@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, type ReactNode } from 'react';
+import { act, useSyncExternalStore, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { GestureResponderEvent } from 'react-native';
@@ -7,13 +7,18 @@ import type { MenuAction } from '@react-native-menu/menu';
 import { PendingSendBubble, type PendingSendBubbleActions } from '@/session/PendingSendBubble';
 import { MessageBodyText } from '@/session/ShareMessageCheckbox';
 import { buildQueueRowPresentation, EMPTY_INPUT_PROJECTION } from '@/session/inputProjection';
-import type { MobilePendingSendItem } from '@/session/pendingSendItems';
+import { buildPendingSendItems, type MobilePendingSendItem } from '@/session/pendingSendItems';
+import { buildOutboxItem, outboxDisplayItem, outboxItemWithEnqueueFailure } from '@/session/sessionOutbox';
+import { i18n } from '@/i18n';
 import { collectMobileMessageGalleryImages, lightboxImagesForPayload } from '@/session/messageGallery';
 import { useWaitingComputerRecovery } from '@/session/useWaitingComputerRecovery';
 import type { DeviceView } from '@cindy/device-link';
 import { usePendingOutboxActions, usePendingSendActions } from '@/session/usePendingSendActions';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
-import type { DurableOutboxRecord } from '@/session/durableOutbox';
+import { createDurableOutbox, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { createDurableOutboxDelivery } from '@/session/durableOutboxDelivery';
+import { DeviceLinkError } from '@cindy/device-link';
+import type { QueuedRemoteMessage } from '@/session/types';
 import type { TFunction } from 'i18next';
 
 const outbox = vi.hoisted(() => ({ records: [] as DurableOutboxRecord[], update: vi.fn().mockResolvedValue(undefined) }));
@@ -76,7 +81,8 @@ vi.mock('@/session/SentInlineAtomBody', async () => {
 vi.mock('@/session/sentAttachmentThumbStore', () => ({ getSentAttachmentThumbUri: (ref: string) => durableThumbs.get(ref) ?? null,
   useSentAttachmentThumbsVersion: () => 0 }));
 vi.mock('react-i18next', () => ({ initReactI18next: { type: '3rdParty', init: () => undefined },
-  useTranslation: () => ({ t: (key: string) => key }) }));
+  useTranslation: () => ({ t: (key: string) => key === 'message.queue.deliveryUnconfirmed'
+    || key === 'message.queue.recheckDelivery' ? i18n.t(key) : key }) }));
 vi.mock('@/theme', async () => {
   const tokens = await import('@/theme/tokens');
   return { ...tokens, useTheme: () => ({ colors: tokens.lightColors }),
@@ -134,6 +140,31 @@ function touch(type: 'Start' | 'Move' | 'End' | 'Cancel', x = 0, y = 0, count = 
   const handler = handlers.get('pendingSend.body.a')?.[`onTouch${type}`] as ((e: GestureResponderEvent) => void) | undefined;
   act(() => handler?.({ nativeEvent: { pageX: x, pageY: y, touches: Array(count).fill({}) } } as unknown as GestureResponderEvent));
 }
+
+// #4841 (unit): the touch cases do not cover a stored Android DNS failure.
+// Render the production outbox projection and check the text the user sees.
+it('shows a localized reason for a stored Expo Android DNS failure', async () => {
+  const previousLanguage = i18n.language;
+  await i18n.changeLanguage('zh-CN');
+  try {
+    const snapshot = buildOutboxItem({
+      clientId: 'a', sessionId: 'session-a', text: 'hello',
+      permissionModeAtSend: 'ask', readyAttachments: [], claimedUploads: [],
+    });
+    const failure = outboxItemWithEnqueueFailure(snapshot,
+      'fetch failed: java.net.UnknownHostException: Unable to resolve host "relay.example.invalid": No address associated with hostname');
+    const [pending] = buildPendingSendItems({
+      outbox: [outboxDisplayItem(failure)], queue: [], settling: [], editingClientId: null,
+      hiddenClientIds: new Set(), sendingClientIds: new Set(), steeringClientIds: new Set(),
+      presentationByClientId: new Map(),
+    });
+    show(pending);
+    expect(host.querySelector('[data-testid="pendingSend.error.a"]')?.textContent)
+      .toBe(i18n.t('apiErrors.networkUnavailable', { webHint: '' }));
+  } finally {
+    await i18n.changeLanguage(previousLanguage);
+  }
+});
 function flush() {
   act(() => { for (const [id, callback] of [...frames]) { frames.delete(id); callback(0); } });
 }
@@ -187,6 +218,16 @@ it('rechecks the waiting computer once, backs off, and never resubmits the messa
   expect(read).toHaveBeenCalledTimes(2);
 });
 
+// Unit: only a locally persisted text still awaiting its receipt offers delivery details.
+it('reveals the pending delivery explanation and drops it after acknowledgement', () => {
+  const awaiting = { actions: null, phase: 'sending' as const, queueIndex: null, pendingDelivery: true };
+  show(awaiting);
+  expect(host.textContent).toContain('message.queue.pendingDelivery');
+  show(awaiting, 'a');
+  expect(host.textContent).toContain('message.queue.pendingDeliveryHint');
+  show({ ...awaiting, pendingDelivery: false }, 'a');
+  expect(host.textContent).not.toContain('message.queue.pendingDelivery');
+});
 it('lets an in-flight local outbox message open its cancel action', () => {
   show({ actions: null, phase: 'sending', queueIndex: null });
   touch('Start'); touch('End'); flush();
@@ -213,6 +254,101 @@ it('lets a real body link consume the pending tap before the frame commits', () 
   show(); touch('Start'); touch('End');
   act(() => host.querySelector<HTMLElement>('[data-testid="link"]')!.click());
   flush(); expect(openLink).toHaveBeenCalledOnce(); expect(select).not.toHaveBeenCalled();
+});
+
+// UI unit regression with the real ledger, driver and task-page callback. The wire
+// cases cover Host persistence; this case makes the missing confirmation visible
+// and verifies that a tap changes only the read request for that same message.
+it('keeps a legacy miss under the original message and checks it again on tap', async () => {
+  const previousLanguage = i18n.language;
+  await i18n.changeLanguage('zh-CN');
+  const storage = new Map<string, string>();
+  const ledger = createDurableOutbox({
+    getAllKeys: async () => [...storage.keys()], getItem: async (key) => storage.get(key) ?? null,
+    setItem: async (key, value) => { storage.set(key, value); },
+    removeItem: async (key) => { storage.delete(key); },
+  });
+  await ledger.activate('test');
+  const task = 'task-recheck';
+  const pending = (clientId: string, text: string, createdAt: number): DurableOutboxRecord => ({
+    version: 1, accountId: 'test', deviceId: 'pc', createdAt, state: 'queued', uploads: [],
+    item: buildOutboxItem({
+      sessionId: task, clientId, text, permissionModeAtSend: 'ask', readyAttachments: [], claimedUploads: [],
+    }),
+  });
+  const first = pending('a', 'original message', 1);
+  const next = pending('b', 'later message', 2);
+  await ledger.add({ ...first, state: 'confirming', enqueueStarted: true, prepared: { clientId: 'a' } as QueuedRemoteMessage });
+  await ledger.add(next);
+  const projection = { ...EMPTY_INPUT_PROJECTION, sessionId: task };
+  const history = vi.fn(async (_r: DurableOutboxRecord) => {
+    throw new DeviceLinkError('CHANNEL_NOT_ALLOWED', 'old peer');
+  });
+  const legacyHistory = vi.fn<(r: DurableOutboxRecord) => Promise<boolean>>()
+    .mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  const enqueue = vi.fn(async (_r: DurableOutboxRecord) => projection);
+  const delivery = createDurableOutboxDelivery({
+    store: ledger, isCurrent: () => true, canRun: () => true, session: async () => null,
+    projection: async () => projection, enqueue, history, legacyHistory,
+    prepare: async (r) => ({ clientId: r.item.clientId } as QueuedRemoteMessage),
+    upload: async () => { throw new Error('unexpected upload'); }, cancel: async () => false,
+    bindProjection: () => () => {}, cleanup: async () => {}, discardUploads: () => {},
+    retryable: () => false, describe: String, confirmationMessage: 'check receipt', clearedMessage: 'task cleared',
+  });
+  outbox.update.mockImplementation((r, patch) => ledger.update(r, patch));
+  const clearSelection = () => {};
+  function Screen() {
+    const records = useSyncExternalStore(ledger.subscribe, ledger.getSnapshot);
+    outbox.records = [...records];
+    const { retryOutboxItem, removeOutboxItem } = usePendingOutboxActions({
+      deviceId: 'pc', deviceName: 'Computer', sessionId: task, router: { push: vi.fn() },
+      outboxSessionAliveRef: { current: task }, setError: vi.fn(),
+      setQueueSelectedClientId: clearSelection, t: i18n.t,
+    });
+    const actions = usePendingSendActions({
+      retryOutboxItem, removeOutboxItem, sessionId: task, queueBusy: false, queueSelectedClientId: null,
+      setQueueSelectedClientId: clearSelection, beginQueueEdit: edit,
+      steerQueueItem: steer, removeQueueItem: remove, moveQueueItem: move,
+    });
+    const items = buildPendingSendItems({
+      outbox: records.map(r => ({ ...outboxDisplayItem(r.item),
+        historyConfirmation: r.historyConfirmation, canCancel: !r.historyConfirmation })),
+      queue: [], settling: [], editingClientId: null, hiddenClientIds: new Set(),
+      sendingClientIds: new Set(), steeringClientIds: new Set(), presentationByClientId: new Map(),
+    });
+    return <>{items.map(entry => <PendingSendBubble key={entry.key} item={entry} actions={actions}
+      renderText={(body) => <span>{body}</span>} renderFile={() => null} renderImage={() => null} />)}</>;
+  }
+  try {
+    await delivery.run();
+    act(() => root.render(<Screen />));
+    const messageRow = host.querySelector('[data-testid="pendingSend.row.a"]')!;
+    expect(messageRow.textContent).toContain('original message');
+    expect(messageRow.textContent).toContain('发送结果未确认');
+    expect(messageRow.querySelector('[data-testid="pendingSend.outboxRemove.a"]')).toBeNull();
+    expect(messageRow.querySelector('[data-testid="pendingSend.outboxRetry.a"]')).toBeNull();
+    expect([...host.querySelectorAll('[data-testid^="pendingSend.row."]')].map(row => row.getAttribute('data-testid')))
+      .toEqual(['pendingSend.row.a', 'pendingSend.row.b']);
+    expect(enqueue).not.toHaveBeenCalled();
+    const check = messageRow.querySelector<HTMLElement>('[data-testid="pendingSend.outboxRecheck.a"]')!;
+    expect(check.textContent).toBe('重新确认');
+    await act(async () => check.click());
+    expect(outbox.update).toHaveBeenCalledWith(expect.objectContaining({ item: first.item }), { historyConfirmation: 'requested' });
+    expect(messageRow.textContent).toContain('发送结果未确认');
+    expect(handlers.get('pendingSend.outboxRecheck.a')?.disabled).toBe(true);
+    await act(async () => delivery.run());
+    expect(host.querySelector('[data-testid="pendingSend.outboxConfirmation.a"]')).toBeNull();
+    expect(enqueue).not.toHaveBeenCalled();
+    await act(async () => delivery.run());
+    expect(history.mock.calls.map(([r]) => r.item.clientId)).toEqual(['a', 'a']);
+    expect(legacyHistory.mock.calls.map(([r]) => r.item.clientId)).toEqual(['a', 'a']);
+    expect(enqueue.mock.calls.map(([r]) => r.item.clientId)).toEqual(['b']);
+  } finally {
+    delivery.stop();
+    outbox.records = [];
+    outbox.update.mockReset().mockResolvedValue(undefined);
+    await i18n.changeLanguage(previousLanguage);
+  }
 });
 
 // #7083 unit regression: the production hooks feed the real bubble. Existing
@@ -390,7 +526,13 @@ it.each([
   expect(move.mock.calls).toEqual(expected.map((id) => ['a', id === 'moveUp' ? 'up' : 'down']));
 });
 it('hides unavailable choices and removes the menu while busy or dispatched', () => {
-  show({ actions: { ...item.actions!, steer: { disabled: true, disabledReason: 'Not available' } } });
+  const unsupported = buildQueueRowPresentation({
+    item: { clientId: 'a', text: 'hello' },
+    originalIndex: 0,
+    queueLength: 1,
+    projection: { ...EMPTY_INPUT_PROJECTION, steerUnsupported: true },
+  });
+  show({ actions: unsupported.actions });
   const menu = handlers.get('pendingSend.queueMenu.a')!;
   expect((menu.actions as MenuAction[]).map(({ id }) => id)).toEqual(['edit', 'remove']);
   const choose = menu.onPressAction as (event: { nativeEvent: { event: string } }) => void;

@@ -24,6 +24,7 @@ function historyWithSessions(): XdtHelperHistoryDeps {
           {
             id: "session-1",
             title: "Busy",
+            pinnedAt: 1,
             workingDir: "/repo",
             agentKind: "codex",
             workspaceKind: "project",
@@ -40,6 +41,7 @@ function historyWithSessions(): XdtHelperHistoryDeps {
           {
             id: "session-2",
             title: "Idle",
+            pinnedAt: null,
             workingDir: "/repo",
             agentKind: "cc",
             workspaceKind: "project",
@@ -64,19 +66,25 @@ function historyWithSessions(): XdtHelperHistoryDeps {
 }
 
 describe("list_sessions agent_kind", () => {
-  it("passes the pi filter through registry validation to the host", async () => {
+  it("passes the pi and acp filters through registry validation to the host", async () => {
     const history = historyWithSessions();
     const registry = new XdtHelperToolRegistry();
     registerListSessionsTool(registry, { history });
 
     expect(registry.get("list_sessions")?.description).toContain(
-      "agent_kind: cc(Claude Code) | codex | pi",
+      "agent_kind: cc(Claude Code) | codex | pi | acp(插件引擎)",
     );
     const result = await registry.call("list_sessions", { agent_kind: "pi" });
 
     expect(parse(result)).toMatchObject({ ok: true });
     expect(history.listSessions).toHaveBeenCalledWith(
       expect.objectContaining({ agentKind: "pi" }),
+    );
+
+    const acpResult = await registry.call("list_sessions", { agent_kind: "acp" });
+    expect(parse(acpResult)).toMatchObject({ ok: true });
+    expect(history.listSessions).toHaveBeenCalledWith(
+      expect.objectContaining({ agentKind: "acp" }),
     );
   });
 });
@@ -101,8 +109,8 @@ describe("list_sessions queuedCount", () => {
     expect(payload).toMatchObject({
       ok: true,
       sessions: [
-        { id: "session-1", messageCount: 3, queuedCount: 2 },
-        { id: "session-2", messageCount: 1, queuedCount: 0 },
+        { id: "session-1", messageCount: 3, queuedCount: 2, pinned: true },
+        { id: "session-2", messageCount: 1, queuedCount: 0, pinned: false },
       ],
     });
     expect(sessionQueue.listSessionQueuedCounts).toHaveBeenCalledWith([

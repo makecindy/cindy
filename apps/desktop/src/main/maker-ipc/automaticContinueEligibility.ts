@@ -1,5 +1,6 @@
 import type { ProviderGroupEligibilityContext } from '../provider-group/service.js';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 
 export function isQuotaScheduleCurrent(schedule: { status: string; targetSessionId?: string | null } | undefined,
   sessionId: string): boolean {
@@ -26,6 +27,7 @@ interface SessionSnapshot {
   source?: string | null;
   status?: string;
   orcaRole?: string | null;
+  orcaRemoteLead?: string | null;
   agentDeviceId?: string | null;
   remoteHostId?: string | null;
 }
@@ -57,14 +59,14 @@ export function createAutomaticContinueEligibility(deps: {
     const owner = deps.ownerEpoch();
     if (deps.isPaused(sessionId)) return false;
     const row = await deps.readSession(sessionId);
-    if (!row || (row.orcaRole === 'worker' && !context)) return false;
+    if (!row || (!context && (row.orcaRole === 'worker' || !!parseOrcaRemoteLead(row.orcaRemoteLead)))) return false;
     const ownsQuota = () => !!row.agentDeviceId && !row.remoteHostId
-      && (!context || context.kind === 'before-send')
+      && (!context || context.kind === 'before-send' || (context.kind === 'failure' && context.token !== undefined))
       && (deps.ownsScheduledQuotaInput?.(sessionId, context?.kind === 'before-send' ? context.clientId : undefined) ?? false);
     const ownsInput = () => ownsQuota() || (!!context && deps.ownsCompanionInput(sessionId, context));
     if (row.source === 'bot') {
       // A role alone cannot identify who owns the turn: IM and scheduling can
-      // also enter canonical. Only coordinator-owned human input qualifies.
+      // also enter canonical. Only coordinator-owned human or scheduled quota input qualifies.
       if ((!ownsQuota() && (!context || (context.kind !== 'failure' && context.kind !== 'before-send'))) || row.status !== 'active') return false;
       // Candidate recovery owns these remote turns, including when it declines
       // recovery. No visible output does not prove the remote work never ran.

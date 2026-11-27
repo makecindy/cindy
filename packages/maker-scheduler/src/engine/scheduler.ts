@@ -1,4 +1,4 @@
-import { normalizePrTrigger } from '../pr-trigger.js';
+import { isGitlabMrTriggerUrl, normalizePrTrigger, schedulePrTriggers } from '../pr-trigger.js';
 import { EventEmitter } from 'node:events';
 import type {
   Schedule,
@@ -24,23 +24,39 @@ import type {
   ScheduleRunTrigger,
 } from '../types.js';
 import { normalizePreRunPlugin, SCRIPT_CAPABILITIES } from '../types.js';
+import {
+  isTransientPrecheckHookFailure,
+  shouldEscalateTransientPrecheckFailure,
+} from '../precheck-transient.js';
 import { isLegalPhaseTransition } from './attemptLifecycle.js';
 import type { ScheduleStorage } from '../interfaces/schedule-storage.js';
-import type { ChildRunInput, FireContext, ScheduleRunner } from '../interfaces/schedule-runner.js';
+import type {
+  ChildRunInput,
+  FireContext,
+  PreRunHookCompletionOutcome,
+  ScheduleRunner,
+} from '../interfaces/schedule-runner.js';
 import type { Clock } from '../interfaces/clock.js';
 import type { Logger } from '../interfaces/logger.js';
 import { nextCronOrMonthlyFire } from './monthlyClamp.js';
-import { GITHUB_APP_EVENTS, normalizeScheduleWebhookSource, sameGithubAppScope } from '../webhook-formats.js';
+import { GITHUB_APP_EVENTS, isManagedWebhookSource, normalizeScheduleWebhookSource, sameManagedWebhookScope } from '../webhook-formats.js';
 
 /**
- * Interval-mode 下次触发时间。`baseMs` 是上次完成（或 createdAt）。
+ * Interval-mode 下次触发时间。`baseMs` 是参考锚点（上次完成或 createdAt），保留原相位：
  *   - baseMs + intervalMs 在未来 → 用它（尊重原 schedule，重启不重置）
- *   - baseMs + intervalMs 已过去 → 用 now + intervalMs（不补发漏掉的，重新起 N 倒计时）
+ *   - baseMs + intervalMs 已过去 → 向前对齐到严格大于 now 的下一个 `baseMs + k * intervalMs`
+ *     相位槽（落在 `(now, now + intervalMs]`），既不补发漏掉的触发，又保持多条任务原本错开的相位，
+ *     避免重启/休眠恢复后全部坍缩到同一秒形成惊群。
  */
 function nextIntervalFire(baseMs: number, intervalMs: number, now: number): number {
   const planned = baseMs + intervalMs;
-  return planned > now ? planned : now + intervalMs;
+  if (planned > now) return planned;
+  const skippedCycles = Math.floor((now - planned) / intervalMs) + 1;
+  return planned + skippedCycles * intervalMs;
 }
+
+/** 自动 interval 触发晚于原计划达到该阈值且本次快速收口时，按原创建相位重排以打破积压排空后的相位锁定。 */
+const OVERDUE_PHASE_PRESERVE_MS = 30_000;
 
 /** 在途请求计数的分组键:每条换发路径各记各的。 */
 function expireWriteKey(scheduleId: string): string {
@@ -60,6 +76,13 @@ function replanKey(scheduleId: string): string {
 }
 
 const SWEEP_REQUEST_KEY = 'sweep';
+
+function sameSingleWatchedPr(schedule: Schedule, trigger?: ScheduleRunTrigger): boolean {
+  if (trigger?.kind !== 'watch' || trigger.source !== 'pr-status' || !trigger.detail) return false;
+  if (schedule.webhookTrigger) return false;
+  const watched = schedulePrTriggers(schedule);
+  return watched.length === 1 && watched[0]!.url.toLowerCase() === trigger.detail.toLowerCase();
+}
 
 function stableJson(value: unknown): string {
   if (value === undefined) return 'null';
@@ -87,6 +110,7 @@ export interface RunNowOptions {
   expectedSchedule?: ScheduleMutationGuard;
   webhook?: FireContext['webhook'];
   trigger?: ScheduleRunTrigger;
+  mrObservation?: ScheduleRun['mrObservation'];
   /** Internal durable-queue handoff. Awaited after insertRun, before any runner side effects. */
   onRunCreated?: () => Promise<void>;
 }
@@ -113,8 +137,10 @@ function normalizeWebhookTrigger(
     !(GITHUB_APP_EVENTS as readonly string[]).includes(name.split('.')[0]!))) {
     throw new Error('unsupported GitHub App event filter');
   }
-  const managedScopeChanged = existing && (source?.preset === 'github-app' || existing.source?.preset === 'github-app')
-    && !sameGithubAppScope({ source, events }, existing);
+  // Plugin sources choose their event types per plugin; a top-level filter would be ambiguous.
+  if (source?.preset === 'plugin' && events.length) throw new Error('plugin events choose event types per plugin source');
+  const managedScopeChanged = existing && (isManagedWebhookSource(source) || isManagedWebhookSource(existing.source))
+    && !sameManagedWebhookScope({ source, events }, existing);
   return {
     // App routes have no public URL/secret. Rotate their local queue identity when
     // scope changes so an already prepared run cannot execute under a new scope.
@@ -156,6 +182,9 @@ function validateScheduleExecutionShape(
   }
   // 一次事件就会把定时的一次性任务用完。手动任务的 recurring 不参与调度，不受此限。
   if (schedule.prTrigger && schedule.webhookTrigger) throw new Error('Choose a PR trigger or a Webhook trigger');
+  if (isGitlabMrTriggerUrl(schedule.prTrigger?.url) && (schedule.manual || !schedule.recurring)) {
+    throw new Error('Invalid GitLab MR trigger: use recurring=true and manual=false for timed status checks.');
+  }
   if ((schedule.webhookTrigger || schedule.prTrigger) && !schedule.recurring && !schedule.manual) {
     throw new Error('webhook trigger requires a recurring schedule');
   }
@@ -168,7 +197,7 @@ function validateScheduleExecutionShape(
   }
   if (schedule.modelAgentDeviceId !== undefined && (
     typeof schedule.modelAgentDeviceId !== 'string' ||
-    (schedule.modelAgentDeviceId !== '' && (!schedule.modelAgentDeviceId.trim() ||
+    (schedule.modelAgentDeviceId !== '' && (!/^[A-Za-z0-9_.:-]{1,128}$/.test(schedule.modelAgentDeviceId) ||
       !schedule.modelAgentKind || !schedule.model?.trim() || !schedule.providerId?.trim()))
   )) throw new Error('Scheduled remote model selection requires a device, Harness, model and provider');
   if (schedule.modelAgentKind != null) {
@@ -176,28 +205,24 @@ function validateScheduleExecutionShape(
       throw new Error('Explicit scheduled model Harness requires a supported Harness and model');
     }
   }
-  // 插件引擎(docs/plans/acp-plugin-bridge.md)只在自动任务所在电脑上、每次新建任务运行：必须指出是
-  // 哪个引擎，不绑定已有任务、不换电脑、不用 worktree、不走脚本执行。旧端只改了其中一半(例如把
-  // agentKind 写回内置引擎)时整份拒绝，不悄悄换引擎。
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持新建任务(含 worktree 与另一台电脑)、
+  // 持续会话及绑定任意非 SSH 任务(含临时切换)；仅脚本执行不可用。
+  // 独立任务只改了其中一半(例如旧端把 agentKind 写回内置引擎)时整份拒绝，不悄悄换引擎。
   if (schedule.agentKind === 'acp' || schedule.modelAgentKind === 'acp') {
-    if (schedule.agentKind !== 'acp' || schedule.modelAgentKind !== 'acp') {
-      throw new Error('A plugin engine schedule must choose the plugin engine as its model');
-    }
-    if (!schedule.providerId?.startsWith(PLUGIN_ENGINE_PROVIDER_PREFIX)
-      || schedule.providerId.length <= PLUGIN_ENGINE_PROVIDER_PREFIX.length) {
-      throw new Error('A plugin engine schedule needs providerId acp-plugin:<plugin>:<harness>');
-    }
-    if ((schedule.executionMode ?? 'agent') !== 'agent') {
-      throw new Error('Script schedules cannot use a plugin engine');
-    }
-    if (schedule.targetSessionId || schedule.persistentSession) {
-      throw new Error('A plugin engine schedule starts a new task each run');
-    }
-    if (schedule.agentDeviceId || schedule.modelAgentDeviceId) {
-      throw new Error('Plugin engines run on the automation host only');
-    }
-    if (schedule.useWorktree) {
-      throw new Error('Plugin engine schedules cannot use a worktree');
+    const boundTask = Boolean(schedule.targetSessionId);
+    const boundFollowsOwnTask = boundTask && !schedule.modelAgentKind && !schedule.model?.trim();
+    const boundBuiltinOverride = boundTask && schedule.modelAgentKind != null && schedule.modelAgentKind !== 'acp';
+    if (!boundFollowsOwnTask && !boundBuiltinOverride) {
+      if (schedule.modelAgentKind !== 'acp' || (!boundTask && schedule.agentKind !== 'acp')) {
+        throw new Error('A plugin engine schedule must choose the plugin engine as its model');
+      }
+      if (!schedule.providerId?.startsWith(PLUGIN_ENGINE_PROVIDER_PREFIX)
+        || schedule.providerId.length <= PLUGIN_ENGINE_PROVIDER_PREFIX.length) {
+        throw new Error('A plugin engine schedule needs providerId acp-plugin:<plugin>:<harness>');
+      }
+      if ((schedule.executionMode ?? 'agent') !== 'agent') {
+        throw new Error('Script schedules cannot use a plugin engine');
+      }
     }
   }
   if (schedule.agentDeviceId !== undefined) {
@@ -272,7 +297,7 @@ export interface SchedulerOptions {
   validateTargetSession?: (
     targetSessionId: string,
     operation: 'create' | 'update' | 'fire',
-    selection: Pick<Schedule, 'modelAgentKind' | 'modelAgentDeviceId' | 'primaryHostKey'>,
+    selection: Pick<Schedule, 'modelAgentKind' | 'modelAgentDeviceId' | 'primaryHostKey' | 'model' | 'providerId' | 'effort' | 'source' | 'persistentSession'>,
   ) => Promise<void>;
   /**
    * 被动模式:本实例不参与自动触发 —— start() 不装 tick 时钟、不做僵尸 run 清理
@@ -602,6 +627,19 @@ export function normalizeScheduleModelGroup(value: unknown): string | undefined 
   return id || undefined;
 }
 
+/** Maximum retry delay when a schedule is repeatedly deferred without running (15 min). */
+const DEFER_ESCALATION_MAX_RETRY_MS = 15 * 60_000;
+/** Emit a structured warning after this many consecutive deferrals, and periodically thereafter. */
+const DEFER_WARN_FIRST_COUNT = 5;
+const DEFER_WARN_EVERY_COUNT = 10;
+
+function computeDeferredRetryMs(baseRetryMs: number, consecutiveCount: number): number {
+  const safeBase = Math.max(1, baseRetryMs);
+  if (consecutiveCount <= 3) return safeBase;
+  const multiplier = consecutiveCount <= 6 ? 2 : consecutiveCount <= 10 ? 4 : 10;
+  return Math.max(safeBase, Math.min(safeBase * multiplier, DEFER_ESCALATION_MAX_RETRY_MS));
+}
+
 export class Scheduler extends EventEmitter {
   private readonly storage: ScheduleStorage;
   private readonly runner: ScheduleRunner;
@@ -612,6 +650,8 @@ export class Scheduler extends EventEmitter {
   private readonly generateId: () => string;
 
   private readonly activeSchedules = new Map<string, Schedule>();
+  /** Tracks consecutive deferred fires per schedule to apply bounded backoff and warn on stuck loops. */
+  private readonly consecutiveDeferrals = new Map<string, { count: number; firstAt: number; lastReason?: string }>();
   /**
    * 在途的过期写入:scheduleId → 那次 storage.update 的 promise **连同它发起时
    * 那一版的 updatedAt**。
@@ -706,6 +746,9 @@ export class Scheduler extends EventEmitter {
   // 被 silenceInflightRuns 标记为"本轮静默"的 runId。仅内存(进程重启丢失 →
   // 通知照发,fail-safe);fireOne/runNow 终态落库后清理对应条目。
   private readonly silencedRuns = new Set<string>();
+  // 瞬时前置检查故障（限流／超时／DNS）在 24 小时静默期内的 runId：落库生而已读、
+  // 不外发通知、不顶任务、归档目标放回已归档；超过 1 天未恢复后不再加入此集合。
+  private readonly quietFailedRuns = new Set<string>();
   // sessionId → 当前 in-flight runId 的反向映射。让 MCP 静默工具无需 agent 传 runId,
   // 直接按"是谁在调我"(调用方 session)定位本轮 run —— 把易漂移的 LLM 传参收回代码。
   //   sessionIdToRunId: sessionId → runId(正向,resolveInflightRunForSession 读)
@@ -775,6 +818,12 @@ export class Scheduler extends EventEmitter {
    * 只存内存:进程重启后这些 run 行已是终态,不需要再记。
    */
   private readonly abandonedRuns = new Set<string>();
+  /**
+   * 已知当前没有待恢复前置检查/中断失败的 scheduleId。create() 与成功/健康检查后置位;
+   * 任何 failed / interrupted / stop() 清掉 —— 随后第一次 checkSucceeded 的 skipped 会立即补发
+   * changed,保证旧版桌面与手机也能即时清除失败告警和未读红点,而常态连续空跳保持静默。
+   */
+  private readonly schedulesWithKnownCleanCheck = new Set<string>();
   /**
    * 排期补偿失败待重试的 schedule（key = scheduleId）。存储瞬时错误不能让一条活跃的
    * recurring 任务停摆到进程重启 —— 周期 DB sync 只重灌行、不会补 nextFireAt，僵尸清扫
@@ -1036,6 +1085,7 @@ export class Scheduler extends EventEmitter {
         if (attempt.phase === 'finalizing') continue;
         this.unregisterInflight(attempt.scheduleId, attempt.runId);
         this.silencedRuns.delete(attempt.runId);
+        this.quietFailedRuns.delete(attempt.runId);
         this.finishInflightAttempt(attempt.runId);
       }
       const remaining = await this.waitForRunSettlement(() => this.inflightAttempts.size);
@@ -1057,6 +1107,7 @@ export class Scheduler extends EventEmitter {
     this.waitingSchedules.clear();
     this.inflightControllers.clear();
     this.inflightByschedule.clear();
+    this.consecutiveDeferrals.clear();
     // abandonedRuns **刻意不清**:stop 只是发出 abort,被强制收口过的 run 的 runner
     // 可能仍在跑、几分钟后才 settle。清掉保护会让那次迟到 settle 覆写用户已看到的
     // failed 并二次重排 schedule(review #944 P1)。集合只存 runId,留到进程退出无成本。
@@ -1068,6 +1119,7 @@ export class Scheduler extends EventEmitter {
     // 第一次 begin 的不变量断言把它当悬挂登记抛错(codex review P1)。语义上也与
     // silenceRun 文档一致 —— 标记丢失的安全方向就是照常通知。
     this.silencedRuns.clear();
+    this.quietFailedRuns.clear();
     this.activeSchedules.clear();
     // 生命周期换代:stop 之前发起、之后才回来的回调(迟到过期写入收口)不得再改
     // 本地状态或广播事件(Codex P1 on #11577)。
@@ -1102,6 +1154,7 @@ export class Scheduler extends EventEmitter {
     // 生命周期那一份永远不 settle 的读。
     this.inFlightGuardReads.clear();
     this.guardReadIssueTokens.clear();
+    this.schedulesWithKnownCleanCheck.clear();
     this.listActiveFailed = false;
     this.emitRuntimeState();
     await Promise.all(interrupted.map(async (run) => {
@@ -1179,6 +1232,9 @@ export class Scheduler extends EventEmitter {
           const activeIds = new Set(actives.map((sch) => sch.id));
           for (const scheduleId of this.invalidScheduleIds) {
             if (!activeIds.has(scheduleId)) this.invalidScheduleIds.delete(scheduleId);
+          }
+          for (const scheduleId of this.consecutiveDeferrals.keys()) {
+            if (!activeIds.has(scheduleId)) this.consecutiveDeferrals.delete(scheduleId);
           }
           for (const sch of actives) {
             // 存储能应答、批量结果仍含同版本的 active 行 = 那次过期写入没落地
@@ -1496,10 +1552,14 @@ export class Scheduler extends EventEmitter {
         if (this.isSupersededSnapshot(current)) return true;
         this.refreshAutomaticDispatchSchedules(current);
         if (current.status === 'active') this.activeSchedules.set(current.id, current);
-        else this.activeSchedules.delete(schedule.id);
+        else {
+          this.activeSchedules.delete(schedule.id);
+          this.consecutiveDeferrals.delete(schedule.id);
+        }
       } else {
         // 回读拿到空(行被删掉):缓存里这一条也要下去。
         this.activeSchedules.delete(schedule.id);
+        this.consecutiveDeferrals.delete(schedule.id);
       }
       if (updated) this.emitEvent({ type: 'changed', scheduleId: schedule.id });
     } catch (err) {
@@ -1546,7 +1606,10 @@ export class Scheduler extends EventEmitter {
           if (this.isStaleExpireResult(late)) return;
           this.refreshAutomaticDispatchSchedules(late);
           if (late.status === 'active') this.activeSchedules.set(late.id, late);
-          else this.activeSchedules.delete(late.id);
+          else {
+            this.activeSchedules.delete(late.id);
+            this.consecutiveDeferrals.delete(late.id);
+          }
           this.emitEvent({ type: 'changed', scheduleId: late.id });
           return;
         }
@@ -1568,7 +1631,10 @@ export class Scheduler extends EventEmitter {
             if (this.isSupersededSnapshot(current)) return;
             this.refreshAutomaticDispatchSchedules(current);
             if (current.status === 'active') this.activeSchedules.set(current.id, current);
-            else this.activeSchedules.delete(current.id);
+            else {
+              this.activeSchedules.delete(current.id);
+              this.consecutiveDeferrals.delete(current.id);
+            }
           },
           () => undefined,
         );
@@ -1899,6 +1965,10 @@ export class Scheduler extends EventEmitter {
   }
 
   private async fireOneInner(schedule: Schedule, runId: string, assertFireContext?: () => void): Promise<void> {
+    // Capture planned fire timing before claimDueFire clears schedule.nextFireAt so
+    // backlog-delayed automatic interval runs can restore their staggered phase on finish.
+    const plannedFireAt = schedule.nextFireAt;
+    const scheduledIntervalMs = schedule.intervalMs;
     // 跨进程互斥:先在 DB 对这次触发做原子认领(CAS:nextFireAt 必须仍等于本进程
     // 内存里看到的值)。dev / release 双开共用同一 DB 时两边引擎会同时判定"到点
     // 了",只有认领成功的一方真正执行;失败方刷新内存副本后放弃,保证同一次到点
@@ -1959,7 +2029,9 @@ export class Scheduler extends EventEmitter {
       id: runId,
       scheduleId: schedule.id,
       firedAt,
-      ...(schedule.prTrigger ? { triggerSource: 'pr-check' as const } : {}),
+      ...(schedule.prTrigger || schedulePrTriggers(schedule).length > 0
+        ? { triggerSource: 'pr-check' as const }
+        : {}),
       status: 'running',
       // Script 不产生 agent token，零费用是确定值；agent 费用在 turn done 后异步归因。
       costAttribution: schedule.executionMode === 'script' ? 'zero' : 'unavailable',
@@ -2007,7 +2079,9 @@ export class Scheduler extends EventEmitter {
     let runError: string | undefined;
     let deferred = false;
     let deferRetryMs: number | undefined;
+    let deferReason: string | undefined;
     let skipped = false;
+    let preRunCheckSucceeded = false;
     // unregisterInflight 会清掉 session 映射,终态 emit 必须用 finally 之前捕获的值。
     let knownSessionId: string | undefined;
     this.updateInflightAttempt(runId, 'running');
@@ -2026,7 +2100,9 @@ export class Scheduler extends EventEmitter {
         signal: controller.signal,
         canDispatch: () => !hasExpired(this.automaticDispatchSchedules.get(runId) ?? schedule, this.clock.now()),
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
-        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(runId),
+        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(schedule.id, runId, firedAt, (hook) => {
+          preRunCheckSucceeded = hook.checkSucceeded === true;
+        }),
         onTurnActive: this.buildOnTurnActive(runId),
         createChildRun: this.buildCreateChildRun(schedule.id, firedAt),
         onQueueWaitStart: this.buildOnQueueWaitStart(runId),
@@ -2038,6 +2114,7 @@ export class Scheduler extends EventEmitter {
       resultText = result.resultText;
       deferred = result.deferred ?? false;
       deferRetryMs = result.deferRetryMs;
+      deferReason = result.deferReason;
       skipped = result.skipped ?? false;
     } catch (err) {
       runError = err instanceof Error ? err.message : String(err);
@@ -2048,11 +2125,12 @@ export class Scheduler extends EventEmitter {
       this.updateInflightAttempt(runId, 'finalizing');
     }
 
-    // 卡死守卫已经强制收口过这条 run(槽位收回、run 落 failed、schedule 重排)。
-    // 迟到的 settle 不能再写任何东西,否则会把用户已看到的失败覆写回 success
-    // 并二次重排 nextFireAt。
+    // 卡死守卫已经强制收口过这条 run(槽位收回、run 落 failed、schedule 重排、顺延计数已在收口时重置)。
+    // 迟到的 settle 不能再写任何东西(含 consecutiveDeferrals),否则会把用户已看到的失败覆写回 success,
+    // 或清掉后续新一轮已经积累的顺延计数。
     if (this.consumeAbandonedRun(runId)) {
       this.silencedRuns.delete(runId);
+      this.quietFailedRuns.delete(runId);
       return;
     }
 
@@ -2078,7 +2156,9 @@ export class Scheduler extends EventEmitter {
         this.logger?.warn?.('deleteRun on defer failed', { scheduleId: schedule.id, runId, error: String(err) });
       }
       this.silencedRuns.delete(runId);
-      const retryAt = finishedAt + (deferRetryMs ?? 60_000);
+      this.quietFailedRuns.delete(runId);
+      const deferral = this.recordDeferral(schedule.id, runId, finishedAt, deferRetryMs ?? 60_000, deferReason);
+      const retryAt = finishedAt + deferral.retryMs;
       const updated = await this.updateSchedulingSnapshot(schedule.id, (current) => ({
         nextFireAt: beforeDeadline(current, retryAt),
         ...(current.status === 'active' && hasExpired(current, finishedAt) ? { status: 'expired' as const } : {}),
@@ -2088,9 +2168,20 @@ export class Scheduler extends EventEmitter {
       } else this.activeSchedules.delete(schedule.id);
       // 'deferred' 配对先前的 'fired',让 UI 清掉 ephemeral running 态(不留可见 run);
       // 'changed' 让列表 revalidate 新的 nextFireAt。
-      this.emitEvent({ type: 'deferred', scheduleId: schedule.id, runId });
+      this.emitEvent({
+        type: 'deferred',
+        scheduleId: schedule.id,
+        runId,
+        ...(deferReason ? { deferReason } : {}),
+        consecutiveDeferrals: deferral.count,
+      });
       this.emitEvent({ type: 'changed', scheduleId: schedule.id });
       return;
+    }
+    // pause/delete/stop 已在对应边界清零 consecutiveDeferrals;仅非外部中断(含守卫 abort)才清零,
+    // 避免超时后迟到返回的中断 run 抹掉恢复后新一轮已经积累的顺延计数。
+    if (!controller.signal.aborted || stallAborted) {
+      this.consecutiveDeferrals.delete(schedule.id);
     }
 
     // 整段"写 run 行 + 广播终态"包在 try 里:任何一次 storage.updateRun 抛存储瞬时错误
@@ -2098,6 +2189,7 @@ export class Scheduler extends EventEmitter {
     // 冒泡会让这条活跃的 recurring 任务静默停摆到进程重启(review #944 第九轮 P1)。
     // run 行本身交给心跳过期后的僵尸清扫兜底(与 forceReleaseStalledRun 的落库失败分支
     // 同款处置),这里只保证排期一定被恢复。
+    let skippedPersisted = false;
     try {
       if (stallAborted) {
         // 卡死守卫中断:run 记 'failed'(异常必须可见),且下方重排照常执行。
@@ -2136,13 +2228,15 @@ export class Scheduler extends EventEmitter {
         });
         this.emitFailed(schedule.id, runId, 'aborted', knownSessionId);
       } else if (runError !== undefined) {
+        const quietFailure = this.quietFailedRuns.has(runId);
         await this.storage.updateRun(runId, {
           status: 'failed',
           finishedAt,
           errorMsg: runError,
+          ...(quietFailure ? { readAt: finishedAt } : {}),
           ...(knownSessionId ? { sessionId: knownSessionId } : {}),
         });
-        this.emitFailed(schedule.id, runId, runError, knownSessionId);
+        this.emitFailed(schedule.id, runId, runError, knownSessionId, quietFailure);
       } else if (skipped) {
         // 前置检查拦截(preRunHook exit 2):run 记录保留为 'skipped'(与 deferred 的
         // "撤销不留痕"不同——跳过是本轮的最终结果,用户要能在历史里看到"这几轮是
@@ -2156,7 +2250,7 @@ export class Scheduler extends EventEmitter {
           resultText,
           readAt: finishedAt,
         });
-        this.emitEvent({ type: 'skipped', scheduleId: schedule.id, runId, sessionId: sessionId ?? '' });
+        skippedPersisted = true;
       } else {
         // No error path: runner resolved. sessionId is whatever runner returned (string per
         // FireResult contract); empty string is still treated as success — runner is responsible
@@ -2172,6 +2266,7 @@ export class Scheduler extends EventEmitter {
           resultText,
           ...(this.silencedRuns.has(runId) ? { readAt: finishedAt } : {}),
         });
+        this.schedulesWithKnownCleanCheck.add(schedule.id);
         this.emitEvent({
           type: 'completed',
           scheduleId: schedule.id,
@@ -2193,6 +2288,7 @@ export class Scheduler extends EventEmitter {
       );
     }
     this.silencedRuns.delete(runId);
+    this.quietFailedRuns.delete(runId);
 
     // Aborted 路径不更新 schedule 行 —— schedule 大概率已被 delete(行已不存在,update
     // 是 no-op)或 pause(status='paused',activeSchedules 已被摘出)。重排 nextFireAt
@@ -2204,8 +2300,50 @@ export class Scheduler extends EventEmitter {
       return;
     }
 
-    await this.finishRunSchedule(schedule, firedAt, finishedAt, 'automatic');
-    this.emitEvent({ type: 'changed', scheduleId: schedule.id });
+    const finish = () =>
+      this.finishRunSchedule(schedule, firedAt, finishedAt, 'automatic', undefined, plannedFireAt, scheduledIntervalMs);
+    if (skippedPersisted) {
+      await this.finishSkippedRun(schedule, runId, sessionId ?? '', preRunCheckSucceeded, finish);
+    } else {
+      await finish();
+      this.emitEvent({ type: 'changed', scheduleId: schedule.id });
+    }
+  }
+
+  private async finishSkippedRun(
+    schedule: Schedule,
+    runId: string,
+    sessionId: string,
+    preRunCheckSucceeded: boolean,
+    finish: () => Promise<Schedule | null>,
+  ): Promise<void> {
+    let updated: Schedule | null = null;
+    try {
+      updated = await finish();
+    } finally {
+      // The terminal run has already been persisted. Subscribers need its
+      // outcome even when replanning fails and no timing patch is available.
+      const recoversPotentialFailure =
+        preRunCheckSucceeded && !this.schedulesWithKnownCleanCheck.has(schedule.id);
+      if (preRunCheckSucceeded) this.schedulesWithKnownCleanCheck.add(schedule.id);
+      this.emitEvent({
+        type: 'skipped',
+        scheduleId: schedule.id,
+        runId,
+        sessionId,
+        ...(updated
+          ? {
+              lastFiredAt: updated.lastFiredAt,
+              lastFinishedAt: updated.lastFinishedAt,
+              nextFireAt: updated.nextFireAt,
+            }
+          : {}),
+        ...(preRunCheckSucceeded ? { preRunCheckSucceeded: true } : {}),
+      });
+      if (updated?.status !== schedule.status || recoversPotentialFailure) {
+        this.emitEvent({ type: 'changed', scheduleId: schedule.id });
+      }
+    }
   }
 
   /** A scheduling patch is derived from a row snapshot. Re-read and recompute
@@ -2226,8 +2364,11 @@ export class Scheduler extends EventEmitter {
     schedule: Schedule,
     firedAt: number,
     finishedAt: number,
-    source: 'automatic' | 'run-now' | 'recovery',
-  ): Promise<void> {
+    source: 'automatic' | 'pr-watch' | 'run-now' | 'recovery',
+    watchTrigger?: ScheduleRunTrigger,
+    plannedFireAt?: number,
+    scheduledIntervalMs?: number,
+  ): Promise<Schedule | null> {
     // Update the schedule row (schedules table — different from schedule_runs above).
     // lastFinishedAt 跟随终态写入：success/failed 都算"跑完了一次"，UI 列表
     // "Last X ago" 用本字段，避免显示出 fired vs finished 间的间隙感。
@@ -2244,12 +2385,52 @@ export class Scheduler extends EventEmitter {
       if (ownsSchedule) {
         patch.lastFiredAt = firedAt;
         if (current.recurring) {
-          patch.nextFireAt = beforeDeadline(current, current.intervalMs !== undefined
-            ? finishedAt + current.intervalMs
-            : nextCronOrMonthlyFire(current.cronExpr, finishedAt, current.timezone));
+          let nextAt: number;
+          if (current.intervalMs !== undefined) {
+            const intervalMs = current.intervalMs;
+            // When an automatic interval run was delayed past its planned fire time (e.g. sleep
+            // or maxConcurrentRuns backlog drain) and finished quickly, realign to its original
+            // createdAt phase at least intervalMs/2 ahead so drained tasks re-stagger instead of
+            // locking into a permanent thundering herd.
+            const delayedByBacklog =
+              source === 'automatic' &&
+              plannedFireAt !== undefined &&
+              scheduledIntervalMs === intervalMs &&
+              firedAt - plannedFireAt >= OVERDUE_PHASE_PRESERVE_MS &&
+              finishedAt - firedAt < intervalMs / 2;
+            nextAt = delayedByBacklog
+              ? nextIntervalFire(
+                  current.createdAt <= finishedAt ? current.createdAt : plannedFireAt,
+                  intervalMs,
+                  finishedAt + Math.floor(intervalMs / 2),
+                )
+              : finishedAt + intervalMs;
+          } else {
+            nextAt = nextCronOrMonthlyFire(current.cronExpr, finishedAt, current.timezone);
+          }
+          patch.nextFireAt = beforeDeadline(current, nextAt);
         } else if (current.status !== 'paused') {
           patch.status = 'expired';
           patch.nextFireAt = undefined;
+        }
+      } else if (
+        source === 'pr-watch' &&
+        current.status === 'active' &&
+        current.recurring &&
+        !current.manual &&
+        current.nextFireAt !== undefined &&
+        sameSingleWatchedPr(current, watchTrigger)
+      ) {
+        // Merge duplicate checks ONLY when a PR-status watch run just checked the exact
+        // single PR this schedule's fallback timer watches (and no independent webhookTrigger
+        // is attached). Ordinary webhook + interval tasks keep their independent timer untouched.
+        if (current.intervalMs !== undefined) {
+          patch.nextFireAt = beforeDeadline(current, finishedAt + current.intervalMs);
+        } else if (current.nextFireAt <= finishedAt) {
+          patch.nextFireAt = beforeDeadline(
+            current,
+            nextCronOrMonthlyFire(current.cronExpr, finishedAt, current.timezone),
+          );
         }
       }
       if (current.status === 'expired' || (current.status === 'active' && hasExpired(current, finishedAt))) {
@@ -2260,6 +2441,7 @@ export class Scheduler extends EventEmitter {
     });
     if (updated?.status === 'active') this.activeSchedules.set(updated.id, updated);
     else this.activeSchedules.delete(schedule.id);
+    return updated;
   }
 
   // Force-fire a schedule now.
@@ -2275,9 +2457,12 @@ export class Scheduler extends EventEmitter {
     // 手动触发不受并发闸门拦截(用户显式动作要即时响应),但计入 in-flight 占用,
     // 会挤压后续自动触发的槽位。
     const runId = this.generateId();
-    // Webhook is automatic work, even though it shares the run-now execution path.
+    // Webhook and automatic PR-status watch triggers are automatic work sharing the run-now path.
     // Check and reserve synchronously: simultaneous arrivals cannot all pass one slot.
-    if (options?.webhook && (this.inflightByschedule.has(id)
+    const automaticRunNow = Boolean(
+      options?.webhook || (options?.deferToCaller && options?.trigger?.source === 'pr-status'),
+    );
+    if (automaticRunNow && (this.inflightByschedule.has(id)
       || this.countSlotsInUse() >= this.maxConcurrentRuns)) return { runId, deferred: true };
     this.beginInflightAttempt({
       scheduleId: id,
@@ -2354,6 +2539,9 @@ export class Scheduler extends EventEmitter {
       heartbeatAt: firedAt,
       ...(options?.webhook ? { triggerSource: 'webhook' as const } : options?.trigger?.source === 'pr-status' ? { triggerSource: 'pr-status' as const } : {}),
     };
+    if (initialRun.triggerSource === 'pr-status' && options?.mrObservation) {
+      initialRun.mrObservation = options.mrObservation;
+    }
     if (!recovery) await this.storage.insertRun(initialRun);
     if (!recovery && options?.onRunCreated) {
       try {
@@ -2405,7 +2593,9 @@ export class Scheduler extends EventEmitter {
     let runResultText: string | undefined;
     let deferred = false;
     let deferRetryMs: number | undefined;
+    let deferReason: string | undefined;
     let skipped = false;
+    let preRunCheckSucceeded = false;
     // unregisterInflight 会清掉 session 映射,终态 emit 必须用 finally 之前捕获的值。
     let knownSessionId: string | undefined;
     this.updateInflightAttempt(runId, 'running');
@@ -2429,7 +2619,9 @@ export class Scheduler extends EventEmitter {
           ? { expectedPreRunWorkingDir: options.expectedSchedule.effectiveWorkingDir } : {}),
         signal: controller.signal,
         onSessionBound: this.buildOnSessionBound(schedule.id, runId),
-        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(runId),
+        onPreRunHookCompleted: this.buildOnPreRunHookCompleted(schedule.id, runId, firedAt, (hook) => {
+          preRunCheckSucceeded = hook.checkSucceeded === true;
+        }),
         onTurnActive: (sessionId) => {
           continuationAccepted = true;
           this.buildOnTurnActive(runId)(sessionId);
@@ -2444,6 +2636,7 @@ export class Scheduler extends EventEmitter {
       runResultText = result.resultText;
       deferred = result.deferred ?? false;
       deferRetryMs = result.deferRetryMs;
+      deferReason = result.deferReason;
       skipped = result.skipped ?? false;
     } catch (err) {
       if (recovery && !continuationAccepted && !this.abandonedRuns.has(runId)) throw err;
@@ -2455,9 +2648,10 @@ export class Scheduler extends EventEmitter {
     }
     finishedAt = this.clock.now();
 
-    // 语义同 fireOneInner:被卡死守卫强制收口过的 run,迟到 settle 整体丢弃。
+    // 语义同 fireOneInner:被卡死守卫强制收口过的 run,迟到 settle 整体丢弃(不动 consecutiveDeferrals)。
     if (this.consumeAbandonedRun(runId)) {
       this.silencedRuns.delete(runId);
+      this.quietFailedRuns.delete(runId);
       return { runId };
     }
 
@@ -2470,10 +2664,12 @@ export class Scheduler extends EventEmitter {
     // deferToCaller 由宿主持久队列接力，保留原 nextFireAt，不建立第二个重试来源。
     if (deferred && !wasAborted) {
       if (recovery) {
+        this.consecutiveDeferrals.delete(schedule.id);
         await this.storage.updateRun(runId, {
           status: 'interrupted', finishedAt, errorMsg: 'app restarted',
         });
         this.silencedRuns.delete(runId);
+        this.quietFailedRuns.delete(runId);
         this.emitEvent({ type: 'changed', scheduleId: schedule.id });
         return { runId, deferred: true };
       }
@@ -2483,7 +2679,11 @@ export class Scheduler extends EventEmitter {
         this.logger?.warn?.('deleteRun on defer failed', { scheduleId: schedule.id, runId, error: String(err) });
       }
       this.silencedRuns.delete(runId);
-      const retryAt = finishedAt + (deferRetryMs ?? 60_000);
+      this.quietFailedRuns.delete(runId);
+      const deferral = options?.deferToCaller
+        ? null
+        : this.recordDeferral(schedule.id, runId, finishedAt, deferRetryMs ?? 60_000, deferReason);
+      const retryAt = finishedAt + (deferral?.retryMs ?? (deferRetryMs ?? 60_000));
       // 还原 lastFiredAt:runNow 在 fire 前已乐观写 lastFiredAt=firedAt(让 UI 立刻
       // 反映"刚跑了一次");但顺延意味着没真跑,必须撤销这次乐观写,恢复到 fire 前的
       // schedule.lastFiredAt。否则:① 顺延却显示成"已触发",违背"顺延不留可见记录";
@@ -2498,9 +2698,18 @@ export class Scheduler extends EventEmitter {
         this.activeSchedules.set(updated.id, updated);
       } else this.activeSchedules.delete(schedule.id);
       // 'deferred' 配对先前的 'fired'(清 UI running 态、不留可见 run);'changed' revalidate。
-      this.emitEvent({ type: 'deferred', scheduleId: schedule.id, runId });
+      this.emitEvent({
+        type: 'deferred',
+        scheduleId: schedule.id,
+        runId,
+        ...(deferReason ? { deferReason } : {}),
+        ...(deferral ? { consecutiveDeferrals: deferral.count } : {}),
+      });
       this.emitEvent({ type: 'changed', scheduleId: schedule.id });
       return { runId, deferred: true };
+    }
+    if (!controller.signal.aborted || stallAborted) {
+      this.consecutiveDeferrals.delete(schedule.id);
     }
 
     if (stallAborted) {
@@ -2532,13 +2741,15 @@ export class Scheduler extends EventEmitter {
       });
       this.emitFailed(schedule.id, runId, 'aborted', knownSessionId);
     } else if (runError !== undefined) {
+      const quietFailure = this.quietFailedRuns.has(runId);
       await this.storage.updateRun(runId, {
         status: 'failed',
         finishedAt,
         errorMsg: runError,
+        ...(quietFailure ? { readAt: finishedAt } : {}),
         ...(knownSessionId ? { sessionId: knownSessionId } : {}),
       });
-      this.emitFailed(schedule.id, runId, runError, knownSessionId);
+      this.emitFailed(schedule.id, runId, runError, knownSessionId, quietFailure);
     } else if (skipped) {
       // 前置检查拦截:语义同 fireOne 的 skipped 分支(run 保留为 'skipped'、生而
       // 已读、不通知)。手动触发被 hook 拦下同样留痕,让用户点"立即运行"后能看到
@@ -2551,12 +2762,6 @@ export class Scheduler extends EventEmitter {
         resultText: runResultText,
         readAt: finishedAt,
       });
-      this.emitEvent({
-        type: 'skipped',
-        scheduleId: schedule.id,
-        runId,
-        sessionId: runSessionId ?? '',
-      });
     } else {
       // 静默语义与 fireOne 一致:success 落库带 readAt,失败路径不豁免。
       await this.storage.updateRun(runId, {
@@ -2567,6 +2772,7 @@ export class Scheduler extends EventEmitter {
         resultText: runResultText,
         ...(this.silencedRuns.has(runId) ? { readAt: finishedAt } : {}),
       });
+      this.schedulesWithKnownCleanCheck.add(schedule.id);
       this.emitEvent({
         type: 'completed',
         scheduleId: schedule.id,
@@ -2577,15 +2783,23 @@ export class Scheduler extends EventEmitter {
     }
     const silenced = this.silencedRuns.has(runId);
     this.silencedRuns.delete(runId);
+    this.quietFailedRuns.delete(runId);
 
     // Aborted 路径同 fireOne:schedule 大概率已被 delete/pause,不要重写 lastFinishedAt
     // (避免污染已删除/已暂停 schedule 的字段)。守卫 abort 例外:schedule 仍在,
     // "跑完了一次(以失败收场)"该如实反映到列表。
-    if (!wasAborted || stallAborted) {
-      await this.finishRunSchedule(schedule, firedAt, finishedAt, recovery ? 'recovery' : 'run-now');
+    const finishSource = recovery
+      ? 'recovery'
+      : !options?.webhook && options?.trigger?.source === 'pr-status'
+        ? 'pr-watch'
+        : 'run-now';
+    const finish = () => this.finishRunSchedule(schedule, firedAt, finishedAt, finishSource, options?.trigger);
+    if (skipped && !wasAborted && !stallAborted && runError === undefined) {
+      await this.finishSkippedRun(schedule, runId, runSessionId ?? '', preRunCheckSucceeded, finish);
+    } else {
+      if (!wasAborted || stallAborted) await finish();
+      this.emitEvent({ type: 'changed', scheduleId: schedule.id });
     }
-    // Revalidate history for either a new run or the recovered original row.
-    this.emitEvent({ type: 'changed', scheduleId: schedule.id });
     return { runId, ...(silenced ? { silenced: true } : {}) };
     } catch (error) {
       // Stop/forced settlement already owns an abandoned or removed attempt.
@@ -2708,6 +2922,7 @@ export class Scheduler extends EventEmitter {
     }
     await this.validateModelSelection?.(schedule);
     const inserted = await this.storage.insert(schedule);
+    this.schedulesWithKnownCleanCheck.add(id);
     if (inserted.status === 'active') this.activeSchedules.set(id, inserted);
     this.emitEvent({ type: 'changed', scheduleId: id });
     return inserted;
@@ -2959,8 +3174,34 @@ export class Scheduler extends EventEmitter {
         toIso: recomputeFromTo.to ? new Date(recomputeFromTo.to).toISOString() : null,
       });
     }
+    this.consecutiveDeferrals.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
     return updated;
+  }
+
+  private recordDeferral(
+    scheduleId: string,
+    runId: string,
+    finishedAt: number,
+    baseRetryMs: number,
+    deferReason?: string,
+  ): { retryMs: number; count: number } {
+    const prev = this.consecutiveDeferrals.get(scheduleId);
+    const count = (prev?.count ?? 0) + 1;
+    const firstAt = prev?.firstAt ?? finishedAt;
+    this.consecutiveDeferrals.set(scheduleId, { count, firstAt, lastReason: deferReason });
+    const retryMs = computeDeferredRetryMs(baseRetryMs, count);
+    if (count === DEFER_WARN_FIRST_COUNT || (count > DEFER_WARN_FIRST_COUNT && count % DEFER_WARN_EVERY_COUNT === 0)) {
+      this.logger?.warn?.('schedule repeatedly deferred without running', {
+        scheduleId,
+        runId,
+        consecutiveDeferrals: count,
+        deferredForMs: Math.max(0, finishedAt - firstAt),
+        ...(deferReason ? { deferReason } : {}),
+        nextRetryMs: retryMs,
+      });
+    }
+    return { retryMs, count };
   }
 
   async pause(id: string, opts?: { exemptRunId?: string; internalRoutine?: true }): Promise<Schedule> {
@@ -2993,6 +3234,7 @@ export class Scheduler extends EventEmitter {
     // (Codex P1 on #12087 的第十一轮复评)。
     this.invalidateReplanWriteReceipts(id);
     this.invalidScheduleIds.delete(id);
+    this.consecutiveDeferrals.delete(id);
     this.activeSchedules.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
     return updated;
@@ -3032,6 +3274,7 @@ export class Scheduler extends EventEmitter {
     // 跳过(Codex P1 on #12087 的第十一轮复评)。
     this.invalidateReplanWriteReceipts(id);
     this.invalidScheduleIds.delete(id);
+    this.consecutiveDeferrals.delete(id);
     if (updated.status === 'active') this.activeSchedules.set(id, updated);
     else this.activeSchedules.delete(id);
     this.emitEvent({ type: 'changed', scheduleId: id });
@@ -3092,6 +3335,7 @@ export class Scheduler extends EventEmitter {
       : undefined;
     await this.storage.delete(id);
     this.invalidScheduleIds.delete(id);
+    this.consecutiveDeferrals.delete(id);
     this.pendingReplans.delete(id);
     this.replanLatestIssue.delete(id);
     this.replanWriteReceipts.delete(id);
@@ -3245,6 +3489,11 @@ export class Scheduler extends EventEmitter {
     return this.silencedRuns.has(runId);
   }
 
+  /** run 是否为静默期内的瞬时前置检查故障(quietRunArchive 在异常出口查询)。 */
+  isRunQuietFailure(runId: string): boolean {
+    return this.quietFailedRuns.has(runId);
+  }
+
   /**
    * 僵尸清扫的 single-flight 入口(见 inFlightSweep)。上一份还在途时本轮不重复
    * 发起 —— 预闸门超时只放弃「等」,活儿还在跑,每个 30 秒的 DB sync 块都再起一份
@@ -3301,6 +3550,7 @@ export class Scheduler extends EventEmitter {
         `scheduler: swept ${affected.length} stale running run(s) as interrupted`,
       );
       for (const scheduleId of new Set(affected)) {
+        this.schedulesWithKnownCleanCheck.delete(scheduleId);
         // 先恢复排期再广播,让 UI 一次刷新就读到最终状态。
         await this.rescheduleAfterSweep(scheduleId, now);
         this.emitEvent({ type: 'changed', scheduleId });
@@ -3443,6 +3693,7 @@ export class Scheduler extends EventEmitter {
     }
     if (this.runIdToBoundSessionId.delete(runId)) residuals.push('boundSessionMap');
     if (this.silencedRuns.delete(runId)) residuals.push('silencedRuns');
+    if (this.quietFailedRuns.delete(runId)) residuals.push('quietFailedRuns');
     if (residuals.length > 0) {
       this.logger?.warn?.(
         'scheduler: attempt exit found unreaped registrations (cleaned; a lifecycle path skipped its cleanup)',
@@ -3493,6 +3744,11 @@ export class Scheduler extends EventEmitter {
     for (const runId of this.silencedRuns) {
       if (!this.inflightAttempts.has(runId)) {
         throw new Error(`scheduler invariant violated: silenced mark without attempt (runId=${runId})`);
+      }
+    }
+    for (const runId of this.quietFailedRuns) {
+      if (!this.inflightAttempts.has(runId)) {
+        throw new Error(`scheduler invariant violated: quiet-failed mark without attempt (runId=${runId})`);
       }
     }
   }
@@ -3810,13 +4066,21 @@ export class Scheduler extends EventEmitter {
     );
   }
 
-  private emitFailed(scheduleId: string, runId: string, error: string, sessionId?: string): void {
+  private emitFailed(
+    scheduleId: string,
+    runId: string,
+    error: string,
+    sessionId?: string,
+    silenced?: boolean,
+  ): void {
+    this.schedulesWithKnownCleanCheck.delete(scheduleId);
     this.emitEvent({
       type: 'failed',
       scheduleId,
       runId,
       error,
       ...(sessionId ? { sessionId } : {}),
+      ...(silenced ? { silenced: true } : {}),
     });
   }
 
@@ -3883,11 +4147,40 @@ export class Scheduler extends EventEmitter {
 
   /** 前置检查发生在 session 创建之前，结束后立即把完整结果写到当前 run。 */
   private buildOnPreRunHookCompleted(
+    scheduleId: string,
     runId: string,
-  ): (result: PreRunHookRunResult) => Promise<void> {
+    firedAt: number,
+    onResult?: (result: PreRunHookRunResult) => void,
+  ): (result: PreRunHookRunResult) => Promise<PreRunHookCompletionOutcome> {
     return async (result: PreRunHookRunResult) => {
+      onResult?.(result);
+      let quietFailure = false;
+      if (isTransientPrecheckHookFailure(result)) {
+        try {
+          const outage = this.storage.getTransientPrecheckOutageState
+            ? await this.storage.getTransientPrecheckOutageState(scheduleId, runId)
+            : { firstUnrecoveredFiredAt: null, lastEscalatedFiredAt: null };
+          quietFailure = !shouldEscalateTransientPrecheckFailure(outage, firedAt);
+        } catch (err) {
+          // 历史查询失败不隐藏原故障，按正常失败提醒。
+          this.logger?.warn?.('lookup transient precheck outage state failed', {
+            scheduleId,
+            runId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      if (quietFailure && !this.inflightAttempts.has(runId)) {
+        quietFailure = false;
+      }
+      const persistedResult: PreRunHookRunResult = quietFailure
+        ? { ...result, transientQuiet: true }
+        : result;
+      if (quietFailure) {
+        this.quietFailedRuns.add(runId);
+      }
       try {
-        await this.storage.updateRun(runId, { preRunHookResult: result });
+        await this.storage.updateRun(runId, { preRunHookResult: persistedResult });
       } catch (err) {
         // 诊断结果落库是 best-effort：短暂 BUSY / I/O 错误不能覆盖已经得到的
         // run / skip / block 业务判定，最终 run 状态仍由 fire 主流程收敛。
@@ -3896,6 +4189,7 @@ export class Scheduler extends EventEmitter {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+      return { quietFailure };
     };
   }
 
@@ -4228,6 +4522,8 @@ export class Scheduler extends EventEmitter {
     }
     this.runIdToBoundSessionId.delete(runId);
     this.silencedRuns.delete(runId);
+    this.quietFailedRuns.delete(runId);
+    this.consecutiveDeferrals.delete(scheduleId);
     const noProgressMs = now - attempt.lastProgressAt;
     this.logger?.error?.('scheduler: force-releasing stalled run slot (runner never settled)', {
       schedulerInstanceId: this.schedulerInstanceId,
@@ -4690,7 +4986,7 @@ export class Scheduler extends EventEmitter {
     attempt: ReplanAttempt,
     now: number,
   ): Promise<boolean> {
-    const next = computeNextFireAt(current, now);
+    const next = computeNextFireAt(current, now, { ignorePersistedNextFireAt: true });
     if (next === undefined) return true; // manual:按语义不续命
     const write = this.writeReplanNextFireAt(scheduleId, current, next, attempt);
     let updated = await write;
@@ -4712,7 +5008,7 @@ export class Scheduler extends EventEmitter {
         fresh.status === 'active' &&
         this.isRetiredReplanWrite(scheduleId, fresh)
       ) {
-        const freshNext = computeNextFireAt(fresh, now);
+        const freshNext = computeNextFireAt(fresh, now, { ignorePersistedNextFireAt: true });
         if (freshNext !== undefined) {
           updated = await this.writeReplanNextFireAt(scheduleId, fresh, freshNext, attempt);
           // 接管写也落空:行里留着的是按故障前时刻算出的旧排期,长故障之后已经落在
@@ -4732,7 +5028,7 @@ export class Scheduler extends EventEmitter {
           // 周期任务。不补排的话它不会被触发(没有排期),周期 DB sync 也只重灌行、
           // 不补 nextFireAt —— 任务停摆到进程重启(Codex P1 on #12087)。按它自己
           // 的 cadence 从恢复时刻补排。
-          const freshNext = computeNextFireAt(fresh, now);
+          const freshNext = computeNextFireAt(fresh, now, { ignorePersistedNextFireAt: true });
           if (freshNext !== undefined) {
             updated = await this.writeReplanNextFireAt(scheduleId, fresh, freshNext, attempt);
             // 补排写也落空:又一个并发写(再一次 runNow / 用户编辑)在回读之后落了
@@ -4908,7 +5204,11 @@ function replanWriteIdentity(row: Schedule): string {
   ]);
 }
 
-function computeNextFireAt(schedule: Schedule, fromMs: number): number | undefined {
+function computeNextFireAt(
+  schedule: Schedule,
+  fromMs: number,
+  options?: { ignorePersistedNextFireAt?: boolean },
+): number | undefined {
   if (hasExpired(schedule, fromMs)) return undefined;
   // manual schedule 永远不参与自动触发，跳过 cron 计算（runNow 是单独路径）
   if (schedule.manual) return undefined;
@@ -4918,13 +5218,37 @@ function computeNextFireAt(schedule: Schedule, fromMs: number): number | undefin
   // evade startup/DB-sync quarantine and fire from a stale nextFireAt.
   nextCronOrMonthlyFire(schedule.cronExpr, fromMs, schedule.timezone);
   if (schedule.intervalMs !== undefined) {
-    // 冷启动：基线取 lastFinishedAt（跑过）或 createdAt（没跑过），再 max(base+N, now+N)
-    // —— 漏掉的不补发，重新起 N 倒计时。
-    return beforeDeadline(schedule, nextIntervalFire(
-      schedule.lastFinishedAt ?? schedule.createdAt,
-      schedule.intervalMs,
-      fromMs,
-    ));
+    const intervalMs = schedule.intervalMs;
+    const maxPreservedNextFireAt = fromMs + intervalMs + Math.floor(intervalMs / 2);
+    // 冷启动优先保留合法的未来 nextFireAt（含积压排空按 createdAt 打散后写入的
+    // (finishedAt + intervalMs/2, finishedAt + 1.5*intervalMs] 相位槽，以及 resume/update
+    // 刚写入的排期），避免一间隔内重启时被共享的 lastFinishedAt + intervalMs 覆盖重聚。
+    if (
+      !options?.ignorePersistedNextFireAt &&
+      schedule.nextFireAt !== undefined &&
+      schedule.nextFireAt > fromMs &&
+      schedule.nextFireAt <= maxPreservedNextFireAt
+    ) {
+      return beforeDeadline(schedule, schedule.nextFireAt);
+    }
+    // 仅当持久化 nextFireAt 缺失/被忽略（如认领后崩溃、接管退役补排）或超出合法窗口时，
+    // 才回退参考 (lastFinishedAt ?? createdAt) + intervalMs；若持久化 nextFireAt 明确已过期，
+    // 直接按 createdAt 相位向前对齐，避免部分错过错开槽位的积压任务被吸附回同一 lastFinishedAt + intervalMs。
+    const hasOverduePersistedNext =
+      !options?.ignorePersistedNextFireAt &&
+      schedule.nextFireAt !== undefined &&
+      schedule.nextFireAt <= fromMs;
+    if (!hasOverduePersistedNext) {
+      const planned = (schedule.lastFinishedAt ?? schedule.createdAt) + intervalMs;
+      if (planned > fromMs && planned <= fromMs + intervalMs) {
+        return beforeDeadline(schedule, planned);
+      }
+    }
+    const phaseAnchor =
+      schedule.createdAt <= fromMs
+        ? schedule.createdAt
+        : (schedule.lastFinishedAt ?? schedule.createdAt);
+    return beforeDeadline(schedule, nextIntervalFire(phaseAnchor, intervalMs, fromMs));
   }
   return beforeDeadline(schedule, nextCronOrMonthlyFire(schedule.cronExpr, fromMs, schedule.timezone));
 }

@@ -17,7 +17,11 @@ import { ClaudeCodeAgent } from '@cindy/maker-core/agents/claude-code';
 import { CodexAgent } from '@cindy/maker-core/agents/codex';
 import { hasProxyEnvConfig } from '@cindy/anthropic-compat-proxy';
 import { Maker, PiAgent } from '@cindy/maker-core';
-import type { AgentDeps, AgentKind, AuthAdapter, AuthAdapterOptions, AuthLoginOptions, AuthState, MakerDeps, MakerMemoryManager } from '@cindy/maker-core';
+import { scanPiCustomizations } from '@cindy/maker-core/customization-scanner';
+import type { AgentDeps, AgentKind, AuthAdapter, AuthAdapterOptions, AuthLoginOptions, AuthState, EngineKind, MakerDeps, MakerMemoryManager } from '@cindy/maker-core';
+import { installPluginEnginesCore } from '../../../desktop/src/main/maker-host/acpHostCore.js';
+import { builtinAgentKindOrNull } from '../../../desktop/src/main/maker-host/engineKind.js';
+import { createPluginEngineSkillLister } from '../../../desktop/src/main/maker-host/pluginEngineSkills.js';
 
 import { hasClaudeNativeLogin } from '../../../desktop/src/main/maker-host/claude-native-auth.ts';
 import { peekClaudeCliLoginStatus } from '../../../desktop/src/main/maker-host/claude-native-cli-status.js';
@@ -59,13 +63,12 @@ import type { createHostClaudeProxyRuntime } from './claude-proxy-runtime.js';
 import { createHostModelContext } from './model-context.js';
 import { readDisabledSkillPaths } from '../../../desktop/src/main/skillhub/activationPreferences.js';
 import { createHostStartOptions } from './start-options.js';
-import { dbToMakerAgentKind } from '../../../desktop/src/shared/agentKindConversion.js';
 import { createBashConcurrencyHooks, mergeClaudeHooks } from '../../../desktop/src/main/maker-host/claude-hooks/bash-concurrency-hook.js';
 import { createReadImageHook } from '../../../desktop/src/main/maker-host/claude-hooks/read-image-hook.js';
 import { createDesktopInputShellGuardHooks } from '../../../desktop/src/main/maker-host/claude-hooks/desktop-input-shell-guard-hook.js';
 import { readAgentResourceSettings } from '../../../desktop/src/main/maker-host/agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from '../../../desktop/src/main/maker-host/command-concurrency-gate.js';
-import { captureKnownFileBefore, noteOpaqueTurnChange } from '../../../desktop/src/main/turn-change-set/store.js';
+import { captureKnownFileBefore, noteOpaqueTurnChange, recordKnownFilePreimage } from '../../../desktop/src/main/turn-change-set/store.js';
 import { readCodexHistoryHasProductPrompt, writeCodexHistoryHasProductPrompt } from '../../../desktop/src/main/maker-host/session-storage.js';
 import { buildPiRuntimeConfig, claudeUpstreamEndpoint, createAgentRuntimeConfigs } from '../../../desktop/src/main/maker-host/runtimeConfigsCore.js';
 import { hostRuntimeLayout } from '../runtime-layout.mjs';
@@ -120,6 +123,8 @@ export interface HostAgentGraphOptions {
   getManagedSkills?: AgentDeps['getManagedSkills'];
   /** Directory holding the bundled harnesses, including `ripgrep-bin`. Defaults to the Host layout. */
   harnessRoot?: string;
+  /** Host application version reported to plugin ACP engines during initialize. */
+  appVersion?: string;
   /** The account gateway's rejected-key report (model-access.ts), for the one-shot review requests. */
   reportGatewayKeyRejected?: (key: string) => void;
   /** The account realm (main.ts), as the desktop's getActiveAuthRealm for the Codex token reader. */
@@ -131,6 +136,10 @@ export interface HostAgentGraphOptions {
   /** Shared global Skill preparation (agent/shared-global-skills.ts, release table row 25): before
    * each Claude CLI start (the desktop's Claude getAuthEnv) and before local Pi (piNativeProviders). */
   sharedGlobalSkills?: Pick<HostSharedGlobalSkills, 'ensureSharedGlobalSkills' | 'beforeClaudeLaunch'> | null;
+  /** Expands a Smart Routing auxiliary ref (`route:<id>`) into local catalog pins. */
+  expandRouteRef?: (routeId: string) => string[];
+  /** Resolves a Smart Routing Claude subagent route (`route:<id>`) into local CC candidate pairs. */
+  subagentRouteMembers?: (routeId: string) => readonly { providerId: string; model: string }[];
 }
 
 /** The desktop's Claude getAuthEnv opens with the shared Skill preparation; the Host adapter keeps its own body. */
@@ -624,7 +633,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   const autoReview = createHostAutoReview({
     userDataDir: options.userDataDir, getMaker: () => maker, gateway: options.gateway,
     reportGatewayKeyRejected: options.reportGatewayKeyRejected, providerConfig: config,
-    bridge: () => options.codexRuntime?.subscriptions.bridge ?? null, logger: LOGGER,
+    bridge: () => options.codexRuntime?.subscriptions.bridge ?? null,
+    expandRouteRef: options.expandRouteRef,
+    logger: LOGGER,
   });
   const piAuth = bindAuthOwner(createPiAuthAdapter({
     subscriptionAccountKind,
@@ -672,6 +683,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     userDataPath: () => options.userDataDir,
     ripgrepCandidates: key => [path.join(harnessRoot, 'ripgrep-bin', key)],
     codexBinaryPath: () => codexBinaryPath,
+    ...(options.subagentRouteMembers ? { subagentRouteMembers: options.subagentRouteMembers } : {}),
   });
   // Without an account gateway the Host keeps the endpoint unset, as before.
   const hostEndpoint = (() => options.gateway?.endpoint || undefined) as () => string;
@@ -767,6 +779,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     resolveCodexSubagentRoutingSignature: undefined, resolveCodexLocalAuthPolicy: undefined, isCodexAccountProvider: undefined,
     isolateCodexAccountSessions: undefined, registerCodexTextOnlyPolicy: undefined, registerCodexSystemPromptForThread: undefined,
     getRejectedCodexDownshiftModel: undefined,
+    getObservedCodexUpstreamCapacity: undefined,
+    subscribeCodexUpstreamCapacity: undefined,
     getCodexSubagentIdentity: undefined, armCodexHttpRecovery: undefined, registerCodexChildThreadForParent: undefined,
   } satisfies { [K in keyof AgentDeps]?: undefined };
   // codexModelResolvers exists exactly when there is a Codex binary (above).
@@ -800,7 +814,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         binaryPath: codexBinaryPath,
         logger: LOGGER,
         // As the desktop: Host exit reaps the tool trees below these app-servers (main.ts stop).
-        registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
+        registerLocalCodexAppServerProcess: ({ pid, role, child }) => registerCodexProcessRole(pid, role, child),
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
         getMcpToolApprovalEvidence: undefined,
         // As the desktop: a credential-mode switch of the shared local app-server refuses busy
@@ -849,6 +863,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // As the desktop (pi-host.ts, maker-host/index.ts): Pi packages from this profile's pi-package-home.
   const piPackages = createHostPiPackages({ userDataDir: options.userDataDir, piBinaryPath: options.piBinaryPath ?? null });
   const piNativeProviders = createHostPiNativeProviders({
+    getCatalog: () => modelContext.getRoutingCatalog(),
     userDataDir: options.userDataDir, piBinaryPath: options.piBinaryPath ?? null, endpoint: engineEndpoint,
     claudeProxy, providerConfig: config,
     ensureSharedGlobalSkills: () => options.sharedGlobalSkills?.ensureSharedGlobalSkills() ?? Promise.resolve(),
@@ -916,6 +931,9 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         // As the desktop (pi-host.ts): the shared resolver with the Host's ports (pi-native-providers.ts),
         // and the Cindy gateway block's API and compat from the same probe state.
         resolvePiNativeProviders: (ctx) => piNativeProviders.resolvePiNativeProviders(ctx),
+        // #12298: the Host's own subscription connection state (read-only), so subagent
+        // routes skip a source the Host knows is disconnected.
+        isNativeProviderSourceConnected: piNativeProviders.subscriptionSourceConnected,
         // As the desktop (pi-host.ts): durable Subagent runners, forked as Node child processes (pi-subagent-runner.ts).
         spawnPiSubagentRunner: (request) => spawnHostPiSubagentRunner(request),
         resolvePiManagedPackageResources: piPackages.deps.resolvePiManagedPackageResources,
@@ -1023,6 +1041,31 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     toolLoopReviewer: autoReview.toolLoopReviewer,
     makerMemory: options.makerMemory,
   }));
+  // Plugin-provided ACP engines (docs/plans/acp-plugin-bridge.md): registered only once an
+  // enabled, approved plugin provides a harness; built-in engines stay untouched either way.
+  const listPluginEngineSkills = createPluginEngineSkillLister({
+    listManagedSkills: () => options.getManagedSkills?.() ?? Promise.resolve([]),
+    // SkillHub discovery isolation is M2 (release table section 4), matching Claude/Codex/Pi above;
+    // once M2 adds Host's isolated customization scanner, wire it here too.
+    scanCustomizations: (_engine, scanOpts) => scanPiCustomizations(scanOpts),
+    readDisabledSkillPaths: () => readDisabledSkillPaths(),
+  });
+  const disposePluginEngines = installPluginEnginesCore({
+    maker,
+    logger: LOGGER,
+    appVersion: options.appVersion ?? hostRuntimeLayout().version,
+    mcpProviders,
+    makerMemory: options.makerMemory,
+    turnChangeCapture: {
+      beforeKnownFileWrite: captureKnownFileBefore,
+      recordKnownFilePreimage,
+      noteOpaqueWrite: noteOpaqueTurnChange,
+    },
+    getGhostRosterPrompt: options.getGhostRosterPrompt,
+    listSessionSkills: listPluginEngineSkills,
+    preparePiExtraSpawnConfig: options.mcpRuntime.piDeps.preparePiExtraSpawnConfig,
+    getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
+  });
   // As the desktop (register.ts): when the loopback proxy sees Claude's native Auto classifier
   // fail, the task stays on Auto and its later approvals go to the Cindy reviewer above.
   // The latest graph owns the process-wide listener.
@@ -1052,14 +1095,19 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // verified window of a route, as in Desktop; the learned Pi cache
   // compatibility of this profile; and the Codex runtime's native history.
   const contextRecovery = {
-    resolveVerifiedWindow: (agentKind: string, modelId: string, providerId: string | null | undefined) =>
-      startOptions.resolveConfiguredContextWindow(getActiveCatalog(), dbToMakerAgentKind(agentKind), providerId, modelId, undefined, 'required'),
+    resolveVerifiedWindow: (agentKind: string, modelId: string, providerId: string | null | undefined) => {
+      const builtin = builtinAgentKindOrNull((agentKind === 'cc' ? 'claude-code' : agentKind) as EngineKind);
+      if (!builtin) return null;
+      return startOptions.resolveConfiguredContextWindow(getActiveCatalog(), builtin, providerId, modelId, undefined, 'required');
+    },
     async resolveHandoffWindow(sessionId: string, route: {
       agentKind: string; model: string; providerId: string | null; agentDeviceId?: string | null;
     }) {
       if (route.agentDeviceId) return null;
+      const builtin = builtinAgentKindOrNull((route.agentKind === 'cc' ? 'claude-code' : route.agentKind) as EngineKind);
+      if (!builtin) return null;
       return startOptions.resolveConfiguredContextWindow(
-        getActiveCatalog(), dbToMakerAgentKind(route.agentKind), route.providerId, route.model,
+        getActiveCatalog(), builtin, route.providerId, route.model,
         await startOptions.readStoredSessionContextWindowBudget(sessionId), 'required',
       );
     },
@@ -1076,8 +1124,12 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     readStoredSessionContextWindowBudget: startOptions.readStoredSessionContextWindowBudget,
     contextWindowBudgetChangesEffectiveWindow: startOptions.contextWindowBudgetChangesEffectiveWindow,
   };
+  const hasEngine = (kind: EngineKind): boolean => {
+    if (kind !== 'acp') return Boolean(agents[kind]);
+    try { maker.getCapabilities('acp'); return true; } catch { return false; }
+  };
   return { maker, agent, codex, pi, gatewayRestart, capabilitiesByAgent, instances: agents, autoReview, piPackages,
-    contextRecovery, modelWindow,
+    contextRecovery, modelWindow, disposePluginEngines, hasEngine,
     refreshModels: () => refreshCatalogDerivedModels(maker, modelContext.getSelectableCatalog()),
     agents: Object.keys(agents) as AgentKind[] };
 }

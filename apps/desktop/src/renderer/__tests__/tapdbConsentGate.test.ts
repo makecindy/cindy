@@ -256,7 +256,7 @@ describe('TapDB consent gate', () => {
     await flush();
 
     expect(tapdb.init).toHaveBeenCalledTimes(1);
-    expect(tapdb.trackEvent).toHaveBeenCalledWith('page_view', { '#tag': 'app_start' });
+    expect(tapdb.trackEvent).toHaveBeenCalledWith('cindy_desktop_page_view_v1', { cindy_activity_trigger: 'app_start' });
   });
 
   it('stays silent on auth changes while unconsented', async () => {
@@ -376,7 +376,7 @@ describe('TapDB consent gate', () => {
     await flush();
     hidePage();
 
-    expect(tapdb.track).toHaveBeenCalledWith('page_hide');
+    expect(tapdb.track).toHaveBeenCalledWith('cindy_desktop_page_hide_v1', expect.any(Object));
   });
 
   it('does not report page_hide after opting out', async () => {
@@ -551,7 +551,7 @@ describe('engagement-driven activity reporting', () => {
     fireWindowEvent('pointerdown');
 
     expect(tapdb.trackEvent).toHaveBeenCalledTimes(2); // app_start + 1 × app_engaged
-    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('page_view', { '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('cindy_desktop_page_view_v1', { cindy_activity_trigger: 'app_engaged' });
 
     vi.advanceTimersByTime(30 * 60 * 1000);
     fireWindowEvent('focus');
@@ -578,11 +578,11 @@ describe('engagement-driven activity reporting', () => {
 
     vi.advanceTimersByTime(30 * 60 * 1000);
     expect(tapdb.trackEvent).toHaveBeenCalledTimes(2);
-    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('page_view', { '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('cindy_desktop_page_view_v1', { cindy_activity_trigger: 'app_engaged' });
 
     vi.advanceTimersByTime(30 * 60 * 1000);
     expect(tapdb.trackEvent).toHaveBeenCalledTimes(3);
-    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('page_view', { '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('cindy_desktop_page_view_v1', { cindy_activity_trigger: 'app_engaged' });
   });
 
   it('starts the rolling report when a session was already working before TapDB initializes', async () => {
@@ -593,7 +593,7 @@ describe('engagement-driven activity reporting', () => {
     vi.advanceTimersByTime(30 * 60 * 1000);
 
     expect(tapdb.trackEvent).toHaveBeenCalledTimes(2);
-    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('page_view', { '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('cindy_desktop_page_view_v1', { cindy_activity_trigger: 'app_engaged' });
   });
 
   it('does not postpone the next report when working progress notifies repeatedly', async () => {
@@ -605,7 +605,7 @@ describe('engagement-driven activity reporting', () => {
     vi.advanceTimersByTime(60 * 1000);
 
     expect(tapdb.trackEvent).toHaveBeenCalledTimes(2);
-    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('page_view', { '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('cindy_desktop_page_view_v1', { cindy_activity_trigger: 'app_engaged' });
   });
 
   it('serializes aligned working timers across renderer windows', async () => {
@@ -623,7 +623,7 @@ describe('engagement-driven activity reporting', () => {
 
     expect(lockRequest).toHaveBeenCalledTimes(2);
     expect(tapdb.trackEvent).toHaveBeenCalledTimes(1);
-    expect(tapdb.trackEvent).toHaveBeenCalledWith('page_view', { '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenCalledWith('cindy_desktop_page_view_v1', { cindy_activity_trigger: 'app_engaged' });
   });
 
   it('drops a queued working report if work stops before the lock is acquired', async () => {
@@ -711,7 +711,7 @@ describe('engagement-driven activity reporting', () => {
     expect(billingSdk.setUser).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(28 * 60 * 1000); // 00:29,距上次 app_start 30 分钟
-    expect(tapdb.trackEvent).toHaveBeenCalledWith('page_view', { '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenCalledWith('cindy_desktop_page_view_v1', { cindy_activity_trigger: 'app_engaged' });
     expect(billingSdk.setUser).not.toHaveBeenCalled();
   });
 
@@ -724,7 +724,7 @@ describe('engagement-driven activity reporting', () => {
     vi.setSystemTime(new Date(2026, 6, 29, 9, 0, 0));
     fireWindowEvent('pointerdown');
 
-    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('page_view', { '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenLastCalledWith('cindy_desktop_page_view_v1', { cindy_activity_trigger: 'app_engaged' });
     expect(billingSdk.setUser).toHaveBeenCalledTimes(1);
 
     // 同日后续窗口只发 page_view,不重复 setUser。
@@ -805,7 +805,7 @@ describe('engagement-driven activity reporting', () => {
     vi.setSystemTime(new Date(2026, 6, 29, 0, 3, 0));
     fireWindowEvent('keydown');
 
-    expect(tapdb.trackEvent).toHaveBeenCalledWith('page_view', { '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenCalledWith('cindy_desktop_page_view_v1', { cindy_activity_trigger: 'app_engaged' });
     expect(billingSdk.setUser).not.toHaveBeenCalled();
   });
 
@@ -826,7 +826,7 @@ describe('engagement-driven activity reporting', () => {
     vi.advanceTimersByTime(29 * 60 * 1000 + 31 * 1000);
     fireWindowEvent('keydown');
 
-    expect(tapdb.trackEvent).toHaveBeenCalledWith('page_view', { '#tag': 'app_engaged' });
+    expect(tapdb.trackEvent).toHaveBeenCalledWith('cindy_desktop_page_view_v1', { cindy_activity_trigger: 'app_engaged' });
   });
 
   it('ignores input while unconsented, then reports normally after consent', async () => {
@@ -840,7 +840,7 @@ describe('engagement-driven activity reporting', () => {
 
     // 未放行期间的交互不消耗节流窗口:同意后立刻能发 app_start。
     settingsListener?.(ALLOWED);
-    expect(tapdb.trackEvent).toHaveBeenCalledWith('page_view', { '#tag': 'app_start' });
+    expect(tapdb.trackEvent).toHaveBeenCalledWith('cindy_desktop_page_view_v1', { cindy_activity_trigger: 'app_start' });
   });
 
   it('stops engagement reports immediately after opt-out', async () => {

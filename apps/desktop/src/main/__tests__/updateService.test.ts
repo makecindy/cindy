@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { TEST_CDN_BASE_URL as CDN_EXTERNAL_BASE_URL } from '../../test/vitest/clientEndpointsFixture';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
 
 const originalPlatform = process.platform;
 const originalArch = process.arch;
@@ -41,7 +42,11 @@ const spawnProcess = vi.fn(() => ({
   unref: vi.fn(),
   on: vi.fn(),
 }));
-const findLinuxUserInstallation = vi.fn(() => null);
+type TestLinuxInstallation = { prefix: string; current: string; region: 'global' | 'cn' };
+const findLinuxUserInstallation = vi.fn<() => TestLinuxInstallation | null>(() => null);
+const recognizeLinuxUserInstallation = vi.fn<() => TestLinuxInstallation | null>(() => null);
+const hasLinuxPkexec = vi.fn(() => true);
+const isLinuxPkexecPreauthorized = vi.fn(() => false);
 const checkDebianManagedInstallation = vi.fn<() =>
   | { status: 'managed' }
   | { status: 'not-managed' }
@@ -50,6 +55,7 @@ const checkDebianManagedInstallation = vi.fn<() =>
 const missingLinuxUserInstallTools = vi.fn(() => [] as string[]);
 vi.mock('../linuxInstallation', () => ({
   findLinuxUserInstallation, checkDebianManagedInstallation, missingLinuxUserInstallTools,
+  recognizeLinuxUserInstallation, hasLinuxPkexec, isLinuxPkexecPreauthorized,
 }));
 const checkWindowsUpdaterPrerequisites = vi.fn<
   () => { satisfied: boolean; missingFiles: string[] }
@@ -284,6 +290,12 @@ beforeEach(() => {
   spawnProcess.mockClear();
   findLinuxUserInstallation.mockReset();
   findLinuxUserInstallation.mockReturnValue(null);
+  recognizeLinuxUserInstallation.mockReset();
+  recognizeLinuxUserInstallation.mockReturnValue(null);
+  hasLinuxPkexec.mockReset();
+  hasLinuxPkexec.mockReturnValue(true);
+  isLinuxPkexecPreauthorized.mockReset();
+  isLinuxPkexecPreauthorized.mockReturnValue(false);
   checkDebianManagedInstallation.mockReset();
   checkDebianManagedInstallation.mockReturnValue({ status: 'not-managed' });
   missingLinuxUserInstallTools.mockReset();
@@ -1132,7 +1144,16 @@ describe('checkForUpdate Linux installer flow', () => {
     }
   });
 
-  it('does not quit or increment attempts for an unmanaged Linux installation', async () => {
+  // Regression (2026-11-25, cloud desktop without polkit): a system .deb on a
+  // computer without pkexec quit Cindy, the script logged "pkexec not found"
+  // and relaunched the same version on every click. Both layouts must be
+  // refused before quitting. Mocked Electron, temporary files; unit.
+  it.each([
+    { name: 'an unmanaged Linux installation', debian: 'not-managed' as const, pkexec: true },
+    { name: 'a system .deb without pkexec', debian: 'managed' as const, pkexec: false },
+  ])('does not quit or increment attempts for $name', async ({ debian, pkexec }) => {
+    checkDebianManagedInstallation.mockReturnValue({ status: debian });
+    hasLinuxPkexec.mockReturnValue(pkexec);
     download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
       fs.writeFileSync(targetPath, 'deb');
@@ -1198,12 +1219,76 @@ describe('checkForUpdate Linux installer flow', () => {
     expect(download).not.toHaveBeenCalled();
   });
 
-  it('does not auto-apply a staged Linux .deb at startup', async () => {
+  // Only installs that need no pkexec password get the macOS-style startup
+  // apply and the Settings switch: Cindy's user-directory install, or a system
+  // .deb whose pkexec polkit already authorizes (cloud desktop images).
+  // Mocked Electron and layout probes; unit.
+  // A user install only carries the global/cn markers; the test build runs as one of them.
+  const currentRegion: TestLinuxInstallation['region'] = CURRENT_CINDY_REGION === 'cn' ? 'cn' : 'global';
+  const otherRegion: TestLinuxInstallation['region'] = currentRegion === 'cn' ? 'global' : 'cn';
+  const userInstall: TestLinuxInstallation = {
+    prefix: '/home/u/.local/opt/cindy', current: 'releases/0.0.64', region: currentRegion,
+  };
+  it('does not defer IM startup when a user install cannot apply unattended', async () => {
+    checkDebianManagedInstallation.mockReturnValue({ status: 'not-managed' });
+    recognizeLinuxUserInstallation.mockReturnValue(userInstall);
+    findLinuxUserInstallation.mockReturnValue(userInstall);
+    missingLinuxUserInstallTools.mockReturnValue(['bsdtar']);
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.writeFileSync(targetPath, 'deb');
+      return { path: targetPath, size: 123 };
+    });
+    const service = await freshUpdateService('linux', 'x64');
+    service.initUpdateService();
+    try {
+      await expect(service.checkForUpdate(linuxInstallerManifest())).resolves.toBe('ready');
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it.each([
+    { name: 'a system .deb', recognized: null, strict: null, missingTools: [], action: 'none' },
+    { name: 'a passwordless system .deb', recognized: null, strict: null, missingTools: [], preauthorized: true, action: 'relaunch' },
+    { name: 'a user install', recognized: userInstall, strict: userInstall, missingTools: [], action: 'relaunch' },
+    // The splash waits once a relaunch is accepted, so a preflight that would
+    // fail after acceptance must keep startup on the normal path instead.
+    { name: 'a user install missing bsdtar', recognized: userInstall, strict: userInstall, missingTools: ['bsdtar'], action: 'none' },
+  ])('applies a staged Linux update at startup only for $name', async ({ recognized, strict, missingTools, preauthorized, action }) => {
+    checkDebianManagedInstallation.mockReturnValue({ status: 'managed' });
+    isLinuxPkexecPreauthorized.mockReturnValue(preauthorized ?? false);
+    recognizeLinuxUserInstallation.mockReturnValue(recognized);
+    findLinuxUserInstallation.mockReturnValue(strict);
+    missingLinuxUserInstallTools.mockReturnValue(missingTools);
     await expect(runStartupUpdate({ platform: 'linux' })).resolves.toMatchObject({
       hasUpdate: true,
-      action: 'none',
+      action,
       version: '0.0.65',
     });
+  });
+
+  it.each([
+    { name: 'a system .deb', recognized: null, expected: false },
+    { name: 'a passwordless system .deb', recognized: null, preauthorized: true, expected: true },
+    { name: 'a passwordless system .deb without pkexec', recognized: null, preauthorized: true, pkexec: false, expected: false },
+    { name: 'a user install', recognized: userInstall, expected: true },
+    { name: 'a user install of another region', recognized: { ...userInstall, region: otherRegion }, expected: false },
+  ])('tells Settings whether idle install can work for $name', async ({ recognized, preauthorized, pkexec, expected }) => {
+    checkDebianManagedInstallation.mockReturnValue({ status: 'managed' });
+    isLinuxPkexecPreauthorized.mockReturnValue(preauthorized ?? false);
+    hasLinuxPkexec.mockReturnValue(pkexec ?? true);
+    recognizeLinuxUserInstallation.mockReturnValue(recognized);
+    const service = await freshUpdateService('linux', 'x64');
+    service.initUpdateService();
+    try {
+      expect(ipcHandlers.get('update-auto-settings-get')?.()).toMatchObject({
+        unattendedInstallSupported: expected,
+      });
+    } finally {
+      service.stopUpdateService();
+    }
   });
 
   // Regression: ARM64 must use the existing org-default and trusted IPC paths;

@@ -9,6 +9,7 @@
     "stopAllHint": "他の人の依頼も含みます",
     "step": "ステップ {{step}}/{{total}}"
   },
+  "newMessagesBoundary": "NEW",
   "title": "グループチャット",
   "memberSeparator": "、",
   "memberCount_one": "メンバー {{count}} 人",
@@ -97,6 +98,8 @@
   },
   "notice": {
     "memberJoined": "{{name}}さんがグループに参加しました",
+    "memberJoinedList": "{{names}}がグループに参加しました",
+    "memberJoinedSummary": "{{names}}ほか{{others}}人がグループに参加しました",
     "memberFailed": "{{name}} は今回返信できませんでした",
     "memberTimeout": "{{name}} の返信に時間がかかりすぎたため、今回はスキップしました",
     "memberUnavailable": "{{name}} は現在利用できないため、今回は発言しませんでした",
@@ -175,7 +178,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
       "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}} さん、Cindy に代わりに作業してもらうには、あなたの Cindy を接続してください（現在オンラインの Cindy がありません）。"
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}} さん、Cindy に代わりに作業してもらうには、あなたの Cindy を接続してください（現在オンラインの Cindy がありません）。",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}さん、このグループで使うコンピュータを選ぶと、この依頼を続行できます。",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}}さんがこのグループで選んだコンピュータはオフラインです。"
     }
   },
   "plan": {
@@ -311,6 +316,8 @@
     },
     "allowMemberInvites": "全メンバーによる友達の招待を許可",
     "allowMemberInvitesHint": "オンにすると、参加済みの全メンバーが友達を招待できます。変更できるのはグループオーナーと管理者のみです。",
+    "allowMemberMentionAll": "すべてのメンバーに @全員 を許可",
+    "allowMemberMentionAllHint": "オンにすると全メンバーが @全員 を使用でき、オフのときはグループオーナーと管理者のみ使用できます。変更できるのはグループオーナーと管理者のみです。",
     "allowMentionAllBots": "すべての仲間への @ を許可",
     "allowMentionAllBotsHint": "変更できるのはオーナーのみです。全員が返信する可能性があるため、大人数のグループでは慎重に有効にしてください。本人に代わる AI の返信には影響しません。"
   },
@@ -339,6 +346,7 @@
     "groupDissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
     "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。",
     "allBotsMentionDisabled": "オーナーがすべての仲間への @ を有効にしていません。",
+    "allHumansMentionForbidden": "@全員 を使用できるのはグループ所有者と管理者のみです。",
     "turnAlreadyStarted": "この仲間はすでに実行を開始しているため、スキップできません",
     "stopOwnershipUnknown": "一部の作業を停止できませんでした。依頼者を確認できません。",
     "nothingToStop": "停止できる進行中の作業はありません。"
@@ -428,7 +436,36 @@
     "select": "メッセージを選択",
     "sidebarOwn": "スレッドの返信を共有しました",
     "sidebarOther": "{{name}} がスレッドの返信を共有しました",
-    "shareFailed_many": "{{count}} 件の返信はスレッドに送信されましたが、メインチャットには送信できませんでした。"
+    "shareFailed_many": "{{count}} 件の返信はスレッドに送信されましたが、メインチャットには送信できませんでした。",
+    "openIndex": "スレッド",
+    "indexTitle": "スレッド",
+    "filterAria": "スレッドを絞り込む",
+    "filterMine": "自分に関連",
+    "filterAll": "すべて",
+    "searchPlaceholder": "スレッド・返信・メンバーを検索",
+    "clearSearch": "検索をクリア",
+    "listRecent": "最近",
+    "indexParticipatedTag": "参加済み",
+    "indexMentionedTag": "メンションあり",
+    "indexEmptyMine": "参加したスレッドやメンションされたスレッドはまだありません",
+    "indexEmptyAll": "このグループにはまだスレッドがありません",
+    "indexEmptySearch": "一致するスレッドがありません",
+    "viewAllThreads": "すべてのスレッドを見る",
+    "emptyReply": "テキストなし",
+    "listNews": "新しい返信",
+    "hintOne": "スレッドに新しい返信があります",
+    "hintMany_one": "{{count}} 件のスレッドに新しい返信",
+    "hintMany_other": "{{count}} 件のスレッドに新しい返信",
+    "syncingHistory": "以前のスレッドを読み込み中…",
+    "rootKind": {
+      "task": "タスク",
+      "image": "画像",
+      "video": "動画",
+      "audio": "音声",
+      "file": "ファイル",
+      "share": "共有された返信",
+      "card": "カード"
+    }
   },
   "mask": {
     "toolAccess": "ツールの権限",
@@ -499,10 +536,12 @@
       "tools": "ツールと情報の利用を許可済み",
       "authorizeTitle": "{{name}} のツールと情報の利用を許可しますか？",
       "toolsHint": "メンバーはこの仲間の既存ツールと個人情報を利用できます。結果は全員に公開され、既存の承認ルールが適用されます。取り消すと実行中の要求は停止しますが、実行済みの操作は元に戻せません。",
-      "confirm": "確認"
+      "confirm": "ツールの使用を許可"
     }
   },
   "groupSettings": {
+    "assistantComputer": "実行するコンピュータ",
+    "chooseComputer": "コンピュータを選択",
     "tabSettings": "設定",
     "youAreOwner": "あなたはオーナーです",
     "youAreAdmin": "あなたは管理者です",
@@ -543,7 +582,10 @@
     "accessNone": "所有者のみ",
     "accessChat": "グループ内の会話のみ",
     "accessTools": "ツールと情報を利用可",
+    "memberPermissions": "メンバーの権限",
     "replies": "仲間の返信",
+    "assistant": "グループの Cindy",
+    "assistantHint": "@ した人のパソコンで動きます。",
     "replyModeMentionedNote": "@ されない限り、仲間は返信しません。",
     "work": "役割分担",
     "organizerHint": "誰がどのステップを担当するかを決めます。既定は最初の仲間です。",
@@ -588,7 +630,7 @@
     "removeOwnHint": "{{name}} は「{{group}}」のメッセージを受信しなくなります。履歴は保持され、他のグループや個別チャットには影響しません。",
     "removeOwnActiveHint": "このグループでの処理中のリクエストは停止します。独立して開始したタスクは続行します。",
     "stopAndRemove": "停止して退出",
-    "confirm": "確認",
+    "confirm": "ツールの使用を許可",
     "inviteTitle": "グループに招待",
     "reusableLink": "有効期限なし · 複数の人が繰り返し利用可能",
     "singleUseUntil": "1 回のみ利用可能 · {{date}} まで有効",
@@ -646,5 +688,11 @@
     },
     "externalFormatError": "元のメッセージから完全なリンクを開き直してください。"
   },
-  "waitingForOwner": "所有者の確認待ち"
+  "waitingForOwner": "所有者の確認待ち",
+  "externalBadge": "外部",
+  "reaction": {
+    "add": "リアクションを追加",
+    "count": "{{emoji}} · {{count}} 件のリアクション",
+    "failed": "リアクションを更新できませんでした。再試行してください。"
+  }
 }

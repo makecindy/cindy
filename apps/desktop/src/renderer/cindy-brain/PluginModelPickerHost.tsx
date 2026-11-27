@@ -5,9 +5,14 @@ import { ErrorNotice } from '@/components/ui/error-notice';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import type { WebviewTag } from 'electron';
 import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
+import { resolveModelGroup, useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import { resolveDeviceModelGroup, useDeviceModelGroups } from '@/features/model-groups/remoteModelGroups';
+import { MODEL_GROUPS_DEFAULTS, type ModelGroupSelection } from '../../shared/modelGroups';
 import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { useTransientModelPickerPreferences } from '@/components/new-chat/modelPickerPreferences';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
+import { usePluginModelPickerEngines } from '@/hooks/usePluginModelPickerEngines';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 import { refreshLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
 import type { Effort } from '@/lib/userPreferences.types';
 import type {
@@ -31,11 +36,35 @@ export function PluginModelPickerPopover({
   const [error, setError] = useState(false);
   const lock = useRef<'selection' | 'cancel' | null>(null);
   const answerSequence = useRef(0);
+  const isAcpRoute = route?.agentKind === 'acp';
   const preferenceStore = useTransientModelPickerPreferences();
+  const { config: localGroupsConfig } = useModelGroups();
   const agents = useModelPickerAgents(
-    route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind ?? 'codex'),
-    modelCatalogKey(route?.agentDeviceId),
+    route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind === 'codex' || route?.agentKind === 'pi' ? route.agentKind : 'codex'),
+    modelCatalogKey(isAcpRoute ? undefined : route?.agentDeviceId),
   );
+  const pickPopoverGroup = async (selection: ModelGroupSelection) => {
+    const resolved = await resolveModelGroup(
+      selection,
+      undefined,
+      request.allowRemote ? undefined : { agentDeviceId: null },
+    );
+    if (resolved?.outcome !== 'routed' || resolved.route.agentKind === 'acp') {
+      setError(true);
+      return;
+    }
+    const next: PluginModelPickerRoute = {
+      ...(resolved.route.agentDeviceId ? { agentDeviceId: resolved.route.agentDeviceId } : {}),
+      providerId: resolved.route.providerId,
+      model: resolved.route.model,
+      agentKind: resolved.route.agentKind,
+      effort: resolved.route.effort ?? '',
+      fastMode: resolved.route.fastMode ?? false,
+      modelGroup: selection.id,
+    };
+    update(next);
+    await answer(next);
+  };
   const [anchor, setAnchor] = useState<DOMRect>();
   const answerRef = useRef(onAnswer);
   answerRef.current = onAnswer;
@@ -128,6 +157,33 @@ export function PluginModelPickerPopover({
     draft.current = value;
     setRoute(value);
   };
+  const toPluginEngineRoute = (selection: {
+    providerId: string;
+    modelId?: string;
+    effort?: string;
+    deviceId?: string;
+  }): PluginModelPickerRoute => ({
+    ...(selection.deviceId ? { agentDeviceId: selection.deviceId } : {}),
+    agentKind: 'acp',
+    providerId: selection.providerId,
+    model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+    effort: selection.effort ?? '',
+    fastMode: false,
+  });
+  const pluginEngines = usePluginModelPickerEngines({
+    enabled: true,
+    allowRemote: request.allowRemote === true,
+    active: route,
+    onSelect: async (selection) => {
+      const next = toPluginEngineRoute(selection);
+      update(next);
+      return answer(next);
+    },
+    onSelectEffort: (selection) => {
+      update(toPluginEngineRoute(selection));
+      return true;
+    },
+  });
   const close = () => {
     // Parameter edits apply on dismissal; an untouched picker returns cancellation.
     void answer(
@@ -171,13 +227,27 @@ export function PluginModelPickerPopover({
         <ModelRouteSelectorContent
           sshRemote={!request.allowRemote}
           preferenceStore={preferenceStore}
-          agentDeviceId={route?.agentDeviceId}
-          modelId={route?.model ?? ''}
-          currentProviderId={route?.providerId ?? null}
-          vendorKey={route?.agentKind}
-          effort={(route?.effort ?? '') as Effort}
-          fastMode={route?.fastMode ?? false}
+          agentDeviceId={isAcpRoute ? undefined : route?.agentDeviceId}
+          modelId={isAcpRoute ? '' : (route?.model ?? '')}
+          currentProviderId={isAcpRoute ? null : (route?.providerId ?? null)}
+          vendorKey={route?.agentKind === 'acp' ? undefined : route?.agentKind}
+          effort={isAcpRoute ? ('' as Effort) : ((route?.effort ?? '') as Effort)}
+          fastMode={isAcpRoute ? false : (route?.fastMode ?? false)}
           unifiedAgents={agents}
+          pluginEngines={pluginEngines}
+          modelGroups={{
+            config: localGroupsConfig,
+            active: !isAcpRoute && route?.modelGroup && localGroupsConfig.routes.some((r) => r.id === route.modelGroup)
+              ? { type: 'route', id: route.modelGroup }
+              : null,
+            onSelect: (selection) => { void pickPopoverGroup(selection); },
+            onAttach: (selection) => {
+              if (!draft.current || draft.current.agentKind === 'acp') return;
+              const next: PluginModelPickerRoute = { ...draft.current, modelGroup: selection.id };
+              update(next);
+              void answer(next);
+            },
+          }}
           onModelChange={() => false}
           onEffortChange={(effort) => {
             if (draft.current) update({ ...draft.current, effort });
@@ -219,13 +289,56 @@ export function PluginModelPickerDialog({
 }) {
   const { t } = useTranslation();
   const [route, setRoute] = useState(request.initial);
+  const isAcpRoute = route?.agentKind === 'acp';
   const preferenceStore = useTransientModelPickerPreferences(deviceId);
+  const localGroups = useModelGroups(!deviceId);
+  const remoteGroups = useDeviceModelGroups(deviceId ?? null, !!deviceId);
+  const dialogGroupsConfig = deviceId ? remoteGroups.config ?? MODEL_GROUPS_DEFAULTS : localGroups.config;
+  const dialogGroupsAvailable = !deviceId || !!remoteGroups.config;
   const agents = useModelPickerAgents(
-    route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind ?? 'codex'),
-    modelCatalogKey(route?.agentDeviceId ?? deviceId, deviceId),
+    route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind === 'codex' || route?.agentKind === 'pi' ? route.agentKind : 'codex'),
+    modelCatalogKey((isAcpRoute ? undefined : route?.agentDeviceId) ?? deviceId, deviceId),
   );
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(false);
+  const pluginEngines = usePluginModelPickerEngines({
+    enabled: true,
+    allowRemote: request.allowRemote === true,
+    hostDeviceId: deviceId,
+    active: route,
+    onSelect: (selection) => {
+      setRoute({
+        ...(selection.deviceId ? { agentDeviceId: selection.deviceId } : {}),
+        agentKind: 'acp',
+        providerId: selection.providerId,
+        model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+        effort: selection.effort ?? '',
+        fastMode: false,
+      });
+      setError(false);
+      return true;
+    },
+  });
+  const pickDialogGroup = async (selection: ModelGroupSelection) => {
+    const location = request.allowRemote ? undefined : { agentDeviceId: null };
+    const resolved = deviceId
+      ? await resolveDeviceModelGroup(deviceId, selection, undefined, location)
+      : await resolveModelGroup(selection, undefined, location);
+    if (resolved?.outcome !== 'routed' || resolved.route.agentKind === 'acp') {
+      setError(true);
+      return;
+    }
+    setRoute({
+      ...(resolved.route.agentDeviceId ? { agentDeviceId: resolved.route.agentDeviceId } : {}),
+      providerId: resolved.route.providerId,
+      model: resolved.route.model,
+      agentKind: resolved.route.agentKind,
+      effort: resolved.route.effort ?? '',
+      fastMode: resolved.route.fastMode ?? false,
+      modelGroup: selection.id,
+    });
+    setError(false);
+  };
   const lock = useRef(false);
   const answer = async (value: PluginModelPickerRoute | null) => {
     if (lock.current) return;
@@ -265,13 +378,26 @@ export function PluginModelPickerDialog({
             sshRemote={!request.allowRemote}
             preferenceStore={preferenceStore}
             deviceId={deviceId}
-            agentDeviceId={route?.agentDeviceId}
-            modelId={route?.model ?? ''}
-            currentProviderId={route?.providerId ?? null}
-            vendorKey={route?.agentKind}
-            effort={(route?.effort ?? '') as Effort}
-            fastMode={route?.fastMode ?? false}
+            agentDeviceId={isAcpRoute ? undefined : route?.agentDeviceId}
+            modelId={isAcpRoute ? '' : (route?.model ?? '')}
+            currentProviderId={isAcpRoute ? null : (route?.providerId ?? null)}
+            vendorKey={route?.agentKind === 'acp' ? undefined : route?.agentKind}
+            effort={isAcpRoute ? ('' as Effort) : ((route?.effort ?? '') as Effort)}
+            fastMode={isAcpRoute ? false : (route?.fastMode ?? false)}
             unifiedAgents={agents}
+            pluginEngines={pluginEngines}
+            {...(dialogGroupsAvailable ? {
+              modelGroups: {
+                config: dialogGroupsConfig,
+                active: !isAcpRoute && route?.modelGroup && dialogGroupsConfig.routes.some((r) => r.id === route.modelGroup)
+                  ? { type: 'route' as const, id: route.modelGroup }
+                  : null,
+                onSelect: (selection: ModelGroupSelection) => { void pickDialogGroup(selection); },
+                onAttach: (selection: ModelGroupSelection) => {
+                  setRoute((current) => (current && current.agentKind !== 'acp' ? { ...current, modelGroup: selection.id } : current));
+                },
+              },
+            } : {})}
             onModelChange={() => false}
             onEffortChange={(effort) => {
               setRoute((r) => (r ? { ...r, effort } : r));

@@ -14,6 +14,7 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 
+import { dbToMakerEngineKind } from '../../../shared/agentKindConversion.js';
 import type { ImDefaultSettingsChannel } from '../../../shared/imDefaultSettings.js';
 import { getDbClient } from '../../localDb/client/current';
 import { sessions } from '../../localDb/schema';
@@ -31,6 +32,7 @@ import {
   readImRawDefaultRoute,
   resolveImSessionDefaults,
 } from '../defaultSessionSettings';
+import { getModelGroupStartBridge } from '../../model-groups/startBridge.js';
 import {
   buildImDefaultRouteRecord,
   decideImDefaultRoute,
@@ -133,11 +135,11 @@ function isChannelOwnedRow(
 
 function currentRouteOf(row: SessionRouteRow): ImDefaultRoute {
   return {
-    agentKind: toCoreAgentKind(row.agentKind),
+    agentKind: dbToMakerEngineKind(row.agentKind),
     model: row.model ?? '',
     providerId: row.providerId?.trim() || null,
     ...(row.agentDeviceId ? { agentDeviceId: row.agentDeviceId } : {}),
-    effort: row.effort ?? null,
+    effort: row.effort || null,
   };
 }
 
@@ -149,7 +151,7 @@ function currentRouteOf(row: SessionRouteRow): ImDefaultRoute {
  */
 function providerNormalizer(providers: ProviderView[]) {
   return (route: ImDefaultRoute): string | null => {
-    if (route.agentDeviceId) return route.providerId;
+    if (route.agentDeviceId || route.agentKind === 'acp') return route.providerId;
     const agent = route.agentKind as AgentKind;
     return (
       movedCindyAutoSourceId(providers, {
@@ -177,6 +179,7 @@ interface Evaluation {
   current: ImDefaultRoute;
   target: ImDefaultRoute;
   targetFingerprint: string;
+  modelGroupStart?: string;
   providers: ProviderView[];
   /**
    * 任务当前的 Fast 开关。渠道默认不存 Fast, 跟随切换只管 Agent/模型/来源/档位,
@@ -223,11 +226,11 @@ export function createImChannelDefaultRouteSync(deps: {
         ? follow.project.fingerprint
         : readImDefaultSettingsFingerprint(source, follow.override);
     },
-    resolveTarget: (providers, row) => {
+    resolveTarget: (providers, row, options) => {
       const follow = followOf(row);
       return follow.kind === 'project'
-        ? follow.project.resolve(providers)
-        : resolveImSessionDefaults(config, providers, source, follow.override);
+        ? follow.project.resolve(providers, options)
+        : resolveImSessionDefaults(config, providers, source, follow.override, options);
     },
     isRouteUsable: deps.isRouteUsable,
   });
@@ -239,12 +242,16 @@ export function createDefaultRouteFollower(deps: {
   ownsRow(row: SessionRouteRow): boolean;
   /** 这条任务此刻应跟随的设置指纹; `row` 供按路由键覆写的渠道使用。 */
   fingerprint(row: SessionRouteRow): string;
-  resolveTarget(providers: ProviderView[], row: SessionRouteRow): Promise<ImDefaultRoute & { fingerprint: string }>;
+  resolveTarget(
+    providers: ProviderView[],
+    row: SessionRouteRow,
+    options?: { dryRun?: boolean },
+  ): Promise<ImDefaultRoute & { fingerprint: string; modelGroupStart?: string }>;
   isRouteUsable: RouteAuthCheck;
 }): ImChannelDefaultRouteSync {
   const source = deps.label;
 
-  async function evaluate(sessionId: string): Promise<Evaluation | 'defer-unknown' | null> {
+  async function evaluate(sessionId: string, options?: { dryRun?: boolean }): Promise<Evaluation | 'defer-unknown' | null> {
     const row = await readSessionRouteRow(sessionId);
     if (!row || !deps.ownsRow(row)) return null;
     const record = parseImDefaultRouteRecord(row.imDefaultRoute);
@@ -255,7 +262,7 @@ export function createDefaultRouteFollower(deps: {
     // 目录拿不到就无法可靠比对来源, 本条消息先按原路由走 —— 但若记录仍认领着在世
     // 的系统意图, 调用方必须暂缓通用意图应用(PR #5155 review P2)。
     if (!providers) return 'defer-unknown';
-    const defaults = await deps.resolveTarget(providers, row);
+    const defaults = await deps.resolveTarget(providers, row, options);
     // Automatic settings are stable while their catalog-resolved route may change.
     // Skip writes when re-resolution confirms the last adopted route is still current.
     if (defaults.fingerprint === record.fp && !record.pendingRoute) return null;
@@ -291,6 +298,7 @@ export function createDefaultRouteFollower(deps: {
       current,
       target,
       targetFingerprint: defaults.fingerprint,
+      ...(defaults.modelGroupStart ? { modelGroupStart: defaults.modelGroupStart } : {}),
       providers,
       currentFastMode: row.fastMode ?? false,
     };
@@ -326,6 +334,7 @@ export function createDefaultRouteFollower(deps: {
         // Fast 不属于渠道默认: 保留任务自己的开关, 不拿新任务的固定默认覆盖。
         { ...e.target, agentDeviceId: e.target.agentDeviceId ?? null, fastMode: e.currentFastMode },
         e.current.agentKind,
+        e.current.providerId,
       );
     } catch (err) {
       await writeRecord(sessionId, serializeImDefaultRouteRecord(e.record));
@@ -415,6 +424,9 @@ export function createDefaultRouteFollower(deps: {
       );
     }
     await writeRecord(sessionId, buildImDefaultRouteRecord(e.targetFingerprint, applied));
+    if (e.modelGroupStart) {
+      getModelGroupStartBridge()?.attach(sessionId, e.modelGroupStart);
+    }
     log.info(
       `default route followed session=...${sessionId.slice(-8)} ` +
         `${e.current.agentKind}/${e.current.model} -> ${applied.agentKind}/${applied.model}`,
@@ -423,7 +435,7 @@ export function createDefaultRouteFollower(deps: {
 
   async function previewSwitchTarget(sessionId: string): Promise<ImDefaultRoute | null> {
     try {
-      const e = await evaluate(sessionId);
+      const e = await evaluate(sessionId, { dryRun: true });
       if (!e || e === 'defer-unknown') return null;
       if (e.decision.kind !== 'switch' && e.decision.kind !== 'staged') return null;
       return (await deps.isRouteUsable(e.target)) ? e.target : null;
@@ -581,7 +593,7 @@ export async function backfillLegacyImDefaultRoutes(
   const fingerprint = readImDefaultSettingsFingerprint(source);
   let resolvedDefault: ImDefaultRoute | null = null;
   try {
-    const defaults = await resolveImSessionDefaults(config, providers, source);
+    const defaults = await resolveImSessionDefaults(config, providers, source, undefined, { dryRun: true });
     resolvedDefault = {
       agentKind: defaults.agentKind,
       model: defaults.model,
@@ -600,6 +612,7 @@ export async function backfillLegacyImDefaultRoutes(
   const normalize = providerNormalizer(providers);
   let count = 0;
   for (const row of legacyRows) {
+    if (row.agentKind === 'acp') continue;
     const current = currentRouteOf(row);
     // 匹配只认整条路由相等: 隐式默认的历史钉住与用户手动钉住无法区分(断开的来源
     // 证明不了出身), 无法区分时保守不认领(PR #5155 review P2 后续裁决)。

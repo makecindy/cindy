@@ -6,6 +6,15 @@
  * 所有类型经已有来源授权后进入标准预览；未就绪附件保留原状态。
  */
 import { useAuth } from "@/auth/AuthContext";
+import {
+  chatServerMediaCacheKey,
+  chatServerMediaRoomEpoch,
+  invalidateCachedServerMedia,
+  peekCachedServerMedia,
+  resolveChatServerMediaOwner,
+  setCachedServerMedia,
+  subscribeChatServerMediaInvalidation,
+} from "@/chat/chatServerMediaCache";
 import { RemoteAttachmentPreview } from "./RemoteAttachmentPreview";
 import { Text } from "@/components/AppText";
 import { spacing, textStyles, useTheme } from "@/theme";
@@ -19,6 +28,7 @@ import {
 } from "react-native";
 import { useTranslation } from "react-i18next";
 import type { BotGroupAttachment } from "@cindy/maker-shared/botGroupChat";
+import { attachmentPreviewKind } from "@cindy/maker-shared/attachment-preview";
 import {
   MessageListVisibilityContext,
   useMessageListItemVisible,
@@ -40,6 +50,7 @@ import type { ResolveRemoteMediaFn } from "./remoteMedia";
  */
 export function botGroupAttachmentForDisplay(
   attachment: BotGroupAttachment,
+  cacheKey?: string,
 ): NormalizedAttachment {
   return attachment.category === "image" && attachment.url
     ? {
@@ -47,6 +58,7 @@ export function botGroupAttachmentForDisplay(
         name: attachment.name,
         uri: attachment.url,
         ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+        ...(cacheKey ? { cacheKey } : {}),
         previewable: isPayloadDirectPreviewableUrl(attachment.url),
       }
     : {
@@ -81,6 +93,7 @@ export function botGroupAttachmentGallery(
 
 export function BotGroupMessageAttachments({
   messageId,
+  roomId,
   attachments,
   align,
   onResolveRemoteMedia,
@@ -88,6 +101,8 @@ export function BotGroupMessageAttachments({
   previewServerImages = true,
 }: {
   messageId: string;
+  /** Chat Server conversation ID for session-scoped preview URL reuse and stable cache keys. */
+  roomId?: string;
   attachments: readonly BotGroupAttachment[];
   align: "left" | "right";
   onResolveRemoteMedia: ResolveRemoteMediaFn;
@@ -100,7 +115,12 @@ export function BotGroupMessageAttachments({
 }) {
   const { t } = useTranslation();
   const { width } = useWindowDimensions();
-  const { accountGeneration } = useAuth();
+  const auth = useAuth();
+  const { accountGeneration } = auth;
+  const mediaOwner = useMemo(
+    () => resolveChatServerMediaOwner(auth.user?.id, accountGeneration),
+    [auth.user?.id, accountGeneration],
+  );
   const visibility = useContext(MessageListVisibilityContext);
   const rowVisible = useMessageListItemVisible(messageId);
   const previewVisible = previewServerImages && (!visibility || rowVisible);
@@ -116,7 +136,9 @@ export function BotGroupMessageAttachments({
   if (resolveServerMedia)
     return (
       <ServerAttachments
-        key={`${accountGeneration}:${messageId}`}
+        key={`${accountGeneration}:${mediaOwner ?? ""}:${roomId ?? ""}:${messageId}`}
+        roomId={roomId}
+        mediaOwner={mediaOwner}
         runs={runs}
         visible={previewVisible}
         previewServerImages={previewServerImages}
@@ -145,6 +167,7 @@ export function BotGroupMessageAttachments({
       );
     }
   };
+  const deviceAudio = deviceFile && attachmentPreviewKind(deviceFile.name, deviceFile.mimeType) === "audio";
   const deviceSource =
     deviceFile?.url ??
     (deviceFile?.path
@@ -164,7 +187,9 @@ export function BotGroupMessageAttachments({
         ) : (
           <AttachmentStrip
             key={index === 0 ? messageId : `${messageId}:${index}`}
-            attachments={run.attachments.map(botGroupAttachmentForDisplay)}
+            attachments={run.attachments.map((item) =>
+              botGroupAttachmentForDisplay(item),
+            )}
             messageKey={index === 0 ? messageId : `${messageId}:${index}`}
             align={align}
             layout={layout}
@@ -179,14 +204,15 @@ export function BotGroupMessageAttachments({
         <RemoteAttachmentPreview
           key={`${accountGeneration}:${deviceFile.id}`}
           name={deviceFile.name}
-          resolve={(signal) =>
+          mediaKind={deviceAudio ? "audio" : undefined}
+          resolve={(signal, forceRefresh) =>
             onResolveRemoteMedia(
               {
-                kind: deviceFile.category === "image" ? "image" : "file",
+                kind: deviceAudio ? "audio" : deviceFile.category === "image" ? "image" : "file",
                 url: deviceSource,
                 previewable: false,
               },
-              { front: true, signal },
+              { front: true, signal, ...(forceRefresh ? { forceRefresh: true } : {}) },
             )
           }
           onClose={() => setDeviceFile(null)}
@@ -328,8 +354,13 @@ function drainPreviews() {
   }
 }
 
-/** Image preview URLs live only in this mounted message; opening always re-authorizes. */
+/**
+ * Reuses short-lived authorized preview URLs within the active account session & room
+ * via the bounded LRU cache (`chatServerMediaCache`); opening still always re-authorizes.
+ */
 function ServerAttachments({
+  roomId,
+  mediaOwner,
   runs,
   visible,
   previewServerImages,
@@ -337,6 +368,8 @@ function ServerAttachments({
   layout,
   resolve,
 }: {
+  roomId?: string;
+  mediaOwner: string | null;
   visible: boolean;
   previewServerImages: boolean;
   align: "left" | "right";
@@ -346,11 +379,34 @@ function ServerAttachments({
 }) {
   const { t } = useTranslation();
   const { colors } = useTheme();
+  const canUseCache = previewServerImages && !!roomId && !!mediaOwner;
+  const previewExpiresAtRef = useRef<Record<string, number>>({});
   const [previews, setPreviews] = useState<Record<string, BotGroupAttachment>>(
-    {},
+    () => {
+      if (!visible || !canUseCache || !roomId || !mediaOwner) return {};
+      const initial: Record<string, BotGroupAttachment> = {};
+      for (const run of runs) {
+        if (run.kind !== "ready") continue;
+        for (const item of run.attachments) {
+          const cached = peekCachedServerMedia(
+            mediaOwner,
+            roomId,
+            item.id,
+            Date.now(),
+            { allowExpiredImage: true },
+          );
+          if (cached) {
+            initial[item.id] = cached.attachment;
+            previewExpiresAtRef.current[item.id] = cached.expiresAtMs;
+          }
+        }
+      }
+      return initial;
+    },
   );
   const failedPreviewIds = useRef(new Set<string>());
-  const retriedPreviewIds = useRef(new Set<string>());
+  // Keep the failed preview identity across retries so a concurrent renewal can repair it.
+  const retriedPreviews = useRef(new Map<string, BotGroupAttachment>());
   const retryPreview = useRef<((id: string) => void) | null>(null);
   const [previewVersions, setPreviewVersions] = useState<
     Record<string, number>
@@ -365,34 +421,66 @@ function ServerAttachments({
     ),
   );
   useEffect(() => {
+    if (!canUseCache || !roomId) return;
+    return subscribeChatServerMediaInvalidation((invalidatedRoomId) => {
+      if (invalidatedRoomId !== null && invalidatedRoomId !== roomId) return;
+      previewExpiresAtRef.current = {};
+      failedPreviewIds.current.clear();
+      retriedPreviews.current.clear();
+      previewsRef.current = {};
+      setPreviews({});
+    });
+  }, [canUseCache, roomId]);
+  useEffect(() => {
     let cancelled = false;
     if (!visible) return;
     const cancelJobs: Array<() => void> = [];
     const schedule = (id: string) => {
       cancelJobs.push(
         authorizePreview(async (signal) => {
+          const refreshing = failedPreviewIds.current.has(id);
+          const expiresAt = previewExpiresAtRef.current[id];
+          const expired = expiresAt !== undefined && Date.now() >= expiresAt;
           if (
             cancelled ||
-            (previewsRef.current[id] && !failedPreviewIds.current.has(id))
+            (previewsRef.current[id] && !refreshing && !expired)
           )
             return;
-          const refreshing = failedPreviewIds.current.has(id);
           const previousPreview = previewsRef.current[id];
+          const startEpoch =
+            canUseCache && roomId ? chatServerMediaRoomEpoch(roomId) : 0;
           try {
             const value = await resolveRef.current(id, signal);
             const preview =
               value.category === "image" ? value : { ...value, url: null };
+            const epochValid =
+              !canUseCache ||
+              !roomId ||
+              chatServerMediaRoomEpoch(roomId) === startEpoch;
             if (
               !cancelled &&
               !signal.aborted &&
+              epochValid &&
               previewsRef.current[id] === previousPreview
             ) {
+              if (canUseCache && roomId && mediaOwner) {
+                const nextExpiresAt = setCachedServerMedia(
+                  mediaOwner,
+                  roomId,
+                  preview,
+                );
+                if (nextExpiresAt !== null) {
+                  previewExpiresAtRef.current[id] = nextExpiresAt;
+                } else {
+                  delete previewExpiresAtRef.current[id];
+                }
+              }
               previewsRef.current = { ...previewsRef.current, [id]: preview };
               setPreviews(previewsRef.current);
               failedPreviewIds.current.delete(id);
               // A renewed authorization can return the same URL after a transient CDN failure.
               // Remount only the failed image too, resetting its native error state.
-              if (refreshing)
+              if (previousPreview && retriedPreviews.current.get(id) === previousPreview)
                 setPreviewVersions((versions) => ({
                   ...versions,
                   [id]: (versions[id] ?? 0) + 1,
@@ -407,13 +495,42 @@ function ServerAttachments({
       );
     };
     retryPreview.current = schedule;
-    for (const id of JSON.parse(previewIds) as string[]) schedule(id);
+    const hydrated: Record<string, BotGroupAttachment> = {};
+    let hydratedAny = false;
+    const toSchedule: string[] = [];
+    for (const id of JSON.parse(previewIds) as string[]) {
+      const refreshing = failedPreviewIds.current.has(id);
+      const expiresAt = previewExpiresAtRef.current[id];
+      const expired = expiresAt !== undefined && Date.now() >= expiresAt;
+      if (previewsRef.current[id] && !refreshing && !expired) continue;
+      if (!refreshing && canUseCache && roomId && mediaOwner) {
+        const cached = peekCachedServerMedia(
+          mediaOwner,
+          roomId,
+          id,
+          Date.now(),
+          { allowExpiredImage: true },
+        );
+        if (cached) {
+          previewExpiresAtRef.current[id] = cached.expiresAtMs;
+          hydrated[id] = cached.attachment;
+          hydratedAny = true;
+          if (!cached.expired) continue;
+        }
+      }
+      toSchedule.push(id);
+    }
+    if (hydratedAny) {
+      previewsRef.current = { ...previewsRef.current, ...hydrated };
+      setPreviews(previewsRef.current);
+    }
+    for (const id of toSchedule) schedule(id);
     return () => {
       cancelled = true;
       retryPreview.current = null;
       cancelJobs.forEach((cancel) => cancel());
     };
-  }, [previewIds, visible]);
+  }, [previewIds, visible, canUseCache, roomId, mediaOwner]);
   const displayRuns = botGroupAttachmentRuns(
     runs.flatMap((run) =>
       run.kind === "pending"
@@ -448,7 +565,18 @@ function ServerAttachments({
         ) : (
           <View key={run.attachments[0]!.id} style={styles.serverAttachment}>
             <AttachmentStrip
-              attachments={run.attachments.map(botGroupAttachmentForDisplay)}
+              attachments={run.attachments.map((item) =>
+                botGroupAttachmentForDisplay(
+                  item,
+                  canUseCache &&
+                    roomId &&
+                    mediaOwner &&
+                    item.category === "image" &&
+                    item.url
+                    ? chatServerMediaCacheKey(mediaOwner, roomId, item.id)
+                    : undefined,
+                ),
+              )}
               imageReloadKeys={run.attachments.map(
                 (item) => previewVersions[item.id] ?? 0,
               )}
@@ -465,13 +593,20 @@ function ServerAttachments({
               }}
               onImageError={(index) => {
                 const attachment = run.attachments[index];
-                if (
-                  !attachment ||
-                  retriedPreviewIds.current.has(attachment.id) ||
-                  previewsRef.current[attachment.id]?.url !== attachment.url
-                )
-                  return;
-                retriedPreviewIds.current.add(attachment.id);
+                if (!attachment) return;
+                const currentPreview = previewsRef.current[attachment.id];
+                if (!currentPreview || currentPreview.url !== attachment.url) return;
+                const alreadyRetried = retriedPreviews.current.has(attachment.id);
+                retriedPreviews.current.set(attachment.id, currentPreview);
+                if (alreadyRetried) return;
+                if (canUseCache && roomId && mediaOwner) {
+                  invalidateCachedServerMedia(
+                    mediaOwner,
+                    roomId,
+                    attachment.id,
+                  );
+                }
+                delete previewExpiresAtRef.current[attachment.id];
                 failedPreviewIds.current.add(attachment.id);
                 retryPreview.current?.(attachment.id);
               }}
@@ -489,22 +624,46 @@ function ServerAttachments({
           name={filePreview.name}
           onClose={() => setFilePreview(null)}
           resolve={async (signal) => {
+            const startEpoch =
+              canUseCache && roomId ? chatServerMediaRoomEpoch(roomId) : 0;
             const value = await resolve(filePreview.id, signal);
             const url = new URL(value.url ?? "");
             if (url.protocol !== "https:" || url.username || url.password)
               throw new Error("ATTACHMENT_PREVIEW_URL_INVALID");
             if (signal.aborted) throw new Error("ABORTED");
-            if (previewServerImages && value.category === "image") {
+            const epochValid =
+              !canUseCache ||
+              !roomId ||
+              chatServerMediaRoomEpoch(roomId) === startEpoch;
+            if (previewServerImages && value.category === "image" && epochValid) {
+              if (canUseCache && roomId && mediaOwner) {
+                const nextExpiresAt = setCachedServerMedia(
+                  mediaOwner,
+                  roomId,
+                  value,
+                );
+                if (nextExpiresAt !== null) {
+                  previewExpiresAtRef.current[filePreview.id] = nextExpiresAt;
+                } else {
+                  delete previewExpiresAtRef.current[filePreview.id];
+                }
+              }
+              const hadFailure =
+                failedPreviewIds.current.has(filePreview.id) ||
+                retriedPreviews.current.has(filePreview.id);
               previewsRef.current = {
                 ...previewsRef.current,
                 [filePreview.id]: value,
               };
               setPreviews(previewsRef.current);
               failedPreviewIds.current.delete(filePreview.id);
-              setPreviewVersions((versions) => ({
-                ...versions,
-                [filePreview.id]: (versions[filePreview.id] ?? 0) + 1,
-              }));
+              retriedPreviews.current.delete(filePreview.id);
+              if (hadFailure) {
+                setPreviewVersions((versions) => ({
+                  ...versions,
+                  [filePreview.id]: (versions[filePreview.id] ?? 0) + 1,
+                }));
+              }
             }
             return { url: url.href, mimeType: value.mimeType };
           }}

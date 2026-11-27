@@ -25,6 +25,7 @@ import { historyDeviceShape, HISTORY_DEVICE_DESCRIPTION, queryHistoryDevices } f
 const DESCRIPTION = [
   HISTORY_DEVICE_DESCRIPTION,
   'sessionUrl 是可直接引用的任务链接；用 [任务标题](sessionUrl) 返回给用户。',
+  '需要链接到某条用户消息时，用返回的任务 id 调用 get_chat_history({session_ids: [id], roles: ["user"]})，取目标行的 clientId，按 get_chat_history 的说明在原 sessionUrl 上设置消息锚点。',
   '列出所选电脑数据库里的 session 元数据(id / title / workingDir / agentKind / model /',
   '时间戳 / messageCount 等), 按多种过滤条件组合查。**不返回 messages 内容** —',
   '要拉具体聊天内容请用 get_chat_history。',
@@ -36,9 +37,10 @@ const DESCRIPTION = [
   '【过滤参数】所有参数可任意组合, 不传 = 不过滤:',
   '  - workdir: 精确匹配 sessions.workingDir',
   '  - from / to: ISO 8601 时间窗 (from 含, to 不含), 按 time_field 过滤（默认创建时间，activity 为最近活动）',
-  '  - agent_kind: cc(Claude Code) | codex | pi',
+  '  - agent_kind: cc(Claude Code) | codex | pi | acp(插件引擎)',
   '  - include_deleted: 默认 false (排除 status=deleted)',
   '',
+  'pinned 表示侧栏置顶状态。旧版远程电脑省略该字段时可查 get_task_digest。',
   '【输出】messageCount 已过滤被 rewind 软删的消息, 是用户可见的真实条数。',
   '本机结果的 queuedCount 是当前尚未消费的输入队列条数，可用 list_session_queue 查看本机明细；远程结果不含队列计数。',
   '时间戳均为 ISO 8601 字符串(对应 DB 里的 unix ms 转换)。',
@@ -80,7 +82,7 @@ export function registerListSessionsTool(
         .optional()
         .describe('ISO 8601 时间字符串(不含), 过滤所选 time_field < to。'),
       agent_kind: z
-        .enum(['cc', 'codex', 'pi'])
+        .enum(['cc', 'codex', 'pi', 'acp'])
         .optional()
         .describe('过滤 agent 类型, 不传 = 全部返回。'),
       include_deleted: z
@@ -162,6 +164,7 @@ export function registerListSessionsTool(
             workspaceKind: s.workspaceKind,
             model: s.model,
             status: s.status,
+            ...(s.pinnedAt !== undefined && { pinned: s.pinnedAt !== null }),
             ...(s.hiddenAt != null ? { hiddenAt: new Date(s.hiddenAt).toISOString() } : {}),
             source: s.source,
             createdAt: new Date(s.createdAt).toISOString(),

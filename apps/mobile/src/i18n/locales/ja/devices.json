@@ -366,7 +366,11 @@
       "close": "閉じる",
       "cancelRename": "名前の変更をキャンセル",
       "createdBy": "{{name}} が作成",
-      "ownedBy": "{{name}} に所属"
+      "ownedBy": "{{name}} に所属",
+      "orcaRemoteLead": "{{device}} からの協同",
+      "createdByTask": "他のタスクから作成",
+      "createdByTaskNamed": "タスク「{{title}}」から作成",
+      "unknownDevice": "別のコンピューター"
     },
     "accounts": {
       "title": "アカウントを切り替え",
@@ -389,6 +393,7 @@
       "sortHeading": "タスク順",
       "projectOrderHeading": "プロジェクトの並び順",
       "projectOrderManualTip": "プロジェクト行を長押ししてドラッグすると順番を変えられます。グループ内のタスクは上の並び替えに従います。",
+      "pinnedOrderManualTip": "ピン留めしたタスクを長押ししてドラッグすると順番を変えられます。",
       "statusHeading": "タスクの状態",
       "showDeviceTasks": "タスクを表示",
       "openDevice": "開く",
@@ -422,7 +427,8 @@
         "all": "すべて",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "プラグインエンジン"
       },
       "filterLastActivityHeading": "最終アクティビティ",
       "filterLastActivity": {
@@ -477,7 +483,14 @@
         "nextWeek": "来週",
         "indefinite": "無期限",
         "custom": "カスタム…",
-        "invalidTime": "1年以内の未来の日時を選択してください。"
+        "invalidTime": "1年以内の未来の日時を選択してください。",
+        "pendingSync": "同期待ち",
+        "pendingArchiveSync": "コンピューターがオンラインになり次第アーカイブ",
+        "offlineCompleteRejectedDirty": "「{{title}}」を保留中に戻しました：worktree に未コミットの変更があるため、確認後にアーカイブしてください。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」を保留中に戻しました：オフライン中にこのタスクに新しい動きがありました。",
+        "offlineCompleteRejectedRunning": "「{{title}}」を保留中に戻しました：タスクは現在実行中です。",
+        "offlineCompleteRejectedAttached": "「{{title}}」を保留中に戻しました：接続中または共有中のため自動アーカイブできませんでした。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」を保留中に戻しました：アーカイブ前に worktree の状態を確認できませんでした。"
       },
       "taskListMode": {
         "enterInbox": "受信トレイへ",
@@ -512,7 +525,8 @@
           "all": "すべて",
           "cc": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "acp": "プラグインエンジン"
         },
         "lastActivity": {
           "1d": "1日",
@@ -521,7 +535,8 @@
           "30d": "30日",
           "all": "すべて"
         }
-      }
+      },
+      "partial": "結果が一部のみの可能性があります。キーワードを具体的にするか、プロジェクトを絞ってください。"
     },
     "renameDevice": {
       "title": "デバイス名を変更",
@@ -828,9 +843,6 @@
     "connectionsEmpty": "スキルや接続は選択されていません",
     "largeProfileRecovery": "このプロフィールは長すぎるため、ここでは編集できません。{{deviceName}} で全文を編集してください。",
     "addModel": "予備モデルを追加",
-    "removeModel": "モデルを削除",
-    "moveModelUp": "モデルを上へ",
-    "backupModels": "予備のモデル（{{count}}）",
     "settingsTitle": "仲間の設定",
     "name": "名前",
     "portraitNumber": "アバター {{number}}",
@@ -957,6 +969,8 @@
     "timeout": "「{{device}}」の準備がまだ終わっていません。そのパソコンで Cindy が開いていてオンラインか確認して、もう一度お試しください。",
     "conflict": "{{name}} はすでに「{{device}}」に移っています。",
     "switchFailed": "メインのパソコンを変更できません。しばらくしてからもう一度お試しください。",
+    "skillTargetOutdated": "「{{name}}」には本文が 64 KB を超えるスキルがあるため、「{{device}}」の古い Cindy では受け取れません。先にそのパソコンの Cindy を更新してから移してください。仲間は元のパソコンに残っています",
+    "skillTargetOutdated_skill": "「{{device}}」の古い Cindy では、スキル「{{slug}}」を受け取れません。本文が {{bodyBytes, number}} バイトあり、上限の 64 KB を超えています。「{{name}}」は元のパソコンで引き続き動作しています。移行先の Cindy を更新してから、もう一度お試しください。",
     "unknownDevice": "別のパソコン",
     "runsOn": "「{{device}}」で実行中",
     "homeTitle": "メインのパソコン",

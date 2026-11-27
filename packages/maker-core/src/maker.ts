@@ -249,20 +249,11 @@ function capabilitiesForSession(
   base: Capabilities,
   remoteHostId?: string | null,
   agentDeviceId?: string | null,
-  handle?: AgentSessionHandle,
 ): Capabilities {
   if (agentDeviceId) {
-    // Agent 在另一台电脑上：对话在那台截断(handle 转发 commitRewindFiles)，文件由本机按保存点
-    // 回退。那台的 Cindy 不支持转发时不提供。
-    if (base.rewind.supported && typeof handle?.commitRewindFiles === 'function') return base;
-    return {
-      ...base,
-      rewind: {
-        supported: false,
-        reason: 'platform-limited',
-        message: 'Update Cindy on the computer running the agent to rewind this task',
-      },
-    };
+    // Agent 在另一台电脑上：对话截断、目录热更新与手动压缩是否可用取决于远端 handle
+    // 当下暴露的方法（含重连切换对端版本后的最新状态），由 Session.capabilities 动态对齐。
+    return base;
   }
   if (agentKind !== 'codex' || !remoteHostId) return base;
   return {
@@ -949,6 +940,9 @@ export class Maker {
         ...startOpts,
         sessionId: id,
         sessionInstanceId,
+        isNewMakerTask: opts.agentKind === 'pi'
+          ? async () => !opts.id || (await this.storage.get(id)) === null
+          : undefined,
         // 强制由 Maker 注入持久化 CAS，不能信任外部 CreateSessionOptions 自带回调。
         // Claude adapter 只在精确识别 invalid-resume 时调用；Codex 不消费该字段。
         // 对所有 claude-code 会话装配(不止 resume):全新会话也可能在首个 turn 崩溃前
@@ -1253,8 +1247,7 @@ export class Maker {
         meta.agentKind,
         handle.negotiatedCapabilities ?? agent?.capabilities ?? applicationHandleCapabilities(handle),
         meta.remoteHostId,
-        meta.agentDeviceId ?? startOpts.agentDeviceId,
-        handle,
+        startOpts.agentDeviceId || null,
       ),
       logger: this.logger,
       permissionMode: startOpts.permissionMode,
@@ -1781,7 +1774,7 @@ export class Maker {
         handle,
         logger: this.logger,
         permissionMode: opts.permissionMode,
-        capabilities: deviceId ? applicationHandleCapabilities(handle) : capabilitiesForSession(kind, agent!.capabilities, undefined, undefined, handle),
+        capabilities: deviceId ? applicationHandleCapabilities(handle) : capabilitiesForSession(kind, agent!.capabilities, undefined, undefined),
         toolLoopReviewer: this.toolLoopReviewer,
         // 整机拆除期间抑制空闲会话的进程死亡终态错误(#8831 退出期守卫)。
         isHostShuttingDown: () => this.shutdownStarted,
@@ -1810,9 +1803,10 @@ export class Maker {
 
   /**
    * Agent 用户/项目目录扫出的 skill (palette 'agent-skill' 类目) —— 异步, 有 IO。
+   * `acp`：插件引擎任务的 `/` 菜单，与引擎展开 `/<skill>` 同一份清单（AcpAgent.listAgentSkills）。
    */
   async listAgentSkills(
-    agentKind: AgentKind,
+    agentKind: EngineKind,
     opts: ListAgentSkillsOptions & { sessionId?: string },
     /** Host-only request-scoped verification; never part of renderer/remote options. */
     readDisabledSkillPaths?: () => Promise<readonly string[]>,

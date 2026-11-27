@@ -10,6 +10,7 @@ import type { ReactNode } from 'react';
 import path from 'node:path';
 import type { InstalledGhost } from '../../../../shared/ghost';
 import type { PreparedPluginContribution } from '../../../../shared/pluginContributions';
+import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 const toastMocks = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
@@ -51,13 +52,14 @@ vi.mock('@/cindy-brain/GhostSettingsWebview', () => ({
 const ownerGeneration = vi.hoisted(() => ({ value: 1 }));
 vi.mock('@/contexts/AuthContext', () => ({
   useOptionalAuthUser: () => null,
+  useOptionalAuthDeviceId: () => null,
   useOptionalDataOwnerGeneration: () => ownerGeneration.value,
 }));
 
 // 本文件只测详情页其它区块;介绍区带着完整 Markdown 渲染器(会初始化真实 i18n),另有专门测试。
 vi.mock('../PluginReadmeSection', () => ({
   PluginReadmeSection: () => null,
-  usePluginReadme: () => null,
+  usePluginReadme: () => ({ readme: null, pending: false }),
 }));
 
 vi.mock('react-i18next', async () => {
@@ -86,7 +88,6 @@ vi.mock('react-i18next', async () => {
         'settings.ghosts.perm.cindyImageGenerate': 'Generate images',
         'settings.ghosts.perm.cindyTextOneshot': 'Quick Q&A',
         'settings.ghosts.detail.infoTitle': 'Details',
-        'settings.ghosts.detail.byAuthor': `By ${String(options?.author ?? '')}`,
         'settings.ghosts.detail.infoVersion': 'Version',
         'settings.ghosts.detail.infoAuthor': 'Author',
         'settings.ghosts.detail.infoId': 'Identifier',
@@ -107,7 +108,8 @@ vi.mock('react-i18next', async () => {
         'settings.ghosts.detail.oauthScopeStale':
           'This authorization does not include newly added permissions. Reconnect to enable them.',
       };
-      return key.startsWith('settings.ghosts.perm.hostUi.') ? localized.t(key, options) :
+      return key.startsWith('settings.ghosts.perm.hostUi.') || key === 'settings.ghosts.detail.toolCount' ||
+        key.startsWith('settings.ghosts.detail.infoPackageSize') ? localized.t(key, options) :
         labels[key] ?? (options?.value !== undefined ? `${options.value} ${key}` : key);
     },
     i18n: { language: 'en' },
@@ -119,12 +121,13 @@ import type { GhostPermissionItem } from '../../../../shared/ghost';
 import {
   DetailsSection,
   GhostPluginDetailView,
-  GhostPluginMetadata,
   PermissionSummary,
   ToolDescriptionChip,
   ToolsSection,
 } from '../GhostPluginDetailView';
+import { PluginDetailHero } from '../PluginDetailHero';
 import { toGhostPluginDetail, type GhostPluginDetail } from '../lib/ghostPluginViewModel';
+import { PLUGIN_MANAGEMENT_FRAME_CLASS } from '../PluginManagementLayout';
 import { RemotePluginReadOnlyDetail } from '../RemotePluginReadOnlyDetail';
 import { GhostAccountReuseSection } from '../GhostAccountReuseSection';
 
@@ -200,6 +203,136 @@ beforeEach(() => {
     value: {
 
     },
+  });
+});
+
+// Unit / round2 §4.2. Real detail markup with controlled viewport/record heights
+// distinguishes successive layout passes and catches remeasurement after opening.
+describe('detail content defaults', () => {
+  const summary = 'Full description for the plugin with useful context.';
+  const update = { version: '1.2.3', publishedAt: '2026-11-25T12:00:00Z', releaseNotes: 'Release notes' };
+  const local = { ...detail, description: summary, origin: 'local' as const };
+  const props = {
+    ghost: null, detail: local, panelStatus: null, toggleDisabled: false,
+    onBack: vi.fn(), onToggle: vi.fn(), onUse: vi.fn(), onUpdate: vi.fn(), onUpdateFromFile: vi.fn(), onUninstall: vi.fn(),
+  };
+  const recordRow = (name: string) => within(screen.getByRole('region', { name: 'settings.ghosts.detail.recordTitle' }))
+    .getByText(name).closest('details')!;
+
+  function geometry(height: number, bottom: (article: HTMLElement) => number, lines = 4) {
+    const viewport = { height };
+    const getStyle = window.getComputedStyle;
+    const getRect = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, 'clientHeight', 'get').mockImplementation(function (this: Element) {
+      return this.tagName === 'MAIN' ? viewport.height : 0;
+    });
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((element, pseudo) => {
+      const style = getStyle(element, pseudo);
+      if (element.textContent === summary) style.lineHeight = '20px';
+      return style;
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.hasAttribute('data-plugin-detail-end')) return DOMRect.fromRect({ height: bottom(this.closest('article')!) });
+      if (this.textContent === summary) return DOMRect.fromRect({ width: 400, height: lines * 20 });
+      return getRect.call(this);
+    });
+    return viewport;
+  }
+
+  it.each([0, 800])('weighs no automatic expansion in a %i-pixel viewport without free space', height => {
+    const measure = vi.fn(() => 820);
+    geometry(height, measure);
+    const { container } = render(<GhostPluginDetailView {...props} releaseUpdates={[update]} />);
+    expect(recordRow('Permissions').open).toBe(false);
+    expect(recordRow('Details').open).toBe(false);
+    expect(screen.getByText(summary).classList.contains('line-clamp-2')).toBe(true);
+    expect(screen.getByText(update.releaseNotes).classList.contains('line-clamp-4')).toBe(true);
+    expect(measure).toHaveBeenCalledTimes(height ? 1 : 0);
+    expect([...container.querySelectorAll('header dl dt')].map(label => label.textContent)).toEqual([
+      'Version', 'Permissions', 'mcpApps.sourceLabel',
+    ]);
+  });
+
+  it('leaves a three-line compact description in full', () => {
+    geometry(800, () => 800, 3);
+    render(<GhostPluginDetailView {...props} />);
+    expect(screen.getByText(summary).classList.contains('line-clamp-2')).toBe(false);
+    expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.descriptionExpand' })).toBeNull();
+  });
+
+  it.each([[670, 2], [510, 3]])('measures each visible step from %i pixels and stops after %i passes', (initial, passes) => {
+    const measure = vi.fn((article: HTMLElement) => {
+      const description = article.querySelector('header p.line-clamp-6');
+      const notes = article.querySelector('p[class~="line-clamp-[10]"]');
+      return initial + (description ? 50 : 0) + (notes ? 170 : 0);
+    });
+    geometry(800, measure, 8);
+    render(<GhostPluginDetailView {...props} releaseUpdates={[update]} />);
+    expect(measure).toHaveBeenCalledTimes(passes);
+    expect(screen.getByText(summary).classList.contains('line-clamp-6')).toBe(true);
+    expect(screen.getByText(update.releaseNotes).classList.contains(passes === 3 ? 'line-clamp-[10]' : 'line-clamp-4')).toBe(true);
+    expect(recordRow('Details').open).toBe(false);
+    const collapse = within(screen.getByText(summary).closest('header')!)
+      .getByRole('button', { name: 'settings.ghosts.detail.descriptionCollapse' });
+    fireEvent.click(collapse);
+    expect(screen.getByText(summary).classList.contains('line-clamp-2')).toBe(true);
+  });
+
+  it('skips missing blocks and retains the fitted layout, late data limits and user choices', () => {
+    const measure = vi.fn(() => 430);
+    const viewport = geometry(800, measure);
+    const permissionsInput = Array.from({ length: 22 }, (_, index): GhostPermissionItem => ({
+      key: `requested-${index}`, kind: 'code', labelKey: 'code',
+    }));
+    const tools = Array.from({ length: 60 }, (_, index) => ({ name: `tool_${index}`, description: 'Tool description' }));
+    const model = { ...local, permissions: permissionsInput, tools };
+    const { rerender } = render(<GhostPluginDetailView {...props} detail={model} />);
+    const permissions = recordRow('Permissions');
+    const facts = recordRow('Details');
+    expect(measure).toHaveBeenCalledTimes(4); // compact, description, permissions, facts
+    expect(permissions.open).toBe(true);
+    expect(facts.open).toBe(true);
+    expect(within(permissions).getAllByRole('listitem')).toHaveLength(3);
+    expect(within(facts).getAllByRole('listitem')).toHaveLength(6);
+    fireEvent.click(within(facts).getByRole('button', { name: 'settings.ghosts.detail.remainingPermissions' }));
+    expect(within(facts).getAllByRole('listitem')).toHaveLength(60);
+    fireEvent.click(within(facts).getByRole('button', { name: 'settings.ghosts.detail.descriptionCollapse' }));
+    expect(within(facts).getAllByRole('listitem')).toHaveLength(6);
+    fireEvent.click(permissions.querySelector('summary')!);
+    expect(permissions.open).toBe(false);
+    viewport.height = 450;
+    fireEvent(window, new Event('resize'));
+    rerender(<GhostPluginDetailView {...props} detail={model} releaseUpdates={[update]} publishingSection={<p>Publication status</p>} />);
+    expect(measure).toHaveBeenCalledTimes(4);
+    expect(screen.getByText(update.releaseNotes).classList.contains('line-clamp-4')).toBe(true);
+    expect(facts.open).toBe(true);
+    expect(permissions.open).toBe(false);
+    fireEvent.click(permissions.querySelector('summary')!);
+    expect(within(permissions).getAllByRole('listitem')).toHaveLength(5);
+    fireEvent.click(within(permissions).getByRole('button', { name: 'settings.ghosts.detail.remainingPermissions' }));
+    expect(within(permissions).getAllByRole('listitem')).toHaveLength(22);
+  });
+
+  it.each([false, true])('shares more plugins with a local installed detail only (remote=%s)', async remote => {
+    const item: PluginMarketItem = {
+      pluginId: 'example-more', ghostId: 'example-more', name: 'Nearby plugin', description: null, author: null,
+      scope: 'public', publisherKind: 'personal', organizationId: null, defaultInstall: false,
+      releaseId: 'release-more', version: '1.0', publishedAt: update.publishedAt,
+      icon: null, installState: 'not-installed', enabled: null, sourceType: 'server', sourceMarketName: null,
+    };
+    const loadPage = vi.fn(async () => ({
+      items: [item], nextCursor: null, counts: null, unavailableReason: null,
+      customSourceNames: [], unavailableCustomSourceNames: [],
+    }));
+    render(<GhostPluginDetailView {...props} remote={remote}
+      relatedCatalog={{ cache: {}, ownerKey: 'owner', catalogKey: 'en', local: true, loadPage }} onOpenRelated={vi.fn()} />);
+    if (remote) {
+      expect(screen.queryByRole('region', { name: 'settings.ghosts.detail.morePlugins' })).toBeNull();
+      expect(loadPage).not.toHaveBeenCalled();
+    } else {
+      expect(await screen.findByRole('button', { name: item.name })).toBeTruthy();
+      expect(loadPage).toHaveBeenCalledOnce();
+    }
   });
 });
 
@@ -414,9 +547,33 @@ describe('Ghost plugin detail sections', () => {
   it('renders readable host capability details in the plugin permission summary', () => {
     const view = render(<PermissionSummary items={[{ key: 'ui:host:capability:draft', kind: 'panel',
       labelKey: 'uiHost', detailKey: 'uiHostAccess', detailArgs: { subject: 'capability:draft', access: 'draft' } }]} />);
-    fireEvent.click(screen.getByRole('button', { name: /Permissions: settings.ghosts.perm.uiHost/ }));
+    fireEvent.click(screen.getByText('Permissions').closest('summary')!);
     expect(screen.getByText('Read and edit the message draft')).toBeTruthy();
     expect(view.container.textContent).not.toContain('capability:draft');
+  });
+
+  // Unit / round2 §4.2: linked MCP tools have their own five-row limit,
+  // independent of the tools in the facts accordion.
+  it('reveals interaction-page tools after the first five without opening details', () => {
+    const tools = Array.from({ length: 6 }, (_, index) => ({ name: `view_${index}`, description: 'Open a view' }));
+    const ghost: InstalledGhost = { enabled: true, dir: '/fixture', uiCapabilityApproved: true,
+      approval: { state: 'approved', revision: 'one' }, manifest: { schemaVersion: 3, id: 'board', name: 'Board',
+        version: '1', kind: 'chip', entry: 'main.js', tools, mcpApps: {
+          ui: { resources: [{ uri: 'ui://board', file: 'board.html' }],
+            tools: Object.fromEntries(tools.map(tool => [tool.name, { resourceUri: 'ui://board' }])) },
+        } } };
+    render(<GhostPluginDetailView ghost={ghost} detail={toGhostPluginDetail(ghost)} panelStatus={null}
+      onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()}
+      onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
+    const heading = screen.getByRole('heading', { name: 'settings.ghosts.perm.mcpUi' });
+    const interaction = within(heading.closest('section')!);
+    expect(interaction.getAllByRole('listitem')).toHaveLength(5);
+    const more = interaction.getByRole('button', { name: 'settings.ghosts.detail.remainingPermissions' });
+    fireEvent.click(more);
+    expect(interaction.getByText('view_5')).toBeTruthy();
+    expect(screen.getByText('Details').closest('details')?.open).toBe(false);
+    fireEvent.click(more);
+    expect(interaction.queryByText('view_5')).toBeNull();
   });
   // Unit / round-4: installed detail no longer exposes personal call history.
   // Extend the remote-only regression to local detail; retain shared header metrics.
@@ -452,7 +609,7 @@ describe('Ghost plugin detail sections', () => {
         toggleDisabled={false}
       />,
     );
-    expect(screen.getByText('1,284 settings.ghosts.usage.downloadsValue')).toBeTruthy();
+    expect(screen.getByRole('group', { name: '1,284 settings.ghosts.usage.downloadsValue' })).toBeTruthy();
     expect(screen.queryByText('settings.ghosts.usage.title')).toBeNull();
     expect(usageSummary).not.toHaveBeenCalled();
   });
@@ -472,7 +629,7 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.queryByLabelText('Open Install Location')).toBeNull();
     expect(container.textContent).not.toMatch(/undefined|unverified|已停用|Disabled/);
   });
-  it('renders Host permission descriptions through the existing permission dialog and disables retry offline', async () => {
+  it('renders Host permission descriptions in the read-only permission row and disables retry offline', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     render(<RemotePluginReadOnlyDetail
       detail={{ id: 'notes', name: 'Notes', description: '', permissions: [{ title: 'Read service', description: 'Only the declared service' }] }}
@@ -480,20 +637,69 @@ describe('Ghost plugin detail sections', () => {
       onBack={vi.fn()} onRetry={vi.fn()}
     />);
     expect((screen.getByRole('button', { name: 'settings.ghosts.remote.refreshDetail' }) as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(screen.getByRole('button', { name: 'Permissions: Read service' }));
-    expect(within(await screen.findByRole('dialog')).getByText('Only the declared service')).toBeTruthy();
+    const row = screen.getByText('Permissions').closest('details')!;
+    expect(row.open).toBe(false);
+    fireEvent.click(row.querySelector('summary')!);
+    expect(row.open).toBe(true);
+    expect(within(row).getByText('Only the declared service')).toBeTruthy();
   });
-  it('keeps installed use details focused on the plugin without a version and publishing section', () => {
+  it('shows installed notes immediately with tools inside the collapsed details row', () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
     render(<GhostPluginDetailView ghost={null} detail={{ ...detail, releaseNotes: 'Only version changes', tools: [{ name: 'example', description: 'Example tool' }] }} panelStatus={null}
       onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()}
       onUninstall={vi.fn()} toggleDisabled={false} />);
     expect(screen.getByText(detail.description)).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Tools' })).toBeTruthy();
-    expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
-    expect(screen.queryByText('Only version changes')).toBeNull();
+    const facts = screen.getByText('Details').closest('details')!;
+    expect(facts.open).toBe(false);
+    expect(within(facts).getByText('Tools').closest('details')).toBe(facts);
+    const version = screen.getByRole('heading', { name: /recentUpdates/ }).closest('section')!;
+    expect(within(version).getByText(`v${detail.version}`)).toBeTruthy();
+    expect(within(version).getByText('Only version changes')).toBeTruthy();
   });
 
+  // The route can replace an installed detail without unmounting the view.
+  it('shows exactly one set of release notes when switching between installed plugins', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const props = {
+      ghost: null, panelStatus: null, onBack: vi.fn(), onToggle: vi.fn(),
+      onUse: vi.fn(), onUpdate: vi.fn(), onUpdateFromFile: vi.fn(),
+      onUninstall: vi.fn(), toggleDisabled: false,
+    };
+    const view = (id: string, releaseNotes: string) =>
+      <GhostPluginDetailView {...props} detail={{ ...detail, id, name: id, releaseNotes }} />;
+    try {
+      const { rerender } = render(view('art', 'Art release notes'));
+      expect(screen.getByText('Art release notes')).toBeTruthy();
+      rerender(view('web-search', 'Search release notes'));
+      expect(screen.queryByText('Art release notes')).toBeNull();
+      expect(screen.getByText('Search release notes')).toBeTruthy();
+      rerender(view('art', 'Art release notes'));
+      expect(screen.queryByText('Search release notes')).toBeNull();
+      expect(screen.getAllByRole('heading', { name: /recentUpdates/ })).toHaveLength(1);
+      expect(screen.getAllByText('Art release notes')).toHaveLength(1);
+      expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key|duplicate key/i);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it.each(['Changes in the target release', undefined])('shows the version of the available notes when target notes are %j', updateNotes => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    render(<GhostPluginDetailView ghost={null} detail={{ ...detail, releaseNotes: 'Installed release notes' }} panelStatus={null}
+      onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()}
+      updateVersion="1.2.4" updateNotes={updateNotes} onUninstall={vi.fn()} toggleDisabled={false} />);
+
+    const version = screen.getByRole('heading', { name: /recentUpdates/ }).closest('section')!;
+    expect(within(version).getByText(updateNotes ? 'v1.2.4' : `v${detail.version}`)).toBeTruthy();
+    expect(within(version).getByText(updateNotes ?? 'Installed release notes')).toBeTruthy();
+    if (updateNotes) expect(screen.getAllByText(updateNotes)).toHaveLength(1);
+
+    const header = screen.getByRole('heading', { name: detail.name }).closest('header')!;
+    const facts = screen.getByText('Details').closest('details')!;
+    expect(within(header).getByText('settings.ghosts.detail.heroInstalledVersion', { selector: 'dt' })).toBeTruthy();
+    expect(within(header).getByText('Permissions', { selector: 'dt' })).toBeTruthy();
+    expect(within(facts).getByText(`v${detail.version}`)).toBeTruthy();
+  });
 
   it.each(['pending', 'approved', 'rejected', 'cancelled'] as const)(
     'hides a submission that cannot be repeated for the %s version without showing publishing details', (status) => {
@@ -519,7 +725,7 @@ describe('Ghost plugin detail sections', () => {
         contributionUnavailableReason={prepared.preflight?.actions.canSubmit ? undefined : 'Change the version before publishing again'} />;
       const { rerender } = render(view(preview));
       expect(screen.queryByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' })).toBeNull();
-      expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
+      expect(screen.getByText('Details').closest('details')?.open).toBe(false);
       expect(screen.queryByText('Change the version before publishing again')).toBeNull();
       expect(screen.queryByText('settings.ghosts.contribution.versionConsumedHint')).toBeNull();
       expect(screen.queryByText('Complete package release notes')).toBeNull();
@@ -540,12 +746,17 @@ describe('Ghost plugin detail sections', () => {
       onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()}
       onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false}
       onContribute={publish} />);
-    expect(screen.queryByText('settings.ghosts.contribution.versionUpdates')).toBeNull();
+    expect(screen.getByText('Details').closest('details')?.open).toBe(false);
     expect(screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' }).closest('header')).toBeTruthy();
     const chat = screen.getByRole('button', { name: 'settings.ghosts.detail.chatAction' });
-    expect(within(chat.closest('.plugin-detail-actions') as HTMLElement).getByRole('switch')).toBeTruthy();
+    const actions = within(chat.closest('.plugin-detail-identity-actions') as HTMLElement);
+    const action = actions.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' });
+    expect(actions.queryByRole('switch')).toBeNull();
+    const enable = screen.getByRole('switch');
+    expect(enable.closest('.plugin-detail-identity-enable')).toBeTruthy();
+    expect(chat.compareDocumentPosition(action) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(action.compareDocumentPosition(enable) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText('Example plugin')).toBeTruthy();
-    const action = screen.getByRole('button', { name: 'settings.ghosts.contribution.publishPlugin' });
     fireEvent.click(action);
     expect(publish).toHaveBeenCalledOnce();
   });
@@ -579,6 +790,27 @@ describe('Ghost plugin detail sections', () => {
     );
     expect(verify).not.toHaveBeenCalled();
   });
+
+  it('omits configuration when GitHub CLI credentials are declared without a settings page', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    const ghost: InstalledGhost = {
+      manifest: {
+        schemaVersion: 3, minCindyVersion: '0.1.0', kind: 'chip',
+        id: 'github-helper', name: detail.name, version: detail.version, entry: 'main.js',
+        network: { hosts: ['api.github.com'], secrets: [{ key: 'github_pat', label: 'GitHub', source: 'gh-cli',
+          inject: { header: 'Authorization', format: 'Bearer {value}', hosts: ['api.github.com'] } }] },
+      },
+      dir: '/tmp/plugin',
+      enabled: true,
+      approval: { state: 'approved', revision: 'rev-1' },
+    };
+    render(<GhostPluginDetailView ghost={ghost} detail={toGhostPluginDetail(ghost)} panelStatus={null}
+      onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()}
+      onUninstall={vi.fn()} toggleDisabled={false} />);
+    expect(screen.queryByRole('heading', { name: 'settings.ghosts.detail.configurationTitle' })).toBeNull();
+    expect(screen.queryByTestId('ghost-settings-webview')).toBeNull();
+  });
+
   it.each([
     { layout: 'legacy', connection: { status: 'missing' } },
     { layout: 'root', connection: { status: 'auth', source: 'token' } },
@@ -651,20 +883,28 @@ describe('Ghost plugin detail sections', () => {
   });
   it('places Background Tasks after settings and before Tools for plugins declaring hiddenTasks', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
-    const listBackgroundTasks = vi.fn(async () => ({ items: [
-      { taskId: 'bg-1', title: 'Hidden grading', status: 'active' as const, updatedAt: Date.now(), running: false },
-    ] }));
+    const listBackgroundTasks = vi.fn(async () => ({ items: Array.from({ length: 6 }, (_, index) => ({
+      taskId: `bg-${index}`, title: `Hidden grading ${index + 1}`, status: 'active' as const, updatedAt: Date.now(), running: false,
+    })) }));
     Object.assign(window.electronAPI, { ghosts: { listBackgroundTasks, revealBackgroundTask: vi.fn() } });
     const ghost = { manifest: { agent: { tasks: true, hiddenTasks: true } }, enabled: true, taskCapabilityApproved: true } as InstalledGhost;
     render(<GhostPluginDetailView ghost={ghost} detail={{ ...detail, tools: [{ name: 'render', description: 'Render.' }] }} panelStatus="Docked" onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()} onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
-    expect(await screen.findByText('Hidden grading')).toBeTruthy();
+    expect(await screen.findByText('Hidden grading 1')).toBeTruthy();
     expect(listBackgroundTasks).toHaveBeenCalledWith(detail.id);
     const heading = screen.getByRole('heading', { name: 'settings.ghosts.backgroundTasks.title' });
-    const tools = screen.getByRole('heading', { name: 'Tools' });
+    const tasks = within(heading.closest('section')!);
+    expect(tasks.getAllByRole('listitem')).toHaveLength(5);
+    const more = tasks.getByRole('button', { name: 'settings.ghosts.detail.remainingPermissions' });
+    fireEvent.click(more);
+    expect(tasks.getAllByRole('listitem')).toHaveLength(6);
+    fireEvent.click(more);
+    expect(tasks.queryByText('Hidden grading 6')).toBeNull();
+    const tools = within(screen.getByRole('region', { name: 'settings.ghosts.detail.recordTitle' }))
+      .getByText('Tools').closest('details')!;
     expect(heading.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // Outside a router the open action is omitted; showing in the task list stays available.
     expect(screen.queryByRole('button', { name: 'settings.ghosts.backgroundTasks.open' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'settings.ghosts.backgroundTasks.reveal' })).toBeTruthy();
+    expect(tasks.getAllByRole('button', { name: 'settings.ghosts.backgroundTasks.reveal' })).toHaveLength(5);
   });
   it('lets the user retry task permission, disables duplicate clicks, and hides after approval', async () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
@@ -756,6 +996,7 @@ describe('Ghost plugin detail sections', () => {
     const toggle = screen.getByRole('switch', {
       name: 'settings.ghosts.enableAria',
     });
+    expect(toggle.closest('.plugin-detail-identity-enable')).toBeTruthy();
     expect(toggle.className).toContain('cindy-switch');
     expect(toggle.className).toContain('data-[state=checked]:bg-[var(--switch-track-on)]');
     expect(toggle.firstElementChild?.className).toContain(
@@ -769,6 +1010,19 @@ describe('Ghost plugin detail sections', () => {
     fireEvent.click(toggle);
     fireEvent.click(screen.getByText('settings.ghosts.detail.enabledLabel'));
     expect(onToggle).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a disabled management-only plugin’s switch in the banner without an action', () => {
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    render(<GhostPluginDetailView ghost={null} detail={{ ...detail, enabled: false, tabPanel: false, canUse: false }}
+      panelStatus={null} onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()}
+      onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
+    const banner = screen.getByRole('heading', { name: detail.name }).closest('[data-v5-detail-header]')!;
+    const toggle = within(banner as HTMLElement).getByRole('switch');
+    expect(toggle.closest('.plugin-detail-identity-enable')).toBeTruthy();
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(within(banner as HTMLElement).getByText('settings.ghosts.detail.disabledLabel')).toBeTruthy();
+    expect(banner.querySelector('.plugin-detail-identity-actions > *')).toBeNull();
   });
 
   it('renders a remote disabled notice without a configuration heading or local settings', () => {
@@ -885,7 +1139,7 @@ describe('Ghost plugin detail sections', () => {
     expect(onUse).toHaveBeenCalledTimes(1);
   });
 
-  it('shows a non-blocking stale OAuth scope badge inside the configuration section', () => {
+  it.each([false, true])('keeps the stale OAuth scope badge visible with authorization expired = %s', expired => {
     vi.stubGlobal(
       'ResizeObserver',
       class {
@@ -894,24 +1148,26 @@ describe('Ghost plugin detail sections', () => {
         disconnect() {}
       },
     );
+    const ghost: InstalledGhost = {
+      manifest: {
+        schemaVersion: 2,
+        id: 'oauth-helper',
+        name: detail.name,
+        version: detail.version,
+        kind: 'chip',
+        entry: 'main.js',
+        settingsHtml: 'settings.html',
+      },
+      dir: detail.installDir ?? '/tmp/plugin',
+      enabled: true,
+      approval: { state: 'approved', revision: 'rev-1' },
+      oauthScopeStale: { secretKey: 'account', missingScopeCount: 2 },
+      oauthAuthorizationExpired: expired ? { expiredAccountCount: 1 } : undefined,
+    };
     render(
       <GhostPluginDetailView
-        ghost={{
-          manifest: {
-            schemaVersion: 2,
-            id: detail.id,
-            name: detail.name,
-            version: detail.version,
-            kind: 'chip',
-            entry: 'main.js',
-            settingsHtml: 'settings.html',
-          },
-          dir: detail.installDir ?? '/tmp/plugin',
-          enabled: true,
-          approval: { state: 'approved', revision: 'rev-1' },
-          oauthScopeStale: { secretKey: 'account', missingScopeCount: 2 },
-        }}
-        detail={{ ...detail, hasSettingsUi: true }}
+        ghost={ghost}
+        detail={toGhostPluginDetail(ghost)}
         panelStatus="Docked"
         onBack={vi.fn()}
         onToggle={vi.fn()}
@@ -923,10 +1179,12 @@ describe('Ghost plugin detail sections', () => {
       />,
     );
 
-    const badge = screen.getByRole('status');
-    expect(badge.textContent).toContain('newly added permissions');
+    const configuration = within(screen.getByRole('region', { name: 'settings.ghosts.detail.configurationTitle' }));
+    const header = within(screen.getByRole('heading', { level: 1 }).closest('header')!);
+    const badge = header.getByText(/newly added permissions/).closest('[role="status"]')!;
     expect(badge.className).toContain('bg-[var(--warning-bg-soft)]');
-    expect(screen.getByTestId('ghost-settings-webview')).toBeTruthy();
+    expect(header.queryByText('settings.ghosts.page.oauthAuthorizationExpired') !== null).toBe(expired);
+    expect(configuration.getByTestId('ghost-settings-webview')).toBeTruthy();
   });
 
   it('keeps the detail surface on one centered content grid', () => {
@@ -957,23 +1215,20 @@ describe('Ghost plugin detail sections', () => {
 
     const scrollSurface = container.querySelector('main');
     const detailFrame = container.querySelector('article');
-    // 返回按钮住在吸顶顶栏里(mac 的窗口拖拽区)。顶栏内层复用同一条 824px
-    // 内容框,与正文左缘对齐。
+    // 吸顶顶栏与正文共用列表内容框，进出详情时水平边缘对齐。
     const topBar = container.querySelector('[data-testid="plugin-detail-top-bar"]');
     const topBarFrame = topBar?.querySelector(':scope > div');
     const backButton = topBar?.querySelector('button');
-    const detailHero = detailFrame?.querySelector('.plugin-detail-hero');
-    const detailActions = detailFrame?.querySelector('.plugin-detail-actions');
+    const detailHero = detailFrame?.querySelector('.plugin-detail-identity');
     expect(scrollSurface?.className).toContain('[scrollbar-gutter:stable_both-edges]');
     expect(detailFrame?.className).toContain('plugin-detail-frame');
-    expect(detailFrame?.className).toContain('mx-auto');
-    expect(detailFrame?.className).toContain('max-w-[824px]');
+    expect(detailFrame?.className).toContain(PLUGIN_MANAGEMENT_FRAME_CLASS);
     expect(topBar?.className).toContain('sticky');
-    expect(topBarFrame?.className).toContain('mx-auto');
-    expect(topBarFrame?.className).toContain('max-w-[824px]');
+    expect(topBarFrame?.className).toContain(PLUGIN_MANAGEMENT_FRAME_CLASS);
     expect(backButton?.className).toContain('-ml-3');
-    expect(detailHero?.className).toContain('grid-cols-[64px_minmax(0,1fr)_auto]');
-    expect(detailActions?.className).toContain('flex-wrap');
+    expect(detailHero?.querySelector('h1')).toBeTruthy();
+    expect(detailHero?.querySelector('.plugin-detail-identity-controls .plugin-detail-identity-actions')).toBeTruthy();
+    expect(detailHero?.nextElementSibling?.classList.contains('plugin-detail-hero-facts')).toBe(true);
   });
 
   it('routes a projected detail icon failure to market recovery', () => {
@@ -1085,20 +1340,13 @@ describe('Ghost plugin detail sections', () => {
       expect(screen.getByText(bodyKey)).toBeTruthy();
       // 缺批准时"使用"与"更新"都不该顶在最前面,主动作是重新确认。
       expect(screen.queryByRole('button', { name: 'settings.ghosts.market.updateTo' })).toBeNull();
-      // detail fixture 是指令型插件(canUse:true / tabPanel:false → 'command'),主动作按钮
-      // 标 chatAction;缺批准时 primaryEnabled=false → 禁用。
-      expect(
-        (
-          screen.getByRole('button', {
-            name: 'settings.ghosts.detail.chatAction',
-          }) as HTMLButtonElement
-        ).disabled,
-      ).toBe(true);
+      expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.chatAction' })).toBeNull();
 
       // 共享 Switch 和关联文字标签遵循同一禁用门控。
       const toggle = screen.getByRole('switch', {
         name: 'settings.ghosts.enableAria',
       }) as HTMLButtonElement;
+      expect(toggle.closest('.plugin-detail-identity-enable')).toBeTruthy();
       expect(toggle.disabled).toBe(true);
       fireEvent.click(toggle);
       expect(onToggle).not.toHaveBeenCalled();
@@ -1305,15 +1553,61 @@ describe('Ghost plugin detail sections', () => {
     expect(onExport).toHaveBeenCalledTimes(1);
   });
 
-  it('uses one metadata color and orders author, then version', () => {
-    const { container } = render(<GhostPluginMetadata author="Cindy" version="1.1.4" />);
+  it('puts the author below the name and omits a strip with a single fact', () => {
+    const { container } = render(<PluginDetailHero id="example" name="Example" author="Cindy" version="1.1.4" />);
+    expect(screen.getByText('Cindy').className).toContain('text-[var(--text-secondary)]');
+    expect(container.querySelector('.plugin-detail-identity-controls > *')).toBeNull();
+    expect(container.querySelector('dl')).toBeNull();
+  });
 
-    const metadata = container.firstElementChild as HTMLElement;
-    expect(metadata.textContent).toBe('By Cindy·v1.1.4');
-    expect(metadata.className).toContain('text-[var(--text-tertiary)]');
-    expect(metadata.innerHTML).not.toContain('text-[var(--text-secondary)]');
-    expect(screen.getByText('By Cindy').className).toContain('min-w-0');
-    expect(screen.getByText('By Cindy').className).toContain('truncate');
+  // Unit: the published size is identified by the visible version, including on another computer.
+  it.each([
+    [false, '1.2.3', 1_258_291, '1.2 MB'],
+    [false, '1.2.2', 1_258_291, '1.2 MB (v1.2.3)'],
+    [true, '1.2.2', 1_258_291, '1.2 MB (v1.2.3)'],
+    [true, '1.2.3', undefined, undefined],
+  ] as const)('shows package size (remote %s, installed %s, bytes %s)', (remote, installedVersion, sizeBytes, expected) => {
+    const marketItem: PluginMarketItem = {
+      pluginId: 'example-market', ghostId: detail.ghostId, name: detail.name, description: null, author: null,
+      scope: 'public', organizationId: null, defaultInstall: false, sourceType: 'server', sourceMarketName: null,
+      releaseId: 'current-release', ...(sizeBytes === undefined ? {} : { sizeBytes }),
+      version: detail.version, publishedAt: '2026-11-25T00:00:00Z', icon: null,
+      installState: 'update-available', enabled: true,
+    };
+    render(<GhostPluginDetailView ghost={null} remote={remote} detail={{ ...detail, version: installedVersion }} marketItem={marketItem}
+      panelStatus={null} onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()}
+      onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
+    const facts = within(screen.getByText('Details').closest('details')!);
+    if (expected === undefined) {
+      expect(facts.queryByText('Package size')).toBeNull();
+    } else {
+      const version = facts.getByText('Version').parentElement!;
+      const size = facts.getByText('Package size').parentElement!;
+      expect(version.nextElementSibling).toBe(size);
+      expect(within(size).getByText(expected)).toBeTruthy();
+    }
+  });
+
+  it('keeps the public badge in the hero and places installation and publisher details inside the record', () => {
+    render(<GhostPluginDetailView
+      ghost={null}
+      detail={{ ...detail, origin: 'public', publisherKind: 'official', installationLabelKey: 'publicInstall',
+        installationSource: { kind: 'market' } }}
+      panelStatus={null} onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()}
+      onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
+    const header = screen.getByRole('heading', { level: 1, name: detail.name }).closest('header')!;
+    const source = 'settings.ghosts.detail.publicInstall';
+    const publisher = 'settings.ghosts.market.publisherDescription.official';
+    expect(within(header).queryByText(source)).toBeNull();
+    expect(within(header).queryByText(publisher)).toBeNull();
+    expect(within(header).getByText('settings.ghosts.market.publisherKind.official')).toBeTruthy();
+
+    const record = within(screen.getByRole('region', { name: 'settings.ghosts.detail.recordTitle' }));
+    const summary = record.getByText('Details');
+    fireEvent.click(summary);
+    const facts = within(summary.closest('details')!);
+    expect(facts.getByText(source)).toBeTruthy();
+    expect(facts.getByText(publisher)).toBeTruthy();
   });
 
   it.each([
@@ -1421,79 +1715,46 @@ describe('Ghost plugin detail sections', () => {
     expect(screen.queryByText('JSON Schema')).toBeNull();
   });
 
-  it('keeps the Tools title count-free and puts See All beside the title', () => {
-    render(
-      <ToolsSection
-        tools={Array.from({ length: 7 }, (_, index) => ({
-          name: `tool_${index}`,
-          description: `Tool ${index}`,
-        }))}
-      />,
-    );
-
-    const heading = screen.getByRole('heading', { name: 'Tools' });
-    expect(heading).toBeTruthy();
-    expect(heading.closest('section')?.className).not.toContain('border-t');
-    expect(screen.queryByRole('heading', { name: /Tools.*7/ })).toBeNull();
-    expect(screen.getByRole('button', { name: 'See All' })).toBeTruthy();
+  it('shows the total tool count and expands the entries after the first six in place', () => {
+    const { container } = render(<ToolsSection tools={Array.from({ length: 7 }, (_, index) => ({
+      name: `tool_${index}`, description: `Tool ${index}`,
+    }))} />);
+    expect(screen.getByRole('heading', { name: 'Tools 7 tools' })).toBeTruthy();
+    expect(within(container).getAllByRole('listitem')).toHaveLength(6);
+    const more = within(container).getByRole('button', { name: 'settings.ghosts.detail.remainingPermissions' });
+    fireEvent.click(more);
+    expect(within(container).getAllByRole('listitem')).toHaveLength(7);
+    expect(screen.getByText('Tool 6')).toBeTruthy();
+    fireEvent.click(more);
+    expect(within(container).getAllByRole('listitem')).toHaveLength(6);
   });
 
-  it('shows every host permission except Tools and opens the same complete details', async () => {
+  it('expands the complete non-tool permission list with the host wording', () => {
     render(<PermissionSummary items={permissions} />);
-
-    const networkLabel = screen.getByText('Access api.example.com');
-    const permissionCard = networkLabel.closest('button');
-    const commandLabel = screen.getByText('Command render');
-    const cindyLabel = screen.getByText('Generate images');
-    expect(permissionCard).toBeTruthy();
-    expect(commandLabel.closest('button')).toBe(permissionCard);
-    expect(cindyLabel.closest('button')).toBe(permissionCard);
-    expect(within(permissionCard as HTMLButtonElement).queryByText('Tool render')).toBeNull();
-    expect(permissionCard?.className).toContain('grid-cols-2');
-    expect(permissionCard?.className).toContain('var(--surface-elevated)');
-    expect(permissionCard?.className).toContain('p-4');
-    expect(permissionCard?.className).toContain('gap-y-0');
-    expect(networkLabel.parentElement?.className).toContain('min-h-9');
-    expect(networkLabel.className).toContain('text-13');
-    expect(networkLabel.className).toContain('font-normal');
-    expect(networkLabel.className).toContain('break-words');
-    expect(networkLabel.className).not.toContain('truncate');
-    expect(networkLabel.className).not.toContain('font-medium');
-
-    fireEvent.click(permissionCard as HTMLButtonElement);
-
-    const dialog = await screen.findByRole('dialog');
-    expect(dialog.querySelector('.lucide-globe')).toBeTruthy();
-    expect(dialog.innerHTML).toContain('border-b-[0.5px]');
-    expect(dialog.innerHTML).toContain('divide-y-[0.5px]');
-    expect(within(dialog).getByText('Access api.example.com')).toBeTruthy();
-    expect(within(dialog).getByText('Can access this declared domain.')).toBeTruthy();
-    expect(within(dialog).getByText('Command render')).toBeTruthy();
-    expect(within(dialog).queryByText('Tool render')).toBeNull();
-    expect(within(dialog).getByText('Generate images')).toBeTruthy();
-    // detailArgs 的 model 插值必须替换占位符,不能显示裸 {{model}}(Greptile 2026-08-07)。
-    expect(
-      within(dialog).getByText(
-        'Takes effect when the model (codex/gpt-5.5) is available in the catalog.',
-      ),
-    ).toBeTruthy();
-    expect(within(dialog).queryByText(/Takes effect when the model \(\{\{model\}\}\)/)).toBeNull();
+    const row = screen.getByText('Permissions').closest('details')!;
+    expect(row.open).toBe(false);
+    fireEvent.click(row.querySelector('summary')!);
+    expect(row.open).toBe(true);
+    expect(row.querySelector('.lucide-globe')).toBeTruthy();
+    expect(within(row).getByText('Access api.example.com')).toBeTruthy();
+    expect(within(row).getByText('Can access this declared domain.')).toBeTruthy();
+    expect(within(row).getByText('Command render')).toBeTruthy();
+    expect(within(row).queryByText('Tool render')).toBeNull();
+    expect(within(row).getByText('Generate images')).toBeTruthy();
+    expect(within(row).getByText('Takes effect when the model (codex/gpt-5.5) is available in the catalog.')).toBeTruthy();
+    expect(within(row).queryByText(/Takes effect when the model \(\{\{model\}\}\)/)).toBeNull();
   });
 
-  it('uses the same elevated theme surface for Tool bubbles and Permission cards', () => {
-    render(
-      <>
-        <ToolDescriptionChip tool={{ name: 'render_image', description: 'Render an image.' }} />
-        <PermissionSummary items={permissions} />
-      </>,
-    );
-
-    expect(screen.getByRole('button', { name: 'Open render_image' }).className).toContain(
-      'var(--surface-elevated)',
-    );
-    expect(screen.getByText('Access api.example.com').closest('button')?.className).toContain(
-      'var(--surface-elevated)',
-    );
+  it('keeps a shared elevated surface for the installed information rows', () => {
+    const { container } = render(<GhostPluginDetailView ghost={null}
+      detail={{ ...detail, permissions, tools: [{ name: 'render_image', description: 'Render an image.' }] }}
+      panelStatus={null} onBack={vi.fn()} onToggle={vi.fn()} onUse={vi.fn()} onUpdate={vi.fn()}
+      onUpdateFromFile={vi.fn()} onUninstall={vi.fn()} toggleDisabled={false} />);
+    const record = within(screen.getByRole('region', { name: 'settings.ghosts.detail.recordTitle' }));
+    const tools = record.getByText('Tools').closest('details')!;
+    const perms = record.getByText('Permissions').closest('details')!;
+    expect(tools.previousElementSibling).toBe(perms);
+    expect(container.querySelector('details')?.parentElement?.className).toContain('var(--settings-theme-card-bg)');
   });
 
   it('lets the install location use the full details row and preserves its actions', async () => {
@@ -1506,12 +1767,12 @@ describe('Ghost plugin detail sections', () => {
     });
     render(<DetailsSection detail={detail} panelStatus="Docked" />);
 
-    expect(screen.getByRole('heading', { name: 'Details' })).toBeTruthy();
+    fireEvent.click(screen.getByText('Details').closest('summary')!);
     expect(screen.getByText('Version')).toBeTruthy();
     expect(screen.getByText('Author')).toBeTruthy();
     expect(screen.getByText('Identifier')).toBeTruthy();
     const detailsGrid = screen.getByText('Version').parentElement?.parentElement;
-    expect(detailsGrid?.className).toContain('grid-cols-3');
+    expect(detailsGrid?.className).toContain('sm:grid-cols-2');
     expect(detailsGrid?.className).not.toContain('border');
     expect(screen.getByText('v1.2.3').className).toContain('truncate');
     expect(screen.getByText('Contents')).toBeTruthy();
@@ -1573,26 +1834,26 @@ describe('Ghost plugin detail sections', () => {
       />,
     );
 
-    fireEvent.click(
-      screen.getByText('Access api.example.com').closest('button') as HTMLButtonElement,
-    );
-    const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getAllByText('Can access this declared domain.')).toHaveLength(2);
-    expect(
-      within(dialog).getByText((_, element) => element?.textContent === 'scope.read\nscope.write'),
-    ).toBeTruthy();
+    const row = screen.getByText('Permissions').closest('details')!;
+    fireEvent.click(row.querySelector('summary')!);
+    expect(within(row).getAllByText('Can access this declared domain.')).toHaveLength(2);
+    expect(within(row).getByText((_, element) => element?.textContent === 'scope.read\nscope.write')).toBeTruthy();
   });
 });
 
-it('adds shared counts to installed detail metadata while preserving author and version', () => {
-  const { container } = render(<GhostPluginMetadata author="Cindy" version="1.7.5" marketItem={{
+it('shows downloads and weekly uses in order before the installed version and update date', () => {
+  const { container } = render(<PluginDetailHero id="example" name="Example" author="Cindy" version="1.7.5" versionLabel="installed" marketItem={{
     sourceType: 'server', scope: 'organization',
-    downloadStatistics: { requestCount: '1284' },
-    usageStatistics: { usageCount: '8932', usageCountLast7Days: '12', asOf: '2026-10-13T00:00:00Z' },
+    downloadStatistics: { requestCount: '1284' }, publishedAt: '2026-10-13T12:00:00Z',
+    usageStatistics: { usageCount: '8932', usageCountLast7Days: '0', asOf: '2026-10-13T00:00:00Z' },
   } as import('../../../../shared/pluginMarket').PluginMarketItem} />);
-  expect(container.textContent).toContain('By Cindy·v1.7.5');
-  expect(container.textContent).toContain('1,284 settings.ghosts.usage.downloadsValue');
-  expect(container.textContent).toContain('8,932 settings.ghosts.usage.usesValue');
+  expect([...container.querySelectorAll('dl dt')].map(label => label.textContent)).toEqual([
+    'settings.ghosts.detail.heroDownloads', 'settings.ghosts.detail.heroWeeklyUsage',
+    'settings.ghosts.detail.heroInstalledVersion', 'settings.ghosts.detail.heroLatestUpdate',
+  ]);
+  expect(screen.getByText('v1.7.5')).toBeTruthy();
+  expect(screen.getByRole('group', { name: '1,284 settings.ghosts.usage.downloadsValue' })).toBeTruthy();
+  expect(screen.getByRole('group', { name: 'settings.ghosts.detail.heroWeeklyUsage 0' })).toBeTruthy();
 });
 
 // Chat files handed to a plugin: the user sees each 7-day copy and deletes one
@@ -1603,12 +1864,20 @@ it('deletes one handed-over file only after confirmation', async () => {
   const { GhostHandoffFilesSection } = await import('../GhostHandoffFilesSection');
   const file = (name: string, n: number) => ({ ref: `handoff:0000000${n}-0000-4000-8000-000000000000`, name, mimeType: 'text/csv', size: 2048, sha256: 'a'.repeat(64), createdAt: 1, expiresAt: 2 });
   const [first, second] = [file('first.csv', 1), file('second.csv', 2)];
-  const handoffList = vi.fn().mockResolvedValueOnce([first, second]).mockResolvedValue([second]);
+  const files = [first, second, ...Array.from({ length: 4 }, (_, index) => file(`file-${index + 3}.csv`, index + 3))];
+  const handoffList = vi.fn().mockResolvedValueOnce(files).mockResolvedValue(files.slice(1));
   const handoffDelete = vi.fn(async () => ({ existed: true }));
   Object.assign(window.electronAPI, { ghosts: { handoffList, handoffDelete, handoffFolder: vi.fn(async () => null) } });
   render(<ConfirmDialogProvider><GhostHandoffFilesSection ghostId="art" declared /></ConfirmDialogProvider>);
 
   const row = (await screen.findByText('first.csv')).closest('li') as HTMLElement;
+  const section = within(row.closest('section')!);
+  expect(section.getAllByRole('listitem')).toHaveLength(5);
+  const more = section.getByRole('button', { name: 'settings.ghosts.detail.remainingPermissions' });
+  fireEvent.click(more);
+  expect(section.getByText('file-6.csv')).toBeTruthy();
+  fireEvent.click(more);
+  expect(section.queryByText('file-6.csv')).toBeNull();
   fireEvent.click(within(row).getByRole('button'));
   fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'settings.ghosts.handoff.cancel' }));
   await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());

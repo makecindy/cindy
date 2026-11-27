@@ -679,7 +679,7 @@ async function screenshotToolResult(
  * network reads, uploads, dialogs or trusted input); the hint tells the model
  * to involve the user rather than switch targets on its own.
  */
-const BACKEND_SWITCH_HINT = '当前浏览器后端不支持此操作。需要时请明确告知用户并建议改用 Cindy 专用浏览器(setBackend external),不要自行切换。';
+const BACKEND_SWITCH_HINT = '当前浏览器后端不支持此操作。请明确告知用户，由用户决定是否在设置中改用 Cindy 专用浏览器；不要自行切换，也不要在 shell 中自行启动 Playwright 或 Chrome 绕过当前浏览器。';
 function unsupportedByBackend(args: Record<string, unknown>, deps: BrowserMcpDeps): string | undefined {
   const caps = deps.backendCapabilities?.();
   if (!caps) return undefined;
@@ -713,6 +713,9 @@ function recipeUnsupportedByBackend(recipe: Recipe, deps: BrowserMcpDeps): strin
   return undefined;
 }
 
+/** Discovery marks, once per listing, why a recipe flagged `runnable:false` would be refused. */
+const RECIPE_NOT_RUNNABLE_HINT = `标 runnable:false 的配方需要当前浏览器没有的能力(调试协议、页面脚本或读取网络请求),调用会被拒绝;改用普通浏览器操作完成。${BACKEND_SWITCH_HINT}`;
+
 // Forwards validated MCP args straight to the runtime. `extract` (MCP-only
 // sugar) is rewritten in the handler before this is reached, so every `action`
 // arriving here is a real BrowserControlAction.
@@ -729,6 +732,8 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
   const results = new BrowserResultCache();
   const discovered = new Map<string, string>();
   const learningHints = new Set<string>();
+  // Suggestions and discovery follow the same gate `recipe` applies before running one.
+  const runnable = (recipe: Recipe) => !recipeUnsupportedByBackend(recipe, deps);
   const textResult = (value: Record<string, unknown>, source?: { profile?: string; targetId?: string }) => resultText(results.digest(value, source));
   // Session-local evidence and repair budget: never share successful trials
   // between agents, and never retain caller inputs or page contents here.
@@ -795,7 +800,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
     category: 'browser',
     description:
       '浏览器自动化统一入口。通过 action 选择 status/start/tabs/navigate/snapshot/screenshot/act 等操作; ' +
-      'status 返回实际浏览器模式; setBackend 切换并保存全局浏览器模式(内置 rsb-webview / 外置 external / 用户自己的浏览器 user-browser,即「我的浏览器」)。' +
+      'status 返回实际浏览器模式; setBackend 仅在用户明确要求时切换并保存全局浏览器模式(内置 rsb-webview / 外置 external / 用户自己的浏览器 user-browser,即「我的浏览器」),会进入任务审批,不要因报错或断连自行切换,也不要在 shell 中自行启动 Playwright/Chrome。' +
       '只要页面上的文字时用 read:{action:"read",url} 或 pages:[…] 打开、等内容出现、返回可见文字后关闭;{action:"read",targetId} 读已打开的页面。' +
       '优先使用 snapshot 返回的 ref 执行 click/type/press,不要猜测 CSS selector。' +
       'act/open/navigate/upload 可带 afterSnapshot:{}，一次返回动作结果和精简快照；可用 selector 限定区域。' +
@@ -824,7 +829,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
       backend: z
         .enum(['external', 'rsb-webview', 'user-browser'])
         .optional()
-        .describe('仅 action=setBackend: 切换全局自动化目标并保存设置; 会影响其他任务,两种模式的登录态与标签页不互通'),
+        .describe('仅 action=setBackend 且用户明确要求切换时使用: 会进入审批并修改全局持久化设置,影响其他任务; 不要自行切换'),
       proxyServer: z.string().optional().describe(
         'action=start 时使用的代理 URL（如 http://host:port）。**不支持带用户名/密码的认证代理**，带 userinfo 会被直接拒绝',
       ),
@@ -1299,18 +1304,24 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           }
           if (args.site && args.intent) {
             return { content: [{ type: 'text', text: resultText({ ok: true, action: 'siteguide',
-              site: args.site, recipes: suggestRecipes(recipeReg, args.site.toLowerCase(), args.intent, args.profile) }) }] };
+              site: args.site, recipes: suggestRecipes(recipeReg, args.site.toLowerCase(), args.intent, args.profile, undefined, runnable) }) }] };
           }
+          let blockedCount = 0;
           const recipeInputsOf = (ids: string[] | undefined, compact = false) =>
             (ids ?? []).map((id) => {
               const r = recipeReg.get(id);
               const spec = r?.recipe.inputs ?? {};
+              // Listed for discovery, but marked: the current browser would refuse to run it.
+              const blocked = !!r && !runnable(r.recipe);
+              if (blocked) blockedCount++;
               if (compact && id.startsWith('opencli:')) return {
                 id, access: r?.recipe.access,
                 ...(r?.recipe.validation ? { state: r.recipe.validation.state } : {}),
+                ...(blocked ? { runnable: false } : {}),
               };
               return {
                 id,
+                ...(blocked ? { runnable: false } : {}),
                 // Surface the author's description at discovery time — it carries
                 // input constraints (e.g. "id must be passed as a string") that the
                 // bare input-name list cannot express.
@@ -1360,6 +1371,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
                     siteCount: sites.length,
                     recipeCount: recipeReg.size,
                     hint: '按 site 查询完整参数、默认值及 read/write 分类。',
+                    ...(blockedCount ? { runnableHint: RECIPE_NOT_RUNNABLE_HINT } : {}),
                     sites,
                     ...(recipesWithoutGuide.length ? { recipesWithoutGuide } : {}),
                   }),
@@ -1373,6 +1385,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
           if (!entry) {
             return errorResult('siteguide', `no siteguide for "${args.site}" (available: ${[...registry.keys()].join(', ') || 'none'})`);
           }
+          const recipes = recipeInputsOf(entry.guide.recipes);
           return {
             content: [
               {
@@ -1382,7 +1395,8 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
                   action: 'siteguide',
                   provenance: entry.provenance,
                   data: entry.guide,
-                  recipes: recipeInputsOf(entry.guide.recipes),
+                  ...(blockedCount ? { runnableHint: RECIPE_NOT_RUNNABLE_HINT } : {}),
+                  recipes,
                 }),
               },
             ],
@@ -1731,7 +1745,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
               const site = new URL(url).hostname;
               if (targetKey && args.action !== 'snapshot') experiences.start(targetKey, url);
               const user = await resolveUserLayer(deps);
-              const suggestions = suggestRecipes(recipeRegistryFrom(user), site, args.intent, args.profile, url);
+              const suggestions = suggestRecipes(recipeRegistryFrom(user), site, args.intent, args.profile, url, runnable);
               // A homepage must not consume the later post-specific suggestion.
               // Deduplicate by suggested capabilities, not every individual URL.
               const key = JSON.stringify([site, args.profile ?? '', args.intent ?? '', suggestions.map(s => s.id)]);

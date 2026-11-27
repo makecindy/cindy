@@ -105,6 +105,7 @@ function DoneScene({ start }: { start: number }) {
 
 /** Snooze: a task is put off with a clock, time passes, and it comes back with a dot. */
 function SnoozeScene({ start }: { start: number }) {
+  // 迷你卡片：插画内部的形状，不是控件框（DESIGN.md §5 插画登记）
   const card = 'relative flex h-10 w-[58px] flex-col justify-center gap-1 rounded border border-[var(--text-tertiary)] bg-[var(--confirm-bg)] px-2';
   const lines = (
     <>

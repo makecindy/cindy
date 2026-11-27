@@ -26,6 +26,7 @@ import {
 } from '@cindy/maker-shared';
 
 import { extractCommandOutputPathCandidates } from '../../shared/commandOutputPaths';
+import { toWorkdirRel } from '../../shared/workdirPath';
 import { resolveToolFilePath } from './localPathResolver';
 import { basename } from './utils';
 
@@ -51,6 +52,8 @@ export interface GeneratedFileRef {
   artifact?: DocumentArtifactMetadata;
   /** true 仅表示同一 tool_use 有结构化 ok:true 结果，可用本轮 mtime 证明成功覆盖。 */
   artifactConfirmed?: boolean;
+  /** Latest successful Forge invocation that wrote this local package. */
+  packageToolUseId?: string;
 }
 
 export type DocumentArtifactFormat = 'pdf' | 'docx' | 'pptx' | 'xlsx';
@@ -294,6 +297,18 @@ function canonicalizeWindowsShape(abs: string): string {
 }
 
 
+function isForgePackagePath(path: string, workingDir: string): boolean {
+  if (!/\.cindy$/i.test(path)) return false;
+  const normalized = path.replace(/\\/g, '/');
+  if (normalized.startsWith('//')) {
+    // Restoring history must not initiate reads from a different network share.
+    return /^[\\/]{2}/.test(workingDir)
+      && /^\/\/(?![?.]\/)[^/]+\/[^/]+\//.test(normalized)
+      && toWorkdirRel(workingDir, path) !== null;
+  }
+  return /^(?:\/|[A-Za-z]:[\\/])/.test(path);
+}
+
 /**
  * 一组消息(通常是一个 turn 的切片,但对任意切片都成立)→ 新建文件的有序去重
  * 列表。路径经 `resolveToolFilePath` 解析成绝对路径;`workingDir` 为空时按原样
@@ -378,6 +393,21 @@ export function collectGeneratedFiles(
 
     for (const rawPath of createdPathsFromDescriptor(descriptorFor(msg))) {
       addPath(rawPath, 'tool');
+    }
+    // A successful local Forge pack writes a concrete artifact. Publish tickets
+    // only expose a filename hint and must never become install actions.
+    if (/^(?:mcp(?:__|:)(?:cindy|cindy_ghosts)(?:__|:))?ghost_forge_pack$/.test(toolName)) {
+      const result = parseToolResult(resultContent);
+      const path = stringField(result, 'cindyPath');
+      if (result?.ok === true && !result.publishToken && asRecord(msg.toolInput)?.intent !== 'publish' &&
+          path && isForgePackagePath(path, workingDir)) {
+        addPath(path, 'tool');
+        const file = byKey.get(dedupeKeyForPath(canonicalizeWindowsShape(path)));
+        if (file) {
+          file.artifactConfirmed = true;
+          file.packageToolUseId = msg.toolUseId;
+        }
+      }
     }
     const artifact = extractDocumentArtifactMetadata(toolName, msg.toolInput, resultContent);
     if (artifact) {

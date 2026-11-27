@@ -69,6 +69,8 @@ import {
   selectOrdinarySessionListRows,
   touchUserSendRow,
   selectSessionWithCount,
+  isSessionImAttachedInDb,
+  selectImAttachedSessionIds,
   selectSessionsByIds,
   flattenSessionReadRow,
   projectSessionDetail,
@@ -415,9 +417,16 @@ async function writeSessionPatch(
   if (status === 'active') await noteSessionsRestoring([sessionId], db);
   beforeWrite?.();
   const deletedIsTerminal = status === 'active' || status === 'archived';
+  const effectiveSetObj =
+    status === 'archived' && typeof setObj.archivedAt === 'number'
+      ? {
+          ...setObj,
+          archivedAt: sql<number | null>`CASE WHEN ${sessions.status} = 'archived' THEN ${sessions.archivedAt} ELSE ${setObj.archivedAt} END`,
+        }
+      : setObj;
   const result = await db
     .update(sessions)
-    .set(setObj)
+    .set(effectiveSetObj)
     .where(
       deletedIsTerminal
         ? and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted'))
@@ -438,8 +447,9 @@ async function setTerminalSessionStatus(
   dbClient: DbClient,
   sessionId: string,
   status: 'archived' | 'deleted',
-  { idleArchiveCutoff, unusedOnly, projectGuard, deleteTarget, sideChatCloseParentId }: {
+  { idleArchiveCutoff, archivedAt, unusedOnly, projectGuard, deleteTarget, sideChatCloseParentId }: {
     idleArchiveCutoff?: number;
+    archivedAt?: number | null;
     unusedOnly?: boolean;
     projectGuard?: ProjectArchiveGuard;
     deleteTarget?: SessionDeleteTarget;
@@ -449,6 +459,7 @@ async function setTerminalSessionStatus(
   try {
     const result = await dbClient.tx('sessions.setTerminalStatus', { sessionId, status,
       ...(idleArchiveCutoff !== undefined ? { idleArchiveCutoff } : {}),
+      ...(archivedAt !== undefined ? { archivedAt } : {}),
       ...(projectGuard && { projectGuard }),
       ...(deleteTarget !== undefined && { deleteTarget }),
       ...(sideChatCloseParentId !== undefined && { sideChatCloseParentId }),
@@ -1059,8 +1070,9 @@ export interface OverwritableAutoTitleTarget {
    * 入队时构建的 createOpts 可能已经过期(lazy-create 的
    * `reconcileCreateOptsAgainstDb` 处理的正是同一类漂移),用错 agent 会让标题
    * 走错供应商 —— 纯 Codex / 纯 Claude 用户会因此只拿到 fallback 标题。
+   * null = 插件引擎任务：只用辅助模型，不回落到任何内置引擎。
    */
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | null;
   /**
    * 是否仍停在建会话时的裸默认标题。合成占位(纯附件消息)只允许覆写这一种 ——
    * fork 占位与上一条附件写下的合成占位都要保留到用户真正打字为止。
@@ -1075,8 +1087,10 @@ export async function getOverwritableAutoTitle(
   const db = getDbClient().drizzle;
   const row = await selectSessionWithCount(db, id);
   if (!row) return null;
+  // 插件引擎任务只用辅助模型起名(null)，不把对话交给另一个引擎。
   const agentKind =
-    row.agentKind === 'codex' || row.agentKind === 'pi' ? row.agentKind : 'claude-code';
+    row.agentKind === 'acp' ? null
+      : row.agentKind === 'codex' || row.agentKind === 'pi' ? row.agentKind : 'claude-code';
   const overwritable =
     row.title === DEFAULT_DRAFT_SESSION_TITLE ||
     (!!row.parentSessionId && row.title.startsWith(FORK_PLACEHOLDER_TITLE_PREFIX)) ||
@@ -1518,17 +1532,30 @@ export function registerSessionIpc(
     }
     const ids = [...new Set(value.map((id) => requireString(id, 'sessionId')))];
     if (!ids.length) return [];
-    const rows = await selectSessionsByIds(getDbClient().drizzle, ids);
-    return rows.map((row) => projectSessionReadResult(row, opts.resolveContextWindow));
+    const db = getDbClient().drizzle;
+    const [rows, attachedIds] = await Promise.all([
+      selectSessionsByIds(db, ids),
+      selectImAttachedSessionIds(db, ids),
+    ]);
+    return rows.map((row) => ({
+      ...projectSessionReadResult(row, opts.resolveContextWindow),
+      imAttached: attachedIds.has(row.id),
+    }));
   });
 
   ipcMain.handle('local-db:sessions:get', async (_e, id: unknown) => {
     const sid = requireString(id, 'id');
     const dbClient = getDbClient();
-    const row = await selectSessionWithCount(dbClient.drizzle, sid);
+    const [row, imAttached] = await Promise.all([
+      selectSessionWithCount(dbClient.drizzle, sid),
+      isSessionImAttachedInDb(dbClient.drizzle, sid),
+    ]);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
     const timing = getSilentContinuationTiming(sid, row.activeTurnStartedAt, dbClient);
-    return projectSessionDetail(row, opts.resolveContextWindow, timing?.startedAt ?? undefined, timing?.settledEndAt);
+    return {
+      ...projectSessionDetail(row, opts.resolveContextWindow, timing?.startedAt ?? undefined, timing?.settledEndAt),
+      imAttached,
+    };
   });
 
   /**
@@ -1646,7 +1673,7 @@ export function registerSessionIpc(
         workspaceKind: updated.workspaceKind,
       });
       if (isOwnerScopeCurrent(ownerScope)) {
-        broadcastSessionPatched(sid, { status: 'active', snoozedUntil: null, snoozedAt: null }, ownerScope);
+        broadcastSessionPatched(sid, { status: 'active', snoozedUntil: null, snoozedAt: null, archivedAt: null }, ownerScope);
       }
       scheduleWorktreeRecycleForStatusChange(sid, 'active');
       notifyGhostSessionStatusChange(sid, 'active', updated.workingDir);
@@ -1900,7 +1927,7 @@ export async function updateSessionInDb(
         const terminal = p.status === 'archived' || p.status === 'deleted';
         if (terminal) {
           if (typeof dbClient.tx === 'function') {
-            const { status: _status, ...nonTerminalPatch } = setObj;
+            const { status: _status, archivedAt: _archivedAt, ...nonTerminalPatch } = setObj;
             await writeSessionPatch(db, sid, nonTerminalPatch, undefined);
             deletedSideChats = await setTerminalSessionStatus(dbClient, sid, p.status as 'archived' | 'deleted', { deleteTarget });
           } else {
@@ -1992,13 +2019,20 @@ export async function updateSessionInDb(
     // 之间无 await,同进程单事件循环下不可能再插入并发写;即便并发删除的广播
     // 晚于本广播到达,镜像最终也收敛到 deleted。
     let broadcastStatus = updated.status;
+    let broadcastArchivedAt = updated.status === 'archived' ? updated.archivedAt : null;
     if (p.status !== undefined) {
       const [currentRow] = await db
-        .select({ status: sessions.status })
+        .select({ status: sessions.status, archivedAt: sessions.archivedAt })
         .from(sessions)
         .where(eq(sessions.id, sid))
         .limit(1);
-      if (currentRow) broadcastStatus = currentRow.status;
+      if (currentRow) {
+        broadcastStatus = currentRow.status;
+        broadcastArchivedAt =
+          currentRow.status === 'archived' && currentRow.archivedAt != null
+            ? new Date(currentRow.archivedAt).toISOString()
+            : null;
+      }
     }
     const broadcastPatch =
       p.pinnedAt === undefined && p.status === undefined && setObj.projectDir === undefined
@@ -2009,7 +2043,7 @@ export async function updateSessionInDb(
             // old explicit membership after a move, just as SQLite does.
             ...(setObj.projectDir !== undefined ? { projectDir: updated.projectDir } : {}),
             ...(p.pinnedAt !== undefined ? { pinnedAt: updated.pinnedAt } : {}),
-            ...(p.status !== undefined ? { status: broadcastStatus } : {}),
+            ...(p.status !== undefined ? { status: broadcastStatus, archivedAt: broadcastArchivedAt } : {}),
             ...(p.pinnedAt !== undefined && updated.pinnedAt === null ? { summary: null } : {}),
             ...(p.pinnedAt !== undefined && updated.pinnedAt !== null
               ? { status: broadcastStatus }
@@ -2179,7 +2213,7 @@ export async function patchSessionMetaInDb(
     pinnedAt?: string | null;
     snoozedUntil?: string | null;
   },
-  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; unusedOnly?: boolean; projectGuard?: ProjectArchiveGuard; preserveFiles?: boolean; linkedArchive?: { parentId: string; finish: () => Promise<void> } } = {},
+  options: { routeLockHeld?: boolean; signal?: AbortSignal; beforeWrite?: () => void; idleArchiveCutoff?: number; archivedAt?: number | null; unusedOnly?: boolean; projectGuard?: ProjectArchiveGuard; preserveFiles?: boolean; linkedArchive?: { parentId: string; finish: () => Promise<void> } } = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
   const { discardWorktreeChanges: discardRequested, deleteTarget: deleteRequested, archiveSideChatParentId, ...patch } = rawPatch;
@@ -2217,7 +2251,14 @@ export async function patchSessionMetaInDb(
   };
   const dbClient = getDbClient();
   const db = dbClient.drizzle;
-  const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
+  const setObj = sessionPatchToRow(patch, {
+    bumpUpdatedAt: false,
+    ...(options.idleArchiveCutoff !== undefined
+      ? { archivedAt: null }
+      : options.archivedAt !== undefined
+        ? { archivedAt: options.archivedAt }
+        : {}),
+  });
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId, readCurrentDbClientSnapshot());
   let deletedSideChats: SessionsSetTerminalStatusResult['deletedSideChats'] | undefined;
@@ -2230,17 +2271,26 @@ export async function patchSessionMetaInDb(
     }
     beforeWrite();
   }, deleteTarget);
+  // A pin-only patch operates on metadata even when the IM turn owns the route lock.
+  // Compare and set in one write so retries cannot reorder cards or clear a newer summary.
+  const pinOnly = patch.pinnedAt !== undefined && Object.keys(rawPatch).length === 1;
+  let pinChanged = false;
+  const assertPatchCurrent = () => {
+    if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
+    beforeWrite();
+  };
   const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
     if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
     beforeWrite();
     const terminal = patch.status === 'archived' || patch.status === 'deleted';
     if (terminal) {
       if (typeof dbClient.tx === 'function') {
-        const { status: _status, ...nonTerminalPatch } = setObj;
+        const { status: _status, archivedAt: _archivedAt, ...nonTerminalPatch } = setObj;
         await writeSessionPatch(db, sessionId, nonTerminalPatch, undefined);
         beforeWrite();
         deletedSideChats = await setTerminalSessionStatus(dbClient, sessionId, patch.status as 'archived' | 'deleted', {
           idleArchiveCutoff: options.idleArchiveCutoff,
+          archivedAt: options.archivedAt,
           unusedOnly: options.unusedOnly,
           projectGuard: options.projectGuard,
           deleteTarget,
@@ -2258,6 +2308,15 @@ export async function patchSessionMetaInDb(
         }
         await finalizeSharedTaskClosure(dbClient, prepared);
       }
+    } else if (pinOnly) {
+      assertPatchCurrent();
+      const pinning = setObj.pinnedAt != null;
+      const result = await db.update(sessions)
+        .set(pinning ? setObj : { ...setObj, summary: null })
+        .where(and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted'),
+          pinning ? isNull(sessions.pinnedAt) : sql`(${sessions.pinnedAt} IS NOT NULL OR ${sessions.summary} IS NOT NULL)`))
+        .run();
+      pinChanged = result.changes > 0;
     } else if (patch.status === 'active' && typeof dbClient.tx === 'function') {
       // Restore through the same transaction as batch actions, including the
       // group receiver fence for archived rows written by older versions.
@@ -2268,7 +2327,7 @@ export async function patchSessionMetaInDb(
         beforeWrite();
       };
       await noteSessionsRestoring([sessionId], db);
-      const { status: _status, ...nonStatusPatch } = setObj;
+      const { status: _status, archivedAt: _archivedAt, ...nonStatusPatch } = setObj;
       await writeSessionPatch(db, sessionId, nonStatusPatch, undefined, assertRestoreCurrent);
       assertRestoreCurrent();
       await dbClient.tx('sessions.setStatus', { sessionIds: [sessionId], status: 'active', ...(options.projectGuard && { projectGuard: options.projectGuard }) });
@@ -2276,14 +2335,12 @@ export async function patchSessionMetaInDb(
       // All asynchronous preparation has finished. Once this write is issued,
       // cancellation does not roll back a committed lifecycle transition.
       if (options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
-      await writeSessionPatch(db, sessionId, setObj, patch.status, () => {
-        if (!isOwnerScopeCurrent(ownerScope) || options.signal?.aborted) throwIpcError('PRECONDITION_FAILED', 'Session send aborted');
-        beforeWrite();
-      });
+      await writeSessionPatch(db, sessionId, setObj, patch.status, assertPatchCurrent);
     }
     const row = await selectSessionWithCount(db, sessionId);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    if (patch.pinnedAt !== undefined && row.pinnedAt == null) {
+    if (pinOnly && row.status === 'deleted') throwIpcError('PRECONDITION_FAILED', '已删除的任务不能置顶或取消置顶');
+    if (!pinOnly && patch.pinnedAt !== undefined && row.pinnedAt == null) {
       await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sessionId));
       row.summary = null;
     }
@@ -2294,6 +2351,7 @@ export async function patchSessionMetaInDb(
     }
     return sessionToCamel(row);
   }, options.routeLockHeld, beforeWrite, options.idleArchiveCutoff !== undefined, options.unusedOnly, discardWorktreeChanges, options.preserveFiles, deleteTarget, Boolean(options.linkedArchive));
+  if (pinOnly && !pinChanged) return updated;
   await options.linkedArchive?.finish();
   if (updated.status === 'deleted' && isOwnerScopeCurrent(ownerScope)) {
     clearSessionAttention(sessionId, 'explicit');
@@ -2321,10 +2379,13 @@ export async function patchSessionMetaInDb(
   // 经 tap 转发:订阅了该被控端 `sessions` topic 的控制端也即时收到这条 patched(push 驱动镜像)。
   const snoozePatch = patch.snoozedUntil !== undefined || patch.status !== undefined
     ? { snoozedUntil: updated.snoozedUntil, snoozedAt: updated.snoozedAt } : {};
+  const archivePatch = patch.status !== undefined ? { archivedAt: updated.archivedAt } : {};
   const broadcastPatch =
-    patch.pinnedAt !== undefined && updated.pinnedAt == null ? { ...patch, summary: null } : patch;
+    patch.pinnedAt === undefined ? patch : {
+      ...patch, pinnedAt: updated.pinnedAt, ...(updated.pinnedAt == null && { summary: null }),
+    };
   if (isOwnerScopeCurrent(ownerScope)) {
-    broadcastSessionPatched(sessionId, { ...broadcastPatch, ...snoozePatch, ...(options.linkedArchive && { orcaRole: null }) }, ownerScope);
+    broadcastSessionPatched(sessionId, { ...broadcastPatch, ...snoozePatch, ...archivePatch, ...(options.linkedArchive && { orcaRole: null }) }, ownerScope);
   }
   if (patch.pinnedAt !== undefined && updated.pinnedAt != null) {
     void import('../../sessionTaskSummary.js').then((m) =>
@@ -2535,7 +2596,12 @@ export async function setSessionsStatusInDb(
       workingDir: item.workingDir,
       workspaceKind: item.workspaceKind,
     });
-    broadcastSessionPatched(item.sessionId, { status: item.status, snoozedUntil: null, snoozedAt: null }, ownerScope);
+    broadcastSessionPatched(item.sessionId, {
+      status: item.status,
+      snoozedUntil: null,
+      snoozedAt: null,
+      archivedAt: item.archivedAt == null ? null : new Date(item.archivedAt).toISOString(),
+    }, ownerScope);
     scheduleWorktreeRecycleForStatusChange(item.sessionId, item.status, {
       ownerScope,
       mediaDb: dbClient.drizzle,

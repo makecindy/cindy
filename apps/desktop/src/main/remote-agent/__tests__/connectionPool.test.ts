@@ -21,10 +21,13 @@ import {
 import { hostRewritesResumeId, startRemoteAgentSession, type StartRemoteAgentDeps } from '../controller/startRemote';
 import { ExecServerRelay } from '../controller/execServerRelay';
 import { RemoteAgentRunClient } from '../controller/runClient';
-import { decideProviderGroupFailure, providerGroupFailureSignals } from '../../provider-group/failurePolicy';
+import { decideProviderGroupFailure, providerGroupFailureSignals, ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy';
+import { holdsContextRecoveryBroadcast, isContextOverflowErrorData } from '../../maker-ipc/contextOverflowRollover';
 import { RemoteExecutor } from '../executor/executor';
 import { createRemoteAgentHost, type HostedStartInput } from '../host/runHost';
 import type { RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
+import { GoalController } from '../../goal-host/controller';
+import type { GoalState } from '../../goal-host/types';
 
 // ─── 连接池本身 ────────────────────────────────────────────────────
 
@@ -929,7 +932,19 @@ describe('remote connection pool with a real host', () => {
     scenario.releaseHold?.();
   });
 
-  it.each(['missing', 'aborted', 'provider-restarting'] as const)('settles %s during the first turn once and reconnects the live Session', async reason => {
+  // #12558 integration: the restart branch must retain the received close reason
+  // and run correlation, not infer an OS process exit. Existing assertions only
+  // counted errors. Minimal input: an unfinished real Session + a missing run.
+  it.each([
+    { reason: 'missing' },
+    { reason: 'aborted' },
+    { reason: 'provider-restarting' },
+    { reason: 'provider-restarting', message: 'provider is shutting down' },
+    { reason: 'provider-restarting', message: '' },
+    { reason: 'provider-restarting', message: 'prompt is too long' },
+    { reason: 'provider-restarting', message: 'tool execution failed' },
+    { reason: 'aborted', message: 'user rejected the request' },
+  ])('settles $reason ($message) during the first turn once and reconnects the live Session', async ({ reason, message }) => {
     const clients: RemoteAgentRunClient[] = [];
     const onData = RemoteAgentRunClient.prototype.onData;
     const receive = vi.spyOn(RemoteAgentRunClient.prototype, 'onData').mockImplementation(function (this: RemoteAgentRunClient, data, done) {
@@ -942,7 +957,8 @@ describe('remote connection pool with a real host', () => {
       interrupt = false;
       return { runs: (request.runs as Array<{ runId: string; cursor: number }>).map(run => {
         if (reason === 'missing') return { ...run, missing: true };
-        const data = Buffer.from(JSON.stringify({ t: 'closed', reason }) + '\n');
+        const data = Buffer.from(JSON.stringify({ t: 'closed', reason,
+          ...(message !== undefined ? { error: { code: 'AGENT_ERROR', message } } : {}) }) + '\n');
         return { ...run, cursor: run.cursor + data.length, data: data.toString('base64'), done: true };
       }) };
     });
@@ -961,6 +977,21 @@ describe('remote connection pool with a real host', () => {
       await expect(sending).resolves.toMatchObject({ accepted: true });
       await vi.waitFor(() => expect(seen.some(e => e.type === 'done')).toBe(true));
       expect(seen.filter(e => e.type === 'error')).toHaveLength(1);
+      const closedRunId = clients[0].runId;
+      const interruption = seen.find(e => e.type === 'error')!;
+      // #12605: a close detail must not select a second recovery owner. Exercise
+      // the actual projection plus the group's and context delivery's predicates.
+      expect(isContextOverflowErrorData(interruption.data)).toBe(false);
+      expect(holdsContextRecoveryBroadcast({ remoteHostId: null }, interruption)).toBe(false);
+      expect(decideProviderGroupFailure(providerGroupFailureSignals(interruption.data), 'run')).toMatchObject({
+        action: 'switch', connection: 'lost', cool: false,
+      });
+      expect(interruption.data).toMatchObject({
+        reason: 'remote_agent_restarted', isTerminal: true,
+        remoteCloseReason: reason, remoteRunId: closedRunId,
+        sdkError: `Remote agent stream closed (${reason}); runId: ${closedRunId}`,
+        message: '[REMOTE_AGENT_UNAVAILABLE] The remote run is no longer available; reconnecting to the original conversation.',
+      });
       expect(session.isTurnRunning()).toBe(false);
       await expect(session.send('continued')).resolves.toMatchObject({ accepted: true });
       await vi.waitFor(() => expect(seen.some(e => e.type === 'text' && textOf(e) === 'ok:continued')).toBe(true));
@@ -1457,6 +1488,147 @@ describe('remote connection pool with a real host', () => {
     expect(scenario.started).toHaveLength(2);
   });
 
+  // #11644 unit: the old handle-only tests did not exercise Session's ambiguous
+  // tail fence. Six real starter caps attempts must never dispatch this input or
+  // close its reusable Session. No production network, model, or real 30s wait.
+  it('retains the Session after six caps timeouts and resumes the same history on explicit retry', async () => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    const handle = await start(pool);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'caps-reconnect', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      let caps = 0;
+      vi.useFakeTimers();
+      intercept = request => request.op !== 'caps' ? undefined : new Promise((_resolve, reject) => {
+        caps++;
+        setTimeout(() => reject(Object.assign(new Error('[INVOKE_TIMEOUT] no invoke-result'),
+          { code: 'INVOKE_TIMEOUT', inFlight: true })), 30_000);
+      });
+      const sending = session.send('not dispatched').catch(error => error);
+      await vi.advanceTimersByTimeAsync(190_000);
+      const result = await sending;
+      expect(caps).toBe(6);
+      expect(result).toMatchObject({ accepted: false, reason: 'provider-rejected-before-dispatch' });
+      expect(session.getStatus()).not.toBe('closed');
+      expect(opens).toBe(1);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(1);
+      vi.useRealTimers();
+      intercept = null;
+      expect(await session.send('not dispatched')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 2 }));
+      expect(scenario.started).toHaveLength(2);
+      expect(scenario.started[1].options.resumeSessionId).toBe(handle.id);
+      expect(scenario.calls.filter(call => call.method === 'send').map(call =>
+        (call.args[0] as { content: string }).content)).toEqual(['first', 'not dispatched']);
+    } finally {
+      vi.useRealTimers();
+      intercept = null;
+      await session.close();
+    }
+  });
+
+  // #12612 unit: a real starter converts IPC startup quota into a local typed
+  // error. A bare proxy/startup-envelope test misses that conversion. The queue
+  // needs this type and reset metadata, with no second body dispatch.
+  it.each([null, 5_000_000])('preserves group quota metadata on reconnect (reset=%s)', async resetAtMs => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    const handle = await start(pool);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'quota-reconnect', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      const remoteQuota = Object.assign(new Error(new ProviderGroupUsageLimitError({ resetAtMs }).message),
+        { code: 'IPC_ERROR' });
+      intercept = request => {
+        if (request.op === 'open') throw remoteQuota;
+        return undefined;
+      };
+      const result = await session.send('not dispatched').catch(error => error);
+      expect(result).toBeInstanceOf(ProviderGroupUsageLimitError);
+      expect(result.limit).toEqual({ resetAtMs });
+      expect(opens).toBe(2);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(1);
+    } finally {
+      intercept = null;
+      await session.close();
+    }
+  });
+
+  // #12612 unit: Goal's provider-rejection backoff starts after preparation
+  // finishes. Exercise the actual Goal -> Session -> remote starter boundary:
+  // a three-minute caps failure must block, not begin another six RPCs.
+  it('blocks a Goal after six preparation timeouts without automatically starting another handshake', async () => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    const handle = await start(pool);
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const session = new Session({ id: 'goal-caps-reconnect', agentKind: 'claude-code', workDir: project,
+      handle, capabilities: {} as never, logger, turnStallMs: 0 });
+    // Session also supports EngineKinds outside Goal's AgentKind contract.
+    const goalSession = {
+      id: session.id,
+      agentKind: 'claude-code' as const,
+      send: session.send.bind(session),
+      onEvent: session.onEvent.bind(session),
+      getStatus: session.getStatus.bind(session),
+      getTurnGeneration: session.getTurnGeneration.bind(session),
+      isTurnRunning: session.isTurnRunning.bind(session),
+      abort: session.abort.bind(session),
+    };
+    let goal: GoalState | null = null;
+    const controller = new GoalController({
+      storage: {
+        get: async () => goal,
+        upsert: async state => { goal = { ...state }; },
+        update: async (_id, patch) => goal ? (goal = { ...goal, ...patch }) : null,
+        clear: async () => { goal = null; },
+        listActive: async () => goal?.status === 'active' ? [goal] : [],
+        listUsageLimited: async () => [],
+      },
+      getSession: () => goalSession,
+      ensureSession: async () => goalSession,
+      isSessionInTurn: () => false,
+      stopActiveGoalTurn() {},
+      emitStatus() {},
+      getDefaults: () => ({ maxTurns: 20, budgetTokens: null, noProgressLimit: 3 }),
+      logger,
+    });
+    try {
+      expect(await session.send('first')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      let caps = 0;
+      vi.useFakeTimers();
+      intercept = request => request.op !== 'caps' ? undefined : new Promise((_resolve, reject) => {
+        caps++;
+        setTimeout(() => reject(Object.assign(new Error('[INVOKE_TIMEOUT] no invoke-result'),
+          { code: 'INVOKE_TIMEOUT', inFlight: true })), 30_000);
+      });
+      const setting = controller.setGoal({ sessionId: session.id, objective: 'continue the task' });
+      await vi.advanceTimersByTimeAsync(190_000);
+      await setting;
+      expect(goal).toMatchObject({ status: 'blocked', turnsUsed: 0 });
+      await vi.advanceTimersByTimeAsync(190_000);
+      expect(caps).toBe(6);
+      expect(opens).toBe(1);
+      expect(scenario.calls.filter(call => call.method === 'send')).toHaveLength(1);
+    } finally {
+      controller.dispose();
+      vi.useRealTimers();
+      intercept = null;
+      await session.close();
+    }
+  });
+
   it('when a release close does not get through, makes room before opening instead of hitting the limit, then closes it', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const retryRequested = Promise.withResolvers<void>();
@@ -1532,11 +1704,194 @@ describe('remote connection pool with a real host', () => {
     expect(scenario.started).toHaveLength(3);
   });
 
-  // PR #6483 第三轮：self 让出时 close 没送到，接回前本机不算自己的旧 run，对方按上限拒绝，且不会选 self 让出。
+  // Reconnect-upgrade/downgrade regression (unit): real Session + beforeTurn +
+  // startRemoteAgentSession + createRemoteAgentHost across idle release and
+  // reconnect when the peer gains or loses setWritableDirs.
+  it('keeps beforeTurn writableDirs working after idle reconnect to an upgraded peer and skips removed methods on downgrade', async () => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    let peerSupportsWritableDirs = false;
+    const baseCapabilities = {
+      switchModel: { supported: false, reason: 'sdk-missing' as const },
+      availableModels: [],
+      hasFastMode: false,
+      effort: { supported: false, reason: 'sdk-missing' as const },
+      effortLevels: [],
+      reasoningDisplay: [],
+      permissionModes: [],
+      setPermissionModeMidSession: { supported: true as const },
+      multimodal: { text: { supported: true as const }, image: { supported: false as const, reason: 'sdk-missing' as const }, file: { supported: true as const } },
+      fork: { supported: false as const, reason: 'sdk-missing' as const },
+      rewind: { supported: false as const, reason: 'sdk-missing' as const },
+      abort: { supported: true as const },
+      sameTurnSteer: { supported: false as const, reason: 'sdk-missing' as const },
+      memory: { supported: { supported: false as const, reason: 'sdk-missing' as const } },
+      extraDirs: { supported: false as const, reason: 'not-implemented' as const },
+      writableDirs: { supported: false as const, reason: 'not-implemented' as const },
+    };
+    const hostWithUpgrade = createRemoteAgentHost({
+      readLimits: () => limits,
+      isAgentAvailable: () => true,
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+      startHosted: async (input) => fakeAgent(input),
+      pluginEngines: {
+        isOffered: (providerId) => providerId === 'acp-plugin:p:h',
+        start: async (input) => {
+          const inner = fakeAgent({ ...input, kind: 'pi' });
+          const caps = {
+            ...baseCapabilities,
+            writableDirs: peerSupportsWritableDirs
+              ? { supported: true as const }
+              : { supported: false as const, reason: 'not-implemented' as const },
+          };
+          return {
+            ...inner,
+            agentKind: 'acp' as const,
+            get negotiatedCapabilities() {
+              return caps;
+            },
+            ...(peerSupportsWritableDirs
+              ? {
+                  async setWritableDirs(dirs: string[]) {
+                    scenario.calls.push({ method: 'setWritableDirs', args: [dirs] });
+                  },
+                }
+              : {}),
+          };
+        },
+      },
+    });
+    const prevHost = host;
+    host = hostWithUpgrade;
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+    const extraWritable = path.join(root, 'writable-extra');
+    fs.mkdirSync(extraWritable, { recursive: true });
+    let appliedWritableDirs: string[] = [];
+    const handle = await startRemoteAgentSession('acp', {
+      sessionId: randomUUID(),
+      workingDir: project,
+      model: 'gemini-4-neon',
+      providerId: 'acp-plugin:p:h',
+    } as StartSessionOptions, deps(pool));
+    opened.push(handle);
+    const session = new Session({
+      id: 'acp-upgrade-reconnect',
+      agentKind: 'acp',
+      agentDeviceId: 'provider-device',
+      workDir: project,
+      handle,
+      capabilities: baseCapabilities,
+      logger,
+      turnStallMs: 0,
+      beforeTurn: async (sess) => {
+        if (sess.capabilities.writableDirs?.supported) {
+          await sess.setWritableDirs(appliedWritableDirs);
+        }
+      },
+    });
+    try {
+      // Turn 1: old peer without setWritableDirs.
+      expect(session.capabilities.writableDirs?.supported).toBe(false);
+      expect(await session.send('turn-1')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+
+      // Idle release, then peer upgrades to advertise writableDirs + setWritableDirs.
+      await sleep(5);
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      peerSupportsWritableDirs = true;
+
+      // Turn 2 triggers reconnect and updates capabilities + handle methods.
+      expect(await session.send('turn-2')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(session.capabilities.writableDirs?.supported).toBe(true);
+
+      // Turn 3: beforeTurn sees writableDirs.supported === true and must succeed.
+      appliedWritableDirs = [extraWritable];
+      expect(await session.send('turn-3')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(scenario.calls.filter((call) => call.method === 'setWritableDirs')).toHaveLength(1);
+
+      // Idle release again, then peer downgrades (loses setWritableDirs):
+      // capability flips back to false so beforeTurn skips setWritableDirs.
+      await sleep(5);
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      peerSupportsWritableDirs = false;
+      expect(await session.send('turn-4')).toMatchObject({ accepted: true });
+      await vi.waitFor(() => expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(session.capabilities.writableDirs?.supported).toBe(false);
+      expect(scenario.calls.filter((call) => call.method === 'setWritableDirs')).toHaveLength(1);
+    } finally {
+      await session.close();
+      await hostWithUpgrade.dispose();
+      host = prevHost;
+    }
+  });
+
+  // PR #13354 review (unit): when the initial connection advertised
+  // setWritableDirs (firstStarted.methods contains it), updating writableDirs
+  // and reconnecting to a downgraded peer lacking setWritableDirs must use the
+  // reconnected peer's methods in reapply() instead of calling setWritableDirs
+  // on the older peer and failing reconnect.
+  it('skips setWritableDirs in reapply when initial peer supported it but reconnected peer does not', async () => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    let peerSupportsWritableDirs = true;
+    const hostWithDowngrade = createRemoteAgentHost({
+      readLimits: () => limits,
+      isAgentAvailable: () => true,
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+      startHosted: async (input) => {
+        const inner = fakeAgent(input);
+        return {
+          ...inner,
+          ...(peerSupportsWritableDirs
+            ? {
+                async setWritableDirs(dirs: string[]) {
+                  scenario.calls.push({ method: 'setWritableDirs', args: [dirs] });
+                },
+              }
+            : {}),
+        };
+      },
+    });
+    const prevHost = host;
+    host = hostWithDowngrade;
+    const extraWritable = path.join(root, 'writable-downgrade');
+    fs.mkdirSync(extraWritable, { recursive: true });
+    try {
+      const a = await start(pool);
+      const events = watch(a);
+      await ask(a, events, 'first');
+      // Mutate writableDirs while connected so writableDirs !== openedDirs.writableDirs.
+      await a.setWritableDirs!([extraWritable]);
+      expect(scenario.calls.filter((call) => call.method === 'setWritableDirs')).toHaveLength(1);
+
+      // Idle release, then reconnect to a downgraded peer without setWritableDirs.
+      await sleep(5);
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      peerSupportsWritableDirs = false;
+      expect(await ask(a, events, 'after-downgrade')).toBe('ok:after-downgrade');
+      expect(a.setWritableDirs).toBeUndefined();
+      expect(scenario.calls.filter((call) => call.method === 'setWritableDirs')).toHaveLength(1);
+    } finally {
+      await hostWithDowngrade.dispose();
+      host = prevHost;
+    }
+  });
+
+  // #12552: real controller + host admission, unit. #6483 covered a lost
+  // close but expected the old host's limit rejection. A new host can finish
+  // this exact idle session before replacing it, even if every close RPC drops.
   it.each([
-    ['gets through', 1, 'ok:again'],
-    ['still fails', Infinity, '[DEVICE_LIMIT]'],
-  ])('when its own release close did not get through and the retried close %s, a reconnect closes the old run first', async (_label, drops, outcome) => {
+    ['gets through', 1],
+    ['still fails', Infinity],
+  ])('when its own release close did not get through and the retried close %s, a reconnect closes the old run first', async (_label, drops) => {
     const pool = new RemoteConnectionPool({ idleMinutes: () => idleMinutes, checkMs: 3_600_000, closeRetryMs: 3_600_000 });
     const a = await start(pool);
     const events = watch(a);
@@ -1552,19 +1907,15 @@ describe('remote connection pool with a real host', () => {
     // 对方还开着 a 的旧 run(名额 1 已占满)。
     expect(host.limitUsage().total).toBe(1);
     opens = 0;
-    if (outcome.startsWith('ok:')) {
-      expect(await ask(a, events, 'again')).toBe(outcome);
-      // 先关掉了 a 的旧 run 再打开，没有撞上限。
-      expect(opens).toBe(1);
-      expect(dropped).toBe(1);
-      expect(host.limitUsage().total).toBe(1);
-      expect(scenario.started).toHaveLength(2);
-    } else {
-      // 旧 run 还是关不掉：照常按对方的上限报错，不死循环。
-      await expect(a.send({ type: 'user', content: 'again' })).rejects.toThrow(outcome);
-      expect(opens).toBe(1);
-      expect(dropped).toBeLessThanOrEqual(3);
-    }
+    expect(await ask(a, events, 'again')).toBe('ok:again');
+    // Either the close RPC or the host's same-session admission finishes the
+    // old idle instance. Never add a second slot or loop on a lost close.
+    expect(opens).toBe(1);
+    expect(dropped).toBeGreaterThanOrEqual(1);
+    expect(dropped).toBeLessThanOrEqual(3);
+    if (drops === 1) expect(dropped).toBe(1);
+    expect(host.limitUsage().total).toBe(1);
+    expect(scenario.started).toHaveLength(2);
   });
 
   it('still counts the old run of a task closed while its release close was undelivered, then drops it once closed', async () => {
@@ -1741,18 +2092,31 @@ describe('remote connection pool with a real host', () => {
     await sleep(5);
     // 连回的 open 在路上时关掉任务。
     let openGate: (() => void) | null = null;
+    const cleanupGate: { release?: () => void } = {};
+    let openDelivered = false;
     intercept = (request) => {
+      if (request.op === 'close' && openDelivered) return new Promise(resolve => {
+        cleanupGate.release = () => resolve(host.handle(CONTROLLER, request).then(value => value ?? null));
+      });
       if (request.op !== 'open' || openGate) return undefined;
       return new Promise((resolve) => {
-        openGate = () => resolve(host.handle(CONTROLLER, request).then((value) => value ?? null));
+        openGate = () => { openDelivered = true; resolve(host.handle(CONTROLLER, request).then((value) => value ?? null)); };
       });
     };
     const sending = a.send({ type: 'user', content: 'late' });
     await vi.waitFor(() => expect(openGate).not.toBeNull());
-    const closing = a.close({ reason: 'navigation' });
+    let sendSettled = false;
+    const result = sending.then(() => { sendSettled = true; return 'sent'; }, () => { sendSettled = true; return 'rejected'; });
+    await a.close({ reason: 'navigation' });
     openGate!();
-    await closing;
-    await expect(sending).rejects.toThrow();
+    try {
+      await vi.waitFor(() => expect(cleanupGate.release).toBeTypeOf('function'));
+      // One event-loop boundary drains promise handlers without a timing threshold.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(host.limitUsage().total).toBe(1);
+      expect(sendSettled).toBe(false);
+    } finally { cleanupGate.release?.(); }
+    await expect(result).resolves.toBe('rejected');
     // b 为 a 让了位；a 连回途中被关掉，对方不能留下 a 的进程。
     await vi.waitFor(() => expect(host.limitUsage().total).toBe(0));
     expect(pool.size).toBe(1);

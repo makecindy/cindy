@@ -49,6 +49,7 @@ export function useMarketManagement(options: {
       description: t('skillhub.marketConfirm.deleteDesc', { name: skillName }),
       confirmText: t('skillhub.marketConfirm.deleteConfirm'),
       cancelText: t('skillhub.publishDialog.cancel'),
+      confirmVariant: 'destructive',
     });
     if (!ok) return;
 

@@ -17,6 +17,11 @@
  * 对应「同一台连续失败才算」。
  */
 import { AgentNotAuthenticatedError, SESSION_CLOSED_MID_TURN_MESSAGE } from '@cindy/maker-core';
+import {
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
+  readProviderBillingCode,
+} from '@cindy/maker-shared/error-redaction';
 
 import type { AutoResumeAgentSwitchCause } from '../../shared/agentInputQueue.js';
 import type { ProviderGroupUsageLimit } from '../../shared/providerGroup.js';
@@ -180,6 +185,7 @@ const STAY_REASONS: ReadonlyMap<string, ProviderGroupStayReason> = new Map([
   ['context-overflow', 'context'],
   ['codex_history_oversized', 'context'],
   ['output-limit', 'context'],
+  [PROVIDER_SAFETY_REFUSAL_REASON, 'policy'],
   ['tool_use_loop_detected', 'tool-loop'],
   ['user-denied', 'user'],
   ['user_rejected', 'user'],
@@ -199,6 +205,7 @@ const STAY_CODEX_ERRORS: ReadonlyMap<string, ProviderGroupStayReason> = new Map(
   ['contextWindowExceeded', 'context'],
   ['badRequest', 'invalid-request'],
   ['cyberPolicy', 'policy'],
+  ['misalignmentPolicyViolation', 'policy'],
   ['sandboxError', 'local'],
 ]);
 
@@ -294,17 +301,22 @@ export function decideProviderGroupFailure(
   if (isContextOverflowErrorData(signals) || isOversizedHistoryErrorData(signals)) return { action: 'stay', why: 'context' };
   const codexStay = signals.codexErrorInfo ? STAY_CODEX_ERRORS.get(signals.codexErrorInfo) : undefined;
   if (codexStay) return { action: 'stay', why: codexStay };
+  if (signals.sdkError === 'content_filter' || isProviderSafetyRefusalError(message, reason)) {
+    return { action: 'stay', why: 'policy' };
+  }
 
   // ── 那台账号的问题：换，并记进组的状态 ──
   // Explicit upstream account denial is not a broken connection. Preserve the
   // existing authorized account fallback instead of retrying that source.
-  if (reason === 'account_access_denied') return switchTo('auth', null);
+  // Claude reports a held (suspended) account with its own SDK tag.
+  if (reason === 'account_access_denied' || signals.sdkError === 'account_on_hold') return switchTo('auth', null);
+  if (isBillingDepletionError(signals)) return switchTo('usage-limit', null);
   // A plugin engine's agent said its account must sign in again (ACP auth_required or the account
   // classification of plugin-harnesses.md 引擎账号): the account's problem, like a failed login.
   if (reason === 'acp-auth-required') return switchTo('auth', null);
   // 过载先于用量上限判(529 / serverOverloaded 也会被用量判定认作限流)：过载只短冷却，用量上限按重置时刻冷却。
   if (classifyTurnOverload(signals)) return switchTo('overload', null);
-  if (isBillingDepletionError(signals) || classifyTurnUsageLimit(signals)) return switchTo('usage-limit', null);
+  if (classifyTurnUsageLimit(signals)) return switchTo('usage-limit', null);
   if (
     signals.sdkError === 'authentication_failed'
     || signals.codexErrorInfo === 'unauthorized'
@@ -343,6 +355,24 @@ export function providerGroupSwitchCause(
 ): ProviderGroupFailureCause | null {
   const decision = decideProviderGroupFailure(signals, phase);
   return decision.action === 'switch' ? decision.cause : null;
+}
+
+/** A current mixed-pool terminal may be retried only with explicit rejection
+ * evidence. A Worker with observed output can keep its assignment via the
+ * continuation-only path; it must never replay the original task. */
+export function mixedPoolRecoveryDisposition(
+  signals: InterruptedTurnErrorSignals,
+  delivered: boolean | undefined,
+  workerPoolTurn = false,
+): 'retry' | 'continue' | null {
+  const cause = providerGroupSwitchCause(signals, 'run');
+  if (!cause || delivered === undefined
+    || !(signals.errorStatus === 401 || signals.errorStatus === 402 || signals.errorStatus === 429
+      || signals.sdkError === 'billing_error' || signals.sdkError === 'rate_limit'
+      || signals.codexErrorInfo === 'usageLimitExceeded'
+      || readProviderBillingCode(undefined, signals.message ?? '') !== undefined)) return null;
+  if (!delivered) return 'retry';
+  return workerPoolTurn && cause === 'usage-limit' ? 'continue' : null;
 }
 
 /**

@@ -4,16 +4,14 @@
  * 常驻挂在 sidebar 文件树上方,空值显示文件树,有输入则由 caller 切换到
  * `FilterResultList`。
  *
- * 视觉:h-7 圆角矩形,左侧 Search 图标,右侧 X 清除按钮(有内容时显示),边框
- * focus 时高亮 ring。
+ * 视觉:共享 SearchInput(32px 胶囊、14px 搜索图标,有内容时右侧是它内置的清空按钮)。
  *
  * 抽到 workdir-browse/ 下,RSB plugin 和 doc 模式 sidebar 共用。
  */
 
-import { Search, X as XIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { cn } from '@/lib/utils';
+import { SearchInput } from '@/components/ui/search-input';
 
 export interface FileFilterInputProps {
   placeholder?: string;
@@ -28,37 +26,15 @@ export function FileFilterInput({ value, onChange, placeholder }: FileFilterInpu
   //   - 下间距 = Input pb-0(0) + FileTreeView / FilterResultList 自带 py-2(8) = 8
   // 不对称是有意的:上面接 chrome,留出标题与筛选框的视觉断层;下面紧贴文件树
   // 列表,更紧凑,符合"筛选输入 → 即将看到的结果"的连续阅读节奏。
+  const label = placeholder ?? t('rightSidebar.fileBrowser.filterPlaceholder');
   return (
     <div className="shrink-0 px-3 pt-2">
-      <div className="relative">
-        <Search
-          size={12}
-          strokeWidth={2}
-          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sidebar-action-icon"
-        />
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder ?? t('rightSidebar.fileBrowser.filterPlaceholder')}
-          className={cn(
-            'h-7 w-full rounded-md border border-[var(--border-default)] bg-[var(--surface-elevated)]',
-            'pl-7 pr-7 text-12 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)]',
-            'outline-none transition-colors',
-            'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
-          )}
-        />
-        {value && (
-          <button
-            type="button"
-            onClick={() => onChange('')}
-            aria-label={t('rightSidebar.fileBrowser.filterClear')}
-            className="absolute right-1 top-1/2 -translate-y-1/2 flex size-5 items-center justify-center rounded text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
-          >
-            <XIcon size={12} strokeWidth={2} />
-          </button>
-        )}
-      </div>
+      <SearchInput
+        value={value}
+        onChange={onChange}
+        placeholder={label}
+        aria-label={label}
+      />
     </div>
   );
 }

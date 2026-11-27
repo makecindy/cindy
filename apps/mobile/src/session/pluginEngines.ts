@@ -13,13 +13,34 @@
  *
  * 列表按电脑缓存在内存里：打开模型选择器时读一次并请那台的插件重新上报模型，不轮询。
  */
-import { useCallback, useEffect, useSyncExternalStore } from 'react';
-import { quotaLevelFromRemaining, type QuotaLevel } from '@cindy/maker-shared/quota-level';
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityEngine } from '@cindy/maker-shared/branding';
+import {
+  isSharedTaskPeer,
+  parseAgentDeviceFavoriteSource,
+  parseProviderShareFavoriteSource,
+  providerShareFavoriteWireKey,
+  type ProviderShareFavoriteSource,
+} from '@cindy/device-link';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import {
+  clampPluginQuotaPercent,
+  effectivePluginWindowMinutes,
+  pickPluginEngineQuotaPools,
+  pickPluginEngineWeeklyQuota,
+  pickPluginModelPickerWindow,
+} from '@cindy/maker-shared/plugin-engine-quota';
+import { quotaLevelFromRemaining, strongerQuotaLevel, type QuotaLevel } from '@cindy/maker-shared/quota-level';
+import { subscriptionQuotaOverview } from '@cindy/maker-shared/subscription-selection';
+import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import { createPluginHarnessUsageReader, type GhostHarnessUsage } from '@cindy/plugin-protocol';
 
 import type { MobileAgentCapabilities, MobileChoiceOption, MobileModelOption } from '@cindy/maker-shared/agent-capabilities';
 
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import type { RemoteInvoke } from '@/device-link/mobileMakerTransport';
+import { isProviderShareAgentDeviceId } from './providerShareAgentDevice';
+import type { RemoteAgentCatalog } from './remoteAgentCatalogs';
+import type { MobileModelFavorite } from './unifiedMobileModels';
 
 export const PLUGIN_ENGINE_AGENT_KIND = 'acp' as const;
 export const PLUGIN_ENGINE_PROVIDER_PREFIX = 'acp-plugin:';
@@ -53,6 +74,14 @@ export interface MobilePluginEngine {
    */
   hidden?: true;
   defaultModelAllowed?: false;
+  /** Whether the owning computer opened this engine for remote use / sharing. */
+  remoteUse?: { supported: boolean; enabled: boolean; shareSupported?: boolean };
+  /** Execution computer or share (`share:<shareId>`) when this engine runs outside the task computer. */
+  deviceId?: string;
+  /** Display name of the remote computer or share. */
+  deviceName?: string;
+  /** Favorite identity supplied by the task computer for a shared plugin engine. */
+  favoriteSource?: ProviderShareFavoriteSource;
   models: MobilePluginEngineModel[];
   permissionModes: { id: string; displayName: string }[];
   defaultPermissionMode: string;
@@ -72,6 +101,45 @@ export interface MobilePluginEngineSelection {
   providerId: string;
   modelId: string;
   effort?: PluginEngineEffort;
+  /** Execution computer or share id; null / undefined = task computer. */
+  deviceId?: string | null;
+}
+
+/** Identity of a plugin engine choice inside one picker (same plugin can be installed on several computers). */
+export function pluginEngineChoiceKey(choice: { providerId: string; deviceId?: string | null }): string {
+  return choice.deviceId ? `${choice.deviceId}\n${choice.providerId}` : choice.providerId;
+}
+
+/** Whether two plugin engine selections/entries refer to the same engine on the same computer. */
+export function isSamePluginEngineChoice(
+  a: { providerId: string; deviceId?: string | null } | null | undefined,
+  b: { providerId: string; deviceId?: string | null } | null | undefined,
+): boolean {
+  return !!a && !!b && a.providerId === b.providerId && (a.deviceId ?? null) === (b.deviceId ?? null);
+}
+
+/** Whether another computer's plugin engine is open for remote use right now. */
+export function isPluginEngineOfferedRemotely(
+  engine: Pick<MobilePluginEngine, 'availability' | 'remoteUse'>,
+): boolean {
+  return engine.remoteUse?.supported === true
+    && engine.remoteUse.enabled === true
+    && engine.availability.state !== 'unavailable';
+}
+
+/** Stable source-filter id for a local or remote plugin engine in UnifiedModelPickerSheet. */
+export function pluginEngineFilterId(providerId: string, deviceId?: string | null): string {
+  return deviceId ? `plugin-engine:${JSON.stringify([deviceId, providerId])}` : `plugin-engine:${providerId}`;
+}
+
+/** Whether a favorite's stored providerId refers to a local, remote, or shared plugin engine. */
+export function isPluginEngineFavoriteProviderId(providerId: unknown): boolean {
+  if (typeof providerId !== 'string') return false;
+  if (isPluginEngineProviderId(providerId)) return true;
+  const agentDevice = parseAgentDeviceFavoriteSource(providerId);
+  if (agentDevice && isPluginEngineProviderId(agentDevice.providerId)) return true;
+  const share = parseProviderShareFavoriteSource(providerId);
+  return !!share && isPluginEngineProviderId(share.providerId);
 }
 
 export function isPluginEngineEffort(value: unknown): value is PluginEngineEffort {
@@ -152,13 +220,28 @@ export function normalizePluginEngines(raw: unknown): MobilePluginEngine[] {
           return [{ id, displayName: text((mode as Record<string, unknown>).displayName, 64) ?? id }];
         })
       : [];
-    const fallbackModes = [{ id: 'ask', displayName: 'Ask' }, { id: 'bypassPermissions', displayName: 'Allow all' }];
+    const fallbackModes = [{ id: 'ask', displayName: 'Default permissions' }, { id: 'bypassPermissions', displayName: 'Full access' }];
     const modes = permissionModes.length ? permissionModes : fallbackModes;
     const requestedDefault = text(item.defaultPermissionMode, 64);
-    const iconDataUrl = typeof item.iconDataUrl === 'string' && item.iconDataUrl.startsWith('data:image/')
+    const ghostId = typeof item.ghostId === 'string' ? item.ghostId : undefined;
+    const iconDataUrl = isAntigravityEngine({ ghostId, providerId, name })
+      ? ANTIGRAVITY_MARK_DATA_URL
+      : typeof item.iconDataUrl === 'string' && item.iconDataUrl.startsWith('data:image/')
       ? item.iconDataUrl
       : undefined;
     const description = text(item.description, 200);
+    const rawRemoteUse = item.remoteUse && typeof item.remoteUse === 'object' && !Array.isArray(item.remoteUse)
+      ? item.remoteUse as Record<string, unknown>
+      : null;
+    const remoteUse = rawRemoteUse
+      ? {
+          supported: rawRemoteUse.supported === true,
+          enabled: rawRemoteUse.enabled === true,
+          ...(typeof rawRemoteUse.shareSupported === 'boolean'
+            ? { shareSupported: rawRemoteUse.shareSupported }
+            : {}),
+        }
+      : undefined;
     engines.push({
       key: providerId.slice(PLUGIN_ENGINE_PROVIDER_PREFIX.length),
       ...(item.reportsUsage === true ? { reportsUsage: true as const } : {}),
@@ -169,6 +252,7 @@ export function normalizePluginEngines(raw: unknown): MobilePluginEngine[] {
       availability: { state, ...(message ? { message } : {}) },
       ...(item.hidden === true ? { hidden: true as const } : {}),
       ...(item.defaultModelAllowed === false ? { defaultModelAllowed: false as const } : {}),
+      ...(remoteUse ? { remoteUse } : {}),
       models,
       permissionModes: modes,
       defaultPermissionMode: requestedDefault && modes.some((mode) => mode.id === requestedDefault)
@@ -182,8 +266,15 @@ export function normalizePluginEngines(raw: unknown): MobilePluginEngine[] {
 export function findPluginEngine(
   engines: readonly MobilePluginEngine[],
   providerId: string | null | undefined,
+  deviceId?: string | null,
 ): MobilePluginEngine | null {
-  return providerId ? engines.find((engine) => engine.providerId === providerId) ?? null : null;
+  if (!providerId) return null;
+  if (deviceId !== undefined) {
+    return engines.find((engine) => isSamePluginEngineChoice(engine, { providerId, deviceId })) ?? null;
+  }
+  return engines.find((engine) => engine.providerId === providerId && !engine.deviceId)
+    ?? engines.find((engine) => engine.providerId === providerId)
+    ?? null;
 }
 
 /** 'unknown' = 插件从没上报状态：可选，启动失败由任务自己报告(与 Desktop 相同)。 */
@@ -215,13 +306,17 @@ export function resolvePluginEngineEffort(
   return model?.defaultEffort && offered.includes(model.defaultEffort) ? model.defaultEffort : null;
 }
 
-/** 插件引擎任务的权限模式：引擎提供的那一档，否则用引擎的默认档；引擎已不在时只保留「全部允许」。 */
+/** 插件引擎任务的权限模式：按跨引擎等价规则（ask <-> default）匹配引擎提供的档位，否则安全回落到引擎默认档；引擎已不在时只保留「完全访问」。 */
 export function pluginEnginePermissionMode(
   mode: string | null | undefined,
   engine: Pick<MobilePluginEngine, 'permissionModes' | 'defaultPermissionMode'> | null | undefined,
 ): string {
   if (engine) {
-    return engine.permissionModes.some((option) => option.id === mode) ? mode! : engine.defaultPermissionMode;
+    return resolvePermissionModeForOptions(
+      mode,
+      engine.permissionModes.map((option) => option.id),
+      engine.defaultPermissionMode,
+    );
   }
   return mode === 'bypassPermissions' ? 'bypassPermissions' : 'ask';
 }
@@ -242,7 +337,7 @@ export function pluginEngineModelName(
 export function pluginEngineCreateSessionFields(
   engine: MobilePluginEngine,
   selection: { modelId: string; effort?: string | null; permissionMode?: string | null },
-): { agentKind: typeof PLUGIN_ENGINE_AGENT_KIND; providerId: string; model: string; effort: string; permissionMode: string; fastMode: false } {
+): { agentKind: typeof PLUGIN_ENGINE_AGENT_KIND; providerId: string; model: string; effort: string; permissionMode: string; fastMode: false; agentDeviceId?: string } {
   const model = selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL;
   return {
     agentKind: PLUGIN_ENGINE_AGENT_KIND,
@@ -251,12 +346,13 @@ export function pluginEngineCreateSessionFields(
     effort: resolvePluginEngineEffort(engine, model, selection.effort) ?? '',
     permissionMode: pluginEnginePermissionMode(selection.permissionMode, engine),
     fastMode: false,
+    ...(engine.deviceId ? { agentDeviceId: engine.deviceId } : {}),
   };
 }
 
 /**
  * 插件引擎任务的能力视图：主机级开关(能否切换引擎等)沿用被控电脑上报的那份，模型、思考深度与
- * 权限模式换成引擎自己的；插件引擎没有 Fast 与计划模式。
+ * 权限模式换成引擎自己的；插件引擎没有 Fast，计划模式按引擎是否声明 `plan` 档决定。
  */
 export function pluginEngineSessionCapabilities(
   host: MobileAgentCapabilities | null,
@@ -279,8 +375,8 @@ export function pluginEngineSessionCapabilities(
     .filter((effort) => rows.some((row) => row.efforts.includes(effort)))
     .map((effort) => ({ id: effort, label: labels.effort(effort) }));
   const permissionModes: MobileChoiceOption[] = (engine?.permissionModes ?? [
-    { id: 'ask', displayName: 'Ask' },
-    { id: 'bypassPermissions', displayName: 'Allow all' },
+    { id: 'ask', displayName: 'Default permissions' },
+    { id: 'bypassPermissions', displayName: 'Full access' },
   ]).map((mode) => ({ id: mode.id, label: mode.displayName }));
   return {
     ...(host ?? {}),
@@ -288,7 +384,7 @@ export function pluginEngineSessionCapabilities(
     effortLevels,
     permissionModes,
     hasFastMode: false,
-    planModeSupported: false,
+    planModeSupported: engine?.permissionModes.some((mode) => mode.id === 'plan') === true,
   };
 }
 
@@ -309,6 +405,11 @@ export function normalizePluginEngineSwitchIntent(value: unknown): MobilePluginE
   };
 }
 
+/** 任务来源是否允许在已有任务内切到 / 换出插件引擎（与 Desktop shared/pluginEngines 保持一致：除 review 外全开放）。 */
+export function isPluginEngineSwitchSourceAllowed(source: string | null | undefined): boolean {
+  return source !== 'review';
+}
+
 /** The pending target has priority over the saved execution location, including an explicit return home. */
 export function pluginEngineExecutionDeviceId(
   currentDeviceId: string | null | undefined,
@@ -322,55 +423,165 @@ export function pluginEngineExecutionDeviceId(
 export interface UnifiedMobilePluginEngineRow {
   key: string;
   providerId: string;
+  /** Execution computer or share id when running on another computer; absent = task computer. */
+  deviceId?: string;
+  /** Present when running on another computer or share (renders the remote badge). */
+  remoteDevice?: { deviceId: string; name: string };
   modelId: string;
   title: string;
   subtitle?: string;
+  quotaLabel?: string;
+  engineName?: string;
   /** 引擎不可用时插件给的说明。 */
   notice?: string;
   iconDataUrl?: string;
   /** 这一行将使用的思考深度(没有可选档位时为 null)。 */
   effort: PluginEngineEffort | null;
   efforts: PluginEngineEffort[];
+  defaultEffort?: PluginEngineEffort;
   effortLabel: string;
   selected: boolean;
   disabled: boolean;
+  /** 收藏区行携带原收藏记录，普通引擎行不带。 */
+  favorite?: MobileModelFavorite;
+}
+
+/** One independent model pool of an engine (e.g. Antigravity's Gemini or Claude & GPT pool). */
+export interface UnifiedMobilePluginEngineQuotaGroup {
+  id: string;
+  label: string;
+  remaining: number;
+  level: QuotaLevel;
+  reset: string | null;
+  summary: string;
+  accessibilityLabel: string;
 }
 
 export interface UnifiedMobilePluginEngineQuota {
   summary: string;
+  /** Sources page label aligned with built-in sourceQuota (e.g. "7d · 95% left"). */
+  sourceLabel?: string;
+  remaining?: number;
   level: QuotaLevel;
   accessibilityLabel: string;
+  resetSoon?: boolean;
+  reset?: { remaining: number; time: string; level: 'normal' | 'warn' | 'crit' };
+  resetParts?: string[];
+  resetDescription?: string;
+  /** True when the engine meters 2+ separate model pools; `groups` then lists each pool. */
+  isMultiGroup?: boolean;
+  groups?: UnifiedMobilePluginEngineQuotaGroup[];
 }
 
 export interface UnifiedMobilePluginEngineGroup {
   key: string;
   providerId: string;
+  deviceId?: string;
+  choiceKey: string;
   title: string;
   quota?: UnifiedMobilePluginEngineQuota;
   rows: UnifiedMobilePluginEngineRow[];
 }
 
-/** Formats a plugin engine's usage snapshot into a single-line picker header readout. */
+export interface PluginEnginePickerQuotaLabels {
+  formatRemaining?: (percent: number) => string;
+  formatResetIn?: (duration: string) => string;
+  resetSoonLabel?: string;
+  fallbackWindowLabel?: (windowMinutes: number | null, rawLabel: string) => string;
+}
+
+/**
+ * Formats a plugin engine's usage snapshot into picker group header + Sources page readouts,
+ * aligned with built-in subscription providers (weekly primary %, reset-soon countdown, and
+ * `[countdown, remaining]` on Sources).
+ */
 export function formatPluginEnginePickerQuota(
   usage: GhostHarnessUsage | null | undefined,
   now: number,
   language: string,
-  countdown: (resetsAtSeconds: number, now: number) => string | null,
+  countdown: (resetsAtSeconds: number, now: number, windowMinutes?: number | null) => string | null,
+  labels?: PluginEnginePickerQuotaLabels,
 ): UnifiedMobilePluginEngineQuota | undefined {
   if (!usage) return undefined;
-  const current = (usage.windows ?? []).filter((row) => !row.resetsAt || row.resetsAt > now);
-  const first = current.reduce<(typeof current)[number] | undefined>(
-    (lowest, row) => (!lowest || row.remainingPercent < lowest.remainingPercent ? row : lowest),
-    undefined,
-  );
-  if (first) {
-    const percent = `${Math.round(first.remainingPercent)}%`;
-    const reset = first.resetsAt ? countdown(first.resetsAt / 1000, now) : null;
-    const summary = reset ? `${percent} · ${reset}` : percent;
+  const formatPercent = labels?.formatRemaining ?? ((percent: number) => `${percent}%`);
+  // Separate model pools (Antigravity: Gemini vs Claude & GPT) are shown per pool, each with its
+  // own weekly-first value; they are never merged into one engine-wide number.
+  const pools = pickPluginEngineQuotaPools(usage, now);
+  if (pools) {
+    const groups: UnifiedMobilePluginEngineQuotaGroup[] = pools.map((pool) => {
+      const resetsAt = pool.overview.primary?.resetsAt;
+      const reset = typeof resetsAt === 'number' && Number.isFinite(resetsAt) && resetsAt > 0
+        ? countdown(resetsAt / 1000, now, pool.overview.primaryWindowMinutes)
+        : null;
+      const summary = [`${pool.remaining}%`, reset].filter(Boolean).join(' · ');
+      return {
+        id: pool.id,
+        label: pool.label,
+        remaining: pool.remaining,
+        level: pool.level,
+        reset,
+        summary,
+        accessibilityLabel: [pool.label, formatPercent(pool.remaining), reset].filter(Boolean).join(' · '),
+      };
+    });
+    const summary = groups.map((group) => `${group.label} ${group.remaining}%`).join(' · ');
     return {
       summary,
-      level: quotaLevelFromRemaining(first.remainingPercent),
-      accessibilityLabel: [first.label, summary].filter(Boolean).join(' · '),
+      sourceLabel: groups.map((group) => `${group.label} ${formatPercent(group.remaining)}`).join(' · '),
+      remaining: Math.min(...groups.map((group) => group.remaining)),
+      level: strongerQuotaLevel(...groups.map((group) => group.level)),
+      accessibilityLabel: groups.map((group) => group.accessibilityLabel).join(' · '),
+      isMultiGroup: true,
+      groups,
+    };
+  }
+  const overview = pickPluginEngineWeeklyQuota(usage, now);
+  if (overview.primary) {
+    const primary = overview.primary;
+    const remaining = Math.round(clampPluginQuotaPercent(primary.remainingPercent));
+    const resetsAtSec =
+      typeof primary.resetsAt === 'number' && Number.isFinite(primary.resetsAt) && primary.resetsAt > 0
+        ? primary.resetsAt / 1000
+        : null;
+    const resetText = resetsAtSec !== null ? countdown(resetsAtSec, now, overview.primaryWindowMinutes) : null;
+    const subOverview = subscriptionQuotaOverview(
+      [{ remaining, resetsAt: resetsAtSec }],
+      now,
+    );
+    const formatRemaining = labels?.formatRemaining ?? ((percent: number) => `${percent}%`);
+    const fallbackLabel = labels?.fallbackWindowLabel
+      ? labels.fallbackWindowLabel(overview.primaryWindowMinutes, primary.label)
+      : primary.label;
+    const sourceLabel = [resetText ?? fallbackLabel, formatRemaining(remaining)]
+      .filter(Boolean)
+      .join(' · ');
+    const resetParts = labels?.formatResetIn
+      ? labels.formatResetIn('{time}').split('{time}')
+      : undefined;
+    const resetDescription =
+      subOverview.reset && resetText
+        ? [
+            labels?.formatResetIn ? labels.formatResetIn(resetText) : resetText,
+            formatRemaining(subOverview.reset.remaining),
+          ].join(' · ')
+        : undefined;
+    return {
+      summary: `${remaining}%`,
+      sourceLabel,
+      remaining,
+      level: quotaLevelFromRemaining(remaining),
+      ...(subOverview.resetSoonCount > 0 ? { resetSoon: true } : {}),
+      ...(subOverview.reset ? { reset: subOverview.reset } : {}),
+      ...(resetParts ? { resetParts } : {}),
+      ...(resetDescription ? { resetDescription } : {}),
+      accessibilityLabel: [
+        primary.label,
+        formatRemaining(remaining),
+        subOverview.resetSoonCount > 0 ? labels?.resetSoonLabel : null,
+        resetText ? (labels?.formatResetIn ? labels.formatResetIn(resetText) : resetText) : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
     };
   }
   const balance = (usage.balances ?? []).find((row) => Number.isFinite(Number(row.amount)));
@@ -388,9 +599,40 @@ export function formatPluginEnginePickerQuota(
   }
   return {
     summary: formatted,
+    sourceLabel: formatted,
     level: amount <= 0 ? 'crit' : 'normal',
     accessibilityLabel: formatted,
   };
+}
+
+/**
+ * Formats per-model quota for a plugin engine row, aligned with built-in `modelQuotaLabel`
+ * (prefers weekly window when present, supports explicit `models[]`, single-group, and
+ * multi-group label matching like Antigravity).
+ */
+export function formatPluginEngineModelQuota(
+  usage: GhostHarnessUsage | null | undefined,
+  modelId: string,
+  now: number,
+  countdown: (resetsAtSeconds: number, now: number, windowMinutes?: number | null) => string | null,
+  modelName?: string | null,
+): string | null {
+  if (!usage?.windows?.length || !modelId || modelId === PLUGIN_ENGINE_DEFAULT_MODEL) return null;
+  const { primary } = pickPluginModelPickerWindow(
+    usage,
+    { id: modelId, displayName: modelName },
+    now,
+    { prefer: 'weekly' },
+  );
+  if (!primary) return null;
+  const resetsAtSec =
+    typeof primary.resetsAt === 'number' && Number.isFinite(primary.resetsAt) && primary.resetsAt > 0
+      ? primary.resetsAt / 1000
+      : null;
+  const reset = resetsAtSec !== null ? countdown(resetsAtSec, now, effectivePluginWindowMinutes(primary)) : null;
+  return [reset, `${Math.round(clampPluginQuotaPercent(primary.remainingPercent))}%`]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 /** 插件引擎分组：引擎名命中搜索时整组列出，否则只列命中的模型；不可用的引擎可见但不能选。 */
@@ -401,17 +643,26 @@ export function buildPluginEngineGroups(
     defaultModel: string;
     effort(id: PluginEngineEffort): string;
     unavailable(name: string, hint?: string): string;
+    remoteTitle?(engineName: string, deviceName: string): string;
+    modelQuota?(engine: MobilePluginEngine, modelId: string, modelName?: string): string | null;
   },
 ): UnifiedMobilePluginEngineGroup[] {
   const needle = query.trim().toLowerCase();
   const groups: UnifiedMobilePluginEngineGroup[] = [];
   for (const engine of options.engines) {
     const selectable = isPluginEngineSelectable(engine);
-    const active = options.active?.providerId === engine.providerId ? options.active : null;
+    const active = isSamePluginEngineChoice(options.active, engine) ? options.active : null;
     // 只装了插件但未登录 / 未就绪的引擎、用户在那台电脑上隐藏的引擎都不在模型选择器里占位；
     // 仅当前任务已选该引擎时保留以便识别状态。
     if ((!selectable || engine.hidden) && !active) continue;
-    const engineMatches = !needle || engine.name.toLowerCase().includes(needle);
+    const choiceKey = pluginEngineChoiceKey(engine);
+    const deviceLabel = engine.deviceId ? (engine.deviceName ?? engine.deviceId) : null;
+    const groupTitle = deviceLabel
+      ? (labels.remoteTitle ? labels.remoteTitle(engine.name, deviceLabel) : `${engine.name} · ${deviceLabel}`)
+      : engine.name;
+    const engineMatches = !needle
+      || engine.name.toLowerCase().includes(needle)
+      || (deviceLabel ? deviceLabel.toLowerCase().includes(needle) : false);
     const rows = pluginEngineModelRows(engine, active?.modelId)
       .filter((model) => engineMatches
         || [model.isDefault ? labels.defaultModel : model.displayName, model.description]
@@ -419,24 +670,124 @@ export function buildPluginEngineGroups(
       .map((model): UnifiedMobilePluginEngineRow => {
         const selected = !!active && active.modelId === model.id;
         const effort = resolvePluginEngineEffort(engine, model.id, selected ? active?.effort : undefined);
+        const quotaLabel = labels.modelQuota?.(engine, model.id, model.isDefault ? undefined : model.displayName) ?? null;
         return {
-          key: `${engine.providerId}#${model.id}`,
+          key: `${choiceKey}#${model.id}`,
           providerId: engine.providerId,
+          ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
+          ...(engine.deviceId ? { remoteDevice: { deviceId: engine.deviceId, name: deviceLabel! } } : {}),
           modelId: model.id,
           title: model.isDefault ? labels.defaultModel : model.displayName,
           ...(model.description ? { subtitle: model.description } : {}),
+          ...(quotaLabel ? { quotaLabel } : {}),
+          engineName: engine.name,
           ...(!selectable ? { notice: labels.unavailable(engine.name, engine.availability.message) } : {}),
           ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
           effort,
           efforts: [...model.efforts],
+          ...(model.defaultEffort ? { defaultEffort: model.defaultEffort } : {}),
           effortLabel: effort ? labels.effort(effort) : '',
           selected,
           disabled: !selectable,
         };
       });
-    if (rows.length) groups.push({ key: `plugin-engine:${engine.providerId}`, providerId: engine.providerId, title: engine.name, rows });
+    if (rows.length) {
+      groups.push({
+        key: `plugin-engine:${choiceKey}`,
+        providerId: engine.providerId,
+        ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
+        choiceKey,
+        title: groupTitle,
+        rows,
+      });
+    }
   }
   return groups;
+}
+
+/**
+ * 解析收藏列表里的插件引擎条目（支持本机、同账号另一台电脑及插件引擎分享）：
+ * 已隐藏但可用的引擎照常解析（与内置隐藏供应商同口径）；
+ * 不可用引擎或已移除的模型返回 null，不删原收藏。
+ */
+export function resolveMobilePluginEngineFavorite(
+  item: MobileModelFavorite,
+  engines: readonly MobilePluginEngine[],
+  labels: {
+    defaultModel: string;
+    effort(id: PluginEngineEffort): string;
+    modelQuota?(engine: MobilePluginEngine, modelId: string, modelName?: string): string | null;
+  },
+): UnifiedMobilePluginEngineRow | null {
+  let engine: MobilePluginEngine | undefined;
+  if (isPluginEngineProviderId(item.providerId)) {
+    engine = engines.find((candidate) => candidate.providerId === item.providerId && !candidate.deviceId);
+  } else {
+    const agentDevice = parseAgentDeviceFavoriteSource(item.providerId);
+    if (agentDevice && isPluginEngineProviderId(agentDevice.providerId)) {
+      engine = engines.find(
+        (candidate) => candidate.providerId === agentDevice.providerId && candidate.deviceId === agentDevice.deviceId,
+      );
+    } else {
+      const share = parseProviderShareFavoriteSource(item.providerId);
+      if (share && isPluginEngineProviderId(share.providerId)) {
+        engine = engines.find(
+          (candidate) =>
+            candidate.providerId === share.providerId
+            && !!candidate.favoriteSource
+            && providerShareFavoriteWireKey(candidate.favoriteSource) === item.providerId,
+        );
+      }
+    }
+  }
+  if (!engine || !isPluginEngineSelectable(engine)) return null;
+  let title: string;
+  let efforts: PluginEngineEffort[];
+  let defaultEffort: PluginEngineEffort | undefined;
+  if (item.modelId === PLUGIN_ENGINE_DEFAULT_MODEL) {
+    if (engine.defaultModelAllowed === false) return null;
+    title = labels.defaultModel;
+    efforts = [];
+  } else {
+    const model = engine.models.find((candidate) => candidate.id === item.modelId);
+    if (!model) return null;
+    title = model.displayName;
+    efforts = [...model.efforts];
+    defaultEffort = model.defaultEffort;
+  }
+  const effort = resolvePluginEngineEffort(engine, item.modelId, item.effort);
+  const deviceLabel = engine.deviceId ? (engine.deviceName ?? engine.deviceId) : null;
+  const quotaLabel = labels.modelQuota?.(engine, item.modelId, item.modelId === PLUGIN_ENGINE_DEFAULT_MODEL ? undefined : title) ?? null;
+  return {
+    key: item.uid,
+    providerId: engine.providerId,
+    ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
+    ...(engine.deviceId ? { remoteDevice: { deviceId: engine.deviceId, name: deviceLabel! } } : {}),
+    modelId: item.modelId,
+    title,
+    subtitle: deviceLabel ? `${engine.name} · ${deviceLabel}` : engine.name,
+    ...(quotaLabel ? { quotaLabel } : {}),
+    engineName: engine.name,
+    ...(engine.iconDataUrl ? { iconDataUrl: engine.iconDataUrl } : {}),
+    effort,
+    efforts,
+    ...(defaultEffort ? { defaultEffort } : {}),
+    effortLabel: effort ? labels.effort(effort) : '',
+    selected: false,
+    disabled: false,
+    favorite: item,
+  };
+}
+
+/** 插件引擎收藏行是否命中搜索词。 */
+export function matchesPluginEngineFavoriteQuery(
+  row: UnifiedMobilePluginEngineRow,
+  query: string,
+): boolean {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return true;
+  return [row.title, row.subtitle, row.engineName, row.remoteDevice?.name, row.modelId]
+    .some((value) => value?.toLowerCase().includes(needle));
 }
 
 // —— 按电脑缓存的引擎列表 ——
@@ -451,8 +802,296 @@ const EMPTY_ENGINES: MobilePluginEngine[] = [];
 const EMPTY_ENTRY: CacheEntry = { engines: EMPTY_ENGINES, supported: false };
 const cache = new Map<string, CacheEntry>();
 const inFlight = new Map<string, Promise<void>>();
+const controlledCache = new Map<string, CacheEntry>();
+const controlledInFlight = new Map<string, Promise<void>>();
+const controlledLastReadAt = new Map<string, number>();
+const controlledLocationsCache = new Map<string, ControlledPluginEngineLocation[]>();
+const controlledLocationsInFlight = new Map<string, Promise<ControlledPluginEngineLocation[]>>();
+const controlledLocationsReadAt = new Map<string, number>();
+const CONTROLLED_REREAD_MS = 15_000;
 const listeners = new Set<() => void>();
 let version = 0;
+
+export interface ControlledPluginEngineLocation {
+  agentDeviceId: string;
+  name: string;
+  favoriteSource?: ProviderShareFavoriteSource;
+}
+
+export function controlledPluginEngineCacheKey(controlledDeviceId: string, agentDeviceId: string): string {
+  return JSON.stringify([controlledDeviceId, agentDeviceId]);
+}
+
+function readControlledFavoriteSource(value: unknown, agentDeviceId: string): ProviderShareFavoriteSource | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const owner = source.owner && typeof source.owner === 'object' && !Array.isArray(source.owner)
+    ? source.owner as Record<string, unknown>
+    : null;
+  if (
+    typeof source.shareId !== 'string' || !source.shareId
+    || typeof source.memberId !== 'string' || !source.memberId
+    || typeof source.providerId !== 'string' || !source.providerId
+    || agentDeviceId !== `share:${source.shareId}`
+    || (owner?.region !== 'cn' && owner?.region !== 'global')
+  ) {
+    return undefined;
+  }
+  return {
+    shareId: source.shareId,
+    memberId: source.memberId,
+    providerId: source.providerId,
+    owner: { region: owner.region },
+  };
+}
+
+/** Parse task-host `maker:model-catalog:read` `{ op: 'locations' }` reply into remote plugin engine candidates. */
+export function parseControlledModelLocations(
+  controlledDeviceId: string,
+  raw: unknown,
+): ControlledPluginEngineLocation[] {
+  const list = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? (raw as { locations?: unknown }).locations
+    : undefined;
+  if (!Array.isArray(list)) return [];
+  const out: ControlledPluginEngineLocation[] = [];
+  const seen = new Set<string>();
+  for (const item of list) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    const agentDeviceId = typeof record.agentDeviceId === 'string' ? record.agentDeviceId.trim() : '';
+    if (!agentDeviceId || agentDeviceId === controlledDeviceId || seen.has(agentDeviceId)) continue;
+    const favoriteSource = readControlledFavoriteSource(record.favoriteSource, agentDeviceId);
+    const rawFavoriteProviderId = record.favoriteSource && typeof record.favoriteSource === 'object' && !Array.isArray(record.favoriteSource)
+      && typeof (record.favoriteSource as Record<string, unknown>).providerId === 'string'
+      ? (record.favoriteSource as Record<string, unknown>).providerId as string
+      : undefined;
+    // Built-in provider shares never offer plugin engines.
+    if (isProviderShareAgentDeviceId(agentDeviceId) && rawFavoriteProviderId !== undefined && !isPluginEngineProviderId(rawFavoriteProviderId)) {
+      continue;
+    }
+    seen.add(agentDeviceId);
+    out.push({
+      agentDeviceId,
+      name: text(record.name, 120) ?? agentDeviceId,
+      ...(favoriteSource ? { favoriteSource } : {}),
+    });
+  }
+  return out;
+}
+
+/** Filter a remote source's engine list to engines opened for remote use with at least one permitted model. */
+export function normalizeOfferedRemotePluginEngines(
+  raw: unknown,
+  meta: { deviceId: string; deviceName?: string; favoriteSource?: ProviderShareFavoriteSource },
+): MobilePluginEngine[] {
+  return normalizePluginEngines(raw)
+    .filter((engine) =>
+      isPluginEngineOfferedRemotely(engine)
+      && (engine.models.length > 0 || engine.defaultModelAllowed !== false))
+    .map((engine) => {
+      const next: MobilePluginEngine = {
+        ...engine,
+        deviceId: meta.deviceId,
+        ...(meta.deviceName ? { deviceName: meta.deviceName } : {}),
+        ...(meta.favoriteSource ? { favoriteSource: meta.favoriteSource } : {}),
+      };
+      // Owner's local hidden preference does not hide remotely offered engines;
+      // provider shares never expose the sharer's account usage.
+      delete next.hidden;
+      if (isProviderShareAgentDeviceId(meta.deviceId)) delete next.reportsUsage;
+      return next;
+    });
+}
+
+export function setCachedControlledPluginEngines(
+  controlledDeviceId: string,
+  agentDeviceId: string,
+  engines: MobilePluginEngine[],
+  supported: boolean,
+): void {
+  const key = controlledPluginEngineCacheKey(controlledDeviceId, agentDeviceId);
+  const previous = controlledCache.get(key);
+  if (previous && previous.supported === supported && sameEngines(previous.engines, engines)) return;
+  controlledCache.set(key, { engines: engines.length ? engines : EMPTY_ENGINES, supported });
+  publish();
+}
+
+export function getCachedControlledPluginEngines(
+  controlledDeviceId: string | null | undefined,
+  agentDeviceId: string | null | undefined,
+): readonly MobilePluginEngine[] {
+  if (!controlledDeviceId || !agentDeviceId) return EMPTY_ENGINES;
+  return controlledCache.get(controlledPluginEngineCacheKey(controlledDeviceId, agentDeviceId))?.engines ?? EMPTY_ENGINES;
+}
+
+const EVICT_CONTROLLED_CATALOG_ERROR_CODES = new Set([
+  'CHANNEL_NOT_ALLOWED',
+  'DEVICE_LINK_CHANNEL_NOT_ALLOWED',
+  'INVALID_PARAMS',
+  'PRECONDITION_FAILED',
+  'PERMISSION_DENIED',
+  'NOT_FOUND',
+]);
+
+function shouldEvictControlledCatalogError(error: unknown): boolean {
+  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined;
+  if (typeof code === 'string' && EVICT_CONTROLLED_CATALOG_ERROR_CODES.has(code)) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const bracketCode = /^\[([A-Z_]+)\]/.exec(message)?.[1];
+  if (bracketCode && EVICT_CONTROLLED_CATALOG_ERROR_CODES.has(bracketCode)) {
+    return true;
+  }
+  for (const candidate of EVICT_CONTROLLED_CATALOG_ERROR_CODES) {
+    if (message.includes(candidate)) return true;
+  }
+  return false;
+}
+
+function evictMissingControlledCatalogs(
+  controlledDeviceId: string,
+  allowedAgentDeviceIds: ReadonlySet<string>,
+): boolean {
+  let evicted = false;
+  for (const [key, entry] of [...controlledCache.entries()]) {
+    let pair: unknown;
+    try {
+      pair = JSON.parse(key);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(pair) || pair.length !== 2 || pair[0] !== controlledDeviceId) continue;
+    const agentDeviceId = typeof pair[1] === 'string' ? pair[1] : '';
+    if (allowedAgentDeviceIds.has(agentDeviceId)) continue;
+    controlledCache.delete(key);
+    controlledLastReadAt.delete(key);
+    if (entry.engines.length > 0 || entry.supported) evicted = true;
+  }
+  return evicted;
+}
+
+/** Read one remote/shared source's plugin engines through the task computer (`maker:model-catalog:read`). */
+export function loadControlledPluginEngines(
+  controlledDeviceId: string,
+  agentDeviceId: string,
+  invoke: RemoteInvoke,
+  options?: { force?: boolean; deviceName?: string; favoriteSource?: ProviderShareFavoriteSource },
+): Promise<void> {
+  ensureOwnerSubscription();
+  const owner = getMobileAuthOwner();
+  if (!owner.accountId || !controlledDeviceId || !agentDeviceId || isSharedTaskPeer(controlledDeviceId)) {
+    return Promise.resolve();
+  }
+  const key = controlledPluginEngineCacheKey(controlledDeviceId, agentDeviceId);
+  const existing = controlledInFlight.get(key);
+  if (existing) return existing;
+  const now = Date.now();
+  const lastRead = controlledLastReadAt.get(key) ?? 0;
+  if (!options?.force && controlledCache.has(key) && now - lastRead < CONTROLLED_REREAD_MS) {
+    return Promise.resolve();
+  }
+  const run = invoke<unknown>(controlledDeviceId, 'maker:model-catalog:read', [{
+    op: 'read',
+    agentDeviceId,
+    channel: 'maker:list-plugin-engines',
+    args: [],
+  }])
+    .then((raw) => {
+      if (!isMobileAuthOwnerCurrent(owner)) return;
+      controlledLastReadAt.set(key, Date.now());
+      const offered = normalizeOfferedRemotePluginEngines(raw, {
+        deviceId: agentDeviceId,
+        deviceName: options?.deviceName,
+        favoriteSource: options?.favoriteSource,
+      });
+      setCachedControlledPluginEngines(controlledDeviceId, agentDeviceId, offered, true);
+    })
+    .catch((error: unknown) => {
+      if (!isMobileAuthOwnerCurrent(owner)) return;
+      controlledLastReadAt.set(key, Date.now());
+      if (shouldEvictControlledCatalogError(error) || !controlledCache.has(key)) {
+        setCachedControlledPluginEngines(controlledDeviceId, agentDeviceId, [], false);
+      }
+    })
+    .finally(() => {
+      if (controlledInFlight.get(key) === run) controlledInFlight.delete(key);
+    });
+  controlledInFlight.set(key, run);
+  return run;
+}
+
+/** Prefetch a remote/shared plugin engine catalog once for task list icon resolution. */
+export function prefetchControlledPluginEngineIcons(
+  controlledDeviceId: string,
+  agentDeviceId: string,
+  invoke: RemoteInvoke,
+): Promise<void> {
+  return getCachedControlledPluginEngines(controlledDeviceId, agentDeviceId).length
+    ? Promise.resolve()
+    : loadControlledPluginEngines(controlledDeviceId, agentDeviceId, invoke);
+}
+
+function loadControlledPluginEngineLocations(
+  controlledDeviceId: string,
+  invoke: RemoteInvoke,
+  force = false,
+): Promise<ControlledPluginEngineLocation[]> {
+  ensureOwnerSubscription();
+  const owner = getMobileAuthOwner();
+  if (!owner.accountId || !controlledDeviceId || isSharedTaskPeer(controlledDeviceId)) {
+    return Promise.resolve([]);
+  }
+  const existing = controlledLocationsInFlight.get(controlledDeviceId);
+  if (existing) return existing;
+  const now = Date.now();
+  const lastRead = controlledLocationsReadAt.get(controlledDeviceId) ?? 0;
+  if (!force && controlledLocationsCache.has(controlledDeviceId) && now - lastRead < CONTROLLED_REREAD_MS) {
+    return Promise.resolve(controlledLocationsCache.get(controlledDeviceId) ?? []);
+  }
+  const run = invoke<unknown>(controlledDeviceId, 'maker:model-catalog:read', [{ op: 'locations' }])
+    .then((raw) => {
+      if (!isMobileAuthOwnerCurrent(owner)) return [];
+      const parsed = parseControlledModelLocations(controlledDeviceId, raw);
+      const complete = !(
+        raw && typeof raw === 'object' && !Array.isArray(raw)
+        && (raw as { status?: unknown }).status === 'degraded'
+      );
+      controlledLocationsReadAt.set(controlledDeviceId, Date.now());
+      const previous = controlledLocationsCache.get(controlledDeviceId);
+      const changed = !previous || JSON.stringify(previous) !== JSON.stringify(parsed);
+      if (changed) controlledLocationsCache.set(controlledDeviceId, parsed);
+      const evicted = complete
+        ? evictMissingControlledCatalogs(controlledDeviceId, new Set(parsed.map((loc) => loc.agentDeviceId)))
+        : false;
+      if (changed || evicted) publish();
+      return parsed;
+    })
+    .catch((error: unknown) => {
+      if (!isMobileAuthOwnerCurrent(owner)) return [];
+      controlledLocationsReadAt.set(controlledDeviceId, Date.now());
+      if (shouldEvictControlledCatalogError(error)) {
+        const previous = controlledLocationsCache.get(controlledDeviceId);
+        const changed = !previous || previous.length > 0;
+        controlledLocationsCache.set(controlledDeviceId, []);
+        const evicted = evictMissingControlledCatalogs(controlledDeviceId, new Set());
+        if (changed || evicted) publish();
+        return [];
+      }
+      if (!controlledLocationsCache.has(controlledDeviceId)) {
+        controlledLocationsCache.set(controlledDeviceId, []);
+      }
+      return controlledLocationsCache.get(controlledDeviceId) ?? [];
+    })
+    .finally(() => {
+      if (controlledLocationsInFlight.get(controlledDeviceId) === run) {
+        controlledLocationsInFlight.delete(controlledDeviceId);
+      }
+    });
+  controlledLocationsInFlight.set(controlledDeviceId, run);
+  return run;
+}
 
 function publish(): void {
   version += 1;
@@ -478,12 +1117,38 @@ export function getCachedPluginEngines(deviceId: string | null | undefined): rea
   return (deviceId ? cache.get(deviceId)?.engines : undefined) ?? EMPTY_ENGINES;
 }
 
+export function hasCachedPluginEngineCatalogue(deviceId: string | null | undefined): boolean {
+  return !!deviceId && cache.has(deviceId);
+}
+
+/** Whether a local or same-account remote plugin engine declares `reportsUsage: true`. */
+export function pluginEngineReportsUsage(
+  engine: Pick<MobilePluginEngine, 'providerId' | 'reportsUsage' | 'deviceId'>,
+): boolean {
+  if (engine.reportsUsage === true) return true;
+  if (!engine.deviceId || isProviderShareAgentDeviceId(engine.deviceId) || isSharedTaskPeer(engine.deviceId)) {
+    return false;
+  }
+  return findPluginEngine(getCachedPluginEngines(engine.deviceId), engine.providerId)?.reportsUsage === true;
+}
+
+export function usePluginEngineCacheVersion(): number {
+  return useSyncExternalStore(subscribe, getVersion, getVersion);
+}
+
 /** 退出账号 / 切换账号时清掉，不把上一个账号的电脑引擎带过去。 */
 export function clearPluginEngineCache(): void {
   lastRefreshAt.clear();
   inFlight.clear();
-  if (cache.size === 0) return;
+  controlledInFlight.clear();
+  controlledLastReadAt.clear();
+  controlledLocationsInFlight.clear();
+  controlledLocationsReadAt.clear();
+  const hadData = cache.size > 0 || controlledCache.size > 0 || controlledLocationsCache.size > 0;
+  if (!hadData) return;
   cache.clear();
+  controlledCache.clear();
+  controlledLocationsCache.clear();
   publish();
 }
 
@@ -588,11 +1253,143 @@ export function usePluginEngines(
   return { engines: active ? getCachedPluginEngines(deviceId) : EMPTY_ENGINES, refresh };
 }
 
+/**
+ * Remote & shared plugin engines available to a controlled task computer, read through that
+ * computer's `maker:model-catalog:read` channel (matching Desktop `controlledPluginEngineSources`).
+ */
+export function useControlledRemotePluginEngines(input: {
+  controlledDeviceId: string | null | undefined;
+  enabled: boolean;
+  /** True when the model picker is open and should discover all remote/shared sources. */
+  discoverAll?: boolean;
+  invoke: RemoteInvoke | null;
+  remoteCatalogs?: readonly RemoteAgentCatalog[];
+  keepDeviceIds?: readonly string[];
+  connectionEpoch?: number;
+}): {
+  engines: readonly MobilePluginEngine[];
+  settled: boolean;
+  refresh(): void;
+} {
+  const snapshotVersion = useSyncExternalStore(subscribe, getVersion, getVersion);
+  const controlledDeviceId = input.controlledDeviceId || '';
+  const active = input.enabled && !!controlledDeviceId && !!input.invoke && !isSharedTaskPeer(controlledDeviceId);
+  const discoverAll = input.discoverAll === true;
+  const keepKey = (input.keepDeviceIds ?? []).filter(Boolean).join('\n');
+  const [locationsSettled, setLocationsSettled] = useState(false);
+  const remoteCatalogsRef = useRef(input.remoteCatalogs);
+  remoteCatalogsRef.current = input.remoteCatalogs;
+
+  const fetchAll = useCallback((force: boolean) => {
+    if (!active || !input.invoke) return;
+    const invoke = input.invoke;
+    const keepIds = keepKey ? keepKey.split('\n') : [];
+    const loadSources = async () => {
+      const locations = discoverAll
+        ? await loadControlledPluginEngineLocations(controlledDeviceId, invoke, force)
+        : (controlledLocationsCache.get(controlledDeviceId) ?? []);
+      const targets = new Map<string, ControlledPluginEngineLocation>();
+      if (discoverAll) {
+        for (const loc of locations) targets.set(loc.agentDeviceId, loc);
+      }
+      for (const id of keepIds) {
+        if (id && id !== controlledDeviceId && !targets.has(id)) {
+          const fromLoc = locations.find((loc) => loc.agentDeviceId === id);
+          const fromCatalog = remoteCatalogsRef.current?.find((c) => c.deviceId === id);
+          targets.set(id, fromLoc ?? {
+            agentDeviceId: id,
+            name: fromCatalog?.name ?? id,
+            ...(fromCatalog?.favoriteSource ? { favoriteSource: fromCatalog.favoriteSource } : {}),
+          });
+        }
+      }
+      await Promise.all(
+        [...targets.values()].map((loc) =>
+          loadControlledPluginEngines(controlledDeviceId, loc.agentDeviceId, invoke, {
+            force,
+            deviceName: loc.name,
+            favoriteSource: loc.favoriteSource,
+          }),
+        ),
+      );
+      setLocationsSettled(true);
+    };
+    void loadSources();
+  }, [active, controlledDeviceId, discoverAll, input.invoke, keepKey]);
+
+  useEffect(() => {
+    if (!active) return;
+    fetchAll(false);
+  }, [active, fetchAll, input.connectionEpoch]);
+
+  const refresh = useCallback(() => {
+    fetchAll(true);
+  }, [fetchAll]);
+
+  const engines = useMemo(() => {
+    if (!active) return EMPTY_ENGINES;
+    const locations = controlledLocationsCache.get(controlledDeviceId) ?? [];
+    const keepIds = keepKey ? keepKey.split('\n') : [];
+    const catalogByDevice = new Map((input.remoteCatalogs ?? []).map((c) => [c.deviceId, c]));
+    const orderedIds: string[] = [];
+    const seen = new Set<string>();
+    for (const loc of locations) {
+      if (!seen.has(loc.agentDeviceId)) {
+        seen.add(loc.agentDeviceId);
+        orderedIds.push(loc.agentDeviceId);
+      }
+    }
+    for (const id of keepIds) {
+      if (id && id !== controlledDeviceId && !seen.has(id)) {
+        seen.add(id);
+        orderedIds.push(id);
+      }
+    }
+    const locById = new Map(locations.map((loc) => [loc.agentDeviceId, loc]));
+    const list: MobilePluginEngine[] = [];
+    for (const agentDeviceId of orderedIds) {
+      const cached = getCachedControlledPluginEngines(controlledDeviceId, agentDeviceId);
+      if (cached.length === 0) continue;
+      const catalog = catalogByDevice.get(agentDeviceId);
+      // Skip offline sources unless kept by an active/pending task.
+      const kept = keepIds.includes(agentDeviceId);
+      if (catalog?.offline && !kept) continue;
+      const loc = locById.get(agentDeviceId);
+      const displayName = catalog?.name || loc?.name || agentDeviceId;
+      const favoriteSource = catalog?.favoriteSource ?? loc?.favoriteSource;
+      for (const engine of cached) {
+        list.push({
+          ...engine,
+          deviceId: agentDeviceId,
+          deviceName: displayName,
+          ...(favoriteSource ? { favoriteSource } : {}),
+        });
+      }
+    }
+    return list;
+  }, [active, controlledDeviceId, keepKey, input.remoteCatalogs, snapshotVersion]);
+
+  return { engines, settled: !active || locationsSettled, refresh };
+}
+
 /** 任务列表等只读场景：已读到过的引擎(没读到过返回 null，调用方显示通用引擎标识)。 */
 export function usePluginEngineFor(
   deviceId: string | null | undefined,
   providerId: string | null | undefined,
+  agentDeviceId?: string | null,
 ): MobilePluginEngine | null {
   useSyncExternalStore(subscribe, getVersion, getVersion);
+  if (agentDeviceId && deviceId && agentDeviceId !== deviceId) {
+    const controlled = findPluginEngine(
+      getCachedControlledPluginEngines(deviceId, agentDeviceId),
+      providerId,
+      agentDeviceId,
+    );
+    if (controlled) return controlled;
+    if (!isProviderShareAgentDeviceId(agentDeviceId)) {
+      return findPluginEngine(getCachedPluginEngines(agentDeviceId), providerId);
+    }
+    return null;
+  }
   return findPluginEngine(getCachedPluginEngines(deviceId), providerId);
 }

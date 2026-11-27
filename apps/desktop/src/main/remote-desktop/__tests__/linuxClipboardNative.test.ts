@@ -1,12 +1,32 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-const h = vi.hoisted(() => ({ exec: vi.fn(), unlocked: vi.fn(), spawn: vi.fn() }));
+const h = vi.hoisted(() => ({
+  exec: vi.fn(),
+  unlocked: vi.fn(),
+  spawn: vi.fn(),
+  gnomeReady: false,
+  gnomeRead: vi.fn(),
+  gnomeWrite: vi.fn(),
+  gnomeStop: vi.fn(),
+}));
+vi.mock('../linuxX11Clipboard', () => ({ isX11Clipboard: () => false }));
+vi.mock('../linuxGnomeClipboard', () => ({
+  gnomeClipboardReady: () => h.gnomeReady,
+  readGnomeClipboardSnapshot: h.gnomeRead,
+  writeGnomeClipboard: h.gnomeWrite,
+  stopGnomeClipboard: h.gnomeStop,
+}));
 vi.mock('../linuxSessionLock', () => ({ isLinuxDesktopUnlocked: h.unlocked }));
 vi.mock('electron', () => ({ app: { isPackaged: true } }));
 vi.mock('node:child_process', () => ({ execFile: vi.fn(), spawn: h.spawn }));
 vi.mock('node:util', () => ({ promisify: () => h.exec }));
 vi.mock('node:fs', () => ({ accessSync: vi.fn(), constants: { X_OK: 1 } }));
-import { readLinuxClipboardSnapshot, writeLinuxClipboard } from '../linuxClipboardNative';
+import {
+  readLinuxClipboardSnapshot,
+  stopLinuxClipboardWriter,
+  supportsLinuxClipboard,
+  writeLinuxClipboard,
+} from '../linuxClipboardNative';
 it.each([
   [6016, 3384, true],
   [6000, 4000, true],
@@ -31,6 +51,10 @@ beforeEach(() => {
   h.exec.mockReset();
   h.spawn.mockReset();
   h.unlocked.mockReset().mockResolvedValue(true);
+  h.gnomeReady = false;
+  h.gnomeRead.mockReset();
+  h.gnomeWrite.mockReset();
+  h.gnomeStop.mockReset();
   vi.stubGlobal('process', { ...process, platform: 'linux', resourcesPath: '/runtime' });
   vi.stubEnv('HYPRLAND_INSTANCE_SIGNATURE', 'test');
 });
@@ -131,4 +155,18 @@ it('does not leak native clipboard diagnostics or confuse refusal with empty sel
   await expect(readLinuxClipboardSnapshot()).rejects.toThrow('DESKTOP_CLIPBOARD_UNAVAILABLE');
   h.exec.mockRejectedValue({ stderr: Buffer.from('Nothing is copied') });
   expect((await readLinuxClipboardSnapshot()).content).toEqual({});
+});
+it('routes GNOME Wayland clipboard reads, writes and cleanup to the GNOME backend', async () => {
+  vi.stubEnv('HYPRLAND_INSTANCE_SIGNATURE', '');
+  h.gnomeReady = true;
+  h.gnomeRead.mockResolvedValue({ formats: ['text/plain'], content: { text: '来自 GNOME' } });
+  h.gnomeWrite.mockResolvedValue(undefined);
+  expect(supportsLinuxClipboard()).toBe(true);
+  expect((await readLinuxClipboardSnapshot()).content).toEqual({ text: '来自 GNOME' });
+  await writeLinuxClipboard({ text: '写入 GNOME' }, () => true);
+  expect(h.gnomeWrite).toHaveBeenCalledWith({ text: '写入 GNOME' }, expect.any(Function));
+  stopLinuxClipboardWriter();
+  expect(h.gnomeStop).toHaveBeenCalledOnce();
+  expect(h.exec).not.toHaveBeenCalled();
+  expect(h.spawn).not.toHaveBeenCalled();
 });

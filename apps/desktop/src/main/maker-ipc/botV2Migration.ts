@@ -31,7 +31,7 @@ import { createLogger } from '../logger.js';
 import { readEffectiveBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { activeOwnerScopeKey, ownerScopedUserDataPath } from '../appSessionState.js';
 import { botProfileDir, ensureBotWorkspaceDir } from './botProfileFolder.js';
-import { ensureBotProjectAutomations, ensureTeammateTemplate, ensureWorkspaceRepository, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from './botProjectMode.js';
+import { ensureBotProjectAutomations, ensureTeammateProjectIgnored, ensureTeammateTemplate, ensureWorkspaceRepository, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from './botProjectMode.js';
 import { TEAMMATE_V2_RECEIPT_FILE, teammateWorkspaceDir } from './botProjectMemory.js';
 import { writeRoutineAutomations } from './botRoutineAutomations.js';
 import { readV1NeverDispatchedSessionIds, readV1RoutineSlice, removeV1Routine } from './botV1Routines.js';
@@ -257,9 +257,16 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
   const home = botProfileDir(ownerRoot, botId);
   const receiptPath = path.join(home, RECEIPT_FILE);
   if (await exists(receiptPath)) {
-    // Upgraded before its project memory moved into the project folder: move it once (idempotent).
     const workspace = teammateWorkspaceDir(ownerRoot, botId);
-    if (await exists(workspace)) await moveTeammateMemoryIntoProject({ botId, ownerRoot, workspace });
+    let ignore: 'ready' | 'failed' = 'failed';
+    if (await exists(workspace)) {
+      // Set up before the project ignored credentials, environments and worktrees: add those once,
+      // before any version below is recorded. When that fails the teammate stays usable, but the
+      // versions below are deferred (snapshotTeammateProject) and the next start tries again.
+      ignore = await ensureTeammateProjectIgnored({ botId, workspace });
+      // Upgraded before its project memory moved into the project folder: move it once (idempotent).
+      await moveTeammateMemoryIntoProject({ botId, ownerRoot, workspace });
+    }
     // A build that still had the switch may have turned it off after the upgrade: V1 is gone.
     const upgraded = await readBotSettingsProfile(botId);
     // Upgraded before the starter template existed (or an older version of it): fill it in once.
@@ -269,9 +276,11 @@ async function migrateTeammateOnce(botId: string, ownerRoot: string,
       await ensureBotProjectAutomations({ botId, displayName: upgraded.name, workingDir: workspace, addMissing: false });
       // V2's migration receipt says nothing about the initial Git commit succeeding.
       // Retry only incomplete repositories; versions must not block the buddy's use.
-      await ensureWorkspaceRepository(workspace).catch((error) => {
-        log.warn('buddy project repository setup failed', { botId, error: String(error) });
-      });
+      if (ignore === 'ready') {
+        await ensureWorkspaceRepository(workspace).catch((error) => {
+          log.warn('buddy project repository setup failed', { botId, error: String(error) });
+        });
+      }
       assertCurrent();
       const projectDir = normalizeRecentWorkdirPath(workspace);
       if (projectDir) await nameBotProject(botId, projectDir, upgraded.name);
@@ -371,6 +380,16 @@ export function migrateTeammatesToV2(): Promise<void> {
       } catch (error) {
         log.warn('teammate V2 upgrade failed; retries on next start', { botId: id, error: String(error) });
       }
+    }
+    if (activeOwnerScopeKey() !== scope) return;
+    try {
+      const { runLegacyTeammateMemoryReviewCleanup, startGlobalMemoryTidy } = await import('./globalMemoryTidyRuntime.js');
+      await runLegacyTeammateMemoryReviewCleanup(ownerRoot, () => {
+        if (activeOwnerScopeKey() !== scope) throw new Error('OWNER_CHANGED');
+      });
+      if (activeOwnerScopeKey() === scope) startGlobalMemoryTidy();
+    } catch (error) {
+      log.warn('legacy memory review cleanup or global tidy startup failed; retries on next start', { error: String(error) });
     }
   })().catch((error) => log.warn('teammate V2 upgrade skipped', { error: String(error) }))
     .finally(() => { if (running?.promise === promise) running = null; });

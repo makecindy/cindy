@@ -57,6 +57,40 @@ export function withoutPrMetadata(result: PrStatusResult): PrStatusResult {
   return rest;
 }
 
+const MAX_BROADCAST_TRACKED = 500;
+
+/** Content digest for main→renderer push deduplication; ignores volatile observedAt/revision and heavy metadata. */
+export function prStatusBroadcastDigest(result: PrStatusResult): string {
+  const stripped = withoutPrMetadata(result);
+  if (!stripped.ok) return `err:${stripped.reason}`;
+  const { observedAt: _observedAt, revision: _revision, ...stable } = stripped;
+  return JSON.stringify(stable);
+}
+
+/** Broadcasts metadata-stripped PR status updates to local windows only when visible status content changes. */
+export function createPrStatusBroadcastGate(
+  broadcast: (status: PrStatusResult) => void,
+): { observe: (query: PrStatusQuery, result: PrStatusResult) => void; reset: () => void } {
+  const lastDigest = new Map<string, string>();
+  return {
+    observe(query, result) {
+      if (!result.ok && result.reason !== 'not-found') return;
+      const key = prStatusKey(query);
+      const digest = prStatusBroadcastDigest(result);
+      if (lastDigest.get(key) === digest) return;
+      lastDigest.delete(key);
+      lastDigest.set(key, digest);
+      if (lastDigest.size > MAX_BROADCAST_TRACKED) {
+        lastDigest.delete(lastDigest.keys().next().value!);
+      }
+      broadcast(withoutPrMetadata(result));
+    },
+    reset() {
+      lastDigest.clear();
+    },
+  };
+}
+
 /** 单条 PR 的远端原始字段(github-client GithubPullRequest 的子集 + thread 统计)。 */
 export interface PrRemoteState {
   state: 'open' | 'closed';
@@ -91,6 +125,8 @@ export interface PrStatusServiceDeps {
   cacheTtlMs?: number;
   /** Event-covered PRs may reuse successful summaries longer; evaluated on every read. */
   eventCacheTtlMs?: (query: PrStatusQuery) => number | undefined;
+  /** Adaptive low-quota TTL extension for background reads; auto-recovers once quota resets. */
+  adaptiveCacheTtlMs?: (query: PrStatusQuery, scope: string) => number | undefined;
   /**
    * 过期后仍可直接回答的时长,默认 10 分钟:过期条目先原样返回,再后台向 GitHub 复核,
    * 下一次查询拿到新值。PR 状态变化以分钟计,但每次 60s 过期都让侧栏 / 手机等一次
@@ -214,8 +250,13 @@ export class PrStatusService {
     const cached = this.cache.get(key);
     const now = this.now();
     const eventTtl = cached?.result.ok ? this.deps.eventCacheTtlMs?.(q) : undefined;
-    const expiresAt = cached && eventTtl !== undefined
-      ? cached.fetchedAt + Math.max(this.ttlMs, eventTtl) : cached?.expiresAt;
+    const adaptiveTtl = cached?.result.ok ? this.deps.adaptiveCacheTtlMs?.(q, this.scope) : undefined;
+    const extendedTtl =
+      eventTtl !== undefined || adaptiveTtl !== undefined
+        ? Math.max(this.ttlMs, eventTtl ?? 0, adaptiveTtl ?? 0)
+        : undefined;
+    const expiresAt = cached && extendedTtl !== undefined
+      ? cached.fetchedAt + extendedTtl : cached?.expiresAt;
     if (!refresh && cached && expiresAt! > now) return cached.result;
     if (!refresh && !waitForFresh && cached && cached.staleUntil > now) {
       // Stale-while-revalidate: answer now, refresh once in the background.
@@ -231,8 +272,9 @@ export class PrStatusService {
     if (inflight) return inflight;
 
     const generation = this.generation;
+    const expectedScope = this.scope;
     const p = this.fetchOne(q)
-      .then((result) => {
+      .then(async (result) => {
         // 只缓存确定性结果(ok / not-found)。其余失败都不缓存:
         //  - gh-missing / gh-not-logged-in / no-token:用户装完 gh 或登录后,
         //    下一次查询应立即生效(token source 自带 30s 负缓存兜底);
@@ -240,6 +282,18 @@ export class PrStatusService {
         //    下次渲染触发查询时立即重试(review 反馈)。过期条目遇到这类失败时
         //    保留原值继续作为 stale 回答,直到 staleUntil。
         if (generation === this.generation && (result.ok || result.reason === 'not-found')) {
+          if (this.deps.scope) {
+            let currentScope: string | null = null;
+            try {
+              currentScope = await this.deps.scope();
+            } catch {
+              currentScope = null;
+            }
+            if (generation !== this.generation || currentScope !== expectedScope) {
+              if (generation === this.generation) this.invalidate();
+              return { ok: false, ...prStatusQuery(q), reason: 'no-token' } satisfies PrStatusResult;
+            }
+          }
           const fetchedAt = this.now();
           if (this.cache.size >= 200 && !this.cache.has(key))
             this.cache.delete(this.cache.keys().next().value!);
@@ -319,9 +373,11 @@ export class PrStatusService {
         return { ok: false, ...base, reason: gitlab ? 'glab-not-logged-in' : 'gh-not-logged-in' };
       }
       if (status === 404) return { ok: false, ...base, reason: 'not-found' };
+      const code = (err as { code?: unknown })?.code;
       log.warn('fetch pr status failed', {
         key: `${q.owner}/${q.repo}#${q.prNumber}`,
         status: typeof status === 'number' ? status : undefined,
+        ...(typeof code === 'string' ? { code } : {}),
       });
       return { ok: false, ...base, reason: 'fetch-failed' };
     }

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from '@/lib/toast';
 import type { SubscriptionPoolView } from '../../../../shared/subscriptionAccounts';
 
+const confirmPlacement = vi.hoisted(() => vi.fn<(options: unknown) => Promise<boolean>>(async () => true));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     i18n: { language: 'en', resolvedLanguage: 'en' },
@@ -15,10 +16,12 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
-  useConfirmDialog: () => ({ confirm: vi.fn(async () => true) }),
+  useConfirmDialog: () => ({ confirm: confirmPlacement }),
 }));
 
 import { SubscriptionAccountsSection, SubscriptionPoolViewCache } from '../SubscriptionAccountsSection';
+import { ExistingSubscriptionLogins } from '../ExistingSubscriptionLogins';
+import { MergeProviderButton } from '../SubscriptionPlacement';
 
 /* 测试价值：多账号设置页曾给每个账号另画一条周用量条，又在底部重复原用量卡，且漏掉
  * 5 小时与分模型周窗口。经真实组件验证：默认账号行放原用量卡，其他账号用同一张卡显示
@@ -27,7 +30,7 @@ const resetsAt = Date.now() / 1000 + 3600;
 const view: SubscriptionPoolView = {
   providerId: 'anthropic',
   configured: true,
-  strategy: 'least',
+  strategy: 'expiring',
   accounts: [
     { id: 'default', paused: false, limit: 4, weight: 1, directory: '/home/.claude', status: 'ready', running: 0, identity: 'first@example.test',
       plan: 'max', planTier: 'max_20x', usage: { claude: { source: 'oauth-endpoint', updatedAt: Date.now(),
@@ -56,6 +59,7 @@ const view: SubscriptionPoolView = {
 };
 
 beforeEach(() => {
+  confirmPlacement.mockClear();
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     subscriptionAccounts: {
       command: vi.fn(async () => view),
@@ -64,6 +68,113 @@ beforeEach(() => {
     // Providers an account may move to (2026-11-13); none of the same kind unless a test adds them.
     maker: { listProviders: vi.fn(async () => ({ providers: [] })) },
   };
+});
+
+// #12999, unit: leave settings and then the review dialog open past the host's ten-minute
+// receipt lifetime. Other account tests never let a reviewed login change before confirmation.
+it('reviews the current login again after idle time, without background scans or attaching an old receipt', async () => {
+  vi.useFakeTimers();
+  try {
+    const result = (identity: string) => ({ computer: 'Fixture', candidates: [
+      { identity, directory: '/fixture/.claude-person', receipt: identity },
+    ] });
+    const api = vi.fn().mockResolvedValueOnce(result('initial'))
+      .mockResolvedValueOnce(result('on-open')).mockResolvedValueOnce(result('on-confirm'))
+      .mockResolvedValue({ computer: 'Fixture', candidates: [] });
+    window.electronAPI.subscriptionAccounts.existingLogins = api;
+    await act(async () => { render(<ExistingSubscriptionLogins provider="anthropic" disabled={false}>Add</ExistingSubscriptionLogins>); });
+    expect(screen.getByRole('button', { name: 'subscriptionAccounts.existing.found' })).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(11 * 60_000); });
+    expect(screen.queryByRole('button', { name: 'subscriptionAccounts.existing.found' })).toBeNull();
+    expect(api).toHaveBeenCalledTimes(1);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'subscriptionAccounts.existing.menu' }), { button: 0, pointerType: 'mouse' });
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'subscriptionAccounts.existing.connect' })); });
+    expect(screen.getByText('on-open')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(11 * 60_000); });
+    expect(screen.queryByRole('button', { name: 'subscriptionAccounts.existing.attach' })).toBeNull();
+    expect(api).toHaveBeenCalledTimes(2);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.existing.connect' })); });
+    expect(screen.getByText('on-confirm')).toBeTruthy();
+    expect(api.mock.calls.map(([request]) => request.action)).toEqual(Array(3).fill('discover-logins'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.existing.attach' })); });
+    expect(api).toHaveBeenLastCalledWith({ action: 'attach-login', providerId: 'anthropic', receipt: 'on-confirm' });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// A folder picked outside the discovery roots can only be verified again through the picker.
+it('keeps an expired custom folder selection on the explicit picker path', async () => {
+  vi.useFakeTimers();
+  try {
+    const api = vi.fn().mockResolvedValueOnce({ computer: 'Fixture', candidates: [] })
+      .mockResolvedValueOnce({ computer: 'Fixture', candidates: [{ identity: 'custom', directory: '/custom', receipt: 'old' }] })
+      .mockResolvedValueOnce({ computer: 'Fixture', canceled: true, candidates: [] });
+    window.electronAPI.subscriptionAccounts.existingLogins = api;
+    await act(async () => { render(<ExistingSubscriptionLogins provider="openai" disabled={false}>Add</ExistingSubscriptionLogins>); });
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'subscriptionAccounts.existing.menu' }), { button: 0, pointerType: 'mouse' });
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem')); });
+    expect(screen.getByText('custom')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(11 * 60_000); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.existing.choose' })); });
+    expect(api.mock.calls.map(([request]) => request.action)).toEqual(['discover-logins', 'pick-login', 'pick-login']);
+    expect(screen.queryByRole('button', { name: 'subscriptionAccounts.existing.attach' })).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+// Unit through the real placement controls with IPC fixtures. The mixed
+// command must follow source → destination and retain the existing login and
+// whole-subscription commands, which have different persistence effects.
+it.each(['subscription', 'apiKey'] as const)('merges from %s through the existing provider menu', async kind => {
+  const fromSubscription = kind === 'subscription';
+  const subscriptionId = fromSubscription ? 'openai-sub-12345678' : 'openai';
+  const source = fromSubscription ? subscriptionId : 'fixture-key';
+  const target = fromSubscription ? 'fixture-key' : 'openai';
+  const accounts = [
+    { id: subscriptionId, name: 'Fixture subscription', kind: 'subscription', connected: true },
+    { id: 'fixture-key', name: 'Fixture key', kind: 'apiKey', connected: true },
+  ].map(account => ({ ...account, kind: account.kind as 'subscription' | 'apiKey', included: account.id === source,
+    ...(account.id === target ? { mergeTarget: true as const } : {}) }));
+  const command = vi.fn(async () => ({ ok: true }));
+  Object.assign(window.electronAPI, { providerGroup: { command } });
+  render(fromSubscription
+    ? <SubscriptionAccountsSection providerId={source} openAiAccounts={accounts} />
+    : <MergeProviderButton kind={null} providerId={source} providerName="Fixture key" openAiAccounts={accounts} />);
+  if (fromSubscription) {
+    fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.add' }));
+    await waitFor(() => expect(window.electronAPI.subscriptionAccounts.command).toHaveBeenCalledWith({
+      action: 'add', providerId: source, loginKey: expect.any(String),
+    }));
+    expect(command).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'subscriptionAccounts.add' })).toBeTruthy());
+  } else {
+    expect(screen.queryByRole('button', { name: 'subscriptionAccounts.add' })).toBeNull();
+  }
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'subscriptionAccounts.placement.mergeInto' }),
+    { button: 0, ctrlKey: false, pointerType: 'mouse' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: fromSubscription ? 'Fixture key' : 'Fixture subscription' }));
+  await waitFor(() => expect(command).toHaveBeenCalledWith({
+    action: 'account-merge', providerId: source, targetProviderId: target,
+  }));
+  expect(confirmPlacement).toHaveBeenCalledWith(expect.objectContaining({ description: 'openAiAccountGroup.mergeDescription' }));
+  expect(window.electronAPI.subscriptionAccounts.command).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'merge' }));
+});
+
+it('continues to use the subscription placement command for same-kind providers', async () => {
+  vi.mocked(window.electronAPI.maker.listProviders).mockResolvedValue({ providers: [
+    { id: 'openai', name: 'Existing subscription', connected: true },
+  ] } as Awaited<ReturnType<typeof window.electronAPI.maker.listProviders>>);
+  render(<SubscriptionAccountsSection providerId="other-openai" kind="openai" />);
+  fireEvent.pointerDown(await screen.findByRole('button', { name: 'subscriptionAccounts.placement.mergeInto' }),
+    { button: 0, ctrlKey: false, pointerType: 'mouse' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Existing subscription' }));
+  await waitFor(() => expect(window.electronAPI.subscriptionAccounts.command).toHaveBeenCalledWith({
+    action: 'merge', providerId: 'other-openai', target: 'openai',
+  }));
+  expect(confirmPlacement).toHaveBeenCalledWith(expect.objectContaining({ description: 'subscriptionAccounts.placement.mergeDescription' }));
 });
 
 describe('SubscriptionAccountsSection usage', () => {
@@ -78,6 +189,27 @@ describe('SubscriptionAccountsSection usage', () => {
       action: 'remove', providerId: 'anthropic', accountId: 'default',
     }));
   });
+  // Unit: a target's own API Key is a permanent part of this source. Only
+  // another, merged connection should offer the remove command.
+  it('keeps testing but hides the impossible remove action on the target Key', async () => {
+    const providerId = 'target-key-fixture';
+    const apiAccount = (id: string, connectionId: string) => ({
+      ...view.accounts[0]!, id, identity: connectionId, usage: undefined,
+      apiKey: { connectionId, checks: [{ agent: 'pi' as const }] },
+    });
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
+      providerId, configured: true, strategy: 'expiring',
+      accounts: [apiAccount('key-target', providerId), apiAccount('key-member', 'other-key-fixture')],
+    });
+    render(<SubscriptionAccountsSection providerId={providerId} kind="openai" />);
+    const [own, merged] = await screen.findAllByTestId('subscription-account');
+    expect(within(own).getByRole('button', { name: /settings.providers.custom.test.button/ })).toBeTruthy();
+    expect(within(own).queryByRole('button', { name: 'providerGroup.member.moreAria' })).toBeNull();
+    fireEvent.pointerDown(within(merged).getByRole('button', { name: 'providerGroup.member.moreAria' }),
+      { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    expect(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.remove' })).toBeTruthy();
+  });
+
   // Unit regression: the real second-account row must expose the shared reset UI
   // and send its own scope/key. Previously only the supplied default card had it.
   it.each([true, false])('shows and saves second-account reset preferences with quota present=%s', async hasQuota => {
@@ -128,6 +260,66 @@ describe('SubscriptionAccountsSection usage', () => {
     await screen.findByText('Expires in about 30 days');
     expect(command).toHaveBeenCalledWith({ action: 'login', providerId: 'anthropic', accountId: 'cindy-owner-second', loginKey: expect.any(String) });
     expect(within(rows[0]).getByText('Expires in about 18 days')).toBeTruthy();
+  });
+  // Unit, 2026-11-24 Claude long-lived token (subscription-account-pools.md「Claude 长期令牌」):
+  // a row on a token must report the token, stop nagging about the ordinary sign-in it no longer
+  // depends on, and send its own commands. The expiry cases above only know the ordinary sign-in.
+  // Minimal failing input: an account view with `longLivedToken`.
+  it('reports the token instead of the ordinary sign-in, and creates or stops it from the account menu', async () => {
+    const soon = new Date(Date.now() + 3 * 86_400_000).toISOString();
+    let current: SubscriptionPoolView = { ...view, accounts: [
+      { ...view.accounts[0], loginExpiresAt: soon },
+      { ...view.accounts[1], loginExpiresAt: soon, longLivedToken: {
+        expiresAt: new Date(Date.now() + 300 * 86_400_000).toISOString(), storedLogin: true, verification: 'pending',
+      } },
+    ] };
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async request => {
+      if (request.action === 'token-login') current = { ...current, accounts: current.accounts.map(account =>
+        account.id === request.accountId ? { ...account, longLivedToken: { storedLogin: true, verification: 'pending' as const } } : account) };
+      if (request.action === 'token-remove') current = { ...current, accounts: current.accounts.map(account =>
+        account.id === request.accountId ? { ...account, longLivedToken: undefined } : account) };
+      return current;
+    });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const rows = () => screen.getAllByTestId('subscription-account');
+    await screen.findAllByTestId('subscription-account');
+    const openMenu = (row: HTMLElement) => fireEvent.pointerDown(
+      within(row).getByRole('button', { name: 'providerGroup.member.moreAria' }), { button: 0, ctrlKey: false, pointerType: 'mouse' });
+
+    expect(within(rows()[1]).getByText('subscriptionAccounts.longLivedToken.tag')).toBeTruthy();
+    expect(within(rows()[1]).getByTestId('subscription-account-token-expiry').textContent)
+      .toBe('subscriptionAccounts.longLivedToken.expiresInDays');
+    // Both ordinary sign-ins end in three days; only the row without a token still asks to renew.
+    expect(within(rows()[1]).queryByRole('button', { name: 'Sign in again to second@example.test' })).toBeNull();
+    expect(within(rows()[0]).getByRole('button', { name: 'Sign in again to first@example.test' })).toBeTruthy();
+
+    openMenu(rows()[0]);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.longLivedToken.use' }));
+    await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'token-login', providerId: 'anthropic', accountId: 'default', loginKey: expect.any(String),
+    }));
+    await waitFor(() => expect(within(rows()[0]).getByText('subscriptionAccounts.longLivedToken.active')).toBeTruthy());
+
+    openMenu(rows()[1]);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.longLivedToken.remove' }));
+    await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'token-remove', providerId: 'anthropic', accountId: 'cindy-owner-second',
+    }));
+    await waitFor(() => expect(within(rows()[1]).queryByText('subscriptionAccounts.longLivedToken.tag')).toBeNull());
+  });
+  it('says so when a token belongs to another account, without offering a sign-in that would not fix it', async () => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, accounts: [view.accounts[0], {
+      ...view.accounts[1], status: 'signed-out', usage: undefined, authIssue: 'claude-token-account-mismatch',
+      longLivedToken: { storedLogin: true, verification: 'mismatch' },
+    }] });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const row = (await screen.findAllByTestId('subscription-account'))[1];
+    expect(within(row).getByText('subscriptionAccounts.longLivedToken.mismatchStatus')).toBeTruthy();
+    expect(within(row).queryByRole('button', { name: 'Sign in again to second@example.test' })).toBeNull();
+    fireEvent.pointerDown(within(row).getByRole('button', { name: 'providerGroup.member.moreAria' }),
+      { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    expect(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.longLivedToken.renew' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'subscriptionAccounts.longLivedToken.remove' })).toBeTruthy();
   });
   it('keeps a past estimate connected, disables renewal while busy, and tolerates older hosts', async () => {
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
@@ -207,7 +399,8 @@ describe('SubscriptionAccountsSection usage', () => {
     await screen.findByRole('alert');
     expect(screen.getByText('This computer')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
-    await screen.findByText('first@example.test');
+    // 读到之后账号区收成一行：名字在那一行和收起的账号列表里各有一处。
+    await screen.findAllByText('first@example.test');
     expect(screen.queryByRole('alert')).toBeNull();
     expect(command.mock.calls.every(([request]) => request.action === 'read')).toBe(true);
     expect(screen.getAllByTestId('subscription-account')).toHaveLength(2);
@@ -296,21 +489,23 @@ describe('SubscriptionAccountsSection usage', () => {
     render(<SubscriptionAccountsSection providerId="anthropic" />);
     expect(await screen.findAllByTestId('subscription-account')).toHaveLength(accounts.length);
   });
-  it('shows the strategy only when there are accounts to choose between', async () => {
+  // 2026-11-24：几个账号是一条自动路由，选法只在「智能路由」里改；账号区只说明现状。
+  it('states the strategy only when there are accounts to choose between, without a second control', async () => {
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
       ...view,
-      strategy: 'weight',
+      strategy: 'weighted',
       accounts: [view.accounts[0]],
     });
     const { unmount } = render(<SubscriptionAccountsSection providerId="anthropic" />);
     expect(await screen.findAllByTestId('subscription-account')).toHaveLength(1);
-    expect(screen.queryByRole('radiogroup')).toBeNull();
+    expect(screen.queryByTestId('route-strategy-note')).toBeNull();
     expect(screen.queryByLabelText('providerGroup.member.weightAria')).toBeNull();
     expect(screen.getByLabelText('providerGroup.member.limitAria')).toBeTruthy();
     unmount();
-    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, strategy: 'weight' });
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, strategy: 'weighted' });
     render(<SubscriptionAccountsSection providerId="anthropic" />);
-    expect(await screen.findByRole('radiogroup', { name: 'subscriptionAccounts.strategy' })).toBeTruthy();
+    expect((await screen.findByTestId('route-strategy-note')).textContent).toContain('modelGroups.auto.assignedBy');
+    expect(screen.queryByRole('radiogroup')).toBeNull();
     expect(screen.getAllByLabelText('providerGroup.member.weightAria')).toHaveLength(2);
     // 2026-11-11: an unset (legacy default 4) limit reads as unlimited; a chosen limit shows its number.
     const [first, second] = screen.getAllByTestId('subscription-account');
@@ -344,7 +539,7 @@ describe('SubscriptionAccountsSection for plugin engines', () => {
   const pluginView = (methods: NonNullable<SubscriptionPoolView['pluginEngine']>['methods']): SubscriptionPoolView => ({
     providerId,
     configured: true,
-    strategy: 'least',
+    strategy: 'expiring',
     pluginEngine: { engineKey: 'zcode-plugin:zcode', methods },
     accounts: [{
       id: 'default', paused: false, limit: 4, weight: 1, directory: '', status: 'ready', running: 0,
@@ -360,7 +555,7 @@ describe('SubscriptionAccountsSection for plugin engines', () => {
     const row = await screen.findByTestId('subscription-account');
     expect(within(row).getByText('me@z.ai')).toBeTruthy();
     expect(within(row).getByText('GLM Coding Pro')).toBeTruthy();
-    expect(within(row).getByText('GLM · 5h')).toBeTruthy();
+    expect(within(row).getByText('GLM · quotaCard.fiveHourLabel')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.add' }));
     await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({
       action: 'add', providerId, methodId: 'zai',

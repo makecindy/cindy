@@ -602,7 +602,7 @@ describe('isNewSessionRuntimePending', () => {
     // 目标模式是独立创建入口:表单禁用 + 函数内兜底。
     const goalStart = source.indexOf('const createGoalSession = useCallback(');
     expect(source.slice(goalStart, goalStart + 400)).toContain('if (runtimePendingRef.current) return;');
-    expect(source).toContain('disabled={worktreeCreateBlocked || runtimePending || pluginEngineWorktreeUnsupported}');
+    expect(source).toContain('disabled={worktreeCreateBlocked || runtimePending}');
   });
 
   it('aborts creation instead of sending an empty model after the submit-time catalog check', () => {
@@ -3000,4 +3000,95 @@ describe('页面 Auto 校准和提交保留 Cindy 来源身份', () => {
       expect(result).toMatchObject({ model: auto, providerId: 'pool-new' });
     },
   );
+});
+
+describe('plugin engine new-session helpers', () => {
+  it('synthesizes acp session metadata from create-session fallback, summarizes draft, and resolves acp skills', async () => {
+    const draft = applyPluginEnginePick(
+      newSessionDraft({
+        agentKind: 'codex',
+        model: 'gpt-5.4',
+        providerId: 'openai',
+        effort: 'medium',
+        fastMode: true,
+        firstMessage: '/skill:review check',
+      }),
+      {
+        providerId: 'acp-plugin:dsh:dsh',
+        model: 'deepseek-v4',
+        effort: 'high',
+        permissionMode: 'default',
+        agentDeviceId: 'studio',
+      },
+    );
+    const created = sessionFromCreateResult({ sessionId: 'sess-acp' }, draft);
+    expect(created).toMatchObject({
+      id: 'sess-acp',
+      agentKind: 'acp',
+      providerId: 'acp-plugin:dsh:dsh',
+      agentDeviceId: 'studio',
+      model: 'deepseek-v4',
+      effort: 'high',
+      permissionMode: 'default',
+      fastMode: false,
+    });
+
+    const summary = summarizeNewSessionDraft(draft);
+    expect(summary.agentLabel).not.toBe('Claude');
+    expect(summary.agentLabel).not.toBe('Codex');
+    expect(summary.runtimeLabel).toContain('deepseek-v4');
+    expect(summary.runtimeLabel).not.toContain('Fast');
+
+    const maker = {
+      listAgentSkills: vi.fn().mockResolvedValue({
+        success: true,
+        skills: [{ kind: 'agent-skill', name: 'review', runtimeCommandName: 'review' }],
+      }),
+    };
+    const localDraft = applyPluginEnginePick(
+      {
+        ...draft,
+        workingDir: '/repo',
+        firstMessage: '/skill:review check',
+        selectedSkill: {
+          name: 'review',
+          invocation: 'skill:review',
+          context: buildComposerPaletteCacheKey('dev-a', 'pi', '/repo'),
+        },
+      },
+      {
+        providerId: 'acp-plugin:dsh:dsh',
+        model: 'deepseek-v4',
+        effort: 'high',
+        permissionMode: 'default',
+      },
+    );
+    const resolvedLocal = await resolveNewSessionSkillDraft(localDraft, 'dev-a', maker);
+    expect(maker.listAgentSkills).toHaveBeenCalledWith('acp', { workingDir: '/repo' });
+    expect(resolvedLocal.firstMessage).toBe('/review check');
+
+    maker.listAgentSkills.mockClear();
+    const remoteDraft = applyPluginEnginePick(
+      {
+        ...draft,
+        workingDir: '/repo',
+        firstMessage: '/skill:review check',
+        selectedSkill: {
+          name: 'review',
+          invocation: 'skill:review',
+          context: buildComposerPaletteCacheKey('dev-a', 'pi', '/repo'),
+        },
+      },
+      {
+        providerId: 'acp-plugin:dsh:dsh',
+        model: 'deepseek-v4',
+        effort: 'high',
+        permissionMode: 'default',
+        agentDeviceId: 'studio',
+      },
+    );
+    const resolvedRemote = await resolveNewSessionSkillDraft(remoteDraft, 'dev-a', maker);
+    expect(maker.listAgentSkills).not.toHaveBeenCalled();
+    expect(resolvedRemote.firstMessage).toBe('/review check');
+  });
 });

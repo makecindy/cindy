@@ -114,3 +114,50 @@ UDP port as well」（访客经 UDP 越权被断开）；`packages/agent-net/src
 （同一中转复用在途请求，成功结果保留 10 分钟，失败后 1 分钟内沿用已有结果）。旧安装包的原生库没有这项，照旧全走 WebSocket。中转协议没变，不递增 `RELAY_VERSION`。
 回归：`native.integration.test.ts`「carries sessions on the real native engine, relays them over UDP, ...」（1 MB 结果经 WebSocket 的不到
 256 KB；不下发凭据时失败）。
+
+**电脑端改用原生引擎、手机原生库补上「只通登记」的退回（2026-11-23）。** Desktop 的 Agent-Net worker 改跑原生引擎前核对发现，
+`udp_paths.rs` 只有登记、确认与 4 秒没确认的退回，没有上面三条「登记通了数据不通」的判断，也不报走 UDP 时的往返。现在同一套判断
+在原生库里实现（时间、门槛与冷却档位与 `relayUdp.ts` 相同）：数据静默与发出不被确认由引擎自己看，请求超时由 JS 经 `relayStalled`
+命令报给引擎；`poll` 多报 `relayRoute`（`via`、登记往返 `rttMs`、停用时的 `udpSuspension`）和引擎 UDP 套接字的收发字节
+`udpTraffic`，`NativeTransport.relayRoute()` 与 Desktop 的远程连接页、日志照旧读。这些随引擎能力位 `relay-udp-health` 出现：
+旧安装包的原生库不报它，JS 不发 `relayStalled`，路由只按 `relayUdp` 报走哪条路、不报往返，和以前一样。包格式、中转与自建中转都不变。
+回归：`udp_paths.rs` 的 `tests`（数据静默与冷却递增、单个纯确认不算、60 秒内两次请求超时、中转连接上发出的数据不被确认、确认停了不再报往返），
+`nativeTransport.test.ts`「reports the relay route, request timeouts and UDP traffic …」（有、无这项能力的引擎各一遍）。
+
+**第 1 跳满尺寸双向 UDP 探针与单对端隔离（2026-11-25，`udp-relay-probe-v1`）。**
+真机日志暴露：只靠端到端重传（`unacked-sends`）和静默（`data-silence`）判定本机到中转的 UDP 健康度，会把单台远端对端掉线/跨网抖动
+误判成本机第 1 跳故障，连坐同机其他经中转的健康对端，且间歇轮询场景下每 5 秒窗口清空 `healthySince` 会把退避档位一路锁进 1800 秒 WS。
+- **增量能力与包格式（100% 向后兼容）**：中继在 `/api/agent-net/info` 的 `features` 声明 `udp-relay-probe-v1`，并在 WebSocket `hello.udp`
+  附带可选字段 `probe: true`；旧中继省略它，旧客户端忽略它，新旧组合无需发布顺序。新增类型字节 `0xE5`（`UDP_RELAY_PROBE`）和 `0xE6`
+  （`UDP_RELAY_PROBE_ACK`），仍在 `111` 段内：
+  - 探测 `0xE5`：`[类型 1][会话号 8][计数器 8][MAC 16][填充至 1350 字节]`，MAC 覆盖包头与填充；
+  - 确认 `0xE6`：`[类型 1][计数器 8][MAC 16][填充至探针长度 - 8 字节]`（1342 字节），MAC 覆盖包头、会话号与填充。
+  - 安全与无放大：中继仅在来源地址已被登记凭证认定、登记仍在 30 秒有效期内、计数器严格递增、验签通过且有 UDP 令牌桶余量时回复，
+    确认严格短于请求（放大系数 < 1），同时双向验证 ~1350B 业务包长能否穿过 VPN 透明代理与路径 MTU。
+- **设备侧状态机（Desktop/Host `relayUdp.ts`、Mobile 原生 `udp_paths.rs`）**：
+  - 支持 `probe: true` 时：地址认定后须先通过一次 1350B 探针才启用中转 UDP；运行中出现 `data-silence` / `request-timeouts` / `unacked-sends`
+    时先发 1350B 探针复核第 1 跳（中继秒回说明故障在对端、不熔断；2.5 秒超时才实锤 `probe-failed` 退回 WebSocket）；停用期间按
+    15s → 30s → 60s → 120s 在 WebSocket 保护下主动发单包探针，通了立即切回 UDP；换网（`networkChanged` / `migrate`）立即清冷却并重探。
+  - 连接未升级探针的旧中继时：按对端连接分别统计中转重传（`RelaySendCounters.sampleDetailed`），同期只要存在任意一台经中转对端正常确认字节
+    且无高重传，绝不熔断全局中转 UDP；全员有确认推进的偶发重传须连续两个窗口持续才触发；纯空闲窗口不再重置 `healthySince`，累计跨过 60 秒的
+    多笔双向确认即可清零退避档位。
+- **自建与官方中转**：自建中转 `packages/device-link-relay/src/version.ts` 递增到 `0.5.7`；官方中转在独立服务端仓同步 `packages/agent-net-relay`
+  前，新客户端自动走旧中继兜底逻辑（已消除单对端连坐与 30 分钟锁死），服务端同步后自动启用 `udp-relay-probe-v1`。
+回归：`packages/agent-net-relay/src/__tests__/relay.integration.test.ts`「answers full-size UDP probes only for proven addresses with non-amplifying acks and rejects replays or tampering」、
+`packages/agent-net/src/__tests__/relayUdp.test.ts`（满尺寸探针准入/复核/换网恢复、旧中继单对端隔离与间歇流量清零）与 `packages/agent-net-native/src/udp_paths.rs` 单测。
+
+**告诉对方自己那一段（2026-11-27）。** 经中转时两台设备各自到中转走 UDP 还是 WebSocket，互不相同也正常；本机原来只知道自己那段，
+拓扑图却把它写在通往对方的线上，遇到一台走 WS、另一台走 UDP 时，两台的图对不上。现在两端在每条连接自己的控制流
+（类型字节 `C`，每行一个 JSON，与 `candidates`、`session`、`pathPreference` 同一条流）上各说一行 `{"relayVia":"udp"|"websocket"}`：
+控制流第一个字节写出后说一次，之后每轮重验（10 秒）发现变了再说（`pathRouter.ts` 的 `announceRelayVia`，取值与 `relayRoute().via`
+同一个判断）。收到的一端只认这两个值，记在 `pathMetrics().peerRelayVia`，经 worker 状态与 `peerRoutes` 进 IPC 的
+`agentNetRoutes[].peerRelayVia`，拓扑在通往它的线上写这一段、卡片「连接方式」写「本机 X · 对方 Y」。
+- **兼容**：旧节点只读控制流里认识的字段，这一行整行忽略（WASM 与原生两种传输都是 `JSON.parse` 后按字段取，不认识的流类型才会断开，
+  这里不开新流）；旧节点也从不说，新节点那条线上只写延迟，不拿本机那段冒充。新旧任意组合不需要发布顺序。只有带 `path-routing` 的引擎
+  建选路模块，没有它的旧原生库两边都不说也不读。
+- **中转不经手**：内容在两台设备之间的加密连接里，中转只转发密文，官方与自建中转都不用改，不递增 `RELAY_VERSION`。
+- **频率**：每条连接开头一行，之后只在本机中转走法变了才多一行（UDP 不通退回、恢复切回），字段 `relayVia` 每条 JSON 行占 19（UDP）或 25（WebSocket）字节，复用既有重验定时器。
+回归：`nativeTransport.test.ts`「tells the peer how this side reaches the relay, again when that changes, and keeps what the peer says …」、
+`workerSocket.test.ts`「passes the peer relay leg from the worker status to peerRoutes and announces the change」、
+`peerLinksPush.test.ts`「对方到中转那一段的走法变化也广播」、`topologyModel.test.ts`「按实际链路协议与路径推导对端底层传输协议…」与
+`pnpm ui:check --page remote-connection-v2`。

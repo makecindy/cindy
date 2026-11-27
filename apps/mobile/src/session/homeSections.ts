@@ -1,4 +1,7 @@
 import { isTeammateOwnInboxTask, taskInboxSection, taskInboxSignalsFromRank, taskSnoozeUntil, teammateInboxSection, type TaskInboxState } from '@cindy/maker-shared/live-task-priority';
+import { getSessionArchivedActivityAt } from '@cindy/maker-shared/session-activity';
+import { getMobileOfflineInboxIntent } from './offlineInboxIntents';
+import { orcaLeadSessionKey } from '@cindy/maker-shared/orca-team';
 import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
 import type { HomePinnedSort } from './homeDisplaySettings';
 import { i18n } from '@/i18n';
@@ -28,6 +31,7 @@ import {
 import {
   moveVisibleProjectOrder,
   normalizeManualProjectOrder,
+  reorderVisibleProjectByDropIndex,
   type HomeProjectOrder,
 } from './homeProjectOrder';
 import {
@@ -71,6 +75,8 @@ export interface InboxTeammateEntry {
   snooze: TaskInboxState | null;
   /** Latest activity (host time), ordering teammate rows among themselves. */
   activityAt: number;
+  /** True when an offline snooze intent is queued and waiting for the host to reconnect. */
+  pendingSync?: boolean;
 }
 
 /** SectionList 的一个分区。title 为 null 的分区不渲染表头。 */
@@ -135,12 +141,16 @@ export function buildHomeSections(
     for (const project of home.projects) bucket(project.deviceId ?? '').projects.push(project);
     for (const chat of home.chats) bucket(homeRowDeviceKey(chat)).chats.push(chat);
     const labels = new Map(home.deviceFilters.map(device => [device.deviceId, device.label]));
-    for (const id of new Set([...labels.keys(), ...devices.keys()])) {
-      if (id === null) continue;
+    const deviceIds = [...new Set([...labels.keys(), ...devices.keys()])]
+      .filter((id): id is string => id !== null && devices.has(id));
+    const hideDeviceHeading = home.selectedDeviceId !== null || deviceIds.length === 1;
+    for (const id of deviceIds) {
       const contents = devices.get(id);
       if (!contents) continue;
       const key = 'device:' + id;
-      const title = labels.get(id) ?? contents.projects[0]?.deviceName ?? i18n.t('devices.presentation.home.unknownComputer');
+      const title = hideDeviceHeading
+        ? null
+        : labels.get(id) ?? contents.projects[0]?.deviceName ?? i18n.t('devices.presentation.home.unknownComputer');
       const rows = buildMainRows({ ...home, ...contents }, groupByProject, options).map(row => {
         if (row.kind !== 'dialogue' && row.kind !== 'automation') return row;
         const scopedKey = key + ':' + row.key;
@@ -160,16 +170,34 @@ function pinnedOrderKey(item: RemoteSessionListItem): string {
   return item.session.id + '\0' + (item.session.pinnedAt ?? '');
 }
 
+function retainActivePinnedOrder(
+  order: readonly string[],
+  current: ReadonlyMap<string, string>,
+): string[] {
+  // Remove superseded generations from the visible scope. Other devices retain their slots.
+  return order.filter(key => {
+    const [taskId] = key.split('\0');
+    return !current.has(taskId) || current.get(taskId) === key;
+  });
+}
+
 export function movePinnedItem(order: readonly string[], visible: readonly RemoteSessionListItem[], id: string, direction: -1 | 1) {
   const current = new Map(visible.map(item => [item.session.id, pinnedOrderKey(item)]));
   const source = current.get(id);
   if (!source) return null;
-  // Remove superseded generations from the visible scope. Other devices retain their slots.
-  const retained = order.filter(key => {
-    const [taskId] = key.split('\0');
-    return !current.has(taskId) || current.get(taskId) === key;
-  });
-  return moveVisibleProjectOrder(retained, [...current.values()], source, direction);
+  return moveVisibleProjectOrder(retainActivePinnedOrder(order, current), [...current.values()], source, direction);
+}
+
+export function reorderPinnedItemByDropIndex(
+  order: readonly string[],
+  visible: readonly RemoteSessionListItem[],
+  id: string,
+  dropIndex: number,
+): string[] | null {
+  const current = new Map(visible.map(item => [item.session.id, pinnedOrderKey(item)]));
+  const source = current.get(id);
+  if (!source) return null;
+  return reorderVisibleProjectByDropIndex(retainActivePinnedOrder(order, current), [...current.values()], source, dropIndex);
 }
 
 export function orderedPinnedItems(items: readonly RemoteSessionListItem[], sort: HomePinnedSort, keys: readonly string[]) {
@@ -642,14 +670,17 @@ function latestActivityAt(items: readonly RemoteSessionListItem[]): string {
 
 
 /** Wake time of a snoozed inbox row, as its label. */
-function snoozeLabel(until: number): string {
-  return Number.isFinite(until) ? new Date(until).toLocaleString(i18n.language) : i18n.t('devices.list.menu.inbox.indefinite');
+function snoozeLabel(until: number, pendingSync = false): string {
+  const base = Number.isFinite(until) ? new Date(until).toLocaleString(i18n.language) : i18n.t('devices.list.menu.inbox.indefinite');
+  return pendingSync ? `${base} · ${i18n.t('devices.list.menu.inbox.pendingSync')}` : base;
 }
 
 /**
  * Inbox never uses unread as a settled marker. Automation runs are individually actionable.
  * A teammate's main conversation is one row placed by whose turn it is and left out while idle
  * and read (2026-11-20 user decision); teammate rows lead their section, most recent first.
+ * Tasks within a section follow time alone, newest activity first: unread or waiting decides the
+ * section, never the order inside it (2026-11-25 user decision). Snoozed rows wake soonest first.
  */
 export function buildInboxHomeSections(
   home: MobileHomePresentation,
@@ -657,6 +688,7 @@ export function buildInboxHomeSections(
   priorityContext: HomeListPriorityContext,
   nowMs: number,
   teammates: readonly InboxTeammateEntry[] = [],
+  extraFollowingSessionKeys?: ReadonlySet<string>,
 ): HomeSection[] {
   const original = buildHomeSections(home, false, true, {
     groupDialogue: false, groupCindyMake: false, sortBy: 'priority', priorityContext,
@@ -677,16 +709,35 @@ export function buildInboxHomeSections(
       if (row.kind !== 'session') continue;
       for (const item of row.item.automationGroup?.items ?? [row.item]) {
         const task = item.session;
+        const canonicalDeviceId = (task as RemoteSession).canonicalDeviceId;
         const group = taskInboxSection(task, {
           ...taskInboxSignalsFromRank(sessionPriorityRank(task.id, ctx), naturalPriorityRankForId(task.id, ctx)),
-          following: item.scheduleInfo?.hasActiveFollowUp === true,
+          following: item.scheduleInfo?.hasActiveFollowUp === true
+            || extraFollowingSessionKeys?.has(orcaLeadSessionKey(task.id, task.deviceLinkDeviceId)) === true
+            || (!!canonicalDeviceId
+              && extraFollowingSessionKeys?.has(orcaLeadSessionKey(task.id, canonicalDeviceId)) === true),
           // A teammate's own conversations and its project's tasks are listed only while they need
           // the user or run (2026-11-18); a task it opened elsewhere is the user's work (2026-11-22).
           teammate: isTeammateOwnInboxTask(task as RemoteSession),
         }, nowMs);
         if (!group) continue;
-        const sourceLabel = group === 'snoozed' ? snoozeLabel(taskSnoozeUntil(task)) : row.sourceLabel;
-        groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item,
+        const offlineIntent = getMobileOfflineInboxIntent(
+          (task as RemoteSession).canonicalDeviceId ?? task.deviceLinkDeviceId,
+          task.id,
+        );
+        const sourceLabel =
+          group === 'snoozed'
+            ? snoozeLabel(taskSnoozeUntil(task), offlineIntent?.kind === 'snooze')
+            : group === 'archived' && offlineIntent?.kind === 'complete'
+              ? i18n.t('devices.list.menu.inbox.pendingArchiveSync')
+              : row.sourceLabel;
+        const displayActivityAt = group === 'archived'
+          ? (getSessionArchivedActivityAt(task) ?? item.lastActivityAt)
+          : item.lastActivityAt;
+        const rowItem = displayActivityAt !== item.lastActivityAt
+          ? { ...item, lastActivityAt: displayActivityAt }
+          : item;
+        groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item: rowItem,
           sourceLabel });
       }
     }
@@ -695,13 +746,14 @@ export function buildInboxHomeSections(
     data.sort((a, b) => a.kind === 'session' && b.kind === 'session'
       ? group === 'snoozed'
         ? taskSnoozeUntil(a.item.session) - taskSnoozeUntil(b.item.session)
-        : compareSessionItemsByPriority(a.item, b.item, ctx)
+        : activityMsFromIso(b.item.lastActivityAt) - activityMsFromIso(a.item.lastActivityAt)
+          || compareSessionListStrings(a.item.session.id, b.item.session.id)
       : 0);
     const listed = teammates.filter(entry => teammateInboxSection(entry.status, entry.snooze, nowMs) === group)
       .sort((a, b) => (group === 'snoozed' ? taskSnoozeUntil(a.snooze ?? {}) - taskSnoozeUntil(b.snooze ?? {}) : 0)
         || b.activityAt - a.activityAt || compareSessionListStrings(a.key, b.key));
     data.unshift(...listed.map((teammate): HomeRow => ({ key: `inbox-teammate:${teammate.key}`, kind: 'teammate', teammate,
-      ...(group === 'snoozed' ? { sourceLabel: snoozeLabel(taskSnoozeUntil(teammate.snooze ?? {})) } : {}) })));
+      ...(group === 'snoozed' ? { sourceLabel: snoozeLabel(taskSnoozeUntil(teammate.snooze ?? {}), teammate.pendingSync === true) } : {}) })));
     const key = `inbox-${group}`;
     sections.push({ key, title: i18n.t(`devices.list.menu.inbox.${group}`), count: data.length,
       data: collapsed.has(key) ? [] : data });

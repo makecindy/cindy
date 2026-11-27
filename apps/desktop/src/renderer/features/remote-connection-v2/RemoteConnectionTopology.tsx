@@ -31,11 +31,12 @@ import { cn } from '@/lib/utils';
 import type { DeviceLinkLinkStatus } from '@/hooks/useDeviceLinkSettings';
 
 import type { RemoteSwitchEntry, RemoteSwitchTarget } from './agentNetRemoteSwitch';
+import type { PeerUpdateConfirmTarget } from './peerAppUpdate';
 import type { DeviceLinkPeerPathPreference } from '../../../shared/deviceLinkIpc';
 import { DeviceNodePopover, HubNodePopover } from './DeviceNodePopover';
 import { PlatformGlyph } from './PlatformGlyph';
 import { TopologyFlowLayer, type FlowLine } from './TopologyFlow';
-import { groupLines, layoutTopology, LINK_LABEL_TILE_GAP, OFFLINE_FOLD_ID, type Point, type TopologyLayout } from './topologyGeometry';
+import { cubicAt, groupLines, layoutTopology, LINK_LABEL_TILE_GAP, OFFLINE_FOLD_ID, type Point, type TopologyLayout } from './topologyGeometry';
 import type { LinkTransport, TopologyModel, TopologyNode, TopologyStatus } from './topologyModel';
 import { ProtocolMark } from './ProtocolMark';
 import {
@@ -119,6 +120,8 @@ export interface RemoteConnectionTopologyProps {
   onSwitch?: (node: TopologyNode, target: RemoteSwitchTarget) => void;
   /** 手动切换本机到指定设备的 Agent-Net 选路偏好(auto / direct / relay)。 */
   onPathPreferenceChange?: (node: TopologyNode, preference: DeviceLinkPeerPathPreference) => Promise<boolean | void> | void;
+  /** 点击版本号旁更新图标：由外层弹出二次确认再触发目标（或本机）内置更新。 */
+  onUpdate?: (target: PeerUpdateConfirmTarget) => void;
 }
 
 /**
@@ -132,7 +135,7 @@ const SETTLE_MAX_MS = 2_000;
 /** openId 里代表「这台电脑的卡」的值(设备 id 不会是它)。 */
 const HUB_CARD = '\u0000hub';
 
-function useMeasuredWidth<T extends HTMLElement>(): [RefObject<T | null>, number] {
+function useMeasuredWidth<T extends HTMLElement>(visible = true): [RefObject<T | null>, number] {
   const ref = useRef<T | null>(null);
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
@@ -144,8 +147,8 @@ function useMeasuredWidth<T extends HTMLElement>(): [RefObject<T | null>, number
     const ro = new ResizeObserver(read);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
-  return [ref, width];
+  }, [visible]);
+  return [ref, visible ? width : 0];
 }
 
 /** 绝对定位 + transform:位置变化才能走过渡。 */
@@ -201,9 +204,18 @@ function lineAttrs(kind: LineKind, emphasis: LineEmphasis) {
 
 const PILL_W = 116;
 const PILL_H = 16;
+const STACKED_PILL_H = 28;
 const PILL_TEXT = 'text-11 leading-none tabular-nums';
 const INLINE_PILL_PADDING = 'px-1.5';
+const STACKED_PILL_LAYOUT = 'grid auto-rows-[1em] justify-items-center gap-0.5 px-px';
+/**
+ * 标签的外形：一行是胶囊;上下两行时是又窄又高的一块，胶囊的大圆角会把四角的字切掉(2026-11-27 真机截图:「9 ms」的 s 被切),
+ * 改用小圆角。拓扑示意图的名称与模型标注底色，可能折成两行，4px 是示意图固有几何（DESIGN.md §5 登记）
+ */
+const pillShape = (stacked: boolean) => (stacked ? cn(STACKED_PILL_LAYOUT, 'rounded') : cn(INLINE_PILL_PADDING, 'rounded-full'));
 const INLINE_PILL_SAMPLE_RTT_MS = 9_999;
+/** 「这台电脑 → 中转站」的标签至少按三位数往返留宽，普通延迟波动时布局保持稳定。 */
+const TRUNK_PILL_SAMPLE_RTT_MS = 999;
 const STACKED_PILL_MIN_W = 52;
 const PILL_COLUMN_GAP = 4;
 /** Keep at least 2px of clearance next to a computer tile. */
@@ -241,9 +253,9 @@ function LatencyPill({
     >
       <span
         className={cn(
-          'truncate rounded-full bg-[var(--settings-theme-card-bg)] py-0.5',
+          'truncate bg-[var(--settings-theme-card-bg)] py-0.5',
           PILL_TEXT,
-          stacked ? 'grid auto-rows-[1em] justify-items-center gap-0.5 px-px' : INLINE_PILL_PADDING,
+          pillShape(stacked),
           strong ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
         )}
         style={{ maxWidth }}
@@ -257,6 +269,59 @@ function LatencyPill({
       </span>
     </div>
   );
+}
+
+/**
+ * 「这台电脑 → 中转站」那段线中间的标签：这台电脑到中转怎么走、往返多少(2026-11-27 用户要求：本机那一段写在这段线上，
+ * 对方那一段写在通往对方的线上，两台电脑对照起来才对得上)。和设备线上的标签同一个样子，居中压在线上;设备线上的标签
+ * 上下叠放时它也叠放。
+ */
+function TrunkPill({ at, maxWidth, stacked, parts, strong, animate }: {
+  at: Point;
+  maxWidth: number;
+  stacked: boolean;
+  parts: readonly string[];
+  strong: boolean;
+  animate: boolean;
+}) {
+  return (
+    <div className="pointer-events-none flex items-center justify-center" style={placed(at.x, at.y, PILL_W, PILL_H, animate)} aria-hidden>
+      <span
+        className={cn(
+          'truncate bg-[var(--settings-theme-card-bg)] py-0.5',
+          PILL_TEXT,
+          pillShape(stacked),
+          strong ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
+        )}
+        style={{ maxWidth }}
+      >
+        {stacked ? parts.map((part) => <span key={part} className="max-w-full truncate">{part}</span>) : parts.join(' · ')}
+      </span>
+    </div>
+  );
+}
+
+/** 设备线上标签那一列能用的宽度，以及是否要把协议和延迟上下叠放(与标签同字体、同语言的样例量出 inlinePillWidth)。 */
+function pillColumns(layout: TopologyLayout, inlinePillWidth: number) {
+  const { m } = layout;
+  const relaySide = layout.groups.find((group) => group.relay)?.side;
+  const labelReach = m.tile - m.half - LINK_LABEL_TILE_GAP - PILL_COLUMN_GAP;
+  const hubPillRoom = labelReach - HUB_TEXT_W / 2;
+  const relayPillRoom = Math.min(hubPillRoom, labelReach - m.relay - RELAY_LABEL_OUTER);
+  const narrowestPillRoom = relaySide === undefined ? hubPillRoom : relayPillRoom;
+  // Use the same font and locale as the labels. A fixed sample keeps the layout stable as RTTs change.
+  const stackPills = Math.min(PILL_W, narrowestPillRoom + PILL_MAX_SHIFT) < inlinePillWidth;
+  return { relaySide, hubPillRoom, relayPillRoom, stackPills, minPillWidth: stackPills ? STACKED_PILL_MIN_W : inlinePillWidth };
+}
+
+/** 中转点落在本机下方时，线上的标签可能经过本机名字或协议所在的高度。 */
+function clearsHubText(layout: TopologyLayout, at: Point, width: number, height: number, nameWidth: number, protocolWidth: number): boolean {
+  const { hub, m } = layout;
+  const nameY = hub.y + m.ring + HUB_NAME_GAP;
+  const overlaps = (y: number, textWidth: number, textHeight: number) => textWidth > 0
+    && Math.abs(at.x - hub.x) < (textWidth + width) / 2 + 2
+    && Math.abs(at.y - y) < (textHeight + height) / 2 + 2;
+  return !overlaps(nameY, nameWidth, HUB_NAME_H) && !overlaps(nameY + HUB_NAME_H, protocolWidth, HUB_PROTOCOL_H);
 }
 
 /**
@@ -328,11 +393,19 @@ export function RemoteConnectionTopology({
   switches,
   onSwitch,
   onPathPreferenceChange,
+  onUpdate,
 }: RemoteConnectionTopologyProps) {
   const { t } = useTranslation();
+  const selfName = model.self?.name || t('settings.devices.thisDevice');
+  const selfProtocol = selfProtocolKind(model, linkStatus);
+  const selfProtocolLabel = protocolKindLabel(selfProtocol, t);
   const reduced = useReducedMotion();
   const [ref, measured] = useMeasuredWidth<HTMLDivElement>();
   const [inlinePillRef, measuredInlinePillWidth] = useMeasuredWidth<HTMLSpanElement>();
+  const [trunkPillRef, measuredTrunkPillWidth] = useMeasuredWidth<HTMLSpanElement>();
+  const [stackedTrunkPillRef, measuredStackedTrunkPillWidth] = useMeasuredWidth<HTMLSpanElement>();
+  const [hubNameRef, hubNameWidth] = useMeasuredWidth<HTMLSpanElement>();
+  const [hubProtocolRef, hubProtocolWidth] = useMeasuredWidth<HTMLSpanElement>(Boolean(selfProtocol && selfProtocolLabel));
   const [hoverId, setHoverId] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const hubButton = useRef<HTMLButtonElement>(null);
@@ -351,20 +424,44 @@ export function RemoteConnectionTopology({
   }, [settled, measuredOnce, ready]);
   // 位置过渡与流动虚线都等图稳定之后。
   const animate = !reduced && settled;
-  const layout = layoutTopology(model.groups, width, model.dense);
-  const { m, hub } = layout;
-  const relaySide = layout.groups.find((group) => group.relay)?.side;
-  const labelReach = m.tile - m.half - LINK_LABEL_TILE_GAP - PILL_COLUMN_GAP;
-  const hubPillRoom = labelReach - HUB_TEXT_W / 2;
-  const relayPillRoom = Math.min(hubPillRoom, labelReach - m.relay - RELAY_LABEL_OUTER);
-  const narrowestPillRoom = relaySide === undefined ? hubPillRoom : relayPillRoom;
+  const relayRtt = model.relay.rttMs === null ? null : formatRtt(model.relay.rttMs, t);
+  const trunkSampleRtt = formatRtt(Math.max(TRUNK_PILL_SAMPLE_RTT_MS, model.relay.rttMs ?? 0), t);
+  // 这台电脑到中转那一段怎么走、往返多少，如「UDP · 25 ms」:放得下就写在这台电脑到中转站的线上，否则写在中转点上方。
+  const relayPathParts = [relayTransportLabel(model.relay, t), relayRtt].filter((part): part is string => Boolean(part));
+  const relayPath = relayPathParts.join(' · ');
   const inlinePillWidth = Math.ceil(measuredInlinePillWidth) || PILL_W;
-  // Use the same font and locale as the labels. A fixed sample keeps the layout stable as RTTs change.
-  const stackPills = Math.min(PILL_W, narrowestPillRoom + PILL_MAX_SHIFT) < inlinePillWidth;
-  const minPillWidth = stackPills ? STACKED_PILL_MIN_W : inlinePillWidth;
-  const selfName = model.self?.name || t('settings.devices.thisDevice');
-  const selfProtocol = selfProtocolKind(model, linkStatus);
-  const selfProtocolLabel = protocolKindLabel(selfProtocol, t);
+  const plainLayout = layoutTopology(model.groups, width, model.dense);
+  const plainPills = pillColumns(plainLayout, inlinePillWidth);
+  // 线上的标签和设备线上的一个样子：设备标签一行写得下就一行(线要够长),叠放时它也叠放(线短一些也放得下)。
+  // 给这段线腾地方不能让原本一行写得下的设备标签折成两行；两种都放不下就仍写在中转点上方。
+  let picked: { layout: TopologyLayout; columns: ReturnType<typeof pillColumns>; trunk?: { at: Point; maxWidth: number; stacked: boolean } } = {
+    layout: plainLayout, columns: plainPills,
+  };
+  const relayGroup = model.groups.find((group) => group.key === 'relay');
+  // 设备线上的标签一行写得下时，扇出的线只让出它们还富余的那点宽度，其余由设备列往外挪。
+  const fanGive = plainPills.stackPills ? undefined : plainPills.relayPillRoom + PILL_MAX_SHIFT - inlinePillWidth;
+  for (const [stacked, labelW] of [[false, measuredTrunkPillWidth], [true, measuredStackedTrunkPillWidth]] as const) {
+    if (!relayGroup || !relayPath || labelW <= 0) continue;
+    const maxWidth = Math.ceil(labelW);
+    const trunkLayout = layoutTopology(model.groups, width, model.dense, { trunkLabelW: maxWidth, fanGive });
+    if (!trunkLayout.trunkLabel) continue;
+    const columns = pillColumns(trunkLayout, inlinePillWidth);
+    // 一行的线上标签只配一行的设备标签;叠放的线上标签不能让原本一行的设备标签因此叠放。
+    if (stacked ? columns.stackPills && !plainPills.stackPills : columns.stackPills) continue;
+    const { toRelay } = groupLines(trunkLayout, relayGroup);
+    if (!toRelay) continue;
+    const height = stacked ? STACKED_PILL_H : PILL_H;
+    // Keep the pill on the curve. A small shift toward the relay can clear the computer name without hiding the line end.
+    const at = [toRelay.at, cubicAt(toRelay.shape, 0.6)].find((point) =>
+      Math.abs(point.x - toRelay.shape.k.x) >= maxWidth / 2 + 2
+      && clearsHubText(trunkLayout, point, maxWidth, height, hubNameWidth, hubProtocolWidth));
+    if (!at) continue;
+    picked = { layout: trunkLayout, columns, trunk: { at, maxWidth, stacked } };
+    break;
+  }
+  const { layout } = picked;
+  const { relaySide, hubPillRoom, relayPillRoom, stackPills, minPillWidth } = picked.columns;
+  const { m, hub } = layout;
   const selfDescription = selfProtocolLabel ? `${selfName} · ${selfProtocolLabel}` : selfName;
   // 悬停优先于打开的浮层:鼠标移到别的设备上时跟着它走。
   const focusId = hoverId ?? openId;
@@ -419,10 +516,20 @@ export function RemoteConnectionTopology({
         flowing.push({ id: `${group.id}:relay`, shape: toRelay.shape, flow: model.relay.flow });
       }
       const relayProtocol = protocolKindLabel(model.relay.protocol, t);
-      const relayRtt = model.relay.rttMs === null ? null : formatRtt(model.relay.rttMs, t);
-      // 最下面一行：经中转的数据走 UDP 还是 WS,紧跟那条路的往返，如「UDP · 25 ms」。
-      const relayPath = [relayTransportLabel(model.relay, t), relayRtt].filter(Boolean).join(' · ');
       const relayDescription = [model.relay.name, relayRouteLabel(model.relay, t), relayRtt].filter(Boolean).join(' · ');
+      // 线路标签放不下或与本机文字相交时，沿用中转点旁的第三行。
+      const pathOnTrunk = picked.trunk;
+      if (pathOnTrunk) {
+        pills.push(
+          <TrunkPill
+            key={`${group.id}:relay:pill`}
+            {...pathOnTrunk}
+            parts={relayPathParts}
+            strong={emphasis !== 'rest' && emphasis !== 'dim'}
+            animate={animate}
+          />,
+        );
+      }
       const size = m.relayR * 2;
       // 中转站的名字、连接方式和往返写在小圆点正上方、居中(用户反馈 2026-11-18:原来写在圆点下面朝中间排开,
       // 和这台电脑的名字、连接方式挤成一团)。这台电脑的字总在圆盘下面,所以只有中转站整个落在那些字
@@ -432,9 +539,9 @@ export function RemoteConnectionTopology({
       // 「Retransmissor Cindy」、自建中转的长名字),再长才截断(悬停圆点与两张卡片里有全名)。
       // 名字下面写协议，再下面写经中转的数据走 UDP 还是 WS 和那条路的往返(用户要求 2026-11-18:这台电脑名字下面的
       // 「Agent-Net」看不出是在说中转，也分不出 Agent-Net 的 UDP、WS 和 Device Link)。协议和走法分两行：
-      // 中转点离中间近时(fleet)「Agent-Net · WS」写在一行放不下。
+      // 中转点离中间近时(fleet)「Agent-Net · WS」写在一行放不下。走法写到线上以后，这里只剩名字和协议。
       const labelBelow = g.relay.y + m.relayR + RELAY_LABEL_GAP >= hub.y + m.ring + HUB_TEXT_BOTTOM + 4;
-      const towardHub = relayReachTowardHub(m, hub, g.relay, labelBelow, relayPath !== '');
+      const towardHub = relayReachTowardHub(m, hub, g.relay, labelBelow, relayPath !== '' && !pathOnTrunk);
       const leftRoom = group.side === -1 ? RELAY_LABEL_OUTER : towardHub;
       const rightRoom = group.side === -1 ? towardHub : RELAY_LABEL_OUTER;
       nodes.push(
@@ -462,15 +569,17 @@ export function RemoteConnectionTopology({
           }}
           aria-hidden
         >
+          {/* 拓扑示意图的名称与模型标注底色，可能折成两行，4px 是示意图固有几何（DESIGN.md §5 登记） */}
           <span className="line-clamp-2 max-w-full break-words rounded bg-[var(--settings-theme-card-bg)] px-1">{model.relay.name}</span>
           {model.relay.protocol && relayProtocol ? (
             <span className="flex max-w-full rounded bg-[var(--settings-theme-card-bg)] px-1">
               <ProtocolMark kind={model.relay.protocol} label={relayProtocol} className="text-11 leading-[1.3] text-[var(--text-tertiary)]" />
             </span>
           ) : null}
-          {relayPath ? (
+          {relayPath && !pathOnTrunk ? (
             <span
               className={cn(
+                // 拓扑示意图的名称与模型标注底色，可能折成两行，4px 是示意图固有几何（DESIGN.md §5 登记）
                 'whitespace-nowrap rounded bg-[var(--settings-theme-card-bg)] px-1 tabular-nums',
                 emphasis !== 'rest' && emphasis !== 'dim' && 'text-[var(--text-secondary)]',
               )}
@@ -604,6 +713,7 @@ export function RemoteConnectionTopology({
             <DeviceNodePopover
               node={node}
               relayName={model.relay.name}
+              selfRelayTransport={model.relay.transport ?? null}
               onRemoteDesktop={onRemoteDesktop}
               onDelete={onDelete && (() => {
                 setOpenId(null);
@@ -612,6 +722,7 @@ export function RemoteConnectionTopology({
               switchEntry={switchEntry}
               onSwitch={onSwitch}
               onPathPreferenceChange={onPathPreferenceChange}
+              onUpdate={onUpdate}
             />
           </PopoverContent>
         </Popover>,
@@ -638,6 +749,21 @@ export function RemoteConnectionTopology({
         aria-hidden
       >
         {linkTransportLabel('webrtc', t)} · {formatRtt(INLINE_PILL_SAMPLE_RTT_MS, t)}
+      </span>
+      <span
+        ref={trunkPillRef}
+        className={cn('invisible absolute left-0 top-0 w-max whitespace-nowrap', PILL_TEXT, INLINE_PILL_PADDING)}
+        aria-hidden
+      >
+        {linkTransportLabel('udp', t)} · {trunkSampleRtt}
+      </span>
+      <span
+        ref={stackedTrunkPillRef}
+        className={cn('invisible absolute left-0 top-0 w-max whitespace-nowrap', PILL_TEXT, STACKED_PILL_LAYOUT)}
+        aria-hidden
+      >
+        <span>{linkTransportLabel('udp', t)}</span>
+        <span>{trunkSampleRtt}</span>
       </span>
       <svg className="pointer-events-none absolute inset-0" width={layout.w} height={layout.h} aria-hidden>
         {lines}
@@ -672,6 +798,7 @@ export function RemoteConnectionTopology({
             linkStatus={linkStatus}
             issue={issue}
             standby={standby}
+            onUpdate={onUpdate}
           />
         </PopoverContent>
       </Popover>
@@ -680,7 +807,8 @@ export function RemoteConnectionTopology({
         style={placed(hub.x, hub.y + m.ring + HUB_NAME_GAP, HUB_TEXT_W, HUB_NAME_H, animate)}
         aria-hidden
       >
-        <span className="max-w-full truncate rounded bg-[var(--settings-theme-card-bg)] px-1.5 text-12 font-medium leading-[1.5] text-[var(--text-primary)]">
+        {/* 拓扑示意图的名称与模型标注底色，可能折成两行，4px 是示意图固有几何（DESIGN.md §5 登记） */}
+        <span ref={hubNameRef} className="max-w-full truncate rounded bg-[var(--settings-theme-card-bg)] px-1.5 text-12 font-medium leading-[1.5] text-[var(--text-primary)]">
           {selfName}
         </span>
       </div>
@@ -691,7 +819,8 @@ export function RemoteConnectionTopology({
           style={placed(hub.x, hub.y + m.ring + HUB_NAME_GAP + HUB_NAME_H, HUB_TEXT_W, HUB_PROTOCOL_H, animate)}
           aria-hidden
         >
-          <span className="flex max-w-full rounded bg-[var(--settings-theme-card-bg)] px-1.5">
+          {/* 拓扑示意图的名称与模型标注底色，可能折成两行，4px 是示意图固有几何（DESIGN.md §5 登记） */}
+          <span ref={hubProtocolRef} className="flex max-w-full rounded bg-[var(--settings-theme-card-bg)] px-1.5">
             <ProtocolMark
               kind={selfProtocol}
               label={selfProtocolLabel}

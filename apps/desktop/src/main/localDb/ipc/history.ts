@@ -4,9 +4,7 @@
  * 该入口只暴露 cindy_helper 已有 history reader 的只读能力，不开放跨会话扫描。
  * 参数在被控端再次校验，避免 allowlist 只能校验 channel、不能校验 payload 的缺口。
  */
-import { ipcMain } from 'electron';
 import { eq } from 'drizzle-orm';
-import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 
 import {
   getMessagesForHistory,
@@ -22,7 +20,7 @@ import { readLatestSessionTerminal, type SessionTerminalHint } from '../sessionT
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate';
 import { redactSensitiveTextDeep } from '@cindy/maker-shared/error-redaction';
 
-const VALID_AGENT_KINDS: readonly HistoryAgentKind[] = ['cc', 'codex', 'pi'];
+const VALID_AGENT_KINDS: readonly HistoryAgentKind[] = ['cc', 'codex', 'pi', 'acp'];
 const VALID_ORDERS: readonly HistoryOrder[] = ['asc', 'desc'];
 const VALID_ROLES: readonly HistoryRole[] = [
   'user',
@@ -215,6 +213,23 @@ function contentHasOmittedData(value: unknown): boolean {
   return false;
 }
 
+export function clampAroundRadius(raw: unknown): number {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 60;
+  return Math.min(Math.max(Math.floor(n), 0), 200);
+}
+
+export function requireReferenceContentCharLimit(raw: unknown): number | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > 8_000) {
+    throwIpcError(
+      'INVALID_PARAMS',
+      'contentCharLimit must be an integer between 1 and 8000 or null',
+    );
+  }
+  return raw;
+}
+
 /** Cap per-row reference text before it crosses device-link and mark lossy rows. */
 export function capReferenceMessageRows<T extends { content: unknown; agentMeta?: unknown }>(
   items: readonly T[],
@@ -301,9 +316,9 @@ const defaultDeps: RemoteHistoryIpcDeps = {
   readTerminal: readLatestSessionTerminal,
 };
 
-/** Register the allowlisted, read-only remote history handler. */
-export function registerRemoteHistoryIpc(deps: RemoteHistoryIpcDeps = defaultDeps): void {
-  ipcMain.handle(DL_HISTORY_MESSAGES_CHANNEL, async (_event, value: unknown) => {
+/** The allowlisted, read-only history operation shared by Desktop and Node Host. */
+export function createRemoteHistoryHandler(deps: RemoteHistoryIpcDeps = defaultDeps) {
+  return async (value: unknown) => {
     const request = parseRemoteHistoryMessagesRequest(value);
     if (!(await deps.sessionExists(request.sessionId))) {
       throwIpcError('NOT_FOUND', 'Session does not exist');
@@ -340,5 +355,5 @@ export function registerRemoteHistoryIpc(deps: RemoteHistoryIpcDeps = defaultDep
       ),
       terminal: terminal ?? null,
     };
-  });
+  };
 }

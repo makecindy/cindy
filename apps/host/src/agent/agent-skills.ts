@@ -11,7 +11,7 @@
  */
 import path from 'node:path';
 
-import type { AgentKind, Maker } from '@cindy/maker-core';
+import type { EngineKind, Maker } from '@cindy/maker-core';
 
 import { builtInSkillDescriptorsAsync } from '../../../desktop/src/main/maker-host/built-in-skills.ts';
 import { readDisabledSkillPaths } from '../../../desktop/src/main/skillhub/activationPreferences.ts';
@@ -19,7 +19,7 @@ import { getAppDataDir, getUserDataDir } from '../../../desktop/src/main/userDat
 
 export interface HostAgentSkillListPorts {
   maker(): Pick<Maker, 'listAgentSkills'> | null;
-  hasAgent(kind: AgentKind): boolean;
+  hasAgent(kind: EngineKind): boolean;
   readStoredWorkDir(sessionId: string): Promise<{ found: boolean; workDir?: string | null }>;
   /** The input queue's desktop hold; true while a desktop uses this profile. */
   isProfileHeld(): boolean;
@@ -29,7 +29,10 @@ export interface HostAgentSkillListPorts {
 export function createHostAgentSkillList(ports: HostAgentSkillListPorts) {
   return async (input: { agentKind?: string; workingDir?: string; sessionId?: string; forceReload?: boolean }) => {
     const rawKind = String(input.agentKind ?? '');
-    const kind: AgentKind = rawKind === 'codex' ? 'codex' : rawKind === 'pi' ? 'pi' : 'claude-code';
+    const kind: EngineKind = rawKind === 'codex' ? 'codex'
+      : rawKind === 'pi' ? 'pi'
+      : rawKind === 'acp' ? 'acp'
+      : 'claude-code';
     const maker = ports.maker();
     if (!maker || !ports.hasAgent(kind)) return { success: false, error: `Agent '${kind}' is not registered` };
     const stored = input.sessionId ? await ports.readStoredWorkDir(input.sessionId) : null;

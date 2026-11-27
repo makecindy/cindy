@@ -4,14 +4,21 @@
  * 产品规则见 docs/product-rules/model-groups.md。
  */
 
+import { pluginEngineKeyFromProviderId } from './pluginEngines.js';
+import { ROUTE_STRATEGIES, type RouteStrategy } from './routeStrategy.js';
+
 export const MODEL_GROUPS_IPC = {
   GET: 'model-groups:get',
   SET: 'model-groups:set',
   RESOLVE: 'model-groups:resolve',
   COMMIT: 'model-groups:commit',
-  /** 记下这个任务是经哪条路线建的、用着哪个候选(撞配额时据此提议换来源)。 */
+  /** 记下这个任务是经哪条路线建的、用着哪个候选(任务中间持续托管与故障接替都据此判断)。 */
   BIND_SESSION: 'model-groups:bind-session',
-  /** 撞配额时同一条路线里还能接着用的下一个来源；没有为 null。 */
+  /** 解除任务的智能路由托管绑定(保留任务当前模型与来源，不再自动换源)。 */
+  UNBIND_SESSION: 'model-groups:unbind-session',
+  /** 读取任务当前的智能路由托管状态(用于桌面、远程控制与手机 UI 展示)。 */
+  GET_SESSION_BINDING: 'model-groups:get-session-binding',
+  /** 撞配额或来源不可用时同一条路线里还能接着用的下一个来源；没有为 null。 */
   SWITCH_OFFER: 'model-groups:switch-offer',
   /**
    * 手机或另一台电脑经这台电脑的模式建了任务后，请这台电脑在任务里写那一行说明(model-groups.md §6.3)。
@@ -22,7 +29,7 @@ export const MODEL_GROUPS_IPC = {
 
 /**
  * 同账号本人控制的手机与电脑可以远程调用的模型组接口(model-groups.md §6.3)：读模式、按模式选来源、
- * 提交选路记录、记下任务用着哪个来源、写说明。改模式(SET)只在本机。
+ * 提交选路记录、读写/解除任务托管绑定、查撞配额换源提议、写说明。改模式(SET)只在本机。
  * 协议约定见 docs/dev-rules/protocol-compatibility/model-groups-remote-pickers.md。
  */
 export const MODEL_GROUPS_REMOTE_CHANNELS = [
@@ -30,18 +37,66 @@ export const MODEL_GROUPS_REMOTE_CHANNELS = [
   MODEL_GROUPS_IPC.RESOLVE,
   MODEL_GROUPS_IPC.COMMIT,
   MODEL_GROUPS_IPC.BIND_SESSION,
+  MODEL_GROUPS_IPC.UNBIND_SESSION,
+  MODEL_GROUPS_IPC.GET_SESSION_BINDING,
+  MODEL_GROUPS_IPC.SWITCH_OFFER,
   MODEL_GROUPS_IPC.ROUTE_NOTE,
 ] as const;
 
-export const MODEL_GROUP_STRATEGIES = ['expiring', 'order', 'rotate', 'cheapest', 'drain', 'headroom', 'weighted'] as const;
+/** model-groups:get 的可选参数；旧主机忽略额外参数，旧控制端不传此参数。 */
+export interface ModelGroupGetOptions {
+  /** 新版手机与远程控制端显式声明：需要以独立 append-only 字段附带按供应商合并的路由及其展开。 */
+  includeSourceRoutes?: boolean;
+}
+
+/** 任务当前的智能路由托管投影，供桌面、远程控制与手机展示当前托管状态与一键退出。 */
+export interface ModelGroupSessionBindingView {
+  selection: ModelGroupSelection;
+  /** 路由显示名(合并供应商路由取父路由名，普通路由取路由名)。 */
+  routeName: string;
+  /** 若为按供应商合并的展开路由，给出父供应商路由 id，供选择器高亮 sroute:<parentId>。 */
+  parentId?: string;
+  /** 若为按供应商合并的展开路由，给出父供应商路由显示名。 */
+  parentName?: string;
+  /** 是否为按供应商合并的路由展开项。 */
+  isSourceRoute?: boolean;
+  /** 出问题时是否自动换来源。 */
+  autoSwitch: boolean;
+  /** 命中待生效的切换意图而非当前已落库行。 */
+  pendingSwitch?: boolean;
+}
+
+/** 供应商提示缓存默认有效期：未知供应商统一按 5 分钟(model-groups.md §7.1)。 */
+export const DEFAULT_PROMPT_CACHE_TTL_MS = 5 * 60_000;
+
 /**
- * expiring = 快作废的额度先用；order = 按顺序；rotate = 每个新任务换一个；
- * cheapest = 最省钱：还有配额的订阅不另外花钱，其余按该来源的标价从低到高；
- * drain = 用完再换：一直用上一次选中的，它用完或用不了才换列表里下一个；
- * headroom = 余量最多的先用：剩余配额占比最高的先用；
- * weighted = 按权重：新任务按各来源的权重比例交错分配。
+ * 估算当前供应商/模型的提示缓存有效期，用于持续托管在任务中间判断是否值得留在原来源保缓存。
+ * 已知供应商按已公布的标准缓存窗口，其余统一按 5 分钟。
  */
-export type ModelGroupStrategy = (typeof MODEL_GROUP_STRATEGIES)[number];
+export function promptCacheTtlMsForProvider(provider?: {
+  type?: string | null;
+  id?: string | null;
+  model?: string | null;
+}): number {
+  const id = (provider?.id ?? '').toLowerCase();
+  const type = (provider?.type ?? '').toLowerCase();
+  const model = (provider?.model ?? '').toLowerCase();
+  // Anthropic / Claude、OpenAI / Codex、Gemini 默认瞬态提示缓存均为 ~5 分钟窗口。
+  if (type === 'anthropic' || id.includes('anthropic') || id.includes('claude') || model.includes('claude')) {
+    return 5 * 60_000;
+  }
+  if (type === 'openai' || id.includes('openai') || id.includes('codex') || model.includes('gpt-')) {
+    return 5 * 60_000;
+  }
+  if (type === 'google' || type === 'gemini' || id.includes('gemini') || model.includes('gemini')) {
+    return 5 * 60_000;
+  }
+  return DEFAULT_PROMPT_CACHE_TTL_MS;
+}
+
+/** 选法只有一套(shared/routeStrategy.ts)，账号池与供应商组也用它。 */
+export const MODEL_GROUP_STRATEGIES = ROUTE_STRATEGIES;
+export type ModelGroupStrategy = RouteStrategy;
 
 /**
  * 2026-11-23 之前的手机与电脑只认识前四种选法：旧手机会整条不列认不出的模式，旧电脑把它当成「快作废的先用」。
@@ -53,13 +108,54 @@ const LEGACY_STRATEGY: Record<ModelGroupStrategy, 'expiring' | 'order' | 'rotate
   drain: 'order', headroom: 'expiring', weighted: 'rotate',
 };
 
-/** 发给手机与另一台电脑的模式配置(model-groups:get 与伙伴设置里的模型组)：见 LEGACY_STRATEGY。 */
-export function modelGroupsConfigForRemote(config: ModelGroupsConfig): ModelGroupsConfig {
+/** 远程传输用的模式配置：routes 永远只放用户按模型排的路由，合并供应商路由及其展开走独立 append-only 字段。 */
+export interface ModelGroupsRemoteConfig extends ModelGroupsConfig {
+  /** 按供应商合并的路由在每个模型上的展开项(独立于 routes，防止旧端把展开项当普通路由平铺或截断)。 */
+  expandedRoutes?: ModelGroupRoute[];
+}
+
+function legacyStrategyRoute<T extends { strategy: ModelGroupStrategy }>(route: T): T {
+  return LEGACY_STRATEGY[route.strategy] === route.strategy
+    ? route
+    : { ...route, strategy: LEGACY_STRATEGY[route.strategy], pick: route.strategy };
+}
+
+/**
+ * 发给手机与另一台电脑的模式配置(model-groups:get 与伙伴设置里的模型组)：见 LEGACY_STRATEGY。
+ * `routes` 始终保持纯净(不含 hidden 与 parent 展开项)，确保旧手机与旧桌面零回归；
+ * 仅当调用方显式传 `includeSourceRoutes: true` 时，通过独立 append-only 字段下发 `sourceRoutes` 与 `expandedRoutes`。
+ */
+export function modelGroupsConfigForRemote(
+  config: ModelGroupsConfig,
+  options?: ModelGroupGetOptions,
+): ModelGroupsRemoteConfig {
+  const routes = config.routes
+    .filter((route) => !route.hidden && !route.parent)
+    .map(legacyStrategyRoute);
+  if (!options?.includeSourceRoutes) return { routes };
+  const sourceRoutes = (config.sourceRoutes ?? [])
+    .filter((route) => !route.hidden)
+    .map(legacyStrategyRoute);
+  const expandedRoutes = config.routes
+    .filter((route) => !route.hidden && !!route.parent)
+    .map(legacyStrategyRoute);
   return {
-    routes: config.routes.map((route) => (LEGACY_STRATEGY[route.strategy] === route.strategy
-      ? route
-      : { ...route, strategy: LEGACY_STRATEGY[route.strategy], pick: route.strategy } as ModelGroupRoute)),
+    routes,
+    ...(sourceRoutes.length > 0 ? { sourceRoutes } : {}),
+    ...(expandedRoutes.length > 0 ? { expandedRoutes } : {}),
   };
+}
+
+/** 从另一台电脑收到的模式配置：将独立字段 `expandedRoutes` 安全合回 `routes` 供统一面板消费。 */
+export function modelGroupsConfigFromRemote(raw: unknown): ModelGroupsConfig {
+  const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const baseRoutes = Array.isArray(value.routes) ? value.routes : [];
+  const expandedRoutes = Array.isArray(value.expandedRoutes) ? value.expandedRoutes : [];
+  if (expandedRoutes.length === 0) return normalizeModelGroupsConfig(raw);
+  return normalizeModelGroupsConfig({
+    ...value,
+    routes: [...baseRoutes, ...expandedRoutes],
+  });
 }
 
 /**
@@ -97,7 +193,7 @@ export function modelGroupResolveResultFromRemote(result: ModelGroupResolveResul
     : { ...result, trace };
 }
 
-export type ModelGroupAgentKind = 'cc' | 'codex' | 'pi';
+export type ModelGroupAgentKind = 'cc' | 'codex' | 'pi' | 'acp';
 
 /** 一个已连接的模型：与新任务选择器选中一行时得到的组合相同。 */
 export interface ModelGroupCandidate {
@@ -133,14 +229,94 @@ export interface ModelGroupRoute {
   exceptions?: ModelGroupException[];
   /** 推理强度；不设或选中的模型不支持这一档时不带，按该模型的默认档运行。 */
   effort?: string;
+  /**
+   * 「出问题时自动换来源」(model-groups.md §4.5)：默认开，只在用户关掉这个模式的开关时存 false。
+   * 关掉后用这个模式的任务出问题不自动换，只在横幅里提议。
+   */
+  autoSwitch?: false;
+  /**
+   * 这条路由是某条供应商路由在一个模型上的展开(见 ModelGroupSourceRoute)：由这台电脑按目录生成，不存盘。
+   * 界面把它列在那条供应商路由下面，不当作单独的一条路由。
+   */
+  parent?: { id: string; name: string };
+  /** 所属的供应商路由被用户隐藏了：选择器不列，设置页里能找回。 */
+  hidden?: true;
+}
+
+/** 供应商路由的成员：一整个供应商(它提供的全部模型)，不指定模型。 */
+export interface ModelGroupSource {
+  providerId: string;
+  /** 运行位置：另一台电脑的设备 id，或分享来的供应商(`share:<id>`)。省略 = 本机。与 ModelGroupCandidate 同义。 */
+  agentDeviceId?: string;
+  /** 用户暂时不让这条路由用它；保留在列表里。 */
+  off?: boolean;
+  /** 「按权重」时的权重，1–1000；不设为 1。 */
+  weight?: number;
+}
+
+/**
+ * 供应商路由(2026-11-24 用户裁决)：把几个供应商合成一条路由，用起来像一个合并后的供应商——照常选模型，
+ * 由路由按选法决定这次用哪个供应商。它在每个模型上展开成一条普通路由(routes 里带 parent 的那些)，
+ * 选路、任务里的说明、撞配额换来源都走普通路由已有的那一套，不另写。
+ * auto = 同一家的几个供应商自动合成的：成员跟着连接增减，不存盘，只能改选法或隐藏。
+ */
+export interface ModelGroupSourceRoute {
+  id: string;
+  name: string;
+  strategy: ModelGroupStrategy;
+  sources: ModelGroupSource[];
+  effort?: string;
+  /** 「出问题时自动换来源」(model-groups.md §4.5)，与普通路由同一个开关：默认开，只在关掉时存 false；展开出来的每条路由沿用它。 */
+  autoSwitch?: false;
+  /** 例外(时段改走、带图只用能看图的来源)，与普通路由同一种；展开出来的每条路由沿用它。 */
+  exceptions?: ModelGroupException[];
+  auto?: true;
+  hidden?: true;
 }
 
 /** 2026-11-11 起只有路线；旧版存下的 modes 读取时忽略。 */
 export interface ModelGroupsConfig {
+  /** 读取时：用户排的路由在前，供应商路由展开出来的(带 parent)在后。保存时只存用户排的。 */
   routes: ModelGroupRoute[];
+  /** 读取时：用户建的供应商路由在前，自动合成的(auto)在后。保存时只存用户建的。 */
+  sourceRoutes?: ModelGroupSourceRoute[];
+  /** 用户隐藏的自动供应商路由 id。 */
+  hiddenAuto?: string[];
+  /** 用户给自动供应商路由改的选法；没改过的按默认「快作废的先用」。 */
+  autoStrategy?: Record<string, ModelGroupStrategy>;
+  /** 用户关掉了「出问题时自动换来源」的自动供应商路由 id。 */
+  autoSwitchOff?: string[];
+  /**
+   * 用户给自动供应商路由的成员排的先后、填的权重、暂停了哪个：键是路由 id，值是按用户排的顺序列出的成员。
+   * 成员本身仍跟着供应商的连接增减：这里没列到的新成员排在后面，已经不在的留着(重新连上时回到原来的位置)。
+   */
+  autoSources?: Record<string, ModelGroupSource[]>;
+  /** 用户给自动供应商路由加的例外：键是路由 id。 */
+  autoExceptions?: Record<string, ModelGroupException[]>;
 }
 
+/** 用了这个模式的任务出问题时是否自动换来源(默认开)。 */
+export function modelGroupAutoSwitchOn(route: Pick<ModelGroupRoute, 'autoSwitch'>): boolean {
+  return route.autoSwitch !== false;
+}
+
+/** 任务记下的模式此刻是否自动换来源；模式已删除时为 false(不再接替)。 */
+export function modelGroupAutoSwitchFor(config: ModelGroupsConfig, selection: ModelGroupSelection | null | undefined): boolean {
+  const route = findModelGroupRoute(config, selection);
+  return !!route && modelGroupAutoSwitchOn(route);
+}
+
+/** 自动供应商路由的 id 前缀(后面是那一家的标识)，以及展开出来的路由的 id 前缀。用户建的都不用这两个前缀。 */
+export const MODEL_GROUP_AUTO_PREFIX = 'auto:';
+export const MODEL_GROUP_EXPANDED_PREFIX = 'src:';
+export const isAutoModelGroupId = (id: string): boolean => id.startsWith(MODEL_GROUP_AUTO_PREFIX);
+export const isExpandedModelGroupId = (id: string): boolean => id.startsWith(MODEL_GROUP_EXPANDED_PREFIX);
+
 export const MODEL_GROUPS_DEFAULTS: ModelGroupsConfig = { routes: [] };
+
+/** 供应商路由最多展开出这么多条(每条供应商路由的每个模型一条)，以及最多记这么多条隐藏。 */
+export const MODEL_GROUP_EXPANDED_LIMIT = 512;
+export const MODEL_GROUP_HIDDEN_AUTO_LIMIT = 128;
 
 export const MODEL_GROUP_LIMITS = { routes: 32, candidates: 16, exceptions: 8, name: 40, id: 64, field: 256, effort: 32, weight: 1000 } as const;
 
@@ -210,6 +386,8 @@ export interface ModelGroupResolvedRoute {
   /** 选中的来源在另一台电脑或是分享来的：新任务的 Agent 在那里运行。本机省略。 */
   agentDeviceId?: string;
   effort?: string;
+  /** 用户要的 Fast，且选中的来源支持；否则省略。 */
+  fastMode?: true | 'ultrafast';
 }
 
 /**
@@ -240,7 +418,7 @@ export type ModelGroupResolveResult = {
   /** missing = 这条路线已被删除；unavailable = 里面没有现在能用的模型。两者都沿用用户原来选的模型。 */
   | { outcome: 'missing' | 'unavailable'; groupName: string; trace: ModelGroupTraceEntry[] });
 
-/** 撞配额时「换到下一个来源继续」的提议(model-groups.md §6.1)。只提议与任务同一运行位置(本机)的来源。 */
+/** 撞配额或来源不可用时「换到下一个来源继续」的提议(model-groups.md §6.1)；支持跨本地、分享与远程位置。 */
 export interface ModelGroupSwitchOffer {
   groupName: string;
   /** 换过去之后记回去时用：任务仍属于同一个组。 */
@@ -248,21 +426,37 @@ export interface ModelGroupSwitchOffer {
   agentKind: ModelGroupAgentKind;
   providerId: string;
   model: string;
+  /** 目标运行位置：另一台电脑或分享来的供应商(`share:<id>`)；本机省略。 */
+  agentDeviceId?: string;
+  /** 路由指定的推理强度(若目标模型支持)。 */
+  effort?: string;
+  /** 目标模型的 Fast 档位(若支持)。 */
+  fastMode?: boolean | 'ultrafast';
   modelName: string;
   sourceName: string;
   /** 换到另一个引擎：要走选择器的跨引擎切换(含它的确认)。 */
   crossEngine: boolean;
+  /** 换到另一个运行位置(本机 ↔ 分享 / 另一台电脑)：走统一交接流程。 */
+  crossLocation?: boolean;
 }
 
 export interface ModelGroupResolveRequest {
   selection: ModelGroupSelection;
   /** 只看会选谁：不推进「轮流」的顺序。 */
   dryRun?: boolean;
-  /** 第一条消息的情况；时间由主进程自己取，不信界面传来的。 */
-  context?: { hasImages?: boolean };
   /**
-   * 只在这个运行位置的来源里选(agentDeviceId null = 本机)：进行中的任务里选模式时用，任务换不了电脑。
-   * 省略 = 不限(新任务)。
+   * 只用手头已有的额度读数，不等一份新的：给界面显示余量用(设置里的关系图)，打开就要有数。
+   * 真正给任务选来源时不传——那时宁可等一下(有上限)也要按新读数选。旧版本不认识这个字段，照常等。
+   */
+  cachedQuota?: boolean;
+  /**
+   * 本轮消息的情况；时间由主进程自己取，不信界面传来的。
+   * effort / fastMode = 用户在选择器里给这个模型选的思考深度与 Fast：只对供应商路由展开出来的路由生效
+   * (它们在选择器里就是普通模型行，这两项用户照常能调)，选中的来源不支持时不带。
+   */
+  context?: { hasImages?: boolean; effort?: string; fastMode?: true | 'ultrafast' };
+  /**
+   * 只在这个运行位置的来源里选(agentDeviceId null = 本机)。省略 = 不限(含跨本地、分享与远程位置)。
    */
   location?: { agentDeviceId: string | null };
   /**
@@ -270,6 +464,11 @@ export interface ModelGroupResolveRequest {
    * 只能用这台开了「允许被远程调用」的来源(model-groups.md §3.1、§6.3)。其余来源按用不了处理。
    */
   remoteInvocableOnly?: boolean;
+  /**
+   * SSH 远程主机 id：存在时强制按 SSH 可用边界过滤候选(仅限本机直传源与该 SSH 主机原生 Codex，
+   * 禁止跨 agentDeviceId、禁止订阅直连与本机桥接源)。
+   */
+  sshHostId?: string;
 }
 
 function text(value: unknown, max: number): string {
@@ -277,7 +476,7 @@ function text(value: unknown, max: number): string {
 }
 
 function agentKind(value: unknown): ModelGroupAgentKind | null {
-  return value === 'cc' || value === 'codex' || value === 'pi' ? value : null;
+  return value === 'cc' || value === 'codex' || value === 'pi' || value === 'acp' ? value : null;
 }
 
 function candidate(raw: unknown): ModelGroupCandidate | null {
@@ -287,6 +486,7 @@ function candidate(raw: unknown): ModelGroupCandidate | null {
   const providerId = text(value.providerId, MODEL_GROUP_LIMITS.field);
   const model = text(value.model, MODEL_GROUP_LIMITS.field);
   if (!kind || !providerId || !model) return null;
+  if (kind === 'acp' && !pluginEngineKeyFromProviderId(providerId)) return null;
   // 运行位置截断后会指到别处：格式不对的整条丢弃，不悄悄变成本机。
   let agentDeviceId: string | undefined;
   if (value.agentDeviceId !== undefined && value.agentDeviceId !== null) {
@@ -351,7 +551,66 @@ function normalizeModelGroupRoute(raw: unknown): ModelGroupRoute | null {
     .filter((item): item is ModelGroupException => !!item)
     .slice(0, MODEL_GROUP_LIMITS.exceptions);
   const effort = text(value.effort, MODEL_GROUP_LIMITS.effort);
-  return { id, name, strategy, candidates, ...(exceptions.length > 0 ? { exceptions } : {}), ...(effort ? { effort } : {}) };
+  // 展开出来的路由只凭 id 前缀认：用户排的路由 id 不带这个前缀，带了 parent 也不算。
+  const parentRaw = isExpandedModelGroupId(id) && value.parent && typeof value.parent === 'object' ? value.parent as Record<string, unknown> : null;
+  const parent = parentRaw ? { id: text(parentRaw.id, MODEL_GROUP_LIMITS.id), name: text(parentRaw.name, MODEL_GROUP_LIMITS.name) } : null;
+  return {
+    id, name, strategy, candidates, ...(exceptions.length > 0 ? { exceptions } : {}), ...(effort ? { effort } : {}),
+    ...(value.autoSwitch === false ? { autoSwitch: false as const } : {}),
+    ...(parent?.id && parent.name ? { parent } : {}),
+    ...(parent?.id && value.hidden === true ? { hidden: true as const } : {}),
+  };
+}
+
+/** 供应商路由的成员在配置里的身份：运行位置 + 供应商连接。 */
+export function modelGroupSourceKey(source: Pick<ModelGroupSource, 'providerId' | 'agentDeviceId'>): string {
+  return `${source.agentDeviceId ?? ''}\u0000${source.providerId}`;
+}
+
+function normalizeSources(raw: unknown): ModelGroupSource[] {
+  const seen = new Set<string>();
+  return (Array.isArray(raw) ? raw : []).flatMap((item): ModelGroupSource[] => {
+    const entry = item && typeof item === 'object' ? item as Record<string, unknown> : null;
+    const providerId = entry ? text(entry.providerId, MODEL_GROUP_LIMITS.field) : '';
+    // 运行位置格式不对的整条丢弃，不悄悄变成本机。
+    const location = entry && entry.agentDeviceId !== undefined && entry.agentDeviceId !== null
+      ? modelGroupAgentDeviceId(entry.agentDeviceId) : undefined;
+    const key = `${location ?? ''}\u0000${providerId}`;
+    if (!entry || !providerId || location === null || seen.has(key)) return [];
+    seen.add(key);
+    const weight = modelGroupWeight(entry.weight);
+    return [{
+      providerId, ...(location ? { agentDeviceId: location } : {}),
+      ...(entry.off === true ? { off: true } : {}), ...(weight !== 1 ? { weight } : {}),
+    }];
+  }).slice(0, MODEL_GROUP_LIMITS.candidates);
+}
+
+function normalizeExceptions(raw: unknown): ModelGroupException[] {
+  return (Array.isArray(raw) ? raw : []).map(exception)
+    .filter((item): item is ModelGroupException => !!item)
+    .slice(0, MODEL_GROUP_LIMITS.exceptions);
+}
+
+function normalizeSourceRoute(raw: unknown): ModelGroupSourceRoute | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const id = text(value.id, MODEL_GROUP_LIMITS.id);
+  const name = text(value.name, MODEL_GROUP_LIMITS.name);
+  if (!id || !name || isExpandedModelGroupId(id)) return null;
+  const sources = normalizeSources(value.sources);
+  const strategy = MODEL_GROUP_STRATEGIES.find((item) => item === value.pick)
+    ?? MODEL_GROUP_STRATEGIES.find((item) => item === value.strategy) ?? 'expiring';
+  const effort = text(value.effort, MODEL_GROUP_LIMITS.effort);
+  const auto = isAutoModelGroupId(id);
+  const exceptions = normalizeExceptions(value.exceptions);
+  return {
+    id, name, strategy, sources, ...(effort ? { effort } : {}),
+    ...(value.autoSwitch === false ? { autoSwitch: false as const } : {}),
+    ...(exceptions.length > 0 ? { exceptions } : {}),
+    ...(auto ? { auto: true as const } : {}),
+    ...(auto && value.hidden === true ? { hidden: true as const } : {}),
+  };
 }
 
 function hour(value: unknown): number | null {
@@ -396,13 +655,17 @@ export function modelGroupHoursMatch(when: { from: number; to: number; days?: re
 }
 
 /** 去掉指向自己或已不存在路线的时段例外，以及重复的图片例外。 */
-function pruneExceptions(route: ModelGroupRoute, routeIds: ReadonlySet<string>): ModelGroupRoute {
-  if (!route.exceptions) return route;
+function pruneExceptionList(list: readonly ModelGroupException[], selfId: string, routeIds: ReadonlySet<string>): ModelGroupException[] {
   let image = false;
-  const exceptions = route.exceptions.filter((item) => {
+  return list.filter((item) => {
     if (item.when.type === 'image') return !image && (image = true);
-    return item.use !== 'vision' && item.use.routeId !== route.id && routeIds.has(item.use.routeId);
+    return item.use !== 'vision' && item.use.routeId !== selfId && routeIds.has(item.use.routeId);
   });
+}
+
+function pruneExceptions<T extends { id: string; exceptions?: ModelGroupException[] }>(route: T, routeIds: ReadonlySet<string>): T {
+  if (!route.exceptions) return route;
+  const exceptions = pruneExceptionList(route.exceptions, route.id, routeIds);
   if (exceptions.length > 0) return { ...route, exceptions };
   const rest = { ...route };
   delete rest.exceptions;
@@ -420,12 +683,44 @@ function uniqueById<T extends { id: string }>(items: readonly T[], max: number):
  */
 export function normalizeModelGroupsConfig(raw: unknown): ModelGroupsConfig {
   const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-  const routes = uniqueById(
-    (Array.isArray(value.routes) ? value.routes : []).map(normalizeModelGroupRoute).filter((item): item is ModelGroupRoute => !!item),
-    MODEL_GROUP_LIMITS.routes,
-  );
+  const all = (Array.isArray(value.routes) ? value.routes : []).map(normalizeModelGroupRoute).filter((item): item is ModelGroupRoute => !!item);
+  // 展开出来的路由不存盘，数量由生成方封顶；用户排的路由仍按上限截断。
+  const routes = [
+    ...uniqueById(all.filter((route) => !route.parent), MODEL_GROUP_LIMITS.routes),
+    ...uniqueById(all.filter((route) => route.parent), MODEL_GROUP_EXPANDED_LIMIT),
+  ];
   const routeIds = new Set(routes.map((route) => route.id));
-  return { routes: routes.map((route) => pruneExceptions(route, routeIds)) };
+  const sourceRoutes = uniqueById(
+    (Array.isArray(value.sourceRoutes) ? value.sourceRoutes : []).map(normalizeSourceRoute).filter((item): item is ModelGroupSourceRoute => !!item),
+    MODEL_GROUP_LIMITS.routes * 2,
+  );
+  const hiddenAuto = [...new Set((Array.isArray(value.hiddenAuto) ? value.hiddenAuto : [])
+    .map((id) => text(id, MODEL_GROUP_LIMITS.id)).filter(isAutoModelGroupId))].slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT);
+  const autoStrategy = Object.fromEntries(Object.entries(value.autoStrategy && typeof value.autoStrategy === 'object' ? value.autoStrategy : {})
+    .filter(([id, strategy]) => isAutoModelGroupId(id) && id.length <= MODEL_GROUP_LIMITS.id && MODEL_GROUP_STRATEGIES.includes(strategy as ModelGroupStrategy))
+    .slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT)) as Record<string, ModelGroupStrategy>;
+  const autoSwitchOff = [...new Set((Array.isArray(value.autoSwitchOff) ? value.autoSwitchOff : [])
+    .map((id) => text(id, MODEL_GROUP_LIMITS.id)).filter(isAutoModelGroupId))].slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT);
+  const autoSources = Object.fromEntries(Object.entries(value.autoSources && typeof value.autoSources === 'object' ? value.autoSources : {})
+    .filter(([id]) => isAutoModelGroupId(id) && id.length <= MODEL_GROUP_LIMITS.id)
+    .map(([id, sources]) => [id, normalizeSources(sources)] as const)
+    .filter(([, sources]) => sources.length > 0)
+    .slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT)) as Record<string, ModelGroupSource[]>;
+  // 时段例外只能改走用户排的路由(展开出来的不存盘，没有稳定的目标)；目标删了一并去掉。
+  const autoExceptions = Object.fromEntries(Object.entries(value.autoExceptions && typeof value.autoExceptions === 'object' ? value.autoExceptions : {})
+    .filter(([id]) => isAutoModelGroupId(id) && id.length <= MODEL_GROUP_LIMITS.id)
+    .map(([id, list]) => [id, pruneExceptionList(normalizeExceptions(list), id, routeIds)] as const)
+    .filter(([, list]) => list.length > 0)
+    .slice(0, MODEL_GROUP_HIDDEN_AUTO_LIMIT)) as Record<string, ModelGroupException[]>;
+  return {
+    routes: routes.map((route) => pruneExceptions(route, routeIds)),
+    ...(sourceRoutes.length > 0 ? { sourceRoutes: sourceRoutes.map((route) => pruneExceptions(route, routeIds)) } : {}),
+    ...(hiddenAuto.length > 0 ? { hiddenAuto } : {}),
+    ...(autoSwitchOff.length > 0 ? { autoSwitchOff } : {}),
+    ...(Object.keys(autoStrategy).length > 0 ? { autoStrategy } : {}),
+    ...(Object.keys(autoSources).length > 0 ? { autoSources } : {}),
+    ...(Object.keys(autoExceptions).length > 0 ? { autoExceptions } : {}),
+  };
 }
 
 export function findModelGroupRoute(

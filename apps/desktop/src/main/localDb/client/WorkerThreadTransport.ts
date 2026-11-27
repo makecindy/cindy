@@ -1,3 +1,4 @@
+import { installDeletedTaskVectorCleanup } from '../deletedTaskVectors.js';
 import { PROJECT_ARCHIVE_GUARD_SQL } from '../projectArchiveGuard.js';
 import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
@@ -26,6 +27,7 @@ import {
   type DbTransportTerminationInfo,
   type LogEvent,
   type RpcRequest,
+  type RpcResponse,
   type VecStatusEvent,
   type WorkerMessage,
 } from './DbTransport.js';
@@ -33,6 +35,7 @@ import { isSqliteCorruption, createCorruptDbUnavailableError } from './sqliteCor
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const installDeletedTaskVectorCleanup = ${installDeletedTaskVectorCleanup.toString()};
 const isSqliteCorruption = ${isSqliteCorruption.toString()};
 const createCorruptDbUnavailableError = ${createCorruptDbUnavailableError.toString()};
 let corruptionError = null;
@@ -344,6 +347,7 @@ function createDatabase(opts) {
         dbPath,
         ...vec,
       });
+      if (vec.loaded) installDeletedTaskVectorCleanup(nextDb);
       parentPort.postMessage({ event: 'vec-status', payload: vec });
       assertNoPendingMigrations(nextDb, dbPath, opts.drizzleDir);
       const drift = detectSchemaDrift(nextDb, opts.drizzleDir);
@@ -1219,10 +1223,10 @@ function sessionsSetStatus(readyDb, args) {
     throw Object.assign(new Error('invalid status: ' + status), { code: 'INVALID_ARGS' });
   }
   const selectSession = readyDb.prepare(
-    'SELECT status, source, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT status, source, archived_at AS archivedAt, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = readyDb.prepare(
-    'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, archived_at = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source, archived_at AS archivedAt',
   );
   return readyDb.transaction(() => {
     const applied = [];
@@ -1253,7 +1257,12 @@ function sessionsSetStatus(readyDb, args) {
       if (existing.source === 'bot' && (status === 'archived' || existing.status === 'archived')) {
         readyDb.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
       }
-      const updated = updateSession.get(status, now, sessionId);
+      const nextArchivedAt = status === 'active'
+        ? null
+        : existing.status === 'archived'
+          ? (existing.archivedAt ?? null)
+          : now;
+      const updated = updateSession.get(status, nextArchivedAt, now, sessionId);
       if (closeSharedTasks && status === 'archived') {
         readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
       }
@@ -1265,6 +1274,7 @@ function sessionsSetStatus(readyDb, args) {
         workspaceKind: updated.workspaceKind,
         remoteHostId: updated.remoteHostId,
         source: updated.source,
+        archivedAt: updated.archivedAt ?? null,
         status,
       });
     }
@@ -1280,6 +1290,11 @@ function sessionsSetTerminalStatus(readyDb, args) {
   if (status !== 'archived' && status !== 'deleted') {
     throw Object.assign(new Error('invalid terminal status: ' + status), { code: 'INVALID_ARGS' });
   }
+  const hasExplicitArchivedAt = Object.prototype.hasOwnProperty.call(payload, 'archivedAt');
+  if (hasExplicitArchivedAt && (status !== 'archived'
+    || (payload.archivedAt !== null && (typeof payload.archivedAt !== 'number' || !Number.isFinite(payload.archivedAt))))) {
+    throw Object.assign(new Error('invalid archivedAt'), { code: 'INVALID_ARGS' });
+  }
   return readyDb.transaction(() => {
     const guard = payload.projectGuard;
     if (guard && !readyDb.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
@@ -1294,7 +1309,7 @@ function sessionsSetTerminalStatus(readyDb, args) {
       || !readyDb.prepare("SELECT id FROM sessions WHERE id = ? AND status = 'active' AND user_send_at IS NULL AND active_turn_started_at IS NULL AND pinned_at IS NULL AND NOT EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)").get(sessionId))) {
       throw Object.assign(new Error('Task is no longer unused'), { code: 'PRECONDITION_FAILED' });
     }
-    const existing = readyDb.prepare('SELECT id, status, source, side_chat_promoted AS sideChatPromoted, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
+    const existing = readyDb.prepare('SELECT id, status, source, archived_at AS archivedAt, side_chat_promoted AS sideChatPromoted, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const closeParentId = payload.sideChatCloseParentId;
@@ -1316,16 +1331,25 @@ function sessionsSetTerminalStatus(readyDb, args) {
       readyDb.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
     }
     readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
+    const nextArchivedAt = status === 'deleted'
+      ? null
+      : payload.idleArchiveCutoff !== undefined
+        ? (existing.archivedAt ?? null)
+        : hasExplicitArchivedAt
+          ? payload.archivedAt
+          : existing.status === 'archived'
+            ? (existing.archivedAt ?? null)
+            : now;
     const updated = readyDb.prepare(
-      'UPDATE sessions SET status = ?, side_chat_close_pending = CASE WHEN ? THEN 1 ELSE side_chat_close_pending END, snoozed_until = NULL, snoozed_at = NULL, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
-    ).get(status, closeParentId === undefined ? 0 : 1, payload.idleArchiveCutoff ?? null, now, sessionId);
+      'UPDATE sessions SET status = ?, side_chat_close_pending = CASE WHEN ? THEN 1 ELSE side_chat_close_pending END, snoozed_until = NULL, snoozed_at = NULL, archived_at = ?, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source, archived_at AS archivedAt',
+    ).get(status, closeParentId === undefined ? 0 : 1, nextArchivedAt, payload.idleArchiveCutoff ?? null, now, sessionId);
     if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     const deletedSideChats = status === 'deleted' && (existing.source !== 'side-chat' || existing.sideChatPromoted)
-      ? readyDb.prepare("UPDATE sessions SET status = 'deleted', updated_at = ? " +
+      ? readyDb.prepare("UPDATE sessions SET status = 'deleted', archived_at = NULL, updated_at = ? " +
           "WHERE parent_session_id = ? AND source = 'side-chat' AND side_chat_promoted = 0 AND status <> 'deleted' " +
           'AND NOT ' + COMMITTED_SIDE_CHAT_WORKER_SQL + ' ' +
           'RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind, ' +
-          'remote_host_id AS remoteHostId, source').all(now, sessionId)
+          'remote_host_id AS remoteHostId, source, archived_at AS archivedAt').all(now, sessionId)
       : [];
     if (status === 'deleted') {
       deleteDeletedSessionViewStates(readyDb, [sessionId, ...deletedSideChats.map(child => child.sessionId)]);
@@ -1333,7 +1357,7 @@ function sessionsSetTerminalStatus(readyDb, args) {
     for (const child of deletedSideChats) {
       readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
     }
-    return { ...updated, sessionId: updated.id, status, deletedSideChats };
+    return { ...updated, sessionId: updated.id, archivedAt: updated.archivedAt ?? null, status, deletedSideChats };
   })();
 }
 
@@ -1622,12 +1646,14 @@ function orcaUpsertWorker(readyDb, args) {
       const remote = asRecord(payload.remoteExecution, 'remoteExecution');
       if (remote.proxySession !== undefined) {
         const proxy = asRecord(remote.proxySession, 'remoteExecution.proxySession');
-        readyDb.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?)").run(
+        readyDb.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at, provider_id, agent_device_id) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?, ?, ?)").run(
           sessionId, expectString(proxy.title, 'proxySession.title'),
           expectString(proxy.model, 'proxySession.model'),
           proxy.effort == null ? 'high' : expectString(proxy.effort, 'proxySession.effort'),
           expectString(proxy.permissionMode, 'proxySession.permissionMode'), fastModeToStorage(proxy.fastMode),
           expectString(proxy.agentKind, 'proxySession.agentKind'), now, now,
+          proxy.providerId == null ? null : expectString(proxy.providerId, 'proxySession.providerId'),
+          proxy.agentDeviceId == null ? null : expectString(proxy.agentDeviceId, 'proxySession.agentDeviceId'),
         );
       }
     }
@@ -2123,6 +2149,9 @@ function forkSession(readyDb, args) {
     if (newMessageIds.length !== sourceMessages.length) {
       throw invalidArgs('newMessageIds length mismatch: expected ' + sourceMessages.length + ', got ' + newMessageIds.length);
     }
+    if (payload.sourceMessagesDigest != null && computeForkSourceMessagesDigest(sourceMessages) !== expectString(payload.sourceMessagesDigest, 'sourceMessagesDigest')) {
+      throw invalidArgs('Source history changed while preparing fork');
+    }
     const childCreatedAt = expectNumber(newSession.createdAt, 'newSession.createdAt');
     // Keep inherited history before the side-chat boundary, preserving relative order.
     const historyTimeOffset = newSession.source === 'side-chat'
@@ -2581,16 +2610,27 @@ parentPort.on('message', async (req) => {
 });
 `;
 
-interface PendingRpc {
+interface RpcDispatch {
   op: string;
   enqueuedAt: number;
   dispatchedAt: number;
+}
+
+interface PendingRpc extends RpcDispatch {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
   /** 当前预算窗口的起点(挂钟)。跨睡眠重武装时会重置,见 evaluateRpcTimeout。 */
   sentAtMs: number;
   background: boolean;
+}
+
+interface TimedOutRpc extends RpcDispatch {
+  timedOutAt: number;
+}
+
+function elapsedMs(from: number, to: number): number {
+  return Math.round(Math.max(0, to - from));
 }
 
 interface QueuedRpc {
@@ -2666,6 +2706,7 @@ export interface WorkerThreadTransportOptions {
 
 export class WorkerThreadTransport implements DbTransport {
   private static readonly RPC_TIMEOUT_MS = 30_000;
+  private static readonly MAX_TIMED_OUT_RPCS = 128;
   private static readonly DEFAULT_MAX_IN_FLIGHT_RPCS = 128;
   private static readonly DEFAULT_MAX_QUEUED_RPCS = 512;
   /** 一次侧栏索引大约 4 路 rawAll；16 够几路对账并行，占不满 128。 */
@@ -2673,12 +2714,14 @@ export class WorkerThreadTransport implements DbTransport {
   private static readonly DEFAULT_MAX_BACKGROUND_QUEUED_RPCS = 32;
 
   private worker: Worker;
-  private nextId = 1;
+  // Logs from different workers share a process, including after a worker restart.
+  private static nextId = 1;
   private closed = false;
   private closing = false;
   private corruptionError: Error | null = null;
   private vecLoaded = false;
   private readonly pending = new Map<number, PendingRpc>();
+  private readonly timedOut = new Map<number, TimedOutRpc>();
   private readonly queued: QueuedRpc[] = [];
   private readonly eventListeners = new Map<EventName, Set<(payload: unknown) => void>>();
   private readonly terminatedListeners = new Set<(info: DbTransportTerminationInfo) => void>();
@@ -2698,7 +2741,7 @@ export class WorkerThreadTransport implements DbTransport {
     if (this.corruptionError && op !== 'closeDb') {
       return Promise.reject(createCorruptDbUnavailableError(this.corruptionError));
     }
-    const id = this.nextId++;
+    const id = WorkerThreadTransport.nextId++;
     const req: RpcRequest = { id, op, args };
     const background = isBackgroundDbRpc();
     return new Promise<R>((resolve, reject) => {
@@ -2876,6 +2919,19 @@ export class WorkerThreadTransport implements DbTransport {
         return;
       }
       this.pending.delete(id);
+      const { enqueuedAt, dispatchedAt } = pending;
+      const timedOutAt = performance.timeOrigin + performance.now();
+      const dispatch = { op, enqueuedAt, dispatchedAt, timedOutAt };
+      // Keep only timing metadata, capped independently of in-flight admission.
+      if (this.timedOut.size >= WorkerThreadTransport.MAX_TIMED_OUT_RPCS) {
+        const oldest = this.timedOut.keys().next().value;
+        if (oldest !== undefined) this.timedOut.delete(oldest);
+      }
+      this.timedOut.set(id, dispatch);
+      this.emitRpcDebug('rpc.timeout', id, dispatch, timedOutAt, {
+        dispatchedMs: elapsedMs(dispatchedAt, timedOutAt),
+        workerTiming: 'unknown',
+      });
       pending.reject(
         createDbTransportError(
           DB_TRANSPORT_OUTCOME_UNKNOWN,
@@ -3002,31 +3058,23 @@ export class WorkerThreadTransport implements DbTransport {
         try { this.opts.onCorruption?.(this.corruptionError); } catch { /* Admission remains closed. */ }
       }
       const pending = this.pending.get(msg.id);
-      if (!pending) return;
+      const receivedAt = performance.timeOrigin + performance.now();
+      if (!pending) {
+        const timedOut = this.timedOut.get(msg.id);
+        if (timedOut) {
+          this.timedOut.delete(msg.id);
+          this.emitRpcDebug('rpc.lateReply', msg.id, timedOut, receivedAt, {
+            ...this.replyTiming(msg, timedOut, receivedAt),
+            lateByMs: elapsedMs(timedOut.timedOutAt, receivedAt),
+            ...(msg.timing ? { workerFinishedBeforeTimeout: msg.timing.finishedAt <= timedOut.timedOutAt } : {}),
+          });
+        }
+        return;
+      }
       this.pending.delete(msg.id);
       clearTimeout(pending.timeout);
-      const receivedAt = performance.timeOrigin + performance.now();
-      const totalMs = receivedAt - pending.enqueuedAt;
-      if (totalMs >= 250) {
-        // Local debug only: operation class and durations, never query/args/results.
-        // Delivery includes result transfer and main event-loop scheduling; execution
-        // includes a whole worker operation (possibly a transaction), not only SQL.
-        const ms = (value: number) => Math.round(Math.max(0, value));
-        try {
-          this.emitClientLog('debug', {
-            event: 'rpc.slow', id: msg.id, totalMs: ms(totalMs),
-            op: ['rawAll', 'rawGet', 'query', 'queryOne', 'run', 'exec', 'tx', 'closeDb', 'worktreeReferences'].includes(pending.op) ? pending.op : 'other',
-            queueMs: ms(pending.dispatchedAt - pending.enqueuedAt),
-            ...(msg.timing ? {
-              workerWaitMs: ms(msg.timing.startedAt - pending.dispatchedAt),
-              workerExecutionMs: ms(msg.timing.finishedAt - msg.timing.startedAt),
-              deliveryMs: ms(receivedAt - msg.timing.finishedAt),
-            } : {}),
-            inFlight: this.pending.size, queued: this.queued.length, ok: msg.ok,
-          });
-        } catch {
-          // Debug sinks must not prevent settling the RPC or draining the queue.
-        }
+      if (receivedAt - pending.enqueuedAt >= 250) {
+        this.emitRpcDebug('rpc.slow', msg.id, pending, receivedAt, this.replyTiming(msg, pending, receivedAt));
       }
       if (msg.ok) {
         pending.resolve(msg.result);
@@ -3047,6 +3095,40 @@ export class WorkerThreadTransport implements DbTransport {
     for (const cb of listeners) cb(msg.payload);
   }
 
+  private replyTiming(msg: RpcResponse, rpc: RpcDispatch, receivedAt: number) {
+    if (!msg.timing) return { ok: msg.ok, workerTiming: 'unknown' };
+    // Execution covers the entire worker operation. Delivery also includes main-loop scheduling.
+    const { startedAt, finishedAt } = msg.timing;
+    return {
+      ok: msg.ok,
+      workerWaitMs: elapsedMs(rpc.dispatchedAt, startedAt),
+      workerExecutionMs: elapsedMs(startedAt, finishedAt),
+      deliveryMs: elapsedMs(finishedAt, receivedAt),
+    };
+  }
+
+  private emitRpcDebug(
+    event: 'rpc.timeout' | 'rpc.lateReply' | 'rpc.slow',
+    id: number,
+    rpc: RpcDispatch,
+    observedAt: number,
+    fields: object,
+  ): void {
+    try {
+      this.emitClientLog('debug', {
+        event, id,
+        op: ['rawAll', 'rawGet', 'query', 'queryOne', 'run', 'exec', 'tx', 'closeDb', 'worktreeReferences'].includes(rpc.op) ? rpc.op : 'other',
+        queueMs: elapsedMs(rpc.enqueuedAt, rpc.dispatchedAt),
+        totalMs: elapsedMs(rpc.enqueuedAt, observedAt),
+        inFlight: this.pending.size,
+        queued: this.queued.length,
+        ...fields,
+      });
+    } catch {
+      // Debug sinks must not prevent settling the RPC or draining the queue.
+    }
+  }
+
   /**
    * 客户端侧(非 worker)产生的日志走同一条 'log' 事件通道,由 DbClient 汇入
    * 统一 logger —— transport 自身不 import logger,保持零 Electron 依赖可测。
@@ -3064,6 +3146,7 @@ export class WorkerThreadTransport implements DbTransport {
       pending.reject(pendingError);
     }
     this.pending.clear();
+    this.timedOut.clear();
     for (const queued of this.queued.splice(0)) {
       if (queued.queueTimeout) clearTimeout(queued.queueTimeout);
       queued.reject(queuedError);

@@ -14,6 +14,8 @@ import {
   supportsLinuxClipboard,
 } from './linuxClipboardNative';
 
+import { isX11Clipboard } from './linuxX11Clipboard';
+import { gnomeClipboardReady } from './linuxGnomeClipboard';
 import {
   CLIPBOARD_IMAGE_BYTES as IMAGE_BYTES,
   CLIPBOARD_IMAGE_PIXELS as IMAGE_PIXELS,
@@ -101,14 +103,7 @@ export async function transferDesktopClipboard(
     : clipboard.readText();
   check();
   if (writtenText !== text) throw new Error('DESKTOP_CLIPBOARD_WRITE_FAILED');
-  const modifier = process.platform === 'darwin' ? 'MetaLeft' : 'ControlLeft';
-  input([
-    { kind: 'release' },
-    { kind: 'key', code: modifier, down: true },
-    { kind: 'key', code: 'KeyV', down: true },
-    { kind: 'key', code: 'KeyV', down: false },
-    { kind: 'key', code: modifier, down: false },
-  ]);
+  input(clipboardPasteShortcut());
 }
 
 /** Portable formats are written together so HTML/image alternatives survive. */
@@ -182,7 +177,10 @@ export async function transferDesktopClipboardContent(
       (value.text || value.url || undefined) !== actual.text ||
       value.html !== actual.html ||
       value.rtf !== actual.rtf ||
-      value.png !== actual.png
+      (isX11Clipboard() && value.png && actual.png
+        ? !clipboardPng(nativeImage.createFromBuffer(incomingPng(value.png)))
+          .equals(clipboardPng(nativeImage.createFromBuffer(incomingPng(actual.png))))
+        : value.png !== actual.png)
     )
       throw new Error('DESKTOP_CLIPBOARD_WRITE_FAILED');
     if (options?.sync) {
@@ -226,12 +224,24 @@ export async function transferDesktopClipboardContent(
       return { version };
     }
   }
-  const modifier = process.platform === 'darwin' ? 'MetaLeft' : 'ControlLeft';
-  input([
+  input(clipboardPasteShortcut());
+}
+
+/** Shift+Insert is the paste binding shared by Chrome/GTK and terminals on X11
+ * and GNOME Wayland; Ctrl+V is literal input in a terminal. Sync never calls it. */
+function clipboardPasteShortcut(): DesktopInput[] {
+  const shiftInsert = isX11Clipboard() || gnomeClipboardReady();
+  const modifier = shiftInsert
+    ? 'ShiftLeft'
+    : process.platform === 'darwin'
+      ? 'MetaLeft'
+      : 'ControlLeft';
+  const key = shiftInsert ? 'Insert' : 'KeyV';
+  return [
     { kind: 'release' },
     { kind: 'key', code: modifier, down: true },
-    { kind: 'key', code: 'KeyV', down: true },
-    { kind: 'key', code: 'KeyV', down: false },
+    { kind: 'key', code: key, down: true },
+    { kind: 'key', code: key, down: false },
     { kind: 'key', code: modifier, down: false },
-  ]);
+  ];
 }

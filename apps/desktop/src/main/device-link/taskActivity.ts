@@ -1,8 +1,19 @@
-import type { HostTaskActivity } from '@cindy/device-link';
+import {
+  HOST_TASK_ACTIVITY_COMPANION_JPEG_MAX,
+  type HostTaskActivity,
+  type HostTaskActivityCompanion,
+} from '@cindy/device-link';
 import type { AgentIslandSessionSnapshot } from '../../shared/agentIsland.js';
 
-/** Full execution-host projection, independent of Home pagination and island UI visibility. */
-export function projectHostTaskActivity(snapshots: readonly AgentIslandSessionSnapshot[]): HostTaskActivity {
+/**
+ * Execution-host counts from the island overview (not Home pagination), so the phone matches this computer.
+ * `includeCompanion` adds the selected task's companion identity for the same-account
+ * device-link snapshot. The official task-activity upload keeps its documented body.
+ */
+export function projectHostTaskActivity(
+  snapshots: readonly AgentIslandSessionSnapshot[],
+  options: { includeCompanion?: boolean } = {},
+): HostTaskActivity {
   const candidates = snapshots.filter(
     (row) =>
       !row.groupChat &&
@@ -11,6 +22,9 @@ export function projectHostTaskActivity(snapshots: readonly AgentIslandSessionSn
   const rank = { 'needs-interaction': 0, completed: 1, error: 1, running: 2 };
   candidates.sort((a, b) => rank[a.phase] - rank[b.phase]);
   const first = candidates[0];
+  const companion = options.includeCompanion && first && first.phase !== 'running'
+    ? hostTaskActivityCompanion(first.companion)
+    : undefined;
   return {
     schemaVersion: 1 as const,
     waitingCount: candidates.filter((row) => row.phase === 'needs-interaction').length,
@@ -22,8 +36,25 @@ export function projectHostTaskActivity(snapshots: readonly AgentIslandSessionSn
           sessionId: first.sessionId,
           title: [...first.title].slice(0, 100).join(''),
           status: first.phase === 'needs-interaction' ? 'attention' : first.phase,
+          ...(companion ? { companion } : {}),
         }
       : null,
+  };
+}
+
+/** Same identity and thumbnail bound as the macOS Live Activity companion. */
+function hostTaskActivityCompanion(
+  companion: AgentIslandSessionSnapshot['companion'],
+): HostTaskActivityCompanion | undefined {
+  if (!companion) return undefined;
+  const imageJpeg = companion.imageJpeg && companion.imageJpeg.length <= HOST_TASK_ACTIVITY_COMPANION_JPEG_MAX
+    ? companion.imageJpeg
+    : undefined;
+  return {
+    hue: companion.hue,
+    glyph: companion.glyph,
+    glyphIsInitial: companion.glyphIsInitial,
+    ...(imageJpeg ? { imageJpeg } : {}),
   };
 }
 

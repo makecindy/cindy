@@ -58,6 +58,11 @@ import { mergeAttachmentsWithinLimit } from './attachments';
 import type { MobileLocalAttachmentUploadCandidate } from './mobileLocalAttachmentUpload';
 import { noteLocalSend } from './localSendMotion';
 import {
+  logNewSessionCreationTiming,
+  startNewSessionCreationTimer,
+  type NewSessionCreationTimer,
+} from './newSessionCreationTiming';
+import {
   forgetPendingPrecreatedWorktree,
   parseDiscardPrecreatedAck,
   registerPendingPrecreatedWorktree,
@@ -138,9 +143,9 @@ export interface NewSessionCreationParams {
   sleep?: (ms: number) => Promise<void>;
   /**
    * 会话在被控电脑上建成后调用一次(重跑管线不再调用)：经模型组选的来源要请那台记下任务用着谁、
-   * 提交选路记录并在任务里写说明(model-groups.md §6.3)。抛错不影响创建。
+   * 提交选路记录并在任务里写说明(model-groups.md §6.3)。返回 Promise 时会在首条消息入队前有界等待，抛错不影响创建。
    */
-  onSessionCreated?: (sessionId: string) => void;
+  onSessionCreated?: (sessionId: string) => void | Promise<void>;
 }
 
 export interface NewSessionCreationTask {
@@ -181,6 +186,8 @@ interface InternalTask extends NewSessionCreationTask {
   precreatedWorktreeSessionCreateStarted: boolean;
   /** onSessionCreated 已经调用过(重试同一个任务时不再调用)。 */
   sessionCreatedNotified?: boolean;
+  /** 首条消息已交出、管线正常收口(只用于计时记录的结果)。 */
+  handedOff?: boolean;
   params: NewSessionCreationParams;
 }
 
@@ -402,7 +409,7 @@ export function retryNewSessionCreation(sessionId: string): void {
   ), task.firstMessageSessionRefs);
   remoteSessionStore.setInputProjectionOptimistically(sessionId, buildOptimisticProjection(sessionId, queued));
   emit();
-  void runPipeline(task);
+  void runPipeline(task, true);
 }
 
 /**
@@ -963,6 +970,7 @@ function finishTask(task: InternalTask): void {
   }
   forgetPrecreatedRecoveryRecord(task);
   tasks.delete(task.sessionId);
+  task.handedOff = true;
   emit();
 }
 
@@ -1246,7 +1254,28 @@ function cancelStaleOwnerTask(task: InternalTask): void {
   emit();
 }
 
-async function runPipeline(task: InternalTask): Promise<void> {
+async function runPipeline(task: InternalTask, retry = false): Promise<void> {
+  const timer = startNewSessionCreationTimer({
+    startedAt: task.startedAt,
+    clientId: task.firstMessageClientId,
+    agentKind: task.draft.agentKind,
+    durable: Boolean(task.params.transport.handoffFirstMessage),
+    worktree: Boolean(task.params.precreatedWorktree),
+    retry,
+  });
+  try {
+    await runPipelineSteps(task, timer);
+  } finally {
+    try {
+      logNewSessionCreationTiming(timer.finish(task.handedOff ? 'handed-off'
+        : task.status === 'running' ? 'dismissed' : task.status));
+    } catch {
+      // 诊断不能影响创建。
+    }
+  }
+}
+
+async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTimer): Promise<void> {
   const phase = (value: SlowSendPhase) => {
     task.phase = value;
     emit();
@@ -1279,6 +1308,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
         assertTaskOwnerCurrent(task);
       }
     }
+    timer.lap('claim');
     await withTransientRemoteRetry(async () => {
       assertTaskOwnerCurrent(task);
       await openLink(params.deviceId);
@@ -1286,6 +1316,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
       await subscribe(`new-session:${params.deviceId}`, params.deviceId, ['sessions']);
       assertTaskOwnerCurrent(task);
     });
+    timer.lap('link');
     // 建链/订阅完成后再启动鉴权 fresh revalidate(codex review P2:将最终目录
     // 刷新放到建链和订阅之后)——与建链并行启动时,listProviders 可能在建链完成
     // 前就返回旧目录快照(来源 A),而建链期间工作站已替换为 B,后续拿旧 A 快照
@@ -1302,6 +1333,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
       }
     })();
     const auth = await freshUnauthenticated;
+    timer.lap('modelCheck');
     assertTaskOwnerCurrent(task);
     if (auth?.unauthenticated) {
       params.onUnauthenticated();
@@ -1319,14 +1351,17 @@ async function runPipeline(task: InternalTask): Promise<void> {
       assertTaskOwnerCurrent(task);
     }
     const finalDraft: NewSessionDraft = draftPatch ? { ...task.draft, ...draftPatch } : task.draft;
+    timer.lap('revalidate');
 
     phase('creating');
     // The durable outbox resolves when preparing delivery, including cold recovery.
     // Direct enqueue resolves after openLink, before creating any host session.
     const creationDraft = params.transport.handoffFirstMessage ? finalDraft
       : await resolveNewSessionSkillDraft(finalDraft, params.deviceId, maker);
+    timer.lap('skill');
     assertTaskOwnerCurrent(task);
     const createOutcome = await createSessionIdempotent(task, creationDraft);
+    timer.lap('create');
     // started 写盘后二次重验可能修正草稿(codex review P2:将 started 后修正的
     // 草稿传给排队消息)——createOpts 用修正版创建,排队消息合成也必须用同一
     // 修正版:否则 getSession 弱网失败时 sessionForQueue 按旧 finalDraft 合成,
@@ -1341,10 +1376,11 @@ async function runPipeline(task: InternalTask): Promise<void> {
     if (params.onSessionCreated && !task.sessionCreatedNotified) {
       task.sessionCreatedNotified = true;
       try {
-        params.onSessionCreated(sessionId);
+        await params.onSessionCreated(sessionId);
       } catch {
         // 只影响模型组的记录与说明，任务照常进行。
       }
+      assertTaskOwnerCurrent(task);
     }
 
     // 权威会话刷新(dialogue 会话此刻才拿到被控端分配的 workingDir);失败不阻断,
@@ -1369,6 +1405,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
       if (isStaleNewSessionOwnerError(error)) throw error;
       freshSession = null;
     }
+    timer.lap('read');
 
     // 重跑管线(enqueue 失败后重试)时团队可能已建成:权威行已是 Lead 就不再开启。
     if (params.orcaEnable && freshSession?.orcaRole !== 'lead') {
@@ -1382,6 +1419,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
         rememberOrcaStartFailure(sessionId, describeOrcaError(error, null));
       }
       assertTaskOwnerCurrent(task);
+      timer.lap('team');
     }
 
     if (params.planModeArm && !params.transport.handoffFirstMessage) {
@@ -1393,6 +1431,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
         // best-effort
       }
       assertTaskOwnerCurrent(task);
+      timer.lap('planMode');
     }
 
     // 同 clientId 重建 queued(workingDir 等 lazy-create 材料以权威会话为准):
@@ -1437,6 +1476,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
     if (params.transport.handoffFirstMessage) {
       try {
         await params.transport.handoffFirstMessage(queuedDraft);
+        timer.lap('handoff');
         assertTaskOwnerCurrent(task);
         remoteSessionStore.applySessionPatch(params.deviceId, sessionId, { pendingLocalCreation: false });
         finishTask(task);
@@ -1518,6 +1558,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
       }
       assertTaskOwnerCurrent(task);
     }
+    timer.lap('handoff');
 
     // 收口前主动清合成行的 pendingLocalCreation 禁发标:正常情况下上面的 fresh
     // getSession 已用权威行(无标)覆盖,但弱网下 getSession 可能失败,靠会话页

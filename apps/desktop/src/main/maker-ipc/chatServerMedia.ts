@@ -1,10 +1,12 @@
 import { chatErrorDiagnostic, chatRetryDeadline, rememberUploadRetryDeadline } from './chatServerErrors.js';
+import { isTransientGetTransportReset } from './chatServerTransport.js';
 import { retryAfterDeadline } from '@cindy/auth-client';
 import { net } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile as readMedia, supportedMime } from '../cindy-media/blobStore.desktop.js';
+import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { captureRemoteMediaCacheValidity, chatMediaPersistentCache, remoteMediaCacheGeneration } from '../device-link/remoteMediaPersistentCache.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { botGroupAttachmentsPath } from './botGroupWorkDir.js';
@@ -118,7 +120,9 @@ export function createChatMedia(api: ChatApi, current: () => boolean, endpoint: 
           await checkFile();
           if (!bytes || !bytes.length || bytes.length > MAX_SIZE) throw new Error('ATTACHMENT_UNAVAILABLE');
           const key = createHash('sha256').update(source).update(attachment.id).update(bytes).digest('hex');
-          const metadata = { name: attachment.name, type: attachment.mimeType, size: bytes.length };
+          const isReplyMp4 = attachment.sourceUrl && attachment.readBytes
+            && path.extname(attachment.name).toLowerCase() === '.mp4' && sniffMediaMime(bytes) === 'video/mp4';
+          const metadata = { name: attachment.name, type: isReplyMp4 ? 'video/mp4' : attachment.mimeType, size: bytes.length };
           // Try the old key first: successful uploads (including lost ACKs) keep their receipt.
           let upload: { id: string; uploadUrl: string };
           let replacedExpired = false;
@@ -202,22 +206,32 @@ export function createChatMedia(api: ChatApi, current: () => boolean, endpoint: 
           if (hit && hit.bytes.length === size)
             return { ...base, mimeType: hit.mimeType, category: 'image' as const, url: hit.url, path: null };
         }
-        const response = await net.fetch(signedUrl(media.url), { redirect: 'error', signal: AbortSignal.timeout(60000) });
-        // The status tells a file that is gone (4xx: never comes) from a failing server (retried).
-        if (!response.ok || !response.body) throw Object.assign(new Error('MEDIA_DOWNLOAD_FAILED'), response.ok ? {} : { status: response.status });
-        const chunks: Uint8Array[] = []; let received = 0;
-        const reader = response.body.getReader();
+        const downloadBytes = async (): Promise<Buffer> => {
+          const response = await net.fetch(signedUrl(media.url), { redirect: 'error', signal: AbortSignal.timeout(60000) });
+          // The status tells a file that is gone (4xx: never comes) from a failing server (retried).
+          if (!response.ok || !response.body) throw Object.assign(new Error('MEDIA_DOWNLOAD_FAILED'), response.ok ? {} : { status: response.status });
+          const chunks: Uint8Array[] = []; let received = 0;
+          const reader = response.body.getReader();
+          try {
+            for (;;) {
+              const next = await reader.read(); checkDownload();
+              if (next.done) break;
+              received += next.value.byteLength;
+              if (received > size) throw new Error('INVALID_MEDIA_SIZE');
+              chunks.push(next.value);
+            }
+          } finally { await reader.cancel(); }
+          if (received !== size) throw new Error('INVALID_MEDIA_SIZE');
+          return Buffer.concat(chunks);
+        };
+        let buffer: Buffer;
         try {
-          for (;;) {
-            const next = await reader.read(); checkDownload();
-            if (next.done) break;
-            received += next.value.byteLength;
-            if (received > size) throw new Error('INVALID_MEDIA_SIZE');
-            chunks.push(next.value);
-          }
-        } finally { await reader.cancel(); }
-        if (received !== size) throw new Error('INVALID_MEDIA_SIZE');
-        const buffer = Buffer.concat(chunks);
+          buffer = await downloadBytes();
+        } catch (error) {
+          checkDownload();
+          if (!isTransientGetTransportReset(error)) throw error;
+          buffer = await downloadBytes();
+        }
         checkDownload();
         if (isImage) {
           const stored = await persistent?.put(buffer, media.type);

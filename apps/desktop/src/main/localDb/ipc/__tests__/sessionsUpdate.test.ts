@@ -279,7 +279,7 @@ function createDb(): void {
       context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, archived_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
@@ -304,6 +304,7 @@ function createDb(): void {
       remote_host_id TEXT,
       agent_device_id TEXT,
       orca_remote_lead TEXT,
+      created_by_session TEXT,
       codex_history_has_product_prompt INTEGER,
       codex_plan_json TEXT,
       im_bot_context_id TEXT,
@@ -1103,7 +1104,7 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'active' });
     expect(h.routeLock).toHaveBeenCalledTimes(routeLockHeld ? 0 : 1);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
-      sessionId: 'codex-local', patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
+      sessionId: 'codex-local', patch: { status: 'active', archivedAt: null, snoozedUntil: null, snoozedAt: null },
     }));
   });
 
@@ -1336,6 +1337,78 @@ describe('local-db:sessions:update handler wiring', () => {
     }
   });
 
+  // 2026-11-26: bound automation temporary switch across plugin engine and built-in harnesses.
+  // Production entry: createSessionRuntimeProjector + projectScheduledPreferences + persistSessionFields.
+  // Minimal failing input: a plugin-engine baseline projected as 'cc', or a built-in baseline skipped
+  // while the row temporarily holds agent_kind='acp'. Unit tier.
+  it('projects a saved plugin-engine baseline during a built-in override and vice versa', async () => {
+    const sessionId = 'pi-local';
+    const projection = createSessionRuntimeProjection({ broadcastSessionPatched });
+    const projector = createSessionRuntimeProjector({
+      projectScheduledPreferences: projection.projectScheduledPreferences,
+      runtimePluginsSelected: () => false,
+    });
+    const acpBaseline = JSON.stringify({
+      scopeId: 'acp-owner',
+      agentKind: 'acp',
+      agentDeviceId: null,
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'bypassPermissions',
+    });
+    expect(projector({
+      id: sessionId,
+      agentKind: 'codex',
+      agentDeviceId: null,
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      effort: 'medium',
+      fastMode: false,
+      scheduledModelBaseline: acpBaseline,
+    })).toMatchObject({
+      agentKind: 'acp',
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'bypassPermissions',
+      runtimeBaseline: undefined,
+      runtimeEffective: undefined,
+      runtimePending: null,
+      runtimeBaselineRecoveryPending: false,
+    });
+    const builtinBaseline = JSON.stringify({
+      scopeId: 'codex-owner',
+      agentKind: 'codex',
+      agentDeviceId: null,
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      effort: 'high',
+      fastMode: true,
+      permissionMode: 'acceptEdits',
+    });
+    expect(projector({
+      id: sessionId,
+      agentKind: 'acp' as unknown as Parameters<typeof projector>[0]['agentKind'],
+      agentDeviceId: null,
+      model: 'gemini-4',
+      providerId: 'acp-plugin:agy:agy',
+      effort: '',
+      fastMode: false,
+      scheduledModelBaseline: builtinBaseline,
+    })).toMatchObject({
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      effort: 'high',
+      fastMode: true,
+      permissionMode: 'acceptEdits',
+      runtimeBaselineRecoveryPending: true,
+    });
+  });
+
   it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {
     await expect(invokeUpdate('review-local', { effort: 'low' })).rejects.toThrow(
       /Review task settings are fixed/,
@@ -1423,7 +1496,7 @@ describe('local-db:sessions:update handler wiring', () => {
       'local-db:sessions:patched',
       expect.objectContaining({
         sessionId: 'cc-local',
-        patch: { status: 'deleted', snoozedUntil: null, snoozedAt: null },
+        patch: { status: 'deleted', archivedAt: null, snoozedUntil: null, snoozedAt: null },
       }),
     );
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
@@ -1604,18 +1677,19 @@ describe('local-db:sessions:update handler wiring', () => {
   });
 
   it('broadcasts local unarchive status patches to every window (#3175)', async () => {
-    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived', archived_at = 1700000000000 WHERE id = ?").run('codex-local');
 
     await invokeUpdate('codex-local', { status: 'active' });
     await vi.dynamicImportSettled();
 
     const persisted = h
-      .sqlite!.prepare('SELECT status FROM sessions WHERE id = ?')
-      .get('codex-local') as { status: string };
+      .sqlite!.prepare('SELECT status, archived_at AS archivedAt FROM sessions WHERE id = ?')
+      .get('codex-local') as { status: string; archivedAt: number | null };
     expect(persisted.status).toBe('active');
+    expect(persisted.archivedAt).toBeNull();
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
+      patch: { status: 'active', archivedAt: null, snoozedUntil: null, snoozedAt: null },
     });
     expect(h.compactSessionToolResultsBestEffort).not.toHaveBeenCalled();
   });
@@ -1627,13 +1701,21 @@ describe('local-db:sessions:update handler wiring', () => {
     await vi.dynamicImportSettled();
 
     const persisted = h
-      .sqlite!.prepare('SELECT status, pinned_at AS pinnedAt FROM sessions WHERE id = ?')
-      .get('codex-local') as { status: string; pinnedAt: number | null };
+      .sqlite!.prepare('SELECT status, pinned_at AS pinnedAt, archived_at AS archivedAt FROM sessions WHERE id = ?')
+      .get('codex-local') as { status: string; pinnedAt: number | null; archivedAt: number | null };
     expect(persisted.status).toBe('archived');
     expect(persisted.pinnedAt).toBeNull();
+    expect(persisted.archivedAt).toBeGreaterThan(0);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'archived', pinnedAt: null, summary: null, snoozedUntil: null, snoozedAt: null },
+      patch: {
+        status: 'archived',
+        archivedAt: new Date(persisted.archivedAt!).toISOString(),
+        pinnedAt: null,
+        summary: null,
+        snoozedUntil: null,
+        snoozedAt: null,
+      },
     });
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'codex-local' }),
@@ -1659,7 +1741,14 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.requestRecycle).toHaveBeenCalledTimes(2);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'archived', pinnedAt: null, summary: null, snoozedUntil: null, snoozedAt: null },
+      patch: {
+        status: 'archived',
+        archivedAt: expect.any(String),
+        pinnedAt: null,
+        summary: null,
+        snoozedUntil: null,
+        snoozedAt: null,
+      },
     });
   });
 
@@ -1840,7 +1929,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'deleted', snoozedUntil: null, snoozedAt: null },
+      patch: { status: 'deleted', archivedAt: null, snoozedUntil: null, snoozedAt: null },
     });
     // 不再出现携带请求值的回滚广播
     const statusPatches = h.tapWindowBroadcast.mock.calls
@@ -1871,6 +1960,27 @@ describe('local-db:sessions:update handler wiring', () => {
       .filter(([channel]) => channel === 'local-db:sessions:patched')
       .map(([, payload]) => (payload as { patch: { status?: string } }).patch.status);
     expect(statusPatches).toEqual(['deleted']);
+  });
+
+  // #12464, DB tier: IM owns this task's route lock while calling the helper.
+  // Retry the same pin with a later clock and clear the stored card via patch-meta.
+  it('pins the current IM task without reentering its lease or moving an existing pin', async () => {
+    const first = '2026-08-03T04:08:26.000Z';
+    h.routeLock.mockImplementation(async () => { throw new Error('reentered IM route lock'); });
+    await invokePatchMeta('codex-local', { pinnedAt: first });
+    await vi.dynamicImportSettled();
+    h.tapWindowBroadcast.mockClear();
+    h.summarizeSession.mockClear();
+    await expect(invokePatchMeta('codex-local', { pinnedAt: '2026-08-04T00:00:00.000Z' }))
+      .resolves.toMatchObject({ pinnedAt: first });
+    await vi.dynamicImportSettled();
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+    expect(h.summarizeSession).not.toHaveBeenCalled();
+    h.sqlite!.prepare('UPDATE sessions SET summary = ? WHERE id = ?').run('card', 'codex-local');
+    await expect(invokePatchMeta('codex-local', { pinnedAt: null })).resolves.toMatchObject({ pinnedAt: null, summary: null });
+    expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
+      sessionId: 'codex-local', patch: { pinnedAt: null, summary: null },
+    });
   });
 
   it('broadcasts pin and unpin patches to device-link subscribers', async () => {
@@ -2263,6 +2373,16 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.relocate).not.toHaveBeenCalled();
   });
 
+  it('persists a project move without relocating a bound worktree or its transcript', async () => {
+    const worktree = path.join(h.userDataDir!, '.cindy-worktrees', 'task');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktree, 'cc-local');
+    await invokeUpdate('cc-local', { workspaceKind: 'project', workingDir: '/new/project' });
+    expect(h.sqlite!.prepare('SELECT working_dir, project_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: worktree, project_dir: '/new/project' });
+    expect(h.closeSession).not.toHaveBeenCalled();
+    expect(h.relocate).not.toHaveBeenCalled();
+  });
+
   it('still allows moving a worktree session back to a dialogue', async () => {
     const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
     h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktreeDir, 'cc-local');
@@ -2483,7 +2603,27 @@ it.each([true, false])('publishes a local ACP task only after successful checkou
     : undefined);
 });
 
-it.each([{ agentDeviceId: 'other-computer' }, { remoteHostId: 'ssh-host' }, { orcaRole: 'worker' }])(
+// 2026-11-25: an engine on another computer of the same account still works in this computer's files,
+// so the checkout happens here like any local task; the row keeps the engine's location.
+it('provisions the local worktree when the plugin engine runs on another computer', async () => {
+  const baseRepo = path.join(h.userDataDir!, 'repo-remote-engine');
+  const managedPath = path.join(baseRepo, '.cindy-worktrees', 'fixture');
+  await mkdir(baseRepo);
+  const create = vi.fn(async (input: CreateWorktreeReq): Promise<CreateWorktreeResp> => ({
+    ok: true, meta: { ...input, path: managedPath, branch: 'cindy/fixture', createdAt: '2026-01-01T00:00:00.000Z' },
+  }));
+  registerSessionIpc(undefined, { localPluginWorktrees: { create, discard: vi.fn() } });
+  await expect(invokeCreate({
+    id: 'acp-remote-engine', agentKind: 'acp', providerId: 'acp-plugin:fixture:marker',
+    model: 'fixture-model', workspaceKind: 'project', workingDir: baseRepo, agentDeviceId: 'other-computer',
+    localPluginWorktree: { name: 'fixture', sourceBranch: 'main' },
+  })).resolves.toMatchObject({ workingDir: normalizeWorkingDirForStorage(managedPath) });
+  expect(create).toHaveBeenCalledOnce();
+  expect(h.sqlite!.prepare('SELECT worktree_path, agent_device_id FROM sessions WHERE id = ?').get('acp-remote-engine'))
+    .toEqual({ worktree_path: normalizeWorkingDirForStorage(managedPath), agent_device_id: 'other-computer' });
+});
+
+it.each([{ remoteHostId: 'ssh-host' }, { orcaRole: 'worker' }])(
   'rejects local ACP worktree provisioning for %j before any Git or task write',
   async (placement) => {
     const create = vi.fn();

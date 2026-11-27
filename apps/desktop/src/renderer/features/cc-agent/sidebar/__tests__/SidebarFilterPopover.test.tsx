@@ -44,6 +44,10 @@ vi.mock('@cindy/maker-shared/project-order-sync', () => ({
 function makeFilter(overrides: Partial<UseSidebarFilterReturn> = {}): UseSidebarFilterReturn {
   return {
     creators: 'all',
+    hideAutomations: false,
+    setHideAutomations: vi.fn(),
+    hideTaskCreated: false,
+    setHideTaskCreated: vi.fn(),
     creatorOptions: [],
     toggleCreator: vi.fn(),
     setCreatorsAll: vi.fn(),
@@ -162,14 +166,18 @@ describe('sidebar display settings menu', () => {
     expect(
       within(submenu).getByRole('menuitem', { name: '重置筛选' }).getAttribute('data-disabled'),
     ).not.toBeNull();
+    fireEvent.click(within(submenu).getByRole('menuitemcheckbox', { name: '隐藏由其他任务创建的任务' }));
+    expect(filter.setHideTaskCreated).toHaveBeenCalledWith(true);
     const harness = await openSubmenu(/^Harness/);
     expect(
       within(harness)
         .getAllByRole('menuitem')
         .map((row) => row.textContent),
-    ).toEqual(['全部', 'Claude Code', 'Codex', 'Pi']);
+    ).toEqual(['全部', 'Claude Code', 'Codex', 'Pi', '插件引擎']);
     fireEvent.click(within(harness).getByRole('menuitem', { name: 'Pi' }));
     expect(filter.setVendor).toHaveBeenCalledWith('pi');
+    fireEvent.click(within(harness).getByRole('menuitem', { name: '插件引擎' }));
+    expect(filter.setVendor).toHaveBeenCalledWith('acp');
     expect(screen.getAllByRole('menu').length).toBeGreaterThan(1);
   });
 
