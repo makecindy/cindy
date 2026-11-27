@@ -251,7 +251,8 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
   const exec = deps.exec ?? runCommand;
   const dirs = deps.dirs ?? userUnitDirs();
   const removeFile = deps.removeFile ?? ((path: string) => unlink(path));
-  const writeFile = deps.writeFile ?? writeFileFsp;
+  // Recovery must never overwrite a file created by another process after deletion.
+  const writeFile = deps.writeFile ?? ((file: string, text: string) => writeFileFsp(file, text, { flag: 'wx' }));
   const reload = deps.reload ?? (async () => {
     const { failed } = await exec('systemctl', ['--user', 'daemon-reload']);
     // 失败意味着 systemd 仍持有内存单元：此时删文件会留下「文件没了、进程还在」。
@@ -499,7 +500,8 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
       const ownExecution =
         unit.endsWith('.timer') && isOwnCounterpart(unit, declaredUnit) && pairedPath !== null;
       if (ownExecution && !(await sharedByOthers(target, unit))) {
-        const pairedText = await readFile(pairedPath, 'utf8').catch(() => null);
+        // If the original cannot be saved, leave both definitions intact.
+        const pairedText = await readFile(pairedPath, 'utf8');
         await removeFile(pairedPath);
         // 自己的文件删失败时把执行面原样写回：timer 的 command 仍来自配对服务的
         // ExecStart，归属不丢，下次扫描还能带着归属重试。留着半删状态反而会让
@@ -510,7 +512,11 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
           try {
             await removeFile(ownPath);
           } catch (error) {
-            if (pairedText !== null) await writeFile(pairedPath, pairedText).catch(() => {});
+            try {
+              await writeFile(pairedPath, pairedText);
+            } catch (restoreError) {
+              throw new AggregateError([error, restoreError], 'systemd unit removal failed and the service could not be restored');
+            }
             throw error;
           }
         }

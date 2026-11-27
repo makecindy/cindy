@@ -680,6 +680,32 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
     },
   );
 
+  // Unit: a concurrent replacement must survive the real adapter's failed removal and recovery.
+  it('does not overwrite a service recreated while timer deletion fails', async () => {
+    const replacement = '[Service]\nExecStart=/bin/new-service\n';
+    const { adapter, dir, cleanup } = await withUnits(
+      {
+        'backup.timer': '[Timer]\nOnCalendar=hourly\n',
+        'backup.service': '[Service]\nExecStart=/bin/old-service\n',
+      },
+      {
+        removeFile: async (file) => {
+          if (file.endsWith('backup.timer')) {
+            await writeFile(join(dirname(file), 'backup.service'), replacement);
+            throw new Error('timer removal failed');
+          }
+          await unlink(file);
+        },
+      },
+    );
+    try {
+      await expect(adapter.remove('systemd-user:backup.timer')).rejects.toThrow('could not be restored');
+      expect(await readFile(join(dir, 'backup.service'), 'utf8')).toBe(replacement);
+    } finally {
+      await cleanup();
+    }
+  });
+
   it('timer 文件删失败时把执行面写回，条目仍带着归属可重试', async () => {
     const { adapter, dir, cleanup } = await withUnits(
       {
