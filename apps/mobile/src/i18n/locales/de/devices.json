@@ -422,7 +422,8 @@
         "all": "Alle",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Plugin-Engine"
       },
       "filterLastActivityHeading": "Letzte Aktivität",
       "filterLastActivity": {
@@ -528,7 +529,8 @@
           "30d": "30 T",
           "all": "Alle"
         }
-      }
+      },
+      "partial": "Die Ergebnisse sind möglicherweise unvollständig. Verwenden Sie genauere Suchbegriffe oder wählen Sie ein Projekt."
     },
     "renameDevice": {
       "title": "Gerät umbenennen",

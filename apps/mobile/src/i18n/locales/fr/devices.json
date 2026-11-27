@@ -425,7 +425,8 @@
         "all": "Tous",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Moteur de plugin"
       },
       "filterLastActivityHeading": "Dernière activité",
       "filterLastActivity": {
@@ -532,7 +533,8 @@
           "30d": "30 j",
           "all": "Toutes"
         }
-      }
+      },
+      "partial": "Les résultats peuvent être incomplets. Précisez les mots-clés ou limitez la recherche à un projet."
     },
     "renameDevice": {
       "title": "Renommer l'appareil",

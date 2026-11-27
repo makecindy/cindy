@@ -422,7 +422,8 @@
         "all": "全部",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "插件引擎"
       },
       "filterLastActivityHeading": "最近活跃",
       "filterLastActivity": {
@@ -528,7 +529,8 @@
           "30d": "30 天",
           "all": "全部"
         }
-      }
+      },
+      "partial": "结果可能不完整，请使用更具体的关键词或限定项目。"
     },
     "renameDevice": {
       "title": "重命名设备",

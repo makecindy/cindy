@@ -134,6 +134,16 @@ import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService
 import { isResidentBrowserGhost, spawnResidentGhost } from './residentGhost.js';
 import { handleRoutineRequest } from './routineSlot.js';
 import {
+  forgetPluginEventStatus,
+  onSubscribedEventPluginsChanged,
+  onPluginEventSubscriptionsChanged,
+  pluginEventSourceStatus,
+  setPluginRuntimeProbe,
+  subscribedEventPluginIds,
+} from '../scheduler-host/webhook/pluginEvents.js';
+import { setGitlabPluginTokenResolver } from '../git-context/gitlabTokenChain.js';
+import { glabCliTokenSource } from '../git-context/glabCliTokenSource.js';
+import {
   app,
   BrowserWindow,
   clipboard,
@@ -308,6 +318,7 @@ import { relocateGhostUserDataResources } from './ghostUserDataRelocation.js';
 import {
   GhostManager,
   canUseGithubHostCredentials,
+  canUseGitlabHostCredentials,
   type GhostExclusiveMutation,
   isCindyOfficialTrustInfo,
   type GhostHostTrustOverride,
@@ -444,7 +455,7 @@ import { createGhostOauthOwnerReconciliationGate } from './ghostOauthOwnerReconc
 import { cancelActiveGhostOauthFlow } from './ghostOauthFlow.js';
 import { mapGhostOauthConnectError } from './ghostOauthSetupError.js';
 import { reclaimLoopbackPort } from './portReclaim.js';
-import { GhostConnectionManager } from './ghostConnections.js';
+import { GhostConnectionManager, normalizeGhostConnectionHost } from './ghostConnections.js';
 import { getResolvedMainLocale, rawMainString, t } from '../i18n.desktop.js';
 import { refreshGhostLocalizationIfChanged } from './ghostLocalizationRefresh.js';
 import type { SupportedLocale } from '../../shared/locale.js';
@@ -506,6 +517,8 @@ import {
   ghostExternalLinkUrls,
   isGhostControlPointId,
   type GhostControlPointCandidate,
+  type GhostEventSourceCandidate,
+  type GhostPipeRoutineSubscriptions,
   type GhostControlPointId,
   type GhostModelRoute,
   type GhostPickerModel,
@@ -1403,6 +1416,20 @@ function libraryStorageKeyFor(id: string): string | null {
 
 function findGhostForPhysicalStoragePart(id: string): InstalledGhost | null {
   return availableGhosts().find((ghost) => installedGhostStoragePart(ghost) === id) ?? null;
+}
+
+/**
+ * The account the user connected for this GitLab instance in the official GitLab plugin.
+ * Only for the host's read-only merge request status (same instance); a disabled,
+ * unapproved or look-alike plugin is never borrowed from.
+ */
+export function resolveGitlabPluginToken(host: string): string | null {
+  const ghost = findGhostForPhysicalStoragePart(CINDY_GITLAB_GHOST_ID);
+  if (ghost?.manifest.id !== CINDY_GITLAB_GHOST_ID || !ghost.enabled || ghost.approval?.state !== 'approved') {
+    return null;
+  }
+  if (!ghost.manifest.network?.connections?.some((decl) => decl.key === CINDY_GITLAB_CONNECTION_KEY)) return null;
+  return getGhostConnectionManager().resolveTokenByHost(CINDY_GITLAB_GHOST_ID, CINDY_GITLAB_CONNECTION_KEY, host);
 }
 
 /** Runtime-authorized lookup for integrations outside this module. */
@@ -3421,6 +3448,21 @@ export async function routeGhostNewTask(pluginId: string, data: GhostStartTaskPo
   }
   log.warn('plugin chose an unavailable model route', { pluginId, agentKind: base.agentKind, model: base.model });
   return kept('unavailable-route');
+}
+
+/** 自动化事件触发可选的插件：本机已启用、声明了事件的插件，附监听状态。 */
+export function ghostEventSourceCandidates(): GhostEventSourceCandidate[] {
+  return availableGhosts()
+    .filter((ghost) => ghost.enabled && ghost.manifest.routineEvents)
+    .map((ghost) => {
+      const plugin = installedGhostStoragePart(ghost);
+      return {
+        plugin,
+        name: ghost.manifest.name,
+        state: pluginEventSourceStatus(plugin).state,
+        events: ghost.manifest.routineEvents!.events.map((event) => ({ ...event, fields: [...event.fields] })),
+      };
+    });
 }
 
 /** 任务「前置检查」里可选的插件:已启用、声明了该节点且用户已批准。 */
@@ -5876,27 +5918,25 @@ function customMediaAgents(provider: Provider, model: ProviderMediaModel, respec
 function listLocalProviderMediaModels(respectDisplaySwitch = false, capabilities: readonly MediaCapability[] = []) {
   const access = readModelDisableOverrides();
   return getActiveCatalog().providers.flatMap((provider) => {
-    if (
-      provider.id === 'xd' ||
-      isProviderDisabled(access, provider.id) ||
-      (!getImageChannelRegistry().isProviderReady(provider.id) &&
-        !(provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method)))
-    ) {
+    if (!provider.imageModels?.length || provider.id === 'xd' || isProviderDisabled(access, provider.id)) {
       return [];
     }
-    return (provider.imageModels ?? []).flatMap((model) => {
-      const guideDriven = provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method);
+    const guideDriven = provider.source === 'user' && !provider.auth.native && ['apiKey', 'none'].includes(provider.auth.method);
+    const channel = getImageChannelRegistry().readyChannel(provider.id);
+    if (!guideDriven && !channel) return [];
+    return provider.imageModels.flatMap((model) => {
+      if (isModelDisabled(access, provider.id, model.id)) return [];
       const sourceAgents = guideDriven ? customMediaAgents(provider, model, respectDisplaySwitch, capabilities) : [];
+      if (guideDriven && !sourceAgents.length) return [];
+      const modelReady = channel !== undefined && channel.isModelReady?.(model.id) !== false;
       if (
-        (guideDriven && !sourceAgents.length) ||
-        (!guideDriven && !getImageChannelRegistry().isProviderReady(provider.id, model.id)) ||
-        isModelDisabled(access, provider.id, model.id) ||
+        (!guideDriven && !modelReady) ||
         (respectDisplaySwitch && !guideDriven &&
           !isCatalogMediaModelVisible(provider.id, model.id, model.defaultEnabled, undefined, 'image'))
       ) {
         return [];
       }
-      const supportsEdit = guideDriven ? sourceAgents.some(agent => provider.models[agent]?.find(candidate => candidate.id === model.id)?.modalities?.input.includes('image')) : getImageChannelRegistry().isProviderEditReady(provider.id, model.id);
+      const supportsEdit = guideDriven ? sourceAgents.some(agent => provider.models[agent]?.find(candidate => candidate.id === model.id)?.modalities?.input.includes('image')) : channel?.supportsEdit !== false;
       // Legacy/provider catalogs may only carry id/name. The channel registry is
       // the executable capability source in that case: every registered image
       // channel accepts text generation, and editable channels additionally
@@ -5920,8 +5960,7 @@ function listLocalProviderMediaModels(respectDisplaySwitch = false, capabilities
           providerId: provider.id,
           mode: 'image_generation' as const,
           ...(guideDriven ? { guideDriven, sourceAgent: model.sourceAgent && sourceAgents.includes(model.sourceAgent) ? model.sourceAgent : sourceAgents.length === 1 ? sourceAgents[0] : undefined, sourceAgents } : {}),
-          imageProtocol: getImageChannelRegistry().isProviderReady(provider.id, model.id)
-            ? getImageChannelRegistry().resolve(provider.id, model.id).imageProtocol : undefined,
+          imageProtocol: modelReady ? channel.imageProtocol : undefined,
           modalities: { input, output: [...modalities.output] },
           ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
         },
@@ -7198,8 +7237,9 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
       // 匹配注入那条连接自己的 token(tokenFor;同一 hostname 命中多个 decl
       // 时取第一个)。每单现查现读,设置页增删下一单即生效。
       connections: {
-        hostsFor: (ghostId) => {
-          const decls = (findGhostForInstanceId(ghostId))?.manifest.network?.connections ?? [];
+        hostsFor: async (ghostId) => {
+          const ghost = findGhostForInstanceId(ghostId);
+          const decls = ghost?.manifest.network?.connections ?? [];
           const mgr = getGhostConnectionManager();
           const hosts: string[] = [];
           for (const decl of decls) {
@@ -7207,16 +7247,36 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
               if (!hosts.includes(host)) hosts.push(host);
             }
           }
+          if (ghost && canUseGitlabHostCredentials(ghost) && decls.some((decl) => decl.source === 'glab-cli')) {
+            for (const host of await glabCliTokenSource.listLoggedInHosts()) {
+              const normalized = normalizeGhostConnectionHost(host);
+              if (normalized && !hosts.includes(normalized)) hosts.push(normalized);
+            }
+          }
           return hosts;
         },
         tokenFor: (ghostId, hostname) => {
-          const decls = (findGhostForInstanceId(ghostId))?.manifest.network?.connections ?? [];
+          const ghost = findGhostForInstanceId(ghostId);
+          const decls = ghost?.manifest.network?.connections ?? [];
           const mgr = getGhostConnectionManager();
           for (const decl of decls) {
             const token = mgr.resolveTokenByHost(ghostId, decl.key, hostname);
             if (token !== null) {
               return { value: token, header: decl.inject.header, format: decl.inject.format };
             }
+          }
+          const normalized = normalizeGhostConnectionHost(hostname);
+          if (
+            normalized &&
+            ghost &&
+            canUseGitlabHostCredentials(ghost) &&
+            decls.some((decl) => decl.source === 'glab-cli')
+          ) {
+            return glabCliTokenSource.readTokenDetailed(normalized).then((glab) =>
+              glab.ok
+                ? { value: glab.token, header: 'Authorization', format: 'Bearer {value}', hostManaged: true }
+                : null,
+            );
           }
           return null;
         },
@@ -9290,6 +9350,45 @@ export function builtinSeedYieldsToStoreVersion(id: string, storeVersion: string
   return seedVersion === null || !seedIsNewerThanStore(seedVersion, storeVersion);
 }
 
+let pluginEventListenersActive = false;
+
+/**
+ * Automations that chose a plugin's events keep that plugin listening; registered once per process.
+ * Removing the last subscription does not stop a running plugin (the user may also be using it);
+ * it is simply not started again on the next launch.
+ */
+function activatePluginEventListeners(): void {
+  if (pluginEventListenersActive) return;
+  pluginEventListenersActive = true;
+  // GitLab MR status falls back to the GitLab plugin's connection for the same instance.
+  setGitlabPluginTokenResolver(resolveGitlabPluginToken);
+  setPluginRuntimeProbe((plugin) => {
+    const state = getGhostRuntime().stateOf(plugin);
+    if (state !== 'running' && state !== 'starting') {
+      // A stopped plugin's last "listening" report is stale.
+      if (state === 'off' || state === 'fused' || state === 'crashed') forgetPluginEventStatus(plugin);
+      return false;
+    }
+    return true;
+  });
+  const spawnSubscribed = (plugins: ReadonlySet<string>) => {
+    for (const plugin of plugins) {
+      const ghost = findGhostForPhysicalStoragePart(plugin);
+      if (ghost) spawnIfResident(ghost);
+    }
+  };
+  onSubscribedEventPluginsChanged(spawnSubscribed);
+  // Running plugins learn about subscription changes right away (routine-subscriptions); they read them
+  // once at start (routine-request subscriptions) and never need to keep asking.
+  onPluginEventSubscriptionsChanged((plugin, subscriptions) => {
+    const ghost = findGhostForPhysicalStoragePart(plugin);
+    if (!ghost?.enabled || !ghost.manifest.routineEvents) return;
+    const message: GhostPipeRoutineSubscriptions = { type: 'routine-subscriptions', subscriptions };
+    sendToGhostLogic(plugin, message);
+  });
+  spawnSubscribed(subscribedEventPluginIds());
+}
+
 /**
  * launch: 'resident' 的意识在"唤醒且在场"时保持电子脑常驻——本函数是所有
  * "该在场了"时机的统一入口(应用启动扫描 / 装入即开 / 唤醒 / 更新换代后)。
@@ -9305,6 +9404,7 @@ function spawnIfResident(ghost: InstalledGhost, allowPendingLegacy = false): voi
   spawnResidentGhost(ghost, {
     isAvailable: isGhostAvailableForActiveSession,
     allowPendingLegacy,
+    eventSubscribed: subscribedEventPluginIds().has(storagePart),
     startNode: (installed) => getGhostNodeRuntimeBroker().startResident(installed),
     spawnBrowser: (installed) => getGhostRuntime().spawn(installed),
     warn: (message, fields) => log.warn(message, fields),
@@ -9819,6 +9919,7 @@ export function registerGhostIpc(): void {
     isAvailable: isGhostAvailableForActiveSession,
     readAvailability: (ghostId) => publishedHarnessesStore().read(ghostId),
     uiLocale: () => currentGhostAppContext().context.uiLocale,
+    ownerScopeKey: () => JSON.stringify(captureDataOwnerBroadcastScope()),
     spawn: (ghostId, harnessId, options) => getGhostNodeRuntimeBroker().spawnHarness(ghostId, harnessId, options),
     requestRefresh: (ghostId) => sendToGhostLogic(ghostId, { type: 'harnesses-refresh-requested' }),
     readUsage: async (ghostId, harnessId, accountDir) => {
@@ -9987,13 +10088,15 @@ export function registerGhostIpc(): void {
     const ghost = findGhostForInstanceId(ghostId);
     if (!ghost) return { status: 404 };
     const connectionDecls = ghost.manifest.network?.connections ?? [];
-    const decls = new Map<string, { label: string; maxConnections: number }>();
+    const decls = new Map<string, { label: string; maxConnections: number; source?: 'glab-cli' }>();
     for (const c of connectionDecls) {
       decls.set(c.key, {
         label: c.label,
         maxConnections: c.maxConnections ?? GHOST_NETWORK_MAX_CONNECTIONS_PER_DECL,
+        ...(c.source === 'glab-cli' ? { source: 'glab-cli' as const } : {}),
       });
     }
+    const allowGlab = connectionDecls.some((c) => c.source === 'glab-cli') && canUseGitlabHostCredentials(ghost);
     return handleGhostConnectionsRequest({
       method,
       pathname,
@@ -10001,6 +10104,7 @@ export function registerGhostIpc(): void {
       isCurrent,
       decls,
       manager: getGhostConnectionManager(),
+      ...(allowGlab ? { readGlabHosts: () => glabCliTokenSource.listLoggedInHosts() } : {}),
       ghostId,
       // 受信确认:main 侧系统模态(对照 bootstrap 的 moveToApplications 弹窗
       // 用法),默认落在「取消」上防误触;意识名从在装清单现查。
@@ -10257,6 +10361,8 @@ export function registerGhostIpc(): void {
     // The migration body has its own committed-owner gate, so signed-out runs
     // the common activation phase without touching legacy account data.
     const activationOutcome = activateGhostsAndMigrateLegacyAccounts();
+    // Plugins chosen by automation event triggers start listening once the owner's plugins are active.
+    activatePluginEventListeners();
     if (
       activeOwnerScopeKey() !== scope.scopeKey ||
       getActiveAppSession().dataOwnerId !== scope.dataOwnerId
@@ -11826,6 +11932,12 @@ export function registerGhostIpc(): void {
   ipcMain.handle('ghosts:models:list', (event) => {
     assertTrustedAppRendererEvent(event);
     return ghostPickerModels();
+  });
+
+  // 自动化「事件」触发的插件来源(仅本机窗口,不进 device-link)。
+  ipcMain.handle('ghosts:event-sources', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return ghostEventSourceCandidates();
   });
 
   // 定时任务 / 例行任务编辑页的插件下拉。

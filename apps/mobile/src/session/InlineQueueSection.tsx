@@ -45,6 +45,7 @@ import { radius, spacing, typeScale } from '@/theme/tokens';
 export interface InlineQueueSectionProps {
   onRecoverHistory?: () => void;
   projection: InputProjection;
+  isRunning?: boolean;
   sessionSource?: string | null;
   busy?: boolean;
   readOnlyReason?: string | null;
@@ -62,6 +63,7 @@ export interface InlineQueueSectionProps {
 export function InlineQueueSection({
   onRecoverHistory,
   projection,
+  isRunning,
   sessionSource,
   busy,
   readOnlyReason,
@@ -76,10 +78,17 @@ export function InlineQueueSection({
   const { colors } = useTheme();
   const { t, i18n } = useTranslation();
 
+  const showSteerUnsupportedNotice = projection.steerUnsupported === true
+    && (projection.pendingQueue?.length ?? 0) > 0
+    && isRunning === true
+    && !projection.queuePaused
+    && !projection.queueAbortPending;
+
   const hasBanner = !!projection.error
     || !!projection.credentialSwitchWait
     || projection.queueAbortPending
-    || projection.queuePaused;
+    || projection.queuePaused
+    || showSteerUnsupportedNotice;
   if (!hasBanner) return null;
 
   const controlsDisabled = busy || !!readOnlyReason;
@@ -209,6 +218,10 @@ export function InlineQueueSection({
             <Text style={styles.resumePillText}>{t('message.queue.resume')}</Text>
           </QueueTouchButton>
         </View>
+      ) : showSteerUnsupportedNotice ? (
+        <Text style={styles.steerUnsupportedNotice} testID="queue.inline.steerUnsupportedNotice">
+          {t('message.queue.steerUnsupportedNotice')}
+        </Text>
       ) : null}
     </View>
   );
@@ -340,6 +353,12 @@ const makeStyles = (colors: ThemeColors) =>
       color: colors.textSecondary,
       fontSize: typeScale.footnote,
       lineHeight: lineHeight.caption,
+    },
+    steerUnsupportedNotice: {
+      color: colors.textSecondary,
+      fontSize: typeScale.footnote,
+      lineHeight: lineHeight.caption,
+      paddingHorizontal: spacing.xs,
     },
     errorActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
     actionPill: {

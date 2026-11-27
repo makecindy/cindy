@@ -97,6 +97,8 @@
   },
   "notice": {
     "memberJoined": "{{name}}加入了群聊",
+    "memberJoinedList": "{{names}}加入了群聊",
+    "memberJoinedSummary": "{{names}} 及另外 {{others}} 人加入了群聊",
     "memberFailed": "{{name}}这次没能回复",
     "memberTimeout": "{{name}}太久没有回复，这次先跳过",
     "memberUnavailable": "{{name}}现在不可用，这次没有发言",
@@ -175,7 +177,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
       "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。"
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，请先选择本群的执行电脑，选好后会继续这条请求。",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 在本群选的执行电脑已离线。"
     }
   },
   "plan": {
@@ -503,6 +507,8 @@
     }
   },
   "groupSettings": {
+    "assistantComputer": "执行电脑",
+    "chooseComputer": "选择电脑",
     "tabSettings": "群设置",
     "youAreOwner": "你是群主",
     "youAreAdmin": "你是管理员",

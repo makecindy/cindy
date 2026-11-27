@@ -422,7 +422,8 @@
         "all": "全部",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "插件引擎"
       },
       "filterLastActivityHeading": "最近活躍",
       "filterLastActivity": {
@@ -528,7 +529,8 @@
           "30d": "30 天",
           "all": "全部"
         }
-      }
+      },
+      "partial": "結果可能不完整，請使用更具體的關鍵詞或限定專案。"
     },
     "renameDevice": {
       "title": "重新命名裝置",

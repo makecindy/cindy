@@ -422,7 +422,8 @@
         "all": "전체",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "플러그인 엔진"
       },
       "filterLastActivityHeading": "최근 활동",
       "filterLastActivity": {
@@ -528,7 +529,8 @@
           "30d": "30일",
           "all": "전체"
         }
-      }
+      },
+      "partial": "일부 결과가 누락될 수 있습니다. 더 구체적인 키워드를 사용하거나 프로젝트를 지정하세요."
     },
     "renameDevice": {
       "title": "기기 이름 변경",

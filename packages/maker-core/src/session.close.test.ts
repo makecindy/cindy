@@ -142,7 +142,14 @@ describe('Session close lifecycle', () => {
     await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
     expect(seen).toHaveLength(1);
     expect(seen[0]).toMatchObject({ type: 'error', turnAttemptToken: 8,
-      data: { isTerminal: true, reason: 'session_event_loop_crashed' } });
+      data: {
+        isTerminal: true,
+        reason: cause === 'requested-close' ? 'session_closed_mid_turn' : 'session_event_loop_crashed',
+        message: cause === 'requested-close'
+          ? 'Session closed before the current turn delivered a terminal event'
+          : 'Session event loop stopped unexpectedly without a terminal event',
+      },
+    });
     expect(handle.send).toHaveBeenCalledOnce();
   });
 

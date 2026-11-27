@@ -422,7 +422,8 @@
         "all": "All",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Plugin engine"
       },
       "filterLastActivityHeading": "Last activity",
       "filterLastActivity": {
@@ -528,7 +529,8 @@
           "30d": "30d",
           "all": "All"
         }
-      }
+      },
+      "partial": "Results may be incomplete. Narrow the keywords or search a specific project."
     },
     "renameDevice": {
       "title": "Rename Device",

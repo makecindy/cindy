@@ -425,7 +425,8 @@
         "all": "Todo",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Motor de complemento"
       },
       "filterLastActivityHeading": "Última actividad",
       "filterLastActivity": {
@@ -532,7 +533,8 @@
           "30d": "30d",
           "all": "Todo"
         }
-      }
+      },
+      "partial": "Los resultados pueden estar incompletos. Usa palabras más específicas o limita la búsqueda a un proyecto."
     },
     "renameDevice": {
       "title": "Cambiar nombre del dispositivo",
