@@ -1122,4 +1122,46 @@ describe('Responses → Anthropic request translation', () => {
       { type: 'text', text: '[orphan tool_result orphan omitted from replay]' },
     ]);
   });
+
+  it('parses multi-megabyte and multi-parameter data URLs in linear time without stack overflow', () => {
+    const largePayload = 'A'.repeat(4_500_000);
+    const largeResult = translateResponsesRequest({
+      model: 'claude',
+      input: [{
+        role: 'user',
+        content: [{ type: 'input_image', image_url: `data:image/png;base64,${largePayload}` }],
+      }],
+    });
+    const largeBlock = (largeResult.request.messages[0].content as Array<Record<string, unknown>>)[0];
+    expect(largeBlock).toMatchObject({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png' },
+    });
+    expect(((largeBlock.source as Record<string, unknown>).data as string)).toHaveLength(largePayload.length);
+
+    // Previously O(2^n) ReDoS due to `(?:;[^,]*)*` backtracking on malformed headers
+    const adversarial = `data:image/png${';a=1'.repeat(40)},AAAA`;
+    const startedAt = Date.now();
+    expect(() => translateResponsesRequest({
+      model: 'claude',
+      input: [{
+        role: 'user',
+        content: [{ type: 'input_image', image_url: adversarial }],
+      }],
+    })).toThrow();
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+
+    // Valid header with multiple parameters still extracts the primary media type
+    const multiParam = translateResponsesRequest({
+      model: 'claude',
+      input: [{
+        role: 'user',
+        content: [{ type: 'input_image', image_url: `data:image/png${';a=1'.repeat(40)};base64,AAAA` }],
+      }],
+    });
+    expect(multiParam.request.messages[0].content).toEqual([{
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: 'AAAA' },
+    }]);
+  });
 });
