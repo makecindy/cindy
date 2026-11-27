@@ -17,6 +17,7 @@ import { isDisallowedPluginEngineDeviceId } from '../maker-ipc/pluginEngineSessi
 import { CONTINUE_AFTER_APP_EXIT_PROMPT, UI_ACTION_TRIGGER_PREFIX } from '../../shared/interruptedTurn.js';
 import { workingDirEquals } from '../../shared/workingDir.js';
 import { withScheduleLock } from './scheduleLock';
+import { deliverScheduleRunNotification } from './forcedFailureRun';
 import {
   routinePermissionSnapshot,
   settledRoutinePermissionMismatch,
@@ -2964,16 +2965,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
             // to cancel this one pre-dispatch send.
             throw new RoutineDispatchDeferredError('Routine revision changed before dispatch');
           }
-          // 保留 scheduler 的既有 userSendAt 写入；该入口同时推进列表 lastActivityAt。
-          // userSendAt 的历史口径清理另行处理，不改变活跃礼让判据。
-          // 用 ctx.firedAt 对齐本轮 run.firedAt,顺延重试时也稳定。
-          void this.runtime.touchUserSendInDb(session.id, ctx.firedAt).catch((err) => {
-            this.deps.logger.warn?.('[runner] touchUserSend failed', {
-              scheduleId: schedule.id,
-              sessionId: session.id,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          });
+          // 不在派发阶段提前 bump userSendAt / lastActivityAt：无论 silentWhenIdle
+          // 还是轮内调用 schedule_silence_current_run，都要等本轮终态确认需要提醒或
+          // 失败时（统一经 deliverScheduleRunNotification：finalizeRun /
+          // notifyFailureSilent / notifyForcedFailure / notifyPluginStop）再推进，
+          // 避免静默轮把任务顶到收件箱/列表最前或提前解除「稍后处理」。
         },
       });
       if (pendingHandoff && sendResult.accepted) {
@@ -3680,13 +3676,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         ctx.onTurnActive?.(sessionId);
         this.runtime.noteSilentStopUserSend(sessionId);
         options?.onAccepted?.();
-        void this.runtime.touchUserSendInDb(sessionId, ctx.firedAt).catch((err) => {
-          this.deps.logger.warn?.('[runner] touchUserSend failed', {
-            scheduleId: schedule.id,
-            sessionId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
+        // 与直发路径一致：不在派发时提前写 userSendAt，改在 finalizeRun / 失败出口确认非静默后再推进。
         settleDispatch();
       },
       onAcceptedRollback: async (reason) => {
@@ -4612,17 +4602,20 @@ export class MakerScheduleRunner implements ScheduleRunner {
           ctx.onRunnerNotified?.('failure');
         }
       }
-      try {
-        if (
-          (!silenced || reportPersistFailed) &&
-          isDataOwnerBroadcastScopeCurrent(ownerScope) &&
-          !(finalRun.status === 'success' && ctx.signal.aborted)
-        ) {
-          await this.deps.notifier.notify(schedule, finalRun);
-        }
-      } catch (err) {
-        // 即便 Notifier 实现违规 throw，runner 也要兜住 —— 通知不能阻塞 run 结果上报
-        this.deps.logger.warn?.('notifier.notify threw (should not happen)', err);
+      if (
+        (!silenced || reportPersistFailed) &&
+        isDataOwnerBroadcastScopeCurrent(ownerScope) &&
+        !(finalRun.status === 'success' && ctx.signal.aborted)
+      ) {
+        await deliverScheduleRunNotification({
+          schedule,
+          run: finalRun,
+          notifier: this.deps.notifier,
+          touchUserSendInDb: this.runtime.touchUserSendInDb,
+          logger: this.deps.logger,
+          logTag: '[runner] touchUserSend on run settle failed',
+          swallowNotifyError: true,
+        });
       }
     }
     if (runError) throw new Error(runError);
@@ -5030,11 +5023,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
     };
     // 见 finalizeRun:先认领再投递,避免 await 期间强制收口并发投出第二条。
     ctx.onRunnerNotified?.('failure');
-    try {
-      await this.deps.notifier.notify(schedule, fauxRun);
-    } catch {
-      /* notifier 已做兜底，再炸只能 swallow */
-    }
+    await deliverScheduleRunNotification({
+      schedule,
+      run: fauxRun,
+      notifier: this.deps.notifier,
+      touchUserSendInDb: this.runtime.touchUserSendInDb,
+      logger: this.deps.logger,
+      logTag: '[runner] touchUserSend on pre-dispatch failure failed',
+      swallowNotifyError: true,
+    });
   }
 }
 

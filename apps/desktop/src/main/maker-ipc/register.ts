@@ -20774,7 +20774,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 插话并入正在运行的 turn,不开启新 turn:排队时登记的「新 turn 接管」回调不再适用,
     // 只释放登记(不运行),否则会给已在跑的 worker 另建一份 running/auto-bridge 身份。
     onSteerAccepted: async (sessionId, item) => {
-      if (!item.autoResume) void touchSessionActivityInDb(sessionId);
+      if (!item.autoResume && item.origin?.kind !== 'scheduler') void touchSessionActivityInDb(sessionId);
       void settleTaskActionInput(item).catch(() => undefined);
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
     },
@@ -20822,7 +20822,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       settleQueuedAttachmentPersistenceFailure(sessionId, item.clientId, opts.retainForRetry);
     },
     onDispatchedUserTurn: async (sessionId, item, preVendorDispatchAt): Promise<void> => {
-      if (!item.autoResume) {
+      if (!item.autoResume && item.origin?.kind !== 'scheduler') {
         void touchSessionActivityInDb(sessionId, preVendorDispatchAt);
       }
       void settleTaskActionInput(item).catch(() => undefined);
