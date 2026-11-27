@@ -130,6 +130,8 @@ export interface RemoteAgentErrorInfo {
   message: string;
   /** 原错误类名(仅用于控制端还原 maker-core 的特定错误类型)。 */
   name?: string;
+  /** Allowlisted diagnostic for a send rejected before dispatch. */
+  dispatchDiagnostic?: 'acp-inline-images-too-large';
 }
 
 /** 被控端请控制端处理的反向请求。 */
@@ -1020,12 +1022,14 @@ export function parseRemoteAgentPollResult(value: unknown): RemoteAgentPollResul
   };
 }
 
-function errorInfo(value: unknown): RemoteAgentErrorInfo {
+function errorInfo(value: unknown, callResult = false): RemoteAgentErrorInfo {
   const v = record(value);
   return {
     code: typeof v.code === 'string' ? v.code.slice(0, 128) : 'INTERNAL',
     message: typeof v.message === 'string' ? v.message.slice(0, MAX_MESSAGE) : '',
     ...(typeof v.name === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(v.name) ? { name: v.name } : {}),
+    ...(callResult && v.code === 'TURN_DISPATCH_REJECTED' && v.dispatchDiagnostic === 'acp-inline-images-too-large'
+      ? { dispatchDiagnostic: v.dispatchDiagnostic } : {}),
   };
 }
 
@@ -1094,7 +1098,7 @@ export function parseRemoteAgentStreamItem(line: string): RemoteAgentStreamItem 
     case 'result':
       return v.ok === true
         ? { t: 'result', callId: id(v.callId), ok: true, ...(v.value !== undefined ? { value: v.value } : {}) }
-        : { t: 'result', callId: id(v.callId), ok: false, error: errorInfo(v.error) };
+        : { t: 'result', callId: id(v.callId), ok: false, error: errorInfo(v.error, true) };
     case 'request':
       return { t: 'request', requestId: id(v.requestId), request: reverseRequest(v.request) };
     case 'cancel':

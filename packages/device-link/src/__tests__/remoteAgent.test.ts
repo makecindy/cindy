@@ -426,6 +426,19 @@ describe('remote agent channel', () => {
       .toThrow('REMOTE_AGENT_INVALID');
   });
 
+  // #13471 (unit): a successful round trip alone does not cover a newer
+  // sender's unknown diagnostic or a diagnostic on the wrong error code.
+  it.each([
+    ['TURN_DISPATCH_REJECTED', undefined],
+    ['TURN_DISPATCH_REJECTED', 'future-diagnostic'],
+    ['AGENT_ERROR', 'acp-inline-images-too-large'],
+  ])('ignores unrecognized dispatch metadata for %s (%s)', (code, dispatchDiagnostic) => {
+    expect(parseRemoteAgentStreamItem(JSON.stringify({
+      t: 'result', callId: otherId, ok: false,
+      error: { code, message: 'test refusal', dispatchDiagnostic, upstreamStatus: 418, privateDetail: 'example' },
+    }))).toEqual({ t: 'result', callId: otherId, ok: false, error: { code, message: 'test refusal' } });
+  });
+
   it('validates host replies and read results', () => {
     expect(parseRemoteAgentReply({ type: 'http', status: 200, headers: [], body: 'YQ==' })).toEqual({ type: 'http', status: 200, headers: [], body: 'YQ==' });
     expect(() => parseRemoteAgentReply({ type: 'http', status: 42, headers: [] })).toThrow();

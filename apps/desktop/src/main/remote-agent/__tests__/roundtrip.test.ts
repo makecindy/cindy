@@ -21,9 +21,10 @@ import type {
   UserMessage,
 } from '@cindy/maker-core';
 import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Maker, Session,
+  openAcpSession, toSessionDispatchOutcome, TurnDispatchRejectedError, type AcpSession,
   type CreateSessionOptions, type SessionMeta } from '@cindy/maker-core';
 import { createServer } from 'node:http';
-import { isProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
+import { isProviderSharePeer, parseRemoteAgentPollResult, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RemoteAgentPoller } from '../controller/poller';
@@ -1853,7 +1854,12 @@ describe('a plugin engine of another computer', () => {
   const ENGINE = 'acp-plugin:dsh-acp:dsh';
   const ENGINE_CAPABILITIES = { availableModels: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4' }] };
 
-  function createPluginEngineHost(options: { offered?: () => boolean; supported?: boolean; guest?: boolean } = {}) {
+  function createPluginEngineHost(options: {
+    offered?: () => boolean;
+    supported?: boolean;
+    guest?: boolean;
+    start?: () => Promise<AgentSessionHandle>;
+  } = {}) {
     const started: PluginEngineHostedStartInput[] = [];
     const host = createRemoteAgentHost({
       isAgentAvailable: () => true,
@@ -1866,6 +1872,7 @@ describe('a plugin engine of another computer', () => {
           isOffered: (providerId: string) => providerId === ENGINE && (options.offered?.() ?? true),
           start: async (input: PluginEngineHostedStartInput) => {
             started.push(input);
+            if (options.start) return options.start();
             return {
               ...fakeHostedAgent({ ...input, kind: 'pi' }),
               agentKind: 'acp' as const,
@@ -1886,6 +1893,96 @@ describe('a plugin engine of another computer', () => {
   const start = (host: ReturnType<typeof createRemoteAgentHost>) => startRemoteAgentSession('acp', {
     sessionId: 'plugin-task', workingDir: project, model: 'default', providerId: ENGINE, permissionMode: 'default',
   }, makeDeps(host));
+
+  // #13471 / r4717513766 (unit): the local budget test cannot detect metadata lost
+  // in the real host → serialized poll → proxy → Session.send path. Two 92 B images
+  // exceed a 100 B budget, while the same task can still send one.
+  it('restores the image size rejection over the remote send round trip', async () => {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgaPgPAAIDAYAkYfWXAAAAAElFTkSuQmCC', 'base64');
+    const imagePath = path.join(project, 'picture.png');
+    fs.writeFileSync(imagePath, png);
+    const image = { type: 'image', path: imagePath, mimeType: 'image/png' } as const;
+    const draft: UserMessage = { type: 'user', content: [{ type: 'text', text: 'Check these images' }, image, image] };
+    const original = structuredClone(draft);
+    const prompts: unknown[] = [];
+    const hostErrors: unknown[] = [];
+    let acp: AcpSession | undefined;
+    const { host } = createPluginEngineHost({
+      start: async () => {
+        let receive: ((line: string) => void) | undefined;
+        acp = await openAcpSession({
+          cwd: project, clientInfo: { name: 'test', version: '1' },
+          inlineImageBudgetBytes: 100, readFile: async () => png,
+          transport: {
+            onLine(listener) { receive = listener; return () => { receive = undefined; }; },
+            onClose() { return () => {}; },
+            async close() {},
+            write(line) {
+              const request = JSON.parse(line);
+              if (request.method === 'session/prompt') prompts.push(request.params.prompt);
+              const result = request.method === 'initialize'
+                ? { protocolVersion: 1, agentCapabilities: { promptCapabilities: { image: true } } }
+                : request.method === 'session/new' ? { sessionId: 'test-acp' } : { stopReason: 'end_turn' };
+              queueMicrotask(() => receive?.(JSON.stringify({ jsonrpc: '2.0', id: request.id, result })));
+            },
+          },
+        });
+        return acp;
+      },
+    });
+    let session: Session | undefined;
+    try {
+      const deps = makeDeps(host);
+      const handle = await startRemoteAgentSession('acp', {
+        sessionId: 'plugin-budget-task', workingDir: project, model: 'default', providerId: ENGINE,
+      }, {
+        ...deps,
+        invoke: async (args, options) => {
+          const reply = await deps.invoke(args, options);
+          if ((args[0] as { op: string }).op === 'poll') {
+            for (const run of parseRemoteAgentPollResult(reply).runs) {
+              if (!run.data) continue;
+              for (const line of Buffer.from(run.data, 'base64').toString('utf8').trim().split('\n')) {
+                const item = JSON.parse(line);
+                if (item.t === 'result' && item.ok === false) hostErrors.push(item.error);
+              }
+            }
+          }
+          return reply;
+        },
+      });
+      session = new Session({
+        id: 'plugin-budget-task', agentKind: 'acp', workDir: project, handle,
+        capabilities: {} as never, logger: historyLogger, turnStallMs: 0,
+      });
+      const refused = await session.send(draft);
+      expect(toSessionDispatchOutcome(refused, 'internal fixture context')).toMatchObject({
+        dispatched: false, message: expect.stringContaining('fewer or smaller images'),
+      });
+      expect(hostErrors[0]).toMatchObject({ code: 'TURN_DISPATCH_REJECTED', dispatchDiagnostic: 'acp-inline-images-too-large' });
+      expect(prompts).toEqual([]);
+      expect(draft).toEqual(original);
+      expect(fs.readFileSync(imagePath)).toEqual(png);
+
+      const internalError = Object.assign(new TurnDispatchRejectedError('test refusal'), {
+        diagnostic: 'internal-only-diagnostic', upstreamStatus: 418, privateDetail: 'fixture detail',
+      });
+      vi.spyOn(acp!, 'send').mockRejectedValueOnce(internalError);
+      expect(await session.send('typed rejection')).toEqual({ accepted: false, reason: 'provider-rejected-before-dispatch' });
+      expect(hostErrors[1]).toEqual({ code: 'TURN_DISPATCH_REJECTED', name: 'TurnDispatchRejectedError', message: 'test refusal' });
+
+      expect(await session.send({ type: 'user', content: [image] })).toEqual({ accepted: true });
+      await vi.waitFor(() => expect(session!.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done' }));
+      expect(prompts).toEqual([[{ type: 'image', mimeType: 'image/png', data: png.toString('base64') }]]);
+
+      vi.spyOn(acp!, 'send').mockRejectedValueOnce(new Error('ordinary remote failure'));
+      await expect(session.send('ordinary failure')).rejects.toThrow('ordinary remote failure');
+      expect(hostErrors[2]).toEqual({ code: 'AGENT_ERROR', name: 'Error', message: 'ordinary remote failure' });
+    } finally {
+      await session?.close();
+      host.dispose();
+    }
+  });
 
   it('runs through the engine\'s own entry with files staying here, until the owner closes it', async () => {
     let offered = true;
