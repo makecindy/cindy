@@ -1,7 +1,7 @@
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PluginPublisherBadge } from './PluginPublisherBadge';
 import { PluginDetailHero } from './PluginDetailHero';
-import { ChevronRight, Info, Plus, RotateCw, Search } from 'lucide-react';
+import { ChevronRight, Info, Plus, RotateCw } from 'lucide-react';
 import { Select } from '@/components/ui/select';
 import { Tip } from '@/components/ui/tooltip';
 import type { GhostPluginListItem } from './lib/ghostPluginViewModel';
@@ -12,7 +12,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { SearchInput } from '@/components/ui/search-input';
 import { SETTINGS_PAGE_TITLE_CLASS } from '@/components/ui/settings-rows';
 import { cn } from '@/lib/utils';
 import {
@@ -876,11 +876,8 @@ export function MyPluginsPage({
                       value, label: t(`${copy}.filter.${value}`),
                     }))}
                     onValueChange={value => setFilter(value as MyPluginFilter)} />
-                  <div className="relative min-w-0 max-[540px]:ml-auto">
-                    <Search size={15} aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-3 z-raised my-auto text-[var(--text-tertiary)]" />
-                    <Input size="sm" type="search" value={query} onChange={setQuery}
-                      placeholder={t(`${copy}.search`)} aria-label={t(`${copy}.search`)} inputClassName="pl-9" />
-                  </div>
+                  <SearchInput value={query} onChange={setQuery} className="min-w-0 max-[540px]:ml-auto"
+                    placeholder={t(`${copy}.search`)} aria-label={t(`${copy}.search`)} />
                 </div>
               ) : null}
             </header>

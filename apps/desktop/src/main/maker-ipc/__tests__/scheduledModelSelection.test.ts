@@ -1020,13 +1020,17 @@ describe('scheduled baseline permissionMode preservation', () => {
       providerShareGuestPeer('share-1', 'member-1', 'peer-2'),
     )).toThrow('cannot be used for scheduled tasks');
 
-    // Standalone scheduler-created tasks (e.g. a PR created inside an automation run)
-    // can also switch to/from a plugin engine, while IM and teammate routines stay refused.
-    expect(() => assertScheduledHarnessSupported(
-      { agentKind: 'acp', status: 'active', source: 'scheduler', providerId: REMOTE_ENGINE },
-      'codex',
-      null,
-    )).not.toThrow();
+    // Scheduler, IM, collaboration, and teammate tasks can all switch to/from a plugin engine,
+    // while SSH targets remain refused.
+    for (const target of [
+      { agentKind: 'acp' as const, status: 'active', source: 'scheduler', providerId: REMOTE_ENGINE },
+      { agentKind: 'acp' as const, status: 'active', source: 'feishu', providerId: REMOTE_ENGINE },
+      { agentKind: 'acp' as const, status: 'active', source: 'telegram', providerId: REMOTE_ENGINE },
+      { agentKind: 'acp' as const, status: 'active', source: 'bot', providerId: REMOTE_ENGINE },
+      { agentKind: 'acp' as const, status: 'active', source: 'desktop', orcaRole: 'lead', providerId: REMOTE_ENGINE },
+    ]) {
+      expect(() => assertScheduledHarnessSupported(target, 'codex', null)).not.toThrow();
+    }
     expect(() => assertScheduledHarnessSupported(
       { agentKind: 'codex', status: 'active', source: 'scheduler' },
       'acp',
@@ -1034,9 +1038,10 @@ describe('scheduled baseline permissionMode preservation', () => {
       REMOTE_ENGINE,
     )).not.toThrow();
     expect(() => assertScheduledHarnessSupported(
-      { agentKind: 'acp', status: 'active', source: 'feishu', providerId: REMOTE_ENGINE },
-      'codex',
+      { agentKind: 'codex', status: 'active', source: 'desktop', remoteHostId: 'ssh-box' },
+      'acp',
       null,
-    )).toThrow('This task cannot switch to or from a plugin engine');
+      REMOTE_ENGINE,
+    )).toThrow('SSH automation targets must keep their current Harness');
   });
 });

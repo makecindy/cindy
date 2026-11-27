@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { gitExec } from './gitExec';
+import { GIT_LISTING_MAX_BUFFER } from './gitOutputLimits';
 import { createLogger } from '../logger';
 
 const log = createLogger('worktree:dirty');
@@ -41,7 +42,7 @@ async function hasInitializedSubmodule(
   const { stdout: stageEntries } = await gitExec(
     ['ls-files', '--stage', '-z'],
     worktreePath,
-    { extraEnv: indexEnv },
+    { extraEnv: indexEnv, maxBuffer: GIT_LISTING_MAX_BUFFER },
   );
   const worktreeRoot = path.resolve(worktreePath);
   for (const entry of stageEntries.split('\0')) {
@@ -174,6 +175,7 @@ export async function listNonReproducibleIgnoredFiles(
   const { stdout } = await gitExec(
     ['ls-files', '--others', '--ignored', '--exclude-standard', '-z'],
     worktreePath,
+    { maxBuffer: GIT_LISTING_MAX_BUFFER },
   );
   const ignored = stdout.split('\0').filter(Boolean);
   const nonReproducible: string[] = [];
