@@ -1581,6 +1581,32 @@ describe('BotGroupChatView', () => {
     expect(refreshReads).toEqual([601, 501, 401, 301, 201, 101]);
   });
 
+  it('patches settled attachments in place on attachment-only pushes without re-fetching getBotGroup', async () => {
+    const mediaId = 'att-inline-1';
+    mocks.getBotGroup.mockResolvedValue({
+      ok: true,
+      group: detail({
+        messages: [msg({
+          id: 'm-img',
+          sequence: 10,
+          content: '',
+          attachments: [{ id: mediaId, name: 'clipboard.png', category: 'file', mimeType: '', size: 0, url: null, path: null, state: 'loading' }],
+        })],
+      }),
+    });
+    renderView();
+    expect(await screen.findByText('chat.imageMissing.loading')).toBeTruthy();
+    const readsBeforePush = mocks.getBotGroup.mock.calls.length;
+    await act(async () => mocks.pushes.forEach(push => push({
+      groupId: 'g1',
+      change: 'attachments',
+      attachments: [{ id: mediaId, name: 'clipboard.png', category: 'image', mimeType: 'image/png', size: 12, url: 'cindy-media://blobs/clipboard.png', path: null }],
+    })));
+    expect(await screen.findByAltText('clipboard.png')).toBeTruthy();
+    expect(screen.queryByText('chat.imageMissing.loading')).toBeNull();
+    expect(mocks.getBotGroup).toHaveBeenCalledTimes(readsBeforePush);
+  });
+
   it('keeps a newer push failure snapshot when a stale older-page request finishes later', async () => {
     const latest = msg({ id: 'latest', sequence: 100, content: 'Latest question' });
     const source = msg({ id: 'older', sequence: 4, content: 'Earlier question' });
@@ -7065,6 +7091,64 @@ describe('sidebar topic reply navigation', () => {
     renderView();
     await waitFor(() => expect(mocks.toastInfo).toHaveBeenCalledWith('bots.groupChat.server.thread.replyNotFound'));
     expect(mocks.thread).toHaveBeenCalledOnce();
+  });
+
+  it('preserves an attachments push that arrives while initial getBotGroup and loadOlder are in flight', async () => {
+    let resolveInitial!: (value: unknown) => void;
+    let resolveOlder!: (value: unknown) => void;
+    const latestMediaId = '60000000-0000-4000-8000-000000000611';
+    const olderMediaId = '60000000-0000-4000-8000-000000000612';
+    const loadingLatest = { id: latestMediaId, name: 'latest.png', category: 'file' as const, mimeType: '', size: 0, url: null, path: null, state: 'loading' as const };
+    const settledLatest = { id: latestMediaId, name: 'latest.png', category: 'image' as const, mimeType: 'image/png', size: 1024, url: 'cindy-media://blobs/settled-latest.png', path: null };
+    const loadingOlder = { id: olderMediaId, name: 'older.png', category: 'file' as const, mimeType: '', size: 0, url: null, path: null, state: 'loading' as const };
+    const settledOlder = { id: olderMediaId, name: 'older.png', category: 'image' as const, mimeType: 'image/png', size: 1024, url: 'cindy-media://blobs/settled-older.png', path: null };
+
+    mocks.getBotGroup.mockImplementation((_groupId: string, options?: { cacheOnly?: boolean; beforeSequence?: number }) => {
+      if (options?.cacheOnly) return Promise.resolve({ ok: false, errorCode: 'NOT_FOUND' });
+      if (options?.beforeSequence) return new Promise((resolve) => { resolveOlder = resolve; });
+      return new Promise((resolve) => { resolveInitial = resolve; });
+    });
+
+    renderView();
+    await waitFor(() => expect(resolveInitial).toBeTypeOf('function'));
+
+    // Attachments push arrives while initial getBotGroup() is still in flight.
+    act(() => {
+      for (const push of mocks.pushes) push({ groupId: 'g1', change: 'attachments', attachments: [settledLatest] });
+    });
+    await act(async () => {
+      resolveInitial({
+        ok: true,
+        group: detail({
+          serverBacked: true,
+          historyRevision: 'rev-attach-race',
+          hasMoreBefore: true,
+          messages: [msg({ id: 'm-latest', sequence: 10, content: 'latest image', attachments: [loadingLatest] })],
+        }),
+      });
+    });
+
+    await waitFor(() => expect(document.querySelector('img[src="cindy-media://blobs/settled-latest.png"]')).toBeTruthy());
+
+    // Now test the same race during loadOlder().
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await waitFor(() => expect(resolveOlder).toBeTypeOf('function'));
+    act(() => {
+      for (const push of mocks.pushes) push({ groupId: 'g1', change: 'attachments', attachments: [settledOlder] });
+    });
+    await act(async () => {
+      resolveOlder({
+        ok: true,
+        group: detail({
+          serverBacked: true,
+          historyRevision: 'rev-attach-race',
+          hasMoreBefore: false,
+          messages: [msg({ id: 'm-older', sequence: 5, content: 'older image', attachments: [loadingOlder] })],
+        }),
+      });
+    });
+
+    await waitFor(() => expect(document.querySelector('img[src="cindy-media://blobs/settled-older.png"]')).toBeTruthy());
   });
 
   // Basis: bot-group-chat.md §10「群聊里的话题索引与提示」— verifies header 邀请/话题/设置 order, quiet unread dot,
