@@ -18,6 +18,8 @@ import type { PrStatusQuery } from './prStatusService';
 export const PR_WATCH_SOURCE = 'pr-status';
 /** Two host triggers of one schedule at least this far apart; the cron covers the rest. */
 export const MIN_RETRIGGER_MS = 60_000;
+/** Bounded fallback when GitHub metadata lacks updated_at across repeated overflow batches; preserves 30m human-wait backoff. */
+export const RECONCILE_FALLBACK_MS = 30 * 60_000;
 /** How many PR baselines are kept (LRU by insertion). */
 const MAX_TRACKED = 500;
 
@@ -40,6 +42,14 @@ export interface PrFollowWatchDeps {
 
 type OkStatus = Extract<PrStatusResult, { ok: true }>;
 
+const ACTIONABLE_GITHUB_MERGE_STATES = new Set(['DIRTY', 'BEHIND']);
+
+/** GitHub reports UNKNOWN while recomputing mergeability after a base push; treat it as absent. */
+function normalizeMergeState(mergeState: string | null | undefined): string {
+  if (!mergeState) return '';
+  return mergeState.toUpperCase() === 'UNKNOWN' ? '' : mergeState;
+}
+
 /** What a follow-up cares about; volatile fields (revision, observedAt) stay out. */
 export function prStatusSignature(result: PrStatusResult): string | null {
   if (!result.ok) return null;
@@ -52,7 +62,7 @@ export function prStatusSignature(result: PrStatusResult): string | null {
     ok.headSha ?? '',
     checks,
     ok.unresolvedCount ?? '',
-    ok.mergeState ?? '',
+    ok.provider === 'gitlab' ? (ok.mergeState ?? '') : normalizeMergeState(ok.mergeState),
     ok.conflicts ?? '',
     ok.reviewDecision ?? '',
     ...(ok.provider === 'gitlab' ? [
@@ -72,12 +82,42 @@ function withKnownMrSummary(signature: string, fallback: string | undefined): st
   return [status, head, checks || otherChecks, threads || otherThreads, ...rest].join('|');
 }
 
+/** On the same PR head, carry forward known GitHub mergeability and summary fields across transient UNKNOWN/null reads. */
+function withKnownGithubSummary(signature: string, fallback: string | undefined): string {
+  if (!fallback) return signature;
+  const parts = signature.split('|');
+  const other = fallback.split('|');
+  if (!parts[1] || parts[1] !== other[1]) return signature;
+  for (const idx of [2, 3, 4, 5, 6] as const) {
+    if (!parts[idx] && other[idx]) parts[idx] = other[idx];
+  }
+  return parts.join('|');
+}
+
+/** When mergeability first resolves on the same head to a non-actionable state, establish baseline without waking. */
+function withBenignGithubBaseline(previous: string, current: string): string {
+  const parts = previous.split('|');
+  const next = current.split('|');
+  if (!parts[1] || parts[1] !== next[1]) return previous;
+  if (!parts[4] && next[4] && !ACTIONABLE_GITHUB_MERGE_STATES.has(next[4].toUpperCase())) {
+    parts[4] = next[4];
+  }
+  if (!parts[5] && next[5] === 'false') {
+    parts[5] = next[5];
+  }
+  return parts.join('|');
+}
+
 export function changesBetween(previous: string | undefined, current: string | undefined, provider?: PrStatusQuery['provider']): PrChange[] {
   if (!previous || !current || previous === current) return [];
   // When detail first becomes available, establish its baseline without treating it as a change.
   if (provider === 'gitlab') {
     current = withKnownMrSummary(current, previous);
     previous = withKnownMrSummary(previous, current);
+    if (previous === current) return [];
+  } else {
+    current = withKnownGithubSummary(current, previous);
+    previous = withBenignGithubBaseline(previous, current);
     if (previous === current) return [];
   }
   const changes: PrChange[] = ['any'];
@@ -118,6 +158,8 @@ function watchesChange(schedule: Schedule, url: string, changes: readonly WatchC
 
 export class PrFollowWatch {
   private readonly signatures = new Map<string, string>();
+  private readonly reconciledUpdatedAt = new Map<string, string>();
+  private readonly lastReconciledAt = new Map<string, number>();
   private readonly lastTriggered = new Map<string, number>();
   /** Keep one doorbell per schedule, so retrying a busy follower cannot rerun its siblings. */
   private readonly pending = new Map<string, () => Promise<void>>();
@@ -130,6 +172,8 @@ export class PrFollowWatch {
 
   reset(): void {
     this.signatures.clear();
+    this.reconciledUpdatedAt.clear();
+    this.lastReconciledAt.clear();
     this.lastTriggered.clear();
     this.pending.clear();
     if (this.retryTimer) clearTimeout(this.retryTimer);
@@ -145,12 +189,25 @@ export class PrFollowWatch {
     if (fresh === null) return;
     const key = prStatusKey(query);
     const previous = this.signatures.get(key);
-    const signature = query.provider === 'gitlab' ? withKnownMrSummary(fresh, previous) : fresh;
+    const signature = query.provider === 'gitlab'
+      ? withKnownMrSummary(fresh, previous)
+      : withKnownGithubSummary(fresh, previous);
     this.signatures.delete(key);
     this.signatures.set(key, signature);
     if (this.signatures.size > MAX_TRACKED) this.signatures.delete(this.signatures.keys().next().value!);
     const changes = changesBetween(previous, signature, query.provider);
     if (!changes.length) {
+      // Seed reconciledUpdatedAt on the initial baseline read so later overflow sweeps
+      // do not emit redundant `reconcile` triggers for PRs whose updated_at never moved.
+      if (
+        previous === undefined &&
+        this.deps.autoRunAllowed() &&
+        result.ok &&
+        typeof result.metadata?.updated_at === 'string' &&
+        result.metadata.updated_at
+      ) {
+        this.markCommentReconciled(query, result.metadata.updated_at);
+      }
       this.retryPending();
       if (previous === undefined && result.ok && (result.status === 'merged' || (query.provider === 'gitlab' && result.status === 'closed'))) {
         const mergedAt = Date.parse(String((result.status === 'merged' ? result.metadata?.merged_at : result.metadata?.closed_at) ?? ''));
@@ -163,6 +220,9 @@ export class PrFollowWatch {
       return;
     }
     const url = sessionPrUrl(query);
+    if (this.deps.autoRunAllowed() && result.ok && typeof result.metadata?.updated_at === 'string' && result.metadata.updated_at) {
+      this.markCommentReconciled(query, result.metadata.updated_at);
+    }
     void this.trigger(url, changes).catch((error) => {
       this.deps.log?.warn?.('pr follow watch trigger failed', {
         error: error instanceof Error ? error.message : String(error),
@@ -187,6 +247,35 @@ export class PrFollowWatch {
   /** Snapshot the observer baseline before refreshing an explicit event. */
   observedSignature(query: PrStatusQuery): string | undefined {
     return this.signatures.get(prStatusKey(query));
+  }
+
+  /**
+   * Overflow / reconnect reconciliation wakes the PR check when `updated_at` advanced
+   * (or was never reconciled); if `updated_at` is absent, falls back once per bounded window
+   * rather than looping every minute.
+   */
+  needsCommentReconcile(query: PrStatusQuery, updatedAt: string | undefined): boolean {
+    const key = prStatusKey(query);
+    if (updatedAt) {
+      return this.reconciledUpdatedAt.get(key) !== updatedAt;
+    }
+    const lastAt = this.lastReconciledAt.get(key);
+    return lastAt === undefined || this.now() - lastAt >= RECONCILE_FALLBACK_MS;
+  }
+
+  markCommentReconciled(query: PrStatusQuery, updatedAt: string | undefined): void {
+    const key = prStatusKey(query);
+    this.lastReconciledAt.delete(key);
+    this.lastReconciledAt.set(key, this.now());
+    if (this.lastReconciledAt.size > MAX_TRACKED) {
+      this.lastReconciledAt.delete(this.lastReconciledAt.keys().next().value!);
+    }
+    if (!updatedAt) return;
+    this.reconciledUpdatedAt.delete(key);
+    this.reconciledUpdatedAt.set(key, updatedAt);
+    if (this.reconciledUpdatedAt.size > MAX_TRACKED) {
+      this.reconciledUpdatedAt.delete(this.reconciledUpdatedAt.keys().next().value!);
+    }
   }
 
   /** An authenticated doorbell may represent a new comment without changing status counts. */
@@ -252,13 +341,24 @@ export class PrFollowWatch {
       }
       this.pending.delete(schedule.id);
       this.lastTriggered.set(schedule.id, now);
+      const isReconcileOnly = changes.length === 1 && changes[0] === 'reconcile';
       this.deps.log?.info?.('pr follow watch: status changed, running schedule now', { scheduleId: schedule.id, url });
       // This run belongs to the configured schedule, even if the observing tool call expired.
       void runTaskActionRequest(() =>
-        this.deps.runNow(schedule.id, { kind: 'watch', source: PR_WATCH_SOURCE, detail: url }, schedule, observation))
+        this.deps.runNow(
+          schedule.id,
+          {
+            kind: 'watch',
+            source: PR_WATCH_SOURCE,
+            detail: url,
+            ...(isReconcileOnly ? { reason: 'reconcile' as const } : {}),
+          },
+          schedule,
+          observation,
+        ))
         .then(result => {
           // The next cron tick only checks status. Keep the event after a runner defers its work.
-          if (schedule.prTrigger && result?.deferred && isCurrent() && this.generation === generation && !this.pending.has(schedule.id)) {
+          if (result?.deferred && isCurrent() && this.generation === generation && !this.pending.has(schedule.id)) {
             this.defer(schedule.id, retry);
           }
         })

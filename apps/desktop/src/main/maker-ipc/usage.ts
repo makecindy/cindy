@@ -42,7 +42,7 @@ import {
 import { app, powerMonitor } from 'electron';
 import { requireAppCapability } from '../appCapabilities.js';
 import { emptyUsageHistoryPayload, readUsageHistory } from '../usage/usageHistory.js';
-import { readUsageDeviceRows } from '../usage/usageDeviceRows.js';
+import { createUsageTaskDeltaCache, readUsageDeviceRows } from '../usage/usageDeviceRows.js';
 import {
   configurePeerUsageSync,
   peerUsageCacheFilePath,
@@ -76,6 +76,7 @@ import { hasClaudeNativeLogin } from '../maker-host/claude-native-auth.js';
 import { peekClaudeCliLoginStatus } from '../maker-host/claude-native-cli-status.js';
 import { readClaudeCliPlanUsage } from '../maker-host/claude-native-cli.desktop.js';
 import {
+  codexPoolResetAccountGone,
   observeSubscriptionAccountUsage,
   onSubscriptionAccountsChanged,
   pooledCodexResetTarget,
@@ -83,9 +84,14 @@ import {
 } from '../subscription-accounts/runtime.js';
 import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.desktop.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
-import { CodexResetAutoUse, parseCodexResetAutoUse } from '../usage/codexResetAutoUse.js';
+import {
+  CodexResetAutoUse,
+  parseCodexResetAutoUse,
+  shouldResetCodexAutoUseBackoffForAccountChange,
+} from '../usage/codexResetAutoUse.js';
 import {
   detachedDefaultCodexHome,
+  readCodexWebUsageCredentials,
   readDefaultCodexHomeIdentity,
   withDetachedDefaultCodexHome,
 } from '../usage/codexDefaultAccountHome.js';
@@ -138,12 +144,18 @@ const claudeSubscriptionUsageReader = createClaudeSubscriptionUsageReader({
 });
 
 /**
- * Claude turn done 后的订阅余量刷新钩子 (register.ts 消费) —— fire-and-forget,
- * 节流 / 429 退避在 reader 内部。未连订阅时 no-op。
+ * Claude turn done / 面板轮询后的订阅余量刷新钩子 (register.ts / quota-overview 消费) ——
+ * fire-and-forget, 活跃度自适应节流 / 退避在 reader 内部。未连订阅时 no-op。
  */
-export function triggerClaudeSubscriptionUsageRefresh(providerId?: string): void {
-  if (providerId && providerId !== 'anthropic') { triggerSubscriptionAccountUsage(providerId); return; }
-  claudeSubscriptionUsageReader.triggerRefresh();
+export function triggerClaudeSubscriptionUsageRefresh(
+  providerId?: string,
+  options?: { source?: 'turn' | 'poll' | 'manual' },
+): void {
+  if (providerId && providerId !== 'anthropic') { triggerSubscriptionAccountUsage(providerId, options); return; }
+  const source = options?.source ?? 'turn';
+  claudeSubscriptionUsageReader.triggerRefresh(
+    source === 'manual' ? { manual: true } : { activity: source === 'turn' },
+  );
 }
 
 /**
@@ -191,10 +203,16 @@ const xaiSubscriptionUsageReader = createXaiSubscriptionUsageReader({
   },
 });
 
-/** SuperGrok 周用量:turn-done 钩子,节流 / 退避 / 未登录 no-op 都在 reader 内。 */
-export function triggerXaiSubscriptionUsageRefresh(providerId?: string): void {
-  if (providerId && providerId !== 'xai') { triggerSubscriptionAccountUsage(providerId); return; }
-  xaiSubscriptionUsageReader.triggerRefresh();
+/** SuperGrok 周用量:turn-done / 面板轮询钩子,节流 / 退避 / 未登录 no-op 都在 reader 内。 */
+export function triggerXaiSubscriptionUsageRefresh(
+  providerId?: string,
+  options?: { source?: 'turn' | 'poll' | 'manual' },
+): void {
+  if (providerId && providerId !== 'xai') { triggerSubscriptionAccountUsage(providerId, options); return; }
+  const source = options?.source ?? 'turn';
+  xaiSubscriptionUsageReader.triggerRefresh(
+    source === 'manual' ? { manual: true } : { activity: source === 'turn' },
+  );
 }
 
 /**
@@ -235,26 +253,34 @@ function normalizeCodexResetProvider(providerId?: string): string | undefined {
 }
 let codexReadersOwner = '';
 const codexUsageReaders = new Map<string, ReturnType<typeof createCodexAccountUsageSnapshotReader>>();
-export function readCodexAccountUsageSnapshotWithWebRefresh(requestedProviderId?: string, options?: { fresh?: boolean }) {
+export function readCodexAccountUsageSnapshotWithWebRefresh(
+  requestedProviderId?: string,
+  options?: { fresh?: boolean; activity?: boolean; manual?: boolean },
+) {
   const providerId = normalizeCodexUsageProvider(requestedProviderId);
   const scope = activeOwnerScopeKey();
   if (scope !== codexReadersOwner) { codexUsageReaders.clear(); codexReadersOwner = scope; }
   const key = providerId ?? 'openai';
   const existing = codexUsageReaders.get(key);
   if (existing) return existing(options);
-const reader = createCodexAccountUsageSnapshotReader({
-  readAccessToken: () => scope === activeOwnerScopeKey() ? desktopCodexAuthAdapter.getAccessToken(providerId) : Promise.reject(new Error('Account scope changed')),
-  readAccountId: () => desktopCodexAuthAdapter.getAccountId(providerId),
-  fetchWebUsageSnapshot: fetchCodexWebUsageSnapshot,
-  recordSnapshot: (snapshot) => scope === activeOwnerScopeKey() ? recordCodexAccountUsageSnapshot(snapshot, providerId) : Promise.resolve(),
-  clearSnapshot: () => scope === activeOwnerScopeKey() ? clearCodexAccountUsageSnapshot(providerId) : Promise.resolve(),
-  readCachedSnapshot: () => scope === activeOwnerScopeKey() ? readCodexAccountUsageSnapshot(providerId) : Promise.resolve(null),
-  now: () => Date.now(),
-  isUnauthorizedError: (err) => err instanceof CodexWebUsageUnauthorizedError,
-  onRefreshError: (err) => {
-    log.warn('codex web usage refresh failed:', err instanceof Error ? err.message : String(err));
-  },
-});
+  const reader = createCodexAccountUsageSnapshotReader({
+    readCredentials: async () => {
+      const current = () => scope === activeOwnerScopeKey() && !isAppSessionBoundaryPending();
+      if (!current()) throw new Error('Account scope changed');
+      const credentials = await readCodexWebUsageCredentials(providerId, desktopCodexAuthAdapter);
+      if (!current()) throw new Error('Account scope changed');
+      return credentials;
+    },
+    fetchWebUsageSnapshot: fetchCodexWebUsageSnapshot,
+    recordSnapshot: (snapshot) => scope === activeOwnerScopeKey() ? recordCodexAccountUsageSnapshot(snapshot, providerId) : Promise.resolve(),
+    clearSnapshot: () => scope === activeOwnerScopeKey() ? clearCodexAccountUsageSnapshot(providerId) : Promise.resolve(),
+    readCachedSnapshot: () => !isAppSessionBoundaryPending() && scope === activeOwnerScopeKey() ? readCodexAccountUsageSnapshot(providerId) : Promise.resolve(null),
+    now: () => Date.now(),
+    isUnauthorizedError: (err) => err instanceof CodexWebUsageUnauthorizedError,
+    onRefreshError: (err) => {
+      log.warn('codex web usage refresh failed:', err instanceof Error ? err.message : String(err));
+    },
+  });
 
   codexUsageReaders.set(key, reader);
   return reader(options);
@@ -262,12 +288,21 @@ const reader = createCodexAccountUsageSnapshotReader({
 
 /**
  * 触发 ChatGPT 订阅额度(wham/usage)后台刷新 —— 复用带 web-refresh 的 reader:拉到新快照即
- * recordSnapshot → 广播 usage:codex-account-changed(reader 内部 10s 节流 + in-flight 去重)。
- * 供 claude-code 框架下 `chatgpt/` bridge 轮结束后调用,让底部 chip 的 ChatGPT 额度实时更新
- * (bridge 轮不产生 codex account_usage 事件,需主动触发)。fire-and-forget。
+ * recordSnapshot → 广播 usage:codex-account-changed(reader 内部活跃度自适应节流 + in-flight 去重)。
+ * 供 claude-code / pi 订阅轮结束后调用 (`source: 'turn'`)，以及菜单栏/概览轮询 (`source: 'poll'`)。
+ * fire-and-forget。
  */
-export function triggerCodexAccountUsageRefresh(providerId?: string): void {
-  void readCodexAccountUsageSnapshotWithWebRefresh(providerId).catch(() => {
+export function triggerCodexAccountUsageRefresh(
+  providerId?: string,
+  options?: { source?: 'turn' | 'poll' | 'manual' },
+): void {
+  const source = options?.source ?? 'turn';
+  const readOptions = source === 'manual'
+    ? { manual: true }
+    : source === 'turn'
+      ? { activity: true }
+      : undefined;
+  void readCodexAccountUsageSnapshotWithWebRefresh(providerId, readOptions).catch(() => {
     /* best-effort: 失败保留上一次快照, 不影响 turn 收尾 */
   });
 }
@@ -391,19 +426,38 @@ export function registerMakerUsageIpc(maker: Maker): void {
   });
   const checkEnabled = () => {
     if (isAppSessionBoundaryPending()) return;
-    for (const providerId of codexResetAutoUseStore.providers()) void automatic.check(providerId);
+    for (const providerId of codexResetAutoUseStore.providers()) {
+      // 已删除的订阅池账号(#12390):探针永远失败且不会自愈,按退避上限(15 分钟)持续产生
+      // 失败与告警。发现即清掉残留规则并退订,不再调度。
+      if (codexPoolResetAccountGone(providerId)) {
+        log.info('dropping stale Codex auto-reset rule for a deleted pool account', { providerId });
+        codexResetAutoUseStore.remove(providerId)
+          .then(() => automatic.resetFailureBackoff(providerId))
+          .catch(() => { /* 属主切换时 updateAtomic 会拒写;下一轮枚举自然再清。 */ });
+        continue;
+      }
+      void automatic.check(providerId);
+    }
   };
   // Checks run on the execution computer even with no renderer or remote phone connected.
   const timer = setInterval(checkEnabled, 60_000);
   timer.unref();
   const unobserve = observeUsageChanges(kind => { if (kind === 'codex') checkEnabled(); });
-  const unobservePool = onSubscriptionAccountsChanged((provider, resetAccountId) => {
+  const unobservePool = onSubscriptionAccountsChanged((provider, resetAccountId, change) => {
+    if (shouldResetCodexAutoUseBackoffForAccountChange(provider, resetAccountId, change)) {
+      automatic.resetFailureBackoff();
+    }
     if (provider === 'openai' && resetAccountId) checkEnabled();
   });
-  powerMonitor.on('resume', checkEnabled);
-  app.once('will-quit', () => { clearInterval(timer); unobserve(); unobservePool(); powerMonitor.removeListener('resume', checkEnabled); });
+  const onResume = () => {
+    automatic.resetFailureBackoff();
+    checkEnabled();
+  };
+  powerMonitor.on('resume', onResume);
+  app.once('will-quit', () => { clearInterval(timer); unobserve(); unobservePool(); powerMonitor.removeListener('resume', onResume); });
   checkEnabled();
 
+  const usageTaskDeltaCache = createUsageTaskDeltaCache();
   setSubscriptionAccountUsageBroadcaster(broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot);
   registerMakerUsageHandlers(cloudManagementProviderRegistry(createElectronIpcHandlerRegistry()), {
     readAgentTodayUsage,
@@ -416,6 +470,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
       if (patch !== null) parseCodexResetAutoUse({ ...codexResetAutoUseStore.read(providerId, key).settings, ...patch });
       await codexResetAutoUseStore.write(providerId, key, patch as Partial<CodexResetAutoUseSettings> | null);
       if (scope !== activeOwnerScopeKey() || key !== await accountKeyFor(providerId)) throw new Error('PRECONDITION_FAILED: Account changed');
+      automatic.resetFailureBackoff(providerId);
       checkEnabled();
       return readCodexRateLimits(providerId);
     },
@@ -460,6 +515,8 @@ export function registerMakerUsageIpc(maker: Maker): void {
             return new Set(ids.filter((id) => (access.get(id) ?? 'hidden') !== 'hidden'));
           },
           todayKey: () => localDayKey(),
+          taskDeltaCache: usageTaskDeltaCache,
+          scopeKey: activeOwnerScopeKey,
         },
         request,
       ),
@@ -482,11 +539,12 @@ export function registerMakerUsageIpc(maker: Maker): void {
 
   // 订阅会话的 CLI 在会话里上报 SDK rate_limit_event → 落库 + 广播(maker-core 只对本机
   // Claude 订阅会话转发)。事件晚于登出 / 断开到达时丢弃,不复活刚清掉的快照。
-  setClaudeRateLimitInfoListener((info, account) => {
-    if (account) { observeSubscriptionAccountUsage(account, info); return; }
+  setClaudeRateLimitInfoListener((info, account, longLivedTokenVersion) => {
+    if (account) { observeSubscriptionAccountUsage(account, info, { claudeTokenVersion: longLivedTokenVersion }); return; }
     if (!hasClaudeNativeLogin()) return;
     const snapshot = parseClaudeSdkRateLimitInfo(info, Date.now());
     if (!snapshot) return;
+    claudeSubscriptionUsageReader.markActivity();
     const fingerprint = currentClaudeAccountFingerprint();
     const subscriptionType = peekClaudeCliLoginStatus()?.subscriptionType;
     const planTier = peekClaudeCliLoginStatus()?.planTier;

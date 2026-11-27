@@ -1,6 +1,6 @@
 import { mailTextParagraphs } from '@cindy/maker-shared/mail-text-edit';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
-import { captureImContext, type ImMessageSource } from '../../../shared/imMessageSource';
+import { captureImContext, type ImMessageOrigin, type ImMessageSource } from '../../../shared/imMessageSource';
 /**
  * userMessageDisplayText
  * ---------------------------------------------------------------------------
@@ -19,6 +19,11 @@ import { captureImContext, type ImMessageSource } from '../../../shared/imMessag
 export interface OrcaCommunicationContent {
   orcaSource: 'lead' | 'worker';
   content: string;
+}
+
+/** 旧 IM 记录没有发送人，沿用聊天卡片的本人署名。 */
+export function isOwnImSender(origin?: ImMessageOrigin): boolean {
+  return !origin?.sender || origin.sender.isOwner;
 }
 
 export function hasEmbeddedImPrompt(source?: ImMessageSource): boolean {

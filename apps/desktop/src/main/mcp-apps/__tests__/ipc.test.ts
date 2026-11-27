@@ -115,6 +115,7 @@ import { sessions } from '../../localDb/schema.js';
 import { readAppServer } from '../runtime.js';
 import { pagePermissionGrants, pagePermissionSessionChanged } from '../pagePermissions.js';
 import { registerMcpAppsIpc } from '../ipc.js';
+import { nativePluginUi } from '../nativeRuntime.js';
 import { mountRemoteAppDocument } from '../sandboxProtocol.js';
 const { McpAppsHost: NativeHost } = await vi.importActual<typeof import('../host.js')>('../host.js');
 const record = {
@@ -189,6 +190,37 @@ beforeEach(() => {
   registerMcpAppsIpc(async () => {}, request);
 });
 describe('MCP App persistence and IPC wiring', () => {
+  // Unit: dynamic labels never carry new authority. Main accepts only IDs in
+  // this caller's currently published collection and retains the declared tool.
+  it('dispatches only visible enabled items from a declared dynamic action', async () => {
+    state.plugin = { host: { contributions: [{ id: 'actions', title: 'Actions', position: 'composer.header',
+      dynamicItems: true, visible: true, tool: 'apply', arguments: { scope: 'fixed' } }] },
+      config: { id: 'plugin', url: 'in-process://plugin', transport: 'in-process', plugin: { assertCurrent() {} } as AppServerConfig['plugin'] } };
+    const snapshot = vi.spyOn(nativePluginUi, 'snapshot');
+    const event = { sender: { id: 1, isDestroyed: () => false } };
+    const input = { op: 'plugin-action', instanceId: 'local__demo', id: 'actions', value: 'two' };
+    try {
+      for (const current of [undefined, { visible: true, items: [] },
+        { visible: true, items: [{ id: 'two', title: 'Two', visible: false }] },
+        { visible: true, items: [{ id: 'two', title: 'Two', disabled: true }] }]) {
+        snapshot.mockReturnValue(current);
+        await expect(state.handle!(event, 'task', input)).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+      }
+      expect(state.action).not.toHaveBeenCalled();
+      snapshot.mockReturnValue({ items: [{ id: 'two', title: 'Two' }] });
+      await expect(state.handle!(event, null, input)).rejects.toThrow('MCP_APP_SESSION_UNAVAILABLE');
+      await expect(state.handle!(event, null, { ...input, value: undefined })).rejects.toThrow('MCP_APP_SESSION_UNAVAILABLE');
+      await expect(state.handle!(event, 'task', { ...input, value: undefined })).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+      expect(state.action).not.toHaveBeenCalled();
+      await state.handle!(event, 'task', input);
+      expect(snapshot).toHaveBeenLastCalledWith('renderer:1', { instanceId: 'local__demo', id: 'actions', sessionId: 'task' });
+      expect(state.action.mock.calls[0][3]).toBe('apply');
+      expect(state.action.mock.calls[0][4]).toEqual({ scope: 'fixed', value: 'two' });
+      snapshot.mockReturnValue({ visible: false, items: [{ id: 'two', title: 'Two' }] });
+      await expect(state.action.mock.calls[0][2].assertCurrent()).rejects.toThrow('MCP_APP_INVALID_REQUEST');
+    } finally { snapshot.mockRestore(); }
+  });
+
   // Unit: the AppBridge tests bypass Electron. A subframe calling the drop IPC
   // must fail before any ticket lookup, and only Electron supplies the window ID.
   it('binds drag redemption to the trusted top-level IPC sender', async () => {

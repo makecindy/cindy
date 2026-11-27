@@ -468,6 +468,47 @@ describe('createOverrideSettingsFile', () => {
     }
   });
 
+  // Unit: real settings reads/writes. Repeated ordinary reads used to stat on every call.
+  // Minimal input: one file, an external replacement, then a local write and same-path owner change.
+  it('bounds opted-in file checks without delaying strict reads, local writes or owner changes', () => {
+    let owner = 'owner:1';
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const { dir, file, store } = createTempStore(undefined, { scopeKey: () => owner });
+    const stat = vi.spyOn(fs, 'statSync');
+    const replace = (limit: number) => {
+      fs.writeFileSync(`${file}.replacement`, JSON.stringify({ limit }));
+      fs.renameSync(`${file}.replacement`, file);
+    };
+    try {
+      store.writePatch({ limit: 7 });
+      stat.mockClear();
+      for (let i = 0; i < 60; i++) { store.invalidateIfChanged(60_000); expect(store.read().limit).toBe(7); }
+      expect(stat).not.toHaveBeenCalled();
+      replace(9);
+      now += 59_999;
+      store.invalidateIfChanged(60_000);
+      expect(store.read().limit).toBe(7);
+      now++;
+      store.invalidateIfChanged(60_000);
+      expect(store.read().limit).toBe(9);
+      replace(11);
+      store.invalidateIfChanged(); // Uncached callers explicitly bypass the window.
+      expect(store.read().limit).toBe(11);
+      store.writePatch({ limit: 13 });
+      store.invalidateIfChanged(60_000);
+      expect(store.read().limit).toBe(13);
+      replace(17);
+      owner = 'owner:2';
+      store.invalidateIfChanged(60_000);
+      expect(store.read().limit).toBe(17);
+      now -= 120_000; // A backwards wall-clock jump cannot extend the cache.
+      replace(19);
+      store.invalidateIfChanged(60_000);
+      expect(store.read().limit).toBe(19);
+    } finally { stat.mockRestore(); clock.mockRestore(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+
   it('writePatch clears object overrides that match defaults with different key order', () => {
     const { dir, file, store } = createTempStore();
     try {

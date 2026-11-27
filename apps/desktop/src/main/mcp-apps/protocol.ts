@@ -1,3 +1,4 @@
+import { isCanonicalBase64 } from '@cindy/maker-shared';
 import { validateCspDomains } from '@cindy/plugin-protocol';
 import { Buffer } from 'node:buffer';
 import type { ReadResourceResult, Tool } from '@modelcontextprotocol/sdk/types.js';
@@ -93,7 +94,7 @@ export function readAppResource(
   if (
     'blob' in item &&
     (item.blob.length > Math.ceil(MCP_APPS_MAX_BYTES / 3) * 4 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(item.blob))
+      !isCanonicalBase64(item.blob))
   )
     throw new Error('MCP_APP_INVALID_RESOURCE');
   const html = 'text' in item ? item.text : Buffer.from(item.blob, 'base64').toString('utf8');

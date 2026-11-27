@@ -38,6 +38,7 @@ export const APP_SHORTCUT_IDS = [
   'toggle-sidebar',
   'session-history-back',
   'session-history-forward',
+  'copy-session-link',
   'open-settings',
   'new-maker',
   'close-tab-or-window',
@@ -153,6 +154,14 @@ export const APP_SHORTCUT_DEFINITIONS: ReadonlyArray<AppShortcutDefinition> = [
     rebindable: true,
     menuBacked: true,
     getDefaultCombos: (platform) => [modCombo('KeyN', platform)],
+  },
+  {
+    id: 'copy-session-link',
+    scope: 'app',
+    labelKey: 'settings.shortcuts.items.copy-session-link.label',
+    descriptionKey: 'settings.shortcuts.items.copy-session-link.description',
+    rebindable: true,
+    getDefaultCombos: () => [],
   },
   {
     id: 'toggle-sidebar',

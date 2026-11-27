@@ -18,9 +18,12 @@
 顺带的好处：逻辑只有一份，桌面与后台不会各改各的；手机、网页和其他设备可以连接同一个后台。
 底线：迁移过程中桌面版的行为不变。
 
-现在所处的一步：把逻辑从 Electron 主进程里原样搬出来，第一阶段先让普通本地任务在 Host 上与桌面一致；
-之后依次是界面与 Host 之间的通道，伙伴、供应商分组与定时任务等，最后是联合验收，开放迁移另行决定。
-每项能力的现状与差异见[个人版迁移放行表](personal-migration-release-table.md)。
+现在所处的一步（截至 2026-11-27）：阶段 0 的工作已归档，三项独立修复已合入。阶段 1
+已通过 macOS 自用实例验收，还缺无图形 Linux 验收和企业云主机试点。阶段 2 首批已合入，
+覆盖普通任务派发、设备状态、企业 CLI 登录和远控降级。详见
+[云端 Cindy 验收结果与剩余缺口](cloud-cindy-status.md)。各阶段的完成条件见
+[分阶段路线](headless-runtime-plan.md#分阶段路线2026-11-25-起)，现有用户迁移排在最后。
+[个人版迁移放行表](personal-migration-release-table.md)暂停更新，作为阶段 5 的素材保留。
 
 代码中的两个入口：
 
@@ -32,7 +35,9 @@
 | 文档 | 内容 |
 |---|---|
 | [自有电脑验证 Host](owned-machine-verification.md) | 三个平台的任务内工具链、Host 门禁，以及发布前的 macOS 文件监听和桌面测试 |
-| [headless-runtime-plan.md](headless-runtime-plan.md) | 当前架构目标、能力缺口、分批交付与完整无界面验收 |
+| [headless-runtime-plan.md](headless-runtime-plan.md) | 当前架构目标、分阶段路线、能力缺口、分批交付与完整无界面验收 |
+| [cloud-cindy-status.md](cloud-cindy-status.md) | 云端 Cindy 的自用实例验收、已合入能力、剩余缺口与源码验收准备 |
+| [phase0-sealed-work.md](phase0-sealed-work.md) | 阶段 0 封存清单：2026-11 封存的工作线、已证实的发现、已进入主线的独立修复与重启前提 |
 | [architecture-and-status.md](architecture-and-status.md) | 原 PR 阶段的模块分析与实验记录；现状以基础网页版和当前计划为准 |
 | [maintenance-plan.md](maintenance-plan.md) | PR #9246 合并后的维护计划与逐批验收边界 |
 | [feature-parity.md](feature-parity.md) | 原 PR 阶段的逐项功能记录与审计，保留历史验证范围 |
@@ -73,6 +78,8 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 
 企业内测使用中国区账号体系。用开发环境的桌面渲染产物构建 Host 时，在 `--region cn` 后加 `--dev-endpoints`，并通过 `--web-dir` 指定 dev 渲染目录。构建器将发布仓提供的 `config/endpoint.dev.json` 装入中国区配置，同时核对渲染环境以及认证、设备、模型和 CDN 的独立 HTTPS 地址。
 
+用企业账号登录时，执行 `cindy-host login --org=<企业标识>`，会同时在国内区和国际区查找 SSO。一侧请求失败或超时、另一侧找到企业时，命令会说明本次使用的区域。两区都找到企业时，命令会提示加 `--region=cn` 或 `--region=global` 重试。已知企业区域时，可以直接指定，只查该区。用源码启动时，把相同参数加在上方 `login` 后，换掉个人账号示例里的 `--method=google`。详见[登录流程](architecture-and-status.md#登录流程阶段-2)。
+
 ## Linux 发布包
 
 无图形 Linux 用的 Host 发布包由工作流 [Host release (Linux)](../../.github/workflows/host-release.yml) 构建。在 Actions 页手动运行，「Use workflow from」选要构建的发布标签，或用 `gh workflow run host-release.yml --ref v<版本>`。工作流构建它所在的那个提交，版本号取自标签，所以只能构建已经包含这条工作流的标签。从分支运行得到不带版本号的包。
@@ -87,8 +94,10 @@ CINDY_HOST_API=http://127.0.0.1:3456 pnpm --filter desktop dev
 - Host 只监听 `127.0.0.1`，所有数据接口要求 profile bearer 或本机 cookie。
 - Device Link 的项目目录浏览复用桌面 `fsBrowse` 的纯 Node 实现，支持 `fs:list-dir`、`fs:stat-path` 和 `fs:mkdir-p`；目录始终按执行端文件系统解析。`maker:send` 复用完整 turn executor，运行设置复用 Host 现有 sessions 路由。`maker:get-new-maker-defaults` 复用桌面默认值镜像，首次读取时从当前账号目录恢复草稿与 worktree 偏好，文件名为 `host-new-maker-defaults.json`，分支偏好复用桌面持久化。`maker:git-safety:get` 读取同一份 Git safety 设置，`maker:set-extra-dirs` 复用桌面授权校验、冲突排除和失败回滚。wire channel、payload 与 relay 不变，写操作在桌面占用 profile 时拒绝。回归入口：`apps/host/src/device-link.test.mjs`、`apps/host/src/agent/remote-draft-preferences.test.mjs`。
 - Device Link 的远端新建 Worktree 流程支持 `worktree:detect-cwd`、`list-branches`、`suggest-name`、`create`、`discard-precreated` 和 `cancel-precreated`。Git 编排、分支冲突避让、后台 checkout 租约、脏改动/保留标记/活动引用保护、取消 tombstone 和分支删除 expected-tip 检查复用 Desktop 同一份 `WorktreeManager`；registry 使用同一 profile 的 `worktrees.json` 与跨进程锁。正式会话创建后回写 `sessions.worktree_path`，已落库或已有 live runtime 的会话拒绝补偿回收。这里不开放通用删除、主 checkout 切换或 archive/recovery，`supportsCheckout` 返回 false。回归入口：`apps/host/scripts/worktree-lifecycle.git-integration.mjs`（`pnpm --filter @cindy/host test:git-integration`）与 Desktop WorktreeManager/Store 测试。
-- 当前已完成 macOS 上真实文本任务、刷新、停止、允许一次、Host 重启续接与受控事件断线恢复；
-  手机、三平台实机与真实网络切换仍待验收，见 [本地人工验收](basic-web.md#本地人工验收2026-11-10)。
+- 基础网页版的 macOS 文本任务、刷新、停止、允许一次、重启续接与受控断线恢复见
+  [本地人工验收](basic-web.md#本地人工验收2026-11-10)。手机通过 Device Link 连接云端并运行
+  任务已单独验收，见[云端 Cindy 验收结果与剩余缺口](cloud-cindy-status.md)。三平台实机和真实
+  网络切换仍待验收。
 - Electron 客户端模式覆盖任务、消息、供应商、能力、Agent 命令/技能、输入队列、交互与告警；
   插件执行、MCP、scheduler、device-link、记忆/文件工具仍由 Desktop Runtime 承担（见上表 TODO）。
 

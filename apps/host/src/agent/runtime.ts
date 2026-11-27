@@ -767,6 +767,8 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
     resolveCodexSubagentRoutingSignature: undefined, resolveCodexLocalAuthPolicy: undefined, isCodexAccountProvider: undefined,
     isolateCodexAccountSessions: undefined, registerCodexTextOnlyPolicy: undefined, registerCodexSystemPromptForThread: undefined,
     getRejectedCodexDownshiftModel: undefined,
+    getObservedCodexUpstreamCapacity: undefined,
+    subscribeCodexUpstreamCapacity: undefined,
     getCodexSubagentIdentity: undefined, armCodexHttpRecovery: undefined, registerCodexChildThreadForParent: undefined,
   } satisfies { [K in keyof AgentDeps]?: undefined };
   // codexModelResolvers exists exactly when there is a Codex binary (above).
@@ -800,7 +802,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
         binaryPath: codexBinaryPath,
         logger: LOGGER,
         // As the desktop: Host exit reaps the tool trees below these app-servers (main.ts stop).
-        registerLocalCodexAppServerProcess: ({ pid, role }) => registerCodexProcessRole(pid, role),
+        registerLocalCodexAppServerProcess: ({ pid, role, child }) => registerCodexProcessRole(pid, role, child),
         getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
         getMcpToolApprovalEvidence: undefined,
         // As the desktop: a credential-mode switch of the shared local app-server refuses busy
@@ -849,6 +851,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // As the desktop (pi-host.ts, maker-host/index.ts): Pi packages from this profile's pi-package-home.
   const piPackages = createHostPiPackages({ userDataDir: options.userDataDir, piBinaryPath: options.piBinaryPath ?? null });
   const piNativeProviders = createHostPiNativeProviders({
+    getCatalog: () => modelContext.getRoutingCatalog(),
     userDataDir: options.userDataDir, piBinaryPath: options.piBinaryPath ?? null, endpoint: engineEndpoint,
     claudeProxy, providerConfig: config,
     ensureSharedGlobalSkills: () => options.sharedGlobalSkills?.ensureSharedGlobalSkills() ?? Promise.resolve(),

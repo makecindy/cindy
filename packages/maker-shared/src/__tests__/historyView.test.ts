@@ -44,8 +44,10 @@ describe('history reading projection', () => {
     const visibleIds = (items: ReturnType<typeof projectHistoryView>) => items
       .flatMap((item) => item.type === 'messages' ? item.messages : []).map((message) => message.id);
     expect(visibleIds(projectHistoryView(rows, false, true))).toContain('2');
-    const rewritten = rows.map((r) => r.id === '2' ? { ...r, content: body('xdt_card_ix') } : r);
-    expect(visibleIds(projectHistoryView(rewritten, false, true))).not.toContain('2');
+    // Reusing a row object across calls must still recheck its current body:
+    // per-projection reuse must not become an object-identity cache across reads.
+    rows[2].content = body('xdt_card_ix');
+    expect(visibleIds(projectHistoryView(rows, false, true))).not.toContain('2');
   });
   // Unit regression: two 16-character bodies that collide under a single 32-bit
   // FNV-1a (`<tool_use_error>` vs `xdt-file:///Al乇坋`) shared the same stamp here,
@@ -255,7 +257,7 @@ describe('automatic process detail reading', () => {
   });
 });
 
-import { HistoryViewController } from '../historyViewController.js';
+import { HistoryViewController, type HistoryViewSnapshot } from '../historyViewController.js';
 import { renderHistoryView } from '../historyViewRender.js';
 
 it('does not bind subagent detail fetching to a desktop summary-only enclosing group', async () => {
@@ -682,6 +684,58 @@ describe('shared history view lifecycle', () => {
     expect(intents.at(-1)).toEqual([]);
   });
 
+  // Unit regression for #12504: releasing three detail ranges used to scan
+  // 12 cached bodies instead of five and notify the chat after each collapse.
+  it('trims the warm cache once when a mounted group releases its detail ranges', async () => {
+    const visited: string[] = [];
+    const messages = Array.from({ length: 6 }, (_, index) => ({
+      ...row(index + 1, 'thinking', ''),
+      get content() { visited.push(this.id); return 'cached body'; },
+    }));
+    const items = messages.flatMap(message => projectHistoryView([message], false));
+    const summaries = historyWorkSummaries(items);
+    const keys = summaries.slice(2).map(summary => summary.key);
+    const heldKey = keys[0];
+    const queue = { tail: Promise.resolve() };
+    const expanded = vi.fn(async (_refs: readonly { key: string }[]) => {});
+    const readDetails = vi.fn(async () => { throw new Error('Expected a warm read'); });
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items, hasMore: false, nextCursor: null }),
+      details: readDetails, expanded,
+    }, queue);
+    const details = new Map(summaries.map((summary, index) => [summary.key, {
+      messages: [messages[index]], revision: summary.revision, lastMessageId: summary.lastMessageId,
+      loading: false, complete: true, error: null,
+    }]));
+    await view.restoreCachedView(async () => ({
+      items, details, expanded: new Set(), nextCursor: null, hasMore: false,
+      loading: false, ready: true, error: null,
+    }));
+
+    const release = view.retainExpanded(keys);
+    const releaseShared = view.retainExpanded([heldKey]);
+    await queue.tail;
+    const notify = vi.fn();
+    const unsubscribe = view.subscribe(notify);
+    visited.length = 0;
+    release();
+    release();
+    await queue.tail;
+
+    expect([...view.getSnapshot().expanded]).toEqual([heldKey]);
+    expect(view.getSnapshot().details).toBe(details);
+    expect(visited.toSorted()).toEqual(messages.filter((_, i) => i !== 2).map(message => message.id));
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(expanded.mock.calls.map(([refs]) => refs.map(ref => ref.key))).toEqual([keys, [heldKey]]);
+    expect(readDetails).not.toHaveBeenCalled();
+
+    releaseShared();
+    await queue.tail;
+    expect([...view.getSnapshot().expanded]).toEqual([]);
+    expect(expanded.mock.calls.at(-1)?.[0]).toEqual([]);
+    unsubscribe();
+  });
+
   // Unit: a delayed ACK used to queue one identical final replacement per
   // refresh/toggle. Only unsent intents may coalesce; reconnect must resend.
   it.each([false, true])('coalesces queued interest behind a slow ACK (rejected=%s)', async (rejected) => {
@@ -1046,6 +1100,54 @@ describe('locating folded history preserves display expansion', () => {
   // Unit regression for #12529. Existing preview tests keep a mounted owner.
   // A cached running preview must remain usable after its last owner releases
   // it (a card replaced the work group), until a changed revision needs a read.
+  // 2026-11-26 personal build: a running task page crashed with React #185 in
+  // WorkGroupBlock's layout effect -> setVisible -> retainExpanded. Whatever display
+  // change makes a surface unmount when its own range is retained, the controller
+  // must reach a fixed point instead of oscillating until React aborts the page.
+  // The driver mirrors React: effects run after a commit, a publish schedules another.
+  it('stops a surface that unmounts whenever its own range is retained', async () => {
+    let messages = [row(1, 'thinking', 'first'), row(2, 'tool_use', { toolName: 'Bash', toolUseId: 'a', input: {} })];
+    const loops: unknown[] = [];
+    const view = new HistoryViewController<HistoryMessageSource>({
+      page: async () => ({ version: 1, items: projectHistoryView(messages, true), hasMore: false, nextCursor: null }),
+      details: async () => ({ version: 1, messages, hasMore: false, nextCursor: null }),
+      expanded: async () => undefined,
+      expansionLoop: (event) => loops.push(event),
+    });
+    try {
+      await view.refresh();
+      const key = historyWorkSummaries(view.getSnapshot().items)[0]?.preview?.key;
+      if (!key) throw new Error('Expected a running preview');
+      let release: (() => void) | null = null;
+      let dirty = false;
+      view.subscribe(() => { dirty = true; });
+      const commit = () => {
+        const mounted = !view.getSnapshot().expanded.has(key);
+        if (!mounted && release) { const unmount = release; release = null; unmount(); }
+        if (mounted && !release) release = view.retainExpanded([key]);
+      };
+      let commits = 0;
+      do {
+        dirty = false;
+        commit();
+        if (++commits > 50) throw new Error('Maximum update depth exceeded');
+      } while (dirty);
+
+      expect(commits).toBeLessThan(10);
+      expect(view.getSnapshot().expanded.has(key)).toBe(true);
+      expect(loops).toEqual([expect.objectContaining({
+        key, retainedWith: [key], range: expect.objectContaining({ preview: true, isStreaming: true }),
+      })]);
+
+      // Once the run finishes its preview leaves the page and the kept range is released.
+      messages = [...messages, row(3, 'assistant', 'done')];
+      await view.refresh();
+      expect(view.getSnapshot().expanded.has(key)).toBe(false);
+    } finally {
+      view.setActive(false);
+    }
+  });
+
   it('keeps a completed running preview after release until its revision changes', async () => {
     let messages = [row(1, 'thinking', 'first activity')];
     const view = new HistoryViewController<HistoryMessageSource>({
@@ -1211,4 +1313,37 @@ it.each(['initial', 'older', 'refresh'])('uses existing raw fallback after a bud
   view.reset(); await view.refresh();
   expect(view.getSnapshot().ready).toBe(true);
   view.setActive(false);
+});
+
+// 测试价值：验证 detached HistoryViewController.applyPrefetchedSnapshot 原地更新并保留未变 item 引用，
+// 且在 active 或 unavailable 降级态下不覆写；覆盖缺口：此前无原地更新 detached view 路径，tier unit。
+it('updates a detached controller in place on prefetch while preserving unchanged item references and active/fallback guards', async () => {
+  const first = row(1, 'user', 'first');
+  const second = row(2, 'assistant', 'second');
+  const view = new HistoryViewController<HistoryMessageSource>({
+    page: async () => ({ version: 1, items: projectHistoryView([first], false), hasMore: false, nextCursor: null }),
+    details: async () => ({ version: 1, messages: [], hasMore: false, nextCursor: null }),
+    expanded: async () => undefined,
+  });
+  await view.refresh();
+  const initialFirstItem = view.getSnapshot().items[0];
+  const prefetched: HistoryViewSnapshot<HistoryMessageSource> = {
+    items: projectHistoryView([first, second], false),
+    details: new Map(),
+    expanded: new Set(),
+    hasMore: false,
+    nextCursor: null,
+    ready: true,
+    loading: false,
+    error: null,
+  };
+  // Active views ignore detached prefetch updates.
+  view.applyPrefetchedSnapshot(prefetched);
+  expect(view.getSnapshot().items).toHaveLength(1);
+  // Detached views update synchronously in place and preserve unchanged item identities.
+  view.setActive(false);
+  view.applyPrefetchedSnapshot(prefetched);
+  expect(view.getSnapshot()).toMatchObject({ ready: true, stale: true, loading: false, error: null });
+  expect(view.getSnapshot().items).toHaveLength(2);
+  expect(view.getSnapshot().items[0]).toBe(initialFirstItem);
 });

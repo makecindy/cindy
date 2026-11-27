@@ -434,6 +434,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           assertSharedTaskCurrent.admit();
         }
         await persistSessionFields(sessionId, { model: target.model, effort: effort ?? '' }, { allowEmptyEffort: true });
+        if (internalOptions.source === 'user' && internalOptions.configStaged !== true) {
+          await updateScheduledPreference(sessionId, null);
+        }
         assertRuntimeOwnerCurrent();
         const generation = internalOptions.source === 'fallback'
           ? acceptSessionRuntimeMutation({
@@ -601,7 +604,8 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         });
         if ((!provider?.connected && routeExplicit) || !catalogModel) {
           throwIpcError(
-            'INVALID_PARAMS',
+            runtimeAgentKind === 'pi' && provider?.connected && !catalogModel
+              ? 'MODEL_SELECTION_UNAVAILABLE' : 'INVALID_PARAMS',
             `model "${model}" is unavailable from provider "${actualProviderId ?? 'default'}"`,
           );
         }
@@ -858,7 +862,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
       if (runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh) && liveSessionBeforeRouteChange) {
         if (!piPreview || piPreview.action === 'unavailable') {
           throwIpcError(
-            'PRECONDITION_FAILED',
+            piPreview?.modelNotOffered ? 'MODEL_SELECTION_UNAVAILABLE' : 'PRECONDITION_FAILED',
             piPreview?.reason ?? 'Pi target route cannot be previewed; runtime selection was not changed',
           );
         }
@@ -1030,10 +1034,6 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
             && resolvedCurrentWindow > 0
             ? resolvedCurrentWindow
             : undefined);
-        const targetDoesNotShrink =
-          typeof verifiedCurrentWindow === 'number' &&
-          typeof verifiedTargetWindow === 'number' &&
-          verifiedTargetWindow >= verifiedCurrentWindow;
         // Materialized/user-provider catalog windows can be display-only fallbacks.
         // A destructive native-context rebuild may use only a route-verified window.
         targetContextWindow = verifiedTargetWindow ?? undefined;
@@ -1099,7 +1099,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           gate: {
             inTurn: isSessionInTurn(sessionId),
             isRemote: !!runtimeStatus.remoteHostId || modelSelectionOrigin === 'scoped' ||
-              (!internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke()),
+              (!ownerWindowRebuild && !internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke()),
             agentKind: runtimeAgentKind,
             runtimeRouteChanged: runtimeRouteChanged || piConfigurationRefresh,
             verifiedTargetWindow,
@@ -1122,8 +1122,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           !ownerPiFinalWindow &&
           !modelSwitchPlan.skipRebuild &&
           typeof targetContextWindow === 'number' &&
-          targetContextWindow > 0 &&
-          !targetDoesNotShrink
+          targetContextWindow > 0
         ) {
           if (!contextOverflowRolloverHolder) {
             throwIpcError(
@@ -1143,7 +1142,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
               nextInputChars: internalOptions.nextInputChars,
               recheckTargetPressure: true,
               confirmedTargetPressure:
-                (internalOptions.source === 'user' && internalOptions.applyingUserSelectionOnSend === true &&
+                (internalOptions.source === 'user' &&
                   (ownerWindowRebuild || localWindowRebuild)) ||
                 (modelSelectionOrigin === undefined && !isDeviceLinkInvoke() && confirmedContextWindow === targetContextWindow),
               onConfirmationRequired: (contextTokens) => {

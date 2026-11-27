@@ -45,7 +45,62 @@ function VoiceQuestion() {
 const json = '{\n  "fruit": "苹果",\n  "count": 1\n}';
 const solidity = 'pragma solidity ^0.8.20;\n\n/** @notice Example contract */\ncontract Example {\n    string public message = "hello";\n\n    function check() public {\n        require(true, "safe");\n        // Keep the original source readable.\n        revert("example");\n    }\n}';
 
-function Fixture({ editor, projectSearch, voice, video, askVoice, jsonPreview, solidityPreview, solidityFileBody }: { editor: boolean; projectSearch: boolean; voice: boolean; video: boolean; askVoice: boolean; jsonPreview: boolean; solidityPreview: boolean; solidityFileBody: boolean }) {
+function svgMockDataUri(title: string, subtitle: string, bg: string, fg: string, accent: string): string {
+  const svg = [
+    '<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360">',
+    `<rect width="720" height="360" rx="16" fill="${bg}"/>`,
+    `<rect x="28" y="28" width="664" height="304" rx="12" fill="none" stroke="${accent}" stroke-width="2"/>`,
+    `<rect x="52" y="64" width="220" height="24" rx="6" fill="${accent}"/>`,
+    `<text x="52" y="148" fill="${fg}" font-family="system-ui, sans-serif" font-size="30" font-weight="600">${title}</text>`,
+    `<text x="52" y="196" fill="${fg}" opacity="0.72" font-family="system-ui, sans-serif" font-size="18">${subtitle}</text>`,
+    '</svg>',
+  ].join('');
+  return `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+}
+
+const sampleDarkSlide = svgMockDataUri('Voice Input — Dark', 'Carousel Slide 1 (Dark Mode)', 'rgb(24,24,27)', 'rgb(244,244,245)', 'rgb(63,63,70)');
+const sampleLightSlide = svgMockDataUri('Voice Input — Light', 'Carousel Slide 2 (Light Mode)', 'rgb(250,250,250)', 'rgb(24,24,27)', 'rgb(212,212,216)');
+const sampleBannerImg = svgMockDataUri('Architecture Overview', 'Inline Markdown Image Preview', 'rgb(30,41,59)', 'rgb(248,250,252)', 'rgb(71,85,105)');
+
+const imagesMarkdown = [
+  '# Voice Input Screenshots',
+  '',
+  'Dark / Light screenshots embedded in a carousel and standard image block:',
+  '',
+  '````carousel',
+  `![Dark Mode](${sampleDarkSlide})`,
+  '<!-- slide -->',
+  `![Light Mode](${sampleLightSlide})`,
+  '````',
+  '',
+  '## Standalone Image',
+  '',
+  `![Architecture Overview](${sampleBannerImg})`,
+].join('\n');
+
+function Fixture({
+  editor,
+  projectSearch,
+  voice,
+  video,
+  askVoice,
+  jsonPreview,
+  solidityPreview,
+  solidityFileBody,
+  imagesPreview,
+  imagesFileBody,
+}: {
+  editor: boolean;
+  projectSearch: boolean;
+  voice: boolean;
+  video: boolean;
+  askVoice: boolean;
+  jsonPreview: boolean;
+  solidityPreview: boolean;
+  solidityFileBody: boolean;
+  imagesPreview: boolean;
+  imagesFileBody: boolean;
+}) {
   const [open, setOpen] = useState(false);
   useLayoutEffect(() => {
     if (!video) return;
@@ -67,6 +122,10 @@ function Fixture({ editor, projectSearch, voice, video, askVoice, jsonPreview, s
           <FileBodyView workdir="/fixture" relPath="Contract.sol" allowEdit={false}
             content={{ kind: 'text', relPath: 'Contract.sol', content: solidity, size: solidity.length, mtimeMs: 0, truncated: false }} />
         </div>}
+        {imagesFileBody && <div className="min-h-0 flex-1" data-images-file-body>
+          <FileBodyView workdir="/fixture" relPath="voice-input-screenshots.md" allowEdit={false}
+            content={{ kind: 'text', relPath: 'voice-input-screenshots.md', content: imagesMarkdown, size: imagesMarkdown.length, mtimeMs: 0, truncated: false }} />
+        </div>}
         {voice && <VoiceComposer />}
         {askVoice && <VoiceQuestion />}
         {projectSearch && <div className="h-64 w-64"><WorkdirBrowseSidebar
@@ -84,7 +143,7 @@ function Fixture({ editor, projectSearch, voice, video, askVoice, jsonPreview, s
         />}
       </main>
       <FindInPageBar />
-      {open && <TextLightbox filePath={solidityPreview ? '/fixture/Contract.sol' : jsonPreview ? '/fixture/preview.json' : '/fixture/preview.md'} onClose={() => setOpen(false)} />}
+      {open && <TextLightbox filePath={solidityPreview ? '/fixture/Contract.sol' : jsonPreview ? '/fixture/preview.json' : imagesPreview ? '/fixture/voice-input-screenshots.md' : '/fixture/preview.md'} onClose={() => setOpen(false)} />}
     </>
   );
 }
@@ -112,6 +171,7 @@ mountPage({
     readTextFilePreview: async () => {
       if (ctx.case === 'solidity-preview') return { success: true, data: solidity, size: solidity.length };
       if (ctx.case === 'json-preview') return { success: true, data: json, size: json.length };
+      if (ctx.case === 'markdown-images-preview') return { success: true, data: imagesMarkdown, size: imagesMarkdown.length };
       if (ctx.case === 'loading-editor') {
         await new Promise<void>(resolve => {
           window.addEventListener('fixture-preview-ready', () => resolve(), { once: true });
@@ -162,5 +222,5 @@ mountPage({
     deviceLink: { onRemotePush: subscription('remote-push') },
     ghosts: { listSync: () => ({ ghosts: [] }) },
   }),
-  render: ctx => <Fixture editor={['background-editor', 'loading-editor', 'source-background-editor'].includes(ctx.case)} projectSearch={ctx.case === 'background-project-search'} voice={ctx.case === 'background-voice'} video={ctx.case === 'fullscreen-video'} askVoice={ctx.case === 'background-ask-voice'} jsonPreview={ctx.case === 'json-preview'} solidityPreview={ctx.case === 'solidity-preview'} solidityFileBody={ctx.case === 'solidity-file-body'} />,
+  render: ctx => <Fixture editor={['background-editor', 'loading-editor', 'source-background-editor'].includes(ctx.case)} projectSearch={ctx.case === 'background-project-search'} voice={ctx.case === 'background-voice'} video={ctx.case === 'fullscreen-video'} askVoice={ctx.case === 'background-ask-voice'} jsonPreview={ctx.case === 'json-preview'} solidityPreview={ctx.case === 'solidity-preview'} solidityFileBody={ctx.case === 'solidity-file-body'} imagesPreview={ctx.case === 'markdown-images-preview'} imagesFileBody={ctx.case === 'markdown-images-file-body'} />,
 });

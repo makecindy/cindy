@@ -8,8 +8,10 @@ import { Button } from '@/components/ui/button';
 
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
-import { useSettingsTarget } from './settingsTarget';
+import { useSettingsTarget, type SettingsTargetApi } from './settingsTarget';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { imBotSettings } from './ImBotSection.settings-search';
 import { cn } from '@/lib/utils';
@@ -30,31 +32,6 @@ function i18nRoot(source: SettingsSource): string {
 const EMOJI_OPTIONS: Behavior['emojiReactions'][] = ['off', 'minimal', 'expressive'];
 const GROUP_QUOTE_OPTIONS: Behavior['replyQuoteGroup'][] = ['off', 'first', 'all'];
 const DM_QUOTE_OPTIONS: Behavior['replyQuoteDm'][] = ['off', 'first'];
-
-function mergeOfficialGroupActivation(
-  groups: readonly TelegramHookKnownGroup[],
-  groupActivation: TelegramHookBehaviorState['groupActivation'],
-): TelegramHookKnownGroup[] {
-  const merged = new Map(
-    groups.map((group) => [
-      group.chatId,
-      {
-        ...group,
-        activation:
-          groupActivation[group.chatId] === 'always' ? ('always' as const) : ('mention' as const),
-      },
-    ]),
-  );
-  for (const [chatId, activation] of Object.entries(groupActivation)) {
-    if (merged.has(chatId)) continue;
-    merged.set(chatId, {
-      chatId,
-      chatName: chatId,
-      activation: activation === 'always' ? 'always' : 'mention',
-    });
-  }
-  return [...merged.values()];
-}
 
 function SegmentedRow<T extends string>(props: {
   source: SettingsSource;
@@ -334,9 +311,27 @@ export function TelegramBehaviorSettingsView({
 }
 
 /** 「人格」节: bot 名字 + soul 文本(soul.md 语义), 可一键同步名字到 Telegram 资料页。 */
+/** Keep debounced and close-time saves on the same failure path. */
+async function persistTelegramPersona(
+  api: SettingsTargetApi,
+  next: { botName: string; soul: string },
+  t: (key: string) => string,
+): Promise<boolean> {
+  try {
+    await api.telegramBot.setPersona(next);
+    return true;
+  } catch (error) {
+    toast.error(t(mapIpcErrorToI18nKey(error, { fallback: 'ipcError.INTERNAL' })));
+    return false;
+  }
+}
+
 export function TelegramPersonaSettings() {
   const { t } = useTranslation();
   const { api } = useSettingsTarget();
+  // The close-time save runs in an unmount cleanup; read the current translator there.
+  const translate = useRef(t);
+  translate.current = t;
   const [persona, setPersona] = useState<{ botName: string; soul: string } | null>(null);
   const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'done' | 'failed'>('idle');
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -357,7 +352,7 @@ export function TelegramPersonaSettings() {
       if (pendingSave.current) {
         const flush = pendingSave.current;
         pendingSave.current = null;
-        void api.telegramBot.setPersona(flush);
+        void persistTelegramPersona(api, flush, translate.current);
       }
     };
   }, [api]);
@@ -371,7 +366,13 @@ export function TelegramPersonaSettings() {
     // 600ms 去抖自动保存 — 无显式保存按钮(设置卡即改即存的通用手感)。
     saveTimer.current = setTimeout(() => {
       pendingSave.current = null;
-      void api.telegramBot.setPersona({ botName: next.botName, soul: next.soul });
+      void persistTelegramPersona(api, next, t).then(async saved => {
+        if (saved) return;
+        try {
+          const stored = await api.telegramBot.getPersona();
+          setPersona(current => current === next ? stored : current);
+        } catch { /* The save error was shown and newer edits stay in the editor. */ }
+      });
     }, 600);
   };
 
@@ -430,7 +431,7 @@ export function TelegramPersonaSettings() {
         placeholder={t('settings.telegramBot.persona.soulPlaceholder')}
         spellCheck={false}
         className={cn(
-          'w-full resize-y rounded-2xl px-[14px] py-[10px]',
+          'w-full resize-y rounded-lg px-[14px] py-[10px]',
           'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
           'text-13 leading-[1.6] text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
           'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
@@ -459,13 +460,7 @@ export function TelegramPersonaSettings() {
 }
 
 /** 「群聊」节: bot 进过的群逐行切换参与模式(仅@ / 全响应·自主判断)。 */
-export function TelegramGroupActivationSettings({
-  source = 'personal',
-  bindingId,
-}: {
-  source?: SettingsSource;
-  bindingId?: string;
-}) {
+export function TelegramGroupActivationSettings() {
   const { t } = useTranslation();
   const { api } = useSettingsTarget();
   const [groups, setGroups] = useState<TelegramHookKnownGroup[] | null>(null);
@@ -478,9 +473,8 @@ export function TelegramGroupActivationSettings({
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const latestRevision = useRef(0);
   const mounted = useRef(true);
-  const root = i18nRoot(source);
-  const bindingKey = `${source}:${bindingId ?? ''}`;
-  const activeBindingKey = useRef(bindingKey);
+  const root = i18nRoot('personal');
+  const activeApi = useRef(api);
 
   useEffect(() => {
     mounted.current = true;
@@ -490,7 +484,7 @@ export function TelegramGroupActivationSettings({
   }, []);
 
   useLayoutEffect(() => {
-    activeBindingKey.current = bindingKey;
+    activeApi.current = api;
     groupsRef.current = null;
     confirmedRef.current = null;
     pendingWrites.current = 0;
@@ -499,58 +493,26 @@ export function TelegramGroupActivationSettings({
     latestRevision.current += 1;
     setGroups(null);
     setError(null);
-  }, [bindingKey]);
+  }, [api]);
 
   useEffect(() => {
     let cancelled = false;
-    let loadSettled = false;
-    let pushedDuringLoad: TelegramHookBehaviorState | null = null;
     saveFailed.current = false;
     setError(null);
-    const unsubscribe =
-      source === 'official'
-        ? api.hookControl.onTelegramBehaviorChanged((behavior) => {
-            if (cancelled || behavior.bindingId !== bindingId) return;
-            if (!loadSettled) {
-              pushedDuringLoad = behavior;
-              return;
-            }
-            if (pendingWrites.current > 0) return;
-            const next =
-              groupsRef.current === null
-                ? null
-                : mergeOfficialGroupActivation(groupsRef.current, behavior.groupActivation);
-            groupsRef.current = next;
-            confirmedRef.current = next;
-            setGroups(next);
-            setError(null);
-          })
-        : undefined;
-    const load =
-      source === 'official'
-        ? api.hookControl.listTelegramGroups(bindingId as string)
-        : api.telegramBot.listGroups();
-    void load
-      .then((result) => {
-        loadSettled = true;
+    void api.telegramBot.listGroups()
+      .then(({ groups: next }) => {
         if (cancelled) return;
-        const next =
-          pushedDuringLoad === null
-            ? result.groups
-            : mergeOfficialGroupActivation(result.groups, pushedDuringLoad.groupActivation);
         groupsRef.current = next;
         confirmedRef.current = next;
         setGroups(next);
       })
       .catch(() => {
-        loadSettled = true;
         if (!cancelled) setError('load');
       });
     return () => {
       cancelled = true;
-      unsubscribe?.();
     };
-  }, [api, bindingId, reloadToken, source]);
+  }, [api, reloadToken]);
 
   if (!groups) {
     return error === 'load' ? (
@@ -563,9 +525,6 @@ export function TelegramGroupActivationSettings({
   }
 
   const setMode = (chatId: string, mode: TelegramHookGroupActivationMode) => {
-    const writeBindingKey = bindingKey;
-    const writeBindingId = bindingId;
-    const writeSource = source;
     const optimistic = (groupsRef.current ?? groups).map((group) =>
       group.chatId === chatId ? { ...group, activation: mode } : group,
     );
@@ -576,51 +535,30 @@ export function TelegramGroupActivationSettings({
     pendingWrites.current += 1;
     saveQueue.current = saveQueue.current.then(async () => {
       try {
-        if (writeSource === 'official') {
-          const result = await api.hookControl.setTelegramGroupActivation(
-            writeBindingId as string,
-            chatId,
-            mode,
-          );
-          if (activeBindingKey.current !== writeBindingKey) return;
-          const authoritative = mergeOfficialGroupActivation(
-            groupsRef.current ?? optimistic,
-            result.behavior.groupActivation,
-          );
-          confirmedRef.current = authoritative;
-          if (mounted.current && revision === latestRevision.current) {
-            groupsRef.current = authoritative;
-            setGroups(authoritative);
-          }
-        } else {
-          await api.telegramBot.setGroupActivation({ chatId, mode });
-          if (activeBindingKey.current !== writeBindingKey) return;
-          confirmedRef.current = (confirmedRef.current ?? groups).map((group) =>
-            group.chatId === chatId ? { ...group, activation: mode } : group,
-          );
-        }
+        await api.telegramBot.setGroupActivation({ chatId, mode });
+        if (activeApi.current !== api) return;
+        confirmedRef.current = (confirmedRef.current ?? groups).map((group) =>
+          group.chatId === chatId ? { ...group, activation: mode } : group,
+        );
         if (mounted.current && revision === latestRevision.current) setError(null);
       } catch {
-        if (activeBindingKey.current === writeBindingKey) saveFailed.current = true;
+        if (activeApi.current === api) saveFailed.current = true;
       } finally {
-        if (activeBindingKey.current !== writeBindingKey) return;
+        if (activeApi.current !== api) return;
         pendingWrites.current -= 1;
         if (pendingWrites.current === 0 && saveFailed.current) {
           const reconcileRevision = latestRevision.current;
           let authoritative = confirmedRef.current;
           try {
-            authoritative = (
-              writeSource === 'official'
-                ? await api.hookControl.listTelegramGroups(writeBindingId as string)
-                : await api.telegramBot.listGroups()
-            ).groups;
+            authoritative = (await api.telegramBot.listGroups()).groups;
+            if (activeApi.current !== api) return;
             confirmedRef.current = authoritative;
           } catch {
             // Keep the last confirmed snapshot; the inline retry remains available.
           }
           if (
             mounted.current &&
-            activeBindingKey.current === writeBindingKey &&
+            activeApi.current === api &&
             pendingWrites.current === 0 &&
             reconcileRevision === latestRevision.current &&
             authoritative !== null
@@ -637,7 +575,6 @@ export function TelegramGroupActivationSettings({
 
   return (
     <TelegramGroupActivationSettingsView
-      source={source}
       groups={groups}
       setMode={setMode}
       notice={
@@ -653,21 +590,18 @@ export function TelegramGroupActivationSettings({
   );
 }
 export function TelegramGroupActivationSettingsView({
-  source = 'personal',
   groups,
   setMode,
   notice,
   contactsHint,
 }: {
-  source?: SettingsSource;
   groups: readonly TelegramHookKnownGroup[];
   setMode(id: string, mode: TelegramHookGroupActivationMode): void;
   notice?: ReactNode;
   contactsHint?: ReactNode;
 }) {
   const { t } = useTranslation();
-  const root = i18nRoot(source);
-  const groupSetting = source === 'official' ? imBotSettings.cindyTelegram : imBotSettings.telegram;
+  const root = i18nRoot('personal');
   return (
     <div className="flex flex-col gap-3">
       <div className="text-13 font-medium text-[var(--settings-section-title)]">
@@ -694,7 +628,7 @@ export function TelegramGroupActivationSettingsView({
               </div>
             </div>
             <SegmentedControl
-              data-setting-id={groupSetting.id}
+              data-setting-id={imBotSettings.telegram.id}
               aria-label={`${group.chatName || group.chatId} · ${t(`${root}.groups.title`)}`}
               value={group.activation}
               onValueChange={(mode) => setMode(group.chatId, mode)}

@@ -93,8 +93,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "Groupe de fournisseurs · {{count}} ordinateur",
-    "groupBadge_other": "Groupe de fournisseurs · {{count}} ordinateurs",
+    "groupBadge_one": "Groupe d'ordinateurs · {{count}} ordinateur",
+    "groupBadge_other": "Groupe d'ordinateurs · {{count}} ordinateurs",
     "harness": "Harness",
     "restoreRecommended": "Rétablir les paramètres recommandés",
     "saveFailed": "Impossible d'enregistrer. Réessayez.",
@@ -160,7 +160,6 @@
     "genericName": "Moteur de plugin",
     "defaultModel": "Modèle par défaut",
     "unavailable": "{{engine}} est indisponible",
-    "unavailableWithHint": "{{engine}} est indisponible : {{hint}}",
-    "worktreeUnsupported": "Les moteurs de plugins ne peuvent pas encore démarrer de tâche dans un worktree. Désactivez worktree pour envoyer."
+    "unavailableWithHint": "{{engine}} est indisponible : {{hint}}"
   }
 }
