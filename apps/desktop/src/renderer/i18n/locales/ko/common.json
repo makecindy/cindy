@@ -17565,6 +17565,13 @@
         "inbox": "받은 편지함",
         "enterInbox": "받은 편지함 모드로 전환",
         "leaveInbox": "작업 목록 모드로 전환"
+      },
+      "filterHideTaskCreated": "다른 작업에서 만든 작업 숨기기",
+      "origin": {
+        "createdByTask": "다른 작업에서 생성됨",
+        "createdByTaskNamed": "「{{title}}」 작업에서 생성됨",
+        "createdByRemoteTask": "{{device}}의 작업에서 생성됨",
+        "createdByRemoteTaskNamed": "{{device}}의 「{{title}}」 작업에서 생성됨"
       }
     },
     "rename": {
@@ -17585,7 +17592,9 @@
       "orcaRemoteLead": "{{device}}에서 온 협업",
       "orcaRemoteLeadReleased": "협업 종료됨 · {{device}}에서",
       "orcaRemoteLeadUnknownDevice": "다른 컴퓨터",
-      "orcaRemoteLeadTip": "{{device}}에 있는 “{{lead}}”의 Worker입니다. 작업, 폴더, 명령은 이 컴퓨터에서 실행됩니다. 여기서 보낸 메시지는 Lead에 보고되지 않습니다."
+      "orcaRemoteLeadTip": "{{device}}에 있는 “{{lead}}”의 Worker입니다. 작업, 폴더, 명령은 이 컴퓨터에서 실행됩니다. 여기서 보낸 메시지는 Lead에 보고되지 않습니다.",
+      "createdByTask": "다른 작업에서 시작",
+      "createdByTaskNamed": "「{{title}}」에서 시작"
     },
     "gitContext": {
       "detached": "Detached HEAD",
