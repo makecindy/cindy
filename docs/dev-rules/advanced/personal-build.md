@@ -210,6 +210,51 @@ rollback candidate; its compatibility with data created by a newer build must st
 There is no automatic rollback of data and no automatic cleanup of worktrees. When finished, use
 normal Git worktree management after checking no process or uncommitted work depends on the directory.
 
+### Forward a reviewed resolution to its source PR
+
+A combination may conflict even while every source PR merges cleanly with its own base.
+Keep those resolutions in the personal build. For a PR that also conflicts with its actual
+target (including a stacked target or a fork), use the separate maintainer CLI below.
+
+1. Run `node scripts/personal-build.mjs conflicts list /build/report.json` after a
+   completed composition. Save its JSON output outside Git. The inventory identifies the
+   repository, PR, frozen head, first-parent merge and conflicting paths. An existing build
+   report works as long as the checkout still has its Git objects. Keep any explicitly
+   excluded PRs out of the follow-up inventory.
+2. One existing follow-up can consume several inventories. Run
+   `node scripts/personal-build.mjs conflicts check /build/inventory.json --cache /state/checked.json`.
+   Append other inventory filenames to the command when they are in scope. The check groups
+   by repository and PR, queries its live state once, and reuses Git's conflict paths while
+   both remote tips and branch identities match. Treat an error as an incomplete run. Empty
+   `pending` with open PRs means wait; stop the follow-up when a successful run returns
+   `open: 0`. This command never updates a remote branch.
+3. For a pending record, prepare a detached worktree with the commands below. Review both
+   the original resolution and the candidate against the current PR. Git supplies the clean
+   merge of the real target; only the text inside matching conflict blocks is taken from
+   the recorded resolution. Context outside those blocks comes from the live merge. Check
+   that the chosen lines themselves do not depend on an unmerged feature. If the file type,
+   conflict or a boundary is ambiguous, the tool stops. Inspect that case separately; do
+   not copy the private merge commit or an entire file onto the PR.
+4. With explicit authority to update the source PR, run `push` against the same worktree.
+   Supply the affected project's actual test and typecheck commands as JSON argument arrays.
+   The command checks the reviewed tree, parents, PR identity and both remote tips, pushes
+   the candidate with ordinary Git fast-forward semantics, then reads the remote head back.
+   A moved branch requires a fresh comparison. If a push receipt is interrupted, recheck
+   the remote head against the candidate before trying again.
+
+```sh
+tool=scripts/personal-build.mjs
+node "$tool" conflicts prepare /build/report.json --repo app --pr 123 --worktree /work/review-123
+git -C /work/review-123 show --remerge-diff HEAD
+# Example for a Desktop change; select commands for the actual conflict.
+node "$tool" conflicts push /build/report.json --repo app --pr 123 --worktree /work/review-123 \
+  --test '["pnpm","--dir","apps/desktop","exec","vitest","run","path/to/affected.test.ts"]' \
+  --typecheck '["pnpm","--dir","apps/desktop","typecheck"]'
+```
+
+Use `--repo plugins` for the composed plugin repository. Preparing or checking a build
+does not schedule a follow-up, change a PR target, publish branches or merge PRs.
+
 ## Personal iPhone companion delivery
 
 The optional mobile step consumes the **same `report.json` and frozen source commit** as Desktop.
