@@ -4086,14 +4086,120 @@ describe('tasks using imported Codex connections', () => {
     } finally { release(); }
   });
 
-  it('forks old history through the same imported account and reconnects through its old login', async () => {
+  // Issue #13416: runtime lease accounts carry an owner-and-provider-prefixed id
+  // (`<owner>:openai:<accountId>`). Switching an existing Codex session from the `openai` pool
+  // to a named alias pointing to the same pool account must still recognize it as the same
+  // account instead of misclassifying it for `provider-thread-relink`.
+  it('matches the running account when registered with the runtime prefixed native account id', async () => {
+    h.pools.openai = {
+      strategy: 'rotate',
+      accounts: [account('default'), account('imported')],
+      legacyCodexAccounts: { 'openai-old': 'imported' },
+    };
+    h.created.cprov = { kind: 'openai', name: 'Named Pool', account: 'imported' };
+    h.placement['openai:imported'] = 'openai';
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => false);
+    const agent = withSubscriptionAccounts({ kind: 'codex', requiresCodexThreadHostTransfer: check } as unknown as BaseAgent);
+    const running = {
+      id: 'local:openai:imported',
+      configDir: 'openai/imported',
+      assertCurrent() {},
+      readState: async () => ({ authenticated: true }),
+    };
+    const release = registerSessionSubscriptionAccount('lane', running, 'imported');
+    try {
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'cprov', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[2][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBe(running);
+      h.pools.openai.legacyCodexAccounts = { 'openai-old': 'default' };
+      await agent.requiresCodexThreadHostTransfer({ sessionId: 'lane', providerId: 'openai-old', model: 'gpt-5.4', threadId: 't' });
+      expect(check.mock.calls[3][0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+    } finally { release(); }
+  });
+
+  // #13416: a legacy alias after merge and the OpenAI pool must pass the same
+  // native route and account to the writer check and resume. Standard unit tier.
+  it.each([false, true])('keeps the validated account when resuming a merged legacy Codex alias (hosted=%s)', async deviceHosted => {
+    const model = 'gpt-5.4';
+    h.pools.openai = {
+      strategy: 'rotate',
+      accounts: [account('imported'), account('second')],
+      legacyCodexAccounts: { 'openai-old': 'imported', 'openai-other': 'second' },
+    };
+    h.bindings.set('task:lane', { providerId: 'openai', accountId: 'imported', via: 'openai' });
+    h.bindings.set('native:thread', { providerId: 'openai', accountId: 'imported', via: 'openai' });
+    const start = vi.fn<BaseAgent['startSession']>(async () =>
+      ({ id: 'thread', close: async () => {} } as AgentSessionHandle));
+    const check = vi.fn<BaseAgent['requiresCodexThreadHostTransfer']>(async () => false);
+    const agent = withSubscriptionAccounts({
+      kind: 'codex', startSession: start, requiresCodexThreadHostTransfer: check,
+    } as unknown as BaseAgent);
+    const options = { sessionId: 'lane', model, resumeSessionId: 'thread', workingDir: '.' };
+    const execution = deviceHosted ? { deviceHosted: { guest: false } as NonNullable<StartSessionOptions['deviceHosted']> } : {};
+    const expectedEngineRoute = deviceHosted ? 'openai-old' : 'openai';
+    const current = await agent.startSession({ ...options, ...execution, providerId: 'openai' });
+    try {
+      const running = start.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT];
+      expect(running?.configDir).toBe('openai/imported');
+      await agent.requiresCodexThreadHostTransfer({ ...options, threadId: 'thread', providerId: 'openai-old' });
+      expect(check).toHaveBeenLastCalledWith(expect.objectContaining({
+        providerId: expectedEngineRoute, [NATIVE_SUBSCRIPTION_ACCOUNT]: running,
+      }));
+      await agent.requiresCodexThreadHostTransfer({ ...options, threadId: 'thread', providerId: 'openai-other' });
+      expect(check.mock.lastCall?.[0].providerId).toBe('openai-other');
+      expect(check.mock.lastCall?.[0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+    } finally {
+      await current.close();
+    }
+    const resumed = await agent.startSession({ ...options, ...execution, providerId: 'openai-old' });
+    try {
+      expect(resumed.id).toBe('thread');
+      expect(start.mock.calls[1][0]).toMatchObject({ providerId: expectedEngineRoute, resumeSessionId: 'thread' });
+      expect(start.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
+      expect(h.bindings.get('task:lane')?.accountId).toBe('imported');
+      expect(h.bindings.get('native:thread')?.accountId).toBe('imported');
+      if (!deviceHosted) {
+        setSessionProvider('lane', 'openai-old');
+        const query = { ...options, threadId: 'thread', providerId: 'openai' };
+        const boundAccount = start.mock.calls[1][0][NATIVE_SUBSCRIPTION_ACCOUNT];
+        await agent.requiresCodexThreadHostTransfer(query);
+        expect(check).toHaveBeenLastCalledWith(expect.objectContaining({
+          providerId: 'openai', [NATIVE_SUBSCRIPTION_ACCOUNT]: boundAccount,
+        }));
+        await agent.requiresCodexThreadHostTransfer({ ...query, providerId: 'openai-other' });
+        expect(check.mock.lastCall?.[0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+        check.mockImplementationOnce(async () => {
+          setSessionProvider('lane', 'independent-provider');
+          return false;
+        });
+        check.mockImplementationOnce(async () => true);
+        await expect(agent.requiresCodexThreadHostTransfer(query)).resolves.toBe(true);
+        expect(check.mock.lastCall?.[0][NATIVE_SUBSCRIPTION_ACCOUNT]).toBeUndefined();
+      }
+    } finally {
+      clearSessionProvider('lane');
+      await resumed.close();
+    }
+    await expect(agent.startSession({ ...options, ...execution, providerId: 'openai-other' }))
+      .rejects.toThrow('The task subscription account changed');
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  // Hosted forks have a validated hostedForkAccess instead of deviceHosted.
+  // The fork route must keep that original legacy alias, unlike a local resume.
+  it.each([false, true])('forks old history through its saved legacy route (hosted=%s)', async hosted => {
     h.pools.openai = {
       strategy: 'rotate', accounts: [account('default'), account('imported')],
       legacyCodexAccounts: { 'openai-old': 'imported' },
     };
     const fork = vi.fn<(options: ForkSdkSessionOptions) => Promise<{ newSdkSessionId: string }>>(async () => ({ newSdkSessionId: 'forked' }));
     const agent = withSubscriptionAccounts({ kind: 'codex', forkSdkSession: fork } as unknown as BaseAgent);
-    await agent.forkSdkSession({ providerId: 'openai-old', sourceSdkSessionId: 'old-native' } as ForkSdkSessionOptions);
+    const hostedForkAccess = hosted ? { ownComputer: true, assertCurrent() {} } : undefined;
+    await agent.forkSdkSession({ providerId: 'openai-old', sourceSdkSessionId: 'old-native', upToMessageId: 'fixture-anchor', hostedForkAccess });
+    expect(fork.mock.calls[0][0]).toMatchObject({ providerId: 'openai-old', hostedForkAccess });
     expect(fork.mock.calls[0][0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('openai/imported');
     expect(h.bindings.get('native:forked')?.accountId).toBe('imported');
     await runSubscriptionAccountCommand({ action: 'login', providerId: 'openai', accountId: 'imported', loginKey: 'reconnect' });
