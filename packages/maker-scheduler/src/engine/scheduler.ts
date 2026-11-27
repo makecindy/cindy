@@ -60,7 +60,12 @@ function replanKey(scheduleId: string): string {
   return `replan:${scheduleId}`;
 }
 
+function timedPauseResumeKey(scheduleId: string): string {
+  return `timed-pause-resume:${scheduleId}`;
+}
+
 const SWEEP_REQUEST_KEY = 'sweep';
+const TIMED_PAUSED_SYNC_REQUEST_KEY = 'timed-paused-sync';
 
 function sameSingleWatchedPr(schedule: Schedule, trigger?: ScheduleRunTrigger): boolean {
   if (trigger?.kind !== 'watch' || trigger.source !== 'pr-status' || !trigger.detail) return false;
@@ -628,6 +633,17 @@ export class Scheduler extends EventEmitter {
   /** Paused schedules carrying an explicit auto-resume timestamp (`pausedUntil`). */
   private readonly timedPausedSchedules = new Map<string, Schedule>();
   /**
+   * In-flight auto-resume writes for timed pauses, keyed by scheduleId with the
+   * paused row's updatedAt version (mirrors pendingExpireWrites: prevents stacking
+   * duplicate UPDATEs when storage wedges while letting a newer pause proceed).
+   */
+  private readonly pendingTimedResumeWrites = new Map<string, {
+    version: number;
+    update: Promise<Schedule | null>;
+  }>();
+  /** Monotonic per-schedule counter bumped on local CRUD mutations to fence late auto-resume results. */
+  private readonly scheduleMutationEpochs = new Map<string, number>();
+  /**
    * 在途的过期写入:scheduleId → 那次 storage.update 的 promise **连同它发起时
    * 那一版的 updatedAt**。
    *
@@ -874,6 +890,8 @@ export class Scheduler extends EventEmitter {
    * (Codex P2 on #12087)。
    */
   private inFlightSweep: { sweep: Promise<void>; generation: number } | undefined;
+  /** Single-flight DB sync for timed-paused schedules (mirrors inFlightSweep). */
+  private inFlightTimedPausedSync: { sync: Promise<void>; generation: number } | undefined;
   /**
    * 严格 cron 解析上线前可能落库的畸形 active 任务。清空 nextFireAt 若遇到存储故障，
    * 周期 DB 同步仍会读回旧的到期时间；在用户修正表达式前必须持续把它们隔离在内存里。
@@ -1092,6 +1110,7 @@ export class Scheduler extends EventEmitter {
     this.silencedRuns.clear();
     this.activeSchedules.clear();
     this.timedPausedSchedules.clear();
+    this.scheduleMutationEpochs.clear();
     // 生命周期换代:stop 之前发起、之后才回来的回调(迟到过期写入收口)不得再改
     // 本地状态或广播事件(Codex P1 on #11577)。
     this.lifecycleGeneration += 1;
@@ -1099,6 +1118,7 @@ export class Scheduler extends EventEmitter {
     // 会以为「这条任务还有在途过期写入」而永远不再发过期写入。promise 本身取消
     // 不了,但它的迟到结果已被上面的代次挡住。
     this.pendingExpireWrites.clear();
+    this.pendingTimedResumeWrites.clear();
     // 在途计数同理:上一段生命周期那些挂死的过期写入不再占用新主人的换发额度。
     // 按 token 记的集合整体清掉 —— 那些挂死请求的迟到 settle 会发现自己那条
     // token 已经不在集合里,不会去动新一段生命周期的计数(见 trackOutstandingRequest)。
@@ -1121,6 +1141,7 @@ export class Scheduler extends EventEmitter {
     this.outstandingProbes.clear();
     // 在途清扫同理:挂死的那一份不能把新主人的清扫一直挡在门外。
     this.inFlightSweep = undefined;
+    this.inFlightTimedPausedSync = undefined;
     // 在途的守卫回读同理:挂死的读不能跨生命周期留着,否则新主人一直复用上一段
     // 生命周期那一份永远不 settle 的读。
     this.inFlightGuardReads.clear();
@@ -1317,10 +1338,10 @@ export class Scheduler extends EventEmitter {
       if (this.tickHandle !== tickHandle) return;
       await this.runPreGatePhase('sweep', preGateDeadline, () => this.runSweepSingleFlight(now));
       if (this.tickHandle !== tickHandle) return;
-      await this.runPreGatePhase('syncTimedPaused', preGateDeadline, () => this.refreshTimedPausedFromDb(preGateDeadline));
+      await this.runPreGatePhase('syncTimedPaused', preGateDeadline, () => this.runTimedPausedSyncSingleFlight());
     }
     if (this.tickHandle !== tickHandle) return;
-    await this.processDueTimedPauses(now, tickHandle);
+    await this.processDueTimedPauses(now, tickHandle, preGateDeadline);
     if (this.tickHandle !== tickHandle) return;
     // 补排重试要排在挑选 due 之前:本次刚补上的 nextFireAt 若已到期,同一个 tick 就能
     // 把它捞进 due,不必再等一整个 tick 间隔。
@@ -3038,6 +3059,7 @@ export class Scheduler extends EventEmitter {
     // Do not reuse scheduling or validation decisions after a concurrent write.
     // A deleted row or stale approval guard is rejected by the fresh read.
     if (!updated) return this.updateUnlocked(id, patch, expected);
+    this.bumpScheduleMutationEpoch(id);
     this.refreshAutomaticDispatchSchedules(updated);
     if (updated.status === 'active') {
       this.activeSchedules.set(id, this.keepInvalidScheduleQuarantined(updated, now));
@@ -3075,6 +3097,13 @@ export class Scheduler extends EventEmitter {
     return updated;
   }
 
+  private bumpScheduleMutationEpoch(scheduleId: string): void {
+    this.scheduleMutationEpochs.set(
+      scheduleId,
+      (this.scheduleMutationEpochs.get(scheduleId) ?? 0) + 1,
+    );
+  }
+
   private async syncTimedPausedSchedules(now: number): Promise<void> {
     this.timedPausedSchedules.clear();
     let pausedList: Schedule[];
@@ -3089,64 +3118,256 @@ export class Scheduler extends EventEmitter {
     if (!Array.isArray(pausedList)) return;
     for (const sch of pausedList) {
       if (sch.source === 'bot' || sch.pausedUntil === undefined) continue;
+      this.timedPausedSchedules.set(sch.id, sch);
       if (sch.pausedUntil <= now) {
-        await this.autoResumeExpiredPause(sch.id);
-      } else {
-        this.timedPausedSchedules.set(sch.id, sch);
+        await this.autoResumeExpiredPause(sch, now);
       }
     }
   }
 
-  private async refreshTimedPausedFromDb(preGateDeadline: number): Promise<void> {
-    const remaining = preGateRemaining(preGateDeadline);
-    if (remaining <= 0) return;
-    const pausedList = await withStorageTimeout(
-      this.storage.list({ status: 'paused' }),
-      Math.max(1, remaining),
-      'listPaused',
-    );
+  /**
+   * Single-flight DB sync for timed-paused schedules (mirrors runSweepSingleFlight):
+   * prevents hanging `storage.list({ status: 'paused' })` queries from stacking every
+   * 30s DB sync cycle, while allowing bounded recovery after `listActiveGeneration`
+   * advances.
+   */
+  private runTimedPausedSyncSingleFlight(): Promise<void> {
+    const existing = this.inFlightTimedPausedSync;
+    if (existing && existing.generation >= this.listActiveGeneration) return Promise.resolve();
+    if (existing && !this.mayIssueStorageRequest(TIMED_PAUSED_SYNC_REQUEST_KEY)) {
+      return Promise.resolve();
+    }
+    const generation = this.lifecycleGeneration;
+    const sync = this.refreshTimedPausedFromDb(generation);
+    this.inFlightTimedPausedSync = { sync, generation: this.listActiveGeneration };
+    this.trackOutstandingRequest(TIMED_PAUSED_SYNC_REQUEST_KEY, sync);
+    const clear = () => {
+      if (this.inFlightTimedPausedSync?.sync === sync) this.inFlightTimedPausedSync = undefined;
+    };
+    void sync.then(clear, clear);
+    return sync;
+  }
+
+  private async refreshTimedPausedFromDb(generation: number): Promise<void> {
+    const priorSnapshots = new Map(this.timedPausedSchedules);
+    let pausedList: Schedule[];
+    try {
+      pausedList = await this.storage.list({ status: 'paused' });
+    } catch (err) {
+      this.logger?.warn?.('scheduler: timed-paused DB sync failed', err);
+      return;
+    }
+    if (generation !== this.lifecycleGeneration) return;
     if (!Array.isArray(pausedList)) return;
-    this.timedPausedSchedules.clear();
+    this.lastStorageResponseAt = this.clock.now();
+    const seenIds = new Set<string>();
     for (const sch of pausedList) {
       if (sch.source === 'bot' || sch.pausedUntil === undefined) continue;
+      seenIds.add(sch.id);
+      const localPaused = this.timedPausedSchedules.get(sch.id);
+      const localActive = this.currentScheduleSnapshot(sch.id);
+      if (
+        (localPaused && localPaused.updatedAt > sch.updatedAt) ||
+        (localActive && localActive.updatedAt > sch.updatedAt)
+      ) {
+        continue;
+      }
+      // Storage answered and the same paused row is still persisted: retire any orphaned
+      // in-flight auto-resume write (subject to bounded cap) so the next tick can retry,
+      // mirroring pendingExpireWrites recovery in tick().
+      const pendingWrite = this.pendingTimedResumeWrites.get(sch.id);
+      if (pendingWrite && pendingWrite.version <= sch.updatedAt) {
+        if (this.mayIssueStorageRequest(timedPauseResumeKey(sch.id))) {
+          this.pendingTimedResumeWrites.delete(sch.id);
+        }
+      }
       this.timedPausedSchedules.set(sch.id, sch);
+    }
+    for (const [id, prior] of priorSnapshots) {
+      if (!seenIds.has(id) && this.timedPausedSchedules.get(id) === prior) {
+        this.timedPausedSchedules.delete(id);
+      }
     }
   }
 
   private async processDueTimedPauses(
     now: number,
     tickHandle: ReturnType<typeof setInterval> | null,
+    preGateDeadline: number,
   ): Promise<void> {
     if (this.timedPausedSchedules.size === 0) return;
-    const dueIds: string[] = [];
-    for (const [id, sch] of this.timedPausedSchedules) {
+    const due: Schedule[] = [];
+    for (const sch of this.timedPausedSchedules.values()) {
       if (sch.pausedUntil !== undefined && sch.pausedUntil <= now) {
-        dueIds.push(id);
+        due.push(sch);
       }
     }
-    for (const id of dueIds) {
+    for (const sch of due) {
       if (this.tickHandle !== tickHandle) return;
-      this.timedPausedSchedules.delete(id);
-      await this.autoResumeExpiredPause(id);
+      await this.autoResumeExpiredPause(sch, this.clock.now(), preGateDeadline);
     }
   }
 
-  private async autoResumeExpiredPause(id: string): Promise<void> {
-    try {
-      await this.serializeScheduleMutation(id, async () => {
-        const current = await this.storage.get(id);
-        if (!current || current.source === 'bot' || current.status !== 'paused') return;
-        const now = this.clock.now();
-        if (current.pausedUntil === undefined) return;
-        if (current.pausedUntil > now) {
-          this.timedPausedSchedules.set(id, current);
-          return;
+  private trackPendingTimedResumeWrite(
+    scheduleId: string,
+    version: number,
+    update: Promise<Schedule | null>,
+  ): void {
+    this.pendingTimedResumeWrites.set(scheduleId, { version, update });
+    this.trackOutstandingRequest(timedPauseResumeKey(scheduleId), update);
+    const clear = () => {
+      const tracked = this.pendingTimedResumeWrites.get(scheduleId);
+      if (tracked && tracked.update === update) this.pendingTimedResumeWrites.delete(scheduleId);
+    };
+    void update.then(clear, clear);
+  }
+
+  private applyAutoResumedSchedule(
+    expectedSnapshot: Schedule,
+    updated: Schedule,
+    mutationEpoch: number,
+  ): void {
+    // Fence against any local pause/resume/update/delete that occurred while the
+    // storage write was in flight (including indefinite pause or deletion on the
+    // same clock tick, which leave both activeSchedules and timedPausedSchedules empty).
+    if ((this.scheduleMutationEpochs.get(expectedSnapshot.id) ?? 0) !== mutationEpoch) return;
+    const currentActive = this.currentScheduleSnapshot(updated.id);
+    if (currentActive && currentActive.updatedAt > updated.updatedAt) return;
+    const currentPaused = this.timedPausedSchedules.get(updated.id);
+    if (currentPaused && currentPaused.updatedAt > updated.updatedAt) return;
+    this.invalidateReplanWriteReceipts(updated.id);
+    this.invalidScheduleIds.delete(updated.id);
+    if (this.timedPausedSchedules.get(updated.id)?.updatedAt === expectedSnapshot.updatedAt) {
+      this.timedPausedSchedules.delete(updated.id);
+    }
+    if (updated.status === 'active') {
+      this.activeSchedules.set(updated.id, updated);
+    } else {
+      this.activeSchedules.delete(updated.id);
+    }
+    this.emitEvent({ type: 'changed', scheduleId: updated.id });
+  }
+
+  private armTimedResumeLateApply(
+    expectedSnapshot: Schedule,
+    update: Promise<Schedule | null>,
+    generation: number,
+    mutationEpoch: number,
+  ): void {
+    void update.then(
+      (late) => {
+        if (generation !== this.lifecycleGeneration) return;
+        if (late) {
+          this.applyAutoResumedSchedule(expectedSnapshot, late, mutationEpoch);
+        } else if (
+          (this.scheduleMutationEpochs.get(expectedSnapshot.id) ?? 0) === mutationEpoch &&
+          this.timedPausedSchedules.get(expectedSnapshot.id) === expectedSnapshot
+        ) {
+          this.timedPausedSchedules.delete(expectedSnapshot.id);
         }
-        await this.resumeUnlocked(id);
-      });
+      },
+      () => undefined,
+    );
+  }
+
+  /**
+   * Auto-resume a timed-paused schedule once `pausedUntil <= now`.
+   *
+   * Intentionally runs outside `serializeScheduleMutation` (mirroring `expireSchedule`):
+   * - A wedged storage write can never block subsequent user `pause`/`resume`/`delete`.
+   * - Persistence uses an atomic CAS (`storage.update(id, patch, expected)`) matching
+   *   `status = 'paused'` and `paused_until = expected.pausedUntil`, so a stale resume
+   *   cannot overwrite a concurrent indefinite pause, extension, or edit from this or
+   *   another instance.
+   * - Single-flight tracking (`pendingTimedResumeWrites`) + bounded `mayIssueStorageRequest`
+   *   + `preGateDeadline` keep retries bounded during storage outages and recoverable after.
+   */
+  private async autoResumeExpiredPause(
+    schedule: Schedule,
+    now: number,
+    preGateDeadline?: number,
+  ): Promise<void> {
+    if (
+      schedule.source === 'bot' ||
+      schedule.status !== 'paused' ||
+      schedule.pausedUntil === undefined
+    ) {
+      if (this.timedPausedSchedules.get(schedule.id) === schedule) {
+        this.timedPausedSchedules.delete(schedule.id);
+      }
+      return;
+    }
+    if (schedule.pausedUntil > now) return;
+    const pendingWrite = this.pendingTimedResumeWrites.get(schedule.id);
+    if (pendingWrite && pendingWrite.version >= schedule.updatedAt) return;
+    if (preGateDeadline !== undefined && preGateRemaining(preGateDeadline) <= 0) {
+      this.logPreGateTimeout('autoResumeTimedPause');
+      return;
+    }
+    const budget = Math.max(
+      1,
+      preGateRemaining(preGateDeadline ?? Date.now() + this.preGateStorageTimeoutMs),
+    );
+    if (!this.mayIssueStorageRequest(timedPauseResumeKey(schedule.id))) return;
+
+    let next: number | undefined;
+    try {
+      nextCronOrMonthlyFire(schedule.cronExpr, now, schedule.timezone);
+      next = schedule.manual
+        ? undefined
+        : schedule.intervalMs !== undefined
+          ? now + schedule.intervalMs
+          : nextCronOrMonthlyFire(schedule.cronExpr, now, schedule.timezone);
     } catch (err) {
+      this.logger?.warn?.('scheduler: auto-resume skipped invalid schedule cron', {
+        scheduleId: schedule.id,
+        error: String(err),
+      });
+      if (this.timedPausedSchedules.get(schedule.id) === schedule) {
+        this.timedPausedSchedules.delete(schedule.id);
+      }
+      return;
+    }
+
+    const expired = hasExpired(schedule, now);
+    const nextStatus: Schedule['status'] = expired ? 'expired' : 'active';
+    const nextFireAt = expired ? undefined : beforeDeadline(schedule, next);
+    const generation = this.lifecycleGeneration;
+    const mutationEpoch = this.scheduleMutationEpochs.get(schedule.id) ?? 0;
+    let updatePromise: Promise<Schedule | null> | undefined;
+    try {
+      updatePromise = this.storage.update(
+        schedule.id,
+        {
+          status: nextStatus,
+          updatedAt: now,
+          nextFireAt,
+          pausedUntil: undefined,
+          pauseReason: undefined,
+        },
+        schedule,
+      );
+      this.trackPendingTimedResumeWrite(schedule.id, schedule.updatedAt, updatePromise);
+      const updated = await withStorageTimeout(updatePromise, budget, 'autoResumeTimedPause');
+      if (generation !== this.lifecycleGeneration) return;
+      if (updated) {
+        this.applyAutoResumedSchedule(schedule, updated, mutationEpoch);
+      } else if (
+        (this.scheduleMutationEpochs.get(schedule.id) ?? 0) === mutationEpoch &&
+        this.timedPausedSchedules.get(schedule.id) === schedule
+      ) {
+        this.timedPausedSchedules.delete(schedule.id);
+      }
+    } catch (err) {
+      if (err instanceof StorageAwaitTimeoutError) {
+        this.logPreGateTimeout(err.phase);
+        if (updatePromise) {
+          this.armTimedResumeLateApply(schedule, updatePromise, generation, mutationEpoch);
+        }
+        return;
+      }
       this.logger?.warn?.('scheduler: auto-resume of timed pause failed', {
-        scheduleId: id,
+        scheduleId: schedule.id,
         error: String(err),
       });
     }
@@ -3199,6 +3420,7 @@ export class Scheduler extends EventEmitter {
       pauseReason,
     });
     if (!updated) throw new Error(`Schedule not found: ${id}`);
+    this.bumpScheduleMutationEpoch(id);
     // pause 是**排期语义**的改动(用户改主意了,这条任务不再按原排期跑),这一版不再是
     // 任何一次补排写下的排期 —— 作废该任务名下的补排收据。
     //
@@ -3249,6 +3471,7 @@ export class Scheduler extends EventEmitter {
       pauseReason: undefined,
     });
     if (!updated) throw new Error(`Schedule not found: ${id}`);
+    this.bumpScheduleMutationEpoch(id);
     // resume 同样是**排期语义**的改动(这一版的排期由用户重新起算),作废该任务名下
     // 的补排收据 —— 与 pause 同一把尺子:pause → resume 之后行回到 active 且
     // nextFireAt 可能与暂停前逐项相同,不动作废的话收据会把用户恢复出来的那一版
@@ -3316,6 +3539,7 @@ export class Scheduler extends EventEmitter {
       ? await this.storage.latestClosureFailure?.(id, ownSession).catch(() => undefined)
       : undefined;
     await this.storage.delete(id);
+    this.bumpScheduleMutationEpoch(id);
     this.invalidScheduleIds.delete(id);
     this.pendingReplans.delete(id);
     this.replanLatestIssue.delete(id);

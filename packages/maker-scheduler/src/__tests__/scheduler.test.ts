@@ -41,7 +41,7 @@ class InMemoryStorage implements ScheduleStorage {
     const ex = this.schedules.get(id);
     if (!ex) return null;
     if (expected && (['lastFiredAt', 'nextFireAt', 'status', 'recurring', 'manual',
-      'cronExpr', 'timezone', 'intervalMs', 'expireAt'] as const).some((key) => ex[key] !== expected[key])) return null;
+      'cronExpr', 'timezone', 'intervalMs', 'expireAt', 'pausedUntil'] as const).some((key) => ex[key] !== expected[key])) return null;
     const merged: Schedule = { ...ex, ...patch };
     if (patch.lastFinishedAt !== undefined) {
       merged.lastFinishedAt = Math.max(ex.lastFinishedAt ?? patch.lastFinishedAt, patch.lastFinishedAt);
@@ -9185,6 +9185,120 @@ describe('Scheduler timed pause (pausedUntil & pauseReason)', () => {
     expect(recovered?.status).toBe('active');
     expect(recovered?.pausedUntil).toBeUndefined();
     expect(recovered?.pauseReason).toBeUndefined();
+    await h.scheduler.stop();
+  });
+
+  // Regression for PR #13359 Greptile P1/P2:
+  // 1. A wedged auto-resume storage write must not block user pause/resume/delete, must not
+  //    overwrite a newer indefinite/extended pause when it settles late, and must recover once
+  //    storage answers again.
+  // 2. Cross-instance atomic CAS must reject a stale auto-resume when another instance extends
+  //    or clears `pausedUntil` before the write lands.
+  // 3. `refreshTimedPausedFromDb` must be single-flight so hung `storage.list({ status: 'paused' })`
+  //    calls do not stack every 30s DB sync cycle.
+  it('bounds hung auto-resume without blocking mutations, enforces atomic CAS on pausedUntil, and single-flights paused DB sync', async () => {
+    const h = makeHarness({ preGateStorageTimeoutMs: 20 });
+    const sch = await h.scheduler.create(baseInput);
+    await h.scheduler.start();
+
+    // (1) Wedged auto-resume does not hold serializeScheduleMutation; user indefinite pause
+    // succeeds immediately and late auto-resume settlement cannot resurrect active status.
+    const t0 = h.clock.now();
+    await h.scheduler.pause(sch.id, {
+      pausedUntil: t0 + 10_000,
+      pauseReason: 'rate limit',
+    });
+    const origUpdate = h.storage.update.bind(h.storage);
+    let releaseHungUpdate!: (val: Schedule | null) => void;
+    let updateCalls = 0;
+    const updateSpy = vi.spyOn(h.storage, 'update').mockImplementation(async (id, patch, expected) => {
+      updateCalls += 1;
+      if (updateCalls === 1 && expected?.status === 'paused') {
+        return new Promise<Schedule | null>((resolve) => {
+          releaseHungUpdate = resolve;
+        });
+      }
+      return origUpdate(id, patch, expected);
+    });
+
+    h.clock.advance(10_000);
+    await h.scheduler.tick(); // times out after 20ms instead of hanging forever
+    expect(updateCalls).toBe(1);
+
+    // User immediately switches to indefinite pause while auto-resume write is still wedged.
+    const indefinite = await h.scheduler.pause(sch.id, { pauseReason: 'manual indefinite' });
+    expect(indefinite.status).toBe('paused');
+    expect(indefinite.pausedUntil).toBeUndefined();
+
+    // Even if the hung auto-resume eventually resolves with a stale active snapshot,
+    // mutationEpoch fencing discards it and DB stays paused.
+    releaseHungUpdate({ ...indefinite, status: 'active', pausedUntil: undefined, pauseReason: undefined });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect((await h.storage.get(sch.id))?.status).toBe('paused');
+    updateSpy.mockRestore();
+
+    // (2) Cross-instance atomic CAS: another instance extends pausedUntil in DB before our
+    // auto-resume write executes -> CAS returns null and extended pause is preserved.
+    const t1 = h.clock.now();
+    await h.scheduler.pause(sch.id, {
+      pausedUntil: t1 + 10_000,
+      pauseReason: 'first window',
+    });
+    const peerUpdate = h.storage.update.bind(h.storage);
+    const casSpy = vi.spyOn(h.storage, 'update').mockImplementationOnce(async (id, patch, expected) => {
+      // Simulate another instance extending pausedUntil right before our CAS runs.
+      const row = h.storage.schedules.get(id)!;
+      h.storage.schedules.set(id, {
+        ...row,
+        pausedUntil: t1 + 60_000,
+        pauseReason: 'extended by peer',
+        updatedAt: t1 + 10_001,
+      });
+      return peerUpdate(id, patch, expected);
+    });
+    h.clock.advance(10_000);
+    await h.scheduler.tick();
+    casSpy.mockRestore();
+    const afterPeerExtend = await h.storage.get(sch.id);
+    expect(afterPeerExtend?.status).toBe('paused');
+    expect(afterPeerExtend?.pausedUntil).toBe(t1 + 60_000);
+    expect(afterPeerExtend?.pauseReason).toBe('extended by peer');
+
+    // (3) Single-flight refreshTimedPausedFromDb: a hung list({ status: 'paused' }) does not
+    // accumulate new queries across repeated 30s DB sync cycles.
+    const origList = h.storage.list.bind(h.storage);
+    let releaseHungList!: () => void;
+    let pausedListCalls = 0;
+    const listSpy = vi.spyOn(h.storage, 'list').mockImplementation(async (filter) => {
+      if (filter?.status === 'paused') {
+        pausedListCalls += 1;
+        if (pausedListCalls === 1) {
+          await new Promise<void>((resolve) => {
+            releaseHungList = resolve;
+          });
+          return origList(filter);
+        }
+      }
+      return origList(filter);
+    });
+    h.clock.advance(31_000);
+    await h.scheduler.tick();
+    h.clock.advance(31_000);
+    await h.scheduler.tick();
+    expect(pausedListCalls).toBe(1);
+    releaseHungList();
+    await Promise.resolve();
+    await Promise.resolve();
+    listSpy.mockRestore();
+
+    // After the extended pausedUntil arrives, sync picks it up and auto-resume succeeds.
+    h.clock.advance(31_000);
+    await h.scheduler.tick();
+    const finalRow = await h.storage.get(sch.id);
+    expect(finalRow?.status).toBe('active');
+    expect(finalRow?.pausedUntil).toBeUndefined();
+    expect(finalRow?.pauseReason).toBeUndefined();
     await h.scheduler.stop();
   });
 });

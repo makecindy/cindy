@@ -265,9 +265,12 @@ describeMigrationReplay('existing side-chat teams', () => {
         '0161_schedule_model_group.sql',
         '0162_schedule_mr_observation.sql',
         '0163_purge_deleted_task_history.sql',
+        '0164_schedule_pause_metadata.sql',
       ]);
       expect(columnNames(db, 'schedules')).toContain('model_group');
       expect(columnNames(db, 'schedules')).toContain('primary_host_key');
+      expect(columnNames(db, 'schedules')).toContain('paused_until');
+      expect(columnNames(db, 'schedules')).toContain('pause_reason');
       const reopened = createBetterSqliteDatabase(db.name);
       try {
         expect(reopened.prepare("SELECT side_chat_promoted FROM sessions WHERE id = 'live'").pluck().get()).toBe(1);
@@ -497,7 +500,7 @@ describeMigrationReplay('migration replay', () => {
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163,
+          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -677,7 +680,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。
@@ -786,6 +789,56 @@ describeMigrationReplay('migration replay', () => {
           if (state === 'missing table') expect(tableExists(db, 'schedules')).toBe(false);
           else expect(db.prepare('SELECT * FROM schedules').all()).toEqual([{ id: 'old', prompt: 'keep this prompt',
             model_agent_device_id: state === 'existing column' ? 'shared:owner' : null }]);
+        }
+      } finally {
+        rmSync(stagedDir, { recursive: true, force: true });
+        cleanup();
+      }
+    },
+  );
+
+  // Migration tier: adding nullable pause metadata columns must be idempotent on
+  // partial fixtures (missing schedules table) and preserve existing paused rows.
+  it.each(['missing table', 'legacy table', 'existing columns'])(
+    'replays the schedule pause metadata migration with %s',
+    (state) => {
+      const { db, cleanup } = createTempDb();
+      const stagedDir = mkdtempSync(path.join(tmpdir(), 'cindy-schedule-pause-metadata-'));
+      try {
+        db.exec('CREATE TABLE migration_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)');
+        const migration = listMigrations(drizzleDir()).find((item) =>
+          item.fileName.endsWith('_schedule_pause_metadata.sql'),
+        )!;
+        copyFileSync(migration.sqlPath, path.join(stagedDir, migration.fileName));
+        mkdirSync(path.join(stagedDir, 'scripts'));
+        copyFileSync(
+          migration.tsScriptPath!,
+          path.join(stagedDir, 'scripts', path.basename(migration.tsScriptPath!)),
+        );
+        if (state !== 'missing table') {
+          db.exec(
+            "CREATE TABLE schedules (id TEXT PRIMARY KEY, status TEXT); INSERT INTO schedules VALUES ('s1', 'paused');",
+          );
+          if (state === 'existing columns') {
+            db.exec(
+              "ALTER TABLE schedules ADD COLUMN paused_until INTEGER; ALTER TABLE schedules ADD COLUMN pause_reason TEXT; UPDATE schedules SET paused_until = 123456, pause_reason = 'cooldown' WHERE id = 's1';",
+            );
+          }
+        }
+        for (let replay = 0; replay < 2; replay += 1) {
+          runMigrationReplay(db, { drizzleDir: stagedDir, currentVersion: migration.seq - 1 });
+          if (state === 'missing table') {
+            expect(tableExists(db, 'schedules')).toBe(false);
+          } else {
+            expect(db.prepare('SELECT * FROM schedules').all()).toEqual([
+              {
+                id: 's1',
+                status: 'paused',
+                paused_until: state === 'existing columns' ? 123456 : null,
+                pause_reason: state === 'existing columns' ? 'cooldown' : null,
+              },
+            ]);
+          }
         }
       } finally {
         rmSync(stagedDir, { recursive: true, force: true });

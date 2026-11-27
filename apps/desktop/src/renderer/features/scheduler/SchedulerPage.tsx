@@ -618,7 +618,9 @@ export function SchedulerPage() {
           prNumber: ref.prNumber,
           ...(ref.provider === 'gitlab' ? { provider: ref.provider, host: ref.host } : {}),
         }));
-        const results = (await window.electronAPI.gitContext.getPrStatuses(batch)) as PrStatusResult[];
+        const results = (await window.electronAPI.gitContext.getPrStatuses(batch, {
+          refresh: true,
+        })) as PrStatusResult[];
         for (const result of results) {
           statusMap.set(prStatusKey(result), result);
           if (result.ok) okCount += 1;

@@ -4976,6 +4976,7 @@ interface ElectronAPI {
         repo: string;
         prNumber: number;
       }>,
+      options?: { refresh?: boolean },
     ) => Promise<import('@/lib/gitContext.types').PrStatusResult[]>;
     onChanged: (
       cb: (data: import('@/lib/gitContext.types').GitContextSnapshot) => void,

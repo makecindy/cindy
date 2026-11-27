@@ -12,7 +12,7 @@ import { assertCronAndTimezoneValid, buildJsonResult, withScheduler } from './_s
 import { isLocalDevice, runOnDevice, writeDeviceShape } from './_devices.js';
 import { schedulePrTriggerSchema, assertWebhookReceiverAvailable, webhookSourceSchema } from './_webhook.js';
 import { LOCAL_SCHEDULE_AGENT_DEVICE } from './listModels.js';
-import { attachMultiPrSessionWarning } from './_prSessionGuard.js';
+import { attachMultiPrSessionWarning, attachRemoteMultiPrSessionWarning } from './_prSessionGuard.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import { stabilizePreRunHookForUpdate, type UpdateScheduleInput } from '@cindy/maker-scheduler';
@@ -225,6 +225,7 @@ export function registerScheduleUpdateTool(
         return runOnDevice(deps, device, async () => undefined, {
           op: 'update',
           args: expected ? [id, remotePatch, expected] : [id, remotePatch],
+          map: (data) => attachRemoteMultiPrSessionWarning(deps, device!, data),
         });
       }
       return withScheduler(deps, async (scheduler) => {

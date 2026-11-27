@@ -1831,10 +1831,24 @@ describe('PR follow watch', () => {
     expect(fetchPr).toHaveBeenCalledTimes(1); // held by adaptive 5m TTL
     await svc.getStatuses([Q], { refresh: true });
     expect(fetchPr).toHaveBeenCalledTimes(2); // explicit refresh still bypasses adaptive TTL
+    // Destructive cleanup safety (PR #13359): cached closed PR under extended adaptive TTL
+    // must still observe a reopened PR on { waitForFresh: true, refresh: true }, and a live
+    // fetch failure must return ok:false rather than the stale closed cache entry.
+    const cleanupPr = { ...Q, prNumber: 86 };
+    fetchPr.mockResolvedValueOnce(remote({ state: 'closed', merged: false, head_sha: 'h86' }));
+    const [closedFirst] = await svc.getStatuses([cleanupPr], { waitForFresh: true, refresh: true });
+    expect(closedFirst).toMatchObject({ ok: true, status: 'closed' });
+    fetchPr.mockResolvedValueOnce(remote({ state: 'open', merged: false, head_sha: 'h86' }));
+    const [reopened] = await svc.getStatuses([cleanupPr], { waitForFresh: true, refresh: true });
+    expect(reopened).toMatchObject({ ok: true, status: 'open' });
+    fetchPr.mockRejectedValueOnce(new Error('rate limited'));
+    const [failedRefresh] = await svc.getStatuses([cleanupPr], { waitForFresh: true, refresh: true });
+    expect(failedRefresh).toMatchObject({ ok: false, reason: 'fetch-failed' });
+    const callsBeforeReset = fetchPr.mock.calls.length;
     adaptiveTtl = undefined; // quota reset restores normal 60s TTL immediately
     now = 151_000;
     await svc.getStatuses([Q]);
-    expect(fetchPr).toHaveBeenCalledTimes(3);
+    expect(fetchPr).toHaveBeenCalledTimes(callsBeforeReset + 1);
 
     // 3. Initial baseline seeded reconciledUpdatedAt -> overflow with unchanged updated_at does NOT emit reconcile.
     await refreshGithubPrEvents(svc, watch, [url], () => true, { reason: 'overflow', notify: [url] });

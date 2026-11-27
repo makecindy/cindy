@@ -464,13 +464,24 @@ export function registerGitContextIpc(deps?: { readGitlabPluginToken?: (host: st
     });
   });
 
-  const statusHandler = async (_e: unknown, queries: unknown) => {
+  const statusHandler = async (event: Electron.IpcMainInvokeEvent, queries: unknown, options?: unknown) => {
     let rawQueries: unknown = queries;
     let remoteSessionId: string | null = null;
     if (isDeviceLinkInvoke()) {
       const obj = queries as { sessionId?: unknown; queries?: unknown };
       remoteSessionId = requireString(obj?.sessionId, 'sessionId');
       rawQueries = obj?.queries;
+    }
+    const forceRefresh =
+      !remoteSessionId &&
+      Boolean(
+        options &&
+        typeof options === 'object' &&
+        !Array.isArray(options) &&
+        (options as { refresh?: unknown }).refresh === true,
+      );
+    if (forceRefresh) {
+      assertTrustedAppRendererEvent(event);
     }
     if (!Array.isArray(rawQueries)) {
       throwIpcError('INVALID_PARAMS', 'queries 必须是数组');
@@ -528,7 +539,10 @@ export function registerGitContextIpc(deps?: { readGitlabPluginToken?: (host: st
         return [];
       }
     }
-    const statuses = await prStatusService!.getStatuses(parsed, { remote: remoteSessionId !== null });
+    const statuses = await prStatusService!.getStatuses(parsed, {
+      remote: remoteSessionId !== null,
+      ...(forceRefresh ? { waitForFresh: true, refresh: true } : {}),
+    });
     return statuses.map(withoutPrMetadata);
   };
   ipcMain.handle(GIT_CONTEXT_INVOKE.PR_STATUS, statusHandler);
