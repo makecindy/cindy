@@ -1682,3 +1682,47 @@ it('lists a shared plugin provider under my shared providers instead of the ordi
     resetProviderShareStoreForTests();
   }
 });
+
+// 2026-11-27 用户要求：插件设置页的「在模型供应商里管理账号」要直接落到那个插件引擎的页面，而不是让用户自己去找。
+// unit/jsdom：真实的 ProvidersSection，引擎列表来自预加载接口的替身并晚于首帧返回。此前的深链用例只覆盖
+// connect／import／receivedShare，没有任何参数能选中插件引擎。
+// 最小失败输入：?pluginEngine=<key> 而引擎列表后到——默认选中的普通供应商不让位，或一次性参数留在 URL 里；
+// 点名一个不在列表里的引擎(插件刚停用)时把别的引擎选了出来。
+it.each([
+  ['the named plugin provider', 'agy-plugin:agy', 'Antigravity'],
+  ['no plugin provider for a key that is not listed', 'gone-plugin:gone', null],
+])('pluginEngine=<key> opens %s once the engine list arrives', async (_name, key, opened) => {
+  providersState.providers = [makeProvider('anthropic', { name: 'Anthropic', connected: true })];
+  const agy = {
+    key: 'agy-plugin:agy', providerId: 'acp-plugin:agy-plugin:agy', ghostId: 'agy-plugin', harnessId: 'agy', name: 'Antigravity',
+    availability: { state: 'available' }, models: [{ id: 'm1', displayName: 'Model One' }],
+    permissionModes: [{ id: 'ask', displayName: 'Ask' }], defaultPermissionMode: 'ask',
+    remoteUse: { supported: true, enabled: false, shareSupported: true },
+  };
+  let deliver!: (engines: unknown[]) => void;
+  Object.assign((window.electronAPI as unknown as { maker: Record<string, unknown> }).maker, {
+    listPluginEngines: vi.fn(() => new Promise((resolve) => { deliver = resolve; })),
+    onPluginEnginesChanged: vi.fn(() => () => undefined),
+    refreshPluginEngines: vi.fn(async () => undefined),
+    setPluginEnginePrefs: vi.fn(async () => null),
+  });
+  const anthropicCurrent = () => screen.getByRole('button', { name: 'Anthropic' }).getAttribute('aria-current');
+  try {
+    renderAt(`?tab=providers&pluginEngine=${encodeURIComponent(key)}`);
+    // Until the engines are known the page shows what it would show anyway and keeps the request.
+    await waitFor(() => expect(anthropicCurrent()).toBe('true'));
+    expect(screen.getByTestId('search').textContent).toContain('pluginEngine=');
+    await act(async () => deliver([agy]));
+    await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
+    if (opened) {
+      expect(within(screen.getByTestId('plugin-engine-provider-detail')).getByText(opened)).toBeTruthy();
+      expect(anthropicCurrent()).toBe('false');
+    } else {
+      expect(screen.queryByTestId('plugin-engine-provider-detail')).toBeNull();
+      expect(anthropicCurrent()).toBe('true');
+    }
+  } finally {
+    cleanup();
+    resetPluginEnginesStoreForTests();
+  }
+});

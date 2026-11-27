@@ -167,7 +167,7 @@ import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { usePluginEngines } from '@/hooks/usePluginEngines';
-import { pluginEngineKeyFromProviderId, type PluginEngineView } from '../../../shared/pluginEngines';
+import { PLUGIN_ENGINE_SETTINGS_PARAM, pluginEngineKeyFromProviderId, type PluginEngineView } from '../../../shared/pluginEngines';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
 import { useLocalProviderGroupsState } from '@/features/provider-group/useLocalProviderGroups';
@@ -3125,6 +3125,32 @@ export function ProvidersSection({ routing = false, onRoutingChange }: {
     next.delete(PROVIDER_SHARE_RECEIVED_PARAM);
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams, receivedSharesLoaded, receivedShares, selectShare, selectionKey]);
+  // 插件引擎深链(?pluginEngine=<引擎 key>，来自插件设置页的「在模型供应商里管理」)：等引擎列表到了再消费
+  // 并从 URL 摘除；这个引擎不在列表里(插件刚停用)时只停在供应商页。引擎列表是异步到的，空列表表示
+  // 「还没读到」，这时保留参数；等待期间用户自己改选了别的，就放弃这次跳转。
+  const pluginEngineWaitRef = useRef<string | null>(null);
+  useEffect(() => {
+    const target = searchParams.get(PLUGIN_ENGINE_SETTINGS_PARAM);
+    if (!target) {
+      pluginEngineWaitRef.current = null;
+      return;
+    }
+    const waiting = pluginEngines.length === 0;
+    const userMoved = pluginEngineWaitRef.current !== null && pluginEngineWaitRef.current !== selectionKey;
+    if (waiting && !userMoved) {
+      pluginEngineWaitRef.current ??= selectionKey;
+      return;
+    }
+    pluginEngineWaitRef.current = null;
+    if (!userMoved && pluginEngines.some((engine) => engine.key === target)) {
+      setShareManageProviderId(null);
+      setFocusedModel(null);
+      selectEngine(target);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete(PLUGIN_ENGINE_SETTINGS_PARAM);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams, pluginEngines, selectEngine, selectionKey]);
   useEffect(() => {
     if (loading) return;
     const connect = searchParams.get('connect');

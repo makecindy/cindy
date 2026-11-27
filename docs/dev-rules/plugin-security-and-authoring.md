@@ -1571,6 +1571,29 @@ App 双向同步，**不另建存储**：Main 复用 device-link 同一条 owner
 `ghostLocalInstallIdentity.test.ts`（旧 receipt 升级）与 `ghostInstallConsent.test.ts`。协议记录见
 [插件任务执行引擎](protocol-compatibility/plugin-harnesses.md)，作者契约见 `cindy-plugin-creator/references/plugin-harnesses.md` §4.6.4。
 
+### 插件页面打开自己引擎的供应商设置（2026-11-27，新增接口，尚未发布）
+
+用途：引擎的账号、用量与模型开关都在「设置 → 模型供应商」，插件设置页不再各做一套，改放一个把用户带过去的
+按钮。页面同源 `POST /harnesses/open-settings`，请求体只有 `{"id":"<引擎 id>"}`。边界：
+
+- **只能指向自己的引擎**：`id` 必须在该物理实例 manifest 的 `harnesses` 里，且引擎当前在注册表中（已启用、
+  整包批准有效、已声明）；引擎 key 由 Main 从注册表取，页面给不出别的插件、内置供应商或任意设置页。
+- **必须紧跟宿主看到的用户操作**：消费 `noteGhostUserGesture` 记下的一次性手势（guest 的 mouseDown／keyDown，
+  3 秒内有效），与派活、任务页跳转共用同一枚，用过即失效；格式错误或未声明的请求在消费之前就拒绝，不耗掉这次点击。
+  没有手势一律 403，页面不能在后台把用户拉去设置页，也不能反复触发。
+- **只导航**：Main 向主窗口发 `deep-link:navigate` 的 `plugin-engine-settings`（只带引擎 key），Renderer 进入
+  `/settings?tab=providers&pluginEngine=<key>`，由供应商页一次性消费并选中。不改任何设置、不回传引擎或账号信息。
+  该 payload 只由 Main 在上述校验后发出，`parseDeepLink` 不解析任何对应的 `cindy://` 链接，外部应用无法构造；
+  没有就绪的主窗口时返回 503，不进待处理队列、不在下次启动时重放。
+- **只在本机页面开放**：路由只挂在 Electron 的 `cindy-ghost://` 页面处理器上；手机页与远程设置页的转发入口
+  （`electronSandboxAdapter` 的按路径分发）不认这条路径，Node Host 不提供该端口，一律 404。不进 device-link 白名单。
+
+不增加 manifest 字段、权限行或批准状态，存量插件影响：无。旧 Host 上该路径落到包内文件查找返回 404，页面据此
+保留文字引导。实现见 `runtime/ghostEngineSettingsEndpoint.ts`、`deepLink.ts` 的 `openMainWindowPluginEngineSettings`
+与 `ProvidersSection` 的 `pluginEngine` 参数；回归见 `ghostEngineSettingsEndpoint.test.ts`、`deepLink.test.ts`、
+`providersSectionDeepLink.test.tsx`；作者契约见 `cindy-plugin-creator/references/plugin-harnesses.md`
+「让用户到模型供应商里管理引擎」。
+
 ### 宿主统一模型选择器（新增接口，尚未发布）
 
 桌面插件的 settings / panel / mainView / taskView WebView 可调用
