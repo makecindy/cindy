@@ -30,6 +30,48 @@ export function buildForcedFailureRun(input: {
 }
 
 /**
+ * 所有非静默提醒与失败通知出口共用的单一收口：
+ * 调度派发阶段不再提前写 userSendAt，因此每次实际通知用户或失败（finalizeRun /
+ * notifyFailureSilent / notifyForcedFailure / notifyPluginStop）都经此在发通知前
+ * 补记任务活动时间，确保稍后处理中的绑定任务被唤回且写入失败不阻塞通知投递。
+ */
+export async function deliverScheduleRunNotification(input: {
+  schedule: Schedule;
+  run: ScheduleRun;
+  now?: number;
+  notifier: Notifier;
+  touchUserSendInDb?: (sessionId: string, atMs?: number) => Promise<void>;
+  logger?: Logger;
+  logTag?: string;
+  swallowNotifyError?: boolean;
+}): Promise<ScheduleRun> {
+  const targetSessionId = input.run.sessionId || input.schedule.targetSessionId;
+  if (targetSessionId && input.touchUserSendInDb) {
+    const activityAt = Math.max(input.run.firedAt, input.run.finishedAt ?? input.now ?? 0);
+    try {
+      await input.touchUserSendInDb(targetSessionId, activityAt);
+    } catch (err) {
+      input.logger?.warn?.(input.logTag ?? '[scheduler-host] touchUserSend before notify failed', {
+        scheduleId: input.schedule.id,
+        runId: input.run.id,
+        sessionId: targetSessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  if (input.swallowNotifyError) {
+    try {
+      await input.notifier.notify(input.schedule, input.run);
+    } catch (err) {
+      input.logger?.warn?.('notifier.notify threw (should not happen)', err);
+    }
+  } else {
+    await input.notifier.notify(input.schedule, input.run);
+  }
+  return input.run;
+}
+
+/**
  * 卡死守卫强制收口绕过 runner，但与 finalizeRun 共享「非静默/失败才推进任务时间」的不变量：
  * 派发阶段不再提前写 userSendAt，因此这里在发失败通知前补记活动时间，确保稍后处理中的任务被唤回。
  */
@@ -50,20 +92,13 @@ export async function deliverForcedFailureNotification(input: {
     run: input.run,
     now: input.now,
   });
-  const targetSessionId = forcedRun.sessionId ?? input.schedule.targetSessionId;
-  if (targetSessionId && input.touchUserSendInDb) {
-    const activityAt = Math.max(forcedRun.firedAt, forcedRun.finishedAt ?? input.now);
-    try {
-      await input.touchUserSendInDb(targetSessionId, activityAt);
-    } catch (err) {
-      input.logger?.warn?.('[scheduler-host] touchUserSend on forced failure failed', {
-        scheduleId: input.schedule.id,
-        runId: input.runId,
-        sessionId: targetSessionId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-  await input.notifier.notify(input.schedule, forcedRun);
-  return forcedRun;
+  return deliverScheduleRunNotification({
+    schedule: input.schedule,
+    run: forcedRun,
+    now: input.now,
+    notifier: input.notifier,
+    touchUserSendInDb: input.touchUserSendInDb,
+    logger: input.logger,
+    logTag: '[scheduler-host] touchUserSend on forced failure failed',
+  });
 }

@@ -18,7 +18,7 @@ import type { TeammateProjectState } from './ownTeammateProject';
 import type { MakerScheduleRunner, SchedulerQueueDeps } from './runner';
 import type { ScriptScheduleRunner } from './script-runner';
 import { setSilencedRunProbe } from './silent-output';
-import { deliverForcedFailureNotification } from './forcedFailureRun';
+import { deliverForcedFailureNotification, deliverScheduleRunNotification } from './forcedFailureRun';
 import { screenScheduleRun } from '../cindy-brain/scheduleControlPointGate.js';
 import { withScheduleLock } from './scheduleLock';
 import { runSchedulerStartup } from './scheduler-startup-lifecycle';
@@ -59,7 +59,7 @@ export interface SchedulerHostRuntime<Deps extends SchedulerHostStartDeps> {
   captureFireContext?: () => () => void;
   /** Existing teammate projects sync directly; deleted ones cannot be recreated by late writes. */
   getTeammateProjectState?(workingDir: string): Promise<TeammateProjectState | null>;
-  /** Advances task activity & wakes snooze on out-of-band stall-guard forced failures. */
+  /** Advances task activity & wakes snooze on host-level failure notifications (plugin stops and stall-guard forced failures). */
   touchUserSendInDb?: (sessionId: string, atMs?: number) => Promise<void>;
   beforeReset(): Promise<void>;
 }
@@ -94,13 +94,28 @@ export function createSchedulerHost<Deps extends SchedulerHostStartDeps>(runtime
     const storage = runtime.createStorage(deps.getDb);
     _storage = storage;
     const { notifier, promptRunner, scriptRunner } = runtime.createRunners(deps, storage);
-    // 与检查脚本拦下时同一条失败通知：先认领，避免卡死守卫再投第二条。
+    // 与检查脚本拦下时同一条失败通知：先认领，避免卡死守卫再投第二条；同时按统一口径补记活动时间。
     const notifyPluginStop = async (schedule: Schedule, ctx: FireContext, errorMsg: string) => {
       if (_scheduler?.isRunAbandoned(ctx.runId)) return;
       ctx.onRunnerNotified?.('failure');
-      await notifier.notify(schedule, {
-        id: ctx.runId, scheduleId: schedule.id, firedAt: ctx.firedAt, finishedAt: Date.now(), status: 'failed', errorMsg,
-      }).catch(() => {});
+      const now = Date.now();
+      await deliverScheduleRunNotification({
+        schedule,
+        run: {
+          id: ctx.runId,
+          scheduleId: schedule.id,
+          firedAt: ctx.firedAt,
+          finishedAt: now,
+          status: 'failed',
+          errorMsg,
+        },
+        now,
+        notifier,
+        touchUserSendInDb: runtime.touchUserSendInDb,
+        logger: deps.logger,
+        logTag: '[scheduler-host] touchUserSend on plugin stop failed',
+        swallowNotifyError: true,
+      });
     };
     const baseRunner: ScheduleRunner = {
       fire: (schedule, ctx) =>
