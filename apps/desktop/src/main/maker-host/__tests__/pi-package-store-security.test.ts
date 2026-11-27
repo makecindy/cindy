@@ -5264,7 +5264,11 @@ describe('Pi package executable-code boundary', () => {
     const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-parent-swap-pkg-'));
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-parent-swap-outside-'));
     roots.push(packageRoot, outsideRoot);
-    const dataDir = path.join(packageRoot, 'data');
+    // The walker lstats and opens realpath-canonical paths, while mkdtemp keeps
+    // os.tmpdir()'s spelling. macOS TMPDIR (/var → /private/var) and Windows
+    // junctions make those differ, so inject and observe canonical paths.
+    const canonicalPackageRoot = await fs.realpath(packageRoot);
+    const dataDir = path.join(canonicalPackageRoot, 'data');
     const payload = path.join(dataDir, 'payload.txt');
     const outsideData = path.join(outsideRoot, 'data');
     const outsidePayload = path.join(outsideData, 'payload.txt');
@@ -5294,7 +5298,7 @@ describe('Pi package executable-code boundary', () => {
     const payloadOpens: string[] = [];
     const lstatSpy = vi.spyOn(fs, 'lstat').mockImplementation(async (...args) => {
       const stat = await originalLstat(...args as Parameters<typeof fs.lstat>);
-      if (!swapped && path.resolve(String(args[0])) === path.resolve(payload)) {
+      if (!swapped && path.resolve(String(args[0])) === payload) {
         swapped = true;
         await fs.rm(dataDir, { recursive: true, force: true });
         await fs.symlink(outsideData, dataDir, process.platform === 'win32' ? 'junction' : 'dir');
@@ -5304,7 +5308,7 @@ describe('Pi package executable-code boundary', () => {
     const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
       // The swapped junction keeps the original child path, so detect the
       // read by that path rather than the hidden target.
-      if (path.resolve(String(args[0])) === path.resolve(payload)) {
+      if (path.resolve(String(args[0])) === payload) {
         payloadOpens.push(String(args[0]));
       }
       return originalOpen(...args as Parameters<typeof fs.open>);
