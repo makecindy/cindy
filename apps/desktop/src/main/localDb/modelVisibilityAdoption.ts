@@ -16,9 +16,9 @@ function identity(file: string): string {
  * reservation. Before a hard link, the snapshot already has the final file identity.
  * The exclusive-copy path records its target after flushing, before marking it published.
  */
-export function recordModelVisibilityAdoption(target: string, snapshot = target): void {
+export function recordModelVisibilityAdoption(target: string, snapshot = target, providerKeyBatch?: string): void {
   const marker = `${target}${SUFFIX}`;
-  atomicWriteFileSync(marker, JSON.stringify({ version: 1, identity: identity(snapshot) }));
+  atomicWriteFileSync(marker, JSON.stringify({ version: 1, identity: identity(snapshot), providerKeyBatch }));
   const fd = fs.openSync(marker, 'r+');
   try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   let directory: number | undefined;
@@ -45,4 +45,17 @@ export function readModelVisibilityAdoption(target: string): 'adopted' | 'absent
     // Read-only: do not race the writer's Windows atomic backup exchange.
     return fs.existsSync(`${target}${SUFFIX}.bak`) ? 'pending' : 'absent';
   }
+}
+
+// A losing hard-link race, replaced target, or older receipt grants no key access.
+export function readPublishedProviderKeyBatch(target: string): string | null {
+  try {
+    const bytes = readBoundedFileNoFollowSync(target + SUFFIX, 1024);
+    const marker = bytes && JSON.parse(bytes.toString('utf8'));
+    if (marker?.version === 1 && typeof marker.providerKeyBatch === 'string' &&
+        /^[0-9a-f-]{36}$/.test(marker.providerKeyBatch) && marker.identity === identity(target)) {
+      return marker.providerKeyBatch;
+    }
+  } catch { /* Unreadable receipts cannot grant authority. */ }
+  return null;
 }

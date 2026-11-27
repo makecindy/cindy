@@ -77,7 +77,9 @@ function isOfficialOpenAiModelList(value: unknown): boolean {
     && list.data.every(entry => entry && typeof entry.id === 'string' && entry.id.trim() === entry.id && entry.id !== '');
 }
 
-// Share only an in-flight Hinoki/Token Rhythm HTTP read, not parsed models or agent-bound
+const COMMAND_CODE_MODELS_URL = 'https://api.commandcode.ai/provider/v1/models';
+
+// Share only in-flight HTTP responses from these common catalogs, not agent-bound
 // provenance receipts. Every caller keeps its own parsing/error policy below.
 const sharedModelReads = new WeakMap<typeof fetch, Map<string, {
   response: Promise<Response>;
@@ -86,13 +88,17 @@ const sharedModelReads = new WeakMap<typeof fetch, Map<string, {
 
 async function fetchModelsResponse(url: string, init: RequestInit, fetchImpl: typeof fetch): Promise<Response> {
   if (url !== 'https://inference.hinoki.security/v1/models'
-    && url !== 'https://tokenrhythm.studio/v1/models') return fetchImpl(url, init);
+    && url !== 'https://tokenrhythm.studio/v1/models' && url !== COMMAND_CODE_MODELS_URL) return fetchImpl(url, init);
+  // Command Code's public view still belongs to the active application's
+  // request lifetime. Never adopt a prior owner's response after a switch.
+  const ownerKey = url === COMMAND_CODE_MODELS_URL ? activeOwnerScopeKey() : '';
+  if (ownerKey && isAppSessionBoundaryPending()) return fetchImpl(url, init);
   let reads = sharedModelReads.get(fetchImpl);
   if (!reads) { reads = new Map(); sharedModelReads.set(fetchImpl, reads); }
   // The existing process-local HMAC includes all effective headers (including
   // credentials) without retaining plaintext keys in the map key. Never share
   // across redirect policies or injected transport/credential-owner closures.
-  const signature = `${modelSourceRequestSignature(url, init)}:${init.redirect ?? 'follow'}`;
+  const signature = `${ownerKey}:${modelSourceRequestSignature(url, init)}:${init.redirect ?? 'follow'}`;
   let read = reads.get(signature);
   if (!read) {
     read = { response: Promise.resolve().then(() => fetchImpl(url, init)), consumers: 0 };
@@ -298,7 +304,7 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
     delete headers['anthropic-version'];
     delete headers['anthropic-beta'];
     if (spec.apiKey) headers['xi-api-key'] = spec.apiKey;
-  } else if (isOpenRouterModelsUrl(discoveryUrl) || longcatOpenAiCatalog) {
+  } else if (isOpenRouterModelsUrl(discoveryUrl) || longcatOpenAiCatalog || discoveryUrl === COMMAND_CODE_MODELS_URL) {
     // Discovery is provider-specific, not the generation harness's wire format.
     // OpenRouter's Anthropic view rewrites IDs and defaults to only 20 results.
     // LongCat explicitly shares its OpenAI catalog with the Messages runtime.
@@ -356,6 +362,22 @@ async function readLimitedBody(res: Response, limit: number): Promise<string> {
 }
 
 /** 拉一次模型列表并分类结果。fetch 可注入（单测）。 */
+const commandCodeProtocolPaths: Partial<Record<ProviderWireProtocol, string>> = {
+  'anthropic-messages': '/messages',
+  'openai-responses': '/responses',
+  'openai-chat': '/chat/completions',
+};
+
+function commandCodeModelsForProtocol(payload: unknown, protocolPath: string): unknown {
+  if (!payload || typeof payload !== 'object' || !('data' in payload) || !Array.isArray(payload.data)
+    || ('error' in payload && payload.error != null)) return null;
+  if (payload.data.some(row => !row || typeof row !== 'object'
+    || typeof row.id !== 'string' || !row.id.trim()
+    || !Array.isArray(row.supported_endpoints)
+    || row.supported_endpoints.some((path: unknown) => typeof path !== 'string'))) return null;
+  return { ...payload, data: payload.data.filter(row => row.supported_endpoints.includes(protocolPath)) };
+}
+
 export async function fetchProviderModels(
   spec: ProviderModelsFetchSpec,
   fetchImpl: typeof fetch = outboundFetch,
@@ -446,12 +468,19 @@ async function fetchCatalog(spec: ProviderModelsFetchSpec, fetchImpl: typeof fet
       detail: 'models response is not JSON or exceeds the response limit',
     };
   }
+  const commandCode = url === COMMAND_CODE_MODELS_URL;
+  const wireProtocol = spec.wireProtocol ?? (spec.agent === 'claude-code' ? 'anthropic-messages'
+    : spec.agent === 'codex' ? 'openai-responses' : 'openai-chat');
+  const commandCodePath = commandCode ? commandCodeProtocolPaths[wireProtocol] : undefined;
+  const parsePage = (payload: unknown) => commandCode
+    ? commandCodePath ? commandCodeModelsForProtocol(payload, commandCodePath) : null
+    : payload;
   const pageDeadline = Date.now() + 30_000;
-  const { models, complete } = await collectModelDiscoveryPagesWithStatus(json, url, async nextUrl => {
+  const { models, complete } = await collectModelDiscoveryPagesWithStatus(parsePage(json), url, async nextUrl => {
     if (spec.isCurrent?.() === false || Date.now() >= pageDeadline) throw new Error('catalog read no longer current');
     const page = await fetchImpl(nextUrl, { ...init, redirect: 'error', signal: AbortSignal.timeout(Math.max(1, Math.min(FETCH_TIMEOUT_MS, pageDeadline - Date.now()))) });
     if (!page.ok) { await page.body?.cancel(); throw new Error('catalog page failed'); }
-    return JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024));
+    return parsePage(JSON.parse(await readLimitedBody(page, spec.responseByteLimit ?? 8 * 1024 * 1024)));
   });
   // These exact OpenAI-compatible catalog views can legitimately be empty. Keep
   // that success distinct in every consumer (wizard, edit and saved refresh),
@@ -483,7 +512,7 @@ async function fetchCatalog(spec: ProviderModelsFetchSpec, fetchImpl: typeof fet
       } else await hello.body?.cancel();
     } catch { /* An unconfirmed gateway keeps the existing conservative result. */ }
   }
-  if (!models || catalogError || (models.length === 0 && (emptyCatalogAllowed ? !rawCatalogEmpty : !spec.allowEmpty && !magpieEmpty))) {
+  if (!models || catalogError || (models.length === 0 && !commandCode && (emptyCatalogAllowed ? !rawCatalogEmpty : !spec.allowEmpty && !magpieEmpty))) {
     // 端点 200 但响应不是可识别的模型列表（或为空）——按「模型不存在」类引导用户手填。
     return {
       ok: false,
@@ -525,6 +554,6 @@ async function fetchCatalog(spec: ProviderModelsFetchSpec, fetchImpl: typeof fet
     ok: true,
     models: issueModelSourceSnapshot(models, spec.agent, signature),
     ...(glmFlashProbe && { glmFlashProbe }),
-    complete,
+    complete: !commandCode && complete,
   };
 }
