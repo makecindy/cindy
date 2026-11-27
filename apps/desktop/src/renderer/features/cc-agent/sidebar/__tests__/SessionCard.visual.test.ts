@@ -303,6 +303,59 @@ describe('SessionCard visual cases', () => {
     },
   );
 
+  // 2026-11-27 user decision (task-inbox.md): inbox Done rows display archivedAt (falling
+  // back to regular activity for legacy rows), while regular list mode keeps lastActivityAt.
+  it.each(['list', 'text'] as const)(
+    'shows archivedAt only for archived rows in inbox mode (%s row)',
+    (variant) => {
+      const archivedSession: Session = {
+        ...sessionCardVisualCases[0].session,
+        status: 'archived',
+        workspaceKind: 'dialogue',
+        workingDir: null,
+        projectDir: null,
+        lastActivityAt: '2026-11-20T08:00:00.000Z',
+        archivedAt: '2026-11-27T10:00:00.000Z',
+      };
+      const renderRow = (session: Session, inboxMode: boolean) => {
+        const props = {
+          session,
+          inboxMode,
+          isActive: false,
+          isRunning: false,
+          hasAttentionNotification: false,
+          onClick: vi.fn(),
+          onAction: vi.fn(),
+          onRename: vi.fn(),
+          onTogglePin: vi.fn(),
+        };
+        return render(
+          variant === 'list'
+            ? createElement(SessionCard, { ...props, variant: 'list', projectOptions: [] })
+            : createElement(SessionItem, props),
+        );
+      };
+
+      const inboxArchived = renderRow(archivedSession, true);
+      expect(inboxArchived.container.querySelector('time')?.getAttribute('dateTime')).toBe(
+        archivedSession.archivedAt,
+      );
+      inboxArchived.unmount();
+
+      const inboxLegacy = renderRow({ ...archivedSession, archivedAt: null }, true);
+      expect(inboxLegacy.container.querySelector('time')?.getAttribute('dateTime')).toBe(
+        archivedSession.lastActivityAt,
+      );
+      inboxLegacy.unmount();
+
+      const regularArchived = renderRow(archivedSession, false);
+      expect(regularArchived.container.querySelector('time')?.getAttribute('dateTime')).toBe(
+        archivedSession.lastActivityAt,
+      );
+      regularArchived.unmount();
+    },
+  );
+
   it('scrolls a text row into nearest view only when it becomes active', () => {
     const props = {
       session: sessionCardVisualCases[0].session,

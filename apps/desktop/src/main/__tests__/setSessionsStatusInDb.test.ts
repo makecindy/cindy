@@ -178,8 +178,14 @@ describe('setSessionsStatusInDb', () => {
 
   it('returns batch status changes promptly and serializes their cleanup chains', async () => {
     const ids = ['one', 'two', 'three'];
+    const archivedAtMs = 1_786_500_000_000;
     h.tx.mockResolvedValueOnce(
-      ids.map((sessionId) => ({ sessionId, status: 'archived', workingDir: null })),
+      ids.map((sessionId) => ({
+        sessionId,
+        status: 'archived',
+        workingDir: null,
+        archivedAt: archivedAtMs,
+      })),
     );
     let finish!: () => void;
     h.recycleWorktreeForRemovedSession.mockImplementationOnce(
@@ -196,7 +202,12 @@ describe('setSessionsStatusInDb', () => {
       for (const sessionId of ids)
         expect(h.webContentsSend).toHaveBeenCalledWith('local-db:sessions:patched', {
           sessionId,
-          patch: { status: 'archived', snoozedUntil: null, snoozedAt: null },
+          patch: {
+            status: 'archived',
+            snoozedUntil: null,
+            snoozedAt: null,
+            archivedAt: new Date(archivedAtMs).toISOString(),
+          },
         });
     } finally {
       finish?.();
@@ -289,6 +300,7 @@ describe('setSessionsStatusInDb', () => {
         title: 'T1',
         workingDir: '/repo',
         workspaceKind: 'project',
+        archivedAt: null,
         status: 'active',
       },
       {
@@ -296,6 +308,7 @@ describe('setSessionsStatusInDb', () => {
         title: 'T2',
         workingDir: null,
         workspaceKind: 'dialogue',
+        archivedAt: null,
         status: 'active',
       },
     ]);
@@ -310,7 +323,7 @@ describe('setSessionsStatusInDb', () => {
     expect(h.tapWindowBroadcast).toHaveBeenCalledTimes(2);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 's1',
-      patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
+      patch: { status: 'active', snoozedUntil: null, snoozedAt: null, archivedAt: null },
     });
     expect(h.webContentsSend).toHaveBeenCalledTimes(2);
     // 返回值是精简后的行(不含 workspaceKind)
