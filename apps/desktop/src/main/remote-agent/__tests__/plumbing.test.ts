@@ -884,6 +884,45 @@ describe('wire payloads', () => {
     expect(references?.quotedMessages?.[0]).not.toHaveProperty('extra');
     const legacy = await decodeSendOptions({ cindy: { mainOwned: { origin: { kind: 'im', channel: 'telegram' }, rawChannelText: 'x' } } }, callbacks);
     expect(legacy[MAIN_OWNED_SEND_CONTEXT]).toEqual({ origin: { kind: 'im', channel: 'telegram' }, rawChannelText: 'x' });
+
+    // Local Host attachment file paths must never cross the remote wire in either direction.
+    const localBlob = '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/abcd1234.mp4';
+    const encodedWithPath = await encodeSendOptions({
+      [MAIN_OWNED_SEND_CONTEXT]: {
+        origin: { kind: 'im', channel: 'telegram' },
+        rawChannelText: '帮我看这个视频',
+        autoReviewReferences: {
+          attachments: { images: 0, files: 1 },
+          readOnlyAttachmentPaths: [localBlob],
+        },
+      },
+    }, async () => Buffer.alloc(0));
+    expect(encodedWithPath.wire.cindy?.mainOwned?.autoReviewReferences).toEqual({
+      attachments: { images: 0, files: 1 },
+    });
+    const encodedPathOnly = await encodeSendOptions({
+      [MAIN_OWNED_SEND_CONTEXT]: {
+        origin: { kind: 'im', channel: 'telegram' },
+        rawChannelText: '这是啥',
+        autoReviewReferences: { readOnlyAttachmentPaths: [localBlob] },
+      },
+    }, async () => Buffer.alloc(0));
+    expect(encodedPathOnly.wire.cindy?.mainOwned?.autoReviewReferences).toBeUndefined();
+    const peerInjectedPath = await decodeSendOptions({
+      cindy: {
+        mainOwned: {
+          origin: { kind: 'im', channel: 'telegram' },
+          rawChannelText: '帮我看这个视频',
+          autoReviewReferences: {
+            attachments: { images: 0, files: 1 },
+            readOnlyAttachmentPaths: [localBlob],
+          },
+        },
+      },
+    }, callbacks);
+    expect(peerInjectedPath[MAIN_OWNED_SEND_CONTEXT]?.autoReviewReferences).toEqual({
+      attachments: { images: 0, files: 1 },
+    });
   });
 });
 

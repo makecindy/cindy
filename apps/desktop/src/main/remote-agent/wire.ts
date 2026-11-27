@@ -769,7 +769,20 @@ export async function encodeSendOptions(
   }
   const cindy: NonNullable<RemoteAgentWireSendOptions['cindy']> = {};
   const mainOwned = opts[MAIN_OWNED_SEND_CONTEXT];
-  if (mainOwned) cindy.mainOwned = jsonSafe(mainOwned) as NonNullable<typeof cindy.mainOwned>;
+  if (mainOwned) {
+    // Strip Host-local attachment paths before crossing the remote wire boundary:
+    // paths on the controller are meaningless and unauthorized on the controlled machine.
+    const wireMainOwned = mainOwned.autoReviewReferences
+      ? prune({
+          ...mainOwned,
+          autoReviewReferences: projectAutoReviewUserReferences(
+            mainOwned.autoReviewReferences,
+            { allowAttachmentPaths: false },
+          ),
+        })
+      : mainOwned;
+    cindy.mainOwned = jsonSafe(wireMainOwned) as NonNullable<typeof cindy.mainOwned>;
+  }
   const sourceContent = opts[AUTO_REVIEW_SOURCE_CONTENT];
   if (sourceContent !== undefined) {
     cindy.autoReviewSourceContent = await encodeUserMessage({ type: 'user', content: sourceContent }, readImage);
@@ -852,8 +865,12 @@ export async function decodeSendOptions(value: unknown, callbacks: DecodeSendCal
       opts[MAIN_OWNED_SEND_CONTEXT] = prune({
         origin,
         rawChannelText: optString(cindy.mainOwned.rawChannelText),
-        // Re-projected here: shape and bounds are never taken from the wire as-is.
-        autoReviewReferences: projectAutoReviewUserReferences(cindy.mainOwned.autoReviewReferences),
+        // Re-projected here: shape and bounds are never taken from the wire as-is,
+        // and local attachment file paths are never accepted from a remote peer.
+        autoReviewReferences: projectAutoReviewUserReferences(
+          cindy.mainOwned.autoReviewReferences,
+          { allowAttachmentPaths: false },
+        ),
       });
     }
     if (isRecord(cindy.autoReviewSourceContent)) {
