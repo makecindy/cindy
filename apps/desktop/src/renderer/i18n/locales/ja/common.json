@@ -14923,6 +14923,12 @@
       "discoveredCopy": {
         "unavailableHere": "このパソコンの {{provider}} は現在使えません。",
         "unavailableOn": "「{{device}}」の {{provider}} は現在使えません。"
+      },
+      "preparation": {
+        "pending": "次のメッセージ",
+        "preparing": "準備中…",
+        "failed": "切り替えに失敗",
+        "usingPrevious": "このメッセージは {{actual}} を使用します。{{target}} はまだ準備ができていません。"
       }
     },
     "permissionSelector": {

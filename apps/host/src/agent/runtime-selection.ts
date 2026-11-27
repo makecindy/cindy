@@ -491,7 +491,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     pendingSwitches,
     selectSameAgentModel: createSelectSameAgentModel(explicitPorts<Parameters<typeof createSelectSameAgentModel>[0]>({ applySessionRuntimeSelection })),
     onPendingSwitchChanged: (sessionId, intent) => {
-      if (intent) recordUserSessionRuntimeMutation(sessionId);
+      if (intent && !intent.preparation) recordUserSessionRuntimeMutation(sessionId);
       broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
     },
     // The desktop also marks an IM task as detached from its channel default; the Host has no IM.

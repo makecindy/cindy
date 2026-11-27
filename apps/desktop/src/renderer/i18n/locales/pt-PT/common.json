@@ -15096,6 +15096,12 @@
       "discoveredCopy": {
         "unavailableHere": "{{provider}} neste computador não está disponível de momento.",
         "unavailableOn": "{{provider}} em «{{device}}» não está disponível de momento."
+      },
+      "preparation": {
+        "pending": "Próxima mensagem",
+        "preparing": "A preparar…",
+        "failed": "Falha ao mudar",
+        "usingPrevious": "Esta mensagem usa {{actual}}; {{target}} ainda não está pronto."
       }
     },
     "permissionSelector": {

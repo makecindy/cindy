@@ -398,7 +398,13 @@
     "forkConfirmTitle": "Hier eine neue Sitzung starten?",
     "forkConfirmDescription": "Mit dem Kontext an dieser Stelle wird eine separate Sitzung erstellt. Die ursprüngliche Sitzung bleibt unverändert. Künftige Nachrichten in einer Sitzung beeinflussen die andere nicht.",
     "forkConfirm": "Neue Sitzung starten",
-    "forkCancel": "Abbrechen"
+    "forkCancel": "Abbrechen",
+    "modelSwitchPreparation": {
+      "pending": "Nächste Nachricht",
+      "preparing": "Wird vorbereitet…",
+      "failed": "Wechsel fehlgeschlagen",
+      "usingPrevious": "Diese Nachricht verwendet {{actual}}; {{target}} ist noch nicht bereit."
+    }
   },
   "shareImage": {
     "title": "Unterhaltung teilen",

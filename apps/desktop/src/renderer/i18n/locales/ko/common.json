@@ -14923,6 +14923,12 @@
       "discoveredCopy": {
         "unavailableHere": "이 컴퓨터의 {{provider}}을(를) 지금 사용할 수 없습니다.",
         "unavailableOn": "“{{device}}”의 {{provider}}을(를) 지금 사용할 수 없습니다."
+      },
+      "preparation": {
+        "pending": "다음 메시지",
+        "preparing": "준비 중…",
+        "failed": "전환 실패",
+        "usingPrevious": "이 메시지는 {{actual}}을(를) 사용합니다. {{target}}은(는) 아직 준비되지 않았습니다."
       }
     },
     "permissionSelector": {

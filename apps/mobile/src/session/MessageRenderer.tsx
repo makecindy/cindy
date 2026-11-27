@@ -297,6 +297,9 @@ import {
 } from '@/session/remoteSessionStore';
 import {
   parseSourceSessionTarget,
+  readMessageDispatchRoute,
+  messageDispatchRouteMismatch,
+  messageDispatchRouteLabel,
   shouldShowSourceDevice,
   type MessageSourceDevice,
   type MessageSourcePlugin,
@@ -4355,6 +4358,7 @@ function MessageBubble({
     </View>
   );
 
+  const dispatchRoute = item.message.kind === 'user' ? readMessageDispatchRoute(item.message.source.agentMeta) : undefined;
   const messageNode = (
     <View
       ref={shareableMessage ? handleShareableMessageViewChange : undefined}
@@ -4412,6 +4416,17 @@ function MessageBubble({
         />
       ) : null}
       {attachmentStripNode}
+      {dispatchRoute && messageDispatchRouteMismatch(dispatchRoute) && dispatchRoute.selected ? (
+        <ErrorNotice message={t('session.screen.modelSwitchPreparation.usingPrevious', {
+          actual: messageDispatchRouteLabel(dispatchRoute), target: messageDispatchRouteLabel(dispatchRoute.selected),
+        })}>
+          {dispatchRoute.switchError ? <AgentErrorDetails message={dispatchRoute.switchError} /> : null}
+        </ErrorNotice>
+      ) : dispatchRoute ? (
+        <Text style={styles.failedSamplingAttemptText} testID="message.dispatchRoute">
+          {messageDispatchRouteLabel(dispatchRoute)}
+        </Text>
+      ) : null}
       {item.message.failedSamplingAttempt ? (
         <Text style={styles.failedSamplingAttemptText}>
           {t('message.renderer.failedSamplingAttempt')}

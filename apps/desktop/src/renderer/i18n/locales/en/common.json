@@ -14978,6 +14978,12 @@
       "discoveredCopy": {
         "unavailableHere": "{{provider}} on this computer isn’t available right now.",
         "unavailableOn": "{{provider}} on “{{device}}” isn’t available right now."
+      },
+      "preparation": {
+        "pending": "Next message",
+        "preparing": "Preparing…",
+        "failed": "Switch failed",
+        "usingPrevious": "This message uses {{actual}}; {{target}} is not ready."
       }
     },
     "permissionSelector": {

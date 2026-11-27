@@ -17,6 +17,51 @@ export { forwardedRequestDisplayText } from './forwardedRequestDisplay.js';
 
 export type MessageSourceDevicePlatform = 'mobile' | 'desktop';
 
+/** Executor snapshot for one dispatched input. Never infer it from a later picker. */
+export interface MessageRoute {
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
+  model: string;
+  providerId: string | null;
+  agentDeviceId: string | null;
+}
+
+export interface MessageDispatchRoute extends MessageRoute {
+  selected?: MessageRoute;
+  switchError?: string;
+}
+
+export function readMessageDispatchRoute(meta: unknown): MessageDispatchRoute | undefined {
+  const raw = asRecord(asRecord(meta)?.dispatchRoute);
+  if (!raw || !['claude-code', 'codex', 'pi', 'acp'].includes(String(raw.agentKind))
+    || typeof raw.model !== 'string' || !raw.model || raw.model.length > 1024
+    || (raw.providerId !== null && typeof raw.providerId !== 'string')
+    || (raw.agentDeviceId !== null && typeof raw.agentDeviceId !== 'string')) return undefined;
+  const selected = raw.selected ? readMessageDispatchRoute({ dispatchRoute: { ...asRecord(raw.selected), selected: undefined } }) : undefined;
+  return { agentKind: raw.agentKind as MessageRoute['agentKind'], model: raw.model,
+    providerId: raw.providerId as string | null, agentDeviceId: raw.agentDeviceId as string | null,
+    ...(selected ? { selected } : {}),
+    ...(typeof raw.switchError === 'string' ? { switchError: raw.switchError.slice(0, 4000) } : {}) };
+}
+
+export function messageDispatchRouteMismatch(route: MessageDispatchRoute): boolean {
+  const target = route.selected;
+  return !!target && (route.agentKind !== target.agentKind || route.model !== target.model
+    || route.providerId !== target.providerId || route.agentDeviceId !== target.agentDeviceId);
+}
+
+/** Final in-memory comparison at dispatch; no catalog reads, probes or retries. */
+export function captureMessageDispatchRoute(actual: MessageRoute, selected?: MessageRoute, switchError?: string): MessageDispatchRoute {
+  const snapshot = { ...actual, ...(selected ? { selected: { ...selected } } : {}) };
+  return messageDispatchRouteMismatch(snapshot)
+    ? { ...snapshot, ...(switchError ? { switchError } : {}) } : { ...actual };
+}
+
+export function messageDispatchRouteLabel(route: MessageRoute): string {
+  const agent = route.agentKind === 'claude-code' ? 'Claude Code' : route.agentKind === 'codex' ? 'Codex'
+    : route.agentKind === 'pi' ? 'Pi' : route.providerId;
+  return [agent, route.providerId, route.model].filter(Boolean).join(' · ');
+}
+
 /** 被控端在 device-link 入口盖章的控制端设备（agentMeta.sourceDevice）。 */
 export interface MessageSourceDevice {
   /** 服务端认证过的控制端设备 id。 */

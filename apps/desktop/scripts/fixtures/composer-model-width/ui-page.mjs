@@ -23,6 +23,8 @@ export default {
   notCovered: 'Full Desktop, native window drag, real accounts, microphone and model discovery; the host and model catalog use fixture data.',
   stubs,
   cases: {
+    'switch-preparing': { about: 'The target is preparing while the actual task stays on Pi', viewport: { width: 420, height: 520 }, data: { showRuntimeControls: true, modelName: 'GPT-6 Astra', switchPreparation: 'preparing' } },
+    'switch-failed': { about: 'A fallback input retains its actual source and expandable failure beside a failed target', viewport: { width: 420, height: 520 }, data: { showRuntimeControls: true, modelName: 'GPT-6 Astra', switchPreparation: 'failed' } },
     default: { about: 'Long English model fits without premature truncation', data: { showRuntimeControls: true, modelName: 'GPT-6 Astra Extended Context' } },
     chinese: { about: 'Chinese model name and a narrow composer', viewport: { width: 420, height: 400 }, data: { showRuntimeControls: true, modelName: '复杂任务长名称模型' } },
     'long-ultra': { about: 'A very long model name leaves room for icon-only controls', viewport: { width: 400, height: 400 }, data: { showRuntimeControls: true, modelName: 'Anthropic Claude Opus Extended Reasoning Context with Long Provider Model Name' } },
@@ -56,6 +58,17 @@ export default {
     await page.locator('[contenteditable="true"]').waitFor();
   },
   async check(page, ui) {
+    if (ui.data.switchPreparation) {
+      assert.ok(await page.locator('[data-session-model-slot] [role="status"]').textContent());
+      if (ui.data.switchPreparation === 'failed') {
+        await page.getByText(/Pi · xd · fixture-chat/).first().waitFor();
+        await ui.capture('fallback-source');
+        await page.locator('[data-fixture-composer] button[aria-expanded="false"]').first().click();
+        await page.getByText('[DEVICE_LINK_TIMEOUT] Target preparation timed out', { exact: true }).waitFor();
+        await ui.capture('failure-details');
+      }
+      return;
+    }
     const slot = page.locator('[data-session-model-slot]');
     const toolbar = ui.data.showRuntimeControls ? slot.locator('..').locator('..') :
       page.getByRole('button', { name: 'Plugin 1', exact: true })

@@ -1317,7 +1317,7 @@ import {
   prependHandoffToUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
-import { messageSourceSenderFromMeta, readMessageSourcePluginRelay, sanitizeSourceName, type MessageSourcePluginReply } from '@cindy/maker-shared/message-source';
+import { captureMessageDispatchRoute, messageSourceSenderFromMeta, readMessageSourcePluginRelay, sanitizeSourceName, type MessageSourcePluginReply } from '@cindy/maker-shared/message-source';
 import { registerSessionHandoffIpc } from './sessionHandoffIpc.js';
 import {
   installLocalAgentVisibleSessionHost,
@@ -11988,7 +11988,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       applySessionRuntimeSelection: (...args) => applySessionRuntimeSelection(...args),
     }),
     onPendingSwitchChanged: (sessionId, intent) => {
-      if (intent) recordUserSessionRuntimeMutation(sessionId);
+      if (intent && !intent.preparation) recordUserSessionRuntimeMutation(sessionId);
       broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
     },
     // 用户选择落地 → 给 IM 任务打「脱离跟随」标记(同值重选也永久脱离, PR #5155)。
@@ -19335,6 +19335,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prewarmSession: prewarmSessionRuntime,
     hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
+    readDispatchRoute: (session, scheduled) => {
+      const actual = { agentKind: session.agentKind, model: session.model ?? '',
+        providerId: getSessionProvider(session.id), agentDeviceId: session.agentDeviceId ?? null };
+      const intent = scheduled ? readScheduledPendingSwitch(session.id) : agentSwitchPending.get(session.id);
+      return captureMessageDispatchRoute(actual, intent ? {
+        agentKind: intent.targetAgentKind, model: intent.model, providerId: intent.providerId ?? null,
+        agentDeviceId: intent.targetAgentDeviceId === undefined ? actual.agentDeviceId : intent.targetAgentDeviceId,
+      } : undefined, intent?.preparationError);
+    },
     onUserProviderDispatch: (sessionId) => {
       const session = sessionBindings.getSession(sessionId);
       if (session) captureDirectProviderDispatch(session);

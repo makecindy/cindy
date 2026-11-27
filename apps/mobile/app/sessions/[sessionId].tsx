@@ -3238,7 +3238,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         agentKind: sessionAgentKind,
         hasFastModeCap: capabilities?.hasFastMode === true,
       }) && (currentSession?.fastMode ?? false);
-  const composerRuntimeLabel = composerRuntimeSummary
+  const composerTargetLabel = composerRuntimeSummary
     ? agentSwitchIntent && composerSwitchesAgent
       ? `${mobileAgentLabel(agentSwitchIntent.targetAgentKind)} · ${composerRuntimeSummary.modelSummary}`
       : composerRuntimeSummary.modelSummary
@@ -3259,6 +3259,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       }),
     ];
   }, [pluginEngines.engines, remotePluginEngines.engines, remoteAgentCatalogs]);
+  const composerRuntimeLabel = agentSwitchIntent
+    ? `${t(`session.screen.modelSwitchPreparation.${agentSwitchIntent.preparation ?? 'pending'}`)} · ${composerTargetLabel}`
+    : composerTargetLabel;
   // 插件引擎(插件引擎任务自己的引擎，或下一条消息要切到的引擎)：药丸写引擎的模型(+ 思考深度)，
   // 图标用插件自己的；待切到时与内置引擎意图一样写「引擎 · 模型」。
   const composerPluginEngine = pluginEngineSwitchIntent
