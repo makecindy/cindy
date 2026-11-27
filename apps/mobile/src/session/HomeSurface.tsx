@@ -158,7 +158,11 @@ import { useScreenEdgePadding } from '@/components/screenEdgeInsets';
 import { isAccessRevokedError } from '@/device-link/accessRevoked';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
-import { isPluginEngineSessionKind, prefetchPluginEngineIcons } from './pluginEngines';
+import {
+  isPluginEngineSessionKind,
+  prefetchControlledPluginEngineIcons,
+  prefetchPluginEngineIcons,
+} from './pluginEngines';
 import {
   discoverRemoteHomeCollections,
   remoteResourceDiscoveryKey,
@@ -2506,29 +2510,47 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const liveActivityIndex = useStableValue(liveActivityIndexRaw, mapContentEqual);
   // 已知归属的问题在 Lead 行提示，缺少归属时保留提问的 Worker。
   const homeSessions = useMemo(() => excludeOrcaWorkerSessions(sessions, visibleWorkerIds), [sessions, visibleWorkerIds]);
-  const pluginIconDevices = useMemo(() => {
-    const ids = new Set<string>();
+  const pluginIconTargets = useMemo(() => {
+    const locals = new Set<string>();
+    const remotes = new Map<string, { deviceId: string; agentDeviceId: string }>();
     for (const session of homeSessions) {
       const deviceId = session.deviceLinkDeviceId;
       if (deviceId && session.status === 'active' && isPluginEngineSessionKind(session.agentKind)
         && homeSyncDeviceIdSet.has(deviceId)) {
-        ids.add(deviceId);
+        if (session.agentDeviceId && session.agentDeviceId !== deviceId) {
+          remotes.set(`${deviceId}\n${session.agentDeviceId}`, { deviceId, agentDeviceId: session.agentDeviceId });
+        } else {
+          locals.add(deviceId);
+        }
       }
     }
-    return [...ids].sort();
+    return {
+      locals: [...locals].sort(),
+      remotes: [...remotes.values()].sort((a, b) =>
+        a.deviceId.localeCompare(b.deviceId) || a.agentDeviceId.localeCompare(b.agentDeviceId)),
+    };
   }, [homeSessions, homeSyncDeviceIdSet]);
-  const stablePluginIconDevices = useStableValue(pluginIconDevices,
-    (before, after) => before.length === after.length && before.every((id, index) => id === after[index]));
+  const stablePluginIconTargets = useStableValue(pluginIconTargets, (before, after) =>
+    before.locals.length === after.locals.length
+    && before.locals.every((id, index) => id === after.locals[index])
+    && before.remotes.length === after.remotes.length
+    && before.remotes.every((item, index) =>
+      item.deviceId === after.remotes[index]?.deviceId
+      && item.agentDeviceId === after.remotes[index]?.agentDeviceId));
   useEffect(() => {
     if (!screenFocused || !active || !homeAppActive || status !== 'online') return;
     const owner = getMobileAuthOwner();
     let cancelled = false;
-    void runHomeDeviceSyncBatch(stablePluginIconDevices, async (deviceId) => {
+    void runHomeDeviceSyncBatch(stablePluginIconTargets.locals, async (deviceId) => {
       if (cancelled || !isMobileAuthOwnerCurrent(owner)) return;
       await prefetchPluginEngineIcons(deviceId, createMobileMakerTransport({ deviceId, invoke }));
     });
+    void runHomeDeviceSyncBatch(stablePluginIconTargets.remotes, async (target) => {
+      if (cancelled || !isMobileAuthOwnerCurrent(owner)) return;
+      await prefetchControlledPluginEngineIcons(target.deviceId, target.agentDeviceId, invoke);
+    });
     return () => { cancelled = true; };
-  }, [stablePluginIconDevices, screenFocused, active, homeAppActive, status, invoke, accountGeneration, connectionEpoch]);
+  }, [stablePluginIconTargets, screenFocused, active, homeAppActive, status, invoke, accountGeneration, connectionEpoch]);
   const home = useMemo(
     () => buildMobileHomePresentation({
       projectAliases,

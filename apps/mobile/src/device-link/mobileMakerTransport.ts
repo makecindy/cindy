@@ -490,7 +490,7 @@ export interface MobileMakerTransport {
   /** 在被控端生成当前任务完成后的输入框推荐提示词。 */
   predictNextPrompt(request: {
     sessionId: string;
-    agentKind: MobileAgentKind | 'acp';
+    agentKind: MobileAgentKind | "acp";
     turnGen: number;
     completionRevision: number;
     cacheOnly?: boolean;
@@ -750,7 +750,7 @@ export interface MobileMakerTransport {
    */
   learnStart(req: MobileLearnStartRequest): Promise<{ runId: string }>;
   listAgentSkills(
-    agentKind: MobileAgentKind,
+    agentKind: MobileAgentKind | "acp",
     opts: { workingDir?: string; forceReload?: boolean; sessionId?: string },
   ): Promise<MobileAgentSkillListResult>;
   scanAtResources(
@@ -1006,7 +1006,7 @@ export interface MobileMakerTransport {
 /** `maker:session:enable-orca` 的 options(与桌面 preload maker.enableOrca 同形状)。 */
 export interface MobileOrcaEnableOptions {
   modelGroup?: string;
-  workerAgent: OrcaWorkerAgentKind;
+  workerAgent: OrcaWorkerAgentKind | "acp";
   role?: string;
   label?: string;
   model?: string;
@@ -1034,7 +1034,7 @@ export interface MobileOrcaCreateWorkerInput {
   leadSessionId: string;
   role: string;
   label: string;
-  agent: OrcaWorkerAgentKind;
+  agent: OrcaWorkerAgentKind | "acp";
   model?: string;
   effort?: string;
   fast?: boolean | 'ultrafast';
