@@ -27,3 +27,15 @@ PR 检查受阻时可以在 stdout 单独输出 `CINDY_PR_CHECK_DIAGNOSIS ` 后�
 执行端仅在脚本失败且 stdout 完整时读取，为有效数据补上本机名称，然后将
 `prCheckDiagnosis` 随运行记录和轻量索引传递。缺失或无效的诊断沿用原有提示，
 退出码、恢复条件与调度频率沿用原有约定。stderr 首行仍供旧版执行端提取摘要。
+
+可自动重试的瞬时前置检查故障（`prCheckDiagnosis.kind` 为 `rate-limit` / `timeout` / `dns`，
+或无结构化诊断且无插件缺失时的通用限流 `stderr`）在首次发生后的 24 小时内静默处理：
+`preRunHookResult` 记录可选 `transientQuiet: true`，运行仍落 `status: 'failed'` 但生而已读
+（`readAt = finishedAt`），不推进绑定任务的活动时间／`updatedAt`、不发外发通知、
+不将已归档目标留在活跃列表，并广播带可选 `silenced: true` 的 `failed` 事件。
+任务内失败横幅不依赖已读回执，因此打开任务仍可看到未恢复的提示，并在后续 `CINDY_PRECHECK_OK`
+或成功运行后自动消失；旧控制端忽略未知字段，凭 `readAt` 同样不亮未读红点、不拉入收件箱「待处理」。
+同一自动化若连续超过 24 小时仍未恢复（或距上次升级提醒又满 24 小时），下一次瞬时失败会升级为
+正常未读失败并补发兜底提醒；`hasUnrecoveredMatchingFailure` 排除 `transientQuiet` 记录，
+避免首次静默记录吞掉 24 小时后的首次兜底通知。`auth`、`missingPlugin`、`unknown` 与执行期失败
+仍立即提醒。

@@ -21,7 +21,13 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { broadcastSessionPatched as BroadcastSessionPatched } from '../localDb/ipc/sessions.js';
 
-import type { Schedule, ScheduleRun, ScheduleStorage, ListFilter } from '@cindy/maker-scheduler';
+import type {
+  Schedule,
+  ScheduleRun,
+  ScheduleStorage,
+  ListFilter,
+  TransientPrecheckOutageState,
+} from '@cindy/maker-scheduler';
 
 import * as schema from '../localDb/schema';
 import {
@@ -76,6 +82,25 @@ function missingPluginField(raw: string | null): { missingPlugin?: ScheduleMissi
   } catch {
     return {};
   }
+}
+
+/** SQL counterpart of isTransientPrecheckHookFailure, shared by outage tracking. */
+function transientPrecheckFailureSql(alias: 'failed' | 'schedule_runs') {
+  const row = sql.raw(alias);
+  return sql<boolean>`(
+    CASE WHEN json_valid(${row}.pre_run_hook_result)
+      AND json_extract(${row}.pre_run_hook_result, '$.decision') = 'block'
+      AND COALESCE(json_extract(${row}.pre_run_hook_result, '$.status'), '') != 'aborted'
+      AND COALESCE(json_extract(${row}.pre_run_hook_result, '$.aborted'), 0) != 1
+      AND json_type(${row}.pre_run_hook_result, '$.missingPlugin') IS NULL
+    THEN CASE
+      WHEN json_type(${row}.pre_run_hook_result, '$.prCheckDiagnosis') = 'object'
+        AND json_extract(${row}.pre_run_hook_result, '$.prCheckDiagnosis.kind') IN ('dns', 'timeout', 'auth', 'rate-limit', 'unknown')
+      THEN json_extract(${row}.pre_run_hook_result, '$.prCheckDiagnosis.kind') IN ('dns', 'timeout', 'rate-limit')
+      ELSE lower(COALESCE(json_extract(${row}.pre_run_hook_result, '$.stderr'), '')) LIKE '%rate limit%'
+    END
+    ELSE 0 END
+  )`;
 }
 
 /** A success only recovers failures belonging to the same automation. */
@@ -691,7 +716,10 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     // 必须进入这个时间轴 —— 否则用户看到的会话时间在 run 结束后停在 fire 触发那刻,
     // 与"刚跑完一轮"直觉相悖(schedules.lastFinishedAt / schedule_runs.finishedAt
     // 同一时刻写入,这里挑 run 侧作为唯一联动点,避免 schedule 侧再重复一次)。
-    if (patch.finishedAt !== undefined && row?.sessionId) {
+    // 例外:静默的瞬时前置检查失败（status='failed' 且生而已读）不推进任务时间，
+    // 避免限流／网络抖动把任务顶到列表前面。
+    const skipSessionTouch = patch.status === 'failed' && patch.readAt !== undefined;
+    if (patch.finishedAt !== undefined && row?.sessionId && !skipSessionTouch) {
       await db
         .update(sessions)
         // 用 MAX 防止倒退：若另一路径（用户发送/clear）在 run 结束前已推进了
@@ -766,10 +794,36 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       AND (${errorMatch})
       AND COALESCE(CASE WHEN json_valid(${scheduleRuns.preRunHookResult})
         THEN json_extract(${scheduleRuns.preRunHookResult}, '$.stderr') END, '') = ${run.preRunHookResult?.stderr ?? ''}
+      AND COALESCE(CASE WHEN json_valid(${scheduleRuns.preRunHookResult})
+        THEN json_extract(${scheduleRuns.preRunHookResult}, '$.transientQuiet') END, 0) != 1
       AND ${scheduleRuns.firedAt} <= ${run.firedAt}
       AND NOT ${failureRecoveredSql('schedule_runs')}
     `).limit(1);
     return rows.length > 0;
+  }
+
+  /** Inspect unrecovered transient precheck failures so the scheduler can keep brief outages quiet and escalate after 24 hours. */
+  async getTransientPrecheckOutageState(
+    scheduleId: string,
+    excludeRunId: string,
+  ): Promise<TransientPrecheckOutageState> {
+    const [row] = await this.getDb()
+      .select({
+        firstUnrecoveredFiredAt: sql<number | null>`MIN(${scheduleRuns.firedAt})`,
+        lastEscalatedFiredAt: sql<number | null>`MAX(CASE WHEN COALESCE(json_extract(${scheduleRuns.preRunHookResult}, '$.transientQuiet'), 0) != 1 THEN ${scheduleRuns.firedAt} END)`,
+      })
+      .from(scheduleRuns)
+      .where(sql`
+        ${scheduleRuns.scheduleId} = ${scheduleId}
+        AND ${scheduleRuns.id} != ${excludeRunId}
+        AND ${scheduleRuns.status} IN ('failed', 'interrupted')
+        AND ${transientPrecheckFailureSql('schedule_runs')}
+        AND NOT ${failureRecoveredSql('schedule_runs')}
+      `);
+    return {
+      firstUnrecoveredFiredAt: typeof row?.firstUnrecoveredFiredAt === 'number' ? row.firstUnrecoveredFiredAt : null,
+      lastEscalatedFiredAt: typeof row?.lastEscalatedFiredAt === 'number' ? row.lastEscalatedFiredAt : null,
+    };
   }
 
   async lastSuccessfulMrObservation(scheduleId: string) {

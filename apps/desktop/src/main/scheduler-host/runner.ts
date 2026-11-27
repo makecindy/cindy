@@ -1382,7 +1382,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
         },
       }), schedule.preRunHook.command, this.deps.diagnosePreRunHookFailure);
-      await ctx.onPreRunHookCompleted?.(hook);
+      const hookOutcome = await ctx.onPreRunHookCompleted?.(hook);
       if (hook.status === 'aborted' || ctx.signal.aborted) {
         // 本轮已被 pause/delete 中止:不留痕、不继续执行,直接抛回 engine
         // (controller.signal.aborted 会让 run 记 'aborted' 而非 'failed')。
@@ -1416,7 +1416,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
           error: hook.error,
           stderr: hook.stderr.slice(0, 500),
         });
-        await this.notifyFailureSilent(schedule, ctx, errMsg, hook);
+        if (!hookOutcome?.quietFailure) {
+          await this.notifyFailureSilent(schedule, ctx, errMsg, hook);
+        }
         throw new Error(errMsg);
       }
       holder.preRunHookResult = hook;
