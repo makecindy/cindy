@@ -967,25 +967,47 @@ function writeHash() {
   if (S.view === 'duo') p.set('dir', S.x.dir);
   history.replaceState(null, '', '#' + p.toString());
 }
+/* 深链里的值一律只认下面列出的取值：返回的是常量本身，链接里的任意文本不会进到页面里。 */
+const HASH_VALUES = {
+  view: ['mobile', 'desktop', 'duo', 'map'],
+  region: ['global', 'cn'],
+  account: ['existing', 'new', 'other'],
+  theme: ['light', 'dark'],
+  dir: ['pc', 'phone'],
+  step: ['identifier', 'consent', 'code', 'oauth', 'sso', 'signup', 'region', 'switching', 'qr', 'scan', 'scanWait', 'done'],
+  via: ['email', 'phone', 'sso', 'google', 'wechat', 'apple'],
+  from: ['verify', 'scan'],
+  qr: ['waiting', 'scanned', 'confirmed', 'expired'],
+};
+const pickHash = (p, key) => HASH_VALUES[key].find(v => v === p.get(key)) ?? null;
+/* 深链回放的动作同样只认页面里存在的动作名，带参数的 goto: / oauth: 只认上面列出的步骤与方式。 */
+const HASH_ACTS = ["consent:no","consent:yes","create","fill","fillBind","fillCode","finish","noop","oauthDone","pcAllowed","qr:confirmed","qr:expire","qr:refresh","qr:scanned","scanOk","ssoGo","submitId","switch","switchScan","toggleConsent","verify"];
+const HASH_XACTS = ["pc:allow","pc:back","pc:closeDlg","pc:deny","pc:openPhone","pc:switch","ph:back","ph:cancel","ph:closeScan","ph:confirm","ph:openScan","ph:scanned","ph:scanned2","ph:switch","ph:toScan","qr:expire","qr:refresh","reset"];
+function pickAct(a) {
+  if (a.startsWith('goto:')) { const t = HASH_VALUES.step.find(v => v === a.slice(5)); return t ? 'goto:' + t : null; }
+  if (a.startsWith('oauth:')) { const t = HASH_VALUES.via.find(v => v === a.slice(6)); return t ? 'oauth:' + t : null; }
+  return HASH_ACTS.find(v => v === a) ?? null;
+}
 function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
-  for (const k of ['view', 'region', 'account', 'theme']) if (p.get(k)) S[k] = p.get(k);
+  for (const k of ['view', 'region', 'account', 'theme']) { const v = pickHash(p, k); if (v) S[k] = v; }
   if (p.get('marks') === '0') S.marks = false;
-  if (p.get('dir')) S.x.dir = p.get('dir');
+  const dir = pickHash(p, 'dir');
+  if (dir) S.x.dir = dir;
   resetFlows();
-  const step = p.get('step');
+  const step = pickHash(p, 'step');
   if (step && (S.view === 'mobile' || S.view === 'desktop')) {
     const dev = S.view === 'desktop' ? 'd' : 'm'; const st = S[dev];
     if (step === 'consent') Object.assign(st, { step: 'identifier', modal: true, input: true });
-    else Object.assign(st, { step, input: true, code: step !== 'code', via: p.get('via') || (step === 'oauth' ? (S.region === 'cn' ? 'wechat' : 'google') : 'email'), regionFrom: p.get('from') || 'verify', qr: p.get('qr') || 'waiting', toast: step === 'done' ? '登录成功' : '' });
+    else Object.assign(st, { step, input: true, code: step !== 'code', via: pickHash(p, 'via') || (step === 'oauth' ? (S.region === 'cn' ? 'wechat' : 'google') : 'email'), regionFrom: pickHash(p, 'from') || 'verify', qr: pickHash(p, 'qr') || 'waiting', toast: step === 'done' ? '登录成功' : '' });
   }
   if (S.view === 'duo') {
     const seq = (p.get('seq') || '').split(',').filter(Boolean);
-    seq.forEach(s => xact(s));
+    seq.map(s => HASH_XACTS.find(v => v === s)).filter(Boolean).forEach(s => xact(s));
   }
   // 深链回放：#view=mobile&do=fill,submitId,consent:yes,fillCode,verify
   if (S.view === 'mobile' || S.view === 'desktop') {
-    (p.get('do') || '').split(',').filter(Boolean).forEach(a => act(S.view === 'desktop' ? 'd' : 'm', a));
+    (p.get('do') || '').split(',').map(pickAct).filter(Boolean).forEach(a => act(S.view === 'desktop' ? 'd' : 'm', a));
   }
 }
 let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(render, 120); });
