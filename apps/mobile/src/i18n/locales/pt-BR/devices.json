@@ -369,7 +369,11 @@
       "close": "Fechar",
       "cancelRename": "Cancelar renomeação",
       "createdBy": "Criado por {{name}}",
-      "ownedBy": "Pertence a {{name}}"
+      "ownedBy": "Pertence a {{name}}",
+      "orcaRemoteLead": "Colaboração de {{device}}",
+      "createdByTask": "Aberta por outra tarefa",
+      "createdByTaskNamed": "Aberta pela tarefa “{{title}}”",
+      "unknownDevice": "outro computador"
     },
     "accounts": {
       "title": "Trocar de conta",
@@ -426,7 +430,8 @@
         "all": "Todas",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Mecanismo de plugin"
       },
       "filterLastActivityHeading": "Última atividade",
       "filterLastActivity": {

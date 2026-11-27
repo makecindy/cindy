@@ -78,7 +78,7 @@ export interface RemoteSession {
   interruptedTurnStartedAt?: number | null;
   lastTurnEndedAt?: number | null;
   status: RemoteSessionStatus;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp';
   /**
    * 远程 Agent:非空 = Agent 在同账号另一台电脑上运行(desktop sessions.agent_device_id),
    * 任务与文件仍留在被控电脑;null / 缺省 = Agent 就在被控电脑运行(含旧被控端)。
@@ -109,6 +109,16 @@ export interface RemoteSession {
     leadTitle: string;
     workerLabel: string;
     releasedAt?: number;
+  } | null;
+  /** 由另一个任务通过 send_to_session（create 模式）新建时的来源任务元数据。旧端缺省。 */
+  createdBySession?: {
+    kind: 'session';
+    sessionId: string;
+    title?: string;
+    deviceId?: string;
+    deviceName?: string;
+    botId?: string;
+    botName?: string;
   } | null;
   parentSessionId?: string | null;
   forkedAtMessageId?: string | null;
