@@ -29,7 +29,7 @@ export interface SilentGatewaySwitchSessionRow {
 
 /** Main-process services the send-time silent switch depends on; injected so the decision is testable. */
 export interface SilentGatewaySwitchDeps {
-  /** Identity of the signed-in local database; a new owner starts a fresh "first send" set. */
+  /** Identity of the signed-in local database; an owner change during the handoff cancels the switch. */
   getOwner: () => object | null | undefined;
   isRemoteInvoke: () => boolean;
   hasPendingAgentSwitch: (sessionId: string) => boolean;
@@ -55,38 +55,26 @@ export interface SilentGatewaySwitchDeps {
 /**
  * Send-time silent engine switch for Cindy AI catalog entries marked `silentSwitch`.
  *
- * Each task is evaluated at most once per signed-in database per process: the first send that
- * sees a current (authoritative) catalog decides, and later sends skip the check. While the
- * catalog is not authoritative the task stays unevaluated so a later send can still decide.
- * A failed switch is logged and the send continues on the current engine, like the cross-engine
- * pending switch does; it is not retried on later sends.
+ * Every send re-checks the latest authoritative catalog; nothing is remembered per task. A send
+ * that cannot decide (catalog not authoritative, task busy) or whose switch fails leaves the task
+ * as it is, so the next send checks again. A failed switch is logged and the send continues on
+ * the current engine, like the cross-engine pending switch does. Idle tasks are never switched
+ * in the background: the catalog only takes effect when the task is next sent to.
  */
 export function createSilentGatewaySwitchForSend(deps: SilentGatewaySwitchDeps) {
-  const evaluatedByOwner = new WeakMap<object, Set<string>>();
   return async (sessionId: string, signal?: AbortSignal): Promise<void> => {
     const owner = deps.getOwner();
     if (!owner || signal?.aborted || deps.isRemoteInvoke()) return;
-    let evaluated = evaluatedByOwner.get(owner);
-    if (!evaluated) {
-      evaluated = new Set();
-      evaluatedByOwner.set(owner, evaluated);
-    }
-    if (evaluated.has(sessionId)) return;
-    if (deps.hasPendingAgentSwitch(sessionId) || deps.isTurnRunning(sessionId) || deps.hasPendingInteraction(sessionId)) {
-      evaluated.add(sessionId);
-      return;
-    }
+    // Most accounts never see the flag; they must not pay for a session read on every send.
     const catalog = deps.getCatalog();
-    if (!catalog.authoritative) return;
-    if (!catalog.models.some(model => model.silentSwitch === true)) {
-      evaluated.add(sessionId);
+    if (!catalog.authoritative || !catalog.models.some(model => model.silentSwitch === true)) return;
+    if (deps.hasPendingAgentSwitch(sessionId) || deps.isTurnRunning(sessionId) || deps.hasPendingInteraction(sessionId)) {
       return;
     }
     const row = await deps.getSessionRow(sessionId);
     if (row?.providerId !== 'xd' || !row.model || row.status !== 'active' ||
         row.remoteHostId || row.agentDeviceId || row.orcaRole || row.orcaRemoteLead ||
         (row.source && row.source !== 'desktop' && row.source !== 'mobile')) {
-      evaluated.add(sessionId);
       return;
     }
     const current = row.agentKind ? deps.toBuiltinAgent(row.agentKind) : undefined;
@@ -126,7 +114,6 @@ export function createSilentGatewaySwitchForSend(deps: SilentGatewaySwitchDeps) 
         });
         if (!result.switched || result.deferred) throwIpcError('PRECONDITION_FAILED', 'Agent switch could not be applied');
       } catch (err) {
-        // A cancelled send stays unevaluated so the next send can still switch.
         if (signal?.aborted) throw err;
         deps.log.warn('agent-switch: silent gateway switch failed; sending on the current engine', {
           sessionId,
@@ -135,6 +122,5 @@ export function createSilentGatewaySwitchForSend(deps: SilentGatewaySwitchDeps) 
         });
       }
     }
-    evaluated.add(sessionId);
   };
 }

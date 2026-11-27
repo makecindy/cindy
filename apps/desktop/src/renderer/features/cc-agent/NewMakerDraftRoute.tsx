@@ -160,6 +160,7 @@ import {
   patchVendorPrefs,
   patchVendorPrefsPreservingModelChoice,
   applySuggestedDefaultTuple,
+  applySilentSwitchDraftTuple,
   fallbackUnavailableVendor,
   markDefaultTupleCustomized,
   clearDefaultTupleTuningCustomization,
@@ -229,7 +230,7 @@ import {
   resolveDraftSessionProviderId,
   type DraftModelCalibrationResult,
 } from '@/lib/draftModelCalibration';
-import { resolveNewMakerDefaultTuple } from '@/lib/newMakerDefaultTuple';
+import { resolveNewMakerDefaultTuple, resolveSilentSwitchDraftTuple } from '@/lib/newMakerDefaultTuple';
 import { RUN_LOCATION_LOCAL } from '@/lib/providerRunLocation';
 import { useProviderBorrow } from '@/hooks/useProviderBorrow';
 import { showWorktreeError } from '@/lib/worktreeToast';
@@ -1918,6 +1919,30 @@ function NewMakerDraftForm({ composerKey: NEW_MAKER_DRAFT_KEY }: { composerKey: 
     draft.remoteHostId,
     hasLegacyDefaultChoice,
   ]);
+  // A remembered Cindy AI model that the catalog moved to another engine (silentSwitch) follows
+  // it, including customized drafts; otherwise the saved route blocks task creation. Local only:
+  // remote targets resolve engines in their own catalog.
+  const savedDraftPrefs = savedDraft.lastByVendor[savedDraft.vendor];
+  const silentSwitchDraftTuple = useMemo(
+    () =>
+      catalogDeviceId || savedDraft.remoteHostId || savedDraft.pluginEngine || localAlternate
+        ? null
+        : resolveSilentSwitchDraftTuple({
+            providers: localProviders,
+            providersLoading: localProvidersLoading,
+            availableAgents: availableVendors,
+            availableAgentsLoaded,
+            vendor: savedDraft.vendor,
+            model: savedDraftPrefs.model,
+            providerId: savedDraftPrefs.providerId ?? null,
+          }),
+    [catalogDeviceId, savedDraft.remoteHostId, savedDraft.pluginEngine, localAlternate, localProviders,
+      localProvidersLoading, availableVendors, availableAgentsLoaded, savedDraft.vendor, savedDraftPrefs.model,
+      savedDraftPrefs.providerId],
+  );
+  useEffect(() => {
+    if (silentSwitchDraftTuple) applySilentSwitchDraftTuple(savedDraft.vendor, silentSwitchDraftTuple);
+  }, [silentSwitchDraftTuple, savedDraft.vendor]);
   const {
     providers: deviceProviders,
     loading: deviceProvidersLoading,

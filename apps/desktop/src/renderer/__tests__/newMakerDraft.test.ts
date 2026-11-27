@@ -231,6 +231,38 @@ describe('newMakerDraft store', () => {
     expect(getDraft().defaultTupleSelectionCustomized).toBe(true);
   });
 
+  // docs/dev-rules/protocol-compatibility/model-access-silent-switch.md: a draft the user set to
+  // Pi + auto used to stay blocked ("model") once the catalog moved auto to Codex only, because the
+  // product default never overrides a customized draft. It now follows the flagged engine.
+  it('自选的 Pi + auto 草稿随目录静默指定换到 Codex，不再被拦下，Pi 槽位保留', async () => {
+    const { resolveSilentSwitchDraftTuple } = await import('@/lib/newMakerDefaultTuple');
+    const { savedDraftModelIssue } = await import('../features/cc-agent/newMakerDraftModelPrefs');
+    const { applySilentSwitchDraftTuple, getDraft, patchVendorPrefs, switchVendor } = await loadModule();
+    const gateway: import('@cindy/model-providers').ProviderView = {
+      id: 'xd', name: 'Cindy AI', source: 'builtin', connected: true, agents: ['pi', 'codex'],
+      auth: { method: 'managed' }, access: { kind: 'managed' },
+      routing: { pi: { upstream: 'https://provider.invalid', authStrategy: 'none' },
+        codex: { upstream: 'https://provider.invalid', authStrategy: 'none' } },
+      models: { pi: [], codex: [{ id: 'auto', name: 'Auto', contextWindow: 200000, efforts: ['medium', 'high'],
+        defaultEffort: 'medium', silentSwitch: true }] },
+    };
+    switchVendor('pi');
+    patchVendorPrefs('pi', { model: 'auto', providerId: 'xd' });
+    const issue = (agent: 'pi' | 'codex') => savedDraftModelIssue({ agent, engineAvailable: true, enginesLoaded: true,
+      enginesLoading: false, model: getDraft().lastByVendor[agent].model, providerId: 'xd', providers: [gateway],
+      providersLoading: false, providersLoadFailed: false });
+    expect(issue('pi')).toBe('model');
+    const tuple = resolveSilentSwitchDraftTuple({ providers: [gateway], providersLoading: false,
+      availableAgents: new Set(['cc', 'codex', 'pi']), availableAgentsLoaded: true, vendor: 'pi', model: 'auto', providerId: 'xd' });
+    expect(applySilentSwitchDraftTuple('pi', tuple!)).toBe(true);
+    const draft = (await reloadModule()).getDraft();
+    expect(draft).toMatchObject({ vendor: 'codex', defaultTupleSelectionCustomized: true,
+      lastByVendor: { codex: { model: 'auto', providerId: 'xd', effort: 'medium' }, pi: { model: 'auto', providerId: 'xd' } } });
+    expect(draft.modelChosenByVendor.codex).toBe(true);
+    expect(issue('codex')).toBeNull();
+    expect(applySilentSwitchDraftTuple('pi', tuple!)).toBe(false);
+  });
+
   it('恢复推荐只撤销 effort/Fast 调档，不清除模型/来源/Harness 选择', async () => {
     const tuningOnly = await loadModule();
     tuningOnly.markDefaultTupleCustomized(false);

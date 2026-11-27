@@ -75,6 +75,12 @@ import {
   type AgentSwitchSessionRow,
   type MakerSessionAgentSwitchHandlerDeps,
 } from '../sessionAgentSwitchHandler';
+import { createSilentGatewaySwitchForSend } from '../silentGatewaySwitch';
+import {
+  getXdGatewayModelAccessSnapshot,
+  setXdGatewayModels,
+  type XdGatewayModelInfo,
+} from '../../maker-host/active-catalog.js';
 
 function ordinaryUserMessage(content: string): { type: 'user'; content: string } {
   return { type: 'user', content };
@@ -5371,6 +5377,95 @@ describe('session-agent-switch handoff injection', () => {
     }), undefined);
     expect(deps.consumePendingHandoff).toHaveBeenCalledExactlyOnceWith('session-1');
     expect(handoff).toBeNull();
+  });
+
+  // docs/dev-rules/protocol-compatibility/model-access-silent-switch.md, PR #13427 review: the
+  // send-time switch used to decide once per task, so a send made before the catalog flagged Auto
+  // used up the decision and the Pi task never moved. Real silent switch + real agent switch +
+  // real send transaction, wired as register.ts does; only storage and engines are fakes.
+  it('a Pi task moves to Codex on a later send once the catalog flags Auto mid-conversation, sending each message once', async () => {
+    const piAuto: XdGatewayModelInfo = { id: 'auto', name: 'Auto', contextWindow: 128_000, availability: 'available',
+      agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-responses' } } };
+    setXdGatewayModels([piAuto], { authoritative: true });
+    const pendingSwitches = createPendingAgentSwitchRegistry();
+    let current: MakerSendTransactionSession | undefined = createSession({ agentKind: 'pi' });
+    let row: AgentSwitchSessionRow = {
+      id: 'session-1', agentKind: 'pi', model: 'auto', providerId: 'xd', status: 'active', remoteHostId: null,
+      orcaRole: null, sdkSessionId: 'pi-native-session', source: 'desktop',
+    };
+    let handoff: string | null = null;
+    const switchDeps: MakerSessionAgentSwitchHandlerDeps = {
+      pendingSwitches,
+      getSessionRow: async () => ({ ...row }),
+      getLiveSession: () => current,
+      closeSession: vi.fn(async () => { current = undefined; }),
+      listMessagesForHandoff: async () => [{ role: 'user', content: 'Earlier conversation on Pi', createdAt: 1 }],
+      applyAgentSwitchToDb: vi.fn(async (_id, patch) => {
+        row = { ...row, ...patch, providerId: patch.providerId ?? null, sdkSessionId: patch.sdkSessionId ?? null };
+      }),
+      setSessionProvider: vi.fn(),
+      insertBoundaryMessage: vi.fn(async () => 'switch-boundary'),
+      applyResumeFallbackAtomically: vi.fn(async () => { throw new Error('fresh target has no parked session'); }),
+      setPendingHandoff: (_id, text) => { handoff = text; },
+      bootstrapSwitchedSession: vi.fn(async () => { throw new Error('send must bootstrap through the transaction'); }),
+      withCloseSuppressed: (_id, fn) => fn(),
+      log: { info: vi.fn(), warn: vi.fn() },
+    };
+    const silentSwitch = createSilentGatewaySwitchForSend({
+      getOwner: () => switchDeps, isRemoteInvoke: () => false,
+      hasPendingAgentSwitch: id => Boolean(pendingSwitches.get(id)),
+      isTurnRunning: () => current?.isTurnRunning() === true, hasPendingInteraction: () => false,
+      getCatalog: getXdGatewayModelAccessSnapshot, getSessionRow: async () => ({ ...row }),
+      toBuiltinAgent: kind => (kind === 'cc' ? 'claude-code' : kind as AgentKind),
+      listAvailableAgents: () => ['pi', 'codex'], canUseRoute: async () => true,
+      switchAgent: ({ sessionId, targetAgentKind, model, effort, signal, assertSelectionCurrent }) =>
+        performSessionAgentSwitch(switchDeps, { sessionId, targetAgentKind, model, providerId: 'xd', effort,
+          fastMode: false, configStaged: true, applyNow: true, skipBootstrap: true, signal, assertSelectionCurrent }),
+      log: { warn: vi.fn() },
+    });
+    const sessions: MakerSendTransactionSession[] = [current];
+    const { deps } = createDeps({
+      getSession: () => current,
+      applyPendingAgentSwitch: async (id, options) => {
+        await silentSwitch(id, options?.signal);
+        await applyPendingAgentSwitchIfIdle(switchDeps, id, options);
+      },
+      reconcileCreateOptsWithDb: vi.fn(async (_id, opts) => {
+        opts.agentKind = row.agentKind as AgentKind;
+        opts.model = row.model ?? undefined;
+        opts.providerId = row.providerId;
+        opts.resumeSessionId = row.sdkSessionId ?? undefined;
+      }),
+      bootstrapSession: vi.fn(async (opts) => {
+        current = createSession({ agentKind: opts.agentKind as AgentKind, workDir: opts.workingDir });
+        sessions.push(current);
+        return { session: current, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+      }),
+      peekPendingHandoff: async () => handoff,
+      consumePendingHandoff: vi.fn(() => { handoff = null; }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+    const send = (content: string) => transaction.sendToAgentAccepted('session-1', { type: 'user', content },
+      { agentKind: 'pi', workingDir: path.join(os.tmpdir(), 'silent-switch-fixture'), model: 'auto', providerId: 'xd' },
+      { persistUserMessage: { clientId: content, content } });
+    try {
+      await expect(send('Before the flag')).resolves.toMatchObject({ accepted: true });
+      expect(row.agentKind).toBe('pi');
+      setXdGatewayModels([{ ...piAuto, silentSwitch: true, agents: ['codex'],
+        perAgent: { codex: { wireProtocol: 'openai-responses' } } }], { authoritative: true });
+      await expect(send('After the flag')).resolves.toMatchObject({ accepted: true });
+      expect(row).toMatchObject({ agentKind: 'codex', model: 'auto', providerId: 'xd' });
+      expect(sessions.map(session => session.agentKind)).toEqual(['pi', 'codex']);
+      const [pi, codex] = sessions.map(session => vi.mocked(session.send).mock.calls);
+      expect(pi!.map(([message]) => (message as UserMessage).content)).toEqual(['Before the flag']);
+      expect(codex).toHaveLength(1);
+      expect((codex![0]![0] as UserMessage).content).toContain('Earlier conversation on Pi');
+      expect((codex![0]![0] as UserMessage).content).toContain('After the flag');
+      expect(deps.bootstrapSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agentKind: 'codex', model: 'auto' }));
+      expect(vi.mocked(deps.createDbMessage).mock.calls.map(([, message]) => message.content)).toEqual(['Before the flag', 'After the flag']);
+    } finally {
+      setXdGatewayModels([], { authoritative: false });
+    }
   });
 
   it('排队 drain 端到端:切换在派发时刻落实(关旧引擎)→ createOpts 按 DB 对齐新引擎 → 交接注入新引擎首条 + scheduler origin 透传', async () => {

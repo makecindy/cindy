@@ -4,11 +4,12 @@
  *   目录指定的引擎、发送是否被拒、同一任务之后的发送是否还会再判定。
  * - Bug／规则依据：docs/dev-rules/protocol-compatibility/model-access-silent-switch.md；review 发现
  *   目录按数组引用比较导致内容不变的刷新中断发送、切换失败让该任务每次发送都失败、无需切换时
- *   仍因选择器变化拒绝发送。
+ *   仍因选择器变化拒绝发送；PR #13427 review 要求取消「每任务只判定一次」：任务忙或切换失败时
+ *   消耗掉唯一一次机会，之后的发送永远不再切换。
  * - 现有覆盖缺口：modelsSyncRefresh.test.ts 只覆盖目标解析 resolveSilentGatewaySwitchTarget，
  *   不覆盖发送前的判定、目录复核与失败回退。
  * - 最小失败输入：交接期间 setXdGatewayModels 以相同内容重写目录；performSessionAgentSwitch 抛错；
- *   无目标时等待期间出现待回答问题。
+ *   无目标时等待期间出现待回答问题；首次发送时回合仍在进行。
  * - tier：unit（进程内 fake 依赖 + 真实 active-catalog 目录 setter）。
  * - 实测耗时：单文件墙钟约 1.6 秒（pnpm --filter desktop exec vitest run 本文件）。
  */
@@ -43,7 +44,7 @@ function harness(options: {
 } = {}) {
   setXdGatewayModels(options.models ?? [AUTO], { authoritative: true });
   const owner = {};
-  const state = { pendingQuestion: false };
+  const state = { pendingQuestion: false, turnRunning: false };
   const row: SilentGatewaySwitchSessionRow = {
     providerId: 'xd', model: 'auto', status: 'active', agentKind: 'codex', source: 'desktop', ...options.row,
   };
@@ -54,22 +55,28 @@ function harness(options: {
       return { switched: true };
     }),
   );
+  // Like performSessionAgentSwitch, a completed switch persists the new engine on the task.
+  const persistSwitch = async (params: Parameters<SilentGatewaySwitchDeps['switchAgent']>[0]) => {
+    const result = await switchAgent(params);
+    if (result.switched && !result.deferred) row.agentKind = params.targetAgentKind;
+    return result;
+  };
   const log = { warn: vi.fn() };
   const send = createSilentGatewaySwitchForSend({
     getOwner: () => owner,
     isRemoteInvoke: () => false,
     hasPendingAgentSwitch: () => false,
-    isTurnRunning: () => false,
+    isTurnRunning: () => state.turnRunning,
     hasPendingInteraction: () => state.pendingQuestion,
     getCatalog: getXdGatewayModelAccessSnapshot,
     getSessionRow,
     toBuiltinAgent: kind => (kind === 'acp' ? undefined : kind as AgentKind),
     listAvailableAgents: () => ['codex', 'pi'],
     canUseRoute: async () => true,
-    switchAgent,
+    switchAgent: persistSwitch,
     log,
   });
-  return { send, state, getSessionRow, switchAgent, log };
+  return { send, state, row, getSessionRow, switchAgent, log };
 }
 
 afterEach(() => {
@@ -85,19 +92,33 @@ describe('silent Cindy AI engine switch on send', () => {
     expect(h.switchAgent.mock.calls[0]![0]).toMatchObject({
       sessionId: 'task-1', targetAgentKind: 'pi', model: 'auto', effort: 'medium',
     });
-    expect(h.getSessionRow).toHaveBeenCalledTimes(1);
+    expect(h.row.agentKind).toBe('pi');
+    // Each send re-checks the task against the catalog; it is already on the allowed engine.
+    expect(h.getSessionRow).toHaveBeenCalledTimes(2);
     expect(h.log.warn).not.toHaveBeenCalled();
   });
 
   it.each([
+    // Cheap path: accounts without any flagged entry never read the task.
     ['the directory has no silentSwitch entry', { models: [{ ...AUTO, silentSwitch: undefined }] }, 0],
-    ['the task already runs on the allowed engine', { row: { agentKind: 'pi' } }, 1],
-  ])('does not switch when %s and does not re-check later sends', async (_label, options, rowReads) => {
+    ['the task already runs on the allowed engine', { row: { agentKind: 'pi' } }, 2],
+  ])('does not switch when %s', async (_label, options, rowReads) => {
     const h = harness(options);
     await h.send('task-1');
     await h.send('task-1');
     expect(h.switchAgent).not.toHaveBeenCalled();
     expect(h.getSessionRow).toHaveBeenCalledTimes(rowReads);
+  });
+
+  it.each(['turnRunning', 'pendingQuestion'] as const)('skips a busy task (%s) without giving up, and switches on the next send', async (busy) => {
+    const h = harness();
+    h.state[busy] = true;
+    await h.send('task-1');
+    expect(h.switchAgent).not.toHaveBeenCalled();
+    h.state[busy] = false;
+    await h.send('task-1');
+    expect(h.switchAgent).toHaveBeenCalledTimes(1);
+    expect(h.row.agentKind).toBe('pi');
   });
 
   it('does not reject a send that needs no switch when a question appears while the task is read', async () => {
@@ -133,13 +154,18 @@ describe('silent Cindy AI engine switch on send', () => {
       params.assertSelectionCurrent();
       return { switched: true };
     }],
-  ])('sends on the current engine and does not retry when %s', async (_label, switchAgent) => {
+  ])('sends on the current engine when %s and checks again on the next send', async (label, switchAgent) => {
     const h = harness({ switchAgent });
     await expect(h.send('task-1')).resolves.toBeUndefined();
-    await expect(h.send('task-1')).resolves.toBeUndefined();
-    expect(h.switchAgent).toHaveBeenCalledTimes(1);
+    expect(h.row.agentKind).toBe('codex');
     expect(h.log.warn).toHaveBeenCalledTimes(1);
     expect(h.log.warn.mock.calls[0]![1]).toMatchObject({ sessionId: 'task-1', targetAgentKind: 'pi' });
+    h.switchAgent.mockImplementation(async () => ({ switched: true }));
+    await expect(h.send('task-1')).resolves.toBeUndefined();
+    // A withdrawn directive leaves nothing to retry; any other failure is retried and now succeeds.
+    const withdrawn = label.includes('withdraws');
+    expect(h.switchAgent).toHaveBeenCalledTimes(withdrawn ? 1 : 2);
+    expect(h.row.agentKind).toBe(withdrawn ? 'codex' : 'pi');
   });
 
   it('propagates a cancelled send and lets the next send switch', async () => {

@@ -1,4 +1,5 @@
 import {
+  chatEligibleSourcesForModel,
   isCindyAutoModelId,
   connectedProvidersForAgent,
   isCindyDistributedProvider,
@@ -28,6 +29,11 @@ interface ProviderDefaultPolicy {
   modelIds: readonly string[];
   allowOtherModels?: boolean;
   /**
+   * The Cindy AI catalog may move a model to a single other engine (`silentSwitch`); that engine is
+   * then searched after `agents`, for flagged entries only.
+   */
+  followsSilentSwitch?: boolean;
+  /**
    * Also search Cindy-distributed pool connections, and try the Auto the server marked as this
    * agent's new-task default before `modelIds`.
    */
@@ -45,6 +51,8 @@ interface ProviderDefaultPolicy {
  * 这里在两类来源中跟随服务端的 Pi 新任务默认标记；没有标记时（旧服务端）回退预设 `auto`。
  * 只认 Auto 系列的标记：个人目录仍把旧 GLM 标为 Pi 默认，不能让它取代 Auto。
  * 这条规则同时负责把没有订阅的用户默认切到 Pi，不能删除。
+ * Cindy AI 目录用 `silentSwitch` 把 Auto 指定给唯一一个其它引擎时（如成员试点把 Auto 交给 Codex），
+ * 直接用那个引擎，模型 id 不变；只对带该标记的条目生效，其余模型仍不会因此默认到 Codex。
  */
 const DEFAULT_POLICIES: readonly ProviderDefaultPolicy[] = [
   {
@@ -66,6 +74,7 @@ const DEFAULT_POLICIES: readonly ProviderDefaultPolicy[] = [
     modelIds: ['auto'],
     allowOtherModels: false,
     serverMarkedAuto: true,
+    followsSilentSwitch: true,
   },
   {
     providerId: 'xai',
@@ -127,8 +136,9 @@ function matchingModel(
     providerId: string,
     model: { id: string; defaultEnabled?: boolean },
   ) => boolean,
+  silentSwitchOnly = false,
 ) {
-  const models = provider.models[agent] ?? [];
+  const models = (provider.models[agent] ?? []).filter((model) => !silentSwitchOnly || model.silentSwitch === true);
   // Both renderer and unattended callers keep the same-provider fallback.
   // Without local visibility overrides, use the catalog's default visibility.
   // Cindy Auto is an upstream route identity; do not substitute a fixed model.
@@ -150,6 +160,14 @@ function matchingModel(
       (enabled ? enabled(agent, provider.id, model) : model.defaultEnabled !== false) &&
       isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
   );
+}
+
+/** Missing or stale optional effort metadata does not disqualify a usable route. */
+function tupleEffort(model: CatalogModel): Effort | null {
+  return model.efforts.length === 0 ? null
+    : model.defaultEffort === null ? null
+      : (clampEffortToSupported(model.defaultEffort, model.efforts)
+        ?? defaultEffortForCapabilities(model.efforts)) as Effort | null;
 }
 
 function isAvailableDefaultProvider(provider: ProviderView): boolean {
@@ -205,25 +223,24 @@ export function resolveNewMakerDefaultTuples(args: {
       'preferred',
       ...(policy.allowOtherModels === false ? [] : ['other' as const]),
     ];
+    // Only the policy's own catalog can redirect its models to another engine.
+    const searchAgents = (provider: ProviderView): readonly AgentKind[] =>
+      policy.followsSilentSwitch && isPolicyProvider(provider)
+        ? [...policy.agents, ...provider.agents.filter((agent) => !policy.agents.includes(agent))]
+        : policy.agents;
     // Search every account for the recommendation before falling back to other
     // enabled models. An earlier account's fallback must not hide a later Sol.
     policySearch: for (const pass of passes) {
       for (const provider of matchingProviders) {
-        for (const agent of policy.agents) {
+        for (const agent of searchAgents(provider)) {
           const vendor = vendorForAgent(agent);
           if (!availableAgents.has(vendor)) continue;
-          const model = matchingModel(provider, agent, policy.modelIds, pass, args.isModelEnabled);
+          const silentSwitchTarget = !policy.agents.includes(agent);
+          const model = matchingModel(provider, agent, policy.modelIds, pass, args.isModelEnabled, silentSwitchTarget);
           if (!model) continue;
-          tuples.push({
-            vendor,
-            providerId: provider.id,
-            model: model.id,
-            // Missing or stale optional metadata does not disqualify a usable route.
-            effort: model.efforts.length === 0 ? null
-              : model.defaultEffort === null ? null
-                : (clampEffortToSupported(model.defaultEffort, model.efforts)
-                  ?? defaultEffortForCapabilities(model.efforts)) as Effort | null,
-          });
+          // Same bar as the send-time switch: the flagged engine's route must be usable here.
+          if (silentSwitchTarget && chatEligibleSourcesForModel([provider], model.id, agent).length === 0) continue;
+          tuples.push({ vendor, providerId: provider.id, model: model.id, effort: tupleEffort(model) });
           break policySearch;
         }
       }
@@ -237,4 +254,37 @@ export function resolveNewMakerDefaultTuple(
   args: Parameters<typeof resolveNewMakerDefaultTuples>[0],
 ): NewMakerDefaultTuple | null {
   return resolveNewMakerDefaultTuples(args)[0] ?? null;
+}
+
+/**
+ * A remembered Cindy AI draft route whose model the latest catalog moved to another engine
+ * (`silentSwitch`, a single allowed engine): returns that engine's route with the same model id,
+ * so task creation uses it instead of stopping at "this engine does not offer the model".
+ * Returns null when there is no such entry, the engine is not installed here, or the entry
+ * cannot start a new task.
+ */
+export function resolveSilentSwitchDraftTuple(args: {
+  providers: readonly ProviderView[];
+  providersLoading: boolean;
+  availableAgents: ReadonlySet<MakerVendor>;
+  availableAgentsLoaded: boolean;
+  vendor: MakerVendor;
+  model: string;
+  /** The draft's saved source; null follows the engine default, which for Cindy AI models is Cindy AI. */
+  providerId: string | null;
+}): NewMakerDefaultTuple | null {
+  const { providers, availableAgents, vendor, model } = args;
+  if (args.providersLoading || !args.availableAgentsLoaded || !model || vendor === 'orca') return null;
+  const provider = providers.find((candidate) =>
+    providerCatalogId(candidate) === 'xd' && (args.providerId === null || candidate.id === args.providerId));
+  if (!provider || !isAvailableDefaultProvider(provider)) return null;
+  for (const agent of provider.agents) {
+    const target = vendorForAgent(agent);
+    if (target === vendor || !availableAgents.has(target)) continue;
+    const entry = (provider.models[agent] ?? []).find((candidate) => candidate.id === model);
+    if (entry?.silentSwitch !== true || !isModelSelectableForNewRoute(entry) ||
+        chatEligibleSourcesForModel([provider], model, agent).length === 0) continue;
+    return { vendor: target, providerId: provider.id, model, effort: tupleEffort(entry) };
+  }
+  return null;
 }

@@ -1393,6 +1393,37 @@ export function applySuggestedDefaultTuple(tuple: SuggestedDefaultTuple): boolea
   return true;
 }
 
+/**
+ * Cindy AI 目录把草稿记着的模型静默指定给另一个引擎（`silentSwitch`）时，把草稿换到那个引擎，
+ * 模型 id 不变。自定义过的草稿同样换，否则新建任务会停在「当前引擎没有这个模型」。
+ * 用户在原引擎上的选择标记随模型带到目标引擎，避免校准把这次选择当成默认值改写；原引擎槽位
+ * 保持不动，目录撤回标记后切回原引擎仍是原来的选择。
+ */
+export function applySilentSwitchDraftTuple(from: MakerVendor, tuple: SuggestedDefaultTuple): boolean {
+  rebaseStoredDefaultTuplePreference();
+  // Read the module draft: the product default may already have moved it this frame.
+  if (currentDraft.vendor !== from || currentDraft.lastByVendor[from].model !== tuple.model) return false;
+  const previous = currentDraft.lastByVendor[tuple.vendor];
+  const chosen = currentDraft.modelChosenByVendor[from] === true;
+  currentDraft = {
+    ...currentDraft,
+    vendor: tuple.vendor,
+    lastByVendor: {
+      ...currentDraft.lastByVendor,
+      [tuple.vendor]: {
+        ...previous,
+        model: tuple.model,
+        providerId: tuple.providerId,
+        ...(tuple.effort ? { effort: tuple.effort } : {}),
+      },
+    },
+    ...(chosen ? { modelChosenByVendor: { ...currentDraft.modelChosenByVendor, [tuple.vendor]: true } } : {}),
+  };
+  scheduleWrite({ preserveStoredDefaultTuplePreference: false });
+  emit();
+  return true;
+}
+
 /** 用户开始调整默认组合后立刻封住后续自动下放。 */
 export function markDefaultTupleCustomized(selectionCustomized = true): void {
   rebaseStoredDefaultTuplePreference();
