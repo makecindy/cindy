@@ -727,6 +727,20 @@ function applyMacPackagedDisplayName(buildPath: string, platform: string): void 
   }
 }
 
+function readMacExecutableEntitlements(exePath: string): Buffer | undefined {
+  const result = spawnSync('codesign', ['--display', '--entitlements', '-', '--xml', exePath], {
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  if (result.error) throw result.error;
+  if (result.status === 0) return result.stdout.length > 0 ? result.stdout : undefined;
+
+  const stderr = result.stderr.toString().trim();
+  if (result.status === 1 && stderr.endsWith(': code object is not signed at all')) return undefined;
+  throw new Error(
+    `[forge:postPackage] Failed to read macOS entitlements (${exePath}): ${stderr || result.signal || result.status}`,
+  );
+}
+
 /**
  * Give each packaged macOS app its own deterministic Mach-O LC_UUID before
  * signing. Prebuilt Electron shares one stock LC_UUID across apps of the same
@@ -745,21 +759,34 @@ async function applyMacUniqueExecutableUuid(buildPath: string, platform: string)
     if (!fs.existsSync(exePath)) {
       throw new Error(`[forge:postPackage] macOS executable missing at ${exePath}`);
     }
+    // Patching LC_UUID invalidates the signature that carries the original entitlements.
+    const entitlements =
+      process.platform === 'darwin' ? readMacExecutableEntitlements(exePath) : undefined;
     const nextUuid = deriveMacAppMachoUuid(CINDY_APP_ID, electronVersion);
     const { previous, uuid } = patchMachoUuid(exePath, nextUuid);
     if (process.platform === 'darwin') {
       // Refresh the local ad-hoc signature so unsigned `forge package` outputs
       // stay launchable on Apple silicon; external release signing seals it again.
-      const resign = spawnSync(
-        'codesign',
-        ['--force', '--sign', '-', '--preserve-metadata=entitlements', exePath],
-        { stdio: 'pipe' },
-      );
-      if (resign.status !== 0) {
-        const stderr = resign.stderr ? String(resign.stderr).trim() : '';
-        throw new Error(
-          `[forge:postPackage] ad-hoc codesign failed after LC_UUID patch (${exePath}): ${stderr}`,
-        );
+      const args = ['--force', '--sign', '-'];
+      const tempDir = entitlements
+        ? fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mac-entitlements-'))
+        : undefined;
+      try {
+        if (tempDir && entitlements) {
+          const entitlementsPath = path.join(tempDir, 'entitlements.plist');
+          fs.writeFileSync(entitlementsPath, entitlements, { mode: 0o600 });
+          args.push('--entitlements', entitlementsPath);
+        }
+        const resign = spawnSync('codesign', [...args, exePath]);
+        if (resign.error) throw resign.error;
+        if (resign.status !== 0) {
+          const detail = resign.stderr.toString().trim() || resign.signal || resign.status;
+          throw new Error(
+            `[forge:postPackage] ad-hoc codesign failed after LC_UUID patch (${exePath}): ${detail}`,
+          );
+        }
+      } finally {
+        if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
       }
     }
     console.log(

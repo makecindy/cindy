@@ -284,3 +284,23 @@ it.each([['imFeishu', 'feishu'], ['imWechat', 'wechat'], ['imWecom', 'wecom'], [
   expect(readImDefaultSettings('slack').agents.codex.model).toBe(route.modelId);
   expect(() => normalizeHostSettingsChange({ domain, set: { codex: { providerId: 'fixed-provider', modelId: '', effort: 'high' } } })).toThrow();
 });
+
+// 回归：Node Host host-settings v1 协议不含 acp 引擎；本地若已保存插件引擎默认，getHostSettings
+// 必须返回 unavailable 而不是把无效值写进 v1 schema 或静默覆盖。最小失败输入与 tier：unit。
+it('reports an IM domain as unavailable on host-settings v1 when a plugin engine route is saved', async () => {
+  const { writeImDefaultSettingsPatch } = await import('../../im/defaultSettingsStore');
+  writeImDefaultSettingsPatch(
+    {
+      agentKind: 'acp',
+      agents: {
+        acp: {
+          providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+          model: 'gemini-4-neon',
+          effort: 'high',
+        },
+      },
+    },
+    'feishu',
+  );
+  expect(await getHostSettings(caller, 'imFeishu')).toMatchObject({ status: 'unavailable', revision: null });
+});

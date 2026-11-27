@@ -22,7 +22,8 @@ import {
   type ProviderShareFavoriteSource,
 } from '@cindy/device-link';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { quotaLevelFromRemaining, type QuotaLevel } from '@cindy/maker-shared/quota-level';
+import { buildPluginEngineUsagePresentation, matchPluginEngineQuotaGroup } from '@cindy/maker-shared/plugin-engine-usage';
+import type { QuotaLevel } from '@cindy/maker-shared/quota-level';
 import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import { createPluginHarnessUsageReader, type GhostHarnessUsage } from '@cindy/plugin-protocol';
 
@@ -397,6 +398,26 @@ export function normalizePluginEngineSwitchIntent(value: unknown): MobilePluginE
   };
 }
 
+/** 任务来源是否允许在已有任务内切到 / 换出插件引擎（与 Desktop shared/pluginEngines 保持一致）。 */
+const PLUGIN_ENGINE_SWITCH_ALLOWED_SOURCES: ReadonlySet<string> = new Set([
+  'desktop',
+  'bot',
+  'x',
+  'feishu',
+  'telegram',
+  'discord',
+  'discord-hook',
+  'slack',
+  'wechat',
+  'dingtalk',
+  'wecom',
+  'imessage',
+]);
+
+export function isPluginEngineSwitchSourceAllowed(source: string | null | undefined): boolean {
+  return !source || PLUGIN_ENGINE_SWITCH_ALLOWED_SOURCES.has(source);
+}
+
 /** The pending target has priority over the saved execution location, including an explicit return home. */
 export function pluginEngineExecutionDeviceId(
   currentDeviceId: string | null | undefined,
@@ -433,11 +454,23 @@ export interface UnifiedMobilePluginEngineRow {
   favorite?: MobileModelFavorite;
 }
 
+export interface UnifiedMobilePluginEngineQuotaGroup {
+  id: string;
+  label: string;
+  remaining: number;
+  level: QuotaLevel;
+  reset: string | null;
+  summary: string;
+  accessibilityLabel: string;
+}
+
 export interface UnifiedMobilePluginEngineQuota {
   summary: string;
   remaining?: number;
   level: QuotaLevel;
   accessibilityLabel: string;
+  isMultiGroup?: boolean;
+  groups?: UnifiedMobilePluginEngineQuotaGroup[];
 }
 
 export interface UnifiedMobilePluginEngineGroup {
@@ -450,49 +483,84 @@ export interface UnifiedMobilePluginEngineGroup {
   rows: UnifiedMobilePluginEngineRow[];
 }
 
-/** Formats a plugin engine's usage snapshot into a single-line picker header readout. */
+/** Formats a plugin engine's usage snapshot into picker header quota readout(s) or a balance. */
 export function formatPluginEnginePickerQuota(
   usage: GhostHarnessUsage | null | undefined,
   now: number,
   language: string,
   countdown: (resetsAtSeconds: number, now: number) => string | null,
 ): UnifiedMobilePluginEngineQuota | undefined {
-  if (!usage) return undefined;
-  const current = (usage.windows ?? []).filter((row) => !row.resetsAt || row.resetsAt > now);
-  const first = current.reduce<(typeof current)[number] | undefined>(
-    (lowest, row) => (!lowest || row.remainingPercent < lowest.remainingPercent ? row : lowest),
-    undefined,
-  );
-  if (first) {
-    const remaining = Math.round(first.remainingPercent);
-    const percent = `${remaining}%`;
-    const reset = first.resetsAt ? countdown(first.resetsAt / 1000, now) : null;
-    const summary = reset ? `${percent} · ${reset}` : percent;
+  const presentation = buildPluginEngineUsagePresentation(usage, now);
+  if (presentation.groups.length > 0) {
+    const groups: UnifiedMobilePluginEngineQuotaGroup[] = presentation.groups.map((group) => {
+      const label = presentation.isMultiGroup
+        ? (group.shortLabel ?? group.primary.label)
+        : group.primary.label;
+      const percent = `${group.remainingPercent}%`;
+      const reset = group.primary.resetsAt ? countdown(group.primary.resetsAt / 1000, now) : null;
+      const summary = reset ? `${percent} · ${reset}` : percent;
+      return {
+        id: group.id,
+        label,
+        remaining: group.remainingPercent,
+        level: group.level,
+        reset,
+        summary,
+        accessibilityLabel: [label, summary].filter(Boolean).join(' · '),
+      };
+    });
+    if (!presentation.isMultiGroup) {
+      const only = groups[0]!;
+      return {
+        summary: only.summary,
+        level: only.level,
+        accessibilityLabel: only.accessibilityLabel,
+        remaining: only.remaining,
+        groups,
+      };
+    }
     return {
-      summary,
-      remaining,
-      level: quotaLevelFromRemaining(first.remainingPercent),
-      accessibilityLabel: [first.label, summary].filter(Boolean).join(' · '),
+      summary: groups.map((group) => `${group.label} ${group.remaining}%`).join(' · '),
+      level: presentation.level,
+      accessibilityLabel: groups.map((group) => group.accessibilityLabel).join(' · '),
+      isMultiGroup: true,
+      groups,
     };
   }
-  const balance = (usage.balances ?? []).find((row) => Number.isFinite(Number(row.amount)));
+  const balance = presentation.balances[0];
   if (!balance) return undefined;
-  const amount = Number(balance.amount);
   let formatted: string;
   try {
     formatted = new Intl.NumberFormat(language, {
       style: 'currency',
       currency: balance.currency,
       currencyDisplay: 'code',
-    }).format(amount);
+    }).format(balance.numericAmount);
   } catch {
     formatted = `${balance.currency} ${balance.amount}`;
   }
   return {
     summary: formatted,
-    level: amount <= 0 ? 'crit' : 'normal',
+    level: presentation.level,
     accessibilityLabel: formatted,
   };
+}
+
+/** Formats per-model quota text for a plugin engine row, matching built-in `modelQuotaLabel`. */
+export function formatPluginEngineModelQuotaLabel(
+  usage: GhostHarnessUsage | null | undefined,
+  model: { id: string; name?: string | null },
+  now: number,
+  countdown: (resetsAtSeconds: number, now: number, windowMinutes: number | null) => string | null,
+): string | undefined {
+  if (!usage || model.id === PLUGIN_ENGINE_DEFAULT_MODEL) return undefined;
+  const presentation = buildPluginEngineUsagePresentation(usage, now);
+  const group = matchPluginEngineQuotaGroup(presentation, model);
+  if (!group) return undefined;
+  const reset = group.primary.resetsAt
+    ? countdown(group.primary.resetsAt / 1000, now, group.primary.windowMinutes ?? null)
+    : null;
+  return [reset, `${group.remainingPercent}%`].filter(Boolean).join(' · ');
 }
 
 /** Formats per-model quota when a plugin engine publishes model-scoped usage windows. */

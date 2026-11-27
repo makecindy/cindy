@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events';
+import { release } from 'node:os';
 import { beforeEach, expect, it, vi } from 'vitest';
 
+vi.mock('node:os', { spy: true });
 const state = vi.hoisted(() => ({ windows: [] as any[], displays: [] as any[], confirm: vi.fn() }));
 const excludeMask = vi.hoisted(() => vi.fn((_handle: Buffer) => true));
 vi.mock('../../windowsTaskbarNative', () => ({
@@ -69,6 +71,7 @@ vi.mock('electron', () => ({
     async loadURL(url: string) { this.page = decodeURIComponent(url); }
     setContentProtection() {}
     setIgnoreMouseEvents = vi.fn();
+    setOpacity = vi.fn();
     setFocusable = vi.fn();
     setVisibleOnAllWorkspaces() {}
     setAlwaysOnTop() {}
@@ -202,6 +205,28 @@ function fixture(heldInput?: () => void) {
 const settle = async () => {
   for (let i = 0; i < 12; i++) await Promise.resolve();
 };
+
+// Unit: keep the Win32 layer opaque and excluded once build 26300 uses an
+// alpha-capable surface to let the covered taskbar receive pointer input.
+it('keeps the Windows 26300 taskbar-compatible mask opaque and capture-excluded', async () => {
+  vi.stubGlobal('process', Object.create(process, { platform: { value: 'win32' } }));
+  vi.mocked(release).mockReturnValueOnce('10.0.26300');
+  excludeMask.mockClear();
+  const f = fixture();
+  try {
+    await f.masks.set(true, () => true);
+    const window = state.windows[0];
+    expect(window.options).toMatchObject({ transparent: true, backgroundColor: '#000000' });
+    expect(window.setOpacity).toHaveBeenCalledWith(1);
+    expect(window.setOpacity).toHaveBeenCalledBefore(excludeMask);
+    expect(excludeMask).toHaveBeenCalledWith(window.getNativeWindowHandle());
+    expect(window.getBounds()).toEqual(state.displays[0].bounds);
+    expect(window.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+  } finally {
+    f.masks.stop();
+    vi.unstubAllGlobals();
+  }
+});
 
 it('keeps the full-display mask passive so injected input reaches underlying apps', async () => {
   const f = fixture();

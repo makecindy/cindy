@@ -5370,17 +5370,20 @@ function applyInputProjection(
     // 折叠:同一次中断事件里,ephemeral 进行中行与它前面那些已落库的重连行只显示最新
     // 一条(否则第 2 次重连时会看到「未成功」+「重新连接中 2/5」两行并存)。
     const messages = collapseConsecutiveAutoResumeRows(withPendingCard);
-    // main 可能重复投影同一条 error。相对时间（如 "Try again in 1h"）只能在错误首次出现
-    // 时锚定；每次都按新的 Date.now() 重算会让恢复时间持续后移，也会制造无意义的新对象。
-    const usageLimitRecovery = !projection.error
-      ? null
-      : projection.error === s.error
-        ? s.usageLimitRecovery
-        : extractUsageLimitRecoveryHint({ message: projection.error });
     const projectionErrorReason =
       projection.error && typeof projection.errorReason === 'string' && projection.errorReason.length > 0
         ? projection.errorReason
         : null;
+    // main 可能重复投影同一条 error。相对时间（如 "Try again in 1h"）只能在错误首次出现
+    // 时锚定；每次都按新的 Date.now() 重算会让恢复时间持续后移，也会制造无意义的新对象。
+    const usageLimitRecovery = !projection.error
+      ? null
+      : projection.error === s.error && projectionErrorReason === s.errorReason
+        ? s.usageLimitRecovery
+        : extractUsageLimitRecoveryHint({
+            message: projection.error,
+            ...(projectionErrorReason ? { reason: projectionErrorReason } : {}),
+          });
     const projectionToolLoop = parseToolLoopErrorDetails(projection.toolLoop) ?? null;
     const projectionOutputLimit = parseOutputLimitDetails(projection.outputLimit) ?? null;
     return {
@@ -12632,6 +12635,10 @@ function createRemoteHistoryView(sessionId: string) {
   };
   const view = new HistoryViewController<HistoryChatMessage>({
     diagnostic: (event) => log.debug('history view changed', {
+      hostRef: deviceId?.slice(0, 8) ?? 'local', sessionRef: sessionId.slice(0, 8), ...event,
+    }),
+    // 渲染死循环(React #185)被拦下时留证据:哪个范围、当时的读取状态。只有 id 与计数。
+    expansionLoop: (event) => log.warn('history expansion loop stopped', {
       hostRef: deviceId?.slice(0, 8) ?? 'local', sessionRef: sessionId.slice(0, 8), ...event,
     }),
     page: async (before) => {
