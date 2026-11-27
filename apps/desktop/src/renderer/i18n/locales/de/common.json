@@ -17534,6 +17534,8 @@
         "moveToProjectRemoteUnsupported": "Das Verschieben von Remote-Sitzungen wird noch nicht unterstützt",
         "moveToProjectWorktreeBlocked": "Das Arbeitsverzeichnis dieser Aufgabe ist ein Worktree. Sie kann daher noch nicht in ein anderes Projekt verschoben werden.",
         "openInNewWindow": "In neuem Fenster öffnen",
+        "openInNewWindowShortcutMac": "⌘+Klick",
+        "openInNewWindowShortcutOther": "Strg+Klick",
         "exportShare": "Sitzung exportieren…",
         "exportHtml": "Als HTML exportieren…",
         "exportHtmlSuccess": "Sitzung als HTML exportiert",
