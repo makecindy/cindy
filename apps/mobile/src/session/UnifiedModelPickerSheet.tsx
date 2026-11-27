@@ -21,7 +21,7 @@ import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
 import {
   buildPluginEngineGroups,
-  formatPluginEngineModelQuotaLabel,
+  formatPluginEngineModelQuota,
   formatPluginEnginePickerQuota,
   isPluginEngineFavoriteProviderId,
   isPluginEngineProviderId,
@@ -77,6 +77,11 @@ import {
   type MobileProviderGroups,
 } from "./remoteProviderGroups";
 import { remoteFilterId } from "./remoteSourceFilters";
+import {
+  isMobileSourceRouteProviderId,
+  withMobileSourceRouteProviders,
+  type HostModelGroupsPayload,
+} from "./sourceRouteProviders";
 
 const NO_REMOTE_CATALOGS: readonly RemoteAgentCatalog[] = [];
 
@@ -219,10 +224,26 @@ export interface UnifiedMobileModelGroupRow {
   selected: boolean;
 }
 
+export interface UnifiedMobileModelGroupManagedMeta {
+  routeName: string;
+  isSourceRoute?: boolean;
+}
+
 export interface UnifiedMobileModelGroupOptions {
   rows: readonly UnifiedMobileModelGroupRow[];
   /** 返回 false = 没有应用(选择器留在原地)。 */
   onSelect(id: string): Promise<boolean> | boolean;
+  /** 任务中间由智能路由持续托管时的元信息与一键解除回调(保留当前模型)。 */
+  managedMeta?: UnifiedMobileModelGroupManagedMeta | null;
+  onDetach?: () => Promise<boolean> | boolean;
+  /** 被控电脑的供应商合并路由载荷(合成面板里的虚拟供应商条目并隐藏成员)。 */
+  sourceRoutesPayload?: HostModelGroupsPayload | null;
+  /** 当前绑定的路由 id(用于高亮已合并的供应商条目)。 */
+  activeRouteId?: string | null;
+  /** 进行中任务点击已合并供应商里的模型行时触发，走路由挑源并绑定托管。 */
+  onPickMerged?: (routeId: string, config: MobileModelConfiguration) => Promise<boolean> | boolean;
+  /** 草稿/设置点击已合并供应商或普通模型行时，同步附加或清除展开路由 id。 */
+  onAttach?: (routeId: string | null) => void;
 }
 
 export interface UnifiedMobilePluginEngineOptions {
@@ -305,6 +326,8 @@ export interface UnifiedMobilePickerViewProps {
     title: string;
     rows: readonly UnifiedMobileModelGroupRow[];
     onSelect(id: string): void;
+    managedMeta?: UnifiedMobileModelGroupManagedMeta;
+    onDetach?: () => void;
   };
   /** 插件引擎分组(列在内置模型之前)；effort 只改思考深度、不关闭选择器；onOptions 打开配置/收藏详情页。 */
   pluginEngines?: {
@@ -438,8 +461,9 @@ export function UnifiedModelPickerSheet(
   }, [p.visible, p.unified.scope, hasOnPluginEnginesOpen]);
   // 选中的是插件引擎时，内置模型行都不显示选中态(也不列「推荐」)。
   const pluginEngineActive = !!pluginEngineOptions?.active;
-  // 选中的是模型组时同理：只有组那一行打勾，具体模型行不打勾、不列「推荐」，打开时停在顶部(和桌面一致)。
-  const modelGroupActive = !!p.unified.modelGroups?.rows.some((row) => row.selected);
+  // 草稿选着模型组时只有组行打勾；进行中任务受持续托管(managedMeta)时仍保留当前真实运行模型的高亮(对齐桌面)。
+  const modelGroupActive = !!p.unified.modelGroups?.rows.some((row) => row.selected)
+    && !p.unified.modelGroups?.managedMeta;
   const otherChoiceActive = pluginEngineActive || modelGroupActive;
   useEffect(() => {
     if (!p.visible) return;
@@ -477,13 +501,53 @@ export function UnifiedModelPickerSheet(
   const remoteCatalogs = p.unified.remote?.catalogs ?? NO_REMOTE_CATALOGS;
   /** 选中态属于哪台其他电脑的目录;null = 被控电脑自己的(含没有远程 Agent 的情况)。 */
   const selectedDeviceId = p.unified.remote?.selectedDeviceId ?? null;
+  const modelGroupOptions = p.unified.modelGroups;
+  const remoteProvidersByDevice = useMemo(() => {
+    const map = new Map<string, readonly ProviderView[]>();
+    for (const catalog of remoteCatalogs) map.set(catalog.deviceId, catalog.providers);
+    return map;
+  }, [remoteCatalogs]);
+  const sourceRoutes = useMemo(
+    () =>
+      withMobileSourceRouteProviders(
+        p.providers,
+        modelGroupOptions?.sourceRoutesPayload,
+        {
+          providerId: p.selectedProviderId,
+          modelId: p.activeModelId,
+          agentDeviceId: selectedDeviceId,
+        },
+        remoteProvidersByDevice,
+        (name, count) =>
+          t("models.modelGroups.sourceRouteTitle", {
+            name,
+            count,
+            defaultValue: `${name} (${count})`,
+          }),
+      ),
+    [
+      p.providers,
+      modelGroupOptions?.sourceRoutesPayload,
+      p.selectedProviderId,
+      p.activeModelId,
+      selectedDeviceId,
+      remoteProvidersByDevice,
+      t,
+    ],
+  );
+  const displayProviders = sourceRoutes.providers;
+  const shownMergedSourceId = sourceRoutes.shownAs(
+    p.selectedProviderId,
+    modelGroupOptions?.activeRouteId,
+    selectedDeviceId,
+  );
   const keepModel = useMemo(
     () => ({
-      providerId: p.selectedProviderId,
+      providerId: shownMergedSourceId ?? p.selectedProviderId,
       modelId: p.activeModelId,
       agent: p.agentKind,
     }),
-    [p.selectedProviderId, p.activeModelId, p.agentKind],
+    [shownMergedSourceId, p.selectedProviderId, p.activeModelId, p.agentKind],
   );
   // 供应商组(provider-groups.md §10):组里其他电脑上的这个供应商收进组那一项,只列组那一项。
   const hostDeviceId = p.unified.remote?.hostDeviceId;
@@ -525,18 +589,18 @@ export function UnifiedModelPickerSheet(
   const entries = useMemo(
     () =>
       mobileUnifiedEntries(
-        p.providers,
+        displayProviders,
         p.unified.agents,
         p.modelVisibilityOverrides,
         !!p.existingSessionRoute,
         boundGroup?.deviceId === null
           ? boundKeepModel
-          : selectedDeviceId === null
+          : selectedDeviceId === null || shownMergedSourceId !== null
             ? keepModel
             : undefined,
       ),
     [
-      p.providers,
+      displayProviders,
       p.unified.agents,
       p.modelVisibilityOverrides,
       p.existingSessionRoute,
@@ -544,6 +608,7 @@ export function UnifiedModelPickerSheet(
       boundKeepModel,
       boundGroup,
       selectedDeviceId,
+      shownMergedSourceId,
     ],
   );
   /** Agent 下一条消息时所在的那台电脑上正在用的来源(那台在组里被收起时照样算出来,用来停在组那一项)。 */
@@ -570,7 +635,8 @@ export function UnifiedModelPickerSheet(
           (provider) =>
             !providerGroups.hidden.has(
               providerGroupEntryKey(catalog.deviceId, provider.id),
-            ),
+            )
+            && !sourceRoutes.hidesRemote(catalog.deviceId, provider.id),
         );
         if (providers.length === 0) return [];
         const selectedHere = catalog.deviceId === selectedDeviceId;
@@ -607,6 +673,7 @@ export function UnifiedModelPickerSheet(
       boundKeepModel,
       p.unified.agents,
       p.existingSessionRoute,
+      sourceRoutes,
     ],
   );
   // Presentation only: keep complete catalogs for favorites and the task's saved route.
@@ -631,18 +698,19 @@ export function UnifiedModelPickerSheet(
     return { hiddenSources: hidden, unavailableBaseByRemoteSource: folds.askBeforeUse };
   }, [p.providers, p.selectedProviderId, providerGroups, remoteCatalogs, selectedDeviceId]);
   const sourceId =
-    boundGroup?.deviceId === null
-      ? boundGroup.providerId
-      : selectedDeviceId === null
-        ? buildMobileModelSections({
-            providers: p.providers,
-            agentKind: p.agentKind,
-            selectedModelId: p.activeModelId,
-            selectedProviderId: p.selectedProviderId,
-            existingSessionRoute: p.existingSessionRoute,
-            visibilityOverrides: p.modelVisibilityOverrides,
-          }).activeSourceId
-        : null;
+    shownMergedSourceId
+      ?? (boundGroup?.deviceId === null
+        ? boundGroup.providerId
+        : selectedDeviceId === null
+          ? buildMobileModelSections({
+              providers: displayProviders,
+              agentKind: p.agentKind,
+              selectedModelId: p.activeModelId,
+              selectedProviderId: p.selectedProviderId,
+              existingSessionRoute: p.existingSessionRoute,
+              visibilityOverrides: p.modelVisibilityOverrides,
+            }).activeSourceId
+          : null);
   const selection: MobileModelConfiguration = {
     providerId: sourceId ?? "",
     modelId: p.activeModelId,
@@ -677,8 +745,14 @@ export function UnifiedModelPickerSheet(
           defaultValue: config.effort,
         })
       : "";
-  const accountQuotaOf = (providerId: string, sourceDeviceId?: string) =>
-    sourceDeviceId ? quotaOf(sourceDeviceId, providerId) : quotas[providerId];
+  const accountQuotaOf = (providerId: string, sourceDeviceId?: string) => {
+    if (!sourceDeviceId && isMobileSourceRouteProviderId(providerId)) {
+      const lead = sourceRoutes.usageMember(providerId);
+      if (!lead) return undefined;
+      return lead.agentDeviceId ? quotaOf(lead.agentDeviceId, lead.provider.id) : quotas[lead.provider.id];
+    }
+    return sourceDeviceId ? quotaOf(sourceDeviceId, providerId) : quotas[providerId];
+  };
   const accountIdentityOf = (providerId: string, sourceDeviceId?: string) => {
     const quota = accountQuotaOf(providerId, sourceDeviceId);
     if (quota?.members?.length) return t('models.unified.accountCount', { count: quota.members.length });
@@ -690,7 +764,7 @@ export function UnifiedModelPickerSheet(
   const describe = (
     entry: UnifiedModelEntry,
     config: MobileModelConfiguration,
-    providers: readonly (typeof p.providers)[number][] = p.providers,
+    providers: readonly (typeof p.providers)[number][] = displayProviders,
     sourceDeviceId?: string,
   ) => {
     const provider = providers.find((item) => item.id === entry.providerId);
@@ -724,7 +798,8 @@ export function UnifiedModelPickerSheet(
     entry: UnifiedModelEntry,
     favorite?: MobileModelFavorite,
   ): UnifiedMobileRow => {
-    const provider = p.providers.find((item) => item.id === entry.providerId);
+    const provider = displayProviders.find((item) => item.id === entry.providerId);
+    const routed = isMobileSourceRouteProviderId(entry.providerId);
     const selected =
       entry.providerId === sourceId && matchesEntry(entry, p.activeModelId);
     const config = resolveMobileModelConfig(entry, {
@@ -746,6 +821,7 @@ export function UnifiedModelPickerSheet(
         routing: provider?.routing,
         logoKind: provider?.logoKind,
         customIcon: provider?.customIcon,
+        ...(routed ? { routed: true } : {}),
       },
       selected: !favorite && selected && !otherChoiceActive,
       disabled:
@@ -781,8 +857,10 @@ export function UnifiedModelPickerSheet(
       : name;
   };
   const providerName = (id: string) => {
-    const provider = p.providers.find((item) => item.id === id);
+    const provider = displayProviders.find((item) => item.id === id)
+      ?? p.providers.find((item) => item.id === id);
     if (!provider) return id;
+    if (isMobileSourceRouteProviderId(id)) return provider.name;
     return withGroupBadge(null, id, mobileProviderAccountTitle(provider, accountIdentityOf(id)));
   };
   // 另一台电脑目录里的供应商,说法带电脑名(「Claude 订阅 · 工作室 Mac」)。
@@ -830,9 +908,13 @@ export function UnifiedModelPickerSheet(
     return baseProviderId ? unavailableOn(providerName(baseProviderId), p.unified.remote?.hostDeviceName) : undefined;
   };
   // Providers hidden from the picker stay in `entries` for favorites; only the regular list drops them.
-  const currentPick = { providerId: p.selectedProviderId, modelId: p.activeModelId };
+  const currentPick = { providerId: shownMergedSourceId ?? p.selectedProviderId, modelId: p.activeModelId };
   const allRows = entries.map((entry) => makeRow(entry));
-  const listedLocal = new Set(listedMobileEntries(entries, p.providers, selectedDeviceId === null ? currentPick : null));
+  const listedLocal = new Set(listedMobileEntries(
+    entries,
+    displayProviders,
+    selectedDeviceId === null || shownMergedSourceId !== null ? currentPick : null,
+  ));
   const rows = allRows.filter((row) => listedLocal.has(row.entry));
   const makeRemoteRow = (
     directory: (typeof remoteDirectories)[number],
@@ -912,19 +994,20 @@ export function UnifiedModelPickerSheet(
   const pluginEngineCountdown = (
     resetsAtSeconds: number,
     currentNow: number,
-    windowMinutes: number | null = null,
-  ) => formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, windowMinutes);
-  const pluginEngineModelQuota = (engine: MobilePluginEngine, modelId: string): string | null => {
-    const model = engine.models.find((candidate) => candidate.id === modelId);
-    return (
-      formatPluginEngineModelQuotaLabel(
-        pluginEngineQuotas?.[pluginEngineChoiceKey(engine)],
-        { id: modelId, name: model?.displayName },
-        now,
-        pluginEngineCountdown,
-      ) ?? null
+    windowMinutes?: number | null,
+  ) => formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, windowMinutes ?? null);
+  const pluginEngineModelQuota = (
+    engine: MobilePluginEngine,
+    modelId: string,
+    modelName?: string,
+  ) =>
+    formatPluginEngineModelQuota(
+      pluginEngineQuotas?.[pluginEngineChoiceKey(engine)],
+      modelId,
+      now,
+      pluginEngineCountdown,
+      modelName ?? engine.models.find((candidate) => candidate.id === modelId)?.displayName,
     );
-  };
   const pluginEngineLabels = {
     defaultModel: t("models.pluginEngines.defaultModel"),
     effort: (effort: PluginEngineEffort) =>
@@ -1045,7 +1128,7 @@ export function UnifiedModelPickerSheet(
       rows: recommended,
     });
   if (all || shownFilter !== "favorites")
-    for (const provider of p.providers) {
+    for (const provider of displayProviders) {
       const group = filtered.filter(
         (row) =>
           row.entry.providerId === provider.id && !recommended.includes(row),
@@ -1084,6 +1167,19 @@ export function UnifiedModelPickerSheet(
       now,
       i18n?.language ?? "en",
       pluginEngineCountdown,
+      {
+        formatRemaining: (percent) => t("session.menu.usage.remaining", { percent }),
+        formatResetIn: (duration) => t("models.unified.quotaResetIn", { duration }),
+        resetSoonLabel: t("models.unified.quotaResetSoon"),
+        fallbackWindowLabel: (windowMinutes, rawLabel) =>
+          windowMinutes === 10080
+            ? t("session.menu.usage.week")
+            : windowMinutes && windowMinutes % 60 === 0
+              ? t("session.menu.usage.hours", { count: windowMinutes / 60 })
+              : windowMinutes
+                ? t("session.menu.usage.minutes", { count: windowMinutes })
+                : rawLabel || t("session.menu.usage.quota"),
+      },
     );
   const matchingPluginEngines = pluginEngineOptions
     ? all
@@ -1402,16 +1498,41 @@ export function UnifiedModelPickerSheet(
   const select = (row: UnifiedMobileRow) => {
     if (row.disabled) return;
     void transact(async (isCurrent) => {
+      const mergedHit = !row.remoteDevice
+        ? sourceRoutes.hit(row.entry.providerId, row.entry.modelId)
+        : null;
+      if (mergedHit) {
+        const concreteConfig: MobileModelConfiguration = {
+          ...row.config,
+          providerId: mergedHit.candidate.providerId,
+          modelId: mergedHit.candidate.model,
+        };
+        if (modelGroupOptions?.onPickMerged) {
+          if ((await modelGroupOptions.onPickMerged(mergedHit.route.id, concreteConfig)) !== false && isCurrent()) {
+            p.onClose();
+          }
+          return;
+        }
+        const applied = await p.unified.onSelect(concreteConfig, {
+          deviceId: mergedHit.candidate.agentDeviceId ?? null,
+        });
+        if (applied && isCurrent()) {
+          modelGroupOptions?.onAttach?.(mergedHit.route.id);
+          p.onClose();
+        }
+        return;
+      }
       const [config, source] = boundRoute(row, row.config) ?? [
         row.config,
         { deviceId: row.remoteDevice?.deviceId ?? null },
       ];
-      if ((await p.unified.onSelect(config, source)) && isCurrent())
+      if ((await p.unified.onSelect(config, source)) && isCurrent()) {
+        modelGroupOptions?.onAttach?.(null);
         p.onClose();
+      }
     });
   };
   // 插件引擎行：选中模型时关闭选择器；只改思考深度时留在原地。
-  const modelGroupOptions = p.unified.modelGroups;
   const modelGroupRows = (modelGroupOptions?.rows ?? []).filter((row) => {
     const needle = query.trim().toLowerCase();
     return !needle || `${row.title} ${row.subtitle}`.toLowerCase().includes(needle);
@@ -1423,6 +1544,15 @@ export function UnifiedModelPickerSheet(
       if (applied !== false && isCurrent()) p.onClose();
     });
   };
+  const detachModelGroup = modelGroupOptions?.onDetach
+    ? () => {
+        const detach = modelGroupOptions.onDetach;
+        if (!detach) return;
+        void transact(async () => {
+          await detach();
+        });
+      }
+    : undefined;
   const selectPluginEngine = (row: UnifiedMobilePluginEngineRow, effort?: PluginEngineEffort) => {
     if (row.disabled || !pluginEngineOptions) return;
     void transact(async (isCurrent) => {
@@ -1562,8 +1692,24 @@ export function UnifiedModelPickerSheet(
       });
       return;
     }
-    // 被控电脑自己的组那一项(任务归它、此刻在组里别的电脑上运行)里的行同样留在那台。
-    const apply = (next: MobileModelConfiguration) => {
+    // 被控电脑自己的组那一项(任务归它、此刻在组里别的电脑上运行)里的行同样留在那台；
+    // 合并后的供应商条目(sroute:)按展开路由挑源或映射到真实成员。
+    const apply = async (next: MobileModelConfiguration) => {
+      const mergedHit = sourceRoutes.hit(row.entry.providerId, row.entry.modelId);
+      if (mergedHit) {
+        const concreteConfig: MobileModelConfiguration = {
+          ...next,
+          providerId: mergedHit.candidate.providerId,
+          modelId: mergedHit.candidate.model,
+        };
+        if (modelGroupOptions?.onPickMerged) {
+          return (await modelGroupOptions.onPickMerged(mergedHit.route.id, concreteConfig)) !== false;
+        }
+        const configure = p.unified.onConfigure ?? p.unified.onSelect;
+        const ok = await configure(concreteConfig, { deviceId: mergedHit.candidate.agentDeviceId ?? null });
+        if (ok) modelGroupOptions?.onAttach?.(mergedHit.route.id);
+        return ok;
+      }
       const routed = boundRoute(row, next);
       const configure = p.unified.onConfigure ?? p.unified.onSelect;
       return routed ? configure(...routed) : configure(next);
@@ -1643,7 +1789,7 @@ export function UnifiedModelPickerSheet(
   const cap = row?.entry.capabilities[row.config.agent];
   const provider =
     row &&
-    (sourceRemoteCatalog?.providers ?? p.providers).find(
+    (sourceRemoteCatalog?.providers ?? displayProviders).find(
       (item) => item.id === row.entry.providerId,
     );
   const price = row
@@ -1728,15 +1874,10 @@ export function UnifiedModelPickerSheet(
   for (const engine of visiblePluginEnginesForSources) {
     const choiceKey = pluginEngineChoiceKey(engine);
     const quota = pluginEngineQuotaOf(choiceKey);
-    const filterRemaining =
-      quota?.remaining ??
-      (quota?.groups?.length
-        ? Math.min(...quota.groups.map((group) => group.remaining))
-        : undefined);
     const filterQuota = quota
       ? {
-          ...(filterRemaining !== undefined ? { remaining: filterRemaining } : {}),
-          label: quota.summary,
+          ...(quota.remaining !== undefined ? { remaining: quota.remaining } : {}),
+          label: quota.sourceLabel ?? quota.summary,
         }
       : undefined;
     const pluginEngineMark = {
@@ -1784,7 +1925,7 @@ export function UnifiedModelPickerSheet(
       return listed;
     }
     const id = remoteFilterId(catalog.deviceId, share.providerId);
-    if (hiddenSources.has(id) || listed.some((item) => item.id === id)) return listed;
+    if (hiddenSources.has(id) || sourceRoutes.hidesRemote(catalog.deviceId, share.providerId) || listed.some((item) => item.id === id)) return listed;
     if (share.offline) offlineShareFilterIds.add(id);
     const provider = catalog.providers.find((item) => item.id === share.providerId);
     return [...listed, {
@@ -1871,7 +2012,7 @@ export function UnifiedModelPickerSheet(
           ? [{ id: "favorites", label: t("models.unified.favorites") }]
           : []),
         ...localPluginFilters,
-        ...p.providers
+        ...displayProviders
           .filter((provider) =>
             !hiddenSources.has(provider.id) && rows.some((row) => row.entry.providerId === provider.id),
           )
@@ -1879,21 +2020,32 @@ export function UnifiedModelPickerSheet(
             id: provider.id,
             label: providerName(provider.id),
             quota: sourceQuota(provider.id),
-            sourceUnavailableReason: sourceUnavailableReason(provider, null),
+            sourceUnavailableReason: isMobileSourceRouteProviderId(provider.id)
+              ? undefined
+              : sourceUnavailableReason(provider, null),
             providerMark: {
               providerId: provider.id,
               name: provider.name,
               routing: provider.routing,
               logoKind: provider.logoKind,
               customIcon: provider.customIcon,
+              ...(isMobileSourceRouteProviderId(provider.id) ? { routed: true } : {}),
             },
           })),
         ...sourceFilters,
         ...remotePluginFilters,
       ]}
       groups={groups}
-      {...(modelGroupRows.length
-        ? { modelGroups: { title: t("models.modelGroups.title"), rows: modelGroupRows, onSelect: selectModelGroup } }
+      {...(modelGroupRows.length || modelGroupOptions?.managedMeta
+        ? {
+            modelGroups: {
+              title: t("models.modelGroups.title"),
+              rows: modelGroupRows,
+              onSelect: selectModelGroup,
+              ...(modelGroupOptions?.managedMeta ? { managedMeta: modelGroupOptions.managedMeta } : {}),
+              ...(detachModelGroup ? { onDetach: detachModelGroup } : {}),
+            },
+          }
         : {})}
       {...(pluginEngineOptions && (pluginEngineGroups.length || hasPluginFavoriteRows)
         ? {

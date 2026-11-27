@@ -24,8 +24,19 @@ beforeEach(() => {
   h.patch.mockReset().mockImplementation(async (_id, _patch, options) => options.beforeWrite());
 });
 it('archives an untouched task but preserves explicit snooze, pins and queued input', async () => {
-  await archiveQuietScheduledTarget('task', 1000);
-  expect(h.patch).toHaveBeenCalledOnce();
+  await archiveQuietScheduledTarget('task', 1000, 500);
+  expect(h.patch).toHaveBeenCalledWith(
+    'task',
+    { status: 'archived' },
+    expect.objectContaining({ archivedAt: 500 }),
+  );
+  h.patch.mockClear();
+  await archiveQuietScheduledTarget('task', 1000, null);
+  expect(h.patch).toHaveBeenCalledWith(
+    'task',
+    { status: 'archived' },
+    expect.objectContaining({ archivedAt: null }),
+  );
   for (const row of [{ snoozedAt: 1000 }, { pinnedAt: 1001 }, { queued: 1 }]) {
     h.patch.mockClear(); Object.assign(h.row, { snoozedAt: null, pinnedAt: null, queued: 0 }, row);
     await archiveQuietScheduledTarget('task', 1000);

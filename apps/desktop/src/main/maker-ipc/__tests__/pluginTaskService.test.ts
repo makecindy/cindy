@@ -498,6 +498,8 @@ function useProductionPermissionCreator(f: ReturnType<typeof fixture>, configure
     PluginTaskError, isPluginTaskPermissionAllowed, createPluginTaskSession: persist,
     clampPluginTaskPermissionMode: (mode: unknown) => mode ?? 'ask', snapshot,
     getCurrentDbClientSnapshot: () => snapshot, isPluginTaskAuthorized: () => true,
+    pendingPluginGroupStarts: new Map(), pluginGroupKey: () => '',
+    modelGroupSessionStart: { attach: () => {} },
   };
   f.deps.readPermissionMode = () => useDefaults ? configured.permissionMode : undefined;
   f.deps.createSession = new Function(...Object.keys(deps), permissionCreatorCode)(...Object.values(deps));
@@ -1987,6 +1989,16 @@ it('an open plugin selection without a source session follows the auxiliary chai
       auxiliaryChainSessionCandidates: () => candidates, pluginTaskRouteAttempts, pluginTaskSelectionIsOpen,
       resolveLightestPluginTaskFallback, reportPluginTaskAuxiliaryFallback: reportFallback,
       savedPluginTaskRemoteRoute, readPluginRouteProviders: async () => [],
+      readRemotePluginEngines: async () => [],
+      admitLocalPluginEngineTaskRoute: (sel: Record<string, unknown>) => ({
+        agentKind: 'acp' as const,
+        providerId: String(sel.providerId ?? ''),
+        model: String(sel.model ?? ''),
+        effort: typeof sel.effort === 'string' ? sel.effort : '',
+        fastMode: false as const,
+      }),
+      isPluginEngineKind: (kind: unknown) => kind === 'acp',
+      maker: { getSessionMeta: async () => null },
       // Remote catalog admission is covered by resolveRemotePluginTaskRoute's own tests; mark the path taken.
       resolveRemotePluginTaskRoute: async (route: PluginTaskRoute) => ({ ...route, viaRemoteCatalog: true }) };
     const js = ts.transpileModule(`${resolve}\nreturn resolveRoute;`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -2026,6 +2038,11 @@ it('an open plugin selection without a source session follows the auxiliary chai
   expect(local).toMatchObject({ model: 'next', providerId: f.route.providerId });
   expect(local).not.toHaveProperty('agentDeviceId');
   expect(local).not.toHaveProperty('viaRemoteCatalog');
+  // Explicit local and remote plugin-engine (acp) routes stay on acp without falling back to built-in resolvers.
+  const explicitAcpLocal: PluginTaskRoute = { agentKind: 'acp', providerId: 'acp-plugin:antigravity:agy', model: 'gemini-4-neon', effort: 'high', fastMode: false };
+  await expect(run([], {}, undefined, explicitAcpLocal)).resolves.toEqual(explicitAcpLocal);
+  const explicitAcpRemote: PluginTaskRoute = { ...explicitAcpLocal, agentDeviceId: 'mac-mini' };
+  await expect(run([], {}, undefined, explicitAcpRemote)).resolves.toEqual({ ...explicitAcpRemote, viaRemoteCatalog: true });
 });
 
 it('archives only its own idle task through the host writer and treats archived tasks as done', async () => {
@@ -2104,6 +2121,16 @@ it.each([
     // No auxiliary chain configured in this scenario: the new-task selection stays the inherited default.
     getEffectiveAuxiliaryModelRefs: () => [], getEffectiveAuxiliaryModelChainSnapshot: () => '',
     auxiliaryChainSessionCandidates: () => [], pluginTaskRouteAttempts, pluginTaskSelectionIsOpen, savedPluginTaskRemoteRoute,
+    readRemotePluginEngines: async () => [],
+    admitLocalPluginEngineTaskRoute: (sel: Record<string, unknown>) => ({
+      agentKind: 'acp' as const,
+      providerId: String(sel.providerId ?? ''),
+      model: String(sel.model ?? ''),
+      effort: typeof sel.effort === 'string' ? sel.effort : '',
+      fastMode: false as const,
+    }),
+    isPluginEngineKind: (kind: unknown) => kind === 'acp',
+    maker: { getSessionMeta: async () => null },
     resolveLightestPluginTaskFallback, reportPluginTaskAuxiliaryFallback: () => {} };
   const js = ts.transpileModule(`${resolve}\nreturn {${preference} resolveRoute};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },

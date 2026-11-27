@@ -1894,8 +1894,7 @@
       "ariaLabel": "Rechercher dans les paramètres",
       "placeholder": "Rechercher un paramètre",
       "resultsLabel": "Résultats de recherche dans les paramètres",
-      "noResults": "Aucun paramètre trouvé. Essayez un autre mot-clé.",
-      "clear": "Effacer la recherche"
+      "noResults": "Aucun paramètre trouvé. Essayez un autre mot-clé."
     },
     "back": "Retour",
     "defaults": {
@@ -5589,6 +5588,27 @@
           "confirm": "Réinitialiser",
           "cancel": "Annuler"
         }
+      },
+      "tidy": {
+        "label": "Nettoyage mémoire et compétences",
+        "description": "Déduplique et compacte périodiquement en arrière-plan la mémoire et les compétences de vos compagnons. Ne s'exécute que s'il y a assez d'activité récente, ne coûte rien sans changement et ne laisse aucune tâche résiduelle.",
+        "cadenceLabel": "Fréquence de nettoyage",
+        "cadences": {
+          "weekly": "Hebdomadaire",
+          "biweekly": "Toutes les 2 semaines",
+          "monthly": "Mensuelle",
+          "off": "Désactivée (manuel)"
+        },
+        "runNow": "Nettoyer maintenant",
+        "running": "Nettoyage…",
+        "toast": {
+          "cadenceSaved": "Fréquence de nettoyage mise à jour",
+          "cadenceFailed": "Échec de la mise à jour de la fréquence",
+          "updated": "Nettoyage terminé ({{count}} mis à jour)",
+          "idle": "Aucun nettoyage nécessaire",
+          "skipped": "Aucun compagnon éligible au nettoyage",
+          "failed": "Échec du nettoyage de la mémoire"
+        }
       }
     },
     "subagentModels": {
@@ -7214,6 +7234,8 @@
           "controlling": "Contrôle cet ordinateur",
           "protocol": "Connexion",
           "rttNote": "dernière mesure",
+          "relayLegSelf": "Cet appareil {{transport}}",
+          "relayLegPeer": "Autre appareil {{transport}}",
           "manage": "Gérer l’appareil…",
           "linkStatus": "Vers {{name}}",
           "version": "Cindy {{version}}",
@@ -7263,6 +7285,7 @@
         },
         "onlyEncrypted": "Utiliser uniquement Agent-Net",
         "onlyEncryptedHint": "Les anciens appareils et les partages utilisant encore l’ancienne connexion seront indisponibles. Désactivé par défaut.",
+        "removedOff": "Cet ordinateur a été retiré de votre compte, Agent-Net a donc été désactivé. Réactivez-le pour le réintégrer.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Passage à Agent-Net…",
@@ -8895,6 +8918,8 @@
         "nodeRuntime": "Peut exécuter un programme Node fourni sur cet ordinateur",
         "nodeMcp": "Peut exécuter un MCP stdio fourni sur cet ordinateur",
         "nodeRuntimeDetail": "Risque élevé : il dispose des mêmes accès locaux que votre compte utilisateur, y compris les fichiers, le réseau et le lancement d'autres programmes. Cindy ne peut pas le confiner dans le bac à sable du navigateur.",
+        "nodeInheritEnv": "Hériter de l’environnement local",
+        "nodeInheritEnvDetail": "Risque élevé : le programme Node du plugin et ses processus enfants reçoivent toutes les variables d’environnement de Cindy, y compris les paramètres de proxy et de certificats ainsi que les clés API ou jetons qu’elles contiennent.",
         "nodeSecret": "Peut fournir l'identifiant enregistré « {{name}} » au programme Node local",
         "nodeSecretDetail": "Cindy le stocke chiffré et ne l'injecte que pendant l'exécution des méthodes Worker déclarées ci-dessous. Le programme Node reçoit la valeur en clair et peut la renvoyer, la journaliser, l'enregistrer ou l'exposer d'une autre manière au code du plugin côté navigateur ou aux paramètres de l'Agent. N'installez que des plugins de confiance.",
         "nodeResident": "Le programme Node peut continuer à s'exécuter en arrière-plan",
@@ -9994,6 +10019,49 @@
         "identity": "Identité du répertoire à vérifier",
         "failed": "Le nettoyage n'a pas pu aboutir",
         "pending": "En file d'attente"
+      },
+      "remote": {
+        "title": "Worktrees distants en attente",
+        "description": "Les worktrees distants non nettoyés bloquent la création d’un nouveau worktree sur le même appareil jusqu’à la fin du nettoyage ou la conservation manuelle du répertoire distant.",
+        "storageUnreadable": "Impossible de lire le registre de nettoyage des worktrees distants. La création de nouveaux worktrees distants est suspendue jusqu’au rétablissement du stockage local.",
+        "sessionLabel": "Tâche {{id}}",
+        "keepUnblock": "Conserver le répertoire et débloquer",
+        "confirmKeepTitle": "Conserver le répertoire du worktree distant et débloquer ?",
+        "confirmKeepDescription": "Cela efface l’entrée locale de nettoyage afin de pouvoir créer de nouveaux worktrees sur {{device}}. Le répertoire sur l’appareil distant ne sera pas supprimé.",
+        "confirmKeepConfirm": "Conserver et débloquer",
+        "retrySuccess": "Worktree distant nettoyé.",
+        "keepSuccess": "Entrée de nettoyage effacée. Vous pouvez de nouveau créer des worktrees distants.",
+        "keepFailed": "Impossible d’effacer l’entrée de nettoyage. Actualisez et réessayez.",
+        "phase": {
+          "reserved": "Création non confirmée",
+          "precreated": "En attente de nettoyage",
+          "session-create-started": "Création de tâche non confirmée"
+        },
+        "failure": {
+          "offline": "Appareil injoignable ou délai dépassé",
+          "in-progress": "Création ou extraction en cours",
+          "preserved": "Conservé par l’appareil distant",
+          "mismatch": "Clé de nettoyage non concordante",
+          "unsupported": "Version distante de Cindy non prise en charge",
+          "create-started": "En attente de confirmation de la tâche",
+          "storage": "Registre local indisponible",
+          "unknown": "Le nettoyage n’a pas pu aboutir"
+        },
+        "preserveReason": {
+          "claimed": "Déjà utilisé par une tâche",
+          "in-progress": "Création ou extraction en cours",
+          "dirty": "Contient des modifications non validées",
+          "keep-sentinel": "Marqué à conserver (.worktree-keep)",
+          "live-reference": "Encore utilisé par une autre tâche ou un processus",
+          "branch-mismatch": "État de la branche ou du répertoire modifié",
+          "include-files-changed": "Fichiers de configuration locaux modifiés",
+          "ignored-files": "Contient des fichiers ignorés non reproductibles",
+          "ephemeral": "Répertoire de pool géré",
+          "pending-transfer": "Transfert en cours",
+          "invalid-quarantine": "État de quarantaine invalide",
+          "quarantine-failed": "Impossible de mettre le répertoire en quarantaine",
+          "remove-failed": "Impossible de supprimer le répertoire"
+        }
       }
     },
     "awayFromComputer": {
@@ -10831,7 +10899,6 @@
     "fileBrowser": {
       "noWorkdir": "Cette session n'a pas de répertoire de travail local ; l'explorateur de fichiers est indisponible",
       "filterPlaceholder": "Filtrer les fichiers…",
-      "filterClear": "Effacer le filtre",
       "filterIndexing": "Indexation des fichiers du projet…",
       "filterNoMatch": "Aucun fichier correspondant",
       "filterRgUnavailable": "ripgrep n'est pas installé sur la machine distante ; le filtrage par nom de fichier est indisponible",
@@ -12323,6 +12390,8 @@
         "projectDirSaveFailed": "Impossible d'enregistrer le dossier du projet. Vérifiez que le dossier existe toujours, puis réessayez.",
         "allowMemberInvites": "Tous les membres peuvent inviter des amis",
         "allowMemberInvitesHint": "Si activé, tous les membres du groupe peuvent inviter des amis. Seuls le propriétaire et les administrateurs peuvent modifier ce réglage.",
+        "allowMemberMentionAll": "Autoriser tous les membres à utiliser @tous",
+        "allowMemberMentionAllHint": "Si activé, tous les membres peuvent utiliser @tous ; sinon, seuls le propriétaire et les administrateurs le peuvent. Seuls le propriétaire et les administrateurs peuvent modifier ce réglage.",
         "allowMentionAllBots": "Autoriser @tous les amis",
         "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les amis peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous."
       },
@@ -12354,6 +12423,7 @@
         "groupDissolved": "Ce groupe a été dissous. Vous pouvez toujours lire l'historique disponible.",
         "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter.",
         "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les amis.",
+        "allHumansMentionForbidden": "Seuls le propriétaire du groupe et les administrateurs peuvent utiliser @tous.",
         "turnAlreadyStarted": "Cet ami a déjà commencé et ne peut plus être ignoré"
       },
       "organizer": "Organisateur",
@@ -12547,8 +12617,10 @@
         },
         "replyPlaceholder": "Répondre à ce message ; utilisez @ pour mentionner un ami…",
         "sendReply": "Envoyer la réponse",
+        "moreReactions": "Plus de réactions",
         "addReaction": "Ajouter une réaction",
         "reactionCount": "{{emoji}} · {{count}} réactions",
+        "reactionTotal": "{{emoji}} · {{count}} réactions",
         "reactionWho": "{{emoji}} · {{count}} réactions : {{names}}",
         "reactorSelf": "Vous",
         "reactorFormer": "{{name}} (ne fait plus partie du groupe)",
@@ -12672,6 +12744,7 @@
           "accessNone": "Propriétaire uniquement",
           "accessChat": "Conversation de groupe uniquement",
           "accessTools": "Peut utiliser les outils et les informations",
+          "memberPermissions": "Autorisations des membres",
           "replies": "Mode de réponse des amis",
           "replyModeMentionedNote": "Les amis restent silencieux, sauf si quelqu’un les @mentionne.",
           "assistant": "Cindy du groupe",
@@ -13487,6 +13560,7 @@
   },
   "commonUi": {
     "retry": "Réessayer",
+    "clearSearch": "Effacer la recherche",
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
@@ -15527,6 +15601,7 @@
         "diverged": "Les branches locale et distante ont des modifications différentes. Résolvez ces différences avant de changer de branche.",
         "missing": "La branche choisie n’existe plus. Actualisez la liste.",
         "git": "Impossible de terminer. Vérifiez la branche actuelle et les modifications enregistrées avant de réessayer",
+        "timeout": "Délai dépassé lors de la vérification de l’état Git. Les dépôts volumineux ou les nombreuses modifications non validées peuvent prendre trop de temps ; organisez-les ou utilisez worktree.",
         "savedMissing": "Ces modifications enregistrées ne sont plus disponibles",
         "undoUnavailable": "Ce changement de branche ne peut plus être annulé"
       },
@@ -15814,7 +15889,8 @@
       "startedAt": "Démarré à {{time}}",
       "recentOutput": "Sortie récente · mise à jour il y a {{time}}",
       "noOutputYet": "Aucune sortie",
-      "toolUses_many": "{{count}} utilisations d'outils"
+      "toolUses_many": "{{count}} utilisations d'outils",
+      "recentActivity": "Activité récente"
     },
     "planPill": {
       "step": "Étape {{current}} sur {{total}}",
@@ -16359,7 +16435,36 @@
       },
       "status": {
         "running": "En cours d'exécution",
-        "done": "Terminé"
+        "done": "Terminé",
+        "failed": "Échec"
+      },
+      "collab": {
+        "wait": "Attendre le sous-Agent",
+        "waitCount_one": "Attendre {{count}} sous-Agent",
+        "waitCount_other": "Attendre {{count}} sous-Agents",
+        "waitCount_many": "Attendre {{count}} sous-Agents",
+        "sendInput": "Envoyer des instructions au sous-Agent",
+        "sendInputCount_one": "Envoyer des instructions à {{count}} sous-Agent",
+        "sendInputCount_other": "Envoyer des instructions à {{count}} sous-Agents",
+        "sendInputCount_many": "Envoyer des instructions à {{count}} sous-Agents",
+        "resume": "Reprendre le sous-Agent",
+        "resumeCount_one": "Reprendre {{count}} sous-Agent",
+        "resumeCount_other": "Reprendre {{count}} sous-Agents",
+        "resumeCount_many": "Reprendre {{count}} sous-Agents",
+        "close": "Fermer le sous-Agent",
+        "closeCount_one": "Fermer {{count}} sous-Agent",
+        "closeCount_other": "Fermer {{count}} sous-Agents",
+        "closeCount_many": "Fermer {{count}} sous-Agents",
+        "spawn": "Démarrer le sous-Agent",
+        "spawnCount_one": "Démarrer {{count}} sous-Agent",
+        "spawnCount_other": "Démarrer {{count}} sous-Agents",
+        "spawnCount_many": "Démarrer {{count}} sous-Agents",
+        "targets": "Cibles : {{targets}}",
+        "targetCount_one": "Cibles : {{count}} sous-Agent",
+        "targetCount_other": "Cibles : {{count}} sous-Agents",
+        "targetCount_many": "Cibles : {{count}} sous-Agents",
+        "prompt": "Instruction : {{prompt}}",
+        "model": "Modèle : {{model}}"
       }
     },
     "systemCard": {
@@ -17308,6 +17413,22 @@
       "piRemoteUnsupported": "Pi s'exécute uniquement en local et ne peut pas utiliser d'hôtes distants SSH. Passez à Claude ou Codex pour utiliser cet hôte.",
       "localWorktreeCleanupPending": "La session worktree locale précédente est toujours en attente de nettoyage. Réessayez une fois le nettoyage terminé.",
       "remoteWorktreeCleanupPending": "Le worktree distant précédent est toujours en attente de nettoyage. Reconnectez l'appareil et réessayez.",
+      "remoteWorktreeCleanupOpenSettings": "Nettoyage des worktrees",
+      "remoteWorktreeCleanup": {
+        "inProgress": "Le worktree distant précédent est encore en cours de création ou d’extraction. Patientez un instant et réessayez, ou gérez-le dans Paramètres → Stockage.",
+        "preserved": "L’appareil distant a conservé le worktree précédent (modifications possibles ou encore utilisé). Réessayez ou débloquez-le dans Paramètres → Stockage.",
+        "preservedDirty": "L’appareil distant a conservé le worktree précédent car il contient des modifications non validées. Vérifiez-le sur cet appareil ou débloquez-le dans Paramètres → Stockage.",
+        "preservedKeepSentinel": "L’appareil distant a conservé le worktree précédent car il porte un marqueur de conservation (.worktree-keep). Gérez-le dans Paramètres → Stockage.",
+        "preservedLiveReference": "L’appareil distant a conservé le worktree précédent car une autre tâche ou un processus l’utilise encore. Réessayez ou débloquez-le dans Paramètres → Stockage.",
+        "preservedBranchMismatch": "L’appareil distant n’a pas pu vérifier l’état de la branche ou du répertoire du worktree précédent. Réessayez ou débloquez-le dans Paramètres → Stockage.",
+        "preservedIncludeFilesChanged": "L’appareil distant a conservé le worktree précédent car ses fichiers de configuration locaux ont changé. Réessayez ou débloquez-le dans Paramètres → Stockage.",
+        "preservedIgnoredFiles": "L’appareil distant a conservé le worktree précédent car il contient des fichiers ignorés non reproductibles. Réessayez ou débloquez-le dans Paramètres → Stockage.",
+        "preservedRemoveFailed": "L’appareil distant n’a pas pu supprimer le répertoire du worktree précédent. Vérifiez les permissions ou les fichiers ouverts sur cet appareil, ou débloquez-le dans Paramètres → Stockage.",
+        "mismatch": "L’appareil distant a refusé la clé de nettoyage du worktree. Réessayez ou débloquez-le dans Paramètres → Stockage.",
+        "unsupported": "La version de Cindy sur l’appareil distant ne prend pas en charge le nettoyage automatique des worktrees. Mettez Cindy à jour sur cet appareil ou débloquez-le dans Paramètres → Stockage.",
+        "createStarted": "La création de la tâche distante précédente n’a pas été confirmée. Reconnectez l’appareil pour la vérifier ou débloquez-le dans Paramètres → Stockage.",
+        "storage": "Impossible de lire ou d’écrire le registre local de nettoyage des worktrees distants. Vérifiez Paramètres → Stockage."
+      },
       "remoteProviderUpdating": "Les identifiants du fournisseur sont en cours de mise à jour : réessayez dans un instant",
       "remoteProviderUnsupported": "Ce fournisseur n'est pas pris en charge dans les sessions SSH distantes : choisissez une autre source",
       "remoteNativeOauthUnavailable": "Les tâches distantes ne peuvent pas utiliser d'abonnement Claude : choisissez une passerelle ou un modèle avec clé API",
@@ -17405,7 +17526,8 @@
         "all": "Tous",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Moteur de plugin"
       },
       "filterGroupBy": {
         "project": "Projet",
@@ -19259,6 +19381,24 @@
         "reconnectFailed": "Reconnexion impossible. Vérifiez les places disponibles avant de réessayer."
       },
       "pluginTitle": "Déclenchement par événement de plugin"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} suivis de PR en pause",
+      "viewPaused": "Voir",
+      "resumeAll": "Tout reprendre",
+      "cleanMerged": "Nettoyer les fusionnées",
+      "checking": "Vérification…",
+      "resumeAllConfirmTitle": "Reprendre {{count}} suivis de PR en pause ?",
+      "resumeAllConfirmDescription": "Reprend toutes les automatisations de PR en pause dans cette vue et recalcule leur prochaine vérification.",
+      "resumeAllConfirmAction": "Tout reprendre",
+      "resumeAllDone": "{{count}} suivis de PR repris",
+      "resumeAllPartial": "{{resumed}} suivis de PR repris ({{failed}} échecs)",
+      "noMergedFound": "Aucune PR fusionnée ou fermée parmi les automatisations en pause",
+      "cleanMergedConfirmTitle": "Supprimer {{count}} automatisations de PR terminées ?",
+      "cleanMergedConfirmDescription": "Ces automatisations en pause suivent des PR déjà fusionnées ou fermées : {{names}}",
+      "cleanMergedConfirmAction": "Supprimer",
+      "cleanMergedDone": "{{count}} automatisations de PR terminées supprimées",
+      "checkFailed": "Impossible de vérifier le statut des PR pour le moment"
     }
   },
   "issueTracker": {
@@ -23442,7 +23582,10 @@
       "mergedLabel_one": "{{name}} · route ({{count}} source)",
       "mergedLabel_other": "{{name}} · route ({{count}} sources)",
       "routeDecides": "La route « {{name}} » décide de la source utilisée par cette tâche",
-      "quotaOf": "Quota : {{name}}"
+      "quotaOf": "Quota : {{name}}",
+      "managedBy": "Géré par « {{name}} »",
+      "detach": "Détacher",
+      "detached": "Détaché du routage intelligent. Le modèle actuel est conservé."
     },
     "why": {
       "expiringQuota": "Il lui reste {{left}} % de quota, réinitialisé le {{reset}} : elle passe en premier",
@@ -23480,7 +23623,7 @@
       "newRoute": "Nouvelle route",
       "newRouteName": "Nouvelle route",
       "routesEmpty": "Aucune route pour l'instant. Créez-en une et ajoutez-y quelques sources.",
-      "scopeNote": "Le routage intelligent s'applique aux tâches de cet ordinateur. Une nouvelle tâche choisit une source au démarrage. En choisir une dans une tâche en cours la bascule une fois, tout de suite ; elle ne change plus d'elle-même ensuite.",
+      "scopeNote": "Le routage intelligent gère en continu les tâches sur cet ordinateur et ses points d’entrée compatibles. Une fois sélectionné — au démarrage ou en cours de tâche — il vérifie la disponibilité et le quota avant chaque tour, bascule vers une source vision pour les images, préserve le cache actif et prend le relais en cas d’erreur jusqu’à ce que vous le détachiez ou choisissiez un modèle précis.",
       "back": "Retour au routage intelligent",
       "name": "Nom",
       "nameHint": "Affiché dans le sélecteur de modèles.",
@@ -23616,6 +23759,11 @@
       "deviceDefaultReadOnly": "Mettez cet ordinateur à jour pour modifier ici son modèle par défaut.",
       "deviceUnavailable": "Impossible de lire les réglages des compagnons de cet ordinateur pour le moment. Vérifiez qu’il est en ligne, puis rouvrez.",
       "deviceLoading": "Lecture des réglages de cet ordinateur…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "Source actuelle indisponible ou quota épuisé ; bascule avant envoi",
+      "imageInput": "Le message contient des images ; bascule vers une source compatible vision",
+      "cacheExpired": "Fenêtre de cache expirée ; source réévaluée selon la stratégie de la route"
     }
   },
   "projectSettings": {

@@ -6,6 +6,7 @@ import {
   buildInboxHomeSections,
   buildMixedHomeRows,
   movePinnedItem,
+  reorderPinnedItemByDropIndex,
   HOME_MAIN_SECTION_KEY,
   homeFolderRowsShareRenderData,
   homeRowsShareRenderData,
@@ -77,6 +78,35 @@ describe('buildHomeSections', () => {
       false, false, { pinnedOrder })[0].data.map(row => row.key);
     expect(rows([a, b])).toEqual(['pinned:a', 'pinned:b']);
     expect(rows([a, pin('b', '2026-06-03')])).toEqual(['pinned:b', 'pinned:a']);
+  });
+
+  // Unit: reorderPinnedItemByDropIndex drives long-press drag reorder of pinned tasks.
+  // Existing movePinnedItem tests only cover adjacent +-1 steps, not arbitrary drop indices
+  // or cross-device slot retention when a visible subset is dragged.
+  it('reorders pinned tasks by drop index while preserving hidden-device slots and dropping stale generations', () => {
+    const pin = (id: string, date: string) => {
+      const item = listItem(id, date);
+      return { ...item, session: { ...item.session, pinnedAt: date } };
+    };
+    const a = pin('a', '2026-06-03');
+    const b = pin('b', '2026-06-02');
+    const c = pin('c', '2026-06-01');
+    const key = (id: string, date: string) => `${id}\0${date}`;
+    const hiddenOtherDevice = key('other', '2026-06-02');
+    const staleA = key('a', '2026-05-01');
+    const initial = [staleA, key('a', '2026-06-03'), hiddenOtherDevice, key('b', '2026-06-02'), key('c', '2026-06-01')];
+
+    // Dropping onto the same slot produces no change.
+    expect(reorderPinnedItemByDropIndex(initial, [a, b, c], 'a', 0)).toBeNull();
+
+    // Drag first pinned item past the last item; hidden other-device slot stays intact and staleA is pruned.
+    const movedDown = reorderPinnedItemByDropIndex(initial, [a, b, c], 'a', 2)!;
+    expect(movedDown).toEqual([key('b', '2026-06-02'), hiddenOtherDevice, key('c', '2026-06-01'), key('a', '2026-06-03')]);
+    const [pins] = buildHomeSections(presentation({ pinned: [a, b, c] }), false, false, {
+      pinnedSort: 'manual',
+      pinnedOrder: movedDown,
+    });
+    expect(pins.data.map((row) => row.key)).toEqual(['pinned:b', 'pinned:c', 'pinned:a']);
   });
 
   it('置顶收起时保留分区但清空 data(表头照常渲染,只折叠下属会话)', () => {
@@ -579,6 +609,32 @@ it('orders each inbox section by latest activity, whether or not a task is unrea
     .find(s => s.key === key)!.data.flatMap(row => row.kind === 'session' ? [row.item.session.id] : []);
   expect(ids('inbox-inbox')).toEqual(['new-read', 'old-unread']);
   expect(ids('inbox-archived')).toEqual(['new-read-done', 'old-unread-done']);
+});
+
+// 2026-11-27 user decision (task-inbox.md「分区与动作」): Done rows sort and display by archivedAt
+// (falling back to regular activity for legacy rows), while the regular list keeps lastActivityAt.
+it('sorts and displays inbox-archived rows by archivedAt with fallback for legacy rows', () => {
+  const archivedItem = (id: string, lastActivityAt: string, archivedAt: string | null) => ({
+    ...listItem(id, lastActivityAt),
+    session: { id, status: 'archived', lastActivityAt, archivedAt },
+  }) as unknown as RemoteSessionListItem;
+  const oldJustDone = archivedItem('old-just-done', '2026-11-20T00:00:00.000Z', '2026-11-27T10:00:00.000Z');
+  const recentEarlierDone = archivedItem('recent-earlier-done', '2026-11-27T09:00:00.000Z', '2026-11-27T09:30:00.000Z');
+  const legacyNoArchivedAt = archivedItem('legacy-done', '2026-11-27T09:45:00.000Z', null);
+  const home = presentation({ chats: [recentEarlierDone, oldJustDone, legacyNoArchivedAt] });
+  const empty = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
+  const archivedSection = buildInboxHomeSections(home, new Set(), empty, Date.parse('2026-11-27T11:00:00.000Z'))
+    .find(section => section.key === 'inbox-archived')!;
+  const rows = archivedSection.data.flatMap(row => row.kind === 'session' ? [[row.item.session.id, row.item.lastActivityAt]] : []);
+  expect(rows).toEqual([
+    ['old-just-done', '2026-11-27T10:00:00.000Z'],
+    ['legacy-done', '2026-11-27T09:45:00.000Z'],
+    ['recent-earlier-done', '2026-11-27T09:30:00.000Z'],
+  ]);
+  // Regular home list retains the original activity timestamp unchanged.
+  const regularRows = buildHomeSections(home, false, false)[0].data
+    .flatMap(row => row.kind === 'session' ? [[row.item.session.id, row.item.lastActivityAt]] : []);
+  expect(regularRows.find(([id]) => id === 'old-just-done')?.[1]).toBe('2026-11-20T00:00:00.000Z');
 });
 
 // 2026-11-18 user decision: teammates' routine results filled the phone's inbox. Teammate tasks
