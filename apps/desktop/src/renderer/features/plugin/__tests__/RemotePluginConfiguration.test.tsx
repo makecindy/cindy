@@ -19,9 +19,6 @@ vi.mock('../remotePluginManagementClient', async (original) => ({
   ...(await original<typeof import('../remotePluginManagementClient')>()),
   invokePluginManagement: invoke,
 }));
-vi.mock('../GhostPluginDetailView', () => ({
-  DetailSectionHeader: ({ title }: { title: string }) => <h2>{title}</h2>,
-}));
 vi.mock('@/cindy-brain/PluginTaskPrefs', () => ({
   PluginTaskPrefs: ({
     remote,

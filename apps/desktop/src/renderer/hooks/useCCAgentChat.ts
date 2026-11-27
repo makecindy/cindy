@@ -203,6 +203,7 @@ interface UseCCAgentChatReturn {
   /** 当前 terminal error 的稳定 reason key(如 'silent-stop-exhausted');ErrorBanner
    *  据此渲染专用 action。仅 error 非空时有意义。 */
   errorReason: string | null;
+  reconnectHandoff?: ChatMessage['reconnectHandoff'];
   /** Structured details for a tool-loop terminal error, when available. */
   toolLoop: ToolLoopErrorDetails | null;
   outputLimit: OutputLimitDetails | null;
@@ -916,6 +917,7 @@ export function useCCAgentChat(
         : lightState.recoverableError != null
           ? (lightState.errorReason ?? null)
           : null,
+    reconnectHandoff: lightState.error ? lightState.reconnectHandoff : undefined,
     toolLoop: lightState.error ? (lightState.toolLoop ?? null) : null,
     outputLimit: lightState.error ? (lightState.outputLimit ?? null) : null,
     // 当前 error 是非终止 recoverableError(turn 在跑,daemon 自动重试中):

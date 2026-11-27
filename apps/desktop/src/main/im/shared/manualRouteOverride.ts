@@ -11,7 +11,7 @@
  */
 import { eq } from 'drizzle-orm';
 
-import { dbToMakerAgentKind } from '../../../shared/agentKindConversion.js';
+import { dbToMakerEngineKind } from '../../../shared/agentKindConversion.js';
 import {
   IM_DEFAULT_SETTINGS_CHANNELS,
   type ImDefaultSettingsChannel,
@@ -57,7 +57,7 @@ export async function markImSessionManualRouteOverride(sessionId: string): Promi
     && (source === 'feishu' ? !!row.feishuBotAppId : !!row.imBotContextId);
   if (!personal && !parseImDefaultRouteRecord(row.imDefaultRoute)) return;
   const route: ImDefaultRoute = {
-    agentKind: dbToMakerAgentKind(row.agentKind),
+    agentKind: dbToMakerEngineKind(row.agentKind),
     model: row.model,
     providerId: row.providerId?.trim() || null,
     agentDeviceId: row.agentDeviceId ?? null,

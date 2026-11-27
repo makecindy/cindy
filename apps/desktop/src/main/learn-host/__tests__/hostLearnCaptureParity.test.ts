@@ -61,7 +61,7 @@ let listing: (session: { agentKind: AgentKind }) => ListAgentSkillsResult = () =
 const maker = {
   getSession: (id: string) => sessions.get(id) ?? null,
   listAgentRuntimeSkills: async (agentKind: AgentKind, opts: unknown) => { calls.push(['runtime', agentKind, opts]); return listing({ agentKind }); },
-  listAgentSkills: async (agentKind: AgentKind, opts: unknown) => { calls.push(['agent', agentKind, opts]); return listing({ agentKind }); },
+  listAgentSkills: async (agentKind: AgentKind | 'acp', opts: unknown) => { calls.push(['agent', agentKind, opts]); return listing({ agentKind: agentKind as AgentKind }); },
 };
 let desktop: Capture;
 let host: Capture;

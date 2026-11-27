@@ -7,6 +7,7 @@
  * JS 层引用,不影响 fingerprint(以 mobile:release:check 实测为准)。
  */
 import { Directory, File, Paths } from "expo-file-system";
+import { isCanonicalBase64, isLooseBase64Chars, parseBase64DataUrl } from "@cindy/maker-shared";
 import { releasePeerMedia } from '@/device-link/peerFileRegistry';
 
 import {
@@ -38,7 +39,10 @@ async function downloadCancellable(
   });
   const task = FileSystem.createDownloadResumable(url, target.uri, {}, (progress) => {
     if (!signal.aborted) onProgress?.(progress.totalBytesWritten, progress.totalBytesExpectedToWrite);
-    if (maxBytes !== undefined && progress.totalBytesWritten > maxBytes) {
+    if (
+      maxBytes !== undefined &&
+      (progress.totalBytesWritten > maxBytes || progress.totalBytesExpectedToWrite > maxBytes)
+    ) {
       rejectStopped(new Error('PREVIEW_TOO_LARGE'));
       void task.cancelAsync().catch(() => undefined);
     }
@@ -82,23 +86,30 @@ export async function copyRemoteFile(
   if (url.startsWith("data:")) {
     // Video data URLs are already playable. Decode their bounded payload in
     // native IO instead of building another full binary string and JS array.
-    const videoHeader = /^data:video\/[\w.+-]+;base64,/i.exec(url);
-    if (videoHeader) {
-      const base64 = url.slice(videoHeader[0].length);
+    const videoData = parseBase64DataUrl(url, /^data:video\/[\w.+-]+;base64$/i, {
+      allowEmpty: true,
+      allowLineTerminators: true,
+    });
+    if (videoData) {
+      const base64 = videoData.payload;
       const bytes = Math.floor(base64.length * 3 / 4) - (base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0);
       if (bytes > Math.min(maxBytes ?? Infinity, 64 * 1024 * 1024)
-        || base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) throw new Error("INVALID_INLINE_FILE");
+        || !isCanonicalBase64(base64)) throw new Error("INVALID_INLINE_FILE");
       if (signal?.aborted) throw new Error("DOWNLOAD_CANCELLED");
       const FileSystem = await import("expo-file-system/legacy");
       await FileSystem.writeAsStringAsync(target.uri, base64, { encoding: FileSystem.EncodingType.Base64 });
       return target;
     }
-    const match = /^data:[\w.+-]+\/[\w.+-]+;base64,([A-Za-z0-9+/=]*)$/.exec(
-      url,
-    );
-    if (!match || match[1].length > 1024 * 1024)
+    const parsed = parseBase64DataUrl(url, /^data:[\w.+-]+\/[\w.+-]+;base64$/, {
+      allowEmpty: true,
+    });
+    if (
+      !parsed
+      || parsed.payload.length > 1024 * 1024
+      || !isLooseBase64Chars(parsed.payload, { allowEmpty: true })
+    )
       throw new Error("INVALID_INLINE_FILE");
-    target.writeSync(Uint8Array.from(atob(match[1]), (char) => char.charCodeAt(0)));
+    target.writeSync(Uint8Array.from(atob(parsed.payload), (char) => char.charCodeAt(0)));
     return target;
   }
   if (signal || maxBytes !== undefined || onProgress) return downloadCancellable(url, target, signal ?? new AbortController().signal, maxBytes, onProgress);
@@ -179,6 +190,7 @@ export async function downloadRemoteMediaAsDataUri(
   url: string,
   mimeType: string,
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   return withDownloadedRemoteMediaFile(
     url,
@@ -188,6 +200,7 @@ export async function downloadRemoteMediaAsDataUri(
       const base64 = await file.base64();
       return base64 ? `data:${mimeType};base64,${base64}` : null;
     },
+    signal,
   );
 }
 
@@ -208,7 +221,7 @@ export async function withDownloadedRemoteMediaFile<T>(
     dir.create({ intermediates: true, idempotent: true });
     const unique = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     target = new File(dir, `res-${unique}.${extOfMime(mimeType)}`);
-    const file = await copyRemoteFile(url, target, signal, signal ? maxBytes : undefined);
+    const file = await copyRemoteFile(url, target, signal, maxBytes);
     const size = file.size ?? 0;
     if (signal?.aborted || size < 0 || (size === 0 && !options?.allowEmpty)) return null;
     if (size > maxBytes) {

@@ -4,6 +4,7 @@ import {
   speechSpeedRange,
   voiceModelKey,
   type VoiceConversationModel,
+  type VoiceConversationApi,
   type VoiceConversationSelection,
 } from '@/../shared/voiceConversation';
 
@@ -56,4 +57,16 @@ export function resolveVoiceConfiguration(
     speed: resolvedSpeed,
     speedAdjusted: speed !== undefined && speed !== resolvedSpeed,
   };
+}
+
+/** The composer and the call host must validate the same saved route. */
+export async function readVoiceCallConfiguration(api: VoiceConversationApi, botId: string) {
+  const { realtimeSelection, selection: speechSelection, sentencePlayback = true } = await api.preference(botId);
+  if (realtimeSelection) {
+    const models = await api.realtimeModels?.();
+    const available = models?.some(model => voiceModelKey(model) === voiceModelKey(realtimeSelection));
+    return { selection: available ? realtimeSelection : null, sentencePlayback };
+  }
+  const { selection, protocol } = resolveVoiceConfiguration(await api.models(), speechSelection);
+  return { selection: protocol ? selection : null, sentencePlayback };
 }

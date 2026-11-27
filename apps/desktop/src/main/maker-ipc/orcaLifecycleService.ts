@@ -27,6 +27,7 @@ export interface OrcaEnableTeamParams {
   role?: string;
   label?: string;
   model?: string;
+  modelGroup?: string;
   effort?: OrcaWorkerEffort;
   fast?: boolean | 'ultrafast';
   /** 显式选定的模型来源;语义见 OrcaWorkerCreateParams.providerId。 */
@@ -161,6 +162,7 @@ function normalizeEnableParams(params: OrcaEnableTeamParams): OrcaWorkerCreatePa
     label: explicitLabel ?? createDefaultWorkerLabel(role),
     agent: params.workerAgent,
     model: params.model?.trim() || undefined,
+    modelGroup: params.modelGroup,
     effort: params.effort,
     fast: params.fast,
     providerId: params.providerId,

@@ -9,6 +9,7 @@ import { AcpAgent, type AcpLineTransport, type Logger } from '@cindy/maker-core'
 import { createCheckoutService } from '../worktree/checkout';
 import '../worktree/WorktreeManagerPorts.desktop';
 import { awaitBackgroundCheckout, createWorktree, detectCwd } from '../worktree/WorktreeManager';
+import { createWorkerWorktree } from '../maker-ipc/orcaWorkerProject';
 import { app } from 'electron';
 import type { WorktreeMeta } from '../worktree/types';
 
@@ -359,6 +360,163 @@ it.each(['fresh', 'offline', 'other-source', 'legacy', 'checkout-fails'] as cons
   },
   30_000,
 );
+
+// 测试价值
+// - 生产入口与可观察结果：真实 Git 仓库下 createWorktree({ trackBackgroundCheckout: true }) +
+//   AcpAgent.startSession(session/new) + ensureBackgroundCheckoutReady + session.send(session/prompt)；
+//   验证本机 ACP 可在后台 full checkout 期间提前启动，并在首轮 prompt 前等到完整树落盘。
+// - 规则依据：#11956 叠加本机 ACP 延迟全量检出到 session/prompt 前。
+// - 现有覆盖缺口：上方用例走 awaitFullCheckout: true，未覆盖 trackBackgroundCheckout + ensureBackgroundCheckoutReady。
+// - 最小失败输入：仅通过 stageCheckout 创建 worktree 后，若不在 prompt 前等 ensureBackgroundCheckoutReady，
+//   或后台检出失败被吞掉，则 marker.txt 读取会缺文件或静默失败。
+// - tier：git-integration（真实 Git 仓库与 AcpAgent 传输层）。
+it('defers local ACP full checkout until ensureBackgroundCheckoutReady before session/prompt', async () => {
+  fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-acp-deferred-wt-'));
+  vi.spyOn(app, 'getPath').mockReturnValue(fixture);
+  const repo = path.join(fixture, 'repo');
+  await fs.mkdir(repo);
+  const git = async (cwd: string, ...args: string[]) =>
+    (await exec('git', args, { cwd, windowsHide: true })).stdout.trim();
+  await git(repo, 'init', '-b', 'main');
+  await git(repo, 'config', 'user.name', 'Test');
+  await git(repo, 'config', 'user.email', 'test@example.com');
+  await fs.writeFile(path.join(repo, 'AGENTS.md'), '# rules\n');
+  await fs.writeFile(path.join(repo, 'marker.txt'), 'deferred full checkout content');
+  await git(repo, 'add', 'AGENTS.md', 'marker.txt');
+  await git(repo, 'commit', '-m', 'init');
+
+  const { createWorktree, ensureBackgroundCheckoutReady } = await import('../worktree/WorktreeManager');
+  const created = await createWorktree(
+    { sessionId: 'local-acp-deferred', baseRepo: repo, name: 'local-acp', sourceBranch: 'main' },
+    { trackBackgroundCheckout: true },
+  );
+  expect(created.ok).toBe(true);
+  if (!created.ok) return;
+  // Startup instruction file is checked out synchronously during stageCheckout.
+  expect(await fs.readFile(path.join(created.meta.path, 'AGENTS.md'), 'utf8')).toBe('# rules\n');
+
+  const read = Promise.withResolvers<string>();
+  const logger: Logger = {
+    trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child: () => logger,
+  };
+  let onLine: ((line: string) => void) | undefined;
+  let pluginCwd = '';
+  const transport: AcpLineTransport = {
+    write(line) {
+      const { id, method, params } = JSON.parse(line);
+      const reply = (result: object) => queueMicrotask(() => {
+        onLine?.(JSON.stringify({ jsonrpc: '2.0', id, result }));
+      });
+      if (method === 'initialize') reply({ protocolVersion: 1, agentCapabilities: {}, authMethods: [] });
+      if (method === 'session/new') {
+        pluginCwd = params.cwd;
+        reply({ sessionId: 'deferred-fixture-session' });
+      }
+      if (method === 'session/prompt') {
+        void fs.readFile(path.join(pluginCwd, 'marker.txt'), 'utf8').then((content) => {
+          read.resolve(content);
+          reply({ stopReason: 'end_turn' });
+        }, read.reject);
+      }
+    },
+    onLine(listener) {
+      onLine = listener;
+      return () => { onLine = undefined; };
+    },
+    onClose: () => () => {},
+    close: async () => {},
+  };
+  const agent = new AcpAgent({
+    auth: {
+      getState: async () => ({ authenticated: true }),
+      triggerLogin: async () => ({ authenticated: true }),
+      logout: async () => {},
+      getAuthEnv: async () => ({}),
+    },
+    binaryPath: '', runtimeConfig: {}, logger, clientInfo: { name: 'fixture', version: '1' },
+    endpoints: { connect: async () => transport },
+  });
+  const session = await agent.startSession({
+    workingDir: created.meta.path, providerId: 'acp-plugin:fixture:marker', model: '',
+  });
+  try {
+    await ensureBackgroundCheckoutReady('local-acp-deferred');
+    await session.send({ type: 'user', content: 'Read marker.txt' });
+    await expect(read.promise).resolves.toBe('deferred full checkout content');
+  } finally {
+    await session.close();
+  }
+}, 30_000);
+
+// Orca Workers based on the origin default used to skip the refresh, so whole
+// batches started behind main. Tool calls name it as `origin/main`, which the
+// Desktop-only refresh did not recognize. Minimal failure: the remote advances
+// after the local fetch. Real Git + local bare remote, git-integration tier.
+it('creates an Orca Worker from the freshly fetched origin default', async () => {
+  fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-worker-default-'));
+  vi.spyOn(app, 'getPath').mockReturnValue(fixture);
+  const remote = path.join(fixture, 'remote.git');
+  const seed = path.join(fixture, 'seed');
+  const repo = path.join(fixture, 'repo');
+  await fs.mkdir(seed);
+  const git = async (cwd: string, ...args: string[]) =>
+    (await exec('git', args, { cwd, windowsHide: true, timeout: 10_000 })).stdout.trim();
+  await git(seed, 'init', '--initial-branch=main');
+  await git(seed, 'config', 'user.name', 'Test');
+  await git(seed, 'config', 'user.email', 'test@example.invalid');
+  await fs.writeFile(path.join(seed, 'tracked.txt'), 'old');
+  await git(seed, 'add', '.');
+  await git(seed, 'commit', '-m', 'old');
+  await git(fixture, 'clone', '--bare', seed, remote);
+  await git(fixture, 'clone', remote, repo);
+  const old = await git(repo, 'rev-parse', 'HEAD');
+  await git(repo, 'branch', 'origin/main');
+  await fs.writeFile(path.join(seed, 'tracked.txt'), 'new');
+  await git(seed, 'commit', '-am', 'new');
+  await git(seed, 'push', remote, 'main');
+  const latest = await git(seed, 'rev-parse', 'HEAD');
+
+  // #12391 P1: the Desktop source picker supplies a local short name while
+  // the Orca tool uses the same string as a remote default shorthand.
+  const desktop = await createWorktree(
+    { sessionId: 'desktop-local', baseRepo: repo, name: 'desktop-local', sourceBranch: 'origin/main' },
+    { refreshDefaultSource: true, awaitFullCheckout: true },
+  );
+  expect(desktop.ok, JSON.stringify(desktop)).toBe(true);
+  if (!desktop.ok) return;
+  expect(await git(desktop.meta.path, 'rev-parse', 'HEAD')).toBe(old);
+  expect(desktop.meta.sourceBranch).toBe('refs/heads/origin/main');
+  expect(await git(repo, 'rev-parse', 'refs/remotes/origin/main')).toBe(old);
+
+  // #12391 review: a colliding local branch made the short remote name
+  // ambiguous at checkout. A full local ref must still select the local branch.
+  const localWorker = await createWorkerWorktree('orca-local', repo, 'refs/heads/origin/main');
+  await awaitBackgroundCheckout('orca-local');
+  expect(await git(localWorker, 'rev-parse', 'HEAD')).toBe(old);
+  expect(await git(repo, 'rev-parse', 'refs/remotes/origin/main')).toBe(old);
+
+  const workerDir = await createWorkerWorktree('orca-worker', repo, 'origin/main');
+  await awaitBackgroundCheckout('orca-worker');
+  expect(await git(workerDir, 'rev-parse', 'HEAD')).toBe(latest);
+  expect(await fs.readFile(path.join(workerDir, 'tracked.txt'), 'utf8')).toBe('new');
+  expect(metadata.get('orca-worker')?.sourceBranch).toBe('refs/remotes/origin/main');
+
+  // #12391: once origin's default changes, keep the selected tracking ref
+  // and its local commit. The same-named local branch remains at the old commit.
+  await git(repo, 'update-ref', 'refs/remotes/origin/trunk', latest);
+  await git(repo, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+  await git(seed, 'commit', '--allow-empty', '-m', 'after the default changed');
+  await git(seed, 'push', remote, 'main');
+  const nonDefaultWorker = await createWorkerWorktree('orca-non-default', repo, 'origin/main');
+  await awaitBackgroundCheckout('orca-non-default');
+  expect(await git(nonDefaultWorker, 'rev-parse', 'HEAD')).toBe(latest);
+  expect(metadata.get('orca-non-default')?.sourceBranch).toBe('refs/remotes/origin/main');
+
+  await git(repo, 'update-ref', '-d', 'refs/remotes/origin/main');
+  await expect(createWorkerWorktree('orca-missing-remote', repo, 'origin/main'))
+    .rejects.toThrow('Worker worktree creation failed');
+  expect(metadata.has('orca-missing-remote')).toBe(false);
+}, 30_000);
 
 // #6792: createWorktree must populate the linked worktree's full index after
 // background checkout. Existing checks use ordinary repositories. Reproduce

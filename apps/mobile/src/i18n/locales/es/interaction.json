@@ -89,7 +89,7 @@
     "submitAnswerAccessibility": "Enviar respuesta",
     "next": "Siguiente",
     "answerRequired": "Selecciona o introduce una respuesta para continuar.",
-    "submit": "Enviar",
+    "submit": "Enviar respuesta",
     "sendAndContinue": "Enviar y continuar",
     "closeAnswer": "Cerrar",
     "planReviewTitle": "Revisar el plan de Claude",
@@ -274,6 +274,7 @@
     "inlineFormActionGeneric": "Ingresa una configuración en tu computadora"
   },
   "inputHandoff": {
+    "refreshVerification": "Actualizar código QR",
     "originWarning": {
       "insecure": "Esta página no utiliza una conexión segura. Lo que introduzcas podrá ser leído por otros.",
       "ip-address": "Esta página utiliza una dirección IP en lugar de un dominio. Asegúrate de que sea el sitio que esperas.",
@@ -296,7 +297,7 @@
       "expired": "La entrada manual finalizó tras esperar demasiado."
     },
     "failure": {
-      "permission": "Cindy no puede leer la interfaz de este Mac. Comprueba el permiso de control de la copia de Cindy que está en ejecución. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad.",
+      "permission": "Cindy no puede leer la interfaz de este Mac. Comprueba el permiso de control de la copia de Cindy que está en ejecución. En macOS 27.3 o posterior, el permiso de control está en «System & App Protection Override». En versiones anteriores, está en Accesibilidad. Si Cindy solo puede controlar algunas apps, añade también esta.",
       "target_gone": "La ventana de destino se cerró.",
       "unreadable": "No se puede leer esta pantalla. Completa el paso en la computadora anfitriona y devuelve el control al Agent.",
       "action_failed": "Esa acción no surtió efecto. Comprueba la pantalla y vuelve a intentarlo.",

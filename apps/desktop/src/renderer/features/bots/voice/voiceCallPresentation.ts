@@ -1,10 +1,7 @@
-import type { VoiceCallRecord } from '@cindy/maker-core';
-import { readVoiceCallRecord } from '@/../shared/voiceConversation';
+import { hasVoiceCallContent, readVoiceCallRecord } from '@cindy/maker-shared/voice-call-record';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
-export function hasVoiceCallContent(record: VoiceCallRecord): boolean {
-  return record.turns.some((turn) => turn.text.trim().length > 0) || record.handoffs.length > 0;
-}
+export { hasVoiceCallContent } from '@cindy/maker-shared/voice-call-record';
 
 /** Display-only: keep failed/interrupted originals and every handoff state.
  * Apply to both live rows and independently loaded history before grouping;

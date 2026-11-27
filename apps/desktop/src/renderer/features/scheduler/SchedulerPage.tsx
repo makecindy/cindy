@@ -43,6 +43,8 @@ import type {
   ScheduleTemplate,
   UpdateScheduleInput,
 } from '@cindy/maker-scheduler';
+import { schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
+import { parseSessionPrUrl, prStatusKey, type PrStatusResult } from '@cindy/maker-shared';
 
 import { useHorizontalResize } from '@/hooks/useHorizontalResize';
 
@@ -143,6 +145,7 @@ export function SchedulerPage() {
   // Status 筛选默认 'all'(默认展示全部任务,含 paused);用户在 popover 主动
   // 切换后持久化,重进页面恢复上次选择(issue #75)。
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(loadStatusFilter);
+  const [pausedPrBusy, setPausedPrBusy] = useState(false);
   // 创建一个新 automation 后想自动选中它，但 selection useEffect 会在 sorted 还没
   // 包含新 id 的那一帧把 selectedId 重置成 sorted[0]。用 ref 暂存 pending id，
   // 等下一轮 sorted 刷新到含有该 id 时再 set，避免被覆盖。
@@ -250,6 +253,11 @@ export function SchedulerPage() {
     const target = normalizeWorkingDir(filterWorkingDir);
     return schedules.filter((s) => normalizeWorkingDir(s.workingDir ?? null) === target);
   }, [schedules, filterWorkingDir]);
+
+  const pausedPrSchedules = useMemo(
+    () => scopedByDir.filter((s) => s.status === 'paused' && schedulePrTriggers(s).length > 0),
+    [scopedByDir],
+  );
 
   const filtered = useMemo(() => {
     let list = scopedByDir;
@@ -460,11 +468,6 @@ export function SchedulerPage() {
         toast.warning(t('scheduler.list.promote.noWorkingDir'));
         return;
       }
-      // 插件引擎只在装了插件的这台电脑上，项目自动化会提交给所有成员。
-      if (s.agentKind === 'acp' || s.modelAgentKind === 'acp') {
-        toast.warning(t('scheduler.list.promote.pluginEngine'));
-        return;
-      }
       try {
         await window.electronAPI.maker.projectAutomation.upsertSchedule({
           workingDir: s.workingDir,
@@ -551,6 +554,118 @@ export function SchedulerPage() {
     [requestDeleteSchedule],
   );
 
+  const handleResumeAllPausedPrs = useCallback(async () => {
+    const targets = pausedPrSchedules;
+    if (targets.length === 0 || pausedPrBusy) return;
+    if (targets.length > 1) {
+      const ok = await confirm({
+        title: t('scheduler.pause.resumeAllConfirmTitle', { count: targets.length }),
+        description: t('scheduler.pause.resumeAllConfirmDescription'),
+        confirmText: t('scheduler.pause.resumeAllConfirmAction'),
+        cancelText: t('scheduler.confirm.pause.cancel'),
+      });
+      if (!ok) return;
+    }
+    setPausedPrBusy(true);
+    try {
+      const results = await Promise.allSettled(
+        targets.map((s) => window.electronAPI.maker.schedule.resume(s.id)),
+      );
+      const resumed = results.filter((r) => r.status === 'fulfilled').length;
+      const failed = results.length - resumed;
+      if (failed === 0) {
+        toast.success(t('scheduler.pause.resumeAllDone', { count: resumed }));
+      } else {
+        toast.warning(t('scheduler.pause.resumeAllPartial', { resumed, failed }));
+      }
+      void refresh();
+    } finally {
+      setPausedPrBusy(false);
+    }
+  }, [confirm, pausedPrBusy, pausedPrSchedules, refresh, t]);
+
+  const handleCleanMergedPausedPrs = useCallback(async () => {
+    const candidates = pausedPrSchedules.filter((s) => s.source !== 'project');
+    if (candidates.length === 0 || pausedPrBusy) return;
+    setPausedPrBusy(true);
+    try {
+      const refsBySchedule = new Map<string, NonNullable<ReturnType<typeof parseSessionPrUrl>>[]>();
+      const uniqueQueries = new Map<string, NonNullable<ReturnType<typeof parseSessionPrUrl>>>();
+      for (const s of candidates) {
+        const refs = schedulePrTriggers(s)
+          .map((rule) => parseSessionPrUrl(rule.url))
+          .filter((ref): ref is NonNullable<ReturnType<typeof parseSessionPrUrl>> => ref !== null);
+        if (refs.length === 0) continue;
+        refsBySchedule.set(s.id, refs);
+        for (const ref of refs) uniqueQueries.set(prStatusKey(ref), ref);
+      }
+      const queryList = [...uniqueQueries.values()];
+      if (queryList.length === 0) {
+        toast.info(t('scheduler.pause.noMergedFound'));
+        return;
+      }
+      const statusMap = new Map<string, PrStatusResult>();
+      let okCount = 0;
+      for (let i = 0; i < queryList.length; i += 10) {
+        const batch = queryList.slice(i, i + 10).map((ref) => ({
+          owner: ref.owner,
+          repo: ref.repo,
+          prNumber: ref.prNumber,
+          ...(ref.provider === 'gitlab' ? { provider: ref.provider, host: ref.host } : {}),
+        }));
+        const results = (await window.electronAPI.gitContext.getPrStatuses(batch, {
+          refresh: true,
+        })) as PrStatusResult[];
+        for (const result of results) {
+          statusMap.set(prStatusKey(result), result);
+          if (result.ok) okCount += 1;
+        }
+      }
+      if (okCount === 0) {
+        toast.error(t('scheduler.pause.checkFailed'));
+        return;
+      }
+      const completed = candidates.filter((s) => {
+        const refs = refsBySchedule.get(s.id);
+        if (!refs || refs.length === 0) return false;
+        return refs.every((ref) => {
+          const st = statusMap.get(prStatusKey(ref));
+          return Boolean(st?.ok && (st.status === 'merged' || st.status === 'closed'));
+        });
+      });
+      if (completed.length === 0) {
+        toast.info(t('scheduler.pause.noMergedFound'));
+        return;
+      }
+      const previewNames = completed
+        .slice(0, 5)
+        .map((s) => s.name)
+        .join(', ');
+      const namesText =
+        completed.length > 5 ? `${previewNames} (+${completed.length - 5})` : previewNames;
+      const ok = await confirm({
+        title: t('scheduler.pause.cleanMergedConfirmTitle', { count: completed.length }),
+        description: t('scheduler.pause.cleanMergedConfirmDescription', { names: namesText }),
+        confirmText: t('scheduler.pause.cleanMergedConfirmAction'),
+        cancelText: t('scheduler.confirm.delete.cancel'),
+        confirmVariant: 'destructive',
+      });
+      if (!ok) return;
+      const deleted = await Promise.allSettled(
+        completed.map((s) => window.electronAPI.maker.schedule.delete(s.id)),
+      );
+      const count = deleted.filter((r) => r.status === 'fulfilled').length;
+      if (count > 0) {
+        toast.success(t('scheduler.pause.cleanMergedDone', { count }));
+        void refresh();
+      }
+    } catch {
+      toast.error(t('scheduler.pause.checkFailed'));
+    } finally {
+      setPausedPrBusy(false);
+    }
+  }, [confirm, pausedPrBusy, pausedPrSchedules, refresh, t]);
+
   // EmptyState 只在「整库没有任务」时显示，避免 workingDir / status
   // 等用户主动筛选导致的空列表误触发 onboard CTA。
   const isEmpty = !loading && !error && schedules.length === 0;
@@ -631,6 +746,10 @@ export function SchedulerPage() {
               width={taskListWidth}
               onResizeStart={handlePaneResizeStart}
               onResizeReset={handlePaneResizeReset}
+              pausedPrCount={pausedPrSchedules.length}
+              pausedPrBusy={pausedPrBusy}
+              onResumeAllPausedPrs={handleResumeAllPausedPrs}
+              onCleanMergedPausedPrs={handleCleanMergedPausedPrs}
             />
             {selected && (
               <RunHistoryPane

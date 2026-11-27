@@ -232,6 +232,7 @@ import { PiAgent, pickSupportedEffort } from "../index.js";
 import { PiRpcRequestTimeoutError } from "../rpc-client.js";
 import {
   PiNativeProviderProxyNotReadyError,
+  PiByomRouteAbsentError,
   MAIN_OWNED_SEND_CONTEXT,
   type AgentDeps,
   type PiNativeProvidersResult,
@@ -334,6 +335,40 @@ describe("Pi provider-aware model routing", () => {
       rmSync(agentHome, { recursive: true, force: true });
       rmSync(cwd, { recursive: true, force: true });
     }
+  });
+
+  // #12920, unit: the existing switch tests only cover a running task. At
+  // startup an inherited Codex model missing from both Pi catalogs must fail
+  // before spawning Pi, while the same saved route may still open.
+  it('rejects an unsupported inherited model only for a new Maker task', async () => {
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: 'openai-codex', sourceProviderId: 'openai', name: 'OpenAI',
+          baseUrl: 'http://127.0.0.1:9', api: 'openai-codex-responses',
+          models: [{ id: 'gpt-6-sol' }],
+        }],
+        env: {},
+      }),
+    });
+    const options = { workingDir: cwd, model: 'chatgpt/gpt-6.2-sol', providerId: 'openai' };
+
+    await expect(agent.startSession({ ...options, isNewMakerTask: async () => true }))
+      .rejects.toThrow("Model 'chatgpt/gpt-6.2-sol' is unavailable in the current Pi catalog.");
+    expect(captured.spawnBinaryPath).toBeUndefined();
+
+    const existing = await agent.startSession({ ...options, isNewMakerTask: async () => false });
+    await existing.close();
   });
 
   // Standard: the actual Pi launch passes the host account to auth and both authenticated proxy scopes.
@@ -6677,9 +6712,10 @@ describe("Pi provider-aware model routing", () => {
         model: "local-model",
         providerId: "my-local",
       }),
-    ).rejects.toThrow(
-      /BYOM provider 'my-local' cannot serve model 'local-model'/,
-    );
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/BYOM provider 'my-local' cannot serve model 'local-model'/),
+      cause: expect.not.objectContaining({ name: "PiByomRouteAbsentError" }),
+    });
     // 未走到 spawn(--provider 参数从未拼装)。
     expect(captured.args).toEqual([]);
   });
@@ -6709,9 +6745,10 @@ describe("Pi provider-aware model routing", () => {
         model: "local-model",
         providerId: "my-local",
       }),
-    ).rejects.toThrow(
-      /cannot serve model 'local-model'.*refusing to fall back/s,
-    );
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/cannot serve model 'local-model'.*refusing to fall back/s),
+      cause: expect.not.objectContaining({ name: "PiByomRouteAbsentError" }),
+    });
     expect(captured.args).toEqual([]);
   });
 
@@ -6737,7 +6774,10 @@ describe("Pi provider-aware model routing", () => {
         model: "local-model",
         providerId: "my-local",
       }),
-    ).rejects.toThrow(/refusing to fall back to the Cindy gateway/);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/refusing to fall back to the Cindy gateway/),
+      cause: expect.any(PiByomRouteAbsentError),
+    });
     expect(captured.args).toEqual([]);
   });
 
@@ -6796,6 +6836,8 @@ describe("Pi provider-aware model routing", () => {
       model: "local-model",
       providerId: "native-a",
     });
+    await expect(handle.previewModelSwitch!("ghost-model", { providerId: "native-a" }))
+      .resolves.toMatchObject({ action: "unavailable", modelNotOffered: true });
     await expect(
       handle.setModel!("ghost-model", { providerId: "native-a" }),
     ).rejects.toThrow(/does not offer model 'ghost-model'/);
@@ -7725,13 +7767,16 @@ describe("Pi provider-aware model routing", () => {
     }
   });
 
-  it('reports the oversized history response before retry accepts another prompt', async () => {
+  it.each([
+    ['RPC response exceeded 16 MiB and was discarded.', 'pi-retry-history-frame-too-large', undefined],
+    ['550 status code (no body)', 'pi-retry-history-unavailable', 550],
+  ])('rejects a failed history read before retry accepts another prompt: %s', async (error, diagnostic, upstreamStatus) => {
     captured.requestHandler = async command => {
       if (command.type === 'get_state') return { success: true, data: {
         sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
       } };
       if (command.type === 'get_tree') return {
-        success: false, error: 'RPC response exceeded 16 MiB and was discarded.',
+        success: false, error,
       };
       return { success: true, data: {} };
     };
@@ -7740,7 +7785,13 @@ describe("Pi provider-aware model routing", () => {
     const retryStart = captured.requests.length;
     await expect(handle.send({ type: 'user', content: 'same input' }, {
       retryTranscriptUserEntryId: 'accepted',
-    })).rejects.toThrow('RPC response exceeded 16 MiB and was discarded.');
+    })).rejects.toMatchObject({
+      message: diagnostic === 'pi-retry-history-frame-too-large'
+        ? `Pi retry history unavailable: ${error}`
+        : 'Pi retry history unavailable',
+      diagnostic,
+      upstreamStatus,
+    });
     expect(captured.requests.slice(retryStart).filter(r => r.type === 'prompt')).toHaveLength(0);
     await handle.close();
   });

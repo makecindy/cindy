@@ -8,7 +8,7 @@
 
 import type { ControlResult } from '../types.js';
 
-export type HistoryAgentKind = 'cc' | 'codex' | 'pi';
+export type HistoryAgentKind = 'cc' | 'codex' | 'pi' | 'acp';
 export type HistoryOrder = 'asc' | 'desc';
 
 /** Stable business errors exposed by cross-device history readers. */
@@ -74,6 +74,7 @@ export interface HistoryCompanion {
 }
 
 export interface HistorySession {
+  pinnedAt?: number | null;
   id: string;
   title: string;
   workingDir: string | null;

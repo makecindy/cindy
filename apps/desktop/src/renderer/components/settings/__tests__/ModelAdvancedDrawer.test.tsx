@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG, buildUserProvider, resolveModelMetadata } from '@cindy/model-providers';
@@ -17,6 +17,12 @@ const mocks = vi.hoisted(() => ({
   imageMixed: false,
   imageError: false,
   limit: null as number | null,
+  compaction: { pct: 90, isCustomized: false } as { pct: number; isCustomized: boolean },
+  compactionEnabled: false,
+  setCompaction: vi.fn(async () => {}),
+  ownerGeneration: 1,
+  sliderValue: null as number | null,
+  pressValue: null as number | null,
   mixed: false,
 }));
 vi.mock('react-i18next', () => {
@@ -35,8 +41,16 @@ vi.mock('@/hooks/useModelContextLimit', () => ({
       error: false,
       setLimit: mocks.setLimit,
       reset: mocks.reset,
+      ...(mocks.compactionEnabled
+        ? { compaction: mocks.compaction, setCompaction: mocks.setCompaction }
+        : {}),
     };
   },
+}));
+vi.mock('@/contexts/dataOwnerGeneration', () => ({
+  getDataOwnerGeneration: () => ({ dataOwnerId: 'owner', generation: mocks.ownerGeneration }),
+  isDataOwnerGenerationCurrent: (owner: { generation: number }) =>
+    owner.generation === mocks.ownerGeneration,
 }));
 vi.mock('@/hooks/useModelImageInputOverride', () => ({
   useModelImageInputOverride: (target: unknown) => {
@@ -69,6 +83,48 @@ vi.mock('../ModelPriceOverrideDialog', async (importOriginal) => {
   };
 });
 import type { ModelImageInputCatalogModel } from '../../../../shared/modelImageInputOverride';
+// Radix 滑杆在 jsdom 里量不到轨道，手势语义另有 ui/slider 自己的用例；这里换成
+// 一个可控的 range 输入，直接驱动“预览 / 提交”两条通道。
+vi.mock('@/components/ui/slider', () => ({
+  Slider: ({ value, min, max, step, onValueChange, onValueCommit, onValueCancel, onPointerCancel, ...rest }: {
+    value?: number[];
+    min?: number;
+    max?: number;
+    step?: number;
+    onValueChange?: (next: number[]) => void;
+    onValueCommit?: (next: number[]) => void;
+    onValueCancel?: (restored: number[]) => void;
+    onPointerCancel?: (event: unknown) => void;
+    'aria-label'?: string;
+  }) => {
+    // 受控 input 在 jsdom 里不回写未变化的 DOM value，断言直接读收到的 value prop。
+    mocks.sliderValue = value?.[0] ?? min ?? null;
+    return (
+    <input
+      type="range"
+      aria-label={rest['aria-label']}
+      value={value?.[0] ?? min}
+      min={min}
+      max={max}
+      step={step}
+      onPointerDown={(event) => {
+        // 共享 Slider 记下按下时的值，取消时回放它。
+        mocks.pressValue = value?.[0] ?? min ?? null;
+      }}
+      onPointerCancel={(event) => {
+        onPointerCancel?.(event);
+        // 共享 Slider 的取消语义：先报告取消，再回放按下前的值。
+        // 回放值不等于落盘值（真实场景：按下 90、别的窗口存了 70）。
+        const restored = [mocks.pressValue ?? value?.[0] ?? min ?? 0];
+        onValueCancel?.(restored);
+        onValueChange?.(restored);
+      }}
+      onChange={(event) => onValueChange?.([Number(event.target.value)])}
+      onBlur={(event) => onValueCommit?.([Number(event.target.value)])}
+    />
+    );
+  },
+}));
 import { ModelAdvancedDrawer } from '../ModelAdvancedDrawer';
 import { setModelVisibility } from '@/state/modelVisibilityPrefs';
 import { setProviderModelEffort, getProviderModelEffort, clearProviderModelEffort } from '@/state/providerModelMemory';
@@ -127,11 +183,26 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.realPricing = false;
   mocks.limit = null;
+  mocks.compactionEnabled = false;
+  mocks.compaction = { pct: 90, isCustomized: false };
+  mocks.ownerGeneration = 1;
+  mocks.sliderValue = null;
+  mocks.pressValue = null;
   mocks.mixed = false;
   mocks.imageValue = null;
   mocks.imageMixed = false;
   mocks.imageError = false;
   vi.mocked(getProviderModelEffort).mockReset();
+  // Radix 的滑杆用 ResizeObserver 量轨道，jsdom 没有。
+  vi.stubGlobal('ResizeObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  });
+  // jsdom 没有指针捕获，手势取消路径（共享 Slider 的 cancel）要用到。
+  Element.prototype.setPointerCapture ??= () => {};
+  Element.prototype.releasePointerCapture ??= () => {};
+  Element.prototype.hasPointerCapture ??= () => false;
 });
 
 describe('model advanced editor', () => {
@@ -144,6 +215,154 @@ describe('model advanced editor', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'effortLevels.ultra' }));
     expect(setProviderModelEffort).toHaveBeenCalledWith('codex', 'openai', id, 'ultra');
     expect(setProviderModelEffort).toHaveBeenCalledWith('claude-code', 'openai', `chatgpt/${id}`, 'max');
+  });
+
+  // The compaction row only writes on release: a preview must not write, a release
+  // must collapse a keyboard burst into one write, and the shown ratio must always
+  // follow the saved policy.
+  it('commits the compaction ratio once per release and follows the saved policy', async () => {
+    mocks.compactionEnabled = true;
+    vi.useFakeTimers();
+    try {
+      const view = render(drawer());
+      const ratio = () => screen.getByRole('slider', {
+        name: 'settings.providers.models.advanced.compaction.sliderAria',
+      }) as HTMLInputElement;
+
+      fireEvent.change(ratio(), { target: { value: '89' } });
+      expect(ratio().value).toBe('89');
+      expect(mocks.setCompaction).not.toHaveBeenCalled();
+
+      // Saved policy moves on (write landed, model switched, external edit): the
+      // preview must not survive it.
+      mocks.compaction = { pct: 70, isCustomized: true };
+      view.rerender(drawer());
+      expect(ratio().value).toBe('70');
+
+      // A release writes right away (drag latency); a burst inside the window
+      // collapses into one trailing write of the last value.
+      fireEvent.change(ratio(), { target: { value: '80' } });
+      fireEvent.blur(ratio());
+      expect(mocks.setCompaction).toHaveBeenCalledTimes(1);
+      expect(mocks.setCompaction).toHaveBeenLastCalledWith(80);
+
+      fireEvent.change(ratio(), { target: { value: '81' } });
+      fireEvent.blur(ratio());
+      fireEvent.change(ratio(), { target: { value: '82' } });
+      fireEvent.blur(ratio());
+      await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+      expect(mocks.setCompaction).toHaveBeenCalledTimes(2);
+      expect(mocks.setCompaction).toHaveBeenLastCalledWith(82);
+
+      fireEvent.click(screen.getByRole('button', {
+        name: 'settings.providers.models.advanced.compaction.restoreAria',
+      }));
+      expect(mocks.setCompaction).toHaveBeenLastCalledWith(null);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The trailing burst write must survive the first write's confirmation: the
+  // policy moving to 89 is our own write landing, not a reason to drop 87.
+  it('keeps the trailing burst write alive across the first write confirmation', async () => {
+    mocks.compactionEnabled = true;
+    vi.useFakeTimers();
+    try {
+      const view = render(drawer());
+      const ratio = () => screen.getByRole('slider', {
+        name: 'settings.providers.models.advanced.compaction.sliderAria',
+      }) as HTMLInputElement;
+
+      let releaseFirst!: () => void;
+      mocks.setCompaction.mockImplementationOnce(
+        async () => new Promise<void>((resolve) => { releaseFirst = resolve; }),
+      );
+      fireEvent.change(ratio(), { target: { value: '89' } });
+      fireEvent.blur(ratio());
+      expect(mocks.setCompaction).toHaveBeenCalledTimes(1);
+
+      fireEvent.change(ratio(), { target: { value: '88' } });
+      fireEvent.blur(ratio());
+      fireEvent.change(ratio(), { target: { value: '87' } });
+      fireEvent.blur(ratio());
+
+      // The first write confirms (policy moves to 89) before the trailing timer.
+      await act(async () => {
+        releaseFirst();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      mocks.compaction = { pct: 89, isCustomized: true };
+      view.rerender(drawer());
+      expect(ratio().value).toBe('87');
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+      expect(mocks.setCompaction).toHaveBeenCalledTimes(2);
+      expect(mocks.setCompaction).toHaveBeenLastCalledWith(87);
+      mocks.compaction = { pct: 87, isCustomized: true };
+      view.rerender(drawer());
+      expect(ratio().value).toBe('87');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A trailing write binds to the account generation at commit time; an account
+  // switch while it waits must retire it instead of writing the old value into
+  // the new account.
+  it('retires the trailing burst write when the account generation moved on', async () => {
+    mocks.compactionEnabled = true;
+    vi.useFakeTimers();
+    try {
+      render(drawer());
+      const ratio = () => screen.getByRole('slider', {
+        name: 'settings.providers.models.advanced.compaction.sliderAria',
+      }) as HTMLInputElement;
+
+      fireEvent.change(ratio(), { target: { value: '89' } });
+      fireEvent.blur(ratio());
+      fireEvent.change(ratio(), { target: { value: '88' } });
+      fireEvent.blur(ratio());
+      mocks.ownerGeneration += 1;
+      await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+      expect(mocks.setCompaction).toHaveBeenCalledTimes(1);
+      expect(mocks.setCompaction).toHaveBeenCalledWith(89);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The shared Slider reports a canceled gesture explicitly (a consumer cannot
+  // tell a cancel replay from a normal move to the same value). The preview
+  // must follow the saved policy, even when the drag passed the start value.
+  it('drops the drag preview on cancel even when the drag passed the start value', () => {
+    mocks.compactionEnabled = true;
+    const view = render(drawer());
+    const ratio = () => screen.getByRole('slider', {
+      name: 'settings.providers.models.advanced.compaction.sliderAria',
+    }) as HTMLInputElement;
+
+    fireEvent.pointerDown(ratio(), { pointerId: 1, button: 0, isPrimary: true });
+    fireEvent.change(ratio(), { target: { value: '80' } });
+    expect(mocks.sliderValue).toBe(80);
+    expect(mocks.setCompaction).not.toHaveBeenCalled();
+
+    // Another window saves 70 while the drag is in the air.
+    mocks.compaction = { pct: 70, isCustomized: true };
+    view.rerender(drawer());
+
+    // Cancel: the shared Slider reports it and replays the press-time value.
+    fireEvent.pointerCancel(ratio(), { pointerId: 1 });
+    expect(mocks.sliderValue).toBe(70);
+    expect(mocks.setCompaction).not.toHaveBeenCalled();
+
+    // Keyboard after the cancel must not be mistaken for another replay:
+    // End-to-95 and back to 90 must both show immediately.
+    fireEvent.change(ratio(), { target: { value: '95' } });
+    expect(mocks.sliderValue).toBe(95);
+    fireEvent.change(ratio(), { target: { value: '90' } });
+    expect(mocks.sliderValue).toBe(90);
+    expect(mocks.setCompaction).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -428,6 +647,142 @@ describe('model advanced editor', () => {
       const config = update.mock.calls[0]![0] as Parameters<typeof buildUserProvider>[0];
       expect(config.runtimes.codex!.models).toEqual([{ id: 'k3.1-pro', name: 'K3.1', interfaceId }]);
       expect(buildUserProvider(config).models.codex![0].selectedInterface?.api).toBe('openai-responses');
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  // Regression: catalog fallback is not a Kimi Code entitlement, even for the same upstream model ID.
+  it('does not display metered model specs or prices for a Kimi Code connection', () => {
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === 'moonshot-kimi-code')!;
+    const endpoint = preset.runtimes.codex!;
+    const source = { ...buildUserProvider({ id: 'kimi-plan', name: 'Kimi', runtimes: {
+      codex: { ...endpoint, catalogPresetId: preset.id, models: [{ id: 'k3.1-pro', name: 'K3.1 Pro' }] },
+    } }), connected: true } as ProviderView;
+    const published = { ...source.models.codex![0], maxOutput: 987_654, contextWindowMax: 1_987_654,
+      supportsFastMode: true, status: 'alpha' as const };
+    render(drawer(published, published.defaultEffort, published.efforts, source));
+    expect(screen.getByText('settings.providers.models.subscription')).toBeTruthy();
+    expect(screen.queryByText('987,654')).toBeNull();
+    expect(screen.queryByText('1,987,654')).toBeNull();
+    expect(screen.getByText('1,048,576')).toBeTruthy();
+    expect(screen.getByText(/modalities\.video/)).toBeTruthy();
+    expect(screen.queryByText('settings.providers.models.advanced.lifecycle.alpha')).toBeNull();
+    expect(mocks.priceProps.mock.lastCall?.[0].manualPriceOnly('codex')).toBe(true);
+  });
+
+  // Same name/ID on two actual routes: only the plan must reject catalog fallback.
+  it.each([
+    'aliyun-bailian-coding', 'aliyun-bailian-token-plan-cn', 'aliyun-bailian-token-plan-team-cn',
+    'zhipu-coding-plan-cn', 'zai-coding-plan-global', 'xiaomi-mimo-token-plan-cn',
+    'volcengine-coding-plan', 'volcengine-agent-plan', 'tencentcloud-coding-plan', 'opencode-go',
+  ])('keeps public API specs out of the %s plan drawer', (id) => {
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === id)!;
+    const runtime = preset.runtimes.codex!;
+    const configuredModel = runtime.models.find(item => item.route &&
+      item.route.baseUrl !== runtime.baseUrl) ?? { id: 'test-model', name: 'Model' };
+    const source = { ...buildUserProvider({ id: 'plan', name: 'Plan', runtimes: {
+      codex: { ...runtime, catalogPresetId: id, models: [configuredModel] },
+    } }), connected: true } as ProviderView;
+    const published = { ...source.models.codex![0], maxOutput: 987_654 };
+    const rendered = render(drawer(published, published.defaultEffort, published.efforts, source));
+    expect(screen.queryByText('987,654'), JSON.stringify({
+      route: published.route, upstream: source.routing.codex?.upstream, preset: preset.runtimes.codex?.baseUrl,
+    })).toBeNull();
+    const apiRoute = { ...source, routing: {
+      codex: { ...source.routing.codex!, upstream: 'https://example.test/v1' },
+    } };
+    const replacement = { baseUrl: 'https://example.test/v1', wireProtocol: 'openai-chat' as const };
+    const apiModel = { ...published, route: replacement,
+      userModelConfig: { ...published.userModelConfig!, route: replacement } };
+    rendered.rerender(drawer(apiModel, apiModel.defaultEffort, apiModel.efforts, apiRoute));
+    expect(screen.getByText('987,654')).toBeTruthy();
+  });
+
+  // The same Messages URL accepts both products. Require the selected plan preset.
+  it.each([
+    ['zhipu-glm-cn', true],
+    ['zhipu-coding-plan-cn', false],
+  ] as const)('keeps metered specs visible only on the API preset at the shared GLM Messages URL (%s)', (id, metered) => {
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === id)!;
+    const agent = 'claude-code';
+    const provider = { ...buildUserProvider({ id: 'glm', name: 'GLM', runtimes: {
+      [agent]: { ...preset.runtimes[agent]!, catalogPresetId: id, models: [{ id: 'glm-test', name: 'GLM' }] },
+    } }), connected: true } as ProviderView;
+    const model = { ...provider.models[agent]![0], maxOutput: 987_654 };
+    render(<ModelAdvancedDrawer
+      provider={provider} row={{ id: model.id, name: model.name, avail: [agent], byAgent: { [agent]: model } }}
+      open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()}
+      disabled={false} paymentRequired={false}
+    />);
+    expect(Boolean(screen.queryByText('987,654'))).toBe(metered);
+  });
+
+  it('keeps public prices and specs out of a GLM plan saved at its Responses URL', () => {
+    const id = 'zhipu-coding-plan-cn';
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === id)!;
+    const route = { baseUrl: 'https://open.bigmodel.cn/api/v1', wireProtocol: 'openai-responses' as const };
+    const source = { ...buildUserProvider({ id: 'glm-plan', name: 'GLM', runtimes: {
+      codex: { ...preset.runtimes.codex!, ...route, catalogPresetId: id,
+        models: [{ id: 'glm-5.4', name: 'GLM', route }] },
+    } }), connected: true } as ProviderView;
+    const published = { ...source.models.codex![0], maxOutput: 987_654 };
+    const view = render(drawer(published, published.defaultEffort, published.efforts, source));
+    expect(screen.queryByText('987,654')).toBeNull();
+    expect(screen.getByText('settings.providers.models.subscription')).toBeTruthy();
+
+    const customRoute = { ...route, requestPath: '/custom' };
+    const custom = { ...published, route: customRoute, userModelConfig: { ...published.userModelConfig!, route: customRoute } };
+    view.rerender(drawer(custom, custom.defaultEffort, custom.efforts, source));
+    expect(screen.getByText('987,654')).toBeTruthy();
+    expect(screen.queryByText('settings.providers.models.subscription')).toBeNull();
+  });
+
+  it('leaves Kimi Code quote fields empty unless an estimate was explicitly saved', async () => {
+    mocks.realPricing = true;
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === 'moonshot-kimi-code')!;
+    const source = { ...buildUserProvider({ id: 'kimi-plan', name: 'Kimi', runtimes: {
+      codex: { ...preset.runtimes.codex!, catalogPresetId: preset.id, models: [{ id: 'k3.1-pro', name: 'K3.1 Pro' }] },
+    } }), connected: true } as ProviderView;
+    const previous = window.electronAPI;
+    const quote = { currency: 'USD', inputPerMtok: 1, outputPerMtok: 4 };
+    const read = vi.fn(async () => ({ editable: true, reference: quote, effective: quote, override: null,
+      conflict: false, allowedCurrencies: ['USD'], registryUpdatedAt: null }));
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { getModelPriceOverride: read } } });
+    try {
+      render(drawer(source.models.codex![0], 'high', ['high'], source));
+      const input = screen.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+      await waitFor(() => expect(input.disabled).toBe(false));
+      expect(read).toHaveBeenCalled();
+      expect(input.value).toBe('');
+      expect(screen.getByText('settings.providers.models.subscription')).toBeTruthy();
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
+  it.each(['USD', 'CNY'] as const)('updates a saved sparse %s Kimi Code estimate without revealing the inherited API value', async (currency) => {
+    mocks.realPricing = true;
+    const preset = BUNDLED_CATALOG.presets!.find(item => item.id === 'moonshot-kimi-code')!;
+    const source = { ...buildUserProvider({ id: 'kimi-plan', name: 'Kimi', runtimes: {
+      codex: { ...preset.runtimes.codex!, catalogPresetId: preset.id, models: [{ id: 'k3.1-pro', name: 'K3.1 Pro' }] },
+    } }), connected: true } as ProviderView;
+    const previous = window.electronAPI;
+    const reference = { currency, inputPerMtok: 1, outputPerMtok: 4 };
+    const estimate = (output: number) => ({ editable: true, reference, effective: { ...reference, outputPerMtok: output },
+      override: { outputPerMtok: output }, conflict: false, allowedCurrencies: ['USD', 'CNY'], registryUpdatedAt: null });
+    const write = vi.fn(async () => estimate(6));
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: {
+      getModelPriceOverride: async () => estimate(5), setModelPriceOverride: write,
+    } } });
+    try {
+      render(drawer(source.models.codex![0], 'high', ['high'], source));
+      const input = screen.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement;
+      const output = screen.getByLabelText('settings.providers.models.priceOverride.output') as HTMLInputElement;
+      await waitFor(() => expect(output.value).toBe('5'));
+      expect(input.value).toBe('');
+      fireEvent.change(output, { target: { value: '6' } });
+      fireEvent.blur(output);
+      await waitFor(() => expect(write).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        currency, inputPerMtok: 1, outputPerMtok: 6,
+      })));
+      expect(input.value).toBe('');
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
   });
 

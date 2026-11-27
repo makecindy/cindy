@@ -7,9 +7,14 @@
  * 3 = 另外能从伙伴大内容存储恢复资料，允许主力电脑交出超过偏好上限的值；
  * 4 = 另外能运行伙伴 V2（伙伴 = 一个项目）：接手时带上项目规则、项目自动化与项目记忆。V2 主力电脑只交给
  *     声明 ≥ 4 的电脑（旧电脑接住的是 V1 伙伴，不认识项目），可选目标里低于 4 的标 `outdated`。
+ * 5 = 另外能原文恢复超过编辑器 64 KiB 正文限制的导入技能。
  */
 export const COMPANION_CLOUD_CAPS_CHANNEL = 'maker:companion-cloud:caps';
-export const COMPANION_CLOUD_VERSION = 4;
+export const COMPANION_CLOUD_VERSION = 5;
+/** 能原文恢复超出编辑器正文限制的技能的最低版本。 */
+export const COMPANION_CLOUD_SKILL_SOURCE_VERSION = 5;
+/** Shipped receivers before v5 applied the editor limit to the UTF-8 body of SKILL.md. */
+export const COMPANION_CLOUD_LEGACY_SKILL_MAX_BODY_BYTES = 64 * 1024;
 /** 能接手伙伴的最低版本。 */
 export const COMPANION_CLOUD_RECEIVE_VERSION = 1;
 /** 主力电脑接受其他电脑发起换主力电脑的最低版本。 */
@@ -70,9 +75,14 @@ export interface CompanionCloudRemoteTarget {
   outdated?: boolean;
 }
 
+export interface CompanionOversizedSkill {
+  slug: string;
+  bodyBytes: number;
+}
+
 export type CompanionCloudRemoteActionResult =
   | { ok: true }
-  | { ok: false; code: string; homeDeviceId?: string | null };
+  | { ok: false; code: string; homeDeviceId?: string | null; oversizedSkill?: CompanionOversizedSkill };
 
 /** Declared cloud-companion version, or 0 when the answer is not a caps record. */
 export function companionCloudCapsVersion(value: unknown): number {
@@ -105,5 +115,13 @@ export function parseCompanionCloudRemoteActionResult(value: unknown): Companion
   if (record.ok === true) return { ok: true };
   const code = typeof record.code === 'string' && /^[A-Z_]{1,40}$/.test(record.code) ? record.code : 'FAILED';
   const homeDeviceId = typeof record.homeDeviceId === 'string' ? record.homeDeviceId : record.homeDeviceId === null ? null : undefined;
-  return { ok: false, code, ...(homeDeviceId !== undefined ? { homeDeviceId } : {}) };
+  const failure = { ok: false as const, code, ...(homeDeviceId !== undefined ? { homeDeviceId } : {}) };
+  if (code === 'SKILL_TARGET_OUTDATED' && record.oversizedSkill && typeof record.oversizedSkill === 'object') {
+    const { slug, bodyBytes } = record.oversizedSkill as Record<string, unknown>;
+    if (typeof slug === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(slug)
+      && typeof bodyBytes === 'number' && Number.isSafeInteger(bodyBytes) && bodyBytes > COMPANION_CLOUD_LEGACY_SKILL_MAX_BODY_BYTES) {
+      return { ...failure, oversizedSkill: { slug, bodyBytes } };
+    }
+  }
+  return failure;
 }

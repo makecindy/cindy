@@ -1,4 +1,5 @@
 import { pickFileIcon } from '@/components/ui/file-type-icon';
+import { SearchInput } from '@/components/ui/search-input';
 import { Button } from '@/components/ui/button';
 import { MENU_CURRENT_ROW_ATTR, MENU_ROW_ATTR, currentMarkedRow } from '@/components/ui/dropdown-menu-highlight';
 import {
@@ -54,7 +55,6 @@ import {
   Paperclip,
   Plug,
   RotateCw,
-  Search,
   Sparkles,
   Target,
   UsersRound,
@@ -581,32 +581,18 @@ export function AtMentionPanel({
         <MenuHighlightLayer />
         {hasSearchBox ? (
           <div className="px-1 pb-1.5">
-            <div className="relative">
-              <Search
-                size={12}
-                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--cmd-palette-item-meta)]"
-              />
-              <input
-                ref={searchRef}
-                data-composer-suggestion-search=""
-                type="text"
-                value={searchValue}
-                onChange={(event) => onSearchChange?.(event.target.value)}
-                onKeyDown={handleSearchKeyDown}
-                placeholder={hint}
-                aria-label={hint}
-                className={cn(
-                  'h-8 w-full rounded-full border border-[var(--cmd-palette-border)] bg-transparent',
-                  'pl-7 pr-2 text-13 text-[var(--cmd-palette-item-text)] outline-none',
-                  'placeholder:text-[var(--text-placeholder)]',
-                  // 聚焦描边走中性弱化 token（同 composer 输入框口径）。--focus-ring
-                  // 是强蓝且只用于键盘可达性环,拿来当输入框聚焦边框会突兀成蓝框
-                  // (DESIGN §2:Focus Blue「正常交互流里不出现」);文本输入框的
-                  // :focus-visible 恒成立,所以这里不能靠 focus-visible 区分鼠标/键盘。
-                  'focus:border-[var(--chat-input-border-focus)]',
-                )}
-              />
-            </div>
+            {/* panel 档聚焦只加深描边（--chat-input-border-focus），不出蓝框：文本框的
+                :focus-visible 恒成立，无法区分鼠标 / 键盘（DESIGN §2、§4 composer 输入）。 */}
+            <SearchInput
+              surface="panel"
+              inputRef={searchRef}
+              data-composer-suggestion-search=""
+              value={searchValue}
+              onChange={(value) => onSearchChange?.(value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder={hint}
+              aria-label={hint}
+            />
           </div>
         ) : null}
         {showLoadingSkeleton && (

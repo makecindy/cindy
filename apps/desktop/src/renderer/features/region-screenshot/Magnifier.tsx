@@ -110,6 +110,7 @@ export function Magnifier({
         </div>
         <div className="flex items-center gap-1.5 text-[var(--text-primary)]">
           <span
+            // 取色色样：插画内部的形状，不是控件框（DESIGN.md §5 插画登记）
             className="inline-block h-3 w-3 shrink-0 rounded-sm border border-[var(--border-default)]"
             style={{ backgroundColor: color ? colorHex(color) : 'transparent', ...profileBackground(16, 0) }}
           />

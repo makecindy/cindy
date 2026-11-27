@@ -23,6 +23,7 @@ export function isSessionSettingsOnlyPatch(p: Record<string, unknown>): boolean 
     'pinnedAt',
     'notificationsMuted',
     'snoozedUntil',
+    'projectDir',
     'workingDir',
     'workspaceKind',
     'title',

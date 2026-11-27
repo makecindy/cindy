@@ -157,6 +157,29 @@ describe('message persistence clear boundary', () => {
     const first = await createMessage('s1', body, { requireNoUserMessage: true });
     expect(await createMessage('s1', body, { requireNoUserMessage: true })).toEqual(first);
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM messages').get()).toEqual({ count: 1 });
+
+    // Legacy hidden [UI_ACTION_TRIGGER] welcome rows do not block writing a static opening.
+    sqlite.prepare('DELETE FROM messages').run();
+    sqlite.prepare(
+      `INSERT INTO messages (id, client_id, session_id, role, content, created_at)
+       VALUES ('syn-1', 'legacy-1', 's1', 'user', ?, 10),
+              ('syn-2', 'legacy-2', 's1', 'user', ?, 11)`,
+    ).run(
+      JSON.stringify({ text: '[UI_ACTION_TRIGGER]The user has just invited you.' }),
+      '[UI_ACTION_TRIGGER]raw trigger',
+    );
+    await expect(createMessage('s1', {
+      clientId: 'opening-after-legacy', role: 'assistant', content: 'Welcome',
+    }, { requireNoUserMessage: true })).resolves.toMatchObject({ clientId: 'opening-after-legacy', content: 'Welcome' });
+
+    // A real user attachment row still blocks writing an opening even if its text starts with the prefix.
+    sqlite.prepare(
+      `INSERT INTO messages (id, client_id, session_id, role, content, created_at)
+       VALUES ('img-1', 'user-img', 's1', 'user', ?, 12)`,
+    ).run(JSON.stringify({ text: '[UI_ACTION_TRIGGER]attached', images: [{ id: 'i1' }] }));
+    await expect(createMessage('s1', {
+      clientId: 'opening-blocked', role: 'assistant', content: 'Welcome',
+    }, { requireNoUserMessage: true })).rejects.toMatchObject({ code: 'MESSAGE_USER_ALREADY_SPOKE' });
   });
 
   it('rewinds a row that lost the clear race and is idempotent', async () => {

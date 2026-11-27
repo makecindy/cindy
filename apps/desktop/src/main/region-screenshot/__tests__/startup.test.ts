@@ -185,7 +185,7 @@ describe('screenshot startup cleanup', () => {
   // so the query must already be sent when it is entered, not merely later.
   it('keeps window queries parallel with Electron capture on wide-gamut displays', async () => {
     mocks.displays.mockReturnValue([{ id: 1, bounds: { x: 0, y: 0, width: 10, height: 10 }, scaleFactor: 1,
-      depthPerComponent: 10, colorSpace: '{primaries:BT2020, transfer:PQ, matrix:RGB, range:FULL}' }]);
+      depthPerComponent: 10, colorSpace: '{primaries:BT2020, transfer:INVALID, matrix:RGB, range:FULL}' }]);
     let windowsAtFallback = -1;
     mocks.capture.mockImplementation(async () => { windowsAtFallback = mocks.windows.mock.calls.length; return []; });
     mocks.shortcut!();

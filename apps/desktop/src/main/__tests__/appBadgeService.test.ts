@@ -377,6 +377,38 @@ describe('appBadgeService', () => {
     expect(setOverlayIcon).toHaveBeenLastCalledWith(null, '');
   });
 
+  // The Windows badge clear case only covers zero. Muting a group can leave other attention
+  // visible, so exercise a decreasing, still-positive count through the projection IPC (unit).
+  it('redraws a lower Windows badge without flashing again', async () => {
+    await freshService('win32');
+    await publish({ sender: mainWebContents }, 2);
+    expect(flashFrame).toHaveBeenLastCalledWith(true);
+    flashFrame.mockClear();
+
+    await publish({ sender: mainWebContents }, 1);
+    expect(setOverlayIcon).toHaveBeenLastCalledWith(overlayIcon, 'Tasks needing attention: 1');
+    expect(flashFrame).not.toHaveBeenCalled();
+
+    await publish({ sender: mainWebContents }, 0);
+    expect(flashFrame).toHaveBeenLastCalledWith(false);
+  });
+
+  // PR #13211: the badge IPC distinguishes a quiet restoration from a new alert
+  // even if the total stays the same or falls in a mixed refresh (unit).
+  it('flashes Windows for new attention independently of a positive total change', async () => {
+    await freshService('win32');
+    const send = registeredHandlers.get('notification:set-app-attention-count')!;
+    const snapshot = { sessionIds: [], dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation };
+    await send({ sender: mainWebContents }, { ...snapshot, count: 2, windowsHasNewAttention: false });
+    expect(setOverlayIcon).toHaveBeenLastCalledWith(overlayIcon, 'Tasks needing attention: 2');
+    expect(flashFrame).not.toHaveBeenCalled();
+
+    await send({ sender: mainWebContents }, { ...snapshot, count: 2, windowsHasNewAttention: true });
+    await send({ sender: mainWebContents }, { ...snapshot, count: 1, windowsHasNewAttention: true });
+    expect(setOverlayIcon).toHaveBeenLastCalledWith(overlayIcon, 'Tasks needing attention: 1');
+    expect(flashFrame.mock.calls).toEqual([[true], [true]]);
+  });
+
   it('refreshes Windows descriptions without changing attention or flashing again', async () => {
     const service = await freshService('win32');
     await publish({ sender: mainWebContents }, 3);

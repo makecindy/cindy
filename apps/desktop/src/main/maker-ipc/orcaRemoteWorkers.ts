@@ -23,7 +23,7 @@ import {
   type OrcaRemoteWorkerOpenResult as DeviceOpenResult,
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import {
@@ -375,6 +375,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
                   platform: device.platform,
                   supported: supported[index] !== false,
                   ...((supported[index] as OrcaRemoteWorkerCaps)?.agentDevice === true ? { supportsAgentDevice: true } : {}),
+                  ...((supported[index] as OrcaRemoteWorkerCaps)?.modelGroup === true ? { supportsModelGroup: true } : {}),
                 },
               ],
         )
@@ -433,6 +434,10 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
           message: `${name} 需要更新后才能为跨设备 Worker 选择 Agent 所在电脑。` };
       }
+      if (input.modelGroup && supported.modelGroup !== true) {
+        return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+          message: 'The execution computer does not support Worker model groups' };
+      }
       const remoteSessionId = createId();
       let opened: DeviceOpenResult | undefined;
       let uncertainOpen = false;
@@ -445,6 +450,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
             sessionId: remoteSessionId,
             agentKind: input.agent,
             ...(input.model ? { model: input.model } : {}),
+            ...(input.modelGroup ? { modelGroup: input.modelGroup } : {}),
             ...(input.providerId ? { providerId: input.providerId } : {}),
             ...(input.agentDeviceId !== undefined ? { agentDeviceId: input.agentDeviceId } : {}),
             ...(input.effort ? { effort: input.effort } : {}),
@@ -540,7 +546,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         if (!opened) opening.delete(remoteSessionId);
       }
       const proxySessionId = createId();
-      const agent: AgentKind = opened.agentKind ?? input.agent;
+      const agent: EngineKind = opened.agentKind ?? input.agent;
       // open 与关联之间尚未创建本机代理，退出后只需按持久 open 身份解除远端标记。
       assertOwner(owner);
       const proxySession = {
@@ -552,6 +558,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
           : input.effort && EFFORTS.has(input.effort) ? input.effort : null,
         permissionMode: input.permissionMode,
         fastMode: opened.fastMode ?? (input.fast ?? false),
+        ...(opened.providerId !== undefined || input.providerId ? { providerId: opened.providerId ?? input.providerId ?? null } : {}),
         ...(opened.agentDeviceId !== undefined ? { agentDeviceId: opened.agentDeviceId } : {}),
       };
       creationOwners.set(proxySessionId, owner);

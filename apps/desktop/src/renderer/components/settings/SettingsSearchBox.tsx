@@ -1,10 +1,8 @@
-import type { SettingsSearchContext } from './settingsSearchTypes';
+import type { SettingsSearchContext, SettingsSearchEntry } from './settingsSearchTypes';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { Input } from '@/components/ui/input';
-import { Tip } from '@/components/ui/tooltip';
+import { SearchInput } from '@/components/ui/search-input';
 import { currentSelectedOption } from '@/components/ui/dropdown-menu-highlight';
 import {
   COMPOSER_MENU_ROW,
@@ -27,10 +25,11 @@ interface SettingsSearchBoxProps {
   visibleTabIds: readonly VisibleSettingsTab[];
   searchContext?: SettingsSearchContext;
   additionalDocuments?: readonly SettingsSearchDocument[];
+  allowSearchEntry?: (entry: SettingsSearchEntry) => boolean;
   onSelect?: (result: { tab: SettingsTab; sectionId: string }) => void;
 }
 
-export function SettingsSearchBox({ requestedQuery = '', visibleTabIds, searchContext, additionalDocuments, onSelect }: SettingsSearchBoxProps) {
+export function SettingsSearchBox({ requestedQuery = '', visibleTabIds, searchContext, additionalDocuments, onSelect, allowSearchEntry }: SettingsSearchBoxProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState(requestedQuery.slice(0, 200));
   useEffect(() => { setQuery(requestedQuery.slice(0, 200)); }, [requestedQuery]);
@@ -46,8 +45,8 @@ export function SettingsSearchBox({ requestedQuery = '', visibleTabIds, searchCo
     },
   });
   const documents = useMemo(
-    () => [...buildSettingsSearchDocuments(t, visibleTabIds, searchContext), ...(additionalDocuments ?? [])],
-    [t, visibleTabIds, searchContext, additionalDocuments],
+    () => [...buildSettingsSearchDocuments(t, visibleTabIds, searchContext), ...(additionalDocuments ?? [])].filter(doc => !allowSearchEntry || allowSearchEntry(doc.entry)),
+    [t, visibleTabIds, searchContext, additionalDocuments, allowSearchEntry],
   );
   const results = useMemo(() => searchSettings(documents, query), [documents, query]);
   const hasQuery = query.trim().length > 0;
@@ -71,21 +70,13 @@ export function SettingsSearchBox({ requestedQuery = '', visibleTabIds, searchCo
 
   return (
     <div className="mb-3 px-1">
-      <div className="relative">
-        <Search
-          aria-hidden="true"
-          size={15}
-          className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-[var(--settings-section-sublabel)]"
-        />
-        <Input
+        <SearchInput
           inputRef={inputRef}
           value={query}
           onChange={(value) => {
             setQuery(value);
             setActiveIndex(0);
           }}
-          size="sm"
-          surface="ivory"
           ariaLabel={t('settings.search.ariaLabel')}
           placeholder={t('settings.search.placeholder')}
           role="combobox"
@@ -93,7 +84,6 @@ export function SettingsSearchBox({ requestedQuery = '', visibleTabIds, searchCo
           aria-controls={hasQuery ? 'settings-search-results' : undefined}
           aria-autocomplete="list"
           aria-activedescendant={activeResult ? 'settings-search-result-' + activeResult.entry.id : undefined}
-          inputClassName="pl-9 pr-9"
           onKeyDown={(event) => {
             if (!hasQuery) return;
             if (event.nativeEvent.isComposing) return;
@@ -112,26 +102,7 @@ export function SettingsSearchBox({ requestedQuery = '', visibleTabIds, searchCo
               setActiveIndex(0);
             }
           }}
-          trailing={
-            hasQuery ? (
-              <Tip text={t('settings.search.clear')}>
-                <button
-                  type="button"
-                  aria-label={t('settings.search.clear')}
-                  onClick={() => {
-                    setQuery('');
-                    setActiveIndex(0);
-                    inputRef.current?.focus();
-                  }}
-                  className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-[var(--settings-section-sublabel)] transition-colors hover:bg-[var(--settings-menu-bg-hover)] hover:text-[var(--settings-section-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-                >
-                  <X size={14} aria-hidden="true" />
-                </button>
-              </Tip>
-            ) : undefined
-          }
         />
-      </div>
 
       {hasQuery ? (
         <div

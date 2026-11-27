@@ -230,6 +230,22 @@ describe('sessionRepo.findActiveSession 软删行复活(#748)', () => {
     },
   );
 
+  // Review on #12820: after a restart the IM cold path re-reads the task row (peekSessionById /
+  // findActiveSession / peekSession). Mapping 'acp' to a built-in kind there sent a plugin-engine task
+  // through built-in auth checks and restarted it on Claude Code. Minimal input: agent_kind 'acp'.
+  it('keeps a plugin-engine task row on its own engine on every read', async () => {
+    const acpRow = { ...dbRow('active'), agentKind: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro' };
+    mocks.selectLimit.mockResolvedValue([acpRow]);
+    const repo = makeRepo();
+    for (const row of [
+      await repo.peekSessionById('feishu_bot_user'),
+      await repo.peekSession('bot', 'user'),
+      await repo.findActiveSession('bot', 'user'),
+    ]) {
+      expect(row).toMatchObject({ agentKind: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro' });
+    }
+  });
+
   it('active 行直接返回,不发 update 不广播', async () => {
     mocks.selectLimit.mockResolvedValue([dbRow('active')]);
     const row = await makeRepo().findActiveSession('bot', 'user');

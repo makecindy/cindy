@@ -2,13 +2,14 @@ import * as Network from 'expo-network';
 import { AppState } from 'react-native';
 import { AgentNetMembership, AgentNetSocket, NativeTransport, type SessionConfig, type SessionHandle } from '@cindy/agent-net/portable';
 import { agentNetStunServer } from '@cindy/agent-net-protocol';
+import { getOfficialAgentNetPeerBase } from '@cindy/maker-shared/client-endpoints';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { getOfficialAgentNetApiBaseUrl, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
 import { apiFetchRaw } from '@/api/client';
 import { getActiveSelfHostedRelay, getSelfHostedRelayRouteGeneration, isAgentNetOnlyRoute, subscribeSelfHostedRelayRoute } from './selfHostedRelayRouting';
 import { MobileAgentNetEngine } from './agentNetNative';
 import { ensureMobileAgentNetIdentity, clearMobileAgentNetIdentity, currentMobileAgentNetIdentity, type MobileAgentNetEnrollmentOptions } from './agentNetIdentity';
-import { getMobileAgentNetPreferences, mobileAgentNetRequiresEncryption, subscribeMobileAgentNetPreferences } from './agentNetPreferences';
+import { getMobileAgentNetPreferences, mobileAgentNetRequiresEncryption, setMobileAgentNetPreferences, subscribeMobileAgentNetPreferences } from './agentNetPreferences';
 import { clearMobileAgentNetNotifications, clearMobileAgentNetNotificationDelivery, refreshMobileAgentNetNotificationPreferences,
   mobileAgentNetNotificationScope, mutateMobileAgentNetNotificationRegistration, updateMobileAgentNetNotificationTrust,
   sendMobileAgentNetNotification } from './agentNetNotifications';
@@ -41,6 +42,7 @@ export function mobileAgentNetIdentityRefused(): boolean {
 /** After this removed phone rejoined (deviceRejoin.ts): its next connection tries Agent-Net again instead of running as with it off. */
 export function clearMobileAgentNetIdentityRefusal(): void {
   refusedSelection = null;
+  membership.reset();
 }
 function isMobileIdentityRefusal(error: unknown): boolean {
   const message = error instanceof Error ? error.message : '';
@@ -58,6 +60,19 @@ function noteMobileIdentityRefused(): boolean {
   refusedSelection = scope;
   return true;
 }
+/**
+ * 2026-11-26（用户定：被删后默认关掉，再打开就重新加入）：官方服务说这台手机被移除过——身份被撤销（`DEVICE_REVOKED`），或读到的
+ * 账号设备列表里没有它（重新登录后 Device Link 照常能连，同账号的电脑却在 Agent-Net 上都拦它，手机分不清被拦和慢，只能干等）——
+ * 就把开关关掉并记下原因；设置里写明「重新打开即可重新加入」，打开时由 deviceRejoin.ts 重新加入。网络错误不算。
+ * 「仅使用加密连接」时不关：关了就会改走未加密的 Device Link，照旧走「已移除」的重新加入入口。
+ */
+function turnOffMobileAgentNetAfterRemoval(): boolean {
+  const preferences = getMobileAgentNetPreferences();
+  if (getActiveSelfHostedRelay() || !preferences.ready || !preferences.enabled || mobileAgentNetRequiresEncryption()) return false;
+  void setMobileAgentNetPreferences({ enabled: false, removed: true }).catch(() => undefined);
+  return true;
+}
+const isRevocation = (error: unknown) => (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED';
 
 // ─── Sessions (docs/agent-net-session-plan.md §10, stage 4), as the Desktop's agentNetRuntime.ts ───────────────────
 let sessionConfig: SessionConfig | null = null;
@@ -119,6 +134,9 @@ export function mobileAgentNetPeerRoute(peer: string): { path: 'direct' | 'relay
   const socket = live();
   return { path: socket?.pathTo(peer) ?? null, rttMs: socket?.peerSnapshot(peer)?.rttMs ?? null };
 }
+export function mobileAgentNetRelayStalled(peer: string): void {
+  if (!isScopedPeer(peer)) live()?.relayStalled();
+}
 export function mobileAgentNetPeerConnectedAt(peer: string): number | null { return peerConnectedAt.get(peer) ?? null; }
 /**
  * The phone changed networks: connections send from the new address now and candidates are gathered again. `routeChanged`
@@ -142,7 +160,17 @@ export function notifyMobileAgentNetNetworkChanged(options?: { routeChanged?: bo
 let deviceListReader: (() => Promise<readonly string[] | null>) | null = null;
 const membership = new AgentNetMembership({
   readDeviceLinkDeviceIds: () => deviceListReader?.() ?? Promise.resolve(null),
-  apply: rule => { if (!getActiveSelfHostedRelay()) live()?.restrictPeers(rule); },
+  apply: rule => {
+    if (getActiveSelfHostedRelay()) return;
+    const socket = live();
+    socket?.restrictPeers(rule);
+    // A later read of the list (it is read again in the background) no longer has this phone: removed, as at open below.
+    const self = currentMobileAgentNetIdentity()?.api.identity.deviceId;
+    if (socket && self && rule.allowed && !rule.allowed.includes(self)) {
+      if (mobileAgentNetRequiresEncryption()) socket.close(4410);
+      else turnOffMobileAgentNetAfterRemoval();
+    }
+  },
   active: () => !!live() && !getActiveSelfHostedRelay(),
 });
 /** An existing read of the official device list finished (it started at `startedAt`). */
@@ -306,10 +334,10 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
     identity = await ensureMobileAgentNetIdentity(options); guard();
   } catch (error) {
     guard();
-    if (official && mobileAgentNetRequiresEncryption()
-      && (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED') {
+    if (official && mobileAgentNetRequiresEncryption() && isRevocation(error)) {
       throw new DeviceLinkRegistrationRemovedError();
     }
+    if (official && isRevocation(error)) turnOffMobileAgentNetAfterRemoval();
     if (isMobileIdentityRefusal(error) && noteMobileIdentityRefused()) throw new Error('AGENT_NET_IDENTITY_REFUSED');
     throw error;
   }
@@ -329,6 +357,16 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
   } catch (error) {
     void enginePromise.then(created => created.destroy()).catch(() => undefined);
     throw error;
+  }
+  // Signed in again after a removal: Device Link is back, but the account's device list does not have this phone, so every
+  // computer of the account refuses it on Agent-Net. Run as with Agent-Net off instead of waiting on them (2026-11-26); with
+  // 「仅使用加密连接」 there is nothing to fall back to: the same "removed" (with 「重新加入」) as a revoked identity, as the Desktop.
+  if (official && membership.lists(options.deviceId) === false) {
+    void engine.destroy().catch(() => undefined);
+    if (mobileAgentNetRequiresEncryption()) throw new DeviceLinkRegistrationRemovedError();
+    turnOffMobileAgentNetAfterRemoval();
+    if (noteMobileIdentityRefused()) throw new Error('AGENT_NET_IDENTITY_REFUSED');
+    throw new DeviceLinkRegistrationRemovedError();
   }
   const cachedDirectory = [...(cached?.devices ?? [])];
   // Match Desktop's offline startup: our validated local certificate keeps the
@@ -377,7 +415,11 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
         if (attempt !== openAttempt) return;
         rememberDirectAddress(deviceId, address, lastKnownLocalIp);
       },
-      onIdentityRefused: () => scopeCurrent() && noteMobileIdentityRefused(),
+      onIdentityRefused: reason => {
+        if (!scopeCurrent()) return false;
+        if (official && reason === 'AGENT_NET_CLOSED_4410') turnOffMobileAgentNetAfterRemoval();
+        return noteMobileIdentityRefused();
+      },
       bindings: {
         verifyCertificate: verifyMobileAgentNetCertificate,
         verifyDelegation: verifyMobileAgentNetDelegation,
@@ -386,20 +428,43 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
           const base = identity.api.base;
           const cachedRelay = base && preferences.enabled ? relayInfo.get(base) : undefined;
           const knownServer = cachedRelay && Date.now() < cachedRelay.nextReadAt && cachedRelay.server ? cachedRelay.server : undefined;
+          const peerOfficialBase = official && base && preferences.enabled ? getOfficialAgentNetPeerBase(base) : null;
+          const cachedPeer = peerOfficialBase ? relayInfo.get(peerOfficialBase) : undefined;
+          const knownPeerServer = cachedPeer && Date.now() < cachedPeer.nextReadAt && cachedPeer.server ? cachedPeer.server : undefined;
+          const initialStun = [...new Set([knownServer, knownPeerServer].filter((s): s is string => !!s))];
           const transport = await NativeTransport.create(
             engine,
-            knownServer ? { ...transportOptions, relayUdpServer: knownServer } : transportOptions,
+            knownServer || initialStun.length
+              ? { ...transportOptions, ...(knownServer ? { relayUdpServer: knownServer } : {}), ...(initialStun.length ? { stunServers: initialStun } : {}) }
+              : transportOptions,
             readAddresses,
             preferences.enabled,
           );
           const udp = preferences.enabled && (transport.supports('stun') || transport.supports('relay-udp-v2'));
           const privateNetwork = preferences.enabled && identity.api.certificate.networkId.startsWith('private:');
+          let latestPrimary: string | undefined = knownServer;
+          let latestPeer: string | undefined = knownPeerServer;
           if (base && (udp || privateNetwork)) {
             // The existing WebSocket/direct connection can start while the optional lookup runs.
             void readRelayInfo(base).then(info => {
               guard();
               if (privateNetwork) setMobileAgentNetPrivateSharingSupport(base, identity.api.rootPublicKey, info.privateSharing);
-              if (udp && info.server && info.server !== knownServer) return transport.configureUdpServer(info.server);
+              if (udp && info.server && info.server !== latestPrimary) {
+                latestPrimary = info.server;
+                return latestPeer && latestPeer !== info.server
+                  ? transport.configureUdpServer(info.server, [latestPeer])
+                  : transport.configureUdpServer(info.server);
+              }
+            }).catch(() => undefined);
+          }
+          if (udp && peerOfficialBase && transport.supports('stun')) {
+            void readRelayInfo(peerOfficialBase).then(info => {
+              guard();
+              if (info.server && info.server !== latestPeer) {
+                latestPeer = info.server;
+                const merged = [...new Set([latestPrimary, latestPeer].filter((s): s is string => !!s))];
+                if (merged.length) return transport.configureStunServers?.(merged);
+              }
             }).catch(() => undefined);
           }
           return transport;
@@ -455,8 +520,9 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
         try { await identity.api.directory!(); }
         catch (error) {
           if (!scopeCurrent() || current?.socket !== socket || !isMobileIdentityRefusal(error)) return;
+          if (official && isRevocation(error)) turnOffMobileAgentNetAfterRemoval();
           if (noteMobileIdentityRefused()) socket.close(1006);
-          else if (official && (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED') socket.close(4410);
+          else if (official && isRevocation(error)) socket.close(4410);
         }
       });
     }

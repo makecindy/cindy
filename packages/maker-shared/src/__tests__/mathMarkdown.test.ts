@@ -111,6 +111,63 @@ describe('normalizeMathDelimiters — link destination 保护', () => {
   });
 });
 
+describe('normalizeMathDelimiters — link label / GFM table / 正文转义方括号保护', () => {
+  // 生产入口 normalizeMathDelimiters: 链接标签与表格单元格里的 CommonMark 转义方括号
+  // `\[...\]` 曾被展开成 `\n\n$$\n...\n$$\n\n`, 炸碎表格、拆断链接并中断后续有序列表。
+  it.each([
+    [
+      'inline link label 里的 \\[Schedule\\](含 cindy:// 深链)',
+      '[\\[Schedule\\] torchlight2 PR 审查与合并](cindy://session/b379a11d-3b48-4eb3-8f6f-2a6be2d284b7?device=dev1)',
+    ],
+    [
+      'inline link label 内混排 inline code 与 \\[...\\]',
+      '[\\[Schedule\\] `torchlight2` 巡检](cindy://session/abc)',
+    ],
+    [
+      'inline link label 含数学形态的转义方括号也不拆成 display 块',
+      '[\\[E=mc^2\\] 推导笔记](https://example.com/math)',
+    ],
+    [
+      'reference link label 里的 \\[...\\]',
+      '[\\[Schedule\\] 每日汇总][ref-1]',
+    ],
+    [
+      'GFM 表格行(含同行 inline code + 多个转义方括号链接)不插入换行',
+      [
+        '| 类别 | 数量 | 说明与代表项 |',
+        '| --- | ---: | --- |',
+        '| 过期定时任务 | 10 | `torchlight2` 巡检，如 [\\[Schedule\\] A](cindy://session/1)、[\\[Schedule\\] B](cindy://session/2) 与 \\[E=mc^2\\] |',
+      ].join('\n'),
+    ],
+    [
+      '列表项与正文行中的 CommonMark 转义方括号标签',
+      '4. \\[飞书·Cindy·CRT鸣谢添加感谢zkyo创意\\] 805a77\n请填写 \\[姓名\\] 和 \\[日期\\]，访问 a\\[i\\] 与 b\\[0\\]。',
+    ],
+    [
+      '未闭合的游离 \\[ 不与后续链接标签内的 \\] 跨界配对',
+      '未闭合 \\[foo 见 [\\[Schedule\\] 巡检](cindy://session/1)',
+    ],
+  ])('原样保留 %s', (_label, src) => {
+    expect(normalizeMathDelimiters(src)).toBe(src);
+  });
+
+  it('链接标签与表格单元格内的行内 \\(...\\) 仍正常转成 $...$', () => {
+    expect(normalizeMathDelimiters('[公式 \\(E=mc^2\\) \\[注\\]](https://example.com)')).toBe(
+      '[公式 $E=mc^2$ \\[注\\]](https://example.com)',
+    );
+    expect(
+      normalizeMathDelimiters('| 名称 | 公式 |\n| --- | --- |\n| 质能 | \\(E=mc^2\\) \\[注\\] |'),
+    ).toBe('| 名称 | 公式 |\n| --- | --- |\n| 质能 | $E=mc^2$ \\[注\\] |');
+  });
+
+  it('独占一行(含引用块 / CRLF)与含明确数学信号的行中 \\[...\\] 仍转为 display 块', () => {
+    expect(normalizeMathDelimiters('> \\[x\\]')).toBe('> \n\n$$\nx\n$$\n\n');
+    expect(normalizeMathDelimiters('\\[x\\]\r\n下段')).toBe('\n\n$$\nx\n$$\n\n\r\n下段');
+    expect(normalizeMathDelimiters('即 \\[\\frac{1}{2}\\] 如下')).toBe('即 \n\n$$\n\\frac{1}{2}\n$$\n\n 如下');
+    expect(normalizeMathDelimiters('有 \\[a + b = c\\] 成立')).toBe('有 \n\n$$\na + b = c\n$$\n\n 成立');
+  });
+});
+
 describe('normalizeMathDelimiters — preserveLineCount(行锚点模式)', () => {
   it('单行 inline 照常转换,行数不变', () => {
     const src = '第一行 \\(E=mc^2\\) 结尾\n第二行';
@@ -152,6 +209,20 @@ describe('normalizeMathDelimiters — 对抗性输入(ReDoS 回归,CodeQL js/pol
       'a \\alpha b $x$ c \\beta d',
     );
     expect(normalizeMathDelimiters('尾部未闭合 \\alpha \\(x')).toBe('尾部未闭合 \\alpha \\(x');
+  });
+
+  it('大量未闭合方括号、表格管道符与单长行重复 \\[...\\] 均线性完成', () => {
+    const adversarial = '['.repeat(30000) + '\\[Schedule\\]' + '](x) ' + '|'.repeat(30000);
+    const sameLineRepeatedMath = '\\[x=1\\] '.repeat(20000);
+    const sameLineRepeatedTag = '\\[tag\\] '.repeat(20000);
+    const started = Date.now();
+    const out = normalizeMathDelimiters(adversarial);
+    const outMath = normalizeMathDelimiters(sameLineRepeatedMath);
+    const outTag = normalizeMathDelimiters(sameLineRepeatedTag);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(out).toBe(adversarial);
+    expect(outMath).toContain('$$\nx=1\n$$');
+    expect(outTag).toBe(sameLineRepeatedTag);
   });
 });
 

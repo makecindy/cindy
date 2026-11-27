@@ -13,13 +13,15 @@ import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/win
 import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { isEditableKeyboardTarget } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
+import { PluginDetailArticle, type usePluginDetailLayout } from './PluginDetailRecord';
+import { PLUGIN_MANAGEMENT_FRAME_CLASS } from './PluginManagementLayout';
 
 interface PluginDetailTopBarProps {
   label: string;
   onBack: () => void;
   /** 滚动帧是否已离开顶部；顶栏据此从透明切到实底 + hairline。 */
   scrolled: boolean;
-  /** 管理页传入与正文共用的宽度和留白；详情页保留默认阅读宽度。 */
+  /** 自定义页面宽度；插件管理列表和详情默认共用同一内容框。 */
   frameClassName?: string;
   actions?: ReactNode;
 }
@@ -38,6 +40,28 @@ export function usePluginDetailScrolled(): {
     setScrolled(event.currentTarget.scrollTop > 0);
   }, []);
   return { scrolled, onScroll };
+}
+
+/** The installed detail frame also hosts the read-only projection from older computers. */
+export function PluginInstalledDetailFrame({ label, onBack, layout, actions, children }: {
+  label: string;
+  onBack: () => void;
+  layout: ReturnType<typeof usePluginDetailLayout>;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  const { scrolled, onScroll } = usePluginDetailScrolled();
+  return (
+    <main
+      className="app-wallpaper-surface plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
+      onScroll={onScroll}
+    >
+      <PluginDetailTopBar label={label} onBack={onBack} scrolled={scrolled} actions={actions} />
+      <PluginDetailArticle layout={layout} className={cn(PLUGIN_MANAGEMENT_FRAME_CLASS, 'plugin-detail-frame pb-16 pt-5')}>
+        {children}
+      </PluginDetailArticle>
+    </main>
+  );
 }
 
 /**
@@ -122,8 +146,8 @@ export function PluginDetailTopBar({
     >
       <div
         className={cn(
-          'flex h-16 items-center justify-between gap-3',
-          frameClassName ?? 'mx-auto w-full max-w-[824px] px-8 max-[760px]:px-6',
+          'flex h-[calc(var(--space-16)+var(--space-1))] items-center justify-between gap-3',
+          frameClassName ?? PLUGIN_MANAGEMENT_FRAME_CLASS,
         )}
       >
         <button

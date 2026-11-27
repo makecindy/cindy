@@ -1,4 +1,4 @@
-import { pluginUiInterestKey, type PluginUiInterest, type PluginUiTarget, type PluginUiControlState, type PluginUiStateChange } from '../../shared/pluginUi.js';
+import { PLUGIN_UI_INTEREST_LIMIT, pluginUiInterestKey, type PluginUiInterest, type PluginUiTarget, type PluginUiControlState, type PluginUiStateChange } from '../../shared/pluginUi.js';
 
 interface Interest extends PluginUiInterest { authority: object }
 interface Group { owner: string; epoch: string; interests: Map<string, Interest> }
@@ -32,6 +32,13 @@ export class NativePluginUiState {
       });
     });
     return current.length ? current : undefined;
+  }
+
+  snapshot(caller: string, interest: PluginUiInterest): PluginUiControlState | undefined {
+    const group = this.groups.get(caller), key = pluginUiInterestKey(interest);
+    const entry = group?.interests.get(key), snapshot = this.latest.get(key);
+    return group?.owner === this.deps.owner() && entry && this.deps.authority(entry) === entry.authority &&
+      snapshot?.owner === group.owner && snapshot.authority === entry.authority ? snapshot.change.state : undefined;
   }
 
   subscribe(caller: string, epoch: string, entries: PluginUiInterest[]): PluginUiStateChange[] {
@@ -117,8 +124,22 @@ export class NativePluginUiState {
         raw.value !== undefined && (typeof raw.value !== 'string' || raw.value.length > 256) ||
         raw.disabled !== undefined && typeof raw.disabled !== 'boolean' || raw.visible !== undefined && typeof raw.visible !== 'boolean')
       throw new Error('MCP_APP_INVALID_CONTROL_STATE');
+    const ids = new Set<string>();
+    if (raw.items !== undefined && (!Array.isArray(raw.items) || raw.items.length > PLUGIN_UI_INTEREST_LIMIT))
+      throw new Error('MCP_APP_INVALID_CONTROL_STATE');
+    const items = raw.items?.map(item => {
+      if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !item.id || item.id.length > 256 || ids.has(item.id) ||
+          typeof item.title !== 'string' || !item.title.trim() || item.title.length > 200 ||
+          item.icon !== undefined && (typeof item.icon !== 'string' || item.icon.length > 64) ||
+          item.disabled !== undefined && typeof item.disabled !== 'boolean' || item.visible !== undefined && typeof item.visible !== 'boolean')
+        throw new Error('MCP_APP_INVALID_CONTROL_STATE');
+      ids.add(item.id);
+      return { id: item.id, title: item.title, ...(item.icon !== undefined ? { icon: item.icon } : {}),
+        ...(item.disabled !== undefined ? { disabled: item.disabled } : {}), ...(item.visible !== undefined ? { visible: item.visible } : {}) };
+    });
     const state = { ...(raw.title !== undefined ? { title: raw.title } : {}), ...(raw.value !== undefined ? { value: raw.value } : {}),
-      ...(raw.disabled !== undefined ? { disabled: raw.disabled } : {}), ...(raw.visible !== undefined ? { visible: raw.visible } : {}) };
+      ...(raw.disabled !== undefined ? { disabled: raw.disabled } : {}), ...(raw.visible !== undefined ? { visible: raw.visible } : {}),
+      ...(items !== undefined ? { items } : {}) };
     const revision = ++this.revision;
     for (const { caller, group, key } of deliveries) {
       const change = { key, revision, state };

@@ -112,6 +112,7 @@ function deriveRequirementGroups(manifest: GhostManifest): GhostSetupRequirement
     implicit.push({ kind: 'secret', key: s.key });
   }
   for (const c of manifest.network?.connections ?? []) {
+    if (c.source === 'glab-cli') continue;
     implicit.push({ kind: 'connection', key: c.key });
   }
   return implicit.length > 0 ? [implicit] : [];
@@ -226,13 +227,21 @@ function verdictOf(
     return kvValueConfigured(probes.kvValue(req.key)) ? 'satisfied' : 'missing';
   }
   if (req.kind === 'connection') {
-    const declared = manifest.network?.connections?.some(
+    const connDecl = manifest.network?.connections?.find(
       (connection) => connection.key === req.key,
     );
-    if (strict && !declared) {
+    if (strict && !connDecl) {
       throw new GhostSetupAssessmentError(
         `setup requirement ${requirementRef(req)} is not declared`,
       );
+    }
+    if (connDecl?.source === 'glab-cli') {
+      if (strict) {
+        throw new GhostSetupAssessmentError(
+          `setup requirement ${requirementRef(req)} cannot use a glab-cli connection`,
+        );
+      }
+      return 'satisfied';
     }
     return probes.connectionCount(req.key) > 0 ? 'satisfied' : 'missing';
   }
