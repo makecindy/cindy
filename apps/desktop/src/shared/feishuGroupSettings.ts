@@ -12,10 +12,11 @@
 
 import {
   isImDefaultAgentKind,
-  isImDefaultEffortForAgent,
+  isImDefaultEffort,
   isImDefaultPermissionMode,
-  type ImDefaultAgentEffort,
+  isImDefaultPluginEngineEffort,
   type ImDefaultAgentKind,
+  type ImDefaultEffort,
   type ImDefaultPermissionMode,
 } from './imDefaultSettings.js';
 import { pluginEngineKeyFromProviderId } from './pluginEngines.js';
@@ -26,7 +27,8 @@ export interface FeishuGroupRoute {
   providerId: string | null;
   /** Agent 所在电脑；share:<id> 表示分享来的供应商；null 为本机。 */
   agentDeviceId: string | null;
-  effort: ImDefaultAgentEffort;
+  /** 插件引擎(acp)允许 '' 表示引擎默认思考强度。 */
+  effort: ImDefaultEffort | '';
 }
 
 /** 渲染端可见的一个群的设置。 */
@@ -128,7 +130,11 @@ function optionalId(value: unknown): string | null | undefined {
 export function parseFeishuGroupRoute(value: unknown): FeishuGroupRoute | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
-  if (!isImDefaultAgentKind(raw.agentKind) || !isImDefaultEffortForAgent(raw.agentKind, raw.effort)) return null;
+  if (!isImDefaultAgentKind(raw.agentKind)) return null;
+  const effortValid = raw.agentKind === 'acp'
+    ? isImDefaultPluginEngineEffort(raw.effort)
+    : isImDefaultEffort(raw.effort);
+  if (!effortValid) return null;
   if (typeof raw.model !== 'string') return null;
   const model = raw.model.trim();
   if (!model || model.length > MAX_ID_LENGTH) return null;
@@ -136,7 +142,13 @@ export function parseFeishuGroupRoute(value: unknown): FeishuGroupRoute | null {
   const agentDeviceId = optionalId(raw.agentDeviceId ?? null);
   if (providerId === undefined || agentDeviceId === undefined) return null;
   if (raw.agentKind === 'acp' && !pluginEngineKeyFromProviderId(providerId)) return null;
-  return { agentKind: raw.agentKind, model, providerId, agentDeviceId, effort: raw.effort };
+  return {
+    agentKind: raw.agentKind,
+    model,
+    providerId,
+    agentDeviceId,
+    effort: raw.effort as ImDefaultEffort | '',
+  };
 }
 
 /** 运行时校验渲染端发来的保存内容；不合法时抛错，不做部分保存。 */

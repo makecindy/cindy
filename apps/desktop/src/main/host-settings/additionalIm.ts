@@ -19,7 +19,7 @@ function project(domain: ImSettingsDomain, snapshot: ReturnType<ReturnType<typeo
   const effective = channel ? document.channels[channel] : document.global;
   // This wire version only describes built-in routes executed on this Host. Do not turn
   // a saved remote-Agent or plugin-engine route into a local built-in route by dropping its binding.
-  if (effective.agentKind === 'acp' || Object.values(effective.agents).some(route => route?.agentDeviceId)) {
+  if (effective.agentKind === 'acp' || effective.agents.acp || Object.values(effective.agents).some(route => route?.agentDeviceId)) {
     return { status: 'unavailable', revision: null };
   }
   const scope = channel ? record(record(snapshot.value.channels)[channel]) : record(snapshot.value.global);

@@ -457,6 +457,7 @@ import {
   findPluginEngine,
   isPluginEngineEffort,
   isPluginEngineSessionKind,
+  isPluginEngineSwitchSourceAllowed,
   isSamePluginEngineChoice,
   pluginEngineExecutionDeviceId,
   pluginEngineModelName,
@@ -1959,7 +1960,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const pluginEngineSwitchEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
     // Agent 在另一台电脑的任务照样可以：选插件引擎时 Agent 回到被控电脑(被控端负责换位置)。
     && !currentSession.remoteHostId
-    && currentSession.source !== 'review'
+    && isPluginEngineSwitchSourceAllowed(currentSession.source)
     && currentSession.status !== 'archived';
   const pluginEngines = usePluginEngines(maker, deviceId, pluginEngineTask || pluginEngineSwitchEligible);
   const pluginEngineKeepDeviceIds = useMemo(
@@ -10357,11 +10358,17 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const archiveFromCard = useCallback(() => {
     void patchSessionMeta({ status: 'archived' }, async (isCurrent) => {
       const names = deviceId
-        ? await loadActiveBoundScheduleNames({ deviceId, invoke, sessionId, source: sessionSourceForSchedule })
+        ? await loadActiveBoundScheduleNames({
+            deviceId,
+            invoke,
+            sessionId,
+            source: sessionSourceForSchedule,
+            orcaRole: currentSession?.orcaRole,
+          })
         : [];
       return isCurrent() && confirmArchiveWithSchedules(t, names);
     });
-  }, [deviceId, invoke, patchSessionMeta, sessionId, sessionSourceForSchedule, t]);
+  }, [currentSession?.orcaRole, deviceId, invoke, patchSessionMeta, sessionId, sessionSourceForSchedule, t]);
   useTaskAutoArchive({
     session: currentSession?.id === sessionId ? currentSession : null,
     deviceId,
@@ -10991,7 +10998,13 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             onArchive={(prepare) => { void patchSessionMeta({ status: 'archived' }, prepare); }}
             confirmArchive={async (isCurrent) => {
               const names = deviceId
-                ? await loadActiveBoundScheduleNames({ deviceId, invoke, sessionId, source: sessionSourceForSchedule })
+                ? await loadActiveBoundScheduleNames({
+                    deviceId,
+                    invoke,
+                    sessionId,
+                    source: sessionSourceForSchedule,
+                    orcaRole: currentSession?.orcaRole,
+                  })
                 : [];
               return isCurrent() && confirmArchiveWithSchedules(t, names);
             }}

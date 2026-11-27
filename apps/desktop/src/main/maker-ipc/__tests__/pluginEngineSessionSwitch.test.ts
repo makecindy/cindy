@@ -221,15 +221,16 @@ describe('switching a task onto a plugin engine', () => {
     expect(handoff).toContain('帮我改一下登录页');
   });
 
-  // 2026-11-27: plugin engines are open across IM (Telegram/Feishu), Orca collaboration, and
-  // scheduler tasks just like built-in engines, while review tasks, SSH workspaces, and shared-task
-  // guests stay fail-closed.
+  // 2026-11-27: plugin engines are open across IM (Telegram/Feishu/X/Discord hook), Orca
+  // collaboration, scheduler, and learn tasks just like built-in engines, while review tasks,
+  // SSH workspaces, and shared-task guests stay fail-closed.
   it.each([
     { name: 'a Telegram IM task', row: { source: 'telegram' } },
     { name: 'a Feishu IM task', row: { source: 'feishu' } },
     { name: 'a collaboration lead', row: { orcaRole: 'lead' as const } },
     { name: 'a collaboration worker', row: { orcaRole: 'worker' as const } },
     { name: 'a scheduler task', row: { source: 'scheduler' } },
+    { name: 'a learn task', row: { source: 'learn' } },
   ])('stages and commits switching $name onto a plugin engine', async ({ row }) => {
     const { deps, pendingSwitches } = makeDeps(makeRow(row));
     const staged = await performSessionAgentSwitch(deps, {
@@ -243,6 +244,33 @@ describe('switching a task onto a plugin engine', () => {
       agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4', sdkSessionId: null,
     }));
     expect(pendingSwitches.get('s1')).toBeUndefined();
+  });
+
+  // 回归：IM / 官方 hook 会话支持切换本机与远程插件引擎。
+  it.each([
+    { source: 'x', agentDeviceId: 'mini' },
+    { source: 'feishu', agentDeviceId: null },
+    { source: 'telegram', agentDeviceId: null },
+    { source: 'discord-hook', agentDeviceId: 'mini' },
+  ])('allows $source task to switch onto a plugin engine (device=$agentDeviceId)', async ({ source, agentDeviceId }) => {
+    const admitRemotePluginEngineTarget = vi.fn(async () => ({
+      model: 'gemini-4-neon', effort: 'high', permissionMode: 'default', engineName: 'Antigravity',
+    }));
+    const { deps, pendingSwitches } = makeDeps(makeRow({ source }), { admitRemotePluginEngineTarget });
+    const staged = await performSessionAgentSwitch(deps, {
+      sessionId: 's1',
+      targetAgentKind: 'acp',
+      model: 'gemini-4-neon',
+      providerId: ENGINE,
+      ...(agentDeviceId ? { agentDeviceId } : {}),
+    });
+    expect(staged).toMatchObject({ deferred: true, agentKind: 'acp', model: 'gemini-4-neon' });
+    expect(pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'acp',
+      model: 'gemini-4-neon',
+      providerId: ENGINE,
+      ...(agentDeviceId ? { targetAgentDeviceId: agentDeviceId } : {}),
+    });
   });
 
   it.each([

@@ -18,10 +18,11 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/lib/toast';
 import { additionalSettingsSchemas } from '../../../shared/settingsEditableCatalog';
 import {
-  imDefaultAgentSettingsOf,
+  activeImDefaultAgentSettings,
+  isImDefaultBuiltinAgentKind,
   isImDefaultEffort,
   isImDefaultPermissionMode,
-  type BuiltinImDefaultAgentKind,
+  type ImDefaultBuiltinAgentKind,
   type ImDefaultSettingsChannel,
 } from '../../../shared/imDefaultSettings';
 import type { CloudSettingsDomain, CloudSettingsState } from '../../../shared/cloudSettings';
@@ -42,8 +43,9 @@ const channels = {
   dingtalk: 'imDingtalk',
   wecom: 'imWecom',
 } as const;
-const routeKey = (agent: BuiltinImDefaultAgentKind) => (agent === 'claude-code' ? 'claudeCode' : agent);
-const vendorOf = (agent: BuiltinImDefaultAgentKind) => (agent === 'claude-code' ? 'cc' : agent);
+const routeKey = (agent: ImDefaultBuiltinAgentKind) =>
+  agent === 'claude-code' ? 'claudeCode' : agent;
+const vendorOf = (agent: ImDefaultBuiltinAgentKind) => (agent === 'claude-code' ? 'cc' : agent);
 type Props = {
   itemId: string;
   section?: 'defaults' | 'telegram';
@@ -106,11 +108,11 @@ export function CloudImSettings({
   const agents = (state?.choices?.agentKind ?? [])
     .map((choice) => choice.value)
     .filter(
-      (agent): agent is BuiltinImDefaultAgentKind =>
+      (agent): agent is ImDefaultBuiltinAgentKind =>
         agent === 'claude-code' || agent === 'codex' || agent === 'pi',
     );
   const select = (
-    agent: BuiltinImDefaultAgentKind,
+    agent: ImDefaultBuiltinAgentKind,
     modelId: string,
     providerId: string | null,
     effort: unknown,
@@ -152,8 +154,13 @@ export function CloudImSettings({
   const available = !loading && !readFailed && supported && state && value && active;
   // Like the local picker, the automatic route shows the model it resolves to ("Auto · 高").
   const shown =
-    display && value && active && !active.modelId && display.automaticModel && display.agentKind !== 'acp'
-      ? { agentKind: display.agentKind, route: imDefaultAgentSettingsOf(display, display.agentKind) }
+    display &&
+    value &&
+    active &&
+    !active.modelId &&
+    display.automaticModel &&
+    isImDefaultBuiltinAgentKind(display.agentKind)
+      ? { agentKind: display.agentKind, route: display.agents[display.agentKind] }
       : null;
   return (
     <div className="flex min-w-0 flex-col gap-6">
@@ -333,7 +340,7 @@ export function cloudImSettingsSummary(
   if (display?.automaticModel)
     return {
       agentKind: display.agentKind,
-      model: imDefaultAgentSettingsOf(display, display.agentKind).model || automaticLabel,
+      model: activeImDefaultAgentSettings(display).model || automaticLabel,
     };
   const state = states[domain];
   const parsed =

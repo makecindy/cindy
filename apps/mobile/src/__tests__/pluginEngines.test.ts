@@ -28,6 +28,7 @@ import {
   formatPluginEnginePickerQuota,
   getCachedControlledPluginEngines,
   getCachedPluginEngines,
+  isPluginEngineSwitchSourceAllowed,
   loadControlledPluginEngines,
   loadPluginEngines,
   normalizeOfferedRemotePluginEngines,
@@ -374,6 +375,29 @@ describe('a task running on a plugin engine', () => {
     });
 
     expect(formatPluginEnginePickerQuota(null, now, 'en-US', countdown)).toBeUndefined();
+  });
+
+  // 回归：Mobile 会话页的模型选择器需与 Desktop 保持一致，对除 review 外的所有任务来源开放插件引擎切换。
+  it.each([
+    ['desktop', true],
+    ['bot', true],
+    ['x', true],
+    ['feishu', true],
+    ['telegram', true],
+    ['discord', true],
+    ['discord-hook', true],
+    ['slack', true],
+    ['wechat', true],
+    ['dingtalk', true],
+    ['wecom', true],
+    ['imessage', true],
+    ['learn', true],
+    ['cindy-make', true],
+    ['scheduler', true],
+    [null, true],
+    ['review', false],
+  ] as const)('switch source allowlist: %s -> %s', (source, allowed) => {
+    expect(isPluginEngineSwitchSourceAllowed(source)).toBe(allowed);
   });
 
   // 生产入口：resolveMobilePluginEngineFavorite + matchesPluginEngineFavoriteQuery。

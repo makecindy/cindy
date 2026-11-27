@@ -26,25 +26,20 @@ import {
 } from '../maker-host/model-route-guard';
 
 import {
+  activeImDefaultAgentSettings,
   IM_DEFAULT_EFFORT_OVERRIDES,
+  IM_DEFAULT_PLUGIN_ENGINE_SETTINGS,
   IM_DEFAULT_SETTINGS,
-  imDefaultAgentSettingsOf,
-  type ImDefaultAgentEffort,
+  type ImDefaultBuiltinAgentKind,
   type ImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
   type ImDefaultSettings,
-  type ImDefaultAgentKind,
   isUnconditionalTurnPolicyChannel,
 } from '../../shared/imDefaultSettings.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { createLogger } from '../logger';
 import { getMaker } from '../maker-host';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService';
-import { listPluginEngineViews } from '../maker-ipc/pluginEnginesIpc.js';
-import {
-  admitPluginEngineSwitchTarget,
-  isDisallowedPluginEngineDeviceId,
-} from '../maker-ipc/pluginEngineSessionAdmission.js';
-import { readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { readImDefaultSettings } from './defaultSettingsStore';
 import { readImRemoteProviderRoute } from './remoteProviderRoute';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror';
@@ -58,7 +53,7 @@ export async function resolveImAutomaticDefaults<T extends ImDefaultSettings>(
   raw: T,
   channel?: ImDefaultSettingsChannel,
   providerSnapshot?: ProviderView[] | null,
-  agentKind?: ImDefaultAgentKind,
+  agentKind?: ImDefaultBuiltinAgentKind,
 ): Promise<T | null> {
   const providers = providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
   if (!providers) return null;
@@ -90,7 +85,7 @@ export interface ResolvedImSessionDefaults {
   agentDeviceId?: string | null;
   agentKind: EngineKind;
   model: string;
-  effort: ImDefaultAgentEffort;
+  effort: Effort | '';
   providerId: string | null;
   permissionMode: PermissionMode;
   fastMode: boolean | 'ultrafast';
@@ -101,19 +96,8 @@ export interface ResolvedImSessionDefaults {
 export function getImDefaultEffortFor(
   agentKind: AgentKind,
   modelId: string,
-  overrides?: Readonly<Partial<Record<string, Effort>>>,
-): Effort;
-export function getImDefaultEffortFor(
-  agentKind: EngineKind,
-  modelId: string,
-  overrides?: Readonly<Partial<Record<string, Effort>>>,
-): ImDefaultAgentEffort;
-export function getImDefaultEffortFor(
-  agentKind: EngineKind,
-  modelId: string,
   overrides: Readonly<Partial<Record<string, Effort>>> = IM_DEFAULT_EFFORT_OVERRIDES,
-): ImDefaultAgentEffort {
-  if (agentKind === 'acp') return '';
+): Effort {
   const model = getMaker()
     .getCapabilities(agentKind)
     .availableModels.find((m) => m.id === modelId);
@@ -134,6 +118,21 @@ export function applyImRouteOverride<T extends ImDefaultSettings>(
   override: ImLaneRouteOverride | null | undefined,
 ): T {
   if (!override) return raw;
+  if (override.agentKind === 'acp') {
+    return {
+      ...raw,
+      agentKind: 'acp',
+      agents: {
+        ...raw.agents,
+        acp: {
+          providerId: override.providerId,
+          model: override.model,
+          effort: override.effort,
+          ...(override.agentDeviceId ? { agentDeviceId: override.agentDeviceId } : {}),
+        },
+      },
+    };
+  }
   return {
     ...raw,
     agentKind: override.agentKind,
@@ -142,7 +141,7 @@ export function applyImRouteOverride<T extends ImDefaultSettings>(
       [override.agentKind]: {
         providerId: override.providerId,
         model: override.model,
-        effort: override.effort,
+        effort: override.effort || raw.agents[override.agentKind].effort,
         ...(override.agentDeviceId ? { agentDeviceId: override.agentDeviceId } : {}),
       },
     },
@@ -156,54 +155,42 @@ export async function resolveImSessionDefaults(
   routeOverride?: ImLaneRouteOverride | null,
 ): Promise<ResolvedImSessionDefaults> {
   const raw = applyImRouteOverride(readImDefaultSettings(channel), routeOverride);
+  if (raw.agentKind === 'acp') {
+    const acp = raw.agents.acp ?? IM_DEFAULT_PLUGIN_ENGINE_SETTINGS;
+    if (!pluginEngineKeyFromProviderId(acp.providerId) || !acp.model.trim()) {
+      throw new Error('im default plugin engine route is incomplete; reselect a model in settings');
+    }
+    return {
+      ...(acp.agentDeviceId ? { agentDeviceId: acp.agentDeviceId } : {}),
+      agentKind: 'acp',
+      model: acp.model.trim(),
+      effort: acp.effort,
+      providerId: acp.providerId,
+      permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
+      fastMode: false,
+      fingerprint: fingerprintImDefaultSettings(raw),
+    };
+  }
   if (usesAutomaticImModel(raw)) {
     const resolved = await resolveImAutomaticDefaults(raw, channel, providerSnapshot);
     if (!resolved) throw new Error('im default session has no available chat model; connect or enable a model in settings');
+    const resolvedSettings = activeImDefaultAgentSettings(resolved);
     return {
       agentKind: resolved.agentKind,
-      ...imDefaultAgentSettingsOf(resolved, resolved.agentKind),
+      ...resolvedSettings,
       permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
       fastMode: false,
       fingerprint: resolvedImDefaultFingerprint(fingerprintImDefaultSettings(raw), resolved),
     };
   }
-  if (raw.agentKind === 'acp') {
-    const acp = imDefaultAgentSettingsOf(raw, 'acp');
-    if (isDisallowedPluginEngineDeviceId(acp.agentDeviceId)) {
-      throw new Error('无效的插件引擎运行位置。请重新选择插件引擎。');
-    }
-    const engines = acp.agentDeviceId
-      ? await readRemotePluginEngines(acp.agentDeviceId)
-      : listPluginEngineViews();
-    const admitted = admitPluginEngineSwitchTarget(
-      {
-        providerId: acp.providerId,
-        model: acp.model,
-        effort: acp.effort,
-        permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
-      },
-      engines,
-    );
-    return {
-      ...(acp.agentDeviceId ? { agentDeviceId: acp.agentDeviceId } : {}),
-      agentKind: 'acp',
-      model: admitted.model,
-      effort: admitted.effort,
-      providerId: acp.providerId,
-      permissionMode: admitted.permissionMode,
-      fastMode: false,
-      fingerprint: fingerprintImDefaultSettings(raw),
-    };
-  }
   const remote = raw.agents[raw.agentKind];
   if (remote.agentDeviceId) {
     const { model } = await readImRemoteProviderRoute({ ...remote, agentDeviceId: remote.agentDeviceId, agentKind: raw.agentKind });
-    const requestedEffort: Effort = remote.effort || 'high';
     return {
       ...remote,
       agentKind: raw.agentKind,
-      effort: model.efforts.includes(requestedEffort) || !model.efforts.length
-        ? requestedEffort : model.defaultEffort ?? model.efforts[0],
+      effort: model.efforts.includes(remote.effort) || !model.efforts.length
+        ? remote.effort : model.defaultEffort ?? model.efforts[0],
       permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
       fastMode: false,
       fingerprint: fingerprintImDefaultSettings(raw),
@@ -229,7 +216,7 @@ export async function resolveImSessionDefaults(
   const effort = resolveEffort(
     agentKind,
     model.modelId,
-    agentSettings.effort || 'high',
+    agentSettings.effort,
     config.effortOverrides,
     providers,
     providerId,
@@ -264,13 +251,13 @@ export function readImDefaultSettingsFingerprint(
  */
 export function readImRawDefaultRoute(channel?: ImDefaultSettingsChannel): ImDefaultRoute {
   const raw = readImDefaultSettings(channel);
-  const settings = imDefaultAgentSettingsOf(raw, raw.agentKind);
+  const settings = activeImDefaultAgentSettings(raw);
   return {
     agentKind: raw.agentKind,
     model: settings.model,
     providerId: settings.providerId?.trim() || null,
     agentDeviceId: settings.agentDeviceId ?? null,
-    effort: settings.effort,
+    effort: settings.effort || null,
   };
 }
 
@@ -335,7 +322,7 @@ function pickModel(
   // 硬编码系统兜底同样过准入(PR #744 review 第十五轮):走到这里时该 agent 的
   // 启用来源已全部耗尽,目录可用而硬编码模型也被停用 ⇒ 抛错走 IM 既有失败路径,
   // 绝不让 turnRunner 拿停用模型直建付费会话;目录不可用保持旧兜底(降级窗口)。
-  const systemAgent: AgentKind = IM_DEFAULT_SETTINGS.agentKind;
+  const systemAgent = IM_DEFAULT_SETTINGS.agentKind;
   const systemFallbackModel = IM_DEFAULT_SETTINGS.agents[systemAgent].model;
   if (providers) {
     const lenient = resolveLenientRoute(providers, systemAgent, systemFallbackModel, null);

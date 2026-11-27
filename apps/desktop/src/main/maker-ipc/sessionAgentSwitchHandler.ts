@@ -42,7 +42,7 @@ import {
   parseProviderSharePeer,
 } from '@cindy/device-link';
 import { isIpcError } from '../../shared/ipc-errors.js';
-import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, readDeviceLinkModelSelectionOrigin, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
+import { deviceLinkInvokeControllerSupports, getDeviceLinkInvokeContext, isDeviceLinkInvoke, runOutsideDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { parseOrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
 import { createSharedTaskPendingSelectionGuard, createSharedTaskSettingGuard } from './sharedTaskSetting.js';
@@ -67,7 +67,7 @@ import {
   normalizeDbAgentKind,
   type DbEngineKind,
 } from '../../shared/agentKindConversion.js';
-import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
+import { isPluginEngineSwitchSourceAllowed, pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { decideProviderGroupFailure, providerGroupFailureSignals } from '../provider-group/failurePolicy.js';
 
 function throwIfAgentSwitchAborted(signal: AbortSignal | undefined): void {
@@ -983,7 +983,7 @@ export async function performSessionAgentSwitch(
     // 从插件引擎换到内置引擎时目标位置照常：可以是另一台电脑或供应商组(下面按内置引擎换电脑裁决)。
     // 共享任务访客仍受只读/访客边界限制；其余所有非 review / 非 SSH 的会话（含普通、伙伴、IM、
     // Hook、侧边追问、定时任务与多 Agent 协同）均与内置引擎同等开放插件引擎切换。
-    if (getDeviceLinkInvokeContext()?.sharedTask) {
+    if (getDeviceLinkInvokeContext()?.sharedTask || !isPluginEngineSwitchSourceAllowed(row.source)) {
       throwIpcError('UNSUPPORTED_CAPABILITY', 'this task cannot switch to or from a plugin engine yet');
     }
     if (!builtinTarget) {

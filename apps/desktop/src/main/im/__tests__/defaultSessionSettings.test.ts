@@ -5,8 +5,6 @@ const mocks = vi.hoisted(() => ({
   listProviders: vi.fn(),
   readImDefaultSettings: vi.fn(),
   readRemoteRoute: vi.fn(),
-  listPluginEngineViews: vi.fn(() => [] as unknown[]),
-  readRemotePluginEngines: vi.fn(async (_deviceId: string) => [] as unknown[]),
   logger: {
     warn: vi.fn(),
     info: vi.fn(),
@@ -21,12 +19,6 @@ vi.mock('../../maker-host', () => ({
 }));
 vi.mock('../../maker-host/createDesktopProviderService', () => ({
   getDesktopProviderService: () => ({ listProviders: mocks.listProviders }),
-}));
-vi.mock('../../maker-ipc/pluginEnginesIpc.js', () => ({
-  listPluginEngineViews: () => mocks.listPluginEngineViews(),
-}));
-vi.mock('../../remote-agent/controller/deviceCatalog.js', () => ({
-  readRemotePluginEngines: (deviceId: string) => mocks.readRemotePluginEngines(deviceId),
 }));
 vi.mock('../defaultSettingsStore', () => ({
   readImDefaultSettings: mocks.readImDefaultSettings,
@@ -212,25 +204,11 @@ describe('resolveImSessionDefaults', () => {
     mocks.listProviders.mockResolvedValue(providers);
   });
 
-  // 生产入口与可观察结果：resolveImSessionDefaults 对本地与远程 acp 插件引擎默认配置的准入与返回。
-  // 规则依据：2026-11-27 IM 渠道默认设置放开插件引擎；不经内置供应商目录，直接按本地/远程插件引擎目录准入。
-  // 覆盖缺口：此前 resolveImSessionDefaults 只接受三内置引擎，无法解析 agents.acp。
-  // 最小失败输入与 tier：unit，设置 agentKind='acp' + 本地与远程 plugin engine 视图并校验解析结果。
+  // 生产入口与可观察结果：resolveImSessionDefaults 对本地与远程 acp 插件引擎默认配置的解析与不完整路由拦截。
+  // 规则依据：IM 渠道默认设置放开插件引擎；不经内置供应商目录，完整路由透传给 openChannelSession 做实时准入。
+  // 最小失败输入与 tier：unit，设置 agentKind='acp' + 本地/远程路由及缺失 providerId/model 校验。
   it('resolves local and remote plugin engine (acp) IM defaults without consulting built-in providers', async () => {
     const DSH = 'acp-plugin:dsh-acp:dsh';
-    mocks.listPluginEngineViews.mockReturnValue([
-      {
-        key: 'dsh-acp:dsh',
-        providerId: DSH,
-        ghostId: 'dsh-acp',
-        harnessId: 'dsh',
-        name: 'DSH',
-        availability: { state: 'available' },
-        models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4', efforts: ['high'] }],
-        permissionModes: [{ id: 'ask' }, { id: 'bypassPermissions' }],
-        defaultPermissionMode: 'ask',
-      },
-    ]);
     mocks.readImDefaultSettings.mockReturnValue({
       ...IM_DEFAULT_SETTINGS,
       agentKind: 'acp',
@@ -250,20 +228,6 @@ describe('resolveImSessionDefaults', () => {
     });
     expect(mocks.listProviders).not.toHaveBeenCalled();
 
-    mocks.readRemotePluginEngines.mockResolvedValue([
-      {
-        key: 'dsh-acp:dsh',
-        providerId: DSH,
-        ghostId: 'dsh-acp',
-        harnessId: 'dsh',
-        name: 'DSH',
-        availability: { state: 'available' },
-        remoteUse: { supported: true, enabled: true },
-        models: [{ id: 'deepseek-v4', displayName: 'DeepSeek V4' }],
-        permissionModes: [{ id: 'ask' }],
-        defaultPermissionMode: 'ask',
-      },
-    ]);
     mocks.readImDefaultSettings.mockReturnValue({
       ...IM_DEFAULT_SETTINGS,
       agentKind: 'acp',
@@ -279,9 +243,19 @@ describe('resolveImSessionDefaults', () => {
       providerId: DSH,
       model: 'deepseek-v4',
       effort: '',
-      permissionMode: 'ask',
+      permissionMode: 'auto',
+      fastMode: false,
     });
-    expect(mocks.readRemotePluginEngines).toHaveBeenCalledWith('studio');
+
+    mocks.readImDefaultSettings.mockReturnValue({
+      ...IM_DEFAULT_SETTINGS,
+      agentKind: 'acp',
+      agents: {
+        ...IM_DEFAULT_SETTINGS.agents,
+        acp: { providerId: null, model: '', effort: '' },
+      },
+    });
+    await expect(resolveImSessionDefaults(config)).rejects.toThrow('plugin engine route is incomplete');
   });
 
   it('preserves an explicitly saved older model and effort', async () => {
@@ -812,6 +786,32 @@ describe('resolveImSessionDefaults', () => {
       agentKind: 'claude-code',
       model: 'shared-id',
       effort: 'medium', // clamped using the chat copy's defaultEffort, not silently passed through
+    });
+  });
+
+  // 回归：IM 默认设置为插件引擎(acp)时，resolveImSessionDefaults 必须直通 acp 路由(含远程 agentDeviceId)，
+  // 不走内置供应商目录回退。最小失败输入与 tier：unit，saved default 为 acp。
+  it('resolves a saved plugin engine (acp) default directly without built-in catalog fallback', async () => {
+    mocks.readImDefaultSettings.mockReturnValue({
+      agentKind: 'acp',
+      agents: {
+        'claude-code': { providerId: null, model: 'claude-opus-4-8', effort: 'xhigh' },
+        codex: { providerId: null, model: 'codex/gpt-5.5', effort: 'high' },
+        acp: {
+          providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+          model: 'gemini-4-neon',
+          effort: 'high',
+          agentDeviceId: 'mini',
+        },
+      },
+    });
+
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+      model: 'gemini-4-neon',
+      effort: 'high',
+      agentDeviceId: 'mini',
     });
   });
 });

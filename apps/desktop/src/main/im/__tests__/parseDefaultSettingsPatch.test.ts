@@ -97,38 +97,31 @@ describe('parseImDefaultSettingsPatch', () => {
     expect(parsed).toEqual(nonDefault);
   });
 
-  // 生产入口与可观察结果：parseImDefaultSettingsPatch 解析 agentKind='acp' 与 agents.acp。
-  // 规则依据：2026-11-27 全系统放开插件模型，IM 新对话默认设置与飞书群设置须支持本地与远程插件引擎及空 effort。
-  // 覆盖缺口：此前 patch 解析只认三内置引擎，提交 acp 或 effort='' 会抛错导致 UI 弹回。
-  // 最小失败输入与 tier：unit，提交合法 acp-plugin providerId 与空 effort，以及非法 providerId。
-  it('parses plugin engine defaults with optional empty effort and rejects invalid plugin providerId', () => {
-    const parsed = parseImDefaultSettingsPatch({
+  // 回归：IM 新对话默认模型支持插件引擎(acp)，覆盖本地/远程插件引擎保存、清空及非法 providerId/model 校验。
+  // 最小失败输入与 tier：unit，agents.acp 带合法 acp-plugin: providerId / 置空清除 / 传普通 providerId。
+  it('parses, clears, and validates plugin engine (acp) default routes', () => {
+    const pluginRoute = {
+      providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+      model: 'gemini-4-neon',
+      effort: 'high' as const,
+      agentDeviceId: 'mini',
+    };
+    expect(parseImDefaultSettingsPatch({ agentKind: 'acp', agents: { acp: pluginRoute } })).toEqual({
       agentKind: 'acp',
-      agents: {
-        acp: {
-          providerId: 'acp-plugin:dsh-acp:dsh',
-          model: 'deepseek-v4',
-          effort: '',
-          agentDeviceId: 'studio',
-        },
-      },
+      agents: { acp: pluginRoute },
     });
-    expect(parsed).toEqual({
-      agentKind: 'acp',
-      agents: {
-        acp: {
-          providerId: 'acp-plugin:dsh-acp:dsh',
-          model: 'deepseek-v4',
-          effort: '',
-          agentDeviceId: 'studio',
-        },
-      },
+    expect(
+      parseImDefaultSettingsPatch({ agents: { acp: { providerId: null, model: '', effort: '' } } }),
+    ).toEqual({
+      agents: { acp: { providerId: null, model: '', effort: '' } },
     });
     expect(() =>
+      parseImDefaultSettingsPatch({ agents: { acp: { providerId: 'openai', model: 'gpt-5', effort: '' } } }),
+    ).toThrow(/providerId/);
+    expect(() =>
       parseImDefaultSettingsPatch({
-        agentKind: 'acp',
-        agents: { acp: { providerId: 'openai', model: 'deepseek-v4', effort: '' } },
+        agents: { acp: { providerId: 'acp-plugin:_ns__local__agy-acp:agy', model: '', effort: '' } },
       }),
-    ).toThrow(/providerId/i);
+    ).toThrow(/model/);
   });
 });

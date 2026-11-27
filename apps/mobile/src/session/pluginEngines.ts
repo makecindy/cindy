@@ -397,6 +397,11 @@ export function normalizePluginEngineSwitchIntent(value: unknown): MobilePluginE
   };
 }
 
+/** 任务来源是否允许在已有任务内切到 / 换出插件引擎（与 Desktop shared/pluginEngines 保持一致：除 review 外全开放）。 */
+export function isPluginEngineSwitchSourceAllowed(source: string | null | undefined): boolean {
+  return source !== 'review';
+}
+
 /** The pending target has priority over the saved execution location, including an explicit return home. */
 export function pluginEngineExecutionDeviceId(
   currentDeviceId: string | null | undefined,

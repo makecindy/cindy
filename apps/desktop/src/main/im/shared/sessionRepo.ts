@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto';
 
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { IdentityKey } from '@cindy/im';
-import type { AgentKind, EngineKind, Effort, PermissionMode } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind, PermissionMode } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
 
@@ -67,8 +67,8 @@ export interface ImSessionRow {
   agentKind: EngineKind;
   workingDir: string;
   model: string;
-  /** Latest persisted effort (may be changed by user via /model card later). */
-  effort: Effort;
+  /** Latest persisted effort (may be changed by user via /model card later; '' for acp default). */
+  effort: Effort | '';
   /** Latest persisted permission mode. */
   permissionMode: PermissionMode;
   fastMode: boolean | 'ultrafast';
@@ -103,7 +103,7 @@ export interface ImSessionRow {
 export interface SessionModelRouteSnapshot {
   agentDeviceId?: string | null;
   model: string;
-  effort: Effort;
+  effort: Effort | '';
   providerId: string | null;
 }
 
@@ -496,7 +496,7 @@ export function createImSessionRepo(
                 : {}),
               workingDir: row.workingDir,
               model: row.model,
-              effort: row.effort,
+              effort: row.effort as Effort,
               permissionMode: row.permissionMode,
               fastMode: row.fastMode,
               status: 'active',
@@ -670,7 +670,7 @@ export function createImSessionRepo(
             },
             now,
           });
-          if (fresh.providerId) setSessionProvider(fresh.id, fresh.providerId);
+          if (fresh.providerId && fresh.agentKind !== 'acp') setSessionProvider(fresh.id, fresh.providerId);
           log.info(
             `created fresh ${ns.source} session id=${fresh.id} workingDir=${maskPath(fresh.workingDir)} ` +
               `agent=${fresh.agentKind} model=${fresh.model} effort=${fresh.effort} ` +
@@ -794,7 +794,7 @@ export async function resetSessionToDefaults(
     .set({
       agentKind: toDbAgentKind(defaults.agentKind),
       model: defaults.model,
-      effort: defaults.effort,
+      effort: defaults.effort as Effort,
       providerId: defaults.providerId,
       agentDeviceId: defaults.agentDeviceId ?? null,
       permissionMode: defaults.permissionMode,
@@ -889,7 +889,7 @@ export async function readModelRouteSnapshot(
 export async function updateModelEffort(
   sessionId: string,
   model: string,
-  effort: Effort,
+  effort: Effort | '',
   providerId?: string | null,
 ): Promise<void> {
   const db = getDbClient().drizzle;
@@ -897,7 +897,7 @@ export async function updateModelEffort(
     .update(sessions)
     .set({
       model,
-      effort,
+      effort: effort as Effort,
       ...(providerId !== undefined ? { providerId } : {}),
       updatedAt: Date.now(),
     })

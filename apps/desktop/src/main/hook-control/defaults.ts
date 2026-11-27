@@ -57,7 +57,7 @@ export interface ResolvedHookSessionConfig {
   agentDeviceId?: string | null;
   agentKind: EngineKind;
   model: string;
-  effort: Effort | undefined;
+  effort: Effort | '' | undefined;
   permissionMode: string;
   /**
    * 草稿默认的来源(供应商)id, 未设置为 null。这里只透传设置值不校验连接态 ——
@@ -66,6 +66,11 @@ export interface ResolvedHookSessionConfig {
    */
   providerId: string | null;
 }
+
+export type ResolvedBuiltinHookSessionConfig = Omit<ResolvedHookSessionConfig, 'agentKind' | 'effort'> & {
+  agentKind: 'claude-code' | 'codex' | 'pi';
+  effort: Effort | undefined;
+};
 
 const AGENT_KINDS = new Set(['claude-code', 'codex', 'pi']);
 
@@ -81,7 +86,7 @@ export function resolveHookSessionConfig(
     effort: string | null;
     permissionMode: string | null;
   },
-): ResolvedHookSessionConfig & { agentKind: 'claude-code' | 'codex' | 'pi' } {
+): ResolvedBuiltinHookSessionConfig {
   const defaults = deps.readDefaults();
 
   // 1. agent: 显式合法值 > 草稿默认

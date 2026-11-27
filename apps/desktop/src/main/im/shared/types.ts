@@ -1,5 +1,5 @@
 import type { ImContextSnapshot } from '../../../shared/imMessageSource';
-import type { ImDefaultAgentEffort, ImDefaultAgentKind } from '../../../shared/imDefaultSettings';
+import type { ImDefaultAgentKind, ImDefaultEffort } from '../../../shared/imDefaultSettings';
 import type { ProviderView } from '@cindy/model-providers';
 import type { ResolvedImSessionDefaults } from '../defaultSessionSettings';
 /**
@@ -64,7 +64,7 @@ export interface ImLaneRouteOverride {
   model: string;
   providerId: string | null;
   agentDeviceId: string | null;
-  effort: ImDefaultAgentEffort;
+  effort: ImDefaultEffort | '';
 }
 
 /**

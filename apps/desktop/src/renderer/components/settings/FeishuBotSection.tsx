@@ -11,8 +11,12 @@ import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { ImConnectionError, ImReconnectButton } from './ImConnectionRecovery';
 import { savedCredentialsNoteKey, shouldShowSavedCredentialsCard } from './feishuBotPresentation';
-import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
-import { ImDefaultSettingsSection, imDefaultRouteSummaryText } from './ImDefaultSettingsSection';
+import {
+  formatImDefaultRouteSummary,
+  ImChannelSettingsCard,
+  useImChannelSettingsSummary,
+} from './ImChannelSettingsCard';
+import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { FeishuBotNotificationSection } from './FeishuBotNotificationSection';
 import { FeishuGroupSettingsSection } from './FeishuGroupSettingsSection';
 
@@ -184,7 +188,7 @@ export function FeishuBotSectionView({
       id={`${idPrefix}${imBotSettings.feishu.targetId}`}
       title={t(imBotSettings.feishu.titleKey)}
       description={t('settings.feishuBot.description')}
-      routeSummary={routeSummary ? imDefaultRouteSummaryText(routeSummary, t) : null}
+      routeSummary={formatImDefaultRouteSummary(routeSummary, t)}
       expanded={expanded}
       onToggle={onToggle}
       status={

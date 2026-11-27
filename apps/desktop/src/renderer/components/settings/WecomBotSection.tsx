@@ -11,8 +11,12 @@ import { useWecomBot } from '@/hooks/useWecomBot';
 import { useWecomGroupNotificationSettings } from '@/hooks/useWecomGroupNotificationSettings';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
-import { ImDefaultSettingsSection, imDefaultRouteSummaryText } from './ImDefaultSettingsSection';
+import {
+  formatImDefaultRouteSummary,
+  ImChannelSettingsCard,
+  useImChannelSettingsSummary,
+} from './ImChannelSettingsCard';
+import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 
 const STATUS_KEY: Record<WecomBotTransportStatus['kind'], string> = {
   idle: 'settings.wecomBot.status.needsConfig',
@@ -128,7 +132,7 @@ export function WecomBotSectionView({
       id={`${idPrefix}${imBotSettings.wecom.targetId}`}
       title={t(imBotSettings.wecom.titleKey)}
       description={t('settings.wecomBot.description')}
-      routeSummary={routeSummary ? imDefaultRouteSummaryText(routeSummary, t) : null}
+      routeSummary={formatImDefaultRouteSummary(routeSummary, t)}
       expanded={expanded}
       onToggle={onToggle}
       status={

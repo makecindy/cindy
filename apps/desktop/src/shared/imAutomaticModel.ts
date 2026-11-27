@@ -7,19 +7,14 @@ import {
 import { resolveNewMakerDefaultTuple } from './newMakerDefaultTuple.js';
 import { resolveNewTaskDefaultRoute } from './draftModelCalibration.js';
 import {
-  BUILTIN_IM_DEFAULT_AGENT_KINDS,
-  imDefaultAgentSettingsOf,
+  activeImDefaultAgentSettings,
   isImDefaultEffort,
-  type BuiltinImDefaultAgentKind,
-  type ImDefaultAgentKind,
+  type ImDefaultBuiltinAgentKind,
   type ImDefaultSettings,
 } from './imDefaultSettings.js';
 
 export function usesAutomaticImModel(settings: ImDefaultSettings): boolean {
-  if (settings.agentKind === 'acp') {
-    const acp = settings.agents.acp;
-    return !acp?.providerId || !acp.model.trim();
-  }
+  if (settings.agentKind === 'acp') return false;
   return !settings.agents[settings.agentKind].model.trim();
 }
 
@@ -28,14 +23,13 @@ export function resolveAutomaticImSettings<T extends ImDefaultSettings>(
   settings: T,
   providers: readonly ProviderView[],
   options: {
-    agentKind?: ImDefaultAgentKind;
+    agentKind?: ImDefaultBuiltinAgentKind;
     providerId?: string | null;
-    allowAgent?: (agent: BuiltinImDefaultAgentKind) => boolean;
+    allowAgent?: (agent: ImDefaultBuiltinAgentKind) => boolean;
     isModelEnabled?: Parameters<typeof resolveNewMakerDefaultTuple>[0]['isModelEnabled'];
   } = {},
 ): T | null {
-  if (options.agentKind === 'acp') return null;
-  const agents = BUILTIN_IM_DEFAULT_AGENT_KINDS.filter(
+  const agents = (['claude-code', 'codex', 'pi'] as const).filter(
     (agent) =>
       (!options.agentKind || options.agentKind === agent) && (options.allowAgent?.(agent) ?? true),
   );
@@ -110,7 +104,7 @@ export function resolvedImDefaultFingerprint(
   rawFingerprint: string,
   resolved: ImDefaultSettings,
 ): string {
-  const selected = imDefaultAgentSettingsOf(resolved, resolved.agentKind);
+  const selected = activeImDefaultAgentSettings(resolved);
   return JSON.stringify([
     rawFingerprint,
     resolved.agentKind,

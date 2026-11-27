@@ -13,13 +13,15 @@
  */
 
 import {
-  DEFAULT_ACP_IM_AGENT_SETTINGS,
+  IM_DEFAULT_PLUGIN_ENGINE_SETTINGS,
   IM_DEFAULT_SETTINGS,
   isImDefaultAgentKind,
-  isImDefaultEffortForAgent,
+  isImDefaultEffort,
   isImDefaultPermissionMode,
-  type ImDefaultAgentKind,
+  isImDefaultPluginEngineEffort,
+  type ImDefaultBuiltinAgentKind,
   type ImDefaultAgentSettings,
+  type ImDefaultPluginEngineSettings,
   type ImDefaultSettingsPatch,
 } from '../../shared/imDefaultSettings.js';
 import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
@@ -57,29 +59,89 @@ export function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatc
     }
     const agentInput = input.agents as Record<string, unknown>;
     const agentsPatch: NonNullable<ImDefaultSettingsPatch['agents']> = {};
-    // 所有引擎(含插件引擎 acp)必须对称解析；漏掉任一项会让 IM 设置页改模型静默丢弃。
-    for (const kind of ['claude-code', 'codex', 'pi', 'acp'] as const) {
+    // 三个 harness 必须对称解析；漏掉 pi 会让 IM 设置页切 Pi 后改模型静默丢弃
+    // (store 本身支持 pi，见 defaultSettingsStore / IM_DEFAULT_SETTINGS.agents.pi)。
+    for (const kind of ['claude-code', 'codex', 'pi'] as const) {
       if (kind in agentInput) {
         agentsPatch[kind] = parseImDefaultAgentSettings(kind, agentInput[kind]);
       }
+    }
+    if ('acp' in agentInput) {
+      agentsPatch.acp = parseImDefaultPluginEngineSettings(agentInput.acp);
     }
     patch.agents = agentsPatch;
   }
   if ('providerId' in input || 'model' in input || 'effort' in input) {
     const legacyAgentKind = patch.agentKind ?? IM_DEFAULT_SETTINGS.agentKind;
-    patch.agents = {
-      ...patch.agents,
-      [legacyAgentKind]: parseImDefaultAgentSettings(legacyAgentKind, input),
-    };
+    if (legacyAgentKind === 'acp') {
+      patch.agents = {
+        ...patch.agents,
+        acp: parseImDefaultPluginEngineSettings(input),
+      };
+    } else {
+      patch.agents = {
+        ...patch.agents,
+        [legacyAgentKind]: parseImDefaultAgentSettings(legacyAgentKind, input),
+      };
+    }
   }
   return patch;
 }
 
+function parseImDefaultPluginEngineSettings(raw: unknown): ImDefaultPluginEngineSettings {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ...IM_DEFAULT_PLUGIN_ENGINE_SETTINGS };
+  }
+  const input = raw as Record<string, unknown>;
+  let agentDeviceId: string | null = null;
+  if ('agentDeviceId' in input && input.agentDeviceId !== null && input.agentDeviceId !== undefined) {
+    if (typeof input.agentDeviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(input.agentDeviceId)) {
+      throwIpcError('INVALID_PARAMS', 'im default agentDeviceId invalid');
+    }
+    agentDeviceId = input.agentDeviceId.trim();
+  }
+  let providerId: string | null = null;
+  if ('providerId' in input) {
+    if (input.providerId !== null && typeof input.providerId !== 'string') {
+      throwIpcError('INVALID_PARAMS', 'im default providerId must be string or null');
+    }
+    providerId =
+      typeof input.providerId === 'string' && input.providerId.trim()
+        ? input.providerId.trim()
+        : null;
+  }
+  let model = '';
+  if ('model' in input) {
+    if (typeof input.model !== 'string' || (input.model.length > 0 && !input.model.trim())) {
+      throwIpcError('INVALID_PARAMS', 'im default model required (string)');
+    }
+    model = input.model.trim();
+  }
+  let effort: ImDefaultPluginEngineSettings['effort'] = '';
+  if ('effort' in input && input.effort !== undefined && input.effort !== null) {
+    if (!isImDefaultPluginEngineEffort(input.effort)) {
+      throwIpcError('INVALID_PARAMS', 'im default effort invalid');
+    }
+    effort = input.effort;
+  }
+  // Empty providerId + empty model clears the acp slot (e.g. "reset to automatic").
+  if (!providerId && !model) {
+    return { ...IM_DEFAULT_PLUGIN_ENGINE_SETTINGS };
+  }
+  if (!pluginEngineKeyFromProviderId(providerId)) {
+    throwIpcError('INVALID_PARAMS', 'im default acp providerId must be acp-plugin:<plugin>:<harness>');
+  }
+  if (!model) {
+    throwIpcError('INVALID_PARAMS', 'im default acp model required');
+  }
+  return { providerId, model, effort, ...(agentDeviceId ? { agentDeviceId } : {}) };
+}
+
 function parseImDefaultAgentSettings(
-  agentKind: ImDefaultAgentKind,
+  agentKind: ImDefaultBuiltinAgentKind,
   raw: unknown,
 ): ImDefaultAgentSettings {
-  const defaults = agentKind === 'acp' ? DEFAULT_ACP_IM_AGENT_SETTINGS : IM_DEFAULT_SETTINGS.agents[agentKind];
+  const defaults = IM_DEFAULT_SETTINGS.agents[agentKind];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { ...defaults };
   }
@@ -110,18 +172,10 @@ function parseImDefaultAgentSettings(
     model = input.model.trim();
   }
   if ('effort' in input) {
-    if (!isImDefaultEffortForAgent(agentKind, input.effort)) {
+    if (!isImDefaultEffort(input.effort)) {
       throwIpcError('INVALID_PARAMS', 'im default effort invalid');
     }
     effort = input.effort;
-  }
-  if (agentKind === 'acp' && (providerId || model)) {
-    if (!pluginEngineKeyFromProviderId(providerId)) {
-      throwIpcError('INVALID_PARAMS', 'im default plugin engine providerId invalid');
-    }
-    if (!model) {
-      throwIpcError('INVALID_PARAMS', 'im default plugin engine model required');
-    }
   }
   if (agentDeviceId && !providerId) throwIpcError('INVALID_PARAMS', 'remote providerId required');
   if (agentDeviceId && !model) throwIpcError('INVALID_PARAMS', 'remote model required');

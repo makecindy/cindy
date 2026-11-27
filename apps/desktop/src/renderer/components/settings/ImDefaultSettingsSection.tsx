@@ -18,32 +18,21 @@ import { useTranslation } from 'react-i18next';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
-import {
-  type ModelDescriptor,
-  type PermissionModeDescriptor,
-  useAgentCapabilities,
-} from '@/hooks/useAgentCapabilities';
-import { usePickerPluginEngines } from '@/hooks/usePickerPluginEngines';
+import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
-import {
-  PLUGIN_ENGINE_DEFAULT_MODEL,
-  PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES,
-  type PluginEngineSelection,
-} from '@/lib/pluginEngineSelection';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
 import { toast } from '@/lib/toast';
 import type { Effort } from '@/lib/userPreferences.types';
 import { cn } from '@/lib/utils';
 import {
-  DEFAULT_ACP_IM_AGENT_SETTINGS,
+  activeImDefaultAgentSettings,
   IM_DEFAULT_EFFORT_OVERRIDES,
+  IM_DEFAULT_PLUGIN_ENGINE_SETTINGS,
   IM_DEFAULT_SETTINGS,
-  imDefaultAgentSettingsOf,
-  isBuiltinImDefaultAgentKind,
   isUnconditionalTurnPolicyChannel,
   isImDefaultPermissionMode,
-  type BuiltinImDefaultAgentKind,
+  type ImDefaultBuiltinAgentKind,
   type ImDefaultAgentKind,
   type ImDefaultEffort,
   type ImDefaultSettingsChannel,
@@ -51,40 +40,28 @@ import {
   type ImDefaultSettingsState,
   isImDefaultEffort,
 } from '../../../shared/imDefaultSettings';
-import { isPluginEngineEffort } from '../../../shared/pluginEngines';
+import {
+  PLUGIN_ENGINE_DEFAULT_MODEL,
+  isPluginEngineEffort,
+} from '../../../shared/pluginEngines';
+import type { PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { Button } from '@/components/ui/button';
 import { buildAgentSettingsPatch, mergeSettingsPatch } from './imDefaultSettingsLogic';
+import { useSettingsPluginEngines } from './useSettingsPluginEngines';
 
 function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
-  return agentKind === 'claude-code' || agentKind === 'acp' ? 'cc' : agentKind;
+  return agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc';
 }
 
-/** AgentSelect 的 vendor → IM 默认配置的内置 agentKind。 */
-function agentKindOfVendor(vendor: string): BuiltinImDefaultAgentKind {
+/** AgentSelect 的 vendor → IM 默认配置的 agentKind。 */
+function agentKindOfVendor(vendor: string): ImDefaultBuiltinAgentKind {
   return vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex';
 }
 
 export interface ImDefaultSettingsSummary {
   agentKind: ImDefaultAgentKind;
   model: string;
-  /** Plugin engine display name when agentKind === 'acp'. */
-  agentLabel?: string;
-}
-
-export function imDefaultRouteSummaryText(
-  summary: ImDefaultSettingsSummary,
-  t: (key: string) => string,
-): string {
-  const agent =
-    summary.agentKind === 'acp'
-      ? summary.agentLabel || t('newChat.pluginEngines.genericName')
-      : t(`settings.imBot.defaults.agents.${summary.agentKind}`);
-  const model =
-    summary.agentKind === 'acp' && summary.model === PLUGIN_ENGINE_DEFAULT_MODEL
-      ? t('newChat.pluginEngines.defaultModel')
-      : summary.model;
-  return `${agent} · ${model}`;
 }
 
 export function ImDefaultSettingsSection({
@@ -111,10 +88,10 @@ export function ImDefaultSettingsSection({
   const [settings, setSettings] = useState<ImDefaultSettingsState | null>(null);
   const [pending, setPending] = useState(false);
   const settingsRequestVersion = useRef(0);
-  const activeRoute = settings ? imDefaultAgentSettingsOf(settings, settings.agentKind) : null;
-  const isPluginEngine = settings?.agentKind === 'acp';
-  const agentDeviceId = activeRoute?.agentDeviceId ?? null;
-  const builtinAgentDeviceId = isPluginEngine ? null : agentDeviceId;
+  const activeRouteSettings = settings ? activeImDefaultAgentSettings(settings) : null;
+  const isPluginEngineRoute = settings?.agentKind === 'acp' && !!activeRouteSettings?.providerId;
+  const agentDeviceId = activeRouteSettings?.agentDeviceId ?? null;
+  const builtinAgentDeviceId = isPluginEngineRoute ? null : agentDeviceId;
   const local = useProviders();
   const remote = useDeviceProviders(builtinAgentDeviceId ?? undefined);
   const providers = builtinAgentDeviceId ? remote.providers : local.providers;
@@ -122,18 +99,12 @@ export function ImDefaultSettingsSection({
   const codex = useAgentCapabilities('codex', builtinAgentDeviceId ?? undefined);
   const pi = useAgentCapabilities('pi', builtinAgentDeviceId ?? undefined);
   const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: builtinAgentDeviceId });
+  const settingsPluginEngines = useSettingsPluginEngines(isPluginEngineRoute ? agentDeviceId : null);
 
   const pickerAgents = useModelPickerAgents(
-    settings && isBuiltinImDefaultAgentKind(settings.agentKind) ? settings.agentKind : 'claude-code',
+    settings?.agentKind === 'acp' ? 'claude-code' : (settings?.agentKind ?? 'claude-code'),
     builtinAgentDeviceId,
   );
-  const pickerPluginEngines = usePickerPluginEngines({
-    enabled: true,
-    rememberedDeviceIds: isPluginEngine ? [agentDeviceId] : [],
-  });
-  const activePluginEngine = isPluginEngine
-    ? pickerPluginEngines.findEngine(activeRoute?.providerId, agentDeviceId)
-    : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -158,17 +129,13 @@ export function ImDefaultSettingsSection({
 
   useEffect(() => {
     if (!settings) return;
-    const route = imDefaultAgentSettingsOf(settings, settings.agentKind);
     onSummaryChange?.({
       agentKind: settings.agentKind,
-      model: route.model,
-      ...(settings.agentKind === 'acp' && activePluginEngine?.name
-        ? { agentLabel: activePluginEngine.name }
-        : {}),
+      model: activeImDefaultAgentSettings(settings).model,
     });
-  }, [activePluginEngine?.name, onSummaryChange, settings]);
+  }, [onSummaryChange, settings]);
 
-  const modelsByAgent = useMemo<Record<BuiltinImDefaultAgentKind, ModelDescriptor[]>>(() => {
+  const modelsByAgent = useMemo<Record<ImDefaultBuiltinAgentKind, ModelDescriptor[]>>(() => {
     // 准入口径:IM 默认模型是「从零挑一个」的清单,停用的供应商/模型与能力模型
     // 不该可选 —— 否则 headless runner 派发时才降级换模型,用户无感(PR #744 review)。
     const fromProviders = {
@@ -190,7 +157,7 @@ export function ImDefaultSettingsSection({
   }, [providers, cc.capabilities, codex.capabilities, pi.capabilities]);
 
   const resolveProviderId = useCallback(
-    (agentKind: BuiltinImDefaultAgentKind, modelId: string, providerId: string | null): string | null => {
+    (agentKind: ImDefaultBuiltinAgentKind, modelId: string, providerId: string | null): string | null => {
       if (!providerId) return null;
       const provider = connectedProvidersForAgent(providers, agentKind).find(
         (p) => p.id === providerId,
@@ -209,19 +176,18 @@ export function ImDefaultSettingsSection({
   );
 
   const resolveEffort = useCallback(
-    (agentKind: BuiltinImDefaultAgentKind, modelId: string, requested: Effort): ImDefaultEffort => {
+    (agentKind: ImDefaultBuiltinAgentKind, modelId: string, requested: Effort): ImDefaultEffort => {
       const model = modelsByAgent[agentKind].find((m) => m.id === modelId);
       const requestedEffort = toImDefaultEffort(requested);
-      const fallbackEffort = toImDefaultEffort(IM_DEFAULT_SETTINGS.agents[agentKind].effort) ?? 'high';
       if (!model || model.efforts.length === 0) {
-        return requestedEffort ?? fallbackEffort;
+        return requestedEffort ?? IM_DEFAULT_SETTINGS.agents[agentKind].effort;
       }
       if (requestedEffort && model.efforts.includes(requestedEffort)) return requestedEffort;
       const override = IM_DEFAULT_EFFORT_OVERRIDES[modelId];
       if (override && model.efforts.includes(override)) return override;
       const defaultEffort = toImDefaultEffort(model.defaultEffort);
       if (defaultEffort && model.efforts.includes(defaultEffort)) return defaultEffort;
-      return toImDefaultEffort(model.efforts[0]) ?? fallbackEffort;
+      return toImDefaultEffort(model.efforts[0]) ?? IM_DEFAULT_SETTINGS.agents[agentKind].effort;
     },
     [modelsByAgent],
   );
@@ -270,7 +236,7 @@ export function ImDefaultSettingsSection({
 
   const automaticMode =
     settings?.automaticModel ??
-    (settings ? !imDefaultAgentSettingsOf(settings, settings.agentKind).model : false);
+    (settings ? settings.agentKind !== 'acp' && !activeImDefaultAgentSettings(settings).model : false);
   useEffect(() => {
     if (!automaticMode || pending || local.loading) return;
     const version = ++settingsRequestVersion.current;
@@ -302,30 +268,22 @@ export function ImDefaultSettingsSection({
     );
   }
 
-  const activeSettings = imDefaultAgentSettingsOf(settings, settings.agentKind);
-  const automaticModel = settings.automaticModel ?? !activeSettings.model;
+  const activeSettings = activeImDefaultAgentSettings(settings);
+  const automaticModel = settings.automaticModel ?? (settings.agentKind !== 'acp' && !activeSettings.model);
   // 按选中 Agent 的 capabilities 判断:未声明 / 声明了但 supported.supported !== true
-  // 的 Agent(如 Pi)无法在「无条件挂逐条权限确认」的渠道(个人微信)使用。不写死 Pi——
-  // 未来 Pi 补上该 capability、或新增其它不支持的 Agent 时,此处自动跟随 main 侧
-  // 的 capability 真相,不会误警告 / 漏警告。(Telegram / 钉钉仅在群聊挂 policy,
-  // 主人私聊 Pi 可用,设置 UI 不区分群聊/私聊,故不整体警告。)
+  // 的 Agent(如 Pi / 插件引擎)无法在「无条件挂逐条权限确认」的渠道(个人微信)使用。
   const selectedAgentCaps =
-    settings.agentKind === 'claude-code'
-      ? cc
-      : settings.agentKind === 'codex'
-        ? codex
-        : settings.agentKind === 'pi'
-          ? pi
-          : null;
+    settings.agentKind === 'claude-code' ? cc : settings.agentKind === 'codex' ? codex : pi;
   const selectedAgentCapabilitiesReady =
-    selectedAgentCaps !== null &&
     !selectedAgentCaps.loading &&
     selectedAgentCaps.error === null &&
     selectedAgentCaps.capabilities !== null;
-  const selectedTurnPolicy = selectedAgentCaps?.capabilities?.turnPermissionPolicy;
+  const selectedTurnPolicy = selectedAgentCaps.capabilities?.turnPermissionPolicy;
   const selectedAgentUnsupported =
-    selectedAgentCapabilitiesReady && selectedTurnPolicy?.supported.supported !== true;
+    settings.agentKind === 'acp' ||
+    (selectedAgentCapabilitiesReady && selectedTurnPolicy?.supported.supported !== true);
   const selectedPermissionModeUnsupported =
+    settings.agentKind !== 'acp' &&
     selectedAgentCapabilitiesReady &&
     selectedTurnPolicy?.supported.supported === true &&
     selectedTurnPolicy.unsupportedPermissionModes.includes(settings.permissionMode);
@@ -348,7 +306,16 @@ export function ImDefaultSettingsSection({
     providerId: string | null = activeSettings.providerId,
     reconciledEffort?: Effort,
   ) => {
-    if (!isBuiltinImDefaultAgentKind(settings.agentKind)) return;
+    if (settings.agentKind === 'acp') {
+      return persist(
+        buildAgentSettingsPatch('acp', {
+          ...activeSettings,
+          model,
+          providerId,
+          effort: isImDefaultEffort(reconciledEffort) ? reconciledEffort : activeSettings.effort,
+        }),
+      );
+    }
     const nextProviderId = builtinAgentDeviceId
       ? providerId
       : resolveProviderId(settings.agentKind, model, providerId);
@@ -357,7 +324,7 @@ export function ImDefaultSettingsSection({
       : resolveEffort(settings.agentKind, model, activeSettings.effort);
     return persist(
       buildAgentSettingsPatch(settings.agentKind, {
-        ...activeSettings,
+        ...settings.agents[settings.agentKind],
         model,
         providerId: nextProviderId,
         effort,
@@ -366,17 +333,24 @@ export function ImDefaultSettingsSection({
   };
 
   const changeEffort = (effort: Effort) => {
-    if (!isBuiltinImDefaultAgentKind(settings.agentKind)) return;
     if (!isImDefaultEffort(effort) || effort === activeSettings.effort) return;
+    if (settings.agentKind === 'acp') {
+      return persist(
+        buildAgentSettingsPatch('acp', {
+          ...activeSettings,
+          effort,
+        }),
+      );
+    }
     return persist(
       buildAgentSettingsPatch(settings.agentKind, {
-        ...activeSettings,
+        ...settings.agents[settings.agentKind],
         effort,
       }),
     );
   };
 
-  const showPluginEngines = pickerPluginEngines.hasSources || isPluginEngine;
+  const showPluginEngines = settingsPluginEngines.hasSources || isPluginEngineRoute;
 
   return (
     <ImDefaultSettingsSectionView
@@ -390,25 +364,18 @@ export function ImDefaultSettingsSection({
       activeModel={activeSettings.model}
       turnPolicyWarning={turnPolicyWarning}
       modeUnsupportedAfterSwitch={modeUnsupportedAfterSwitch}
-      activeAgentLabel={activePluginEngine?.name}
-      pluginEngineModes={
-        isPluginEngine
-          ? (activePluginEngine?.permissionModes ?? PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES)
-          : undefined
-      }
-      useAutomatic={() => {
-        const hasAcp = Boolean(
-          settings.agents.acp?.model ||
-            settings.agents.acp?.providerId ||
-            settings.agents.acp?.agentDeviceId,
-        );
-        return persist({
+      useAutomatic={() =>
+        persist({
           agentKind: IM_DEFAULT_SETTINGS.agentKind,
-          agents: hasAcp
-            ? { ...IM_DEFAULT_SETTINGS.agents, acp: DEFAULT_ACP_IM_AGENT_SETTINGS }
-            : IM_DEFAULT_SETTINGS.agents,
-        });
-      }}
+          agents:
+            settings.agentKind === 'acp' || settings.agents.acp
+              ? {
+                  ...IM_DEFAULT_SETTINGS.agents,
+                  acp: IM_DEFAULT_PLUGIN_ENGINE_SETTINGS,
+                }
+              : IM_DEFAULT_SETTINGS.agents,
+        })
+      }
       onGroupPermissionChange={(groupPermissionMode) => persist({ groupPermissionMode })}
       modelPicker={
         <ModelSelector
@@ -427,35 +394,29 @@ export function ImDefaultSettingsSection({
           }
           fastModeConfigurable={false}
           unifiedAgents={pickerAgents}
-          pluginEngines={
-            showPluginEngines
+          pluginEngines={showPluginEngines ? {
+            engines: settingsPluginEngines.engines,
+            active: isPluginEngineRoute && activeSettings.model
               ? {
-                  engines: pickerPluginEngines.engines,
-                  active:
-                    isPluginEngine && activeSettings.providerId && activeSettings.model
-                      ? {
-                          providerId: activeSettings.providerId,
-                          ...(agentDeviceId ? { deviceId: agentDeviceId } : {}),
-                          modelId: activeSettings.model,
-                          ...(isPluginEngineEffort(activeSettings.effort)
-                            ? { effort: activeSettings.effort }
-                            : {}),
-                        }
-                      : null,
-                  readCatalogue: pickerPluginEngines.readCatalogue,
-                  onSelect: (selection: PluginEngineSelection) =>
-                    persist({
-                      agentKind: 'acp',
-                      ...buildAgentSettingsPatch('acp', {
-                        providerId: selection.providerId,
-                        model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
-                        effort: selection.effort ?? '',
-                        agentDeviceId: selection.deviceId ?? null,
-                      }),
-                    }),
+                  providerId: activeSettings.providerId!,
+                  ...(agentDeviceId ? { deviceId: agentDeviceId } : {}),
+                  modelId: activeSettings.model,
+                  ...(isPluginEngineEffort(activeSettings.effort) ? { effort: activeSettings.effort } : {}),
                 }
-              : undefined
-          }
+              : null,
+            readCatalogue: settingsPluginEngines.readCatalogue,
+            onSelect: (selection: PluginEngineSelection) => {
+              void persist({
+                agentKind: 'acp',
+                ...buildAgentSettingsPatch('acp', {
+                  providerId: selection.providerId,
+                  model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+                  effort: selection.effort ?? '',
+                  ...(selection.deviceId ? { agentDeviceId: selection.deviceId } : {}),
+                }),
+              });
+            },
+          } : undefined}
           onUnifiedSelect={({ engine, modelId, providerId, effort, agentDevice }) => {
             const agentKind = agentKindOfVendor(engine);
             return persist({
@@ -474,7 +435,7 @@ export function ImDefaultSettingsSection({
           onModelChange={(modelId) => changeModel(modelId)}
           onEffortChange={changeEffort}
           vendorKey={vendorKeyFor(settings.agentKind)}
-          currentProviderId={isPluginEngine ? null : activeSettings.providerId}
+          currentProviderId={isPluginEngineRoute ? null : activeSettings.providerId}
           onProviderChange={(providerId, modelId, reconciledEffort) => {
             changeModel(modelId ?? activeSettings.model, providerId, reconciledEffort);
           }}
@@ -553,8 +514,6 @@ export function ImDefaultSettingsSectionView({
   turnPolicyWarning = null,
   modeUnsupportedAfterSwitch = false,
   showAutomaticUnavailable = true,
-  activeAgentLabel,
-  pluginEngineModes,
 }: {
   settings: Pick<ImDefaultSettingsState, 'agentKind' | 'groupPermissionMode' | 'isCustomized'>;
   channel?: ImDefaultSettingsChannel;
@@ -571,8 +530,6 @@ export function ImDefaultSettingsSectionView({
   turnPolicyWarning?: 'agent' | 'mode' | null;
   modeUnsupportedAfterSwitch?: boolean;
   showAutomaticUnavailable?: boolean;
-  activeAgentLabel?: string;
-  pluginEngineModes?: readonly PermissionModeDescriptor[];
 }) {
   const { t } = useTranslation();
   return (
@@ -630,7 +587,6 @@ export function ImDefaultSettingsSectionView({
             deviceId={deviceId}
             permissionMode={settings.groupPermissionMode}
             vendorKey={vendorKeyFor(settings.agentKind)}
-            pluginEngineModes={pluginEngineModes}
             triggerVariant="field"
             disabled={pending}
             ariaContext={t('settings.imBot.defaults.groupPermissionLabel')}
@@ -665,7 +621,7 @@ export function ImDefaultSettingsSectionView({
                   {t('settings.imBot.defaults.agentUnsupportedOnChannelHint', {
                     agent:
                       settings.agentKind === 'acp'
-                        ? activeAgentLabel || t('newChat.pluginEngines.genericName')
+                        ? t('newChat.pluginEngines.genericName')
                         : t(`settings.imBot.defaults.agents.${settings.agentKind}`),
                   })}
                 </p>

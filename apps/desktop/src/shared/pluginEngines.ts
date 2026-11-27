@@ -246,3 +246,12 @@ export function pluginEngineKeyFromProviderId(providerId: string | null | undefi
 export function isPluginEngineKind(kind: unknown): kind is typeof PLUGIN_ENGINE_AGENT_KIND {
   return kind === PLUGIN_ENGINE_AGENT_KIND;
 }
+
+/**
+ * 任务来源是否允许在已有任务内切到 / 换出插件引擎。
+ * 与内置引擎同等开放所有非 review 来源（普通任务、伙伴、IM、官方 hook、侧边追问、定时任务、learn 等）；
+ * review 任务路由固定跟随源任务，保持关闭。
+ */
+export function isPluginEngineSwitchSourceAllowed(source: string | null | undefined): boolean {
+  return source !== 'review';
+}

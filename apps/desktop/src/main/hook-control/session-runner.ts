@@ -43,6 +43,8 @@ import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation
 import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type {
+  AgentKind,
+  Effort,
   EngineKind,
   InteractionRequest,
   PermissionMode,
@@ -114,22 +116,14 @@ import { resolveSafe as resolveCindyMediaUrl } from '../cindy-media/blobStore.de
 import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/ingest.js';
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
-import {
-  imDefaultAgentSettingsOf,
-  isImDefaultPermissionMode,
-} from '../../shared/imDefaultSettings.js';
+import { isImDefaultPermissionMode } from '../../shared/imDefaultSettings.js';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
+  isPluginEnginePermissionModeId,
   pluginEngineKeyFromProviderId,
 } from '../../shared/pluginEngines.js';
 import { readImRemoteAutomaticDefaults, readImRemotePermissionModes, readImRemoteProviderRoute } from '../im/remoteProviderRoute.js';
 import { resolveImAutomaticDefaults } from '../im/defaultSessionSettings.js';
-import { listPluginEngineViews } from '../maker-ipc/pluginEnginesIpc.js';
-import {
-  admitPluginEngineSwitchTarget,
-  isDisallowedPluginEngineDeviceId,
-} from '../maker-ipc/pluginEngineSessionAdmission.js';
-import { readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { getWorkspaceProviderRoute } from './workspaceProviderSourceStore.js';
 import {
   SHARED_PREFS_CHANNEL,
@@ -363,80 +357,53 @@ async function resolveNewSessionConfig(
   const { channel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults } = inputs;
   let defaults = imDefaults;
   const selectedAgent = mergedOverrides.agentKind;
-  const effectiveRequestedAgent: EngineKind =
-    selectedAgent === 'claude-code' ||
-    selectedAgent === 'codex' ||
-    selectedAgent === 'pi' ||
-    selectedAgent === 'acp'
+  const selectedBuiltinAgent =
+    selectedAgent === 'claude-code' || selectedAgent === 'codex' || selectedAgent === 'pi'
       ? selectedAgent
-      : imDefaults.agentKind;
-  if (effectiveRequestedAgent === 'acp') {
-    const defaultAcp = imDefaultAgentSettingsOf(imDefaults, 'acp');
-    const explicitAcpSource =
-      workdirRoute && pluginEngineKeyFromProviderId(workdirRoute.providerId) ? workdirRoute : null;
-    const acpProviderId = explicitAcpSource?.providerId ?? defaultAcp.providerId;
-    const acpDeviceId = explicitAcpSource
-      ? (explicitAcpSource.agentDeviceId ?? null)
-      : (defaultAcp.agentDeviceId ?? null);
-    if (!pluginEngineKeyFromProviderId(acpProviderId)) {
-      throw new Error(
-        `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected plugin engine is unavailable${routeReselectHint()}`,
-      );
+      : null;
+  // 插件引擎(acp)不走内置供应商目录或自动选模：按全局 IM 默认或显式工作区路由解析，
+  // 真实可用性与远端准入在 openChannelSession -> admitPluginEngineSession 中校验。
+  const wantsPluginEngine =
+    selectedAgent === 'acp' || (selectedBuiltinAgent === null && imDefaults.agentKind === 'acp');
+  if (wantsPluginEngine) {
+    const acp = imDefaults.agents.acp;
+    // 项目切回跟随默认时可能仍残留旧内置供应商的 workdirRoute；只有显式选了 acp 且该路由本身带
+    // 合法插件引擎标识时才采用 workdirRoute，否则整体沿用全局 ACP 默认的 (providerId, model, agentDeviceId)。
+    const explicitAcp = selectedAgent === 'acp';
+    const acpWorkdirRoute =
+      explicitAcp && workdirRoute && pluginEngineKeyFromProviderId(workdirRoute.providerId)
+        ? workdirRoute
+        : null;
+    const providerId = acpWorkdirRoute?.providerId ?? acp?.providerId ?? null;
+    const model = (explicitAcp ? mergedOverrides.model : null) ?? acp?.model ?? '';
+    const agentDeviceId = acpWorkdirRoute ? acpWorkdirRoute.agentDeviceId : (acp?.agentDeviceId ?? null);
+    if (!pluginEngineKeyFromProviderId(providerId) || !model.trim()) {
+      throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} plugin engine route is incomplete${routeReselectHint()}`);
     }
-    if (isDisallowedPluginEngineDeviceId(acpDeviceId)) {
-      throw new Error(
-        `${HOOK_ROUTE_UNAVAILABLE_PREFIX} selected plugin engine location is invalid${routeReselectHint()}`,
-      );
-    }
-    const engines = acpDeviceId
-      ? await readRemotePluginEngines(acpDeviceId)
-      : listPluginEngineViews();
-    const requestedModel =
-      mergedOverrides.model?.trim() || defaultAcp.model.trim() || PLUGIN_ENGINE_DEFAULT_MODEL;
-    const requestedEffort = mergedOverrides.effort ?? (defaultAcp.effort || undefined);
-    const engineKey = pluginEngineKeyFromProviderId(acpProviderId);
-    const matchedEngine = engines.find((item) => item.key === engineKey);
     const requestedPermissionMode = mergedOverrides.permissionMode;
-    if (
-      acpDeviceId &&
-      requestedPermissionMode !== null &&
-      matchedEngine &&
-      (!isImDefaultPermissionMode(requestedPermissionMode) ||
-        !matchedEngine.permissionModes.some((mode) => mode.id === requestedPermissionMode))
-    ) {
-      throw new Error(
-        'Selected permission mode is unavailable for the remote agent' + routeReselectHint(),
-      );
-    }
-    const admitted = admitPluginEngineSwitchTarget(
-      {
-        providerId: acpProviderId,
-        model: requestedModel,
-        effort: requestedEffort,
-        permissionMode: requestedPermissionMode ?? 'bypassPermissions',
-      },
-      engines,
-    );
     const permissionMode =
       requestedPermissionMode === null
         ? 'bypassPermissions'
-        : matchedEngine && matchedEngine.permissionModes.some((mode) => mode.id === requestedPermissionMode)
+        : isPluginEnginePermissionModeId(requestedPermissionMode)
           ? requestedPermissionMode
-          : (matchedEngine?.permissionModes[0]?.id ?? admitted.permissionMode);
+          : 'ask';
+    const inheritedAcpEffort = explicitAcp && (acpWorkdirRoute || mergedOverrides.model !== null)
+      ? ''
+      : (acp?.effort ?? '');
     return {
-      ...(acpDeviceId ? { agentDeviceId: acpDeviceId } : {}),
+      ...(agentDeviceId ? { agentDeviceId } : {}),
       agentKind: 'acp',
-      model: admitted.model,
-      effort: admitted.effort || undefined,
+      model: model.trim(),
+      effort: ((mergedOverrides.effort ?? inheritedAcpEffort) || undefined) as Effort | undefined,
       permissionMode,
-      providerId: acpProviderId,
+      providerId,
       fingerprint,
     };
   }
-  const selectedDefaultAgent = effectiveRequestedAgent;
+  const selectedDefaultAgent = selectedBuiltinAgent ?? (imDefaults.agentKind as AgentKind);
   const automatic = usesAutomaticImModel({ ...imDefaults, agentKind: selectedDefaultAgent }) && mergedOverrides.model === null;
   if (automatic) {
-    const automaticAgent = selectedAgent === 'claude-code' || selectedAgent === 'codex' || selectedAgent === 'pi' ? selectedAgent : undefined;
+    const automaticAgent = selectedBuiltinAgent ?? undefined;
     const remoteDeviceId = workdirRoute?.agentDeviceId ?? imDefaults.agents[selectedDefaultAgent].agentDeviceId;
     const resolved = remoteDeviceId
       ? await readImRemoteAutomaticDefaults(imDefaults, {
@@ -449,14 +416,16 @@ async function resolveNewSessionConfig(
     if (!resolved) throw new Error(`${HOOK_ROUTE_UNAVAILABLE_PREFIX} no available default model${routeReselectHint()}`);
     defaults = resolved;
   }
-  const requestedAgent: 'claude-code' | 'codex' | 'pi' =
-    mergedOverrides.agentKind === 'claude-code' || mergedOverrides.agentKind === 'codex' || mergedOverrides.agentKind === 'pi'
-      ? mergedOverrides.agentKind
-      : defaults.agentKind === 'acp'
-        ? selectedDefaultAgent
-        : defaults.agentKind;
-  const builtinDefaults = { ...defaults, agentKind: requestedAgent };
-  const defaultRoute = builtinDefaults.agents[requestedAgent];
+  const requestedAgent = selectedBuiltinAgent ?? (defaults.agentKind as AgentKind);
+  const builtinDefaults = {
+    agentKind: defaults.agentKind as AgentKind,
+    agents: {
+      'claude-code': defaults.agents['claude-code'],
+      codex: defaults.agents.codex,
+      pi: defaults.agents.pi,
+    },
+  };
+  const defaultRoute = defaults.agents[requestedAgent];
   const agentDeviceId = workdirRoute ? workdirRoute.agentDeviceId : defaultRoute.agentDeviceId;
   if (agentDeviceId) {
     const providerId = workdirRoute?.providerId ?? defaultRoute.providerId;
@@ -967,12 +936,12 @@ export function createMakerHookSessionRunner(deps: {
           // 插件引擎任务(docs/plans/acp-plugin-bridge.md)同样接官方渠道：按它自己的引擎与 providerId 恢复。
           effectiveAgentKind = meta.agentKind;
         }
-        effort = req.companionBotId ? meta?.effort : undefined;
+        effort = req.companionBotId || effectiveAgentKind === 'acp' ? meta?.effort : undefined;
         companionFastMode = req.companionBotId ? meta?.fastMode : undefined;
-        if (req.companionBotId) {
+        if (req.companionBotId && effectiveAgentKind !== 'acp') {
           // This lane bypasses bootstrapSession. Claude subscription bridges read
           // these stores, not createSession options, including on cold resume.
-          setSessionEffort(req.sessionId, effort);
+          setSessionEffort(req.sessionId, effort || undefined);
           setSessionFastMode(req.sessionId, companionFastMode ?? false);
         }
         permissionMode = meta?.permissionMode ?? 'bypassPermissions';
@@ -1040,16 +1009,18 @@ export function createMakerHookSessionRunner(deps: {
        * 不会越到别处。这个取舍写在 PR #733 的风险段里。
        */
 
-      // resolved 路径必有 model; 复用路径 meta 缺失时兜底草稿默认
+      // resolved 路径必有 model; 复用路径 meta 缺失时兜底草稿默认(插件引擎兜底 default)
       const effectiveModel = model?.trim()
         ? model
-        : (
-            await resolveNewSessionConfig(
-              { agentKind: effectiveAgentKind, model: null, effort: null, permissionMode: null },
-              log,
-              req.source?.im,
-            )
-          ).model;
+        : effectiveAgentKind === 'acp'
+          ? PLUGIN_ENGINE_DEFAULT_MODEL
+          : (
+              await resolveNewSessionConfig(
+                { agentKind: effectiveAgentKind, model: null, effort: null, permissionMode: null },
+                log,
+                req.source?.im,
+              )
+            ).model;
 
       // 来源(供应商)贯通(issue #854: hook 会话只继承模型 id 不继承来源):
       //   - 新建: 上方 resolved 已用同一份实时供应商目录同时选定模型与具体来源;
@@ -1065,7 +1036,7 @@ export function createMakerHookSessionRunner(deps: {
         model: effectiveModel,
         ...(agentDeviceId ? { agentDeviceId } : {}),
         ...(providerId !== null ? { providerId } : {}),
-        ...(effort !== undefined ? { effort } : {}),
+        ...(effort ? { effort } : {}),
         permissionMode,
         ...(companionFastMode !== undefined ? { fastMode: companionFastMode } : {}),
         // chat 伪目录新会话: 标记 dialogue, 落侧边栏「对话」分组而非按
@@ -1140,7 +1111,7 @@ export function createMakerHookSessionRunner(deps: {
                 model: admitted.model,
                 ...(agentDeviceId ? { agentDeviceId } : {}),
                 ...(req.workspaceKind !== undefined ? { workspaceKind: req.workspaceKind } : {}),
-                ...(admitted.effort !== undefined ? { effort: admitted.effort } : {}),
+                ...(admitted.effort ? { effort: admitted.effort } : {}),
                 permissionMode,
               });
               return admitted.providerId;
@@ -1151,7 +1122,7 @@ export function createMakerHookSessionRunner(deps: {
           // 也不向服务端谎报创建成功。
           if (admittedProviderId) {
             assertAccount?.();
-            setSessionProvider(req.sessionId, admittedProviderId);
+            if (effectiveAgentKind !== 'acp') setSessionProvider(req.sessionId, admittedProviderId);
             await setSessionProviderIdInDb(req.sessionId, admittedProviderId);
           }
           const createOnlySessionSource = hookSessionSource(req.source?.im);
@@ -1195,10 +1166,11 @@ export function createMakerHookSessionRunner(deps: {
           const recovered = await getSessionRowSnapshotStrict(req.sessionId);
           assertAccount?.();
           if (!recovered || recovered.status === 'deleted') throw new Error('The task route changed');
-          // createOpts.agentKind is effectiveAgentKind (built-in, see above).
-          const runtimeOverride = getSessionRuntimeStartOverride(req.sessionId, effectiveAgentKind, createOpts.agentDeviceId);
+          const runtimeOverride = effectiveAgentKind === 'acp'
+            ? {}
+            : getSessionRuntimeStartOverride(req.sessionId, effectiveAgentKind, createOpts.agentDeviceId);
           Object.assign(createOpts, { providerId: recovered.providerId ?? null }, runtimeOverride);
-          if (runtimeOverride.model) {
+          if ('model' in runtimeOverride && runtimeOverride.model) {
             setSessionEffort(req.sessionId, runtimeOverride.effort);
             setSessionFastMode(req.sessionId, runtimeOverride.fastMode ?? false);
           }
@@ -1211,12 +1183,12 @@ export function createMakerHookSessionRunner(deps: {
               sessionProviderId = admitted.providerId;
               createOpts.model = admitted.model;
               if (admitted.providerId !== null) createOpts.providerId = admitted.providerId;
-              if (admitted.effort !== undefined) createOpts.effort = admitted.effort;
+              if (admitted.effort !== undefined) createOpts.effort = admitted.effort || undefined;
               return maker.createSession({
                 ...createOpts,
                 model: admitted.model,
                 ...(admitted.providerId !== null ? { providerId: admitted.providerId } : {}),
-                ...(admitted.effort !== undefined ? { effort: admitted.effort } : {}),
+                ...(admitted.effort ? { effort: admitted.effort } : {}),
               });
             }, assertAccount)
           : await maker.createSession(createOpts);
@@ -1236,12 +1208,14 @@ export function createMakerHookSessionRunner(deps: {
       // 用已关闭实例只会把真实启动原因(如新增扩展导致 pi 启动失败)换成误导
       // 性的「会话已关闭」(2026-11-09 Greptile P2)。
       let driftedRecycled = false;
-      try {
-        driftedRecycled = await maker.recyclePiRuntimeIfResourcesDrifted(session);
-      } catch {
-        // 回收抛出时 Session 已停在 error(close 失败不回退),旧实例不可用 ——
-        // 继续投递只会被 ensureActive 拒,必须走重建(Codex P2,2026-11-10)。
-        driftedRecycled = session.getStatus() !== 'active';
+      if (session.agentKind !== 'acp') {
+        try {
+          driftedRecycled = await maker.recyclePiRuntimeIfResourcesDrifted(session);
+        } catch {
+          // 回收抛出时 Session 已停在 error(close 失败不回退),旧实例不可用 ——
+          // 继续投递只会被 ensureActive 拒,必须走重建(Codex P2,2026-11-10)。
+          driftedRecycled = session.getStatus() !== 'active';
+        }
       }
       if (driftedRecycled) {
         try {
@@ -1252,7 +1226,7 @@ export function createMakerHookSessionRunner(deps: {
                   ...createOpts,
                   model: admitted.model,
                   ...(admitted.providerId !== null ? { providerId: admitted.providerId } : {}),
-                  ...(admitted.effort !== undefined ? { effort: admitted.effort } : {}),
+                  ...(admitted.effort !== undefined ? { effort: admitted.effort || undefined } : {}),
                 });
               }, assertAccount)
             : await maker.createSession(createOpts);
@@ -1271,12 +1245,15 @@ export function createMakerHookSessionRunner(deps: {
       // 后复用会读到空来源,改走默认供应商或因模型不可用而失败。
       // 新建显式 set(与 scheduler 4.4.2 的显式 providerId 分支同款); 复用走
       // hydrate —— 仅内存无条目时写入, 不覆盖运行中会话刚在聊天里切的更新值。
-      if (req.isNew) {
-        if (sessionProviderId && accountStillCurrent()) {
-          setSessionProvider(session.id, sessionProviderId);
+      // 插件引擎不走内置 session-provider-store，providerId 随 session/DB 行生效。
+      if (session.agentKind !== 'acp') {
+        if (req.isNew) {
+          if (sessionProviderId && accountStillCurrent()) {
+            setSessionProvider(session.id, sessionProviderId);
+          }
+        } else {
+          hydrateSessionProvider(session.id, rowProviderId);
         }
-      } else {
-        hydrateSessionProvider(session.id, rowProviderId);
       }
 
       // 取消探针:回收/重建是异步窗口,期间 task.cancel 的 abort 对旧实例无目标、

@@ -4912,7 +4912,12 @@ type CompanionSessionRouteSelection = SessionRouteSelection;
 let readPendingAgentSwitchRouteHolder:
   ((sessionId: string) => PendingAgentSwitchRouteRead | undefined) | null = null;
 let applySessionRouteUnderSendLockHolder:
-  ((sessionId: string, route: SessionRouteSelection | null, currentAgentKind: EngineKind, currentProviderId?: string | null) => Promise<'applied' | 'staged'>) | null = null;
+  ((
+    sessionId: string,
+    route: SessionRouteSelection | null,
+    currentAgentKind: EngineKind,
+    currentProviderId?: string | null,
+  ) => Promise<'applied' | 'staged'>) | null = null;
 /**
  * 切换引擎后重建会话时补回渠道专属 vendorOptions(IM 的会话 id / 对端等)。
  * 切换建会话只读 DB 行, 不补的话 IM 任务切完引擎会悄悄丢掉 bot 专属工具。
@@ -5362,7 +5367,7 @@ export async function acquirePendingAgentSwitchForImSend(
 }
 
 /** 会话上待应用的切换意图目标(用户挑的或系统登记的)读回投影。 */
-export interface PendingAgentSwitchRouteRead extends Omit<SessionRouteSelection, 'fastMode'> {
+export interface PendingAgentSwitchRouteRead extends Omit<CompanionSessionRouteSelection, 'fastMode'> {
   /**
    * 意图在 pending 注册表的修订号(set / clear 都推进)。与跟随记录里的 pendingRev
    * 相等 = 同一次登记; 用户重新挑过(哪怕选了同值)会换号, 据此不把用户选择
@@ -14954,7 +14959,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         const config = await resolveSharedImProjectConfig(alias, log);
         target.assertCurrent();
-        if (!config.providerId || config.agentKind === 'acp' || !(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(config.permissionMode))
+        if (config.agentKind === 'acp' || !config.providerId || !(GHOST_ERRAND_PERMISSION_MODES as readonly string[]).includes(config.permissionMode))
           throw new PluginTaskError('ROUTE_UNAVAILABLE', 'The selected project configuration is unavailable');
         return { ...target,
           permissionMode: config.permissionMode as GhostErrandPermissionMode,
@@ -20784,7 +20789,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 插话并入正在运行的 turn,不开启新 turn:排队时登记的「新 turn 接管」回调不再适用,
     // 只释放登记(不运行),否则会给已在跑的 worker 另建一份 running/auto-bridge 身份。
     onSteerAccepted: async (sessionId, item) => {
-      if (!item.autoResume) void touchSessionActivityInDb(sessionId);
+      if (!item.autoResume && item.origin?.kind !== 'scheduler') void touchSessionActivityInDb(sessionId);
       void settleTaskActionInput(item).catch(() => undefined);
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
     },
@@ -20832,7 +20837,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       settleQueuedAttachmentPersistenceFailure(sessionId, item.clientId, opts.retainForRetry);
     },
     onDispatchedUserTurn: async (sessionId, item, preVendorDispatchAt): Promise<void> => {
-      if (!item.autoResume) {
+      if (!item.autoResume && item.origin?.kind !== 'scheduler') {
         void touchSessionActivityInDb(sessionId, preVendorDispatchAt);
       }
       void settleTaskActionInput(item).catch(() => undefined);

@@ -1954,6 +1954,53 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(latestNotifiedRun(notifier).status).toBe('success');
   });
 
+  // Reproduce a local Codex thread relink between enqueue and lazy startup.
+  // The queue prepares before the send transaction recreates the missing handle.
+  it.each(['same route', 'changed saved provider', 'changed replacement model', 'SSH replacement'] as const)(
+    'dispatches the queued Codex turn after a relink only on its selected route: %s', async (scenario) => {
+      const selection = { agentKind: 'codex' as const, model: 'selected-model',
+        providerId: 'selected-source', effort: null, fastMode: false };
+      const original = createSessionHarness(async () => ({ accepted: true }));
+      Object.assign(original.session, selection);
+      mocks.getSessionProvider.mockReturnValue(selection.providerId);
+      const queue = createQueueHarness({ busy: false });
+      const { runner, maker, replaceLiveSession } = createRunnerHarness(original.session, queue.deps, {
+        metaModel: selection.model,
+        acquirePendingAgentSwitch: async () => ({ release: vi.fn(), selection }),
+      });
+      const result = runner.fire(heartbeatSchedule({ ...selection, effort: undefined, modelAgentKind: 'codex' }),
+        createFireContext()).catch((error: unknown) => error);
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+      const request = enqueueLast(queue);
+      vi.mocked(maker.getSession).mockReturnValue(undefined);
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', ...selection,
+        providerId: scenario === 'changed saved provider' ? 'other-source' : selection.providerId });
+      if (scenario === 'changed saved provider') {
+        await queue.accept();
+        expect(String(await result)).toContain('provider');
+        return;
+      }
+      await request.onPreparing?.();
+      const replacement = createSessionHarness(async () => ({ accepted: true }));
+      Object.assign(replacement.session, selection, {
+        model: scenario === 'changed replacement model' ? 'other-model' : selection.model,
+        remoteHostId: scenario === 'SSH replacement' ? 'other-host' : null,
+      });
+      replaceLiveSession(replacement.session);
+      vi.mocked(maker.getSession).mockReturnValue(replacement.session);
+      const accept = request.onAccepted({ permissionMode: 'ask', planMode: false });
+      if (scenario !== 'same route') {
+        await expect(accept).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+        expect(String(await result)).toContain(scenario === 'SSH replacement' ? '(device)' : '(model)');
+        return;
+      }
+      await accept;
+      replacement.emit({ type: 'done', data: {}, source: 'codex' });
+      expect(await result).toMatchObject({ sessionId: SESSION_ID });
+      expect(queue.enqueueCalls).toHaveLength(1);
+    },
+  );
+
   // Review regression (integration): the previous matrix only kept the same live
   // location. An identical provider/model on another device must never receive
   // this run. Exercise both preparation and accepted-before-vendor boundaries.

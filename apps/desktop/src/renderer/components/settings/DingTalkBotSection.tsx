@@ -8,8 +8,12 @@ import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Loader2, Trash2 } from '
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useDingTalkBot } from '@/hooks/useDingTalkBot';
 import { cn } from '@/lib/utils';
-import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
-import { ImDefaultSettingsSection, imDefaultRouteSummaryText } from './ImDefaultSettingsSection';
+import {
+  formatImDefaultRouteSummary,
+  ImChannelSettingsCard,
+  useImChannelSettingsSummary,
+} from './ImChannelSettingsCard';
+import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 
 const DEVELOPER_PORTAL_URL = 'https://open-dev.dingtalk.com/';
 
@@ -101,7 +105,7 @@ export function DingTalkBotSectionView({
       id={`${idPrefix}${imBotSettings.dingtalk.targetId}`}
       title={t(imBotSettings.dingtalk.titleKey)}
       description={t('settings.dingtalkBot.description')}
-      routeSummary={routeSummary ? imDefaultRouteSummaryText(routeSummary, t) : null}
+      routeSummary={formatImDefaultRouteSummary(routeSummary, t)}
       expanded={expanded}
       onToggle={onToggle}
       status={

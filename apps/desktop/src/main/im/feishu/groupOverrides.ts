@@ -25,12 +25,10 @@ import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../../shared/hookControlIpc.js';
 import {
   isImDefaultAgentKind,
   isImDefaultEffort,
-  isImDefaultEffortForAgent,
   isImDefaultPermissionMode,
-  type ImDefaultAgentEffort,
+  type ImDefaultEffort,
   type ImDefaultPermissionMode,
 } from '../../../shared/imDefaultSettings.js';
-import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines.js';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
 import { createLogger, maskPath } from '../../logger.js';
 import { getImDefaultEffortFor, type ResolvedImSessionDefaults } from '../defaultSessionSettings.js';
@@ -120,20 +118,16 @@ export function feishuProjectPermissionMode(alias: string): ImDefaultPermissionM
 function routeOf(resolved: FeishuSharedProjectResolution): FeishuGroupRoute | null {
   if (!isImDefaultAgentKind(resolved.agentKind) || !resolved.model) return null;
   if (resolved.agentKind === 'acp') {
-    if (!pluginEngineKeyFromProviderId(resolved.providerId)) return null;
-    const effort: ImDefaultAgentEffort = isImDefaultEffortForAgent('acp', resolved.effort)
-      ? resolved.effort
-      : '';
     return {
       agentKind: 'acp',
       model: resolved.model,
       providerId: resolved.providerId,
       agentDeviceId: resolved.agentDeviceId ?? null,
-      effort,
+      effort: isImDefaultEffort(resolved.effort) ? resolved.effort : '',
     };
   }
   // 那一行没给推理强度时才按模型的默认强度补上。
-  let effort: ImDefaultAgentEffort = 'high';
+  let effort: ImDefaultEffort = 'high';
   if (isImDefaultEffort(resolved.effort)) effort = resolved.effort;
   else {
     const fallback = getImDefaultEffortFor(resolved.agentKind, resolved.model);
