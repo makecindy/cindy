@@ -60,9 +60,11 @@ export interface PrepareBuiltInSkillsResult {
   changed: boolean;
   warnings: string[];
   /**
-   * Subset of `warnings` describing stable state that retrying cannot clear (for example,
-   * preserving a verified newer installed bundle on an older build). Callers may cache past
-   * them and report each distinct set once instead of on every run.
+   * Stable state that retrying cannot clear, so hosts hold their completion cache past these
+   * instead of re-running the whole projection on every request and report each distinct set
+   * once. Two kinds: preserving a verified newer installed bundle on an older build (also kept
+   * in `warnings`), and a bundle version reused for different bytes (reported only here, since it
+   * stays true for as long as this build ships these bytes). Retryable failures stay in `warnings`.
    */
   persistentWarnings: string[];
 }
@@ -1245,7 +1247,7 @@ export async function prepareBuiltInSkills(
     // before any materialization or publication, including when a read fails.
     for (let offset = 0; offset < descriptors.length; offset += 4) {
       const outcomes = await Promise.all(descriptors.slice(offset, offset + 4).map(async (descriptor): Promise<
-        { plan: (typeof plans)[number] } | { warning: string }
+        { plan: (typeof plans)[number] } | { warning: string } | { persistentWarning: string }
       > => {
         const source = path.join(options.bundledRoot, descriptor.name);
         try {
@@ -1260,7 +1262,10 @@ export async function prepareBuiltInSkills(
             recordedFingerprint !== undefined &&
             recordedFingerprint !== fingerprint;
           if (sameVersionConflict) {
-            return { warning:
+            // Deterministic for as long as this build ships these bytes: a later build
+            // that bumps the version changes the preparation cache key. Never treat it
+            // as a retryable failure, or every palette load repays the whole preparation.
+            return { persistentWarning:
               `kept built-in Skill ${descriptor.name} because bundle version ${bundleVersion} was reused for different bytes`,
             };
           }
@@ -1273,6 +1278,7 @@ export async function prepareBuiltInSkills(
       }));
       for (const outcome of outcomes) {
         if ('plan' in outcome) plans.push(outcome.plan);
+        else if ('persistentWarning' in outcome) persistentWarnings.push(outcome.persistentWarning);
         else warnings.push(outcome.warning);
       }
     }

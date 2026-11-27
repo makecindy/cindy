@@ -19,6 +19,7 @@ vi.mock('../auth-adapters.js', () => ({
   desktopClaudeAuthAdapter: {
     ensureSharedGlobalSkills: async () => {
       state.sharedSkillRefreshes += 1;
+      return true;
     },
   },
   desktopCodexAuthAdapter: { getState: async () => ({ authenticated: false }) },

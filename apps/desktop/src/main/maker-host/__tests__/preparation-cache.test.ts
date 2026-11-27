@@ -44,6 +44,16 @@ describe('successful preparation cache', () => {
     expect(other).toHaveBeenCalledTimes(1);
   });
 
+  it('reports whether the preparation was clean, and a cached hit is always clean', async () => {
+    const cache = new PreparationCache(30_000);
+    const clean = vi.fn(async () => true);
+    await expect(cache.ensure('owner:1', clean)).resolves.toBe(true);
+    // Only a clean run is cached, so the hit reports clean without preparing again.
+    await expect(cache.ensure('owner:1', clean)).resolves.toBe(true);
+    expect(clean).toHaveBeenCalledTimes(1);
+    await expect(cache.ensure('owner:2', async () => false)).resolves.toBe(false);
+  });
+
   it('never caches sequential capability checks at TTL zero, even when the clock moves backwards', async () => {
     let now = 100;
     const cache = new PreparationCache(0, () => now);

@@ -170,7 +170,7 @@ it.skipIf(!canLinkFile).each([false, true])('preserves successful shared login a
   const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
   const adapter = new DesktopCodexAuthAdapter();
   // Credential lifecycle only; asset preparation is covered in authAssetPreparation.test.ts.
-  vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
+  vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue(true);
   const finishSuccessfulCodexLogin = (
     adapter as unknown as {
       finishSuccessfulCodexLogin(): Promise<{ authenticated: boolean }>;
@@ -3326,6 +3326,7 @@ it.each([
       expect(fs.statSync(systemAuth).nlink).toBe(initial === 'hardlink-locked' ? 2 : 1);
       vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockImplementation(async () => {
         if (initial === 'late-hardlink') fs.linkSync(systemAuth, localAuth);
+        return true;
       });
       const binaryPath = path.join(root, 'fake-codex.exe');
       vi.spyOn(binaries, 'getCachedBinaryStatus').mockReturnValue({
@@ -3511,7 +3512,7 @@ describe('Codex 系统凭证备份与旧硬链接 (#9316 review)', () => {
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
     const adapter = new DesktopCodexAuthAdapter();
     // Credential lifecycle only; asset preparation is covered in authAssetPreparation.test.ts.
-    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue();
+    vi.spyOn(adapter, 'ensureGlobalCodexAssets').mockResolvedValue(true);
     await expect(adapter.triggerLogin({ mode: 'local' })).resolves.toMatchObject({
       authenticated: true,
     });

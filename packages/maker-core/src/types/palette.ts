@@ -95,17 +95,38 @@ export interface ListAgentSkillsOptions {
   forceReload?: boolean;
   /** Host-owned Pi boundary; renderer input must never set this directly. */
   includeManagedPiPackages?: boolean;
+  /**
+   * Host-owned preview marker: this read only renders an ephemeral catalog, so
+   * it may reuse a warm package inspection. A read whose result is kept —
+   * session startup, Bot hydration — must leave it unset and stay on the short
+   * window, or it freezes a package list that is already stale.
+   */
+  palettePreview?: boolean;
 }
 
 /** Host-only runtime discovery inputs used for security decisions about the live task. */
 export interface ListRuntimeSkillsOptions extends ListAgentSkillsOptions {
   /** Exact config directory passed to the local runtime process, when it differs from its default. */
   runtimeConfigDir?: string;
+  /** A runtime read is never a preview, so it never reuses a warm package inspection. */
+  palettePreview?: never;
 }
 
 export interface ListAgentSkillsResult {
   skills: AgentSkillCommand[];
   errors?: Array<{ path?: string; message: string }>;
+  /**
+   * A source that can recover on retry was left out of this roster — a managed
+   * package whose inspection hit its budget, for instance. It is not an error, but
+   * a caller that caches rosters must rescan instead of storing this one.
+   */
+  incomplete?: boolean;
+  /**
+   * When the warm package inspection this roster merged was computed, if any.
+   * A caller that caches rosters must not keep this one past that inspection's
+   * own reuse window — it is the only bound on an install made outside Cindy.
+   */
+  managedInspectionComputedAt?: number;
 }
 
 export type AtResourceType = 'file' | 'dir' | 'agent';

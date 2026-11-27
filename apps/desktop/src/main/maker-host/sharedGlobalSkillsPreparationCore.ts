@@ -50,18 +50,19 @@ export interface SharedGlobalSkillsPreparationPorts {
 }
 
 export function createSharedGlobalSkillsPreparation(ports: SharedGlobalSkillsPreparationPorts): {
-  ensureSharedGlobalSkills(): Promise<void>;
+  /** Resolves with whether the projection is clean; warnings mean some links may be missing. */
+  ensureSharedGlobalSkills(): Promise<boolean>;
 } {
   const sharedSkillsPreparation = new PreparationCache(30_000);
   /** Last reported set of persistent projection warnings; each set is logged once. */
   let reportedPersistentSkillWarnings = '[]';
 
-  async function ensureSharedGlobalSkills(): Promise<void> {
+  async function ensureSharedGlobalSkills(): Promise<boolean> {
     const scope = ports.preparationScope();
     // The opt-in setting and root listings are part of the key so a cached completion
     // never hides a crossAgentSyncEnabled toggle or an added/removed global skill.
     const key = JSON.stringify([scope.key, await sharedGlobalSkillLinksFingerprint()]);
-    await sharedSkillsPreparation.ensure(key, async () => {
+    return sharedSkillsPreparation.ensure(key, async () => {
       const success = await runEnsureSharedGlobalSkills(scope.ownerId);
       return success && scope.current();
     });
@@ -95,7 +96,7 @@ export function createSharedGlobalSkillsPreparation(ports: SharedGlobalSkillsPre
             ...migrationWarnings,
             ...sharedProjection.warnings.filter((warning) => !persistent.has(warning)),
           ],
-          persistentWarnings,
+          persistentWarnings: [...persistent],
         };
       });
       for (const warning of result.warnings) {

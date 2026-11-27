@@ -499,8 +499,10 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     await presentation;
   }
 
-  async ensureSharedGlobalSkills(): Promise<void> {
-    await this.sharedGlobalSkills.ensureSharedGlobalSkills();
+  /** Resolves with whether the projection is clean; warnings mean some links may be missing. */
+  async ensureSharedGlobalSkills(): Promise<boolean> {
+    // `await ...();` 形态是 authPassiveSharedInstance guard 的源码文本契约，勿改写。
+    return await this.sharedGlobalSkills.ensureSharedGlobalSkills();
   }
 
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {
@@ -1281,12 +1283,12 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
   }
 
-  async ensureGlobalCodexAssets(): Promise<void> {
+  async ensureGlobalCodexAssets(): Promise<boolean> {
     const scope = preparationScope();
-    await this.pendingAssetsPrep.ensure(scope.key, async () => {
-      await this.runEnsureGlobalCodexSkills(scope.ownerId);
+    return this.pendingAssetsPrep.ensure(scope.key, async () => {
+      const sharedClean = await this.runEnsureGlobalCodexSkills(scope.ownerId);
       await this.runEnsureGlobalCodexPlugins();
-      return true;
+      return sharedClean;
     });
   }
 
@@ -1296,7 +1298,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     // owner guard) runs inside ensureSharedGlobalSkills and reports its own warnings, so
     // Codex does not repeat it; per-launch freshness of the approved catalog comes from
     // prepareCodexGlobalSkillsLinks below.
-    await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+    const sharedClean = await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
 
     const [skillsOutcome, rulesOutcome] = await Promise.all([
       withSharedGlobalSkillProjectionMutation(ownerId, async () =>
@@ -1326,7 +1328,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         assetPrepLog.warn('Codex global asset warning', { asset: outcome.label, warning });
       }
     }
-    return outcomes.every((outcome) => outcome.ok && outcome.warnings.length === 0);
+    return sharedClean && outcomes.every((outcome) => outcome.ok && outcome.warnings.length === 0);
   }
 
   private async runEnsureGlobalCodexPlugins(): Promise<void> {

@@ -106,4 +106,56 @@ describe('PiAgent.listAgentSkills (filesystem discovery, no binary spawn)', () =
     }));
     expect(resolver).toHaveBeenCalledOnce();
   });
+
+  it('passes the host preview marker on to the package resolver', async () => {
+    const resolver = vi.fn(async (_options?: { palettePreview?: boolean }) => ({
+      extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+    }));
+    const agent = new PiAgent({ ...buildDeps(), resolvePiManagedPackageResources: resolver });
+
+    await agent.listAgentSkills({ workingDir, includeManagedPiPackages: true });
+    expect(resolver.mock.calls[0]?.[0]?.palettePreview).toBeUndefined();
+
+    await agent.listAgentSkills({ workingDir, includeManagedPiPackages: true, palettePreview: true });
+    expect(resolver.mock.calls[1]?.[0]?.palettePreview).toBe(true);
+  });
+
+  it('reports a managed package source that could not be read in full', async () => {
+    const incomplete = new PiAgent({
+      ...buildDeps(),
+      resolvePiManagedPackageResources: async () => ({
+        extensions: [],
+        skills: [],
+        promptTemplates: [],
+        packageRoots: [],
+        incomplete: true,
+      }),
+    });
+    await expect(incomplete.listAgentSkills({ workingDir, includeManagedPiPackages: true }))
+      .resolves.toMatchObject({ incomplete: true });
+
+    const failed = new PiAgent({
+      ...buildDeps(),
+      resolvePiManagedPackageResources: async () => {
+        throw new Error('package state unreadable');
+      },
+    });
+    const failedResult = await failed.listAgentSkills({
+      workingDir,
+      includeManagedPiPackages: true,
+    });
+    expect(failedResult.incomplete).toBe(true);
+
+    const complete = new PiAgent({
+      ...buildDeps(),
+      resolvePiManagedPackageResources: async () => ({
+        extensions: [], skills: [], promptTemplates: [], packageRoots: [],
+      }),
+    });
+    const completeResult = await complete.listAgentSkills({
+      workingDir,
+      includeManagedPiPackages: true,
+    });
+    expect(completeResult.incomplete).toBeUndefined();
+  });
 });

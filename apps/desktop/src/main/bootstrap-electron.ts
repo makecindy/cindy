@@ -8203,7 +8203,10 @@ const registerIpcHandlers = () => {
       app.getPath('userData'),
       app.getPath('appData'),
     ),
-    prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
+    prepareSharedSkills: async () => {
+      // Only the palette listing consumes the clean flag; this scan just waits for the preparation.
+      await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+    },
     getAllowedProjectRoots: listAllowedSkillhubProjectRoots,
   });
   // 新电脑设置(docs/product-rules/new-device-setup-migration.md)：从同账号另一台电脑读取非秘密配置，
@@ -8215,7 +8218,9 @@ const registerIpcHandlers = () => {
       app.getPath('userData'),
       app.getPath('appData'),
     ),
-    prepareSharedSkills: () => desktopClaudeAuthAdapter.ensureSharedGlobalSkills(),
+    prepareSharedSkills: async () => {
+      await desktopClaudeAuthAdapter.ensureSharedGlobalSkills();
+    },
     getMainWindow: () => mainWindowRef,
     getLegacyMigrated: () => didMigrateLegacyDataForUser(authManager.getCurrentUserId()),
   });

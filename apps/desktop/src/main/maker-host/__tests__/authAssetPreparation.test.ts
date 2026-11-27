@@ -119,6 +119,20 @@ describe('asset preparation boundaries', () => {
     expect(prepare).toHaveBeenCalledTimes(4);
   });
 
+  it('caches past a reused built-in Skill bundle version instead of reprojecting every palette load', async () => {
+    const conflict = 'kept built-in Skill cindy-skill-creator because bundle version 85 was reused for different bytes';
+    // The reused-version conflict is persistent and is not returned in `warnings` (see built-in-skills.ts).
+    state.builtIns.mockResolvedValue({ descriptors: [], projectionSafe: false, warnings: [], persistentWarnings: [conflict] });
+    state.links.mockResolvedValue({ warnings: [], persistentWarnings: [] });
+    const adapter = new DesktopClaudeAuthAdapter();
+    await adapter.ensureSharedGlobalSkills();
+    await adapter.ensureSharedGlobalSkills();
+    expect(state.links).toHaveBeenCalledTimes(1);
+    expect(state.logs.filter((entry) => entry.warning === conflict)).toEqual([
+      { level: 'warn', scope: 'auth-adapters:asset-prep', warning: conflict },
+    ]);
+  });
+
   // Regression (idle CPU): the default sync opt-out and user-owned conflicting paths were
   // returned as warnings, so the 30s completion cache never held and every agent env build
   // re-ran the whole projection and re-logged the same lines. Unit tier, in-process fakes.
