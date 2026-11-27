@@ -333,7 +333,19 @@ export interface SchedulerMcpDeps {
     problem?: string;
     quotaLimit?: number;
     quotaResetAt?: number;
+    /** 插件事件来源：每个选中插件的监听状态。 */
+    plugins?: Array<{ plugin: string; state: string; reportedAt?: number; lastEventAt?: number }>;
   } | null;
+  /**
+   * 本机已启用、声明了事件的插件及其事件与字段(host 注入)。缺省 = schedule_list_event_sources
+   * 不注册。只返回声明与监听状态，不含事件内容。
+   */
+  pluginEventSources?: () => Promise<Array<{
+    plugin: string;
+    name: string;
+    state: string;
+    events: Array<{ type: string; name: string; fields: string[] }>;
+  }>>;
   /** 这台电脑的 Webhook 接收方;signed-out / unavailable 时拒绝开启触发条件。缺省 = 不检查。 */
   webhookReceiver?: () => 'cloud' | 'local' | 'signed-out' | 'unavailable';
   /** 同账号云端地址管理；只返回安全摘要，不暴露签名密钥。 */
@@ -645,8 +657,8 @@ export type ControlResult<T extends object = object, E extends string = never> =
  */
 export type ControlWorkerAgent = 'claude-code' | 'codex' | 'pi';
 /**
- * Orca Worker 的执行引擎：内置引擎，或 'acp' = 本机插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)，
- * 配 provider_id = acp-plugin:<插件>:<引擎>。只用于创建 / 读取 Worker，普通任务仍只认内置引擎。
+ * 任务与 Orca Worker 的执行引擎：内置引擎，或 'acp' = 插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)，
+ * 配 provider_id = acp-plugin:<插件>:<引擎>。用于普通任务(send_to_session)与协同 Worker。
  */
 export type ControlWorkerEngine = ControlWorkerAgent | 'acp';
 

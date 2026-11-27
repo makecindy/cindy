@@ -33,6 +33,30 @@ beforeEach(() => {
 afterAll(async () => { await fs.promises.rm(fixtureRoot, { recursive: true, force: true }); });
 
 describe('remote provider access', () => {
+  // Unit: real permission store. One external disable may lag by a minute; repeated
+  // invocations must not keep it alive. Local saves still update the cached grant immediately.
+  it('bounds external permission changes while reusing checks and applying local disable', async () => {
+    let at = 1_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => at);
+    const stat = vi.spyOn(fs, 'statSync');
+    try {
+      await store.setRemoteProviderInvocationEnabled('openai', true);
+      stat.mockClear();
+      for (let i = 0; i < 60; i++) expect(store.isRemoteProviderInvocationAllowed('openai')).toBe(true);
+      expect(stat).not.toHaveBeenCalled();
+      fs.writeFileSync(`${prefsFile()}.replacement`, JSON.stringify({ allowedProviders: {} }));
+      fs.renameSync(`${prefsFile()}.replacement`, prefsFile());
+      at += 59_999;
+      expect(store.isRemoteProviderInvocationAllowed('openai')).toBe(true);
+      at++;
+      expect(store.isRemoteProviderInvocationAllowed('openai')).toBe(false);
+      await store.setRemoteProviderInvocationEnabled('openai', true);
+      expect(store.isRemoteProviderInvocationAllowed('openai')).toBe(true);
+      await store.setRemoteProviderInvocationEnabled('openai', false);
+      expect(store.isRemoteProviderInvocationAllowed('openai')).toBe(false);
+    } finally { stat.mockRestore(); clock.mockRestore(); }
+  });
+
   // 2026-11-18 user decision: old configuration is not migrated. An 11-10 default-open file opens nothing;
   // only providers the user opened stay open.
   it('opens only what the user opened, whatever an 11-10 file says', async () => {

@@ -93,6 +93,7 @@ import {
 } from '@/auth/secureStorage';
 import {
   LOGIN_CREDENTIAL_STORAGE,
+  InvalidMobileAccountVaultError,
   clearMobileLoginCredentialsForLogout,
   commitMobileLoginSessions,
   commitMobileRuntimeResourceSession,
@@ -127,10 +128,12 @@ import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { isSelfHostedRelayBaseUrl, getSelfHostedRelayRouteGeneration } from '@/device-link/selfHostedRelayRouting';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
+import { clearAllMobileOfflineInboxIntents } from '@/session/offlineInboxIntents';
 import { clearHomeSessionPrCache } from '@/session/homeSessionPrStore';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
+import { clearChatServerMediaCache } from '@/chat/chatServerMediaCache';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
@@ -291,6 +294,7 @@ interface PendingOAuth {
 
 export interface AuthContextValue {
   initialized: boolean;
+  recoveringSession: boolean;
   isBusy: boolean;
   isAuthenticated: boolean;
   user: MobileUser | null;
@@ -320,7 +324,7 @@ export interface AuthContextValue {
   cancelAddAccount(): Promise<void>;
   logout(): Promise<void>;
   /** 认证服务已明确拒绝当前会话时，单飞执行完整本地退登。 */
-  terminateSession(reason?: 'ACCOUNT_UNAVAILABLE'): Promise<void>;
+  terminateSession(reason?: 'ACCOUNT_UNAVAILABLE' | 'SESSION_EXPIRED'): Promise<void>;
   getAccountDeletionAvailability(): Promise<AccountDeletionAvailability>;
   requestAccountDeletionChallenge(): Promise<AccountDeletionChallenge>;
   confirmAccountDeletion(input: {
@@ -342,6 +346,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   if (MOBILE_VISUAL_MOCK_ENABLED) {
     const value: AuthContextValue = {
       initialized: true,
+      recoveringSession: false,
       isBusy: false,
       isAuthenticated: true,
       user: visualMockUser,
@@ -457,7 +462,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const terminalLogoutInFlightRef = useRef<Promise<void> | null>(null);
   // refresh 定义早于完整清理函数；运行时通过 ref 调用本次 render 的最新实现。
   const terminateSessionImplRef = useRef<
-    (reason?: 'ACCOUNT_UNAVAILABLE') => Promise<void>
+    (reason?: 'ACCOUNT_UNAVAILABLE' | 'SESSION_EXPIRED') => Promise<void>
   >(async () => undefined);
   // Logout bumps this generation so a late refresh cannot resurrect the session.
   const authGenerationRef = useRef(0);
@@ -880,12 +885,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [serializeUserProfileMutation],
   );
 
-  const refreshSavedAccountsSnapshot = useCallback(async () => {
-    const vault = await readMobileAccountVault();
+  const refreshSavedAccountsSnapshot = useCallback(async (options?: { strict?: boolean }) => {
+    const vault = await readMobileAccountVault(options);
     const runtimeActiveAccountKey = userRef.current
       ? accountVaultKey(activeAuthRealmRef.current, userRef.current.id)
       : null;
     setSavedAccounts(listMobileSavedAccounts(vault, runtimeActiveAccountKey));
+    return vault;
   }, []);
 
   const refreshSavedAccountsSnapshotBestEffort = useCallback((): void => {
@@ -908,10 +914,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearHistoryDisk(),
       clearRemoteResourceCache().catch(() => undefined),
       clearCachedHomeListSnapshot().catch(() => undefined),
+      clearAllMobileOfflineInboxIntents().catch(() => undefined),
       clearHomeSessionPrCache().catch(() => undefined),
     ]);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
+    clearChatServerMediaCache({ clearNativeImageCache: true });
   }, []);
 
   const clearAuthError = useCallback(() => setAuthError(null), []);
@@ -950,7 +958,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           passportId: identityResult.value.passportId,
           memberships: identityResult.value.identities,
         })
-          .then(refreshSavedAccountsSnapshot)
+          .then(() => refreshSavedAccountsSnapshot())
           .catch(() => undefined);
       } else if (isAccountUnavailableAuthError(identityResult.error)) {
         await terminateSessionImplRef.current('ACCOUNT_UNAVAILABLE');
@@ -1254,15 +1262,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             writePersistedSession: writePersistedAuthSession,
             clearPersistedSession: () => deleteSecureItem(AUTH_SESSION_KEY),
           }),
-        ).catch(() => null);
-        if (!reconciledAuth) {
-          // A locked phone refuses Keychain reads. That is not a missing login: callers
-          // treat `null` as signed out and clear local data, so report it as a failure
-          // to retry instead. Reachable since notification buttons run the app in the
-          // background, until both login items are stored "after first unlock".
+        ).catch(async error => {
           if (!(await isCredentialStoreReadable())) throw authCodeError('AUTH_STORAGE_LOCKED');
-          return null;
-        }
+          throw error;
+        });
         const persistedVault = reconciledAuth.vault;
         const activeResourceAtStart = persistedVault?.activeAccountKey
           ? {
@@ -1446,7 +1449,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               refreshSavedAccountsSnapshotBestEffort();
             }
             if (authGenerationRef.current !== generation) return null;
-            await terminateSessionImplRef.current();
+            await terminateSessionImplRef.current(isAccountUnavailableAuthError(error) ? 'ACCOUNT_UNAVAILABLE' : 'SESSION_EXPIRED');
             return null;
           }
           throw error;
@@ -1498,21 +1501,137 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, [persistPendingOAuth]);
 
+  const restoreLocalIdentity = useCallback(async (isCurrent: () => boolean) => {
+    const did = await prepareBetaChannelForCurrentDevice();
+    if (!isCurrent()) return null;
+    deviceIdRef.current = did;
+    setDeviceId(did);
+    const persistedAccountVault = await refreshSavedAccountsSnapshot({ strict: true });
+    if (!isCurrent()) return null;
+    const signedOutTombstone =
+      typeof persistedAccountVault?.signedOutAt === 'number';
+    let storedSession = signedOutTombstone
+      ? null
+      : await readPersistedAuthSessionStrict();
+    if (!isCurrent()) return null;
+    if (signedOutTombstone) {
+      // Logout writes the empty-vault tombstone before deleting the
+      // compatibility session key. If the process stopped between those
+      // writes, the tombstone remains authoritative on the next launch.
+      await serializeRefreshTokenMutation(async () => {
+        if (isCurrent()) await deleteSecureItem(AUTH_SESSION_KEY).catch(() => undefined);
+      });
+      await deleteSecureItem(LEGACY_RESOURCE_REFRESH_TOKEN_KEY).catch(
+        () => undefined,
+      );
+    } else if (!storedSession) {
+      const legacyToken = await getSecureItem(
+        LEGACY_RESOURCE_REFRESH_TOKEN_KEY,
+      );
+      if (legacyToken) {
+        await serializeRefreshTokenMutation(async () => {
+          if (isCurrent()) await writePersistedAuthSession(legacyToken, BUILD_AUTH_REGION);
+        });
+        if (!isCurrent()) return null;
+        await deleteSecureItem(LEGACY_RESOURCE_REFRESH_TOKEN_KEY).catch(
+          () => undefined,
+        );
+        storedSession = {
+          version: 1,
+          realm: BUILD_AUTH_REGION,
+          refreshToken: legacyToken,
+        };
+      }
+    }
+    // A previous write may have committed the vault before the compatibility key.
+    if (!storedSession && !signedOutTombstone && persistedAccountVault?.activeAccountKey) {
+      const active = persistedAccountVault.resources[persistedAccountVault.activeAccountKey];
+      if (active) storedSession = { version: 1, realm: active.realm, refreshToken: active.refreshToken };
+    }
+    const [cachedProfile, storedDeletionReceiptRaw] = await Promise.all([
+      readCachedUserProfile(),
+      getSecureItem(ACCOUNT_DELETION_RECEIPT_KEY).catch(() => null),
+    ]);
+    const cachedUser = cachedProfile?.user ?? null;
+    const storedDeletionReceipt =
+      parseAccountDeletionReceiptRecord(storedDeletionReceiptRaw) ??
+      (storedDeletionReceiptRaw &&
+      !storedDeletionReceiptRaw.trimStart().startsWith('{')
+        ? {
+            version: 1 as const,
+            realm: BUILD_AUTH_REGION,
+            receiptToken: storedDeletionReceiptRaw,
+          }
+        : null);
+    if (!isCurrent()) return null;
+    if (storedDeletionReceipt) {
+      accountDeletionReceiptRef.current =
+        storedDeletionReceipt.receiptToken;
+      accountDeletionReceiptRealmRef.current = storedDeletionReceipt.realm;
+      setAccountDeletionReceipt(storedDeletionReceipt.receiptToken);
+      // Older builds stored only the opaque receipt; migrate it atomically
+      // with the deterministic build-region interpretation.
+      if (!parseAccountDeletionReceiptRecord(storedDeletionReceiptRaw)) {
+        await setSecureItem(
+          ACCOUNT_DELETION_RECEIPT_KEY,
+          serializeAccountDeletionReceiptRecord(
+            storedDeletionReceipt.realm,
+            storedDeletionReceipt.receiptToken,
+          ),
+        );
+      }
+    }
+    // 弱网冷启动只有在会话所属 realm 的业务端点已整体激活后，才发布缓存用户。
+    // 构建 realm 命中启动缓存，不增加网络依赖；跨区清单不可用时保持未认证，
+    // 防止业务调用先捕获构建区 URL、随后 refresh 又把对端 token 发给该 URL。
+    const cachedAccountKey =
+      storedSession && cachedUser
+        ? accountVaultKey(storedSession.realm, cachedUser.id)
+        : null;
+    const cachedProfileMatchesActiveAccount =
+      cachedAccountKey !== null &&
+      persistedAccountVault?.activeAccountKey === cachedAccountKey &&
+      (cachedProfile?.accountKey === cachedAccountKey ||
+        cachedProfile?.accountKey === null);
+    if (storedSession && cachedUser && cachedProfileMatchesActiveAccount) {
+      try {
+        await loadMobileEndpointsForRealm(storedSession.realm);
+        if (!isCurrent()) return null;
+        activateMobileSessionRealm(storedSession.realm);
+        activeAuthRealmRef.current = storedSession.realm;
+        userRef.current = cachedUser;
+        setMobileAuthOwner(cachedUser.id, storedSession.realm);
+        setUser(cachedUser);
+        if (cachedProfile.accountKey === null) {
+          void serializeUserProfileMutation(() =>
+            writeCachedUserProfile(cachedUser, cachedAccountKey),
+          );
+        }
+      } catch {
+        // Keep identity private until this realm can be activated.
+      }
+    }
+    return { did, hasSession: Boolean(storedSession) };
+  }, [prepareBetaChannelForCurrentDevice, refreshSavedAccountsSnapshot, serializeRefreshTokenMutation, serializeUserProfileMutation]);
+
+  const allowLoginForInvalidVault = useCallback((error: unknown) => {
+    if (!(error instanceof InvalidMobileAccountVaultError) || userRef.current) return false;
+    // Successful explicit login can repair the vault. Leave the existing
+    // credentials and local data intact until the new login commits.
+    setAuthError('AUTH_VAULT_INVALID');
+    setDeferredSessionRecovery(false);
+    return true;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
+    const generation = authGenerationRef.current;
+    const isCurrent = () => !cancelled && generation === authGenerationRef.current && !sessionRecoverySuspendedRef.current;
     const run = async () => {
       setIsBusy(true);
       try {
-        const did = await prepareBetaChannelForCurrentDevice();
-        if (cancelled || sessionRecoverySuspendedRef.current) return;
-        deviceIdRef.current = did;
-        setDeviceId(did);
-        await refreshSavedAccountsSnapshot().catch(() => undefined);
-        const persistedAccountVault = await readMobileAccountVault().catch(
-          () => null,
-        );
-        const signedOutTombstone =
-          typeof persistedAccountVault?.signedOutAt === 'number';
+        await prepareBetaChannelForCurrentDevice();
+        if (!isCurrent()) return;
         // Old Feishu refresh tokens are not valid in auth-server. Purge them explicitly
         // instead of sending them to the new endpoint or restoring an unrelated profile.
         await Promise.all([
@@ -1527,105 +1646,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // 服务模式开关与 BYOK LiteLLM key,防止桌面 key 继续躺在 secure storage。
           clearAllMobileVoiceCredentials().catch(() => undefined),
         ]);
-        let storedSession = signedOutTombstone
-          ? null
-          : await readPersistedAuthSession();
-        if (signedOutTombstone) {
-          // Logout writes the empty-vault tombstone before deleting the
-          // compatibility session key. If the process stopped between those
-          // writes, the tombstone remains authoritative on the next launch.
-          await serializeRefreshTokenMutation(() =>
-            deleteSecureItem(AUTH_SESSION_KEY).catch(() => undefined),
-          );
-          await deleteSecureItem(LEGACY_RESOURCE_REFRESH_TOKEN_KEY).catch(
-            () => undefined,
-          );
-        } else if (!storedSession) {
-          const legacyToken = await getSecureItem(
-            LEGACY_RESOURCE_REFRESH_TOKEN_KEY,
-          ).catch(() => null);
-          if (legacyToken) {
-            await writePersistedAuthSession(legacyToken, BUILD_AUTH_REGION);
-            await deleteSecureItem(LEGACY_RESOURCE_REFRESH_TOKEN_KEY).catch(
-              () => undefined,
-            );
-            storedSession = {
-              version: 1,
-              realm: BUILD_AUTH_REGION,
-              refreshToken: legacyToken,
-            };
-          }
-        }
-        const [cachedProfile, storedDeletionReceiptRaw] = await Promise.all([
-          readCachedUserProfile(),
-          getSecureItem(ACCOUNT_DELETION_RECEIPT_KEY).catch(() => null),
-        ]);
-        const cachedUser = cachedProfile?.user ?? null;
-        const storedDeletionReceipt =
-          parseAccountDeletionReceiptRecord(storedDeletionReceiptRaw) ??
-          (storedDeletionReceiptRaw &&
-          !storedDeletionReceiptRaw.trimStart().startsWith('{')
-            ? {
-                version: 1 as const,
-                realm: BUILD_AUTH_REGION,
-                receiptToken: storedDeletionReceiptRaw,
-              }
-            : null);
-        if (storedDeletionReceipt) {
-          accountDeletionReceiptRef.current =
-            storedDeletionReceipt.receiptToken;
-          accountDeletionReceiptRealmRef.current = storedDeletionReceipt.realm;
-          setAccountDeletionReceipt(storedDeletionReceipt.receiptToken);
-          // Older builds stored only the opaque receipt; migrate it atomically
-          // with the deterministic build-region interpretation.
-          if (!parseAccountDeletionReceiptRecord(storedDeletionReceiptRaw)) {
-            await setSecureItem(
-              ACCOUNT_DELETION_RECEIPT_KEY,
-              serializeAccountDeletionReceiptRecord(
-                storedDeletionReceipt.realm,
-                storedDeletionReceipt.receiptToken,
-              ),
-            );
-          }
-        }
-        // 弱网冷启动只有在会话所属 realm 的业务端点已整体激活后，才发布缓存用户。
-        // 构建 realm 命中启动缓存，不增加网络依赖；跨区清单不可用时保持未认证，
-        // 防止业务调用先捕获构建区 URL、随后 refresh 又把对端 token 发给该 URL。
-        const cachedAccountKey =
-          storedSession && cachedUser
-            ? accountVaultKey(storedSession.realm, cachedUser.id)
-            : null;
-        const cachedProfileMatchesActiveAccount =
-          cachedAccountKey !== null &&
-          persistedAccountVault?.activeAccountKey === cachedAccountKey &&
-          (cachedProfile?.accountKey === cachedAccountKey ||
-            cachedProfile?.accountKey === null);
-        if (storedSession && cachedUser && cachedProfileMatchesActiveAccount) {
-          try {
-            await loadMobileEndpointsForRealm(storedSession.realm);
-            if (cancelled) return;
-            activateMobileSessionRealm(storedSession.realm);
-            activeAuthRealmRef.current = storedSession.realm;
-            userRef.current = cachedUser;
-            setMobileAuthOwner(cachedUser.id, storedSession.realm);
-            setUser(cachedUser);
-            if (cachedProfile.accountKey === null) {
-              void serializeUserProfileMutation(() =>
-                writeCachedUserProfile(cachedUser, cachedAccountKey),
-              );
-            }
-          } catch {
-            if (!cancelled) setDeferredSessionRecovery(true);
-          }
-        }
-        if (!storedSession)
-          await deleteSecureItem(USER_PROFILE_KEY).catch(() => undefined);
+        const restored = await restoreLocalIdentity(isCurrent);
+        if (!restored || !isCurrent() || !restored.hasSession) return;
+        const { did } = restored;
+        if (!userRef.current) setDeferredSessionRecovery(true);
         try {
           await awaitAuthStartupGate(
             refresh(did),
             AUTH_STARTUP_GATE_TIMEOUT_MS,
           );
-        } catch {
+        } catch (error) {
+          if (isCurrent() && allowLoginForInvalidVault(error)) return;
           // transient:保留降级会话,由下方自愈 effect 自动补刷 token。
         }
         // 使用统计同意闸的一次性存量迁移。放在这里而不是下面的 tapdb effect 里,
@@ -1641,6 +1672,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!cancelled && userRef.current) {
           await migrateExistingLoginAsConsented().catch(() => undefined);
         }
+      } catch (error) {
+        if (isCurrent() && !allowLoginForInvalidVault(error)) setDeferredSessionRecovery(true);
       } finally {
         if (!cancelled) {
           setIsBusy(false);
@@ -1648,27 +1681,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
     };
-    // v6.3:initialize 链外层兜底 catch——ensureDeviceId / 存储异常穿出时归一未登录,
-    // 避免 unhandled rejection;finally 已保证 initialized/isBusy 收敛,此处只清残留会话。
-    void run().catch((error) => {
-      console.warn('[auth] initialize failed; normalized to signed-out', error);
-      if (cancelled) return;
-      userRef.current = null;
-      setMobileAuthOwner(null);
-      setUser(null);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    prepareBetaChannelForCurrentDevice,
-    refresh,
-    refreshSavedAccountsSnapshot,
-    serializeRefreshTokenMutation,
-  ]);
+    void run();
+    return () => { cancelled = true; };
+  }, [allowLoginForInvalidVault, prepareBetaChannelForCurrentDevice, restoreLocalIdentity, refresh]);
 
-  // 降级会话自愈:已安全发布的缓存用户，或因跨区清单失败而延迟发布的会话，
-  // 都以退避节奏和回前台时机重试。
+  // 降级会话自愈：无法验证缓存身份时先重读本机凭证，再与已恢复用户共用单飞续期。
   useEffect(() => {
     const hasRecoverableSession =
       user !== null || deferredSessionRecovery;
@@ -1689,43 +1706,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => void tryRefresh(), delay);
     };
+    let running = false;
+    const generation = authGenerationRef.current;
+    const isCurrent = () => !cancelled && generation === authGenerationRef.current && !sessionRecoverySuspendedRef.current;
     const tryRefresh = async () => {
-      if (cancelled || sessionRecoverySuspendedRef.current) return;
+      if (!isCurrent() || running) return;
+      running = true;
       try {
-        const token = await refresh();
-        if (cancelled || sessionRecoverySuspendedRef.current) return;
-        if (token) return;
-        let storedSession: AuthSessionRecord | null;
-        try {
-          // Strict: an unreadable Keychain must reach the catch below. The lenient
-          // read turns it into "no session", which signs the person out.
-          storedSession = await readPersistedAuthSessionStrict();
-        } catch {
-          scheduleNext();
-          return;
+        if (!userRef.current) {
+          const restored = await restoreLocalIdentity(isCurrent);
+          if (!restored || !isCurrent()) return;
+          if (!restored.hasSession) {
+            setDeferredSessionRecovery(false);
+            return;
+          }
         }
-        if (cancelled || sessionRecoverySuspendedRef.current) return;
-        if (!storedSession) {
-          applyUser(null);
-          return;
-        }
-        scheduleNext();
-      } catch {
-        scheduleNext();
+        if (!(await refresh()) && isCurrent()) scheduleNext();
+      } catch (error) {
+        if (isCurrent() && !allowLoginForInvalidVault(error)) scheduleNext();
+      } finally {
+        running = false;
       }
     };
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') void tryRefresh();
     });
-    void tryRefresh();
+    let network: { remove(): void } | undefined;
+    void import('expo-network').then(({ addNetworkStateListener }) => {
+      if (!isCurrent()) return;
+      let reachable: boolean | undefined;
+      network = addNetworkStateListener(state => {
+        const online = state.isConnected === true && state.isInternetReachable !== false;
+        if (online && reachable !== true) void tryRefresh();
+        reachable = online;
+      });
+    }).catch(() => undefined);
+    scheduleNext();
     return () => {
       cancelled = true;
       subscription.remove();
+      network?.remove();
       if (timer) clearTimeout(timer);
     };
   }, [
     accessToken,
-    applyUser,
+    allowLoginForInvalidVault,
+    restoreLocalIdentity,
     deferredSessionRecovery,
     initialized,
     refresh,
@@ -1978,7 +2004,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           loginFlowEpochRef.current === epoch;
         promise = (async () => {
           setIsBusy(true);
-          setAuthError(null);
+          setAuthError(reason =>
+            reason === 'SESSION_EXPIRED' || reason === 'ACCOUNT_UNAVAILABLE' || reason === 'AUTH_VAULT_INVALID'
+              ? reason
+              : null,
+          );
           suspendSessionRecoveryForLogin();
           try {
             const did = await (deviceIdRef.current ?? prepareBetaChannelForCurrentDevice());
@@ -2714,7 +2744,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             resourcePairStored = true;
           } catch (error) {
             if (
-              !isDefinitiveSavedSessionError(error) ||
+              !isRejectedRefresh(error) ||
               !(error instanceof AuthApiError)
             ) {
               throw error;
@@ -3013,9 +3043,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 首页设备+会话快照与消息缓存一样属于账号数据,登出必须清掉。
     await clearRemoteResourceCache().catch(() => undefined);
     await clearCachedHomeListSnapshot().catch(() => undefined);
+    await clearAllMobileOfflineInboxIntents().catch(() => undefined);
     await clearHomeSessionPrCache().catch(() => undefined);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
+    clearChatServerMediaCache({ clearNativeImageCache: true });
     await clearCanaryChannel().catch(() => undefined);
     // 使用统计的同意记录也随登出清除。手机端没有游客模式:登出后 NavigationGate 会
     // 把所有路由重定向到 /login,设置页里的统计开关从此不可达。保留同意会让用户处在
@@ -3050,7 +3082,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   ]);
 
   const terminateSession = useCallback(
-    (reason?: 'ACCOUNT_UNAVAILABLE'): Promise<void> => {
+    (reason?: 'ACCOUNT_UNAVAILABLE' | 'SESSION_EXPIRED'): Promise<void> => {
       if (reason) setAuthError(reason);
       const existing = terminalLogoutInFlightRef.current;
       if (existing) return existing;
@@ -3370,10 +3402,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
           const fresh = await refresh();
           nativeGuard();
-          if (!fresh) {
-            if (userRef.current) await terminateSession();
-            throw error;
-          }
+          if (!fresh) throw error;
           try {
             return await apiFetchRaw<T>(path, { ...opts, token: fresh });
           } catch (retryError) {
@@ -3381,15 +3410,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (
               retryError instanceof ApiError &&
               retryError.status === 401 &&
-              (retryError.code === 'ACCOUNT_UNAVAILABLE' ||
-                isRefreshableUnauthorizedCode(retryError.code))
+              retryError.code === 'ACCOUNT_UNAVAILABLE'
             ) {
               if (userRef.current) {
-                await terminateSession(
-                  retryError.code === 'ACCOUNT_UNAVAILABLE'
-                    ? 'ACCOUNT_UNAVAILABLE'
-                    : undefined,
-                );
+                await terminateSession('ACCOUNT_UNAVAILABLE');
               }
             }
             throw retryError;
@@ -3424,9 +3448,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [getAccessToken, refresh, terminateSession],
   );
 
+  const recoveringSession = initialized && deferredSessionRecovery && user === null;
   const value = useMemo<AuthContextValue>(
     () => ({
-      initialized,
+      initialized: initialized && !recoveringSession,
+      recoveringSession,
       isBusy,
       // 以 user 为准:弱网冷启动 token 可能尚未刷到,但会话仍可降级恢复。
       isAuthenticated: user !== null,
@@ -3483,6 +3509,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       getAccountDeletionAvailability,
       getAccountDeletionStatus,
       refresh,
+      recoveringSession,
       initialized,
       isBusy,
       loginState,
@@ -3566,41 +3593,19 @@ function awaitAuthStartupGate<T>(
   });
 }
 
-function isRejectedRefresh(error: unknown): boolean {
-  return (
-    error instanceof AuthApiError &&
-    (error.statusCode === 401 ||
-      error.code.includes('REFRESH_TOKEN') ||
-      error.code === 'MEMBERSHIP_DISABLED')
-  );
-}
-
-function isDefinitiveSavedSessionError(error: unknown): boolean {
-  return (
-    error instanceof AuthApiError &&
-    (error.statusCode === 401 ||
-      [
-        'INVALID_REFRESH_TOKEN',
-        'REFRESH_TOKEN_EXPIRED',
-        'DEVICE_MISMATCH',
-        'ACCOUNT_UNAVAILABLE',
-        'MEMBERSHIP_DISABLED',
-      ].includes(error.code))
-  );
+/** Only a recognized refusal from the auth service invalidates a saved credential.
+ * A gateway can return a generic or malformed 401 while the session is valid. */
+function isRejectedRefresh(error: unknown): error is AuthApiError {
+  return error instanceof AuthApiError &&
+    (error.statusCode === 401 || error.statusCode === 403) &&
+    [
+      'INVALID_REFRESH_TOKEN', 'REFRESH_TOKEN_EXPIRED', 'DEVICE_MISMATCH',
+      'ACCOUNT_NOT_FOUND', 'ACCOUNT_DISABLED', 'ACCOUNT_UNAVAILABLE', 'MEMBERSHIP_DISABLED',
+    ].includes(error.code);
 }
 
 function isDefinitivePassportSessionError(error: unknown): boolean {
-  return (
-    error instanceof AuthApiError &&
-    (error.statusCode === 401 ||
-      [
-        'INVALID_REFRESH_TOKEN',
-        'REFRESH_TOKEN_EXPIRED',
-        'DEVICE_MISMATCH',
-        'ACCOUNT_UNAVAILABLE',
-      ].includes(error.code)) &&
-    error.code !== 'MEMBERSHIP_DISABLED'
-  );
+  return isRejectedRefresh(error) && error.code !== 'MEMBERSHIP_DISABLED';
 }
 
 function isAccountUnavailableAuthError(error: unknown): boolean {
@@ -3645,10 +3650,6 @@ function authErrorCode(error: unknown): string {
 
 function authCodeError(code: string): Error & { code: string } {
   return Object.assign(new Error(code), { code });
-}
-
-async function readPersistedAuthSession(): Promise<AuthSessionRecord | null> {
-  return readPersistedAuthSessionStrict().catch(() => null);
 }
 
 async function readPersistedAuthSessionStrict(): Promise<AuthSessionRecord | null> {

@@ -23,14 +23,20 @@ import { Button } from '../ui/button';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
 import { buildDeepSeekUsageCard, buildZhipuUsageCard, buildKimiUsageCard, buildOpenCodeGoUsageCard } from '../status/usageCardModel';
 
-export function ProviderAccountUsageModule({ provider }: { provider?: ProviderView }) {
+export function ProviderAccountUsageModule({
+  provider,
+  reader,
+}: {
+  provider?: ProviderView;
+  reader?: Parameters<typeof useProviderAccountUsage>[4];
+}) {
   const { t, i18n } = useTranslation();
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const deepSeek = hasDeepSeekOfficialRouteView(provider);
   const zhipu = isZhipuCodingPlanProviderView(provider);
   const kimi = isKimiCodingProviderView(provider);
   const opencodeGo = isOpenCodeGoProviderView(provider);
-  const usage = useProviderAccountUsage(deepSeek || zhipu || kimi || opencodeGo ? provider : undefined);
+  const usage = useProviderAccountUsage(deepSeek || zhipu || kimi || opencodeGo ? provider : undefined, undefined, null, {}, reader);
   const dashboardUrl = usage.result?.dashboardUrl ?? getProviderAccountUsageDashboardUrlView(provider);
   if (!deepSeek && !zhipu && !kimi && !opencodeGo) return null;
   const snapshot = usage.result?.status === 'ready' ? usage.result.snapshot : null;

@@ -367,6 +367,7 @@ export function getDesktopMcpToolApprovalPolicy(
     // Moving a teammate hands its running to another computer: the task's permission mode decides.
     if (action === 'manage_session_prs' && args?.action !== 'list') return 'prompt-each-time';
     if (action === 'move_teammate_home') return 'prompt-each-time';
+    if (action === 'teammate_workspace_migration' && !['preview', 'status'].includes(String(args?.action))) return 'prompt-each-time';
     // 发给另一台电脑上的任务：作用范围越出本机，交给当前任务的权限档，不走可信 server 的静默放行。
     if (action === 'send_to_session' && targetsAnotherComputer(sessionIdDevice(args?.target_session_id))) {
       return 'prompt-each-time';

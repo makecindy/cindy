@@ -1,5 +1,5 @@
 import { getPluginHostUi, getPluginToolUi, parseGhostUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
-import { hostUiApprovalSubjects } from '../hostUi.js';
+import { hostUiApprovalSubjects, isInlineComposerAction, isDynamicComposerContribution, type GhostHostUiContribution } from '../hostUi.js';
 import {
   GHOST_HARNESS_GUEST_WORKSPACE_ARG,
   GHOST_HARNESS_REMOTE_WORKSPACE_ARG,
@@ -861,6 +861,51 @@ describe('Ghost manifest contract', () => {
     });
   });
 
+  // 与 Desktop 镜像同一组 fixture:设备码端点只在声明时出现并固定在 tokenUrl 之后
+  // (市场能力上限按归一化 JSON 逐字比较),越白名单或与 broker 同用即拒。
+  it('accepts the device authorization endpoint at a fixed position and rejects unsafe combinations', () => {
+    const manifestWith = (oauth: Record<string, unknown>) => ({
+      ...validManifest,
+      tools: undefined,
+      slots: ['network'],
+      settingsHtml: 'settings.html',
+      network: {
+        hosts: ['accounts.example.com', 'api.example.com'],
+        secrets: [
+          {
+            key: 'account',
+            label: 'Example account',
+            source: 'oauth',
+            inject: { header: 'Authorization', format: 'Bearer {value}' },
+            oauth,
+          },
+        ],
+      },
+    });
+    const base = {
+      authorizeUrl: 'https://accounts.example.com/authorize',
+      tokenUrl: 'https://accounts.example.com/token',
+      scopes: ['read.a'],
+    };
+    const legacy = validateGhostManifest(manifestWith(base));
+    expect(legacy.ok && JSON.stringify(legacy.manifest.network?.secrets?.[0]?.oauth)).toBe(JSON.stringify(base));
+    const device = validateGhostManifest(
+      manifestWith({ ...base, deviceAuthorizationUrl: 'https://api.example.com/device' }),
+    );
+    expect(device.ok && Object.keys(device.manifest.network?.secrets?.[0]?.oauth ?? {})).toEqual([
+      'authorizeUrl',
+      'tokenUrl',
+      'deviceAuthorizationUrl',
+      'scopes',
+    ]);
+    for (const bad of [
+      { ...base, deviceAuthorizationUrl: 'https://evil.example.net/device' },
+      { ...base, deviceAuthorizationUrl: 'https://accounts.example.com/device', tokenBroker: 'feishu', redirectPort: 53684 },
+    ]) {
+      expect(validateGhostManifest(manifestWith(bad)).ok, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
   it('accepts and normalizes Plugin locale resource declarations', () => {
     const locales = {
       en: 'locales/en.json',
@@ -1615,6 +1660,68 @@ describe('Ghost manifest contract', () => {
       reason: expect.stringContaining('与 node.secretBindings'),
     });
 
+    expect(
+      validateGhostManifest({
+        ...base,
+        slots: ['tool', 'network'],
+        node: undefined,
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: [],
+          connections: [
+            {
+              key: 'gitlab_conn',
+              label: 'GitLab 实例',
+              source: 'glab-cli',
+              inject: { header: 'PRIVATE-TOKEN', format: '{value}' },
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      ok: true,
+      manifest: { network: { connections: [expect.objectContaining({ key: 'gitlab_conn', source: 'glab-cli' })] } },
+    });
+    expect(
+      validateGhostManifest({
+        ...base,
+        slots: ['tool', 'network'],
+        node: undefined,
+        settingsHtml: 'settings.html',
+        network: {
+          hosts: [],
+          connections: [
+            {
+              key: 'gitlab_conn',
+              label: 'GitLab 实例',
+              source: 'glab-cli',
+              inject: { header: 'X-Custom', format: '{value}' },
+            },
+          ],
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateGhostManifest({
+        ...base,
+        slots: ['tool', 'network'],
+        node: undefined,
+        settingsHtml: 'settings.html',
+        setup: { requires: [{ anyOf: ['connection:gitlab_conn'] }] },
+        network: {
+          hosts: [],
+          connections: [
+            {
+              key: 'gitlab_conn',
+              label: 'GitLab 实例',
+              source: 'glab-cli',
+              inject: { header: 'PRIVATE-TOKEN', format: '{value}' },
+            },
+          ],
+        },
+      }).ok,
+    ).toBe(false);
+
     for (const invalidBinding of [
       { ...binding, key: 'Bad-Key' },
       { ...binding, label: '' },
@@ -2204,6 +2311,31 @@ it('validates standalone agent.modelPreferences', () => {
   expect(validateGhostManifest({ ...base, agent: { modelPreferences: false } }).ok).toBe(false);
 });
 
+// Unit, protocol compatibility §3: validate the package's wire contract through
+// validateGhostManifest. Desktop's mirror does not cover this entry point;
+// e.g. checkSources: ['mail'] without checks: true must fail here as well.
+describe('agent source checks declaration', () => {
+  const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'checks-test', name: 'Checks', version: '1.0.0', entry: 'main.js' };
+
+  it('preserves an enabled capability and declared source names', () => {
+    for (const agent of [{ checks: true }, { checks: true, checkSources: ['mail'] }]) {
+      const result = validateGhostManifest({ ...base, agent });
+      expect(result.ok && result.manifest.agent).toEqual(agent);
+    }
+  });
+
+  it.each([
+    { checks: 'yes' },
+    { checkSources: ['mail'] },
+    { checks: true, checkSources: [] },
+    { checks: true, checkSources: ['mail', 'mail'] },
+    { checks: true, checkSources: ['bad/source'] },
+    { checks: true, checkSources: Array.from({ length: 17 }, (_, i) => `source-${i}`) },
+  ])('rejects an invalid declaration %j', (agent) => {
+    expect(validateGhostManifest({ ...base, agent }).ok).toBe(false);
+  });
+});
+
 // New target access is not implied by the old plugin-owned tasks declaration.
 it('validates independent target access without dropping the tasks dependency', () => {
   const base = { schemaVersion: 3, minCindyVersion: '0.1.0', id: 'target-test', name: 'Targets', version: '1.0.0', entry: 'main.js' };
@@ -2330,6 +2462,7 @@ describe('interactive page declarations', () => {
     { contributions: [{ id: 'new', title: 'New', position: 'composer.attachment', tool: 'help' }] },
     { contributions: [{ id: 'new', title: 'New', position: 'sidebar.section', tool: 'help' }] },
     { contributions: [{ id: 'new', title: 'New', position: 'window.titlebar', kind: 'status' }] },
+    { contributions: [{ id: 'new', title: 'New', position: 'workdir.menu', kind: 'status' }] },
   ])('keeps legacy host authority when stored extensions are invalid: %j', extension => {
     const legacy = { contributions: [{ id: 'old', title: 'Old toolbar', position: 'composer.toolbar', tool: 'help' }],
       commands: [{ id: 'command', title: 'Old command', tool: 'help', shortcut: 'Mod+Shift+H' }] };
@@ -2342,7 +2475,7 @@ describe('interactive page declarations', () => {
     expect(projected).toMatchObject(legacy);
     expect(hostUiApprovalSubjects(projected!)).toEqual(hostUiApprovalSubjects(legacy));
   });
-  it.each(['composer.header', 'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion', 'window.titlebar'])(
+  it.each(['composer.header', 'sidebar.navigation', 'session.menu', 'settings.section', 'composer.completion', 'window.titlebar', 'workdir.menu'])(
     'approves the understood %s placement without changing an existing entry token', position => {
       const old = { id: 'legacy', title: 'Open', position: 'composer.toolbar', tool: 'help' };
       const entry = { id: 'extension', title: 'Extension', position,
@@ -2410,6 +2543,44 @@ describe('interactive page declarations', () => {
       expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
         host: { ...popup, contributions: [{ ...popup.contributions[0], position }] },
       } }).ok).toBe(false);
+  });
+  // Unit: this presentation hint preserves the existing approval subject and
+  // cannot turn a global view or another position into a draft action.
+  it('recognizes inline composer buttons without changing existing approval subjects', () => {
+    const views = [{ id: 'board', title: 'Board', resourceUri: 'ui://planner', scope: 'task' as const }];
+    const previous = { id: 'open', title: 'Open', position: 'composer.toolbar', view: 'board', presentation: 'popover' as const };
+    const inline: GhostHostUiContribution = { ...previous, composerAction: 'inline' };
+    const host = { views, contributions: [inline] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host)).toEqual(hostUiApprovalSubjects({ views, contributions: [previous] }));
+    const hidden = { ...host, contributions: [{ ...inline, visible: false }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: hidden } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(hidden)).toEqual(hostUiApprovalSubjects(host));
+    for (const concurrency of ['queue', 'replace'] as const) {
+      const scheduled = { ...host, contributions: [{ ...inline, concurrency }] };
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: scheduled } }).ok).toBe(true);
+      expect(hostUiApprovalSubjects(scheduled)).toEqual(hostUiApprovalSubjects(host));
+    }
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+      host: { ...host, contributions: [{ ...inline, concurrency: true }] },
+    } }).ok).toBe(false);
+    for (const visible of ['false', 0, null]) {
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+        host: { ...host, contributions: [{ ...inline, visible }] },
+      } }).ok).toBe(false);
+    }
+    expect(isInlineComposerAction(inline, views)).toBe(true);
+    expect(isInlineComposerAction(previous, views)).toBe(false);
+    expect(isInlineComposerAction({ ...inline, position: 'composer.header' }, views)).toBe(true);
+    expect(isInlineComposerAction({ ...inline, position: 'statusbar' }, views)).toBe(false);
+    expect(isInlineComposerAction(inline, [{ ...views[0], scope: 'global' }])).toBe(false);
+    const collection: GhostHostUiContribution = { ...inline, position: 'composer.header', dynamicItems: true, visible: false };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+      host: { views, contributions: [collection] },
+    } }).ok).toBe(true);
+    expect(isDynamicComposerContribution(collection)).toBe(true);
+    expect(isDynamicComposerContribution({ ...collection, position: 'statusbar' })).toBe(false);
+    expect(isDynamicComposerContribution({ ...collection, kind: 'status' })).toBe(false);
   });
   it.each([
     { kind: 'status' },

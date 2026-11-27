@@ -38,10 +38,10 @@ export function hasPluginDelegationApproval(ghost: InstalledGhost | null | undef
   return hasPluginTargetApproval(ghost) && ghost?.manifest.agent?.delegation === true && ghost.delegationCapabilityApproved === true;
 }
 
-export type PluginTaskCapability = 'tasks' | 'targets' | 'delegation' | 'observe' | 'companions';
+export type PluginTaskCapability = 'tasks' | 'targets' | 'delegation' | 'observe' | 'companions' | 'checks';
 
 export function pluginDeclaresCapability(manifest: InstalledGhost['manifest'], capability: PluginTaskCapability): boolean {
-  return capability === 'observe' || capability === 'companions'
+  return capability === 'observe' || capability === 'companions' || capability === 'checks'
     ? manifest.agent?.[capability] === true : manifest.agent?.tasks === true;
 }
 
@@ -51,7 +51,7 @@ export function hasPluginHostToolGroupApproval(ghost: InstalledGhost | null | un
 }
 
 export function pluginCapabilityApproval(capability: PluginTaskCapability): (ghost: InstalledGhost | null | undefined) => boolean {
-  return capability === 'companions' ? hasPluginCompanionsApproval : capability === 'observe' ? hasPluginObserveApproval
+  return capability === 'checks' ? hasPluginChecksApproval : capability === 'companions' ? hasPluginCompanionsApproval : capability === 'observe' ? hasPluginObserveApproval
     : capability === 'delegation' ? hasPluginDelegationApproval : capability === 'targets' ? hasPluginTargetApproval : hasPluginTaskApproval;
 }
 
@@ -114,4 +114,10 @@ export async function ensurePluginTaskApproval(
   });
   if (!confirmed || !deps.isCurrent()) return false;
   return deps.approve(id, revision, deps.isCurrent);
+}
+
+/** Change checks exchange only a bounded tri-state, never content or credentials. */
+export function hasPluginChecksApproval(ghost: InstalledGhost | null | undefined): boolean {
+  return ghost?.enabled === true && ghost.manifest.agent?.checks === true &&
+    ghost.approval?.state === 'approved' && ghost.checksCapabilityApproved === true;
 }

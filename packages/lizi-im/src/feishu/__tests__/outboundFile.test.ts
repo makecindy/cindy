@@ -1,9 +1,17 @@
 import fsSync from 'node:fs';
+import * as childProcess from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
 
 const mocks = vi.hoisted(() => ({
   createFile: vi.fn(),
@@ -61,6 +69,30 @@ async function fileFixture(name: string, content: string): Promise<string> {
   return absPath;
 }
 
+// Only the Windows path helper is controlled. Native containment tests use the
+// original spawn implementation, including the inherited directory handles.
+function stubWindowsPathHelper(candidate: string, outcome = 'success', onFd?: (fd: number) => void) {
+  if (process.platform !== 'win32') return null;
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(),
+    kill: vi.fn(() => {
+      queueMicrotask(() => child.emit('close', null));
+      return true;
+    }),
+  });
+  vi.mocked(childProcess.spawn).mockImplementationOnce((_command, _args, options) => {
+    onFd?.((options!.stdio as [number, string, string])[0]);
+    if (outcome !== 'timeout') {
+      queueMicrotask(() => {
+        child.stdout.end(Buffer.from(path.win32.toNamespacedPath(candidate), 'utf8'));
+        child.emit('close', 0);
+      });
+    }
+    return child as unknown as childProcess.ChildProcess;
+  });
+  return child;
+}
+
 describe('Feishu reaction removal', () => {
   afterEach(() => outbound.unbindClient());
 
@@ -96,47 +128,93 @@ describe('Feishu parent-chat file reuse', () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
+    vi.mocked(childProcess.spawn).mockRestore();
     outbound.unbindClient();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
   });
 
-  // The first Windows upload cold-starts PowerShell/Add-Type. Its production
-  // helper has a 15s deadline; allow it to finish before asserting the attested
-  // path instead of timing out at Vitest's default 5s (CI run 39577662696).
-  it('uploads a regular file once and reuses its file_key for the parent chat', async () => {
-    const absPath = await fileFixture('报告.txt', 'trusted report');
+  // CI run 45621511972: a helper deadline is a supported empty proof, not an
+  // upload failure. Exercise sendFile with controlled Windows helper outcomes;
+  // the real pinned-directory chain tests below retain native security coverage.
+  it.each(process.platform === 'win32' ? ['success', 'timeout', 'mismatch'] : ['native'])(
+    'uploads a regular file once and reuses its file_key with helper outcome %s', async (outcome) => {
+      const absPath = await fileFixture('报告.txt', 'trusted report');
+      const expectedPath = fsSync.realpathSync.native(absPath);
+      const expectedIdentity = fsSync.statSync(absPath, { bigint: true });
+      let uploaded = '';
+      mocks.createFile.mockImplementation(async ({ data }: { data: { file: NodeJS.ReadableStream } }) => {
+        uploaded = await readStream(data.file);
+        return { file_key: 'file-key' };
+      });
 
-    const primary = await outbound.sendFile('ou_owner', absPath, 'report.txt');
-    expect(primary).toMatchObject({
-      ok: true,
-      messageId: 'om_sent',
-      reusableMessage: {
-        msgType: 'file',
-        content: JSON.stringify({ file_key: 'file-key' }),
-      },
-      uploadedSource: {
-        realPath: expect.any(String),
-        dev: expect.any(String),
-        ino: expect.any(String),
-        ancestors: [],
-      },
-    });
-    if (['linux', 'darwin', 'win32'].includes(process.platform)) {
-      expect(primary.uploadedSource!.realPath.length).toBeGreaterThan(0);
-    } else {
-      expect(primary.uploadedSource!.realPath).toBe('');
-    }
+      const candidate = outcome === 'mismatch'
+        ? await fileFixture('decoy.txt', 'different inode')
+        : absPath;
+      let inheritedIdentity: fsSync.BigIntStats | undefined;
+      const child = stubWindowsPathHelper(candidate, outcome, (fd) => {
+        inheritedIdentity = fsSync.fstatSync(fd, { bigint: true });
+      });
 
-    await expect(
-      outbound.sendFileToChat('oc_group', primary.reusableMessage!, 'u1'),
-    ).resolves.toEqual({ ok: true, messageId: 'om_sent' });
+      if (outcome === 'timeout') vi.useFakeTimers();
+      const sending = outbound.sendFile('ou_owner', absPath, 'report.txt');
+      if (outcome === 'timeout') {
+        await vi.waitFor(() => expect(childProcess.spawn).toHaveBeenCalledOnce());
+        expect(mocks.createFile).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(child!.kill).toHaveBeenCalledOnce();
+        vi.useRealTimers();
+      }
 
-    expect(mocks.createFile).toHaveBeenCalledOnce();
-    expect(mocks.createImage).not.toHaveBeenCalled();
-    expect(mocks.createMessage).toHaveBeenCalledTimes(2);
-  }, process.platform === 'win32' ? 20_000 : undefined);
+      const primary = await sending;
+      // spawn exceptions are caught by production code. Assert outside that
+      // boundary so a missing/invalid/wrong fd cannot pass as an empty proof.
+      if (outcome !== 'native') {
+        expect(inheritedIdentity).toMatchObject({
+          dev: expectedIdentity.dev,
+          ino: expectedIdentity.ino,
+        });
+      }
+      expect(primary).toMatchObject({
+        ok: true,
+        messageId: 'om_sent',
+        reusableMessage: {
+          msgType: 'file',
+          content: JSON.stringify({ file_key: 'file-key' }),
+        },
+        uploadedSource: {
+          realPath: expect.any(String),
+          dev: expect.any(String),
+          ino: expect.any(String),
+          ancestors: [],
+        },
+      });
+      expect(primary.uploadedSource).toMatchObject({
+        dev: String(expectedIdentity.dev),
+        ino: String(expectedIdentity.ino),
+      });
+      if (outcome === 'success') {
+        expect(primary.uploadedSource!.realPath).toBe(expectedPath);
+      } else if (outcome === 'timeout' || outcome === 'mismatch') {
+        expect(primary.uploadedSource!.realPath).toBe('');
+      } else if (['linux', 'darwin'].includes(process.platform)) {
+        expect(primary.uploadedSource!.realPath).toBe(expectedPath);
+      } else {
+        expect(primary.uploadedSource!.realPath).toBe('');
+      }
+
+      await expect(
+        outbound.sendFileToChat('oc_group', primary.reusableMessage!, 'u1'),
+      ).resolves.toEqual({ ok: true, messageId: 'om_sent' });
+
+      expect(mocks.createFile).toHaveBeenCalledOnce();
+      expect(mocks.createImage).not.toHaveBeenCalled();
+      expect(mocks.createMessage).toHaveBeenCalledTimes(2);
+      expect(uploaded).toBe('trusted report');
+      if (outcome !== 'native') expect(childProcess.spawn).toHaveBeenCalledOnce();
+  });
 
   // Windows starts a fresh PowerShell process and compiles the native helper
   // for each containment proof. Keep this security regression independent of
@@ -202,6 +280,7 @@ describe('Feishu parent-chat file reuse', () => {
 
   it('uploads an image once and reuses its image_key for the parent chat', async () => {
     const absPath = await fileFixture('preview.png', 'trusted image');
+    stubWindowsPathHelper(absPath);
 
     const primary = await outbound.sendFile('ou_owner', absPath);
     expect(primary.reusableMessage).toEqual({
@@ -220,6 +299,7 @@ describe('Feishu parent-chat file reuse', () => {
 
   it('reports a parent-message failure without uploading the local file again', async () => {
     const absPath = await fileFixture('report.txt', 'trusted report');
+    stubWindowsPathHelper(absPath);
     const primary = await outbound.sendFile('ou_owner', absPath);
     mocks.createMessage.mockRejectedValueOnce(new Error('group unavailable'));
 
@@ -233,6 +313,7 @@ describe('Feishu parent-chat file reuse', () => {
 
   it('uploads the inode opened for identity when the path is replaced before the stream starts', async () => {
     const absPath = await fileFixture('report.txt', 'trusted report');
+    stubWindowsPathHelper(absPath);
     const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-feishu-outside-'));
     tempDirs.push(outsideRoot);
     const outside = path.join(outsideRoot, 'secret.txt');

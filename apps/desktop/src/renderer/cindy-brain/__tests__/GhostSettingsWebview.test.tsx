@@ -116,7 +116,7 @@ describe('GhostSettingsWebview layout ownership', () => {
     const githubRelease = vi.fn()
       .mockResolvedValueOnce({ status: 'available', release: { version: '0.2.15', assetId: 42 } })
       .mockResolvedValueOnce({ status: 'updated', version: '0.2.15' });
-    vi.stubGlobal('electronAPI', { ghosts: { githubRelease } });
+    vi.stubGlobal('electronAPI', { ghosts: { githubRelease }, pluginMarket: { onInstallProgress: () => () => {} } });
     render(<StrictMode><GhostSettingsWebview ghost={releaseGhost} appearance="plugin" /></StrictMode>);
     const install = await screen.findByRole('button', { name: 'settings.ghosts.detail.githubRelease.update' });
     expect(githubRelease).toHaveBeenCalledExactlyOnceWith('check', expect.any(String), undefined);
@@ -124,6 +124,27 @@ describe('GhostSettingsWebview layout ownership', () => {
     await screen.findByText('settings.ghosts.detail.githubRelease.updated');
     expect(githubRelease).toHaveBeenLastCalledWith('update', expect.any(String), 42);
     expect(screen.queryByRole('button', { name: 'settings.ghosts.detail.githubRelease.update' })).toBeNull();
+  });
+
+  // Unit / duplicate update: reopening settings mid-download must show the running
+  // operation until it settles, without submitting a second update.
+  it('keeps a running GitHub update visible across a settings remount', async () => {
+    let finish!: () => void;
+    const available = { status: 'available', release: { version: '0.2.15', assetId: 42 } };
+    const githubRelease = vi.fn().mockResolvedValueOnce(available)
+      .mockImplementationOnce(() => new Promise(resolve => {
+        finish = () => resolve({ status: 'updated', version: '0.2.15' });
+      })).mockResolvedValue({ status: 'current', release: available.release });
+    vi.stubGlobal('electronAPI', { ghosts: { githubRelease }, pluginMarket: { onInstallProgress: () => () => {} } });
+    const first = render(<GhostSettingsWebview ghost={releaseGhost} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.ghosts.detail.githubRelease.update' }));
+    first.unmount();
+    render(<GhostSettingsWebview ghost={releaseGhost} />);
+    expect(screen.getByText('settings.ghosts.detail.githubRelease.updating')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'settings.ghosts.detail.githubRelease.check' }).hasAttribute('disabled')).toBe(true);
+    expect(githubRelease).toHaveBeenCalledTimes(2);
+    await act(async () => finish());
+    await screen.findByText('settings.ghosts.detail.githubRelease.current');
   });
 
   // Unit / request budget: a hidden detail must not start I/O, and a rapid reopen
@@ -174,6 +195,48 @@ describe('GhostSettingsWebview layout ownership', () => {
     expect((webview as HTMLElement).style.opacity).toBe('1');
   });
 
+  it('separates an unavailable remote page from a guest crash and reloads without replaying a save', async () => {
+    let receive!: (value: { viewId: string; status: 'unavailable' | 'write-unconfirmed' }) => void;
+    const open = vi.fn().mockRejectedValueOnce(new Error('TIMEOUT')).mockResolvedValue({
+      id: 'view-b',
+      partition: 'remote-plugin-settings:view-b',
+      src: 'cindy-ghost://example-settings-layout/settings.html',
+    });
+    vi.stubGlobal('electronAPI', {
+      ghosts: {
+        openRemoteSettings: open,
+        closeRemoteSettings: vi.fn(async () => {}),
+        onRemoteSettingsDirectory: () => () => {},
+        onRemoteSettingsStatus: (listener: typeof receive) => {
+          receive = listener;
+          return () => {};
+        },
+      },
+    });
+    const { ghost, view } = renderSettings();
+    view.rerender(<GhostSettingsWebview ghost={ghost} remoteDeviceId="B" />);
+    await screen.findByText('settings.ghosts.remote.configurationReadFailed');
+    expect(screen.queryByText('settings.ghosts.panelError.crashed')).toBeNull();
+    expect(view.container.querySelector('webview')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.remote.refreshConfiguration' }));
+    await waitFor(() => expect(view.container.querySelector('webview')).not.toBeNull());
+    act(() => receive({ viewId: 'unrelated', status: 'write-unconfirmed' }));
+    expect(screen.queryByText('settings.ghosts.remote.settingsWriteUnconfirmed')).toBeNull();
+    act(() => receive({ viewId: 'view-b', status: 'write-unconfirmed' }));
+    expect(screen.getByText('settings.ghosts.remote.settingsWriteUnconfirmed')).toBeTruthy();
+    expect(view.container.querySelector('webview')).not.toBeNull();
+    act(() => receive({ viewId: 'view-b', status: 'unavailable' }));
+    expect(screen.getByText('settings.ghosts.remote.configurationReadFailed')).toBeTruthy();
+    expect(screen.getByText('settings.ghosts.remote.settingsWriteUnconfirmed')).toBeTruthy();
+    expect(view.container.querySelector('webview')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.remote.refreshConfiguration' }));
+    await waitFor(() => expect(view.container.querySelector('webview')).not.toBeNull());
+    expect(open).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText('settings.ghosts.remote.settingsWriteUnconfirmed')).toBeNull();
+    fireEvent(view.container.querySelector('webview')!, new Event('render-process-gone'));
+    expect(screen.getByText('settings.ghosts.panelError.crashed')).toBeTruthy();
+  });
+
   it('keeps the target page and directory picker bound to B, and closes the lease on unmount', async () => {
     let receive!: (value: { viewId: string; request: { id: string; expiresAt: number } }) => void;
     const unsubscribe = vi.fn(),
@@ -189,6 +252,7 @@ describe('GhostSettingsWebview layout ownership', () => {
         openRemoteSettings: open,
         closeRemoteSettings: close,
         answerRemoteSettingsDirectory: answer,
+        onRemoteSettingsStatus: () => () => {},
         onRemoteSettingsDirectory: (listener: typeof receive) => {
           receive = listener;
           return unsubscribe;

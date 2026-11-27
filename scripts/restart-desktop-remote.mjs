@@ -629,6 +629,8 @@ export function currentDarwinTerminal() {
 export function launchDarwinDevInCurrentTerminal(command, logPath, { cwd = rootDir, env = process.env } = {}) {
   const terminal = currentDarwinTerminal();
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  // Clean up any legacy in-tree FIFO left by older builds so recursive tools never block on logs/.
+  fs.rmSync(`${logPath}.fifo`, { force: true });
   const output = fs.openSync(terminal, 'w');
   try {
     // Only this layer creates a PTY. Its output goes directly to the existing
@@ -685,19 +687,24 @@ export function desktopDevTerminalLogPath(root = rootDir) {
 // Agent 没有 TTY 时 dev 跑在新开的 Terminal 标签页里，进程退出后标签页随之关闭，
 // 失败原因就看不到了。script(1) 继续给子进程一个 pty（electron-forge 依赖 TTY），
 // 输出经命名管道只把前 maxBytes 写进日志、其余丢弃：dev 会把 trace 级日志镜像到
-// 终端，长期运行的实例不能让这份文件无限增长。每次启动覆盖，退出码与子进程一致。
+// 终端，长期运行的实例不能让这份文件无限增长。命名管道建在临时目录而不是仓库的
+// apps/desktop/logs/ 下，避免 dev 运行期间递归 grep/tar 等工具误打开活跃 FIFO 而
+// 永久阻塞（并抢走日志字节）。每次启动覆盖，退出码与子进程一致。
 // 返回一个 `{ ...; }` 命令组，可以整体接在 `cd … &&` 后面；envPrefix 只作用于 script。
 export function darwinTerminalLoggedCommand(
   command,
   logPath,
-  { envPrefix = '', maxBytes = DEV_TERMINAL_LOG_MAX_BYTES } = {},
+  { envPrefix = '', maxBytes = DEV_TERMINAL_LOG_MAX_BYTES, fifoDir = os.tmpdir() } = {},
 ) {
   const log = shellSingleQuote(logPath);
-  const fifo = shellSingleQuote(`${logPath}.fifo`);
+  const fifoTemplate = shellSingleQuote(path.join(fifoDir, 'cindy-dev-term.XXXXXX'));
   return [
-    `{ rm -f ${fifo}; mkfifo ${fifo} && { { head -c ${maxBytes} > ${log}; cat > /dev/null; } < ${fifo} & }; `,
-    `${envPrefix}/usr/bin/script -q -F ${fifo} ${command}; `,
-    `cindyDevExit=$?; rm -f ${fifo}; (exit $cindyDevExit); }`,
+    `{ cindyDevFifoDir=$(mktemp -d ${fifoTemplate}) && `,
+    `cindyDevFifo="$cindyDevFifoDir/dev-terminal.fifo" && `,
+    `mkfifo -m 0600 "$cindyDevFifo" && `,
+    `{ { head -c ${maxBytes} > ${log}; cat > /dev/null; } < "$cindyDevFifo" & } && `,
+    `${envPrefix}/usr/bin/script -q -F "$cindyDevFifo" ${command}; `,
+    `cindyDevExit=$?; [ -n "$cindyDevFifoDir" ] && rm -rf -- "$cindyDevFifoDir"; (exit $cindyDevExit); }`,
   ].join('');
 }
 
@@ -1078,12 +1085,12 @@ function devScriptForMode(mode) {
   return mode === 'local' ? 'dev:desktop' : 'dev:desktop:remote';
 }
 
-function packageManagerCommand(mode) {
+function packageManagerCommand(mode, startupArgs = []) {
   const runnerPath = path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs');
   if (process.platform === 'win32') {
-    return `${cmdDoubleQuote(process.execPath)} ${cmdDoubleQuote(runnerPath)} ${mode}`;
+    return `${cmdDoubleQuote(process.execPath)} ${cmdDoubleQuote(runnerPath)} ${mode}${startupArgs.map((arg) => ` ${cmdDoubleQuote(arg)}`).join('')}`;
   }
-  return `${shellSingleQuote(process.execPath)} ${shellSingleQuote(runnerPath)} ${shellSingleQuote(mode)}`;
+  return `${shellSingleQuote(process.execPath)} ${shellSingleQuote(runnerPath)} ${shellSingleQuote(mode)}${startupArgs.map((arg) => ` ${shellSingleQuote(arg)}`).join('')}`;
 }
 
 function darwinEnvPrefix() {
@@ -1220,9 +1227,9 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     .join(' ') + ' ';
 }
 
-function launchInSystemTerminal(mode) {
+function launchInSystemTerminal(mode, startupArgs) {
   if (process.platform === 'win32') {
-    const command = `cd /d ${cmdDoubleQuote(rootDir)} && ${devEnvPrefix()}${packageManagerCommand(mode)}`;
+    const command = `cd /d ${cmdDoubleQuote(rootDir)} && ${devEnvPrefix()}${packageManagerCommand(mode, startupArgs)}`;
     const script = [
       "Start-Process -FilePath 'cmd.exe'",
       `-ArgumentList @('/c', ${psSingleQuote(command)})`,
@@ -1244,7 +1251,7 @@ function launchInSystemTerminal(mode) {
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     fs.rmSync(logPath, { force: true });
     fs.rmSync(`${logPath}.fifo`, { force: true });
-    const command = `${darwinEnvPrefix()}${darwinStaleDevEnvUnset()}cd ${shellSingleQuote(rootDir)} && ${darwinTerminalLoggedCommand(packageManagerCommand(mode), logPath, { envPrefix: devEnvPrefix() })}; exitCode=$?; exit $exitCode`;
+    const command = `${darwinEnvPrefix()}${darwinStaleDevEnvUnset()}cd ${shellSingleQuote(rootDir)} && ${darwinTerminalLoggedCommand(packageManagerCommand(mode, startupArgs), logPath, { envPrefix: devEnvPrefix() })}; exitCode=$?; exit $exitCode`;
     const { scriptPath, args } = prepareDarwinTerminalLaunch(command);
     // osascript 在 do script 之前失败（自动化权限被拒、脚本错误）时临时脚本不会被 source，
     // 首行自删不会发生；按失败退出尽力删除，避免留下含开发环境变量的文件。
@@ -1278,17 +1285,17 @@ function launchInSystemTerminal(mode) {
   return null;
 }
 
-function startDesktopDev(mode, reuseTerminal = false) {
+function startDesktopDev(mode, reuseTerminal = false, startupArgs = []) {
   console.log(`==> Starting desktop ${mode} dev...`);
 
   if (!reuseTerminal && !hasInteractiveTty() && (process.platform === 'win32' || process.platform === 'darwin')) {
-    return launchInSystemTerminal(mode) ?? null;
+    return launchInSystemTerminal(mode, startupArgs) ?? null;
   }
 
   const logPath = reuseTerminal ? desktopDevTerminalLogPath() : null;
   const child = reuseTerminal
-    ? launchDarwinDevInCurrentTerminal(packageManagerCommand(mode), logPath)
-    : spawn(process.execPath, [path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs'), mode], {
+    ? launchDarwinDevInCurrentTerminal(packageManagerCommand(mode, startupArgs), logPath)
+    : spawn(process.execPath, [path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs'), mode, ...startupArgs], {
     cwd: rootDir,
     stdio: 'inherit',
     windowsHide: false,
@@ -1845,7 +1852,12 @@ async function main() {
       isolationName: process.env.XDT_ISOLATED_NAME || '',
     });
   }
-  const terminalLogPath = startDesktopDev(mode, reuseTerminal);
+  // Re-pass the explicit file as CLI intent: the child wrapper must still ignore
+  // unrelated inherited XDT_ENDPOINT_MANIFEST_FILE values.
+  const startupArgs = argv.some((arg) => arg === '--endpoints-file' || arg.startsWith('--endpoints-file='))
+    ? [`--endpoints-file=${path.resolve(rootDir, startupConfig.endpointManifestFile)}`]
+    : [];
+  const terminalLogPath = startDesktopDev(mode, reuseTerminal, startupArgs);
   // 所有非 ready 的结论（启动失败、超时、ready 后进程退出导致的 WHOAMI_MISMATCH）
   // 都先打印终端日志末尾，并在 verdict 里带上 log=。
   const printFailedVerdict = (verdict) => {

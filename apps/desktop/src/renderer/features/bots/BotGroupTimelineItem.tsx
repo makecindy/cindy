@@ -24,7 +24,7 @@ import type { BotGroupAuthorKind } from '@cindy/maker-shared/botGroupChat';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { memo, useMemo, useEffect, useState, useLayoutEffect, useRef, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CircleAlert, CornerDownRight, RefreshCcw } from 'lucide-react';
+import { ChevronDown, CircleAlert, CornerDownRight, RefreshCcw } from 'lucide-react';
 import { BotGroupCapabilityNotice } from './BotGroupCapabilityNotice';
 import { BotGroupThreadPreview, BotGroupThreadShareQuote, botGroupThreadShareLabel } from './BotGroupThreadViews';
 import { toast } from '@/lib/toast';
@@ -36,6 +36,7 @@ import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from '@/components/chat/ChatBubb
 import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
 import { ShareMessageCheckbox } from '@/components/chat/ShareMessageCheckbox';
 import { CHAT_MESSAGE_LOCATE_TRANSITION_CLASS, CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS } from '@/components/chat/chatChrome';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SHARE_EXCLUDE_ATTR, SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/lib/shareConversationImage';
 import { ChatReadReceipt } from './ChatMessageReaders';
@@ -52,9 +53,10 @@ import { isBotGroupCapabilityNoticeCode, isBotGroupRuntimeFailureCode } from '..
 import { GroupMaskMessageAvatar } from './GroupMaskControls';
 import { useGroupMask, maskIdentity } from './groupMaskPresentation';
 import { BotAvatar } from './BotAvatar';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { BotGroupMentionCard, botGroupMentionMember } from './BotGroupMentionCard';
 import { splitBotGroupMentionSegments } from './botGroupMentions';
-import { botGroupNoticeKey } from './botGroupPresentation';
+import { BOT_GROUP_JOIN_SUMMARY_NAMES, botGroupNoticeKey } from './botGroupPresentation';
 import {
   BotGroupHandoffFiles,
   BotGroupOrganizerTag,
@@ -277,12 +279,12 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
 
 // ---- Pieces ----------------------------------------------------------------------------
 
-/** Quiet pill after an author name (负责人, 第 k 步, 某某的主人). */
-export function BotGroupNameTag({ children }: { children: ReactNode }) {
+/** Quiet pill after an author name (负责人, 第 k 步, 某某的主人, 部门). */
+export function BotGroupNameTag({ children, title }: { children: ReactNode; title?: string }) {
   return (
-    <span className="inline-flex min-h-[18px] max-w-[12rem] shrink-0 select-none items-center truncate rounded-full bg-[var(--surface-chip)] px-1.5 py-px text-11 font-medium leading-tight text-[var(--text-secondary)]">
+    <Badge title={title} className="max-w-[12rem] truncate">
       {children}
-    </span>
+    </Badge>
   );
 }
 
@@ -300,6 +302,7 @@ export function BotGroupDateDivider({ timestamp, locale }: { timestamp: number; 
 // ---- The row ---------------------------------------------------------------------------
 
 export interface BotGroupTimelineItemProps {
+  showDeviceChoice?: boolean;
   pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates;
   message: BotGroupTimelineMessage;
   /** Same author as the row above within five minutes: no avatar or name. */
@@ -310,6 +313,12 @@ export interface BotGroupTimelineItemProps {
   avatar?: { name: string; avatar: string | null; avatarUrl?: string | null; avatarColor: string | null };
   /** Bots a human author brought into the group: 「某某的主人」. */
   ownerOf?: string;
+  /** Same-organization colleague leaf department (strictly same-org viewers only). */
+  department?: string;
+  /** Full department path tooltip (strictly same-org viewers only). */
+  departmentPath?: string;
+  /** True only for enterprise viewers looking at an external human member. */
+  external?: boolean;
   /** 「第 k 步」 on a step hand-off. */
   stepNumber?: number;
   members: readonly BotGroupMemberView[];
@@ -357,6 +366,8 @@ export interface BotGroupTimelineItemProps {
   onEditStep?: (planId: string, step: BotGroupPlanStepView, action: 'reassign' | 'remove' | 'skip', botId?: string) => void;
   /** Present on the open 分工 card for whoever may press 继续 (§7.4). */
   onPlanAutoContinue?: (planId: string, on: boolean) => void;
+  /** Deduplicated names when consecutive `member-joined` system notices are collapsed onto this row. */
+  joinedNames?: readonly string[];
 }
 
 function Row({ message, highlighted, focusable, entering, block, children }: {
@@ -388,6 +399,44 @@ function SystemLine({ children, testId }: { children: ReactNode; testId?: string
       <span aria-hidden className="h-px min-w-6 flex-1 bg-[var(--border-default)]" />
       {children}
       <span aria-hidden className="h-px min-w-6 flex-1 bg-[var(--border-default)]" />
+    </div>
+  );
+}
+
+function BotGroupMemberJoinedNotice({ names }: { names: readonly string[] }) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const separator = t('bots.groupChat.memberSeparator');
+  const fullText = t('bots.groupChat.notice.memberJoinedList', { names: names.join(separator) });
+  if (names.length <= BOT_GROUP_JOIN_SUMMARY_NAMES) {
+    return (
+      <p className="select-none text-center text-12 leading-[1.667] text-[var(--text-tertiary)]">
+        {fullText}
+      </p>
+    );
+  }
+  const summaryText = t('bots.groupChat.notice.memberJoinedSummary', {
+    names: names.slice(0, BOT_GROUP_JOIN_SUMMARY_NAMES).join(separator),
+    others: names.length - BOT_GROUP_JOIN_SUMMARY_NAMES,
+  });
+  return (
+    <div className="flex justify-center">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        data-testid="bot-group-joined-summary"
+        onClick={() => setExpanded((open) => !open)}
+        className="max-w-[85%] cursor-pointer select-none rounded-lg px-2 py-0.5 text-center text-12 leading-[1.667] text-[var(--text-tertiary)] transition-colors hover:text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+      >
+        <span>{expanded ? fullText : summaryText}</span>
+        <ChevronDown
+          aria-hidden
+          className={cn(
+            'ml-1 inline-block h-3 w-3 align-[-2px] transition-transform duration-[var(--motion-fast)] motion-reduce:transition-none',
+            expanded && 'rotate-180',
+          )}
+        />
+      </button>
     </div>
   );
 }
@@ -438,12 +487,19 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   if (message.kind === 'notice' || message.authorKind === 'system') {
     const name = message.authorName.trim() || authorName;
     if (isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)) return <Row {...rowProps} block="system">
-      <BotGroupCapabilityNotice name={name} code={message.capabilityNoticeCode} />
+      <BotGroupCapabilityNotice name={name} code={message.capabilityNoticeCode} chooseDevice={props.showDeviceChoice && message.canChooseAssistantDevice} />
     </Row>;
     if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
       return (
         <Row {...rowProps} block="system">
           <BotGroupRuntimeFailureNotice name={name} code={message.runtimeFailureCode} reason={message.runtimeFailureReason} />
+        </Row>
+      );
+    }
+    if (message.noticeCode === 'member-joined' && props.joinedNames && props.joinedNames.length >= 2) {
+      return (
+        <Row {...rowProps} block="system">
+          <BotGroupMemberJoinedNotice names={props.joinedNames} />
         </Row>
       );
     }
@@ -620,6 +676,8 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           {!continued ? (
             <span className="flex min-w-0 max-w-full select-none items-baseline gap-1.5">
               <span className="min-w-0 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">{authorName}</span>
+              {props.external ? <BotGroupExternalBadge /> : null}
+              {props.department ? <BotGroupNameTag title={props.departmentPath ?? props.department}>{props.department}</BotGroupNameTag> : null}
               {isPlanCard ? <BotGroupOrganizerTag /> : null}
               {props.stepNumber ? <BotGroupNameTag>{t('bots.groupChat.timeline.stepTag', { count: props.stepNumber })}</BotGroupNameTag> : null}
               {props.ownerOf ? <BotGroupNameTag>{t('bots.groupChat.ownerOf', { name: props.ownerOf })}</BotGroupNameTag> : null}

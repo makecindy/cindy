@@ -1,3 +1,4 @@
+import { isStrictBase64Chars, parseBase64DataUrl } from "./dataUrl.js";
 import { TASK_TAG_COLORS } from "./taskTags.js";
 /** Project artwork is content; controls remain on the application's semantic palette. */
 export const PROJECT_SYMBOLS = [
@@ -149,11 +150,9 @@ export function isProjectImage(
 export function isProjectImageDraft(
   value: unknown,
 ): value is `data:image/${string}` {
-  return (
-    typeof value === "string" &&
-    value.length <= PROJECT_ICON_UPLOAD_LIMIT &&
-    /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value)
-  );
+  if (typeof value !== "string" || value.length > PROJECT_ICON_UPLOAD_LIMIT) return false;
+  const parsed = parseBase64DataUrl(value, /^data:image\/(png|jpeg|webp);base64$/);
+  return parsed !== null && isStrictBase64Chars(parsed.payload);
 }
 export function validProjectIcon(value: unknown): value is string {
   if (typeof value !== "string" || value.length > 160) return false;

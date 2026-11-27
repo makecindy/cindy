@@ -1,7 +1,9 @@
+import { createHash, createHmac } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { CINDY_BRIDGE_EXTENSION_SOURCE } from '../cindy-bridge-source.js';
+import { completedPiResponsesMessage } from '../responses-completion.js';
+import { CINDY_BRIDGE_EXTENSION_SOURCE, CINDY_PI_RESPONSES_COMPLETION_PREFIX } from '../cindy-bridge-source.js';
 import { nativeProviderAdapterAliases, PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from '../native-provider-adapter-source.js';
 
 type RegisteredProvider = { id: string; auth: { apiKey?: unknown; oauth?: unknown }; getModels: () => unknown[]; filterModels?: () => unknown;
@@ -9,7 +11,7 @@ type RegisteredProvider = { id: string; auth: { apiKey?: unknown; oauth?: unknow
 
 type Alias = { id: string; name: string; provider: string; keyEnv?: string; remoteProviderId?: string; models?: Array<{ id: string; grant: string }> };
 
-function loadAdapter(initialAliases: Alias[] = [], network?: { fetch: unknown; stream: RegisteredProvider['streamSimple']; guest?: boolean }) {
+function loadAdapter(initialAliases: Alias[] = [], network?: { fetch: unknown; stream: RegisteredProvider['streamSimple']; guest?: boolean; local?: boolean }) {
   const env: Record<string, string> = {
     CINDY_PI_NATIVE_PROVIDER_ADAPTERS: JSON.stringify(initialAliases),
     CINDY_PI_KEY_OLD: 'old-secret',
@@ -33,6 +35,8 @@ function loadAdapter(initialAliases: Alias[] = [], network?: { fetch: unknown; s
     ? ['allowed', 'denied'].map(id => ({ provider: alias.id, id })) : [{ provider: alias.id, id: 'old' }]);
   let nextModels = models;
   const ctx = {
+    ui: { notify: vi.fn() },
+    sessionManager: { getSessionId: () => 'native-session' },
     modelRegistry: {
       runtime: { async prepareRequest(model: any, options: any) { return { model, options, provider: ctx.modelRegistry.getProvider(model.provider) }; } },
       getAll: () => models,
@@ -54,7 +58,8 @@ function loadAdapter(initialAliases: Alias[] = [], network?: { fetch: unknown; s
   }).outputText;
   const sandbox: Record<string, unknown> = {
     process: { env },
-    CINDY_HOSTED: { guest: network?.guest ?? true, url: 'http://127.0.0.1:9', token: 'run-token' },
+    CINDY_HOSTED: network?.local ? null : { guest: network?.guest ?? true, url: 'http://127.0.0.1:9', token: 'run-token' },
+    CINDY_PI_RESPONSES_COMPLETION_PREFIX, completedPiResponsesMessage, createHash, createHmac, Headers, URL,
     fetch: network?.fetch, AbortSignal,
     __loadPiAi: async (name: string) => name.endsWith('/compat')
       ? { getApiProvider: () => network ? { stream: network.stream, streamSimple: network.stream } : undefined }
@@ -74,6 +79,59 @@ function loadAdapter(initialAliases: Alias[] = [], network?: { fetch: unknown; s
 }
 
 describe('Cindy native provider refresh bridge', () => {
+  // Unit: original prepared transport -> private completion receipt. The cache refresh
+  // tests don't cover direct key recovery; mere text with no completed Responses status failed open.
+  it('attests the native Responses request credential and only a real completed generation', async () => {
+    const official = 'https://api.openai.com/v1/responses';
+    const model = { provider: 'fixture', id: 'wire', api: 'openai-responses', baseUrl: 'https://api.openai.com/v1' };
+    const completed = { role: 'assistant', api: model.api, stopReason: 'stop', rawStopReason: 'completed',
+      responseId: 'resp_unit', usage: { output: 1 }, content: [{ type: 'text', text: 'done' }] };
+    let message: unknown = completed;
+    let responseUrl = official;
+    const transport = vi.fn(async () => ({ url: responseUrl, ok: true, redirected: false }));
+    const preparedStream = (_model: unknown, _context: unknown, options: any) => {
+      const done = options.fetch(official, { method: 'POST', headers: {
+        authorization: 'Bearer actual-test-key', 'openai-project': 'fixture-project',
+      } }).then(() => message);
+      return { result: () => done, async *[Symbol.asyncIterator]() {} };
+    };
+    const h = loadAdapter([], { stream: preparedStream, fetch: transport, local: true });
+    h.env.CINDY_PI_TURN_TOOL_POLICY = 'instance';
+    h.setModels([model]);
+    await h.ctx.modelRegistry.refresh({ allowNetwork: false });
+    await h.adapter.registerCindyNativeProviderAdapters(h.pi, {
+      accepts: () => false,
+      ownRegistry: vi.fn(),
+    });
+    await h.handlers.get('session_start')!({}, h.ctx);
+    const dispatch = async (sessionId = 'native-session') => {
+      const prepared = await h.ctx.modelRegistry.runtime.prepareRequest(model, { sessionId,
+        apiKey: 'configured-but-overridden', fetch: transport });
+      const result = prepared.provider.streamSimple(prepared.model, { messages: [] }, prepared.options) as AsyncIterable<unknown> & {
+        result(): Promise<unknown>;
+      };
+      await result.result();
+    };
+    await dispatch();
+    const key = createHash('sha256').update('actual-test-key').digest('hex');
+    const scope = createHash('sha256').update(JSON.stringify([key, 'fixture-project', null])).digest('hex');
+    const proof = createHmac('sha256', 'instance').update(JSON.stringify(['fixture', 'wire', 'resp_unit', scope])).digest('hex');
+    expect(h.ctx.ui.notify).toHaveBeenCalledExactlyOnceWith(CINDY_PI_RESPONSES_COMPLETION_PREFIX + 'instance:' + proof, 'info');
+    h.ctx.ui.notify.mockClear();
+    for (const [negative, endpoint, sessionId] of [
+      [{ ...completed, rawStopReason: 'incomplete.max_output_tokens' }, official, 'native-session'],
+      [{ ...completed, content: [] }, official, 'native-session'],
+      [{ ...completed, stopReason: 'aborted' }, official, 'native-session'],
+      [completed, 'https://example.invalid/v1/responses', 'native-session'],
+      [completed, official, 'another-native-session'],
+    ] as const) {
+      message = negative;
+      responseUrl = endpoint;
+      await dispatch(sessionId);
+      expect(h.ctx.ui.notify).not.toHaveBeenCalled();
+    }
+  });
+
   it('wraps only managed cache routes and keeps the native serializer and payload hook', async () => {
     const stream = vi.fn(async function* () {});
     const h = loadAdapter([], { fetch: vi.fn(), stream });

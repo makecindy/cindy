@@ -1,3 +1,4 @@
+import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../agent-input-coordinator.js';
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -23,7 +24,7 @@ import {
 } from '../pluginTaskService.js';
 import type { PluginTaskRoute, PluginTaskView } from '../../../shared/pluginTasks.js';
 import { controlOwnedSessionExecution, isSameSessionExecution, withdrawOwnedSessionInputs } from '../sessionExecutionOwnership.js';
-import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
+import { PLUGIN_TEAM_PLAN_MAX_JSON_CHARS, PLUGIN_TASK_FOLLOW_UP_MS, PLUGIN_TASK_RECEIPT_MAX_JSON_CHARS } from '../../../shared/pluginTasks.js';
 import { resolveRemotePluginTaskRoute, savedPluginTaskRemoteRoute } from '../pluginTaskModelRoute.js';
 import type { ProviderView } from '@cindy/model-providers';
 
@@ -401,6 +402,8 @@ function fixture() {
       ),
     forSession: async (t) =>
       copy([...rows.values()].filter((r) => r.operation === 'send' && r.targetId === t)),
+    followUpLinks: async (t) =>
+      copy([...rows.values()].filter((r) => r.operation === 'followUp' && r.targetId === t)),
     insert: async (r) => {
       expect(rows.has(r.id)).toBe(false);
       rows.set(r.id, copy(r));
@@ -618,6 +621,52 @@ it('keeps relay-free send receipts replayable and binds a relay to its request k
   await expect(f.service.send('p', { ...request, requestKey: 'relay', relay: { ...relay, sender: { ...sender, isOwner: true } } }))
     .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
   expect(f.deps.dispatch).toHaveBeenCalledTimes(2);
+});
+
+// unit: plugin-agent-tasks.md「后续轮次」(2026-11-25). A WeChat question's turn opened a task; its
+// result came back into the WeChat task but nothing reached WeChat, because the plugin only knows runs
+// it sent. Entries: send(followUps) → noteOpenedTask → openFollowUp → accept/settle → getRun/listRuns/
+// cancel. Observable: only word back from the task that opted-in run opened becomes a run the plugin
+// can read (never the owner's turns, other tasks, another plugin, or after the window), and the
+// plugin's dispatch checks never hold that word back. Minimal inputs: one opted-in and one plain run,
+// word from the opened task, from another task and after 7 days, a config change before acceptance.
+it('turns word back from a task an opted-in run opened into a follow-up run, and nothing else', async () => {
+  const f = fixture();
+  let clock = 1;
+  const relay = { platform: 'wechat', chatType: 'group' as const, chatName: '产品群', sender: { id: 'wxid_a', name: 'Chris', isOwner: true } };
+  const readInputRelay = vi.fn(async () => relay);
+  const service = createPluginTaskService({ ...f.deps, now: () => clock, readInputRelay });
+  const task = await service.create('p', { requestKey: 'create', title: 'WeChat group' });
+  const base = { taskId: task.taskId, expectedRevision: task.revision };
+  const plain = await service.send('p', { ...base, requestKey: 'plain', text: 'plain' });
+  const asked = await service.send('p', { ...base, requestKey: 'asked', text: '查一下', followUps: true });
+  expect([plain.followUps, asked.followUps]).toEqual([undefined, { tasks: 0 }]);
+  // A turn without the opt-in (as the owner's own turns) remembers nothing.
+  await service.noteOpenedTask(task.taskId, [plain.inputMessageId], 'helper');
+  expect(await service.openFollowUp('helper', task.taskId)).toBeUndefined();
+  await service.noteOpenedTask(task.taskId, [asked.inputMessageId], 'helper');
+  await service.noteOpenedTask(task.taskId, [asked.inputMessageId], 'helper');
+  expect(readInputRelay).toHaveBeenCalledExactlyOnceWith(task.taskId, [asked.inputMessageId]);
+  expect((await service.getRun('p', asked.runId)).followUps).toEqual({ tasks: 1, until: 1 + PLUGIN_TASK_FOLLOW_UP_MS });
+  for (const [sender, target] of [['other', task.taskId], ['helper', 'another-task']])
+    expect(await service.openFollowUp(sender, target)).toBeUndefined();
+  const followUp = (await service.openFollowUp('helper', task.taskId))!;
+  expect(followUp).toEqual({ runId: expect.any(String), clientId: `plugin-task:${followUp.runId}`, pluginId: 'p', relay });
+  // The word is already accepted for delivery: a changed task configuration never rejects it.
+  f.tasks.get(task.taskId)!.resolvedConfig = { ...f.route, model: 'changed' };
+  await expect(service.accept(task.taskId, { clientId: followUp.clientId }, f.execution)).resolves.toBeUndefined();
+  await service.settle(task.taskId, f.execution, 'completed', 'answer');
+  expect(await service.getRun('p', followUp.runId)).toMatchObject({ status: 'completed', outputMessageId: 'answer',
+    followUpOf: asked.runId, followUps: { tasks: 0 }, acceptedConfig: { model: 'changed' } });
+  expect((await service.listRuns('p', task.taskId)).items.map(run => run.runId)).toContain(followUp.runId);
+  await expect(service.getRun('other', followUp.runId)).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+  // Each word back is its own follow-up; the plugin cannot withdraw another task's word.
+  const next = (await service.openFollowUp('helper', task.taskId))!;
+  await expect(service.cancel('p', next.runId)).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+  await service.abandonFollowUp(next.runId);
+  expect(await service.getRun('p', next.runId)).toMatchObject({ status: 'failed' });
+  clock = 2 + PLUGIN_TASK_FOLLOW_UP_MS;
+  expect(await service.openFollowUp('helper', task.taskId)).toBeUndefined();
 });
 
 // unit: plugin-agent-tasks.md「消息附件」(2026-11-17). A relayed photo may come without words, and
@@ -885,6 +934,14 @@ it.each(['completed','failed','cancelled','interrupted'] as const)('prefers a ne
   }
 });
 
+function productionCancelAdapter(deps: Record<string, unknown>): PluginTaskServiceDeps['cancel'] {
+  const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');
+  const start=source.indexOf('      cancel: async (pluginId, taskId, inputClientIds, execution, mode) => {');
+  const block=source.slice(start+'      cancel: '.length,source.indexOf('\n      },',start)+8);
+  const js=ts.transpileModule('return ('+block+');',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+  return new Function(...Object.keys(deps),js)(...Object.values(deps));
+}
+
 it.each(['restore','restart'] as const)('the production cancel adapter rechecks revoked ownership after %s waits', async point => {
   const f=fixture(),run=await f.send();
   let release!:()=>void,entered!:()=>void,restores=0;
@@ -903,11 +960,7 @@ it.each(['restore','restart'] as const)('the production cancel adapter rechecks 
     withSessionRestartLock:async(_id:string,operation:()=>Promise<void>)=>{if(point==='restart')await pause();await operation();},
     readExecution:()=>f.execution,resetAutomaticRecoveryForExplicitStop:vi.fn(),contextOverflowRolloverHolder:null,
     sessionControlService:{stopSessionTurn:stop}};
-  const source=readFileSync(new URL('../register.ts',import.meta.url),'utf8');
-  const start=source.indexOf('      cancel: async (pluginId, taskId, inputClientIds, execution) => {');
-  const block=source.slice(start+'      cancel: '.length,source.indexOf('\n      },',start)+8);
-  const js=ts.transpileModule('return ('+block+');',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
-  const cancel=new Function(...Object.keys(deps),js)(...Object.values(deps));
+  const cancel=productionCancelAdapter(deps);
   const operation=cancel('p',run.taskId,[run.inputMessageId],f.execution);
   const result=expect(operation).rejects.toMatchObject({code:'TASK_NOT_FOUND'});
   await started;await f.service.withUninstall('p',async()=>{});release();await result;
@@ -1287,6 +1340,130 @@ describe('plugin ordinary task receipts', () => {
     ).resolves.toBeUndefined();
     expect(await f.service.getRun('p', run.runId)).toMatchObject({ status: 'failed' });
   });
+  // Unit, #13300: receipt-only tests missed the restored queue head after a pre-accept rejection.
+  it('withdraws the rejected plugin input from the live queue and restart snapshot', async () => {
+    const f = fixture();
+    const run = await f.send();
+    const task = await f.create();
+    const other = await f.service.send('p', { taskId: task.taskId, expectedRevision: task.revision,
+      requestKey: 'second', text: 'next' });
+    const sid = run.taskId;
+    type Item = Parameters<AgentInputCoordinator['enqueue']>[1];
+    const item = (clientId: string): Item => ({
+      clientId, text: 'hello', persistedContent: 'hello', model: 'model', effort: 'medium',
+      permissionMode: 'default', workingDir: '/repo',
+      chatMessage: { clientId, role: 'user', content: 'hello', isStreaming: false, createdAt: new Date(0).toISOString() },
+      createOpts: { agentKind: 'codex', model: 'model', effort: 'medium', permissionMode: 'default',
+        workingDir: '/repo', userPrompt: '', makerMemoryEnabled: true, displayReasoning: 'summarized' },
+    });
+    const snapshots = new Map<string, Item[]>();
+    let busy = true;
+    let settlement: Promise<void> | undefined;
+    let original!: Item;
+    const deps: AgentInputCoordinatorDeps = {
+      isTurnRunning: () => busy, hasPendingInteraction: () => false, getAgentKind: () => 'codex',
+      getSdkSessionId: async () => undefined, createUserMessage: vi.fn(), touchUserSend: async () => {},
+      steerToAgent: vi.fn(), abortSession: vi.fn(), emitProjection: vi.fn(),
+      loadQueueSnapshot: async id => snapshots.get(id) ?? [],
+      persistQueueSnapshot: (id, items) => { snapshots.set(id, structuredClone(items)); },
+      sendToAgent: async () => {
+        busy = true;
+        return { kind: 'host-send', accepted: false, code: 'LAZY_CREATE_FAILED', message: 'unavailable' };
+      },
+      onRejectedUserTurn: (id, rejected) => {
+        original = rejected;
+        settlement = f.service.discard(id, rejected, 'failed', async () => { queue.discardRejectedInput(id, rejected); });
+      },
+    };
+    const queue = new AgentInputCoordinator(deps);
+    for (const id of [sid, 'other-session']) await queue.ensureQueueRestored(id);
+    queue.enqueue(sid, item(run.inputMessageId));
+    queue.enqueue(sid, item(other.inputMessageId));
+    queue.enqueue('other-session', item(run.inputMessageId));
+    busy = false;
+    queue.wakeSession(sid, 'test');
+    await vi.waitFor(() => expect(settlement).toBeDefined());
+    await settlement;
+    expect((await f.service.getRun('p', run.runId)).status).toBe('failed');
+    const ids = (items: readonly Item[]) => items.map(row => row.clientId);
+    expect({ live: ids(queue.getProjection(sid).pendingQueue), saved: ids(snapshots.get(sid)!) })
+      .toEqual({ live: [other.inputMessageId], saved: [other.inputMessageId] });
+    expect(ids(queue.getProjection('other-session').pendingQueue)).toEqual([run.inputMessageId]);
+    const revision = f.rows.get(run.runId)!.revision;
+    await f.service.discard(sid, original, 'failed', async () => {
+      expect(queue.discardRejectedInput(sid, original)).toBe(false);
+    });
+    expect(f.rows.get(run.runId)!.revision).toBe(revision);
+    const restarted = new AgentInputCoordinator(deps);
+    await restarted.ensureQueueRestored(sid);
+    expect(ids(restarted.getProjection(sid).pendingQueue)).toEqual([other.inputMessageId]);
+    // Once a queued steer is in progress it still appears in the queue until vendor acceptance.
+    const consuming = queue.getQueueControlSnapshot(sid).pendingQueue[0]!;
+    let release!: () => void;
+    const steerEntered = new Promise<void>(entered => {
+      deps.steerToAgent = async () => { entered(); await new Promise<void>(resolve => { release = resolve; }); };
+    });
+    const steering = queue.steer(sid, consuming, { removeFromQueue: true });
+    await steerEntered;
+    try {
+      expect(queue.discardRejectedInput(sid, consuming)).toBe(false);
+      expect(ids(queue.getQueueControlSnapshot(sid).pendingQueue)).toEqual([other.inputMessageId]);
+    } finally {
+      release();
+      await steering;
+    }
+  });
+
+  // Unit, #13300: an old failed receipt can predate cleanup. A cold owner cancel must flush
+  // the exact original input, without treating a later user retry alias as plugin-owned.
+  it('repairs the old queue snapshot through the owning plugin cancel receipt', async () => {
+    const f = fixture(), run = await f.send();
+    await f.service.discard(run.taskId, { clientId: run.inputMessageId }, 'failed');
+    const failed = await f.service.getRun('p', run.runId);
+    const rows = [{ clientId: run.inputMessageId }, { clientId: 'another-run' },
+      { clientId: 'user-retry', retrySourceClientId: run.inputMessageId }];
+    let saved = structuredClone(rows);
+    let pending: typeof rows = [];
+    let restored = false;
+    let consuming = true;
+    let flushFails = true;
+    const adapter = {
+      assertPlugin: () => {}, assertCurrent: () => {}, PluginTaskError,
+      pluginTaskServiceForCurrentOwner: () => f.service,
+      inputCoordinator: {
+        ensureQueueRestored: async (id: string) => {
+          expect(id).toBe(run.taskId);
+          if (!restored) pending = structuredClone(saved);
+          restored = true;
+        },
+        isQueueRestored: () => restored,
+        getActiveInputClientIds: () => consuming ? [run.inputMessageId] : [],
+        getQueueControlSnapshot: () => ({ pendingQueue: pending, steeringQueueClientIds: [] }),
+        discardRejectedInput: (_id: string, item: typeof rows[number]) => {
+          pending = pending.filter(row => row !== item);
+          return true;
+        },
+      },
+      awaitAgentInputQueueSnapshotPersistence: async () => {
+        if (flushFails) throw new Error('snapshot write failed');
+        saved = structuredClone(pending);
+      },
+    };
+    f.deps.cancel = productionCancelAdapter(adapter);
+    await expect(f.service.cancel('other-plugin', run.runId)).rejects.toMatchObject({ code: 'TASK_NOT_FOUND' });
+    expect(restored).toBe(false);
+    await expect(f.service.cancel('p', run.runId)).rejects.toMatchObject({ code: 'TASK_BUSY' });
+    expect(pending).toEqual(rows);
+    consuming = false;
+    await expect(f.service.cancel('p', run.runId)).rejects.toThrow('snapshot write failed');
+    expect(saved).toEqual(rows);
+    flushFails = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(await f.service.cancel('p', run.runId)).toEqual(failed);
+      expect(saved).toEqual(rows.slice(1));
+    }
+  });
+
   it('keeps multi-hop recovery aliases but never adopts an unrelated user input', async () => {
     const f = fixture();
     const run = await f.send();

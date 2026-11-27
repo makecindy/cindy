@@ -5,16 +5,25 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter, once } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer } from 'ws';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, getTableColumns, getTableName } from 'drizzle-orm';
 import { DeviceLinkClient, PROTOCOL_VERSION, FILE_PEER_CHANNEL, REMOTE_AGENT_CHANNEL, REMOTE_DESKTOP_CHANNEL,
-  PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL } from '@cindy/device-link';
+  DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1, DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1, DL_HISTORY_MESSAGES_CHANNEL, DL_SESSION_HANDOFF_CHANNEL, ORCA_REMOTE_WORKER_MODELS_CHANNEL,
+  ORCA_REMOTE_WORKER_CAPS_CHANNEL, MACHINE_STATUS_CHANNEL, parseMachineStatus,
+  PROVIDER_SHARE_RELAY_CAPABILITY, isProviderSharePeer, providerShareGuestPeer, providerShareHostPeer, PLUGIN_OAUTH_CHANNEL, SESSION_ACTIVITY_CHANNEL, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
 import { AgentNetWorkerSocket } from '@cindy/agent-net';
 import { createPrivateNetwork, generateIdentity, issueCertificate } from '@cindy/agent-net-relay';
 import { readDeviceLinkInvokeSourceDevice, readDeviceLinkModelSelectionOrigin } from '../../desktop/src/main/device-link/invoke-context.ts';
+import { getOfficialAgentNetPeerBase, parseAgentNetUdpPort } from '../../desktop/src/main/device-link/agentNetStunDiscovery.ts';
 import { createHostDeviceLink, HOST_DISPATCH_PORTS_WHILE_HELD } from './device-link.ts';
+import { createHostSessionHandoff } from './agent/session-handoff.ts';
+import { setSessionOpeningModelAdmission } from '../../desktop/src/main/localDb/sessionOpening.ts';
+import { readChatHistoryMessages } from '../../desktop/src/main/mcp-integrations/remoteChatHistory.ts';
+import { createRemoteSessionHandoff } from '../../desktop/src/main/mcp-integrations/sessionHandoffRemote.ts';
+import { validateRemoteTaskActionReceipt } from '../../desktop/src/main/maker-ipc/remoteTaskActionReceipt.ts';
 import { createHostWorktreeLifecycle } from './agent/worktree-lifecycle.ts';
 import { createHostService } from './service.mjs';
 import { createHostServer } from './server.mjs';
@@ -27,11 +36,13 @@ import { getCurrentDbClientSnapshot, setCurrentDbClient, clearCurrentDbClient } 
 import { createDbClientForHandle } from '../../desktop/src/main/localDb/client/createDbClientForHandle.ts';
 import { messageToCamel } from '../../desktop/src/main/localDb/mapper.ts';
 import { startHostEventBridge } from '../../desktop/src/main/host-delegation.ts';
-import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles } from '../../desktop/src/main/localDb/schema.ts';
+import { sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles, recentWorkdirs, projectAliases } from '../../desktop/src/main/localDb/schema.ts';
 import { readHostSessionList, readHostSession } from './session-reads.ts';
 import { publishAgentEvent } from './agent/turn-executor.mjs';
 import { createHostContextRecoveryRollover } from './agent/context-recovery-assembly.ts';
-import { readMessagesList } from './agent/history.ts';
+import { createHostHistoryReader, dismissHostErrorMessage, readHostHistoryView, readHostWorkDetails, readMessagesList } from './agent/history.ts';
+import { setHistoryWorkPageReader } from '../../desktop/src/main/device-link/historyViewPush.ts';
+import { ackSessionTurnEndedDurable, markSessionTurnEnded, drainSessionActiveTurnWrites, setOnSessionTurnEndedPersisted } from '../../desktop/src/main/localDb/sessionActiveTurn.ts';
 import * as broadcastTap from '../../desktop/src/main/device-link/broadcast-tap.ts';
 import { PHASE1_UNFORWARDED_USAGE_CHANNELS } from './agent/usage-push-channels.ts';
 import { redactEventForRenderer } from '../../desktop/src/main/maker-ipc/rendererEventRedaction.ts';
@@ -49,11 +60,18 @@ const waitFor = async condition => {
 // relay authenticates synthetic tokens and stamps src; it is NOT official-relay
 // or physical iOS/Android acceptance, and does not make a model call.
 test('headless dispatcher serves multiple clients and enforces owner and per-device revocation', async t => {
+  const previousDeviceName = process.env.CINDY_HOST_DEVICE_NAME;
+  const deviceName = 'Fixture cloud computer';
+  process.env.CINDY_HOST_DEVICE_NAME = `  ${deviceName}  `;
+  t.after(() => {
+    if (previousDeviceName === undefined) delete process.env.CINDY_HOST_DEVICE_NAME;
+    else process.env.CINDY_HOST_DEVICE_NAME = previousDeviceName;
+  });
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-remote-'));
   configureAppDataDir(profile);
   configureHostOwner({ userDataDir: profile, ownerId: 'test-headless-owner' });
   const sqlite = new Database(':memory:');
-  for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles]) {
+  for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles, recentWorkdirs, projectAliases]) {
     sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
   }
   sqlite.exec(`CREATE TABLE im_bindings (target_session_id TEXT);
@@ -79,6 +97,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   const clients = [];
   let host, hold, release, writes = 0, duplicateNext = false;
+  let hostHello;
   let source;
   // Coexistence plan A: the refusal while a desktop uses the profile (null: not held).
   let held = null;
@@ -103,6 +122,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     socket.on('message', raw => {
       const frame = JSON.parse(raw.toString());
       if (frame.kind === 'hello') {
+        if (id === 'host') hostHello = frame.payload;
         platforms.set(id, frame.payload.platform);
         socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
           serverProtocolVersion: PROTOCOL_VERSION, deviceId: id, userId: 'synthetic-user', capabilities: [],
@@ -123,6 +143,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   });
   await once(wss, 'listening');
   const url = `ws://127.0.0.1:${wss.address().port}`;
+  const closedSessions = [];
+  const metaPatches = [];
+  const titleCalls = [];
   const service = createHostService({
     profileHold: () => held,
     // One USD and one CNY quote: the device-link v1 projection keeps only USD (usageHandlers.ts).
@@ -131,6 +154,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       'cny-model': { providerId: 'xd', modelId: 'cny-model', currency: 'CNY', source: 'gateway', approximate: false, inputPerMtok: 20, outputPerMtok: 80 },
     } }),
     providers: async () => ({ providers: [] }),
+    executeTaskTags: async request => {
+      assert.deepEqual(request, { action: 'list' });
+      return { tags: [], sessions: [] };
+    },
     setSessionEffort: async () => ({}),
     setSessionFastMode: async () => ({}),
     setSessionThinkingEnabled: async () => ({}),
@@ -138,6 +165,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     setSessionPlanMode: async () => ({}),
     listSessions: options => readHostSessionList(db.drizzle, options),
     getSession: id => readHostSession(db.drizzle, id),
+    updateSession: async (id, patch, options) => { metaPatches.push({ id, patch, options }); return { id, ...patch }; },
     messagesList: (id, limit) => readMessagesList(id, { limit }),
     setSessionModel: async (id, model) => {
       if (model === 'release-refusal') throw holdError(releaseFailure());
@@ -145,7 +173,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       modelChoices.push({ id, model, origin: readDeviceLinkModelSelectionOrigin() });
       return { deferred: true };
     },
-    input: { enqueue: async (sessionId, item) => {
+    input: {
+      projection: async sessionId => ({ sessionId, pendingQueue: [], turnInProgress: false, clearBoundaryMs: null }),
+      enqueue: async (sessionId, item) => {
       writes++; source = readDeviceLinkInvokeSourceDevice();
       await hold;
       const projection = { sessionId, pendingQueue: [item], turnInProgress: false };
@@ -159,8 +189,34 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     worktreeCreates.push({ request, options });
     return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
   } };
-  host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', getWsUrl: () => url,
+  const handoffQueue = [];
+  const handoffProviders = [{
+    id: 'fixture-provider', name: 'Fixture provider', connected: true, source: 'user', agents: ['claude-code'],
+    routing: { 'claude-code': { authStrategy: 'api-key' } },
+    models: { 'claude-code': [{ id: 'fixture-model', name: 'Fixture model', efforts: [] }] },
+  }, {
+    id: 'selected-provider', name: 'Selected provider', connected: true, source: 'user', agents: ['claude-code'],
+    routing: { 'claude-code': { authStrategy: 'api-key' } },
+    models: { 'claude-code': [{ id: 'fixture-model', name: 'Fixture model', efforts: [] }] },
+  }];
+  // Model-service IO is synthetic. The Host adapter still performs repository
+  // model checks, real session opening, SQLite writes and queue admission.
+  setSessionOpeningModelAdmission(async body => body);
+  host = createHostDeviceLink({ profileDir: profile, worktree: worktreeLifecycle, version: 'test', sessionInTurn: () => false, getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
+    sessionHandoff: isSelfDeviceId => createHostSessionHandoff({
+      input: {
+        profileHoldReason: () => held, profileHoldGeneration: () => 0,
+        enqueue: async (id, item, handoff) => {
+          await handoff.taskActionDeliveryGuard();
+          handoffQueue.push({ id, item, handoff });
+        },
+      },
+      worktree: worktreeLifecycle, isSelfDeviceId, readProviders: async () => handoffProviders,
+      agents: () => ['claude-code'], hasCindyAiApiKey: () => false,
+      assertProviderExecutionSupported() {},
+      broadcastCreated: sessionId => hub.publish({ type: 'session_changed', action: 'create', sessionId }),
+    }),
     invoke: service, subscribe: hub.subscribe,
     send: async (sessionId, message, createOpts, sendOpts) => ({ accepted: true, sessionId, message, createOpts, sendOpts }),
     assertRemoteInputControlBoundary: async () => ({ expectedClearBoundaryMs: null, expectedInputGeneration: 0 }),
@@ -180,6 +236,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       created++;
       throw new Error('Not part of this transport test');
     },
+    closeRuntimeSession: async id => { closedSessions.push(id); },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
     profileHold: () => held,
     isSessionClaimed: async sessionId => {
@@ -187,6 +244,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       return rows.length > 0;
     },
     mcpApps: { invoke: async () => { appCalls++; return {}; }, releaseCaller: async () => {} },
+    autoTitle: {
+      generateTitle: async req => { titleCalls.push(['generate', req]); return { title: 'Gen title' }; },
+      regenerateTitle: async req => { titleCalls.push(['regenerate', req]); return { title: 'Regen title' }; },
+    },
     requestPluginOauth: async () => { oauthCalls++; return { ok: true }; },
     invalidatePluginOauth: peer => { oauthCancelled.push(peer ?? 'all'); },
   });
@@ -202,12 +263,19 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     client.start();
     await waitFor(() => client.getStatus() === 'online');
     await client.openLink('host', { controllerName: id, protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+    // The first invocation uses one of the last registered ordinary handlers (no startup delay).
+    // Assigning old-peer "unsupported" here would survive the end of startup in a controller cache.
+    const first = await client.invoke('host', { channel: 'maker:session:prewarm', args: ['task', {}] });
+    assert.deepEqual(first, { ok: true, result: { accepted: false } });
     const reply = await client.invoke('host', { channel: 'local-db:sessions:list', args: [] });
     assert.equal(reply.ok, true, JSON.stringify(reply));
     assert.deepEqual(reply.result.map(row => row.id), ['task']);
     return client;
   }
   for (const id of ['ios', 'android', 'desktop']) clients.push(await connect(id));
+  // Task tags have a dedicated dispatch port, separate from the ordinary IPC registry.
+  const tags = await clients[2].invoke('host', { channel: 'local-db:task-tags:execute', args: [{ action: 'list' }] });
+  assert.deepEqual(tags, { ok: true, result: { tags: [], sessions: [] } });
   /*
    * Test value (engineering-conventions §3.2)
    * - Production entry and observable result: createHostDeviceLink over the real loopback relay;
@@ -267,6 +335,34 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(sent.result.message, 'hello');
   assert.equal(sent.result.sendOpts.expectedClearBoundaryMs, null);
   assert.equal(sent.result.sendOpts.expectedInputGeneration, 0);
+  const inTurn = await clients[0].invoke('host', { channel: 'maker:session-in-turn', args: ['task'] });
+  assert.equal(inTurn.ok, true, JSON.stringify(inTurn));
+  assert.equal(inTurn.result, false);
+  const projection = await clients[0].invoke('host', { channel: 'maker:input:get-projection', args: ['task'] });
+  assert.equal(projection.ok, true, JSON.stringify(projection));
+  assert.equal(projection.result.sessionId, 'task');
+  assert.equal(projection.result.turnInProgress, false);
+  assert.equal(projection.result.inputDeliveryVersion, undefined);
+  const removalPreview = await clients[0].invoke('host', { channel: 'worktree:removal-preview', args: ['task'] });
+  assert.deepEqual(removalPreview, { ok: true, result: { hasWorktree: false, dirty: false } });
+  const closed = await clients[0].invoke('host', { channel: 'maker:close-session', args: ['task'] });
+  assert.equal(closed.ok, true, JSON.stringify(closed));
+  assert.deepEqual(closedSessions, ['task']);
+  const archived = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'archived', pinnedAt: null }] });
+  assert.deepEqual(archived, { ok: true, result: { id: 'task', status: 'archived', pinnedAt: null } });
+  assert.deepEqual(metaPatches.at(-1), { id: 'task', patch: { status: 'archived', pinnedAt: null }, options: undefined });
+  const deleted = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'deleted', deleteTarget: 'task' }] });
+  assert.deepEqual(deleted, { ok: true, result: { id: 'task', status: 'deleted' } });
+  assert.deepEqual(metaPatches.at(-1), { id: 'task', patch: { status: 'deleted' }, options: { deleteTarget: 'task' } });
+  const badField = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { workingDir: '/tmp' }] });
+  assert.equal(badField.ok, false);
+  const badDiscard = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'archived', discardWorktreeChanges: true }] });
+  assert.equal(badDiscard.ok, false);
+  const genTitle = await clients[0].invoke('host', { channel: 'maker:generate-title', args: [{ message: 'hello', agentKind: 'claude-code', sessionId: 'task' }] });
+  assert.deepEqual(genTitle, { ok: true, result: { title: 'Gen title' } });
+  const regenTitle = await clients[0].invoke('host', { channel: 'maker:regenerate-title', args: [{ sessionId: 'task' }] });
+  assert.deepEqual(regenTitle, { ok: true, result: { title: 'Regen title' } });
+  assert.deepEqual(titleCalls, [['generate', { message: 'hello', agentKind: 'claude-code', sessionId: 'task' }], ['regenerate', { sessionId: 'task' }]]);
   const chosen = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-draft-pref', args: [{
     agent: 'pi', providerId: 'inferx', modelId: 'kimi-k3.1-pro', active: true,
     markModelChoice: true, selectDraftAgent: true, effort: 'max', fast: true, thinking: false,
@@ -550,6 +646,138 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       ['local-db:messages:created', 'other-task'],
     ]);
   });
+  /*
+   * Test value (engineering-conventions §3.2)
+   * Production entry: desktop createRemoteSessionHandoff → real Device Link → Node Host
+   * registry and session opener. Earlier relay tests only covered direct controller
+   * sends and returned CHANNEL_NOT_ALLOWED for a desktop capability probe.
+   * Contract: cross-computer-task-action-receipt.md. Minimal input is that probe;
+   * create, jump, revoked receipt and catalogs each have a different observable result.
+   * Tier: integration, using the existing loopback relay and synthetic owner DB.
+   */
+  await t.test('desktop handoff negotiates catalogs, creates and queues with a live reverse receipt', async () => {
+    const desktop = clients[2];
+    const off = desktop.onFrame(frame => {
+      if (frame.kind === 'link-open') desktop.sendLinkAccept(frame.src, frame.id, {
+        appVersion: 'test', allowlistHash: 'test', capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
+      });
+      if (frame.kind !== 'invoke' || frame.payload.channel !== DL_SESSION_HANDOFF_CHANNEL) return;
+      const [input] = frame.payload.args;
+      assert.equal(input.action, 'validate-task-action');
+      void validateRemoteTaskActionReceipt(frame.src, input).then(valid => {
+        desktop.sendInvokeResult(frame.src, frame.id, {
+          ok: true, result: { valid, ...(input.release ? { released: valid } : {}) },
+        });
+      });
+    });
+    try {
+      const handoff = args => desktop.invoke('host', { channel: DL_SESSION_HANDOFF_CHANNEL, args });
+      const support = await handoff([{ action: 'task-action-capability' }]);
+      assert.equal(support.ok, true, JSON.stringify(support));
+      assert.equal(support.result.ordinaryCreateVersion, 1);
+      assert.equal(support.result.ordinaryCreatePluginEngine, undefined);
+      assert.equal(support.result.projectCatalogVersion, 1);
+      assert.equal(support.result.taskActionVersion, 1);
+
+      await db.drizzle.insert(recentWorkdirs).values({ path: profile, lastUsedAt: 1 }).run();
+      const projects = await handoff([{ action: 'list-projects', options: { limit: 1 } }]);
+      assert.equal(projects.result?.projects?.[0]?.workingDir, profile, JSON.stringify(projects));
+      const models = await desktop.invoke('host', { channel: ORCA_REMOTE_WORKER_MODELS_CHANNEL, args: [{ agent: 'claude-code' }] });
+      assert.equal(models.result?.claude_code?.[0]?.id, 'fixture-model', JSON.stringify(models));
+      const worker = await desktop.invoke('host', { channel: ORCA_REMOTE_WORKER_CAPS_CHANNEL, args: [] });
+      assert.equal(worker.error?.code, 'CHANNEL_NOT_ALLOWED');
+
+      let lastWrite;
+      const send = createRemoteSessionHandoff({
+        captureAccess: () => () => {},
+        invoke: (_id, channel, args) => {
+          if (args[0].taskActionReceipt) lastWrite = args[0];
+          return desktop.invoke('host', { channel, args });
+        },
+      });
+      const id = randomUUID();
+      const sender = async () => ({ sessionId: 'source-task', title: 'Desktop task' });
+      // Integration regression: when two connected sources serve the same model,
+      // the persisted draft's provider must win over the catalog's default.
+      const draft = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-draft-pref', args: [{
+        agent: 'claude-code', providerId: 'selected-provider', modelId: 'fixture-model',
+        active: true, markModelChoice: true, selectDraftAgent: true,
+      }] });
+      assert.equal(draft.ok, true, JSON.stringify(draft));
+      const create = await send({ deviceId: 'host', sessionId: id }, {
+        sender, message: 'First delegated message',
+        create: async () => ({ permissionMode: 'ask', projectDir: null }),
+      });
+      assert.equal(create.ok, true, JSON.stringify(create));
+      assert.equal(create.wakeKind, 'created');
+      assert.equal(hostHello?.deviceName, deviceName);
+      assert.ok(hostHello?.deviceInfo?.osVersion);
+      const [stored] = await db.drizzle.select().from(sessions).where(eq(sessions.id, id));
+      assert.equal(stored.permissionMode, 'ask');
+      assert.equal(stored.model, 'fixture-model');
+      assert.equal(stored.providerId, 'selected-provider');
+      assert.equal(create.providerId, 'selected-provider');
+      const jump = await send({ deviceId: 'host', sessionId: id }, { sender, message: 'Follow-up message' });
+      assert.equal(jump.wakeKind, 'queued', JSON.stringify(jump));
+      assert.deepEqual(handoffQueue.map(({ id, item, handoff }) => [id, item.text, handoff.origin.senderSessionId]), [
+        [id, 'First delegated message', 'desktop::source-task'], [id, 'Follow-up message', 'desktop::source-task'],
+      ]);
+      // Cross-device history is the read-only recovery path after DELIVERY_UNKNOWN.
+      // Direct renderer history above does not exercise the MCP request, cursors,
+      // or qualified IDs. One production sender read on a stored reply reproduces
+      // the old CHANNEL_NOT_ALLOWED with this same loopback relay (integration tier).
+      await db.drizzle.insert(messages).values([
+        { id: 'handoff-user', sessionId: id, role: 'user', content: JSON.stringify('First delegated message'), createdAt: 10 },
+        { id: 'handoff-reply', sessionId: id, role: 'assistant', content: JSON.stringify('Result from the Host'), createdAt: 10 },
+      ]).run();
+      const readHistory = (sessionId, cursor = null) => readChatHistoryMessages({
+        sessionIds: [`host::${sessionId}`], workdir: null, fromMs: null, toMs: null, agentKind: null,
+        roles: ['user', 'assistant'], includeRewound: false, limit: 1, cursor, order: 'asc',
+      }, {
+        invokeRemote: (deviceId, channel, args) => desktop.invoke(deviceId, { channel, args }),
+        readLocal: () => assert.fail('A qualified ID must not fall back to local history'),
+      });
+      const firstPage = await readHistory(id);
+      assert.equal(firstPage.ok, true, JSON.stringify(firstPage));
+      assert.equal(firstPage.page.hasMore, true);
+      assert.deepEqual(firstPage.page.items.map(row => [row.sessionId, row.role, row.content]),
+        [[`host::${id}`, 'user', 'First delegated message']]);
+      const secondPage = await readHistory(id, firstPage.page.nextCursor);
+      assert.equal(secondPage.ok, true, JSON.stringify(secondPage));
+      assert.equal(secondPage.page.hasMore, false);
+      assert.deepEqual(secondPage.page.items.map(row => [row.sessionId, row.role, row.content]),
+        [[`host::${id}`, 'assistant', 'Result from the Host']]);
+      assert.equal((await readHistory('missing')).errorCode, 'NOT_FOUND');
+
+      const unsupportedPlugin = await send({ deviceId: 'host', sessionId: randomUUID() }, {
+        sender, message: 'Plugin engine task',
+        create: async () => ({ permissionMode: 'ask', agentKind: 'acp', providerId: 'acp-plugin:antigravity:acp', model: 'gemini-4-neon', projectDir: null }),
+      });
+      assert.equal(unsupportedPlugin.ok, false, JSON.stringify(unsupportedPlugin));
+      assert.equal(unsupportedPlugin.errorCode, 'REMOTE_UNSUPPORTED');
+      const bypassPlugin = createRemoteSessionHandoff({
+        captureAccess: () => () => {},
+        invoke: async (_id, channel, args) => {
+          const res = await desktop.invoke('host', { channel, args });
+          if (args[0]?.action === 'task-action-capability' && res.ok && res.result)
+            return { ...res, result: { ...res.result, ordinaryCreatePluginEngine: 1 } };
+          return res;
+        },
+      });
+      const hostRejectedPlugin = await bypassPlugin({ deviceId: 'host', sessionId: randomUUID() }, {
+        sender, message: 'Bypassed plugin engine task',
+        create: async () => ({ permissionMode: 'ask', agentKind: 'acp', providerId: 'acp-plugin:antigravity:acp', model: 'gemini-4-neon', projectDir: null }),
+      });
+      assert.equal(hostRejectedPlugin.ok, false, JSON.stringify(hostRejectedPlugin));
+      assert.equal(hostRejectedPlugin.errorCode, 'UNSUPPORTED_CAPABILITY');
+      assert.equal(handoffQueue.length, 2);
+
+      await handoffQueue[1].handoff.taskActionDeliveryGuard.onSettled();
+      await assert.rejects(handoffQueue[1].handoff.taskActionDeliveryGuard(), /TASK_ACTION_AUTHORIZATION_EXPIRED/);
+      assert.equal((await handoff([lastWrite])).result?.errorCode, 'UNSUPPORTED_CAPABILITY');
+      assert.equal(handoffQueue.length, 2);
+    } finally { off(); }
+  });
   await host.revoke('ios');
   const denied = await clients[0].invoke('host', { channel: 'local-db:sessions:get', args: ['task'] }).catch(error => ({ denied: error }));
   assert.ok(denied.denied || denied.ok === false);
@@ -604,7 +832,17 @@ test('Host device-link refuses provider-share guests and the platform features i
   const sockets = new Map();
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
   const reached = [];
-  let host, desktop, guest;
+  // list_machines opens a background link with no subscriptions. Keep the
+  // fixture's status reader explicit so a guest cannot reach the OS probes.
+  let machineReads = 0;
+  const machineStatus = {
+    capturedAt: '2026-11-01T00:00:00.000Z',
+    cpu: { logicalCores: 8, busyPercent: 2, loadAverage1m: 1 },
+    memory: { totalBytes: 256, availableBytes: 128 },
+    disk: { freeBytes: 512, totalBytes: 1024 },
+    idleSeconds: 25, onBattery: false, runningTasks: 1,
+  };
+  let host, desktop, guest, hostDeviceInfo;
   t.after(async () => {
     desktop?.stop(); guest?.stop();
     await host?.stop();
@@ -621,6 +859,7 @@ test('Host device-link refuses provider-share guests and the platform features i
     socket.on('message', raw => {
       const frame = JSON.parse(raw.toString());
       if (frame.kind === 'hello') {
+        if (id === 'host') hostDeviceInfo = frame.payload.deviceInfo;
         socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
           serverProtocolVersion: PROTOCOL_VERSION, deviceId: id, userId: `synthetic-${id === 'guest' ? 'other' : 'same'}-user`,
           capabilities: [PROVIDER_SHARE_RELAY_CAPABILITY],
@@ -638,15 +877,20 @@ test('Host device-link refuses provider-share guests and the platform features i
   });
   await once(wss, 'listening');
   const url = `ws://127.0.0.1:${wss.address().port}`;
-  host = createHostDeviceLink({ profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => url,
+  host = createHostDeviceLink({ profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => url,
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: async route => { reached.push(route); return { status: 404, body: { message: `unexpected ${route}` } }; },
+    readMachineStatus: async () => { machineReads++; return machineStatus; },
     subscribe: () => () => {},
     createRuntimeSession: async () => { throw new Error('Not part of this test'); },
+    closeRuntimeSession: async () => { throw new Error('Not part of this test'); },
     disableShareAvailability: async () => { throw new Error('This fixture owns no standby grants'); },
   });
   await host.setEnabled(true);
   await waitFor(() => host.state().status === 'online');
+  // The directory gets hardware and OS labels from hello, before it requests live status.
+  assert.ok(hostDeviceInfo?.osVersion, 'the Host hello must include the OS version');
+  if (os.cpus()[0]?.model.trim()) assert.ok(hostDeviceInfo.cpuLabel, 'the Host hello must include the CPU label');
   const client = id => {
     const value = new DeviceLinkClient({ getWsUrl: () => url, getToken: async () => `synthetic-${id}`,
       getHello: () => ({ deviceName: id, platform: 'darwin', appVersion: 'test', remoteControlEnabled: false }),
@@ -658,7 +902,31 @@ test('Host device-link refuses provider-share guests and the platform features i
   desktop = client('desktop');
   guest = client('guest');
   await waitFor(() => desktop.getStatus() === 'online' && guest.getStatus() === 'online');
-  await desktop.openLink('host', { controllerName: 'desktop', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+  // Production loopback entry and regression for cindy-machines §3: a desktop
+  // opens a regular relay background link and reads a valid status. Without the
+  // capability or handler, the directory reports update_required.
+  const accepted = await desktop.openLink('host', { controllerName: 'desktop', protocolVersion: PROTOCOL_VERSION,
+    appVersion: 'test', capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1] });
+  assert.ok(accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1));
+  assert.ok(accepted.capabilities?.includes(DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1));
+  const status = await desktop.invoke('host', { channel: MACHINE_STATUS_CHANNEL, args: [] });
+  assert.deepEqual(status, { ok: true, result: machineStatus });
+  assert.deepEqual(parseMachineStatus(status.result), machineStatus);
+  assert.deepEqual(host.state().controllers, [], 'background probe does not control the computer');
+
+  // The genuine relay invoke path used to report IPC_ERROR when an allowlisted handler was absent.
+  // Clients cache only CHANNEL_NOT_ALLOWED as unsupported. Extend the existing loopback fixture
+  // with one request per affected capability, including the goal write that must not reach a handler.
+  for (const channel of [
+    'model-groups:get', 'maker:subscription-accounts', 'maker:goal:get-status', 'maker:goal:set',
+    'maker:model-context-limit:get', 'maker:api-key:present',
+  ]) {
+    const reply = await desktop.invoke('host', { channel, args: [] });
+    assert.deepEqual(reply, {
+      ok: false,
+      error: { code: 'CHANNEL_NOT_ALLOWED', message: `channel '${channel}' not allowed remotely` },
+    }, channel);
+  }
 
   const filePeer = await desktop.invoke('host', { channel: FILE_PEER_CHANNEL, args: [{}] });
   assert.deepEqual(filePeer, { ok: false, error: { code: 'IPC_ERROR', message: 'FILE_PEER_UNAVAILABLE' } });
@@ -667,12 +935,14 @@ test('Host device-link refuses provider-share guests and the platform features i
   assert.equal(remoteDesktop.error.code, 'IPC_ERROR');
   assert.match(remoteDesktop.error.message, /^\[NOT_SUPPORTED\] requestRemoteDesktop /);
 
-  for (const channel of [REMOTE_AGENT_CHANNEL, 'local-db:sessions:list', 'host:execute-arbitrary']) {
+  for (const channel of [REMOTE_AGENT_CHANNEL, MACHINE_STATUS_CHANNEL, DL_HISTORY_MESSAGES_CHANNEL,
+    'local-db:sessions:list', 'host:execute-arbitrary']) {
     const reply = await guest.invoke(hostKey, { channel, args: [] });
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
     assert.equal(reply.error.code, 'ACCESS_REVOKED', `${channel}: ${JSON.stringify(reply)}`);
   }
-  assert.deepEqual(reached, [], 'neither refusal may reach the Host service');
+  assert.equal(machineReads, 1, 'only the same-account machine status request reached the reader');
+  assert.deepEqual(reached, [], 'no refused channel may reach the Host service');
 });
 
 /*
@@ -691,7 +961,7 @@ test('Host device-link refuses provider-share guests and the platform features i
  */
 const PINNED_DISPATCH_PORTS = {
   read: ['sameAccountCapabilities', 'TASK_TAG_CHANNEL', 'app', 'readDeviceLinkSettings', 'noteControllerAccessAllowed',
-    'noteControllerAccessDenied', 'syncRemoteControlAccessGeneration', 'invalidatePluginOauth',
+    'noteControllerAccessDenied', 'syncRemoteControlAccessGeneration', 'invalidatePluginOauth', 'hasLocalChannel',
     'assertRemoteBotInvocationAllowed', 'projectRemoteSessionResult', 'projectRemoteBotPush', 'hasRemoteBotSessionLookup',
     'setRemoteBotSessionLookup', 'captureSharedTaskPeer', 'captureSharedTaskPush', 'assertSharedTaskInvoke',
     'sharedTaskMetadataTopic', 'sharedTaskAccessFailure', 'MAX_SHARED_TASK_TOPICS', 'refreshSharedTaskPeer',
@@ -701,6 +971,7 @@ const PINNED_DISPATCH_PORTS = {
   'service-gate': ['executeTaskTags', 'dispatchLocalInvoke'],
   'refused-at-entry': ['requestPluginOauth'],
   unbound: ['readUsageWidgetSnapshot', 'configureStandbyGuestCleanup', 'prepareShareAvailability',
+    'readZhipuCodingPlanAccountUsage', 'isRemoteProviderInvocationAllowed',
     'readKimiCodingAccountUsage', 'readOpenCodeGoAccountUsage', 'requestFilePeer', 'stopFilePeers', 'requestTaskMigration',
     'delegatedProviderShareGuestAccess', 'locallyProvenProviderShareDelegation',
     'delegatedProviderShareLeases', 'invalidateProviderShareDelegation',
@@ -754,10 +1025,10 @@ test('keeps compatibility app callers alive when only the Agent-Net connection d
   let primary, compatibility;
   t.mock.method(AgentNetWorkerSocket, 'open', async () => (primary = wire()));
   const host = createHostDeviceLink({
-    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => 'ws://127.0.0.1:9',
     getToken: async () => 'synthetic-host', canRegister: () => true,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
-    createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
+    createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
     createWebSocket: () => (compatibility = wire()),
     releaseAuthCaller: caller => releasedAuth.push(caller),
     mcpApps: { invoke: async caller => caller, releaseCaller: async caller => { releasedApps.push(caller); } },
@@ -832,10 +1103,10 @@ test('Agent-Net control refuses profile hold and rechecks the owner inside the s
   let held = holdMessage;
   let canRegister = false;
   const host = createHostDeviceLink({
-    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', sessionInTurn: () => false, getWsUrl: () => 'ws://127.0.0.1:9',
     getToken: async () => null, canRegister: () => canRegister, profileHold: () => held,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
-    createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
+    createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
     agentNet: { base: () => null, subject: () => null, deviceId: () => null },
   });
   const server = createHostServer({ instanceId: 'fixture', token: 'fake-token',
@@ -905,7 +1176,7 @@ test('cindy-host remote rejoin reports why it could not rejoin, and asks the off
     profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
     getToken: async () => null, canRegister: () => true, profileHold: () => held,
     invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
-    createRuntimeSession: async () => ({}), disableShareAvailability: async () => {},
+    createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
     agentNet: { base: () => null, subject: () => null, deviceId: () => null },
     officialDeviceLinkFetch: async (route, opts) => { requests.push([route, opts]); return answer(); },
   });
@@ -936,4 +1207,316 @@ test('cindy-host remote rejoin reports why it could not rejoin, and asks the off
   assert.deepEqual(await rejoin(), { result: 'rejoined', agentNet: 'skipped' });
   assert.deepEqual(requests.map(([route, opts]) => [route, opts.method, opts.body]),
     [['/api/device-link/rejoin', 'POST', {}], ['/api/device-link/rejoin', 'POST', {}]]);
+});
+
+// Test value (engineering-conventions §3.2)
+// - Production entry and observable result: Node Host's shared `parseAgentNetUdpPort` (`CINDY_AGENT_NET_UDP_PORT`) and
+//   `getOfficialAgentNetPeerBase` helpers run without Electron, validate 1..65535 (warning and falling back to ephemeral on
+//   invalid input), and map official CN <-> Global bases while returning null for self-hosted/custom URLs.
+// - Rule: architecture-invariants §5 (shared core tested under Host runtime); dual-region STUN privacy boundary.
+// - Coverage gap: desktop Vitest tests run under desktop's toolchain; Host's Node runner verifies zero-Electron import and env parsing.
+// - Minimal failing input: valid port '41641', '0'/empty, invalid '70000'/'abc', and official vs self-hosted URLs.
+// - Tier: unit, pure functions in Node Host runner.
+test('Node Host parses CINDY_AGENT_NET_UDP_PORT and pairs only official Agent-Net regions', () => {
+  const warnings = [];
+  const log = { warn: msg => warnings.push(msg) };
+  assert.equal(parseAgentNetUdpPort(undefined, log), undefined);
+  assert.equal(parseAgentNetUdpPort('', log), undefined);
+  assert.equal(parseAgentNetUdpPort('0', log), undefined);
+  assert.equal(parseAgentNetUdpPort('1', log), 1);
+  assert.equal(parseAgentNetUdpPort(' 41641 ', log), 41641);
+  assert.equal(parseAgentNetUdpPort('65535', log), 65535);
+  assert.equal(warnings.length, 0);
+
+  for (const invalid of ['-1', '65536', '70000', '41641.5', 'abc', '41641px']) {
+    assert.equal(parseAgentNetUdpPort(invalid, log), undefined);
+  }
+  assert.equal(warnings.length, 6);
+
+  assert.equal(getOfficialAgentNetPeerBase('https://agent-net.cindy.com.cn'), 'https://agent-net.cindy.app');
+  assert.equal(getOfficialAgentNetPeerBase('https://agent-net.cindy.app/'), 'https://agent-net.cindy.com.cn');
+  assert.equal(getOfficialAgentNetPeerBase('https://self-hosted.example.test'), null);
+  assert.equal(getOfficialAgentNetPeerBase('http://127.0.0.1:8787'), null);
+});
+
+test('Host device-link pushes session activity, turn-ended patches, and serves history view-intent and work-details', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-status-history-'));
+  configureAppDataDir(profile);
+  configureHostOwner({ userDataDir: profile, ownerId: 'test-status-history-owner' });
+  commitVolatileAppSession('cloud', 'test-status-history-owner', true);
+  const sqlite = new Database(':memory:');
+  for (const table of [sessions, messages, taskTags, sessionTaskTags, orcaWorkers, orcaTeams, botSessionLinks, botProfiles, recentWorkdirs, projectAliases]) {
+    sqlite.exec(`CREATE TABLE "${getTableName(table)}" (${Object.values(getTableColumns(table)).map(column => `"${column.name}" ${column.getSQLType()}`).join(',')})`);
+  }
+  sqlite.exec(`
+    INSERT INTO sessions(id, source, title, working_dir, agent_kind, status, created_at, updated_at, active_turn_started_at)
+    VALUES ('task-1', 'desktop', 'Status Task', '/repo', 'cc', 'active', 1000, 1000, 1000);
+    INSERT INTO messages(id, client_id, session_id, role, content, tool_use_id, created_at) VALUES
+      ('m-user', 'c-user', 'task-1', 'user', '"run check"', NULL, 1000),
+      ('m-tool-use', 'c-tu', 'task-1', 'tool_use', '{"toolUseId":"tu-1","toolName":"Read","input":{"file_path":"/repo/a.ts"}}', 'tu-1', 1100),
+      ('m-tool-res', 'c-tr', 'task-1', 'tool_result', '{"toolUseId":"tu-1","summary":"ok","fullText":"const a = 1;"}', 'tu-1', 1200),
+      ('m-reply', 'c-reply', 'task-1', 'assistant', '"done"', NULL, 1300),
+      ('m-err', 'c-err', 'task-1', 'error', '{"message":"boom","sdkError":"rate_limit"}', NULL, 1400);
+  `);
+  const db = createDbClientForHandle({ db: sqlite, drizzle: drizzle(sqlite) });
+  setCurrentDbClient(db, 'test-status-history-owner');
+  const reader = createHostHistoryReader({ running: () => false, live: () => [] });
+  setHistoryWorkPageReader((sid, onShape) => reader.page(sid, undefined, true, { workLines: true, onShape }));
+  const hub = createEventHub();
+  setOnSessionTurnEndedPersisted(
+    (sessionId, endedAt, capturedScope) => {
+      if (capturedScope && !broadcastTap.isDataOwnerBroadcastScopeCurrent(capturedScope)) return;
+      hub.publish({ type: 'session_changed', sessionId, patch: { lastTurnEndedAt: endedAt } });
+    },
+    broadcastTap.captureDataOwnerBroadcastScope,
+  );
+
+  const sockets = new Map();
+  const platforms = new Map();
+  const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+  let host;
+  const clients = [];
+  t.after(async () => {
+    clients.forEach(c => c.stop());
+    await host?.stop();
+    setOnSessionTurnEndedPersisted(null);
+    setHistoryWorkPageReader(null);
+    for (const s of wss.clients) s.terminate();
+    await new Promise(resolve => wss.close(resolve));
+    clearCurrentDbClient(db);
+    sqlite.close();
+    commitVolatileAppSession('signed-out', null, true);
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+
+  wss.on('connection', (socket, request) => {
+    const match = /^Bearer synthetic-(host|ctrl-1|ctrl-2)$/.exec(request.headers.authorization ?? '');
+    if (!match) { socket.close(1008); return; }
+    const id = match[1];
+    sockets.set(id, socket);
+    socket.on('message', raw => {
+      const frame = JSON.parse(raw.toString());
+      if (frame.kind === 'hello') {
+        platforms.set(id, frame.payload.platform);
+        socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
+          serverProtocolVersion: PROTOCOL_VERSION, deviceId: id, userId: 'synthetic-user', capabilities: [],
+        } }));
+        for (const [peer, target] of sockets) for (const [deviceId, platform] of platforms) {
+          if (peer !== deviceId && target.readyState === WebSocket.OPEN) {
+            target.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'presence-changed', payload: { deviceId, platform, online: true, remoteControlEnabled: true } }));
+          }
+        }
+      } else if (frame.kind === 'ping') {
+        socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'pong' }));
+      } else if (frame.dst && sockets.get(frame.dst)?.readyState === WebSocket.OPEN) {
+        sockets.get(frame.dst).send(JSON.stringify({ ...frame, src: id }));
+      }
+    });
+    socket.once('close', () => { if (sockets.get(id) === socket) sockets.delete(id); });
+  });
+  await once(wss, 'listening');
+  const url = `ws://127.0.0.1:${wss.address().port}`;
+
+  const service = createHostService({
+    getSession: async id => {
+      const [row] = await db.drizzle.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+      return row ? { id: row.id, title: row.title, status: row.status, workingDir: row.workingDir } : null;
+    },
+    historyView: (id, before, opts) => readHostHistoryView(reader, id, before, opts),
+    workDetails: (id, ref, after) => readHostWorkDetails(reader, id, ref, after),
+    listRunningSessions: options => {
+      const rows = [
+        { sessionId: 'task-1', agentKind: 'claude-code', workDir: '/repo', capabilities: {}, isTurnRunning: false },
+        { sessionId: 'task-idle', agentKind: 'claude-code', workDir: '/repo', capabilities: {}, isTurnRunning: false },
+      ];
+      return options?.summary === true && options?.snapshotVersion === 2
+        ? { format: 'active-sessions-v2', sessions: rows }
+        : rows;
+    },
+    clearSessionAttention: async (id, intent) => {
+      await host.acknowledgeSessionRead(id, intent);
+      return { ok: true };
+    },
+    ackInterrupted: async id => { await ackSessionTurnEndedDurable(String(id)); return { ok: true }; },
+    dismissError: (id, cid) => dismissHostErrorMessage(
+      id,
+      cid,
+      message => {
+        hub.publish({ type: 'message_created', sessionId: message.sessionId, messageId: message.id, message });
+      },
+      async (sid, clientId) => {
+        if (sid === 'task-1' && clientId === 'c-deferred-err') {
+          await new Promise(resolve => setTimeout(resolve, 20));
+          await db.drizzle.insert(messages).values({
+            id: 'm-deferred-err', clientId: 'c-deferred-err', sessionId: 'task-1', role: 'error',
+            content: JSON.stringify({ message: 'overflow', sdkError: 'context_length' }), createdAt: 1500,
+          }).run();
+        }
+      },
+    ),
+  });
+  host = createHostDeviceLink({
+    profileDir: profile,
+    worktree: createHostWorktreeLifecycle(profile),
+    version: 'test',
+    getWsUrl: () => url,
+    getToken: async () => 'synthetic-host',
+    canRegister: () => true,
+    invoke: service,
+    subscribe: hub.subscribe,
+    publish: hub.publish,
+    createWebSocket: (u, headers) => new WebSocket(u, { headers }),
+  });
+  await host.setEnabled(true);
+  await waitFor(() => host.state().status === 'online');
+
+  // An attached Desktop consumes this same turn over SSE while the two controllers use Device Link.
+  const attached = [];
+  const server = createHostServer({ instanceId: 'fixture', token: 'synthetic-stream', events: hub, service });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  let connected = false;
+  const stop = startHostEventBridge({
+    baseUrl: `http://127.0.0.1:${server.address().port}`, token: 'synthetic-stream',
+    onConnectionState: state => { connected = state.status === 'connected'; },
+    broadcast() {},
+    onPluginPush(channel, payload) {
+      if (channel === 'agent-island:session-snapshots') attached.push(payload);
+    },
+  });
+  t.after(async () => {
+    stop();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+  });
+  await waitFor(() => connected);
+
+  const mkClient = id => {
+    const c = new DeviceLinkClient({
+      getWsUrl: () => url,
+      getToken: async () => `synthetic-${id}`,
+      getHello: () => ({ platform: 'darwin', deviceName: id, appVersion: 'test', remoteControlEnabled: false, busy: false, capabilities: [] }),
+      createWebSocket: (u, headers) => new WebSocket(u, { headers }),
+    });
+    clients.push(c);
+    return c;
+  };
+  const c1 = mkClient('ctrl-1');
+  const c2 = mkClient('ctrl-2');
+  const c1Pushes = [];
+  const c2Pushes = [];
+  const off1 = c1.onFrame(frame => {
+    if (frame.kind === 'push' && frame.src === 'host') c1Pushes.push({ ch: frame.payload.channel, payload: frame.payload.payload });
+  });
+  const off2 = c2.onFrame(frame => {
+    if (frame.kind === 'push' && frame.src === 'host') c2Pushes.push({ ch: frame.payload.channel, payload: frame.payload.payload });
+  });
+  t.after(() => { off1(); off2(); });
+
+  c1.start();
+  await waitFor(() => c1.getStatus() === 'online');
+  await c1.openLink('host', { controllerName: 'Mac 1', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+  assert.equal((await c1.invoke('host', { channel: 'device-link:subscribe', args: [{ topics: ['sessions', 'session:task-1'] }] })).ok, true);
+
+  hub.publish({ sessionId: 'task-1', event: { type: 'status', data: { isRunning: true } } });
+  await waitFor(() => c1Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.sessionId === 'task-1' && p.payload?.phase === 'running'));
+
+  hub.publish({
+    type: 'interaction_request',
+    sessionId: 'task-1',
+    request: { kind: 'permission', requestId: 'perm-1', toolName: 'Bash', input: { command: 'pwd' } },
+  });
+  await waitFor(() => c1Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.phase === 'needs-interaction' && p.payload?.interactionKind === 'permission'));
+
+  hub.publish({ type: 'interaction_dismissed', sessionId: 'task-1', requestId: 'perm-1', reason: 'resolved' });
+  hub.publish({ sessionId: 'task-1', event: { type: 'done', data: {} } });
+  await waitFor(() => c1Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.phase === 'completed' && p.payload?.attention === true));
+
+  markSessionTurnEnded('task-1', 2000);
+  await drainSessionActiveTurnWrites('task-1');
+  await waitFor(() => c1Pushes.some(p => p.ch === 'local-db:sessions:patched' && p.payload?.sessionId === 'task-1' && p.payload?.patch?.lastTurnEndedAt === 2000));
+
+  c2.start();
+  await waitFor(() => c2.getStatus() === 'online');
+  await c2.openLink('host', { controllerName: 'Mac 2', protocolVersion: PROTOCOL_VERSION, appVersion: 'test' });
+  assert.equal((await c2.invoke('host', { channel: 'device-link:subscribe', args: [{ topics: ['sessions'] }] })).ok, true);
+  await waitFor(() => c2Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.sessionId === 'task-1' && p.payload?.phase === 'completed' && p.payload?.attention === true));
+
+  const fg = await c2.invoke('host', { channel: TASK_ACTIVITY_SNAPSHOT, args: [] });
+  assert.equal(fg.ok, true, JSON.stringify(fg));
+  assert.equal(fg.result.schemaVersion, 1);
+  assert.equal(fg.result.unreadCount, 1);
+
+  const active = await c2.invoke('host', { channel: 'maker:list-active', args: [{ summary: true, snapshotVersion: 2 }] });
+  assert.equal(active.ok, true, JSON.stringify(active));
+  assert.equal(active.result.format, 'active-sessions-v2');
+  const activeMap = new Map(active.result.sessions.map(s => [s.sessionId, s]));
+  assert.equal(activeMap.get('task-1')?.activityPhase, 'completed');
+  assert.equal(activeMap.get('task-1')?.activityAttention, true);
+  assert.equal(activeMap.get('task-idle')?.activityPhase, 'idle');
+  assert.equal(activeMap.get('task-idle')?.activityAttention, false);
+
+  await waitFor(() => attached.at(-1)?.some(item => item.sessionId === 'task-1' && item.phase === 'completed' && item.attention));
+  const cleared = await c1.invoke('host', { channel: 'notification:clear-session-attention', args: ['task-1', 'explicit'] });
+  assert.equal(cleared.ok, true, JSON.stringify(cleared));
+  await waitFor(() => c1Pushes.some(p => p.ch === SESSION_ACTIVITY_CHANNEL && p.payload?.sessionId === 'task-1' && p.payload?.attention === false));
+
+  await waitFor(() => !attached.at(-1).some(item => item.sessionId === 'task-1' && item.attention));
+
+  // An HTTP acknowledgement from another attached client clears this Desktop's unread state too.
+  hub.publish({ sessionId: 'task-1', event: { type: 'status', data: { isRunning: true } } });
+  hub.publish({ sessionId: 'task-1', event: { type: 'done', data: {} } });
+  await waitFor(() => attached.at(-1)?.some(item => item.sessionId === 'task-1' && item.attention));
+  const clearResponse = await fetch(`http://127.0.0.1:${server.address().port}/api/notifications/clear-session-attention`, {
+    method: 'POST', headers: { authorization: 'Bearer synthetic-stream', 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: 'task-1', intent: 'explicit' }),
+  });
+  assert.equal(clearResponse.status, 200);
+  await waitFor(() => !attached.at(-1).some(item => item.sessionId === 'task-1' && item.attention));
+
+  const view = await c1.invoke('host', { channel: 'local-db:messages:view', args: ['task-1', { lazyDetails: true, workLines: true }] });
+  assert.equal(view.ok, true, JSON.stringify(view));
+  const workItem = view.result.items.find(item => item.type === 'work');
+  assert.ok(workItem, JSON.stringify(view.result.items));
+
+  const intentOk = await c1.invoke('host', { channel: 'local-db:messages:view-intent', args: ['task-1', [{ key: workItem.key }]] });
+  assert.equal(intentOk.ok, true, JSON.stringify(intentOk));
+  const intentBad = await c1.invoke('host', { channel: 'local-db:messages:view-intent', args: ['task-1', 'not-an-array'] });
+  assert.equal(intentBad.ok, false);
+  assert.match(intentBad.error?.message ?? '', /INVALID_PARAMS/);
+
+  const legacyView = await c1.invoke('host', { channel: 'local-db:messages:view', args: ['task-1', {}] });
+  assert.equal(legacyView.ok, true, JSON.stringify(legacyView));
+  assert.ok(legacyView.result.items.some(item => item.type === 'work'));
+
+  const workRef = {
+    key: workItem.key,
+    firstMessageId: workItem.summary.firstMessageId,
+    lastMessageId: workItem.summary.lastMessageId,
+    ...(workItem.summary.firstStoredMessageId ? { firstStoredMessageId: workItem.summary.firstStoredMessageId } : {}),
+    ...(workItem.summary.lastStoredMessageId ? { lastStoredMessageId: workItem.summary.lastStoredMessageId } : {}),
+  };
+  const details = await c1.invoke('host', { channel: 'local-db:messages:work-details', args: ['task-1', workRef, {}] });
+  assert.equal(details.ok, true, JSON.stringify(details));
+  assert.deepEqual(details.result.messages.map(m => m.id), ['m-tool-use', 'm-tool-res']);
+
+  const beforeAckCount = c1Pushes.length;
+  const ack = await c1.invoke('host', { channel: 'local-db:sessions:ack-interrupted', args: ['task-1'] });
+  assert.equal(ack.ok, true, JSON.stringify(ack));
+  await waitFor(() => c1Pushes.slice(beforeAckCount).some(p => p.ch === 'local-db:sessions:patched' && p.payload?.sessionId === 'task-1' && typeof p.payload?.patch?.lastTurnEndedAt === 'number'));
+
+  const dismissed = await c1.invoke('host', { channel: 'local-db:messages:dismiss-error', args: ['task-1', 'c-err'] });
+  assert.equal(dismissed.ok, true, JSON.stringify(dismissed));
+  const dismissedContent = typeof dismissed.result.content === 'string' ? JSON.parse(dismissed.result.content) : dismissed.result.content;
+  assert.equal(dismissedContent.dismissed, true);
+  assert.equal(dismissedContent.sdkError, 'rate_limit');
+  await waitFor(() => c1Pushes.some(p => p.ch === 'local-db:messages:created' && p.payload?.message?.clientId === 'c-err'));
+
+  const deferredDismiss = await c1.invoke('host', { channel: 'local-db:messages:dismiss-error', args: ['task-1', 'c-deferred-err'] });
+  assert.equal(deferredDismiss.ok, true, JSON.stringify(deferredDismiss));
+  const deferredContent = typeof deferredDismiss.result.content === 'string' ? JSON.parse(deferredDismiss.result.content) : deferredDismiss.result.content;
+  assert.equal(deferredContent.dismissed, true);
+
+  const dismissMissing = await c1.invoke('host', { channel: 'local-db:messages:dismiss-error', args: ['task-1', 'c-reply'] });
+  assert.equal(dismissMissing.ok, false);
+  assert.match(dismissMissing.error?.message ?? '', /NOT_FOUND/);
 });

@@ -48,7 +48,7 @@ Orca 是 Cindy Desktop 内的多 agent 协同能力：一个 **Lead session** �
 
 - 多 worker：同一个 active team 下可创建多个 worker，支持 role、label、focused worker 切换、soft/hard limit 与归档。创建后可经协同面板的编辑入口或 `update_worker` 修改 worker 的展示角色名 `role` 与 team 内唯一标识 `label`（只改身份元数据，不换 Agent/模型/权限，见「Worker 运行态」第 10 条）。
 - Split view：Lead 与 focused Worker 共用 `OrcaSplitView` pane 外壳，宽屏为左右 split，doc rail 为 Lead/Worker toggle。见 `apps/desktop/src/renderer/features/cc-agent/OrcaSplitView.tsx` 的 `OrcaSplitView`、`OrcaPaneShell`。
-- 本地 Claude Code、Codex 与 Pi 的普通 Lead 无论是项目还是对话都可开启协同，本地 Worker 也支持这三类 agent；SSH 远端会话的 Claude Code、Codex 与 Pi 均可作 Lead 或 Worker（远端 agent 经 SSH remote-forward 连接本机 MCP bridge：Codex 走 daemon config 注入，Claude Code 走 per-query HTTP 注入，Pi 走内部 MCP bridge URL 改写）；device-link 被控端的项目与对话同样可作 Lead（Lead / Worker / team 的真身都在被控端，控制端只是镜像）。renderer 的入口判定收敛在 `apps/desktop/src/renderer/features/cc-agent/collabEntryPolicy.ts` 的 `resolveCollabEntryPolicy`，新建草稿（`NewMakerDraftRoute`）与会话视图（`CCAgentSessionView` 的 `allowCollabToggle`）共用同一份：普通 Lead 都显示入口，只排除不能嵌套协同的 Orca Worker 子会话。项目按项目级策略查询；Main 的 `resolveLocalCollabPolicyWorkingDir` 同时服务入口状态查询与最终授权，只有 workspace kind 为 dialogue 且 Main 确认目录位于 app 托管 dialogue root 时才只查用户级/全局级策略（即使 cwd 内出现 `.cindy/plugins.json`），显式绑定真实目录的对话仍按该目录的项目级策略查询，不能靠自报 `workspaceKind` 绕过项目禁用。
+- 本地 Claude Code、Codex、Pi 与 ACP 插件引擎的普通 Lead 无论是项目还是对话都可开启协同；本地 Worker 同样支持这四类引擎（插件引擎 Worker 仅限在 Lead 所在电脑本机运行，支持 worktree，但拒绝跨机运行设备、Agent 位置与 SSH Lead，且 `set_worker_runtime` 对插件引擎 Worker 返回 `UNSUPPORTED_CAPABILITY`，详参[ACP 插件执行引擎](acp-plugin-harness.md)与[协议记录](protocol-compatibility/plugin-harnesses.md)）；SSH 远端会话的 Claude Code、Codex 与 Pi 均可作 Lead 或 Worker（远端 agent 经 SSH remote-forward 连接本机 MCP bridge：Codex 走 daemon config 注入，Claude Code 走 per-query HTTP 注入，Pi 走内部 MCP bridge URL 改写）；device-link 被控端的项目与对话同样可作 Lead（Lead / Worker / team 的真身都在被控端，控制端只是镜像）。renderer 的入口判定收敛在 `apps/desktop/src/renderer/features/cc-agent/collabEntryPolicy.ts` 的 `resolveCollabEntryPolicy`，新建草稿（`NewMakerDraftRoute`）与会话视图（`CCAgentSessionView` 的 `allowCollabToggle`）共用同一份：普通 Lead 都显示入口，只排除不能嵌套协同的 Orca Worker 子会话。项目按项目级策略查询；Main 的 `resolveLocalCollabPolicyWorkingDir` 同时服务入口状态查询与最终授权，只有 workspace kind 为 dialogue 且 Main 确认目录位于 app 托管 dialogue root 时才只查用户级/全局级策略（即使 cwd 内出现 `.cindy/plugins.json`），显式绑定真实目录的对话仍按该目录的项目级策略查询，不能靠自报 `workspaceKind` 绕过项目禁用。
 - Codex Lead 使用全局注册的 `cindy_orca`，调用时通过 context 恢复身份并在 handler 内拒绝越权。远端 Codex 同样走 `params._meta.threadId` 路由——remote thread 与本地 thread 一样注册进 `CodexMcpThreadContextStore`（`packages/maker-core/src/agents/codex/index.ts` 的 `registerCodexMcpContext` 不再跳过 remoteHostId）。远端 cc 没有 threadId，身份走持久 bearer token + URL `?session=<id>` 路由（`codexHttpBridge.registerSessionCtx`），审批归属快照在 `remoteCcQueryFactory` 注入后按 `startParams.mcpServers` 最终清单定稿。
 - SSH 远端 Codex 的 MCP 桥接：本机 `codexHttpBridge` 在原有 per-run 主 token 之外接受一个 persistent bearer token（safeStorage）；`remote-ssh/codex-remote-mcp.ts` 在 session start/resume 前置完成 per-host 固定端口 remote-forward（`RemoteHost.openRemoteForward`，重连自动 rebind）、远端 `$CODEX_HOME/config.toml` 的 `mcp_servers` 管理段漂移检测（行级 marker + 剥离用户同名 table）与 daemon 幂等 bootstrap（token 只经 stdin 的 KEY=value 块注入，不进 argv）；config 漂移需要重启 daemon 时若同 host 有 live turn 则本次降级（留待下次 ensure）。worker 创建经 `OrcaLeadSessionSnapshot.remoteHostId` 继承在同一台远端主机 spawn，创建前走 `ensureRemoteReadyForSessionStart`（SSH 重连 / agent 安装 / MCP 注入）；lazy resume 与 Orca worker 唤醒路径同样先 ensure 再 bootstrap。
 - PR #107 提供 side_chat 的底层 fork 数据动作：user/assistant 消息都能 fork，assistant 按 turn 粒度复制，Claude 用 uuid 锚点，Codex 用 ThreadFork + ThreadRollback。当前作为普通 session 跳转；未来要登记为 side activity 并挂入统一 pane。
@@ -424,6 +424,10 @@ Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
    Lead 启动时可从本队的活跃成员恢复唯一 Worker 的会话地址。多个候选时只使用仍匹配的既有 ID，
    启动提示只记录地址。角色和标签可在协同面板修改；按角色或标签选人时，本次派单尚未核实匹配项才查当前名单。按明确的 Worker 地址派单可直接发送。只读审阅直接回传发现和必要证据；实施任务按实际改动验证。
    独立复核按任务要求执行。验证证据可以直接写进回报，用户要求日志或失败排查需要时再保存文件。
+
+   Lead 一次交代清楚任务和预期结果。影响 Worker 如何执行或判断完成、且它未必已知的背景、决定和限制，
+   随单说明或提供它能直接查看的具体出处。简单追问可以只写一句，复杂派单按需分段；不强制模板、
+   读取 Lead 历史或重复已知上下文。替换尚可能未读的旧单仍须给出完整替代指令并标明覆盖关系。
 
 2. **实际执行通道必须披露并按同一通道验收（状态：不变量）**<br>
    Lead 汇总前必须按执行该任务的同一通道确认真实终态，并逐项标明
@@ -824,6 +828,21 @@ Worker turn 被 vendor 报终止型 error，但 interrupted-turn auto-resume 仍
 
 4. **worker 状态变更必须广播给 renderer（状态：不变量）**
    创建 worker、`enableOrca` 创建首个 worker、任意真实 worker turn 开始后的 running、idle、archive、terminal done/error 都必须广播 `ORCA_WORKER_CHANGED`。worker DB `status` 跟随真实 turn 生命周期：Lead 派活或用户直接对话 worker 时，只有真实 turn 开始才置 `running`，**产品** terminal 才置 `done/error`（auto-resume 仍 pending/deferred 的 vendor 终态不是产品终态，见消息派发与 auto-bridge 5a）；`switch_focus` / resume / restore 只能恢复可访问性，不能凭空置 `running`。实现指针：`orcaLifecycleService.ts` 的 `createWorker` / `enableTeam`、`orcaWorkerCreationService.ts` 的 `createWorkerInTeam`、`orcaTeamService.ts` 的 `dispatchWorkerTask` / `handleWorkerTurnStarted` / `handleWorkerTerminalTurn`、`register.ts` 的 status event adapter、`useWorkers.ts` 的 `useWorkers`。
+
+   Worker 的普通继续与自动续跑同样进入共同活动状态机；「不单独展示灵动岛」仅在展示层过滤，
+   不得丢弃事件或删除活动快照。`get_session_runtime`、`get_task_digest`、Lead 的活动聚合与
+   `maker:list-active` 诊断查询读取新回合的真实状态，历史 error 行保留。跨电脑通知流及重连重放仍
+   排除 Worker，避免旧控制端冒出独立卡片；远程 Worker 视图沿用任务与协同事件。错误行或空
+   agentMeta 不是已接受／已运行的证据；Stop 与切账号沿原生命周期
+   清理，不为消除旧错误而重放输入。回归见 `agent-island/__tests__/service.test.ts`、
+   `makerOrcaRoleMarking.test.ts`。
+
+   归档、结束协同或创建失败补偿在清除本机 Worker 身份前，必须先以 `discarded` 清理当前活动
+   投影；单纯 `process-closed` 会保留未读完成／错误。身份先消失会让这份活动在下一次发布时
+   变成普通任务卡片、提示音与公共通知流。统一入口是 `register.ts` 的
+   `forgetKnownOrcaWorkerSession`；不删除持久化消息或历史错误。
+   展示清理／通知刷新失败只记录诊断，不能中止 Worker 身份清理或角色落库；清理复用既有
+   best-effort close 包装，身份在 `finally` 释放；不扩大原账号、Review 与权限准入异常的捕获范围。
 
 5. **切换 session 不重置 worker 未读状态（状态：不变量）**
    worker done 的绿点由 renderer 进程级 edge-trigger attention store 维护，而不是跟随组件切换重置的局部 state。worker 状态跳变进 `done` 才标 attention；正在查看该 worker 时清除 attention；只切走 / 切回不应让同一轮 done 重新变未读。协同 tab 图标另外显示 Worker 的出错（红）与等待确认（蓝），出错取自 Worker 自己在 `sessionAttentionStore` 的 attention，等待确认取自未处理交互或任务 awaiting；多个 Worker 时按 红 > 蓝 > 绿（完成未读）取最高一档，红 / 蓝在 tab 激活时也显示，绿点仍是激活即视为看到。实现指针：`useOrcaWorkerAttentionWatcher.ts` 的 `computeWorkerAttentionUpdates`，`RolePillDropdown.tsx` 的 selected worker clear effect，`workerAttentionStore.ts` 的 `attentionWorkerIds`，`OrcaWorkersAttentionIcon.tsx` 的 `resolveOrcaWorkersTabTone`。

@@ -15,9 +15,11 @@ import { useTranslation } from 'react-i18next';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { retainReportingPluginEngines } from './pluginEngineUsage';
 
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityEngine } from '@cindy/maker-shared/branding';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
+  subscribeDataOwnerGeneration,
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
@@ -56,11 +58,14 @@ export function requestPluginEnginesRefresh(targetGhostId?: string): void {
 let engines: readonly PluginEngineView[] = NO_ENGINES;
 const listeners = new Set<() => void>();
 let detachPush: (() => void) | null = null;
+let detachOwner: (() => void) | null = null;
+let snapshotOwner = getDataOwnerGeneration();
 /** Bumped by every push, so a slower initial read never overwrites a newer pushed list. */
 let generation = 0;
 
 function setEngines(next: readonly PluginEngineView[]): void {
-  retainReportingPluginEngines(getDataOwnerGeneration(), null, next);
+  snapshotOwner = getDataOwnerGeneration();
+  retainReportingPluginEngines(snapshotOwner, null, next);
   engines = next.length === 0 ? NO_ENGINES : next;
   for (const listener of listeners) listener();
 }
@@ -71,31 +76,48 @@ function sanitize(raw: unknown): readonly PluginEngineView[] {
     !!engine && typeof engine === 'object'
     && typeof (engine as PluginEngineView).providerId === 'string'
     && typeof (engine as PluginEngineView).name === 'string'
-    && Array.isArray((engine as PluginEngineView).models));
+    && Array.isArray((engine as PluginEngineView).models))
+    .map((engine) => isAntigravityEngine(engine)
+      ? { ...engine, iconDataUrl: ANTIGRAVITY_MARK_DATA_URL }
+      : engine);
 }
 
 function attach(): void {
   const api = pluginEnginesApi();
   if (!api?.listPluginEngines || !api.onPluginEnginesChanged) return;
+  const owner = getDataOwnerGeneration();
   detachPush = api.onPluginEnginesChanged((list) => {
+    if (!isDataOwnerGenerationCurrent(owner)) return;
     generation += 1;
     setEngines(sanitize(list));
   });
   const readGeneration = generation;
   api.listPluginEngines()
     .then((list) => {
-      if (readGeneration === generation) setEngines(sanitize(list));
+      if (readGeneration === generation && isDataOwnerGenerationCurrent(owner)) setEngines(sanitize(list));
     })
     .catch((err: unknown) => log.warn('plugin engines unavailable', err));
 }
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
-  if (listeners.size === 1 && !detachPush) attach();
+  if (listeners.size === 1) {
+    detachOwner = subscribeDataOwnerGeneration(() => {
+      generation += 1;
+      detachPush?.();
+      detachPush = null;
+      setEngines(NO_ENGINES);
+      attach();
+    });
+    attach();
+  }
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0 && detachPush) {
-      detachPush();
+    if (listeners.size === 0) {
+      generation += 1;
+      detachOwner?.();
+      detachOwner = null;
+      detachPush?.();
       detachPush = null;
     }
   };
@@ -106,7 +128,7 @@ function subscribeDisabled(): () => void {
 }
 
 function snapshot(): readonly PluginEngineView[] {
-  return engines;
+  return isDataOwnerGenerationCurrent(snapshotOwner) ? engines : NO_ENGINES;
 }
 
 function emptySnapshot(): readonly PluginEngineView[] {

@@ -2,6 +2,7 @@ import * as Network from 'expo-network';
 import { AppState } from 'react-native';
 import { AgentNetMembership, AgentNetSocket, NativeTransport, type SessionConfig, type SessionHandle } from '@cindy/agent-net/portable';
 import { agentNetStunServer } from '@cindy/agent-net-protocol';
+import { getOfficialAgentNetPeerBase } from '@cindy/maker-shared/client-endpoints';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { getOfficialAgentNetApiBaseUrl, getOfficialDeviceLinkApiBaseUrl } from '@/config/env';
 import { apiFetchRaw } from '@/api/client';
@@ -118,6 +119,9 @@ export function mobileAgentNetPeerState(peer: string): 'online' | 'offline' | nu
 export function mobileAgentNetPeerRoute(peer: string): { path: 'direct' | 'relay' | null; rttMs: number | null } {
   const socket = live();
   return { path: socket?.pathTo(peer) ?? null, rttMs: socket?.peerSnapshot(peer)?.rttMs ?? null };
+}
+export function mobileAgentNetRelayStalled(peer: string): void {
+  if (!isScopedPeer(peer)) live()?.relayStalled();
 }
 export function mobileAgentNetPeerConnectedAt(peer: string): number | null { return peerConnectedAt.get(peer) ?? null; }
 /**
@@ -386,20 +390,43 @@ export async function openMobileAgentNetSocket(options: MobileAgentNetEnrollment
           const base = identity.api.base;
           const cachedRelay = base && preferences.enabled ? relayInfo.get(base) : undefined;
           const knownServer = cachedRelay && Date.now() < cachedRelay.nextReadAt && cachedRelay.server ? cachedRelay.server : undefined;
+          const peerOfficialBase = official && base && preferences.enabled ? getOfficialAgentNetPeerBase(base) : null;
+          const cachedPeer = peerOfficialBase ? relayInfo.get(peerOfficialBase) : undefined;
+          const knownPeerServer = cachedPeer && Date.now() < cachedPeer.nextReadAt && cachedPeer.server ? cachedPeer.server : undefined;
+          const initialStun = [...new Set([knownServer, knownPeerServer].filter((s): s is string => !!s))];
           const transport = await NativeTransport.create(
             engine,
-            knownServer ? { ...transportOptions, relayUdpServer: knownServer } : transportOptions,
+            knownServer || initialStun.length
+              ? { ...transportOptions, ...(knownServer ? { relayUdpServer: knownServer } : {}), ...(initialStun.length ? { stunServers: initialStun } : {}) }
+              : transportOptions,
             readAddresses,
             preferences.enabled,
           );
           const udp = preferences.enabled && (transport.supports('stun') || transport.supports('relay-udp-v2'));
           const privateNetwork = preferences.enabled && identity.api.certificate.networkId.startsWith('private:');
+          let latestPrimary: string | undefined = knownServer;
+          let latestPeer: string | undefined = knownPeerServer;
           if (base && (udp || privateNetwork)) {
             // The existing WebSocket/direct connection can start while the optional lookup runs.
             void readRelayInfo(base).then(info => {
               guard();
               if (privateNetwork) setMobileAgentNetPrivateSharingSupport(base, identity.api.rootPublicKey, info.privateSharing);
-              if (udp && info.server && info.server !== knownServer) return transport.configureUdpServer(info.server);
+              if (udp && info.server && info.server !== latestPrimary) {
+                latestPrimary = info.server;
+                return latestPeer && latestPeer !== info.server
+                  ? transport.configureUdpServer(info.server, [latestPeer])
+                  : transport.configureUdpServer(info.server);
+              }
+            }).catch(() => undefined);
+          }
+          if (udp && peerOfficialBase && transport.supports('stun')) {
+            void readRelayInfo(peerOfficialBase).then(info => {
+              guard();
+              if (info.server && info.server !== latestPeer) {
+                latestPeer = info.server;
+                const merged = [...new Set([latestPrimary, latestPeer].filter((s): s is string => !!s))];
+                if (merged.length) return transport.configureStunServers?.(merged);
+              }
             }).catch(() => undefined);
           }
           return transport;

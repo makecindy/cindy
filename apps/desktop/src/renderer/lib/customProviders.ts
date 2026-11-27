@@ -132,9 +132,10 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
   for (const agent of p.agents) {
     const routing = p.routing[agent];
     const models = p.models[agent] ?? [];
+    const catalogPresetId = routing?.catalogPresetId ?? models[0]?.catalogPresetId;
     runtimes[agent] = {
       baseUrl: routing?.upstream ?? '',
-      ...(models[0]?.catalogPresetId ? { catalogPresetId: models[0].catalogPresetId } : {}),
+      ...(catalogPresetId ? { catalogPresetId } : {}),
       ...(routing?.requestPath ? { requestPath: routing.requestPath } : {}),
       ...(routing?.wireProtocol ? { wireProtocol: routing.wireProtocol } : {}),
       ...(agent === 'codex' && routing?.supportsImageGeneration === true
@@ -240,15 +241,17 @@ export async function readCustomProviderKey(
   return value && value.length > 0 ? value : null;
 }
 
-/** Saved Hinoki refresh must overlap its reads to use Main's in-flight coalescer. */
+/** Overlap reads from shared catalogs so Main can coalesce identical requests. */
 export async function fetchCustomProviderModelsForRefresh(
   provider: ProviderView,
   config: CustomProviderConfig,
 ) {
   if (provider.auth.native || provider.auth.method !== 'apiKey' || !provider.agents.every(agent => {
     const rt = config.runtimes[agent];
-    return rt?.baseUrl && (rt.modelsUrl ?? rt.baseUrl.replace(/\/+$/, '') + '/models')
-      === 'https://inference.hinoki.security/v1/models';
+    if (!rt?.baseUrl) return false;
+    const modelsUrl = rt.modelsUrl ?? rt.baseUrl.replace(/\/+$/, '') + '/models';
+    return modelsUrl === 'https://inference.hinoki.security/v1/models'
+      || modelsUrl === 'https://api.commandcode.ai/provider/v1/models';
   })) return null;
   // Prepare every stored key before network work; slow key reads must not turn
   // this back into disjoint requests. Main isolates unequal saved headers/keys.

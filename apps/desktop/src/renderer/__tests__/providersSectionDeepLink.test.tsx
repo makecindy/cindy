@@ -8,11 +8,14 @@
  *   4. wizard=1 → 向导目录第一步(entry undefined)。
  */
 
-import { cleanup, fireEvent, act, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, act, isInaccessible, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { SettingsSearchNavigationContext } from '../components/settings/SettingsSearchNavigation';
+import { providersSettings } from '../components/settings/ProvidersSection.settings-search';
+import { SettingsEscapeHarness } from '../components/settings/__tests__/SettingsEscapeHarness';
 import type { ProviderShareReceived } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
 import type { SubscriptionPoolView } from '../../shared/subscriptionAccounts';
@@ -64,6 +67,7 @@ vi.mock('@/hooks/useProviders', () => ({
 
 vi.mock('@/contexts/AuthContext', () => ({
   useOptionalAuthUser: () => null,
+  useOptionalAuthDeviceId: () => null,
   useAuth: () => ({ mode: 'local', exitLocalMode: vi.fn(async () => undefined) }),
 }));
 
@@ -217,9 +221,13 @@ beforeEach(() => {
     }),
   ];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    providerGroup: {
+      command: vi.fn(async ({ action }: { action: string }) => action === 'account-detail' ? { accounts: [] } : {}),
+      onChanged: vi.fn(() => () => undefined),
+    },
     subscriptionAccounts: {
       command: vi.fn(async ({ providerId }: { providerId: string }) => ({
-        providerId, configured: false, strategy: 'least', accounts: [],
+        providerId, configured: false, strategy: 'expiring', accounts: [],
       })),
       onChanged: vi.fn(() => () => undefined),
     },
@@ -259,7 +267,7 @@ describe('ProvidersSection — 深链定位', () => {
       agents: kind === 'openai' ? ['codex'] : ['claude-code'],
     })];
     const pool: SubscriptionPoolView = {
-      providerId: kind, configured: true, strategy: 'least',
+      providerId: kind, configured: true, strategy: 'expiring',
       accounts: [{ id: 'default', identity: 'member@example.test', status: 'ready',
         paused: false, limit: 4, weight: 1, running: 0, directory: '/fixture/account' }],
     };
@@ -284,7 +292,7 @@ describe('ProvidersSection — 深链定位', () => {
     providersState.providers = [makeProvider('openai', { removed: false, subscriptionAccountPool: 'openai', agents: ['codex'],
       auth: { method: 'oauth', native: 'codex' } })];
     const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
-    let pool: SubscriptionPoolView = { providerId: 'openai', configured: true, strategy: 'least', accounts: [] };
+    let pool: SubscriptionPoolView = { providerId: 'openai', configured: true, strategy: 'expiring', accounts: [] };
     command.mockImplementation(async input => {
       if (input.action === 'add') {
         pool = { ...pool, accounts: [{ id: 'cindy-owner-member', identity: 'member@example.test', status: 'ready',
@@ -303,7 +311,7 @@ describe('ProvidersSection — 深链定位', () => {
   it('lets the user choose the login row when several saved accounts have no default', async () => {
     providersState.providers = [makeProvider('openai', { removed: false, subscriptionAccountPool: 'openai' })];
     const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
-    command.mockResolvedValue({ providerId: 'openai', configured: true, strategy: 'least',
+    command.mockResolvedValue({ providerId: 'openai', configured: true, strategy: 'expiring',
       accounts: ['first', 'second'].map(id => ({ id, identity: id, status: 'signed-out',
         paused: false, limit: 4, weight: 1, running: 0, directory: '/fixture/' + id })) });
     renderAt('?tab=providers&connect=openai');
@@ -328,7 +336,7 @@ describe('ProvidersSection — 深链定位', () => {
     const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
     command.mockImplementation(async (input) => {
       if (input.action === 'login') throw new Error(`[${code}] synthetic sign-in result`);
-      return { providerId: 'openai', configured: true, strategy: 'least',
+      return { providerId: 'openai', configured: true, strategy: 'expiring',
         accounts: [{ id: 'cindy-owner-member', identity: 'member@example.test', status: 'signed-out',
           paused: false, limit: 4, weight: 1, running: 0, directory: '/fixture/account' }] };
     });
@@ -350,7 +358,7 @@ describe('ProvidersSection — 深链定位', () => {
   it('offers a re-read, not sign-in, when the pool accounts cannot be read', async () => {
     providersState.providers = [makeProvider('openai', { name: 'OpenAI', connected: true, agents: ['codex'] })];
     const command = vi.mocked(window.electronAPI.subscriptionAccounts.command);
-    command.mockResolvedValue({ providerId: 'openai', configured: true, strategy: 'least',
+    command.mockResolvedValue({ providerId: 'openai', configured: true, strategy: 'expiring',
       accounts: [{ id: 'default', identity: 'member@example.test', status: 'unavailable',
         paused: false, limit: 4, weight: 1, running: 0, directory: '/fixture/account' }] });
     renderAt('?tab=providers&connect=openai');
@@ -459,7 +467,7 @@ describe('ProvidersSection — 深链定位', () => {
       // Each row owns its quota, including the CLI-origin account. A successful empty pool
       // must never display an unrelated provider-wide card.
       vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
-        providerId: 'openai', configured: true, strategy: 'least', accounts: [{
+        providerId: 'openai', configured: true, strategy: 'expiring', accounts: [{
           id: 'default', directory: 'fixture', status: 'ready', paused: false,
           limit: 1, weight: 1, running: 0, identity: 'first@example.test',
           usage: { codex: { credits: null, buckets: { codex: {
@@ -513,17 +521,33 @@ describe('ProvidersSection — 深链定位', () => {
         .getAllByRole('menuitem')
         .map((item) => item.textContent),
     ).toEqual([
-      'settings.providers.pill.rename',
+      'settings.providers.menu.appearance',
       'settings.providers.menu.hideProvider',
       'settings.providers.menu.disableProvider',
       'settings.providers.custom.deleteAria',
     ]);
-    fireEvent.click(within(menu).getByText('settings.providers.pill.rename'));
+    fireEvent.click(within(menu).getByText('settings.providers.menu.appearance'));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: 'Personal' } });
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'settings.providers.menu.connectionIcon.personal' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.save' }));
     await waitFor(() => expect(window.electronAPI.maker.setProviderPresentation).toHaveBeenCalledWith(
-      { providerId: 'openai-work', action: 'rename', name: 'Work account', dataOwnerId: 'owner', ownerGeneration: 1 },
+      expect.objectContaining({ providerId: 'openai-work', action: 'appearance', name: 'Personal', icon: 'personal' }),
     ));
     expect(updateCustomProvider).not.toHaveBeenCalled();
     expect(customDialogSpy).not.toHaveBeenCalled();
+  });
+
+  // Unit: selecting a mark in Settings must target just that saved connection.
+  it('sets the selected connection icon from its detail menu', async () => {
+    providersState.providers = [makeProvider('glm-team', { source: 'user', name: 'GLM', connected: true })];
+    renderAt('?tab=providers&connect=glm-team');
+    fireEvent.keyDown(await screen.findByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.menu.appearance' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Magpie' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.cancel' }));
+    expect(window.electronAPI.maker.setProviderPresentation).not.toHaveBeenCalled();
   });
 
   it('renames an account when its sidebar row is double-clicked', async () => {
@@ -541,17 +565,11 @@ describe('ProvidersSection — 深链定位', () => {
 
     fireEvent.doubleClick(await screen.findByRole('button', { name: /Work account/ }));
 
-    await waitFor(() => expect(confirmSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ title: 'settings.providers.pill.rename' }),
-    ));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByRole('textbox'), { target: { value: 'Desk' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'settings.providers.custom.save' }));
     await waitFor(() => expect(window.electronAPI.maker.setProviderPresentation).toHaveBeenCalledWith(
-      {
-        providerId: 'openai-work',
-        action: 'rename',
-        name: 'Work account',
-        dataOwnerId: 'owner',
-        ownerGeneration: 1,
-      },
+      expect.objectContaining({ providerId: 'openai-work', action: 'appearance', name: 'Desk' }),
     ));
   });
 
@@ -822,7 +840,7 @@ describe('ProvidersSection — 深链定位', () => {
   ])('invalidated default OpenAI auth only allows models when another pooled account is usable ($configured/$usable)', async ({ configured, usable }) => {
     codexAuthState.state = { kind: 'reconnect-required', reason: 'token_revoked' };
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
-      providerId: 'openai', configured, strategy: 'least',
+      providerId: 'openai', configured, strategy: 'expiring',
       accounts: usable ? [{ id: 'second', paused: false, limit: 4, weight: 1,
         directory: '/fixture/.codex-second', status: 'ready', running: 0 }] : [],
     });
@@ -1146,6 +1164,10 @@ describe('ProvidersSection — 深链定位', () => {
       }),
     ];
     (window as unknown as { electronAPI: unknown }).electronAPI = {
+      providerGroup: {
+        command: vi.fn(async ({ action }: { action: string }) => action === 'account-detail' ? { accounts: [] } : {}),
+        onChanged: vi.fn(() => () => undefined),
+      },
       maker: {
         listProviders: vi.fn(async () => ({ providers: providersState.providers, dataOwnerId: 'owner', ownerGeneration: 1 })),
       setProviderPresentation: vi.fn(async () => ({ ok: true })),
@@ -1229,7 +1251,7 @@ describe('ProvidersSection — 允许被远程调用与供应商组', () => {
     resetProviderShareStoreForTests();
   });
 
-  it('folds the provider group into the remote-use row and waits for the group settings before showing it', async () => {
+  it('opens sharing from the loaded provider group row and returns to both provider scroll positions', async () => {
     localProviderGroupsTesting.reset();
     let answer!: (groups: Record<string, unknown>) => void;
     const list = new Promise<Record<string, unknown>>((resolve) => {
@@ -1244,13 +1266,30 @@ describe('ProvidersSection — 允许被远程调用与供应商组', () => {
         listDevices: vi.fn(async () => ({ devices: [] })),
         onPresenceChanged: () => () => undefined,
         onControlTargetChanged: () => () => undefined,
+        onStatusChanged: () => () => undefined,
+      },
+      providerShare: {
+        command: vi.fn(async () => { throw new Error('offline'); }),
+        onReceivedChanged: () => () => undefined,
+        onOwnedChanged: () => () => undefined,
       },
       providerGroup: { command, onChanged: () => () => undefined },
     });
     providersState.providers = [
-      makeProvider('anthropic', { name: 'Anthropic', connected: true, remoteInvocationEnabled: true }),
+      makeProvider('anthropic', {
+        name: 'Anthropic', connected: true, remoteInvocationEnabled: true,
+        models: { 'claude-code': [{ id: 'chat', name: 'Chat fixture', contextWindow: 128_000, efforts: [], defaultEffort: null }] },
+        imageModels: [{ id: 'image', name: 'Image fixture' }],
+      }),
     ];
-    renderAt('?tab=providers&connect=anthropic');
+    const page = (activation: number) => (
+      <MemoryRouter initialEntries={['/settings?tab=providers&connect=anthropic']}>
+        <SettingsSearchNavigationContext.Provider value={{ entry: activation ? providersSettings.sharing : null, activation }}>
+          <SettingsEscapeHarness><ProvidersSection /></SettingsEscapeHarness>
+        </SettingsSearchNavigationContext.Provider>
+      </MemoryRouter>
+    );
+    const view = render(page(0));
     await waitFor(() => expect(command).toHaveBeenCalledWith({ action: 'list' }));
     await waitFor(() => expect(window.electronAPI.deviceLink.getState).toHaveBeenCalled());
     // 等「允许远程控制」读完，只剩组设置没读到。
@@ -1263,7 +1302,7 @@ describe('ProvidersSection — 允许被远程调用与供应商组', () => {
     await act(async () => {
       answer({
         anthropic: {
-          strategy: 'least',
+          strategy: 'expiring',
           autoSwitch: true,
           members: [
             { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false },
@@ -1280,6 +1319,33 @@ describe('ProvidersSection — 允许被远程调用与供应商组', () => {
     expect(within(row).getByRole('switch', { name: 'settings.providers.detail.remoteAccess.ariaLabel' })).toBeTruthy();
     expect(screen.queryByTestId('provider-group-row')).toBeNull();
     expect(command).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'get' }));
+
+    // Unit regression: a round trip from a scrolled provider to sharing used to
+    // lose both panes. The deep-link cases only checked the selected provider.
+    // The held detail must retain the chosen model filter when its effects reconnect.
+    const imageFilter = () => screen.getByRole('radio', { name: 'newChat.modelSelector.category.image' });
+    fireEvent.click(imageFilter());
+    screen.getByTestId('provider-list-scroll').scrollTop = 75;
+    screen.getByTestId('provider-detail-scroll').scrollTop = 246;
+    fireEvent.click(within(row).getByTestId('provider-share-entry'));
+    const sharing = await screen.findByTestId('share-manage-stub');
+    expect(sharing.scrollTop).toBe(0);
+    fireEvent.click(within(sharing).getByRole('button', { name: 'back to providers' }));
+    expect(imageFilter().getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByTestId('provider-list-scroll').scrollTop).toBe(75);
+    expect(screen.getByTestId('provider-detail-scroll').scrollTop).toBe(246);
+
+    fireEvent.click(within(row).getByTestId('provider-share-entry'));
+    await screen.findByTestId('share-manage-stub');
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByTestId('share-manage-stub')).toBeNull();
+    expect(screen.getByTestId('provider-list-scroll').scrollTop).toBe(75);
+    expect(screen.getByTestId('provider-detail-scroll').scrollTop).toBe(246);
+
+    fireEvent.click(within(row).getByTestId('provider-share-entry'));
+    await screen.findByTestId('share-manage-stub');
+    view.rerender(page(1));
+    await waitFor(() => expect(screen.queryByTestId('share-manage-stub')).toBeNull());
   });
 });
 
@@ -1518,7 +1584,6 @@ it('lists providers that plugins offer beside the ordinary ones and falls back w
     expect(railGroup('hidden')?.textContent).toContain('1');
     expect(railGroup('suspended')?.textContent).toContain('1');
     // An ordinary provider stays the default selection: the plugin row does not take the page over.
-    // Looked up each time: opening the share page replaces the list, so an earlier node would be stale.
     const anthropicCurrent = () => screen.getByRole('button', { name: 'Anthropic' }).getAttribute('aria-current');
     expect(anthropicCurrent()).toBe('true');
     expect(screen.queryByTestId('plugin-engine-provider-detail')).toBeNull();
@@ -1533,10 +1598,10 @@ it('lists providers that plugins offer beside the ordinary ones and falls back w
     const sharePage = screen.getByTestId('share-manage-stub');
     expect(sharePage.getAttribute('data-provider')).toBe('acp-plugin:dsh-plugin:dsh');
     expect(within(sharePage).getByText('DeepSeek Harness')).toBeTruthy();
-    expect(screen.queryByTestId('plugin-engine-provider-detail')).toBeNull();
+    expect(isInaccessible(screen.getByTestId('plugin-engine-provider-detail'))).toBe(true);
     fireEvent.click(within(sharePage).getByRole('button', { name: 'back to providers' }));
     expect(screen.queryByTestId('share-manage-stub')).toBeNull();
-    expect(within(screen.getByTestId('plugin-engine-provider-detail')).getByText('DeepSeek Harness')).toBeTruthy();
+    expect(isInaccessible(within(screen.getByTestId('plugin-engine-provider-detail')).getByText('DeepSeek Harness'))).toBe(false);
     expect(screen.getByTestId('plugin-engine-provider-row').getAttribute('aria-current')).toBe('true');
 
     // The one being viewed is hidden: it moves to the hidden group, which opens once so it stays in view.

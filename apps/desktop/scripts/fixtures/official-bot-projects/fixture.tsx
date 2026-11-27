@@ -174,7 +174,9 @@ function hookView(scenario: Scenario, defaultProject: string | null): SlackHookV
     bindings: [],
     pendingBind: null,
     serverMultiTeam: false,
-    telegram: scenario.telegram ? lane('telegram', defaultProject) : { ...disabledLane, url: 'ws://127.0.0.1:8794' },
+    telegram: scenario.telegram
+      ? { ...lane('telegram', defaultProject), behaviorAvailable: scenario.expand === 'telegram' }
+      : { ...disabledLane, url: 'ws://127.0.0.1:8794' },
     x: scenario.x ? lane('x', defaultProject) : { ...disabledLane, url: 'ws://127.0.0.1:8794' },
     feishu: scenario.feishu ? lane('feishu', defaultProject) : { ...disabledLane, url: 'ws://127.0.0.1:8794' },
   } as SlackHookView;
@@ -215,6 +217,11 @@ void mountPage({
       hookControl: {
         get: async () => ({ hook: hookView(scenario, defaultProject) }),
         onStatusChanged: subscription('hook-status'),
+        getTelegramBehavior: async () => ({
+          behavior: { bindingId: 'telegram-binding', bound: true, emojiReactions: 'minimal',
+            replyQuoteDm: 'off', replyQuoteGroup: 'first', groupActivation: { '-1001': 'always' } },
+        }),
+        onTelegramBehaviorChanged: subscription('telegram-behavior'),
         setProviderDefaultWorkspace: async (_provider: string, alias: string | null) => {
           defaultProject = alias;
           return { hook: hookView(scenario, defaultProject) };

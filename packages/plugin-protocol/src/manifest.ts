@@ -278,6 +278,10 @@ export interface GhostAgentNeeds {
   companions?: boolean;
   /** 读取并修改本机模型收藏、只读最近使用的模型;不依赖 tasks,安装/更新确认中单列。 */
   modelPreferences?: boolean;
+  /** Independently approved, content-free change checks between plugins. Never grants tool calls. */
+  checks?: boolean;
+  /** Source kinds this plugin can check using its own accounts; requires checks. */
+  checkSources?: string[];
 }
 
 /** 插件随包本地 Node 工作进程使用的 stdio 协议。 */
@@ -628,6 +632,14 @@ export interface GhostSecretOauthDecl {
   /** code / refresh token 交换端点(https;域名必须命中 hosts——clientSecret 只流向用户同意过的域名)。 */
   tokenUrl: string;
   /**
+   * 可选:设备码授权端点(RFC 8628 Device Authorization Grant,https;域名必须命中
+   * hosts)。声明后主机改走「设备码登录」:申请 user_code 与确认页、拉起确认页,
+   * 再轮询 tokenUrl(grant_type=urn:ietf:params:oauth:grant-type:device_code),
+   * 无需 loopback 回调与重定向 URL 登记。authorizeUrl 仍必填:不认识本字段的旧
+   * 主机忽略它并退回授权码流程。与 tokenBroker / brokerBounce 互斥。
+   */
+  deviceAuthorizationUrl?: string;
+  /**
    * 可选:作者内置的 OAuth 客户端 ID(2026-07-13 定案,开箱即用前置)。
    * 声明后用户零配置即可点"连接账号";用户在设置页自填的
    * client 凭证**覆盖**内置值(清除自填 = 回落内置)。桌面应用的 client
@@ -801,11 +813,16 @@ export interface GhostSecretDecl {
  * 范围恒等于各连接自身地址(结构上钉死"token 只流向它自己的实例"),因此
  * inject 不允许声明 hosts 子集(写了拒装)。
  */
+export const GHOST_CONNECTION_SOURCES = ['user', 'glab-cli'] as const;
+export type GhostConnectionSource = (typeof GHOST_CONNECTION_SOURCES)[number];
+
 export interface GhostConnectionDecl {
   /** 连接声明键(意识内唯一,与 secrets[].key 共用命名空间不得撞名):小写字母开头,1–32。 */
   key: string;
   /** 给人看的连接类型名(如「GitLab 实例」;确认框与设置页展示)。 */
   label: string;
+  /** 连接来源;缺省 'user'(归一化省略);'glab-cli' 在插件未添加同域名连接时回退读取本机 glab 登录。 */
+  source?: GhostConnectionSource;
   /** 可选提示(≤200 字,设置页展示,如"填实例域名与 Personal Access Token")。 */
   hint?: string;
   /**
@@ -1063,7 +1080,7 @@ export interface GhostManifest {
    * hooks 非空时 launch 必须为 'resident'(校验强制)。
    */
   subscribe?: GhostSubscribeNeeds;
-  /** Autonomous publishing of declared events into user-configured routines. */
+  /** Autonomous publishing of declared events; they wake automations whose trigger chose this plugin. */
   routineEvents?: GhostRoutineEvents;
   /** Models this plugin may add to the model picker; the list is published at runtime. */
   models?: GhostModelsNeeds;
@@ -2639,6 +2656,19 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
           if (!authorizeParsed.ok) return authorizeParsed;
           const tokenParsed = parseHostBoundUrl(oa.tokenUrl, 'tokenUrl');
           if (!tokenParsed.ok) return tokenParsed;
+          let deviceAuthorizationUrl: string | undefined;
+          if (oa.deviceAuthorizationUrl !== undefined) {
+            const deviceParsed = parseHostBoundUrl(oa.deviceAuthorizationUrl, 'deviceAuthorizationUrl');
+            if (!deviceParsed.ok) return deviceParsed;
+            if (oa.tokenBroker !== undefined || oa.brokerBounce !== undefined) {
+              return {
+                ok: false,
+                reason:
+                  'network.secrets[].oauth.deviceAuthorizationUrl 与 tokenBroker / brokerBounce 互斥(broker 只承接授权码交换)',
+              };
+            }
+            deviceAuthorizationUrl = deviceParsed.url;
+          }
           // 内置 client 凭证(可选,成对语义:secret 不许孤儿声明)。
           if (oa.clientId !== undefined) {
             if (
@@ -2956,6 +2986,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
           oauth = {
             authorizeUrl: authorizeParsed.url,
             tokenUrl: tokenParsed.url,
+            ...(deviceAuthorizationUrl !== undefined ? { deviceAuthorizationUrl } : {}),
             ...(oa.clientId !== undefined ? { clientId: oa.clientId as string } : {}),
             ...(oaClientIdAlternatives !== undefined
               ? { clientIdAlternatives: oaClientIdAlternatives }
@@ -3202,6 +3233,32 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
               'network.connections[].inject.hosts 不允许声明(连接凭证只注入对应连接自身的地址)',
           };
         }
+        let connSource: GhostConnectionSource | undefined;
+        if (c.source !== undefined) {
+          if (
+            typeof c.source !== 'string' ||
+            !(GHOST_CONNECTION_SOURCES as readonly string[]).includes(c.source)
+          ) {
+            return {
+              ok: false,
+              reason: `network.connections[].source 仅支持 ${GHOST_CONNECTION_SOURCES.join(' / ')}(缺省 user)`,
+            };
+          }
+          if (c.source === 'glab-cli') connSource = 'glab-cli';
+        }
+        if (
+          connSource === 'glab-cli' &&
+          !(
+            (cinj.header === 'PRIVATE-TOKEN' && cinj.format === '{value}') ||
+            (cinj.header === 'Authorization' && cinj.format === 'Bearer {value}')
+          )
+        ) {
+          return {
+            ok: false,
+            reason:
+              'network.connections[].source 为 glab-cli 时 inject 必须是 PRIVATE-TOKEN: {value} 或 Authorization: Bearer {value}',
+          };
+        }
         if (c.maxConnections !== undefined) {
           if (
             typeof c.maxConnections !== 'number' ||
@@ -3218,6 +3275,7 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
         connections.push({
           key: c.key,
           label: c.label,
+          ...(connSource !== undefined ? { source: connSource } : {}),
           ...(c.hint !== undefined ? { hint: c.hint as string } : {}),
           inject: { header: cinj.header, format: cinj.format },
           ...(c.maxConnections !== undefined ? { maxConnections: c.maxConnections as number } : {}),
@@ -3285,15 +3343,21 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
     }
     if (agentRaw.companions !== undefined && typeof agentRaw.companions !== 'boolean') return { ok: false, reason: 'agent.companions must be boolean' };
     if (agentRaw.modelPreferences !== undefined && typeof agentRaw.modelPreferences !== 'boolean') return { ok: false, reason: 'agent.modelPreferences must be boolean' };
-    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && agentRaw.modelPreferences !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences'])).length === 0) {
+    if (agentRaw.checks !== undefined && typeof agentRaw.checks !== 'boolean') return { ok: false, reason: 'agent.checks must be boolean' };
+    if (agentRaw.checkSources !== undefined &&
+        (agentRaw.checks !== true || !Array.isArray(agentRaw.checkSources) || agentRaw.checkSources.length < 1 || agentRaw.checkSources.length > 16 ||
+         !agentRaw.checkSources.every((v: unknown) => typeof v === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(v)) ||
+         new Set(agentRaw.checkSources).size !== agentRaw.checkSources.length))
+      return { ok: false, reason: 'agent.checkSources requires checks and 1–16 unique source names' };
+    if (agentRaw.background !== true && agentRaw.errand !== true && agentRaw.schedule !== true && agentRaw.tasks !== true && agentRaw.observe !== true && agentRaw.companions !== true && agentRaw.modelPreferences !== true && agentRaw.checks !== true && Object.keys(unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences', 'checks', 'checkSources'])).length === 0) {
       return {
         ok: false,
         reason:
-          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true / modelPreferences: true 七项加档;仅需用户点击触发时请省略 agent 字段',
+          'agent 能力详单只有 background: true / errand: true / schedule: true / tasks: true / observe: true / companions: true / modelPreferences: true / checks: true 八项加档;仅需用户点击触发时请省略 agent 字段',
       };
     }
     agent = {
-      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences']),
+      ...unknownDeclarationFields(agentRaw, ['background', 'errand', 'schedule', 'tasks', 'hiddenTasks', 'targets', 'delegation', 'observe', 'companions', 'modelPreferences', 'checks', 'checkSources']),
       ...(agentRaw.background === true ? { background: true } : {}),
       ...(agentRaw.errand === true ? { errand: true } : {}),
       ...(agentRaw.tasks === true ? { tasks: true } : {}),
@@ -3304,6 +3368,8 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
       ...(agentRaw.observe === true ? { observe: true } : {}),
       ...(agentRaw.companions === true ? { companions: true } : {}),
       ...(agentRaw.modelPreferences === true ? { modelPreferences: true } : {}),
+      ...(agentRaw.checks === true ? { checks: true } : {}),
+      ...(agentRaw.checks === true && Array.isArray(agentRaw.checkSources) ? { checkSources: agentRaw.checkSources as string[] } : {}),
     };
   }
 
@@ -3920,7 +3986,9 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
         (secret) => [secret.key, { hostDerivedSource: null }] as const,
       ),
     ]);
-    const connectionKeys = new Set((network?.connections ?? []).map((connection) => connection.key));
+    const connectionByKey = new Map(
+      (network?.connections ?? []).map((connection) => [connection.key, connection] as const),
+    );
     const groups: GhostSetupGroup[] = [];
     for (const group of setupRaw.requires) {
       if (
@@ -3963,10 +4031,17 @@ function validateGhostManifestInput(value: unknown, preserveHistoricalParameterS
             }
             item = { kind: 'secret', key };
           } else {
-            if (!connectionKeys.has(key)) {
+            const connDecl = connectionByKey.get(key);
+            if (!connDecl) {
               return {
                 ok: false,
                 reason: `setup 引用了未声明的连接 ${JSON.stringify(key)}(必须逐字取自 network.connections[].key)`,
+              };
+            }
+            if (connDecl.source === 'glab-cli') {
+              return {
+                ok: false,
+                reason: `setup 不允许引用 glab-cli 源连接 ${JSON.stringify(key)}(优先复用本机 glab 登录时没有同步前置动作可拦)`,
               };
             }
             item = { kind: 'connection', key };

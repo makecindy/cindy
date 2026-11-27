@@ -22,6 +22,11 @@ import {
   serializeOrcaRemoteLead,
   type OrcaRemoteLead,
 } from '../../shared/orcaRemoteWorker.js';
+import {
+  parseSessionCreatedBy,
+  serializeSessionCreatedBy,
+  type SessionCreatedBy,
+} from '../../shared/sessionOrigin.js';
 
 import type {
   sessions,
@@ -323,6 +328,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     remoteHostId: row.remoteHostId ?? null,
     agentDeviceId: row.agentDeviceId ?? null,
     orcaRemoteLead: parseOrcaRemoteLead(row.orcaRemoteLead ?? null),
+    createdBySession: parseSessionCreatedBy(row.createdBySession ?? null),
     // interrupted-turn-resume:「疑似中断」判定的两个时间戳(unix ms 原样透出,
     // renderer 打开会话时比较 startedAt > endedAt,见 sessionActiveTurn.ts)。
     activeTurnStartedAt: row.activeTurnStartedAt ?? null,
@@ -456,6 +462,8 @@ export function sessionCreateToRow(
         agentDeviceId?: string | null;
         /** 仅运行设备上的协同远端 Worker 入口写入(见 shared/orcaRemoteWorker.ts)。 */
         orcaRemoteLead?: OrcaRemoteLead | null;
+        /** 仅 send_to_session（create 模式）入口写入（见 shared/sessionOrigin.ts）。 */
+        createdBySession?: SessionCreatedBy | null;
         /**
          * per-session 来源(供应商)显式选择,落盘 sessions.provider_id(与 update 同列)。
          * null/undefined = 不显式选,跟随该 agent 的原生默认路由(no-break)。草稿态首次
@@ -504,6 +512,7 @@ export function sessionCreateToRow(
     // Agent 运行在另一台电脑时与 SSH 远端互斥：两者同时给出时以 SSH 远端为准、不记录设备。
     agentDeviceId: normalizeRemoteHostId(body?.remoteHostId) ? null : normalizeRemoteHostId(body?.agentDeviceId),
     orcaRemoteLead: body?.orcaRemoteLead ? serializeOrcaRemoteLead(body.orcaRemoteLead) : null,
+    createdBySession: body?.createdBySession ? serializeSessionCreatedBy(body.createdBySession) : null,
     // 显式来源:trim 后非空才入库,其余(undefined / null / 空串 / 纯空白)一律落 null,
     // 与 session-provider-store 的 null 语义对齐(null → 回落默认路由,字节级不变)。
     providerId:
@@ -526,6 +535,7 @@ export function sessionPatchToRow(
   patch: {
     title?: string;
     workingDir?: string;
+    projectDir?: string | null;
     workspaceKind?: WorkspaceKind;
     model?: string;
     effort?: string | null;
@@ -556,8 +566,11 @@ export function sessionPatchToRow(
   if (patch.workspaceKind !== undefined) out.workspaceKind = patch.workspaceKind;
   // Move controls explicitly set workspaceKind; an execution-only cwd update
   // (e.g. attaching a worktree) must preserve the chosen project.
-  if (patch.workspaceKind === 'dialogue'
-    || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) out.projectDir = null;
+  if (patch.projectDir !== undefined) {
+    out.projectDir = normalizeWorkingDirForStorage(patch.projectDir);
+  } else if (patch.workspaceKind === 'dialogue' || (patch.workspaceKind === 'project' && patch.workingDir !== undefined)) {
+    out.projectDir = null;
+  }
   if (patch.model !== undefined) out.model = patch.model;
   const persistableEffort = opts?.allowEmptyEffort && patch.effort === ''
     ? ('' as SessionInsert['effort'])
@@ -592,6 +605,37 @@ export function sessionPatchToRow(
   return out;
 }
 
+/**
+ * 序列化 messages.agent_meta：省略事件准备阶段每轮附带的默认 false 标记
+ * （`botPrivateReply: false`、`botTaskCoordination: false`），空对象收敛为 NULL。
+ * 实时事件流仍保留显式 false 供渲染层与提醒覆盖上一轮状态；持久层所有查询与历史
+ * 加载对缺省与 false 语义一致，不省略 `samplingAttemptPending: false` 或
+ * `turnCompleted: false` 这类显式终态覆盖字段。
+ */
+export function serializePersistedAgentMeta(
+  agentMeta: AgentMeta | Record<string, unknown> | null | undefined,
+): string | null {
+  if (agentMeta === undefined || agentMeta === null) return null;
+  if (typeof agentMeta !== 'object' || Array.isArray(agentMeta)) {
+    return safeStringify(agentMeta);
+  }
+  const source = agentMeta as Record<string, unknown>;
+  if (source.botPrivateReply !== false && source.botTaskCoordination !== false) {
+    const serialized = safeStringify(source);
+    return serialized === '{}' ? null : serialized;
+  }
+  const compact: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    if ((key === 'botPrivateReply' || key === 'botTaskCoordination') && value === false) {
+      continue;
+    }
+    compact[key] = value;
+  }
+  const serialized = safeStringify(compact);
+  return serialized === '{}' ? null : serialized;
+}
+
 /** Message create 入口字段映射。content / agentMeta 序列化为 JSON 字符串。 */
 export function messageCreateToRow(
   id: string,
@@ -614,10 +658,7 @@ export function messageCreateToRow(
     role: body.role as MessageInsert['role'],
     content: safeStringify(body.content),
     toolUseId: body.toolUseId ?? null,
-    agentMeta:
-      body.agentMeta === undefined || body.agentMeta === null
-        ? null
-        : safeStringify(body.agentMeta),
+    agentMeta: serializePersistedAgentMeta(body.agentMeta),
     agentKind: body.agentKind ?? null,
     createdAt: body.createdAt ?? now,
   };

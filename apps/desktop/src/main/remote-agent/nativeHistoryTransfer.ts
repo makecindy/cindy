@@ -5,6 +5,7 @@ import { createReadStream, createWriteStream, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { pipeline } from 'node:stream/promises';
+import { isStrictBase64Chars } from '@cindy/maker-shared';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 
 export const NATIVE_HISTORY_CHUNK_BYTES = 512 * 1024;
@@ -105,7 +106,7 @@ export function parseNativeHistoryCommand(value: unknown): NativeHistoryCommand 
   }
   if (v.action === 'write') {
     const data = text(v.data, Math.ceil(NATIVE_HISTORY_CHUNK_BYTES / 3) * 4);
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(data) || Buffer.from(data, 'base64').toString('base64') !== data) invalid();
+    if (!isStrictBase64Chars(data) || Buffer.from(data, 'base64').toString('base64') !== data) invalid();
     return { action: 'write', id, offset, data };
   }
   return invalid();

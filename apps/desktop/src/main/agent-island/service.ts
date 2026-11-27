@@ -1,5 +1,7 @@
+import { DeferredSessionCompletions } from './deferredSessionCompletions.js';
+import { toSessionActivity } from './sessionActivitySnapshot.js';
 import { retireReadMobileNotifications, retireAnsweredMobileNotifications } from '../device-link/notificationDismissalHost.js';
-import { app, dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions } from 'electron';
+import { app, dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions, type WebContents } from 'electron';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { release as getOsRelease } from 'node:os';
@@ -15,7 +17,6 @@ import {
 import type { SchedulerEvent } from '@cindy/maker-scheduler';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import {
-  projectSessionActivity,
   type SessionActivitySnapshot,
   type SessionActivityTransition,
 } from '@cindy/maker-shared/session-activity';
@@ -30,7 +31,20 @@ import {
   clearSessionAttention as clearAppBadgeSessionAttention,
   hasSessionAttention as hasAppBadgeSessionAttention,
 } from '../appBadgeService.js';
-import { buildSessionDeepLink, openMainWindowSession, openMainWindowChatMessage } from '../deepLink.js';
+import {
+  buildSessionDeepLink,
+  focusAppWindow,
+  openMainWindowChatMessage,
+  openMainWindowSession,
+  sendWindowDeepLink,
+} from '../deepLink.js';
+import {
+  findSecondaryWindowForGroupChat,
+  findSecondaryWindowForSession,
+  isSecondaryAppWindow,
+  queueSecondaryWindowBootGroupNavigation,
+  updateSecondaryWindowVisibleSessions,
+} from '../secondaryWindowRegistry.js';
 import { groupChatIslandId, type AgentIslandGroupChatInput } from './groupChat.js';
 import {
   AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL,
@@ -91,6 +105,8 @@ import {
 } from '../../shared/agentIsland.js';
 import { getSessionRowSnapshot, patchSessionMetaInDb } from '../localDb/ipc/sessions.js';
 import { isSessionNotificationsMutedSync } from '../localDb/sessionFlagRegistry';
+import { isKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js';
+import { shouldNotifyAgentIslandForSession } from './notificationPolicy.js';
 import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
 import { confirmIslandArchive } from './archiveConfirmation.js';
 import { AgentIslandLiveActivity, agentIslandLiveActivityStateFromPill } from './liveActivity.js';
@@ -120,11 +136,11 @@ import {
   applyAgentIslandUserPrompt,
   buildAgentIslandDisplayState,
   buildAgentIslandTaskOverview,
+  buildLocalAgentIslandTaskOverview,
   buildAllSessionActivitySnapshots,
   buildDeviceSessionActivitySnapshots,
   closeAgentIslandSessionPreservingUnread,
   completeAgentIslandSessionWithoutAttention,
-  completedReplySummary,
   createAgentIslandUserPromptRollbackToken,
   createAgentIslandState,
   dismissAgentIslandActiveReveal,
@@ -347,49 +363,6 @@ function sessionActivitySnapshotsEqual(
     && left.source === right.source;
 }
 
-function safeSessionActionSummary(snapshot: AgentIslandSessionSnapshot): string {
-  if (snapshot.phase === 'needs-interaction') {
-    if (snapshot.interactionKind === 'permission') return '等待权限确认';
-    if (snapshot.interactionKind === 'ask_user_question') return '等待用户回答';
-    if (snapshot.interactionKind === 'plan_review') return '等待计划确认';
-    if (snapshot.interactionKind === 'plugin_setup') return '等待插件配置';
-    if (snapshot.interactionKind === 'input_handoff') return '等待代输入';
-    return '等待用户确认';
-  }
-  if (snapshot.phase === 'completed') return '运行已正常结束';
-  if (snapshot.phase === 'error') return '运行出错';
-  const latestKind = snapshot.activityLines.at(-1)?.kind;
-  if (latestKind === 'tool') return '正在运行工具';
-  if (latestKind === 'assistant') return '正在生成回复';
-  if (latestKind === 'user') return '正在处理新消息';
-  return '正在运行';
-}
-
-function toSessionActivity(s: AgentIslandSessionSnapshot): AgentIslandSessionActivity {
-  return {
-    ...(s.completionToken ? { completionToken: s.completionToken } : {}),
-    ...(s.completionNotification ? { completionNotification: s.completionNotification } : {}),
-    ...projectSessionActivity({
-      sessionId: s.sessionId,
-      recordStatus: 'active',
-      title: s.title,
-      source: 'live',
-      livePhase: s.phase,
-      startedAtMs: s.startedAt,
-      lastActivityAtMs: s.lastActivityAt,
-      currentActionSummary: safeSessionActionSummary(s),
-      interactionKind: s.interactionKind,
-      attention: s.attention,
-    }),
-    phase: s.phase,
-    interactionKind: s.interactionKind,
-    // 完成后这份摘要只给其它设备的完成卡片用(本机岛面直接读展示快照)。
-    compactDetail: s.phase === 'completed' ? completedReplySummary(s) : s.compactDetail,
-    summaryFormat: 'plain-text',
-    workingPhase: s.workingPhase,
-  };
-}
-
 function canonicalSessionActivity(
   activity: AgentIslandSessionActivity,
 ): SessionActivitySnapshot {
@@ -472,7 +445,13 @@ export class AgentIslandService {
    * 控件」的入口用(群专线、只读历史、不可用的委派任务):renderer 在目标地址真正提交后
    * 带上这次的点击编号调 consumeIslandEntryAlert,编号与卡片身份都一致才按 explicit 处置。
    */
-  private islandEntryAlert: { sessionId: string; entryId: string; stamp: string; until: number } | null = null;
+  private islandEntryAlert: {
+    sessionId: string;
+    entryId: string;
+    stamp: string;
+    until: number;
+    targetWebContents: WebContents | null;
+  } | null = null;
   private islandEntrySequence = 0;
   private readonly userPromptRollbackTokens = new Map<string, {
     state: AgentIslandUserPromptRollbackToken;
@@ -482,7 +461,7 @@ export class AgentIslandService {
     wasReplacementTurnPending: boolean;
     wasReplacementTurnDispatching: boolean;
   }>();
-  private readonly deferredCompletions = new Map<string, { event: AgentEvent; suppressAttention: boolean }>();
+  private readonly deferredCompletions = new DeferredSessionCompletions(id => this.shouldDeferCompletion?.(id) === true);
   private readonly deferredRemoteAuthErrors = new Map<string, {
     meta: AgentIslandSessionMeta;
     event: AgentEvent;
@@ -565,10 +544,8 @@ export class AgentIslandService {
    * (之前因推迟判定成立而被压住),且现在推迟判定已不成立,则立即补发。
    */
   notifyQueueEmptied(sessionId: string): void {
-    const deferred = this.deferredCompletions.get(sessionId);
+    const deferred = this.deferredCompletions.takeIfReady(sessionId);
     if (!deferred) return;
-    if (this.shouldDeferCompletion?.(sessionId) === true) return;
-    this.deferredCompletions.delete(sessionId);
     const { event, suppressAttention } = deferred;
     if (suppressAttention) {
       // 延后完成已被标记为「应压制注意力」:silencedSessionRunIds 可能已被清除,
@@ -687,6 +664,9 @@ export class AgentIslandService {
         return { ok: true };
       }
       const nextSessionId = parseVisibleSessionPayload(sessionId);
+      if (isSecondaryAppWindow(sourceWindow)) {
+        updateSecondaryWindowVisibleSessions(sourceWindow, nextSessionId);
+      }
       if (!sourceWindow.isFocused() && !isAgentIslandPendingFocusAck(this.state, nextSessionId)) {
         return { ok: true };
       }
@@ -708,9 +688,12 @@ export class AgentIslandService {
 
     ipcMain.handle(AGENT_ISLAND_CONSUME_ENTRY_ALERT_CHANNEL, (event, rawSessionId: unknown, rawEntryId: unknown) => {
       assertTrustedAppRendererEvent(event);
-      // 导航只发生在主窗;副窗也挂 MainLayout 级组件,不能替主窗处置提醒。
+      // 只有本次灵动岛点击命中的主窗或副窗才能处置对应提醒，其它窗口不得代为消费。
       const mainWindow = this.deps.getMainWindow();
-      if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents !== event.sender) {
+      const senderWindow = BrowserWindow.fromWebContents(event.sender);
+      const isMainSender = Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents === event.sender);
+      const isSecondarySender = isSecondaryAppWindow(senderWindow);
+      if (!isMainSender && !isSecondarySender) {
         return { ok: true, consumed: false };
       }
       const sessionId = typeof rawSessionId === 'string' ? rawSessionId.trim() : '';
@@ -720,7 +703,7 @@ export class AgentIslandService {
       if (typeof rawEntryId !== 'string' || !rawEntryId || rawEntryId.length > MAX_ISLAND_ENTRY_ID_LENGTH) {
         throwIpcError('INVALID_PARAMS', 'entryId is invalid');
       }
-      return { ok: true, consumed: this.consumeIslandEntryAlert(sessionId, rawEntryId) };
+      return { ok: true, consumed: this.consumeIslandEntryAlert(sessionId, rawEntryId, Date.now(), event.sender) };
     });
 
     ipcMain.handle(AGENT_ISLAND_SET_ENABLED_CHANNEL, (_event, enabled: unknown) => {
@@ -880,8 +863,6 @@ export class AgentIslandService {
    * is on; it has no error presentation.
    */
   ownsTaskAlert(kind: 'done' | 'needs-reply' | 'error'): boolean {
-    // Keep the OS notification when this event has no enabled Cindy sound.
-    if (!hasAgentIslandNotificationSound(this.soundSettings, kind)) return false;
     if (this.hasIslandDisplay()) return true;
     return kind !== 'error' && this.deps.liveActivity?.ownsAlerts() === true;
   }
@@ -940,7 +921,7 @@ export class AgentIslandService {
     }
     for (const sessionId of result.baselineSessionIds) this.baselineSoundSessionIds.add(sessionId);
     if (result.changed) this.publish();
-    // ownsTaskAlert covers the island itself; only events it will not sound for reach the OS.
+    // ownsTaskAlert covers the visible island and Live Activity; only unhandled events reach the OS.
     for (const event of result.events) {
       if (this.ownsTaskAlert(event.kind)) continue;
       try {
@@ -1221,18 +1202,17 @@ export class AgentIslandService {
     this.prunePermissionRequestsForAgentEvent(hydrated.sessionId, event);
     if (
       isCompletionDoneEvent(event) &&
-      this.shouldDeferCompletion?.(hydrated.sessionId) === true &&
       // Thread 2 fix: silenced completions carry no attention/sound regardless of
       // queue state, so there is no need to defer them — apply with no-attention
       // immediately. Linger 只挂 scheduler 的 completed && silenced;中间 agent done
       // 不得开 linger,否则续 turn 会清掉标记。这里仍跳过 defer,免得 completed 先到
       // 排了 linger 后,队列排空重放时标记已退场、被当成普通完成。
-      !this.isCompletionEventSilenced(hydrated.sessionId, event)
+      !this.isCompletionEventSilenced(hydrated.sessionId, event) &&
+      this.deferredCompletions.deferIfPending(hydrated.sessionId, event)
     ) {
       if (event.type === 'done') {
         this.deletePermissionRequestsForSession(hydrated.sessionId);
       }
-      this.deferredCompletions.set(hydrated.sessionId, { event, suppressAttention: false });
       this.clearStreamingPreviewPublishTimer();
       this.publish();
       return;
@@ -1310,10 +1290,7 @@ export class AgentIslandService {
       // 防止队列排空后 notifyQueueEmptied 重放时 silencedSessionRunIds 已被清除、
       // 误触发 reveal/sound。
       if (event.sessionId) {
-        const deferred = this.deferredCompletions.get(event.sessionId);
-        if (deferred) {
-          this.deferredCompletions.set(event.sessionId, { ...deferred, suppressAttention: true });
-        }
+        this.deferredCompletions.suppressAttention(event.sessionId);
       }
       this.scheduleSilencedRunClear(event.runId, SILENCED_COMPLETION_CLEAR_MS);
       if (changed) this.publish();
@@ -1562,8 +1539,8 @@ export class AgentIslandService {
   }
 
   /**
-   * 「消息免打扰」发生变化:只影响展示面(岛面 / 菜单栏 / 提示音)。重发一次即可 ——
-   * 抑制集合在 publish() 里从同步索引重新对齐。静音任务的 Agent 事件仍照常进状态机,
+   * 通知策略发生变化(消息免打扰 / 标记为 Worker):只影响展示面(岛面 / 菜单栏 / 提示音)。
+   * 重发一次即可 —— 抑制集合在 publish() 里从同步索引重新对齐。Agent 事件仍照常进状态机,
    * 侧栏卡片的实时活动、等待交互态与远端活动镜像不受影响。
    */
   handleNotificationMuteChanged(): void {
@@ -1585,8 +1562,7 @@ export class AgentIslandService {
 
   /**
    * @param options.reason
-   *   `'discarded'`(默认)= 这条记录不该再存在(会话归档 / 删除、Orca worker 被策略
-   *   清除),条目硬删。
+   *   `'discarded'`(默认)= 这条记录不该再存在(会话归档 / 删除),条目硬删。
    *   `'process-closed'` = 只是 agent 进程收了(典型:临时会话调度 run 终态后的
    *   closeSession),仍在展示的完成 / 错误卡片必须留着走完 dwell,否则刚弹出的卡片会
    *   当场消失。见 `closeAgentIslandSessionPreservingUnread`。
@@ -1795,10 +1771,10 @@ export class AgentIslandService {
 
   /**
    * 按需重放当前会话活动快照。`emit` 由调用方(bootstrap)注入定向 sink 时,
-   * 快照只投给刚完成 sessions 订阅的那一台控制端;不传则沿默认广播通道扇出。
+   * 快照只投给刚完成列表或共享任务订阅的控制端;不传则沿默认广播通道扇出。
    */
-  replaySessionActivity(emit?: (payload: SessionActivityPayload) => void): void {
-    this.sessionActivityRelay.replay(this.buildSessionActivityPayload(), emit);
+  replaySessionActivity(emit?: (payload: SessionActivityPayload) => void, sessionId?: string): void {
+    this.sessionActivityRelay.replay(this.notificationActivity(this.buildSessionActivityPayload()), emit, sessionId);
   }
 
   /**
@@ -2121,7 +2097,7 @@ export class AgentIslandService {
   private foregroundRevision = 0;
 
   getForegroundTaskActivity() {
-    const summary = projectHostTaskActivity(this.getLocalTaskActivitySnapshots());
+    const summary = projectHostTaskActivity(this.getLocalTaskOverview());
     const key = JSON.stringify(summary);
     if (key !== this.foregroundSummaryKey) {
       this.foregroundSummaryKey = key;
@@ -2132,6 +2108,11 @@ export class AgentIslandService {
 
   getLocalTaskActivitySnapshots(): AgentIslandSessionSnapshot[] {
     return buildAllSessionActivitySnapshots(this.state);
+  }
+
+  /** This computer's share of the island counts; the phone island adds these per computer. */
+  getLocalTaskOverview(): AgentIslandSessionSnapshot[] {
+    return buildLocalAgentIslandTaskOverview(this.state, Date.now(), this.companionChatProjections());
   }
 
   /** Read the same canonical snapshot used by sidebar and device-list relays. */
@@ -2253,7 +2234,7 @@ export class AgentIslandService {
 
   private emitSessionActivityToRenderer(): void {
     const payload = this.buildSessionActivityPayload();
-    this.sessionActivityRelay.publish(payload);
+    this.sessionActivityRelay.publish(this.notificationActivity(payload));
     this.emitSessionActivityTransitions(payload, Date.now());
     this.notifySessionActivityConsumer(this.buildProcessLocalActivityPayload(payload));
     // 广播给所有 app content window(含「在新窗口打开」的副窗),不只主窗 —— 副窗也有侧栏、
@@ -2276,8 +2257,14 @@ export class AgentIslandService {
     }
   }
 
+  /** Keep old controllers' notification stream unchanged; diagnostic reads retain all activity. */
+  private notificationActivity(activity: readonly AgentIslandSessionActivity[]): AgentIslandSessionActivity[] {
+    return activity.filter(item =>
+      shouldNotifyAgentIslandForSession(AGENT_ISLAND_DISPLAY_CONFIG, isKnownOrcaWorkerSession(item.sessionId)));
+  }
+
   /**
-   * 把「消息免打扰」从同步索引对齐到展示面抑制集合。放在每次 publish 的开头：账号
+   * 把消息免打扰与 Worker 通知策略对齐到展示面抑制集合。放在每次 publish 的开头：账号
    * 切换、索引重载、直接改库都能自愈，不靠某一条写库路径记得来登记。
    */
   private syncDisplaySuppression(): void {
@@ -2287,7 +2274,10 @@ export class AgentIslandService {
       setAgentIslandSessionDisplaySuppressed(
         this.state,
         sessionId,
-        session.sourceDeviceId === null && isSessionNotificationsMutedSync(sessionId),
+        session.sourceDeviceId === null && (
+          isSessionNotificationsMutedSync(sessionId)
+          || !shouldNotifyAgentIslandForSession(AGENT_ISLAND_DISPLAY_CONFIG, isKnownOrcaWorkerSession(sessionId))
+        ),
       );
     }
   }
@@ -3122,13 +3112,64 @@ export class AgentIslandService {
       // Navigation never acknowledges a group: reading the destination updates the server read position.
       requestAgentIslandManualCollapse(this.state, Date.now());
       this.publish();
+      const secondaryGroup = findSecondaryWindowForGroupChat({ groupId: group.input.groupId });
+      if (secondaryGroup) {
+        this.raiseWindowIfNeeded(secondaryGroup.window);
+        const payload = {
+          type: 'chat-message' as const,
+          groupId: group.input.groupId,
+          messageId: group.input.messageId,
+          ...(group.input.threadRootId ? { threadRootId: group.input.threadRootId } : {}),
+        };
+        if (secondaryGroup.isBooting) {
+          queueSecondaryWindowBootGroupNavigation(
+            secondaryGroup.window,
+            { groupId: group.input.groupId },
+            (win) => {
+              sendWindowDeepLink(win, payload);
+            },
+          );
+        } else {
+          sendWindowDeepLink(secondaryGroup.window, payload);
+        }
+        return;
+      }
       openMainWindowChatMessage(group.input.groupId, group.input.messageId, group.input.threadRootId);
       return;
     }
     const now = Date.now();
-    const islandEntryId = this.recordIslandEntryAlert(nextSessionId, now);
+    const companionEntry = this.companionChats.get(nextSessionId);
     const deviceId = this.state.sessions.get(nextSessionId)?.sourceDeviceId
-      ?? this.companionChats.get(nextSessionId)?.input.deviceId;
+      ?? companionEntry?.input.deviceId;
+    const secondarySession = findSecondaryWindowForSession({
+      sessionId: nextSessionId,
+      deviceId,
+      companion: companionEntry
+        ? { botId: companionEntry.input.botId, deviceId: companionEntry.input.deviceId }
+        : null,
+    });
+    if (secondarySession) {
+      const islandEntryId = this.recordIslandEntryAlert(nextSessionId, now, secondarySession.window.webContents);
+      const target = { ...(islandEntryId ? { islandEntryId } : {}), ...(deviceId ? { deviceId } : {}) };
+      this.playConfiguredSound('select', now);
+      const focusChanged = requestAgentIslandSessionFocus(this.state, nextSessionId, now);
+      if (focusChanged) this.publish();
+      this.raiseWindowIfNeeded(secondarySession.window);
+      if (secondarySession.matchKind === 'navigate') {
+        sendWindowDeepLink(secondarySession.window, {
+          type: 'session',
+          id: nextSessionId,
+          ...target,
+        });
+      }
+      return;
+    }
+    const mainWindow = this.deps.getMainWindow();
+    const islandEntryId = this.recordIslandEntryAlert(
+      nextSessionId,
+      now,
+      mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null,
+    );
     const target = { ...(islandEntryId ? { islandEntryId } : {}), ...(deviceId ? { deviceId } : {}) };
     this.playConfiguredSound('select', now);
     if (this.state.appFocused && this.state.visibleSessionIds.has(nextSessionId)) {
@@ -3146,6 +3187,16 @@ export class AgentIslandService {
     // renderer reloads and restores macOS app focus. A one-shot notification
     // sent during loading is lost before MainLayout can acknowledge the task.
     openMainWindowSession(nextSessionId, Object.keys(target).length ? target : undefined);
+  }
+
+  private raiseWindowIfNeeded(win: BrowserWindow): void {
+    if (win.isDestroyed()) return;
+    const alreadyFrontAndFocused =
+      win.isFocused() &&
+      (typeof win.isVisible !== 'function' || win.isVisible()) &&
+      (typeof win.isMinimized !== 'function' || !win.isMinimized());
+    if (alreadyFrontAndFocused) return;
+    focusAppWindow(win);
   }
 
   private readonly completionActionsPending = new Set<string>();
@@ -3224,14 +3275,24 @@ export class AgentIslandService {
   }
 
   /** 记下这次点击并取代之前的任何一次;被点的卡不是未读完成 / 报错时不留可处置记录。 */
-  private recordIslandEntryAlert(sessionId: string, now: number): string | null {
+  private recordIslandEntryAlert(
+    sessionId: string,
+    now: number,
+    targetWebContents: WebContents | null = null,
+  ): string | null {
     const stamp = readAgentIslandUnreadTerminalStamp(this.state, sessionId);
     if (!stamp) {
       this.islandEntryAlert = null;
       return null;
     }
     const entryId = String(++this.islandEntrySequence);
-    this.islandEntryAlert = { sessionId, entryId, stamp, until: now + ISLAND_ENTRY_ALERT_TTL_MS };
+    this.islandEntryAlert = {
+      sessionId,
+      entryId,
+      stamp,
+      until: now + ISLAND_ENTRY_ALERT_TTL_MS,
+      targetWebContents,
+    };
     return entryId;
   }
 
@@ -3242,9 +3303,15 @@ export class AgentIslandService {
    * 收掉,重打点也唤不回这张卡;按 cindy-bots-runtime.md 6.2 的合同,任务记录、失败状态与
    * 错误行都不动 —— 错误尾行派生的侧栏红点在报错被横幅 / 重试真正处理前仍会如实出现。
    */
-  consumeIslandEntryAlert(sessionId: string, entryId: string, now = Date.now()): boolean {
+  consumeIslandEntryAlert(
+    sessionId: string,
+    entryId: string,
+    now = Date.now(),
+    sender?: WebContents,
+  ): boolean {
     const entry = this.islandEntryAlert;
     if (!entry || entry.sessionId !== sessionId || entry.entryId !== entryId) return false;
+    if (sender && entry.targetWebContents && entry.targetWebContents !== sender) return false;
     this.islandEntryAlert = null;
     if (entry.until <= now) return false;
     if (readAgentIslandUnreadTerminalStamp(this.state, sessionId) !== entry.stamp) return false;

@@ -966,8 +966,8 @@ function GhostCardCanvas({
   };
 
   /** 输入面板发送:非空文字 → 锁源按钮 + 派发带 prompt 的 card-action。 */
-  const submitPrompt = (): void => {
-    const text = promptText.trim();
+  const submitPrompt = (overrideText?: string): void => {
+    const text = (overrideText ?? promptText).trim();
     if (!text || !promptAsk) return;
     const el = promptSourceElRef.current;
     if (el) lockActionEl(el);
@@ -1337,7 +1337,8 @@ export function GhostToolCard({
         >
           {toolName ? (
             <div
-              className="mb-1 inline-block rounded px-1.5 py-px font-mono text-10"
+              // design: intrinsic-geometry — 行内代码，与 Markdown 行内代码同为 6px（DESIGN.md §5 内容排版）
+              className="mb-1 inline-block rounded-[6px] px-1.5 py-px font-mono text-10"
               style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
             >
               {toolName}

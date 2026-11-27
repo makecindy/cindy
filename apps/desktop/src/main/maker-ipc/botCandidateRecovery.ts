@@ -1,5 +1,10 @@
 import { isContextOverflowErrorMessage, isNetworkishErrorMessage, isOverloadErrorMessage, UPSTREAM_STREAM_INTERRUPTED_REASON } from '@cindy/maker-core';
-import { extractNonSecretErrorSignals, matchesDeterministicUsageExhaustionText } from '@cindy/maker-shared/error-redaction';
+import {
+  extractNonSecretErrorSignals,
+  isAccountUsageLimitReachedText,
+  isProviderSafetyRefusalError,
+  matchesDeterministicUsageExhaustionText,
+} from '@cindy/maker-shared/error-redaction';
 import { isAcceptedTurnContinuationOnlyReason, isRemoteAgentRouteLostReason, type InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
 import { isBillingDepletionError } from '../../shared/usageLimitRecovery.js';
 
@@ -26,18 +31,33 @@ export function isBotCandidateUnavailable(signals: InterruptedTurnErrorSignals):
   // turn. An owner disconnect is `user-revoked`, not this.
   if (isRemoteAgentRouteLostReason(signals.reason)) return true;
   const reason = signals.reason ?? '';
+  const tag = signals.sdkError ?? '';
+  const message = signals.message ?? '';
+  if (
+    signals.codexErrorInfo === 'cyberPolicy' ||
+    signals.codexErrorInfo === 'misalignmentPolicyViolation' ||
+    tag === 'content_filter' ||
+    isProviderSafetyRefusalError(message, reason)
+  ) {
+    return false;
+  }
   // Explicit product/control failures must never be reinterpreted from their text.
   if (reason && !PROVIDER_TURN_FAILURE_REASONS.has(reason)) return false;
   // Exhaustion forbids retrying this account, not trying the user's configured
   // backups. The caller requires a successful route change before resuming.
   if (signals.codexErrorInfo === 'sessionBudgetExceeded') return false;
-  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded' || isBillingDepletionError(signals)
-      || matchesDeterministicUsageExhaustionText(signals.message ?? '')) return true;
+  if (
+    signals.usageLimit === true ||
+    signals.codexErrorInfo === 'usageLimitExceeded' ||
+    signals.codexErrorInfo === 'rateLimitExceeded' ||
+    isBillingDepletionError(signals) ||
+    matchesDeterministicUsageExhaustionText(message)
+  ) {
+    return true;
+  }
   if (reason && reason !== 'turn-failed' && reason !== 'acp-request-failed') return true;
-  const tag = signals.sdkError ?? '';
   if (['authentication_failed', 'authentication_error', 'rate_limit', 'server_error', 'billing_error',
     'model_not_found', 'user_model_access_denied', 'agent_start_failed'].includes(tag)) return true;
-  const message = signals.message ?? '';
   if (/user (?:denied|rejected)|approval (?:denied|required)|context.{0,20}(?:overflow|too long)|prompt too long/i.test(message)) return false;
   if ([401, 402, 403, 429, 500, 502, 503, 504, 529].includes(signals.errorStatus ?? 0)) return true;
   if (/permission denied/i.test(message)) return false;
@@ -77,12 +97,44 @@ const MODEL_GROUP_AUTH_TEXT = /invalid (?:api[ _-]?key|token|x-api-key|access to
 const MODEL_GROUP_REJECTED_REQUEST_TEXT = /user (?:denied|rejected|cancelled|canceled)|approval (?:denied|required)|prompt too long|context.{0,20}(?:overflow|too long)|content[_ -](?:filter(?:ed)?|policy[_ -]violation)|invalid[_ -]request|request[_ -]too[_ -]large/i;
 const MODEL_GROUP_UNAVAILABLE_TEXT = /model.{0,80}(?:not found|does not exist|unavailable)|(?:failed to (?:start|spawn)|could not start) (?:the )?(?:agent|pi|codex|claude)/i;
 
+/**
+ * `extractNonSecretErrorSignals` sets `usageLimit: true` on transient 429 / rate-limit
+ * envelopes as well as account quota exhaustion. Keep transient rate limits in the
+ * model-group `transient` bucket (two same-source retries, then switch without marking
+ * the whole connection unavailable) while preserving bare `{ usageLimit: true }` and
+ * explicit account/session/budget exhaustion as `connection`.
+ */
+function isTransientRateLimitOnly(signals: InterruptedTurnErrorSignals, message: string): boolean {
+  const reason = signals.reason ?? '';
+  if (
+    signals.codexErrorInfo === 'usageLimitExceeded' ||
+    signals.usageResetAt !== undefined ||
+    reason === 'acp-usage-limit' ||
+    reason === 'provider_quota_limit' ||
+    isModelGroupConnectionOutOfCredit(signals) ||
+    matchesDeterministicUsageExhaustionText(message) ||
+    isAccountUsageLimitReachedText(message) ||
+    /\[SUBSCRIPTION_(?:ACCOUNT|POOL_MODEL)_LIMITED\]/i.test(message)
+  ) {
+    return false;
+  }
+  const status = signals.errorStatus ?? leadingHttpStatus(message);
+  return (
+    signals.codexErrorInfo === 'rateLimitExceeded' ||
+    reason === 'provider_rate_limit' ||
+    signals.sdkError === 'rate_limit' ||
+    status === 429 ||
+    /\b(?:rate[\s_-]?limit(?:ed|s|ing|_exceeded|_error)?|too\s+many\s+requests)\b/i.test(message)
+  );
+}
+
 export function modelGroupFailureScope(input: InterruptedTurnErrorSignals): ModelGroupFailureScope | null {
   const reason = input.reason ?? '';
   const tag = input.sdkError ?? '';
   if (input.toolLoop || input.outputLimit ||
-    ['sessionBudgetExceeded', 'contextWindowExceeded', 'cyberPolicy'].includes(input.codexErrorInfo ?? '') ||
-    ['invalid_request', 'invalid_request_error', 'context_length_exceeded', 'content_filter'].includes(tag)) return null;
+    ['sessionBudgetExceeded', 'contextWindowExceeded', 'cyberPolicy', 'misalignmentPolicyViolation'].includes(input.codexErrorInfo ?? '') ||
+    ['invalid_request', 'invalid_request_error', 'context_length_exceeded', 'content_filter'].includes(tag) ||
+    isProviderSafetyRefusalError(input.message ?? '', reason)) return null;
   if (reason === 'acp-usage-limit') return 'connection';
   if (isRemoteAgentRouteLostReason(reason)) return 'model';
   if (reason === UPSTREAM_STREAM_INTERRUPTED_REASON || isAcceptedTurnContinuationOnlyReason(reason)) return 'transient';
@@ -94,14 +146,18 @@ export function modelGroupFailureScope(input: InterruptedTurnErrorSignals): Mode
   if ([400, 413, 422].includes(status ?? 0) ||
     isContextOverflowErrorMessage(message) || MODEL_GROUP_REJECTED_REQUEST_TEXT.test(message)) return null;
   const signals = status !== undefined && input.errorStatus === undefined ? { ...input, errorStatus: status } : input;
+  const accountUsageLimit = signals.usageLimit === true && !isTransientRateLimitOnly(signals, message);
   if (isModelGroupConnectionOutOfCredit(signals)
-    || signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded'
+    || accountUsageLimit || signals.codexErrorInfo === 'usageLimitExceeded'
     || matchesDeterministicUsageExhaustionText(message)
     || ['provider_quota_limit', 'provider_auth_or_access', 'acp-auth-required'].includes(reason)
     || ['authentication_failed', 'authentication_error', 'billing_error'].includes(tag)
     || signals.errorStatus === 401
     || MODEL_GROUP_AUTH_TEXT.test(message)
-    || /missing bearer token|no available oauth accounts|\byou['’]ve hit your session limit\b/i.test(message)) {
+    || /missing bearer token|no available oauth accounts|\byou['’]ve hit your session limit\b/i.test(message)
+    // 供应商里的账号池没有能接的账号(都撞了额度、都不可用或都满了)：换账号已经轮不到，交给路由换来源(§4.1)。
+    // OpenAI 的账号池只给一句普通的话，原来落到「原地再试」，同一个来源白试两次才换(2026-11-26 排查)。
+    || /\[SUBSCRIPTION_(?:ACCOUNT_LIMITED|POOL_MODEL_LIMITED|ACCOUNT_UNAVAILABLE|ACCOUNTS_FULL)\]|\bno subscription account is available\b/i.test(message)) {
     return 'connection';
   }
   if (['model_unavailable', 'user_model_access_denied', 'agent-start-failed', 'acp-agent-exited', 'pi-gateway-drop',
@@ -129,13 +185,16 @@ export type ModelGroupSwitchCause = 'usage-limit' | 'auth' | 'unavailable' | 'ov
 export function modelGroupSwitchCause(signals: InterruptedTurnErrorSignals, scope: ModelGroupFailureScope | null): ModelGroupSwitchCause {
   const reason = signals.reason ?? '';
   const tag = signals.sdkError ?? '';
-  if (signals.usageLimit === true || signals.codexErrorInfo === 'usageLimitExceeded' || reason === 'acp-usage-limit'
-    || reason === 'provider_quota_limit' || matchesDeterministicUsageExhaustionText(signals.message ?? '')) return 'usage-limit';
   const text = signals.message ?? (typeof signals.sdkError === 'string' ? signals.sdkError : '');
+  const accountUsageLimit = signals.usageLimit === true && !isTransientRateLimitOnly(signals, text);
+  if (accountUsageLimit || signals.codexErrorInfo === 'usageLimitExceeded' || reason === 'acp-usage-limit'
+    || reason === 'provider_quota_limit' || matchesDeterministicUsageExhaustionText(signals.message ?? '')
+    || isModelGroupConnectionOutOfCredit(signals)) return 'usage-limit';
   if (['provider_auth_or_access', 'acp-auth-required'].includes(reason) || ['authentication_failed', 'authentication_error'].includes(tag)
     || (signals.errorStatus ?? leadingHttpStatus(text)) === 401 || MODEL_GROUP_AUTH_TEXT.test(text)) return 'auth';
   if (scope === 'transient' &&
-    (['upstream-overload', 'provider_rate_limit', 'provider_server_error'].includes(reason) ||
+    (signals.codexErrorInfo === 'rateLimitExceeded' ||
+      ['upstream-overload', 'provider_rate_limit', 'provider_server_error'].includes(reason) ||
       [429, 500, 502, 503, 504, 529].includes(signals.errorStatus ?? leadingHttpStatus(text) ?? 0) ||
       ['rate_limit', 'server_error'].includes(tag) || isOverloadErrorMessage(text, signals.errorStatus))) return 'overload';
   if (isRemoteAgentRouteLostReason(signals.reason) || ['model_unavailable', 'user_model_access_denied', 'agent-start-failed'].includes(reason)

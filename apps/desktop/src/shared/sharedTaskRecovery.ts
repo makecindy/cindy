@@ -1,4 +1,4 @@
-import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
+import { isProviderSafetyRefusalError, parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { BREAKER_PROBE_BACKOFF_MAX_MS } from '@cindy/maker-shared/device-responsiveness';
 import { isQuotaExhaustedErrorMessage } from './providerErrors';
 
@@ -17,6 +17,7 @@ export function sharedTaskRecoveryReason(message: string): SharedTaskRecoveryRea
 }
 
 export function sharedTaskRecoveryFor(message: string, agentDeviceId?: string | null): SharedTaskRecoveryReason | undefined {
+  if (isProviderSafetyRefusalError(message)) return undefined;
   const detailed = sharedTaskRecoveryReason(message);
   if (detailed) return detailed;
   if (!agentDeviceId?.startsWith('share:')) return undefined;

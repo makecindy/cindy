@@ -132,6 +132,14 @@ export function isInFlightDeviceLinkError(err: unknown): boolean {
   return err instanceof DeviceLinkError && err.inFlight === true;
 }
 
+/** Local-only signal. The reliable sender has retained no business frame and wrote no fragment. */
+export class DeviceLinkUnsentInvokeError extends DeviceLinkError {
+  constructor() {
+    super('BACKPRESSURE', 'unsent invoke yielded to an available route');
+    this.inFlight = false;
+  }
+}
+
 // ─── 连接层 payload ───────────────────────────────────────────────────────────
 
 // ─── 隧道层 payload ───────────────────────────────────────────────────────────
