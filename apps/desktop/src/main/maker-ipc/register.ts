@@ -1225,6 +1225,7 @@ import {
 } from './orcaTeamService.js';
 import {
   agentDeviceCatalogFailure,
+  buildOrcaLeadSessionSnapshot,
   createOrcaWorkerCreationService,
   pickWorkerAgentDeviceId,
 } from './orcaWorkerCreationService.js';
@@ -17732,23 +17733,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         .where(eq(sessions.id, leadSessionId))
         .limit(1);
       if (!leadRow) return null;
-      const isAcpLead = leadRow.agentKind === 'acp';
-      return {
-        ...readLeadProviderGroupEntry(leadRow.id, leadRow.remoteHostId),
-        id: leadRow.id,
-        // 走引擎转换正本:pi / acp lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
-        // 判等失效,会导致内置 Worker 误继承插件引擎的 model/providerId,或 pi-lead 走错默认分支。
-        agentKind: dbToMakerEngineKind(leadRow.agentKind),
-        workspaceKind: leadRow.workspaceKind,
-        workingDir: leadRow.workingDir,
-        model: isAcpLead ? '' : leadRow.model,
-        effort: isAcpLead ? '' : leadRow.effort,
-        permissionMode: leadRow.permissionMode,
-        fastMode: isAcpLead ? false : (leadRow.fastMode ?? false),
-        providerId: isAcpLead ? null : (leadRow.providerId ?? null),
-        remoteHostId: leadRow.remoteHostId ?? null,
-        ...(leadRow.agentDeviceId && !leadRow.remoteHostId ? { agentDeviceId: leadRow.agentDeviceId } : {}),
-      };
+      return buildOrcaLeadSessionSnapshot(
+        {
+          id: leadRow.id,
+          // 走引擎转换正本:pi / acp lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
+          // 判等失效,会导致内置 Worker 误继承插件引擎的 model/providerId,或 pi-lead 走错默认分支。
+          agentKind: dbToMakerEngineKind(leadRow.agentKind),
+          workspaceKind: leadRow.workspaceKind,
+          workingDir: leadRow.workingDir,
+          model: leadRow.model,
+          effort: leadRow.effort,
+          permissionMode: leadRow.permissionMode,
+          fastMode: leadRow.fastMode,
+          providerId: leadRow.providerId,
+          remoteHostId: leadRow.remoteHostId,
+          agentDeviceId: leadRow.agentDeviceId,
+        },
+        readLeadProviderGroupEntry(leadRow.id, leadRow.remoteHostId),
+      );
     },
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
     modelGroupStart: modelGroupSessionStart,
