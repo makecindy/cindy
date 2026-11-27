@@ -1,4 +1,5 @@
 import { companionDragProps } from './companionDragProps';
+import { shouldOpenSearchResultInNewWindow } from '../cc-agent/sidebar/searchResultTaskMenuModel';
 import { Users } from 'lucide-react';
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -101,8 +102,25 @@ export function TeammateSearchResults({
         <button
           key={match.key}
           type="button" {...companionDragProps(match.route, match.name)}
-          onClick={() => {
+          onClick={(event) => {
+            if (shouldOpenSearchResultInNewWindow(event)) {
+              event.preventDefault();
+              const openInNewWindow = window.electronAPI?.maker?.openSessionInNewWindow;
+              if (openInNewWindow) {
+                void openInNewWindow(match.route);
+                onSelected?.();
+                return;
+              }
+            }
             navigate(match.route);
+            onSelected?.();
+          }}
+          onAuxClick={(event) => {
+            if (event.button !== 1) return;
+            const openInNewWindow = window.electronAPI?.maker?.openSessionInNewWindow;
+            if (!openInNewWindow) return;
+            event.preventDefault();
+            void openInNewWindow(match.route);
             onSelected?.();
           }}
           className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[var(--cmd-palette-item-hover)]"

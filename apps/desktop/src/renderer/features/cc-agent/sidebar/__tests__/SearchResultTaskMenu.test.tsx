@@ -28,27 +28,44 @@ import type {
   ConversationSearchSessionSummary,
   ConversationSearchStatusFilter,
 } from '../../../../../shared/conversationSearch';
-import { SearchResultsBody } from '../ConversationSearchBox';
+import {
+  ConversationSearchBox,
+  SearchResultsBody,
+  useConversationSearch,
+} from '../ConversationSearchBox';
+import { setSearchDraft } from '../conversationSearchDraft';
 import {
   buildFallbackSessionFromSearchSummary,
   CONVERSATION_SEARCH_KEEPALIVE_SELECTOR,
   createSearchResultTaskMenuActions,
 } from '../SearchResultTaskMenu';
+import {
+  SPLIT_GROUP_SESSION_LINK_MIME,
+  SPLIT_GROUP_SESSION_MIME,
+} from '../../splitGroupDnd';
 
 const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
+  searchConversations: vi.fn(),
   hostSharedTask: vi.fn(),
   accountSharedTask: vi.fn(),
   deviceLinkInvoke: vi.fn(),
   deviceLinkOpenLink: vi.fn(),
   deviceLinkCloseLink: vi.fn(),
   openSessionInNewWindow: vi.fn(),
+  openSessionInNewWindowIfDroppedOutside: vi.fn(),
+  beginSessionDragPreview: vi.fn(),
+  endSessionDragPreview: vi.fn(),
   worktreeRemovalPreview: vi.fn(),
   taskTagsExecute: vi.fn(),
   writeClipboard: vi.fn(),
   toastSuccess: vi.fn(),
   toastWarning: vi.fn(),
   toastError: vi.fn(),
+}));
+
+vi.mock('@/lib/conversationSearchService', () => ({
+  searchConversations: (...args: unknown[]) => mocks.searchConversations(...args),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -167,6 +184,7 @@ beforeEach(() => {
   __resetInstalledGhostsStoreForTest();
   resetTaskTagCatalogCache();
   remoteProjectsStore.clear();
+  setSearchDraft('');
   setDataOwnerGeneration('owner-1');
   vi.clearAllMocks();
 
@@ -176,10 +194,20 @@ beforeEach(() => {
   mocks.deviceLinkOpenLink.mockResolvedValue(undefined);
   mocks.deviceLinkCloseLink.mockResolvedValue(undefined);
   mocks.openSessionInNewWindow.mockResolvedValue(undefined);
+  mocks.openSessionInNewWindowIfDroppedOutside.mockResolvedValue(false);
+  mocks.beginSessionDragPreview.mockResolvedValue(undefined);
+  mocks.endSessionDragPreview.mockReturnValue(undefined);
   mocks.worktreeRemovalPreview.mockResolvedValue({ hasWorktree: false, dirty: false });
   mocks.taskTagsExecute.mockResolvedValue({ tags: [], sessions: [] });
   mocks.writeClipboard.mockResolvedValue(undefined);
   mocks.getSession.mockResolvedValue(null);
+  mocks.searchConversations.mockResolvedValue({
+    query: '',
+    results: [],
+    vectorUsed: false,
+    vectorSkipReason: null,
+    poolCapped: false,
+  });
 
   Object.defineProperty(navigator, 'clipboard', {
     configurable: true,
@@ -191,6 +219,9 @@ beforeEach(() => {
       worktreeRemovalPreview: mocks.worktreeRemovalPreview,
       maker: {
         openSessionInNewWindow: mocks.openSessionInNewWindow,
+        openSessionInNewWindowIfDroppedOutside: mocks.openSessionInNewWindowIfDroppedOutside,
+        beginSessionDragPreview: mocks.beginSessionDragPreview,
+        endSessionDragPreview: mocks.endSessionDragPreview,
       },
       sharedTask: {
         host: mocks.hostSharedTask,
@@ -675,5 +706,380 @@ describe('SearchResultTaskMenu', () => {
     fireEvent.click(await screen.findByRole('menuitem', { name: 'exportShare' }));
     const exportDialog = await screen.findByRole('alertdialog');
     expect(exportDialog.closest(CONVERSATION_SEARCH_KEEPALIVE_SELECTOR)).not.toBeNull();
+  });
+
+  it('opens search rows and nested hits in a new window on Cmd/Ctrl-click and middle-click with platform and remote gates', async () => {
+    const navigate = vi.fn();
+    const pinSpy = vi.spyOn(remoteProjectsStore, 'pinSessionOrigin');
+    const hit1 = {
+      messageId: 'msg-1',
+      messageClientId: 'client-1',
+      role: 'assistant' as const,
+      createdAt: '2026-09-01T10:00:00.000Z',
+      snippet: null,
+      preview: 'First matching snippet',
+      score: 1,
+      ftsRank: 1,
+      vectorRank: null,
+    };
+    const hit2 = {
+      messageId: 'msg-2',
+      messageClientId: 'client-2',
+      role: 'user' as const,
+      createdAt: '2026-09-01T10:05:00.000Z',
+      snippet: null,
+      preview: 'Second matching snippet',
+      score: 0.9,
+      ftsRank: 2,
+      vectorRank: null,
+    };
+    const localItem = makeResult(
+      { id: 'task-jump', title: 'Deploy jump target' },
+      { matchKind: 'both', contentHit: hit1, contentHits: [hit1, hit2] },
+    );
+    const onlineRemote = makeResult({
+      id: 'remote-online',
+      title: 'Deploy remote online',
+      deviceLinkDeviceId: 'dev-online',
+      deviceLinkDeviceName: 'Studio',
+    });
+    const offlineRemote = makeResult({
+      id: 'remote-offline',
+      title: 'Deploy remote offline',
+      deviceLinkDeviceId: 'dev-offline',
+      deviceLinkDeviceName: 'Offline Box',
+    });
+    const sharedPeer = sharedTaskHostPeer('share-2', 'dev-host');
+    const sharedGuest = makeResult({
+      id: 'remote-shared',
+      title: 'Deploy shared guest',
+      deviceLinkDeviceId: sharedPeer,
+      deviceLinkDeviceName: 'Host Mac',
+    });
+
+    const liveByKey = new Map<string, Session>([
+      [':task-jump', buildFallbackSessionFromSearchSummary(localItem.session)],
+      ['dev-online:remote-online', buildFallbackSessionFromSearchSummary(onlineRemote.session, 'connected')],
+      ['dev-offline:remote-offline', buildFallbackSessionFromSearchSummary(offlineRemote.session, 'disconnected')],
+      [`${sharedPeer}:remote-shared`, buildFallbackSessionFromSearchSummary(sharedGuest.session, 'connected')],
+    ]);
+
+    function Harness() {
+      const search = useConversationSearch({
+        enabled: true,
+        navigate,
+        allKnownProjects: [],
+      });
+      const taskMenu = createSearchResultTaskMenuActions({
+        resolveSession: (summary) =>
+          liveByKey.get(`${summary.deviceLinkDeviceId ?? ''}:${summary.id}`) ?? null,
+        getRemoteConnectionStatus: (deviceId) =>
+          deviceId === 'dev-offline' ? 'disconnected' : 'connected',
+        onAction: vi.fn(),
+        onRename: vi.fn(),
+        onTogglePin: vi.fn(),
+      });
+      return (
+        <MemoryRouter>
+          <Tooltip.Provider>
+            <SearchResultsBody
+              trimmed="Deploy"
+              status="done"
+              results={[localItem, onlineRemote, offlineRemote, sharedGuest]}
+              taskMenu={taskMenu}
+              onSelect={search.handleSelect}
+            />
+          </Tooltip.Provider>
+        </MemoryRouter>
+      );
+    }
+
+    render(<Harness />);
+
+    const localRowButton = document.querySelector(
+      '[data-session-id="task-jump"] > button',
+    ) as HTMLButtonElement;
+    const hit2Button = screen.getByRole('button', { name: /Second matching snippet/ });
+
+    // macOS Cmd+Click on row header opens with primary hit anchor and does not navigate
+    fireEvent.click(localRowButton, { metaKey: true });
+    await waitFor(() =>
+      expect(mocks.openSessionInNewWindow).toHaveBeenLastCalledWith('task-jump', undefined, 'client-1'),
+    );
+    expect(navigate).not.toHaveBeenCalled();
+
+    // macOS Cmd+Click on nested hit #2 preserves hit #2's messageClientId
+    fireEvent.click(hit2Button, { metaKey: true });
+    await waitFor(() =>
+      expect(mocks.openSessionInNewWindow).toHaveBeenLastCalledWith('task-jump', undefined, 'client-2'),
+    );
+    expect(navigate).not.toHaveBeenCalled();
+
+    // Middle-click on nested hit also opens in a new window
+    fireEvent(hit2Button, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
+    await waitFor(() => expect(mocks.openSessionInNewWindow).toHaveBeenCalledTimes(3));
+    expect(navigate).not.toHaveBeenCalled();
+
+    // macOS Ctrl+Click stays normal navigation (does not open in new window)
+    fireEvent.click(localRowButton, { ctrlKey: true });
+    await waitFor(() => expect(navigate).toHaveBeenCalledTimes(1));
+    expect(mocks.openSessionInNewWindow).toHaveBeenCalledTimes(3);
+
+    // Connected remote Cmd+Click pins origin and passes deviceId
+    const onlineButton = document.querySelector(
+      '[data-session-id="remote-online"] > button',
+    ) as HTMLButtonElement;
+    fireEvent.click(onlineButton, { metaKey: true });
+    await waitFor(() =>
+      expect(mocks.openSessionInNewWindow).toHaveBeenLastCalledWith('remote-online', 'dev-online', null),
+    );
+    expect(pinSpy).toHaveBeenCalledWith('dev-online', 'remote-online');
+
+    // Offline remote and shared-task guest Cmd+Click warn instead of opening a new window
+    mocks.openSessionInNewWindow.mockClear();
+    const offlineButton = document.querySelector(
+      '[data-session-id="remote-offline"] > button',
+    ) as HTMLButtonElement;
+    fireEvent.click(offlineButton, { metaKey: true });
+    expect(mocks.toastWarning).toHaveBeenCalledWith('actionsUnavailable');
+    expect(mocks.openSessionInNewWindow).not.toHaveBeenCalled();
+
+    const sharedButton = document.querySelector(
+      '[data-session-id="remote-shared"] > button',
+    ) as HTMLButtonElement;
+    fireEvent.click(sharedButton, { metaKey: true });
+    expect(mocks.toastWarning).toHaveBeenCalledTimes(2);
+    expect(mocks.openSessionInNewWindow).not.toHaveBeenCalled();
+
+    // Windows/Linux Ctrl+Click opens in a new window
+    window.electronAPI.platform = 'win32';
+    navigate.mockClear();
+    fireEvent.click(localRowButton, { ctrlKey: true });
+    await waitFor(() =>
+      expect(mocks.openSessionInNewWindow).toHaveBeenLastCalledWith('task-jump', undefined, 'client-1'),
+    );
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('supports dragging search rows and nested hits to split panes or new windows and respects drag gates', async () => {
+    const pinSpy = vi.spyOn(remoteProjectsStore, 'pinSessionOrigin');
+    const hit = {
+      messageId: 'msg-drag',
+      messageClientId: 'client-drag',
+      role: 'assistant' as const,
+      createdAt: '2026-09-01T10:00:00.000Z',
+      snippet: null,
+      preview: 'Draggable hit snippet',
+      score: 1,
+      ftsRank: 1,
+      vectorRank: null,
+    };
+    const localItem = makeResult(
+      { id: 'task-drag', title: 'Deploy draggable task' },
+      { matchKind: 'both', contentHit: hit, contentHits: [hit] },
+    );
+    const remoteItem = makeResult({
+      id: 'remote-drag',
+      title: 'Deploy remote drag',
+      deviceLinkDeviceId: 'dev-drag',
+      deviceLinkDeviceName: 'Studio',
+    });
+    const workerItem = makeResult({
+      id: 'worker-no-drag',
+      title: 'Deploy worker',
+      orcaRole: 'worker',
+    });
+    const sharedGuest = makeResult({
+      id: 'shared-no-drag',
+      title: 'Deploy shared',
+      deviceLinkDeviceId: sharedTaskHostPeer('share-3', 'dev-host'),
+      deviceLinkDeviceName: 'Host',
+    });
+
+    renderSearchResults({
+      results: [localItem, remoteItem, workerItem, sharedGuest],
+      liveSessions: [
+        buildFallbackSessionFromSearchSummary(localItem.session),
+        buildFallbackSessionFromSearchSummary(remoteItem.session, 'connected'),
+        buildFallbackSessionFromSearchSummary(workerItem.session),
+        buildFallbackSessionFromSearchSummary(sharedGuest.session, 'connected'),
+      ],
+      remoteStatuses: { 'dev-drag': 'connected' },
+    });
+
+    const createDataTransfer = (dropEffect = 'none') => {
+      const values = new Map<string, string>();
+      return {
+        values,
+        dataTransfer: {
+          effectAllowed: '',
+          dropEffect,
+          clearData: () => values.clear(),
+          setData: (type: string, value: string) => values.set(type, value),
+          setDragImage: vi.fn(),
+        },
+      };
+    };
+
+    // 1. Dragging local row header writes split + link payloads and calls outside-drop check on dragEnd
+    const localButton = document.querySelector(
+      '[data-session-id="task-drag"] > button',
+    ) as HTMLButtonElement;
+    expect(localButton.getAttribute('draggable')).toBe('true');
+    expect(localButton.getAttribute('data-split-group-drag-source')).toBe('true');
+
+    const localDt = createDataTransfer('none');
+    fireEvent.pointerDown(localButton.querySelector('span') ?? localButton);
+    fireEvent.dragStart(localButton, { dataTransfer: localDt.dataTransfer });
+    // Tip must stay mounted during dragStart so Chromium never aborts the native drag gesture
+    expect(document.querySelector('[data-session-id="task-drag"] > button')).toBe(localButton);
+    expect(localButton.getAttribute('data-session-dragging')).toBe('true');
+    expect(localDt.values.get(SPLIT_GROUP_SESSION_MIME)).toBe('task-drag');
+    expect(localDt.values.get(SPLIT_GROUP_SESSION_LINK_MIME)).toBe(buildSessionDeepLink('task-drag'));
+    expect(mocks.beginSessionDragPreview).toHaveBeenCalledWith(
+      'Deploy draggable task',
+      'task-drag',
+      undefined,
+      expect.any(Object),
+    );
+    fireEvent.dragEnd(localButton, { dataTransfer: localDt.dataTransfer });
+    expect(mocks.openSessionInNewWindowIfDroppedOutside).toHaveBeenLastCalledWith('task-drag', undefined);
+
+    // 2. Dragging nested content hit writes the same session payload
+    const hitButton = screen.getByRole('button', { name: /Draggable hit snippet/ });
+    expect(hitButton.getAttribute('draggable')).toBe('true');
+    expect(hitButton.getAttribute('data-split-group-drag-source')).toBe('true');
+    const hitDt = createDataTransfer('move');
+    fireEvent.dragStart(hitButton, { dataTransfer: hitDt.dataTransfer });
+    expect(hitDt.values.get(SPLIT_GROUP_SESSION_MIME)).toBe('task-drag');
+    fireEvent.dragEnd(hitButton, { dataTransfer: hitDt.dataTransfer });
+    expect(mocks.openSessionInNewWindowIfDroppedOutside).toHaveBeenLastCalledWith('task-drag', undefined);
+
+    // 3. Dragging remote result pins origin and passes deviceId into link + outside-drop check
+    const remoteButton = document.querySelector(
+      '[data-session-id="remote-drag"] > button',
+    ) as HTMLButtonElement;
+    const remoteDt = createDataTransfer('none');
+    fireEvent.dragStart(remoteButton, { dataTransfer: remoteDt.dataTransfer });
+    expect(pinSpy).toHaveBeenCalledWith('dev-drag', 'remote-drag');
+    expect(remoteDt.values.get(SPLIT_GROUP_SESSION_MIME)).toBe('remote-drag');
+    expect(remoteDt.values.get(SPLIT_GROUP_SESSION_LINK_MIME)).toBe(
+      buildSessionDeepLink('remote-drag', { deviceId: 'dev-drag' }),
+    );
+    fireEvent.dragEnd(remoteButton, { dataTransfer: remoteDt.dataTransfer });
+    expect(mocks.openSessionInNewWindowIfDroppedOutside).toHaveBeenLastCalledWith(
+      'remote-drag',
+      'dev-drag',
+    );
+
+    // 4. Worker and shared-task guest rows are not draggable
+    const workerButton = document.querySelector(
+      '[data-session-id="worker-no-drag"] > button',
+    ) as HTMLButtonElement;
+    expect(workerButton.getAttribute('draggable')).toBe('false');
+    expect(workerButton.getAttribute('data-split-group-drag-source')).toBeNull();
+
+    const sharedButton = document.querySelector(
+      '[data-session-id="shared-no-drag"] > button',
+    ) as HTMLButtonElement;
+    expect(sharedButton.getAttribute('draggable')).toBe('false');
+    expect(sharedButton.getAttribute('data-split-group-drag-source')).toBeNull();
+
+    // 5. Opening context menu or starting inline rename disables drag on the row
+    const localRow = document.querySelector('[data-session-id="task-drag"]') as HTMLElement;
+    fireEvent.contextMenu(localRow, { clientX: 50, clientY: 50 });
+    await screen.findByRole('menu');
+    expect(localButton.getAttribute('draggable')).toBe('false');
+    expect(localButton.getAttribute('data-split-group-drag-source')).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'rename' }));
+    expect(screen.getByRole('textbox')).toBeTruthy();
+    expect(hitButton.getAttribute('draggable')).toBe('false');
+  });
+
+  it('hides rail ConversationSearchBox popover transparently during drag, restores on cancel, and closes on in-window drop', async () => {
+    const item = makeResult({ id: 'rail-drag-task', title: 'Deploy from rail' });
+    mocks.searchConversations.mockResolvedValue({
+      query: 'Deploy',
+      results: [item],
+      vectorUsed: false,
+      vectorSkipReason: null,
+      poolCapped: false,
+    });
+
+    const rafCallbacks: FrameRequestCallback[] = [];
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      rafCallbacks.push(cb);
+      return rafCallbacks.length;
+    });
+    const cancelRafSpy = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+    const onOpenChange = vi.fn();
+
+    try {
+      render(
+        <MemoryRouter>
+          <Tooltip.Provider>
+            <ConversationSearchBox
+              navigate={vi.fn()}
+              allKnownProjects={[]}
+              allowedSessionIds={['rail-drag-task']}
+              hiddenProjectKeys={new Set()}
+              defaultOpen
+              onOpenChange={onOpenChange}
+            />
+          </Tooltip.Provider>
+        </MemoryRouter>,
+      );
+
+      const input = await screen.findByRole('textbox', { name: 'placeholder' });
+      fireEvent.change(input, { target: { value: 'Deploy' } });
+
+      const resultRow = await waitFor(() => {
+        const node = document.querySelector(
+          '[data-session-id="rail-drag-task"] > button',
+        ) as HTMLButtonElement | null;
+        expect(node).not.toBeNull();
+        return node!;
+      });
+
+      const popoverContent = resultRow.closest('[role="dialog"]') as HTMLElement;
+      expect(popoverContent).not.toBeNull();
+
+      const makeDt = (dropEffect: string) => {
+        const values = new Map<string, string>();
+        return {
+          effectAllowed: '',
+          dropEffect,
+          clearData: () => values.clear(),
+          setData: (type: string, value: string) => values.set(type, value),
+          setDragImage: vi.fn(),
+        };
+      };
+
+      // Drag start defers hiding by 1 animation frame so Chromium captures drag source cleanly
+      fireEvent.dragStart(resultRow, { dataTransfer: makeDt('none') });
+      expect(popoverContent.className).not.toContain('pointer-events-none');
+      act(() => {
+        while (rafCallbacks.length > 0) rafCallbacks.shift()!(16);
+      });
+      expect(popoverContent.className).toContain('pointer-events-none');
+      expect(popoverContent.className).toContain('opacity-0');
+
+      // Cancelled / outside drag (dropEffect = 'none') keeps popover open and restores visibility
+      fireEvent.dragEnd(resultRow, { dataTransfer: makeDt('none') });
+      expect(popoverContent.className).not.toContain('pointer-events-none');
+      expect(popoverContent.className).not.toContain('opacity-0');
+      expect(onOpenChange).not.toHaveBeenCalledWith(false);
+
+      // In-window drop (dropEffect = 'move') closes the rail popover cleanly
+      fireEvent.dragStart(resultRow, { dataTransfer: makeDt('move') });
+      act(() => {
+        while (rafCallbacks.length > 0) rafCallbacks.shift()!(32);
+      });
+      fireEvent.dragEnd(resultRow, { dataTransfer: makeDt('move') });
+      expect(onOpenChange).toHaveBeenCalledWith(false);
+    } finally {
+      rafSpy.mockRestore();
+      cancelRafSpy.mockRestore();
+    }
   });
 });

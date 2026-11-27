@@ -13,6 +13,8 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type DragEvent as ReactDragEvent,
+  type PointerEvent as ReactPointerEvent,
 } from 'react';
 import {
   Check,
@@ -33,13 +35,22 @@ import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
 import type { Session } from '@/lib/ccAgent.types';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { toast } from '@/lib/toast';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { SessionRenameInput } from '../SessionRenameInput';
+import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { getSessionDisplayTitle, toStoredSessionTitle } from '../lib/sessionDisplayTitle';
+import {
+  finishSessionDrag,
+  isSplitGroupDragSource,
+  startSessionDrag,
+} from '../splitGroupDnd';
 import {
   canOpenSearchResultTaskMenu,
   CONVERSATION_SEARCH_KEEPALIVE_SELECTOR,
+  shouldOpenSearchResultInNewWindow,
   useHydratedSearchSession,
+  type SearchResultSelectOptions,
   type SearchResultTaskMenuActions,
 } from './searchResultTaskMenuModel';
 import {
@@ -582,14 +593,31 @@ export function useConversationSearch({
     async (
       item: ConversationSearchResultItem,
       hitOverride?: ConversationSearchResultItem['contentHit'],
+      options?: SearchResultSelectOptions,
     ) => {
       try {
         const remoteDeviceId = item.session.deviceLinkDeviceId;
         if (remoteDeviceId) {
           remoteProjectsStore.pinSessionOrigin(remoteDeviceId, item.session.id);
         }
-        const baseRoute = standardSessionRoute(item.session.id, remoteDeviceId);
         const hit = hitOverride ?? item.contentHit;
+        if (options?.openInNewWindow) {
+          const openInNewWindow = window.electronAPI?.maker?.openSessionInNewWindow;
+          if (openInNewWindow) {
+            onResultChosen?.();
+            try {
+              await openInNewWindow(
+                item.session.id,
+                remoteDeviceId,
+                hit?.messageClientId ?? null,
+              );
+            } catch {
+              // Opening a secondary window is independent of search state; keep results intact.
+            }
+            return;
+          }
+        }
+        const baseRoute = standardSessionRoute(item.session.id, remoteDeviceId);
         // popover 形态:onResultChosen 关闭面板并通知托盘(SidebarActionBar 减 openChildCount),
         // 两种形态都保留 query。内联展开态不传 onResultChosen，
         // 结果 overlay 继续显示,用户可连续点开多条结果;只有点搜索区域以外才收起(见 conversationSearchContext)。
@@ -663,12 +691,18 @@ export function SearchResultsBody({
   poolCapped = false,
   taskMenu,
   statusFilter = 'all',
+  onDragSessionStart,
+  onDragSessionEnd,
 }: {
   poolCapped?: boolean;
   trimmed: string;
   status: 'idle' | 'searching' | 'done' | 'error';
   results: ConversationSearchResultItem[];
-  onSelect: (item: ConversationSearchResultItem, hit?: ConversationSearchResultItem['contentHit']) => void;
+  onSelect: (
+    item: ConversationSearchResultItem,
+    hit?: ConversationSearchResultItem['contentHit'],
+    options?: SearchResultSelectOptions,
+  ) => void;
   /** 结果列表滚动容器的高度约束(popover 传 max-h,内联铺满时省略)。 */
   maxHeightClass?: string;
   /** 排在会话结果之前的本地命中(伙伴 / 群聊);有命中时不显示「无结果」。 */
@@ -678,6 +712,9 @@ export function SearchResultsBody({
   taskMenu?: SearchResultTaskMenuActions;
   /** 当前搜索的状态筛选；归档或恢复后立即按该口径过滤结果。 */
   statusFilter?: ConversationSearchStatusFilter;
+  /** 拖拽开始/结束通知（供 rail Popover 在拖拽期间透明化并透传落点）。 */
+  onDragSessionStart?: () => void;
+  onDragSessionEnd?: (droppedInWindow: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [mutationState, setMutationState] = useState<{
@@ -838,6 +875,8 @@ export function SearchResultsBody({
               onSelect={onSelect}
               taskMenu={taskMenu}
               sessionPatch={patchForItem(item)}
+              onDragSessionStart={onDragSessionStart}
+              onDragSessionEnd={onDragSessionEnd}
             />
           ))
         )}
@@ -882,6 +921,8 @@ export function SearchResultsBody({
           onSelect={onSelect}
           taskMenu={taskMenu}
           sessionPatch={patchForItem(item)}
+          onDragSessionStart={onDragSessionStart}
+          onDragSessionEnd={onDragSessionEnd}
         />
       ))}
     </div>
@@ -998,10 +1039,27 @@ export function ConversationSearchBox({
     search.setProjectSelection,
   ]);
 
+  const [draggingResult, setDraggingResult] = useState(false);
+  const dragFrameRef = useRef<number | null>(null);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      if (dragFrameRef.current !== null) {
+        cancelAnimationFrame(dragFrameRef.current);
+        dragFrameRef.current = null;
+      }
+      setDraggingResult(false);
+      return;
+    }
     window.setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
+
+  useEffect(
+    () => () => {
+      if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
+    },
+    [],
+  );
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
@@ -1012,6 +1070,28 @@ export function ConversationSearchBox({
       onOpenChange?.(next);
     },
     [onOpenChange, search],
+  );
+
+  const handleDragSessionStart = useCallback(() => {
+    if (dragFrameRef.current !== null) cancelAnimationFrame(dragFrameRef.current);
+    dragFrameRef.current = requestAnimationFrame(() => {
+      dragFrameRef.current = null;
+      setDraggingResult(true);
+    });
+  }, []);
+
+  const handleDragSessionEnd = useCallback(
+    (droppedInWindow: boolean) => {
+      if (dragFrameRef.current !== null) {
+        cancelAnimationFrame(dragFrameRef.current);
+        dragFrameRef.current = null;
+      }
+      setDraggingResult(false);
+      if (droppedInWindow) {
+        handleOpenChange(false);
+      }
+    },
+    [handleOpenChange],
   );
 
   return (
@@ -1038,6 +1118,10 @@ export function ConversationSearchBox({
         collisionPadding={12}
         onContextMenu={(event) => event.stopPropagation()}
         onPointerDownOutside={(event) => {
+          if (draggingResult) {
+            event.preventDefault();
+            return;
+          }
           const target = event.target as Element | null;
           if (
             target?.closest(CONVERSATION_SEARCH_KEEPALIVE_SELECTOR) ||
@@ -1047,6 +1131,10 @@ export function ConversationSearchBox({
           }
         }}
         onFocusOutside={(event) => {
+          if (draggingResult) {
+            event.preventDefault();
+            return;
+          }
           const target = event.target as Element | null;
           if (
             target?.closest(CONVERSATION_SEARCH_KEEPALIVE_SELECTOR) ||
@@ -1056,6 +1144,10 @@ export function ConversationSearchBox({
           }
         }}
         onEscapeKeyDown={(event) => {
+          if (draggingResult) {
+            event.preventDefault();
+            return;
+          }
           const target = event.target as Element | null;
           if (
             target?.closest('[data-search-result-rename="true"]') ||
@@ -1067,6 +1159,7 @@ export function ConversationSearchBox({
         className={cn(
           'z-float w-[min(640px,calc(100vw-32px))] rounded-xl border border-[var(--cmd-palette-border)]',
           'bg-[var(--cmd-palette-bg)] p-0 text-[var(--cmd-palette-item-text)] shadow-[shadow:var(--cmd-palette-shadow)]',
+          draggingResult && 'pointer-events-none opacity-0',
         )}
       >
         <div className="border-b border-[var(--cmd-palette-border)] p-2">
@@ -1126,6 +1219,8 @@ export function ConversationSearchBox({
           maxHeightClass="max-h-[min(620px,calc(100vh-140px))]"
           taskMenu={taskMenu}
           statusFilter={search.statusFilter}
+          onDragSessionStart={handleDragSessionStart}
+          onDragSessionEnd={handleDragSessionEnd}
         />
       </PopoverContent>
     </Popover>
@@ -1478,20 +1573,43 @@ function SearchResultRow({
   onSelect,
   taskMenu,
   sessionPatch,
+  onDragSessionStart,
+  onDragSessionEnd,
 }: {
   item: ConversationSearchResultItem;
   query: string;
-  onSelect: (item: ConversationSearchResultItem, hit?: ConversationSearchResultItem['contentHit']) => void;
+  onSelect: (
+    item: ConversationSearchResultItem,
+    hit?: ConversationSearchResultItem['contentHit'],
+    options?: SearchResultSelectOptions,
+  ) => void;
   taskMenu?: SearchResultTaskMenuActions;
   sessionPatch?: Partial<Session>;
+  onDragSessionStart?: () => void;
+  onDragSessionEnd?: (droppedInWindow: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [editValue, setEditValue] = useState('');
   const committedRef = useRef(false);
   const rowButtonRef = useRef<HTMLButtonElement>(null);
+  const dragStartTargetRef = useRef<Element | null>(null);
+  const draggingActiveRef = useRef(false);
+  const onDragSessionEndRef = useRef(onDragSessionEnd);
+  onDragSessionEndRef.current = onDragSessionEnd;
+
+  useEffect(
+    () => () => {
+      if (draggingActiveRef.current) {
+        draggingActiveRef.current = false;
+        onDragSessionEndRef.current?.(false);
+      }
+    },
+    [],
+  );
 
   const canOpenMenu = Boolean(taskMenu) && canOpenSearchResultTaskMenu(item.session);
   const liveSession = taskMenu?.resolveSession(item.session) ?? null;
@@ -1511,6 +1629,17 @@ function SearchResultRow({
     menuOpen: menuPos !== null,
     remoteConnectionStatus,
   });
+
+  const isSharedGuest = isSharedTaskPeer(resolvedSession.deviceLinkDeviceId ?? '');
+  const remoteWritesBlocked = isSharedGuest || isRemoteSessionWriteBlocked(resolvedSession);
+  const splitDragEnabled =
+    !isSharedGuest &&
+    menuPos === null &&
+    isSplitGroupDragSource({
+      editing: isEditing,
+      orcaRole: resolvedSession.orcaRole,
+      inSortableContainer: false,
+    });
 
   const unnamedLabel = t('ccAgent.common.unnamedSession');
   // 与 main 的匹配串同源:未起名会话在结果行里也不能露出英文哨兵,且 titleMatchIndices
@@ -1617,6 +1746,80 @@ function SearchResultRow({
     rowButtonRef.current?.focus();
   }, []);
 
+  const handleOpenInNewWindowClick = useCallback(
+    (hitOverride?: ConversationSearchResultItem['contentHit']) => {
+      if (remoteWritesBlocked) {
+        toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
+        return;
+      }
+      void onSelect(item, hitOverride, { openInNewWindow: true });
+    },
+    [item, onSelect, remoteWritesBlocked, t],
+  );
+
+  const handleDragPointerDownCapture = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    dragStartTargetRef.current = event.target instanceof Element ? event.target : null;
+  }, []);
+
+  const clearDragStartTarget = useCallback(() => {
+    dragStartTargetRef.current = null;
+  }, []);
+
+  const handleDragStart = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      const started = startSessionDrag(event, {
+        sessionId: resolvedSession.id,
+        deviceId: resolvedSession.deviceLinkDeviceId,
+        label: displayTitle,
+        enabled: splitDragEnabled,
+        needsDedicatedHandle: false,
+        dragStartTarget: dragStartTargetRef.current,
+      });
+      dragStartTargetRef.current = null;
+      if (started) {
+        if (resolvedSession.deviceLinkDeviceId) {
+          remoteProjectsStore.pinSessionOrigin(resolvedSession.deviceLinkDeviceId, resolvedSession.id);
+        }
+        draggingActiveRef.current = true;
+        setIsDragging(true);
+        onDragSessionStart?.();
+      }
+    },
+    [
+      displayTitle,
+      onDragSessionStart,
+      resolvedSession.deviceLinkDeviceId,
+      resolvedSession.id,
+      splitDragEnabled,
+    ],
+  );
+
+  const handleDragEnd = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      dragStartTargetRef.current = null;
+      finishSessionDrag(event, resolvedSession.id, resolvedSession.deviceLinkDeviceId);
+      if (draggingActiveRef.current) {
+        draggingActiveRef.current = false;
+        setIsDragging(false);
+        const droppedInWindow = Boolean(
+          event.dataTransfer?.dropEffect && event.dataTransfer.dropEffect !== 'none',
+        );
+        onDragSessionEnd?.(droppedInWindow);
+      }
+    },
+    [onDragSessionEnd, resolvedSession.deviceLinkDeviceId, resolvedSession.id],
+  );
+
+  const dragProps = {
+    'data-split-group-drag-source': splitDragEnabled ? 'true' : undefined,
+    draggable: splitDragEnabled,
+    onPointerDownCapture: handleDragPointerDownCapture,
+    onPointerUpCapture: clearDragStartTarget,
+    onPointerCancelCapture: clearDragStartTarget,
+    onDragStart: handleDragStart,
+    onDragEnd: handleDragEnd,
+  } as const;
+
   const rowHeaderContent = (
     <>
       <div className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--cmd-palette-item-icon)]">
@@ -1650,7 +1853,13 @@ function SearchResultRow({
               </span>
             </span>
           )}
-          <Tip text={sourceText} side="top" delay={150} disabled={menuPos !== null || isEditing}>
+          <Tip
+            text={sourceText}
+            side="top"
+            delay={150}
+            controlledOpen={menuPos !== null || isEditing || isDragging ? false : undefined}
+            resetHoverOnControlChange
+          >
             <Badge size="xs">
               {t(`ccAgent.search.kind.${item.matchKind}`)}
             </Badge>
@@ -1689,13 +1898,27 @@ function SearchResultRow({
           text={tooltip}
           side="right"
           delay={250}
-          disabled={menuPos !== null}
+          controlledOpen={menuPos !== null || isDragging ? false : undefined}
+          resetHoverOnControlChange
           contentClassName="max-w-[500px] break-words"
         >
           <button
             ref={rowButtonRef}
             type="button"
-            onClick={() => { void onSelect(item); }}
+            {...dragProps}
+            onClick={(event) => {
+              if (shouldOpenSearchResultInNewWindow(event)) {
+                event.preventDefault();
+                handleOpenInNewWindowClick();
+                return;
+              }
+              void onSelect(item);
+            }}
+            onAuxClick={(event) => {
+              if (event.button !== 1) return;
+              event.preventDefault();
+              handleOpenInNewWindowClick();
+            }}
             className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left"
           >
             {rowHeaderContent}
@@ -1709,7 +1932,9 @@ function SearchResultRow({
               key={hit.messageId}
               hit={hit}
               query={query}
+              dragProps={dragProps}
               onSelect={() => { void onSelect(item, hit); }}
+              onOpenInNewWindow={() => { handleOpenInNewWindowClick(hit); }}
             />
           ))}
           {hiddenHitCount > 0 && (
@@ -1752,11 +1977,23 @@ function SearchResultRow({
 function SearchHitRow({
   hit,
   query,
+  dragProps,
   onSelect,
+  onOpenInNewWindow,
 }: {
   hit: NonNullable<ConversationSearchResultItem['contentHit']>;
   query: string;
+  dragProps: {
+    'data-split-group-drag-source'?: 'true';
+    draggable: boolean;
+    onPointerDownCapture: (event: ReactPointerEvent<HTMLElement>) => void;
+    onPointerUpCapture: () => void;
+    onPointerCancelCapture: () => void;
+    onDragStart: (event: ReactDragEvent<HTMLElement>) => void;
+    onDragEnd: (event: ReactDragEvent<HTMLElement>) => void;
+  };
   onSelect: () => void;
+  onOpenInNewWindow: () => void;
 }) {
   const { t } = useTranslation();
   const sourceText = searchSourceLabel(hit, t);
@@ -1766,9 +2003,21 @@ function SearchHitRow({
   return (
     <button
       type="button"
+      {...dragProps}
       onClick={(event) => {
         event.stopPropagation();
+        if (shouldOpenSearchResultInNewWindow(event)) {
+          event.preventDefault();
+          onOpenInNewWindow();
+          return;
+        }
         onSelect();
+      }}
+      onAuxClick={(event) => {
+        if (event.button !== 1) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenInNewWindow();
       }}
       className={cn(
         'flex w-full items-start rounded-lg border border-transparent px-2 py-1.5 text-left',
