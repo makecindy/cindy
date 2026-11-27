@@ -5,16 +5,19 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { ResetGroupButton } from '@/components/ui/reset-buttons';
 import { SegmentedControl } from '@/components/ui/segmented-control';
-import type { PluginEngineEffort, PluginEngineModel } from '../../../shared/pluginEngines';
+import { modelBrand, localizedBrandName } from '@/lib/modelDisplayNames';
+import type { PluginEngineEffort, PluginEngineModel, PluginEngineReportedModelDetails } from '../../../shared/pluginEngines';
 import {
   ModelAdvancedColumns, ModelAdvancedFooter, ModelAdvancedContent, ModelAdvancedRow, ModelAdvancedSection,
 } from './ModelAdvancedLayout';
 import { providersSettings } from './ProvidersSection.settings-search';
 
 export function PluginModelAdvancedDialog({
-  model, providerName, customized, enabled, visibilityBusy, onToggle, onSave, onClose, onCloseAutoFocus,
+  model, reported, antigravity, providerName, customized, enabled, visibilityBusy, onToggle, onSave, onClose, onCloseAutoFocus,
 }: {
   model: PluginEngineModel;
+  reported?: PluginEngineReportedModelDetails | undefined;
+  antigravity?: boolean;
   providerName: string;
   customized: boolean;
   enabled: boolean;
@@ -24,7 +27,16 @@ export function PluginModelAdvancedDialog({
   onClose: () => void;
   onCloseAutoFocus: (event: Event) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const contextWindow = reported?.contextWindow;
+  const imageInput = reported?.imageInput;
+  const isHydrogen = antigravity && model.id === 'gemini-4-hydrogen';
+  const isNeon = antigravity && model.id === 'gemini-4-neon';
+  // The Antigravity model guide declares 512K for Neon, not for Hydrogen.
+  // https://antigravity.google/docs/models#gemini-4-neon
+  const brand = isHydrogen || isNeon ? modelBrand(model) : undefined;
+  // Antigravity's model guide publishes "up to 512K" for Neon only. Keep its unit.
+  const officialContextWindow = isNeon ? '512K' : undefined;
   const [saving, setSaving] = useState(false);
   const offered = model.efforts ?? [];
   const value = offered.find(effort => effort === model.defaultEffort) ?? null;
@@ -85,17 +97,29 @@ export function PluginModelAdvancedDialog({
                 )}
               </ModelAdvancedSection>
               <ModelAdvancedSection title={t('settings.providers.models.advanced.contextLimit')}>
-                <p className="py-2 text-13 text-[var(--text-tertiary)]">-</p>
+                {contextWindow === undefined
+                  ? <p className="py-2 text-13 text-[var(--text-tertiary)]">-</p>
+                  : <p className="py-2 text-13 text-[var(--text-primary)]">
+                      {t('settings.providers.models.advanced.contextLimitRoute', {
+                        tokens: new Intl.NumberFormat(i18n.resolvedLanguage ?? i18n.language ?? 'en').format(contextWindow),
+                      })}
+                    </p>}
                 <ModelAdvancedRow label={t('settings.providers.models.advanced.compaction.title')} muted>-</ModelAdvancedRow>
               </ModelAdvancedSection>
               <ModelAdvancedSection title={t('settings.providers.models.advanced.spec')}>
-                <ModelAdvancedRow label={t('settings.providers.models.advanced.contextWindow')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.advanced.contextWindow')} muted={officialContextWindow === undefined}>
+                  {officialContextWindow ?? '-'}
+                </ModelAdvancedRow>
                 <ModelAdvancedRow label={t('settings.providers.models.advanced.maxOutput')} muted>-</ModelAdvancedRow>
               </ModelAdvancedSection>
             </>}
             right={<>
               <ModelAdvancedSection title={t('settings.providers.models.advanced.capability')}>
-                <ModelAdvancedRow label={t('settings.providers.models.advanced.imageInput')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.advanced.imageInput')} muted={imageInput === undefined}>
+                  {imageInput === undefined ? '-' : t(imageInput
+                    ? 'settings.providers.models.advanced.supported'
+                    : 'settings.providers.models.advanced.unsupported')}
+                </ModelAdvancedRow>
                 <ModelAdvancedRow label={t('settings.providers.models.advanced.inputModalities')} muted>-</ModelAdvancedRow>
                 <ModelAdvancedRow label={t('settings.providers.models.advanced.outputModalities')} muted>-</ModelAdvancedRow>
                 <ModelAdvancedRow label="Fast" muted>-</ModelAdvancedRow>
@@ -111,11 +135,15 @@ export function PluginModelAdvancedDialog({
                 <ModelAdvancedRow label={t('settings.providers.models.priceOverride.referenceDetails')} muted>-</ModelAdvancedRow>
               </ModelAdvancedSection>
               <ModelAdvancedSection title={t('settings.providers.models.advanced.identity')}>
-                <p className="mb-2 break-words text-12 leading-relaxed text-[var(--text-secondary)]">{model.description || '-'}</p>
+                  <p className="mb-2 break-words text-12 leading-relaxed text-[var(--text-secondary)]">
+                    {model.description || (isHydrogen ? t('settings.providers.models.advanced.antigravityHydrogenDescription') : '-')}
+                  </p>
                 <ModelAdvancedRow label={t('settings.providers.models.advanced.modelId')}>
                   <code className="select-text break-all text-12">{model.id}</code>
                 </ModelAdvancedRow>
-                <ModelAdvancedRow label={t('settings.providers.models.management.brand')} muted>-</ModelAdvancedRow>
+                <ModelAdvancedRow label={t('settings.providers.models.management.brand')} muted={!brand}>
+                  {brand ? localizedBrandName(brand, t) : '-'}
+                </ModelAdvancedRow>
                 <ModelAdvancedRow label={t('settings.providers.models.advanced.status')} muted>-</ModelAdvancedRow>
               </ModelAdvancedSection>
             </>}

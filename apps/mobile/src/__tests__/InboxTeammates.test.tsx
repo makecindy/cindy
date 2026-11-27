@@ -17,7 +17,11 @@ vi.mock('@/chat/cloudCompanion', () => ({ CLOUD_ROW_REVISION: 'cloud' }));
 vi.mock('@/session/teammateNavigation', () => ({ orderedTeammates: (items: unknown) => items }));
 vi.mock('@/session/useTeammateStatus', () => ({ useRosterActivities: () => new Map() }));
 vi.mock('@/session/useTeammateNavigation', () => ({ useTeammateNavigation: () => ({ openTeammate: vi.fn() }) }));
-vi.mock('@/session/TeammateList', () => ({ teammateRowState: () => ({ status: 'unread' }) }));
+vi.mock('@/session/TeammateList', () => ({
+  teammateRowState: () => ({ status: 'unread' }),
+  conversationSessionId: (r: { item?: { links?: Array<{ kind?: string; ref?: { id?: string } }> } }) =>
+    r?.item?.links?.find((link) => link.kind === 'conversation')?.ref?.id ?? null,
+}));
 vi.mock('@/session/SwipeableSessionRow', () => ({ SwipeableSessionRow: () => null }));
 vi.mock('@/session/TaskSnoozeSheet', () => ({ TaskSnoozeSheet: () => null }));
 vi.mock('@/session/MountOnFirstOpen', () => ({ MountOnFirstOpen: () => null }));

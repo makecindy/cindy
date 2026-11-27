@@ -106,11 +106,24 @@ function scopeAutomationGroupKey(key: string, session: Session): ScopedAutomatio
   return deviceId ? { key: `${key}:device:${deviceId}`, legacyKey: key } : { key };
 }
 
+/** 伙伴例行任务 Session（含旧主机不带 routineId 的行），供分组与「隐藏自动化任务」共用。 */
+export function isTeammateRoutineSession(session: Session): boolean {
+  return isTeammateTaskSession(session) && session.orcaRole !== 'worker' && session.companion?.role === 'routine';
+}
+
+/**
+ * 侧边栏自动化任务统一判定（分组与「隐藏自动化任务」筛选共用单一真相源）：
+ * 覆盖定时自动化（`source === 'scheduler'` 及历史 `[Schedule] ` 标题前缀）与伙伴例行任务。
+ */
+export function isAutomationSidebarSession(session: Session): boolean {
+  return isAutomationGeneratedSession(session) || isTeammateRoutineSession(session);
+}
+
 /** 伙伴例行任务 Session 的规则归属；旧主机不带 routineId 时为 null（维持平铺）。 */
 function teammateRoutineOf(session: Session): { botId: string; routineId: string } | null {
-  if (!isTeammateTaskSession(session) || session.orcaRole === 'worker') return null;
+  if (!isTeammateRoutineSession(session)) return null;
   const companion = session.companion;
-  if (companion?.role !== 'routine' || !companion.routineId) return null;
+  if (!companion?.routineId) return null;
   return { botId: companion.id, routineId: companion.routineId };
 }
 

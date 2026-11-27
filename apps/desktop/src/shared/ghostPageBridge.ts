@@ -56,6 +56,10 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     finally { uiSending = false; if (uiUpdates.size) scheduleUiUpdates(); }
   }
   const api = {
+  checks: {
+    list: (): Promise<unknown> => ports.send({ type: 'change-checks-request', action: 'list' }),
+    probe: (checks: unknown[]): Promise<unknown> => ports.send({ type: 'change-checks-request', action: 'probe', checks }),
+  },
   ping: async (): Promise<{ ok: true; id: string }> => {
     const revision = consumerRevision;
     const result = await ports.ping();

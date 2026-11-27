@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { localAgentNetMediaReceipt } from '@/device-link/agentNetLocalMediaReceipt';
 import {
+  cacheInlineRemoteMedia,
   canPreviewResolvedRemoteMedia,
   formatRemoteMediaSize,
   mediaLoadFailureKey,
@@ -398,6 +399,35 @@ describe("mobile remote media", () => {
     expect(isDirectPreviewableMediaUrl(resolved.url)).toBe(true);
     expect(resolved.previewable).toBe(true);
     expect(presignGet).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { kind: "audio", mimeType: "audio/wav", diskHit: true },
+    { kind: "image", mimeType: "image/webp", diskHit: true },
+    { kind: "image", mimeType: "image/webp", diskHit: false },
+  ] as const)("keeps a usable inline $kind URL after cache handling (hit=$diskHit)", async ({ kind, mimeType, diskHit }) => {
+    const inlineBase64 = "UklGRg==";
+    const resolved = await resolveMobileRemoteMedia(
+      { kind, url: `cindy-media://blobs/${"a".repeat(64)}.bin` },
+      { fetchRemoteMedia: async () => ({ ossKey: "", mimeType, size: 4, inlineBase64 }), presignGet: vi.fn() },
+      kind === "image" ? { thumbnail: true } : undefined,
+    );
+    const fileUri = "file:///cache/delivered-media";
+    const diskCache = {
+      storeBytes: vi.fn(async () => diskHit),
+      lookup: vi.fn(async () => diskHit ? { uri: fileUri, mimeType, size: 4 } : null),
+    };
+    const output = await cacheInlineRemoteMedia(kind, resolved, diskCache, "source-key");
+
+    expect(output.url).toBe(kind === "image" && diskHit ? fileUri : `data:${mimeType};base64,${inlineBase64}`);
+    expect(output.previewable).toBe(true);
+    if (kind === "audio") {
+      expect(diskCache.storeBytes).not.toHaveBeenCalled();
+      expect(diskCache.lookup).not.toHaveBeenCalled();
+    } else {
+      expect(diskCache.storeBytes).toHaveBeenCalledExactlyOnceWith("source-key", inlineBase64, mimeType);
+      expect(output).not.toHaveProperty("inlineBase64");
+    }
   });
 
   it("falls back to the presign path when an old desktop ignores the thumbnail flag", async () => {

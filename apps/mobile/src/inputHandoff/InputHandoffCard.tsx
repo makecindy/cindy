@@ -89,6 +89,9 @@ export function InputHandoffCard({
   // Stays wanted across steps: after Continue the sheet hides while the
   // computer types and comes back by itself for the next screen to fill.
   const [sheetWanted, setSheetWanted] = useState(false);
+  useEffect(() => {
+    if (snapshot.accountVerification) setSheetWanted(true);
+  }, [snapshot.requestId, snapshot.accountVerification]);
   // The owner chose the form over the live view (it could not be opened, or they prefer it).
   const [formFor, setFormFor] = useState<string | null>(null);
   const push = useGuardedPush();
@@ -171,6 +174,7 @@ export function InputHandoffCard({
   const qrSheet: InputHandoffQrSheet | null = qrScan
     ? {
         view: qrView,
+        ...(snapshot.accountVerification ? { verification: { refresh: () => decide("refresh"), cancel: () => decide("cancel") } } : {}),
         notice: qrNotice,
         onOpen: () => {
           const qr = qrView.picture?.qr;
@@ -427,7 +431,7 @@ export function InputHandoffCard({
         embedded={
           // Mounted only while the sheet shows: a hidden SwiftUI sheet still renders its children.
           !(sheetWanted && sheetContent) ? null : qrScan ? (
-            <InputHandoffQrCode view={qrView} side={qrSide} />
+            <InputHandoffQrCode view={qrView} side={qrSide} onOpen={snapshot.accountVerification ? qrSheet?.onOpen : undefined} />
           ) : snapshot.picture ? (
             // One screenshot per revision; no quiet claim here (it would bump the revision).
             <InputHandoffPictureStep

@@ -10,7 +10,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { eq, and, lt, gt, asc, desc, isNull, or, sql } from 'drizzle-orm';
+import { eq, and, lt, gt, asc, desc, isNull, or, sql, count } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { CodexResumePreparationBlockedError, isCodexHistoryRecoveryRequired } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
@@ -19,7 +19,7 @@ import { assertCindyMakeSessionAvailable } from '../cindy-make/featureGate.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
 import { forkRemoteAgentSession } from '../remote-agent/controller/fork.js';
 import { remoteAgentInvoker } from '../remote-agent/controller/runClient.js';
-import { parseProviderSharePeer } from '@cindy/device-link';
+import { isSharedTaskPeer, parseProviderSharePeer, remoteAgentErrorCode } from '@cindy/device-link';
 import {
   authorizeSharedTaskHistory, authorizeSharedTaskExecutor, releaseSharedTaskAuthorization,
 } from '../remote-agent/controller/providerShareTaskLocation.js';
@@ -45,6 +45,9 @@ import {
   parseClaudeAgentMeta,
   resolveClaudeForkAssistantAnchor,
 } from './claudeTranscriptAnchors';
+import { createLogger } from '../logger';
+
+const log = createLogger('maker-orchestration/fork');
 
 /** fork 内部错误码——由 IPC 层 catch 后映射到对应 IPC 错误码。 */
 export type ForkErrorCode =
@@ -62,8 +65,22 @@ const STRIP_FORK_TITLE_PREFIX = '[Fork·已剥离]';
 
 export { listSideChats } from './side-chat-list.js';
 
+// Avoid starting duplicate native forks when a controller retries before a lost reply settles.
+const sideChatsInFlight = new Set<string>();
+
+export async function createSideChat(sourceSessionId: string, childId?: string): Promise<Session> {
+  if (!childId) return forkSideChat(sourceSessionId);
+  if (sideChatsInFlight.has(childId)) throw forkError('UNSUPPORTED_HISTORY', 'Side chat creation is in progress');
+  sideChatsInFlight.add(childId);
+  try {
+    return await forkSideChat(sourceSessionId, childId);
+  } finally {
+    sideChatsInFlight.delete(childId);
+  }
+}
+
 /** Snapshot completed history without waiting for or stopping the parent turn. */
-export async function createSideChat(sourceSessionId: string): Promise<Session> {
+async function forkSideChat(sourceSessionId: string, childId?: string): Promise<Session> {
   const db = getDbClient().drizzle;
   const [source] = await db.select().from(sessions).where(eq(sessions.id, sourceSessionId)).limit(1);
   if (!source || source.status !== 'active') {
@@ -72,6 +89,17 @@ export async function createSideChat(sourceSessionId: string): Promise<Session> 
   // A plugin engine task opens its side chat like a fork: from Cindy's record (forkSessionAtMessage).
   if ((source.source === 'side-chat' && !source.sideChatPromoted) || source.source === 'review' || source.source === 'bot') {
     throw forkError('UNSUPPORTED_HISTORY', 'Open a side chat from the main task');
+  }
+  if (childId) {
+    const [existing] = await db.select().from(sessions).where(eq(sessions.id, childId)).limit(1);
+    if (existing) {
+      if (existing.source !== 'side-chat' || existing.parentSessionId !== sourceSessionId || existing.status !== 'active' || existing.sideChatPromoted) {
+        throw forkError('UNSUPPORTED_HISTORY', 'Side chat ID is unavailable');
+      }
+      const [history] = await db.select({ total: count() }).from(messages).where(eq(messages.sessionId, childId));
+      await assertTaskActionCurrent();
+      return sessionToCamel({ ...existing, messageCount: history.total });
+    }
   }
   const inFlight = (source.activeTurnStartedAt ?? 0) > (source.lastTurnEndedAt ?? 0);
   const completedBefore = source.lastTurnEndedAt
@@ -87,7 +115,14 @@ export async function createSideChat(sourceSessionId: string): Promise<Session> 
     completedBefore ? lt(messages.createdAt, completedBefore) : undefined,
   )).orderBy(desc(messages.createdAt), desc(messageRowid)).limit(1);
   if (!anchor?.clientId) throw forkError('NO_PRIOR_ASSISTANT', 'Wait for the first completed reply');
-  return forkSessionAtMessage(sourceSessionId, anchor.clientId, { sideChat: true });
+  return forkSessionAtMessage(sourceSessionId, anchor.clientId, { sideChat: true, childId });
+}
+
+/** 被控端的错误码可能在正文前缀里(桌面 IPC 包装)，也可能直接是 code(中转原样转发)。 */
+function isRemoteNativeForkFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return remoteAgentErrorCode(error.message) === 'REMOTE_AGENT_FORK_FAILED'
+    || (error as { code?: unknown }).code === 'REMOTE_AGENT_FORK_FAILED';
 }
 
 function forkError(code: ForkErrorCode, message: string): Error {
@@ -151,9 +186,9 @@ interface ForkTimelineMessage {
 }
 
 interface ParsedAgentSwitchBoundary {
-  fromAgentKind: DbAgentKind;
+  fromAgentKind: ForkEngineKind;
   fromAgentDeviceId?: string | null;
-  toAgentKind?: DbAgentKind;
+  toAgentKind?: ForkEngineKind;
   fromModel: string | null;
   fromProviderId?: string | null;
   toProviderId?: string | null;
@@ -321,11 +356,15 @@ function parseAgentSwitchBoundary(content: string): ParsedAgentSwitchBoundary | 
     if (
       parsed.fromAgentKind !== 'cc' &&
       parsed.fromAgentKind !== 'codex' &&
-      parsed.fromAgentKind !== 'pi'
+      parsed.fromAgentKind !== 'pi' &&
+      parsed.fromAgentKind !== 'acp'
     )
       return null;
     const toAgentKind =
-      parsed.toAgentKind === 'cc' || parsed.toAgentKind === 'codex' || parsed.toAgentKind === 'pi'
+      parsed.toAgentKind === 'cc' ||
+      parsed.toAgentKind === 'codex' ||
+      parsed.toAgentKind === 'pi' ||
+      parsed.toAgentKind === 'acp'
         ? parsed.toAgentKind
         : undefined;
     return {
@@ -511,9 +550,9 @@ async function resolveForkNativeSource(
       throw forkError('UNSUPPORTED_HISTORY', '目标消息对应的历史引擎会话不可用');
     }
     // Harness 切换边界可能没有留下可恢复的原生会话编号，例如旧版本
-    // 创建的边界、会话迁移或引擎从未真正启动的片段。可见消息仍然是完整的，
-    // 这时复制历史并在新任务中重建交接，比直接让用户无法 fork 更可靠。
-    if (!parsed.fromSdkSessionId) {
+    // 创建的边界、会话迁移或引擎从未真正启动的片段；ACP 插件引擎也无原生分叉。
+    // 可见消息仍然是完整的，这时复制历史并在新任务中重建交接，比直接让用户无法 fork 更可靠。
+    if (!parsed.fromSdkSessionId || parsed.fromAgentKind === 'acp') {
       const model = parsed.fromModel ?? source.model;
       let providerId: string | null;
       if (Object.hasOwn(parsed, 'fromProviderId')) {
@@ -537,7 +576,7 @@ async function resolveForkNativeSource(
           Object.hasOwn(previousBoundary, 'toProviderId')
         ) {
           providerId = previousBoundary.toProviderId ?? null;
-        } else if (parsed.fromAgentKind === normalizeDbAgentKind(source.agentKind)) {
+        } else if (parsed.fromAgentKind === forkEngineKind(source.agentKind)) {
           providerId = source.providerId;
         } else if (parsed.fromAgentKind === 'codex') {
           providerId = inferProviderIdForModel(model, 'codex');
@@ -644,6 +683,20 @@ async function resolveForkNativeSource(
   }
   if (!source.sdkSessionId) {
     throw forkError('SOURCE_NEVER_RAN', '原会话尚未运行，无法 fork');
+  }
+  if (source.agentKind === 'acp') {
+    // ACP plugin engines have no native fork primitive; copy the visible prefix
+    // and seed a handoff rebuild so the child opens a fresh native ACP session.
+    return {
+      agentKind: 'acp',
+      agentDeviceId,
+      sdkSessionId: null,
+      model: source.model,
+      providerId: source.providerId,
+      nextSwitch: null,
+      reuseVendorSession: false,
+      rebuildReason: 'native-session-recovery',
+    };
   }
   return {
     agentKind: normalizeDbAgentKind(source.agentKind),
@@ -953,7 +1006,7 @@ function collectClaudeToolParentUuids(
 export async function forkSessionAtMessage(
   sourceSessionId: string,
   messageClientId: string,
-  options: { sideChat?: boolean } = {},
+  options: { sideChat?: boolean; childId?: string } = {},
 ): Promise<Session> {
   await assertTaskActionCurrent();
   const dbClient = getDbClient();
@@ -1001,11 +1054,20 @@ export async function forkSessionAtMessage(
   }
 
   const forkSource = await resolveForkNativeSource(sourceSessionId, source, target);
-  // A plugin engine fork opens a new task on that engine without going through the admission another
-  // computer or a received share applies to each task, so it is offered on this computer only
-  // (protocol-compatibility/plugin-harnesses.md「暂未开放」).
-  if (forkSource.agentKind === 'acp' && forkSource.agentDeviceId) {
-    throw forkError('UNSUPPORTED_HISTORY', 'Plugin engine tasks that run on another computer cannot be forked yet');
+  // Plugin engine forks open a fresh session on the same engine (sdkSessionId = null) with a
+  // copied-history handoff; when the engine lives on another computer or a received share, that
+  // host still runs its full admission on the child's first turn (open / send). Only reject
+  // missing engine identity or invalid peer targets here (same boundary as createUserSession).
+  if (forkSource.agentKind === 'acp') {
+    if (!pluginEngineKeyFromProviderId(forkSource.providerId)) {
+      throw forkError('UNSUPPORTED_HISTORY', 'Plugin engine task is missing its engine identity');
+    }
+    if (
+      forkSource.agentDeviceId
+      && (isSharedTaskPeer(forkSource.agentDeviceId) || Boolean(parseProviderSharePeer(forkSource.agentDeviceId)))
+    ) {
+      throw forkError('UNSUPPORTED_HISTORY', 'Invalid plugin engine target device');
+    }
   }
 
   // 2.5 复制边界(exclusive)：user 不含自身；assistant 带完整 turn，到下一条 user
@@ -1078,13 +1140,15 @@ export async function forkSessionAtMessage(
   const isCodex = forkSource.agentKind === 'codex';
   // pi 复用 codex 的粗粒度 tail-turn fork:countCodexTailTurns 只按 sdkSessionId
   // 数边界后的 user turn(引擎无关),pi 的 forkSdkSession 按 tailTurnsToDrop rewind
-  // 到目标 user 消息。只有 Claude(cc)走 message-uuid 锚点路径。
-  const usesTailTurnFork = isCodex || forkSource.agentKind === 'pi';
+  // 到目标 user 消息。acp 走交接重建、无 Claude transcript 锚点，同样跳过 Claude 专用分支。
+  const usesTailTurnFork = isCodex || forkSource.agentKind === 'pi' || forkSource.agentKind === 'acp';
   let assistantUuid: string | undefined;
   let lastTurnId: string | undefined;
   let forkAtTimestampMs: number | undefined;
   let tailTurnsToDrop: number | undefined;
   let claudeAnchorIndex: ClaudeTranscriptAnchorIndex | null = null;
+  /** Claude 原生分叉不可用时，子任务从复制的聊天记录交接开始。 */
+  let claudeHistoryHandoff = false;
   const resetHandoffBoundaryClientId = findFirstUserAfterSwitchBoundary(
     sourceMessages,
     target.role,
@@ -1104,7 +1168,12 @@ export async function forkSessionAtMessage(
     // 切换后的首条 user 自身不进子分支。fresh Claude session 在它之前没有可 fork
     // 的 assistant 锚点，此时创建未绑定的新会话，并把复制边界恢复为 pending handoff。
     if (!assistantUuid && !resetHandoffBoundaryClientId) {
-      throw forkError('NO_PRIOR_ASSISTANT', '请在 AI 回复之后的提问上 fork');
+      // 有 AI 回复、只是原生记录里找不到(典型：压缩后底层对话换了编号，旧回复不在当前记录里)：
+      // 用复制的聊天记录交接给新的原生对话，而不是让用户无法分叉。
+      if (!sourceMessages.some((row) => row.role === 'assistant')) {
+        throw forkError('NO_PRIOR_ASSISTANT', '请在 AI 回复之后的提问上 fork');
+      }
+      claudeHistoryHandoff = true;
     }
   } else if (forkSource.reuseVendorSession && forkSource.sdkSessionId) {
     if (isCodex) {
@@ -1123,7 +1192,7 @@ export async function forkSessionAtMessage(
   // 4. 调 SDK forkSession (事务外)。fresh Claude 首条 user 特例没有合法的 prior
   // assistant 锚点：保留 pending handoff、让新会话首次发送时 lazy-create 即可。
   const newTitle = source.title.startsWith('[Fork') ? source.title : `[Fork] ${source.title}`;
-  const newSessionId = createBusinessSessionId();
+  const newSessionId = options.childId ?? createBusinessSessionId();
   await assertTaskActionCurrent();
   let newSdkSessionId: string | null = null;
   let uuidMap = new Map<string, string>();
@@ -1185,6 +1254,17 @@ export async function forkSessionAtMessage(
       ? forkRemote()
       : getMaker().forkSdkSession(agentKind, forkOptions))
       .catch((err: unknown) => {
+        // 运行 Agent 的电脑明确回「原生分叉失败」(多为锚点已不在当前原生记录里)：电脑在线、
+        // 也有权限，只是原生历史接不上，用聊天记录交接。连不上、无权限等其它错误照常上抛。
+        if (forkSource.agentDeviceId && forkSource.agentKind === 'cc' && isRemoteNativeForkFailure(err)) {
+          claudeHistoryHandoff = true;
+          return {
+            newSdkSessionId: null,
+            uuidMap: new Map<string, string>(),
+            initialContextTokens: undefined,
+            usedNativeForkAnchor: false,
+          };
+        }
         // 这里刻意用 isCodex(非 usesTailTurnFork):CODEX_FORK_STATE_UNAVAILABLE 是 codex 专属
         // 错误码 + 文案,只有真 codex 失败才包装。pi 与 cc 一样裸抛原始错误(不会拿到指名道姓
         // 错对象的 "Codex 状态不可用" 提示)。改成 usesTailTurnFork 会让 pi 误报成 codex 错误。
@@ -1322,9 +1402,18 @@ export async function forkSessionAtMessage(
     throw new Error('Fork session 创建后查询失败');
   }
   const pluginEngineFork = forkSource.agentKind === 'acp';
+  const handoffReason = claudeHistoryHandoff
+    ? 'native-session-recovery' as const
+    : !needsHistoryRecovery && !forkSource.reuseVendorSession ? forkSource.rebuildReason : undefined;
+  if (claudeHistoryHandoff) {
+    log.warn('fork: Claude native anchor unavailable, handing off from chat history', {
+      sourceSessionId,
+      remote: Boolean(forkSource.agentDeviceId),
+      copiedMessages: sourceMessages.length,
+    });
+  }
   // A plugin engine fork before the first copied message has no history to hand over.
-  if (!needsHistoryRecovery && !forkSource.reuseVendorSession && forkSource.rebuildReason
-    && (!pluginEngineFork || sourceMessages.length > 0)) {
+  if (handoffReason && (!pluginEngineFork || sourceMessages.length > 0)) {
     await assertTaskActionCurrent();
     await seedForkHandoffAfterSameEngineRebuild({
       sessionId: newSessionId,
@@ -1332,11 +1421,12 @@ export async function forkSessionAtMessage(
       agentKind: forkSource.agentKind,
       model: forkSource.model,
       providerId: forkSource.providerId,
-      // Plugin engines report no context window: the handoff uses the default budget.
-      targetContextWindow: pluginEngineFork ? null : await resolveDesktopHandoffWindow(newSessionId, {
-        ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
-      }),
-      reason: forkSource.rebuildReason,
+      targetContextWindow: pluginEngineFork
+        ? (source.contextWindow && source.contextWindow > 0 ? source.contextWindow : null)
+        : await resolveDesktopHandoffWindow(newSessionId, {
+            ...forkSource, agentKind: dbToMakerAgentKind(forkSource.agentKind), remoteHostId: source.remoteHostId,
+          }),
+      reason: handoffReason,
     });
   }
   return sessionToCamel({ ...row, messageCount: sourceMessages.length + (recoveryMarker ? 1 : 0) });
@@ -1352,10 +1442,6 @@ export async function forkSessionStripEncrypted(sourceSessionId: string): Promis
     .limit(1);
   if (!source) {
     throw forkError('SOURCE_NOT_FOUND', `Source session ${sourceSessionId} 不存在`);
-  }
-  if (source.agentKind === 'acp') {
-    // Plugin engines keep their own history; Cindy cannot fork it (docs/plans/acp-plugin-bridge.md).
-    throw forkError('UNSUPPORTED_HISTORY', 'Tasks running on a plugin engine cannot be forked');
   }
 
   assertCindyMakeSessionAvailable(source.source);

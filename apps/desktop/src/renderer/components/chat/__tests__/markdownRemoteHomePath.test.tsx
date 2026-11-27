@@ -312,20 +312,29 @@ describe('remote home references', () => {
     );
   });
 
+  // #11851 unit/DOM: the real renderer must preserve the heading target and
+  // existing relative file reference when cross-paragraph labels expand.
   it.each([false, true])('distinguishes same-name links across paragraphs without moving their targets (streaming=%s)', async isStreaming => {
     const local = { kind: 'local' } as const;
     const view = render(reply([
-      '[guide.html](/workspace/A/docs/guide.html)',
+      '## [guide.html](/workspace/A/docs/guide.html)',
       '[guide.html](/workspace/B/docs/guide.html)',
-      '[intro.html](/workspace/A/docs/intro.html)',
+      '[intro.html](docs/intro.html) [Website](https://example.com/)',
     ].join('\n\n'), 'unused', '/workspace/A', local, isStreaming));
     await act(async () => {});
     const links = view.getAllByRole('link');
-    expect(links.map(link => link.textContent)).toEqual(['A/docs/guide.html', 'B/docs/guide.html', 'intro.html']);
+    expect(links.map(link => link.textContent)).toEqual(['A/docs/guide.html', 'B/docs/guide.html', 'intro.html', 'Website']);
+    expect(view.getByRole('heading').id).toBe('guidehtml');
     localResolve.mockResolvedValueOnce({ status: 'unique', candidates: ['/workspace/B/docs/guide.html'], kind: 'file' });
     await act(async () => fireEvent.click(view.getByRole('link', { name: 'B/docs/guide.html' })));
     expect(openHtmlFileByPreference).toHaveBeenCalledWith(
       'session', '/workspace/B/docs/guide.html', expect.any(Function),
+      expect.objectContaining({ origin: local }), undefined,
+    );
+    localResolve.mockResolvedValueOnce({ status: 'unique', candidates: ['/workspace/A/docs/intro.html'], kind: 'file' });
+    await act(async () => fireEvent.click(view.getByRole('link', { name: 'intro.html' })));
+    expect(openHtmlFileByPreference).toHaveBeenCalledWith(
+      'session', '/workspace/A/docs/intro.html', expect.any(Function),
       expect.objectContaining({ origin: local }), undefined,
     );
   });

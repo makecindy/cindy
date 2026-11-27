@@ -39,6 +39,7 @@ export function liveTaskPriorityRank(signals: LiveTaskPrioritySignals): LiveTask
 export type TaskInboxSection = 'inbox' | 'working' | 'snoozed' | 'archived';
 
 export interface TaskInboxState {
+  pinnedAt?: string | null;
   status?: string;
   snoozedUntil?: string | null;
   snoozedAt?: string | null;
@@ -90,6 +91,8 @@ export function taskInboxSection(
   if (signals.running) return 'working';
   if (signals.teammate) return null;
   if (signals.following && !signals.unread) return 'working';
+  // A read, idle pinned task remains accessible in Pinned.
+  if (task.pinnedAt && !signals.unread) return null;
   return 'inbox';
 }
 

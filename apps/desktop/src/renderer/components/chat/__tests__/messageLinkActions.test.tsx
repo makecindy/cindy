@@ -76,7 +76,14 @@ describe('message link entry points', () => {
       workingDir="/workspace" automationOrigin={automationOrigin} /></MemoryRouter>);
     fireEvent.click(screen.getByRole('button', { name: count
       ? `chat.userMessage.orcaFromWorkerBatch:${count}` : 'chat.userMessage.orcaFromWorkerNamed:A' }));
-    expect(await screen.findByText((_content, element) => element?.tagName === 'PRE' && element.textContent === body)).toBeTruthy();
+    // 正文现在走聊天 Markdown 渲染：仍要保住合并后的完整正文，而不是只剩首条摘要。
+    const bodyElement = await waitFor(() => {
+      const element = document.querySelector('[data-selection-quote-body]');
+      expect(element).toBeTruthy();
+      return element as HTMLElement;
+    });
+    expect(bodyElement.textContent).toContain('A full report');
+    expect(bodyElement.textContent).toContain('B full report');
     if (count) expect(screen.queryByRole('button', { name: 'chat.userMessage.sessionSent' })).toBeNull();
     else expect(screen.getByRole('button', { name: 'chat.userMessage.sessionSent' })).toBeTruthy();
   });

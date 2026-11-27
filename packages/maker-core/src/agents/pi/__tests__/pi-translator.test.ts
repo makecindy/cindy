@@ -1226,6 +1226,36 @@ describe('pi translator', () => {
     ]);
   });
 
+  it('shows the first native retry of a concurrency-limited Responses request', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const errorMessage = 'mock API error (429): {"code":"1302","message":"并发超限，请稍后重试"}';
+    translatePiEvent(ev({ type: 'auto_retry_start', attempt: 1, maxAttempts: 6, errorMessage }), queue, ctx);
+    expect(events.find(event => event.type === 'error')?.data).toMatchObject({
+      reason: 'terminal-rate-limit-retry', isTerminal: false, willRetry: true,
+      message: errorMessage + ' (rate-limit-retry 1/6)',
+    });
+  });
+
+  // #10948, unit: replay the terminal sequences from Pi's Responses endpoint.
+  it.each([
+    ['1302: 并发超限，请稍后重试', 'agent_settled', 'upstream-overload'],
+    ['1302: 并发超限，请稍后重试', 'auto_retry_end', undefined],
+    ['insufficient_quota: Monthly quota exceeded', 'agent_settled', undefined],
+  ] as const)('classifies Responses failure %s at %s', (errorMessage, terminal, reason) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({
+      type: 'message_end',
+      message: { role: 'assistant', api: 'openai-responses', stopReason: 'error', content: [], errorMessage },
+    }), queue, ctx);
+    translatePiEvent(ev({ type: terminal, success: false }), queue, ctx);
+    const errors = events.filter(event => event.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect((errors[0].data as { reason?: string }).reason).toBe(reason);
+  });
+
   it.each(['no retry', 'exhausted', 'stopped'] as const)(
     'settles a Chat Completions stream truncation without inventing retry progress: %s',
     outcome => {
@@ -2047,6 +2077,34 @@ describe('pi translator', () => {
     const done2 = events2.events.find((e) => e.type === 'done');
     expect((done2!.data as { result?: unknown }).result).toBe('');
     expect(done2!.data).toMatchObject({ silentStop: true });
+  });
+
+  it.each([
+    ['resumed', true, undefined],
+    ['already-active', true, undefined],
+    ['queued', true, undefined],
+    ['queued', false, true],
+    ['unknown', true, true],
+  ])('settles a worker send with wake kind %s and ok=%s', (wakeKind, ok, expectedSilentStop) => {
+    // #13114, unit: a confirmed dispatch followed by an empty reply must not wake the Lead.
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    const tool = { toolCallId: 'dispatch', toolName: 'cindy_mcp_call_tool' };
+    const args = { server: 'cindy_orca', tool: 'send_to_worker', args: { target_session_id: 'worker', message: 'work' } };
+    const result = { content: [{ type: 'text', text: JSON.stringify({ ok, wake_kind: wakeKind }) }] };
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_start', ...tool, args }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_end', ...tool, result, isError: false }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: { role: 'assistant', stopReason: 'stop', content: [] } }), queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    const done = events.find((event) => event.type === 'done');
+    expect(done?.data).toMatchObject({ status: 'completed', result: '' });
+    expect((done?.data as { silentStop?: boolean }).silentStop).toBe(expectedSilentStop);
+    const next = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), next.queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_end', ...tool, result }), next.queue, ctx);
+    translatePiEvent(ev({ type: 'agent_settled' }), next.queue, ctx);
+    expect(next.events.find((event) => event.type === 'done')?.data).toMatchObject({ silentStop: true });
   });
 
   it.each([

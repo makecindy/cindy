@@ -18,7 +18,7 @@ export function createSharedReconnectFixture() {
   const readGroup = () => null;
   const isTurnRunning = () => false;
   const router = createProviderGroupRouter({
-    directory, readGroup, isTurnRunning, listBindings: () => ({}), now, random: () => 0,
+    directory, readGroup, isTurnRunning, listBindings: () => ({}), now,
   });
   const service = createProviderGroupService({
     router, directory, readGroup, isTurnRunning, guestSwitch, now,
@@ -56,6 +56,7 @@ export function createSharedReconnectFixture() {
     silentStopAutoResumeGuard: { noteUserSend: vi.fn() },
     interruptedTurnAutoResumeGuard: { noteUserSend: vi.fn() },
     usageLimitAutoResume: { noteUserAction: vi.fn() },
+    startFallbackTurn: vi.fn(),
     getProviderGroupService: () => service,
     enqueueDurableWrite: async (_label, commit) => commit(null),
     getLastAssistantTranscriptUuid: () => 'anchor',
