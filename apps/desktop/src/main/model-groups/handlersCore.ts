@@ -16,6 +16,7 @@ import {
   type ModelGroupResolveRequest,
   type ModelGroupSessionBindingView,
 } from '../../shared/modelGroups.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { readModelGroupDecisions } from './decisionLog.js';
 import { assertModelGroupsCallerCore } from './remoteAccessCore.js';
@@ -152,8 +153,9 @@ export function createModelGroupHandlers(ports: ModelGroupHandlersPorts) {
       const agentDeviceId = route.agentDeviceId === undefined || route.agentDeviceId === null
         ? undefined
         : modelGroupAgentDeviceId(route.agentDeviceId);
-      if (!selection || (agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi')
+      if (!selection || (agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi' && agentKind !== 'acp')
         || typeof providerId !== 'string' || !providerId || providerId.length > MODEL_GROUP_LIMITS.field
+        || (agentKind === 'acp' && !pluginEngineKeyFromProviderId(providerId))
         || typeof model !== 'string' || !model || model.length > MODEL_GROUP_LIMITS.field
         || agentDeviceId === null) {
         throwIpcError('INVALID_PARAMS', 'model group selection and route are required');
