@@ -77,6 +77,12 @@ describe('sessionMenu header', () => {
     expect(header.metaLine).toBe('Codex · worktree voice-fix');
   });
 
+  it('names plugin engine sessions using the resolved engine name or generic fallback', () => {
+    const acpSession = session({ agentKind: 'acp', providerId: 'acp-plugin:dsh:dsh' });
+    expect(buildSessionMenuHeader(acpSession, 'DeepSeek Harness').metaLine).toBe('DeepSeek Harness · xdt-maker');
+    expect(buildSessionMenuHeader(acpSession).metaLine).toBe('插件引擎 · xdt-maker');
+  });
+
   it('collects status chips in a stable order', () => {
     const header = buildSessionMenuHeader(session({
       pinnedAt: '2026-01-02T00:00:00.000Z',
@@ -141,8 +147,10 @@ describe('sessionMenu info model', () => {
     expect(buildSessionInfoWorkspace(session({ workingDir: null }))).toBeNull();
   });
 
-  it('limits the extra dirs entry to cc project sessions', () => {
+  it('limits the extra dirs entry to cc and acp project sessions', () => {
     expect(sessionInfoShowsExtraDirs(session())).toBe(true);
+    expect(sessionInfoShowsExtraDirs(session({ agentKind: 'acp', providerId: 'acp-plugin:dsh:dsh' }))).toBe(true);
+    expect(sessionInfoShowsExtraDirs(session({ agentKind: 'acp', workspaceKind: 'dialogue' }))).toBe(false);
     expect(sessionInfoShowsExtraDirs(session({ agentKind: 'codex' }))).toBe(false);
     expect(sessionInfoShowsExtraDirs(session({ workspaceKind: 'dialogue' }))).toBe(false);
     expect(sessionInfoShowsExtraDirs(session({ workingDir: null }))).toBe(false);

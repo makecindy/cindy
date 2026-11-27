@@ -25,5 +25,8 @@ export function getVoiceInputWorkletUrl(): string {
   // worklet via `?url` made Vite package raw TS as a `data:video/mp2t` asset in
   // release builds; keeping the worklet as plain JS lets Vite emit a real JS
   // module while preserving normal AudioWorklet module loading semantics.
+  if (typeof window === 'undefined' || !window.location?.href) {
+    return rawPcm16kWorkletUrl;
+  }
   return resolveVoiceInputWorkletUrl(rawPcm16kWorkletUrl, window.location.href);
 }
