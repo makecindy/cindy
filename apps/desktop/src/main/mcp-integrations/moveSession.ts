@@ -143,6 +143,7 @@ async function moveSessionProject(
     return {
       ok: true,
       sessionId: updated.id,
+      projectDir: updated.projectDir ?? null,
       workingDir: updated.workingDir ?? null,
       workspaceKind: updated.workspaceKind ?? 'project',
     };

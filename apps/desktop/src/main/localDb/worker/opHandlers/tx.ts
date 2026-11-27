@@ -1136,11 +1136,33 @@ function botsPersistSessionPermission(
   }
   const profilePermission = mode === 'bypassPermissions' ? 'trusted' : mode === 'auto' ? 'auto' : mode === 'ask' ? 'ask' : null;
   return db.transaction(() => {
-    const session = db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId);
+    const columns = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
+    const hasBaselineCol = columns.some((col) => col.name === 'scheduled_model_baseline');
+    const hasAgentKindCol = columns.some((col) => col.name === 'agent_kind');
+    const session = hasBaselineCol
+      ? db.prepare(`SELECT id, ${hasAgentKindCol ? 'agent_kind AS agentKind, ' : ''}scheduled_model_baseline AS scheduledModelBaseline FROM sessions WHERE id = ?`)
+        .get(sessionId) as { id: string; agentKind?: string | null; scheduledModelBaseline: string | null } | undefined
+      : db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId) as { id: string } | undefined;
     if (!session) return { updated: false };
+    const savedBaseline = 'scheduledModelBaseline' in session
+      ? parseScheduledModelBaseline(session.scheduledModelBaseline)
+      : null;
+    const nextBaseline = savedBaseline && !savedBaseline.pendingBotProfileVersion
+      ? JSON.stringify({ ...savedBaseline, permissionMode: mode })
+      : null;
+    const crossPluginTemp = !!nextBaseline && !!savedBaseline
+      && ((('agentKind' in session ? session.agentKind : null) === 'acp') !== (savedBaseline.agentKind === 'acp'));
     if (!profilePermission) {
-      db.prepare('UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?')
-        .run(mode, Date.now(), sessionId);
+      if (crossPluginTemp) {
+        db.prepare('UPDATE sessions SET scheduled_model_baseline = ?, updated_at = ? WHERE id = ?')
+          .run(nextBaseline, Date.now(), sessionId);
+      } else if (nextBaseline) {
+        db.prepare('UPDATE sessions SET permission_mode = ?, scheduled_model_baseline = ?, updated_at = ? WHERE id = ?')
+          .run(mode, nextBaseline, Date.now(), sessionId);
+      } else {
+        db.prepare('UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?')
+          .run(mode, Date.now(), sessionId);
+      }
       return { updated: true };
     }
     const link = db.prepare(`SELECT bot_id AS botId FROM bot_session_links
@@ -1178,6 +1200,16 @@ function botsPersistSessionPermission(
         (SELECT session_id FROM bot_session_links WHERE bot_id = ?
           AND role IN ('canonical', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL)`)
         .run(mode, Date.now(), link.botId);
+      if (nextBaseline) {
+        db.prepare('UPDATE sessions SET scheduled_model_baseline = ? WHERE id = ?')
+          .run(nextBaseline, sessionId);
+      }
+    } else if (crossPluginTemp) {
+      db.prepare('UPDATE sessions SET scheduled_model_baseline = ?, updated_at = ? WHERE id = ?')
+        .run(nextBaseline, Date.now(), sessionId);
+    } else if (nextBaseline) {
+      db.prepare('UPDATE sessions SET permission_mode = ?, scheduled_model_baseline = ?, updated_at = ? WHERE id = ?')
+        .run(mode, nextBaseline, Date.now(), sessionId);
     } else {
       db.prepare('UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?')
         .run(mode, Date.now(), sessionId);
@@ -3547,12 +3579,13 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
       const remote = asRecord(payload.remoteExecution, 'remoteExecution');
       if (remote.proxySession !== undefined) {
         const proxy = asRecord(remote.proxySession, 'remoteExecution.proxySession');
-        db.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at, agent_device_id) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?, ?)").run(
+        db.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at, provider_id, agent_device_id) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?, ?, ?)").run(
           sessionId, expectString(proxy.title, 'proxySession.title'),
           expectString(proxy.model, 'proxySession.model'),
           proxy.effort == null ? 'high' : expectString(proxy.effort, 'proxySession.effort'),
           expectString(proxy.permissionMode, 'proxySession.permissionMode'), fastModeToStorage(proxy.fastMode),
           expectString(proxy.agentKind, 'proxySession.agentKind'), now, now,
+          proxy.providerId == null ? null : expectString(proxy.providerId, 'proxySession.providerId'),
           proxy.agentDeviceId == null ? null : expectString(proxy.agentDeviceId, 'proxySession.agentDeviceId'),
         );
       }

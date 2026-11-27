@@ -44,6 +44,7 @@ import {
   type BotProfile,
 } from './botStore';
 import { useBotSettingsTarget } from './useBotSettingsTarget';
+import { displayedModelChain, followsDefaultModel } from './botModelChainPatch';
 import { BotRosterView } from './BotRosterView';
 import { BotAvatar } from './BotAvatar';
 import { BotBasicProfileFields } from './BotBasicProfileFields';
@@ -141,10 +142,7 @@ export function BotSettings({
   // dirty autosave or overwrite a model override / pending text edits.
   const hiddenVendors = target.useHiddenVendors();
   const defaultModelChain = target.useDefaultModelChain();
-  const displayedModelChain =
-    capabilities.modelChainOverride === null
-      ? defaultModelChain
-      : capabilities.modelChain;
+  const shownModelChain = displayedModelChain(capabilities, defaultModelChain);
   const [page, setPage] = useState<
     | 'home'
     | 'profile'
@@ -630,47 +628,28 @@ export function BotSettings({
           className="pt-3"
           aria-label={t('bots.settingsTabs.model')}
         >
-          <div data-testid="bot-model-controls" className="min-w-0">
-            <div data-testid="bot-primary-model-controls">
+          {/* 伙伴的模型统一在「模型供应商 → 智能路由」里设置(2026-11-26 用户裁决)：这里只说现状并给入口，不再有第二个编辑器。 */}
+          <div data-testid="bot-model-controls" className="flex min-w-0 flex-col gap-3">
+            <div data-testid="bot-primary-model-controls" className="flex min-w-0 flex-col gap-1.5">
+              <span className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
+                {t('bots.model.primary')}
+                <span aria-hidden="true"> · </span>
+                <span>{followsDefaultModel(capabilities) ? t('bots.model.followsDefault') : t('bots.model.ownModel')}</span>
+              </span>
               <BotModelChainEditor
-                label={t('bots.model.primary')}
                 hiddenVendors={hiddenVendors}
                 deviceId={target.deviceId}
-                onRestoreDefault={() => {
-                  const modelChain = defaultModelChain;
-                  const primary = modelChain[0];
-                  setCapabilities((current) => ({
-                    ...current,
-                    ...(primary ?? { model: '', providerId: null, effort: '', fastMode: false }),
-                    ...((current.agentDeviceId != null || primary?.agentDeviceId != null)
-                      ? { agentDeviceId: primary?.agentDeviceId ?? null } : {}),
-                    modelOverride: null,
-                    modelChain,
-                    modelChainOverride: null,
-                  }));
-                  autosave.onEdit('model');
-                }}
-                value={displayedModelChain}
-                onChange={(modelChain) => {
-                  const primary = modelChain[0];
-                  if (!primary) return;
-                  setCapabilities((current) => ({
-                    ...current,
-                    ...primary,
-                    ...((current.agentDeviceId != null || primary.agentDeviceId != null)
-                      ? { agentDeviceId: primary.agentDeviceId ?? null } : {}),
-                    modelChain,
-                    modelChainOverride: modelChain,
-                    modelOverride: {
-                      model: primary.model,
-                      providerId: primary.providerId,
-                      effort: primary.effort,
-                      fastMode: primary.fastMode,
-                    },
-                  }));
-                  autosave.onEdit('model');
-                }}
+                value={shownModelChain}
+                disabled
+                onChange={() => undefined}
               />
+            </div>
+            <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2">
+              <span className="min-w-0 flex-1 text-13 leading-[1.5] text-[var(--text-secondary)]">{t('bots.model.managedInSettings')}</span>
+              <Button variant="secondary" size="md" compact type="button" className="shrink-0"
+                onClick={() => navigate('/settings?tab=model-groups&section=buddies')}>
+                {t('bots.model.openSettings')}
+              </Button>
             </div>
           </div>
         </section>
@@ -1147,7 +1126,7 @@ export function BotsHomeView() {
     return (
       <main className="flex h-full items-center justify-center px-6" role="main">
         <BotInvitationWelcome bot={selectedBot}
-          onConfigureModel={() => navigate(`/bots/${selectedBot.id}?settings=1&settingsPage=model`)} />
+          onConfigureModel={() => navigate('/settings?tab=model-groups&section=buddies')} />
       </main>
     );
 

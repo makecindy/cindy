@@ -1,3 +1,4 @@
+import { installDeletedTaskVectorCleanup } from '../deletedTaskVectors.js';
 import { PROJECT_ARCHIVE_GUARD_SQL } from '../projectArchiveGuard.js';
 import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
@@ -34,6 +35,7 @@ import { isSqliteCorruption, createCorruptDbUnavailableError } from './sqliteCor
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const installDeletedTaskVectorCleanup = ${installDeletedTaskVectorCleanup.toString()};
 const isSqliteCorruption = ${isSqliteCorruption.toString()};
 const createCorruptDbUnavailableError = ${createCorruptDbUnavailableError.toString()};
 let corruptionError = null;
@@ -345,6 +347,7 @@ function createDatabase(opts) {
         dbPath,
         ...vec,
       });
+      if (vec.loaded) installDeletedTaskVectorCleanup(nextDb);
       parentPort.postMessage({ event: 'vec-status', payload: vec });
       assertNoPendingMigrations(nextDb, dbPath, opts.drizzleDir);
       const drift = detectSchemaDrift(nextDb, opts.drizzleDir);
@@ -1623,12 +1626,14 @@ function orcaUpsertWorker(readyDb, args) {
       const remote = asRecord(payload.remoteExecution, 'remoteExecution');
       if (remote.proxySession !== undefined) {
         const proxy = asRecord(remote.proxySession, 'remoteExecution.proxySession');
-        readyDb.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?)").run(
+        readyDb.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at, provider_id, agent_device_id) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?, ?, ?)").run(
           sessionId, expectString(proxy.title, 'proxySession.title'),
           expectString(proxy.model, 'proxySession.model'),
           proxy.effort == null ? 'high' : expectString(proxy.effort, 'proxySession.effort'),
           expectString(proxy.permissionMode, 'proxySession.permissionMode'), fastModeToStorage(proxy.fastMode),
           expectString(proxy.agentKind, 'proxySession.agentKind'), now, now,
+          proxy.providerId == null ? null : expectString(proxy.providerId, 'proxySession.providerId'),
+          proxy.agentDeviceId == null ? null : expectString(proxy.agentDeviceId, 'proxySession.agentDeviceId'),
         );
       }
     }

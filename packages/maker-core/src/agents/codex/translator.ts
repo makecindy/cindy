@@ -157,6 +157,10 @@ export interface CodexRuntimeState {
   pendingWebSearchInput: Map<string, WebSearchInput>;
   /** 已 emit 的 Web Search 输入，用于判断 completed 是否带来权威参数更新。 */
   emittedWebSearchInput: Map<string, WebSearchInput>;
+  /** Bounded fallback map of child threadId -> human subagent name for collab:* target resolution. */
+  subagentNamesByThreadId: Map<string, string>;
+  /** Bounded fallback set of currently active child threadIds for empty-receiver collab:wait calls. */
+  activeSubagentThreadIds: Set<string>;
   /**
    * Auth retry-loop dedupe key (`<threadId>|<turnId>`)。daemon 撞 401 时
    * willRetry=true 通知会按 retry 频率 (~每秒) 持续发, 不 dedupe 会让
@@ -210,6 +214,8 @@ export function newCodexRuntimeState(): CodexRuntimeState {
     emittedToolUse: new Set(),
     pendingWebSearchInput: new Map(),
     emittedWebSearchInput: new Map(),
+    subagentNamesByThreadId: new Map(),
+    activeSubagentThreadIds: new Set(),
     lastAuthErrorKey: null,
     networkRetryNotice: null,
   };
@@ -569,6 +575,18 @@ export interface CodexTranslateContext {
     attempt: number;
     maxAttempts: number;
   } | null;
+  /**
+   * Resolve active or named subagents for parent-thread `collab:*` calls
+   * (especially Codex V2 `wait_agent`, which arrives with `receiverThreadIds: []`).
+   */
+  resolveCollabTargets?: (
+    tool: string,
+    receiverThreadIds: readonly string[],
+  ) => {
+    targets: string[];
+    targetCount: number;
+    namesByThreadId?: ReadonlyMap<string, string>;
+  };
 }
 
 // ── 主入口: 三个 item.* notification 的统一分发 ────────────────────────────────
@@ -733,6 +751,9 @@ export function translateItemNotification(
     case 'hookPrompt':
     case 'enteredReviewMode':
     case 'exitedReviewMode':
+    //   sleep:        codex 的 clock.sleep 长等待通知（轮询工具自带），无 UI 概念；
+    //                 落 default 会每条约一条 unhandled warning，长任务刷满日志
+    case 'sleep':
       return;
     default:
       ctx.log.warn('unhandled item type', { phase, itemType });
@@ -1049,6 +1070,11 @@ export function classifyCodexError(
         ? REMOTE_COMPACT_ENCRYPTED_CONTENT_REASON
         : errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(message)
           ? CONTEXT_OVERFLOW_REASON
+          // Native Responses truncation has no dedicated CodexErrorInfo variant.
+          // Match only its complete diagnostic, not rejected request parameters
+          // or transport errors that happen to mention max_output_tokens.
+          : rawMessage.trim() === 'Incomplete response returned, reason: max_output_tokens'
+            ? 'output-limit'
           // Preserve a diagnosis that native only provided inside its exhausted
           // transport wrapper. This reason is presentation-only: upstream-overload
           // and errorStatus=529 also authorize host/goal retries. Do not promote
@@ -2518,13 +2544,132 @@ function formatCodexAgentStateLabel(state: unknown): string | undefined {
   return undefined;
 }
 
-function formatCodexAgentStatesSummary(states: Record<string, unknown> | null | undefined): string | undefined {
+const MAX_TRACKED_SUBAGENT_NAMES = 128;
+
+function formatCodexSubagentDisplayName(agentPath: string | undefined): string | undefined {
+  const trimmed = agentPath?.trim();
+  if (!trimmed) return undefined;
+  const leaf = /^\/root(?:\/[^/\s]+)+\/?$/.test(trimmed)
+    ? (trimmed.split('/').filter(Boolean).at(-1) ?? trimmed)
+    : trimmed;
+  if (!leaf || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(leaf)) {
+    return undefined;
+  }
+  return leaf;
+}
+
+function rememberCodexSubagentName(
+  rt: CodexRuntimeState,
+  threadId: string | undefined,
+  agentPath: string | undefined,
+): void {
+  if (!threadId) return;
+  if (!rt.activeSubagentThreadIds.has(threadId) && rt.activeSubagentThreadIds.size >= MAX_TRACKED_SUBAGENT_NAMES) {
+    const oldest = rt.activeSubagentThreadIds.values().next();
+    if (!oldest.done) rt.activeSubagentThreadIds.delete(oldest.value);
+  }
+  rt.activeSubagentThreadIds.add(threadId);
+  const name = formatCodexSubagentDisplayName(agentPath);
+  if (!name) return;
+  if (!rt.subagentNamesByThreadId.has(threadId) && rt.subagentNamesByThreadId.size >= MAX_TRACKED_SUBAGENT_NAMES) {
+    const oldest = rt.subagentNamesByThreadId.keys().next();
+    if (!oldest.done) rt.subagentNamesByThreadId.delete(oldest.value);
+  }
+  rt.subagentNamesByThreadId.set(threadId, name);
+}
+
+function isTerminalCodexAgentStateLabel(label: string | undefined): boolean {
+  if (!label) return false;
+  const lower = label.trim().toLowerCase();
+  return lower === 'completed'
+    || lower === 'complete'
+    || lower === 'succeeded'
+    || lower === 'done'
+    || lower === 'failed'
+    || lower === 'error'
+    || lower === 'stopped'
+    || lower === 'interrupted'
+    || lower === 'cancelled';
+}
+
+function resolveCollabTargetsFromState(
+  ctx: CodexTranslateContext,
+  item: CollabAgentToolCallItem,
+  phase: ItemPhase,
+): {
+  targets: string[];
+  targetCount: number;
+  namesByThreadId: ReadonlyMap<string, string>;
+} {
+  const fromTracker = ctx.resolveCollabTargets?.(item.tool, item.receiverThreadIds);
+  const mergedNames = new Map<string, string>(ctx.rt.subagentNamesByThreadId);
+  if (fromTracker?.namesByThreadId) {
+    for (const [threadId, name] of fromTracker.namesByThreadId) {
+      mergedNames.set(threadId, name);
+    }
+  }
+
+  let targets: string[] = fromTracker?.targets ? [...fromTracker.targets] : [];
+  let targetCount = fromTracker?.targetCount ?? 0;
+
+  if (!fromTracker) {
+    const sourceThreadIds = item.receiverThreadIds.length > 0
+      ? item.receiverThreadIds
+      : [...ctx.rt.activeSubagentThreadIds];
+    const seen = new Set<string>();
+    for (const threadId of sourceThreadIds) {
+      const name = mergedNames.get(threadId);
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        targets.push(name);
+      }
+    }
+    targetCount = sourceThreadIds.length;
+  } else if (item.receiverThreadIds.length > 0 && targets.length === 0) {
+    const seen = new Set<string>();
+    for (const threadId of item.receiverThreadIds) {
+      const name = mergedNames.get(threadId);
+      if (name && !seen.has(name)) {
+        seen.add(name);
+        targets.push(name);
+      }
+    }
+  }
+
+  if (targetCount === 0 && phase === 'completed' && item.agentsStates) {
+    const stateThreadIds = Object.keys(item.agentsStates);
+    if (stateThreadIds.length > 0) {
+      const seen = new Set<string>();
+      targets = [];
+      for (const threadId of stateThreadIds) {
+        const name = mergedNames.get(threadId);
+        if (name && !seen.has(name)) {
+          seen.add(name);
+          targets.push(name);
+        }
+      }
+      targetCount = stateThreadIds.length;
+    }
+  }
+
+  return {
+    targets: targets.slice(0, 8),
+    targetCount,
+    namesByThreadId: mergedNames,
+  };
+}
+
+function formatCodexAgentStatesSummary(
+  states: Record<string, unknown> | null | undefined,
+  namesByThreadId?: ReadonlyMap<string, string>,
+): string | undefined {
   const entries = Object.entries(states ?? {});
   if (entries.length === 0) return undefined;
   return entries
     .map(([threadId, state]) => {
+      const displayThread = namesByThreadId?.get(threadId) ?? threadId;
       const label = formatCodexAgentStateLabel(state);
-      return label ? `${threadId}: ${label}` : threadId;
+      return label ? `${displayThread}: ${label}` : displayThread;
     })
     .join('\n');
 }
@@ -2546,10 +2691,13 @@ function handleCollabAgentToolCall(
   } else if (phase === 'completed') {
     ctx.rt.collabToolItems.delete(item.id);
   }
+  const resolved = resolveCollabTargetsFromState(ctx, item, phase);
   const input: Record<string, unknown> = {
     senderThreadId: item.senderThreadId,
     receiverThreadIds: item.receiverThreadIds,
   };
+  if (resolved.targets.length > 0) input.targets = resolved.targets;
+  if (resolved.targetCount > 0) input.targetCount = resolved.targetCount;
   if (item.prompt) input.prompt = item.prompt;
   if (item.model) input.model = item.model;
   if (item.reasoningEffort) input.reasoningEffort = item.reasoningEffort;
@@ -2611,8 +2759,22 @@ function handleCollabAgentToolCall(
     });
   }
   ctx.rt.emittedToolUse.delete(item.id);
+  const lowerTool = item.tool.trim().toLowerCase();
+  if (lowerTool === 'close' || lowerTool === 'closeagent' || lowerTool === 'close_agent') {
+    for (const threadId of item.receiverThreadIds) {
+      ctx.rt.activeSubagentThreadIds.delete(threadId);
+    }
+  }
+  if (item.agentsStates) {
+    for (const [threadId, state] of Object.entries(item.agentsStates)) {
+      if (isTerminalCodexAgentStateLabel(formatCodexAgentStateLabel(state))) {
+        ctx.rt.activeSubagentThreadIds.delete(threadId);
+      }
+    }
+  }
   const isError = item.status === 'failed';
-  const fullText = formatCodexAgentStatesSummary(item.agentsStates) ?? (isError ? 'failed' : item.status);
+  const statesSummary = formatCodexAgentStatesSummary(item.agentsStates, resolved.namesByThreadId);
+  const fullText = statesSummary ?? (isError ? 'failed' : (isSpawn ? item.status : ''));
   queue.push({
     type: 'tool_result_full',
     data: { toolUseId: item.id, fullText, isError },
@@ -2737,6 +2899,7 @@ function handleSubAgentActivity(
   // started phase 登记等 completed 清理;只收到 completed(防御)时无后续 phase,不登记。
   if (phase === 'started') ctx.rt.emittedToolUse.add(item.id);
   const agentPath = typeof item.agentPath === 'string' ? item.agentPath : undefined;
+  rememberCodexSubagentName(ctx.rt, item.agentThreadId, agentPath);
   const model = typeof item.model === 'string' && item.model ? item.model : undefined;
   const reasoningEffort = typeof item.reasoningEffort === 'string' && item.reasoningEffort
     ? item.reasoningEffort

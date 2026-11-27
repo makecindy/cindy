@@ -284,3 +284,58 @@ it.each([['imFeishu', 'feishu'], ['imWechat', 'wechat'], ['imWecom', 'wecom'], [
   expect(readImDefaultSettings('slack').agents.codex.model).toBe(route.modelId);
   expect(() => normalizeHostSettingsChange({ domain, set: { codex: { providerId: 'fixed-provider', modelId: '', effort: 'high' } } })).toThrow();
 });
+
+// 回归：Node Host host-settings v1 协议不含 acp 引擎；本地若已保存插件引擎默认，getHostSettings
+// 必须返回 unavailable 而不是把无效值写进 v1 schema 或静默覆盖。最小失败输入与 tier：unit。
+it('reports an IM domain as unavailable on host-settings v1 when a plugin engine route is saved', async () => {
+  const { writeImDefaultSettingsPatch } = await import('../../im/defaultSettingsStore');
+  writeImDefaultSettingsPatch(
+    {
+      agentKind: 'acp',
+      agents: {
+        acp: {
+          providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+          model: 'gemini-4-neon',
+          effort: 'high',
+        },
+      },
+    },
+    'feishu',
+  );
+  expect(await getHostSettings(caller, 'imFeishu')).toMatchObject({ status: 'unavailable', revision: null });
+});
+
+it('preserves modelGroup on effort-only IM updates and clears modelGroup on default reset', async () => {
+  const { writeModelGroupsConfig } = await import('../../model-groups/store.js');
+  writeModelGroupsConfig({ routes: [{ id: 'coding', name: 'Coding', strategy: 'order', candidates: [] }] });
+  expect(await updateHostSettings(caller, await request('imFeishu', {
+    set: {
+      agentKind: 'codex',
+      modelGroup: 'coding',
+      codex: { providerId: route.providerId, modelId: route.modelId, effort: 'high' },
+    },
+  }))).toMatchObject({ saved: true });
+  expect(await getHostSettings(caller, 'imFeishu')).toMatchObject({
+    status: 'ready',
+    value: { modelGroup: 'coding' },
+  });
+
+  // Effort-only change on the same concrete route keeps modelGroup.
+  expect(await updateHostSettings(caller, await request('imFeishu', {
+    set: { codex: { providerId: route.providerId, modelId: route.modelId, effort: 'low' } },
+  }))).toMatchObject({ saved: true });
+  expect(await getHostSettings(caller, 'imFeishu')).toMatchObject({
+    status: 'ready',
+    value: { modelGroup: 'coding', codex: { effort: 'low' } },
+  });
+
+  // Clearing default keys (even without explicitly naming modelGroup) clears modelGroup.
+  const beforeReset = await getHostSettings(caller, 'imFeishu');
+  expect(beforeReset.status).toBe('ready');
+  const defaultKeys = Object.keys((beforeReset as { defaults: Record<string, unknown> }).defaults);
+  expect(await updateHostSettings(caller, await request('imFeishu', { clear: defaultKeys }))).toMatchObject({ saved: true });
+  const afterReset = await getHostSettings(caller, 'imFeishu');
+  expect(afterReset.status).toBe('ready');
+  expect((afterReset as { value: Record<string, unknown>; isCustomized: boolean }).value.modelGroup).toBeUndefined();
+  expect((afterReset as { isCustomized: boolean }).isCustomized).toBe(false);
+});

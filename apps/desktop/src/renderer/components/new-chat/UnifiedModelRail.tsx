@@ -1,9 +1,15 @@
+import {
+  buildPluginEngineUsagePresentation,
+  splitPluginUsageWindowLabel,
+} from '@cindy/maker-shared/plugin-engine-usage';
+import { quotaLevelFromRemaining } from '@cindy/maker-shared/quota-level';
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { isDarkBackground } from '../../../shared/theme-import/color';
 import { themeService } from '@/themes/theme-service';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
-import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
+import { usePluginEngineUsage } from '@/hooks/usePluginEngineUsage';
+import { History, LayoutGrid, Share2, Sparkles, Star } from 'lucide-react';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { useTranslation } from 'react-i18next';
 import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
@@ -23,7 +29,8 @@ import {
   type ProviderGroupUsageOf,
   type ProviderUsageScope,
 } from './useProviderWeeklyQuota';
-import { formatQuotaResetCountdown } from '../status/usageCardModel';
+import { formatQuotaResetCountdown, formatQuotaResetDuration } from '../status/usageCardModel';
+import { pluginEngineUsageBalances } from '../status/pluginEngineUsageAccount';
 import { agentOptionOf } from './agentOptions';
 import { ProviderRailMark } from './UnifiedFlyoutHost';
 import { RemoteSourceMark } from '@/components/icons/RemoteSourceMark';
@@ -36,7 +43,10 @@ import {
   type UnifiedRailFilter,
   type UnifiedRailItem,
 } from './unifiedModelSelection';
-import { QUOTA_FILL_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
+import { QUOTA_FILL_COLOR_CLASSES, QUOTA_TEXT_COLOR_CLASSES, quotaSeverity } from '../status/QuotaBar';
+import { RouteSourceMark } from '@/components/icons/RouteSourceMark';
+import { isSourceRouteProviderId } from '@/features/model-groups/sourceRouteProviders';
+import { OWN_ROUTES_PROVIDER_ID } from '../../../shared/auxiliaryModelSettings';
 
 /**
  * UnifiedModelRail —— 统一面板左侧的视图筛选栏(model-selector-unified §1.2 / §1.6)。
@@ -59,7 +69,10 @@ export function UnifiedModelRail({
   remoteSources,
   pluginEngineTabs,
   modelGroupDeviceTabs,
+  routeUsageMember,
 }: {
+  /** 合并整个供应商的路由那一格显示谁的额度；缺省时那一格不显示额度。 */
+  routeUsageMember?: (providerId: string) => { provider: ProviderView; agentDeviceId: string | null } | null;
   /** 插件引擎格的名字与图标，按 providerId (与所在电脑)对应 `plugin-engine` 格。 */
   pluginEngineTabs?: readonly PluginEngineRailTab[];
   /** 另一台电脑的「模型组」格的名字(悬停与读屏)。 */
@@ -108,9 +121,15 @@ export function UnifiedModelRail({
         const previous = index > 0 ? items[index - 1] : undefined;
         // 另一台电脑上的插件引擎格与那台的供应商格同属一段。
         const itemDeviceId = railItemDeviceId(item);
+        // 路由一组(「智能路由」那一格 + 合并了整个供应商的路由)与后面的普通供应商之间也画一条：
+        // 混在一排品牌图标里分不出哪些是路由(2026-11-25 用户反馈)。
+        const routeItem = (candidate: UnifiedRailItem | undefined) => !!candidate && (
+          (candidate.kind === 'model-groups' && !candidate.deviceId)
+          || (candidate.kind === 'provider' && isSourceRouteProviderId(candidate.providerId)));
         const separatorBefore =
           item.kind === 'all' ||
-          (itemDeviceId !== null && (!previous || railItemDeviceId(previous) !== itemDeviceId));
+          (itemDeviceId !== null && (!previous || railItemDeviceId(previous) !== itemDeviceId)) ||
+          (itemDeviceId === null && routeItem(previous) && !routeItem(item));
         const engineTab = item.kind === 'plugin-engine'
           ? pluginEngineTabs?.find((tab) => tab.providerId === item.providerId && (tab.deviceId ?? null) === (item.deviceId ?? null))
           : undefined;
@@ -157,6 +176,14 @@ export function UnifiedModelRail({
                   device: groupUsage.deviceName,
                 })
           : undefined;
+        // 合并整个供应商的路由：额度按排在最前、没停用的那个成员显示，悬停写明是谁的(它自己没有账号)。
+        const routeMember = item.kind === 'provider' && isSourceRouteProviderId(item.providerId)
+          ? routeUsageMember?.(item.providerId) ?? null : null;
+        const routeMemberShare = routeMember && isProviderShareAgentDeviceId(routeMember.agentDeviceId) ? routeMember.agentDeviceId : null;
+        const routeMemberName = routeMember
+          ? (routeMember.agentDeviceId ? remoteSources?.labelOf(routeMember.agentDeviceId, routeMember.provider.id) : undefined)
+            ?? routeMember.provider.name
+          : null;
         const label =
           item.kind === 'recent'
             ? t('newChat.modelSelector.unified.railRecent')
@@ -179,6 +206,16 @@ export function UnifiedModelRail({
                   : item.kind === 'remote-provider'
                     ? (remoteSources?.labelOf(item.deviceId, item.providerId) ?? item.providerId)
                     : (remoteSources?.localProviderLabel ?? providerLabel)(item.providerId);
+        const pluginUsageDeviceId = item.kind === 'plugin-engine' ? (item.deviceId ?? usageDeviceId) : null;
+        const pluginEngineUsage =
+          item.kind === 'plugin-engine' &&
+          !isSourceRouteProviderId(item.providerId) &&
+          engineTab?.reportsUsage === true &&
+          engineTab.selectable !== false &&
+          engineTab.key &&
+          !isProviderShareAgentDeviceId(pluginUsageDeviceId)
+            ? { engineKey: engineTab.key, deviceId: pluginUsageDeviceId }
+            : undefined;
         return (
           <div key={key} className="contents">
             {separatorBefore && (
@@ -189,24 +226,31 @@ export function UnifiedModelRail({
             )}
             <RailButton
               shareDeviceId={
-                (item.kind === 'provider' || item.kind === 'remote-provider') &&
-                isProviderShareAgentDeviceId(usageDeviceId)
-                  ? usageDeviceId
-                  : null
+                routeMember
+                  ? routeMemberShare
+                  : (item.kind === 'provider' || item.kind === 'remote-provider') &&
+                      isProviderShareAgentDeviceId(usageDeviceId)
+                    ? usageDeviceId
+                    : null
               }
               label={label}
-              accountIdentity={accountIdentity}
-              {...(groupNote ? { groupNote } : {})}
+              accountIdentity={routeMember ? undefined : accountIdentity}
+              {...(routeMemberName
+                ? { groupNote: t('modelGroups.picker.quotaOf', { name: routeMemberName }) }
+                : groupNote ? { groupNote } : {})}
               selectedUpload={isActive && !!provider?.customIcon}
               isActive={isActive}
               itemKey={key}
               onClick={() => onSelect(item)}
               disabled={interactionDisabled}
-              provider={providerUsage ? usageProvider : undefined}
+              provider={providerUsage ? (routeMember ? (routeMemberShare ? undefined : routeMember.provider) : usageProvider) : undefined}
+              {...(pluginEngineUsage ? { pluginEngineUsage } : {})}
               usageDeviceId={
-                groupUsage?.kind === 'running' && groupUsage.usage
-                  ? groupUsage.usage.scope.deviceId
-                  : usageDeviceId
+                routeMember
+                  ? routeMember.agentDeviceId ?? usageDeviceId
+                  : groupUsage?.kind === 'running' && groupUsage.usage
+                    ? groupUsage.usage.scope.deviceId
+                    : usageDeviceId
               }
             >
               {item.kind === 'recent' ? (
@@ -226,15 +270,20 @@ export function UnifiedModelRail({
               ) : item.kind === 'model-groups' && item.deviceId ? (
                 // 另一台电脑的模式：与远程供应商格同一个信号波纹。
                 <RemoteSourceMark markSize={16}>
-                  <Waypoints size={16} />
+                  <Sparkles size={16} />
                 </RemoteSourceMark>
               ) : item.kind === 'model-groups' ? (
-                <Waypoints size={16} />
+                <Sparkles size={16} />
               ) : item.kind === 'plugin-engine' && item.deviceId ? (
                 // 另一台电脑上的引擎：与远程供应商格同一个信号波纹。
                 <RemoteSourceMark markSize={16}>
                   <PluginEngineIcon size={16} iconDataUrl={engineTab?.iconDataUrl} className="" />
                 </RemoteSourceMark>
+              ) : item.kind === 'plugin-engine' && isSourceRouteProviderId(item.providerId) ? (
+                // 合并了插件执行引擎的供应商路由：插件图标 + 路由角标，与内置供应商路由一致。
+                <RouteSourceMark markSize={16}>
+                  <PluginEngineIcon size={16} iconDataUrl={engineTab?.iconDataUrl} className="" />
+                </RouteSourceMark>
               ) : item.kind === 'plugin-engine' ? (
                 // 和供应商格一样画来源自己的标：提供引擎的插件图标(没有时画通用拼图，跟随格的前景色)。
                 <PluginEngineIcon
@@ -242,6 +291,14 @@ export function UnifiedModelRail({
                   iconDataUrl={engineTab?.iconDataUrl}
                   className=""
                 />
+              ) : item.kind === 'provider' && item.providerId === OWN_ROUTES_PROVIDER_ID ? (
+                // 自己排的路由合在一格(辅助模型)：与「智能路由」格同一个图形，不叠合并供应商的角标。
+                <Sparkles size={16} />
+              ) : item.kind === 'provider' && isSourceRouteProviderId(item.providerId) ? (
+                // 合并了整个供应商的路由：品牌图形 + 路由角标，不与普通供应商混淆。
+                <RouteSourceMark markSize={16}>
+                  <ProviderRailMark providerId={item.providerId} providers={railProviders} />
+                </RouteSourceMark>
               ) : item.kind === 'provider' ? (
                 <ProviderRailMark providerId={item.providerId} providers={railProviders} />
               ) : item.kind === 'remote-provider' ? (
@@ -270,6 +327,7 @@ interface RailButtonProps {
   onClick: () => void;
   disabled: boolean;
   provider?: ProviderView;
+  pluginEngineUsage?: { engineKey: string; deviceId: string | null };
   usageDeviceId: string | null;
   shareDeviceId?: string | null;
   children: ReactNode;
@@ -280,6 +338,9 @@ function RailButton(props: RailButtonProps) {
   // and must never borrow this desktop's account quota.
   if (props.shareDeviceId) {
     return <SharedProviderQuotaButton {...props} shareDeviceId={props.shareDeviceId} />;
+  }
+  if (props.pluginEngineUsage) {
+    return <PluginEngineQuotaButton {...props} pluginEngineUsage={props.pluginEngineUsage} />;
   }
   // Groups already resolve an executing member. Keep that member's runtime
   // mirror, rather than previewing a new allocation on the same computer.
@@ -295,6 +356,91 @@ function RailButton(props: RailButtonProps) {
     </ModelPickerAccountBoundary>
   ) : (
     <RailButtonView {...props} />
+  );
+}
+
+function PluginEngineQuotaButton(
+  props: RailButtonProps & { pluginEngineUsage: { engineKey: string; deviceId: string | null } },
+) {
+  const { t, i18n } = useTranslation();
+  const { usage, now } = usePluginEngineUsage({
+    engineKey: props.pluginEngineUsage.engineKey,
+    deviceId: props.pluginEngineUsage.deviceId,
+    enabled: true,
+  });
+  const presentation = buildPluginEngineUsagePresentation(usage, now);
+  const balances = usage ? pluginEngineUsageBalances(usage, i18n.language, t) : [];
+  const primary = presentation.primaryGroup;
+  // Single 22×3px bar matching every built-in provider icon; multi-group details live in the tooltip & list.
+  const quota = primary
+    ? {
+        usedPercent: 100 - primary.remainingPercent,
+        resetsAt: primary.primary.resetsAt ? primary.primary.resetsAt / 1000 : null,
+      }
+    : null;
+  const hasDetails = presentation.groups.length > 0 || balances.length > 0;
+  const customDescription = hasDetails
+    ? [
+        ...presentation.groups.map((group) => {
+          const reset = group.primary.resetsAt
+            ? formatQuotaResetDuration(group.primary.resetsAt / 1000, now, t)
+            : null;
+          const groupLabel = presentation.isMultiGroup
+            ? (group.shortLabel ?? group.primary.label)
+            : group.primary.label;
+          return [
+            groupLabel,
+            t('quotaCard.remainingPercent', { percent: group.remainingPercent }),
+            reset,
+          ]
+            .filter(Boolean)
+            .join(' · ');
+        }),
+        ...balances,
+      ].join(' · ')
+    : undefined;
+  const customTooltip = hasDetails ? (
+    <div className="space-y-2">
+      <div>{props.label}</div>
+      {presentation.groups.map((group) => (
+        <div key={group.id} className="space-y-0.5">
+          {presentation.isMultiGroup && group.rawName && (
+            <div className="font-medium">{group.rawName}</div>
+          )}
+          {group.windows.map((row, index) => {
+            const rowReset = row.resetsAt
+              ? formatQuotaResetDuration(row.resetsAt / 1000, now, t)
+              : null;
+            const label = presentation.isMultiGroup && group.rawName
+              ? splitPluginUsageWindowLabel(row.label).period
+              : row.label;
+            const rowLevel = quotaLevelFromRemaining(row.remainingPercent);
+            return (
+              <div key={index} className={QUOTA_TEXT_COLOR_CLASSES[rowLevel]}>
+                {[
+                  label,
+                  t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }),
+                  rowReset,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+      {balances.map((line, index) => (
+        <div key={`b:${index}`}>{line}</div>
+      ))}
+    </div>
+  ) : undefined;
+  return (
+    <RailButtonView
+      {...props}
+      quota={quota}
+      customTooltip={customTooltip}
+      customDescription={customDescription}
+    />
   );
 }
 
@@ -340,9 +486,13 @@ function RailButtonView({
   selectedUpload,
   quota,
   pool,
+  customTooltip,
+  customDescription,
 }: RailButtonProps & {
   quota?: ReturnType<typeof useProviderWeeklyQuota>;
   pool?: ModelPoolQuota | null;
+  customTooltip?: ReactNode;
+  customDescription?: string;
 }) {
   const { t } = useTranslation();
   const mark = useRef<HTMLSpanElement>(null);
@@ -408,8 +558,8 @@ function RailButtonView({
       .filter(Boolean)
       .join(' · '),
   ) : undefined;
-  const description = [note, quotaLabel, ...(!pool?.hasAccountDetails ? [pool?.warningLabel] : []), ...(accountLines ?? [])].filter(Boolean).join(' · ');
-  const tooltip = pool && (pool.hasAccountDetails || pool.warning) ? (
+  const description = customDescription ?? [note, quotaLabel, ...(!pool?.hasAccountDetails ? [pool?.warningLabel] : []), ...(accountLines ?? [])].filter(Boolean).join(' · ');
+  const tooltip = customTooltip !== undefined ? customTooltip : pool && (pool.hasAccountDetails || pool.warning) ? (
     <>
       <div>{displayLabel}</div>
       {/* 标题已含完整账号时明细不再重复；供应商组标题不带账号、生成名截断到 50 字时只有半个账号，照常列出。 */}

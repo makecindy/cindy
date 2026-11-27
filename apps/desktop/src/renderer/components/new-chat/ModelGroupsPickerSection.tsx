@@ -6,7 +6,7 @@
  * 本机选择器「其他电脑」那几段各有一格列那台电脑自己的模式(model-groups.md §6.3)：选中后由那台选来源，
  * 这些行不带 ☆(收藏只记本机的模式)，也没有管理入口(那台的模式在那台上改)。
  */
-import { Settings2, Star, Waypoints } from 'lucide-react';
+import { Settings2, Sparkles, Star } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
@@ -14,13 +14,35 @@ import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
 import { toggleModelGroupFavorite, useModelGroupFavorites } from '@/features/model-groups/modelGroupFavorites';
 import { cn } from '@/lib/utils';
 
-import type { ModelGroupRoute, ModelGroupSelection, ModelGroupsConfig } from '../../../shared/modelGroups';
+import type {
+  ModelGroupRoute,
+  ModelGroupSelection,
+  ModelGroupSessionBindingView,
+  ModelGroupsConfig,
+} from '../../../shared/modelGroups';
 
 export interface ModelGroupsPickerProps {
   config: ModelGroupsConfig;
-  /** 当前选中的模式；null = 用普通模型(进行中的任务里总是 null：选一次换一次，不留选中态)。 */
+  /** 当前选中的模式；null = 用普通模型(进行中的任务在处于持续托管时也会带上当前托管的路由)。 */
   active: ModelGroupSelection | null;
   onSelect(selection: ModelGroupSelection): void;
+  /**
+   * 进行中的任务处于智能路由持续托管时的元信息：按钮显示实际运行的模型 + 路由标记，
+   * 选择器顶部显示当前托管路由并提供显式「解除托管」入口(2026-11-27)。
+   */
+  managedMeta?: ModelGroupSessionBindingView | null;
+  /** 显式解除当前任务的智能路由持续托管，保留当前具体模型。 */
+  onDetach?(): void;
+  /**
+   * 新任务草稿才传：选了供应商路由下的一个模型后，只记下「这次由这条路由决定用哪个成员」，不动刚选好的模型、
+   * 思考深度与 Fast。传了它，面板就把供应商路由当成普通供应商列出来(sourceRouteProviders.ts)。
+   */
+  onAttach?(selection: ModelGroupSelection): void;
+  /**
+   * 进行中的任务才传(与 onAttach 二选一)：面板同样把供应商路由当成普通供应商列出来，但选中其中一个模型时不先换到某个成员，
+   * 而是交给这里——按路由在任务所在的位置挑成员再换，带上用户在那一行选的思考深度与 Fast。
+   */
+  onPickMerged?(selection: ModelGroupSelection, context: { effort?: string; fastMode?: true | 'ultrafast' }): void;
   /** 打开设置里的「模型组」。组属于另一台电脑(远程控制它的伙伴)时不传：这台电脑的设置管不到那边的组。 */
   onManage?(): void;
   /** 另一台电脑自己的模式，每台一格；只列有模式的电脑。选中的 selection 带上那台的 deviceId。 */
@@ -43,6 +65,8 @@ interface PickerRow {
   selection: ModelGroupSelection;
   name: string;
   hint: string;
+  /** 供应商路由在这个模型上的展开：列在那条供应商路由的名字下面。 */
+  parent?: { id: string; name: string };
 }
 
 export function useModelGroupPickerRows(config: ModelGroupsConfig, deviceId?: string): PickerRow[] {
@@ -57,10 +81,12 @@ export function buildModelGroupPickerRows(config: ModelGroupsConfig, t: TFunctio
     t(`modelGroups.strategy.${route.strategy}.title`),
     route.effort ? t(`effortLevels.${route.effort}`, { defaultValue: route.effort }) : '',
   ].filter(Boolean).join(' · ');
-  return config.routes.map((route) => ({
+  // 隐藏了的供应商路由不列(设置页里能找回)；用户排的在前，供应商路由在后，与设置页同一顺序。
+  return config.routes.filter((route) => !route.hidden).map((route) => ({
     selection: { type: 'route', id: route.id, ...(deviceId ? { deviceId } : {}) },
     name: route.name,
     hint: hint(route),
+    ...(route.parent ? { parent: route.parent } : {}),
   }));
 }
 
@@ -87,7 +113,7 @@ export function useFavoriteModelGroupCount(config: ModelGroupsConfig): number {
 export type ModelGroupsPickerVariant = 'rail' | 'all' | 'search' | 'favorites';
 
 export function ModelGroupIcon({ size }: { size: number }) {
-  return <Waypoints size={size} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />;
+  return <Sparkles size={size} aria-hidden className="shrink-0 text-[var(--text-secondary)]" />;
 }
 
 export function ModelGroupsPickerSection({
@@ -112,8 +138,17 @@ export function ModelGroupsPickerSection({
   const shown = variant === 'favorites'
     ? favorites.flatMap((id) => rows.filter((row) => row.selection.id === id))
     : matches(rows, query);
+  // 收藏按收藏顺序整段列；其余位置每条供应商路由单独一段：段名是它的名字，下面是它能用的模型，像一个合并后的供应商。
+  const split = variant !== 'favorites';
+  const title = device ? t('modelGroups.picker.deviceTitle', { device: device.name }) : t('modelGroups.title');
+  const parents = split ? [...new Map(shown.flatMap((row) => (row.parent ? [[row.parent.id, row.parent] as const] : []))).values()] : [];
   const groups = [
-    { key: 'modes', label: device ? t('modelGroups.picker.deviceTitle', { device: device.name }) : t('modelGroups.title'), rows: shown },
+    { key: 'modes', label: title, rows: split ? shown.filter((row) => !row.parent) : shown },
+    ...parents.map((parent) => ({
+      key: `source:${parent.id}`,
+      label: device ? `${parent.name} · ${device.name}` : parent.name,
+      rows: shown.filter((row) => row.parent?.id === parent.id),
+    })),
   ].filter((group) => group.rows.length > 0);
   // 只有「模型组」一格显示空态与管理入口；其余位置没有可列的就不占地方。
   const searchOnly = variant !== 'rail';
@@ -121,10 +156,36 @@ export function ModelGroupsPickerSection({
     picker.onManage?.();
     onPicked();
   };
-  if (searchOnly && groups.length === 0) return null;
+  const detach = () => {
+    picker.onDetach?.();
+    onPicked();
+  };
+  const showManagedBanner = !device && (variant === 'rail' || variant === 'all') && !!picker.managedMeta && !!picker.onDetach;
+  if (searchOnly && groups.length === 0 && !showManagedBanner) return null;
   return (
     <>
-      {groups.length === 0 && (
+      {showManagedBanner && picker.managedMeta && (
+        <div
+          data-model-group-managed-banner
+          className="mx-2 mb-1 mt-1.5 flex items-center justify-between gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-subtle,var(--bg-subtle))] px-2.5 py-1.5 text-12 text-[var(--text-secondary)]"
+        >
+          <span className="flex min-w-0 items-center gap-1.5">
+            <ModelGroupIcon size={13} />
+            <span className="min-w-0 truncate">
+              {t('modelGroups.picker.managedBy', { name: picker.managedMeta.routeName })}
+            </span>
+          </span>
+          <button
+            type="button"
+            data-model-group-detach
+            onClick={detach}
+            className="shrink-0 rounded px-1.5 py-0.5 text-11 font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)]"
+          >
+            {t('modelGroups.picker.detach')}
+          </button>
+        </div>
+      )}
+      {groups.length === 0 && !showManagedBanner && (
         <div className="w-0 min-w-full px-3 py-6 text-center text-13 leading-[1.5] text-[var(--text-tertiary)]">
           {t('modelGroups.picker.empty')}
         </div>

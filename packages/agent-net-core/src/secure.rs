@@ -94,6 +94,9 @@ const RESPONSE_OVERHEAD: usize = RESPONSE_PREFIX + SECOND_MESSAGE_FIXED_LEN + PA
 const DATA_PREFIX: usize = wire::PACKET_HEADER_LEN + CONNECTION_ID_LEN;
 /// 最短的路径验证包。
 const MIN_PROBE_LEN: usize = DATA_PREFIX + wire::PATH_FRAME_LEN + TAG_LEN;
+/// 路径 MTU 回退探测长度：常规满长探测（1309/1400 字节）连续两次无回音时，退到常见 1280 MTU 隧道（IPv6/WireGuard/PPPoE/AnyConnect）
+/// 安全可通过的长度继续验证；通过后将该路径的发包上限收窄到此长度，切回满长路径时自动恢复。
+pub const SMALL_MTU_PROBE_LEN: usize = 1180;
 /// 一轮路径验证最多发几次。第 n 次（从 0 数）之后隔 `initial_rto_us << n` 再发下一次。
 const MAX_CHALLENGES: u32 = 4;
 /// 一轮验证从开始到判定失败的时间是 `initial_rto_us` 的这么多倍，即四次间隔 1 + 2 + 4 + 8。
@@ -546,6 +549,9 @@ struct Candidate {
     challenges: u32,
     /// 每次发出验证包的时间戳（微秒），收到对应回复时算路径往返。
     sent_at: [u64; MAX_CHALLENGES as usize],
+    /// 每次发出验证包的实际长度，以及是否因满长探测超时而主动降档到小 MTU 探测。
+    sent_size: [usize; MAX_CHALLENGES as usize],
+    stepped_down: [bool; MAX_CHALLENGES as usize],
     due_at: u64,
     interval_us: u64,
     deadline: u64,
@@ -667,6 +673,8 @@ impl Paths {
             first: self.next_value,
             challenges: 0,
             sent_at: [0; MAX_CHALLENGES as usize],
+            sent_size: [0; MAX_CHALLENGES as usize],
+            stepped_down: [false; MAX_CHALLENGES as usize],
             due_at: now_us,
             interval_us,
             deadline,
@@ -719,31 +727,44 @@ impl Paths {
     }
 
     /// 到期要发的验证：发往的路径、值、包长、是否只换了端口。放大限制连最短的验证包都不允许的路径跳过。
+    /// 前两次按 `max_packet_size` 发满长包；若连续两次无回音且 `max_packet_size > SMALL_MTU_PROBE_LEN`，
+    /// 第 3、4 次自动降档到 `SMALL_MTU_PROBE_LEN` 以穿透小 MTU 隧道/VPN。
     fn next_challenge(&mut self, now_us: u64, max_packet_size: usize) -> Option<(u64, u64, usize, bool)> {
         let index = self.candidates.iter().position(|candidate| candidate.due_at <= now_us && self.can_challenge(candidate))?;
-        // 只用一半额度：验证包丢了还要重发，从这条路径收到更多之前得留着。这一端自己要验证的发满长度。
+        let step_down = self.candidates[index].challenges >= 2 && max_packet_size > SMALL_MTU_PROBE_LEN;
+        let budget = if step_down { SMALL_MTU_PROBE_LEN } else { max_packet_size };
+        // 只用一半额度：验证包丢了还要重发，从这条路径收到更多之前得留着。这一端自己要验证的按当前档位发满。
         let size = match self.room(self.candidates[index].path) {
-            Some(room) => (room / 2).clamp(MIN_PROBE_LEN, max_packet_size),
-            None => max_packet_size,
+            Some(room) => (room / 2).clamp(MIN_PROBE_LEN, budget),
+            None => budget,
         };
         let candidate = &mut self.candidates[index];
         let challenge_index = candidate.challenges as usize;
         let value = candidate.first + candidate.challenges as u64;
         if challenge_index < candidate.sent_at.len() {
             candidate.sent_at[challenge_index] = now_us;
+            candidate.sent_size[challenge_index] = size;
+            candidate.stepped_down[challenge_index] = step_down;
         }
         candidate.due_at = now_us + (candidate.interval_us << candidate.challenges);
         candidate.challenges += 1;
         Some((candidate.path, value, size, candidate.same_route))
     }
 
-    /// 对端回了验证：返回是哪一条正在验证的路径发出的值、是否只换了端口、是不是这一端自己要验证的、以及是否允许换过去；
+    /// 对端回了验证：返回是哪一条正在验证的路径发出的值、是否只换了端口、是不是这一端自己要验证的、是否允许换过去，
+    /// 以及若未能证明路径支持满长 `full_limit`（例如主动降档到小 MTU，或受放大限制发出的短验证仅收到非满长回复）则返回收窄后的发包上限；
     /// 不是任何一条的值时返回 `None`。同时记录这次探测测得的往返时间。
-    fn on_response(&mut self, now_us: u64, value: u64) -> Option<(u64, bool, bool, bool)> {
+    fn on_response(&mut self, now_us: u64, value: u64, response_size: usize, full_limit: usize) -> Option<(u64, bool, bool, bool, Option<usize>)> {
         let candidate = self.candidates.iter().find(|candidate| (candidate.first..candidate.first + candidate.challenges as u64).contains(&value))?;
         let offset = (value - candidate.first) as usize;
         let rtt_us = candidate.sent_at.get(offset).copied().map(|sent| now_us.saturating_sub(sent)).unwrap_or(0);
-        let result = (candidate.path, candidate.same_route, candidate.proactive, candidate.switch_on_pass);
+        let stepped_down = candidate.stepped_down.get(offset).copied().unwrap_or(false);
+        let sent_size = candidate.sent_size.get(offset).copied().unwrap_or(0);
+        // 满长发送能力仅在未降档且（本端发出了满长验证，或跟随端受放大限制时对端在活跃路径上回了满长回复）时成立。
+        // 主动端已降档到 1180 B 时，它回给跟随端的验证回复同样受限在 1180 B，跟随端不得把短验证误当成 1309 B 满长证明。
+        let full_proven = !stepped_down && (sent_size >= full_limit || (!candidate.proactive && response_size >= full_limit));
+        let reduced_limit = (!full_proven && full_limit > SMALL_MTU_PROBE_LEN).then_some(SMALL_MTU_PROBE_LEN);
+        let result = (candidate.path, candidate.same_route, candidate.proactive, candidate.switch_on_pass, reduced_limit);
         if self.probe_rtts.len() == MAX_PROBE_RTTS {
             self.probe_rtts.pop_front();
         }
@@ -1063,6 +1084,11 @@ impl<C: Crypto> SecureConnection<C> {
         self.paths.active
     }
 
+    /// 当前活跃路径实际使用的发包上限（默认等于 `config.send_limit()`，小 MTU 路径验证通过后会收窄到已验证长度）。
+    pub fn active_send_packet_size(&self) -> usize {
+        self.connection.effective_send_limit()
+    }
+
     /// 正在验证的新路径，先开始的在前。验证通过之前数据照旧发往 [`path`](Self::path)，发往新路径的只有验证包，受放大限制。
     pub fn validating(&self) -> impl Iterator<Item = u64> + '_ {
         self.paths.candidates.iter().map(|candidate| candidate.path)
@@ -1115,6 +1141,11 @@ impl<C: Crypto> SecureConnection<C> {
     }
 
     /// 取走一条刚测得的路径往返：（路径号，微秒）。
+    /// 有没取走的路径测速结果（[`poll_probe_rtt`](Self::poll_probe_rtt)）：宿主据此决定要不要叫应用来读。
+    pub fn has_probe_rtt(&self) -> bool {
+        !self.paths.probe_rtts.is_empty()
+    }
+
     pub fn poll_probe_rtt(&mut self) -> Option<(u64, u64)> {
         self.paths.probe_rtts.pop_front()
     }
@@ -1352,7 +1383,7 @@ impl<C: Crypto> SecureConnection<C> {
                 // 验证期间的确认又都发往了旧端口。真换了网络时不补：自己知道换了网络的对端已经重来，补的确认只确认旧路径上的包，
                 // 2026-11-05 模拟里这时上传反而慢 2%、双向慢 3%。
                 // 这一端自己要验证的路径比数据路径贵、数据路径又还好好的：留作备用，不换。
-                let Some((path, same_route, proactive, switch_on_pass)) = self.paths.on_response(now_us, value) else { return };
+                let Some((path, same_route, proactive, switch_on_pass, reduced_limit)) = self.paths.on_response(now_us, value, size, self.config.send_limit()) else { return };
                 if !switch_on_pass {
                     self.paths.keep_alternate(path);
                     self.stats.alternates_kept += 1;
@@ -1361,6 +1392,13 @@ impl<C: Crypto> SecureConnection<C> {
                 // 断了的判断和发起退回时一样：自己连续超时、又安静了，或者可以跟着对端走了。
                 let failing = Self::active_dead(&self.connection, &self.paths, now_us) || Self::active_failing(&self.connection, &self.paths, now_us);
                 if proactive && self.paths.cost(path) > self.paths.cost(self.paths.active) && !failing {
+                    self.paths.keep_alternate(path);
+                    self.stats.alternates_kept += 1;
+                    return;
+                }
+                let target_limit = reduced_limit.unwrap_or_else(|| self.config.send_limit());
+                if !self.connection.try_set_send_packet_size(target_limit) {
+                    // 发送队列中仍有在更宽路径上切出的未确认大分片，先留作备用待其确认完后再切，避免卡死重传。
                     self.paths.keep_alternate(path);
                     self.stats.alternates_kept += 1;
                     return;
@@ -1601,7 +1639,7 @@ impl<C: Crypto> SecureConnection<C> {
     /// 路径验证包的明文：先回对端的验证，再在没验证过的新路径上发验证。返回明文长度、包号和发往的路径。
     fn write_probe(&mut self, now_us: u64, out: &mut [u8]) -> Option<(usize, u64, u64)> {
         let hold_us = (self.config.initial_rto_us * VALIDATION_RTOS).max(1);
-        let (frame, path, value, size) = match self.paths.next_response(now_us, self.config.send_limit(), hold_us) {
+        let (frame, path, value, size) = match self.paths.next_response(now_us, self.connection.effective_send_limit(), hold_us) {
             Some((path, value, size)) => (wire::PathFrame::Response, path, value, size),
             None => {
                 let (path, value, size, same_route) = self.paths.next_challenge(now_us, self.config.send_limit())?;

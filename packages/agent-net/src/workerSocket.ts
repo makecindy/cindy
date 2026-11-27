@@ -9,7 +9,7 @@ import { MAX_CONTROL_BYTES } from '@cindy/agent-net-protocol';
 import { shortDeviceRef } from '@cindy/device-link';
 import type { AgentNetSocketOptions } from './socket.js';
 import type { PeerRule } from './socketPorts.js';
-import { DRAIN_LOW_WATER_BYTES, type PathPreference, type RelayRoute } from './types.js';
+import { DRAIN_LOW_WATER_BYTES, type PathPreference, type RelayRoute, type UdpRebindReason } from './types.js';
 import type { SessionConfig, SessionHandle } from './session/peer.js';
 import { WorkerSessions } from './session/workerSessions.js';
 
@@ -115,6 +115,8 @@ interface PeerStatus {
   directRttMs?: number | null;
   relayRttMs?: number | null;
   pathPreference?: PathPreference;
+  /** How the peer's datagrams reach the relay, as it said on the control stream (pathRouter.ts `relayVia`). */
+  peerRelayVia?: 'udp' | 'websocket' | null;
   dialing: boolean;
 }
 
@@ -130,9 +132,15 @@ function peerRoutesChanged(previous: ReadonlyMap<string, PeerStatus>, next: Read
     if ((status.pathPreference ?? 'auto') !== (prev?.pathPreference ?? 'auto')) return true;
     if ((status.directRttMs != null) !== (prev?.directRttMs != null)) return true;
     if ((status.relayRttMs != null) !== (prev?.relayRttMs != null)) return true;
+    if ((status.peerRelayVia ?? null) !== (prev?.peerRelayVia ?? null)) return true;
   }
   for (const [id, status] of previous) if (!next.has(id) && peerRoute(status)) return true;
   return false;
+}
+
+const UDP_REBIND_REASONS: ReadonlySet<UdpRebindReason> = new Set(['network-changed', 'send-errors', 'udp-blackhole']);
+function isUdpRebindReason(value: unknown): value is UdpRebindReason {
+  return typeof value === 'string' && UDP_REBIND_REASONS.has(value as UdpRebindReason);
 }
 
 /** The encrypted transport/parser runs off Main; privileged outbound sockets retain the host's proxy policy. */
@@ -185,7 +193,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     });
     const { onDirectory: _directory, onDelegationRequests: _requests, onDelegations: _grants, onPathChanged: _path, onRelayReplaced, tap: _tap, client: _client, workerFile: _file, assertCurrent: _guard,
       log: _log, onLog: _onLog, uplinkKeepalive: _keepalive, uplinkMaxQueueDelayMs: _queueDelay, networkChangeProbeMs: _probe, pathMoveLogIntervalMs: _moveLog,
-      relayStuckMs: _stuck, onRelayClosed: _relayClosed, observeUdpTraffic, ...portable } = options;
+      relayStuckMs: _stuck, onRelayClosed: _relayClosed, onUdpRebound: _udpRebound, observeUdpTraffic, native, ...portable } = options;
     if (observeUdpTraffic) {
       // Only two integers cross the thread boundary. Sampling doesn't copy packets or post per-datagram messages.
       const bytes = new BigUint64Array(new SharedArrayBuffer(2 * BigUint64Array.BYTES_PER_ELEMENT));
@@ -193,8 +201,11 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       const stop = observeUdpTraffic(() => ({ sent: Number(Atomics.load(bytes, 0)), received: Number(Atomics.load(bytes, 1)) }));
       socket.worker.once('exit', stop);
     }
+    // The worker loads the native engine itself (socket.ts `native`); only the module's path crosses, and it reports which
+    // engine it runs on (`engine`).
     socket.worker.postMessage({ type: 'init', options: portable, client: workerClient(options.client), tap: !!options.tap,
-      reportRelayReplacements: !!onRelayReplaced });
+      reportRelayReplacements: !!onRelayReplaced,
+      nativeBinding: typeof native?.binding === 'string' ? native.binding : undefined });
     try { await ready; socket.watchRelayRestart(); setImmediate(() => { if (!socket.closed) socket.emit('open'); }); return socket; }
     catch (error) { socket.dispose(1006); throw error; }
   }
@@ -276,6 +287,19 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       : '';
     this.options.log?.info(`agent-net relayed datagrams now go over the relay ${via === 'udp' ? 'UDP port' : 'WebSocket'}${why}`);
     this.emit('relay-route', via);
+  }
+  /** The engine the worker's transport runs on, as it reported it: `native` (Rust, its own thread) or `wasm`. */
+  private engine: 'native' | 'wasm' | null = null;
+  engineInUse(): 'native' | 'wasm' | null { return this.engine; }
+  private noteEngine(engine: unknown, code: unknown): void {
+    if (engine !== 'native' && engine !== 'wasm') return;
+    this.engine = engine;
+    const reason = typeof code === 'string' && /^[A-Z0-9_]{1,80}$/.test(code) ? code : null;
+    if (engine === 'native') this.options.log?.info('agent-net transport runs on the native engine');
+    else if (reason) {
+      this.options.log?.warn(`agent-net native engine unavailable (${reason}); the transport runs on WASM`);
+      this.options.native?.onFallback?.(reason);
+    }
   }
   private readonly pingSentAt = new WeakMap<WebSocket, number>();
   private pingRelay(ws: WebSocket): void {
@@ -390,6 +414,8 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
     directRttMs?: number | null;
     relayRttMs?: number | null;
     pathPreference?: PathPreference;
+    /** The peer's own leg to the relay, once it said (older peers never do). */
+    peerRelayVia?: 'udp' | 'websocket';
   }> {
     if (this.closed || this.closeTimer) return [];
     const routes = [];
@@ -404,6 +430,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
           ...(status.directRttMs !== undefined ? { directRttMs: status.directRttMs } : {}),
           ...(status.relayRttMs !== undefined ? { relayRttMs: status.relayRttMs } : {}),
           ...(status.pathPreference !== undefined ? { pathPreference: status.pathPreference } : {}),
+          ...(status.peerRelayVia ? { peerRelayVia: status.peerRelayVia } : {}),
         });
       }
     }
@@ -448,6 +475,12 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       }
       return;
     }
+    if (message.type === 'udp-rebound') {
+      const reason = isUdpRebindReason(message.reason) ? message.reason : null;
+      this.options.log?.info(`agent-net rebound UDP socket (reason=${reason ?? 'unknown'})`);
+      if (reason) this.options.onUdpRebound?.(reason);
+      return;
+    }
     if (message.type === 'delegation-requests') { this.options.onDelegationRequests?.(message.requests); return; }
     if (message.type === 'delegations') {
       this.delegations = Array.isArray(message.delegations) ? message.delegations.filter((d: unknown): d is Delegation =>
@@ -480,6 +513,7 @@ export class AgentNetWorkerSocket extends EventEmitter implements AgentNetAppSoc
       return;
     }
     if (message.type === 'tap') { this.options.tap?.(message.data, message.via); return; }
+    if (message.type === 'engine') { this.noteEngine(message.engine, message.code); return; }
     if (message.type === 'ws-open') {
       this.relayAttemptAt = performance.now();
       const expected = this.client.base.replace(/^http/, 'ws') + this.client.path('/ws');

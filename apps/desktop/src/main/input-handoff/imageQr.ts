@@ -36,6 +36,7 @@ export interface ImageQrSessionOptions {
   timeoutMs: number;
   remoteInput: boolean;
   picture: PictureQr;
+  checkAccount?(): void;
   publish(snapshot: InputHandoffSnapshot): void;
   finish(result: HandoffResult): void;
 }
@@ -59,7 +60,7 @@ export class ImageQrHandoffSession {
   private failure: HandoffResult['failure'];
   private ended = false;
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
-  private readonly source: InputHandoffSource;
+  private source: InputHandoffSource;
 
   constructor(private readonly options: ImageQrSessionOptions) {
     this.source = pictureQrSource(options.picture.qr);
@@ -85,8 +86,7 @@ export class ImageQrHandoffSession {
       controls: [],
       ...(this.failure ? { failure: this.failure } : {}),
       // Older clients show their "the agent opened this" caution for it.
-      agentControlled: true,
-      agentPicture: true,
+      ...(this.options.checkAccount ? { accountVerification: true as const } : { agentControlled: true as const, agentPicture: true as const }),
       ...(this.options.remoteInput && !this.ended ? { remoteInput: true as const } : {}),
       ...(this.ended ? { terminal: true as const } : {}),
       ...(ready ? { picture: true as const, qr: 'scan' as const } : {}),
@@ -120,6 +120,7 @@ export class ImageQrHandoffSession {
     if (this.ended || decision.expectedRevision !== this.revision) return false;
     switch (decision.action) {
       case 'done':
+        if (this.options.checkAccount) { this.options.checkAccount(); return true; }
         this.answeredOn = actor ?? { local: true };
         this.end('succeeded', 'owner');
         return true;
@@ -136,11 +137,24 @@ export class ImageQrHandoffSession {
         return true;
       }
       case 'refresh':
+        if (this.options.checkAccount) { this.options.checkAccount(); return true; }
         this.publish(this.phase);
         return true;
       default:
         return false;
     }
+  }
+
+  updateAccountPicture(picture: PictureQr): void {
+    if (this.ended) { picture.jpeg.fill(0); return; }
+    this.options.picture.jpeg.fill(0);
+    this.options.picture = picture;
+    this.source = pictureQrSource(picture.qr);
+    this.publish('ready');
+  }
+
+  accountVerified(): void {
+    this.end('succeeded', 'detected');
   }
 
   cancel(reason: HandoffEndReason = 'cancelled'): void {

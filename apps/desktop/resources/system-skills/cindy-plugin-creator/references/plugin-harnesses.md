@@ -102,12 +102,36 @@ Cindy 存下最新状态,显示引擎列表时只读这份记录,**不调用插�
 `_session/steering` 扩展(claude-agent-acp、codex-acp 等已实现)时,在 `initialize` 结果的**顶层** `_meta` 里声明
 `{ "steering": { "supported": true } }`,用户就能在任务运行中插话:Cindy 发请求
 `_session/steering`,参数 `{ sessionId, prompt: ContentBlock[], _meta: { steering: { idleBehavior: "promptRequired" } } }`,
-Agent 把内容注入当前这一轮后回 `{ "outcome": "injected" }`,插话之后的回复继续走这一轮的 `session/update`,这一轮的
-`session/prompt` 等插话的工作做完再返回。Agent 这一轮已经结束时回 `{ "outcome": "promptRequired", "reason": "noRunningTurn" }`
-且不要自己开新一轮,Cindy 会把这条消息作为下一轮发送。没有声明的 Agent 照旧:运行中输入的消息排队,等这一轮结束再发。
+Agent 可返回以下结局:
+
+- `{ "outcome": "injected" }`:已注入当前这一轮,插话之后的回复继续走这一轮的 `session/update`,这一轮的 `session/prompt` 等插话工作做完再返回;
+- `{ "outcome": "queued" }`:当前轮无法中段注入、已由引擎内部排队受理,Cindy 按已受理处理且不提前截断当前回复段;
+- `{ "outcome": "promptRequired", "reason": "noRunningTurn" }`:当前轮已经结束,请不要自己开新一轮,Cindy 会把这条消息作为下一轮发送;
+- `{ "outcome": "startedNewTurn" }`:不认识 `idleBehavior` 的旧适配器自己开了一轮,Cindy 按受理处理并按回合外工作显示。
+
+如果 Agent 声明了支持却实际返回 JSON-RPC `method not found` (`-32601`),Cindy 会立即在本会话撤回插话能力并同步给控制端与手机端,后续输入改为排队。没有声明支持时,桌面与手机界面会自动隐藏插话入口,将输入改为「这一轮结束后发送」排队。
 
 入口原样转发字节时什么都不用做,外部 Agent 自己声明、自己处理。入口会改写 `initialize` 回包时要保留 `_meta.steering`;
-外部 Agent 本身不支持时,不要替它声明,否则 Cindy 会把插话发给它而收不到 `injected`。
+外部 Agent 本身不支持时,不要替它声明,否则 Cindy 会把插话发给它而收不到有效结局。
+
+**提问卡片、计划更新、分叉／回退／压缩与协同**:
+
+- **提问卡片（`elicitation/create`）**:外部 Agent 支持 ACP Form Elicitation 时,发起 `elicitation/create` 请求(JSON Schema 表单),Cindy 会渲染为原生提问卡并把用户回答编码回 `{ action: "accept" | "decline" | "cancel", content? }`。当某个选择字段 `k` 同时附带一个可选纯文本字段 `${k}_other` 时,Cindy 会自动把两者折叠为「单选／多选 + 内置自填框」,不会拆成两步表单。
+- **计划更新**:通过 ACP `plan` 更新通知上报的步骤清单会自动渲染在 Cindy 的任务计划视图里。
+- **分叉、回退、压缩与 Orca 协同**:本机插件引擎任务支持分叉、编辑／回退、手动压缩、侧聊、Worktree、定时任务(含本机与同账号远程/分享、以及绑定任务临时切换),以及作为 Orca Lead 或本机 Orca Worker 运行。外部 Agent 无需额外实现分叉或回退原语时,由 Cindy 通过交接与文件恢复点模拟。
+
+**聊天里的每轮权限闸**:用户把任务接到飞书、微信等聊天后,群聊、访客和个人微信发来的消息带一条「这一轮哪些操作必须先让
+用户确认」的规则,内置引擎在执行每个工具前检查它。插件引擎要让 Cindy 看到这一轮的每一次工具调用,才能执行这条规则。
+Agent(或入口)能做到时,在 `initialize` 结果的**顶层** `_meta` 里声明 `{ "permissionGate": { "supported": true } }`。
+声明支持后，每条 `session/prompt` 的 `_meta.permissionGate` 都带 `turnId`。受限轮次另外带
+`scope: "all-tool-calls"`，Agent 在这轮及其后台工作中执行任何工具前都发 `session/request_permission`。
+所有审批请求都要在顶层 `_meta.permissionGate.turnId` 原样回传发起这项工作的轮次 ID。新一轮开始后，
+旧轮次的审批请求会拒绝。Agent 自己原本无需询问的调用可同时带 `routine: true`。Cindy 能识别操作和输入且
+渠道规则允许时会直接同意读取和搜索，其余请求走审批。只允许文字回复的轮次拒绝全部工具请求。
+
+`toolCall.kind` 照 ACP 填写(`read`、`edit`、`delete`、`execute` 等),执行命令时把命令放在 `rawInput.command`:聊天的安全
+规则按它们判断,例如群聊里不能删除文件。没有声明的 Agent 收不到这类轮次,聊天里提示当前引擎不支持,主人私聊的普通消息
+照常运行;任务处在「全部允许」时这类轮次同样不运行,与内置引擎一致。声明了就必须做到,做不到时不要声明。
 
 ### 入口进程
 
@@ -115,9 +139,11 @@ Agent 把内容注入当前这一轮后回 `{ "outcome": "injected" }`,插话之
 [§4.12.4 childSpawn](plugin-node-worker.md#4124-宿主代启子进程childspawn) 同一通道,但由 Cindy 发起,
 不需要声明 `childSpawn`)。一个任务一个进程:
 
-- 工作目录是系统临时目录,环境与插件 Node 进程相同(不含宿主的密钥类环境变量);
+- 工作目录是系统临时目录,环境与插件 Node 进程相同：默认保留原有基础环境；声明
+  `node.inheritEnv: true` 时全量继承执行宿主已有环境，可能包含密钥，见
+  [§4.12 继承宿主环境](plugin-node-worker.md#继承宿主环境);
 - `process.stdin` / `process.stdout` 只承载 ACP JSON-RPC,每条消息一行;日志写 `process.stderr`,
-  Cindy 截断后写入插件日志;
+  Cindy 截断后写入插件日志；开启 `node.inheritEnv` 时只记录 `[REDACTED]`，不落原始 stderr;
 - 入口退出就是 Agent 退出;外部 Agent 退出时入口也要退出;
 - 插件停用、更新、卸载前,Cindy 先结束这些进程。
 
@@ -207,7 +233,7 @@ worker 只返回账号可显示的快照，例如：
 可单独提供窗口或余额，也可两者都提供。标签应能区分套餐、模型组和周期。账号用量按需读取，
 请把凭据留在 worker，避免把快照写入引擎列表。任务本身的上下文占用继续由 ACP `usage_update` 上报。
 
-### 多个账号（未发布）
+### 多个账号
 
 外部 Agent 能把登录与会话历史放进指定目录时（类似 Claude 的 `CLAUDE_CONFIG_DIR`、Codex 的 `CODEX_HOME`），可以让用户在 Cindy 里
 给这个引擎添加多个账号：Cindy 像内置供应商一样在账号之间分配任务、设置并发上限和权重、额度用完时换号，并显示每个账号的身份。
@@ -240,3 +266,38 @@ worker 只返回账号可显示的快照，例如：
    余额不足这类没有重置时刻的不给)、需要重新登录、服务繁忙或限流。其余消息原样转发。没有分类时 Cindy 只能识别启动失败和 `-32000` 登录失效。
 
 旧版 Cindy 不会传这个参数，也不会调用这些方法，插件照旧按原有登录运行。
+
+### 让用户到模型供应商里管理引擎
+
+引擎的账号、用量、模型开关和显示名都在 Cindy 的「设置 → 模型供应商」里管理，设置页不必自己再做一套。
+放一个按钮，在点击时请 Cindy 打开那一页并选中这个引擎：
+
+```js
+button.addEventListener('click', async () => {
+  const response = await fetch('/harnesses/open-settings', {
+    method: 'POST',
+    body: JSON.stringify({ id: 'dsh' }),
+  });
+  if (!response.ok) hint.hidden = false; // 例如「请到 设置 → 模型供应商 → DeepSeek Harness 管理账号」
+});
+```
+
+- `id` 只能是本插件 `harnesses` 里声明的引擎。Cindy 在主窗口打开「设置 → 模型供应商」并选中它，成功时回
+  `{ "ok": true }`。这只是导航：不改任何设置，也不返回引擎或账号的任何信息。
+- 必须紧跟用户在这个页面里的一次点击或按键：Cindy 只认它自己看到的那一次操作，约 3 秒内有效，用过即失效。
+  页面加载时、定时器里或没有用户操作时调用得到 403；同一次操作不能既打开设置页、又用于派活或打开任务页。
+- 始终保留一句文字引导。不支持这个接口的 Cindy、手机和远程查看的设置页返回 404，没有可显示设置的窗口时
+  返回 503；请求不成功时让用户按文字自己过去。
+- 想只在能用的地方显示按钮，页面加载时 `GET` 同一路径：支持的 Cindy 回 405（它只收 POST），其余回 404。
+  这次探测不需要用户操作，也不会打开任何界面。
+
+### 联调与生产实践常见坑
+
+以下是真实 ACP 插件（如 Antigravity、DSH）联调中反复踩过的关键点，编写入口和 worker 时请逐项核对：
+
+1. **退出前刷空 stdout**：外部 Agent 退出时，不要在 `exit` 事件里立刻 `process.exit()` 丢掉尚未读完的 `agent.stdout` 缓冲；等待 stdout `end`／刷空后再退出，否则最后一条响应或错误会丢失。
+2. **远程工作区的 MCP 预热与断流清理**：部分外部 CLI 对 `mcpServers` 的启动预载有短超时（例如 5 秒），在跨电脑／高延迟网络下容易来不及完成首次握手。若入口自行代理或预热 MCP HTTP 握手，失败时必须立即关闭半开流、限制保留的失败连接数，并将断流状态传播给对端，避免悬空连接泄漏。
+3. **用量探测节流与并发失效防护**：主 worker 的 `usage` 方法可能被桌面、菜单栏、小组件与手机高频触发。插件内部应对上游 `/usage` 探测做「活跃短 TTL（如 5 分钟）+ 空闲长冷却（如 60 分钟）」的持久化节流，并合并在途探测、在长回合运行中刷新活跃时间戳，避免打爆上游限流或因并发失效返回错乱快照。
+4. **配置／模型探测必须响应取消并回收子进程**：用临时会话探测模型列表与 `efforts` 时，必须给探测加硬超时与并发上限，桥接取消或插件停用时立即中止探测子进程，并在升级 CLI 后回收旧安装目录。
+5. **外部 CLI 的工具数量上限**：部分外部 CLI 对所有 MCP 暴露的总工具数有共享上限，超限时可能丢弃后续工具；确保你的入口不额外膨胀冗余工具，并让 Cindy 的插件网关与 Orca 发现入口保持可用。
+6. **环境变量**：插件入口默认沿用基础环境和已有代理兼容；需要完整的 Proxy、证书或 CLI 环境时，声明 `node.inheritEnv: true`，按 [§4.12](plugin-node-worker.md#继承宿主环境) 全量继承执行宿主已有的环境。它不额外加载用户终端 shell 配置。CLI 专有路径或配置仍可通过插件设置提供，不假定宿主已持有所需变量。

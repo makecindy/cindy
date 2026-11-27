@@ -21,8 +21,10 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   'maker:get-capabilities',
   // 同一批模型选择器预读：插件引擎列表与刷新请求。
   'maker:list-plugin-engines',
-  // 同一批预读：被控电脑的模型组列表(只读)。
+  // 同一批预读：被控电脑的模型组列表与任务托管状态/换源提议(只读)。
   'model-groups:get',
+  'model-groups:get-session-binding',
+  'model-groups:switch-offer',
   'maker:refresh-plugin-engines',
   'maker:get-plugin-engine-usage',
   'maker:list-available-agents',
@@ -33,8 +35,11 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   'git-context:mr-status',
   'maker:schedule:list-sidebar-index-runs',
   'maker:usage:device-rows',
+  'maker:usage:zhipu-coding-plan',
   // Authorized display-only quota/history; never starts a model task.
   'provider-share:insights:v1',
+  // A guest moving a Device Link share to Agent-Net in the background; nobody waits on it.
+  'provider-share:agent-net-link:v1',
   // 远程任务状态栏的定时复查(每 15 秒两次只读);后台任务面板挂载水合同用,可让位于用户操作。
   'maker:session-background-activity',
   'maker:session-background-tasks:list',

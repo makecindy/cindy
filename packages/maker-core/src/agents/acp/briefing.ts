@@ -18,10 +18,12 @@ export interface PluginEngineBriefingSkill {
   path?: string;
   /** Found in the task's project (`repo`) or for every task (`user`); only the `/` menu reads it. */
   scope?: 'user' | 'repo';
+  /** True for Cindy-managed and approved plugin Skills so they rank first and are evicted last under budget. */
+  managed?: boolean;
 }
 
 const SKILL_LIST_MAX_ITEMS = 120;
-const SKILL_DESCRIPTION_MAX_CHARS = 280;
+const SKILL_DESCRIPTION_MAX_CHARS = 600;
 const SKILL_LIST_CHAR_BUDGET = 24_000;
 
 const SKILL_LIST_INTRO = [
@@ -283,7 +285,14 @@ export function formatPluginEngineSkillList(skills: readonly PluginEngineBriefin
   const skillNames = collectPluginEngineSkillNames(skills);
   const seen = new Set<string>();
   const lines: string[] = [];
-  for (const skill of [...skills].sort((a, b) => a.name.localeCompare(b.name))) {
+  // Keep Cindy-managed and plugin Skills ahead of general scanned folders so they appear first and
+  // are never evicted ahead of third-party folders when the list hits item or character caps.
+  const ordered = [...skills].sort((a, b) => {
+    const priorityDiff = Number(Boolean(b.managed)) - Number(Boolean(a.managed));
+    if (priorityDiff !== 0) return priorityDiff;
+    return a.name.localeCompare(b.name);
+  });
+  for (const skill of ordered) {
     const name = oneLine(skill.name);
     const file = skill.path?.trim();
     if (!name || !file || seen.has(file)) continue;
@@ -306,6 +315,71 @@ export interface PluginEngineCapabilityBriefingInput {
   /** The host's installed-plugin roster, the same text the built-in engines get. */
   pluginRoster: string;
   skills: readonly PluginEngineBriefingSkill[];
+}
+
+/**
+ * Formats extra reference and writable directory grants for a plugin engine
+ * briefing, matching the built-in Pi directory tags and keeping the host-owned
+ * plugin library root out of the general reference list.
+ */
+export function formatPluginEngineDirectoryGrants(
+  readOnlyDirs: readonly string[],
+  writableDirs: readonly string[],
+  libraryRoot?: string | null,
+): string {
+  const sections: string[] = [];
+  const dedupReadOnly = [...new Set(readOnlyDirs.map((dir) => dir.trim()).filter(Boolean))];
+  if (dedupReadOnly.length > 0) {
+    const userDirs = typeof libraryRoot === 'string'
+      ? dedupReadOnly.filter((dir) => dir !== libraryRoot)
+      : dedupReadOnly;
+    sections.push(
+      '<cindy-extra-reference-directories>',
+      'This task can read extra references as read-only. If a plugin library root is authorized as a host-owned extraDir, resolve the latest library:assets/<2>/<hash>/blob.<ext> relative key against that root; do not cache roots across directory changes. Do not modify them.',
+      ...userDirs.map((dir) => `- ${dir}`),
+      '</cindy-extra-reference-directories>',
+    );
+  }
+  const dedupWritable = [...new Set(writableDirs.map((dir) => dir.trim()).filter(Boolean))];
+  if (dedupWritable.length > 0) {
+    sections.push(
+      '<cindy-extra-writable-directories>',
+      'The user explicitly allowed additional writable locations for this task. Stay inside those grants; do not write the plugin library root.',
+      ...dedupWritable.map((dir) => `- ${dir}`),
+      '</cindy-extra-writable-directories>',
+    );
+  }
+  return sections.join('\n');
+}
+
+/**
+ * Formats a mid-session directory grant update (including explicit revocations)
+ * prepended to the next prompt after `setExtraDirs` / `setWritableDirs`.
+ */
+export function formatPluginEngineDirectoryGrantsUpdate(
+  readOnlyDirs: readonly string[],
+  writableDirs: readonly string[],
+  libraryRoot?: string | null,
+): string {
+  const formatted = formatPluginEngineDirectoryGrants(readOnlyDirs, writableDirs, libraryRoot);
+  if (!formatted) {
+    return [
+      '<cindy-directory-grants-update>',
+      'Updated task directory grants (replaces earlier extra reference and extra writable directory grants).',
+      'No extra reference directories or extra writable directories are currently authorized; stay within the task working directory.',
+      '</cindy-directory-grants-update>',
+    ].join('\n');
+  }
+  const dedupReadOnly = readOnlyDirs.some((dir) => dir.trim().length > 0);
+  const dedupWritable = writableDirs.some((dir) => dir.trim().length > 0);
+  const notes: string[] = [
+    '<cindy-directory-grants-update>',
+    'Updated task directory grants (replaces earlier extra reference and extra writable directory grants).',
+    ...(dedupReadOnly ? [] : ['No extra reference directories are currently authorized.']),
+    ...(dedupWritable ? [] : ['No extra writable directories are currently authorized; do not write outside the task working directory.']),
+    '</cindy-directory-grants-update>',
+  ];
+  return `${notes.join('\n')}\n${formatted}`;
 }
 
 /**
