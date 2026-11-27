@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import React from 'react';
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen } from '@testing-library/react';
 import { ChevronsUpDown } from 'lucide-react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MainListScopeHeader } from '../MainListScopeHeader';
 import type { UseSidebarFilterReturn } from '../../hooks/useSidebarFilter';
+import { useTaskListMode, type TaskListMode } from '@/hooks/useTaskListMode';
 
 vi.mock('@/components/ui/tooltip', () => ({
   Tip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -17,14 +18,20 @@ vi.mock('../SidebarFilterPopover', () => ({
 afterEach(cleanup);
 
 // 段头操作默认只在 hover/focus 时出现(用 opacity-0 + pointer-events-none 隐藏)。
-// 查看「已归档」时设置按钮必须常驻,否则看不到提醒点;折叠按钮不受影响。
+// 设置按钮只在带提醒点时常驻:收件箱里有筛选或隐藏生效。查看「已归档」不再提醒、也不再常驻
+// (2026-11-28 用户决定,取代 2026-10-20 的归档提醒);折叠按钮不受影响。
 function hiddenUntilHover(element: HTMLElement): boolean {
   return element.closest('.opacity-0') !== null;
 }
-function renderHeader(status: 'active' | 'archived' | 'all') {
+function renderHeader(mode: TaskListMode, filter: Partial<UseSidebarFilterReturn>) {
+  const listMode = renderHook(useTaskListMode);
+  act(() => listMode.result.current.setMode(mode));
   render(
     <MainListScopeHeader
-      filter={{ status } as UseSidebarFilterReturn}
+      filter={{
+        status: 'active', projects: 'all', vendor: 'all', lastActivity: 'all', creators: 'all',
+        hideAutomations: false, hideTaskCreated: false, ...filter,
+      } as UseSidebarFilterReturn}
       allKnownProjects={[]}
       hasRemoteDevices={false}
       fold={{ label: 'fold', Icon: ChevronsUpDown, onClick: vi.fn(), disabled: false }}
@@ -38,11 +45,12 @@ function renderHeader(status: 'active' | 'archived' | 'all') {
 
 describe('MainListScopeHeader actions visibility', () => {
   it.each([
-    ['active', true],
-    ['archived', false],
-    ['all', true],
-  ] as const)('with the %s filter the settings button hides until hover: %s', (status, hidden) => {
-    const { settings, fold } = renderHeader(status);
+    ['the task list showing archived tasks', 'tasks', { status: 'archived' }, true],
+    ['the inbox without a filter', 'inbox', {}, true],
+    ['the inbox hiding automation tasks', 'inbox', { hideAutomations: true }, false],
+    ['the inbox hiding teammates', 'inbox', { creators: 'none' }, false],
+  ] as const)('in %s the settings button hides until hover: %s', (_name, mode, filter, hidden) => {
+    const { settings, fold } = renderHeader(mode, filter);
     expect(hiddenUntilHover(settings)).toBe(hidden);
     expect(hiddenUntilHover(fold)).toBe(true);
   });

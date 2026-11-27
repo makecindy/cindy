@@ -21,8 +21,10 @@ const BACKGROUND_INVOKE_CHANNELS = new Set([
   'maker:get-capabilities',
   // 同一批模型选择器预读：插件引擎列表与刷新请求。
   'maker:list-plugin-engines',
-  // 同一批预读：被控电脑的模型组列表(只读)。
+  // 同一批预读：被控电脑的模型组列表与任务托管状态/换源提议(只读)。
   'model-groups:get',
+  'model-groups:get-session-binding',
+  'model-groups:switch-offer',
   'maker:refresh-plugin-engines',
   'maker:get-plugin-engine-usage',
   'maker:list-available-agents',

@@ -1065,4 +1065,34 @@ describe('official bot follows defaults without an extra control', () => {
     expect(await (await officialFollower()).syncUnderLock('official')).toBe(true);
     expect(parseImDefaultRouteRecord((await rowOf('official')).imDefaultRoute)?.pendingRev).toBe(7);
   });
+
+  // 2026-11-27: 插件引擎跟随切换必须把当前插件 providerId 传给 applySessionRouteUnderSendLock，
+  // 以便跨插件引擎(同样 agentKind='acp'、不同 providerId)正确识别为跨引擎切换。
+  it('passes current providerId when following away from a plugin engine session', async () => {
+    const oldAcp = {
+      agentKind: 'acp' as const,
+      model: 'deepseek-v4',
+      providerId: 'acp-plugin:dsh:dsh',
+      effort: '',
+    };
+    const nextAcp = {
+      agentKind: 'acp' as const,
+      model: 'gemini-3-pro',
+      providerId: 'acp-plugin:agy:agy',
+      effort: '',
+    };
+    await insertTask('official-acp', oldAcp, {
+      source: 'telegram',
+      marker: false,
+      record: buildImDefaultRouteRecord(hookFp, oldAcp),
+    });
+    mocks.resolveDefaults.mockResolvedValue({ ...nextAcp, fingerprint: nextHookFp });
+    await (await officialFollower()).syncUnderLock('official-acp');
+    expect(mocks.applyRoute).toHaveBeenCalledWith(
+      'official-acp',
+      { ...nextAcp, agentDeviceId: null, fastMode: false },
+      'acp',
+      oldAcp.providerId,
+    );
+  });
 });

@@ -3288,6 +3288,7 @@ export class GhostManager {
           ...approvedCindyModelActionsField(receipt.approvedCindyModelActions, receipt.manifest),
           ...approvedHarnessesField(receipt.approvedHarnesses, receipt.manifest),
           ...approvedFileOpenerExtensionsField(receipt.approvedFileOpenerExtensions, receipt.manifest),
+          ...(receipt.checksCapabilityApproved === true ? { checksCapabilityApproved: true as const } : {}),
           trust: receipt.trust,
           ...(!retired && receipt.manifest.skill?.items.length
             ? {
@@ -3506,7 +3507,7 @@ export class GhostManager {
           (capability === 'targets' && (approval.receipt.manifest.agent?.targets !== true || approval.receipt.taskCapabilityApproved !== true)) ||
           (capability === 'delegation' && (approval.receipt.manifest.agent?.delegation !== true || approval.receipt.manifest.agent?.targets !== true || approval.receipt.targetCapabilityApproved !== true || approval.receipt.taskCapabilityApproved !== true)) ||
           !findInstalledGhostByInstanceId(this.list(), id)?.enabled) return false;
-      const field = capability === 'companions' ? 'companionsCapabilityApproved' : capability === 'observe' ? 'observeCapabilityApproved' : capability === 'delegation' ? 'delegationCapabilityApproved' : capability === 'targets' ? 'targetCapabilityApproved' : 'taskCapabilityApproved';
+      const field = capability === 'checks' ? 'checksCapabilityApproved' : capability === 'companions' ? 'companionsCapabilityApproved' : capability === 'observe' ? 'observeCapabilityApproved' : capability === 'delegation' ? 'delegationCapabilityApproved' : capability === 'targets' ? 'targetCapabilityApproved' : 'taskCapabilityApproved';
       if (approval.receipt[field] !== true) {
         const expired = new Error('Task capability approval owner changed');
         try {
@@ -4250,6 +4251,7 @@ export class GhostManager {
       approvedFileOpenerExtensions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
+      checksCapabilityApproved?: true;
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -4289,6 +4291,7 @@ export class GhostManager {
       approvedFileOpenerExtensions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
+      checksCapabilityApproved?: true;
       initiallyEnabled?: boolean;
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
@@ -4472,6 +4475,7 @@ export class GhostManager {
           approvedFileOpenerExtensions: opts?.approvedFileOpenerExtensions,
           ...(opts?.observeCapabilityApproved === true && approvedManifest.agent?.observe === true ? {observeCapabilityApproved:true as const} : {}),
           ...(opts?.companionsCapabilityApproved === true && approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
+          ...(opts?.checksCapabilityApproved === true && approvedManifest.agent?.checks === true ? { checksCapabilityApproved: true as const } : {}),
           trust,
           // 指纹取自包投影而不是刚发布的 finalDir:发布后被换的字节应当在快照
           // 对账时被拒,而不是被首读钉成批准基线(P0-8)。
@@ -4609,6 +4613,7 @@ export class GhostManager {
       approvedFileOpenerExtensions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
+      checksCapabilityApproved?: true;
       expectedInstalledApproval: string;
       /** Main-selected instance key; never a renderer-supplied path or a logical namespace address. */
       expectedInstalledInstanceId?: string;
@@ -4653,6 +4658,7 @@ export class GhostManager {
       approvedFileOpenerExtensions?: readonly string[];
       observeCapabilityApproved?: true;
       companionsCapabilityApproved?: true;
+      checksCapabilityApproved?: true;
       expectedInstalledApproval: string;
       expectedInstalledInstanceId?: string;
       seededMarketRecovery?: { pluginId: string; sourceDir: string };
@@ -5003,6 +5009,8 @@ export class GhostManager {
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...((opts.companionsCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.companionsCapabilityApproved === true)) &&
           approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
+        ...((opts.checksCapabilityApproved === true || (archiveId === undefined && approvalResult.state === 'approved' && approvalResult.receipt.checksCapabilityApproved === true)) &&
+          approvedManifest.agent?.checks === true ? { checksCapabilityApproved: true as const } : {}),
         trust,
         // 同 install:指纹取自包投影,发布后的目录漂移在快照对账时 fail closed(P0-8)。
         skillContentSha256: await this.hashSkillContentFromPackage(
@@ -5439,6 +5447,8 @@ export class GhostManager {
           approvedManifest.agent?.observe === true ? { observeCapabilityApproved: true as const } : {}),
         ...(current.state === 'approved' && current.receipt.companionsCapabilityApproved === true &&
           approvedManifest.agent?.companions === true ? { companionsCapabilityApproved: true as const } : {}),
+        ...(current.state === 'approved' && current.receipt.checksCapabilityApproved === true &&
+          approvedManifest.agent?.checks === true ? { checksCapabilityApproved: true as const } : {}),
         ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
         namespace: null,
       }),

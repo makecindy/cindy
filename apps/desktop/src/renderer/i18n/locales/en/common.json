@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Verify your Google account",
+    "note": "Scan the code or open the Google page. This task continues when Antigravity confirms access.",
+    "refresh": "Refresh verification code"
+  },
   "runtimePlugins": {
     "save": "Save",
     "promptUnsupported": "This Pi execution location does not support system prompt fragments.",
@@ -10,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "Cannot resume on the original computer",
-    "description": "Choose another computer or provider to continue with a context handoff. Your messages stay, but switching does not transfer the original computer’s full running state.",
-    "choose": "Choose another computer",
+    "description": "Open the model selector to switch to another computer, provider, or model and continue with a context handoff. Your messages stay, but switching does not transfer the original computer’s full running state.",
+    "choose": "Switch model or provider",
     "cancel": "Stay here",
     "stage": {
       "owner": "Failed while contacting the sharing computer.",
@@ -1851,8 +1856,7 @@
       "ariaLabel": "Search settings",
       "placeholder": "Search settings",
       "resultsLabel": "Settings search results",
-      "noResults": "No settings found. Try another keyword.",
-      "clear": "Clear search"
+      "noResults": "No settings found. Try another keyword."
     },
     "back": "Back",
     "defaults": {
@@ -5524,6 +5528,27 @@
           "confirm": "Reset",
           "cancel": "Cancel"
         }
+      },
+      "tidy": {
+        "label": "Memory & skill tidying",
+        "description": "Periodically deduplicates and compacts buddies' memories and skills in the background. Runs only when there is enough new activity, costs nothing when idle, and leaves no lingering task.",
+        "cadenceLabel": "Tidying cadence",
+        "cadences": {
+          "weekly": "Weekly",
+          "biweekly": "Every 2 weeks",
+          "monthly": "Monthly",
+          "off": "Off (manual only)"
+        },
+        "runNow": "Tidy now",
+        "running": "Tidying…",
+        "toast": {
+          "cadenceSaved": "Tidying cadence updated",
+          "cadenceFailed": "Failed to update tidying cadence",
+          "updated": "Tidying finished ({{count}} updated)",
+          "idle": "Nothing needed tidying",
+          "skipped": "No eligible buddies to tidy",
+          "failed": "Memory tidying failed"
+        }
       }
     },
     "subagentModels": {
@@ -7140,6 +7165,8 @@
           "controlling": "Controlling this computer",
           "protocol": "Connection",
           "rttNote": "last measured",
+          "relayLegSelf": "This device {{transport}}",
+          "relayLegPeer": "Other device {{transport}}",
           "manage": "Manage device…",
           "linkStatus": "To {{name}}",
           "version": "Cindy {{version}}",
@@ -7189,6 +7216,7 @@
         },
         "onlyEncrypted": "Use Only Agent-Net",
         "onlyEncryptedHint": "Older devices and shares still using the older connection will be unavailable. Off by default.",
+        "removedOff": "This computer was removed from your account, so Agent-Net was turned off. Turn it on again to rejoin.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Switching to Agent-Net…",
@@ -8822,6 +8850,8 @@
         "nodeRuntime": "Can run a bundled Node program on this computer",
         "nodeMcp": "Can run a bundled stdio MCP on this computer",
         "nodeRuntimeDetail": "High risk: it has the same local access as your user account, including files, network, and starting other programs. Cindy cannot contain it in the browser sandbox.",
+        "nodeInheritEnv": "Inherit local environment",
+        "nodeInheritEnvDetail": "High risk: the plugin’s Node program and its child processes receive all environment variables available to Cindy, including proxy and certificate settings and any API keys or tokens they contain.",
         "nodeSecret": "Can provide the stored credential “{{name}}” to the local Node program",
         "nodeSecretDetail": "Cindy stores it encrypted and injects it only while the declared Worker methods below run. The Node program receives the plaintext and can return, log, save, or otherwise expose it to browser-side plugin code or Agent parameters. Only install plugins you trust.",
         "nodeResident": "The Node program can stay running in the background",
@@ -9028,7 +9058,10 @@
             "user": "User",
             "assistant": "Assistant"
           }
-        }
+        },
+        "agentChecks": "Can check whether sources have new content",
+        "agentChecksDetail": "Exchanges only changed, unchanged or unknown status with other approved plugins, using each source plugin’s own connected accounts. No message content or credentials are shared. Checks do not use a model. Also checks whether local Cindy conversations have changed, without returning their content.",
+        "agentChecksRequest": "Review change checking permission"
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -9917,6 +9950,49 @@
         "identity": "Directory identity needs review",
         "failed": "Cleanup could not finish",
         "pending": "Queued"
+      },
+      "remote": {
+        "title": "Remote pending worktrees",
+        "description": "Unfinished remote worktrees block creating a new worktree on the same device until cleanup succeeds or you choose to keep the remote directory.",
+        "storageUnreadable": "Could not read the remote worktree cleanup ledger. Creating new remote worktrees is paused until local storage recovers.",
+        "sessionLabel": "Task {{id}}",
+        "keepUnblock": "Keep directory & unblock",
+        "confirmKeepTitle": "Keep remote worktree directory and unblock?",
+        "confirmKeepDescription": "This clears the local cleanup record so you can create new worktrees on {{device}} again. The directory on the remote device will not be deleted.",
+        "confirmKeepConfirm": "Keep & unblock",
+        "retrySuccess": "Remote worktree cleaned up.",
+        "keepSuccess": "Cleanup record cleared. You can create new remote worktrees now.",
+        "keepFailed": "Could not clear the cleanup record. Refresh and try again.",
+        "phase": {
+          "reserved": "Creation unconfirmed",
+          "precreated": "Awaiting cleanup",
+          "session-create-started": "Task creation unconfirmed"
+        },
+        "failure": {
+          "offline": "Device unreachable or timed out",
+          "in-progress": "Still creating or checking out",
+          "preserved": "Kept by remote device",
+          "mismatch": "Cleanup key mismatch",
+          "unsupported": "Remote Cindy version unsupported",
+          "create-started": "Waiting to confirm task ownership",
+          "storage": "Local ledger unavailable",
+          "unknown": "Cleanup could not finish"
+        },
+        "preserveReason": {
+          "claimed": "Already used by a task",
+          "in-progress": "Still creating or checking out",
+          "dirty": "Has uncommitted changes",
+          "keep-sentinel": "Marked to keep (.worktree-keep)",
+          "live-reference": "Still in use by another task or process",
+          "branch-mismatch": "Branch or directory state changed",
+          "include-files-changed": "Local config files changed",
+          "ignored-files": "Contains non-reproducible ignored files",
+          "ephemeral": "Managed pool directory",
+          "pending-transfer": "Transfer in progress",
+          "invalid-quarantine": "Quarantine state invalid",
+          "quarantine-failed": "Could not quarantine directory",
+          "remove-failed": "Could not remove directory"
+        }
       }
     },
     "awayFromComputer": {
@@ -10192,7 +10268,8 @@
       "INVALID_AUTH_CODE": "Authorization expired. Start sign-in again.",
       "INVALID_LOGIN_TICKET": "The sign-in session expired. Start again.",
       "INVALID_BIND_TICKET": "The verification session expired. Start again.",
-      "REGION_MISMATCH": "The sign-in service region does not match this app."
+      "REGION_MISMATCH": "The sign-in service region does not match this app.",
+      "INVALID_SIGNUP_TICKET": "Sign-up confirmation expired. Sign in again."
     },
     "rateLimit": {
       "retryAt": "Try again after {{time}} (local time).",
@@ -10200,6 +10277,15 @@
       "intro": "The sign-in service is temporarily limiting requests. This is separate from a local credential-storage error.",
       "guidance": "Wait before requesting another code. Restarting, reinstalling, or changing networks does not guarantee that the limit will be lifted.",
       "support": "If this continues after waiting, privately send logs to feedback@cindy.app with your OS, Cindy version, error time, and the code below. Do not post logs publicly."
+    },
+    "signup": {
+      "title": "No Cindy account yet",
+      "subtitle": "{{target}} isn't registered with Cindy. Signed in another way before? Go back and choose it.",
+      "subtitleSocial": "This {{provider}} account isn't registered with Cindy. Signed in another way before? Go back and choose it.",
+      "create": "Create a new account",
+      "createDescEmail": "Sign up with this email",
+      "createDescPhone": "Sign up with this phone number",
+      "createDescSocial": "Sign up with this {{provider}} account"
     }
   },
   "legalTermsUpdate": {
@@ -10318,6 +10404,7 @@
     "sessionCostLabel": "Session {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "No usage yet",
       "noUsageDetail": "No usage has been recorded for this session yet.",
       "unavailableLabel": "Usage unavailable",
@@ -10753,7 +10840,6 @@
     "fileBrowser": {
       "noWorkdir": "This session has no local working directory; file browser unavailable",
       "filterPlaceholder": "Filter files…",
-      "filterClear": "Clear filter",
       "filterIndexing": "Indexing project files…",
       "filterNoMatch": "No matching files",
       "filterRgUnavailable": "ripgrep is not installed on the remote machine; file name filtering is unavailable",
@@ -11517,7 +11603,17 @@
         "enable": "Enable",
         "enabled": "Enabled"
       },
-      "close": "Close Download Dialog"
+      "close": "Close Download Dialog",
+      "scanToLogin": "Scan with the Cindy app to sign in to this account",
+      "approveTitle": "Allow your phone to sign in?",
+      "approveBody": "{{device}} is signing in by scanning your code. If this isn't you, tap Deny.",
+      "approveBodyUnknown": "A phone is signing in by scanning your code. If this isn't you, tap Deny.",
+      "approve": "Allow",
+      "deny": "Deny",
+      "loginApproved": "Phone signed in",
+      "loginDenied": "Sign-in denied",
+      "qrExpired": "This code has expired",
+      "qrRefresh": "Refresh"
     },
     "localNetwork": {
       "title": "Allow local network access",
@@ -11945,6 +12041,7 @@
           "title": "Mentions of me",
           "me": "Me",
           "markAll": "Mark all as read",
+          "markReadFailed": "Could not mark mentions as read.",
           "empty": "No unread mentions",
           "thread": "Thread",
           "main": "Group chat",
@@ -12152,6 +12249,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} joined the group",
+        "memberJoinedList": "{{names}} joined the group",
+        "memberJoinedSummary": "{{names}} and {{others}} more joined the group",
         "memberFailed": "{{name}} couldn’t reply this time",
         "memberTimeout": "{{name}} took too long to reply and was skipped this time",
         "memberUnavailable": "{{name}} is unavailable and didn’t speak this time",
@@ -12226,6 +12325,8 @@
         "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again.",
         "allowMemberInvites": "Let all members invite friends",
         "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
+        "allowMemberMentionAll": "Allow all members to @everyone",
+        "allowMemberMentionAllHint": "When on, all members can @everyone; when off, only the group owner and admins can. Only the group owner and admins can change this.",
         "allowMentionAllBots": "Allow @all buddies",
         "allowMentionAllBotsHint": "Only the group owner can change this. Buddies may all reply; use with care in large groups. AI replies on your behalf are independent."
       },
@@ -12257,6 +12358,7 @@
         "groupDissolved": "This group has been dissolved. You can still read the available history.",
         "lastOwner": "Transfer ownership or dissolve this group before leaving.",
         "allBotsMentionDisabled": "The group owner has not enabled @all buddies.",
+        "allHumansMentionForbidden": "Only the group owner and admins can @everyone.",
         "turnAlreadyStarted": "This buddy has already started and cannot be skipped"
       },
       "organizer": "Organizer",
@@ -12332,6 +12434,8 @@
         "threadNew": "New messages in the thread",
         "replyingTo": "Replying to “{{name}}”: {{text}}",
         "filesOutsideWorkingDir": "Files outside the working directory were not attached.",
+        "modelFallback": "The selected model isn't on this computer, so this reply uses {{model}}.",
+        "modelFallbackUnnamed": "The selected model isn't on this computer, so this reply uses a model available here.",
         "earlierOmitted": "(Earlier messages omitted)",
         "actingFor": "{{name}} · for {{person}}",
         "checkout": {
@@ -12412,13 +12516,40 @@
           "unfollowTip": "Unfollow: you will only be told when someone mentions you",
           "listLabel": "Threads in this group chat",
           "listNews": "New replies",
-          "listOthers": "Other threads",
-          "newSeparator": "New replies"
+          "newSeparator": "New replies",
+          "openIndex": "Threads",
+          "indexTitle": "Threads",
+          "backToList": "Back to threads",
+          "filterAria": "Filter threads",
+          "filterMine": "For me",
+          "filterAll": "All",
+          "searchPlaceholder": "Search threads, replies, or members",
+          "clearSearch": "Clear search",
+          "listRecent": "Recent",
+          "indexParticipatedTag": "Participated",
+          "indexMentionedTag": "Mentioned",
+          "locateInGroup": "Show in group chat",
+          "indexEmptyMine": "No threads you participated in or were mentioned in yet",
+          "indexEmptyAll": "No threads in this group yet",
+          "indexEmptySearch": "No matching threads",
+          "viewAllThreads": "View all threads",
+          "syncingHistory": "Loading earlier threads…",
+          "rootKind": {
+            "task": "Task",
+            "image": "Image",
+            "video": "Video",
+            "audio": "Audio",
+            "file": "File",
+            "share": "Shared reply",
+            "card": "Card"
+          }
         },
         "replyPlaceholder": "Reply to this message; use @ to mention a companion…",
         "sendReply": "Send reply",
+        "moreReactions": "More reactions",
         "addReaction": "Add reaction",
         "reactionCount": "{{emoji}} · {{count}} reactions",
+        "reactionTotal": "{{emoji}} · {{count}} reactions",
         "reactionWho": "{{emoji}} · {{count}} reactions: {{names}}",
         "reactorSelf": "You",
         "reactorFormer": "{{name}} (no longer in group)",
@@ -12555,6 +12686,7 @@
           "accessNone": "Owner only",
           "accessChat": "Group chat only",
           "accessTools": "Can use tools and info",
+          "memberPermissions": "Member permissions",
           "replies": "How buddies reply",
           "replyModeMentionedNote": "Buddies stay quiet unless someone @mentions them.",
           "assistant": "Group Cindy",
@@ -13352,6 +13484,7 @@
   },
   "commonUi": {
     "retry": "Try again",
+    "clearSearch": "Clear search",
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
@@ -14872,6 +15005,12 @@
       "discoveredCopy": {
         "unavailableHere": "{{provider}} on this computer isn’t available right now.",
         "unavailableOn": "{{provider}} on “{{device}}” isn’t available right now."
+      },
+      "preparation": {
+        "pending": "Next message",
+        "preparing": "Preparing…",
+        "failed": "Switch failed",
+        "usingPrevious": "This message uses {{actual}}; {{target}} is not ready."
       }
     },
     "permissionSelector": {
@@ -15370,6 +15509,7 @@
         "diverged": "The local and remote branches have different updates. Resolve the differences before switching.",
         "missing": "The selected branch no longer exists. Refresh the list.",
         "git": "Could not finish the operation. Check the current branch and saved changes before trying again",
+        "timeout": "Checking Git status timed out. Large repositories or many uncommitted changes can take too long; clean up changes or use worktree.",
         "savedMissing": "These saved changes are no longer available",
         "undoUnavailable": "This branch switch can no longer be undone"
       },
@@ -15690,7 +15830,8 @@
       "runningFor": "Running for {{duration}}",
       "startedAt": "Started at {{time}}",
       "recentOutput": "Recent output · updated {{time}} ago",
-      "noOutputYet": "No output yet"
+      "noOutputYet": "No output yet",
+      "recentActivity": "Recent activity"
     },
     "planPill": {
       "step": "Step {{current}} of {{total}}",
@@ -16220,7 +16361,30 @@
       },
       "status": {
         "running": "Running",
-        "done": "Completed"
+        "done": "Completed",
+        "failed": "Failed"
+      },
+      "collab": {
+        "wait": "Wait for Subagent",
+        "waitCount_one": "Wait for {{count}} Subagent",
+        "waitCount_other": "Wait for {{count}} Subagents",
+        "sendInput": "Send instructions to Subagent",
+        "sendInputCount_one": "Send instructions to {{count}} Subagent",
+        "sendInputCount_other": "Send instructions to {{count}} Subagents",
+        "resume": "Resume Subagent",
+        "resumeCount_one": "Resume {{count}} Subagent",
+        "resumeCount_other": "Resume {{count}} Subagents",
+        "close": "Close Subagent",
+        "closeCount_one": "Close {{count}} Subagent",
+        "closeCount_other": "Close {{count}} Subagents",
+        "spawn": "Start Subagent",
+        "spawnCount_one": "Start {{count}} Subagent",
+        "spawnCount_other": "Start {{count}} Subagents",
+        "targets": "Targets: {{targets}}",
+        "targetCount_one": "Targets: {{count}} Subagent",
+        "targetCount_other": "Targets: {{count}} Subagents",
+        "prompt": "Prompt: {{prompt}}",
+        "model": "Model: {{model}}"
       }
     },
     "systemCard": {
@@ -17118,6 +17282,22 @@
       "piRemoteUnsupported": "Pi runs locally only and can't use SSH remote hosts. Switch to Claude or Codex to use this host.",
       "localWorktreeCleanupPending": "The previous local worktree session is still awaiting cleanup. Try again after cleanup finishes.",
       "remoteWorktreeCleanupPending": "The previous remote worktree is still awaiting cleanup. Reconnect the device and try again.",
+      "remoteWorktreeCleanupOpenSettings": "Worktree cleanup",
+      "remoteWorktreeCleanup": {
+        "inProgress": "The previous remote worktree is still being created or checked out. Wait a moment and try again, or manage it in Settings → Storage.",
+        "preserved": "The remote device kept the previous worktree (it may have changes or still be in use). Retry or unblock it in Settings → Storage.",
+        "preservedDirty": "The remote device kept the previous worktree because it has uncommitted changes. Check it on that device, or unblock it in Settings → Storage.",
+        "preservedKeepSentinel": "The remote device kept the previous worktree because it is marked to keep (.worktree-keep). Manage it in Settings → Storage.",
+        "preservedLiveReference": "The remote device kept the previous worktree because another task or process is still using it. Retry or unblock it in Settings → Storage.",
+        "preservedBranchMismatch": "The remote device could not verify the previous worktree branch or directory state. Retry or unblock it in Settings → Storage.",
+        "preservedIncludeFilesChanged": "The remote device kept the previous worktree because its local config files changed. Retry or unblock it in Settings → Storage.",
+        "preservedIgnoredFiles": "The remote device kept the previous worktree because it contains ignored files that cannot be recreated. Retry or unblock it in Settings → Storage.",
+        "preservedRemoveFailed": "The remote device could not remove the previous worktree directory. Check permissions or open files on that device, or unblock it in Settings → Storage.",
+        "mismatch": "The remote device rejected the worktree cleanup key. Retry or unblock it in Settings → Storage.",
+        "unsupported": "The remote device’s Cindy version does not support automatic worktree cleanup. Update Cindy on that device, or unblock it in Settings → Storage.",
+        "createStarted": "The previous remote task creation did not confirm. Reconnect the device to verify it, or unblock it in Settings → Storage.",
+        "storage": "Could not read or write the local remote worktree cleanup record. Check Settings → Storage."
+      },
       "remoteProviderUpdating": "Provider credentials are being updated — retry in a moment",
       "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
       "remoteNativeOauthUnavailable": "Remote tasks can't use a Claude subscription — pick a gateway or API key model",
@@ -17148,9 +17328,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Add cloud computer",
-        "preparingCloud": "Cloud computer · preparing",
-        "manageCloud": "Manage cloud computer",
         "allMachines": "All",
         "localMachine": "Local",
         "connecting": "Connecting…",
@@ -17208,6 +17385,8 @@
       "organizeSidebar": "Sidebar settings",
       "filterAllText": "all",
       "filterSelectedProjects": "{{count}} selected",
+      "filterSelectedHarnesses": "{{count}} selected",
+      "filterVendorPluginHeading": "From plugins",
       "filterStatus": {
         "active": "Active",
         "archived": "Archived",
@@ -17217,7 +17396,8 @@
         "all": "All",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Plugin engine"
       },
       "filterGroupBy": {
         "project": "Project",
@@ -17225,6 +17405,11 @@
         "device": "Device",
         "dialogue": "Chat",
         "automation": "Automation"
+      },
+      "filterGroupByHint": {
+        "device": "Outermost",
+        "dialogue": "Sessions without a project",
+        "automation": "Automation runs"
       },
       "filterGroupByDeviceManualTip": "Group by device is unavailable while sorting manually",
       "deviceGroup": {
@@ -17256,6 +17441,11 @@
       "filterSortByTip": {
         "priority": "Waiting on you first, then unread, then running, then by time"
       },
+      "filterSortByHint": {
+        "priority": "Waiting on you first",
+        "activity": "Latest activity first",
+        "created": "Newest first"
+      },
       "filterStatusHeading": "Status",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "Last activity",
@@ -17270,9 +17460,17 @@
       "filterProjectOrderTip": {
         "custom": "Drag project rows with the mouse to reorder. Sessions inside still follow the sort above."
       },
+      "filterProjectOrderHint": {
+        "custom": "Drag project rows"
+      },
       "filterCreatorsHeading": "Buddies",
       "filterCreatorsAny": "All",
-      "filterHideAutomations": "Hide automation tasks",
+      "hideHeading": "Hide",
+      "hideOptions": {
+        "automations": "Automation tasks",
+        "taskCreated": "Tasks from other tasks",
+        "teammates": "Buddy tasks"
+      },
       "filterCreatorsNone": "Hide all",
       "filterSelectedCreators": "{{count}} selected",
       "filterProjectsHeading": "Projects",
@@ -17295,6 +17493,10 @@
         "openWorktree": "Open worktree folder",
         "tokens": "Tokens",
         "cost": "Cost"
+      },
+      "taskInfoSection": {
+        "identity": "Session markers",
+        "meta": "Right-side details · shown in the order you select"
       },
       "taskInfoTip": {
         "tokens": "Total tokens",
@@ -17376,7 +17578,15 @@
         "scheduleName": "“{{name}}”",
         "scheduleNameSeparator": ", ",
         "confirm": "Archive session",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "deleteSchedules_one": "Delete linked automation",
+        "deleteSchedules_other": "Delete linked automations",
+        "deleteScheduleWarning_one": "The linked automation {{names}} will be deleted and cannot be restored.",
+        "deleteScheduleWarning_other": "The linked automations {{names}} will be deleted and cannot be restored.",
+        "deleteSchedulesAndArchive": "Delete and archive",
+        "discardDeleteAndArchive": "Discard, delete, and archive",
+        "deleteScheduleFailed_one": "Task archived, but failed to delete the linked automation. Delete it in Automations.",
+        "deleteScheduleFailed_other": "Task archived, but failed to delete {{count}} linked automations. Delete them in Automations."
       },
       "dialogueAction": {
         "search": "Search This Chat Group",
@@ -17510,6 +17720,8 @@
         "moveToProjectRemoteUnsupported": "Moving remote sessions is not supported yet",
         "moveToProjectWorktreeBlocked": "This session’s working directory is a worktree, so it can’t be moved to another project yet",
         "openInNewWindow": "Open in new window",
+        "openInNewWindowShortcutMac": "⌘+click",
+        "openInNewWindowShortcutOther": "Ctrl+click",
         "exportShare": "Export session…",
         "exportHtml": "Export to HTML…",
         "exportHtmlSuccess": "Session exported to HTML",
@@ -17640,7 +17852,14 @@
         "tasks": "Task list",
         "inbox": "Inbox",
         "enterInbox": "Switch to Inbox mode",
-        "leaveInbox": "Switch to task list mode"
+        "leaveInbox": "Switch to task list mode",
+        "inboxTips": "Inbox tips"
+      },
+      "origin": {
+        "createdByTask": "Opened by another task",
+        "createdByTaskNamed": "Opened by task “{{title}}”",
+        "createdByRemoteTask": "Opened by a task on {{device}}",
+        "createdByRemoteTaskNamed": "Opened by “{{title}}” on {{device}}"
       }
     },
     "rename": {
@@ -17661,7 +17880,9 @@
       "orcaRemoteLead": "Collaboration from {{device}}",
       "orcaRemoteLeadReleased": "Collaboration ended · from {{device}}",
       "orcaRemoteLeadUnknownDevice": "another computer",
-      "orcaRemoteLeadTip": "A Worker for “{{lead}}” on {{device}}. Its task, folder and commands run on this computer. Messages you send here are not reported to the Lead."
+      "orcaRemoteLeadTip": "A Worker for “{{lead}}” on {{device}}. Its task, folder and commands run on this computer. Messages you send here are not reported to the Lead.",
+      "createdByTask": "From another task",
+      "createdByTaskNamed": "From “{{title}}”"
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -19050,6 +19271,24 @@
         "reconnectFailed": "Could not reconnect. Check the available slots before trying again."
       },
       "pluginTitle": "Plugin event trigger"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} paused PR follow-ups",
+      "viewPaused": "View",
+      "resumeAll": "Resume all",
+      "cleanMerged": "Clean merged",
+      "checking": "Checking…",
+      "resumeAllConfirmTitle": "Resume {{count}} paused PR follow-ups?",
+      "resumeAllConfirmDescription": "Resumes all paused PR automations in this view and recalculates their next scheduled check.",
+      "resumeAllConfirmAction": "Resume all",
+      "resumeAllDone": "Resumed {{count}} PR follow-ups",
+      "resumeAllPartial": "Resumed {{resumed}} PR follow-ups ({{failed}} failed)",
+      "noMergedFound": "No merged or closed PRs found among paused automations",
+      "cleanMergedConfirmTitle": "Delete {{count}} completed PR automations?",
+      "cleanMergedConfirmDescription": "These paused automations track PRs that are already merged or closed: {{names}}",
+      "cleanMergedConfirmAction": "Delete",
+      "cleanMergedDone": "Deleted {{count}} completed PR automations",
+      "checkFailed": "Unable to check PR status right now"
     }
   },
   "issueTracker": {
@@ -23185,7 +23424,10 @@
       "mergedLabel_one": "{{name}} · route ({{count}} source)",
       "mergedLabel_other": "{{name}} · route ({{count}} sources)",
       "routeDecides": "The route “{{name}}” decides which source this task uses",
-      "quotaOf": "Quota: {{name}}"
+      "quotaOf": "Quota: {{name}}",
+      "managedBy": "Managed by “{{name}}”",
+      "detach": "Detach",
+      "detached": "Detached from smart routing. Keeping the current model."
     },
     "why": {
       "expiringQuota": "{{left}}% of its quota is left and resets {{reset}}, so it goes first",
@@ -23223,11 +23465,17 @@
       "newRoute": "New route",
       "newRouteName": "New route",
       "routesEmpty": "No routes yet. Create one and add a few sources.",
-      "scopeNote": "Smart routing applies to tasks on this computer. A new task picks a source when it starts. Choosing one in a task already under way switches it once, right away; it does not switch by itself afterwards.",
+      "scopeNote": "Smart routing manages tasks on this computer and supported entry points continuously. Once selected—at start or mid-task—it checks availability and quota before each turn, switches to a vision source for images, preserves warm prompt caches, and falls back on failure until you detach or pick a specific model.",
       "back": "Back to smart routing",
       "name": "Name",
       "nameHint": "Shown in the model picker.",
-      "routeShownAs": "Shown under Smart routing in the model picker.",
+      "routeType": "Route type",
+      "routeTypeModel": "Model route",
+      "routeTypeProvider": "Provider route",
+      "switchTypeConfirmTitle": "Switch route type?",
+      "switchTypeConfirmDescription": "Sources already added will be removed. The name, pick rule, and exceptions stay.",
+      "switchTypeConfirmTargetWarning": "Time exceptions in other routes that point to this route will also be removed.",
+      "switchTypeConfirmAction": "Switch type",
       "pick": "Which one to use",
       "moreStrategies": "More options",
       "effort": "Reasoning effort",
@@ -23237,11 +23485,10 @@
       "weightAria": "Weight for “{{name}}”",
       "weightHint": "With “By weight”, a higher weight gets more new tasks. 1–1000.",
       "sources": "Sources it can use",
-      "sourcesHint": "Different models can sit together. The task shows which one was used.",
-      "sourcesEmpty": "No sources yet. Add a connected model below.",
+      "sourcesEmpty": "Different models can sit together · The task shows which one was used · Add a connected model below",
       "sourcesEmptyMerged": "No sources yet. Add a connected provider below.",
       "sourcesFull": "A route can hold up to {{count}} sources.",
-      "addSource": "Add source",
+      "addSource": "Add model route",
       "chooseModel": "Choose a model",
       "notConnected": "Not connected",
       "moveUp": "Move up",
@@ -23325,10 +23572,9 @@
       "note": "Automatic routes follow your connected providers. Members cannot be added or removed, but you can reorder them, set weights, turn one off, change the strategy or hide the route.",
       "providers_one": "{{count}} provider",
       "providers_other": "{{count}} providers",
-      "addWhole": "Add a whole provider",
+      "addWhole": "Add provider route",
       "addWholeHint": "All of its models join this route. In the model picker the route works like one provider: pick a model as usual and the route decides which member runs it.",
-      "addModelHint": "Add one model from one provider. Choosing this route picks one of these sources by its strategy.",
-      "detailHint": "This route combines whole providers. In the model picker it works like one provider: pick a model and effort as usual and the route decides which member runs it."
+      "addModelHint": "Add one model from one provider. Choosing this route picks one of these sources by its strategy."
     },
     "kinds": {
       "byModel": "By model",
@@ -23353,6 +23599,11 @@
       "deviceDefaultReadOnly": "Update that computer to change its default model here.",
       "deviceUnavailable": "Can’t read that computer’s buddy settings right now. Make sure it’s online, then open this again.",
       "deviceLoading": "Reading that computer’s settings…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "Current source unavailable or out of quota; switched before sending",
+      "imageInput": "Message includes images; switched to a vision-capable source",
+      "cacheExpired": "Prompt cache window expired; re-selected source by route strategy"
     }
   },
   "projectSettings": {

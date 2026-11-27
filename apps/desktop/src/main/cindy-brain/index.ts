@@ -7,6 +7,8 @@ import { setPluginEnabled } from './pluginEnableService.js';
 import { warmRuntimePluginSettings } from '../maker-host/runtime-plugin-settings.js';
 import type { AgentDeps } from '@cindy/maker-core';
 import { createGhostExecutionPipe } from './executionPipe.js';
+import { GhostChangeChecksSlot } from './changeChecksSlot.js';
+import { hasConversationChanges } from '../localDb/historyChangeCheck.js';
 import { createPluginFileAccess } from '../mcp-apps/pluginFileAccess.js';
 import { ownsPersonalBuildMonitor } from '../personalBuildMonitor.js';
 import { importPickedFiles } from './pickedFiles.js';
@@ -110,9 +112,22 @@ import {
 import { createGhostModelPreferencesProvider } from './ghostModelPreferences.js';
 import { applyHostModelFavorite, readHostModelPreferences } from '../maker-ipc/modelFavoritesSync.js';
 import { modelDescriptionKey } from '../../shared/modelDescriptionKey.js';
-import { GhostModelPicker, chooseModelPickerWindow, readPluginModelRouteCatalog, getPluginModelPickerAgents, isPluginModelPickerRouteAvailable, isPluginRouteHarnessInstalled, type RemotePluginRouteAgentStatus } from './ghostModelPicker.js';
+import {
+  GhostModelPicker,
+  chooseModelPickerWindow,
+  readPluginModelRouteCatalog,
+  getPluginModelPickerAgents,
+  getPluginModelPickerPluginEngines,
+  isPluginEngineModelRouteAvailable,
+  isPluginModelPickerRouteAvailable,
+  isPluginRouteHarnessInstalled,
+  type RemotePluginRouteAgentStatus,
+} from './ghostModelPicker.js';
+import type { PluginEngineView } from '../../shared/pluginEngines.js';
 import { installGhostPageModelPicker } from './ghostPageModelPicker.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { readModelGroupsConfig } from '../model-groups/store.js';
+import { localRouteCandidatesInPickOrder } from '../utility-model/auxiliaryRouteRefs.js';
 import { PluginDownloadSlot } from './downloadSlot.js';
 import { createDownloader } from '../downloader/index.js';
 import { handlePluginTaskRequest, type PluginTaskHandler } from './taskSlot.js';
@@ -408,6 +423,7 @@ import {
   setGhostKvStore,
   setGhostModelsHandler,
   setGhostHarnessesHandler,
+  setGhostEngineSettingsHandler,
   setGhostMediaModelsProvider,
   setGhostAgentModelsProvider,
   setGhostModelPreferencesProvider,
@@ -421,7 +437,8 @@ import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { createGhostKvStore, removeGhostKvBestEffort, type GhostKvStore } from './ghostKvStore.js';
 import { handleGhostModelsRequest } from './runtime/ghostModelsEndpoint.js';
 import { handleGhostHarnessesRequest } from './runtime/ghostHarnessesEndpoint.js';
-import { configurePluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
+import { handleGhostEngineSettingsRequest } from './runtime/ghostEngineSettingsEndpoint.js';
+import { configurePluginHarnessRegistry, getPluginHarnessRegistry, PLUGIN_USAGE_WORKER_FAILURE, reconcilePluginHarnesses } from './pluginHarnesses.js';
 import { pluginEngineAccountRoot } from '../plugin-engine-accounts/paths.js';
 import { forgetPluginEngineAccountsOfPlugin } from '../plugin-engine-accounts/store.js';
 import { ghostPublishedModelText, parseGhostPublishedModels } from '@cindy/plugin-protocol';
@@ -460,7 +477,7 @@ import { GhostConnectionManager, normalizeGhostConnectionHost } from './ghostCon
 import { getResolvedMainLocale, rawMainString, t } from '../i18n.desktop.js';
 import { refreshGhostLocalizationIfChanged } from './ghostLocalizationRefresh.js';
 import type { SupportedLocale } from '../../shared/locale.js';
-import { getDeepLinkMainWindow } from '../deepLink.js';
+import { getDeepLinkMainWindow, openMainWindowPluginEngineSettings } from '../deepLink.js';
 import { reconcileGhostSkillLinks, removeGhostSkillLinksForRoots, ghostSkillPluginRoot } from './skillSlot.js';
 import { diagnoseScheduleHookPlugin } from './scheduleHookPluginDiagnosis.js';
 import type { PreRunHookMissingPlugin } from '@cindy/maker-scheduler';
@@ -2698,16 +2715,19 @@ export function setGhostAgentTurnRunner(runner: GhostAgentTurnRunner | null): vo
 const ghostAgentModelsCache = createGhostAgentModelsCache();
 let listGhostAgentLocations: (() => Promise<GhostAgentLocationsReadResult>) | null = null;
 let readGhostAgentRemoteViews: ((agentDeviceId: string) => Promise<ProviderView[]>) | null = null;
+let readGhostAgentRemotePluginEngines: ((agentDeviceId: string) => Promise<readonly PluginEngineView[]>) | null = null;
 let readGhostAgentRemoteStatus: RemotePluginRouteAgentStatus | null = null;
 
 /** maker-ipc 注入设备列表与跨设备目录读取；静态 import device-link 会成环。 */
 export function setGhostAgentModelLocationSources(sources: {
   listLocations: () => Promise<GhostAgentLocationsReadResult>;
   readRemoteViews: (agentDeviceId: string) => Promise<ProviderView[]>;
+  readRemotePluginEngines?: (agentDeviceId: string) => Promise<readonly PluginEngineView[]>;
   readRemoteStatus?: RemotePluginRouteAgentStatus;
 } | null): void {
   listGhostAgentLocations = sources?.listLocations ?? null;
   readGhostAgentRemoteViews = sources?.readRemoteViews ?? null;
+  readGhostAgentRemotePluginEngines = sources?.readRemotePluginEngines ?? null;
   readGhostAgentRemoteStatus = sources?.readRemoteStatus ?? null;
 }
 
@@ -3116,6 +3136,27 @@ export const GHOST_ASSISTANT_REWRITTEN_CHANNEL = 'ghosts:assistant-message-rewri
 export const GHOST_ASSISTANT_PENDING_CHANNEL = 'ghosts:assistant-message-pending';
 
 const taskEventIndex = new GhostTaskEventIndex();
+let changeChecksSingleton: GhostChangeChecksSlot | null = null;
+function getGhostChangeChecks(): GhostChangeChecksSlot {
+  return changeChecksSingleton ??= new GhostChangeChecksSlot({
+    owner: () => {
+      if (isAppSessionBoundaryPending()) return null;
+      const stamp = getGhostOwnerPushStamp();
+      return stamp ? JSON.stringify([stamp.dataOwnerId, stamp.ownerGeneration]) : null;
+    },
+    list: availableGhosts,
+    conversationChanges: hasConversationChanges,
+    readTool: (providerId, tool, args, signal) => getGhostPipeDispatcher().callGhostTool({
+      ghostId: providerId, tool, args, signal, timeoutMs: 4_000,
+    }),
+    wake: async ghost => {
+      const result = await getGhostRuntime().spawn(ghost);
+      if (!result.ok) throw new Error(result.reason);
+    },
+    send: sendToGhostLogic,
+  });
+}
+
 
 /**
  * 订阅网关单例(卡槽①):did- 旁听扇出与 will- 拦截裁决的装配点。
@@ -3127,7 +3168,11 @@ const runtimePluginHost = createDesktopRuntimePluginHost({
     && (getAppCapabilities().canUseCindyAccountServices || !ghostRequiresCindyAccount(ghost.manifest)),
   sendToGhostLogic, broadcastGhostWindowPush, ghostOwnerScope, log, getGhostOwnerPushStamp,
   isGhostOwnerStampCurrent, findGhostForInstanceId,
-  remoteSources: () => ({ locations: listGhostAgentLocations, remoteViews: readGhostAgentRemoteViews }),
+  remoteSources: () => ({
+    locations: listGhostAgentLocations,
+    remoteViews: readGhostAgentRemoteViews,
+    remotePluginEngines: readGhostAgentRemotePluginEngines,
+  }),
 });
 const { isGhostEligibleSession } = runtimePluginHost;
 export const { getGhostSubscriptionGateway, hasEnabledUserMessageHookGhost, screenGhostUserMessage,
@@ -4619,6 +4664,12 @@ export function getGhostModelPicker(): GhostModelPicker {
     },
     available: async route => {
       const owner = activeOwnerScopeKey();
+      if (route.agentKind === 'acp') {
+        const engines = route.agentDeviceId
+          ? await readGhostAgentRemotePluginEngines?.(route.agentDeviceId).catch(() => []) ?? []
+          : getPluginModelPickerPluginEngines();
+        return owner === activeOwnerScopeKey() && isPluginEngineModelRouteAvailable(route, engines);
+      }
       const { views, agents } = await readPluginModelRouteCatalog(route, {
         local: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
         remote: readGhostAgentRemoteViews, localAgents: getPluginModelPickerAgents,
@@ -5024,8 +5075,9 @@ export function getGhostScheduleSlot(): GhostScheduleSlot {
   if (!scheduleSlotSingleton) {
     scheduleSlotSingleton = new GhostScheduleSlot({
       getGhost: findGhostForInstanceId,
-      sendToMobile: (pageId, payload) => mobilePluginPages?.present(pageId, payload.ghostId, {
+      sendToMobile: (pageId, payload, instanceId) => mobilePluginPages?.present(pageId, instanceId, {
         kind: 'schedule', name: payload.name, prompt: payload.prompt, intervalMs: payload.intervalMs,
+        ...(payload.preRunPlugin ? { preRunPlugin: payload.preRunPlugin } : {}),
       }) ?? false,
       sendToWindow: (payload) => {
         // 候选只取**挂了完整主壳**的窗口:独立的插件面板窗 / 右侧栏窗与 MainLayout
@@ -6197,6 +6249,28 @@ function getPluginOneshotModelSelection(
   ghostId: string,
 ): { providerId?: string; agentKind: AgentKind; model: string } | null {
   const config = getPluginTaskDefaults(ghostId) ?? {};
+  // 插件引擎任务与远程任务一样不用于本机一次性快问快答：快问快答回落系统辅助模型链。
+  if (config.agentKind === 'acp') return null;
+  if (config.modelGroup) {
+    for (const candidate of localRouteCandidatesInPickOrder(config.modelGroup)) {
+      if (candidate.agentKind === 'pi') {
+        const resolved = resolveOneshotCatalogModel(
+          getActiveCatalog(),
+          readModelDisableOverrides(),
+          candidate.model,
+          [candidate.providerId, ...readProviderOrder()],
+          hasOneshotProviderCredential,
+        );
+        if (resolved && resolved.providerId === candidate.providerId) return resolved;
+        continue;
+      }
+      return {
+        agentKind: candidate.agentKind === 'cc' ? 'claude-code' : candidate.agentKind,
+        model: candidate.model,
+        providerId: candidate.providerId,
+      };
+    }
+  }
   if (!config.model || config.agentDeviceId) return null;
   if (!config.agentKind || config.agentKind === 'pi') {
     // 两种情况按目录解析一条快问快答可路由的 供应商×agent×模型:
@@ -6366,10 +6440,13 @@ export function getGhostCindySlot(): GhostCindySlot {
       // 模块顶层读 electron app 路径,静态引入会把这条链拽进所有 import 本
       // 模块的单测(hook-script-generator 同款做法)。失败面折叠成 slot 层
       // 的三档 reason;attempts 细节只进日志,不给沙箱探测面。
-      oneshotText: async ({ prompt, maxTokens, timeoutMs, route }) => {
+      oneshotText: async ({ prompt, maxTokens, timeoutMs, route, signal }) => {
+        signal?.throwIfAborted();
         const ownerScope = activeOwnerScopeKey();
         const deadline = performance.now() + timeoutMs;
-        if (!await makerStartupGate.wait(timeoutMs)) {
+        const ready = await makerStartupGate.wait(timeoutMs, signal);
+        signal?.throwIfAborted();
+        if (!ready) {
           return { ok: false, reason: 'timeout', message: '快问快答超时,请稍后再试' };
         }
         const [{ requestUtilityText }, { getMaker }] = await Promise.all([
@@ -6377,6 +6454,7 @@ export function getGhostCindySlot(): GhostCindySlot {
           import('../maker-host/index.js'),
         ]);
         const remainingMs = Math.floor(deadline - performance.now());
+        signal?.throwIfAborted();
         if (remainingMs <= 0) return { ok: false, reason: 'timeout', message: '快问快答超时,请稍后再试' };
         if (isAppSessionBoundaryPending() || ownerScope !== activeOwnerScopeKey()) {
           return { ok: false, reason: 'failed', message: 'ACCOUNT_CHANGED' };
@@ -6385,6 +6463,7 @@ export function getGhostCindySlot(): GhostCindySlot {
           source: 'plugin-text',
           maxTokens,
           timeoutMs: remainingMs,
+          ...(signal ? { signal } : {}),
           // 用户选的模型 / 身份卡声明走显式供应商路径(钉死,不回落);
           // 缺省 route = 系统辅助模型链。
           ...(route
@@ -6427,6 +6506,7 @@ export function getGhostCindySlot(): GhostCindySlot {
           readProviderOrder(),
           hasOneshotProviderCredential,
         ),
+      getPendingCallSignal: (ghostId, callId) => getGhostPipeDispatcher().getPendingCallSignal(ghostId, callId),
       // 管子续命挂钩:同步视频代办(署名单)在途期间替 tool-call 续命,
       // 免得分钟级生成被管子 330s 基础窗口掐掉(任务后台继续烧钱、结果作废)。
       // ghostId 由派发器配对验身:冒用他人在途 callId 不能续命/收短别人的卷。
@@ -8259,6 +8339,7 @@ async function installAndDockLocked(
     approvedFileOpenerExtensions: confirmedFileOpenerExtensions(opts.consent.decision, installedBefore, opts.consent.manifest),
     observeCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'observe'),
     companionsCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'companions'),
+    checksCapabilityApproved: confirmedTaskCapability(opts.consent.decision, installedBefore, opts.consent.manifest, 'checks'),
     initiallyEnabled: opts.enable ?? false,
     expectedPackageSha256: opts.expectedPackageSha256,
     ...(opts.trustOverride ? { trustOverride: opts.trustOverride } : {}),
@@ -8459,6 +8540,7 @@ async function updateLocalGhostPackageLocked(
           approvedFileOpenerExtensions: confirmedFileOpenerExtensions(consent, previousGhost, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'companions'),
+          checksCapabilityApproved: confirmedTaskCapability(consent, previousGhost, inspected.manifest, 'checks'),
           expectedPackageSha256,
           expectedInstalledApproval,
           expectedInstalledInstanceId: instanceId,
@@ -9067,6 +9149,7 @@ async function installOrUpdateMarketGhostPackageLocked(
           approvedFileOpenerExtensions: confirmedFileOpenerExtensions(expected.consent, installed, inspected.manifest),
           observeCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'observe'),
           companionsCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'companions'),
+          checksCapabilityApproved: confirmedTaskCapability(expected.consent, installed, inspected.manifest, 'checks'),
           expectedPackageSha256: inspected.packageSha256,
           expectedInstalledApproval: expected.expectedInstalledApproval!,
           ...(seededMarketRecovery ? { seededMarketRecovery } : {}),
@@ -9635,6 +9718,7 @@ export function registerGhostIpc(): void {
       read: readPluginTaskConfig, write: writePluginTaskConfig, validate: validatePluginTaskConfig,
       providers: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
       agents: async () => { const { getMakerIfReady } = await import('../maker-host/index.js'); return getMakerIfReady()?.listAvailableAgents() ?? []; },
+      pluginEngines: getPluginModelPickerPluginEngines,
     });
   remotePluginManagement = new RemotePluginManagement({
     list: availableGhosts,
@@ -9855,12 +9939,27 @@ export function registerGhostIpc(): void {
     const projected = withGhostModelDescriptions(
       projectGhostAgentModels(views, maker.listAvailableAgents(), getModelVisibilityOverride), describeGhostModel);
     if (!projected.ok) return projected;
-    if (!listGhostAgentLocations) return { ...projected, supportsRemoteRoutes: true };
+    let modelGroupsSummary: Array<{ id: string; name: string; strategy: string; candidateCount: number; effort?: string }> = [];
+    try {
+      modelGroupsSummary = readModelGroupsConfig().routes
+        .filter((route) => !route.hidden && !route.parent)
+        .map((route) => ({
+          id: route.id,
+          name: route.name,
+          strategy: route.strategy,
+          candidateCount: route.candidates.filter((c) => !c.off).length,
+          ...(route.effort ? { effort: route.effort } : {}),
+        }));
+    } catch {
+      modelGroupsSummary = [];
+    }
+    const withGroups = modelGroupsSummary.length > 0 ? { modelGroups: modelGroupsSummary } : {};
+    if (!listGhostAgentLocations) return { ...projected, supportsRemoteRoutes: true, ...withGroups };
     const locations = await ghostAgentModelsCache.locations(owner, listGhostAgentLocations);
     if (owner !== activeOwnerScopeKey() || !findGhostForInstanceId(instanceId)?.enabled) {
       return { ok: false, errorCode: 'NOT_AVAILABLE', message: 'Plugin unavailable' };
     }
-    return { ...projected, supportsRemoteRoutes: true, ...(locations ? { locations } : {}) };
+    return { ...projected, supportsRemoteRoutes: true, ...withGroups, ...(locations ? { locations } : {}) };
   });
   // agent.modelPreferences:收藏读写/最近使用只读,复用 device-link 同一条 owner 围栏的
   // renderer 收藏桥(maker-ipc/modelFavoritesSync),不建第二份收藏或最近使用存储。
@@ -9938,6 +10037,22 @@ export function registerGhostIpc(): void {
       declared: () => (ghost ? ghost.manifest.harnesses : null),
       store: publishedHarnessesStore(),
       onChanged: () => reconcilePluginHarnesses(),
+    });
+  });
+  // /harnesses/open-settings：页面在用户点击后请宿主打开自己某个引擎的供应商设置页。引擎须在当前
+  // 注册表里(已启用、已批准、已声明)；只导航，不改任何设置。
+  setGhostEngineSettingsHandler(({ ghostId, method, readBodyText, isCurrent }) => {
+    const ghost = findGhostForInstanceId(ghostId);
+    return handleGhostEngineSettingsRequest({
+      method, readBodyText, isCurrent,
+      declared: () => (ghost ? ghost.manifest.harnesses : null),
+      consumeUserGesture: () => getGhostErrandSlot().consumeUserGesture(ghostId),
+      open: (harnessId) => {
+        const engine = getPluginHarnessRegistry().list()
+          .find((harness) => harness.ghostId === ghostId && harness.harnessId === harnessId);
+        if (!engine || !isCurrent()) return false;
+        return openMainWindowPluginEngineSettings(engine.key);
+      },
     });
   });
   configurePluginHarnessRegistry({
@@ -10171,6 +10286,7 @@ export function registerGhostIpc(): void {
   app.on('before-quit', () => {
     runtime.destroyAll();
     getGhostNodeRuntimeBroker().destroyAll();
+    changeChecksSingleton?.dispose();
     void getGhostBrowserExtensionSlot().dispose();
   });
   const suspendPluginApps = () => { void revokePluginAppServers().catch(() => log.warn('plugin page revocation on suspend failed')); };
@@ -10471,6 +10587,11 @@ export function registerGhostIpc(): void {
     // 只返回调用插件自己已声明能力的当前选型，不返回其它插件配置或凭证。
     // resource-usage 只返回本机及同 owner × 安装实例的进程合计。
     // 未知 kind 明确拒绝，避免接口悄悄扩面。
+    if (type === 'change-checks-request') return getGhostChangeChecks().request(id, payload);
+    if (type === 'change-check-result') {
+      getGhostChangeChecks().result(id, payload);
+      return { ok: true };
+    }
     if (type === 'host-request') {
       const kind = (payload as { kind?: unknown } | null)?.kind;
       if (kind === 'app-context') return currentGhostAppContext();
@@ -11976,8 +12097,8 @@ export function registerGhostIpc(): void {
   ipcMain.handle('ghosts:request-task-approval', async (event, id: unknown, capability: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !id.trim()) throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
-    if (capability !== undefined && capability !== 'observe' && capability !== 'companions') {
-      throwIpcError('INVALID_PARAMS', 'unknown plugin capability');
+    if (capability !== undefined && capability !== 'observe' && capability !== 'companions' && capability !== 'checks') {
+      throwIpcError('INVALID_PARAMS', 'capability must be observe, companions or checks when provided');
     }
     requireGhostAvailableForActiveSession(id);
     const isCurrent = () => {
@@ -11985,7 +12106,7 @@ export function registerGhostIpc(): void {
     };
     const granted = await requestPluginTaskApproval(id, isCurrent, facts =>
       createWindowGhostInstallConsentPrompt(event.sender)({ purpose: 'task-capability', initiator: 'user', origin: 'local-file', facts }), true,
-      capability === 'observe' || capability === 'companions' ? capability : 'tasks');
+      capability ?? 'tasks');
     if (granted) broadcastGhostsChanged(getGhostManager().list());
     return { granted };
   });

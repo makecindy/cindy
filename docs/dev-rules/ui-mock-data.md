@@ -212,6 +212,12 @@ pnpm mobile:sim:whoami -- --mock --json
   展开详情不显示原始来源字段；允许或拒绝后卡片消失，不连接真实电脑。缺来源的同类卡：
   `cindy://sessions/visual-plugin-install-card-unverified?deviceId=cindy-visual-mock-mac`（自定义市场、卡上没有 `source`，
   只能拒绝，并说明在电脑上处理）。
+- 手机续发确认：`cindy://sessions/visual-outbox-confirmation?deviceId=cindy-visual-mock-mac`。发两条
+  合成消息，首条历史查询先不命中，第二条留在待发。点「重新确认」后首条回到历史，第二条接着发出。
+  用 `cindy://sessions/visual-outbox-failure?deviceId=cindy-visual-mock-mac` 对照普通发送失败。
+  用 `cindy://sessions/visual-outbox-retry?deviceId=cindy-visual-mock-mac` 验收重试：发两条后等首条
+  未确认，点「重新确认」应变为「未发送」，点「重试」后两条按原顺序各出现一次。
+  两者都通过实际任务页与待发队列，只使用内存模拟的电脑。
 - 反馈确认：`cindy://sessions/visual-issue-confirm?deviceId=cindy-visual-mock-mac`，合成反馈草稿、署名与环境，覆盖预览、编辑和展开详情；不提交。Desktop 对应 `pnpm ui:check --page issue-confirm --case all --theme all`，两端均加载实际组件。
 - 代输入：`cindy://sessions/visual-input-handoff?deviceId=cindy-visual-mock-mac`，一条英文的电脑 App 登录请求（长目的、Agent 补充、邮箱与密码），点「填写」打开实际的 iOS 原生面板；用于在 iPhone Duo 折叠／展开、短屏与常规机型上检查对齐和高度。合成数据，「继续」不会提交到任何电脑。
 - 群聊点名：`cindy://companions/groups/mention-qa?deviceId=cindy-visual-mock-mac`，合成成员覆盖显式身份、唯一名称回退、重名、未知及群体提及。沿用实际群聊组件与成员身份 sheet，只用于界面验收；话题入口另由直连 Chat Server 的组件回归覆盖。

@@ -310,6 +310,7 @@ vi.mock("@/session/ComposerNativeSection", () => ({
 vi.mock("@/auth/authOwnerGeneration", () => ({
   getMobileAuthOwner: () => "owner",
   isMobileAuthOwnerCurrent: () => bridge.ownerCurrent,
+  subscribeMobileAuthOwner: () => () => {},
 }));
 vi.mock('@/device-link/useDeviceProviders', () => ({ useDeviceProviders: () => ({ providers: [], ready: true }) }));
 vi.mock('@/device-link/useMobileMakerTransport', () => ({ useMobileMakerTransport: () => bridge.maker }));

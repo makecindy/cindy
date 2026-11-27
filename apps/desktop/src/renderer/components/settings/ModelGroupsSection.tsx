@@ -4,9 +4,10 @@
  * 产品规则见 docs/product-rules/model-groups.md。
  */
 import { Activity, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { ArrowDown, ArrowUp, Plus, Waypoints, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Plus, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { ModelSelector, ProviderMark } from '@/components/new-chat/ModelSelector';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -28,7 +29,9 @@ import {
 } from '@/features/model-groups/modelGroupsClient';
 import { routeStrategySelectGroups } from '@/features/model-groups/routeStrategyOptions';
 import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { usePickerPluginEngines } from '@/hooks/usePickerPluginEngines';
 import { createLogger } from '@/lib/logger';
+import { PLUGIN_ENGINE_DEFAULT_MODEL, type PluginEngineSelection } from '@/lib/pluginEngineSelection';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
@@ -39,6 +42,7 @@ import {
   modelGroupCandidateKey,
   modelGroupWeight,
   type ModelGroupCandidate,
+  type ModelGroupException,
   type ModelGroupRoute,
   type ModelGroupsConfig,
   type ModelGroupStrategy,
@@ -51,11 +55,10 @@ import {
   SourceRouteDetail,
   SourceRouteRow,
   useSourceOptions,
-  WholeProviderAddRow,
 } from './ModelGroupsAutoRoutes';
 import { modelGroupsSettings } from './ModelGroupsSection.settings-search';
 import { ModelGroupsOverview } from './ModelGroupsOverview';
-import { RouteNameRow, RowIconButton, WeightInput } from './ModelGroupRowControls';
+import { RouteNameRow, RouteTypeSection, RowIconButton, WeightInput, type RouteKind } from './ModelGroupRowControls';
 import { useSettingsSubpageBack } from './useSettingsEscape';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
 import { useSettingsSectionTarget } from './useSettingsSectionTarget';
@@ -65,7 +68,7 @@ const log = createLogger('ModelGroupsSection');
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const UNSET_EFFORT = '__unset__';
 
-type View = { kind: 'list' } | { kind: 'route'; id: string } | { kind: 'source'; id: string }
+type View = { kind: 'list' } | { kind: 'route' | 'source'; id: string; focusType?: boolean }
   /** 另一台电脑上的伙伴用哪个模型(id 是那台电脑)。 */
   | { kind: 'buddies'; id: string };
 
@@ -74,6 +77,20 @@ const RemoteBuddyModelsPage = lazy(() => import('./RemoteBuddyModelsPage').then(
 
 /** 路由列表里两种路由各自的小标题：与模型供应商页左栏的分组标题同一档字。 */
 const ROUTE_KIND_LABEL = 'px-1 text-12 font-medium leading-[1.33] text-[var(--text-tertiary)]';
+
+/** Time exceptions can only target a model route. Include the stored overrides of auto routes,
+ * even if the supplier is currently disconnected and the route is not shown. */
+function routeTypeRedirects(config: ModelGroupsConfig, id: string) {
+  const entries: [string, ModelGroupException[] | undefined][] = [
+    ...config.routes.filter((route) => !route.parent && route.id !== id).map((route): [string, ModelGroupException[] | undefined] => [route.id, route.exceptions]),
+    ...(config.sourceRoutes ?? []).filter((route) => !route.auto).map((route): [string, ModelGroupException[] | undefined] => [route.id, route.exceptions]),
+    ...Object.entries(config.autoExceptions ?? {}),
+  ];
+  return entries.flatMap(([routeId, exceptions]) =>
+    (exceptions ?? []).filter((exception) => exception.use !== 'vision' && exception.use.routeId === id)
+      .map((exception) => ({ routeId, exception })),
+  );
+}
 
 export function ModelGroupsSection({ scrollRef, focusProvider }: {
   scrollRef?: RefObject<HTMLDivElement | null>;
@@ -94,6 +111,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
   const namesOf = useModelGroupCandidateNames(allCandidates);
   // 「添加来源」与其它设置页一样列出其他电脑与分享来的供应商；选中哪一行，来源就连同运行位置一起存。
   const routeDevices = useModelRouteDevices({ controlledDeviceId: null, leadAgentDeviceId: null });
+  const pickerPluginEngines = usePickerPluginEngines({ enabled: true });
   const [view, setView] = useState<View>({ kind: 'list' });
   const route = view.kind === 'route' ? userRoutes.find((item) => item.id === view.id) : undefined;
   const sourceRoute = view.kind === 'source' ? sourceRoutes.find((item) => item.id === view.id) : undefined;
@@ -180,6 +198,110 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
     const route: ModelGroupRoute = { id: crypto.randomUUID(), name: t('modelGroups.settings.newRouteName'), strategy: 'expiring', candidates: [] };
     if (await save((latest) => ({ ...latest, routes: [...latest.routes, route] }))) openRoute(route.id);
   };
+  const switchingKindRef = useRef(false);
+  const [switchingKind, setSwitchingKind] = useState(false);
+  const switchRouteKind = useCallback(async (id: string, fromKind: RouteKind, toKind: RouteKind, fromKeyboard: boolean) => {
+    if (fromKind === toKind || switchingKindRef.current) return;
+    switchingKindRef.current = true;
+    setSwitchingKind(true);
+    try {
+      let approved: string | undefined;
+      const fromView = fromKind === 'model' ? 'route' : 'source';
+      const prevViewKey = `${fromView}:${id}`;
+      for (;;) {
+        const result: {
+          status: 'converted' | 'missing' | 'full' | 'confirm';
+          impact?: { snapshot: string; redirects: boolean };
+        } = { status: 'missing' };
+        const ok = await save((latest) => {
+          const model = fromKind === 'model' ? latest.routes.find((item) => item.id === id && !item.parent) : undefined;
+          const provider = fromKind === 'provider' ? latest.sourceRoutes?.find((item) => item.id === id && !item.auto) : undefined;
+          const current = model ?? provider;
+          if (!current) return latest;
+
+          const userSourceRoutes = (latest.sourceRoutes ?? []).filter((item) => !item.auto);
+          if (
+            (toKind === 'provider' && userSourceRoutes.length >= MODEL_GROUP_LIMITS.routes * 2)
+            || (toKind === 'model' && latest.routes.filter((item) => !item.parent).length >= MODEL_GROUP_LIMITS.routes)
+          ) {
+            result.status = 'full';
+            return latest;
+          }
+
+          // Decide in the save queue, after any in-flight add. A confirmation only covers
+          // the sources and redirects observed in that attempt, not a later edit.
+          const sources = model?.candidates ?? provider?.sources ?? [];
+          const redirects = model ? routeTypeRedirects(latest, id) : [];
+          if (sources.length || redirects.length) {
+            const snapshot = JSON.stringify([sources, redirects]);
+            if (approved !== snapshot) {
+              result.status = 'confirm';
+              result.impact = { snapshot, redirects: redirects.length > 0 };
+              return latest;
+            }
+          }
+
+          result.status = 'converted';
+          if (shownView.current === prevViewKey) shownView.current = null;
+          const common = {
+            id: current.id,
+            name: current.name,
+            strategy: current.strategy,
+            ...(current.autoSwitch === false ? { autoSwitch: false as const } : {}),
+            ...(current.exceptions?.length ? { exceptions: current.exceptions } : {}),
+          };
+          if (model) {
+            return {
+              ...latest,
+              routes: latest.routes.filter((item) => item.id !== id),
+              // The IPC normalizer caps the submitted array before the store strips automatic routes.
+              sourceRoutes: [...userSourceRoutes, { ...common, sources: [] }],
+            };
+          }
+          return {
+            ...latest,
+            routes: [...latest.routes, {
+              ...common,
+              candidates: [],
+              ...(provider?.effort ? { effort: provider.effort } : {}),
+            }],
+            sourceRoutes: (latest.sourceRoutes ?? []).filter((item) => item.id !== id),
+          };
+        });
+        if (!ok) {
+          if (result.status === 'converted' && !shownView.current) shownView.current = prevViewKey;
+          return;
+        }
+        if (result.status === 'confirm' && result.impact) {
+          const description = t('modelGroups.settings.switchTypeConfirmDescription');
+          if (!await confirm({
+            title: t('modelGroups.settings.switchTypeConfirmTitle'),
+            description: result.impact.redirects
+              ? `${description} ${t('modelGroups.settings.switchTypeConfirmTargetWarning')}`
+              : description,
+            confirmText: t('modelGroups.settings.switchTypeConfirmAction'),
+            cancelText: t('modelGroups.settings.cancel'),
+          })) return;
+          approved = result.impact.snapshot;
+          continue;
+        }
+        if (result.status === 'full') {
+          toast.error(t('modelGroups.settings.saveFailed'));
+        } else {
+          setView((current) => {
+            if (current.kind !== fromView || current.id !== id) return current;
+            return result.status === 'converted'
+              ? { kind: toKind === 'model' ? 'route' : 'source', id, focusType: fromKeyboard }
+              : { kind: 'list' };
+          });
+        }
+        return;
+      }
+    } finally {
+      switchingKindRef.current = false;
+      setSwitchingKind(false);
+    }
+  }, [confirm, save, t]);
   const back = () => setView({ kind: 'list' });
   useSettingsSubpageBack(subpageOpen ? back : null);
 
@@ -194,7 +316,18 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
       </Suspense>
     );
   } else if (sourceRoute) {
-    detail = <SourceRouteDetail route={sourceRoute} config={config} options={sourceOptions} save={save} onBack={back} />;
+    detail = (
+      <SourceRouteDetail
+        route={sourceRoute}
+        config={config}
+        options={sourceOptions}
+        save={save}
+        onBack={back}
+        switchingKind={switchingKind}
+        focusType={view.kind === 'source' && view.focusType}
+        onSwitchToModel={sourceRoute.auto ? undefined : (fromKeyboard) => void switchRouteKind(sourceRoute.id, 'provider', 'model', fromKeyboard)}
+      />
+    );
   } else if (route) {
     // 按来源本身找、不按界面上的序号：连点或另一处刚改过时，改的仍是点的那一行(2026-11-26 排查)。
     const move = (key: string, delta: number) => updateRoute(route.id, (current) => {
@@ -230,12 +363,17 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
         <section className="flex min-w-0 flex-col" data-testid="model-group-route-detail">
           <SettingsPageHeader
             title={route.name}
-            description={t('modelGroups.settings.routeShownAs')}
             onBack={back}
             backLabel={t('modelGroups.settings.back')}
             backProps={{ 'data-settings-search-action': 'Return from a route to the model groups list' }}
           />
           <div className="mt-6 flex min-w-0 flex-col gap-9">
+            <RouteTypeSection
+              value="model"
+              disabled={switchingKind}
+              focusSelected={view.kind === 'route' && view.focusType}
+              onSelect={(next, fromKeyboard) => { if (next === 'provider') void switchRouteKind(route.id, 'model', 'provider', fromKeyboard); }}
+            />
             <SettingsSection>
               <SettingsCard>
                 <RouteNameRow key={route.id} value={route.name} label={t('modelGroups.settings.name')} hint={t('modelGroups.settings.nameHint')}
@@ -298,7 +436,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
 
             <SettingsSection
               title={t('modelGroups.settings.sources')}
-              description={route.strategy === 'weighted' ? t('modelGroups.settings.weightHint') : t('modelGroups.settings.sourcesHint')}
+              description={route.strategy === 'weighted' ? t('modelGroups.settings.weightHint') : undefined}
             >
               <SettingsCard>
                 {route.candidates.map((candidate, index) => {
@@ -314,8 +452,12 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
                         <span className="flex items-center gap-3">
                           <span className="w-4 text-center text-12 tabular-nums leading-[1.33] text-[var(--text-tertiary)]">{index + 1}</span>
                           <SettingsRowIcon>
-                            <ProviderMark providerId={candidate.providerId} name={names.provider?.name} routing={names.provider?.routing} logoKind={names.provider?.logoKind} customIcon={names.provider?.customIcon}
-                              colorClass="text-[var(--text-primary)]" withMargin={false} />
+                            {candidate.agentKind === 'acp' ? (
+                              <PluginEngineIcon iconDataUrl={names.pluginEngine?.iconDataUrl} size={16} />
+                            ) : (
+                              <ProviderMark providerId={candidate.providerId} name={names.provider?.name} routing={names.provider?.routing} logoKind={names.provider?.logoKind} customIcon={names.provider?.customIcon}
+                                colorClass="text-[var(--text-primary)]" withMargin={false} />
+                            )}
                           </SettingsRowIcon>
                         </span>
                       }
@@ -364,29 +506,34 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
                 {route.candidates.length === 0 && (
                   <SettingsBlock className="text-13 leading-[1.5] text-[var(--text-secondary)]">{t('modelGroups.settings.sourcesEmpty')}</SettingsBlock>
                 )}
-                {/* 还没有来源时可以改成合并整个供应商：这条路由随之变成「像一个供应商，照常选模型」的那一类。 */}
-                {route.candidates.length === 0 && (
-                  <WholeProviderAddRow options={sourceOptions} taken={[]} onAdd={(source) => void save((latest) => ({
-                    ...latest,
-                    routes: latest.routes.filter((item) => item.id !== route.id),
-                    sourceRoutes: [...(latest.sourceRoutes ?? []), {
-                      id: route.id, name: route.name, strategy: route.strategy, sources: [source],
-                      ...(route.effort ? { effort: route.effort } : {}),
-                      ...(route.autoSwitch === false ? { autoSwitch: false as const } : {}),
-                      // 例外跟着走(合并整个供应商的路由也有例外)。别的路由改走到它的时段例外会失效：它不再是一条能直接改走的路由。
-                      ...(route.exceptions?.length ? { exceptions: route.exceptions } : {}),
-                    }],
-                  })).then((ok) => { if (ok) setView({ kind: 'source', id: route.id }); })} />
-                )}
                 <SettingsRow
                   title={t('modelGroups.settings.addSource')}
-                  hint={full ? t('modelGroups.settings.sourcesFull', { count: MODEL_GROUP_LIMITS.candidates }) : route.candidates.length === 0 ? t('modelGroups.sources.addModelHint') : undefined}
+                  hint={full ? t('modelGroups.settings.sourcesFull', { count: MODEL_GROUP_LIMITS.candidates }) : undefined}
                   wrap
                   trailing={
                     <div className="w-[280px] max-w-full">
                       <ModelSelector
                         data-setting-id={modelGroupsSettings.routes.id}
                         remoteAgent={routeDevices.devices && { devices: routeDevices.devices, selectedDeviceId: null }}
+                        pluginEngines={
+                          pickerPluginEngines.hasSources
+                            ? {
+                                engines: pickerPluginEngines.engines,
+                                active: null,
+                                readCatalogue: pickerPluginEngines.readCatalogue,
+                                onSelect: (selection: PluginEngineSelection) => {
+                                  const added: ModelGroupCandidate = {
+                                    agentKind: 'acp',
+                                    providerId: selection.providerId,
+                                    model: selection.modelId || PLUGIN_ENGINE_DEFAULT_MODEL,
+                                    ...(selection.deviceId ? { agentDeviceId: selection.deviceId } : {}),
+                                  };
+                                  if (route.candidates.some((item) => modelGroupCandidateKey(item) === modelGroupCandidateKey(added))) return true;
+                                  return updateRoute(route.id, (current) => ({ ...current, candidates: [...current.candidates, added] }));
+                                },
+                              }
+                            : undefined
+                        }
                         disabled={full}
                         modelId=""
                         effort=""
@@ -422,7 +569,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
             />
 
             {/* 配置一改，旧的试用结果作废(resetKey)。 */}
-            <ModelGroupRoutePreview key={route.id} resetKey={JSON.stringify(route)} routes={[route]} nameCandidates={allCandidates} />
+            <ModelGroupRoutePreview key={`try:${route.id}`} resetKey={JSON.stringify(route)} routes={[route]} nameCandidates={allCandidates} />
 
             <SettingsSection>
               <SettingsCard>
@@ -467,7 +614,7 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
                     media
                     data-model-group-route={item.id}
                     data-settings-search-action="Opens one route"
-                    lead={<SettingsRowIcon><Waypoints size={16} aria-hidden /></SettingsRowIcon>}
+                    lead={<SettingsRowIcon><Sparkles size={16} aria-hidden /></SettingsRowIcon>}
                     title={item.name}
                     hint={routeSummary(item)}
                     chevron

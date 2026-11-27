@@ -41,6 +41,7 @@ type Act = (actionId: BotGroupRemoteActionId, input?: Record<string, unknown>) =
 type SettingsProps = {
   visible: boolean;
   onMask?(): void;
+  onMentionHistory?(): void;
   /** The personal AI 代答 state, shown on the shared group's settings. */
   mask?: GroupPersonalMask;
   /** The screen talks to the chat service directly (no computer in between). */

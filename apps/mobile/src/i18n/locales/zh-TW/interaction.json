@@ -275,6 +275,7 @@
     "inlineFormActionGeneric": "在電腦端填寫一項配置"
   },
   "inputHandoff": {
+    "refreshVerification": "重新整理驗證 QR 碼",
     "originWarning": {
       "insecure": "這個頁面沒有使用安全連線，輸入的內容可能被他人讀取。",
       "ip-address": "這個頁面使用 IP 位址而不是網域名稱，請確認它是你預期的網站。",

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   status: vi.fn(), save: vi.fn(), quote: vi.fn(), discard: vi.fn(), reveal: vi.fn(),
   close: vi.fn(), activate: vi.fn(), cache: vi.fn(), clear: vi.fn(), patch: vi.fn(), info: vi.fn(), error: vi.fn(),
   readBatch: vi.fn(), getDraft: vi.fn(), flushDraft: vi.fn(), draftHasContent: vi.fn(),
+  findSession: vi.fn((_id: string) => null as Session | null),
   device: null as string | null, tabs: [] as Array<{ id: string; kind: string; state: unknown }>,
   created: new Set<(payload: any, stamp?: any) => void>(),
   patched: new Set<(payload: any, stamp?: any) => void>(),
@@ -19,7 +20,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/makerTransport', () => ({ makerApiForSticky: () => ({ createSideChat: mocks.create, listSideChats: mocks.list }) }));
 vi.mock('@/features/device-link/stickySessionOrigin', () => ({ getStickySessionDeviceId: () => mocks.device }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({ remoteProjectsStore: { pinSessionOrigin: mocks.pin, mergeDeviceSessions: mocks.cache, applyPatch: mocks.patch, getDeviceName: () => 'Host' } }));
-vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { findById: () => null } }));
+vi.mock('@/lib/sessionsStore', () => ({ sessionsStore: { findById: (id: string) => mocks.findSession(id) } }));
 vi.mock('@/lib/composerDraftStore', () => ({
   saveDraft: mocks.save,
   appendQuoteToDraft: mocks.quote,
@@ -81,6 +82,7 @@ describe('side chat task entry', () => {
     mocks.merge.mockResolvedValue(undefined);
     mocks.getDraft.mockReturnValue(undefined);
     mocks.draftHasContent.mockReturnValue(false);
+    mocks.findSession.mockReturnValue(null);
     const subscribe = (listeners: Set<any>) => (listener: any) => {
       listeners.add(listener); return () => listeners.delete(listener);
     };
@@ -526,5 +528,59 @@ describe('side chat task entry', () => {
       expect(mocks.reveal).not.toHaveBeenCalled();
     } finally { stop(); }
     expect(mocks.bucketListeners.size).toBe(0);
+  });
+
+  // 2026-11-27 regression: openSideChatTab previously rejected all plugin engine sessions up front
+  // with chat.sideChat.failed, and buildPreviewSideChatSession dropped agentDeviceId. Coverage gap:
+  // existing tests mocked sessionsStore.findById to null and never passed an acp parent session.
+  // Minimal failing input: active desktop acp parent session (local or with agentDeviceId 'studio').
+  // Tier: unit.
+  it.each([null, 'studio'])('opens a side chat for a plugin engine parent session and preserves agentDeviceId (%s)', async (agentDeviceId) => {
+    mocks.findSession.mockReturnValue({
+      id: 'parent',
+      userId: 'user-1',
+      title: 'Plugin task',
+      workingDir: '/repo',
+      model: 'gemini-4-neon',
+      providerId: 'acp-plugin:antigravity:agy',
+      effort: 'high',
+      permissionMode: 'default',
+      status: 'active',
+      sdkSessionId: null,
+      totalTokenUsage: 0,
+      totalCostUsd: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      fastMode: false,
+      clearedAt: null,
+      pinnedAt: null,
+      userSendAt: '2026-11-27T00:00:00.000Z',
+      agentKind: 'acp' as Session['agentKind'],
+      agentDeviceId,
+      workspaceKind: 'project',
+      source: 'desktop',
+      extraDirs: [],
+      writableDirs: [],
+      createdAt: '2026-11-27T00:00:00.000Z',
+      updatedAt: '2026-11-27T00:00:00.000Z',
+    });
+    let resolveCreate!: (value: { id: string }) => void;
+    mocks.create.mockReturnValueOnce(new Promise(resolve => { resolveCreate = resolve; }));
+
+    expect(await openSideChatTab('parent')).toBe(true);
+    expect(mocks.error).not.toHaveBeenCalled();
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+    const pending = getPendingSideChat('tab-0');
+    expect(pending?.previewSession).toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:antigravity:agy',
+      agentDeviceId,
+      source: 'side-chat',
+    });
+
+    resolveCreate({ id: 'child' });
+    await vi.waitFor(() => expect(mocks.tabs).toContainEqual(
+      expect.objectContaining({ id: 'tab-0', state: { sessionId: 'child', deviceId: null } }),
+    ));
   });
 });

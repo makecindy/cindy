@@ -14,7 +14,7 @@ import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { MachineSwitcherMenu } from './MachineSwitcherMenu';
 import { sidebarContentFilterCount } from '../hooks/helpers/sidebarFilterCore';
-import { SidebarFilterPopover } from './SidebarFilterPopover';
+import { SidebarFilterPopover, type SidebarPluginHarness } from './SidebarFilterPopover';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
 import type { UseSidebarFilterReturn } from '../hooks/useSidebarFilter';
 
@@ -33,12 +33,14 @@ export function MainListScopeHeader({
   filter,
   allKnownProjects,
   dialogueCount = 0,
+  pluginHarnesses,
   hasRemoteDevices,
   fold = null,
 }: {
   filter: UseSidebarFilterReturn;
   allKnownProjects: ProjectNodeData[];
   dialogueCount?: number;
+  pluginHarnesses?: readonly SidebarPluginHarness[];
   hasRemoteDevices: boolean;
   fold?: {
     label: string;
@@ -48,9 +50,8 @@ export function MainListScopeHeader({
   } | null;
 }): ReactNode {
   const { mode } = useTaskListMode();
-  const showReminder = mode === 'inbox'
-    ? sidebarContentFilterCount(filter) > 0
-    : filter.status === 'archived';
+  // 收件箱里有筛选或隐藏生效时按钮常驻并带点；查看已归档任务不再提醒(2026-11-28 用户决定)。
+  const showReminder = mode === 'inbox' && sidebarContentFilterCount(filter) > 0;
   const [displaySettingsOpen, setDisplaySettingsOpen] = useState(false);
   return (
     <div className="group/sidebar-header flex h-6 items-center justify-between pr-0 pl-6">
@@ -79,12 +80,13 @@ export function MainListScopeHeader({
               </Tip>
             </div>
           ) : null}
-          {/* 在看已归档任务时设置按钮常驻(带点),否则跟随段头 hover 出现。 */}
+          {/* 收件箱有筛选生效时设置按钮常驻(带点),否则跟随段头 hover 出现。 */}
           <div className={showReminder ? undefined : HEADER_HOVER_ACTION_CLASS}>
             <SidebarFilterPopover
               filter={filter}
               allKnownProjects={allKnownProjects}
               dialogueCount={dialogueCount}
+              pluginHarnesses={pluginHarnesses}
               hasRemoteDevices={hasRemoteDevices}
               open={displaySettingsOpen}
               onOpenChange={setDisplaySettingsOpen}

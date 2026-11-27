@@ -8,6 +8,19 @@
       "selected": "已選取"
     }
   },
+  "voiceCall": {
+    "title": "語音通話",
+    "saved": "記錄已儲存",
+    "you": "你",
+    "companion": "夥伴",
+    "sendFailed": "傳送失敗，原話已保留。",
+    "handoff": {
+      "sending": "正在交接…",
+      "accepted": "已交給夥伴處理",
+      "failed": "交接失敗，原話已保留",
+      "completed": "結果已返回"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "由本機應用程式「{{name}}」傳送",
     "sourceLocalAppId": "應用程式 ID：{{id}}",
@@ -185,7 +198,8 @@
     "groupSent": "從群聊傳送",
     "sourceGroupId": "群聊 ID：{{id}}",
     "selectText": "選取文字",
-    "you": "你"
+    "you": "你",
+    "recentActivity": "最近活動"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",
@@ -264,6 +278,8 @@
     "delete": "刪除",
     "retry": "重試",
     "notSent": "未傳送",
+    "deliveryUnconfirmed": "傳送結果未確認",
+    "recheckDelivery": "重新確認",
     "imagesNotUploaded_one": "{{count}} 張圖片沒傳上去",
     "imagesNotUploaded_other": "{{count}} 張圖片沒傳上去",
     "waitingForNamedComputer": "連上{{name}}後自動傳送",

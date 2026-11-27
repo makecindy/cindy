@@ -101,6 +101,9 @@ import {
   ScheduleSettingsButton,
   ThreadPickerInline,
 } from './ScheduleChips';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { useFieldVoiceInput } from '@/voice-input/useFieldVoiceInput';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
 
 /** 可直接运行的最小协议示例，帮助用户理解 stdout 的 JSONL 约束。 */
 const SCRIPT_PROTOCOL_PYTHON_EXAMPLE = `import json
@@ -262,6 +265,12 @@ export function ScheduleFormDialog({
     setPromptExpanded(false);
   }, [open, initial?.id]);
   const [submitting, setSubmitting] = useState(false);
+  const [stoppingPromptVoice, setStoppingPromptVoice] = useState(false);
+  const [stoppingHookVoice, setStoppingHookVoice] = useState(false);
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const hookGenInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const submittingRef = useRef(false);
+  const hookGenSubmittingRef = useRef(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   useEffect(() => { setSubmitError(null); }, [open, initial]);
   const showSubmitError = (error: unknown) => {
@@ -330,9 +339,29 @@ export function ScheduleFormDialog({
   const isTemplateMode = mode === 'gallery' || !!selectedTemplate;
   // script/agent 双执行模式的唯一判别常量——所有条件渲染共用,避免散拷漂移
   const isScriptMode = (form.executionMode ?? 'agent') === 'script';
-  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持本机与同账号其他电脑开放的插件引擎，可用于每次新建任务
-  // 与绑定普通桌面任务临时切换；持续会话(scheduler 任务)、脚本、伙伴例行任务与项目自动化不提供。
-  const pluginEnginesAllowed = (runMode === 'fresh' || runMode === 'bound') && !isScriptMode && !isProjectAutomationMode && initial?.source !== 'bot';
+  const promptVoice = useFieldVoiceInput({
+    draftKey: `schedule-prompt:${open}:${initial?.id ?? 'new'}:${isScriptMode}`,
+    inputElementKey: promptExpanded,
+    inputRef: promptInputRef,
+    value: form.prompt,
+    onChange: (next) => {
+      if (selectedTemplate) setPromptDirty(true);
+      setField('prompt', next);
+    },
+    active: open && !isScriptMode && (mode !== 'gallery' || isEdit || isProjectAutomationMode),
+    disabled: submitting,
+  });
+  const hookVoice = useFieldVoiceInput({
+    draftKey: `schedule-hook-gen:${open}:${hookGenOpen}`,
+    inputRef: hookGenInputRef,
+    value: hookGenDesc,
+    onChange: (next) => setHookGenDesc(next),
+    active: open && hookGenOpen,
+    disabled: hookGenerating,
+  });
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持本机与同账号其他电脑及分享开放的插件引擎，
+  // 可用于新建任务、持续会话、绑定非 SSH 任务、伙伴例行任务与项目自动化；仅脚本执行不可用。
+  const pluginEnginesAllowed = !isScriptMode;
   const pluginEngineList = usePluginEngines(pluginEnginesAllowed || !!form.pluginEngine);
   const pluginEngineChoice = pluginEnginesAllowed ? form.pluginEngine ?? null : null;
   const pluginRouteDevices = useModelRouteDevices({
@@ -540,8 +569,22 @@ export function ScheduleFormDialog({
 
   /** 前置检查「AI 生成」:描述 → utility model 生成脚本落盘 → 命令回填输入框。 */
   const runHookGenerate = useCallback(async () => {
-    const description = hookGenDesc.trim();
-    if (!description || hookGenerating) return;
+    if (hookGenerating || hookGenSubmittingRef.current) return;
+    let nextDesc = hookGenDesc;
+    if (hookVoice.isBusy) {
+      hookGenSubmittingRef.current = true;
+      setStoppingHookVoice(true);
+      try {
+        const stoppedDesc = await hookVoice.stop();
+        if (stoppedDesc === null) return;
+        nextDesc = stoppedDesc;
+      } finally {
+        hookGenSubmittingRef.current = false;
+        setStoppingHookVoice(false);
+      }
+    }
+    const description = nextDesc.trim();
+    if (!description) return;
     const hasSessionTarget = hasRealBinding(form);
     // 脚本在本机生成。Agent 在另一台电脑时它的模型与来源只在那台可用,改用本机的
     // 辅助模型兜底链,不把那台的来源 id 当成本机来源。
@@ -603,6 +646,8 @@ export function ScheduleFormDialog({
   }, [
     hookGenDesc,
     hookGenerating,
+    hookVoice.isBusy,
+    hookVoice.stop,
     providers,
     form.name,
     form.providerId,
@@ -862,15 +907,37 @@ export function ScheduleFormDialog({
   const awaitingNewModelCatalog = !isEdit && !editProjectSchedule && !isScriptMode && !isBound
     && (!modelCatalogReady || defaultCapabilitiesLoading || (!agentsLoaded && agentsLoading));
 
+  const submitBusy = submitting || stoppingPromptVoice;
+
   const handleSubmit = async () => {
-    if (awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)) return;
+    if (submitBusy || submittingRef.current || awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)) return;
+    submittingRef.current = true;
+    let promptOverride: Partial<ScheduleFormState> | undefined;
+    let voiceChangedPrompt = false;
+    if (promptVoice.isBusy) {
+      setStoppingPromptVoice(true);
+      try {
+        const finalPrompt = await promptVoice.stop();
+        if (finalPrompt === null) {
+          submittingRef.current = false;
+          return;
+        }
+        promptOverride = { prompt: finalPrompt };
+        voiceChangedPrompt = finalPrompt !== form.prompt;
+      } finally {
+        setStoppingPromptVoice(false);
+      }
+    }
+    const effectiveForm = promptOverride ? { ...form, ...promptOverride } : form;
     setSubmitError(null);
-    const err = validate();
+    const err = validate(promptOverride);
     if (err) {
+      submittingRef.current = false;
       toast.warning(t(err.key, err.values));
       return;
     }
-    if (!canSubmitSessionBinding(form.executionMode ?? 'agent', runMode, boundSessionReference)) {
+    if (!canSubmitSessionBinding(effectiveForm.executionMode ?? 'agent', runMode, boundSessionReference)) {
+      submittingRef.current = false;
       toast.warning(t(
         boundSessionReference?.state === 'available' && boundSessionReference.status === 'archived'
           ? 'scheduler.editor.thread.archivedBinding'
@@ -881,17 +948,19 @@ export function ScheduleFormDialog({
       return;
     }
     if (modelUnavailable) {
-      toast.warning(t('scheduler.editor.validation.modelUnavailable', { model: form.model }));
+      submittingRef.current = false;
+      toast.warning(t('scheduler.editor.validation.modelUnavailable', { model: effectiveForm.model }));
       return;
     }
     // 选的插件引擎已停用、卸载或报告不可用：不保存，也不悄悄换成内置模型。
     if (pluginEngineUnavailable) {
+      submittingRef.current = false;
       toast.warning(t('scheduler.editor.validation.pluginEngineUnavailable'));
       return;
     }
     if (isProjectAutomationMode && projectWorkingDir) {
       const id = initial?.projectConfigId ?? generateProjectScheduleId();
-      const config = formToProjectConfig(form, id);
+      const config = formToProjectConfig(effectiveForm, id);
       setSubmitting(true);
       try {
         await window.electronAPI.maker.projectAutomation.upsertSchedule({
@@ -904,14 +973,16 @@ export function ScheduleFormDialog({
       } catch (e) {
         showSubmitError(e);
       } finally {
+        submittingRef.current = false;
         setSubmitting(false);
       }
       return;
     }
-    let input = toInput();
-    if (selectedTemplate && !promptDirty) {
+    let input = toInput(promptOverride);
+    if (selectedTemplate && !promptDirty && !voiceChangedPrompt) {
       const missingLabel = missingRequiredTemplateParamLabel(selectedTemplate, paramValues);
       if (missingLabel) {
+        submittingRef.current = false;
         toast.warning(t('scheduler.editor.validation.templateParamRequired', { label: missingLabel }));
         return;
       }
@@ -921,6 +992,7 @@ export function ScheduleFormDialog({
           prompt: applyTemplateParams(selectedTemplate.prompt ?? '', paramValues, selectedTemplate.parameters),
         };
       } catch {
+        submittingRef.current = false;
         toast.warning(t('scheduler.editor.validation.templateApplyFailed'));
         return;
       }
@@ -928,11 +1000,12 @@ export function ScheduleFormDialog({
     setSubmitting(true);
     try {
       await onSubmit(input, isEdit);
-      if (!isEdit) rememberScheduleFormPrefs(form);
+      if (!isEdit) rememberScheduleFormPrefs(effectiveForm);
       onOpenChange(false);
     } catch (e) {
       showSubmitError(e);
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -940,7 +1013,9 @@ export function ScheduleFormDialog({
   // 紧凑卡片与展开层共用同一个输入框定义:值、占位符、字号与主题都只有一处。
   const promptField = (className: string, autoFocus?: boolean) => (
     <textarea
-      value={form.prompt}
+      ref={promptInputRef}
+      value={promptVoice.displayText}
+      readOnly={promptVoice.isBusy}
       onChange={(e) => {
         if (selectedTemplate) setPromptDirty(true);
         setField('prompt', e.target.value);
@@ -958,7 +1033,7 @@ export function ScheduleFormDialog({
   );
 
   return (
-    <Dialog.Root open={open} onOpenChange={(v) => !submitting && onOpenChange(v)}>
+    <Dialog.Root open={open} onOpenChange={(v) => !submitBusy && onOpenChange(v)}>
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn('modal-scrim fixed inset-0 z-modal')}
@@ -969,10 +1044,12 @@ export function ScheduleFormDialog({
           onPointerDownOutside={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
           onEscapeKeyDown={(e) => {
-            if (promptExpanded) {
+            if (promptVoice.isBusy || hookVoice.isBusy) {
+              e.preventDefault();
+            } else if (promptExpanded) {
               e.preventDefault();
               setPromptExpanded(false);
-            } else if (submitting) {
+            } else if (submitBusy) {
               e.preventDefault();
             }
           }}
@@ -1029,7 +1106,7 @@ export function ScheduleFormDialog({
               type="button"
               onClick={() => onOpenChange(false)}
               aria-label={t('scheduler.button.close')}
-              disabled={submitting}
+              disabled={submitBusy}
               className={cn(
                 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
                 'text-[var(--cmd-palette-item-meta)] transition-colors dark:text-[var(--settings-section-desc)] hover:bg-[var(--confirm-btn-secondary-hover)] dark:hover:bg-[var(--confirm-btn-secondary-hover)]',
@@ -1231,9 +1308,19 @@ export function ScheduleFormDialog({
                                       setField('modelAgentKind', form.agentKind);
                                   }}
                                 />
+                                <div className="w-1.5 shrink-0" aria-hidden />
+                                <VoiceInputButton
+                                  {...promptVoice.buttonProps}
+                                  testId="schedule-prompt-voice"
+                                  tipSide="top"
+                                />
                               </div>
                             </div>
                           </div>
+                          <FieldVoiceInputNotice
+                            error={promptVoice.lastError}
+                            speakerFiltered={promptVoice.speakerFiltered}
+                          />
                           {isBound && (form.model.trim() !== '' || !!pluginEngineChoice) && (
                             <p className="px-1 text-11 leading-[1.4] text-[var(--cmd-palette-item-meta)]">
                               {t('scheduler.editor.runSession.switchModelHint')}
@@ -1866,7 +1953,9 @@ export function ScheduleFormDialog({
                               {hookGenOpen && (
                                 <div className="flex flex-col gap-2 rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-3">
                                   <textarea
-                                    value={hookGenDesc}
+                                    ref={hookGenInputRef}
+                                    value={hookVoice.displayText}
+                                    readOnly={hookVoice.isBusy}
                                     onChange={(e) => setHookGenDesc(e.target.value)}
                                     placeholder={t('scheduler.editor.preRunHook.aiPlaceholder')}
                                     rows={2}
@@ -1875,6 +1964,10 @@ export function ScheduleFormDialog({
                                       'w-full resize-none bg-transparent text-13 leading-[1.5] outline-none',
                                       'text-[var(--settings-input-text)] placeholder-[var(--settings-input-placeholder)]',
                                     )}
+                                  />
+                                  <FieldVoiceInputNotice
+                                    error={hookVoice.lastError}
+                                    speakerFiltered={hookVoice.speakerFiltered}
                                   />
                                   {hookGenFailure && (
                                     <ErrorNotice
@@ -1926,6 +2019,11 @@ export function ScheduleFormDialog({
                                     </ErrorNotice>
                                   )}
                                   <div className="flex items-center justify-end gap-2">
+                                    <VoiceInputButton
+                                      {...hookVoice.buttonProps}
+                                      testId="schedule-hook-gen-voice"
+                                      tipSide="top"
+                                    />
                                     <Button
                                       variant="secondary"
                                       size="md"
@@ -1937,7 +2035,7 @@ export function ScheduleFormDialog({
                                         setHookGenDesc('');
                                         setHookGenFailure(null);
                                       }}
-                                      disabled={hookGenerating}
+                                      disabled={hookGenerating || stoppingHookVoice}
                                     >
                                       {t('scheduler.editor.preRunHook.aiCancel')}
                                     </Button>
@@ -1945,10 +2043,10 @@ export function ScheduleFormDialog({
                                       variant="cta"
                                       size="md"
                                       compact
-                                      loading={hookGenerating}
+                                      loading={hookGenerating || stoppingHookVoice}
                                       type="button"
                                       onClick={() => void runHookGenerate()}
-                                      disabled={hookGenerating || !hookGenDesc.trim()}
+                                      disabled={hookGenerating || stoppingHookVoice || !hookVoice.displayText.trim()}
                                     >
                                       {hookGenerating && (
                                         <span
@@ -2111,7 +2209,7 @@ export function ScheduleFormDialog({
               <Button
                 variant="primary"
                 size="lg"
-                loading={submitting}
+                loading={submitBusy}
                 type="button"
                 aria-label={
                   isEdit
@@ -2119,7 +2217,7 @@ export function ScheduleFormDialog({
                     : t('scheduler.editor.promptDialog.createAria')
                 }
                 onClick={() => void handleSubmit()}
-                disabled={submitting || awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)}
+                disabled={submitBusy || awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)}
                 className="min-w-[68px] shrink-0"
               >
                 {submitLabel}
@@ -2144,10 +2242,24 @@ export function ScheduleFormDialog({
               <div className="min-h-0 flex-1 px-6 pb-6">
                 {/* 这一层的边框就是输入框自己的框:多行输入一律 8px(DESIGN §5),
                     不随铺满面板升成 12px 容器档。紧凑卡片的 12px 属于装着输入框与工具条的外框。 */}
-                {promptField(
-                  'rounded-lg border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-4',
-                  true,
-                )}
+                <div className="flex h-full flex-col overflow-hidden rounded-lg border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]">
+                  <div className="min-h-0 flex-1 p-4">
+                    {promptField('overflow-y-auto', true)}
+                  </div>
+                  <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <FieldVoiceInputNotice
+                        error={promptVoice.lastError}
+                        speakerFiltered={promptVoice.speakerFiltered}
+                      />
+                    </div>
+                    <VoiceInputButton
+                      {...promptVoice.buttonProps}
+                      testId="schedule-prompt-expanded-voice"
+                      tipSide="top"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           )}

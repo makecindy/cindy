@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { sharedTaskRecoveryFor } from '../../shared/sharedTaskRecovery';
+import { sharedTaskRecoveryFor, sharedTaskRecoveryStage } from '../../shared/sharedTaskRecovery';
 import { extractUsageLimitRecoveryHint } from '../../shared/usageLimitRecovery';
 import { makerChatStore } from '@/lib/makerChatStore';
 
@@ -15,7 +15,7 @@ export function useSharedTaskRecovery(input: { sessionId?: string; agentDeviceId
   const accountLimit = input.agentKind === 'codex'
     && extractUsageLimitRecoveryHint({ message: input.error })?.isAccountUsageLimit;
   const reason = input.handledUsageLimit || accountLimit ? undefined : sharedTaskRecoveryFor(input.error, input.agentDeviceId);
-  const stage = /\[SHARED_TASK_STAGE_(owner|allocation|executor|capability|authorization)\]/.exec(input.error)?.[1] ?? 'unknown';
+  const stage = sharedTaskRecoveryStage(input.error) ?? 'unknown';
   // Live errors become persisted tail rows without creating a second episode.
   const episode = JSON.stringify([input.sessionId, input.agentDeviceId, input.error]);
   const request = manual.episode === episode ? manual.nonce : 0;

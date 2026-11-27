@@ -69,7 +69,7 @@ import {
   sumMoneyByCurrency,
   type RegionalMoney,
 } from '../../../shared/regionalMoney.js';
-import { capReferenceMessageRows } from './history.js';
+import { capReferenceMessageRows, clampAroundRadius, requireReferenceContentCharLimit } from './history.js';
 import type { Message, MessageRole, AgentMeta } from '../../../renderer/lib/ccAgent.types';
 import { scheduleBotRemoteResourceChangedForSession } from '../../maker-ipc/botRemoteResourceInvalidation';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer';
@@ -1288,23 +1288,6 @@ export async function updateMessageContent(
     await reconcileUpdatedMessagePrRefs(dbClient, sessionId, row.id, isCurrent);
   }
   return row ? messageToCamel(row) : null;
-}
-
-function clampAroundRadius(raw: unknown): number {
-  const n = typeof raw === 'number' ? raw : Number(raw);
-  if (!Number.isFinite(n) || n < 0) return 60;
-  return Math.min(Math.max(Math.floor(n), 0), 200);
-}
-
-function requireReferenceContentCharLimit(raw: unknown): number | null {
-  if (raw === undefined || raw === null) return null;
-  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > 8_000) {
-    throwIpcError(
-      'INVALID_PARAMS',
-      'contentCharLimit must be an integer between 1 and 8000 or null',
-    );
-  }
-  return raw;
 }
 
 /**

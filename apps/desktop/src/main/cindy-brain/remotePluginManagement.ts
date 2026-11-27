@@ -177,6 +177,7 @@ export function projectManagedGhost(g: InstalledGhost): InstalledGhost {
     delegationCapabilityApproved: g.delegationCapabilityApproved,
     observeCapabilityApproved: g.observeCapabilityApproved,
     companionsCapabilityApproved: g.companionsCapabilityApproved,
+    checksCapabilityApproved: g.checksCapabilityApproved,
     oauthScopeStale: g.oauthScopeStale,
     oauthAuthorizationExpired: g.oauthAuthorizationExpired,
   };

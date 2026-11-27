@@ -550,5 +550,6 @@
     "readAgain": "Volver a leer",
     "showInstalled": "Ir a Instalados",
     "unlisted": "«{{device}}» ya no está entre los ordenadores de esta cuenta."
-  }
+  },
+  "automationCheck": "Dejar que {{name}} compruebe antes de usar un modelo"
 }

@@ -283,12 +283,16 @@ export function observePluginEngineEvent(sessionId: string, event: AgentEvent): 
   const background = event.turnScope === 'background' && PLUGIN_ENGINE_WORK_EVENT_TYPES.has(event.type);
   let st = states.get(sessionId);
   if (event.type === 'tool_use' && typeof data.toolUseId === 'string' && data.toolUseId) {
-    // 只记会自己结束的调用:常驻服务的未完成调用不代表 Agent 还在干活(见
-    // isLongRunningPluginEngineTool),否则 `pnpm dev` 一停下来就点亮 31 分钟。
+    // 只记会自己结束的真实工具调用:
+    //  1. 展示用快照(`runtimeActivity: 'snapshot'`,如 ACP `plan` / `plan_update` 合成的
+    //     `update_plan`)永远没有配对的 `tool_result`,与 maker-core 的 observeTurnControl /
+    //     observeToolLoop 同口径,不计入未完成调用;
+    //  2. 常驻服务的未完成调用不代表 Agent 还在干活(见 isLongRunningPluginEngineTool),
+    //     否则 `pnpm dev` 一停下来就点亮 31 分钟。
     // `input` 是 translator 经 parseMessageToolUse 拍平后的工具入参(maker-shared)。
     // ACP 会先发空入参的 tool_use、再用 tool_call_update 补齐同 id 的入参:补上的入参
     // 才带常驻标记时,先前已记下的 id 必须撤掉,否则服务照样点亮。
-    if (isLongRunningPluginEngineTool(data.input)) {
+    if (data.runtimeActivity === 'snapshot' || isLongRunningPluginEngineTool(data.input)) {
       st?.engineOpenTools.delete(data.toolUseId);
     } else {
       st ??= ensureState(sessionId);

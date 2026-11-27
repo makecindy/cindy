@@ -198,7 +198,8 @@ interface DeviceLinkPeerLinksSnapshot {
 /** .cshare 导入向导的预览数据(main 侧 SharePreview 的镜像)。 */
 interface SessionSharePreview {
   title: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp';
+  providerId?: string | null;
   workspaceKind: 'project' | 'dialogue';
   originalWorkingDir: string | null;
   exportedAt: string;
@@ -208,6 +209,7 @@ interface SessionSharePreview {
   mediaCount: number;
   /** 协同包携带的 Worker 会话数;普通包为 0。 */
   orcaWorkerCount: number;
+  hasAcpWorker?: boolean;
 }
 
 interface LocalSshKeyInfo {
@@ -1237,6 +1239,8 @@ interface ElectronAPI {
   /** 当前 Desktop 构建是否具备 Beta 更新渠道。 */
   supportsBetaUpdateChannel?: boolean;
   windowBackdropMaterial: import('../shared/windowBackdrop').WindowsBackdropMaterial;
+  /** 硬件加速回退(软件渲染)模式标记：渲染进程据此关闭昂贵的 CSS backdrop-filter。 */
+  gpuFallback?: boolean;
   onWindowBackdropMaterialChanged?: (
     cb: (material: import('../shared/windowBackdrop').WindowsBackdropMaterial) => void,
   ) => () => void;
@@ -1394,15 +1398,17 @@ interface ElectronAPI {
   /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
   modelGroups: {
     commit: (decisionId: string) => Promise<boolean>;
-    get: () => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
+    get: (options?: import('../shared/modelGroups').ModelGroupGetOptions) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     set: (config: import('../shared/modelGroups').ModelGroupsConfig) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest) => Promise<import('../shared/modelGroups').ModelGroupResolveResult>;
     decisions: () => Promise<import('../shared/modelGroupDecisions').ModelGroupDecision[]>;
     bindSession: (request: {
       sessionId: string;
       selection: import('../shared/modelGroups').ModelGroupSelection;
-      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model'>;
+      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
     }) => Promise<void>;
+    unbindSession: (request: { sessionId: string }) => Promise<{ ok: boolean; unbound: boolean }>;
+    getSessionBinding: (request: { sessionId: string }) => Promise<import('../shared/modelGroups').ModelGroupSessionBindingView | null>;
     switchOffer: (request: { sessionId: string }) => Promise<import('../shared/modelGroups').ModelGroupSwitchOffer | null>;
   },
 
@@ -1517,7 +1523,7 @@ interface ElectronAPI {
     uiPrompts: () => Promise<Array<{id: string; name: string; version: string}>>;
     deferUiPrompt: (id: string, version: string) => Promise<void>;
     requestUiApproval: (id: string) => Promise<{ granted: boolean }>;
-    requestTaskApproval: (id: string, capability?: 'observe' | 'companions') => Promise<{ granted: boolean }>;
+    requestTaskApproval: (id: string, capability?: 'observe' | 'companions' | 'checks') => Promise<{ granted: boolean }>;
     getControlPoints: (id: string) => Promise<import('../shared/ghost').GhostControlPointInfo[]>;
     listControlPointCandidates: (point: import('../shared/ghost').GhostControlPointId) => Promise<import('../shared/ghost').GhostControlPointCandidate[]>;
     listEventSources: () => Promise<import('../shared/ghost').GhostEventSourceCandidate[]>;
@@ -2401,6 +2407,13 @@ interface ElectronAPI {
   }>;
   authGetLoginState: () => Promise<DesktopLoginActionResult>;
   authDispatchLoginAction: (action: DesktopLoginAction) => Promise<DesktopLoginActionResult>;
+  /** 扫码登录：本机已登录，为另一台设备出码；凭据只在 main。 */
+  authQrHandoffCreate: () => Promise<import('../shared/authIpc').DesktopQrHandoffResult>;
+  authQrHandoffState: (handoffId: string) => Promise<import('../shared/authIpc').DesktopQrHandoffStateResult>;
+  authQrHandoffDecide: (
+    handoffId: string,
+    approve: boolean,
+  ) => Promise<import('../shared/authIpc').DesktopQrHandoffDecisionResult>;
   /** 登录 captcha 托管挑战页地址(不含 query);LoginCaptchaOverlay 装载 webview 用。 */
   authGetCaptchaChallengeUrl: () => Promise<string>;
   authLogout: () => Promise<void>;
@@ -3342,6 +3355,7 @@ interface ElectronAPI {
         | { type: 'installed-plugin'; ghostId?: string }
         | { type: 'gift-card'; code: string }
         | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
+        | { type: 'plugin-engine-settings'; engineKey: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' },
     ) => void,
   ) => () => void;
@@ -3368,6 +3382,7 @@ interface ElectronAPI {
     | { type: 'installed-plugin'; ghostId?: string }
     | { type: 'gift-card'; code: string }
     | { type: 'settings-navigation'; target: import('@cindy/maker-shared/settings-navigation').SettingsNavigationTarget }
+    | { type: 'plugin-engine-settings'; engineKey: string }
     | { type: 'settings'; tab: 'voice-input' | 'providers' | 'billing' | 'remote-control' | 'builtin-tools' | 'im-bot'; focusDeviceId?: string; connect?: string; intent?: 'topup'; imGroup?: 'cindy' | 'personal' }
     | null
   >;
@@ -4916,6 +4931,7 @@ interface ElectronAPI {
       teamId: string | null;
       workspace: string;
       providerId: string | null;
+      modelGroup?: string | null;
     }) => Promise<{
       entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[];
     }>;
@@ -4976,11 +4992,18 @@ interface ElectronAPI {
         repo: string;
         prNumber: number;
       }>,
+      options?: { refresh?: boolean },
     ) => Promise<import('@/lib/gitContext.types').PrStatusResult[]>;
     onChanged: (
       cb: (data: import('@/lib/gitContext.types').GitContextSnapshot) => void,
     ) => () => void;
     onPrRefsChanged: (cb: (data: { sessionId: string }) => void) => () => void;
+    onPrStatusChanged: (
+      cb: (
+        data: import('@/lib/gitContext.types').PrStatusResult,
+        ownerStamp?: import('../shared/dataOwnerPush').DataOwnerPushStamp,
+      ) => void,
+    ) => () => void;
   };
 
   gitReview: {
@@ -6804,7 +6827,7 @@ interface ElectronAPI {
     listActive: () => Promise<
       Array<{
         sessionId: string;
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
         workDir: string;
         capabilities: unknown;
         isTurnRunning: boolean;
@@ -7127,6 +7150,33 @@ interface ElectronAPI {
       defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
       /** true = Codex 正忙, 存活会话的软重启在任务结束后自动补做 (设置已生效) */
       codexRestartDeferred: boolean;
+    }>;
+    memoryTidyStatus: () => Promise<{
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
+      running: boolean;
+      lastRunAt: number | null;
+      lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
+      lastSummary: string;
+      lastTouchedBots: string[];
+      nextEligibleAt: number | null;
+    }>;
+    memoryTidySetCadence: (
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off' | null,
+    ) => Promise<{
+      cadence: 'weekly' | 'biweekly' | 'monthly' | 'off';
+      isCustomCadence: boolean;
+      running: boolean;
+      lastRunAt: number | null;
+      lastOutcome: 'idle' | 'updated' | 'skipped' | 'error' | null;
+      lastSummary: string;
+      lastTouchedBots: string[];
+      nextEligibleAt: number | null;
+    }>;
+    memoryTidyRun: () => Promise<{
+      outcome: 'idle' | 'updated' | 'skipped' | 'error';
+      summary: string;
+      touchedBots: string[];
     }>;
 
     /** IM 新会话默认 agent/model/effort/provider。传 channel 时按渠道独立读写。 */

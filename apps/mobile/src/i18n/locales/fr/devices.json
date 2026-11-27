@@ -369,7 +369,11 @@
       "close": "Fermer",
       "cancelRename": "Annuler le renommage",
       "createdBy": "Créée par {{name}}",
-      "ownedBy": "Appartient à {{name}}"
+      "ownedBy": "Appartient à {{name}}",
+      "orcaRemoteLead": "Collaboration depuis {{device}}",
+      "createdByTask": "Ouverte par une autre tâche",
+      "createdByTaskNamed": "Ouverte par la tâche « {{title}} »",
+      "unknownDevice": "un autre ordinateur"
     },
     "accounts": {
       "title": "Changer de compte",
@@ -392,6 +396,7 @@
       "sortHeading": "Tri des tâches",
       "projectOrderHeading": "Tri des projets",
       "projectOrderManualTip": "Maintenez le doigt appuyé sur une ligne de projet, puis faites-la glisser pour la déplacer. Les tâches qu'il contient suivent toujours le tri ci-dessus.",
+      "pinnedOrderManualTip": "Maintenez le doigt appuyé sur une tâche épinglée, puis faites-la glisser pour la déplacer.",
       "statusHeading": "Statut des tâches",
       "showDeviceTasks": "Afficher les tâches",
       "openDevice": "Ouvrir",
@@ -524,7 +529,8 @@
           "all": "Tous",
           "cc": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "acp": "Moteur de plugin"
         },
         "lastActivity": {
           "1d": "1 j",

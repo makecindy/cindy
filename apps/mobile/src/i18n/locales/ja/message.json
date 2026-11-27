@@ -8,6 +8,19 @@
       "selected": "選択済み"
     }
   },
+  "voiceCall": {
+    "title": "音声通話",
+    "saved": "記録を保存しました",
+    "you": "あなた",
+    "companion": "仲間",
+    "sendFailed": "送信できませんでした。発言は保持されています。",
+    "handoff": {
+      "sending": "引き継ぎ中…",
+      "accepted": "仲間に引き継ぎました",
+      "failed": "引き継ぎできませんでした。発言は保持されています。",
+      "completed": "結果を受信しました"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "ローカルアプリ「{{name}}」から送信",
     "sourceLocalAppId": "アプリ ID：{{id}}",
@@ -185,7 +198,8 @@
     "groupSent": "グループから送信",
     "sourceGroupId": "グループ ID: {{id}}",
     "selectText": "テキストを選択",
-    "you": "あなた"
+    "you": "あなた",
+    "recentActivity": "直近のアクティビティ"
   },
   "actions": {
     "attachmentsPrefix": "添付ファイル：{{names}}",
@@ -264,6 +278,8 @@
     "delete": "削除",
     "retry": "再試行",
     "notSent": "未送信",
+    "deliveryUnconfirmed": "送信結果は未確認です",
+    "recheckDelivery": "再確認",
     "imagesNotUploaded_one": "{{count}} 枚の画像を送れませんでした",
     "imagesNotUploaded_other": "{{count}} 枚の画像を送れませんでした",
     "waitingForNamedComputer": "{{name}} に接続したら自動送信",

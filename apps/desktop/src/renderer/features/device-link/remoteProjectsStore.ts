@@ -146,6 +146,21 @@ function emitRemoved(sessionId: string): void {
   for (const fn of removedSubs) fn(sessionId);
 }
 
+type RemoteSessionPatchListener = (
+  deviceId: string,
+  sessionId: string,
+  patch: Partial<Session>,
+) => void;
+/**
+ * 远端会话 patch 订阅（含不在当前有界分片窗口内的任务）。与 `sessionsStore.subscribePatches`
+ * 对称，供搜索结果等旁路视图即时同步窗口外远端任务的归档/恢复/重命名/置顶/删除状态。
+ */
+const patchSubs = new Set<RemoteSessionPatchListener>();
+
+function emitPatched(deviceId: string, sessionId: string, patch: Partial<Session>): void {
+  for (const fn of patchSubs) fn(deviceId, sessionId, patch);
+}
+
 /**
  * snapshot epoch(per-device):防「旧 snapshot 覆盖新 snapshot」。listing tier 发起一次
  * 全量拉取前 `nextSnapshotEpoch(deviceId)`,await 回来后只有 `isLatestSnapshotEpoch` 仍成立
@@ -443,6 +458,7 @@ export interface RemotePendingStatusToken {
 
 interface PendingStatusEntry {
   token: RemotePendingStatusToken;
+  archivedAt: string | null;
   /**
    * 写库成功那一刻两个状态桶的 snapshot epoch;null = 写库仍在途。
    * 只有 epoch 大于栅栏的列表(写库确认之后才发出的 sessions:list)落地,才算权威确认。
@@ -480,8 +496,12 @@ function withPendingStatus(session: Session, deviceId: string): Session {
   const { status } = entry.token;
   // 归档一并 unpin(与被控端写库、本机 sessionsStore 乐观补丁同口径)。
   const unpin = status === 'archived' && session.pinnedAt != null;
-  if (session.status === status && !unpin) return session;
-  return { ...session, status, ...(unpin ? { pinnedAt: null } : {}) };
+  const nextArchivedAt = status === 'archived'
+    ? (session.status === 'archived' && session.archivedAt ? session.archivedAt : entry.archivedAt)
+    : null;
+  const archiveChanged = (session.archivedAt ?? null) !== nextArchivedAt;
+  if (session.status === status && !unpin && !archiveChanged) return session;
+  return { ...session, status, ...(unpin ? { pinnedAt: null } : {}), archivedAt: nextArchivedAt };
 }
 
 /**
@@ -1104,6 +1124,7 @@ const actions = {
       }
       emitRemoved(sessionId);
     }
+    emitPatched(deviceId, sessionId, patch as Partial<Session>);
     // 状态迁移叠加层:删除一律让位。active / archived 推送不带 updatedAt,可能是写库前
     // 迟到的旧推送,不动叠加层,交给写库后的列表按内容确认(见 pendingStatuses)。
     if (deleted && pendingStatuses.get(sessionId)?.token.deviceId === deviceId) {
@@ -1386,13 +1407,18 @@ const actions = {
     status: RemoteSessionStatus,
   ): RemotePendingStatusToken {
     const token: RemotePendingStatusToken = { deviceId, sessionId, status };
-    pendingStatuses.set(sessionId, { token, fence: null, toleratedMismatch: false });
+    pendingStatuses.set(sessionId, {
+      token,
+      archivedAt: status === 'archived' ? new Date().toISOString() : null,
+      fence: null,
+      toleratedMismatch: false,
+    });
     recompute();
     return token;
   },
 
   /**
-   * 写库成功:用被控端返回的行(status / pinnedAt / updatedAt)就地落进分片,不等
+   * 写库成功:用被控端返回的行(status / pinnedAt / archivedAt / updatedAt)就地落进分片,不等
    * `sessions:patched` 回流;叠加层留到写库后的新列表确认为止。凭据已被取代 / 设备
    * 已移除时 no-op —— 旧写库的结果不能盖过更新的一次迁移,权威值交给 push 回流。
    */
@@ -1411,6 +1437,13 @@ const actions = {
       patch.pinnedAt = persisted.pinnedAt ?? null;
     } else if (token.status === 'archived') {
       patch.pinnedAt = null;
+    }
+    if (persisted && Object.prototype.hasOwnProperty.call(persisted, 'archivedAt')) {
+      entry.archivedAt = persisted.archivedAt ?? null;
+      patch.archivedAt = entry.archivedAt;
+    } else {
+      entry.archivedAt = null;
+      patch.archivedAt = null;
     }
     if (typeof persisted?.updatedAt === 'string') patch.updatedAt = persisted.updatedAt;
     actions.applyPatch(token.deviceId, token.sessionId, patch);
@@ -1664,6 +1697,13 @@ export function subscribeRemoteSessionRemoval(fn: (sessionId: string) => void): 
   };
 }
 
+export function subscribeRemoteSessionPatches(fn: RemoteSessionPatchListener): () => void {
+  patchSubs.add(fn);
+  return () => {
+    patchSubs.delete(fn);
+  };
+}
+
 /** listing tier 挂载时注册「重拉某设备」的实现;卸载时传 null 清。 */
 export function setRemoteReseedImpl(
   fn: ((deviceId: string, status: RemoteSessionStatus) => void) | null,
@@ -1764,6 +1804,7 @@ export const remoteProjectsStore = {
   subscribe,
   subscribeRename,
   subscribeRemoved: subscribeRemoteSessionRemoval,
+  subscribePatches: subscribeRemoteSessionPatches,
 };
 
 /** 便捷导出:传输层只关心 origin 判定。 */

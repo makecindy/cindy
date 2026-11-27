@@ -217,12 +217,24 @@ const ssoVerificationRequiredOutcomeSchema = z.object({
   channel: z.enum(["email", "sms"]),
   targetMasked: z.string().min(1),
 });
+/**
+ * 登录请求声明了 `SIGNUP_CONFIRMATION_CAPABILITY` 且本区没有该身份的账号时，auth-server
+ * 不再首登即注册，而是返回注册确认票据；用户确认后 `CindyAuthClient.signup()` 建号。
+ * `channel` 是本次用来证明身份的方式（email / phone / 社交 provider），只用于文案。
+ */
+const signupRequiredOutcomeSchema = z.object({
+  status: z.literal("signup_required"),
+  signupTicket: z.string().min(1),
+  channel: z.string().min(1).max(32),
+  targetMasked: z.string().min(1).optional(),
+});
 export const loginOutcomeSchema = z
   .discriminatedUnion("status", [
     okOutcomeSchema,
     selectAccountOutcomeSchema,
     bindingRequiredOutcomeSchema,
     ssoVerificationRequiredOutcomeSchema,
+    signupRequiredOutcomeSchema,
   ])
   .superRefine((outcome, ctx) => {
     if (outcome.status !== "ok" && outcome.status !== "select_account") return;
@@ -238,6 +250,55 @@ export const loginOutcomeSchema = z
   });
 export type LoginOutcome = z.infer<typeof loginOutcomeSchema>;
 export type AuthSuccess = z.infer<typeof okOutcomeSchema>;
+export type SignupRequiredOutcome = z.infer<typeof signupRequiredOutcomeSchema>;
+
+/**
+ * 登录能力声明：只有 Cindy 桌面端与手机端在登录请求里声明，服务端才会返回
+ * `signup_required`。cindy-host CLI、云设置等其它调用方不声明，保持首登即注册。
+ */
+export const SIGNUP_CONFIRMATION_CAPABILITY = "signup_confirmation_v1";
+
+// ---------------------------------------------------------------------------
+// 扫码登录（auth-server /api/auth/qr-login/handoffs）：只有一个方向——已登录的电脑出码，
+// 未登录的手机扫码认领，电脑允许后手机登录同一个账号。
+
+const qrRegionSchema = authRegionSchema;
+const qrExpiresAtSchema = z.string().min(1);
+
+/** 已登录设备建码。 */
+export const qrLoginHandoffCreatedSchema = z.object({
+  handoffId: z.string().min(1),
+  scanToken: z.string().min(1),
+  expiresAt: qrExpiresAtSchema,
+  region: qrRegionSchema,
+});
+export type QrLoginHandoffCreated = z.infer<typeof qrLoginHandoffCreatedSchema>;
+
+export const qrRequesterInfoSchema = z.object({
+  clientType: z.enum(["desktop", "mobile", "web"]),
+  deviceName: z.string().optional(),
+  platform: z.string().optional(),
+});
+export type QrRequesterInfo = z.infer<typeof qrRequesterInfoSchema>;
+
+/** 认领方（手机）轮询的结果；approved 只会返回一次。 */
+export const qrLoginPollSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("pending"), expiresAt: qrExpiresAtSchema }),
+  z.object({ status: z.literal("denied") }),
+  z.object({ status: z.literal("expired") }),
+  z.object({ status: z.literal("approved"), outcome: loginOutcomeSchema }),
+]);
+export type QrLoginPoll = z.infer<typeof qrLoginPollSchema>;
+
+export const qrHandoffStateSchema = z.union([
+  z.object({
+    status: z.enum(["pending", "claimed", "approved", "denied"]),
+    expiresAt: qrExpiresAtSchema,
+    requester: qrRequesterInfoSchema.optional(),
+  }),
+  z.object({ status: z.literal("expired") }),
+]);
+export type QrHandoffState = z.infer<typeof qrHandoffStateSchema>;
 
 export const accountMembershipSchema = membershipSchema.extend({
   orgSlug: z.string().nullable(),
@@ -396,6 +457,12 @@ export type AuthFlowState =
       contact?: string;
     }
   | { step: "completed"; membership: AuthMembership }
+  /** 本区没有该身份的账号：询问是否创建；注册票据留在宿主控制器里。 */
+  | { step: "signup-confirmation"; channel: string; targetMasked?: string }
+  /** 手机扫到的电脑在另一个版本：询问是否切换到该版本登录。 */
+  | { step: "qr-region-switch"; targetRegion: AuthRegion }
+  /** 手机已认领电脑上的二维码，等待电脑允许。 */
+  | { step: "qr-waiting"; expiresAt: string }
   | {
       step: "error";
       code: string;
@@ -426,6 +493,8 @@ export type AuthFlowAction =
       bindType: VerificationKind;
       contact: string;
     }
+  | { type: "qr-region-switch-required"; targetRegion: AuthRegion }
+  | { type: "qr-waiting"; expiresAt: string }
   | {
       type: "failed";
       code: string;
@@ -477,6 +546,10 @@ export function reduceAuthFlow(
         targetMasked: action.targetMasked,
         codeRequested: true,
       };
+    case "qr-region-switch-required":
+      return { step: "qr-region-switch", targetRegion: action.targetRegion };
+    case "qr-waiting":
+      return { step: "qr-waiting", expiresAt: action.expiresAt };
     case "failed":
       return { step: "error", code: action.code, recoverTo: action.recoverTo };
     case "outcome":
@@ -492,6 +565,15 @@ export function reduceAuthFlow(
           channel: action.outcome.channel,
           targetMasked: action.outcome.targetMasked,
           codeRequested: false,
+        };
+      }
+      if (action.outcome.status === "signup_required") {
+        return {
+          step: "signup-confirmation",
+          channel: action.outcome.channel,
+          ...(action.outcome.targetMasked
+            ? { targetMasked: action.outcome.targetMasked }
+            : {}),
         };
       }
       return {

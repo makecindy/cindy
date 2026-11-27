@@ -1629,3 +1629,14 @@ it.each([{ current: 'abc123', head: 'abc123' }, { current: 'HEAD', head: '' }])(
     expect(branchView.mock.lastCall?.[0]?.displayedBranch).toBe('HEAD');
   },
 );
+
+it.each([
+  ['local status timeout', new Error('[INTERNAL] checkout:timeout')],
+  ['remote invoke timeout', new Error('[DEVICE_LINK_TIMEOUT] invoke timed out')],
+])('surfaces timeout guidance separately from generic git errors (%s)', async (_label, error) => {
+  const checkout = setupCheckout();
+  checkout.mockRejectedValueOnce(error);
+  render(<CheckoutRow />);
+  await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith('newChat.checkout.errors.timeout'));
+  expect(mocks.toast).not.toHaveBeenCalledWith('newChat.checkout.errors.git');
+});

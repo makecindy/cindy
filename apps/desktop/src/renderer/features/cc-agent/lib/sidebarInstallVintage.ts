@@ -95,6 +95,8 @@ export type SidebarInstallVintage = 'legacy' | 'fresh';
 
 /** 模块级缓存:同一次运行内判定只做一遍(读 localStorage 的 key 遍历不必重复)。 */
 let memoized: SidebarInstallVintage | null = null;
+/** 本次运行里才第一次给这份安装下结论、且结论是 fresh。读到已固化的结论时为 false。 */
+let inferredFreshThisRun = false;
 
 function safeStorage(): Storage | null {
   try {
@@ -144,6 +146,7 @@ export function getSidebarInstallVintage(): SidebarInstallVintage {
   }
 
   const vintage: SidebarInstallVintage = hasLegacyUsageTrace(storage) ? 'legacy' : 'fresh';
+  inferredFreshThisRun = vintage === 'fresh';
   try {
     storage.setItem(INSTALL_VINTAGE_KEY, vintage);
   } catch {
@@ -152,11 +155,23 @@ export function getSidebarInstallVintage(): SidebarInstallVintage {
   return (memoized = vintage);
 }
 
+/**
+ * 这是不是「全新安装的第一次运行」。只在这一次运行里为 true:固化的结论此前不存在,且刚被推断为 fresh。
+ * 以后新增「只给新装」的默认值用它(显示模式之后的第二个:项目排序默认手动,2026-11-28)——
+ * 那时已经在用的安装无论当年被判成 legacy 还是 fresh,结论都早已固化,这里一律为 false,
+ * 所以升级不会改掉他们的默认。调用方必须在返回 true 的这次运行里把新默认落盘,下次启动就不再为 true。
+ */
+export function isFirstRunOfFreshInstall(): boolean {
+  getSidebarInstallVintage();
+  return inferredFreshThisRun;
+}
+
 export const __testing = {
   INSTALL_VINTAGE_KEY,
   LEGACY_USAGE_KEYS,
   OWNER_CLAIM_KEY,
   resetMemo(): void {
     memoized = null;
+    inferredFreshThisRun = false;
   },
 };

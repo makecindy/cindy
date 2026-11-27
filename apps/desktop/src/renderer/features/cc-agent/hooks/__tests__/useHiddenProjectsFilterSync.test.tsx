@@ -349,7 +349,7 @@ describe('sidebar content filter reset', () => {
     act(() => {
       view.result.current.setStatus('archived');
       view.result.current.toggleProject(PROJECT_A);
-      view.result.current.setVendor('pi');
+      view.result.current.setVendor(['pi']);
       view.result.current.setLastActivity('7d');
       view.result.current.setSortBy('priority');
       view.result.current.setGroupBy('flat');

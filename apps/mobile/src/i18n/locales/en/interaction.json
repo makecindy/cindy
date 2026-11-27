@@ -275,6 +275,7 @@
     "inlineFormActionGeneric": "Enter one setting on your computer"
   },
   "inputHandoff": {
+    "refreshVerification": "Refresh verification code",
     "originWarning": {
       "insecure": "This page doesn't use a secure connection. What you enter could be read by others.",
       "ip-address": "This page uses an IP address instead of a domain. Make sure it's the site you expect.",

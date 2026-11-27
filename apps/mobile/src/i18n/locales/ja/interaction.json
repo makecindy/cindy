@@ -275,6 +275,7 @@
     "inlineFormActionGeneric": "パソコンで設定を入力"
   },
   "inputHandoff": {
+    "refreshVerification": "QR コードを更新",
     "originWarning": {
       "insecure": "このページは安全な接続を使っていません。入力内容が他人に読まれる可能性があります。",
       "ip-address": "このページはドメインではなく IP アドレスを使っています。想定したサイトか確認してください。",

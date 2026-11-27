@@ -8,6 +8,19 @@
       "selected": "已選"
     }
   },
+  "voiceCall": {
+    "title": "聲通",
+    "saved": "錄已存",
+    "you": "君",
+    "companion": "同伴",
+    "sendFailed": "遣送未成，原話已留。",
+    "handoff": {
+      "sending": "方交接…",
+      "accepted": "已交同伴處理",
+      "failed": "交接未成，原話已留",
+      "completed": "結果已歸"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "此機應用程式「{{name}}」所遣",
     "sourceLocalAppId": "應用程式 ID：{{id}}",
@@ -185,7 +198,8 @@
     "groupSent": "遣自群議",
     "sourceGroupId": "群議 ID：{{id}}",
     "selectText": "選文字",
-    "you": "君"
+    "you": "君",
+    "recentActivity": "近事"
   },
   "actions": {
     "attachmentsPrefix": "附卷：{{names}}",
@@ -264,6 +278,8 @@
     "delete": "刪",
     "retry": "再試",
     "notSent": "未遣",
+    "deliveryUnconfirmed": "傳送未驗",
+    "recheckDelivery": "再驗",
     "imagesNotUploaded_one": "{{count}} 圖未能上呈",
     "imagesNotUploaded_other": "{{count}} 圖未能上呈",
     "waitingForNamedComputer": "俟{{name}}連通即發",

@@ -12,6 +12,10 @@ export * from './botGroupQuote';
 export * from './botGroupTask';
 export { isOwnBotGroupSpeaker };
 
+/** Personal AI replies and private digests are paused in this client release.
+ * The server capability still covers mention history and human read receipts. */
+export const BOT_GROUP_PERSONAL_REPLIES_ENABLED: boolean = false;
+
 export const BOT_GROUP_MIN_MEMBERS = 2;
 export const BOT_GROUP_MAX_MEMBERS = 6;
 export const BOT_GROUP_NAME_MAX_CHARS = 40;
@@ -318,19 +322,59 @@ export interface BotGroupThreadUnread {
   latest?: number;
 }
 
+/** One responder in a Thread summary's avatar stack. */
+export interface BotGroupThreadResponder {
+  id: string;
+  authorBotId: string | null;
+  authorName: string;
+}
+
+/** Latest message in a Thread that explicitly mentioned this reader (persists after read). */
+export interface BotGroupThreadMentionSummary {
+  messageId: string;
+  authorName: string;
+  text: string;
+  createdAt: number;
+}
+
 /**
  * One Thread of the group for the in-chat 话题 list (bot-group-chat.md §10「话题未读与提示」).
  * Root text and author come from the server's copy; empty while that copy is still being read.
  */
+export interface BotGroupThreadCodeRef {
+  kind: 'issue' | 'pr';
+  provider?: 'github' | 'gitlab';
+  host?: string;
+  owner: string;
+  repo: string;
+  number: number;
+  url: string;
+}
+
+export type BotGroupThreadRootKind = 'task' | 'image' | 'video' | 'audio' | 'file' | 'share' | 'card';
+
 export interface BotGroupThreadSummary {
   rootId: string;
   rootAuthorName: string;
   rootAuthorBotId: string | null;
   rootText: string;
+  /** Content type of a non-text root message (task card, media, share, card) for compact list labels. */
+  rootKind?: BotGroupThreadRootKind;
+  rootCreatedAt?: number;
   replyCount: number;
   unread: BotGroupThreadUnread;
   /** The reader chose to follow it; absent when the server keeps no read state. */
   following?: boolean;
+  /** The reader started this Thread or posted a reply (including personal AI stand-in). */
+  participated?: boolean;
+  /** Someone mentioned this reader in the root or a reply (persists after reading). */
+  mentionedMe?: boolean;
+  /** Newest message that mentioned this reader, for direct jump from the @me view. */
+  lastMention?: BotGroupThreadMentionSummary | null;
+  /** Up to 3 distinct recent responders for the compact avatar stack. */
+  responders?: BotGroupThreadResponder[];
+  /** GitHub/GitLab PR/MR and Issue references found in this thread, newest-first. */
+  refs?: BotGroupThreadCodeRef[];
   lastReply: { authorName: string; text: string; createdAt: number } | null;
 }
 
@@ -642,11 +686,15 @@ export function chatGroupNotificationPreference(
 }
 
 export interface BotGroupSummary {
+  supportsPersonalMentionHistory?: boolean;
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
   /** Manager-controlled friend invitations; absent on old servers/hosts. */
   supportsMemberInvites?: boolean;
   allowMemberInvites?: boolean;
+  /** Manager-controlled @everyone permission (default false); absent on old servers/hosts. */
+  supportsMemberMentionAll?: boolean;
+  allowMemberMentionAll?: boolean;
   /** Owner-controlled companion broadcast; absent on old servers/hosts. */
   supportsMentionAudiences?: boolean;
   allowMentionAllBots?: boolean;
@@ -772,10 +820,17 @@ export interface BotGroupDetail extends BotGroupSummary {
   /** Plans referenced by the loaded messages, plus the open plan. */
   plans: BotGroupPlanView[];
   /**
-   * Threads with replies in the newest window, unread ones first. Omitted by local groups,
-   * older hosts and servers without read state.
+   * Threads with replies across the snapshot, read history and retained room cache,
+   * unread ones first. Omitted by local groups, older hosts and servers without read state.
    */
   threads?: BotGroupThreadSummary[];
+  /**
+   * Server-owned main timeline read cursor (`main` read_seq) for this account before this view is
+   * marked read. Omitted by local groups, older hosts and servers without read state.
+   */
+  readSequence?: string;
+  /** True while the client is tracing earlier group history or hydrating historical threads. */
+  threadsSyncing?: boolean;
 }
 
 export type BotGroupErrorCode =
@@ -802,6 +857,7 @@ export type BotGroupErrorCode =
   | 'MEMBER_UNAVAILABLE'
   | 'MENTION_UNAVAILABLE'
   | 'ALL_BOTS_MENTION_DISABLED'
+  | 'ALL_HUMANS_MENTION_FORBIDDEN'
   | 'HOST_NOT_READY'
   /** An explicit 安排分工 while a plan is running or waiting. */
   | 'PLAN_OPEN'
@@ -838,6 +894,7 @@ export interface BotGroupCreateInput {
 
 export interface BotGroupUpdateInput {
   allowMemberInvites?: boolean;
+  allowMemberMentionAll?: boolean;
   allowMentionAllBots?: boolean;
   groupId: string;
   /** Optional optimistic precondition for server-backed settings. */
@@ -907,19 +964,82 @@ export interface BotGroupGetOptions {
   sourceMessageIds?: string[];
   /** Shares already shown from older pages, so edits and deletions reach them without a reload. */
   shownShares?: Array<{ id: string; messageId: string; threadRootId: string; sharerId?: string }>;
+  /** Trace earlier group history in the background for the in-group Threads index. */
+  includeHistoricalThreads?: boolean;
 }
 
-export type BotGroupChange = 'created' | 'updated' | 'deleted' | 'messages' | 'round' | 'plan' | 'list';
+export type BotGroupChange = 'created' | 'updated' | 'deleted' | 'messages' | 'attachments' | 'round' | 'plan' | 'list';
 
 export interface BotGroupChangedPayload {
   groupId: string;
   change: BotGroupChange;
   /** Authenticated message deltas can render before the slower room metadata refresh. */
   messages?: BotGroupMessageView[];
+  /** Settled attachment states patched in place without triggering a full room re-read. */
+  attachments?: BotGroupAttachment[];
   /** Only apply deltas to an already displayed projection of the same generation. */
   historyRevision?: string;
   /** Personal state, only emitted after an authoritative account-scoped reply/event. */
   listState?: { hidden: boolean; revision: number };
+}
+
+function patchAttachmentList(
+  attachments: readonly BotGroupAttachment[],
+  updates: ReadonlyMap<string, BotGroupAttachment>,
+): BotGroupAttachment[] | null {
+  let changed = false;
+  const next = attachments.map((item) => {
+    const update = updates.get(item.id);
+    if (!update) return item;
+    const merged: BotGroupAttachment = {
+      ...update,
+      name: update.name || item.name,
+    };
+    if (
+      item.category === merged.category
+      && item.name === merged.name
+      && item.mimeType === merged.mimeType
+      && item.size === merged.size
+      && item.url === merged.url
+      && item.path === merged.path
+      && item.state === merged.state
+    ) {
+      return item;
+    }
+    changed = true;
+    return merged;
+  });
+  return changed ? next : null;
+}
+
+/**
+ * Patches settled attachment downloads in place across a message list (including shared
+ * thread reply cards). Returns the original array reference when nothing matched or changed.
+ */
+export function patchBotGroupMessageAttachments(
+  messages: readonly BotGroupMessageView[],
+  updates: ReadonlyMap<string, BotGroupAttachment>,
+): BotGroupMessageView[] {
+  if (updates.size === 0 || messages.length === 0) return messages as BotGroupMessageView[];
+  let anyChanged = false;
+  const next = messages.map((message) => {
+    const patchedAttachments = message.attachments.length > 0
+      ? patchAttachmentList(message.attachments, updates)
+      : null;
+    const patchedShareAttachments = message.threadShare && message.threadShare.attachments.length > 0
+      ? patchAttachmentList(message.threadShare.attachments, updates)
+      : null;
+    if (!patchedAttachments && !patchedShareAttachments) return message;
+    anyChanged = true;
+    return {
+      ...message,
+      ...(patchedAttachments ? { attachments: patchedAttachments } : {}),
+      ...(patchedShareAttachments && message.threadShare
+        ? { threadShare: { ...message.threadShare, attachments: patchedShareAttachments } }
+        : {}),
+    };
+  });
+  return anyChanged ? next : (messages as BotGroupMessageView[]);
 }
 
 export function isBotGroupNoReplyText(text: string): boolean {
@@ -1128,6 +1248,10 @@ export interface ChatMaskMention {
   messageId: string; sequence: string; threadRootId?: string; authorName: string; text: string;
   reply?: { companion: ChatMaskIdentity; text: string };
 }
+/** One current group message read by ID, without changing any read position. */
+export interface ChatMaskOriginal {
+  messageId: string; authorName: string; text: string; deleted: boolean;
+}
 /** One reacting actor. `name` is null when the group has no member record for it. */
 export interface ChatReactor { actorId: string; name: string | null; isSelf: boolean; formerMember: boolean }
 /** One member on a message's read list; `readAt` is null when the server knows the read but not its time. */
@@ -1153,7 +1277,7 @@ export type ChatGroupAction =
   | { type: 'read'; messageId: string; conversationKind?: 'direct' }
   | { type: 'assistantDevice'; deviceId: string }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; allowMemberInvites?: boolean; assistant?: boolean }
+  | { type: 'update'; name: string; topic: string; description: string; expectedRevision: number; responseMode?: BotGroupReplyMode; speakingMode?: BotGroupSpeakingMode; allowMentionAllBots?: boolean; allowMemberMentionAll?: boolean; allowMemberInvites?: boolean; assistant?: boolean }
   | { type: 'nickname'; actorId: string; nickname: string | null }
   | { type: 'avatar'; actorId: string; avatar: { type: 'keep' | 'reset' } | { type: 'set'; data: Uint8Array; mimeType: string } }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'ban' | 'unban' | 'role'; role?: 'admin' | 'member' }
@@ -1161,10 +1285,11 @@ export type ChatGroupAction =
   | { type: 'botAccess'; actorId: string; access: 'none' | 'chat' | 'tools'; expectedRevision: number }
   | { type: 'dissolve'; expectedRevision: number }
   | { type: 'hide' }
-  | { type: 'archive'; archived: boolean; expectedRevision: number };
+  | { type: 'archive'; archived: boolean; expectedRevision: number }
+  | { type: 'retryAttachment'; mediaId: string; name?: string };
 export interface ChatServerApi {
   mask?(input: { groupId: string; action?: ChatMaskAction; operationId?: string }): Promise<ChatServerResult<{ state: ChatMaskState }>>;
-  mentions?(input: { groupId: string; before?: string; readIds?: string[]; operationId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean }>>;
+  mentions?(input: { groupId: string; history?: boolean; before?: string; readIds?: string[]; operationId?: string; originalId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean; original?: ChatMaskOriginal }>>;
   manage(input: { groupId: string; action: ChatGroupAction }): Promise<ChatServerResult<{ listState?: { conversationId: string; hidden: boolean; revision: number } }>>;
   /** Owned companions across devices. `botId` is the stable external id, not a local-install guarantee. */
   ownedBots(): Promise<ChatServerResult<{ bots: Array<{ actorId: string; botId?: string; name: string; avatar?: string | null; homeDeviceId?: string | null }> }>>;

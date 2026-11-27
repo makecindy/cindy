@@ -1537,7 +1537,7 @@
         "ko": "엔진"
       },
       "checkCase": false,
-      "note": "伙伴设置里「跑在哪个 Agent 上」那个选择(Claude / Codex / Pi)。代码里叫 harness,但那是实现名词,普通用户看不懂;2026-08-21 实机截图里中文界面直接显示英文 Harness。这里先提「引擎」待裁决 —— 它不精确(Pi 严格说是多协议接入层),但对用户能表达「换一个跑法」。定不下来的话另一个候选是直接列三个名字不给类目名。"
+      "note": "任务或伙伴设置里「跑在哪个 Agent 上」的选择（内置 Claude Code / Codex / Pi，以及通过插件提供的 ACP 插件引擎）。代码里叫 harness，但那是实现名词，普通用户看不懂；面向用户以「引擎」表达运行承载层，由插件提供的具体称「插件引擎」（见 plugin-engine）。"
     },
     {
       "id": "face-id-verification",
@@ -1764,7 +1764,7 @@
         "ja": "Harness",
         "ko": "Harness"
       },
-      "note": "用于任务筛选、搜索筛选，以及用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。"
+      "note": "用于任务筛选、搜索筛选，以及用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi、ACP（插件执行引擎）的公开全名，不使用 cc/cx/pi 等内部缩写。"
     },
     {
       "id": "hunyuan-model-brand",
@@ -2590,6 +2590,19 @@
         "zh-Hant-x-lzh": "社群"
       },
       "note": "插件公开来源下的社区发布者身份标识，与官方并列；用户于 2026-11-09 确认设计。社区作者继续不公开署名；不表示个人私有市场或运行时信任。"
+    },
+    {
+      "id": "plugin-engine",
+      "status": "proposed",
+      "en": "Plugin engine",
+      "translations": {
+        "zh-CN": "插件引擎",
+        "zh-TW": "插件引擎",
+        "ja": "プラグインエンジン",
+        "ko": "플러그인 엔진"
+      },
+      "checkCase": false,
+      "note": "通过插件（manifest v3 harnesses / ACP 协议）接入 Cindy 的任务执行引擎（如 Antigravity、DeepSeek Harness），在「设置 → 模型供应商」与模型选择器中作为一类独立供应商与执行引擎呈现（docs/product-rules/plugin-engines-and-models.md）。不要与「插件路由模型」（仅本机新任务草稿里发首条消息前路由真实模型的 models.types: ['route']）混为一谈。"
     },
     {
       "id": "plugin-main-view",

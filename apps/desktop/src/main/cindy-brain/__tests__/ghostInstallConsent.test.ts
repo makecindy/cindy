@@ -62,6 +62,24 @@ const userPrompt = (answer: boolean | Error) =>
 
 const reviewedDigest = 'a'.repeat(64);
 
+// Unit: an ordinary update must confirm inheritance, but the existing verified
+// server-default exemption must still install it without any new approval path.
+it('keeps existing install policies when Node environment inheritance is enabled', async () => {
+  const node = { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio' as const };
+  const previous = installed({ ...manifest(['api.weather.test']), node });
+  const next: GhostManifest = { ...previous.manifest, node: { ...node, inheritEnv: true } };
+  const prompt = vi.fn<GhostInstallConsentPrompt>(async () => true);
+  const decision = await obtainGhostInstallConsent({ mode: 'prompt', prompt, initiator: 'user', origin: 'market' }, previous, next, reviewedDigest);
+  expect(decision.mode).toBe('confirmed');
+  expect(prompt.mock.calls[0][0].facts).toMatchObject({ kind: 'update',
+    added: [expect.objectContaining({ key: 'node:inherit-env' })] });
+  await expect(obtainGhostInstallConsent({ mode: 'automatic' }, previous, next, reviewedDigest))
+    .rejects.toSatisfy(isGhostInstallConsentRequiredError);
+  const exempt = await obtainGhostInstallConsent({ mode: 'exempt', reason: 'server-default-install' }, previous, next, reviewedDigest);
+  expect(exempt).toEqual({ mode: 'exempt', reason: 'server-default-install' });
+  expect(() => assertGhostInstallConsent(exempt, previous, next, reviewedDigest)).not.toThrow();
+});
+
 // Unit: no supplementary grant for the same installed version; actual updates
 // still show changed Host declarations through ordinary install/update consent.
 it('uses the installed Host declarations without re-confirming the same version', async () => {

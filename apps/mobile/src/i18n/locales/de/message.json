@@ -8,6 +8,19 @@
       "selected": "Ausgewählt"
     }
   },
+  "voiceCall": {
+    "title": "Sprachanruf",
+    "saved": "Anruftranskript gespeichert",
+    "you": "Du",
+    "companion": "Freund",
+    "sendFailed": "Senden fehlgeschlagen. Dein Gesprochenes wurde beibehalten.",
+    "handoff": {
+      "sending": "Wird übergeben…",
+      "accepted": "An deinen Freund übergeben",
+      "failed": "Übergabe fehlgeschlagen. Dein Gesprochenes wurde beibehalten.",
+      "completed": "Ergebnis erhalten"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Von lokaler App „{{name}}“ gesendet",
     "sourceLocalAppId": "App-ID: {{id}}",
@@ -185,7 +198,8 @@
     "groupSent": "Aus einer Gruppe gesendet",
     "sourceGroupId": "Gruppen-ID: {{id}}",
     "selectText": "Text auswählen",
-    "you": "Du"
+    "you": "Du",
+    "recentActivity": "Letzte Aktivität"
   },
   "actions": {
     "attachmentsPrefix": "Anhänge: {{names}}",
@@ -264,6 +278,8 @@
     "delete": "Löschen",
     "retry": "Erneut versuchen",
     "notSent": "Nicht gesendet",
+    "deliveryUnconfirmed": "Sendeergebnis unbestätigt",
+    "recheckDelivery": "Erneut prüfen",
     "imagesNotUploaded_one": "{{count}} Bild wurde nicht hochgeladen",
     "imagesNotUploaded_other": "{{count}} Bilder wurden nicht hochgeladen",
     "waitingForNamedComputer": "Wird automatisch gesendet, sobald {{name}} verbunden ist",

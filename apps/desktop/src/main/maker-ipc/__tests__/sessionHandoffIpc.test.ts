@@ -87,11 +87,19 @@ describe('maker:session:handoff (receiving computer)', () => {
       targetTitle: 'Work', targetLastUserSendAt: null }));
     const handle = createSessionHandoffHandler({ create: createRemoteSessionOpener(deps), send, validate: async () => true });
     const wire = { ...request, sessionId: id, action: 'create', create: { permissionMode: 'ask' } };
-    expect(await handle('source-device', wire)).toMatchObject({ ok: true, wakeKind: 'created', targetSessionId: id,
+    expect(await handle('source-device', wire, 'Office Mac')).toMatchObject({ ok: true, wakeKind: 'created', targetSessionId: id,
       model: 'destination-default', projectDir: '/destination/project' });
     expect(rows.get(id)).toMatchObject({ title: 'hello', permissionMode: 'ask', agentKind: 'codex', agentDeviceId: null,
-      workingDir: '/destination/project', workspaceKind: 'project' });
+      workingDir: '/destination/project', workspaceKind: 'project',
+      createdBySession: {
+        kind: 'session',
+        sessionId: 'source-device::sender-1',
+        title: 'PR 跟进',
+        deviceId: 'source-device',
+        deviceName: 'Office Mac',
+      } });
     expect(rows.get(id)).not.toHaveProperty('orcaRemoteLead');
+    expect(rows.get(id)).not.toHaveProperty('parentSessionId');
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: id, forceQueue: true,
       origin: expect.objectContaining({ senderSessionId: 'source-device::sender-1' }) }));
     expect(await handle('source-device', wire)).toMatchObject({ ok: false, errorCode: 'DELIVERY_UNKNOWN' });

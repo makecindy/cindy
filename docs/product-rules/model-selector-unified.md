@@ -2,13 +2,14 @@
 
 > **状态**:实施设计文档(本次交付的权威规格;合并后其中「交互契约」章节升为产品规则)
 > **读取时机**:实现、review 或修改新版模型选择器(新会话/会话内)前
-> **适用路径**：`apps/desktop/src/renderer/components/new-chat/{ModelSelector,ModelPickerAccount,UnifiedModel,unifiedModelSelection,modelPickerPreferences}*`、
+> **适用路径**：`apps/desktop/src/renderer/components/new-chat/{ModelSelector,ModelPickerAccount,UnifiedModel,unifiedModelSelection,modelPickerPreferences,PluginEnginesSection,PluginModelsSection}*`、
+> `apps/desktop/src/renderer/lib/pluginEngineFavorites.ts`、`apps/desktop/src/renderer/features/cc-agent/pluginModelFavorites.ts`、
 > `apps/desktop/src/renderer/__tests__/{modelSelector,modelPicker,unifiedModel}*`、
-> `apps/mobile/src/session/{UnifiedModelPicker,MobileModelPickerList,ModelPicker,modelPicker}*`、
-> `apps/mobile/src/__tests__/{modelPicker,unifiedMobilePicker,androidModelPickerParity}*`、
+> `apps/mobile/src/session/{UnifiedModelPicker,MobileModelPickerList,ModelPicker,modelPicker,pluginEngines}*`、
+> `apps/mobile/src/__tests__/{modelPicker,unifiedMobilePicker,androidModelPickerParity,pluginEngines}*`、
 > `packages/model-providers/src/**/unifiedSelection*`、`packages/device-link/src/**/modelFavorites*`、
 > `apps/desktop/src/renderer/state/modelFavorites.ts`、
-> `apps/desktop/scripts/fixtures/{model-selector-performance,model-selector-remote-repro}/**`
+> `apps/desktop/scripts/fixtures/{model-selector-performance,model-selector-remote-repro,plugin-engines}/**`
 > **来源**:2026-08-12 交互设计稿(Chris 逐轮裁决)+ 三路代码侦察(选择器结构/目录平面/偏好持久化)
 
 ## 0. 一句话
@@ -76,6 +77,13 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
 
 ### 1.1 触发器(composer pill)
 
+普通任务同设备跨引擎切换仍在下条消息发送时准备；准备失败可以沿原来源继续发送（2026-11-27 用户确认保留原设计）。
+保留目标不等于已切换：药丸分别标明下条消息、准备中或切换失败，当前与目标配置在说明中分开。
+每条实际来源与目标不一致的消息旁必须持久显示实际引擎、模型与供应商及目标未就绪提示，可展开经脱敏的真实失败原因；
+不能只弹一次 toast。派发时从执行端内存快照核对引擎、模型、供应商与电脑，历史归属不随之后的选择改变，
+不增加每消息网络探测或轮询。换电脑、同引擎选择与协同任务原有的准入／阻断边界不因这一继续发送策略放宽。
+实现与回归：`sessionAgentSwitchHandler.ts`、`makerSendTransaction.ts`、共享 `messageSource.ts` 及各自测试。
+
 - 单一 pill:`[厂商图标] 模型名 · [引擎图标] 深度 [⚡]`。独立的引擎选择器(AgentSelect)从**新会话工具条**撤除。
 - 模型名超长:max-width 截断 + hover title 全名。正常工具栏 pill 按内容展开，整体上限 320px（不超过父容器）；窄 / 超窄仍为 148px / 64px。避免超长 pill 通过 MorphPopover 的锚点宽度下限撑大展开面板。
 - hover tooltip:`引擎名 · 思考深度 <档> [· Fast] [· 已自定义/收藏配置]`。
@@ -116,6 +124,7 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
   实现见 `PluginTaskPrefs.tsx`、`PluginTaskSettings.tsx`、`pluginTaskPrefsStore.ts`、`mobileTaskSettings.ts` 与
   `register.ts` 的插件路由解析。
 - 协同 Worker 的面板与新任务一样列出远程供应商（2026-10-10）：任务所在电脑的供应商之后接其他电脑与分享来的供应商，选中哪一行，Worker 的 Agent 就在哪台运行，默认选中 Lead 的位置。Desktop、Desktop 远程控制与 Mobile 同口径；远程那几行的档位记在本机为那台单独记的一份，不进本机 Worker 偏好。
+- **插件执行引擎（ACP）与插件路由模型（`route`）**：桌面与手机的统一模型选择器分别通过 `PluginEnginesSection`（及手机 `pluginEngines.ts`）和 `PluginModelsSection` 呈现这两类能力。插件执行引擎遵循执行端目录、逐模型开关（关闭任意模型后 `defaultModelAllowed: false`）与统一收藏通道（wire 固定写 `PLUGIN_ENGINE_FAVORITE_WIRE_AGENT = 'cc'`，按 `acp-plugin:` 识别）；插件路由模型仅在本机桌面新任务草稿可见，收藏仅存本机 `localStorage`（`cindy:pluginModelFavorites:v1`），且单任务草稿临时替换（alternate）时必须遮罩已保存的插件路由模型与模型组模式（#13238）。完整产品边界见[插件引擎与插件模型](plugin-engines-and-models.md)。
 - 模型选择、配置编辑与“跟随默认”均等待保存结果；失败保留面板与原配置。选模型或跟随默认成功才收起，配置编辑保持浮层打开。无模型记忆表的设置入口编辑非当前模型时，直接应用其完整配置。已有待生效配置时再次远程选模，先展示最新用户选择；运行时当前配置的来源、模型、引擎、深度与 Fast 始终来自同一快照。
 - 结构:搜索框贴顶 → 左侧 rail(最近 / ★收藏 / 全部 / 各供应商图标) → 右侧列表 → 底部「＋配置模型」。
   「最近」格在 ★ 之上（2026-09-16 裁决），与 ★ 一样常驻，图标用时钟回弹箭头（History），点击进入**独立的最近视图**；空列表时显示引导空态。常规视图（全部 / 各供应商 / 同引擎）**不**陈列最近区（与收藏上下叠放会产生视觉歧义）。
@@ -162,7 +171,7 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
 
 - **远程收藏按被控电脑共享**：Desktop 与 Mobile 连接同一台电脑时读取和修改该电脑当前账号的既有收藏。各被控电脑独立，不将控制端的本机收藏套用或自动合并到远端。收藏以单条新增、条件编辑、条件删除同步，等持久化确认后反馈成功；并发修改同一副本时拒绝旧快照覆盖，重读后再编辑。断线、账号切换、旧版不支持时不得声称已同步；不自动重试写操作，也不影响会话和连接恢复。
 - **远程收藏先显示上次读到的**（2026-10-19）：控制端按账号 + 被控电脑记住最近一次读到的收藏，选择器每次打开（含任务页、新建页重新进入）先显示它，同时在后台重读，有变化再替换；读取失败保留原显示。缓存只用于显示与发起修改，修改仍带旧值交给被控电脑核对，不会用旧快照覆盖。只存在内存里，切换账号即清空。
-- **Mobile 新建任务记住其他电脑 / 分享来的模型**（2026-10-19）：在新建页选了同账号另一台电脑或分享来的模型后，按账号 + 被控电脑 + Agent 记住，下次打开新建页恢复；选回被控电脑自己的模型即清掉。恢复出来的选择若此刻用不了（被控电脑不再提供远程模型、那台离线或读不到、分享已暂停或分享者离线、模型已不在那份目录里），退回被控电脑的默认，记忆保留。Desktop 在不重启时沿用草稿里的选择，重启后不恢复，维持原设计。
+- **Mobile 新建任务记住其他电脑 / 分享来的模型**（2026-10-19）：在新建页选了同账号另一台电脑或分享来的模型后，按账号 + 被控电脑 + Agent 记住，下次打开新建页恢复；选回被控电脑自己的模型即清掉。恢复出来的选择若此刻用不了（被控电脑不再提供远程模型、那台离线或读不到、分享已暂停或分享者离线、模型已不在那份目录里），退回被控电脑的默认，记忆保留。Desktop 本机新任务的远程来源恢复规则见下文的桌面端约定。
 - **其他电脑上的模型照样收藏**（2026-10-13）：同账号另一台电脑开放了远程调用的模型，收藏、编辑、取消收藏与本机模型完全一样，用户不用关心模型在哪台电脑上运行。收藏仍存在被控电脑上，运行位置编进来源（`agent-device-favorite:["<电脑>","<供应商>"]`，见 `packages/device-link/src/modelFavorites.ts`），不另加字段——旧版解析会丢掉不认识的字段，把那台电脑的供应商当成被控电脑的同名供应商而派错地方；编进来源后旧版只把这条当作不认识的供应商藏起来。它与本机收藏排在同一个收藏区，说明行带电脑名以区分本机同名模型；选中即在那台电脑运行。同一模型在本机与那台电脑上的收藏互不匹配。那台电脑离线（包括只因任务的 Agent 在那台、靠缓存目录留在列表里）、关闭远程调用、供应商被收进供应商组，或那台电脑上已没有这个模型时先不显示，收藏本身保留；Desktop 在那台电脑仍在列表里、目录还在读取或读取失败时置灰显示，Mobile 等目录读到后再显示。Desktop 收藏区里这类条目不弹参数浮层，参数在那台电脑的视图里调；已建任务的 Agent 已在那台电脑上时，点它先切到那台电脑的视图，再点一次应用。Mobile 收藏分享来的模型与 Desktop 用同一存储键、写在同一份被控电脑收藏里：键是 `provider-share-favorite:` 加上分享、成员、供应商与归属区域，经原 `maker:model-favorites` 读写，不写在手机上。被控电脑在 `maker:provider-share:received-catalogs` 附带可选 `favoriteSource`；旧电脑没有该字段时不收藏，也不用别的成员身份代替。编码后超过收藏通道既有的 512 字时不提供星标（更长的键会让旧客户端整表解析失败，Desktop 本机仍可存到 2048）。原授权可用、目录含该模型且分享不是离线占位时才显示；暂停、被收进供应商组或模型已不在目录里时先不显示，收藏保留。分享者电脑暂时离线时（2026-11-23 用户裁决「保留并标注」）不再隐藏：选择器里这条分享照常列出、名字后标「暂时离线」，Desktop 收藏随目录置灰；Desktop 与 Mobile 共用 `providerSharePickerState` 判断，不随在线状态来回出现、消失。
 
 - **Desktop 收藏视图不随浏览来源切换**（2026-10-13）：★ / 全部统一展示任务所在电脑收藏的本机、同账号远程与分享模型，保持收藏顺序；点任何供应商图标时，收藏区与模型区都只显示该连接的条目，同品牌不同电脑、不同分享互不混用。分享收藏沿用带分享与成员身份的既有存储键，仅在原授权可用且对应目录包含模型时解析；浏览分享时点 ★ 同样返回聚合收藏。远控任务的分享收藏也读写被控电脑，不能写入控制端收藏。侧栏仍为供应商图标，不增加设备标题；配置与选择交互沿用既有路径。实现及回归见 `UnifiedModelPanel.tsx`、`providerShareFavorites.ts` 与 `remoteAgentDeviceFavoritesPanel.test.tsx`。
@@ -296,7 +305,9 @@ Mobile `useMobileModelQuotas`、`unifiedMobilePicker`；共享模型准入 `unif
 | 已自定义老用户 | 任一明确的 Harness / 来源 / 模型 / 思考深度 / Fast 选择会封住后续自动下放；`modelChosenByVendor`、providerModelMemory、引擎 override 与形态偏好全部保留 |
 | 远程任务 | SSH / device-link 不套用控制端本机登录态；继续由执行端能力与来源快照决定，避免把本机授权强塞给远端 |
 
-桌面本机新建任务恢复手动保存的引擎、来源和模型。可用性检查期间保留这组选择并提示连接中。检查发现引擎、来源或模型不可用时，提示对应原因，允许从模型选择器为当前任务选择替代项。替代项只随当前草稿提交，既有默认在下次新建时恢复。例外（2026-11-26 用户裁决）：替代项是同账号另一台电脑或分享来的模型时，与正常选远程模型一样，本次运行内之后的新建任务继续预选它，不再提示「仅用于本次任务」；保存的默认不变，重启后恢复默认；明确改选别的模型即不再沿用（`features/cc-agent/alternateDraftModel.ts`）。
+桌面本机新建任务恢复手动保存的引擎、来源和模型。可用性检查期间保留这组选择并提示连接中。检查发现引擎、来源或模型不可用时，提示对应原因，允许从模型选择器为当前任务选择替代项。本机替代项只随当前草稿提交，既有默认在下次新建时恢复。
+
+2026-11-27，[#13207](https://github.com/makecindy/cindy/pull/13207) 需求方调整了 2026-11-26 对远程替代项的约定：在桌面本机新任务里，用户明确选中同账号另一台电脑或分享来的模型时，按当前账号保存运行位置、供应商、引擎和型号，包括原默认不可用后重新选择的情况。下次新建和客户端重启后均恢复这条选择。任务与文件留在本机，Agent 使用所选来源的登录与额度。明确切回本机来源时清除远程选择。旧记录缺少分享或设备标识时，由用户重新选择一次。[选模测试](../../apps/desktop/src/renderer/features/cc-agent/__tests__/newMakerDraftTargetCatalog.test.ts)、[跨窗口与重启恢复测试](../../apps/desktop/src/renderer/__tests__/newMakerDraft.test.ts)。
 
 ---
 

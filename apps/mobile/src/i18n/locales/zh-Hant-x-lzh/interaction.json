@@ -275,6 +275,7 @@
     "inlineFormActionGeneric": "於機上填一項設定"
   },
   "inputHandoff": {
+    "refreshVerification": "更新驗證碼",
     "originWarning": {
       "insecure": "此頁未用安全連線，所書之內容或為他人所窺。",
       "ip-address": "此頁用 IP 位址而非網域名稱，請確其為君所期之站。",

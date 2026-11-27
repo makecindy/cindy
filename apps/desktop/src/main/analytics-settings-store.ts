@@ -8,10 +8,11 @@ import { validateAdditionalSettingsOverrides } from '../shared/settingsEditableC
  *  - privacyConsentAccepted：用户是否**明示同意过《隐私政策》**。这是采集的前置
  *    条件,不是偏好设置。TapTap 官方合规要求「用户同意隐私协议后再初始化 SDK」,
  *    国内《APP违法违规收集使用个人信息行为认定方法》也把「未经同意收集」列为违规。
- *  - analyticsEnabled：同意之后的 opt-out 开关,默认开启,用户可随时在设置里关闭。
+ *  - analyticsEnabled：本机「使用统计」偏好，默认开启，用户可随时关闭。
  *
- * 有效上报条件 = 正式构建 && privacyConsentAccepted && analyticsEnabled
+ * TapDB 有效上报条件 = 正式构建 && privacyConsentAccepted && analyticsEnabled
  * (见 isAnalyticsAllowed;构建闸的理由见 isReportingBuild)。
+ * 公司 Token 报表使用同一个员工开关，由企业策略授权。
  *
  * 关于「恢复默认」:consent 是事实记录而非配置,不提供 UI 级 reset。resetAnalyticsSettings
  * 只用于测试与显式的账号数据清理,调用后用户会重新落回「未同意」。
@@ -28,12 +29,14 @@ import {
 } from './maker-host/override-settings-file.js';
 
 import { inspectSettingsFile } from './maker-host/settings-inspection.js';
+import { readBoundedFileNoFollowSync } from './utils/readBoundedFile.js';
 
 const log = desktopMakerLogger.child('analytics-settings-store');
+const MAX_SETTINGS_BYTES = 64 * 1024;
 
 /** 不初始化统计、不求值同意门禁，也不修改启动探针的历史证据。 */
 export function inspectAnalyticsSettings() {
-  return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize,
+  return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize, maxBytes: MAX_SETTINGS_BYTES,
     validate: (raw) => {
       if (classifyAnalyticsContent(JSON.stringify(raw)) !== 'valid') throw new Error('Invalid setting');
     },
@@ -43,7 +46,7 @@ export function inspectAnalyticsSettings() {
 export interface AnalyticsSettings {
   /** 用户是否已明示同意《隐私政策》。false = 一律不得初始化 TapDB。 */
   privacyConsentAccepted: boolean;
-  /** 同意后的统计开关(opt-out)。默认开启。 */
+  /** 本机「使用统计」开关。默认开启。 */
   analyticsEnabled: boolean;
   /**
    * 存量同意迁移的窗口是否已在本机**永久关闭**(持久标记,非用户偏好)。
@@ -90,6 +93,10 @@ function normalize(raw: unknown): AnalyticsSettings {
 }
 
 const store = createOverrideSettingsFile<AnalyticsSettings>({
+  // A damaged opt-out must not look like a fresh installation on the next startup.
+  preserveUnreadableFile: 'until-write',
+  maxBytes: MAX_SETTINGS_BYTES,
+  logReadErrorDetails: false,
   validateOverrides: raw => validateAdditionalSettingsOverrides('privacy', raw),
   filePath: settingsFilePath,
   defaults: DEFAULTS,
@@ -101,11 +108,8 @@ const store = createOverrideSettingsFile<AnalyticsSettings>({
 /**
  * 本机是否曾经有过记录 —— 存量迁移的唯一依据。
  *
- * 为什么不能在迁移时才 `existsSync`:renderer 挂载后第一件事就是
- * `analytics:settings-get`,它早于 `auth:initialize`。而 createOverrideSettingsFile
- * 读到坏 JSON 会**把文件删掉**并缓存一个未自定义的默认态。等到迁移真正执行时,
- * 盘上已经什么都没有了,一份损坏的记录(可能原本就是显式 opt-out)就会被判成
- * 「从没有过」,进而被静默迁移成「已同意 + 默认开启」。
+ * renderer 的 `analytics:settings-get` 可能早于 `auth:initialize`。普通读取遇到损坏记录会
+ * 返回默认值。迁移需记住首次读到的状态，避免把损坏的退出偏好当成全新安装。
  *
  * 所以在任何 store 读写之前先做一次只读探针,把结论钉在内存里:
  *   none    = 确实没有记录(新装)
@@ -172,11 +176,10 @@ export async function readAnalyticsConsentFromDisk(): Promise<boolean | null> {
 /** 现读盘一次并分类（文件不存在 ⇒ none；读盘本身失败 ⇒ invalid，绝不当「没有记录」）。 */
 function probeSettingsFileNow(): RecordProbe {
   try {
-    const file = settingsFilePath();
-    if (!fs.existsSync(file)) return 'none';
-    return classifyAnalyticsContent(fs.readFileSync(file, 'utf-8'));
-  } catch {
-    return 'invalid';
+    const bytes = readBoundedFileNoFollowSync(settingsFilePath(), MAX_SETTINGS_BYTES);
+    return bytes === null ? 'invalid' : classifyAnalyticsContent(bytes.toString('utf8'));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'none' : 'invalid';
   }
 }
 
@@ -213,14 +216,7 @@ function refreshProbeAfterWrite(): void {
  * 无法区分。日志上报的授权闸据此会判成「明确拒绝」并**清空待补传标记**,一次设置文件
  * 读取故障就永久丢掉一个崩溃现场。有了这个探针,闸才能把它判成 `unknown`(不传、也不清)。
  *
- * 两道判据取交集:一是进程启动期那次 `probeRecordOnce()` 的结论(store 读到坏文件时会把它
- * **删掉**,现读就再也看不到了,而那次探针的结论是删除之前抓到的),二是**现读**盘上的文件
- * (捕捉此刻仍在盘上的损坏)。任一判为损坏即返回 false。
- *
- * ⚠️ 先跑一次 `probeRecordOnce()`(2026-08-04 review copilot):本函数原先只读 `recordProbe`
- * 的现值,若从没有别的入口触发过探针,那次「删除之前」的启动快照就丢了,损坏文件被删后现读
- * 看到「文件不存在 ⇒ 可读」,闸误判「可读但未同意」清空标记。probeRecordOnce 幂等,首次调用
- * 抓快照,之后是零成本读缓存。
+ * 同时检查首次读取时的状态与当前文件。损坏记录保留到用户主动修复；成功写入会刷新探针。
  */
 export function isAnalyticsConsentRecordReadable(): boolean {
   if (probeRecordOnce() === 'invalid') return false;
@@ -305,20 +301,30 @@ export function isAnalyticsAllowed(): boolean {
   return value.privacyConsentAccepted && value.analyticsEnabled;
 }
 
+/** Read on account/policy/settings changes. Enterprise identity and participation are checked by the reporter. */
+export function readCompanyTokenReportingPreference(): boolean | null {
+  if (!isReportingBuild()) return false;
+  const settings = inspectAnalyticsSettings();
+  return settings.status === 'ready' ? settings.value.analyticsEnabled : null;
+}
+
 /**
  * 记录用户明示同意《隐私政策》。幂等。
  *
  * 调用点是登录页协议门放行的那一刻(手机号/邮箱/验证码/社交等个人**账号**登录),
  * 即用户已勾选或在弹窗里点了「同意」并继续使用。企业 SSO 入口与「跳过登录」
  * (本地模式,2026-07-27 拍板免协议门)都被协议门豁免,因此这两类用户不会到达这里,
- * 也就不会被采集——这是刻意的。
+ * 不会在这里授予个人产品统计许可。
  */
 export function acceptPrivacyConsent(): AnalyticsSettings {
-  probeRecordOnce();
+  refreshAnalyticsSettingsFromDisk();
   const current = store.read();
   if (current.privacyConsentAccepted) return current;
-  // preserveDefaults 无关:true ≠ 默认值 false,override 会被保留。
-  store.writePatch({ privacyConsentAccepted: true });
+  // Repairing consent cannot establish that a damaged usage preference was on.
+  const patch = isAnalyticsConsentRecordReadable()
+    ? { privacyConsentAccepted: true }
+    : { privacyConsentAccepted: true, analyticsEnabled: false };
+  store.writePatch(patch);
   refreshProbeAfterWrite();
   log.info('privacy consent accepted');
   return store.read();
@@ -346,9 +352,8 @@ export function setAnalyticsEnabled(analyticsEnabled: boolean): AnalyticsSetting
  */
 export function migrateExistingLoginAsConsented(isSignedIn: boolean): boolean {
   if (!isSignedIn) return false;
-  // 只认探针结论,不在这里 existsSync —— 到这一步时,更早的 settings-get 可能已经把
-  // 一份损坏的记录删掉了(见 probeRecordOnce 的注释)。损坏 ≠ 不存在。
-  if (probeRecordOnce() !== 'none') return false;
+  // The preference may have been saved between the initial probe and auth restoration.
+  if (probeRecordOnce() !== 'none' || probeSettingsFileNow() !== 'none') return false;
   const state = store.readState();
   if (state.isCustomized) return false;
   // 本机曾经历过「无存量登录态」的冷启动 = 之后出现的账号都是改版后新建的,不可迁移
@@ -370,7 +375,8 @@ export function migrateExistingLoginAsConsented(isSignedIn: boolean): boolean {
  * 也不会让 `isAnalyticsAllowed` 变 true —— 唯一作用是让后续冷启动不再迁移。
  */
 export function closeLegacyConsentMigration(): boolean {
-  probeRecordOnce();
+  if (!isAnalyticsConsentRecordReadable()) return false;
+  store.invalidateIfChanged();
   const current = store.read();
   if (current.legacyConsentMigrationClosed) return false;
   // true ≠ 默认值 false,override 会被保留(无需 preserveDefaults)。
