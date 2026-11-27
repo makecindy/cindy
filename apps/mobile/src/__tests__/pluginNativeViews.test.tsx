@@ -32,10 +32,15 @@ const bridge = vi.hoisted(() => ({
   mode: "light" as "light" | "dark",
   /** `scrollTo` calls on a ScrollView, by its testID. */
   scrolledTo: [] as Array<[string | undefined, unknown]>,
+  /** The consent sheet's settle clock (`consentSettle`), in ms: `layOutSheet` moves it on once a layout is in. */
+  clock: 0,
   /** How many times a ScrollView with that testID was mounted (a new one starts at its top). */
   scrollMounts: new Map<string, number>(),
 }));
 vi.mock("@/hooks/useReduceMotion", () => ({ useReduceMotionEnabled: () => false }));
+vi.mock("@/plugins/consentSettle", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/plugins/consentSettle")>()), consentClockNow: () => bridge.clock,
+}));
 // Metro resolves the iOS market rows inside the iOS directory; vitest needs the platform file named.
 vi.mock("@/plugins/PluginMarketRows", () => import("@/plugins/PluginMarketRows.ios"));
 // The record panel only calls this on "Read again" (not pressed here); the real module needs the device link.
@@ -339,6 +344,7 @@ afterEach(() => {
   bridge.mode = "light";
   bridge.width = 390;
   bridge.height = 844;
+  bridge.clock = 0;
   bridge.ownerCurrent = true;
   bridge.keyboardVisible = false;
   bridge.fontScale = 1;
@@ -389,7 +395,7 @@ function sheetViewIds(): Set<string> {
  * or inside one, report again; a view that kept its identity and its size reports nothing.
  */
 function layOutSheet(heights: { identity: number; visible: number; content: number; other?: number; listTop?: number; contentTop?: number;
-  innerContent?: number }, renewedSince?: Set<string>) {
+  innerContent?: number }, renewedSince?: Set<string>, options: { settle?: boolean } = {}) {
   const sheet = bridge.props.get("plugins.managementConfirmation");
   const other = heights.other ?? 20;
   const listTop = heights.listTop ?? 100, contentTop = heights.contentTop ?? listTop;
@@ -425,6 +431,8 @@ function layOutSheet(heights: { identity: number; visible: number; content: numb
     walk(sheet.footer);
   } else walk(sheet.children);
   for (const call of calls) act(call);
+  // A device shows a laid-out sheet for a while before a person presses anything (`settle: false`: pressed at once).
+  if (options.settle !== false) bridge.clock += 1000;
 }
 // New plugin picker wrapper: native sheets call onClose after a successful onSelect.
 // Minimal input is one model click; the observable result must be one complete route,
@@ -2148,6 +2156,36 @@ describe("pinned high-risk permission", () => {
     layOutSheet({ identity: 96, visible: 132.5, content: 1894.5, listTop: 52, contentTop: 82.5 });
     expect(pressAllow(p), "the source line is under the fade").toBe(false);
     expect(container.querySelector('[data-testid="plugins.management.review"]'), "review first").not.toBeNull();
+  });
+  /* 测试价值（调度 2026-11-27：身份块与列表两个 frame 在面板没停稳的一帧里可能来自不同排版轮次，往松的方向偏）
+   * - 生产入口与可观察结果：iOS 真实确认面板组件；按下「允许」是否写出 answer(true)、之后的主按钮。
+   * - 依据：判定所需的布局自最后一次变化起稳定 150 ms 之前，按下只进入查看；稳定后按最新布局判定。
+   * - 最小失败输入：列表顶 100、视区 270、身份块 250；身份块的 frame 还停在上一轮的 y 68（真实是 108），读成下缘距列表顶 218、
+   *   放得下（真实 258，加渐隐 282 > 270），这一帧里按「允许」；811ac92adc 上写出。对照：同样放得下的布局停稳后按下作答。
+   *   tier: unit。
+   */
+  it("iOS: the identity block's frame still from an earlier pass (reading looser than the truth): Allow pressed in that frame writes nothing; settled, the truth is review first", () => {
+    bridge.fontScale = 1;
+    const p = props(allFive);
+    mount(PluginManagementConfirmation, p);
+    layOutSheet({ identity: 250, visible: 270, content: 1200, listTop: 100, contentTop: 60 }, undefined, { settle: false });
+    expect(pressAllow(p), "pressed in the frame where the two frames are from different passes").toBe(false);
+    const second = props(allFive);
+    second.state.receipt.consent.requestId = "request-2";
+    const { container: other } = mount(PluginManagementConfirmation, second);
+    layOutSheet({ identity: 250, visible: 270, content: 1200, listTop: 100, contentTop: 60 }, undefined, { settle: false });
+    // The identity block's frame of this pass arrives: it ends 258 below the list's top, the fade starts at 246.
+    act(() => bridge.props.get("plugins.management.identity").modifiers.find((m: any) => m.onGeometryChange)
+      .onGeometryChange({ x: 0, y: 108, width: 390, height: 250 }));
+    bridge.clock += 1000;
+    expect(other.querySelector('[data-testid="plugins.management.review"]'), "settled: review first").not.toBeNull();
+  });
+  it("iOS: a layout that fits and has settled answers at once (control for the settle wait)", () => {
+    bridge.fontScale = 1;
+    const p = props(allFive);
+    mount(PluginManagementConfirmation, p);
+    layOutSheet({ identity: 200, visible: 270, content: 1200 });
+    expect(pressAllow(p)).toBe(true);
   });
   it.each([[212, true], [240, false]] as const)(
     "iOS: scrolling the list (the identity block moving up) does not change the decision made at rest (identity %s: answers %s)", (identity, answers) => {

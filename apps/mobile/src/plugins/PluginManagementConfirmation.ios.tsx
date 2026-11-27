@@ -25,6 +25,7 @@ import {
 } from "./usePluginConsent";
 import { useEffect, useRef, useState } from "react";
 import { useConsentSheetSizes } from "./useConsentSheetSizes";
+import { CONSENT_SETTLE_MS } from "./consentSettle";
 import { useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CONSENT_FADE_HEIGHT, CONSENT_SIDE_BY_SIDE_MIN_WIDTH, consentIdentityShown, consentLayoutKey, consentRegularConfirmed, consentSheetMeasured,
@@ -138,7 +139,10 @@ export function PluginManagementConfirmation(
   // 18:13: on first mount, or with only some sizes, the plan can say regular before it knows). Until then Allow looks the
   // same but does not answer: pressed, the sheet goes compact (review first) instead. Read from the newest reports when
   // pressed. Not marked unavailable: SwiftUI's disabled state would dim the button for that frame.
-  const confirmedNow = () => consentRegularConfirmed(layout.latest(), { lineCount, available, gap: spacing.xs, positions: true });
+  // And only once that layout has stayed unchanged a moment (CONSENT_SETTLE_MS): for a frame, the identity block's and
+  // the list's frames can come from different layout passes and read looser than the truth (dispatcher 2026-11-27).
+  const confirmedNow = () => layout.settledFor() >= CONSENT_SETTLE_MS
+    && consentRegularConfirmed(layout.latest(), { lineCount, available, gap: spacing.xs, positions: true });
   const needsReview = compact && !reviewed && info?.allowBlocked !== true;
   // The pinned summary's content height, for this layout key only.
   const [summaryContent, setSummaryContent] = useState<{ for: string | null; height: number }>({ for: null, height: 0 });
