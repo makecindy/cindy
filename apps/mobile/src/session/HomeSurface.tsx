@@ -66,6 +66,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  CornerDownRight,
   Crown,
   Ellipsis,
   Folder,
@@ -253,6 +254,11 @@ import {
   startHostProjectOrderLoad,
 } from '@/session/remoteProjectOrder';
 import {
+  getActiveOrcaWorkersForLead,
+  indexActiveOrcaWorkersByLead,
+  orcaLeadSessionKey,
+} from '@cindy/maker-shared/orca-team';
+import {
   createProjectOrderFetchFence,
   isHostProjectOrderReachable,
   projectOrderWriteLedger,
@@ -339,7 +345,7 @@ import { RenameSessionModal } from '@/session/RenameSessionModal';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
 import { TaskCreatorMark, TaskFollowMark, taskFollowerNames, useTaskFollowers } from '@/session/TaskFollowMark';
-import { createSwipeRowRegistry } from '@/session/swipeRowRegistry';
+import { createSwipeRowRegistry, sessionOptionsInboxMode, type SessionOptionsContext } from '@/session/swipeRowRegistry';
 import {
   clearMobileOfflineInboxIntentsForDevice,
   getMobileOfflineInboxIntent,
@@ -799,9 +805,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const scheduleIndexRef = useRef<ReadonlyMap<string, RemoteSessionScheduleInfo>>(new Map());
   const taskListModeRef = useRef<'tasks' | 'inbox'>('tasks');
   const unresponsiveDevicesRef = useRef<ReadonlySet<string>>(new Set());
+  const orcaLeadFollowingKeysRef = useRef<ReadonlySet<string>>(new Set());
   const {
     snoozeSessionTarget, confirmSnooze, closeSnooze, handleSnoozeClosed,
     actionSheetSession,
+    actionSheetContext,
     archiveSession,
     closeRenameSession,
     confirmRenameSession,
@@ -817,7 +825,11 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     toggleSessionPinned,
   } = useSessionListActions({
     animateListChange,
-    hasActiveAutomation: (session) => scheduleIndexRef.current.get(session.id)?.hasActiveFollowUp === true,
+    hasActiveAutomation: (session) =>
+      scheduleIndexRef.current.get(session.id)?.hasActiveFollowUp === true
+      || orcaLeadFollowingKeysRef.current.has(orcaLeadSessionKey(session.id, session.deviceLinkDeviceId))
+      || (!!session.canonicalDeviceId
+        && orcaLeadFollowingKeysRef.current.has(orcaLeadSessionKey(session.id, session.canonicalDeviceId))),
     isInboxMode: () => taskListModeRef.current === 'inbox',
     userId: homeCacheUserId,
     isDeviceOffline: (deviceId) =>
@@ -2487,6 +2499,26 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, [messageSearchVersion, normalizedSearchQuery, sessions]);
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
   const { pendingInteractionIndex, visibleWorkerIds, workerTargets } = useOrcaQuestionRows(sessions, homeStatusVersion);
+  const orcaLeadFollowingKeysRaw = useMemo(() => {
+    const keys = new Set<string>();
+    const workerIndex = indexActiveOrcaWorkersByLead(sessions);
+    for (const session of sessions) {
+      if (session.status !== 'active' || session.orcaRole !== 'lead') continue;
+      const workers = getActiveOrcaWorkersForLead(workerIndex, session);
+      if (workers.some((worker) => scheduleIndex.get(worker.sessionId)?.hasActiveFollowUp === true)) {
+        keys.add(orcaLeadSessionKey(session.id, session.deviceLinkDeviceId));
+        if (session.canonicalDeviceId && session.canonicalDeviceId !== session.deviceLinkDeviceId) {
+          keys.add(orcaLeadSessionKey(session.id, session.canonicalDeviceId));
+        }
+      }
+    }
+    return keys;
+  }, [sessions, scheduleIndex]);
+  const orcaLeadFollowingKeys = useStableValue(
+    orcaLeadFollowingKeysRaw,
+    (a, b) => a.size === b.size && [...a].every((key) => b.has(key)),
+  );
+  orcaLeadFollowingKeysRef.current = orcaLeadFollowingKeys;
   const liveActivityIndexRaw = useMemo(() => {
     const next = new Map<string, RemoteSessionLiveActivity>();
     for (const session of sessions) {
@@ -2727,10 +2759,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         sortBy,
       });
       return taskListMode === 'inbox'
-        ? [...regular.filter(section => section.key === 'pinned'), ...buildInboxHomeSections(filteredHome, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries)]
+        ? [...regular.filter(section => section.key === 'pinned'), ...buildInboxHomeSections(filteredHome, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries, orcaLeadFollowingKeys)]
         : regular;
     },
-    [taskListMode, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries, displayedManualProjectOrder, displayedProjectOrder,
+    [taskListMode, inboxCollapsed, priorityContext, inboxNow, inboxTeammateEntries, orcaLeadFollowingKeys, displayedManualProjectOrder, displayedProjectOrder,
       filteredHome, groupByDevice, pinnedSort, pinnedOrder, groupAutomation, groupByProject, groupDialogue, pinnedCollapsed,
       sortPriorityContext, sortBy, t],
   );
@@ -4232,7 +4264,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         visible={searchFilterOpen}
       />}</MountOnFirstOpen>
       <MountOnFirstOpen open={actionSheetSession !== null}>{() => <SessionOptionsPresenter
-        inboxMode={taskListMode === 'inbox'}
+        inboxMode={sessionOptionsInboxMode(taskListMode === 'inbox', actionSheetContext)}
         session={actionSheetSession}
         onAction={handleSessionSheetAction}
         onClose={() => setActionSheetSession(null)}
@@ -5012,7 +5044,7 @@ function HomeListRowInner({
   onProjectDragMove?: (absoluteY: number) => void;
   onProjectDragStart?: (input: { absoluteY: number; count: number; key: string; title: string }) => void;
   onShowAllDialogue(): void;
-  onShowOptions(session: RemoteSession): void;
+  onShowOptions(session: RemoteSession, context?: SessionOptionsContext): void;
   onToggleAutomationGroup(key: string): void;
   onToggleProject(key: string): void;
   onTogglePin(session: RemoteSession): void;
@@ -5084,6 +5116,7 @@ function HomeListRowInner({
   return (
     <SwipeableSessionRow
       inboxMode={inboxMode}
+      pinnedSection={item.source === 'pinned'}
       onSnooze={swipe.onSnooze}
       onComplete={swipe.onComplete}
       onArchive={onArchive}
@@ -5276,7 +5309,9 @@ function HomeSessionRowInner({
           !selectionMode && !group && swipe && conversationSearchAllowsLocalWrites(item)
             ? () => {
                 swipe.registry.closeOpenRow();
-                swipe.onShowOptions(latestMobileSessionRow(item).session as RemoteSession);
+                const session = latestMobileSessionRow(item).session as RemoteSession;
+                if (pinnedView) swipe.onShowOptions(session, { pinnedSection: true });
+                else swipe.onShowOptions(session);
               }
             : onLongPress}
         onPress={handlePress}
@@ -5378,7 +5413,7 @@ function HomeSessionRowInner({
                 {sourceLabel}
               </Text>
             ) : null}
-            {textMode && (showSchedule || showPinned) ? (
+            {textMode && (showSchedule || showPinned || Boolean(item.session.orcaRemoteLead) || Boolean(item.session.createdBySession)) ? (
               <View style={styles.sessionInlineIcons}>
                 {showSchedule ? (
                   <AutomationTimerIcon
@@ -5386,6 +5421,27 @@ function HomeSessionRowInner({
                     size={iconSize.md}
                     testID={`home.sessionAutomationTimer.${item.session.id}`}
                   />
+                ) : null}
+                {item.session.orcaRemoteLead ? (
+                  <View
+                    accessibilityLabel={t('devices.list.a11y.orcaRemoteLead', {
+                      device: item.session.orcaRemoteLead.leadDeviceName || t('devices.list.a11y.unknownDevice'),
+                    })}
+                    accessibilityRole="image"
+                    testID={`home.sessionOriginOrcaRemote.${item.session.id}`}
+                  >
+                    <UsersRound color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.thin} />
+                  </View>
+                ) : item.session.createdBySession && !(taskInfoFields.includes('teammate') && !group && taskTeammate && item.session.createdBySession.botId) ? (
+                  <View
+                    accessibilityLabel={item.session.createdBySession.title?.trim()
+                      ? t('devices.list.a11y.createdByTaskNamed', { title: item.session.createdBySession.title.trim() })
+                      : t('devices.list.a11y.createdByTask')}
+                    accessibilityRole="image"
+                    testID={`home.sessionOriginTask.${item.session.id}`}
+                  >
+                    <CornerDownRight color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.thin} />
+                  </View>
                 ) : null}
                 {showPinned ? <Pin color={colors.textTertiary} size={iconSize.md} strokeWidth={iconStroke.thin} /> : null}
               </View>
@@ -5447,7 +5503,7 @@ function HomeSessionRowInner({
                   {preview}
                 </Text>
               )}
-              {showSchedule || showPinned ? (
+              {showSchedule || showPinned || Boolean(item.session.orcaRemoteLead) || Boolean(item.session.createdBySession) ? (
                 // 组行与单次自动化会话行同款标记:Timer 放右下(时间下方的尾部图标位),
                 // 行首保留正常的会话状态图标(primary 运行的 vendor / 运行态)。
                 <View style={styles.sessionTrailingIcons}>
@@ -5457,6 +5513,27 @@ function HomeSessionRowInner({
                       size={iconSize.lg}
                       testID={`home.sessionAutomationTimer.${item.session.id}`}
                     />
+                  ) : null}
+                  {item.session.orcaRemoteLead ? (
+                    <View
+                      accessibilityLabel={t('devices.list.a11y.orcaRemoteLead', {
+                        device: item.session.orcaRemoteLead.leadDeviceName || t('devices.list.a11y.unknownDevice'),
+                      })}
+                      accessibilityRole="image"
+                      testID={`home.sessionOriginOrcaRemote.${item.session.id}`}
+                    >
+                      <UsersRound color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
+                    </View>
+                  ) : item.session.createdBySession && !(taskInfoFields.includes('teammate') && !group && taskTeammate && item.session.createdBySession.botId) ? (
+                    <View
+                      accessibilityLabel={item.session.createdBySession.title?.trim()
+                        ? t('devices.list.a11y.createdByTaskNamed', { title: item.session.createdBySession.title.trim() })
+                        : t('devices.list.a11y.createdByTask')}
+                      accessibilityRole="image"
+                      testID={`home.sessionOriginTask.${item.session.id}`}
+                    >
+                      <CornerDownRight color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} />
+                    </View>
                   ) : null}
                   {showPinned ? <Pin color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.thin} /> : null}
                 </View>

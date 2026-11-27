@@ -6,8 +6,11 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
+  useWindowDimensions,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import type { PluginNativeIntent } from "@cindy/device-link";
 import {
@@ -59,6 +62,8 @@ export function PluginScheduleDraft({
   const { t } = useTranslation(),
     { colors } = useTheme(),
     styles = useThemedStyles(makeStyles);
+  const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
   const link = useDeviceLink(),
     maker = useMobileMakerTransport(deviceId),
     providers = useDeviceProviders(deviceId);
@@ -98,7 +103,9 @@ export function PluginScheduleDraft({
           : d.cronExpr,
     }));
   };
+  const [checkEnabled, setCheckEnabled] = useState(true);
   const [picker, setPicker] = useState(false),
+    [pickerVisible, setPickerVisible] = useState(false),
     [busy, setBusy] = useState(false),
     [unknown, setUnknown] = useState(false);
   useEffect(() => {
@@ -187,7 +194,9 @@ export function PluginScheduleDraft({
       const result = await link.invoke<{ id: string }>(
         deviceId,
         "maker:schedule:create",
-        [buildMobileScheduleInput(draft)],
+        [{ ...buildMobileScheduleInput(draft),
+          ...(checkEnabled && intent.preRunPlugin ? { preRunPlugin: intent.preRunPlugin } : {}),
+        }],
         { preSend: assertCurrent },
       );
       if (!result || typeof result.id !== "string")
@@ -247,18 +256,27 @@ export function PluginScheduleDraft({
     <>
       <SheetModal
         visible={!picker}
+        onClosed={() => { if (picker) setPickerVisible(true); }}
         keyboardAvoiding
         onBackdropPress={() => {}}
         onRequestClose={onClose}
       >
         <ScrollView
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.sheet}
+          style={{ flexGrow: 0, maxHeight: height - insets.top - spacing.lg }}
+          contentContainerStyle={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]}
         >
           <Text style={styles.title}>{t("plugins.automationDraft")}</Text>
           <Text style={styles.hint}>
             {intent.ghostName} · {t("plugins.automationDraftHint")}
           </Text>
+          {intent.preRunPlugin ? (
+            <View style={styles.checkRow}>
+              <Text style={styles.checkLabel}>{t("plugins.automationCheck", { name: intent.ghostName })}</Text>
+              <Switch value={checkEnabled} onValueChange={setCheckEnabled} disabled={sent.current}
+                accessibilityLabel={t("plugins.automationCheck", { name: intent.ghostName })} />
+            </View>
+          ) : null}
           <Text style={styles.body}>{t("plugins.automationName")}</Text>
           <TextInput
             accessibilityLabel={t("plugins.automationName")}
@@ -412,8 +430,9 @@ export function PluginScheduleDraft({
         </ScrollView>
       </SheetModal>
       <ModelPickerSheet
-        visible={picker}
-        onClose={() => setPicker(false)}
+        visible={pickerVisible}
+        onClose={() => setPickerVisible(false)}
+        onClosed={() => setPicker(false)}
         agentKind={draft.agentKind === "acp" ? "claude-code" : draft.agentKind}
         providers={providers.providers}
         providersReady={providers.ready}
@@ -471,7 +490,7 @@ export function PluginScheduleDraft({
                       effort: selection.effort || "",
                       fastMode: false,
                     }));
-                    setPicker(false);
+                    setPickerVisible(false);
                     return true;
                   },
                 },
@@ -490,7 +509,7 @@ export function PluginScheduleDraft({
               effort: value.effort || "",
               fastMode: value.fast,
             }));
-            setPicker(false);
+            setPickerVisible(false);
             return true;
           },
         }}
@@ -505,6 +524,9 @@ const makeStyles = (colors: ThemeColors) =>
       padding: spacing.lg,
       gap: spacing.md,
     },
+    checkRow: { flexDirection: "row", alignItems: "center", gap: spacing.md, minHeight: 44 },
+    checkLabel: { flex: 1, fontSize: typeScale.body, lineHeight: lineHeight.body,
+      fontWeight: fontWeight.medium, color: colors.textPrimary },
     frequencies: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
     frequency: {
       minHeight: 44,

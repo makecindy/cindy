@@ -899,4 +899,146 @@ describe('exportSessionShare', () => {
       }),
     ).rejects.toMatchObject({ code: 'SHARE_EXPORT_FAILED' });
   });
+
+  it('exports a plain ACP session as v3 db-only preserving providerId/model/effort and clearing sdkSessionId', async () => {
+    sessionRowRef.row = {
+      ...baseSession(),
+      agentKind: 'acp',
+      providerId: 'acp-plugin:demo:codex',
+      model: 'acp-model-1',
+      effort: 'medium',
+      sdkSessionId: 'stale-acp-native-id',
+    };
+    messagesRef.rows = [
+      {
+        id: 'm1',
+        clientId: 'c1',
+        role: 'user',
+        content: JSON.stringify([{ type: 'text', text: 'hello acp' }]),
+        toolUseId: null,
+        agentMeta: null,
+        agentKind: 'acp',
+        createdAt: 1700000000100,
+        rewindAt: null,
+      },
+      {
+        id: 'm2',
+        clientId: 'c2',
+        role: 'agent_switch',
+        content: JSON.stringify({
+          fromAgentKind: 'cc',
+          toAgentKind: 'acp',
+          fromSdkSessionId: 'parked-cc-id',
+        }),
+        toolUseId: null,
+        agentMeta: JSON.stringify({ sdkSessionId: 'stale-acp-native-id', providerId: 'acp-plugin:demo:codex' }),
+        agentKind: 'acp',
+        createdAt: 1700000000200,
+        rewindAt: null,
+      },
+    ];
+
+    const target = path.join(tmpRoot, 'out-acp.cshare');
+    const outcome = await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.fidelity).toBe('db-only');
+    expect(outcome.missingTranscripts).toEqual([]);
+
+    const zip = await unzipOf(target);
+    const manifest = validateManifest(
+      JSON.parse(await zip.file('manifest.json')!.async('string')),
+    );
+    expect(manifest.formatVersion).toBe(3);
+    expect(manifest.minReaderVersion).toBe(3);
+    expect(manifest.agentKind).toBe('acp');
+    expect(manifest.providerId).toBe('acp-plugin:demo:codex');
+    expect(manifest.sdkSessionIds).toEqual([]);
+    expect(manifest.activeSdkSessionId).toBeNull();
+    expect(manifest.transcripts).toEqual([]);
+    expect(manifest.exportFidelity).toBe('db-only');
+
+    const snapshot = JSON.parse(
+      await zip.file('session.json')!.async('string'),
+    ) as Record<string, unknown>;
+    expect(snapshot).toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:demo:codex',
+      model: 'acp-model-1',
+      effort: 'medium',
+      sdkSessionId: null,
+    });
+
+    const exportedMessages = (await zip.file('messages.jsonl')!.async('string'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { content: string; agentMeta: string | null });
+    expect(JSON.parse(exportedMessages[1].content)).toMatchObject({ fromSdkSessionId: null });
+    expect(JSON.parse(exportedMessages[1].agentMeta!)).not.toHaveProperty('sdkSessionId');
+  });
+
+  it('exports an Orca bundle with a CC lead and an ACP worker at v3 partial fidelity', async () => {
+    sessionRowRef.row = { ...baseSession(), orcaRole: 'lead' };
+    activeTeamRef.row = { id: 'team-acp', status: 'active' };
+    workerRowsRef.rows = [
+      { sessionId: 'worker-acp-1', status: 'done', label: 'acp-dev', role: 'developer', focused: 1 },
+    ];
+    workerSessionsById.set('worker-acp-1', {
+      ...baseSession(),
+      id: 'worker-acp-1',
+      title: 'ACP Worker',
+      agentKind: 'acp',
+      providerId: 'acp-plugin:demo:worker',
+      model: 'worker-acp-model',
+      effort: 'low',
+      orcaRole: 'worker',
+      sdkSessionId: 'stale-worker-acp-id',
+    });
+    workerMessagesBySession.set('worker-acp-1', [
+      {
+        id: 'wm1',
+        clientId: 'wc1',
+        role: 'user',
+        content: JSON.stringify([{ type: 'text', text: 'run task' }]),
+        toolUseId: null,
+        agentMeta: null,
+        agentKind: 'acp',
+        createdAt: 1700000000300,
+        rewindAt: null,
+      },
+    ]);
+
+    const target = path.join(tmpRoot, 'out-orca-acp.cshare');
+    const outcome = await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.fidelity).toBe('partial');
+    expect(outcome.missingTranscripts).toEqual([]);
+    expect(outcome.orcaWorkers).toBe(1);
+
+    const zip = await unzipOf(target);
+    const manifest = validateManifest(
+      JSON.parse(await zip.file('manifest.json')!.async('string')),
+    );
+    expect(manifest.formatVersion).toBe(3);
+    expect(manifest.minReaderVersion).toBe(3);
+    expect(manifest.agentKind).toBe('cc');
+    expect(manifest.orca!.workers[0]).toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:demo:worker',
+      sdkSessionIds: [],
+      activeSdkSessionId: null,
+      transcripts: [],
+    });
+    const workerSnapshot = JSON.parse(
+      await zip.file('orca/workers/0/session.json')!.async('string'),
+    ) as Record<string, unknown>;
+    expect(workerSnapshot).toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:demo:worker',
+      model: 'worker-acp-model',
+      effort: 'low',
+      sdkSessionId: null,
+    });
+  });
 });

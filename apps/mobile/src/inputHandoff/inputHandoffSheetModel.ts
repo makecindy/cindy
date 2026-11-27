@@ -13,6 +13,7 @@ export interface InputHandoffQrSheet {
   view: InputHandoffQrView;
   onOpen(): void;
   onShare(): void;
+  verification?: { refresh(): void; cancel(): void };
   onCopy(): void;
   /** Result of the last open, share or copy. */
   notice: string | null;

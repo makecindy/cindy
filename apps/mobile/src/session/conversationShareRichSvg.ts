@@ -297,6 +297,11 @@ export function layoutConversationShareRichBody(
         lineHeight.body,
         inlines(value.inlines, x + indent + markerWidth, cursor, Math.max(1, width - indent - markerWidth)),
       );
+    } else if (value.type === "carousel") {
+      for (const slide of value.slides) {
+        slide.forEach(block);
+      }
+      return;
     } else {
       const heading = value.type === "heading";
       const size = heading
