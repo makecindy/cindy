@@ -23,9 +23,9 @@ export interface ConcurrentInstanceScanDeps {
   isPidAlive(pid: number): boolean;
   readProcessIdentity?(pid: number): ProcessIdentitySnapshot | null;
   /**
-   * 删除已证死的注册表记录（可选）。desktop 的 productionDeps 已带 `unlink`；没带的调用方
-   * （如 Host 的 profile-coexistence ports）行为与从前一致：残留记录留在盘上，靠 60s 证明
-   * TTL 挡日志刷屏，每轮扫描继续完整查证。
+   * 删除已证死的注册表记录（可选）。desktop 的 productionDeps 与 Host 的
+   * profile-coexistence ports 都带 `unlink`；没带的调用方行为与从前一致：残留记录留在
+   * 盘上，靠 60s 证明 TTL 挡日志刷屏，每轮扫描继续完整查证。
    */
   unlink?(file: string): Promise<void>;
 }
