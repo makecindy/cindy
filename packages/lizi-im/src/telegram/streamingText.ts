@@ -147,10 +147,11 @@ export interface TelegramStreamingDeps extends TelegramProgressDeps {
   /**
    * 终稿 HTML/Markdown 分段的专用发送(第 `part` 段, 0 起)。提供时 finalize 的首段与
    * 后续分段都走它, 不再走 `send` / `repost` —— 给需要区分"过程帧 send"与"终稿段
-   * send"的传输用(官方 bot: msg.op 的 turn-progress 与 turn-final 是两种登记)。
-   * 个人 bot 不提供, 行为不变。
+   * send"的传输用(官方 bot: msg.op 的 turn-progress 与 turn-final; 个人 bot:
+   * 过程载体不写入群历史窗口, 终稿才回流)。`reuseReplyTarget` 仅在 part===0 且本轮
+   * 曾发出过过程载体时为 true, 供个人 bot 沿用冻结回挂目标。
    */
-  sendFinalChunk?: (markdown: string, part: number) => Promise<string>;
+  sendFinalChunk?: (markdown: string, part: number, reuseReplyTarget?: boolean) => Promise<string>;
   /** NO_REPLY 静默时删除流式占位消息。 */
   deleteMessage?: (messageId: string) => Promise<void>;
 }
@@ -478,7 +479,7 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
           // turn was lazy and has no carrier, send consumes the normal target lease.
           const sendFinalChunk = this.deps.sendFinalChunk;
           const post = sendFinalChunk
-            ? (markdown: string) => sendFinalChunk(markdown, 0)
+            ? (markdown: string) => sendFinalChunk(markdown, 0, staleMessageId !== '')
             : staleMessageId
               ? (this.deps.repost ?? this.deps.send)
               : this.deps.send;
@@ -501,7 +502,7 @@ class TelegramStreamingTextHandle implements StreamingTextHandle {
         this.deliveredChunks += 1;
         try {
           await (this.deps.sendFinalChunk
-            ? this.deps.sendFinalChunk(chunk, index)
+            ? this.deps.sendFinalChunk(chunk, index, false)
             : this.deps.send(chunk));
           this.unconfirmedChunks.delete(index);
         } catch (err) {

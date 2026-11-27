@@ -1,5 +1,7 @@
-import { syncNewMakerDraftCache, getGroupAssistantPluginSelection, getSelectedNewMakerRoute } from '../../maker-host/newMakerDefaultsCache.js';
+import { syncNewMakerDraftCache, getGroupAssistantPluginSelection, getSelectedNewMakerRoute, GroupCindyRemoteEngineError } from '../../maker-host/newMakerDefaultsCache.js';
 import { admitPluginEngineSwitchTarget } from '../pluginEngineSessionAdmission.js';
+import { resolveSessionExecutionSelection, SessionModelUnavailableError, type SessionModelSelection } from '../sessionExecutionSelection.js';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../../shared/pluginEngines.js';
 import * as path from 'node:path';
 import { createSessionOptionsReconciler, type SessionExecutionRow } from '../sessionOptionsReconciler.js';
 import type { MakerSessionCreateOpts } from '../sessionRequest.js';
@@ -36,6 +38,7 @@ import { resolveSendToSessionCreateRoute } from '../sendToSessionExecutionConfig
 import { builtinAgentKindOrNull, hasBuiltinAgentKind, requireBuiltinAgentKind } from '../../maker-host/engineKind.js';
 import { createGhostAgentTurnRunner, type GhostAgentTurnRunnerDeps } from '../ghostAgentTurnRunner.js';
 import { sanitizeSourceName, buildMessageSourceNote, messageSourceSenderFromMeta } from '@cindy/maker-shared/message-source';
+import { buildSessionCreatedBy, serializeSessionCreatedBy } from '../../../shared/sessionOrigin.js';
 
 const registerSource = readFileSync(resolve(__dirname, '..', 'register.ts'), 'utf8').replace(
   /\r\n?/g,
@@ -244,6 +247,8 @@ function botTaskDispatchHarness(
         : null,
     getDbClient: () => dbClient,
     getCurrentDbClientSnapshot: () => dbClient,
+    buildSessionCreatedBy,
+    serializeSessionCreatedBy,
     normalizeAutoTitle,
     refineCreatedTaskTitle: asyncNoop,
     messages: {},
@@ -524,12 +529,20 @@ describe('external handoff to hidden group lanes', () => {
     const push = (selectedPluginEngine: unknown) => syncNewMakerDraftCache({ ownerStamp: owner,
       selectedPluginEngine, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, owner, 'user:1', false);
     const openSession = vi.fn(async () => ({ row: { id: 'created' } }));
-    const engine = { key: 'fixture:engine', availability: { state: 'available' }, models: [{ id: 'chosen' }],
-      permissionModes: [{ id: 'plan' }], defaultPermissionMode: 'ask' };
+    const engine = { key: 'fixture:engine', providerId, name: 'Fixture Engine',
+      availability: { state: 'available' }, models: [{ id: 'chosen' }],
+      permissionModes: [{ id: 'plan' }, { id: 'ask' }], defaultPermissionMode: 'ask' };
+    const localModel = { harness: 'codex', model: 'gpt-local', providerId: 'openai', effort: 'medium', fastMode: false };
+    const inspectAppDefaultModel = vi.fn(async () => ({ available: [{ route: localModel }] }));
+    const teammatePluginEngineModelChoices = vi.fn(() => (engine.availability.state === 'available'
+      ? [{ route: { providerId, model: 'chosen' }, displayName: 'Fixture Model' }] : []));
     const h = botTaskDispatchHarness({ created: { permissionMode: 'plan', planModeEnabled: true } }, {}, {
       captureSessionOwner: () => () => {}, activeOwnerScopeKey: () => 'user:1',
-      getGroupAssistantPluginSelection, getSelectedNewMakerRoute, admitPluginEngineSwitchTarget,
+      getGroupAssistantPluginSelection, getSelectedNewMakerRoute, admitPluginEngineSwitchTarget, GroupCindyRemoteEngineError,
+      SessionModelUnavailableError, PLUGIN_ENGINE_DEFAULT_MODEL,
       listPluginEngineViews: () => [engine], openSession, markGroupCindyTask: vi.fn(), broadcastSessionCreated: vi.fn(),
+      inspectAppDefaultModel, teammatePluginEngineModelChoices, getRemoteNewMakerDefaults: () => ({ permissionMode: 'ask' }),
+      permissionModeOrAsk: (mode: string | undefined) => mode ?? 'ask', log: { warn: vi.fn() },
       maker: { getSession: () => undefined, getSessionMeta: async () => ({ agentKind: 'acp' }) },
     });
     const request = { title: 'Group Cindy', projectDir: null };
@@ -543,16 +556,84 @@ describe('external handoff to hidden group lanes', () => {
     const input = { targetSessionId: opened.sessionId, clientId: 'bot-group:turn', message: 'Hello' };
     expect(await h.groupDispatch({ ...input, groupAssistantTask: true })).toMatchObject({ ok: true, wakeKind: 'queued' });
     expect(h.scope.enqueueSendToSessionMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(input));
-    for (const invalid of [{ ...selection, providerId: 'bad' }, { ...selection, deviceId: 'another-device' }]) {
-      push(invalid);
-      expect(await h.ensureGroupAssistantSession(request)).toMatchObject({ ok: false });
-    }
+    push({ ...selection, providerId: 'bad' });
+    expect(await h.ensureGroupAssistantSession(request)).toMatchObject({ ok: false, errorCode: 'LANE_UNAVAILABLE' });
+    expect(openSession).toHaveBeenCalledTimes(1);
     engine.availability.state = 'unavailable';
     push(selection);
-    expect(await h.ensureGroupAssistantSession(request)).toMatchObject({ ok: false });
-    expect(openSession).toHaveBeenCalledTimes(1);
+    expect(await h.ensureGroupAssistantSession(request))
+      .toMatchObject({ ok: true, modelFallback: { name: 'gpt-local' } });
+    expect(openSession).toHaveBeenCalledTimes(2);
+    // 2026-11-26 incident: a new-task engine on another computer failed every @Cindy with a bare
+    // RUNTIME_ERROR. The executing computer now answers with its own model and says so; with no
+    // model at all it is the public MODEL_UNAVAILABLE, not a runtime error.
+    push({ ...selection, deviceId: 'another-device' });
+    expect(await h.ensureGroupAssistantSession(request))
+      .toMatchObject({ ok: true, sessionId: 'created', created: true, modelFallback: { name: 'gpt-local' } });
+    expect(openSession).toHaveBeenLastCalledWith(expect.objectContaining({ body: expect.objectContaining({
+      agentKind: 'codex', providerId: 'openai', model: 'gpt-local',
+    }) }));
+    inspectAppDefaultModel.mockResolvedValueOnce({ available: [] });
+    expect(await h.ensureGroupAssistantSession(request))
+      .toMatchObject({ ok: false, errorCode: 'MODEL_UNAVAILABLE' });
+    expect(openSession).toHaveBeenCalledTimes(3);
+    // #13163 review, existing guard fixture: no built-in routes, but one local
+    // plugin model. Its new task must not inherit the remote engine's Plan mode.
+    engine.availability.state = 'available';
+    inspectAppDefaultModel.mockResolvedValueOnce({ available: [] });
+    expect(await h.ensureGroupAssistantSession(request))
+      .toMatchObject({ ok: true, sessionId: 'created', created: true, modelFallback: { name: 'Fixture Model' } });
+    expect(openSession).toHaveBeenLastCalledWith(expect.objectContaining({ body: expect.objectContaining({
+      agentKind: 'acp', providerId, model: 'chosen', permissionMode: 'ask',
+    }) }));
     push(undefined);
   });
+
+  // #13163 §9: the registered opener admits the cached route before writing a row. The existing
+  // plugin fixture misses built-in location, provider and catalog failures. Guard tier (same
+  // production opener slice): exercise the real built-in resolver up to the storage port.
+  it.each(['remote', 'share', 'provider missing', 'model missing', 'engine missing', 'no fallback', 'bad tuning'] as const)(
+    'uses only an admitted local model for a built-in Cindy selection (%s)', async scenario => {
+      const owner = { dataOwnerId: 'user', ownerGeneration: 1 };
+      const local = { harness: 'codex', model: 'local', providerId: 'local-provider', effort: '', fastMode: false };
+      const selected = { ...local,
+        ...(scenario === 'provider missing' || scenario === 'no fallback' ? { providerId: 'gone' } : {}),
+        ...(scenario === 'model missing' ? { model: 'gone' } : {}),
+        ...(scenario === 'engine missing' ? { harness: 'claude' } : {}),
+        ...(scenario === 'remote' || scenario === 'share' ? { agentDeviceId: scenario === 'remote' ? 'other-device' : 'share:other' } : {}),
+        ...(scenario === 'bad tuning' ? { effort: 'high' } : {}),
+      };
+      const persist = vi.fn((_selection: ReturnType<typeof resolveSessionExecutionSelection>) => ({ row: { id: 'created' } }));
+      const openSession = async ({ body }: { body: SessionModelSelection }) => persist(resolveSessionExecutionSelection({
+        selection: body, availableAgents: ['codex'], availableModels: [{ id: local.model }], hasCindyAiApiKey: true,
+        providerRouting: { availability: { 'claude-code': [], pi: [], codex: [{ id: local.providerId, name: 'Local', models: [local.model] }] },
+          resolveDefaultProviderIdForModel: () => local.providerId },
+      }));
+      const h = botTaskDispatchHarness({}, {}, {
+        captureSessionOwner: () => () => {}, activeOwnerScopeKey: () => 'user:1',
+        getGroupAssistantPluginSelection, getSelectedNewMakerRoute, GroupCindyRemoteEngineError, SessionModelUnavailableError,
+        inspectAppDefaultModel: async () => ({ available: scenario === 'no fallback' ? [] : [{ route: local }] }),
+        listPluginEngineViews: () => [], teammatePluginEngineModelChoices: () => [],
+        getRemoteNewMakerDefaults: () => ({ permissionMode: 'ask' }), permissionModeOrAsk,
+        openSession, markGroupCindyTask: vi.fn(), broadcastSessionCreated: vi.fn(), log: { warn: vi.fn() },
+      });
+      const push = (selectedRoute?: typeof selected) => syncNewMakerDraftCache({ ownerStamp: owner,
+        selectedRoute, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, owner, 'user:1', false);
+      expect(push(selected)).toBe(true);
+      try {
+        const opened = await h.ensureGroupAssistantSession({ title: 'Group Cindy', projectDir: null });
+        if (scenario === 'no fallback' || scenario === 'bad tuning') {
+          expect(opened).toMatchObject({ ok: false, errorCode: scenario === 'no fallback' ? 'MODEL_UNAVAILABLE' : 'LANE_UNAVAILABLE' });
+          expect(persist).not.toHaveBeenCalled();
+        } else {
+          expect(opened).toMatchObject({ ok: true, modelFallback: { name: local.model } });
+          expect(persist).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ model: local.model, providerId: local.providerId }));
+        }
+      } finally {
+        push();
+      }
+    },
+  );
 
   it('preserves host continuations inside a group lane', async () => {
     const h = groupHarness(false);
