@@ -188,7 +188,7 @@ export function summarizeSchedule(
     detail: [
       describeScheduleTiming(schedule, localizer),
       describeRunSessionLabel(schedule, localizer),
-      humanizeAgentKind(schedule.agentKind),
+      humanizeAgentKind(schedule.agentKind, localizer),
       describeDestination(schedule, localizer),
     ].filter(Boolean).join(' · '),
     runSessionDetail: describeRunSessionDetail(schedule, localizer),
@@ -475,9 +475,15 @@ function formatRunDuration(ms: number, localizer?: PresentationLocalizer): strin
       });
 }
 
-function humanizeAgentKind(agentKind: RemoteSchedule['agentKind']): string {
+function humanizeAgentKind(
+  agentKind: RemoteSchedule['agentKind'],
+  localizer?: PresentationLocalizer,
+): string {
   if (agentKind === 'codex') return 'Codex';
   if (agentKind === 'pi') return 'Pi';
+  if (agentKind === 'acp') {
+    return presentationText(localizer, 'models.pluginEngines.genericName', '插件引擎');
+  }
   return 'Claude';
 }
 

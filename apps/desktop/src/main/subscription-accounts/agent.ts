@@ -1,5 +1,7 @@
 import {
   NATIVE_SUBSCRIPTION_ACCOUNT,
+  LOCAL_AGENT_CLIENT,
+  isolatedBotProfile,
   AgentStartupStoppedError,
   AgentStartupCleanupPendingError,
   AgentNotAuthenticatedError,
@@ -527,6 +529,10 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
                 accountId: imported, resuming: !!options.resumeSessionId, includeApiKeys: true,
                 ...(target.kind === 'codex' || target.kind === 'pi' || target.kind === 'claude-code' ? { agent: target.kind } : {}),
                 ...(tried.size ? { exclude: tried } : {}),
+                // Mirrors the Claude adapter's settingSources: these sessions start without user settings.
+                ...(target.kind === 'claude-code' && (options.reviewMode || options.deviceHosted
+                  || isolatedBotProfile(options.botRuntimeProfile) || options[LOCAL_AGENT_CLIENT]?.hostToolsOnly)
+                  ? { userSettingsLoaded: false } : {}),
               });
               if (!lease) {
                 if (lastFailure !== undefined) throw lastFailure;

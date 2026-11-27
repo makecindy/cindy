@@ -315,7 +315,11 @@ async function readUsage(
     let usage: GhostHarnessUsage | null = null;
     try {
       const dir = dirOf(ref, accountId);
-      usage = await (dir === undefined ? readPluginHarnessUsage(ref.engineKey) : readPluginHarnessUsage(ref.engineKey, dir));
+      usage = await (force
+        ? readPluginHarnessUsage(ref.engineKey, dir, { force: true })
+        : dir === undefined
+          ? readPluginHarnessUsage(ref.engineKey)
+          : readPluginHarnessUsage(ref.engineKey, dir));
     } catch {
       usage = cached?.usage ?? null;
     }
