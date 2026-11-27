@@ -183,7 +183,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
       ? {
           width: effectiveWidth,
           flexShrink: 1,
-          maxWidth: `max(0px, calc(100% - ${CHAT_AREA_MIN_WIDTH}px))`,
+          maxWidth: `max(0px, calc(100% - var(--layout-chat-min, ${CHAT_AREA_MIN_WIDTH}px)))`,
         }
       : undefined;
   const contentStyle: CSSProperties | undefined =
@@ -210,7 +210,7 @@ export const RightSidebar = forwardRef<RightSidebarHandle, RightSidebarProps>(fu
         // width —— 否则普通态的引擎 pane width 在 main hidden 后仍会留下固定宽,
         // 无法接管全部剩余空间(2026-07-01 用户实测 bug:maximize 后文件树消失)。
         // 非 maximize:width prop 只作为 preferred width。允许 flex shrink,配合 main
-        // 的 min-w-[400px] 让极窄窗口下 RSB 温和变窄,避免 280px 目标宽硬顶出窗口。
+        // 的 --layout-chat-min 让窄窗下 RSB 温和变窄且不压成 0 宽,避免硬顶出窗口。
         isMaximized ? 'flex-1' : 'shrink',
         'min-w-0 max-w-full',
         'overflow-hidden',
