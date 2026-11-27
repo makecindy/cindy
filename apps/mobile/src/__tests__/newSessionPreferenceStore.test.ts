@@ -112,7 +112,9 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: {},
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
+      pluginEngineByDevice: {},
     });
     expect(JSON.parse(store.get(__testing.storageKey) ?? '{}')).toEqual({
       agentKind: 'codex',
@@ -140,7 +142,9 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: {},
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
+      pluginEngineByDevice: {},
     });
 
     store.set(__testing.storageKey, '{broken');
@@ -150,7 +154,9 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: {},
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
+      pluginEngineByDevice: {},
     });
 
     await saveNewSessionPreferences({
@@ -162,7 +168,9 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: {},
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
+      pluginEngineByDevice: {},
     });
   });
 
@@ -191,7 +199,9 @@ describe('newSessionPreferenceStore', () => {
       lastPermissionMode: 'ask',
       permissionModeByAgent: { 'claude-code': 'ask', codex: 'ask' },
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
+      pluginEngineByDevice: {},
     });
 
     // 插件引擎写入 lastPermissionMode 时同步保留给内置与插件引擎沿用（default -> ask）。
@@ -211,7 +221,9 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: null,
       permissionModeByAgent: { codex: 'auto' },
       workingDirByDevice: {},
+      workspaceKindByDevice: {},
       remoteAgentByDevice: {},
+      pluginEngineByDevice: {},
     });
   });
 
@@ -237,21 +249,34 @@ describe('newSessionPreferenceStore', () => {
       workspaceKind: 'dialogue',
       permissionModeByAgent: {},
       workingDirByDevice: { devA: '/repo/fourth', devB: ' /other/app ' },
+      workspaceKindByDevice: { devA: 'project', devB: 'project' },
       remoteAgentByDevice: {},
+      pluginEngineByDevice: {},
     });
     expect(JSON.parse(store.get(__testing.storageKey) ?? '{}')).toEqual({
       workspaceKind: 'dialogue',
     });
     expect(JSON.parse(store.get(__testing.workingDirStorageKey(accountVaultKey('global', 'account-a'))) ?? '{}')).toEqual({ devA: '/repo/fourth', devB: ' /other/app ' });
+    expect(JSON.parse(store.get(__testing.workspaceKindStorageKey(accountVaultKey('global', 'account-a'))) ?? '{}')).toEqual({ devA: 'project', devB: 'project' });
+
+    // Switching one device explicitly to dialogue records that device without clearing another device's project.
+    await saveNewSessionPreferences({ workspaceKindForDevice: { deviceId: 'devB', workspaceKind: 'dialogue' } });
+    await expect(readNewSessionPreferences()).resolves.toMatchObject({
+      workingDirByDevice: { devA: '/repo/fourth', devB: ' /other/app ' },
+      workspaceKindByDevice: { devA: 'project', devB: 'dialogue' },
+    });
 
     // 落盘里的非法条目(非字符串 / 空)在读取时被清洗,旧存储没有该字段也不报错。
     store.set(__testing.workingDirStorageKey(accountVaultKey('global', 'account-a')), JSON.stringify({ devA: '/repo/ok', devB: 42, ' ': '/x', devC: '', devD: ' /keep me ' }));
+    store.set(__testing.workspaceKindStorageKey(accountVaultKey('global', 'account-a')), JSON.stringify({ devA: 'project', devB: 'dialogue', devC: 'invalid', ' ': 'project' }));
     await expect(readNewSessionPreferences()).resolves.toMatchObject({
       workingDirByDevice: { devA: '/repo/ok', devD: ' /keep me ' },
+      workspaceKindByDevice: { devA: 'project', devB: 'dialogue' },
       remoteAgentByDevice: {},
     });
     store.set(__testing.workingDirStorageKey(accountVaultKey('global', 'account-a')), JSON.stringify('bad'));
-    await expect(readNewSessionPreferences()).resolves.toMatchObject({ workingDirByDevice: {} });
+    store.set(__testing.workspaceKindStorageKey(accountVaultKey('global', 'account-a')), JSON.stringify('bad'));
+    await expect(readNewSessionPreferences()).resolves.toMatchObject({ workingDirByDevice: {}, workspaceKindByDevice: {} });
   });
 
   // 回归:新建页选了其他电脑 / 分享来的模型，下次打开就回到被控电脑默认。按(账号, 被控电脑, agent)记,
@@ -271,6 +296,26 @@ describe('newSessionPreferenceStore', () => {
     await saveNewSessionPreferences({ remoteAgentForDevice: { deviceId: 'mac', agentKind: 'codex', pick: null } });
     await saveNewSessionPreferences({ remoteAgentForDevice: { deviceId: 'mac', agentKind: 'pi', pick: null } });
     expect((await readNewSessionPreferences()).remoteAgentByDevice).toEqual({});
+  });
+
+  it('remembers and isolates the selected plugin engine per controlled device and account', async () => {
+    const { readNewSessionPreferences, saveNewSessionPreferences } =
+      await import('@/session/newSessionPreferenceStore');
+    const pick = {
+      providerId: 'acp-plugin:dsh:dsh',
+      modelId: 'deepseek-v4',
+      effort: 'high' as const,
+      deviceId: 'share:s1',
+    };
+    await saveNewSessionPreferences({ pluginEngineForDevice: { deviceId: 'mac', selection: pick } });
+    expect((await readNewSessionPreferences()).pluginEngineByDevice).toEqual({ mac: pick });
+
+    setMobileAuthOwner('account-b');
+    expect((await readNewSessionPreferences()).pluginEngineByDevice).toEqual({});
+
+    setMobileAuthOwner('account-a');
+    await saveNewSessionPreferences({ pluginEngineForDevice: { deviceId: 'mac', selection: null } });
+    expect((await readNewSessionPreferences()).pluginEngineByDevice).toEqual({});
   });
 
   it('remembers either workspace mode across reloads without losing other preferences', async () => {

@@ -159,14 +159,47 @@ describe('claude-session-background-activity', () => {
   // 回合结束时一律熄灭。从没有回合外工作的插件不得触发。
   describe('插件引擎回合外工作', () => {
     let island: Array<[string, boolean, boolean]>;
-    const toolUse = (id: string, turnScope?: 'background'): AgentEvent =>
-      ({ type: 'tool_use', data: { toolUseId: id }, ...(turnScope ? { turnScope } : {}) });
+    const toolUse = (id: string, turnScope?: 'background', input?: unknown): AgentEvent =>
+      ({
+        type: 'tool_use',
+        data: { toolUseId: id, toolName: 'run_command', ...(input === undefined ? {} : { input }) },
+        ...(turnScope ? { turnScope } : {}),
+      });
     const toolResult = (id: string, turnScope?: 'background'): AgentEvent =>
       ({ type: 'tool_result', data: { toolUseIds: [id] }, ...(turnScope ? { turnScope } : {}) });
 
     beforeEach(() => {
       island = [];
       setPluginEngineBackgroundWorkListener((id, active, options) => island.push([id, active, options.turnStarting]));
+    });
+
+    // #13004 (unit): observePluginEngineEvent 接到补全的常驻命令输入后，两轮结束都应保持空闲。
+    // 相邻用例仅覆盖普通工具的完成与超时，没有覆盖未返回结果的服务与真正工作并存。
+    it.each([
+      { IsDaemon: true, CommandLine: 'custom-server' },
+      { CommandLine: 'pnpm dev' },
+    ])('常驻服务不跨回合占用运行状态，仍接收后台结果 %o', (input) => {
+      const sid = 'service';
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, toolUse('dev'));
+      observePluginEngineEvent(sid, {
+        type: 'tool_use', data: { toolUseId: 'dev', input, acpKind: 'execute', acpInputPatch: true },
+      });
+      noteClaudeSessionTurnState(sid, false);
+      noteClaudeSessionTurnState(sid, true);
+      noteClaudeSessionTurnState(sid, false);
+      expect(island).toEqual([]);
+
+      observePluginEngineEvent(sid, {
+        type: 'tool_use', data: { toolUseId: 'build', acpKind: 'execute', input: { command: 'pnpm build' } },
+        turnScope: 'background',
+      });
+      observePluginEngineEvent(sid, toolResult('dev', 'background'));
+      vi.advanceTimersByTime(ACTIVITY_WINDOW_MS + 100);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      observePluginEngineEvent(sid, toolResult('build', 'background'));
+      vi.advanceTimersByTime(ACTIVITY_WINDOW_MS + 100);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
     });
 
     it('回合结束仍有未完成的工具调用立即点亮,结果到达后按静默窗熄灭;没有回合外工作不触发', () => {
@@ -192,6 +225,56 @@ describe('claude-session-background-activity', () => {
       vi.advanceTimersByTime(1_100);
       expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
       expect(island.at(-1)).toEqual([sid, false, false]);
+    });
+
+    // #13004 / #13017:Antigravity 的 run_command 带 `IsDaemon: true` 起本地 dev server 时，
+    // 服务活着就永远不报 completed，命令本身也不会自己结束。它与 Claude Code 的
+    // `backgroundCommandKind=service` 同类：不能当成「Agent 还在跑，所以任务在运行中」。
+    // 最小失败输入：回合结束时仍挂着一条 IsDaemon 的服务调用 —— 旧实现让它点亮 31 分钟，
+    // 且每轮结束都重新计时。会自己结束的后台工作(构建、测试、等 CI)照旧点亮。
+    it('常驻服务不点亮:IsDaemon 标记与长驻命令都按服务算,真实后台工作仍点亮', () => {
+      const sid = 'agy-daemon';
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(
+        sid,
+        toolUse('dev', undefined, { CommandLine: 'unset HTTPS_PROXY && pnpm dev', IsDaemon: true }),
+      );
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+      expect(island).toEqual([]);
+
+      // 没带常驻标记,但命令本身是长驻开发服务(与 CC 后台命令分类同一判据)。
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, toolUse('vite', undefined, { command: 'vite --host 0.0.0.0' }));
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+
+      // 对照:同一个 Agent 里会自己结束的后台工作照旧点亮。
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, toolUse('checks', undefined, { command: 'pnpm test:unit:related' }));
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+    });
+
+    // ACP 真实形态先发空入参的 tool_call，再用 tool_call_update 补齐入参：
+    // 同一 toolUseId 会发两条 tool_use(第二条带 acpInputPatch)。第一条已经把 id 记进
+    // engineOpenTools，补上常驻标记时只跳过新增是不够的，必须把那条 id 撤掉。
+    it('先缺参后补上常驻标记时撤掉已记录的调用', () => {
+      const sid = 'agy-late-daemon';
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, toolUse('dev'));
+      observePluginEngineEvent(sid, {
+        type: 'tool_use',
+        data: {
+          toolUseId: 'dev',
+          toolName: 'run_command',
+          input: { CommandLine: 'pnpm dev', IsDaemon: true },
+          acpInputPatch: true,
+        },
+      });
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+      expect(island).toEqual([]);
     });
 
     it('回合外输出点亮、新回合让位;只剩等待中的调用时最多亮到上限', () => {

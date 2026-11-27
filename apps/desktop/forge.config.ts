@@ -727,6 +727,77 @@ function applyMacPackagedDisplayName(buildPath: string, platform: string): void 
   }
 }
 
+function readMacExecutableEntitlements(exePath: string): Buffer | undefined {
+  const result = spawnSync('codesign', ['--display', '--entitlements', '-', '--xml', exePath], {
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  if (result.error) throw result.error;
+  if (result.status === 0) return result.stdout.length > 0 ? result.stdout : undefined;
+
+  const stderr = result.stderr.toString().trim();
+  if (result.status === 1 && stderr.endsWith(': code object is not signed at all')) return undefined;
+  throw new Error(
+    `[forge:postPackage] Failed to read macOS entitlements (${exePath}): ${stderr || result.signal || result.status}`,
+  );
+}
+
+/**
+ * Give each packaged macOS app its own deterministic Mach-O LC_UUID before
+ * signing. Prebuilt Electron shares one stock LC_UUID across apps of the same
+ * Electron release; macOS Local Network privacy (nehelper) tracks executables
+ * by LC_UUID as well as bundle ID, so colliding with stock Electron.app or
+ * another Electron app causes macOS to suppress the one-time permission prompt
+ * and omit Cindy from System Settings > Local Network (verified 2026-11-26).
+ */
+async function applyMacUniqueExecutableUuid(buildPath: string, platform: string): Promise<void> {
+  if (platform !== 'darwin') return;
+  // Release builds without a pre-signing smoke test let finishDarwin sign the
+  // nested code before sealing the outer app. Forge's intermediate app can be unsigned.
+  const shouldResign =
+    process.platform === 'darwin' && process.env.CINDY_FORGE_DEFER_MAC_SIGNING !== '1';
+  const { deriveMacAppMachoUuid, patchMachoUuid } = await import('../../scripts/macos-macho-uuid.mjs');
+  const electronVersion = (_require('electron/package.json') as { version: string }).version;
+  const apps = fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'));
+  for (const appDir of apps) {
+    const exePath = path.join(buildPath, appDir, 'Contents', 'MacOS', CINDY_EXE);
+    if (!fs.existsSync(exePath)) {
+      throw new Error(`[forge:postPackage] macOS executable missing at ${exePath}`);
+    }
+    // Patching LC_UUID invalidates the signature that carries the original entitlements.
+    const entitlements = shouldResign ? readMacExecutableEntitlements(exePath) : undefined;
+    const nextUuid = deriveMacAppMachoUuid(CINDY_APP_ID, electronVersion);
+    const { previous, uuid } = patchMachoUuid(exePath, nextUuid);
+    if (shouldResign) {
+      // Refresh the local ad-hoc signature so unsigned `forge package` outputs
+      // stay launchable on Apple silicon; external release signing seals it again.
+      const args = ['--force', '--sign', '-'];
+      const tempDir = entitlements
+        ? fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mac-entitlements-'))
+        : undefined;
+      try {
+        if (tempDir && entitlements) {
+          const entitlementsPath = path.join(tempDir, 'entitlements.plist');
+          fs.writeFileSync(entitlementsPath, entitlements, { mode: 0o600 });
+          args.push('--entitlements', entitlementsPath);
+        }
+        const resign = spawnSync('codesign', [...args, exePath]);
+        if (resign.error) throw resign.error;
+        if (resign.status !== 0) {
+          const detail = resign.stderr.toString().trim() || resign.signal || resign.status;
+          throw new Error(
+            `[forge:postPackage] ad-hoc codesign failed after LC_UUID patch (${exePath}): ${detail}`,
+          );
+        }
+      } finally {
+        if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+    console.log(
+      `[forge:postPackage] mac LC_UUID ${previous.join(',')} → ${uuid} (${appDir}/Contents/MacOS/${CINDY_EXE})`,
+    );
+  }
+}
+
 /**
  * macOS Live Activity (Agent Island in the system Dynamic Island). `build.mjs` skips
  * every step unless the macOS 27.3 SDK and Apple silicon are available, so older
@@ -1085,6 +1156,12 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
         path.join(temporary, 'cindy-linux-desktop-capture'),
         path.join(destDir, 'cindy-linux-desktop-capture'),
       );
+      // Optional GNOME (Mutter/PipeWire) capture: builders without its headers
+      // skip it, and must not ship an earlier checkout's binary instead.
+      const gnomeCapture = path.join(destDir, 'cindy-linux-gnome-capture');
+      fs.rmSync(gnomeCapture, { force: true });
+      if (fs.existsSync(path.join(temporary, 'cindy-linux-gnome-capture')))
+        fs.copyFileSync(path.join(temporary, 'cindy-linux-gnome-capture'), gnomeCapture);
       const clipboard = spawnSync(
         process.execPath,
         [
@@ -2240,6 +2317,7 @@ const config: ForgeConfig = {
           console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
           signPackagedExes(buildPath);
           applyMacPackagedDisplayName(buildPath, opts.platform);
+          await applyMacUniqueExecutableUuid(buildPath, opts.platform);
           installMacAgentActivityExtension(buildPath, opts.platform, opts.arch);
           installMacDesktopWidgetsExtension(buildPath, opts.platform, opts.arch);
         }

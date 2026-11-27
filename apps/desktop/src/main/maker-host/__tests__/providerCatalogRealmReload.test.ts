@@ -16,6 +16,7 @@ import { remoteAccessProviderId } from '../mergedProviderPool.js';
 import { createHostProviderConfig } from '../../../../../host/src/agent/provider-config.js';
 import { projectSubscriptionPoolCatalog } from '../subscriptionPoolCatalog.js';
 import { createHostModelContext } from '../../../../../host/src/agent/model-context.js';
+import { resolvePiNativeProviders } from '../pi-host.js';
 
 const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
@@ -123,7 +124,7 @@ vi.mock('../../subscription-accounts/runtime.js', async (importOriginal) => {
     refreshSubscriptionPool: async (id: string) => {
       h.refreshed.add(id);
       if (h.poolRefreshError) throw h.poolRefreshError;
-      return { providerId: id, configured: true, strategy: 'least' as const, accounts: [] };
+      return { providerId: id, configured: true, strategy: 'expiring' as const, accounts: [] };
     },
     refreshSubscriptionPoolCodexModels: async () => undefined,
     refreshSubscriptionPoolClaudeModels: h.claudeModelRefresh,
@@ -234,6 +235,7 @@ vi.mock('../../ownerNamespaceMigration.js', () => ({
 }));
 vi.mock('../auth-adapters.js', () => ({
   readClaudeApiKey: () => null,
+  desktopClaudeAuthAdapter: { ensureSharedGlobalSkills: async () => {} },
   desktopCodexAuthAdapter: {
     hasCodexOAuthLogin: () => false,
     hasCodexOAuthLoginReadOnly: () => false,
@@ -241,6 +243,11 @@ vi.mock('../auth-adapters.js', () => ({
     readAccountPresentationState: async () => ({ authenticated: false }),
   },
 }));
+vi.mock('../anthropic-compat-proxy-host.js', () => ({
+  getClaudeEndpoint: () => 'http://127.0.0.1:18765',
+  isAnthropicCompatProxyHandleReady: () => true,
+}));
+vi.mock('../../agent-binaries/index.js', () => ({ getReadyBinaryPath: () => null }));
 vi.mock('../claude-native-auth.js', () => ({
   hasClaudeNativeLogin: () => false,
   hasClaudeNativeLoginUnbound: () => false,
@@ -390,7 +397,7 @@ describe('provider catalog realm reload', () => {
   // Unit: all task/provider consumers share this reader. A pending Claude SDK query
   // must not hold Codex/API/remote catalog reads; only explicit discovery waits for it.
   it('keeps ordinary provider reads responsive while Claude discovery is pending', async () => {
-    h.claudePool = { strategy: 'least', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
+    h.claudePool = { strategy: 'expiring', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
     let finish!: (value: boolean) => void;
     const discovery = new Promise<boolean>(resolve => { finish = resolve; });
     h.claudeModelRefresh.mockReturnValue(discovery);
@@ -422,7 +429,7 @@ describe('provider catalog realm reload', () => {
     const previous = getActiveCatalog();
     const model = { id: 'pool-inference-only', name: 'Pool inference only', contextWindow: 100_000,
       efforts: [], defaultEffort: null };
-    h.pool = { strategy: 'least', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
+    h.pool = { strategy: 'expiring', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
     h.poolModels = [model];
     let allowed = true;
     const binding = bindHostedSessionProvider('pool-inference', 'openai', () => allowed);
@@ -458,7 +465,7 @@ describe('provider catalog realm reload', () => {
     const model = (id: string): import('@cindy/model-providers').CatalogModel => ({
       id, name: id, contextWindow: 272_000, efforts: [], defaultEffort: null,
     });
-    h.pool = { strategy: 'least', disconnected: state === 'builtin-disconnected',
+    h.pool = { strategy: 'expiring', disconnected: state === 'builtin-disconnected',
       accounts: [builtin ? 'default' : 'a1', 'a2', 'b', 'imported'].map(id => ({ id, paused: false, limit: 4, weight: 1 })),
       legacyCodexAccounts: { 'legacy-imported': 'imported' } };
     h.created = { ...(!builtin ? { [original]: { kind: 'openai' as const, name: 'A', account: 'a1' } } : {}),
@@ -513,7 +520,7 @@ describe('provider catalog realm reload', () => {
     const model = (id: string): import('@cindy/model-providers').CatalogModel => ({
       id, name: id, contextWindow: 272_000, efforts: [], defaultEffort: null,
     });
-    h.pool = { strategy: 'least', accounts: ['a', 'b', 'legacy', 'imported'].map(id => ({ id, paused: false, limit: 4, weight: 1 })),
+    h.pool = { strategy: 'expiring', accounts: ['a', 'b', 'legacy', 'imported'].map(id => ({ id, paused: false, limit: 4, weight: 1 })),
       legacyCodexAccounts: { 'legacy-target': 'imported' } };
     h.created = {
       'openai-sub-a': { kind: 'openai', name: 'Account A', account: 'a' },
@@ -576,7 +583,7 @@ describe('provider catalog realm reload', () => {
   // run with a healthy account merged into it. Listing must refresh that target pool.
   it('refreshes legacy target pools and uses their aggregate connection state', async () => {
     const previous = getActiveCatalog();
-    h.pool = { strategy: 'least', accounts: ['imported', 'second'].map(id => ({ id, paused: false, limit: 4, weight: 1 })),
+    h.pool = { strategy: 'expiring', accounts: ['imported', 'second'].map(id => ({ id, paused: false, limit: 4, weight: 1 })),
       legacyCodexAccounts: { 'legacy-target': 'imported' } };
     h.placement = { 'openai:imported': 'legacy-target', 'openai:second': 'legacy-target' };
     const legacy: CustomProviderConfig = { id: 'legacy-target', name: 'Old OpenAI',
@@ -628,7 +635,7 @@ describe('provider catalog realm reload', () => {
     const openai = BUNDLED_CATALOG.providers.find(provider => provider.id === 'openai')!;
     const retained = { id: 'gpt-retained', name: 'Retained', contextWindow: 128_000, efforts: [], defaultEffort: null };
     const healthy = { ...retained, id: 'gpt-healthy' };
-    h.pool = { strategy: 'least', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
+    h.pool = { strategy: 'expiring', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
     h.retainedOpenAiModels = [retained];
     h.openAiSiblingHealthy = siblingHealthy;
     h.poolModels = [healthy];
@@ -689,7 +696,7 @@ describe('provider catalog realm reload', () => {
         providerId, id: modelId, name: 'GPT Image Gen', mode: 'image_generation',
         modalities: { input: ['text', 'image'], output: ['image'] },
       }] : []);
-    h.pool = { strategy: 'least', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
+    h.pool = { strategy: 'expiring', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
     h.created = { 'openai-sub-fixture': { kind: 'openai', name: 'OpenAI · second', account: 'second' } };
     h.poolModelsByProvider = { 'openai-sub-fixture': [{
       id: 'gpt-fixture', name: 'Fixture', contextWindow: 100_000, efforts: [], defaultEffort: null,
@@ -734,12 +741,12 @@ describe('provider catalog realm reload', () => {
   // Unit regression: a revoked default login cleared the supplier catalog even
   // after the pool selected a healthy second account. Existing coverage only
   // projected legacy connection aliases, not ordinary pool accounts.
-  it('keeps healthy pooled membership at the guest startup entry after default auth invalidation', async () => {
+  it('keeps healthy pooled membership at guest and Pi startup after default auth invalidation', async () => {
     const previous = getActiveCatalog();
     const model = (id: string): import('@cindy/model-providers').CatalogModel => ({
       id, name: id, contextWindow: 272_000, efforts: [], defaultEffort: null,
     });
-    h.pool = { strategy: 'least', accounts: ['default', 'second'].map(id => ({ id, paused: false, limit: 4, weight: 1 })) };
+    h.pool = { strategy: 'expiring', accounts: ['default', 'second'].map(id => ({ id, paused: false, limit: 4, weight: 1 })) };
     h.poolModels = [model('healthy-model')];
     try {
       setDiscoveredCodexModels([model('default-only')]);
@@ -750,6 +757,29 @@ describe('provider catalog realm reload', () => {
         expect(guestProviderModelIds(views, 'openai', 'codex')).toContain('healthy-model');
         expect(guestProviderModelIds(views, 'openai', 'codex')).not.toContain('default-only');
       }
+      // #10327 late P1: the picker/guest catalog was pooled but the actual Pi
+      // startup resolver still read the invalid default account. No real CLI/IO.
+      h.customProviderRead.mockResolvedValue([]);
+      for (const purpose of ['startup', 'live-refresh', 'preview'] as const) {
+        const native = await resolvePiNativeProviders({ workingDir: process.cwd(),
+          providerId: 'openai', model: 'chatgpt/healthy-model', purpose });
+        expect(native.providers.find(p => p.sourceProviderId === 'openai')).toMatchObject({
+          id: 'openai-codex', baseUrl: 'http://127.0.0.1:18765',
+          modelIdAliases: { 'healthy-model': 'chatgpt/healthy-model' },
+          models: expect.arrayContaining([expect.objectContaining({ id: 'chatgpt/healthy-model', wireId: 'healthy-model' })]),
+        });
+      }
+      // A separately named pool must use only its own account membership.
+      setSubscriptionPoolProviders([{ id: 'openai-secondary', kind: 'openai', name: 'Second pool' }]);
+      h.poolModelsByProvider = { 'openai-secondary': [model('secondary-only')] };
+      const named = await resolvePiNativeProviders({ workingDir: process.cwd(),
+        providerId: 'openai-secondary', model: 'chatgpt/secondary-only' });
+      expect(named.providers.find(p => p.sourceProviderId === 'openai-secondary')?.models.map(m => m.wireId))
+        .toContain('secondary-only');
+      expect(named.providers.find(p => p.sourceProviderId === 'openai-secondary')?.models.map(m => m.wireId))
+        .not.toContain('healthy-model');
+      expect(named.providers.find(p => p.sourceProviderId === 'openai')?.models.map(m => m.wireId))
+        .not.toContain('secondary-only');
       h.poolModels = ['healthy-model', 'unshared-model', 'disabled-model', 'other-group-model'].map(model);
       h.disabledModels = { 'openai:disabled-model': true };
       const binder = createGuestProviderRouteBinder({
@@ -776,9 +806,14 @@ describe('provider catalog realm reload', () => {
         .toEqual(['healthy-model', 'gpt-history[1m]']);
       h.poolModels = [];
       expect(guestProviderModelIds(await service.listProviders({ snapshotOnly: true }), 'openai', 'codex')).toEqual([]);
+      expect((await resolvePiNativeProviders({ workingDir: process.cwd(), providerId: 'openai',
+        model: 'chatgpt/healthy-model' })).providers.find(p => p.sourceProviderId === 'openai')?.models
+        .some(m => m.id === 'chatgpt/healthy-model') ?? false).toBe(false);
     } finally {
       h.pool = null;
       h.poolModels = null;
+      h.poolModelsByProvider = {};
+      setSubscriptionPoolProviders([]);
       h.disabledModels = {};
       setDiscoveredCodexModels([]);
       setActiveCatalog(previous);
@@ -796,7 +831,7 @@ describe('provider catalog realm reload', () => {
       auth: { method: 'apiKey', native: 'codex' },
       models: { codex: [model('gpt-order[1m]'), model('imported-order-fixture')] },
     });
-    h.pool = { strategy: 'least', accounts: [{ id: 'imported', paused: false, limit: 4, weight: 1 }],
+    h.pool = { strategy: 'expiring', accounts: [{ id: 'imported', paused: false, limit: 4, weight: 1 }],
       legacyCodexAccounts: { 'legacy-order-fixture': 'imported' } };
     h.poolModels = null;
     h.legacyLoggedIn.add('legacy-order-fixture');
@@ -829,7 +864,7 @@ describe('provider catalog realm reload', () => {
     input.providers = [openai, { ...openai, id: 'openai-created', subscriptionPool: 'openai', models: { codex: [model('created-base')] } },
       { ...openai, id: 'borrower', models: { codex: [model('borrower-base')] } },
       imported('legacy-merged', 'merged-only'), imported('legacy-lent', 'lent-only'), imported('legacy-paused', 'paused-only')];
-    h.pool = { strategy: 'least', accounts: ['merged', 'lent', 'paused'].map(id => ({ id, paused: id === 'paused', limit: 4, weight: 1 })),
+    h.pool = { strategy: 'expiring', accounts: ['merged', 'lent', 'paused'].map(id => ({ id, paused: id === 'paused', limit: 4, weight: 1 })),
       legacyCodexAccounts: { 'legacy-merged': 'merged', 'legacy-lent': 'lent', 'legacy-paused': 'paused' } };
     h.placement = { 'openai:merged': 'openai-created', 'openai:lent': 'borrower', 'openai:paused': 'borrower' };
     h.created = { 'openai-created': { kind: 'openai', name: 'Created', account: 'merged' } };
@@ -854,8 +889,8 @@ describe('provider catalog realm reload', () => {
       const projected = projectSubscriptionPoolCatalog(input, ports, routing);
       expect(ids(projected, 'openai-created')).toEqual(routing ? ['created-base', 'merged-only', 'paused-only'] : ['created-base', 'merged-only']);
       expect(ids(projected, 'borrower')).toEqual(['borrower-base', 'lent-only']);
-      // Host only consumes selectable=false; even in a routing test it must not
-      // absorb the paused historical model into its selectable list.
+      // Pi startup uses full routing, but the picker still excludes bound-only models.
+      expect(ids(host.getRoutingCatalog(), 'openai-created')).toEqual(['created-base', 'merged-only', 'paused-only']);
       expect(ids(host.getSelectableCatalog(), 'openai-created')).toEqual(['created-base', 'merged-only']);
       expect(host.getSelectableCatalog()).toEqual(getDesktopSelectableCatalog());
     } finally {
@@ -873,7 +908,7 @@ describe('provider catalog realm reload', () => {
     h.created = { 'openai-discovery-created': { kind: 'openai', name: 'Created discovery', account: 'fixture' } };
     h.poolConnectionByProvider = { 'openai-discovery-created': { serving: true, bound: true } };
     const read = vi.spyOn(activeCatalogForHostParity, 'getActiveCatalog').mockReturnValue(input);
-    h.pool = { strategy: 'least', accounts: [{ id: 'fixture', paused: false, limit: 4, weight: 1 }] };
+    h.pool = { strategy: 'expiring', accounts: [{ id: 'fixture', paused: false, limit: 4, weight: 1 }] };
     h.poolModels = [{ id: 'pool-discovered', name: 'Pool discovered', contextWindow: 100_000, efforts: [], defaultEffort: null }];
     try {
       const host = createHostModelContext({ readGatewayKey: () => null, hasCodexOAuthLogin: () => false,
@@ -945,7 +980,7 @@ describe('provider catalog realm reload', () => {
     const previousOwner = h.owner;
     const previousPool = h.pool;
     h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
-    h.pool = { strategy: 'least', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
+    h.pool = { strategy: 'expiring', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
     const provider = 'openai-sub-1234abcd';
     const file = path.join(root, h.owner, 'subscription-account-placement.json');
     const image = (target: string) => JSON.stringify({ accounts: { 'openai:default': target },
@@ -1026,7 +1061,7 @@ describe('provider catalog realm reload', () => {
     const previousOwner = h.owner;
     const accountId = 'cindy-123456789abc-12345678-1234-1234-1234-123456789abc';
     h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
-    h.pool = { strategy: 'least', accounts: ['default', accountId].map(id => ({ id, paused: false, limit: 4, weight: 1 })) };
+    h.pool = { strategy: 'expiring', accounts: ['default', accountId].map(id => ({ id, paused: false, limit: 4, weight: 1 })) };
     h.customProviderRead.mockResolvedValue([]);
     h.copyAccountOverrides.mockClear();
     try {
@@ -1097,7 +1132,7 @@ describe('provider catalog realm reload', () => {
   // Codex connections to the restore of upgrade-merged accounts (subscription-account-pools.md).
   it('projects merged model membership under OpenAI while retaining compatibility routes', async () => {
     const previous = getActiveCatalog();
-    h.pool = { strategy: 'least', accounts: [{ id: 'imported', paused: false, limit: 4, weight: 1 }],
+    h.pool = { strategy: 'expiring', accounts: [{ id: 'imported', paused: false, limit: 4, weight: 1 }],
       legacyCodexAccounts: { 'legacy-imported': 'imported' } };
     h.placement = { 'openai:imported': 'openai' };
     h.legacyLoggedIn.add('legacy-imported');
@@ -2310,7 +2345,7 @@ describe('provider catalog realm reload', () => {
   // Last in this describe because it restarts the process-wide first load.
   it('finishes the startup catalog load when the Claude pool read hits an owner boundary', async () => {
     __testing.resetStartupCatalogLoad();
-    h.claudePool = { strategy: 'least', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
+    h.claudePool = { strategy: 'expiring', accounts: [{ id: 'second', paused: false, limit: 4, weight: 1 }] };
     h.poolRefreshError = new Error('Subscription account owner changed');
     const loadsBefore = h.loads.length;
     try {

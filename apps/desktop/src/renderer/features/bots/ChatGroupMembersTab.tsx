@@ -3,12 +3,13 @@
  * 身份一行；能操作的成员在行尾有「⋯」，右键同一行打开同一个菜单。菜单项只出现自己
  * 能做的：自己的伙伴调「在本群的权限」，群主/管理员设管理员、转让群主（只转给人）、移出。
  */
-import { useState } from 'react';
-import { MoreHorizontal, Search } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { createBotGroupMemberSearch } from '@cindy/maker-shared/botGroupMemberSearch';
+import { MoreHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Input } from '@/components/ui/input';
+import { SearchInput } from '@/components/ui/search-input';
 import type { BotGroupMemberView, BotGroupSummary } from '../../../shared/botGroupChat';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupExternalBadge } from './BotGroupExternalBadge';
@@ -32,20 +33,10 @@ export function ChatGroupMembersTab({ group, owner, manager, busy, actions }: {
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
-  const needle = query.trim().toLocaleLowerCase();
-  const shown = needle ? group.members.filter(member => [
-    botGroupMemberDisplayName(member),
-    member.name,
-    member.displayName,
-    member.orgName,
-    member.department,
-    member.departmentPath,
-  ].some(field => field?.toLocaleLowerCase().includes(needle))) : group.members;
+  const searchMembers = useMemo(() => createBotGroupMemberSearch(group.members, botGroupMemberDisplayName), [group.members]);
+  const shown = useMemo(() => searchMembers(query), [searchMembers, query]);
   return <>
-    <div className="relative">
-      <Search size={16} aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
-      <Input size="sm" value={query} onChange={setQuery} placeholder={t(key('searchMembers'))} aria-label={t(key('searchMembers'))} inputClassName="pl-9" />
-    </div>
+    <SearchInput value={query} onChange={setQuery} placeholder={t(key('searchMembers'))} aria-label={t(key('searchMembers'))} />
     <SettingsSection title={t(shared('members'))} count={shown.length} testId="chat-group-members">
       {shown.length
         ? <SettingsCard>{shown.map(member => <MemberRow key={member.actorId ?? member.botId} member={member} group={group}

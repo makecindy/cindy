@@ -35,6 +35,7 @@ describe('screenshot rendering recovery', () => {
   // expected that flash. Overlapping captured windows + deferred replies, tier: unit.
   // Standalone file: 1.52s on XD-PC (2026-10-28).
   it('keeps point-specific hits current and selects the corrected target', async () => {
+    vi.useFakeTimers();
     vi.stubGlobal('PointerEvent', MouseEvent);
     vi.stubGlobal('ImageData', class {
       data: Uint8ClampedArray;
@@ -46,7 +47,7 @@ describe('screenshot rendering recovery', () => {
     const bridge = {
       onBegin: (callback: typeof begin) => { begin = callback; return () => {}; },
       onEnd: () => () => {}, onClear: () => () => {},
-      shellReady() {}, abandon() {}, painted() {}, focused() {}, selectionStarted() {},
+      shellReady() {}, abandon() {}, painted: vi.fn(), focused() {}, selectionStarted() {},
       elementsAt: vi.fn(() => new Promise<RegionScreenshotHit>((resolve) => replies.push(resolve))),
     } as unknown as RegionScreenshotOverlayBridge;
     const { container } = render(<RegionScreenshotOverlay bridge={bridge} />);
@@ -54,7 +55,16 @@ describe('screenshot rendering recovery', () => {
     const outer = { id: 0, rect: { x: 0, y: 0, width: 500, height: 400 } };
     const corrected = { id: 1, rect: { x: 20, y: 20, width: 300, height: 300 } };
     const front = { id: 2, rect: { x: 200, y: 100, width: 50, height: 40 } };
-    await act(async () => begin({ token: 'one', locale: 'en', viewport: { width: 600, height: 500 }, safeArea: { x: 0, y: 0, width: 600, height: 500 }, scaleFactor: 1, frame: { width: 1, height: 1, data: new Uint8Array(4) }, windows: [front, outer, corrected], cursor: { x: 10, y: 10 }, lastRegion: null }));
+    await act(async () => {
+      begin({ token: 'one', locale: 'en', viewport: { width: 600, height: 500 }, safeArea: { x: 0, y: 0, width: 600, height: 500 }, scaleFactor: 1, frame: { width: 1, height: 1, data: new Uint8Array(4) }, windows: [front, outer, corrected], cursor: { x: 10, y: 10 }, lastRegion: null });
+      vi.advanceTimersToNextFrame();
+      vi.advanceTimersToNextFrame();
+      expect(bridge.painted).not.toHaveBeenCalled();
+    });
+    vi.advanceTimersToNextFrame();
+    vi.advanceTimersToNextFrame();
+    expect(bridge.painted).toHaveBeenCalledWith('one');
+    expect(screen.getByText('500 × 400')).toBeTruthy();
     fireEvent.pointerMove(root, { clientX: 40, clientY: 40 });
     await act(async () => replies[0]({ window: outer, rects: [{ x: 0, y: 0, width: 200, height: 200 }] }));
     expect(screen.getByText('500 × 400')).toBeTruthy();
