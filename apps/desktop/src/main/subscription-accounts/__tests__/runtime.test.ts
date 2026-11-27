@@ -268,6 +268,7 @@ vi.mock('../store.js', () => ({
 }));
 import {
   acquireSubscriptionAccount,
+  codexPoolResetAccountGone,
   hasUnavailableSubscriptionPoolAccount,
   isSubscriptionPoolReadUnreachable,
   needsSubscriptionAccountHandoff as probeSubscriptionAccountHandoff,
@@ -9302,5 +9303,30 @@ describe('unreachable account service', () => {
     await refreshSubscriptionPoolCodexModels();
     expect(hasConnectedSubscriptionPool('openai')).toBe(false);
     expect(readSubscriptionPoolCodexModels()).toEqual([]);
+  });
+});
+
+describe('codexPoolResetAccountGone', () => {
+  // #12390:被删除的订阅池账号留下的自动重置规则要能被识别为「残留」并清理;判定错方向
+  // (把还在的账号当残留)会误删设置,所以 legacy 导入连接、default 与读不到的池一律不算残留。
+  it('flags only pool-prefixed scopes whose account has left the pool', () => {
+    h.pools.openai = {
+      strategy: 'expiring',
+      accounts: [account('default'), account('cindy-o-keep')],
+      legacyCodexAccounts: { 'legacy-conn': 'cindy-o-legacy' },
+    };
+    expect(codexPoolResetAccountGone('openai-account:cindy-o-keep')).toBe(false);
+    expect(codexPoolResetAccountGone('openai-account:cindy-o-gone')).toBe(true);
+    // legacy 导入连接的 accountId 仍在 legacyCodexAccounts 里:设置属主是原连接,不能判残留。
+    expect(codexPoolResetAccountGone('openai-account:cindy-o-legacy')).toBe(false);
+    expect(codexPoolResetAccountGone('openai-account:default')).toBe(false);
+    expect(codexPoolResetAccountGone('openai')).toBe(false);
+
+    // 池读不到(null):不当成「没有账号」,fail closed 保留规则。
+    const saved = h.pools.openai;
+    h.pools = {};
+    expect(codexPoolResetAccountGone('openai-account:cindy-o-gone')).toBe(false);
+    h.pools.openai = saved;
+    expect(codexPoolResetAccountGone('openai-account:cindy-o-gone')).toBe(true);
   });
 });
