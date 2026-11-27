@@ -4021,6 +4021,7 @@ const botCompactRuntimeRefreshCoordinator = createBotCompactRuntimeRefreshCoordi
 });
 
 function attemptBotCompactRuntimeRefresh(session: WiredSession, trigger: string): void {
+  agentInputCoordinatorHolder?.onBotRouteIdleBoundary(session.id);
   if (!botCompactRuntimeRefreshCoordinator.hasPending(session.id)) return;
   void botCompactRuntimeRefreshCoordinator.attempt(session).then((outcome) => {
     if (outcome === 'refreshed') {
