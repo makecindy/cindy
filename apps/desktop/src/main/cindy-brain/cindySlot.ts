@@ -1,3 +1,4 @@
+import { isStrictBase64Chars, parseBase64DataUrl } from '@cindy/maker-shared';
 import type { PluginMediaRequestContext } from '../model-access/pluginMediaRequest.js';
 import { EvaluationError } from '../cindy-evaluate/errors.js';
 import type { EvaluationContext } from '../cindy-evaluate/service.js';
@@ -709,8 +710,13 @@ export class GhostCindySlot {
           readImage: async ref => {
             assertCurrent();
             if (ref.startsWith('data:')) {
-              if (ref.length > 44 * 1024 * 1024 || !/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]*={0,2}$/.test(ref)) throw new EvaluationError('INVALID_INPUT', '图片 data URL 无效或过大');
-              return Buffer.from(ref.slice(ref.indexOf(',') + 1), 'base64');
+              const parsed = ref.length <= 44 * 1024 * 1024
+                ? parseBase64DataUrl(ref, /^data:image\/(?:png|jpeg|webp|gif);base64$/, { allowEmpty: true })
+                : null;
+              if (!parsed || !isStrictBase64Chars(parsed.payload, { allowEmpty: true })) {
+                throw new EvaluationError('INVALID_INPUT', '图片 data URL 无效或过大');
+              }
+              return Buffer.from(parsed.payload, 'base64');
             }
             const hash = /^cindy-media:\/\/blobs\/([a-f0-9]{64})\.[a-z0-9]+$/.exec(ref)?.[1] ?? ref;
             const media = await this.deps.resolveOwnedMedia(ghostId, hash, owner);
