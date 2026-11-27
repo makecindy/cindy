@@ -385,6 +385,11 @@ export class AcpAgent extends BaseAgent {
           ...(writableDirs.length > 0 ? { writableDirs } : {}),
           ...(libraryRoot !== undefined ? { libraryRoot } : {}),
           ...(reviewMode ? { reviewMode: true, reviewReadGrants } : {}),
+          // Device-hosted tasks mutate files on the controller computer through cindy_exec,
+          // where RemoteExecutor captures pre-write snapshots on the real workspace.
+          ...(!reviewMode && !hosted && opts.sessionId && this.deps.turnChangeCapture
+            ? { captureSessionId: opts.sessionId, turnChangeCapture: this.deps.turnChangeCapture }
+            : {}),
           briefing,
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),

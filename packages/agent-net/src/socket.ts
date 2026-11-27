@@ -11,6 +11,7 @@ import type { KeyObject } from 'node:crypto';
 import { NativeTransport } from './nativeTransport.js';
 import { NodeNativeEngine, loadNodeNativeBinding, type NodeNativeBinding } from './nodeNativeEngine.js';
 import { resolveUdpHost, splitHostPort } from './stun.js';
+import { createPortMapSession } from './portMap.js';
 
 export interface AgentNetSocketOptions extends Omit<PortableSocketOptions, 'client' | 'bindings'> {
   client: AgentNetClient;
@@ -31,6 +32,7 @@ export interface AgentNetSocketOptions extends Omit<PortableSocketOptions, 'clie
    * Tests and benchmarks that tap datagrams or bind an address/port keep the WASM core, which has those.
    */
   native?: { binding: NodeNativeBinding | string; onFallback?(code: string): void };
+  portMapping?: boolean;
   onLog?: TransportOptions['onLog'];
 }
 /** Node bindings; device-link routing and framing are shared with mobile. */
@@ -66,7 +68,7 @@ export class AgentNetSocket extends PortableSocket {
         return createCoreTransport({ ...request,
           identity: options.client.identity.transportPrivateKey, module: options.module,
           bindAddress: options.bindAddress, bindPort: options.bindPort, udp: options.udp, stunServers: options.stunServers, tap: options.tap,
-          udpTraffic: options.udpTraffic, onLog: options.onLog,
+          udpTraffic: options.udpTraffic, onLog: options.onLog, portMapping: options.portMapping,
           relayUdpServer: options.relayUdpServer, publicCandidatesOnly: options.publicCandidatesOnly,
         });
       },
@@ -130,7 +132,9 @@ async function createNativeTransport(options: AgentNetSocketOptions, native: Non
     const own = await engine.command<{ transportKey?: string }>({ op: 'identity' });
     if (own.transportKey !== identity.transportKey) throw new Error('AGENT_NET_NATIVE_IDENTITY_MISMATCH');
   } catch (error) { await engine.destroy(); throw error; }
+  const enablePortMap = options.udp !== false && !options.publicCandidatesOnly && options.portMapping !== false;
   return NativeTransport.create(engine, { ...request, stunServers: options.stunServers, relayUdpServer: options.relayUdpServer,
-    udpTraffic: options.udpTraffic, publicCandidatesOnly: options.publicCandidatesOnly, resolveUdpServer },
+    udpTraffic: options.udpTraffic, publicCandidatesOnly: options.publicCandidatesOnly, resolveUdpServer, onLog: options.onLog,
+    ...(enablePortMap ? { createPortMap: createPortMapSession } : {}) },
     interfaceAddresses, true);
 }

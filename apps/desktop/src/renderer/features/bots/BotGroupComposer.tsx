@@ -114,13 +114,13 @@ import {
   useBotGroupThreadReplyAttempt, type BotGroupThreadReplyAttempt,
 } from './botGroupThreadReplies';
 import { GroupMaskIndicator } from './GroupMaskControls';
-import { useGroupMask } from './groupMaskPresentation';
+import { useGroupMaskControls } from './groupMaskPresentation';
 import { useBotGroupMentionPicker } from './useBotGroupMentionPicker';
 import { useBotGroupVoiceInput } from './useBotGroupVoiceInput';
 import { VoiceInputStatusNotice } from '@/voice-input/VoiceInputStatusNotice';
 import { isVoiceInputShortcutMatch } from '@/voice-input/shortcut';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
-import type { BotGroupInitialPaste, BotGroupTextInput } from './botGroupTextInput';
+import { botGroupInputElement, type BotGroupInitialPaste, type BotGroupTextInput } from './botGroupTextInput';
 import { isLongPasteText } from '@/components/new-chat/longPasteText';
 
 const BotGroupTextEditor = lazy(() => import('./BotGroupTextEditor').then(module => ({ default: module.BotGroupTextEditor })));
@@ -251,7 +251,7 @@ export function BotGroupComposer({
   const { preference: sendShortcutPreference } = useComposerSendShortcutPreference();
   const thread = mode === 'thread';
   const threadAttempt = useBotGroupThreadReplyAttempt(thread ? draftKey : null);
-  const groupMask = useGroupMask(groupId);
+  const groupMask = useGroupMaskControls(groupId);
   const [{ text, richText, initialPaste, foldRestoredValue }, setInput] = useState(() => {
     const text = threadAttempt?.sending ? '' : botGroupDraftText(getDraft(draftKey)?.text);
     const folded = isLongPasteText(text);
@@ -304,7 +304,7 @@ export function BotGroupComposer({
   // Same @ picker in the group and in a 话题; the 话题 also resolves the server's aliases.
   const mention = useBotGroupMentionPicker({
     text,
-    disabled: disabled || voice.isBusy,
+    disabled: disabled || sending || voice.isBusy,
     onTextChange: (value) => {
       // A 话题 reply is a new attempt as soon as its text changes (even if typed back the same).
       if (thread && threadAttempt && threadAttempt.text !== value.trim()) setBotGroupThreadReplyAttempt(draftKey, null);
@@ -723,7 +723,7 @@ export function BotGroupComposer({
   const noop = () => undefined;
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (isComposingKey(event)) return;
+    if (isComposingKey(event) || mention.composingRef.current) return;
     // The native shortcut owns its gesture, even when configured as Enter.
     if (isVoiceInputShortcutMatch(event.nativeEvent, getVoiceInputSettings().shortcut)) {
       event.preventDefault();
@@ -769,7 +769,13 @@ export function BotGroupComposer({
   };
 
   return (
-    <div data-bot-group-composer className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}>
+    <div data-bot-group-composer className={cn(BOT_GROUP_COMPOSER_DOCK, thread && 'px-4')}
+      onCompositionStartCapture={event => {
+        if (event.target === botGroupInputElement(textareaRef.current)) mention.composingRef.current = true;
+      }}
+      onCompositionEndCapture={event => {
+        if (event.target === botGroupInputElement(textareaRef.current)) mention.composingRef.current = false;
+      }}>
       <div className={cn(BOT_GROUP_COMPOSER_COLUMN, thread && 'max-w-none')}>
         {error ? <p role="alert" className="mb-2 text-13 text-[var(--error-fg)]">{error}</p> : null}
         {voice.lastError ? <VoiceInputStatusNotice message={voice.lastError} className="mb-2" /> : null}
@@ -916,7 +922,7 @@ export function BotGroupComposer({
                 </DropdownMenuContent>
               </DropdownMenu>
               {footerStart?.(sending)}
-              {!thread && conversationKind !== 'direct' && <GroupMaskIndicator groupId={groupId} onTakeOver={() => textareaRef.current?.focus()} />}
+              {groupMask && !thread && conversationKind !== 'direct' && <GroupMaskIndicator groupId={groupId} onTakeOver={() => textareaRef.current?.focus()} />}
               <span className="min-w-0 truncate text-12 text-[var(--text-tertiary)]" aria-live="polite">
                 {hint}
               </span>
