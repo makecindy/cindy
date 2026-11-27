@@ -77,6 +77,19 @@ describe('createXaiSubscriptionUsageReader', () => {
     expect(recover).toHaveBeenCalledTimes(sample.expected);
   });
 
+  // #13553 / unit: a failed scheduler store operation must not discard a successful vendor quota refresh.
+  it('records the fresh account snapshot even if clearing the scheduler hold fails', async () => {
+    const cached = { ...makeSnapshot(1), prepaidBalance: 0, accountFingerprint: 'account' };
+    const fresh = { ...cached, updatedAt: 2, prepaidBalance: 10 };
+    const { deps } = makeDeps({ cached, fetchSnapshot: vi.fn().mockResolvedValue(fresh) });
+    const error = new Error('simulated scheduler store error');
+    const reader = createXaiSubscriptionUsageReader({ ...deps, captureBillingRecovery: () => () => { throw error; } });
+    await reader.read();
+    await settle();
+    expect(deps.onRefreshError).toHaveBeenCalledWith(error);
+    expect(deps.recordSnapshot).toHaveBeenCalledExactlyOnceWith(fresh);
+  });
+
   it('clears on logout and on explicit credential change before refetching', async () => {
     const { deps, clearSnapshot, fetchSnapshot } = makeDeps({
       cached: makeSnapshot(0),

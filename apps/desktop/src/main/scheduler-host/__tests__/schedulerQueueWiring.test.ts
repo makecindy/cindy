@@ -41,6 +41,7 @@ vi.mock('../../notificationService.js', () => ({ getDesktopNotificationsEnabled:
 vi.mock('../../maker-ipc/scheduledSessionBootstrap.js', () => ({ captureScheduledOwnerGuard: mocks.captureGuard }));
 vi.mock('../../maker-ipc/register.js', () => ({
   bootstrapScheduledSession: vi.fn(),
+  resolveScheduledBillingFallback: vi.fn(async () => null),
   ensureSchedulerQueueRestored: mocks.restore,
   hasPendingSchedulerTargetInput: mocks.pendingInput,
   findSchedulerUsageLimitWait: mocks.quotaWait,

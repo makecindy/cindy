@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -770,7 +771,8 @@ describe('MakerScheduleRunner send outcome policy', () => {
 
   // #12353 / unit: two independent fires on one pinned Pi connection. The existing
   // single-session recovery tests cannot detect a second upstream generation.
-  it('skips the next pinned Pi schedule after an explicit Grok billing rejection', async () => {
+  // PR #13553: the accepted notification must retain and persist a rejection even when the first atomic rename fails.
+  it.each([0, 1, 2])('skips the next pinned Pi schedule after an explicit Grok billing rejection (failed writes=%i)', async writeFailures => {
     const dir = await mkdtemp(join(tmpdir(), 'cindy-billing-'));
     let owner = 1;
     vi.spyOn(ownerContext, 'ownerScopedPath').mockImplementation((...parts) => join(dir, String(owner), ...parts));
@@ -792,12 +794,29 @@ describe('MakerScheduleRunner send outcome policy', () => {
       vi.mocked(maker.createSession).mockResolvedValueOnce(h.session);
       return runner.fire(baseSchedule({ id, agentKind: 'pi', model: 'grok-4.6', providerId }), { ...createFireContext(), runId: id });
     }
+    let release!: () => void;
     try {
-      let release!: () => void;
       const gate = new Promise<void>(resolve => { release = resolve; });
       const inflight = expect(fire('inflight', 'xai', billing, gate)).rejects.toThrow(billing);
       await vi.waitFor(() => expect(generation).toHaveBeenCalledWith('inflight'));
+      let failedWrites = 0;
+      if (writeFailures) {
+        const rename = fs.renameSync;
+        vi.spyOn(fs, 'renameSync').mockImplementation((src, dst) => {
+          if (failedWrites < writeFailures && dst === join(dir, '1', 'scheduled-billing-holds.json')) {
+            failedWrites++;
+            throw new Error('simulated atomic rename failure');
+          }
+          return rename(src, dst);
+        });
+      }
       await expect(fire('first', 'xai', billing)).rejects.toThrow(billing);
+      await flushScheduledBillingWrites();
+      expect(failedWrites).toBe(writeFailures);
+      await expect(fire('after-notice', 'xai')).rejects.toThrow('Waiting for credits');
+      await flushScheduledBillingWrites();
+      const persisted = JSON.parse(await readFile(join(dir, '1', 'scheduled-billing-holds.json'), 'utf8'));
+      expect(persisted.holds.xai).toEqual({ version: expect.any(String), notified: true });
       const stale = captureManualPiBillingRecovery('xai');
       release();
       await inflight;
@@ -822,9 +841,16 @@ describe('MakerScheduleRunner send outcome policy', () => {
       recovered?.({ ...success, data: { status: 'cancelled', result: 'partial' } });
       await expect(fire('still-waiting', 'xai')).rejects.toThrow('Waiting for credits');
       recovered?.(success);
+      // A different writer records a newer rejection before our queued recovery acquires the lock.
+      const newerHold = { version: '00000000-0000-4000-8000-000000012353', notified: true };
+      fs.writeFileSync(join(dir, '1', 'scheduled-billing-holds.json'), JSON.stringify({ holds: { xai: newerHold } }));
+      await flushScheduledBillingWrites();
+      await expect(fire('after-competing-rejection', 'xai')).rejects.toThrow('Waiting for credits');
+      captureManualPiBillingRecovery('xai')?.(success);
       await expect(fire('recovered', 'xai')).resolves.toMatchObject({ resultText: 'done' });
       expect(generation.mock.calls.flat()).toEqual(['inflight', 'first', 'ordinary', 'other-allowed', 'rate', 'after-rate', 'timed', 'after-timed', 'another-owner', 'recovered']);
     } finally {
+      release?.();
       await flushScheduledBillingWrites();
       vi.restoreAllMocks();
       await rm(dir, { recursive: true, force: true });

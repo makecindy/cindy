@@ -150,7 +150,13 @@ export function createXaiSubscriptionUsageReader(
     attemptSeq: number,
   ): Promise<void> {
     try {
-      const recoverBilling = deps.captureBillingRecovery?.();
+      let recoverBilling: (() => void) | undefined;
+      try {
+        recoverBilling = deps.captureBillingRecovery?.();
+      } catch (err) {
+        // Optional scheduler evidence must not prevent the account from refreshing its quota.
+        deps.onRefreshError(err);
+      }
       const previous = recoverBilling ? await deps.readCachedSnapshot().catch(() => null) : null;
       const result = await deps.fetchSnapshot(credentials);
       if (generation !== refreshGeneration) return;
@@ -174,7 +180,9 @@ export function createXaiSubscriptionUsageReader(
         const toppedUp = previous.prepaidBalance != null && previous.prepaidBalance <= 0 && (result.prepaidBalance ?? 0) > 0;
         const subscribed = previous.planLabel?.trim().toLowerCase() === 'free' &&
           /^supergrok(?: heavy)?$/i.test(result.planLabel?.trim() ?? '');
-        if (toppedUp || subscribed) recoverBilling();
+        if (toppedUp || subscribed) {
+          try { recoverBilling(); } catch (err) { deps.onRefreshError(err); }
+        }
       }
       await deps.recordSnapshot(result);
       markSuccessSettled();

@@ -26,56 +26,82 @@ const file = createOverrideSettingsFile<Holds>({
 });
 
 // Publish a rejection synchronously, including while its durable write is taking the file lock.
-const pending = new Map<string, { hold: Hold | null }>();
+interface PendingChange {
+  hold: Hold | null;
+  // Shared by successive mutations for this connection. Advance only after an actual commit.
+  durable: { version: string | null };
+  retry?: () => void;
+}
+const pending = new Map<string, PendingChange>();
 let writes = Promise.resolve();
 
 export function scheduledBillingHold(providerId: string): Hold | null {
   const change = pending.get(ownerGeneration() + ':' + providerId);
-  if (change) return change.hold;
+  if (change) {
+    change.retry?.();
+    return change.hold;
+  }
   file.invalidateIfChanged();
   const holds = file.read().holds;
   return Object.hasOwn(holds, providerId) ? holds[providerId] : null;
 }
 
-function update(providerId: string, hold: Hold | null, expected?: string) {
+function update(providerId: string, hold: Hold | null, previous: Hold | null, newRejection = false) {
   const generation = ownerGeneration();
   const key = generation + ':' + providerId;
-  const change = { hold };
+  const durable = pending.get(key)?.durable ?? { version: previous?.version ?? null };
+  const change: PendingChange = { hold, durable };
   pending.set(key, change);
-  writes = writes.then(async () => {
-    if (generation !== ownerGeneration() || isOwnerBoundaryPending()) return;
-    await file.updateAtomic(({ value }) => {
-      if (expected && value.holds[providerId]?.version !== expected) return null;
-      const holds = { ...value.holds };
-      if (hold) return { holds: { ...holds, [providerId]: hold } };
-      delete holds[providerId];
-      return { holds };
+
+  function enqueue(compareVersion: boolean) {
+    change.retry = undefined;
+    writes = writes.then(async () => {
+      if (generation === ownerGeneration() && !isOwnerBoundaryPending()) {
+        let applied = false;
+        await file.updateAtomic(({ value }) => {
+          const storedVersion = value.holds[providerId]?.version ?? null;
+          if (compareVersion && storedVersion !== durable.version) return null;
+          applied = true;
+          if (hold) return { holds: { ...value.holds, [providerId]: hold } };
+          const holds = { ...value.holds };
+          delete holds[providerId];
+          return { holds };
+        });
+        if (applied) durable.version = hold?.version ?? null;
+      }
+      // A CAS miss exposes the other writer's state. Later queued writes still compare
+      // against our last real commit, so an old recovery cannot clear that other rejection.
+      if (pending.get(key) === change) pending.delete(key);
+    }).catch(() => {
+      // Keep blocking in memory on I/O failure. Retry on the next access, at most once
+      // while that write is in flight. The notification can also persist the full hold.
+      change.retry = () => enqueue(true);
+      log.warn('could not persist scheduled billing state');
     });
-  }).then(() => {
-    if (pending.get(key) === change) pending.delete(key);
-  }).catch(() => log.warn('could not persist scheduled billing state'));
+  }
+  enqueue(!newRejection);
 }
 
 /** Each rejection invalidates success evidence from requests already in flight. */
 export function rejectScheduledBilling(providerId: string): void {
   const previous = scheduledBillingHold(providerId);
-  update(providerId, { version: randomUUID(), notified: previous?.notified ?? false });
+  update(providerId, { version: randomUUID(), notified: previous?.notified ?? false }, previous, true);
 }
 
 export function claimScheduledBillingNotice(providerId: string): boolean {
   const hold = scheduledBillingHold(providerId);
   if (!hold || hold.notified) return false;
-  update(providerId, { ...hold, notified: true }, hold.version);
+  update(providerId, { ...hold, notified: true }, hold);
   return true;
 }
 
 export function captureScheduledBillingRecovery(providerId: string): (() => void) | undefined {
   const generation = ownerGeneration();
-  const version = scheduledBillingHold(providerId)?.version;
-  if (!version) return;
+  const hold = scheduledBillingHold(providerId);
+  if (!hold) return;
   return () => {
-    if (!isOwnerBoundaryPending() && generation === ownerGeneration() && scheduledBillingHold(providerId)?.version === version) {
-      update(providerId, null, version);
+    if (!isOwnerBoundaryPending() && generation === ownerGeneration() && scheduledBillingHold(providerId)?.version === hold.version) {
+      update(providerId, null, hold);
     }
   };
 }
