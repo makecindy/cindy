@@ -14,6 +14,7 @@ import { isSharedTaskPeer, parseProviderSharePeer } from '@cindy/device-link';
 import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import type { PluginHarness } from '../cindy-brain/pluginHarnesses.js';
 import type { SessionOpenBody } from '../localDb/sessionOpening.js';
+import { SessionModelUnavailableError } from './sessionExecutionSelection.js';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   isPluginEngineModelDisabled,
@@ -66,16 +67,16 @@ export function admitPluginEngineSession(
   // (plugin-engine-accounts).
   const harness = harnesses.find((item) => item.key === key.replace(/~[a-z0-9]{8}$/, ''));
   if (!harness) {
-    throw new Error('提供这个引擎的插件已停用或卸载。请在新建任务时重新选择模型。');
+    throw new SessionModelUnavailableError('提供这个引擎的插件已停用或卸载。请在新建任务时重新选择模型。');
   }
   const settings = settingsOf?.({ key });
-  if (settings?.suspended) throw new Error(pluginEngineSuspendedMessage(harness.name));
+  if (settings?.suspended) throw new SessionModelUnavailableError(pluginEngineSuspendedMessage(harness.name));
   if (harness.availability.state === 'unavailable') {
     const hint = harness.availability.message?.trim();
-    throw new Error(hint ? `${harness.name} 当前不可用：${hint}` : `${harness.name} 当前不可用。`);
+    throw new SessionModelUnavailableError(hint ? `${harness.name} 当前不可用：${hint}` : `${harness.name} 当前不可用。`);
   }
   const model = typeof body.model === 'string' && body.model.trim() ? body.model : PLUGIN_ENGINE_DEFAULT_MODEL;
-  if (isPluginEngineModelDisabled(model, settings?.disabledModels)) throw new Error(pluginEngineModelOffMessage(harness.name));
+  if (isPluginEngineModelDisabled(model, settings?.disabledModels)) throw new SessionModelUnavailableError(pluginEngineModelOffMessage(harness.name));
   const requested = body.effort;
   const offered = modelsOf(harness).find((item) => item.id === model)?.efforts ?? [];
   const saved = settings?.modelEfforts?.[model];
@@ -129,17 +130,17 @@ export function admitPluginEngineSwitchTarget(
   const key = pluginEngineKeyFromProviderId(target.providerId);
   if (!key) throw new Error('缺少插件引擎标识。请重新选择插件引擎。');
   const engine = engines.find((item) => item.key === key);
-  if (!engine) throw new Error('提供这个引擎的插件已停用或卸载。请重新选择模型。');
-  if (engine.suspended) throw new Error(pluginEngineSuspendedMessage(engine.name));
+  if (!engine) throw new SessionModelUnavailableError('提供这个引擎的插件已停用或卸载。请重新选择模型。');
+  if (engine.suspended) throw new SessionModelUnavailableError(pluginEngineSuspendedMessage(engine.name));
   if (engine.availability.state === 'unavailable') {
     const hint = engine.availability.message?.trim();
-    throw new Error(hint ? `${engine.name} 当前不可用：${hint}` : `${engine.name} 当前不可用。`);
+    throw new SessionModelUnavailableError(hint ? `${engine.name} 当前不可用：${hint}` : `${engine.name} 当前不可用。`);
   }
   const model = target.model.trim() ? target.model : PLUGIN_ENGINE_DEFAULT_MODEL;
-  if (engine.disabledModels?.some((item) => item.id === model)) throw new Error(pluginEngineModelOffMessage(engine.name));
+  if (engine.disabledModels?.some((item) => item.id === model)) throw new SessionModelUnavailableError(pluginEngineModelOffMessage(engine.name));
   if (engine.defaultModelAllowed === false
     && (model === PLUGIN_ENGINE_DEFAULT_MODEL || !engine.models.some((item) => item.id === model))) {
-    throw new Error(`${engine.name} 当前没有开放这个模型。请重新选择模型。`);
+    throw new SessionModelUnavailableError(`${engine.name} 当前没有开放这个模型。请重新选择模型。`);
   }
   const offered = engine.models.find((item) => item.id === model)?.efforts ?? [];
   const saved = engine.modelEfforts?.[model];

@@ -19,6 +19,7 @@ import {
   chatGroupOwnerName,
   botGroupNewMessageCount,
   botGroupActivityAt,
+  collapseBotGroupMemberJoined,
   latestBotGroupMessage,
 } from '../botGroupPresentation.js';
 import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary } from '../botGroupChat.js';
@@ -449,6 +450,53 @@ it('keeps concurrent execution updates between their original neighboring messag
     .toEqual(['request', 'first', 'second', 'later', 'newest']);
   expect(ids([second])).toEqual(['request', 'second', 'later']);
   expect(ids([])).toEqual(['request', 'later']);
+});
+
+describe('collapseBotGroupMemberJoined', () => {
+  const joined = (id: string, authorName: string, extra: Partial<BotGroupMessageView> = {}): BotGroupMessageView => ({
+    id, sequence: 1, kind: 'notice', authorKind: 'system', authorBotId: null, authorName,
+    content: '', noticeCode: 'member-joined', planId: null, files: [], attachments: [],
+    mentions: { all: false, botIds: [] }, createdAt: 1000, threadRootId: null, ...extra,
+  });
+  const chat = (id: string): BotGroupMessageView => ({
+    ...joined(id, 'Host'), kind: 'message', authorKind: 'user', noticeCode: null, content: 'Hello',
+  });
+
+  it('keeps isolated joins untouched and collapses consecutive runs with deduplicated names', () => {
+    const messages = [
+      joined('solo', 'Solo'),
+      chat('m1'),
+      joined('j1', 'Alice'),
+      joined('j2', 'Bob'),
+      joined('j3', 'Alice'),
+      joined('j4', 'Carol'),
+      chat('m2'),
+      joined('r1', 'Dave'),
+      joined('r2', 'Dave'),
+      { ...joined('other', 'Bot'), noticeCode: 'member-failed' as const },
+      joined('j5', 'Eve'),
+      joined('j6', 'Frank'),
+    ];
+    const result = collapseBotGroupMemberJoined(messages);
+    expect(result.messages.map((m) => m.id)).toEqual(['solo', 'm1', 'j1', 'm2', 'r1', 'other', 'j5']);
+    expect(result.joinedNamesByMessageId.has('solo')).toBe(false);
+    expect(result.joinedNamesByMessageId.get('j1')).toEqual(['Alice', 'Bob', 'Carol']);
+    expect(result.joinedNamesByMessageId.get('r1')).toEqual(['Dave']);
+    expect(result.joinedNamesByMessageId.get('j5')).toEqual(['Eve', 'Frank']);
+  });
+
+  it('breaks runs on deleted or empty-name notices', () => {
+    const messages = [
+      joined('j1', 'Alice'),
+      joined('j2', 'Deleted', { deleted: true }),
+      joined('j3', 'Bob'),
+      joined('j4', '   '),
+      joined('j5', 'Carol'),
+    ];
+    const result = collapseBotGroupMemberJoined(messages);
+    expect(result.messages.map((m) => m.id)).toEqual(['j1', 'j2', 'j3', 'j4', 'j5']);
+    expect(result.joinedNamesByMessageId.size).toBe(0);
+  });
 });
 
 // Server receipts can precede their durable message row; source identity must beat delayed starts.

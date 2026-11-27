@@ -15,7 +15,7 @@
  */
 
 import { imText } from './imText';
-import type { EngineKind, Effort, PermissionMode } from '@cindy/maker-core';
+import type { Effort, EngineKind, PermissionMode } from '@cindy/maker-core';
 
 import { makerToDbEngineKind } from '../../../shared/agentKindConversion';
 import { createLogger } from '../../logger';
@@ -33,7 +33,7 @@ export interface ChannelSessionRoute {
   model: string;
   providerId: string | null;
   /** 缺席 = 渠道没有显式指定(准入后的默认值不回写给调用方, 保持渠道原有省略语义)。 */
-  effort?: Effort;
+  effort?: Effort | '';
   /** 缺席同上。 */
   fastMode?: boolean | 'ultrafast';
   permissionMode: PermissionMode;
@@ -46,7 +46,7 @@ export interface ChannelSessionRoute {
 export interface AdmittedChannelRoute {
   model: string;
   providerId: string | null;
-  effort?: Effort;
+  effort?: Effort | '';
   fastMode?: boolean | 'ultrafast';
 }
 
@@ -107,7 +107,7 @@ export async function openChannelSession<T>(
         {
           model: row.model,
           providerId: row.providerId ?? null,
-          ...(route.effort !== undefined ? { effort: row.effort as Effort } : {}),
+          ...(route.effort !== undefined ? { effort: row.effort as Effort | '' } : {}),
           ...(route.fastMode !== undefined ? { fastMode: row.fastMode } : {}),
         },
         assertCurrent,

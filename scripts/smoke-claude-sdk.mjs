@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { once } from "node:events";
+import { closeSync, openSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -739,6 +740,36 @@ async function run() {
     assert.equal(forkResult.session_id, forkId);
     await forked.close();
     check("transcript read, persisted resume, fork and resumed fork");
+    if (process.platform !== "win32") {
+      // Long-lived subscription token (credentials-and-local-storage.md): Cindy hands the CLI the
+      // account's token file as an inherited descriptor. The variable is not in the official
+      // documentation, so each bundled CLI is checked here. Status is a local read; the token is fake.
+      const tokenFile = path.join(root, "long-lived-token");
+      await fs.writeFile(tokenFile, `sk-ant-oat01-${"A".repeat(95)}\n`, { mode: 0o600 });
+      const tokenEnv = {
+        PATH: process.env.PATH,
+        HOME: root,
+        CLAUDE_CONFIG_DIR: path.join(root, "claude-token-account"),
+        CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
+      };
+      const status = (format) => {
+        const handle = openSync(tokenFile, "r");
+        try {
+          return execFileSync(cli, ["--setting-sources", "", "auth", "status", format], {
+            env: tokenEnv,
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore", handle],
+          });
+        } finally {
+          closeSync(handle);
+        }
+      };
+      const tokenStatus = JSON.parse(status("--json"));
+      assert.equal(tokenStatus.loggedIn, true);
+      assert.equal(tokenStatus.authMethod, "oauth_token");
+      assert.match(status("--text"), /^Auth token: CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR$/m);
+      check("long-lived token read from an inherited file descriptor");
+    }
     if (arg("--daemon-bundle")) {
       await smokeManager({
         bundle: path.resolve(arg("--daemon-bundle")),

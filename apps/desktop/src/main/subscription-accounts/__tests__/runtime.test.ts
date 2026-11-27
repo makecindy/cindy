@@ -39,6 +39,8 @@ const h = vi.hoisted(() => ({
   rejectSnapshotRename: false,
   directoryEntries: vi.fn(),
   login: vi.fn(),
+  tokenCreate: vi.fn(),
+  tokenRemove: vi.fn(),
   bound: true,
   shared: true,
   legacyRead: vi.fn(),
@@ -177,6 +179,8 @@ vi.mock('../nativeCli.js', () => ({
   readNativeCodexTokens: h.tokens,
   readNativeAccountUsage: h.usage,
   loginNativeAccount: h.login,
+  createNativeLongLivedToken: h.tokenCreate,
+  removeNativeLongLivedToken: h.tokenRemove,
   readLegacyCodexAccount: h.legacyRead,
   loginLegacyCodexAccount: h.legacyLogin,
   readLegacyCodexProviderAccount: h.importedRead,
@@ -268,6 +272,7 @@ vi.mock('../store.js', () => ({
 }));
 import {
   acquireSubscriptionAccount,
+  codexPoolResetAccountGone,
   hasUnavailableSubscriptionPoolAccount,
   isSubscriptionPoolReadUnreachable,
   needsSubscriptionAccountHandoff as probeSubscriptionAccountHandoff,
@@ -291,6 +296,7 @@ import {
   readSubscriptionPoolScheduling,
   readLegacySubscriptionPoolUsage,
   readSubscriptionSessionUsage,
+  readSubscriptionTaskUsage,
   readSubscriptionSessionAccount,
   canSwitchHostedSubscriptionAccount,
   readSubscriptionPoolAccountUsages,
@@ -398,6 +404,8 @@ beforeEach(() => {
   h.modelCacheRead.mockReset().mockRejectedValue(new Error('no account cache'));
   h.directoryEntries.mockReset().mockResolvedValue([]);
   h.login.mockReset().mockResolvedValue(undefined);
+  h.tokenCreate.mockReset().mockResolvedValue(undefined);
+  h.tokenRemove.mockReset().mockResolvedValue(undefined);
   h.legacyRead.mockReset().mockResolvedValue({
     authenticated: true,
     identity: 'original@example.com',
@@ -6257,6 +6265,139 @@ describe('native account assignment on the executing computer', () => {
     expect(await readSubscriptionPoolAccountUsages('anthropic')).toBeUndefined();
     expect((await readSubscriptionPool('anthropic')).accounts.every((a) => !a.usage)).toBe(true);
   });
+
+  // Regression (unit): a shared created subscription provider (`anthropic-sub-*`) whose account
+  // was merged into the built-in pool previously returned `[]` from readSubscriptionPoolAccountUsages
+  // because it only checked providerAccounts instead of servingAccounts. Minimal failing input:
+  // created provider with pinned account moved to built-in `anthropic`.
+  it('resolves the pinned serving account and authoritative kind for merged created providers', async () => {
+    const providerId = 'anthropic-sub-a1b2c3d4';
+    h.created[providerId] = { kind: 'anthropic', name: 'Claude · Ultra', account: 'second' };
+    // Merged into built-in `anthropic`: no account is placed directly on `providerId`.
+    h.placement['anthropic:second'] = 'anthropic';
+    const resetsAt = Date.now() / 1000 + 3600;
+    h.usage.mockImplementation(async (_provider: string, dir: string) => ({
+      claudeUsage: {
+        updatedAt: Date.now(),
+        fiveHour: { utilization: dir.endsWith('second') ? 35 : 5, resetsAt },
+        sevenDay: { utilization: dir.endsWith('second') ? 60 : 10, resetsAt },
+      },
+    }));
+    const shared = await readSubscriptionPoolAccountUsages(providerId);
+    expect(shared).toEqual([
+      expect.objectContaining({
+        kind: 'anthropic',
+        usage: expect.objectContaining({
+          claudeUsage: expect.objectContaining({
+            fiveHour: expect.objectContaining({ utilization: 35 }),
+            sevenDay: expect.objectContaining({ utilization: 60 }),
+          }),
+        }),
+      }),
+    ]);
+    // Pausing or disconnecting the destination pool hides the merged share's quota instead of leaking.
+    h.pools.anthropic!.accounts = h.pools.anthropic!.accounts.map(a => a.id === 'second' ? { ...a, paused: true } : a);
+    expect(await readSubscriptionPoolAccountUsages(providerId)).toEqual([]);
+    h.pools.anthropic!.accounts = h.pools.anthropic!.accounts.map(a => ({ ...a, paused: false }));
+    h.pools.anthropic!.disconnected = true;
+    expect(await readSubscriptionPoolAccountUsages(providerId)).toEqual([]);
+  });
+
+  // Regression (unit): local and remote usage-limit reset lookups must read the task's actual
+  // bound subscription account or created subscription provider (`anthropic-sub-*` / `openai-sub-*`),
+  // never the legacy default CLI reader or another pool member.
+  it('reads task-scoped and created-provider subscription usage for reset lookups', async () => {
+    const providerId = 'anthropic-sub-a1b2c3d4';
+    h.created[providerId] = { kind: 'anthropic', name: 'Claude · Ultra', account: 'second' };
+    h.placement['anthropic:second'] = providerId;
+    const resetsAt = Date.now() / 1000 + 7200;
+    h.usage.mockImplementation(async (_provider: string, dir: string) => ({
+      claudeUsage: {
+        updatedAt: Date.now(),
+        fiveHour: { utilization: dir.endsWith('second') ? 100 : 12, resetsAt },
+      },
+    }));
+    h.bindings.set('task:task-1', { providerId: 'anthropic', accountId: 'second' });
+    h.bindings.set('native:sdk-1', { providerId: 'anthropic', accountId: 'second' });
+
+    // Task-bound lookup reads the pinned account even when default still has quota.
+    const taskUsage = await readSubscriptionTaskUsage('anthropic', {
+      sessionId: 'task-1',
+      nativeSessionId: 'sdk-1',
+      providerId,
+    });
+    expect(taskUsage?.claudeUsage?.fiveHour?.utilization).toBe(100);
+
+    // Remote legacy quota channel supports created providers with or without sdkSessionId and echoes providerId.
+    const withSession = await readLegacySubscriptionQuota(
+      readLegacySubscriptionPoolUsage,
+      'maker:usage:claude-subscription',
+      [providerId, true, { subscriptionSessionId: 'sdk-1' }],
+      readSubscriptionSessionUsage,
+    );
+    expect(withSession).toMatchObject({ providerId, fiveHour: { utilization: 100 } });
+
+    const firstTurn = await readLegacySubscriptionQuota(
+      readLegacySubscriptionPoolUsage,
+      'maker:usage:claude-subscription',
+      [providerId, true, 'default-subscription-account'],
+      readSubscriptionSessionUsage,
+    );
+    expect(firstTurn).toMatchObject({ providerId, fiveHour: { utilization: 100 } });
+
+    // Unbound native session on a created provider fails closed (null) instead of falling through to legacy default.
+    const unbound = await readLegacySubscriptionQuota(
+      readLegacySubscriptionPoolUsage,
+      'maker:usage:claude-subscription',
+      [providerId, true, { subscriptionSessionId: 'unknown-sdk' }],
+      readSubscriptionSessionUsage,
+    );
+    expect(unbound).toBeNull();
+
+    // Removed bound account fails closed (null) rather than borrowing another pool account.
+    h.pools.anthropic!.accounts = h.pools.anthropic!.accounts.filter(a => a.id !== 'second');
+    expect(await readSubscriptionTaskUsage('anthropic', { sessionId: 'task-1', providerId })).toBeNull();
+  });
+
+  // Regression (unit, PR #13205 review): fresh=true must bypass the 3-minute usage cache
+  // (forceUsage=true) so a post-limit lookup sees the newly exhausted window, and unbound
+  // pre-pool sessions with a nativeSessionId on a built-in provider must return undefined
+  // (default-account fallback) instead of picking another pool member with remaining quota.
+  it('forces fresh usage on post-limit task lookup and preserves pre-pool default fallback', async () => {
+    const resetsAt = Date.now() / 1000 + 7200;
+    let secondUtilization = 40;
+    h.usage.mockImplementation(async (_provider: string, dir: string) => ({
+      claudeUsage: {
+        updatedAt: Date.now(),
+        fiveHour: { utilization: dir.endsWith('second') ? secondUtilization : 100, resetsAt },
+      },
+    }));
+    h.bindings.set('task:bound-task', { providerId: 'anthropic', accountId: 'second' });
+
+    // Prime the 3-minute usage cache with a non-exhausted reading.
+    expect((await readSubscriptionTaskUsage('anthropic', { sessionId: 'bound-task', providerId: 'anthropic' }))
+      ?.claudeUsage?.fiveHour?.utilization).toBe(40);
+    // Exhaust quota externally; fresh=true must force a usage re-read rather than reusing 40%.
+    secondUtilization = 100;
+    expect((await readSubscriptionTaskUsage('anthropic', { sessionId: 'bound-task', providerId: 'anthropic' }, { fresh: true }))
+      ?.claudeUsage?.fiveHour?.utilization).toBe(100);
+
+    // Same forceUsage guarantee for a merged created provider resolved via pinnedOwnAccount.
+    const mergedId = 'anthropic-sub-a1b2c3d4';
+    h.created[mergedId] = { kind: 'anthropic', name: 'Claude · Merged', account: 'second' };
+    h.placement['anthropic:second'] = 'anthropic';
+    secondUtilization = 55;
+    expect((await readSubscriptionTaskUsage('anthropic', { providerId: mergedId }, { fresh: true }))
+      ?.claudeUsage?.fiveHour?.utilization).toBe(55);
+
+    // Unbound pre-pool session on built-in `anthropic` has a nativeSessionId and no binding:
+    // must return undefined so callers read the CLI default account instead of `second`.
+    expect(await readSubscriptionTaskUsage('anthropic', {
+      sessionId: 'pre-pool-task',
+      nativeSessionId: 'pre-pool-sdk-id',
+      providerId: 'anthropic',
+    }, { fresh: true })).toBeUndefined();
+  });
   // User-reported quota oscillation / unit: frequent SDK events used to renew
   // the cache clock forever. Existing tests never cross endpoint TTL with events.
   it('refreshes authoritative Claude percentages despite continuous SDK events', async () => {
@@ -9168,5 +9309,290 @@ describe('unreachable account service', () => {
     await refreshSubscriptionPoolCodexModels();
     expect(hasConnectedSubscriptionPool('openai')).toBe(false);
     expect(readSubscriptionPoolCodexModels()).toEqual([]);
+  });
+});
+
+// Unit, 2026-11-24 Claude long-lived token (subscription-account-pools.md「Claude 长期令牌」).
+// Production entries: runSubscriptionAccountCommand, readSubscriptionPool, acquireSubscriptionAccount
+// and observeSubscriptionAccountUsage. The service refuses profile reads for such a token (measured:
+// 403, scope user:profile), so the row's identity has to survive without it, and the account the
+// token spends can only be checked through quota windows. No earlier case has an account whose
+// tasks run on anything but its ordinary login. Minimal failing input: a status read that reports a
+// token login with no identity.
+describe('Claude long-lived token', () => {
+  const stored = {
+    authenticated: true, identity: 'second@example.test', plan: 'max', planTier: 'max_20x',
+    loginExpiresAt: '2030-01-05T00:00:00.000Z',
+  };
+  const onToken = (
+    storedLogin: boolean,
+    source: 'descriptor' | 'settings' = 'descriptor',
+    version = `${source}:v1`,
+  ) => storedLogin
+    ? { ...stored, longLivedToken: { source, storedLogin: true, version } }
+    : { authenticated: true, longLivedToken: { source, storedLogin: false, version } };
+  let second: Record<string, unknown>;
+  const restart = () => { h.owner = 'owner-a:' + ++generation; };
+  beforeEach(() => {
+    second = stored;
+    h.read.mockImplementation(async (_provider, directory) => directory === 'anthropic/default'
+      ? { authenticated: true, identity: 'first@example.test' } : second);
+  });
+
+  it('moves a signed-in account onto a token and keeps who it is after the ordinary sign-in ends', async () => {
+    h.tokenCreate.mockImplementation(async () => { second = onToken(true); });
+    const view = await runSubscriptionAccountCommand({
+      action: 'token-login', providerId: 'anthropic', accountId: 'second', loginKey: 'mint',
+    });
+    expect(h.tokenCreate).toHaveBeenCalledExactlyOnceWith('anthropic/second', expect.any(AbortSignal));
+    expect(view.accounts[1]).toMatchObject({
+      identity: 'second@example.test', status: 'ready', loginExpiresAt: stored.loginExpiresAt,
+      longLivedToken: { storedLogin: true, verification: 'pending' },
+    });
+    expect(Date.parse(view.accounts[1].longLivedToken!.expiresAt!)).toBeGreaterThan(Date.now() + 364 * 86_400_000);
+    expect(view.accounts[0].longLivedToken).toBeUndefined();
+
+    // About a month later the ordinary sign-in is gone; the token says nothing about the account.
+    second = onToken(false);
+    restart();
+    const later = await readSubscriptionPool('anthropic');
+    expect(later.accounts[1]).toMatchObject({
+      identity: 'second@example.test', plan: 'max', planTier: 'max_20x', status: 'ready',
+      longLivedToken: { storedLogin: false, verification: 'pending' },
+    });
+    expect(later.accounts[1].loginExpiresAt).toBeUndefined();
+  });
+
+  it('refuses an account that has no ordinary sign-in to be identified by', async () => {
+    second = { authenticated: false };
+    await expect(runSubscriptionAccountCommand({
+      action: 'token-login', providerId: 'anthropic', accountId: 'second', loginKey: 'mint',
+    })).rejects.toThrow('not_signed_in');
+    expect(h.tokenCreate).not.toHaveBeenCalled();
+    expect(h.pools.anthropic?.accounts[1]).not.toHaveProperty('longLivedToken');
+  });
+
+  it.each([
+    [0, 'verified'],
+    [3_600, 'mismatch'],
+  ] as const)('checks whose quota the token spends on its first task (windows %i s apart: %s)', async (offset, verdict) => {
+    const now = Math.floor(Date.now() / 1000);
+    const fiveHour = now + 3_600;
+    const sevenDay = now + 3 * 86_400;
+    second = onToken(true);
+    h.pools.anthropic!.accounts[0].paused = true;
+    h.usage.mockImplementation(async (_provider, directory) => directory === 'anthropic/second' ? { claudeUsage: {
+      fiveHour: { utilization: 10, resetsAt: fiveHour }, sevenDay: { utilization: 20, resetsAt: sevenDay },
+      source: 'oauth-endpoint', updatedAt: Date.now(),
+    } } : {});
+    const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+    expect(lease?.account.configDir).toBe('anthropic/second');
+    // The shape CLI 2.1.321 reports: both windows under unifiedWindows.
+    observeSubscriptionAccountUsage(lease!.account, { status: 'allowed', unifiedWindows: {
+      five_hour: { utilization: 0.3, resetsAt: fiveHour + offset },
+      seven_day: { utilization: 0.2, resetsAt: sevenDay + offset },
+    } }, { claudeTokenVersion: 'descriptor:v1' });
+    await vi.waitFor(() => expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBe(verdict));
+    lease!.release();
+    const view = await readSubscriptionPool('anthropic');
+    if (verdict === 'verified') {
+      expect(view.accounts[1]).toMatchObject({ status: 'ready', longLivedToken: { verification: 'verified' } });
+      return;
+    }
+    // A token for some other account spends that account's quota: stop assigning this row.
+    expect(view.accounts[1]).toMatchObject({
+      status: 'signed-out', identity: 'second@example.test', authIssue: 'claude-token-account-mismatch',
+      longLivedToken: { verification: 'mismatch' },
+    });
+    await expect(acquireSubscriptionAccount('anthropic', 'claude-sonnet', [])).rejects.toThrow('No subscription account is available');
+    // Authorizing again replaces the token and its verdict; the row must not be locked out of its own repair.
+    const renewed = await runSubscriptionAccountCommand({
+      action: 'token-login', providerId: 'anthropic', accountId: 'second', loginKey: 'again',
+    });
+    expect(h.tokenCreate).toHaveBeenCalledExactlyOnceWith('anthropic/second', expect.any(AbortSignal));
+    expect(renewed.accounts[1]).toMatchObject({ status: 'ready', longLivedToken: { verification: 'pending' } });
+    expect(renewed.accounts[1].authIssue).toBeUndefined();
+  });
+
+  it('ignores usage events from older ordinary-login or replaced-token CLI processes during verification', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const fiveHour = now + 3_600;
+    const sevenDay = now + 3 * 86_400;
+    h.pools.anthropic!.accounts[0].paused = true;
+    h.usage.mockImplementation(async (_provider, directory) => directory === 'anthropic/second' ? { claudeUsage: {
+      fiveHour: { utilization: 10, resetsAt: fiveHour }, sevenDay: { utilization: 20, resetsAt: sevenDay },
+      source: 'oauth-endpoint', updatedAt: Date.now(),
+    } } : {});
+    // Process started while the account was still on its ordinary login.
+    const oldLease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+    h.tokenCreate.mockImplementationOnce(async () => { second = onToken(true, 'descriptor', 'descriptor:v1'); });
+    await runSubscriptionAccountCommand({ action: 'token-login', providerId: 'anthropic', accountId: 'second', loginKey: 'mint-v1' });
+
+    // Events from the old ordinary-login process (null or omitted version) must not verify token v1.
+    const matchingEvent = { status: 'allowed', unifiedWindows: {
+      five_hour: { utilization: 0.3, resetsAt: fiveHour }, seven_day: { utilization: 0.2, resetsAt: sevenDay },
+    } };
+    observeSubscriptionAccountUsage(oldLease!.account, matchingEvent, { claudeTokenVersion: null });
+    observeSubscriptionAccountUsage(oldLease!.account, matchingEvent);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBeUndefined();
+
+    // Renewing to token v2: an event from a process still running token v1 must not verify v2.
+    h.tokenCreate.mockImplementationOnce(async () => { second = onToken(true, 'descriptor', 'descriptor:v2'); });
+    await runSubscriptionAccountCommand({ action: 'token-login', providerId: 'anthropic', accountId: 'second', loginKey: 'mint-v2' });
+    observeSubscriptionAccountUsage(oldLease!.account, matchingEvent, { claudeTokenVersion: 'descriptor:v1' });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBeUndefined();
+
+    // Only an event from a process launched with token v2 completes verification for v2.
+    observeSubscriptionAccountUsage(oldLease!.account, { status: 'allowed', unifiedWindows: {
+      five_hour: { utilization: 0.3, resetsAt: fiveHour + 3_600 }, seven_day: { utilization: 0.2, resetsAt: sevenDay + 3_600 },
+    } }, { claudeTokenVersion: 'descriptor:v2' });
+    await vi.waitFor(() => expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBe('mismatch'));
+    oldLease!.release();
+  });
+
+  it('forces a fresh account and ordinary-login quota read before marking mismatch', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const oldFiveHour = now + 3_600;
+    const updatedFiveHour = now + 7_200;
+    const sevenDay = now + 3 * 86_400;
+    second = onToken(true, 'descriptor', 'descriptor:v1');
+    h.pools.anthropic!.accounts[0].paused = true;
+    let usageCalls = 0;
+    h.usage.mockImplementation(async (_provider, directory) => {
+      if (directory !== 'anthropic/second') return {};
+      usageCalls += 1;
+      const fiveHour = usageCalls === 1 ? oldFiveHour : updatedFiveHour;
+      return { claudeUsage: {
+        fiveHour: { utilization: 10, resetsAt: fiveHour }, sevenDay: { utilization: 20, resetsAt: sevenDay },
+        source: 'oauth-endpoint', updatedAt: Date.now(),
+      } };
+    });
+    const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+    const readsBefore = h.read.mock.calls.length;
+    // Immediately (well inside the 30s snapshot TTL) report the updated window. The re-read must
+    // bypass the cache, fetch fresh ordinary-login quota, and conclude 'verified' instead of 'mismatch'.
+    observeSubscriptionAccountUsage(lease!.account, { status: 'allowed', unifiedWindows: {
+      five_hour: { utilization: 0.3, resetsAt: updatedFiveHour }, seven_day: { utilization: 0.2, resetsAt: sevenDay },
+    } }, { claudeTokenVersion: 'descriptor:v1' });
+    await vi.waitFor(() => expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBe('verified'));
+    expect(usageCalls).toBe(2);
+    expect(h.read.mock.calls.length).toBeGreaterThan(readsBefore);
+    expect(h.read.mock.calls.at(-1)?.[2]).toEqual({ force: true });
+    lease!.release();
+  });
+
+  it('does not mark mismatch when the confirmation quota re-read fails', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const oldFiveHour = now + 3_600;
+    const updatedFiveHour = now + 7_200;
+    const sevenDay = now + 3 * 86_400;
+    second = onToken(true, 'descriptor', 'descriptor:v1');
+    h.pools.anthropic!.accounts[0].paused = true;
+    let usageCalls = 0;
+    h.usage.mockImplementation(async (_provider, directory) => {
+      if (directory !== 'anthropic/second') return {};
+      usageCalls += 1;
+      if (usageCalls > 1) throw new Error('temporary network failure');
+      return { claudeUsage: {
+        fiveHour: { utilization: 10, resetsAt: oldFiveHour }, sevenDay: { utilization: 20, resetsAt: sevenDay },
+        source: 'oauth-endpoint', updatedAt: Date.now(),
+      } };
+    });
+    const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+    observeSubscriptionAccountUsage(lease!.account, { status: 'allowed', unifiedWindows: {
+      five_hour: { utilization: 0.3, resetsAt: updatedFiveHour }, seven_day: { utilization: 0.2, resetsAt: sevenDay },
+    } }, { claudeTokenVersion: 'descriptor:v1' });
+    await vi.waitFor(() => expect(usageCalls).toBe(2));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBeUndefined();
+    lease!.release();
+  });
+
+  it('does not let an in-flight mismatch check clobber a concurrent token renewal', async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const oldFiveHour = now + 3_600;
+    const updatedFiveHour = now + 7_200;
+    const sevenDay = now + 3 * 86_400;
+    second = onToken(true, 'descriptor', 'descriptor:v1');
+    h.pools.anthropic!.accounts[0].paused = true;
+    let finishReread!: () => void;
+    let usageCalls = 0;
+    h.usage.mockImplementation(async (_provider, directory) => {
+      if (directory !== 'anthropic/second') return {};
+      usageCalls += 1;
+      if (usageCalls === 2) await new Promise<void>(resolve => { finishReread = resolve; });
+      return { claudeUsage: {
+        fiveHour: { utilization: 10, resetsAt: oldFiveHour }, sevenDay: { utilization: 20, resetsAt: sevenDay },
+        source: 'oauth-endpoint', updatedAt: Date.now(),
+      } };
+    });
+    const lease = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+    observeSubscriptionAccountUsage(lease!.account, { status: 'allowed', unifiedWindows: {
+      five_hour: { utilization: 0.3, resetsAt: updatedFiveHour }, seven_day: { utilization: 0.2, resetsAt: sevenDay },
+    } }, { claudeTokenVersion: 'descriptor:v1' });
+    await vi.waitFor(() => expect(finishReread).toBeTypeOf('function'));
+    h.tokenCreate.mockImplementationOnce(async () => { second = onToken(true, 'descriptor', 'descriptor:v2'); });
+    const renewing = runSubscriptionAccountCommand({ action: 'token-login', providerId: 'anthropic', accountId: 'second', loginKey: 'race' });
+    finishReread();
+    const renewed = await renewing;
+    expect(renewed.accounts[1]).toMatchObject({ status: 'ready', longLivedToken: { verification: 'pending' } });
+    expect(h.pools.anthropic!.accounts[1].longLivedToken?.verification).toBeUndefined();
+    lease!.release();
+  });
+
+  it('keeps a token stored in user settings away from sessions that start without them', async () => {
+    second = onToken(false, 'settings');
+    h.pools.anthropic!.accounts[0].paused = true;
+    await expect(acquireSubscriptionAccount('anthropic', 'claude-sonnet', [], false, { userSettingsLoaded: false }))
+      .rejects.toThrow('No subscription account is available');
+    const local = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', []);
+    expect(local?.account.configDir).toBe('anthropic/second');
+    local?.release();
+    expect((await readSubscriptionPool('anthropic')).accounts[1].longLivedToken).toMatchObject({ settingsOnly: true });
+
+    // A token handed over as a descriptor reaches every kind of session.
+    second = onToken(false);
+    restart();
+    const hosted = await acquireSubscriptionAccount('anthropic', 'claude-sonnet', [], false, { userSettingsLoaded: false });
+    expect(hosted?.account.configDir).toBe('anthropic/second');
+    hosted?.release();
+  });
+
+  it('takes the token away again and forgets its notes', async () => {
+    second = onToken(true);
+    h.pools.anthropic!.accounts[1] = { ...account('second'), longLivedToken: { mintedAt: 1, verification: 'verified' } };
+    h.tokenRemove.mockImplementation(async () => { second = stored; });
+    const view = await runSubscriptionAccountCommand({ action: 'token-remove', providerId: 'anthropic', accountId: 'second' });
+    expect(h.tokenRemove).toHaveBeenCalledExactlyOnceWith('anthropic/second');
+    expect(view.accounts[1]).toMatchObject({ status: 'ready', identity: 'second@example.test', loginExpiresAt: stored.loginExpiresAt });
+    expect(view.accounts[1].longLivedToken).toBeUndefined();
+    expect(h.pools.anthropic!.accounts[1]).not.toHaveProperty('longLivedToken');
+  });
+});
+
+describe('codexPoolResetAccountGone', () => {
+  // #12390:被删除的订阅池账号留下的自动重置规则要能被识别为「残留」并清理;判定错方向
+  // (把还在的账号当残留)会误删设置,所以 legacy 导入连接、default 与读不到的池一律不算残留。
+  it('flags only pool-prefixed scopes whose account has left the pool', () => {
+    h.pools.openai = {
+      strategy: 'expiring',
+      accounts: [account('default'), account('cindy-o-keep')],
+      legacyCodexAccounts: { 'legacy-conn': 'cindy-o-legacy' },
+    };
+    expect(codexPoolResetAccountGone('openai-account:cindy-o-keep')).toBe(false);
+    expect(codexPoolResetAccountGone('openai-account:cindy-o-gone')).toBe(true);
+    // legacy 导入连接的 accountId 仍在 legacyCodexAccounts 里:设置属主是原连接,不能判残留。
+    expect(codexPoolResetAccountGone('openai-account:cindy-o-legacy')).toBe(false);
+    expect(codexPoolResetAccountGone('openai-account:default')).toBe(false);
+    expect(codexPoolResetAccountGone('openai')).toBe(false);
+
+    // 池读不到(null):不当成「没有账号」,fail closed 保留规则。
+    const saved = h.pools.openai;
+    h.pools = {};
+    expect(codexPoolResetAccountGone('openai-account:cindy-o-gone')).toBe(false);
+    h.pools.openai = saved;
+    expect(codexPoolResetAccountGone('openai-account:cindy-o-gone')).toBe(true);
   });
 });
