@@ -26,7 +26,7 @@ import type { ModelGroupRecovery } from '../../../desktop/src/main/maker-ipc/ses
 import type { RunModelGroupBeforeSendSessionRow } from '../../../desktop/src/main/model-groups/applyTurnRouting.js';
 import {
   createModelGroupHandlers,
-  type ModelGroupHandlersSessionTarget,
+  type ModelGroupHandlersPorts,
 } from '../../../desktop/src/main/model-groups/handlersCore.js';
 import type { ModelGroupRouteNotePorts } from '../../../desktop/src/main/model-groups/routeNote.js';
 import { createModelGroupRuntime } from '../../../desktop/src/main/model-groups/runtimeCore.js';
@@ -54,7 +54,8 @@ export interface HostModelGroupsPorts {
   listLocalAgents(): readonly string[];
   readPricing(): Promise<{ gateway: ModelPricingCatalog | null; reference: ModelPricingCatalog | null }>;
   createDbMessage(sessionId: string, body: Record<string, unknown>): Promise<unknown>;
-  readPendingSessionTarget?(sessionId: string): ModelGroupHandlersSessionTarget | null;
+  readPendingSessionTarget?: ModelGroupHandlersPorts['readPendingSessionTarget'];
+  markPendingModelGroupPick?: ModelGroupHandlersPorts['markPendingModelGroupPick'];
   onBindingChanged?(sessionId: string): void;
 }
 
@@ -178,6 +179,7 @@ export function createHostModelGroups(ports: HostModelGroupsPorts) {
     deviceLinkOrigin: () => readDeviceLinkModelSelectionOrigin(),
     readSessionTarget: (sessionId) => getSessionRowSnapshot(sessionId),
     readPendingSessionTarget: (sessionId) => ports.readPendingSessionTarget?.(sessionId) ?? null,
+    markPendingModelGroupPick: (sessionId, pickedKey) => ports.markPendingModelGroupPick?.(sessionId, pickedKey),
     routeNotePorts,
   });
 

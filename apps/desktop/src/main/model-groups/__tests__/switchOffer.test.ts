@@ -48,12 +48,14 @@ import {
   readModelGroupBindingForDispatch,
   unbindModelGroupSession,
 } from '../sessionBindings.js';
+import { createModelGroupHandlers } from '../handlersCore.js';
 import { runModelGroupBeforeSend } from '../applyTurnRouting.js';
 import { evaluateModelGroupBeforeSend } from '../turnRouting.js';
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
   performSessionAgentSwitch,
+  projectPendingModelGroupTarget,
   type MakerSessionAgentSwitchHandlerDeps,
 } from '../../maker-ipc/sessionAgentSwitchHandler.js';
 
@@ -312,6 +314,19 @@ describe('computeModelGroupSwitchOffer', () => {
   });
 });
 
+function bindPendingRoute(
+  registry: ReturnType<typeof createPendingAgentSwitchRegistry>,
+  sessionId: string,
+  route: { agentKind: 'codex'; providerId: string; model: string; agentDeviceId?: string },
+) {
+  const handlers = createModelGroupHandlers({
+    isDeviceLink: () => false,
+    deviceLinkOrigin: () => undefined,
+    markPendingModelGroupPick: registry.markModelGroupPick,
+  } as Parameters<typeof createModelGroupHandlers>[0]);
+  handlers.bindSession({ sessionId, selection: { type: 'route', id: 'r1' }, route }, () => {});
+}
+
 describe('model group session bindings', () => {
   let dir: string;
   beforeEach(() => {
@@ -500,13 +515,60 @@ describe('model group session bindings', () => {
       providerId: 'acct-a',
       model: 'gpt',
     });
-    bindModelGroupSession('s-switch', { type: 'route', id: 'r1' }, CURRENT, 30);
+    bindPendingRoute(pendingSwitches, 's-switch', { agentKind: 'codex', providerId: 'acct-a', model: 'gpt' });
     await applyPendingAgentSwitchIfIdle(deps, 's-switch');
     expect(row.agentKind).toBe('codex');
     expect(readModelGroupSessionBinding('s-switch')).toMatchObject({
       selection: { type: 'route', id: 'r1' },
       pickedKey: CURRENT,
     });
+  });
+
+  // Unit, model-groups.md §4.4: the first send after selecting an already running
+  // remote member must distinguish a direct pick from an explicit smart route bind.
+  it.each([
+    { agentDeviceId: undefined, routed: false },
+    { agentDeviceId: 'computer-a', routed: true },
+  ])('lands a same-model selection with $agentDeviceId (routed=$routed)', async ({ agentDeviceId, routed }) => {
+    const sessionId = 's-remote';
+    const current = { agentKind: 'codex' as const, providerId: 'acct-a', model: 'gpt', agentDeviceId };
+    const selection = { type: 'route' as const, id: 'r1' };
+    const pickedKey = modelGroupCandidateKey(current);
+    bindModelGroupSession(sessionId, selection, pickedKey);
+    const pendingSwitches = createPendingAgentSwitchRegistry();
+    pendingSwitches.set(sessionId, {
+      targetAgentKind: 'codex', providerId: current.providerId, model: current.model, sameAgentSelection: true,
+    });
+    if (routed) bindPendingRoute(pendingSwitches, sessionId, current);
+    expect(Boolean(projectModelGroupSessionBinding({
+      binding: readModelGroupSessionBinding(sessionId),
+      config: { routes: [route('order')] },
+      current,
+      pending: projectPendingModelGroupTarget(pendingSwitches.get(sessionId)),
+    }))).toBe(routed);
+    const deps: MakerSessionAgentSwitchHandlerDeps = {
+      pendingSwitches,
+      getSessionRow: async () => ({
+        id: sessionId, ...current, status: 'active', remoteHostId: null, orcaRole: null, sdkSessionId: null,
+      }),
+      getLiveSession: () => null,
+      closeSession: async () => {},
+      listMessagesForHandoff: async () => [],
+      applyAgentSwitchToDb: async () => {},
+      setSessionProvider: () => {},
+      insertBoundaryMessage: async () => 'boundary-1',
+      applyResumeFallbackAtomically: async () => {},
+      setPendingHandoff: () => {},
+      bootstrapSwitchedSession: async () => {},
+      withCloseSuppressed: async (_id, run) => run(),
+      selectSameAgentModel: async (_id, intent) => {
+        if (!intent.preserveModelGroupBinding) unbindModelGroupSession(sessionId);
+        return { deferred: false };
+      },
+      log: { info: vi.fn(), warn: vi.fn() },
+    };
+    await applyPendingAgentSwitchIfIdle(deps, sessionId);
+    expect(Boolean(readModelGroupSessionBinding(sessionId))).toBe(routed);
   });
 
   it('persists detached state for companion sessions so bot profile modelGroup does not re-manage them', async () => {

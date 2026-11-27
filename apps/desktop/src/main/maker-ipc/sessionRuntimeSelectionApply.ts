@@ -107,6 +107,7 @@ export type InternalRuntimeSelectionOptions = {
   persistRoute?: boolean;
   /** 本次用户切换属于智能路由选路发起，保留/随后覆盖绑定而不主动解绑。 */
   preserveModelGroupBinding?: boolean;
+  modelGroupPickedKey?: string;
 };
 /** The type of register.ts `applySessionRuntimeSelection` (moved from its declaration). */
 export type ApplySessionRuntimeSelection = (
@@ -670,6 +671,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           ...(deviceLinkModelSelectionOrigin ? { deviceLinkModelSelectionOrigin } : {}),
           ...(internalOptions.runtimeSource ? { runtimeSource: internalOptions.runtimeSource } : {}),
           ...(internalOptions.configStaged === true ? { configStaged: true } : {}),
+          ...(internalOptions.modelGroupPickedKey ? { modelGroupPickedKey: internalOptions.modelGroupPickedKey } : {}),
           sameAgentSelection: true,
           credentialSelectionAxes,
           targetAgentKind: dbToMakerAgentKind(runtimeStatus.agentKind),

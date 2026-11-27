@@ -58,13 +58,14 @@ import {
   type DbAgentKind,
   type HandoffSourceMessage,
 } from './agentHandoff.js';
-import { modelGroupBindingMatchesTarget, unbindModelGroupSession } from '../model-groups/sessionBindings.js';
+import { modelGroupBindingMatchesTarget, unbindModelGroupSession, type PendingModelGroupTarget } from '../model-groups/sessionBindings.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-catalog.js';
 import {
   dbToMakerAgentKind,
   isPluginEngineKind,
   makerToDbAgentKind,
+  makerToDbEngineKind,
   normalizeDbAgentKind,
   type DbEngineKind,
 } from '../../shared/agentKindConversion.js';
@@ -507,6 +508,8 @@ export interface PendingAgentSwitchIntent {
   deviceLinkModelSelectionOrigin?: 'owner' | 'scoped';
   /** Internal only: preserve the task's smart-routing binding when landing this pending intent. */
   preserveModelGroupBinding?: boolean;
+  /** Candidate confirmed by the model-group bind handler for this exact pending choice. */
+  modelGroupPickedKey?: string;
   /** 'acp' = 插件引擎，providerId 必为 acp-plugin:<插件>:<引擎>。 */
   targetAgentKind: EngineKind;
   model: string;
@@ -590,7 +593,21 @@ export function projectPendingAgentSwitchIntent(
   };
 }
 
-export function createPendingAgentSwitchRegistry(): PendingAgentSwitchRegistry {
+/** Main-process view for model-group matching. Omitted position inherits the current task location. */
+export function projectPendingModelGroupTarget(intent?: PendingAgentSwitchIntent): PendingModelGroupTarget | null {
+  if (!intent) return null;
+  return {
+    agentKind: makerToDbEngineKind(intent.targetAgentKind),
+    providerId: intent.providerId ?? null,
+    model: intent.model,
+    agentDeviceId: intent.targetAgentDeviceId,
+    pickedKey: intent.modelGroupPickedKey ?? (intent.configStaged ? undefined : null),
+  };
+}
+
+export function createPendingAgentSwitchRegistry(): PendingAgentSwitchRegistry & {
+  markModelGroupPick(sessionId: string, pickedKey: string): void;
+} {
   const pending = new Map<string, PendingAgentSwitchIntent>();
   const revisions = new Map<string, number>();
   const bump = (sessionId: string): number => {
@@ -604,6 +621,10 @@ export function createPendingAgentSwitchRegistry(): PendingAgentSwitchRegistry {
       bump(sessionId);
     },
     get: (sessionId) => pending.get(sessionId),
+    markModelGroupPick: (sessionId, pickedKey) => {
+      const intent = pending.get(sessionId);
+      if (intent) intent.modelGroupPickedKey = pickedKey;
+    },
     clear: (sessionId) => {
       pending.delete(sessionId);
       bump(sessionId);
@@ -1841,15 +1862,20 @@ export function applyPendingAgentSwitchIfIdle(
     if (!intent) return;
     const live = deps.getLiveSession(sessionId);
     if (live?.isTurnRunning()) return;
-    // 发前落地的意图如果正是智能路由选定并绑定的目标(如从 ACP / 其他引擎切入路由)，
-    // 落地时必须保留绑定，否则第一条消息刚发就把刚建好的持续托管解绑了。
-    const preserveModelGroupBinding = modelGroupBindingMatchesTarget(sessionId, {
-      agentKind: intent.targetAgentKind === 'acp' ? 'acp' : makerToDbAgentKind(intent.targetAgentKind),
-      providerId: intent.providerId ?? null,
-      model: intent.model,
-      agentDeviceId: intent.targetAgentDeviceId ?? null,
-    });
     try {
+      // A matching model alone is insufficient: a direct pick of that model opts out.
+      let preserveModelGroupBinding = intent.preserveModelGroupBinding === true;
+      if (intent.modelGroupPickedKey) {
+        const current = intent.targetAgentDeviceId === undefined ? await deps.getSessionRow(sessionId) : undefined;
+        if (deps.pendingSwitches?.get(sessionId) !== intent) {
+          throwIpcError('HARNESS_SWITCH_NOT_READY', 'Model selection changed before sending');
+        }
+        throwIfAgentSwitchAborted(opts?.signal);
+        preserveModelGroupBinding = current !== null && modelGroupBindingMatchesTarget(sessionId, {
+          ...projectPendingModelGroupTarget(intent),
+          agentDeviceId: intent.targetAgentDeviceId === undefined ? current?.agentDeviceId : intent.targetAgentDeviceId,
+        }, intent.modelGroupPickedKey);
+      }
       if (intent.sameAgentSelection) {
         if (!deps.selectSameAgentModel) throw new Error('model selection apply is unavailable');
         const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
@@ -1862,9 +1888,7 @@ export function applyPendingAgentSwitchIfIdle(
         // host registry. Apply only that choice under host authority; retain the
         // captured send fence through preflight and admit before mutation. Keep
         // this admission separate from the guest invoke's settings transaction.
-        const applyIntent = preserveModelGroupBinding
-          ? { ...intent, preserveModelGroupBinding: true }
-          : intent;
+        const applyIntent = { ...intent, preserveModelGroupBinding };
         const applySelection = () => deps.selectSameAgentModel!(
           sessionId, applyIntent, true, undefined, undefined, access, opts?.nextInputChars,
         );

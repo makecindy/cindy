@@ -1299,6 +1299,7 @@ import {
   isUserPendingAgentSwitchIntent,
   performSessionAgentSwitch,
   projectPendingAgentSwitchIntent,
+  projectPendingModelGroupTarget,
   registerMakerSessionAgentSwitchHandler,
   relocateForFreshStart,
   settleSystemRouteSwitchIntent,
@@ -1504,7 +1505,7 @@ import {
   readModelGroupRecoveryOffer,
   refreshAutoModelGroupRoutes,
 } from '../model-groups/desktopResolver.js';
-import { registerModelGroupPendingTargetReader } from '../model-groups/ipc.js';
+import { registerModelGroupPendingSelection } from '../model-groups/ipc.js';
 import { modelGroupSessionStart } from '../model-groups/sessionStart.desktop.js';
 import { isModelGroupRecoverySource } from '../model-groups/switchOffer.js';
 import { readModelGroupsConfigForSelected } from '../model-groups/store.js';
@@ -6984,9 +6985,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   setSessionTextSnapshotReader(getSessionTextSnapshot);
   log.info('registering maker:* IPC handlers');
-  let readPendingModelGroupTarget: ((sessionId: string) => {
-    agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null;
-  } | null) | null = null;
+  let readPendingModelGroupTarget: ((sessionId: string) => ReturnType<typeof projectPendingModelGroupTarget>) | null = null;
   const projectTaskModelGroupBinding = (
     sessionId: string,
     target: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null },
@@ -11849,17 +11848,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   // turn 运行中登记的切换意图(下一条消息发送时刻由 send 事务 apply)。
   const agentSwitchPending = createPendingAgentSwitchRegistry();
-  readPendingModelGroupTarget = (sessionId) => {
-    const intent = agentSwitchPending.get(sessionId);
-    if (!intent) return null;
-    return {
-      agentKind: intent.targetAgentKind === 'acp' ? 'acp' : makerToDbAgentKind(intent.targetAgentKind),
-      providerId: intent.providerId ?? null,
-      model: intent.model,
-      agentDeviceId: intent.targetAgentDeviceId ?? null,
-    };
-  };
-  registerModelGroupPendingTargetReader(readPendingModelGroupTarget);
+  readPendingModelGroupTarget = (sessionId) => projectPendingModelGroupTarget(agentSwitchPending.get(sessionId));
+  registerModelGroupPendingSelection({
+    readPendingSessionTarget: readPendingModelGroupTarget,
+    markPendingModelGroupPick: (sessionId, pickedKey) => agentSwitchPending.markModelGroupPick(sessionId, pickedKey),
+  });
   /**
    * The send_to_session route projected into model input before delivery: the live session's
    * host-reconciled route. A steer ('live') reaches that running runtime as is. A send ('send': queued
@@ -23549,6 +23542,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         ...(deviceLinkModelSelectionOrigin ? { deviceLinkModelSelectionOrigin } : {}),
         ...(internalOptions.runtimeSource ? { runtimeSource: internalOptions.runtimeSource } : {}),
         ...(internalOptions.configStaged === true ? { configStaged: true } : {}),
+        ...(internalOptions.modelGroupPickedKey ? { modelGroupPickedKey: internalOptions.modelGroupPickedKey } : {}),
         sameAgentSelection: true,
         targetAgentKind: agentKind,
         model,

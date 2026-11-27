@@ -1731,7 +1731,8 @@ function ModelSelectorContentView({
         const hit = sourceRoutePluginEngines.hit(selection.providerId, selection.modelId);
         if (!hit) return pluginEngines.onSelect(selection);
         if (pickMerged) {
-          return pickMerged({ type: 'route', id: hit.route.id }, selection.effort ? { effort: selection.effort } : {});
+          const applied = pickMerged({ type: 'route', id: hit.route.id }, selection.effort ? { effort: selection.effort } : {});
+          return applied instanceof Promise ? applied.then((ok) => ok !== false) : applied;
         }
         const applied = pluginEngines.onSelect({
           ...selection,

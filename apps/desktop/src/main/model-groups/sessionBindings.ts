@@ -172,7 +172,7 @@ export async function isModelGroupSessionDetachedForDispatch(sessionId: string):
   return state?.detached.has(sessionId) === true;
 }
 
-function writeTo(file: string, state: BindingsState): void {
+function writeTo(file: string, state: BindingsState): boolean {
   const newestBindings = [...state.bindings.entries()]
     .sort((a, b) => b[1].at - a[1].at)
     .slice(0, MODEL_GROUP_SESSION_BINDINGS_MAX);
@@ -190,8 +190,10 @@ function writeTo(file: string, state: BindingsState): void {
     }));
     dispatchIndex = { file, state: Promise.resolve(cloneState(nextState)) };
     syncCache = { file, state: nextState };
+    return true;
   } catch (error) {
     log.warn('model group session binding not saved', { error: error instanceof Error ? error.name : 'unknown' });
+    return false;
   }
 }
 
@@ -201,15 +203,16 @@ export function bindModelGroupSession(
   selection: ModelGroupSelection,
   pickedKey: string,
   now: number = Date.now(),
-): void {
+): boolean {
   const file = filePath();
   const entry = binding({ selection, pickedKey, at: now });
-  if (!file || !validSessionId(sessionId) || !entry) return;
+  if (!file || !validSessionId(sessionId) || !entry) return false;
   const state = readFrom(file);
   state.bindings.set(sessionId, entry);
   state.detached.delete(sessionId);
-  writeTo(file, state);
+  if (!writeTo(file, state)) return false;
   notifyBindingChanged(sessionId);
+  return true;
 }
 
 /** 解除任务的智能路由托管绑定(保留当前模型，不再自动换源)；同时记下解除标记，避免伙伴会话回落主槽重新接管。 */
@@ -273,6 +276,11 @@ export interface ModelGroupSessionTarget {
   agentDeviceId?: string | null;
 }
 
+export interface PendingModelGroupTarget extends ModelGroupSessionTarget {
+  /** Explicit route pick, direct pick (null), or a system intent (omitted). */
+  pickedKey?: string | null;
+}
+
 function targetMatchesPickedKey(pickedKey: string, target?: ModelGroupSessionTarget | null): boolean {
   if (!target || !target.providerId || !target.model) return false;
   const kind = target.agentKind === 'claude-code' ? 'cc' : target.agentKind;
@@ -289,26 +297,32 @@ function targetMatchesPickedKey(pickedKey: string, target?: ModelGroupSessionTar
 export function modelGroupBindingMatchesTarget(
   sessionId: string,
   target?: ModelGroupSessionTarget | null,
+  pickedKey?: string,
 ): boolean {
   const entry = peekModelGroupSessionBinding(sessionId);
-  return !!entry && targetMatchesPickedKey(entry.pickedKey, target);
+  return !!entry && (pickedKey === undefined || entry.pickedKey === pickedKey)
+    && targetMatchesPickedKey(entry.pickedKey, target);
 }
 
 export function projectModelGroupSessionBinding(params: {
   binding: ModelGroupSessionBinding | null;
   config: ModelGroupsConfig;
   current?: ModelGroupSessionTarget | null;
-  pending?: ModelGroupSessionTarget | null;
+  pending?: PendingModelGroupTarget | null;
 }): ModelGroupSessionBindingView | null {
   const { binding: entry, config, current, pending } = params;
   if (!entry) return null;
   const route = findModelGroupRoute(config, entry.selection);
   if (!route) return null;
   const matchedCurrent = targetMatchesPickedKey(entry.pickedKey, current);
-  // 已登记下一轮切换意图时，以待切目标为准：手动改切到非路由成员(含 ACP)立即退出托管展示，
-  // 而从 ACP/其他引擎切入路由成员则在发前即显示持续托管(带 pendingSwitch)。
+  // 手动选具体模型时立即退出托管展示，即使它正好是路由当前的模型。
+  // 经路由切入其他成员时，发前即显示托管(带 pendingSwitch)。
   if (pending) {
-    if (!targetMatchesPickedKey(entry.pickedKey, pending)) return null;
+    if (pending.pickedKey !== undefined && pending.pickedKey !== entry.pickedKey) return null;
+    if (!targetMatchesPickedKey(entry.pickedKey, {
+      ...pending,
+      agentDeviceId: pending.agentDeviceId === undefined ? current?.agentDeviceId : pending.agentDeviceId,
+    })) return null;
     return {
       selection: entry.selection,
       routeName: route.parent?.name ?? route.name,
