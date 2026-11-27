@@ -40,7 +40,9 @@ plist 中的 `~` 和 `$HOME` 也不会展开。
 | `StandardOutPath`、`StandardErrorPath` | 各自指向已建好的 `logs` 目录下的文件。 |
 
 保存后校验并加载。以后用户每次登录 macOS，`RunAtLoad` 都会让后台启动。进程异常退出时
-`KeepAlive.SuccessfulExit=false` 会自动拉起，频繁失败时按 30 秒节流。正常退出后保持停止。
+`KeepAlive.SuccessfulExit=false` 会自动拉起。`ThrottleInterval=30` 让两次自动启动至少间隔
+30 秒，所以刚启动就崩溃也要等约 30 秒才恢复。空资料实例在启动后立即被终止，实测
+29.9 秒恢复 `/health`。
 
 ```bash
 plutil -lint "$plist"
@@ -61,6 +63,14 @@ launchctl print "$service"
 - **改配置**先 `bootout`，修改并用 `plutil -lint` 校验，再 `bootstrap`。
 - **日志**见 plist 指定的 `host.stdout.log` 和 `host.stderr.log`，应用日志另在资料目录的
   `logs/`。连续启动失败时，先用 `launchctl print` 看退出状态，再查日志中的路径、区域和凭据错误。
+
+用同一份配置执行 `cindy-host stop` 并正常退出后，macOS 服务会保持停止。[Linux 的 systemd
+单元](systemd.md)用 `Restart=always`，进程正常退出也会拉起。要停止 Linux 服务，使用
+`systemctl --user stop cindy-host`。
+
+macOS 13 及以后，加载时系统可能显示「已添加后台项目」通知。在「系统设置 → 通用 → 登录项」
+（较新版本为「登录项与扩展」）中检查「允许在后台」，此项目可能显示为 `node`。关闭后该后台项
+将无法运行。见 [Apple 的后台项目说明](https://support.apple.com/guide/deployment/depdca572563/web)。
 
 ## 卸载
 
