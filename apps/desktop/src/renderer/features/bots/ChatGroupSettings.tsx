@@ -442,8 +442,8 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
                   title={t('bots.groupChat.mask.title')} hint={t(key('maskHint'))} value={t(`bots.groupChat.mask.status.${mask.status}`)} chevron
                   onClick={() => { if (scroller.current) homeScroll.current = scroller.current.scrollTop; openMask(); }} />}
                 {computers && <SettingsRow wrap title={t(key('assistantComputer'))} trailing={
-                  <Select size="compact" label={t(key('assistantComputer'))} placeholder={t(key('chooseComputer'))} value={group.assistantDeviceId ?? ''}
-                    contentClassName="w-max min-w-[var(--radix-select-trigger-width)] max-w-[min(20rem,var(--radix-select-content-available-width))]" truncateOptions
+                  <Select size="compact" width="sm" label={t(key('assistantComputer'))} placeholder={t(key('chooseComputer'))} value={group.assistantDeviceId ?? ''}
+                    truncateOptions
                     disabled={busy || !!group.archived || !computers.length}
                     options={computers.map(device => ({ value: device.id, label: device.name }))}
                     onValueChange={deviceId => void mutate({ type: 'assistantDevice', deviceId })} />} />}
