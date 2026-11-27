@@ -582,6 +582,9 @@ export function richResolvedValues(
   return values;
 }
 
+export const RICH_EXPRESSION_ARGUMENT_LIMIT = 32;
+type RichEvaluationIssue = "sendTooManyArguments" | "sendValueUnavailable";
+
 /** Whitelisted arithmetic, never JavaScript. Unavailable values cannot coerce to zero. */
 export function richEvaluate(
   expr: unknown,
@@ -589,12 +592,29 @@ export function richEvaluate(
   depth = 0,
   resolve?: (id: string) => RichValue | undefined,
 ): RichValue | undefined {
+  return evaluateRichExpression(expr, values, depth, resolve);
+}
+
+function evaluateRichExpression(
+  expr: unknown,
+  values: RichValues,
+  depth: number,
+  resolve?: (id: string) => RichValue | undefined,
+  reportIssue?: (issue: RichEvaluationIssue) => void,
+): RichValue | undefined {
   if (value(expr)) return expr;
   if (!record(expr) || depth > 16) return undefined;
-  if (typeof expr.ref === "string")
-    return own(values, expr.ref) ? values[expr.ref] : resolve?.(expr.ref);
-  if (!Array.isArray(expr.args) || expr.args.length > 32) return undefined;
-  const evaluate = (x: unknown) => richEvaluate(x, values, depth + 1, resolve);
+  if (typeof expr.ref === "string") {
+    const result = own(values, expr.ref) ? values[expr.ref] : resolve?.(expr.ref);
+    if (result === undefined) reportIssue?.("sendValueUnavailable");
+    return result;
+  }
+  if (!Array.isArray(expr.args)) return undefined;
+  if (expr.args.length > RICH_EXPRESSION_ARGUMENT_LIMIT) {
+    reportIssue?.("sendTooManyArguments");
+    return undefined;
+  }
+  const evaluate = (x: unknown) => evaluateRichExpression(x, values, depth + 1, resolve, reportIssue);
   // Evaluate only the selected branch: an unused forward reference is harmless.
   if (expr.op === "if") {
     if (expr.args.length !== 3) return undefined;
@@ -707,13 +727,24 @@ export function richAction(
   return changes;
 }
 
+export type RichSendIssue = RichEvaluationIssue | "sendTextUnavailable";
+
 /** Optional message action. The host supplies the current conversation; generated
  * content cannot select a recipient, tool or command. Nothing runs on value changes. */
-export function richSendText(node: RichNode, values: RichValues): string | undefined {
-  if (node.kind !== "button" && node.kind !== "form") return undefined;
-  const text = richEvaluate(node.props.send, values);
+export function richSendPreview(node: RichNode, values: RichValues): {
+  text?: string;
+  issue?: RichSendIssue;
+} {
+  if (node.kind !== "button" && node.kind !== "form") return {};
+  let issue: RichEvaluationIssue | undefined;
+  const text = evaluateRichExpression(node.props.send, values, 0, undefined, reason => { issue ??= reason; });
   return typeof text === "string" && text.trim() && text.length <= 16_000
-    ? text.trim() : undefined;
+    ? { text: text.trim() }
+    : { issue: issue ?? "sendTextUnavailable" };
+}
+
+export function richSendText(node: RichNode, values: RichValues): string | undefined {
+  return richSendPreview(node, values).text;
 }
 
 export type RichMessageSender = (text: string) => Promise<boolean>;

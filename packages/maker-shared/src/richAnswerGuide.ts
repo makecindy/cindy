@@ -1,5 +1,5 @@
 /** Single delivery protocol used by host instructions and optional capability lookup. */
-export const RICH_ANSWER_GUIDE = `Default to plain text or Markdown for ordinary conversation, explanations, progress updates and concise results. Use cindy-ui only when charts, interaction, media presentation or structured layout materially improve understanding, or when the user explicitly requests components. Do not wrap plain prose in text or markdown components just for decoration. Keep surrounding prose in Markdown and use components only for the parts that benefit. Follow the user's requested format.
+const INLINE_RICH_ANSWER_GUIDE = `Default to plain text or Markdown for ordinary conversation, explanations, progress updates and concise results. Use cindy-ui only when charts, interaction, media presentation or structured layout materially improve understanding, or when the user explicitly requests components. Do not wrap plain prose in text or markdown components just for decoration. Keep surrounding prose in Markdown and use components only for the parts that benefit. Follow the user's requested format.
 
 When components are useful, write them directly in progress messages or final answers, alongside Markdown. Choose content and layout freely; no HTML file, tool call or extra model call is needed.
 
@@ -52,13 +52,18 @@ Component syntax example, not a prescribed answer layout. When using components,
 
 Keep blocks under 128 KB, with no more than 2048 nodes and depth 32. Finish each line before starting the next. Media loads via the existing host path. Interrupted output keeps committed nodes; incomplete lines wait for completion. Unknown or malformed operations show a local readable fallback, never execute code. New Cindy clients render components; older clients may show the fenced source. Use Markdown when the receiving channel does not support components.`;
 
+/** Full protocol returned by the on-demand rich-answers capability. */
+export const RICH_ANSWER_GUIDE = `${INLINE_RICH_ANSWER_GUIDE}
+
+Each expression accepts at most 32 entries in its args array. Literal strings, references, and nested expressions each count as one entry. For a longer concat, split the entries across smaller nested concat expressions and concatenate their results.`;
+
 /** Host addition only: native CLI instructions and execution remain unchanged. */
 export const ANSWER_DELIVERY_PROMPT = `## Cindy answer delivery
 Create clear, readable answers. Choose plain text, Markdown or cindy-ui components according to the guidance below. When using components, you own layout, typography and charts; Cindy supplies colors. Preserve native workflows.
 
 The component protocol is rendered on Cindy conversation surfaces. External channels retain their required formats. Controls hold local viewing state. Optional button/form send actions let the user explicitly submit visible text as a normal message to continue the conversation; they do not directly execute work or tools.
 
-${RICH_ANSWER_GUIDE}`;
+${INLINE_RICH_ANSWER_GUIDE}`;
 
 /** Executable basic subset of RICH_ANSWER_GUIDE; advanced syntax is discovered on demand. */
 export const PI_ANSWER_DELIVERY_PROMPT = `## Cindy answer delivery

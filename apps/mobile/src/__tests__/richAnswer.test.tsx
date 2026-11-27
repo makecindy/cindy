@@ -117,6 +117,31 @@ it('keeps incomplete and read-only answers from sending', async () => {
   expect(send).not.toHaveBeenCalled();
 });
 
+// Unit #13479: the native renderer should explain a disabled form in a writable
+// session, and suppress the explanation when the host withdraws sending.
+it('shows the argument limit only for a complete writable form', async () => {
+  const send = vi.fn(async () => true);
+  const args = Array.from({ length: 33 }, () => ({ ref: 'name' }));
+  const oversized = source + JSON.stringify({
+    seq: 3, op: 'patch', id: 'submit', props: { send: { op: 'concat', args } },
+  }) + '\n';
+  const show = (sender: typeof send | null, complete: boolean) => act(async () => {
+    root.render(<SessionQuickSendProvider value={sender}>
+      <RichAnswer source={oversized} stateKey="argument-limit" complete={complete} renderMarkdown={text => text} />
+    </SessionQuickSendProvider>);
+  });
+  const hint = 'message.richAnswer.sendTooManyArguments';
+  await show(send, false);
+  expect(container.textContent).not.toContain(hint);
+  await show(send, true);
+  expect(container.querySelector('button')!.disabled).toBe(true);
+  expect(container.textContent).toContain(hint);
+  await show(null, true);
+  expect(container.querySelector('button')!.disabled).toBe(true);
+  expect(container.textContent).not.toContain(hint);
+  expect(send).not.toHaveBeenCalled();
+});
+
 // Unit regression: route ids used to miss the live memory entry when file origin was null.
 // Edit the production control, then read its real memory through both export builders.
 it.each([null, { deviceId: 'desktop', sessionId: 'task' }])(
