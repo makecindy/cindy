@@ -5153,7 +5153,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       ...sendingQueueClientIds,
       ...settlingItemsForRender.map((item) => item.clientId),
       ...durableOutboxRecords.filter((record) => record.deviceId === deviceId
-        && record.item.sessionId === sessionId && record.state !== 'failed'
+        && record.item.sessionId === sessionId && (record.state !== 'failed' || record.historyConfirmation)
         && !record.cancelRequested && !record.suspended).map((record) => record.item.clientId),
     ]);
     // Only the enqueue path can reserve a transcript position. A vanished
@@ -6427,7 +6427,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     return {
       ...outboxDisplayItem(item),
       ...(record ? { sentAt: record.createdAt, pendingDelivery: isPendingDeliveryAfterLeaving(record) } : {}),
-      canCancel: !(record?.creation && !record.prepared && !record.template),
+      historyConfirmation: record?.historyConfirmation,
+      canCancel: !record?.historyConfirmation && !(record?.creation && !record.prepared && !record.template),
     };
   }), [outboxItems, deviceId, sessionId, outboxLeftVersion]);
 
