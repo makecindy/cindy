@@ -1,10 +1,15 @@
 /**
  * 扫码登录的相机取景（只识别二维码）。只能经 qr-scan 页按需加载：expo-camera 在 import
  * 期就要求原生模块存在，入口先用 isQrScanSupported() 判断。
+ *
+ * 进入即开相机：未决定时自动请求一次权限（系统弹授权框），授权后直接取景，不需要先点按钮。
+ * 系统不再弹窗（iOS 拒绝过）时显示「打开系统设置」；Android 拒绝后仍可再问时显示「允许使用相机」，
+ * 由用户决定是否再试，不自动反复弹窗。从系统设置回到 App 时重新读取权限。
  */
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Linking, StyleSheet, View } from 'react-native';
+import { AppState, Linking, StyleSheet, View } from 'react-native';
 
 import { Text } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
@@ -21,10 +26,27 @@ export default function QrCameraScanner({
 }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
-  const [permission, requestPermission] = useCameraPermissions();
+  const [permission, requestPermission, getPermission] = useCameraPermissions();
+  const [autoRequest, setAutoRequest] = useState<'idle' | 'pending' | 'done'>('idle');
+
+  useEffect(() => {
+    if (!permission || permission.granted || !permission.canAskAgain || autoRequest !== 'idle') return;
+    setAutoRequest('pending');
+    void requestPermission()
+      .catch(() => undefined)
+      .finally(() => setAutoRequest('done'));
+  }, [autoRequest, permission, requestPermission]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void getPermission().catch(() => undefined);
+    });
+    return () => subscription.remove();
+  }, [getPermission]);
 
   let body;
-  if (!permission) {
+  if (!permission || (!permission.granted && permission.canAskAgain && autoRequest !== 'done')) {
+    // 权限未读到或系统授权框还在：只显示空取景框，不闪按钮。
     body = null;
   } else if (!permission.granted) {
     body = (

@@ -2073,6 +2073,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setIsBusy(true);
           try {
             await acceptOutcome(result.outcome, did, expectedLoginFlowEpoch);
+          } catch (error) {
+            // 登录结果只会返回一次：保存失败时结束等待并提示，由用户重新扫码，不再继续轮询。
+            if (loginFlowEpochRef.current === expectedLoginFlowEpoch) fail(authErrorCode(error));
           } finally {
             if (loginFlowEpochRef.current === expectedLoginFlowEpoch) setIsBusy(false);
           }

@@ -89,6 +89,25 @@ describe('useQrLoginHandoff', () => {
     expect(api.authQrHandoffState).toHaveBeenCalledTimes(callsAtExpiry);
   });
 
+  it('expires a claimed code at its deadline instead of leaving Allow / Deny up', async () => {
+    const api = fakeApi([
+      { success: true, status: 'claimed', requester: { clientType: 'mobile', deviceName: 'iPhone 15' } },
+    ]);
+    const { result } = renderHook(() => useQrLoginHandoff(true, api));
+    await act(async () => {});
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(QR_HANDOFF_POLL_INTERVAL_MS);
+    });
+    expect(result.current.phase).toBe('claimed');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(result.current.phase).toBe('expired');
+    expect(result.current.requester).toBeNull();
+    // 等待决定期间只按本地到期时间判断，不额外轮询服务端。
+    expect(api.authQrHandoffState).toHaveBeenCalledTimes(1);
+  });
+
   it('falls back to the plain download code when the server cannot create a login code', async () => {
     const api = {
       ...fakeApi([]),

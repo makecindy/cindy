@@ -144,6 +144,20 @@ export function useQrLoginHandoff(
     };
   }, [snapshot.phase, snapshot.handoffId, snapshot.expiresAt, api, create, now]);
 
+  // 等待用户允许 / 拒绝时不再轮询，但仍按到期时间转为过期：手机已超时退出后，电脑不再显示
+  // 允许 / 拒绝，而是给出刷新入口。只用本地计时，不发请求。
+  useEffect(() => {
+    if (snapshot.phase !== 'claimed' || snapshot.expiresAt == null) return;
+    const current = generation.current;
+    const timer = setTimeout(() => {
+      if (current !== generation.current) return;
+      setSnapshot((previous) =>
+        previous.phase === 'claimed' ? { ...previous, phase: 'expired', requester: null } : previous,
+      );
+    }, Math.max(0, snapshot.expiresAt - now()));
+    return () => clearTimeout(timer);
+  }, [snapshot.phase, snapshot.expiresAt, now]);
+
   const decide = useCallback(
     (approve: boolean) => {
       const handoffId = snapshot.handoffId;
