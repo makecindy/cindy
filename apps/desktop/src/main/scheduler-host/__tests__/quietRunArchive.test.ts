@@ -60,10 +60,17 @@ it('keeps the round result when re-archiving fails, and lets runner failures pro
 
   const archiveIfUntouched = vi.fn();
   const failing = withQuietRunArchive({ fire: async () => { throw new Error('agent failed'); } }, {
-    targetStatus: async () => 'archived', isRunSilenced: () => true, archiveIfUntouched, warn: vi.fn(),
+    targetStatus: async () => 'archived', isRunSilenced: () => true, isRunQuietFailure: () => false, archiveIfUntouched, warn: vi.fn(),
   });
   await expect(failing.fire(schedule, ctx())).rejects.toThrow('agent failed');
   expect(archiveIfUntouched).not.toHaveBeenCalled();
+
+  const quietArchive = vi.fn(async () => {});
+  const quietFailing = withQuietRunArchive({ fire: async () => { throw new Error('pre-run hook failed: rate limit'); } }, {
+    targetStatus: async () => 'archived', isRunSilenced: () => false, isRunQuietFailure: () => true, archiveIfUntouched: quietArchive, warn: vi.fn(),
+  });
+  await expect(quietFailing.fire(schedule, ctx())).rejects.toThrow('pre-run hook failed: rate limit');
+  expect(quietArchive).toHaveBeenCalledWith('task', 1000);
 });
 
 // Bug 2026-11-18: each silent round of a per-round automation left an open task in the inbox.
