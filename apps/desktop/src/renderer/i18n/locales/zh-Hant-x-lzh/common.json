@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "驗 Google 帳戶",
+    "note": "請掃碼，或啟 Google 頁以驗之。Antigravity 確認可用，則續前事。",
+    "refresh": "更新驗證碼"
+  },
   "runtimePlugins": {
     "save": "存之",
     "promptUnsupported": "此 Pi 所在之處不支援系統提示詞片段。",

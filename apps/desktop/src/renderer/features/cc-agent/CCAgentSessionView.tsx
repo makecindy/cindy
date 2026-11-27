@@ -6380,6 +6380,7 @@ function CCAgentSessionContent({
                   errorText={errorTailText}
                   dismissOnEscape={viewVisible && ownsHardwareTaskActions}
                   errorReason={errorTailMsg?.errorReason}
+                  errorCreatedAt={errorTailMsg?.createdAt}
                   reconnectHandoff={errorTailMsg?.reconnectHandoff}
                   toolLoop={errorTailMsg?.toolLoop}
                   outputLimit={errorTailMsg?.outputLimit}

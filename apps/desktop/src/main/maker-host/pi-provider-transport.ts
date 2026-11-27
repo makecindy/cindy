@@ -1,4 +1,5 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { parseBase64DataUrl } from '@cindy/maker-shared';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
@@ -273,8 +274,10 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
           ? [{ type: 'text', text: message.content }] : message.content.map(part => {
             if (part.type === 'text') return { type: 'text', text: part.text };
             if (part.type === 'image_url') {
-              const match = /^data:([^;,]+);base64,([\s\S]+)$/.exec(part.image_url.url);
-              if (match) return { type: 'image', mimeType: match[1], data: match[2] };
+              const parsed = parseBase64DataUrl(part.image_url.url, /^data:([^;,]+);base64$/, {
+                allowLineTerminators: true,
+              });
+              if (parsed) return { type: 'image', mimeType: parsed.header[1], data: parsed.payload };
             }
             throw new Error('This native API requires inline text or image content');
           });

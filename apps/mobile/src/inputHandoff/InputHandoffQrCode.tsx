@@ -11,7 +11,7 @@ import { useTheme, useThemedStyles } from "@/theme";
 import { makeInputHandoffStyles } from "./inputHandoffStyles";
 import type { InputHandoffQrView } from "./useInputHandoffQr";
 
-export function InputHandoffQrCode({ view, side }: { view: InputHandoffQrView; side: number }) {
+export function InputHandoffQrCode({ view, side, onOpen }: { view: InputHandoffQrView; side: number; onOpen?: () => void }) {
   const { t } = useTranslation();
   const styles = useThemedStyles(makeInputHandoffStyles);
   const { colors } = useTheme();
@@ -23,16 +23,16 @@ export function InputHandoffQrCode({ view, side }: { view: InputHandoffQrView; s
       <View style={styles.qrWrap}>
         <Pressable
           accessibilityRole="imagebutton"
-          accessibilityLabel={t("interaction.inputHandoff.qr.alt")}
+          accessibilityLabel={onOpen && view.link ? t("interaction.inputHandoff.qr.open", { site: view.link.site }) : t("interaction.inputHandoff.qr.alt")}
           disabled={state !== "shown"}
           testID="interaction.inputHandoff.qr.code"
           onLayout={(e: LayoutChangeEvent) => {
             layout.current = e.nativeEvent.layout;
           }}
-          onPress={(event) => {
+          onPress={onOpen ?? ((event) => {
             const { width, height } = layout.current;
             if (width > 0 && height > 0) view.tap(event.nativeEvent.locationX / width, event.nativeEvent.locationY / height);
-          }}
+          })}
           style={[styles.qrCode, box, state !== "shown" && styles.pictureDisabled]}
         >
           <Image
