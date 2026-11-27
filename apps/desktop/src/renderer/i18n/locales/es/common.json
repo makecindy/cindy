@@ -12029,6 +12029,7 @@
           "title": "Menciones a mí",
           "me": "Yo",
           "markAll": "Marcar todo como leído",
+          "markReadFailed": "No se pudieron marcar las menciones como leídas.",
           "empty": "No hay menciones no leídas",
           "thread": "Hilo",
           "main": "Chat grupal",

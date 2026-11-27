@@ -1265,6 +1265,7 @@ describe('personal mask transport', () => {
       return { messages: [{ ...message(20), reply: { content: [{ type: 'text', text: 'Recorded' }], maskAttribution: { companion } } }], hasMore: false };
     });
     const client = createChatServerClient(request as never);
+    await expect(client.mask(id(2), { type: 'resume' })).rejects.toThrow('UNSUPPORTED_OPERATION');
     expect((await client.maskMentions(id(2))).mentions[0]).toMatchObject({ messageId: id(20), text: '20', reply: { companion, text: 'Recorded' } });
     expect(request.mock.calls.some(([, method]) => method === 'POST')).toBe(false);
     await client.maskMentions(id(2), undefined, [id(20)], 'read-one');

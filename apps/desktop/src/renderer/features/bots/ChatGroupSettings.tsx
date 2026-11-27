@@ -26,7 +26,7 @@ import type { BotGroupMemberView, BotGroupSummary, ChatGroupAction } from '../..
 import { groupRepositoryLabel, parseGroupRepository } from '../../../shared/botGroupChat';
 import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { GroupMaskAvatar, useOpenGroupMask } from './GroupMaskControls';
-import { useGroupMask } from './groupMaskPresentation';
+import { useGroupMaskControls } from './groupMaskPresentation';
 import { ChatBotAccessField } from './ChatBotAccessField';
 import { ChatGroupNotificationSettings } from './ChatGroupNotificationSettings';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
@@ -79,7 +79,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const { confirm } = useConfirmDialog();
   const profiles = useBotProfiles();
-  const mask = useGroupMask(group.id);
+  const mask = useGroupMaskControls(group.id);
   const openMask = useOpenGroupMask();
   // Teammates someone owns; the group's own Cindy is set by its switch in group management.
   const companions = group.members.filter(member => member.actorKind === 'bot' && member.assistant !== true);

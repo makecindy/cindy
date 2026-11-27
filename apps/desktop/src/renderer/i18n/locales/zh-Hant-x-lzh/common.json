@@ -11893,6 +11893,7 @@
           "title": "@ 我之訊",
           "me": "我",
           "markAll": "盡標已讀",
+          "markReadFailed": "未能標所及為已讀。",
           "empty": "無人 @ 君，耳根清淨",
           "thread": "話題",
           "main": "群議",

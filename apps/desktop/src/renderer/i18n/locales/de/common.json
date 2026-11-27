@@ -11939,6 +11939,7 @@
           "title": "Erwähnungen von mir",
           "me": "Ich",
           "markAll": "Alle als gelesen markieren",
+          "markReadFailed": "Erwähnungen konnten nicht als gelesen markiert werden.",
           "empty": "Keine ungelesenen Erwähnungen",
           "thread": "Thread",
           "main": "Gruppenchat",

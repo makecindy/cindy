@@ -12029,6 +12029,7 @@
           "title": "Menções a mim",
           "me": "Eu",
           "markAll": "Marcar todas como lidas",
+          "markReadFailed": "Não foi possível marcar as menções como lidas.",
           "empty": "Nenhuma menção não lida",
           "thread": "Tópico",
           "main": "Conversa em grupo",
