@@ -751,6 +751,10 @@ function readMacExecutableEntitlements(exePath: string): Buffer | undefined {
  */
 async function applyMacUniqueExecutableUuid(buildPath: string, platform: string): Promise<void> {
   if (platform !== 'darwin') return;
+  // Release builds without a pre-signing smoke test let finishDarwin sign the
+  // nested code before sealing the outer app. Forge's intermediate app can be unsigned.
+  const shouldResign =
+    process.platform === 'darwin' && process.env.CINDY_FORGE_DEFER_MAC_SIGNING !== '1';
   const { deriveMacAppMachoUuid, patchMachoUuid } = await import('../../scripts/macos-macho-uuid.mjs');
   const electronVersion = (_require('electron/package.json') as { version: string }).version;
   const apps = fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'));
@@ -760,11 +764,10 @@ async function applyMacUniqueExecutableUuid(buildPath: string, platform: string)
       throw new Error(`[forge:postPackage] macOS executable missing at ${exePath}`);
     }
     // Patching LC_UUID invalidates the signature that carries the original entitlements.
-    const entitlements =
-      process.platform === 'darwin' ? readMacExecutableEntitlements(exePath) : undefined;
+    const entitlements = shouldResign ? readMacExecutableEntitlements(exePath) : undefined;
     const nextUuid = deriveMacAppMachoUuid(CINDY_APP_ID, electronVersion);
     const { previous, uuid } = patchMachoUuid(exePath, nextUuid);
-    if (process.platform === 'darwin') {
+    if (shouldResign) {
       // Refresh the local ad-hoc signature so unsigned `forge package` outputs
       // stay launchable on Apple silicon; external release signing seals it again.
       const args = ['--force', '--sign', '-'];

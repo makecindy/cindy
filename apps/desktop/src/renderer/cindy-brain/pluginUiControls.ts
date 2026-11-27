@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback, useRef, useSyncExternalStore } from 'react';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { PLUGIN_UI_INTEREST_LIMIT, pluginUiInterestKey, type PluginUiControlState, type PluginUiInterest, type PluginUiStateChange } from '../../shared/pluginUi';
 
@@ -99,4 +99,20 @@ export function usePluginUiControl(interest: PluginUiInterest, authority: object
   const subscribe = useCallback((changed: () => void) => active ? controls.subscribe(interest, changed) : () => {}, [interest, authority, active]);
   const snapshot = useCallback(() => active ? controls.snapshot(interest) : undefined, [interest, authority, active]);
   return useSyncExternalStore(subscribe, snapshot, () => undefined);
+}
+
+const NO_STATES: readonly (PluginUiControlState | undefined)[] = [];
+/** Collection templates share the existing subscription owner, including while empty. */
+export function usePluginUiControlStates(interests: readonly PluginUiInterest[], active: boolean) {
+  const previous = useRef(NO_STATES);
+  const subscribe = useCallback((changed: () => void) => {
+    const stops = active ? interests.map(interest => controls.subscribe(interest, changed)) : [];
+    return () => stops.forEach(stop => stop());
+  }, [interests, active]);
+  const snapshot = useCallback(() => {
+    const next = active && interests.length ? interests.map(interest => controls.snapshot(interest)) : NO_STATES;
+    if (next.length === previous.current.length && next.every((state, index) => state === previous.current[index])) return previous.current;
+    return previous.current = next;
+  }, [interests, active]);
+  return useSyncExternalStore(subscribe, snapshot, () => NO_STATES);
 }

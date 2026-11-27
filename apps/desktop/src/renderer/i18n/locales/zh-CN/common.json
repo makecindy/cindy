@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Google 账号需要验证",
+    "note": "请扫码或打开 Google 页面完成验证。Antigravity 确认账号恢复后，任务会自动继续。",
+    "refresh": "刷新验证二维码"
+  },
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "当前 Pi 运行位置不支持系统提示词片段。",
@@ -17459,6 +17464,8 @@
         "moveToProjectRemoteUnsupported": "暂不支持移动远程任务",
         "moveToProjectWorktreeBlocked": "该任务的工作目录是 worktree，暂不支持移动到其他项目",
         "openInNewWindow": "在新窗口打开",
+        "openInNewWindowShortcutMac": "⌘+点击",
+        "openInNewWindowShortcutOther": "Ctrl+点击",
         "exportShare": "导出任务…",
         "exportHtml": "导出为 HTML…",
         "exportHtmlSuccess": "任务已导出为 HTML",

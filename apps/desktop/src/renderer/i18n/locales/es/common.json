@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Verifica tu cuenta de Google",
+    "note": "Escanea el código o abre la página de Google. La tarea continuará cuando Antigravity confirme el acceso.",
+    "refresh": "Actualizar código QR"
+  },
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Esta ubicación de ejecución de Pi no admite fragmentos de instrucciones del sistema.",
@@ -17699,6 +17704,8 @@
         "moveToProjectRemoteUnsupported": "Aún no se pueden mover sesiones remotas",
         "moveToProjectWorktreeBlocked": "El directorio de trabajo de esta tarea es un worktree, por lo que aún no se puede mover a otro proyecto",
         "openInNewWindow": "Abrir en una ventana nueva",
+        "openInNewWindowShortcutMac": "⌘+clic",
+        "openInNewWindowShortcutOther": "Ctrl+clic",
         "exportShare": "Exportar sesión…",
         "exportHtml": "Exportar a HTML…",
         "exportHtmlSuccess": "Sesión exportada a HTML",
