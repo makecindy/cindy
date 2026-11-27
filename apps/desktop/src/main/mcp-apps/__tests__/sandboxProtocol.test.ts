@@ -86,7 +86,7 @@ describe('MCP App local protocol isolation', () => {
     const beforeHeaders = state.beforeHeaders!;
     const invoke = vi.fn(async () => ({ ok: true }));
     supplyMcpAppDocument(document, 'renderer:1', invoke);
-    const frame = { url: 'cindy-mcp-app://untrusted-id/sandbox' };
+    const frame = { url: 'cindy-mcp-app://untrusted-id/sandbox?scheme=dark' };
     const details = { url: 'cindy-mcp-app://untrusted-id/bridge', method: 'POST',
       webContentsId: 1, frame, requestHeaders: { 'x-cindy-mcp-app-frame': 'forged' } };
     for (const invalid of [null, { url: 'file:///host.html' },
@@ -107,8 +107,21 @@ describe('MCP App local protocol isolation', () => {
       headers: { 'X-Cindy-Mcp-App-Frame': key }, body: JSON.stringify({ op: 'message', message: {} }) });
     expect((await handler(request('forged'))).status).toBe(403);
     expect(invoke).not.toHaveBeenCalled();
-    const html = await (await handler(new Request('cindy-mcp-app://untrusted-id/sandbox'))).text();
-    expect(html).not.toContain(headers['X-Cindy-Mcp-App-Frame']);
+    // #12124, unit: exercise the real /sandbox route before any load-time theme message.
+    // The Electron pixel fixture covers the generated wrapper, not this URL boundary.
+    const { JSDOM } = createRequire(import.meta.url)('jsdom');
+    const sandboxUrl = 'cindy-mcp-app://untrusted-id/sandbox';
+    for (const [query, scheme] of [['?scheme=dark', 'dark'], ['', 'light'], ['?scheme=light', 'light'], ['?scheme=unknown', 'light']]) {
+      const response = await handler(new Request(sandboxUrl + query));
+      const html = await response.text();
+      expect(html).not.toContain(headers['X-Cindy-Mcp-App-Frame']);
+      const { window } = new JSDOM(html); // Scripts are disabled: this is the first-paint style.
+      try {
+        expect(window.getComputedStyle(window.document.documentElement).colorScheme).toBe(scheme);
+      } finally {
+        window.close();
+      }
+    }
     const response = await handler(request(headers['X-Cindy-Mcp-App-Frame']));
     expect(await response.json()).toEqual({ ok: true });
     expect(invoke).toHaveBeenCalledOnce();

@@ -342,7 +342,7 @@ test('25b: serve refuses to publish the projection owner and writes no state', a
   assert.equal(fs.existsSync(boundary.__testing.quarantinePath()), false);
 });
 
-async function fakeLoginAuth() {
+async function fakeLoginAuth({ region = 'global', discoveryStatus = 404 } = {}) {
   const { createServer } = await import('node:http');
   const hits = [];
   let member = 'member-a';
@@ -351,7 +351,16 @@ async function fakeLoginAuth() {
     hits.push(request.url);
     const json = (value) => response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value));
     const membership = { id: member, kind, role: 'owner', displayName: 'Fixture', email: null, orgId: null, orgName: null };
-    if (request.url === '/api/auth/providers') return json({ region: 'global', attribution: 'email', email: true, phone: false, social: ['google'] });
+    if (request.url === '/api/auth/providers') return json({ region, attribution: 'email', email: true, phone: false, social: ['google'] });
+    if (request.url === '/api/auth/sso/discovery') {
+      if (discoveryStatus === 404) {
+        return response.writeHead(404, { 'content-type': 'application/json' })
+          .end(JSON.stringify({ error: { code: 'ORG_SSO_NOT_FOUND', message: 'Not found' } }));
+      }
+      if (discoveryStatus !== 200) return response.writeHead(discoveryStatus).end('{}');
+      return json({ region, orgName: 'Fixture Org',
+        connections: [{ protocol: 'oidc', connectionId: `sso-${region}`, connectionName: 'SSO' }] });
+    }
     if (request.url === '/api/auth/desktop/callback/poll') return json({ status: 'ok', code: 'fixture-code' });
     if (request.url === '/api/auth/token') return json({ status: 'ok', accessToken: 'fixture-access', refreshToken: `fixture-refresh-${member}`, membership });
     if (request.url === '/api/auth/logout') return json({ status: 'ok' });
@@ -360,14 +369,19 @@ async function fakeLoginAuth() {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
   const close = () => new Promise((resolve) => { server.closeAllConnections?.(); server.close(resolve); });
-  return { hits, port, close, setMember: (id) => { member = id; }, setKind: (value) => { kind = value; } };
+  return { hits, port, close, setMember: (id) => { member = id; }, setKind: (value) => { kind = value; },
+    setDiscoveryStatus: value => { discoveryStatus = value; } };
 }
 
 async function loginEnvironment(t, root, profile, port) {
   const endpointDir = path.join(root, 'endpoints');
   fs.mkdirSync(endpointDir, { recursive: true });
-  const manifest = JSON.stringify({ authApiBaseUrl: `https://127.0.0.1:${port}`, authDesktopCallbackUrl: `https://127.0.0.1:${port}/desktop/callback` });
-  for (const file of ['endpoint.json', 'endpoint.global.json']) fs.writeFileSync(path.join(endpointDir, file), manifest);
+  for (const [region, file] of [['cn', 'endpoint.json'], ['global', 'endpoint.global.json']]) {
+    const base = `https://127.0.0.1:${typeof port === 'number' ? port : port[region]}`;
+    fs.writeFileSync(path.join(endpointDir, file), JSON.stringify({
+      authApiBaseUrl: base, authDesktopCallbackUrl: `${base}/desktop/callback`,
+    }));
+  }
   const saved = { CINDY_HOST_DATA_DIR: process.env.CINDY_HOST_DATA_DIR, CINDY_HOST_ENDPOINT_DIR: process.env.CINDY_HOST_ENDPOINT_DIR,
     CINDY_HOST_APP_DATA_DIR: process.env.CINDY_HOST_APP_DATA_DIR };
   process.env.CINDY_HOST_DATA_DIR = profile;
@@ -378,13 +392,78 @@ async function loginEnvironment(t, root, profile, port) {
   const store = { read: (key) => records.get(key) ?? null, write: (key, value) => records.set(key, value), remove: (key) => records.delete(key) };
   const { runLoginCommand } = await import('./login-cli.mjs');
   const { CindyAuthClient } = await import('@cindy/auth-client');
-  const login = (deps = {}, stdout = () => {}) => runLoginCommand(['--no-open'], { stdout, stderr: () => {}, deps: {
+  const diagnostics = [];
+  const login = (deps = {}, stdout = () => {}, argv = []) => runLoginCommand(['--no-open', ...argv], { stdout, stderr: line => diagnostics.push(line), deps: {
     store, readStatus: async () => ({ running: false }), scanDesktops: async () => [],
     // The manifest must be https (endpoints.mjs); the fake server listens on plain loopback HTTP.
     createAuthClient: (options) => new CindyAuthClient({ ...options, fetch: (input, init) => fetch(String(input).replace(/^https:/, 'http:'), init) }),
     ...deps } });
-  return { login, records };
+  return { login, records, diagnostics };
 }
+
+/*
+ * Test value (engineering-conventions §3.2)
+ * - Entry: runLoginCommand with real auth-client requests to two loopback servers.
+ * - Regression: CLI sent an explicit enterprise identifier to the build region
+ *   only. One valid CN discovery plus an unavailable global realm must sign in.
+ * - Gap: auth-client tests cover selection in isolation, not the CLI warning and
+ *   retry instructions, callback, saved realm, or explicit --region bypass.
+ * - Tier: unit with isolated profile, loopback and in-memory credentials.
+ */
+test('enterprise login uses the discovered realm once and respects an explicit region', async t => {
+  const { root, profile } = await skillBoundaryProfile(t);
+  const cn = await fakeLoginAuth({ region: 'cn', discoveryStatus: 200 });
+  t.after(cn.close);
+  const global = await fakeLoginAuth({ discoveryStatus: 503 });
+  t.after(global.close);
+  cn.setKind('org');
+  global.setKind('org');
+  const { login, records, diagnostics } = await loginEnvironment(t, root, profile, { cn: cn.port, global: global.port });
+  const { AUTH_SESSION_KEY } = await import('../../desktop/src/main/authCredentialKeys.ts');
+  const { parseAuthSessionRecord } = await import('@cindy/auth-client');
+  const org = '--org=fixture-org';
+  const discover = '/api/auth/sso/discovery';
+  const signIn = [discover, '/api/auth/desktop/callback/poll', '/api/auth/token'];
+  const profileLine = `Profile: ${profile}`;
+
+  await t.test('warns when the other region is unavailable and stays quiet on a confirmed miss', async () => {
+    const selected = await login({}, undefined, [org]);
+    assert.equal(selected.realm, 'cn');
+    assert.equal(selected.method, 'sso-cn');
+    assert.deepEqual(cn.hits.splice(0), signIn);
+    assert.deepEqual(global.hits.splice(0), [discover]);
+    assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY)).realm, 'cn');
+    assert.deepEqual(diagnostics.splice(0), [
+      'Warning: Could not confirm the global auth region. Using cn. If this is not the correct region, rerun with --region=cn or --region=global.',
+      profileLine,
+    ]);
+
+    global.setDiscoveryStatus(404);
+    assert.equal((await login({}, undefined, [org])).realm, 'cn');
+    assert.deepEqual(diagnostics.splice(0), [profileLine], 'a confirmed miss does not need a warning');
+    assert.deepEqual(cn.hits.splice(0), signIn);
+    assert.deepEqual(global.hits.splice(0), [discover]);
+  });
+
+  await t.test('explains how to retry a dual hit and respects the explicit region', async () => {
+    global.setDiscoveryStatus(200);
+    await assert.rejects(login({}, undefined, [org]), {
+      code: 'ORG_REALM_AMBIGUOUS',
+      statusCode: 409,
+      message: 'Enterprise identifier exists in both auth regions. Rerun with --region=cn or --region=global.',
+    });
+    assert.deepEqual(cn.hits.splice(0), [discover]);
+    assert.deepEqual(global.hits.splice(0), [discover]);
+    assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY)).realm, 'cn', 'ambiguous discovery does not change the saved session');
+
+    const forced = await login({}, undefined, [org, '--region=global']);
+    assert.equal(forced.realm, 'global');
+    assert.deepEqual(diagnostics, [profileLine], 'an explicit region does not need a warning');
+    assert.deepEqual(cn.hits, []);
+    assert.deepEqual(global.hits, signIn);
+    assert.equal(parseAuthSessionRecord(records.get(AUTH_SESSION_KEY)).realm, 'global');
+  });
+});
 
 test('25b: cindy-host login publishes the owner that serve then reads as stable, and sweeps the previous account', async (t) => {
   const { root, home, profile, observer, boundary } = await skillBoundaryProfile(t);
@@ -558,6 +637,9 @@ test('25b L1: /api/agent-skills drops a Skill the user switched off, and only li
   held = true;
   assert.deepEqual((await list({ agentKind: 'pi' })).skills.map((skill) => skill.name), ['kept']);
   assert.equal(refreshes, 1, 'held: listed without refreshing');
+  // #12732: a plugin-engine `/` menu asks for `acp`. Plugin engines do not run on this Host, so it must
+  // answer "not registered" rather than treat the unknown kind as Claude and list Claude's Skills.
+  assert.deepEqual(await list({ agentKind: 'acp' }), { success: false, error: "Agent 'acp' is not registered" });
 });
 
 // Review follow-ups (25b): the browser step can take minutes, so the desktop scan and serve's state are

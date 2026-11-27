@@ -109,6 +109,19 @@ Agent 把内容注入当前这一轮后回 `{ "outcome": "injected" }`,插话之
 入口原样转发字节时什么都不用做,外部 Agent 自己声明、自己处理。入口会改写 `initialize` 回包时要保留 `_meta.steering`;
 外部 Agent 本身不支持时,不要替它声明,否则 Cindy 会把插话发给它而收不到 `injected`。
 
+**聊天里的每轮权限闸**:用户把任务接到飞书、微信等聊天后,群聊、访客和个人微信发来的消息带一条「这一轮哪些操作必须先让
+用户确认」的规则,内置引擎在执行每个工具前检查它。插件引擎要让 Cindy 看到这一轮的每一次工具调用,才能执行这条规则。
+Agent(或入口)能做到时,在 `initialize` 结果的**顶层** `_meta` 里声明 `{ "permissionGate": { "supported": true } }`。
+声明支持后，每条 `session/prompt` 的 `_meta.permissionGate` 都带 `turnId`。受限轮次另外带
+`scope: "all-tool-calls"`，Agent 在这轮及其后台工作中执行任何工具前都发 `session/request_permission`。
+所有审批请求都要在顶层 `_meta.permissionGate.turnId` 原样回传发起这项工作的轮次 ID。新一轮开始后，
+旧轮次的审批请求会拒绝。Agent 自己原本无需询问的调用可同时带 `routine: true`。Cindy 能识别操作和输入且
+渠道规则允许时会直接同意读取和搜索，其余请求走审批。只允许文字回复的轮次拒绝全部工具请求。
+
+`toolCall.kind` 照 ACP 填写(`read`、`edit`、`delete`、`execute` 等),执行命令时把命令放在 `rawInput.command`:聊天的安全
+规则按它们判断,例如群聊里不能删除文件。没有声明的 Agent 收不到这类轮次,聊天里提示当前引擎不支持,主人私聊的普通消息
+照常运行;任务处在「全部允许」时这类轮次同样不运行,与内置引擎一致。声明了就必须做到,做不到时不要声明。
+
 ### 入口进程
 
 用户在任务里选了你的引擎后,Cindy 以插件 Node 运行时的「原样 stdio」模式启动 `entry`(与
@@ -206,3 +219,37 @@ worker 只返回账号可显示的快照，例如：
 时间使用 Unix 毫秒，额度填剩余百分比（0–100），余额填币种及十进制字符串。只返回有依据的字段：
 可单独提供窗口或余额，也可两者都提供。标签应能区分套餐、模型组和周期。账号用量按需读取，
 请把凭据留在 worker，避免把快照写入引擎列表。任务本身的上下文占用继续由 ACP `usage_update` 上报。
+
+### 多个账号（未发布）
+
+外部 Agent 能把登录与会话历史放进指定目录时（类似 Claude 的 `CLAUDE_CONFIG_DIR`、Codex 的 `CODEX_HOME`），可以让用户在 Cindy 里
+给这个引擎添加多个账号：Cindy 像内置供应商一样在账号之间分配任务、设置并发上限和权重、额度用完时换号，并显示每个账号的身份。
+做不到按目录隔离登录的 Agent（例如登录固定存在系统钥匙串里）不要声明登录方式，只报告原有登录的身份即可。
+
+1. 在 `PUT /harnesses` 对应条目加 `accounts`(只在 `available: true` 时有效，主 worker 须为 `json-rpc-stdio`)：
+
+   ```json
+   { "id": "dsh", "available": true,
+     "accounts": { "methods": [{ "id": "api-key", "label": "DeepSeek API Key", "kind": "secret", "secretLabel": "DeepSeek API Key" }] } }
+   ```
+
+   `kind` 为 `browser`(你的 worker 打开浏览器完成登录)或 `secret`(Cindy 弹窗收一个 Key 交给你)，最多 4 种。`methods: []` 表示只报告原有登录
+   的身份、不能添加账号。
+2. Cindy 加的账号运行任务时，入口的 `process.argv` 末尾多两项 `--cindy-account-dir <绝对路径>`。只对这一次启动让 Agent 的登录、写入的设置和会话
+   历史都用这个目录(例如设置 `DSH_HOME`)，**不要回落到原有登录**；目录用不了就向 stderr 写明原因并以非零状态退出。没有这个参数时就是原有登录，
+   行为不变。与 `--cindy-remote-workspace` / `--cindy-guest-workspace` 同时出现时，分享模式的隔离以这个目录为来源。
+3. 主 worker 处理下面的方法(不带 `accountDir` 都指原有登录)：
+   - `accountStatus({ harnessId, accountDir? })` → `null` 或 `{ state: "signed-in" | "signed-out", identity?: { email?, name?, detail? }, plan?, fingerprint?, models? }`。
+     身份只给能显示的：邮箱、用户名，或「API Key ····abcd」这类说明；`fingerprint` 是同一账号的稳定摘要(例如 Key 的 sha256 前缀)，只用来识别重复登录；
+     `models` 只在这个账号的模型和引擎清单不同时给。
+   - `accountLogin({ harnessId, accountDir?, methodId, secret? })` → `{ ok: true }` 或 `{ ok: false, error: "cancelled" | "timeout" | "busy" | "unsupported" | "invalid-secret" | "failed", message? }`。
+     浏览器登录最长等 11 分钟，等待期间至少每 20 秒发一次进度 notification 或写一行 stderr，否则 60 秒没有动静就会超时。`secret` 只用来写进
+     这个账号目录里 Agent 自己的凭据存储，不要写日志、不要回传。
+   - `accountLoginCancel({ harnessId, accountDir? })` → `{ ok: true }`，结束正在等待的登录。
+   - `usage` 多一个可选参数 `accountDir`，返回那个账号的用量。窗口可以加 `windowMinutes`(窗口长度，例如 5 小时为 300)和 `models`(这个窗口只限这些模型)，
+     Cindy 据此优先用快要作废的额度。
+4. 让 Cindy 能换号：Agent 在 `session/new`、`session/load`、`session/resume`、`session/prompt` 因账号原因失败时，入口在 JSON-RPC 错误里加
+   `error.data._meta.cindy = { kind: "usage-limit" | "auth-required" | "overloaded", resetsAt?: <毫秒>, model? }`：额度用完(有周期重置的给 `resetsAt`，
+   余额不足这类没有重置时刻的不给)、需要重新登录、服务繁忙或限流。其余消息原样转发。没有分类时 Cindy 只能识别启动失败和 `-32000` 登录失效。
+
+旧版 Cindy 不会传这个参数，也不会调用这些方法，插件照旧按原有登录运行。

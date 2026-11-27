@@ -15,13 +15,17 @@ import { useTranslation } from 'react-i18next';
 import { isSharedTaskPeer } from '@cindy/device-link';
 import { retainReportingPluginEngines } from './pluginEngineUsage';
 
+import { ANTIGRAVITY_MARK_DATA_URL, isAntigravityEngine } from '@cindy/maker-shared/branding';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
+  subscribeDataOwnerGeneration,
   type DataOwnerGeneration,
 } from '@/contexts/dataOwnerGeneration';
 import { createLogger } from '@/lib/logger';
+import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
 import { extractIpcError } from '@/utils/ipcError';
+import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 import {
   PLUGIN_ENGINES_INVOKE,
   pluginEngineKeyFromProviderId,
@@ -54,11 +58,14 @@ export function requestPluginEnginesRefresh(targetGhostId?: string): void {
 let engines: readonly PluginEngineView[] = NO_ENGINES;
 const listeners = new Set<() => void>();
 let detachPush: (() => void) | null = null;
+let detachOwner: (() => void) | null = null;
+let snapshotOwner = getDataOwnerGeneration();
 /** Bumped by every push, so a slower initial read never overwrites a newer pushed list. */
 let generation = 0;
 
 function setEngines(next: readonly PluginEngineView[]): void {
-  retainReportingPluginEngines(getDataOwnerGeneration(), null, next);
+  snapshotOwner = getDataOwnerGeneration();
+  retainReportingPluginEngines(snapshotOwner, null, next);
   engines = next.length === 0 ? NO_ENGINES : next;
   for (const listener of listeners) listener();
 }
@@ -69,31 +76,48 @@ function sanitize(raw: unknown): readonly PluginEngineView[] {
     !!engine && typeof engine === 'object'
     && typeof (engine as PluginEngineView).providerId === 'string'
     && typeof (engine as PluginEngineView).name === 'string'
-    && Array.isArray((engine as PluginEngineView).models));
+    && Array.isArray((engine as PluginEngineView).models))
+    .map((engine) => isAntigravityEngine(engine)
+      ? { ...engine, iconDataUrl: ANTIGRAVITY_MARK_DATA_URL }
+      : engine);
 }
 
 function attach(): void {
   const api = pluginEnginesApi();
   if (!api?.listPluginEngines || !api.onPluginEnginesChanged) return;
+  const owner = getDataOwnerGeneration();
   detachPush = api.onPluginEnginesChanged((list) => {
+    if (!isDataOwnerGenerationCurrent(owner)) return;
     generation += 1;
     setEngines(sanitize(list));
   });
   const readGeneration = generation;
   api.listPluginEngines()
     .then((list) => {
-      if (readGeneration === generation) setEngines(sanitize(list));
+      if (readGeneration === generation && isDataOwnerGenerationCurrent(owner)) setEngines(sanitize(list));
     })
     .catch((err: unknown) => log.warn('plugin engines unavailable', err));
 }
 
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
-  if (listeners.size === 1 && !detachPush) attach();
+  if (listeners.size === 1) {
+    detachOwner = subscribeDataOwnerGeneration(() => {
+      generation += 1;
+      detachPush?.();
+      detachPush = null;
+      setEngines(NO_ENGINES);
+      attach();
+    });
+    attach();
+  }
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0 && detachPush) {
-      detachPush();
+    if (listeners.size === 0) {
+      generation += 1;
+      detachOwner?.();
+      detachOwner = null;
+      detachPush?.();
       detachPush = null;
     }
   };
@@ -104,7 +128,7 @@ function subscribeDisabled(): () => void {
 }
 
 function snapshot(): readonly PluginEngineView[] {
-  return engines;
+  return isDataOwnerGenerationCurrent(snapshotOwner) ? engines : NO_ENGINES;
 }
 
 function emptySnapshot(): readonly PluginEngineView[] {
@@ -149,8 +173,11 @@ function sameEngineViews(
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function isUnsupportedRemoteListError(error: unknown): boolean {
-  if (extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return true;
+function isUnsupportedRemoteListError(error: unknown, deviceId: string): boolean {
+  const code = extractIpcError(error)?.code;
+  if (code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return true;
+  // A task computer that cannot read plugin engines for its sources yet refuses the read itself.
+  if (code === 'INVALID_PARAMS' && parseModelCatalogKey(deviceId)) return true;
   const message = error instanceof Error ? error.message : String(error ?? '');
   return message.includes('CHANNEL_NOT_ALLOWED');
 }
@@ -227,9 +254,11 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
       if (pending) return pending;
       const readGeneration = deviceGeneration;
       const readStartedAt = Date.now();
+      const link = window.electronAPI?.deviceLink;
       const run = Promise.resolve()
-        .then(() => isDataOwnerGenerationCurrent(owner) && readGeneration === deviceGeneration
-          ? window.electronAPI?.deviceLink?.invoke(deviceId, PLUGIN_ENGINES_INVOKE.LIST, [])
+        .then(() => isDataOwnerGenerationCurrent(owner) && readGeneration === deviceGeneration && link
+          // A source read through the task computer (remote control) is keyed by modelCatalogKey.
+          ? invokeModelCatalog(link, deviceId, PLUGIN_ENGINES_INVOKE.LIST, [])
           : undefined)
         .then((reply) => {
           if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== deviceGeneration || !Array.isArray(reply)) {
@@ -251,7 +280,7 @@ function deviceCatalogue(owner: DataOwnerGeneration, deviceId: string): DeviceCa
         // Old or unreachable hosts leave the catalogue unknown or retain their last result.
         .catch((error: unknown) => {
           if (!isDataOwnerGenerationCurrent(owner) || readGeneration !== deviceGeneration) return;
-          if (isUnsupportedRemoteListError(error)) unsupported = true;
+          if (isUnsupportedRemoteListError(error, deviceId)) unsupported = true;
           else lastFailedAt = Date.now();
         })
         .finally(() => {
@@ -404,6 +433,24 @@ export function evictRemotePluginEngines(deviceId: string): void {
   existingDeviceCatalogue(getDataOwnerGeneration(), deviceId)?.evict();
 }
 
+/** Drop data and in-flight reads routed through this task computer. */
+export function evictControlledPluginEngines(taskDeviceId: string): void {
+  const catalogues = deviceCatalogues.get(getDataOwnerGeneration());
+  for (const [key, catalogue] of catalogues ?? []) {
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) catalogue.evict();
+  }
+}
+
+/** Only active task headers reload after the host confirms which sources are still available. */
+export function refreshControlledPluginEngines(taskDeviceId: string, sourceIds: ReadonlySet<string>): void {
+  const catalogues = deviceCatalogues.get(getDataOwnerGeneration());
+  for (const [key, catalogue] of catalogues ?? []) {
+    const route = parseModelCatalogKey(key);
+    if (route?.taskDeviceId === taskDeviceId && sourceIds.has(route.agentDeviceId)
+      && catalogue.hasPrefetchSubscribers()) catalogue.ensureLoaded();
+  }
+}
+
 function unreadSnapshot(): null {
   return null;
 }
@@ -450,7 +497,7 @@ const pickerReadAt = new WeakMap<DeviceCatalogue, number>();
  * DEVICE_PLUGIN_ENGINES_REREAD_MS; a computer keeps its last answer in between.
  * `null` = that computer has not answered yet (or could not be reached).
  */
-export function useDevicesPluginEngines(deviceIds: readonly string[]): {
+export function useDevicesPluginEngines(deviceIds: readonly string[], prefetchOnReconnect = false): {
   catalogues: ReadonlyMap<string, readonly PluginEngineView[] | null>;
   read: (deviceId?: string) => void;
 } {
@@ -471,12 +518,12 @@ export function useDevicesPluginEngines(deviceIds: readonly string[]): {
     }
   }, [sources]);
   const subscribe = useCallback((listener: () => void) => {
-    // Picker candidates share cache updates and read on demand, without causing reconnect prefetch.
-    const offs = sources.map((source) => source.catalogue.subscribe(listener, false));
+    // Picker candidates read on demand. A visible settings list can also recover on reconnect.
+    const offs = sources.map((source) => source.catalogue.subscribe(listener, prefetchOnReconnect));
     return () => {
       for (const off of offs) off();
     };
-  }, [sources]);
+  }, [sources, prefetchOnReconnect]);
   // One map per distinct set of answers, so consumers re-render only when a computer's list changed.
   const cache = useRef<{
     sources: typeof sources;

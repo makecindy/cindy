@@ -1,4 +1,6 @@
-import { ipcMain } from 'electron';
+import { dialog, ipcMain } from 'electron';
+import { homedir } from 'node:os';
+import { activeOwnerScopeKey } from '../appSessionState.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { isProviderSharePeer } from '@cindy/device-link';
 import { getDeviceLinkInvokeContext, type DeviceLinkInvokeContext } from '../device-link/invoke-context.js';
@@ -6,11 +8,13 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   SUBSCRIPTION_ACCOUNTS_CHANNEL,
   isSubscriptionPoolProviderIdShape,
+  isSubscriptionProvider,
 } from '../../shared/subscriptionAccounts.js';
 import {
   parseSubscriptionAccountCommand,
   parseSubscriptionSessionAccountQuery,
 } from './commands.js';
+import { onPluginEngineAccountsChanged } from '../plugin-engine-accounts/runtime.js';
 export { parseSubscriptionAccountCommand } from './commands.js';
 import { executeSubscriptionAccountCommand } from './service.js';
 import {
@@ -52,6 +56,10 @@ export function registerSubscriptionAccountsIpc(): void {
     broadcast('subscription-accounts:changed', { providerId, ...(resetAccountId ? { resetAccountId } : {}),
       ...(change ? { change } : {}) }),
   );
+  // Plugin engine accounts use the same push (older views ignore provider ids they do not show).
+  onPluginEngineAccountsChanged((providerId, change) =>
+    broadcast('subscription-accounts:changed', { providerId, ...(change ? { change } : {}) }),
+  );
   ipcMain.handle('maker:subscription-pool:quota', async (event, providerId: unknown, model?: unknown, scope?: unknown) => {
     const context = getDeviceLinkInvokeContext();
     if (context?.sharedTask) throwIpcError('PERMISSION_DENIED', 'Account quota requires the owner');
@@ -89,7 +97,6 @@ export function registerSubscriptionAccountsIpc(): void {
     if (context?.sharedTask)
       throwIpcError('PERMISSION_DENIED', 'Account management requires the owner');
     if (!context) assertTrustedAppRendererEvent(event);
-    // Read-only task account for its usage display; same owner gate as `read`.
     const session = parseSubscriptionSessionAccountQuery(raw);
     if (session) {
       try {
@@ -100,7 +107,41 @@ export function registerSubscriptionAccountsIpc(): void {
         throwIpcError('SUBSCRIPTION_ACCOUNT_FAILED', 'Could not read the task account');
       }
     }
+    if (raw && typeof raw === 'object' && 'action' in raw
+      && (raw.action === 'discover-logins' || raw.action === 'attach-login' || raw.action === 'pick-login')) {
+      if (context && !isOwnComputerContext(context)) throwIpcError('PERMISSION_DENIED', 'Existing logins require the owner');
+      if (!('providerId' in raw) || !isSubscriptionProvider(raw.providerId)) throwIpcError('INVALID_PARAMS', 'Invalid provider');
+      const owner = activeOwnerScopeKey();
+      const { existingLoginSession } = await import('./existingLogins.js');
+      if (owner !== activeOwnerScopeKey()) throwIpcError('PERMISSION_DENIED', 'Account owner changed');
+      const session = existingLoginSession(raw.providerId);
+      try {
+        if (raw.action === 'discover-logins') {
+          const candidates = await session.discover();
+          return { computer: session.computer, candidates };
+        }
+        if (raw.action === 'pick-login') {
+          const picked = await dialog.showOpenDialog({ defaultPath: homedir(), properties: ['openDirectory', 'showHiddenFiles'] });
+          session.assertCurrent();
+          if (picked.canceled || !picked.filePaths[0]) return { computer: session.computer, candidates: [], canceled: true };
+          const candidates = await session.pick(picked.filePaths[0]);
+          return { computer: session.computer, candidates };
+        }
+        if (!('receipt' in raw) || typeof raw.receipt !== 'string' || raw.receipt.length !== 36) throw new Error('Invalid selection');
+        await session.attach(raw.receipt);
+        const { refreshLinkedSubscriptionProvider } = await import('./service.js');
+        session.assertCurrent();
+        refreshLinkedSubscriptionProvider(raw.providerId);
+        return { computer: session.computer, candidates: [] };
+      } catch {
+        throwIpcError('SUBSCRIPTION_ACCOUNT_FAILED', 'Could not verify the selected subscription login');
+      }
+    }
     const command = parseSubscriptionAccountCommand(raw);
+    // A secret (a plugin engine's API key) is typed into this computer's own window only: it never
+    // travels between computers (plugin-security-and-authoring.md 内联凭证只走本机).
+    if (context && 'secret' in command && command.secret !== undefined)
+      throwIpcError('PERMISSION_DENIED', 'Enter the key on the computer that has the plugin');
     try {
       return await executeSubscriptionAccountCommand(command);
     } catch (error) {
@@ -115,6 +156,7 @@ export function registerSubscriptionAccountsIpc(): void {
             : KNOWN_FAILURE_REASONS.has(reason) ? reason
               : error instanceof Error ? error.name : typeof error,
         });
+      if (reason === 'Account not found') throwIpcError('NOT_FOUND', 'Subscription account not found');
       if (unreachable)
         throwIpcError(
           'SUBSCRIPTION_ACCOUNT_UNREACHABLE',

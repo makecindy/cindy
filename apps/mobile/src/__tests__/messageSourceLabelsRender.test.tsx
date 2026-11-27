@@ -65,6 +65,8 @@ const viewportHarness = vi.hoisted(() => ({
   renders: 0,
   captureNativeOpacity: false,
   memoizedCells: false,
+  window: { width: 402, height: 874, scale: 3, fontScale: 1 },
+  windowListeners: new Set<() => void>(),
   opacityTargets: new Set<HTMLElement>(),
   layouts: new WeakMap<Element, (event: { nativeEvent: { layout: { height: number } } }) => void>(),
   scrollToEnd: vi.fn(),
@@ -75,7 +77,6 @@ const viewportHarness = vi.hoisted(() => ({
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
 vi.mock("react-native", async () => {
   const React = await import("react");
-  const window = { width: 402, height: 874, scale: 3, fontScale: 1 };
   // onLongPress 映射到 contextmenu,便于测试长按显示来源 ID。
   const view = ({ children, testID, accessibilityLabel, accessibilityHint, accessibilityState, onLayout, onLongPress, onPress, disabled, selectable, style, nativeRef }: {
     children?: ReactNode;
@@ -101,6 +102,11 @@ vi.mock("react-native", async () => {
         style: { height: layoutStyle.height },
         "data-testid": testID,
         "data-min-height": layoutStyle.minHeight,
+        "data-padding-left": layoutStyle.paddingLeft,
+        ...(testID === "message.audioAttachmentCard" ? {
+          "data-set-width": layoutStyle.width,
+          "data-align": layoutStyle.alignSelf,
+        } : {}),
         ...(selectable !== undefined ? { "data-selectable": String(selectable) } : {}),
         "aria-label": accessibilityLabel,
         "aria-expanded": accessibilityState?.expanded,
@@ -171,7 +177,13 @@ vi.mock("react-native", async () => {
     Alert: {},
     Linking: {},
     StatusBar: {},
-    Dimensions: { get: () => window, addEventListener: () => ({ remove() {} }) },
+    Dimensions: {
+      get: () => viewportHarness.window,
+      addEventListener: (_event: string, listener: () => void) => {
+        viewportHarness.windowListeners.add(listener);
+        return { remove: () => viewportHarness.windowListeners.delete(listener) };
+      },
+    },
     useWindowDimensions: () => ({
       width: 402,
       height: 874,
@@ -203,6 +215,7 @@ vi.mock("@legendapp/list/react-native", () => ({
   useViewability: () => {},
 }));
 vi.mock("lucide-react-native", () => ({
+  ArrowDown: () => createElement("span", { "data-testid": "audio-fetch-icon" }),
   Stethoscope: () => null,
   Mail: () => null, CalendarDays: () => null, Folder: () => null, ChartColumn: () => null, Info: () => null, Clock: () => null, MapPin: () => null, Coffee: () => null, Image: () => null, Users: () => null, Star: () => null,
   Database: () => null,
@@ -239,7 +252,8 @@ vi.mock("lucide-react-native", () => ({
   ListTodo: () => null,
   LoaderCircle: () => null,
   PencilLine: () => null,
-  RefreshCw: () => null,
+  RefreshCw: () => createElement("span", { "data-testid": "retry-icon" }),
+  Play: () => createElement("span", { "data-testid": "play-icon" }),
   Send: () => null,
   Share: () => null,
   Sparkles: () => null,
@@ -387,7 +401,9 @@ vi.mock("@/session/messageActions", async (original) => ({
 }));
 
 import { i18n } from "@/i18n";
-import { MessageRenderer } from "@/session/MessageRenderer";
+import { AttachmentStrip, COMPANION_AVATAR_SIZE, MessagePayloadModal, MessageRenderer } from "@/session/MessageRenderer";
+import { buildMediaPayload } from "@/session/messagePayload";
+import { buildMessageContentLayout } from "@/session/messageContentLayout";
 import { copyMessageText, writeClipboardText } from "@/session/messageActions";
 import { buildMobileMessageRenderItems } from "@/session/messageRenderModel";
 import { remoteSessionStore } from "@/session/remoteSessionStore";
@@ -1108,7 +1124,11 @@ describe("table-heavy assistant replies", () => {
   });
 });
 
-vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: () => null }));
+const mockAudioViewer = vi.hoisted(() => vi.fn((_props: {
+  onAudioPhaseChange?: (phase: 'idle' | 'loading' | 'ready' | 'error') => void;
+  resolve(signal: AbortSignal, forceRefresh?: boolean): Promise<unknown>;
+}) => null));
+vi.mock('@/session/RemoteAttachmentPreview', () => ({ RemoteAttachmentPreview: mockAudioViewer }));
 
 // 测试价值
 // - 生产入口与可观察结果：真实 MessageRenderer 的 pending_send 分支通过 renderText
@@ -1462,4 +1482,162 @@ describe('buddy primary inbox letters', () => {
       viewportHarness.memoizedCells = false;
     }
   });
+});
+
+it('opens managed audio on tap and reflects the viewer states on the message card', async () => {
+  const url = `cindy-media://blobs/${'a'.repeat(64)}.wav`;
+  const tool = { ...msg('voice-tool', { toolName: 'mcp:cindy:ghost_call', toolUseId: 'voice-call' }, null), role: 'tool_use' as const };
+  const result = { ...msg('voice-result', { xdt_audio_tracks: [{ title: 'Voice sample', xdt_audio_url: url }] }, null),
+    role: 'tool_result' as const, toolUseId: 'voice-call' };
+  const items = buildMobileMessageRenderItems([tool, result]);
+  const playbackSource = { url: 'https://fixture.invalid/tone.wav' };
+  const resolve = vi.fn().mockResolvedValue(playbackSource);
+  mockAudioViewer.mockClear();
+  const mounted = mount([], { items, companion: true, onResolveRemoteMedia: resolve });
+  const card = () => mounted.host.querySelector<HTMLElement>('[data-testid="message.audioAttachmentCard"]')!;
+  try {
+    expect(card().textContent).toContain('Voice sample');
+    expect(card().querySelector('[data-testid="audio-fetch-icon"]')).not.toBeNull();
+    expect(card().querySelector('[data-testid="play-icon"]')).toBeNull();
+    expect(card().textContent).toContain(i18n.t('message.attachmentPreview.fetchAudio'));
+    expect(resolve).not.toHaveBeenCalled();
+    await act(async () => {
+      card().click();
+      await Promise.resolve();
+      expect(resolve).toHaveBeenCalledWith(
+        { kind: 'audio', url, previewable: false }, { signal: expect.any(AbortSignal), front: true },
+      );
+    });
+    const firstViewer = mockAudioViewer.mock.lastCall?.[0]!;
+    expect(card().getAttribute('aria-disabled')).toBe('true');
+    expect(card().textContent).toContain(i18n.t('message.renderer.loading'));
+    await expect(firstViewer.resolve(new AbortController().signal)).resolves.toBe(playbackSource);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    act(() => firstViewer.onAudioPhaseChange?.('ready'));
+    expect(card().querySelector('[data-testid="play-icon"]')).not.toBeNull();
+    expect(card().textContent).toContain(i18n.t('message.renderer.playAudio'));
+    act(() => firstViewer.onAudioPhaseChange?.('error'));
+    expect(card().querySelector('[data-testid="retry-icon"]')).not.toBeNull();
+    expect(card().textContent).toContain(i18n.t('message.attachmentPreview.retry'));
+    resolve.mockRejectedValueOnce(new Error('Controller offline'));
+    await act(async () => card().click());
+    expect(card().textContent).toContain(i18n.t('message.attachmentPreview.retry'));
+    await act(async () => card().click());
+    expect(resolve).toHaveBeenLastCalledWith(
+      { kind: 'audio', url, previewable: false }, { signal: expect.any(AbortSignal), front: true, forceRefresh: true },
+    );
+  } finally {
+    mounted.unmount();
+  }
+});
+
+it.each([true, false])('aligns tool audio to the reply column when a Bot portrait is present (%s)', (companion) => {
+  const tool = { ...msg('voice-tool', { toolName: 'mcp:cindy:ghost_call', toolUseId: 'voice-call' }, null), role: 'tool_use' as const };
+  const result = { ...msg('voice-result', { xdt_audio_tracks: [{ title: 'Tone.wav', xdt_audio_url: 'xdt-audio://tone.wav' }] }, null),
+    role: 'tool_result' as const, toolUseId: 'voice-call' };
+  const final = { ...msg('reply', 'Here is the audio.', { assistantPhase: 'final_answer', turnCompleted: true }), role: 'assistant' as const };
+  const items = buildMobileMessageRenderItems([tool, result, final]).map(item => item.type === 'tool_media'
+    ? { ...item, tools: item.tools.map(entry => ({ ...entry,
+      files: [{ kind: 'file' as const, title: 'Readme.pdf', url: `cindy-media://blobs/${'b'.repeat(64)}.pdf` }],
+    })) }
+    : item);
+  const mounted = mount([], { items, companion, companionAvatar: <i data-testid="partner-portrait" /> });
+  try {
+    const output = mounted.host.querySelector('[data-testid="message.toolMediaBlock"]')!;
+    const audio = output.querySelector('[data-testid="message.audioAttachmentCard"]')!;
+    expect(audio.parentElement?.getAttribute('data-padding-left')).toBe(companion ? String(COMPANION_AVATAR_SIZE + 10) : null);
+    const file = output.querySelector('[data-testid="message.filePreviewButton.pdf"]');
+    expect(file?.parentElement).toBe(output);
+    expect(output.getAttribute('data-padding-left')).toBeNull();
+    expect(output.parentElement?.getAttribute('data-padding-left')).toBeNull();
+    expect(output.querySelector('[data-testid="partner-portrait"]')).toBeNull();
+  } finally {
+    mounted.unmount();
+  }
+});
+
+it('keeps addressless group files on their ID-based open path', () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  const onOpenFile = vi.fn();
+  const onResolveRemoteMedia = vi.fn();
+  const layout = buildMessageContentLayout({ screenWidth: 320 });
+  act(() => root.render(
+    <AttachmentStrip attachments={[
+      { kind: 'file', name: 'Readme.pdf', previewable: false },
+      { kind: 'file', name: '录音附件.wav', mimeType: 'audio/wav', previewable: false },
+    ]} messageKey="sent-audio" align="right" layout={layout}
+    usePreviewState={useState} onOpenFile={onOpenFile} onResolveRemoteMedia={onResolveRemoteMedia} />,
+  ));
+  try {
+    const file = host.querySelector<HTMLElement>('[data-testid="message.filePreviewButton"]');
+    expect(file?.textContent).toContain('录音附件.wav');
+    expect(host.querySelector('[data-testid="message.audioAttachmentCard"]')).toBeNull();
+    expect(host.querySelector('[data-testid="message.filePreviewButton.pdf"]')).not.toBeNull();
+    act(() => file!.click());
+    expect(onOpenFile).toHaveBeenCalledExactlyOnceWith(1);
+    expect(onResolveRemoteMedia).not.toHaveBeenCalled();
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it.each([[320, 252], [402, 304], [834, 320]])(
+  'gives short and long audio cards the same width at a %d pt screen', (screenWidth, expectedWidth) => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    act(() => root.render(
+      <AttachmentStrip attachments={[
+        { kind: 'file', name: 'Tone.wav', path: '/fixture/Tone.wav', previewable: false },
+        { kind: 'file', name: '小猫观察日记 · 片头旁白和客厅环境声 · 第三版试听录音.wav', path: '/fixture/voice.wav', previewable: false },
+      ]} messageKey="audio-width" align="left" layout={buildMessageContentLayout({ screenWidth })} usePreviewState={useState} />,
+    ));
+    try {
+      const widths = Array.from(host.querySelectorAll('[data-testid="message.audioAttachmentCard"]'),
+        (card) => card.getAttribute('data-set-width'));
+      expect(widths).toEqual([String(expectedWidth), String(expectedWidth)]);
+    } finally {
+      act(() => root.unmount());
+    }
+  },
+);
+
+it('updates a retained audio card when the chat viewport resizes', () => {
+  const portrait = viewportHarness.window;
+  viewportHarness.memoizedCells = true;
+  const tool = { ...msg('voice-tool', { toolName: 'mcp:cindy:ghost_call', toolUseId: 'voice-call' }, null), role: 'tool_use' as const };
+  const result = { ...msg('voice-result', { xdt_audio_tracks: [{ title: 'Tone.wav', xdt_audio_url: 'xdt-audio://tone.wav' }] }, null),
+    role: 'tool_result' as const, toolUseId: 'voice-call' };
+  const mounted = mount([], { items: buildMobileMessageRenderItems([tool, result]) });
+  const width = () => mounted.host.querySelector('[data-testid="message.audioAttachmentCard"]')?.getAttribute('data-set-width');
+  try {
+    expect(width()).toBe('304');
+    act(() => {
+      viewportHarness.window = { ...portrait, width: 874, height: 402 };
+      viewportHarness.windowListeners.forEach((listener) => listener());
+    });
+    expect(width()).toBe('320');
+  } finally {
+    mounted.unmount();
+    viewportHarness.memoizedCells = false;
+    viewportHarness.window = portrait;
+  }
+});
+
+it('opens public audio in the attachment player without a computer resolver', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const root = createRoot(document.createElement('div'));
+  mockAudioViewer.mockClear();
+  const url = 'https://fixture.invalid/tone.wav';
+  try {
+    const payload = buildMediaPayload({ kind: 'audio', url, mimeType: 'audio/wav', previewable: true }, 'Tone');
+    act(() => root.render(<MessagePayloadModal payload={payload} onClose={() => {}} />));
+    const preview = mockAudioViewer.mock.lastCall?.[0];
+    expect(preview).toMatchObject({ mediaKind: 'audio' });
+    await expect(preview?.resolve(new AbortController().signal)).resolves.toEqual({ url, mimeType: 'audio/wav' });
+  } finally {
+    act(() => root.unmount());
+  }
 });

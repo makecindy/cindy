@@ -11,6 +11,7 @@ export type { SessionRightStatus as SidebarRightStatusKind } from '@cindy/maker-
 
 export interface SidebarRightStatusInput {
   interruption?: SessionInterruptionState;
+  pendingIssueConfirm?: boolean;
   sessionId: string;
   title?: string | null;
   recordStatus?: SessionActivitySnapshot['recordStatus'];
@@ -40,6 +41,7 @@ export interface SidebarRightStatusInput {
 /** Collapse local/remote live state and legacy attention fallbacks into one model. */
 export function projectSidebarSessionActivity({
   interruption,
+  pendingIssueConfirm,
   sessionId,
   title,
   recordStatus,
@@ -61,7 +63,7 @@ export function projectSidebarSessionActivity({
     source: liveActivity?.source ?? 'fallback',
     livePhase: liveActivity?.phase ?? null,
     running: isRunning || liveActivity?.currentTurnActive === true,
-    waitingForUser: awaitingAttention,
+    waitingForUser: awaitingAttention || pendingIssueConfirm === true,
     terminal: errorAttention ? 'error' : doneAttention ? 'completed' : null,
     startedAtMs: liveActivity?.startedAtMs,
     lastActivityAtMs: liveActivity?.lastActivityAtMs,

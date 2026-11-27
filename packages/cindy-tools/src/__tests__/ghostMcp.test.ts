@@ -17,6 +17,7 @@ import {
   handleGhostList,
   handleGhostManual,
   handleMedia,
+  prepareStartupGhostToolInputSchema,
 } from "../ghost/mcpServer.js";
 import type {
   CindyGhostInfo,
@@ -1193,6 +1194,49 @@ describe("cindy_ghosts · ghost_call(派活透传)", () => {
 });
 
 describe("cindy · media MCP 边界", () => {
+  it("validates request arguments at the MCP boundary before dispatching paid media", async () => {
+    const { Client } = await import("@modelcontextprotocol/sdk/client/index.js");
+    const { InMemoryTransport } = await import("@modelcontextprotocol/sdk/inMemory.js");
+    const callMedia = vi.fn(async () => ({ ok: true }));
+    const server = createCindyGhostsMcpServer(fakeDeps({ callMedia }));
+    const client = new Client({ name: "test", version: "1" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    const request = (args: Record<string, unknown>) =>
+      client.callTool({ name: "media", arguments: { action: "request", ...args } });
+    try {
+      const body = { parts: [{ text: "test" }] };
+      for (const args of [
+        { invocation_id: "token", body },
+        { invocationId: "token", body },
+        { invocation_id: "token", invocationId: "token", body: {} },
+      ]) {
+        const result = await request(args);
+        expect(result.isError).toBeFalsy();
+        expect(callMedia).toHaveBeenCalledExactlyOnceWith({
+          action: "request", invocationId: "token", body: args.body,
+        });
+        callMedia.mockClear();
+      }
+      for (const [args, message] of [
+        [{ body }, "request 必须提供 invocation_id。"],
+        [{ invocation_id: "token", prompt: "test" }, "request 必须提供 body 对象。"],
+        [{ invocation_id: "token", invocationId: "other", body }, "invocation_id 与 invocationId 必须一致。"],
+      ] as const) {
+        const result = await request(args);
+        expect(result.isError).toBe(true);
+        expect(result.content).toEqual([{ type: "text", text: expect.any(String) }]);
+        const [first] = result.content as Array<{ text: string }>;
+        expect(JSON.parse(first.text)).toMatchObject({ errorCode: "INVALID_INPUT", message });
+        expect(callMedia).not.toHaveBeenCalled();
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it('binds an original paid invocation during prepare without an extra tool action', async () => {
     const callMedia = vi.fn(async () => ({ ok: true, status: 'pending', next_action: 'poll' }));
     const deps = fakeDeps({ callMedia });
@@ -2272,6 +2316,39 @@ describe('personal community author MCP transport', () => {
     await client.connect(ct);
     return { client, close: async () => { await client.close(); await server.close(); } };
   }
+
+  // Unit: the real MCP catalog pins the startup definition and sends only the
+  // approved target and validated arguments to the shared ghost_call handler.
+  // The existing ghost_call tests do not cover a startup MCP definition.
+  it('lists a named startup tool with its declared schema and invokes its pinned target', async () => {
+    const name = 'ghost_library_find_23cd';
+    const parameters = {
+      type: 'object', properties: { query: { type: 'string' } },
+      required: ['query'], additionalProperties: false,
+    } as const;
+    const callGhostTool = vi.fn<CindyGhostsMcpDeps['callGhostTool']>(async () => ({ ok: true, result: { found: true } }));
+    const startupTools: NonNullable<CindyGhostsMcpDeps['startupTools']>[number][] = [
+      { name, ghostId: 'library', namespace: 'local', tool: 'find', description: 'Find books',
+        inputSchema: prepareStartupGhostToolInputSchema(parameters)! },
+    ];
+    const { client, close } = await connected(fakeDeps({ callGhostTool, startupTools }));
+    try {
+      startupTools.length = 0;
+      const catalog = await client.listTools();
+      expect(catalog.tools.find(tool => tool.name === name)?.inputSchema.properties?.args)
+        .toMatchObject(parameters);
+      expect(callGhostTool).not.toHaveBeenCalled();
+      expect(await client.callTool({ name, arguments: { args: { query: 2 } } })).toMatchObject({ isError: true });
+      expect(callGhostTool).not.toHaveBeenCalled();
+      const result = await client.callTool({ name, arguments: { args: { query: 'atlas' } } });
+      expect(result.isError).toBeFalsy();
+      expect(callGhostTool).toHaveBeenCalledWith(expect.objectContaining({
+        ghostId: 'library', namespace: 'local', tool: 'find', args: { query: 'atlas' }, startupToolName: name,
+      }));
+    } finally {
+      await close();
+    }
+  });
 
   it('routes preparation, the same operation, and exact personal reads to the independent Host capability', async () => {
     const communityContribution = vi.fn<NonNullable<CindyGhostsMcpDeps['communityContribution']>>(async () => ({ ok: true, result: {} }));

@@ -16,6 +16,11 @@ import { useDevicesProviders } from '@/hooks/useDevicesProviders';
 import { useProviders } from '@/hooks/useProviders';
 import { deviceDisplayName } from '@/lib/deviceName';
 import { createLogger } from '@/lib/logger';
+import {
+  buildModelGroupRouteNote,
+  modelGroupSourceLabel,
+  type ModelGroupLocationName,
+} from '../../../shared/modelGroupRouteNoteText';
 
 import {
   MODEL_GROUPS_DEFAULTS,
@@ -36,16 +41,19 @@ const log = createLogger('model-groups');
  * 缓存按账号分开：换账号只重新挂载页面，这个模块还在。上一个账号的配置不给新账号看，
  * 上一个账号迟到的读取或排队中的保存也不落到新账号上。
  */
-let cached: { owner: string | null; config: ModelGroupsConfig } | null = null;
+let cached: { owner: string | null; config: ModelGroupsConfig; visible: ModelGroupsConfig } | null = null;
 let loading: { owner: string | null; promise: Promise<void> } | null = null;
 const listeners = new Set<() => void>();
 
 const ownerNow = (): string | null => getDataOwnerGeneration().dataOwnerId;
 const currentConfig = (): ModelGroupsConfig => (cached && cached.owner === ownerNow() ? cached.config : MODEL_GROUPS_DEFAULTS);
+/** 选择器等所有使用方看到的：不含用户隐藏的自动路由。只有设置页读全部(要能把隐藏的找回来)。 */
+const currentVisible = (): ModelGroupsConfig => (cached && cached.owner === ownerNow() ? cached.visible : MODEL_GROUPS_DEFAULTS);
 
 function publish(owner: string | null, next: ModelGroupsConfig): void {
   if (owner !== ownerNow()) return;
-  cached = { owner, config: next };
+  const hidden = next.routes.some((route) => route.hidden);
+  cached = { owner, config: next, visible: hidden ? { ...next, routes: next.routes.filter((route) => !route.hidden) } : next };
   for (const listener of listeners) listener();
 }
 
@@ -81,12 +89,20 @@ export function saveModelGroups(change: (latest: ModelGroupsConfig) => ModelGrou
 }
 
 /** 当前账号的模型组；每次挂载重新读一次，覆盖换账号和别的窗口里的修改。 */
-export function useModelGroups(enabled = true): { config: ModelGroupsConfig; loaded: boolean } {
+export function useModelGroups(enabled = true, options: { includeHidden?: boolean } = {}): { config: ModelGroupsConfig; loaded: boolean } {
   const config = useSyncExternalStore(
     (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    currentConfig,
+    options.includeHidden ? currentConfig : currentVisible,
+    () => MODEL_GROUPS_DEFAULTS,
   );
-  useEffect(() => { if (enabled) void refreshModelGroups(); }, [enabled]);
+  useEffect(() => {
+    if (!enabled) return undefined;
+    void refreshModelGroups();
+    // 供应商路由是按已连接的供应商合成和展开的：供应商连上、断开或模型目录变了就重新读一次(本机进程间调用)。
+    // 桥接还没有这个接口的窗口(与读取失败一样)照常工作，只是不跟着刷新。
+    const unsubscribe = (window.electronAPI as typeof window.electronAPI | undefined)?.maker?.onProvidersChanged?.(() => { void refreshModelGroups(); });
+    return typeof unsubscribe === 'function' ? unsubscribe : undefined;
+  }, [enabled]);
   return { config: enabled ? config : MODEL_GROUPS_DEFAULTS, loaded: cached?.owner === ownerNow() };
 }
 
@@ -145,8 +161,6 @@ export async function bindModelGroupSession(
 }
 
 /** 一个运行位置(另一台电脑或分享来的供应商)显示成什么名字。 */
-export type ModelGroupLocationName = (agentDeviceId: string) => string;
-
 /**
  * 按已知的电脑与分享名单取位置的名字，与模型选择器里远程那几行同一份名字；分享写「来自 X 的分享」，
  * 名单里没有(已解除配对等)时写「另一台电脑」，不显示 id。
@@ -163,19 +177,6 @@ export function useModelGroupLocationName(): ModelGroupLocationName {
   const { devices } = useSelectableDevices();
   const { nameFor } = useProviderShareAgentDevices();
   return useMemo(() => modelGroupLocationNameFrom(devices, nameFor), [devices, nameFor]);
-}
-
-/**
- * 来源的名字：本机就是供应商名；另一台电脑或分享来的写成「供应商 · 那台电脑」，与模型选择器里远程那几行的写法相同。
- */
-export function modelGroupSourceLabel(
-  entry: { sourceName: string; agentDeviceId?: string | null },
-  locationName: ModelGroupLocationName,
-  t: TFunction,
-): string {
-  return entry.agentDeviceId
-    ? t('newChat.modelSelector.unified.railRemoteProvider', { provider: entry.sourceName, device: locationName(entry.agentDeviceId) })
-    : entry.sourceName;
 }
 
 type CandidateRef = Pick<ModelGroupCandidate, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
@@ -212,10 +213,18 @@ export function useModelGroupCandidateNames(
     const list = candidate.agentDeviceId ? remoteAgentProviders(catalog?.providers ?? []) : providers;
     const provider = list.find((item) => item.id === candidate.providerId);
     const model = provider?.models[agent]?.find((item) => item.id === candidate.model);
-    const sourceName = provider?.name ?? (fallback?.sourceName || candidate.providerId);
+    // 那个位置的目录里没有(分享已收回、对方改了目录、还没读到)：先在别处已经读到的目录里找同一个模型和供应商的名字，
+    // 都找不到才显示 id，不在界面上露出 claude-opus-5-5、anthropic 这样的原始写法。
+    const everywhere = [providers, ...[...catalogs.values()].map((item) => item.providers ?? [])];
+    const knownModel = model ?? everywhere.flatMap((views) => views.flatMap((view) => view.models[agent] ?? []))
+      .find((item) => item.id === candidate.model);
+    const knownProvider = provider ?? everywhere.flat().find((view) => view.id === candidate.providerId);
+    const sourceName = provider?.name ?? (fallback?.sourceName && fallback.sourceName !== candidate.providerId
+      ? fallback.sourceName : knownProvider?.name ?? fallback?.sourceName ?? candidate.providerId);
     return {
       provider,
-      modelName: model?.name ?? (fallback?.modelName || candidate.model),
+      modelName: model?.name ?? (fallback?.modelName && fallback.modelName !== candidate.model
+        ? fallback.modelName : knownModel?.name ?? fallback?.modelName ?? candidate.model),
       sourceName,
       sourceLabel: modelGroupSourceLabel({ sourceName, agentDeviceId: candidate.agentDeviceId }, locationName, t),
       known: !!provider,
@@ -259,68 +268,10 @@ export async function isModelGroupSwitchOfferCurrent(sessionId: string, offer: M
   }
 }
 
-function formatReset(ms: number, locale: string): string {
-  return new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(ms);
-}
-
-/** 一个候选为什么被选中、没轮到或被跳过；任务里的说明与设置页「试一下」共用。 */
-export function modelGroupWhyText(
-  entry: Pick<ModelGroupTraceEntry, 'why' | 'quota' | 'limitedUntilMs'>,
-  t: TFunction,
-  locale: string,
-): string {
-  const left = entry.quota ? Math.max(0, Math.round(100 - entry.quota.usedPercent)) : null;
-  const reset = entry.quota?.resetAtMs ? formatReset(entry.quota.resetAtMs, locale) : null;
-  if (entry.why === 'expiring') {
-    return left !== null && reset
-      ? t('modelGroups.why.expiringQuota', { left, reset })
-      : t('modelGroups.why.expiring');
-  }
-  if (entry.why === 'limited' || entry.why === 'soonest') {
-    return entry.limitedUntilMs
-      ? t(`modelGroups.why.${entry.why}Until`, { reset: formatReset(entry.limitedUntilMs, locale) })
-      : t(`modelGroups.why.${entry.why}`);
-  }
-  if (entry.why === 'standby' && left !== null && reset) return t('modelGroups.why.standbyQuota', { left, reset });
-  return t(`modelGroups.why.${entry.why}`);
-}
-
-/** 起作用的例外，用一句话说明；改走路线与按图片筛可以同时出现。 */
-export function modelGroupExceptionText(exceptions: readonly ModelGroupAppliedException[] | undefined, t: TFunction): string {
-  return (exceptions ?? []).map((item) => (item.type === 'hours'
-    ? t('modelGroups.why.exceptionHours', { name: item.viaRouteName ?? '' })
-    : t(`modelGroups.why.${item.type === 'image' ? 'exceptionImage' : 'exceptionImageFallback'}`))).join(t('modelGroups.why.separator'));
-}
-
 /**
- * 第一条消息下方的一行说明，沿用「让插件选」的说明卡(手机端同样能读)：routed 写用了哪个模型和来源、为什么，
- * 来源在另一台电脑或是分享来的时连同位置一起写；里面没有能用的模型时写明沿用了原来的模型。组已被删除时不写。
- * locationName 按模式所在那台电脑的视角给位置起名(远程控制时 agentDeviceId 是那台电脑眼里的位置)。
+ * 本机任务：第一条消息下方写一行说明(文字见 shared/modelGroupRouteNoteText 的 buildModelGroupRouteNote)。
+ * 另一台电脑上的任务用 writeDeviceModelGroupRouteNote 请那台代写。组已被删除时不写。
  */
-export function buildModelGroupRouteNote(
-  result: ModelGroupResolveResult | null,
-  keptModelName: string,
-  t: TFunction,
-  locale: string,
-  locationName: ModelGroupLocationName,
-): ModelGroupRouteNote | null {
-  if (!result || result.outcome === 'missing') return null;
-  return result.outcome === 'routed'
-    ? {
-        pluginName: result.groupName,
-        outcome: 'routed',
-        modelName: `${result.modelName} · ${modelGroupSourceLabel({ sourceName: result.sourceName, agentDeviceId: result.route.agentDeviceId }, locationName, t)}`,
-        ...(result.route.effort ? { effort: result.route.effort } : {}),
-        reason: [
-          modelGroupExceptionText(result.exceptions, t),
-          modelGroupWhyText({ why: result.why, quota: result.quota, limitedUntilMs: result.trace.find((entry) => entry.state === 'picked')?.limitedUntilMs }, t, locale),
-        ].filter(Boolean).join(t('modelGroups.why.separator')),
-        source: 'model-group',
-      }
-    : { pluginName: result.groupName, outcome: 'kept', modelName: keptModelName, why: 'unavailable-route', source: 'model-group' };
-}
-
-/** 本机任务：在本机库里写说明。另一台电脑上的任务用 writeDeviceModelGroupRouteNote 请那台代写。 */
 export function writeModelGroupRouteNote(
   sessionId: string,
   result: ModelGroupResolveResult | null,
@@ -354,3 +305,12 @@ export function writeModelGroupRouteNote(
     });
   })().catch((err: unknown) => log.warn('model group route note failed', err));
 }
+
+// 说明文字与主进程(定时任务)共用一份，见 shared/modelGroupRouteNoteText。
+export {
+  buildModelGroupRouteNote,
+  modelGroupExceptionText,
+  modelGroupSourceLabel,
+  modelGroupWhyText,
+  type ModelGroupLocationName,
+} from '../../../shared/modelGroupRouteNoteText';

@@ -7,7 +7,8 @@ import { remotePrStatuses, prStatusQuery, type PrIdentity } from '@cindy/maker-s
 import { and, eq, isNull } from 'drizzle-orm';
 import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 import type { InvokeResultPayload } from '@cindy/device-link';
-import type { HistoryDevice, TaskDigestRoute } from '@cindy/mcps';
+import type { HistoryDevice, TaskDigestCurrentRoute, TaskDigestRoute } from '@cindy/mcps';
+import { isProviderSafetyRefusalError, PROVIDER_SAFETY_REFUSAL_REASON } from '@cindy/maker-shared/error-redaction';
 import type { AgentKind } from '@cindy/model-providers';
 
 import { getDbClient } from '../localDb/client/current.js';
@@ -35,6 +36,7 @@ type Invoke = (deviceId: string, channel: string, args: unknown[]) => Promise<In
 
 interface RuntimeLike {
   phase?: unknown;
+  source?: unknown;
   interactionKind?: unknown;
   startedAtMs?: unknown;
   lastActivityAtMs?: unknown;
@@ -47,6 +49,7 @@ export interface DesktopTaskDigestHost {
   listDevices?: () => Promise<HistoryDevice[]>;
   getSessionRuntime(sessionId: string): Promise<{ ok: true; runtime: RuntimeLike } | { ok: false }>;
   listSessionQueuedCounts(sessionIds: string[]): Promise<{ ok: true; counts: Record<string, number> } | { ok: false }>;
+  readLocalQueuePaused?(sessionId: string): boolean | undefined;
   /** 本机任务的 PR 状态(git-context 同一服务与缓存)。 */
   readSessionPrStatuses(sessionId: string): Promise<Parameters<typeof formatPrStatuses>[0]>;
   /**
@@ -62,11 +65,11 @@ export interface DesktopTaskDigestHost {
 
 const num = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
 
-function routeFromProfile(profile: RuntimeLike['effectiveProfile']): TaskDigestRoute | null {
+function routeFromProfile(profile: RuntimeLike['effectiveProfile']): TaskDigestCurrentRoute | null {
   if (!profile || typeof profile.model !== 'string' || !profile.model) return null;
   const kind = profile.agentKind;
   return {
-    harness: kind === 'codex' || kind === 'pi' ? kind : 'claude-code',
+    harness: kind === 'codex' || kind === 'pi' || kind === 'acp' ? kind : 'claude-code',
     model: profile.model,
     provider_id: typeof profile.providerId === 'string' ? profile.providerId : null,
     effort: typeof profile.effort === 'string' ? profile.effort : null,
@@ -167,8 +170,10 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const [row] = await getDbClient()
           .drizzle.select({
             title: sessions.title,
+            pinnedAt: sessions.pinnedAt,
             clearedAt: sessions.clearedAt,
             activeTurnStartedAt: sessions.activeTurnStartedAt,
+            lastTurnEndedAt: sessions.lastTurnEndedAt,
             status: sessions.status,
             source: sessions.source,
             agentKind: sessions.agentKind,
@@ -188,6 +193,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const runtime = result.runtime;
         return {
           phase: typeof runtime.phase === 'string' ? runtime.phase : 'idle',
+          source: typeof runtime.source === 'string' ? runtime.source : undefined,
           interactionKind: typeof runtime.interactionKind === 'string' ? runtime.interactionKind : null,
           startedAtMs: num(runtime.startedAtMs),
           lastActivityAtMs: num(runtime.lastActivityAtMs),
@@ -211,7 +217,21 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         }
         // This reader already enforces the tail, rewind and /clear boundaries.
         const stored = await readLatestWorkerTurnError(sessionId);
-        if (!stored || stored.createdAt < Math.max(facts.startedAtMs ?? 0, activity.startedAtMs ?? 0)) return null;
+        if (!stored) return null;
+        const startedAt = Math.max(facts.startedAtMs ?? 0, activity.startedAtMs ?? 0);
+        if (stored.createdAt < startedAt) {
+          // An immediate failure can be ordered after the input but dated before the
+          // turn marker. Only the confirmed persisted terminal of a settled turn can
+          // supply a safety reason here. Never return its provider text on this path.
+          const matchesSettledTerminal =
+            activity.source === 'persisted'
+            && activity.lastActivityAtMs === stored.createdAt
+            && facts.startedAtMs === activity.startedAtMs
+            && (facts.endedAtMs ?? 0) >= startedAt;
+          return matchesSettledTerminal && isProviderSafetyRefusalError(stored.message, stored.reason)
+            ? PROVIDER_SAFETY_REFUSAL_REASON
+            : null;
+        }
         return [stored.message, stored.sdkError].filter(Boolean).join(':\n').trim() || null;
       },
       readLastExchange: readSessionLastExchange,
@@ -219,6 +239,7 @@ export function createDesktopTaskDigestDeps(host: DesktopTaskDigestHost): TaskDi
         const result = await host.listSessionQueuedCounts([sessionId]);
         return result.ok ? (result.counts[sessionId] ?? 0) : null;
       },
+      queuePaused: (sessionId) => host.readLocalQueuePaused?.(sessionId),
       prStatus: async (sessionId) => formatPrStatuses(await host.readSessionPrStatuses(sessionId)),
       suggestRoute: async ({ callerSessionId, targetSessionId, current, failure }) => {
         if (!callerSessionId) return null;

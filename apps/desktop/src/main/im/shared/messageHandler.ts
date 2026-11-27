@@ -588,14 +588,18 @@ export function createMessageHandler(
         event.delivery.awaitPersistence();
         const dispatch = await turnRunner.dispatchAgentTurn({
           ...turnArgs, queueMode: 'external',
-          beforeProviderStart: async () => { event.assertCurrent?.(); event.delivery!.awaitPersistence(); },
+          beforeProviderStart: async () => {
+            event.assertCurrent?.();
+            event.delivery!.awaitPersistence();
+            if (event.delivery!.isCancelled?.()) throw new Error('IM_INPUT_CANCELLED');
+          },
         });
         if (dispatch.kind === 'busy') event.delivery.defer();
         else if (dispatch.kind === 'rejected') {
-          const text = dispatch.reason === 'missing_auth' ? ui.agent.apiKeyMissing
+          const text = dispatch.notice ?? (dispatch.reason === 'missing_auth' ? ui.agent.apiKeyMissing
             : dispatch.reason === 'companion_unavailable'
               ? ui.agent.companionUnavailable?.(dispatch.reason) ?? ui.agent.runtimeError(dispatch.reason)
-              : ui.agent.sendInternalError(dispatch.reason);
+              : ui.agent.sendInternalError(dispatch.reason));
           try {
             await im.sendText(event.senderId, text, { threadTs: event.scopeKey });
             event.delivery.accept();
@@ -609,6 +613,7 @@ export function createMessageHandler(
         await turnRunner.runAgentTurn(turnArgs);
       }
     } catch (err) {
+      if (event.delivery?.isCancelled?.()) return;
       try { event.assertCurrent?.(); }
       catch {
         const reactionId = await handedOverAck;

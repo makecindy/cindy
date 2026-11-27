@@ -1,4 +1,6 @@
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
 import { localizedModelName, localizedBrandName, matchesModelName } from '@/lib/modelDisplayNames';
 import { modelManagementState } from './modelManagementState';
 /**
@@ -26,7 +28,7 @@ import { modelManagementState } from './modelManagementState';
  * 同一模式下同一轴的控件形态唯一 —— 这是本组件的硬约束(v4 交互稿定稿延续)。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Info, Lock, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 
@@ -48,6 +50,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { CustomProviderIcon } from '@/components/icons/CustomProviderIcon';
+import { isProviderConnectionIcon, isProviderConnectionImage } from '@cindy/model-providers/branding';
 import { ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import {
   litWholeMarks,
@@ -57,7 +60,7 @@ import {
 } from '@/components/new-chat/priceTierMarks';
 import { priceTierOf } from '@/components/new-chat/unifiedModelSelection';
 import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
-import { modelPriceDiscountLabelValues } from '@/lib/modelPriceFormat';
+import { formatModelPriceAmount, modelPriceDiscountLabelValues } from '@/lib/modelPriceFormat';
 import { resolveModelPricePresentation } from '@/lib/modelPricePresentation';
 import { MANAGED_OLLAMA_PROVIDER_ID } from '../../../shared/localModelRuntime';
 import {
@@ -75,6 +78,7 @@ import { LocalPackagingTag } from './LocalPackagingTag';
 import { getModelEngineOverride, useModelEnginePrefsVersion } from '@/state/modelEnginePrefs';
 import { getProviderModelEffort, getProviderModelFast, getProviderModelThinking, useProviderModelMemoryVersion } from '@/state/providerModelMemory';
 import { ModelAdvancedDrawer } from './ModelAdvancedDrawer';
+import { useModelSettingsSource } from './modelSettingsSource';
 import {
   groupModelsForManagement,
   MANAGEMENT_KIND_ORDER,
@@ -93,6 +97,10 @@ import {
 } from '@cindy/model-providers';
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
 import { modelCompactionTarget } from '../../../shared/modelContextLimit';
+
+/** 模型行右侧事实列的共同样式：默认隐藏，由各列自己的容器宽度条件显示；数字等宽、右对齐。 */
+const MODEL_FACT_CLASS = 'hidden shrink-0 text-right text-12 tabular-nums text-[var(--text-secondary)]';
+const MODEL_FACT_HEAD_CLASS = 'whitespace-nowrap text-11 font-medium text-[var(--text-tertiary)]';
 
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
@@ -330,11 +338,12 @@ function rowEnabled(
   row: UnionModelRow,
   agent: AgentKind,
   userProvider: boolean,
+  enabled: typeof isModelEnabled = isModelEnabled,
 ): boolean | null {
   const m = row.byAgent[agent];
   if (!m) return null;
   if (isAgentSelectableModel(m, { userProvider }) || rowHasVisibilitySwitch(row, userProvider)) {
-    return isModelEnabled(agent, providerId, m);
+    return enabled(agent, providerId, m);
   }
   return null;
 }
@@ -412,8 +421,13 @@ export function modelVisibilityTargets(
 }
 
 /** 普通模式的单开关显示值:任一可用 agent 开启即视为开(拨动才归一)。 */
-function rowAnyEnabled(providerId: string, row: UnionModelRow, userProvider: boolean): boolean {
-  return row.avail.some((a) => rowEnabled(providerId, row, a, userProvider) === true);
+function rowAnyEnabled(
+  providerId: string,
+  row: UnionModelRow,
+  userProvider: boolean,
+  enabled: typeof isModelEnabled = isModelEnabled,
+): boolean {
+  return row.avail.some((a) => rowEnabled(providerId, row, a, userProvider, enabled) === true);
 }
 
 /** 该行全部 avail agent 的真实目录 id(桥接投影两端 id 不同,写停用要两端一起写)。 */
@@ -470,6 +484,7 @@ export function UnifiedModelList({
   provider,
   onRefresh,
   onAddSpeechModels,
+  onAddRealtimeModels,
   refreshing,
   refreshDisabled,
   refreshIdleLabel,
@@ -478,11 +493,13 @@ export function UnifiedModelList({
   compact,
   focusModelId,
   focusAgent,
+  visibilityControls = true,
 }: {
   provider: ProviderView;
   /** 「刷新模型」；内置供应商走各自真源，自定义供应商走 additions-only 发现。 */
   onRefresh?: () => void;
   onAddSpeechModels?: () => void;
+  onAddRealtimeModels?: () => void;
   refreshing?: boolean;
   /** 其它供应商正在刷新时禁用，避免并发刷新造成反馈归属不清。 */
   refreshDisabled?: boolean;
@@ -497,8 +514,12 @@ export function UnifiedModelList({
   /** Settings deep link target: reveal, focus, and scroll this model row into view. */
   focusModelId?: string;
   focusAgent?: AgentKind;
+  /** Which models are offered is left to the caller: no count, hint, bulk menu or row switches. */
+  visibilityControls?: boolean;
 }) {
   const { t } = useTranslation();
+  /** Another device's model settings (cloud instance page); null for this device. */
+  const source = useModelSettingsSource();
   const { confirm } = useConfirmDialog();
   const [query, setQuery] = useState('');
   const [managementView, setManagementView] = useState<ManagementView>('brand');
@@ -516,14 +537,14 @@ export function UnifiedModelList({
   };
   /** 类型筛选(全部 / 对话 / 图像 / 视频…):只有该来源真存在多类时才渲染整条。 */
   const [kindFilter, setKindFilter] = useState<ModelCategory | 'chat' | 'all'>('all');
+  // The detail is keyed by provider. Reconnecting effects after sharing keeps its
+  // filters and drawer; only a new catalog snapshot supersedes optimistic changes.
+  const previousProvider = useRef(provider);
   useEffect(() => {
-    setPendingDisabled({});
-    setAdvancedRow(null);
-    setAdvancedOpen(false);
-    setKindFilter('all');
-  }, [provider.id]);
-  useEffect(() => {
-    setPendingDisabled({});
+    if (previousProvider.current !== provider) {
+      previousProvider.current = provider;
+      setPendingDisabled({});
+    }
   }, [provider]);
 
   // 报价快照:与模型选择器同两份来源(XD 实付价 / 非 XD 参考价),派生逻辑共用
@@ -613,21 +634,35 @@ export function UnifiedModelList({
   }, []);
   // 订阅可见性 version:开关变更后 counts memo 必须重算(否则「全部开启/关闭」
   // 按钮方向与计数陈旧)。行内开关读取不 memo,天然新鲜;只有 counts 依赖它。
-  const visibilityVersion = useModelVisibilityVersion();
-  const aliasEngineVersion = useModelEnginePrefsVersion();
-  const aliasMemoryVersion = useProviderModelMemoryVersion();
+  const localVisibilityVersion = useModelVisibilityVersion();
+  const visibilityVersion = source ? source.visibilityVersion : localVisibilityVersion;
+  const aliasEngineVersion = useModelEnginePrefsVersion(!source);
+  const aliasMemoryVersion = useProviderModelMemoryVersion(!source);
+  const isEnabled = source?.isModelEnabled ?? isModelEnabled;
+  const writeModelDisable = useCallback(
+    (input: Parameters<Window['electronAPI']['maker']['setModelDisable']>[0]) =>
+      source ? source.setModelDisable(input) : window.electronAPI.maker.setModelDisable(input),
+    [source],
+  );
+  const localModels = provider.id === MANAGED_OLLAMA_PROVIDER_ID && !source;
 
   const selectionAvailable = provider.connected && !provider.suspended;
   const multiAgent = provider.agents.length > 1;
-  const unionRows = useMemo(() => buildUnionRows(provider, (agent, modelId) => ({
+  const unionRows = useMemo(() => buildUnionRows(provider, (agent, modelId) => source ? {
+    // The instance reports visibility and effort; engine, thinking and Fast stay with its own panel.
+    customPrice: (() => { const model = provider.models[agent]!.find((m) => m.id === modelId)!;
+      const p = pricePresentationOf(agent, model); return p?.kind === 'priced' && p.current.source === 'user-override'; })(),
+    effort: source.getEffort(agent, provider.id, modelId),
+    visible: isEnabled(agent, provider.id, provider.models[agent]!.find((m) => m.id === modelId)!),
+  } : ({
     engine: getModelEngineOverride(provider.id, modelId),
     customThinking: getProviderModelThinking(agent, provider.id, modelId) !== undefined,
     customPrice: (() => { const model = provider.models[agent]!.find((m) => m.id === modelId)!;
       const p = pricePresentationOf(agent, model); return p?.kind === 'priced' && p.current.source === 'user-override'; })(),
     effort: getProviderModelEffort(agent, provider.id, modelId),
     fast: getProviderModelFast(agent, provider.id, modelId),
-    visible: isModelEnabled(agent, provider.id, provider.models[agent]!.find((m) => m.id === modelId)!),
-  })), [provider, visibilityVersion, aliasEngineVersion, aliasMemoryVersion, pricePresentationOf]);
+    visible: isEnabled(agent, provider.id, provider.models[agent]!.find((m) => m.id === modelId)!),
+  })), [provider, visibilityVersion, aliasEngineVersion, aliasMemoryVersion, pricePresentationOf, source, isEnabled]);
   const currentAdvancedRow = unionRows.find((row) => row.id === advancedRow?.id ||
     row.aliasRows?.some((member) => member.id === advancedRow?.id)) ?? advancedRow;
 
@@ -640,11 +675,11 @@ export function UnifiedModelList({
       modelManagementState(provider, {
         ids: rowModelIds(row),
         capability: isCapabilityRow(row, provider.source === 'user'),
-        savedSelected: rowAnyEnabled(provider.id, row, provider.source === 'user'),
+        savedSelected: rowAnyEnabled(provider.id, row, provider.source === 'user', isEnabled),
         disabled: rowDisabledEffective(row),
         paymentRequired: isRowPaymentRequired(row),
       }),
-    [provider, rowDisabledEffective, visibilityVersion],
+    [provider, rowDisabledEffective, visibilityVersion, isEnabled],
   );
   const focusedRow = useMemo(() => {
     if (!focusModelId) return null;
@@ -691,13 +726,12 @@ export function UnifiedModelList({
     (row: UnionModelRow, disabled: boolean) => {
       if (!disabled && !canReenableRow(row)) return Promise.resolve(false);
       setPendingDisabled((prev) => ({ ...prev, [row.id]: disabled }));
-      return window.electronAPI.maker
-        .setModelDisable({
-          kind: 'model',
-          providerId: provider.id,
-          modelIds: rowModelIds(row),
-          disabled,
-        })
+      return writeModelDisable({
+        kind: 'model',
+        providerId: provider.id,
+        modelIds: rowModelIds(row),
+        disabled,
+      })
         .then(() => true)
         .catch(() => {
           setPendingDisabled((prev) => {
@@ -714,7 +748,7 @@ export function UnifiedModelList({
           return false;
         });
     },
-    [provider.id, canReenableRow, t],
+    [provider.id, canReenableRow, t, writeModelDisable],
   );
 
   const deleteInstalledModel = useCallback(
@@ -757,19 +791,25 @@ export function UnifiedModelList({
       for (const r of rows) next[r.id] = false;
       return next;
     });
-    void window.electronAPI.maker
-      .setModelDisable({ kind: 'reset', providerId: provider.id })
-      .catch(() => {
-        setPendingDisabled((prev) => {
-          const next = { ...prev };
-          for (const r of rows) {
-            if (next[r.id] === false) delete next[r.id];
-          }
-          return next;
-        });
-        toast.error(t('settings.providers.models.accessWriteFailed'));
+    void writeModelDisable({ kind: 'reset', providerId: provider.id }).catch(() => {
+      setPendingDisabled((prev) => {
+        const next = { ...prev };
+        for (const r of rows) {
+          if (next[r.id] === false) delete next[r.id];
+        }
+        return next;
       });
-  }, [hasLockedDisabledRow, unionRows, pendingDisabled, provider.id, selectionAvailable, t]);
+      toast.error(t('settings.providers.models.accessWriteFailed'));
+    });
+  }, [
+    hasLockedDisabledRow,
+    unionRows,
+    pendingDisabled,
+    provider.id,
+    selectionAvailable,
+    t,
+    writeModelDisable,
+  ]);
 
   /**
    * 该来源真实存在的**输出类型**:对话 + 各能力类型(图像 / 视频 / 语音…)。
@@ -940,13 +980,14 @@ export function UnifiedModelList({
       ) {
         return;
       }
-      const next = !rowAnyEnabled(provider.id, row, userProvider);
+      const next = !rowAnyEnabled(provider.id, row, userProvider, isEnabled);
       const targets = modelVisibilityTargets(provider, row, next);
-      if ((await setModelVisibilities(provider.id, targets, next)) === false) {
+      const write = source?.setModelVisibilities ?? setModelVisibilities;
+      if ((await write(provider.id, targets, next)) === false) {
         showVisibilityWriteFailure();
       }
     },
-    [provider, rowState, showVisibilityWriteFailure],
+    [provider, rowState, showVisibilityWriteFailure, isEnabled, source],
   );
 
   /**
@@ -962,11 +1003,11 @@ export function UnifiedModelList({
       const userProvider = provider.source === 'user';
       if (rowDisabledEffective(row)) return false;
       return rowHasVisibilitySwitch(row, userProvider)
-        ? rowAnyEnabled(provider.id, row, userProvider)
+        ? rowAnyEnabled(provider.id, row, userProvider, isEnabled)
         : true;
     },
     // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityVersion 是 modelVisibilityPrefs 的外部刷新信号。
-    [provider.id, provider.source, rowDisabledEffective, visibilityVersion],
+    [provider.id, provider.source, rowDisabledEffective, visibilityVersion, isEnabled],
   );
   const toggleCapabilityRow = useCallback(
     async (row: UnionModelRow) => {
@@ -976,14 +1017,15 @@ export function UnifiedModelList({
         return;
       }
       if (rowDisabledEffective(row) && !(await setRowDisabled(row, false))) return;
-      if (rowHasVisibilitySwitch(row, userProvider) && !rowAnyEnabled(provider.id, row, userProvider)) {
+      if (rowHasVisibilitySwitch(row, userProvider) && !rowAnyEnabled(provider.id, row, userProvider, isEnabled)) {
         const targets = modelVisibilityTargets(provider, row, true);
-        if ((await setModelVisibilities(provider.id, targets, true)) === false) {
+        const write = source?.setModelVisibilities ?? setModelVisibilities;
+        if ((await write(provider.id, targets, true)) === false) {
           showVisibilityWriteFailure();
         }
       }
     },
-    [capabilityRowOn, provider, rowDisabledEffective, setRowDisabled, showVisibilityWriteFailure],
+    [capabilityRowOn, provider, rowDisabledEffective, setRowDisabled, showVisibilityWriteFailure, isEnabled, source],
   );
 
   // Separate commands have stable meanings even when the selection is mixed. Adding all
@@ -992,13 +1034,15 @@ export function UnifiedModelList({
     if (!visibilityWriteAvailable) return;
     const next = action === 'show';
     const rows = next
-      ? writableRows.filter((row) => !rowAnyEnabled(provider.id, row, provider.source === 'user'))
+      ? writableRows.filter(
+          (row) => !rowAnyEnabled(provider.id, row, provider.source === 'user', isEnabled),
+        )
       : writableRows;
     const targets = rows.flatMap((row) => modelVisibilityTargets(provider, row, next));
     const success =
       action === 'reset'
-        ? await resetModelVisibilities(provider.id, targets)
-        : await setModelVisibilities(provider.id, targets, next);
+        ? await (source?.resetModelVisibilities ?? resetModelVisibilities)(provider.id, targets)
+        : await (source?.setModelVisibilities ?? setModelVisibilities)(provider.id, targets, next);
     if (!success) showVisibilityWriteFailure();
   };
 
@@ -1011,30 +1055,78 @@ export function UnifiedModelList({
    */
   const rowAdvancedButton = (row: UnionModelRow) => (
     <Tip text={t('settings.providers.models.advanced.open')}>
-      <button
+      <Button
         data-settings-search-action="Open advanced settings for this model"
         type="button"
+        variant="secondary"
+        tone="quiet"
+        size="xs"
         aria-label={t('settings.providers.models.advanced.openAria', {
           name: localizedModelName(row.name, t),
         })}
         onClick={() => openAdvanced(row)}
-        className={cn(
-          'flex h-6 w-6 shrink-0 items-center justify-center rounded-full opacity-0 transition-opacity',
-          'hover:bg-[var(--surface-hover)] focus-visible:opacity-100 group-hover:opacity-100',
-          advancedOpen && advancedRow?.id === row.id && 'opacity-100',
-        )}
+        className="w-6 px-0"
         style={{ color: 'var(--text-tertiary)' }}
       >
         <SlidersHorizontal size={14} />
-      </button>
+      </Button>
     </Tip>
   );
+
+  const renderModelName = (row: UnionModelRow, color: string) => {
+    const rep = row.byAgent[row.avail[0]]!;
+    const absentFromAllRoutes = provider.source === 'user' && provider.auth.method === 'apiKey' &&
+      (row.aliasRows ?? [row]).every(member => member.avail.every(agent =>
+        member.byAgent[agent]?.userModelConfig?.missingUpstream === true,
+      ));
+    const name = (
+      <span className="min-w-0 truncate text-14 font-medium" style={{ color }}>
+        {localizedModelName(rep.name, t)}
+      </span>
+    );
+    if (!absentFromAllRoutes) return name;
+    return (
+      <span className="flex min-w-0 flex-col">
+        {name}
+        <span className="break-words text-12 text-[var(--text-secondary)]">
+          {t('settings.providers.models.withdrawn.rowStatus')}
+        </span>
+      </span>
+    );
+  };
 
   /**
    * 一行模型的渲染。抽成函数是因为它现在有**两个调用点**:厂商分组里,以及底部
    * 「未启用」沉底区。两边必须逐像素一致 —— 复制一份 150 行 JSX 的话,任何一次
    * 行内改动都会漏掉另一边。
    */
+  // 模型行右侧的几列事实（上下文、价格、默认推理强度）。订阅类供应商没有按量报价，不留价格列。
+  const facts = { priced: provider.access?.kind !== 'subscription' };
+  const factHeader = (
+    <div data-testid="model-facts-header" className="flex h-6 items-center gap-3 px-2 [container-type:inline-size]">
+      <span className="min-w-0 flex-1" />
+      <span className={cn(MODEL_FACT_CLASS, MODEL_FACT_HEAD_CLASS, 'w-[84px] [@container(min-width:520px)]:block')}>
+        {t('settings.providers.models.advanced.contextLimit')}
+      </span>
+      {facts.priced && (
+        <>
+          <span title={t('settings.providers.models.advanced.perMtok')} className={cn(MODEL_FACT_CLASS, MODEL_FACT_HEAD_CLASS, 'w-[68px] [@container(min-width:680px)]:block')}>
+            {t('settings.providers.models.advanced.price.input')}
+          </span>
+          <span title={t('settings.providers.models.advanced.perMtok')} className={cn(MODEL_FACT_CLASS, MODEL_FACT_HEAD_CLASS, 'w-[68px] [@container(min-width:680px)]:block')}>
+            {t('settings.providers.models.advanced.price.output')}
+          </span>
+        </>
+      )}
+      <span className={cn(MODEL_FACT_CLASS, MODEL_FACT_HEAD_CLASS, 'w-[104px]', facts.priced ? '[@container(min-width:820px)]:block' : '[@container(min-width:620px)]:block')}>
+        {t('newChat.modelSelector.effortLabel')}
+      </span>
+      {/* 与行尾「高级设置」按钮和开关同宽的留位，让列标题对齐各行的列。 */}
+      <span aria-hidden className="w-6 shrink-0" />
+      <span aria-hidden className="w-9 shrink-0" />
+    </div>
+  );
+
   const renderModelRow = (row: UnionModelRow) => {
     const rep = row.byAgent[row.avail[0]]!;
     const capability = isCapabilityRow(row, provider.source === 'user');
@@ -1043,7 +1135,7 @@ export function UnifiedModelList({
     const brand = modelBrand(rep);
     const explicitIcon = resolveModelIconKind(rep.icon);
     const logoKind =
-      explicitIcon === 'claude'
+      isProviderConnectionIcon(provider.logoKind) ? provider.logoKind : explicitIcon === 'claude'
         ? 'anthropic'
         : explicitIcon === 'codex'
           ? 'openai'
@@ -1070,7 +1162,7 @@ export function UnifiedModelList({
         data-deep-link-target={focusedRow?.id === row.id ? 'true' : undefined}
         className={cn(
           focusedRow?.id === row.id && 'bg-[var(--surface-hover)] ring-2 ring-[var(--focus-ring)]',
-          'group flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+          'group flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-[var(--settings-menu-bg-hover)] [container-type:inline-size]',
           // 被用户关掉的功能型模型不整行压暗:行名已用三级文字色表达「关」,开关要保持可点的观感。
           !state.ready && !capabilityOff && 'opacity-55',
         )}
@@ -1079,7 +1171,9 @@ export function UnifiedModelList({
           className="flex h-6 w-6 shrink-0 items-center justify-center text-[var(--text-secondary)]"
           aria-hidden="true"
         >
-          {logoKind ? (
+          {isProviderConnectionImage(provider.customIcon) ? (
+            <CustomProviderIcon svg={provider.customIcon} size={19}>{null}</CustomProviderIcon>
+          ) : logoKind ? (
             <ProviderLogoMark providerId={provider.id} routing={provider.routing} logoKind={logoKind} size={19} />
           ) : brand ? (
             <span className="text-13 font-semibold">{brand.label.slice(0, 1)}</span>
@@ -1089,17 +1183,8 @@ export function UnifiedModelList({
             </CustomProviderIcon>
           )}
         </span>
-        <span
-          className="min-w-0 truncate text-14 font-medium"
-          style={{
-            color:
-              (capability ? capabilityOn && state.ready : state.ready && anyOn)
-                ? 'var(--settings-section-title)'
-                : 'var(--text-tertiary)',
-          }}
-        >
-          {localizedModelName(rep.name, t)}
-        </span>
+        {renderModelName(row, (capability ? capabilityOn && state.ready : state.ready && anyOn)
+          ? 'var(--settings-section-title)' : 'var(--text-tertiary)')}
         {/* 价格档与折扣紧跟模型名(不单独成列):这一列不是用来纵向比价的,
                 是用来在读到某个模型名时顺手知道它贵不贵。拿不到报价就整个
                 不渲染 —— 不画假的「$」也不画「—」。 */}
@@ -1129,7 +1214,7 @@ export function UnifiedModelList({
             />
           );
         })()}
-        {provider.id === MANAGED_OLLAMA_PROVIDER_ID && <LocalPackagingTag libraryName={row.id} />}
+        {localModels && <LocalPackagingTag libraryName={row.id} />}
         {capNote && (
           <Tip text={capNote}>
             <button
@@ -1153,23 +1238,42 @@ export function UnifiedModelList({
           </span>
         )}
         {paymentRequired && (
-          <span
-            data-payment-required-badge
-            className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--text-secondary)]"
-          >
-            <Lock size={11} />
+          <Badge data-payment-required-badge icon={<Lock size={11} />}>
             {t('settings.providers.models.paymentRequired')}
-          </span>
+          </Badge>
         )}
-        {/* 上下文窗口已移进高级设置抽屉的「规格」段:它是「查一次就够」
-            的属性,常驻列表只会让每行更碎,而真正要决策的是「这个模型贵不贵、
-            开没开」。抽屉里给的还是带千分位的准确 token 数 —— 列表这种紧凑
-            位置的 1M / 128K 缩写在真实数据里是歧义的(1,000,000 /
-            1,048,576 / 1,050,000 都印成 1M)。 */}
+        {/* 事实列排在「付费」标记之后、紧贴行尾的两个控件，各行才对得齐列标题。
+            宽度够时每行多出几列（2026-11-24 用户裁决，取代此前「上下文只放在高级设置抽屉里」的做法；抽屉里的规格仍保留）：上下文、输入价、输出价、默认推理强度；
+            窄了只剩名称和开关。上下文写完整 token 数，不用 1M / 128K 这类有歧义的缩写；拿不到的值留空，不画占位符。
+            订阅类供应商没有按量报价，不留价格两列。 */}
+        {!capability && (() => {
+          const price = facts.priced ? pricePresentationOf(row.avail[0], rep) : null;
+          const quote = price?.kind === 'priced' && price.current.source !== 'subscription-reference' ? price.current : null;
+          return (
+            <>
+              <span data-model-fact="context" className={cn(MODEL_FACT_CLASS, 'w-[84px] [@container(min-width:520px)]:block')}>
+                {typeof rep.contextWindow === 'number' && rep.contextWindow > 0 ? rep.contextWindow.toLocaleString('en-US') : ''}
+              </span>
+              {facts.priced && (
+                <>
+                  <span data-model-fact="input-price" className={cn(MODEL_FACT_CLASS, 'w-[68px] [@container(min-width:680px)]:block')}>
+                    {quote ? formatModelPriceAmount(quote.inputPerMtok, quote.currency) : ''}
+                  </span>
+                  <span data-model-fact="output-price" className={cn(MODEL_FACT_CLASS, 'w-[68px] [@container(min-width:680px)]:block')}>
+                    {quote ? formatModelPriceAmount(quote.outputPerMtok, quote.currency) : ''}
+                  </span>
+                </>
+              )}
+              <span data-model-fact="effort" className={cn(MODEL_FACT_CLASS, 'w-[104px]', facts.priced ? '[@container(min-width:820px)]:block' : '[@container(min-width:620px)]:block')}>
+                {rep.defaultEffort ? t(`effortLevels.${rep.defaultEffort}`, { defaultValue: rep.defaultEffort }) : ''}
+              </span>
+            </>
+          );
+        })()}
         {rowAdvancedButton(row)}
         {/* 功能型模型:单一「启用」开关(停用轴)。开着的随时能关;被停用的随时能恢复
             (见 canReenableRow,不看聊天登录);被旧显示开关关掉的要等它的媒体通道就绪。 */}
-        {capability ? (
+        {!visibilityControls ? null : capability ? (
           <Switch
             data-capability-enable-switch
             data-setting-id={providersSettings.providers.id}
@@ -1217,17 +1321,21 @@ export function UnifiedModelList({
                 <span className="text-13 font-medium text-[var(--text-primary)]">
                   {t('settings.providers.models.manage.title')}
                 </span>
-                <span className="text-11 text-[var(--text-tertiary)]">
-                  {t('settings.providers.models.manage.selected', { count: selectedCount })}
-                </span>
-              </div>
-              <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
-                {t(
-                  selectionAvailable
-                    ? 'settings.providers.models.manage.hint'
-                    : 'settings.providers.models.manage.connectionRequired',
+                {visibilityControls && (
+                  <span className="text-11 text-[var(--text-tertiary)]">
+                    {t('settings.providers.models.manage.selected', { count: selectedCount })}
+                  </span>
                 )}
-              </p>
+              </div>
+              {visibilityControls && (
+                <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
+                  {t(
+                    selectionAvailable
+                      ? 'settings.providers.models.manage.hint'
+                      : 'settings.providers.models.manage.connectionRequired',
+                  )}
+                </p>
+              )}
             </div>
             {onRefresh && (
               <button
@@ -1263,7 +1371,7 @@ export function UnifiedModelList({
                 ]}
               />
             )}
-            {(unionRows.length > 0 || onAddSpeechModels) && (
+            {visibilityControls && (unionRows.length > 0 || onAddSpeechModels || onAddRealtimeModels) && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button data-settings-search-action="Open the model management menu" variant="secondary" size="sm" compact type="button" className="shrink-0">
@@ -1272,6 +1380,9 @@ export function UnifiedModelList({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                  {onAddRealtimeModels && <DropdownMenuItem onSelect={onAddRealtimeModels}>
+                    {t('bots.voiceMode.realtime.add')}
+                  </DropdownMenuItem>}
                   {onAddSpeechModels && (
                     <DropdownMenuItem onSelect={onAddSpeechModels}>
                       {t('settings.providers.speechSetup.add')}
@@ -1317,8 +1428,7 @@ export function UnifiedModelList({
                   aria-label={t('settings.providers.models.kindFilter.aria')}
                   value={kindFilter}
                   onValueChange={setKindFilter}
-                  height={28}
-                  optionHeight={24}
+                  density="sm"
                   optionClassName="px-2.5"
                   options={(
                     ['all', ...presentCategories] as Array<ModelCategory | 'chat' | 'all'>
@@ -1337,23 +1447,14 @@ export function UnifiedModelList({
               {showSearch && (
                 /* basis 200px 但允许收缩:窄窗口(右栏可被压到 ~270px)时先压缩搜索框,
              不让 chip 组被 overflow-hidden 裁掉(PR #1102 review)。 */
-                <div className="flex h-8 min-w-0 basis-[200px] items-center gap-2 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3">
-                  <Search
-                    size={14}
-                    className="shrink-0"
-                    style={{ color: 'var(--text-tertiary)' }}
-                  />
-                  <input
-                    data-settings-search-action="Search the provider model list"
-                    type="text"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder={t('settings.providers.models.search')}
-                    aria-label={t('settings.providers.models.search')}
-                    className="min-w-0 flex-1 bg-transparent text-13 outline-none placeholder:text-[var(--text-placeholder)]"
-                    style={{ color: 'var(--settings-section-title)' }}
-                  />
-                </div>
+                <SearchInput
+                  className="min-w-0 basis-[200px]"
+                  data-settings-search-action="Search the provider model list"
+                  value={query}
+                  onChange={setQuery}
+                  placeholder={t('settings.providers.models.search')}
+                  aria-label={t('settings.providers.models.search')}
+                />
               )}
             </div>
           )}
@@ -1374,7 +1475,9 @@ export function UnifiedModelList({
                 : (emptyMessage ?? t('settings.providers.models.noResults'))}
             </div>
           ) : (
-            groups.map((g) => {
+            <>
+            {groups.length > 0 && <div className="-mb-3">{factHeader}</div>}
+            {groups.map((g) => {
               // 搜索时强制展开(否则匹配项藏在折叠组里看不到);仅多组时才有折叠头。
               const collapsed = showGroupHeaders && !query.trim() && isCollapsed(g.key);
               // 能力语义按**行**判(isCapabilityRow,含自定义供应商的未知 group 豁免),
@@ -1424,7 +1527,7 @@ export function UnifiedModelList({
                     </button>
                   )}
                   {/* 能力模型组:不进对话选择器;图像/视频开关控制对应功能清单。 */}
-                  {wholeGroupCapability && !collapsed && (
+                  {visibilityControls && wholeGroupCapability && !collapsed && (
                     <span
                       className={cn('pb-1 text-11 leading-snug', showGroupHeaders && 'pl-6')}
                       style={{ color: 'var(--text-tertiary)' }}
@@ -1435,7 +1538,8 @@ export function UnifiedModelList({
                   {!collapsed && g.rows.map((row) => renderModelRow(row))}
                 </div>
               );
-            })
+            })}
+            </>
           )}
 
           {/* 未启用型号保持展开，旧折叠偏好不再隐藏这些行。 */}
@@ -1537,12 +1641,7 @@ export function UnifiedModelList({
                               'bg-[var(--surface-hover)] ring-2 ring-[var(--focus-ring)]',
                           )}
                         >
-                          <span
-                            className="min-w-0 truncate text-14 font-medium"
-                            style={{ color: 'var(--text-disabled)' }}
-                          >
-                            {localizedModelName(rep.name, t)}
-                          </span>
+                          {renderModelName(row, 'var(--text-disabled)')}
                           {/* 来源分组注记:启用后会回到哪个组,别让用户猜。 */}
                           <span
                             className="shrink-0 text-12"
@@ -1554,13 +1653,9 @@ export function UnifiedModelList({
                           </span>
                           <span className="min-w-0 flex-1" />
                           {paymentRequired && (
-                            <span
-                              data-payment-required-badge
-                              className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-11 font-medium text-[var(--text-secondary)]"
-                            >
-                              <Lock size={11} />
+                            <Badge data-payment-required-badge icon={<Lock size={11} />}>
                               {t('settings.providers.models.paymentRequired')}
-                            </span>
+                            </Badge>
                           )}
                           {!paymentRequired && (
                             <Button
@@ -1576,7 +1671,7 @@ export function UnifiedModelList({
                               {t('settings.providers.models.enableModel')}
                             </Button>
                           )}
-                          {provider.id === MANAGED_OLLAMA_PROVIDER_ID && (
+                          {localModels && (
                             <Button
                               data-settings-search-action="Delete the installed local model"
                               variant="secondary"
@@ -1615,7 +1710,7 @@ export function UnifiedModelList({
           // 抽屉里的停用/启用与列表行同一条写入路径(乐观覆盖 + IPC),不另开一套。
           if (await setRowDisabled(row, !rowDisabledEffective(row))) setAdvancedOpen(false);
         }}
-        {...(provider.id === MANAGED_OLLAMA_PROVIDER_ID
+        {...(localModels
           ? {
               onDeleteLocal: (row: UnionModelRow) => {
                 setAdvancedOpen(false);

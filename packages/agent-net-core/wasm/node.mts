@@ -154,6 +154,8 @@ export interface EndpointOptions {
   udpTraffic?: BigUint64Array;
   /** 先看收到的 UDP 数据报：返回 `true` 表示这是上层自己的（比如查公网地址的回复），不交给核心。 */
   intercept?: (datagram: Uint8Array, from: Address) => boolean;
+  /** 底层 UDP 套接字发送报错时的通知（如透明代理/VPN 切换导致旧 fd 失效）。 */
+  onUdpSendError?: (error: Error, info: { consecutiveErrors: number; totalErrors: number }) => void;
   /** `false` 时不开 UDP 套接字，只走通道，发往 UDP 地址的包直接丢掉：和 UDP 全被挡一样。默认 `true`。 */
   udp?: boolean;
   /** 已编译的核心；不给就读本仓库 `target` 下的 release 产物。 */
@@ -184,6 +186,8 @@ export interface ConnectionStats {
   connectionIdsRetired: number;
   connectionIdPackets: number;
   connectionIdRetransmissions: number;
+  /** 发出的包里已被对端确认的累计字节数。旧核心不提供时为零。 */
+  acknowledgedBytes: number;
 }
 
 export interface EndpointStats {
@@ -218,6 +222,10 @@ interface Exports {
   close(id: number): number;
   local_address_change(now: number): void;
   probe(id: number, now: number): number;
+  /** 下面三个是 2026-11-22 加的（仅测速探测、动态切换中继优先级、取路径探测往返），旧核心没有。 */
+  measure_probe?(id: number, now: number): number;
+  conn_set_prefer_relay?(id: number, prefer: number): number;
+  conn_poll_probe_rtt?(id: number): number;
   conn_state(id: number): number;
   conn_remote_static(id: number): number;
   conn_remote_payload(id: number): number;
@@ -561,6 +569,24 @@ export class Connection extends EventEmitter {
     return started === 1;
   }
 
+  /** 仅探测到 `address` 的可达性与往返时间（不切数据路径）；结果经 `probe-rtt` 事件通知。 */
+  measure(address: PeerAddress): boolean {
+    const started = this.endpoint.call((core, _io, addr) => {
+      if (!core.measure_probe) return 0;
+      this.endpoint.encode(addr(), address);
+      return core.measure_probe(this.id, this.endpoint.now());
+    });
+    this.endpoint.schedule();
+    return started === 1;
+  }
+
+  /** 动态切换这条连接是否优先走中继（不改变当前活动路径，需再 `probe` 目标路径以切换）。 */
+  setPreferRelay(prefer: boolean): void {
+    this.endpoint.call((core) => {
+      core.conn_set_prefer_relay?.(this.id, prefer ? 1 : 0);
+    });
+  }
+
   /** 发送方向的进展；核心不提供（旧版）或连接关了时是 `null`。 */
   sendProgress(): SendProgress | null {
     if (this.closed) return null;
@@ -598,11 +624,12 @@ export class Connection extends EventEmitter {
         fallbackProbes: v[14],
         alternatesKept: v[15],
         cookiesReceived: v[16],
-          connectionIdRotations: v[17],
-          connectionIdExhaustions: v[18],
-          connectionIdsRetired: v[19],
-          connectionIdPackets: v[20],
-          connectionIdRetransmissions: v[21],
+        connectionIdRotations: v[17],
+        connectionIdExhaustions: v[18],
+        connectionIdsRetired: v[19],
+        connectionIdPackets: v[20],
+        connectionIdRetransmissions: v[21],
+        acknowledgedBytes: v[22] ?? 0,
       };
     });
   }
@@ -667,6 +694,8 @@ export class Endpoint extends EventEmitter {
   private broken: Error | null = null;
   private panicMessage = '';
   private sendErrors = 0;
+  private consecutiveSendErrors = 0;
+  private rebinding: Promise<void> | null = null;
   private readonly ioOffset: number;
   private readonly addrOffset: number;
   readonly publicKey: Uint8Array;
@@ -683,7 +712,9 @@ export class Endpoint extends EventEmitter {
   static async create(options: EndpointOptions): Promise<Endpoint> {
     const endpoint = new Endpoint(options);
     endpoint.start();
-    if (options.udp !== false) await endpoint.bindSocket(options.bind?.address ?? '0.0.0.0', options.bind?.port ?? 0);
+    if (options.udp !== false) {
+      endpoint.socket = await endpoint.createBoundSocket(options.bind?.address ?? '0.0.0.0', options.bind?.port ?? 0);
+    }
     return endpoint;
   }
 
@@ -713,9 +744,23 @@ export class Endpoint extends EventEmitter {
     if (!socket) return;
     const bytes = datagram.byteLength;
     this.pendingSends += 1;
+    let settled = false;
     const done = (error?: Error | null) => {
-      if (error) this.sendErrors += 1;
-      else if (this.options.udpTraffic) Atomics.add(this.options.udpTraffic, 0, BigInt(bytes));
+      if (settled) return;
+      settled = true;
+      if (socket === this.socket && !this.broken) {
+        if (error) {
+          this.sendErrors += 1;
+          this.consecutiveSendErrors += 1;
+          this.options.onUdpSendError?.(error, {
+            consecutiveErrors: this.consecutiveSendErrors,
+            totalErrors: this.sendErrors,
+          });
+        } else {
+          this.consecutiveSendErrors = 0;
+          if (this.options.udpTraffic) Atomics.add(this.options.udpTraffic, 0, BigInt(bytes));
+        }
+      }
       this.pendingSends -= 1;
       if (this.pendingSends === 0) this.drained?.();
     };
@@ -751,12 +796,51 @@ export class Endpoint extends EventEmitter {
     this.schedule();
   }
 
-  /** 换一个本地地址重新绑定。`notify` 见 {@link localAddressChanged}。 */
+  /**
+   * 换一个本地地址重新绑定底层 UDP 套接字：先绑好新套接字再切换并关闭旧套接字，清零错误计数，
+   * 不中断已建立的连接与中转通道（复用同一 Rust 核心实例）。并发调用合并为同一次重绑。`notify` 见 {@link localAddressChanged}。
+   */
   async rebind(bind: Partial<Address> = {}, notify = true): Promise<void> {
-    const old = this.socket;
-    await this.bindSocket(bind.address ?? old?.address().address ?? '0.0.0.0', bind.port ?? 0);
-    old?.close();
-    if (notify) this.localAddressChanged();
+    if (this.broken) throw this.broken;
+    if (this.options.udp === false) throw new Error('this endpoint has no UDP socket');
+    if (this.rebinding) return this.rebinding;
+    const run = (async () => {
+      let fallbackAddress = this.options.bind?.address ?? '0.0.0.0';
+      let currentPort = 0;
+      if (this.socket) {
+        try {
+          const current = this.socket.address();
+          if (!bind.address) fallbackAddress = current.address;
+          currentPort = current.port;
+        } catch { /* 旧套接字可能已失效 */ }
+      }
+      const targetAddress = bind.address ?? fallbackAddress;
+      const targetPort = bind.port ?? 0;
+      const old = this.socket;
+      // 固定端口重绑时须先释放旧套接字占用，否则会 EADDRINUSE；随机端口（0）则先绑好新套接字再关闭旧套接字实现无中断切换。
+      if (old && targetPort > 0 && currentPort === targetPort) {
+        this.socket = null;
+        await new Promise<void>((resolve) => {
+          try { old.close(() => resolve()); } catch { resolve(); }
+        });
+        if (this.broken) throw this.broken;
+      }
+      const next = await this.createBoundSocket(targetAddress, targetPort);
+      if (this.broken) {
+        try { next.close(); } catch { /* 端点在绑定途中已关闭 */ }
+        throw this.broken;
+      }
+      const previous = this.socket;
+      this.socket = next;
+      this.sendErrors = 0;
+      this.consecutiveSendErrors = 0;
+      if (previous && previous !== next) {
+        try { previous.close(); } catch { /* 旧套接字可能已关闭 */ }
+      }
+      if (notify && !this.broken) this.localAddressChanged();
+    })();
+    this.rebinding = run;
+    try { await run; } finally { if (this.rebinding === run) this.rebinding = null; }
   }
 
   stats(): EndpointStats {
@@ -812,23 +896,32 @@ export class Endpoint extends EventEmitter {
     });
   }
 
-  private bindSocket(address: string, port: number): Promise<void> {
+  private createBoundSocket(address: string, port: number): Promise<dgram.Socket> {
     const socket = dgram.createSocket(address.includes(':') ? 'udp6' : 'udp4');
     socket.on('message', (message, remote) => this.onMessage(socket, message, remote));
     // 发往已关闭端口的包换回的 ICMP、网络不可达都不是致命错误，可靠层会重传。
     socket.on('error', () => undefined);
     return new Promise((resolve, reject) => {
-      socket.once('error', reject);
+      const onBindError = (error: Error) => {
+        try { socket.close(); } catch { /* ignore */ }
+        reject(error);
+      };
+      socket.once('error', onBindError);
       socket.bind(port, address, () => {
-        socket.off('error', reject);
-        this.socket = socket;
-        resolve();
+        socket.off('error', onBindError);
+        if (this.broken) {
+          try { socket.close(); } catch { /* ignore */ }
+          reject(this.broken);
+          return;
+        }
+        resolve(socket);
       });
     });
   }
 
   private onMessage(socket: dgram.Socket, message: Buffer, remote: dgram.RemoteInfo): void {
     if (socket !== this.socket || this.broken || message.length > IO_LEN) return;
+    this.consecutiveSendErrors = 0;
     if (this.options.udpTraffic) Atomics.add(this.options.udpTraffic, 1, BigInt(message.byteLength));
     const from = { address: remote.address, port: remote.port };
     if (this.options.intercept?.(message, from)) return;
@@ -920,6 +1013,18 @@ export class Endpoint extends EventEmitter {
           const stream = new RecvStream(event);
           connection.recvStreams.set(event, stream);
           connection.emit('stream', stream);
+        }
+      }
+      if (this.core?.conn_poll_probe_rtt) {
+        for (;;) {
+          if (connection.closed) return;
+          const sample = this.call((core, _io, addr) => {
+            const rttUs = core.conn_poll_probe_rtt!(connection.id);
+            return rttUs >= 0 ? { address: decodeAddress(addr()), rttUs } : null;
+          });
+          if (!sample) break;
+          progressed = true;
+          connection.emit('probe-rtt', sample.address, sample.rttUs);
         }
       }
       for (const id of [0, ...connection.recvStreams.keys()]) {

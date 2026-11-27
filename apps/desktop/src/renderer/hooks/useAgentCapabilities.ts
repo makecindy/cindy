@@ -15,6 +15,8 @@ import { invokeModelCatalog } from '@/lib/invokeModelCatalog';
 import { parseModelCatalogKey } from '../../shared/controlledModelCatalog';
 
 import { MetadataSnapshotExpiry } from '@cindy/device-link';
+import { isDeviceUnresponsiveRemoteError, isTransientRemoteError } from '@cindy/maker-shared/device-link-contract';
+import { extractIpcError } from '@/utils/ipcError';
 import { createLogger } from '@/lib/logger';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 
@@ -140,6 +142,7 @@ export interface AgentCapabilities {
    * 老被控端无此字段 → undefined：Worker 面板不列远程供应商、不发这个字段(老端会静默丢掉)。
    */
   supportsOrcaWorkerAgentDevice?: boolean;
+  supportsOrcaWorkerModelGroup?: boolean;
   /**
    * 被控端接受给它上面的协同 Lead / 本机 Worker 换 Agent 所在电脑。
    * 老被控端无此字段 → undefined：控制端对这类任务不列其他电脑与分享(v0.1.104–v0.1.110 会拒绝)。
@@ -321,6 +324,7 @@ function parseAgentCapabilities(value: unknown): AgentCapabilities {
     !isOptionalBoolean(value.supportsOrcaWorkerUpdate) ||
     !isOptionalBoolean(value.supportsDeferredOrcaUiAssignment) ||
     !isOptionalBoolean(value.supportsOrcaWorkerAgentDevice) ||
+    !isOptionalBoolean(value.supportsOrcaWorkerModelGroup) ||
     !isOptionalBoolean(value.supportsOrcaAgentRelocation) ||
     !isOptionalBoolean(value.supportsOrcaRemoteWorkerAgentRelocation) ||
     !isOptionalCapabilityStatus(value.writableDirs) ||
@@ -383,6 +387,9 @@ export type DeviceCapabilitiesEvent =
   | { status: 'error'; error: string };
 /** 已挂载的远程能力订阅者；key 同缓存，provider revision 后可原子换入新快照。 */
 const remoteListeners = new Map<CacheKey, Set<(event: DeviceCapabilitiesEvent) => void>>();
+/** Same bounded re-read as provider catalogs (useDeviceProviders): one per key per 5s. */
+const EXPIRY_REREAD_MIN_INTERVAL_MS = 5_000;
+const expiryRereadAt = new Map<CacheKey, number>();
 /**
  * 每被控设备的能力「代际」。`evictDeviceCapabilities` 时自增——在途的 fetchCapabilities 完成
  * 回调据此判断「本次请求是否已被驱逐」:被驱逐则**丢弃结果**,既不回写 cache、也不动 inflight
@@ -492,8 +499,27 @@ async function fetchCapabilities(
         if (deviceId && requestedAt && !expiry.remember(key, caps, requestedAt, () => {
           // Only this (device, agentKind) cache key expired. Other kinds and
           // routed aliases keep their independently measured budgets and
-          // in-flight responses; no prefetch is started here.
-          retireDeviceCapabilityKey(deviceId, agentKind, true);
+          // in-flight responses. A still-mounted key reads once more, as provider
+          // catalogs do; the host forwards its own budget, so trust is never extended.
+          const now = performance.now();
+          const last = expiryRereadAt.get(key);
+          // No mounted consumer, a read already under way, or a re-read moments ago: retire as before.
+          if ((remoteListeners.get(key)?.size ?? 0) === 0 || inflight.has(key)
+            || (last !== undefined && now - last < EXPIRY_REREAD_MIN_INTERVAL_MS)) {
+            retireDeviceCapabilityKey(deviceId, agentKind, true);
+            return;
+          }
+          if (expiryRereadAt.size >= 256) expiryRereadAt.clear();
+          expiryRereadAt.set(key, now);
+          // Retire the expired snapshot now; mounted consumers see `loading`, then the new answer.
+          cache.delete(key);
+          expiry.forget(key);
+          inflight.delete(key);
+          queueMicrotask(() => {
+            if (cache.has(key)) return;
+            notifyRemoteCapabilities(deviceId, agentKind, { status: 'loading' });
+            void fetchCapabilities(agentKind, deviceId).catch(() => undefined);
+          });
         })) {
           cache.delete(key);
           throw new Error('[MODEL_VISIBILITY_NOT_READY] Agent capabilities snapshot expired');
@@ -575,7 +601,11 @@ export function useAgentCapabilities(
       }
       if (event.status === 'error') {
         setOwnerKey(key);
-        setCapabilities(null);
+        // Same rule as provider catalogs: a temporary failure keeps the bounded snapshot on screen;
+        // an expired budget, a refusal or an unsupported target clears it.
+        const recoverable = (isTransientRemoteError(event.error) || isDeviceUnresponsiveRemoteError(event.error))
+          && extractIpcError(new Error(event.error))?.code !== 'MODEL_VISIBILITY_NOT_READY';
+        if (!recoverable) setCapabilities(null);
         setLoading(false);
         setError(event.error);
         return;
@@ -682,17 +712,27 @@ export async function prefetchDeviceCapabilities(deviceId: string): Promise<void
   await Promise.allSettled(ALL_AGENT_KINDS.map((agent) => fetchCapabilities(agent, deviceId)));
 }
 
-export function evictControlledDeviceCapabilities(taskDeviceId: string): void {
+export function evictControlledDeviceCapabilities(taskDeviceId: string, recovered?: ReadonlySet<string>): void {
   const devices = new Set([...cache.keys(), ...inflight.keys(), ...remoteListeners.keys()]
     .map(key => key.slice(0, key.lastIndexOf(':'))));
   for (const key of devices) {
-    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId) evictDeviceCapabilities(key);
+    if (parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId && !recovered?.has(key)) evictDeviceCapabilities(key);
   }
 }
 
 export function getMountedControlledDeviceCapabilityTargets(taskDeviceId: string): string[] {
   const devices = new Set([...remoteListeners.keys()].map(key => key.slice(0, key.lastIndexOf(':'))));
   return [...devices].filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId);
+}
+
+export function getCachedControlledDeviceCapabilityTargets(taskDeviceId: string): string[] {
+  const devices = new Set<string>();
+  for (const key of cache.keys()) {
+    if (!expiry.valid(key)) continue;
+    const deviceKey = key.slice(0, key.lastIndexOf(':'));
+    if (parseModelCatalogKey(deviceKey)?.taskDeviceId === taskDeviceId) devices.add(deviceKey);
+  }
+  return [...devices];
 }
 
 /** device-link:被控设备下线 / 断链时驱逐其能力缓存(只清该设备的 key)。 */

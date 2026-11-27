@@ -1,5 +1,5 @@
 import { assertTaskActionCurrent, captureTaskActionSyncGuard, hasTaskActionAuthorization } from './taskActionAuthorization.js';
-import { inspectAppDefaultModel, changeAppDefaultModel } from './appDefaultModelControl.js';
+import { inspectTeammateModelChoices, changeAppDefaultModel } from './appDefaultModelControl.js';
 import path from 'node:path';
 import { hostname } from 'node:os';
 import { realpath } from 'node:fs/promises';
@@ -20,7 +20,7 @@ import type { AgentKind, EngineKind, Maker } from '@cindy/maker-core';
 import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
 import type { BotToolsetContext } from '../../shared/botRemoteCapabilities.js';
 import type { BotProfileRuntimeDeps } from './botProfileRuntime.js';
-import type { BotModelRoute } from '../../shared/botModelChain.js';
+import { parseRemoteBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
 import { readEffectiveBotModelChain, readExplicitBotModelChain } from '../maker-host/bot-model-chain-settings-store.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { joinSharedSkillPreparation } from '../skillhub/sharedSkillPreparation.js';
@@ -333,7 +333,9 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
     async models(input: { callerSessionId: string }) {
       try {
         const ctx = await context(input.callerSessionId);
-        const selection = await inspectAppDefaultModel();
+        // A teammate may also run on this computer's plugin engines; those choices are marked
+        // teammateOnly and are refused as the application default.
+        const selection = await inspectTeammateModelChoices();
         await ctx.refresh();
         return { ok: true as const, ...selection };
       } catch (error) {
@@ -512,11 +514,11 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
         let modelChain: BotModelRoute[] | null | undefined;
         if (input.modelChain === null) modelChain = null;
         else if (input.modelChain !== undefined) {
-          const { available } = await inspectAppDefaultModel();
+          const { available } = await inspectTeammateModelChoices();
           ctx.assertOwner();
           if (!input.modelChain.length || input.modelChain.length > 5) throw new Error('Invalid model chain');
           const seen = new Set<string>();
-          modelChain = input.modelChain.map(selection => {
+          const selectedRoutes = input.modelChain.map(selection => {
             const choice = available.find(item => item.id === selection.id);
             if (!choice || seen.has(selection.id)
               || (selection.effort !== undefined && selection.effort !== '' && !choice.efforts.some(effort => effort === selection.effort))
@@ -529,6 +531,8 @@ export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
               ...(selection.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
             };
           });
+          modelChain = parseRemoteBotModelChain(selectedRoutes);
+          if (!modelChain) throw new Error('Invalid model chain');
         }
         ctx.assertOwner();
         await updateBotProfile({ id: ctx.botId,

@@ -20,6 +20,8 @@
  *
  */
 
+import { ANTIGRAVITY_MARK_DATA_URL } from '@cindy/maker-shared/branding';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { cn } from '@/lib/utils';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
@@ -178,7 +180,9 @@ export function VendorIcon({
   return (
     <span className={wrapperClassName} title={title}>
       {vendor === 'acp' ? (
-        iconDataUrl ? (
+        iconDataUrl === ANTIGRAVITY_MARK_DATA_URL ? (
+          <PluginEngineIcon size={size} iconDataUrl={iconDataUrl} />
+        ) : iconDataUrl ? (
           <PluginIdentityMark iconDataUrl={iconDataUrl} size={size} running={running} />
         ) : (
           <Puzzle size={size} aria-hidden strokeWidth={1.75} />
