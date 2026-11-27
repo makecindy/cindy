@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   cleanupStagedChatAttachments: vi.fn(),
   cleanupSessionLayoutPrefs: vi.fn(),
   cleanupSessionImages: vi.fn(),
+  scheduleDelete: vi.fn(),
+  deviceLinkInvoke: vi.fn(),
   toastError: vi.fn(),
   toastWarning: vi.fn(),
   logInfo: vi.fn(),
@@ -138,11 +140,15 @@ beforeEach(() => {
   mocks.refreshSessions.mockResolvedValue([]);
   mocks.cleanupSessionImages.mockResolvedValue(undefined);
   mocks.cleanupStagedChatAttachments.mockResolvedValue(undefined);
+  mocks.scheduleDelete.mockResolvedValue(undefined);
+  mocks.deviceLinkInvoke.mockResolvedValue(undefined);
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
       cleanupSessionImages: mocks.cleanupSessionImages,
       cleanupStagedChatAttachments: mocks.cleanupStagedChatAttachments,
+      maker: { schedule: { delete: mocks.scheduleDelete } },
+      deviceLink: { invoke: mocks.deviceLinkInvoke },
     },
   });
   discardDraft('session-1');
@@ -846,5 +852,70 @@ describe('useSessionLifecycleActions unarchive convergence', () => {
     expect(mocks.completePendingStatus).not.toHaveBeenCalled();
     expect(mocks.refreshSessions).not.toHaveBeenCalled();
     expect(mocks.toastError).toHaveBeenCalledWith('ccAgent.sidebar.unarchiveFailed');
+  });
+
+  // 2026-11-27: deleting linked automations chosen in the archive dialog must run only
+  // after the archive write succeeds, pass discardWorktreeChanges through, and toast on failure.
+  it('deletes confirmed linked automations only after archive write succeeds, and keeps them on archive failure', async () => {
+    const schedules = [
+      { id: 'sched-local', name: 'PR #1', deviceId: null, deletable: true },
+      { id: 'sched-remote', name: 'PR #2', deviceId: 'mac-2', deletable: true },
+    ];
+    const { result } = renderHook(() => useSessionLifecycleActions());
+
+    // 1. Archive succeeds with discard + deleteSchedules.
+    await act(async () => {
+      await result.current.runSessionAction('session-1', 'archive', {
+        activeSessionId: 'session-1',
+        prepareArchive: async () => ({
+          discardWorktreeChanges: true,
+          deleteSchedules: schedules,
+        }),
+      });
+    });
+
+    expect(mocks.setStatus).toHaveBeenCalledWith('session-1', 'archived', { kind: 'local' }, true);
+    expect(mocks.scheduleDelete).toHaveBeenCalledWith('sched-local');
+    expect(mocks.deviceLinkInvoke).toHaveBeenCalledWith('mac-2', 'maker:schedule:delete', ['sched-remote']);
+    expect(mocks.setStatus.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.scheduleDelete.mock.invocationCallOrder[0],
+    );
+    expect(mocks.toastError).not.toHaveBeenCalled();
+
+    // 2. Archive write fails -> must NOT delete any linked automation.
+    mocks.scheduleDelete.mockClear();
+    mocks.deviceLinkInvoke.mockClear();
+    mocks.toastError.mockClear();
+    mocks.setStatus.mockRejectedValueOnce(new Error('db write failed'));
+
+    await act(async () => {
+      await result.current.runSessionAction('session-1', 'archive', {
+        activeSessionId: 'session-1',
+        prepareArchive: async () => ({
+          discardWorktreeChanges: false,
+          deleteSchedules: schedules,
+        }),
+      });
+    });
+
+    expect(mocks.scheduleDelete).not.toHaveBeenCalled();
+    expect(mocks.deviceLinkInvoke).not.toHaveBeenCalled();
+    expect(mocks.toastError).toHaveBeenCalledWith('ccAgent.sidebar.archiveFailed');
+
+    // 3. Archive succeeds, but schedule delete fails -> surfaces partial failure toast.
+    mocks.toastError.mockClear();
+    mocks.scheduleDelete.mockRejectedValueOnce(new Error('scheduler busy'));
+
+    await act(async () => {
+      await result.current.runSessionAction('session-1', 'archive', {
+        activeSessionId: 'session-1',
+        prepareArchive: async () => ({
+          discardWorktreeChanges: false,
+          deleteSchedules: [schedules[0]!],
+        }),
+      });
+    });
+
+    expect(mocks.toastError).toHaveBeenCalledWith('ccAgent.sidebar.confirmArchive.deleteScheduleFailed');
   });
 });

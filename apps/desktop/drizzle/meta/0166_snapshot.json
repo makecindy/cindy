@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "036a4daa-7ea5-425f-b4d4-71dfe039cf58",
+  "id": "f5943513-2c8a-4f32-b7bb-4ab194fb4b0c",
   "prevId": "47024693-e2b1-4e72-b093-a4551da4845a",
   "tables": {
     "account_usage_snapshots": {
@@ -2263,13 +2263,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
-        },
-        "acp_missing_price": {
-          "name": "acp_missing_price",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "input_tokens": {
           "name": "input_tokens",
@@ -5459,6 +5452,14 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
+        },
+        "schedule_revision": {
+          "name": "schedule_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
         },
         "last_fired_at": {
           "name": "last_fired_at",

@@ -536,10 +536,17 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     return inserted;
   }
 
-  async update(id: string, patch: Partial<Schedule>, expected?: Schedule): Promise<Schedule | null> {
+  async update(id: string, patch: Partial<Schedule>, expected?: Schedule, mode?: 'replan'): Promise<Schedule | null> {
     const db = this.getDb();
+    // All ordinary scheduling writes invalidate prior replan receipts, including
+    // pause/resume into the same slot. Metadata edits preserve their generation.
+    const changesScheduling = ['status', 'recurring', 'manual', 'cronExpr', 'timezone',
+      'intervalMs', 'expireAt', 'lastFiredAt', 'nextFireAt'].some(key => Object.hasOwn(patch, key));
     const setObj = {
       ...schedulePatchToRow(patch),
+      ...(changesScheduling && mode !== 'replan' ? {
+        scheduleRevision: sql`${schedules.scheduleRevision} + 1`,
+      } : {}),
       // Completion time is a watermark, including ordinary writes after a
       // recovery loses CAS. Compare in the write, never in a prior SELECT.
       ...(patch.lastFinishedAt !== undefined ? {
@@ -548,7 +555,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     };
     const where = and(
       eq(schedules.id, id),
+      // Evaluate the deadline inside SQLite: the request may have stalled in
+      // transit long enough for the proposed slot to become overdue.
+      mode === 'replan' ? sql`${patch.nextFireAt ?? null} > unixepoch('subsec') * 1000` : undefined,
       expected ? and(
+        eq(schedules.scheduleRevision, expected.scheduleRevision ?? 0),
         sql`${schedules.lastFiredAt} IS ${expected.lastFiredAt ?? null}`,
         sql`${schedules.nextFireAt} IS ${expected.nextFireAt ?? null}`,
         eq(schedules.status, expected.status),
@@ -606,7 +617,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     // RunResult,两种环境形状一致。本文件其余读 changes 处同此约束。
     const result = await db
       .update(schedules)
-      .set({ nextFireAt: null })
+      .set({ nextFireAt: null, scheduleRevision: sql`${schedules.scheduleRevision} + 1` })
       .where(
         and(
           eq(schedules.id, id),

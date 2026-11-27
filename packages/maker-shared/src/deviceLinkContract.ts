@@ -373,6 +373,8 @@ export interface MobileCodexRateLimitResetResult {
 
 /** 下一条消息发送时才会应用的跨 Agent 切换意图。 */
 export interface MobileSessionAgentSwitchIntent {
+  preparation?: 'preparing' | 'failed';
+  preparationError?: string;
   targetAgentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   providerId: string | null;

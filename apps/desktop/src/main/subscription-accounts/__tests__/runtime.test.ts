@@ -10155,3 +10155,103 @@ describe('local credential directory hardening scope', () => {
     expect(h.mkdir).not.toHaveBeenCalled();
   });
 });
+
+describe('pooled Claude shared quota throttling and live-window retention', () => {
+  // #13535 review, unit: the shared quota reader must recover after the failure delay
+  // when get_usage returns null on the first read or after the only window expires.
+  // The live-window retention test below already took the failure path on both versions.
+  it.each([false, true])('retries an empty Claude quota after backoff (expired prior window: %s)', async hasExpiredWindow => {
+    let now = 1_900_000_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      h.pools.anthropic = { strategy: 'expiring', accounts: [account('default')] };
+      h.read.mockResolvedValue({ authenticated: true, identity: 'shared@example.test', plan: 'max' });
+      const quota = (used: number, resetsInSeconds: number) => ({
+        claudeUsage: {
+          source: 'oauth-endpoint',
+          updatedAt: now,
+          fiveHour: { utilization: used, resetsAt: now / 1000 + resetsInSeconds },
+          scoped: [],
+        },
+      });
+      if (hasExpiredWindow) {
+        h.usage.mockResolvedValueOnce(quota(25, 180));
+        await readSubscriptionPoolAccountUsages('anthropic');
+        now += 181_000;
+      }
+
+      h.usage.mockResolvedValueOnce({ claudeUsage: null });
+      const readQuota = async () => (await readSubscriptionPoolAccountUsages('anthropic'))?.[0]?.usage?.claudeUsage;
+      expect(await readQuota()).toBeNull();
+
+      h.usage.mockResolvedValue(quota(35, 3_600));
+      now += 60_000;
+      expect(await readQuota()).toBeNull();
+      now += 4 * 60_000;
+      expect(await readQuota()).toMatchObject({ fiveHour: { utilization: 35 } });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  // Unit regression (server-channel-review.md & provider-sharing.md): shared-provider quota
+  // polling previously hit `claude -p get_usage` every 3m while idle and every 30s after a
+  // transient error (429 / stored-login error), and a null get_usage reply wiped live windows.
+  it('throttles idle passive reads, backs off failures, and preserves live windows when get_usage returns null', async () => {
+    let now = 1_900_000_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const reset = now / 1000 + 86_400;
+      h.pools.anthropic = { strategy: 'expiring', accounts: [account('default')] };
+      h.read.mockResolvedValue({ authenticated: true, identity: 'shared@example.test', plan: 'max' });
+      h.usage.mockResolvedValueOnce({
+        claudeUsage: {
+          source: 'oauth-endpoint',
+          updatedAt: now,
+          fiveHour: { utilization: 25, resetsAt: reset },
+          sevenDay: { utilization: 40, resetsAt: reset },
+          scoped: [],
+        },
+      });
+      const first = await readSubscriptionPoolAccountUsages('anthropic');
+      expect(first?.[0]?.usage?.claudeUsage?.fiveHour?.utilization).toBe(25);
+      expect(h.usage).toHaveBeenCalledTimes(1);
+
+      // Idle passive poll after 10m (< 30m idle TTL) reuses cached quota without spawning CLI.
+      now += 10 * 60_000;
+      const idle = await readSubscriptionPoolAccountUsages('anthropic');
+      expect(idle?.[0]?.usage?.claudeUsage?.fiveHour?.utilization).toBe(25);
+      expect(h.usage).toHaveBeenCalledTimes(1);
+
+      // After idle TTL (31m), an unrecognized/null get_usage reply preserves live windows and backs off 5m.
+      now += 21 * 60_000;
+      h.usage.mockResolvedValueOnce({ claudeUsage: null });
+      const preserved = await readSubscriptionPoolAccountUsages('anthropic');
+      expect(preserved?.[0]?.usage?.claudeUsage?.fiveHour?.utilization).toBe(25);
+      expect(h.usage).toHaveBeenCalledTimes(2);
+
+      // Polling 1m later (> 30s snapshot TTL, < 5m backoff) must not re-hit get_usage.
+      now += 60_000;
+      const backedOff = await readSubscriptionPoolAccountUsages('anthropic');
+      expect(backedOff?.[0]?.usage?.claudeUsage?.fiveHour?.utilization).toBe(25);
+      expect(h.usage).toHaveBeenCalledTimes(2);
+
+      // Once the 5m failure backoff expires, a fresh read retries and picks up updated quota.
+      now += 4 * 60_000 + 1_000;
+      h.usage.mockResolvedValueOnce({
+        claudeUsage: {
+          source: 'oauth-endpoint',
+          updatedAt: now,
+          fiveHour: { utilization: 35, resetsAt: reset },
+          sevenDay: { utilization: 45, resetsAt: reset },
+          scoped: [],
+        },
+      });
+      const recovered = await readSubscriptionPoolAccountUsages('anthropic');
+      expect(recovered?.[0]?.usage?.claudeUsage?.fiveHour?.utilization).toBe(35);
+      expect(h.usage).toHaveBeenCalledTimes(3);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});

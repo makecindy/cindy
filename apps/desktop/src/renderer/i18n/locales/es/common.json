@@ -10337,7 +10337,8 @@
       "INVALID_AUTH_CODE": "La autorización venció. Vuelve a iniciar sesión.",
       "INVALID_LOGIN_TICKET": "La sesión de inicio de sesión venció. Comienza de nuevo.",
       "INVALID_BIND_TICKET": "La sesión de verificación venció. Comienza de nuevo.",
-      "REGION_MISMATCH": "La región del servicio de inicio de sesión no coincide con la de esta aplicación."
+      "REGION_MISMATCH": "La región del servicio de inicio de sesión no coincide con la de esta aplicación.",
+      "INVALID_SIGNUP_TICKET": "La confirmación de registro venció. Vuelve a iniciar sesión."
     },
     "rateLimit": {
       "retryAt": "Vuelve a intentarlo después de las {{time}} (hora local).",
@@ -10345,6 +10346,15 @@
       "intro": "El servicio de inicio de sesión está limitando temporalmente las solicitudes. Esto es independiente de un error local de almacenamiento de credenciales.",
       "guidance": "Espera antes de solicitar otro código. Reiniciar, reinstalar o cambiar de red no garantiza que se elimine el límite.",
       "support": "Si esto continúa después de esperar, envía los registros de forma privada a feedback@cindy.app e incluye tu sistema operativo, la versión de Cindy, la hora del error y el código que aparece abajo. No publiques los registros."
+    },
+    "signup": {
+      "title": "Aún no tienes cuenta de Cindy",
+      "subtitle": "{{target}} no está registrado en Cindy. ¿Entraste de otra forma antes? Vuelve y elígela.",
+      "subtitleSocial": "Esta cuenta de {{provider}} no está registrada en Cindy. ¿Entraste de otra forma antes? Vuelve y elígela.",
+      "create": "Crear una cuenta nueva",
+      "createDescEmail": "Regístrate con este correo",
+      "createDescPhone": "Regístrate con este número",
+      "createDescSocial": "Regístrate con esta cuenta de {{provider}}"
     }
   },
   "legalTermsUpdate": {
@@ -11675,7 +11685,17 @@
         "enable": "Activar",
         "enabled": "Activado"
       },
-      "close": "Cerrar diálogo de descarga"
+      "close": "Cerrar diálogo de descarga",
+      "scanToLogin": "Escanea con la app de Cindy para iniciar sesión en esta cuenta",
+      "approveTitle": "¿Permitir que el teléfono inicie sesión?",
+      "approveBody": "{{device}} está iniciando sesión con tu código. Si no eres tú, toca Rechazar.",
+      "approveBodyUnknown": "Un teléfono está iniciando sesión con tu código. Si no eres tú, toca Rechazar.",
+      "approve": "Permitir",
+      "deny": "Rechazar",
+      "loginApproved": "El teléfono inició sesión",
+      "loginDenied": "Inicio de sesión rechazado",
+      "qrExpired": "El código venció",
+      "qrRefresh": "Actualizar"
     },
     "localNetwork": {
       "title": "Permitir acceso a la red local",
@@ -15100,6 +15120,12 @@
       "discoveredCopy": {
         "unavailableHere": "{{provider}} en esta computadora no está disponible ahora.",
         "unavailableOn": "{{provider}} en “{{device}}” no está disponible ahora."
+      },
+      "preparation": {
+        "pending": "Próximo mensaje",
+        "preparing": "Preparando…",
+        "failed": "Error al cambiar",
+        "usingPrevious": "Este mensaje usa {{actual}}; {{target}} aún no está listo."
       }
     },
     "permissionSelector": {
@@ -17692,7 +17718,18 @@
         "confirm": "Confirmar",
         "cancel": "Cancelar",
         "scheduleWarning_many": "Las automatizaciones vinculadas {{names}} seguirán ejecutándose y restaurarán esta sesión.",
-        "scheduleWarningMany_many": "{{count}} de estas sesiones tienen automatizaciones vinculadas que las restaurarán cuando se ejecuten."
+        "scheduleWarningMany_many": "{{count}} de estas sesiones tienen automatizaciones vinculadas que las restaurarán cuando se ejecuten.",
+        "deleteSchedules_one": "Eliminar automatización vinculada",
+        "deleteSchedules_other": "Eliminar automatizaciones vinculadas",
+        "deleteSchedules_many": "Eliminar automatizaciones vinculadas",
+        "deleteScheduleWarning_one": "La automatización vinculada {{names}} se eliminará y no se podrá restaurar.",
+        "deleteScheduleWarning_other": "Las automatizaciones vinculadas {{names}} se eliminarán y no se podrán restaurar.",
+        "deleteScheduleWarning_many": "Las automatizaciones vinculadas {{names}} se eliminarán y no se podrán restaurar.",
+        "deleteSchedulesAndArchive": "Eliminar y archivar",
+        "discardDeleteAndArchive": "Descartar, eliminar y archivar",
+        "deleteScheduleFailed_one": "Tarea archivada, pero no se pudo eliminar la automatización vinculada. Elimínala en Automatizaciones.",
+        "deleteScheduleFailed_other": "Tarea archivada, pero no se pudieron eliminar {{count}} automatizaciones vinculadas. Elimínalas en Automatizaciones.",
+        "deleteScheduleFailed_many": "Tarea archivada, pero no se pudieron eliminar {{count}} automatizaciones vinculadas. Elimínalas en Automatizaciones."
       },
       "dialogueAction": {
         "search": "Buscar en este grupo de chats",
@@ -23631,7 +23668,13 @@
       "back": "Volver al enrutamiento inteligente",
       "name": "Nombre",
       "nameHint": "Se muestra en el selector de modelos.",
-      "routeShownAs": "Se muestra en «Enrutamiento inteligente» del selector de modelos.",
+      "routeType": "Tipo de ruta",
+      "routeTypeModel": "Ruta de modelos",
+      "routeTypeProvider": "Ruta de proveedores",
+      "switchTypeConfirmTitle": "¿Cambiar el tipo de ruta?",
+      "switchTypeConfirmDescription": "Se quitarán las fuentes ya añadidas. Se conservan el nombre, la regla de selección y las excepciones.",
+      "switchTypeConfirmTargetWarning": "También se quitarán las excepciones horarias de otras rutas que apuntan a esta ruta.",
+      "switchTypeConfirmAction": "Cambiar tipo",
       "pick": "Cuál usar",
       "moreStrategies": "Más opciones",
       "effort": "Intensidad de razonamiento",
@@ -23641,11 +23684,10 @@
       "weightAria": "Peso de «{{name}}»",
       "weightHint": "Con «Por peso», un peso mayor recibe más tareas nuevas. 1–1000.",
       "sources": "Fuentes que puede usar",
-      "sourcesHint": "Puede haber modelos distintos. La tarea indica cuál se usó.",
-      "sourcesEmpty": "Aún no hay fuentes. Añade abajo un modelo conectado.",
+      "sourcesEmpty": "Puede haber modelos distintos · La tarea indica cuál se usó · Añade abajo un modelo conectado",
       "sourcesEmptyMerged": "Aún no hay fuentes. Añade abajo un proveedor conectado.",
       "sourcesFull": "Una ruta admite hasta {{count}} fuentes.",
-      "addSource": "Añadir fuente",
+      "addSource": "Añadir ruta de modelos",
       "chooseModel": "Elegir un modelo",
       "notConnected": "Sin conexión",
       "moveUp": "Subir",
@@ -23733,10 +23775,9 @@
       "providers_one": "{{count}} proveedor",
       "providers_many": "{{count}} proveedores",
       "providers_other": "{{count}} proveedores",
-      "addWhole": "Añadir un proveedor completo",
+      "addWhole": "Añadir ruta de proveedores",
       "addWholeHint": "Todos sus modelos entran en esta ruta. En el selector de modelos, la ruta funciona como un proveedor: elige el modelo como siempre y la ruta decide qué miembro lo ejecuta.",
-      "addModelHint": "Añade un modelo de un proveedor. Al elegir esta ruta se escoge una de estas fuentes según su estrategia.",
-      "detailHint": "Esta ruta combina proveedores completos. En el selector de modelos funciona como un proveedor: elige modelo e intensidad de razonamiento como siempre y la ruta decide qué miembro lo ejecuta."
+      "addModelHint": "Añade un modelo de un proveedor. Al elegir esta ruta se escoge una de estas fuentes según su estrategia."
     },
     "kinds": {
       "byModel": "Por modelo",

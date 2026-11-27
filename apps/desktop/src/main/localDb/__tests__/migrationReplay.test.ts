@@ -267,9 +267,11 @@ describeMigrationReplay('existing side-chat teams', () => {
         '0163_purge_deleted_task_history.sql',
         '0164_flat_prism.sql',
         '0165_whole_nemesis.sql',
-        '0166_acp_usage_reference_price.sql',
+        '0166_schedule_revision.sql',
+        '0167_acp_usage_reference_price.sql',
       ]);
       expect(columnNames(db, 'schedules')).toContain('model_group');
+      expect(columnNames(db, 'schedules')).toContain('schedule_revision');
       expect(columnNames(db, 'schedules')).toContain('primary_host_key');
       const reopened = createBetterSqliteDatabase(db.name);
       try {
@@ -500,7 +502,7 @@ describeMigrationReplay('migration replay', () => {
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166,
+          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -680,7 +682,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。
@@ -1180,7 +1182,7 @@ describeMigrationReplay('migration replay', () => {
   // Migration tier: verify 0165 adds nullable sessions.archived_at without mutating
   // existing archived rows (legacy rows must fall back to activity time rather than
   // receiving an artificial archive timestamp) and stays idempotent when already present.
-  // 0166 follows the archive migration. An old usage row must keep both tokens and spend,
+  // 0167 follows the archive and schedule revision migrations. An old usage row must keep both tokens and spend,
   // and an existing missing-price marker must survive idempotent replay as well.
   it.each([false, true])('upgrades archive timestamps and ACP pricing markers without changing existing rows (present=%s)', (alreadyPresent) => {
     const { db, cleanup } = createTempDb();
@@ -1191,11 +1193,14 @@ describeMigrationReplay('migration replay', () => {
         CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at INTEGER NOT NULL${alreadyPresent ? ', archived_at INTEGER' : ''});
         INSERT INTO sessions (id, status, updated_at${alreadyPresent ? ', archived_at' : ''})
         VALUES ('a', 'active', 1${alreadyPresent ? ', NULL' : ''}), ('b', 'archived', 2${alreadyPresent ? ', 500' : ''});
+        CREATE TABLE schedules (id TEXT PRIMARY KEY${alreadyPresent ? ', schedule_revision INTEGER NOT NULL DEFAULT 0' : ''});
+        INSERT INTO schedules VALUES ('scheduled'${alreadyPresent ? ', 5' : ''});
         CREATE TABLE daily_model_usage (input_tokens INTEGER, cost_amount REAL${alreadyPresent ? ', acp_missing_price INTEGER' : ''});
         INSERT INTO daily_model_usage VALUES (12, 0.75${alreadyPresent ? ', 1' : ''});
       `);
       const replay = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 164 });
-      expect(replay.applied.map((migration) => migration.seq)).toEqual([165, 166]);
+      expect(replay.applied.map((migration) => migration.seq)).toEqual([165, 166, 167]);
+      expect(db.prepare('SELECT schedule_revision FROM schedules').pluck().get()).toBe(alreadyPresent ? 5 : 0);
       expect(db.prepare('SELECT input_tokens, cost_amount, acp_missing_price FROM daily_model_usage').get()).toEqual({
         input_tokens: 12, cost_amount: 0.75, acp_missing_price: alreadyPresent ? 1 : null,
       });

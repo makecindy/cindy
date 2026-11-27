@@ -33,6 +33,15 @@ export interface ArchiveTarget {
   orcaRole?: string | null;
 }
 
+export interface ActiveBoundSchedule {
+  id: string;
+  name: string;
+  /** null 表示本机自动化；非空表示所在远程电脑的 deviceId。 */
+  deviceId: string | null;
+  /** project 来源由仓库配置管理，归档弹窗不直接删除。 */
+  deletable: boolean;
+}
+
 /** 冷启动且缓存未就绪时,最多等这么久;超时按「无绑定」处理,不让普通任务的归档卡在列表请求上。 */
 export const COLD_SCHEDULE_LOAD_WAIT_MS = 1500;
 
@@ -230,10 +239,10 @@ async function expandTargetsWithOrcaWorkers(
   return { refsByTarget, workersConfirmed };
 }
 
-async function resolveActiveBoundScheduleNames(
+async function resolveActiveBoundSchedules(
   targets: readonly ArchiveTarget[],
   strict: boolean,
-): Promise<{ names: Map<string, string[]>; confirmed: boolean }> {
+): Promise<{ schedules: Map<string, ActiveBoundSchedule[]>; confirmed: boolean }> {
   const selfDeviceId = getCurrentAuthDeviceId();
   const { refsByTarget, workersConfirmed } = await expandTargetsWithOrcaWorkers(targets, selfDeviceId);
   const allRefs = [...refsByTarget.values()].flat();
@@ -255,13 +264,13 @@ async function resolveActiveBoundScheduleNames(
   const localMap: ReadonlyMap<string, readonly ScheduleBinding[]> = localSchedules
     ? buildBindingMap(localSchedules)
     : new Map();
-  const result = new Map<string, string[]>();
+  const result = new Map<string, ActiveBoundSchedule[]>();
   for (const target of targets) {
     const refs = refsByTarget.get(target) ?? [
       { sessionId: target.id, deviceId: normalizeOrcaDeviceId(target.deviceLinkDeviceId, selfDeviceId) },
     ];
     const seenScheduleKeys = new Set<string>();
-    const names: string[] = [];
+    const bound: ActiveBoundSchedule[] = [];
     for (const ref of refs) {
       const deviceId = ref.deviceId;
       let bindings: readonly ScheduleBinding[];
@@ -278,19 +287,42 @@ async function resolveActiveBoundScheduleNames(
         const scheduleKey = `${deviceId ?? ''}\0${schedule.id}`;
         if (seenScheduleKeys.has(scheduleKey)) continue;
         seenScheduleKeys.add(scheduleKey);
-        names.push(schedule.name);
+        bound.push({
+          id: schedule.id,
+          name: schedule.name,
+          deviceId: deviceId ?? null,
+          // 仅明确声明 source === 'user' 时允许从归档框删除；project、bot 或旧远程端省略 source 时默认禁止删除。
+          deletable: schedule.source === 'user',
+        });
       }
     }
-    if (names.length > 0) result.set(target.id, names);
+    if (bound.length > 0) result.set(target.id, bound);
   }
-  return { names: result, confirmed };
+  return { schedules: result, confirmed };
+}
+
+function projectScheduleNames(
+  schedules: Map<string, ActiveBoundSchedule[]>,
+): Map<string, string[]> {
+  const names = new Map<string, string[]>();
+  for (const [targetId, items] of schedules) {
+    names.set(targetId, items.map((item) => item.name));
+  }
+  return names;
+}
+
+/** 每个任务绑定的 active 自动化明细（含本机/远程归属与是否可从归档框删除）。 */
+export async function loadActiveBoundSchedules(
+  targets: readonly ArchiveTarget[],
+): Promise<Map<string, ActiveBoundSchedule[]>> {
+  return (await resolveActiveBoundSchedules(targets, false)).schedules;
 }
 
 /** 每个任务绑定的 active 自动化名称；包含持续任务，没有的任务不出现在结果里。 */
 export async function loadActiveBoundScheduleNames(
   targets: readonly ArchiveTarget[],
 ): Promise<Map<string, string[]>> {
-  return (await resolveActiveBoundScheduleNames(targets, false)).names;
+  return projectScheduleNames((await resolveActiveBoundSchedules(targets, false)).schedules);
 }
 
 /**
@@ -300,14 +332,61 @@ export async function loadActiveBoundScheduleNames(
 export async function loadConfirmedActiveBoundScheduleNames(
   targets: readonly ArchiveTarget[],
 ): Promise<Map<string, string[]> | null> {
-  const { names, confirmed } = await resolveActiveBoundScheduleNames(targets, true);
-  return confirmed ? names : null;
+  const { schedules, confirmed } = await resolveActiveBoundSchedules(targets, true);
+  return confirmed ? projectScheduleNames(schedules) : null;
+}
+
+function isScheduleNotFoundError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /schedule not found/i.test(message);
+}
+
+/** 删除归档确认框勾选的关联自动化（本机与远程均按各自归属设备执行；已不存在按幂等成功计）。 */
+export async function deleteBoundSchedules(
+  schedules: readonly ActiveBoundSchedule[],
+): Promise<{ deleted: ActiveBoundSchedule[]; failed: ActiveBoundSchedule[] }> {
+  const deleted: ActiveBoundSchedule[] = [];
+  const failed: ActiveBoundSchedule[] = [];
+  const seen = new Set<string>();
+  for (const schedule of schedules) {
+    if (!schedule.deletable) continue;
+    const key = `${schedule.deviceId ?? ''}\0${schedule.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      if (schedule.deviceId) {
+        await window.electronAPI.deviceLink.invoke(
+          schedule.deviceId,
+          'maker:schedule:delete',
+          [schedule.id],
+        );
+      } else {
+        await window.electronAPI.maker.schedule.delete(schedule.id);
+      }
+      deleted.push(schedule);
+    } catch (err) {
+      if (isScheduleNotFoundError(err)) deleted.push(schedule);
+      else failed.push(schedule);
+    }
+  }
+  return { deleted, failed };
 }
 
 /** 单个任务的提醒句;无绑定时返回空串。 */
 export function archiveScheduleWarning(t: TFunction, names: readonly string[]): string {
   if (names.length === 0) return '';
   return t('ccAgent.sidebar.confirmArchive.scheduleWarning', {
+    count: names.length,
+    names: names
+      .map((name) => t('ccAgent.sidebar.confirmArchive.scheduleName', { name }))
+      .join(t('ccAgent.sidebar.confirmArchive.scheduleNameSeparator')),
+  });
+}
+
+/** 勾选删除关联自动化后的警示句;无待删自动化时返回空串。 */
+export function archiveDeleteScheduleWarning(t: TFunction, names: readonly string[]): string {
+  if (names.length === 0) return '';
+  return t('ccAgent.sidebar.confirmArchive.deleteScheduleWarning', {
     count: names.length,
     names: names
       .map((name) => t('ccAgent.sidebar.confirmArchive.scheduleName', { name }))

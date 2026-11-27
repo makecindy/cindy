@@ -370,6 +370,61 @@ describe('MobileDownloadDialog', () => {
     expect(await screen.findByAltText('sidebar.mobileDownload.qrAlt')).toBeTruthy();
   });
 
+  // 依据:登录码只是附加能力,图片生成失败时弹窗仍要给出可用的下载码,不能一直转圈;
+  // 也不再为这张显示不了的码轮询,到期后不能用「已过期」盖掉下载码(server-channel-review)。
+  it('falls back to the download QR when the login code image cannot be generated', async () => {
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
+    });
+    const authQrHandoffState = vi.fn(async () => ({ success: true as const, status: 'pending' as const }));
+    Object.assign(window.electronAPI, {
+      authQrHandoffCreate: vi.fn(async () => ({
+        success: true as const,
+        handoffId: 'handoff-render-fail',
+        payload: 'https://cindy.cn/download/?cindy_login=render-fail',
+        expiresAt: new Date(Date.now() + 120_000).toISOString(),
+      })),
+      authQrHandoffState,
+      authQrHandoffDecide: vi.fn(async () => ({ success: true as const })),
+    });
+    toDataURL.mockImplementation(async (...args: unknown[]) => {
+      if (String(args[0]).includes('cindy_login=')) throw new Error('canvas busy');
+      return 'data:image/png;base64,mobile-download';
+    });
+    render(
+      <MobileDownloadDialog
+        open
+        onOpenChange={vi.fn()}
+        remoteAvailable
+        onOpenRemoteSettings={vi.fn()}
+        onOpenDevices={vi.fn()}
+        triggerRef={detachedTriggerRef}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(toDataURL).toHaveBeenCalledWith(
+        'https://cindy.cn/download/?cindy_login=render-fail',
+        expect.anything(),
+      ),
+    );
+    const qr = await screen.findByAltText('sidebar.mobileDownload.qrAlt');
+    expect(qr.getAttribute('src')).toBe('data:image/png;base64,mobile-download');
+    expect(screen.queryByText('sidebar.mobileDownload.preparing')).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(130_000);
+    });
+    expect(authQrHandoffState).not.toHaveBeenCalled();
+    expect(screen.queryByText('sidebar.mobileDownload.qrExpired')).toBeNull();
+    expect(screen.getByAltText('sidebar.mobileDownload.qrAlt').getAttribute('src')).toBe(
+      'data:image/png;base64,mobile-download',
+    );
+    vi.useRealTimers();
+    toDataURL.mockImplementation(async () => 'data:image/png;base64,mobile-download');
+  });
+
   it('subscribes to Device Link pushes only while the dialog is open', async () => {
     const props = {
       onOpenChange: vi.fn(),

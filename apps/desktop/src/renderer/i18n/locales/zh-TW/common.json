@@ -10218,7 +10218,8 @@
       "INVALID_AUTH_CODE": "授權已過期，請重新登入",
       "INVALID_LOGIN_TICKET": "登入會話已過期，請重新登入",
       "INVALID_BIND_TICKET": "繫結會話已過期，請重新登入",
-      "REGION_MISMATCH": "登入服務區域與當前客戶端不匹配"
+      "REGION_MISMATCH": "登入服務區域與當前客戶端不匹配",
+      "INVALID_SIGNUP_TICKET": "註冊確認已過期，請重新登入"
     },
     "rateLimit": {
       "retryAt": "請在 {{time}}（本機時間）之後重試。",
@@ -10226,6 +10227,15 @@
       "intro": "登入服務暫時限制了請求次數。這與本機憑證儲存異常是不同的問題。",
       "guidance": "請等待後再取得驗證碼。重新啟動、重新安裝或切換網路不保證解除限制。",
       "support": "等待後仍無法登入，請將記錄私下寄給 feedback@cindy.app，並提供作業系統、Cindy 版本、出錯時間和下方錯誤碼。請勿公開發布記錄。"
+    },
+    "signup": {
+      "title": "還沒有 Cindy 帳號",
+      "subtitle": "{{target}} 還沒有註冊 Cindy。之前用其他方式登入過？請返回選擇。",
+      "subtitleSocial": "這個 {{provider}} 帳號還沒有註冊 Cindy。之前用其他方式登入過？請返回選擇。",
+      "create": "建立新帳號",
+      "createDescEmail": "用這個電子郵件註冊 Cindy",
+      "createDescPhone": "用這個手機號碼註冊 Cindy",
+      "createDescSocial": "用這個 {{provider}} 帳號註冊"
     }
   },
   "legalTermsUpdate": {
@@ -11546,7 +11556,17 @@
         "enable": "去開啟",
         "enabled": "已開啟"
       },
-      "close": "關閉"
+      "close": "關閉",
+      "scanToLogin": "用 Cindy App 掃碼，直接登入這個帳號",
+      "approveTitle": "允許手機登入你的帳號？",
+      "approveBody": "「{{device}}」正在掃碼登入。不是你本人操作，請點「拒絕」。",
+      "approveBodyUnknown": "一台手機正在掃碼登入。不是你本人操作，請點「拒絕」。",
+      "approve": "允許",
+      "deny": "拒絕",
+      "loginApproved": "手機已登入",
+      "loginDenied": "已拒絕這次登入",
+      "qrExpired": "QR 碼已過期",
+      "qrRefresh": "重新整理"
     },
     "localNetwork": {
       "title": "開啟區域網路權限",
@@ -14927,6 +14947,12 @@
       "discoveredCopy": {
         "unavailableHere": "這台電腦上的 {{provider}} 現在無法使用。",
         "unavailableOn": "「{{device}}」上的 {{provider}} 現在無法使用。"
+      },
+      "preparation": {
+        "pending": "下則訊息",
+        "preparing": "準備中…",
+        "failed": "切換失敗",
+        "usingPrevious": "本次使用 {{actual}}，{{target}} 尚未就緒"
       }
     },
     "permissionSelector": {
@@ -17450,7 +17476,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "確認",
-        "cancel": "取消"
+        "cancel": "取消",
+        "deleteSchedules_one": "刪除關聯的自動化",
+        "deleteSchedules_other": "刪除關聯的自動化",
+        "deleteScheduleWarning_one": "關聯的自動化{{names}}將被刪除，無法復原。",
+        "deleteScheduleWarning_other": "關聯的自動化{{names}}將被刪除，無法復原。",
+        "deleteSchedulesAndArchive": "刪除並歸檔",
+        "discardDeleteAndArchive": "捨棄、刪除並歸檔",
+        "deleteScheduleFailed_one": "任務已歸檔，但未能刪除關聯的自動化，請前往自動化頁面手動刪除。",
+        "deleteScheduleFailed_other": "任務已歸檔，但未能刪除 {{count}} 個關聯的自動化，請前往自動化頁面手動刪除。"
       },
       "dialogueAction": {
         "search": "在對話中搜尋",
@@ -23317,7 +23351,13 @@
       "back": "返回智慧路由",
       "name": "名字",
       "nameHint": "選模型時顯示這個名字。",
-      "routeShownAs": "選模型時在「智慧路由」裡顯示。",
+      "routeType": "路由類型",
+      "routeTypeModel": "模型路由",
+      "routeTypeProvider": "供應商路由",
+      "switchTypeConfirmTitle": "切換路由類型？",
+      "switchTypeConfirmDescription": "已經加入的來源會被移除。名稱、選法與例外會保留。",
+      "switchTypeConfirmTargetWarning": "其他路由中指向這條路由的時段例外也會移除。",
+      "switchTypeConfirmAction": "切換",
       "pick": "這次用哪個",
       "moreStrategies": "更多選法",
       "effort": "推理強度",
@@ -23327,11 +23367,10 @@
       "weightAria": "「{{name}}」的權重",
       "weightHint": "按權重分配時，權重越大分到的新任務越多，1–1000。",
       "sources": "可以用的來源",
-      "sourcesHint": "可以放不同的模型；實際用了哪個會寫在任務裡。",
-      "sourcesEmpty": "還沒有來源。從下面加入已經連線的模型。",
+      "sourcesEmpty": "可以放不同的模型 · 實際呼叫了哪個會顯示在任務裡 · 從下面加入已經連線的模型",
       "sourcesEmptyMerged": "還沒有來源。從下面加入已經連線的供應商。",
       "sourcesFull": "一個路由最多 {{count}} 個來源。",
-      "addSource": "新增來源",
+      "addSource": "新增模型路由",
       "chooseModel": "選一個模型",
       "notConnected": "沒有連線",
       "moveUp": "上移",
@@ -23411,10 +23450,9 @@
       "removeAria": "把 {{name}} 從這條路由中移除",
       "note": "自動合成的路由會跟著供應商的連接增減：不能新增或移出成員，但可以調先後、填權重、停用某個成員，也可以改選法或隱藏。",
       "providers_other": "{{count}} 個供應商",
-      "addWhole": "新增整個供應商",
+      "addWhole": "新增供應商路由",
       "addWholeHint": "它的全部模型都進這條路由：選模型時這條路由像一個供應商，照常選模型，由路由決定這次用哪個成員。",
-      "addModelHint": "只加某個供應商的某個模型：選這條路由時依選法在這些來源裡挑一個。",
-      "detailHint": "這條路由合併的是整個供應商：選模型時它像一個供應商，照常選模型、推理強度，由路由決定這次用哪個成員。"
+      "addModelHint": "只加某個供應商的某個模型：選這條路由時依選法在這些來源裡挑一個。"
     },
     "kinds": {
       "byModel": "按模型",

@@ -2,7 +2,11 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 
 import { useTranslation } from 'react-i18next';
 
-import { ConfirmDialog, type ConfirmDialogProps } from '@/components/ui/confirm-dialog';
+import {
+  ConfirmDialog,
+  type ConfirmDialogCheckboxItem,
+  type ConfirmDialogProps,
+} from '@/components/ui/confirm-dialog';
 import { BlockingPromptActiveContext } from '@/components/ui/blocking-prompt-hold';
 import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
@@ -90,12 +94,23 @@ export interface ConfirmWithCheckboxOptions extends Omit<ConfirmOptions, 'dontSh
   checkedOverrides?: ConfirmDialogProps['checkedOverrides'];
 }
 
+/** 带多个独立业务复选框的 confirm：返回确认状态与本次勾选的 id 列表。 */
+export interface ConfirmWithCheckboxesOptions
+  extends Omit<ConfirmOptions, 'dontShowAgainKey' | 'dontShowAgainLabel'> {
+  checkboxes: readonly ConfirmDialogCheckboxItem[];
+  resolveCheckedOverrides?: ConfirmDialogProps['resolveCheckedOverrides'];
+}
+
 interface ConfirmDialogContextValue {
   confirm: (options: ConfirmOptions, signal?: AbortSignal) => Promise<boolean>;
   /** 三状态 confirm — 用于「保存 / 不保存 / 取消」这类需要区分 cancel 与 negative 的场景。 */
   confirmThree: (options: ConfirmThreeOptions) => Promise<ConfirmThreeResult>;
   /** 带业务复选框(初始勾选态由 checkboxDefaultChecked 决定,缺省不勾;取消时 checked 恒为 false)。 */
   confirmWithCheckbox: (options: ConfirmWithCheckboxOptions) => Promise<{ ok: boolean; checked: boolean }>;
+  /** 带多个独立业务复选框（取消时 checkedIds 恒为空数组）。 */
+  confirmWithCheckboxes: (
+    options: ConfirmWithCheckboxesOptions,
+  ) => Promise<{ ok: boolean; checkedIds: string[] }>;
 }
 
 interface QueueItem {
@@ -104,8 +119,10 @@ interface QueueItem {
     checkboxLabel?: string;
     checkboxDefaultChecked?: boolean;
     checkedOverrides?: ConfirmDialogProps['checkedOverrides'];
+    checkboxes?: readonly ConfirmDialogCheckboxItem[];
+    resolveCheckedOverrides?: ConfirmDialogProps['resolveCheckedOverrides'];
   };
-  resolve: (value: ConfirmThreeResult, dontShowAgain?: boolean) => void;
+  resolve: (value: ConfirmThreeResult, dontShowAgain?: boolean, checkedIds?: string[]) => void;
 }
 
 const ConfirmDialogContext = createContext<ConfirmDialogContextValue | null>(null);
@@ -133,7 +150,7 @@ interface ConfirmSlot {
   enqueue: (item: QueueItem) => void;
   /** AbortSignal 触发:排队中的直接移出,正在显示且未作答的按取消关闭。 */
   abort: (item: QueueItem) => void;
-  handleConfirm: (opts?: { dontShowAgain?: boolean }) => void;
+  handleConfirm: (opts?: { dontShowAgain?: boolean; checkedIds?: string[] }) => void;
   handleTertiary: () => void;
   handleOpenChange: (value: boolean) => void;
   /** 当前项显示前的焦点元素;阻断提示关闭后把焦点还给它(见 renderSlot)。 */
@@ -204,10 +221,10 @@ function useConfirmSlot(hooks: ConfirmSlotHooks = {}): ConfirmSlot {
   }, []);
 
   const handleConfirm = useCallback(
-    (opts?: { dontShowAgain?: boolean }) => {
+    (opts?: { dontShowAgain?: boolean; checkedIds?: string[] }) => {
       if (!resolvedRef.current) {
         resolvedRef.current = true;
-        currentItem?.resolve('confirm', opts?.dontShowAgain);
+        currentItem?.resolve('confirm', opts?.dontShowAgain, opts?.checkedIds);
         setOpen(false);
       }
     },
@@ -348,6 +365,19 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
     [enqueue],
   );
 
+  const confirmWithCheckboxes = useCallback(
+    (options: ConfirmWithCheckboxesOptions): Promise<{ ok: boolean; checkedIds: string[] }> => {
+      return new Promise((resolve) => {
+        enqueue({
+          options,
+          resolve: (r, _dontShowAgain, checkedIds) =>
+            resolve({ ok: r === 'confirm', checkedIds: r === 'confirm' ? (checkedIds ?? []) : [] }),
+        });
+      });
+    },
+    [enqueue],
+  );
+
   const renderSlot = (slot: ConfirmSlot, zIndex: number, restoreFocus: boolean) => {
     const { currentItem } = slot;
     if (!currentItem) return null;
@@ -388,6 +418,8 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
         }
         checkboxDefaultChecked={currentItem.options.checkboxDefaultChecked}
         checkedOverrides={currentItem.options.checkedOverrides}
+        checkboxes={currentItem.options.checkboxes}
+        resolveCheckedOverrides={currentItem.options.resolveCheckedOverrides}
         onConfirm={slot.handleConfirm}
         onTertiary={slot.handleTertiary}
       />
@@ -395,7 +427,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <ConfirmDialogContext.Provider value={{ confirm, confirmThree, confirmWithCheckbox }}>
+    <ConfirmDialogContext.Provider value={{ confirm, confirmThree, confirmWithCheckbox, confirmWithCheckboxes }}>
       {/* 阻断提示显示或退场中时,界面里独立挂载的 ConfirmDialog 暂缓新打开(见 useHeldWhileBlockingPrompt)。
           阻断槽位不会只排队不显示,currentItem 即可代表它是否有项。下面两个槽位不在此范围内。 */}
       <BlockingPromptActiveContext.Provider value={blocking.currentItem !== null}>

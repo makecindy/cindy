@@ -10316,6 +10316,7 @@ export function ChatInput({
                         ? composerAgentIdentity
                         : undefined
                     }
+                    selectionPreparation={storedAgentSwitchIntent ? storedAgentSwitchIntent.preparation ?? 'pending' : undefined}
                     // 统一模型选择器(M5 新会话 / M6 会话内)。composer 是它的两个真实入口;
                     // 其余 7 个消费者(scheduler / IM / Hook / Subagent / Worker /
                     // GhostErrand / 设置)本版一律不开。
