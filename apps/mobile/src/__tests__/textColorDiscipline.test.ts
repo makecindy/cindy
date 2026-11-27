@@ -51,6 +51,7 @@ const SEMANTIC_TEXT_COLORS = [
 ];
 // 规范逐项登记的精确用法(文件 + 样式名 + token),不属于存量。新增例外先改规范,再加到这里。
 const REGISTERED_TEXT_COLOR_USES = new Set([
+  'src/session/BotGroupChatScreen.tsx unreadLabel botUnread', // 群聊主时间线与话题的未读分界标签，见 mobile-design-guide §3。
   // mobile-design-guide §3 / DESIGN.md §2: PR 卡片「已合并」沿用合并状态色。
   'src/plugins/PluginCardActions.tsx statusMergedText prMerged',
   // Approved installation-source exceptions; mobile-design-guide §3.
@@ -66,8 +67,6 @@ const REGISTERED_TEXT_COLOR_USES = new Set([
   'src/session/BotGroupMessageText.tsx mention groupMentionText',
   // DESIGN.md §2 / mobile-design-guide.md §3: enterprise-viewer External group/member badge reuses groupMentionText.
   'src/session/BotGroupExternalBadge.tsx label groupMentionText',
-  // mobile-design-guide.md §3 登记例外 / DESIGN.md Mobile thread new-reply divider:话题内「New」分界标签与横线同色。
-  'src/session/BotGroupChatScreen.tsx newReplyDivider threadUnreadDivider',
 ]);
 const isAllowedTextColor = (rel: string, token: string) =>
   NEUTRAL_TEXT_COLORS.includes(token) || SEMANTIC_TEXT_COLORS.includes(token)

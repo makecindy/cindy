@@ -259,6 +259,50 @@ describe('computeModelGroupSwitchOffer', () => {
     expect(elsewhere.candidateFacts).not.toHaveBeenCalled();
     expect(await computeModelGroupSwitchOffer(deps(), 's1')).not.toBeNull();
   });
+
+  // 生产入口与可观察结果：computeModelGroupSwitchOffer 在插件引擎候选间判断同引擎 vs 跨引擎切换。
+  // 规则依据：2026-11-27 模型组支持 acp 插件引擎候选；同一插件引擎换模型为同引擎(crossEngine=false)，
+  // 不同插件引擎(providerId 不同)或插件↔内置为跨引擎(crossEngine=true)。
+  // 覆盖缺口：此前 isModelGroupAgentKind 拒绝 'acp'，且 isSameEngine 只比较 agentKind 未区分不同插件 providerId。
+  // 最小失败输入与 tier：unit，两个不同 acp-plugin providerId 的候选在自动接替与横幅提议中互相切换。
+  it('treats distinct plugin engines as cross-engine and same plugin engine models as same-engine', async () => {
+    const dshA: ModelGroupCandidate = { agentKind: 'acp', providerId: 'acp-plugin:dsh:dsh', model: 'deepseek-v4' };
+    const dshB: ModelGroupCandidate = { agentKind: 'acp', providerId: 'acp-plugin:dsh:dsh', model: 'deepseek-r1' };
+    const agy: ModelGroupCandidate = { agentKind: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro' };
+    const acpRoute: ModelGroupRoute = {
+      id: 'r1',
+      name: '插件主力',
+      strategy: 'order',
+      candidates: [dshA, agy, dshB],
+    };
+    const acpDeps = deps({
+      config: { routes: [acpRoute] },
+      row: { agentKind: 'acp', providerId: dshA.providerId, model: dshA.model },
+      pickedKey: modelGroupCandidateKey(dshA),
+      facts: [fact('DSH', used(100)), fact('AGY', used(20)), fact('DSH', used(20))],
+    });
+    // Manual banner skips same account (dshA & dshB share providerId) and offers agy as crossEngine=true.
+    const bannerOffer = await computeModelGroupSwitchOffer(acpDeps, 's1');
+    expect(bannerOffer).toMatchObject({
+      agentKind: 'acp',
+      providerId: agy.providerId,
+      model: agy.model,
+      crossEngine: true,
+    });
+    // Non-account-wide recovery prefers same plugin engine (dshB, crossEngine=false) before crossing to agy.
+    const sameEngineRecovery = await computeModelGroupSwitchOffer(acpDeps, 's1', {
+      current: dshA,
+      visited: new Set(),
+      accountUnavailable: false,
+      recordUnavailable: vi.fn(),
+    });
+    expect(sameEngineRecovery).toMatchObject({
+      agentKind: 'acp',
+      providerId: dshB.providerId,
+      model: dshB.model,
+      crossEngine: false,
+    });
+  });
 });
 
 describe('model group session bindings', () => {

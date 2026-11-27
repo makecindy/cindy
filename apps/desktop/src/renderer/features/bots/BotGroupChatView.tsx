@@ -103,7 +103,7 @@ import {
   type BotGroupFollowUpAction,
   type BotGroupPlanCardAction,
 } from './BotGroupPlan';
-import { BotGroupDateDivider, BotGroupTimelineItem } from './BotGroupTimelineItem';
+import { BotGroupDateDivider, BotGroupTimelineItem, BotGroupUnreadDivider } from './BotGroupTimelineItem';
 import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import {
   botGroupHandoffStepNumbers,
@@ -127,13 +127,16 @@ import {
   botGroupPlanFollowUp,
   collapseBotGroupMemberJoined,
   continuableRoundEndId,
+  findFirstUnreadBotGroupMessageId,
+  hasUnreadBotGroupMessages,
   mergeBotGroupMessages,
   projectBotGroupExecutionFailures,
   mergeBotGroupPlans,
   openBotGroupPlan,
+  type BotGroupUnreadBoundary,
 } from './botGroupPresentation';
 import { botGroupApi, editBotGroupPlanStep, runBotGroupPlanAction, setBotGroupAutoContinue, useBotGroupSummary } from './botGroupStore';
-import { botGroupReadKey, markBotRead } from './botReadState';
+import { botGroupReadKey, getBotLastReadAt, markBotRead } from './botReadState';
 import { useGroupMentionHistory, useReadLocatedMention, type GroupMaskMention } from './groupMaskPresentation';
 import {
   enqueueBotGroupSend, botGroupSendSignature, beginBotGroupTimelineRead, discardBotGroupOutbox, getBotGroupOutboxClaims,
@@ -336,6 +339,16 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   };
   const [seenThrough, setSeenThrough] = useState<string | null>(null);
   const readOwner = useRef(getDataOwnerGeneration());
+  const entryLocalReadRef = useRef<{ owner: ReturnType<typeof getDataOwnerGeneration>; at: number | null }>({
+    owner: getDataOwnerGeneration(),
+    at: getBotLastReadAt(botGroupReadKey(groupId)),
+  });
+  /** Unread boundary captured on entry and held fixed while this group stays open. */
+  const unreadBoundaryRef = useRef<{
+    owner: ReturnType<typeof getDataOwnerGeneration>;
+    finalized: boolean;
+    boundary: BotGroupUnreadBoundary | null;
+  }>({ owner: getDataOwnerGeneration(), finalized: false, boundary: null });
   const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
   const attachmentScope = botGroupAttachmentScope(groupId);
   const attachmentState = useAttachments(attachmentScope, attachmentScope);
@@ -769,11 +782,37 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     if (state.kind === 'ready') setSeenThrough(previous => previous ?? latestSequence);
   }, [state.kind, latestSequence]);
   const newMessageCount = botGroupNewMessageCount(realMessages, seenThrough);
+  const currentReadOwner = getDataOwnerGeneration();
+  if (!isDataOwnerGenerationCurrent(entryLocalReadRef.current.owner)) {
+    entryLocalReadRef.current = { owner: currentReadOwner, at: getBotLastReadAt(botGroupReadKey(groupId)) };
+  }
+  if (!isDataOwnerGenerationCurrent(unreadBoundaryRef.current.owner)) {
+    unreadBoundaryRef.current = { owner: currentReadOwner, finalized: false, boundary: null };
+  }
+  // A cached server cursor may predate reads on another device. Capture it from the
+  // first fresh page before this visit sends its own read receipt.
+  const waitingForServerRead = !direct && state.kind === 'ready' && !!state.group.serverBacked && state.readToken === 0;
+  if (!direct && state.kind === 'ready' && !waitingForServerRead && !unreadBoundaryRef.current.finalized) {
+    const throughSequence = BigInt(latestSequence);
+    const candidate: BotGroupUnreadBoundary | null = state.group.readSequence !== undefined
+      ? { kind: 'sequence', sequence: state.group.readSequence, throughSequence }
+      : !state.group.serverBacked && entryLocalReadRef.current.at !== null
+        ? { kind: 'time', at: entryLocalReadRef.current.at, throughSequence }
+        : null;
+    if (state.readToken > 0 || hasUnreadBotGroupMessages(realMessages, candidate)) {
+      unreadBoundaryRef.current = { owner: currentReadOwner, finalized: true, boundary: candidate };
+    }
+  }
+  const unreadBoundary = unreadBoundaryRef.current.boundary;
+  const firstUnreadId = useMemo(
+    () => findFirstUnreadBotGroupMessageId(rows, unreadBoundary),
+    [rows, unreadBoundary],
+  );
   const messageNavigationVisible = !sharing && !nearBottom && (newMessageCount > 0 || jumpDown.visible);
   const readRequest = useRef<string | null>(null);
   const readMessages = useRef(realMessages); readMessages.current = realMessages;
   const acknowledge = useCallback(() => {
-    if (!isDataOwnerGenerationCurrent(readOwner.current) || !stickToBottomRef.current || document.visibilityState !== 'visible' || !document.hasFocus()) return;
+    if (waitingForServerRead || !isDataOwnerGenerationCurrent(readOwner.current) || !stickToBottomRef.current || document.visibilityState !== 'visible' || !document.hasFocus()) return;
     const element = scrollRef.current;
     if (!element || element.scrollHeight - element.scrollTop - element.clientHeight >= STICK_TO_BOTTOM_PX) return;
     setSeenThrough(latestSequenceRef.current);
@@ -787,7 +826,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         .then(result => { if (!result.ok && readRequest.current === latest.id) readRequest.current = null; })
         .catch(() => { if (readRequest.current === latest.id) readRequest.current = null; });
     }
-  }, [groupId]);
+  }, [groupId, direct, waitingForServerRead]);
   const lastAcknowledgeRef = useRef(0);
   const acknowledgeTimerRef = useRef<number | null>(null);
   /** Leading-edge throttle for scroll: the first event marks at once, a burst marks once more after. */
@@ -1665,11 +1704,12 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             return (
               <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {rowLayout?.dateDivider != null ? <BotGroupDateDivider timestamp={rowLayout.dateDivider} locale={locale} /> : null}
+                {message.id === firstUnreadId ? <BotGroupUnreadDivider /> : null}
                 <BotGroupTimelineItem
                   showDeviceChoice={!!group.assistantComputers && !group.assistantDeviceId}
                   pluginUi={pluginUi}
                   message={message}
-                  continued={timeline[timelineIndex - 1]?.kind !== 'work' && (rowLayout?.continued ?? false)}
+                  continued={timeline[timelineIndex - 1]?.kind !== 'work' && message.id !== firstUnreadId && (rowLayout?.continued ?? false)}
                   authorName={authorName}
                   avatar={identity ? avatarById.get(identity.botId) : undefined}
                   ownerOf={owned || undefined}
