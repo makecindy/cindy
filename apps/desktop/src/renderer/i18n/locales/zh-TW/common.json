@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "驗證 Google 帳戶",
+    "note": "請掃描 QR 碼或開啟 Google 頁面完成驗證。Antigravity 確認可存取帳戶後，任務會自動繼續。",
+    "refresh": "重新整理驗證 QR 碼"
+  },
   "runtimePlugins": {
     "save": "儲存",
     "promptUnsupported": "目前 Pi 執行位置不支援系統提示詞片段。",
@@ -12368,8 +12373,33 @@
           "unfollowTip": "取消關注後，只在有人提到你時提示",
           "listLabel": "這個群聊裡的話題",
           "listNews": "有新回覆",
-          "listOthers": "其他話題",
-          "newSeparator": "新回覆"
+          "newSeparator": "新回覆",
+          "openIndex": "話題",
+          "indexTitle": "話題",
+          "backToList": "返回話題列表",
+          "filterAria": "篩選話題",
+          "filterMine": "與我相關",
+          "filterAll": "全部",
+          "searchPlaceholder": "搜尋話題、回覆或成員",
+          "clearSearch": "清除搜尋",
+          "listRecent": "最近",
+          "indexParticipatedTag": "參與過",
+          "indexMentionedTag": "@過我",
+          "locateInGroup": "在群聊中定位",
+          "indexEmptyMine": "還沒有你參與或提到你的話題",
+          "indexEmptyAll": "這個群聊還沒有話題",
+          "indexEmptySearch": "沒有符合的話題",
+          "viewAllThreads": "查看全部話題",
+          "syncingHistory": "正在追溯更早話題…",
+          "rootKind": {
+            "task": "任務",
+            "image": "圖片",
+            "video": "影片",
+            "audio": "語音",
+            "file": "檔案",
+            "share": "轉發回覆",
+            "card": "卡片"
+          }
         },
         "replyPlaceholder": "回覆這則訊息，可用 @ 點名夥伴…",
         "sendReply": "傳送回覆",
@@ -17442,6 +17472,8 @@
         "moveToProjectRemoteUnsupported": "暫不支援移動遠端任務",
         "moveToProjectWorktreeBlocked": "此任務的工作目錄是 worktree，暫不支援移動到其他專案",
         "openInNewWindow": "在新視窗開啟",
+        "openInNewWindowShortcutMac": "⌘+點擊",
+        "openInNewWindowShortcutOther": "Ctrl+點擊",
         "exportShare": "匯出任務…",
         "exportHtml": "匯出為 HTML…",
         "exportHtmlSuccess": "對話已匯出為 HTML",

@@ -1,5 +1,5 @@
 import { getPluginHostUi, getPluginToolUi, parseGhostUi, pluginHasToolUi, pluginToolVisible, pluginUiDomains, pluginUiPermissionsExpand } from '../toolUi.js';
-import { hostUiApprovalSubjects } from '../hostUi.js';
+import { hostUiApprovalSubjects, isInlineComposerAction, isDynamicComposerContribution, type GhostHostUiContribution } from '../hostUi.js';
 import {
   GHOST_HARNESS_GUEST_WORKSPACE_ARG,
   GHOST_HARNESS_REMOTE_WORKSPACE_ARG,
@@ -2543,6 +2543,44 @@ describe('interactive page declarations', () => {
       expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
         host: { ...popup, contributions: [{ ...popup.contributions[0], position }] },
       } }).ok).toBe(false);
+  });
+  // Unit: this presentation hint preserves the existing approval subject and
+  // cannot turn a global view or another position into a draft action.
+  it('recognizes inline composer buttons without changing existing approval subjects', () => {
+    const views = [{ id: 'board', title: 'Board', resourceUri: 'ui://planner', scope: 'task' as const }];
+    const previous = { id: 'open', title: 'Open', position: 'composer.toolbar', view: 'board', presentation: 'popover' as const };
+    const inline: GhostHostUiContribution = { ...previous, composerAction: 'inline' };
+    const host = { views, contributions: [inline] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(host)).toEqual(hostUiApprovalSubjects({ views, contributions: [previous] }));
+    const hidden = { ...host, contributions: [{ ...inline, visible: false }] };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: hidden } }).ok).toBe(true);
+    expect(hostUiApprovalSubjects(hidden)).toEqual(hostUiApprovalSubjects(host));
+    for (const concurrency of ['queue', 'replace'] as const) {
+      const scheduled = { ...host, contributions: [{ ...inline, concurrency }] };
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps, host: scheduled } }).ok).toBe(true);
+      expect(hostUiApprovalSubjects(scheduled)).toEqual(hostUiApprovalSubjects(host));
+    }
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+      host: { ...host, contributions: [{ ...inline, concurrency: true }] },
+    } }).ok).toBe(false);
+    for (const visible of ['false', 0, null]) {
+      expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+        host: { ...host, contributions: [{ ...inline, visible }] },
+      } }).ok).toBe(false);
+    }
+    expect(isInlineComposerAction(inline, views)).toBe(true);
+    expect(isInlineComposerAction(previous, views)).toBe(false);
+    expect(isInlineComposerAction({ ...inline, position: 'composer.header' }, views)).toBe(true);
+    expect(isInlineComposerAction({ ...inline, position: 'statusbar' }, views)).toBe(false);
+    expect(isInlineComposerAction(inline, [{ ...views[0], scope: 'global' }])).toBe(false);
+    const collection: GhostHostUiContribution = { ...inline, position: 'composer.header', dynamicItems: true, visible: false };
+    expect(validateGhostManifest({ ...base, mcpApps: { ...base.mcpApps,
+      host: { views, contributions: [collection] },
+    } }).ok).toBe(true);
+    expect(isDynamicComposerContribution(collection)).toBe(true);
+    expect(isDynamicComposerContribution({ ...collection, position: 'statusbar' })).toBe(false);
+    expect(isDynamicComposerContribution({ ...collection, kind: 'status' })).toBe(false);
   });
   it.each([
     { kind: 'status' },

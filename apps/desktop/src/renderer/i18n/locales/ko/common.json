@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Google 계정 확인",
+    "note": "QR 코드를 스캔하거나 Google 페이지를 열어 계정을 확인하세요. Antigravity에서 액세스를 확인하면 작업이 재개됩니다.",
+    "refresh": "QR 코드 새로고침"
+  },
   "runtimePlugins": {
     "save": "저장",
     "promptUnsupported": "이 Pi 실행 위치는 시스템 지시 추가를 지원하지 않습니다.",
@@ -12368,8 +12373,33 @@
           "unfollowTip": "팔로우를 해제하면 나를 언급할 때만 알려 드립니다",
           "listLabel": "이 그룹 채팅의 스레드",
           "listNews": "새 답글 있음",
-          "listOthers": "다른 스레드",
-          "newSeparator": "새 답글"
+          "newSeparator": "새 답글",
+          "openIndex": "스레드",
+          "indexTitle": "스레드",
+          "backToList": "스레드 목록으로 돌아가기",
+          "filterAria": "스레드 필터",
+          "filterMine": "내 관련",
+          "filterAll": "전체",
+          "searchPlaceholder": "스레드, 답글 또는 멤버 검색",
+          "clearSearch": "검색 지우기",
+          "listRecent": "최근",
+          "indexParticipatedTag": "참여함",
+          "indexMentionedTag": "멘션됨",
+          "locateInGroup": "그룹에서 보기",
+          "indexEmptyMine": "참여했거나 멘션된 스레드가 아직 없습니다",
+          "indexEmptyAll": "이 그룹에 아직 스레드가 없습니다",
+          "indexEmptySearch": "일치하는 스레드가 없습니다",
+          "viewAllThreads": "전체 스레드 보기",
+          "syncingHistory": "이전 스레드 불러오는 중…",
+          "rootKind": {
+            "task": "작업",
+            "image": "이미지",
+            "video": "동영상",
+            "audio": "오디오",
+            "file": "파일",
+            "share": "공유된 답글",
+            "card": "카드"
+          }
         },
         "replyPlaceholder": "이 메시지에 답글을 쓰세요. @로 동반자를 멘션할 수 있어요…",
         "sendReply": "답글 보내기",
@@ -17442,6 +17472,8 @@
         "moveToProjectRemoteUnsupported": "원격 세션 이동은 아직 지원하지 않습니다",
         "moveToProjectWorktreeBlocked": "이 세션의 작업 디렉터리는 worktree이므로 아직 다른 프로젝트로 이동할 수 없습니다",
         "openInNewWindow": "새 창에서 열기",
+        "openInNewWindowShortcutMac": "⌘+클릭",
+        "openInNewWindowShortcutOther": "Ctrl+클릭",
         "exportShare": "세션 내보내기…",
         "exportHtml": "HTML로 내보내기…",
         "exportHtmlSuccess": "세션을 HTML로 내보냈습니다",

@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Google-Konto bestätigen",
+    "note": "Scanne den QR-Code oder öffne die Google-Seite. Sobald Antigravity den Zugriff bestätigt, wird die Aufgabe fortgesetzt.",
+    "refresh": "QR-Code aktualisieren"
+  },
   "runtimePlugins": {
     "save": "Speichern",
     "promptUnsupported": "Dieser Pi-Ausführungsort unterstützt keine Systemanweisungsfragmente.",
@@ -12414,8 +12419,33 @@
           "unfollowTip": "Nicht mehr folgen: Du wirst nur benachrichtigt, wenn dich jemand erwähnt",
           "listLabel": "Threads in diesem Gruppenchat",
           "listNews": "Neue Antworten",
-          "listOthers": "Andere Threads",
-          "newSeparator": "Neue Antworten"
+          "newSeparator": "Neue Antworten",
+          "openIndex": "Threads",
+          "indexTitle": "Threads",
+          "backToList": "Zurück zu Threads",
+          "filterAria": "Threads filtern",
+          "filterMine": "Für mich",
+          "filterAll": "Alle",
+          "searchPlaceholder": "Threads, Antworten oder Mitglieder suchen",
+          "clearSearch": "Suche löschen",
+          "listRecent": "Zuletzt",
+          "indexParticipatedTag": "Beteiligt",
+          "indexMentionedTag": "Erwähnt",
+          "locateInGroup": "Im Gruppenchat zeigen",
+          "indexEmptyMine": "Noch keine Threads mit deiner Beteiligung oder Erwähnung",
+          "indexEmptyAll": "Noch keine Threads in dieser Gruppe",
+          "indexEmptySearch": "Keine passenden Threads",
+          "viewAllThreads": "Alle Threads anzeigen",
+          "syncingHistory": "Ältere Threads werden geladen…",
+          "rootKind": {
+            "task": "Aufgabe",
+            "image": "Bild",
+            "video": "Video",
+            "audio": "Audio",
+            "file": "Datei",
+            "share": "Geteilte Antwort",
+            "card": "Karte"
+          }
         },
         "replyPlaceholder": "Antworte auf diese Nachricht; mit @ erwähnst du einen Freund…",
         "sendReply": "Antwort senden",
@@ -17517,6 +17547,8 @@
         "moveToProjectRemoteUnsupported": "Das Verschieben von Remote-Sitzungen wird noch nicht unterstützt",
         "moveToProjectWorktreeBlocked": "Das Arbeitsverzeichnis dieser Aufgabe ist ein Worktree. Sie kann daher noch nicht in ein anderes Projekt verschoben werden.",
         "openInNewWindow": "In neuem Fenster öffnen",
+        "openInNewWindowShortcutMac": "⌘+Klick",
+        "openInNewWindowShortcutOther": "Strg+Klick",
         "exportShare": "Sitzung exportieren…",
         "exportHtml": "Als HTML exportieren…",
         "exportHtmlSuccess": "Sitzung als HTML exportiert",
