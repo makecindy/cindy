@@ -185,7 +185,8 @@
     "groupSent": "從群聊傳送",
     "sourceGroupId": "群聊 ID：{{id}}",
     "selectText": "選取文字",
-    "you": "你"
+    "you": "你",
+    "recentActivity": "最近活動"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",

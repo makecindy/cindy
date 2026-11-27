@@ -125,4 +125,56 @@ describe('AgentTaskCard codex subagent live state', () => {
     expect(text).toContain('chat.agentTask.status.completed');
     expect(text).not.toContain('chat.agentTask.status.running');
   });
+
+  it('surfaces live tool activity on running codex cards and recent steps inline without opening the Pi sidebar', () => {
+    const { container } = render(
+      <AgentTaskCard
+        sessionId="s-1"
+        sessionAgentKind="codex"
+        toolCall={spawnToolCall()}
+        result="/root/scout"
+        update={{
+          ...liveCodexUpdate,
+          lastToolName: 'exec',
+          lastToolSummary: 'pnpm --filter @cindy/maker-core test',
+          recentActivities: [
+            {
+              id: 'a-1',
+              toolName: 'file_change',
+              detail: 'translator.ts',
+              status: 'completed',
+            },
+            {
+              id: 'a-2',
+              toolName: 'mcp:cindy_docs:read_sheet',
+              detail: 'metrics.xlsx',
+              status: 'failed',
+              error: 'Permission denied',
+            },
+            {
+              id: 'a-3',
+              toolName: 'exec',
+              detail: 'pnpm --filter @cindy/maker-core test',
+              status: 'running',
+            },
+          ],
+        }}
+      />,
+    );
+
+    // Live activity line shows the active running command directly on the card.
+    const liveLine = container.querySelector('[data-agent-task-live-activity="true"]');
+    expect(liveLine?.textContent).toContain('pnpm --filter @cindy/maker-core test');
+
+    // Expanded inline area shows recent steps + error summary.
+    const steps = container.querySelector('[data-agent-task-recent-activities="true"]');
+    expect(steps?.textContent).toContain('chat.agentTask.recentActivity');
+    expect(steps?.textContent).toContain('translator.ts');
+    expect(steps?.textContent).toContain('cindy_docs · read sheet');
+    expect(steps?.textContent).toContain('Permission denied');
+    expect(steps?.textContent).toContain('pnpm --filter @cindy/maker-core test');
+
+    // Pi-only right-sidebar subagents jump stays strictly absent for Codex.
+    expect(container.querySelector('[data-agent-task-open-subagents="true"]')).toBeNull();
+  });
 });

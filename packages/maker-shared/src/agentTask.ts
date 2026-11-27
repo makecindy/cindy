@@ -32,6 +32,56 @@ export interface AgentTaskUsage {
   costUsd?: number;
 }
 
+export type SubagentToolActivityStatus = 'running' | 'completed' | 'failed';
+
+/** Bounded, redacted recent tool step emitted by a subagent (e.g. Codex child thread). */
+export interface SubagentRecentActivity {
+  id: string;
+  toolName: string;
+  detail?: string;
+  status: SubagentToolActivityStatus;
+  error?: string;
+}
+
+const SUBAGENT_RECENT_ACTIVITIES_MAX = 6;
+const SUBAGENT_ACTIVITY_ID_MAX = 120;
+const SUBAGENT_ACTIVITY_TOOL_MAX = 80;
+const SUBAGENT_ACTIVITY_DETAIL_MAX = 140;
+const SUBAGENT_ACTIVITY_ERROR_MAX = 160;
+const SUBAGENT_LAST_TOOL_SUMMARY_MAX = 160;
+
+export function normalizeSubagentRecentActivities(
+  raw: unknown,
+): SubagentRecentActivity[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: SubagentRecentActivity[] = [];
+  for (const item of raw) {
+    if (out.length >= SUBAGENT_RECENT_ACTIVITIES_MAX) break;
+    if (!item || typeof item !== 'object') continue;
+    const e = item as Record<string, unknown>;
+    const id = clampedString(e.id, SUBAGENT_ACTIVITY_ID_MAX);
+    const toolName = clampedString(e.toolName, SUBAGENT_ACTIVITY_TOOL_MAX);
+    const status = e.status === 'running' || e.status === 'completed' || e.status === 'failed'
+      ? e.status
+      : undefined;
+    if (!id || !toolName || !status) continue;
+    const detail = clampedString(e.detail, SUBAGENT_ACTIVITY_DETAIL_MAX);
+    const error = clampedString(e.error, SUBAGENT_ACTIVITY_ERROR_MAX);
+    out.push({
+      id,
+      toolName,
+      ...(detail ? { detail } : {}),
+      status,
+      ...(error ? { error } : {}),
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+export function normalizeSubagentLastToolSummary(value: unknown): string | undefined {
+  return clampedString(value, SUBAGENT_LAST_TOOL_SUMMARY_MAX);
+}
+
 /**
  * `workflow_progress` 数组条目 —— Claude Code CLI 在 `task_progress` 系统事件上
  * 原生携带的 workflow 进度树节点(`workflow_phase` 分组行 / `workflow_agent` 逐 agent
@@ -151,6 +201,8 @@ export interface AgentTaskUpdate {
   outputFile?: string;
   usage?: AgentTaskUsage;
   lastToolName?: string;
+  lastToolSummary?: string;
+  recentActivities?: SubagentRecentActivity[];
   taskType?: string;
   workflowName?: string;
   /** `null` is an explicit live-update instruction to clear a stale model badge. */
@@ -379,6 +431,8 @@ export function normalizeAgentTaskUpdate(
       }
     : undefined;
   const workflowProgress = normalizeWorkflowProgressEntries(raw.workflowProgress);
+  const lastToolSummary = normalizeSubagentLastToolSummary(raw.lastToolSummary);
+  const recentActivities = normalizeSubagentRecentActivities(raw.recentActivities);
   return {
     provider,
     taskId: taskId ?? parentToolUseId!,
@@ -390,6 +444,8 @@ export function normalizeAgentTaskUpdate(
     ...(typeof raw.outputFile === 'string' && raw.outputFile ? { outputFile: raw.outputFile } : {}),
     ...(usage && Object.keys(usage).length > 0 ? { usage } : {}),
     ...(typeof raw.lastToolName === 'string' && raw.lastToolName ? { lastToolName: raw.lastToolName } : {}),
+    ...(lastToolSummary ? { lastToolSummary } : {}),
+    ...(recentActivities ? { recentActivities } : {}),
     ...(typeof raw.taskType === 'string' && raw.taskType ? { taskType: raw.taskType } : {}),
     ...(typeof raw.workflowName === 'string' && raw.workflowName ? { workflowName: raw.workflowName } : {}),
     ...(raw.model === null
@@ -410,6 +466,12 @@ export function normalizeAgentTaskUpdate(
 /** Field-wise merge of a newer update over a prior one (newer non-empty fields win). */
 export function mergeAgentTaskUpdate(prev: AgentTaskUpdate | undefined, next: AgentTaskUpdate): AgentTaskUpdate {
   if (!prev) return next;
+  const hasNewToolActivity = next.lastToolName !== undefined || next.recentActivities !== undefined;
+  const lastToolSummary = next.lastToolSummary !== undefined
+    ? next.lastToolSummary
+    : hasNewToolActivity
+      ? undefined
+      : prev.lastToolSummary;
   return {
     ...prev,
     ...next,
@@ -419,6 +481,8 @@ export function mergeAgentTaskUpdate(prev: AgentTaskUpdate | undefined, next: Ag
     summary: next.summary ?? prev.summary,
     outputFile: next.outputFile ?? prev.outputFile,
     lastToolName: next.lastToolName ?? prev.lastToolName,
+    lastToolSummary,
+    recentActivities: next.recentActivities ?? prev.recentActivities,
     // CLI 节流帧不带 workflowProgress(undefined = 沿用旧树),必须保留上一帧。
     workflowProgress: next.workflowProgress ?? prev.workflowProgress,
     createdAt: prev.createdAt ?? next.createdAt,
@@ -513,6 +577,8 @@ export interface AgentTaskCardModel {
    */
   spawnedAgentName?: string;
   lastToolName?: string;
+  lastToolSummary?: string;
+  recentActivities?: SubagentRecentActivity[];
   outputFile?: string;
   totalTokens?: number;
   toolUses?: number;
@@ -654,6 +720,8 @@ export function buildAgentTaskCardModel(input: {
     ...(summary ? { summary } : {}),
     ...(spawnedAgentName ? { spawnedAgentName } : {}),
     ...(update?.lastToolName ? { lastToolName: update.lastToolName } : {}),
+    ...(update?.lastToolSummary ? { lastToolSummary: update.lastToolSummary } : {}),
+    ...(update?.recentActivities ? { recentActivities: update.recentActivities } : {}),
     ...(update?.outputFile ? { outputFile: update.outputFile } : {}),
     ...(typeof update?.usage?.totalTokens === 'number' ? { totalTokens: update.usage.totalTokens } : {}),
     ...(typeof update?.usage?.toolUses === 'number' ? { toolUses: update.usage.toolUses } : {}),

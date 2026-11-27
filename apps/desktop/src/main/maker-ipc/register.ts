@@ -2814,6 +2814,7 @@ type SendToSessionInternalResult =
         | 'DELETED'
         | 'BUSY'
         | 'AGENT_NOT_READY'
+        | 'HOST_NOT_READY'
         | 'UNSUPPORTED_CAPABILITY'
         | 'BUDGET_MODEL_REQUIRES_API_MODE'
         | 'PROVIDER_ROUTE_UNAVAILABLE'
@@ -4470,6 +4471,7 @@ import {
   withSessionRestartLock,
   waitForSendToSessionLock,
   assertSessionNotRestarting,
+  SessionRestartInProgressError,
 } from './sendToSessionLock.js';
 import { createMakerSteerTransaction, summarizeIpcUserMessage } from './makerSteerTransaction.js';
 export { acquireSendToSessionLock, hasSendToSessionLock, withSendToSessionLock };
@@ -13243,7 +13245,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     }
 
-    assertSessionNotRestarting(targetSessionId);
+    // Only the restart fence before dispatch can prove this handoff did not send.
+    const refuseBeforeSend = (error: unknown): SendToSessionInternalResult => {
+      if (!params.taskActionDeliveryGuard || !(error instanceof SessionRestartInProgressError)) throw error;
+      return { ok: false, errorCode: 'HOST_NOT_READY', message: error.message };
+    };
+    try {
+      assertSessionNotRestarting(targetSessionId);
+    } catch (error) {
+      return refuseBeforeSend(error);
+    }
     const prev = sendToSessionLocks.get(targetSessionId);
     const waitPrev = waitForSendToSessionLock(targetSessionId, prev);
     // lockStage 只为 sendToSessionLock 的泄漏告警服务:标出临界区内当前挂在哪个
@@ -13722,7 +13733,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: err instanceof Error ? err.message : String(err),
         };
       }
-    });
+    }, refuseBeforeSend);
 
     // 锁条目改由 trackSendToSessionLockRun 安装:run 挂死超过 5min 时条目强制 bail,
     // 后续 outbox 重试 / guardian dispatch / worker idle-close 不再被僵尸条目糊死;

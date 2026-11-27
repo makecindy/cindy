@@ -22,11 +22,25 @@ import {
 import { useTranslation } from 'react-i18next';
 import {
   deriveAgentTaskStatus,
-
+  PI_SUBAGENT_TOOL_NAME,
+  formatAgentTaskTitle,
+  isClaudeSubagentToolName,
+  isSubagentResultError,
+  subagentSpawnReceiptName,
+  subagentSpawnResultIndicatesRunning,
   type AgentTaskStatus,
-
   type AgentTaskTerminalStatus,
+  type SubagentRecentActivity,
 } from '@cindy/maker-shared/agent-task';
+import {
+  describeToolUse,
+  humanizeToolToken,
+  parseToolName,
+} from '@cindy/maker-shared/tool-use-descriptor';
+import {
+  formatCollabRowLabel,
+  verbLabelKeyForIntent,
+} from '@/lib/agent-actions/verbAggregator';
 
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import {
@@ -53,17 +67,54 @@ import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
 import { formatCompactTokens } from '@/lib/usageFormat';
 import { CODEX_SUBAGENT_EFFORTS } from '../../../shared/subagentModelSettings';
-import {
-  PI_SUBAGENT_TOOL_NAME,
-  formatAgentTaskTitle,
-  isClaudeSubagentToolName,
-  isSubagentResultError,
-  subagentSpawnReceiptName,
-  subagentSpawnResultIndicatesRunning,
-} from '@cindy/maker-shared/agent-task';
 
 // 徽标可显示的思考强度档:协议全部合法档(效果词表 effortLevels 四语齐)。
 const EFFORT_BADGE_LEVELS = new Set<string>(['minimal', ...CODEX_SUBAGENT_EFFORTS]);
+
+function formatSubagentActivity(
+  activity: SubagentRecentActivity,
+  t: TFunction,
+): { label: string; detail?: string } {
+  const { toolName, detail } = activity;
+  if (toolName === 'exec') {
+    if (detail) {
+      const descriptor = describeToolUse('exec', { command: detail });
+      if (descriptor.kind === 'command' && descriptor.intent) {
+        return { label: t(verbLabelKeyForIntent(descriptor.intent.action)), detail };
+      }
+    }
+    return { label: t('chat.agentActionRow.verb.ranCommand'), ...(detail ? { detail } : {}) };
+  }
+  if (toolName === 'file_change') {
+    return { label: t('chat.agentActionRow.verb.edited'), ...(detail ? { detail } : {}) };
+  }
+  if (toolName === 'web_search') {
+    return { label: t('chat.agentActionRow.verb.searched'), ...(detail ? { detail } : {}) };
+  }
+  if (toolName === 'view_image') {
+    return { label: t('chat.agentActionRow.verb.read'), ...(detail ? { detail } : {}) };
+  }
+  const parsed = parseToolName(toolName);
+  if (parsed.kind === 'mcp') {
+    return {
+      label: `${parsed.server} · ${humanizeToolToken(parsed.tool)}`,
+      ...(detail ? { detail } : {}),
+    };
+  }
+  if (parsed.kind === 'dynamic') {
+    const label = parsed.namespace
+      ? `${parsed.namespace} · ${humanizeToolToken(parsed.tool)}`
+      : humanizeToolToken(parsed.tool);
+    return { label, ...(detail ? { detail } : {}) };
+  }
+  if (parsed.kind === 'collab') {
+    const descriptor = describeToolUse(toolName, detail ? { prompt: detail } : null);
+    if (descriptor.kind === 'collab') {
+      return { label: formatCollabRowLabel(descriptor, t), ...(detail ? { detail } : {}) };
+    }
+  }
+  return { label: humanizeToolToken(toolName), ...(detail ? { detail } : {}) };
+}
 
 interface AgentTaskCardProps {
   renderItemKey?: string;
@@ -464,6 +515,41 @@ export function AgentTaskCard({
     </span>
   );
 
+  const liveActivity = useMemo(() => {
+    if (status !== 'running' || isWorkflow || isBash) return null;
+    const recent = update?.recentActivities;
+    if (recent && recent.length > 0) {
+      let current: SubagentRecentActivity | undefined;
+      for (let i = recent.length - 1; i >= 0; i -= 1) {
+        if (recent[i].status === 'running') {
+          current = recent[i];
+          break;
+        }
+      }
+      current ??= recent.at(-1);
+      if (!current) return null;
+      const formatted = formatSubagentActivity(current, t);
+      const text = [formatted.label, formatted.detail, current.error]
+        .filter(Boolean)
+        .join(' · ');
+      return text ? { text, failed: current.status === 'failed' } : null;
+    }
+    if (update?.lastToolName) {
+      const formatted = formatSubagentActivity(
+        {
+          id: 'last-tool',
+          toolName: update.lastToolName,
+          ...(update.lastToolSummary ? { detail: update.lastToolSummary } : {}),
+          status: 'running',
+        },
+        t,
+      );
+      const text = [formatted.label, formatted.detail].filter(Boolean).join(' · ');
+      return text ? { text, failed: false } : null;
+    }
+    return null;
+  }, [isBash, isWorkflow, status, t, update?.lastToolName, update?.lastToolSummary, update?.recentActivities]);
+
   return (
     // data-message-client-id:MessageStream 的消息级 focus(后台任务面板行点击 /
     // 搜索跳转)靠该锚点滚动定位 —— 普通消息行有,任务卡也必须有,否则面板点
@@ -538,6 +624,20 @@ export function AgentTaskCard({
               ))}
               {showLiveElapsed && startedAtMs !== undefined && <RunningElapsed startedAtMs={startedAtMs} />}
             </span>
+            {liveActivity && (
+              <span
+                data-agent-task-live-activity="true"
+                className={cn(
+                  'mt-0.5 block truncate text-12 leading-[1.333333]',
+                  liveActivity.failed
+                    ? 'text-[var(--error-fg)]'
+                    : 'text-[var(--text-tertiary)]',
+                )}
+                title={liveActivity.text}
+              >
+                {liveActivity.text}
+              </span>
+            )}
             {workflowSummary && (
               <span
                 data-workflow-progress-line="true"
@@ -656,11 +756,69 @@ export function AgentTaskCard({
                   )}
                 </>
               )}
-              {update?.lastToolName && (
+              {update?.recentActivities && update.recentActivities.length > 0 ? (
+                <div
+                  data-agent-task-recent-activities="true"
+                  className="mb-1 flex flex-col gap-1"
+                >
+                  <p className="text-11 font-medium text-[var(--text-tertiary)]">
+                    {t('chat.agentTask.recentActivity')}
+                  </p>
+                  <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                    {update.recentActivities.map((activity) => {
+                      const stepSpinning = status === 'running' && activity.status === 'running';
+                      const StepIcon = activity.status === 'failed'
+                        ? AlertCircle
+                        : activity.status === 'completed'
+                          ? CheckCircle2
+                          : LoaderCircle;
+                      const formatted = formatSubagentActivity(activity, t);
+                      return (
+                        <li
+                          key={activity.id}
+                          className="flex min-w-0 items-start gap-1.5 text-12 leading-[1.333333] text-[var(--text-tertiary)]"
+                        >
+                          <span
+                            className={cn(
+                              'mt-0.5 inline-flex shrink-0 items-center',
+                              activity.status === 'failed'
+                                ? 'text-[var(--error-fg)]'
+                                : 'text-[var(--text-tertiary)]',
+                            )}
+                          >
+                            <Spinner icon={StepIcon} size={11} spinning={stepSpinning} />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate">
+                              <span className="text-[var(--text-secondary)]">
+                                {formatted.label}
+                              </span>
+                              {formatted.detail && (
+                                <span className="ml-1.5 font-mono text-[var(--text-tertiary)]">
+                                  {formatted.detail}
+                                </span>
+                              )}
+                            </span>
+                            {activity.error && (
+                              <span className="block truncate text-[var(--error-fg)]">
+                                {activity.error}
+                              </span>
+                            )}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ) : update?.lastToolName ? (
                 <p className="text-12 leading-4 text-[var(--text-tertiary)]">
-                  {t('chat.agentTask.lastTool', { tool: update.lastToolName })}
+                  {t('chat.agentTask.lastTool', {
+                    tool: update.lastToolSummary
+                      ? `${update.lastToolName} · ${update.lastToolSummary}`
+                      : update.lastToolName,
+                  })}
                 </p>
-              )}
+              ) : null}
               {update?.outputFile && (
                 <p className="text-12 leading-4 text-[var(--text-tertiary)]">
                   {t('chat.agentTask.outputFile', { path: update.outputFile })}

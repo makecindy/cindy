@@ -111,7 +111,8 @@ vi.mock('react-router-dom', async (original) => ({
   useParams: () => ({ groupId: mocks.groupId }),
   useSearchParams: () => [new URLSearchParams(), vi.fn()],
 }));
-vi.mock('@/contexts/dataOwnerGeneration', () => ({
+vi.mock('@/contexts/dataOwnerGeneration', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/contexts/dataOwnerGeneration')>(),
   getDataOwnerGeneration: () => mocks.ownerGeneration,
   isDataOwnerGenerationCurrent: (owner: { dataOwnerId: string; generation: number }) =>
     owner.dataOwnerId === mocks.ownerGeneration.dataOwnerId && owner.generation === mocks.ownerGeneration.generation,
@@ -1468,6 +1469,35 @@ describe('BotGroupChatView', () => {
     expect((within(panel).getByRole('textbox') as HTMLTextAreaElement).value).toBe('Unsent diagram reply');
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('complementary')).toBeNull();
+  });
+
+  it.each([3, 4])('renders the corner badge for %i reactors in both the timeline and the open thread', async count => {
+    const root = msg({ id: 'u1', content: 'Group message', reactions: [{ emoji: '👍', count, me: false }] });
+    const reactors = ['Ada', 'Ben', 'Cal', 'Deb'].slice(0, count).map(name => ({
+      actorId: name, name, isSelf: false, formerMember: false,
+    }));
+    vi.mocked(window.electronAPI.maker.chatServer.reactors).mockResolvedValue({ ok: true, reactors });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [root] }) });
+    mocks.thread.mockResolvedValue({ ok: true, root, replies: [], hasMore: false });
+    renderView();
+
+    async function checkCorner(surface: HTMLElement) {
+      const badge = await within(surface).findByRole('button', { name: /bots\.groupChat\.server\.reaction(Who|Count)/ });
+      expect(badge.closest('[data-message-reactions]')).toBeTruthy();
+      if (count === 3) {
+        await waitFor(() => expect(Array.from(badge.querySelectorAll('[data-avatar]'), avatar => avatar.getAttribute('data-avatar')))
+          .toEqual(['Ada', 'Ben', 'Cal']));
+        expect(within(badge).queryByText('3')).toBeNull();
+      } else {
+        expect(within(badge).getByText('4')).toBeTruthy();
+        expect(within(badge).queryByTestId('reaction-avatars')).toBeNull();
+      }
+    }
+
+    const openThread = await screen.findByRole('button', { name: 'bots.groupChat.server.startTopic' });
+    await checkCorner(openThread.closest('main')!);
+    fireEvent.click(openThread);
+    await checkCorner(await screen.findByRole('complementary'));
   });
 
   it('lets Escape dismiss a portalled reaction picker without closing the thread', async () => {
@@ -3334,6 +3364,23 @@ describe('BotGroupChatView', () => {
       expect(mocks.getBotGroup).toHaveBeenLastCalledWith('g1', expect.objectContaining({ beforeSequence: 2 }));
       expect(screen.getByTestId('bot-group-quote').getAttribute('data-quote-state')).toBe('deleted');
       expect(document.body.textContent).not.toContain('很早的原文');
+    });
+
+    it('holds an offline reaction on the timeline until the next normal read of the row', async () => {
+      const row = msg({ id: 'root', sequence: 1, content: '群消息', reactions: [{ emoji: '👍', count: 4, me: false }] });
+      mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: true, messages: [row] }) });
+      const react = vi.fn().mockRejectedValue(new Error('offline'));
+      Object.assign(window.electronAPI.maker.chatServer, { react });
+      renderView();
+      const chip = await screen.findByRole('button', { name: 'bots.groupChat.server.reactionCount' });
+      mocks.getBotGroup.mockClear();
+      await act(async () => fireEvent.click(chip));
+      expect(chip.getAttribute('aria-pressed')).toBe('true');
+      expect(mocks.getBotGroup).not.toHaveBeenCalled();
+      await act(async () => { mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })); });
+      expect(chip.getAttribute('aria-pressed')).toBe('false');
+      expect(mocks.getBotGroup).toHaveBeenCalledTimes(1);
+      expect(react).toHaveBeenCalledTimes(1);
     });
 
     it('re-reads the opened older page after reacting to a message on it', async () => {
