@@ -9,6 +9,7 @@
     "stopAllHint": "Inclui solicitações de outras pessoas",
     "step": "Etapa {{step}}/{{total}}"
   },
+  "newMessagesBoundary": "NEW",
   "title": "Conversas em grupo",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} membro",

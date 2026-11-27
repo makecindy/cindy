@@ -4,6 +4,7 @@ import { Pause, Play, X } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DownloadMeter } from '@/components/ui/download-meter';
+import { SearchInput } from '@/components/ui/search-input';
 import type { DownloadProgress } from '../../../shared/downloadProgress';
 
 /** One visibility rule for both runtimes: installed items only appear in search;
@@ -218,14 +219,12 @@ export function LocalModelBrowser<T>({
           </span>
           {!searching && summary}
         </div>
-        <input
+        <SearchInput
           id={id}
           aria-label={t('settings.providers.local.searchPlaceholder')}
           value={query}
-          onChange={(e) => onQuery(e.target.value)}
+          onChange={onQuery}
           placeholder={t('settings.providers.local.searchPlaceholder')}
-          className={localModelInputClass}
-          style={localModelInputStyle}
         />
         {searching && visible.length === 0 && (
           <span className="text-12" style={{ color: 'var(--text-tertiary)' }}>
