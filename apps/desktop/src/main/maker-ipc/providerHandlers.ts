@@ -18,7 +18,7 @@ import { appendSpeechModels, missingSpeechReference } from '../../shared/speechP
 import { cloudManagementExecution } from '../host-settings/managementCalls.js';
 import { presentManagementDeviceCode } from '../host-settings/managementAuthorization.js';
 import { isProviderConnectionIcon, isProviderConnectionImage } from '@cindy/model-providers/branding';
-import { readProviderConnectionIcons, setProviderConnectionIcon, setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
+import { readProviderConnectionIcons, readProviderPresentation, setProviderConnectionIcon, setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import type { DeploymentDetectionResult } from '../../shared/providerDetection.js';
 import { pruneProviderGroupBindings } from '../provider-group/bindings.desktop.js';
 import { writeProviderGroup } from '../provider-group/store.js';
@@ -1918,8 +1918,11 @@ export function registerProviderHandlers(
             throw error;
           }
           assertOptionalRequestedOwner(value);
-          if (provider.auth.method === 'oauth') {
-            await setProviderPresentation(providerId, { name });
+          if (provider.auth?.method === 'oauth') {
+            await setProviderPresentation(providerId, { name }).catch(() => {
+              log.warn('Failed to record OAuth provider presentation name', { providerId });
+            });
+            assertOptionalRequestedOwner(value);
           }
           await refreshCatalogAfterCommit();
         });
@@ -3063,6 +3066,12 @@ export function registerProviderHandlers(
             if (Object.hasOwn(readProviderConnectionIcons(), runtimeProviderId)) {
               await setProviderConnectionIcon(runtimeProviderId, null).catch(() => {
                 log.warn('Failed to clear connection icon after provider deletion', { providerId });
+              });
+              assertProviderMutationOwner(ownerAtIngress);
+            }
+            if (readProviderPresentation(runtimeProviderId, { allowSideEffects: false }).name !== undefined) {
+              await setProviderPresentation(runtimeProviderId, { name: null }).catch(() => {
+                log.warn('Failed to clear presentation name after provider deletion', { providerId });
               });
               assertProviderMutationOwner(ownerAtIngress);
             }
