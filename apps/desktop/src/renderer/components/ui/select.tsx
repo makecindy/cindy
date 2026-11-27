@@ -21,6 +21,8 @@ export interface SelectProps {
   /** Settings search checker reason, forwarded to the trigger. */
   'data-settings-search-action'?: string;
   label: string;
+  /** Displayed when there is no selected option. Defaults to the field label. */
+  placeholder?: string;
   value: string;
   options?: ReadonlyArray<SelectOption>;
   /** Labelled option groups (e.g. commands / keys); use instead of options. */
@@ -77,6 +79,7 @@ export function Select({
   'data-setting-id': settingId,
   'data-settings-search-action': searchAction,
   label,
+  placeholder = label,
   value,
   options,
   groups,
@@ -143,7 +146,7 @@ export function Select({
           aria-describedby={describedBy}
           aria-invalid={error ? true : invalid}
           aria-required={required}
-          title={selected?.title ?? selected?.label}
+          title={selected?.title ?? selected?.label ?? (placeholder !== label ? placeholder : undefined)}
           className={cn(
             'min-w-0 max-w-full justify-between gap-2 px-3 font-normal [-webkit-app-region:no-drag]',
             size === 'inline' && SELECT_INLINE_TRIGGER,
@@ -154,7 +157,7 @@ export function Select({
           )}
         >
           <span className={cn('min-w-0 truncate text-left', triggerAdornment && 'flex-1')}>
-            <SelectPrimitive.Value placeholder={label} />
+            <SelectPrimitive.Value placeholder={placeholder} />
           </span>
           {triggerAdornment}
           <SelectPrimitive.Icon asChild>

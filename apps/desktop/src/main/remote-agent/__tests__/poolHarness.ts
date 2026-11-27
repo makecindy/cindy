@@ -235,6 +235,8 @@ export function sharedAccountRegisterWiring(ports: Record<string, unknown> & {
     providerShareAccessEpoch: () => 0,
     findReceivedShare: () => ({ status: 'active' }),
     withRehydrateCloseSuppressed: (_id: string, run: () => unknown) => run(),
+    createSessionStartTimer: () => ({ lap: noop, attempt: noop, finish: noop }),
+    logSessionStartTiming: noop,
     RuntimePluginControlError, SessionCreationCleanupPendingError,
     withSharedSessionResumeRecovery, withSharedReconnectHandoff, isProviderShareAgentDeviceId,
     createAgentSwitchBoundaryInsert, relocateForFreshStart,

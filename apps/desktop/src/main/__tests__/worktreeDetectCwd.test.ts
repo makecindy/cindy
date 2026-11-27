@@ -38,7 +38,7 @@ beforeEach(() => {
   // Synchronous Git fixtures consume no work budget; fake-timer cases replace this clock.
   vi.spyOn(performance, 'now').mockReturnValue(0);
   // Synthetic paths need no filesystem I/O, including fake-timer timeout tests.
-  realpathMock.mockReset().mockImplementation(async (cwd) => String(cwd));
+  realpathMock.mockReset().mockImplementation(async (cwd: string) => cwd);
 });
 
 afterEach(() => {
@@ -203,29 +203,36 @@ describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
     }
   });
 
-  // #13175 / #6409, unit tier: when realpath confirms ENOENT/ENOTDIR, preserve
-  // gitInstalled via `git --version` without spawning doomed `git rev-parse` calls
-  // against the missing cwd. Minimal failure: a deleted worktree path with realpath
-  // rejecting ENOENT/ENOTDIR previously triggered 2 failing rev-parse spawns.
+  // #13175, unit tier: realpath ENOENT/ENOTDIR used to launch Git in the invalid cwd
+  // despite returning the correct status. Only the installation check can succeed.
   it.each([
     { code: 'ENOENT', gitInstalled: true },
     { code: 'ENOENT', gitInstalled: false },
     { code: 'ENOTDIR', gitInstalled: true },
     { code: 'ENOTDIR', gitInstalled: false },
-  ])('skips rev-parse spawns on $code while preserving gitInstalled=$gitInstalled', async ({ code, gitInstalled }) => {
-    realpathMock.mockRejectedValue(Object.assign(new Error(`realpath ${code}`), { code }));
+  ])('preserves invalid-directory results on $code when gitInstalled=$gitInstalled', async ({ code, gitInstalled }) => {
+    realpathMock.mockRejectedValueOnce(Object.assign(new Error(`invalid directory (${code})`), { code }));
     gitExecMock.mockImplementation(async (args: readonly string[]) => {
       if (gitInstalled && args[0] === '--version') return { stdout: 'git version 2.45.0\n', stderr: '' };
       throw new GitExecError({ args, exitCode: null, stderr: '', stdout: '',
         cause: Object.assign(new Error('not found'), { code: 'ENOENT' }) });
     });
-    expect(await detectCwd('/missing')).toMatchObject({
+    expect(await detectCwd('/missing')).toEqual({
       isGitRepo: false,
       isInsideWorktree: false,
       gitInstalled,
+      supportsRecoveryKeyDiscard: true,
+      supportsCheckout: true,
     });
-    expect(gitExecMock).toHaveBeenCalledTimes(1);
-    expect(gitExecMock).toHaveBeenCalledWith(['--version'], undefined, expect.any(Object));
+    expect(gitExecMock.mock.calls.map(([args, cwd]) => [args, cwd])).toEqual([[['--version'], undefined]]);
+  });
+
+  it('uses the supplied directory when realpath fails with a permission error', async () => {
+    const cwd = path.resolve('/repo');
+    realpathMock.mockRejectedValueOnce(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+    gitExecMock.mockResolvedValue({ stdout: `${cwd}\nmain\n.git\n.git\n` });
+    expect(await detectCwd(cwd)).toMatchObject({ isGitRepo: true, repoRoot: cwd });
+    expect(gitExecMock.mock.calls[0][1]).toBe(cwd);
   });
 
   it('releases all four hung probes after Git timeout and allows queued work and same-path retries', async () => {

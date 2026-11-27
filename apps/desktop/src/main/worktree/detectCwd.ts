@@ -37,20 +37,19 @@ async function detectCwdOnce(cwd: string, opts?: DetectCwdOptions): Promise<Dete
   };
   // Git resolves relative metadata paths from the physical process cwd. A
   // symlink spelling can otherwise make an ordinary repo look like a linked
-  // worktree. If the directory itself is missing (ENOENT/ENOTDIR), skip the
-  // doomed rev-parse spawns while still preserving gitInstalled detection.
-  let missingDir = false;
-  cwd = await realpathWorkingDirectory(cwd).catch((err) => {
+  // worktree.
+  const physicalCwd = await realpathWorkingDirectory(cwd).catch((err) => {
     // Keep timeout/pool exhaustion unknown; falling back to a symlink spelling
     // could recreate the false linked-worktree result we are trying to avoid.
     if (err?.code === 'WORKDIR_PROBE_TIMEOUT' || err?.code === 'WORKDIR_PROBE_UNAVAILABLE') throw err;
-    if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') missingDir = true;
+    if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') return null;
     return cwd;
   });
-  // One Git process returns the same snapshot that previously needed five.
-  // Unborn HEADs, older Git versions and newline-containing paths retain the
-  // individual-query fallback below rather than changing the IPC contract.
-  if (!missingDir) {
+  if (physicalCwd !== null) {
+    cwd = physicalCwd;
+    // One Git process returns the same snapshot that previously needed five.
+    // Unborn HEADs, older Git versions and newline-containing paths retain the
+    // individual-query fallback below rather than changing the IPC contract.
     try {
       const { stdout } = await probeGit(
         ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD', '--git-dir', '--git-common-dir'],
@@ -95,7 +94,8 @@ async function detectCwdOnce(cwd: string, opts?: DetectCwdOptions): Promise<Dete
     return out;
   }
 
-  if (missingDir) return out;
+  // A missing or non-directory path can only answer the cwd-independent installation check.
+  if (physicalCwd === null) return out;
 
   // 2. rev-parse --show-toplevel: 拿 repo 根
   try {

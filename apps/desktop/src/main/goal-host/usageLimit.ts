@@ -11,6 +11,7 @@
  *  - Codex:error 事件带 `codexErrorInfo: 'usageLimitExceeded'`,另有 `data.message` 文本兜底。
  */
 
+import { UPSTREAM_OVERLOAD_REASON } from '@cindy/maker-core';
 import { isProviderSafetyRefusalError } from '@cindy/maker-shared/error-redaction';
 import {
   extractUsageLimitRecoveryHint,
@@ -97,12 +98,13 @@ export function readTurnUsageResetAt(
 export function classifyTurnOverload(data: unknown): boolean {
   if (!data || typeof data !== 'object') return false;
   if (isBillingDepletionError(data)) return false;
-  const d = data as { message?: unknown; errorStatus?: unknown; codexErrorInfo?: unknown };
+  const d = data as { message?: unknown; errorStatus?: unknown; codexErrorInfo?: unknown; reason?: unknown };
   // 结构化 tag 优先(与 maker-core 的 parseOverloadError 同序): Codex 的过载文案是
   // codex 二进制里硬编码的用户可见提示语, 随版本漂移; 只靠文案判定会在某次升级后
   // 静默失效, 而这条判定决定的是「60s 短窗口自动续跑」还是「判 blocked 交回用户」
   // —— 漏判等于把可自愈的容量抖动变成需要人工 resume 的死局。
   if (d.codexErrorInfo === 'serverOverloaded') return true;
+  if (d.reason === UPSTREAM_OVERLOAD_REASON) return true;
   if (d.errorStatus === 529) return true;
   const msg = typeof d.message === 'string' ? d.message : '';
   // `at capacity` 要求精确短语,避免误伤业务文案里的 capacity(缓存/队列容量)。
