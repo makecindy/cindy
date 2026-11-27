@@ -5529,6 +5529,27 @@
           "confirm": "Reset",
           "cancel": "Cancel"
         }
+      },
+      "tidy": {
+        "label": "Memory & skill tidying",
+        "description": "Periodically deduplicates and compacts buddies' memories and skills in the background. Runs only when there is enough new activity, costs nothing when idle, and leaves no lingering task.",
+        "cadenceLabel": "Tidying cadence",
+        "cadences": {
+          "weekly": "Weekly",
+          "biweekly": "Every 2 weeks",
+          "monthly": "Monthly",
+          "off": "Off (manual only)"
+        },
+        "runNow": "Tidy now",
+        "running": "Tidying…",
+        "toast": {
+          "cadenceSaved": "Tidying cadence updated",
+          "cadenceFailed": "Failed to update tidying cadence",
+          "updated": "Tidying finished ({{count}} updated)",
+          "idle": "Nothing needed tidying",
+          "skipped": "No eligible buddies to tidy",
+          "failed": "Memory tidying failed"
+        }
       }
     },
     "subagentModels": {
@@ -9922,6 +9943,49 @@
         "identity": "Directory identity needs review",
         "failed": "Cleanup could not finish",
         "pending": "Queued"
+      },
+      "remote": {
+        "title": "Remote pending worktrees",
+        "description": "Unfinished remote worktrees block creating a new worktree on the same device until cleanup succeeds or you choose to keep the remote directory.",
+        "storageUnreadable": "Could not read the remote worktree cleanup ledger. Creating new remote worktrees is paused until local storage recovers.",
+        "sessionLabel": "Task {{id}}",
+        "keepUnblock": "Keep directory & unblock",
+        "confirmKeepTitle": "Keep remote worktree directory and unblock?",
+        "confirmKeepDescription": "This clears the local cleanup record so you can create new worktrees on {{device}} again. The directory on the remote device will not be deleted.",
+        "confirmKeepConfirm": "Keep & unblock",
+        "retrySuccess": "Remote worktree cleaned up.",
+        "keepSuccess": "Cleanup record cleared. You can create new remote worktrees now.",
+        "keepFailed": "Could not clear the cleanup record. Refresh and try again.",
+        "phase": {
+          "reserved": "Creation unconfirmed",
+          "precreated": "Awaiting cleanup",
+          "session-create-started": "Task creation unconfirmed"
+        },
+        "failure": {
+          "offline": "Device unreachable or timed out",
+          "in-progress": "Still creating or checking out",
+          "preserved": "Kept by remote device",
+          "mismatch": "Cleanup key mismatch",
+          "unsupported": "Remote Cindy version unsupported",
+          "create-started": "Waiting to confirm task ownership",
+          "storage": "Local ledger unavailable",
+          "unknown": "Cleanup could not finish"
+        },
+        "preserveReason": {
+          "claimed": "Already used by a task",
+          "in-progress": "Still creating or checking out",
+          "dirty": "Has uncommitted changes",
+          "keep-sentinel": "Marked to keep (.worktree-keep)",
+          "live-reference": "Still in use by another task or process",
+          "branch-mismatch": "Branch or directory state changed",
+          "include-files-changed": "Local config files changed",
+          "ignored-files": "Contains non-reproducible ignored files",
+          "ephemeral": "Managed pool directory",
+          "pending-transfer": "Transfer in progress",
+          "invalid-quarantine": "Quarantine state invalid",
+          "quarantine-failed": "Could not quarantine directory",
+          "remove-failed": "Could not remove directory"
+        }
       }
     },
     "awayFromComputer": {
@@ -15411,6 +15475,7 @@
         "diverged": "The local and remote branches have different updates. Resolve the differences before switching.",
         "missing": "The selected branch no longer exists. Refresh the list.",
         "git": "Could not finish the operation. Check the current branch and saved changes before trying again",
+        "timeout": "Checking Git status timed out. Large repositories or many uncommitted changes can take too long; clean up changes or use worktree.",
         "savedMissing": "These saved changes are no longer available",
         "undoUnavailable": "This branch switch can no longer be undone"
       },
@@ -17183,6 +17248,22 @@
       "piRemoteUnsupported": "Pi runs locally only and can't use SSH remote hosts. Switch to Claude or Codex to use this host.",
       "localWorktreeCleanupPending": "The previous local worktree session is still awaiting cleanup. Try again after cleanup finishes.",
       "remoteWorktreeCleanupPending": "The previous remote worktree is still awaiting cleanup. Reconnect the device and try again.",
+      "remoteWorktreeCleanupOpenSettings": "Worktree cleanup",
+      "remoteWorktreeCleanup": {
+        "inProgress": "The previous remote worktree is still being created or checked out. Wait a moment and try again, or manage it in Settings → Storage.",
+        "preserved": "The remote device kept the previous worktree (it may have changes or still be in use). Retry or unblock it in Settings → Storage.",
+        "preservedDirty": "The remote device kept the previous worktree because it has uncommitted changes. Check it on that device, or unblock it in Settings → Storage.",
+        "preservedKeepSentinel": "The remote device kept the previous worktree because it is marked to keep (.worktree-keep). Manage it in Settings → Storage.",
+        "preservedLiveReference": "The remote device kept the previous worktree because another task or process is still using it. Retry or unblock it in Settings → Storage.",
+        "preservedBranchMismatch": "The remote device could not verify the previous worktree branch or directory state. Retry or unblock it in Settings → Storage.",
+        "preservedIncludeFilesChanged": "The remote device kept the previous worktree because its local config files changed. Retry or unblock it in Settings → Storage.",
+        "preservedIgnoredFiles": "The remote device kept the previous worktree because it contains ignored files that cannot be recreated. Retry or unblock it in Settings → Storage.",
+        "preservedRemoveFailed": "The remote device could not remove the previous worktree directory. Check permissions or open files on that device, or unblock it in Settings → Storage.",
+        "mismatch": "The remote device rejected the worktree cleanup key. Retry or unblock it in Settings → Storage.",
+        "unsupported": "The remote device’s Cindy version does not support automatic worktree cleanup. Update Cindy on that device, or unblock it in Settings → Storage.",
+        "createStarted": "The previous remote task creation did not confirm. Reconnect the device to verify it, or unblock it in Settings → Storage.",
+        "storage": "Could not read or write the local remote worktree cleanup record. Check Settings → Storage."
+      },
       "remoteProviderUpdating": "Provider credentials are being updated — retry in a moment",
       "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
       "remoteNativeOauthUnavailable": "Remote tasks can't use a Claude subscription — pick a gateway or API key model",

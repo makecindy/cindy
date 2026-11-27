@@ -161,7 +161,7 @@ export function sameImDefaultRoute(
     a.agentKind === b.agentKind &&
     (a.agentDeviceId ?? null) === (b.agentDeviceId ?? null) &&
     a.model === b.model &&
-    (a.effort ?? null) === (b.effort ?? null) &&
+    (a.effort || null) === (b.effort || null) &&
     normalizeProvider(a) === normalizeProvider(b)
   );
 }

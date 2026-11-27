@@ -94,7 +94,7 @@ export function ModelGroupRoutePreview({ routes, nameCandidates, resetKey }: {
                 key={modelGroupCandidateKey(entry)}
                 data-model-group-trace={entry.state}
                 lead={<Icon size={15} aria-hidden className={entry.state === 'picked' ? 'text-[var(--text-primary)]' : 'text-[var(--text-tertiary)]'} />}
-                title={`${names.modelName} · ${names.sourceLabel} · ${modelGroupHarnessLabel(entry.agentKind)}`}
+                title={[names.modelName, names.sourceLabel, modelGroupHarnessLabel(entry.agentKind)].filter(Boolean).join(' · ')}
                 tag={t(`modelGroups.settings.try.${entry.state}`)}
                 hint={modelGroupWhyText(sameQuota ? { ...entry, quota: null } : entry, t, locale)}
               />

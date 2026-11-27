@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { and, asc, eq } from 'drizzle-orm';
 import type { ProviderView } from '@cindy/model-providers';
-import { dbToMakerAgentKind, makerToDbAgentKind } from '../../../desktop/src/shared/agentKindConversion.js';
+import { dbToMakerEngineKind, makerToDbEngineKind } from '../../../desktop/src/shared/agentKindConversion.js';
 import {
   modelGroupCandidateKey,
   type ModelGroupSessionBindingView,
@@ -288,15 +288,18 @@ export function createHostModelGroups(ports: HostModelGroupsPorts) {
     const offer = await runOutsideDeviceLinkInvokeContext(() => runtime.readModelGroupRecoveryOffer(sessionId, {
       visited: excluded,
       ...recovery,
-      recordUnavailable: (candidate) => recordFailedSessionRuntimeFallbackCandidate(sessionId, generation, {
-        ...current,
-        agentKind: dbToMakerAgentKind(candidate.agentKind),
-        providerId: candidate.providerId,
-        model: candidate.model,
-        agentDeviceId: candidate.agentDeviceId ?? null,
-      }),
+      recordUnavailable: (candidate) => {
+        if (candidate.agentKind === 'acp') return;
+        recordFailedSessionRuntimeFallbackCandidate(sessionId, generation, {
+          ...current,
+          agentKind: dbToMakerEngineKind(candidate.agentKind),
+          providerId: candidate.providerId,
+          model: candidate.model,
+          agentDeviceId: candidate.agentDeviceId ?? null,
+        });
+      },
       current: {
-        agentKind: makerToDbAgentKind(current.agentKind),
+        agentKind: makerToDbEngineKind(current.agentKind),
         providerId: currentProviderId,
         model: current.model,
         agentDeviceId: current.agentDeviceId ?? null,
@@ -308,8 +311,9 @@ export function createHostModelGroups(ports: HostModelGroupsPorts) {
     if (
       !offer
       || offer.agentDeviceId
+      || offer.agentKind === 'acp'
       || (
-        dbToMakerAgentKind(offer.agentKind) === current.agentKind
+        dbToMakerEngineKind(offer.agentKind) === current.agentKind
         && offer.providerId === current.providerId
         && offer.model === current.model
         && (offer.agentDeviceId ?? null) === (current.agentDeviceId ?? null)
@@ -320,7 +324,7 @@ export function createHostModelGroups(ports: HostModelGroupsPorts) {
 
     return {
       candidate: {
-        agentKind: dbToMakerAgentKind(offer.agentKind),
+        agentKind: dbToMakerEngineKind(offer.agentKind),
         model: offer.model,
         providerId: offer.providerId,
         agentDeviceId: null,
@@ -331,7 +335,7 @@ export function createHostModelGroups(ports: HostModelGroupsPorts) {
       bindCommittedRoute: (profile: SessionRuntimeProfile) => {
         if (profile.providerId) {
           bindModelGroupSession(sessionId, binding.selection, modelGroupCandidateKey({
-            agentKind: makerToDbAgentKind(profile.agentKind),
+            agentKind: makerToDbEngineKind(profile.agentKind),
             model: profile.model,
             providerId: profile.providerId,
             agentDeviceId: profile.agentDeviceId || undefined,

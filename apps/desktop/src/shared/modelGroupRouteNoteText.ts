@@ -11,11 +11,12 @@ import type {
 } from './modelGroups.js';
 
 /** The same Harness name is shown in settings and the task routing note. */
-export function modelGroupHarnessLabel(agentKind: ModelGroupAgentKind): string {
+export function modelGroupHarnessLabel(agentKind: ModelGroupAgentKind): string | undefined {
   switch (agentKind) {
     case 'cc': return 'Claude Code';
     case 'codex': return 'Codex';
     case 'pi': return 'Pi';
+    case 'acp': return undefined;
   }
 }
 
@@ -90,7 +91,11 @@ export function buildModelGroupRouteNote(
   return {
     pluginName: result.groupName,
     outcome: 'routed',
-    modelName: `${result.modelName} · ${modelGroupSourceLabel({ sourceName: result.sourceName, agentDeviceId: result.route.agentDeviceId }, locationName, t)} · ${modelGroupHarnessLabel(result.route.agentKind)}`,
+    modelName: [
+      result.modelName,
+      modelGroupSourceLabel({ sourceName: result.sourceName, agentDeviceId: result.route.agentDeviceId }, locationName, t),
+      modelGroupHarnessLabel(result.route.agentKind),
+    ].filter(Boolean).join(' · '),
     ...(result.route.effort ? { effort: result.route.effort } : {}),
     reason: [
       modelGroupExceptionText(result.exceptions, t),
