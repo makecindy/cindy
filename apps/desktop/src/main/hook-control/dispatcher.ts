@@ -96,6 +96,8 @@ import type { AutoReviewQuotedMessage } from '@cindy/maker-shared/auto-review-in
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
 import { captureImContext, type ImContextSnapshot } from '../../shared/imMessageSource.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
+import type { GroupContextAssembly } from '../im/shared/groupWindowCore.js';
+import { buildHistoryMediaNote } from '../im/shared/replyContext.js';
 import { hookReplyTarget } from '../im/shared/autoReviewReferences.js';
 import { overloadFailureNotice, quotaFailureNoticePrefix } from '../im/shared/turnRetryNotice.js';
 import { imText } from '../im/shared/imText.js';
@@ -270,6 +272,13 @@ export interface HookRunRequest {
   prompt: string;
   /** 本次派发携带的入站附件(base64); 无则省略。runner 解码落盘后喂给 agent。 */
   attachments?: TaskAttachment[];
+  /** 随群上下文窗口补齐的近期历史图片(仅送本轮模型, 不落持久化用户消息附件)。 */
+  contextImages?: Array<{
+    absPath: string;
+    originalName: string;
+    mimeType: string;
+    author: string;
+  }>;
   /** 来源标注(落 user 消息 agentMeta + turnOrigin)。 */
   origin: { connectionId: string; connectionName: string; externalKey: string };
   /** IM 来源元数据(平台 + thread 上下文); 省略 = 旧 server 不发。 */
@@ -379,12 +388,27 @@ export interface HookDispatcherDeps {
   buildContextPrefix?: (payload: TaskDispatchPayload) => Promise<{
     prefix: string;
     messageCount?: number;
+    imageMessages?: GroupContextAssembly['imageMessages'];
+    triggerAuthor?: string;
+    triggerSentAt?: number;
     commit: (
       guard?: () => boolean | Promise<boolean>,
     ) =>
       | void
       | { rollback(): void | Promise<void> }
       | Promise<void | { rollback(): void | Promise<void> }>;
+  }>;
+  /**
+   * 可选: 为官方 Telegram 群轮次补齐群上下文里近期(≤2 分钟、最多 2 张)图片。
+   * 仅送模型不落库; 失败静默降级, 绝不阻断派发。
+   */
+  collectGroupHistoryImages?: (
+    payload: TaskDispatchPayload,
+    assembly: Pick<GroupContextAssembly, 'imageMessages' | 'triggerAuthor' | 'triggerSentAt'>,
+    isCurrent: () => boolean,
+  ) => Promise<{
+    images: NonNullable<HookRunRequest['contextImages']>;
+    unavailable: string[];
   }>;
   /**
    * 可选: 内置「对话」伪目录(chat 保留别名)的解析面。rootDir 在每次
@@ -800,6 +824,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     runner,
     prepareWorktree,
     buildContextPrefix,
+    collectGroupHistoryImages,
     dialogue,
     abortSession,
     stopSessionExplicitly,
@@ -3019,14 +3044,46 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     serializeByKey(`${connectionId} ${payload.externalKey}`, async () => {
       try {
         let contextPrefix = '';
+        let contextDisplayGroupPrefix = '';
         let groupMessageCount: number | undefined;
         let commitContextCursor: ContextCursorCommit | undefined;
+        let contextImages: HookRunRequest['contextImages'];
         if (buildContextPrefix) {
           try {
             const assembly = await buildContextPrefix(dispatchPayload);
             contextPrefix = assembly.prefix;
+            contextDisplayGroupPrefix = assembly.prefix;
             groupMessageCount = assembly.messageCount;
             commitContextCursor = assembly.commit;
+            if (collectGroupHistoryImages && (assembly.imageMessages?.length ?? 0) > 0) {
+              const collected = await collectGroupHistoryImages(
+                dispatchPayload,
+                assembly,
+                () => isCurrentGeneration(admittedGeneration),
+              ).catch((error) => {
+                log.warn(
+                  `official group history images failed, dispatching without them: ${String(error)}`,
+                );
+                return { images: [], unavailable: [] };
+              });
+              if (!isCurrentGeneration(admittedGeneration)) return;
+              if (collected.images.length > 0) {
+                contextImages = collected.images;
+              }
+              const historyMediaNote = buildHistoryMediaNote({
+                provided: collected.images,
+                unavailable: collected.unavailable,
+              });
+              if (historyMediaNote.modelText) {
+                contextPrefix = `${contextPrefix}${historyMediaNote.modelText}`;
+              }
+              if (historyMediaNote.displayText) {
+                contextDisplayGroupPrefix = contextDisplayGroupPrefix.replace(
+                  '\n</group_chat_context>',
+                  () => `\n${historyMediaNote.displayText}\n</group_chat_context>`,
+                );
+              }
+            }
           } catch (error) {
             log.warn(`group context prefix failed, dispatching without it: ${String(error)}`);
           }
@@ -3055,10 +3112,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             ...resolved.run,
             ...(contextPrefix ? { prompt: `${contextPrefix}${resolved.run.prompt}` } : {}),
+            ...(contextImages?.length ? { contextImages } : {}),
             contextSnapshot: captureImContext({
               // Only the host-produced prefix is context; user text may contain
               // identical tags without becoming an attached background group.
-              groupPrefix: contextPrefix,
+              groupPrefix: contextDisplayGroupPrefix,
               groupMessageCount,
             }),
             ...(source ? { source } : {}),
