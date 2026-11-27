@@ -226,10 +226,12 @@ struct HdrDuplicator {
     monitor: isize,
     device_name: [u16; 32],
     desktop_rect: RECT,
+    max_luminance_nits: f32,
     device: ID3D11Device,
     context: ID3D11DeviceContext,
     duplication: IDXGIOutputDuplication,
     gpu_frame: Option<ID3D11Texture2D>,
+    tone_mapper: HdrToneMapper,
 }
 
 #[derive(Default)]
@@ -313,10 +315,12 @@ impl HdrDuplicator {
                         monitor: monitor.0 as isize,
                         device_name: desc1.DeviceName,
                         desktop_rect: desc1.DesktopCoordinates,
+                        max_luminance_nits: desc1.MaxLuminance,
                         device,
                         context,
                         duplication,
                         gpu_frame: None,
+                        tone_mapper: HdrToneMapper::default(),
                     });
                 }
             }
@@ -451,12 +455,13 @@ impl HdrDuplicator {
             let bgra = if mapped.pData.is_null() {
                 None
             } else {
-                Some(convert_scrgb_fp16_to_bgra(
+                Some(self.tone_mapper.convert(
                     mapped.pData as *const u8,
                     mapped.RowPitch as usize,
                     width as usize,
                     height as usize,
                     sdr_scale,
+                    self.max_luminance_nits,
                 ))
             };
             self.context.Unmap(&staging, 0);
@@ -464,7 +469,7 @@ impl HdrDuplicator {
             if out_w == width && out_h == height {
                 Ok((out_w, out_h, bgra))
             } else {
-                Ok((out_w, out_h, resize_bgra_bilinear(&bgra, width as usize, height as usize, out_w as usize, out_h as usize)))
+                Ok((out_w, out_h, resize_bgra_area(&bgra, width as usize, height as usize, out_w as usize, out_h as usize)))
             }
         }
     }
@@ -559,145 +564,286 @@ fn linear_to_srgb_u8(v: f32) -> u8 {
     (s.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
-/// Convert a mapped `DXGI_FORMAT_R16G16B16A16_FLOAT` scRGB region to 8-bit sRGB BGRA.
-///
-/// Pure SDR / wide-gamut-SDR desktops (normalized Rec.709 luminance peak <= 1.02,
-/// even if saturated P3/BT.2020 channels briefly exceed 1.0) run through a 31 KB
-/// `f16 -> sRGB` LUT with zero tone-map compression so SDR colors match an SDR
-/// display bit-for-bit. When true HDR highlights (luminance > 1.02) are present,
-/// darks and midtones (<= 0.80) stay untouched via the LUT while highlights above
-/// 0.80 roll off smoothly via a C1 hue-preserving maxRGB shoulder.
-unsafe fn convert_scrgb_fp16_to_bgra(
-    src_ptr: *const u8,
-    row_pitch: usize,
-    width: usize,
-    height: usize,
-    sdr_scale: f32,
-) -> Vec<u8> {
-    let scale = sdr_scale.max(0.5);
-    let inv_scale = 1.0 / scale;
-
-    let mut lut = vec![0u8; 0x7c00];
-    let mut sdr_limit_h: u16 = 0;
-    for (h, entry) in lut.iter_mut().enumerate() {
-        let lin = f16_to_f32_non_neg(h as u16) * inv_scale;
-        if lin <= 1.02 { sdr_limit_h = h as u16; }
-        *entry = linear_to_srgb_u8(lin);
-    }
-
-    // Pass 1: fast integer scan; only evaluate Rec.709 luminance on pixels with
-    // any channel above SDR white so saturated P3 SDR colors never dim SDR white.
-    let mut peak_luma: f32 = 0.0;
-    let mut peak_chan: f32 = 0.0;
-    for y in 0..height {
-        let row = std::slice::from_raw_parts(src_ptr.add(y * row_pitch) as *const u16, width * 4);
-        for px in row.chunks_exact(4) {
-            let rh = px[0];
-            let gh = px[1];
-            let bh = px[2];
-            if (rh > sdr_limit_h && rh < 0x7c00)
-                || (gh > sdr_limit_h && gh < 0x7c00)
-                || (bh > sdr_limit_h && bh < 0x7c00)
-            {
-                let r = f16_to_f32_signed(rh) * inv_scale;
-                let g = f16_to_f32_signed(gh) * inv_scale;
-                let b = f16_to_f32_signed(bh) * inv_scale;
-                let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                if luma > peak_luma { peak_luma = luma; }
-                let m = r.max(g).max(b);
-                if m > peak_chan { peak_chan = m; }
-            }
-        }
-    }
-
-    let mut out = vec![0u8; width * height * 4];
-    if peak_luma <= 1.02 {
-        for y in 0..height {
-            let row = std::slice::from_raw_parts(src_ptr.add(y * row_pitch) as *const u16, width * 4);
-            let dst_row = &mut out[y * width * 4..(y + 1) * width * 4];
-            for (src_px, dst_px) in row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
-                let r = src_px[0] as usize;
-                let g = src_px[1] as usize;
-                let b = src_px[2] as usize;
-                dst_px[0] = if b < 0x7c00 { lut[b] } else { 0 };
-                dst_px[1] = if g < 0x7c00 { lut[g] } else { 0 };
-                dst_px[2] = if r < 0x7c00 { lut[r] } else { 0 };
-                dst_px[3] = 255;
-            }
-        }
-        return out;
-    }
-
-    const KNEE: f32 = 0.80;
-    let headroom = 1.0 - KNEE;
-    let d_max = peak_chan.max(peak_luma).min(20.0) - KNEE;
-    let rolloff_a = (d_max - headroom) / (headroom * d_max);
-    let knee_limit = KNEE * scale;
-    let mut knee_h: u16 = 0;
-    for h in 0..0x7c00u16 {
-        if f16_to_f32_non_neg(h) <= knee_limit { knee_h = h; } else { break; }
-    }
-
-    for y in 0..height {
-        let row = std::slice::from_raw_parts(src_ptr.add(y * row_pitch) as *const u16, width * 4);
-        let dst_row = &mut out[y * width * 4..(y + 1) * width * 4];
-        for (src_px, dst_px) in row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
-            let rh = src_px[0];
-            let gh = src_px[1];
-            let bh = src_px[2];
-            if (rh <= knee_h || rh >= 0x7c00) && (gh <= knee_h || gh >= 0x7c00) && (bh <= knee_h || bh >= 0x7c00) {
-                dst_px[0] = if bh < 0x7c00 { lut[bh as usize] } else { 0 };
-                dst_px[1] = if gh < 0x7c00 { lut[gh as usize] } else { 0 };
-                dst_px[2] = if rh < 0x7c00 { lut[rh as usize] } else { 0 };
-                dst_px[3] = 255;
-            } else {
-                let mut r = f16_to_f32_non_neg(rh) * inv_scale;
-                let mut g = f16_to_f32_non_neg(gh) * inv_scale;
-                let mut b = f16_to_f32_non_neg(bh) * inv_scale;
-                let m = r.max(g).max(b);
-                if m > KNEE {
-                    let d = m - KNEE;
-                    let mapped = KNEE + d / (1.0 + rolloff_a * d);
-                    let scale = mapped / m;
-                    r *= scale;
-                    g *= scale;
-                    b *= scale;
-                }
-                dst_px[0] = linear_to_srgb_u8(b);
-                dst_px[1] = linear_to_srgb_u8(g);
-                dst_px[2] = linear_to_srgb_u8(r);
-                dst_px[3] = 255;
-            }
-        }
-    }
-    out
+#[derive(Clone, Copy, PartialEq)]
+enum ToneMapMode {
+    SdrExact,
+    HdrShoulder { rolloff_a: f32 },
 }
 
-fn resize_bgra_bilinear(src: &[u8], src_w: usize, src_h: usize, dst_w: usize, dst_h: usize) -> Vec<u8> {
-    let mut dst = vec![0u8; dst_w * dst_h * 4];
-    let scale_x = src_w as f32 / dst_w as f32;
-    let scale_y = src_h as f32 / dst_h as f32;
-    for y in 0..dst_h {
-        let sy = ((y as f32 + 0.5) * scale_y - 0.5).clamp(0.0, (src_h - 1) as f32);
-        let y0 = sy.floor() as usize;
-        let y1 = (y0 + 1).min(src_h - 1);
-        let wy = sy - y0 as f32;
-        for x in 0..dst_w {
-            let sx = ((x as f32 + 0.5) * scale_x - 0.5).clamp(0.0, (src_w - 1) as f32);
-            let x0 = sx.floor() as usize;
-            let x1 = (x0 + 1).min(src_w - 1);
-            let wx = sx - x0 as f32;
-            let i00 = (y0 * src_w + x0) * 4;
-            let i10 = (y0 * src_w + x1) * 4;
-            let i01 = (y1 * src_w + x0) * 4;
-            let i11 = (y1 * src_w + x1) * 4;
-            let o = (y * dst_w + x) * 4;
-            for c in 0..3 {
-                let top = src[i00 + c] as f32 * (1.0 - wx) + src[i10 + c] as f32 * wx;
-                let bot = src[i01 + c] as f32 * (1.0 - wx) + src[i11 + c] as f32 * wx;
-                dst[o + c] = (top * (1.0 - wy) + bot * wy + 0.5) as u8;
+struct LockedToneMap {
+    sdr_scale: f32,
+    mode: ToneMapMode,
+    lut: Vec<u8>,
+    knee_h: u16,
+}
+
+/// Converts mapped `DXGI_FORMAT_R16G16B16A16_FLOAT` scRGB frames to 8-bit sRGB BGRA.
+///
+/// Locks the tone-map mode and LUT on the first frame of a capture session (and
+/// only refreshes when the monitor's `SDRWhiteLevel` changes) so continuous
+/// captures (recording, GIF, and scrolling screenshots) never shift brightness
+/// or introduce stitching bands when HDR highlights enter or leave the region.
+#[derive(Default)]
+struct HdrToneMapper {
+    locked: Option<LockedToneMap>,
+}
+
+impl HdrToneMapper {
+    const KNEE: f32 = 0.80;
+
+    unsafe fn convert(
+        &mut self,
+        src_ptr: *const u8,
+        row_pitch: usize,
+        width: usize,
+        height: usize,
+        sdr_scale: f32,
+        max_luminance_nits: f32,
+    ) -> Vec<u8> {
+        let scale = sdr_scale.max(0.5);
+        let inv_scale = 1.0 / scale;
+
+        let needs_init = self
+            .locked
+            .as_ref()
+            .is_none_or(|state| (state.sdr_scale - scale).abs() > 1e-4);
+        if needs_init {
+            let mut lut = vec![0u8; 0x7c00];
+            let mut sdr_limit_h: u16 = 0;
+            let mut knee_h: u16 = 0;
+            for (h, entry) in lut.iter_mut().enumerate() {
+                let lin = f16_to_f32_non_neg(h as u16) * inv_scale;
+                if lin <= Self::KNEE { knee_h = h as u16; }
+                if lin <= 1.02 { sdr_limit_h = h as u16; }
+                *entry = linear_to_srgb_u8(lin);
             }
-            dst[o + 3] = 255;
+
+            // Detect true HDR highlights once for this session; evaluate Rec.709
+            // luminance only on pixels exceeding SDR white so saturated P3 SDR
+            // colors never dim SDR white.
+            let mut peak_luma: f32 = 0.0;
+            let mut peak_chan: f32 = 0.0;
+            for y in 0..height {
+                let row = std::slice::from_raw_parts(src_ptr.add(y * row_pitch) as *const u16, width * 4);
+                for px in row.chunks_exact(4) {
+                    let rh = px[0];
+                    let gh = px[1];
+                    let bh = px[2];
+                    if (rh > sdr_limit_h && rh < 0x7c00)
+                        || (gh > sdr_limit_h && gh < 0x7c00)
+                        || (bh > sdr_limit_h && bh < 0x7c00)
+                    {
+                        let r = f16_to_f32_signed(rh) * inv_scale;
+                        let g = f16_to_f32_signed(gh) * inv_scale;
+                        let b = f16_to_f32_signed(bh) * inv_scale;
+                        let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                        if luma > peak_luma { peak_luma = luma; }
+                        let m = r.max(g).max(b);
+                        if m > peak_chan { peak_chan = m; }
+                    }
+                }
+            }
+
+            let mode = if peak_luma <= 1.02 {
+                ToneMapMode::SdrExact
+            } else {
+                let headroom = 1.0 - Self::KNEE;
+                let frame_peak = peak_chan.max(peak_luma);
+                let display_peak = if max_luminance_nits > 0.0 {
+                    (max_luminance_nits / (80.0 * scale)).clamp(2.0, 20.0)
+                } else {
+                    frame_peak
+                };
+                let d_max = display_peak.max(frame_peak).min(20.0) - Self::KNEE;
+                let rolloff_a = (d_max - headroom) / (headroom * d_max);
+                ToneMapMode::HdrShoulder { rolloff_a }
+            };
+
+            self.locked = Some(LockedToneMap {
+                sdr_scale: scale,
+                mode,
+                lut,
+                knee_h,
+            });
+        }
+
+        let state = self.locked.as_ref().unwrap();
+        let lut = &state.lut;
+        let mut out = vec![0u8; width * height * 4];
+        match state.mode {
+            ToneMapMode::SdrExact => {
+                for y in 0..height {
+                    let row = std::slice::from_raw_parts(src_ptr.add(y * row_pitch) as *const u16, width * 4);
+                    let dst_row = &mut out[y * width * 4..(y + 1) * width * 4];
+                    for (src_px, dst_px) in row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+                        let r = src_px[0] as usize;
+                        let g = src_px[1] as usize;
+                        let b = src_px[2] as usize;
+                        dst_px[0] = if b < 0x7c00 { lut[b] } else { 0 };
+                        dst_px[1] = if g < 0x7c00 { lut[g] } else { 0 };
+                        dst_px[2] = if r < 0x7c00 { lut[r] } else { 0 };
+                        dst_px[3] = 255;
+                    }
+                }
+            }
+            ToneMapMode::HdrShoulder { rolloff_a } => {
+                let knee_h = state.knee_h;
+                for y in 0..height {
+                    let row = std::slice::from_raw_parts(src_ptr.add(y * row_pitch) as *const u16, width * 4);
+                    let dst_row = &mut out[y * width * 4..(y + 1) * width * 4];
+                    for (src_px, dst_px) in row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+                        let rh = src_px[0];
+                        let gh = src_px[1];
+                        let bh = src_px[2];
+                        if (rh <= knee_h || rh >= 0x7c00)
+                            && (gh <= knee_h || gh >= 0x7c00)
+                            && (bh <= knee_h || bh >= 0x7c00)
+                        {
+                            dst_px[0] = if bh < 0x7c00 { lut[bh as usize] } else { 0 };
+                            dst_px[1] = if gh < 0x7c00 { lut[gh as usize] } else { 0 };
+                            dst_px[2] = if rh < 0x7c00 { lut[rh as usize] } else { 0 };
+                            dst_px[3] = 255;
+                        } else {
+                            let mut r = f16_to_f32_non_neg(rh) * inv_scale;
+                            let mut g = f16_to_f32_non_neg(gh) * inv_scale;
+                            let mut b = f16_to_f32_non_neg(bh) * inv_scale;
+                            let m = r.max(g).max(b);
+                            if m > Self::KNEE {
+                                let d = m - Self::KNEE;
+                                let mapped = Self::KNEE + d / (1.0 + rolloff_a * d);
+                                let factor = mapped / m;
+                                r *= factor;
+                                g *= factor;
+                                b *= factor;
+                            }
+                            dst_px[0] = linear_to_srgb_u8(b);
+                            dst_px[1] = linear_to_srgb_u8(g);
+                            dst_px[2] = linear_to_srgb_u8(r);
+                            dst_px[3] = 255;
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
+struct AreaSpan {
+    start: usize,
+    end: usize,
+    w_first: f32,
+    w_last: f32,
+    inv_weight: f32,
+}
+
+fn build_area_spans(src_len: usize, dst_len: usize) -> Vec<AreaSpan> {
+    let scale = src_len as f64 / dst_len as f64;
+    let mut spans = Vec::with_capacity(dst_len);
+    for i in 0..dst_len {
+        let lo = i as f64 * scale;
+        let hi = ((i + 1) as f64 * scale).min(src_len as f64);
+        let start = (lo.floor() as usize).min(src_len - 1);
+        let end = (hi.ceil() as usize).clamp(start + 1, src_len);
+        let (w_first, w_last, inv_weight) = if end == start + 1 {
+            (1.0, 0.0, 1.0)
+        } else {
+            let wf = ((start + 1) as f64 - lo).max(0.0) as f32;
+            let wl = (hi - (end - 1) as f64).max(0.0) as f32;
+            let total = (hi - lo).max(1e-6) as f32;
+            (wf, wl, 1.0 / total)
+        };
+        spans.push(AreaSpan { start, end, w_first, w_last, inv_weight });
+    }
+    spans
+}
+
+/// Separable exact box/area filter for antialiasing downscales (e.g. 4K -> 960p GIF)
+/// so thin lines and small text are preserved instead of skipped by 2x2 bilinear taps.
+fn resize_bgra_area(src: &[u8], src_w: usize, src_h: usize, dst_w: usize, dst_h: usize) -> Vec<u8> {
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return Vec::new();
+    }
+    let x_spans = build_area_spans(src_w, dst_w);
+    let y_spans = build_area_spans(src_h, dst_h);
+
+    // Pass 1: horizontal area average (src_w x src_h -> dst_w x src_h, 3 f32 channels).
+    let mut horiz = vec![0.0f32; dst_w * src_h * 3];
+    for y in 0..src_h {
+        let src_row = &src[y * src_w * 4..(y + 1) * src_w * 4];
+        let tmp_row = &mut horiz[y * dst_w * 3..(y + 1) * dst_w * 3];
+        for (dx, span) in x_spans.iter().enumerate() {
+            let (mut b, mut g, mut r) = (0.0f32, 0.0f32, 0.0f32);
+            if span.end == span.start + 1 {
+                let si = span.start * 4;
+                b = src_row[si] as f32;
+                g = src_row[si + 1] as f32;
+                r = src_row[si + 2] as f32;
+            } else {
+                let si_first = span.start * 4;
+                b += src_row[si_first] as f32 * span.w_first;
+                g += src_row[si_first + 1] as f32 * span.w_first;
+                r += src_row[si_first + 2] as f32 * span.w_first;
+                for sx in (span.start + 1)..(span.end - 1) {
+                    let si = sx * 4;
+                    b += src_row[si] as f32;
+                    g += src_row[si + 1] as f32;
+                    r += src_row[si + 2] as f32;
+                }
+                let si_last = (span.end - 1) * 4;
+                b += src_row[si_last] as f32 * span.w_last;
+                g += src_row[si_last + 1] as f32 * span.w_last;
+                r += src_row[si_last + 2] as f32 * span.w_last;
+                b *= span.inv_weight;
+                g *= span.inv_weight;
+                r *= span.inv_weight;
+            }
+            let di = dx * 3;
+            tmp_row[di] = b;
+            tmp_row[di + 1] = g;
+            tmp_row[di + 2] = r;
+        }
+    }
+
+    // Pass 2: vertical area average (dst_w x src_h -> dst_w x dst_h, BGRA u8).
+    let mut dst = vec![0u8; dst_w * dst_h * 4];
+    let mut acc = vec![0.0f32; dst_w * 3];
+    for (dy, span) in y_spans.iter().enumerate() {
+        let dst_row = &mut dst[dy * dst_w * 4..(dy + 1) * dst_w * 4];
+        if span.end == span.start + 1 {
+            let tmp_row = &horiz[span.start * dst_w * 3..(span.start + 1) * dst_w * 3];
+            for dx in 0..dst_w {
+                let ti = dx * 3;
+                let di = dx * 4;
+                dst_row[di] = (tmp_row[ti].clamp(0.0, 255.0) + 0.5) as u8;
+                dst_row[di + 1] = (tmp_row[ti + 1].clamp(0.0, 255.0) + 0.5) as u8;
+                dst_row[di + 2] = (tmp_row[ti + 2].clamp(0.0, 255.0) + 0.5) as u8;
+                dst_row[di + 3] = 255;
+            }
+        } else {
+            acc.fill(0.0);
+            let first_row = &horiz[span.start * dst_w * 3..(span.start + 1) * dst_w * 3];
+            for (a, &v) in acc.iter_mut().zip(first_row.iter()) {
+                *a += v * span.w_first;
+            }
+            for sy in (span.start + 1)..(span.end - 1) {
+                let mid_row = &horiz[sy * dst_w * 3..(sy + 1) * dst_w * 3];
+                for (a, &v) in acc.iter_mut().zip(mid_row.iter()) {
+                    *a += v;
+                }
+            }
+            let last_row = &horiz[(span.end - 1) * dst_w * 3..span.end * dst_w * 3];
+            for (a, &v) in acc.iter_mut().zip(last_row.iter()) {
+                *a += v * span.w_last;
+            }
+            for dx in 0..dst_w {
+                let ti = dx * 3;
+                let di = dx * 4;
+                dst_row[di] = ((acc[ti] * span.inv_weight).clamp(0.0, 255.0) + 0.5) as u8;
+                dst_row[di + 1] = ((acc[ti + 1] * span.inv_weight).clamp(0.0, 255.0) + 0.5) as u8;
+                dst_row[di + 2] = ((acc[ti + 2] * span.inv_weight).clamp(0.0, 255.0) + 0.5) as u8;
+                dst_row[di + 3] = 255;
+            }
         }
     }
     dst
@@ -970,8 +1116,9 @@ mod tests {
             [f32_to_f16(1.068), f32_to_f16(2.084), f32_to_f16(3.631), f32_to_f16(1.0)],
             [f32_to_f16(4.0), f32_to_f16(4.0), f32_to_f16(4.0), f32_to_f16(1.0)],
         ];
+        let mut mapper = HdrToneMapper::default();
         let bgra = unsafe {
-            convert_scrgb_fp16_to_bgra(pixels.as_ptr() as *const u8, 24, 3, 1, 4.0)
+            mapper.convert(pixels.as_ptr() as *const u8, 24, 3, 1, 4.0, 1000.0)
         };
         assert_eq!(&bgra[0..4], &[23, 21, 21, 255]);
         assert_eq!(&bgra[4..8], &[244, 191, 141, 255]);
@@ -980,7 +1127,7 @@ mod tests {
 
     #[test]
     fn scrgb_hdr_highlights_preserve_sdr_midtones_and_compress_peaks() {
-        // 4 pixels at sdr_scale = 2.0 (160 nits):
+        // 5 pixels at sdr_scale = 2.0 (160 nits), display peak 640 nits (4.0x SDR):
         // dark (<= 0.80), SDR white (1.0), HDR highlight (2.0), HDR peak (4.0), plus negative/NaN.
         let pixels: [[u16; 4]; 5] = [
             [f32_to_f16(0.06), f32_to_f16(0.06), f32_to_f16(0.06), f32_to_f16(1.0)],
@@ -989,8 +1136,9 @@ mod tests {
             [f32_to_f16(8.0), f32_to_f16(8.0), f32_to_f16(8.0), f32_to_f16(1.0)],
             [f32_to_f16(-0.5), 0x7e00, 0x7c00, f32_to_f16(1.0)],
         ];
+        let mut mapper = HdrToneMapper::default();
         let bgra = unsafe {
-            convert_scrgb_fp16_to_bgra(pixels.as_ptr() as *const u8, 40, 5, 1, 2.0)
+            mapper.convert(pixels.as_ptr() as *const u8, 40, 5, 1, 2.0, 640.0)
         };
         // Dark pixel (linear 0.03) is completely untouched by the shoulder curve.
         assert_eq!(&bgra[0..4], &[48, 48, 48, 255]);
@@ -1013,10 +1161,58 @@ mod tests {
             [f32_to_f16(1.2249 * scale), f32_to_f16(-0.0420 * scale), f32_to_f16(-0.0197 * scale), f32_to_f16(1.0)],
             [f32_to_f16(scale), f32_to_f16(scale), f32_to_f16(scale), f32_to_f16(1.0)],
         ];
+        let mut mapper = HdrToneMapper::default();
         let bgra = unsafe {
-            convert_scrgb_fp16_to_bgra(pixels.as_ptr() as *const u8, 16, 2, 1, scale)
+            mapper.convert(pixels.as_ptr() as *const u8, 16, 2, 1, scale, 1000.0)
         };
         assert_eq!(&bgra[0..4], &[0, 0, 255, 255]);
         assert_eq!(&bgra[4..8], &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn continuous_capture_keeps_unchanged_pixels_stable_when_highlights_enter_or_leave() {
+        // Case 1: HDR capture where highlights intensify then leave the region.
+        let scale = 2.0;
+        let base_mid = [f32_to_f16(1.8), f32_to_f16(1.8), f32_to_f16(1.8), f32_to_f16(1.0)];
+        let base_white = [f32_to_f16(2.0), f32_to_f16(2.0), f32_to_f16(2.0), f32_to_f16(1.0)];
+        let frame_hdr_1 = [base_mid, base_white, [f32_to_f16(6.0), f32_to_f16(6.0), f32_to_f16(6.0), f32_to_f16(1.0)]];
+        let frame_hdr_brighter = [base_mid, base_white, [f32_to_f16(16.0), f32_to_f16(16.0), f32_to_f16(16.0), f32_to_f16(1.0)]];
+        let frame_sdr_only = [base_mid, base_white, [f32_to_f16(0.5), f32_to_f16(0.5), f32_to_f16(0.5), f32_to_f16(1.0)]];
+
+        let mut hdr_session = HdrToneMapper::default();
+        let out1 = unsafe { hdr_session.convert(frame_hdr_1.as_ptr() as *const u8, 24, 3, 1, scale, 1000.0) };
+        let out2 = unsafe { hdr_session.convert(frame_hdr_brighter.as_ptr() as *const u8, 24, 3, 1, scale, 1000.0) };
+        let out3 = unsafe { hdr_session.convert(frame_sdr_only.as_ptr() as *const u8, 24, 3, 1, scale, 1000.0) };
+        assert_eq!(&out1[0..8], &out2[0..8]);
+        assert_eq!(&out1[0..8], &out3[0..8]);
+
+        // Case 2: SDR capture where an HDR highlight later enters the region (e.g. scrolling).
+        let mut sdr_session = HdrToneMapper::default();
+        let sdr1 = unsafe { sdr_session.convert(frame_sdr_only.as_ptr() as *const u8, 24, 3, 1, scale, 1000.0) };
+        let sdr2 = unsafe { sdr_session.convert(frame_hdr_1.as_ptr() as *const u8, 24, 3, 1, scale, 1000.0) };
+        assert_eq!(&sdr1[0..8], &sdr2[0..8]);
+        assert_eq!(&sdr2[4..8], &[255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn area_downscale_preserves_thin_lines_without_skipping_pixels() {
+        // 8x8 -> 2x2 (4:1 downscale, matching 4K -> 960p GIF). A 1px vertical white line
+        // placed at any column in the left half (0..4) must contribute consistently (255 / 4 => 64)
+        // instead of disappearing or flickering as bilinear 2x2 taps skip rows/columns.
+        for line_col in 0..4usize {
+            let mut src = vec![0u8; 8 * 8 * 4];
+            for y in 0..8 {
+                let idx = (y * 8 + line_col) * 4;
+                src[idx] = 255;
+                src[idx + 1] = 255;
+                src[idx + 2] = 255;
+                src[idx + 3] = 255;
+            }
+            let dst = resize_bgra_area(&src, 8, 8, 2, 2);
+            assert_eq!(&dst[0..4], &[64, 64, 64, 255], "top-left pixel for col {line_col}");
+            assert_eq!(&dst[4..8], &[0, 0, 0, 255], "top-right pixel for col {line_col}");
+            assert_eq!(&dst[8..12], &[64, 64, 64, 255], "bottom-left pixel for col {line_col}");
+            assert_eq!(&dst[12..16], &[0, 0, 0, 255], "bottom-right pixel for col {line_col}");
+        }
     }
 }
