@@ -7546,6 +7546,35 @@ describe('AgentIslandService island-entry alert disposal', () => {
 });
 
 describe('会话关闭原因决定条目去留', () => {
+  it('removes an archived error card and ignores a trailing error until the task is restored', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((_frame: AgentIslandDisplayState) => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish },
+    });
+    syncEnabledForTest(service, publish);
+    const meta = { sessionId: 'archived-task', agentKind: 'codex' } as const;
+    const error = terminalErrorEvent('Session closed before the current turn delivered a terminal event');
+    const errorCards = () => service.getTaskOverview()
+      .filter((session) => session.phase === 'error').map((session) => session.sessionId).sort();
+
+    service.handleAgentEvent(meta, error);
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({ sessionId: meta.sessionId, phase: 'error' });
+    service.handleAgentEvent({ sessionId: 'other-task' }, error);
+    expect(errorCards()).toEqual(['archived-task', 'other-task']);
+    service.handleSessionStatusChanged(meta.sessionId, 'archived');
+    expect(errorCards()).toEqual(['other-task']);
+    service.handleAgentEvent(meta, error);
+    service.handleSessionClosed(meta.sessionId, { reason: 'process-closed' });
+    expect(errorCards()).toEqual(['other-task']);
+
+    service.handleSessionStatusChanged(meta.sessionId, 'active');
+    expect(errorCards()).toEqual(['other-task']);
+    service.handleAgentEvent(meta, terminalErrorEvent('A later turn failed'));
+    expect(errorCards()).toEqual(['archived-task', 'other-task']);
+  });
+
   it('进程关闭保留仍在展示的完成卡片,归档/删除照常硬删', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn(() => true);

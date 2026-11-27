@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   handleSessionClosed: vi.fn(),
+  handleSessionStatusChanged: vi.fn(),
   handleSessionMetadataPatch: vi.fn(),
   handleNotificationMuteChanged: vi.fn(),
   getAgentIslandService: vi.fn(),
@@ -30,6 +31,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.getAgentIslandService.mockReturnValue({
     handleSessionClosed: h.handleSessionClosed,
+    handleSessionStatusChanged: h.handleSessionStatusChanged,
     handleSessionMetadataPatch: h.handleSessionMetadataPatch,
     handleNotificationMuteChanged: h.handleNotificationMuteChanged,
   });
@@ -52,12 +54,18 @@ describe('notifyAgentIslandSessionPatch', () => {
     expect(h.handleSessionMetadataPatch).not.toHaveBeenCalled();
   });
 
-  it('still closes archived, deleted and hidden tasks', async () => {
+  it('forwards durable task status changes and separately closes hidden tasks', async () => {
     await notify({ status: 'deleted' });
     await notify({ status: 'archived' });
+    await notify({ status: 'active' });
     await notify({ hiddenAt: new Date(1).toISOString() });
 
-    expect(h.handleSessionClosed).toHaveBeenCalledTimes(3);
+    expect(h.handleSessionStatusChanged.mock.calls).toEqual([
+      ['session-1', 'deleted'],
+      ['session-1', 'archived'],
+      ['session-1', 'active'],
+    ]);
+    expect(h.handleSessionClosed).toHaveBeenCalledTimes(1);
     expect(h.handleSessionClosed).toHaveBeenCalledWith('session-1');
   });
 

@@ -50,6 +50,8 @@ export function buildAgentIslandRemoteSessionInputs(
   }
   const companionSessionIds = new Set(inputs.map((input) => input.sessionId));
   for (const session of selectVisibleSessions([], remoteSessions, selection)) {
+    // Archived rows remain available in the remote task list for history.
+    if (session.status === 'archived' || session.status === 'deleted') continue;
     const deviceId = session.deviceLinkDeviceId;
     // `connecting` rows are cached/unverified (cold start, relay reconnect): their retained
     // activity may be stale, so it must not be presented as live in the island.

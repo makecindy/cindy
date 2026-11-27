@@ -428,6 +428,7 @@ export class AgentIslandService {
   /** 本轮同步首次出现的其它设备任务:进列表但不响铃。publish 后清空。 */
   private readonly baselineSoundSessionIds = new Set<string>();
   private readonly stoppedSessionIds = new Set<string>();
+  private readonly archivedSessionIds = new Set<string>();
   private readonly replacementTurnPendingSessionIds = new Set<string>();
   private readonly replacementTurnDispatchingSessionIds = new Set<string>();
   private readonly stoppedProviderTurnIdBySession = new Map<string, string>();
@@ -1084,6 +1085,7 @@ export class AgentIslandService {
     this.mutedCompletionSoundSessionIds.clear();
     this.baselineSoundSessionIds.clear();
     this.stoppedSessionIds.clear();
+    this.archivedSessionIds.clear();
     this.replacementTurnPendingSessionIds.clear();
     this.replacementTurnDispatchingSessionIds.clear();
     this.stoppedProviderTurnIdBySession.clear();
@@ -1137,6 +1139,7 @@ export class AgentIslandService {
     active: boolean,
     options: { turnStarting?: boolean } = {},
   ): void {
+    if (this.archivedSessionIds.has(meta.sessionId)) return;
     const hydrated = this.hydrateMeta(meta);
     if (setAgentIslandSessionBackgroundWork(this.state, hydrated, active, Date.now(), options)) this.publish();
   }
@@ -1145,6 +1148,7 @@ export class AgentIslandService {
     meta: AgentIslandSessionMeta,
     event: AgentEvent,
   ): void {
+    if (this.archivedSessionIds.has(meta.sessionId)) return;
     const hydrated = this.hydrateMeta(meta);
     const providerTurnId = providerTurnIdFromAgentEvent(event);
     const replacementPending =
@@ -1558,6 +1562,18 @@ export class AgentIslandService {
       }
     }
     this.publish();
+  }
+
+  /** Apply the task record's lifecycle independently of the Agent process closing. */
+  handleSessionStatusChanged(sessionId: string, status: 'active' | 'archived' | 'deleted'): void {
+    if (status === 'archived') {
+      // The process can still deliver the final error after the archive removed its card.
+      this.archivedSessionIds.add(sessionId);
+      this.clearDeferredRemoteAuthError(sessionId);
+    } else {
+      this.archivedSessionIds.delete(sessionId);
+    }
+    if (status !== 'active') this.handleSessionClosed(sessionId);
   }
 
   /**
