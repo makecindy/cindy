@@ -97,6 +97,8 @@
   },
   "notice": {
     "memberJoined": "{{name}}さんがグループに参加しました",
+    "memberJoinedList": "{{names}}がグループに参加しました",
+    "memberJoinedSummary": "{{names}}ほか{{others}}人がグループに参加しました",
     "memberFailed": "{{name}} は今回返信できませんでした",
     "memberTimeout": "{{name}} の返信に時間がかかりすぎたため、今回はスキップしました",
     "memberUnavailable": "{{name}} は現在利用できないため、今回は発言しませんでした",
@@ -175,7 +177,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
       "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}} さん、Cindy に代わりに作業してもらうには、あなたの Cindy を接続してください（現在オンラインの Cindy がありません）。"
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}} さん、Cindy に代わりに作業してもらうには、あなたの Cindy を接続してください（現在オンラインの Cindy がありません）。",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}さん、このグループで使うコンピュータを選ぶと、この依頼を続行できます。",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}}さんがこのグループで選んだコンピュータはオフラインです。"
     }
   },
   "plan": {
@@ -503,6 +507,8 @@
     }
   },
   "groupSettings": {
+    "assistantComputer": "実行するコンピュータ",
+    "chooseComputer": "コンピュータを選択",
     "tabSettings": "設定",
     "youAreOwner": "あなたはオーナーです",
     "youAreAdmin": "あなたは管理者です",
@@ -544,6 +550,8 @@
     "accessChat": "グループ内の会話のみ",
     "accessTools": "ツールと情報を利用可",
     "replies": "仲間の返信",
+    "assistant": "グループの Cindy",
+    "assistantHint": "@ した人のパソコンで動きます。",
     "replyModeMentionedNote": "@ されない限り、仲間は返信しません。",
     "work": "役割分担",
     "organizerHint": "誰がどのステップを担当するかを決めます。既定は最初の仲間です。",

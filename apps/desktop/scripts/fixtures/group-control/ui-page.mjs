@@ -38,7 +38,7 @@ export default {
   notCovered:
     'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state/topic-preview cases and is otherwise an empty frame',
   cases: {
-    'topic-preview': { about: 'Sidebar source label and independent group/reply targets, exact reply highlight and repeat navigation',
+    'topic-preview': { about: 'Sidebar source label stays plain non-interactive preview text and opens the main group chat',
       viewport: { width: 1000, height: 700 }, data: { ...base, name: 'Cindy 讨论', bubbles: true, topicPreview: true } },
     'reply-composer': {
       about: 'Real thread reply composer with microphone and editable draft at narrow width',
@@ -154,7 +154,7 @@ export default {
       data: { ...base, arrangement: 'done' },
     },
     'thread-unread': {
-      about: 'Server read state: unread thread entries (with @you), the in-chat 话题 hint above the composer and its list of this group\'s Threads',
+      about: 'Thread entries show the total reply count while unread and mention indicators appear in the group thread hint',
       data: { ...base, bubbles: true, threadUnread: true },
     },
     'thread-work': { about: 'Concurrent topic work stays in its own thread', data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true } },
@@ -208,28 +208,19 @@ export default {
     const definition = this.cases[ui.case];
     if (ui.case === 'topic-preview') {
       const row = page.locator('[data-bot-group-id="fixture-group"]');
-      const topic = row.getByRole('button', { name: new RegExp(await ui.t('bots.groupChat.server.thread.viewThread')) });
       const group = row.getByRole('button', { name: 'Cindy 讨论', exact: true });
-      assert.equal(await row.locator('button button').count(), 0, 'independent native buttons');
+      const sourceText = await ui.t('bots.groupChat.sidebar.threadReply');
+      assert.equal(await row.getByRole('button', { name: new RegExp(await ui.t('bots.groupChat.server.thread.viewThread')) }).count(), 0, 'thread preview is not a separate button');
+      assert.equal(await row.locator('button').count(), 1, 'whole row is a single group button');
+      const subtitle = row.getByText(sourceText);
       const originalHeight = await row.evaluate(el => el.getBoundingClientRect().height);
-      const hitArea = await topic.evaluate(el => {
-        const bounds = el.getBoundingClientRect();
-        const title = el.closest('[data-bot-group-id]').querySelector('[title="Cindy 讨论"]').getBoundingClientRect();
-        return { height: bounds.height, separate: bounds.top >= title.bottom,
-          sourceFits: el.firstElementChild.getBoundingClientRect().right <= bounds.right };
+      const fits = await subtitle.evaluate(el => {
+        const container = el.parentElement.getBoundingClientRect();
+        return el.getBoundingClientRect().right <= container.right;
       });
-      assert.ok(hitArea.height >= 24 && hitArea.separate && hitArea.sourceFits, 'source fits; the reply target is at least 24px and does not overlap the group title');
-      await topic.click();
-      const reply = page.locator('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]');
-      await reply.waitFor();
-      await page.waitForFunction(() => document.querySelector('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]')?.classList.contains('ring-2'));
-      await ui.capture('reply-located');
-      await reply.evaluate(el => el.classList.remove('ring-2'));
-      await topic.focus();
-      await page.keyboard.press('Enter');
-      await page.waitForFunction(() => document.querySelector('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]')?.classList.contains('ring-2'));
+      assert.ok(fits, 'source label fits without clipping');
       await group.click();
-      await reply.waitFor({ state: 'detached' });
+      assert.equal(await page.locator('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]').count(), 0, 'clicking the group row stays in main chat');
       assert.equal(await row.evaluate(el => el.getBoundingClientRect().height), originalHeight, 'row geometry stays stable');
       await ui.capture('main-chat');
       return;
@@ -586,9 +577,8 @@ export default {
       }
       if (definition.data.workQueuedStep) {
         const header = await page.getByTestId('bot-group-content-header').innerText();
-        const sidebar = await page.getByTestId('bot-group-running').innerText();
         assert.ok(header.includes(await ui.t('bots.groupChat.header.speaking', { name: 'Nova' })));
-        assert.ok(sidebar.includes('Nova') && !sidebar.includes('Aster'));
+        assert.equal(await page.getByTestId('bot-group-running').count(), 0);
         const progress = await page.getByTestId('bot-group-progress').allTextContents();
         assert.equal(progress.length, 2);
         assert.ok(progress[0].includes(await ui.t('bots.groupChat.progress.queued')));
@@ -596,7 +586,7 @@ export default {
         const header = await page.getByTestId('bot-group-content-header').innerText();
         const progress = await page.getByTestId('bot-group-progress').innerText();
         assert.ok(header.includes(await ui.t('bots.groupChat.header.queued', { name: 'Aster' })));
-        assert.ok((await page.getByTestId('bot-group-running').innerText()).includes(await ui.t('bots.groupChat.header.queued', { name: 'Aster' })));
+        assert.equal(await page.getByTestId('bot-group-running').count(), 0);
         assert.ok(progress.includes(await ui.t('bots.groupChat.progress.queued')));
         const elapsedLabel = (await ui.t('chat.teammateProcess.elapsed', { duration: '__TIME__' })).replace('__TIME__', '').trim();
         assert.ok(!progress.includes(elapsedLabel));
@@ -938,9 +928,21 @@ export default {
     }
     if (ui.case === 'thread-unread') {
       await page.getByText('Android 更新卡那个 PR', { exact: false }).waitFor();
-      // Unread replies replace the last-reply time on the entry; an @you is named there too.
-      assert.equal(await page.locator('[data-thread-preview="a1"] [data-thread-unread="2"]').count(), 1);
-      assert.equal(await page.locator('[data-thread-preview="q4"] [data-thread-unread]').count(), 0, 'a read Thread keeps its last-reply time');
+      // One unread reply used to add a second count to the entry and its accessible name.
+      const newReply = await ui.t('bots.groupChat.server.thread.newReplies', { count: 1 });
+      const mentioned = await ui.t('bots.groupChat.server.thread.mentionedYou');
+      for (const [id, count] of [['q2', 1], ['q3', 3]]) {
+        const entry = page.locator(`[data-thread-preview="${id}"]`);
+        const total = await ui.t('bots.groupChat.server.replyCount', { count });
+        assert.equal(await entry.getByText(total, { exact: true }).count(), 1);
+        assert.equal(await entry.getByText(newReply, { exact: true }).count(), 0, 'the entry omits the new-reply reminder');
+        assert.equal(await entry.getByText(mentioned, { exact: true }).count(), 0);
+        assert.equal(await entry.getAttribute('aria-label'), await ui.t('bots.groupChat.server.thread.open', { count }));
+        assert.equal(await entry.locator('time').count(), 0);
+      }
+      const timestamp = page.locator('[data-thread-preview="q4"] time');
+      assert.equal(await timestamp.count(), 1, 'a read topic shows a standalone timestamp');
+      assert.match(await timestamp.textContent(), /\b\d{1,2}:\d{2}\b/);
       const hint = page.locator('[data-thread-hint]');
       await hint.waitFor();
       const geometry = await page.evaluate(() => {
@@ -950,7 +952,7 @@ export default {
         return { aboveComposer: box.bottom <= composer.top + 1, inside: box.right <= timeline.right + 1 && box.left >= timeline.left };
       });
       assert.ok(geometry.inside, 'the hint stays inside the chat column');
-      // Threads that name the reader or that they follow ask for attention; others wait at their entry.
+      // The separate hint still alerts the reader to mentions and replies in followed threads.
       const label = await hint.textContent();
       assert.ok(label.includes('3'), `the hint counts the two Threads that mention the reader and the one they follow (${label})`);
       await ui.capture('hint');

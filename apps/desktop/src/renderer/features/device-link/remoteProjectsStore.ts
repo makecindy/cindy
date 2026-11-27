@@ -1,5 +1,10 @@
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
+import { projectSessionWithOfflineInboxIntent } from '@cindy/maker-shared/offline-inbox-intent';
+import {
+  getOfflineInboxIntent,
+  subscribeOfflineInboxIntents,
+} from './offlineInboxIntentsStore';
 /**
  * remoteProjectsStore —— 控制端「远程项目」内存层(device-link 跨设备远程控制)。
  * ---------------------------------------------------------------------------
@@ -40,6 +45,7 @@ import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy
  */
 
 import { useSyncExternalStore } from 'react';
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
 import type { ListStatusFilter } from '@/lib/sessionService';
@@ -64,7 +70,7 @@ interface DeviceShard {
 
 const EMPTY_SCHEDULE_BINDINGS: readonly ScheduleBinding[] = Object.freeze([]);
 /** Display-only until the creating host returns. Never feed these rows to the mirror cache. */
-type CreationPreview = {
+export type CreationPreview = {
   row: Session;
   message: import('@/lib/makerChatStore').ChatMessage;
   handedOff?: boolean;
@@ -522,9 +528,12 @@ function recompute(): void {
     const flat: Session[] = [];
     for (const shard of shards.values()) {
       for (const s of shard.sessions) {
-        const projected = withPendingStatus(
-          withPendingFirstSend(withPendingTitle(s)),
-          shard.deviceId,
+        const projected = projectSessionWithOfflineInboxIntent(
+          withPendingStatus(
+            withPendingFirstSend(withPendingTitle(s)),
+            shard.deviceId,
+          ),
+          getOfflineInboxIntent(shard.deviceId, s.id),
         );
         flat.push(projected);
         const pinnedDeviceId = pinnedOrigins.get(s.id);
@@ -597,6 +606,10 @@ function recompute(): void {
   recomputeArchivedLoadedDeviceIds();
   subs.forEach((fn) => fn());
 }
+
+subscribeOfflineInboxIntents(() => {
+  if (shards.size > 0) recompute();
+});
 
 /** 更新某个状态桶的读取态但不通知；调用方与其它 mutation 合并成一次通知。 */
 function setSessionStatusLoading(
@@ -1277,6 +1290,24 @@ const actions = {
   /** 用户界面使用的远端会话投影；旧 Cindy Make 行保留在原始镜像中但不可见。 */
   getVisibleMergedRemoteSessions(): Session[] {
     return visibleMergedSnapshot;
+  },
+
+  /**
+   * 每台被控设备最近一次可见任务的活跃时间(unix ms)。
+   * 复用 `visibleMergedSnapshot`(已过滤隐藏来源并叠加首条发送与创建预览时间戳),
+   * 供新建页设备切换器在尚未有本地显式选择记录时,也能按真实最近使用顺序排布对端设备。
+   */
+  getDeviceLatestActivityAt(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const session of visibleMergedSnapshot) {
+      const deviceId = session.deviceLinkDeviceId;
+      if (!deviceId || session.status === 'deleted') continue;
+      const ts = Date.parse(getSessionListActivityAt(session));
+      if (Number.isFinite(ts) && ts > (out[deviceId] ?? 0)) {
+        out[deviceId] = ts;
+      }
+    }
+    return out;
   },
 
   /**

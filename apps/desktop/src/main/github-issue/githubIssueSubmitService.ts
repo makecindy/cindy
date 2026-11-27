@@ -79,6 +79,8 @@ export interface GithubIssuePostResponse {
 }
 
 export interface GithubIssueSubmitServiceDeps {
+  /** The live task's engine identity, supplied by the host independently of the tool bridge. */
+  isAcpSession?: (sessionId: string) => boolean;
   confirm: (
     sessionId: string,
     draft: IssueDraft,
@@ -132,6 +134,7 @@ export async function submitGithubIssueWithConfirm(
   deps: GithubIssueSubmitServiceDeps,
   req: SubmitIssueRequest,
 ): Promise<GithubIssueSubmitResult> {
+  const harness = deps.isAcpSession?.(req.sessionId) ? 'ACP' : issueHarnessForAgentKind(req.agentKind);
   let modelId = 'unknown';
   try {
     modelId = normalizeIssueModelId(await deps.getTurnModelId(req.sessionId)) ?? 'unknown';
@@ -141,7 +144,7 @@ export async function submitGithubIssueWithConfirm(
   const env: IssueEnvInfo = {
     appVersion: deps.getAppVersion(),
     ...deps.getOsInfo(),
-    harness: issueHarnessForAgentKind(req.agentKind),
+    harness,
     modelId,
     region: deps.getRegion(),
   };

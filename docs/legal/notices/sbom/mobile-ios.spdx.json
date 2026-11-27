@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-mobile-ios",
-  "documentNamespace": "https://cindy.app/spdx/mobile-ios/e2fdf65fe5c4f45161a28fa337eb374bb59aa5302f29e0bbb110cfe7e10ba816",
+  "documentNamespace": "https://cindy.app/spdx/mobile-ios/bda8d5731ebfc8c56807dc36e7b2d71d82f51799933ecb8f7a5054dfb32b6c18",
   "creationInfo": {
-    "created": "2026-11-23T12:35:11Z",
+    "created": "2026-11-26T11:54:25Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -7973,6 +7973,23 @@
       ]
     },
     {
+      "name": "pinyin-pro",
+      "SPDXID": "SPDXRef-Package-01d3652e4685d328",
+      "versionInfo": "3.29.5",
+      "downloadLocation": "https://github.com/zh-lx/pinyin-pro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/pinyin-pro@3.29.5"
+        }
+      ]
+    },
+    {
       "name": "plist",
       "SPDXID": "SPDXRef-Package-136d5b503d3fff27",
       "versionInfo": "3.1.1",
@@ -12577,6 +12594,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-143da6249da887a4"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-01d3652e4685d328"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

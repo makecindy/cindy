@@ -26,7 +26,7 @@ import type { BotGroupMemberView, BotGroupSummary, ChatGroupAction } from '../..
 import { groupRepositoryLabel, parseGroupRepository } from '../../../shared/botGroupChat';
 import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { GroupMaskAvatar, useOpenGroupMask } from './GroupMaskControls';
-import { useGroupMask } from './groupMaskPresentation';
+import { useGroupMaskControls } from './groupMaskPresentation';
 import { ChatBotAccessField } from './ChatBotAccessField';
 import { ChatGroupNotificationSettings } from './ChatGroupNotificationSettings';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
@@ -79,7 +79,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const { confirm } = useConfirmDialog();
   const profiles = useBotProfiles();
-  const mask = useGroupMask(group.id);
+  const mask = useGroupMaskControls(group.id);
   const openMask = useOpenGroupMask();
   // Teammates someone owns; the group's own Cindy is set by its switch in group management.
   const companions = group.members.filter(member => member.actorKind === 'bot' && member.assistant !== true);
@@ -408,6 +408,12 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
                     : <SettingsRowIcon><Reply size={16} aria-hidden /></SettingsRowIcon>}
                   title={t('bots.groupChat.mask.title')} hint={t(key('maskHint'))} value={t(`bots.groupChat.mask.status.${mask.status}`)} chevron
                   onClick={() => { if (scroller.current) homeScroll.current = scroller.current.scrollTop; openMask(); }} />}
+                {group.assistantComputers && <SettingsRow wrap title={t(key('assistantComputer'))} trailing={
+                  <Select size="compact" label={t(key('assistantComputer'))} value={group.assistantDeviceId ?? 'unselected'}
+                    disabled={busy || !!group.archived || !group.assistantComputers.length}
+                    options={[...(!group.assistantDeviceId ? [{ value: 'unselected', label: t(key('chooseComputer')), disabled: true }] : []),
+                      ...group.assistantComputers.map(device => ({ value: device.id, label: device.name }))]}
+                    onValueChange={deviceId => void mutate({ type: 'assistantDevice', deviceId })} />} />}
                 {group.supportsNotificationSettings && group.notificationMode && <ChatGroupNotificationSettings key={group.id}
                   groupId={group.id} mode={group.notificationMode} inherited={group.notificationModeInherited} disabled={busy || !!group.archived} />}
               </SettingsCard>

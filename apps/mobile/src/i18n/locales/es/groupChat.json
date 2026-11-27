@@ -100,6 +100,8 @@
   },
   "notice": {
     "memberJoined": "{{name}} se unió al grupo",
+    "memberJoinedList": "{{names}} se unieron al grupo",
+    "memberJoinedSummary": "{{names}} y {{others}} más se unieron al grupo",
     "memberFailed": "{{name}} no pudo responder esta vez",
     "memberTimeout": "{{name}} tardó demasiado en responder y esta vez se omitió",
     "memberUnavailable": "{{name}} no está disponible y no habló esta vez",
@@ -178,7 +180,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del amigo puede volver a solicitarla en este grupo.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
       "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado)."
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado).",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, elige un equipo para este grupo para continuar con la solicitud.",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "El equipo que {{name}} eligió para este grupo está desconectado."
     }
   },
   "plan": {
@@ -511,6 +515,8 @@
     }
   },
   "groupSettings": {
+    "assistantComputer": "Equipo de ejecución",
+    "chooseComputer": "Elegir equipo",
     "tabSettings": "Configuración",
     "youAreOwner": "Eres el propietario",
     "youAreAdmin": "Eres administrador",
@@ -552,6 +558,8 @@
     "accessChat": "Solo chat del grupo",
     "accessTools": "Puede usar herramientas e información",
     "replies": "Cómo responden los amigos",
+    "assistant": "Cindy del grupo",
+    "assistantHint": "Trabaja en el ordenador de quien la menciona con @.",
     "replyModeMentionedNote": "Los amigos no responden a menos que alguien los mencione con @.",
     "work": "Repartos de trabajo",
     "organizerHint": "Decide quién realiza cada paso. De forma predeterminada, es el primer amigo.",

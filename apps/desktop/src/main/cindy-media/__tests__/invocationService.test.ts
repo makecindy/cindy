@@ -20,6 +20,7 @@ interface MockTransitionInput {
 }
 
 const mocks = vi.hoisted(() => ({
+  activeCatalog: vi.fn(),
   localMode: false,
   currentUserId: 'media-user-0',
   ownerGeneration: 1,
@@ -106,6 +107,7 @@ vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({
 vi.mock('../../usage/gatewayMediaBilling.js', () => ({
   prepareGatewayMediaBilling: mocks.prepareBilling,
 }));
+vi.mock('../../maker-host/active-catalog.js', () => ({ getActiveCatalog: mocks.activeCatalog }));
 vi.mock('../../model-access/mediaModels.js', () => ({
   listAvailableMediaModels: mocks.models,
   listExecutableMediaModels: mocks.executableModels,
@@ -347,6 +349,7 @@ async function prepare(capability: MediaCapability = 'image.generate'): Promise<
 
 describe('Cindy Core media invocation state and security boundary', () => {
   beforeEach(() => {
+    mocks.activeCatalog.mockReset().mockReturnValue({ providers: [] });
     mocks.recordBilling.mockReset().mockResolvedValue(undefined);
     mocks.finishBilling.mockReset();
     mocks.prepareBilling.mockReset().mockResolvedValue(
@@ -1993,6 +1996,25 @@ describe('Cindy Core media invocation state and security boundary', () => {
     })).resolves.toMatchObject({ ok: true, status: 'complete' });
     const init = mocks.outboundFetch.mock.calls[0]![1] as RequestInit;
     expect(JSON.parse(init.body as string)).toMatchObject({ size: '1320x2868', quality: 'max' });
+  });
+
+  // #13118 / unit: a visible custom connection can exist outside the image catalog.
+  it('guides a targeted prepare miss without inferring a missing declaration or submitting', async () => {
+    mocks.activeCatalog.mockReturnValue({ providers: [{ id: 'relay', source: 'user',
+      models: { pi: [{ id: 'image-model' }] } }] });
+    const request = { action: 'prepare', providerId: 'relay', modelId: 'image-model',
+      sourceAgent: 'pi', capability: 'image.generate' } as const;
+    const result = await callCindyMedia(request);
+    expect(result).toMatchObject({ ok: false, errorCode: 'MODEL_NOT_AVAILABLE', retryable: false,
+      target: { providerId: 'relay', agent: 'pi', modelId: 'image-model' },
+      allowedActions: expect.arrayContaining(['inspect_model_connection_and_media_declaration']),
+      guidance: expect.stringMatching(/是否启用.*声明缺失时.*configure_model_connection.*image_generation.*text.*image/) });
+    const unknown = await callCindyMedia({ ...request, providerId: 'wrong-source' });
+    expect(unknown.errorCode).toBe('MODEL_NOT_AVAILABLE');
+    expect(unknown).not.toHaveProperty('guidance');
+    expect(mocks.rows.size).toBe(0);
+    expect(mocks.providerInvoke).not.toHaveBeenCalled();
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
   });
 
   it('本机准备期间同 owner 代次变化时不保存调用', async () => {

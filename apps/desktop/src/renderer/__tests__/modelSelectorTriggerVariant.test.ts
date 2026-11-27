@@ -3195,10 +3195,9 @@ describe('ModelSelector trigger variants', () => {
       name: 'newChat.modelSelector.search.placeholderAll',
     });
     expect(searchInput.hasAttribute('disabled')).toBe(true);
+    // Shared SearchInput disabled state (DESIGN.md §4 input/text: 60% opacity, not-allowed cursor).
     expect(searchInput.className).toContain('cursor-not-allowed');
-    expect(searchInput.className).toContain('text-[var(--text-disabled)]');
-    expect(searchInput.className).toContain('placeholder:text-[var(--text-disabled)]');
-    expect(searchInput.parentElement?.className).toContain('bg-[var(--surface-elevated-soft)]');
+    expect(searchInput.className).toContain('opacity-60');
 
     fireEvent.click(opusRow);
     fireEvent.pointerEnter(opusRow);

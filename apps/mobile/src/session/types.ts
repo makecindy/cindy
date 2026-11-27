@@ -78,7 +78,7 @@ export interface RemoteSession {
   interruptedTurnStartedAt?: number | null;
   lastTurnEndedAt?: number | null;
   status: RemoteSessionStatus;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp';
   /**
    * 远程 Agent:非空 = Agent 在同账号另一台电脑上运行(desktop sessions.agent_device_id),
    * 任务与文件仍留在被控电脑;null / 缺省 = Agent 就在被控电脑运行(含旧被控端)。
@@ -114,6 +114,8 @@ export interface RemoteSession {
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
   snoozedUntil?: string | null;
+  /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
+  imAttached?: boolean;
   snoozedAt?: string | null;
   userSendAt: string | null;
   lastActivityAt?: string | null;
@@ -311,6 +313,8 @@ export type ContinuationInFlightProjectionCapability = 'unknown' | 'legacy' | 's
 export interface InputProjection {
   sessionId: string;
   pendingQueue: QueuedRemoteMessage[];
+  /** 当前会话的实时引擎不支持同轮插话（老被控端缺省 = 按支持处理）。 */
+  steerUnsupported?: boolean;
   steeringQueueClientIds: string[];
   queuePaused: boolean;
   queueExpanded: boolean;
@@ -320,6 +324,7 @@ export interface InputProjection {
   error: string | null;
   /** Stable error reason for live projections; older controlled hosts may omit it. */
   errorReason?: string | null;
+  reconnectHandoff?: 'disabled' | 'exhausted';
   /** Bounded details for tool-loop errors; older projections may omit them. */
   toolLoop?: MobileToolLoopErrorDetails | null;
   outputLimit?: OutputLimitDetails | null;

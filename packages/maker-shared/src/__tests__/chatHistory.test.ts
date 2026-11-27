@@ -18,10 +18,46 @@ function fixture() {
     if (route.startsWith('/changes?')) return batch;
     return [message('2'), message('1')];
   });
-  const open = () => createChatHistory({ api: api as <T>(route: string) => Promise<T>, store, current: () => live, newGeneration: () => String(++generation) });
+  const open = (readerId?: string) => createChatHistory({ api: api as <T>(route: string) => Promise<T>, store, current: () => live, newGeneration: () => String(++generation), readerId });
   const page = new URLSearchParams('limit=100&before=5');
   return { disk, store, api, open, message, page, setBatch: (value: ChatHistoryBatch) => { batch = value; }, leave: () => { live = false; } };
 }
+
+// Unit: an unrelated join used to discard the opened topic and its older pages.
+it('retains an open topic across a verified peer join and drops it on a reader membership change', async () => {
+  const f = fixture();
+  const cache = f.open('self');
+  const reader = { id: 'self', state: 'joined', accessRevision: 1 };
+  const snapshot = { room: { id: 'room' }, messages: [], members: [reader], cursor: '10' };
+  f.api.mockResolvedValueOnce(snapshot);
+  const initial = await cache.snapshot('room');
+  const page = new URLSearchParams('threadRootId=root&before=5');
+  const replies = await cache.page('room', page);
+  const members = [reader, { id: 'peer', state: 'joined' }];
+  f.api.mockResolvedValueOnce({ ...snapshot, members, cursor: '11' });
+  await cache.receive('room', { cursor: '11', changes: [{ type: 'membership.changed', entityId: 'peer' }] }, '10');
+  expect(cache.committedSnapshot('room')).toMatchObject({ members, cacheGeneration: initial.cacheGeneration });
+  f.api.mockClear();
+  expect(await cache.page('room', page)).toEqual(replies);
+  expect(f.api).not.toHaveBeenCalled();
+  await cache.receive('room', { cursor: '12', changes: [{ type: 'membership.changed', entityId: 'self' }] }, '11');
+  expect(cache.committedSnapshot('room')).toBeUndefined();
+});
+
+// Unit: rejecting receive() interrupts the shared push connection on a single room's HTTP failure.
+it('invalidates only the unverified room when its join snapshot is throttled', async () => {
+  const f = fixture();
+  const cache = f.open('self');
+  for (const id of ['room', 'other']) {
+    f.api.mockResolvedValueOnce({ room: { id }, cursor: '10', messages: [], members: [{ id: 'self', state: 'joined' }] });
+    await cache.snapshot(id);
+  }
+  f.api.mockRejectedValueOnce(new Error('RATE_LIMITED'));
+  await expect(cache.receive('room', { cursor: '11', changes: [{ type: 'membership.changed', entityId: 'peer' }] }, '10'))
+    .resolves.toBeUndefined();
+  expect(f.disk.has('room')).toBe(false);
+  expect(await cache.receive('other', { cursor: '11', changes: [] }, '10')).toBe('11');
+});
 
 // Unit tier, phone group-open latency: a store that rewrites the whole room per commit was
 // asked to commit after every step of one read (delta, metadata, page, each root lookup).
