@@ -2254,10 +2254,10 @@ export function AddProviderWizard({
                       style={{ borderColor: 'var(--border-default)' }}
                     >
                       <div className="flex items-center gap-3 px-3.5 py-2.5">
-                        <Button variant="secondary" size="xs" tone="quiet" compact type="button" onClick={() => setAllGeneralPicks(true)}>
+                        <Button data-settings-search-action="Select all ordinary models in the preset provider draft" variant="secondary" size="xs" tone="quiet" compact type="button" onClick={() => setAllGeneralPicks(true)}>
                           {t('settings.providers.custom.fetch.selectAll')}
                         </Button>
-                        <Button variant="secondary" size="xs" tone="quiet" compact type="button" onClick={() => setAllGeneralPicks(false)}>
+                        <Button data-settings-search-action="Clear all ordinary model selections in the preset provider draft" variant="secondary" size="xs" tone="quiet" compact type="button" onClick={() => setAllGeneralPicks(false)}>
                           {t('settings.providers.custom.fetch.clearAll')}
                         </Button>
                       </div>
