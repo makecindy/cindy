@@ -54,12 +54,13 @@ export function PluginManagementConfirmation(
   const layoutKey = consentLayoutKey(consent?.requestId, { width: windowWidth, height: windowHeight, fontScale });
   const layout = useConsentSheetSizes(layoutKey);
   const sizes = layout.sizes;
-  const measure = (key: "identity" | "heading" | "actions" | "visible" | "content") => (frame: { y: number; height: number }) => {
-    if (frame.height <= 0) return;
-    layout.report(key, frame.height);
-    // Where the list and its content start on screen (global frames): their difference is the content's top inset.
-    if (key === "visible") layout.reportTop("listTop", frame.y);
-    if (key === "content") layout.reportTop("contentTop", frame.y);
+  const measure = (key: "identity" | "heading" | "actions") => (frame: { y: number; height: number }) => {
+    if (frame.height > 0) layout.report(key, frame.height);
+  };
+  // Where the list and its content start on screen (global frames): their difference is the content's top inset. Only
+  // positions come from frames; the list's visible and content heights come from its own scroll geometry (below).
+  const measureTop = (key: "listTop" | "contentTop") => (frame: { y: number; height: number }) => {
+    if (frame.height > 0) layout.reportTop(key, frame.y);
   };
   const measureLine = (index: number) => (size: { height: number }) => {
     if (size.height > 0) layout.reportLine(index, size.height);
@@ -73,7 +74,14 @@ export function PluginManagementConfirmation(
     const next = geometry.contentHeight > geometry.containerHeight + 1 && geometry.contentOffsetY + geometry.containerHeight < geometry.contentHeight - 2;
     setMore((current) => current[key] === next ? current : { ...current, [key]: next });
   };
-  const listGeometry = useScrollGeometryChange(watchMore("list"));
+  // The native list's own scroll range: the fade over its lower edge reads it, and so does the real-layout check
+  // (maintainer review 17:24: the inner content can be shorter than the viewport while the Form around it still scrolls,
+  // with the fade over the source line). Container and content sizes, not the offset: scrolling never relaxes the check.
+  const listGeometry = useScrollGeometryChange((geometry: { contentOffsetY: number; containerHeight: number; contentHeight: number }) => {
+    watchMore("list")(geometry);
+    if (geometry.containerHeight > 0) layout.report("visible", geometry.containerHeight);
+    if (geometry.contentHeight > 0) layout.report("content", geometry.contentHeight);
+  });
   const summaryGeometry = useScrollGeometryChange(watchMore("summary"));
   const fade = (testID: string, shown: boolean) => (
     <Rectangle testID={testID} modifiers={[
@@ -200,8 +208,8 @@ export function PluginManagementConfirmation(
       nativeContent
       // A new identity for the reviewed list, so it opens at its top (the source) rather than where the first list was.
       nativeContentModifiers={[...(listGeometry ? [listGeometry] : []), accessibilityHint(t("plugins.management.scrollHint")),
-        // The list's visible height (its own frame), for the real-layout check.
-        onGeometryChange(measure("visible")),
+        // Where the list starts on screen, for the content's top inset.
+        onGeometryChange(measureTop("listTop")),
         forRequest(reviewed ? "plugins.management.reviewed" : "plugins.management.list")]}
       nativeContentOverlay={fade("plugins.management.listFade", more.list)}
       // Open large when the summary, a source-change notice or an accessibility text size needs the room (at the medium
@@ -251,7 +259,7 @@ export function PluginManagementConfirmation(
       <VStack
         alignment="leading"
         spacing={spacing.md}
-        modifiers={[padding({ vertical: spacing.sm }), onGeometryChange(measure("content"))]}
+        modifiers={[padding({ vertical: spacing.sm }), onGeometryChange(measureTop("contentTop"))]}
       >
         {/* Reviewed (compact): the source and this consent's high-risk summary come first, then the rest as before. */}
         {reviewed ? (
