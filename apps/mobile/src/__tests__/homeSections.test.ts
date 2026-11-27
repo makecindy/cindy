@@ -18,6 +18,7 @@ import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/m
 import type { RemoteSessionListItem } from '@/session/sessionList';
 import { collectHomePriorityContext, collectInboxHomePriorityContext } from '@/session/homeListPriority';
 import { groupAutomationListItems } from '@cindy/maker-shared/session-list';
+import { orcaLeadSessionKey } from '@cindy/maker-shared/orca-team';
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
@@ -717,4 +718,24 @@ it.each(['chat', 'project'] as const)('keeps each %s automation run independent 
     expect(ids('inbox-inbox')).toEqual(mode === 'unread' ? [] : ['older']);
     expect(ids('inbox-working')).toEqual(mode === 'idle' ? [] : ['latest']);
   }
+});
+
+// Rule: task-inbox.md — an Orca Lead whose active Worker holds an active automation must be
+// classified as Working when quiet/read and return to Pending when unread.
+it('places a quiet Orca Lead in working when its Worker holds an active automation', () => {
+  const lead = listItem('lead-1', '2026-11-26T08:00:00Z');
+  (lead.session as { deviceLinkDeviceId?: string; orcaRole?: string }).deviceLinkDeviceId = 'mac-mini';
+  (lead.session as { orcaRole?: string }).orcaRole = 'lead';
+  const home = presentation({ chats: [lead] });
+  const idle = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
+  const followingKeys = new Set([orcaLeadSessionKey('lead-1', 'mac-mini')]);
+
+  const quietSections = buildInboxHomeSections(home, new Set(), idle, Date.now(), [], followingKeys);
+  expect(quietSections.find(s => s.key === 'inbox-working')?.count).toBe(1);
+  expect(quietSections.find(s => s.key === 'inbox-inbox')?.count).toBe(0);
+
+  lead.liveActivity = { attention: true, phase: 'completed' } as RemoteSessionListItem['liveActivity'];
+  const unreadSections = buildInboxHomeSections(home, new Set(), idle, Date.now(), [], followingKeys);
+  expect(unreadSections.find(s => s.key === 'inbox-inbox')?.count).toBe(1);
+  expect(unreadSections.find(s => s.key === 'inbox-working')?.count).toBe(0);
 });

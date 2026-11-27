@@ -1,5 +1,5 @@
 import { GithubAppCard } from '@/features/cc-agent/GithubAppCard';
-import { schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
+import { schedulePrTriggers, isGithubPrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
 import { Button } from '@/components/ui/button';
 import { shouldShowOpenPathError } from '../../../../shared/openPathResult';
 /**
@@ -26,7 +26,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import type { Schedule, ScheduleAgentKind, ScheduleRun } from '@cindy/maker-scheduler';
-import { findPluginEngine, usePluginEngines } from '@/hooks/usePluginEngines';
+import { usePluginEngineIdentity } from '@/hooks/usePluginEngines';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { clearSessionAttentionMany } from '@/lib/sessionAttentionStore';
@@ -70,9 +70,12 @@ export function RunHistoryPane({
   connectionSetupVisible = true,
 }: Props) {
   const { t } = useTranslation();
-  // 插件引擎自动任务按引擎自己的名字显示(插件停用后用通用名称)。
-  const pluginEngines = usePluginEngines(s.agentKind === 'acp');
-  const pluginEngineName = findPluginEngine(pluginEngines, s.providerId)?.name;
+  // 插件引擎自动任务按引擎自己的名字显示(插件停用后用通用名称；另一台电脑时从该电脑目录读取)。
+  const pluginEngineIdentity = usePluginEngineIdentity(
+    s.agentKind === 'acp' ? s.providerId : null,
+    (s.modelAgentDeviceId || s.agentDeviceId) || undefined,
+  );
+  const pluginEngineName = s.agentKind === 'acp' ? pluginEngineIdentity.name : undefined;
   const projectLabel = useProjectLabel();
   // 展示策略（避免切任务闪烁）：
   // - hasLoaded=false（应用启动后第一次都没拉过）→ 整块 run 区域不挂载
@@ -226,9 +229,12 @@ export function RunHistoryPane({
     ? t('scheduler.detail.manualTrigger')
     : s.intervalMs ? formatIntervalDuration(s.intervalMs, appI18n.language) : summarizeCron(s.cronExpr, t);
   const rules = schedulePrTriggers(s);
-  const prText = rules.map(rule => `${rule.url.replace('https://github.com/', '').replace('/pull/', '#').replace('/-/merge_requests/', '!')} · ${t(`scheduler.prTrigger.${rule.change}`)}`).join(', ');
+  // GitHub PR: owner/repo#N; GitLab MR: group/project!N.
+  const prText = rules.map(rule => `${rule.url.replace(/^https:\/\/github\.com\//, '').replace('/pull/', '#')
+    .replace(/^https:\/\/[^/]+\//, '').replace('/-/merge_requests/', '!')} · ${t(`scheduler.prTrigger.${rule.change}`)}`).join(', ');
+  const eventTitle = t(s.webhookTrigger?.source?.preset === 'plugin' ? 'scheduler.webhook.pluginTitle' : 'scheduler.webhook.title');
   const cronText = prText ? (s.manual ? prText : `${timingText} · ${prText}`) : s.webhookTrigger
-    ? s.manual ? t('scheduler.webhook.title') : `${timingText} · ${t('scheduler.webhook.title')}`
+    ? s.manual ? eventTitle : `${timingText} · ${eventTitle}`
     : timingText;
   const agentText = s.agentKind === 'acp'
     ? pluginEngineName ?? t('newChat.pluginEngines.genericName')
@@ -326,7 +332,8 @@ export function RunHistoryPane({
 
       {/* 连接引导与执行结果一起滚动，较小窗口仍能看完密钥和测试步骤。 */}
       <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
-        {rules.length > 0 && connectionSetupVisible && <GithubAppCard automation timedPrCheck={!s.manual} repositories={rules.map(rule => rule.url.split('/').slice(3, 5).join('/'))} />}
+        {rules.some(rule => isGithubPrTriggerUrl(rule.url)) && connectionSetupVisible && <GithubAppCard automation timedPrCheck={!s.manual}
+          repositories={rules.filter(rule => isGithubPrTriggerUrl(rule.url)).map(rule => rule.url.split('/').slice(3, 5).join('/'))} />}
         {s.webhookTrigger && <WebhookTriggerPanel key={s.id} schedule={s} connectionSetupVisible={connectionSetupVisible} />}
 
         {hasLoaded && (

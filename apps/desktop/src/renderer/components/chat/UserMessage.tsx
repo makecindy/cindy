@@ -5,6 +5,7 @@ import { botReplyQuoteFor } from '@/features/bots/botDmQuote';
 import type { ChatReplyQuote } from '../../../shared/chatReplyQuote';
 import { BotDmThreadPreview } from '@/features/bots/BotDmThreadPreview';
 import { useBotDmThreadForMessage } from '@/features/bots/botDmThreadsContext';
+import { Badge } from '@/components/ui/badge';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import type { ImMessageSource } from '../../../shared/imMessageSource';
 import { isSharedTaskPeer } from '@cindy/device-link';
@@ -24,6 +25,7 @@ import { hasEmbeddedImPrompt } from './userMessageDisplayText';
  */
 
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
+import { MarkdownRenderer } from './MarkdownRenderer';
 import { type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
@@ -880,8 +882,8 @@ export function UserMessage({
   // renderer 'cc' ↔ maker 'claude-code' 别名映射 (DB / Session 用 'cc', maker IPC 用 'claude-code')
   const makerKind: MakerAgentKind =
     agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
-  // 插件引擎任务(agent_kind = 'acp')不支持分叉与回退，也不读任何内置 Harness 的能力
-  // (docs/plans/acp-plugin-bridge.md)。
+  // 插件引擎任务(agent_kind = 'acp')不读任何内置 Harness 的能力。分叉由主进程从 Cindy 的记录交接；
+  // 回退要改动插件 Agent 自己的历史，仍不支持(docs/plans/acp-plugin-bridge.md)。
   const pluginEngineTask = isPluginEngineKind(agentKind);
   // device-link 远程会话:fork/rewind 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // 媒体来源(device/ssh)用于把附件/文件预览 URL 改写到 cindy-remote-media://(入方向媒体)。
@@ -899,10 +901,10 @@ export function UserMessage({
   // remoteHostId 非空时直接关掉这两个能力, 避免点了落到后端错误。
   const isRemote = Boolean(remoteHostId);
   const forkSupported =
-    !isRemote && !pluginEngineTask && (!agentKind || (capabilities?.fork?.supported ?? true));
+    !isRemote && (pluginEngineTask || !agentKind || (capabilities?.fork?.supported ?? true));
   const rewindSupported =
-    !isRemote && !pluginEngineTask &&
-    (!agentKind || (capabilities?.rewind?.supported ?? true));
+    !isRemote &&
+    (!agentKind || pluginEngineTask || (capabilities?.rewind?.supported ?? true));
 
   const hasImages = images && images.length > 0;
   const hasFiles = files && files.length > 0;
@@ -1478,9 +1480,17 @@ export function UserMessage({
               </button>
               {orcaExpanded && (
                 <div className="border-t border-[var(--msg-tool-card-border)] px-3 py-2">
-                  <pre data-selection-quote-body="" className="chat-content-text m-0 whitespace-pre-wrap break-words font-mono text-[length:calc(var(--app-code-font-size)_-_2px)] leading-[calc(var(--app-code-font-size)_+_4px)] text-foreground">
-                    {displayContent}
-                  </pre>
+                  <div
+                    data-selection-quote-body=""
+                    className="chat-content-text min-w-0 text-13 text-foreground [&_.msg-markdown>*:first-child]:mt-0 [&_.msg-markdown>*:last-child]:mb-0"
+                  >
+                    <MarkdownRenderer
+                      content={displayContent}
+                      workingDir={workingDir}
+                      currentSessionId={sessionId}
+                      allowPrivilegedLinks={allowPrivilegedLinks}
+                    />
+                  </div>
                 </div>
               )}
             </div>
@@ -1559,15 +1569,11 @@ export function UserMessage({
             />
             {/* /goal 目标设定/更新:气泡上方右对齐渲一个徽标(不进气泡、不入 copyText)。 */}
             {goalBadge && (
-              <span
-                className="inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-11 font-medium"
-                style={{ backgroundColor: 'var(--surface-chip)', color: 'var(--text-secondary)' }}
-              >
-                <Target size={11} strokeWidth={2} aria-hidden className="shrink-0" />
+              <Badge className="max-w-full" icon={<Target size={11} strokeWidth={2} />}>
                 <span className="min-w-0 truncate">
                   {goalBadge.updated ? t('goal.objectiveBadgeUpdated') : t('goal.objectiveBadge')}
                 </span>
-              </span>
+              </Badge>
             )}
             {/* 伙伴私聊：图片与文件随正文进同一个气泡（编辑态照常在上方）。 */}
             {!attachmentsInBubble && imageAttachmentNodes}
