@@ -284,7 +284,7 @@ describe('SearchResultTaskMenu', () => {
       'title',
       'moveToProject',
       'exportShare',
-      'openInNewWindow',
+      'openInNewWindowopenInNewWindowShortcutMac',
       'archived',
       'delete',
     ]);
@@ -835,7 +835,7 @@ describe('SearchResultTaskMenu', () => {
     );
     expect(pinSpy).toHaveBeenCalledWith('dev-online', 'remote-online');
 
-    // Offline remote and shared-task guest Cmd+Click warn instead of opening a new window
+    // Offline remote Cmd+Click warns instead of opening a new window
     mocks.openSessionInNewWindow.mockClear();
     const offlineButton = document.querySelector(
       '[data-session-id="remote-offline"] > button',
@@ -844,12 +844,16 @@ describe('SearchResultTaskMenu', () => {
     expect(mocks.toastWarning).toHaveBeenCalledWith('actionsUnavailable');
     expect(mocks.openSessionInNewWindow).not.toHaveBeenCalled();
 
+    // Connected shared-task guest Cmd+Click opens in a new window (aligned with SharedTasksSection)
     const sharedButton = document.querySelector(
       '[data-session-id="remote-shared"] > button',
     ) as HTMLButtonElement;
     fireEvent.click(sharedButton, { metaKey: true });
-    expect(mocks.toastWarning).toHaveBeenCalledTimes(2);
-    expect(mocks.openSessionInNewWindow).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(mocks.openSessionInNewWindow).toHaveBeenLastCalledWith('remote-shared', sharedPeer, null),
+    );
+    expect(pinSpy).toHaveBeenCalledWith(sharedPeer, 'remote-shared');
+    expect(mocks.toastWarning).toHaveBeenCalledTimes(1);
 
     // Windows/Linux Ctrl+Click opens in a new window
     window.electronAPI.platform = 'win32';

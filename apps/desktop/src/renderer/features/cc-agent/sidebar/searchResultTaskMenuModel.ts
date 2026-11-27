@@ -26,22 +26,6 @@ export interface SearchResultSelectOptions {
   openInNewWindow?: boolean;
 }
 
-/**
- * Whether clicking a search result should open it in a new window:
- * - macOS: Command+Click (metaKey) or middle-click (button === 1); Ctrl+Click stays right-click.
- * - Windows/Linux: Ctrl+Click (ctrlKey), Meta+Click, or middle-click.
- */
-export function shouldOpenSearchResultInNewWindow(event: {
-  metaKey?: boolean;
-  ctrlKey?: boolean;
-  button?: number;
-}): boolean {
-  if (event.button === 1) return true;
-  const isMac =
-    typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin';
-  return isMac ? Boolean(event.metaKey) : Boolean(event.ctrlKey || event.metaKey);
-}
-
 export interface SearchResultTaskMenuProps {
   session: Session;
   isLiveInStore: boolean;

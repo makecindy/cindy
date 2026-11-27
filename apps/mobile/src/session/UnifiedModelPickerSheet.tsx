@@ -21,7 +21,7 @@ import type { MobileAgentCapabilities } from "./agentCapabilities";
 import type { ModelPickerSheetProps } from "./ModelPickerSheet";
 import {
   buildPluginEngineGroups,
-  formatPluginEngineModelQuota,
+  formatPluginEngineModelQuotaLabel,
   formatPluginEnginePickerQuota,
   isPluginEngineFavoriteProviderId,
   isPluginEngineProviderId,
@@ -909,15 +909,22 @@ export function UnifiedModelPickerSheet(
     catalog,
     rows: deviceRows.filter((row) => listed.has(row.entry)),
   }));
-  const pluginEngineCountdown = (resetsAtSeconds: number, currentNow: number) =>
-    formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, null);
-  const pluginEngineModelQuota = (engine: MobilePluginEngine, modelId: string) =>
-    formatPluginEngineModelQuota(
-      pluginEngineQuotas?.[pluginEngineChoiceKey(engine)],
-      modelId,
-      now,
-      pluginEngineCountdown,
+  const pluginEngineCountdown = (
+    resetsAtSeconds: number,
+    currentNow: number,
+    windowMinutes: number | null = null,
+  ) => formatQuotaResetCountdown(resetsAtSeconds, currentNow, t, windowMinutes);
+  const pluginEngineModelQuota = (engine: MobilePluginEngine, modelId: string): string | null => {
+    const model = engine.models.find((candidate) => candidate.id === modelId);
+    return (
+      formatPluginEngineModelQuotaLabel(
+        pluginEngineQuotas?.[pluginEngineChoiceKey(engine)],
+        { id: modelId, name: model?.displayName },
+        now,
+        pluginEngineCountdown,
+      ) ?? null
     );
+  };
   const pluginEngineLabels = {
     defaultModel: t("models.pluginEngines.defaultModel"),
     effort: (effort: PluginEngineEffort) =>
@@ -1721,9 +1728,14 @@ export function UnifiedModelPickerSheet(
   for (const engine of visiblePluginEnginesForSources) {
     const choiceKey = pluginEngineChoiceKey(engine);
     const quota = pluginEngineQuotaOf(choiceKey);
+    const filterRemaining =
+      quota?.remaining ??
+      (quota?.groups?.length
+        ? Math.min(...quota.groups.map((group) => group.remaining))
+        : undefined);
     const filterQuota = quota
       ? {
-          ...(quota.remaining !== undefined ? { remaining: quota.remaining } : {}),
+          ...(filterRemaining !== undefined ? { remaining: filterRemaining } : {}),
           label: quota.summary,
         }
       : undefined;

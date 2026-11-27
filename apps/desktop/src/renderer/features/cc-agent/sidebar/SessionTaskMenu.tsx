@@ -26,6 +26,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
@@ -61,6 +62,7 @@ interface Props {
   onUnarchive: () => void;
   onDelete: () => void;
   onOpenInNewWindow: () => void;
+  openInNewWindowShortcut?: string;
   move: ReactNode;
   tags: ReactNode;
   copy: ReactNode;
@@ -98,6 +100,7 @@ function ActiveSessionTaskMenu({
   onUnarchive,
   onDelete,
   onOpenInNewWindow,
+  openInNewWindowShortcut,
   move,
   tags,
   copy,
@@ -231,6 +234,9 @@ function ActiveSessionTaskMenu({
   const item = (key: string, action: () => void, disabled = false) => (
     <DropdownMenuItem className={MENU_ITEM_CLASS} disabled={disabled} onSelect={action}>
       {t(`ccAgent.sidebar.sessionMenu.${key}`)}
+      {key === 'openInNewWindow' && openInNewWindowShortcut ? (
+        <DropdownMenuShortcut aria-hidden>{openInNewWindowShortcut}</DropdownMenuShortcut>
+      ) : null}
     </DropdownMenuItem>
   );
   const separator = <DropdownMenuSeparator />;

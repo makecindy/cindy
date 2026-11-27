@@ -12,6 +12,7 @@ import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore'
 import { TaskTagEditor, TaskTagMenuSection } from '@/features/task-tags/TaskTags';
 import { buildSessionDeepLink } from '@/lib/deepLink';
 import { createLogger } from '@/lib/logger';
+import { getSidebarNewWindowShortcutKey } from '@/lib/sidebarNewWindowActivation';
 import { toast } from '@/lib/toast';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { isEmptyDraftSession } from '../lib/sessionDisplayTitle';
@@ -28,7 +29,6 @@ export {
   buildFallbackSessionFromSearchSummary,
   canOpenSearchResultTaskMenu,
   CONVERSATION_SEARCH_KEEPALIVE_SELECTOR,
-  shouldOpenSearchResultInNewWindow,
   useHydratedSearchSession,
   type SearchResultSelectOptions,
   type SearchResultTaskMenuActions,
@@ -298,6 +298,7 @@ export function SearchResultTaskMenu({
             onUnarchive={handleUnarchiveSelect}
             onDelete={handleDeleteSelect}
             onOpenInNewWindow={handleOpenInNewWindowSelect}
+            openInNewWindowShortcut={t(getSidebarNewWindowShortcutKey())}
             move={moveToProjectSubmenu}
             tags={tagMenu}
             copy={copySessionIdSubmenu}

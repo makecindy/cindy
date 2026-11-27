@@ -48,7 +48,6 @@ import {
 import {
   canOpenSearchResultTaskMenu,
   CONVERSATION_SEARCH_KEEPALIVE_SELECTOR,
-  shouldOpenSearchResultInNewWindow,
   useHydratedSearchSession,
   type SearchResultSelectOptions,
   type SearchResultTaskMenuActions,
@@ -113,6 +112,11 @@ import {
   getRemoteProjectMachineIdentity,
   projectDisplayLabelWithMachine,
 } from '../lib/remoteProjectIdentity';
+import {
+  isSidebarNewWindowActivation,
+  openTargetInNewWindow,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 
 const DEBOUNCE_MS = 250;
 const SEMANTIC_SEARCH_DEBOUNCE_MS = 900;
@@ -601,27 +605,23 @@ export function useConversationSearch({
           remoteProjectsStore.pinSessionOrigin(remoteDeviceId, item.session.id);
         }
         const hit = hitOverride ?? item.contentHit;
-        if (options?.openInNewWindow) {
-          const openInNewWindow = window.electronAPI?.maker?.openSessionInNewWindow;
-          if (openInNewWindow) {
-            onResultChosen?.();
-            try {
-              await openInNewWindow(
-                item.session.id,
-                remoteDeviceId,
-                hit?.messageClientId ?? null,
-              );
-            } catch {
-              // Opening a secondary window is independent of search state; keep results intact.
-            }
-            return;
-          }
-        }
-        const baseRoute = standardSessionRoute(item.session.id, remoteDeviceId);
         // popover 形态:onResultChosen 关闭面板并通知托盘(SidebarActionBar 减 openChildCount),
         // 两种形态都保留 query。内联展开态不传 onResultChosen，
         // 结果 overlay 继续显示,用户可连续点开多条结果;只有点搜索区域以外才收起(见 conversationSearchContext)。
         onResultChosen?.();
+        if (options?.openInNewWindow) {
+          try {
+            await openTargetInNewWindow(
+              item.session.id,
+              remoteDeviceId,
+              hit?.messageClientId || null,
+            );
+          } catch {
+            // Opening a secondary window is independent of search state; keep results intact.
+          }
+          return;
+        }
+        const baseRoute = standardSessionRoute(item.session.id, remoteDeviceId);
         navigate(baseRoute, {
           state: hit
             ? {
@@ -1631,7 +1631,7 @@ function SearchResultRow({
   });
 
   const isSharedGuest = isSharedTaskPeer(resolvedSession.deviceLinkDeviceId ?? '');
-  const remoteWritesBlocked = isSharedGuest || isRemoteSessionWriteBlocked(resolvedSession);
+  const remoteDisconnected = isRemoteSessionWriteBlocked(resolvedSession);
   const splitDragEnabled =
     !isSharedGuest &&
     menuPos === null &&
@@ -1748,13 +1748,13 @@ function SearchResultRow({
 
   const handleOpenInNewWindowClick = useCallback(
     (hitOverride?: ConversationSearchResultItem['contentHit']) => {
-      if (remoteWritesBlocked) {
+      if (remoteDisconnected) {
         toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
         return;
       }
       void onSelect(item, hitOverride, { openInNewWindow: true });
     },
-    [item, onSelect, remoteWritesBlocked, t],
+    [item, onSelect, remoteDisconnected, t],
   );
 
   const handleDragPointerDownCapture = useCallback((event: ReactPointerEvent<HTMLElement>) => {
@@ -1906,8 +1906,9 @@ function SearchResultRow({
             ref={rowButtonRef}
             type="button"
             {...dragProps}
+            onMouseDown={preventMiddleClickAutoscroll}
             onClick={(event) => {
-              if (shouldOpenSearchResultInNewWindow(event)) {
+              if (isSidebarNewWindowActivation(event)) {
                 event.preventDefault();
                 handleOpenInNewWindowClick();
                 return;
@@ -1917,6 +1918,7 @@ function SearchResultRow({
             onAuxClick={(event) => {
               if (event.button !== 1) return;
               event.preventDefault();
+              event.stopPropagation();
               handleOpenInNewWindowClick();
             }}
             className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left"
@@ -2004,9 +2006,13 @@ function SearchHitRow({
     <button
       type="button"
       {...dragProps}
+      onMouseDown={(event) => {
+        event.stopPropagation();
+        preventMiddleClickAutoscroll(event);
+      }}
       onClick={(event) => {
         event.stopPropagation();
-        if (shouldOpenSearchResultInNewWindow(event)) {
+        if (isSidebarNewWindowActivation(event)) {
           event.preventDefault();
           onOpenInNewWindow();
           return;

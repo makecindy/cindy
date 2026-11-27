@@ -475,6 +475,17 @@ test("changed paths resolve to the rules that govern them", () => {
 	for (const [file, rule] of [
 		["apps/desktop/src/main/logger.ts", "docs/dev-rules/log-upload-and-redaction.md"],
 		["packages/maker-core/src/agents/pi/index.ts", "docs/dev-rules/pi-harness.md"],
+		["packages/maker-core/src/agents/acp/session.ts", "docs/dev-rules/acp-plugin-harness.md"],
+		["packages/maker-core/src/agents/acp/session.ts", "docs/dev-rules/maker-core-and-agent-behavior.md"],
+		["apps/desktop/src/main/cindy-brain/pluginHarnesses.ts", "docs/dev-rules/acp-plugin-harness.md"],
+		["apps/desktop/src/main/cindy-brain/pluginHarnesses.ts", "docs/dev-rules/plugin-security-and-authoring.md"],
+		["apps/desktop/src/main/plugin-engine-accounts/runtime.ts", "docs/dev-rules/acp-plugin-harness.md"],
+		["apps/desktop/src/renderer/components/new-chat/PluginEnginesSection.tsx", "docs/product-rules/plugin-engines-and-models.md"],
+		["apps/desktop/src/renderer/components/new-chat/PluginEnginesSection.tsx", "docs/product-rules/model-selector-unified.md"],
+		["apps/desktop/src/renderer/components/new-chat/PluginModelsSection.tsx", "docs/product-rules/plugin-engines-and-models.md"],
+		["apps/desktop/src/renderer/components/new-chat/PluginModelsSection.tsx", "docs/product-rules/model-selector-unified.md"],
+		["apps/mobile/src/session/pluginEngines.ts", "docs/product-rules/plugin-engines-and-models.md"],
+		["apps/mobile/src/session/pluginEngines.ts", "docs/product-rules/model-selector-unified.md"],
 		["apps/desktop/src/main/cindy-brain/index.ts", "docs/dev-rules/plugin-security-and-authoring.md"],
 	]) {
 		assert.ok(filesFor(file).includes(rule), `${file} should surface ${rule}`);

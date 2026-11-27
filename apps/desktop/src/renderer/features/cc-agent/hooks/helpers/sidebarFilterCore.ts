@@ -446,15 +446,35 @@ export function persistHideAutomations(hide: boolean, mode: TaskListMode): void 
   }
 }
 
+const HIDE_TASK_CREATED_KEYS: Record<TaskListMode, string> = {
+  tasks: 'cc-agent.sidebar.filter.hideTaskCreated',
+  inbox: 'cc-agent.sidebar.filter.inbox.hideTaskCreated',
+};
+
+export function loadHideTaskCreated(mode: TaskListMode): boolean {
+  try { return safeStorage()?.getItem(HIDE_TASK_CREATED_KEYS[mode]) === 'true'; } catch { return false; }
+}
+
+export function persistHideTaskCreated(hide: boolean, mode: TaskListMode): void {
+  try {
+    if (hide) safeStorage()?.setItem(HIDE_TASK_CREATED_KEYS[mode], 'true');
+    else safeStorage()?.removeItem(HIDE_TASK_CREATED_KEYS[mode]);
+  } catch (err) {
+    log.warn('[useSidebarFilter] failed to persist task-created filter:', err);
+  }
+}
+
 export function sidebarContentFilterCount(filter: {
   projects: FilterProjects;
   vendor: FilterVendor;
   lastActivity: FilterLastActivity;
   creators: FilterCreators;
   hideAutomations: boolean;
+  hideTaskCreated?: boolean;
 }): number {
   return Number(filter.projects !== 'all') + Number(filter.vendor !== 'all')
-    + Number(filter.lastActivity !== 'all') + Number(filter.creators !== 'all') + (filter.hideAutomations ? 1 : 0);
+    + Number(filter.lastActivity !== 'all') + Number(filter.creators !== 'all')
+    + (filter.hideAutomations ? 1 : 0) + (filter.hideTaskCreated ? 1 : 0);
 }
 
 /* ============================== groupDevice load/persist ============================== */

@@ -5,7 +5,8 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useRef, useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import * as groupChatContract from '@cindy/maker-shared/botGroupChat';
 import type { VoiceInputRendererEvent } from '@cindy/voice-input-core';
 import type { VoiceInputShortcut } from '@/voice-input/shortcut';
 import type { BotGroupComposerHandle, BotGroupOutboxEntry } from '../botGroupOutbox';
@@ -129,8 +130,15 @@ describe('group textarea dictation ownership (#6650)', () => {
   // discussion_r4560895069 / unit: real Composer + voice hooks + mask Provider.
   // Keyboard tests do not cover either shared voice start entry. Assert the
   // participate wire action and paused projection before any ASR text arrives;
-  // always delegation must retain the Provider's existing exception.
-  it.each(['scheduled', 'manual', 'always'] as const)('applies %s participation rules to microphone and shortcut starts', async triggerMode => {
+  // always delegation must retain the Provider's existing exception. #13080:
+  // the same mic/shortcut start with legacy settings must not write while paused.
+  it.each(['scheduled', 'manual', 'always', 'paused'] as const)('applies %s participation rules to microphone and shortcut starts', async mode => {
+    const paused = mode === 'paused';
+    const triggerMode = paused ? 'scheduled' : mode;
+    if (!paused) {
+      const enabled = vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(true);
+      onTestFinished(() => enabled.mockRestore());
+    }
     for (const entry of ['button', 'shortcut'] as const) {
       let state: ChatMaskState = {
         revision: 1, status: 'enabled', manualRunning: true,
@@ -152,11 +160,11 @@ describe('group textarea dictation ownership (#6650)', () => {
       }
       const view = render(<MemoryRouter><Tooltip.Provider><GroupMaskProvider groupId="group">
         <Projection />
-        <BotGroupComposer groupId="group" draftKey={`mask-voice-${triggerMode}-${entry}`} mode={entry === 'button' ? 'group' : 'thread'}
+        <BotGroupComposer groupId="group" draftKey={`mask-voice-${mode}-${entry}`} mode={entry === 'button' ? 'group' : 'thread'}
           members={[]} running={false} sendReply={vi.fn()} />
       </GroupMaskProvider></Tooltip.Provider></MemoryRouter>);
       await act(async () => {});
-      expect(screen.getByTestId('mask-projection').textContent).toBe('enabled:true');
+      expect(screen.getByTestId('mask-projection').textContent).toBe(paused ? ':undefined' : 'enabled:true');
       const textbox = screen.getByRole('textbox') as HTMLTextAreaElement;
       act(() => textbox.focus());
       const starts = api.start.mock.calls.length;
@@ -165,8 +173,9 @@ describe('group textarea dictation ownership (#6650)', () => {
         else trigger('start');
       });
       expect(api.start).toHaveBeenCalledTimes(starts + 1);
-      expect(mask.mock.calls.filter(([request]) => request.action?.type === 'participate')).toHaveLength(triggerMode === 'always' ? 0 : 1);
-      expect(screen.getByTestId('mask-projection').textContent).toBe(triggerMode === 'always' ? 'enabled:true' : 'paused:false');
+      expect(mask.mock.calls.filter(([request]) => request.action?.type === 'participate')).toHaveLength(paused || triggerMode === 'always' ? 0 : 1);
+      if (paused) expect(mask).not.toHaveBeenCalled();
+      expect(screen.getByTestId('mask-projection').textContent).toBe(paused ? ':undefined' : triggerMode === 'always' ? 'enabled:true' : 'paused:false');
       act(() => { submit(); refine(); emit({ type: 'state', runId: 'run', state: 'done' }); });
       expect(textbox.value).toBe('Spoken.');
       view.unmount();

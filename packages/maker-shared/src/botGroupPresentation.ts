@@ -4,10 +4,15 @@
  * 该用哪一句文案（各端按自己的 i18n 命名空间拼 key）。只依赖群聊契约，不碰 React 与 IPC。
  */
 import { RichAnswerStream, splitRichAnswer, richMarkdown, richString, richLabel, richResolvedValues, richChart, richOptions, richCalculationUnavailable } from './richAnswer.js';
+import { readBotGroupProcessCard } from './botGroupProcess.js';
+import { readBotGroupQuoteCard } from './botGroupQuote.js';
+import { readBotGroupLiveTaskCard, readBotGroupTaskCard } from './botGroupTask.js';
+import { isPrHost } from './sessionPrRefs.js';
 import {
   isBotGroupPlanOpen,
   isBotGroupCapabilityNoticeCode,
   readBotGroupRuntimeFailureReason,
+  readBotGroupThreadShareCard,
   type BotGroupDetail,
   type BotGroupErrorCode,
   type BotGroupExecutionFailureView,
@@ -18,6 +23,9 @@ import {
   type BotGroupPlanView,
   type BotGroupReplyMode,
   type BotGroupSummary,
+  type BotGroupThreadCodeRef,
+  type BotGroupThreadRootKind,
+  type BotGroupThreadSummary,
 } from './botGroupChat.js';
 
 interface ChatGroupNamedMember {
@@ -118,6 +126,77 @@ export function botGroupMemberNames(
 /** Collapse whitespace so a multi-line message fits a one-line preview. */
 export function botGroupPreviewLine(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+/** Leading names shown inline before a collapsed join run summarizes the rest. */
+export const BOT_GROUP_JOIN_SUMMARY_NAMES = 2;
+
+export function isBotGroupMemberJoinedNotice(
+  message: Pick<BotGroupMessageView, 'kind' | 'authorKind' | 'noticeCode' | 'deleted' | 'threadRootId'>,
+): boolean {
+  return !message.deleted
+    && !message.threadRootId
+    && message.kind === 'notice'
+    && message.authorKind === 'system'
+    && message.noticeCode === 'member-joined';
+}
+
+export interface BotGroupCollapsedMemberJoins<M> {
+  /** Timeline messages with consecutive `member-joined` runs reduced to their first message. */
+  messages: M[];
+  /** Deduplicated joined names (in order of first appearance) keyed by the run's representative message id. */
+  joinedNamesByMessageId: ReadonlyMap<string, readonly string[]>;
+}
+
+/**
+ * Collapses consecutive `member-joined` system notices into one representative row so mass joins
+ * never flood the timeline. Anchoring on the first message preserves React keys and expansion state
+ * while more members join, and keeps date dividers attached to real conversation days.
+ */
+export function collapseBotGroupMemberJoined<
+  M extends Pick<BotGroupMessageView, 'id' | 'kind' | 'authorKind' | 'authorName' | 'noticeCode' | 'deleted' | 'threadRootId'>,
+>(messages: readonly M[]): BotGroupCollapsedMemberJoins<M> {
+  const collapsed: M[] = [];
+  const joinedNamesByMessageId = new Map<string, readonly string[]>();
+  let runAnchor: M | null = null;
+  let runNames: string[] = [];
+  let runSeen: Set<string> | null = null;
+  let runLength = 0;
+
+  const flush = () => {
+    if (runAnchor && runLength > 1) {
+      joinedNamesByMessageId.set(runAnchor.id, runNames);
+    }
+    runAnchor = null;
+    runNames = [];
+    runSeen = null;
+    runLength = 0;
+  };
+
+  for (const message of messages) {
+    const name = isBotGroupMemberJoinedNotice(message) ? message.authorName.trim() : '';
+    if (name) {
+      if (!runAnchor) {
+        runAnchor = message;
+        runNames = [name];
+        runSeen = new Set([name]);
+        runLength = 1;
+        collapsed.push(message);
+      } else {
+        runLength += 1;
+        if (!runSeen!.has(name)) {
+          runSeen!.add(name);
+          runNames.push(name);
+        }
+      }
+      continue;
+    }
+    flush();
+    collapsed.push(message);
+  }
+  flush();
+
+  return { messages: collapsed, joinedNamesByMessageId };
 }
 
 /** New arrivals below a reader's viewport, excluding history pages and repeat snapshots. */
@@ -565,4 +644,282 @@ export function botGroupQueueWindow(plan: BotGroupPlanView): { start: number; en
   const active = plan.steps.findIndex((step) => step.status !== 'done' && step.status !== 'skipped');
   const start = Math.min(Math.max((active < 0 ? count - 1 : active) - 1, 0), count - QUEUE_VISIBLE_STEPS);
   return { start, end: start + QUEUE_VISIBLE_STEPS };
+}
+
+// ---- In-group 话题 index (Desktop + Mobile) ---------------------------------------------
+
+export type BotGroupThreadFilter = 'mine' | 'all';
+
+/** Threads the reader participated in, was mentioned in (read or unread), or explicitly follows. */
+export function isBotGroupThreadMine(thread: BotGroupThreadSummary): boolean {
+  return thread.participated === true
+    || thread.mentionedMe === true
+    || thread.following === true
+    || thread.unread.mentioned === true;
+}
+
+/** Quiet actionable-unread gate: only unread @mentions or unread replies in followed threads. */
+export function isBotGroupThreadActionable(thread: BotGroupThreadSummary, openRootId: string | null = null): boolean {
+  return thread.rootId !== openRootId
+    && thread.unread.count > 0
+    && (thread.unread.mentioned === true || thread.following === true);
+}
+
+/** True when any thread in the group has an actionable unread reply (drives the quiet header dot). */
+export function hasActionableGroupThreads(
+  threads: readonly BotGroupThreadSummary[] | undefined,
+  openRootId: string | null = null,
+): boolean {
+  return Boolean(threads?.some(thread => isBotGroupThreadActionable(thread, openRootId)));
+}
+
+/** Chronological anchor for sorting the thread index (newest activity first). */
+export function botGroupThreadActivityAt(thread: BotGroupThreadSummary): number {
+  const candidates = [thread.lastReply?.createdAt, thread.lastMention?.createdAt, thread.rootCreatedAt];
+  return candidates.reduce<number>((latest, value) => (typeof value === 'number' && Number.isFinite(value) ? Math.max(latest, value) : latest), 0);
+}
+
+const THREAD_GH_CODE_REF_RE =
+  /https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(pull|issues)\/([1-9]\d*)\b/gi;
+const THREAD_GL_CODE_REF_RE =
+  /https:\/\/([^/\s<>"'`]+)\/((?:[A-Za-z0-9_.-]+\/)+)([A-Za-z0-9_.-]+)\/-\/(merge_requests|issues)\/([1-9]\d*)\b/gi;
+
+/**
+ * Deterministically extracts GitHub PR/Issue and GitLab MR/Issue URLs from thread texts.
+ * Callers pass texts newest-first (latest replies -> older replies -> root) so the first item
+ * of each kind is the thread's most recent PR or Issue. Bare `#123` mentions are never guessed.
+ */
+export function extractBotGroupThreadCodeRefs(
+  texts: readonly string[],
+  limit = 8,
+): BotGroupThreadCodeRef[] {
+  const seen = new Set<string>();
+  const refs: BotGroupThreadCodeRef[] = [];
+  for (const text of texts) {
+    if (!text) continue;
+    const candidates: Array<{ index: number; ref: BotGroupThreadCodeRef }> = [];
+    for (const match of text.matchAll(THREAD_GH_CODE_REF_RE)) {
+      const owner = match[1]!.toLowerCase();
+      const repo = match[2]!.replace(/\.git$/i, '').toLowerCase();
+      const kind: 'issue' | 'pr' = match[3]!.toLowerCase() === 'pull' ? 'pr' : 'issue';
+      const number = Number(match[4]);
+      if (!Number.isSafeInteger(number) || number <= 0) continue;
+      if (`${owner}/${repo}`.split('/').some(part => part === '.' || part === '..')) continue;
+      candidates.push({
+        index: match.index ?? 0,
+        ref: {
+          kind,
+          provider: 'github',
+          host: 'github.com',
+          owner,
+          repo,
+          number,
+          url: `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${kind === 'pr' ? 'pull' : 'issues'}/${number}`,
+        },
+      });
+    }
+    for (const match of text.matchAll(THREAD_GL_CODE_REF_RE)) {
+      const host = match[1]!.toLowerCase();
+      const owner = match[2]!.slice(0, -1).toLowerCase();
+      const repo = match[3]!.toLowerCase();
+      const kind: 'issue' | 'pr' = match[4]!.toLowerCase() === 'merge_requests' ? 'pr' : 'issue';
+      const number = Number(match[5]);
+      if (!isPrHost(host) || !Number.isSafeInteger(number) || number <= 0) continue;
+      if (`${owner}/${repo}`.split('/').some(part => part === '.' || part === '..')) continue;
+      const project = `${owner}/${repo}`.split('/').map(encodeURIComponent).join('/');
+      candidates.push({
+        index: match.index ?? 0,
+        ref: {
+          kind,
+          provider: 'gitlab',
+          host,
+          owner,
+          repo,
+          number,
+          url: `https://${host}/${project}/-/${kind === 'pr' ? 'merge_requests' : 'issues'}/${number}`,
+        },
+      });
+    }
+    for (const { ref } of candidates.sort((a, b) => a.index - b.index)) {
+      const key = `${ref.kind}:${ref.provider ?? 'github'}:${(ref.host ?? 'github.com').toLowerCase()}/${ref.owner}/${ref.repo}#${ref.number}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      refs.push(ref);
+      if (refs.length >= limit) return refs;
+    }
+  }
+  return refs;
+}
+
+/** Extracts PR/Issue links from structured chat messages (newest-first), skipping quote/process cards and including task-card PR URLs. */
+export function extractBotGroupThreadCodeRefsFromMessages(
+  messages: readonly {
+    content: readonly {
+      type?: unknown;
+      text?: unknown;
+      fallback?: unknown;
+      namespace?: unknown;
+      schemaRevision?: unknown;
+      data?: unknown;
+    }[];
+  }[],
+  limit = 8,
+): BotGroupThreadCodeRef[] {
+  const texts: string[] = [];
+  for (const message of messages) {
+    for (const block of message.content) {
+      if (block.type === 'media') continue;
+      if (readBotGroupQuoteCard(block) || readBotGroupProcessCard(block) || readBotGroupTaskCard(block)) continue;
+      const liveTask = readBotGroupLiveTaskCard(block);
+      if (liveTask) {
+        if (liveTask.prUrl) texts.push(liveTask.prUrl);
+        continue;
+      }
+      const value = typeof block.text === 'string'
+        ? block.text
+        : typeof block.fallback === 'string'
+          ? block.fallback
+          : '';
+      if (value) texts.push(value);
+    }
+  }
+  return extractBotGroupThreadCodeRefs(texts, limit);
+}
+
+/** Picks at most 1 latest Issue and 1 latest PR for compact sidebar-style row display. */
+export function pickBotGroupThreadDisplayRefs(
+  refs: readonly BotGroupThreadCodeRef[] | undefined,
+): { issue: BotGroupThreadCodeRef | null; pr: BotGroupThreadCodeRef | null } {
+  if (!refs?.length) return { issue: null, pr: null };
+  let issue: BotGroupThreadCodeRef | null = null;
+  let pr: BotGroupThreadCodeRef | null = null;
+  for (const ref of refs) {
+    if (ref.kind === 'issue' && !issue) issue = ref;
+    else if (ref.kind === 'pr' && !pr) pr = ref;
+    if (issue && pr) break;
+  }
+  return { issue, pr };
+}
+
+/** Compact number label matching sidebar PR chips (`#13107` / `!42`). */
+export function botGroupCodeRefLabel(
+  ref: Pick<BotGroupThreadCodeRef, 'kind' | 'provider' | 'number'>,
+): string {
+  return `${ref.kind === 'pr' && ref.provider === 'gitlab' ? '!' : '#'}${ref.number}`;
+}
+
+const IMAGE_MEDIA_EXT_RE = /\.(?:png|jpe?g|gif|webp|heic|heif|bmp|svg|avif)$/i;
+const VIDEO_MEDIA_EXT_RE = /\.(?:mp4|mov|m4v|webm|mkv|avi)$/i;
+const AUDIO_MEDIA_EXT_RE = /\.(?:mp3|m4a|wav|ogg|opus|aac|flac|amr)$/i;
+
+export interface BotGroupThreadRootFallback {
+  kind: BotGroupThreadRootKind;
+  text: string;
+}
+
+/**
+ * Classifies a non-text thread root message (task card, share card, media, or other card)
+ * so the thread list can show its type/title instead of falling back to "No text".
+ */
+export function describeBotGroupThreadRootFallback(message: {
+  deleted?: unknown;
+  threadRootId?: unknown;
+  author?: { kind?: unknown };
+  content: readonly {
+    type?: unknown;
+    namespace?: unknown;
+    schemaRevision?: unknown;
+    data?: unknown;
+    caption?: unknown;
+    mimeType?: unknown;
+  }[];
+}): BotGroupThreadRootFallback | null {
+  if (message.deleted === true) return null;
+  if (message.author?.kind === 'bot') {
+    const liveTask = message.content.map(readBotGroupLiveTaskCard).find(Boolean);
+    if (liveTask) return { kind: 'task', text: liveTask.title.trim() };
+    const task = message.content.map(readBotGroupTaskCard).find(Boolean);
+    if (task) return { kind: 'task', text: task.title.trim() };
+  }
+  if (readBotGroupThreadShareCard(message)) return { kind: 'share', text: '' };
+  const media = message.content.find(block => block.type === 'media');
+  if (media) {
+    const caption = typeof media.caption === 'string' ? media.caption.trim() : '';
+    const mime = typeof media.mimeType === 'string' ? media.mimeType.toLowerCase() : '';
+    const kind: BotGroupThreadRootKind = mime.startsWith('image/') || IMAGE_MEDIA_EXT_RE.test(caption)
+      ? 'image'
+      : mime.startsWith('video/') || VIDEO_MEDIA_EXT_RE.test(caption)
+        ? 'video'
+        : mime.startsWith('audio/') || AUDIO_MEDIA_EXT_RE.test(caption)
+          ? 'audio'
+          : 'file';
+    return { kind, text: caption };
+  }
+  const otherCard = message.content.find(block => block.type === 'card' && !readBotGroupQuoteCard(block) && !readBotGroupProcessCard(block));
+  if (otherCard) return { kind: 'card', text: '' };
+  return null;
+}
+
+/** Formats a thread row's single-line title, identifying non-text roots by type/title. */
+export function formatBotGroupThreadRootTitle(
+  thread: Pick<BotGroupThreadSummary, 'rootText' | 'rootKind'>,
+  labels: {
+    kinds: Record<BotGroupThreadRootKind, string>;
+    empty: string;
+  },
+): string {
+  const text = thread.rootText.trim();
+  if (!thread.rootKind) return text || labels.empty;
+  const tag = `[${labels.kinds[thread.rootKind]}]`;
+  if (thread.rootKind === 'image' || thread.rootKind === 'video' || thread.rootKind === 'audio') {
+    return tag;
+  }
+  return text ? `${tag} ${text}` : tag;
+}
+
+function matchesBotGroupThreadQuery(thread: BotGroupThreadSummary, needle: string): boolean {
+  if (!needle) return true;
+  const fields = [
+    thread.rootText,
+    thread.rootAuthorName,
+    thread.lastReply?.text,
+    thread.lastReply?.authorName,
+    thread.lastMention?.text,
+    thread.lastMention?.authorName,
+    ...(thread.responders?.map(responder => responder.authorName) ?? []),
+    ...(thread.refs?.flatMap(ref => [botGroupCodeRefLabel(ref), `${ref.owner}/${ref.repo}`]) ?? []),
+  ];
+  return fields.some(field => typeof field === 'string' && field.toLocaleLowerCase().includes(needle));
+}
+
+function compareBotGroupThreadsByActivity(a: BotGroupThreadSummary, b: BotGroupThreadSummary): number {
+  return botGroupThreadActivityAt(b) - botGroupThreadActivityAt(a) || a.rootId.localeCompare(b.rootId);
+}
+
+/**
+ * Projects a group's threads for the quiet in-group 话题 index:
+ * - Filters by scope (`mine` / `all`) and search query.
+ * - Keeps actionable unread threads in a compact leading section without letting old unreads
+ *   corrupt chronological order in the main list.
+ */
+export function filterBotGroupThreads(
+  threads: readonly BotGroupThreadSummary[],
+  filter: BotGroupThreadFilter,
+  query: string,
+  openRootId: string | null = null,
+): { unread: BotGroupThreadSummary[]; recent: BotGroupThreadSummary[] } {
+  const needle = query.trim().toLocaleLowerCase();
+  const matched = threads.filter((thread) => {
+    if (filter === 'mine' && !isBotGroupThreadMine(thread)) return false;
+    return matchesBotGroupThreadQuery(thread, needle);
+  });
+  const unread: BotGroupThreadSummary[] = [];
+  const recent: BotGroupThreadSummary[] = [];
+  for (const thread of matched) {
+    if (isBotGroupThreadActionable(thread, openRootId)) unread.push(thread);
+    else recent.push(thread);
+  }
+  unread.sort(compareBotGroupThreadsByActivity);
+  recent.sort(compareBotGroupThreadsByActivity);
+  return { unread, recent };
 }

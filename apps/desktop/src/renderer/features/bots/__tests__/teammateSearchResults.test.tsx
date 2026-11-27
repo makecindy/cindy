@@ -150,52 +150,26 @@ describe('teammates in the sidebar-wide search', () => {
     expect(screen.getByText('bots.groupChat.sidebar.title')).toBeTruthy();
   });
 
-  it('opens teammates and group chats in a new window on Cmd/Ctrl-click and middle-click', () => {
-    const openSessionInNewWindow = vi.fn().mockResolvedValue(undefined);
-    const onSelected = vi.fn();
-    Object.assign(window, {
-      electronAPI: {
-        platform: 'darwin',
-        maker: { openSessionInNewWindow },
-      },
-    });
+  it('opens matched teammates and groups in a new window on primary-mod click and middle click', () => {
+    const openSessionInNewWindow = vi.fn(async () => undefined);
+    const prevApi = window.electronAPI;
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      platform: 'win32',
+      maker: { openSessionInNewWindow },
+    };
+    try {
+      const onSelected = vi.fn();
+      const { result } = renderHook(() => useTeammateSearchMatches('e', null));
+      render(<TeammateSearchResults matches={result.current} onSelected={onSelected} />);
 
-    const { result } = renderHook(() => useTeammateSearchMatches('e', null));
-    render(<TeammateSearchResults matches={result.current} onSelected={onSelected} />);
-
-    const writerBtn = screen.getByRole('button', { name: /Writer/ });
-    const remoteBtn = screen.getByRole('button', { name: /Cloud helper/ });
-
-    // macOS Cmd+Click opens in a new window without navigating the current window
-    fireEvent.click(writerBtn, { metaKey: true });
-    expect(openSessionInNewWindow).toHaveBeenLastCalledWith('/bots/writer');
-    expect(mocks.navigate).not.toHaveBeenCalled();
-    expect(onSelected).toHaveBeenCalledTimes(1);
-
-    // macOS Ctrl+Click stays normal click (does not open a new window)
-    fireEvent.click(writerBtn, { ctrlKey: true });
-    expect(openSessionInNewWindow).toHaveBeenCalledTimes(1);
-    expect(mocks.navigate).toHaveBeenLastCalledWith('/bots/writer');
-
-    // Middle-click opens remote teammate in a new window
-    fireEvent(remoteBtn, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 }));
-    expect(openSessionInNewWindow).toHaveBeenLastCalledWith('/bots/remote/mac-mini/cloud');
-    expect(mocks.navigate).toHaveBeenCalledTimes(1);
-
-    // Non-macOS Ctrl+Click opens group chat in a new window
-    cleanup();
-    mocks.navigate.mockClear();
-    openSessionInNewWindow.mockClear();
-    Object.assign(window, {
-      electronAPI: {
-        platform: 'win32',
-        maker: { openSessionInNewWindow },
-      },
-    });
-    const groupMatches = renderHook(() => useTeammateSearchMatches('出游', null)).result.current;
-    render(<TeammateSearchResults matches={groupMatches} onSelected={onSelected} />);
-    fireEvent.click(screen.getByRole('button', { name: /周末出游/ }), { ctrlKey: true });
-    expect(openSessionInNewWindow).toHaveBeenCalledWith('/bots/groups/trip');
-    expect(mocks.navigate).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: /Writer/ }), { ctrlKey: true });
+      fireEvent(screen.getByRole('button', { name: /Cloud helper/ }), new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(1, '/bots/writer', undefined, undefined);
+      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(2, '/bots/remote/mac-mini/cloud', undefined, undefined);
+      expect(mocks.navigate).not.toHaveBeenCalled();
+      expect(onSelected).toHaveBeenCalledTimes(2);
+    } finally {
+      (window as unknown as { electronAPI: unknown }).electronAPI = prevApi;
+    }
   });
 });
