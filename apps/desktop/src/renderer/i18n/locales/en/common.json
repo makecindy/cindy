@@ -17548,7 +17548,15 @@
         "scheduleName": "“{{name}}”",
         "scheduleNameSeparator": ", ",
         "confirm": "Archive session",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "deleteSchedules_one": "Delete linked automation",
+        "deleteSchedules_other": "Delete linked automations",
+        "deleteScheduleWarning_one": "The linked automation {{names}} will be deleted and cannot be restored.",
+        "deleteScheduleWarning_other": "The linked automations {{names}} will be deleted and cannot be restored.",
+        "deleteSchedulesAndArchive": "Delete and archive",
+        "discardDeleteAndArchive": "Discard, delete, and archive",
+        "deleteScheduleFailed_one": "Task archived, but failed to delete the linked automation. Delete it in Automations.",
+        "deleteScheduleFailed_other": "Task archived, but failed to delete {{count}} linked automations. Delete them in Automations."
       },
       "dialogueAction": {
         "search": "Search This Chat Group",

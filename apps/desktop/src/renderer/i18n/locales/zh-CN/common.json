@@ -17473,7 +17473,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "确认",
-        "cancel": "取消"
+        "cancel": "取消",
+        "deleteSchedules_one": "删除关联的自动化",
+        "deleteSchedules_other": "删除关联的自动化",
+        "deleteScheduleWarning_one": "关联的自动化{{names}}将被删除，无法恢复。",
+        "deleteScheduleWarning_other": "关联的自动化{{names}}将被删除，无法恢复。",
+        "deleteSchedulesAndArchive": "删除并归档",
+        "discardDeleteAndArchive": "丢弃、删除并归档",
+        "deleteScheduleFailed_one": "任务已归档，但未能删除关联的自动化，请前往自动化页面手动删除。",
+        "deleteScheduleFailed_other": "任务已归档，但未能删除 {{count}} 个关联的自动化，请前往自动化页面手动删除。"
       },
       "dialogueAction": {
         "search": "在此对话组中搜索",

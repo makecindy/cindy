@@ -17548,7 +17548,15 @@
         "scheduleName": "“{{name}}”",
         "scheduleNameSeparator": ", ",
         "confirm": "Bestätigen",
-        "cancel": "Abbrechen"
+        "cancel": "Abbrechen",
+        "deleteSchedules_one": "Verknüpfte Automatisierung löschen",
+        "deleteSchedules_other": "Verknüpfte Automatisierungen löschen",
+        "deleteScheduleWarning_one": "Die verknüpfte Automatisierung {{names}} wird gelöscht und kann nicht wiederhergestellt werden.",
+        "deleteScheduleWarning_other": "Die verknüpften Automatisierungen {{names}} werden gelöscht und können nicht wiederhergestellt werden.",
+        "deleteSchedulesAndArchive": "Löschen und archivieren",
+        "discardDeleteAndArchive": "Verwerfen, löschen und archivieren",
+        "deleteScheduleFailed_one": "Aufgabe archiviert, aber die verknüpfte Automatisierung konnte nicht gelöscht werden. Bitte unter Automatisierungen löschen.",
+        "deleteScheduleFailed_other": "Aufgabe archiviert, aber {{count}} verknüpfte Automatisierungen konnten nicht gelöscht werden. Bitte unter Automatisierungen löschen."
       },
       "dialogueAction": {
         "search": "Diese Chatgruppe durchsuchen",

@@ -17473,7 +17473,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "善",
-        "cancel": "罢"
+        "cancel": "罢",
+        "deleteSchedules_one": "删所关联之自运",
+        "deleteSchedules_other": "删所关联之自运",
+        "deleteScheduleWarning_one": "所关联之自运{{names}}将被删除，不可复原。",
+        "deleteScheduleWarning_other": "所关联之自运{{names}}将被删除，不可复原。",
+        "deleteSchedulesAndArchive": "删而归档",
+        "discardDeleteAndArchive": "弃、删并归档",
+        "deleteScheduleFailed_one": "差事已封存，惟未能删除所关联之自运，请往自运页手动删除。",
+        "deleteScheduleFailed_other": "差事已封存，惟未能删除 {{count}} 项所关联之自运，请往自运页手动删除。"
       },
       "dialogueAction": {
         "search": "于言谈中寻",
