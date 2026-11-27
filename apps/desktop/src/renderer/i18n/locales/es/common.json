@@ -1894,8 +1894,7 @@
       "ariaLabel": "Buscar en la configuración",
       "placeholder": "Buscar en la configuración",
       "resultsLabel": "Resultados de búsqueda de configuración",
-      "noResults": "No se encontraron configuraciones. Prueba con otra palabra clave.",
-      "clear": "Borrar búsqueda"
+      "noResults": "No se encontraron configuraciones. Prueba con otra palabra clave."
     },
     "back": "Atrás",
     "defaults": {
@@ -5588,6 +5587,27 @@
           "description": "Esto eliminará permanentemente todos los recuerdos que {{label}} haya acumulado en cada proyecto. Esta acción no se puede deshacer.",
           "confirm": "Restablecer",
           "cancel": "Cancelar"
+        }
+      },
+      "tidy": {
+        "label": "Limpieza de memoria y Skills",
+        "description": "Depura y compacta periódicamente en segundo plano la memoria y las Skills de tus Buddies. Solo se ejecuta cuando hay suficiente actividad nueva, no consume recursos si no hay cambios y no deja tareas residuales.",
+        "cadenceLabel": "Frecuencia de limpieza",
+        "cadences": {
+          "weekly": "Semanal",
+          "biweekly": "Cada 2 semanas",
+          "monthly": "Mensual",
+          "off": "Desactivada (solo manual)"
+        },
+        "runNow": "Limpiar ahora",
+        "running": "Limpiando…",
+        "toast": {
+          "cadenceSaved": "Frecuencia de limpieza actualizada",
+          "cadenceFailed": "No se pudo actualizar la frecuencia de limpieza",
+          "updated": "Limpieza completada ({{count}} actualizados)",
+          "idle": "No hizo falta limpiar nada",
+          "skipped": "No hay Buddies pendientes de limpieza",
+          "failed": "Error al limpiar la memoria"
         }
       }
     },
@@ -9999,6 +10019,49 @@
         "identity": "Es necesario revisar la identidad del directorio",
         "failed": "No se pudo completar la limpieza",
         "pending": "En cola"
+      },
+      "remote": {
+        "title": "Worktrees remotos pendientes",
+        "description": "Los worktrees remotos sin limpiar bloquean la creación de uno nuevo en el mismo dispositivo hasta que la limpieza tenga éxito o decidas conservar el directorio remoto.",
+        "storageUnreadable": "No se pudo leer el registro de limpieza de worktrees remotos. La creación de nuevos worktrees remotos está pausada hasta que se recupere el almacenamiento local.",
+        "sessionLabel": "Tarea {{id}}",
+        "keepUnblock": "Conservar directorio y desbloquear",
+        "confirmKeepTitle": "¿Conservar el directorio del worktree remoto y desbloquear?",
+        "confirmKeepDescription": "Esto borra el registro local de limpieza para que puedas volver a crear worktrees en {{device}}. El directorio en el dispositivo remoto no se eliminará.",
+        "confirmKeepConfirm": "Conservar y desbloquear",
+        "retrySuccess": "Worktree remoto limpiado.",
+        "keepSuccess": "Registro de limpieza borrado. Ya puedes crear nuevos worktrees remotos.",
+        "keepFailed": "No se pudo borrar el registro de limpieza. Actualiza e inténtalo de nuevo.",
+        "phase": {
+          "reserved": "Creación sin confirmar",
+          "precreated": "Pendiente de limpieza",
+          "session-create-started": "Creación de tarea sin confirmar"
+        },
+        "failure": {
+          "offline": "Dispositivo inaccesible o tiempo agotado",
+          "in-progress": "Creación o checkout en curso",
+          "preserved": "Conservado por el dispositivo remoto",
+          "mismatch": "Clave de limpieza no coincidente",
+          "unsupported": "Versión remota de Cindy no compatible",
+          "create-started": "Esperando confirmar la propiedad de la tarea",
+          "storage": "Registro local no disponible",
+          "unknown": "La limpieza no pudo finalizar"
+        },
+        "preserveReason": {
+          "claimed": "Ya está en uso por una tarea",
+          "in-progress": "Creación o checkout en curso",
+          "dirty": "Tiene cambios sin confirmar",
+          "keep-sentinel": "Marcado para conservar (.worktree-keep)",
+          "live-reference": "En uso por otra tarea o proceso",
+          "branch-mismatch": "El estado de la rama o del directorio cambió",
+          "include-files-changed": "Cambiaron archivos de configuración locales",
+          "ignored-files": "Contiene archivos ignorados no reproducibles",
+          "ephemeral": "Directorio de grupo gestionado",
+          "pending-transfer": "Transferencia en curso",
+          "invalid-quarantine": "Estado de cuarentena no válido",
+          "quarantine-failed": "No se pudo aislar el directorio",
+          "remove-failed": "No se pudo eliminar el directorio"
+        }
       }
     },
     "awayFromComputer": {
@@ -10836,7 +10899,6 @@
     "fileBrowser": {
       "noWorkdir": "Esta sesión no tiene un directorio de trabajo local; el explorador de archivos no está disponible",
       "filterPlaceholder": "Filtrar archivos…",
-      "filterClear": "Borrar filtro",
       "filterIndexing": "Indexando archivos del proyecto…",
       "filterNoMatch": "No hay archivos coincidentes",
       "filterRgUnavailable": "ripgrep no está instalado en el equipo remoto; el filtrado por nombre de archivo no está disponible",
@@ -13498,6 +13560,7 @@
   },
   "commonUi": {
     "retry": "Reintentar",
+    "clearSearch": "Borrar búsqueda",
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
@@ -15538,6 +15601,7 @@
         "diverged": "Las ramas local y remota tienen cambios diferentes. Resuelve las diferencias antes de cambiar de rama.",
         "missing": "La rama seleccionada ya no existe. Actualiza la lista.",
         "git": "No se pudo completar la operación. Revisa la rama actual y los cambios guardados antes de reintentar",
+        "timeout": "Se agotó el tiempo al comprobar el estado de Git. Los repositorios grandes o con muchos cambios sin confirmar pueden tardar demasiado; organiza los cambios o usa worktree.",
         "savedMissing": "Estos cambios guardados ya no están disponibles",
         "undoUnavailable": "Ya no se puede deshacer este cambio de rama"
       },
@@ -17349,6 +17413,22 @@
       "piRemoteUnsupported": "Pi solo se ejecuta localmente y no puede usar hosts remotos SSH. Cambia a Claude o Codex para usar este host.",
       "localWorktreeCleanupPending": "La sesión anterior del worktree local sigue pendiente de limpieza. Inténtalo de nuevo cuando termine la limpieza.",
       "remoteWorktreeCleanupPending": "El worktree remoto anterior sigue pendiente de limpieza. Vuelve a conectar el dispositivo e inténtalo de nuevo.",
+      "remoteWorktreeCleanupOpenSettings": "Limpieza de worktrees",
+      "remoteWorktreeCleanup": {
+        "inProgress": "El worktree remoto anterior aún se está creando o descargando. Espera un momento e inténtalo de nuevo, o gestiónalo en Configuración → Almacenamiento.",
+        "preserved": "El dispositivo remoto conservó el worktree anterior (puede tener cambios o seguir en uso). Reinténtalo o desbloquéalo en Configuración → Almacenamiento.",
+        "preservedDirty": "El dispositivo remoto conservó el worktree anterior porque tiene cambios sin confirmar. Revísalo en ese dispositivo o desbloquéalo en Configuración → Almacenamiento.",
+        "preservedKeepSentinel": "El dispositivo remoto conservó el worktree anterior porque está marcado para conservarse (.worktree-keep). Gestiónalo en Configuración → Almacenamiento.",
+        "preservedLiveReference": "El dispositivo remoto conservó el worktree anterior porque otra tarea o proceso aún lo usa. Reinténtalo o desbloquéalo en Configuración → Almacenamiento.",
+        "preservedBranchMismatch": "El dispositivo remoto no pudo verificar el estado de la rama o del directorio del worktree anterior. Reinténtalo o desbloquéalo en Configuración → Almacenamiento.",
+        "preservedIncludeFilesChanged": "El dispositivo remoto conservó el worktree anterior porque cambiaron sus archivos de configuración locales. Reinténtalo o desbloquéalo en Configuración → Almacenamiento.",
+        "preservedIgnoredFiles": "El dispositivo remoto conservó el worktree anterior porque contiene archivos ignorados que no se pueden recrear. Reinténtalo o desbloquéalo en Configuración → Almacenamiento.",
+        "preservedRemoveFailed": "El dispositivo remoto no pudo eliminar el directorio del worktree anterior. Comprueba los permisos o archivos abiertos en ese dispositivo, o desbloquéalo en Configuración → Almacenamiento.",
+        "mismatch": "El dispositivo remoto rechazó la clave de limpieza del worktree. Reinténtalo o desbloquéalo en Configuración → Almacenamiento.",
+        "unsupported": "La versión de Cindy en el dispositivo remoto no admite la limpieza automática de worktrees. Actualiza Cindy allí o desbloquéalo en Configuración → Almacenamiento.",
+        "createStarted": "No se confirmó la creación de la tarea remota anterior. Vuelve a conectar el dispositivo para verificarla o desbloquéalo en Configuración → Almacenamiento.",
+        "storage": "No se pudo leer ni escribir el registro local de limpieza de worktrees remotos. Revisa Configuración → Almacenamiento."
+      },
       "remoteProviderUpdating": "Las credenciales del proveedor se están actualizando. Vuelve a intentarlo en un momento.",
       "remoteProviderUnsupported": "Este proveedor no es compatible con sesiones remotas SSH; elige otra fuente",
       "remoteNativeOauthUnavailable": "Las tareas remotas no pueden usar una suscripción de Claude: elige una puerta de enlace o un modelo con clave API",
