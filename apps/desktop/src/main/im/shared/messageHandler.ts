@@ -49,6 +49,16 @@ import { isLaneTurnScopeChannel, type ChannelToolScope } from './channelToolScop
  */
 export { isStopCommand } from './controlCommands';
 
+/**
+ * Whether the message was sent inside a thread/topic. A message that opens a new topic from
+ * the main stream reads its context from the main stream, so it is not "in" that topic yet.
+ */
+function messageIsInThread(adapter: ImChannelAdapter, event: IMMessageEvent): boolean {
+  if (event.groupContextLane) return event.groupContextLane.threadId !== '';
+  const lane = adapter.companionLane?.(event.senderId);
+  return lane?.kind === 'group' && lane.threadId !== '';
+}
+
 export function createMessageHandler(
   adapter: ImChannelAdapter,
   slash: ImSlashHandlers,
@@ -498,7 +508,7 @@ export function createMessageHandler(
             }
           : undefined);
       const fallbackReplyPrefix = !adapter.prepareAgentTurnText && event.replyContext
-        ? buildImReplyContextBlock(event.replyContext)
+        ? buildImReplyContextBlock(event.replyContext, event.text)
         : '';
       const deliveredReply = prepared?.replyContext ??
         (!adapter.prepareAgentTurnText ? event.replyContext : undefined);
@@ -543,6 +553,7 @@ export function createMessageHandler(
           text: event.text,
           invoked: event.invoked,
           hasReply: !!deliveredReply,
+          inThread: messageIsInThread(adapter, event),
           attachmentCount: event.attachments.length + (prepared?.contextAttachments?.length ?? 0),
           unavailable: [
             ...event.unsupported.map((entry) => `${entry.type}：${entry.label}`),
@@ -596,10 +607,10 @@ export function createMessageHandler(
         });
         if (dispatch.kind === 'busy') event.delivery.defer();
         else if (dispatch.kind === 'rejected') {
-          const text = dispatch.reason === 'missing_auth' ? ui.agent.apiKeyMissing
+          const text = dispatch.notice ?? (dispatch.reason === 'missing_auth' ? ui.agent.apiKeyMissing
             : dispatch.reason === 'companion_unavailable'
               ? ui.agent.companionUnavailable?.(dispatch.reason) ?? ui.agent.runtimeError(dispatch.reason)
-              : ui.agent.sendInternalError(dispatch.reason);
+              : ui.agent.sendInternalError(dispatch.reason));
           try {
             await im.sendText(event.senderId, text, { threadTs: event.scopeKey });
             event.delivery.accept();

@@ -916,6 +916,40 @@ describe("cindy_helper MCP server", () => {
   // Unit through MCP tools/list and tools/call: on 11/19 the user's wording only
   // found runtime settings despite handoff being registered. Follow the result
   // to the existing task, and keep title-only requests on the rename path.
+  // Unit MCP integration: the runtime index/schema previously offered only local
+  // and same-account IDs, so a copied guest link could not reach its Host.
+  // shared-task-mode.md; minimal input is one shared target. No network beyond MCP in-memory transport.
+  it('discovers received shared-task delivery and exposes the same schema over the real MCP entry', async () => {
+    const sendToSession = vi.fn();
+    const sendToSharedTask = vi.fn(async () => ({ ok: true as const,
+      target_session_id: 'cindy://session/task?device=shared', task_link: 'cindy://session/task?device=shared',
+      delivery_id: 'delivery', delivery_state: 'pending' as const, wake_kind: 'queued' as const }));
+    const server = createXdtHelperMcpServer({ sendToSession, sendToSharedTask }, {
+      agentKind: 'codex', workingDir: '/fixture', sessionId: 'mine',
+    });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'shared-handoff', version: '1' });
+    await Promise.all([server.connect(b), client.connect(a)]);
+    try {
+      expect((await client.listTools()).tools.find(tool => tool.name === 'list_tools')?.description).toContain('共享任务');
+      const list = async (args: Record<string, string>) => parsePayload(await client.callTool({ name: 'list_tools', arguments: args }));
+      const tool = (await list({ name: 'send_to_session' })).tool as { description: string; inputSchema: { properties: Record<string, { description: string }> } };
+      expect(tool.description).toContain('delivery_id');
+      expect(tool.inputSchema.properties.target_session_id.description).toContain('复制任务链接');
+      expect(tool.inputSchema.properties.delivery_id.description).toContain('绝不再次发送');
+      expect((await list({ query: '给共享任务发消息' })).items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ key: 'native.send_to_session', availability: 'available' }),
+      ]));
+      expect(parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: 'send_to_session', args: { target_session_id: 'cindy://session/task?device=shared', message: 'Chosen result', delivery_id: 'delivery' },
+      } }))).toMatchObject({ ok: true, wake_kind: 'queued', delivery_id: 'delivery' });
+      expect(sendToSharedTask).toHaveBeenCalledWith(expect.objectContaining({
+        target: 'cindy://session/task?device=shared', message: 'Chosen result', deliveryId: 'delivery', context: expect.objectContaining({ sessionId: 'mine' }),
+      }));
+      expect(sendToSession).not.toHaveBeenCalled();
+    } finally { await client.close(); await server.close(); }
+  });
+
   it("discovers sending to an existing task without exposing it in rename discovery", async () => {
     const sendToSession = vi.fn(async () => ({
       ok: true as const,

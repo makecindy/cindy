@@ -118,22 +118,29 @@ export function previewRemoteCreation(p: RemoteSessionHandoffParams, title: stri
   markSessionStarting(p.remoteSessionId);
   if (title) remoteProjectsStore.setPendingTitlePreview(p.remoteSessionId, title, Boolean(normalizeAutoTitle(message.content)));
   remoteProjectsStore.setPendingFirstSend(p.remoteSessionId, p.nowIso);
-  const attachments = buildUserMessageAttachmentPayload(files);
-  const row = buildProvisionalRemoteSession({
-    sessionId: p.remoteSessionId, workDir: p.workDir ?? '', args: p.createArgs, nowIso: p.nowIso,
-  });
+  const preview = buildTaskCreationPreview(p.remoteSessionId, p.workDir, p.createArgs, p.nowIso, title, message, files);
   remoteProjectsStore.setCreationPreview({
-    row: { ...row, projectDir: p.createArgs.workingDir, title: title || row.title, userSendAt: p.nowIso,
-      deviceLinkDeviceId: p.deviceId, deviceLinkDeviceName: p.deviceName, deviceLinkConnectionStatus: 'connected' },
-    message: { ...message, images: attachments.imageAttachments, files: attachments.fileAttachments },
+    ...preview,
+    row: { ...preview.row, deviceLinkDeviceId: p.deviceId, deviceLinkDeviceName: p.deviceName, deviceLinkConnectionStatus: 'connected' },
   });
 }
 
-export function updateRemoteCreationAttachments(id: string, files: AttachedFile[]): void {
-  const preview = remoteProjectsStore.getCreationPreview(id);
+export function buildTaskCreationPreview(id: string, workDir: string | undefined, args: DeviceLinkCreateArgs,
+  nowIso: string, title: string | null, message: ChatMessage, files?: AttachedFile[]) {
+  const row = buildProvisionalRemoteSession({ sessionId: id, workDir: workDir ?? '', args, nowIso });
+  const attachments = buildUserMessageAttachmentPayload(files);
+  return {
+    row: { ...row, projectDir: args.workingDir, title: title || row.title, userSendAt: nowIso },
+    message: { ...message, images: attachments.imageAttachments, files: attachments.fileAttachments },
+  };
+}
+
+export function updateRemoteCreationAttachments(id: string, files: AttachedFile[],
+  store: Pick<typeof remoteProjectsStore, 'getCreationPreview' | 'setCreationPreview'> = remoteProjectsStore): void {
+  const preview = store.getCreationPreview(id);
   if (!preview) return;
   const { imageAttachments, fileAttachments } = buildUserMessageAttachmentPayload(files);
-  remoteProjectsStore.setCreationPreview({
+  store.setCreationPreview({
     ...preview, message: { ...preview.message, images: imageAttachments, files: fileAttachments },
   });
 }

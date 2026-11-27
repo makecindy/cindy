@@ -1,9 +1,8 @@
 /**
  * Single-consumer async queue — many-producers push + single end().
  *
- * Kept in sync with maker-core/src/agents/shared/async-queue.ts so this
- * package stays zero-internal-deps (manager binary is esbuild-bundled and
- * shipped to remote SSH machines, can't pull in maker-core).
+ * Kept in sync with maker-core/src/agents/shared/async-queue.ts so the
+ * bundled remote daemon can use the queue without pulling in maker-core.
  */
 
 export interface AsyncQueue<T> extends AsyncIterable<T> {

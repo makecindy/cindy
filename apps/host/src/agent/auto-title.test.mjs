@@ -19,6 +19,34 @@ import { createInputQueue } from './input-queue.mjs';
 import { createHostAutoTitle } from './auto-title.ts';
 import { createHostSessionUpdate } from './session-update.ts';
 
+test('opening an existing Host owner database repairs an imported title without reordering the task', async t => {
+  const profile = mkdtempSync(path.join(os.tmpdir(), 'cindy-host-import-title-'));
+  t.after(() => rmSync(profile, { recursive: true, force: true }));
+  const layout = hostRuntimeLayout();
+  const options = {
+    userDataDir: profile, ownerId: 'owner-import-title', isPackaged: false,
+    drizzleDir: layout.drizzleDir, sqliteVecExtPath: layout.sqliteVecPath,
+  };
+  const original = await openOwnerDatabase(options);
+  try {
+    original.db.prepare("INSERT INTO sessions (id, title, created_at, updated_at) VALUES ('imported', '<system-reminder data-role=', 1, 2)").run();
+    original.db.prepare("INSERT INTO session_imports (session_id, source, source_session_id, mode, status, imported_at, updated_at) VALUES ('imported', 'workbuddy', 'original', 'handoff', 'ready', 1, 2)").run();
+    original.db.prepare("INSERT INTO messages (id, client_id, session_id, role, content, created_at) VALUES ('first', 'first', 'imported', 'user', ?, 1)")
+      .run(JSON.stringify('<system-reminder data-role="user-context">Injected context</system-reminder><user_query>Fix login</user_query>'));
+  } finally {
+    original.db.close();
+  }
+
+  const reopened = await openOwnerDatabase(options);
+  try {
+    assert.deepEqual(reopened.db.prepare("SELECT title, updated_at FROM sessions WHERE id = 'imported'").get(), {
+      title: 'Fix login', updated_at: 2,
+    });
+  } finally {
+    reopened.db.close();
+  }
+});
+
 async function waitFor(predicate, timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {

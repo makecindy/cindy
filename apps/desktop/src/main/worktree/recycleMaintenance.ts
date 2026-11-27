@@ -55,6 +55,23 @@ function grantsLegacyArchiveRetry(record: WorktreeRecycleRecord): boolean {
     && recyclePolicy(record).state === 'paused' && record.reason !== undefined && !unsafeResourceReasons.has(record.reason);
 }
 
+/**
+ * Before index-sized listings got a larger output ceiling, every request in a repository with
+ * ~1M files failed its pre-snapshot checks and paused as a generic failure. Nothing was saved or
+ * deleted yet (no snapshot, still pending), so a request whose archive retry was already spent by
+ * such a client gets one more fresh failure budget. Any grant made by this client marks both, so
+ * a failure here pauses the request again for good.
+ */
+function grantsLargeListingRetry(record: WorktreeRecycleRecord): boolean {
+  return !record.largeListingRetry && record.phase === 'pending' && !record.snapshot
+    && recyclePolicy(record).state === 'paused'
+    && (record.reason === 'recycle-failed' || record.reason === 'git-output-too-large');
+}
+
+function grantsRetry(record: WorktreeRecycleRecord): boolean {
+  return grantsLegacyArchiveRetry(record) || grantsLargeListingRetry(record);
+}
+
 /** Event-driven, single-flight maintenance with one timer for the earliest pending deadline. */
 export class WorktreeRecycleMaintenance {
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -181,7 +198,8 @@ export class WorktreeRecycleMaintenance {
   /**
    * Recycling no longer builds recovery archives. Once per start, delete archives nothing can
    * decrypt, and give requests that older clients paused (usually an archive timeout or a disk
-   * filled by archives) one fresh failure budget. Paused-by-user or identity faults stay put.
+   * filled by archives) one fresh failure budget, as well as requests paused by oversized Git
+   * listings before their snapshot. Paused-by-user or identity faults stay put.
    */
   private async retireRecoveryArchives(records: readonly WorktreeRecycleRecord[]): Promise<boolean> {
     let granted = false;
@@ -189,16 +207,17 @@ export class WorktreeRecycleMaintenance {
       const pruned = await pruneUnreferencedRecoveryArchives();
       if (pruned > 0) log.info('removed unreferenced worktree recovery archives', { count: pruned });
       for (const candidate of records) {
-        if (!grantsLegacyArchiveRetry(candidate)) continue;
+        if (!grantsRetry(candidate)) continue;
         await withWorktreeResourceLock(candidate.meta.path, async () => {
           const record = await readRecycleRecord(candidate.meta.path);
           if (!record || record.id !== candidate.id || record.generation !== candidate.generation
-            || !grantsLegacyArchiveRetry(record)) return;
+            || !grantsRetry(record)) return;
           record.retryPolicy = { state: 'retrying', failures: 0, failedWorkMs: 0 };
           record.reason = undefined;
           record.attempts = 0;
           record.nextAttemptAt = 0;
           record.legacyArchiveRetry = true;
+          record.largeListingRetry = true;
           await writeRecycleRecord(record);
           granted = true;
         });

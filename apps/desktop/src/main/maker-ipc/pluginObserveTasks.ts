@@ -10,12 +10,14 @@ import { createCanonicalSessionActivityBatchReader, type PersistedSessionActivit
 const MAX_PROJECT_TASKS = 200;
 const projectKey = (dir: string) => projectKeyComparisonKey(`local:${dir}`, process.platform);
 
-/** Same visibility as plugin targets, plus archived tasks; excludes dialogues. */
+/**
+ * Same visibility as plugin targets, plus archived tasks; excludes dialogues. A task whose Agent
+ * runs on another computer or a shared provider is still a local task; SSH tasks are not.
+ */
 const visibleTask = and(
   or(eq(sessions.status, 'active'), eq(sessions.status, 'archived')),
   eq(sessions.workspaceKind, 'project'),
   isNull(sessions.remoteHostId),
-  isNull(sessions.agentDeviceId),
   isNull(sessions.hiddenAt),
   isNull(botSessionLinks.id),
   ne(sessions.source, 'bot'),

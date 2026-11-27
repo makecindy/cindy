@@ -8,6 +8,7 @@ import {
 } from '@cindy/model-providers';
 import type { AgentKind } from '@cindy/maker-core';
 
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines.js';
 import type { ImSessionRow } from './sessionRepo';
 
 type AnyAuthRow = Pick<ImSessionRow, 'agentKind' | 'model' | 'providerId' | 'agentDeviceId'>;
@@ -56,7 +57,12 @@ export async function checkImRouteAuth(
   providerSnapshot: ProviderView[] | null | undefined,
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthCheckResult> {
-  if (!isBuiltinAuthRow(anyRow)) return { ok: true, missing: null };
+  // 插件引擎(acp)不走内置供应商凭证/OAuth 链路，但仍要求 providerId 指向有效插件引擎身份。
+  if (!isBuiltinAuthRow(anyRow)) {
+    return pluginEngineKeyFromProviderId(anyRow.providerId)
+      ? { ok: true, missing: null }
+      : { ok: false, missing: 'provider-disconnected' };
+  }
   const row = anyRow;
   if (row.agentDeviceId) return checkRemoteAuth(row, deps);
   const resolution = resolveEffectiveProvider(
@@ -125,7 +131,13 @@ export async function checkImRouteAuthDetailed(
   deps: ImAuthCheckDeps,
 ): Promise<ImAuthRouteStatus> {
   if (!isBuiltinAuthRow(anyRow)) {
-    return { ok: true, missing: null, providerId: anyRow.providerId, providerLabel: null };
+    const valid = Boolean(pluginEngineKeyFromProviderId(anyRow.providerId));
+    return {
+      ok: valid,
+      missing: valid ? null : 'provider-disconnected',
+      providerId: anyRow.providerId ?? null,
+      providerLabel: null,
+    };
   }
   const row = anyRow;
   if (row.agentDeviceId) return checkRemoteAuth(row, deps);
@@ -220,10 +232,11 @@ export function resolveEffectiveProvider(
 }
 
 export async function fallbackAuthForImRoute(
-  row: AuthRow,
+  anyRow: AnyAuthRow,
   deps: ImAuthCheckDeps,
 ): Promise<boolean> {
-  return (await fallbackAuthCheckForImRoute(row, deps)).ok;
+  if (!isBuiltinAuthRow(anyRow)) return Boolean(pluginEngineKeyFromProviderId(anyRow.providerId));
+  return (await fallbackAuthCheckForImRoute(anyRow, deps)).ok;
 }
 
 async function fallbackAuthCheckForImRoute(

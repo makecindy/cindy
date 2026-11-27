@@ -29,14 +29,22 @@ export async function listActiveSessions(storage) {
 }
 
 /** Match maker:list-active: persisted task status is not a live turn status. */
-export function listRunningSessions(maker, options) {
-  const sessions = (maker?.listActiveSessions() ?? []).map(session => ({
-    sessionId: session.id,
-    agentKind: session.agentKind,
-    workDir: session.workDir,
-    capabilities: session.capabilities,
-    isTurnRunning: session.isTurnRunning(),
-  }));
+export function listRunningSessions(maker, options, getSessionActivityMap) {
+  const activityMap = getSessionActivityMap ? getSessionActivityMap() : null;
+  const sessions = (maker?.listActiveSessions() ?? []).map(session => {
+    const activity = activityMap ? activityMap.get(session.id) : undefined;
+    return {
+      sessionId: session.id,
+      agentKind: session.agentKind,
+      workDir: session.workDir,
+      capabilities: session.capabilities,
+      isTurnRunning: session.isTurnRunning(),
+      ...(activityMap ? {
+        activityPhase: activity?.phase ?? 'idle',
+        activityAttention: activity?.attention ?? false,
+      } : {}),
+    };
+  });
   return options?.summary === true && options?.snapshotVersion === 2
     ? { format: 'active-sessions-v2', sessions }
     : sessions;
