@@ -864,7 +864,8 @@
       "WORKER_CREATION_IN_PROGRESS": "另一个同名 Worker 正在创建，请稍后重试。",
       "WORKER_NOT_FOUND": "这个 Worker 已不存在，列表已刷新。",
       "ORCA_CREATE_UNCONFIRMED": "创建 Worker 超时，暂时无法确认是否成功。请先查看 Worker 列表，确认没有新建的 Worker 后再重试。",
-      "ORCA_ACTION_UNCONFIRMED": "操作超时，暂时无法确认结果。已刷新列表，请以当前显示的状态为准。"
+      "ORCA_ACTION_UNCONFIRMED": "操作超时，暂时无法确认结果。已刷新列表，请以当前显示的状态为准。",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "这台电脑的版本不支持在插件引擎任务中开启协同。"
     }
   },
   "resetAutoUse": {
