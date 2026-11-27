@@ -12,12 +12,13 @@ import { getGoalController } from '../goal-host/index.js';
 import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import { listPluginEngineViews } from '../maker-ipc/pluginEnginesIpc.js';
 import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
 import { getProviderGroupRouter } from '../provider-group/runtime.js';
 import { fiveHourTightFor } from '../provider-group/scheduler.js';
 import { readProviderGroup } from '../provider-group/store.js';
 import { getQuotaOverviewService } from '../quota-overview/service.js';
-import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCatalog.js';
+import { readDeviceProviderCatalog, readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { readSubscriptionPoolScheduling } from '../subscription-accounts/runtime.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
 import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
@@ -50,7 +51,8 @@ async function quotaWindows(options?: { cached?: boolean }) {
   return byProvider;
 }
 
-function innerQuota(source: { providerId: string; model: string; agentKind: 'cc' | 'codex' | 'pi' }): Promise<ModelGroupInnerQuota | null> {
+function innerQuota(source: { providerId: string; model: string; agentKind: 'cc' | 'codex' | 'pi' | 'acp' }): Promise<ModelGroupInnerQuota | null> {
+  if (source.agentKind === 'acp') return Promise.resolve(null);
   const agent = source.agentKind === 'cc' ? 'claude-code' as const : source.agentKind;
   const config = readProviderGroup(source.providerId);
   if (config) {
@@ -100,6 +102,8 @@ export const desktopModelGroupRuntime = createModelGroupRuntime({
   scope: () => activeOwnerScopeKey(),
   localViews: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
   localAgents: () => getPluginModelPickerAgents(),
+  pluginEngines: () => listPluginEngineViews(),
+  remotePluginEngines: (agentDeviceId) => readRemotePluginEngines(agentDeviceId),
   harnessInstalled: (agent, agentDeviceId) => isPluginRouteHarnessInstalled(agent, agentDeviceId, async (deviceId, name) => {
     const result = await remoteBackgroundInvoke(deviceId, 'maker:agent:status', [name]);
     if (!result.ok) throw new Error(result.error?.message ?? 'Remote agent status unavailable');

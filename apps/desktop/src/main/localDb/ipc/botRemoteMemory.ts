@@ -90,9 +90,13 @@ const fail = (): never => throwIpcError('INVALID_PARAMS', 'Invalid memory input'
 const missing = (): never => { throw new RemoteResourceRegistryError('NOT_FOUND', 'Memory not found'); };
 const digest = (filename: string) => createHash('sha256').update(filename).digest('hex').slice(0, 12);
 const listId = (botId: string) => `settings:${botId}/memory`;
+const DIRECT_ENTRY_RE = /^(?:user|feedback|project|reference)_[a-z0-9_-]{1,64}$/;
 export function botMemoryEntryResourceId(botId: string, filename: string): string {
-  const direct = `${listId(botId)}/${filename.replace(/\.md$/, '')}`;
-  return direct.length <= MAX_REF_ID_CHARS ? direct : `${listId(botId)}/h${digest(filename)}`;
+  const stem = filename.replace(/\.md$/, '');
+  const direct = `${listId(botId)}/${stem}`;
+  return DIRECT_ENTRY_RE.test(stem) && direct.length <= MAX_REF_ID_CHARS
+    ? direct
+    : `${listId(botId)}/h${digest(filename)}`;
 }
 const timestamp = (iso: string) => {
   const value = Date.parse(iso);

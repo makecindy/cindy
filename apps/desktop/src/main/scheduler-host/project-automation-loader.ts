@@ -55,9 +55,9 @@ export interface ProjectScheduleConfig {
   manual?: boolean;
   intervalMs?: number;
   expireAt?: number;
-  agentKind?: 'claude-code' | 'codex' | 'pi';
+  agentKind?: 'claude-code' | 'codex' | 'pi' | 'acp';
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
-  modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  modelAgentKind?: 'claude-code' | 'codex' | 'pi' | 'acp';
   modelAgentDeviceId?: string;
   /** Bot project model inheritance; new supplied tasks opt in, explicit models take precedence. Stored in the project file only. */
   followTeammateModel?: boolean;
@@ -801,6 +801,11 @@ function isProjectScheduleConfig(value: unknown): value is ProjectScheduleConfig
     optionalNumber(config.expireAt) &&
     optionalAgentKind(config.agentKind) &&
     optionalAgentKind(config.modelAgentKind) &&
+    ((config.agentKind !== 'acp' && config.modelAgentKind !== 'acp') || (
+      typeof config.providerId === 'string' &&
+      config.providerId.startsWith('acp-plugin:') &&
+      config.providerId.length > 'acp-plugin:'.length
+    )) &&
     (config.modelAgentDeviceId === undefined || (typeof config.modelAgentDeviceId === 'string' &&
       (config.modelAgentDeviceId === '' || (config.modelAgentDeviceId.trim() !== '' &&
         !!config.modelAgentKind && typeof config.providerId === 'string' && config.providerId.trim() !== '')))) &&
@@ -846,7 +851,7 @@ function optionalNumber(value: unknown): boolean {
 }
 
 function optionalAgentKind(value: unknown): boolean {
-  return value === undefined || value === 'claude-code' || value === 'codex' || value === 'pi';
+  return value === undefined || value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'acp';
 }
 
 function optionalNotify(value: unknown): boolean {

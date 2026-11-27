@@ -509,7 +509,14 @@ function withEngineWhenAmbiguous(nodes: MapNode[]): MapNode[] {
   const seen = new Map<string, number>();
   for (const node of nodes) seen.set(node.name, (seen.get(node.name) ?? 0) + 1);
   return nodes.map((node) => (node.candidate && !node.provider && (seen.get(node.name) ?? 0) > 1
-    ? { ...node, name: `${node.name} · ${agentOptionOf(node.candidate.agentKind).label}` }
+    ? {
+        ...node,
+        name: `${node.name} · ${
+          node.candidate.agentKind === 'acp'
+            ? node.candidate.providerId
+            : agentOptionOf(node.candidate.agentKind).label
+        }`,
+      }
     : node));
 }
 
