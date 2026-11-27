@@ -1,12 +1,15 @@
 import { deviceDisplayName } from '@/lib/deviceName';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { FormField } from '@/components/ui/form-field';
+import { Input } from '@/components/ui/input';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import * as React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ExternalLink, Folder, MessageCircle, Timer, SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 import { Select } from '@/components/ui/select';
 import { Tip } from '@/components/ui/tooltip';
 import {
@@ -25,7 +28,7 @@ import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelec
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import type { PluginEnginesPickerProps } from '@/components/new-chat/PluginEnginesSection';
 import { ModelGroupIcon, type ModelGroupsPickerProps } from '@/components/new-chat/ModelGroupsPickerSection';
-import { pluginEngineModelName, resolvePluginEngineEffort, PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
+import { isSamePluginEngineChoice, pluginEngineModelName, resolvePluginEngineEffort, PLUGIN_ENGINE_DEFAULT_MODEL } from '@/lib/pluginEngineSelection';
 import { useModelDiscoveryPending } from '@/components/new-chat/useModelDiscoveryPending';
 import {
   effectiveSourceIdForModel,
@@ -247,7 +250,7 @@ export function ScheduleSettingsButton({
         <Tip text={switchDisabled && cantUseReason ? cantUseReason : null} side="top" contentClassName="z-modal-popover-nested">
           <label
             className={cn(
-              'flex h-8 w-full items-center gap-2 rounded-md px-2 text-13 transition-colors',
+              'flex h-8 w-full items-center gap-2 rounded-lg px-2 text-13 transition-colors',
               switchDisabled
                 ? 'cursor-not-allowed opacity-50'
                 : 'cursor-pointer hover:bg-[var(--surface-hover)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
@@ -276,7 +279,8 @@ type EditableScheduleMenuMode =
   | 'daily'
   | 'weekdays'
   | 'weekly'
-  | 'monthly';
+  | 'monthly'
+  | 'custom';
 type ScheduleMenuMode = EditableScheduleMenuMode | 'exactInterval';
 
 // Note: these mode strings mirror codex i18n keys (settings.automations.scheduleMode.*),
@@ -289,6 +293,7 @@ const SCHEDULE_MENU_MODES: ReadonlyArray<EditableScheduleMenuMode> = [
   'weekdays',
   'weekly',
   'monthly',
+  'custom',
 ];
 
 const INTERVAL_MENU_MODES: ReadonlyArray<EditableScheduleMenuMode> = [
@@ -324,13 +329,13 @@ export function ScheduleChip({
   const displayCronExpr = timingPresentation.kind === 'intervalExact'
     ? cronExpr
     : timingPresentation.displayCronExpr;
-  const [config, setConfig] = useState<CodexScheduleConfig>(() => normalizeScheduleConfig(cronToConfig(displayCronExpr)));
+  const [config, setConfig] = useState<CodexScheduleConfig>(() => scheduleConfigFromCron(displayCronExpr));
 
   useEffect(() => {
     setConfig((prev) => {
-      const next = normalizeScheduleConfig(cronToConfig(displayCronExpr));
-      if (configToCron(prev) === displayCronExpr) return prev;
-      return next;
+      const previousCron = prev.mode === 'custom' ? prev.customCron : configToCron(prev);
+      if (previousCron === displayCronExpr) return prev;
+      return scheduleConfigFromCron(displayCronExpr);
     });
   }, [displayCronExpr]);
 
@@ -353,7 +358,7 @@ export function ScheduleChip({
 
   const update = (patch: Partial<CodexScheduleConfig>) => {
     const next = normalizeScheduleConfig({ ...config, ...patch });
-    const nextCronExpr = configToCron(next);
+    const nextCronExpr = next.mode === 'custom' ? next.customCron : configToCron(next);
     setConfig(next);
     onChangeSchedule({
       cronExpr: nextCronExpr,
@@ -375,6 +380,10 @@ export function ScheduleChip({
   };
 
   const setMode = (mode: EditableScheduleMenuMode) => {
+    if (mode === 'custom') {
+      setConfig({ ...config, mode, customCron: cronExpr });
+      return;
+    }
     // Re-selecting the visible mode is not an instruction to replace a legacy value.
     // An exact interval has its own activeMode and can still enter a supported preset.
     if (mode === 'intervalMinutes' && mode === activeMode) return;
@@ -407,27 +416,18 @@ export function ScheduleChip({
           }}
         >
           <div className="rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
-            <div className="flex h-[34px] items-center gap-1 rounded-lg bg-[var(--chat-input-chip-bg)] p-0.5">
-              {(['cron', 'interval'] as const).map((mode) => {
-                const active = timingMode === mode;
-                return (
-                  <button
-                    key={mode}
-                    type="button"
-                    aria-pressed={active}
-                    onClick={() => setTimingMode(mode)}
-                    className={cn(
-                      'h-full flex-1 rounded-md border px-3 text-12 font-medium transition-colors',
-                      active
-                        ? 'border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)] text-[var(--msg-assistant-text)]'
-                        : 'border-transparent text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)]',
-                    )}
-                  >
-                    {t(`scheduler.chips.timingMode.${mode}`)}
-                  </button>
-                );
-              })}
-            </div>
+            <SegmentedControl
+              aria-label={t('scheduler.chips.timingMode.label')}
+              value={timingMode}
+              options={(['cron', 'interval'] as const).map((mode) => ({
+                value: mode,
+                label: t(`scheduler.chips.timingMode.${mode}`),
+              }))}
+              onValueChange={setTimingMode}
+              height={34}
+              optionHeight={30}
+              fullWidth
+            />
             <p className="px-1 pt-1.5 text-11 leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
               {t(
                 timingMode === 'interval' && !intervalIsPreset
@@ -512,6 +512,21 @@ function ScheduleConfigPanel({
   return (
     <div className="min-w-0 flex-1 rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-2 shadow-[shadow:var(--shadow-menu)] dark:border-[var(--cmd-palette-border)] dark:bg-[var(--cmd-palette-bg)]">
       <div className="flex flex-col gap-2">
+        {mode === 'custom' && (
+          <FormField label={t('scheduler.chips.scheduleMenu.custom')}>
+            {(control) => (
+              <Input
+                {...control}
+                mono
+                spellCheck={false}
+                autoCapitalize="off"
+                placeholder="0 9,18 * * *"
+                value={panelConfig.customCron}
+                onChange={(customCron) => onUpdate({ mode: 'custom', customCron })}
+              />
+            )}
+          </FormField>
+        )}
         {mode === 'intervalMinutes' && (
           <>
             <div className="flex min-h-[34px] w-full items-center gap-1.5">
@@ -889,7 +904,7 @@ function TimeColumn({
               type="button"
               onClick={() => onChange(option)}
               className={cn(
-                'flex h-7 w-full items-center justify-center rounded-md text-13 transition-colors',
+                'flex h-7 w-full items-center justify-center rounded-lg text-13 transition-colors',
                 active
                   ? 'bg-[var(--chat-input-chip-bg)] font-medium text-[var(--msg-assistant-text)] dark:bg-[var(--chat-input-chip-bg)] dark:text-[var(--msg-assistant-text)]'
                   : 'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--surface-hover)] dark:text-[var(--settings-section-desc)] dark:hover:bg-[var(--settings-btn-secondary-hover-bg)]',
@@ -1016,10 +1031,16 @@ function normalizeScheduleConfig(config: CodexScheduleConfig): CodexScheduleConf
   return config;
 }
 
+function scheduleConfigFromCron(cronExpr: string): CodexScheduleConfig {
+  const config = normalizeScheduleConfig(cronToConfig(cronExpr));
+  if (!cronExpr.trim()) return { ...DEFAULT_CONFIG };
+  return config.mode === 'custom' ? { ...config, customCron: cronExpr } : config;
+}
+
 function toMenuMode(config: CodexScheduleConfig): EditableScheduleMenuMode {
   if (config.mode === 'hourly' || config.mode === 'interval') return 'interval';
   if (config.mode === 'minute' || config.mode === 'intervalMinutes') return 'intervalMinutes';
-  if (config.mode === 'daily' || config.mode === 'weekdays' || config.mode === 'weekly' || config.mode === 'monthly') return config.mode;
+  if (config.mode === 'custom' || config.mode === 'daily' || config.mode === 'weekdays' || config.mode === 'weekly' || config.mode === 'monthly') return config.mode;
   return 'daily';
 }
 
@@ -1091,12 +1112,14 @@ export function ModelEffortChip({
   // 与聊天的模型选择器同一套「发现在途」状态(理由见 useModelDiscoveryPending):
   // 定时任务这边同样是打开就触发一次发现,静默的话用户看到的清单同样可能是上一轮的。
   const discovery = useModelDiscoveryPending();
+  const readPluginEngineCatalogue = pluginEngines?.readCatalogue;
   const handleOpenChange = useCallback(
     (next: boolean): void => {
       const nextOpen = disabled ? false : next;
       const wasOpen = openRef.current;
       openRef.current = nextOpen;
       if (nextOpen && !wasOpen) {
+        readPluginEngineCatalogue?.();
         discovery.begin(() =>
           window.electronAPI.maker.requestProviderModelsAutoRefresh('model-selector-open'),
         );
@@ -1104,7 +1127,7 @@ export function ModelEffortChip({
       if (!nextOpen) discovery.reset();
       setOpen(nextOpen);
     },
-    [disabled, discovery],
+    [disabled, discovery, readPluginEngineCatalogue],
   );
   const pickerAgents = useModelPickerAgents(agentKind, agentDeviceId || undefined);
   const caps = useAgentCapabilities(agentKind, agentDeviceId || undefined);
@@ -1175,8 +1198,11 @@ export function ModelEffortChip({
   // 选中插件引擎时触发器写引擎自己的名字、模型与档位(插件停用后用通用名称)，不画内置 Harness 的标志。
   const activeEngineSelection = pluginEngines?.active ?? null;
   const activeEngine = activeEngineSelection
-    ? pluginEngines?.engines.find((engine) => engine.providerId === activeEngineSelection.providerId) ?? null
+    ? pluginEngines?.engines.find((engine) => isSamePluginEngineChoice(engine, activeEngineSelection)) ?? null
     : null;
+  const activeEngineDeviceId = activeEngineSelection?.deviceId ?? null;
+  const activeEngineDeviceName = activeEngine?.deviceName
+    ?? (activeEngineDeviceId ? deviceDisplayName(activeEngineDeviceId, undefined, routeDevices.devices ?? []) : null);
   const engineDisplay = activeEngineSelection
     ? [
         activeEngine?.name ?? t('newChat.pluginEngines.genericName'),
@@ -1190,9 +1216,18 @@ export function ModelEffortChip({
         })(),
       ].filter(Boolean).join(' · ')
     : null;
+  const engineIcon = engineDisplay
+    ? <PluginEngineIcon size={14} iconDataUrl={activeEngine?.iconDataUrl} className='text-current' />
+    : undefined;
+  const engineTitle = engineDisplay
+    ? (activeEngineDeviceName
+        ? `${engineDisplay} · ${t('newChat.modelSelector.trigger.agentDevice', { device: activeEngineDeviceName })}`
+        : engineDisplay)
+    : undefined;
 
+  // 合并条目下的模型照常显示成「模型 · 合并的供应商」，不显示路由内部展开出来的那一条。
   const activeModelGroupName = modelGroups?.active
-    ? modelGroups.config.routes.find((route) => route.id === modelGroups.active?.id)?.name ?? null
+    ? modelGroups.config.routes.find((route) => route.id === modelGroups.active?.id && !(modelGroups.onAttach && route.parent))?.name ?? null
     : null;
 
   return (
@@ -1209,11 +1244,11 @@ export function ModelEffortChip({
           />
         ) : (
         <ChipButton
-          icon={engineDisplay
-            ? <PluginEngineIcon size={14} iconDataUrl={activeEngine?.iconDataUrl} className='text-current' />
+          icon={engineIcon
+            ? (activeEngineDeviceId ? <RemoteSourceMark markSize={14}>{engineIcon}</RemoteSourceMark> : engineIcon)
             : agentDeviceId && agentIcon ? <RemoteSourceMark markSize={14}>{agentIcon}</RemoteSourceMark> : agentIcon}
           label={engineDisplay ?? display}
-          title={engineDisplay ? engineDisplay : agentDeviceTitle ? `${display} · ${agentDeviceTitle}` : undefined}
+          title={engineTitle ?? (agentDeviceTitle ? `${display} · ${agentDeviceTitle}` : undefined)}
           active={open}
           disabled={disabled}
           className="[&>span:last-of-type]:min-w-[106px] max-w-[240px] px-2"

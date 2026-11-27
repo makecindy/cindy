@@ -4,7 +4,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { PROVIDER_GROUP_IPC } from '../../../shared/providerGroup.js';
-import { REMOTE_AGENT_CHANNEL, PROVIDER_GROUP_REMOTE_CHANNEL, REMOTE_CATALOG_FRESH_MS, type Envelope, type InvokeResultPayload } from '@cindy/device-link';
+import {
+  CONTROLLED_MODEL_CATALOG_CHANNEL,
+  CONTROLLED_MODEL_CATALOG_CHANGED,
+  CONTROLLED_MODEL_CATALOG_RETRY_SHARE,
+  modelCatalogKey,
+} from '../../../shared/controlledModelCatalog.js';
+import {
+  REMOTE_AGENT_CHANNEL,
+  PROVIDER_GROUP_REMOTE_CHANNEL,
+  PROVIDER_SHARE_GROUP_STATUS_REQUEST,
+  REMOTE_CATALOG_FRESH_MS,
+  providerShareHostPeer,
+  type Envelope,
+  type InvokeResultPayload,
+} from '@cindy/device-link';
 const identity = vi.hoisted(() => ({ owner: 'owner-a:1', endpoint: 'https://a.invalid', pending: false }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => identity.owner, isAppSessionBoundaryPending: () => identity.pending }));
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => identity.endpoint }));
@@ -12,10 +26,12 @@ vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => ide
 // index also assembles client/routedClient/direct/remoteDesktop runtime that these
 // tests never execute; this facade keeps reader/error/constants real.
 vi.mock('@cindy/device-link', async () => {
-  const [metadata, group, remoteAgent] = await Promise.all([
+  const [metadata, group, remoteAgent, protocol, shareCatalog] = await Promise.all([
     import('../../../../../../packages/device-link/src/metadataContinuity.js'),
     import('../../../../../../packages/device-link/src/providerGroup.js'),
     import('../../../../../../packages/device-link/src/remoteAgent.js'),
+    import('../../../../../../packages/device-link/src/protocol.js'),
+    import('../../../../../../packages/device-link/src/providerShareCatalog.js'),
   ]);
   return {
     MetadataContinuityReader: metadata.MetadataContinuityReader,
@@ -25,6 +41,9 @@ vi.mock('@cindy/device-link', async () => {
     REMOTE_CATALOG_FRESH_MS: metadata.REMOTE_CATALOG_FRESH_MS,
     PROVIDER_GROUP_REMOTE_CHANNEL: group.PROVIDER_GROUP_REMOTE_CHANNEL,
     REMOTE_AGENT_CHANNEL: remoteAgent.REMOTE_AGENT_CHANNEL,
+    parseProviderSharePeer: protocol.parseProviderSharePeer,
+    providerShareHostPeer: protocol.providerShareHostPeer,
+    PROVIDER_SHARE_GROUP_STATUS_REQUEST: shareCatalog.PROVIDER_SHARE_GROUP_STATUS_REQUEST,
   };
 });
 import { invokeProviderMetadataContinuity as read, invalidateProviderMetadataContinuity as invalidate,
@@ -935,5 +954,125 @@ describe('Main provider metadata continuity', () => {
     expect(rpcScope()).toBe(true);
     expect(await read('A', 'maker:agent:status', ['codex'], async () => { throw failure(); }))
       .toMatchObject({ ok: true, result: { binaryReady: true, providerContinuity: { stale: true } } });
+  });
+});
+
+// Unit: controller Main continuity for routed controlled-host reads (`maker:model-catalog:read`).
+// Bug: routed shared-model reads bypassed the 15s fresh window and continuity reader completely.
+describe('controlled routed catalog continuity', () => {
+  const routedRead = (agentDeviceId: string, channel = 'maker:provider:list', args: unknown[] = []) => [
+    { op: 'read', agentDeviceId, channel, args },
+  ];
+
+  it('reuses one routed catalog read within the fresh window and invalidates only routed entries on controlled push', async () => {
+    const directRequest = vi.fn(catalog);
+    const routedRequest = vi.fn(catalog);
+    await read('B', 'maker:provider:list', [], directRequest);
+    await read('B', CONTROLLED_MODEL_CATALOG_CHANNEL, routedRead('share:a'), routedRequest);
+    await read('B', CONTROLLED_MODEL_CATALOG_CHANNEL, routedRead('share:a'), routedRequest);
+    expect(routedRequest).toHaveBeenCalledTimes(1);
+
+    // Controlled catalog push from B invalidates B's routed reads without retiring B's direct catalog.
+    expect(handleProviderMetadataSourcePush({
+      v: 1, kind: 'push', src: 'B', payload: { channel: CONTROLLED_MODEL_CATALOG_CHANGED },
+    })).toBe(true);
+    await read('B', 'maker:provider:list', [], directRequest);
+    expect(directRequest).toHaveBeenCalledTimes(1);
+    await read('B', CONTROLLED_MODEL_CATALOG_CHANNEL, routedRead('share:a'), routedRequest);
+    expect(routedRequest).toHaveBeenCalledTimes(2);
+
+    // Direct source push from the underlying share peer also invalidates the routed copy.
+    expect(handleProviderMetadataSourcePush({
+      v: 1, kind: 'push', src: providerShareHostPeer('a', 'owner-host'),
+      payload: { channel: 'maker:provider:changed' },
+    })).toBe(true);
+    await read('B', CONTROLLED_MODEL_CATALOG_CHANNEL, routedRead('share:a'), routedRequest);
+    expect(routedRequest).toHaveBeenCalledTimes(3);
+  });
+
+  it('isolates a single routed source denial from the task host and healthy sibling routes', async () => {
+    const notified = vi.fn();
+    const off = onProviderMetadataDenied(notified);
+    try {
+      await read('B', 'maker:provider:list', [], catalog);
+      await read('B', CONTROLLED_MODEL_CATALOG_CHANNEL, routedRead('share:a'), catalog);
+      await read('B', CONTROLLED_MODEL_CATALOG_CHANNEL, routedRead('share:b'), catalog);
+      await pastFreshWindow();
+
+      const denied: InvokeResultPayload = {
+        ok: false,
+        error: { code: 'IPC_ERROR', message: '[REMOTE_AGENT_SHARE_UNAVAILABLE] denied' },
+      };
+      expect(await read('B', CONTROLLED_MODEL_CATALOG_CHANNEL, routedRead('share:a'), async () => denied)).toBe(denied);
+      expect(notified).toHaveBeenCalledExactlyOnceWith(modelCatalogKey('share:a', 'B'));
+
+      // share:a is retired; host B direct catalog and sibling share:b keep their continuity fallback.
+      await expect(read('B', CONTROLLED_MODEL_CATALOG_CHANNEL, routedRead('share:a'), async () => { throw failure(); }))
+        .rejects.toThrow('NOT_CONNECTED');
+      expect(await read('B', 'maker:provider:list', [], async () => { throw failure(); }))
+        .toMatchObject({ ok: true, result: { providerContinuity: { stale: true } } });
+      expect(await read('B', CONTROLLED_MODEL_CATALOG_CHANNEL, routedRead('share:b'), async () => { throw failure(); }))
+        .toMatchObject({ ok: true, result: { providerContinuity: { stale: true } } });
+
+      // Explicit invalidation of host B (link close / revoke) retires B and every routed entry through B.
+      invalidate('B');
+      await expect(read('B', CONTROLLED_MODEL_CATALOG_CHANNEL, routedRead('share:b'), async () => { throw failure(); }))
+        .rejects.toThrow('NOT_CONNECTED');
+    } finally { off(); }
+  });
+
+  it('keeps locations, share-directory retry, agent status and live shared-group status uncached in the fresh window', async () => {
+    const liveCases: Array<{ label: string; channel: string; args: unknown[]; result: InvokeResultPayload }> = [
+      {
+        label: 'locations',
+        channel: CONTROLLED_MODEL_CATALOG_CHANNEL,
+        args: [{ op: 'locations' }],
+        result: { ok: true, result: { status: 'complete', locations: [{ agentDeviceId: 'share:a', name: 'A' }] } },
+      },
+      {
+        label: 'retry-share-directory',
+        channel: CONTROLLED_MODEL_CATALOG_CHANNEL,
+        args: [{ op: CONTROLLED_MODEL_CATALOG_RETRY_SHARE, agentDeviceId: 'share:a' }],
+        result: { ok: true, result: { ok: true, receivedChangeSequence: 1 } },
+      },
+      {
+        label: 'routed agent status',
+        channel: CONTROLLED_MODEL_CATALOG_CHANNEL,
+        args: routedRead('share:a', 'maker:agent:status', ['codex']),
+        result: { ok: true, result: { running: true, providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } },
+      },
+      {
+        label: 'routed live group status',
+        channel: CONTROLLED_MODEL_CATALOG_CHANNEL,
+        args: routedRead('share:a', 'maker:provider:list', [{ [PROVIDER_SHARE_GROUP_STATUS_REQUEST]: true }]),
+        result: { ok: true, result: { providers: [{ id: 'a' }], providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } },
+      },
+      {
+        label: 'direct live group status',
+        channel: 'maker:provider:list',
+        args: [{ [PROVIDER_SHARE_GROUP_STATUS_REQUEST]: true }],
+        result: { ok: true, result: { providers: [{ id: 'a' }], providerContinuity: { stale: false, remainingMs: 30 * 60_000 } } },
+      },
+    ];
+    for (const item of liveCases) {
+      const request = vi.fn(async () => item.result);
+      await read('B', item.channel, item.args, request);
+      await read('B', item.channel, item.args, request);
+      expect(request, item.label).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it('retries a routed read once when controlled catalog changes arrive mid-flight', async () => {
+    let finish!: (value: InvokeResultPayload) => void;
+    const request = vi.fn()
+      .mockImplementationOnce(() => new Promise<InvokeResultPayload>(resolve => { finish = resolve; }))
+      .mockImplementationOnce(emptyCatalog);
+    const pending = read('B', CONTROLLED_MODEL_CATALOG_CHANNEL, routedRead('share:a'), request);
+    handleProviderMetadataSourcePush({
+      v: 1, kind: 'push', src: 'B', payload: { channel: CONTROLLED_MODEL_CATALOG_CHANGED },
+    });
+    finish(await catalog());
+    await expect(pending).resolves.toMatchObject({ ok: true, result: { providers: [] } });
+    expect(request).toHaveBeenCalledTimes(2);
   });
 });

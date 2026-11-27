@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { MarketSkill } from '../hooks/useMarketList';
 
@@ -28,8 +29,8 @@ export function MarketInstallStatus({ skill, onUpdate, updating = false }: Marke
     );
   }
   return skill.installedLocally ? (
-    <span className="shrink-0 rounded-full bg-[var(--chat-input-chip-bg)] px-1.5 py-0.5 text-10 text-[var(--cmd-palette-item-meta)]">
+    <Badge size="xs">
       {t('skillhub.home.installed')}
-    </span>
+    </Badge>
   ) : null;
 }

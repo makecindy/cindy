@@ -71,6 +71,88 @@ describe('ScheduleWebhookQueue', () => {
     h.queue.stop();
   });
 
+  // Rule: docs/product-rules/plugin-event-triggers.md. A plugin event wakes only automations that
+  // chose that plugin (and event/conditions); it never wakes ordinary Webhook or GitHub App tasks,
+  // and messages the automation sent itself are not dropped by the host.
+  it('admits plugin events only for the chosen plugin, events and field conditions', async () => {
+    const h = setup();
+    const schedule = { id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1', source: { preset: 'plugin', sources: [
+      { plugin: 'public/chat', events: ['message.received'], filters: [{ field: 'chatId', operator: 'equals', value: 'c1' }] },
+    ] } } } as Schedule;
+    h.setSchedule(schedule);
+    await h.queue.start();
+    const message = (deliveryId: string, overrides: Partial<ScheduleWebhookEvent> = {}): ScheduleWebhookEvent => ({
+      ...event(deliveryId, 'message.received'), source: 'plugin:public/chat', fields: { chatId: 'c1', fromSelf: true }, ...overrides,
+    });
+    expect(await h.queue.acceptBatch('s1', [
+      message('own-reply'),
+      message('other-plugin', { source: 'plugin:public/mail' }),
+      message('other-chat', { fields: { chatId: 'c2' } }),
+      message('other-type', { event: 'message.recalled' }),
+    ], 0, 'e1')).toEqual(['queued', 'filtered', 'filtered', 'filtered']);
+    await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+    expect(h.fire.mock.calls[0]![1].events.map(item => [item.deliveryId, item.fields])).toEqual([['own-reply', { chatId: 'c1', fromSelf: true }]]);
+    // An ordinary Webhook task never accepts a plugin-sourced doorbell.
+    h.setSchedule({ id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1' } } as Schedule);
+    expect(await h.queue.accept('s1', message('to-webhook-task'))).toBe('filtered');
+    h.queue.stop();
+  });
+
+  it('matches plugin events against untruncated fields before persisting bounded copies', async () => {
+    const h = setup();
+    const pad = 'x'.repeat(1_000);
+    const tail = 'x'.repeat(990);
+    const published = {
+      id: 'burst-1',
+      type: 'message.received',
+      occurredAt: 10,
+      data: { a: pad, b: pad, c: pad, d: tail, fromSelf: true, chatId: 'c1' },
+    };
+    h.setSchedule({ id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1', source: { preset: 'plugin', sources: [
+      { plugin: 'public/chat', events: ['message.received'], filters: [{ field: 'fromSelf', operator: 'not-equals', value: 'true' }] },
+    ] } } } as Schedule);
+    await h.queue.start();
+    expect(await h.queue.acceptPlugin('s1', 'public/chat', published, 'e1')).toBe('filtered');
+    h.setSchedule({ id: 's1', status: 'active', webhookTrigger: { endpointId: 'e2', source: { preset: 'plugin', sources: [
+      { plugin: 'public/chat', events: ['message.received'], filters: [
+        { field: 'chatId', operator: 'equals', value: 'c1' },
+        { field: 'fromSelf', operator: 'equals', value: 'true' },
+      ] },
+    ] } } } as Schedule);
+    expect(await h.queue.acceptPlugin('s1', 'public/chat', published, 'e2')).toBe('queued');
+    await vi.advanceTimersByTimeAsync(LIMITS.debounceMs);
+    expect(h.fire).toHaveBeenCalledTimes(1);
+    expect(h.fire.mock.calls[0]![1].events[0]!.fields).toMatchObject({ chatId: 'c1', fromSelf: true });
+    h.queue.stop();
+  });
+
+  // 2026-11-24, docs/product-rules/schedule-webhook-trigger.md: a specific Issue is the App source
+  // narrowed to one number; other items in the same repository must not wake the automation.
+  it('admits GitHub App events only for the chosen item number', async () => {
+    const h = setup();
+    h.setSchedule({ id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1', events: ['issues', 'issue_comment'],
+      source: { preset: 'github-app', repositories: ['example/project'], number: 7 } } } as Schedule);
+    await h.queue.start();
+    const comment = (deliveryId: string, number?: number) => ({ ...event(deliveryId, 'issue_comment'), action: 'created',
+      repository: 'example/project', ...(number === undefined ? {} : { number }) });
+    expect(await h.queue.acceptBatch('s1', [comment('seven', 7), comment('eight', 8), comment('unnumbered')], 0, 'e1'))
+      .toEqual(['queued', 'filtered', 'filtered']);
+    h.queue.stop();
+  });
+
+  // 2026-11-24: an address sender narrowed to one GitLab issue ignores other items and other projects
+  // that may reuse the same receiver address.
+  it('admits address-sender events only for the chosen project and number', async () => {
+    const h = setup();
+    h.setSchedule({ id: 's1', status: 'active', webhookTrigger: { endpointId: 'e1', events: ['issue'],
+      source: { preset: 'gitlab', repository: 'group/app', number: 3 } } } as Schedule);
+    await h.queue.start();
+    const issue = (deliveryId: string, repository: string, number: number) => ({ ...event(deliveryId, 'issue'), action: 'close', repository, number });
+    expect(await h.queue.acceptBatch('s1', [issue('mine', 'Group/App', 3), issue('other-number', 'group/app', 4),
+      issue('other-project', 'group/other', 3)], 0, 'e1')).toEqual(['queued', 'filtered', 'filtered']);
+    h.queue.stop();
+  });
+
   // PR #9378 / security review: old on-disk recovery markers carry no scope.
   // Exercise restart through the real queue, including interrupted preparation.
   it.each(['pending', 'preparing'] as const)('filters legacy unscoped recovery markers from restored %s', async where => {

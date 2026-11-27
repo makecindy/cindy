@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { WebContents } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BotGroupOutboxCommandRequest, BotGroupOutboxCommandResult, BotGroupOutboxExecution, BotGroupOutboxStorageRequest, BotGroupOutboxStoredEntry } from '../../../../shared/botGroupOutboxStorage';
+import type { BotGroupOutboxChanged, BotGroupOutboxCommandRequest, BotGroupOutboxCommandResult, BotGroupOutboxExecution, BotGroupOutboxStorageRequest, BotGroupOutboxStoredEntry } from '../../../../shared/botGroupOutboxStorage';
 
 vi.mock('../../../../main/appSessionState.js', () => ({ getActiveAppSession: () => ({ dataOwnerId: null, generation: 0 }),
   isAppSessionBoundaryPending: () => false, ownerScopedUserDataPath: () => '', onAppSessionInvalidated: () => () => {} }));
@@ -55,6 +55,7 @@ const mocks = vi.hoisted(() => ({
   listListeners: new Set<() => void>(),
   storage: undefined as undefined | ((request: BotGroupOutboxStorageRequest) => Promise<BotGroupOutboxStoredEntry[]>),
   command: undefined as undefined | ((request: BotGroupOutboxCommandRequest) => Promise<BotGroupOutboxCommandResult>),
+  onOutboxChanged: undefined as undefined | ((callback: (event: BotGroupOutboxChanged) => void) => () => void),
   mainSend: undefined as undefined | ((input: BotGroupSendInput, execution?: BotGroupOutboxExecution) => Promise<BotGroupSendResult>),
 }));
 
@@ -66,7 +67,8 @@ vi.mock('@/contexts/dataOwnerGeneration', () => ({
 vi.mock('../botGroupStore', () => ({
   botGroupApi: () => ({ sendBotGroupMessage: (input: BotGroupSendInput, execution?: BotGroupOutboxExecution) =>
     mocks.mainSend ? mocks.mainSend(input, execution) : mocks.send(input),
-    getBotGroup: mocks.getBotGroup, botGroupOutbox: mocks.storage, botGroupOutboxCommand: mocks.command }),
+    getBotGroup: mocks.getBotGroup, botGroupOutbox: mocks.storage, botGroupOutboxCommand: mocks.command,
+    onBotGroupOutboxChanged: mocks.onOutboxChanged }),
   getBotGroupListSnapshot: () => mocks.list,
   subscribeBotGroups: (listener: () => void) => {
     mocks.listListeners.add(listener);
@@ -167,6 +169,7 @@ beforeEach(() => {
   mocks.generation = 0;
   mocks.storage = undefined;
   mocks.command = undefined;
+  mocks.onOutboxChanged = undefined;
   mocks.mainSend = undefined;
   mocks.send.mockReset();
   mocks.materialize.mockReset().mockImplementation(async (files: readonly AttachedFile[]) => [...files]);
@@ -974,18 +977,84 @@ describe('botGroupOutbox', () => {
   });
 });
 
-function coordinatedBridge(retain: (entry: unknown) => Promise<() => Promise<void>> = async () => async () => {}) {
+function coordinatedBridge(retain: (entry: unknown) => Promise<() => Promise<void>> = async () => async () => {},
+  publish?: (event: BotGroupOutboxChanged) => void) {
   const root = mkdtempSync(path.join(tmpdir(), 'cindy-outbox-bridge-'));
   tempRoots.push(root);
   const owner = () => ({ dataOwnerId: mocks.owner === null ? null : `account-${mocks.owner}`, generation: mocks.generation });
   const main = createBotGroupOutboxStorage({ currentOwner: owner, boundaryPending: () => mocks.owner === null,
-    ownerRoot: () => path.join(root, String(mocks.owner)), retain: entry => retain(entry), release: async () => {} });
+    ownerRoot: () => path.join(root, String(mocks.owner)), retain: entry => retain(entry), release: async () => {}, publish });
   const sender = Object.assign(new EventEmitter(), { isDestroyed: () => false }) as unknown as WebContents;
   mocks.storage = request => main.access(request);
   mocks.command = request => main.command(sender, request);
   mocks.mainSend = (input, execution) => main.send(sender, input, execution, mocks.send);
   return { main, sender, owner, snapshot: () => main.command(sender, { action: 'snapshot', owner: owner() }) };
 }
+
+it('keeps a single optimistic message during a 429 cooldown and hands it off to the one server echo', async () => {
+  vi.useFakeTimers();
+  const events = new EventTarget();
+  vi.stubGlobal('window', events);
+  let deliver: ((event: BotGroupOutboxChanged) => void) | undefined;
+  mocks.onOutboxChanged = callback => { deliver = callback; return () => { deliver = undefined; }; };
+  const bridge = coordinatedBridge(undefined, event => deliver?.(event));
+  await bridge.snapshot();
+  const retryAt = Date.now() + 7_300;
+  const input = draft();
+  const receipt = deferred();
+  const targetSend = vi.fn<() => Promise<BotGroupSendResult>>()
+    .mockResolvedValueOnce({ ok: false, errorCode: 'SERVICE_ERROR', message: 'limited', retryAt, postRateLimited: true })
+    .mockReturnValueOnce(receipt.promise);
+  mocks.send.mockImplementation(async entry => entry.groupId === 'slow-group'
+    ? { ok: true, messageId: 'slow-receipt' } : targetSend());
+  const targetCalls = () => mocks.send.mock.calls.filter(([entry]) => entry.groupId === 'g1');
+  const emptyTimeline = { ok: true, group: { messages: [] } };
+  let finishRead!: (timeline: typeof emptyTimeline) => void;
+  const slowRead = new Promise<typeof emptyTimeline>(resolve => { finishRead = resolve; });
+  mocks.getBotGroup.mockImplementation(groupId => groupId === 'slow-group' ? slowRead : Promise.resolve(emptyTimeline));
+  const stop = startBotGroupOutbox();
+  try {
+    await enqueueBotGroupSend(draft({ groupId: 'slow-group', clientId: 'slow' }));
+    await vi.advanceTimersByTimeAsync(0);
+    events.dispatchEvent(new Event('focus'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.getBotGroup).toHaveBeenCalledWith('slow-group');
+
+    await enqueueBotGroupSend(input);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(targetCalls()).toEqual([[input.input]]);
+    expect(visible('g1', [])).toEqual(['c1:sending']);
+    expect((await bridge.snapshot()).entries.find(row => row.input.groupId === 'g1')).toMatchObject({ status: 'sending', retryAt });
+
+    // Window wakes, outbox commits and timeline reads can arrive during the wait.
+    events.dispatchEvent(new Event('focus'));
+    deliver?.(await bridge.snapshot());
+    noteBotGroupTimeline('g1', [], beginBotGroupTimelineRead());
+    retryBotGroupSend('g1', 'c1');
+    await vi.advanceTimersByTimeAsync(7_299);
+    expect(targetCalls()).toEqual([[input.input]]);
+    expect(visible('g1', [])).toEqual(['c1:sending']);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(targetCalls()).toEqual([[input.input], [input.input]]);
+    events.dispatchEvent(new Event('online'));
+    deliver?.(await bridge.snapshot());
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(targetCalls()).toHaveLength(2);
+    expect(visible('g1', [])).toEqual(['c1:sending']);
+
+    receipt.resolve({ ok: true, messageId: 'server-c1' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(visible('g1', [])).toEqual(['c1:sent']);
+    const echo = msg({ id: 'server-c1', sequence: 1, isSelf: true });
+    expect(project('g1', [echo])).toMatchObject({ pending: [], replacements: new Map([['server-c1', 'c1']]) });
+    noteBotGroupTimeline('g1', [echo], beginBotGroupTimelineRead());
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(targetCalls()).toHaveLength(2);
+  } finally {
+    stop(); finishRead(emptyTimeline); vi.unstubAllGlobals(); vi.useRealTimers();
+  }
+});
 
 // Unit regression: a restart between local enqueue and the HTTP response used to lose
 // ownership. The production outbox must save first, then restore the same clientId FIFO.

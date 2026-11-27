@@ -54,6 +54,7 @@ interface GroupData {
   /** A server group with teammates' bubbles: quote, reactions, thread entry and a task card. */
   bubbles?: boolean;
   wrappedReactions?: boolean;
+  reactionMotion?: boolean;
   replyComposer?: boolean;
   /** A single-speaker server group: nobody was named, so everyone answers in turn (bot-group-chat.md §4.0/§7.0). */
   arrangement?: Queue;
@@ -207,7 +208,6 @@ function bubbleMessages(wrappedReactions = false) {
         { id: 'r3', authorKind: 'bot', authorBotId: 'b', authorName: 'Nova', text: '已经记下了', attachments: [], createdAt: T0 + 10 * MINUTE },
       ] },
     }),
-    // Short messages with more reactions than the text is wide: the bubble widens to carry them.
     message({
       id: 'a2', sequence: 6, authorKind: 'bot', authorBotId: 'a', authorName: 'Aster', createdAt: T0 + 10 * MINUTE, content: '好',
       reactions: wrappedReactions ? manyReactions : ['👍', '🎉', '👀', '🙏'].map((emoji, i) => ({ emoji, count: i + 1, me: i === 0 })),
@@ -509,7 +509,7 @@ void mountPage({
               : input.messageId.endsWith('short-sent') ? [] : [{ actorId: 'g', name: 'Ada', readAt: T0 + 5 * MINUTE, formerMember: false }];
             return { ok: true, readers: { messageId: input.messageId, eligibleCount: 6, readCount: readers.length, listed: true, readers } };
           },
-          react: forbid('maker.chatServer.react'),
+          react: data.reactionMotion ? async () => ({ ok: false, errorCode: 'SERVICE_ERROR' }) : forbid('maker.chatServer.react'),
           ownedBots: async () => ({ ok: true, bots: [] }),
           manage: forbid('maker.chatServer.manage'),
           ...(data.threadPanel || data.readReceipts || data.topicPreview ? { thread, followThread } : {}),
@@ -607,5 +607,5 @@ function TopicPreviewSidebar({ data }: { data: GroupData }) {
   const navigate = useNavigate();
   return <div className="p-2"><BotGroupSidebarRow group={groupFrom(data) as BotGroupSummary}
     bots={[]} islandActivity={new Map()} now={Date.now()} selected={true}
-    onOpenGroup={(id, reply) => navigate(`/bots/groups/${id}${reply ? '?' + new URLSearchParams(reply).toString() : ''}`)} /></div>;
+    onOpenGroup={(id) => navigate(`/bots/groups/${id}`)} /></div>;
 }

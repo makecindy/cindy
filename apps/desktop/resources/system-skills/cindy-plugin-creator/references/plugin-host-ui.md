@@ -45,10 +45,137 @@
 同实例、视图和任务再次打开会聚焦已有页签；更新输入不重建页面。
 
 原生按钮可额外声明 `presentation:"popover"`，在入口旁打开同一 MCP App 资源；缺省仍打开侧栏页签。
-仅适用于 `composer.header/composer.toolbar/session.header/statusbar/message.actions/turn.footer` 的页面按钮；
+仅适用于 `composer.header/composer.toolbar/session.header/statusbar/workdir.menu/message.actions/turn.footer` 的页面按钮；
 正文位置与更多菜单保持各自承载方式。页面在弹层打开后才加载，关闭、入口离开视口或区域隐藏即释放。
 弹层方式在安装/更新时随声明展示，不需要为入口单独授权。例：
 `{"id":"quick","title":"快捷面板","position":"composer.toolbar","view":"board","presentation":"popover"}`。
+
+#### 输入框内联动作
+
+`composer.header` 和 `composer.toolbar` 的原生按钮引用 `scope:"task"` 页面时可附加
+`composerAction:"inline"`。按钮只在已有本机 Desktop 任务的输入框可用。工具栏按钮以
+`title` 作可访问名称和提示，`icon:"sparkles"` 可选。上方按钮复用靠右单行和标题截断。
+新增内联入口没有隐式可见默认值：静态入口必须在 contribution 声明 `visible:true`；
+需要等待配置或按需出现的入口声明 `visible:false`，只在确有内容时发布 `{visible:true,title}`。
+空配置、读取失败或移除条目时发布 `{visible:false}`，隐藏后不留空槽或空行。
+隐藏仍保留按需状态需求，后续更新可以恢复显示；既有非内联控件保持原声明行为。
+
+`composer.header` 的按钮声明 `icon` 时显示为图标按钮，未声明时显示文字。
+图标名沿用原生导航图标名，并支持 `sparkles`，未知名称显示 puzzle。
+图标按钮与文字按钮同高并垂直居中，`title` 保留完整悬停提示和可访问名称。
+收入「更多」后在上方横向浮动栏中展开，保留图标按钮或文字按钮的原样式与顺序。
+浮动栏按内容收拢宽度，达到可用宽度上限后换行；图标按钮保持无常驻背景与边框，完整名称由悬停提示和可访问名称提供。
+
+点击才加载该页面。同一编辑器一次只运行一个动作，工具栏按钮本身显示忙碌状态。
+这只改变动作的呈现方式，不限定业务类型，也不增加权限。页面可以调用本插件已声明的
+`app` 可见工具，组合其已获准的模型、网络、文件等能力；只有声明 `draft` 才获得草稿接口。
+`read/append/replace/replace-selection` 沿用既有语义，追加始终追加；是否去重、如何组织文本、
+使用什么提示词由插件决定。客户端只负责编辑器写入、版本校验与撤销边界。
+仅由此入口打开的页面会收到 `app.getHostContext().cindy.composerAction`，其中 `version:1`
+表示单次动作契约，`dynamicItems:true`、`draftDocument:true`、`queuedActions:true` 分别表示动态项目、结构化草稿写入和动作排队可用。
+这些标记仅用于接口探测，不授予未声明的草稿、文件或模型权限。
+依赖此能力的插件应将已验证支持此接口的 Cindy 版本登记为 `minCindyVersion`。
+页面缺少此标记时应等待用户从支持版本的输入框打开。兼容旧式弹层的 manifest 可保留
+`presentation:"popover"`，旧宿主的弹层不会提供内联动作标记。
+
+连接后仅尝试一次 `cindy.ui.composerAction({phase:"start"})`。只有 MCP 回执明确包含
+`{started:true}` 才执行，可从 `structuredContent` 或 JSON 文本正文读取。
+错误回执、异常正文、超时和断线后的重复请求都应直接结束。任务草稿仍用
+`cindy.ui.draft` 的既有读取、追加和带 revision 替换，替换作为独立的编辑器撤销步骤。
+动作结束时调用 `cindy.ui.composerAction({phase:"finish",status:"success"|"error",message?})`。
+`message` 为最多 160 个字符的本地化状态文本，请省略草稿内容、凭证和原始错误。
+完成只更新本次点击的显示。由于完成会关闭页面，无需等待回执或重试。关闭、替换或重连都会释放页面。
+内联动作的草稿和模型工具仍按
+页面已获准的能力及工具可见性使用。
+
+#### 动作调度与取消
+
+内联动作可声明 `concurrency:"queue"|"replace"`；省略和未知值沿用 `replace`。
+这只是同一编辑器的执行策略，不新增工具或草稿权限，也不按插件名称或草稿写入模式猜策略。
+
+- `queue`：连续选择不同排队动作，按点击顺序执行。待执行动作不加载页面、不读草稿或调用工具；
+  前一动作成功、失败或超时后才启动下一项。正在执行或已排队的同一项目重复点击会合并，完成后可再次点击。
+- `replace`：替换当前动作并清空待执行动作。选择排队动作时，若当前运行的是互斥动作，也会先取消该互斥动作；
+  只有排队动作之间顺序执行。原有未声明调度方式的内联动作保持原行为。
+
+例：`{"id":"insert","title":"插入片段","position":"composer.header","view":"task-action","composerAction":"inline","concurrency":"queue","visible":true}`。
+依赖排队的页面应检查 `hostContext.cindy.composerAction.queuedActions === true`，并登记实际验证的最低宿主版本。
+每个输入框最多保留 512 个待执行动作，达到上限时宿主反馈失败，不启动额外工作。
+
+隐藏、禁用、移除或撤权会取消对应的在途和待执行动作；切任务、编辑器失效或区域隐藏时全部释放。
+仅收起「更多」不会取消已经接受的动作。执行中请使用按钮自身的忙碌状态或另行声明的状态控件，
+不要通过禁用本动作来表示忙碌。无响应动作沿用工具调用的 30 分钟总时长上限，释放后继续处理下一项。
+
+内联页面释放会取消其在途工具调用。工具调用 `oneshot_text` 时须透传收到的 `callId`，
+原调用的取消会沿现有工具生命周期传到模型和模型启动等待，返回 `CANCELLED`，不采纳迟到结果。
+取消是向供应商传递终止请求，不能撤回供应商已处理的内容或已产生的费用。
+
+插件需要主动反馈时，复用已有通用入口，均由插件决定是否展示：
+
+- 阶段、百分比或简短提示：声明 `kind:"status"` 的原生控件，使用 `cindy.ui.updateContribution`
+  更新 `title/visible`；也可更新动作按钮本身的标题。工具的标准 `onprogress` 可供页面接收，
+  由插件选择转换为哪些面向用户的状态，不自动把每条底层进度弹给用户。
+- 成功、提醒或失败轻提示：后台声明 `notify:true`，使用既有 `cindy.send({type:'notify',text,tone})`。
+  遵循通知能力的限速，不用连续 toast 刷进度。
+- 需要查看详情或继续交互：显式调用 `cindy.ui.open` 打开本插件已声明的页面，或沿用原弹层入口。
+
+例如，在 `contributions` 中声明按需出现的状态文字：
+
+```json
+{"id":"job-progress","title":"处理中","position":"composer.header","kind":"status","visible":false}
+```
+
+后台按该任务更新，结束时主动隐藏；不占用草稿，也不发送聊天消息：
+
+```js
+await cindy.ui.updateContribution('job-progress', () => ({ title: '处理中 40%', visible: true }), { sessionId });
+await cindy.ui.updateContribution('job-progress', () => ({ visible: false }), { sessionId });
+```
+
+#### 动态按钮集合
+
+在 `composer.header` 按钮上声明 `dynamicItems:true`，把它作为一组原生动作的模板。
+本能力仅用于已有本机 Desktop 任务的真实输入框；新建页、临时草稿、远程任务和共享访客不展示或执行。
+模板本身始终不渲染，也不预留固定槽位；每个实际项目继承该模板的 `tool` 或 `view`、静态参数与权限。
+支持普通工具按钮及 `composerAction:"inline"` 的任务页面按钮。例如：
+
+```json
+{"id":"actions","title":"操作集合","position":"composer.header","view":"task-action","composerAction":"inline","dynamicItems":true,"visible":false}
+```
+
+只在有实际内容时发布 `visible:true` 与完整项目列表；项目顺序就是原生排列顺序：
+
+```js
+await cindy.ui.updateContribution('actions', () => ({ visible: true, items: [
+  { id: 'first', title: '第一个操作' },
+  { id: 'second', title: '第二个操作', icon: 'sparkles' },
+] }), { sessionId });
+// 清空后不留下模板按钮、更多按钮或间距。
+await cindy.ui.updateContribution('actions', () => ({ visible: true, items: [] }), { sessionId });
+```
+
+项目字段只有 `id/title/icon/disabled/visible`，ID 唯一且不随排序改变；`visible:false` 隐藏单项。
+项目不能改工具、页面、静态参数或权限。点击后将该项目 ID 作为既有 `value` 参数交给原动作；
+内联页面从 `hostContext.cindy.input.value` 读取。普通工具调用会核对当前调用窗口已发布的项目，
+移除、隐藏、禁用或撤权后的项目不能继续调用。沿用通用状态限制，单次列表最多 512 项，
+每个模板仅占一份状态订阅，不为每个项目启动页面或增加轮询。
+
+#### 结构化草稿写入
+
+`cindy.ui.draft` 写入支持 `text` 或 `document` 二选一。`document` 使用读取接口返回的 Tiptap JSON
+文档格式，可用于 `append/replace/replace-selection`；替换仍需起始 `revision`。
+结构化写入要求当前任务已挂载可编辑的输入框，宿主用该编辑器 schema 校验，再沿原保存与撤销流程写入。
+非法文档、版本冲突、锁定或已失效动作都不写；附件不属于该文档字段，继续由原输入框管理。
+
+```js
+await app.callServerTool({ name: 'cindy.ui.draft', arguments: {
+  mode: 'replace', document, revision,
+} });
+```
+
+插件需要保留引用、格式或其它非文本节点时，应在读取的原文档上只修改目标文字并提交完整文档。
+宿主不替插件决定哪些文字需要整理，也不向模型自动发送引用元数据。文本写入及旧普通页面接口保持原有语义。
+单次文本长度或结构化文档的 JSON 长度上限为 128000 字符；一次写入是一条独立撤销记录。
 
 入口指定 `view` 或 `tool` 之一。`arguments` 为静态 JSON：页面收到 `hostContext.cindy.input`，
 工具收到对应参数。`kind:"select"` 还会加入用户选择的 `value`，并须声明
@@ -58,10 +185,11 @@
 
 | position | 位置 |
 | --- | --- |
-| `composer.header` | 任务输入框卡片正上方，与输入框同宽；只显示一行，超宽横向滚动，长标题截断并保留完整提示；建议少量短入口，无贡献时不占空间 |
+| `composer.header` | 任务输入框卡片正上方，与运行状态、耗时和 token 速率同排；按声明顺序从右往左排列，文字按钮按内容取有上限的紧凑宽度，一行放不下的入口收入「更多」横向浮动栏，长标题截断并保留完整提示；无可见贡献时不占空间 |
 | `composer.toolbar` | 输入框内底部工具栏 |
 | `session.header` | 任务标题栏 |
 | `statusbar` | 输入框下方的任务状态栏，位于目录／对话标识与用量信息之间 |
+| `workdir.menu` | 本机任务输入框下方的工作目录菜单，可声明多个页面或工具动作 |
 | `message.actions` | 消息操作栏 |
 | `message.menu` | 消息「更多」菜单内部 |
 | `turn.footer` | 已结束的 AI 消息末尾 |
@@ -77,6 +205,14 @@
 
 `statusbar` 等原生控件位置支持 `button`、`select` 和 `status`。需要点击打开页面或调用工具时，
 声明 `kind:"button"` 并指定 `view` 或 `tool`；示例的底部「示例已就绪」按钮会打开当前任务页。
+
+状态栏按钮默认使用与工作目录标签一致的 12 号字。`fontSize` 可设为数字 12、13 或 14，其他值沿用默认字号。
+
+要把 Open in 放到工作目录上，在 `mcpApps.host.contributions` 声明：
+`{"id":"open-in","title":"Open in","position":"workdir.menu","view":"open-in-page","presentation":"popover"}`。
+`open-in-page` 是插件已声明的页面 ID。用户点目录名后可选系统文件管理器或插件操作。选择 Open in 才加载页面。
+任务页面（弹层或侧栏）声明 `scope:"task"` 和 `context` 能力后，通过 `app.getHostContext().cindy.context.workingDir` 读取用户点选的目录（含当前显示的 worktree）。目录的文件操作沿用已有授权。
+旧客户端忽略此位置，兼容旧版时可保留原状态栏入口。
 
 `message.menu` 声明菜单动作，`kind` 缺省或填 `button`，引用 `view` 或 `tool`；
 不在菜单内嵌选择框、状态条或任意页面。`match.roles` 可区分用户消息和 AI 消息。
@@ -282,7 +418,8 @@ await publish();
 
 `hasConsumers(id,target?)` 只读本地缓存。`updateContribution(id,build,target?)` 在无人消费时不执行 build、不发通信；
 连续更新合并为最后一份完整小状态，返回 `{ok:true,observed:boolean}`。
-字段限于 `title/value/disabled/visible`，省略字段恢复声明默认值，不能改变工具、参数、页面或权限。
+字段为 `title/value/disabled/visible/items`，`items` 仅用于显式声明的动态按钮集合。
+省略字段恢复声明默认值，不能改变工具、静态参数、页面或权限。
 需求消息含本插件的 `{id,sessionId,clientId?}`。传 `target:{sessionId,clientId?}` 精确更新对象，
 省略 target 则更新该入口的实际消费者。需求不携带正文，不唤醒休眠插件，也不新增轮询或心跳。
 消息和回合插槽随原消息区域进入、离开视口登记和释放状态需求，窗口隐藏时也释放；更多菜单中的入口仅在菜单打开时登记。

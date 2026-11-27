@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "08c7fa97-4efb-4461-b05b-9f1fb282b266",
+  "id": "18b32762-8d1a-4730-a1b3-2c984846780b",
   "prevId": "cb417ef8-6561-4771-a291-5d37e762f26a",
   "tables": {
     "account_usage_snapshots": {
@@ -2507,6 +2507,23 @@
       "uniqueConstraints": {},
       "checkConstraints": {}
     },
+    "deleted_chat_vector_rows": {
+      "name": "deleted_chat_vector_rows",
+      "columns": {
+        "rowid": {
+          "name": "rowid",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
     "device_link_ownership": {
       "name": "device_link_ownership",
       "columns": {
@@ -4064,13 +4081,6 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
-          "autoincrement": false
-        },
-        "latest_report": {
-          "name": "latest_report",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
           "autoincrement": false
         }
       },

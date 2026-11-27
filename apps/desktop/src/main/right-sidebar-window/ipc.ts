@@ -188,7 +188,11 @@ function parseCommand(raw: unknown): RsbWindowCommand {
     return { type: 'close-orca-workers-tab', sessionId: r.sessionId };
   }
   if (r.type === 'open-plugin-task') {
-    return { type: 'open-plugin-task', sessionId: r.sessionId, ...parsePluginResource(r) };
+    const path = r.resourceWorkingDir;
+    if (path !== undefined && (typeof path !== 'string' || !path || path.length > MAX_CONTEXT_PATH_LENGTH || !r.resourceViewId))
+      throwIpcError('INVALID_PARAMS', 'Invalid plugin resource working directory');
+    return { type: 'open-plugin-task', sessionId: r.sessionId, ...parsePluginResource(r),
+      ...(path === undefined ? {} : { resourceWorkingDir: path }) };
   }
   if (r.type === 'open-background-tasks-tab') {
     const hasFocusTaskId =

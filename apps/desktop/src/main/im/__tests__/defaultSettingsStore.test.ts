@@ -506,4 +506,54 @@ describe('im default settings store', () => {
     expect(persisted.channels.feishu.groupPermissionMode).toBe('bypassPermissions');
     expect(persisted.channels.feishu.groupCtrPermissionMode).toBeUndefined();
   });
+
+  // 回归：IM 默认设置持久化/清除插件引擎(acp)且不破坏旧版文件无 acp 键时的默认结构。
+  // 最小失败输入与 tier：unit，写入 acp 路由后读取、清空回自动选择、或落盘孤立 agentKind='acp'。
+  it('persists, clears, and safely normalizes plugin engine (acp) defaults', () => {
+    const acpRoute = {
+      providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+      model: 'gemini-4-neon',
+      effort: 'high' as const,
+      agentDeviceId: 'mini',
+    };
+    writeImDefaultSettingsPatch({ agentKind: 'acp', agents: { acp: acpRoute } }, 'feishu');
+    const saved = readImDefaultSettings('feishu');
+    expect(saved.agentKind).toBe('acp');
+    expect(saved.agents.acp).toEqual(acpRoute);
+
+    // 清空回内置自动选择后，agents.acp 应被移除而不是残留空对象。
+    writeImDefaultSettingsPatch(
+      { agentKind: 'claude-code', agents: { acp: { providerId: null, model: '', effort: '' } } },
+      'feishu',
+    );
+    expect(readImDefaultSettings('feishu').agents.acp).toBeUndefined();
+
+    // 若磁盘只写了 agentKind='acp' 但缺少有效 agents.acp，回落到出厂默认内置引擎。
+    const orphan = __testing.normalize({ agentKind: 'acp', agents: IM_DEFAULT_SETTINGS.agents });
+    expect(orphan.agentKind).toBe(IM_DEFAULT_SETTINGS.agentKind);
+  });
+
+  it('preserves modelGroup on effort-only patches and clears it when concrete route identity changes', () => {
+    writeImDefaultSettingsPatch({
+      agentKind: 'codex',
+      modelGroup: 'coding',
+      agents: { codex: { providerId: 'openai', model: 'gpt-5', effort: 'high' } },
+    }, 'feishu');
+    expect(readImDefaultSettings('feishu').modelGroup).toBe('coding');
+
+    // Effort-only update on the same concrete route keeps modelGroup attached.
+    writeImDefaultSettingsPatch({
+      agents: { codex: { providerId: 'openai', model: 'gpt-5', effort: 'xhigh' } },
+    }, 'feishu');
+    expect(readImDefaultSettings('feishu')).toMatchObject({
+      modelGroup: 'coding',
+      agents: { codex: { providerId: 'openai', model: 'gpt-5', effort: 'xhigh' } },
+    });
+
+    // Changing concrete model clears modelGroup.
+    writeImDefaultSettingsPatch({
+      agents: { codex: { providerId: 'openai', model: 'gpt-5-mini', effort: 'xhigh' } },
+    }, 'feishu');
+    expect(readImDefaultSettings('feishu').modelGroup).toBeUndefined();
+  });
 });

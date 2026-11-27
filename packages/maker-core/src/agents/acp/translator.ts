@@ -21,8 +21,14 @@
 
 import { isDeepStrictEqual } from 'node:util';
 import { createTwoFilesPatch } from 'diff';
+import {
+  isProviderSafetyRefusalError,
+  PROVIDER_SAFETY_REFUSAL_REASON,
+} from '@cindy/maker-shared/error-redaction';
 import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type { AgentEvent } from '../../types/events.js';
+import type { TakeMcpToolResult } from '../base-agent.js';
+import { parseAcpMcpToolName } from './mcp-tool-result.js';
 import {
   asNonEmptyString,
   asRecord,
@@ -50,10 +56,14 @@ export interface AcpUpdateTranslatorOptions {
   /** Unique per session; keeps thinking block ids distinct. */
   blockIdPrefix: string;
   now?: () => number;
+  /** Host MCP result fallback for engines that omit MCP tool outputs on `tool_call_update`. */
+  takeMcpToolResult?: TakeMcpToolResult;
+  /** Accepted Host MCP server names for disambiguating server names that contain underscores. */
+  mcpServerNames?: readonly string[];
 }
 
 export type AcpTurnOutcome =
-  | { stopReason: AcpStopReason; usage?: AcpTurnUsage }
+  | { stopReason: AcpStopReason }
   /** `signals`: structured failure fields (usage limit, sign-in, overload) the agent classified. */
   | { error: string; reason?: string; signals?: Record<string, unknown> };
 
@@ -119,12 +129,31 @@ export function acpToolDisplayName(fields: Pick<AcpToolCallFields, 'title' | 'na
   return fields.title ?? fields.name ?? fields.kind ?? 'tool';
 }
 
+/** Maps ACP plan entry statuses to Cindy's `update_plan` status enum. */
+function toCindyPlanStatus(status: string): 'pending' | 'in_progress' | 'completed' {
+  switch (status.toLowerCase()) {
+    case 'completed':
+    case 'done':
+    case 'cancelled':
+    case 'canceled':
+    case 'skipped':
+      return 'completed';
+    case 'in_progress':
+    case 'inprogress':
+    case 'running':
+      return 'in_progress';
+    default:
+      return 'pending';
+  }
+}
+
 export class AcpUpdateTranslator {
   private segmentText = '';
   private segmentMessageId: string | undefined;
   private lastText = '';
   private thinking: ThinkingBlock | null = null;
   private thinkingSeq = 0;
+  private planTurnSeq = 1;
   private readonly tools = new Map<string, ToolState>();
   private plan: AcpPlanEntry[] | null = null;
   private readonly now: () => number;
@@ -133,9 +162,24 @@ export class AcpUpdateTranslator {
     this.now = options.now ?? Date.now;
   }
 
-  /** Latest plan published in this turn (kept for the host; not rendered in phase 1). */
+  verificationWarning(): boolean {
+    return /^⚠\uFE0F?\s+Verification Required$/.test((this.segmentText || this.lastText).trim());
+  }
+
+  finishVerificationWarning(): AgentEvent[] {
+    const events = this.flushPending();
+    this.lastText = '';
+    return events;
+  }
+
+  /** Latest plan published in this turn. */
   getPlan(): AcpPlanEntry[] | null {
     return this.plan;
+  }
+
+  /** Returns the merged fields of a tracked tool call in the current session, if any. */
+  getToolCall(toolCallId: string): AcpToolCallFields | undefined {
+    return this.tools.get(toolCallId);
   }
 
   handleUpdate(update: AcpRecord): AgentEvent[] {
@@ -172,14 +216,39 @@ export class AcpUpdateTranslator {
         if (fields) this.upsertTool(fields, events);
         return events;
       }
-      case 'plan': {
-        const entries = Array.isArray(update.entries) ? update.entries : [];
-        this.plan = entries.flatMap((entry) => {
+      case 'plan':
+      case 'plan_update': {
+        const planRecord = asRecord(update.plan);
+        const rawEntries = Array.isArray(update.entries)
+          ? update.entries
+          : Array.isArray(planRecord.entries)
+            ? planRecord.entries
+            : null;
+        if (!rawEntries) return events;
+        const parsed = rawEntries.flatMap((entry) => {
           const record = asRecord(entry);
-          const content = asNonEmptyString(record.content);
+          const content = asNonEmptyString(record.content) ?? asNonEmptyString(record.title) ?? asNonEmptyString(record.step);
           return content
             ? [{ content, priority: String(record.priority ?? 'medium'), status: String(record.status ?? 'pending') }]
             : [];
+        });
+        this.plan = parsed;
+        const planKey = asNonEmptyString(planRecord.planId) ?? `${this.options.blockIdPrefix}-plan-${this.planTurnSeq}`;
+        this.flushText(events);
+        this.closeThinking(events);
+        events.push({
+          type: 'tool_use',
+          data: {
+            toolUseId: `plan:${planKey}`,
+            toolName: 'update_plan',
+            runtimeActivity: 'snapshot',
+            input: {
+              plan: parsed.map((entry) => ({
+                step: entry.content,
+                status: toCindyPlanStatus(entry.status),
+              })),
+            },
+          },
         });
         return events;
       }
@@ -192,10 +261,10 @@ export class AcpUpdateTranslator {
    * Registers a tool call seen outside `session/update` (the permission request
    * carries one) so its card exists before the user is asked about it.
    */
-  noteToolCall(fields: AcpToolCallFields): AgentEvent[] {
+  noteToolCall(fields: AcpToolCallFields): { events: AgentEvent[]; toolCall: AcpToolCallFields } {
     const events: AgentEvent[] = [];
-    this.upsertTool(fields, events);
-    return events;
+    const tool = this.upsertTool(fields, events);
+    return { events, toolCall: { ...tool, ...fields } };
   }
 
   /** Closes open text / thinking segments without ending the turn (used before a new turn starts). */
@@ -217,8 +286,9 @@ export class AcpUpdateTranslator {
    * or failed turn marks unfinished calls as interrupted; other stop reasons keep
    * the earlier rule and treat them as done.
    */
-  finish(outcome: AcpTurnOutcome): AgentEvent[] {
+  finish(outcome: AcpTurnOutcome, receipt?: { usage: AcpTurnUsage; usageModel?: string }): AgentEvent[] {
     const events = this.flushPending();
+    this.planTurnSeq += 1;
     const interrupted = 'error' in outcome || outcome.stopReason === 'cancelled';
     const carryOpen = !interrupted && outcome.stopReason === 'end_turn';
     for (const [toolCallId, tool] of this.tools) {
@@ -229,13 +299,17 @@ export class AcpUpdateTranslator {
     const result = this.lastText;
     this.lastText = '';
     if ('error' in outcome) {
+      const reason =
+        outcome.reason ??
+        (isProviderSafetyRefusalError(outcome.error) ? PROVIDER_SAFETY_REFUSAL_REASON : undefined);
       events.push({
         type: 'error',
         data: {
           ...(outcome.signals ?? {}),
+          ...(receipt && { type: 'acp/prompt_end', ...receipt }),
           message: outcome.error,
           isTerminal: true,
-          ...(outcome.reason ? { reason: outcome.reason } : {}),
+          ...(reason ? { reason } : {}),
         },
       });
       return events;
@@ -247,8 +321,7 @@ export class AcpUpdateTranslator {
         status: outcome.stopReason === 'cancelled' ? 'cancelled' : 'completed',
         result: outcome.stopReason === 'cancelled' ? '' : result,
         stopReason: outcome.stopReason,
-        // A cancelled turn still spent the tokens the agent reports for it.
-        ...(outcome.usage ? { usage: outcome.usage } : {}),
+        ...receipt,
       },
     });
     return events;
@@ -271,7 +344,7 @@ export class AcpUpdateTranslator {
     return events;
   }
 
-  private upsertTool(fields: AcpToolCallFields, events: AgentEvent[]): void {
+  private upsertTool(fields: AcpToolCallFields, events: AgentEvent[]): ToolState {
     this.flushText(events);
     this.closeThinking(events);
     let tool = this.tools.get(fields.toolCallId);
@@ -296,6 +369,7 @@ export class AcpUpdateTranslator {
     if (!tool.settled && (tool.status === 'completed' || tool.status === 'failed')) {
       this.settleTool(tool, events, tool.status === 'failed' ? 'failed' : 'done');
     }
+    return tool;
   }
 
   private emitToolUse(tool: ToolState, events: AgentEvent[], inputPatch = false): void {
@@ -320,8 +394,25 @@ export class AcpUpdateTranslator {
 
   private settleTool(tool: ToolState, events: AgentEvent[], result: 'done' | 'failed' | 'interrupted'): void {
     tool.settled = true;
-    const isError = result !== 'done';
-    const rendered = renderAcpToolContent(tool.content, tool.rawOutput);
+    let isError = result !== 'done';
+    let rendered = renderAcpToolContent(tool.content, tool.rawOutput);
+    if (this.options.takeMcpToolResult) {
+      const parsed = (tool.name ? parseAcpMcpToolName(tool.name, this.options.mcpServerNames) : null)
+        ?? (tool.title ? parseAcpMcpToolName(tool.title, this.options.mcpServerNames) : null);
+      if (parsed) {
+        // Always retire the matching Host receipt when an MCP call settles so a native-output
+        // or interrupted call cannot leave a stale receipt for a later identical call.
+        const receipt = this.options.takeMcpToolResult({
+          serverName: parsed.serverName,
+          toolName: parsed.toolName,
+          input: tool.rawInput,
+        });
+        if (receipt && !rendered && result !== 'interrupted') {
+          rendered = clip(receipt.fullText);
+          if (receipt.isError) isError = true;
+        }
+      }
+    }
     const fullText = result === 'interrupted' && !rendered ? 'Interrupted before the tool finished.' : rendered;
     events.push({ type: 'tool_result_full', data: { toolUseId: tool.toolCallId, fullText, isError } });
     events.push({ type: 'tool_result', data: { summary: isError ? 'failed' : 'done', toolUseIds: [tool.toolCallId] } });

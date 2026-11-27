@@ -163,7 +163,7 @@ describe('createStdioTransport process observer', () => {
     const onProcessSpawned = vi.fn(() => dispose);
     const transport = createStdioTransport({ binaryPath: '/codex', onProcessSpawned });
 
-    expect(onProcessSpawned).toHaveBeenCalledWith(4321);
+    expect(onProcessSpawned).toHaveBeenCalledWith(4321, child);
     const onClose = vi.fn();
     const onLine = vi.fn();
     transport.onClose(onClose);
@@ -335,10 +335,10 @@ describe('close() 强杀兜底 (#3699)', () => {
     const dispose = vi.fn();
     const transport = createStdioTransport({ binaryPath: '/codex', onProcessSpawned: () => dispose });
     const closing = transport.close();
-    const failure = expect(closing).rejects.toThrow('did not exit after SIGKILL');
+    const failure = expect(closing).rejects.toThrow('Codex runtime cleanup failed: app-server exit was not confirmed after SIGKILL');
     await vi.advanceTimersByTimeAsync(3_000);
     await failure;
-    await expect(transport.close()).rejects.toThrow('did not exit after SIGKILL');
+    await expect(transport.close()).rejects.toThrow('Codex runtime cleanup failed: app-server exit was not confirmed after SIGKILL');
     expect(dispose).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
     child.emit('exit', null, 'SIGKILL');
@@ -346,7 +346,7 @@ describe('close() 强杀兜底 (#3699)', () => {
     await expect(transport.close()).resolves.toBeUndefined();
     await expect(transport.close()).resolves.toBeUndefined();
     // 迟到退出只改变后续检查，不能把原调用的严格失败变成成功。
-    await expect(closing).rejects.toThrow('did not exit after SIGKILL');
+    await expect(closing).rejects.toThrow('Codex runtime cleanup failed: app-server exit was not confirmed after SIGKILL');
     expect(child.stdin.end).toHaveBeenCalledOnce();
     expect(child.kill).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);

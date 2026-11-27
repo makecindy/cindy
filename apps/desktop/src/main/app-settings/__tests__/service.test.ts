@@ -170,3 +170,26 @@ describe('registered memory settings through Desktop service and MCP', () => {
     expect(await late.call({ maker: false })).toMatchObject({ ok: false, errorCode: 'SETTINGS_OPERATION_FAILED' });
   });
 });
+
+// Unit: a settings save based on an earlier read is checked before memory is persisted.
+describe('memory settings saved from an earlier read', () => {
+  const stale = { assertUnchanged: () => { throw new Error('CONFLICT'); } };
+  it('persists nothing for the Cindy memory switch once the read is out of date', async () => {
+    const writeMemorySetting = vi.fn();
+    const applyChange = vi.fn(async (parts: { persist: () => Promise<object> }) => ({ ...await parts.persist(), codexRestartDeferred: false }));
+    await expect(updateMakerMemorySettings(false, {}, {
+      makerMemory: { isEnabled: () => true, enable: vi.fn(), disable: vi.fn(), syncNativeAgentsOff: vi.fn() },
+      maker: { setAgentMemory: vi.fn() }, writeMemorySetting, applyChange: applyChange as never, invalidateBridge: vi.fn(),
+    }, stale)).rejects.toThrow('CONFLICT');
+    expect(writeMemorySetting).not.toHaveBeenCalled();
+  });
+  it('checks only the first engine write, which the read covers', async () => {
+    const value = { maker: false, claudeCode: true, codex: true, pi: true };
+    const updateNative = vi.fn(async (kind: 'claude-code' | 'codex' | 'pi', next: unknown) => { value[kind === 'claude-code' ? 'claudeCode' : kind] = next as boolean; });
+    const section = createMemorySettingsSection({ read: () => ({}), readState: () => ({ value }), isMakerEnabled: () => false,
+      updateMaker: vi.fn(), updateNative, reset: vi.fn() });
+    const guard = { assertUnchanged: vi.fn() };
+    await section.update({ claudeCode: false, pi: false }, guard);
+    expect(updateNative.mock.calls).toEqual([['claude-code', false, guard], ['pi', false, undefined]]);
+  });
+});

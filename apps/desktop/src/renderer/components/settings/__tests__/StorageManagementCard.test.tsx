@@ -30,6 +30,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 }));
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ dataOwnerId: 'storage-test-owner', dataOwnerGeneration: 1, dataOwnerRecoveryEpoch: 0 }),
+  useOptionalDataOwnerGeneration: () => 1,
 }));
 
 import { StorageManagementCard } from '../StorageManagementCard';

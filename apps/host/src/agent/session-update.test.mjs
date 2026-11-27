@@ -61,7 +61,7 @@ const VIEWS = ['prov-a', 'prov-b'].map(id => ({ id, connected: true, agents: ['c
   routing: { 'claude-code': {} }, models: { 'claude-code': Object.keys(WINDOWS).map(model) } }));
 const quiet = { debug() {}, info() {}, warn() {}, error() {} };
 
-async function fixture(t) {
+async function fixture(t, opts = {}) {
   // The development build refuses to migrate what it takes for the official shared profile
   // (XDT_OFFICIAL_SHARED_PROFILE=1 inside a Cindy task); this is a fixture profile.
   const sharedProfile = process.env.XDT_OFFICIAL_SHARED_PROFILE;
@@ -138,6 +138,7 @@ async function fixture(t) {
     publish: event => events.push(event),
     setModel: (...args) => selection.setModel(...args),
     move: sessionMove.move,
+    ...(opts.onSoftDelete ? { onSoftDelete: opts.onSoftDelete } : {}),
   });
   const task = async (id, { agentKind = 'claude-code', model = 'big', contextTokens = 0, workDir = root } = {}) => {
     await storage.create({ id, title: 'Window fixture', agentKind, model, workDir, providerId: 'prov-a' });
@@ -410,10 +411,9 @@ test('window budget: with a restart waiting on the task, the budget is saved wit
   f.runtime('budget-restart');
   t.after(() => { appliedContextWindowBudgets.delete('budget-restart'); pendingSessionContextWindowBudgetReconciles.delete('budget-restart'); });
   let restart;
-  await withSendToSessionLock('budget-restart', async () => {
-    // A restart registers its fence, then waits for the lock /sessions/update holds (as main.ts wraps it).
+  await f.update('budget-restart', { contextWindowBudget: 100_000 }, undefined, () => {
+    // The profile check runs after /sessions/update acquires the route lock.
     restart = withSessionRestartLock('budget-restart', async () => { await f.closeRuntime('budget-restart'); });
-    await f.update('budget-restart', { contextWindowBudget: 100_000 });
   });
   await restart;
   assert.equal(readSessionContextWindowBudget('budget-restart'), 100_000, 'the budget is saved');
@@ -459,8 +459,8 @@ test('restore: the task list and a send make an archived task active through the
   }
   // One event per route: the task list's carries its whole patch, a send's the new status.
   assert.deepEqual(f.events.map(e => [e.sessionId, e.patch]), [
-    ['restore-list', { status: 'active', title: 'Back', snoozedUntil: null, snoozedAt: null }],
-    ['restore-send', { status: 'active', snoozedUntil: null, snoozedAt: null }],
+    ['restore-list', { status: 'active', title: 'Back', archivedAt: null, snoozedUntil: null, snoozedAt: null }],
+    ['restore-send', { status: 'active', archivedAt: null, snoozedUntil: null, snoozedAt: null }],
   ]);
   assert.deepEqual(f.restoreCalls, [['task list', 'restore-list']]);
   // An active task is left as it is by a send.
@@ -876,7 +876,7 @@ test('move: the worktree registry decides ownership; no registry is no binding, 
     assert.deepEqual(await f.row(id), before, 'nothing is written');
   };
   for (const [name, registry, outcome] of [
-    ['bound', JSON.stringify({ worktrees: { 'wt-bound': { path: worktree } } }), 'blocked'],
+    ['bound', JSON.stringify({ worktrees: { 'wt-bound': { path: worktree } } }), 'regrouped'],
     ['no registry', null, 'moved'],
     ['registry without the task', JSON.stringify({ worktrees: {} }), 'moved'],
     ['not JSON', '{"worktrees":', 'failed'],
@@ -892,8 +892,14 @@ test('move: the worktree registry decides ownership; no registry is no binding, 
     if (outcome === 'moved') {
       await f.update(id, patch);
       assert.equal((await f.row(id)).workingDir, storedDir(elsewhere), name);
-    } else if (outcome === 'blocked') {
-      await unchanged(id, patch, error => error.code === 'PRECONDITION_FAILED'
+    } else if (outcome === 'regrouped') {
+      const moved = await f.update(id, patch);
+      assert.equal(moved.workingDir, storedDir(worktree));
+      assert.equal(moved.projectDir, storedDir(elsewhere));
+      assert.equal((await f.row(id)).projectDir, storedDir(elsewhere));
+      assert.deepEqual(movedEvents(f, id).at(-1).patch, { workspaceKind: 'project', projectDir: storedDir(elsewhere) });
+      assert.ok(!f.closedByExecutor.includes(id));
+      await unchanged(id, { workingDir: elsewhere }, error => error.code === 'PRECONDITION_FAILED'
         && error.message.includes('A worktree session cannot be moved outside its worktree'));
     } else {
       await unchanged(id, patch, error => error instanceof Error && !error.message.includes('cannot be moved outside'));
@@ -1022,9 +1028,17 @@ test('task snooze: the Host update saves, rejects and clears the date like the d
   await update({ snoozedUntil });
   const { body: archived } = await update({ status: 'archived' });
   assert.deepEqual([archived.status, archived.snoozedUntil, archived.snoozedAt], ['archived', null, null]);
+  assert.equal(typeof archived.archivedAt, 'string');
   const archivedRow = await f.row(id);
   assert.deepEqual([archivedRow.snoozedUntil, archivedRow.snoozedAt], [null, null]);
-  assert.deepEqual(movedEvents(f, id).at(-1).patch, { status: 'archived', snoozedUntil: null, snoozedAt: null });
+  assert.ok(archivedRow.archivedAt > 0, 'manual archive stamps archived_at');
+  assert.equal(archived.archivedAt, new Date(archivedRow.archivedAt).toISOString());
+  assert.deepEqual(movedEvents(f, id).at(-1).patch, {
+    status: 'archived',
+    archivedAt: archived.archivedAt,
+    snoozedUntil: null,
+    snoozedAt: null,
+  });
 });
 
 // df520e3564: a send in an unregistered directory must neither add a project nor push a project refresh.
@@ -1059,4 +1073,52 @@ test('send: only a registered project becomes recent and is announced; an unchan
   await touch('sent', 6_000);
   assert.equal(f.events.length, events, 'nothing is announced once the owner changed during the send');
   assert.equal((await f.row('sent')).userSendAt, 6_000, 'the entry\'s own database is still stamped');
+});
+
+test('archive and soft-delete use terminal transaction, guard deleteTarget, stop runtime and broadcast unpin summary', async t => {
+  const softDeleted = [];
+  const f = await fixture(t, { onSoftDelete: async id => { softDeleted.push(id); } });
+  await f.task('arch');
+  await f.database.drizzle.update(sessions).set({ pinnedAt: 1000, summary: 'pinned', snoozedUntil: Date.now() + 60_000, snoozedAt: 1000 }).where(eq(sessions.id, 'arch'));
+  const archived = await f.update('arch', { status: 'archived', pinnedAt: null });
+  assert.equal(archived.status, 'archived');
+  assert.equal(archived.pinnedAt, null);
+  assert.equal(archived.snoozedUntil, null);
+  assert.equal((await f.row('arch')).summary, null);
+  assert.equal(movedEvents(f, 'arch').at(-1).patch.summary, null);
+  await f.task('del');
+  await f.task('child');
+  await f.database.drizzle.update(sessions).set({ parentSessionId: 'del', source: 'side-chat', sideChatPromoted: false }).where(eq(sessions.id, 'child'));
+  await assert.rejects(f.update('del', { status: 'deleted' }, { deleteTarget: 'side-chat' }), { code: 'PRECONDITION_FAILED' });
+  assert.equal((await f.row('del')).status, 'active');
+  const deleted = await f.update('del', { status: 'deleted' }, { deleteTarget: 'task' });
+  assert.equal(deleted.status, 'deleted');
+  assert.equal((await f.row('del')).status, 'deleted');
+  assert.equal((await f.row('child')).status, 'deleted');
+  assert.deepEqual(softDeleted, ['del', 'child']);
+  await assert.rejects(f.update('del', { status: 'archived', pinnedAt: null }), { code: 'PRECONDITION_FAILED' });
+  assert.equal((await f.row('del')).status, 'deleted');
+});
+
+// PR 12316, SQLite integration: a queued send needs the route lock while parent cleanup
+// fails. Both committed deletions must reach observers and the child must still stop.
+test('soft delete releases the route lock before draining and isolates parent cleanup failure', { timeout: 10_000 }, async t => {
+  const cleaned = [];
+  let releaseSend;
+  const sendReady = new Promise(resolve => { releaseSend = resolve; });
+  const send = sendReady.then(() => withSendToSessionLock('parent', async () => {}));
+  const f = await fixture(t, { onSoftDelete: async id => {
+    cleaned.push(id);
+    if (id === 'parent') {
+      releaseSend();
+      await send;
+      throw new Error('parent abort failed');
+    }
+  } });
+  await f.task('parent');
+  await f.task('child');
+  await f.database.drizzle.update(sessions).set({ parentSessionId: 'parent', source: 'side-chat', sideChatPromoted: false }).where(eq(sessions.id, 'child'));
+  await assert.rejects(f.update('parent', { status: 'deleted' }), /parent abort failed/);
+  assert.deepEqual(cleaned.sort(), ['child', 'parent']);
+  for (const id of cleaned) assert.equal(movedEvents(f, id).at(-1).status, 'deleted');
 });

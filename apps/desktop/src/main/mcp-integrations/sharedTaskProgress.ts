@@ -1,8 +1,8 @@
-import { parseSharedTaskPeer, type InvokeResultPayload } from '@cindy/device-link';
+import type { InvokeResultPayload } from '@cindy/device-link';
 import type { XdtHelperMcpDeps } from '@cindy/mcps';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
 import { isSyntheticTriggerText } from '@cindy/maker-shared/synthetic-trigger';
-import { stripDeepLinkPathPrefix } from '../../shared/deepLinkSchemes.js';
+import { parseSharedTaskTarget } from './sharedTaskTarget.js';
 import { visibleMessageText } from '../localDb/conversationSearch.pure.js';
 import { classifyRemoteHistoryError } from './remoteChatHistory.js';
 import type { SharedTaskCallerAccess } from './sharedTaskTools.js';
@@ -16,19 +16,6 @@ const TEXT_LIMIT = 2_000;
 const failure = (errorCode: string, message: string) => ({ ok: false as const, errorCode, message });
 const record = (value: unknown): Record<string, unknown> | null =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
-
-function sharedTaskTarget(link: string) {
-  const path = stripDeepLinkPathPrefix(link, 'session/');
-  if (!path) return null;
-  const [encodedId, query] = path.split('?');
-  if (!encodedId || !query) return null;
-  const peer = new URLSearchParams(query).get('device');
-  if (!peer || parseSharedTaskPeer(peer)?.role !== 'host') return null;
-  try {
-    const sessionId = decodeURIComponent(encodedId);
-    return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(sessionId) ? { sessionId, peer } : null;
-  } catch { return null; }
-}
 
 function progressEvent(row: Record<string, unknown>): ProgressEvent[] {
   const role = row.role;
@@ -63,7 +50,7 @@ function progressEvent(row: Record<string, unknown>): ProgressEvent[] {
 /** Uses the same three task-scoped reads as the guest UI. The owner validates membership on every result. */
 export function createSharedTaskProgressReader(deps: SharedTaskCallerAccess & { invoke: Invoke }): ProgressReader {
   return async ({ task_link, before }, context) => {
-    const target = sharedTaskTarget(task_link);
+    const target = parseSharedTaskTarget(task_link);
     if (!target) return failure('INVALID_ARGS', '请在已加入的共享任务中选择「复制任务链接」，并传入完整链接。');
     if (!context?.sessionId || !context.sessionInstanceId) return failure('PERMISSION_DENIED', '缺少当前任务身份。');
     const { peer, sessionId } = target;

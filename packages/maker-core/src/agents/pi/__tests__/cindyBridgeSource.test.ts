@@ -1672,6 +1672,38 @@ describe('cindy-bridge extension source', () => {
     expect(powerShellOverlayEnabled('win32', () => undefined, true)).toBe(false);
   });
 
+  // #13082: the registration guard alone cannot detect missing Python stream
+  // settings on CP936. Exercise the spawn hook supplied to Pi in-process (unit).
+  it('defaults missing Python encodings in the Windows PowerShell child environment', () => {
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const start = source.indexOf('const createPowerShellTool =');
+    const end = source.indexOf('// Cindy owns a separate Pi extension store.', start);
+    const compiled = ts.transpileModule(source.slice(start, end), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    type Env = Record<string, string | undefined>;
+    type SpawnHook = (input: { command: string; cwd: string; env: Env }) => { env: Env };
+    const factory = vi.fn((_cwd: string, _options: { spawnHook: SpawnHook }) => ({}));
+    const cwd = 'C:\\work';
+    const bashPackageHome = 'C:\\isolated';
+    runInNewContext(compiled, {
+      piCodingAgent: { createPowerShellTool: factory },
+      pi: { registerTool: vi.fn() },
+      process: { platform: 'win32', cwd: () => cwd },
+      guestToolGate: null,
+      isolatedBashEnvironment: loadBashIsolationHelper(path.win32),
+      bashPackageHome,
+    });
+    const { spawnHook } = factory.mock.calls[0][1];
+    const run = (env: Env) => spawnHook({ command: 'python', cwd, env }).env;
+    expect(run({ CINDY_PI_API_KEY: 'fixture' })).toEqual({
+      PI_CODING_AGENT_DIR: bashPackageHome, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8',
+    });
+    expect(run({ PythonUtf8: '0', PYTHONIOENCODING: '' })).toEqual({
+      PI_CODING_AGENT_DIR: bashPackageHome, PythonUtf8: '0', PYTHONIOENCODING: '',
+    });
+  });
+
   it.each(['darwin', 'linux'] as const)(
     'does not register the native PowerShell overlay on %s',
     (platform) => {

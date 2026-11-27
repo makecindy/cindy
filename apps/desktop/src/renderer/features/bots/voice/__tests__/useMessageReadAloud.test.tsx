@@ -92,7 +92,31 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-it('advertises only a saved usable selection and rechecks it on every click', async () => {
+it('plays the settings default without saving when only realtime has been configured', async () => {
+  api.preference.mockResolvedValue({
+    selection: null,
+    customized: true,
+    realtimeSelection: {
+      mode: 'realtime', providerId: 'live', agent: 'codex', modelId: 'live',
+      protocol: 'openai-realtime', voice: 'marin',
+    },
+  });
+  api.models.mockResolvedValue([
+    { id: 'hidden', name: 'Hidden', pickerVisible: false, defaultVoice: 'hidden-voice' },
+    { id: 'speech', name: 'Speech', defaultVoice: 'talia' },
+  ]);
+  const { result } = renderHook(() => useMessageReadAloud(options));
+  await waitFor(() => expect(result.current.value?.available).toBe(true));
+  expect(api.startPlayback).not.toHaveBeenCalled();
+  act(() => result.current.value?.toggle('reply', 'hello'));
+  await waitFor(() => expect(result.current.value?.phase).toBe('playing'));
+  expect(api.startPlayback).toHaveBeenCalledWith(
+    expect.objectContaining({ modelId: 'speech', voice: 'talia', botId: 'bot', sessionId: 'task' }),
+  );
+  expect(api.speak).toHaveBeenCalledOnce();
+});
+
+it('requires a usable voice and rechecks the chosen route on every click', async () => {
   api.preference.mockResolvedValue({ selection: null, customized: false });
   const { result } = renderHook(() => useMessageReadAloud(options));
   await waitFor(() => expect(api.preference).toHaveBeenCalled());

@@ -2,6 +2,7 @@ import { mountPage, forbid } from '../../ui-page/harness';
 import { CompanionVoiceSettings } from '../../../src/renderer/features/bots/voice/CompanionVoiceSettings';
 import { alibabaSystemVoices } from '../../../src/shared/alibabaSpeechVoices';
 import { gatewayReferenceSpeechVoices } from '../../../src/shared/speechVoices';
+import type { RealtimeVoiceSelection } from '../../../src/shared/realtimeVoice';
 import type {
   SpeechProtocol,
   SpeechModelSelection,
@@ -58,6 +59,23 @@ mountPage({
       voiceInput: { onPowerStateChange: () => () => {} },
       maker: { refreshBuiltinProviderModels: async () => {} },
       voiceConversation: {
+        ...(ctx.data.realtime ? {
+          realtimeModels: async () => ctx.data.qwenRealtime ? [{
+            id: 'qwen-audio-3.1-realtime-plus', name: 'Qwen 3.1 Plus', providerId: 'bailian', providerName: 'Bailian',
+            agent: 'codex' as const, protocol: 'qwen-audio-realtime' as const, protocolLocked: true, hasCustomVoiceCatalog: true,
+          }] : [{ id: 'gpt-realtime-2', name: 'gpt-realtime-2', providerId: 'openai-api', providerName: 'OpenAI API', agent: 'codex' as const, protocol: 'openai-realtime' as const, protocolLocked: true }],
+          realtimeCustomVoices: async () => {
+            ctx.data.listCount = Number(ctx.data.listCount ?? 0) + 1;
+            return ctx.data.listCount === 1 ? { source: 'provider', voices: [] } :
+              ctx.data.listCount === 2 ? { source: 'provider', voices: [{ id: 'my-buddy', name: 'Buddy' }] } :
+              { source: 'manual', voices: [], customVoicesUnavailable: true };
+          },
+          setRealtimePreference: async (_bot: string, value: RealtimeVoiceSelection | null) => {
+            preference = { ...preference, realtimeSelection: value ?? undefined };
+            ctx.data.savedRealtime = value;
+            return preference;
+          },
+        } : {}),
         models: async () =>
           ctx.data.empty
             ? []

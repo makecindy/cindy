@@ -59,7 +59,10 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
   getCachedDeviceProviders: () => null,
   isSubscriptionShareCatalogStale: () => false,
 }));
-vi.mock('@/lib/remoteCatalogSnapshot', () => ({ refreshRemoteCatalogSnapshot: vi.fn(async () => {}) }));
+vi.mock('@/lib/remoteCatalogSnapshot', () => ({
+  refreshRemoteCatalogSnapshot: vi.fn(async () => {}),
+  wasShareCatalogRecovered: () => false,
+}));
 
 import {
   findReceivedShare, findReceivedShareForExecution, getReceivedSharesSnapshot, leaveProviderShare, refreshReceivedShares, resolveRemoteAgentTarget,

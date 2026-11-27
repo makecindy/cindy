@@ -293,6 +293,7 @@ export function SessionPrManager({
                 event.preventDefault();
                 void window.electronAPI.openExternal(sessionPrUrl(ref));
               }}
+              // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
               className={`block truncate rounded-md hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] ${title ? 'text-13 text-[var(--text-primary)]' : 'text-12 text-[var(--text-secondary)]'}`}
               title={title || `${ref.owner}/${ref.repo} ${prNumberLabel(ref)}`}
             >

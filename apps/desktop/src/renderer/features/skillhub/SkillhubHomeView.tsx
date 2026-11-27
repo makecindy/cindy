@@ -409,11 +409,11 @@ export function SkillhubHomeContent({
                       >
                         <div className="flex items-center gap-2">
                           <div className="size-9 shrink-0 animate-pulse rounded-xl bg-[var(--cmd-palette-item-hover)] opacity-60" />
-                          <div className="h-3.5 w-2/3 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-60" />
+                          <div className="h-3.5 w-2/3 animate-pulse rounded-full bg-[var(--cmd-palette-item-hover)] opacity-60" />
                         </div>
-                        <div className="h-3 w-full animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
-                        <div className="h-3 w-4/5 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
-                        <div className="mt-auto h-3 w-1/3 animate-pulse rounded bg-[var(--cmd-palette-item-hover)] opacity-40" />
+                        <div className="h-3 w-full animate-pulse rounded-full bg-[var(--cmd-palette-item-hover)] opacity-40" />
+                        <div className="h-3 w-4/5 animate-pulse rounded-full bg-[var(--cmd-palette-item-hover)] opacity-40" />
+                        <div className="mt-auto h-3 w-1/3 animate-pulse rounded-full bg-[var(--cmd-palette-item-hover)] opacity-40" />
                       </div>
                     ))}
                   </div>

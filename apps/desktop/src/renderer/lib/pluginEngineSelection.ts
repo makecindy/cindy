@@ -21,6 +21,7 @@ import {
 import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare';
 import { isOrganizationPluginNamespace, parsePluginStoragePart } from '../../shared/pluginIdentity';
+import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
 import type { PermissionMode } from '@/lib/userPreferences.types';
 
 export { PLUGIN_ENGINE_DEFAULT_MODEL };
@@ -51,19 +52,7 @@ export function isSamePluginEngineChoice(
 }
 
 /** What the new-task draft remembers: which engine, which of its models and its permission mode. */
-export interface PluginEngineSelection {
-  providerId: string;
-  /** The other computer of this account that has the engine; absent = the computer the task is on. */
-  deviceId?: string;
-  modelId: string;
-  /**
-   * Kept with the engine choice, apart from the built-in Harness preferences: an engine offers only
-   * 'ask' / 'bypassPermissions', and picking one must not rewrite what Claude Code / Codex / Pi use.
-   */
-  permissionMode?: PluginEnginePermissionMode['id'];
-  /** Reasoning level chosen for the engine; kept across models that offer it (like built-in effort). */
-  effort?: PluginEngineEffort;
-}
+export type PluginEngineSelection = import('../../shared/pluginEngines').NewTaskPluginEngineSelection;
 
 /** A draft selection that can be used right now. */
 export interface ActivePluginEngine {
@@ -141,6 +130,7 @@ export function sameInstalledPluginHarness(
 export function resolveActivePluginEngine(
   engines: readonly PluginEngineChoice[],
   selection: PluginEngineSelection | null | undefined,
+  fallbackPermissionMode?: PermissionMode | null,
 ): ActivePluginEngine | null {
   if (!selection || !pluginEngineKeyFromProviderId(selection.providerId)) return null;
   // An engine of another computer never falls back to this computer's engine of the same plugin.
@@ -152,41 +142,48 @@ export function resolveActivePluginEngine(
   return {
     engine,
     modelId,
-    permissionMode: pluginEnginePermissionMode(selection.permissionMode, engine),
+    permissionMode: pluginEnginePermissionMode(selection.permissionMode ?? fallbackPermissionMode, engine),
     effort: resolvePluginEngineEffort(engine, modelId, selection.effort),
   };
 }
 
-/**
- * The level a model of this engine runs with: the chosen one when the model offers it, else the
- * model's own default; null when the model offers none (the default entry, or no levels listed).
- */
+type PluginEngineEffortPurpose = 'new-task' | 'session';
+
+function modelDefaultEffort(model: PluginEngineModel | undefined, purpose: PluginEngineEffortPurpose): PluginEngineEffort | undefined {
+  const value = purpose === 'session' && model?.declaredDefaultEffort !== undefined
+    ? model.declaredDefaultEffort : model?.defaultEffort;
+  return isPluginEngineEffort(value) && model?.efforts?.includes(value) ? value : undefined;
+}
+
+/** A supported explicit choice wins. Existing tasks without one follow the plugin's default. */
 export function resolvePluginEngineEffort(
   engine: Pick<PluginEngineView, 'models'> | null | undefined,
   modelId: string | null | undefined,
   requested: unknown,
+  purpose: PluginEngineEffortPurpose = 'new-task',
 ): PluginEngineEffort | null {
   const model = engine?.models.find((item) => item.id === modelId);
-  const offered = model?.efforts ?? [];
-  if (isPluginEngineEffort(requested) && offered.includes(requested)) return requested;
-  return model?.defaultEffort && offered.includes(model.defaultEffort) ? model.defaultEffort : null;
+  if (isPluginEngineEffort(requested) && model?.efforts?.includes(requested)) return requested;
+  return modelDefaultEffort(model, purpose) ?? null;
 }
 
 /**
- * Effort for an in-session plugin engine pick: carries over the active effort only when staying on
- * the same plugin engine (and computer); switching to another engine uses the target model's own
- * default level, matching what the picker rows display.
+ * Carries a supported effort from the running engine or the pending selection when reselecting
+ * that same engine and computer. A different engine uses its own launch default.
  */
 export function resolvePluginEngineSessionSwitchEffort(
   selection: PluginEngineSelection,
   targetEngine: Pick<PluginEngineView, 'models'> | null | undefined,
-  currentActive?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
+  running?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
+  pending?: { providerId: string; deviceId?: string | null; effort?: unknown } | null,
 ): PluginEngineEffort | undefined {
   if (selection.effort) return selection.effort;
-  const carriedEffort = currentActive && isSamePluginEngineChoice(selection, currentActive)
-    ? currentActive.effort
-    : undefined;
-  return resolvePluginEngineEffort(targetEngine, selection.modelId, carriedEffort) ?? undefined;
+  const sameEngine = isSamePluginEngineChoice(selection, running);
+  const carriedEffort = sameEngine ? running?.effort
+    : isSamePluginEngineChoice(selection, pending) ? pending?.effort : undefined;
+  return resolvePluginEngineEffort(
+    targetEngine, selection.modelId, carriedEffort, sameEngine ? 'session' : 'new-task',
+  ) ?? undefined;
 }
 
 /**
@@ -197,15 +194,19 @@ export function resolvePluginEngineSessionSwitchEffort(
 export function pluginEngineModelRows(
   engine: Pick<PluginEngineView, 'models' | 'defaultModelAllowed'>,
   activeModelId?: string | null,
+  purpose: PluginEngineEffortPurpose = 'new-task',
 ): PluginEngineModelRow[] {
-  const models: PluginEngineModelRow[] = engine.models.map((model: PluginEngineModel) => ({
-    id: model.id,
-    name: model.displayName,
-    ...(model.description ? { description: model.description } : {}),
-    isDefault: false,
-    efforts: model.efforts ?? [],
-    ...(model.defaultEffort ? { defaultEffort: model.defaultEffort } : {}),
-  }));
+  const models: PluginEngineModelRow[] = engine.models.map(model => {
+    const defaultEffort = modelDefaultEffort(model, purpose);
+    return {
+      id: model.id,
+      name: model.displayName,
+      ...(model.description ? { description: model.description } : {}),
+      isDefault: false,
+      efforts: model.efforts ?? [],
+      ...(defaultEffort ? { defaultEffort } : {}),
+    };
+  });
   const defaultRow: PluginEngineModelRow = { id: PLUGIN_ENGINE_DEFAULT_MODEL, isDefault: true, efforts: [] };
   if (models.length === 0) return engine.defaultModelAllowed === false ? [] : [defaultRow];
   return activeModelId === PLUGIN_ENGINE_DEFAULT_MODEL && engine.defaultModelAllowed !== false
@@ -227,22 +228,26 @@ export function pluginEngineModelName(
  * is no longer listed. The picker localizes them through `newChat.permissionSelector.modes.acp.*`.
  */
 export const PLUGIN_ENGINE_FALLBACK_PERMISSION_MODES: readonly PluginEnginePermissionMode[] = [
-  { id: 'ask', displayName: 'Ask' },
-  { id: 'bypassPermissions', displayName: 'Allow all' },
+  { id: 'ask', displayName: 'Default permissions' },
+  { id: 'bypassPermissions', displayName: 'Full access' },
 ];
 
 /**
  * The permission mode a plugin engine task uses: the requested one when the engine offers it (its
- * own modes or Cindy's two), else the engine's default. Without the engine (plugin removed) only
- * Full access is kept; anything else asks for each request.
+ * own modes or Cindy's two, treating `ask` and `default` as equivalent), else the engine's safe
+ * default. Without the engine (plugin removed) only Full access is kept; anything else asks for
+ * each request.
  */
 export function pluginEnginePermissionMode(
   mode: PermissionMode | string | null | undefined,
   engine?: Pick<PluginEngineView, 'permissionModes' | 'defaultPermissionMode'> | null,
 ): PluginEnginePermissionMode['id'] {
   if (engine) {
-    const offered = engine.permissionModes.find((option) => option.id === mode);
-    return offered ? offered.id : engine.defaultPermissionMode;
+    return resolvePermissionModeForOptions(
+      mode,
+      engine.permissionModes.map((option) => option.id),
+      engine.defaultPermissionMode,
+    ) as PluginEnginePermissionMode['id'];
   }
   return mode === 'bypassPermissions' ? 'bypassPermissions' : 'ask';
 }

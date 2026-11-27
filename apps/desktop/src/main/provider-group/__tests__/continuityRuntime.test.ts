@@ -91,7 +91,7 @@ beforeEach(() => {
   io.slowInspect = false; io.entered = undefined; io.inspectGate = Promise.resolve();
   io.inspectError = undefined;
   syncRemoteControlAccessGeneration();
-  io.group = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true, allowFast: false,
+  io.group = normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true, allowFast: false,
     members: [{ kind: 'device', agentDeviceId: 'M', providerId: 'openai' }] }, 'openai');
   io.received.mockReturnValue({ revision: 7, allowFast: false });
 });

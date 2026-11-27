@@ -230,6 +230,8 @@ export function describeRemoteError(error: string | null): string | null {
 }
 
 function localizedStableRemoteError(error: string): string | null {
+  const binaryNotReady = describeAgentBinaryNotReadyError(error);
+  if (binaryNotReady) return binaryNotReady;
   const simpleMarkers: Array<[string, string]> = [
     ['MODEL_VISIBILITY_NOT_READY', 'transient'],
     ['REMOTE_DISABLED', 'remoteDisabled'],
@@ -258,6 +260,22 @@ function localizedStableRemoteError(error: string): string | null {
     return i18n.t('deviceLink.remoteError.callFailed', { error });
   }
   return null;
+}
+
+function describeAgentBinaryNotReadyError(error: string): string | null {
+  return error.includes('[PRECONDITION_FAILED] binary_not_ready:')
+    ? i18n.t('deviceLink.agentAuth.proxyNotReady', { agent: 'Agent' })
+    : null;
+}
+
+export type NewSessionError = string | { creationError: string };
+
+/** Render both immediate and recovered task creation failures in the current language. */
+export function describeNewSessionError(error: NewSessionError): string {
+  const recovered = typeof error !== 'string';
+  const raw = recovered ? error.creationError : error;
+  const message = describeAgentAuthError(raw) ?? describeAgentBinaryNotReadyError(raw) ?? raw;
+  return recovered ? i18n.t('session.screen.createFailedNotice', { message }) : message;
 }
 
 /**

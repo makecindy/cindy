@@ -114,6 +114,40 @@ describe('Learn invocation grant', () => {
     }
   });
 
+  // 2026-11-25: a plugin-engine task's `/learn` is expanded from the engine's own Skill list
+  // (AcpAgent.listAgentSkills, no runtime command names). It is attested like the built-in engines
+  // instead of always failing the Learn tool. Minimal input: agentKind 'acp' with the built-in learn file.
+  it('captures the trusted built-in Skill for a plugin-engine task’s /learn', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'learn-invocation-capture-acp-'));
+    try {
+      const skillFile = path.join(root, 'SKILL.md');
+      await fs.writeFile(skillFile, '---\nname: learn\n---\nLearn.\n');
+      const session = { id: 'session-acp', instanceId: 'instance-acp', agentKind: 'acp' as const, workDir: root, remoteHostId: null };
+      const listSkills = vi.fn(async () => ({ skills: [{ kind: 'agent-skill' as const, name: 'learn', source: 'skill' as const, path: skillFile }] }));
+      const capture = createCindyLearnInvocationCapture({
+        getSession: () => session,
+        builtInSkillDescriptors: () => [{ name: 'learn', absolutePath: root, nativeClaudePath: root }],
+        isSkillEnabled: () => true,
+        canGrantUnqualifiedClaudeInvocation: async () => true,
+        listSkills,
+      });
+      await expect(capture(session, '/learn', '/learn')).resolves.toEqual({
+        version: 1, sessionInstanceId: 'instance-acp', resolvedSkillPath: await fs.realpath(skillFile),
+      });
+      expect(listSkills).toHaveBeenCalledWith(session);
+      // The prefixed form (review on #12820): the engine drops `cindy:` and reads the same built-in file.
+      await expect(capture(session, '/cindy:learn', '/cindy:learn')).resolves.toEqual({
+        version: 1, sessionInstanceId: 'instance-acp', resolvedSkillPath: await fs.realpath(skillFile),
+      });
+      // A user Skill named learn elsewhere is never attested for the prefixed form.
+      listSkills.mockImplementationOnce(async () => ({ skills: [{ kind: 'agent-skill' as const, name: 'learn',
+        source: 'skill' as const, path: path.join(os.tmpdir(), 'not-cindy', 'SKILL.md') }] }));
+      await expect(capture(session, '/cindy:learn', '/cindy:learn')).resolves.toBeNull();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('does not attest a Bot-owned /learn alias using the global skill catalog', async () => {
     const sqlite = createInvocationDb();
     sqlite.prepare('INSERT INTO bot_session_links(session_id) VALUES (?)').run('bot-session');

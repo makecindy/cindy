@@ -9,6 +9,11 @@ import { AddRemoteProjectDialog } from '@/components/new-chat/AddRemoteProjectDi
 import type { RemotePluginSettingsDirectory } from '../../shared/remotePluginSettings';
 
 import { useAuth } from '@/contexts/AuthContext';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+  isDataOwnerPushCurrent,
+} from '@/contexts/dataOwnerGeneration';
 import { cn } from '@/lib/utils';
 import { GHOST_SCHEME, ghostInstallApprovalToken, type InstalledGhost } from '../../shared/ghost';
 import { getGhostGithubReleaseRepository } from '@cindy/plugin-protocol';
@@ -112,20 +117,32 @@ function AsleepHint({ appearance }: { appearance: 'settings' | 'plugin' }): Reac
   );
 }
 
-/** 崩溃接管(卡片内嵌小态;设置页本来就有沉睡开关,不再放"关闭意识"按钮)。 */
-function CrashedHint({
+type SettingsFailure = 'crashed' | 'unavailable';
+
+function SettingsIssue({
+  failure,
+  writeUnconfirmed,
   onReload,
-  appearance,
 }: {
+  failure: SettingsFailure | null;
+  writeUnconfirmed: boolean;
   onReload: () => void;
-  appearance: 'settings' | 'plugin';
 }): ReactNode {
   const { t } = useTranslation();
+  const saveMessage = writeUnconfirmed ? t('settings.ghosts.remote.settingsWriteUnconfirmed') : undefined;
   return (
-    <ErrorNotice className="m-4" message={t('settings.ghosts.panelError.crashed')}
-      actions={<Button size="sm" compact type="button" onClick={onReload}>
-        {t('settings.ghosts.panelError.reload')}
-      </Button>} />
+    <ErrorNotice
+      className="m-4"
+      message={failure === 'crashed' ? t('settings.ghosts.panelError.crashed')
+        : failure === 'unavailable' ? t('settings.ghosts.remote.configurationReadFailed') : saveMessage}
+      description={failure && saveMessage}
+      role="status"
+      actions={(
+        <Button size="sm" compact type="button" onClick={onReload}>
+          {t(failure === 'crashed' ? 'settings.ghosts.panelError.reload' : 'settings.ghosts.remote.refreshConfiguration')}
+        </Button>
+      )}
+    />
   );
 }
 
@@ -143,7 +160,8 @@ function SettingsWebviewBody({
   hostAccount?: boolean;
   remoteDeviceId?: string;
 }): ReactNode {
-  const [crashed, setCrashed] = useState(false);
+  const [failure, setFailure] = useState<SettingsFailure | null>(null);
+  const [writeUnconfirmed, setWriteUnconfirmed] = useState(false);
   const [generation, setGeneration] = useState(0);
   const [showLoading, setShowLoading] = useState(false);
   const [directory, setDirectory] = useState<RemotePluginSettingsDirectory | null>(null);
@@ -170,7 +188,7 @@ function SettingsWebviewBody({
   );
 
   useEffect(() => {
-    if (crashed || !settingsHtml) return;
+    if (failure || !settingsHtml) return;
     const host = hostRef.current;
     if (!host) return;
     const webview = document.createElement('webview') as WebviewTag;
@@ -274,12 +292,19 @@ function SettingsWebviewBody({
         )
         .catch(() => {});
     };
-    const onGone = () => {
-      if (!disposed) setCrashed(true);
+    const onGone = (event: Electron.RenderProcessGoneEvent) => {
+      if (disposed) return;
+      const cleanRemoteExit = remoteDeviceId && event.details?.reason === 'clean-exit';
+      setFailure((previous) => previous ?? (cleanRemoteExit ? 'unavailable' : 'crashed'));
+    };
+    const onFailLoad = (event: Electron.DidFailLoadEvent) => {
+      if (remoteDeviceId && !disposed && event.isMainFrame && event.errorCode !== -3)
+        setFailure((previous) => previous ?? 'unavailable');
     };
     webview.addEventListener('dom-ready', onDomReady);
     webview.addEventListener('console-message', onConsoleMessage);
     webview.addEventListener('render-process-gone', onGone);
+    if (remoteDeviceId) webview.addEventListener('did-fail-load', onFailLoad);
     const unobserveTheme = observeHostTheme(scheduleInjectTheme);
     const unsubscribeDirectory = remoteDeviceId
       ? window.electronAPI.ghosts.onRemoteSettingsDirectory((value) => {
@@ -292,6 +317,19 @@ function SettingsWebviewBody({
             setDirectory((previous) =>
               previous?.request.id === value.request.id ? previous : value,
             );
+        })
+      : undefined;
+    const ownerGeneration = getDataOwnerGeneration();
+    const unsubscribeStatus = remoteDeviceId
+      ? window.electronAPI.ghosts.onRemoteSettingsStatus((value, ownerStamp) => {
+          if (
+            disposed ||
+            value.viewId !== remoteViewId ||
+            !isDataOwnerGenerationCurrent(ownerGeneration) ||
+            !isDataOwnerPushCurrent(ownerStamp)
+          ) return;
+          if (value.status === 'write-unconfirmed') setWriteUnconfirmed(true);
+          if (value.status === 'unavailable') setFailure((previous) => previous ?? 'unavailable');
         })
       : undefined;
     if (remoteDeviceId) {
@@ -313,13 +351,14 @@ function SettingsWebviewBody({
           host.appendChild(webview);
         })
         .catch(() => {
-          if (!disposed) setCrashed(true);
+          if (!disposed) setFailure('unavailable');
         });
     } else host.appendChild(webview);
     return () => {
       disposed = true;
       remoteView.current = null;
       unsubscribeDirectory?.();
+      unsubscribeStatus?.();
       injector.dispose();
       clearTimeout(loadingTimer);
       if (themeTimer !== null) clearTimeout(themeTimer);
@@ -329,13 +368,14 @@ function SettingsWebviewBody({
       webview.removeEventListener('dom-ready', onDomReady);
       webview.removeEventListener('console-message', onConsoleMessage);
       webview.removeEventListener('render-process-gone', onGone);
+      if (remoteDeviceId) webview.removeEventListener('did-fail-load', onFailLoad);
       webview.remove();
       if (remoteViewId)
         void window.electronAPI.ghosts.closeRemoteSettings(remoteViewId).catch(() => {});
     };
     // version 入依赖:原位更新换版后 webview 重挂载,设置区立刻跑新代码。
   }, [
-    crashed,
+    failure,
     generation,
     manifest.id,
     manifest.version,
@@ -359,17 +399,18 @@ function SettingsWebviewBody({
     return () => clearTimeout(timer);
   }, [directory]);
 
-  if (crashed) {
-    return (
-      <CrashedHint
-        appearance={appearance}
-        onReload={() => {
-          setGeneration((g) => g + 1);
-          setCrashed(false);
-        }}
-      />
-    );
-  }
+  const issue = (failure || writeUnconfirmed) && (
+    <SettingsIssue
+      failure={failure}
+      writeUnconfirmed={writeUnconfirmed}
+      onReload={() => {
+        setGeneration((g) => g + 1);
+        setFailure(null);
+        setWriteUnconfirmed(false);
+      }}
+    />
+  );
+  if (failure) return issue;
   const answerDirectory = async (path: string | null) => {
     if (directory?.request.id === answeredDirectory.current) return;
     if (!directory || remoteView.current !== directory.viewId)
@@ -389,6 +430,7 @@ function SettingsWebviewBody({
   };
   return (
     <>
+      {issue}
       <div
         ref={hostRef}
         data-ghost-webview

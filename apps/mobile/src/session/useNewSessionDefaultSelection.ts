@@ -1,7 +1,7 @@
 import { useEffect, useRef, type MutableRefObject, type Dispatch, type SetStateAction } from 'react';
 import type { UseDeviceProvidersResult } from '@/device-link/useDeviceProviders';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
-import { isStoredAgentRestorePending, nextStoredAgentRestoreStep, canResolveStoredAgentRuntime, pickAgentDefaultRuntime, defaultPermissionModeForNewSessionAgent, resolveNewSessionAutoDefault, type NewSessionStoredPreferences, type StoredAgentRestoreState, type NewSessionAgentKind, type NewSessionRuntime, type NewSessionDraft } from './newSession';
+import { isStoredAgentRestorePending, nextStoredAgentRestoreStep, canResolveStoredAgentRuntime, pickAgentDefaultRuntime, defaultPermissionModeForNewSessionAgent, resolvePermissionModeForNewSessionAgent, resolveNewSessionAutoDefault, type NewSessionStoredPreferences, type StoredAgentRestoreState, type NewSessionAgentKind, type NewSessionRuntime, type NewSessionDraft } from './newSession';
 import { buildMobileModelSections, flattenProviderSections, isFastRestorable, type ProviderModelRow } from './providerModelSections';
 import type { MobileAgentCapabilities, MobileModelOption } from './agentCapabilities';
 import type { MobileModelMemoryAccessors } from './draftModelMemory';
@@ -144,7 +144,11 @@ export function useNewSessionDefaultSelection({
     const previousAutoDefaultDevice = autoDefaultDeviceRef.current;
     if (selectedDeviceId) autoDefaultDeviceRef.current = selectedDeviceId;
     let applied = false;
-    const storedPermissionMode = newSessionPreferences?.permissionModeByAgent[storedAgentKind];
+    const storedPermissionMode = (() => {
+      const preferred = newSessionPreferences?.lastPermissionMode
+        ?? newSessionPreferences?.permissionModeByAgent[storedAgentKind];
+      return preferred ? resolvePermissionModeForNewSessionAgent(storedAgentKind, preferred) : undefined;
+    })();
     const nextPermissionMode =
       storedPermissionMode ??
       defaultPermissionModeForNewSessionAgent(storedAgentKind);
@@ -205,7 +209,11 @@ export function useNewSessionDefaultSelection({
     appliedPermissionMemoryRef.current = true;
     // 有存储的 agent 时由上面的 agent 恢复 effect 统一处理，避免同一轮出现两个确认框。
     if (newSessionPreferences?.agentKind) return;
-    const remembered = newSessionPreferences?.permissionModeByAgent[draft.agentKind];
+    const rawRemembered =
+      newSessionPreferences?.lastPermissionMode ?? newSessionPreferences?.permissionModeByAgent[draft.agentKind];
+    const remembered = rawRemembered
+      ? resolvePermissionModeForNewSessionAgent(draft.agentKind, rawRemembered)
+      : undefined;
     if (!remembered || remembered === draft.permissionMode) return;
     let cancelled = false;
     const seqAtTrigger = runtimeActionSeqRef.current;
@@ -252,9 +260,12 @@ export function useNewSessionDefaultSelection({
     autoDefaultSnapshotRef.current = hostDraftDefaults;
     let applied = false;
     const nextAgentKind = result.patch.agentKind ?? draft.agentKind;
-    const storedPermissionMode = appliedPermissionMemoryRef.current
+    const rawStoredPermissionMode = appliedPermissionMemoryRef.current
       ? undefined
-      : newSessionPreferences?.permissionModeByAgent[nextAgentKind];
+      : (newSessionPreferences?.lastPermissionMode ?? newSessionPreferences?.permissionModeByAgent[nextAgentKind]);
+    const storedPermissionMode = rawStoredPermissionMode
+      ? resolvePermissionModeForNewSessionAgent(nextAgentKind, rawStoredPermissionMode)
+      : undefined;
     const nextPermissionMode = appliedPermissionMemoryRef.current
       ? draft.permissionMode
       : storedPermissionMode ?? defaultPermissionModeForNewSessionAgent(nextAgentKind);

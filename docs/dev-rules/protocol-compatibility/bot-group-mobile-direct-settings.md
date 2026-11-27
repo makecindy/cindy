@@ -55,3 +55,8 @@ Chat Server 返回的 `REVISION_CONFLICT` 保留为公开错误码，新手机�
 旧客户端沿用未知错误码的通用失败提示，不自动重试写操作。
 复用原有 collection、channel、订阅、账号和群权限，不扩 IPC allowlist、relay、服务端
 schema、数据库或 Mobile 原生指纹。完整管理需要两端客户端更新。
+
+经电脑打开的群沿用 `assistantEnabled` 显示群里的 Cindy。只有明确投影
+`supportsAssistantManagement` 的电脑才能接收 `set-assistant`，参数为布尔值
+`assistant` 和编辑时的 `expectedRevision`。电脑复核群管理资格后调用桌面群管理入口；
+手机沿用群详情读回。只提供状态的旧电脑显示只读开关，缺状态的电脑隐藏该行。
