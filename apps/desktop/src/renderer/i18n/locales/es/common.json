@@ -9096,7 +9096,10 @@
             "user": "Usuario",
             "assistant": "Asistente"
           }
-        }
+        },
+        "agentChecks": "Puede comprobar si hay contenido nuevo",
+        "agentChecksDetail": "Solo intercambia estados de cambio, sin cambios o desconocido con otros complementos autorizados. Cada complemento usa sus propias cuentas conectadas, sin compartir mensajes ni credenciales. La comprobación no usa ningún modelo. También comprueba cambios en conversaciones locales de Cindy sin devolver su contenido.",
+        "agentChecksRequest": "Revisar permiso de comprobación"
       },
       "connections": {
         "confirmTitle": "Agregar dirección de conexión",
@@ -17803,6 +17806,13 @@
         "inbox": "Bandeja de entrada",
         "enterInbox": "Cambiar al modo bandeja de entrada",
         "leaveInbox": "Cambiar al modo lista de tareas"
+      },
+      "filterHideTaskCreated": "Ocultar tareas creadas por otras tareas",
+      "origin": {
+        "createdByTask": "Abierta por otra tarea",
+        "createdByTaskNamed": "Abierta por la tarea «{{title}}»",
+        "createdByRemoteTask": "Abierta por una tarea en {{device}}",
+        "createdByRemoteTaskNamed": "Abierta por «{{title}}» en {{device}}"
       }
     },
     "rename": {
@@ -17823,7 +17833,9 @@
       "orcaRemoteLead": "Colaboración desde {{device}}",
       "orcaRemoteLeadReleased": "Colaboración finalizada · desde {{device}}",
       "orcaRemoteLeadUnknownDevice": "otra computadora",
-      "orcaRemoteLeadTip": "Un Worker de «{{lead}}» en {{device}}. Su tarea, carpeta y comandos se ejecutan en esta computadora. Los mensajes que envíes aquí no se comunican al Lead."
+      "orcaRemoteLeadTip": "Un Worker de «{{lead}}» en {{device}}. Su tarea, carpeta y comandos se ejecutan en esta computadora. Los mensajes que envíes aquí no se comunican al Lead.",
+      "createdByTask": "Desde otra tarea",
+      "createdByTaskNamed": "Desde «{{title}}»"
     },
     "gitContext": {
       "detached": "HEAD separado",

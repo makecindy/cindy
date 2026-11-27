@@ -12,20 +12,28 @@ const h = vi.hoisted(() => ({
   refreshRemote: vi.fn(),
   invoke: vi.fn(async () => ({ id: "schedule-1" })),
   picker: null as any,
+  sheet: null as any,
   capabilities: { supportsScheduleAgentDeviceSelection: true } as any,
 }));
 vi.mock("react-native", () => ({
   ActivityIndicator: () => null,
   AppState: { currentState: "active" },
   Platform: { OS: "ios" },
+  useWindowDimensions: () => ({ width: 402, height: 874 }),
   ScrollView: "div",
   StyleSheet: { create: (v: unknown) => v },
   View: "div",
+  Switch: ({ value, onValueChange }: any) => createElement("input", {
+    type: "checkbox", checked: value, onChange: (e: any) => onValueChange(e.target.checked),
+  }),
   Pressable: ({ onPress, disabled, children }: any) =>
     createElement("button", { onClick: onPress, disabled }, children),
 }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+}));
+vi.mock("react-native-safe-area-context", () => ({
+  useSafeAreaInsets: () => ({ top: 62, bottom: 34, left: 0, right: 0 }),
 }));
 vi.mock("@/theme", () => ({
   fontWeight: {},
@@ -68,7 +76,10 @@ vi.mock("@/session/pluginEngines", async (importOriginal) => {
     useControlledRemotePluginEngines: () => ({ engines: h.remotePluginEngines, settled: true, refresh: h.refreshRemote }),
   };
 });
-vi.mock("@/session/SheetModal", () => ({ SheetModal: (p: any) => p.children }));
+vi.mock("@/session/SheetModal", () => ({ SheetModal: (p: any) => {
+  h.sheet = p;
+  return p.children;
+} }));
 vi.mock("@/session/ModelPickerSheet", () => ({
   ModelPickerSheet: (p: any) => {
     h.picker = p;
@@ -95,11 +106,11 @@ const configuration = {
 };
 let root: Root;
 let host: HTMLDivElement;
-const renderDraft = async () => {
+const renderDraft = async (draftIntent: typeof intent | (typeof intent & { preRunPlugin: { pluginId: string; onFailure: 'allow' } }) = intent) => {
   await act(async () => {
     root.render(
       createElement(PluginScheduleDraft, {
-        intent,
+        intent: draftIntent,
         deviceId: "host",
         onClose: () => {},
       }),
@@ -134,6 +145,7 @@ beforeEach(() => {
   ];
   h.invoke.mockClear();
   h.picker = null;
+  h.sheet = null;
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -161,6 +173,40 @@ it("lists remote catalogs and creates the schedule with the selected location", 
     model: "remote-model",
     providerId: "remote-provider",
   });
+});
+
+it("waits for each native modal to close before opening the next and keeps the draft", async () => {
+  await renderDraft({ ...intent, preRunPlugin: { pluginId: 'p1', onFailure: 'allow' } });
+  const check = host.querySelector('input[type="checkbox"]') as HTMLInputElement;
+  await act(async () => check.click());
+  await clickButton('plugins.taskModel');
+  expect(h.sheet.visible).toBe(false);
+  expect(h.picker.visible).toBe(false);
+  await act(async () => h.sheet.onClosed());
+  expect(h.picker.visible).toBe(true);
+  await act(async () => h.picker.unified.onSelect(configuration, { deviceId: 'studio' }));
+  expect(h.picker.visible).toBe(false);
+  expect(h.sheet.visible).toBe(false);
+  await act(async () => h.picker.onClosed());
+  expect(h.sheet.visible).toBe(true);
+  expect(check.checked).toBe(false);
+  await clickButton('plugins.saveConfiguration');
+  const [, , [input]] = h.invoke.mock.calls[0] as unknown as [string, string, [any]];
+  expect(input.model).toBe('remote-model');
+  expect(input.preRunPlugin).toBeUndefined();
+});
+
+it.each([true, false])('saves the visible pre-run check choice (%s) on the original computer', async enabled => {
+  await renderDraft({ ...intent, preRunPlugin: { pluginId: 'p1', onFailure: 'allow' } });
+  await act(async () => h.picker.unified.onSelect(configuration, { deviceId: 'studio' }));
+  const check = host.querySelector('input[type="checkbox"]') as HTMLInputElement;
+  expect(check.checked).toBe(true);
+  if (!enabled) await act(async () => check.click());
+  await clickButton('plugins.saveConfiguration');
+  const [deviceId, channel, [input]] = h.invoke.mock.calls[0] as unknown as [string, string, [any]];
+  expect(deviceId).toBe('host');
+  expect(channel).toBe('maker:schedule:create');
+  expect(input.preRunPlugin).toEqual(enabled ? { pluginId: 'p1', onFailure: 'allow' } : undefined);
 });
 
 it("clears the location when a local row is selected afterwards", async () => {
@@ -206,11 +252,17 @@ it("selects local and remote plugin engines and submits acp schedule inputs", as
     deviceId: "studio",
     deviceName: "Studio",
   }];
-  await renderDraft();
+  // Exercise the combined paths: the native picker must dismiss before the
+  // draft reopens, and engine selection must preserve the draft's pre-run check.
+  const draftIntent = { ...intent, preRunPlugin: { pluginId: "p1", onFailure: "allow" } } as const;
+  await renderDraft(draftIntent);
   expect(h.picker.unified.pluginEngines.engines).toHaveLength(2);
   const firstOnOpen = h.picker.unified.pluginEngines.onOpen;
-  await renderDraft();
+  await renderDraft(draftIntent);
   expect(h.picker.unified.pluginEngines.onOpen).toBe(firstOnOpen);
+  await clickButton("plugins.taskModel");
+  await act(async () => h.sheet.onClosed());
+  expect(h.picker.visible).toBe(true);
   await act(async () => {
     await h.picker.unified.pluginEngines.onSelect({
       providerId: "acp-plugin:dsh:dsh",
@@ -219,9 +271,14 @@ it("selects local and remote plugin engines and submits acp schedule inputs", as
       effort: "high",
     });
   });
+  expect(h.picker.visible).toBe(false);
+  expect(h.sheet.visible).toBe(false);
+  await act(async () => h.picker.onClosed());
+  expect(h.sheet.visible).toBe(true);
   expect(host.textContent).toContain("DeepSeek Harness · DeepSeek V4 · Studio");
   await clickButton("plugins.saveConfiguration");
-  const [, channel, [input]] = h.invoke.mock.calls[0] as unknown as [string, string, [any]];
+  const [deviceId, channel, [input]] = h.invoke.mock.calls[0] as unknown as [string, string, [any]];
+  expect(deviceId).toBe("host");
   expect(channel).toBe("maker:schedule:create");
   expect(input).toMatchObject({
     agentKind: "acp",
@@ -231,5 +288,6 @@ it("selects local and remote plugin engines and submits acp schedule inputs", as
     model: "deepseek-v4",
     effort: "high",
     fastMode: false,
+    preRunPlugin: draftIntent.preRunPlugin,
   });
 });
