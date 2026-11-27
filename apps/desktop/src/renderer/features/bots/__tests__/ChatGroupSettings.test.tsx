@@ -212,6 +212,30 @@ it('hides member invitation controls from ordinary members and on older servers'
   view.update({ ...group(true), supportsMemberInvites: false });
   expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberInvites' })).toBeNull();
 });
+
+it.each(['owner', 'admin'] as const)('lets a %s toggle member @everyone permission from default off', async role => {
+  const initial = { ...group(), supportsMemberMentionAll: true, allowMemberMentionAll: false,
+    members: group().members.map(member => member.actorId === 'me' ? { ...member, role } : member) };
+  const view = renderAt(initial, 'manage');
+  const toggle = screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberMentionAll' });
+  const section = toggle.closest('section');
+  expect(section?.textContent).toContain(key('memberPermissions'));
+  expect(section?.textContent).not.toContain(key('replies'));
+  expect(toggle.getAttribute('aria-checked')).toBe('false');
+  fireEvent.click(toggle);
+  await waitFor(() => expect(mocks.manage).toHaveBeenCalledWith({ groupId: 'room', action: {
+    type: 'update', name: initial.name, topic: '', description: '', expectedRevision: 1, allowMemberMentionAll: true,
+  } }));
+  view.update({ ...initial, revision: 2, allowMemberMentionAll: true });
+  expect(screen.getByRole('switch', { name: 'bots.groupChat.settings.allowMemberMentionAll' }).getAttribute('aria-checked')).toBe('true');
+});
+
+it('hides @everyone permission toggle from ordinary members and on older servers', () => {
+  const view = renderAt({ ...group(), supportsMemberMentionAll: true, allowMemberMentionAll: true }, 'manage');
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberMentionAll' })).toBeNull();
+  view.update({ ...group(true), supportsMemberMentionAll: false });
+  expect(screen.queryByRole('switch', { name: 'bots.groupChat.settings.allowMemberMentionAll' })).toBeNull();
+});
 function activeProfile(id: string, name: string, status = 'active') {
   return { id, name, status, sessions: [] as Array<{ id: string }>, capabilities: {}, skills: [] as string[] };
 }

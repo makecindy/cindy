@@ -35,7 +35,7 @@ import { SETTINGS_HINT, SettingsCard, SettingsNotice, SettingsRow, SettingsRowIc
 import { useBotProfiles } from './botStore';
 import { BotAvatar } from './BotAvatar';
 import { BotGroupSidebarAvatar } from './BotGroupAvatars';
-import { chatErrorKey } from './ChatServerControls';
+import { chatErrorKey } from './chatError';
 import { refreshBotGroups } from './botGroupStore';
 import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
 import { BOT_GROUP_SETTINGS_PAGE_PARAM, BOT_GROUP_SETTINGS_PARAM, botGroupPathBasename } from './botGroupPresentation';
@@ -48,7 +48,7 @@ const SPEAKING_MODE_LABELS = { auto: shared('speakingModeAuto'), sequential: sha
 const api = () => window.electronAPI.maker.chatServer;
 const COMPANION_PAGE = 'companion:';
 /** On/off group settings saved through the group update. */
-type GroupSwitch = 'allowMemberInvites' | 'assistantEnabled' | 'allowMentionAllBots';
+type GroupSwitch = 'allowMemberInvites' | 'allowMemberMentionAll' | 'assistantEnabled' | 'allowMentionAllBots';
 
 export type ChatGroupSettingsPage =
   | { kind: 'manage' | 'edit' | 'profile' }
@@ -193,7 +193,7 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
     if (busyRef.current || group.revision === undefined) return;
     const next = { ...(switchesPending ? switches : null), [name]: on, revision: group.revision };
     setSwitches(next);
-    const field = name === 'assistantEnabled' ? { assistant: on } : name === 'allowMemberInvites' ? { allowMemberInvites: on } : { allowMentionAllBots: on };
+    const field = name === 'assistantEnabled' ? { assistant: on } : { [name]: on };
     const ok = await mutate({ type: 'update', name: group.name, topic: group.topic ?? '', description: group.description ?? '',
       expectedRevision: group.revision, ...field });
     if (!ok && mounted.current) setSwitches(current => current === next ? null : current);
@@ -302,11 +302,14 @@ export function ChatGroupSettings({ group }: { group: BotGroupSummary }) {
     const assistantAnswers = group.supportsGroupAssistant === true && switchOn('assistantEnabled');
     body = <>
       {group.archived && <SettingsNotice>{t(key('archived'))}</SettingsNotice>}
-      {group.supportsMemberInvites && <SettingsSection title={t(key('inviteEntry'))}>
+      {(group.supportsMemberInvites || group.supportsMemberMentionAll) && <SettingsSection title={t(key('memberPermissions'))}>
         <SettingsCard>
-          <SettingsRow wrap title={t(shared('allowMemberInvites'))} hint={t(shared('allowMemberInvitesHint'))}
+          {group.supportsMemberInvites && <SettingsRow wrap title={t(shared('allowMemberInvites'))} hint={t(shared('allowMemberInvitesHint'))}
             trailing={<Switch aria-label={t(shared('allowMemberInvites'))} checked={switchOn('allowMemberInvites')}
-              disabled={busy || group.revision === undefined || group.archived} onCheckedChange={on => void saveSwitch('allowMemberInvites', on)} />} />
+              disabled={busy || group.revision === undefined || group.archived} onCheckedChange={on => void saveSwitch('allowMemberInvites', on)} />} />}
+          {group.supportsMemberMentionAll && <SettingsRow wrap title={t(shared('allowMemberMentionAll'))} hint={t(shared('allowMemberMentionAllHint'))}
+            trailing={<Switch aria-label={t(shared('allowMemberMentionAll'))} checked={switchOn('allowMemberMentionAll')}
+              disabled={busy || group.revision === undefined || group.archived} onCheckedChange={on => void saveSwitch('allowMemberMentionAll', on)} />} />}
         </SettingsCard>
       </SettingsSection>}
       {/* Whether unaddressed messages wake anyone; independent of the order teammates answer in. */}

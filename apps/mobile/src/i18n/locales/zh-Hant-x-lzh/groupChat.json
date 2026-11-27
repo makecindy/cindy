@@ -304,6 +304,8 @@
     },
     "allowMemberInvites": "許諸成員邀友",
     "allowMemberInvitesHint": "啟之，已入群者皆可邀友。唯群主與管理員可改。",
+    "allowMemberMentionAll": "許諸眾 @所有人",
+    "allowMemberMentionAllHint": "啟之，諸眾皆可 @所有人；閉則惟群主與管理員可用。唯群主與管理員可改。",
     "allowMentionAllBots": "許 @諸同伴",
     "allowMentionAllBotsHint": "唯群主可改。同伴或皆作覆，大群慎啟之。此開關不涉 AI 代答。",
     "notifications": {
@@ -343,6 +345,7 @@
     "groupDissolved": "群議已散，仍可觀有權存取之舊訊。",
     "lastOwner": "請先讓渡群主或解散群議，然後退出。",
     "allBotsMentionDisabled": "群主未啟 @諸同伴。",
+    "allHumansMentionForbidden": "惟群主與管事可 @所有人。",
     "turnAlreadyStarted": "此同伴已啟，不可略過",
     "stopOwnershipUnknown": "部分工作未能停止：無從確認由誰發起",
     "nothingToStop": "目前無可停止之工作"
@@ -578,6 +581,7 @@
     "accessNone": "唯主人可用",
     "accessChat": "唯群內交流",
     "accessTools": "可用工具與資料",
+    "memberPermissions": "群員權柄",
     "replies": "同伴如何接話",
     "assistant": "群中 Cindy",
     "assistantHint": "誰 @ 之，即於其人之電腦行事。",

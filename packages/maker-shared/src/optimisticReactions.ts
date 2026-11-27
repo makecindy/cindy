@@ -1,6 +1,6 @@
 /**
- * Optimistic reactions for server-backed group chats, shared by Desktop and Mobile
- * (bot-group-chat.md「表情回应是乐观的」). A tap shows the current actor's reaction at once, the
+ * Optimistic reactions for server-backed group chats on Mobile (bot-group-chat.md「手机直连服务器群显示并可添加表情回应」;
+ * Desktop has its own `useChatReactions`). A tap shows the current actor's reaction at once, the
  * request runs behind it, and the server's copy takes over again once it agrees. A failed request
  * removes the local change and tells the caller. Taps on one emoji are sent in order and only the
  * last intent is kept. Every intent belongs to the data owner that made it, so an account switch
