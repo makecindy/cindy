@@ -17,6 +17,7 @@ import { getActiveCatalog, setActiveCatalog, setOpenAiImagesApiKeyConfigured } f
 import { deriveCindyMediaConfig } from '../cindyMediaCatalog.js';
 
 import { GhostCindySlot, type CindySlotDeps } from '../cindySlot';
+import { GhostPipeDispatcher } from '../pipeDispatcher';
 import { sniffMediaMime } from '../../cindy-media/sniffMediaMime';
 import { probeImageSize } from '../imageProbe.js';
 import type { LegacyMediaResult } from '../../cindy-media/legacyMediaInvocation.js';
@@ -1997,6 +1998,54 @@ describe('快问快答(oneshot_text)', () => {
       oneshotText: vi.fn(async () => ({ ok: true as const, text: '好的', model: 'chain/mini' })),
       ...deps,
     });
+
+  // Unit: cancelling the original tool must reach the existing model signal,
+  // suppress a late success and release the inflight budget. No real model IO.
+  it('propagates tool cancellation to oneshot text and releases the inflight budget', async () => {
+    const controller = new AbortController();
+    const model = vi.fn(async ({ signal }: { signal?: AbortSignal }) => {
+      expect(signal).toBe(controller.signal);
+      await new Promise<void>(resolve => signal!.addEventListener('abort', () => resolve(), { once: true }));
+      return { ok: true as const, text: 'Late' };
+    });
+    const { slot } = withText({ oneshotText: model, getInflightLimit: () => 1,
+      getPendingCallSignal: (_ghost, callId) => callId === 'active-call' ? controller.signal : null });
+    const pending = slot.handleModelRequest('art', { ...ONESHOT, callId: 'active-call' });
+    await vi.waitFor(() => expect(model).toHaveBeenCalledOnce());
+    controller.abort();
+    expect(await pending).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    model.mockImplementation(async () => ({ ok: true, text: 'Next' }));
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({ ok: true, text: 'Next' });
+    expect(await slot.handleModelRequest('art', { ...ONESHOT, callId: 'active-call' }))
+      .toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(model).toHaveBeenCalledTimes(2);
+  });
+
+  // Unit integration: use the real dispatcher lifetime instead of inventing an
+  // AbortSignal. A cancelled/missing call must not start another model request.
+  it('cancels the model through the real pipe lifetime and rejects a late request', async () => {
+    const controller = new AbortController();
+    const ghost = fakeGhost({ model: { text: ['oneshot'] } });
+    const dispatcher = new GhostPipeDispatcher({ getGhost: () => ghost, runtimeStateOf: () => 'running',
+      spawn: async () => ({ ok: true }), sendToGhost: () => true });
+    const model = vi.fn(async ({ signal }: { signal?: AbortSignal }) => {
+      await new Promise<void>((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }));
+      return { ok: true as const, text: 'never' };
+    });
+    const { slot } = withText({ oneshotText: model,
+      getPendingCallSignal: (id, callId) => dispatcher.getPendingCallSignal(id, callId) });
+    const tool = dispatcher.callGhostTool({ ghostId: 'art', tool: 'gen_image', args: {}, callId: 'text-call', signal: controller.signal });
+    const request = { ...ONESHOT, callId: 'text-call' };
+    const result = slot.handleModelRequest('art', request);
+    await vi.waitFor(() => expect(model).toHaveBeenCalledOnce());
+    controller.abort();
+    expect(await tool).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(await result).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(dispatcher.pendingCount()).toBe(0);
+    expect(slot.hasInflightWorkFor('art')).toBe(false);
+    expect(await slot.handleModelRequest('art', request)).toMatchObject({ ok: false, errorCode: 'CANCELLED' });
+    expect(model).toHaveBeenCalledOnce();
+  });
 
   it('未声明 text.oneshot → PERMISSION_DENIED,不触发链路', async () => {
     const oneshotText = vi.fn();
