@@ -247,6 +247,12 @@ describe('VoiceInputModelSelection', () => {
         model: 'gpt-realtime-whisper',
       },
     });
+    const azure = {
+      protocol: 'azure-openai-realtime',
+      websocketUrl: 'wss://example.openai.azure.com/openai/v1/realtime?intent=transcription',
+      model: 'transcription-deployment',
+    };
+    expect(validateVoiceInputCustomAsrConfig(azure)).toEqual({ ok: true, value: azure });
     expect(validateVoiceInputCustomAsrConfig({
       protocol: 'qwen-realtime',
       websocketUrl: 'ws://127.0.0.1:8080/asr',

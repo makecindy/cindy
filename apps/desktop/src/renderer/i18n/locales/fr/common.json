@@ -3190,6 +3190,7 @@
             "hint": "Choisissez le format de message implémenté par le service ASR.",
             "ariaLabel": "Protocole de l'ASR en temps réel personnalisé",
             "openai": "Transcription OpenAI",
+            "azureOpenai": "Azure OpenAI (api-key)",
             "qwen": "ASR en temps réel Qwen"
           },
           "websocketUrl": {

@@ -3122,6 +3122,7 @@
             "hint": "請擇 ASR 服務實所行之訊格式。",
             "ariaLabel": "自定即時 ASR 協議",
             "openai": "OpenAI 轉寫協議",
+            "azureOpenai": "Azure OpenAI (api-key)",
             "qwen": "Qwen 即時 ASR"
           },
           "websocketUrl": {

@@ -8,6 +8,7 @@ import { createAccessibilitySupportBridge } from './accessibilitySupport';
 import { createLiveScreenEmbedBridge, createLiveScreenRelayBridge } from './liveScreenEmbed';
 import { createMicrophonePermissionSnapshot } from './microphonePermissionSnapshot';
 import { createVoiceInputDataSnapshot } from './voiceInputDataSnapshot';
+import type { VoiceInputCustomAsrConfig } from '../shared/voiceInputCustomAsr';
 import type { VoiceInputDataSnapshot } from '../shared/voiceInputData';
 import { createWallpaperAssetsBridge } from './wallpaperAssets';
 import { createPluginFontReader } from './appearanceSnapshot';
@@ -450,11 +451,7 @@ type VoiceInputModelSelectionWire = {
   refinerModel?: string;
   asrProviderChain: VoiceInputProviderKind[];
   asrProviderChainSource: 'default' | 'configured';
-  customAsr?: {
-    protocol: 'openai-realtime' | 'qwen-realtime';
-    websocketUrl: string;
-    model: string;
-  };
+  customAsr?: VoiceInputCustomAsrConfig;
   refinerProviderChain: VoiceInputRefinerProviderKind[];
   refinerProviderChainSource: 'default' | 'configured';
   configPath: string;
@@ -481,11 +478,7 @@ type VoiceInputModelSelectionPatchWire = {
   asrProvider?: string | null;
   refinerProvider?: string | null;
   refinerModel?: string | null;
-  customAsr?: {
-    protocol: 'openai-realtime' | 'qwen-realtime';
-    websocketUrl: string;
-    model: string;
-  } | null;
+  customAsr?: VoiceInputCustomAsrConfig | null;
   customAsrApiKey?: string | null;
   refinerProviderChain?: string[] | null;
 };

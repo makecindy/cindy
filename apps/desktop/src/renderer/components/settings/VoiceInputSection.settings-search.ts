@@ -203,6 +203,10 @@ export const voiceInputSettings = defineSettings({
         labelKey: 'settings.voiceInput.serviceSource.customAsr.protocol.openai',
       },
       {
+        value: 'azure-openai-realtime',
+        labelKey: 'settings.voiceInput.serviceSource.customAsr.protocol.azureOpenai',
+      },
+      {
         value: 'qwen-realtime',
         labelKey: 'settings.voiceInput.serviceSource.customAsr.protocol.qwen',
       },

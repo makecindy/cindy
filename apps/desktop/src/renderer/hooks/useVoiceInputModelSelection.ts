@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
+import type { VoiceInputCustomAsrConfig } from '../../shared/voiceInputCustomAsr';
 
 const log = createLogger('voice-input-model-selection');
 
@@ -30,11 +31,7 @@ export function useVoiceInputModelSelection(): {
   setAsrProvider: (provider: string) => Promise<void>;
   setRefinerProvider: (provider: string) => Promise<void>;
   setRefinerFallbackProvider: (provider: string) => Promise<void>;
-  saveCustomAsr: (config: {
-    protocol: 'openai-realtime' | 'qwen-realtime';
-    websocketUrl: string;
-    model: string;
-  }, apiKey?: string) => Promise<boolean>;
+  saveCustomAsr: (config: VoiceInputCustomAsrConfig, apiKey?: string) => Promise<boolean>;
   clearCustomAsrApiKey: () => Promise<void>;
   resetToDefault: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -113,11 +110,7 @@ export function useVoiceInputModelSelection(): {
   }, [applyPatch]);
 
   const saveCustomAsr = useCallback(async (
-    config: {
-      protocol: 'openai-realtime' | 'qwen-realtime';
-      websocketUrl: string;
-      model: string;
-    },
+    config: VoiceInputCustomAsrConfig,
     apiKey?: string,
   ) => {
     return applyPatch({

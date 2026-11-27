@@ -3152,6 +3152,7 @@
             "hint": "Das vom ASR-Dienst implementierte Nachrichtenformat auswählen.",
             "ariaLabel": "Benutzerdefiniertes Echtzeit-ASR-Protokoll",
             "openai": "OpenAI-Transkription",
+            "azureOpenai": "Azure OpenAI (api-key)",
             "qwen": "Qwen-Echtzeit-ASR"
           },
           "websocketUrl": {

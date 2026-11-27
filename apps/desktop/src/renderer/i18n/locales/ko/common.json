@@ -3122,6 +3122,7 @@
             "hint": "ASR 서비스가 구현한 메시지 형식을 선택하세요.",
             "ariaLabel": "사용자 지정 실시간 ASR 프로토콜",
             "openai": "OpenAI 전사",
+            "azureOpenai": "Azure OpenAI (api-key)",
             "qwen": "Qwen 실시간 ASR"
           },
           "websocketUrl": {

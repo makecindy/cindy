@@ -12,7 +12,10 @@ import {
   makeRecorderSessionId,
 } from './VoiceInputSessionRecorder.js';
 
+type RealtimeAuthMode = 'bearer' | 'azure-api-key';
+
 export type RealtimeAsrWebSocketProviderOptions = {
+  authMode?: RealtimeAuthMode;
   accessTokenProvider: () => Promise<string | null>;
   connectionProvider?: () => Promise<{ websocketUrl: string; authorizationToken: string }>;
   sourceLanguage?: string;
@@ -125,6 +128,7 @@ export function invalidatePrewarmedRealtimeAsrWebSocketSession(): void {
 }
 
 type RealtimeConnectionConfig = {
+  authMode: RealtimeAuthMode;
   realtimeUrl: string;
   extraHeaders: Record<string, string>;
   connectionKey: string;
@@ -132,11 +136,13 @@ type RealtimeConnectionConfig = {
 
 function resolveRealtimeConnectionConfig(options: RealtimeAsrWebSocketProviderOptions): RealtimeConnectionConfig {
   const realtimeUrl = options.realtimeUrl ?? OPENAI_REALTIME_TRANSCRIPTION_URL;
+  const authMode = options.authMode ?? 'bearer';
   const extraHeaders = normalizeExtraHeaders(options.extraHeaders);
   return {
     realtimeUrl,
     extraHeaders,
-    connectionKey: realtimeConnectionKey(realtimeUrl, extraHeaders),
+    authMode,
+    connectionKey: realtimeConnectionKey(realtimeUrl, extraHeaders, authMode),
   };
 }
 
@@ -152,19 +158,17 @@ function normalizeExtraHeaders(headers: Record<string, string> | undefined): Rec
   return normalized;
 }
 
-function realtimeConnectionKey(realtimeUrl: string, extraHeaders: Record<string, string>): string {
+function realtimeConnectionKey(realtimeUrl: string, extraHeaders: Record<string, string>, authMode: RealtimeAuthMode): string {
   const headerKey = Object.entries(extraHeaders)
     .map(([key, value]) => `${key.toLowerCase()}=${value}`)
     .sort()
     .join('&');
-  return `${realtimeUrl}::${headerKey}`;
+  return `${authMode}::${realtimeUrl}::${headerKey}`;
 }
 
-function realtimeHeaders(accessToken: string, extraHeaders: Record<string, string>): Record<string, string> {
-  return {
-    Authorization: `Bearer ${accessToken}`,
-    ...extraHeaders,
-  };
+function realtimeHeaders(accessToken: string, connection: RealtimeConnectionConfig): Record<string, string> {
+  if (connection.authMode === 'azure-api-key') return { 'api-key': accessToken };
+  return { Authorization: 'Bearer ' + accessToken, ...connection.extraHeaders };
 }
 
 function warmConfigKey(
@@ -350,7 +354,7 @@ function createWarmRealtimeSession(
 
     await new Promise<void>((resolve, reject) => {
       const socket = new WebSocket(connection.realtimeUrl, {
-        headers: realtimeHeaders(accessToken, connection.extraHeaders),
+        headers: realtimeHeaders(accessToken, connection),
         agent: wsAgent,
       });
       let settled = false;
@@ -623,10 +627,8 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   private readonly connectionProvider?: () => Promise<{ websocketUrl: string; authorizationToken: string }>;
   private readonly sourceLanguage: string;
   private readonly model: string;
-  private readonly realtimeUrl: string;
   private activeRealtimeUrl: string;
-  private readonly extraHeaders: Record<string, string>;
-  private readonly connectionKey: string;
+  private readonly connection: RealtimeConnectionConfig;
   private readonly credentialCacheKey: string;
   private readonly pcmSampleRate: number;
   private readonly protocolProfile: VoiceInputRealtimeProtocolProfile;
@@ -701,10 +703,8 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     this.protocolProfile = options.protocolProfile ?? 'openai-transcription-manual';
     this.connectTimeoutMs = options.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
     const connection = resolveRealtimeConnectionConfig(options);
-    this.realtimeUrl = connection.realtimeUrl;
     this.activeRealtimeUrl = connection.realtimeUrl;
-    this.extraHeaders = connection.extraHeaders;
-    this.connectionKey = connection.connectionKey;
+    this.connection = connection;
     this.credentialCacheKey = options.credentialCacheKey ?? '';
     this.providerKind = options.providerKind ?? 'openai-realtime-whisper';
     this.missingCredentialMessage =
@@ -759,12 +759,12 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     if (this.stopRequested) throw new Error('Realtime ASR connection stopped.');
     const accessToken = dynamicConnection?.authorizationToken ?? await this.accessTokenProvider();
     if (!accessToken) throw new Error(this.missingCredentialMessage);
-    const realtimeUrl = dynamicConnection?.websocketUrl ?? this.realtimeUrl;
+    const realtimeUrl = dynamicConnection?.websocketUrl ?? this.connection.realtimeUrl;
     this.activeRealtimeUrl = realtimeUrl;
     this.resetTranscriptState();
 
     const warm = dynamicConnection ? null : takeWarmRealtimeSession(
-      this.connectionKey,
+      this.connection.connectionKey,
       this.credentialCacheKey,
       this.model,
       this.sourceLanguage,
@@ -795,7 +795,7 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
     // 代理解析期间可能已停录:复查后再建连,不留没人回收的 socket。
     if (this.stopRequested) throw new Error('Realtime ASR connection stopped.');
     const socket = new WebSocket(realtimeUrl, {
-      headers: realtimeHeaders(accessToken, this.extraHeaders),
+      headers: realtimeHeaders(accessToken, this.connection),
       agent: wsAgent,
     });
     this.socket = socket;

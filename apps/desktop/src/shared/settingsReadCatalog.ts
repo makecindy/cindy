@@ -229,7 +229,7 @@ const voice = {
     asrProvider: z.enum(SETTINGS_READ_ASR_PROVIDERS), asrProviderChain: z.array(z.enum(SETTINGS_READ_ASR_PROVIDERS)).max(7),
     refinerChain: z.array(modelRoute).max(3),
   }, 'voice-input', 'VoiceInputSection', 'shared/voiceInputData.ts#VoiceInputSettings', 'owner', 'nextConnection'),
-  ...group('voice.customAsr', { protocol: z.enum(['openai-realtime', 'qwen-realtime']).nullable(), endpointConfigured: bool, modelConfigured: bool }, 'voice-input', 'VoiceInputSection', 'shared/voiceInputCustomAsr.ts', 'owner', 'nextConnection'),
+  ...group('voice.customAsr', { protocol: z.enum(['openai-realtime', 'azure-openai-realtime', 'qwen-realtime']).nullable(), endpointConfigured: bool, modelConfigured: bool }, 'voice-input', 'VoiceInputSection', 'shared/voiceInputCustomAsr.ts', 'owner', 'nextConnection'),
 };
 const imPreferences = {
   ...group('im.localTelegram', { emojiReactions: z.enum(['off', 'minimal', 'expressive']),

@@ -3122,6 +3122,7 @@
             "hint": "ASR サービスが実装しているメッセージ形式を選択します。",
             "ariaLabel": "カスタムリアルタイム ASR プロトコル",
             "openai": "OpenAI 文字起こし",
+            "azureOpenai": "Azure OpenAI (api-key)",
             "qwen": "Qwen リアルタイム ASR"
           },
           "websocketUrl": {

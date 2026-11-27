@@ -23,6 +23,7 @@ export default {
     'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: (window.__uiPage.ctx.data.cloud || window.__uiPage.ctx.data.tab === 'billing') ? 'cloud' : 'local', dataOwnerId: 'fixture-account', user: { id: 'fixture-account', name: 'Preview', membershipKind: 'personal' } });` },
   },
   cases: {
+    'azure-transcription': { about: 'Choose Azure API key authentication for a custom transcription deployment', data: { tab: 'voice-input', customAsr: true } },
     'model-tokens': { about: 'One analytics switch controls activity and model totals', data: {tab: 'about', cloud: true, modelTokens: true} },
     'archive-search': { about: 'Searching for auto archive or idle days opens the inline controls inside Storage', data: { tab: 'general', archiveEnabled: true } },
     'archive-legacy': { about: 'The previous Task management link opens Storage and highlights auto archive', data: { tab: 'storage', routeTab: 'task-management' } },
@@ -51,6 +52,15 @@ export default {
     const panel = page.getByRole('tabpanel');
     await panel.waitFor();
     assert.equal(await panel.getAttribute('id'), `settings-panel-${ui.data.tab}`);
+    if (ui.data.customAsr) {
+      const protocol = panel.getByRole('combobox', { name: await ui.t('settings.voiceInput.serviceSource.customAsr.protocol.ariaLabel') });
+      await protocol.click();
+      const name = await ui.t('settings.voiceInput.serviceSource.customAsr.protocol.azureOpenai');
+      await page.getByRole('option', { name, exact: true }).click();
+      assert.ok((await protocol.innerText()).includes(name));
+      await ui.capture('azure-selected');
+      return;
+    }
     if (ui.data.chatLayout) {
       const row = panel.locator('#settings-chat-layout');
       const widthRow = panel.locator('#settings-chat-width');

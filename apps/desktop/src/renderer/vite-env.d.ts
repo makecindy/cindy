@@ -297,11 +297,7 @@ type VoiceInputModelSelectionResultData = {
     asrProvider: VoiceInputProviderKindData;
     asrProviderChain: VoiceInputProviderKindData[];
     asrProviderChainSource: 'default' | 'configured';
-    customAsr?: {
-      protocol: 'openai-realtime' | 'qwen-realtime';
-      websocketUrl: string;
-      model: string;
-    };
+    customAsr?: import('../shared/voiceInputCustomAsr').VoiceInputCustomAsrConfig;
     refinerProvider: VoiceInputRefinerProviderKindData;
     refinerModel?: string;
     /** Effective refiner chain, head first; length 1 = no fallback (BYOK default). */
@@ -1973,11 +1969,7 @@ interface ElectronAPI {
       asrProvider?: string | null;
       refinerProvider?: string | null;
       refinerModel?: string | null;
-      customAsr?: {
-        protocol: 'openai-realtime' | 'qwen-realtime';
-        websocketUrl: string;
-        model: string;
-      } | null;
+      customAsr?: import('../shared/voiceInputCustomAsr').VoiceInputCustomAsrConfig | null;
       customAsrApiKey?: string | null;
       /** BYOK fallback tail; null clears the override (primary runs alone). */
       refinerProviderChain?: string[] | null;
