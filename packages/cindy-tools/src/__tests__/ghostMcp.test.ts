@@ -1960,7 +1960,7 @@ describe("formatGhostRoster(花名册快照:JSONL 召回数据源)", () => {
     );
     expect(
       worstCase.split("\n").filter((line) => line.startsWith("{")),
-    ).toHaveLength(16);
+    ).toHaveLength(15);
   });
 
   /**
@@ -2025,6 +2025,9 @@ describe("formatGhostRoster(花名册快照:JSONL 召回数据源)", () => {
     const prompt = buildGhostRosterPrompt(items);
     expect(prompt).toBe(formatGhostRoster(items));
     expect(prompt).toContain("直接调用 ghost_info({ghost_id})");
+    expect(prompt).toContain(
+      "读取私有云文档/表格（Google Docs/Sheets/Drive、飞书等）时，若花名册命中对应插件，先用 ghost_info 查实时状态与账号连接，再决定通道；不要先用 curl 或借浏览器登录态直读。",
+    );
     expect(prompt).toContain("ghost_manual");
     expect(prompt.indexOf('"id":"a"')).toBeLessThan(prompt.indexOf('"id":"z"'));
     expect(buildGhostRosterPrompt([])).toBe("");
