@@ -210,7 +210,10 @@ export const REMOTE_ALLOWED_SERVER_NAMES: ReadonlySet<string> = new Set([
   REMOTE_BOT_HELPER_SERVER_NAME,
 ]);
 /** Shared MCP transport with launcher-owned runtime and credentials. */
-export function createCodexHttpBridgeRuntime(ports: { appServerIds: () => string[]; }) {
+export function createCodexHttpBridgeRuntime(ports: {
+  appServerIds: () => string[];
+  appBindingLogger?: Pick<Logger, 'warn'>;
+}) {
 const { appServerIds } = ports;
 
 
@@ -598,6 +601,11 @@ async function startCodexHttpBridge(
       if (appServer && (!appContext?.sessionId || (isScopedRemoteToken && !appContext.remoteHostId))) {
         res.statusCode = 401;
         res.end('MCP App server requires a bound Session');
+        (ports.appBindingLogger ?? log).warn('rejected MCP App request without a bound Session', {
+          reason: appContext?.sessionId ? 'missing_remote_host' : 'missing_session',
+          hasSessionQuery: sessionQuery !== null,
+          hasInstanceQuery: instanceQuery !== null,
+        });
         return;
       }
       // Bind frozen mounts for every token before initialization or transport lookup: an

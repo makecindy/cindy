@@ -13085,6 +13085,10 @@ function createRemoteHistoryView(sessionId: string) {
     diagnostic: (event) => log.debug('history view changed', {
       hostRef: deviceId?.slice(0, 8) ?? 'local', sessionRef: sessionId.slice(0, 8), ...event,
     }),
+    // 渲染死循环(React #185)被拦下时留证据:哪个范围、当时的读取状态。只有 id 与计数。
+    expansionLoop: (event) => log.warn('history expansion loop stopped', {
+      hostRef: deviceId?.slice(0, 8) ?? 'local', sessionRef: sessionId.slice(0, 8), ...event,
+    }),
     page: async (before) => {
       const writer = deviceId ? remoteHistoryCacheWriter(deviceId, sessionId) : undefined;
       const readRows = new WeakSet(sessions.get(sessionId)?.messages ?? []);

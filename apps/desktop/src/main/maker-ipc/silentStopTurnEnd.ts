@@ -20,7 +20,7 @@ export interface SilentStopTurnEndPorts {
     AgentInputCoordinator,
     'hasPendingQueuedWork' | 'noteHostTurnContinuation' | 'noteHostTurnContinuationFailed'
   > | null | undefined;
-  silentStopAutoResumeGuard: Pick<SilentStopAutoResumeGuard, 'onSilentStop' | 'noteResumeSendFailed'>;
+  silentStopAutoResumeGuard: Pick<SilentStopAutoResumeGuard, 'onSilentStop' | 'noteResumeSendFailed' | 'isBreakerWarned'>;
   sessionListActivityTracker: Pick<SessionListActivityTracker, 'captureContinuation'>;
   productTurnWallClockTracker: Pick<ProductTurnWallClockTracker, 'preserveForContinuation'>;
   advanceRuntimeRecoveryNotice(session: SilentStopSession): void;
@@ -73,6 +73,8 @@ export async function handleSilentStopTurnEndWithPorts(
     await settleSilentStopDone(session.id, 'skip', turnLeaseId, session, generation);
     return;
   }
+  // 先快照:守卫在 exhausted 分支内把 breakerWarned 置位,之后再读恒为 true。
+  const breakerAlreadyWarned = silentStopAutoResumeGuard.isBreakerWarned(session.id);
   const decision = silentStopAutoResumeGuard.onSilentStop(session.id, doneAt);
   if (decision.action === 'resume') {
     const discardEndedActivity = sessionListActivityTracker.captureContinuation(session.id);
@@ -178,7 +180,18 @@ export async function handleSilentStopTurnEndWithPorts(
     return;
   }
   if (decision.action === 'exhausted') {
-    await surfaceSilentStopExhaustedBanner(session.id, decision.cause);
+    // 熔断已提示过后,后续的 session-breaker exhausted 不再重复弹横幅——
+    // #12759:汇报仍在陆续到达,但熔断状态没变,横幅再弹一次没有新信息,
+    // 只会让用户以为又出新错。首次提示照弹;banner 已提示过的后续到达
+    // 只走日志(守卫仍返回 exhausted,上游空响应在熔断解除前始终不续跑)。
+    if (decision.cause !== 'session-breaker' || !breakerAlreadyWarned) {
+      await surfaceSilentStopExhaustedBanner(session.id, decision.cause);
+    } else {
+      log.debug('silent-stop breaker already surfaced — suppressing repeat banner', {
+        sessionId: session.id,
+        cause: decision.cause,
+      });
+    }
     await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
   }
   if (decision.action === 'skip') {

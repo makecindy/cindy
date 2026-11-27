@@ -195,6 +195,7 @@ import { startProviderShareRuntime, stopProviderShareRuntime } from './providerS
 import { refreshProviderShareHost, ownedProviderShareGuestAccess } from './providerShareHost.js';
 import { providerShareGuestPeer, providerShareHostPeer, shortDeviceRef } from '@cindy/device-link';
 import { tapRemoteModelCatalogChange } from './broadcast-tap.js';
+import { parseModelCatalogKey } from '../../shared/controlledModelCatalog.js';
 import { handleProviderMetadataSourcePush, invokeProviderMetadataContinuity, invalidateProviderMetadataContinuity, onProviderDirectoryDenied, onProviderMetadataDenied, isTemporaryProviderMetadataFailure } from './providerMetadataContinuity.js';
 import { retireControlOffRetention } from './controlOffRetention.js';
 import { bumpDeviceAccessGeneration, noteControllerAccessAllowed, syncRemoteControlAccessGeneration } from './remoteControlAccess.js';
@@ -540,7 +541,7 @@ onProviderMetadataDenied(target => {
   // Existing result metadata and local push, not a new wire permission or a link close.
   broadcast(DEVICE_LINK_PUSH.REMOTE_PUSH, { deviceId, channel: 'maker:provider:changed',
     payload: { providerContinuity: { stale: true, remainingMs: 0 } } });
-  tapRemoteModelCatalogChange(target, 'maker:provider:changed', false);
+  if (!parseModelCatalogKey(target)) tapRemoteModelCatalogChange(target, 'maker:provider:changed', false);
 });
 // Local IPC metadata, never accepted from a push payload or sent over the wire.
 const sharedHostStreams = new Map<string, { streamId: string; epoch: number }>();
