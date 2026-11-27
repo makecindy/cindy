@@ -117,6 +117,7 @@
     "./codex-usage-buckets": "./src/codexUsageBuckets.ts",
     "./subscription-usage": "./src/subscriptionUsage.ts",
     "./quota-level": "./src/quotaLevel.ts",
+    "./plugin-engine-quota": "./src/pluginEngineQuota.ts",
     "./plugin-engine-usage": "./src/pluginEngineUsage.ts",
     "./bot-learning": "./src/botLearning.ts",
     "./botCollaboration": "./src/botCollaboration.ts",

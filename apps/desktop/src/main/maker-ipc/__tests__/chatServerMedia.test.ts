@@ -475,6 +475,18 @@ describe('chat private media', () => {
     await expect(createChatMedia(api, () => true, 'https://chat.example.test').download('room', 'later')).rejects.toMatchObject({ message: 'MEDIA_DOWNLOAD_FAILED', status: 503 });
   });
 
+  it('retries signed media download once on a transient socket reset', async () => {
+    const api = vi.fn(async () => ({ name: 'p.png', type: 'image/png', size: 3, url: 'https://download.example.test/signed' })) as unknown as ChatApi;
+    f.fetch.mockReset()
+      .mockRejectedValueOnce(new Error('net::ERR_CONNECTION_RESET'))
+      .mockResolvedValueOnce(new Response('png'));
+    f.ingest.mockResolvedValueOnce({ url: 'cindy-media://recovered', mimeType: 'image/png' });
+    const result = await createChatMedia(api, () => true, 'https://chat.example.test').download('room', 'flaky');
+    expect(result).toMatchObject({ id: 'flaky', category: 'image', url: 'cindy-media://recovered' });
+    expect(f.fetch).toHaveBeenCalledTimes(2);
+    expect(api).toHaveBeenCalledTimes(1);
+  });
+
   it('uploads a send\'s files three at a time and keeps their order', async () => {
     f.read.mockResolvedValue({ buffer: Buffer.from('png') });
     f.fetch.mockResolvedValue(new Response('', { status: 200 }));

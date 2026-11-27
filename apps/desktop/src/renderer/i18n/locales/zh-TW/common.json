@@ -10344,6 +10344,7 @@
     "sessionCostLabel": "本任務 {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "暫無用量",
       "noUsageDetail": "本任務尚未產生用量。",
       "unavailableLabel": "用量暫不可用",
@@ -17286,7 +17287,8 @@
         "all": "全部",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "插件引擎"
       },
       "filterGroupBy": {
         "project": "專案",
@@ -23312,7 +23314,13 @@
       "back": "返回智慧路由",
       "name": "名字",
       "nameHint": "選模型時顯示這個名字。",
-      "routeShownAs": "選模型時在「智慧路由」裡顯示。",
+      "routeType": "路由類型",
+      "routeTypeModel": "模型路由",
+      "routeTypeProvider": "供應商路由",
+      "switchTypeConfirmTitle": "切換路由類型？",
+      "switchTypeConfirmDescription": "已經加入的來源會被移除。名稱、選法與例外會保留。",
+      "switchTypeConfirmTargetWarning": "其他路由中指向這條路由的時段例外也會移除。",
+      "switchTypeConfirmAction": "切換",
       "pick": "這次用哪個",
       "moreStrategies": "更多選法",
       "effort": "推理強度",
@@ -23322,11 +23330,10 @@
       "weightAria": "「{{name}}」的權重",
       "weightHint": "按權重分配時，權重越大分到的新任務越多，1–1000。",
       "sources": "可以用的來源",
-      "sourcesHint": "可以放不同的模型；實際用了哪個會寫在任務裡。",
-      "sourcesEmpty": "還沒有來源。從下面加入已經連線的模型。",
+      "sourcesEmpty": "可以放不同的模型 · 實際呼叫了哪個會顯示在任務裡 · 從下面加入已經連線的模型",
       "sourcesEmptyMerged": "還沒有來源。從下面加入已經連線的供應商。",
       "sourcesFull": "一個路由最多 {{count}} 個來源。",
-      "addSource": "新增來源",
+      "addSource": "新增模型路由",
       "chooseModel": "選一個模型",
       "notConnected": "沒有連線",
       "moveUp": "上移",
@@ -23406,10 +23413,9 @@
       "removeAria": "把 {{name}} 從這條路由中移除",
       "note": "自動合成的路由會跟著供應商的連接增減：不能新增或移出成員，但可以調先後、填權重、停用某個成員，也可以改選法或隱藏。",
       "providers_other": "{{count}} 個供應商",
-      "addWhole": "新增整個供應商",
+      "addWhole": "新增供應商路由",
       "addWholeHint": "它的全部模型都進這條路由：選模型時這條路由像一個供應商，照常選模型，由路由決定這次用哪個成員。",
-      "addModelHint": "只加某個供應商的某個模型：選這條路由時依選法在這些來源裡挑一個。",
-      "detailHint": "這條路由合併的是整個供應商：選模型時它像一個供應商，照常選模型、推理強度，由路由決定這次用哪個成員。"
+      "addModelHint": "只加某個供應商的某個模型：選這條路由時依選法在這些來源裡挑一個。"
     },
     "kinds": {
       "byModel": "按模型",

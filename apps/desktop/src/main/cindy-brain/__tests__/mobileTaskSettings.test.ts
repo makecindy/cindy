@@ -17,7 +17,10 @@ const route = {
   effort: 'medium',
   fastMode: true,
 };
-function setup(validate: (config: PluginTaskConfig) => Promise<void> = async () => {}) {
+function setup(
+  validate: (config: PluginTaskConfig) => Promise<void> = async () => {},
+  pluginEngines: Parameters<typeof MobileTaskSettings['prototype']['read']> extends never ? never : Array<Record<string, unknown>> = [],
+) {
   let config: PluginTaskConfig = {
     workingDir: '/private/selected-directory',
     permissionMode: 'plan',
@@ -30,6 +33,7 @@ function setup(validate: (config: PluginTaskConfig) => Promise<void> = async () 
     validate,
     providers,
     agents: async () => ['codex'],
+    pluginEngines: () => pluginEngines as never,
   });
   return {
     service,
@@ -178,5 +182,40 @@ describe('native mobile task preferences', () => {
     const local = await h.service.update('plugin', 'installed-1',
       { expectedRevision: tuned.revision, model: { ...route, agentDeviceId: null } }, () => {});
     expect(local.config).toEqual({ ...route, agentDeviceId: null, permissionMode: 'auto' });
+  });
+
+  it('saves validated plugin-engine (acp) routes and rejects invalid fastMode or provider prefix', async () => {
+    const validate = vi.fn(async () => {});
+    const h = setup(validate, [{
+      key: 'antigravity:agy',
+      providerId: 'acp-plugin:antigravity:agy',
+      ghostId: 'antigravity',
+      harnessId: 'agy',
+      name: 'Antigravity',
+      availability: { state: 'available' },
+      models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high'] }],
+      permissionModes: [],
+      defaultPermissionMode: 'ask',
+    }]);
+    const before = h.service.read('plugin', 'installed-1');
+    const acp = {
+      agentKind: 'acp',
+      providerId: 'acp-plugin:antigravity:agy',
+      model: 'gemini-4-neon',
+      effort: 'high',
+      fastMode: false,
+    };
+    const saved = await h.service.update('plugin', 'installed-1',
+      { expectedRevision: before.revision, model: acp }, () => {});
+    expect(saved.config).toEqual({ ...acp, permissionMode: 'plan' });
+    await expect(h.service.update('plugin', 'installed-1',
+      { expectedRevision: saved.revision, model: { ...acp, fastMode: true } }, () => {}))
+      .rejects.toThrow('PLUGIN_SETTINGS_INVALID');
+    await expect(h.service.update('plugin', 'installed-1',
+      { expectedRevision: saved.revision, model: { ...acp, providerId: 'openai' } }, () => {}))
+      .rejects.toThrow('PLUGIN_SETTINGS_INVALID');
+    await expect(h.service.update('plugin', 'installed-1',
+      { expectedRevision: saved.revision, model: { ...acp, model: 'missing-model' } }, () => {}))
+      .rejects.toThrow('PLUGIN_MODEL_UNAVAILABLE');
   });
 });

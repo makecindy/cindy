@@ -8,6 +8,7 @@ interface SessionSubscriptionAccountBinding {
   account: NativeSubscriptionAccount;
   /** Pool placement uses the lease's account ID, not Codex's host-scoped account ID. */
   poolAccountId: string;
+  mixedOpenAiPool: boolean;
   deviceHosted: boolean;
 }
 const sessions = new Map<string, SessionSubscriptionAccountBinding>();
@@ -16,11 +17,11 @@ export function registerSessionSubscriptionAccount(
   sessionId: string | undefined,
   account: NativeSubscriptionAccount,
   poolAccountId = account.id,
-  deviceHosted = false,
+  { mixedOpenAiPool = false, deviceHosted = false }: { mixedOpenAiPool?: boolean; deviceHosted?: boolean } = {},
 ): () => void {
   if (!sessionId) return () => {};
   account.assertCurrent();
-  const binding = { account, poolAccountId, deviceHosted };
+  const binding = { account, poolAccountId, mixedOpenAiPool, deviceHosted };
   sessions.set(sessionId, binding);
   return () => {
     if (sessions.get(sessionId) === binding) sessions.delete(sessionId);
@@ -97,6 +98,13 @@ export function isPoolSessionExecutionCurrent(
 export function readPoolExecutionRoute(sessionId: string | null | undefined) {
   const route = readPoolSessionExecution(sessionId);
   return route && 'captureTurnRejection' in route ? route : undefined;
+}
+
+/** A live local mixed-pool lease, whether it chose a Key or a subscription.
+ * This is only a synchronous recovery hint; the allocator checks the current
+ * binding, model, membership and switching policy again before handoff. */
+export function isLocalAccountPoolTurn(sessionId: string): boolean {
+  return readPoolExecutionRoute(sessionId) !== undefined || sessions.get(sessionId)?.mixedOpenAiPool === true;
 }
 
 // The execution host can use this before creating a guest recovery offer.

@@ -10463,6 +10463,7 @@
     "sessionCostLabel": "Sessão {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "Nenhum uso ainda",
       "noUsageDetail": "Ainda não há uso registrado para esta sessão.",
       "unavailableLabel": "Uso indisponível",
@@ -17526,7 +17527,8 @@
         "all": "Todas",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Mecanismo de plugin"
       },
       "filterGroupBy": {
         "project": "Projeto",
@@ -23627,7 +23629,13 @@
       "back": "Voltar ao roteamento inteligente",
       "name": "Nome",
       "nameHint": "Aparece no seletor de modelos.",
-      "routeShownAs": "Aparece em Roteamento inteligente no seletor de modelos.",
+      "routeType": "Tipo de rota",
+      "routeTypeModel": "Rota de modelos",
+      "routeTypeProvider": "Rota de provedores",
+      "switchTypeConfirmTitle": "Trocar o tipo de rota?",
+      "switchTypeConfirmDescription": "As fontes já adicionadas serão removidas. O nome, a regra de escolha e as exceções permanecem.",
+      "switchTypeConfirmTargetWarning": "As exceções de horário de outras rotas que apontam para esta rota também serão removidas.",
+      "switchTypeConfirmAction": "Trocar tipo",
       "pick": "Qual usar",
       "moreStrategies": "Mais opções",
       "effort": "Esforço de raciocínio",
@@ -23637,11 +23645,10 @@
       "weightAria": "Peso de “{{name}}”",
       "weightHint": "Com “Por peso”, um peso maior recebe mais tarefas novas. 1–1000.",
       "sources": "Fontes que ela pode usar",
-      "sourcesHint": "Modelos diferentes podem ficar juntos. A tarefa mostra qual foi usado.",
-      "sourcesEmpty": "Ainda não há fontes. Adicione abaixo um modelo conectado.",
+      "sourcesEmpty": "Modelos diferentes podem ficar juntos · A tarefa mostra qual foi usado · Adicione abaixo um modelo conectado",
       "sourcesEmptyMerged": "Ainda não há fontes. Adicione abaixo um provedor conectado.",
       "sourcesFull": "Uma rota aceita até {{count}} fontes.",
-      "addSource": "Adicionar fonte",
+      "addSource": "Adicionar rota de modelos",
       "chooseModel": "Escolher um modelo",
       "notConnected": "Sem conexão",
       "moveUp": "Mover para cima",
@@ -23729,10 +23736,9 @@
       "providers_one": "{{count}} provedor",
       "providers_many": "{{count}} provedores",
       "providers_other": "{{count}} provedores",
-      "addWhole": "Adicionar um provedor inteiro",
+      "addWhole": "Adicionar rota de provedores",
       "addWholeHint": "Todos os modelos dele entram nesta rota. No seletor de modelos, a rota funciona como um provedor: escolha um modelo como sempre e a rota decide qual membro o executa.",
-      "addModelHint": "Adicione um modelo de um provedor. Ao escolher esta rota, uma dessas fontes é escolhida pela estratégia.",
-      "detailHint": "Esta rota combina provedores inteiros. No seletor de modelos, ela funciona como um provedor: escolha modelo e esforço como sempre e a rota decide qual membro o executa."
+      "addModelHint": "Adicione um modelo de um provedor. Ao escolher esta rota, uma dessas fontes é escolhida pela estratégia."
     },
     "kinds": {
       "byModel": "Por modelo",

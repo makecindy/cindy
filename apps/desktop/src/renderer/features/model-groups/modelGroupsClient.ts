@@ -84,7 +84,9 @@ export function saveModelGroups(change: (latest: ModelGroupsConfig) => ModelGrou
   const owner = ownerNow();
   const run = saving.then(async () => {
     if (owner !== ownerNow() || cached?.owner !== owner) throw new Error('model groups are not loaded for this account');
-    const saved = await window.electronAPI.modelGroups.set(change(cached.config));
+    const next = change(cached.config);
+    if (next === cached.config) return cached.config;
+    const saved = await window.electronAPI.modelGroups.set(next);
     publish(owner, saved);
     return saved;
   });
