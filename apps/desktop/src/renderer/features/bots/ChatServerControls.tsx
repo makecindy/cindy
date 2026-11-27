@@ -14,6 +14,8 @@ import { cn } from '@/lib/utils';
 import type { PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import type { BotGroupDetail, BotGroupMemberView, BotGroupMessageView } from '../../../shared/botGroupChat';
 
+export { chatErrorKey } from './chatError';
+
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const quickReactions = ['👍', '❤️', '😂', '🎉', '👀', '🙏'];
 const FullReactionPicker = lazy(() => import('./FullReactionPicker'));
