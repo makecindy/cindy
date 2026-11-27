@@ -36,6 +36,7 @@ import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from '@/components/chat/ChatBubb
 import { SessionQuickSendProvider } from '@/components/chat/SessionQuickSendContext';
 import { ShareMessageCheckbox } from '@/components/chat/ShareMessageCheckbox';
 import { CHAT_MESSAGE_LOCATE_TRANSITION_CLASS, CHAT_MESSAGE_LOCATE_HIGHLIGHT_CLASS } from '@/components/chat/chatChrome';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { SHARE_EXCLUDE_ATTR, SHARE_MESSAGE_ATTR, SHARE_SESSION_ATTR } from '@/lib/shareConversationImage';
 import { ChatReadReceipt } from './ChatMessageReaders';
@@ -52,6 +53,7 @@ import { isBotGroupCapabilityNoticeCode, isBotGroupRuntimeFailureCode } from '..
 import { GroupMaskMessageAvatar } from './GroupMaskControls';
 import { useGroupMask, maskIdentity } from './groupMaskPresentation';
 import { BotAvatar } from './BotAvatar';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { BotGroupMentionCard, botGroupMentionMember } from './BotGroupMentionCard';
 import { splitBotGroupMentionSegments } from './botGroupMentions';
 import { botGroupNoticeKey } from './botGroupPresentation';
@@ -277,12 +279,12 @@ function BotGroupMessageText({ content, mentionLabels, members, mentions, server
 
 // ---- Pieces ----------------------------------------------------------------------------
 
-/** Quiet pill after an author name (负责人, 第 k 步, 某某的主人). */
-export function BotGroupNameTag({ children }: { children: ReactNode }) {
+/** Quiet pill after an author name (负责人, 第 k 步, 某某的主人, 部门). */
+export function BotGroupNameTag({ children, title }: { children: ReactNode; title?: string }) {
   return (
-    <span className="inline-flex min-h-[18px] max-w-[12rem] shrink-0 select-none items-center truncate rounded-full bg-[var(--surface-chip)] px-1.5 py-px text-11 font-medium leading-tight text-[var(--text-secondary)]">
+    <Badge title={title} className="max-w-[12rem] truncate">
       {children}
-    </span>
+    </Badge>
   );
 }
 
@@ -300,6 +302,7 @@ export function BotGroupDateDivider({ timestamp, locale }: { timestamp: number; 
 // ---- The row ---------------------------------------------------------------------------
 
 export interface BotGroupTimelineItemProps {
+  showDeviceChoice?: boolean;
   pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates;
   message: BotGroupTimelineMessage;
   /** Same author as the row above within five minutes: no avatar or name. */
@@ -310,6 +313,12 @@ export interface BotGroupTimelineItemProps {
   avatar?: { name: string; avatar: string | null; avatarUrl?: string | null; avatarColor: string | null };
   /** Bots a human author brought into the group: 「某某的主人」. */
   ownerOf?: string;
+  /** Same-organization colleague leaf department (strictly same-org viewers only). */
+  department?: string;
+  /** Full department path tooltip (strictly same-org viewers only). */
+  departmentPath?: string;
+  /** True only for enterprise viewers looking at an external human member. */
+  external?: boolean;
   /** 「第 k 步」 on a step hand-off. */
   stepNumber?: number;
   members: readonly BotGroupMemberView[];
@@ -438,7 +447,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   if (message.kind === 'notice' || message.authorKind === 'system') {
     const name = message.authorName.trim() || authorName;
     if (isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)) return <Row {...rowProps} block="system">
-      <BotGroupCapabilityNotice name={name} code={message.capabilityNoticeCode} />
+      <BotGroupCapabilityNotice name={name} code={message.capabilityNoticeCode} chooseDevice={props.showDeviceChoice && message.canChooseAssistantDevice} />
     </Row>;
     if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
       return (
@@ -521,7 +530,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           data-testid={message.outbox ? "bot-group-outbox" : undefined}
           data-status={message.outbox?.status}
           aria-busy={sending && message.outbox?.status !== 'failed' ? true : undefined}
-          className={cn('group/message chat-bubble-layout relative flex min-w-0 justify-end rounded-lg py-0.5', sharing && 'ml-10', attribution && 'pr-[42px]')}
+          className={cn('group/message chat-bubble-layout relative flex min-w-0 justify-end rounded-lg py-0.5', sharing && 'ml-10', attribution && 'pr-10')}
         >
           {sharing && shareable ? <ShareMessageCheckbox clientId={message.id} /> : null}
           <div className={cn('flex min-w-0 flex-col items-end gap-1.5 transition-opacity', share ? 'chat-bubble-column max-w-[min(560px,calc(100%-var(--chat-bubble-gutter,120px)))]' : CHAT_BUBBLE_COLUMN_CLASS, sending && message.outbox?.status !== 'failed' && 'opacity-60')}>
@@ -620,6 +629,8 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
           {!continued ? (
             <span className="flex min-w-0 max-w-full select-none items-baseline gap-1.5">
               <span className="min-w-0 truncate text-13 font-medium leading-5 text-[var(--text-primary)]">{authorName}</span>
+              {props.external ? <BotGroupExternalBadge /> : null}
+              {props.department ? <BotGroupNameTag title={props.departmentPath ?? props.department}>{props.department}</BotGroupNameTag> : null}
               {isPlanCard ? <BotGroupOrganizerTag /> : null}
               {props.stepNumber ? <BotGroupNameTag>{t('bots.groupChat.timeline.stepTag', { count: props.stepNumber })}</BotGroupNameTag> : null}
               {props.ownerOf ? <BotGroupNameTag>{t('bots.groupChat.ownerOf', { name: props.ownerOf })}</BotGroupNameTag> : null}

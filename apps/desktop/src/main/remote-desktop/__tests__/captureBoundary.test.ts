@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   windows: [] as any[],
   deps: null as any,
   permissionDeps: null as any,
+  screenPermission: 'granted',
   lease: 'lease',
   background: false,
   ready: false,
@@ -72,7 +73,11 @@ vi.mock('../linuxDesktop', () => ({
   linuxMonitor: vi.fn(),
   linuxDisplay: () => ({ id: 'hyprland:eDP-2', name: 'eDP-2', width: 1600, height: 1000 }),
 }));
-vi.mock('../linuxCapture', () => ({ readLinuxCursorSupport: async () => false }));
+vi.mock('../linuxCapture', () => ({
+  readLinuxCursorSupport: async () => false,
+  readLinuxX11CaptureSupport: async () => false,
+  resolveLinuxCaptureBinary: async () => '/missing/capture',
+}));
 vi.mock('../linuxSessionLock', () => ({ isLinuxDesktopUnlocked: h.unlocked }));
 vi.mock('../linuxAudio', () => ({
   supportsLinuxAudio: () => h.linuxAudio,
@@ -113,7 +118,7 @@ vi.mock('electron', () => ({
     on: (name: string, handler: any) => h.screenHandlers.set(name, handler),
     getAllDisplays: () => [{ id: 1 }],
   },
-  systemPreferences: { getMediaAccessStatus: () => 'granted' },
+  systemPreferences: { getMediaAccessStatus: () => h.screenPermission },
   desktopCapturer: {
     getSources: () => h.source ?? Promise.resolve([{ id: 'screen:1', display_id: '1' }]),
   },
@@ -288,6 +293,7 @@ beforeEach(() => {
   h.windows.length = 0;
   h.source = null;
   h.lease = 'lease';
+  h.screenPermission = 'granted';
   h.dispose.mockClear();
   h.stop.mockClear();
   h.releaseControl.mockClear();
@@ -405,22 +411,26 @@ it('joins resolution restoration through the shared asynchronous quit phase', as
   expect(settled).toHaveBeenCalledOnce();
 });
 
-it('bounds a stalled screen permission probe so the guide can finish its request', async () => {
-  h.source = new Promise(() => {});
-  const pending = h.permissionDeps.request(
-    'screenRecording',
-    () => true,
-    new AbortController().signal,
-  );
-  const rejected = expect(pending).rejects.toThrow('DESKTOP_VIDEO_TIMEOUT');
-  await vi.advanceTimersByTimeAsync(5000);
-  await rejected;
-  h.source = Promise.resolve([]);
-  await expect(
-    h.permissionDeps.request('screenRecording', () => true, new AbortController().signal),
-  ).resolves.toBeUndefined();
-  expect(h.stop).not.toHaveBeenCalled();
-});
+it.each(['granted', 'denied'])(
+  'bounds a stalled screen permission probe and reports the actual OS state (%s)',
+  async (status) => {
+    h.source = new Promise(() => {});
+    const pending = h.permissionDeps.request(
+      'screenRecording',
+      () => true,
+      new AbortController().signal,
+    );
+    const rejected = expect(pending).rejects.toThrow('DESKTOP_VIDEO_TIMEOUT');
+    await vi.advanceTimersByTimeAsync(5000);
+    await rejected;
+    h.source = Promise.resolve([]);
+    h.screenPermission = status;
+    await expect(
+      h.permissionDeps.request('screenRecording', () => true, new AbortController().signal),
+    ).resolves.toBe(status === 'granted');
+    expect(h.stop).not.toHaveBeenCalled();
+  },
+);
 
 it('drops enumeration timeouts for one relay frame and resumes without stopping the host', async () => {
   vi.stubGlobal('process', { ...process, platform: 'linux' });

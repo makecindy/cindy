@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { providerMonogram } from '@/lib/providerModels';
 import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
 
 /** 供应商卡片图标。 */
 export function cardIcon(sel: { providerId?: string; name: string }): ReactNode {
@@ -41,7 +42,7 @@ export function ProviderRow({
       disabled={busy || buttonProps.disabled}
       aria-busy={busy}
       className={cn(
-        'flex w-full items-center gap-2.5 rounded-lg px-2 py-[7px] text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
+        'flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
         className,
       )}
     >
@@ -62,9 +63,9 @@ export function ProviderRow({
         {name}
       </span>
       {beta && (
-        <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-px text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
+        <Badge tone="outline" size="xs" className="bg-[var(--settings-badge-bg)]">
           {t('settings.providers.local.beta')}
-        </span>
+        </Badge>
       )}
       {/* meta 可收缩截断:en 等长文案在窄弹窗下不得把名称挤出(PR #1102 review)。 */}
       <span className="min-w-0 truncate text-11" style={{ color: 'var(--text-tertiary)' }}>

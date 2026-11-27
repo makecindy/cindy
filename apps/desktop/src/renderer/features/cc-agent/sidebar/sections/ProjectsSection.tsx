@@ -50,7 +50,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { Tip } from '@/components/ui/tooltip';
+import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -110,7 +110,6 @@ import { useViewedPriorityHold } from '../../hooks/useViewedPriorityHold';
 import { projectKeyComparisonKey } from '../../lib/projectGrouping';
 import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import { aggregateSessionLamps, type SessionLampAggregate } from '../../lib/sessionLampAggregation';
-import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { SidebarRightStatusIndicator } from '../SidebarRightStatusIndicator';
 import { useSessionAttentionKindsWithOrcaLeads } from '../../lib/orcaLeadWorkerAttention';
 import { useSessionAttentionUrgencySet } from '../../contexts/SessionAttentionUrgencyContext';
@@ -1233,6 +1232,9 @@ export function ProjectsSection({
                 // 设备层聚合灯:聚合本段全部条目的会话(与段内渲染一致)。
                 // 仅收起时显示运行态与未读点,展开后由下层内容提示。
                 const sectionLamp = lampAgg(section.entries.flatMap(entrySessions));
+                const hasDeviceActions = Boolean(onCreateProject || section.deviceId);
+                const showDeviceTrailingStatus =
+                  !online || Boolean(sectionCollapsed && sectionLamp.dotTone);
                 return (
                   <div key={key} className="flex flex-col">
                     {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
@@ -1240,6 +1242,7 @@ export function ProjectsSection({
                       deviceId={section.deviceId}
                       name={name}
                       createProjectDisabled={!online}
+                      sessionVariant={mainSessionVariant}
                       onCreateProject={
                         onCreateProject
                           ? () => onCreateProject(
@@ -1258,7 +1261,8 @@ export function ProjectsSection({
                             : t('ccAgent.sidebar.deviceGroup.collapse')
                         }
                         className={cn(
-                          'flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-full px-2',
+                          'flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-full pl-2',
+                          mainSessionVariant === 'list' ? 'pr-2.5' : 'pr-2',
                           'text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]',
                         )}
                       >
@@ -1290,20 +1294,32 @@ export function ProjectsSection({
                             className="size-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]"
                           />
                         )}
-                        {/* 条数已去掉(2026-08-12 用户裁决):它数的是顶层条目
-                            (项目行 + 散排对话 + 对话组),不是任务数,读起来只会误导;
-                            段展开后内容本身就是答案。右侧改为灯组:仅收起时显示聚合未读点
-                            (段级 size 6,rail 段钮同款);离线标注始终保留。 */}
-                        <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                          {sectionCollapsed && sectionLamp.dotTone && (
-                            <AttentionDot size={6} tone={sectionLamp.dotTone} />
-                          )}
-                          {!online && (
-                            <span className="shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
-                              {t('ccAgent.sidebar.deviceGroup.offline')}
-                            </span>
-                          )}
-                        </span>
+                        {/* 右侧状态槽与项目/分组/任务行对齐同一垂直列：悬停或键盘聚焦操作按钮时
+                            由 DeviceSectionHeader 原地替换，不再预先为隐藏按钮留白。 */}
+                        {showDeviceTrailingStatus && (
+                          <span
+                            className={cn(
+                              'ml-auto flex shrink-0 items-center gap-1.5',
+                              hasDeviceActions && [
+                                'transition-opacity duration-[var(--motion-fast)] motion-reduce:transition-none',
+                                'group-hover/device-header:w-0 group-hover/device-header:overflow-hidden group-hover/device-header:opacity-0',
+                                'group-has-[[data-device-header-action]:focus-visible]/device-header:w-0 group-has-[[data-device-header-action]:focus-visible]/device-header:overflow-hidden group-has-[[data-device-header-action]:focus-visible]/device-header:opacity-0',
+                              ],
+                            )}
+                          >
+                            {!online && (
+                              <span className="shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
+                                {t('ccAgent.sidebar.deviceGroup.offline')}
+                              </span>
+                            )}
+                            {sectionCollapsed && sectionLamp.dotTone && (
+                              <SidebarRightStatusIndicator
+                                kind={sectionLamp.dotTone}
+                                isActive={false}
+                              />
+                            )}
+                          </span>
+                        )}
                       </button>
                     </DeviceSectionHeader>
                     <SectionCollapse collapsed={sectionCollapsed}>
@@ -1554,7 +1570,8 @@ export function SessionGroupNode({
           }
         }}
         className={cn(
-          'group flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-full pl-3 pr-2',
+          'group flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-full pl-3',
+          sessionVariant === 'list' ? 'pr-2.5' : 'pr-2',
           'text-sm font-normal text-[var(--sidebar-list-muted)]',
           'transition-colors hover:bg-sidebar-item-hover',
         )}
@@ -1582,43 +1599,62 @@ export function SessionGroupNode({
             className="shrink-0 text-[var(--cmd-palette-item-meta)] opacity-0 transition-opacity duration-[120ms] group-hover:opacity-100"
           />
         </div>
-        {/* 聚合状态与普通任务行保持同一右侧槽位；展开后由子任务行分别显示。 */}
-        {collapsed && lamp?.dotTone && (
-          <div className="ml-auto flex h-6 shrink-0 items-center justify-end">
-            <SidebarRightStatusIndicator kind={lamp.dotTone} isActive={false} />
-          </div>
-        )}
-        {/* 悬浮工具组:与 ProjectNode Header 同款——常态隐藏,hover 整行淡入。
-            新建(SquarePen)与项目行等位，右键菜单独立于新建与折叠操作。 */}
-        {onCreateDialogue && (
-          <div
-            className={cn(
-              'flex shrink-0 items-center gap-0.5',
-              'opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100',
-            )}
-          >
-            <Tip text={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}>
-              <button
-                type="button"
-                aria-label={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}
-                disabled={isCreateDisabled}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (!isCreateDisabled) onCreateDialogue();
-                }}
+        {/* 右侧状态槽与 ProjectNode / SessionItem 共用同一覆盖模式：静态下不给
+            新建按钮预先留白，保证绿/蓝/红点贴齐同一垂直列；悬停或聚焦新建按钮时
+            状态点淡出，由新建按钮原地替换。无新建按钮的分组（如自动化）只保留状态点。 */}
+        {onCreateDialogue ? (
+          <div className="group/slot relative ml-auto flex h-6 shrink-0 items-center justify-end">
+            <div className="grid h-6 grid-cols-[max-content] items-center justify-items-end">
+              {collapsed && lamp?.dotTone ? (
+                <div
+                  className={cn(
+                    'col-start-1 row-start-1 flex items-center gap-1',
+                    'transition-opacity duration-[var(--motion-fast)]',
+                    'group-hover:w-0 group-hover:overflow-hidden group-hover:opacity-0',
+                    'group-focus-within/slot:w-0 group-focus-within/slot:overflow-hidden group-focus-within/slot:opacity-0',
+                  )}
+                >
+                  <SidebarRightStatusIndicator kind={lamp.dotTone} isActive={false} />
+                </div>
+              ) : null}
+              <div
+                aria-hidden
+                className="invisible col-start-1 row-start-1 hidden h-6 items-center gap-0.5 group-hover:flex group-focus-within/slot:flex"
+              >
+                <span className="size-5 shrink-0" />
+              </div>
+              <div
                 onPointerDown={(e) => e.stopPropagation()}
                 onKeyDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
                 className={cn(
-                  'flex size-6 shrink-0 items-center justify-center rounded-full',
-                  'text-sidebar-action-icon hover:text-foreground',
-                  'hover:bg-sidebar-item-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent',
+                  'absolute right-0 top-0 flex h-6 items-center gap-0.5',
+                  'pointer-events-none opacity-0 transition-opacity duration-[var(--motion-fast)]',
+                  'group-hover:pointer-events-auto group-hover:opacity-100',
+                  'focus-within:pointer-events-auto focus-within:opacity-100',
                 )}
               >
-                <SquarePen size={14} strokeWidth={2} />
-              </button>
-            </Tip>
+                <SidebarIconButton
+                  icon={SquarePen}
+                  label={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}
+                  disabled={isCreateDisabled}
+                  onClick={onCreateDialogue}
+                  className={cn(
+                    'size-5 text-sidebar-action-icon hover:text-foreground [&>svg]:size-3.5',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    'disabled:cursor-not-allowed disabled:opacity-50',
+                  )}
+                />
+              </div>
+            </div>
           </div>
+        ) : (
+          collapsed &&
+          lamp?.dotTone && (
+            <div className="ml-auto flex h-6 shrink-0 items-center justify-end">
+              <SidebarRightStatusIndicator kind={lamp.dotTone} isActive={false} />
+            </div>
+          )
         )}
       </div>
       {/* 组内会话与 ProjectNode 的会话区同款容器(gap / pt)。 */}

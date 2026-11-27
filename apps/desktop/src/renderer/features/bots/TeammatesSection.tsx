@@ -5,12 +5,13 @@ import { aggregateTeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { localTeammateStatus, remoteTeammateStatus, groupTeammateStatus } from './teammateRosterStatus';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { botRosterLabel } from '../../../shared/botCreation';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type KeyboardEvent, type MouseEvent } from 'react';
 import {
   Check,
   LayoutGrid,
   LayoutList,
   AlertTriangle,
+  AppWindow,
   Archive,
   ArchiveRestore,
   ChevronDown,
@@ -28,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { Tip } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
@@ -67,8 +69,11 @@ import {
   formatBotListTimestamp,
 } from './botListDisplay';
 import { botDeviceLabel, partitionBotRoster } from './botRosterDisplay';
+import { botOpenRoute } from './botNavigation';
 import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, writeTeammatesViewMode, type TeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from './teammatesSectionPrefs';
+import { toast } from '@/lib/toast';
 import {
+  BotModelSelectionRequiredError,
   canonicalBotSessionId,
   duplicateBotProfile,
   setBotHidden,
@@ -192,6 +197,8 @@ export function TeammatesSection() {
   const [archiveBusy, setArchiveBusy] = useState(false);
   const archiveBusyRef = useRef(false);
   const [archiveError, setArchiveError] = useState('');
+  const [duplicatingBotId, setDuplicatingBotId] = useState<string | null>(null);
+  const duplicatingRef = useRef(false);
   const [now, setNow] = useState(() => Date.now());
   const [contextMenu, setContextMenu] = useState<{
     kind: 'bot' | 'group';
@@ -246,6 +253,34 @@ export function TeammatesSection() {
       }
       archiveBusyRef.current = false;
       setArchiveBusy(false);
+    }
+  };
+
+  // Roster writes are not optimistic: a failure leaves the row unchanged, so say so.
+  // The cause is unknown here, so the message names the action without advising a retry.
+  const rosterAction = (action: Promise<unknown>, failedKey: 'bots.list.pinFailed' | 'bots.list.hideFailed') => {
+    const owner = getDataOwnerGeneration();
+    action.catch(() => {
+      if (isDataOwnerGenerationCurrent(owner)) toast.error(t(failedKey));
+    });
+  };
+
+  // Duplicating reads the avatar and waits for the new profile; one at a time keeps names unique.
+  const duplicateBot = async (bot: BotProfile) => {
+    if (duplicatingRef.current) return;
+    duplicatingRef.current = true;
+    setDuplicatingBotId(bot.id);
+    const owner = getDataOwnerGeneration();
+    try {
+      const copy = await duplicateBotProfile(bot.id);
+      if (isDataOwnerGenerationCurrent(owner)) navigate(`/bots/${copy.id}`);
+    } catch (error) {
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      toast.error(t(error instanceof BotModelSelectionRequiredError
+        ? 'bots.list.duplicateModelRequired' : 'bots.list.duplicateFailed'));
+    } finally {
+      duplicatingRef.current = false;
+      setDuplicatingBotId(null);
     }
   };
 
@@ -452,19 +487,19 @@ export function TeammatesSection() {
   );
 
   const renderBotContextMenu = (bot: BotProfile, selected: boolean) => renderContextMenu('bot', bot.id, <>
-        <DropdownMenuItem onSelect={() => void setBotPinned(bot.id, !bot.pinnedAt)}>
+        <DropdownMenuItem onSelect={() => rosterAction(setBotPinned(bot.id, !bot.pinnedAt), 'bots.list.pinFailed')}>
           <Pin size={14} className="mr-2" />
           {t(bot.pinnedAt ? 'bots.list.unpin' : 'bots.list.pin')}
         </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => {
-            void setBotHidden(bot.id, true).then(() => {
+            rosterAction(setBotHidden(bot.id, true).then(() => {
               if (!selected) return;
               const fallback = roster.visible.find(
                 (candidate) => candidate.id !== bot.id,
               );
               navigate(fallback ? `/bots/${fallback.id}` : '/bots');
-            });
+            }), 'bots.list.hideFailed');
           }}
         >
           <EyeOff size={14} className="mr-2" />
@@ -474,11 +509,8 @@ export function TeammatesSection() {
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              onSelect={() => {
-                void duplicateBotProfile(bot.id).then((copy) =>
-                  navigate(`/bots/${copy.id}`),
-                );
-              }}
+              disabled={duplicatingBotId !== null}
+              onSelect={() => void duplicateBot(bot)}
             >
               <Copy size={14} className="mr-2" />
               {t('bots.list.duplicate')}
@@ -493,6 +525,22 @@ export function TeammatesSection() {
         </DropdownMenuItem>
   </>);
 
+  const groupMenuProps = (id: string) => ({
+    'aria-haspopup': 'menu' as const,
+    onContextMenu: (event: MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openContextMenu('group', id, event.currentTarget, event.clientX, event.clientY);
+    },
+    onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
+      if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
+      event.preventDefault();
+      const rect = event.currentTarget.getBoundingClientRect();
+      openContextMenu('group', id, event.currentTarget, rect.left + 10, rect.bottom);
+    },
+  });
+
+  const menuGroup = contextMenu?.kind === 'group' ? groups.find(item => item.id === contextMenu.id) : undefined;
   const renderGroupRow = (group: BotGroupSummary) => (
     <BotGroupSidebarRow key={'group:' + group.id} group={group} bots={bots}
       islandActivity={islandActivity} now={now} selected={group.id === selectedGroupId}
@@ -500,29 +548,7 @@ export function TeammatesSection() {
         const query = reply ? '?' + new URLSearchParams(reply).toString() : '';
         navigate('/bots/groups/' + encodeURIComponent(id) + query);
       }}
-      onContextMenu={event => {
-        event.preventDefault(); event.stopPropagation();
-        openContextMenu('group', group.id, event.currentTarget, event.clientX, event.clientY);
-      }}
-      onKeyDown={event => {
-        if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
-        event.preventDefault();
-        const rect = event.currentTarget.getBoundingClientRect();
-        openContextMenu('group', group.id, event.currentTarget, rect.left + 10, rect.bottom);
-      }}>
-      {renderContextMenu('group', group.id, <>
-        <DropdownMenuItem onSelect={() => navigate('/bots/groups/' + encodeURIComponent(group.id) + '?' + BOT_GROUP_SETTINGS_PARAM + '=1')}>
-          <Settings size={14} className="mr-2" />{t('bots.groupChat.settings.title')}
-        </DropdownMenuItem>
-        {group.serverBacked && !group.dissolvedAt && group.members.some(member => member.isOwned && (member.role === 'owner' || member.role === 'admin')) && <>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem disabled={archiveBusy} onSelect={() => void changeGroupArchive(group)}>
-            {group.archived ? <ArchiveRestore size={14} className="mr-2" /> : <Archive size={14} className="mr-2" />}
-            {t('bots.groupChat.server.settings.' + (group.archived ? 'unarchive' : 'archive'))}
-          </DropdownMenuItem>
-        </>}
-      </>)}
-    </BotGroupSidebarRow>
+      {...groupMenuProps(group.id)} />
   );
 
   const ToggleIcon = collapsed ? ChevronRight : ChevronDown;
@@ -536,6 +562,24 @@ export function TeammatesSection() {
 
   return (
     <div ref={sidebarRef} className="flex w-full flex-col gap-0.5" data-sidebar-section="teammates">
+      {renderContextMenu('group', menuGroup?.id ?? '', menuGroup && <>
+        <DropdownMenuItem onSelect={() => {
+          void window.electronAPI.maker.openSessionInNewWindow('/bots/groups/' + encodeURIComponent(menuGroup.id))
+            .catch(() => toast.error(t('ccAgent.common.openFailed')));
+        }}>
+          <AppWindow size={14} className="mr-2" />{t('rightSidebar.tabs.contextMenu.openInWindow')}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => navigate('/bots/groups/' + encodeURIComponent(menuGroup.id) + '?' + BOT_GROUP_SETTINGS_PARAM + '=1')}>
+          <Settings size={14} className="mr-2" />{t('bots.groupChat.settings.title')}
+        </DropdownMenuItem>
+        {menuGroup.serverBacked && !menuGroup.dissolvedAt && menuGroup.members.some(member => member.isOwned && (member.role === 'owner' || member.role === 'admin')) && <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled={archiveBusy} onSelect={() => void changeGroupArchive(menuGroup)}>
+            {menuGroup.archived ? <ArchiveRestore size={14} className="mr-2" /> : <Archive size={14} className="mr-2" />}
+            {t('bots.groupChat.server.settings.' + (menuGroup.archived ? 'unarchive' : 'archive'))}
+          </DropdownMenuItem>
+        </>}
+      </>)}
       {/* 段头与置顶 / 全部任务段头同款:高 24,左 24 / 右 12;动作悬停浮现。 */}
       <div className="group/sidebar-header flex h-6 items-center justify-between pr-3 pl-6">
         <div className="flex min-w-0 items-center gap-1">
@@ -596,6 +640,7 @@ export function TeammatesSection() {
 
       {showIconStrip && iconChats.length > 0 ? (
         // 默认收起时待处理头像全部可见；主动显示所有头像时沿用单行 +N。
+        // pl-[22px] = 列表容器 pl-3 + 行 px-2.5，与列表模式头像对齐（DESIGN.md §5 悬挂缩进）。
         <div ref={setAvatarRowElement} className={cn('flex items-center gap-1 py-1 pr-0 pl-[22px]', collapsed && !collapsedAvatars ? 'flex-wrap' : 'flex-nowrap overflow-hidden')}>
           {(() => {
             const entries = iconChats.map((entry) => {
@@ -643,6 +688,8 @@ export function TeammatesSection() {
                     <button
                       type="button"
                       {...companionDragProps(chatRoute(entry), label)}
+                      {...(entry.kind === 'group' ? groupMenuProps(entry.group.id) : {})}
+                      data-bot-group-id={entry.kind === 'group' ? entry.group.id : undefined}
                       onClick={() => { const route = chatRoute(entry); if (route) navigate(route); }}
                       aria-label={label}
                       aria-current={selected ? 'page' : undefined}
@@ -691,10 +738,10 @@ export function TeammatesSection() {
         <div className="pt-1 pr-0 pl-3"><BotRosterLoadError /></div>
       ) : null}
 
+      {archiveError && <p role="alert" className="mb-2 pt-1 pr-2.5 pl-[22px] text-12 text-[var(--error-fg)]">{archiveError}</p>}
+
       <SectionCollapse collapsed={showIconStrip || (collapsed && attentionChats.length === 0)}>
       <div className="flex flex-col pt-1 pr-0 pl-3">
-
-      {archiveError && <p role="alert" className="mb-2 px-2.5 text-12 text-[var(--error-fg)]">{archiveError}</p>}
 
       <div>
         {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 && remoteBots.length === 0 && visibleGroups.length === 0 ? (
@@ -828,7 +875,7 @@ export function TeammatesSection() {
                   <button
                     type="button"
                     {...companionDragProps(`/bots/${encodeURIComponent(bot.id)}`, bot.name)}
-                    onClick={() => navigate(`/bots/${encodeURIComponent(bot.id)}`)}
+                    onClick={() => { const { to, state } = botOpenRoute(bot); if (state) navigate(to, { state }); else navigate(to); }}
                     aria-current={selected ? 'page' : undefined}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -882,7 +929,11 @@ export function TeammatesSection() {
                     {/* Reserve the timestamp column so status changes do not shift the preview. */}
                     <span className="flex min-w-10 shrink-0 self-stretch flex-col items-end justify-between whitespace-nowrap py-0.5">
                       <span data-teammate-timestamp className={cn('min-h-4 text-11 tabular-nums', mutedClass)}>{timestamp}</span>
-                      <span aria-hidden className="flex min-h-4 items-center justify-end" />
+                      <span className="flex min-h-4 items-center justify-end">
+                        {duplicatingBotId === bot.id ? (
+                          <Spinner size={12} role="status" aria-label={t('bots.list.duplicating')} className={mutedClass} />
+                        ) : null}
+                      </span>
                     </span>
                   </button>
                   {renderBotContextMenu(bot, selected)}
@@ -933,20 +984,24 @@ export function TeammatesSection() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => void setBotHidden(bot.id, false)}
+                          onClick={() => rosterAction(setBotHidden(bot.id, false), 'bots.list.hideFailed')}
                           className="mr-1 flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[var(--surface-hover)]"
                           aria-label={t('bots.list.unhideNamed', { name: bot.name })}
                         >
                           <Eye size={14} />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteTarget(bot)}
-                          className="mr-1 flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-danger)] hover:bg-[var(--danger-bg-soft)]"
-                          aria-label={t('bots.lifecycle.deleteTitle')}
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        <Tip text={t('bots.lifecycle.deleteTitle')}>
+                          <Button
+                            variant="secondary"
+                            tone="danger"
+                            size="sm"
+                            onClick={() => setDeleteTarget(bot)}
+                            className="mr-1 w-7 px-0"
+                            aria-label={t('bots.lifecycle.deleteTitle')}
+                          >
+                            <Trash2 size={14} aria-hidden />
+                          </Button>
+                        </Tip>
                       </div>
                     ))
                   : null}
@@ -983,14 +1038,18 @@ export function TeammatesSection() {
                           {botRosterLabel(bot, bots)}
                         </span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setDeleteTarget(bot)}
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-danger)] opacity-0 hover:bg-[var(--danger-bg-soft)] group-hover:opacity-100 focus:opacity-100"
-                        aria-label={t('bots.lifecycle.deleteTitle')}
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      <Tip text={t('bots.lifecycle.deleteTitle')}>
+                        <Button
+                          variant="secondary"
+                          tone="danger"
+                          size="sm"
+                          onClick={() => setDeleteTarget(bot)}
+                          className="w-7 px-0 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                          aria-label={t('bots.lifecycle.deleteTitle')}
+                        >
+                          <Trash2 size={14} aria-hidden />
+                        </Button>
+                      </Tip>
                     </div>
                   );
                 })}

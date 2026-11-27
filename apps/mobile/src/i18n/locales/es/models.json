@@ -93,8 +93,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "Grupo de proveedores · {{count}} computadora",
-    "groupBadge_other": "Grupo de proveedores · {{count}} computadoras",
+    "groupBadge_one": "Grupo de equipos · {{count}} computadora",
+    "groupBadge_other": "Grupo de equipos · {{count}} computadoras",
     "harness": "Harness",
     "restoreRecommended": "Restaurar valores recomendados",
     "saveFailed": "No se pudo guardar. Inténtalo de nuevo.",
@@ -123,7 +123,10 @@
       "expiring": "Primero lo que caduca",
       "order": "En orden",
       "rotate": "Por turnos",
-      "cheapest": "Lo más barato"
+      "cheapest": "Lo más barato",
+      "drain": "Agotar y pasar",
+      "headroom": "Más cuota restante",
+      "weighted": "Por peso"
     },
     "sourceOnDevice": "{{provider}} · {{device}}",
     "why": {
@@ -136,6 +139,11 @@
       "soonestUntil": "Todas las fuentes agotaron su cuota; esta se recupera antes ({{reset}})",
       "cheapest": "Precio de lista más bajo",
       "cheapestFree": "Queda cuota de suscripción, sin coste adicional",
+      "drain": "Se sigue usando hasta que se agote su cuota",
+      "drainNext": "La fuente anterior se agotó o dejó de estar disponible, así que pasó a esta",
+      "headroom": "Le queda la mayor cuota",
+      "headroomQuota": "Le queda un {{left}} % de cuota, más que a cualquier otra fuente",
+      "weighted": "Le toca según su peso",
       "exceptionImage": "El mensaje tiene imágenes, así que solo se consideraron las fuentes que pueden verlas",
       "exceptionImageFallback": "El mensaje tiene imágenes, pero ninguna fuente puede verlas, así que se eligió como siempre",
       "exceptionHours": "En este horario usa «{{name}}»",
@@ -152,7 +160,6 @@
     "genericName": "Motor de complemento",
     "defaultModel": "Modelo predeterminado",
     "unavailable": "{{engine}} no está disponible",
-    "unavailableWithHint": "{{engine}} no está disponible: {{hint}}",
-    "worktreeUnsupported": "Los motores de complementos aún no pueden iniciar tareas en un worktree. Desactiva worktree para enviar."
+    "unavailableWithHint": "{{engine}} no está disponible: {{hint}}"
   }
 }

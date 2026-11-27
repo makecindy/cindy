@@ -12,6 +12,7 @@
  * active-catalog 统一持有；连接状态每次实时读（凭证变化要立即反映）。
  */
 
+import { connectionArtworkFields, type ConnectionArtwork } from '@cindy/model-providers/branding';
 import type { ProviderPickerModel } from '@cindy/device-link';
 import { createLogger } from '../logger.js';
 import { mediaErrorForLog } from '../cindy-media/mediaRequestLog.js';
@@ -68,6 +69,8 @@ export interface ProviderListOptions extends ConnectionReadOptions {
     scope: 'available' | ProviderPickerModel;
     describe?: (providerOrder: string[], deferredProviderIds: string[]) => void;
   };
+  /** 设置默认值只需要聊天目录，跳过可选媒体运行时的额外读取；不来自 IPC 输入。 */
+  includeMediaReadiness?: boolean;
   /**
    * Internal catalog override for policy consumers that need the routing truth
    * rather than the user-selectable projection. Never sourced from IPC input.
@@ -99,6 +102,7 @@ export interface ProviderServiceDeps {
   projectProvider?: (provider: ProviderView) => ProviderView;
   /** Organization branding only; local name/removal preferences must not leak into managed providers. */
   getOrganizationProviderLogoKind?: (provider: ProviderView) => ProviderView['logoKind'];
+  getProviderConnectionIcons?: () => Readonly<Record<string, ConnectionArtwork>>;
   getProviderPresentation?: (providerId: string) => { name?: string; removed?: boolean; logoKind?: ProviderView['logoKind'] };
   /** Exact-route user budget/price overrides keep independent rows. */
   hasModelAliasOverride?: (providerId: string, agent: AgentKind, modelId: string) => boolean;
@@ -289,7 +293,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     }
     let media: readonly { providerId: string; id: string }[] | undefined;
     try {
-      if (!picker) media = deps.getAvailableMediaModels?.();
+      if (!picker && opts?.includeMediaReadiness !== false) media = deps.getAvailableMediaModels?.();
     } catch (error) {
       // Media is optional enrichment; configuration and chat providers remain usable.
       media = [];
@@ -343,9 +347,11 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
             unavailableSubscriptions.get(provider.id) !== undefined),
         }, connected, {}, modelAccess).map(provider => [provider.id, formatModels(provider).models] as const)
       : []);
+    const icons = deps.getProviderConnectionIcons?.() ?? {};
     return buildRegistry(catalog, connected, discoveryFailures, modelAccess).map(formatModels).map((provider) => ({
       ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
       ...provider, ...(provider.source === 'builtin' ? deps.getProviderPresentation?.(provider.id) ?? {} : {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
+      ...(provider.source === 'user' && Object.hasOwn(icons, provider.id) ? connectionArtworkFields(icons[provider.id]) : {}),
       ...(provider.source === 'organization' ? { logoKind: deps.getOrganizationProviderLogoKind?.(provider) } : {}),
       // Deletion disconnects first. A live binding wins over a stale removed flag if
       // restoring display preferences failed after authentication was committed.

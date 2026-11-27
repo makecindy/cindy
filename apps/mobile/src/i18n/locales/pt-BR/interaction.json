@@ -89,7 +89,7 @@
     "submitAnswerAccessibility": "Enviar resposta",
     "next": "Próximo",
     "answerRequired": "Selecione ou digite uma resposta para continuar.",
-    "submit": "Enviar",
+    "submit": "Enviar resposta",
     "sendAndContinue": "Enviar e continuar",
     "closeAnswer": "Fechar",
     "planReviewTitle": "Revisar o plano do Claude",
@@ -296,7 +296,7 @@
       "expired": "Entrada manual encerrada por tempo de espera excedido."
     },
     "failure": {
-      "permission": "O Cindy não consegue ler a interface deste Mac. Verifique a permissão de controle da cópia do Cindy em execução. No macOS 27.3 ou posterior, a permissão de controle fica em “System & App Protection Override”. Nas versões anteriores, abra Acessibilidade.",
+      "permission": "O Cindy não consegue ler a interface deste Mac. Verifique a permissão de controle da cópia do Cindy em execução. No macOS 27.3 ou posterior, a permissão de controle fica em “System & App Protection Override”. Nas versões anteriores, abra Acessibilidade. Se o Cindy só puder controlar alguns apps, adicione este também.",
       "target_gone": "A janela de destino foi fechada.",
       "unreadable": "Não é possível ler esta tela. Você pode concluir esta etapa no computador host e devolver o controle ao Agent.",
       "action_failed": "Essa ação não teve efeito. Verifique a tela e tente novamente.",

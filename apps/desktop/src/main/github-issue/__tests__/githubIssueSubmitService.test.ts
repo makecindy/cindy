@@ -9,6 +9,7 @@ import {
   submitGithubIssueWithConfirm,
   type GithubIssueSubmitServiceDeps,
 } from '../githubIssueSubmitService';
+import { getIssueOsInfo } from '../issueOsInfo';
 import type { IssueConfirmDecision } from '../issueConfirmBridge';
 
 const REQ = {
@@ -51,6 +52,24 @@ function makeDeps(over: Partial<GithubIssueSubmitServiceDeps> = {}) {
 }
 
 describe('submitGithubIssueWithConfirm', () => {
+  it.each([
+    ['darwin', 'arm64', '27.0.0', '27.0.1', 'macOS', '27.0.1 · Darwin 27.0.0'],
+    ['darwin', 'arm64', '27.0.0', '', 'macOS', 'Darwin 27.0.0'],
+    ['win32', 'x64', '10.0.26300', undefined, 'win32', '10.0.26300'],
+  ] as const)(
+    'uses the same %s system version in confirmation and the submitted issue',
+    async (platform, arch, kernel, product, label, version) => {
+      const { deps, confirm, postIssue } = makeDeps({
+        getOsInfo: () => getIssueOsInfo(platform, arch, kernel, product),
+      });
+
+      await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+
+      expect(confirm.mock.calls[0]?.[2]).toMatchObject({ platform: label, arch, osVersion: version });
+      expect(postIssue.mock.calls[0]?.[1]().description).toContain(`**OS**: ${label} ${arch} (${version})`);
+    },
+  );
+
   it('确认门: cancelled / timeout 时 postIssue 零调用', async () => {
     for (const [reason, errorCode] of [
       ['cancelled', 'USER_CANCELLED'],
@@ -190,6 +209,22 @@ describe('submitGithubIssueWithConfirm', () => {
       expect(confirm.mock.calls[0]![2]).toMatchObject({ harness });
       expect(postIssue.mock.calls[0]![1]().description).toContain(`**Harness**: ${harness}`);
     }
+  });
+
+  // #13146, unit: ACP and Pi share the same tool context. Only live metadata for
+  // the requested task distinguishes them in the confirmation and public body.
+  it.each([
+    ['sess-1', 'ACP'],
+    ['another-session', 'Pi'],
+  ])('uses live ACP identity only for the feedback task (%s)', async (acpSessionId, harness) => {
+    const modelId = 'fixture-neon';
+    const isAcpSession = vi.fn((sessionId: string) => sessionId === acpSessionId);
+    const { deps, confirm, postIssue } = makeDeps({ isAcpSession, getTurnModelId: async () => modelId });
+
+    await expect(submitGithubIssueWithConfirm(deps, { ...REQ, agentKind: 'pi' })).resolves.toMatchObject({ ok: true });
+    expect(isAcpSession).toHaveBeenCalledExactlyOnceWith(REQ.sessionId);
+    expect(confirm.mock.calls[0]![2]).toMatchObject({ harness, modelId });
+    expect(postIssue.mock.calls[0]![1]().description).toContain(`**Harness**: ${harness}\n**Model ID**: \` ${modelId} \``);
   });
 
   it('在确认卡出现前锁定本轮模型 ID，之后切换 session 模型不会改写提交值', async () => {

@@ -7,12 +7,17 @@
  */
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { GlobalDropImportListener } from '@/components/layout/GlobalDropImportListener';
+import * as cindyImport from '@/cindy-brain/importCindyFile';
+import { toast } from '@/lib/toast';
 import type { ComponentProps, ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { ProviderView } from '@cindy/model-providers';
 import { sshNativeCodexProvider, sshModel, sshProvider } from '@/features/cc-agent/__tests__/sshModelFixtures';
 import type { AttachedFile } from '@/lib/fileTypes';
 import { ChatInput } from '../ChatInput';
+import type { SlashCommandPalette } from '../SlashCommandPalette';
+import { resolveBotChatIdentity } from '@/features/bots/botChatPresentation';
 import { useTaskBotMentions } from '@/features/cc-agent/hooks/useTaskBotMentions';
 import type { CompanionCloudSnapshot } from '../../../../shared/companionCloud';
 import { clearDraft, getDraft, plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
@@ -23,6 +28,7 @@ import type { PermissionSelector } from '../PermissionSelector';
 import type { ModelSelector } from '../ModelSelector';
 import type { UseVoiceInputOptions, UseVoiceInputResult } from '@/voice-input/useVoiceInput';
 import { useAttachments } from '@/hooks/useAttachments';
+import { appendMcpAppComposerAttachment } from '@/lib/mcpAppComposerAttachment';
 import { dispatchInputDeviceAction } from '@/lib/inputDeviceActions';
 import { makerChatStore } from '@/lib/makerChatStore';
 import {
@@ -53,6 +59,8 @@ const h = vi.hoisted(() => ({ t: (key: string) => key, confirm: vi.fn(), editor:
   uploadChatFolder: vi.fn(),
   cacheImageFromBuffer: vi.fn(),
   atPanelStandin: false,
+  realSlashPalette: false,
+  desktopCommands: [] as ComponentProps<typeof SlashCommandPalette>['commands'],
   botProfiles: [] as Array<{ id: string; name: string; status: string; enabled?: boolean; hiddenAt?: number; description?: string }>,
   cloud: { enabled: false, selfDeviceId: 'local', humanActorId: null, actors: [], demotedBotIds: [] } as CompanionCloudSnapshot,
 }));
@@ -109,8 +117,13 @@ vi.mock('../AtMentionPanel', () => ({ AtMentionPanel: (props: ComponentProps<typ
   ) : null;
 } }));
 vi.mock('@/lib/atResourceService', async (original) => ({ ...await original<typeof import('@/lib/atResourceService')>(), scanAtResources: h.scan }));
-vi.mock('../SlashCommandPalette', () => ({ SlashCommandPalette: ({ query, commands }: { query: string; commands: { name: string }[] }) =>
-  <div data-testid="test-slash-palette" data-query={query} data-commands={commands.map(command => command.name).join(',')} /> }));
+vi.mock('../SlashCommandPalette', async (original) => {
+  const real = await original<typeof import('../SlashCommandPalette')>();
+  return { SlashCommandPalette: (props: ComponentProps<typeof SlashCommandPalette>) =>
+    h.realSlashPalette ? <real.SlashCommandPalette {...props} /> :
+      <div data-testid="test-slash-palette" data-query={props.query}
+        data-commands={props.commands.map(command => command.name).join(',')} /> };
+});
 vi.mock('@/voice-input/VoiceInputPointerHintLayer', () => ({ VoiceInputPointerHintLayer: ({ children }: { children: import('react').ReactNode }) => <>{children}</> }));
 vi.mock('@/voice-input/VoiceInputStatusNotice', () => ({ VoiceInputStatusNotice: () => null }));
 vi.mock('@/voice-input/useVoiceInput', () => ({ useVoiceInput: (editor: Editor | null, _disabled: boolean, _messages: unknown, options: UseVoiceInputOptions) => {
@@ -137,15 +150,19 @@ vi.mock('@/hooks/useConnectedSource', () => ({ useConnectedSource: () => ({ hasC
 vi.mock('@/hooks/useAvailableAgents', () => ({ useAvailableAgents: () => ({ agents: [], loading: false }) }));
 vi.mock('@/hooks/useAgentCapabilities', async (original) => ({ ...await original<typeof import('@/hooks/useAgentCapabilities')>(), useAgentCapabilities: () => ({ capabilities: null, loading: false }) }));
 
+const redeemDrag = vi.fn();
 const noOp = () => {};
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const api: any = new Proxy({}, { get: (_obj, key) => {
+  if (key === 'takePendingInstall') return async () => ({ filePath: null });
+  if (key === 'redeemComposerAttachmentDrag') return redeemDrag;
   if (key === 'setModel') return h.setModel;
   if (key === 'uploadChatFolder') return h.uploadChatFolder;
   if (key === 'cacheImageFromBuffer') return h.cacheImageFromBuffer;
-  if (key === 'getFilePath') return () => '/controller/docs';
+  if (key === 'getFilePath') return (file: File) => file.name === 'pack.cindy' ? '/test/pack.cindy' : '/controller/docs';
   if (key === 'listAgentSkills') return h.listAgentSkills;
-  if (key === 'listAgentCommands' || key === 'listDesktopCommands') return async () => ({ success: true, commands: [] });
+  if (key === 'listDesktopCommands') return async () => ({ success: true, commands: h.desktopCommands });
+  if (key === 'listAgentCommands') return async () => ({ success: true, commands: [] });
   if (key === 'listSync') return () => ({ ghosts: [] });
   if (key === 'getDataSnapshot') return () => { throw new Error('test bridge unavailable'); };
   if (key === 'setGlobalShortcut') return () => Promise.resolve({ ok: true });
@@ -175,6 +192,8 @@ beforeEach(() => {
   h.cacheImageFromBuffer.mockReset().mockResolvedValue(undefined);
   h.listAgentSkills.mockReset().mockResolvedValue({ success: true, skills: [] });
   h.localProviders = [];
+  h.realSlashPalette = false;
+  h.desktopCommands = [];
   h.botProfiles = [{ id: 'rosa', name: 'SyntheticRosa', status: 'active', description: 'Writing buddy' }];
   h.cloud = { enabled: false, selfDeviceId: 'local', humanActorId: null, actors: [], demotedBotIds: [] };
   h.editor = null;
@@ -223,6 +242,55 @@ function renderComposer(extra: Partial<ComponentProps<typeof ChatInput>> = {}, t
   const view = render(taskRoster ? <TaskComposer {...props} /> : <ChatInput {...props} />);
   return { ...view, props };
 }
+
+// Unit: the editor and outer file handlers share the same drop event. A reserved
+// MIME mixed with plain text must never insert text or fall through to addFiles.
+it('consumes a composer drag ticket before the editor and reports a rejected ticket', async () => {
+  const error = vi.spyOn(toast, 'error').mockImplementation(() => '');
+  redeemDrag.mockRejectedValueOnce(new Error('MCP_APP_COMPOSER_DRAG_INVALID'));
+  const view = renderComposer({ sessionId: 'composer-regression' });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const mime = 'application/x-cindy-composer-attachment-v1';
+  const ticket = 'ab'.repeat(24);
+  fireEvent.drop(h.editor!.view.dom, { dataTransfer: {
+    types: [mime, 'text/plain'], items: [], files: [],
+    getData: (type: string) => type === mime ? ticket : 'fallback',
+  } });
+  expect(redeemDrag).toHaveBeenCalledWith({ sessionId: 'composer-regression', ticket });
+  await waitFor(() => expect(error).toHaveBeenCalledWith('mcpApps.composerDragFailed'));
+  expect(h.editor!.getText()).not.toContain('fallback');
+  expect(view.props.attachmentState.addFiles).not.toHaveBeenCalled();
+});
+
+// Integration of the window capture listener with the local composer. Its package
+// handler runs before ChatInput, so a mixed drag used to select the wrong action.
+it('keeps package, file, mention and task-link drops separate from card resources', async () => {
+  supplyRangeGeometry();
+  const open = vi.spyOn(cindyImport, 'importCindyFile').mockResolvedValue(undefined);
+  redeemDrag.mockReset().mockResolvedValue(undefined);
+  render(<GlobalDropImportListener onOpenShareImport={vi.fn()} />);
+  const view = renderComposer({ sessionId: 'composer-regression' });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const target = h.editor!.view.dom.closest('[data-split-group-composer-drop-target]')!;
+  const file = new File(['test'], 'pack.cindy');
+  const drop = (values: Record<string, string>, files: File[] = []) => fireEvent.drop(target, { dataTransfer: {
+    types: [...Object.keys(values), ...(files.length ? ['Files'] : [])],
+    items: files.map(() => ({ kind: 'file' })), files, getData: (type: string) => values[type] ?? '',
+  } });
+  drop({ 'application/x-cindy-composer-attachment-v1': 'ab'.repeat(24) }, [file]);
+  expect(redeemDrag).toHaveBeenCalledOnce();
+  expect(open).not.toHaveBeenCalled();
+  drop({}, [file]);
+  expect(open).toHaveBeenCalledOnce();
+  const local = new File(['x'], 'note.txt');
+  drop({}, [local]);
+  expect(view.props.attachmentState.addFiles).toHaveBeenCalledWith([local]);
+  drop({ 'application/x-xdmaker-composer-mention': JSON.stringify({ type: 'file', relPath: 'a.md', name: 'a.md' }) });
+  await waitFor(() => expect(target.querySelector('[data-kind="file"]')?.getAttribute('data-path')).toBe('a.md'));
+  drop({ 'application/x-cindy-session-link': 'xdt-maker://session/ee59672a-5591-48a7-a44d-aa97e3808c64' });
+  await waitFor(() => expect(target.querySelector('[data-kind="session"]')).not.toBeNull());
+  expect(redeemDrag).toHaveBeenCalledTimes(1);
+});
 
 // Unit, project-settings.md: the panel-only tests cannot catch the project
 // shortcut replacing the task picker when a local task supports both.
@@ -366,6 +434,30 @@ it('does not replace the empty editor after an external empty-draft notification
   }));
   expect(changed).not.toHaveBeenCalled();
   expect(h.editor!.state.selection.from).toBe(1);
+});
+
+// Unit: the MCP receipt can reach the real editor before its debounced keystroke
+// save. A stored-text assertion alone missed the visible rollback.
+it('keeps freshly typed text when a card immediately adds a composer attachment', async () => {
+  const sessionId = 'composer-regression';
+  saveDraft(sessionId, { text: plainTextToTiptapDoc('old'), attachments: [] });
+  renderComposer();
+  await waitFor(() => expect(h.editor?.getText()).toBe('old'));
+  vi.useFakeTimers();
+  try {
+    act(() => { h.editor!.commands.setContent('<p>fresh input</p>'); });
+    expect(getDraft(sessionId)?.text).toEqual(plainTextToTiptapDoc('old'));
+    act(() => appendMcpAppComposerAttachment(sessionId, {
+      id: 'receipt', name: 'sample.txt', ext: '.txt', path: '/cache/sample.txt',
+      size: 1, category: 'text', mimeType: 'text/plain',
+    }));
+    expect(h.editor!.getText()).toBe('fresh input');
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(getDraft(sessionId)?.text).toEqual(plainTextToTiptapDoc('fresh input'));
+    expect(getDraft(sessionId)?.attachments.map(file => file.id)).toEqual(['receipt']);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 // #8084 / r4428883080: thread textarea coverage missed ChatInput's debounced text save.
@@ -922,6 +1014,54 @@ it.each(['Enter', 'Tab'])('consumes %s for an empty slash result without sending
   expect(view.props.onSend).not.toHaveBeenCalled();
   expect(h.editor!.getText()).toBe(text);
   expect(screen.queryByTestId('test-slash-palette')).toBeNull();
+});
+
+// #10456 unit: the real composer and palette used to show only the generic empty
+// state for /new. The scope and key checks catch a leaked hint or command row.
+it.each([
+  ['canonical', '/new', false, 'Enter'],
+  ['canonical', '/new', false, 'Escape'],
+  ['task', '/new', false, 'Enter'],
+  ['thread', '/new', false, 'Escape'],
+  ['canonical', '/ne', true, 'Enter'],
+  ['canonical', '/newer', false, 'Enter'],
+] as const)('shows the right slash feedback for %s %s (registered: %s, key: %s)', async (scope, text, registered, key) => {
+  supplyRangeGeometry();
+  h.realSlashPalette = true;
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
+  if (registered) h.desktopCommands = [{ kind: 'desktop', name: 'new', description: 'Registered command' }];
+  const sessionId = scope;
+  const binding = scope === 'task' ? undefined : { id: 'rosa', name: 'SyntheticRosa', sessionId, canonicalChat: scope === 'canonical' };
+  const showBuddyNewHint = resolveBotChatIdentity(binding, sessionId)?.canonicalChat === true;
+  const view = renderComposer({ sessionId, runtimeAgentKind: 'codex', showBuddyNewHint });
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await act(async () => {
+    h.editor!.commands.setContent('<p>' + text + '</p>');
+    h.editor!.commands.setTextSelection(text.length + 1);
+  });
+
+  if (registered) {
+    await screen.findByRole('button', { name: 'new' });
+  } else if (showBuddyNewHint && text === '/new') {
+    await screen.findByText('commandPalette.buddyNewHint');
+    expect(screen.queryByRole('button', { name: 'new' })).toBeNull();
+  } else {
+    await screen.findByText('No matching commands');
+  }
+  expect(fireEvent.keyDown(h.editor!.view.dom, { key, code: key })).toBe(false);
+  expect(view.props.onSend).not.toHaveBeenCalled();
+  if (registered) {
+    expect(h.editor!.view.dom.querySelector('[data-slash-command="new"]')).not.toBeNull();
+    await act(async () => {
+      h.editor!.commands.setContent('<p>/new</p>');
+      h.editor!.commands.setTextSelection(5);
+    });
+    await waitFor(() => expect(h.editor!.view.dom.querySelector('[data-slash-command="new"]')).not.toBeNull());
+  } else {
+    expect(h.editor!.getText()).toBe(text);
+  }
+  expect(screen.queryByText('commandPalette.buddyNewHint')).toBeNull();
+  expect(screen.queryByText('No matching commands')).toBeNull();
 });
 
 // A plugin Skill whose plugin is missing is offered in `/`, but choosing it hands

@@ -32,7 +32,7 @@
     "notFound": "此裝置已不在你的帳號中。",
     "deleteDevice": "刪除裝置",
     "deleteTitle": "刪除「{{name}}」？",
-    "deleteMessage": "將此裝置從帳號中移除並中斷遠端連線。裝置上的任務和檔案會保留，重新登入後可再次加入。",
+    "deleteMessage": "將此裝置從帳號中移除並中斷遠端連線。裝置上的任務和檔案會保留，在那台裝置上點「重新加入」即可回來。",
     "deleteFailed": "刪除裝置失敗。",
     "deleteOnline": "目前伺服器尚不支援移除線上裝置，請待服務升級後重試。",
     "deleteRejectedWhileOffline": "未能刪除裝置：伺服器仍將它記為線上，與清單中的離線狀態不一致",
@@ -393,6 +393,7 @@
       "showDeviceTasks": "查看任務",
       "openDevice": "開啟",
       "renameDevice": "重新命名",
+      "groupDevice": "裝置",
       "groupProject": "專案",
       "sortBy": {
         "priority": "優先順序",
@@ -421,7 +422,8 @@
         "all": "全部",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "插件引擎"
       },
       "filterLastActivityHeading": "最近活躍",
       "filterLastActivity": {
@@ -434,11 +436,15 @@
       "showCollapsedTeammateAvatars": "收起時顯示頭像",
       "displayHeading": "顯示",
       "view": {
+        "card": "卡片",
         "text": "文字",
         "list": "列表"
       },
       "taskInfoHeading": "任務資訊",
       "taskInfo": {
+        "teammate": "夥伴頭像",
+        "project": "專案圖示和名稱",
+        "harness": "Harness 圖示",
         "time": "時間",
         "pr": "PR 狀態",
         "tokens": "Token",
@@ -472,7 +478,14 @@
         "nextWeek": "下週",
         "indefinite": "無限期",
         "custom": "自訂…",
-        "invalidTime": "請選擇未來一年內的日期與時間。"
+        "invalidTime": "請選擇未來一年內的日期與時間。",
+        "pendingSync": "待同步",
+        "pendingArchiveSync": "電腦上線後自動歸檔",
+        "offlineCompleteRejectedDirty": "「{{title}}」已退回待處理：worktree 有未提交改動，需確認後再歸檔。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」已退回待處理：電腦離線期間該任務有新進展。",
+        "offlineCompleteRejectedRunning": "「{{title}}」已退回待處理：該任務正在執行中。",
+        "offlineCompleteRejectedAttached": "「{{title}}」已退回待處理：該任務正被接管或處於共享狀態，未自動歸檔。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」已退回待處理：未能核驗 worktree 狀態，需手動確認後歸檔。"
       },
       "taskListMode": {
         "enterInbox": "切換到收件匣",
@@ -516,7 +529,8 @@
           "30d": "30 天",
           "all": "全部"
         }
-      }
+      },
+      "partial": "結果可能不完整，請使用更具體的關鍵詞或限定專案。"
     },
     "renameDevice": {
       "title": "重新命名裝置",
@@ -823,9 +837,6 @@
     "connectionsEmpty": "尚未選擇技能或連線",
     "largeProfileRecovery": "此資料過長，無法在手機上編輯。請在 {{deviceName}} 上編輯完整資料。",
     "addModel": "新增備用模型",
-    "removeModel": "移除模型",
-    "moveModelUp": "上移模型",
-    "backupModels": "備用模型（{{count}}）",
     "settingsTitle": "夥伴設定",
     "name": "名字",
     "portraitNumber": "頭像 {{number}}",
@@ -952,6 +963,8 @@
     "timeout": "「{{device}}」還沒準備好。請確認那台電腦上的 Cindy 已開啟並連上網路，再試一次。",
     "conflict": "{{name}} 已經換到「{{device}}」繼續了。",
     "switchFailed": "暫時無法更換主力電腦，請稍後再試。",
+    "skillTargetOutdated": "「{{name}}」有技能正文超過 64 KB，「{{device}}」上的舊版 Cindy 無法接收。請先更新那台電腦上的 Cindy，再更換主力電腦。夥伴仍留在原電腦",
+    "skillTargetOutdated_skill": "「{{device}}」上的舊版 Cindy 無法接收技能「{{slug}}」（正文 {{bodyBytes, number}} 位元組，超過 64 KB）。「{{name}}」仍在原電腦上執行。請在目標電腦上更新 Cindy，再更換主力電腦。",
     "unknownDevice": "另一台電腦",
     "runsOn": "在「{{device}}」上執行",
     "homeTitle": "主力電腦",

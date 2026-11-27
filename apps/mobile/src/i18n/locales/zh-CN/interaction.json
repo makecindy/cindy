@@ -89,7 +89,7 @@
     "submitAnswerAccessibility": "提交回答",
     "next": "下一步",
     "answerRequired": "选择或输入回答后才能继续。",
-    "submit": "提交",
+    "submit": "发送答复",
     "sendAndContinue": "发送并继续",
     "closeAnswer": "关闭",
     "planReviewTitle": "审阅 Claude 的计划",
@@ -296,7 +296,7 @@
       "expired": "等待时间过长，代输入已结束。"
     },
     "failure": {
-      "permission": "Cindy 无法读取这台 Mac 的界面。请检查正在运行的这份 Cindy 的控制权限。在 Mac 上，控制权限位于「系统设置 → 隐私与安全性」。macOS 27.3 起选「System & App Protection Override」，旧版选「辅助功能」。",
+      "permission": "Cindy 无法读取这台 Mac 的界面。请检查正在运行的这份 Cindy 的控制权限。在 Mac 上，控制权限位于「系统设置 → 隐私与安全性」。macOS 27.3 起选「System & App Protection Override」，旧版选「辅助功能」。若只允许 Cindy 控制部分 App，请把这个 App 也加进去。",
       "target_gone": "目标窗口已关闭。",
       "unreadable": "无法读取这个界面。可以在宿主电脑上直接完成，然后交还给 Agent。",
       "action_failed": "刚才的操作没有生效，请检查界面后重试。",

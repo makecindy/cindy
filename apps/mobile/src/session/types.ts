@@ -78,7 +78,7 @@ export interface RemoteSession {
   interruptedTurnStartedAt?: number | null;
   lastTurnEndedAt?: number | null;
   status: RemoteSessionStatus;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp';
   /**
    * 远程 Agent:非空 = Agent 在同账号另一台电脑上运行(desktop sessions.agent_device_id),
    * 任务与文件仍留在被控电脑;null / 缺省 = Agent 就在被控电脑运行(含旧被控端)。
@@ -114,6 +114,8 @@ export interface RemoteSession {
   forkedAtMessageId?: string | null;
   pinnedAt?: string | null;
   snoozedUntil?: string | null;
+  /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
+  imAttached?: boolean;
   snoozedAt?: string | null;
   userSendAt: string | null;
   lastActivityAt?: string | null;
@@ -127,6 +129,8 @@ export interface RemoteSession {
   /** device-link 会话列表带的最近一条 user/assistant 消息纯文本预览(桌面 sessionToCamel 产出,
    *  已处理 clearedAt / rewind),供首页 idle 会话直接显示,无需 load 完整消息。 */
   preview?: string | null;
+  /** Stable summary already supplied by hosts for pinned cards. */
+  summary?: string | null;
   /** client-local:冷启动由首页快照缓存种入的行(remoteSessionStore.hydrateDeviceSessionsIfEmpty
    *  打标)。缓存行字段经瘦身/截断,只能用于列表渲染与跳转,不能作为发送参数——会话页在
    *  fresh 元数据(getSession→upsert)到达前据此禁发。fresh 对象来自服务器,天然无此标记。 */
@@ -135,6 +139,8 @@ export interface RemoteSession {
    *  createSession 还没确认,会话页据此禁发(输入可编辑存草稿)、syncSession 守卫
    *  跳过 NOT_FOUND。fresh 对象来自服务器,天然无此标记,权威 upsert 后自净。 */
   pendingLocalCreation?: boolean;
+  /** Local retry state for a side chat whose fork has not been acknowledged. */
+  sideChatCreationError?: 'session.sideChat.unsupported' | 'session.sideChat.waitForReply' | 'session.sideChat.createFailed';
 }
 
 export interface RemoteSessionRuntimeProfile {
@@ -244,6 +250,7 @@ export interface RemoteSerializedAttachment {
 }
 
 export interface QueuedRemoteMessage {
+  waitingForRemoteAccount?: true;
   durableDelivery?: true;
   clientId: string;
   text: string;
@@ -306,6 +313,8 @@ export type ContinuationInFlightProjectionCapability = 'unknown' | 'legacy' | 's
 export interface InputProjection {
   sessionId: string;
   pendingQueue: QueuedRemoteMessage[];
+  /** 当前会话的实时引擎不支持同轮插话（老被控端缺省 = 按支持处理）。 */
+  steerUnsupported?: boolean;
   steeringQueueClientIds: string[];
   queuePaused: boolean;
   queueExpanded: boolean;
@@ -315,6 +324,7 @@ export interface InputProjection {
   error: string | null;
   /** Stable error reason for live projections; older controlled hosts may omit it. */
   errorReason?: string | null;
+  reconnectHandoff?: 'disabled' | 'exhausted';
   /** Bounded details for tool-loop errors; older projections may omit them. */
   toolLoop?: MobileToolLoopErrorDetails | null;
   outputLimit?: OutputLimitDetails | null;

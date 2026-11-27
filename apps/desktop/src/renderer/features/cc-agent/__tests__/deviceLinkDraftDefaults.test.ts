@@ -6,7 +6,7 @@ import {
   shouldReseedDeviceLinkDraftDefaults,
 } from '../deviceLinkDraftDefaults';
 import type { AgentCapabilities } from '@/hooks/useAgentCapabilities';
-import type { CatalogModel, ProviderView } from '@cindy/model-providers';
+import type { AgentKind as ModelAgent, CatalogModel, ProviderView } from '@cindy/model-providers';
 
 function providerModel(
   id: string,
@@ -573,5 +573,96 @@ describe('capabilities refresh clamp contract', () => {
       permissionMode: undefined,
       providerId: 'anthropic',
     });
+  });
+});
+
+function catalogModel(id: string, patch: Partial<CatalogModel> = {}): CatalogModel {
+  return { id, name: id, contextWindow: 200_000, efforts: ['medium', 'high'],
+    defaultEffort: 'medium', ...patch };
+}
+function catalogProvider(id: string, agent: ModelAgent, models: CatalogModel[], patch: Partial<ProviderView> = {}): ProviderView {
+  return { id, name: id, source: 'builtin', agents: [agent], connected: true,
+    auth: { method: 'managed' }, access: { kind: 'managed' }, routing: { [agent]: { upstream: 'https://models.example.invalid', authStrategy: 'none' } }, models: { [agent]: models }, ...patch };
+}
+
+const CLOUD_DEVICE = 'cloud-device-0123456789abcdef01234567';
+
+/**
+ * 测试价值:生产入口 resolveDeviceLinkDraftDefaults;托管云实例按已连接目录选模型与来源,
+ * 其它电脑(含旧端与非云 id)保持 capabilities 口径。最小失败输入:非云 id 配一份只有
+ * 未连接订阅提供冷启动型号的目录,门控缺失时会被换成目录里的另一型号。tier:unit。
+ */
+describe('only a managed cloud instance seeds from its connected catalog', () => {
+  const coldSeed = { model: 'claude-opus-4-8', modelChosenByUser: false } as const;
+  const providers = () => [
+    catalogProvider('anthropic', 'claude-code', [catalogModel('claude-opus-4-8')], { connected: false }),
+    catalogProvider('xd', 'claude-code', [catalogModel('usable')]),
+  ];
+  it.each([
+    { catalogDeviceId: CLOUD_DEVICE, expected: { model: 'usable', providerId: 'xd' } },
+    { catalogDeviceId: 'desk-device-1', expected: { model: 'claude-haiku-4-5', providerId: null } },
+    { catalogDeviceId: undefined, expected: { model: 'claude-haiku-4-5', providerId: null } },
+  ])('cold seed on $catalogDeviceId', ({ catalogDeviceId, expected }) => {
+    expect(resolveDeviceLinkDraftDefaults(caps(), coldSeed, undefined, 'claude-code', providers(),
+      catalogDeviceId)).toMatchObject(expected);
+  });
+
+  it.each([
+    { catalogDeviceId: CLOUD_DEVICE, expected: { model: '', providerId: null, fastMode: false } },
+    { catalogDeviceId: 'desk-device-1', expected: { model: 'claude-opus-4-8', providerId: null } },
+  ])('an empty provider catalog on $catalogDeviceId', ({ catalogDeviceId, expected }) => {
+    expect(resolveDeviceLinkDraftDefaults(caps(), { model: 'claude-opus-4-8' },
+      undefined, 'claude-code', [], catalogDeviceId)).toMatchObject(expected);
+  });
+});
+
+describe('a managed cloud instance uses its connected catalog', () => {
+  it.each([
+    { connected: false }, { suspended: true },
+    { modelDiscoveryFailure: { kind: 'upstream' as const, at: '2026-09-16T00:00:00Z' } },
+    { routing: { 'claude-code': { disabled: true, upstream: 'https://models.example.invalid', authStrategy: 'none' as const } } },
+  ])('skips unavailable provider routes: %j', (patch) => {
+    const providers = [catalogProvider('blocked', 'claude-code', [catalogModel('seed')], patch),
+      catalogProvider('valid', 'claude-code', [catalogModel('available')])];
+    expect(resolveDeviceLinkDraftDefaults(caps(), { model: 'seed', modelChosenByUser: false },
+      undefined, 'claude-code', providers, CLOUD_DEVICE)).toMatchObject({ model: 'available', providerId: 'valid' });
+  });
+
+  it('skips payment-required, disabled, retired and non-chat models', () => {
+    const models = [
+      catalogModel('paid', { availability: 'requires_payment' }),
+      catalogModel('disabled', { disabled: true }),
+      catalogModel('retired', { status: 'retired' }),
+      catalogModel('embedding', { mode: 'embedding' }),
+      catalogModel('usable'),
+    ];
+    expect(resolveDeviceLinkDraftDefaults(caps(), null, undefined, 'claude-code',
+      [catalogProvider('xd', 'claude-code', models)], CLOUD_DEVICE)).toMatchObject({ model: 'usable', providerId: 'xd' });
+  });
+
+  it('keeps a valid explicit selection over a newly marked recommendation', () => {
+    const models = [catalogModel('recommended', { newSessionDefault: ['claude-code'] }), catalogModel('saved')];
+    expect(resolveDeviceLinkDraftDefaults(caps(), {
+      model: 'saved', providerId: 'xd', modelChosenByUser: true, effort: 'high',
+    }, undefined, 'claude-code', [catalogProvider('xd', 'claude-code', models)], CLOUD_DEVICE)).toMatchObject({
+      model: 'saved', providerId: 'xd', effort: 'high',
+    });
+  });
+
+  it('a stale saved selection falls back in the current catalog without mutating the preference', () => {
+    const draft = { model: 'removed', modelChosenByUser: true, providerId: 'xd', effort: 'ultra' };
+    expect(resolveDeviceLinkDraftDefaults(caps(), draft, undefined, 'claude-code',
+      [catalogProvider('xd', 'claude-code', [catalogModel('available')])], CLOUD_DEVICE)).toMatchObject({
+      model: 'available', providerId: 'xd', effort: 'medium',
+    });
+    expect(draft.model).toBe('removed');
+  });
+
+  it('the provider actually chosen supplies effort and Fast capabilities', () => {
+    expect(resolveDeviceLinkDraftDefaults(caps(), {
+      model: 'claude-opus-4-8', modelChosenByUser: true, providerId: 'xd', effort: 'xhigh', fastMode: true,
+    }, undefined, 'claude-code', [catalogProvider('xd', 'claude-code', [catalogModel('claude-opus-4-8', {
+      efforts: ['medium'], defaultEffort: 'medium', supportsFastMode: false,
+    })])], CLOUD_DEVICE)).toMatchObject({ effort: 'medium', fastMode: false });
   });
 });

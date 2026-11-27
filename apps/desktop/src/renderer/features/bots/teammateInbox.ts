@@ -1,7 +1,12 @@
 import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
+import { projectTeammateSnoozeWithOfflineInboxIntent } from '@cindy/maker-shared/offline-inbox-intent';
 
 import * as sessionService from '@/lib/sessionService';
 import type { Session } from '@/lib/ccAgent.types';
+import {
+  getOfflineInboxIntent,
+  queueOfflineInboxSnooze,
+} from '@/features/device-link/offlineInboxIntentsStore';
 import type { AgentIslandSessionActivity } from '../../../shared/agentIsland';
 import { botRosterLabel } from '../../../shared/botCreation';
 import { markBotRead } from './botReadState';
@@ -68,7 +73,12 @@ export function teammateInboxEntries(input: {
       name: bot.name,
       deviceLabel: botDeviceLabel({ deviceId: bot.deviceId, name: bot.deviceName }, input.devices),
       status: remoteTeammateStatus(bot, isRemoteBotUnread(bot), true),
-      snooze: bot.sessionId ? bot.inboxSnooze ?? null : null,
+      snooze: bot.sessionId
+        ? projectTeammateSnoozeWithOfflineInboxIntent(
+            bot.inboxSnooze ?? null,
+            getOfflineInboxIntent(bot.deviceId, bot.sessionId),
+          )
+        : null,
       sessionId: bot.sessionId,
       activityAt: bot.activityAt,
       route: teammateInboxRoute(bot),
@@ -83,6 +93,21 @@ export function teammateInboxEntries(input: {
 export async function snoozeTeammateConversation(entry: TeammateInboxEntry, until: string | null): Promise<void> {
   if (!entry.sessionId || !entry.snooze) throw new Error('UNSUPPORTED_CAPABILITY');
   const bot = entry.bot;
+  if ('deviceId' in bot && !bot.online) {
+    await queueOfflineInboxSnooze(
+      bot.deviceId,
+      entry.sessionId,
+      {
+        snoozedUntil: bot.inboxSnooze?.snoozedUntil ?? null,
+        snoozedAt: bot.inboxSnooze?.snoozedAt ?? null,
+        userSendAt: bot.inboxSnooze?.userSendAt ?? null,
+        title: entry.name,
+        deviceLinkDeviceName: entry.deviceLabel ?? bot.deviceName,
+      },
+      until,
+    );
+    return;
+  }
   const updated = 'deviceId' in bot
     ? await window.electronAPI.deviceLink.invoke(bot.deviceId, 'local-db:sessions:patch-meta', [
       entry.sessionId, { snoozedUntil: until },

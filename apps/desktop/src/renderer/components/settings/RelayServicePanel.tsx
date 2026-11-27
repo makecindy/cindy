@@ -35,6 +35,7 @@ import {
   Users,
 } from 'lucide-react';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { presentRelayApproval } from '@/features/relay-share/relayApprovalStore';
 import { RelayShareDialog } from '@/features/relay-share/RelayShareDialog';
@@ -1387,9 +1388,9 @@ function RouteRow({
             <span aria-hidden className="shrink-0 text-[var(--text-tertiary)]">{icon}</span>
             <span className="truncate text-13 font-medium text-[var(--text-primary)]">{title}</span>
             {tag ? (
-              <span className="shrink-0 rounded-full border border-[var(--border-default)] px-1.5 text-11 leading-[1.636] text-[var(--text-secondary)]">
+              <Badge tone="outline">
                 {tag}
-              </span>
+              </Badge>
             ) : null}
             {selected ? <InUse /> : null}
           </div>

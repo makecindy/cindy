@@ -13,6 +13,8 @@ import type { PrStatusResult, SessionPrRef } from './gitContext.types';
  * limit) and capped at MAX_TASK_STATUS_QUERIES; a task above the cap stays non-archivable. */
 export const MAX_STATUS_BATCH = 10;
 export const MAX_TASK_STATUS_QUERIES = 30;
+/** Local hover-only cache bucket when a chat link has no session id. */
+export const CHAT_LINK_HOVER_SESSION_BUCKET = '__chat_link_hover__';
 
 /** Task completion needs every associated PR, including cards outside the viewport. */
 export function areAllTaskPrsMerged(

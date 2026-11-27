@@ -32,7 +32,7 @@
     "notFound": "Este dispositivo ya no está en tu cuenta.",
     "deleteDevice": "Eliminar dispositivo",
     "deleteTitle": "¿Eliminar {{name}}?",
-    "deleteMessage": "Elimina este dispositivo de tu cuenta y desconecta el acceso remoto. Se conservan sus sesiones y archivos. Vuelve a iniciar sesión en ese dispositivo para volver a unirlo.",
+    "deleteMessage": "Elimina este dispositivo de tu cuenta y desconecta el acceso remoto. Se conservan sus sesiones y archivos. Toca «Volver a unirse» en ese dispositivo para recuperarlo.",
     "deleteFailed": "No se pudo eliminar el dispositivo.",
     "deleteOnline": "Este servidor aún no admite eliminar dispositivos en línea. Vuelve a intentarlo cuando se actualice el servicio.",
     "deleteRejectedWhileOffline": "No se pudo eliminar el dispositivo: el servidor todavía lo incluye como en línea, aunque aquí se muestra como fuera de línea.",
@@ -396,6 +396,7 @@
       "showDeviceTasks": "Mostrar tareas",
       "openDevice": "Abrir",
       "renameDevice": "Cambiar nombre",
+      "groupDevice": "Dispositivo",
       "groupProject": "Proyecto",
       "sortBy": {
         "priority": "Prioridad",
@@ -424,7 +425,8 @@
         "all": "Todo",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Motor de complemento"
       },
       "filterLastActivityHeading": "Última actividad",
       "filterLastActivity": {
@@ -437,11 +439,15 @@
       "showCollapsedTeammateAvatars": "Mostrar avatares al contraer",
       "displayHeading": "Pantalla",
       "view": {
+        "card": "Tarjetas",
         "text": "Texto",
         "list": "Lista"
       },
       "taskInfoHeading": "Información de la tarea",
       "taskInfo": {
+        "teammate": "Avatar del amigo",
+        "project": "Icono y nombre del proyecto",
+        "harness": "Icono del harness",
         "time": "Hora",
         "pr": "Estado del PR",
         "tokens": "Tokens",
@@ -476,7 +482,14 @@
         "nextWeek": "La próxima semana",
         "indefinite": "Indefinidamente",
         "custom": "Personalizar…",
-        "invalidTime": "Elige una fecha y hora futuras dentro de un año."
+        "invalidTime": "Elige una fecha y hora futuras dentro de un año.",
+        "pendingSync": "Pendiente de sincronizar",
+        "pendingArchiveSync": "Se archivará cuando el ordenador vuelva a estar en línea",
+        "offlineCompleteRejectedDirty": "«{{title}}» volvió a Pendientes: hay cambios sin confirmar en el worktree que requieren confirmación antes de archivar.",
+        "offlineCompleteRejectedNewActivity": "«{{title}}» volvió a Pendientes: hubo nueva actividad en su ordenador mientras estaba sin conexión.",
+        "offlineCompleteRejectedRunning": "«{{title}}» volvió a Pendientes: la tarea está en ejecución.",
+        "offlineCompleteRejectedAttached": "«{{title}}» volvió a Pendientes: la tarea está conectada o compartida y no se archivó automáticamente.",
+        "offlineCompleteRejectedPreflight": "«{{title}}» volvió a Pendientes: no se pudo verificar el estado del worktree antes de archivar."
       },
       "taskListMode": {
         "enterInbox": "Bandeja de entrada",
@@ -520,7 +533,8 @@
           "30d": "30d",
           "all": "Todo"
         }
-      }
+      },
+      "partial": "Los resultados pueden estar incompletos. Usa palabras más específicas o limita la búsqueda a un proyecto."
     },
     "renameDevice": {
       "title": "Cambiar nombre del dispositivo",
@@ -831,9 +845,6 @@
     "connectionsEmpty": "No se seleccionaron habilidades ni conexiones.",
     "largeProfileRecovery": "Este perfil es demasiado largo para editarlo aquí. Edita el perfil completo en {{deviceName}}.",
     "addModel": "Agregar modelo alternativo",
-    "removeModel": "Quitar modelo",
-    "moveModelUp": "Mover modelo hacia arriba",
-    "backupModels": "Modelos de respaldo ({{count}})",
     "settingsTitle": "Configuración de amigos",
     "name": "Nombre",
     "portraitNumber": "Retrato {{number}}",
@@ -962,6 +973,8 @@
     "timeout": "\"{{device}}\" aún no está listo. Asegúrate de que Cindy esté abierto y en línea en esa computadora y vuelve a intentarlo.",
     "conflict": "{{name}} ya se mudó a “{{device}}”.",
     "switchFailed": "No se puede cambiar la computadora principal en este momento. Vuelve a intentarlo más tarde.",
+    "skillTargetOutdated": "Una Habilidad de {{name}} tiene un contenido de más de 64 KB que la versión antigua de Cindy en “{{device}}” no puede recibir. Actualiza Cindy en ese ordenador antes de mover a tu amigo. Tu amigo sigue en el ordenador original",
+    "skillTargetOutdated_skill": "La versión antigua de Cindy en «{{device}}» no puede recibir la habilidad «{{slug}}». Su contenido ocupa {{bodyBytes, number}} bytes y supera el límite de 64 KB. {{name}} sigue en el ordenador original. Actualiza Cindy en el ordenador de destino y vuelve a intentarlo.",
     "unknownDevice": "otra computadora",
     "runsOn": "Se ejecuta en \"{{device}}\"",
     "homeTitle": "Computadora principal",
