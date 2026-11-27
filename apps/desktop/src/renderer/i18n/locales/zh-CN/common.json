@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Google 账号需要验证",
+    "note": "请扫码或打开 Google 页面完成验证。Antigravity 确认账号恢复后，任务会自动继续。",
+    "refresh": "刷新验证二维码"
+  },
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "当前 Pi 运行位置不支持系统提示词片段。",
@@ -340,7 +345,7 @@
     "tabOwned": "我发起的",
     "startIntro": "邀请伙伴查看这个任务的全部内容，一起与同一个 Agent 协作。",
     "runsOnThisDevice": "运行在这台电脑",
-    "inviteNotice": "持有邀请链接的用户登录后即可加入，拥有与房主相同的 Agent 使用权限。",
+    "inviteNotice": "持有邀请链接的用户登录后即可加入，拥有与房主相同的 Agent 使用权限。 即使只共享子目录，访客也能查看整个 Git 仓库当前的改动。",
     "offlineAutoClose": "房主电脑持续离线后，共享会自动结束。",
     "inviteBoxHint": "将链接发送给伙伴，对方点击即可加入，也可在 Cindy 中点「加入共享任务」粘贴链接。",
     "invitationMessage": "邀请你加入「{{title}}」\n{{link}}\n点击链接加入；如果没能打开 Cindy，可在 Cindy 中点「加入共享任务」并粘贴这条链接。",
@@ -401,7 +406,7 @@
       "progress": "当前占比 {{used}}% · 上限 {{limit}}%",
       "paused": "此模型已暂停，请选择其他可用模型。",
       "recommendation": "推荐使用 {{model}}",
-      "unsupported": "此供应商组暂不支持模型占比限制。",
+      "unsupported": "此电脑组暂不支持模型占比限制。",
       "basis": "近 7 个自然日 · 输入＋输出 token，不含缓存",
       "maxPercent": "占个人用量的上限",
       "empty": "暂无用量数据",
@@ -496,23 +501,23 @@
         "confirm": "删除分享"
       },
       "reshare": {
-        "applying": "想经 {{owner}} 的供应商组使用",
+        "applying": "想经 {{owner}} 的电脑组使用",
         "requestedAt": "{{time}}请求",
         "usageHint": "同意后，{{name}} 的任务可以在这台电脑上运行，用量算在 {{owner}} 名下",
         "approve": "同意",
         "reject": "拒绝",
-        "summaryUsing_other": "{{count}} 人经 {{owner}} 的供应商组使用",
-        "summaryOwner": "经 {{owner}} 的供应商组",
+        "summaryUsing_other": "{{count}} 人经 {{owner}} 的电脑组使用",
+        "summaryOwner": "经 {{owner}} 的电脑组",
         "summaryDeclined_other": "{{count}} 人未同意",
         "stateApproved": "已同意",
         "stateRejected": "未同意",
         "revoke": "撤回同意",
         "revokeAria": "撤回对 {{name}} 的同意",
         "approveAria": "同意 {{name}} 使用",
-        "toastApproved": "已同意 {{name}} 经 {{owner}} 的供应商组使用 {{provider}}",
+        "toastApproved": "已同意 {{name}} 经 {{owner}} 的电脑组使用 {{provider}}",
         "toastRejected": "已拒绝 {{name}} 的请求",
         "toastRevoked": "已撤回对 {{name}} 的同意，正在运行的任务已停止",
-        "listTitle": "经 {{owner}} 的供应商组使用"
+        "listTitle": "经 {{owner}} 的电脑组使用"
       },
       "memberNote": {
         "add": "设置备注",
@@ -558,7 +563,7 @@
       "requestedAt": "{{time}}通过你的分享链接申请",
       "pairingHint": "同意前可以通过发链接的渠道问对方一句：「你看到的配对码是多少？」一致再同意。",
       "callout": "同意后，{{name}} 可以在自己的任务里使用 {{provider}} 的模型。Agent 在这台电脑上运行，用量计入你的 {{provider}}。你可以随时在「{{provider}} · 远程与分享」里关闭或删除。",
-      "calloutGroup": "同意后，{{name}} 可以在自己的任务里使用 {{provider}} 的模型。由供应商组选一台电脑运行 Agent，用量计入你的 {{provider}}。你可以随时在「{{provider}} · 远程与分享」里关闭或删除。",
+      "calloutGroup": "同意后，{{name}} 可以在自己的任务里使用 {{provider}} 的模型。由电脑组选一台电脑运行 Agent，用量计入你的 {{provider}}。你可以随时在「{{provider}} · 远程与分享」里关闭或删除。",
       "calloutRemote": "同意后，{{name}} 可以在自己的任务里使用 {{provider}} 的模型。Agent 在供应商所在的电脑上运行，用量计入你的 {{provider}}。你可以随时在「{{provider}} · 远程与分享」里关闭或删除。",
       "calloutClaudeEmail": "{{name}} 使用时，Agent 能看到你登录 Claude 用的邮箱。",
       "calloutUnknown": "如果你不认识申请人，请拒绝；拒绝后这条链接作废。",
@@ -698,7 +703,7 @@
       "rejectedTitle": "分享申请未通过",
       "rejectedBody": "{{name}} 没有同意分享 {{provider}}",
       "reshareTitle": "新的使用请求",
-      "reshareBody": "{{name}} 想经 {{owner}} 的供应商组使用你分享的 {{provider}}"
+      "reshareBody": "{{name}} 想经 {{owner}} 的电脑组使用你分享的 {{provider}}"
     },
     "runLimits": {
       "title": "远程任务上限",
@@ -710,7 +715,7 @@
       "idleHint": "任务闲置满这个时长后，这台电脑会结束它的 Agent，名额随即释放；对方再发消息时会自动接回原来的对话。正在运行的任务不会被收回。填 0 表示从不收回。",
       "idleInvalid": "请填写 0～{{max}} 的整数。",
       "usage": "当前占用 {{used}} / {{total}}，来自 {{devices}} 台设备；单台设备最多占用 {{largest}} 个。",
-      "applyHint": "保存后立即生效。调低上限不会中断已有任务，只会限制新增。供应商组中转按直接连接的设备计数。",
+      "applyHint": "保存后立即生效。调低上限不会中断已有任务，只会限制新增。电脑组中转按直接连接的设备计数。",
       "save": "保存",
       "reset": "恢复默认",
       "saved": "远程任务上限已保存",
@@ -754,7 +759,7 @@
   },
   "providerGroup": {
     "management": {
-      "note": "正在管理 {{device}} 上的供应商组。修改会保存到那台电脑，请保持它在线。",
+      "note": "正在管理 {{device}} 上的电脑组。修改会保存到那台电脑，请保持它在线。",
       "unsupported": "建组电脑的 Cindy 版本暂不支持远程管理。请先更新那台电脑上的 Cindy。"
     },
     "page": {
@@ -824,27 +829,13 @@
       "emptyRange": "这段时间没有用量"
     },
     "section": {
-      "title": "供应商组",
+      "title": "电脑组",
       "addComputer": "添加电脑",
       "delete": "删除组",
       "empty": "加入其他电脑上的 {{provider}}，任务会自动选一台运行",
-      "loading": "正在读取供应商组…",
-      "loadFailed": "未能读取供应商组",
+      "loading": "正在读取电脑组…",
+      "loadFailed": "未能读取电脑组",
       "note": "这台电脑上的任务和分享的人的任务，都由组选一台电脑运行 Agent"
-    },
-    "strategy": {
-      "label": "组策略",
-      "least": "最少占用",
-      "round": "轮询",
-      "order": "按顺序",
-      "weight": "按权重",
-      "quotaFirst": "能读取订阅用量时，先用快重置、还剩得多的电脑，各账号会按时间均匀用掉；差不多时按组策略",
-      "description": {
-        "least": "给最闲的那台",
-        "round": "依次轮流",
-        "order": "排前面的优先",
-        "weight": "按权重比例"
-      }
     },
     "autoSwitch": {
       "label": "自动换电脑",
@@ -901,9 +892,9 @@
         }
       },
       "removeConfirm": {
-        "title": "把 {{name}} 移出供应商组？",
+        "title": "把 {{name}} 移出电脑组？",
         "description": "之后不再给它分新任务；已经在它上面运行的任务留在那台电脑上。",
-        "lastDescription": "它是组里最后一台电脑，移出后会删除 {{provider}} 的供应商组。",
+        "lastDescription": "它是组里最后一台电脑，移出后会删除 {{provider}} 的电脑组。",
         "confirm": "移出组"
       },
       "sourceGroupOwner": "组所在电脑",
@@ -939,12 +930,12 @@
       "send": "继续发送"
     },
     "deleteConfirm": {
-      "title": "删除 {{provider}} 的供应商组？",
+      "title": "删除 {{provider}} 的电脑组？",
       "description": "之后这台电脑上的新任务都在本机运行；已经分到其他电脑的任务留在那台电脑上。",
-      "confirm": "删除供应商组"
+      "confirm": "删除电脑组"
     },
     "add": {
-      "title": "把电脑加入 {{provider}} 的供应商组",
+      "title": "把电脑加入 {{provider}} 的电脑组",
       "sourceAria": "电脑来源",
       "tabAvailable": "已经能用的",
       "tabLink": "分享链接",
@@ -953,17 +944,17 @@
       "loadFailed": "未能读取可以加入的电脑",
       "empty": "没有可以加入的电脑。在其他电脑上对 {{provider}} 打开「允许被远程调用」，或用别人的分享链接申请。",
       "alreadyMember": "已在组里",
-      "confirm": "加入供应商组",
+      "confirm": "加入电脑组",
       "cancel": "取消",
       "linkDescription": "粘贴别人分享的 {{provider}} 链接，对方同意后，回到「已经能用的」里勾选加入。",
       "remoteLinkDescription": "请在组所在电脑的「模型供应商」设置中输入分享链接。对方同意后，再回到「已经能用的」勾选加入。",
       "pasteLink": "粘贴分享链接"
     },
     "toast": {
-      "added_other": "已把 {{count}} 台电脑加入 {{provider}} 的供应商组",
-      "addedAccounts_other": "已把 {{count}} 个账号加入 {{provider}} 的供应商组",
-      "removed": "已把 {{name}} 移出供应商组",
-      "deleted": "已删除 {{provider}} 的供应商组"
+      "added_other": "已把 {{count}} 台电脑加入 {{provider}} 的电脑组",
+      "addedAccounts_other": "已把 {{count}} 个账号加入 {{provider}} 的账号组",
+      "removed": "已把 {{name}} 移出电脑组",
+      "deleted": "已删除 {{provider}} 的电脑组"
     }
   },
   "regionScreenshot": {
@@ -1360,7 +1351,7 @@
     "DEVICE_LINK_BUSY": "远端繁忙，请稍后重试。",
     "INVALID_PARAMS": "参数无效，请检查后重试。",
     "PRECONDITION_FAILED": "当前状态下无法执行此操作，请稍后重试。",
-    "PROVIDER_GROUP_CHANGED": "供应商组已在别处修改，本次操作未执行。请查看最新设置后重新操作",
+    "PROVIDER_GROUP_CHANGED": "电脑组已在别处修改，本次操作未执行。请查看最新设置后重新操作",
     "MODEL_CONTEXT_USAGE_UNKNOWN": "模型未切换：无法确认当前任务已使用的上下文。请保留当前模型，或新建任务后再选择",
     "MODEL_WINDOW_CURRENT_CONTEXT_UNKNOWN": "模型未切换：无法确认当前模型的上下文窗口。请检查自定义模型的窗口设置；若无法修改，请保留当前模型或新建任务",
     "MODEL_WINDOW_TARGET_CONTEXT_UNKNOWN": "模型未切换：无法确认目标模型的上下文窗口。请检查自定义模型的窗口设置；若无法修改，请选择其他模型或新建任务",
@@ -1835,8 +1826,7 @@
       "ariaLabel": "搜索设置",
       "placeholder": "搜索设置",
       "resultsLabel": "设置搜索结果",
-      "noResults": "没有找到设置，试试其他关键词",
-      "clear": "清除搜索"
+      "noResults": "没有找到设置，试试其他关键词"
     },
     "back": "返回",
     "defaults": {
@@ -1871,7 +1861,7 @@
       "imBot": "IM 机器人",
       "ghosts": "插件",
       "cindyMake": "Cindy Make",
-      "modelGroups": "模型组"
+      "modelGroups": "智能路由"
     },
     "sections": {
       "user": "用户",
@@ -2535,7 +2525,7 @@
       "skinLabel": "角色",
       "skinHint": "任务胶囊和灵动岛里显示的角色。",
       "soundLabel": "事件音效",
-      "soundHint": "设置了事件音效时，只播放所选音效；未设置或关闭事件音效时，跟随系统通知设置。",
+      "soundHint": "为每类提醒选择 8-bit 音效，任务胶囊和灵动岛共用；点按的音效只在点任务胶囊时播放。",
       "soundAria": "切换任务胶囊音效",
       "soundSelectAria": "{{event}}的音效",
       "soundPreviewAria": "预览{{event}}音效",
@@ -2590,7 +2580,7 @@
         "select": "点击操作"
       },
       "soundOptions": {
-        "none": "跟随系统",
+        "none": "无",
         "startup-chime": "启动音",
         "ring-chime": "圆环音",
         "item-found": "发现道具",
@@ -4284,9 +4274,12 @@
           "compaction": {
             "title": "自动压缩",
             "hint": "占用达到所选比例时压缩上下文。比例越低，越早压缩；实际时机仍受引擎限制。",
-            "default": "{{pct}}%（默认）",
-            "timing": "用于此来源下该模型的所有可用引擎。后续运行生效，不中断正在生成的内容。"
+            "timing": "用于此来源下该模型的所有可用引擎。后续运行生效，不中断正在生成的内容。",
+            "defaultBadge": "默认",
+            "sliderAria": "调整自动压缩触发阈值",
+            "restoreAria": "恢复自动压缩比例的默认设置"
           },
+          "antigravityHydrogenDescription": "为日常编程和快速执行而设计。",
           "contextLimitRoute": "当前 {{tokens}} tokens",
           "contextLimitOverWindow": "已超过供应商声明的上下文窗口，请求可能失败。",
           "restoreDefault": "恢复默认",
@@ -4374,9 +4367,9 @@
         "detailNote": "Agent 在 {{device}} 上运行，用的是那台电脑的登录和配额。新建任务时在模型列表里选择它就能用；要修改这个供应商，请到那台电脑的「设置 → 模型供应商」。",
         "modelsTitle": "可用的模型",
         "modelsEmpty": "这个供应商在那台电脑上还没有开放可用的模型。",
-        "rowLabelGroup": "{{provider}} · {{device}} · 供应商组",
-        "groupBadge_other": "供应商组 · {{count}} 台电脑",
-        "groupNote": "{{device}} 把这个供应商建成了供应商组。在模型列表里选它新建任务时，{{device}} 会按组策略把任务分给下面的一台电脑运行，那台出问题时自动换一台继续。{{device}} 在线时，你可以从这里的「远程与分享」管理这个组和分享。",
+        "rowLabelGroup": "{{provider}} · {{device}} · 电脑组",
+        "groupBadge_other": "电脑组 · {{count}} 台电脑",
+        "groupNote": "{{device}} 把这个供应商建成了电脑组。在模型列表里选它新建任务时，{{device}} 会按组策略把任务分给下面的一台电脑运行，那台出问题时自动换一台继续。{{device}} 在线时，你可以从这里的「远程与分享」管理这个组和分享。",
         "groupMembersTitle": "组内电脑",
         "groupMembersFailed": "暂时读不到组内电脑的状态。",
         "hiddenBanner": "已从这台电脑的模型选择器中隐藏。收藏和正在使用它的任务不受影响。"
@@ -4428,7 +4421,7 @@
         "remoteAccess": {
           "label": "允许被远程调用",
           "description": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，Agent 在这台电脑上运行，使用这台电脑的登录和配额。",
-          "descriptionGroup": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，由供应商组选一台电脑运行 Agent。",
+          "descriptionGroup": "开启后，你的其他电脑和你分享的人可以用这个供应商的模型，由电脑组选一台电脑运行 Agent。",
           "ariaLabel": "允许你的其他电脑和你分享的人调用此供应商",
           "writeFailed": "远程调用设置未能保存，请重试",
           "followsPool": "这条连接已并进「{{pool}}」，跟随它的「允许被远程调用」，请在「{{pool}}」里修改。"
@@ -4733,6 +4726,7 @@
         "discoveryHint": "以下型号由供应商目录返回，尚未验证语音调用。",
         "saved": "已添加",
         "reference": "参考型号",
+        "realtimeConfirmed": "实时端点已确认",
         "discovered": "目录返回",
         "more": "更多语音型号（{{count}}）",
         "manual": "手动输入语音型号",
@@ -5491,6 +5485,27 @@
           "confirm": "重置",
           "cancel": "取消"
         }
+      },
+      "tidy": {
+        "label": "记忆与技能整理",
+        "description": "定期在后台轻量整理各伙伴的记忆与技能（去重、精简、对照全局技能）。仅在有足够积压时才触发，无变动不消耗额度，也不在侧栏留下多余任务。",
+        "cadenceLabel": "整理频率",
+        "cadences": {
+          "weekly": "每周",
+          "biweekly": "每两周",
+          "monthly": "每月",
+          "off": "关闭（仅手动）"
+        },
+        "runNow": "立即整理",
+        "running": "整理中…",
+        "toast": {
+          "cadenceSaved": "整理频率已更新",
+          "cadenceFailed": "更新整理频率失败",
+          "updated": "整理完成（已更新 {{count}} 位伙伴）",
+          "idle": "当前记忆与技能都很整洁，无需改动",
+          "skipped": "暂无需要整理的伙伴",
+          "failed": "记忆整理失败"
+        }
       }
     },
     "subagentModels": {
@@ -5631,7 +5646,8 @@
           "runtime": "辅助模型最近多次请求失败，任务命名、摘要和字幕翻译等插件任务可能受影响。",
           "open": "去设置"
         }
-      }
+      },
+      "missingRoute": "已删除的路由"
     },
     "compaction": {
       "codex": {
@@ -6346,7 +6362,7 @@
     "sessionRuntimeFallback": {
       "cell": {
         "label": "任务模型自动降级",
-        "description": "模型组遇到故障时会尝试组内其他可用模型。跨引擎时沿用任务交接流程，并保存新选择。普通任务连续失败时会在当前引擎内尝试其他来源或推荐模型。默认关闭。"
+        "description": "智能路由遇到故障时会尝试组内其他可用模型。跨引擎时沿用任务交接流程，并保存新选择。普通任务连续失败时会在当前引擎内尝试其他来源或推荐模型。默认关闭。"
       },
       "toggleAria": "切换任务模型自动降级",
       "toast": {
@@ -7155,6 +7171,7 @@
         },
         "onlyEncrypted": "仅使用 Agent-Net",
         "onlyEncryptedHint": "开启后，旧版设备和仍使用旧连接的分享将无法使用。默认关闭。",
+        "removedOff": "这台电脑已从账号中移除，Agent-Net 已自动关闭。重新打开即可重新加入。",
         "peerSwitch": {
           "row": {
             "toAgentNet": "正在切到 Agent-Net…",
@@ -7304,8 +7321,7 @@
             "machines": "远程供应商机器"
           },
           "usage": {
-            "remoteModel": "远程模型",
-            "remoteTask": "远程任务"
+            "remoteModel": "远程模型"
           },
           "bundle": {
             "mixed": "{{running}} 个运行中 · {{ready}} 个就绪",
@@ -8743,8 +8759,8 @@
         "hostTools_controlDetail": "通过 Cindy 的任务工具修改、归档、恢复和控制已有任务及项目，并在本机导入原生任务文件。",
         "hostTools_handoff": "任务投递",
         "hostTools_handoffDetail": "通过 Cindy 的任务工具给已有任务发送消息。需要当前任务上下文的操作必须显式指定任务。",
-        "hostTools_usage": "读取用量与供应商组状态",
-        "hostTools_usageDetail": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、供应商组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置。还可读取有权访问的任务的配额，包括同账号已授权电脑及允许查看配额的分享供应商。",
+        "hostTools_usage": "读取用量与电脑组状态",
+        "hostTools_usageDetail": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、电脑组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置。还可读取有权访问的任务的配额，包括同账号已授权电脑及允许查看配额的分享供应商。",
         "hostTools_settings": "应用设置",
         "hostTools_settingsDetail": "通过 Cindy 的设置工具读取和修改应用配置；不返回密钥，不代替你完成保密输入。",
         "hostTools_scheduler": "自动化管理",
@@ -8783,6 +8799,8 @@
         "nodeRuntime": "可在本机运行随插件附带的 Node 程序",
         "nodeMcp": "可在本机运行随插件附带的 stdio MCP",
         "nodeRuntimeDetail": "高风险：它和你本人一样，可以读取或修改你账号能访问的本机文件、访问网络并启动其它程序。Cindy 不能用浏览器沙箱限制它。",
+        "nodeInheritEnv": "继承本机运行环境",
+        "nodeInheritEnvDetail": "高风险：插件的 Node 程序及其子进程会获得 Cindy 当前全部环境变量，包括 Proxy、证书配置，以及其中可能保存的 API Key、Token 等敏感信息。",
         "nodeSecret": "可将已保存凭证「{{name}}」提供给本机 Node 程序",
         "nodeSecretDetail": "Cindy 加密保管，仅在下列已声明 Worker 方法执行时临时注入。Node 程序会收到明文，也可以将其回传、记录、保存或暴露给浏览器侧插件代码及 Agent 参数；请只安装可信插件。",
         "nodeResident": "Node 程序可常驻后台",
@@ -8867,6 +8885,8 @@
         "networkSecretOauthDetail": "登录和令牌由 Cindy 管理，可新授权或选择已连接的同服务账号。请核对下方权限；使用已连接账号时以其已有权限为准。",
         "networkConnections": "可连接你添加的 {{label}}",
         "networkConnectionsDetail": "地址在这个插件的设置界面里添加；每次新增地址都需要你确认，你提供的凭证只注入对应地址。",
+        "networkConnectionsGlabCli": "可连接你添加的 {{label}}，并优先复用本机 glab 已登录的实例",
+        "networkConnectionsGlabCliDetail": "你在插件设置中添加的实例凭证优先；未单独添加的实例，主机会按需读取本机 glab 的登录令牌并仅注入该实例自身的 HTTPS 请求，插件代码无法读取或保存令牌。",
         "codeDetailNetwork": "在独立沙箱中运行，无法访问你的文件；网络仅限上方声明的域名，由主机代发。",
         "codeDetailWithNode": "面板 UI 在独立沙箱中运行；本地处理能力由上方声明的 Node 运行时提供。",
         "added": "新增",
@@ -8895,7 +8915,7 @@
         "nodeChildSpawnDetail": "只能启动它自己包里申报过的 JS 文件（与主程序同样的本机权限），不能执行任意命令；插件停用或退出时子进程一并关闭。",
         "skill": "为 AI 助手添加技能「{{name}}」",
         "skillDetail": "技能是一份指令文件，AI 会把它当作自己的指令加载执行，拥有你的全部权限，对 Claude Code 与 Codex、所有项目都生效——不受本插件沙箱约束。插件启用期间持续可用，停用或卸载即移除；仅对某个文件夹关闭本插件不会隐藏它。此处无法预览技能全文——请只安装你信任的插件。",
-        "routineEvents": "例行任务事件",
+        "routineEvents": "自动化事件",
         "mcpUi": "可在对话中显示交互页面",
         "mcpUiDomains": "页面可连接域名：{{domains}}",
         "mcpAppOnly": "仅页面可用",
@@ -8987,7 +9007,10 @@
             "user": "用户",
             "assistant": "助手"
           }
-        }
+        },
+        "agentChecks": "可以检查来源是否有新内容",
+        "agentChecksDetail": "与其他已获授权的插件交换有变化、无变化或无法确认的状态。各来源插件使用自己的已连接账号，不共享消息正文或凭证。检查不调用模型。 也可检查本机 Cindy 对话有无新增，不返回对话内容。",
+        "agentChecksRequest": "确认增量检查权限"
       },
       "connections": {
         "confirmTitle": "添加连接地址",
@@ -9875,6 +9898,49 @@
         "identity": "目录身份需要检查",
         "failed": "回收未能完成",
         "pending": "已排队"
+      },
+      "remote": {
+        "title": "远程待回收 worktree",
+        "description": "未完成回收的远程 worktree 会阻止在同一台设备上继续创建新的 worktree，直到回收成功或手动选择保留目录以解除阻止。",
+        "storageUnreadable": "无法读取远程 worktree 回收记录，已暂停创建新的远程 worktree。",
+        "sessionLabel": "任务 {{id}}",
+        "keepUnblock": "保留目录并解除阻止",
+        "confirmKeepTitle": "保留远程 worktree 目录并解除阻止？",
+        "confirmKeepDescription": "这将清除本机的待回收记录，恢复在 {{device}} 上创建新的 worktree；远程设备上的目录不会被删除，你可以稍后手动清理。",
+        "confirmKeepConfirm": "保留并解除阻止",
+        "retrySuccess": "已回收远程 worktree。",
+        "keepSuccess": "已解除阻止，现在可以继续创建远程 worktree。",
+        "keepFailed": "未能清除回收记录，请刷新后重试。",
+        "phase": {
+          "reserved": "创建未确认",
+          "precreated": "等待回收",
+          "session-create-started": "任务创建未确认"
+        },
+        "failure": {
+          "offline": "设备离线或响应超时",
+          "in-progress": "远程仍在创建或检出中",
+          "preserved": "被远程设备保留",
+          "mismatch": "回收凭证不匹配",
+          "unsupported": "远程设备版本不支持自动回收",
+          "create-started": "等待确认任务归属",
+          "storage": "本地记录不可读写",
+          "unknown": "回收未能完成"
+        },
+        "preserveReason": {
+          "claimed": "已被任务认领",
+          "in-progress": "仍在创建或检出中",
+          "dirty": "有未提交改动",
+          "keep-sentinel": "存在保留标记（.worktree-keep）",
+          "live-reference": "仍被其他任务或进程占用",
+          "branch-mismatch": "分支或目录状态异常",
+          "include-files-changed": "本地配置文件已变化",
+          "ignored-files": "包含无法复现的忽略文件",
+          "ephemeral": "受管池目录",
+          "pending-transfer": "正在迁移中",
+          "invalid-quarantine": "隔离状态异常",
+          "quarantine-failed": "隔离移动失败",
+          "remove-failed": "删除目录失败"
+        }
       }
     },
     "awayFromComputer": {
@@ -10711,7 +10777,6 @@
     "fileBrowser": {
       "noWorkdir": "当前任务未关联本地工作目录，文件浏览器不可用",
       "filterPlaceholder": "筛选文件…",
-      "filterClear": "清除筛选",
       "filterIndexing": "正在索引项目文件…",
       "filterNoMatch": "未匹配到文件",
       "filterRgUnavailable": "远端机器未安装 ripgrep，文件名筛选不可用",
@@ -11707,18 +11772,14 @@
     "model": {
       "description": "选择这个伙伴使用的模型。",
       "primary": "主模型",
-      "restoreDefault": "恢复默认模型"
+      "restoreDefault": "恢复默认模型",
+      "followsDefault": "用默认模型",
+      "ownModel": "单独设置的模型",
+      "managedInSettings": "伙伴的模型在「模型供应商 → 智能路由」里统一设置。",
+      "openSettings": "去设置"
     },
     "modelChain": {
-      "primary": "主模型",
-      "fallback": "备用 {{index}}",
-      "routeLabel": "模型候选 {{index}}",
-      "add": "添加备用模型",
-      "remove": "移除这个候选",
-      "moveUp": "上移",
-      "moveDown": "下移",
-      "description": "最多设置 5 个模型。当前候选不可用时，伙伴会按顺序自动接替，不需要你切任务或重试。",
-      "options": "备用模型（{{count}}）"
+      "routeLabel": "模型候选 {{index}}"
     },
     "actions": {
       "message": "发消息",
@@ -11905,6 +11966,7 @@
           "title": "@ 我的消息",
           "me": "我",
           "markAll": "全部标为已读",
+          "markReadFailed": "没能将提及标为已读。",
           "empty": "没有未读的 @ 消息",
           "thread": "话题",
           "main": "群聊",
@@ -12112,6 +12174,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}加入了群聊",
+        "memberJoinedList": "{{names}}加入了群聊",
+        "memberJoinedSummary": "{{names}} 及另外 {{others}} 人加入了群聊",
         "memberFailed": "{{name}}这次没能回复",
         "memberTimeout": "{{name}}太久没有回复，这次先跳过",
         "memberUnavailable": "{{name}}现在不可用，这次没有发言",
@@ -12141,7 +12205,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具调用未执行：群内授权已失效或不允许此操作。请由伙伴主人在当前群重新发起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暂时无法核验 {{name}} 的群聊授权，这次工具调用未执行。请在连接恢复后重试。",
           "ATTACHMENTS_UNAVAILABLE": "部分附件未交给 {{name}}（下载失败或数量限制）。请重新发送本次需要的附件。",
-          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。"
+          "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，连接你的 Cindy 后才能让 Cindy 替你干活（你的电脑上现在没有在线的 Cindy）。",
+          "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，请先选择本群的执行电脑，选好后会继续这条请求。",
+          "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 在本群选的执行电脑已离线。"
         }
       },
       "settings": {
@@ -12184,6 +12250,8 @@
         "projectDirSaveFailed": "项目文件夹没能保存，确认文件夹还在后再试",
         "allowMemberInvites": "允许所有成员邀请朋友",
         "allowMemberInvitesHint": "开启后，已加入的所有成员都可邀请朋友。仅群主和管理员可更改。",
+        "allowMemberMentionAll": "允许所有成员 @所有人",
+        "allowMemberMentionAllHint": "开启后，所有成员都可 @所有人；关闭时仅群主和管理员可用。仅群主和管理员可更改。",
         "allowMentionAllBots": "允许 @所有伙伴",
         "allowMentionAllBotsHint": "仅群主可更改。伙伴可能都会回复，大群请谨慎开启。此开关不影响 AI 代答。"
       },
@@ -12215,6 +12283,7 @@
         "groupDissolved": "群聊已解散，仍可查看有权访问的历史消息。",
         "lastOwner": "请先转让群主或解散群聊，再退出。",
         "allBotsMentionDisabled": "群主尚未开启 @所有伙伴。",
+        "allHumansMentionForbidden": "仅群主和管理员可以 @所有人。",
         "turnAlreadyStarted": "这位伙伴已开始执行，不能跳过"
       },
       "organizer": "负责人",
@@ -12290,6 +12359,8 @@
         "threadNew": "话题里的新消息",
         "replyingTo": "回复「{{name}}」：{{text}}",
         "filesOutsideWorkingDir": "部分文件不在工作目录内，未附上。",
+        "modelFallback": "这台电脑上没有选定的模型，这次改用 {{model}} 回答。",
+        "modelFallbackUnnamed": "这台电脑上没有选定的模型，这次改用本机可用的模型回答。",
         "earlierOmitted": "（更早的消息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {
@@ -12370,13 +12441,40 @@
           "unfollowTip": "取消关注后，只在有人提到你时提示",
           "listLabel": "这个群聊里的话题",
           "listNews": "有新回复",
-          "listOthers": "其他话题",
-          "newSeparator": "新回复"
+          "newSeparator": "新回复",
+          "openIndex": "话题",
+          "indexTitle": "话题",
+          "backToList": "返回话题列表",
+          "filterAria": "筛选话题",
+          "filterMine": "与我相关",
+          "filterAll": "全部",
+          "searchPlaceholder": "搜索话题、回复或成员",
+          "clearSearch": "清除搜索",
+          "listRecent": "最近",
+          "indexParticipatedTag": "参与过",
+          "indexMentionedTag": "@过我",
+          "locateInGroup": "在群聊中定位",
+          "indexEmptyMine": "还没有你参与或提到你的话题",
+          "indexEmptyAll": "这个群聊还没有话题",
+          "indexEmptySearch": "没有匹配的话题",
+          "viewAllThreads": "查看全部话题",
+          "syncingHistory": "正在追溯更早话题…",
+          "rootKind": {
+            "task": "任务",
+            "image": "图片",
+            "video": "视频",
+            "audio": "语音",
+            "file": "文件",
+            "share": "转发回复",
+            "card": "卡片"
+          }
         },
         "replyPlaceholder": "回复这条消息，可用 @ 点名伙伴…",
         "sendReply": "发送回复",
+        "moreReactions": "更多表情",
         "addReaction": "添加表情回应",
         "reactionCount": "{{emoji}} · {{count}} 人回应",
+        "reactionTotal": "{{emoji}} · {{count}} 次回应",
         "reactionWho": "{{emoji}} · {{count}} 人回应：{{names}}",
         "reactorSelf": "你",
         "reactorFormer": "{{name}}（已不在群中）",
@@ -12426,6 +12524,8 @@
         "copyFailed": "复制失败，请选中链接手动复制。",
         "createDescription": "创建后可以邀请朋友和伙伴。",
         "settings": {
+          "assistantComputer": "执行电脑",
+          "chooseComputer": "选择电脑",
           "notifications": {
             "title": "消息通知",
             "all": "所有消息",
@@ -12511,6 +12611,7 @@
           "accessNone": "仅主人可用",
           "accessChat": "仅群内交流",
           "accessTools": "可用工具与资料",
+          "memberPermissions": "成员权限",
           "replies": "伙伴怎么接话",
           "replyModeMentionedNote": "不 @ 人时，伙伴不会接话。",
           "assistant": "群里的 Cindy",
@@ -12855,7 +12956,7 @@
       "arrivingLater": "{{name}} 已换到这台电脑，还在准备中，稍后会出现在伙伴列表里",
       "arrivalPermissions": "{{name}} 已按这台电脑的默认权限运行。",
       "arrivalModel": "{{name}} 之前选的模型在这台电脑上不可用，已改用这台电脑的默认模型。",
-      "arrivalModelSetup": "{{name}} 已来到这台电脑，但还没有可用模型。请连接模型供应商，或打开这位伙伴的「设置 → 模型」选择模型。",
+      "arrivalModelSetup": "{{name}} 已来到这台电脑，但还没有可用模型。请连接模型供应商，或在「模型供应商 → 智能路由」里设置伙伴的默认模型。",
       "arrivalPartialContent": "{{name}} 已来到这台电脑，部分云端内容未能恢复，原内容仍保留在云端。",
       "missingProfileTitle": "用初始资料继续 {{name}}？",
       "missingProfileDescription": "原主力电脑还没上传 {{name}} 的人设和简介。如果原电脑已重装或无法恢复，可以在这台电脑用初始资料继续，已同步到云端的对话和内容仍会保留。",
@@ -13307,6 +13408,7 @@
   },
   "commonUi": {
     "retry": "重试",
+    "clearSearch": "清除搜索",
     "listSeparator": "、",
     "crossAgentConvert": {
       "asking": {
@@ -13818,6 +13920,9 @@
           "allow": "允许",
           "deny": "拒绝",
           "approve": "批准"
+        },
+        "companion": {
+          "retryLater": "请稍后再试"
         }
       },
       "hook": {
@@ -14805,7 +14910,7 @@
         "providerGroupLabel": "{{provider}} · {{group}}",
         "providerGroupRunningOn": "当前在 {{device}} 上运行",
         "providerGroupRunningHere": "当前在这台电脑上运行",
-        "providerGroupUnassigned": "开始后由供应商组选一台电脑，用量按那台显示"
+        "providerGroupUnassigned": "开始后由电脑组选一台电脑，用量按那台显示"
       },
       "speed": {
         "label": "速度",
@@ -15308,6 +15413,7 @@
         "diverged": "本地和远程分支各有不同的更新，请先处理这些差异再切换",
         "missing": "所选分支已不存在，请刷新列表",
         "git": "操作未能完成，请检查当前分支和保存的改动后重试",
+        "timeout": "读取 Git 状态超时。仓库较大或未提交改动过多时会耗时过长，可先整理改动，或改用 worktree",
         "savedMissing": "这份保存的改动已经不在了",
         "undoUnavailable": "已经无法撤销这次切换"
       },
@@ -15627,7 +15733,8 @@
       "runningFor": "已运行 {{duration}}",
       "startedAt": "开始于 {{time}}",
       "recentOutput": "最近输出 · {{time}} 前更新",
-      "noOutputYet": "暂无输出"
+      "noOutputYet": "暂无输出",
+      "recentActivity": "最近活动"
     },
     "planPill": {
       "step": "第 {{current}} / {{total}} 步",
@@ -16153,7 +16260,30 @@
       },
       "status": {
         "running": "运行中",
-        "done": "已完成"
+        "done": "已完成",
+        "failed": "失败"
+      },
+      "collab": {
+        "wait": "等待 Subagent",
+        "waitCount_one": "等待 {{count}} 个 Subagent",
+        "waitCount_other": "等待 {{count}} 个 Subagent",
+        "sendInput": "向 Subagent 发送指令",
+        "sendInputCount_one": "向 {{count}} 个 Subagent 发送指令",
+        "sendInputCount_other": "向 {{count}} 个 Subagent 发送指令",
+        "resume": "恢复 Subagent",
+        "resumeCount_one": "恢复 {{count}} 个 Subagent",
+        "resumeCount_other": "恢复 {{count}} 个 Subagent",
+        "close": "关闭 Subagent",
+        "closeCount_one": "关闭 {{count}} 个 Subagent",
+        "closeCount_other": "关闭 {{count}} 个 Subagent",
+        "spawn": "启动 Subagent",
+        "spawnCount_one": "启动 {{count}} 个 Subagent",
+        "spawnCount_other": "启动 {{count}} 个 Subagent",
+        "targets": "目标：{{targets}}",
+        "targetCount_one": "目标：{{count}} 个 Subagent",
+        "targetCount_other": "目标：{{count}} 个 Subagent",
+        "prompt": "指令：{{prompt}}",
+        "model": "模型：{{model}}"
       }
     },
     "systemCard": {
@@ -16272,10 +16402,11 @@
         "groupSwitch": "已自动换一台电脑继续"
       },
       "autoResumeSeparator": {
-        "label": "连接中断，已自动继续"
+        "label": "回复为空，已自动继续"
       },
       "autoResumePending": {
         "label": "重新连接中",
+        "continuingWithProgress": "正在自动继续（{{attempt}}/{{total}}）…",
         "labelWithProgress": "重新连接中 {{attempt}}/{{total}}",
         "groupSwitch": "正在换一台电脑继续"
       },
@@ -16590,7 +16721,7 @@
       "REMOTE_AGENT_SHARE_UNAVAILABLE": "分享的供应商暂时不可用：对方电脑可能不在线，或对方暂时关闭了分享。可以稍后再试，或换成其他模型继续。",
       "REMOTE_AGENT_SHARE_LEGACY_DISABLED": "这是旧版分享，开启「仅使用 Agent-Net」后暂时不能用。关闭这个开关就能继续，也可以换成其他模型。",
       "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型的可用账号已达到用量上限。可换用其他模型，或等配额重置后继续。",
-      "REMOTE_AGENT_GROUP_UNAVAILABLE": "供应商组里的电脑现在都不能运行这个任务：可能都不在线、已暂停分配、正在冷却，或没有这个模型。可以到这个供应商的「远程与分享」页查看组内电脑。",
+      "REMOTE_AGENT_GROUP_UNAVAILABLE": "电脑组里的电脑现在都不能运行这个任务：可能都不在线、已暂停分配、正在冷却，或没有这个模型。可以到这个供应商的「远程与分享」页查看组内电脑。",
       "REMOTE_AGENT_GROUP_FULL": "能运行这个任务的账号或电脑都已达到并发上限。等正在运行的任务结束，或在供应商设置里调高上限。",
       "SUBSCRIPTION_ACCOUNTS_FULL": "能运行这个任务的账号或电脑都已达到并发上限。等正在运行的任务结束，或在供应商设置里调高上限。",
       "REMOTE_AGENT_DEVICE_LIMIT": "这台设备保留的远程任务数已达上限。可归档暂时不用的任务，或请远程电脑的主人在「远程与分享」中提高上限。",
@@ -17041,6 +17172,22 @@
       "piRemoteUnsupported": "Pi 仅在本地运行，无法使用 SSH 远程主机。请切换到 Claude 或 Codex 来使用该主机。",
       "localWorktreeCleanupPending": "上一次本地 worktree 任务仍待回收，请等待清理完成后再试。",
       "remoteWorktreeCleanupPending": "上一次远程 worktree 仍待回收，请重新连接设备后再试。",
+      "remoteWorktreeCleanupOpenSettings": "前往回收设置",
+      "remoteWorktreeCleanup": {
+        "inProgress": "上一次远程 worktree 仍在创建或检出中，请稍后再试，或在「设置 → 存储空间」中处理。",
+        "preserved": "远程设备保留了上一次 worktree（可能有未提交改动或仍被占用），请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedDirty": "远程设备检测到上一次 worktree 有未提交改动，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedKeepSentinel": "远程设备检测到上一次 worktree 存在保留标记（.worktree-keep），拒绝自动回收。请到「设置 → 存储空间」处理。",
+        "preservedLiveReference": "远程设备检测到上一次 worktree 仍被其他任务或进程占用，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedBranchMismatch": "远程设备上的上一次 worktree 分支或目录状态异常，无法自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedIncludeFilesChanged": "远程设备检测到上一次 worktree 的本地配置文件已变化，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedIgnoredFiles": "远程设备检测到上一次 worktree 包含无法复现的忽略文件，拒绝自动回收。请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "preservedRemoveFailed": "远程设备删除上一次 worktree 目录失败。请检查该设备的权限或占用情况，或在「设置 → 存储空间」保留目录以解除阻止。",
+        "mismatch": "远程设备拒绝了上一次 worktree 的回收凭证，请到「设置 → 存储空间」重试或保留目录以解除阻止。",
+        "unsupported": "远程设备的 Cindy 版本不支持自动回收预创建 worktree，请更新该设备的 Cindy，或在「设置 → 存储空间」保留目录以解除阻止。",
+        "createStarted": "上一次远程任务创建未收到确认，为防误删已暂停自动清理。请确认任务状态后重试，或在「设置 → 存储空间」保留目录以解除阻止。",
+        "storage": "无法读写本地的远程 worktree 回收记录，请到「设置 → 存储空间」查看。"
+      },
       "remoteProviderUpdating": "供应商凭证正在更新，请稍后重试",
       "remoteProviderUnsupported": "该供应商不支持 SSH 远程会话，请更换来源",
       "remoteNativeOauthUnavailable": "远程任务不能使用 Claude 订阅，请选择网关或 API Key 模型",
@@ -17071,9 +17218,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "添加云主机",
-        "preparingCloud": "云主机 · 准备中",
-        "manageCloud": "管理云主机",
         "allMachines": "全部",
         "localMachine": "本机",
         "connecting": "连接中…",
@@ -17433,6 +17577,8 @@
         "moveToProjectRemoteUnsupported": "暂不支持移动远程任务",
         "moveToProjectWorktreeBlocked": "该任务的工作目录是 worktree，暂不支持移动到其他项目",
         "openInNewWindow": "在新窗口打开",
+        "openInNewWindowShortcutMac": "⌘+点击",
+        "openInNewWindowShortcutOther": "Ctrl+点击",
         "exportShare": "导出任务…",
         "exportHtml": "导出为 HTML…",
         "exportHtmlSuccess": "任务已导出为 HTML",
@@ -17549,7 +17695,14 @@
         "snoozeFailed": "未能保存稍后处理时间，请检查连接并确认任务所属电脑已更新。",
         "hours": "{{count}} 小时后",
         "hours_one": "{{count}} 小时后",
-        "hours_other": "{{count}} 小时后"
+        "hours_other": "{{count}} 小时后",
+        "pendingSync": "待同步",
+        "pendingArchiveSync": "电脑上线后自动归档",
+        "offlineCompleteRejectedDirty": "「{{title}}」已退回待处理：worktree 有未提交改动，需确认后再归档。",
+        "offlineCompleteRejectedNewActivity": "「{{title}}」已退回待处理：电脑离线期间该任务有新进展。",
+        "offlineCompleteRejectedRunning": "「{{title}}」已退回待处理：该任务正在运行中。",
+        "offlineCompleteRejectedAttached": "「{{title}}」已退回待处理：该任务正被接管或处于共享状态，未自动归档。",
+        "offlineCompleteRejectedPreflight": "「{{title}}」已退回待处理：未能核验 worktree 状态，需手动确认后归档。"
       },
       "taskListMode": {
         "heading": "任务模式",
@@ -17557,6 +17710,13 @@
         "inbox": "收件箱",
         "enterInbox": "切换到收件箱模式",
         "leaveInbox": "切换到任务列表模式"
+      },
+      "filterHideTaskCreated": "隐藏由其他任务创建的任务",
+      "origin": {
+        "createdByTask": "由其他任务创建",
+        "createdByTaskNamed": "由任务「{{title}}」创建",
+        "createdByRemoteTask": "由 {{device}} 上的任务创建",
+        "createdByRemoteTaskNamed": "由 {{device}} 上的任务「{{title}}」创建"
       }
     },
     "rename": {
@@ -17577,7 +17737,9 @@
       "orcaRemoteLead": "来自 {{device}} 的协同",
       "orcaRemoteLeadReleased": "协同已结束 · 来自 {{device}}",
       "orcaRemoteLeadUnknownDevice": "另一台电脑",
-      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任务、目录和命令都在这台电脑运行；你在这里发的消息不会回报给 Lead。"
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任务、目录和命令都在这台电脑运行；你在这里发的消息不会回报给 Lead。",
+      "createdByTask": "来自其他任务",
+      "createdByTaskNamed": "来自「{{title}}」"
     },
     "gitContext": {
       "detached": "分离 HEAD",
@@ -17781,8 +17943,8 @@
           }
         },
         "gitlab": {
-          "missing": "未检测到 GitLab CLI（glab），看不到 MR 状态。安装 glab 并登录后即可显示。",
-          "notLoggedIn": "本机 glab 尚未登录 {{host}}，看不到 MR 状态。在终端运行 glab auth login 登录后即可显示。",
+          "missing": "未检测到 GitLab CLI（glab），GitLab 插件里也没有这个实例的连接，看不到 MR 状态。安装并登录 glab，或在 GitLab 插件里添加该实例后即可显示。",
+          "notLoggedIn": "本机 glab 尚未登录 {{host}}，GitLab 插件里也没有这个实例的连接，看不到 MR 状态。在终端运行 glab auth login，或在 GitLab 插件里添加该实例后即可显示。",
           "unsupported": "此电脑暂不支持 GitLab MR 状态",
           "openAria": "在浏览器中打开 MR !{{number}}",
           "summaryAria": "MR !{{number}} 汇总",
@@ -18008,6 +18170,13 @@
         "active": "筛选 {{count}}",
         "reset": "重置",
         "allProjects": "所有项目"
+      },
+      "match": {
+        "label": "关键词匹配",
+        "any": "任意关键词",
+        "all": "全部关键词",
+        "help": "选择“全部关键词”后，用空格分开关键词，要求同一条消息全部包含。用“精确短语”匹配连续文字。标题单独匹配。",
+        "partial": "结果可能不完整，请使用更具体的关键词或限定项目。"
       }
     }
   },
@@ -18208,7 +18377,8 @@
         "pause": "暂停",
         "deleteAutomation": "删除自动化"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "插件事件"
     },
     "detail": {
       "manualTrigger": "手动触发",
@@ -18317,7 +18487,7 @@
           "sessions_dispatch": "派发任务",
           "feishu_read": "读取飞书消息",
           "settings_read": "读取分享成员",
-          "usage_read": "读取用量与供应商组状态"
+          "usage_read": "读取用量与电脑组状态"
         },
         "project": "项目目录",
         "capabilitiesLabel": "允许调用的能力",
@@ -18331,7 +18501,7 @@
           "sessions_dispatch": "创建或唤醒 {{appName}} 任务并投递消息",
           "feishu_read": "列出最近活跃的对话；拉取指定对话（群聊或单聊）的最近消息",
           "settings_read": "读取自己分享的成员及模型范围，含同账号已授权电脑；不修改",
-          "usage_read": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、供应商组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置"
+          "usage_read": "读取当前 Cindy 账号在本机已连接的 Claude/Codex 账号标识、套餐、配额窗口和更新时间，以及本机或同账号已授权其他电脑上已记录的每日/型号用量、估算费用、电脑组配置与状态、可见的成员和设备标识、名称及头像。不能读取订阅登录邮箱、账号目录、内部指纹、凭证或文件，也不能修改账号或设置"
         },
         "capabilityWarn": {
           "ghostMissing": "依赖「{{name}}」插件，但该插件未安装——运行时此能力会失败",
@@ -18549,11 +18719,123 @@
         "cindyConnectionTitle": "GitHub · 通过 Cindy 连接",
         "manualConnectionTitle": "GitHub · 手动 Webhook",
         "githubAppHint": "请在运行此任务的电脑上连接 GitHub App，并授权这些仓库，无需另设 Webhook 地址或密钥。",
-        "githubAppPaused": "此任务已暂停，事件不会启动它。"
+        "githubAppPaused": "此任务已暂停，事件不会启动它。",
+        "plugin": {
+          "source": "插件事件",
+          "label": "选择插件和事件",
+          "empty": "本机还没有能提供事件的插件。安装并启用声明了事件的插件后，可以在这里选择。",
+          "unavailable": "插件不可用",
+          "remove": "移除",
+          "hint": "插件不会替你过滤任何事件，包括这个自动化自己发出的消息；要不要处理，请在提示词或前置检查里说明。电脑休眠、关机或插件停用期间的事件收不到。",
+          "offlineHint": "电脑休眠、关机或插件停用期间的事件收不到；不能漏掉事件时，请再加一个定时检查。",
+          "required": "请至少选择一个插件事件",
+          "state": {
+            "listening": "正在监听",
+            "disconnected": "已断开",
+            "error": "连接出错",
+            "stopped": "未运行",
+            "unknown": "等待插件报告状态"
+          },
+          "filterOnly": "只看",
+          "filterField": "字段",
+          "filterOperator": "条件",
+          "filterValue": "值",
+          "filterRemove": "删除条件",
+          "filterAdd": "添加「只看」条件",
+          "operators": {
+            "equals": "等于",
+            "contains": "包含",
+            "not-equals": "不等于"
+          }
+        },
+        "scopeLabel": "范围",
+        "scope": {
+          "repository": "整个仓库",
+          "repositoryHint": "仓库里有新事件时运行，例如新 PR、评论、CI 完成。",
+          "repositoryNeedsAccount": "需要登录 Cindy 账号才能接收仓库事件。",
+          "item": "指定 PR 或 Issue",
+          "itemHint": "只盯一条 PR 或 Issue：PR 在状态确实变化时运行，Issue 在有新动态时运行。",
+          "project": "整个项目",
+          "projectHint": "项目里有新事件时运行，例如新 MR、Issue、流水线完成。",
+          "gitlabItem": "指定 MR 或 Issue",
+          "gitlabItemHint": "只盯一个 MR 或 Issue：MR 在状态确实变化时运行，Issue 在有变化时运行。"
+        },
+        "item": {
+          "label": "PR 或 Issue",
+          "placeholder": "42、#42、owner/repo#42 或链接",
+          "hint": "填编号、owner/repo#编号，或粘贴 PR / Issue 链接，Cindy 会自动识别是哪一种。",
+          "resolving": "正在识别…",
+          "pr": "PR #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "已关闭",
+          "required": "请填写要盯的 PR 或 Issue，并等它识别完成。",
+          "issueHint": "指定 Issue 通过 Cindy 连接的 GitHub App 接收事件，需要登录 Cindy 账号。",
+          "errors": {
+            "invalid": "请填编号、#编号、owner/repo#编号，或 GitHub 上的 PR / Issue 链接。",
+            "no-repository": "只填编号时需要知道仓库，请写成 owner/repo#42，或粘贴链接。",
+            "not-connected": "连接 GitHub 后才能识别是 PR 还是 Issue。",
+            "not-found": "这个仓库里没有找到这个编号，或者你没有访问权限。",
+            "unavailable": "暂时连不上 GitHub，请稍后再试。",
+            "needs-account": "这是一个 Issue。指定 Issue 需要登录 Cindy 账号，并通过 Cindy 连接 GitHub。"
+          },
+          "issueChange": {
+            "any": "Issue 有新动态",
+            "comment": "有新评论",
+            "closed": "Issue 已关闭",
+            "reopened": "Issue 重新打开"
+          },
+          "mr": "MR !{{number}}"
+        },
+        "gitlabSignedConnection": "签名令牌（GitLab 19 及以上）",
+        "gitlabSignedConnectionHint": "在 GitLab 项目的 Webhook 设置里使用签名令牌，安全性更高。",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "适用于较早版本的 GitLab：在 Webhook 设置里填写 Secret token。",
+        "gitlabPluginConnection": "通过 GitLab 插件",
+        "gitlabPluginConnectionHint": "用 GitLab 插件里连好的账号每分钟检查一次，不用在 GitLab 配置 Webhook，也不需要登录 Cindy 账号。电脑休眠或关机期间的变化不会补发。",
+        "gitlabMrPollConnection": "定时读取状态",
+        "gitlabMrPollConnectionHint": "按「同时定时检查」的时间读取 MR 状态（不运行任务），优先使用插件里添加的账号，其次使用本机 glab 登录。",
+        "gitlabSetupHint": "保存后在任务详情里拿到接收地址和密钥，填到 GitLab 项目的「设置 › Webhooks」。",
+        "gitlabItem": {
+          "label": "MR 或 Issue",
+          "placeholder": "!12、#12、group/project!12 或链接",
+          "hint": "MR 写 !编号，Issue 写 #编号，也可以直接粘贴链接。",
+          "required": "请填写要盯的 MR 或 Issue。",
+          "mrHint": "GitLab 没有推送通知，Cindy 会按「同时定时检查」的时间读取 MR 状态（不运行任务），使用这台电脑的 glab 登录，或 GitLab 插件里连好的账号。",
+          "mrPluginHint": "GitLab 插件每分钟检查一次这个 MR，包括新提交、新评论、批准和流水线结果。",
+          "issueHint": "通过 GitLab Webhook 接收这个 Issue 的变化。评论事件无法区分 MR 和 Issue，所以只响应 Issue 本身的新建、编辑、关闭和重新打开。",
+          "issuePluginHint": "GitLab 插件每分钟检查一次这个 Issue，包括新评论。",
+          "errors": {
+            "invalid": "请按 !12（MR）、#12（Issue）或 group/project!12 的格式填写，也可以粘贴 GitLab 上的链接。",
+            "ambiguous": "GitLab 的 MR 和 Issue 编号是分开的，请写 !12（MR）或 #12（Issue），或粘贴链接。",
+            "needs-link": "指定 MR 需要知道 GitLab 实例，请粘贴 MR 链接。",
+            "needs-account": "这是一个 Issue。指定 GitLab Issue 需要安装 GitLab 插件，或登录 Cindy 账号以接收 GitLab Webhook。"
+          },
+          "mrChange": {
+            "any": "MR 有新动态",
+            "merged": "MR 已合并",
+            "review": "评审有新动态",
+            "ci": "流水线状态变化"
+          },
+          "issueChange": {
+            "any": "Issue 有变化",
+            "comment": "Issue 有新评论",
+            "closed": "Issue 已关闭",
+            "reopened": "Issue 重新打开"
+          }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "项目",
+          "projectHint": "填 group/project 或项目链接。GitLab 插件连接了多个实例时，请粘贴链接。",
+          "projectInvalid": "请填写 group/project 或 https 开头的项目链接。",
+          "eventsLabel": "事件",
+          "eventsHint": "都不勾表示响应这个项目的全部事件。",
+          "unavailable": "GitLab 插件未安装或已停用，请在「插件」里启用后再保存。"
+        }
       },
       "trigger": {
         "label": "触发方式",
-        "timed": "定时"
+        "timed": "定时",
+        "event": "事件"
       },
       "runSettings": "运行设置"
     },
@@ -18632,7 +18914,7 @@
         "categoryListAria": "{{category}} 模型",
         "effortListAria": "推理强度",
         "boundLocationLocked": "绑定的任务在原来的电脑上运行，请选择那台电脑上的模型。",
-        "modelGroupTitle": "模型组「{{name}}」：新建任务时按模式选来源"
+        "modelGroupTitle": "智能路由「{{name}}」：新建任务时按模式选来源"
       }
     },
     "toast": {
@@ -18844,7 +19126,26 @@
         "reconnectConfirm": "重新连接 Webhook？",
         "reconnectConfirmHint": "将占用一个名额并生成新的接收地址。请把新地址和密钥更新到发送方。",
         "reconnectFailed": "暂时无法重新连接，请检查剩余名额后重试。"
-      }
+      },
+      "pluginTitle": "插件事件触发"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} 条已暂停的 PR 跟进",
+      "viewPaused": "查看",
+      "resumeAll": "全部恢复",
+      "cleanMerged": "清理已合并",
+      "checking": "检查中…",
+      "resumeAllConfirmTitle": "恢复 {{count}} 条已暂停的 PR 跟进？",
+      "resumeAllConfirmDescription": "将恢复当前视图下全部已暂停的 PR 自动化，并重新计算下次定时检查时间。",
+      "resumeAllConfirmAction": "全部恢复",
+      "resumeAllDone": "已恢复 {{count}} 条 PR 跟进",
+      "resumeAllPartial": "已恢复 {{resumed}} 条 PR 跟进（{{failed}} 条失败）",
+      "noMergedFound": "已暂停的 PR 自动化中未发现已合并或已关闭的 PR",
+      "cleanMergedConfirmTitle": "删除 {{count}} 条已结束的 PR 自动化？",
+      "cleanMergedConfirmDescription": "以下已暂停自动化对应的 PR 已合并或关闭：{{names}}",
+      "cleanMergedConfirmAction": "删除",
+      "cleanMergedDone": "已删除 {{count}} 条已结束的 PR 自动化",
+      "checkFailed": "暂时无法检查 PR 状态"
     }
   },
   "issueTracker": {
@@ -20075,6 +20376,9 @@
       "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。",
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
       "hostShellCommandBlocked": "Cindy 已阻止这条 Shell 命令。请检查命令，并使用可用的工具或命令继续。",
+      "reconnectAutoResumeExhausted": "自动续跑已达到重试次数上限。",
+      "reconnectAutoResumeDisabled": "自动续跑已关闭。",
+      "codexReconnectStalled": "模型连接在 2 分钟内未能恢复。",
       "upstreamResponseIdleTimeout": "模型长时间没有任何响应，本轮已自动中断以免无限等待。已完成的工具调用都保留，可以直接发下一条消息继续。",
       "codexHistoryOversized": "图片历史太大，没能自动恢复。请发送「继续」，Cindy 会接着完成当前任务。",
       "codexHistoryOversizedRemote": "这段历史里有过大的图片，远端压缩无法完成。请在运行 Codex 的那台电脑上打开任务后再发送，Cindy 会自动略去这些图片并继续。",
@@ -21121,7 +21425,7 @@
   "routines": {
     "hourly": "每小时",
     "everyMinutes": "每 {{count}} 分钟",
-    "pluginCapability": "向例行任务提交已声明的事件，只触发你配置的例行任务",
+    "pluginCapability": "向自动化提交已声明的事件，只触发选了这个插件的自动化",
     "advancedSettings": "高级设置"
   },
   "cindyMakeDoctor": {
@@ -22748,9 +23052,6 @@
     "lineNumbers": "行号"
   },
   "openAiAccountGroup": {
-    "strategy": "账号组策略",
-    "leastHint": "优先分给运行任务最少的连接",
-    "quotaHint": "能读取订阅用量时，会先按用量筛选连接，再按组策略分配。",
     "removeDescription": "此连接将不再接收组内的新任务。正在运行的任务仍留在原连接。",
     "mergeDescription": "从 {{target}} 新建的任务可以使用这两个供应商。登录、密钥和已有任务保留在原处。建立调度关系前，Cindy 会测试 {{apiKey}} 的 API Key。",
     "modelUnavailable": "此连接无法调用本次自动选中的模型。再次测试可尝试其他候选。",
@@ -22806,6 +23107,30 @@
     "loginMayHaveExpired": "登录可能已到期",
     "loginExpiryUnknown": "登录到期时间未知",
     "loginExpiryDetail": "预计到期：{{date}}。这是 Claude 提供的估计时间，登录可能提前失效。",
+    "longLivedToken": {
+      "tag": "长期令牌",
+      "use": "改用长期令牌（约一年）",
+      "renew": "重新生成长期令牌",
+      "remove": "停用长期令牌",
+      "confirmTitle": "让 {{name}} 改用长期令牌？",
+      "confirmDescription": "浏览器会打开 Claude 的授权页，请在那里选择同一个账号。令牌有效期约一年，保存在这台电脑上，普通登录到期后任务仍可继续运行。",
+      "confirmAction": "去浏览器授权",
+      "removeTitle": "停用 {{name}} 的长期令牌？",
+      "removeDescription": "令牌会从这台电脑删除，账号回到普通登录。令牌在 Anthropic 那边仍然有效，直到到期。",
+      "removeAction": "停用",
+      "expiresInDays": "令牌约 {{days}} 天后到期",
+      "mayHaveExpired": "令牌可能已到期",
+      "active": "正在使用长期令牌",
+      "detailExpiry": "预计到期：{{date}}。",
+      "detailLoginActive": "普通登录仍然有效，账号信息和用量可以实时读取。",
+      "detailLoginEnded": "普通登录已结束。用量在任务运行时更新；重新登录后可随时刷新。",
+      "detailPending": "还没有核对令牌是否属于这个账号，第一个任务运行时会核对。",
+      "detailSettingsOnly": "在这台电脑上，普通登录结束后，令牌不能用于替其他电脑运行的任务和隔离模式的伙伴。",
+      "mismatchStatus": "令牌属于另一个账号",
+      "needsLogin": "请先登录这个账号，再生成长期令牌。",
+      "notPermitted": "你的组织不允许使用长期令牌。",
+      "unsupported": "这个账号在这台电脑上不能使用长期令牌。"
+    },
     "loginAccountAria": "重新登录 {{name}}",
     "loginIdentityMismatchStatus": "登录账号不符",
     "loginIdentityMismatch": "登录的账号与所选账号不一致。请重新登录，选择列表中的这个账号。",
@@ -22822,7 +23147,6 @@
       "useCodex": "使用 Codex 登录"
     },
     "title": "订阅账号",
-    "strategy": "负载均衡",
     "add": "添加账号",
     "defaultTag": "默认",
     "ready": "已连接",
@@ -22897,14 +23221,14 @@
     "refreshFailed": "主题已装入，但列表未能刷新，请在外观设置中刷新"
   },
   "modelGroups": {
-    "title": "模型组",
-    "description": "把模型供应商里已有的几个来源合成一个可选项。选模型时在「模型组」里选它，由 Cindy 决定这次用哪个来源。",
-    "routes": "模式",
-    "routesDescription": "一个模式里放几个来源，开新任务时按选法挑一个。",
+    "title": "智能路由",
+    "description": "把模型供应商里已有的几个来源合成一个可选项。选模型时在「智能路由」里选它，由 Cindy 决定这次用哪个来源。",
+    "routes": "路由",
+    "routesDescription": "把几个来源合成一个选项。来源可以是整个供应商（照常选模型，由路由决定用哪个），也可以是某个指定的模型。同一家的几个供应商会自动合好。",
     "sourceCount_other": "{{count}} 个来源",
     "strategy": {
       "expiring": {
-        "title": "快作废的先用",
+        "title": "自动",
         "hint": "剩得多又快重置的订阅配额先用，不浪费；读不到配额的来源排在后面。"
       },
       "order": {
@@ -22933,12 +23257,18 @@
       }
     },
     "picker": {
-      "empty": "还没有模型组。在设置里把几个来源合成一个模式，就能在这里选它。",
-      "manage": "管理模型组",
-      "deviceTitle": "模型组 · {{device}}",
+      "empty": "还没有智能路由。在设置里把几个来源合成一个路由，就能在这里选它。",
+      "manage": "管理智能路由",
+      "deviceTitle": "智能路由 · {{device}}",
       "switched": "「{{name}}」把这个任务换成了 {{model}}",
       "switchUnavailable": "「{{name}}」里现在没有能给这个任务用的来源，模型没换。",
-      "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。"
+      "chooseUnavailable": "「{{name}}」里现在没有能用的来源，没有选它。",
+      "mergedLabel_other": "{{name}} · 路由（{{count}} 个来源）",
+      "routeDecides": "这次用哪个来源由路由「{{name}}」决定",
+      "quotaOf": "配额：{{name}}",
+      "managedBy": "当前由「{{name}}」持续托管",
+      "detach": "解除托管",
+      "detached": "已解除智能路由托管，保留当前模型"
     },
     "why": {
       "expiringQuota": "还剩 {{left}}% 配额，{{reset}} 重置，先用它",
@@ -22950,7 +23280,7 @@
       "soonestUntil": "所有来源的配额都用完了，它最早恢复（{{reset}}）",
       "standby": "这次没轮到",
       "standbyQuota": "还剩 {{left}}% 配额，{{reset}} 才重置，先留着",
-      "off": "已在这个模式里停用",
+      "off": "已在这个路由里停用",
       "unavailable": "没有连接，或这个模型现在不可选",
       "limited": "配额用完了",
       "limitedUntil": "配额用完了，{{reset}} 恢复",
@@ -22971,17 +23301,18 @@
     "settings": {
       "autoSwitch": {
         "title": "出问题时自动换来源",
-        "hint": "这个模式正在用的来源出问题时，自动换到下一个能用的来源，并在那一轮下面写明。关掉后只在出错时提议换来源。"
+        "hint": "这条路由正在用的来源出问题时，自动换到下一个能用的来源，并在那一轮下面写明。关掉后只在出错时提议换来源。"
       },
-      "newRoute": "新建模式",
-      "newRouteName": "新模式",
-      "routesEmpty": "还没有模式。新建一个，把几个来源放进去。",
-      "scopeNote": "模型组用于这台电脑上的任务：开新任务时选定一个来源；在进行中的任务里选它，会当场换一次，之后不会自己换。",
-      "back": "返回模型组",
+      "newRoute": "新建路由",
+      "newRouteName": "新路由",
+      "routesEmpty": "还没有路由。新建一个，把几个来源放进去。",
+      "scopeNote": "智能路由适用于这台电脑及已接入入口的任务：开新任务或在任务中途选定路由后，将持续托管该任务——每轮发前检查可用性与配额、带图自动切视觉来源、保护提示缓存并在故障时自动接替，直到你解除托管或手动改选具体模型。",
+      "back": "返回智能路由",
       "name": "名字",
       "nameHint": "选模型时显示这个名字。",
-      "routeShownAs": "选模型时在「模型组」里显示。",
+      "routeShownAs": "选模型时在「智能路由」里显示。",
       "pick": "这次用哪个",
+      "moreStrategies": "更多选法",
       "effort": "推理强度",
       "effortUnset": "不指定",
       "effortHint": "选中的模型不支持这一档时，按它的默认档运行。",
@@ -22991,14 +23322,15 @@
       "sources": "可以用的来源",
       "sourcesHint": "可以放不同的模型；实际用了哪个会写在任务里。",
       "sourcesEmpty": "还没有来源。从下面添加已经连接的模型。",
-      "sourcesFull": "一个模式最多 {{count}} 个来源。",
+      "sourcesEmptyMerged": "还没有来源。从下面添加已经连接的供应商。",
+      "sourcesFull": "一个路由最多 {{count}} 个来源。",
       "addSource": "添加来源",
       "chooseModel": "选一个模型",
       "notConnected": "没有连接",
       "moveUp": "上移",
       "moveDown": "下移",
-      "remove": "移出这个模式",
-      "useSource": "让这个模式使用 {{name}}",
+      "remove": "移出这个路由",
+      "useSource": "让这个路由使用 {{name}}",
       "try": {
         "title": "试一下",
         "hint": "看看现在开新任务会用谁。不发消息，不花配额。",
@@ -23006,11 +23338,14 @@
         "picked": "用它",
         "standby": "备用",
         "skipped": "跳过",
-        "unavailable": "这个模式里现在没有能用的来源，新任务会用你原来选的模型。"
+        "unavailable": "这个路由里现在没有能用的来源，新任务会用你原来选的模型。",
+        "failed": "没能试出结果，请重试。",
+        "model": "试哪个模型"
       },
-      "deleteRoute": "删除这个模式",
+      "deleteRoute": "删除这个路由",
       "deleteRouteConfirmTitle": "删除「{{name}}」？",
-      "deleteRouteConfirmDescription": "别的模式里改走它的时段例外会一起删除。已经开始的任务不受影响。",
+      "deleteRouteConfirmDescription": "别的路由里改走它的时段例外会一起删除。已经开始的任务不受影响。",
+      "deleteMergedRouteConfirmDescription": "已经开始的任务不受影响。",
       "delete": "删除",
       "cancel": "取消",
       "saveFailed": "没有保存成功，请重试。",
@@ -23035,23 +23370,71 @@
         "addHours": "添加",
         "sameHour": "开始和结束不能是同一个时刻。",
         "full": "最多 {{count}} 条例外。",
-        "needOtherRoute": "再建一个模式，才能按时段改走它。"
+        "needOtherRoute": "再建一个路由，才能按时段改走它。"
       }
     },
     "overview": {
       "mapTitle": "现在怎么走",
-      "mapDescription": "从左到右：走哪个模式，最后落到哪个来源。点模式可以修改。",
+      "mapDescription": "从左到右：走哪个路由，最后落到哪个来源。点路由可以修改。",
       "columnSources": "来源",
       "columnEmpty": "还没有",
-      "openRoute": "打开模式「{{name}}」",
+      "openRoute": "打开路由「{{name}}」",
       "recentTitle": "最近的选择",
-      "recentEmpty": "还没有任务用过模式。",
+      "recentEmpty": "还没有任务用过路由。",
       "keptOriginal": "里面没有现在能用的模型，沿用了原来选的模型。",
       "keptOriginalShort": "沿用原来的模型",
       "latest": "最近一次任务走的路"
     },
     "switchOffer": {
       "action": "换到 {{model}} 继续"
+    },
+    "auto": {
+      "accounts_other": "{{count}} 个账号",
+      "computers_other": "{{count}} 台电脑",
+      "pickFor": "{{name}} 的选法",
+      "hiddenTag": "已隐藏",
+      "show": "选模型时显示",
+      "assignedBy": "新任务按「{{strategy}}」分配",
+      "adjust": "在智能路由里调整"
+    },
+    "sources": {
+      "models_other": "{{count}} 个模型",
+      "autoTag": "自动",
+      "chooseProvider": "选择供应商",
+      "removeAria": "把 {{name}} 从这条路由里去掉",
+      "note": "自动合成的路由跟着供应商的连接增减：不能添加或移出成员，但可以调先后、填权重、停用某个成员，也可以改选法或隐藏。",
+      "providers_other": "{{count}} 个供应商",
+      "addWhole": "添加整个供应商",
+      "addWholeHint": "它的全部模型都进这条路由：选模型时这条路由像一个供应商，照常选模型，由路由决定这次用哪个成员。",
+      "addModelHint": "只加某个供应商的某个模型：选这条路由时按选法在这些来源里挑一个。",
+      "detailHint": "这条路由合并的是整个供应商：选模型时它像一个供应商，照常选模型、推理强度，由路由决定这次用哪个成员。"
+    },
+    "kinds": {
+      "byModel": "按模型",
+      "byProvider": "按供应商"
+    },
+    "buddies": {
+      "title": "伙伴的模型",
+      "description": "伙伴都用一个默认模型，个别需要不同的再单独设置。想让伙伴出问题时自动换来源，就选一条智能路由。",
+      "saveFailed": "伙伴的模型没有保存，请重试",
+      "defaultLabel": "默认模型",
+      "defaultHint": "伙伴默认都用它，新建的和从别的电脑接过来的伙伴也用它。",
+      "ownTitle": "单独设置的伙伴",
+      "ownTitleWithRest_other": "单独设置的伙伴 · 其余 {{count}} 位用默认",
+      "addOwn": "为一位伙伴单独设置",
+      "allFollow": "现在所有伙伴都用默认模型。",
+      "otherComputers": "其他电脑上的伙伴",
+      "deviceBuddies_other": "{{count}} 位伙伴",
+      "devicePageTitle": "{{device}} 上的伙伴",
+      "devicePageHint": "从那台电脑能用的模型和智能路由里选，保存在那台电脑上。",
+      "deviceDefaultReadOnly": "那台电脑更新到新版本后，才能在这里改它的默认模型。",
+      "deviceUnavailable": "现在读不到那台电脑的伙伴设置。确认它在线后再打开。",
+      "deviceLoading": "正在读取那台电脑的设置…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "当前来源暂不可用或配额已满，发前自动切换",
+      "imageInput": "本轮包含图片，自动切换到支持视觉的来源",
+      "cacheExpired": "缓存窗口已过，按路由策略重新挑选来源"
     }
   },
   "projectSettings": {

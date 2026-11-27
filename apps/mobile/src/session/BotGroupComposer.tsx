@@ -34,6 +34,7 @@ import {
   retainBotGroupTrackedMentions,
   type BotGroupTrackedMention,
 } from '@cindy/maker-shared/botGroupMentions';
+import { createBotGroupMemberSearch } from '@cindy/maker-shared/botGroupMemberSearch';
 import {
   chatGroupMentionRoster,
   isActiveBotGroupMember,
@@ -80,12 +81,14 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  pullThrough, members, identityFor, deviceId, online, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
+  pullThrough, members, conversationKind, identityFor, deviceId, online, allowMentionAll = true, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
 }: {
   pullThrough?: ComposerPullThroughBridge;
   maskIndicator?: import('react').ReactNode;
   onParticipate?(): void;
   members: readonly BotGroupMemberView[];
+  conversationKind?: 'direct';
+  allowMentionAll?: boolean;
   allowMentionAllBots?: boolean;
   identityFor: BotGroupIdentityLookup;
   deviceId: string;
@@ -158,23 +161,25 @@ export function BotGroupComposer({
   const mediaLibraryEnabled = canBrowsePhotoLibraryDirectly(Platform.OS);
 
   const activeMembers = useMemo(() => members.filter(isActiveBotGroupMember), [members]);
-  const mentionMembers = useMemo(() => chatGroupMentionRoster(members), [members]);
+  const mentionMembers = useMemo(() => chatGroupMentionRoster(members, conversationKind), [members, conversationKind]);
   const mentionCandidates = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
+  const searchMembers = useMemo(() => createBotGroupMemberSearch(mentionCandidates), [mentionCandidates]);
   const allLabel = t('groupChat.mention.all');
   const allBotsLabel = t('groupChat.mention.allBots');
   const allBotLabels = [allBotsLabel, 'bots'];
   const query = focused ? findBotGroupMentionQuery(text, caret, mentionCandidates) : null;
+  const queryText = query?.query;
   const options = useMemo<MentionOption[]>(() => {
-    if (!query || mentionCandidates.length === 0) return [];
-    const everyone: MentionOption[] = filterBotGroupMentionCandidates(query.query, [{ name: allLabel }]).length > 0
+    if (queryText === undefined || mentionCandidates.length === 0) return [];
+    const everyone: MentionOption[] = allowMentionAll && filterBotGroupMentionCandidates(queryText, [{ name: allLabel }]).length > 0
       ? [{ kind: 'all', label: allLabel }]
       : [];
-    const people = filterBotGroupMentionCandidates(query.query, mentionCandidates)
+    const people = searchMembers(queryText)
       .map((member): MentionOption => ({ kind: 'member', label: member.name, member }));
-    const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(query.query, [{ name: allBotsLabel }]).length
+    const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(queryText, [{ name: allBotsLabel }]).length
       ? [{ kind: 'allBots', label: allBotsLabel }] : [];
     return [...everyone, ...allBots, ...people];
-  }, [mentionCandidates, allLabel, allBotsLabel, allowMentionAllBots, query]);
+  }, [mentionCandidates.length, allLabel, allBotsLabel, allowMentionAll, allowMentionAllBots, queryText, searchMembers]);
   const pickerOpen = query !== null && options.length > 0;
 
   const trimmed = text.trim();

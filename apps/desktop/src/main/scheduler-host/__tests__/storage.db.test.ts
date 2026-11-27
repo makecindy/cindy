@@ -14,13 +14,14 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as schema from '../../localDb/schema';
 import { createDbClient } from '../../localDb/client/DbClient';
 import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
 import { applyAgentSwitchToSessionRowWithPorts } from '../../localDb/agentSwitchRows';
 import { recordScheduleRunCostDirect, applyScheduleRunCostMetaChange } from '../runCostLedger';
+import { DrizzleScheduleStorage as CoreDrizzleScheduleStorage } from '../storage';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
 
 function actualMoneyFromLegacyUsd(amountUsd: number) {
@@ -926,9 +927,9 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
-  // #12397, DB tier. A second writer repoints one rule without changing the
+  // #12397, DB tier. A second writer repoints one persistent rule without changing the
   // count, status, or due time. Both affected picker entries must refresh.
-  it('refreshes plugin eligibility when another writer changes a schedule binding', async () => {
+  it('refreshes plugin eligibility when another writer changes a persistent schedule binding', async () => {
     const { db, storage, close } = createStorageHarness();
     const other = new DrizzleScheduleStorage(() => db);
     try {
@@ -939,7 +940,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
           id, scheduleId: 'run-rule', sessionId: id, firedAt: 1, finishedAt: 2, status: 'success',
         });
       }
-      await other.insert(baseSchedule({ id: 'binding', targetSessionId: 'old-target' }));
+      await other.insert(baseSchedule({ id: 'binding', targetSessionId: 'old-target', persistentSession: true }));
       const picker = async (id: string) =>
         (await storage.listSidebarIndexRuns()).findLast(run => run.sessionId === id)?.canSwitchPluginEngine === true;
       await expect(picker('old-target')).resolves.toBe(false);
@@ -2243,10 +2244,10 @@ it('offers the same plugin switch eligibility in the sidebar and send guard', as
   }
 });
 
-// #12397, DB tier. Two SQLite connections pass the initial checks while
-// the task is still on a builtin engine. In either commit order only the
-// first operation may succeed, even without a shared JavaScript lock.
-it.each(['create', 'update'])('serializes plugin switching with a binding from another connection (%s)', async operation => {
+// 2026-11-27 (docs/plans/acp-plugin-bridge.md), DB tier. Persistent and
+// teammate-routine bindings are now fully supported on plugin-engine tasks in
+// either commit order (bind-first or switch-first, via insert or update).
+it.each(['create', 'update'])('allows plugin switching alongside a persistent binding from another connection (%s)', async operation => {
   const dir = mkdtempSync(join(tmpdir(), 'cindy-schedule-route-'));
   const dbPath = join(dir, 'schedule.sqlite');
   const { db, storage, close } = createStorageHarness(undefined, dbPath);
@@ -2265,7 +2266,7 @@ it.each(['create', 'update'])('serializes plugin switching with a binding from a
       await storage.insertRun({
         id: sessionId, scheduleId: 'run-rule', sessionId, firedAt: 1, finishedAt: 2, status: 'success',
       });
-      const rule = baseSchedule({ id: `rule-${sessionId}` });
+      const rule = baseSchedule({ id: `rule-${sessionId}`, persistentSession: true });
       if (operation === 'update') await storage.insert(rule);
       expect(await storage.canSwitchCompletedAutomationSession(sessionId)).toBe(true);
       expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('cc');
@@ -2277,13 +2278,13 @@ it.each(['create', 'update'])('serializes plugin switching with a binding from a
       );
 
       if (sessionId === 'bind-first') {
-        await expect(bind()).resolves.toMatchObject({ targetSessionId: sessionId });
-        await expect(switchRoute()).rejects.toThrow('[PRECONDITION_FAILED]');
-        expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('cc');
+        await expect(bind()).resolves.toMatchObject({ targetSessionId: sessionId, persistentSession: true });
+        await expect(switchRoute()).resolves.toBeUndefined();
+        expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('acp');
       } else {
         await switchRoute();
-        await expect(bind()).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
-        expect((await storage.get(rule.id))?.targetSessionId).toBeUndefined();
+        await expect(bind()).resolves.toMatchObject({ targetSessionId: sessionId, persistentSession: true });
+        expect((await storage.get(rule.id))?.targetSessionId).toBe(sessionId);
         expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('acp');
       }
     }
@@ -2293,6 +2294,68 @@ it.each(['create', 'update'])('serializes plugin switching with a binding from a
     close();
     rmSync(dbPath);
     rmdirSync(dir);
+  }
+});
+
+// 2026-11-27 (docs/plans/acp-plugin-bridge.md), DB tier. Bound automations on
+// scheduler-created plugin-engine tasks (non-persistent follow-ups, persistent
+// session upgrades, and bot routines) all persist cleanly via insert and update.
+it('allows non-persistent, persistent, and bot routine bindings on scheduler-created plugin tasks', async () => {
+  const { db, storage, close } = createStorageHarness();
+  setCurrentDbClient({ drizzle: db } as unknown as DbClient, 'test-user');
+  const owner = {
+    captureOwnerScope: () => true,
+    isOwnerScopeCurrent: () => true,
+    broadcastSessionPatched: () => {},
+  };
+  try {
+    await storage.insert(baseSchedule({ id: 'parent-acp-rule', agentKind: 'acp', modelAgentKind: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-4-neon' }));
+    db.run(sql`INSERT INTO sessions (id, title, source, agent_kind, provider_id, model)
+      VALUES ('sched-acp-task', '#13254', 'scheduler', 'acp', 'acp-plugin:agy:agy', 'gemini-4-neon')`);
+    await storage.insertRun({
+      id: 'parent-run', scheduleId: 'parent-acp-rule', sessionId: 'sched-acp-task',
+      firedAt: 1, finishedAt: 2, status: 'success',
+    });
+
+    // PR auto-follow (persistentSession=false, source='user') binds via insert and update.
+    const prFollow = await storage.insert(baseSchedule({
+      id: 'pr-follow-insert',
+      name: 'PR #13254',
+      targetSessionId: 'sched-acp-task',
+      persistentSession: false,
+    }));
+    expect(prFollow).toMatchObject({ id: 'pr-follow-insert', targetSessionId: 'sched-acp-task', persistentSession: false });
+
+    await storage.insert(baseSchedule({ id: 'pr-follow-update', persistentSession: false }));
+    const updatedFollow = await storage.update('pr-follow-update', { targetSessionId: 'sched-acp-task' });
+    expect(updatedFollow).toMatchObject({ id: 'pr-follow-update', targetSessionId: 'sched-acp-task', persistentSession: false });
+
+    // Non-persistent bound follow-ups do not revoke plugin switch eligibility or block restoring ACP.
+    await expect(storage.canSwitchCompletedAutomationSession('sched-acp-task')).resolves.toBe(true);
+    expect((await storage.listSidebarIndexRuns()).findLast(run => run.sessionId === 'sched-acp-task')?.canSwitchPluginEngine).toBe(true);
+    await applyAgentSwitchToSessionRowWithPorts(
+      'sched-acp-task', { agentKind: 'codex', model: 'gpt-5.4', providerId: 'openai' }, owner,
+    );
+    await applyAgentSwitchToSessionRowWithPorts(
+      'sched-acp-task', { agentKind: 'acp', model: 'gemini-4-neon', providerId: 'acp-plugin:agy:agy' }, owner,
+    );
+
+    // Upgrading an existing binding on an ACP task to persistentSession=true and binding a bot routine succeed.
+    await expect(storage.update('pr-follow-insert', { persistentSession: true })).resolves.toMatchObject({
+      id: 'pr-follow-insert',
+      targetSessionId: 'sched-acp-task',
+      persistentSession: true,
+    });
+    await expect(storage.insert(baseSchedule({
+      id: 'bot-routine-bind', source: 'bot', targetSessionId: 'sched-acp-task', persistentSession: false,
+    }))).resolves.toMatchObject({
+      id: 'bot-routine-bind',
+      source: 'bot',
+      targetSessionId: 'sched-acp-task',
+    });
+  } finally {
+    clearCurrentDbClient();
+    close();
   }
 });
 
@@ -2531,5 +2594,174 @@ it('deduplicates a persistent permission mismatch until the heartbeat succeeds',
     // 真实恢复：一次成功执行之后，再出现同样的失配重新通知。
     await h.storage.insertRun({ id: 'recovered', scheduleId: 'sch-1', firedAt: 40, status: 'success' });
     expect(await h.storage.hasUnrecoveredMatchingFailure({ ...first, id: 'mismatch-4', firedAt: 50 })).toBe(false);
+  } finally { h.close(); }
+});
+
+it('tracks transient precheck outage duration in SQLite, skips session bump for quiet failures, and keeps banner visible', async () => {
+  const h = createStorageHarness();
+  const broadcastSessionPatched = vi.fn();
+  const storage = new CoreDrizzleScheduleStorage(() => h.db, broadcastSessionPatched);
+  try {
+    h.sqlite
+      .prepare(
+        `INSERT INTO sessions (id, title, agent_kind, working_dir, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+      )
+      .run('sess-pr', 'PR #1', 'claude-code', '/tmp/proj', 1_000, 1_000);
+    await storage.insert(baseSchedule({ targetSessionId: 'sess-pr' }));
+
+    const rateLimitHook = {
+      status: 'failed' as const,
+      decision: 'block' as const,
+      exitCode: 1,
+      durationMs: 15,
+      stdout: '',
+      stderr: 'GitHub API rate limit reached',
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      timedOut: false,
+      aborted: false,
+      prCheckDiagnosis: { kind: 'rate-limit' as const, device: 'Dash的Mac Studio', failures: 1, retryAt: 50_000 },
+    };
+    const quietHook = { ...rateLimitHook, transientQuiet: true as const };
+
+    // 1) Quiet transient failure: born-read, does NOT bump sessions.updatedAt or broadcast,
+    //    leaves unread count at 0, yet keeps latestFailedRun visible in listSidebarIndexRuns.
+    await storage.insertRun({ id: 'rl-1', scheduleId: 'sch-1', firedAt: 10_000, status: 'running' });
+    await storage.updateRun('rl-1', { preRunHookResult: quietHook });
+    await storage.updateRun('rl-1', {
+      status: 'failed',
+      finishedAt: 10_500,
+      readAt: 10_500,
+      errorMsg: 'pre-run hook failed: rate limit',
+      sessionId: 'sess-pr',
+    });
+    const sessionAfterQuiet = h.sqlite.prepare('SELECT updated_at FROM sessions WHERE id = ?').get('sess-pr') as { updated_at: number };
+    expect(sessionAfterQuiet.updated_at).toBe(1_000);
+    expect(broadcastSessionPatched).not.toHaveBeenCalled();
+    expect(await storage.getUnreadRunCount()).toBe(0);
+    const indexAfterQuiet = await storage.listSidebarIndexRuns();
+    expect(indexAfterQuiet.find((r) => r.runId === 'rl-1')).toMatchObject({
+      runId: 'rl-1',
+      status: 'failed',
+      readAt: 10_500,
+      failureRecovered: false,
+      failureKind: 'rate-limit',
+      prCheckDiagnosis: { kind: 'rate-limit', device: 'Dash的Mac Studio', failures: 1, retryAt: 50_000 },
+    });
+
+    // 2) Outage state reports rl-1 as firstUnrecoveredFiredAt and null lastEscalatedFiredAt;
+    //    hasUnrecoveredMatchingFailure ignores transientQuiet rows so the 24h fallback still notifies.
+    expect(await storage.getTransientPrecheckOutageState('sch-1', 'rl-next')).toEqual({
+      firstUnrecoveredFiredAt: 10_000,
+      lastEscalatedFiredAt: null,
+    });
+    expect(
+      await storage.hasUnrecoveredMatchingFailure({
+        id: 'rl-24h',
+        scheduleId: 'sch-1',
+        firedAt: 10_000 + 86_400_000,
+        status: 'failed',
+        errorMsg: 'pre-run hook failed: rate limit',
+        preRunHookResult: rateLimitHook,
+      }),
+    ).toBe(false);
+
+    // 3) Backoff skip without checkSucceeded keeps the outage open.
+    await storage.insertRun({
+      id: 'skip-backoff',
+      scheduleId: 'sch-1',
+      firedAt: 20_000,
+      status: 'skipped',
+      readAt: 20_000,
+      preRunHookResult: { ...rateLimitHook, status: 'skipped', decision: 'skip', exitCode: 2 },
+    });
+    expect(await storage.getTransientPrecheckOutageState('sch-1', 'rl-24h')).toEqual({
+      firstUnrecoveredFiredAt: 10_000,
+      lastEscalatedFiredAt: null,
+    });
+
+    // 4) Escalated failure (no transientQuiet, unread) bumps sessions.updatedAt, records lastEscalatedFiredAt,
+    //    and deduplicates subsequent matching notifications.
+    const escalatedAt = 10_000 + 86_400_000;
+    await storage.insertRun({ id: 'rl-24h', scheduleId: 'sch-1', firedAt: escalatedAt, status: 'running' });
+    await storage.updateRun('rl-24h', { preRunHookResult: rateLimitHook });
+    await storage.updateRun('rl-24h', {
+      status: 'failed',
+      finishedAt: escalatedAt + 500,
+      errorMsg: 'pre-run hook failed: rate limit',
+      sessionId: 'sess-pr',
+    });
+    const sessionAfterEscalation = h.sqlite.prepare('SELECT updated_at FROM sessions WHERE id = ?').get('sess-pr') as { updated_at: number };
+    expect(sessionAfterEscalation.updated_at).toBe(escalatedAt + 500);
+    expect(broadcastSessionPatched).toHaveBeenCalledWith('sess-pr', {
+      updatedAt: new Date(escalatedAt + 500).toISOString(),
+    });
+    expect(await storage.getUnreadRunCount()).toBe(1);
+    expect(await storage.getTransientPrecheckOutageState('sch-1', 'rl-after')).toEqual({
+      firstUnrecoveredFiredAt: 10_000,
+      lastEscalatedFiredAt: escalatedAt,
+    });
+    expect(
+      await storage.hasUnrecoveredMatchingFailure({
+        id: 'rl-after',
+        scheduleId: 'sch-1',
+        firedAt: escalatedAt + 1_000,
+        status: 'failed',
+        errorMsg: 'pre-run hook failed: rate limit',
+        preRunHookResult: rateLimitHook,
+      }),
+    ).toBe(true);
+    // 4b) After another full 24h (T = 48h) with the same errorMsg/stderr, the next fallback
+    //     escalation is NOT suppressed by Day 1's escalated row (Greptile P1).
+    expect(
+      await storage.hasUnrecoveredMatchingFailure({
+        id: 'rl-48h',
+        scheduleId: 'sch-1',
+        firedAt: escalatedAt + 86_400_000,
+        status: 'failed',
+        errorMsg: 'pre-run hook failed: rate limit',
+        preRunHookResult: rateLimitHook,
+      }),
+    ).toBe(false);
+    // Non-transient failures (e.g. auth) keep full unrecovered dedup even beyond 24h.
+    const authHook = {
+      ...rateLimitHook,
+      stderr: 'GitHub auth token expired',
+      prCheckDiagnosis: { kind: 'auth', device: 'Dash的Mac Studio', failures: 1 },
+    };
+    await storage.insertRun({
+      id: 'auth-1',
+      scheduleId: 'sch-1',
+      firedAt: escalatedAt + 10_000,
+      finishedAt: escalatedAt + 10_500,
+      status: 'failed',
+      errorMsg: 'pre-run hook failed: auth',
+      preRunHookResult: authHook,
+    });
+    expect(
+      await storage.hasUnrecoveredMatchingFailure({
+        id: 'auth-48h',
+        scheduleId: 'sch-1',
+        firedAt: escalatedAt + 10_000 + 86_400_000,
+        status: 'failed',
+        errorMsg: 'pre-run hook failed: auth',
+        preRunHookResult: authHook,
+      }),
+    ).toBe(true);
+
+    // 5) Healthy CINDY_PRECHECK_OK clears the outage state cleanly.
+    await storage.insertRun({
+      id: 'skip-ok',
+      scheduleId: 'sch-1',
+      firedAt: escalatedAt + 20_000,
+      status: 'skipped',
+      readAt: escalatedAt + 20_000,
+      preRunHookResult: { ...rateLimitHook, status: 'skipped', decision: 'skip', exitCode: 2, checkSucceeded: true },
+    });
+    expect(await storage.getTransientPrecheckOutageState('sch-1', 'rl-fresh')).toEqual({
+      firstUnrecoveredFiredAt: null,
+      lastEscalatedFiredAt: null,
+    });
   } finally { h.close(); }
 });

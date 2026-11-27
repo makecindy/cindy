@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isCanonicalBase64 } from '@cindy/maker-shared';
 import { ComposerDragTickets, DRAG_TICKET_METHOD, DRAG_TICKETS_INVALIDATED, invalidDragTicket } from './composerDrag.js';
 import { VIEW_STATE_KEY, VIEW_STATE_METHOD, VIEW_STATE_CAPABILITY, ViewStateWriter, viewStateError, viewStateSnapshot, type ViewStateStorage } from './viewState.js';
 import { createLogger } from '../logger.js';
@@ -119,7 +120,7 @@ async function readResourceBytes(result: unknown, uri: string): Promise<{ bytes:
   if (typeof item.blob === 'string') {
     if (Buffer.byteLength(item.blob, 'base64') > MCP_APP_COMPOSER_ATTACHMENT_MAX_BYTES)
       throw new Error('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE');
-    if (item.blob.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(item.blob))
+    if (!isCanonicalBase64(item.blob))
       throw new Error('MCP_APP_COMPOSER_ATTACHMENT_INVALID_RESOURCE');
     try {
       const decoded = Buffer.from(item.blob, 'base64');

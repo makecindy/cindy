@@ -168,11 +168,9 @@ export interface ThemeColors {
   permAutoAccent: string;
   /**
    * 伙伴列表未读点(信息蓝 #417CDD,L=D 同值)。对齐桌面 `--bot-unread-bg`(DESIGN.md「Bot Unread Badge」):
-   * 表示 IM 未读语义,用于伙伴列表行(伙伴与群聊)及群内话题入口的未读提示,不是 CTA、不是状态色,不得挪作他用。
+   * 表示 IM 未读语义,用于伙伴列表行(伙伴与群聊)、群内话题入口的未读提示和时间线未读分割线,不是 CTA、不是状态色,不得挪作他用。
    */
   botUnread: string;
-  /** 话题内新回复分界线及标签；列表与摘要继续使用 botUnread。 */
-  threadUnreadDivider: string;
   /**
    * PR 已合并图标色(焦点蓝 #417CDD,L=D 同值)。对齐桌面 PR_STATUS_COLOR.merged = `--focus-ring`;
    * 只用于 PR 状态图标,不得挪作他用。其余 PR 状态复用 statusDone / statusError / textTertiary。
@@ -495,7 +493,6 @@ export const lightColors: ThemeColors = {
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
-  threadUnreadDivider: '#D91F37',
   prMerged: '#417CDD',
   errorText: '#0F0F0F',
   destructive: '#f43d3f',
@@ -597,7 +594,6 @@ export const darkColors: ThemeColors = {
   statusDone: '#2AAE5B',
   permAutoAccent: '#417CDD',
   botUnread: '#417CDD',
-  threadUnreadDivider: '#FF667A',
   prMerged: '#417CDD',
   errorText: '#EDEDED',
   destructive: '#f43d3f',
@@ -813,6 +809,7 @@ export const fontWeight = {
  * 非标准配对(如 subtitle 字号 + listTitle 行高)手动组合两个 token,但禁止字面量。
  */
 export const textStyles = {
+  unreadDivider: { fontSize: typeScale.micro, lineHeight: lineHeight.micro, fontWeight: fontWeight.medium, letterSpacing: typeScale.micro * 0.08 },
   micro: { fontSize: typeScale.micro, lineHeight: lineHeight.micro },
   caption: { fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   footnote: { fontSize: typeScale.footnote, lineHeight: lineHeight.caption },
@@ -940,6 +937,8 @@ export const motionDuration = {
   exit: 150,
   /** 功能性 loading spinner 完整一圈(§14.4 窄例外) */
   spinnerCycle: 1000,
+  /** Desktop 流式正文逐词淡入时长(§14.4 窄例外;双端 token 同构,移动端不消费) */
+  streamWord: 500,
   /** Desktop 侧栏溢出标题每个可视宽度的阅读时长(双端 token 同构,移动端不消费) */
   sidebarTitleMarqueePerViewport: 2400,
 } as const;

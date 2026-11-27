@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
   rewind: vi.fn(),
   getSessionRowSnapshot: vi.fn(),
+  touchUserSendInDb: vi.fn(),
   ensureDialogueWorkspaceDir: vi.fn(),
   wireSessionToIpc: vi.fn(),
   resolveWorkingDir: vi.fn(),
@@ -21,7 +22,10 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => ({ ownerScopeKey: 'original-owner' }),
   isDataOwnerBroadcastScopeCurrent: mocks.ownerCurrent,
 }));
-vi.mock('../pre-run-hook', () => ({ executePreRunHook: mocks.executePreRunHook }));
+vi.mock('../pre-run-hook', () => ({
+  executePreRunHook: mocks.executePreRunHook,
+  formatPreRunHookFailure: (hook: { stderr?: string }) => `pre-run hook failed: ${hook.stderr ?? ''}`,
+}));
 
 vi.mock('../../localDb/ipc/messages.js', () => ({
   createMessage: mocks.createMessage,
@@ -31,7 +35,7 @@ vi.mock('../../localDb/ipc/messages.js', () => ({
 vi.mock('../../localDb/ipc/sessions.js', () => ({
   getSessionRowSnapshot: mocks.getSessionRowSnapshot,
   getSessionFsSnapshot: vi.fn(async () => ({ permissionMode: 'default', planModeEnabled: false })),
-  touchUserSendInDb: vi.fn().mockResolvedValue(undefined),
+  touchUserSendInDb: mocks.touchUserSendInDb,
 }));
 
 vi.mock('../../localDb/dialogueWorkspace', () => ({
@@ -140,6 +144,7 @@ function createRunnerHarness(
     silenced: boolean;
     abandoned?: boolean;
     notifyImpl?: Notifier['notify'];
+    deps?: Partial<ConstructorParameters<typeof MakerScheduleRunner>[0]>;
   },
 ) {
   const notifier: Notifier & { notify: ReturnType<typeof vi.fn> } = {
@@ -159,11 +164,12 @@ function createRunnerHarness(
     getDb: () => ({}) as never,
     notifier,
     logger,
+    ...opts.deps,
   });
   const isRunSilenced = vi.fn(() => opts.silenced);
   const isRunAbandoned = vi.fn(() => opts.abandoned === true);
   runner.attachScheduler({ isRunSilenced, isRunAbandoned } as unknown as Scheduler);
-  return { runner, notifier, isRunSilenced, isRunAbandoned };
+  return { runner, notifier, maker, isRunSilenced, isRunAbandoned };
 }
 
 /** send 接受 + onAccepted 落库,emit done 后 fire 才会 resolve */
@@ -195,6 +201,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: '/repo/project' });
     mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active' });
+    mocks.touchUserSendInDb.mockResolvedValue(undefined);
   });
 
   it.each([true, false])('adds the checkpoint guidance only to recurring teammate work (%s)', async (recurring) => {
@@ -1038,5 +1045,323 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     await fireToCompletion(runner, h);
 
     expect(notifier.notify).toHaveBeenCalledTimes(1);
+  });
+
+  // 回归: 静默调度(无论是 silentWhenIdle=true 还是 silentWhenIdle=false 但轮内调用
+  // schedule_silence_current_run)在静默完成时都不应调用 touchUserSendInDb, 避免把任务顶到
+  // 收件箱/侧栏最前并误解除「稍后处理」; 仅当本轮确认非静默(正常提醒 / schedule_notify_current_run / 失败)时才在收尾写入。
+  it.each([
+    { name: 'silentWhenIdle=true silenced success skips touchUserSendInDb', silentWhenIdle: true, silenced: true, outcome: 'done' as const, expectTouch: false },
+    { name: 'silentWhenIdle=false mid-turn silenced success skips touchUserSendInDb', silentWhenIdle: false, silenced: true, outcome: 'done' as const, expectTouch: false },
+    { name: 'silentWhenIdle=true notified success touches userSendAt on finalize', silentWhenIdle: true, silenced: false, outcome: 'done' as const, expectTouch: true },
+    { name: 'silentWhenIdle=false normal success touches userSendAt on finalize', silentWhenIdle: false, silenced: false, outcome: 'done' as const, expectTouch: true },
+    { name: 'failed silentWhenIdle run touches userSendAt on finalize', silentWhenIdle: true, silenced: true, outcome: 'error' as const, expectTouch: true },
+  ])('scheduled activity timestamp: $name', async ({ silentWhenIdle, silenced, outcome, expectTouch }) => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced });
+    const firePromise = runner.fire(baseSchedule({ silentWhenIdle }), createFireContext());
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalled());
+    // Dispatch must never speculatively bump userSendAt / lastActivityAt before silence is settled.
+    expect(mocks.touchUserSendInDb).not.toHaveBeenCalled();
+
+    if (outcome === 'done') {
+      h.emit({ type: 'done', data: {} });
+      await firePromise;
+    } else {
+      h.emit({ type: 'error', data: { message: 'boom', isTerminal: true } });
+      await expect(firePromise).rejects.toThrow('boom');
+    }
+
+    if (expectTouch) {
+      expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
+      expect(mocks.touchUserSendInDb).toHaveBeenCalledWith('scheduler-session', expect.any(Number));
+    } else {
+      expect(mocks.touchUserSendInDb).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    { name: 'quiet transient precheck failure skips notify and session activity touch', quietFailure: true },
+    { name: 'escalated or actionable precheck failure notifies and touches session activity', quietFailure: false },
+  ])('pre-run hook block: $name', async ({ quietFailure }) => {
+    mocks.executePreRunHook.mockResolvedValue({
+      status: 'failed',
+      decision: 'block',
+      exitCode: 1,
+      durationMs: 10,
+      stdout: '',
+      stderr: 'GitHub API rate limit reached',
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      timedOut: false,
+      aborted: false,
+      prCheckDiagnosis: { kind: 'rate-limit', device: 'Mac', failures: 1, retryAt: 50_000 },
+    });
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, { silenced: true });
+    const ctx = {
+      ...createFireContext(),
+      onPreRunHookCompleted: vi.fn(async () => ({ quietFailure })),
+    };
+
+    await expect(
+      runner.fire(
+        baseSchedule({ targetSessionId: 'scheduler-session', preRunHook: { command: 'node gate.mjs' } }),
+        ctx,
+      ),
+    ).rejects.toThrow('pre-run hook failed: GitHub API rate limit reached');
+
+    expect(ctx.onPreRunHookCompleted).toHaveBeenCalledTimes(1);
+    if (quietFailure) {
+      expect(notifier.notify).not.toHaveBeenCalled();
+      expect(mocks.touchUserSendInDb).not.toHaveBeenCalled();
+    } else {
+      expect(notifier.notify).toHaveBeenCalledTimes(1);
+      expect(mocks.touchUserSendInDb).toHaveBeenCalledWith('scheduler-session', expect.any(Number));
+    }
+  });
+});
+
+// 回归: 派发前模型/路由准入失败（如 acquirePendingAgentSwitch / checkModelRoute /
+// resolveModelSelection / admitPluginEngine 拒绝）在进入 finalizeRun 前即中止；
+// 外层调度引擎普通失败路径不发通知，runner 必须经 notifyFailureSilent 补发一次失败通知，
+// 且在已取消或账号切换时保持静默。
+describe('MakerScheduleRunner pre-dispatch model/route refusal notification', () => {
+  beforeEach(() => {
+    mocks.ownerCurrent.mockReturnValue(true);
+    vi.clearAllMocks();
+    mocks.getSessionRowSnapshot.mockResolvedValue({
+      status: 'active',
+      workingDir: '/repo/project',
+      agentKind: 'cc',
+      model: 'claude-opus-5-5',
+      providerId: 'anthropic',
+    });
+  });
+
+  it('notifies once when heartbeat acquirePendingAgentSwitch fails with MODEL_SELECTION_UNAVAILABLE', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const err = new Error('[MODEL_SELECTION_UNAVAILABLE] the saved model is no longer offered by its execution computer');
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        acquirePendingAgentSwitch: vi.fn(async () => { throw err; }),
+      },
+    });
+    const ctx = { ...createFireContext('run-model-unavail'), onRunnerNotified: vi.fn() };
+    const schedule = baseSchedule({ targetSessionId: 'bound-sess', silentWhenIdle: true });
+
+    await expect(runner.fire(schedule, ctx)).rejects.toThrow(/MODEL_SELECTION_UNAVAILABLE/);
+
+    expect(ctx.onRunnerNotified).toHaveBeenCalledWith('failure');
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+    expect(notifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-model-unavail',
+      sessionId: 'bound-sess',
+      status: 'failed',
+      errorMsg: err.message,
+    });
+  });
+
+  it('notifies once when checkModelRoute rejects a disabled route before createSession', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        checkModelRoute: vi.fn(async () => ({ kind: 'reject' as const, reason: 'explicit-source-disabled' as const })),
+      },
+    });
+    const ctx = { ...createFireContext('run-route-reject'), onRunnerNotified: vi.fn() };
+
+    await expect(runner.fire(baseSchedule({ silentWhenIdle: true }), ctx)).rejects.toThrow(/schedule route unavailable/);
+
+    expect(ctx.onRunnerNotified).toHaveBeenCalledWith('failure');
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+    expect(notifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-route-reject',
+      status: 'failed',
+    });
+    expect(notifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
+  });
+
+  it('carries confirmed existing sessionId on bound route failures and omits it when missing or rebound', async () => {
+    const h = createSessionHarness(acceptingSend());
+
+    // 1. Confirmed bound heartbeat failing at checkModelRoute (post-snapshot) carries sessionId.
+    const { runner: boundRunner, notifier: boundNotifier, maker: boundMaker } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        checkModelRoute: vi.fn(async () => ({ kind: 'reject' as const, reason: 'explicit-source-disabled' as const })),
+      },
+    });
+    vi.mocked(boundMaker.getSessionMeta).mockResolvedValue({
+      workDir: '/repo/project',
+      agentKind: 'codex',
+      model: 'gpt-6-astra',
+    } as never);
+    await expect(
+      boundRunner.fire(baseSchedule({ targetSessionId: 'bound-sess', silentWhenIdle: true }), createFireContext('run-bound-route')),
+    ).rejects.toThrow(/schedule route unavailable/);
+    expect(boundNotifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-bound-route',
+      sessionId: 'bound-sess',
+      status: 'failed',
+    });
+
+    // 2. Bound bot routine failing at acquirePendingAgentSwitch resolves its active sessionId lazily.
+    const { runner: botRunner, notifier: botNotifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        acquirePendingAgentSwitch: vi.fn(async () => {
+          throw new Error('[MODEL_SELECTION_UNAVAILABLE] bot model unavailable');
+        }),
+      },
+    });
+    await expect(
+      botRunner.fire(baseSchedule({ source: 'bot', targetSessionId: 'bot-sess', silentWhenIdle: true }), createFireContext('run-bot-unavail')),
+    ).rejects.toThrow(/MODEL_SELECTION_UNAVAILABLE/);
+    expect(botNotifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-bot-unavail',
+      sessionId: 'bot-sess',
+      status: 'failed',
+    });
+
+    // 3. Missing target row must not stamp a nonexistent sessionId into fauxRun.
+    mocks.getSessionRowSnapshot.mockResolvedValueOnce(null);
+    const { runner: missingRunner, notifier: missingNotifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        acquirePendingAgentSwitch: vi.fn(async () => {
+          throw new Error('[MODEL_SELECTION_UNAVAILABLE] missing target');
+        }),
+      },
+    });
+    await expect(
+      missingRunner.fire(baseSchedule({ targetSessionId: 'gone-sess', silentWhenIdle: true }), createFireContext('run-missing-target')),
+    ).rejects.toThrow(/MODEL_SELECTION_UNAVAILABLE/);
+    expect(missingNotifier.notify).toHaveBeenCalledTimes(1);
+    expect(missingNotifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
+
+    // 4. Persistent session auto-rebound off a deleted target must not stamp old or uncreated sessionId.
+    mocks.getSessionRowSnapshot.mockResolvedValueOnce({ status: 'deleted' }).mockResolvedValueOnce({ status: 'deleted' });
+    const { runner: rebindRunner, notifier: rebindNotifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        checkModelRoute: vi.fn(async () => ({ kind: 'reject' as const, reason: 'explicit-source-disabled' as const })),
+      },
+    });
+    rebindRunner.attachScheduler({
+      isRunSilenced: vi.fn(() => true),
+      isRunAbandoned: vi.fn(() => false),
+      update: vi.fn(async () => undefined),
+    } as unknown as Scheduler);
+    await expect(
+      rebindRunner.fire(
+        baseSchedule({ targetSessionId: 'deleted-sess', persistentSession: true, silentWhenIdle: true }),
+        createFireContext('run-rebind-route'),
+      ),
+    ).rejects.toThrow(/schedule route unavailable/);
+    expect(rebindNotifier.notify).toHaveBeenCalledTimes(1);
+    expect(rebindNotifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
+  });
+
+  it('notifies once when resolveModelSelection fails for a fresh explicit selection', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        resolveModelSelection: vi.fn(async () => {
+          throw new Error('[MODEL_SELECTION_UNAVAILABLE] removed');
+        }),
+      },
+    });
+    const ctx = { ...createFireContext('run-resolve-fail'), onRunnerNotified: vi.fn() };
+    const schedule = baseSchedule({
+      silentWhenIdle: true,
+      modelAgentKind: 'codex',
+      model: 'gpt-6-astra',
+    });
+
+    await expect(runner.fire(schedule, ctx)).rejects.toThrow(/MODEL_SELECTION_UNAVAILABLE/);
+
+    expect(ctx.onRunnerNotified).toHaveBeenCalledWith('failure');
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+    expect(notifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-resolve-fail',
+      status: 'failed',
+      errorMsg: '[MODEL_SELECTION_UNAVAILABLE] removed',
+    });
+    expect(notifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
+  });
+
+  it('notifies once when admitPluginEngine refuses a fresh plugin-engine schedule', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        admitPluginEngine: vi.fn(() => {
+          throw new Error('[MODEL_SELECTION_UNAVAILABLE] plugin engine offline');
+        }),
+      },
+    });
+    const ctx = { ...createFireContext('run-acp-fail'), onRunnerNotified: vi.fn() };
+    const schedule = baseSchedule({
+      silentWhenIdle: true,
+      agentKind: 'acp',
+      modelAgentKind: 'acp',
+      providerId: 'acp-plugin:test:eng',
+      model: 'gemini-4-neon',
+    });
+
+    await expect(runner.fire(schedule, ctx)).rejects.toThrow(/plugin engine offline/);
+
+    expect(ctx.onRunnerNotified).toHaveBeenCalledWith('failure');
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+    expect(notifier.notify.mock.calls[0][1]).toMatchObject({
+      id: 'run-acp-fail',
+      status: 'failed',
+      errorMsg: 'schedule route unavailable: [MODEL_SELECTION_UNAVAILABLE] plugin engine offline',
+    });
+    expect(notifier.notify.mock.calls[0][1].sessionId).toBeUndefined();
+  });
+
+  it('does not notify when fire is aborted or account owner changed during route check', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const controller = new AbortController();
+    const { runner, notifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        acquirePendingAgentSwitch: vi.fn(async () => {
+          controller.abort();
+          throw new DOMException('aborted', 'AbortError');
+        }),
+      },
+    });
+    const ctx = { ...createFireContext('run-aborted'), signal: controller.signal, onRunnerNotified: vi.fn() };
+
+    await expect(
+      runner.fire(baseSchedule({ targetSessionId: 'bound-sess', silentWhenIdle: true }), ctx),
+    ).rejects.toThrow(/aborted/);
+    expect(notifier.notify).not.toHaveBeenCalled();
+
+    const ownerChangedCtx = {
+      ...createFireContext('run-owner-changed'),
+      assertFireContext: () => {
+        throw new Error('Scheduled session owner changed');
+      },
+      onRunnerNotified: vi.fn(),
+    };
+    const { runner: ownerRunner, notifier: ownerNotifier } = createRunnerHarness(h.session, {
+      silenced: true,
+      deps: {
+        acquirePendingAgentSwitch: vi.fn(async () => {
+          throw new Error('[MODEL_SELECTION_UNAVAILABLE] stale account');
+        }),
+      },
+    });
+    await expect(
+      ownerRunner.fire(baseSchedule({ targetSessionId: 'bound-sess', silentWhenIdle: true }), ownerChangedCtx),
+    ).rejects.toThrow(/MODEL_SELECTION_UNAVAILABLE/);
+    expect(ownerNotifier.notify).not.toHaveBeenCalled();
   });
 });

@@ -508,13 +508,16 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
-  it('wakes queued input only for runtime self-closes, not direct product closes', () => {
+  it('wakes queued input only for runtime self-closes and runtime-refresh closes, not direct product closes', () => {
     const closedBlock = extractSessionCloseAdaptersSource();
 
     // 'unexpected' only means no Maker reason was recorded; IM /new and archive
     // sync close sessions directly and must not resurrect the old task's queue.
+    // A deferred runtime-refresh close (closeAfterCurrentTurn) can finish before
+    // turn-done's microtask drain runs, so it must also wake queued input.
+    expect(closedBlock).toContain("const isRuntimeRefresh = context.closeReason === 'runtime-refresh';");
     expect(closedBlock).toContain(
-      "wakeQueuedInput: context.closeReason === 'unexpected' && session.wasClosedByRuntime(),",
+      "wakeQueuedInput: (context.closeReason === 'unexpected' && session.wasClosedByRuntime()) || isRuntimeRefresh,",
     );
     expectOrder(
       closedBlock,
@@ -523,24 +526,35 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
-  it('preserves coordinator input boundary inside the rehydrate suppression window (#1930)', () => {
+  it('preserves coordinator input boundary inside the rehydrate suppression window and deferred runtime-refresh closes (#1930)', () => {
     const closedBlock = extractSessionCloseAdaptersSource();
 
-    // rehydrate / 凭证切换 close-rebuild 期间同一逻辑会话进程内重建:窗口内
-    // onSessionClosed 传 preserveInputBoundary(true)保留 input boundary(不 abort
-    // 驱动本次重建的 signal → #1930),但**其余清理必须照常执行**(不能整体跳过
-    // onSessionClosed,否则 rebuild 失败/close 后不 rebuild 时 coordinator 残留)。
+    // rehydrate / 凭证切换 close-rebuild 以及 deferred runtime-refresh（closeAfterCurrentTurn）
+    // 期间同一逻辑会话进程内重建:窗口内或 runtime-refresh 的 onSessionClosed 传
+    // preserveInputBoundary(true) 保留 input boundary(不 abort 驱动下一轮的 signal → #1930),
+    // 但**其余清理必须照常执行**(不能整体跳过 onSessionClosed,否则 rebuild 失败/close 后不
+    // rebuild 时 coordinator 残留)。
     expect(closedBlock).toContain(
       'agentInputCoordinatorHolder?.onSessionClosed(session.id, options);',
     );
     expect(closedBlock).toContain(
-      'shouldPreserveInputBoundary: () => rehydrateCloseSuppression.isSuppressed(session.id),',
+      'shouldPreserveInputBoundary: () => rehydrateCloseSuppression.isSuppressed(session.id) || isRuntimeRefresh,',
     );
     expectOrder(
       closedBlock,
       'agentInputCoordinatorHolder?.onSessionClosed(session.id, options);',
       'gitSnapshotCoordinator?.onSessionClosed(session.id);',
     );
+  });
+
+  it('recycles extraDirs runtime only when the session declares native handshake recycling', () => {
+    const start = source.indexOf('export function applyDirectoryGrants(');
+    const end = source.indexOf('export async function applyLibraryReadonlyExtraDir(', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const grantBlock = source.slice(start, end);
+    expect(grantBlock).toContain("result.changed && axis === 'extraDirs' && sess?.requiresRuntimeRecycleForExtraDirs?.()");
+    expect(grantBlock).not.toContain("result.changed && axis === 'extraDirs' && sess?.agentKind === 'acp'");
   });
 
   it('preserves continuation-only retry across its exact unexpected provider rebuild', () => {
@@ -1036,7 +1050,7 @@ describe('maker:event hot path ordering', () => {
 
   it('records Claude subscription quota events only while the native login is connected', () => {
     const listenerSource = usageSource.match(
-      /setClaudeRateLimitInfoListener\(\(info, account\) => \{[\s\S]*?\n {2}\}\);/,
+      /setClaudeRateLimitInfoListener\(\(info, account(?:, [^)]+)?\) => \{[\s\S]*?\n {2}\}\);/,
     )?.[0];
     expect(listenerSource).toBeTruthy();
     if (!listenerSource) return;

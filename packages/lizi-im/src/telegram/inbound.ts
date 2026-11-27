@@ -16,7 +16,16 @@ import type {
   IMMessageEvent,
   IMUnsupportedEntry,
 } from '../types.js';
-import type { TelegramApiClient, TgFile, TgMediaFile, TgMessage, TgMessageEntity, TgUser } from './api.js';
+import type {
+  TelegramApiClient,
+  TgExternalReplyInfo,
+  TgFile,
+  TgMediaFile,
+  TgMessage,
+  TgMessageEntity,
+  TgMessageOrigin,
+  TgUser,
+} from './api.js';
 import { audioVideoMimeOf, classifyInboundAttachment } from '../inboundKind.js';
 import { encodeMessageId } from './codec.js';
 import { telegramMessageText, telegramReplyText } from './messageText.js';
@@ -25,6 +34,13 @@ import { telegramMessageText, telegramReplyText } from './messageText.js';
 const MAX_INBOUND_FILE_BYTES = 20 * 1024 * 1024;
 /** 附件下载超时 — 与 Discord 通道同参数。 */
 const DOWNLOAD_TIMEOUT_MS = 30_000;
+const MAX_EXTERNAL_QUOTE_TEXT_CHARS = 16_384;
+const MAX_HISTORY_IMAGE_REFS = 4;
+
+type TgMediaContainer = Pick<
+  TgMessage,
+  'message_id' | 'photo' | 'document' | 'voice' | 'audio' | 'video' | 'video_note' | 'sticker'
+>;
 
 export interface TelegramHistoryImageRef {
   fileId: string;
@@ -34,29 +50,114 @@ export interface TelegramHistoryImageRef {
   downloadToken?: string;
 }
 
-export function historyImageRefsOf(m: TgMessage): TelegramHistoryImageRef[] {
-  if (m.has_protected_content === true) return [];
-  const refs: TelegramHistoryImageRef[] = [];
-  const best = m.photo?.reduce(
+function sanitizeOriginLabel(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\u0000-\u001f\u007f\u200b]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 64);
+}
+
+export function isForwardedMessage(m: TgMessage): boolean {
+  return Boolean(m.forward_origin || m.forward_from || m.forward_from_chat || m.forward_sender_name);
+}
+
+function originAuthorOf(origin: TgMessageOrigin): { author: string; isBot?: boolean } {
+  switch (origin.type) {
+    case 'user': {
+      const author = sanitizeOriginLabel(displayNameOf(origin.sender_user)) || 'unknown';
+      return { author, ...(origin.sender_user.is_bot ? { isBot: true } : {}) };
+    }
+    case 'hidden_user':
+      return { author: sanitizeOriginLabel(origin.sender_user_name) || 'unknown' };
+    case 'chat':
+      return {
+        author:
+          sanitizeOriginLabel(
+            origin.sender_chat.title ||
+              origin.sender_chat.username ||
+              origin.author_signature ||
+              String(origin.sender_chat.id),
+          ) || 'unknown',
+      };
+    case 'channel':
+      return {
+        author:
+          sanitizeOriginLabel(
+            origin.chat.title ||
+              origin.chat.username ||
+              origin.author_signature ||
+              String(origin.chat.id),
+          ) || 'unknown',
+      };
+  }
+}
+
+/** 转发来源显示名(遵守 has_protected_content 边界, 受保护消息不外传来源标注)。 */
+export function forwardOriginLabelOf(m: TgMessage): string | null {
+  if (m.has_protected_content === true) return null;
+  if (m.forward_origin) return originAuthorOf(m.forward_origin).author;
+  if (m.forward_from) return sanitizeOriginLabel(displayNameOf(m.forward_from)) || null;
+  if (m.forward_from_chat) {
+    return (
+      sanitizeOriginLabel(
+        m.forward_from_chat.title ||
+          m.forward_from_chat.username ||
+          String(m.forward_from_chat.id),
+      ) || null
+    );
+  }
+  if (m.forward_sender_name) return sanitizeOriginLabel(m.forward_sender_name) || null;
+  return null;
+}
+
+function annotateForwardedText(text: string, label: string | null): string {
+  if (!label) return text;
+  const trimmed = text.trim();
+  return trimmed ? `[转发自 ${label}] ${text}` : `[转发自 ${label}]`;
+}
+
+function appendHistoryImageRefs(
+  source: Pick<TgMediaContainer, 'photo' | 'document'>,
+  refs: TelegramHistoryImageRef[],
+  seen: Set<string>,
+): void {
+  if (refs.length >= MAX_HISTORY_IMAGE_REFS) return;
+  const best = source.photo?.reduce(
     (a, b) => (b.width * b.height > a.width * a.height ? b : a),
-    m.photo[0],
+    source.photo[0],
   );
-  if (best && (best.file_size ?? 0) <= MAX_INBOUND_FILE_BYTES) {
+  if (best && (best.file_size ?? 0) <= MAX_INBOUND_FILE_BYTES && !seen.has(best.file_id)) {
+    seen.add(best.file_id);
     refs.push({
       fileId: best.file_id,
       name: 'photo.jpg',
       mimeType: 'image/jpeg',
     });
   }
-  if (m.document && (m.document.file_size ?? 0) <= MAX_INBOUND_FILE_BYTES) {
-    const name = m.document.file_name ?? 'image';
-    const classified = classifyInboundAttachment(m.document.mime_type, name);
-    if (classified.kind === 'image')
+  if (refs.length >= MAX_HISTORY_IMAGE_REFS) return;
+  if (
+    source.document &&
+    (source.document.file_size ?? 0) <= MAX_INBOUND_FILE_BYTES &&
+    !seen.has(source.document.file_id)
+  ) {
+    const name = source.document.file_name ?? 'image';
+    const classified = classifyInboundAttachment(source.document.mime_type, name);
+    if (classified.kind === 'image') {
+      seen.add(source.document.file_id);
       refs.push({
-        fileId: m.document.file_id,
+        fileId: source.document.file_id,
         name: name.slice(0, 256),
         mimeType: classified.mimeType,
       });
+    }
+  }
+}
+
+export function historyImageRefsOf(m: TgMessage): TelegramHistoryImageRef[] {
+  if (m.has_protected_content === true) return [];
+  const refs: TelegramHistoryImageRef[] = [];
+  const seen = new Set<string>();
+  appendHistoryImageRefs(m, refs, seen);
+  if (m.external_reply && m.external_reply.has_protected_content !== true) {
+    appendHistoryImageRefs(m.external_reply, refs, seen);
   }
   return refs;
 }
@@ -93,8 +194,7 @@ export function laneThreadIdOf(m: TgMessage): string {
     : '';
 }
 
-/** 群消息 → 本地窗口条目(触发与否都记录; 纯附件消息 text 为空串; botId 由 emit 注入)。 */
-export function groupWindowEntryOf(m: TgMessage): Omit<TelegramGroupWindowEntry, 'botId'> {
+function mediaFileNamesOf(m: Pick<TgMediaContainer, 'document' | 'photo' | 'video' | 'video_note' | 'audio' | 'voice'>): string[] {
   const fileNames: string[] = [];
   if (m.document?.file_name) fileNames.push(m.document.file_name);
   if (m.photo && m.photo.length > 0) fileNames.push('photo');
@@ -102,6 +202,21 @@ export function groupWindowEntryOf(m: TgMessage): Omit<TelegramGroupWindowEntry,
   if (m.video_note) fileNames.push('video note');
   if (m.audio) fileNames.push(m.audio.file_name ?? 'audio');
   if (m.voice) fileNames.push('voice message');
+  return fileNames;
+}
+
+/** 群消息 → 本地窗口条目(触发与否都记录; 纯附件消息 text 为空串; botId 由 emit 注入)。 */
+export function groupWindowEntryOf(m: TgMessage): Omit<TelegramGroupWindowEntry, 'botId'> {
+  const fileNames = mediaFileNamesOf(m);
+  if (
+    fileNames.length === 0 &&
+    m.external_reply &&
+    m.has_protected_content !== true &&
+    m.external_reply.has_protected_content !== true
+  ) {
+    fileNames.push(...mediaFileNamesOf(m.external_reply));
+  }
+  const text = annotateForwardedText(telegramMessageText(m), forwardOriginLabelOf(m));
   return {
     chatId: String(m.chat.id),
     threadId: laneThreadIdOf(m),
@@ -111,7 +226,7 @@ export function groupWindowEntryOf(m: TgMessage): Omit<TelegramGroupWindowEntry,
       name: displayNameOf(m.from),
       ...(m.from?.is_bot ? { isBot: true } : {}),
     },
-    text: telegramMessageText(m),
+    text,
     imageRefs: historyImageRefsOf(m),
     ...(fileNames.length > 0 ? { fileNames } : {}),
     sentAt: m.date * 1000,
@@ -235,36 +350,73 @@ export interface NormalizeContext {
    * 也不固定已有缓存 —— 否则这些 blob 永远不会被回收。
    */
   history?: boolean;
+  /** 仅下载图片类媒体(跳过音视频、贴纸与非图片文档), 用于 ambient 等轻量预算场景。 */
+  imagesOnly?: boolean;
+}
+
+function externalReplyPlaceholder(ext: TgExternalReplyInfo): string {
+  if (ext.photo && ext.photo.length > 0) return '[图片]';
+  if (ext.document) return `[文件: ${ext.document.file_name ?? 'document'}]`;
+  if (ext.voice) return '[语音消息]';
+  if (ext.audio) return `[音频: ${ext.audio.file_name ?? 'audio'}]`;
+  if (ext.video) return `[视频${ext.video.file_name ? `: ${ext.video.file_name}` : ''}]`;
+  if (ext.video_note) return '[视频消息]';
+  if (ext.animation) return '[动画]';
+  if (ext.sticker) return `[贴纸${ext.sticker.emoji ? ` ${ext.sticker.emoji}` : ''}]`;
+  return '[引用消息的正文无法读取]';
 }
 
 /**
  * 被回复消息 → 引用上下文(编排层拼进送模型正文)。纯附件消息给类型占位,
  * 让模型知道"引用的是一张图/一个文件"而不是空字符串。
+ * 同时支持跨群/转发引用(`external_reply`), 继续遵守 `has_protected_content` 保护边界。
  */
 export function replyContextOf(
   m: TgMessage,
-): { messageId: string; sentAt?: number; author: string; text: string; isBot?: boolean } | null {
+): { messageId?: string; sentAt?: number; author: string; text: string; isBot?: boolean } | null {
   const replied = m.reply_to_message;
-  if (!replied) return null;
-  // 受保护群里被引用的原消息不进 prompt: 引用块会把原文原样带进模型上下文,
-  // 那和把它写进本地池是同一次外传。与官方 bot「被引消息受保护则原文与附件
-  // 都不外传」同一语义。触发轮次本身照常跑, 只是不带原文。
-  if (replied.has_protected_content === true || m.has_protected_content === true) return null;
-  let text = telegramReplyText(m);
-  if (!text) {
-    if (replied.photo && replied.photo.length > 0) text = '[图片]';
-    else if (replied.document) text = `[文件: ${replied.document.file_name ?? 'document'}]`;
-    else if (replied.voice) text = '[语音消息]';
-    else if (replied.video) text = '[视频]';
-    else if (replied.sticker) text = `[贴纸${replied.sticker.emoji ? ` ${replied.sticker.emoji}` : ''}]`;
-    else text = '[引用消息的正文无法读取]';
+  if (replied) {
+    // 受保护群里被引用的原消息不进 prompt: 引用块会把原文原样带进模型上下文,
+    // 那和把它写进本地池是同一次外传。与官方 bot「被引消息受保护则原文与附件
+    // 都不外传」同一语义。触发轮次本身照常跑, 只是不带原文。
+    if (replied.has_protected_content === true || m.has_protected_content === true) return null;
+    let text = telegramReplyText(m);
+    if (!text) {
+      if (replied.photo && replied.photo.length > 0) text = '[图片]';
+      else if (replied.document) text = `[文件: ${replied.document.file_name ?? 'document'}]`;
+      else if (replied.voice) text = '[语音消息]';
+      else if (replied.video) text = '[视频]';
+      else if (replied.sticker) text = `[贴纸${replied.sticker.emoji ? ` ${replied.sticker.emoji}` : ''}]`;
+      else text = '[引用消息的正文无法读取]';
+    }
+    return {
+      messageId: String(replied.message_id),
+      ...(replied.date ? { sentAt: replied.date * 1000 } : {}),
+      author: displayNameOf(replied.from),
+      text,
+      ...(replied.from?.is_bot ? { isBot: true } : {}),
+    };
   }
+  const external = m.external_reply;
+  if (!external || m.has_protected_content === true || external.has_protected_content === true) {
+    return null;
+  }
+  const { author, isBot } = originAuthorOf(external.origin);
+  const quoted = typeof m.quote?.text === 'string' && m.quote.text.trim()
+    ? m.quote.text.slice(0, MAX_EXTERNAL_QUOTE_TEXT_CHARS)
+    : '';
+  const text = quoted || externalReplyPlaceholder(external);
+  // 跨群引用的 message_id 属于来源群, 不能与当前群历史表里的 message_id 碰撞去重。
+  const sameChatMessageId =
+    external.message_id !== undefined && external.chat?.id === m.chat.id
+      ? String(external.message_id)
+      : undefined;
   return {
-    messageId: String(replied.message_id),
-    ...(replied.date ? { sentAt: replied.date * 1000 } : {}),
-    author: displayNameOf(replied.from),
+    ...(sameChatMessageId ? { messageId: sameChatMessageId } : {}),
+    ...(external.origin.date ? { sentAt: external.origin.date * 1000 } : {}),
+    author,
     text,
-    ...(replied.from?.is_bot ? { isBot: true } : {}),
+    ...(isBot ? { isBot: true } : {}),
   };
 }
 
@@ -273,7 +425,7 @@ export function replyContextOf(
  * (缺失或 octet-stream)时按扩展名纠正, 再不行按 Telegram 默认容器。
  */
 function audioVideoFilesOf(
-  m: TgMessage,
+  m: Pick<TgMediaContainer, 'message_id' | 'voice' | 'audio' | 'video' | 'video_note'>,
 ): Array<{ file: TgMediaFile; name: string; mimeType: string }> {
   const out: Array<{ file: TgMediaFile; name: string; mimeType: string }> = [];
   if (m.voice) {
@@ -343,26 +495,40 @@ async function collectAudioVideo(
   }
 }
 
-/** 消息是否带可下载媒体(照片/文件/音视频) — 群历史媒体池的入池判据。 */
-export function hasDownloadableMedia(m: TgMessage): boolean {
+function hasContainerDownloadableMedia(
+  m: Pick<TgMediaContainer, 'photo' | 'document' | 'voice' | 'audio' | 'video' | 'video_note'>,
+): boolean {
   return Boolean(
     (m.photo && m.photo.length > 0) || m.document || m.voice || m.audio || m.video || m.video_note,
   );
 }
 
+/** 消息是否带可下载媒体(照片/文件/音视频, 含未受保护的 external_reply) — 群历史媒体池的入池判据。 */
+export function hasDownloadableMedia(m: TgMessage): boolean {
+  return (
+    hasContainerDownloadableMedia(m) ||
+    (m.has_protected_content !== true &&
+      m.external_reply !== undefined &&
+      m.external_reply.has_protected_content !== true &&
+      hasContainerDownloadableMedia(m.external_reply))
+  );
+}
+
 /** 单条消息的媒体收集(相册聚合时对每个成员各调一次)。 */
 async function collectMedia(
-  m: TgMessage,
+  m: TgMediaContainer,
   ctx: NormalizeContext,
   attachments: IMAttachment[],
   unsupported: IMUnsupportedEntry[],
 ): Promise<void> {
-  if (m.sticker) unsupported.push({ type: 'sticker', label: m.sticker.emoji ?? 'sticker' });
+  if (!ctx.imagesOnly && m.sticker) unsupported.push({ type: 'sticker', label: m.sticker.emoji ?? 'sticker' });
 
   // 音视频以 file block(可读路径)交给模型, Agent 可自行抽帧/转写。字节进
   // cindy-media 总仓(内容寻址/引用记账/统一回收), 不写冻结的 cc-agent 目录。
-  for (const media of audioVideoFilesOf(m)) {
-    await collectAudioVideo(ctx, media.file, media.name, media.mimeType, attachments, unsupported);
+  if (!ctx.imagesOnly) {
+    for (const media of audioVideoFilesOf(m)) {
+      await collectAudioVideo(ctx, media.file, media.name, media.mimeType, attachments, unsupported);
+    }
   }
 
   if (m.photo && m.photo.length > 0) {
@@ -381,6 +547,7 @@ async function collectMedia(
     const name = m.document.file_name ?? `document-${m.message_id}`;
     // 去处只由共用判据决定(MIME 与扩展名任一命中)。
     const classified = classifyInboundAttachment(m.document.mime_type, name);
+    if (ctx.imagesOnly && classified.kind !== 'image') return;
     if (classified.kind === 'av') {
       await collectAudioVideo(ctx, m.document, name, classified.mimeType, attachments, unsupported);
     } else if ((m.document.file_size ?? 0) > MAX_INBOUND_FILE_BYTES) {
@@ -399,7 +566,7 @@ async function collectMedia(
 const MAX_REPLY_ATTACHMENTS = 3;
 
 async function collectReplyMedia(
-  replied: TgMessage,
+  replied: TgMediaContainer,
   ctx: NormalizeContext,
   attachments: IMAttachment[],
   unavailable: string[],
@@ -416,7 +583,7 @@ async function collectReplyMedia(
   return attachments.length - before;
 }
 
-/** 私聊消息/群触发消息 → IMMessageEvent(下载图片、文件与音视频附件, 相册成员并入)。 */
+/** 私聊消息/群触发消息 → IMMessageEvent(下载图片、文件与音视频附件, 相册/转发突发成员并入)。 */
 export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Promise<IMMessageEvent> {
   const attachments: IMAttachment[] = [];
   const unsupported: IMUnsupportedEntry[] = [];
@@ -430,12 +597,33 @@ export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Pro
   // 受保护的被引消息连附件一起不外传(与 replyContextOf 的正文判据同一条边界):
   // 只挡引用带出来的那份, 本条消息自己的附件仍按用户显式发送处理。
   const replyProtected =
-    m.reply_to_message?.has_protected_content === true || m.has_protected_content === true;
+    m.reply_to_message?.has_protected_content === true ||
+    m.external_reply?.has_protected_content === true ||
+    m.has_protected_content === true;
   const unavailableAttachments: string[] = [];
-  const replyAttachmentCount =
-    m.reply_to_message && !replyProtected
-      ? await collectReplyMedia(m.reply_to_message, ctx, attachments, unavailableAttachments)
-      : 0;
+  const replyMediaTarget: TgMediaContainer | null = replyProtected
+    ? null
+    : m.reply_to_message
+      ? m.reply_to_message
+      : m.external_reply
+        ? { ...m.external_reply, message_id: m.external_reply.message_id ?? m.message_id }
+        : null;
+  const replyAttachmentCount = replyMediaTarget
+    ? await collectReplyMedia(replyMediaTarget, ctx, attachments, unavailableAttachments)
+    : 0;
+
+  let text = annotateForwardedText(ctx.overrideText ?? m.text ?? m.caption ?? '', forwardOriginLabelOf(m));
+  if (ctx.siblings && ctx.siblings.length > 0 && m.has_protected_content !== true) {
+    const siblingNotes: string[] = [];
+    for (const sibling of ctx.siblings) {
+      if (sibling.has_protected_content === true || !isForwardedMessage(sibling)) continue;
+      const note = annotateForwardedText(telegramMessageText(sibling), forwardOriginLabelOf(sibling)).trim();
+      if (note && !siblingNotes.includes(note)) siblingNotes.push(note);
+    }
+    if (siblingNotes.length > 0) {
+      text = text.trim() ? `${text}\n${siblingNotes.join('\n')}` : siblingNotes.join('\n');
+    }
+  }
 
   return {
     channelName: 'telegram',
@@ -449,7 +637,7 @@ export async function normalizeMessage(m: TgMessage, ctx: NormalizeContext): Pro
     chatId,
     contextId: ctx.contextId,
     messageId: encodeMessageId(chatId, String(m.message_id)),
-    text: ctx.overrideText ?? m.text ?? m.caption ?? '',
+    text,
     attachments,
     unsupported,
     threadTs: undefined,
@@ -482,16 +670,21 @@ export const GROUP_HISTORY_FILE_MAX = 4;
  */
 export async function collectGroupHistoryMedia(
   messages: TgMessage[],
-  ctx: Pick<NormalizeContext, 'api' | 'media' | 'files' | 'stagedDiscards'> & { provided?: readonly IMAttachment[] },
+  ctx: Pick<NormalizeContext, 'api' | 'media' | 'files' | 'stagedDiscards' | 'imagesOnly'> & {
+    provided?: readonly IMAttachment[];
+    maxImages?: number;
+  },
 ): Promise<{ attachments: Array<IMAttachment & { author: string }>; unavailable: string[] }> {
   const picked: Array<IMAttachment & { author: string }> = [];
   const unavailable: string[] = [];
+  const imageLimit = ctx.maxImages ?? GROUP_HISTORY_IMAGE_MAX;
   let images = ctx.provided?.filter((a) => a.kind === 'image').length ?? 0;
   let files = ctx.provided?.filter((a) => a.kind !== 'image').length ?? 0;
   let overQuota = 0;
   for (const m of [...messages].reverse()) {
     const isImage = expectedAttachmentKind(m) === 'image';
-    if (isImage ? images >= GROUP_HISTORY_IMAGE_MAX : files >= GROUP_HISTORY_FILE_MAX) {
+    if (ctx.imagesOnly && !isImage) continue;
+    if (isImage ? images >= imageLimit : files >= GROUP_HISTORY_FILE_MAX) {
       overQuota++;
       continue;
     }
@@ -500,12 +693,21 @@ export async function collectGroupHistoryMedia(
     const author = `${displayNameOf(m.from)} · 消息 ${m.message_id}`;
     const sink: IMAttachment[] = [];
     const failed: IMUnsupportedEntry[] = [];
-    await collectMedia(m, { ...ctx, contextId: '', history: true }, sink, failed);
+    const collectTarget: TgMediaContainer =
+      hasContainerDownloadableMedia(m) ||
+      !m.external_reply ||
+      m.has_protected_content === true ||
+      m.external_reply.has_protected_content === true
+        ? m
+        : { ...m.external_reply, message_id: m.external_reply.message_id ?? m.message_id };
+    await collectMedia(collectTarget, { ...ctx, contextId: '', history: true }, sink, failed);
     unavailable.push(...failed.map((entry) => `群历史附件 ${entry.label}（${author}）：${entry.type}`));
     picked.push(...sink.map((att) => ({ ...att, author })));
   }
   unavailable.reverse();
-  if (overQuota > 0) unavailable.push(`另有 ${overQuota} 个更早的群历史附件超过数量上限，未提供`);
+  if (overQuota > 0 && !ctx.imagesOnly) {
+    unavailable.push(`另有 ${overQuota} 个更早的群历史附件超过数量上限，未提供`);
+  }
   return { attachments: picked.reverse(), unavailable };
 }
 
@@ -513,11 +715,18 @@ export async function collectGroupHistoryMedia(
  * 下载前预判附件类别(占名额用): 照片与经共用判据归为图片的文档进图片额度, 其余进
  * 文件额度 —— 与实际下载分流同一判据(classifyInboundAttachment), 不另立规则。
  */
-function expectedAttachmentKind(m: TgMessage): 'image' | 'file' {
-  if (m.photo && m.photo.length > 0) return 'image';
-  if (m.document) {
-    const name = m.document.file_name ?? `document-${m.message_id}`;
-    if (classifyInboundAttachment(m.document.mime_type, name).kind === 'image') return 'image';
+export function expectedAttachmentKind(m: TgMessage): 'image' | 'file' {
+  const source: Pick<TgMediaContainer, 'message_id' | 'photo' | 'document'> =
+    hasContainerDownloadableMedia(m) ||
+    !m.external_reply ||
+    m.has_protected_content === true ||
+    m.external_reply.has_protected_content === true
+      ? m
+      : { ...m.external_reply, message_id: m.external_reply.message_id ?? m.message_id };
+  if (source.photo && source.photo.length > 0) return 'image';
+  if (source.document) {
+    const name = source.document.file_name ?? `document-${source.message_id}`;
+    if (classifyInboundAttachment(source.document.mime_type, name).kind === 'image') return 'image';
   }
   return 'file';
 }

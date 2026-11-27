@@ -185,7 +185,8 @@
     "groupSent": "Envoyé depuis un groupe",
     "sourceGroupId": "ID du groupe : {{id}}",
     "selectText": "Sélectionner le texte",
-    "you": "Vous"
+    "you": "Vous",
+    "recentActivity": "Activité récente"
   },
   "actions": {
     "attachmentsPrefix": "Pièces jointes : {{names}}",
@@ -250,6 +251,7 @@
     "edit": "Modifier",
     "steer": "Insérer",
     "steerQueued": "Pas encore transmis. Votre message est toujours en file d'attente.",
+    "steerUnsupportedNotice": "Ce moteur ne permet pas de réorienter. Les messages en attente seront envoyés à la fin du tour en cours.",
     "moveUp": "Avancer",
     "moveDown": "Reculer",
     "cancelSend": "Annuler l'envoi",
@@ -267,6 +269,8 @@
     "imagesNotUploaded_other": "{{count}} images n'ont pas été envoyées",
     "waitingForNamedComputer": "Envoi automatique dès que {{name}} se reconnecte",
     "reconnectComputer": "Reconnecter",
+    "pendingDelivery": "En attente de livraison",
+    "pendingDeliveryHint": "Message enregistré sur ce téléphone. En attente de confirmation de l’ordinateur.",
     "waitingForComputer": "Envoi au retour de l'ordinateur",
     "waitingForNetwork": "Envoi au retour du réseau",
     "queued": "En file d'attente",
@@ -300,12 +304,13 @@
     "goalResumed": "Consommation rétablie, objectif repris",
     "goalCapacityRetry": "Service du modèle saturé : nouvel essai",
     "autoResume": {
-      "separator": "Connexion interrompue : reprise automatique",
+      "separator": "Réponse vide — reprise automatique",
       "succeeded": "Reconnecté",
       "failed": "Échec de la reconnexion",
       "neutral": "Se reconnecter",
       "usageReset": "Limite d'utilisation réinitialisée, reprise automatique",
       "pending": "Reconnexion…",
+      "continuingWithProgress": "Reprise automatique ({{attempt}}/{{total}})…",
       "pendingWithProgress": "Reconnexion {{attempt}}/{{total}}…",
       "groupSwitchPending": "Basculement vers un autre ordinateur…",
       "details": "Tentative {{attempt}}/{{total}} · {{count}} reconnexions dans cette session",

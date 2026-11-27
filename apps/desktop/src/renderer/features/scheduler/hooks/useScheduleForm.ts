@@ -38,13 +38,19 @@ export { EFFORT_VALUES, isEffortValue } from '../lib/scheduleFormLogic';
 export type { EffortValue, ScheduleFormState, RunMode } from '../lib/scheduleFormLogic';
 export { deriveRunMode, hasRealBinding, PENDING_SESSION_ID } from '../lib/scheduleFormLogic';
 
-import { isGitlabMrTriggerUrl, normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
+import { isGithubPrTriggerUrl, isGitlabMrTriggerUrl, normalizePrTrigger, schedulePrTriggers } from '@cindy/maker-scheduler/pr-trigger';
+import { parseGitlabItemReference, parseGitlabProjectReference } from '@cindy/maker-scheduler/github-item';
 
 function prFields(schedule: Schedule): Partial<ScheduleFormState> {
   if (schedule.webhookTrigger && schedule.prTrigger === undefined) return {};
   const rules = schedulePrTriggers(schedule);
   if (rules.length !== 1) return schedule.prTrigger === null ? { prEnabled: false } : {};
-  return { prEnabled: true, prUrl: rules[0]!.url, prChange: rules[0]!.change };
+  const url = rules[0]!.url;
+  const gitlab = isGithubPrTriggerUrl(url) ? null : parseGitlabItemReference(url);
+  return { prEnabled: true, prUrl: url, prChange: rules[0]!.change,
+    ...(gitlab
+      ? { gitlabItem: url, gitlabItemHost: gitlab.host, gitlabItemProject: gitlab.project, gitlabItemNumber: gitlab.number, gitlabItemKind: 'mr' as const }
+      : { githubItem: url, githubItemRepository: url.split('/').slice(3, 5).join('/') }) };
 }
 
 const DEFAULT_FORM: ScheduleFormState = {
@@ -304,7 +310,7 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
     ...prFields(s),
     webhookEnabled: Boolean(s.webhookTrigger),
     webhookEvents: (s.webhookTrigger?.events ?? []).join(', '),
-    ...webhookSourceFormFields(s.webhookTrigger?.source),
+    ...webhookSourceFormFields(s.webhookTrigger?.source, s.webhookTrigger?.events),
     ...scheduleEngineFormFields(s),
     modelAgentDeviceId: s.modelAgentDeviceId,
     modelGroup: s.modelGroup,
@@ -369,22 +375,22 @@ export interface UseScheduleFormResult {
    * heartbeat 模式（targetSessionId 非空）只跳过 workingDir/useWorktree
    * （runner 从 SessionMeta 取，传了也被忽略）；model/effort 照常发送。
    */
-  toInput: () => CreateScheduleInput;
+  toInput: (override?: Partial<ScheduleFormState>) => CreateScheduleInput;
   /**
    * 校验 + 返回错误 i18n key + 可选 interpolation values。null = 通过。
    * 调用方负责用 t() 翻译。
    */
-  validate: () => { key: string; values?: Record<string, string> } | null;
+  validate: (override?: Partial<ScheduleFormState>) => { key: string; values?: Record<string, string> } | null;
 }
 
 function withMrTiming(form: ScheduleFormState): ScheduleFormState {
   if (!form.prEnabled || !isGitlabMrTriggerUrl(form.prUrl) || (!form.manual && form.recurring)) return form;
-  // A manual schedule has no active cadence. Start with the MR card's five-minute check.
+  // A manual schedule has no active cadence. Start with the 10-minute timed status check.
   return {
     ...form,
     manual: false,
     recurring: true,
-    ...(form.manual ? { cronExpr: '*/5 * * * *', intervalMs: 300_000 } : {}),
+    ...(form.manual ? { cronExpr: '*/10 * * * *', intervalMs: undefined } : {}),
   };
 }
 
@@ -440,12 +446,13 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
   }, []);
 
   const selectPluginEngine = useCallback((selection: PluginEngineSelection) => {
+    const deviceId = selection.deviceId?.trim() || '';
     setForm((f) => ({
       ...f,
       modelGroup: undefined,
       pluginEngine: selection,
-      agentDeviceId: '',
-      modelAgentDeviceId: undefined,
+      agentDeviceId: deviceId,
+      modelAgentDeviceId: deviceId,
       fastMode: false,
     }));
   }, []);
@@ -486,7 +493,6 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
         case 'thread':
           return {
             ...f,
-            pluginEngine: null,
             useWorktree: false,
             targetSessionId: f.targetSessionId.trim() ? f.targetSessionId : PENDING_SESSION_ID,
           };
@@ -501,8 +507,7 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
       const snapshot = captureBinding(f);
       if (snapshot) lastBindingRef.current = snapshot;
       const next = applyRunMode(f, mode, lastBindingRef.current);
-      // 插件引擎只用于每次新建任务的自动任务。
-      return mode === 'fresh' ? next : { ...next, pluginEngine: null };
+      return next;
     });
   }, []);
 
@@ -533,62 +538,83 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     });
   }, []);
 
-  const validate = useCallback((): { key: string; values?: Record<string, string> } | null => {
-    if (Number.isNaN(parseScheduleDeadline(form.deadline ?? '', form.sourceExpireAt))) {
+  const validate = useCallback((override?: Partial<ScheduleFormState>): { key: string; values?: Record<string, string> } | null => {
+    const current = override ? { ...form, ...override } : form;
+    if (Number.isNaN(parseScheduleDeadline(current.deadline ?? '', current.sourceExpireAt))) {
       return { key: 'scheduler.deadline.invalid' };
     }
-    if (!form.name.trim()) return { key: 'scheduler.editor.validation.nameRequired' };
-    if ((form.executionMode ?? 'agent') === 'agent' && !form.prompt.trim()) {
+    if (!current.name.trim()) return { key: 'scheduler.editor.validation.nameRequired' };
+    if ((current.executionMode ?? 'agent') === 'agent' && !current.prompt.trim()) {
       return { key: 'scheduler.editor.validation.promptRequired' };
     }
-    if ((form.executionMode ?? 'agent') === 'agent' && form.modelAgentKind && !form.model.trim()) {
-      return { key: 'scheduler.editor.validation.modelUnavailable', values: { model: form.providerId } };
+    if ((current.executionMode ?? 'agent') === 'agent' && current.modelAgentKind && !current.model.trim()) {
+      return { key: 'scheduler.editor.validation.modelUnavailable', values: { model: current.providerId } };
     }
-    if (form.executionMode === 'script' && !form.scriptCommand?.trim()) {
+    if (current.executionMode === 'script' && !current.scriptCommand?.trim()) {
       return { key: 'scheduler.editor.validation.scriptCommandRequired' };
     }
-    if (!form.cronExpr.trim()) return { key: 'scheduler.editor.validation.scheduleRequired' };
-    if (!form.timezone.trim()) return { key: 'scheduler.editor.validation.timezoneRequired' };
+    if (!current.cronExpr.trim()) return { key: 'scheduler.editor.validation.scheduleRequired' };
+    if (!current.timezone.trim()) return { key: 'scheduler.editor.validation.timezoneRequired' };
 
-    const tgt = form.targetSessionId.trim();
+    const tgt = current.targetSessionId.trim();
     const isHeartbeat = !!tgt;
-    if (form.executionMode === 'script') {
-      if (!form.workingDir.trim()) return { key: 'scheduler.editor.validation.selectProject' };
+    if (current.executionMode === 'script') {
+      if (!current.workingDir.trim()) return { key: 'scheduler.editor.validation.selectProject' };
       // Script bindings survive editing; unavailable owners are paused by the host.
     } else if (isHeartbeat) {
       if (tgt === '__pending__') return { key: 'scheduler.editor.validation.selectThread' };
     } else {
-      if (form.workspaceKind === 'project' && !form.workingDir.trim()) {
+      if (current.workspaceKind === 'project' && !current.workingDir.trim()) {
         return { key: 'scheduler.editor.validation.selectProject' };
       }
-      if (form.effort && !isEffortValue(form.effort)) {
+      if (current.effort && !isEffortValue(current.effort)) {
         return { key: 'scheduler.editor.validation.reasoningInvalid', values: { values: EFFORT_VALUES.join(' / ') } };
       }
     }
     // script 模式保留已有前置检查;切换时命令留空不创建 hook,
     // 否则用户明明看不到该区块也点不到那个开关,却被挡在保存之外。
-    if (form.executionMode !== 'script' && form.preRunHookEnabled && form.preRunSource === 'plugin' && !form.preRunPluginId.trim()) {
+    if (current.executionMode !== 'script' && current.preRunHookEnabled && current.preRunSource === 'plugin' && !current.preRunPluginId.trim()) {
       return { key: 'scheduler.editor.validation.preRunPluginRequired' };
     }
-    if (form.executionMode !== 'script' && form.preRunHookEnabled && form.preRunSource !== 'plugin' && !form.preRunHookCommand.trim()) {
+    if (current.executionMode !== 'script' && current.preRunHookEnabled && current.preRunSource !== 'plugin' && !current.preRunHookCommand.trim()) {
       return { key: 'scheduler.editor.validation.preRunHookCommandRequired' };
     }
-    if (form.prEnabled) {
-      try { normalizePrTrigger({ url: form.prUrl ?? '', change: form.prChange ?? 'any' }); }
+    if (current.prEnabled) {
+      try { normalizePrTrigger({ url: current.prUrl ?? '', change: current.prChange ?? 'any' }); }
       catch { return { key: 'scheduler.prTrigger.invalid' }; }
     }
-    if (form.webhookEnabled && form.webhookPreset === 'custom' && !parseWebhookFormatText(form.webhookFormat)) {
+    if (current.webhookEnabled && current.webhookPreset === 'custom' && !parseWebhookFormatText(current.webhookFormat)) {
       return { key: 'scheduler.editor.webhook.customInvalid' };
     }
-    if (form.webhookEnabled && form.webhookPreset === 'github-app' && !validGithubRepositories(form.webhookRepositories)) {
+    if (current.webhookEnabled && current.webhookPreset === 'github-app' && current.githubItemNumber === undefined
+      && !validGithubRepositories(current.webhookRepositories)) {
       return { key: 'scheduler.editor.webhook.repositoriesInvalid' };
+    }
+    if (current.webhookEnabled && current.webhookPreset === 'github-item') {
+      return { key: 'scheduler.editor.webhook.item.required' };
+    }
+    if (current.webhookEnabled && (current.webhookPreset === 'gitlab-item' || current.webhookPreset === 'gitlab-mr-poll')) {
+      return { key: 'scheduler.editor.webhook.gitlabItem.required' };
+    }
+    if (current.webhookEnabled && current.webhookPreset === 'gitlab-plugin') {
+      if (!current.gitlabPluginId) return { key: 'scheduler.editor.webhook.gitlabPlugin.unavailable' };
+      if (current.gitlabItemNumber === undefined && !parseGitlabProjectReference(current.gitlabPluginProject ?? '')) {
+        return { key: 'scheduler.editor.webhook.gitlabPlugin.projectInvalid' };
+      }
+    }
+    if (current.webhookEnabled && current.webhookPreset === 'plugin' && !current.webhookPluginSources?.length) {
+      return { key: 'scheduler.editor.webhook.plugin.required' };
     }
     return null;
   }, [form]);
 
   // 核心转换在 lib/scheduleFormLogic.buildScheduleInput(纯函数,node 单测覆盖);
   // heartbeat 分支 model/effort 恒带 key(空值 undefined → update patch 清列 = 跟随会话)。
-  const toInput = useCallback((): CreateScheduleInput => buildScheduleInput(form), [form]);
+  const toInput = useCallback(
+    (override?: Partial<ScheduleFormState>): CreateScheduleInput =>
+      buildScheduleInput(override ? { ...form, ...override } : form),
+    [form],
+  );
 
   return { form, setField, selectModelConfiguration, selectPluginEngine, selectModelGroup, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate };
 }

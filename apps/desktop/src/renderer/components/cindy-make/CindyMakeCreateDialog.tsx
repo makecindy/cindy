@@ -5,12 +5,15 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
-import { Textarea } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
 } from '@/contexts/dataOwnerGeneration';
 import { isSelectableVendor } from '@/lib/agentVendors';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { useFieldVoiceInput } from '@/voice-input/useFieldVoiceInput';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
 import { CindyMakePreflightDialog, type CindyMakePreflightProps } from './CindyMakePreflightDialog';
 
 const MAX_REQUEST_LENGTH = 4000;
@@ -22,14 +25,31 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
   );
   const [request, setRequest] = useState('');
   const [starting, setStarting] = useState(false);
+  const [stoppingVoice, setStoppingVoice] = useState(false);
   const [failed, setFailed] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const submitting = useRef(false);
   const mounted = useRef(true);
   const owner = useRef(getDataOwnerGeneration());
   const returnFocusRef = useRef(
     document.activeElement instanceof HTMLElement ? document.activeElement : null,
   );
-  const valid = request.trim().length > 0 && request.length <= MAX_REQUEST_LENGTH;
+
+  const voice = useFieldVoiceInput({
+    draftKey: 'cindy-make-create',
+    inputRef: textareaRef,
+    value: request,
+    onChange: (next) => {
+      setRequest(next);
+      setFailed(false);
+    },
+    maxLength: MAX_REQUEST_LENGTH,
+    active: !preflight,
+    disabled: starting,
+  });
+
+  const busy = starting || stoppingVoice;
+  const valid = voice.displayText.trim().length > 0 && voice.displayText.length <= MAX_REQUEST_LENGTH;
 
   useEffect(() => {
     mounted.current = true;
@@ -46,6 +66,29 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
       return;
     }
     submitting.current = true;
+    let finalRequest = request;
+    if (voice.isBusy) {
+      setStoppingVoice(true);
+      try {
+        const stoppedRequest = await voice.stop();
+        if (stoppedRequest === null) {
+          submitting.current = false;
+          return;
+        }
+        finalRequest = stoppedRequest;
+      } finally {
+        if (mounted.current) setStoppingVoice(false);
+      }
+      if (!mounted.current || !isCurrent()) {
+        submitting.current = false;
+        if (mounted.current && !isCurrent()) onOpenChange(false);
+        return;
+      }
+      if (!finalRequest.trim() || finalRequest.length > MAX_REQUEST_LENGTH) {
+        submitting.current = false;
+        return;
+      }
+    }
     setStarting(true);
     setFailed(false);
     try {
@@ -56,7 +99,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
       const prefs = draft.lastByVendor[vendor];
       if (!mounted.current) return;
       setPreflight({
-        request,
+        request: finalRequest,
         createOptions: {
           agentKind: vendor,
           model: prefs.model,
@@ -92,7 +135,9 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
             if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus();
           }}
           onEscapeKeyDown={(event) => {
-            if (event.isComposing || event.keyCode === 229) event.preventDefault();
+            if (event.isComposing || event.keyCode === 229 || voice.isBusy || submitting.current) {
+              event.preventDefault();
+            }
           }}
         >
           <Dialog.Title className="text-16 font-medium text-[var(--confirm-title)]">
@@ -114,29 +159,46 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
               hint={t('settings.cindyMake.create.requestHint', { max: MAX_REQUEST_LENGTH })}
             >
               {(control) => (
-                <Textarea
-                  {...control}
-                  value={request}
-                  onChange={(value) => {
-                    setRequest(value);
-                    setFailed(false);
-                  }}
-                  placeholder={t('settings.cindyMake.create.placeholder')}
-                  rows={5}
-                  maxLength={MAX_REQUEST_LENGTH}
-                  disabled={starting}
-                  className="min-h-[120px] resize-y"
-                  onKeyDown={(event) => {
-                    if (
-                      event.key === 'Enter' &&
-                      (event.metaKey || event.ctrlKey) &&
-                      !event.nativeEvent.isComposing
-                    ) {
-                      event.preventDefault();
-                      void submit();
-                    }
-                  }}
-                />
+                <div className="flex flex-col gap-1.5">
+                  <div
+                    className={cn(
+                      'flex flex-col rounded-lg border border-[var(--border-default)] bg-[var(--surface-elevated)] transition-colors',
+                      'focus-within:border-[var(--text-tertiary-stone)] focus-within:ring-2 focus-within:ring-[var(--focus-ring-soft)]',
+                      starting && 'opacity-60',
+                    )}
+                  >
+                    <textarea
+                      {...control}
+                      ref={textareaRef}
+                      value={voice.displayText}
+                      readOnly={voice.isBusy}
+                      onChange={(event) => {
+                        setRequest(event.target.value);
+                        setFailed(false);
+                      }}
+                      placeholder={t('settings.cindyMake.create.placeholder')}
+                      rows={4}
+                      maxLength={MAX_REQUEST_LENGTH}
+                      disabled={starting}
+                      className="min-h-[96px] w-full resize-y bg-transparent px-3 pt-2 pb-1 text-13 text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] outline-none disabled:cursor-not-allowed"
+                      style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+                      onKeyDown={(event) => {
+                        if (
+                          event.key === 'Enter' &&
+                          (event.metaKey || event.ctrlKey) &&
+                          !event.nativeEvent.isComposing
+                        ) {
+                          event.preventDefault();
+                          void submit();
+                        }
+                      }}
+                    />
+                    <div className="flex items-center justify-end px-2 pb-2 pt-1">
+                      <VoiceInputButton {...voice.buttonProps} testId="cindy-make-create-voice" tipSide="top" />
+                    </div>
+                  </div>
+                  <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} />
+                </div>
               )}
             </FormField>
             {failed && (
@@ -148,7 +210,7 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
                   type="button"
                   variant="secondary"
                   size="lg"
-                  disabled={starting}
+                  disabled={busy}
                   palette="confirmation"
                 >
                   {t('settings.cindyMake.create.cancel')}
@@ -157,8 +219,8 @@ export function CindyMakeCreateDialog({ onOpenChange }: { onOpenChange: (open: b
               <Button
                 type="submit"
                 size="lg"
-                disabled={!valid}
-                loading={starting}
+                disabled={!valid || busy}
+                loading={busy}
                 palette="confirmation"
               >
                 {t('settings.cindyMake.create.continue')}

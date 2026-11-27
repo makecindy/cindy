@@ -88,6 +88,10 @@
 主干 2026-11-17 起删除时还会在 Device Link 接受后撤销它的 Agent-Net 身份。两者都保留（2026-11-17 用户定：同事的撤销要有效，
 列表规则也不能出错）：官方撤销之后那台设备重新登录回不到 Agent-Net，但必须照常用 Device Link——它被 Agent-Net 拒绝时这次运行按
 「Agent-Net 关着」走 Device Link 并签「没开」，认得它的电脑用它最后的证书只认这一句（「仅使用 Agent-Net」时不退回）。
+被移除的设备要能自己回来（2026-11-23、2026-11-26 用户定）：在这台设备上点「重新加入」，或在这台设备上打开 Agent-Net
+开关（官方服务说它被移除过——身份被撤销，或账号设备列表里没有它——时，开关先替它重新加入），都能回到 Agent-Net；另一台电脑远程
+替它打开不算。被删后重新登录的设备 Device Link 照常，却不回到设备列表，同账号的电脑在 Agent-Net 上都拦它：开着的开关因此
+自动关掉，开关下写明「已从账号中移除，重新打开即可重新加入」（「仅使用 Agent-Net」时不关）。
 完整范围、复跑命令与未通过项见 [`Desktop 接线记录`](../../prototypes/agent-net-spike/results/2026-11-07-desktop-runtime/README.md)。
 后续手机/分享接线及部署交接状态见 [`2026-11-08 验证记录`](../agent-net-delivery-verification.md)。
 
@@ -133,6 +137,11 @@
   这与第 5 条不冲突，开关关闭时所有旧版路径的行为不变。
 - 开了「仅使用 Agent-Net」时，旧版分享不会出现在列表里也不能用；任务用到时要说明是这个开关挡住的，
   关掉即可继续，不能说成对方删除了分享（错误码 `REMOTE_AGENT_SHARE_LEGACY_DISABLED`）。
+- （2026-11-26 用户决定）以前接受的 Device Link 供应商分享，在分享者和受邀者都开着官方 Agent-Net 后自动改走
+  Agent-Net，用户无感：**授权不动，只换线路**，不建新的成员资格、不出现新的申请或批准，暂停、移除、额度和用量仍是
+  原来那一份。消息和附件一起走 Agent-Net；连接不通时一起回到 Device Link，不会一半走一边。第一版只在官方服务上、
+  同区域分享之间生效；「仅使用 Agent-Net」下旧分享仍按上一条处理。协议见
+  [Device Link 供应商分享改走 Agent-Net](../dev-rules/protocol-compatibility/agent-net-linked-provider-shares.md)。
 
 ## 界面
 

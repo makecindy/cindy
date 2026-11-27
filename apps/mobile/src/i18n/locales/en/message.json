@@ -185,7 +185,8 @@
     "groupSent": "Sent from a group",
     "sourceGroupId": "Group ID: {{id}}",
     "selectText": "Select Text",
-    "you": "You"
+    "you": "You",
+    "recentActivity": "Recent activity"
   },
   "actions": {
     "attachmentsPrefix": "Attachments: {{names}}",
@@ -250,6 +251,7 @@
     "edit": "Edit",
     "steer": "Interject",
     "steerQueued": "Not delivered yet. Your message is still queued.",
+    "steerUnsupportedNotice": "This engine doesn’t support steering. Queued messages will be sent after the current turn.",
     "moveUp": "Move earlier",
     "moveDown": "Move later",
     "cancelSend": "Cancel send",
@@ -267,6 +269,8 @@
     "imagesNotUploaded_other": "{{count}} images didn't upload",
     "waitingForNamedComputer": "Sends automatically when {{name}} connects",
     "reconnectComputer": "Reconnect",
+    "pendingDelivery": "Pending delivery",
+    "pendingDeliveryHint": "Saved on this phone. Waiting for confirmation from the computer.",
     "waitingForComputer": "Sends when your computer is back",
     "waitingForNetwork": "Sends when you’re back online",
     "queued": "Queued",
@@ -299,12 +303,13 @@
     "goalResumed": "Usage restored, continuing the goal",
     "goalCapacityRetry": "Model service was busy — retrying the goal",
     "autoResume": {
-      "separator": "Connection interrupted — resumed automatically",
+      "separator": "Empty response — resumed automatically",
       "succeeded": "Reconnected",
       "failed": "Reconnect failed",
       "neutral": "Reconnect",
       "usageReset": "Usage reset, continued automatically",
       "pending": "Reconnecting…",
+      "continuingWithProgress": "Continuing automatically ({{attempt}}/{{total}})…",
       "pendingWithProgress": "Reconnecting {{attempt}}/{{total}}…",
       "groupSwitchPending": "Switching to another computer…",
       "details": "Attempt {{attempt}}/{{total}} · {{count}} reconnects in this session",
