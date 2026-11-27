@@ -179,7 +179,8 @@ describe("DS-8 production source", () => {
     // The approved provenance marks add eight roles; legacy IDs remain available
     // for local theme compatibility even when built-in UI no longer consumes them.
     // 2026-11-13: + remote-agent-net-accent (远程连接拓扑的 Agent-Net 协议标识).
-    expect(new Set(ids).size).toBe(585);
+    // 2026-11-27: + search-input-bg (SearchInput page 档底色，默认 = surface-elevated).
+    expect(new Set(ids).size).toBe(586);
     expect(
       [
         ...Object.keys(bindings.defaults),

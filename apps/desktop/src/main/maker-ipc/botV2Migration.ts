@@ -381,6 +381,16 @@ export function migrateTeammatesToV2(): Promise<void> {
         log.warn('teammate V2 upgrade failed; retries on next start', { botId: id, error: String(error) });
       }
     }
+    if (activeOwnerScopeKey() !== scope) return;
+    try {
+      const { runLegacyTeammateMemoryReviewCleanup, startGlobalMemoryTidy } = await import('./globalMemoryTidyRuntime.js');
+      await runLegacyTeammateMemoryReviewCleanup(ownerRoot, () => {
+        if (activeOwnerScopeKey() !== scope) throw new Error('OWNER_CHANGED');
+      });
+      if (activeOwnerScopeKey() === scope) startGlobalMemoryTidy();
+    } catch (error) {
+      log.warn('legacy memory review cleanup or global tidy startup failed; retries on next start', { error: String(error) });
+    }
   })().catch((error) => log.warn('teammate V2 upgrade skipped', { error: String(error) }))
     .finally(() => { if (running?.promise === promise) running = null; });
   running = { scope, promise };

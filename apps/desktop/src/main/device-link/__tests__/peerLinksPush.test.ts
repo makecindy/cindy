@@ -198,4 +198,19 @@ describe('createPeerLinksPushScheduler', () => {
     expect(peerLinksStructureKey(jitterOnly)).toBe(peerLinksStructureKey(bothMeasured));
     expect(peerLinksStructureKey(prefChanged)).not.toBe(peerLinksStructureKey(jitterOnly));
   });
+
+  // 拓扑依靠现有合并推送更新对端的中转协议。此前去重只看路径，最小失败输入是同一路由从未上报到 UDP，再切成 WS。tier: unit。
+  it('对方到中转那一段的走法变化也广播', () => {
+    const route = { deviceId: 'a', path: 'relay' as const, rttMs: 220 };
+    let current: DeviceLinkPeerLinksSnapshot = { links: [], relayRttMs: 14, agentNetRoutes: [route] };
+    const broadcast = vi.fn<(snapshot: DeviceLinkPeerLinksSnapshot) => void>();
+    const scheduler = createPeerLinksPushScheduler({ snapshot: () => current, broadcast });
+    for (const peerRelayVia of [undefined, 'udp', 'websocket'] as const) {
+      current = { ...current, agentNetRoutes: [{ ...route, peerRelayVia }] };
+      scheduler.schedule();
+      vi.advanceTimersByTime(250);
+    }
+    expect(broadcast.mock.calls.map(([snapshot]) => snapshot.agentNetRoutes?.[0]?.peerRelayVia))
+      .toEqual([undefined, 'udp', 'websocket']);
+  });
 });
