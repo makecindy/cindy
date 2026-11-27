@@ -25,7 +25,7 @@ import { useImageLoadFailure } from './useImageLoadFailure';
 import { ChatLoadingImage } from './ChatLoadingImage';
 import { FileTypeIcon } from '@/components/ui/file-type-icon';
 import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
-import { createElement, memo, useId, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
+import { createElement, memo, useId, useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkCjkFriendly from 'remark-cjk-friendly';
@@ -57,11 +57,9 @@ import {
 } from './rehypeStreamWordFade';
 import { repairStreamingMarkdown } from './repairStreamingMarkdown';
 import { StreamingMarkdownChunk } from './StreamingMarkdownChunk';
-import {
-  getStreamingMarkdownThrottleInterval,
-  splitStreamingMarkdownChunks,
-  STREAMING_MARKDOWN_THROTTLE_BASE_MS,
-} from './streamingMarkdownChunks';
+import { splitStreamingMarkdownChunks } from './streamingMarkdownChunks';
+import { assignStreamingHeadingIds, rehypeMarkHeadingSlugText } from './streamingHeadingIds';
+import { useStreamingReveal } from './streamingReveal';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { isHomePath, resolveRemoteHomePath, useRemoteHomePath } from '@/hooks/useRemoteHomePath';
 import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
@@ -148,6 +146,8 @@ import {
   activateMessageUrl,
 } from './messageLinkActions';
 import { useOpenWithMenu } from './useOpenWithMenu';
+import { parsePrLinkUrl } from '@/features/cc-agent/PrSummaryPopoverContent';
+import { PrLinkHoverPopover, type PrLinkHoverTriggerProps } from './PrLinkHoverPopover';
 import { activateInlineLinkFromKeyboard, isSeparateLinkActivation } from './linkInteraction';
 import { useLinkContextMenu } from './useLinkContextMenu';
 
@@ -215,11 +215,12 @@ function isMermaidCodeChild(child: ReactNode): boolean {
 // 跳过 link 内 text,不会把 `session/<uuid>` 误当相对路径)。两个数组都是模块级
 // 常量,引用稳定,不破坏 react-markdown 的 re-parse 优化。
 // remarkMath: `$...$` / `$$...$$` → inlineMath / math 节点(micromark 语法扩展,
-// parse 阶段生效,与其它 transformer 的相对顺序无关)。`\(...\)` / `\[...\]` 定界
-// 符在 parse 前由 normalizeMathDelimiters 归一化成 dollar 形式(desktop / mobile
-// 共用实现,见 @cindy/maker-shared 的 mathMarkdown.ts)。remarkStrictInlineMath
-// 紧随其后,把松散配对的 inlineMath(货币文本、跨 code span)降级回原文,
-// 规则与 mobile parser 对齐。
+// parse 阶段生效)。`\(...\)` / `\[...\]` 定界符在 parse 前由 normalizeMathDelimiters
+// 归一化成 dollar 形式(desktop / mobile 共用实现,见 @cindy/maker-shared 的
+// mathMarkdown.ts)。remarkStrictInlineMath 紧随 remarkMath 注册,在 micromark
+// 词法层替换松散的 inline `mathText` tokenizer(规则与 mobile parser 对齐),
+// 让货币文本/跨反引号/跨行的 `$` 在分词阶段直接回退成普通字符,不吞掉两个 `$`
+// 之间的行内代码、链接或加粗。
 // remarkGfm singleTilde:false — 删除线只认标准 GFM 的 `~~text~~`,单个 `~` 保持
 // 字面量。默认 singleTilde:true 会把「4~6……4~6」这类区间写法中间整段划成删除线,
 // mobile 自研 parser(messageMarkdown.ts)本就只匹配 `~~`,此处对齐。
@@ -279,6 +280,11 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeHighlightShared,
   rehypeFencedCodeMarker,
 ];
+// 流式分片各自解析，rehype-slug 的去重计数跨不了分片：同一位置改为只记录标题文本，
+// 提交后由 assignStreamingHeadingIds 按文档顺序统一分配 id（见 streamingHeadingIds.ts）。
+const STREAMING_REHYPE_PLUGINS: PluggableList = REHYPE_PLUGINS.map((plugin) =>
+  plugin === rehypeSlug ? rehypeMarkHeadingSlugText : plugin,
+);
 
 /** MarkdownRenderer 与所有“实际是否渲染”判定共用的输入归一化。 */
 export function normalizeMarkdownRendererContent(
@@ -433,6 +439,8 @@ interface MarkdownRendererProps {
    * 方案 A 的安全前提)。
    */
   emitSourceLines?: boolean;
+  /** Notifies host cards when an in-app image, text or 3D preview lightbox opens or closes. */
+  onPreviewOpenChange?: (open: boolean) => void;
 }
 
 function parseSessionCardHref(href: string): {
@@ -461,90 +469,6 @@ function parseSessionCardHref(href: string): {
   } catch {
     return null;
   }
-}
-
-/**
- * Throttle a rapidly-changing string to at most one render per adaptive
- * interval. Caps react-markdown re-parse + rehype-highlight CPU
- * during SDK streaming, where text deltas can land 30-60 times/s even
- * after the main-process IPC batcher.
- *
- * - `enabled=false`  → returns `value` directly each call (no setState
- *   loop, no timer overhead, identical behavior to passing through).
- * - `enabled=true`   → rate-limits via setTimeout; the trailing edge is
- *   guaranteed (no-token-lost). Switching back to false flushes the
- *   latest value synchronously.
- */
-function useStreamingThrottle(value: string, enabled: boolean): string {
-  const intervalMs = enabled
-    ? getStreamingMarkdownThrottleInterval(value)
-    : STREAMING_MARKDOWN_THROTTLE_BASE_MS;
-  const [throttled, setThrottled] = useState(value);
-  const throttledRef = useRef(value);
-  const latestRef = useRef(value);
-  const lastEmitRef = useRef(0);
-  const timerRef = useRef<number | null>(null);
-
-  const emit = useCallback((nextValue: string, now: number) => {
-    lastEmitRef.current = now;
-    if (throttledRef.current === nextValue) return;
-    throttledRef.current = nextValue;
-    setThrottled(nextValue);
-  }, []);
-
-  useEffect(() => {
-    latestRef.current = value;
-
-    if (!enabled) {
-      if (timerRef.current != null) {
-        window.clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-      // Stream just ended — flush whatever the most recent value is so
-      // the final frame is never the last throttled snapshot.
-      if (throttledRef.current !== value) {
-        throttledRef.current = value;
-        setThrottled(value);
-      }
-      // A new stream should get a leading frame even if it starts shortly
-      // after the previous one ended.
-      lastEmitRef.current = 0;
-      return;
-    }
-
-    const now = performance.now();
-    const elapsed = now - lastEmitRef.current;
-    if (elapsed >= intervalMs) {
-      if (timerRef.current != null) {
-        window.clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-      emit(value, now);
-      return;
-    }
-
-    // Re-arm on every update so an interval bucket change cannot leave a
-    // timer using the previous (shorter) delay. The latest ref keeps the
-    // trailing edge lossless even when several batches arrive in between.
-    if (timerRef.current != null) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(
-      () => {
-        timerRef.current = null;
-        emit(latestRef.current, performance.now());
-      },
-      Math.max(0, intervalMs - elapsed),
-    );
-  }, [emit, value, enabled, intervalMs]);
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current != null) window.clearTimeout(timerRef.current);
-    };
-  }, []);
-
-  // useEffect 在 paint 后才执行。流式结束时本次 render 直接返回最新原文，
-  // effect 只负责同步内部 state，供未来可能的新流式周期使用。
-  return enabled ? throttled : value;
 }
 
 /**
@@ -1796,25 +1720,58 @@ function MarkdownTargetLink({
     return <span>{children}</span>;
   }
 
-  // Explicit local candidates retain the same open/copy-link menu as links.
-  return (
-    <>
+  // 注意：此处位于多个条件早返回之后，禁止放 Hook；parsePrLinkUrl 为轻纯函数。
+  const prLink =
+    allowPrivilegedLinks && target.kind === 'external' ? parsePrLinkUrl(target.href) : null;
+  const effectiveSessionId = sessionId ?? fileCtx.sessionId;
+  const renderAnchor = (prHoverProps?: PrLinkHoverTriggerProps) => (
     <a
       href={target.href}
       className={MARKDOWN_LINK_CLASS}
       onKeyDown={activateInlineLinkFromKeyboard}
-      onClick={activate}
+      onClick={(event) => {
+        prHoverProps?.onDismiss();
+        void activate(event);
+      }}
       onAuxClick={(event) => {
-        if (event.button === 1) void activate(event);
+        if (event.button === 1) {
+          prHoverProps?.onDismiss();
+          void activate(event);
+        }
       }}
       onContextMenu={(e) => {
+        prHoverProps?.onDismiss();
         if (target.kind === 'external') openWith.onContextMenu(e, target.href);
         else inlineMenu.onContextMenu(e);
       }}
       {...anchorProps}
+      onPointerEnter={(event) => {
+        (anchorProps.onPointerEnter as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
+        prHoverProps?.onPointerEnter(event);
+      }}
+      onPointerLeave={(event) => {
+        (anchorProps.onPointerLeave as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
+        prHoverProps?.onPointerLeave(event);
+      }}
+      onPointerDown={(event) => {
+        (anchorProps.onPointerDown as ((e: React.PointerEvent<HTMLAnchorElement>) => void) | undefined)?.(event);
+        prHoverProps?.onPointerDown(event);
+      }}
     >
       {children}
     </a>
+  );
+
+  // Explicit local candidates retain the same open/copy-link menu as links.
+  return (
+    <>
+    {prLink ? (
+      <PrLinkHoverPopover prRef={prLink} sessionId={effectiveSessionId}>
+        {(prHoverProps) => renderAnchor(prHoverProps)}
+      </PrLinkHoverPopover>
+    ) : (
+      renderAnchor()
+    )}
     {openWith.menu}
     {inlineMenu.menu}
     </>
@@ -1901,12 +1858,13 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   resolveImageSrc,
   emitSourceLines = false,
   gallerySection,
+  onPreviewOpenChange,
 }: MarkdownRendererProps) {
   const embeddedMediaStreaming = mediaStreaming ?? isStreaming;
-  // Cap markdown re-parse + syntax highlight cost during streaming.
-  // Static callers (TextLightbox) leave isStreaming undefined → false,
-  // so the throttle is fully bypassed — same behavior as before.
-  const throttledContent = useStreamingThrottle(content, isStreaming);
+  // 流式节奏由外层 MarkdownRenderer 的 useStreamingReveal 统一负责（匀速放出 +
+  // 按渲染耗时退避，DESIGN.md §14.4 Stream pacing）。这里不再叠加固定节流：
+  // 叠加会把逐帧放出重新压回 ~10Hz 的成块跳变。
+  const throttledContent = content;
   // 流式逐词淡入（DESIGN.md §14.4）：消息级 state 跨 parse / remount 保留，
   // 各稳定 Markdown 分片只维护自己的内容匹配状态，但共享同一条连续时间线。
   // isStreaming 翻 false 时整段回落到普通 Markdown，终版没有流式 span 包装。
@@ -1992,6 +1950,12 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
   } | null>(null);
   // model-local chip/link click → in-app 3D preview (ModelLightbox, local mode).
   const [modelLightboxPath, setModelLightboxPath] = useState<string | null>(null);
+  const previewOpen = Boolean(lightbox || textLightboxFile || modelLightboxPath);
+  useEffect(() => {
+    if (!onPreviewOpenChange) return;
+    onPreviewOpenChange(previewOpen);
+    return () => onPreviewOpenChange(false);
+  }, [previewOpen, onPreviewOpenChange]);
   // workingDir and localFileRefs are stable within a session lifecycle — they
   // only change on session switch or when the message list gains a new user
   // attachment. So in steady-state streaming, the components object is still
@@ -2206,12 +2170,18 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
       embeddedMediaStreaming,
     ],
   );
+  const markdownRootRef = useRef<HTMLDivElement>(null);
+  // 没有依赖数组：任何一次提交都可能新增或替换标题元素（尾块重解析），每次按文档
+  // 顺序重排 id。只查询带 data-slug-text 的标题，开销与标题数成正比。
+  useLayoutEffect(() => {
+    if (isStreaming && markdownRootRef.current) assignStreamingHeadingIds(markdownRootRef.current);
+  });
   const urlTransform = resolveImageSrc
     ? allowlistedImageUrlTransform
     : allowPrivilegedLinks ? trustedUrlTransform : previewSafeUrlTransform;
 
   return (
-    <div className="msg-markdown select-text">
+    <div ref={markdownRootRef} className="msg-markdown select-text">
       {isStreaming ? (
         streamingChunks.map((chunk) => (
           <StreamingMarkdownChunk
@@ -2221,7 +2191,7 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
             remarkPlugins={
               allowPrivilegedLinks ? REMARK_PLUGINS_PRIVILEGED : REMARK_PLUGINS
             }
-            rehypePlugins={REHYPE_PLUGINS}
+            rehypePlugins={STREAMING_REHYPE_PLUGINS}
             components={components}
             urlTransform={urlTransform}
             wordFadeState={wordFadeState}
@@ -2272,10 +2242,22 @@ const MarkdownRendererBase = memo(function MarkdownRendererBase({
 });
 
 /** Assistant-only envelope decoding, before Markdown chunking or repairs. */
-export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRendererProps) {
+export const MarkdownRenderer = memo(function MarkdownRenderer(incoming: MarkdownRendererProps) {
   const instanceKey = useId();
   const sessionFileCtx = useChatSessionFile();
-  const source = useStreamingThrottle(props.content, props.isStreaming ?? false);
+  const streaming = incoming.isStreaming ?? false;
+  // 匀速放出与淡入共用同一开关：关闭回复动效或系统减弱动态效果时只保留
+  // 按渲染耗时退避的发布节奏，不缓冲、不延迟。
+  const reducedMotion = useReducedMotion();
+  const streamFadeEnabled = useStreamFadeEnabled();
+  const reveal = useStreamingReveal(incoming.content, streaming, !reducedMotion && streamFadeEnabled);
+  const source = reveal.text;
+  // 流式结束后的 ≤150ms 收尾期间继续按流式渲染（淡入、分片），放完再切终版，
+  // 剩余积压不会在最后一帧整段跳出。
+  const props = useMemo(
+    () => (reveal.draining ? { ...incoming, isStreaming: true } : incoming),
+    [incoming, reveal.draining],
+  );
   const section = (partKey: number, nodeId?: string) =>
     props.galleryMessageKey === undefined ? undefined : replySectionId(props.galleryMessageKey, partKey, nodeId);
   const renderMediaFor = (partKey: number) => (node: RichNode) => {
@@ -2306,7 +2288,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer(props: MarkdownRe
   };
   const parts = useMemo(() => props.renderRichAnswers ? splitRichAnswer(source) : [], [source, props.renderRichAnswers]);
   // A reply without component blocks is one plain part starting at offset 0.
-  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} gallerySection={section(0)} />;
+  if (!parts.some(part => part.kind === 'rich')) return <MarkdownRendererBase {...props} content={source} gallerySection={section(0)} />;
   return <div className="rich-answer-body">{parts.map(part => part.kind === 'rich'
     ? <RichAnswer renderMedia={renderMediaFor(part.key)} key={part.key} source={part.source} complete={part.complete || !props.isStreaming}
         stateKey={`${props.streamFadeKey ?? instanceKey}:${part.key}`}

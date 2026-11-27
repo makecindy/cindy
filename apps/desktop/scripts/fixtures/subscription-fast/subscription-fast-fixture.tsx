@@ -7,7 +7,7 @@ import type { ProviderGroupConfig } from '../../../src/shared/providerGroup';
 mountPage({
   host: (ctx) => {
     let config: ProviderGroupConfig = {
-      strategy: 'least',
+      strategy: 'expiring',
       autoSwitch: true,
       allowFast: ctx.data.allowFast !== false,
       members: [

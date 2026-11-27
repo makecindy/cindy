@@ -629,6 +629,8 @@ export function currentDarwinTerminal() {
 export function launchDarwinDevInCurrentTerminal(command, logPath, { cwd = rootDir, env = process.env } = {}) {
   const terminal = currentDarwinTerminal();
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  // Clean up any legacy in-tree FIFO left by older builds so recursive tools never block on logs/.
+  fs.rmSync(`${logPath}.fifo`, { force: true });
   const output = fs.openSync(terminal, 'w');
   try {
     // Only this layer creates a PTY. Its output goes directly to the existing
@@ -685,19 +687,24 @@ export function desktopDevTerminalLogPath(root = rootDir) {
 // Agent 没有 TTY 时 dev 跑在新开的 Terminal 标签页里，进程退出后标签页随之关闭，
 // 失败原因就看不到了。script(1) 继续给子进程一个 pty（electron-forge 依赖 TTY），
 // 输出经命名管道只把前 maxBytes 写进日志、其余丢弃：dev 会把 trace 级日志镜像到
-// 终端，长期运行的实例不能让这份文件无限增长。每次启动覆盖，退出码与子进程一致。
+// 终端，长期运行的实例不能让这份文件无限增长。命名管道建在临时目录而不是仓库的
+// apps/desktop/logs/ 下，避免 dev 运行期间递归 grep/tar 等工具误打开活跃 FIFO 而
+// 永久阻塞（并抢走日志字节）。每次启动覆盖，退出码与子进程一致。
 // 返回一个 `{ ...; }` 命令组，可以整体接在 `cd … &&` 后面；envPrefix 只作用于 script。
 export function darwinTerminalLoggedCommand(
   command,
   logPath,
-  { envPrefix = '', maxBytes = DEV_TERMINAL_LOG_MAX_BYTES } = {},
+  { envPrefix = '', maxBytes = DEV_TERMINAL_LOG_MAX_BYTES, fifoDir = os.tmpdir() } = {},
 ) {
   const log = shellSingleQuote(logPath);
-  const fifo = shellSingleQuote(`${logPath}.fifo`);
+  const fifoTemplate = shellSingleQuote(path.join(fifoDir, 'cindy-dev-term.XXXXXX'));
   return [
-    `{ rm -f ${fifo}; mkfifo ${fifo} && { { head -c ${maxBytes} > ${log}; cat > /dev/null; } < ${fifo} & }; `,
-    `${envPrefix}/usr/bin/script -q -F ${fifo} ${command}; `,
-    `cindyDevExit=$?; rm -f ${fifo}; (exit $cindyDevExit); }`,
+    `{ cindyDevFifoDir=$(mktemp -d ${fifoTemplate}) && `,
+    `cindyDevFifo="$cindyDevFifoDir/dev-terminal.fifo" && `,
+    `mkfifo -m 0600 "$cindyDevFifo" && `,
+    `{ { head -c ${maxBytes} > ${log}; cat > /dev/null; } < "$cindyDevFifo" & } && `,
+    `${envPrefix}/usr/bin/script -q -F "$cindyDevFifo" ${command}; `,
+    `cindyDevExit=$?; [ -n "$cindyDevFifoDir" ] && rm -rf -- "$cindyDevFifoDir"; (exit $cindyDevExit); }`,
   ].join('');
 }
 
