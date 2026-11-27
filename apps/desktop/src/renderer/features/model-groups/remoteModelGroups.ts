@@ -59,8 +59,16 @@ export function isModelGroupsUnsupportedError(error: unknown): boolean {
   return extractRemoteOptionalReadMiss(error, MODEL_GROUPS_IPC.GET) !== null;
 }
 
+function readDeviceLink(): NonNullable<Window['electronAPI']>['deviceLink'] | undefined {
+  try {
+    return typeof window !== 'undefined' ? window.electronAPI?.deviceLink : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function invoke<T>(deviceId: string, channel: string, args: unknown[]): Promise<T> {
-  const api = window.electronAPI?.deviceLink;
+  const api = readDeviceLink();
   if (!api?.invoke) return Promise.reject(new Error('device link unavailable'));
   return api.invoke(deviceId, channel, args) as Promise<T>;
 }
@@ -84,7 +92,7 @@ function evictAllCurrentOwnerDeviceModelGroups(): void {
  * 升级、改了模式或换了版本后，下次打开选择器或目录恢复时重新读。常规同版本在线心跳不触发重读。
  */
 function watchReconnects(): void {
-  const link = typeof window !== 'undefined' ? window.electronAPI?.deviceLink : undefined;
+  const link = readDeviceLink();
   if (link === observedLink) return;
   const hadPrevious = observedLink !== undefined;
   detachReconnectWatch?.();
@@ -264,7 +272,7 @@ export function useDeviceModelGroups(deviceId: string | null | undefined, readOn
   const entry = useMemo(() => (deviceId ? deviceGroups(owner, deviceId) : null), [owner, deviceId]);
   const read = useCallback(() => { void entry?.read(); }, [entry]);
   useEffect(() => {
-    if (!readOnEntry || !owner.dataOwnerId || !deviceId || isScopedPeer(deviceId) || isProviderShareAgentDeviceId(deviceId)) return;
+    if (!readOnEntry || !owner.dataOwnerId || !deviceId || !readDeviceLink() || isScopedPeer(deviceId) || isProviderShareAgentDeviceId(deviceId)) return;
     read();
     return subscribeDeviceProviders(deviceId, (event) => {
       if (event.status === 'ready') read();

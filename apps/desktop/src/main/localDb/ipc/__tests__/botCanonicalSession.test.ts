@@ -352,6 +352,7 @@ function createDb(filename = ':memory:'): void {
       remote_host_id TEXT,
       agent_device_id TEXT,
       orca_remote_lead TEXT,
+      created_by_session TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
       side_chat_promoted INTEGER NOT NULL DEFAULT 0,
       side_chat_close_pending INTEGER NOT NULL DEFAULT 0,

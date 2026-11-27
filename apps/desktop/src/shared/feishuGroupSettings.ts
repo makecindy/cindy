@@ -14,10 +14,12 @@ import {
   isImDefaultAgentKind,
   isImDefaultEffort,
   isImDefaultPermissionMode,
+  isImDefaultPluginEngineEffort,
   type ImDefaultAgentKind,
   type ImDefaultEffort,
   type ImDefaultPermissionMode,
 } from './imDefaultSettings.js';
+import { pluginEngineKeyFromProviderId } from './pluginEngines.js';
 
 export interface FeishuGroupRoute {
   agentKind: ImDefaultAgentKind;
@@ -25,7 +27,8 @@ export interface FeishuGroupRoute {
   providerId: string | null;
   /** Agent 所在电脑；share:<id> 表示分享来的供应商；null 为本机。 */
   agentDeviceId: string | null;
-  effort: ImDefaultEffort;
+  /** 插件引擎(acp)允许 '' 表示引擎默认思考强度。 */
+  effort: ImDefaultEffort | '';
   /** 可选智能路由 id；命中时建任务按该路由选源并持续托管，失效时回落到上面的具体模型。 */
   modelGroup?: string | null;
 }
@@ -129,7 +132,11 @@ function optionalId(value: unknown): string | null | undefined {
 export function parseFeishuGroupRoute(value: unknown): FeishuGroupRoute | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
-  if (!isImDefaultAgentKind(raw.agentKind) || !isImDefaultEffort(raw.effort)) return null;
+  if (!isImDefaultAgentKind(raw.agentKind)) return null;
+  const effortValid = raw.agentKind === 'acp'
+    ? isImDefaultPluginEngineEffort(raw.effort)
+    : isImDefaultEffort(raw.effort);
+  if (!effortValid) return null;
   if (typeof raw.model !== 'string') return null;
   const model = raw.model.trim();
   if (!model || model.length > MAX_ID_LENGTH) return null;
@@ -137,13 +144,14 @@ export function parseFeishuGroupRoute(value: unknown): FeishuGroupRoute | null {
   const agentDeviceId = optionalId(raw.agentDeviceId ?? null);
   const modelGroup = optionalId(raw.modelGroup ?? null);
   if (providerId === undefined || agentDeviceId === undefined || modelGroup === undefined) return null;
+  if (raw.agentKind === 'acp' && !pluginEngineKeyFromProviderId(providerId)) return null;
   return {
     agentKind: raw.agentKind,
     model,
     providerId,
     agentDeviceId,
-    effort: raw.effort,
-    ...(modelGroup ? { modelGroup } : {}),
+    effort: raw.effort as ImDefaultEffort | '',
+    ...(raw.agentKind !== 'acp' && modelGroup ? { modelGroup } : {}),
   };
 }
 

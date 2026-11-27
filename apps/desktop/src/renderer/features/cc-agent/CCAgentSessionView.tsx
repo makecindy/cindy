@@ -57,7 +57,7 @@ import { SessionRouteOriginGate } from './SessionRouteOriginGate';
 import { usePluginSkillSetup } from './pluginSkillSetup';
 import { useBotIslandVisibleSession } from '@/features/bots/useBotIslandVisibleSession';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
-import { isPluginEngineEffort, isPluginEngineKind, pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
+import { isPluginEngineEffort, isPluginEngineKind, isPluginEngineSwitchSourceAllowed, pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import {
   findPluginEngine,
@@ -2366,7 +2366,7 @@ function CCAgentSessionContent({
   const completedLocalAutomation = localAutomation && scheduleSessionInfo?.canSwitchPluginEngine === true;
   const pluginEngineSwitchEligible = pluginEngineOnTaskComputer && !!sessionId && !readOnly
     && !session.orcaRole && !session.orcaRemoteLead
-    && ((session.source ?? 'desktop') === 'desktop' || session.source === 'bot' || completedLocalAutomation)
+    && (isPluginEngineSwitchSourceAllowed(session.source) || completedLocalAutomation)
     && session.status !== 'archived';
   const automationCanReturnToBuiltin = localAutomation && pluginEngineOnTaskComputer && pluginEngineTask
     && !readOnly && !session.orcaRole && !session.orcaRemoteLead && session.status === 'active';

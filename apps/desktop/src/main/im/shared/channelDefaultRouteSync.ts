@@ -14,6 +14,7 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 
+import { dbToMakerEngineKind } from '../../../shared/agentKindConversion.js';
 import type { ImDefaultSettingsChannel } from '../../../shared/imDefaultSettings.js';
 import { getDbClient } from '../../localDb/client/current';
 import { sessions } from '../../localDb/schema';
@@ -134,7 +135,7 @@ function isChannelOwnedRow(
 
 function currentRouteOf(row: SessionRouteRow): ImDefaultRoute {
   return {
-    agentKind: toCoreAgentKind(row.agentKind),
+    agentKind: dbToMakerEngineKind(row.agentKind),
     model: row.model ?? '',
     providerId: row.providerId?.trim() || null,
     ...(row.agentDeviceId ? { agentDeviceId: row.agentDeviceId } : {}),
@@ -150,7 +151,7 @@ function currentRouteOf(row: SessionRouteRow): ImDefaultRoute {
  */
 function providerNormalizer(providers: ProviderView[]) {
   return (route: ImDefaultRoute): string | null => {
-    if (route.agentDeviceId) return route.providerId;
+    if (route.agentDeviceId || route.agentKind === 'acp') return route.providerId;
     const agent = route.agentKind as AgentKind;
     return (
       movedCindyAutoSourceId(providers, {
@@ -253,8 +254,6 @@ export function createDefaultRouteFollower(deps: {
   async function evaluate(sessionId: string, options?: { dryRun?: boolean }): Promise<Evaluation | 'defer-unknown' | null> {
     const row = await readSessionRouteRow(sessionId);
     if (!row || !deps.ownsRow(row)) return null;
-    // Defaults name only built-in engines: a conversation on a plugin engine is the owner's own choice.
-    if (row.agentKind === 'acp') return null;
     const record = parseImDefaultRouteRecord(row.imDefaultRoute);
     // 用户单独改过路由(墓碑): 永不跟随, 不必解析新默认。
     if (record?.manual) return null;
@@ -335,6 +334,7 @@ export function createDefaultRouteFollower(deps: {
         // Fast 不属于渠道默认: 保留任务自己的开关, 不拿新任务的固定默认覆盖。
         { ...e.target, agentDeviceId: e.target.agentDeviceId ?? null, fastMode: e.currentFastMode },
         e.current.agentKind,
+        e.current.providerId,
       );
     } catch (err) {
       await writeRecord(sessionId, serializeImDefaultRouteRecord(e.record));
