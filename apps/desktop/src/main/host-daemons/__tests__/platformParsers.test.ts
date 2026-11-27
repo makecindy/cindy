@@ -154,13 +154,44 @@ describe('systemd 用户单元', () => {
     expect(stateOf('cron-a.timer', runtime, 'other.service')).toBe('running');
   });
 
-  it('userUnitDirs 按真实优先序给出三个持久用户目录', () => {
-    const dirs = userUnitDirs();
-    expect(dirs).toHaveLength(3);
-    expect(dirs[0]).toMatch(/systemd[/\\]user$/);
-    expect(dirs[1]).toBe(join(sep, 'etc', 'systemd', 'user'));
-    expect(dirs[2]).toMatch(/systemd[/\\]user$/);
-    expect(dirs[0]).not.toBe(dirs[2]);
+  it('userUnitDirs 按 systemd 的搜索优先序给出持久用户目录', () => {
+    // systemd 的用户单元搜索序：配置目录 > $XDG_CONFIG_DIRS > /etc > 数据目录。
+    // 同名单元在多个目录里都有时，systemd 加载的是靠前那个——顺序错了会读错单元文件，
+    // 进而停错、删错。
+    const previous = {
+      config: process.env.XDG_CONFIG_HOME,
+      configDirs: process.env.XDG_CONFIG_DIRS,
+      data: process.env.XDG_DATA_HOME,
+    };
+    const restore = () => {
+      for (const [key, value] of [
+        ['XDG_CONFIG_HOME', previous.config],
+        ['XDG_CONFIG_DIRS', previous.configDirs],
+        ['XDG_DATA_HOME', previous.data],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    };
+    try {
+      process.env.XDG_CONFIG_HOME = '/tmp/xdg-config';
+      process.env.XDG_CONFIG_DIRS = '/tmp/xdg-a:/tmp/xdg-b';
+      process.env.XDG_DATA_HOME = '/tmp/xdg-data';
+      expect(userUnitDirs()).toEqual([
+        join('/tmp/xdg-config', 'systemd', 'user'),
+        join('/tmp/xdg-a', 'systemd', 'user'),
+        join('/tmp/xdg-b', 'systemd', 'user'),
+        join(sep, 'etc', 'systemd', 'user'),
+        join('/tmp/xdg-data', 'systemd', 'user'),
+      ]);
+
+      // 没设 XDG_CONFIG_DIRS 时按默认的 /etc/xdg 算，仍然排在 /etc/systemd/user 前面。
+      delete process.env.XDG_CONFIG_DIRS;
+      expect(userUnitDirs()[1]).toBe(join(sep, 'etc', 'xdg', 'systemd', 'user'));
+      expect(userUnitDirs()[2]).toBe(join(sep, 'etc', 'systemd', 'user'));
+    } finally {
+      restore();
+    }
   });
 
   it('show 的键值输出只收非空 FragmentPath，跳过 mount/device 与 transient', () => {
@@ -625,6 +656,63 @@ describe('systemd 动作契约（真目录 + 假 systemctl）', () => {
       await expect(stat(join(dir, 'backup@daily.service'))).rejects.toMatchObject({ code: 'ENOENT' });
       // 模板是共享定义：别的实例、乃至从未加载过的实例名都可能用它，不能跟着这次删除没。
       await expect(stat(join(dir, 'backup@.service'))).resolves.toBeTruthy();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('drop-in 改了 Unit= 时，停与删都作用到真正被拉起的 service', async () => {
+    // `backup.timer.d/override.conf` 把 Unit= 改成 other.service：主文件里没写 Unit=，
+    // 按同名猜出来的 backup.service 根本不是被拉起的那个——停它等于停错东西，删它
+    // 等于删掉别人的定义。
+    const { adapter, commands, dir, cleanup } = await withUnits({
+      'backup.timer': '[Timer]\nOnCalendar=hourly\n',
+      'backup.timer.d/override.conf': '[Timer]\nUnit=other.service\n',
+      'backup.service': '[Service]\nExecStart=/bin/wrong\n',
+      'other.service': '[Service]\nExecStart=/bin/other\n',
+    });
+    try {
+      const entries = await adapter.scan();
+      // 清单里的命令也按生效的定义走：真正被拉起的是 other.service。
+      expect(entries.find((entry) => entry.name === 'backup.timer')?.command).toBe('/bin/other');
+      await adapter.stop('systemd-user:backup.timer');
+      expect(commands.some((c) => c[2] === 'stop' && c[3] === 'other.service')).toBe(true);
+      expect(commands.some((c) => c[2] === 'stop' && c[3] === 'backup.service')).toBe(false);
+      await adapter.remove('systemd-user:backup.timer');
+      // other.service 是别的单元的文件；backup.service 从来不是目标，都不该动。
+      await expect(stat(join(dir, 'other.service'))).resolves.toBeTruthy();
+      await expect(stat(join(dir, 'backup.service'))).resolves.toBeTruthy();
+      await expect(stat(join(dir, 'backup.timer'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('drop-in 重置 ExecStart 后，命令按生效的那份来', async () => {
+    // `ExecStart=` 赋空值是 systemd 的列表重置语义：清掉之前的，再接新的。
+    const { adapter, cleanup } = await withUnits({
+      'worker.service': '[Service]\nExecStart=/bin/old\n',
+      'worker.service.d/10-reset.conf': '[Service]\nExecStart=\nExecStart=/bin/new\n',
+    });
+    try {
+      const entries = await adapter.scan();
+      expect(entries.find((entry) => entry.name === 'worker.service')?.command).toBe('/bin/new');
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('模板实例的 drop-in 优先于模板的 drop-in', async () => {
+    // systemd 对模板实例先看实例目录、再看模板目录；实例那份覆盖模板那份。
+    const { adapter, commands, cleanup } = await withUnits({
+      'notify@.timer': '[Timer]\nOnCalendar=hourly\n',
+      'notify@.timer.d/10-base.conf': '[Timer]\nUnit=base.service\n',
+      'notify@ubuntu.timer.d/10-override.conf': '[Timer]\nUnit=instance.service\n',
+    });
+    try {
+      await adapter.stop('systemd-user:notify@ubuntu.timer');
+      expect(commands.some((c) => c[2] === 'stop' && c[3] === 'instance.service')).toBe(true);
+      expect(commands.some((c) => c[2] === 'stop' && c[3] === 'base.service')).toBe(false);
     } finally {
       await cleanup();
     }

@@ -17,6 +17,10 @@
  * （ExecStart / 时间表达式）从单元文件本身读 —— 前者回答「现在在跑吗」，后者回答
  * 「删了以后怎么恢复」，两者都不需要为每个单元再起一个子进程。
  *
+ * 定义取的是**有效定义**：主文件 + drop-in 覆盖（`<unit>.d/*.conf`）。只读主文件会
+ * 按旧目标动作——`backup.timer.d/override.conf` 把 `Unit=` 改成 `other.service` 时，
+ * 主文件里没写 `Unit=`，同名猜出来的 `backup.service` 根本不是被拉起的那个。
+ *
  * `foo.timer` 与 `foo.service` 是同一项常驻物的两半：只列 timer（schedule 语义），
  * 跳过被它拉起的 service，避免界面上出现两条几乎一样的条目。执行面按 timer 的
  * `Unit=` 认（没写才同名），删除时只连同能确认属于它、且没有别的单元在用的另一半
@@ -37,12 +41,23 @@ import type { HostDaemonState, HostDaemonTrigger } from '../../shared/hostDaemon
 import { runCommand, type RunCommand } from './exec.js';
 import type { HostDaemonAdapter, RawHostDaemon } from './target.js';
 
-/** systemd 用户单元的持久目录，按真实优先序排列（config > /etc > 数据目录）。 */
+/**
+ * systemd 用户单元的持久目录，按 systemd 的搜索优先序排列（同名先到先得）：
+ * 配置目录 > $XDG_CONFIG_DIRS（默认 /etc/xdg）> /etc > 数据目录。
+ *
+ * 顺序错了会读错单元文件：同名单元在多个目录里都有时，systemd 加载的是优先序靠前
+ * 那个，而动作侧读到别的那个就会停错、删错。
+ */
 export function userUnitDirs(): string[] {
   const config = process.env.XDG_CONFIG_HOME?.trim();
   const data = process.env.XDG_DATA_HOME?.trim();
+  const configDirs = (process.env.XDG_CONFIG_DIRS?.trim() || join(sep, 'etc', 'xdg'))
+    .split(':')
+    .map((dir) => dir.trim())
+    .filter(Boolean);
   return [
     join(config || join(homedir(), '.config'), 'systemd', 'user'),
+    ...configDirs.map((dir) => join(dir, 'systemd', 'user')),
     join(sep, 'etc', 'systemd', 'user'),
     join(data || join(homedir(), '.local', 'share'), 'systemd', 'user'),
   ];
@@ -70,35 +85,64 @@ export interface SystemdUnitRuntime {
   sub: string;
 }
 
-/** 解析单元文件正文。只认第一个 ExecStart（多行 ExecStart 是罕见的高级用法）。 */
-export function parseSystemdUnitFile(text: string): SystemdUnitFile {
-  let execStart = '';
+/**
+ * 解析单元的有效定义：主文件 + drop-in 覆盖，按 systemd 的赋值语义合并。
+ *
+ * 合并规则照 systemd（`Unit=`/`Description=` 是标量，后写的覆盖；`ExecStart=` 与
+ * `OnCalendar=` 是列表，逐条追加，赋空值把之前清空再继续）。只认第一个 ExecStart
+ * （多行 ExecStart 是罕见的高级用法）。
+ */
+export function parseSystemdUnitFiles(texts: readonly string[]): SystemdUnitFile {
   let description = '';
-  let schedule = '';
   let declaredUnit = '';
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
-    const eq = trimmed.indexOf('=');
-    if (eq <= 0) continue;
-    const key = trimmed.slice(0, eq).trim();
-    const value = trimmed.slice(eq + 1).trim();
-    if (key === 'ExecStart' && !execStart) {
-      // `-` 忽略非 0 退出、`@` 传 argv[0]、`+` 提权：都是 systemd 语法前缀，不是命令。
-      execStart = value.replace(/^[-@+]{1,2}/, '').trim();
-    } else if (key === 'Description' && !description) {
-      description = value;
-    } else if (key === 'Unit' && !declaredUnit) {
-      // timer 的 [Timer] Unit= 可以指名任意 service；按同名猜会把动作作用到别的条目上。
-      declaredUnit = value;
-    } else if (
-      !schedule &&
-      (key === 'OnCalendar' || key === 'OnBootSec' || key === 'OnStartupSec' || key === 'OnUnitActiveSec')
-    ) {
-      schedule = `${key}=${value}`;
+  const execStarts: string[] = [];
+  const schedules: string[] = [];
+  for (const text of texts) {
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq <= 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      const value = trimmed.slice(eq + 1).trim();
+      if (key === 'ExecStart') {
+        // 空值 = 重置列表（systemd 语义）：后面的 ExecStart 才是真正生效的那些。
+        if (!value) {
+          execStarts.length = 0;
+          continue;
+        }
+        // `-` 忽略非 0 退出、`@` 传 argv[0]、`+` 提权：都是 systemd 语法前缀，不是命令。
+        execStarts.push(value.replace(/^[-@+]{1,2}/, '').trim());
+      } else if (key === 'Description') {
+        description = value;
+      } else if (key === 'Unit') {
+        // timer 的 [Timer] Unit= 可以指名任意 service；按同名猜会把动作作用到别的条目上。
+        declaredUnit = value;
+      } else if (
+        key === 'OnCalendar' ||
+        key === 'OnBootSec' ||
+        key === 'OnStartupSec' ||
+        key === 'OnUnitActiveSec'
+      ) {
+        if (!value) {
+          schedules.length = 0;
+          continue;
+        }
+        schedules.push(`${key}=${value}`);
+      }
     }
   }
-  return { execStart, description, schedule, declaredUnit };
+  return {
+    execStart: execStarts[0] ?? '',
+    description,
+    schedule: schedules[0] ?? '',
+    declaredUnit,
+  };
+}
+
+/** 解析单元文件正文。 */
+export function parseSystemdUnitFile(text: string): SystemdUnitFile {
+  return parseSystemdUnitFiles([text]);
 }
 
 /** `list-units --all --plain --no-legend` 输出 → 单元名 → 运行状态。 */
@@ -238,6 +282,24 @@ export function isTemplateInstanceOf(name: string, template: string): boolean {
   );
 }
 
+/**
+ * 单元的 drop-in 目录层次，按应用顺序（后者覆盖前者）：类型通配 → 模板 → 单元自己。
+ */
+function dropInLayerNames(unit: string): string[] {
+  const layers: string[] = [unit.endsWith('.timer') ? 'timer.d' : 'service.d'];
+  const template = templateOf(unit);
+  if (template !== null) layers.push(`${template}.d`);
+  layers.push(`${unit}.d`);
+  return layers;
+}
+
+/** 单元目录清单里有哪些 drop-in 目录（`<name>.d/`）：一次 readdir 顺带得到。 */
+function dropInDirNames(entries: readonly string[]): Set<string> {
+  const names = new Set<string>();
+  for (const name of entries) if (name.endsWith('.d')) names.add(name);
+  return names;
+}
+
 export interface SystemdUserAdapterDeps {
   /** 单元目录候选，按真实优先序；默认 `userUnitDirs()`。测试注入临时目录。 */
   dirs?: string[];
@@ -297,11 +359,73 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
   async function readUnit(unit: string): Promise<SystemdUnitFile | null> {
     const file = await unitFilePath(unit);
     if (!file) return null;
-    try {
-      return parseSystemdUnitFile(await readFile(file, 'utf8'));
-    } catch {
-      return null;
+    return readEffectiveUnit(unit, file);
+  }
+
+  /**
+   * 单元的有效定义 = 主文件 + drop-in 覆盖。
+   *
+   * 只读主文件会按旧目标动作：`backup.timer.d/override.conf` 把 `Unit=` 改成
+   * `other.service` 时，主文件里没有 `Unit=`，同名猜出来的 `backup.service` 根本不是
+   * 真正被拉起的那个——停它等于停错东西，删它等于删掉别人的定义。
+   */
+  async function readEffectiveUnit(
+    unit: string,
+    mainPath: string,
+    index?: Map<string, Set<string>>,
+  ): Promise<SystemdUnitFile | null> {
+    const main = await readFile(mainPath, 'utf8').catch(() => null);
+    if (main === null) return null;
+    const drops = await dropInTexts(unit, index);
+    // drop-in 读不了 = 有效定义判断不了：当成读不到这个单元（动作侧据此拒绝）。
+    if (drops === null) return null;
+    return parseSystemdUnitFiles([main, ...drops]);
+  }
+
+  /**
+   * 单元的 drop-in 覆盖文本，按 systemd 的应用顺序（后者覆盖前者）。
+   *
+   * systemd 在每个单元目录里找 `<unit>.d/`：同名文件在优先目录里覆盖低优先目录，
+   * 不同名文件按文件名字典序应用；drop-in 覆盖主单元文件。模板实例先看实例目录
+   * （`foo@bar.service.d`），再看模板目录（`foo@.service.d`）；类型通配目录
+   * （`service.d/`）优先级最低，先应用。
+   *
+   * `index` 是各单元目录里已知的 drop-in 目录名（扫描时一次 readdir 顺带得到）：
+   * 有它就只探真正存在的目录，面板扫描不必为每个单元逐个目录试探。动作侧没有索引，
+   * 逐个探一次也无妨（一次性动作）。
+   *
+   * 读不了（目录或文件读不动）返回 null：判断不了有效定义，按读不到处理。
+   */
+  async function dropInTexts(
+    unit: string,
+    index?: Map<string, Set<string>>,
+  ): Promise<string[] | null> {
+    const texts: string[] = [];
+    for (const layer of dropInLayerNames(unit)) {
+      // 同一层内按文件名字典序；同名文件在优先目录里覆盖低优先目录。
+      const byName = new Map<string, string>();
+      for (const dir of dirs) {
+        const known = index?.get(dir);
+        if (known && !known.has(layer)) continue;
+        const layerDir = join(dir, layer);
+        let entries: string[];
+        try {
+          entries = await readdir(layerDir);
+        } catch (error) {
+          // 目录不存在 = 没有这一层覆盖；读不了 = 判断不了。
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+          continue;
+        }
+        for (const name of entries) {
+          if (!name.endsWith('.conf') || byName.has(name)) continue;
+          const text = await readFile(join(layerDir, name), 'utf8').catch(() => null);
+          if (text === null) return null;
+          byName.set(name, text);
+        }
+      }
+      for (const name of [...byName.keys()].sort()) texts.push(byName.get(name)!);
     }
+    return texts;
   }
 
   async function requireUnit(unit: string): Promise<SystemdUnitFile> {
@@ -398,22 +522,10 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
       // 已被 show 条目占用的定义文件：模板实例（Id=实例名）与模板文件指向同一份
       // 定义，目录再扫到它时不重复列。
       const usedPaths = new Set<string>();
-      // show 与目录并读：show 只看得到 systemd 已加载的单元，刚写入还没 reload 的
-      // 文件只有目录里才有；show 回答不了时目录就是唯一来源（模板实例以模板名出现）。
-      const fragments = await unitFragmentPaths();
-      if (fragments !== null) {
-        for (const [unit, path] of fragments) {
-          if (!unit.endsWith('.service') && !unit.endsWith('.timer')) continue;
-          if (!isUserUnitFile(path, dirs)) continue;
-          try {
-            parsed.set(unit, parseSystemdUnitFile(await readFile(path, 'utf8')));
-            paths.set(unit, path);
-            usedPaths.add(path);
-          } catch {
-            // 读不到的单元文件不进清单：连「删了以后怎么恢复」都答不上来。
-          }
-        }
-      }
+      // 每个单元目录只 readdir 一次：既作单元来源，也作 drop-in 目录索引（面板扫描是
+      // 热路径，不为每个单元逐个目录试探 drop-in）。
+      const dirEntries = new Map<string, string[]>();
+      const dropInIndex = new Map<string, Set<string>>();
       for (const dir of dirs) {
         let names: string[];
         try {
@@ -423,17 +535,34 @@ export function createSystemdUserAdapter(deps: SystemdUserAdapterDeps = {}): Hos
           if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT') throw error;
           continue;
         }
+        dirEntries.set(dir, names);
+        dropInIndex.set(dir, dropInDirNames(names));
+      }
+      // show 与目录并读：show 只看得到 systemd 已加载的单元，刚写入还没 reload 的
+      // 文件只有目录里才有；show 回答不了时目录就是唯一来源（模板实例以模板名出现）。
+      const fragments = await unitFragmentPaths();
+      if (fragments !== null) {
+        for (const [unit, path] of fragments) {
+          if (!unit.endsWith('.service') && !unit.endsWith('.timer')) continue;
+          if (!isUserUnitFile(path, dirs)) continue;
+          // 读有效定义（主文件 + drop-in）：只读主文件会把 drop-in 改过的目标当成没改。
+          const file = await readEffectiveUnit(unit, path, dropInIndex);
+          if (!file) continue;
+          parsed.set(unit, file);
+          paths.set(unit, path);
+          usedPaths.add(path);
+        }
+      }
+      for (const [dir, names] of dirEntries) {
         for (const name of names) {
           if (parsed.has(name)) continue;
           if (!name.endsWith('.service') && !name.endsWith('.timer')) continue;
           const path = join(dir, name);
           if (usedPaths.has(path)) continue;
-          try {
-            parsed.set(name, parseSystemdUnitFile(await readFile(path, 'utf8')));
-            paths.set(name, path);
-          } catch {
-            // 读不到的单元文件不进清单：连「删了以后怎么恢复」都答不上来。
-          }
+          const file = await readEffectiveUnit(name, path, dropInIndex);
+          if (!file) continue;
+          parsed.set(name, file);
+          paths.set(name, path);
         }
       }
 
