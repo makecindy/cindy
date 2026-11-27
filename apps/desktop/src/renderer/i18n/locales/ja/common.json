@@ -13809,6 +13809,9 @@
           "allow": "許可",
           "deny": "拒否",
           "approve": "承認"
+        },
+        "companion": {
+          "retryLater": "しばらくしてからもう一度お試しください"
         }
       },
       "hook": {

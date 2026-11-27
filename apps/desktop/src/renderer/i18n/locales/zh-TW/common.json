@@ -13809,6 +13809,9 @@
           "allow": "允許",
           "deny": "拒絕",
           "approve": "批准"
+        },
+        "companion": {
+          "retryLater": "請稍後再試"
         }
       },
       "hook": {
