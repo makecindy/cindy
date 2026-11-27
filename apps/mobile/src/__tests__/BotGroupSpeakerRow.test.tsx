@@ -27,6 +27,8 @@ vi.mock('react-native', () => ({
   Pressable: ({ children, testID, onPress, accessibilityLabel, accessibilityState, disabled }: any) => el('button', {
     'data-testid': testID, 'aria-label': accessibilityLabel, 'aria-expanded': accessibilityState?.expanded, onClick: onPress, disabled,
   }, children),
+  AccessibilityInfo: { isScreenReaderEnabled: vi.fn(async () => false), addEventListener: () => ({ remove() {} }) },
+  Platform: { OS: 'ios', select: (value: Record<string, unknown>) => value.ios ?? value.default },
   useWindowDimensions: () => ({ width: 390, height: 844 }),
   StyleSheet: { create: (value: unknown) => value },
 }));

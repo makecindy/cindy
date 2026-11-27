@@ -37,6 +37,16 @@ function memberMentionLabels(member: BotGroupMemberView) {
 type MentionRange = { start: number; end: number };
 const overlaps = (a: MentionRange, b: MentionRange) => a.start < b.end && b.start < a.end;
 
+/** Collapse one recipient's nested aliases at the same `@` (e.g. `Alice` and `Alice · Acme`) to the longest span. */
+function mergeNestedAliases(ranges: readonly MentionRange[]): MentionRange[] {
+  const longestByStart = new Map<number, MentionRange>();
+  for (const range of ranges) {
+    const existing = longestByStart.get(range.start);
+    if (!existing || range.end > existing.end) longestByStart.set(range.start, range);
+  }
+  return [...longestByStart.values()];
+}
+
 /** Each saved recipient must occur somewhere. Highlight only a unique occurrence
  * with no competing possible range. Broadcasts also occupy their known spans. */
 function confirmedMobileMentionRanges(text: string, context: BotGroupMentionContext): MentionRange[] {
@@ -51,7 +61,10 @@ function confirmedMobileMentionRanges(text: string, context: BotGroupMentionCont
     && !broadcasts.some(group => group.some(other => other !== range && overlaps(other, range)))));
   const groups = mentions.botIds.map(id => {
     const member = members.find(candidate => candidate.botId === id);
-    return member ? rangesFor(memberMentionLabels(member)).filter(range => !fixedBroadcasts.some(broadcast => overlaps(range, broadcast))) : [];
+    return member
+      ? mergeNestedAliases(rangesFor(memberMentionLabels(member)))
+        .filter(range => !fixedBroadcasts.some(broadcast => overlaps(range, broadcast)))
+      : [];
   });
   // Replies and shares can have implicit recipients. A missing range for one
   // recipient doesn't remove another recipient's independently matched range.
@@ -63,7 +76,7 @@ function confirmedMobileMentionRanges(text: string, context: BotGroupMentionCont
   const typedLabels = roster.flatMap(member => [member.name, member.nickname || member.displayName || member.name]);
   const possibleRanges = roster.length ? rangesFor([...context.labels, ...typedLabels, ...allLabels, ...allBotsLabels]) : [];
   const personal = groups.flatMap((ranges, index) => ranges.length === 1 ? ranges : ranges.filter(range => {
-    if (possibleRanges.some(other => (other.start !== range.start || other.end !== range.end) && overlaps(other, range))) return false;
+    if (possibleRanges.some(other => overlaps(other, range) && (other.start !== range.start || other.end > range.end))) return false;
     const spelling = text.slice(range.start, range.end);
     if (!typedLabels.some(label => spelling === `@${label.trim()}`)) return false;
     const typed = resolveBotGroupMentions(spelling, { members: roster, allLabels, allBotLabels: [...allBotsLabels, 'bots'] });

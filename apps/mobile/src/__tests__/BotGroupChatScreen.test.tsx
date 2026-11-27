@@ -1865,6 +1865,52 @@ describe('group composer', () => {
     }
   });
 
+  // PR #13318 review: cross-org human full display name (`Alice · Acme`) shares the same `@`
+  // start as her undecorated short name (`Alice`). Exercise candidate pick -> send -> mobile
+  // echo -> member card (both single and repeated mentions) while keeping cross-recipient
+  // ambiguity cases above plain text.
+  it('keeps the full member card link when picking a cross-org human mention', async () => {
+    const alice = {
+      botId: 'alice-acme', actorKind: 'human' as const, name: 'Alice', orgName: 'Acme', showOrgName: true,
+      avatar: '', avatarColor: '', status: 'active' as const,
+    };
+    const chat = group({
+      openPlan: null,
+      serverBacked: true,
+      members: [...group().members, alice],
+      messages: [],
+    });
+    await render(chat);
+    await type('@Ali');
+    await click('botGroup.mention.alice-acme');
+    expect(h.row.value).toBe('@Alice · Acme ');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      text: '@Alice · Acme', mentions: { all: false, botIds: ['alice-acme'] },
+    }));
+    const { text: content, mentions } = h.chat.act.mock.lastCall[1];
+    await render({ ...chat, messages: [...chat.messages, message('sent', 3, { authorKind: 'user', content, mentions })] });
+    const bubble = byId('botGroup.message.user')!;
+    const links = [...bubble.querySelectorAll('span[role="link"]')];
+    expect(links.map(link => link.textContent)).toEqual(['@Alice · Acme']);
+    expect(JSON.parse(links[0]!.getAttribute('data-style')!).color).toBeTruthy();
+    await act(async () => (links[0] as HTMLElement).click());
+    expect(byId('botGroup.mention.identity')?.textContent).toContain('Alice · Acme');
+    await click('botGroup.mention.identity.close');
+
+    // Repeated full mentions for the same cross-org recipient also keep both links.
+    await render({
+      ...chat,
+      messages: [...chat.messages, message('sent-twice', 4, {
+        authorKind: 'user', content: '@Alice · Acme 请看，再次确认 @Alice · Acme', mentions,
+      })],
+    });
+    const repeatedBubble = [...node.querySelectorAll('[data-testid="botGroup.message.user"]')].at(-1)!;
+    expect([...repeatedBubble.querySelectorAll('span[role="link"]')].map(link => link.textContent)).toEqual([
+      '@Alice · Acme', '@Alice · Acme',
+    ]);
+  });
+
   it.each(['scheduled', 'manual', 'always'] as const)('honors %s delegation when a long press starts an empty draft', async trigger => {
     const repliesEnabled = vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(true);
     onTestFinished(() => repliesEnabled.mockRestore());
