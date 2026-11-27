@@ -33,3 +33,17 @@ Desktop 控制端在本进程内记录「已发出创建但未得到确认」的
 重新检查 active、无消息、未发送、未运行、未置顶，防止控制端探测后任务被接手；未通过
 检查不取消运行时、不登记回收。旧主机拒绝新通道，控制端只销账，不退回无条件删除。
 控制端快照缺少任一保护字段时也不请求清理。Worker 两条实现保持相同事务条件，不改 schema。
+
+`worktree:discard-precreated` 与 `worktree:cancel-precreated` 拒绝清理时仍返回 `PRECONDITION_FAILED`
+（路径/恢复键不匹配返回 `PERMISSION_DENIED`），但在 `PRECONDITION_FAILED` 消息前缀附带结构化原因
+`WORKTREE_PRECREATED_PRESERVED:<reason>:`（如 `dirty`、`in-progress`、`live-reference`、
+`keep-sentinel`、`branch-mismatch`、`ignored-files`、`remove-failed` 等，见
+`apps/desktop/src/shared/remotePrecreatedWorktreeLedger.ts`）。旧控制端只看错误码，行为不变；
+新控制端遇到旧主机无前缀的 `PRECONDITION_FAILED` 时仍归类为「远端保留」，不再误报「请重新连接设备」。
+被控端 `discard` 与 `cancel` 同样在检查 live reference 前默认回收孤儿 runtime lease，且在合法
+放弃/取消到达时中止同 `sessionId` + `recoveryKey` 的在途 `createWorktree`，等待队列设 40s 上限
+（低于 Device Link 60s 超时）并在超时时返回 `in-progress`，避免盲等 60s 超时。
+控制端在「设置 → 存储空间 → worktree 回收」展示远程待回收账本并提供「重试回收」与经二次确认的
+「保留目录并解除阻止」逃生阀（同步清理 Main 内存镜像与磁盘账本）。
+实现见 `apps/desktop/src/main/worktree/WorktreeManager.ts`、`precreatedWorktreeDiscardHandler.ts`、
+`apps/desktop/src/renderer/features/cc-agent/remotePrecreatedWorktree.ts` 与 `WorktreeRecycleCard.tsx`。
