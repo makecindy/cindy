@@ -359,9 +359,9 @@ export function ScheduleFormDialog({
     active: open && hookGenOpen,
     disabled: hookGenerating,
   });
-  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持本机与同账号其他电脑开放的插件引擎，可用于每次新建任务
-  // 与绑定普通桌面任务临时切换；持续会话(scheduler 任务)、脚本、伙伴例行任务与项目自动化不提供。
-  const pluginEnginesAllowed = (runMode === 'fresh' || runMode === 'bound') && !isScriptMode && !isProjectAutomationMode && initial?.source !== 'bot';
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持本机与同账号其他电脑及分享开放的插件引擎，
+  // 可用于新建任务、持续会话、绑定非 SSH 任务、伙伴例行任务与项目自动化；仅脚本执行不可用。
+  const pluginEnginesAllowed = !isScriptMode;
   const pluginEngineList = usePluginEngines(pluginEnginesAllowed || !!form.pluginEngine);
   const pluginEngineChoice = pluginEnginesAllowed ? form.pluginEngine ?? null : null;
   const pluginRouteDevices = useModelRouteDevices({

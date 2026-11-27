@@ -525,7 +525,8 @@
           "all": "Alle",
           "cc": "Claude Code",
           "codex": "Codex",
-          "pi": "Pi"
+          "pi": "Pi",
+          "acp": "Plugin-Engine"
         },
         "lastActivity": {
           "1d": "1 T",

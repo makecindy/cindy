@@ -9,6 +9,7 @@
     "stopAllHint": "Inclui pedidos de outras pessoas",
     "step": "Passo {{step}}/{{total}}"
   },
+  "newMessagesBoundary": "NEW",
   "title": "Conversas de grupo",
   "memberSeparator": ", ",
   "memberCount_one": "{{count}} membro",
@@ -46,6 +47,7 @@
     "all": "Todos",
     "allHint": "Apenas pessoas",
     "label": "Mencionar um amigo",
+    "avatarHint": "Menciona este amigo no fim do rascunho.",
     "allBots": "Todos os amigos",
     "allBotsHint": "Apenas amigos"
   },
@@ -698,5 +700,10 @@
   },
   "memberCount_many": "{{count}} membros",
   "waitingForOwner": "A aguardar confirmação",
-  "externalBadge": "Externo"
+  "externalBadge": "Externo",
+  "reaction": {
+    "add": "Adicionar reação",
+    "count": "{{emoji}} · {{count}} reações",
+    "failed": "Não foi possível atualizar a reação. Tente novamente."
+  }
 }

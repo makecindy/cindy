@@ -476,9 +476,9 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     }
     return saved;
   })();
-  const [state, setState] = useJsonSnapshotState<{ identity: string; value: BotGroupChatState; online: boolean; loadingOlder: boolean }>(() => ({ identity,
+  const [state, setState] = useJsonSnapshotState<{ identity: string; value: BotGroupChatState; online: boolean; verified: boolean; loadingOlder: boolean }>(() => ({ identity,
     value: cached ? { kind: 'ready', group: chatGroupView(cached.page, cached.self, cached.actors, 'group') } : { kind: 'loading' },
-    online: true, loadingOlder: false }));
+    online: true, verified: false, loadingOlder: false }));
   const page = useRef<{ identity: string; page: ChatPage; self: string; actors: ChatActor[] } | null>(cached ? { identity, ...cached } : null);
   const accessGeneration = useRef(0);
   const deferredMetadataVersion = useRef(0);
@@ -508,7 +508,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     if (recoveryControl.current?.identity === identity) recoveryControl.current.clear();
     forgetChatServerMediaRoom(groupId);
     if (valid()) { void forgetRemoteResource(api.userId, groupId); void forgetChatMessages(groupId); void api.client.clearHistory(groupId).catch(() => undefined); }
-    setState({ identity, value: { kind: 'missing' }, online: false, loadingOlder: false });
+    setState({ identity, value: { kind: 'missing' }, online: false, verified: false, loadingOlder: false });
   }, [valid, api, groupId, identity]);
   const [threadsSyncing, setThreadsSyncing] = useState(false);
   const index = useRef<{ identity: string; generation: number; revision?: string; result: ThreadBackfill; mentionVersion: string } | null>(null);
@@ -544,7 +544,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   useEffect(() => subscribeChatInvalidation(roomId => {
     if (roomId !== groupId || !valid()) return;
     accessGeneration.current++; freshRead.current = false; page.current = null;
-    setState({ identity, value: { kind: 'missing' }, online: false, loadingOlder: false });
+    setState({ identity, value: { kind: 'missing' }, online: false, verified: false, loadingOlder: false });
   }), [api, identity, groupId]);
   useEffect(() => {
     if (!enabled || !api.enabled || api.client.personalList.hidden(groupId)) return;
@@ -558,7 +558,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       page.current = { identity, ...saved };
       if (opening.current.identity === identity && opening.current.shownMs < 0) { opening.current.shownMs = Date.now() - opening.current.at; opening.current.source = 'disk'; }
       setState(old => ({ identity, value: { kind: 'ready', group: view(saved.page, saved.self, saved.actors) },
-        online: old.identity === identity && old.online, loadingOlder: false }));
+        online: old.identity === identity && old.online, verified: false, loadingOlder: false }));
     });
     return () => { cancelled = true; };
   }, [api, identity, enabled, groupId, threadRootId]);
@@ -614,7 +614,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
         const actorsList = previousEntry?.actors ?? [];
         const mergedPartial = preserveNewerPush(partial);
         page.current = { identity, page: mergedPartial, self: selfId, actors: actorsList };
-        setState({ identity, value: { kind: 'ready', group: view(mergedPartial, selfId, actorsList) }, online: true, loadingOlder: false });
+        setState(old => ({ identity, value: { kind: 'ready', group: view(mergedPartial, selfId, actorsList) }, online: true, verified: old.identity === identity && old.verified, loadingOlder: false }));
       };
       const metadataVersionAtLoad = deferredMetadataVersion.current;
       const [loadedNext, self, actors] = await Promise.all([
@@ -650,7 +650,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
         if (saved && valid() && generation === accessGeneration.current) return settleChatOutbox(mobileDurableOutbox, groupId, new Set(next.messages.map(message => message.id)),
           new Set(Object.entries(chatThreadMetadata(next, self).shares).filter(([, share]) => share.bySelf).map(([replyId]) => replyId)));
       }).catch(() => undefined);
-      setState({ identity, value: { kind: 'ready', group: view(next, self, actors) }, online: true, loadingOlder: false });
+      setState({ identity, value: { kind: 'ready', group: view(next, self, actors) }, online: true, verified: true, loadingOlder: false });
       void hydrate(page.current).catch(() => undefined);
       if (!complete && recoveryControl.current?.identity === identity) {
         if (deferredDuringLoad && !loadedNext.metadataRetryAt) recoveryControl.current.ensureScheduled();
@@ -660,7 +660,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       if (run.isStale() || !valid() || generation !== accessGeneration.current) return;
       if (chatAccessLost(error)) loseAccess();
       else {
-        setState(old => ({ identity, value: old.identity === identity && old.value.kind === 'ready' ? old.value : { kind: 'error', message: error instanceof Error && error.message === 'CHAT_ENDPOINT_UNAVAILABLE' ? error.message : 'CHAT_READ_FAILED' }, online: false, loadingOlder: false }));
+        setState(old => ({ identity, value: old.identity === identity && old.value.kind === 'ready' ? old.value : { kind: 'error', message: error instanceof Error && error.message === 'CHAT_ENDPOINT_UNAVAILABLE' ? error.message : 'CHAT_READ_FAILED' }, online: false, verified: old.identity === identity && old.verified, loadingOlder: false }));
         if (recoveryControl.current?.identity === identity) {
           recoveryControl.current.schedule(api.noteRateLimit(error));
         }
@@ -835,7 +835,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
                   if (saved && valid() && generation === accessGeneration.current) return settleChatOutbox(mobileDurableOutbox, groupId, new Set(nextPage.messages.map(message => message.id)),
                     new Set(Object.entries(chatThreadMetadata(nextPage, currentEntry.self).shares).filter(([, share]) => share.bySelf).map(([replyId]) => replyId)));
                 }).catch(() => undefined);
-                setState({ identity, value: { kind: 'ready', group: view(nextPage, currentEntry.self, currentEntry.actors) }, online: true, loadingOlder: false });
+                setState(old => ({ identity, value: { kind: 'ready', group: view(nextPage, currentEntry.self, currentEntry.actors) }, online: true, verified: old.identity === identity && old.verified, loadingOlder: false }));
                 projectedDirectly = true;
                 if (hasAggregate) void hydrate(page.current).catch(() => undefined);
               }
@@ -907,7 +907,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
         if (!valid() || page.current !== previous) return;
         page.current = { ...previous, page: next };
         void cacheChatMessages(groupId, { version: 1, page: next, self: previous.self, actors: previous.actors }, true);
-        setState({ identity, value: { kind: 'ready', group: view(next, previous.self, previous.actors) }, online: true, loadingOlder: false });
+        setState(old => ({ ...old, value: { kind: 'ready', group: view(next, previous.self, previous.actors) }, online: true, loadingOlder: false }));
         void hydrate(page.current).catch(() => undefined);
       } catch (error) {
         if (valid() && page.current === previous && chatAccessLost(error)) loseAccess();
@@ -964,7 +964,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       if (action === 'hide') {
         await api.client.hide(groupId, operationId);
         forgetChatServerMediaRoom(groupId);
-        if (valid()) { accessGeneration.current++; page.current = null; setState({ identity, value: { kind: 'missing' }, online: true, loadingOlder: false });
+        if (valid()) { accessGeneration.current++; page.current = null; setState({ identity, value: { kind: 'missing' }, online: true, verified: false, loadingOlder: false });
           await forgetRemoteResource(api.userId, groupId); await forgetChatMessages(groupId); }
       } else if (action === 'leave') {
         try { await api.client.leave(groupId, operationId); } catch (error) { if (valid()) reload(); throw error; }
@@ -1129,7 +1129,7 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
   const threadMeta = useMemo(() => enabled && latest ? chatThreadMetadata(latest.page, latest.self) : undefined, [enabled, latest]);
   return { state: state.identity === identity ? state.value : { kind: 'loading' } as BotGroupChatState,
     listHidden: api.current() && api.client.personalList.hidden(groupId),
-    online: state.identity === identity && state.online, reload, act, pending, pendingAction, threadMeta, followThread, shareToMain, react,
+    online: state.identity === identity && state.online, verified: state.identity === identity && state.verified, reload, act, pending, pendingAction, threadMeta, followThread, shareToMain, react,
     backfillThreads, threadsSyncing: state.identity === identity && threadsSyncing,
     canQueue: enabled && api.enabled && state.identity === identity && state.value.kind === 'ready' && !api.client.personalList.hidden(groupId),
     acceptListState, isListHidden: () => api.client.personalList.hidden(groupId), loadOlder, loadingOlder: state.loadingOlder, media, markRead, uploadAttachment };

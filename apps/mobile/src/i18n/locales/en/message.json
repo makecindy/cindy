@@ -8,6 +8,19 @@
       "selected": "Selected"
     }
   },
+  "voiceCall": {
+    "title": "Voice Call",
+    "saved": "Record saved",
+    "you": "You",
+    "companion": "Companion",
+    "sendFailed": "Could not send. Your words have been kept.",
+    "handoff": {
+      "sending": "Handing over…",
+      "accepted": "Handed to your companion",
+      "failed": "Could not hand over. Your words have been kept.",
+      "completed": "Result received"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Sent by local app “{{name}}”",
     "sourceLocalAppId": "App ID: {{id}}",
@@ -265,6 +278,8 @@
     "delete": "Delete",
     "retry": "Retry",
     "notSent": "Not sent",
+    "deliveryUnconfirmed": "Delivery unconfirmed",
+    "recheckDelivery": "Check again",
     "imagesNotUploaded_one": "{{count}} image didn't upload",
     "imagesNotUploaded_other": "{{count}} images didn't upload",
     "waitingForNamedComputer": "Sends automatically when {{name}} connects",
@@ -444,6 +459,9 @@
     "send": "Send Message",
     "sending": "Sending…",
     "sent": "Submitted",
+    "sendTooManyArguments": "This message uses more than {{limit}} items in one step. Ask the assistant to split them into smaller groups.",
+    "sendValueUnavailable": "A value this message uses is unavailable. Ask the assistant to check the form fields.",
+    "sendTextUnavailable": "Could not prepare the message to send.",
     "sendFailed": "The message was not submitted. Your entries are still here.",
     "playVideo": "Play video",
     "downloadVideo": "Download video",

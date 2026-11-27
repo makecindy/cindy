@@ -532,4 +532,28 @@ describe('im default settings store', () => {
     const orphan = __testing.normalize({ agentKind: 'acp', agents: IM_DEFAULT_SETTINGS.agents });
     expect(orphan.agentKind).toBe(IM_DEFAULT_SETTINGS.agentKind);
   });
+
+  it('preserves modelGroup on effort-only patches and clears it when concrete route identity changes', () => {
+    writeImDefaultSettingsPatch({
+      agentKind: 'codex',
+      modelGroup: 'coding',
+      agents: { codex: { providerId: 'openai', model: 'gpt-5', effort: 'high' } },
+    }, 'feishu');
+    expect(readImDefaultSettings('feishu').modelGroup).toBe('coding');
+
+    // Effort-only update on the same concrete route keeps modelGroup attached.
+    writeImDefaultSettingsPatch({
+      agents: { codex: { providerId: 'openai', model: 'gpt-5', effort: 'xhigh' } },
+    }, 'feishu');
+    expect(readImDefaultSettings('feishu')).toMatchObject({
+      modelGroup: 'coding',
+      agents: { codex: { providerId: 'openai', model: 'gpt-5', effort: 'xhigh' } },
+    });
+
+    // Changing concrete model clears modelGroup.
+    writeImDefaultSettingsPatch({
+      agents: { codex: { providerId: 'openai', model: 'gpt-5-mini', effort: 'xhigh' } },
+    }, 'feishu');
+    expect(readImDefaultSettings('feishu').modelGroup).toBeUndefined();
+  });
 });

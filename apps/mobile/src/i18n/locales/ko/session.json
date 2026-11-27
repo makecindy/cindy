@@ -398,7 +398,13 @@
     "forkConfirmTitle": "여기서 새 세션을 시작할까요?",
     "forkConfirmDescription": "이 지점의 대화 맥락을 사용해 독립된 새 세션을 만듭니다. 원래 세션은 변경되지 않으며, 이후 두 세션의 메시지는 서로에게 영향을 주지 않습니다.",
     "forkConfirm": "새 세션 시작",
-    "forkCancel": "취소"
+    "forkCancel": "취소",
+    "modelSwitchPreparation": {
+      "pending": "다음 메시지",
+      "preparing": "준비 중…",
+      "failed": "전환 실패",
+      "usingPrevious": "이 메시지는 {{actual}}을(를) 사용합니다. {{target}}은(는) 아직 준비되지 않았습니다."
+    }
   },
   "shareImage": {
     "title": "대화 공유",

@@ -182,6 +182,8 @@ function ViewStyleMenu({
 }
 
 export interface PinnedSectionProps {
+  /** 收件箱模式下，置顶任务沿用收件箱的行显示规则，但不显示稍后处理和完成按钮。 */
+  inboxMode?: boolean;
   sortBy: PinnedSortBy;
   onSortByChange: (next: PinnedSortBy) => void;
   /** 已按筛选和持久化顺序排好的置顶对话与项目。 */
@@ -215,6 +217,7 @@ export interface PinnedSectionProps {
 }
 
 export function PinnedSection({
+  inboxMode = false,
   sortBy,
   onSortByChange,
   entries,
@@ -341,6 +344,8 @@ export function PinnedSection({
       return (
         <SessionCard
           session={session}
+          inboxMode={inboxMode}
+          hideInboxActions={inboxMode}
           variant={mode === 'list' ? 'list' : 'card'}
           isFirst={index === 0}
           hideBottomDivider={nextHighlighted}
@@ -360,6 +365,7 @@ export function PinnedSection({
       );
     },
     [
+      inboxMode,
       mode,
       slicedEntries,
       renderProject,
@@ -385,6 +391,8 @@ export function PinnedSection({
     ) : (
       <SessionItem
         session={entry.session}
+        inboxMode={inboxMode}
+        hideInboxActions={inboxMode}
         isActive={entry.session.id === activeSessionId}
         isRunning={runningSessionIds.has(entry.session.id)}
         isAttached={attachedSessionIds.has(entry.session.id)}

@@ -460,7 +460,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     return {
       role,
       model,
-      ...(modelGroup && !remoteHostId ? { modelGroup } : {}),
+      ...(modelGroup ? { modelGroup } : {}),
       effort: typeof wc.effort === 'string' ? (wc.effort as Effort) : undefined,
       fast: (typeof wc.fast === 'boolean' || wc.fast === 'ultrafast') ? wc.fast : undefined,
       // 来源与模型是同一次选择的两个维度,随 model 一起耐久保留;与 role 同样 trim,
@@ -649,8 +649,8 @@ function sanitize(raw: unknown): NewMakerDraft {
 }
 
 /**
- * 只认 `acp-plugin:<插件>:<引擎>` 形态的来源；模型值是引擎给的不透明字符串。`deviceId` 是引擎所在的
- * 另一台自己的电脑(设备 id 形态)：别人分享的来源不提供插件引擎，读到就整项作废，不悄悄改成本机的同名引擎。
+ * 只认 `acp-plugin:<插件>:<引擎>` 形态的来源；模型值是引擎给的不透明字符串。`deviceId` 可指向
+ * 另一台电脑或收到的分享。这里只恢复来源标识，能否使用由当前目录及分享准入判定。
  */
 function sanitizePluginEngine(value: unknown): NewMakerDraft['pluginEngine'] {
   if (!value || typeof value !== 'object') return null;
@@ -658,7 +658,9 @@ function sanitizePluginEngine(value: unknown): NewMakerDraft['pluginEngine'] {
     providerId?: unknown; modelId?: unknown; permissionMode?: unknown; effort?: unknown; deviceId?: unknown;
   };
   if (deviceId !== undefined && (
-    typeof deviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(deviceId) || isProviderShareAgentDeviceId(deviceId)
+    typeof deviceId !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(deviceId)
+    // Combine the common length/character check with the share parser's alphanumeric first character.
+    || (isProviderShareAgentDeviceId(deviceId) && !/^share:[A-Za-z0-9]/.test(deviceId))
   )) return null;
   if (
     typeof providerId !== 'string' || providerId.length > 512 || !pluginEngineKeyFromProviderId(providerId)
@@ -1184,11 +1186,6 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
     next.collab = defaultCollab();
   } else if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId && next.collab.workerConfig) {
     next.collab = { ...next.collab, workerConfig: undefined };
-  } else if (next.remoteHostId && next.collab.workerConfig?.modelGroup) {
-    next.collab = {
-      ...next.collab,
-      workerConfig: { ...next.collab.workerConfig, modelGroup: undefined },
-    };
   }
   // 协同与项目/对话形态正交,切 workingDir 不再改 enabled。device-link 与 SSH 的 Worker
   // 创建和团队读写都在对应执行端完成;Worker 子会话不能嵌套协同,由会话侧入口判定兜住。

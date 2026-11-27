@@ -14,9 +14,11 @@ import { messages } from '../localDb/schema.js';
 import { isSubscriptionProvider } from '../../shared/subscriptionAccounts.js';
 import { readProviderGroupBinding } from '../provider-group/bindings.desktop.js';
 import { readProviderGroup } from '../provider-group/store.js';
-import { localProviderView, resolver } from './desktopResolver.js';
+import { readSubscriptionSessionAccount } from '../subscription-accounts/runtime.js';
+import { localProviderView, refreshAutoModelGroupRoutes, resolver } from './desktopResolver.js';
 import { bindModelGroupSession } from './sessionBindings.js';
 import { createModelGroupSessionStart } from './sessionStart.js';
+import { registerModelGroupStartBridge } from './startBridge.js';
 
 const log = createLogger('model-groups:session-start');
 
@@ -68,10 +70,16 @@ export const modelGroupSessionStart = createModelGroupSessionStart({
     if ((view?.subscriptionAccountKeys?.length ?? 0) < 2) return null;
     const pool = isSubscriptionProvider(route.providerId) ? route.providerId : view?.subscriptionAccountPool ?? view?.subscriptionPool;
     if (!isSubscriptionProvider(pool)) return null;
-    // 用到时才加载账号池的运行时。
-    const { readSubscriptionSessionAccount } = await import('../subscription-accounts/runtime.js');
     const account = await readSubscriptionSessionAccount(pool, { sessionId, model: route.model, routeProviderId: route.providerId });
     if (account.state !== 'bound') return null;
     return account.account.identity || (t('providerGroup.member.accountFallback' as never, { index: account.account.number } as never) as string);
   },
+});
+
+registerModelGroupStartBridge({
+  resolve: (request) => resolver.resolve(request),
+  refresh: () => refreshAutoModelGroupRoutes(),
+  prepare: modelGroupSessionStart.prepare,
+  attach: modelGroupSessionStart.attach,
+  dispatched: modelGroupSessionStart.dispatched,
 });

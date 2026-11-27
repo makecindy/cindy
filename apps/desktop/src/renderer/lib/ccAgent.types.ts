@@ -3,6 +3,7 @@ import type { AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import type { ImMessageSource } from '../../shared/imMessageSource';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { SessionSource } from '../../shared/sessionSource';
+import type { ModelGroupSessionBindingView } from '../../shared/modelGroups';
 import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
@@ -237,6 +238,7 @@ export interface CcMeta {
    * readMessageSourceDevice（宽容解析）。
    */
   sourceDevice?: MessageSourceDevice;
+  dispatchRoute?: import('@cindy/maker-shared/message-source').MessageDispatchRoute;
   /** 插件任务派发的消息（readMessageSourcePlugin 读取）。 */
   sourcePlugin?: MessageSourcePlugin;
   /** Group source of an explicitly sent private assistant message. */
@@ -414,6 +416,8 @@ export interface Session {
   runtimeBaselineRecoveryPending?: boolean;
   /** Host projection of existing task plugin choices, including uninstalled providers. */
   runtimePluginsSelected?: boolean;
+  /** Host projection of the active smart-routing binding for this task; absent on older hosts or unbound tasks. */
+  modelGroupBinding?: ModelGroupSessionBindingView | null;
   /**
    * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经审批后再执行。
    * 计划批准后 agent 自动退出并经 plan_mode_changed → sessions:patched 回流为 false。
@@ -438,6 +442,8 @@ export interface Session {
   /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
   imAttached?: boolean;
   snoozedAt?: string | null;
+  /** Host time when the task was explicitly archived (ISO 8601). Missing on older hosts and legacy/idle-archived rows. */
+  archivedAt?: string | null;
   /**
    * 用户最近一次"按下发送"的时刻（ISO 8601，null = 从未发过）。
    * Sidebar 排序唯一时间轴：null ⟺ 草稿（归未分类），非 null 即按倒序上浮。

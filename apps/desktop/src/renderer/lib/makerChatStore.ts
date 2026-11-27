@@ -114,6 +114,7 @@ import { toMessageAutomationOrigin } from '@/lib/messageAutomationOrigin';
 import { cancelPendingGhostCardTaskAutoArchive } from '@/cindy-brain/ghostCardTaskArchive';
 import {
   readMessageSourceDevice,
+  readMessageDispatchRoute,
   readMessageSourceGroup,
   readMessageSourcePlugin,
   type MessageSourceDevice,
@@ -616,6 +617,7 @@ export interface ChatMessage {
   sharedAuthorMemberId?: string;
   /** 手机 / 另一台电脑远程发来时的发送设备(读自 agentMeta.sourceDevice)。 */
   sourceDevice?: MessageSourceDevice;
+  dispatchRoute?: import('@cindy/maker-shared/message-source').MessageDispatchRoute;
   /** 插件任务派发的消息来源(读自 agentMeta.sourcePlugin)。 */
   sourcePlugin?: MessageSourcePlugin;
   /** Group source of an explicitly sent private assistant message. */
@@ -2613,6 +2615,8 @@ export type MessageDeliveryMode = 'queue' | 'steer';
 
 /** 仅影响 selector/chip 的乐观展示；agentKind 始终保留真实 reducer 路由。 */
 export interface AgentSwitchIntentRecord {
+  preparation?: 'preparing' | 'failed';
+  preparationError?: string;
   /**
    * 'acp' = 切到插件引擎(docs/plans/acp-plugin-bridge.md)，providerId 是 acp-plugin:<插件>:<引擎>。
    * 内置引擎的展示与切换链路只读 builtinAgentSwitchIntent()，插件引擎由选择器单独呈现。
@@ -5968,7 +5972,7 @@ function hydratePersistedMessage(
   // Keeping a cached field here can falsely label a user message as a teammate,
   // even after the host has delivered a source-free row.
   for (const field of [
-    'automationOrigin', 'sourceDevice', 'sourcePlugin', 'sourceGroup',
+    'automationOrigin', 'sourceDevice', 'sourcePlugin', 'sourceGroup', 'dispatchRoute',
     'hookSource', 'sharedAuthorName', 'sharedAuthorMemberId',
   ] as const) {
     if (persisted[field] === undefined) delete hydrated[field];
@@ -11604,7 +11608,7 @@ setRemoteTerminalErrorProbe(hasSessionTerminalError);
 
 interface ActiveSessionSnapshot {
   sessionId: string;
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
   isTurnRunning: boolean;
 }
 
@@ -11654,7 +11658,10 @@ function isActiveSessionSnapshot(value: unknown): value is ActiveSessionSnapshot
   const item = value as Record<string, unknown>;
   return (
     typeof item.sessionId === 'string' &&
-    (item.agentKind === 'claude-code' || item.agentKind === 'codex' || item.agentKind === 'pi') &&
+    (item.agentKind === 'claude-code' ||
+      item.agentKind === 'codex' ||
+      item.agentKind === 'pi' ||
+      item.agentKind === 'acp') &&
     typeof item.isTurnRunning === 'boolean'
   );
 }
@@ -11747,7 +11754,10 @@ function syncActiveTurnsFromMain(): void {
       const active = items.filter(isActiveSessionSnapshot);
       for (const item of active) {
         setState(item.sessionId, (s) => {
-          const agentKindPatch = s.agentKind === item.agentKind ? null : item.agentKind;
+          // 插件引擎(acp)事件走 Claude Code 通用 reducer，与 mirrorSessionFields 保持一致。
+          const resolvedKind: SessionChatState['agentKind'] =
+            item.agentKind === 'acp' ? 'claude-code' : item.agentKind;
+          const agentKindPatch = s.agentKind === resolvedKind ? null : resolvedKind;
           if (!item.isTurnRunning) {
             return agentKindPatch ? { ...s, agentKind: agentKindPatch } : s;
           }
@@ -19616,6 +19626,8 @@ function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | n
       : undefined;
   return {
     target: item.targetAgentKind,
+    ...(item.preparation === 'preparing' || item.preparation === 'failed' ? { preparation: item.preparation } : {}),
+    ...(typeof item.preparationError === 'string' ? { preparationError: item.preparationError.slice(0, 4000) } : {}),
     model: item.model,
     providerId: typeof item.providerId === 'string' ? item.providerId : null,
     ...(typeof item.effort === 'string' && item.effort.length > 0 ? { effort: item.effort } : {}),
@@ -19636,7 +19648,9 @@ function agentSwitchIntentEquals(
     a.providerId === b.providerId &&
     a.effort === b.effort &&
     a.fastMode === b.fastMode &&
-    a.agentDeviceId === b.agentDeviceId
+    a.agentDeviceId === b.agentDeviceId &&
+    a.preparation === b.preparation &&
+    a.preparationError === b.preparationError
   );
 }
 
@@ -21139,6 +21153,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       // 发送设备 / 插件来源:宽容读取(平台未知等不完整数据不出标签)。
       const sourceDevice = readMessageSourceDevice(m.agentMeta);
       const sourcePlugin = readMessageSourcePlugin(m.agentMeta);
+      const dispatchRoute = readMessageDispatchRoute(m.agentMeta);
       // Both ingress paths share the Desktop card, but local IM must not opt
       // older Mobile clients into legacy Hook/system-card semantics.
       // 插件转发的 IM 消息(sourcePlugin.relay)只在这里派生同一张卡片,不落库成 imSource;
@@ -21149,6 +21164,7 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
           : undefined);
       return {
         sharedAuthorName: sharedTaskAuthorName(m.agentMeta),
+        ...(dispatchRoute ? { dispatchRoute } : {}),
         sharedAuthorMemberId: sharedTaskAuthorMemberId(m.agentMeta),
         clientId: m.clientId,
         role: m.role,

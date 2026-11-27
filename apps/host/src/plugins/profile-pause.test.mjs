@@ -515,6 +515,8 @@ test('stopping a still-loading logic page rejects its startup waiter', async t =
 // §3.2 integration with a substituted browser. The real Host runtime must
 // shut down after a lost binding reply, after preserving both Page and Context
 // during the normal grace period. The newPage regression does not cover either.
+// Start this on-demand plugin through the tool gateway: reconcile also acquires
+// an unrelated OAuth lock (a cold Windows CIM probe can consume the test budget).
 test('plugin runtime closes the browser even when a logic-page binding never settles', { timeout: 5_000 }, async t => {
   const installing = Promise.withResolvers();
   const cleanupBinding = Promise.withResolvers();
@@ -523,18 +525,18 @@ test('plugin runtime closes the browser even when a logic-page binding never set
     return cleanupBinding.promise;
   } });
   const f = await fixture(t, { resident: false });
-  await f.runtime.reconcile();
+  // Capture the startup deadline too, so stop clears it on the same clock.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const call = f.call();
   const page = await installing.promise;
-  t.mock.timers.enable({ apis: ['setTimeout'] });
   const closing = f.runtime.close();
   try {
     await nextTurn();
-    t.mock.timers.tick(2_000);
+    t.mock.timers.tick(2_999);
     await nextTurn();
     assert.equal(page.isClosed(), false, 'page close waits for binding setup');
     assert.equal(browser.contextsClosed(), 0, 'partition close waits for binding setup');
-    t.mock.timers.tick(3_000);
+    t.mock.timers.tick(1);
     await nextTurn();
     assert.equal(page.isClosed(), true);
     assert.equal(browser.contextsClosed(), 1);
