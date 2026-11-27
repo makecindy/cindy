@@ -2671,8 +2671,7 @@ export function ProviderConnectionDialog({
                 setActiveTab(agent);
               }}
               fullWidth
-              height={36}
-              optionHeight={26}
+              density="lg"
               optionClassName="text-13 px-2"
               options={VISIBLE_AGENTS.map((agent) => {
                 const meta = TAB_META[agent];

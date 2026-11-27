@@ -424,8 +424,6 @@ export function ScheduleChip({
                 label: t(`scheduler.chips.timingMode.${mode}`),
               }))}
               onValueChange={setTimingMode}
-              height={34}
-              optionHeight={30}
               fullWidth
             />
             <p className="px-1 pt-1.5 text-11 leading-4 text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">

@@ -1,4 +1,6 @@
 .skill-catalog-source-tabs.cindy-segmented {
+  /* Underline tabs sit on the row divider (owner rule, 2026-11-28): move onto the 1px border. */
+  top: 1px;
   flex-shrink: 1;
   gap: var(--space-6);
   padding: 0;
@@ -30,7 +32,8 @@
 .skill-catalog-source-tabs > .cindy-segmented-option[data-selected='true']::before {
   position: absolute;
   right: 0;
-  bottom: 0;
+  /* Through the option's 1px transparent border, so the underline covers the row divider. */
+  bottom: -1px;
   left: 0;
   height: 2px;
   background: var(--text-primary);

@@ -417,6 +417,8 @@ export function CatalogHeadingTabs({ value, onValueChange, installedCount, marke
       role="tablist"
       aria-label={t('settings.ghosts.page.secondaryTabsAria')}
       className="plugin-catalog-heading-tabs"
+      // Underline-styled heading tabs keep an explicit size so the underline covers the heading
+      // divider; density presets would lift it (DESIGN.md §4 Tabs).
       height={44}
       optionHeight={44}
       optionClassName="text-15"

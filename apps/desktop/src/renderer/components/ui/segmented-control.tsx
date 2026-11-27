@@ -15,8 +15,9 @@ export interface SegmentedOption<T extends string> {
 }
 
 /**
- * Scene density presets (owner decision #8, 2026-11-23): track / option height in px.
- * xs = compact Diff, sm = dense lists and cards, md = settings default, lg = page navigation.
+ * Scene density presets (owner decision #8, 2026-11-23; final four, 2026-11-28): track / option
+ * height in px. xs = compact toolbars beside 24px controls, sm = dense lists and cards,
+ * md = settings default, lg = page navigation and large forms.
  */
 export type SegmentedDensity = 'xs' | 'sm' | 'md' | 'lg';
 
@@ -43,8 +44,8 @@ interface SegmentedControlProps<T extends string> {
   /** Scene density only; all variants share the same selection and interaction. Default `md`. */
   density?: SegmentedDensity;
   /**
-   * @deprecated Use `density`. Kept only for older call sites not yet assigned to a preset;
-   * overrides the preset.
+   * @deprecated Use `density`. Only underline-styled tabs that restyle the control keep an
+   * explicit size (DESIGN.md §4 Tabs); overrides the preset.
    */
   height?: number;
   /** @deprecated Use `density`; see `height`. */

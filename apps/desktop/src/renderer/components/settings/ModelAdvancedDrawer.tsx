@@ -892,8 +892,6 @@ export function ModelAdvancedDrawer({
                           borderRadius: 'var(--radius-xl)',
                         } : undefined}
                         optionClassName={shownEfforts.length > 4 ? '!min-w-0 px-1' : undefined}
-                        height={32}
-                        optionHeight={24}
                         aria-label={t('settings.providers.models.advanced.defaultEffort')}
                         value={shownEfforts.find((effort) => effort === currentEffort) ?? null}
                         onValueChange={applyEffort}

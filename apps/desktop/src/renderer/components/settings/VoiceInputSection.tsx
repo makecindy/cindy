@@ -2125,8 +2125,6 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                       aria-label={t('settings.voiceInput.refinement.dictionary.ariaLabel')}
                       value={dictionaryFilter}
                       onValueChange={setDictionaryFilter}
-                      height={40}
-                      optionHeight={32}
                       options={DICTIONARY_FILTERS.map((filter) => ({
                         value: filter,
                         label: (
