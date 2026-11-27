@@ -21,7 +21,7 @@
 
 | PR | 现在可用的能力 |
 | --- | --- |
-| [#12690](https://github.com/makecindy/cindy/pull/12690) | 常规远程调用通过授权检查，但后台尚未挂对应处理器时，返回旧被控端已有的 `CHANNEL_NOT_ALLOWED` 回执。桌面和手机可沿用各自原有的降级逻辑。 |
+| [#12690](https://github.com/makecindy/cindy/pull/12690) | 常规远程调用通过授权检查，但后台尚未挂对应处理器时，返回旧被控端已有的 `CHANNEL_NOT_ALLOWED` 回执。桌面和手机可沿用各自原有的降级逻辑。真实桌面和手机上的「不支持」提示尚未实机验收。 |
 | [#12830](https://github.com/makecindy/cindy/pull/12830) | 同账号的桌面可以向云端 Cindy 派普通任务、追加消息、查目标机的项目和模型，并按完整任务 ID 读历史。macOS 实机验证了 Codex 任务创建、追加和历史读取。 |
 | [#12829](https://github.com/makecindy/cindy/pull/12829) | 云端设备补齐资源状态与 CPU、系统版本信息。后台缺引擎时明确记日志，并在写入前拒绝新建任务。企业 CLI 登录在未指定区域时同时查国内区、国际区，需消歧或只有一区可确认时给出提示。 |
 
@@ -36,24 +36,27 @@
 2. **macOS 常驻。** 正式的登录自启、异常恢复及启停方式尚未交付。
 3. **伙伴任务。** 云端接收端只支持普通任务。向伙伴任务投递时，发送方收到「任务不存在」。见
    [云端任务接收](../../apps/host/src/agent/session-handoff.ts)。
-4. **建任务后投递未确认。** 有明确失败回执时可以区分「任务已建，消息未送达」。部分在建任务后抛出的
-   异常仍返回「结果未知」，回执认领要等过期才释放。遇到这种结果，先查原任务的历史和队列，避免重复
-   创建。见[投递与回执结算](../../apps/desktop/src/main/maker-ipc/sessionHandoffCore.ts)。
-5. **缺引擎的提示。** 当前手机沿用「电脑端组件尚未就绪」提示。完全没装引擎时，等待或重启无法解决；
-   桌面从远程电脑新建任务时仍显示原始英文。见 [#12829 的后续项](https://github.com/makecindy/cindy/pull/12829)。
-6. **模型可用性。** 目录列表并不能保证当前账号能调用其中每个模型。实机验收中，一个目录列出的
+4. **模型可用性。** 目录列表并不能保证当前账号能调用其中每个模型。实机验收中，一个目录列出的
    Anthropic 模型可以选中并建任务，但执行时被网关以无权限拒绝。见
    [#12830 的手工验证](https://github.com/makecindy/cindy/pull/12830)。
-7. **断链后的可靠帧。** macOS 自用验收时，一个已断开的设备每分钟记录一次
-   `abandoning … stalled reliable frame(s)`，重启后未再出现，重复触发的原因待查。当前代码在
-   发送路径中放弃停滞超过阈值的积压帧。见 [Device Link 发送路径](../../packages/device-link/src/client.ts)。
-8. **手机的模型组提示。** 云端不支持模型组时，手机选择器隐藏该分段，没有显示「不支持」。
-   见[手机通道降级](../../apps/mobile/src/device-link/mobileMakerTransport.ts)和
-   [模型选择器](../../apps/mobile/src/session/UnifiedModelPickerSheet.tsx)。
-9. **默认设备名。** 后台默认使用主机名加「Cindy Host」。当前可用 `CINDY_HOST_DEVICE_NAME`
+5. **建任务后投递未确认。** 有明确失败回执时可以区分「任务已建，消息未送达」。部分在建任务后抛出的
+   异常仍返回「结果未知」，回执认领要等过期才释放。遇到这种结果，先查原任务的历史和队列，避免重复
+   创建。见[投递与回执结算](../../apps/desktop/src/main/maker-ipc/sessionHandoffCore.ts)。
+6. **缺引擎的提示。** 当前手机沿用「电脑端组件尚未就绪」提示。完全没装引擎时，等待或重启无法解决；
+   桌面从远程电脑新建任务时仍显示原始英文。见 [#12829 的后续项](https://github.com/makecindy/cindy/pull/12829)。
+7. **远控降级提示。** 真实桌面和手机上的「不支持」提示仍待实机验收。云端不支持模型组时，
+   手机选择器隐藏该分段，没有显示「不支持」。桌面从远程任务的输入框打开「新建目标」时，
+   对话框会直接显示远端英文错误原文（据代码判断，尚未实机确认）。见
+   [手机模型组读取](../../apps/mobile/src/session/hostModelGroups.ts)和
+   [桌面新建目标](../../apps/desktop/src/renderer/components/new-chat/NewGoalDialog.tsx)。
+8. **默认设备名。** 后台默认使用主机名加「Cindy Host」。当前可用 `CINDY_HOST_DEVICE_NAME`
    覆盖，见[设备信息采集](../../apps/host/src/platform/machine-status.ts)。
-10. **个人账号 CLI 登录。** 个人登录只支持可用的浏览器登录方式。服务器提供多个方式时须显式传
-    `--method`，只有一个时会直接选用。见[登录方式选择](../../apps/host/src/auth/login.mjs)。
+9. **个人账号 CLI 登录。** 个人登录只支持可用的浏览器登录方式。服务器提供多个方式时须显式传
+   `--method`，只有一个时会直接选用。见[登录方式选择](../../apps/host/src/auth/login.mjs)。
+10. **断链后的可靠帧。** 链路断开期间，每次尝试发送新的可靠帧前，如果队头积压已超过 60 秒，
+    就放弃整队并记录 `abandoning … stalled reliable frame(s)`。macOS 自用验收时，同一个已断开
+    的对端每分钟都出现这条日志，表明仍有发送方每分钟尝试向它发送可靠帧。重启后未再出现，
+    触发来源待查。见 [Device Link 发送路径](../../packages/device-link/src/client.ts)。
 
 ## 从源码验收时的准备
 
@@ -62,6 +65,7 @@
   如果启动后 `/api/agents` 为空，先检查引擎文件和启动日志。
 - **SQLite 扩展。** 源码检出中的 `vec0` 可能仍是 Git LFS 占位文件。运行前先用
   `git lfs pull` 取回当前平台的实际文件，避免迁移报 `no such module: vec0`。
+  也可以用 `CINDY_HOST_SQLITE_VEC_PATH` 指向当前平台已有的扩展文件。
 - **进程环境。** 验收脚本用 `env -i` 启动，只传所需的运行环境和测试资料目录，避免继承日常
   shell 的区域、凭据或开发配置覆盖。
 - **持久目录。** 把服务使用的代码和资料放在重启后仍保留的位置。2026-11-26 的一次 macOS
