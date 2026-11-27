@@ -1,3 +1,4 @@
+import { holdError } from './agent/profile-hold.ts';
 import { clientErrorMessage } from './client-error.mjs';
 import { HOST_BROWSER_SETTINGS_ACTIONS } from '@cindy/maker-shared/host-channel-contract';
 import { throwIpcError } from '../../desktop/src/main/utils/ipcValidate.ts';
@@ -23,7 +24,7 @@ export const HOST_PATHS_ALLOWED_WHILE_HELD = Object.freeze({
     '/api/plugins/list', '/api/providers', '/api/agents', '/api/agents/auth-state', '/api/agents/status',
     '/api/agents/codex-runtime-route', '/api/model-access', '/api/usage/model-pricing', '/api/usage/reference-model-pricing',
     '/api/interactions/pending', '/api/input/projection', '/api/agent-commands', '/api/agent-skills', '/api/capabilities',
-    '/api/right-sidebar-tabs/list', '/api/browser-backend/get-state',
+    '/api/right-sidebar-tabs/list', '/api/browser-backend/get-state', '/api/notifications/clear-session-attention',
   ]),
   // Stopping or interrupting the running turn.
   stop: Object.freeze(['/api/input/stop']),
@@ -45,9 +46,9 @@ export function createHostService(deps) {
   return async function invoke(pathname, body = {}, context = {}) {
     const url = { pathname };
     const held = deps.profileHold?.();
-    if (held && !ALLOWED_WHILE_HELD.has(pathname)) throwIpcError('PRECONDITION_FAILED', held);
+    if (held && !ALLOWED_WHILE_HELD.has(pathname)) throw holdError(held);
     if (held && pathname === '/api/ghosts/install-consent/resolve' && body?.confirmed !== false)
-      throwIpcError('PRECONDITION_FAILED', held);
+      throw holdError(held);
 
     for (const [action, handler] of Object.entries(HOST_BROWSER_SETTINGS_ACTIONS)) {
       if (pathname === `/api/browser-backend/${action}`)
@@ -137,7 +138,7 @@ export function createHostService(deps) {
         return { status: 201, body: await deps.createSession(body) };
     }
     if (url.pathname === '/api/sessions/update') {
-        return { status: 200, body: await deps.updateSession(String(body.sessionId ?? ''), body.patch ?? {}) };
+        return { status: 200, body: await deps.updateSession(String(body.sessionId ?? ''), body.patch ?? {}, body.deleteTarget !== undefined ? { deleteTarget: body.deleteTarget } : undefined) };
     }
     if (url.pathname === '/api/sessions/set-effort') {
       // The desktop's set-effort, set-fast-mode and set-thinking-enabled, with their IPC arguments.
@@ -197,10 +198,19 @@ export function createHostService(deps) {
         return { status: 200, body: await deps.estimatedSessionValue(String(body.sessionId ?? '')) };
     }
     if (url.pathname === '/api/messages/history-view') {
-        return { status: 200, body: await deps.historyView(String(body.sessionId ?? ''), body.before ?? null) };
+        return { status: 200, body: await deps.historyView(String(body.sessionId ?? ''), body.before ?? null, body.opts) };
     }
     if (url.pathname === '/api/messages/work-details') {
         return { status: 200, body: await deps.workDetails(String(body.sessionId ?? ''), body.ref, body.after ?? null) };
+    }
+    if (url.pathname === '/api/sessions/ack-interrupted') {
+        return { status: 200, body: await deps.ackInterrupted(body.sessionId) };
+    }
+    if (url.pathname === '/api/notifications/clear-session-attention') {
+        return { status: 200, body: await deps.clearSessionAttention(body.sessionId, body.intent) };
+    }
+    if (url.pathname === '/api/messages/dismiss-error') {
+        return { status: 200, body: await deps.dismissError(body.sessionId, body.clientId) };
     }
     if (url.pathname === '/api/messages/create') {
         return { status: 201, body: await deps.createMessage(String(body.sessionId ?? ''), body.message ?? {}) };

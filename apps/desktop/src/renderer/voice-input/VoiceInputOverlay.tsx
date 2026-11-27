@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { usesMacProtectionOverride } from '../../shared/macControlPermission';
 import {
   useCallback,
   useEffect,
@@ -108,7 +109,7 @@ type CodexRecoveryPromptAttempt = { attemptId: number; reason: string };
 // 'retained' is not a paste failure: the dictation session itself died and the
 // recognized text was kept for copying. It reuses the paste-error layout but
 // carries the session's own error text instead of a paste hint.
-type PasteErrorCode = 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'retained';
+type PasteErrorCode = 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'appNotAllowed' | 'failed' | 'retained';
 type PermissionPromptKind = 'microphone' | 'accessibility';
 
 export function isCurrentCodexRecoveryPromptAttempt(
@@ -145,6 +146,7 @@ function normalizePasteErrorCode(errorCode: string | undefined): PasteErrorCode 
     errorCode === 'unavailable' ||
     errorCode === 'unconfirmed' ||
     errorCode === 'permission' ||
+    errorCode === 'appNotAllowed' ||
     errorCode === 'failed'
   ) {
     return errorCode;
@@ -1153,6 +1155,10 @@ export function VoiceInputOverlay() {
     try {
       const requestResult = await requestRendererMicrophonePermission();
       if (requestResult.ok) return;
+      if (requestResult.status === 'device-unavailable') {
+        await showStartFailure(t('settings.voiceInput.microphone.errors.deviceUnavailable'));
+        return;
+      }
       const settingsResult = await window.electronAPI.voiceInput.openMicrophoneSettings();
       if (!settingsResult.ok) {
         log.warn('open microphone settings failed:', settingsResult.error);
@@ -1160,7 +1166,7 @@ export function VoiceInputOverlay() {
     } catch (error) {
       log.warn('open microphone settings failed:', error instanceof Error ? error.message : String(error));
     }
-  }, []);
+  }, [showStartFailure, t]);
 
   const openPermissionPromptSettings = useCallback(() => {
     const prompt = permissionPrompt;
@@ -1663,12 +1669,17 @@ export function VoiceInputOverlay() {
   }, [hasBlockingError, hasPasteError, hasPermissionPrompt, pasteErrorCode, state, showProcessing, t]);
   // The retained-transcript panel shows the session's own error (cause + "text
   // was kept"); every other code is an actual paste failure with its own hint.
+  const controlHint = (pasteErrorCode === 'permission' || permissionPrompt === 'accessibility')
+    && usesMacProtectionOverride(window.electronAPI.platform, window.electronAPI.osRelease)
+    ? t('macControlPermission.selectApp', { app: window.electronAPI.macPermissionAppName ?? 'Cindy' })
+    : '';
   const pasteFailureHint = pasteErrorCode === 'retained'
     ? error ?? t('voiceInputOverlay.status.transcriptKept')
-    : t(getPasteErrorHintKey(pasteErrorCode));
-  const permissionPromptHint = permissionPrompt
-    ? t(`voiceInputOverlay.permissionPrompts.${permissionPrompt}.hint`)
-    : '';
+    : pasteErrorCode === 'appNotAllowed'
+      ? t('voiceInputOverlay.pasteErrors.appNotAllowed', { app: window.electronAPI.macPermissionAppName ?? 'Cindy' })
+      : (pasteErrorCode === 'permission' && controlHint) || t(getPasteErrorHintKey(pasteErrorCode));
+  const permissionPromptHint = permissionPrompt &&
+    ((permissionPrompt === 'accessibility' && controlHint) || t(`voiceInputOverlay.permissionPrompts.${permissionPrompt}.hint`));
   const transcriptClassName = hasPasteError || hasPermissionPrompt || hasSettingsRecovery
     ? 'min-h-[44px] max-h-[72px] cursor-default overflow-y-auto whitespace-pre-wrap break-words text-15 leading-6 text-[var(--cmd-palette-item-text)]'
     : 'h-[88px] cursor-default overflow-y-auto whitespace-pre-wrap break-words text-15 leading-6 text-[var(--cmd-palette-item-text)]';
@@ -1881,7 +1892,7 @@ export function VoiceInputOverlay() {
               {pasteFailureHint}
             </span>
             <div className="flex shrink-0 items-center gap-2">
-              {pasteErrorCode === 'permission' && (
+              {(pasteErrorCode === 'permission' || pasteErrorCode === 'appNotAllowed') && (
                 <Button
                   variant="cta"
                   size="lg"

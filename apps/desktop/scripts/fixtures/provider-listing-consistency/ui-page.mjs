@@ -18,14 +18,75 @@ export default {
   },
   cases: {
     default: { about: 'Equal sources on other computers are listed once, identically in Settings and the picker' },
+    'connection-icons': { about: 'Two connections to the same GLM model use distinct marks in Settings and in the picker' },
     'same-account-twice-here': { about: 'Two connections of one login on this computer: one entry in both surfaces' },
     'hidden-provider': { about: 'A provider hidden from the picker is folded under 已隐藏 at the end of the list, found by search, and still selectable' },
     'hidden-provider-settings': { about: 'Settings folds hidden and disabled providers into two groups that start closed; each detail says what the state means and how to undo it' },
+    'plugin-providers': { about: 'Providers that plugins offer are listed after this computer’s own with a plugin badge; hidden and turned-off ones go into the same two groups, and the detail offers what an ordinary provider does' },
   },
   async ready(page) {
     await page.locator('[data-listed-source]').first().waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'connection-icons') {
+      await page.locator('[data-listed-source="local:glm-work"]').click();
+      await page.getByRole('button', { name: await ui.t('settings.providers.detail.moreActionsAria') }).click();
+      await page.getByRole('menuitem', { name: await ui.t('settings.providers.menu.appearance') }).click();
+      const dialog = page.getByRole('dialog');
+      assert.equal(await dialog.getByRole('radio').first().getAttribute('aria-label'), 'Cindy AI');
+      const work = dialog.getByRole('radio', { name: await ui.t('settings.providers.menu.connectionIcon.work'), exact: true });
+      assert.ok(await work.isChecked());
+      await ui.capture('connection-appearance', { locator: dialog });
+      const magpie = dialog.getByRole('radio', { name: 'Magpie', exact: true });
+      await magpie.hover();
+      await page.getByRole('tooltip', { name: 'Magpie' }).waitFor();
+      await magpie.check();
+      assert.equal(await work.isChecked(), false);
+      await page.keyboard.press('ArrowLeft');
+      assert.equal(await magpie.isChecked(), false);
+      assert.equal(await dialog.getByRole('radio', { checked: true }).count(), 1);
+      const png = await page.evaluate(() => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 32;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = 'teal'; ctx.fillRect(0, 0, 64, 32);
+        return canvas.toDataURL().split(',')[1];
+      });
+      await dialog.locator('input[type=file]').setInputFiles({ name: 'logo.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') });
+      await dialog.locator('img').first().waitFor();
+      await page.locator('.modal-scrim').click({ position: { x: 8, y: 8 } });
+      const ownImage = dialog.getByRole('radio', { name: await ui.t('settings.providers.menu.ownImage'), exact: true });
+      assert.equal(await ownImage.count(), 1, 'clicking the scrim keeps the appearance draft open');
+      assert.ok(await ownImage.isChecked(), 'the uploaded icon remains selected');
+      await dialog.getByRole('button', { name: await ui.t('settings.providers.custom.cancel'), exact: true }).click();
+      await page.locator('[data-picker] button').first().click();
+      const mark = id => page.locator(`[data-rail-item="provider:glm-${id}"] svg path`).first().getAttribute('d');
+      assert.notEqual(await mark('personal'), await mark('work'));
+      await ui.capture('connection-icons-in-picker');
+      return;
+    }
+    if (ui.case === 'plugin-providers') {
+      const rows = page.locator('[data-testid="plugin-engine-provider-row"]');
+      await rows.first().waitFor();
+      assert.equal(await rows.count(), 1, 'only the plugin provider still in the model picker sits in the regular list');
+      assert.equal(await page.locator('[data-testid="plugin-engine-provider-detail"]').count(), 0, 'an ordinary provider stays the default selection');
+      await ui.capture('plugin-row-in-list');
+      assert.ok(await rows.first().locator('img').count(), 'the row draws the plugin’s own icon when it has one');
+      await rows.first().click();
+      await page.locator('[data-testid="provider-usage-module"]').waitFor();
+      assert.ok(await page.locator('[data-testid="plugin-engine-provider-detail"] img').count(), 'so does the detail header');
+      await ui.capture('plugin-provider-detail');
+      await page.locator('[data-provider-rail-group="suspended"] > button').click();
+      await page.locator('[data-plugin-engine="zcode-plugin:zcode"]').click();
+      await page.getByText(await ui.t('settings.providers.plugin.suspendedBanner')).waitFor();
+      assert.equal(await page.locator('[data-testid="plugin-engine-models"]').count(), 0, 'a turned-off plugin provider lists no models');
+      await ui.capture('plugin-provider-disabled');
+      await page.locator('[data-provider-rail-group="hidden"] > button').click();
+      await page.locator('[data-plugin-engine="agy-plugin:agy"]').click();
+      await page.getByText(await ui.t('settings.providers.plugin.hiddenBanner')).waitFor();
+      await ui.capture('plugin-provider-hidden');
+      return;
+    }
     const settingsEntries = (await page.locator('[data-listed-source]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-listed-source')))).sort();
     await page.locator('[data-picker] button').first().click();
     await page.getByRole('listbox').waitFor();

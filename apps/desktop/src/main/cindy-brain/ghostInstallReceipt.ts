@@ -156,6 +156,8 @@ export interface GhostInstallReceipt {
    * 读到时按未知字段忽略,不判损坏。
    */
   approvedHarnesses?: string[];
+  approvedFileOpenerExtensions?: string[];
+  checksCapabilityApproved?: true;
   schemaVersion: typeof RECEIPT_SCHEMA_VERSION;
   id: string;
   /** Missing is a pre-namespace receipt. null is root; a string is an organization. */
@@ -1328,8 +1330,17 @@ export function approvedHarnessesField(raw: unknown, manifest: GhostManifest): {
   return approved.length > 0 ? { approvedHarnesses: approved } : {};
 }
 
+export function approvedFileOpenerExtensionsField(raw: unknown, manifest: GhostManifest): {
+  approvedFileOpenerExtensions?: string[];
+} {
+  if (!Array.isArray(raw)) return {};
+  const approved = manifest.fileOpener?.extensions.filter(extension => raw.includes(extension));
+  return approved?.length ? { approvedFileOpenerExtensions: approved } : {};
+}
+
 export function createGhostInstallReceipt(input: {
   approvedHarnesses?: readonly string[];
+  approvedFileOpenerExtensions?: readonly string[];
   approvedCindyModelActions?: readonly string[];
   simulatorPreviousRelId?: string;
   simulatorMarketRelease?: GhostInstallReceipt['simulatorMarketRelease'];
@@ -1343,6 +1354,7 @@ export function createGhostInstallReceipt(input: {
   approvedAutoTools?: readonly string[];
   observeCapabilityApproved?: true;
   companionsCapabilityApproved?: true;
+  checksCapabilityApproved?: true;
   manifest: GhostManifest;
   localeResources: Record<string, GhostManifestLocaleResource>;
   enabled: boolean;
@@ -1384,6 +1396,8 @@ export function createGhostInstallReceipt(input: {
     ...(input.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
     ...approvedCindyModelActionsField(input.approvedCindyModelActions, input.manifest),
     ...approvedHarnessesField(input.approvedHarnesses, input.manifest),
+    ...approvedFileOpenerExtensionsField(input.approvedFileOpenerExtensions, input.manifest),
+    ...(input.checksCapabilityApproved === true ? { checksCapabilityApproved: true as const } : {}),
     ...(input.packageSha256 ? { packageSha256: input.packageSha256 } : {}),
     ...(input.iconDataUrl ? { iconDataUrl: input.iconDataUrl } : {}),
     ...(input.installOrigin !== undefined ? { installOrigin: input.installOrigin } : {}),
@@ -1606,6 +1620,8 @@ function validateReceipt(
       ...(value.companionsCapabilityApproved === true ? { companionsCapabilityApproved: true as const } : {}),
       ...approvedCindyModelActionsField(value.approvedCindyModelActions, manifestResult.manifest),
       ...approvedHarnessesField(value.approvedHarnesses, manifestResult.manifest),
+      ...approvedFileOpenerExtensionsField(value.approvedFileOpenerExtensions, manifestResult.manifest),
+      ...(value.checksCapabilityApproved === true ? { checksCapabilityApproved: true as const } : {}),
       ...(typeof value.packageSha256 === 'string' ? { packageSha256: value.packageSha256 } : {}),
       ...(typeof value.iconDataUrl === 'string' ? { iconDataUrl: value.iconDataUrl } : {}),
       ...(installOrigin !== undefined ? { installOrigin } : {}),

@@ -24,6 +24,7 @@
 | 模型配置架构、下发、覆盖、价格与默认值 | [模型配置入口](model-catalog-maintenance.md)、[运行细则](model-catalog-runtime.md) |
 | Agent 编排、prompt、tool / MCP、事件、model 映射与 usage | [maker-core 与 system prompt 确认](maker-core-and-agent-behavior.md) |
 | Pi 集成、权限、配置、桥接与原生能力非退化 | [Pi harness](pi-harness.md) |
+| ACP 插件执行引擎与插件模型的类型、准入、进程、协议扩展与回归 | [ACP 插件执行引擎](acp-plugin-harness.md) |
 | Orca 多 Agent 协同 | [Orca 架构](orca-team-architecture.md) |
 | 个人 IM 与官方 hook 的入站、排队、插话、交互与收尾 | [IM 轮次](im-turn-flow.md) |
 | 插件基座、沙箱、权限、slot、打包、manifest、安装、读取／扫描预算与作者契约 | [插件安全、兼容与合并确认](plugin-security-and-authoring.md) |

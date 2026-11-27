@@ -193,6 +193,7 @@ export function createHostUsageRecording(options: HostUsageRecordingOptions) {
     triggerClaudeSubscriptionUsageRefresh: () => {},
     triggerCodexAccountUsageRefresh: () => {},
     triggerXaiSubscriptionUsageRefresh: () => {},
+    recordProviderAccountActivity: () => {},
   });
 
   // The desktop's per-task usage tables (register.ts :4229–4284, :4802–4804), cleared on close (:6064–6070).
@@ -251,7 +252,10 @@ export function createHostUsageRecording(options: HostUsageRecordingOptions) {
       }
       if ((event.source === 'pi' || event.source === 'codex' || event.source === 'claude-code')
         && (!wasInTurn || !turnUsageContextBySession.has(session.id))) {
-        turnUsageContextBySession.set(session.id, captureTurnUsageContext(session.id));
+        turnUsageContextBySession.set(
+          session.id,
+          captureTurnUsageContext(session.id, undefined, event.source, session.model),
+        );
       }
     },
 

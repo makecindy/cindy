@@ -248,6 +248,10 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   不得以“之后一定弹确认卡”误导审批。Cindy 审阅 allow 可返回当前 Agent，block 返回原因，
   ask 或服务故障才使用 Host-owned 确认卡。本地活跃 Full Access 自动允许，
   其它档位仍须用户点击允许；远程任务不能借此自动取得控制端文件路径。
+  确认卡目前只在运行 Cindy 的电脑上可点，手机只显示「只能在电脑上处理」，飞书只收到文字提醒。
+  无人确认的超时返回 `LOCAL_PATH_REVEAL_TIMEOUT`，与用户拒绝的 `LOCAL_PATH_REVEAL_DENIED`
+  区分。超时后旧卡已撤下，所以提示要求 Agent 不要自动重试，而是等用户表示已在那台电脑旁后
+  再重新调用、确认新弹出的卡，或换用不需要本机路径的办法。
   路径进入会话记录，因此也可能同步到用户的配对设备。返回的是 Cindy Host 所在电脑的
   路径，不保证在 SSH 工作区可用；不新增跨主机复制或文件读取授权。手机与桌面远控仍
   通过任务所在电脑执行。向用户展示或交给插件时继续使用受管地址，不以本机路径替代。
@@ -520,6 +524,13 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
 
 ## 多端与远程
 
+- `cindy-remote-media://` 的每个 OSS 流式响应由 `remoteMediaProtocol.ts` 持有独立
+  `AbortController`。读完、上游出错、消费者取消或调用方中止时，必须同时中止上游请求、
+  解除中止监听并成对释放缓存的 in-flight 计数；迟到的响应体不能再交给已取消的消费者。
+  Electron 42 的 `reader.cancel()` 不保证关闭原生 HTTP 连接，协议 `request.signal`
+  也不保证随下游取消而中止，不能只依赖二者释放连接。否则旧媒体流会占住同站连接池，
+  连带阻塞插件等其它 OSS 下载。回归入口为 `remoteMediaProtocol.test.ts`；同一视频的
+  并发 Range 请求独立取消，不重启共享网络进程，也不删除仍被其它消费者使用的 OSS 对象。
 - 将已有截图或本地图片保存为持久受管附件时，Agent 使用 Core `media(action: "import_image", path)`：Host
   按当前任务文件权限读取，在当前媒体仓入库并登记任务引用，再返回 `xdt_image_urls`。
   工作目录外路径复用现有授权，SSH 任务不得回退读取控制端同名文件。返回成功仅表示
@@ -550,8 +561,9 @@ Windows 使用 CF_HDROP，macOS 使用文件 URL 剪贴板，视频／GIF 均按
   并清除对应引用定义，不能把原始路径留在 definition 中。网页链接和代码示例不改写。
   兼容仅限 hostless `xdt-image:///绝对路径` / `xdt-file:///绝对路径` 图片引用；协议读取器
   不放宽。目标含裸空格的本机图片（如 `![说明](/Users/me/Library/Application Support/a.png)`，
-  CommonMark 不认）由 `shared/bareSpaceLocalImages.ts` 从普通文本节点的**原文片段**补认（不用解码后的 `value`：同节点里的 `&amp;` 不会让图片漏掉，转义的 `\![` 保持字面）：只认 POSIX／
-  Windows 盘符绝对路径或 hostless `xdt-image:///`、以图片扩展名结尾，不解码、不碰代码；
+  CommonMark 不认）由 `shared/bareSpaceLocalImages.ts` 从行内**原文片段**补认。文件名被拆成强调节点时仍识别完整引用，
+  邻近的 `&amp;` 照常渲染，转义的 `\![` 保持字面。只认 POSIX／Windows 盘符绝对路径或
+  hostless `xdt-image:///`、以图片扩展名结尾，不解码、不碰代码、HTML 与链接；
   主进程 `taskImageReferences` 与桌面渲染 `remarkBareSpaceLocalImages` 共用，手机端
   `parseLocalMarkdownDestination` 早已支持。改写回 Markdown 时含空格的地址用 `<…>` 包住。本机任务归属、账号、清空、编辑及 rewind 在提交时复核，不扫描其它任务目录。
   自动导入在首次文件系统访问前拒绝 UNC、WebDAV 和 Windows 设备命名空间；先解码兼容

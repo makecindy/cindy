@@ -3,7 +3,7 @@ import { normalizeTaskTags } from '@cindy/maker-shared';
 /** Shared database reads for local IPC, remote IPC and internal callers. */
 import { and, desc, eq, inArray, isNotNull, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { DbClient } from './client/DbClient';
-import { sessions } from './schema';
+import { imBindings, sessions } from './schema';
 import { DESKTOP_TASK_LIST_SESSION_SOURCES } from '../../shared/sessionSource';
 import { LIST_PREVIEW_EXTRACT_SQL, LATEST_VISIBLE_PREVIEW_FILTER_SQL } from './sessionListProjection';
 import { sessionToCamel, type SessionRowWithCount } from './mapper';
@@ -134,11 +134,13 @@ export function projectSessionReadResult(
 export function projectSessionDetail(
   row: SessionRowWithCount,
   resolve?: (session: ContextWindowSession) => number | null,
+  productStartedAt = row.activeTurnStartedAt,
+  settledProductEndedAt?: number | null,
 ) {
-  const start = row.activeTurnStartedAt;
-  const end = row.lastTurnEndedAt;
+  const start = settledProductEndedAt === undefined ? row.activeTurnStartedAt : productStartedAt;
+  const end = settledProductEndedAt === undefined ? row.lastTurnEndedAt : settledProductEndedAt;
   const turnElapsedMs = start != null && start > (row.clearedAt ?? 0)
-    ? Math.max(0, (end != null && end >= start ? end : Date.now()) - start)
+    ? Math.max(0, (end != null && end >= start ? end : Date.now()) - (productStartedAt ?? start))
     : null;
   return { ...projectSessionReadResult(row, resolve), turnElapsedMs };
 }
@@ -157,6 +159,43 @@ export async function selectSessionsByIds(db: DbClient['drizzle'], ids: readonly
 
 export async function selectSessionWithCount(db: DbClient['drizzle'], id: string): Promise<SessionRowWithCount | undefined> {
   return (await selectSessionsByIds(db, [id]))[0];
+}
+
+/**
+ * Authoritative host-side check for whether `sessionId` is currently attached to an IM binding.
+ * Uses `idx_im_bindings_target` on `im_bindings`. Minimal test schemas that omit `im_bindings`
+ * have no IM bindings; any other database error propagates so callers fail closed.
+ */
+export async function selectImAttachedSessionIds(
+  db: DbClient['drizzle'],
+  sessionIds: readonly string[],
+): Promise<Set<string>> {
+  const unique = [...new Set(sessionIds)];
+  const attached = new Set<string>();
+  if (unique.length === 0) return attached;
+  try {
+    for (let offset = 0; offset < unique.length; offset += 256) {
+      const rows = await db
+        .select({ targetSessionId: imBindings.targetSessionId })
+        .from(imBindings)
+        .where(inArray(imBindings.targetSessionId, unique.slice(offset, offset + 256)));
+      for (const row of rows) {
+        if (row.targetSessionId) attached.add(row.targetSessionId);
+      }
+    }
+    return attached;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('no such table: im_bindings')) return attached;
+    throw err;
+  }
+}
+
+export async function isSessionImAttachedInDb(
+  db: DbClient['drizzle'],
+  sessionId: string,
+): Promise<boolean> {
+  return (await selectImAttachedSessionIds(db, [sessionId])).has(sessionId);
 }
 
 /**

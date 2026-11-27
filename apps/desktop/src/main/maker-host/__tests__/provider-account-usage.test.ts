@@ -7,10 +7,12 @@ import {
   setAccountUsageOAuthReader,
   readKimiCodingAccountUsage,
   readOpenCodeGoAccountUsage,
+  readZhipuCodingPlanAccountUsage,
   isZhipuCodingPlanProvider,
   parseDeepSeekAccountUsage,
   parseZhipuCodingPlanQuota,
   readProviderAccountUsage,
+  recordProviderAccountActivity,
   resetProviderAccountUsageForTest,
   resolveProviderAccountUsage,
   setAccountUsageFetch,
@@ -315,6 +317,128 @@ describe('readProviderAccountUsage', () => {
     vi.restoreAllMocks();
   });
 
+  it('shares one official GLM request between the panel and settings for a mixed connection', async () => {
+    setAccountUsageProviderReader(() => mkProvider({
+      routing: {
+        'claude-code': { upstream: 'https://api.deepseek.com/anthropic', authStrategy: 'api-key-header' },
+        codex: { upstream: 'https://open.bigmodel.cn/api/anthropic', authStrategy: 'api-key-header' },
+        pi: { upstream: 'https://api.z.ai/api/coding/paas/v4', authStrategy: 'api-key-header' },
+      },
+    }));
+    setAccountUsageKeyReader((_id, agent) => agent === 'codex' ? null : `fake-${agent}-key`);
+    let reply!: (response: Response) => void;
+    const fetch = vi.fn<typeof globalThis.fetch>(() => new Promise(resolve => { reply = resolve; }));
+    setAccountUsageFetch(fetch);
+    const panel = readZhipuCodingPlanAccountUsage({ providerId: 'mixed' });
+    const settings = readProviderAccountUsage({ providerId: 'mixed', agent: 'pi' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledWith('https://api.z.ai/api/monitor/usage/quota/limit', expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: 'fake-pi-key' }),
+    }));
+    reply(jsonRes({ data: { limits: [{ type: 'CREDIT_LIMIT', unit: 6, percentage: 35 }] } }));
+    const reading = await panel;
+    expect(reading).toMatchObject({
+      status: 'ready', agent: 'pi', stale: false,
+      snapshot: { kind: 'zhipu-coding-plan-quota', weekly: { usedPercent: 35 } },
+    });
+    expect(await settings).toEqual(reading);
+  });
+
+  it('coalesces GLM aliases on the same official endpoint and key while preserving each engine', async () => {
+    setAccountUsageProviderReader((id) => mkProvider({
+      id,
+      routing: id === 'alias'
+        ? { pi: { upstream: 'https://open.bigmodel.cn/api/coding/paas/v4', authStrategy: 'api-key-header' } }
+        : { 'claude-code': { upstream: 'https://open.bigmodel.cn/api/anthropic', authStrategy: 'api-key-header' } },
+    }));
+    setAccountUsageKeyReader(id => id === 'different-account' ? 'fake-other-glm-key' : 'fake-shared-glm-key');
+    const fetch = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+      const usage = new Headers(init?.headers).get('authorization') === 'fake-shared-glm-key' ? 35 : 70;
+      return jsonRes({ data: { limits: [{ type: 'CREDIT_LIMIT', unit: 6, percentage: usage }] } });
+    });
+    setAccountUsageFetch(fetch);
+    const [original, alias, other] = await Promise.all([
+      readZhipuCodingPlanAccountUsage({ providerId: 'original', forceRefresh: true }),
+      readZhipuCodingPlanAccountUsage({ providerId: 'alias', forceRefresh: true }),
+      readZhipuCodingPlanAccountUsage({ providerId: 'different-account', forceRefresh: true }),
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(original).toMatchObject({ status: 'ready', agent: 'claude-code', snapshot: { weekly: { usedPercent: 35 } } });
+    expect(alias).toMatchObject({ status: 'ready', agent: 'pi', snapshot: { weekly: { usedPercent: 35 } } });
+    expect(other).toMatchObject({ status: 'ready', snapshot: { weekly: { usedPercent: 70 } } });
+    await expect(readProviderAccountUsage({ providerId: 'alias', agent: 'pi' })).resolves.toEqual(alias);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the shared GLM response available to the alias still using the original key', async () => {
+    setAccountUsageProviderReader(id => mkProvider({
+      id, routing: { pi: { upstream: 'https://open.bigmodel.cn/api/coding/paas/v4', authStrategy: 'api-key-header' } },
+    }));
+    let firstKey = 'fake-shared-glm-key';
+    setAccountUsageKeyReader(id => id === 'original' ? firstKey : 'fake-shared-glm-key');
+    let reply!: (response: Response) => void;
+    const fetch = vi.fn<typeof globalThis.fetch>(() => new Promise(resolve => { reply = resolve; }));
+    setAccountUsageFetch(fetch);
+    const original = readZhipuCodingPlanAccountUsage({ providerId: 'original' });
+    const alias = readZhipuCodingPlanAccountUsage({ providerId: 'alias' });
+    firstKey = 'fake-replacement-glm-key';
+    reply(jsonRes({ data: { limits: [{ type: 'CREDIT_LIMIT', unit: 6, percentage: 35 }] } }));
+    await expect(original).resolves.toEqual({ status: 'unavailable', error: 'updating' });
+    const ready = await alias;
+    expect(ready).toMatchObject({ status: 'ready', snapshot: { weekly: { usedPercent: 35 } } });
+    await expect(readZhipuCodingPlanAccountUsage({ providerId: 'alias' })).resolves.toEqual(ready);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([401, 503])('cools down a failing GLM background read after HTTP %s', async (status) => {
+    setAccountUsageProviderReader(() => mkProvider({
+      routing: { pi: { upstream: 'https://open.bigmodel.cn/api/coding/paas/v4', authStrategy: 'api-key-header' } },
+    }));
+    const fetch = vi.fn(async () => jsonRes({}, status));
+    setAccountUsageFetch(fetch);
+    const request = { providerId: 'glm' };
+    await expect(readZhipuCodingPlanAccountUsage(request)).resolves.toMatchObject({ status: 'unavailable' });
+    nowMs += 5_000;
+    await readZhipuCodingPlanAccountUsage(request);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    nowMs += 10_000;
+    await readZhipuCodingPlanAccountUsage(request);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves GLM Retry-After for settings while the panel is cooling down', async () => {
+    setAccountUsageProviderReader(() => mkProvider({
+      routing: { pi: { upstream: 'https://open.bigmodel.cn/api/anthropic', authStrategy: 'api-key-header' } },
+    }));
+    const fetch = vi.fn(async () => jsonRes({}, 429, { 'Retry-After': '60' }));
+    setAccountUsageFetch(fetch);
+    await readZhipuCodingPlanAccountUsage({ providerId: 'glm' });
+    nowMs += 5_000;
+    await expect(readProviderAccountUsage({ providerId: 'glm', agent: 'pi', forceRefresh: true }))
+      .resolves.toMatchObject({ status: 'unavailable', error: 'throttled', retryAt: 1_060_000 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the new GLM window at reset even while the usual cache duration would still apply', async () => {
+    setAccountUsageProviderReader(() => mkProvider({
+      routing: { pi: { upstream: 'https://open.bigmodel.cn/api/anthropic', authStrategy: 'api-key-header' } },
+    }));
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockImplementationOnce(async () => jsonRes({ data: {
+        limits: [{ type: 'CREDIT_LIMIT', unit: 6, percentage: 70, nextResetTime: nowMs + 60_000 }],
+      } }))
+      .mockImplementationOnce(async () => jsonRes({ data: {
+        limits: [{ type: 'CREDIT_LIMIT', unit: 6, percentage: 0 }],
+      } }));
+    setAccountUsageFetch(fetch);
+    await readZhipuCodingPlanAccountUsage({ providerId: 'glm' });
+    nowMs += 60_000;
+    await expect(readZhipuCodingPlanAccountUsage({ providerId: 'glm' })).resolves.toMatchObject({
+      status: 'ready', stale: false, snapshot: { weekly: { usedPercent: 0 } },
+    });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('returns unsupported when no official route exists', async () => {
     setAccountUsageProviderReader(() =>
       mkProvider({ routing: { 'claude-code': { upstream: 'https://proxy.example/v1', authStrategy: 'api-key-header' as const } } }),
@@ -524,7 +648,7 @@ describe('readProviderAccountUsage', () => {
     setAccountUsageFetch(fetchMock as unknown as typeof fetch);
     await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(calls).toBe(1);
-    nowMs += 6 * 60_000; // TTL 过期，触发第二次拉取 → 429 + Retry-After。
+    nowMs += 31 * 60_000; // 空闲 TTL 过期，触发第二次拉取 → 429 + Retry-After。
     await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(calls).toBe(2);
     // 429 失败后重置时间未到：不再发请求，回 stale 快照。
@@ -533,15 +657,31 @@ describe('readProviderAccountUsage', () => {
     expect(third).toMatchObject({ status: 'ready', stale: true, error: 'rate-limited' });
   });
 
-  it('serves the cached snapshot inside the TTL and refetches after expiry', async () => {
+  it('serves the cached snapshot for 30m while idle and shortens to 2m after turn activity', async () => {
     const fetchMock = vi.fn(async () => jsonRes(DEEPSEEK_BALANCE));
     setAccountUsageFetch(fetchMock as unknown as typeof fetch);
     await readProviderAccountUsage({ providerId: 'deepseek' });
     await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Idle reads stay cached past 2m until 30m.
     nowMs += 6 * 60_000;
     await readProviderAccountUsage({ providerId: 'deepseek' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    nowMs += 24 * 60_000;
+    await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Real turn activity switches to the 2m active cadence.
+    recordProviderAccountActivity('deepseek');
+    nowMs += 60_000;
+    await readProviderAccountUsage({ providerId: 'deepseek' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    nowMs += 60_000;
+    await readProviderAccountUsage({ providerId: 'deepseek' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // Without further turns, returns to the 30m idle cadence.
+    nowMs += 6 * 60_000;
+    await readProviderAccountUsage({ providerId: 'deepseek' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('maps upstream failures to error codes and keeps stale snapshots', async () => {
@@ -554,7 +694,7 @@ describe('readProviderAccountUsage', () => {
     setAccountUsageFetch(fetchMock as unknown as typeof fetch);
     const first = await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(first.status).toBe('ready');
-    nowMs += 6 * 60_000;
+    nowMs += 31 * 60_000;
     const second = await readProviderAccountUsage({ providerId: 'deepseek' });
     expect(second).toMatchObject({ status: 'ready', stale: true, error: 'auth' });
     expect((second as { snapshot: { balances: unknown[] } }).snapshot.balances).toHaveLength(1);
@@ -693,7 +833,7 @@ describe('Kimi Code subscription quota', () => {
   it('keeps missing, zero-use and fully-used windows distinct, without inventing totals or dates', async () => {
     fetcher.mockResolvedValueOnce(jsonRes({ usages: { limit_5h: null, limit_7d: { used_ratio: 0 }, limit_month_code: { used_ratio: 1.2, reset_time: 'bad' } } }));
     expect(await read()).toMatchObject({ snapshot: { windows: [{ id: 'limit_7d', usedPercent: 0, resetsAt: null }, { id: 'limit_month_code', usedPercent: 100, resetsAt: null }] } });
-    nowMs += 300_001;
+    nowMs += 30 * 60_000 + 1;
     fetcher.mockResolvedValueOnce(jsonRes({ usages: {} }));
     expect(await read()).toMatchObject({ snapshot: { windows: [] } });
   });
@@ -705,7 +845,7 @@ describe('Kimi Code subscription quota', () => {
 
   it.each([401, 403])('revokes a cached quota on HTTP %s', async status => {
     await read();
-    nowMs += 300_001;
+    nowMs += 30 * 60_000 + 1;
     fetcher.mockResolvedValueOnce(jsonRes({}, status));
     expect(await read()).toMatchObject({ status: 'unavailable', error: 'auth' });
     expect(await read()).toMatchObject({ status: 'unavailable', error: 'auth' });
@@ -714,7 +854,7 @@ describe('Kimi Code subscription quota', () => {
 
   it.each([500, 503])('marks last known data stale on HTTP %s, instead of zero remaining', async status => {
     await read();
-    nowMs += 300_001;
+    nowMs += 30 * 60_000 + 1;
     fetcher.mockResolvedValueOnce(jsonRes({}, status));
     expect(await read()).toMatchObject({ status: 'ready', stale: true, error: 'server', snapshot: { windows: [{ usedPercent: 23 }] } });
   });

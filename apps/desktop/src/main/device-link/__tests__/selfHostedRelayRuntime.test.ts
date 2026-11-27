@@ -52,6 +52,10 @@ const h = vi.hoisted(() => ({
   agentNet: vi.fn(async (_method: string, _path: string, _body?: unknown): Promise<unknown> => ({})),
   createTenant: vi.fn(),
   writeSecrets: vi.fn(),
+  /** 官方服务是否说这台已被移除（officialAgentNetRemoved）、「重新加入」（rejoinThisDevice）与运行时的移除通知（onAgentNetRemoved）的替身。 */
+  revoked: vi.fn(async () => false),
+  removedListener: null as (() => void) | null,
+  rejoin: vi.fn(async (): Promise<{ agentNet: 'rejoined' | 'skipped' | 'failed' }> => ({ agentNet: 'rejoined' })),
 }));
 
 vi.mock('electron', () => ({
@@ -88,7 +92,7 @@ vi.mock('../settings-store.desktop.js', () => {
   const commit = (key: string, value: unknown) => {
     if (key === 'agentNetOnlyEncrypted') h.onlyEncrypted = value === true;
     if (key === 'agentNetEnabled') h.agentNetEnabled = value === true;
-    if (key === 'agentNetPendingSwitch' || key === 'agentNetChangedBy') {
+    if (key === 'agentNetPendingSwitch' || key === 'agentNetChangedBy' || key === 'agentNetRemoved') {
       h.switchSettings[key] = value;
     }
     h.settingsCommitted(key, value);
@@ -115,7 +119,7 @@ vi.mock('../index.js', () => ({
   broadcast: vi.fn(), getDeviceLinkConnectionIssue: () => null,
   remoteBackgroundInvoke: h.invoke,
   getDeviceLinkPeerLinks: () => ({ links: [] }),
-  restartDeviceLinkForRelayChange: h.restart, setKeepAwakeEnabled: vi.fn(),
+  restartDeviceLinkForRelayChange: h.restart, setKeepAwakeEnabled: vi.fn(), rejoinThisDevice: h.rejoin,
 }));
 vi.mock('@cindy/device-link-relay', () => ({
   createDeviceCredential: () => ({ credential: 'fake-credential' }),
@@ -161,6 +165,8 @@ vi.mock('../agentNetRuntime.js', () => ({
   ensureOwnerAgentNetBootstrap: vi.fn(),
   memberAgentNetIdentity: vi.fn(),
   memberAgentNetSecrets: vi.fn(),
+  officialAgentNetRemoved: h.revoked,
+  onAgentNetRemoved: (listener: () => void) => { h.removedListener = listener; return () => {}; },
 }));
 
 import {
@@ -209,6 +215,8 @@ beforeEach(async () => {
   h.secrets = new Map();
   h.agentNet.mockReset();
   h.agentNet.mockResolvedValue({});
+  h.revoked.mockReset(); h.revoked.mockResolvedValue(false);
+  h.rejoin.mockReset(); h.rejoin.mockResolvedValue({ agentNet: 'rejoined' });
   vi.useFakeTimers();
   vi.clearAllMocks();
   h.owner = 'account-a';
@@ -255,6 +263,62 @@ it('exposes and enforces the V2-only relay restriction on both ends of a switch-
   expect(result.peer).toMatchObject({ ok: false, message: expect.stringContaining('[AGENT_NET_SWITCH_V2_ONLY_RELAY]') });
   expect(h.invoke).not.toHaveBeenCalled();
   expect(h.agentNetEnabled).toBe(true);
+});
+
+// 2026-11-26 用户定「被删后要能重新加入」：被移除后重新登录的电脑，设置里已经没有「重新加入」，本机打开开关是剩下的入口。
+// 真实 IPC 与远程切换 handler；缺口：打开开关从不看身份是否已被撤销，开着也一直被 Agent-Net 拒绝。
+// 最小输入：官方 Agent-Net 回 DEVICE_REVOKED 时本机打开（重新加入成功／Agent-Net 未恢复／旧服务端／失败）、另一台电脑远程打开。tier:unit。
+it('rejoins a removed computer before its own switch turns Agent-Net on, never for a remote switch', async () => {
+  const order: string[] = [];
+  const rejoin = async () => { order.push(`rejoin while on=${h.agentNetEnabled}`); return { agentNet: 'rejoined' as const }; };
+  h.rejoin.mockImplementation(rejoin);
+  h.restart.mockImplementation(() => { order.push(`restart while on=${h.agentNetEnabled}`); });
+  const fails = (message: string) => async () => { await rejoin(); throw new Error(message); };
+  const agentNetLater = async () => { await rejoin(); return { agentNet: 'failed' as const }; };
+  for (const [revoked, outcome, shown, expected] of [
+    [false, null, undefined, ['restart while on=true']],
+    // Rejoined while the switch still reads off (same selection as a tap), then switched on and reconnected once.
+    [true, null, 'rejoined', ['rejoin while on=false', 'restart while on=true']],
+    // Coming back did not fully work: on as before (Agent-Net refusing the identity sends this run to Device Link), and the
+    // settings page says why with 「重新加入」's wording.
+    [true, agentNetLater, 'agent-net-unavailable', ['rejoin while on=false', 'restart while on=true']],
+    [true, fails('DEVICE_REJOIN_UNSUPPORTED'), 'unsupported', ['rejoin while on=false', 'restart while on=true']],
+    [true, fails('AGENT_NET_REQUEST_TIMEOUT'), 'failed', ['rejoin while on=false', 'restart while on=true']],
+  ] as const) {
+    h.agentNetEnabled = false; order.length = 0; h.rejoin.mockClear();
+    h.revoked.mockResolvedValue(revoked);
+    if (outcome) h.rejoin.mockImplementationOnce(outcome);
+    const result = await command({ type: 'set-agent-net', enabled: true });
+    expect(result.error).toBeUndefined();
+    expect(result.rejoin).toBe(shown);
+    if (revoked) expect(h.rejoin).toHaveBeenCalledWith({ agentNet: true });
+    expect(h.agentNetEnabled).toBe(true);
+    expect(order).toEqual(expected);
+  }
+
+  // Only this device can bring itself back (agent-net-device-removal.md): another computer turning it on does not.
+  h.agentNetEnabled = false; h.revoked.mockResolvedValue(true); h.rejoin.mockClear();
+  await agentNetSwitchRemoteHandler()!.handle({ action: 'set', enabled: true, switchId: 'switch-removed' }, 'controller', 'Other computer');
+  await vi.advanceTimersByTimeAsync(400);
+  expect(h.agentNetEnabled).toBe(true);
+  expect(h.rejoin).not.toHaveBeenCalled();
+});
+
+// 2026-11-26 用户定「被删后默认关掉，再打开就重新加入」：Agent-Net 运行时说这台被移除过（onAgentNetRemoved），就按本机改开关的
+// 同一条路关掉并记下原因（远程连接页提示），人再打开时清掉。真实 IPC；缺口：被拒只按「这次关着」处理，开关和页面都不说。
+// 最小输入：开着时收到移除通知两次、已关着时收到一次、本机再打开。tier:unit。
+it('turns Agent-Net off with the removed note when this computer was removed, until the person turns it on again', async () => {
+  h.agentNetEnabled = true;
+  h.removedListener!(); h.removedListener!();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.agentNetEnabled).toBe(false);
+  expect(getState()).toMatchObject({ agentNetEnabled: false, agentNetRemoved: true });
+  expect(h.restart).toHaveBeenCalledTimes(1); // Once, however many times the removal was reported.
+  h.removedListener!();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(h.restart).toHaveBeenCalledTimes(1);
+  const result = await command({ type: 'set-agent-net', enabled: true });
+  expect(result.state).toMatchObject({ agentNetEnabled: true, agentNetRemoved: false });
 });
 
 // 账号代次：开关按电脑保存，旧账号排队的 IPC 不能在新账号下取消恢复并启用/重连。真实装配 IPC，unit。

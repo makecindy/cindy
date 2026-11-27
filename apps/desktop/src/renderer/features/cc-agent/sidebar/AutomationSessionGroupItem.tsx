@@ -14,6 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { useTaskInfoFields } from '../hooks/useTaskInfoFields';
 import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import type { Session } from '@/lib/ccAgent.types';
 import type {
@@ -28,8 +29,12 @@ import { useAutomationGroupCollapsed } from '../hooks/useAutomationGroupCollapse
 import { formatSidebarFutureTime, formatSidebarTime } from '../lib/formatSidebarTime';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
-import { hasSessionSelectionModifier, SessionItem } from './SessionItem';
-import type { SessionClickHandler } from './SessionItem';
+import { SessionItem } from './SessionItem';
+import type { SessionClickHandler, SessionClickModifiers } from './SessionItem';
+import {
+  isSidebarNewWindowActivation,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 import { MENU_ITEM_CLASS } from './menuStyles';
 import {
   useSessionAttentionUrgency,
@@ -132,6 +137,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     sessionVariant = 'text',
   }: AutomationSessionGroupItemProps & SidebarNavigationProps) {
     const { t } = useTranslation();
+    const { fields: taskInfoFields } = useTaskInfoFields();
     // 轴 1:文件夹开/关,持久化、记忆上次展开(默认收起)。
     const [storedCollapsed, toggleStoredCollapsed] = useAutomationGroupCollapsed(
       group.id,
@@ -355,13 +361,16 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
     // 告警行 —— 之后用户展开这个组会看到被锁住的两三条告警行而不是正常的前 5 条运行。
     const collapsedRef = useRef(collapsed);
     collapsedRef.current = collapsed;
+    const hasSelectionRef = useRef(false);
+    hasSelectionRef.current = (selectedSessionIds?.size ?? 0) > 0;
     const handleChildSessionClick = useCallback<SessionClickHandler>(
       (id, modifiers) => {
-        if (
-          !collapsedRef.current &&
-          !showAllRef.current &&
-          !hasSessionSelectionModifier(modifiers)
-        ) {
+        const willNavigate =
+          !modifiers ||
+          (!modifiers.shiftKey &&
+            !hasSelectionRef.current &&
+            !isSidebarNewWindowActivation(modifiers));
+        if (!collapsedRef.current && !showAllRef.current && willNavigate) {
           freezeCurrentLayoutRef.current(id);
         }
         onSessionClick(id, modifiers);
@@ -472,12 +481,30 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
 
     // 点击空白行区域 = 点击标题。展开态打开最新一条;收起且整组是红时打开
     // 贡献红点的那条。行内控件各自 stopPropagation,不会误触发。
-    const openLatestSession = () => {
+    const openLatestSession = (
+      event?: Pick<MouseEvent, 'shiftKey' | 'metaKey' | 'ctrlKey' | 'altKey' | 'button'>,
+    ) => {
       const targetId = headerSessionId;
       if (!targetId) return;
-      // 仅在展开 + 前 5 条态下冻结当前布局;收起态未读子行随已读状态收回。
-      if (!collapsed && !showAll) freezeCurrentLayout(targetId);
-      onSessionClick(targetId);
+      const modifiers: SessionClickModifiers | undefined = event
+        ? {
+            shiftKey: event.shiftKey,
+            metaKey: event.metaKey,
+            ctrlKey: event.ctrlKey,
+            altKey: event.altKey,
+            button: event.button,
+          }
+        : undefined;
+      const willNavigate =
+        !modifiers ||
+        (!modifiers.shiftKey &&
+          !(selectedSessionIds && selectedSessionIds.size > 0) &&
+          !isSidebarNewWindowActivation(modifiers));
+      // 仅在展开 + 前 5 条态且确实导航时冻结当前布局;收起态未读子行随已读状态收回。
+      if (!collapsed && !showAll && willNavigate) {
+        freezeCurrentLayout(targetId);
+      }
+      onSessionClick(targetId, modifiers);
     };
 
     return (
@@ -502,7 +529,18 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
             会冒泡穿过内部按钮的 stopPropagation(click 语义)造成双触发。键盘可达性由内部
             标题 <button>(Tab focus + Enter/Space)天然提供。 */}
           <div
+            onMouseDown={(event) => {
+              if (!isAutomationGroupInlineAction(event.target)) {
+                preventMiddleClickAutoscroll(event);
+              }
+            }}
             onClick={openLatestSession}
+            onAuxClick={(event) => {
+              if (event.button !== 1 || isAutomationGroupInlineAction(event.target)) return;
+              event.preventDefault();
+              event.stopPropagation();
+              openLatestSession(event);
+            }}
             onContextMenu={(event) => {
               // 整行右键 = 打开「更多操作」同一份菜单(不再另做一份隐形锚点菜单)。
               event.preventDefault();
@@ -542,21 +580,23 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                 这样首图标和标题都能落在各自模式的普通任务列上。分组 agentKind 取
                 最新一条 run(同一 schedule 所有 run 走同一 agent),缺失时退化为
                 'cc'。isRunning 只看最新那条,与其子行一致。 */}
-              <span
-                className={cn(
-                  'flex shrink-0 items-center justify-center',
-                  sessionVariant === 'list' ? 'w-3' : 'w-[15px]',
-                )}
-              >
-                <VendorIcon
-                  vendor={agentKindToVendor(latestSession?.agentKind)}
-                  size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}
-                  running={isRunning}
-                  colorClassName={
-                    hasActiveHidden ? 'text-[var(--sidebar-item-active-foreground)]' : undefined
-                  }
-                />
-              </span>
+              {taskInfoFields.includes('harness') && (
+                <span
+                  className={cn(
+                    'flex shrink-0 items-center justify-center',
+                    sessionVariant === 'list' ? 'w-3' : 'w-[15px]',
+                  )}
+                >
+                  <VendorIcon
+                    vendor={agentKindToVendor(latestSession?.agentKind)}
+                    size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}
+                    running={isRunning}
+                    colorClassName={
+                      hasActiveHidden ? 'text-[var(--sidebar-item-active-foreground)]' : undefined
+                    }
+                  />
+                </span>
+              )}
               {/* text 延续 vendor → Timer → 标题；list 把 Timer 排到标题右侧，避免它
                 被误读成一层缩进，同时保留自动任务身份和点击入口。Timer 与标题是
                 同级按钮，避免 role=button 嵌进 title button 后无法进入 Tab 顺序。
@@ -609,7 +649,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  openLatestSession();
+                  openLatestSession(event);
                 }}
                 disabled={!latestSession}
                 className="min-w-0 truncate text-left disabled:cursor-default"
@@ -617,7 +657,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                 <span className="min-w-0 truncate">{group.title}</span>
               </button>
               {/* 例行任务分组：标题后显示所属伙伴头像，与组内各行的伙伴标记同源。 */}
-              {teammateRoutine && latestSession && (
+              {taskInfoFields.includes('teammate') && teammateRoutine && latestSession && (
                 <TeammateRoutineOwnerMark session={latestSession} />
               )}
             </span>
@@ -636,7 +676,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                 aria-expanded={!collapsed}
                 aria-label={toggleGroupLabel}
                 className={cn(
-                  'flex size-5 shrink-0 items-center justify-center rounded-md',
+                  'flex size-5 shrink-0 items-center justify-center rounded-lg',
                   hasActiveHidden
                     ? 'hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
                     : 'hover:bg-sidebar-item-hover',
@@ -766,10 +806,10 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                     <div
                       className={cn(
                         'absolute right-0 top-0 flex h-6 items-center gap-0.5',
-                        'opacity-0 transition-opacity',
+                        'transition-opacity',
                         menuOpen
                           ? 'opacity-100'
-                          : 'group-hover:opacity-100 group-focus-within/slot:opacity-100',
+                          : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within/slot:pointer-events-auto group-focus-within/slot:opacity-100',
                       )}
                     >
                       {/* 高频 Run 继续直点;Edit/Pause/Resume/Delete 收进 More 菜单,避免 Edit
@@ -789,7 +829,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                             }}
                             aria-label={t('ccAgent.sidebar.automationGroup.menu.runNow')}
                             className={cn(
-                              'flex size-5 shrink-0 items-center justify-center rounded-md',
+                              'flex size-5 shrink-0 items-center justify-center rounded-lg',
                               'transition-colors',
                               actionButtonToneClassName,
                             )}
@@ -815,7 +855,7 @@ export const AutomationSessionGroupItem = withSidebarNavigation<AutomationSessio
                                 onPointerDown={(event) => event.stopPropagation()}
                                 aria-label={t('ccAgent.sidebar.automationGroup.menu.more')}
                                 className={cn(
-                                  'flex size-5 shrink-0 items-center justify-center rounded-md',
+                                  'flex size-5 shrink-0 items-center justify-center rounded-lg',
                                   'transition-colors',
                                   actionButtonToneClassName,
                                 )}

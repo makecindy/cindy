@@ -102,7 +102,11 @@ describe('messageHandler !stop routing', () => {
     notificationSessionId?: string,
     prepareAgentTurnText?: ImChannelAdapter['prepareAgentTurnText'],
     turnPermissionPolicyFor?: ImChannelAdapter['turnPermissionPolicyFor'],
-    options: { channel?: string; companionBotIdFor?: (botContextId: string) => string | null } = {},
+    options: {
+      channel?: string;
+      companionBotIdFor?: (botContextId: string) => string | null;
+      companionLane?: ImChannelAdapter['companionLane'];
+    } = {},
   ): void {
     stopActiveTurn = vi.fn(async () => ({ stopped: true, droppedQueued: 0 }));
     runAgentTurn = vi.fn(async () => undefined);
@@ -136,6 +140,7 @@ describe('messageHandler !stop routing', () => {
       threadScoped,
       ...(prepareAgentTurnText ? { prepareAgentTurnText } : {}),
       ...(turnPermissionPolicyFor ? { turnPermissionPolicyFor } : {}),
+      ...(options.companionLane ? { companionLane: options.companionLane } : {}),
     } as unknown as ImChannelAdapter;
 
     const attach = createMessageHandler(
@@ -174,6 +179,22 @@ describe('messageHandler !stop routing', () => {
     expect(turn.text).toBe('');
     expect(turn.agentText).toContain('用户显式召唤了机器人');
     expect(turn.agentText).not.toMatch(/检查|看看|继续|附件/);
+  });
+
+  // Unit regression r4674015074: production never told the facts builder a message was in a
+  // topic, so a bare @ inside a topic had no hint to read the topic. A message that opens a
+  // new topic from the main stream is not yet "in" it. Minimal input: empty text on a topic lane.
+  it.each([
+    [{}, true],
+    [{ groupContextLane: { chatId: 'oc_chat', threadId: '' } }, false],
+  ])('tells the model a bare topic mention sits in a topic (%j)', async (extra, inThread) => {
+    wire(false, undefined, undefined, undefined, {
+      channel: 'feishu',
+      companionLane: () => ({ kind: 'group', chatId: 'oc_chat', threadId: 'omt_topic' }),
+    });
+    deliver(makeEvent({ channelName: 'feishu', text: '', invoked: true, ...extra }));
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(runAgentTurn.mock.calls[0][0].agentText.includes('根据话题内容判断')).toBe(inThread);
   });
 
   it('keeps an empty reply and its quoted content separate from the user text', async () => {
@@ -774,6 +795,19 @@ describe('messageHandler !stop routing', () => {
 
     expect(handleSlashCommand).toHaveBeenCalledTimes(1);
     expect(capturedCtx?.consumePendingOpener).toBeUndefined();
+  });
+
+  // Review (#12146): a lone oversize video only carried a retrievable note, so the handler replied
+  // "unsupported" and never invoked the model, which therefore could not fetch the original.
+  it('可按编号取回的附件照样进入模型轮次, 也不向对方报不支持', async () => {
+    deliver(makeEvent({
+      text: '',
+      unsupported: [{ type: 'oversize', retrievable: true, label: 'clip.MOV（96.0 MB）' }] as IMMessageEvent['unsupported'],
+    }));
+    await flushMicrotasks();
+    await vi.waitFor(() => expect(runAgentTurn).toHaveBeenCalledTimes(1));
+    expect(sendText).not.toHaveBeenCalled();
+    expect(consumePendingOpenerCard).not.toHaveBeenCalled();
   });
 
   it('同话题后续纯 unsupported 不消费上一轮的 pending opener', async () => {

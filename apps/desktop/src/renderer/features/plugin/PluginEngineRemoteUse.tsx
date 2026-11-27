@@ -9,7 +9,9 @@
  *
  * The levels follow an ordinary provider's row: this computer must allow remote control first, and
  * the plugin must offer the mode for that engine; otherwise the switch stays visible but cannot be
- * used, with the reason underneath. The stored state arrives with the engine list (main pushes the
+ * used, with the reason underneath. The same holds while the user has the engine turned off in
+ * Settings → Model providers: nothing can use it until it is turned on there, so the switch shows what
+ * is stored but cannot be changed here. The stored state arrives with the engine list (main pushes the
  * complete list after every change), so the card needs no read of its own.
  */
 import { MonitorSmartphone } from 'lucide-react';
@@ -41,6 +43,53 @@ export function usePluginRemoteUseEngines(ghostId: string | null | undefined, en
 
 const NO_ENGINES: readonly PluginEngineView[] = Object.freeze([]);
 
+/**
+ * The 「允许被远程调用」 switch of one engine: what is stored, and how to change it. Shared by the
+ * card in the plugin's own page and the row in Settings → Model providers, so both show the same
+ * state (main pushes the complete engine list after every change) and fail the same way.
+ */
+export function usePluginEngineRemoteUseSwitch(engine: PluginEngineView): {
+  supported: boolean;
+  shareSupported: boolean;
+  enabled: boolean;
+  busy: boolean;
+  setEnabled(next: boolean): void;
+} {
+  const { t } = useTranslation();
+  const supported = engine.remoteUse?.supported === true;
+  const shareSupported = supported && engine.remoteUse?.shareSupported === true;
+  const stored = engine.remoteUse?.enabled === true;
+  const [enabled, setEnabled] = useState(stored);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    setEnabled(stored);
+  }, [stored]);
+  return {
+    supported,
+    shareSupported,
+    enabled,
+    busy,
+    setEnabled(next) {
+      const setRemoteUse = window.electronAPI?.maker?.setPluginEngineRemoteUse;
+      if (!setRemoteUse) return;
+      const previous = enabled;
+      setEnabled(next);
+      setBusy(true);
+      void setRemoteUse(engine.key, next)
+        .then((state) => setEnabled(state.supported && state.enabled))
+        .catch((error: unknown) => {
+          setEnabled(previous);
+          // 主进程说明了原因(插件不支持)就照它说；其余按保存失败处理。
+          const unsupported = error instanceof Error && error.message.includes('[PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED]');
+          toast.error(t(unsupported
+            ? 'chat.remoteError.PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED'
+            : 'settings.providers.detail.remoteAccess.writeFailed'));
+        })
+        .finally(() => setBusy(false));
+    },
+  };
+}
+
 function EngineRemoteUseCard({
   engine,
   named,
@@ -59,14 +108,7 @@ function EngineRemoteUseCard({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const supported = engine.remoteUse?.supported === true;
-  const shareSupported = supported && engine.remoteUse?.shareSupported === true;
-  const stored = engine.remoteUse?.enabled === true;
-  const [enabled, setEnabled] = useState(stored);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    setEnabled(stored);
-  }, [stored]);
+  const { supported, shareSupported, enabled, busy, setEnabled } = usePluginEngineRemoteUseSwitch(engine);
   return (
     <div
       data-plugin-engine-remote-use={engine.key}
@@ -81,12 +123,25 @@ function EngineRemoteUseCard({
             : t('settings.providers.detail.remoteAccess.label')}
         </p>
         <p className="mt-0.5 text-13 leading-[1.54] text-[var(--text-secondary)]">
-          {!remoteControlEnabled ? (
+          {engine.suspended ? (
+            <>
+              {t('settings.ghosts.detail.engineRemoteUse.providerDisabled')}{' '}
+              <button
+                type="button"
+                onClick={() => navigate('/settings?tab=providers')}
+                // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
+                className="rounded-sm text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              >
+                {t('settings.ghosts.detail.engineRemoteUse.openProviders')}
+              </button>
+            </>
+          ) : !remoteControlEnabled ? (
             <>
               {t('settings.ghosts.detail.engineRemoteUse.remoteControlOff')}{' '}
               <button
                 type="button"
                 onClick={() => navigate('/settings?tab=remote-control')}
+                // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
                 className="rounded-sm text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               >
                 {t('providerShare.entry.openRemoteControl')}
@@ -113,26 +168,9 @@ function EngineRemoteUseCard({
       ) : null}
       <Switch
         checked={supported && enabled}
-        disabled={busy || !remoteControlEnabled || !supported}
+        disabled={busy || !remoteControlEnabled || !supported || engine.suspended === true}
         aria-label={t('settings.ghosts.detail.engineRemoteUse.ariaLabel', { engine: engine.name })}
-        onCheckedChange={(next) => {
-          const setRemoteUse = window.electronAPI?.maker?.setPluginEngineRemoteUse;
-          if (!setRemoteUse) return;
-          const previous = enabled;
-          setEnabled(next);
-          setBusy(true);
-          void setRemoteUse(engine.key, next)
-            .then((state) => setEnabled(state.supported && state.enabled))
-            .catch((error: unknown) => {
-              setEnabled(previous);
-              // 主进程说明了原因(插件不支持)就照它说；其余按保存失败处理。
-              const unsupported = error instanceof Error && error.message.includes('[PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED]');
-              toast.error(t(unsupported
-                ? 'chat.remoteError.PLUGIN_ENGINE_REMOTE_USE_UNSUPPORTED'
-                : 'settings.providers.detail.remoteAccess.writeFailed'));
-            })
-            .finally(() => setBusy(false));
-        }}
+        onCheckedChange={setEnabled}
       />
     </div>
   );

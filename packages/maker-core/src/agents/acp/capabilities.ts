@@ -25,7 +25,7 @@ const MAPPABLE_EFFORTS: readonly Effort[] = ['minimal', 'low', 'medium', 'high',
 export const ACP_PERMISSION_MODES: readonly PermissionModeDescriptor[] = [
   {
     id: 'ask',
-    displayName: 'Ask each time',
+    displayName: 'Default permissions',
     description: 'Every permission request from the agent is shown to you for a decision.',
   },
   {
@@ -147,7 +147,9 @@ export function buildAcpCapabilities(init: AcpInitializeResult, options: readonl
   const modelOption = findModelOption(options);
   const effortLevels: EffortDescriptor[] = mapEffortValues(findEffortOption(options))
     .map((mapped) => ({ id: mapped.effort, displayName: mapped.name }));
-  const { promptCapabilities } = init.agentCapabilities;
+  const permissionModes = acpPermissionModes(options);
+  const hasPlanMode = permissionModes.some((mode) => mode.id === 'plan');
+  const { promptCapabilities, sessionCapabilities } = init.agentCapabilities;
   return {
     switchModel: modelOption && modelOption.options.length > 0 ? SUPPORTED : SDK_MISSING,
     availableModels: describeAcpModels(options),
@@ -155,9 +157,9 @@ export function buildAcpCapabilities(init: AcpInitializeResult, options: readonl
     effort: effortLevels.length > 0 ? SUPPORTED : SDK_MISSING,
     effortLevels,
     reasoningDisplay: ['full'],
-    permissionModes: acpPermissionModes(options),
+    permissionModes,
     setPermissionModeMidSession: SUPPORTED,
-    planMode: SDK_MISSING,
+    planMode: hasPlanMode ? SUPPORTED : SDK_MISSING,
     multimodal: {
       text: SUPPORTED,
       // Without image support the attachment is still passed as a resource link.
@@ -169,12 +171,19 @@ export function buildAcpCapabilities(init: AcpInitializeResult, options: readonl
     rewind: SDK_MISSING,
     sessionTree: SDK_MISSING,
     abort: SUPPORTED,
-    // One prompt per session at a time; follow-ups wait for the next turn.
-    sameTurnSteer: SDK_MISSING,
+    // ACP v1 runs one prompt per session at a time; only agents offering the
+    // `_session/steering` extension take input into the running turn.
+    sameTurnSteer: init.steering ? SUPPORTED : SDK_MISSING,
     memory: { supported: SDK_MISSING },
-    extraDirs: NOT_IMPLEMENTED,
+    extraDirs: sessionCapabilities.additionalDirectories ? SUPPORTED : NOT_IMPLEMENTED,
     writableDirs: NOT_IMPLEMENTED,
     sessionHtmlExport: SDK_MISSING,
     manualCompact: SDK_MISSING,
+    // Host turn policies (IM groups, personal WeChat) need an agent that asks before every tool
+    // call of such a turn (`_meta.permissionGate`). Full access would approve those requests.
+    turnPermissionPolicy: {
+      supported: init.permissionGate ? SUPPORTED : SDK_MISSING,
+      unsupportedPermissionModes: ['bypassPermissions'],
+    },
   };
 }

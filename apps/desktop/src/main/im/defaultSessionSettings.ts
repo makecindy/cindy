@@ -6,7 +6,7 @@
  * Slack、Discord 和 `/new` 都走这里，避免渠道之间借用同一份用户选择。
  */
 
-import type { AgentKind, Effort, PermissionMode } from '@cindy/maker-core';
+import type { AgentKind, Effort, EngineKind, PermissionMode } from '@cindy/maker-core';
 import { resolveAutomaticImSettings, resolvedImDefaultFingerprint, usesAutomaticImModel } from '../../shared/imAutomaticModel.js';
 import {
   chatEligibleSourcesForModel,
@@ -26,14 +26,17 @@ import {
 } from '../maker-host/model-route-guard';
 
 import {
+  activeImDefaultAgentSettings,
   IM_DEFAULT_EFFORT_OVERRIDES,
+  IM_DEFAULT_PLUGIN_ENGINE_SETTINGS,
   IM_DEFAULT_SETTINGS,
+  type ImDefaultBuiltinAgentKind,
   type ImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
   type ImDefaultSettings,
-  type ImDefaultAgentKind,
   isUnconditionalTurnPolicyChannel,
 } from '../../shared/imDefaultSettings.js';
+import { pluginEngineKeyFromProviderId } from '../../shared/pluginEngines.js';
 import { createLogger } from '../logger';
 import { getMaker } from '../maker-host';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService';
@@ -41,7 +44,7 @@ import { readImDefaultSettings } from './defaultSettingsStore';
 import { readImRemoteProviderRoute } from './remoteProviderRoute';
 import { getModelVisibilityOverride, waitForModelVisibilityMirror } from '../maker-host/model-visibility-mirror';
 import { fingerprintImDefaultSettings, type ImDefaultRoute } from './shared/channelDefaultRoute';
-import type { ImOrchestratorConfig } from './shared/types';
+import type { ImLaneRouteOverride, ImOrchestratorConfig } from './shared/types';
 
 const log = createLogger('im:defaults');
 
@@ -50,7 +53,7 @@ export async function resolveImAutomaticDefaults<T extends ImDefaultSettings>(
   raw: T,
   channel?: ImDefaultSettingsChannel,
   providerSnapshot?: ProviderView[] | null,
-  agentKind?: ImDefaultAgentKind,
+  agentKind?: ImDefaultBuiltinAgentKind,
 ): Promise<T | null> {
   const providers = providerSnapshot === undefined ? await listProvidersForDefaults() : providerSnapshot;
   if (!providers) return null;
@@ -80,9 +83,9 @@ export async function projectImDefaultSettings<T extends ImDefaultSettings>(raw:
 
 export interface ResolvedImSessionDefaults {
   agentDeviceId?: string | null;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   model: string;
-  effort: Effort;
+  effort: Effort | '';
   providerId: string | null;
   permissionMode: PermissionMode;
   fastMode: boolean | 'ultrafast';
@@ -105,18 +108,76 @@ export function getImDefaultEffortFor(
   return model?.defaultEffort ?? model?.efforts[0] ?? 'high';
 }
 
+/**
+ * 把路由键的固定路由(个人飞书 bot 的按群模型)叠到渠道设置上: 选中它的 Agent, 并用它
+ * 替换那个 Agent 的模型、来源、执行位置与推理强度。其余字段(权限档等)不动。
+ * 叠加后的设置照常走解析与指纹, 所以跟随记录能分辨「这个群换了模型」。
+ */
+export function applyImRouteOverride<T extends ImDefaultSettings>(
+  raw: T,
+  override: ImLaneRouteOverride | null | undefined,
+): T {
+  if (!override) return raw;
+  if (override.agentKind === 'acp') {
+    return {
+      ...raw,
+      agentKind: 'acp',
+      agents: {
+        ...raw.agents,
+        acp: {
+          providerId: override.providerId,
+          model: override.model,
+          effort: override.effort,
+          ...(override.agentDeviceId ? { agentDeviceId: override.agentDeviceId } : {}),
+        },
+      },
+    };
+  }
+  return {
+    ...raw,
+    agentKind: override.agentKind,
+    agents: {
+      ...raw.agents,
+      [override.agentKind]: {
+        providerId: override.providerId,
+        model: override.model,
+        effort: override.effort || raw.agents[override.agentKind].effort,
+        ...(override.agentDeviceId ? { agentDeviceId: override.agentDeviceId } : {}),
+      },
+    },
+  };
+}
+
 export async function resolveImSessionDefaults(
   config: ImOrchestratorConfig,
   providerSnapshot?: ProviderView[] | null,
   channel?: ImDefaultSettingsChannel,
+  routeOverride?: ImLaneRouteOverride | null,
 ): Promise<ResolvedImSessionDefaults> {
-  const raw = readImDefaultSettings(channel);
+  const raw = applyImRouteOverride(readImDefaultSettings(channel), routeOverride);
+  if (raw.agentKind === 'acp') {
+    const acp = raw.agents.acp ?? IM_DEFAULT_PLUGIN_ENGINE_SETTINGS;
+    if (!pluginEngineKeyFromProviderId(acp.providerId) || !acp.model.trim()) {
+      throw new Error('im default plugin engine route is incomplete; reselect a model in settings');
+    }
+    return {
+      ...(acp.agentDeviceId ? { agentDeviceId: acp.agentDeviceId } : {}),
+      agentKind: 'acp',
+      model: acp.model.trim(),
+      effort: acp.effort,
+      providerId: acp.providerId,
+      permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
+      fastMode: false,
+      fingerprint: fingerprintImDefaultSettings(raw),
+    };
+  }
   if (usesAutomaticImModel(raw)) {
     const resolved = await resolveImAutomaticDefaults(raw, channel, providerSnapshot);
     if (!resolved) throw new Error('im default session has no available chat model; connect or enable a model in settings');
+    const resolvedSettings = activeImDefaultAgentSettings(resolved);
     return {
       agentKind: resolved.agentKind,
-      ...resolved.agents[resolved.agentKind],
+      ...resolvedSettings,
       permissionMode: raw.permissionMode ?? config.defaultPermissionMode,
       fastMode: false,
       fingerprint: resolvedImDefaultFingerprint(fingerprintImDefaultSettings(raw), resolved),
@@ -172,9 +233,12 @@ export async function resolveImSessionDefaults(
   };
 }
 
-/** 渠道当前原始设置的指纹 —— 不读供应商列表, 供每条消息的廉价比对。 */
-export function readImDefaultSettingsFingerprint(channel?: ImDefaultSettingsChannel): string {
-  return fingerprintImDefaultSettings(readImDefaultSettings(channel));
+/** 渠道当前原始设置(叠上路由键的固定路由)的指纹 —— 不读供应商列表, 供每条消息的廉价比对。 */
+export function readImDefaultSettingsFingerprint(
+  channel?: ImDefaultSettingsChannel,
+  routeOverride?: ImLaneRouteOverride | null,
+): string {
+  return fingerprintImDefaultSettings(applyImRouteOverride(readImDefaultSettings(channel), routeOverride));
 }
 
 /**
@@ -187,13 +251,13 @@ export function readImDefaultSettingsFingerprint(channel?: ImDefaultSettingsChan
  */
 export function readImRawDefaultRoute(channel?: ImDefaultSettingsChannel): ImDefaultRoute {
   const raw = readImDefaultSettings(channel);
-  const settings = raw.agents[raw.agentKind];
+  const settings = activeImDefaultAgentSettings(raw);
   return {
     agentKind: raw.agentKind,
     model: settings.model,
     providerId: settings.providerId?.trim() || null,
     agentDeviceId: settings.agentDeviceId ?? null,
-    effort: settings.effort,
+    effort: settings.effort || null,
   };
 }
 

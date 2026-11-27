@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
+import type { GhostHarnessUsage } from "@cindy/plugin-protocol";
 import type { ProviderView } from "@cindy/model-providers/registry";
 import { isCodexBucketStale } from "@cindy/maker-shared/codex-usage-buckets";
 import type { MobileCodexRateLimitsResult } from "@cindy/maker-shared/device-link-contract";
@@ -8,7 +9,20 @@ import {
   subscriptionQuotaAccounts,
   subscriptionQuotaOverview,
 } from "@cindy/maker-shared/subscription-selection";
+import { isSharedTaskPeer } from "@cindy/device-link";
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from "@/auth/authOwnerGeneration";
 import { isProviderShareAgentDeviceId } from "./providerShareAgentDevice";
+import {
+  hasCachedPluginEngineCatalogue,
+  isPluginEngineSelectable,
+  loadPluginEngines,
+  normalizePluginEngines,
+  pluginEngineChoiceKey,
+  pluginEngineReportsUsage,
+  pluginUsageReader,
+  usePluginEngineCacheVersion,
+  type MobilePluginEngine,
+} from "./pluginEngines";
 import {
   useDeviceLink,
   subscribeRemoteSubscriptionAccountsChanged,
@@ -80,6 +94,25 @@ function quotaTimeKey(values: QuotaValues, now: number): string {
   );
 }
 
+/** Compare time-dependent presentation for plugin engine windows (expiry and countdown). */
+function pluginQuotaTimeKey(
+  values: Readonly<Record<string, GhostHarnessUsage>>,
+  now: number,
+): string {
+  return JSON.stringify(
+    Object.entries(values).map(([providerId, usage]) => [
+      providerId,
+      (usage.windows ?? [])
+        .filter((row) => !row.resetsAt || row.resetsAt > now)
+        .map((row) => [
+          row.label,
+          Math.round(row.remainingPercent),
+          row.resetsAt ? quotaCountdown(row.resetsAt / 1000, now) : null,
+        ]),
+    ]),
+  );
+}
+
 /** One read per account, never one per model. Responses are fenced by device/account/connection. */
 export function useMobileModelQuotas(
   scope: string,
@@ -91,7 +124,9 @@ export function useMobileModelQuotas(
     offline?: boolean;
   }[] = [],
   taskId?: string,
+  pluginEngines?: readonly MobilePluginEngine[],
 ) {
+  const pluginEngineQuotas = useMobilePluginEngineQuotas(scope, visible, pluginEngines);
   const { invoke, status, connectionEpoch } = useDeviceLink();
   const deviceId = (JSON.parse(scope) as [string, string])[1];
   const quotaKey = (targetDeviceId: string, providerId: string) =>
@@ -137,11 +172,65 @@ export function useMobileModelQuotas(
     values: QuotaValues;
   }>();
   const [now, setNow] = useState(Date.now);
-  const clockSnapshot = useRef({ values: {} as QuotaValues, now });
+  const clockSnapshot = useRef({
+    values: {} as QuotaValues,
+    pluginValues: {} as Readonly<Record<string, GhostHarnessUsage>>,
+    now,
+  });
   clockSnapshot.current = {
     values: state?.binding === binding ? state.values : {},
+    pluginValues: pluginEngineQuotas,
     now,
   };
+  const hasTimedPluginWindow = Object.values(pluginEngineQuotas).some((usage) =>
+    (usage.windows ?? []).some(
+      (row) => typeof row.resetsAt === "number" && row.resetsAt > now,
+    ),
+  );
+  const needsDisplayClock =
+    visible && (sources !== "[]" || hasTimedPluginWindow);
+  useEffect(() => {
+    if (!visible) return;
+    setNow(Date.now());
+  }, [visible, pluginEngineQuotas]);
+  useEffect(() => {
+    if (!needsDisplayClock) return;
+    let clock: ReturnType<typeof setInterval> | undefined;
+    const stopClock = () => {
+      clearInterval(clock);
+      clock = undefined;
+    };
+    const startClock = () => {
+      stopClock();
+      if (AppState.currentState !== "active") return;
+      clock = setInterval(() => {
+        if (AppState.currentState !== "active") return;
+        const next = Date.now();
+        const previous = clockSnapshot.current;
+        if (
+          quotaTimeKey(previous.values, previous.now) !==
+            quotaTimeKey(previous.values, next) ||
+          pluginQuotaTimeKey(previous.pluginValues, previous.now) !==
+            pluginQuotaTimeKey(previous.pluginValues, next)
+        ) {
+          setNow(next);
+        }
+      }, 1000);
+    };
+    startClock();
+    const app = AppState.addEventListener("change", (value) => {
+      if (value === "active") {
+        setNow(Date.now());
+        startClock();
+      } else {
+        stopClock();
+      }
+    });
+    return () => {
+      stopClock();
+      app.remove();
+    };
+  }, [needsDisplayClock]);
   useEffect(() => {
     if (!visible || status !== "online" || sources === "[]") return;
     let active = true;
@@ -276,27 +365,15 @@ export function useMobileModelQuotas(
         void refresh();
       }
     };
-    let clock: ReturnType<typeof setInterval> | undefined;
     let timer: ReturnType<typeof setInterval> | undefined;
     const stopTimers = () => {
-      clearInterval(clock);
       clearInterval(timer);
-      clock = timer = undefined;
+      timer = undefined;
     };
     const resume = () => {
       stopTimers();
       if (AppState.currentState !== "active") return;
       void refresh();
-      clock = setInterval(() => {
-        if (AppState.currentState !== "active") return;
-        const next = Date.now();
-        const previous = clockSnapshot.current;
-        if (
-          quotaTimeKey(previous.values, previous.now) !==
-          quotaTimeKey(previous.values, next)
-        )
-          setNow(next);
-      }, 1000);
       timer = setInterval(() => void refresh(), 30000);
     };
     resume();
@@ -349,8 +426,108 @@ export function useMobileModelQuotas(
   );
   return {
     quotas,
+    pluginEngineQuotas,
     now,
     quotaOf: (targetDeviceId: string, providerId: string) =>
       quotas[quotaKey(targetDeviceId, providerId)],
   };
+}
+
+const EMPTY_PLUGIN_QUOTAS: Readonly<Record<string, GhostHarnessUsage>> = {};
+
+/**
+ * Reads account usage for selectable plugin engines that declare `reportsUsage: true`,
+ * sharing the 1-minute `pluginUsageReader` cache with the session menu.
+ */
+function useMobilePluginEngineQuotas(
+  scope: string,
+  visible: boolean,
+  engines: readonly MobilePluginEngine[] | undefined,
+): Readonly<Record<string, GhostHarnessUsage>> {
+  const { invoke, status, connectionEpoch } = useDeviceLink();
+  usePluginEngineCacheVersion();
+  const deviceId = (JSON.parse(scope) as [string, string])[1];
+  // `maker:model-catalog:read` strips `reportsUsage` from remote engines so account usage is
+  // always read directly from the owning computer. Read each same-account computer's direct
+  // catalogue once (reusing the shared plugin-engine cache) to learn which engines report usage;
+  // shares never expose account usage.
+  const unknownRemoteDevices = JSON.stringify(
+    [
+      ...new Set(
+        (engines ?? []).flatMap((engine) =>
+          engine.deviceId
+          && engine.reportsUsage !== true
+          && isPluginEngineSelectable(engine)
+          && !isProviderShareAgentDeviceId(engine.deviceId)
+          && !isSharedTaskPeer(engine.deviceId)
+          && !hasCachedPluginEngineCatalogue(engine.deviceId)
+            ? [engine.deviceId]
+            : [],
+        ),
+      ),
+    ],
+  );
+  useEffect(() => {
+    if (!visible || status !== "online" || unknownRemoteDevices === "[]") return;
+    const owner = getMobileAuthOwner();
+    if (!owner.accountId) return;
+    const remoteDeviceIds = JSON.parse(unknownRemoteDevices) as string[];
+    for (const targetDeviceId of remoteDeviceIds) {
+      void loadPluginEngines(targetDeviceId, {
+        listPluginEngines: async () =>
+          normalizePluginEngines(await invoke<unknown>(targetDeviceId, "maker:list-plugin-engines", [])),
+        refreshPluginEngines: async () => undefined,
+      });
+    }
+  }, [visible, status, connectionEpoch, unknownRemoteDevices, invoke]);
+
+  const reporting = (engines ?? []).filter(
+    (engine) =>
+      pluginEngineReportsUsage(engine)
+      && isPluginEngineSelectable(engine)
+      && !isProviderShareAgentDeviceId(engine.deviceId || deviceId)
+      && !isSharedTaskPeer(engine.deviceId || deviceId),
+  );
+  const targets = JSON.stringify(
+    reporting.map((engine) => [
+      pluginEngineChoiceKey(engine),
+      engine.deviceId || deviceId,
+      engine.key,
+    ]),
+  );
+  const binding = JSON.stringify([scope, visible, status, connectionEpoch, targets]);
+  const [state, setState] = useState<{
+    binding: string;
+    values: Record<string, GhostHarnessUsage>;
+  }>();
+
+  useEffect(() => {
+    if (!visible || status !== "online" || targets === "[]") return;
+    const owner = getMobileAuthOwner();
+    if (!owner.accountId) return;
+    let active = true;
+    const items = JSON.parse(targets) as [string, string, string][];
+    void Promise.all(
+      items.map(async ([choiceKey, targetDeviceId, key]) => {
+        const usage = await pluginUsageReader.read(owner, targetDeviceId, key, () =>
+          isMobileAuthOwnerCurrent(owner)
+            ? invoke<unknown>(targetDeviceId, "maker:get-plugin-engine-usage", [key])
+            : undefined,
+        ).result;
+        return [choiceKey, usage] as const;
+      }),
+    ).then((entries) => {
+      if (!active || !isMobileAuthOwnerCurrent(owner)) return;
+      const values: Record<string, GhostHarnessUsage> = {};
+      for (const [choiceKey, usage] of entries) {
+        if (usage) values[choiceKey] = usage;
+      }
+      setState({ binding, values });
+    });
+    return () => {
+      active = false;
+    };
+  }, [binding, invoke]);
+
+  return state?.binding === binding ? state.values : EMPTY_PLUGIN_QUOTAS;
 }

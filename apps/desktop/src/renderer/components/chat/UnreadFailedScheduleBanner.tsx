@@ -93,7 +93,9 @@ function FailedScheduleNotice({
   };
 
   const missingPlugin = latestFailedRun.failureKind === 'precheck' ? latestFailedRun.missingPlugin : undefined;
-  const message = t(`chat.unreadFailedScheduleBanner.${scheduleFailureMessageKey(latestFailedRun)}`,
+  const key = scheduleFailureMessageKey(latestFailedRun);
+  const messageKey = key === 'precheck' && latestFailedRun.preRunBlocked === true ? 'preRunBlocked' : key;
+  const message = t(`chat.unreadFailedScheduleBanner.${messageKey}`,
     scheduleFailureMessageParams(latestFailedRun, i18n?.resolvedLanguage));
 
   return (

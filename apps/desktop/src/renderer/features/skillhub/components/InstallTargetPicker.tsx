@@ -320,7 +320,7 @@ export function InstallTargetPicker({
         >
         <div
           className="flex items-start justify-between gap-3"
-          style={{ padding: '20px 18px 12px 18px' }}
+          style={{ padding: 'var(--space-5) var(--space-4) var(--space-3) var(--space-4)' }}
         >
           <div className="flex min-w-0 flex-col" style={{ gap: 'var(--space-1_5)' }}>
             <Dialog.Title

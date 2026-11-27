@@ -28,6 +28,7 @@ import { cn } from '@/lib/utils';
 import type { ChatMessage } from '@/lib/makerChatStore';
 import type { KnownLocalFileRef } from '@/lib/localPathResolver';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { Badge } from '@/components/ui/badge';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -166,24 +167,14 @@ export function PlanReviewBubble({
         </span>
         {/* badge / 状态短语是 UI chrome,禁选;标题与正文保持可选 */}
         {showApprovedBadge && (
-          <span
-            className={cn(
-              'select-none rounded-[6px] px-[8px] py-[2px] text-12 font-medium',
-              'bg-[var(--plan-bubble-badge-bg)] text-[var(--plan-bubble-badge-text)]',
-            )}
-          >
+          <Badge tone="plan" size="md">
             {t('chat.planReviewBubble.approved')}
-          </span>
+          </Badge>
         )}
         {status === 'revised' && (
-          <span
-            className={cn(
-              'select-none rounded-[6px] px-[8px] py-[2px] text-12 font-medium',
-              'bg-[var(--plan-bubble-badge-bg)] text-[var(--plan-bubble-badge-text)]',
-            )}
-          >
+          <Badge tone="plan" size="md">
             {t('chat.planReviewBubble.revisionRequested')}
-          </span>
+          </Badge>
         )}
         {status === 'expired' && (
           <span className="select-none text-13 italic text-[var(--ask-expired-text)]">

@@ -13,20 +13,24 @@ type ElectronFallbackReason = NativePrecheckFallback
   | 'native-frame-unavailable' | 'native-size-mismatch' | 'native-image-empty';
 type ScreenshotFallbackReason = 'no-displays' | ElectronFallbackReason;
 
-/** Why these displays cannot use the native helper, decided before any capture. */
+function captureProfileMode(display: Display): true | 'verify-sdr' | false {
+  const space = display.colorSpace ?? '';
+  if (![8, 10].includes(display.depthPerComponent) || !space.includes('matrix:RGB, range:FULL')
+    || !space.includes('transfer:') || space.includes('transfer:INVALID')) return false;
+  return (display.depthPerComponent === 8 && space.includes('primaries:BT709, transfer:SRGB,')) || 'verify-sdr';
+}
+
 export function nativeScreenshotPrecheck(
   displays: readonly Display[], helper?: SnapshotHelper,
 ): NativePrecheckFallback | undefined {
   if (process.platform !== 'win32') return 'platform';
   if (!helper) return 'helper-missing';
-  if (!displays.every(display => display.depthPerComponent === 8
-    && display.colorSpace?.includes('primaries:BT709, transfer:SRGB,'))) return 'color-space';
+  if (!displays.some(captureProfileMode)) return 'color-space';
   return undefined;
 }
 
 /** Freeze only on demand. The existing user-session GDI helper avoids Electron's
- * screen-source enumeration cost on SDR Windows displays. HDR / wide gamut and
- * failed native capture retain Electron's existing color/capture behavior. */
+ * screen-source enumeration cost and keeps SDR desktop colors on HDR10 outputs. */
 export async function captureScreenshotDisplays(
   displays: readonly Display[],
   helper?: SnapshotHelper,
@@ -34,53 +38,64 @@ export async function captureScreenshotDisplays(
   onHelperReleased?: () => void,
 ): Promise<{
   captures: DisplayCapture[];
-  backend: 'native' | 'electron';
+  backend: 'native' | 'electron' | 'mixed';
   fallbackReason?: ScreenshotFallbackReason;
 }> {
   if (displays.length === 0) return { captures: [], backend: 'electron', fallbackReason: 'no-displays' };
   const precheck = nativeScreenshotPrecheck(displays, helper);
   let fallbackReason: ElectronFallbackReason | undefined = precheck;
-  if (!fallbackReason && helper) {
-    const captures: DisplayCapture[] = [];
+  const byId = new Map<number, DisplayCapture>();
+  if (!precheck && helper) {
     for (const display of displays) {
+      const mode = captureProfileMode(display);
+      if (!mode) { fallbackReason ??= 'color-space'; continue; }
       const rect = screen.dipToScreenRect(null, display.bounds);
-      const frame = await measureTraceOperation('region-screenshot:native', () => helper.capture(rect, 32768));
+      const frame = await measureTraceOperation('region-screenshot:native', () => helper.capture(rect, 32768, mode));
       // Never silently resize or substitute a display; mixed-DPI coordinates are
       // resolved by Electron before the helper reads physical desktop pixels.
-      if (!frame) { fallbackReason = 'native-frame-unavailable'; break; }
-      if (frame.width !== rect.width || frame.height !== rect.height) { fallbackReason = 'native-size-mismatch'; break; }
+      if (!frame) { fallbackReason ??= 'native-frame-unavailable'; continue; }
+      // Older helpers can still serve ordinary sRGB. Wide-gamut device RGB
+      // needs the profile of the same monitor before we can display it.
+      if (!frame.sdrFromHdr && !frame.icc && mode === 'verify-sdr') {
+        fallbackReason ??= 'color-space';
+        continue;
+      }
+      if (frame.width !== rect.width || frame.height !== rect.height) { fallbackReason ??= 'native-size-mismatch'; continue; }
       const image = nativeImage.createFromBitmap(Buffer.from(frame.data.buffer, frame.data.byteOffset, frame.data.byteLength), {
         width: frame.width, height: frame.height, scaleFactor: 1,
       });
-      if (image.isEmpty()) { fallbackReason = 'native-image-empty'; break; }
-      captures.push({ display, image });
+      if (image.isEmpty()) { fallbackReason ??= 'native-image-empty'; continue; }
+      byId.set(display.id, { display, image, previewProfile: frame.icc });
     }
-    if (captures.length === displays.length) return { captures, backend: 'native' };
-    // Recapture the whole set together if a screen failed, rather than combining
-    // frames taken before/after an unavailable helper with different timestamps.
+    if (byId.size === displays.length) return { captures: [...byId.values()], backend: 'native' };
   }
-  // The native loop only falls through after recording why it stopped.
   const reason: ElectronFallbackReason = fallbackReason ?? 'native-frame-unavailable';
   onHelperReleased?.();
   // Window queries waited for attempted native frames. Let them reach the helper
   // before getSources blocks this thread, so both still overlap.
   if (!precheck) await new Promise<void>((resolve) => setImmediate(resolve));
-  const width = Math.max(...displays.map(d => Math.round(d.bounds.width * d.scaleFactor)));
-  const height = Math.max(...displays.map(d => Math.round(d.bounds.height * d.scaleFactor)));
+  const missing = displays.filter(display => !byId.has(display.id));
+  const width = Math.max(...missing.map(d => Math.round(d.bounds.width * d.scaleFactor)));
+  const height = Math.max(...missing.map(d => Math.round(d.bounds.height * d.scaleFactor)));
   // Fixed reason labels only; never include display metadata or captured pixels.
   // Measure around the call itself: getSources enters synchronous native work
   // before returning its promise, which an async timeout cannot interrupt.
   const sources = await measureTraceOperation(`region-screenshot:electron:${reason}`, () =>
     enumerateDesktopSources(() => desktopCapturer.getSources({
       types: ['screen'], thumbnailSize: { width, height },
-    }), 5000));
-  const captures: DisplayCapture[] = [];
-  for (const display of displays) {
+    }), 5000)).catch((error: unknown) => {
+    if (!byId.size) throw error;
+    return [];
+  });
+  const nativeCount = byId.size;
+  for (const display of missing) {
     const source = sources.find(s => s.display_id === String(display.id))
       ?? (displays.length === 1 && sources.length === 1 ? sources[0] : undefined);
-    if (source && !source.thumbnail.isEmpty()) captures.push({ display, image: source.thumbnail });
+    if (source && !source.thumbnail.isEmpty()) byId.set(display.id, { display, image: source.thumbnail });
   }
-  return { captures, backend: 'electron', fallbackReason: reason };
+  const captures = displays.flatMap(display => byId.get(display.id) ?? []);
+  const backend = nativeCount === 0 ? 'electron' : captures.length === nativeCount ? 'native' : 'mixed';
+  return { captures, backend, fallbackReason: reason };
 }
 
 /** Main crops before crossing IPC. No whole-display pixels reach the live panel. */

@@ -45,12 +45,19 @@ export interface SessionRuntimeControlSnapshot {
   visitedRoutes: string[];
 }
 
+function runtimeOverrideForDevice(profile: SessionRuntimeProfile | null, agentDeviceId?: string | null) {
+  return profile && (profile.agentDeviceId ?? null) === (agentDeviceId ?? null) ? profile : null;
+}
+
+function runtimeOverrideForStart(sessionId: string, agentKind: EngineKind, agentDeviceId?: string | null) {
+  const profile = runtimeOverrideForDevice(getSessionRuntimeControlSnapshot(sessionId).effectiveOverride, agentDeviceId);
+  return profile?.agentKind === agentKind ? profile : null;
+}
+
 /** Startup-only projection; persisted preferences and native-history identity stay on the row. */
 export function getSessionRuntimeStartOverride(sessionId: string, agentKind: EngineKind, agentDeviceId?: string | null) {
-  if (agentKind === 'acp') return {};
-  const profile = getSessionRuntimeControlSnapshot(sessionId).effectiveOverride;
-  if (!profile || profile.agentKind !== agentKind
-    || (profile.agentDeviceId ?? null) !== (agentDeviceId ?? null)) return {};
+  const profile = runtimeOverrideForStart(sessionId, agentKind, agentDeviceId);
+  if (!profile) return {};
   return { model: profile.model, providerId: profile.providerId,
     effort: profile.effort ?? undefined, fastMode: profile.fastMode };
 }
@@ -59,9 +66,11 @@ export function getSessionRuntimeStartOverride(sessionId: string, agentKind: Eng
 export function projectSessionRuntimeControl(
   sessionId: string,
   baseline: SessionRuntimeProfile,
+  agentDeviceId = baseline.agentDeviceId,
 ): Partial<RendererSession> {
   const control = getSessionRuntimeControlSnapshot(sessionId);
-  const effective = control.effectiveOverride ?? baseline;
+  // A route-change push can run while an override from the previous computer still exists.
+  const effective = runtimeOverrideForDevice(control.effectiveOverride, agentDeviceId) ?? baseline;
   return {
     agentKind: makerToDbAgentKind(effective.agentKind),
     model: effective.model,
@@ -140,10 +149,13 @@ export function sessionRuntimeGenerationMatches(
   return expectedGeneration === undefined || (states.get(sessionId)?.generation ?? 0) === expectedGeneration;
 }
 
-export function recordUserSessionRuntimeMutation(sessionId: string): number {
+export function recordUserSessionRuntimeMutation(
+  sessionId: string,
+  options?: { preserveEffective?: boolean },
+): number {
   const state = stateFor(sessionId);
   state.generation += 1;
-  state.effectiveOverride = null;
+  if (!options?.preserveEffective) state.effectiveOverride = null;
   state.pending = null;
   state.pendingRouteExplicit = true;
   state.fallbackHop = 0;
@@ -365,6 +377,15 @@ export function acceptSessionRuntimeMutation(params: {
   return state.generation;
 }
 
+/**
+ * 一条新消息(用户发的，或自动化、目标、协同发来的；自动续跑那一条不算)开始了新的一轮：「这一轮已经试过失败的」
+ * 清空，之前失败过、现在可能已恢复的来源(例如额度已重置)重新可以接替。不清跳数：它还决定任务是否在接替来源上。
+ * 原来只在用户换模型时清空，跑得久的任务每个来源都失败过一次以后就再也不会自动换(2026-11-26 排查)。
+ */
+export function startSessionRuntimeFallbackTurn(sessionId: string): void {
+  states.get(sessionId)?.visitedRoutes.clear();
+}
+
 export function recordFailedSessionRuntimeFallbackCandidate(
   sessionId: string,
   expectedGeneration: number,
@@ -428,13 +449,12 @@ export function getPendingSessionRuntimeMutation(
  * started runtime keeps the saved provider baseline and takes its effort and Fast axes from it.
  */
 export function applySessionRuntimeOverrideForStart(
-  o: { id?: string; agentKind: EngineKind; model?: string; providerId?: string | null; effort?: Effort; fastMode?: boolean | 'ultrafast' },
+  o: { id?: string; agentKind: EngineKind; agentDeviceId?: string | null; model?: string; providerId?: string | null; effort?: Effort; fastMode?: boolean | 'ultrafast' },
   groupDecidesSource: boolean,
 ): SessionRuntimeProfile | null {
-  if (o.agentKind === 'acp') return null;
   const runtimeOverride =
-    typeof o.id === 'string' ? getSessionRuntimeControlSnapshot(o.id).effectiveOverride : null;
-  if (runtimeOverride && runtimeOverride.agentKind === o.agentKind) {
+    typeof o.id === 'string' ? runtimeOverrideForStart(o.id, o.agentKind, o.agentDeviceId) : null;
+  if (runtimeOverride) {
     o.model = runtimeOverride.model;
     if (!groupDecidesSource) o.providerId = runtimeOverride.providerId;
     o.effort = runtimeOverride.effort ?? undefined;

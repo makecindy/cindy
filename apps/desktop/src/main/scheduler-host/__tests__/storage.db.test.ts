@@ -8,6 +8,9 @@ import type { DbTransport } from '../../localDb/client/DbTransport';
  */
 
 import type { Schedule, ScheduleRun } from '@cindy/maker-scheduler';
+import { mkdtempSync, rmdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
@@ -16,7 +19,8 @@ import * as schema from '../../localDb/schema';
 import { createDbClient } from '../../localDb/client/DbClient';
 import type { DbClient } from '../../localDb/client/DbClient';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current';
-import { recordScheduleRunCostDirect } from '../runCostLedger';
+import { applyAgentSwitchToSessionRowWithPorts } from '../../localDb/agentSwitchRows';
+import { recordScheduleRunCostDirect, applyScheduleRunCostMetaChange } from '../runCostLedger';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from '../storage.desktop';
 
 function actualMoneyFromLegacyUsd(amountUsd: number) {
@@ -96,6 +100,14 @@ const SCHEDULER_DDL = [
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       source TEXT NOT NULL DEFAULT 'desktop',
+      agent_kind TEXT NOT NULL DEFAULT 'cc',
+      model TEXT,
+      provider_id TEXT,
+      sdk_session_id TEXT,
+      agent_device_id TEXT,
+      effort TEXT,
+      fast_mode INTEGER,
+      scheduled_model_baseline TEXT,
       status TEXT NOT NULL DEFAULT 'active',
       workspace_kind TEXT NOT NULL DEFAULT 'project',
       working_dir TEXT,
@@ -106,6 +118,7 @@ const SCHEDULER_DDL = [
       created_at INTEGER NOT NULL DEFAULT 0,
       updated_at INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL,
+      total_cost_usd_is_approximate INTEGER DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0
@@ -152,6 +165,7 @@ const SCHEDULER_DDL = [
       provider_id TEXT,
       agent_device_id TEXT,
       effort TEXT,
+      model_group TEXT,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       working_dir TEXT,
       workspace_kind TEXT NOT NULL DEFAULT 'project',
@@ -192,12 +206,14 @@ const SCHEDULER_DDL = [
       estimated_value_usd REAL NOT NULL DEFAULT 0,
       cost_amount REAL NOT NULL DEFAULT 0,
       estimated_value_amount REAL NOT NULL DEFAULT 0,
+      other_estimated_value_amount REAL NOT NULL DEFAULT 0,
       cost_currency TEXT,
       cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       cost_attribution TEXT NOT NULL DEFAULT 'legacy',
       result_text TEXT,
       pre_run_hook_result TEXT,
       trigger_source TEXT,
+      mr_observation TEXT,
       read_at INTEGER,
       heartbeat_at INTEGER
     )
@@ -273,8 +289,8 @@ const SCHEDULER_DDL = [
   `,
 ];
 
-function createStorageHarness(queries?: { query: string; params: unknown[] }[]) {
-  const sqlite = new Database(':memory:');
+function createStorageHarness(queries?: { query: string; params: unknown[] }[], dbPath = ':memory:') {
+  const sqlite = new Database(dbPath);
   sqlite.pragma('foreign_keys = ON');
   for (const statement of SCHEDULER_DDL) sqlite.exec(statement);
 
@@ -317,6 +333,33 @@ it.each(['eligible', 'paused', 'archived', 'finished', 'manual-continue', 'runni
       expect(await h.storage.claimInterruptedRun('task', 51)).toBeNull();
     } else expect(claimed).toBeNull();
   } finally { h.close(); }
+});
+
+// DB tier: one scheduler turn has two native subscription quotes, including the path without an assistant row.
+it.each(['message', 'tool-only'])('reads both native estimates for a %s turn after repeated reads', async mode => {
+  const h = createStorageHarness();
+  try {
+    setCurrentDbClient({ drizzle: h.db } as unknown as DbClient, 'test-user');
+    h.sqlite.exec("INSERT INTO sessions (id, title) VALUES ('task', 'mixed')");
+    await h.storage.insert(baseSchedule({ targetSessionId: 'task' }));
+    await h.storage.insertRun({ id: 'run', scheduleId: 'sch-1', sessionId: 'task', firedAt: 1, status: 'success' });
+    const dollars = { currency: 'USD', amount: 2, approximate: true, kind: 'value-estimate' } as const;
+    const yuan = { ...dollars, currency: 'CNY', amount: 7 } as const;
+    const estimatedAmounts = [dollars, yuan];
+    if (mode === 'message') {
+      const meta = { origin: { kind: 'scheduler', scheduleId: 'sch-1', runId: 'run' },
+        turnCost: dollars, turnCostIsEstimate: true, turnUsageDetails: { estimatedAmounts } };
+      h.sqlite.prepare("INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES ('m','m','task','assistant','',?,2)").run(JSON.stringify(meta));
+      await applyScheduleRunCostMetaChange({}, meta);
+      await applyScheduleRunCostMetaChange(meta, meta);
+    } else {
+      await recordScheduleRunCostDirect({ runId: 'run', money: dollars, estimatedAmounts });
+    }
+    for (let read = 0; read < 2; read++) {
+      expect(await h.storage.listRuns('sch-1')).toMatchObject([{ estimatedValueAmounts: [dollars, yuan], costMoney: { amount: 0 } }]);
+      expect(await h.storage.listCostSummaries()).toMatchObject([{ totalEstimatedValueAmounts: [dollars, yuan], totalMoney: { amount: 0 } }]);
+    }
+  } finally { clearCurrentDbClient(); h.close(); }
 });
 
 it.each(['api', 'subscription', 'tool-only'])('includes media in both run history and schedule totals for %s runs', async (mode) => {
@@ -724,6 +767,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(run).toMatchObject({
         runId: 'blocked-missing-plugin',
         failureKind: 'precheck',
+        preRunBlocked: true,
         ...diagnosis,
       });
     } finally {
@@ -792,6 +836,35 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
+  // #12397, DB tier. A second writer repoints one persistent rule without changing the
+  // count, status, or due time. Both affected picker entries must refresh.
+  it('refreshes plugin eligibility when another writer changes a persistent schedule binding', async () => {
+    const { db, storage, close } = createStorageHarness();
+    const other = new DrizzleScheduleStorage(() => db);
+    try {
+      await storage.insert(baseSchedule({ id: 'run-rule' }));
+      for (const id of ['old-target', 'new-target']) {
+        db.run(sql`INSERT INTO sessions (id, title, source) VALUES (${id}, ${id}, 'scheduler')`);
+        await storage.insertRun({
+          id, scheduleId: 'run-rule', sessionId: id, firedAt: 1, finishedAt: 2, status: 'success',
+        });
+      }
+      await other.insert(baseSchedule({ id: 'binding', targetSessionId: 'old-target', persistentSession: true }));
+      const picker = async (id: string) =>
+        (await storage.listSidebarIndexRuns()).findLast(run => run.sessionId === id)?.canSwitchPluginEngine === true;
+      await expect(picker('old-target')).resolves.toBe(false);
+      await expect(picker('new-target')).resolves.toBe(true);
+
+      await other.update('binding', { targetSessionId: 'new-target' });
+      await expect(storage.canSwitchCompletedAutomationSession('old-target')).resolves.toBe(true);
+      await expect(storage.canSwitchCompletedAutomationSession('new-target')).resolves.toBe(false);
+      await expect(picker('old-target')).resolves.toBe(true);
+      await expect(picker('new-target')).resolves.toBe(false);
+    } finally {
+      close();
+    }
+  });
+
   it('recovers warnings per automation without erasing unread history; healthy skips only recover checks', async () => {
     const harness = createStorageHarness();
     try {
@@ -844,6 +917,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(await harness.storage.listSidebarIndexRuns()).toEqual([
         expect.objectContaining({ runId: 'legacy-check', failureKind: 'precheck' }),
       ]);
+      expect((await harness.storage.listSidebarIndexRuns())[0]).not.toHaveProperty('preRunBlocked');
       await harness.storage.insertRun({ id: 'execution', scheduleId: 'sch-1', firedAt: 2,
         status: 'failed', sessionId: 'legacy-check-session', errorMsg: 'agent failed' });
       await harness.storage.insertRun({ id: 'healthy', scheduleId: 'sch-1', firedAt: 3, status: 'skipped',
@@ -2042,6 +2116,156 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
   });
 });
 
+// #12397, DB tier. The sidebar and switch handler share the completed-run
+// predicate. A run resumed or a different automation bound to the same task
+// must no longer let that task pick a plugin engine.
+it('offers the same plugin switch eligibility in the sidebar and send guard', async () => {
+  const harness = createStorageHarness();
+  const { db, storage } = harness;
+  try {
+    await storage.insert(baseSchedule({ id: 'fresh-rule' }));
+    db.run(sql`INSERT INTO sessions (id, title, source) VALUES ('fresh-task', 'fresh task', 'scheduler')`);
+    await storage.insertRun({
+      id: 'first-run', scheduleId: 'fresh-rule', sessionId: 'fresh-task', firedAt: 1, status: 'running',
+    });
+    const eligibility = async () => ({
+      switch: await storage.canSwitchCompletedAutomationSession('fresh-task'),
+      picker: (await storage.listSidebarIndexRuns())
+        .findLast(run => run.sessionId === 'fresh-task')?.canSwitchPluginEngine === true,
+    });
+    await expect(eligibility()).resolves.toEqual({ switch: false, picker: false });
+    await storage.updateRun('first-run', { status: 'success', finishedAt: 2 });
+    await expect(eligibility()).resolves.toEqual({ switch: true, picker: true });
+    await storage.update('fresh-rule', { persistentSession: true });
+    await expect(eligibility()).resolves.toEqual({ switch: true, picker: true });
+
+    await storage.insert(baseSchedule({ id: 'bound-rule', targetSessionId: 'fresh-task', persistentSession: true }));
+    await expect(eligibility()).resolves.toEqual({ switch: false, picker: false });
+    await storage.delete('bound-rule');
+
+    await storage.insertRun({
+      id: 'interrupted-run', scheduleId: 'fresh-rule', sessionId: 'fresh-task',
+      firedAt: 3, finishedAt: 4, status: 'interrupted',
+    });
+    await expect(eligibility()).resolves.toEqual({ switch: false, picker: false });
+  } finally {
+    harness.close();
+  }
+});
+
+// #12397 & #13003, DB tier. Persistent and teammate-routine bindings remain
+// mutually exclusive with plugin-engine switching across SQLite connections in
+// either commit order (including turning persistentSession on via update),
+// while ordinary non-persistent bound automations (e.g. PR auto-follow) can
+// bind to scheduler-created plugin-engine tasks and switch/restore ACP cleanly.
+it.each(['create', 'update'])('serializes plugin switching with a persistent binding from another connection (%s)', async operation => {
+  const dir = mkdtempSync(join(tmpdir(), 'cindy-schedule-route-'));
+  const dbPath = join(dir, 'schedule.sqlite');
+  const { db, storage, close } = createStorageHarness(undefined, dbPath);
+  const second = new Database(dbPath);
+  const routes = drizzle(second, { schema });
+  setCurrentDbClient({ drizzle: routes } as unknown as DbClient, 'test-user');
+  const owner = {
+    captureOwnerScope: () => true,
+    isOwnerScopeCurrent: () => true,
+    broadcastSessionPatched: () => {},
+  };
+  try {
+    await storage.insert(baseSchedule({ id: 'run-rule' }));
+    for (const sessionId of ['bind-first', 'switch-first']) {
+      db.run(sql`INSERT INTO sessions (id, title, source) VALUES (${sessionId}, 'task', 'scheduler')`);
+      await storage.insertRun({
+        id: sessionId, scheduleId: 'run-rule', sessionId, firedAt: 1, finishedAt: 2, status: 'success',
+      });
+      const rule = baseSchedule({ id: `rule-${sessionId}`, persistentSession: true });
+      if (operation === 'update') await storage.insert(rule);
+      expect(await storage.canSwitchCompletedAutomationSession(sessionId)).toBe(true);
+      expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('cc');
+      const bind = () => operation === 'create'
+        ? storage.insert({ ...rule, targetSessionId: sessionId })
+        : storage.update(rule.id, { targetSessionId: sessionId });
+      const switchRoute = () => applyAgentSwitchToSessionRowWithPorts(
+        sessionId, { agentKind: 'acp', model: 'default', providerId: 'acp-plugin:test:engine' }, owner,
+      );
+
+      if (sessionId === 'bind-first') {
+        await expect(bind()).resolves.toMatchObject({ targetSessionId: sessionId, persistentSession: true });
+        await expect(switchRoute()).rejects.toThrow('[PRECONDITION_FAILED]');
+        expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('cc');
+      } else {
+        await switchRoute();
+        await expect(bind()).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+        expect((await storage.get(rule.id))?.targetSessionId).toBeUndefined();
+        expect(second.prepare('SELECT agent_kind FROM sessions WHERE id = ?').pluck().get(sessionId)).toBe('acp');
+      }
+    }
+  } finally {
+    clearCurrentDbClient();
+    second.close();
+    close();
+    rmSync(dbPath);
+    rmdirSync(dir);
+  }
+});
+
+// 2026-11-26 regression (#13003 / PR #13254), DB tier. A PR opened inside a
+// scheduler-created plugin-engine task (source='scheduler', agent_kind='acp')
+// failed to start PR auto-follow with [UNSUPPORTED_CAPABILITY] in storage.insert.
+// Non-persistent bound automations must bind (insert and update), keep plugin
+// switch eligibility, and allow switching/restoring ACP while bound, whereas
+// upgrading that binding to persistentSession=true or binding a bot routine
+// must still be rejected atomically.
+it('allows non-persistent bound automations on scheduler-created plugin tasks while blocking persistent/routine upgrades', async () => {
+  const { db, storage, close } = createStorageHarness();
+  setCurrentDbClient({ drizzle: db } as unknown as DbClient, 'test-user');
+  const owner = {
+    captureOwnerScope: () => true,
+    isOwnerScopeCurrent: () => true,
+    broadcastSessionPatched: () => {},
+  };
+  try {
+    await storage.insert(baseSchedule({ id: 'parent-acp-rule', agentKind: 'acp', modelAgentKind: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-4-neon' }));
+    db.run(sql`INSERT INTO sessions (id, title, source, agent_kind, provider_id, model)
+      VALUES ('sched-acp-task', '#13254', 'scheduler', 'acp', 'acp-plugin:agy:agy', 'gemini-4-neon')`);
+    await storage.insertRun({
+      id: 'parent-run', scheduleId: 'parent-acp-rule', sessionId: 'sched-acp-task',
+      firedAt: 1, finishedAt: 2, status: 'success',
+    });
+
+    // PR auto-follow (persistentSession=false, source='user') binds via insert and update.
+    const prFollow = await storage.insert(baseSchedule({
+      id: 'pr-follow-insert',
+      name: 'PR #13254',
+      targetSessionId: 'sched-acp-task',
+      persistentSession: false,
+    }));
+    expect(prFollow).toMatchObject({ id: 'pr-follow-insert', targetSessionId: 'sched-acp-task', persistentSession: false });
+
+    await storage.insert(baseSchedule({ id: 'pr-follow-update', persistentSession: false }));
+    const updatedFollow = await storage.update('pr-follow-update', { targetSessionId: 'sched-acp-task' });
+    expect(updatedFollow).toMatchObject({ id: 'pr-follow-update', targetSessionId: 'sched-acp-task', persistentSession: false });
+
+    // Non-persistent bound follow-ups do not revoke plugin switch eligibility or block restoring ACP.
+    await expect(storage.canSwitchCompletedAutomationSession('sched-acp-task')).resolves.toBe(true);
+    expect((await storage.listSidebarIndexRuns()).findLast(run => run.sessionId === 'sched-acp-task')?.canSwitchPluginEngine).toBe(true);
+    await applyAgentSwitchToSessionRowWithPorts(
+      'sched-acp-task', { agentKind: 'codex', model: 'gpt-5.4', providerId: 'openai' }, owner,
+    );
+    await applyAgentSwitchToSessionRowWithPorts(
+      'sched-acp-task', { agentKind: 'acp', model: 'gemini-4-neon', providerId: 'acp-plugin:agy:agy' }, owner,
+    );
+
+    // Upgrading an existing binding on an ACP task to persistentSession=true or binding a bot routine stays rejected.
+    await expect(storage.update('pr-follow-insert', { persistentSession: true })).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+    await expect(storage.insert(baseSchedule({
+      id: 'bot-routine-bind', source: 'bot', targetSessionId: 'sched-acp-task', persistentSession: false,
+    }))).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
+  } finally {
+    clearCurrentDbClient();
+    close();
+  }
+});
+
 it('excludes internal routine rows in SQLite before materializing the public sidebar index', async () => {
   const queries: { query: string; params: unknown[] }[] = [];
   const harness = createStorageHarness(queries);
@@ -2158,6 +2382,27 @@ it('only counts successful PR-triggered runs since the merge when reconciling', 
     await h.storage.insertRun({ id: 'watch', scheduleId: 'sch-1', firedAt: 50, status: 'success', triggerSource: 'pr-status' });
     expect(await h.storage.hasSuccessfulPrRunSince('sch-1', 20)).toBe(true);
     expect(await h.storage.hasSuccessfulPrRunSince('sch-1', 51)).toBe(false);
+  } finally { h.close(); }
+});
+
+// Read the durable receipt using the same SQLite run insert/update path as the scheduler.
+it('recovers the latest successful MR observation of this schedule', async () => {
+  const h = createStorageHarness();
+  try {
+    await h.storage.insert(baseSchedule());
+    const run = { scheduleId: 'sch-1', triggerSource: 'pr-status' as const };
+    const url = 'https://git.example.test/group/project/-/merge_requests/7';
+    await h.storage.insertRun({ ...run, id: 'legacy', firedAt: 1, status: 'success' });
+    expect(await h.storage.lastSuccessfulMrObservation('sch-1')).toBeNull();
+    const previous = { url, signature: 'old' };
+    await h.storage.insertRun({ ...run, id: 'previous', firedAt: 2, status: 'success', mrObservation: previous });
+    const latest = { url, signature: 'new' };
+    await h.storage.insertRun({ ...run, id: 'latest', firedAt: 3, status: 'running', mrObservation: latest });
+    await h.storage.insertRun({ ...run, id: 'failed', firedAt: 4, status: 'failed', mrObservation: latest });
+    expect(await h.storage.lastSuccessfulMrObservation('sch-1')).toEqual(previous);
+    await h.storage.updateRun('latest', { status: 'success' });
+    expect(await h.storage.lastSuccessfulMrObservation('sch-1')).toEqual(latest);
+    expect(await h.storage.lastSuccessfulMrObservation('other')).toBeNull();
   } finally { h.close(); }
 });
 

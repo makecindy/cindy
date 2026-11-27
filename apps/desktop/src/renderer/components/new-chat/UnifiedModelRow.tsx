@@ -9,6 +9,7 @@ import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
 import { COMPOSER_MENU_ROW, menuRowAttrs } from '@/components/ui/menu-row';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { isCustomRoutedProvider, modelSupplierLabel } from '@cindy/model-providers';
@@ -79,10 +80,14 @@ export function UnifiedModelRow({
   sourceNotice,
   measurementOnly = false,
   readable = false,
+  tabIndex = 0,
+  position,
 }: {
   /** Hidden intrinsic-width probe: share row typography, omit interaction and fixed-size artwork. */
   measurementOnly?: boolean;
   readable?: boolean;
+  tabIndex?: number | undefined;
+  position?: { index: number; total: number } | undefined;
   /**
    * Supplied only in the combined All / Favorites views; omitted = the local description.
    * The panel omits it only for this catalog's own Cindy AI (see UnifiedModelPanel aggregateSourceLabel).
@@ -163,7 +168,9 @@ export function UnifiedModelRow({
     'aria-label': paymentRequiredActionLabel,
     // ← 开配置浮层是这一行唯一的键盘入口,不声明就只有摸索得到(读屏用户尤甚)。
     'aria-keyshortcuts': paymentRequired || !customizable ? undefined : 'ArrowLeft',
-    tabIndex: interactionDisabled ? -1 : 0,
+    tabIndex: interactionDisabled ? -1 : tabIndex,
+    'aria-posinset': position?.index,
+    'aria-setsize': position?.total,
     'data-model-selected': selected ? ('true' as const) : undefined,
     // Shared menu row: the panel's glide highlight; the chosen row keeps its static fill (below).
     ...menuRowAttrs(),
@@ -204,6 +211,7 @@ export function UnifiedModelRow({
   const starButton = !measurementOnly && onStar ? (
     <button
       type="button"
+      tabIndex={tabIndex}
       disabled={interactionDisabled || paymentRequired}
       onClick={(event) => {
         event.stopPropagation();
@@ -220,7 +228,7 @@ export function UnifiedModelRow({
           : t('newChat.modelSelector.unified.addFavorite')
       }
       className={cn(
-        'flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] transition-opacity',
+        'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-opacity',
         isFavoriteRow || justFavorited
           ? 'text-[var(--favorite-star)] opacity-100'
           : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--favorite-star)]',
@@ -232,6 +240,7 @@ export function UnifiedModelRow({
   const customizeButton = !measurementOnly && (
     <button
       type="button"
+      tabIndex={tabIndex}
       data-row-customize
       aria-expanded={active}
       aria-haspopup="dialog"
@@ -244,7 +253,7 @@ export function UnifiedModelRow({
       title={t('newChat.modelSelector.unified.customize')}
       aria-label={t('newChat.modelSelector.unified.customize')}
       className={cn(
-        'flex h-5 w-5 shrink-0 items-center justify-center rounded-[6px] transition-opacity',
+        'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-opacity',
         active
           ? 'text-[var(--text-secondary)] opacity-100'
           : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--text-secondary)]',
@@ -255,13 +264,9 @@ export function UnifiedModelRow({
   );
   const paymentRequiredBadge =
     paymentRequired && paymentRequiredLabel ? (
-      <span
-        data-payment-required-badge
-        className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2 py-px text-10 font-normal leading-[1.45] text-[var(--text-secondary)]"
-      >
-        <Lock size={10} />
+      <Badge size="xs" data-payment-required-badge icon={<Lock size={10} />}>
         {paymentRequiredLabel}
-      </span>
+      </Badge>
     ) : null;
   const paymentRequiredUnlock =
     paymentRequired && paymentRequiredUnlockLabel ? (

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WebContents } from 'electron';
 import { PLUGIN_OAUTH_CHANNEL, REMOTE_RESOURCE_INVOKE_CHANNEL } from '@cindy/device-link';
@@ -314,9 +315,106 @@ describe('original remote plugin settings', () => {
     ).toBe(200);
     expect(f.stored.get('/secrets/key')).toContain('after-renewal');
   });
-  it('does not renew and replay a write after its response is lost', async () => {
+  it('releases the host exchange when switching out of a settings page', async () => {
+    const f = fixture();
+    for (let i = 0; i < 5; i++) {
+      const { view } = await f.open();
+      closeRemotePluginSettings(f.host, view.id);
+      await vi.waitFor(() => expect(f.disconnect).toHaveBeenCalledTimes(i + 1), { interval: 5 });
+    }
+  });
+
+  it('closes with the existing exchange when the next settings request would renew it', async () => {
+    const f = fixture();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      const { view, fetch } = await f.open();
+      for (const elapsed of [100_000, 200_000]) {
+        clock.mockReturnValue(now + elapsed);
+        expect((await fetch('/secrets')).status).toBe(200);
+      }
+      clock.mockReturnValue(now + 241_000);
+      closeRemotePluginSettings(f.host, view.id);
+      await vi.waitFor(() => expect(f.disconnect).toHaveBeenCalledOnce(), { interval: 5 });
+      expect(f.deps.trustIdentity).toHaveBeenCalledOnce();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('keeps a view after one failed keepalive and reports a sustained interruption', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    try {
+      const f = fixture();
+      const { view, fetch } = await f.open();
+      const guest = Object.assign(new EventEmitter(), {
+        id: 42, isDestroyed: () => false, setWindowOpenHandler: vi.fn(), close: vi.fn(),
+      }) as unknown as WebContents;
+      resolveRemoteSettingsAttach(f.host, view.partition, view.src)!.attach(guest);
+      const invoke = f.deps.invoke;
+      let failures = 1;
+      f.deps.invoke = async (...args) => {
+        if (args[1] === PLUGIN_OAUTH_CHANNEL && failures > 0) {
+          failures--;
+          throw new Error('Connection interrupted');
+        }
+        return invoke(...args);
+      };
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(failures).toBe(0);
+      expect(guest.close).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect((await fetch('/secrets')).status).toBe(200);
+      expect(f.host.send).not.toHaveBeenCalled();
+
+      failures = 2;
+      await vi.advanceTimersByTimeAsync(32_000);
+      expect(guest.close).toHaveBeenCalledOnce();
+      expect(f.host.send).toHaveBeenCalledWith(
+        'device-link:plugin-settings:status',
+        { viewId: view.id, status: 'unavailable' },
+        expect.anything(),
+      );
+      expect(mock.handlers.has(view.partition)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('recovers a failed subscription without replaying a posted mutation', async () => {
+    const f = fixture();
+    const { fetch } = await f.open();
+    const html = await (await fetch('/settings.html')).text();
+    const scriptPath = /src="([^"]+\.js)"/.exec(html)![1];
+    const script = await (await fetch(scriptPath)).text();
+    const window = {} as { BroadcastChannel: typeof BroadcastChannel };
+    const timers: Array<() => void> = [];
+    const route = vi.fn((path: string, init: RequestInit) => fetch(path, init));
+    f.connect.mockRejectedValueOnce(new Error('Subscription interrupted'));
+    runInNewContext(script, {
+      window, fetch: route, EventTarget, MessageEvent, structuredClone,
+      setTimeout: (run: () => void) => timers.push(run),
+    });
+    const channel = new window.BroadcastChannel('settings');
+    await vi.waitFor(() => expect(timers).toHaveLength(1), { interval: 5 });
+    expect(f.post).not.toHaveBeenCalled();
+    timers.shift()!();
+    await vi.waitFor(() => expect(f.connect).toHaveBeenCalledTimes(2), { interval: 5 });
+
+    f.post.mockRejectedValueOnce(new Error('Acknowledgement lost'));
+    channel.postMessage({ save: true });
+    await vi.waitFor(() => expect(f.post).toHaveBeenCalledOnce(), { interval: 5 });
+    await vi.waitFor(() => expect(timers).toHaveLength(1), { interval: 5 });
+    timers.shift()!();
+    await vi.waitFor(() => expect(timers).toHaveLength(1), { interval: 5 });
+    expect(f.post).toHaveBeenCalledOnce();
+    channel.close();
+  });
+
+  it('reports an unconfirmed write without replaying it after its response is lost', async () => {
     const f = fixture(),
-      { fetch } = await f.open();
+      { view, fetch } = await f.open();
     const original = f.deps.invoke;
     f.deps.invoke = async (device, channel, args) => {
       const response = await original(device, channel, args);
@@ -329,6 +427,11 @@ describe('original remote plugin settings', () => {
     expect(f.settingsFetch).toHaveBeenCalledTimes(1);
     expect(f.stored.get('/secrets/key')).toContain('submitted-once');
     expect(f.deps.trustIdentity).toHaveBeenCalledTimes(1);
+    expect(f.host.send).toHaveBeenCalledExactlyOnceWith(
+      'device-link:plugin-settings:status',
+      { viewId: view.id, status: 'write-unconfirmed' },
+      expect.anything(),
+    );
   });
   it('renews while a save awaits confirmation, then returns the original save result', async () => {
     const f = fixture(),

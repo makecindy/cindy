@@ -119,7 +119,8 @@ describe('稳定层:能力必须写进提示词', () => {
     expect(all).toContain('你可以开任务，也可以给伙伴发消息');
     expect(all).not.toContain('session_task');
     expect(all).not.toContain('notify_when_done');
-    expect(all).toContain('send_to_session');
+    expect(all).toContain('cindy_helper 的 `call_tool`');
+    expect(all).toContain('"name":"send_to_session","args":{"target_session_id":"<来源会话 ID>","message":"<结果>"}');
     expect(all).not.toContain('send_to_agent');
     expect(all).toContain('不启动任务');
     expect(all).toContain('优先在当前对话完成能清楚收口的工作');

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { runInNewContext } from "node:vm";
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildMediaPlayerWebViewCommand,
   buildMediaPlayerWebViewHtml,
@@ -64,10 +65,6 @@ describe('mediaPlayerWebView', () => {
       type: 'xdt-media-player/command',
       command: 'pause',
     });
-    expect(JSON.parse(buildMediaPlayerWebViewCommand('reset'))).toEqual({
-      type: 'xdt-media-player/command',
-      command: 'reset',
-    });
   });
 
   it('builds an audio player document and escapes dynamic values', () => {
@@ -82,6 +79,179 @@ describe('mediaPlayerWebView', () => {
     expect(html).toContain('&quot;bad&quot; &lt;script&gt;');
     expect(html).toContain('https://oss.example/a.mp3?x=&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;');
     expect(html).not.toContain('"><script>');
+  });
+
+  it('signals audio readiness, actual playback progress, and non-bubbling source failure', () => {
+    const html = buildMediaPlayerWebViewHtml({ kind: 'audio', url: 'https://fixture.invalid/tone.wav' });
+    const source = new EventTarget();
+    const audio = Object.assign(new EventTarget(), {
+      querySelector: () => source,
+      paused: true,
+      ended: false,
+      duration: 2,
+      currentTime: 0,
+      error: null,
+    });
+    const events: ReturnType<typeof parseMediaPlayerWebViewMessage>[] = [];
+    runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)![1], {
+      document: Object.assign(new EventTarget(), { querySelector: () => audio }),
+      window: Object.assign(new EventTarget(), {
+        ReactNativeWebView: { postMessage: (value: string) => events.push(parseMediaPlayerWebViewMessage(value)) },
+      }),
+    });
+    audio.dispatchEvent(new Event('loadedmetadata'));
+    expect(events).toEqual([]);
+    audio.dispatchEvent(new Event('canplay'));
+    expect(events.at(-1)).toMatchObject({ state: 'ready', duration: 2 });
+    audio.paused = false;
+    audio.dispatchEvent(new Event('play'));
+    expect(events.at(-1)).toMatchObject({ state: 'ready' });
+    audio.currentTime = 0.25;
+    audio.dispatchEvent(new Event('playing'));
+    expect(events.at(-1)).toMatchObject({ state: 'playing', currentTime: 0.25 });
+    source.dispatchEvent(new Event('error'));
+    expect(events.at(-1)).toMatchObject({ state: 'error' });
+  });
+
+  it('handles full-screen audio controls on iOS window and Android document message targets', async () => {
+    const html = buildMediaPlayerWebViewHtml({ kind: 'audio', url: 'https://fixture.invalid/player.wav', externalAudioControls: true });
+    expect(html).not.toContain('<audio controls');
+    const events: ReturnType<typeof parseMediaPlayerWebViewMessage>[] = [];
+    const audio = Object.assign(new EventTarget(), {
+      querySelector: () => new EventTarget(),
+      paused: true,
+      ended: false,
+      duration: 60,
+      currentTime: 0,
+      readyState: 0,
+      HAVE_METADATA: 1,
+      seekable: { length: 0, start: () => 0, end: () => 60 },
+      play: vi.fn<() => Promise<void>>(),
+      pause() { audio.paused = true; },
+      error: null,
+    });
+    audio.play.mockImplementation(async () => {
+      audio.paused = false;
+      audio.dispatchEvent(new Event('play'));
+    });
+    const window = Object.assign(new EventTarget(), {
+      ReactNativeWebView: { postMessage: (value: string) => events.push(parseMediaPlayerWebViewMessage(value)) },
+    });
+    const document = Object.assign(new EventTarget(), { querySelector: () => audio });
+    runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)![1], { window, document });
+    const send = (target: EventTarget, command: Parameters<typeof buildMediaPlayerWebViewCommand>[0], seconds?: number) => {
+      target.dispatchEvent(new MessageEvent('message', { data: buildMediaPlayerWebViewCommand(command, seconds) }));
+    };
+    audio.readyState = 1;
+    audio.dispatchEvent(new Event('loadedmetadata'));
+    expect(events.at(-1)).toMatchObject({ state: 'waiting', paused: true, canStart: true });
+    audio.dispatchEvent(new Event('canplay'));
+    expect(events.at(-1)).toMatchObject({ state: 'ready', paused: true, canSeek: false });
+    send(window, 'seek', 40);
+    expect(audio.currentTime).toBe(0);
+    audio.seekable.length = 1;
+    audio.dispatchEvent(new Event('progress'));
+    expect(events.at(-1)).toMatchObject({ canSeek: true });
+
+    send(window, 'play');
+    expect(events.at(-1)).toMatchObject({ state: 'waiting', paused: false });
+    audio.dispatchEvent(new Event('playing'));
+    expect(events.at(-1)).toMatchObject({ state: 'playing', paused: false });
+    send(document, 'seek', 40);
+    audio.dispatchEvent(new Event('seeked'));
+    expect(events.at(-1)).toMatchObject({ state: 'playing', currentTime: 40 });
+    expect(events.at(-1)?.advanced).toBeUndefined();
+    audio.currentTime = 40.25;
+    audio.dispatchEvent(new Event('timeupdate'));
+    expect(events.at(-1)).toMatchObject({ state: 'playing', currentTime: 40.25, advanced: true });
+    audio.dispatchEvent(new Event('waiting'));
+    audio.dispatchEvent(new Event('timeupdate'));
+    expect(events.at(-1)).toMatchObject({ state: 'waiting', paused: false });
+    send(document, 'pause');
+    send(window, 'seek', 10);
+    expect(events.at(-1)).toMatchObject({ state: 'paused', paused: true, currentTime: 10 });
+    send(document, 'seek', 100);
+    expect(audio.currentTime).toBe(60);
+    send(document, 'seek', Number.NaN);
+    expect(audio.currentTime).toBe(60);
+
+    audio.play.mockRejectedValueOnce({ name: 'AbortError' });
+    send(document, 'play');
+    await vi.waitFor(() => expect(audio.play).toHaveBeenCalledTimes(2));
+    expect(events.at(-1)?.state).not.toBe('error');
+    audio.play.mockRejectedValueOnce({ name: 'NotAllowedError' });
+    send(window, 'play');
+    await vi.waitFor(() => expect(events.at(-1)).toMatchObject({ state: 'error', error: 'NotAllowedError' }));
+  });
+
+  it('reports already loaded audio when the native bridge missed the early media events', () => {
+    const html = buildMediaPlayerWebViewHtml({ kind: 'audio', url: 'https://fixture.invalid/tone.wav', externalAudioControls: true });
+    const audio = Object.assign(new EventTarget(), {
+      querySelector: () => null, duration: 3.75, currentTime: 0, paused: true, ended: false,
+      readyState: 4, HAVE_METADATA: 1, HAVE_FUTURE_DATA: 3,
+      seekable: { length: 1, start: () => 0, end: () => 3.75 },
+      error: null as { code: number } | null,
+    });
+    const events: ReturnType<typeof parseMediaPlayerWebViewMessage>[] = [];
+    const window = Object.assign(new EventTarget(), {
+      ReactNativeWebView: { postMessage: (value: string) => events.push(parseMediaPlayerWebViewMessage(value)) },
+    });
+    const document = Object.assign(new EventTarget(), { querySelector: () => audio });
+    runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)![1], { window, document });
+    const request = () => document.dispatchEvent(new MessageEvent('message', { data: buildMediaPlayerWebViewCommand('status') }));
+    expect(events).toHaveLength(0);
+    request();
+    expect(events.at(-1)).toMatchObject({ state: 'ready', duration: 3.75, canStart: true, canSeek: true });
+    audio.error = { code: 4 };
+    request();
+    expect(events.at(-1)).toMatchObject({ state: 'error', error: '4' });
+  });
+
+  it('changes mute, speed and relative seeks and opens the route picker from the same audio element', () => {
+    const html = buildMediaPlayerWebViewHtml({
+      kind: 'audio', url: 'https://fixture.invalid/tone.wav', externalAudioControls: true, audioRouteLabel: 'Output & AirPlay',
+    });
+    expect(html).toContain('aria-label="Output &amp; AirPlay"');
+    const routeButton = Object.assign(new EventTarget(), { hidden: true });
+    const audio = Object.assign(new EventTarget(), {
+      querySelector: () => null, paused: true, ended: false, duration: 40, currentTime: 3,
+      muted: false, playbackRate: 1, webkitCurrentPlaybackTargetIsWireless: false,
+      webkitShowPlaybackTargetPicker: vi.fn(),
+      seekable: { length: 1, start: () => 0, end: () => 40 },
+    });
+    const events: ReturnType<typeof parseMediaPlayerWebViewMessage>[] = [];
+    const window = Object.assign(new EventTarget(), {
+      ReactNativeWebView: { postMessage: (value: string) => events.push(parseMediaPlayerWebViewMessage(value)) },
+    });
+    const document = Object.assign(new EventTarget(), { querySelector: () => audio, getElementById: () => routeButton });
+    runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)![1], { window, document });
+    const send = (command: Parameters<typeof buildMediaPlayerWebViewCommand>[0], value: number | boolean) =>
+      document.dispatchEvent(new MessageEvent('message', { data: buildMediaPlayerWebViewCommand(command, value) }));
+    audio.dispatchEvent(new Event('canplay'));
+    expect(events.at(-1)).toMatchObject({ canRoute: true, wireless: false, muted: false, rate: 1 });
+    expect(routeButton.hidden).toBe(false);
+    routeButton.dispatchEvent(new Event('click'));
+    expect(audio.webkitShowPlaybackTargetPicker).toHaveBeenCalledOnce();
+    audio.webkitCurrentPlaybackTargetIsWireless = true;
+    audio.dispatchEvent(new Event('webkitcurrentplaybacktargetiswirelesschanged'));
+    expect(events.at(-1)).toMatchObject({ wireless: true });
+
+    send('skip', -10);
+    expect(audio.currentTime).toBe(0);
+    send('skip', 10);
+    send('skip', 10);
+    expect(audio.currentTime).toBe(20);
+    audio.currentTime = 39;
+    send('skip', 10);
+    expect(audio.currentTime).toBe(40);
+    send('mute', true);
+    expect(events.at(-1)).toMatchObject({ muted: true });
+    send('mute', false);
+    expect(events.at(-1)).toMatchObject({ muted: false });
+    send('rate', 1.5);
+    expect(events.at(-1)).toMatchObject({ rate: 1.5 });
+    send('rate', 99);
+    expect(audio.playbackRate).toBe(1.5);
   });
 
   it('parses only structured player status messages from the WebView', () => {

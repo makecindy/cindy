@@ -107,7 +107,16 @@ export class SessionActivityRelay {
   replay(
     list: readonly AgentIslandSessionActivity[],
     emit: (payload: SessionActivityPayload) => void = this.emit,
+    sessionId?: string,
   ): void {
+    // A scoped subscriber needs an explicit idle clear even after a host restart
+    // has discarded the relay's terminal replay history.
+    if (sessionId !== undefined) {
+      const activity = list.find((item) => item.sessionId === sessionId);
+      const payload = activity ? toSessionActivityPayload(activity) : null;
+      emit(payload && isPublishableActivity(payload) ? payload : toTerminalActivityPayload(sessionId));
+      return;
+    }
     const seenSessionIds = new Set<string>();
     for (const activity of list) {
       if (!activity.sessionId) continue;

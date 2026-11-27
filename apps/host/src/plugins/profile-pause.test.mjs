@@ -5,14 +5,20 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { chromium } from 'playwright-core';
 
-import { beginAppSessionBoundary, commitVolatileAppSession, LOCAL_DATA_OWNER_ID } from '../../../desktop/src/main/appSessionState.ts';
+import { beginAppSessionBoundary, commitVolatileAppSession, getActiveDataOwnerPushStamp, LOCAL_DATA_OWNER_ID } from '../../../desktop/src/main/appSessionState.ts';
 import { ownerScopedPath } from '../../../desktop/src/main/dataOwnerPath.ts';
 import { configureAppDataDir } from '../../../desktop/src/main/userDataPath.ts';
 import { configureGhostSnapshotProcess } from '../../../desktop/src/main/cindy-brain/ghostSnapshotCapability.ts';
+import { GhostInstallReceiptStore } from '../../../desktop/src/main/cindy-brain/ghostInstallReceipt.ts';
+import { installedGhostPhysicalRelId } from '../../../desktop/src/shared/pluginIdentity.ts';
 import { GhostRuntime } from '../../../desktop/src/main/cindy-brain/runtime/GhostRuntime.ts';
 import { installedGhostStoragePart } from '../../../desktop/src/shared/pluginIdentity.ts';
+import { setCurrentDbClient, clearCurrentDbClient } from '../../../desktop/src/main/localDb/client/current.ts';
+import { createHostToolService } from '../agent/host-tools.ts';
+import { createHostConfirmations } from '../host-confirmations.ts';
 import { configureHostOwner } from '../agent/claude-auth.mjs';
 import { createHostProfileCoexistenceMonitor } from '../agent/profile-coexistence.ts';
 import { hostOutbound } from '../outbound.mjs';
@@ -49,7 +55,7 @@ const logic = `
     let result;
     if (message.args.request) result = await cindy.send({ ...message.args.request, callId: message.callId });
     else if (message.args.node) result = await cindy.node.request({
-      method: message.args.node === 'pending' ? 'pending' : 'echo',
+      method: typeof message.args.node === 'string' ? message.args.node : 'echo',
       params: message.args.marker,
     });
     else result = true;
@@ -61,17 +67,26 @@ const logic = `
   });
 `;
 const nodeWorker = String.raw`
-  require('node:readline').createInterface({ input: process.stdin }).on('line', line => {
+  require('node:readline').createInterface({ input: process.stdin }).on('line', async line => {
     const request = JSON.parse(line);
     if (request.method === 'pending') {
       require('node:fs').writeFileSync(request.params, 'started');
       return;
     }
-    if (request.id !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: process.pid }) + '\n');
+    if (request.id === undefined) return;
+    let result = process.pid;
+    if (request.method === 'approved-services') {
+      const tools = await cindy.host.call('cindy_helper', 'terminal_list', {});
+      const denied = await cindy.host.call('cindy_helper', 'storage_request', { op: 'targets' });
+      const response = await cindy.fetch({ url: 'https://example.invalid/account' });
+      result = { jobs: JSON.parse(tools.content[0].text).jobs,
+        denied: JSON.parse(denied.content[0].text).errorCode, response };
+    }
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
   });
 `;
 
-async function fixture(t, { executable, resident = true, node = false } = {}) {
+async function fixture(t, { executable, resident = true, node = false, services = false, restartWithJournal = false, retainedBuiltin = false, onCleaned } = {}) {
   const cleanup = lifoCleanup(t);
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-plugin-pause-'));
   cleanup.after(() => fs.rm(profile, { recursive: true, force: true }));
@@ -81,7 +96,16 @@ async function fixture(t, { executable, resident = true, node = false } = {}) {
   configureGhostSnapshotProcess(createSnapshotProcess);
   const ownerId = LOCAL_DATA_OWNER_ID;
   const root = (...parts) => ownerScopedPath(profile, ownerId, ...parts);
-  const manager = createHostGhostManager({ userDataDir: profile, ownerId });
+  let runtime;
+  const cleaned = [];
+  let desktopPresent = restartWithJournal || retainedBuiltin;
+  const managerOptions = { userDataDir: profile, ownerId, onUninstallSourceState: async part => {
+    if (!runtime) throw new Error('Plugin account cleanup is unavailable');
+    await runtime.cleanupUninstalledSource(part);
+    cleaned.push(part);
+    await onCleaned?.();
+  } };
+  let manager = createHostGhostManager(managerOptions);
   cleanup.after(() => manager.disposeNotificationIndex());
   const zip = new JSZip();
   zip.file('ghost.json', JSON.stringify({
@@ -90,7 +114,9 @@ async function fixture(t, { executable, resident = true, node = false } = {}) {
     settingsHtml: 'panel.html', ...(resident ? { launch: 'resident' } : {}),
     subscribe: { hooks: ['will-tool-call', 'did-tool-result'], topics: ['session'] },
     tools: [{ name: 'echo', description: 'synthetic tool', parameters: { type: 'object' } }],
-    network: { hosts: ['example.invalid'] }, library: true, notify: true,
+    ...(services ? { agent: { hostTools: ['terminal'] } } : {}),
+    network: { hosts: ['example.invalid'], ...(services ? { secrets: [{ key: 'fixture', label: 'Fixture',
+      inject: { header: 'Authorization', format: 'Bearer {value}' } }] } : {}) }, library: true, notify: true,
     ...(node ? { node: { entry: 'worker.cjs', protocol: 'json-rpc-stdio', lifecycle: 'resident' } } : {}),
   }));
   zip.file('main.js', logic);
@@ -101,6 +127,30 @@ async function fixture(t, { executable, resident = true, node = false } = {}) {
   const installed = await manager.install(archive, { namespace: null, uiCapabilityApproved: true });
   assert.ok(installed.ghost, JSON.stringify(installed));
   const id = installedGhostStoragePart(installed.ghost);
+  let retiredPlugin;
+  if (retainedBuiltin) {
+    // Persist the same transaction a desktop commits before writing its built-in
+    // tombstone. The Host manager opens this real receipt without a tombstone writer.
+    const manifest = JSON.parse(await zip.file('ghost.json').async('string'));
+    zip.file('ghost.json', JSON.stringify({ ...manifest, id: 'retired-builtin' }));
+    const retiredArchive = path.join(profile, 'retired.cindy');
+    await fs.writeFile(retiredArchive, await zip.generateAsync({ type: 'nodebuffer' }));
+    const { ghost } = await manager.install(retiredArchive, { namespace: null, uiCapabilityApproved: true });
+    assert.ok(ghost);
+    retiredPlugin = ghost;
+    const receipts = new GhostInstallReceiptStore(() => manager.approvalStateRoot());
+    await receipts.writePendingMutation(installedGhostPhysicalRelId(ghost), { kind: 'uninstall', builtinTombstone: true });
+  }
+  if (restartWithJournal) {
+    // The account cleanup port was unavailable before shutdown. Recreate the
+    // real manager from disk while the profile is still owned by the desktop.
+    const removal = await manager.uninstall(installedGhostPhysicalRelId(installed.ghost));
+    assert.equal(removal.rejection?.code, 'io');
+  }
+  if (desktopPresent) {
+    manager.disposeNotificationIndex();
+    manager = createHostGhostManager(managerOptions);
+  }
   const assets = executable ? { ...await prepareHostPluginAssets(), executablePath: executable }
     : { bridgeSource: '', executablePath: null, nodeWorker: '', libraryWorker: '', close: async () => {} };
   cleanup.after(() => assets.close());
@@ -108,37 +158,55 @@ async function fixture(t, { executable, resident = true, node = false } = {}) {
   const warnings = [];
   const terminalCleanup = [];
   const log = { trace() {}, debug() {}, info() {}, warn(message) { warnings.push(message); }, error() {}, fatal() {}, child() { return this; } };
-  const runtime = await createHostPluginRuntime({
-    profileDir: profile, ownerId, manager, assets, log,
-    credentials: { read: () => null, write() {}, remove() {} },
+  let hostTools;
+  if (services) {
+    const db = { drizzle: {} };
+    setCurrentDbClient(db, ownerId);
+    cleanup.after(() => clearCurrentDbClient(db));
+    const confirmations = createHostConfirmations({ current: () => true });
+    cleanup.after(() => confirmations.close());
+    hostTools = createHostToolService({ profileDir: profile, ownerId, current: () => true,
+      owner: getActiveDataOwnerPushStamp, getGhost: key => manager.findInstalledInstance(key),
+      getSession: () => undefined, confirmations, t: key => key });
+    cleanup.after(() => hostTools.close());
+  }
+  const secrets = new Map();
+  runtime = await createHostPluginRuntime({
+    profileDir: profile, ownerId, manager, assets, log, isProfileHeld: () => desktopPresent,
+    credentials: { read: key => secrets.get(key) ?? null, write: (key, value) => secrets.set(key, value),
+      remove: key => secrets.delete(key) }, hostToolRequest: hostTools?.request,
     getLoginEmail: () => null, getSession: () => undefined, requestFileConfirmation: async () => false,
     modelRouteSources: () => ({ localViews: async () => [], localAgents: () => [] }),
     appContext: () => ({ ok: true, context: { region: 'global', locale: 'en' } }),
     onPluginStopped: id => terminalCleanup.push(id),
     publish: (channel, payload) => pushes.push({ channel, payload }),
   });
+  if (desktopPresent) runtime.pauseForDesktop(holdMessage);
   cleanup.after(() => runtime.close());
   const gateway = runtime.taskPlugins.getGhostSubscriptionGateway();
   const call = args => runtime.callTool({ ghostId: id, tool: 'echo', args: args ?? {}, timeoutMs: 2_500 });
   const control = () => runtime.taskPlugins.screenGhostControlPoint('will-tool-call',
     { engine: 'pi', phase: 'call', sessionId: 'task', toolName: 'read', toolCallId: 'tool', input: {} },
     { pluginId: id, onFailure: 'block' });
-  return { root, manager, runtime, id, gateway, call, control, pushes, warnings, terminalCleanup,
-    hold: () => runtime.pauseForDesktop(holdMessage) };
+  return { root, manager, runtime, id, archive, retiredPlugin, installed: installed.ghost, cleaned, gateway, call, control, pushes, warnings, terminalCleanup,
+    desktopExited: () => { desktopPresent = false; }, hold: () => runtime.pauseForDesktop(holdMessage) };
 }
 
-function installBrowserSubstitute(t, { beforePage, beforeToolAnswer } = {}) {
+function installBrowserSubstitute(t, { beforePage, beforeBinding, beforeToolAnswer } = {}) {
   const pages = [];
   let contextCount = 0;
+  let contextsClosed = 0;
+  let browsersClosed = 0;
   let closeObserver;
   const received = [];
   t.mock.method(chromium, 'launch', async () => {
     const browser = {
-      once() {}, isConnected: () => true, async close() {},
+      once() {}, isConnected: () => true, async close() { browsersClosed++; },
       async newContext() {
         contextCount++;
         return {
-          once() {}, on() {}, route() {}, routeWebSocket() {}, async close() {}, browser: () => browser,
+          once() {}, on() {}, route() {}, routeWebSocket() {},
+          async close() { contextsClosed++; }, browser: () => browser,
           async newPage() {
             await beforePage?.();
             let closed = false;
@@ -147,7 +215,10 @@ function installBrowserSubstitute(t, { beforePage, beforeToolAnswer } = {}) {
             const page = {
               on() {}, isClosed: () => closed, mainFrame: () => frame, route() {},
               async close() { closed = true; closeObserver?.(); },
-              exposeBinding(_name, handler) { binding = handler; },
+              async exposeBinding(_name, handler) {
+                if (beforeBinding) await beforeBinding(page);
+                binding = handler;
+              },
               async goto(url) { loadUrl = url; },
               async addScriptTag() {},
               async evaluateHandle() {
@@ -172,7 +243,8 @@ function installBrowserSubstitute(t, { beforePage, beforeToolAnswer } = {}) {
     };
     return browser;
   });
-  return { pages, received, contexts: () => contextCount, observeClose: observer => { closeObserver = observer; } };
+  return { pages, received, contexts: () => contextCount, contextsClosed: () => contextsClosed,
+    browsersClosed: () => browsersClosed, observeClose: observer => { closeObserver = observer; } };
 }
 
 async function filesIn(root) {
@@ -264,7 +336,7 @@ const externalUpload = { request: { type: 'fetch-request', url: 'https://example
 
 // Same monitor as main.ts. Supply scan results and the completion of the input
 // rebuild, while the installed plugin, its cleanup and both gates stay real.
-function profileMonitor(t, f) {
+function profileMonitor(t, f, beforeInputRelease = () => {}) {
   let desktops = [];
   let inputHeld = false;
   let rebuilt = 0;
@@ -288,7 +360,7 @@ function profileMonitor(t, f) {
     input: {
       isHeldForDesktop: () => inputHeld,
       holdForDesktop() { inputHeld = true; },
-      async releaseDesktopHold() { inputHeld = false; return true; },
+      async releaseDesktopHold() { beforeInputRelease(); inputHeld = false; return true; },
     },
   });
   t.after(() => monitor.stop());
@@ -311,16 +383,50 @@ test('Host retries a failed pause cleanup and publishes one current list and sta
   const dispose = f.runtime.library.disposeGhost.bind(f.runtime.library);
   let calls = 0;
   t.mock.method(f.runtime.library, 'disposeGhost', async id => {
-    if (++calls === 1) throw new Error('temporary fixture cleanup failure');
+    if (++calls <= 2) throw new Error('temporary fixture cleanup failure /private/fixture');
     await dispose(id);
   });
-  const monitor = profileMonitor(t, f);
+  let storageAvailable = false;
+  const monitor = profileMonitor(t, f, () => {
+    if (!storageAvailable) throw new Error('release write failed /private/fixture');
+  });
   await monitor.scan([42]);
   assert.deepEqual(await f.call(), held);
   f.pushes.length = 0;
   assert.deepEqual(await monitor.scan([]), []);
-  assert.deepEqual(await monitor.scan([]), [true]);
-  assert.equal(calls, 2);
+  assert.deepEqual(await monitor.scan([]), []);
+  const releaseBlocked = await f.call();
+  assert.equal(releaseBlocked.errorCode, 'PRECONDITION_FAILED');
+  assert.equal(releaseBlocked.reason, 'HOST_PROFILE_RELEASE_FAILED');
+  assert.doesNotMatch(releaseBlocked.message, /fixture|HOST_PROFILE_IN_USE_BY_DESKTOP/);
+  await monitor.scan([42]);
+  assert.deepEqual(await f.call(), held);
+  storageAvailable = true;
+  assert.deepEqual(await monitor.scan([]), []);
+  assert.deepEqual(await monitor.scan([]), [false]);
+  const blocked = await f.call();
+  assert.equal(blocked.errorCode, 'PRECONDITION_FAILED');
+  assert.equal(blocked.reason, 'HOST_PROFILE_RELEASE_FAILED');
+  assert.doesNotMatch(blocked.message, /fixture|HOST_PROFILE_IN_USE_BY_DESKTOP/);
+  // During restore, reconciliation may await inventory before publishing its final state.
+  const inventory = Promise.withResolvers();
+  const proceed = Promise.withResolvers();
+  const list = f.manager.listAsync.bind(f.manager);
+  const listing = t.mock.method(f.manager, 'listAsync', async (...args) => {
+    inventory.resolve();
+    await proceed.promise;
+    return list(...args);
+  });
+  const recovered = monitor.scan([]);
+  try {
+    await inventory.promise;
+    assert.deepEqual(await f.call(), blocked);
+  } finally {
+    proceed.resolve();
+    listing.mock.restore();
+  }
+  assert.deepEqual(await recovered, [true]);
+  assert.equal(calls, 3);
   assert.deepEqual(await monitor.scan([]), []);
   assert.equal(monitor.rebuilt(), 1);
   assert.equal(monitor.refreshed(), 1);
@@ -406,6 +512,42 @@ test('stopping a still-loading logic page rejects its startup waiter', async t =
   assert.equal(runtime.stateOf(f.id), 'off');
 });
 
+// §3.2 integration with a substituted browser. The real Host runtime must
+// shut down after a lost binding reply, after preserving both Page and Context
+// during the normal grace period. The newPage regression does not cover either.
+test('plugin runtime closes the browser even when a logic-page binding never settles', { timeout: 5_000 }, async t => {
+  const installing = Promise.withResolvers();
+  const cleanupBinding = Promise.withResolvers();
+  const browser = installBrowserSubstitute(t, { beforeBinding(page) {
+    installing.resolve(page);
+    return cleanupBinding.promise;
+  } });
+  const f = await fixture(t, { resident: false });
+  await f.runtime.reconcile();
+  const call = f.call();
+  const page = await installing.promise;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const closing = f.runtime.close();
+  try {
+    await nextTurn();
+    t.mock.timers.tick(2_000);
+    await nextTurn();
+    assert.equal(page.isClosed(), false, 'page close waits for binding setup');
+    assert.equal(browser.contextsClosed(), 0, 'partition close waits for binding setup');
+    t.mock.timers.tick(3_000);
+    await nextTurn();
+    assert.equal(page.isClosed(), true);
+    assert.equal(browser.contextsClosed(), 1);
+    assert.equal(browser.browsersClosed(), 1, 'browser closes within the grace limit');
+    await closing;
+    assert.equal((await call).ok, false);
+  } finally {
+    cleanupBinding.resolve();
+    t.mock.timers.reset();
+    await closing;
+  }
+});
+
 test('pause reports an in-flight Node tool as uncertain without an external fetch', realPage, async t => {
   const f = await fixture(t, { executable: executablePath, node: true });
   await f.runtime.reconcile();
@@ -436,7 +578,7 @@ test('Host reports an interrupted external write as uncertain and never resends 
 });
 
 test('resident logic and Node resume in the old partition without a replacement approval', realPage, async t => {
-  const f = await fixture(t, { executable: executablePath, node: true });
+  const f = await fixture(t, { executable: executablePath, node: true, services: true });
   await f.runtime.reconcile();
   assert.equal((await f.call()).ok, true);
   const panel = await f.runtime.openPage(f.id, 'panel.html');
@@ -447,13 +589,45 @@ test('resident logic and Node resume in the old partition without a replacement 
   f.hold();
   assert.equal(f.runtime.node.stateOf(f.id), 'off');
   assert.deepEqual(await f.call({ node: true }), held);
+  // Integration: suspend the final inventory read until any already-started resident has loaded.
+  // A running resident must be able to load its own entry without a tool call restarting it.
+  const spawn = GhostRuntime.prototype.spawn;
+  let loading;
+  t.mock.method(GhostRuntime.prototype, 'spawn', function (...args) {
+    loading = spawn.apply(this, args);
+    return loading;
+  });
+  const list = f.manager.listAsync.bind(f.manager);
+  t.mock.method(f.manager, 'listAsync', async (...args) => {
+    if (loading) await loading;
+    return list(...args);
+  });
   await f.runtime.resumeAfterDesktop();
+  assert.equal((await loading)?.ok, true, 'resident loaded before any external tool call');
   const after = await f.call({ node: true });
   assert.equal(after.ok, true, JSON.stringify(after));
   assert.equal(before.result.ok, true, JSON.stringify(before.result));
   assert.equal(after.result.ok, true, JSON.stringify(after.result));
   assert.notEqual(before.result.result, after.result.result);
   assert.deepEqual(await panel.evaluate(() => [localStorage.getItem('saved'), document.cookie]), ['before', 'fixture=old']);
+  f.runtime.secret.storeGhostSecret(f.id, 'fixture', 'synthetic-test-value');
+  const requests = [];
+  t.mock.method(hostOutbound, 'outboundFetch', async (url, init) => {
+    requests.push(String(url));
+    return Response.json({ authorized: new Headers(init.headers).get('authorization') === 'Bearer synthetic-test-value' });
+  });
+  const check = await f.call({ node: 'approved-services' });
+  assert.equal(check.result?.ok, true, JSON.stringify(check));
+  assert.deepEqual(check.result.result.jobs, []);
+  assert.equal(check.result.result.denied, 'PERMISSION_DENIED');
+  assert.equal(JSON.parse(check.result.result.response.body).authorized, true);
+  assert.doesNotMatch(JSON.stringify(check), /synthetic-test-value/);
+  assert.equal(await panel.evaluate(async () => (await fetch('/kv', { method: 'PUT',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ restored: true }) })).status), 204);
+  assert.deepEqual(await panel.evaluate(async () => (await fetch('/kv')).json()), { restored: true });
+  f.hold();
+  assert.deepEqual(await f.call({ node: 'approved-services' }), held);
+  assert.deepEqual(requests, ['https://example.invalid/account']);
   assert.deepEqual(await filesIn(f.root('ghost-install-state')), receipts);
 });
 
@@ -489,8 +663,44 @@ test('an open settings page cannot wake a plugin or change KV during the hold', 
   assert.deepEqual(await write({ value: 'during' }), { status: 409, json: held });
   const wake = await panel.evaluate(async () => { const response = await fetch('/wake'); return { status: response.status, json: await response.json() }; });
   assert.deepEqual(wake, { status: 409, json: held });
-  await f.runtime.resumeAfterDesktop();
-  assert.deepEqual(await panel.evaluate(async () => (await fetch('/kv')).json()), { value: 'before' });
+
+  // Stop while the resumed resident is registering its binding. The actual
+  // Playwright binding reply creates a child Disposable on the logic page.
+  const bindingStarted = Promise.withResolvers();
+  const finishBinding = Promise.withResolvers();
+  const context = panel.context();
+  const closeContext = t.mock.method(context, 'close');
+  const newPage = context.newPage.bind(context);
+  t.mock.method(context, 'newPage', async () => {
+    const page = await newPage();
+    const exposeBinding = page.exposeBinding.bind(page);
+    t.mock.method(page, 'exposeBinding', async (...args) => {
+      bindingStarted.resolve(page);
+      await finishBinding.promise;
+      return exposeBinding(...args);
+    });
+    return page;
+  });
+  let page;
+  let closing;
+  const requests = [];
+  try {
+    await f.runtime.resumeAfterDesktop();
+    assert.deepEqual(await panel.evaluate(async () => (await fetch('/kv')).json()), { value: 'before' });
+    page = await bindingStarted.promise;
+    page.on('request', request => requests.push(request.url()));
+    const closePage = t.mock.method(page, 'close');
+    closing = f.runtime.close();
+    await nextTurn();
+    assert.equal(closePage.mock.callCount(), 0);
+    assert.equal(closeContext.mock.callCount(), 0);
+    assert.equal(page.isClosed(), false, 'the binding still has a live parent page');
+  } finally {
+    finishBinding.resolve();
+    await closing;
+  }
+  assert.equal(page.isClosed(), true);
+  assert.deepEqual(requests, [], 'the stopped resident never loads its entry');
 });
 
 test('real observer delivery resumes on the next event without replaying a held event', realPage, async t => {
@@ -546,4 +756,106 @@ test('an interrupted external upload is not resent and committed staging remains
   assert.equal((await staging('chunk', { stagingId: unfinished.stagingId, seq: 1, content: data.toString('base64'), encoding: 'base64' })).result.ok, false);
   assert.equal((await staging('commit', { stagingId: unfinished.stagingId })).result.ok, false);
   assert.equal(transport.count(), 1);
+});
+
+// Integration: an actual uninstall can leave a quarantined package and a durable
+// journal while the profile is held. Recover with the authorized cleanup port.
+test('resume finishes the held uninstall journal and releases its quarantine', realPage, async t => {
+  const started = Promise.withResolvers();
+  const finish = Promise.withResolvers();
+  const f = await fixture(t, { executable: executablePath, resident: false, restartWithJournal: true, onCleaned: () => {
+    started.resolve(); return finish.promise;
+  } });
+  const physical = installedGhostPhysicalRelId(f.installed);
+  const store = new GhostInstallReceiptStore(() => f.manager.approvalStateRoot());
+  assert.equal(await f.runtime.resumeAfterDesktop(), false);
+  assert.equal(store.readPendingMutationSync(physical).state, 'valid');
+  assert.deepEqual(f.cleaned, []);
+  f.desktopExited();
+  const resuming = f.runtime.resumeAfterDesktop();
+  // A failed retry can settle without ever reaching the source cleanup port.
+  await Promise.race([started.promise, resuming]);
+  assert.deepEqual(f.cleaned, [f.id]);
+  try {
+    assert.deepEqual(await f.call(), held);
+    assert.throws(() => f.runtime.captureMutationOwner(), { code: 'PRECONDITION_FAILED' });
+  } finally { finish.resolve(); }
+  assert.equal(await resuming, true);
+  assert.equal(store.readPendingMutationSync(physical).state, 'missing');
+  assert.deepEqual(f.cleaned, [f.id]);
+  await assert.rejects(fs.stat(f.installed.dir), { code: 'ENOENT' });
+  assert.ok('ghost' in await f.manager.install(f.archive, { namespace: null, uiCapabilityApproved: true }));
+});
+
+// Integration tier. A stopped resident must not be relaunched by reconciliation.
+test('resume keeps a disabled resident and its Node worker off', realPage, async t => {
+  const f = await fixture(t, { executable: executablePath, node: true });
+  const result = await f.manager.setEnabled(installedGhostPhysicalRelId(f.installed), false);
+  assert.deepEqual(result, { ok: true });
+  f.hold();
+  const spawn = t.mock.method(GhostRuntime.prototype, 'spawn');
+  assert.equal(await f.runtime.resumeAfterDesktop(), true);
+  assert.equal(spawn.mock.callCount(), 0);
+  assert.equal(f.runtime.node.stateOf(f.id), 'off');
+  assert.equal(f.manager.findInstalledInstance(f.id)?.enabled, false);
+});
+
+// Integration: losing the owner while the real uninstall is finishing keeps the
+// account error at the recovery boundary. External mutations cannot use that owner.
+test('journal recovery preserves an actual owner change', realPage, async t => {
+  let leaveBoundary;
+  const f = await fixture(t, {
+    executable: executablePath, resident: false, restartWithJournal: true,
+    onCleaned: () => { leaveBoundary = beginAppSessionBoundary(); },
+  });
+  try {
+    f.desktopExited();
+    await assert.rejects(f.runtime.resumeAfterDesktop(), /PLUGIN_OWNER_CHANGED/);
+    assert.deepEqual(f.cleaned, [f.id]);
+    assert.throws(() => f.runtime.captureMutationOwner(), /PLUGIN_OWNER_CHANGED/);
+  } finally { leaveBoundary?.(); }
+});
+
+// Integration: a durable built-in uninstall journal cannot be completed by the
+// Host. The missing port quarantines one plugin while another resident runs.
+test('a retained built-in uninstall leaves other approved residents available', realPage, async t => {
+  const f = await fixture(t, { executable: executablePath, node: true, retainedBuiltin: true });
+  const quarantined = installedGhostStoragePart(f.retiredPlugin);
+  const physical = installedGhostPhysicalRelId(f.retiredPlugin);
+  const store = new GhostInstallReceiptStore(() => f.manager.approvalStateRoot());
+  const journal = store.readPendingMutationSync(physical);
+  assert.equal(journal.state, 'valid');
+  assert.equal(journal.mutation.builtinTombstone, true);
+  assert.deepEqual(await f.call(), held);
+  const spawn = t.mock.method(GhostRuntime.prototype, 'spawn');
+  const warningsBeforeResume = f.warnings.length;
+  f.desktopExited();
+  assert.equal(await f.runtime.resumeAfterDesktop(), true);
+  assert.deepEqual(spawn.mock.calls.map(call => installedGhostStoragePart(call.arguments[0])), [f.id]);
+  assert.equal(f.runtime.node.stateOf(quarantined), 'off');
+  assert.deepEqual(store.readPendingMutationSync(physical), journal);
+  assert.deepEqual(f.warnings.slice(warningsBeforeResume), ['some plugin mutations remain isolated after recovery']);
+  assert.equal((await f.call({ node: true })).result?.ok, true);
+  const denied = await f.runtime.callTool({ ghostId: quarantined, tool: 'echo', args: {} });
+  assert.equal(denied.ok, false);
+  assert.notEqual(denied.errorCode, 'PRECONDITION_FAILED');
+});
+
+// Integration: revoke the real installation receipt while the desktop owns the
+// profile. A previously approved resident must not start on the old approval.
+test('a resident whose approval was revoked during the hold stays off', realPage, async t => {
+  const f = await fixture(t, { executable: executablePath, node: true });
+  await f.runtime.reconcile();
+  assert.equal((await f.call({ node: true })).result?.ok, true);
+  f.hold();
+  const physical = installedGhostPhysicalRelId(f.installed);
+  const receipts = new GhostInstallReceiptStore(() => f.manager.approvalStateRoot());
+  assert.equal(receipts.readForRecovery(physical).state, 'approved');
+  assert.equal(await f.manager.removeInstallApproval(physical), true);
+  assert.equal(receipts.readForRecovery(physical).state, 'missing');
+  const spawn = t.mock.method(GhostRuntime.prototype, 'spawn');
+  assert.equal(await f.runtime.resumeAfterDesktop(), true);
+  assert.equal(spawn.mock.callCount(), 0);
+  assert.equal(f.runtime.node.stateOf(f.id), 'off');
+  assert.equal((await f.call()).ok, false);
 });

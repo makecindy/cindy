@@ -43,6 +43,7 @@ function makeQueue(kind: string) {
   ];
   if (kind === 'empty' || kind === 'delivered') return [];
   if (kind === 'single') return q.slice(0, 1);
+  if (kind === 'remote-account') return [{ ...q[0], waitingForRemoteAccount: true }];
   if (kind === 'many')
     return Array.from({ length: 6 }, (_, i) =>
       entry(
@@ -228,8 +229,9 @@ function Fixture({ kind }: { kind: string }) {
             retryText="original message"
           />
         )}
-        {kind === 'credential' && (
-          <CredentialSwitchWaitBanner blockedBySessionIds={[]} onCancel={noop} />
+        {(kind === 'credential' || kind === 'own-credential') && (
+          <CredentialSwitchWaitBanner sessionId="queue-gallery"
+            blockedBySessionIds={kind === 'own-credential' ? ['queue-gallery'] : []} onCancel={noop} />
         )}
       </div>
       <div className="mx-auto w-full max-w-[880px] shrink-0 px-6 pb-5 pt-3">

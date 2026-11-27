@@ -77,9 +77,16 @@ import {
 import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
 import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { SessionRenameInput } from '../SessionRenameInput';
-import { SidebarTitleMarquee, type SessionItemProps } from './SessionItem';
+import { isNestedSessionRowAction, SidebarTitleMarquee, type SessionItemProps } from './SessionItem';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
+import { SessionOriginMark } from './SessionOriginMark';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import {
+  getSidebarNewWindowShortcutKey,
+  isSidebarNewWindowActivation,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
+import { useOfflineInboxIntent } from '@/features/device-link/offlineInboxIntentsStore';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { resolveSessionCardBody } from './sessionCardPreview';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
@@ -93,6 +100,7 @@ import { useRemoteSessionScheduleInfo } from '@/features/device-link/remoteProje
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './sidebarRightStatus';
+import { useSidebarIssueConfirm } from './useSidebarIssueConfirm';
 import { Tip } from '@/components/ui/tooltip';
 import { BotFollowMark, useSessionFollowers } from '@/features/bots/BotFollowMark';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
@@ -172,8 +180,6 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
 }: SessionCardProps & SidebarNavigationProps) {
   const { t } = useTranslation();
   const followers = useSessionFollowers(session);
-  // 标题后常显的标记:任务标签色球与「伙伴在跟进」头像。浮出操作钮与归档确认胶囊按它让位。
-  const hasTitleMarks = !!session.tags?.length || followers.length > 0;
   const cindyMakeActivity = useCindyMakeActivity(session);
   const cindyMakePreparing = cindyMakeActivity === 'building' ? undefined : cindyMakeActivity;
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
@@ -193,8 +199,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
   const remoteActivity = useRemoteSessionActivity(session.id, session.deviceLinkDeviceId);
   const remoteSchedule = useRemoteSessionScheduleInfo(session.id);
+  const pendingIssueConfirm = useSidebarIssueConfirm(
+    session.deviceLinkDeviceId || session.remoteHostId || navigationOnly ? undefined : session.id,
+  );
   const sessionActivity = projectSidebarSessionActivity({
     interruption: session,
+    pendingIssueConfirm,
     sessionId: session.id,
     title: session.title,
     recordStatus: session.status,
@@ -250,7 +260,18 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   );
   const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session, t);
   const isArchived = session.status === 'archived';
+  const offlineInboxIntent = useOfflineInboxIntent(session.deviceLinkDeviceId, session.id);
+  const canOfflineInboxQueue =
+    inboxMode &&
+    !navigationOnly &&
+    Boolean(session.deviceLinkDeviceId) &&
+    !isSharedTaskPeer(session.deviceLinkDeviceId ?? '') &&
+    isRemoteSessionWriteBlocked(session);
+  const canUndoOfflineComplete =
+    isArchived && canOfflineInboxQueue && offlineInboxIntent?.kind === 'complete';
   const canQuickArchive = !navigationOnly && !isArchived && !isEmpty && !remoteWritesBlocked;
+  const canInboxComplete =
+    inboxMode && !navigationOnly && !isArchived && !isEmpty && (!remoteWritesBlocked || canOfflineInboxQueue);
   // 卡片/列表的正文固定给预览区域。list 保留实时执行文案,正文只用最近消息;
   // card + 置顶才用稳定任务摘要,完成后由 summary 更新。
   const bodyPreview = resolveSessionCardBody({
@@ -293,6 +314,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const cardPreview = awaitingText ?? preparationText ?? bodyPreview;
   // 任务信息复选(C / C' 期):卡片右下角信息槽内容,与整理菜单同源共享状态。
   const { fields: taskInfoFields } = useTaskInfoFields();
+  const showProject = taskInfoFields.includes('project');
+  const showTeammate = taskInfoFields.includes('teammate');
+  const hasTitleMarks = !!session.tags?.length || (showTeammate && followers.length > 0);
+  const inboxProject = inboxMode ? sessionTaskProjectIconDirectory(session) : null;
   const cardPrRefs = usePrRefsForSession(session.id);
   const cardInfoPrRef = taskInfoFields.includes('pr') ? cardPrRefs[0] : undefined;
   const cardInfoWorktree = useTaskInfoWorktree(session, taskInfoFields.includes('worktree'));
@@ -421,9 +446,30 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       if (isEditing) return;
-      // 多选(与列表 SessionItem 同口径):透传 shift/⌘/ctrl 修饰键,支持卡片区
-      // 范围/加减选;无修饰键即普通导航。
-      onClick(session.id, { shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey });
+      // 透传修饰键与按钮：常态主修饰键/中键新窗打开，Shift 或多选态下走多选，普通左键导航。
+      onClick(session.id, {
+        shiftKey: e.shiftKey,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        button: e.button,
+      });
+    },
+    [isEditing, onClick, session.id],
+  );
+
+  const handleAuxClick = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>) => {
+      if (isEditing || e.button !== 1 || isNestedSessionRowAction(e.target, e.currentTarget)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      onClick(session.id, {
+        shiftKey: e.shiftKey,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        altKey: e.altKey,
+        button: e.button,
+      });
     },
     [isEditing, onClick, session.id],
   );
@@ -432,7 +478,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     (e: React.MouseEvent) => {
       // 已在编辑态时不重复进入:编辑器内部元素漏拦的 dblclick 冒泡到这里会
       // setEditValue 重置草稿(与 handleClick 的 isEditing 守卫对称)。
-      if (isEditing || navigationOnly) return;
+      if (isEditing || navigationOnly || e.shiftKey || isSidebarNewWindowActivation(e)) return;
       e.stopPropagation();
       e.preventDefault();
       if (remoteWritesBlocked) {
@@ -487,12 +533,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
     onAction(session.id, 'archive');
   }, [remoteWritesBlocked, session.id, onAction, t]);
   const handleUnarchiveSelect = useCallback(() => {
-    if (remoteWritesBlocked) {
+    if (remoteWritesBlocked && !canUndoOfflineComplete) {
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
       return;
     }
     onAction(session.id, 'unarchive');
-  }, [remoteWritesBlocked, session.id, onAction, t]);
+  }, [canUndoOfflineComplete, remoteWritesBlocked, session.id, onAction, t]);
   const handleDeleteSelect = useCallback(() => {
     if (remoteWritesBlocked) {
       toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
@@ -591,10 +637,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   ) : null;
 
   const statusIconNode = (
-    <span className={cn(CARD_TITLE_STATUS_SLOT_CLASS, inboxMode && "!w-[18px]")} aria-hidden>
+    <span className={cn(CARD_TITLE_STATUS_SLOT_CLASS, "empty:hidden", inboxMode && "!w-[18px]")} aria-hidden>
       <SessionStatusIcon
-          identityIcon={inboxMode && sessionTaskProjectIconDirectory(session) ? (
-            <ResolvedProjectIcon directory={sessionTaskProjectIconDirectory(session)!}
+          hasSeparateStatusIndicator={rightStatusKind !== 'time'}
+          hideHarness={inboxProject ? !showProject : !taskInfoFields.includes('harness')}
+          identityIcon={showProject && inboxProject ? (
+            <ResolvedProjectIcon directory={inboxProject}
               remoteHostId={session.remoteHostId} deviceId={session.deviceLinkDeviceId}
               name={sourceLabel} size={18} />
           ) : undefined}
@@ -650,11 +698,6 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
       {showScheduleBindingBadge || showAutomationTimer ? (
         <span className={CARD_TITLE_META_SLOT_CLASS}>{renderAutomationMeta(10)}</span>
       ) : null}
-      <span
-        className="inline-block"
-        style={{ width: showScheduleBindingBadge || showAutomationTimer ? 7 : 6 }}
-        aria-hidden
-      />
     </>
   );
 
@@ -689,13 +732,24 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
           makerChatStore.ensureInitialMessages(session.id);
         }
       }}
+      onMouseDown={(e) => {
+        if (!isEditing && !isNestedSessionRowAction(e.target, e.currentTarget)) {
+          preventMiddleClickAutoscroll(e);
+        }
+      }}
       onClick={handleClick}
+      onAuxClick={handleAuxClick}
       onDoubleClick={handleDoubleClick}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
         if (!isEditing && (e.key === 'Enter' || e.key === ' ')) {
           e.preventDefault();
-          onClick(session.id);
+          onClick(session.id, {
+            shiftKey: e.shiftKey,
+            metaKey: e.metaKey,
+            ctrlKey: e.ctrlKey,
+            altKey: e.altKey,
+          });
         }
       }}
       onContextMenu={(e) => {
@@ -783,7 +837,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               draggable={splitDragHandleActive}
               className="relative flex h-[22px] min-w-0 flex-1 items-center gap-0"
             >
-              <span className="flex shrink-0 items-center">{titlePrefixNode}</span>
+              <span className={cn(
+                'flex shrink-0 items-center',
+                showScheduleBindingBadge || showAutomationTimer ? 'mr-[7px]' : 'has-[>:not(:empty)]:mr-1.5',
+              )}>{titlePrefixNode}</span>
               {isEditing ? (
                 <SessionRenameInput
                   sessionId={session.id}
@@ -822,7 +879,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   </SidebarTitleMarquee>
                   {/* 任务标签常显、紧跟标题，不属于任务信息复选。 */}
                   <TaskTagDots tags={session.tags} />
-                  <BotFollowMark followers={followers} />
+                  {showTeammate && <BotFollowMark followers={followers} />}
+                  <SessionOriginMark
+                    session={session}
+                    isActive={isActive}
+                    suppressTaskOrigin={showTeammate && followers.length > 0 && Boolean(session.createdBySession?.botId)}
+                  />
                   {remoteIconKind && (
                     <RemoteProjectIcon
                       kind={remoteIconKind}
@@ -837,7 +899,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                     />
                   )}
                   {/* Agent 在另一台电脑运行(任务在本机)的标识在 Agent 图标上(信号波纹)。 */}
-                  {sourceLabel && !inboxMode ? (
+                  {showProject && sourceLabel && !inboxMode ? (
                     <span
                       title={sourceLabel}
                       data-project-source
@@ -874,6 +936,8 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 isActive={isActive}
                 isArchived={isArchived}
                 canQuickArchive={canQuickArchive}
+                canInboxComplete={canInboxComplete}
+                canSnoozeOverride={canOfflineInboxQueue}
                 archivePending={archivePending}
                 setArchivePending={beginArchivePending}
                 confirmPillRef={confirmPillRef}
@@ -885,10 +949,10 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                 }}
                 onArchiveNow={() => onAction(session.id, 'archive-now')}
                 onComplete={() => {
-                  prefetchRemovalPreflight();
+                  if (!canOfflineInboxQueue) prefetchRemovalPreflight();
                   onAction(session.id, 'complete');
                 }}
-                canUnarchive={!remoteWritesBlocked}
+                canUnarchive={!remoteWritesBlocked || canUndoOfflineComplete}
                 onUnarchive={handleUnarchiveSelect}
                 yieldToOrdinalBadge={ordinalBadgeLabel != null}
                 ordinalBadgeLabel={ordinalBadgeLabel}
@@ -1048,7 +1112,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             {!isEditing && hasTitleMarks ? (
               <span className="flex h-[1.22em] shrink-0 items-center gap-1.5 text-12">
                 <TaskTagDots tags={session.tags} />
-                <BotFollowMark followers={followers} />
+                {showTeammate && <BotFollowMark followers={followers} />}
               </span>
             ) : null}
             {/* 归档确认胶囊的隐形同款占位:与胶囊同文案同样式,按实际宽度让位。
@@ -1117,6 +1181,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             )}
           >
             <SessionStatusIcon
+              hideHarness={!taskInfoFields.includes('harness')}
               session={session}
               isRunning={leftIconRunning}
               isAttached={isAttached}
@@ -1125,6 +1190,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               size={11}
             />
             {renderAutomationMeta(11)}
+            <SessionOriginMark
+              session={session}
+              isActive={isActive}
+              size={11}
+              suppressTaskOrigin={showTeammate && followers.length > 0 && Boolean(session.createdBySession?.botId)}
+            />
             {remoteIconKind && (
               <RemoteProjectIcon
                 kind={remoteIconKind}
@@ -1195,6 +1266,7 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
             onRename={handleRenameSelect} onPin={handlePinSelect}
             onArchive={handleArchiveSelect} onUnarchive={handleUnarchiveSelect} onDelete={handleDeleteSelect}
             onOpenInNewWindow={handleOpenInNewWindowSelect}
+            openInNewWindowShortcut={t(getSidebarNewWindowShortcutKey())}
             move={moveToProjectSubmenu} tags={tagMenu} copy={copySessionIdSubmenu} exportShare={exportShareMenuItem}
           />
         </DropdownMenu>
@@ -1228,6 +1300,8 @@ function TimeActionsSlot({
   isActive,
   isArchived,
   canQuickArchive,
+  canInboxComplete = false,
+  canSnoozeOverride = false,
   canUnarchive,
   archivePending,
   setArchivePending,
@@ -1250,6 +1324,8 @@ function TimeActionsSlot({
   isActive: boolean;
   isArchived: boolean;
   canQuickArchive: boolean;
+  canInboxComplete?: boolean;
+  canSnoozeOverride?: boolean;
   canUnarchive: boolean;
   archivePending: boolean;
   setArchivePending: (v: boolean) => void;
@@ -1267,7 +1343,7 @@ function TimeActionsSlot({
   const { t } = useTranslation();
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const actionsOpen = menuOpen || snoozeOpen;
-  const canSnooze = inboxMode && !isArchived && canUnarchive && !!snoozeAction;
+  const canSnooze = inboxMode && !isArchived && (canUnarchive || canSnoozeOverride) && !!snoozeAction;
   return (
     <div className="group/slot relative ml-auto flex h-[22px] shrink-0 items-center justify-end">
       <div className="grid h-[22px] grid-cols-[max-content] items-center justify-items-end">
@@ -1343,7 +1419,7 @@ function TimeActionsSlot({
               )}
             >
               {(!inboxMode || canSnooze) && <span className="size-5 shrink-0" />}
-              {(isArchived && canUnarchive) || canQuickArchive ? (
+              {(isArchived && canUnarchive) || canInboxComplete || canQuickArchive ? (
                 <span className="size-5 shrink-0" />
               ) : null}
             </div>
@@ -1383,7 +1459,7 @@ function TimeActionsSlot({
                 >
                   <Undo size={14} strokeWidth={2} />
                 </CardAction>
-              ) : canQuickArchive && inboxMode ? (
+              ) : canInboxComplete && inboxMode ? (
                 <CardAction
                   variant="list"
                   isActive={isActive}

@@ -97,6 +97,8 @@
   },
   "notice": {
     "memberJoined": "{{name}}入群議",
+    "memberJoinedList": "{{names}}入群議",
+    "memberJoinedSummary": "{{names}}及餘{{others}}人入群議",
     "memberFailed": "{{name}}此番未能作覆",
     "memberTimeout": "{{name}}久未作覆，此番暫略之",
     "memberUnavailable": "{{name}}今不可用，此番未發言",
@@ -109,7 +111,7 @@
     "runtimeFailureReason": {
       "unclaimed_timeout": {
         "summary": "{{name}}逾候未始處理，此請已終。",
-        "advice": "請同僚之主人察其機上 Cindy 是否運行、網路是否連線。",
+        "advice": "請同伴之主人察其機上 Cindy 是否運行、網路是否連線。",
         "details": "待 Cindy 與網路復常，請重遣訊。"
       }
     },
@@ -175,7 +177,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
       "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連君之 Cindy，而後 Cindy 可代君行事（君之電腦今無在線之 Cindy）。"
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連君之 Cindy，而後 Cindy 可代君行事（君之電腦今無在線之 Cindy）。",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，請擇本群執行之機，既擇即續此事。",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 於本群所擇之機已離線。"
     }
   },
   "plan": {
@@ -300,7 +304,9 @@
     },
     "allowMemberInvites": "許諸成員邀友",
     "allowMemberInvitesHint": "啟之，已入群者皆可邀友。唯群主與管理員可改。",
-    "allowMentionAllBots": "許 @諸同僚",
+    "allowMemberMentionAll": "許諸眾 @所有人",
+    "allowMemberMentionAllHint": "啟之，諸眾皆可 @所有人；閉則惟群主與管理員可用。唯群主與管理員可改。",
+    "allowMentionAllBots": "許 @諸同伴",
     "allowMentionAllBotsHint": "唯群主可改。同伴或皆作覆，大群慎啟之。此開關不涉 AI 代答。",
     "notifications": {
       "title": "訊息告知",
@@ -338,8 +344,9 @@
     "lifecycleUnavailable": "今之伺服器或機尚不支援此舉。",
     "groupDissolved": "群議已散，仍可觀有權存取之舊訊。",
     "lastOwner": "請先讓渡群主或解散群議，然後退出。",
-    "allBotsMentionDisabled": "群主未啟 @諸同僚。",
-    "turnAlreadyStarted": "此同僚已啟，不可略過",
+    "allBotsMentionDisabled": "群主未啟 @諸同伴。",
+    "allHumansMentionForbidden": "惟群主與管事可 @所有人。",
+    "turnAlreadyStarted": "此同伴已啟，不可略過",
     "stopOwnershipUnknown": "部分工作未能停止：無從確認由誰發起",
     "nothingToStop": "目前無可停止之工作"
   },
@@ -428,7 +435,36 @@
     "select": "擇訊",
     "sidebarOwn": "君轉貼一則話題之覆",
     "sidebarOther": "{{name}} 轉貼一則話題之覆",
-    "shareFailed_many": "覆 {{count}} 則已遣至話題，然未能並遣至群議。"
+    "shareFailed_many": "覆 {{count}} 則已遣至話題，然未能並遣至群議。",
+    "openIndex": "話題",
+    "indexTitle": "話題",
+    "filterAria": "篩選話題",
+    "filterMine": "與己相關",
+    "filterAll": "全覽",
+    "searchPlaceholder": "檢索話題、回覆或同席",
+    "clearSearch": "清檢索",
+    "listRecent": "近日",
+    "indexParticipatedTag": "曾與議",
+    "indexMentionedTag": "曾見及",
+    "indexEmptyMine": "尚無與議或見及之話題",
+    "indexEmptyAll": "此群尚無話題",
+    "indexEmptySearch": "無相合之話題",
+    "viewAllThreads": "覽全部話題",
+    "emptyReply": "無文字",
+    "listNews": "有新覆",
+    "hintOne": "話題有新覆",
+    "hintMany_one": "{{count}} 話題有新覆",
+    "hintMany_other": "{{count}} 話題有新覆",
+    "syncingHistory": "方溯舊話…",
+    "rootKind": {
+      "task": "差事",
+      "image": "圖畫",
+      "video": "影像",
+      "audio": "語音",
+      "file": "卷宗",
+      "share": "轉傳回覆",
+      "card": "箋卡"
+    }
   },
   "mask": {
     "toolAccess": "工具之權柄",
@@ -503,6 +539,8 @@
     }
   },
   "groupSettings": {
+    "assistantComputer": "執行之機",
+    "chooseComputer": "擇機",
     "tabSettings": "群之規制",
     "youAreOwner": "君乃群主",
     "youAreAdmin": "君乃群執事",
@@ -543,7 +581,10 @@
     "accessNone": "唯主人可用",
     "accessChat": "唯群內交流",
     "accessTools": "可用工具與資料",
+    "memberPermissions": "群員權柄",
     "replies": "同伴如何接話",
+    "assistant": "群中 Cindy",
+    "assistantHint": "誰 @ 之，即於其人之電腦行事。",
     "replyModeMentionedNote": "無人被 @ 時，同伴不接話。",
     "work": "分職",
     "organizerHint": "排定誰為何步；預設為首位同伴。",
@@ -646,5 +687,6 @@
     },
     "externalFormatError": "請自原訊重新開啟完整連結。"
   },
-  "waitingForOwner": "待主人允"
+  "waitingForOwner": "待主人允",
+  "externalBadge": "外部"
 }

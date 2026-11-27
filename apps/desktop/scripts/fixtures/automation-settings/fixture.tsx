@@ -5,6 +5,14 @@ void mountPage({
   // The section links to the plugin page, so it renders inside the app router.
   route: '/settings',
   host: (ctx) => ({
+    ...(ctx.case === 'mac-control-permission' && {
+      platform: 'darwin',
+      osRelease: '27.3.0',
+      openExternal: async (url: string) => {
+        document.documentElement.dataset.openedSettings = url;
+        return { success: true };
+      },
+    }),
     maker: {
       plugins: {
         getState: async (id: string) => {
@@ -21,7 +29,8 @@ void mountPage({
       computer: {
         status: async () => {
           // driver-rate-limited 需要一个已安装的 macOS driver:更新行只在装上后渲染。
-          if (ctx.case === 'driver-rate-limited') {
+          if (ctx.case === 'driver-rate-limited' || ctx.case === 'mac-control-permission') {
+            const control = ctx.case === 'mac-control-permission' ? 'missing' : 'granted';
             return {
               installed: true,
               executablePath: '/Applications/CuaDriver.app',
@@ -33,8 +42,8 @@ void mountPage({
                 platform: 'macos',
                 required: true,
                 canGrant: true,
-                status: 'granted',
-                accessibility: 'granted',
+                status: control,
+                accessibility: control,
                 screenRecording: 'granted',
                 screenRecordingCapturable: 'granted',
               },
@@ -47,6 +56,7 @@ void mountPage({
             daemonRunning: false,
           };
         },
+        grantPermissions: async () => ({ ok: false, status: await window.electronAPI.maker.computer.status() }),
         // issue #8916:GitHub 匿名限额打满时 main 下发 checkError,面板要说「限流」而不是「检查失败」。
         checkUpdate: async () =>
           ctx.case === 'driver-rate-limited'

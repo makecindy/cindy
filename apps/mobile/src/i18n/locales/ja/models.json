@@ -53,7 +53,8 @@
   },
   "switchOutcome": {
     "applied": "モデルプロバイダーの切り替えが有効になりました。",
-    "failed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。"
+    "failed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。",
+    "previousSettingsRetained": "切り替えは完了しませんでした。タスクは引き続き元の設定を使用します。"
   },
   "agentSwitch": {
     "browseAccessibility": "{{agent}} のモデルを表示"
@@ -61,6 +62,7 @@
   "unified": {
     "remoteCopyUnavailableOn": "「{{device}}」の {{provider}} は現在利用できません。",
     "remoteCopyUnavailableOnTaskComputer": "タスクがあるパソコンの {{provider}} は現在利用できません。",
+    "accountCount_one": "{{count}} 個のアカウント",
     "accountCount_other": "{{count}} 個のアカウント",
     "accountFallback": "アカウント {{index}}",
     "favoriteConfiguration": "この設定をお気に入りに追加",
@@ -90,8 +92,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "プロバイダーグループ · {{count}} 台のパソコン",
-    "groupBadge_other": "プロバイダーグループ · {{count}} 台のパソコン",
+    "groupBadge_one": "コンピューターグループ · {{count}} 台のパソコン",
+    "groupBadge_other": "コンピューターグループ · {{count}} 台のパソコン",
     "harness": "Harness",
     "restoreRecommended": "推奨設定に戻す",
     "saveFailed": "保存できませんでした。再試行してください。",
@@ -112,12 +114,16 @@
   },
   "modelGroups": {
     "title": "モデルグループ",
+    "sourceCount_one": "ソース {{count}} 件",
     "sourceCount_other": "ソース {{count}} 件",
     "strategy": {
       "expiring": "失効が近いものを先に",
       "order": "順番どおり",
       "rotate": "交代で",
-      "cheapest": "最も安く"
+      "cheapest": "最も安く",
+      "drain": "使い切ってから次へ",
+      "headroom": "残りが多い順",
+      "weighted": "重み付け"
     },
     "sourceOnDevice": "{{provider}} · {{device}}",
     "why": {
@@ -130,6 +136,11 @@
       "soonestUntil": "すべてのソースのクォータを使い切りました。これが最も早く回復します（{{reset}}）",
       "cheapest": "定価が最も安い",
       "cheapestFree": "サブスクリプションのクォータが残っており、追加費用なし",
+      "drain": "クォータがなくなるまで引き続き使用",
+      "drainNext": "前のソースを使い切ったか使えなくなったため、こちらに切り替え",
+      "headroom": "残りクォータが最も多い",
+      "headroomQuota": "残り {{left}}% で、ほかのどのソースよりも多い",
+      "weighted": "重みにより今回はこのソース",
       "exceptionImage": "メッセージに画像があるため、画像を扱えるソースの中から選択",
       "exceptionImageFallback": "メッセージに画像がありますが、画像を扱えるソースがないため通常どおり選択",
       "exceptionHours": "この時間帯は「{{name}}」を使用",
@@ -146,7 +157,6 @@
     "genericName": "プラグインエンジン",
     "defaultModel": "デフォルトモデル",
     "unavailable": "{{engine}} は利用できません",
-    "unavailableWithHint": "{{engine}} は利用できません：{{hint}}",
-    "worktreeUnsupported": "プラグインエンジンはまだ worktree でタスクを開始できません。worktree をオフにしてから送信してください"
+    "unavailableWithHint": "{{engine}} は利用できません：{{hint}}"
   }
 }

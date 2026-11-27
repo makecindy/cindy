@@ -27,7 +27,7 @@ function fixture() {
   const bindings = {
     scrollRef: { current: root }, focusJumpRef, settleFocusJump: vi.fn(),
     cancelFocusJump: () => { focusJumpRef.current = null; },
-    isScrollNavigationKey: () => true, isEditableKeyboardTarget: () => false,
+    isScrollNavigationKey: () => true, editableTargetConsumesKey: () => false,
   };
   const cleanup = new Function(...Object.keys(bindings), code)(...Object.values(bindings))();
   cleanups.push(cleanup);

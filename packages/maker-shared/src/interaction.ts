@@ -22,12 +22,18 @@ export interface AskAnswerConstraints {
   maxLength?: number;
 }
 
+export interface AskQuestionOption {
+  label: string;
+  description?: string;
+  preview?: string;
+}
+
 export interface AskQuestion {
   /** Stable provider identity; absent on legacy questions. */
   id?: string;
   question: string;
   header?: string;
-  options?: Array<{ label: string; description?: string }>;
+  options?: AskQuestionOption[];
   multiSelect?: boolean;
   answerConstraints?: AskAnswerConstraints;
 }
@@ -152,7 +158,7 @@ export interface IssueEnv {
   platform: string;
   arch: string;
   osVersion?: string;
-  harness?: 'Claude Code' | 'Codex' | 'Pi';
+  harness?: 'Claude Code' | 'Codex' | 'Pi' | 'ACP';
   modelId?: string;
 }
 
@@ -1231,7 +1237,14 @@ export function normalizeAskQuestions(value: unknown): AskQuestion[] {
         const label = answerConstraints?.choices && typeof option.label === 'string' ? option.label : readString(option.label);
         if (!label) return [];
         const description = readString(option.description);
-        return [{ label, ...(description ? { description } : {}) }];
+        const preview = typeof option.preview === 'string' && option.preview.trim().length > 0
+          ? option.preview
+          : null;
+        return [{
+          label,
+          ...(description ? { description } : {}),
+          ...(preview ? { preview } : {}),
+        }];
       })
       : undefined;
     return [{
@@ -1256,7 +1269,7 @@ function normalizeAskAnswerConstraints(value: unknown): AskAnswerConstraints | u
   };
 }
 
-export function askQuestionOptions(question: AskQuestion | undefined): Array<{ label: string; description?: string }> {
+export function askQuestionOptions(question: AskQuestion | undefined): AskQuestionOption[] {
   return question?.answerConstraints?.choices ? [...(question.options ?? [])] : visibleAskOptions(question?.options);
 }
 
@@ -1463,7 +1476,7 @@ export function normalizeIssueConfirm(request: InteractionRequestLike): IssueCon
 }
 
 function readIssueHarness(value: unknown): IssueEnv['harness'] {
-  return value === 'Claude Code' || value === 'Codex' || value === 'Pi' ? value : undefined;
+  return value === 'Claude Code' || value === 'Codex' || value === 'Pi' || value === 'ACP' ? value : undefined;
 }
 
 function normalizeIssueModelId(value: unknown): string | undefined {
