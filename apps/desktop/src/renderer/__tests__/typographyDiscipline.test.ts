@@ -268,12 +268,6 @@ const EXEMPTIONS: Exemption[] = [
     ],
   },
   {
-    file: 'src/renderer/components/chat/UserMessage.tsx',
-    rule: 'arb-size',
-    reason: '紧凑代码字号派生值',
-    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_2px)]', expected: 1 }],
-  },
-  {
     file: 'src/renderer/components/markdown/MermaidSourceEditor.tsx',
     rule: 'arb-size',
     reason: '紧凑代码字号派生值',

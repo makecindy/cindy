@@ -1230,6 +1230,7 @@ import {
 } from './orcaMcpHydrationCache.js';
 import {
   applyOrcaInstructions,
+  ORCA_DIRECT_TASK_CREATE,
   renderOrcaRoleInstructions,
   synthesizeOrcaVendorOptionsFromDb,
 } from './orcaSessionStartOptions.js';
@@ -10783,6 +10784,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (!co.workingDir && co.projectDir) co.workingDir = co.projectDir;
         assertSessionCreationCurrent();
       }
+      // Mobile/device-link can create an ordinary task before a session row
+      // exists; only this host entrypoint may supply that startup provenance.
+      Object.assign(co, { [ORCA_DIRECT_TASK_CREATE]: true });
       const result = await bootstrapSession(co, assertSessionCreationCurrent);
       assertSessionCreationCurrent();
       // maker:create-session 是手机 / device-link 的创建入口，不经过
@@ -15168,11 +15172,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       },
       // taskId is the session id; the snapshot is the streaming block only (resets after a tool call).
       readLivePreview: taskId => ({ execution: readExecution(taskId), text: getSessionTextSnapshot(taskId)?.event.data.text ?? null }),
-      cancel: async (pluginId, taskId, inputClientIds, execution) => {
+      cancel: async (pluginId, taskId, inputClientIds, execution, mode) => {
         assertPlugin(pluginId);
         await inputCoordinator.ensureQueueRestored(taskId);
         assertCurrent();
         if (!inputCoordinator.isQueueRestored(taskId)) throw new PluginTaskError('HOST_NOT_READY', 'Task queue is restoring', true);
+        if (mode === 'withdraw-failed') {
+          await pluginTaskServiceForCurrentOwner!().get(pluginId, taskId);
+          assertPlugin(pluginId);
+          const [originalId] = inputClientIds;
+          const queue = inputCoordinator.getQueueControlSnapshot(taskId);
+          if (inputCoordinator.getActiveInputClientIds(taskId).includes(originalId) ||
+              queue.steeringQueueClientIds.includes(originalId)) {
+            throw new PluginTaskError('TASK_BUSY', 'The input is being consumed', true);
+          }
+          // Only the original pending row can be stale. A later user retry may name it as a source.
+          const original = queue.pendingQueue.find(item => item.clientId === originalId);
+          if (original && !inputCoordinator.discardRejectedInput(taskId, original)) {
+            throw new PluginTaskError('TASK_BUSY', 'The pending input changed', true);
+          }
+          await awaitAgentInputQueueSnapshotPersistence(taskId);
+          assertPlugin(pluginId);
+          return 'cancelled';
+        }
         await withdrawOwnedSessionInputs({ sessionId: taskId, queue: {
           ensureQueueRestored: async sessionId => {
             await inputCoordinator.ensureQueueRestored(sessionId);
@@ -19242,8 +19264,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
 
   // 输入框开始输入（打字、粘贴、开始语音输入）时预热 Agent（本机与 device-link 控制端共用）。只覆盖用户自己的普通
-  // 任务、且 Agent 在本机运行；Bot / IM / 定时 / 审查 / 共享 / 协同 / 远程主机等任务的
-  // 启动另有专门的路由与权限检查，仍由真实发送处理。启动走发送路径的同一个懒创建，
+  // 任务、且 Agent 在本机运行；Bot / IM / 定时 / 审查 / 共享 / 协同 worker / 远程主机等任务的
+  // 启动另有专门的路由与权限检查，仍由真实发送处理。协同 lead 由用户直接操作，与普通任务同性质，
+  // 因此一并预热；协同 worker 由 orcaWorkerResumeScheduler 负责，不在此列。启动走发送路径的同一个懒创建，
   // 并在同一把会话发送锁里执行，真实发送不会与预热并发重复启动。
   const agentPrewarmer = createAgentPrewarmer({
     start: (sessionId, createOpts) => withSendToSessionLock(sessionId, async () => {
@@ -20906,7 +20929,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         'failed', inputCoordinator.getProjection(sessionId).error).catch(() => {
         log.warn('Bot group undispatched input settlement failed', { sessionId });
       });
-      notePluginTaskLifecycle(service => service.discard(sessionId, item, 'failed'));
+      notePluginTaskLifecycle(service => service.discard(sessionId, item, 'failed', async () => {
+        if (inputCoordinator.discardRejectedInput(sessionId, item)) await awaitAgentInputQueueSnapshotPersistence(sessionId);
+      }));
       welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
       rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected');
       interruptedTurnAutoResumeHooks.onRejectedUserTurn(sessionId, item);
