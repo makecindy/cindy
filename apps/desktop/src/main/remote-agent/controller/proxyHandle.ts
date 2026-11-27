@@ -689,6 +689,15 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       deps.onExtraDirs?.(dirs, libraryRoot);
       await callIfLive('setExtraDirs', deps.workspace.virtualizeDirs(dirs), libraryRoot ? deps.workspace.virtualizeDirs([libraryRoot])[0] : null);
     }),
+    requiresRuntimeRecycleForExtraDirs: () => {
+      if (typeof state.requiresRuntimeRecycleForExtraDirs === 'boolean') {
+        return state.requiresRuntimeRecycleForExtraDirs;
+      }
+      // Older remote hosts omit this boolean; preserve the pre-PR recycle rule
+      // for ACP sessions unless negotiatedCapabilities proves extraDirs unsupported.
+      return started.agentKind === 'acp'
+        && (handle.negotiatedCapabilities?.extraDirs?.supported ?? true);
+    },
     ...optional('setWritableDirs', async (dirs: string[]) => {
       await callIfLive('setWritableDirs', deps.workspace.virtualizeDirs(dirs));
       // 对方成功后才更新本机执行器的根目录：新建的可写目录在本机也能过 root 判定，
@@ -817,7 +826,11 @@ export function createRemoteAgentHandle(deps: RemoteHandleDeps): RemoteAgentHand
       imessageSendContext = next.imessageSendContext === true;
       const previousUsage = state.usage;
       const previousCapabilities = state.negotiatedCapabilities;
-      state = { ...state, ...next.state };
+      const nextState: Record<string, unknown> = { ...state, ...next.state };
+      if (!('requiresRuntimeRecycleForExtraDirs' in next.state)) {
+        delete nextState.requiresRuntimeRecycleForExtraDirs;
+      }
+      state = nextState;
       if (!isEmptyUsage(previousUsage) && isEmptyUsage(state.usage) && state.turnRunning !== true) {
         carriedUsage = previousUsage;
         state = { ...state, usage: previousUsage };

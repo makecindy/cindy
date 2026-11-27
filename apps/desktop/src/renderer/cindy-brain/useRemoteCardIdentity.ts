@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { REMOTE_RESOURCE_GET_CHANNEL, REMOTE_RESOURCE_PROTOCOL_VERSION, resolveRemoteText, type RemoteText } from '@cindy/device-link';
+import { isLooseBase64Chars, parseBase64DataUrl } from '@cindy/maker-shared';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { GhostRemoteCardSource } from './ghostCardStore';
 
@@ -20,7 +21,10 @@ function readIdentity(deviceId: string, sessionId: string, pluginId: string, loc
       const title = resource?.display?.title;
       const name = title === undefined ? '' : resolveRemoteText(title as RemoteText, locale);
       const url = (resource?.blocks?.find((block) => block.id === 'icon')?.data as { url?: unknown } | undefined)?.url;
-      const icon = typeof url === 'string' && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(url) ? url : null;
+      const parsedIcon = typeof url === 'string'
+        ? parseBase64DataUrl(url, /^data:image\/(?:png|jpeg|webp);base64$/)
+        : null;
+      const icon = typeof url === 'string' && parsedIcon && isLooseBase64Chars(parsedIcon.payload) ? url : null;
       return name ? { name, icon } : null;
     }).catch(() => {
       identities.delete(key);
