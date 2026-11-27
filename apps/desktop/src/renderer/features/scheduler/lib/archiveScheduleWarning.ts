@@ -287,12 +287,12 @@ async function resolveActiveBoundSchedules(
         const scheduleKey = `${deviceId ?? ''}\0${schedule.id}`;
         if (seenScheduleKeys.has(scheduleKey)) continue;
         seenScheduleKeys.add(scheduleKey);
-        const source = (schedule as Partial<Schedule>).source;
         bound.push({
           id: schedule.id,
           name: schedule.name,
           deviceId: deviceId ?? null,
-          deletable: source !== 'project',
+          // 仅明确声明 source === 'user' 时允许从归档框删除；project、bot 或旧远程端省略 source 时默认禁止删除。
+          deletable: schedule.source === 'user',
         });
       }
     }

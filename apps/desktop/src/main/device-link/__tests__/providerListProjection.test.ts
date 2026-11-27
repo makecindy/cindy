@@ -83,6 +83,9 @@ describe('schedule binding list projection', () => {
       { ...fields, id: 'second', recurring: false },
       { ...fields, id: 'persistent', persistentSession: true },
       { ...fields, id: 'explicit-off', persistentSession: false },
+      { ...fields, id: 'user-source', source: 'user' },
+      { ...fields, id: 'project-source', source: 'project' },
+      { ...fields, id: 'unknown-source', source: 'unexpected' },
       { ...fields, id: 'expired', status: 'expired' },
       { ...fields, id: 'unbound', targetSessionId: undefined },
       // The pre-run command never crosses the tunnel.
@@ -96,11 +99,14 @@ describe('schedule binding list projection', () => {
       { ...fields, id: 'second', recurring: false },
       { ...fields, id: 'persistent', persistentSession: true },
       { ...fields, id: 'explicit-off' },
+      { ...fields, id: 'user-source', source: 'user' },
+      { ...fields, id: 'project-source', source: 'project' },
+      { ...fields, id: 'unknown-source' },
       { ...fields, id: 'pr' },
     ]);
     expect(JSON.stringify(projected)).not.toContain('gate.mjs');
     expect(Buffer.byteLength(JSON.stringify(full))).toBeGreaterThan(4 * 1024 * 1024);
-    expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(1024);
+    expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(1536);
   });
   it('keeps existing local/mobile/old-controller list responses intact without explicit opt-in', () => {
     const full = [{ ...fields, prompt: 'execution config' }];

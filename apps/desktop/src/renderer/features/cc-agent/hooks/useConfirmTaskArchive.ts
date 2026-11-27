@@ -50,7 +50,7 @@ function normalizeSchedules(
 ): ActiveBoundSchedule[] {
   return items.map((item) =>
     typeof item === 'string'
-      ? { id: item, name: item, deviceId: null, deletable: true }
+      ? { id: item, name: item, deviceId: null, deletable: false }
       : item,
   );
 }

@@ -418,10 +418,12 @@ describe('loadActiveBoundSchedules and deleteBoundSchedules', () => {
     });
   });
 
-  it('区分可删除的用户自动化与不可从归档框删除的 project 自动化', async () => {
+  it('区分可删除的用户自动化与不可从归档框删除的 project/bot/缺失来源自动化', async () => {
     mocks.getSnapshot.mockReturnValue([
       { id: 'u1', name: 'PR #1', status: 'active', source: 'user', targetSessionId: 'task' },
       { id: 'p1', name: 'Repo Lint', status: 'active', source: 'project', targetSessionId: 'task' },
+      { id: 'b1', name: 'Bot Check', status: 'active', source: 'bot', targetSessionId: 'task' },
+      { id: 'x1', name: 'Unknown Local', status: 'active', targetSessionId: 'task' },
     ]);
 
     const result = await loadActiveBoundSchedules([{ id: 'task' }]);
@@ -429,6 +431,41 @@ describe('loadActiveBoundSchedules and deleteBoundSchedules', () => {
     expect(result.get('task')).toEqual([
       { id: 'u1', name: 'PR #1', deviceId: null, deletable: true },
       { id: 'p1', name: 'Repo Lint', deviceId: null, deletable: false },
+      { id: 'b1', name: 'Bot Check', deviceId: null, deletable: false },
+      { id: 'x1', name: 'Unknown Local', deviceId: null, deletable: false },
+    ]);
+  });
+
+  // PR #13451 P1 regression: remote sessionBindings previously dropped `source`, causing
+  // `source !== 'project'` to mark remote project automations (and legacy hosts omitting source)
+  // as deletable. Covers both fresh remote invoke and mirrored fallback (unit tier).
+  it('远程自动化保留 source 区分 user/project，且旧端未提供 source 时默认禁止删除', async () => {
+    mocks.invoke.mockResolvedValueOnce([
+      { id: 'ru', name: 'Remote PR', status: 'active', source: 'user', targetSessionId: 'r-task', cronExpr: '* * * * *' },
+      { id: 'rp', name: 'Remote Repo', status: 'active', source: 'project', targetSessionId: 'r-task', cronExpr: '* * * * *' },
+      { id: 'rl', name: 'Legacy Remote', status: 'active', targetSessionId: 'r-task', cronExpr: '* * * * *' },
+    ]);
+
+    const fresh = await loadActiveBoundSchedules([{ id: 'r-task', deviceLinkDeviceId: 'mac-2' }]);
+    expect(fresh.get('r-task')).toEqual([
+      { id: 'ru', name: 'Remote PR', deviceId: 'mac-2', deletable: true },
+      { id: 'rp', name: 'Remote Repo', deviceId: 'mac-2', deletable: false },
+      { id: 'rl', name: 'Legacy Remote', deviceId: 'mac-2', deletable: false },
+    ]);
+
+    // Mirror fallback when live invoke fails must apply the same fail-closed rule.
+    mocks.invoke.mockRejectedValueOnce(new Error('offline'));
+    mocks.getSessionScheduleBindings.mockReturnValueOnce([
+      { id: 'mu', name: 'Mirrored User', status: 'active', source: 'user', targetSessionId: 'r-task', cronExpr: '* * * * *', manual: false },
+      { id: 'mp', name: 'Mirrored Project', status: 'active', source: 'project', targetSessionId: 'r-task', cronExpr: '* * * * *', manual: false },
+      { id: 'ml', name: 'Mirrored Legacy', status: 'active', targetSessionId: 'r-task', cronExpr: '* * * * *', manual: false },
+    ]);
+
+    const mirrored = await loadActiveBoundSchedules([{ id: 'r-task', deviceLinkDeviceId: 'mac-2' }]);
+    expect(mirrored.get('r-task')).toEqual([
+      { id: 'mu', name: 'Mirrored User', deviceId: 'mac-2', deletable: true },
+      { id: 'mp', name: 'Mirrored Project', deviceId: 'mac-2', deletable: false },
+      { id: 'ml', name: 'Mirrored Legacy', deviceId: 'mac-2', deletable: false },
     ]);
   });
 
