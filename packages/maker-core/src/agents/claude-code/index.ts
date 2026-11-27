@@ -49,6 +49,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { discoverSubagentDefinitions } from './subagent-definitions.js';
 import { spawnObservedClaudeProcess } from './local-process-spawn.js';
+import { claudeLongLivedTokenFile, claudeLongLivedTokenFileVersion } from './cli-login-status.js';
 import { claudeMcpServerToolsReport, type ClaudeMcpServerStatusEntry } from './mcp-server-tools.js';
 import { callClaudeToolCatalog } from './native-tool-catalog.js';
 import {
@@ -886,19 +887,25 @@ export function setClaudeSupportedModelsListener(
  * 5h / 7d 余量改由 CLI 自己上报的 SDK `rate_limit_event` 提供。只对本机订阅会话
  * (nativeCliAuth)转发;listener 抛错不影响会话。
  */
-let rateLimitInfoListener: ((info: unknown, account?: NativeSubscriptionAccount) => void) | null = null;
+let rateLimitInfoListener: ((info: unknown, account?: NativeSubscriptionAccount, longLivedTokenVersion?: string | null) => void) | null = null;
 
 /** host 注入订阅会话 rate_limit_event 捕获回调;传 null 解除。 */
-export function setClaudeRateLimitInfoListener(listener: ((info: unknown, account?: NativeSubscriptionAccount) => void) | null): void {
+export function setClaudeRateLimitInfoListener(
+  listener: ((info: unknown, account?: NativeSubscriptionAccount, longLivedTokenVersion?: string | null) => void) | null,
+): void {
   rateLimitInfoListener = listener;
 }
 
-function notifyRateLimitInfo(rawMsg: unknown, account?: NativeSubscriptionAccount): void {
+function notifyRateLimitInfo(
+  rawMsg: unknown,
+  account?: NativeSubscriptionAccount,
+  longLivedTokenVersion: string | null = null,
+): void {
   if (!rateLimitInfoListener) return;
   const info = (rawMsg as { rate_limit_info?: unknown } | null)?.rate_limit_info;
   if (!info || typeof info !== 'object') return;
   try {
-    rateLimitInfoListener(info, account);
+    rateLimitInfoListener(info, account, longLivedTokenVersion);
   } catch {
     /* listener 异常不得打断事件循环 */
   }
@@ -1121,6 +1128,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         nativeCliAuth: true,
         subagentModel: null,
       });
+      const probeTokenFile = claudeLongLivedTokenFile(env.CLAUDE_CONFIG_DIR);
       q = sdkQuery({
         prompt: idleInput as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
@@ -1128,6 +1136,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           cwd: probeDir,
           pathToClaudeCodeExecutable: this.deps.binaryPath,
           env,
+          // An account on a long-lived token is probed with the credential its tasks use.
+          ...(probeTokenFile
+            ? { spawnClaudeCodeProcess: (spawnOptions) => spawnObservedClaudeProcess({ spawnOptions, oauthTokenFile: probeTokenFile }) }
+            : {}),
         },
       });
       const query = q;
@@ -2395,8 +2407,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     };
     const pendingInteractions = new Map<string, PendingEntry>();
 
+    const CLAUDE_ASK_USER_QUESTION_DISMISSED_MESSAGE =
+      'The question was dismissed before the user answered it. Do not assume an answer or proceed as if the user approved; ask again if needed or wait for the user.';
+
     function safeDefaultDecision(kind: InteractionRequest['kind'], reason: string): InteractionDecision {
-      if (kind === 'ask_user_question') return { kind: 'ask_user_question', answers: {} };
+      if (kind === 'ask_user_question') return { kind: 'ask_user_question', answers: {}, dismissed: true };
+      if (kind === 'plan_review') return { kind: 'plan_review', behavior: 'deny', reason, dismissed: true };
       return { kind, behavior: 'deny', reason } as InteractionDecision;
     }
 
@@ -2462,7 +2478,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const dismissedPayload: InteractionDismissedEvent = {
           requestId,
           reason,
-          resolvedAs: resolveAs,
+          resolvedAs: entry.kind === 'ask_user_question' ? 'deny' : resolveAs,
         };
         eventQueue.push({ type: 'interaction_dismissed', data: dismissedPayload, source: 'claude-code' });
       }
@@ -2475,8 +2491,7 @@ export class ClaudeCodeAgent extends BaseAgent {
       entry.settled = true;
       pendingInteractions.delete(requestId);
       entry.resolve(safeDefaultDecision(entry.kind, reason));
-      const resolvedAs = entry.kind === 'ask_user_question' ? 'allow' : 'deny';
-      eventQueue.push({ type: 'interaction_dismissed', data: { requestId, reason, resolvedAs }, source: 'claude-code' });
+      eventQueue.push({ type: 'interaction_dismissed', data: { requestId, reason, resolvedAs: 'deny' }, source: 'claude-code' });
     }
 
     function dismissDirectorySensitivePending(reason: string): void {
@@ -2566,6 +2581,12 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (decision.kind !== 'ask_user_question') {
           log.warn('AskUserQuestion got mismatched decision', { decKind: decision.kind });
           return { behavior: 'deny', message: 'resolver kind mismatch' };
+        }
+        if (decision.dismissed === true) {
+          return {
+            behavior: 'deny',
+            message: CLAUDE_ASK_USER_QUESTION_DISMISSED_MESSAGE,
+          };
         }
         // 澄清答案同样改变本轮授权范围(用户把范围从 src/ 收窄到 build/ 后,后续 `rm -rf src` 必须按
         // 澄清后的意图裁决)→ 并入有界 review intent 并清空决策缓存,否则 reviewer 仍按原含糊请求
@@ -2997,13 +3018,15 @@ export class ClaudeCodeAgent extends BaseAgent {
       const settings = buildClaudeFlagSettings({
         showThinkingSummaries,
         availableModels: currentAvailableSdkModels(mutableModel),
-        // Bots keep memory in their own Cindy scope, including remote sessions.
-        // For ordinary sessions, do not carry native-memory suppression across the
-        // SSH boundary: the remote host retains its own Claude memory
-        // configuration. Maker Memory on remote sessions is injected via the
-        // host bridge (prompt + http MCP), which coexists with — but does not
-        // rewrite — the remote machine's native memory settings.
-        memoryOverride: reviewMode || isolatedBotProfile(opts.botRuntimeProfile) ? false : opts.remoteHostId ? undefined : this.memoryOverride,
+        // Bots (both V1 and V2 project teammates, including remote sessions) keep memory
+        // in their own Cindy scope, never in Claude's native ~/.claude/projects/.../memory/
+        // directory.
+        // For ordinary non-bot sessions, do not carry native-memory suppression across the
+        // SSH boundary: the remote host retains its own Claude memory configuration. Maker
+        // Memory on ordinary remote sessions is injected via the host bridge (prompt + http
+        // MCP), which coexists with — and does not rewrite — the remote machine's native
+        // memory settings.
+        memoryOverride: reviewMode || opts.botRuntimeProfile || opts.makerMemorySwitchOwned ? false : opts.remoteHostId ? undefined : this.memoryOverride,
         // Fast 模式:进 flag settings 层(= --settings),解锁 cc 二进制在 Agent SDK 通道下的
         // fast(否则二进制按 "Agent SDK 不可用" 拒绝)。是否 Opus/官方/firstParty 由二进制把关,
         // agent 层不重复硬判(规则 9:确定性逻辑就近,但 fast 的最终门槛是二进制 + 配置门控)。
@@ -3289,6 +3312,7 @@ export class ClaudeCodeAgent extends BaseAgent {
     // retrying that no-op and treating a transport failure as fatal would close
     // an otherwise safe session.
     const nativeAutoQueries = new WeakSet<Query>();
+    const queryLongLivedTokenVersions = new WeakMap<Query, { version: string | null }>();
 
     /**
      * **本次 turn** 目标 SDK 权限档: 只看 `planTurnActive`(本轮是否 plan turn), **不含**
@@ -3530,8 +3554,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       let awaitingToolResult = false;
       try {
         const result = await approve();
-        const decision = result as { kind?: string; behavior?: string } | null;
-        awaitingToolResult = decision?.behavior === 'allow' || decision?.kind === 'ask_user_question';
+        const decision = result as { kind?: string; behavior?: string; dismissed?: boolean } | null;
+        awaitingToolResult = decision?.behavior === 'allow'
+          || (decision?.kind === 'ask_user_question' && decision?.behavior !== 'deny' && decision?.dismissed !== true);
         return result;
       } finally {
         // Allowed tools stay protected until tool_result. Denial / failure may
@@ -4116,7 +4141,22 @@ export class ClaudeCodeAgent extends BaseAgent {
                 questions: (params.questions ?? askInput.questions ?? []) as AskUserQuestionItem[],
               });
               if (decision.kind !== 'ask_user_question') {
-                return { kind: 'ask_user_question', answers: {} };
+                return {
+                  kind: 'ask_user_question',
+                  behavior: 'deny',
+                  answers: {},
+                  dismissed: true,
+                  reason: 'resolver kind mismatch',
+                };
+              }
+              if (decision.dismissed === true) {
+                return {
+                  kind: 'ask_user_question',
+                  behavior: 'deny',
+                  answers: {},
+                  dismissed: true,
+                  reason: CLAUDE_ASK_USER_QUESTION_DISMISSED_MESSAGE,
+                };
               }
               // 远端澄清同样改变本轮授权范围(用户把范围从 src/ 收窄到 build/)→ 与本地 AskUserQuestion
               // 分支一致地并入有界 review intent 并清空裁决缓存,否则后续工具仍按澄清前的意图裁决、
@@ -4562,6 +4602,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         await mcpSelectionReady;
         yield* inputQueue;
       };
+      const localSettingSources: ('user' | 'project' | 'local')[] =
+        reviewMode || !!isolatedBotProfile(opts.botRuntimeProfile) || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
+          ? []
+          : hosted ? ['project', 'local'] : ['user', 'project', 'local'];
+      const localQueryTokenRef: { version: string | null } = { version: null };
       const createLocalQueryArgs = (): Parameters<typeof sdkQuery>[0] => ({
         prompt: (requestedHostSkips.length ? selectedInput() : inputQueue) as unknown as Parameters<typeof sdkQuery>[0]['prompt'],
         options: {
@@ -4624,11 +4669,26 @@ export class ClaudeCodeAgent extends BaseAgent {
           ...(finalResumeAt ? { resumeSessionAt: finalResumeAt } : {}),
           ...(finalFork ? { forkSession: true } : {}),
           env,
-          ...(this.deps.registerLocalAgentProcess || this.deps.trackCcDebugFile
+          ...(this.deps.registerLocalAgentProcess || this.deps.trackCcDebugFile || nativeCliAuth
             ? {
-                spawnClaudeCodeProcess: (spawnOptions) =>
-                  spawnObservedClaudeProcess({
+                spawnClaudeCodeProcess: (spawnOptions) => {
+                  if (nativeCliAuth && process.platform === 'win32') {
+                    localQueryTokenRef.version = localSettingSources.includes('user')
+                      ? claudeLongLivedTokenFileVersion('settings', spawnOptions.env.CLAUDE_CONFIG_DIR) ?? null
+                      : null;
+                  }
+                  return spawnObservedClaudeProcess({
                     spawnOptions,
+                    // 订阅账号改用长期令牌后,每次拉起 CLI(含会话中途重建)都把令牌文件的句柄交给它;
+                    // 不依赖用户级设置,设备托管与隔离伙伴会话同样拿得到。本进程不读令牌内容。
+                    ...(nativeCliAuth
+                      ? {
+                          oauthTokenFile: claudeLongLivedTokenFile(spawnOptions.env.CLAUDE_CONFIG_DIR),
+                          ...(process.platform !== 'win32'
+                            ? { onOAuthTokenVersion: (version: string | null) => { localQueryTokenRef.version = version; } }
+                            : {}),
+                        }
+                      : {}),
                     registerProcess: (pid) =>
                       this.deps.registerLocalAgentProcess?.({
                         pid,
@@ -4654,7 +4714,8 @@ export class ClaudeCodeAgent extends BaseAgent {
                         log.info('Claude Code SDK process exited', details);
                       }
                     },
-                  }),
+                  });
+                },
               }
             : {}),
           // 订阅 token 到期续命回调 —— 仅当本次 spawn 实际注入了订阅 OAuth token
@@ -4694,9 +4755,7 @@ export class ClaudeCodeAgent extends BaseAgent {
             ? { tools: [...DEVICE_HOSTED_GUEST_CLAUDE_TOOLS] } : {}),
           // 设备托管：个人配置(用户级设置、hooks)属于任务所在电脑，不加载本机用户级设置；
           // 项目级设置来自同步过来的影子目录(只保留权限规则)。
-          settingSources: reviewMode || !!isolatedBotProfile(opts.botRuntimeProfile) || opts[LOCAL_AGENT_CLIENT]?.hostToolsOnly
-            ? []
-            : hosted ? ['project', 'local'] : ['user', 'project', 'local'],
+          settingSources: localSettingSources,
           // Settings (SDK "flag settings" 层, 优先级最高 — 覆盖 user/project/local 文件层):
           //  - showThinkingSummaries        : reasoning summary 展示开关
           //  - autoMemoryEnabled / autoDream: memory 联动 (host 通过 runtimeConfig.memoryEnabled 或
@@ -4777,6 +4836,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           }
         };
       }
+      queryLongLivedTokenVersions.set(query, localQueryTokenRef);
       if (sdkStartPermissionMode === 'auto') nativeAutoQueries.add(query);
       if (modelUsageCumulativeStartsAtZero) modelUsageStartsAtZeroQueries.add(query);
       if (nativeCliAuth && typeof query.applyFlagSettings === 'function') {
@@ -5950,7 +6010,9 @@ export class ClaudeCodeAgent extends BaseAgent {
             const rawSubtype = (rawMsg as { subtype?: string } | null)?.subtype;
             const rawStatus = (rawMsg as { status?: string } | null)?.status;
             // 只旁路取值,消息照常往下走(与改动前的处理顺序一致)。
-            if (rawType === 'rate_limit_event' && nativeCliAuth) notifyRateLimitInfo(rawMsg, nativeSubscriptionAccount);
+            if (rawType === 'rate_limit_event' && nativeCliAuth) {
+              notifyRateLimitInfo(rawMsg, nativeSubscriptionAccount, queryLongLivedTokenVersions.get(currentQ)?.version ?? null);
+            }
             const isTerminalTaskNotification =
               rawType === 'system' &&
               rawSubtype === 'task_notification' &&

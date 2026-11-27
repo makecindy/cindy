@@ -113,6 +113,8 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
   DropdownMenuItem: ({ children, disabled, onSelect }: { children: ReactNode; disabled?: boolean; onSelect?: () => void }) =>
     createElement('div', { role: 'menuitem', 'aria-disabled': disabled || undefined, onClick: disabled ? undefined : onSelect }, children),
   DropdownMenuSeparator: () => null,
+  DropdownMenuShortcut: ({ children }: { children: ReactNode }) =>
+    createElement('span', { 'aria-hidden': true }, children),
   DropdownMenuSub: ({ children }: { children: ReactNode }) => children,
   DropdownMenuSubContent: () => null,
   DropdownMenuSubTrigger: ({ children }: { children: ReactNode }) => children,
@@ -1465,5 +1467,127 @@ describe('SessionCard visual cases', () => {
       expect(titleRow.className).not.toMatch(/(?:^|\s)pr-14(?:\s|$)/);
       expect(titleRow.className).not.toContain('group-hover/card:pr-14');
     });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：真实渲染 SessionItem / SessionCard（text / list / card 三种置顶形态），
+  //   验证收件箱模式下置顶项显示项目图标、隐藏项目名与自动化标识，且不显示稍后处理／完成／更多／归档按钮，
+  //   右键菜单仍可用且不含稍后处理；已归档项保留取消归档。
+  // - Bug／规则依据：docs/product-rules/task-inbox.md「收件箱项目图标」（2026-11-26 用户决定）。
+  // - 现有覆盖缺口：此前用例只测普通模式与 TaskInbox，未覆盖 inboxMode + hideInboxActions 的三形态。
+  // - 最小失败输入：带 workingDir、sourceLabel 和已绑定自动化的置顶任务在 inboxMode + hideInboxActions 下渲染。
+  // - tier：unit（jsdom 组件渲染，复用本文件现有测试环境，无网络或磁盘 I/O）。
+  describe('收件箱模式下的置顶项显示规则', () => {
+    let electronApiDescriptor: PropertyDescriptor | undefined;
+    beforeEach(() => {
+      electronApiDescriptor = Object.getOwnPropertyDescriptor(window, 'electronAPI');
+      Object.defineProperty(window, 'electronAPI', {
+        configurable: true,
+        value: {
+          localDb: {
+            projectAliases: {
+              snapshot: vi.fn().mockResolvedValue({
+                aliases: [],
+                icons: {},
+                platform: 'darwin',
+                settingsVersion: 3,
+              }),
+              onChanged: vi.fn(() => () => {}),
+            },
+          },
+        },
+      });
+    });
+    afterEach(() => {
+      if (electronApiDescriptor) {
+        Object.defineProperty(window, 'electronAPI', electronApiDescriptor);
+      } else {
+        Reflect.deleteProperty(window, 'electronAPI');
+      }
+    });
+
+    const baseSession = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc')!.session;
+    const pinnedProjectTask: Session = {
+      ...baseSession,
+      id: 'pinned-inbox-task',
+      title: '置顶项目任务',
+      pinnedAt: '2026-11-26T00:00:00.000Z',
+      workspaceKind: 'project',
+      workingDir: '/workspace/Cindy',
+      source: 'scheduler',
+    };
+    const baseProps = {
+      isActive: false,
+      isRunning: false,
+      isAttached: false,
+      hasAttentionNotification: false,
+      isSelected: false,
+      sourceLabel: 'Cindy',
+      onClick: vi.fn(),
+      onAction: vi.fn(),
+      onRename: vi.fn(),
+      onTogglePin: vi.fn(),
+      projectOptions: [],
+    };
+    const renderVariant = (
+      variant: 'text' | 'list' | 'card',
+      overrides: Record<string, unknown> = {},
+    ) =>
+      render(
+        variant === 'text'
+          ? createElement(SessionItem, { ...baseProps, session: pinnedProjectTask, ...overrides })
+          : createElement(SessionCard, { ...baseProps, session: pinnedProjectTask, variant, ...overrides }),
+      );
+
+    it.each(['text', 'list', 'card'] as const)(
+      '%s: 沿用收件箱显示（项目图标、无项目名与自动化标识）且不显示稍后处理／完成按钮',
+      (variant) => {
+        mocks.boundSchedulesBySession.set(pinnedProjectTask.id, [
+          scheduleForCase(pinnedProjectTask.id, 'active'),
+        ]);
+        const { container } = renderVariant(variant, { inboxMode: true, hideInboxActions: true });
+
+        // 行首 / 卡片底栏显示项目图标，不显示内联项目名与自动化标识。
+        expect(container.querySelector('[data-project-monogram]')).not.toBeNull();
+        expect(container.querySelector('[data-project-source]')).toBeNull();
+        expect(container.querySelector('.lucide-timer')).toBeNull();
+        expect(screen.queryByRole('button', { name: '查看自动化任务' })).toBeNull();
+        expect(screen.queryByRole('button', { name: '绑定自动化任务' })).toBeNull();
+
+        // 不显示稍后处理、完成、更多、归档按钮；悬停不把时间槽隐藏。
+        expect(container.querySelectorAll('button')).toHaveLength(0);
+        if (variant === 'card') {
+          expect(container.querySelector('.peer\\/card-actions')).toBeNull();
+          expect(container.querySelector('[class*="group-hover/card:pr-"]')).toBeNull();
+        } else {
+          const infoSlot = container.querySelector<HTMLElement>('.group\\/slot')!;
+          expect(infoSlot.querySelector('[class*="group-hover:opacity-0"]')).toBeNull();
+          expect(infoSlot.querySelector('[class*="group-hover/card:opacity-0"]')).toBeNull();
+        }
+
+        // 右键菜单仍可用，且不包含稍后处理。
+        const row = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
+        fireEvent.contextMenu(row);
+        const menu = screen.getByRole('menu');
+        expect(within(menu).getByRole('menuitem', { name: '取消置顶' })).toBeTruthy();
+        expect(within(menu).queryByText('ccAgent.sidebar.inbox.snooze')).toBeNull();
+      },
+    );
+
+    it.each(['text', 'list', 'card'] as const)(
+      '%s: 已归档置顶项在收件箱模式下保留取消归档按钮',
+      (variant) => {
+        const archivedPinned: Session = { ...pinnedProjectTask, status: 'archived' };
+        const { container } = renderVariant(variant, {
+          session: archivedPinned,
+          inboxMode: true,
+          hideInboxActions: true,
+        });
+        expect(within(container).getByRole('button', { name: '取消归档' })).toBeTruthy();
+        expect(within(container).queryByRole('button', { name: 'ccAgent.sidebar.inbox.complete' })).toBeNull();
+        expect(within(container).queryByRole('button', { name: 'ccAgent.sidebar.inbox.snooze' })).toBeNull();
+        expect(within(container).queryByRole('button', { name: 'ccAgent.sidebar.sessionMenu.moreActions' })).toBeNull();
+      },
+    );
   });
 });

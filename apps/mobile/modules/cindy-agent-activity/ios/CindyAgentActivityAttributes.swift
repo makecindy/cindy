@@ -14,6 +14,9 @@ struct CindyAgentActivityAttributes: ActivityAttributes {
     var staleDetail: String
     // Unix seconds. Optional so existing APNs payloads and installed activities decode.
     var confirmedAt: Double?
+    // Companion the selected task speaks for while it waits or has replied. Optional:
+    // APNs payloads and older JS omit it and keep the Cindy mascot.
+    var companion: Companion?
 
     var freshnessInterval: TimeInterval {
       // Long tasks routinely outlive a brief lock-screen visit. Preserve a useful
@@ -30,4 +33,13 @@ struct CindyAgentActivityAttributes: ActivityAttributes {
     var noticeCount: Int { max(0, count - runningCount) }
   }
   var accountId: String
+
+  /// Mirrors `HostTaskActivityCompanion` (packages/device-link) and the desktop Live Activity.
+  struct Companion: Codable, Hashable {
+    var hue: String
+    var glyph: String
+    var glyphIsInitial: Bool
+    /// Bounded JPEG thumbnail (base64, at most 2 KB) when the companion has artwork.
+    var imageJpeg: String?
+  }
 }

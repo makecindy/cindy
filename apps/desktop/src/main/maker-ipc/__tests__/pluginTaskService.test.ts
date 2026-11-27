@@ -498,6 +498,8 @@ function useProductionPermissionCreator(f: ReturnType<typeof fixture>, configure
     PluginTaskError, isPluginTaskPermissionAllowed, createPluginTaskSession: persist,
     clampPluginTaskPermissionMode: (mode: unknown) => mode ?? 'ask', snapshot,
     getCurrentDbClientSnapshot: () => snapshot, isPluginTaskAuthorized: () => true,
+    pendingPluginGroupStarts: new Map(), pluginGroupKey: () => '',
+    modelGroupSessionStart: { attach: () => {} },
   };
   f.deps.readPermissionMode = () => useDefaults ? configured.permissionMode : undefined;
   f.deps.createSession = new Function(...Object.keys(deps), permissionCreatorCode)(...Object.values(deps));

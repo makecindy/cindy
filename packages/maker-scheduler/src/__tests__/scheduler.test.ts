@@ -9,12 +9,18 @@ import {
 import type {
   Schedule,
   ScheduleRun,
+  SchedulerEvent,
   CreateScheduleInput,
   ListFilter,
 } from '../types.js';
 import type { ScheduleStorage } from '../interfaces/schedule-storage.js';
 import type { FireContext, FireResult, ScheduleRunner } from '../interfaces/schedule-runner.js';
 import type { Logger } from '../interfaces/logger.js';
+import {
+  isTransientPrecheckHookFailure,
+  TRANSIENT_PRECHECK_ESCALATION_MS,
+  type TransientPrecheckOutageState,
+} from '../precheck-transient.js';
 
 class InMemoryStorage implements ScheduleStorage {
   schedules = new Map<string, Schedule>();
@@ -79,6 +85,36 @@ class InMemoryStorage implements ScheduleStorage {
   async hasUnfinishedRuns(scheduleId: string): Promise<boolean> {
     return [...this.runs.values()].some((r) => r.scheduleId === scheduleId &&
       (r.status === 'running' || r.status === 'interrupted'));
+  }
+  async getTransientPrecheckOutageState(
+    scheduleId: string,
+    excludeRunId: string,
+  ): Promise<TransientPrecheckOutageState> {
+    const runs = [...this.runs.values()].filter((r) => r.scheduleId === scheduleId);
+    let firstUnrecoveredFiredAt: number | null = null;
+    let lastEscalatedFiredAt: number | null = null;
+    for (const run of runs) {
+      if (run.id === excludeRunId) continue;
+      if (run.status !== 'failed' && run.status !== 'interrupted') continue;
+      if (!isTransientPrecheckHookFailure(run.preRunHookResult)) continue;
+      const recovered = runs.some(
+        (other) =>
+          (other.firedAt > run.firedAt || (other.firedAt === run.firedAt && other.id > run.id)) &&
+          (other.status === 'success' ||
+            (['skipped', 'success', 'failed'].includes(other.status) &&
+              other.preRunHookResult?.checkSucceeded === true)),
+      );
+      if (recovered) continue;
+      if (firstUnrecoveredFiredAt === null || run.firedAt < firstUnrecoveredFiredAt) {
+        firstUnrecoveredFiredAt = run.firedAt;
+      }
+      if (run.preRunHookResult?.transientQuiet !== true) {
+        if (lastEscalatedFiredAt === null || run.firedAt > lastEscalatedFiredAt) {
+          lastEscalatedFiredAt = run.firedAt;
+        }
+      }
+    }
+    return { firstUnrecoveredFiredAt, lastEscalatedFiredAt };
   }
   async deleteRun(id: string, options?: { excludeBotSchedules?: boolean }): Promise<ScheduleRun | null> {
     const ex = this.runs.get(id);
@@ -3596,9 +3632,12 @@ describe('Scheduler', () => {
       .resolves.toMatchObject({ agentKind: 'acp', targetSessionId: 'task-acp' });
     await expect(h.scheduler.create({ ...baseInput, agentKind: 'acp', modelAgentKind: 'codex', model: 'gpt-5', providerId: 'openai', targetSessionId: 'task-acp' }))
       .resolves.toMatchObject({ agentKind: 'acp', modelAgentKind: 'codex', model: 'gpt-5', targetSessionId: 'task-acp' });
+    // 2026-11-27: persistent plugin-engine automations are supported before and after binding.
+    await expect(h.scheduler.create({ ...baseInput, ...engine, persistentSession: true }))
+      .resolves.toMatchObject({ ...engine, persistentSession: true });
+    await expect(h.scheduler.create({ ...baseInput, ...engine, targetSessionId: 'task-1', persistentSession: true }))
+      .resolves.toMatchObject({ ...engine, targetSessionId: 'task-1', persistentSession: true });
     for (const extra of [
-      { persistentSession: true },
-      { targetSessionId: 'task-1', persistentSession: true },
       { agentDeviceId: 'invalid/device id' },
       { targetSessionId: 'task-1', modelAgentDeviceId: 'invalid/device id' },
       { primaryHostKey: 'tidy-host', agentDeviceId: 'studio-mac' },
@@ -4904,6 +4943,197 @@ describe('Scheduler', () => {
     // (这里 baseInput 没跑过 → undefined),否则顺延却显示成"已触发",且 Once 任务
     // 重启会因 lastFiredAt 已设而吞掉重试。
     expect(after?.lastFiredAt).toBeUndefined();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：Scheduler.tick 连续顺延超过 3 次后按阶梯退避（封顶 15 分钟）拉长 nextFireAt，并在第 5 次起输出结构化 warn 日志与带 deferReason/consecutiveDeferrals 的 deferred 事件；正常执行或 pause/resume 后计数清零。
+  // - Bug／规则依据：修复绑定任务卡在 90 秒无限静默顺延黑洞、零日志且持续空转的线上问题。
+  // - 现有覆盖缺口：既有 deferred 用例仅验证单次顺延的 nextFireAt = fireTime + RETRY，未覆盖连续顺延退避、诊断告警与恢复重置。
+  // - 最小失败输入与 tier：unit，内存 fake clock + runner 连续返回 12 次 { deferred: true, deferRetryMs: 90_000, deferReason: 'already-queued' } 后恢复成功。
+  it('escalates retry delay and logs warning on sustained consecutive deferrals, then resets after running', async () => {
+    const RETRY = 90_000;
+    let shouldDefer = true;
+    const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+    const local = makeHarness({
+      logger,
+      runnerImpl: async (s) =>
+        shouldDefer
+          ? { sessionId: `sess-${s.id}`, deferred: true, deferRetryMs: RETRY, deferReason: 'already-queued' }
+          : { sessionId: `sess-${s.id}`, resultText: 'ok' },
+    });
+    const deferredEvents: Array<{ deferReason?: string; consecutiveDeferrals?: number }> = [];
+    local.scheduler.on('deferred', (e) => {
+      deferredEvents.push({ deferReason: e.deferReason, consecutiveDeferrals: e.consecutiveDeferrals });
+    });
+    const sch = await local.scheduler.create({ ...baseInput });
+    const observedDelays: number[] = [];
+    let now = Date.UTC(2026, 0, 1, 0, 1, 5);
+    for (let i = 0; i < 11; i += 1) {
+      local.clock.setTo(now);
+      await local.scheduler.tick();
+      const row = await local.storage.get(sch.id);
+      const delay = (row?.nextFireAt ?? 0) - now;
+      observedDelays.push(delay);
+      now = row!.nextFireAt!;
+    }
+    // 1-3: 90s; 4-6: 180s; 7-10: 360s; 11+: 900s (15 min cap)
+    expect(observedDelays).toEqual([
+      90_000, 90_000, 90_000,
+      180_000, 180_000, 180_000,
+      360_000, 360_000, 360_000, 360_000,
+      900_000,
+    ]);
+    expect(deferredEvents[0]).toEqual({ deferReason: 'already-queued', consecutiveDeferrals: 1 });
+    expect(deferredEvents[4]).toEqual({ deferReason: 'already-queued', consecutiveDeferrals: 5 });
+    expect(logger.warn).toHaveBeenCalledWith(
+      'schedule repeatedly deferred without running',
+      expect.objectContaining({
+        scheduleId: sch.id,
+        consecutiveDeferrals: 5,
+        deferReason: 'already-queued',
+        nextRetryMs: 180_000,
+      }),
+    );
+
+    // Once a real run settles, the deferral streak resets back to fast 90s retry.
+    shouldDefer = false;
+    local.clock.setTo(now);
+    await local.scheduler.tick();
+    const afterSuccess = await local.storage.get(sch.id);
+    shouldDefer = true;
+    const nextDue = afterSuccess!.nextFireAt!;
+    local.clock.setTo(nextDue);
+    await local.scheduler.tick();
+    const afterResetDefer = await local.storage.get(sch.id);
+    expect(afterResetDefer!.nextFireAt! - nextDue).toBe(RETRY);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：卡死守卫 forceReleaseStalledRun 收口（自动 fireOne 与手动 runNow 两条路径）会立即清零此前的连续顺延计数，避免恢复后的首轮顺延直接沿用旧退避；被弃用的旧运行随后迟到 settle 时不得抹掉新一轮已经积累的顺延计数与阶梯退避。
+  // - Bug／规则依据：PR #13327 review (Greptile P2) — 旧实现仅在 consumeAbandonedRun 迟到返回时 delete consecutiveDeferrals，导致守卫收口后下一轮沿用旧计数、旧运行迟到返回时反清掉新计数。
+  // - 现有覆盖缺口：既有连续顺延用例仅验证正常 settle 后的重置，未覆盖守卫强制收口与迟到 settle 交错的时序。
+  // - 最小失败输入与 tier：unit，fake timers + fake clock，先连续顺延 4 次进入 180s 退避，再分别让 fireOne 与 runNow 卡死触发守卫收口、随后新轮次连续顺延 2 次、再迟到 resolve 旧运行并继续顺延 2 次。
+  it('resets deferral streak at stall force-release and ignores late settles of abandoned fireOne and runNow runs', async () => {
+    vi.useFakeTimers();
+    try {
+      const RETRY = 90_000;
+      let mode: 'defer' | 'hang' = 'defer';
+      const lateResolvers: Array<(result: FireResult) => void> = [];
+      const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+      const local = makeHarness({
+        logger,
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: async (s, ctx) => {
+          if (mode === 'defer') {
+            return { sessionId: `sess-${s.id}`, deferred: true, deferRetryMs: RETRY, deferReason: 'already-queued' };
+          }
+          return new Promise<FireResult>((resolve) => {
+            ctx.signal.addEventListener('abort', () => {});
+            lateResolvers.push(resolve);
+          });
+        },
+      });
+      const deferredCounts: number[] = [];
+      local.scheduler.on('deferred', (e) => {
+        if (e.consecutiveDeferrals !== undefined) deferredCounts.push(e.consecutiveDeferrals);
+      });
+      const sch = await local.scheduler.create({ ...baseInput });
+
+      const deferOnce = async (at: number): Promise<{ delay: number; nextAt: number; count: number }> => {
+        local.clock.setTo(at);
+        await local.scheduler.tick();
+        const row = await local.storage.get(sch.id);
+        return {
+          delay: (row?.nextFireAt ?? 0) - at,
+          nextAt: row!.nextFireAt!,
+          count: deferredCounts[deferredCounts.length - 1]!,
+        };
+      };
+
+      // Build an escalated deferral streak (count=4 -> 180s).
+      let now = Date.UTC(2026, 0, 1, 0, 1, 5);
+      for (let i = 0; i < 4; i += 1) {
+        const res = await deferOnce(now);
+        now = res.nextAt;
+      }
+      expect(deferredCounts.slice(-1)).toEqual([4]);
+
+      // 1. Automatic fireOne stalls and is force-released by the stall guard.
+      mode = 'hang';
+      local.clock.setTo(now);
+      const stalledAuto = local.scheduler.tick();
+      await vi.waitFor(() => expect(local.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      now += 60_001;
+      local.clock.setTo(now);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      now += 30_001;
+      local.clock.setTo(now);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(local.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+
+      // First deferral after force-release must start fresh at count=1 (90s), not inherit count=5 (180s).
+      mode = 'defer';
+      now = (await local.storage.get(sch.id))!.nextFireAt!;
+      const autoPost1 = await deferOnce(now);
+      expect(autoPost1.count).toBe(1);
+      expect(autoPost1.delay).toBe(RETRY);
+      now = autoPost1.nextAt;
+      const autoPost2 = await deferOnce(now);
+      expect(autoPost2.count).toBe(2);
+      now = autoPost2.nextAt;
+
+      // Late settle of the abandoned automatic run must NOT wipe out the new deferral streak.
+      lateResolvers.shift()!({ sessionId: `sess-${sch.id}`, resultText: 'late-auto' });
+      await stalledAuto;
+
+      const autoPost3 = await deferOnce(now);
+      expect(autoPost3.count).toBe(3);
+      expect(autoPost3.delay).toBe(RETRY);
+      now = autoPost3.nextAt;
+      const autoPost4 = await deferOnce(now);
+      expect(autoPost4.count).toBe(4);
+      expect(autoPost4.delay).toBe(RETRY * 2);
+      now = autoPost4.nextAt;
+
+      // 2. Manual runNow stalls and is force-released by the stall guard.
+      mode = 'hang';
+      local.clock.setTo(now - 10_000);
+      const stalledManual = local.scheduler.runNow(sch.id);
+      await vi.waitFor(() => expect(local.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      local.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      local.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(local.scheduler.getRuntimeSnapshot().slotsInUse).toBe(0));
+
+      // First deferral after runNow force-release must also start fresh at count=1 (90s).
+      mode = 'defer';
+      now = Math.max(local.clock.now(), (await local.storage.get(sch.id))!.nextFireAt!);
+      const manualPost1 = await deferOnce(now);
+      expect(manualPost1.count).toBe(1);
+      expect(manualPost1.delay).toBe(RETRY);
+      now = manualPost1.nextAt;
+      const manualPost2 = await deferOnce(now);
+      expect(manualPost2.count).toBe(2);
+      now = manualPost2.nextAt;
+
+      // Late settle of the abandoned runNow must NOT wipe out the new deferral streak.
+      lateResolvers.shift()!({ sessionId: `sess-${sch.id}`, resultText: 'late-manual' });
+      await stalledManual;
+
+      const manualPost3 = await deferOnce(now);
+      expect(manualPost3.count).toBe(3);
+      expect(manualPost3.delay).toBe(RETRY);
+      now = manualPost3.nextAt;
+      const manualPost4 = await deferOnce(now);
+      expect(manualPost4.count).toBe(4);
+      expect(manualPost4.delay).toBe(RETRY * 2);
+
+      await local.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('heartbeat schedule passes targetSessionId through to runner.fire', async () => {
@@ -9123,4 +9353,162 @@ it('keeps internal routine schedules out of public management while retaining ho
   await h.scheduler.runNow(publicSchedule.id);
   expect(h.runner.fire).toHaveBeenCalledTimes(2);
   await h.scheduler.stop();
+});
+
+describe('transient precheck failures stay quiet for 24h and escalate after', () => {
+  const baseHook = {
+    status: 'failed' as const,
+    decision: 'block' as const,
+    exitCode: 1,
+    durationMs: 12,
+    stdout: '',
+    stderr: '',
+    stdoutTruncated: false,
+    stderrTruncated: false,
+    timedOut: false,
+    aborted: false,
+  };
+
+  it.each([
+    ['prCheck rate-limit', { ...baseHook, prCheckDiagnosis: { kind: 'rate-limit', device: 'Mac', failures: 1, retryAt: 2000 } }, true],
+    ['prCheck timeout', { ...baseHook, prCheckDiagnosis: { kind: 'timeout', device: 'Mac', failures: 3, retryAt: 2000 } }, true],
+    ['prCheck dns', { ...baseHook, prCheckDiagnosis: { kind: 'dns', host: 'api.github.com', device: 'Mac', failures: 3, retryAt: 2000 } }, true],
+    ['generic stderr rate limit', { ...baseHook, stderr: 'API rate limit exceeded' }, true],
+    ['prCheck auth', { ...baseHook, prCheckDiagnosis: { kind: 'auth', device: 'Mac', failures: 1, retryAt: 2000 }, stderr: 'rate limit mention' }, false],
+    ['prCheck unknown', { ...baseHook, prCheckDiagnosis: { kind: 'unknown', device: 'Mac', failures: 3, retryAt: 2000 } }, false],
+    ['missingPlugin', { ...baseHook, stderr: 'API rate limit exceeded', missingPlugin: { ghostId: 'cindy-github' } }, false],
+    ['aborted hook', { ...baseHook, status: 'aborted' as const, aborted: true, stderr: 'rate limit' }, false],
+    ['ordinary precheck error', { ...baseHook, stderr: 'syntax error' }, false],
+  ])('classifies %s as transient=%s', (_label, hook, expected) => {
+    expect(isTransientPrecheckHookFailure(hook)).toBe(expected);
+  });
+
+  it('keeps transient precheck failures born-read within 24h, escalates past 24h, and resets after recovery', async () => {
+    const rateLimitHook = {
+      ...baseHook,
+      stderr: 'GitHub API rate limit reached',
+      prCheckDiagnosis: { kind: 'rate-limit', device: 'Mac', failures: 1, retryAt: 100_000 },
+    };
+    const dnsHook = {
+      ...baseHook,
+      stderr: 'lookup api.github.com: no such host',
+      prCheckDiagnosis: { kind: 'dns', host: 'api.github.com', device: 'Mac', failures: 3, retryAt: 200_000 },
+    };
+    const authHook = {
+      ...baseHook,
+      stderr: 'gh auth login required',
+      prCheckDiagnosis: { kind: 'auth', device: 'Mac', failures: 1, retryAt: 200_000 },
+    };
+    let nextStep:
+      | { kind: 'block'; hook: NonNullable<ScheduleRun['preRunHookResult']>; error: string }
+      | { kind: 'skip'; checkSucceeded?: true } = {
+        kind: 'block',
+        hook: rateLimitHook,
+        error: 'pre-run hook failed: rate limit',
+      };
+    const outcomes: Array<{ quietFailure?: boolean; activeInScheduler: boolean }> = [];
+    const failedEvents: Array<Extract<SchedulerEvent, { type: 'failed' }>> = [];
+
+    const h = makeHarness({
+      runnerImpl: async (_schedule, ctx) => {
+        if (nextStep.kind === 'skip') {
+          await ctx.onPreRunHookCompleted?.({
+            ...baseHook,
+            status: 'skipped',
+            decision: 'skip',
+            exitCode: 2,
+            ...(nextStep.checkSucceeded ? { checkSucceeded: true as const } : {}),
+          });
+          return { sessionId: '', skipped: true, resultText: 'skip' };
+        }
+        const outcome = await ctx.onPreRunHookCompleted?.(nextStep.hook);
+        outcomes.push({
+          quietFailure: outcome?.quietFailure,
+          activeInScheduler: h.scheduler.isRunQuietFailure(ctx.runId),
+        });
+        throw new Error(nextStep.error);
+      },
+    });
+    h.scheduler.on('failed', (ev) => failedEvents.push(ev));
+
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      targetSessionId: 'task-pr-1',
+      preRunHook: { command: 'node gate.mjs' },
+    });
+
+    // T = 0h: first rate-limit -> quiet (born-read, silenced event, transientQuiet persisted).
+    const t0 = Date.UTC(2026, 10, 27, 0, 0, 0);
+    h.clock.setTo(t0);
+    const r1 = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: true, activeInScheduler: true });
+    expect(h.scheduler.isRunQuietFailure(r1.runId)).toBe(false);
+    expect(h.storage.runs.get(r1.runId)).toMatchObject({
+      status: 'failed',
+      readAt: t0,
+      preRunHookResult: { transientQuiet: true },
+    });
+    expect(failedEvents.at(-1)).toMatchObject({ runId: r1.runId, silenced: true });
+
+    // T = 6h: backoff skip without CINDY_PRECHECK_OK does NOT recover the outage.
+    h.clock.setTo(t0 + 6 * 3600_000);
+    nextStep = { kind: 'skip' };
+    await h.scheduler.runNow(sch.id);
+
+    // T = 12h: still within 24h -> DNS failure stays quiet.
+    h.clock.setTo(t0 + 12 * 3600_000);
+    nextStep = { kind: 'block', hook: dnsHook, error: 'pre-run hook failed: dns' };
+    const r2 = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: true, activeInScheduler: true });
+    expect(h.storage.runs.get(r2.runId)).toMatchObject({
+      status: 'failed',
+      readAt: t0 + 12 * 3600_000,
+      preRunHookResult: { transientQuiet: true },
+    });
+    expect(failedEvents.at(-1)).toMatchObject({ runId: r2.runId, silenced: true });
+
+    // T = 24h + 1m: still unrecovered -> escalates to unread failure & non-silenced event.
+    h.clock.setTo(t0 + TRANSIENT_PRECHECK_ESCALATION_MS + 60_000);
+    nextStep = { kind: 'block', hook: rateLimitHook, error: 'pre-run hook failed: rate limit 24h' };
+    const r3 = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: false, activeInScheduler: false });
+    expect(h.storage.runs.get(r3.runId)?.readAt).toBeUndefined();
+    expect(h.storage.runs.get(r3.runId)?.preRunHookResult?.transientQuiet).toBeUndefined();
+    expect(failedEvents.at(-1)?.silenced).toBeUndefined();
+
+    // T = 24h + 30m: repeated transient failure right after escalation stays quiet (at most once per 24h).
+    h.clock.setTo(t0 + TRANSIENT_PRECHECK_ESCALATION_MS + 30 * 60_000);
+    const r4 = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: true, activeInScheduler: true });
+    expect(h.storage.runs.get(r4.runId)?.readAt).toBe(t0 + TRANSIENT_PRECHECK_ESCALATION_MS + 30 * 60_000);
+
+    // T = 48h + 1m (24h after Day-1 escalation): escalates again as unread fallback reminder.
+    h.clock.setTo(t0 + 2 * TRANSIENT_PRECHECK_ESCALATION_MS + 60_000);
+    const r4b = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: false, activeInScheduler: false });
+    expect(h.storage.runs.get(r4b.runId)?.readAt).toBeUndefined();
+    expect(h.storage.runs.get(r4b.runId)?.preRunHookResult?.transientQuiet).toBeUndefined();
+    expect(failedEvents.at(-1)?.silenced).toBeUndefined();
+
+    // T = 50h: healthy CINDY_PRECHECK_OK recovers the outage; T = 55h new rate-limit gets a fresh 24h window.
+    h.clock.setTo(t0 + 50 * 3600_000);
+    nextStep = { kind: 'skip', checkSucceeded: true };
+    await h.scheduler.runNow(sch.id);
+
+    h.clock.setTo(t0 + 55 * 3600_000);
+    nextStep = { kind: 'block', hook: rateLimitHook, error: 'pre-run hook failed: new outage' };
+    const r5 = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: true, activeInScheduler: true });
+    expect(h.storage.runs.get(r5.runId)?.readAt).toBe(t0 + 55 * 3600_000);
+
+    // Non-transient auth failure escalates immediately even on first occurrence.
+    h.clock.setTo(t0 + 56 * 3600_000);
+    nextStep = { kind: 'block', hook: authHook, error: 'pre-run hook failed: auth' };
+    const r6 = await h.scheduler.runNow(sch.id);
+    expect(outcomes.at(-1)).toEqual({ quietFailure: false, activeInScheduler: false });
+    expect(h.storage.runs.get(r6.runId)?.readAt).toBeUndefined();
+    expect(failedEvents.at(-1)?.silenced).toBeUndefined();
+
+    await h.scheduler.stop();
+  });
 });

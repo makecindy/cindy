@@ -32,7 +32,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { machineIdSync } from 'node-machine-id';
 import { writeDeviceLinkSetting } from './device-link/settings-store.desktop';
-import {readCloudGuest,cloudGuestSaved,cloudGuestAuthorization,markCloudGuestSaved,confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
+import {readCloudGuest,cloudGuestSaved,cloudGuestAuthorization,cloudGuestFailureReason,markCloudGuestSaved,confirmCloudGuestWhenOnline} from '@cindy/auth-client/linux-cloud';
 import { enrollTestCloudDesktop } from './cloudDesktopTestEnrollment';
 import {
   AuthApiError,
@@ -5502,7 +5502,13 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
               });
             },
           };
-          const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store, desktopAuthFetch);
+          // Keep trying while this guest stays signed out: after the first-boot window only a restart used to retry.
+          const grant = await cloudGuestAuthorization(guest, deviceId, authServerUrl(AUTH_REGION), store, desktopAuthFetch,
+            {
+              persistent: true,
+              stopped: () => Boolean(superseded()),
+              onRetrying: (reason) => log.warn('Cloud guest sign-in still retrying', reason),
+            });
           if (superseded()) return snapshotAuthState();
           const client = createAuthClient(AUTH_REGION);
           const pair = await client.exchangeAuthorizationCode(grant.code, grant.verifier);
@@ -5521,8 +5527,8 @@ export async function initialize(options: AuthInitializeOptions = {}): Promise<A
             () => getClientEndpointForRealm(AUTH_REGION, 'modelAccessApiBaseUrl'), getAccessToken, desktopAuthFetch,
           );
           return snapshotAuthState();
-        })().catch(() => {
-          log.warn('Cloud guest sign-in did not complete');
+        })().catch((error: unknown) => {
+          log.warn('Cloud guest sign-in did not complete', cloudGuestFailureReason(error));
           return snapshotAuthState();
         }).finally(() => { enterpriseGuestSignIn = null; });
         const completion = enterpriseGuestSignIn;
