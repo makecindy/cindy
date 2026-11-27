@@ -6,7 +6,9 @@
  *   （SnapshotAttemptStore）落在同一个 owner 目录。
  * - 规则依据：迁移前桌面建的保存点，迁移后 Host 要能接着用（放行表第 7b 行与第三节）。
  * - 最小失败输入：Host 换了引用名、换了尝试记录目录，或从新链开始。
- * - tier：integration（真实 git 与临时目录，不调模型）。停用裁决在两边都按“不可用”，标签走
+ * - tier：git-integration（两轮真实 Git，独立于默认 unit 池；CI 在 Linux 和 Windows 均执行）。
+ *   #13540 的 Windows unit 池曾耗时 150s，超过 60s；不扩大预算或削弱链路断言。
+ *   停用裁决在两边都按“不可用”，标签走
  *   确定性兜底：桌面这里 mock 掉 live 裁决，只是为了不拉起桌面供应商服务。
  */
 import { execFileSync } from 'node:child_process';
@@ -18,8 +20,8 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../model-route-guard-live.js', () => ({ isAgentOneShotRouteDisabled: async () => true }));
 
-// Real git subprocesses for both savepoint rounds: about 2.7 s alone, and over the 5 s default
-// when the full desktop pool loads the machine. An explicit bound, wide enough for that load.
+// Keep the existing bound for both real-Git rounds. Resource isolation belongs
+// in the Git integration tier, rather than a larger timeout in the unit pool.
 const CHAIN_TIMEOUT_MS = 60_000;
 
 const git = (cwd: string, ...args: string[]) => execFileSync('git', args, {

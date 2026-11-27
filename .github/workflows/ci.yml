@@ -537,6 +537,11 @@ jobs:
       - name: Check Windows Codex credential publication
         run: node --experimental-strip-types apps/desktop/scripts/check-windows-codex-auth-move.mjs
 
+      # The two-round real-Git chain belongs to the Git integration tier. Keep
+      # Windows coverage outside the unit pool, with one worker and the same timeout.
+      - name: Run Desktop to Host Git snapshot chain
+        run: pnpm --dir apps/desktop exec vitest run --project git-integration src/main/maker-host/__tests__/hostGitSnapshotChain.git-integration.test.ts --maxWorkers=1
+
       # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
       - name: Run companion database regressions
         run: pnpm --filter desktop exec vitest run src/main/localDb/ipc/__tests__/botCanonicalSession.test.ts src/main/localDb/ipc/__tests__/botRemoteResourceProvider.test.ts
