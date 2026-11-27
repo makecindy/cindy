@@ -1071,17 +1071,35 @@ describe('AcpSession stop and failure', () => {
     await expect(session.send({ type: 'user', content: 'again' })).rejects.toThrow('closed');
   });
 
-  it.each([false, true])('uses personal instructions only outside isolated companions (isolated: %s)', async (isolated) => {
-    const agent = createFakeAgent({ agentCapabilities: { sessionCapabilities: { systemPrompt: {} } } });
-    const policy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+  // 测试价值：AcpAgent.startSession 发出的 session/new 是否带 ACP `systemPrompt`。依据 #13515：远程供应商与
+  // 分享供应商的插件引擎任务收不到用户的自定义提示词。托管任务的 `userPrompt` 是任务所在电脑随任务发来的
+  // （remote-agent 启动参数，见 mirror.test.ts），不是执行端自己的设置，所以同账号与受邀者都要带上；
+  // 隔离伙伴不带。缺口：原用例只有本机与隔离伙伴。最小失败输入：带 deviceHosted 的启动。unit tier。
+  const isolatedPolicy = { mode: 'allowlist' as const, configured: [], catalog: [] };
+  it.each([
+    { name: 'a local task', extra: {}, sent: true },
+    { name: 'an isolated companion', extra: {
+      botRuntimeProfile: { botId: 'test', profileVersion: 1, skillPolicy: isolatedPolicy, mcpPolicy: isolatedPolicy, toolsetPolicy: isolatedPolicy },
+    }, sent: false },
+    { name: 'a task hosted for another computer of the account', extra: {
+      deviceHosted: {
+        workingDir: '/shadow/p', extraDirs: [], writableDirs: [], platform: 'darwin' as const, shell: 'zsh', isGitRepo: true,
+        tunnelUrl: 'http://127.0.0.1:4711/', tunnelToken: 't', mcpServers: [],
+      },
+    }, sent: true },
+    { name: 'a task hosted for a provider-share guest', extra: {
+      deviceHosted: {
+        workingDir: '/shadow/p', extraDirs: [], writableDirs: [], platform: 'darwin' as const, shell: 'zsh', isGitRepo: true,
+        tunnelUrl: 'http://127.0.0.1:4711/', tunnelToken: 't', mcpServers: [], guest: true,
+      },
+    }, sent: true },
+  ])('passes the personal instructions the task came with to $name as the ACP system prompt: $sent', async ({ extra, sent }) => {
+    const agent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { systemPrompt: {} } } });
     const handle = await createAcpAgent(() => agent.transport).startSession({
-      workingDir: '/w', model: '', providerId: 'acp-plugin:test:engine', userPrompt: '  x  ',
-      ...(isolated ? {
-        botRuntimeProfile: { botId: 'test', profileVersion: 1, skillPolicy: policy, mcpPolicy: policy, toolsetPolicy: policy },
-      } : {}),
+      workingDir: '/w', model: '', providerId: 'acp-plugin:test:engine', userPrompt: '  x  ', ...extra,
     });
-    expect((agent.sent[1]!.params as AcpRecord).systemPrompt).toEqual(
-      isolated ? undefined : { mode: 'append', content: [{ type: 'text', text: 'x' }] },
+    expect((agent.sent.find((message) => message.method === 'session/new')!.params as AcpRecord).systemPrompt).toEqual(
+      sent ? { mode: 'append', content: [{ type: 'text', text: 'x' }] } : undefined,
     );
     await handle.close();
   });

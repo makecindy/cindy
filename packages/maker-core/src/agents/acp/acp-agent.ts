@@ -405,7 +405,10 @@ export class AcpAgent extends BaseAgent {
       ...(hosted?.guest ? { guestWorkspace: true } : {}),
       ...(accountDir ? { accountDir } : {}),
     };
-    const personalSystemPrompt = hosted || isolatedBotProfile(opts.botRuntimeProfile)
+    // A task hosted for another computer (the same account's or a provider-share guest's) gets the
+    // personal instructions that computer sent with the task (`userPrompt` of the remote-agent start
+    // options), never this computer's own: hosted starts bypass this host's personalization.
+    const personalSystemPrompt = isolatedBotProfile(opts.botRuntimeProfile)
       ? undefined
       : opts.userPrompt?.trim();
     const open = async (): Promise<AcpSession> => {

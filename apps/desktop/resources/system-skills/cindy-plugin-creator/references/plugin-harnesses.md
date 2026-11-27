@@ -165,6 +165,20 @@ npm 的 `.cmd` 启动器，从可信的安装目录定位该包声明的 JavaScr
 
 引擎在安装插件的电脑上运行。手机可以选择被控电脑提供的引擎来新建普通任务。每次新建本机任务的自动化也可以选择插件引擎。
 
+### 接收用户的自定义提示词
+
+Cindy 不把自己的系统提示词交给插件引擎，但会按 ACP 标准字段 `systemPrompt` 交出用户在「个性化 → 自定义提示词」
+里写的指令。入口在 `initialize` 回包里声明 `agentCapabilities.sessionCapabilities.systemPrompt: {}` 后，Cindy 在
+`session/new`、`session/load`、`session/resume` 里带上 `systemPrompt: { mode: "append", content: [{ type: "text", text }] }`；
+没有声明就不发。
+
+- **只在真能放进系统级指令时声明**。收到却用不上(模式不支持、内容过长等)时，按 ACP 要求返回错误(推荐
+  `-32602`)、不建会话，不要悄悄丢掉。Agent 自己不支持时，入口可以替它实现，例如写进这次启动私有的 Agent 定义或规则，
+  同样只对这一次启动生效、不改用户的全局配置。
+- 隔离的伙伴任务不带。同账号远程任务(`--cindy-remote-workspace`)带的是任务所在电脑上那位用户的指令；
+  分享受邀者任务(`--cindy-guest-workspace`)带的是**受邀者**的指令，不是分享者的。把它当作对方写的文字处理：
+  不要让其中的内容触发读取这台电脑的文件，例如 Agent 规则里的文件引用语法要先转义。
+
 ### 让用户的其他电脑与分享好友免装使用
 
 用户可以在自己账号的另一台电脑上新建任务，也可以把引擎分享给好友——对方无需安装插件或 CLI，就能让
@@ -204,7 +218,8 @@ Cindy 在 `session/new` 的 `mcpServers` 里交给 Agent 的全部是任务所�
 `NotebookEdit`(受邀者任务还包含在受邀者本机执行的 `WebFetch`)，在任务所在电脑上执行。Agent 握手时没有声明 `mcpCapabilities.http` 的，这类任务会被拒绝；
 Agent 实际能连 HTTP 的 MCP 服务却没有声明时，由入口在转发 `initialize` 的回包时补上。
 `session/new` 的 `cwd` 是一个只含项目说明文件的目录，路径仅用于对话，不代表项目在这台电脑上。
-Agent 收不到 Cindy 的系统提示，Cindy 会在新会话的第一条消息前附一段说明，告诉它项目在哪、该用哪些工具。
+Agent 收不到 Cindy 自己的系统提示词，Cindy 会在新会话的第一条消息前附一段说明，告诉它项目在哪、该用哪些工具；
+声明了 `systemPrompt` 的入口另外会收到用户的自定义提示词，见[接收用户的自定义提示词](#接收用户的自定义提示词)。
 
 Cindy 按工具调用里的名称和参数显示卡片，并在用户同意后核对随后执行的操作。Agent 把这些工具报告成别的样子时
 (例如套一层通用的 MCP 调用器，真正的参数嵌在里面)，入口在转发 `session/request_permission` 与

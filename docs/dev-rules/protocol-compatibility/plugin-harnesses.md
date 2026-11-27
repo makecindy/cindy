@@ -416,3 +416,22 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
    - `packages/device-link/src/orcaRemoteWorker.ts` 的 `ORCA_REMOTE_WORKER_AGENT_KINDS` 新增 `'acp'`，`parseOrcaRemoteWorkerOpenRequest` 在 `agentKind === 'acp'` 且非模型组时校验 `providerId` 为 `acp-plugin:…`；旧版运行设备收到 `'acp'` 时以 `[INVALID_PARAMS] invalid agentKind` fail-closed 拒绝，不创建错误引擎的 Worker。
    - 代理任务行（`OrcaRemoteWorkerProxySessionSeed`）追加可选 `providerId` 落库，`orcaRemoteWorkerBridge` 放开 `'acp'` Worker 向 Lead 回报（MCP 上下文 `agentKind` 与 `acp-agent.ts` 同口径映射为 `'pi'`）。
    - 不新增 channel、allowlist 项或中转帧，官方与自建中转按既有 invoke 帧透明转发，无需改动。
+
+## 用户自定义提示词（ACP `systemPrompt`，2026-11-28）
+
+Cindy 自己的系统提示词仍不交给插件引擎；「个性化 → 自定义提示词」按 ACP v1 标准字段交出（#13098、#13515）：
+
+- **协商**：只在对端 `initialize` 声明 `agentCapabilities.sessionCapabilities.systemPrompt` 时，在 `session/new`、`session/load`、
+  `session/resume` 带 `systemPrompt: { mode: 'append', content: [{ type: 'text', text }] }`；只用 `append`，未声明的引擎与旧版 Cindy 一律不发，
+  存量插件零迁移。对端收到却无法应用时按 ACP 要求以 `-32602` 拒绝建会话。
+- **取值**：本机任务用发起时冻结的个性化正文（`hostStartupPreferences.userPrompt`，不含项目知识与协同说明）；隔离伙伴不带。
+  替另一台电脑运行的任务（同账号远程供应商 `--cindy-remote-workspace` 与分享受邀者 `--cindy-guest-workspace`）用任务所在电脑经既有
+  remote-agent 启动参数 `RemoteAgentWireStartOptions.userPrompt` 发来的正文，不新增 wire 字段，也从不换成执行端自己保存的个性化：
+  托管启动走 `Maker.startHostedAgentSession`，不经过执行端的 `prepareStartOptions`。受邀者任务带的是受邀者的指令。
+- **新旧组合**：新执行端遇到旧发起端时，`userPrompt` 是旧发起端发给内置引擎的那份，可能在个性化正文后附有项目知识入口或协同角色说明，
+  与内置引擎从旧发起端收到的内容一致；双方都升级后只剩个性化正文。旧执行端不给托管任务发 `systemPrompt`，行为同前。中转与 relay 无改动。
+- **插件侧**：受邀者的正文对分享者电脑是不受信的文字，插件不得让其触发读取本机文件（官方 Antigravity 插件在远程与分享模式下
+  把它写进本次启动私有的 Agent 定义并转义 `@[label](path)` 引用，makecindy/cindy-official-plugins#427）。
+
+实现见 maker-core `agents/acp/{acp-agent,protocol,session}.ts` 与 `maker.ts`；回归见 maker-core `acp-session.test.ts`
+（本机、隔离伙伴、同账号托管、受邀者托管四种输入）与 Desktop `remote-agent/__tests__/mirror.test.ts`（发起端 `userPrompt` 到达执行端）。
