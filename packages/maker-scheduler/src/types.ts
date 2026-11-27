@@ -175,6 +175,18 @@ export interface ScheduleWebhookEvent {
   headSha?: string;
   conclusion?: string;
   receivedAt: number;
+  /** 插件事件：宿主根据真实插件身份生成的来源 `plugin:<id>`；Webhook 事件没有。 */
+  source?: string;
+  /** 插件事件：上游发生时间（毫秒）。 */
+  occurredAt?: number;
+  /** 插件事件：插件提交的简短说明，不可信。 */
+  subject?: string;
+  /** 插件事件：插件提交的平坦字段（有界副本），不可信。 */
+  fields?: Record<string, string | number | boolean>;
+  /** 插件事件的字段超出保存预算、有部分被截掉或丢弃。 */
+  fieldsTruncated?: true;
+  /** 插件事件：因保存预算而未放入 fields 的字段名，避免重验条件时把已丢弃字段误判为缺失。 */
+  omittedFields?: string[];
 }
 
 /**
@@ -577,7 +589,7 @@ export type SchedulerEvent =
    * ephemeral runningById)需要据此清掉"运行中"态,否则 chip 会卡在 running 直到下一次
    * 真 run 完成。携带 runId 让消费方精确匹配它当初因 'fired' 记下的那一条。
    */
-  | { type: 'deferred'; scheduleId: string; runId: string }
+  | { type: 'deferred'; scheduleId: string; runId: string; deferReason?: string; consecutiveDeferrals?: number }
   /**
    * 本次 fire 被前置检查脚本（preRunHook exit 2）拦截跳过：未启动 agent、零 token。
    * 与 'deferred' 的区别：run 记录**保留**（status='skipped'，生而已读），照常按

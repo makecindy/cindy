@@ -17,6 +17,7 @@ import {
   type XaiSubscriptionUsageSnapshot,
 } from '../../../shared/xaiSubscriptionUsage';
 import { formatCompactTokens } from '@/lib/usageFormat';
+import { formatQuotaRemainingDuration } from '@/lib/compactQuotaCountdown';
 import {
   formatClaudeSubscriptionPlanLabel,
   formatCodexPlanLabel,
@@ -66,32 +67,15 @@ export function formatQuotaResetCountdown(
   return duration === null ? t('quotaCard.resetPending') : t('quotaCard.resetIn', { duration });
 }
 
-/** The bare time left in a window, without the "resets in" wording; null when unknown or elapsed. */
+/** The bare time left in a window, without the "resets in" wording; null when unknown or elapsed.
+ * 与胶囊共用同一分解(compactQuotaCountdown): 胶囊的 label 必是本串的前缀。 */
 export function formatQuotaResetDuration(
   resetsAt: number | null | undefined,
   nowMs: number,
   t: TFunction,
 ): string | null {
   if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
-  const remainingMs = resetsAt * 1000 - nowMs;
-  if (remainingMs <= 0) return null;
-  const minutes = Math.ceil(remainingMs / 60_000);
-  const days = Math.floor(minutes / 1440);
-  const hours = Math.floor((minutes % 1440) / 60);
-  const remainder = minutes % 60;
-  const parts =
-    days > 0
-      ? [
-          `${days}${t('todaySpend.unit.day')}`,
-          ...(hours ? [`${hours}${t('todaySpend.unit.hour')}`] : []),
-        ]
-      : hours > 0
-        ? [
-            `${hours}${t('todaySpend.unit.hour')}`,
-            ...(remainder ? [`${remainder}${t('todaySpend.unit.minute')}`] : []),
-          ]
-        : [`${minutes}${t('todaySpend.unit.minute')}`];
-  return parts.join(' ');
+  return formatQuotaRemainingDuration(resetsAt * 1000 - nowMs, t);
 }
 
 export function formatQuotaResetAt(

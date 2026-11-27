@@ -97,6 +97,8 @@
   },
   "notice": {
     "memberJoined": "{{name}} ist der Gruppe beigetreten",
+    "memberJoinedList": "{{names}} sind der Gruppe beigetreten",
+    "memberJoinedSummary": "{{names}} und {{others}} weitere sind der Gruppe beigetreten",
     "memberFailed": "{{name}} konnte diesmal nicht antworten",
     "memberTimeout": "{{name}} hat zu lange für die Antwort gebraucht und wurde diesmal übersprungen",
     "memberUnavailable": "{{name}} ist nicht verfügbar und hat diesmal nicht gesprochen",
@@ -175,7 +177,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} konnte dieses Werkzeug nicht ausführen: Die Gruppenberechtigung ist abgelaufen oder erlaubt diese Aktion nicht. Der Besitzer des Freundes kann die Anfrage in dieser Gruppe erneut stellen.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "Die Gruppenberechtigung für {{name}} konnte nicht überprüft werden. Dieses Werkzeug wurde daher nicht ausgeführt. Versuche es erneut, sobald die Verbindung wiederhergestellt ist.",
       "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, verbinde dein Cindy, damit Cindy für dich arbeiten kann (gerade ist kein Cindy von dir online)."
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, verbinde dein Cindy, damit Cindy für dich arbeiten kann (gerade ist kein Cindy von dir online).",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, wähle einen Computer für diese Gruppe, um die Anfrage fortzusetzen.",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "Der von {{name}} für diese Gruppe gewählte Computer ist offline."
     }
   },
   "plan": {
@@ -499,10 +503,12 @@
       "tools": "Vom Inhaber freigegebene Tools und Informationen",
       "authorizeTitle": "Dieser Gruppe erlauben, die Tools und Informationen von {{name}} zu nutzen?",
       "toolsHint": "Mitglieder dürfen die vorhandenen Tools und privaten Informationen dieses Freundes nutzen. Ergebnisse sind für alle sichtbar. Bestehende Genehmigungsregeln gelten weiterhin. Ein Widerruf stoppt aktive Anfragen, kann aber abgeschlossene Aktionen nicht rückgängig machen.",
-      "confirm": "Bestätigen"
+      "confirm": "Tools erlauben"
     }
   },
   "groupSettings": {
+    "assistantComputer": "Ausführender Computer",
+    "chooseComputer": "Computer auswählen",
     "tabSettings": "Einstellungen",
     "youAreOwner": "Du bist Gruppeninhaber",
     "youAreAdmin": "Du bist Admin",
@@ -544,6 +550,8 @@
     "accessChat": "Nur Gruppenchat",
     "accessTools": "Kann Tools und Informationen nutzen",
     "replies": "Antwortverhalten der Freunde",
+    "assistant": "Gruppen-Cindy",
+    "assistantHint": "Arbeitet auf dem Computer der Person, die sie mit @ erwähnt.",
     "replyModeMentionedNote": "Freunde bleiben still, solange sie niemand mit @ erwähnt.",
     "work": "Arbeitsaufteilung",
     "organizerHint": "Legt fest, wer die einzelnen Schritte übernimmt. Standardmäßig der erste Freund.",
@@ -588,7 +596,7 @@
     "removeOwnHint": "{{name}} erhält keine Nachrichten mehr aus „{{group}}“. Der Verlauf bleibt erhalten; andere Gruppen und private Chats sind nicht betroffen.",
     "removeOwnActiveHint": "Aktive Anfragen dieses Freundes in dieser Gruppe werden gestoppt. Unabhängig gestartete Aufgaben laufen weiter.",
     "stopAndRemove": "Stoppen und entfernen",
-    "confirm": "Bestätigen",
+    "confirm": "Tools erlauben",
     "inviteTitle": "Zur Gruppe einladen",
     "reusableLink": "Kein Ablaufdatum · Für mehrere Personen wiederverwendbar",
     "singleUseUntil": "Einmalig nutzbar · Läuft am {{date}} ab",

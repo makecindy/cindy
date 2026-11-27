@@ -1,4 +1,5 @@
 import { PROJECT_ARCHIVE_CHANNEL } from '../../shared/projectArchive.js';
+import { isPluginObserveTaskStatus, parseSessionStatusIds, SESSION_STATUS_PROJECTION } from '../../shared/pluginObserve.js';
 import { DL_HISTORY_QUERY_CHANNEL, TASK_ACTIVITY_SNAPSHOT } from '@cindy/device-link';
 import { currentDbRpcAdmissionClass, type DbRpcAdmissionClass } from '../localDb/client/rpcAdmission.js';
 
@@ -15,8 +16,9 @@ const BACKGROUND_EXCLUDED_LIST_CHANNELS = new Set([
   'local-db:sessions:list',
   'maker:list-active',
 ]);
-type Lookup = (sessionId: string, kind?: 'session' | 'bot') => Promise<RemoteBotSessionAccess>;
-export type RemoteBotSessionBatchLookup = (ids: readonly string[], kind: 'session' | 'bot') => Promise<ReadonlyMap<string, RemoteBotSessionAccess>>;
+export type RemoteSessionLookupKind = 'session' | 'bot' | typeof SESSION_STATUS_PROJECTION;
+type Lookup = (sessionId: string, kind?: RemoteSessionLookupKind) => Promise<RemoteBotSessionAccess>;
+export type RemoteBotSessionBatchLookup = (ids: readonly string[], kind: RemoteSessionLookupKind) => Promise<ReadonlyMap<string, RemoteBotSessionAccess>>;
 let lookup: Lookup | null = null;
 let batchLookup: RemoteBotSessionBatchLookup | null = null;
 
@@ -44,17 +46,17 @@ interface PushAccessRound {
 const pendingPushAccess = new Map<DbRpcAdmissionClass, PushAccessRound>();
 
 function readSessionAccess(
-  single: Lookup, batch: RemoteBotSessionBatchLookup | null, ids: readonly string[],
+  single: Lookup, batch: RemoteBotSessionBatchLookup | null, ids: readonly string[], kind: RemoteSessionLookupKind = 'session',
 ): ReadonlyMap<string, Promise<RemoteBotSessionAccess>> {
   const access = new Map<string, Promise<RemoteBotSessionAccess>>();
   if (batch) {
-    const rows = batch(ids, 'session');
+    const rows = batch(ids, kind);
     for (const id of ids) access.set(id, rows.then((map) => map.get(id) ?? 'hidden'));
   } else {
     // Injected single-lookup consumers keep the previous one-at-a-time read shape.
     let previous: Promise<unknown> = Promise.resolve();
     for (const id of ids) {
-      const current = previous.then(() => single(id, 'session'));
+      const current = previous.then(() => single(id, kind));
       access.set(id, current);
       previous = current.catch(() => undefined);
     }
@@ -82,6 +84,22 @@ function readPushSessionAccess(single: Lookup, ids: readonly string[]): Promise<
   }
   for (const id of ids) round.ids.add(id);
   return round.result.then((access) => Promise.all(ids.map((id) => access.get(id) ?? 'hidden')));
+}
+
+function localOriginRefs(item: unknown): { sessionId: string; botId: string | null } | null {
+  const origin = record(record(item)?.createdBySession);
+  const sessionId = typeof origin?.sessionId === 'string' && origin.sessionId && !origin.sessionId.includes('::')
+    ? origin.sessionId : null;
+  if (!sessionId) return null;
+  const botId = typeof origin?.botId === 'string' && origin.botId ? origin.botId : null;
+  return { sessionId, botId };
+}
+
+function omitCreatedBySession(item: unknown): unknown {
+  const row = record(item);
+  if (!row || !('createdBySession' in row)) return item;
+  const { createdBySession: _omitted, ...rest } = row;
+  return rest;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -236,7 +254,10 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     const entries = (listing ? row.sessions : row.hits) as unknown[];
     const ids = [...new Set(entries.flatMap((item) => {
       const entry = record(item);
-      return [listing ? entry?.id : entry?.sessionId, ...(listing ? [entry?.parentSessionId] : [])]
+      const origin = record(entry?.createdBySession);
+      const originSessionId = typeof origin?.sessionId === 'string' && !origin.sessionId.includes('::')
+        ? origin.sessionId : undefined;
+      return [listing ? entry?.id : entry?.sessionId, ...(listing ? [entry?.parentSessionId, originSessionId] : [])]
         .filter((id): id is string => typeof id === 'string');
     }))];
     const access = new Map<string, RemoteBotSessionAccess>();
@@ -249,14 +270,21 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
       && (access.get(id) === 'ordinary' || access.get(id) === 'visible' || access.get(id) === 'background');
     // The page and its foreign references share one fresh, source-owned lookup.
     // Missing or hidden page members invalidate pagination; optional parents
-    // are simply omitted, including on cached/queued delivery after a hide.
+    // and originating task references are simply omitted, including on cached/queued delivery after a hide.
     if (entries.some((item) => !visible(listing ? record(item)?.id : record(item)?.sessionId))) {
       throw new Error('[NOT_FOUND] History page is no longer available');
     }
     if (Array.isArray(row.sessions)) {
       const sessions = row.sessions.map((item) => {
-        const { parentSessionId, ...session } = record(item)!;
-        return visible(parentSessionId) ? { ...session, parentSessionId } : session;
+        const { parentSessionId, createdBySession, ...session } = record(item)!;
+        const origin = record(createdBySession);
+        const originId = typeof origin?.sessionId === 'string' ? origin.sessionId : null;
+        const keepOrigin = originId !== null && (originId.includes('::') || visible(originId));
+        return {
+          ...session,
+          ...(visible(parentSessionId) ? { parentSessionId } : {}),
+          ...(keepOrigin ? { createdBySession } : {}),
+        };
       });
       return { ...row, sessions };
     }
@@ -266,6 +294,21 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
       // Hidden results must not reveal their content, metadata or candidate count.
       pool_size: undefined,
     };
+  }
+  // Status replies contain only the requested tasks. Recheck them on each delivery before
+  // the full-row projection, which also reads and authorizes originating sessions and bots.
+  const statusRows = channel === 'local-db:sessions:get-many' ? record(value)?.sessions : undefined;
+  if (Array.isArray(statusRows)) {
+    if (!lookup) throw new Error('[HOST_NOT_READY] Task visibility is not ready');
+    if (!statusRows.length) return { sessions: [] };
+    const rows = statusRows.map(row => ({ id: row?.id, status: row?.status }));
+    const ids = parseSessionStatusIds(rows.map(row => row.id));
+    if (!ids || rows.some(row => !isPluginObserveTaskStatus(row.status))) {
+      throw new Error('[INVALID_PARAMS] Invalid session status result');
+    }
+    const access = readSessionAccess(lookup, batchLookup, ids, SESSION_STATUS_PROJECTION);
+    const visibility = await Promise.all(rows.map(row => access.get(row.id)));
+    return { sessions: rows.filter((_, index) => visibility[index] === 'ordinary') };
   }
   if (!lookup || ![
       PROJECT_ARCHIVE_CHANNEL, 'local-db:task-tags:execute',
@@ -280,11 +323,9 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
   }
   const activeLookup = lookup;
   const activeBatchLookup = batchLookup;
-  // The status envelope is restricted to ordinary visible tasks on every delivery.
-  const statusRows = channel === 'local-db:sessions:get-many' ? record(value)?.sessions : undefined;
   const excludeBackground = BACKGROUND_EXCLUDED_LIST_CHANNELS.has(channel);
-  const excluded = (access: RemoteBotSessionAccess) => Array.isArray(statusRows)
-    ? access !== 'ordinary' : access === 'hidden' || (excludeBackground && access === 'background');
+  const excluded = (access: RemoteBotSessionAccess) =>
+    access === 'hidden' || (excludeBackground && access === 'background');
   const identity = (item: unknown) => {
     const row = record(item);
     const ref = record(row?.ref);
@@ -293,17 +334,45 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
     if (!row || typeof id !== 'string') return null;
     return { id, kind: ref?.kind === 'bot' || channel.startsWith('local-db:bots:') ? 'bot' as const : 'session' as const };
   };
+  const redactHiddenOrigin = (
+    item: unknown,
+    sessionAccess: ReadonlyMap<string, RemoteBotSessionAccess>,
+    botAccess: ReadonlyMap<string, RemoteBotSessionAccess>,
+  ): unknown => {
+    const refs = localOriginRefs(item);
+    if (!refs) return item;
+    const originSessionStatus = sessionAccess.get(refs.sessionId) ?? 'hidden';
+    if (excluded(originSessionStatus)) return omitCreatedBySession(item);
+    if (excludeBackground && refs.botId && (botAccess.get(refs.botId) ?? 'hidden') === 'hidden') {
+      return omitCreatedBySession(item);
+    }
+    return item;
+  };
   const project = async (item: unknown) => {
     const key = identity(item);
     if (!key) return item;
-    return excluded(await activeLookup(key.id, key.kind)) ? null : item;
+    if (excluded(await activeLookup(key.id, key.kind))) return null;
+    const refs = key.kind === 'session' ? localOriginRefs(item) : null;
+    if (!refs) return item;
+    if (excluded(await activeLookup(refs.sessionId, 'session'))) return omitCreatedBySession(item);
+    if (excludeBackground && refs.botId && await activeLookup(refs.botId, 'bot') === 'hidden') {
+      return omitCreatedBySession(item);
+    }
+    return item;
   };
-  const rows = Array.isArray(statusRows) ? statusRows : value;
-  if (Array.isArray(rows)) {
-    const identities = rows.map(identity);
+  if (Array.isArray(value)) {
+    const identities = value.map(identity);
     const accessByKind = new Map<'session' | 'bot', ReadonlyMap<string, RemoteBotSessionAccess>>();
     for (const kind of ['session', 'bot'] as const) {
-      const ids = [...new Set(identities.filter((key) => key?.kind === kind).map((key) => key!.id))];
+      const originIds = kind === 'session'
+        ? value.map(localOriginRefs).map((refs) => refs?.sessionId ?? null).filter((id): id is string => id !== null)
+        : excludeBackground
+          ? value.map(localOriginRefs).map((refs) => refs?.botId ?? null).filter((id): id is string => id !== null)
+          : [];
+      const ids = [...new Set([
+        ...identities.filter((key) => key?.kind === kind).map((key) => key!.id),
+        ...originIds,
+      ])];
       if (!ids.length) continue;
       if (activeBatchLookup) {
         accessByKind.set(kind, await activeBatchLookup(ids, kind));
@@ -314,11 +383,14 @@ export async function projectRemoteSessionResult(channel: string, value: unknown
         accessByKind.set(kind, access);
       }
     }
-    const visible = rows.filter((item, index) => {
-      const key = identities[index];
-      return item !== null && (!key || !excluded(accessByKind.get(key.kind)?.get(key.id) ?? 'hidden'));
-    });
-    return Array.isArray(statusRows) ? { sessions: visible } : visible;
+    const sessionAccess = accessByKind.get('session') ?? new Map<string, RemoteBotSessionAccess>();
+    const botAccess = accessByKind.get('bot') ?? new Map<string, RemoteBotSessionAccess>();
+    return value
+      .filter((item, index) => {
+        const key = identities[index];
+        return item !== null && (!key || !excluded(accessByKind.get(key.kind)?.get(key.id) ?? 'hidden'));
+      })
+      .map((item) => redactHiddenOrigin(item, sessionAccess, botAccess));
   }
   const row = record(value);
   if (row && !row.id && Array.isArray(row.sessions)) return { ...row, sessions: await projectRemoteSessionResult(channel, row.sessions) };
@@ -357,14 +429,49 @@ export async function projectRemoteBotPush(value: unknown, channel = ''): Promis
     const [access] = await readPushSessionAccess(lookup, [selected.sessionId]);
     return access === 'ordinary' || access === 'visible' || access === 'background' ? value : { unavailable: true };
   }
-  if (!lookup) return value;
+  const activeLookup = lookup;
+  if (!activeLookup) return value;
   const ids = sessionIds(value);
   const row = record(value);
   if (channel === 'local-db:sessions:created' && typeof row?.id === 'string') ids.push(row.id);
-  const unique = [...new Set(ids)];
-  if (!unique.length) return value;
-  for (const status of await readPushSessionAccess(lookup, unique)) {
+  const pushOriginTarget =
+    channel === 'local-db:sessions:created'
+      ? (record(row?.session) ? 'session' as const : 'root' as const)
+      : channel === 'local-db:sessions:patched' && record(row?.patch)
+        ? 'patch' as const
+        : null;
+  const pushOriginHolder =
+    pushOriginTarget === 'session' ? record(row?.session)
+      : pushOriginTarget === 'patch' ? record(row?.patch)
+        : pushOriginTarget === 'root' ? row
+          : null;
+  const pushOrigin = pushOriginHolder ? localOriginRefs(pushOriginHolder) : null;
+  const primaryIds = [...new Set(ids)];
+  const lookupIds = pushOrigin && !primaryIds.includes(pushOrigin.sessionId)
+    ? [...primaryIds, pushOrigin.sessionId]
+    : primaryIds;
+  if (!lookupIds.length) return value;
+  const statuses = await readPushSessionAccess(activeLookup, lookupIds);
+  const statusById = new Map(lookupIds.map((id, index) => [id, statuses[index] ?? 'hidden'] as const));
+  for (const id of primaryIds) {
+    const status = statusById.get(id) ?? 'hidden';
     if (status === 'hidden' || (status === 'missing' && row?.source === 'bot')) return null;
+  }
+  if (pushOrigin) {
+    const originStatus = statusById.get(pushOrigin.sessionId) ?? 'hidden';
+    let omitOrigin = originStatus === 'hidden' || originStatus === 'background';
+    if (!omitOrigin && pushOrigin.botId) {
+      omitOrigin = (await activeLookup(pushOrigin.botId, 'bot')) === 'hidden';
+    }
+    if (omitOrigin) {
+      if (pushOriginTarget === 'session' && row) {
+        return { ...row, session: omitCreatedBySession(row.session) };
+      }
+      if (pushOriginTarget === 'patch' && row) {
+        return { ...row, patch: omitCreatedBySession(row.patch) };
+      }
+      return omitCreatedBySession(value);
+    }
   }
   return value;
 }

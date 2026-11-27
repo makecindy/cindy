@@ -44,6 +44,13 @@ export function isPluginEngineEffort(value: unknown): value is PluginEngineEffor
   return typeof value === 'string' && (PLUGIN_ENGINE_EFFORTS as readonly string[]).includes(value);
 }
 
+/** Live facts for the local settings page only. */
+export interface PluginEngineReportedModelDetails {
+  modelId: string;
+  imageInput?: boolean;
+  contextWindow?: number;
+}
+
 export interface PluginEngineModel {
   id: string;
   displayName: string;
@@ -137,6 +144,7 @@ export interface PluginEngineView {
   declaredName?: string;
   /** The models the user turned off, as the engine lists them. Not sent to phones or other computers. */
   disabledModels?: PluginEngineModel[];
+  reportedModelDetails?: PluginEngineReportedModelDetails[];
   /** Explicit per-model reasoning defaults, for settings on this computer. */
   modelEfforts?: Readonly<Partial<Record<string, PluginEngineEffort>>>;
   /**
@@ -237,4 +245,28 @@ export function pluginEngineKeyFromProviderId(providerId: string | null | undefi
 
 export function isPluginEngineKind(kind: unknown): kind is typeof PLUGIN_ENGINE_AGENT_KIND {
   return kind === PLUGIN_ENGINE_AGENT_KIND;
+}
+
+/**
+ * 任务来源是否允许在已有任务内切到 / 换出插件引擎。
+ * 覆盖桌面普通任务、伙伴、官方 hook(x / feishu / telegram / discord-hook)与个人 IM 渠道；
+ * review / learn / cindy-make / scheduler 等专有生命周期继续隔离。
+ */
+const PLUGIN_ENGINE_SWITCH_ALLOWED_SOURCES: ReadonlySet<string> = new Set([
+  'desktop',
+  'bot',
+  'x',
+  'feishu',
+  'telegram',
+  'discord',
+  'discord-hook',
+  'slack',
+  'wechat',
+  'dingtalk',
+  'wecom',
+  'imessage',
+]);
+
+export function isPluginEngineSwitchSourceAllowed(source: string | null | undefined): boolean {
+  return !source || PLUGIN_ENGINE_SWITCH_ALLOWED_SOURCES.has(source);
 }

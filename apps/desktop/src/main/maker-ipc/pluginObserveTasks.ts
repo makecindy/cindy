@@ -1,9 +1,9 @@
-import { and, eq, inArray, isNull, ne, or } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { getSessionListActivityAt, type SessionRightStatus } from '@cindy/maker-shared/session-activity';
 import { getCurrentDbClientSnapshot, type CurrentDbClientSnapshot } from '../localDb/client/current.js';
 import type { DbClient } from '../localDb/client/DbClient.js';
 import { botSessionLinks, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
-import { ordinaryTaskSourceFilter } from '../localDb/sessionQueries.js';
+import { pluginObservableSessionFilter, pluginSessionStatusFilter } from '../localDb/sessionVisibility.js';
 import { scheduleUnreadSessionStatus } from '../scheduler-host/scheduleUnread.js';
 import { listRecentWorkdirs } from '../localDb/ipc/recentWorkdirsCore.js';
 import { projectKeyComparisonKey } from '../../shared/projectKeys.js';
@@ -13,18 +13,8 @@ import { createCanonicalSessionRightStatusBatchReader, type PersistedSessionActi
 const MAX_PROJECT_TASKS = 200;
 const projectKey = (dir: string) => projectKeyComparisonKey(`local:${dir}`, process.platform);
 
-/** Ordinary records that openSession can navigate to by known ID in this account's database. */
-const observableSession = and(
-  or(eq(sessions.status, 'active'), eq(sessions.status, 'archived')),
-  isNull(sessions.hiddenAt),
-  isNull(botSessionLinks.id),
-  ne(sessions.source, 'bot'),
-  ne(sessions.source, 'review'),
-  or(isNull(sessions.orcaRole), ne(sessions.orcaRole, 'worker')),
-);
-
 const visibleTask = and(
-  observableSession,
+  pluginObservableSessionFilter(),
   eq(sessions.workspaceKind, 'project'),
   isNull(sessions.remoteHostId),
   isNull(sessions.agentDeviceId),
@@ -134,7 +124,7 @@ export async function listPluginSessionStatuses(ids: string[], readLive?: ReadSe
   const rows = await db.select({ ...activityFacts, id: sessions.id, orcaRole: sessions.orcaRole, scheduleUnread: scheduleUnreadSessionStatus })
     .from(sessions)
     .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
-    .where(and(inArray(sessions.id, requested), observableSession, ordinaryTaskSourceFilter()));
+    .where(pluginSessionStatusFilter(requested));
   const statuses = await readObserveStatuses(db, rows, readLive);
   if (getCurrentDbClientSnapshot() !== snapshot) throw new Error('PERMISSION_DENIED');
   return requested.flatMap(id => {

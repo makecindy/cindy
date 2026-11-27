@@ -82,9 +82,9 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     );
   });
 
-  it('maps Codex reconnect stalls to the existing upstream timeout copy', () => {
+  it('maps Codex reconnect stalls to the reconnect timeout copy', () => {
     expect(ERROR_REASON_I18N_KEYS.codex_reconnect_stalled).toBe(
-      'logic.errors.upstreamResponseIdleTimeout',
+      'logic.errors.codexReconnectStalled',
     );
   });
 

@@ -42,6 +42,23 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   id: string;
   model: string;
   orcaRole?: 'lead' | 'worker' | string | null;
+  orcaRemoteLead?: {
+    leadDeviceId: string;
+    leadDeviceName: string;
+    leadSessionId: string;
+    leadTitle: string;
+    workerLabel: string;
+    releasedAt?: number;
+  } | null;
+  createdBySession?: {
+    kind: 'session';
+    sessionId: string;
+    title?: string;
+    deviceId?: string;
+    deviceName?: string;
+    botId?: string;
+    botName?: string;
+  } | null;
   permissionMode?: string | null;
   pinnedAt?: string | null;
   source?: string | null;
@@ -54,7 +71,12 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   workspaceKind?: 'project' | 'dialogue' | string | null;
   workingDir: string | null;
   projectDir?: string | null;
-  companion?: { taskProjectDir?: string | null } | null;
+  companion?: {
+    id?: string;
+    role?: string;
+    routineId?: string;
+    taskProjectDir?: string | null;
+  } | null;
   remoteHostId?: string | null;
   deviceLinkDeviceId?: string | null;
   worktreePath?: string | null;
@@ -507,7 +529,7 @@ export function toRemoteSessionListItem(
     subtitle: [
       sessionCollaborationLabel(session),
       worktreeLabel,
-      agentLabel(session.agentKind),
+      agentLabel(session.agentKind, localizer),
       session.model,
       isDialogueSession(session) ? 'dialogue' : null,
     ].filter(Boolean).join(' · '),
@@ -865,7 +887,8 @@ function projectTitle(workingDir: string): string {
 const SCHEDULE_PREFIX = '[Schedule] ';
 
 function isAutomationGeneratedSession(session: RemoteSession): boolean {
-  return session.source === 'scheduler' || session.title.startsWith(SCHEDULE_PREFIX);
+  return session.source === 'scheduler'
+    || (typeof session.title === 'string' && session.title.startsWith(SCHEDULE_PREFIX));
 }
 
 function isAutomationSession(
@@ -876,10 +899,11 @@ function isAutomationSession(
 }
 
 function automationDisplayTitle(session: RemoteSession): string {
-  if (!isAutomationGeneratedSession(session)) return session.title || '';
-  return session.title.startsWith(SCHEDULE_PREFIX)
-    ? session.title.slice(SCHEDULE_PREFIX.length)
-    : session.title || '';
+  const title = typeof session.title === 'string' ? session.title : '';
+  if (!isAutomationGeneratedSession(session)) return title;
+  return title.startsWith(SCHEDULE_PREFIX)
+    ? title.slice(SCHEDULE_PREFIX.length)
+    : title;
 }
 
 function fallbackScheduleInfo(session: RemoteSession): RemoteSessionScheduleInfo | null {
@@ -940,19 +964,32 @@ export function groupAutomationListItems(
   return next;
 }
 
+/** 伙伴例行任务 Session（含旧主机不带 routineId 的行），供自动化筛选与归组共用。 */
+export function isTeammateRoutineSession(session: RemoteSessionListItem['session']): boolean {
+  const like = session as {
+    source?: unknown;
+    orcaRole?: unknown;
+    companion?: { role?: unknown } | null;
+  };
+  return like.source === 'bot' && like.orcaRole !== 'worker' && like.companion?.role === 'routine';
+}
+
+/**
+ * 列表自动化任务统一判定（分组与「隐藏自动化任务」筛选共用）：
+ * 覆盖定时自动化（`source === 'scheduler'` 及历史 `[Schedule] ` 标题前缀）与伙伴例行任务。
+ */
+export function isAutomationSidebarSession(session: RemoteSessionListItem['session']): boolean {
+  return isAutomationGeneratedSession(session) || isTeammateRoutineSession(session);
+}
+
 /**
  * 旧伙伴例行任务专线(`source='bot'`、`companion.role='routine'`)按例行规则归组,与桌面
  * getAutomationSidebarGroupInfo 同口径;旧主机不带 routineId 时返回 null,维持逐条显示。
  */
 function teammateRoutineGroupKey(session: RemoteSessionListItem['session']): string | null {
-  const like = session as {
-    source?: unknown;
-    orcaRole?: unknown;
-    companion?: { id?: string | null; role?: unknown; routineId?: string | null } | null;
-  };
-  if (like.source !== 'bot' || like.orcaRole === 'worker') return null;
-  const companion = like.companion;
-  if (companion?.role !== 'routine' || !companion.id || !companion.routineId) return null;
+  if (!isTeammateRoutineSession(session)) return null;
+  const companion = (session as { companion?: { id?: string | null; routineId?: string | null } | null }).companion;
+  if (!companion?.id || !companion.routineId) return null;
   return `routine:${companion.id}:${companion.routineId}`;
 }
 
@@ -996,7 +1033,7 @@ function toAutomationGroupListItem(
       '自动化',
       `${group.length} 个任务`,
       primary.worktreeLabel,
-      agentLabel(primary.session.agentKind),
+      agentLabel(primary.session.agentKind, localizer),
       primary.session.model,
     ].filter(Boolean).join(' · '),
     detail: [
@@ -1061,8 +1098,16 @@ function mergeScheduleInfo(group: readonly RemoteSessionListItem[]): RemoteSessi
   };
 }
 
-function agentLabel(agentKind: RemoteSession['agentKind']): string {
-  return agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : 'Claude Code';
+function agentLabel(
+  agentKind: RemoteSession['agentKind'],
+  localizer?: PresentationLocalizer,
+): string {
+  if (agentKind === 'codex') return 'Codex';
+  if (agentKind === 'pi') return 'Pi';
+  if (agentKind === 'acp') {
+    return presentationText(localizer, 'models.pluginEngines.genericName', '插件引擎');
+  }
+  return 'Claude Code';
 }
 
 function sessionStatusLabel(status: RemoteSession['status']): string {

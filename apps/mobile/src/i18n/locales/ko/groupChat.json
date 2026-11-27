@@ -97,6 +97,8 @@
   },
   "notice": {
     "memberJoined": "{{name}} 님이 그룹에 참여했습니다",
+    "memberJoinedList": "{{names}} 님이 그룹에 참여했습니다",
+    "memberJoinedSummary": "{{names}} 외 {{others}}명이 그룹에 참여했습니다",
     "memberFailed": "{{name}} 님이 이번에는 답하지 못했습니다",
     "memberTimeout": "{{name}} 님의 답이 너무 늦어 이번에는 건너뛰었습니다",
     "memberUnavailable": "{{name}} 님을 지금 사용할 수 없어 이번에는 발언하지 않았습니다",
@@ -175,7 +177,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}}의 도구가 실행되지 않았습니다. 그룹 권한이 만료되었거나 이 작업을 허용하지 않습니다. 동반자 소유자가 이 그룹에서 다시 요청해 주세요.",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}}의 그룹 권한을 확인할 수 없어 도구가 실행되지 않았습니다. 연결이 복구되면 다시 시도해 주세요.",
       "ATTACHMENTS_UNAVAILABLE": "다운로드 실패 또는 첨부 개수 제한으로 일부 첨부 파일이 {{name}}에게 전달되지 않았습니다. 이번 요청에 필요한 파일을 다시 보내 주세요.",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}님, Cindy가 대신 일하게 하려면 내 Cindy를 연결하세요(지금 온라인인 Cindy가 없습니다)."
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}님, Cindy가 대신 일하게 하려면 내 Cindy를 연결하세요(지금 온라인인 Cindy가 없습니다).",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}님, 이 요청을 계속하려면 이 그룹에서 사용할 컴퓨터를 선택하세요.",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}}님이 이 그룹에서 선택한 컴퓨터가 오프라인입니다."
     }
   },
   "plan": {
@@ -499,10 +503,12 @@
       "tools": "도구와 정보 사용 승인됨",
       "authorizeTitle": "{{name}}의 도구와 정보 사용을 허용할까요?",
       "toolsHint": "멤버는 동반자의 기존 도구와 개인 정보를 사용할 수 있으며 결과는 모두에게 공개됩니다. 기존 승인 규칙은 유지됩니다. 권한 취소 시 진행 중인 요청은 중단되지만 완료된 작업은 되돌릴 수 없습니다.",
-      "confirm": "확인"
+      "confirm": "도구 사용 허용"
     }
   },
   "groupSettings": {
+    "assistantComputer": "실행할 컴퓨터",
+    "chooseComputer": "컴퓨터 선택",
     "tabSettings": "설정",
     "youAreOwner": "내가 그룹 소유자",
     "youAreAdmin": "내가 관리자",
@@ -544,6 +550,8 @@
     "accessChat": "그룹 내 대화만",
     "accessTools": "도구와 정보 사용 가능",
     "replies": "동반자 답변 방식",
+    "assistant": "그룹의 Cindy",
+    "assistantHint": "@한 사람의 컴퓨터에서 실행돼요.",
     "replyModeMentionedNote": "@하지 않으면 동반자가 답하지 않아요.",
     "work": "역할 분담",
     "organizerHint": "누가 어느 단계를 맡을지 정해요. 기본은 첫 번째 동반자예요.",
@@ -588,7 +596,7 @@
     "removeOwnHint": "{{name}} 동반자가 “{{group}}” 메시지를 더 이상 받지 않습니다. 기록은 유지되며 다른 그룹과 개인 채팅에는 영향을 주지 않습니다.",
     "removeOwnActiveHint": "이 그룹에서 진행 중인 요청이 중지됩니다. 별도로 시작한 작업은 계속 실행됩니다.",
     "stopAndRemove": "중지 후 내보내기",
-    "confirm": "확인",
+    "confirm": "도구 사용 허용",
     "inviteTitle": "그룹에 초대",
     "reusableLink": "만료 없음 · 여러 사람이 반복 사용 가능",
     "singleUseUntil": "한 번만 사용 가능 · {{date}}에 만료",

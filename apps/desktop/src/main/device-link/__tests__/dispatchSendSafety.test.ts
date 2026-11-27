@@ -53,7 +53,7 @@ vi.mock('../settings-store.desktop', () => ({
 
 import { __testing, dropAllControllers, runInvoke, wireInboundDispatch, setHistoryToolNameReader, setRemoteTurnChangeAction } from '../dispatch.desktop';
 import { __testing as registry } from '../invoke-registry';
-import { setRemoteBotSessionLookup } from '../remoteBotSessionBoundary';
+import { setRemoteBotSessionLookup, type RemoteSessionLookupKind } from '../remoteBotSessionBoundary';
 import { currentDbRpcAdmissionClass } from '../../localDb/client/rpcAdmission';
 import { getDeviceLinkInvokeContext } from '../invoke-context';
 import { HistoryViewController, type HistoryViewPage, type HistoryMessageSource } from '@cindy/maker-shared/message-window';
@@ -1136,7 +1136,7 @@ describe('remote companion Session visibility at the device-link boundary', () =
   it.each(['hidden', 'missing'] as const)('rejects a private thread when the viewer Bot is %s, using Bot identity rather than the opaque thread ID', async (access) => {
     const handler = vi.fn(() => ({ ok: true, thread: { messages: [{ content: 'private' }] } }));
     registry.register('maker:bot-direct-message-thread:get', handler);
-    const lookup = vi.fn(async (id: string, kind?: 'session' | 'bot') =>
+    const lookup = vi.fn(async (id: string, kind?: RemoteSessionLookupKind) =>
       kind === 'bot' && id === 'viewer-bot' ? access : 'ordinary' as const);
     setRemoteBotSessionLookup(lookup);
     expect(await runInvoke('ctrl-1', { channel: 'maker:bot-direct-message-thread:get', args: ['opaque-thread', 'viewer-bot'] }))

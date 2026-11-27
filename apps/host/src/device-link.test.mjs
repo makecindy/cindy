@@ -148,6 +148,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   const url = `ws://127.0.0.1:${wss.address().port}`;
   const closedSessions = [];
   const metaPatches = [];
+  const titleCalls = [];
   const service = createHostService({
     profileHold: () => held,
     // One USD and one CNY quote: the device-link v1 projection keeps only USD (usageHandlers.ts).
@@ -251,6 +252,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       return rows.length > 0;
     },
     mcpApps: { invoke: async () => { appCalls++; return {}; }, releaseCaller: async () => {} },
+    autoTitle: {
+      generateTitle: async req => { titleCalls.push(['generate', req]); return { title: 'Gen title' }; },
+      regenerateTitle: async req => { titleCalls.push(['regenerate', req]); return { title: 'Regen title' }; },
+    },
     requestPluginOauth: async () => { oauthCalls++; return { ok: true }; },
     invalidatePluginOauth: peer => { oauthCancelled.push(peer ?? 'all'); },
   });
@@ -410,6 +415,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
   assert.equal(badField.ok, false);
   const badDiscard = await clients[0].invoke('host', { channel: 'local-db:sessions:patch-meta', args: ['task', { status: 'archived', discardWorktreeChanges: true }] });
   assert.equal(badDiscard.ok, false);
+  const genTitle = await clients[0].invoke('host', { channel: 'maker:generate-title', args: [{ message: 'hello', agentKind: 'claude-code', sessionId: 'task' }] });
+  assert.deepEqual(genTitle, { ok: true, result: { title: 'Gen title' } });
+  const regenTitle = await clients[0].invoke('host', { channel: 'maker:regenerate-title', args: [{ sessionId: 'task' }] });
+  assert.deepEqual(regenTitle, { ok: true, result: { title: 'Regen title' } });
+  assert.deepEqual(titleCalls, [['generate', { message: 'hello', agentKind: 'claude-code', sessionId: 'task' }], ['regenerate', { sessionId: 'task' }]]);
   const chosen = await clients[0].invoke('host', { channel: 'maker:apply-new-maker-draft-pref', args: [{
     agent: 'pi', providerId: 'inferx', modelId: 'kimi-k3.1-pro', active: true,
     markModelChoice: true, selectDraftAgent: true, effort: 'max', fast: true, thinking: false,
@@ -722,6 +732,7 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       const support = await handoff([{ action: 'task-action-capability' }]);
       assert.equal(support.ok, true, JSON.stringify(support));
       assert.equal(support.result.ordinaryCreateVersion, 1);
+      assert.equal(support.result.ordinaryCreatePluginEngine, undefined);
       assert.equal(support.result.projectCatalogVersion, 1);
       assert.equal(support.result.taskActionVersion, 1);
 
@@ -794,6 +805,29 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       assert.deepEqual(secondPage.page.items.map(row => [row.sessionId, row.role, row.content]),
         [[`host::${id}`, 'assistant', 'Result from the Host']]);
       assert.equal((await readHistory('missing')).errorCode, 'NOT_FOUND');
+
+      const unsupportedPlugin = await send({ deviceId: 'host', sessionId: randomUUID() }, {
+        sender, message: 'Plugin engine task',
+        create: async () => ({ permissionMode: 'ask', agentKind: 'acp', providerId: 'acp-plugin:antigravity:acp', model: 'gemini-4-neon', projectDir: null }),
+      });
+      assert.equal(unsupportedPlugin.ok, false, JSON.stringify(unsupportedPlugin));
+      assert.equal(unsupportedPlugin.errorCode, 'REMOTE_UNSUPPORTED');
+      const bypassPlugin = createRemoteSessionHandoff({
+        captureAccess: () => () => {},
+        invoke: async (_id, channel, args) => {
+          const res = await desktop.invoke('host', { channel, args });
+          if (args[0]?.action === 'task-action-capability' && res.ok && res.result)
+            return { ...res, result: { ...res.result, ordinaryCreatePluginEngine: 1 } };
+          return res;
+        },
+      });
+      const hostRejectedPlugin = await bypassPlugin({ deviceId: 'host', sessionId: randomUUID() }, {
+        sender, message: 'Bypassed plugin engine task',
+        create: async () => ({ permissionMode: 'ask', agentKind: 'acp', providerId: 'acp-plugin:antigravity:acp', model: 'gemini-4-neon', projectDir: null }),
+      });
+      assert.equal(hostRejectedPlugin.ok, false, JSON.stringify(hostRejectedPlugin));
+      assert.equal(hostRejectedPlugin.errorCode, 'UNSUPPORTED_CAPABILITY');
+      assert.equal(handoffQueue.length, 2);
 
       await handoffQueue[1].handoff.taskActionDeliveryGuard.onSettled();
       await assert.rejects(handoffQueue[1].handoff.taskActionDeliveryGuard(), /TASK_ACTION_AUTHORIZATION_EXPIRED/);
@@ -1000,6 +1034,7 @@ const PINNED_DISPATCH_PORTS = {
   'service-gate': ['executeTaskTags', 'dispatchLocalInvoke'],
   'refused-at-entry': ['requestPluginOauth'],
   unbound: ['readUsageWidgetSnapshot', 'configureStandbyGuestCleanup', 'prepareShareAvailability',
+    'readZhipuCodingPlanAccountUsage', 'isRemoteProviderInvocationAllowed',
     'readKimiCodingAccountUsage', 'readOpenCodeGoAccountUsage', 'requestFilePeer', 'stopFilePeers', 'requestTaskMigration',
     'delegatedProviderShareGuestAccess', 'locallyProvenProviderShareDelegation',
     'delegatedProviderShareLeases', 'invalidateProviderShareDelegation',

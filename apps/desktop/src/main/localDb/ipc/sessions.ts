@@ -69,6 +69,8 @@ import {
   selectOrdinarySessionListRows,
   touchUserSendRow,
   selectSessionWithCount,
+  isSessionImAttachedInDb,
+  selectImAttachedSessionIds,
   selectSessionsByIds,
   flattenSessionReadRow,
   projectSessionDetail,
@@ -1533,17 +1535,30 @@ export function registerSessionIpc(
     }
     const ids = [...new Set(value.map((id) => requireString(id, 'sessionId')))];
     if (!ids.length) return [];
-    const rows = await selectSessionsByIds(getDbClient().drizzle, ids);
-    return rows.map((row) => projectSessionReadResult(row, opts.resolveContextWindow));
+    const db = getDbClient().drizzle;
+    const [rows, attachedIds] = await Promise.all([
+      selectSessionsByIds(db, ids),
+      selectImAttachedSessionIds(db, ids),
+    ]);
+    return rows.map((row) => ({
+      ...projectSessionReadResult(row, opts.resolveContextWindow),
+      imAttached: attachedIds.has(row.id),
+    }));
   });
 
   ipcMain.handle('local-db:sessions:get', async (_e, id: unknown) => {
     const sid = requireString(id, 'id');
     const dbClient = getDbClient();
-    const row = await selectSessionWithCount(dbClient.drizzle, sid);
+    const [row, imAttached] = await Promise.all([
+      selectSessionWithCount(dbClient.drizzle, sid),
+      isSessionImAttachedInDb(dbClient.drizzle, sid),
+    ]);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
     const timing = getSilentContinuationTiming(sid, row.activeTurnStartedAt, dbClient);
-    return projectSessionDetail(row, opts.resolveContextWindow, timing?.startedAt ?? undefined, timing?.settledEndAt);
+    return {
+      ...projectSessionDetail(row, opts.resolveContextWindow, timing?.startedAt ?? undefined, timing?.settledEndAt),
+      imAttached,
+    };
   });
 
   /**
