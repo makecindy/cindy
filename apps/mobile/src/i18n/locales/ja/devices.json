@@ -422,7 +422,8 @@
         "all": "すべて",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "プラグインエンジン"
       },
       "filterLastActivityHeading": "最終アクティビティ",
       "filterLastActivity": {
