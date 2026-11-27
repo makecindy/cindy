@@ -56,10 +56,12 @@ export interface SilentGatewaySwitchDeps {
  * Send-time silent engine switch for Cindy AI catalog entries marked `silentSwitch`.
  *
  * Every send re-checks the latest authoritative catalog; nothing is remembered per task. A send
- * that cannot decide (catalog not authoritative, task busy) or whose switch fails leaves the task
- * as it is, so the next send checks again. A failed switch is logged and the send continues on
- * the current engine, like the cross-engine pending switch does. Idle tasks are never switched
- * in the background: the catalog only takes effect when the task is next sent to.
+ * that cannot decide (catalog not authoritative, task busy) leaves the task as it is and goes out
+ * on the current engine, so the next send checks again. When the switch is still required but the
+ * handoff fails, the send is stopped with HARNESS_SWITCH_NOT_READY before anything is sent or
+ * stored, so the user retries the same input; if the directive or the task changed during the
+ * handoff there is nothing to switch and the send continues. Idle tasks are never switched in the
+ * background: the catalog only takes effect when the task is next sent to.
  */
 export function createSilentGatewaySwitchForSend(deps: SilentGatewaySwitchDeps) {
   return async (sessionId: string, signal?: AbortSignal): Promise<void> => {
@@ -99,8 +101,8 @@ export function createSilentGatewaySwitchForSend(deps: SilentGatewaySwitchDeps) 
         const latest = deps.getCatalog().models.find(entry => entry.id === modelId);
         return latest?.agents?.[0] === target && isXdGatewaySilentSwitchTarget(latest, target);
       };
+      if (!directiveIsCurrent()) return;
       try {
-        if (!directiveIsCurrent()) throwIpcError('PRECONDITION_FAILED', 'Model directory changed before agent switch');
         const result = await deps.switchAgent({
           sessionId,
           targetAgentKind: target,
@@ -115,11 +117,19 @@ export function createSilentGatewaySwitchForSend(deps: SilentGatewaySwitchDeps) 
         if (!result.switched || result.deferred) throwIpcError('PRECONDITION_FAILED', 'Agent switch could not be applied');
       } catch (err) {
         if (signal?.aborted) throw err;
-        deps.log.warn('agent-switch: silent gateway switch failed; sending on the current engine', {
+        // A directive withdrawn or a task changed under the handoff leaves nothing to switch now.
+        const stillRequired = owner === deps.getOwner() && directiveIsCurrent() &&
+          !deps.hasPendingAgentSwitch(sessionId) && !deps.isTurnRunning(sessionId) &&
+          !deps.hasPendingInteraction(sessionId);
+        deps.log.warn(stillRequired
+          ? 'agent-switch: silent gateway switch failed; send stopped for retry'
+          : 'agent-switch: silent gateway switch no longer applies; sending on the current engine', {
           sessionId,
           targetAgentKind: target,
           err: err instanceof Error ? err.message : String(err),
         });
+        // Nothing has been sent or stored yet; the user retries the same input.
+        if (stillRequired) throwIpcError('HARNESS_SWITCH_NOT_READY', `Switching this task to ${target} failed; retry the send`);
       }
     }
   };

@@ -5,7 +5,8 @@
  * - Bug／规则依据：docs/dev-rules/protocol-compatibility/model-access-silent-switch.md；review 发现
  *   目录按数组引用比较导致内容不变的刷新中断发送、切换失败让该任务每次发送都失败、无需切换时
  *   仍因选择器变化拒绝发送；PR #13427 review 要求取消「每任务只判定一次」：任务忙或切换失败时
- *   消耗掉唯一一次机会，之后的发送永远不再切换。
+ *   消耗掉唯一一次机会，之后的发送永远不再切换；复审要求仍需切换但交接失败时停住本次发送，
+ *   留给用户重试同一条输入，而不是让原引擎发出。
  * - 现有覆盖缺口：modelsSyncRefresh.test.ts 只覆盖目标解析 resolveSilentGatewaySwitchTarget，
  *   不覆盖发送前的判定、目录复核与失败回退。
  * - 最小失败输入：交接期间 setXdGatewayModels 以相同内容重写目录；performSessionAgentSwitch 抛错；
@@ -149,23 +150,37 @@ describe('silent Cindy AI engine switch on send', () => {
   it.each<[string, SilentGatewaySwitchDeps['switchAgent']]>([
     ['the handoff throws', async () => { throw new Error('engine unavailable'); }],
     ['the switch is only deferred', async () => ({ switched: false, deferred: true })],
-    ['the directory withdraws the switch mid-handoff', async (params) => {
-      setXdGatewayModels([{ ...AUTO, silentSwitch: undefined }], { authoritative: true });
-      params.assertSelectionCurrent();
-      return { switched: true };
-    }],
-  ])('sends on the current engine when %s and checks again on the next send', async (label, switchAgent) => {
+  ])('stops the send when %s so the same input is retried, and switches on the retry', async (_label, switchAgent) => {
     const h = harness({ switchAgent });
-    await expect(h.send('task-1')).resolves.toBeUndefined();
+    await expect(h.send('task-1')).rejects.toMatchObject({ code: 'HARNESS_SWITCH_NOT_READY' });
     expect(h.row.agentKind).toBe('codex');
     expect(h.log.warn).toHaveBeenCalledTimes(1);
     expect(h.log.warn.mock.calls[0]![1]).toMatchObject({ sessionId: 'task-1', targetAgentKind: 'pi' });
     h.switchAgent.mockImplementation(async () => ({ switched: true }));
     await expect(h.send('task-1')).resolves.toBeUndefined();
-    // A withdrawn directive leaves nothing to retry; any other failure is retried and now succeeds.
-    const withdrawn = label.includes('withdraws');
-    expect(h.switchAgent).toHaveBeenCalledTimes(withdrawn ? 1 : 2);
-    expect(h.row.agentKind).toBe(withdrawn ? 'codex' : 'pi');
+    expect(h.switchAgent).toHaveBeenCalledTimes(2);
+    expect(h.row.agentKind).toBe('pi');
+  });
+
+  it.each<[string, (h: ReturnType<typeof harness>) => void]>([
+    ['the directory withdraws the switch', () => {
+      setXdGatewayModels([{ ...AUTO, silentSwitch: undefined }], { authoritative: true });
+    }],
+    ['a question appears on the task', (h) => { h.state.pendingQuestion = true; }],
+  ])('sends on the current engine when %s during the handoff, since nothing is left to switch', async (_label, change) => {
+    const ref: { h?: ReturnType<typeof harness> } = {};
+    const h = harness({
+      switchAgent: async (params) => {
+        change(ref.h!);
+        params.assertSelectionCurrent();
+        return { switched: true };
+      },
+    });
+    ref.h = h;
+    await expect(h.send('task-1')).resolves.toBeUndefined();
+    expect(h.row.agentKind).toBe('codex');
+    expect(h.log.warn).toHaveBeenCalledTimes(1);
+    expect(h.log.warn.mock.calls[0]![0]).toContain('no longer applies');
   });
 
   it('propagates a cancelled send and lets the next send switch', async () => {

@@ -5383,7 +5383,8 @@ describe('session-agent-switch handoff injection', () => {
   // send-time switch used to decide once per task, so a task switched on joining the pilot stayed on
   // Codex after leaving it. Real silent switch + real agent switch + real send transaction, wired as
   // register.ts does; only storage and engines are fakes.
-  function silentSwitchSendHarness() {
+  function silentSwitchSendHarness(options: { failHandoffOnce?: boolean } = {}) {
+    let failHandoff = options.failHandoffOnce === true;
     const pendingSwitches = createPendingAgentSwitchRegistry();
     let current: MakerSendTransactionSession | undefined = createSession({ agentKind: 'pi' });
     let row: AgentSwitchSessionRow = {
@@ -5398,7 +5399,13 @@ describe('session-agent-switch handoff injection', () => {
       getLiveSession: () => current,
       closeSession: vi.fn(async () => { current = undefined; }),
       // The handoff carries what the conversation actually stored so far.
-      listMessagesForHandoff: async () => persisted().map((content, index) => ({ role: 'user', content, createdAt: index + 1 })),
+      listMessagesForHandoff: async () => {
+        if (failHandoff) {
+          failHandoff = false;
+          throw new Error('handoff history unavailable');
+        }
+        return persisted().map((content, index) => ({ role: 'user', content, createdAt: index + 1 }));
+      },
       applyAgentSwitchToDb: vi.fn(async (_id, patch) => {
         row = { ...row, ...patch, providerId: patch.providerId ?? null, sdkSessionId: patch.sdkSessionId ?? null };
       }),
@@ -5513,6 +5520,29 @@ describe('session-agent-switch handoff injection', () => {
       expect(harness.delivered()[1]).toHaveLength(2);
       expect(harness.delivered()[1]![1]).toBe('Flag withdrawn');
       expect(harness.persisted()).toEqual(['Joined the pilot', 'Flag withdrawn']);
+    } finally {
+      setXdGatewayModels([], { authoritative: false });
+    }
+  });
+
+  it('a failed handoff stops the send with the input kept; the retry reaches Codex exactly once and Pi never', async () => {
+    const harness = silentSwitchSendHarness({ failHandoffOnce: true });
+    try {
+      setXdGatewayModels([xdAuto('codex', true)], { authoritative: true });
+      await expect(harness.send('Original question')).rejects.toMatchObject({ code: 'HARNESS_SWITCH_NOT_READY' });
+      // Nothing went out or was stored, and the task is still on Pi for the retry.
+      expect(harness.delivered().flat()).toEqual([]);
+      expect(harness.persisted()).toEqual([]);
+      expect(harness.row()).toMatchObject({ agentKind: 'pi', model: 'auto' });
+
+      await expect(harness.send('Original question')).resolves.toMatchObject({ accepted: true });
+      expect(harness.row()).toMatchObject({ agentKind: 'codex', model: 'auto', providerId: 'xd' });
+      expect(harness.sessions.map(session => session.agentKind)).toEqual(['pi', 'codex']);
+      const [pi, codex] = harness.delivered();
+      expect(pi).toEqual([]);
+      expect(codex).toHaveLength(1);
+      expect(codex![0]).toContain('Original question');
+      expect(harness.persisted()).toEqual(['Original question']);
     } finally {
       setXdGatewayModels([], { authoritative: false });
     }
