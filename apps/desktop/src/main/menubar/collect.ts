@@ -390,18 +390,49 @@ function accountIdentity(provider: ProviderView): string | null {
   return identity && identity.trim() ? identity.trim() : null;
 }
 
+const GENERATED_SUBSCRIPTION_BRANDS = ['OpenAI', 'Anthropic', 'Claude', 'xAI', 'Grok'] as const;
+
+function isGeneratedUserSubscriptionName(name: string, identities: readonly string[]): boolean {
+  if (/^(?:openai|anthropic|claude|xai|grok)(?:\s*\((?:[2-9]|[1-9]\d+)\))?$/i.test(name)) return true;
+  const lower = name.toLowerCase();
+  for (const identity of identities) {
+    for (const brand of GENERATED_SUBSCRIPTION_BRANDS) {
+      const base = `${brand} · ${identity}`.slice(0, 50);
+      const baseLower = base.toLowerCase();
+      if (
+        lower === baseLower ||
+        (lower.startsWith(baseLower) && /^ \((?:[2-9]|[1-9]\d+)\)$/.test(name.slice(base.length)))
+      ) {
+        return true;
+      }
+    }
+  }
+  if (
+    identities.length === 0 &&
+    /^(?:openai|anthropic|claude|xai|grok)\s*·\s*\S+@\S+(?:\s*\((?:[2-9]|[1-9]\d+)\))?$/i.test(name)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Owner-chosen name for a subscription provider, if the user explicitly renamed it.
  * Built-in and created subscription providers set `customName` when renamed; legacy
  * user OAuth connections store the edited name directly in `provider.name`.
  */
-function customSubscriptionProviderName(provider: ProviderView): string | null {
+function customSubscriptionProviderName(
+  provider: ProviderView,
+  poolIdentities: readonly string[] = [],
+): string | null {
   const name = provider.name?.trim();
   if (!name) return null;
   if (provider.source === 'builtin') return provider.customName === true ? name : null;
   if (provider.source === 'user') {
     if (name === provider.id) return null;
-    if (/^(?:openai|anthropic|claude|xai|grok)(?:\s*·[\s\S]*)?$/i.test(name)) return null;
+    const ownIdentity = accountIdentity(provider);
+    const identities = ownIdentity ? [ownIdentity, ...poolIdentities] : poolIdentities;
+    if (isGeneratedUserSubscriptionName(name, identities)) return null;
     return name;
   }
   return null;
@@ -475,15 +506,19 @@ export function codexSource(
 /** One account owns the entire displayed snapshot. This projection is shared with peer reads. */
 export function subscriptionPoolSources(provider: ProviderView, pool: SubscriptionPoolView, nowMs: number): MenubarSubscriptionInput[] {
   if (pool.providerId !== provider.id) throw new Error('Subscription pool provider mismatch');
-  const providerName = customSubscriptionProviderName(provider);
+  const poolIdentities = pool.accounts
+    .map(account => account.identity?.trim())
+    .filter((value): value is string => !!value);
+  const providerName = customSubscriptionProviderName(provider, poolIdentities);
   const active = pool.accounts.filter(account => !account.paused && !isUnusedDefaultAccount(account));
   return active.map(account => {
     const signedIn = account.status === 'ready' || account.status === 'limited';
     const usage = signedIn ? account.usage : undefined;
     const view = { ...provider, customName: undefined, openAiAccount: undefined, subscriptionAccount: undefined };
-    const source = (pool.kind ?? provider.subscriptionAccountPool ?? provider.subscriptionPool ?? provider.id) === 'openai'
-      ? codexSource(view, codexPoolPayload(usage?.codex), nowMs)
-      : claudeSource(view, usage?.claude ?? null, nowMs);
+    const { label: _inheritedLabel, providerName: _inheritedProviderName, ...source } =
+      (pool.kind ?? provider.subscriptionAccountPool ?? provider.subscriptionPool ?? provider.id) === 'openai'
+        ? codexSource(view, codexPoolPayload(usage?.codex), nowMs)
+        : claudeSource(view, usage?.claude ?? null, nowMs);
     const identity = account.identity?.trim() || null;
     const label = account.label?.trim() || (active.length === 1 ? providerName : null) || null;
     return {

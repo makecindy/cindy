@@ -18,6 +18,7 @@ import {
   type MenubarCollectDeps,
   modelDisplayNames,
   opencodeGoSource,
+  subscriptionPoolSources,
   usageScope,
 } from '../collect';
 import { readRemoteSubscriptions, retainRemoteSubscriptions, REMOTE_RETAIN_MS, type RemoteSeen, type RemoteSubscriptionDeps } from '../remoteSubscriptions';
@@ -1212,5 +1213,70 @@ describe('plugin engine quota collection', () => {
     expect(view.details['openai'].actionLabel).toBe('Start a task with 团队号池');
     expect(view.details['openai:account:second'].title).toBe('团队号池');
     expect(view.details['openai:account:second'].actionLabel).toBe('Start a task with 团队号池');
+
+    // Legacy user OAuth connections: preserve brand-prefixed custom names ("OpenAI · 工作"),
+    // exclude generated "<Brand> · <email>" names, and never collapse multi-account tubes.
+    const generatedLegacy = codexSource(provider({
+      id: 'openai-legacy',
+      source: 'user',
+      name: 'OpenAI · pricky@gmail.com',
+      openAiAccount: { source: 'oauth', identity: 'pricky@gmail.com' },
+    }), null, NOW);
+    expect(generatedLegacy.label).toBeUndefined();
+
+    const renamedLegacySingle = codexSource(provider({
+      id: 'openai-legacy',
+      source: 'user',
+      name: 'OpenAI · 工作',
+      openAiAccount: { source: 'oauth', identity: 'pricky@gmail.com' },
+    }), null, NOW);
+    expect(renamedLegacySingle).toMatchObject({
+      label: 'OpenAI · 工作',
+      providerName: 'OpenAI · 工作',
+    });
+
+    const renamedLegacyPool = subscriptionPoolSources(
+      provider({
+        id: 'openai-legacy',
+        source: 'user',
+        name: 'OpenAI · 工作',
+        subscriptionAccountPool: 'openai',
+      }),
+      {
+        providerId: 'openai-legacy',
+        kind: 'openai',
+        configured: true,
+        strategy: 'expiring',
+        accounts: [
+          {
+            id: 'default',
+            paused: false,
+            limit: 4,
+            weight: 1,
+            directory: '/home/.codex',
+            status: 'ready',
+            running: 0,
+            identity: 'pricky@gmail.com',
+            planType: 'pro',
+            usage: { codex: { planType: 'pro', credits: null, buckets: { codex: { limitId: 'codex', limitName: null, updatedAt: NOW, primary: null, secondary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } } } } },
+          },
+          {
+            id: 'second',
+            paused: false,
+            limit: 4,
+            weight: 1,
+            directory: '/home/.codex-2',
+            status: 'ready',
+            running: 0,
+            identity: 'backup@gmail.com',
+            planType: 'pro',
+            usage: { codex: { planType: 'pro', credits: null, buckets: { codex: { limitId: 'codex', limitName: null, updatedAt: NOW, primary: null, secondary: { usedPercent: 50, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } } } } },
+          },
+        ],
+      },
+      NOW,
+    );
+    expect(renamedLegacyPool.map(source => source.label)).toEqual([undefined, undefined]);
+    expect(renamedLegacyPool.map(source => source.providerName)).toEqual(['OpenAI · 工作', 'OpenAI · 工作']);
   });
 });
