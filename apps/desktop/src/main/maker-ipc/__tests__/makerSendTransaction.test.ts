@@ -5380,13 +5380,10 @@ describe('session-agent-switch handoff injection', () => {
   });
 
   // docs/dev-rules/protocol-compatibility/model-access-silent-switch.md, PR #13427 review: the
-  // send-time switch used to decide once per task, so a send made before the catalog flagged Auto
-  // used up the decision and the Pi task never moved. Real silent switch + real agent switch +
-  // real send transaction, wired as register.ts does; only storage and engines are fakes.
-  it('a Pi task moves to Codex on a later send once the catalog flags Auto mid-conversation, sending each message once', async () => {
-    const piAuto: XdGatewayModelInfo = { id: 'auto', name: 'Auto', contextWindow: 128_000, availability: 'available',
-      agents: ['pi'], perAgent: { pi: { wireProtocol: 'openai-responses' } } };
-    setXdGatewayModels([piAuto], { authoritative: true });
+  // send-time switch used to decide once per task, so a task switched on joining the pilot stayed on
+  // Codex after leaving it. Real silent switch + real agent switch + real send transaction, wired as
+  // register.ts does; only storage and engines are fakes.
+  function silentSwitchSendHarness() {
     const pendingSwitches = createPendingAgentSwitchRegistry();
     let current: MakerSendTransactionSession | undefined = createSession({ agentKind: 'pi' });
     let row: AgentSwitchSessionRow = {
@@ -5394,12 +5391,14 @@ describe('session-agent-switch handoff injection', () => {
       orcaRole: null, sdkSessionId: 'pi-native-session', source: 'desktop',
     };
     let handoff: string | null = null;
+    let persisted: () => string[] = () => [];
     const switchDeps: MakerSessionAgentSwitchHandlerDeps = {
       pendingSwitches,
       getSessionRow: async () => ({ ...row }),
       getLiveSession: () => current,
       closeSession: vi.fn(async () => { current = undefined; }),
-      listMessagesForHandoff: async () => [{ role: 'user', content: 'Earlier conversation on Pi', createdAt: 1 }],
+      // The handoff carries what the conversation actually stored so far.
+      listMessagesForHandoff: async () => persisted().map((content, index) => ({ role: 'user', content, createdAt: index + 1 })),
       applyAgentSwitchToDb: vi.fn(async (_id, patch) => {
         row = { ...row, ...patch, providerId: patch.providerId ?? null, sdkSessionId: patch.sdkSessionId ?? null };
       }),
@@ -5444,25 +5443,76 @@ describe('session-agent-switch handoff injection', () => {
       peekPendingHandoff: async () => handoff,
       consumePendingHandoff: vi.fn(() => { handoff = null; }),
     });
+    persisted = () => vi.mocked(deps.createDbMessage).mock.calls.map(([, message]) => String(message.content));
     const transaction = createMakerSendTransaction(deps);
     const send = (content: string) => transaction.sendToAgentAccepted('session-1', { type: 'user', content },
       { agentKind: 'pi', workingDir: path.join(os.tmpdir(), 'silent-switch-fixture'), model: 'auto', providerId: 'xd' },
       { persistUserMessage: { clientId: content, content } });
+    /** Messages each engine actually received, in engine order. */
+    const delivered = () => sessions.map(session =>
+      vi.mocked(session.send).mock.calls.map(([message]) => (message as UserMessage).content));
+    return { send, row: () => row, sessions, deps, persisted, delivered };
+  }
+
+  // The directory an XD member sees for Cindy AI `auto`: one engine, optionally flagged silentSwitch.
+  const xdAuto = (agent: 'pi' | 'codex', silentSwitch?: boolean): XdGatewayModelInfo => ({
+    id: 'auto', name: 'Auto', contextWindow: 128_000, availability: 'available', agents: [agent],
+    perAgent: { [agent]: { wireProtocol: 'openai-responses' } },
+    ...(silentSwitch === undefined ? {} : { silentSwitch }),
+  });
+
+  it('one auto conversation follows the pilot catalog Pi → Codex → Pi without a restart, sending each message once', async () => {
+    const harness = silentSwitchSendHarness();
     try {
-      await expect(send('Before the flag')).resolves.toMatchObject({ accepted: true });
-      expect(row.agentKind).toBe('pi');
-      setXdGatewayModels([{ ...piAuto, silentSwitch: true, agents: ['codex'],
-        perAgent: { codex: { wireProtocol: 'openai-responses' } } }], { authoritative: true });
-      await expect(send('After the flag')).resolves.toMatchObject({ accepted: true });
-      expect(row).toMatchObject({ agentKind: 'codex', model: 'auto', providerId: 'xd' });
-      expect(sessions.map(session => session.agentKind)).toEqual(['pi', 'codex']);
-      const [pi, codex] = sessions.map(session => vi.mocked(session.send).mock.calls);
-      expect(pi!.map(([message]) => (message as UserMessage).content)).toEqual(['Before the flag']);
+      // Organization default before the member joins: Pi only, flagged.
+      setXdGatewayModels([xdAuto('pi', true)], { authoritative: true });
+      await expect(harness.send('On Pi')).resolves.toMatchObject({ accepted: true });
+      expect(harness.row()).toMatchObject({ agentKind: 'pi', model: 'auto' });
+
+      // Pilot override: Codex only, flagged.
+      setXdGatewayModels([xdAuto('codex', true)], { authoritative: true });
+      await expect(harness.send('Joined the pilot')).resolves.toMatchObject({ accepted: true });
+      expect(harness.row()).toMatchObject({ agentKind: 'codex', model: 'auto', providerId: 'xd' });
+
+      // Override removed: the member inherits the flagged Pi-only default again.
+      setXdGatewayModels([xdAuto('pi', true)], { authoritative: true });
+      await expect(harness.send('Left the pilot')).resolves.toMatchObject({ accepted: true });
+      expect(harness.row()).toMatchObject({ agentKind: 'pi', model: 'auto', providerId: 'xd' });
+
+      expect(harness.sessions.map(session => session.agentKind)).toEqual(['pi', 'codex', 'pi']);
+      expect(vi.mocked(harness.deps.bootstrapSession).mock.calls.map(([opts]) => [opts.agentKind, opts.model]))
+        .toEqual([['codex', 'auto'], ['pi', 'auto']]);
+      const [firstPi, codex, secondPi] = harness.delivered();
+      expect(firstPi).toEqual(['On Pi']);
+      // Each engine gets exactly one turn, and the handoff carries the stored history forward.
       expect(codex).toHaveLength(1);
-      expect((codex![0]![0] as UserMessage).content).toContain('Earlier conversation on Pi');
-      expect((codex![0]![0] as UserMessage).content).toContain('After the flag');
-      expect(deps.bootstrapSession).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ agentKind: 'codex', model: 'auto' }));
-      expect(vi.mocked(deps.createDbMessage).mock.calls.map(([, message]) => message.content)).toEqual(['Before the flag', 'After the flag']);
+      expect(codex![0]).toContain('On Pi');
+      expect(codex![0]).toContain('Joined the pilot');
+      expect(secondPi).toHaveLength(1);
+      expect(secondPi![0]).toContain('On Pi');
+      expect(secondPi![0]).toContain('Joined the pilot');
+      expect(secondPi![0]).toContain('Left the pilot');
+      expect(harness.persisted()).toEqual(['On Pi', 'Joined the pilot', 'Left the pilot']);
+    } finally {
+      setXdGatewayModels([], { authoritative: false });
+    }
+  });
+
+  it('only withdrawing silentSwitch keeps the task on its current engine', async () => {
+    const harness = silentSwitchSendHarness();
+    try {
+      setXdGatewayModels([xdAuto('codex', true)], { authoritative: true });
+      await expect(harness.send('Joined the pilot')).resolves.toMatchObject({ accepted: true });
+      expect(harness.row()).toMatchObject({ agentKind: 'codex', model: 'auto' });
+
+      // Same Pi-only directory, but the flag is gone: no silent switch back.
+      setXdGatewayModels([xdAuto('pi')], { authoritative: true });
+      await expect(harness.send('Flag withdrawn')).resolves.toMatchObject({ accepted: true });
+      expect(harness.row()).toMatchObject({ agentKind: 'codex', model: 'auto' });
+      expect(harness.sessions.map(session => session.agentKind)).toEqual(['pi', 'codex']);
+      expect(harness.delivered()[1]).toHaveLength(2);
+      expect(harness.delivered()[1]![1]).toBe('Flag withdrawn');
+      expect(harness.persisted()).toEqual(['Joined the pilot', 'Flag withdrawn']);
     } finally {
       setXdGatewayModels([], { authoritative: false });
     }
