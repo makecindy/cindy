@@ -13,12 +13,15 @@ import type { OrcaWorkersState } from '../actions';
 import { _resetStore, ensureHydrated, getBucket, importTabSnapshot } from '../../../store';
 
 const mocks = vi.hoisted(() => ({
+  sessions: [] as { id: string; orcaRole: string | null }[],
+  getSession: vi.fn(),
   panelProps: null as Record<string, unknown> | null,
 }));
 
+vi.mock('@/lib/sessionService', () => ({ get: mocks.getSession }));
 vi.mock('@/lib/sidebarWindow', () => ({ isSidebarWindow: () => true }));
 vi.mock('@/hooks/useCCSessions', () => ({
-  useCCSessions: () => ({ sessions: [], isLoading: false }),
+  useCCSessions: () => ({ sessions: mocks.sessions, isLoading: false }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   useRemoteProjectSessions: () => [],
@@ -73,12 +76,14 @@ function panelProp<T>(name: string): T {
   return mocks.panelProps?.[name] as T;
 }
 
-describe('OrcaWorkersTabBody view Worker in main window', () => {
+describe('OrcaWorkersTabBody', () => {
   let setDetached: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     _resetStore();
     mocks.panelProps = null;
+    mocks.sessions = [{ id: ctx.sessionId, orcaRole: 'lead' }];
+    mocks.getSession.mockReset();
     setDetached = vi.fn().mockResolvedValue({ detached: false, lastOpen: true, open: false });
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       platform: 'darwin',
@@ -90,6 +95,50 @@ describe('OrcaWorkersTabBody view Worker in main window', () => {
     cleanup();
     _resetStore();
     delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+  });
+
+  it.each(['while open', 'before restore'])('removes the tab when the team ends %s and persists the next active tab', async timing => {
+    const restored = [
+      { id: 'orca-tab', kind: 'orca-workers', state: {} },
+      { id: 'files', kind: 'file-tree', state: {} },
+    ];
+    let rows = restored;
+    let activeTabId = 'orca-tab';
+    (window as unknown as { electronAPI: Record<string, unknown> }).electronAPI.localDb = {
+      rightSidebarTabs: {
+        list: async () => ({ tabs: rows, activeTabId }),
+        close: async ({ id }: { id: string }) => { rows = rows.filter(tab => tab.id !== id); },
+        setActive: async ({ id }: { id: string }) => { activeTabId = id; },
+      },
+    };
+    await ensureHydrated(ctx.sessionId);
+    if (timing === 'before restore') mocks.sessions = [];
+    mocks.getSession.mockResolvedValue({ id: ctx.sessionId, orcaRole: null });
+    const view = render(<OrcaWorkersTabBody ctx={ctx} state={{}} active />);
+    if (timing === 'while open') {
+      expect(getBucket(ctx.sessionId).activeTabId).toBe('orca-tab');
+      expect(mocks.getSession).not.toHaveBeenCalled();
+      mocks.sessions = [{ id: ctx.sessionId, orcaRole: null }];
+      view.rerender(<OrcaWorkersTabBody ctx={ctx} state={{}} active />);
+    }
+    await waitFor(() => expect(activeTabId).toBe('files'));
+    view.unmount();
+    _resetStore();
+    await ensureHydrated(ctx.sessionId);
+    expect(getBucket(ctx.sessionId)).toMatchObject({ tabs: [restored[1]], activeTabId: 'files' });
+  });
+
+  it('keeps the tab if the lead role was enabled after the list snapshot', async () => {
+    importTabSnapshot({
+      sessionId: ctx.sessionId,
+      tabs: [{ id: ctx.tabId, kind: 'orca-workers', state: {} }],
+      activeTabId: ctx.tabId,
+      persistable: false,
+    });
+    mocks.sessions = [{ id: ctx.sessionId, orcaRole: null }];
+    mocks.getSession.mockResolvedValue({ id: ctx.sessionId, orcaRole: 'lead' });
+    await act(async () => { render(<OrcaWorkersTabBody ctx={ctx} state={{}} active />); });
+    expect(getBucket(ctx.sessionId).activeTabId).toBe(ctx.tabId);
   });
 
   it('hands the Worker selection intent to the main window with the memory-only tab snapshot', async () => {
