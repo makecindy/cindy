@@ -725,6 +725,16 @@ export function getMountedControlledDeviceCapabilityTargets(taskDeviceId: string
   return [...devices].filter(key => parseModelCatalogKey(key)?.taskDeviceId === taskDeviceId);
 }
 
+export function getCachedControlledDeviceCapabilityTargets(taskDeviceId: string): string[] {
+  const devices = new Set<string>();
+  for (const key of cache.keys()) {
+    if (!expiry.valid(key)) continue;
+    const deviceKey = key.slice(0, key.lastIndexOf(':'));
+    if (parseModelCatalogKey(deviceKey)?.taskDeviceId === taskDeviceId) devices.add(deviceKey);
+  }
+  return [...devices];
+}
+
 /** device-link:被控设备下线 / 断链时驱逐其能力缓存(只清该设备的 key)。 */
 export function evictDeviceCapabilities(
   deviceId: string,
