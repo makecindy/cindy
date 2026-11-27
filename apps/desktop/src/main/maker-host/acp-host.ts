@@ -42,6 +42,11 @@ export {
   type CachedPluginEngineModel,
 } from './pluginEngineModelCache.js';
 
+const ANTIGRAVITY_HARNESS_KEY = '_root__cindy-antigravity-acp:agy';
+// Antigravity's relay has a 16 MiB pending-line limit (#13471). Leave room
+// for the JSON-RPC envelope, text and host context outside the image budget.
+const ANTIGRAVITY_INLINE_IMAGE_BUDGET_BYTES = 15 * 1024 * 1024;
+
 /** Plugin engines manage their own sign-in; Cindy holds no credentials for them. */
 const pluginEngineAuthAdapter: AuthAdapter = {
   getState: async () => ({ authenticated: true }),
@@ -150,7 +155,10 @@ export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
         logger,
       ),
     },
-    verificationForTask: (key, sessionId) => key === '_root__cindy-antigravity-acp:agy'
+    inlineImageBudgetBytesForHarness: (key) => key === ANTIGRAVITY_HARNESS_KEY
+      ? ANTIGRAVITY_INLINE_IMAGE_BUDGET_BYTES
+      : undefined,
+    verificationForTask: (key, sessionId) => key === ANTIGRAVITY_HARNESS_KEY
       ? async (probe, signal) => (await import('./antigravityVerification.desktop.js')).verifyAntigravityAccount(sessionId, probe, signal)
       : undefined,
     onSessionCapabilities: rememberCapabilities,

@@ -7744,10 +7744,18 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.errorRetryText).toBe('first');
   });
 
-  it.each(['cancelled', 'history-frame-too-large'])('keeps a persisted ordinary send recoverable after %s', async failure => {
+  // #13471 (unit): a known pre-dispatch refusal keeps the accepted draft's attachment references
+  // alongside the failure in the desktop projection. The history-limit case has no attachments.
+  it.each([
+    'cancelled',
+    'history-frame-too-large',
+    'acp-inline-images-too-large',
+  ] as const)('keeps a persisted ordinary send recoverable after %s', async failure => {
     const h = createHarness();
     const sid = 'send-persisted-dispatch-failure';
-    const first = makeItem('q-1', 'first');
+    const first = makeItem('q-1', 'first', failure === 'acp-inline-images-too-large' ? {
+      files: [{ id: 'picture', name: 'picture.png', path: 'cindy-media://blobs/' + 'a'.repeat(64) + '.png', ext: '.png', category: 'image', mimeType: 'image/png', size: 68 }],
+    } : {});
     const second = makeItem('q-2', 'second');
     const persisted = deferred<void>();
     const sendSettled = deferred<void>();
@@ -7758,7 +7766,8 @@ describe('AgentInputCoordinator send transaction', () => {
       await sendSettled.promise;
       return failure === 'cancelled' ? sessionDispatchFailure('SEND/send-persisted-dispatch-failure/send')
         : toDesktopSessionDispatchOutcome({
-          accepted: false, reason: 'provider-rejected-before-dispatch', diagnostic: 'pi-retry-history-frame-too-large',
+          accepted: false, reason: 'provider-rejected-before-dispatch',
+          diagnostic: failure === 'acp-inline-images-too-large' ? failure : 'pi-retry-history-frame-too-large',
         }, { source: 'maker-ipc', context: sid });
     });
 
@@ -7775,7 +7784,7 @@ describe('AgentInputCoordinator send transaction', () => {
     if (failure === 'cancelled') expect(projection.error).toContain('cancelled-before-dispatch');
     else {
       expect(projection.error).toContain('not sent');
-      expect(projection.error).toContain('16 MiB');
+      expect(projection.error).toContain(failure === 'acp-inline-images-too-large' ? 'fewer or smaller images' : '16 MiB');
       expect(projection.error).not.toContain(sid);
     }
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });

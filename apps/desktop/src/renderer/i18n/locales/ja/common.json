@@ -15765,6 +15765,7 @@
       "codexHelperUnavailable": "このタスクでは cindy_helper が有効ですが、利用できません。タスクの結果を報告できない可能性があります。",
       "codexHelperUnverified": "このタスクの cindy_helper が利用可能か確認できませんでした。タスクの結果を報告できない可能性があります。",
       "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
+      "acpInlineImagesTooLarge": "メッセージは送信されませんでした。画像の合計サイズが上限を超えています。画像の枚数やサイズを減らしてから送信してください。",
       "piRetryHistoryTooLarge": "メッセージは送信されませんでした。Pi が再試行に必要な履歴を読み込む際に、データフレームがローカルの上限（16 MiB）を超えました。新しいタスクで続けられます。",
       "piRetryHistoryUnavailable": "メッセージは送信されませんでした。Pi が送信に必要な履歴を読み込めませんでした。再試行するか、新しいタスクで続けてください。",
       "upstreamStatusError": "上流が {{status}} を返したため、この返信は完了しませんでした。",

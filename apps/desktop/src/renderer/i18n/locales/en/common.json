@@ -15831,6 +15831,7 @@
       "codexHelperUnavailable": "cindy_helper is enabled but unavailable in this task. Task result reporting may be unavailable.",
       "codexHelperUnverified": "Could not verify cindy_helper for this task. Task result reporting may be unavailable.",
       "requestFormatError": "The app sent an invalid request, so this reply could not be completed.",
+      "acpInlineImagesTooLarge": "Message not sent. The images are too large together. Try sending fewer or smaller images.",
       "piRetryHistoryTooLarge": "Your message was not sent. Pi could not read the history needed to retry after a frame exceeded the local 16 MiB limit. You can continue in a new task.",
       "piRetryHistoryUnavailable": "Your message was not sent. Pi could not read the history needed to send it. You can retry, or continue in a new task.",
       "upstreamStatusError": "The upstream returned {{status}}, so this reply is incomplete.",

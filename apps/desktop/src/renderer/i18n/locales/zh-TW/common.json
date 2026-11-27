@@ -15764,6 +15764,7 @@
       "codexHelperUnavailable": "此任務已啟用 cindy_helper，但目前無法使用，任務結果可能無法回傳。",
       "codexHelperUnverified": "未能確認此任務的 cindy_helper 是否可用，任務結果可能無法回傳。",
       "requestFormatError": "應用程式送出的請求格式有誤，本次回覆未能完成。",
+      "acpInlineImagesTooLarge": "訊息未送出。圖片總大小超過上限，請減少圖片數量或縮小圖片後再送出。",
       "piRetryHistoryTooLarge": "這則訊息未送出。Pi 讀取重試所需的歷史記錄時，有一個資料幀超過本機 16 MiB 限制。你可以在新任務中繼續。",
       "piRetryHistoryUnavailable": "這則訊息未送出。Pi 讀取傳送所需的歷史記錄時失敗。你可以重試，或在新任務中繼續。",
       "upstreamStatusError": "上游回傳 {{status}}，本次回覆未完成。",

@@ -13,7 +13,9 @@ import { readFile as fsReadFile } from 'node:fs/promises';
 import { basename, extname, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Logger } from '../../interfaces/logger.js';
+import { ACP_INLINE_IMAGES_TOO_LARGE_MESSAGE } from '../../session-send-outcome.js';
 import {
+  TurnDispatchRejectedError,
   TurnPermissionPolicyUnsupportedError,
   type AgentSessionHandle,
   type SendOptions,
@@ -183,6 +185,8 @@ export interface OpenAcpSessionOptions {
   /** How long a cancelled prompt may take to settle before Cindy ends the turn itself. */
   cancelGraceMs?: number;
   readFile?: (path: string) => Promise<Uint8Array>;
+  /** Host-selected aggregate Base64 budget per message. Unset when the endpoint has no known limit. */
+  inlineImageBudgetBytes?: number;
   /**
    * Host text sent ahead of the first message of a newly created agent session (for example
    * collaboration role instructions; plugin engines get no Cindy system prompt). A resumed or
@@ -629,6 +633,7 @@ export class AcpSession {
   private readonly turnChangeCapture: TurnChangeCaptureHooks | undefined;
   private readonly logger: Logger | undefined;
   private readonly readImage: (path: string) => Promise<Uint8Array>;
+  private readonly inlineImageBudgetBytes: number | undefined;
   private readonly expandSlashInvocation: ((text: string) => Promise<string | null>) | undefined;
   private readonly cancelGraceMs: number;
   private readonly onVendorOptionsChange: ((patch: Record<string, unknown>) => void) | undefined;
@@ -707,6 +712,7 @@ export class AcpSession {
     this.capabilitiesSnapshot = this.buildCapabilities();
     this.logger = init.options.logger;
     this.readImage = init.options.readFile ?? ((path) => fsReadFile(path));
+    this.inlineImageBudgetBytes = init.options.inlineImageBudgetBytes;
     this.expandSlashInvocation = this.reviewMode ? undefined : init.options.expandSlashInvocation;
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.onVendorOptionsChange = init.options.onVendorOptionsChange;
@@ -1964,13 +1970,22 @@ export class AcpSession {
       return message.content.length > 0 ? [{ type: 'text', text: await this.expandText(message.content) }] : [];
     }
     const blocks: AcpContentBlock[] = [];
+    let remainingImageBytes = this.inlineImageBudgetBytes ?? Infinity;
+    const consumeImageBytes = (sourceBytes: number): void => {
+      remainingImageBytes -= 4 * Math.ceil(sourceBytes / 3);
+      if (remainingImageBytes < 0) {
+        throw new TurnDispatchRejectedError(ACP_INLINE_IMAGES_TOO_LARGE_MESSAGE, {
+          diagnostic: 'acp-inline-images-too-large',
+        });
+      }
+    };
     // Only the message's opening text can be a slash invocation: its first text block, the same text
     // the host keeps its notes off (desktop `shouldPrependMobileClientPromptNote`).
     const opening = message.content.findIndex((block) => block.type === 'text');
     for (const [index, block] of message.content.entries()) {
       blocks.push(index === opening && block.type === 'text'
         ? { type: 'text', text: await this.expandText(block.text) }
-        : await this.toContentBlock(block));
+        : await this.toContentBlock(block, consumeImageBytes));
     }
     return blocks;
   }
@@ -1980,7 +1995,7 @@ export class AcpSession {
     return (await this.expandSlashInvocation(text)) ?? text;
   }
 
-  private async toContentBlock(block: UserContentBlock): Promise<AcpContentBlock> {
+  private async toContentBlock(block: UserContentBlock, consumeImageBytes: (sourceBytes: number) => void): Promise<AcpContentBlock> {
     switch (block.type) {
       case 'text':
         return { type: 'text', text: block.text };
@@ -1988,6 +2003,7 @@ export class AcpSession {
         const mimeType = block.mimeType ?? IMAGE_MIME_BY_EXTENSION[extname(block.path).toLowerCase()];
         if (this.initializeResult.agentCapabilities.promptCapabilities.image && mimeType) {
           const bytes = await this.readImage(block.path);
+          consumeImageBytes(bytes.byteLength);
           return { type: 'image', data: Buffer.from(bytes).toString('base64'), mimeType };
         }
         return { type: 'resource_link', uri: pathToFileURL(block.path).href, name: basename(block.path), ...(mimeType ? { mimeType } : {}) };

@@ -74,6 +74,9 @@ export function localizeReconnectStall(t: TFunction, handoff?: ReconnectHandoff)
 
 /** Also correct persisted failures from hosts that used the old overflow reason or lacked the safety reason. */
 export function errorReasonI18nKey(reason: string | null | undefined, message: string): string | undefined {
+  if (/^(?:provider-rejected-before-dispatch: )?\[ACP_INLINE_IMAGES_TOO_LARGE\] /.test(message)) {
+    return 'chat.errorBanner.acpInlineImagesTooLarge';
+  }
   if (message.startsWith('provider-rejected-before-dispatch: [PI_RETRY_HISTORY_FRAME_TOO_LARGE] ')) {
     return 'chat.errorBanner.piRetryHistoryTooLarge';
   }

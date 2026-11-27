@@ -52,6 +52,7 @@ import {
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import type { Logger } from '../../interfaces/logger.js';
 import { Session } from '../../session.js';
+import { toSessionDispatchOutcome } from '../../session-send-outcome.js';
 
 type Handler = (params: AcpRecord) => unknown;
 
@@ -494,6 +495,52 @@ describe('AcpSession turns', () => {
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
     expect(agent.prompts[1]!.params.prompt).toEqual([{ type: 'text', text: 'two' }]);
     expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
+  });
+
+  // #13471 (unit): a PNG fits individually, but two exceed the host's inline image budget.
+  // Existing attachment tests only cover successful serialization and the resource-link fallback.
+  it('rejects an over-budget image draft before writing and accepts a smaller draft on the same task', async () => {
+    const agent = createFakeAgent({
+      agentCapabilities: { promptCapabilities: { image: true } },
+      handlers: { 'session/prompt': () => ({ stopReason: 'end_turn' }) },
+    });
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgaPgPAAIDAYAkYfWXAAAAAElFTkSuQmCC', 'base64');
+    const originalImage = Buffer.from(png);
+    const image = { type: 'image', path: SHOT } as const;
+    const draft = {
+      type: 'user',
+      content: [{ type: 'text', text: 'Check these images' }, image, { ...image, path: resolve('attachments', 'other.png') }],
+    } as const;
+    const handle = await openAcpSession({
+      transport: agent.transport, cwd: '/w', clientInfo: { name: 'cindy', version: 'test' },
+      readFile: async () => png,
+      inlineImageBudgetBytes: 100,
+      briefing: 'Host context',
+    });
+    const session = new Session({
+      id: 'task', workDir: '/w', agentKind: 'acp', handle, capabilities: handle.capabilities, logger: silentLogger,
+    });
+    try {
+      const beforeSend = agent.sent.length;
+      const content = structuredClone([...draft.content]);
+      const rejected = await session.send({ ...draft, content });
+      expect(toSessionDispatchOutcome(rejected, 'maker send')).toMatchObject({
+        dispatched: false,
+        message: expect.stringMatching(/images are too large together.*fewer or smaller images/i),
+      });
+      expect(agent.sent).toHaveLength(beforeSend);
+      expect(content).toEqual(draft.content);
+      expect(png).toEqual(originalImage);
+
+      expect(await session.send({ ...draft, content: content.slice(0, 2) })).toEqual({ accepted: true });
+      expect(agent.sent.at(-1)).toMatchObject({ method: 'session/prompt', params: { prompt: [
+        { type: 'text', text: 'Host context' },
+        draft.content[0],
+        { type: 'image', mimeType: 'image/png', data: png.toString('base64') },
+      ] } });
+    } finally {
+      await session.close();
+    }
   });
 
   // 协作 Worker 的角色说明：插件引擎不收 Cindy system prompt，只能随第一条消息送达（docs/plans/acp-plugin-bridge.md 第二期「协作」）。

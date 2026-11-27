@@ -15794,6 +15794,7 @@
       "codexHelperUnavailable": "cindy_helper ist für diese Aufgabe aktiviert, aber nicht verfügbar. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden.",
       "codexHelperUnverified": "Es konnte nicht geprüft werden, ob cindy_helper für diese Aufgabe verfügbar ist. Das Aufgabenergebnis kann möglicherweise nicht übermittelt werden.",
       "requestFormatError": "Die App hat eine ungültige Anfrage gesendet. Daher konnte diese Antwort nicht abgeschlossen werden.",
+      "acpInlineImagesTooLarge": "Nachricht nicht gesendet. Die Bilder sind zusammen zu groß. Sende weniger oder kleinere Bilder.",
       "piRetryHistoryTooLarge": "Deine Nachricht wurde nicht gesendet. Beim Lesen des Verlaufs für den erneuten Versuch wurde das lokale Limit von 16 MiB für einen Datenrahmen überschritten. Du kannst in einer neuen Aufgabe fortfahren.",
       "piRetryHistoryUnavailable": "Deine Nachricht wurde nicht gesendet. Pi konnte den Verlauf, der zum Senden nötig ist, nicht lesen. Du kannst es erneut versuchen oder in einer neuen Aufgabe fortfahren.",
       "upstreamStatusError": "Der vorgeschaltete Dienst hat {{status}} zurückgegeben – die Antwort konnte nicht abgeschlossen werden.",

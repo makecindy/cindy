@@ -1983,8 +1983,10 @@ export class TurnDispatchRejectedError extends Error {
    *   reason (upstream refused it, RPC error). The message was never accepted
    *   by the provider, so the host must say "not sent" rather than "reply
    *   failed".
+   * - `acp-inline-images-too-large`: the host stopped encoding inline images
+   *   before sending an ACP prompt.
    */
-  readonly diagnostic?: 'pi-retry-history-frame-too-large' | 'pi-retry-history-unavailable';
+  readonly diagnostic?: 'pi-retry-history-frame-too-large' | 'pi-retry-history-unavailable' | 'acp-inline-images-too-large';
   /**
    * Bounded HTTP status the upstream answered with (400–599), when the
    * rejection carries one. A number only — never the upstream body.
