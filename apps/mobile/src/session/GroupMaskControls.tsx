@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { ChevronDown, ChevronRight } from 'lucide-react-native';
-import type { ChatMaskIdentity, ChatMaskMention } from '@cindy/maker-shared/botGroupChat';
+import type { ChatMaskIdentity, ChatMaskMention, ChatMaskOriginal } from '@cindy/maker-shared/botGroupChat';
 import { useTranslation } from 'react-i18next';
 import { Text, TextInput } from '@/components/AppText';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
@@ -90,14 +90,80 @@ export function GroupMaskSettingsSheet({ visible, mask, onClose, onClosed }: { v
     </View>
   </CompanionSheet>;
 }
-export function GroupMaskCatchupSheet({ visible, mask, onClose, onClosed, onLocate }: { visible: boolean; mask: GroupPersonalMask; onClose(): void; onClosed?(): void; onLocate(mention: ChatMaskMention): void }) {
+export function GroupMaskCatchupSheet({ visible, mask, history, hasOriginalOnScreen, onClose, onClosed, onLocate }: {
+  visible: boolean; history?: boolean; mask: GroupPersonalMask; hasOriginalOnScreen(mention: ChatMaskMention): boolean;
+  onClose(): void; onClosed?(): void; onLocate(mention: ChatMaskMention): void;
+}) {
+  const { t } = useTranslation(), styles = useThemedStyles(makeStyles);
+  return <CompanionSheet visible={visible} title={t(key('catchup.title'))} onClose={onClose} onClosed={onClosed}
+    footer={!history && mask.mentions.length ? <MainWindowActionButton action={{ label: t(key('catchup.markAll')), disabled: mask.saving, onPress: () => mask.markRead(mask.mentions.map(m => m.messageId)) }} /> : undefined}>
+    <View style={styles.content}>
+      {history ? visible && <MentionHistory mask={mask} hasOriginalOnScreen={hasOriginalOnScreen} onLocate={onLocate} /> : <>
+        {!mask.mentions.length && <Text style={styles.secondary}>{t(key('catchup.empty'))}</Text>}
+        <MentionRows entries={mask.mentions} onLocate={onLocate} />
+      </>}
+      {mask.error ? <MainWindowActionButton action={{ label: t(key('retry')), onPress: mask.retry }} /> : null}
+    </View>
+  </CompanionSheet>;
+}
+function MentionHistory({ mask: { loadHistory, loadOriginal }, hasOriginalOnScreen, onLocate }: {
+  mask: GroupPersonalMask; hasOriginalOnScreen(mention: ChatMaskMention): boolean; onLocate(mention: ChatMaskMention): void;
+}) {
+  const { t } = useTranslation(), styles = useThemedStyles(makeStyles);
+  const [request, setRequest] = useState<{ before?: string }>({});
+  const [originalId, setOriginalId] = useState<string>();
+  const [entries, setEntries] = useState<ChatMaskMention[]>([]);
+  const [next, setNext] = useState<string>();
+  const [status, setStatus] = useState<'loading' | 'error' | 'ready'>('loading');
+  useEffect(() => {
+    let active = true;
+    setStatus('loading');
+    void loadHistory(request.before).then(page => {
+      if (!active) return;
+      setEntries(previous => request.before ? [...previous, ...page.mentions] : page.mentions);
+      setNext(page.hasMore ? page.mentions.at(-1)?.sequence : undefined);
+      setStatus('ready');
+    }).catch(() => { if (active) setStatus('error'); });
+    return () => { active = false; };
+  }, [loadHistory, request]);
+  if (originalId) return <OriginalMention messageId={originalId} load={loadOriginal} onBack={() => setOriginalId(undefined)} />;
+  return <>
+    <MentionRows entries={entries} onLocate={entry => {
+      if (hasOriginalOnScreen(entry)) onLocate(entry);
+      else setOriginalId(entry.messageId);
+    }} />
+    {status === 'loading' && <ActivityIndicator />}
+    {status === 'error' && <MainWindowActionButton action={{ label: t(key('retry')), onPress: () => setRequest({ ...request }) }} />}
+    {status === 'ready' && !entries.length && <Text style={styles.secondary}>{t('groupChat.list.noMessages')}</Text>}
+    {status === 'ready' && next && <MainWindowActionButton action={{ label: t('groupChat.server.loadOlder'), onPress: () => setRequest({ before: next }) }} />}
+  </>;
+}
+
+function OriginalMention({ messageId, load, onBack }: { messageId: string; load: GroupPersonalMask['loadOriginal']; onBack(): void }) {
+  const { t } = useTranslation(), styles = useThemedStyles(makeStyles);
+  const [original, setOriginal] = useState<ChatMaskOriginal | null>();
+  useEffect(() => {
+    let active = true;
+    void load(messageId).then(message => { if (active) setOriginal(message); })
+      .catch(() => { if (active) setOriginal(null); });
+    return () => { active = false; };
+  }, [messageId, load]);
+  return <>
+    <MainWindowActionButton density="compact" action={{ label: t('shared.back'), onPress: onBack }} />
+    {original === undefined ? <ActivityIndicator /> : !original || original.deleted
+      ? <Text accessibilityLiveRegion="polite" style={styles.secondary}>{t(original?.deleted ? 'groupChat.quote.deleted' : 'groupChat.quote.unavailable')}</Text>
+      : <View testID="botGroup.mention.original" style={styles.original}>
+          <Text style={[styles.label, styles.author]}>{original.authorName}</Text>
+          <Text selectable style={styles.body}>{original.text}</Text>
+        </View>}
+  </>;
+}
+
+function MentionRows({ entries, onLocate }: { entries: ChatMaskMention[]; onLocate(mention: ChatMaskMention): void }) {
   const { t } = useTranslation(), styles = useThemedStyles(makeStyles), { colors } = useTheme();
   const [expanded, setExpanded] = useState<string | null>(null);
-  return <CompanionSheet visible={visible} title={t(key('catchup.title'))} onClose={onClose} onClosed={onClosed}
-    footer={mask.mentions.length ? <MainWindowActionButton action={{ label: t(key('catchup.markAll')), disabled: mask.saving, onPress: () => mask.markRead(mask.mentions.map(m => m.messageId)) }} /> : undefined}>
-    <View style={styles.content}>
-      {!mask.mentions.length ? <Text style={styles.secondary}>{t(key('catchup.empty'))}</Text> : null}
-      {mask.mentions.map(mention => <View key={mention.messageId} style={styles.mention}>
+  return <>
+      {entries.map(mention => <View key={mention.messageId} style={styles.mention}>
         <View style={styles.row}>
           <Text style={[styles.label, styles.author]}>{mention.authorName}</Text>
           {mention.reply ? <Pressable accessibilityRole="button" accessibilityState={{ expanded: expanded === mention.messageId }} style={styles.disclosure}
@@ -105,7 +171,7 @@ export function GroupMaskCatchupSheet({ visible, mask, onClose, onClosed, onLoca
             <Text style={styles.secondary}>{t(key('catchup.answered'))}</Text><ChevronDown size={iconSize.md} color={colors.textSecondary} />
           </Pressable> : null}
         </View>
-        <Pressable accessibilityRole="button" onPress={() => onLocate(mention)} style={styles.question}>
+        <Pressable testID={`botGroup.mention.${mention.messageId}`} accessibilityRole="button" onPress={() => onLocate(mention)} style={styles.question}>
           <Text style={styles.body}>{mention.text}</Text><ChevronRight size={iconSize.lg} color={colors.textSecondary} />
         </Pressable>
         {expanded === mention.messageId && mention.reply ? <View style={styles.reply}>
@@ -113,10 +179,9 @@ export function GroupMaskCatchupSheet({ visible, mask, onClose, onClosed, onLoca
           <Text style={[styles.body, { color: colors.textSecondary }]}>{mention.reply.text}</Text>
         </View> : null}
       </View>)}
-      {mask.error ? <MainWindowActionButton action={{ label: t(key('retry')), onPress: mask.retry }} /> : null}
-    </View>
-  </CompanionSheet>;
+  </>;
 }
+
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   content: { padding: spacing.lg, gap: spacing.sm },
   row: { flexDirection: 'row', alignItems: 'center', minHeight: 48, gap: spacing.sm },
@@ -127,6 +192,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   status: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, minHeight: 44 },
   time: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   input: { flex: 1, minHeight: 44, fontSize: typeScale.body, color: colors.textPrimary },
+  original: { gap: spacing.sm },
   mention: { borderBottomWidth: StyleSheet.hairlineWidth, borderColor: colors.border, paddingBottom: spacing.md },
   author: { fontWeight: fontWeight.semibold },
   disclosure: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, minHeight: 44 },
