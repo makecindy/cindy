@@ -26,7 +26,7 @@ vi.mock('../auxiliary-model-settings-store.js', () => ({
 }));
 vi.mock('../../model-groups/store.js', () => ({ readModelGroupsConfig: () => h.config, readModelGroupsConfigForSelected: () => h.config }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => 'owner' }));
-vi.mock('../../model-groups/desktopResolver.js', () => ({ resolver: { resolve: h.resolve } }));
+vi.mock('../../model-groups/startBridge.js', () => ({ getModelGroupStartBridge: () => ({ resolve: h.resolve }) }));
 
 import { encodeCatalogModelPin } from '../../../shared/catalogModelPin.js';
 import { buildAuxiliaryRouteOptions } from '../auxiliaryRouteRefs.js';

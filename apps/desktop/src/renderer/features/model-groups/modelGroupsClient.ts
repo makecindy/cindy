@@ -32,10 +32,12 @@ import {
   type ModelGroupResolveResult,
   type ModelGroupRouteNote,
   type ModelGroupSelection,
+  type ModelGroupSessionBindingView,
   type ModelGroupsConfig,
   type ModelGroupSwitchOffer,
   type ModelGroupTraceEntry,
 } from '../../../shared/modelGroups';
+import { getDeviceModelGroupSwitchOffer } from './remoteModelGroups';
 
 const log = createLogger('model-groups');
 
@@ -111,11 +113,17 @@ export function useModelGroups(enabled = true, options: { includeHidden?: boolea
 export async function resolveModelGroup(
   selection: ModelGroupSelection,
   context?: ModelGroupResolveRequest['context'],
-  /** 进行中的任务：只在它所在的运行位置里选。 */
+  /** 显式指定位置过滤；省略则按路由自身候选(含跨位置)。 */
   location?: ModelGroupResolveRequest['location'],
+  options?: { sshHostId?: string },
 ): Promise<ModelGroupResolveResult | null> {
   try {
-    return await window.electronAPI.modelGroups.resolve({ selection, ...(context ? { context } : {}), ...(location ? { location } : {}) });
+    return await window.electronAPI.modelGroups.resolve({
+      selection,
+      ...(context ? { context } : {}),
+      ...(location ? { location } : {}),
+      ...(options?.sshHostId ? { sshHostId: options.sshHostId } : {}),
+    });
   } catch (err) {
     log.warn('model group resolve failed', err);
     return null;
@@ -145,7 +153,7 @@ export function commitModelGroupDecision(result: ModelGroupResolveResult | null)
 export async function bindModelGroupSession(
   sessionId: string,
   selection: ModelGroupSelection,
-  result: ModelGroupResolveResult | Pick<ModelGroupSwitchOffer, 'agentKind' | 'providerId' | 'model'> | null,
+  result: ModelGroupResolveResult | Pick<ModelGroupSwitchOffer, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'> | null,
 ): Promise<void> {
   const route: { agentKind: ModelGroupCandidate['agentKind']; providerId: string; model: string; agentDeviceId?: string } | null =
     !result ? null : 'outcome' in result ? (result.outcome === 'routed' ? result.route : null) : result;
@@ -160,6 +168,29 @@ export async function bindModelGroupSession(
       ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
     },
   }).catch((err: unknown) => log.warn('model group session binding failed', err));
+}
+
+export async function unbindModelGroupSession(sessionId: string): Promise<boolean> {
+  try {
+    const api = window.electronAPI?.modelGroups;
+    if (!api?.unbindSession) return false;
+    const result = await api.unbindSession({ sessionId });
+    return result?.unbound === true;
+  } catch (err) {
+    log.warn('model group session unbind failed', err);
+    return false;
+  }
+}
+
+export async function getModelGroupSessionBinding(sessionId: string): Promise<ModelGroupSessionBindingView | null> {
+  try {
+    const api = window.electronAPI?.modelGroups;
+    if (!api?.getSessionBinding) return null;
+    return await api.getSessionBinding({ sessionId });
+  } catch (err) {
+    log.warn('model group session binding read failed', err);
+    return null;
+  }
 }
 
 /** 一个运行位置(另一台电脑或分享来的供应商)显示成什么名字。 */
@@ -271,25 +302,37 @@ export function useModelGroupSwitchOffer(
   enabled: boolean,
   errorKey: string | null,
   modelKey: string,
+  /** 远程控制另一台电脑上的任务时传那台的 deviceId；本机任务省略/null。 */
+  deviceId?: string | null,
 ): ModelGroupSwitchOffer | null {
   const [offer, setOffer] = useState<{ key: string; value: ModelGroupSwitchOffer } | null>(null);
-  const key = enabled && sessionId ? `${sessionId}\u0000${errorKey ?? ''}\u0000${modelKey}` : null;
+  const key = enabled && sessionId ? `${deviceId ?? ''}\u0000${sessionId}\u0000${errorKey ?? ''}\u0000${modelKey}` : null;
   useEffect(() => {
     if (!key || !sessionId) return;
     let cancelled = false;
-    window.electronAPI.modelGroups.switchOffer({ sessionId })
+    const request = deviceId
+      ? getDeviceModelGroupSwitchOffer(deviceId, sessionId)
+      : window.electronAPI.modelGroups.switchOffer({ sessionId });
+    request
       .then((value) => { if (!cancelled) setOffer(value ? { key, value } : null); })
       .catch((err: unknown) => log.warn('model group switch offer unavailable', err));
     return () => { cancelled = true; };
-  }, [key, sessionId]);
+  }, [key, sessionId, deviceId]);
   return offer && offer.key === key ? offer.value : null;
 }
 
 /** 点「换来源」那一刻再核对一次：任务仍在这条路线上、下一个来源仍是提议的那个，才动手。 */
-export async function isModelGroupSwitchOfferCurrent(sessionId: string, offer: ModelGroupSwitchOffer): Promise<boolean> {
+export async function isModelGroupSwitchOfferCurrent(
+  sessionId: string,
+  offer: ModelGroupSwitchOffer,
+  deviceId?: string | null,
+): Promise<boolean> {
   try {
-    const latest = await window.electronAPI.modelGroups.switchOffer({ sessionId });
+    const latest = deviceId
+      ? await getDeviceModelGroupSwitchOffer(deviceId, sessionId)
+      : await window.electronAPI.modelGroups.switchOffer({ sessionId });
     return !!latest && latest.agentKind === offer.agentKind && latest.providerId === offer.providerId && latest.model === offer.model
+      && (latest.agentDeviceId ?? null) === (offer.agentDeviceId ?? null)
       && latest.selection.type === offer.selection.type && latest.selection.id === offer.selection.id;
   } catch (err) {
     log.warn('model group switch offer recheck failed', err);

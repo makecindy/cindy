@@ -394,7 +394,7 @@ export function CreateWorkerPopover({
     && sshRemote !== true
     && (!executionDeviceId || executionDevice?.supportsAgentDevice === true)
     && (!leadDeviceId || hostCaps.capabilities?.supportsOrcaWorkerAgentDevice === true);
-  const modelGroupsAllowed = open && !sshRemote
+  const modelGroupsAllowed = open
     && (!leadDeviceId || taskHostCaps?.supportsOrcaWorkerModelGroup === true)
     && (!executionDeviceId || executionDevice?.supportsModelGroup === true);
   const localModelGroups = useModelGroups(modelGroupsAllowed && !workerHostDeviceId);
@@ -408,8 +408,8 @@ export function CreateWorkerPopover({
           setPluginEngine(null);
           setModelGroup(selection.id);
         },
-        // 本机的 Worker：合并整个供应商的路由像一个供应商列出来，选其中的模型后补记路由(另一台电脑的配置里没有这类路由)。
-        ...(workerHostDeviceId ? {} : {
+        // 合并整个供应商的路由像一个供应商列出来，选其中的模型后补记路由(SSH 不合并跨机供应商路由)。
+        ...(sshRemote ? {} : {
           onAttach: (selection) => {
             setPluginEngine(null);
             setModelGroup(selection.id);

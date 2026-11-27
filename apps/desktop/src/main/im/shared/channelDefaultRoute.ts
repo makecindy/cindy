@@ -64,6 +64,7 @@ export function fingerprintImDefaultSettings(raw: ImDefaultSettings): string {
     }),
     ...(acp ? [[acp.providerId ?? null, acp.model, acp.effort,
       ...(acp.agentDeviceId ? [acp.agentDeviceId] : [])]] : []),
+    ...(raw.modelGroup ? [raw.modelGroup] : []),
   ]);
 }
 

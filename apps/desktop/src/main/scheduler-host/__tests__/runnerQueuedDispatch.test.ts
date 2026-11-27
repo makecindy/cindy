@@ -75,6 +75,7 @@ vi.mock('../pre-run-hook', async (importOriginal) => ({
 
 vi.mock('../../maker-host/session-provider-store.js', () => ({
   getSessionProvider: mocks.getSessionProvider,
+  hasSessionProvider: () => mocks.getSessionProvider() !== null,
   setSessionProvider: mocks.setSessionProvider,
   hydrateSessionProvider: mocks.hydrateSessionProvider,
 }));
@@ -137,6 +138,7 @@ import { AutoResumeBookkeeping } from '../../maker-ipc/autoResumeBookkeeping.js'
 import { computeScheduleRunCostDeltas } from '../runCostLedger.js';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../../shared/interruptedTurn.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import { bindPoolExecutionRoute } from '../../subscription-accounts/session.js';
 import type { ProviderGroupTurnErrorHooks } from '../../provider-group/service.js';
 import { isUnattendedTurn } from '../../mcp-integrations/unattendedTurn';
 import { noteUnattendedPlanReviewDeclined } from '../../mcp-integrations/unattendedTurn';
@@ -3851,6 +3853,97 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.setModel).not.toHaveBeenCalled();
     expect(harness.send).not.toHaveBeenCalled();
   });
+
+  // Unit: run a real busy heartbeat through the queue bridge, coordinator and
+  // accepted callback before the vendor boundary. Former mixed-pool sessions
+  // compared their logical OpenAI provider against the API thread's identity.
+  // The same fix must not authorize a revoked reservation or a changed route.
+  it.each(['valid', 'revoked', 'changed-group', 'independent-source'] as const)(
+    'dispatches a mixed-pool heartbeat exactly once only on a valid reservation (%s)', async mode => {
+      vi.useFakeTimers();
+      const model = 'gpt-6';
+      const providerId = 'openai';
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', userSendAt: null, providerId });
+      mocks.getSessionProvider.mockReturnValue(providerId);
+      const h = createSessionHarness(async () => ({ accepted: true }));
+      Object.assign(h.session, { agentKind: 'codex', model, codexProxyActive: true,
+        codexThreadModelProviderId: 'cindy_gateway' });
+      let valid = true;
+      const unbind = bindPoolExecutionRoute(SESSION_ID, {
+        providerId, connectionId: 'openai-api',
+        assertCurrent: () => { if (!valid) throw new Error('pool reservation unavailable'); },
+        captureTurnRejection: () => undefined,
+      });
+      let busy = true;
+      const preparation = new Map<string, SchedulerQueuedPreparation>();
+      const discarded = new Map<string, SchedulerQueuedPromptObserver>();
+      const accepted = createQueuedAcceptedCallbacks();
+      const coordinator = new AgentInputCoordinator({
+        sendToAgent: async (id, _text, _opts, sendOpts) => {
+          const clientId = sendOpts.persistUserMessage!.clientId;
+          try {
+            await runSchedulerQueuedPreparation(clientId, preparation, () => discarded.delete(clientId));
+            await sendOpts.persistUserMessage!.onPersisted?.();
+            await h.send({ type: 'user', content: 'scheduled heartbeat' });
+            const result = { kind: 'session-dispatch', source: 'test', dispatched: true } as const;
+            await accepted.settle(id, sendOpts, result);
+            return result;
+          } catch (error) { await accepted.rollback(id, clientId); throw error; }
+        },
+        onAcceptedQueuedMessage: async (id, item) => { await accepted.run(id, item); },
+        onDiscardedQueuedMessage: (_id, item) => { accepted.discard(item.clientId); discarded.get(item.clientId)?.onDiscarded(); },
+        onPersistedSendRejected: (id, error, item, recovering) => bridge.onPersistedSendRejected(id, error, item, recovering),
+        steerToAgent: async () => {}, abortSession: async () => {},
+        isTurnRunning: () => busy, hasPendingInteraction: () => false,
+        getAgentKind: () => 'codex', getSdkSessionId: async () => 'sdk-1', emitProjection: () => {},
+      });
+      const bridge = createSchedulerQueueBridge({
+        coordinator, isSessionBusy: () => busy, getSessionMeta: async () => ({ id: SESSION_ID }),
+        getSessionRowSnapshot: mocks.getSessionRowSnapshot, createId: () => 'mixed-pool-heartbeat',
+        preparations: preparation, discardWatchers: discarded, discardAcceptedCallback: accepted.discard,
+        enqueue: async req => {
+          const createOpts = { agentKind: 'codex' as const, model, workingDir: '.',
+            permissionMode: 'ask' as const, planMode: false, userPrompt: '',
+            makerMemoryEnabled: true, displayReasoning: 'summarized' as const };
+          accepted.register(req.clientId, () => req.onAccepted(createOpts), req.onAcceptedRollback);
+          coordinator.enqueue(req.targetSessionId, {
+            clientId: req.clientId, text: req.message, persistedContent: req.persistedContent,
+            origin: req.origin, createOpts, model, workingDir: '.', effort: '', permissionMode: 'ask',
+            chatMessage: { clientId: req.clientId, role: 'user', content: req.persistedContent, createdAt: new Date().toISOString() },
+          });
+        },
+      });
+      const { runner, maker } = createRunnerHarness(h.session, bridge, { metaModel: model });
+      const ctx = createFireContext();
+      const schedule = heartbeatSchedule({ agentKind: 'codex', model, providerId });
+      const fire = runner.fire(schedule, ctx);
+      const settled = fire.then(result => ({ result, error: undefined }), error => ({ result: undefined, error }));
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(bridge.hasQueuedPrompt(SESSION_ID, schedule.id)).toBe(true);
+        expect(h.send).not.toHaveBeenCalled();
+        if (mode === 'revoked') valid = false;
+        if (mode === 'changed-group') mocks.getSessionProvider.mockReturnValue('another-pool');
+        if (mode === 'independent-source') schedule.providerId = 'xd';
+        busy = false;
+        coordinator.wakeSession(SESSION_ID, 'busy-turn-finished');
+        await vi.advanceTimersByTimeAsync(0);
+        if (mode === 'valid') {
+          expect(h.send).toHaveBeenCalledOnce();
+          h.emit({ type: 'done', data: {}, source: 'codex' });
+          expect((await settled).result).toMatchObject({ sessionId: SESSION_ID });
+        } else {
+          expect(h.send).not.toHaveBeenCalled();
+          expect((await settled).error).toBeInstanceOf(Error);
+        }
+        expect(maker.closeSession).not.toHaveBeenCalled();
+        expect(maker.createSession).not.toHaveBeenCalled();
+      } finally {
+        ctx.abortController.abort(); coordinator.clearSession(SESSION_ID); unbind();
+        await vi.advanceTimersByTimeAsync(0); await settled; vi.useRealTimers();
+      }
+    },
+  );
 
   it('排队 Cindy Codex 在独立 Subagent 不兼容时接受正确的本地压缩身份', async () => {
     mocks.getSessionRowSnapshot.mockResolvedValue({

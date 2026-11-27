@@ -40,6 +40,7 @@ export type FallbackRuntimeSelection = (
     previousProfile: FallbackRouteProfile;
     effortExplicit: boolean;
     fastExplicit: boolean;
+    persistRoute?: boolean;
   },
 ) => Promise<{
   deferred: boolean;
@@ -165,15 +166,21 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
       let currentForFallback: FallbackRouteProfile = profiles.effective;
       let candidate: FallbackRouteProfile | null = botFallback.candidate;
-      const group = groupRecovery && !botFallback.isBot
+      // 智能路由接替优先于静态伙伴链：当伙伴配置了智能路由或在对话中间切入了智能路由，先按智能路由实时配额与策略接替，
+      // 只有整个智能路由耗尽后才回落到伙伴兜底模型(2026-11-27 全面接替；含插件引擎任务)。
+      const group = groupRecovery
         ? await readModelGroupFallbackCandidate?.(sessionId, profiles.effective, profiles.control.visitedRoutes, groupRecovery, profiles.control.generation)
         : null;
       if (!isCurrent()) return { session: null, outcome: 'superseded' };
-      if (groupRecovery && !group) return { session: null, outcome: 'exhausted' };
-      if (group) candidate = group.candidate;
+      if (group?.candidate) {
+        candidate = group.candidate;
+      } else if (groupRecovery && !botFallback.isBot) {
+        if (!group) return { session: null, outcome: 'exhausted' };
+        candidate = null;
+      }
       let groupLabels = group?.labels;
       const switchedResult = (session: RuntimeSession | null): RuntimeFallbackResult<RuntimeSession> => ({
-        session, outcome: 'switched', ...(group && groupLabels ? { sourceSwitch: groupLabels } : {}),
+        session, outcome: 'switched', ...(group?.candidate && groupLabels ? { sourceSwitch: groupLabels } : {}),
       });
       if (!botFallback.isBot && !group) {
         if (profiles.effective.agentKind === 'acp') return { session: null, outcome: requireRouteChange ? 'exhausted' : 'unchanged' };
@@ -288,6 +295,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
               previousProfile: currentForFallback,
               effortExplicit: false,
               fastExplicit: false,
+              ...(group ? { persistRoute: true } : {}),
             },
           );
           // A live override can leave the saved session on its original route.
@@ -327,6 +335,8 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
                 effort: selected.effort,
                 fastMode: selected.fastMode,
                 applyNow: true,
+                configStaged: true,
+                preserveModelGroupBinding: true,
               });
               if (switched.switched && sessionRuntimeControlOwnerEpochMatches(runtimeOwnerEpoch)) {
                 group?.bindCommittedRoute?.(selected);
@@ -396,6 +406,7 @@ export function createSessionRuntimeFallback<RuntimeSession extends { agentKind:
           }
         }
         if (runtimeSelectionRequiresModelWindowConfirmation(result)) {
+          if (group && await advanceConfiguredRoute(selected)) continue;
           // Confirmation is a user decision, not a candidate-availability
           // failure, so it must not advance the configured fallback chain.
           blockAutoResumeForModelWindowConfirmation = true;
