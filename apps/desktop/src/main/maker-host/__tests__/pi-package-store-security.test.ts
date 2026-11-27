@@ -792,6 +792,107 @@ describe('Pi package executable-code boundary', () => {
     }
   });
 
+  // 测试价值：生产入口 resolveManagedPiPackageResources；用户看到的是相邻新对话不再重付整树扫描。
+  // Bug 依据：旧 INSPECTION_CACHE_MS=1s 使间隔超过 1 秒的每次启动都重扫约 8s 的包树。
+  // 覆盖缺口：既有缓存用例只验证同一时刻的并发合并，未验证时间前进后的复用。
+  // 最小失败输入：一个 skill-only 包；fake clock 前进 2 秒（旧 TTL 已过期，新 TTL 仍有效）。
+  // tier：unit（进程内 fake clock，无真实等待）。
+  it('reuses a completed inspection across startups inside the longer cache window', async () => {
+    const { root } = await createSkillOnlyPackage('npm:long-lived-inspection');
+    const store = await import('../pi-package-store.js');
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+    try {
+      const first = await store.resolveManagedPiPackageResources({
+        startupTraceId: '0123456789abcdef',
+      });
+      clock.mockReturnValue(now + 2_000);
+      const second = await store.resolveManagedPiPackageResources({
+        startupTraceId: 'fedcba9876543210',
+      });
+      expect(second).toEqual(first);
+      expect(second.packageRoots).toEqual([await fs.realpath(root)]);
+      expect(runtime.spawns.filter(({ args }) => args.includes('list'))).toHaveLength(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  // 测试价值：生产入口 resolveManagedPiPackageResources；peer Main 改包后下一次启动必须看到新状态。
+  // Bug 依据：单纯延长 TTL 会把 token 变化后的旧包元数据继续用于 30 秒（审批/加载视图陈旧）。
+  // 覆盖缺口：既有 token 用例只验证监听器通知，未验证缓存命中路径上的代次校验。
+  // 最小失败输入：一个 skill-only 包；一次 atomic token 写入，时间不前进（仍在 TTL 内）。
+  // tier：unit（进程内 fake 包列表，真实临时目录 token 文件）。
+  it.each([
+    ['runtime', 'cindy-package-runtime-change-token', 'runtime:peer-edge\n'],
+    ['view', 'cindy-package-view-change-token', 'view:peer-edge\n'],
+  ])('re-inspects inside the cache window after a %s token edge', async (
+    _kind, tokenFileName, tokenContents,
+  ) => {
+    const { root } = await createSkillOnlyPackage(`npm:token-edge-${_kind}`);
+    const store = await import('../pi-package-store.js');
+    const tokenDir = path.join(runtime.userData, 'pi-package-home');
+    await fs.mkdir(tokenDir, { recursive: true });
+    const first = await store.resolveManagedPiPackageResources({
+      startupTraceId: '0123456789abcdef',
+    });
+    expect(runtime.spawns.filter(({ args }) => args.includes('list'))).toHaveLength(1);
+
+    writePeerToken(path.join(tokenDir, tokenFileName), tokenContents);
+    const second = await store.resolveManagedPiPackageResources({
+      startupTraceId: 'fedcba9876543210',
+    });
+    expect(second).toEqual(first);
+    expect(second.packageRoots).toEqual([await fs.realpath(root)]);
+    expect(runtime.spawns.filter(({ args }) => args.includes('list'))).toHaveLength(2);
+  });
+
+  // 测试价值：生产入口 resolveManagedPiPackageResources；扫描期间发生的改动不能让旧结果变成新代次的缓存。
+  // Bug 依据：在途扫描跨过 token edge 后若按旧代次写缓存，后续启动会一直读到包改动前的元数据。
+  // 覆盖缺口：既有在途用例只测等待计时，没有在等待期间制造 token edge。
+  // 最小失败输入：一个 skill-only 包；在 manifest 读取被 gate 住时写一次 token，结束后删回原状态。
+  // tier：unit（进程内 fs.open gate + 真实临时目录 token 文件，无真实等待）。
+  it('does not cache an inspection that finished after a token edge', async () => {
+    const { root } = await createSkillOnlyPackage('npm:inflight-token-edge');
+    const canonicalRoot = await fs.realpath(root);
+    const tokenPath = path.join(runtime.userData, 'pi-package-home', 'cindy-package-runtime-change-token');
+    await fs.mkdir(path.dirname(tokenPath), { recursive: true });
+    const store = await import('../pi-package-store.js');
+    const open = fs.open.bind(fs);
+    let entered = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (!entered && path.resolve(String(args[0])) === path.join(canonicalRoot, 'package.json')) {
+        entered = true;
+        await gate;
+      }
+      return open(...args);
+    });
+    try {
+      const first = store.resolveManagedPiPackageResources({
+        startupTraceId: '0123456789abcdef',
+      });
+      await vi.waitFor(() => expect(entered).toBe(true));
+      writePeerToken(tokenPath, 'runtime:inflight-edge\n');
+      release();
+      await expect(first).resolves.toMatchObject({ packageRoots: [canonicalRoot] });
+      expect(runtime.spawns.filter(({ args }) => args.includes('list'))).toHaveLength(1);
+
+      // Restore the original token state: a cache written under the old
+      // identity would now be a hit, while a stale result must re-inspect.
+      await fs.rm(tokenPath, { force: true });
+      const second = await store.resolveManagedPiPackageResources({
+        startupTraceId: 'fedcba9876543210',
+      });
+      expect(second.packageRoots).toEqual([canonicalRoot]);
+      expect(runtime.spawns.filter(({ args }) => args.includes('list'))).toHaveLength(2);
+    } finally {
+      release();
+      openSpy.mockRestore();
+    }
+  });
+
   it.each([null, [null], [{ warning: 'bad-cache' }]])(
     'keeps native loading and disable preferences when advisory cache is malformed: %j',
     async (snapshotUnavailablePackages) => {
@@ -2475,6 +2576,64 @@ describe('Pi package executable-code boundary', () => {
     ]);
   });
 
+  // 测试价值：生产入口 listPiPackages；用户看到同一 npm resolver 树上的健康邻居是否出现 inspection-limit。
+  // Bug 依据：本机 context-mode/pi-web-access/pi-fff 的三个提示；旧指纹对每个普通文件做 5 次 realpath，累计超过 10s。
+  // 现有覆盖缺口：已有预算用例只注入显式超时，未覆盖共享树中正常文件数量触发的累计超时。
+  // 最小失败输入：两个共享 npm 根的小包，fake clock 把每次 realpath 记为 60ms；旧实现每个普通文件多 5 次 realpath，必然降级。
+  // tier：unit（进程内 fake clock / fs 计数，无真实等待）。
+  it('keeps healthy npm siblings available while fingerprinting a shared resolver tree', async () => {
+    const npmRoot = path.join(runtime.userData, 'pi-package-home', 'npm');
+    const nodeModulesRoot = path.join(npmRoot, 'node_modules');
+    const sources = ['npm:shared-tree-first', 'npm:shared-tree-second'];
+    const lines = ['User packages:'];
+    for (const [index, source] of sources.entries()) {
+      const root = path.join(nodeModulesRoot, `shared-tree-${index}`);
+      await fs.mkdir(path.join(root, 'extensions'), { recursive: true });
+      await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+        name: `shared-tree-${index}`,
+        version: '1.0.0',
+        pi: { extensions: ['./extensions/index.js'] },
+      }));
+      await fs.writeFile(
+        path.join(root, 'extensions', 'index.js'),
+        'export default function setup() {}\n',
+      );
+      if (index === 0) {
+        await fs.mkdir(path.join(root, 'data'));
+        for (let file = 0; file < 40; file += 1) {
+          await fs.writeFile(path.join(root, 'data', `${file}.txt`), 'payload');
+        }
+      }
+      lines.push(`  ${source}`, `    ${root}`);
+    }
+    runtime.listOutput = `${lines.join('\n')}\n`;
+
+    const store = await import('../pi-package-store.js');
+    const originalRealpath = fs.realpath.bind(fs);
+    let now = Date.now();
+    let realpathCalls = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const realpathSpy = vi.spyOn(fs, 'realpath').mockImplementation(async (...args) => {
+      const result = await originalRealpath(...args as Parameters<typeof fs.realpath>);
+      if (String(args[0]).includes(nodeModulesRoot)) {
+        realpathCalls += 1;
+        now += 60;
+      }
+      return result;
+    });
+    let result;
+    try {
+      result = await store.listPiPackages();
+    } finally {
+      realpathSpy.mockRestore();
+      nowSpy.mockRestore();
+    }
+
+    expect(realpathCalls).toBeGreaterThan(0);
+    expect(result.packages.map((pkg) => ({ source: pkg.source, warning: pkg.warning ?? null })))
+      .toEqual(sources.map((source) => ({ source, warning: null })));
+  }, 30_000);
+
   it('retries an inspection-stage duration limit instead of persisting it', async () => {
     const { root, source } = await createSkillOnlyPackage('npm:inspection-duration-retry');
     const store = await import('../pi-package-store.js');
@@ -2713,7 +2872,7 @@ describe('Pi package executable-code boundary', () => {
   );
 
   it('does not run a skipped descendant extension from an unverified ancestor snapshot', async () => {
-    // The aggregate snapshot warning lives in the one-second inspection cache.
+    // The aggregate snapshot warning lives in the 30-second inspection cache.
     // Control only Date so slow CI cannot expire it during real filesystem I/O.
     const now = Date.now();
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -2790,9 +2949,10 @@ describe('Pi package executable-code boundary', () => {
         { source: descendantRoot, enabled: true, warning: 'inspection-limit' },
       ],
     });
-    // After the cache expires, a fresh inspection clears this transient warning
-    // without disabling either native package or changing the returned snapshot.
-    vi.setSystemTime(now + 2_000);
+    // After the 30-second cache expires, a fresh inspection clears this
+    // transient warning without disabling either native package or changing
+    // the returned snapshot.
+    vi.setSystemTime(now + 31_000);
     const refreshed = await store.listPiPackages();
     expect(refreshed.packages).toMatchObject([
       { source: ancestorRoot, enabled: true },
@@ -5655,5 +5815,290 @@ describe('native Pi core management', () => {
     expect(runtime.spawns.map(call => call.args)).toEqual([['--version'], ['--version']]);
     expect(await executePiNativeManagementCommand({ kind: 'version' })).toMatchObject({ version: '0.85.1' });
     expect((await fs.readdir(runtime.userData)).some(name => name.includes('runtime-change'))).toBe(false);
+  });
+});
+
+// 测试价值：生产入口 mutatePiPackage(set-enabled) 写入的审批指纹；并发读取后指纹仍逐字节等于
+// 改动前串行实现算出的固定值，包内任一字节变化则指纹变化。
+// Bug 依据：并发 I/O 若按完成顺序 update hash，会把 10,918 文件的审批身份打乱，导致合法包被误判漂移。
+// 覆盖缺口：旧用例只断言指纹是 64 位 hex，未钉住编码与排序；既有 token/缓存用例不触碰哈希顺序。
+// 最小失败输入：固定模式的多层目录 + 字典序与创建序不同的 7 个文件；一次子文件内容替换。
+// tier：unit（临时目录真实文件，进程内 fake pi list，无外部进程）。
+describe('Pi package fingerprint ordering', () => {
+  const SORTED_EXTRAS: Array<[string, string]> = [
+    ['a.txt', 'alpha\n'],
+    ['B.txt', 'bravo\n'],
+    ['a10.txt', 'ten\n'],
+    ['a2.txt', 'two\n'],
+    ['dir-a/c.txt', 'charlie\n'],
+    ['dir-a/nested/d.txt', 'delta\n'],
+    ['dir-b/e.txt', 'echo\n'],
+  ];
+  // Both values were produced by the pre-concurrency implementation on this
+  // exact tree (modes/separator are part of the approval identity).
+  const GOLDEN = process.platform === 'win32'
+    ? 'f796212cf78487ac79c916f5f8fe7d5cf1a6b9435f442e1e24e692873ccbfc5d'
+    : '6d9c8a36f9dd70facb03d551788c8e18a44ebd938c34329eb6b55e5e4574b88b';
+
+  async function createFingerprintPackage(
+    source: string,
+    extras: Array<[string, string]>,
+  ): Promise<{ root: string; source: string }> {
+    const pkg = await createPackage({ source });
+    for (const [relative, contents] of extras) {
+      await fs.mkdir(path.dirname(path.join(pkg.root, relative)), { recursive: true });
+      await fs.writeFile(path.join(pkg.root, relative), contents);
+    }
+    const normalizeModes = async (dir: string): Promise<void> => {
+      for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+        const entryPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await normalizeModes(entryPath);
+          await fs.chmod(entryPath, process.platform === 'win32' ? 0o666 : 0o755);
+        } else {
+          await fs.chmod(entryPath, process.platform === 'win32' ? 0o666 : 0o644);
+        }
+      }
+    };
+    await normalizeModes(pkg.root);
+    await fs.chmod(pkg.root, process.platform === 'win32' ? 0o666 : 0o755);
+    return pkg;
+  }
+
+  async function approvedFingerprint(source: string): Promise<string> {
+    const state = JSON.parse(await fs.readFile(
+      path.join(runtime.userData, 'pi-package-home', 'cindy-package-state.json'),
+      'utf8',
+    )) as { approvedExtensionFingerprints: Record<string, string> };
+    return state.approvedExtensionFingerprints[source]!;
+  }
+
+  it('keeps the sorted-tree approval fingerprint byte-identical and revokes it on a byte change', async () => {
+    const { root, source } = await createFingerprintPackage(
+      'npm:fingerprint-golden',
+      SORTED_EXTRAS,
+    );
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: true });
+    expect(await approvedFingerprint(source)).toBe(GOLDEN);
+
+    await fs.writeFile(path.join(root, 'dir-a', 'c.txt'), 'charlie changed\n');
+    await mutateAuthorized(store, { action: 'set-enabled', source, enabled: true });
+    expect(await approvedFingerprint(source)).not.toBe(GOLDEN);
+  });
+
+  // 测试价值：同上生产入口；强制字典序首个文件最后完成，并统计同时在途的 fs.open。
+  // Bug 依据：按完成顺序写 hash 或放开并发上限都会在此失败；现有 golden 用例没有乱序时序。
+  // 覆盖缺口：既有指纹用例都是串行完成，不能区分「并发 I/O + 有序提交」与「无序提交」。
+  // 最小失败输入：同一目录 16 个文件，门控第 1 个的 open 直到第 8 个已 open；两棵内容相同的树。
+  // tier：unit（进程内 fs.open spy + 门控，无真实等待）。
+  it('commits out-of-order concurrent reads in sorted order with at most 8 in-flight opens', async () => {
+    const raceExtras = Array.from({ length: 16 }, (_, index) => [
+      `race/${String(index).padStart(2, '0')}.txt`,
+      `race-${index}\n`,
+    ] as [string, string]);
+    const first = await createFingerprintPackage('npm:fingerprint-race-baseline', raceExtras);
+    const second = await createFingerprintPackage('npm:fingerprint-race-gated', raceExtras);
+    // The source string is approval metadata, not tree content: keep both
+    // manifests byte-identical so their fingerprints must match.
+    const manifest = await fs.readFile(path.join(first.root, 'package.json'));
+    await fs.writeFile(path.join(second.root, 'package.json'), manifest);
+
+    runtime.listOutput = [
+      'User packages:',
+      `  ${first.source}`,
+      `    ${first.root}`,
+      `  ${second.source}`,
+      `    ${second.root}`,
+      '',
+    ].join('\n');
+    const store = await import('../pi-package-store.js');
+    await mutateAuthorized(store, { action: 'set-enabled', source: first.source, enabled: true });
+    const baseline = await approvedFingerprint(first.source);
+
+    const originalOpen = fs.open.bind(fs);
+    // The production walker opens realpath-canonical paths, while both roots come
+    // from mkdtemp(os.tmpdir()). macOS TMPDIR (/var → /private/var) and Windows
+    // junctions make those spellings differ, so compare canonical paths.
+    const canonicalSecondRoot = await fs.realpath(second.root);
+    const firstFile = path.join(canonicalSecondRoot, 'race', '00.txt');
+    const lastFile = path.join(canonicalSecondRoot, 'race', '07.txt'); // last of the first 8-way wave
+    let active = 0;
+    let maxActive = 0;
+    let gated = false;
+    let laterOpened = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      // Give every task in the wave a chance to enter before the cheap open.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      try {
+        const openedPath = path.resolve(String(args[0]));
+        if (!laterOpened && openedPath === lastFile) laterOpened = true;
+        if (!gated && openedPath === firstFile) {
+          gated = true;
+          await gate;
+        }
+        return await originalOpen(...args);
+      } finally {
+        active -= 1;
+      }
+    });
+    try {
+      const mutation = mutateAuthorized(store, {
+        action: 'set-enabled',
+        source: second.source,
+        enabled: true,
+      });
+      await vi.waitFor(() => expect(laterOpened).toBe(true));
+      release();
+      await mutation;
+    } finally {
+      release();
+      openSpy.mockRestore();
+    }
+
+    expect(gated).toBe(true);
+    expect(maxActive).toBeGreaterThan(1);
+    expect(maxActive).toBeLessThanOrEqual(8);
+    expect(await approvedFingerprint(second.source)).toBe(baseline);
+  });
+
+  // 测试价值：直接测指纹预算入口，修复普通文件不计数导致空文件目录绕过条目上限。
+  // Bug 依据：旧实现只在 visit 中计数，wave 里的文件子项直接提交，24 个空文件仍算 1 项。
+  // 覆盖缺口：golden/乱序用例不覆盖预算边界。
+  // 最小失败输入：24 个空文件 + maxEntries=10；tier：unit（真实临时目录）。
+  it('counts ordinary files, including empty ones, against the entry budget', async () => {
+    const root = path.join(runtime.userData, 'fingerprint-entry-budget');
+    await fs.mkdir(root, { recursive: true });
+    for (let index = 0; index < 24; index += 1) {
+      await fs.writeFile(path.join(root, `empty-${String(index).padStart(2, '0')}.txt`), '');
+    }
+    const store = await import('../pi-package-store.js');
+    await expect(store.__testing.fingerprintPiPackageTree(root, {
+      maxEntries: 10,
+      maxBytes: 1024 * 1024,
+      maxDurationMs: 10_000,
+    })).rejects.toMatchObject({
+      name: 'PiPackageSnapshotLimitError', scope: 'package', reason: 'entries',
+    });
+  });
+
+  // 测试价值：证明字节预算在读取前预留，而不是整批缓冲后才记账。
+  // Bug 依据：旧实现让 8 个并发文件各自通过 256 MiB 检查，先缓冲再超限。
+  // 覆盖缺口：乱序用例只测顺序，不测预算。
+  // 最小失败输入：2 个 3 MiB 文件 + maxBytes=4 MiB；tier：unit（真实临时目录 + fs.open spy）。
+  it('reserves file bytes before opening so the byte budget rejects early', async () => {
+    const root = path.join(runtime.userData, 'fingerprint-byte-budget');
+    await fs.mkdir(root, { recursive: true });
+    const payload = Buffer.alloc(3 * 1024 * 1024, 7);
+    for (const name of ['a.bin', 'b.bin']) await fs.writeFile(path.join(root, name), payload);
+    const store = await import('../pi-package-store.js');
+    const originalOpen = fs.open.bind(fs);
+    let opens = 0;
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (String(args[0]).includes('fingerprint-byte-budget')) opens += 1;
+      return originalOpen(...args);
+    });
+    try {
+      await expect(store.__testing.fingerprintPiPackageTree(root, {
+        maxEntries: 100,
+        maxBytes: 4 * 1024 * 1024,
+        maxDurationMs: 10_000,
+      })).rejects.toMatchObject({
+        name: 'PiPackageSnapshotLimitError', scope: 'package', reason: 'bytes',
+      });
+      expect(opens).toBe(0);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  // 测试价值：证明并发读取仍存在，但按字节分批，缓冲区不会随文件数线性增长。
+  // Bug 依据：旧的 8 路按文件计数并发会同时缓冲 5 个 3 MiB 文件。
+  // 覆盖缺口：上面的 byte 用例只证明提前失败，不证明正常路径的缓冲上限。
+  // 最小失败输入：5 个 3 MiB 文件 + 8 MiB 在途上限（最多 2 个同时在途）；tier：unit。
+  it('bounds buffered bytes while keeping file reads concurrent', async () => {
+    const root = path.join(runtime.userData, 'fingerprint-inflight-budget');
+    await fs.mkdir(root, { recursive: true });
+    const payload = Buffer.alloc(3 * 1024 * 1024, 9);
+    for (let index = 0; index < 5; index += 1) {
+      await fs.writeFile(path.join(root, `part-${index}.bin`), payload);
+    }
+    const store = await import('../pi-package-store.js');
+    const originalOpen = fs.open.bind(fs);
+    let active = 0;
+    let maxActive = 0;
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      if (!String(args[0]).includes('fingerprint-inflight-budget')) return originalOpen(...args);
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      try {
+        return await originalOpen(...args);
+      } finally {
+        active -= 1;
+      }
+    });
+    try {
+      await expect(store.__testing.fingerprintPiPackageTree(root, {
+        maxEntries: 100,
+        maxBytes: 64 * 1024 * 1024,
+        maxDurationMs: 10_000,
+      })).resolves.toEqual(expect.any(String));
+      expect(maxActive).toBeGreaterThan(1);
+      expect(maxActive).toBeLessThanOrEqual(2);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  // 测试价值：直接测生产入口 fingerprintPiPackageTree；文件在读取期间被追加时，
+  // 必须在预留字节处停止并由 after stat 拒绝，不再缓冲新增内容。
+  // Bug 依据：Greptile 在 #13048 指出读取循环按 before.size 预留预算却读到 EOF。
+  // 覆盖缺口：上面的 byte / in-flight 用例只覆盖打开前的预算，不覆盖打开后文件增长。
+  // 最小失败输入：512 KiB 文件在第一次 read 后被追加 1 MiB；旧实现会读到 1.5 MiB。
+  // tier：unit（进程内 fs.open spy，无真实等待）。
+  it('stops at the reserved size when a file grows during fingerprinting', async () => {
+    const root = path.join(runtime.userData, 'fingerprint-growing-file');
+    await fs.mkdir(root, { recursive: true });
+    const originalSize = 512 * 1024;
+    const growingFile = path.join(root, 'growing.bin');
+    await fs.writeFile(growingFile, Buffer.alloc(originalSize, 5));
+    const store = await import('../pi-package-store.js');
+    const originalOpen = fs.open.bind(fs);
+    let bytesRead = 0;
+    let grown = false;
+    const openSpy = vi.spyOn(fs, 'open').mockImplementation((async (...args) => {
+      const handle = await originalOpen(...args);
+      if (!String(args[0]).includes('fingerprint-growing-file')) return handle;
+      const originalRead = handle.read.bind(handle);
+      return {
+        stat: (...statArgs: Parameters<typeof handle.stat>) => handle.stat(...statArgs),
+        read: async (...readArgs: Parameters<typeof handle.read>) => {
+          const result = await originalRead(...readArgs);
+          bytesRead += result.bytesRead;
+          if (!grown && result.bytesRead > 0) {
+            grown = true;
+            await fs.appendFile(growingFile, Buffer.alloc(1024 * 1024, 6));
+          }
+          return result;
+        },
+        close: (...closeArgs: Parameters<typeof handle.close>) => handle.close(...closeArgs),
+      } as Awaited<ReturnType<typeof fs.open>>;
+    }) as typeof fs.open);
+    try {
+      await expect(store.__testing.fingerprintPiPackageTree(root, {
+        maxEntries: 100,
+        maxBytes: 64 * 1024 * 1024,
+        maxDurationMs: 10_000,
+      })).rejects.toThrow('Pi extension package changed while fingerprinting');
+      expect(grown).toBe(true);
+      expect(bytesRead).toBe(originalSize);
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 });

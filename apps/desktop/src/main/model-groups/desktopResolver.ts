@@ -3,7 +3,7 @@
  * 所有依赖顶层静态导入，所有端口调用期转发；纯 Node 核心逻辑在 runtimeCore.ts。
  */
 import type { ProviderView } from '@cindy/model-providers';
-import type { ModelGroupTraceQuota } from '../../shared/modelGroups.js';
+import type { ModelGroupAgentKind, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getPluginModelPickerAgents, isPluginRouteHarnessInstalled } from '../cindy-brain/ghostModelPicker.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
@@ -12,12 +12,13 @@ import { getGoalController } from '../goal-host/index.js';
 import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import * as pluginEnginesIpc from '../maker-ipc/pluginEnginesIpc.js';
 import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
 import { getProviderGroupRouter } from '../provider-group/runtime.js';
 import { fiveHourTightFor } from '../provider-group/scheduler.js';
 import { readProviderGroup } from '../provider-group/store.js';
 import { getQuotaOverviewService } from '../quota-overview/service.js';
-import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCatalog.js';
+import { readDeviceProviderCatalog, readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
 import { readSubscriptionPoolScheduling } from '../subscription-accounts/runtime.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
 import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
@@ -50,7 +51,8 @@ async function quotaWindows(options?: { cached?: boolean }) {
   return byProvider;
 }
 
-function innerQuota(source: { providerId: string; model: string; agentKind: 'cc' | 'codex' | 'pi' }): Promise<ModelGroupInnerQuota | null> {
+function innerQuota(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null> {
+  if (source.agentKind === 'acp') return Promise.resolve(null);
   const agent = source.agentKind === 'cc' ? 'claude-code' as const : source.agentKind;
   const config = readProviderGroup(source.providerId);
   if (config) {
@@ -96,9 +98,22 @@ export function registerDesktopSshCodexProvidersReader(
   sshCodexProvidersReader = reader;
 }
 
+let pluginEnginesSubscribed = false;
+function ensurePluginEnginesSubscription(): void {
+  if (pluginEnginesSubscribed) return;
+  pluginEnginesSubscribed = true;
+  pluginEnginesIpc.onPluginEnginesChanged?.(() => {
+    desktopModelGroupRuntime.refreshLocalPluginEngines();
+  });
+}
+
 export const desktopModelGroupRuntime = createModelGroupRuntime({
   scope: () => activeOwnerScopeKey(),
-  localViews: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
+  localViews: () => {
+    ensurePluginEnginesSubscription();
+    return getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
+  },
+  pluginEngines: () => pluginEnginesIpc.listPluginEngineViews(),
   localAgents: () => getPluginModelPickerAgents(),
   harnessInstalled: (agent, agentDeviceId) => isPluginRouteHarnessInstalled(agent, agentDeviceId, async (deviceId, name) => {
     const result = await remoteBackgroundInvoke(deviceId, 'maker:agent:status', [name]);
@@ -108,8 +123,9 @@ export const desktopModelGroupRuntime = createModelGroupRuntime({
   quotaWindows: (options) => quotaWindows(options),
   innerQuota: (source) => innerQuota(source),
   remoteInvocable: (providerId) => isRemoteProviderInvocationAllowed(providerId),
-  locations: () => readWorkerAgentLocations(),
+  locations: () => readWorkerAgentLocations({ favoriteSources: true }),
   remoteViews: (agentDeviceId) => readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId),
+  remotePluginEngines: (agentDeviceId) => readRemotePluginEngines(agentDeviceId),
   pricing: async () => ({ gateway: await getGatewayModelPricing(), reference: getReferenceModelPricing() }),
   listSshCodexProviders: (hostId) => sshCodexProvidersReader ? sshCodexProvidersReader(hostId) : Promise.resolve([]),
   readSession: (sessionId) => getSessionRowSnapshot(sessionId),

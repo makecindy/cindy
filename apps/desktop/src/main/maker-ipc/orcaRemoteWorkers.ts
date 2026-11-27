@@ -23,7 +23,7 @@ import {
   type OrcaRemoteWorkerOpenResult as DeviceOpenResult,
 } from '@cindy/device-link';
 import { isMobilePlatform } from '@cindy/maker-shared/device-list';
-import type { AgentKind } from '@cindy/maker-core';
+import type { EngineKind } from '@cindy/maker-core';
 
 import type { DeviceLinkDeviceView } from '../../shared/deviceLinkIpc.js';
 import {
@@ -546,7 +546,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
         if (!opened) opening.delete(remoteSessionId);
       }
       const proxySessionId = createId();
-      const agent: AgentKind = opened.agentKind ?? input.agent;
+      const agent: EngineKind = opened.agentKind ?? input.agent;
       // open 与关联之间尚未创建本机代理，退出后只需按持久 open 身份解除远端标记。
       assertOwner(owner);
       const proxySession = {
@@ -558,6 +558,7 @@ export function createOrcaRemoteWorkers(deps: OrcaRemoteWorkersDeps) {
           : input.effort && EFFORTS.has(input.effort) ? input.effort : null,
         permissionMode: input.permissionMode,
         fastMode: opened.fastMode ?? (input.fast ?? false),
+        ...(opened.providerId !== undefined || input.providerId ? { providerId: opened.providerId ?? input.providerId ?? null } : {}),
         ...(opened.agentDeviceId !== undefined ? { agentDeviceId: opened.agentDeviceId } : {}),
       };
       creationOwners.set(proxySessionId, owner);

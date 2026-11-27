@@ -3722,7 +3722,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       last={isBlockHomeRow(section.data[index + 1])} timeLabel={item.sourceLabel} />
   ) : (
     <HomeListRow
-      inboxMode={section.key.startsWith('inbox-')}
+      inboxMode={taskListMode === 'inbox'}
+      inboxActions={section.key.startsWith('inbox-')}
       expandedAutomationGroups={expandedAutomationGroups}
       isLastPinnedRow={section.key === 'pinned' && index === section.data.length - 1 && sections.length > 1}
       item={item}
@@ -3789,6 +3790,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     sessionSwipeControls,
     showSessionOptions,
     swipeRegistry,
+    taskListMode,
     toggleAutomationGroup,
     toggleProject,
     toggleSessionPinned,
@@ -5489,6 +5491,7 @@ function HomeListRowInner({
   isLastPinnedRow,
   item,
   inboxMode,
+  inboxActions,
   machineIdentity,
   nextIsBlock,
   onArchive,
@@ -5525,6 +5528,7 @@ function HomeListRowInner({
   swipe,
 }: {
   inboxMode: boolean;
+  inboxActions: boolean;
   expandedAutomationGroups: readonly string[];
   /** 置顶段的末行与下一段共用分隔线。 */
   isLastPinnedRow: boolean;
@@ -5681,7 +5685,7 @@ function HomeListRowInner({
   if (item.item.automationGroup || !conversationSearchAllowsLocalWrites(item.item)) return draggableRow;
   return (
     <SwipeableSessionRow
-      inboxMode={inboxMode}
+      inboxMode={inboxActions}
       pinnedSection={item.source === 'pinned'}
       onSnooze={swipe.onSnooze}
       onComplete={swipe.onComplete}

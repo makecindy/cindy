@@ -712,7 +712,8 @@ function rowFromDefaults(
     agentKind: defaults.agentKind,
     workingDir,
     model: defaults.model,
-    effort: defaults.effort,
+    // Plugin engines without effort modes use '' in storage (matching pluginEngineSessionAdmission).
+    effort: defaults.effort as Effort,
     permissionMode: defaults.permissionMode,
     fastMode: defaults.fastMode,
     sdkSessionId: null,

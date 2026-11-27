@@ -22,6 +22,7 @@ import { executePreRunHook } from '../scheduler-host/pre-run-hook';
 
 import {
   PrStatusService,
+  createPrStatusBroadcastGate,
   filterPrStatusQueriesForRefs,
   mapRemoteToStatus,
   withoutPrMetadata,
@@ -1689,6 +1690,185 @@ describe('PR follow watch', () => {
     await refresh(pr3);
     await vi.waitFor(() => expect(runNow).toHaveBeenCalledTimes(2));
     expect(runNow.mock.calls[1]?.[0]).toBe('follow-203');
+  });
+
+  // Unit regression: GitHub App push refreshes PrStatusService in main, but without a
+  // main→renderer broadcast gate the UI waited up to 90s for its next polling tick (or
+  // would spam identical revisions / heavy metadata). Tests production PrStatusService +
+  // refreshGithubPrEvents + createPrStatusBroadcastGate with minimal changed/unchanged states.
+  it('broadcasts stripped status changes on event refresh, suppresses unchanged revisions, and resets on invalidate', async () => {
+    let now = 1_000;
+    let current: PrRemoteState | 'error' | 'not-found' = remote({
+      checks: { total: 2, passed: 1, failed: 0, pending: 1, skipped: 0 },
+      metadata: { body: 'LARGE PR BODY', author: { login: 'octocat' } },
+    });
+    const pushed: unknown[] = [];
+    const gate = createPrStatusBroadcastGate((status) => pushed.push(status));
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      now: () => now,
+      fetchPr: async () => {
+        if (current === 'error') throw new Error('ECONNRESET');
+        if (current === 'not-found') throw Object.assign(new Error('nf'), { status: 404 });
+        return current;
+      },
+      onInvalidated: () => gate.reset(),
+      onObserved: (query, result) => gate.observe(query, result),
+    });
+    const url = 'https://github.com/makecindy/cindy/pull/85';
+
+    // Initial fetch broadcasts once with metadata stripped.
+    await svc.getStatuses([Q]);
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({ ok: true, status: 'open', checks: { passed: 1, pending: 1 } });
+    expect(pushed[0]).not.toHaveProperty('metadata');
+
+    // Identical content on a forced refresh (new observedAt/revision) must not re-broadcast.
+    now += 10_000;
+    await refreshGithubPrEvents(svc, { notify: vi.fn(), observedSignature: () => undefined }, [url], () => true, { reason: 'event', notify: [] });
+    expect(pushed).toHaveLength(1);
+
+    // Real check/status transition via GitHub App push broadcasts immediately without metadata.
+    now += 5_000;
+    current = remote({
+      state: 'closed',
+      merged: true,
+      checks: { total: 2, passed: 2, failed: 0, pending: 0, skipped: 0 },
+      metadata: { body: 'LARGE PR BODY' },
+    });
+    await refreshGithubPrEvents(svc, { notify: vi.fn(), observedSignature: () => undefined }, [url], () => true, { reason: 'event', notify: [] });
+    expect(pushed).toHaveLength(2);
+    expect(pushed[1]).toMatchObject({ ok: true, status: 'merged', checks: { passed: 2, pending: 0 } });
+    expect(pushed[1]).not.toHaveProperty('metadata');
+
+    // Transient fetch failure must not broadcast; definitive not-found must broadcast once.
+    current = 'error';
+    await svc.getStatuses([Q], { refresh: true });
+    expect(pushed).toHaveLength(2);
+    current = 'not-found';
+    await svc.getStatuses([Q], { refresh: true });
+    expect(pushed).toHaveLength(3);
+    expect(pushed[2]).toMatchObject({ ok: false, reason: 'not-found' });
+
+    // Invalidation (account/token switch) resets the gate so the next identical state broadcasts again.
+    svc.invalidate();
+    await svc.getStatuses([Q], { refresh: true });
+    expect(pushed).toHaveLength(4);
+  });
+
+  // Unit regression (security): if the active account/scope changes while a fetch is in flight
+  // and before any new query triggers invalidation, revalidate must re-verify scope BEFORE
+  // caching or invoking onObserved, preventing old-account PR metadata from broadcasting to the
+  // new account.
+  it('suppresses cache writes and status broadcasts when scope changes while a fetch is in flight', async () => {
+    let activeScope = 'account-a';
+    let resolveFetch!: (value: PrRemoteState) => void;
+    const pushed: unknown[] = [];
+    const gate = createPrStatusBroadcastGate((status) => pushed.push(status));
+    const fetchPr = vi.fn(() => new Promise<PrRemoteState>((resolve) => {
+      resolveFetch = resolve;
+    }));
+    const svc = new PrStatusService({
+      readToken: TOKEN_OK,
+      scope: async () => activeScope,
+      fetchPr,
+      onInvalidated: () => gate.reset(),
+      onObserved: (query, result) => gate.observe(query, result),
+    });
+
+    const pendingA = svc.getStatuses([Q]);
+    await vi.waitFor(() => expect(fetchPr).toHaveBeenCalledTimes(1));
+
+    // Switch account before Account A's network response lands (no manual invalidate call).
+    activeScope = 'account-b';
+    resolveFetch(remote({ title: 'Account A secret', branch: 'secret-a' }));
+
+    expect(await pendingA).toEqual([{ ...Q, ok: false, reason: 'no-token' }]);
+    expect(pushed).toEqual([]);
+    expect(await svc.cachedStatuses([Q])).toEqual([undefined]);
+
+    // Subsequent fetch under Account B succeeds and broadcasts normally.
+    fetchPr.mockImplementationOnce(async () => remote({ title: 'Account B PR', branch: 'feat-b' }));
+    const [resB] = await svc.getStatuses([Q]);
+    expect(resB).toMatchObject({ ok: true, title: 'Account B PR', branch: 'feat-b' });
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0]).toMatchObject({ ok: true, title: 'Account B PR', branch: 'feat-b' });
+  });
+
+  // 测试价值：
+  // - 防退化点：PrFollowWatch.retryPending() 若并发遍历全部待重试任务且不重检容量，
+  //   会在一次状态刷新或 5 秒重试时把所有积压 PR 同时打进 runNow，击穿 maxConcurrentRuns。
+  // - 触发条件：在无空槽时向 5 个不同 PR 投递变更使它们进入 pending 队列，随后开放 2 个槽位，
+  //   并在每次 runNow 时即时占槽、完成后释放槽位。
+  // - 生产入口与可观察结果：PrFollowWatch.notify + 5 秒 retryPending 队列排空，断言任一时刻并发占槽严格 <= 2，
+  //   且所有 5 个待办任务最终各执行一次无丢失。
+  // - 依赖策略：vi.useFakeTimers + 内存槽位计数，无网络与真实等待（unit tier）。
+  // - 对应规则或根因：线上 PR 监听积压集中回放导致数十条心跳同毫秒并发触发。
+  it('drains deferred pending PR watch wakeups sequentially without exceeding scheduler capacity', async () => {
+    vi.useFakeTimers();
+    try {
+      const urls = [1, 2, 3, 4, 5].map((n) => `https://github.com/makecindy/cindy/pull/${300 + n}`);
+      const tasks = urls.map((url, idx) =>
+        schedule(`follow-${idx + 1}`, url, { prTrigger: { url, change: 'any' } }),
+      );
+      let capacityOpen = false;
+      let active = 0;
+      let peak = 0;
+      const maxSlots = 2;
+      const releases: Array<() => void> = [];
+      const dispatched: string[] = [];
+
+      const runNow = vi.fn((id: string) => {
+        dispatched.push(id);
+        active += 1;
+        peak = Math.max(peak, active);
+        return new Promise<{ runId: string; deferred?: boolean }>((resolve) => {
+          releases.push(() => {
+            active -= 1;
+            resolve({ runId: `run-${id}` });
+          });
+        });
+      });
+
+      const watch = new PrFollowWatch({
+        listActive: async () => tasks,
+        inflight: () => 0,
+        autoRunAllowed: () => true,
+        hasCapacity: () => capacityOpen && active < maxSlots,
+        runNow,
+      });
+
+      for (const url of urls) {
+        await watch.notify(url);
+      }
+      expect(dispatched).toEqual([]);
+
+      // Open capacity (2 slots): first drain wave must admit at most 2 schedules, leaving 3 queued.
+      capacityOpen = true;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(dispatched).toHaveLength(2);
+      expect(peak).toBe(2);
+
+      // Release 2 slots -> next 5s wave admits the next 2 schedules.
+      releases.splice(0).forEach((fn) => fn());
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(dispatched).toHaveLength(4);
+      expect(peak).toBe(2);
+
+      // Release again -> final 5th schedule drains cleanly and no duplicates fire afterwards.
+      releases.splice(0).forEach((fn) => fn());
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(dispatched).toHaveLength(5);
+      expect(new Set(dispatched).size).toBe(5);
+      expect(peak).toBe(2);
+
+      releases.splice(0).forEach((fn) => fn());
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(dispatched).toHaveLength(5);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 
   // 测试价值：

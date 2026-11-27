@@ -7,8 +7,8 @@
  * - 共享任务在宿主上下文下以 owner 权执行，不暴露宿主私密信息给访客。
  */
 import { randomUUID } from 'node:crypto';
-import type { AgentKind } from '@cindy/maker-core';
-import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import type { EngineKind } from '@cindy/maker-core';
+import { dbToMakerEngineKind, makerToDbEngineKind } from '../../shared/agentKindConversion.js';
 import {
   modelGroupCandidateKey,
   type ModelGroupAgentKind,
@@ -91,7 +91,7 @@ export interface RunModelGroupBeforeSendPorts {
   }>;
   performCrossSwitch(params: {
     sessionId: string;
-    targetAgentKind: AgentKind;
+    targetAgentKind: EngineKind;
     agentDeviceId: string | null;
     model: string;
     providerId: string;
@@ -112,7 +112,7 @@ const DEFAULT_CAUSE_LABELS: Record<ModelGroupTurnDecisionSwitch['cause'], string
 
 function asModelGroupAgentKind(value: string | null | undefined): ModelGroupAgentKind | null {
   if (value === 'cc' || value === 'claude-code') return 'cc';
-  if (value === 'codex' || value === 'pi') return value;
+  if (value === 'codex' || value === 'pi' || value === 'acp') return value;
   return null;
 }
 
@@ -166,10 +166,13 @@ export async function runModelGroupBeforeSend(
       return { switched: false };
     }
 
-    const targetMakerAgent = dbToMakerAgentKind(decision.target.agentKind);
+    const targetMakerAgent = dbToMakerEngineKind(decision.target.agentKind);
     let committedModel = decision.target.model;
     let committedProviderId = decision.target.providerId;
     let switched = false;
+    const nextFastMode = decision.target.agentKind === 'acp'
+      ? false
+      : (decision.target.fastMode ?? row.fastMode ?? false);
 
     const useCrossPath = decision.crossEngine || decision.crossLocation || decision.requiresHandoffForWindow === true;
     if (!useCrossPath) {
@@ -178,7 +181,7 @@ export async function runModelGroupBeforeSend(
         model: decision.target.model,
         providerId: decision.target.providerId,
         effort: decision.target.effort ?? row.effort ?? null,
-        fastMode: decision.target.fastMode ?? row.fastMode ?? false,
+        fastMode: nextFastMode,
       });
       if (sameRes.contextWindowConfirmationRequired) {
         // 触发窗口缩容确认时自动升级为有界交接，避免阻塞任务发送。
@@ -189,7 +192,7 @@ export async function runModelGroupBeforeSend(
           model: decision.target.model,
           providerId: decision.target.providerId,
           effort: decision.target.effort,
-          fastMode: decision.target.fastMode,
+          fastMode: decision.target.agentKind === 'acp' ? false : decision.target.fastMode,
           skipBootstrap: !options.bootstrapAfterSwitch,
         });
         switched = crossRes.switched;
@@ -206,7 +209,7 @@ export async function runModelGroupBeforeSend(
         model: decision.target.model,
         providerId: decision.target.providerId,
         effort: decision.target.effort,
-        fastMode: decision.target.fastMode,
+        fastMode: decision.target.agentKind === 'acp' ? false : decision.target.fastMode,
         skipBootstrap: !options.bootstrapAfterSwitch,
       });
       switched = crossRes.switched;
@@ -218,7 +221,7 @@ export async function runModelGroupBeforeSend(
       sessionId,
       decision.selection,
       modelGroupCandidateKey({
-        agentKind: makerToDbAgentKind(targetMakerAgent),
+        agentKind: makerToDbEngineKind(targetMakerAgent),
         providerId: committedProviderId,
         model: committedModel,
         agentDeviceId: decision.target.agentDeviceId || undefined,

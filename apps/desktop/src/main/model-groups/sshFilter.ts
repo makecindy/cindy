@@ -42,6 +42,7 @@ export function createSshModelGroupSupport(ports: {
     view: ProviderView | undefined,
   ): Promise<boolean> {
     if (candidate.agentDeviceId) return false;
+    if (candidate.agentKind === 'acp') return false;
     if (isSubscriptionDirectModel(candidate.model)) return false;
     if (candidate.agentKind === 'codex') {
       if (candidate.providerId !== 'openai') return false;

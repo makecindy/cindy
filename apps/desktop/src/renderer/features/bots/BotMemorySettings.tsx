@@ -12,10 +12,10 @@ import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { extractIpcError } from '@/utils/ipcError';
 import {
-  BOT_MEMORY_BODY_MAX_BYTES,
   BOT_MEMORY_CHANGED,
   BOT_MEMORY_TITLE_MAX,
   BOT_MEMORY_TYPES,
+  BOT_PROJECT_MEMORY_BODY_MAX_BYTES,
   type BotMemoryDetail,
   type BotMemorySummary,
 } from '../../../shared/botMemory';
@@ -49,7 +49,7 @@ const isConflict = (error: unknown) => {
 };
 const normalizeTitle = (title: string) => title.replace(/\s+/g, ' ').trim();
 const bodyTooLong = (body: string) =>
-  new TextEncoder().encode(body.trim()).length > BOT_MEMORY_BODY_MAX_BYTES;
+  new TextEncoder().encode(body.trim()).length > BOT_PROJECT_MEMORY_BODY_MAX_BYTES;
 
 function useDateLabels() {
   const { t, i18n } = useBotTranslation();

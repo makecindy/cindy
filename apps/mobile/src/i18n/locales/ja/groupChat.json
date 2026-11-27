@@ -9,6 +9,7 @@
     "stopAllHint": "他の人の依頼も含みます",
     "step": "ステップ {{step}}/{{total}}"
   },
+  "newMessagesBoundary": "NEW",
   "title": "グループチャット",
   "memberSeparator": "、",
   "memberCount_one": "メンバー {{count}} 人",
@@ -45,6 +46,7 @@
     "all": "全員",
     "allHint": "人のみ",
     "label": "仲間をメンション",
+    "avatarHint": "この仲間を下書きの末尾にメンションします。",
     "allBots": "すべての仲間",
     "allBotsHint": "仲間のみ"
   },
@@ -688,5 +690,10 @@
     "externalFormatError": "元のメッセージから完全なリンクを開き直してください。"
   },
   "waitingForOwner": "所有者の確認待ち",
-  "externalBadge": "外部"
+  "externalBadge": "外部",
+  "reaction": {
+    "add": "リアクションを追加",
+    "count": "{{emoji}} · {{count}} 件のリアクション",
+    "failed": "リアクションを更新できませんでした。再試行してください。"
+  }
 }

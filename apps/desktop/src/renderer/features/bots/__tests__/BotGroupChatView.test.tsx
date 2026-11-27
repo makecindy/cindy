@@ -1581,6 +1581,32 @@ describe('BotGroupChatView', () => {
     expect(refreshReads).toEqual([601, 501, 401, 301, 201, 101]);
   });
 
+  it('patches settled attachments in place on attachment-only pushes without re-fetching getBotGroup', async () => {
+    const mediaId = 'att-inline-1';
+    mocks.getBotGroup.mockResolvedValue({
+      ok: true,
+      group: detail({
+        messages: [msg({
+          id: 'm-img',
+          sequence: 10,
+          content: '',
+          attachments: [{ id: mediaId, name: 'clipboard.png', category: 'file', mimeType: '', size: 0, url: null, path: null, state: 'loading' }],
+        })],
+      }),
+    });
+    renderView();
+    expect(await screen.findByText('chat.imageMissing.loading')).toBeTruthy();
+    const readsBeforePush = mocks.getBotGroup.mock.calls.length;
+    await act(async () => mocks.pushes.forEach(push => push({
+      groupId: 'g1',
+      change: 'attachments',
+      attachments: [{ id: mediaId, name: 'clipboard.png', category: 'image', mimeType: 'image/png', size: 12, url: 'cindy-media://blobs/clipboard.png', path: null }],
+    })));
+    expect(await screen.findByAltText('clipboard.png')).toBeTruthy();
+    expect(screen.queryByText('chat.imageMissing.loading')).toBeNull();
+    expect(mocks.getBotGroup).toHaveBeenCalledTimes(readsBeforePush);
+  });
+
   it('keeps a newer push failure snapshot when a stale older-page request finishes later', async () => {
     const latest = msg({ id: 'latest', sequence: 100, content: 'Latest question' });
     const source = msg({ id: 'older', sequence: 4, content: 'Earlier question' });
@@ -4407,6 +4433,171 @@ it('keeps copy/share in the more menu and includes folded human text in exported
   } finally { focus.mockRestore(); resetBotReadStateForTests(); }
 });
 
+it('shows the NEW unread divider on the main timeline for local groups, keeps it after read acknowledgement, and breaks author continuation', async () => {
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  resetBotReadStateForTests();
+  markBotRead(botGroupReadKey('g1'), 1_000);
+  try {
+    mocks.getBotGroup.mockResolvedValue({
+      ok: true,
+      group: detail({
+        messages: [
+          msg({ id: 'm1', sequence: 1, authorKind: 'bot', authorBotId: 'mimi', authorName: '咪咪', content: 'Already read', createdAt: 1_000 }),
+          msg({ id: 'm2', sequence: 2, authorKind: 'bot', authorBotId: 'mimi', authorName: '咪咪', content: 'First unread', createdAt: 2_000 }),
+          msg({ id: 'm3', sequence: 3, authorKind: 'bot', authorBotId: 'mimi', authorName: '咪咪', content: 'Second unread', createdAt: 3_000 }),
+        ],
+      }),
+    });
+    renderView();
+    await screen.findByText('First unread');
+    const divider = screen.getByTestId('bot-group-new-messages');
+    expect(divider.getAttribute('role')).toBe('separator');
+    expect(divider.textContent).toBe('bots.chat.newMessagesBoundary');
+    const m1Row = document.querySelector('[data-bot-group-message-id="m1"]')!;
+    const m2Row = document.querySelector('[data-bot-group-message-id="m2"]')!;
+    expect(m1Row.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(divider.compareDocumentPosition(m2Row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // m2 shares the same author within the merge window, so the NEW divider must prevent merging its header.
+    expect(m2Row.textContent).toContain('咪咪');
+    // Read acknowledgement advances local read state while keeping the divider visible during this visit.
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(getBotLastReadAt(botGroupReadKey('g1'))).toBe(3_000);
+    expect(screen.getByTestId('bot-group-new-messages')).toBeTruthy();
+  } finally { focus.mockRestore(); resetBotReadStateForTests(); }
+});
+
+it('shows the NEW unread divider for server groups from readSequence across stale cache and suppresses it for live replies after an already-read entry', async () => {
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  window.electronAPI.maker.chatServer.manage = vi.fn().mockResolvedValue({ ok: true });
+  resetBotReadStateForTests();
+  try {
+    const stale = detail({
+      serverBacked: true,
+      readSequence: '1',
+      serverUnread: { count: 0, mentioned: false },
+      messages: [msg({ id: 'm1', sequence: 1, serverSequence: '1', authorKind: 'user', isSelf: true, content: 'Old mine', createdAt: 1_000 })],
+    });
+    const fresh = detail({
+      serverBacked: true,
+      readSequence: '1',
+      serverUnread: { count: 1, mentioned: false },
+      messages: [
+        msg({ id: 'm1', sequence: 1, serverSequence: '1', authorKind: 'user', isSelf: true, content: 'Old mine', createdAt: 1_000 }),
+        msg({ id: 'm2', sequence: 2, serverSequence: '2', authorKind: 'bot', authorBotId: 'mimi', content: 'Unread from server', createdAt: 2_000 }),
+      ],
+    });
+    let resolveFresh!: (value: unknown) => void;
+    mocks.cachedGroup = stale;
+    mocks.getBotGroup.mockImplementation(() => new Promise(resolve => { resolveFresh = resolve; }));
+    const first = renderView();
+    await screen.findByText('Old mine');
+    expect(screen.queryByTestId('bot-group-new-messages')).toBeNull();
+    await act(async () => resolveFresh({ ok: true, group: fresh }));
+    await screen.findByText('Unread from server');
+    expect(screen.getByTestId('bot-group-new-messages')).toBeTruthy();
+    first.unmount();
+
+    // Entering an already-read group does not show NEW, even when a live reply arrives while open.
+    mocks.cachedGroup = null;
+    const caughtUp = detail({
+      serverBacked: true,
+      readSequence: '2',
+      serverUnread: { count: 0, mentioned: false },
+      messages: fresh.messages,
+    });
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: caughtUp });
+    renderView();
+    await screen.findByText('Unread from server');
+    expect(screen.queryByTestId('bot-group-new-messages')).toBeNull();
+    mocks.getBotGroup.mockResolvedValue({
+      ok: true,
+      group: detail({
+        ...caughtUp,
+        messages: [...caughtUp.messages, msg({ id: 'm3', sequence: 3, serverSequence: '3', authorKind: 'bot', authorBotId: 'mimi', content: 'Live reply', createdAt: 3_000 })],
+      }),
+    });
+    act(() => mocks.pushes.forEach(push => push({ groupId: 'g1', change: 'messages' })));
+    await screen.findByText('Live reply');
+    expect(screen.queryByTestId('bot-group-new-messages')).toBeNull();
+  } finally { mocks.cachedGroup = null; focus.mockRestore(); resetBotReadStateForTests(); }
+});
+
+it('does not mark messages already read on another device as NEW when reopening from cache', async () => {
+  const cached = detail({
+    serverBacked: true, readSequence: '1', serverUnread: { count: 1, mentioned: false },
+    messages: [
+      msg({ id: 'm1', sequence: 1, authorKind: 'bot', content: 'Earlier' }),
+      msg({ id: 'm2', sequence: 2, authorKind: 'bot', content: 'Read elsewhere' }),
+    ],
+  });
+  mocks.cachedGroup = cached;
+  let finish!: (value: unknown) => void;
+  mocks.getBotGroup.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const acknowledge = vi.fn().mockResolvedValue({ ok: true });
+  window.electronAPI.maker.chatServer.manage = acknowledge;
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  try {
+    renderView();
+    await screen.findByText('Read elsewhere');
+    act(() => window.dispatchEvent(new Event('focus')));
+    expect(acknowledge).not.toHaveBeenCalled();
+    await act(async () => finish({ ok: true, group: { ...cached, readSequence: '2', serverUnread: { count: 0, mentioned: false } } }));
+    expect(screen.queryByTestId('bot-group-new-messages')).toBeNull();
+  } finally { focus.mockRestore(); }
+});
+
+it('reveals an older unread reply when the entry page only contains my messages', async () => {
+  const latest = detail({ serverBacked: true, readSequence: '1', hasMoreBefore: true, messages: [
+    msg({ id: 'mine', sequence: 3, authorKind: 'user', isSelf: true, content: 'My latest message' }),
+  ] });
+  const older = detail({ serverBacked: true, readSequence: '3', hasMoreBefore: false, messages: [
+    msg({ id: 'read', sequence: 1, authorKind: 'bot', content: 'Earlier read' }),
+    msg({ id: 'unread', sequence: 2, authorKind: 'bot', content: 'Earlier unread' }),
+  ] });
+  mocks.getBotGroup.mockImplementation((_id, options) =>
+    Promise.resolve({ ok: true, group: options?.beforeSequence ? older : latest }));
+  renderView();
+  await screen.findByText('My latest message');
+  expect(screen.queryByTestId('bot-group-new-messages')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+  await screen.findByText('Earlier unread');
+  const divider = screen.getByTestId('bot-group-new-messages');
+  const unreadRow = document.querySelector('[data-bot-group-message-id="unread"]')!;
+  expect(divider.compareDocumentPosition(unreadRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+it('waits to show the NEW divider until earlier read messages are loaded above a truncated unread page', async () => {
+  resetBotReadStateForTests();
+  const latestUnread = detail({
+    serverBacked: true,
+    readSequence: '1',
+    hasMoreBefore: true,
+    messages: [
+      msg({ id: 'm2', sequence: 2, serverSequence: '2', authorKind: 'bot', authorBotId: 'mimi', content: 'Unread page head', createdAt: 2_000 }),
+    ],
+  });
+  const olderRead = detail({
+    serverBacked: true,
+    readSequence: '1',
+    hasMoreBefore: false,
+    messages: [
+      msg({ id: 'm1', sequence: 1, serverSequence: '1', authorKind: 'user', isSelf: true, content: 'Earlier read', createdAt: 1_000 }),
+    ],
+  });
+  mocks.getBotGroup.mockImplementation((_id, options) =>
+    Promise.resolve({ ok: true, group: options?.beforeSequence ? olderRead : latestUnread }));
+  renderView();
+  await screen.findByText('Unread page head');
+  expect(screen.queryByTestId('bot-group-new-messages')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+  await screen.findByText('Earlier read');
+  const divider = screen.getByTestId('bot-group-new-messages');
+  const m1Row = document.querySelector('[data-bot-group-message-id="m1"]')!;
+  const m2Row = document.querySelector('[data-bot-group-message-id="m2"]')!;
+  expect(m1Row.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(divider.compareDocumentPosition(m2Row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
 // Unit / PR #9249 r4500734691: actual main-group disclosure + one incoming
 // reply that still fits the viewport. Existing main read tests require onScroll;
 // End/wheel here must advance local and server read positions without displacement.
@@ -6900,6 +7091,64 @@ describe('sidebar topic reply navigation', () => {
     renderView();
     await waitFor(() => expect(mocks.toastInfo).toHaveBeenCalledWith('bots.groupChat.server.thread.replyNotFound'));
     expect(mocks.thread).toHaveBeenCalledOnce();
+  });
+
+  it('preserves an attachments push that arrives while initial getBotGroup and loadOlder are in flight', async () => {
+    let resolveInitial!: (value: unknown) => void;
+    let resolveOlder!: (value: unknown) => void;
+    const latestMediaId = '60000000-0000-4000-8000-000000000611';
+    const olderMediaId = '60000000-0000-4000-8000-000000000612';
+    const loadingLatest = { id: latestMediaId, name: 'latest.png', category: 'file' as const, mimeType: '', size: 0, url: null, path: null, state: 'loading' as const };
+    const settledLatest = { id: latestMediaId, name: 'latest.png', category: 'image' as const, mimeType: 'image/png', size: 1024, url: 'cindy-media://blobs/settled-latest.png', path: null };
+    const loadingOlder = { id: olderMediaId, name: 'older.png', category: 'file' as const, mimeType: '', size: 0, url: null, path: null, state: 'loading' as const };
+    const settledOlder = { id: olderMediaId, name: 'older.png', category: 'image' as const, mimeType: 'image/png', size: 1024, url: 'cindy-media://blobs/settled-older.png', path: null };
+
+    mocks.getBotGroup.mockImplementation((_groupId: string, options?: { cacheOnly?: boolean; beforeSequence?: number }) => {
+      if (options?.cacheOnly) return Promise.resolve({ ok: false, errorCode: 'NOT_FOUND' });
+      if (options?.beforeSequence) return new Promise((resolve) => { resolveOlder = resolve; });
+      return new Promise((resolve) => { resolveInitial = resolve; });
+    });
+
+    renderView();
+    await waitFor(() => expect(resolveInitial).toBeTypeOf('function'));
+
+    // Attachments push arrives while initial getBotGroup() is still in flight.
+    act(() => {
+      for (const push of mocks.pushes) push({ groupId: 'g1', change: 'attachments', attachments: [settledLatest] });
+    });
+    await act(async () => {
+      resolveInitial({
+        ok: true,
+        group: detail({
+          serverBacked: true,
+          historyRevision: 'rev-attach-race',
+          hasMoreBefore: true,
+          messages: [msg({ id: 'm-latest', sequence: 10, content: 'latest image', attachments: [loadingLatest] })],
+        }),
+      });
+    });
+
+    await waitFor(() => expect(document.querySelector('img[src="cindy-media://blobs/settled-latest.png"]')).toBeTruthy());
+
+    // Now test the same race during loadOlder().
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.timeline.loadEarlier' }));
+    await waitFor(() => expect(resolveOlder).toBeTypeOf('function'));
+    act(() => {
+      for (const push of mocks.pushes) push({ groupId: 'g1', change: 'attachments', attachments: [settledOlder] });
+    });
+    await act(async () => {
+      resolveOlder({
+        ok: true,
+        group: detail({
+          serverBacked: true,
+          historyRevision: 'rev-attach-race',
+          hasMoreBefore: false,
+          messages: [msg({ id: 'm-older', sequence: 5, content: 'older image', attachments: [loadingOlder] })],
+        }),
+      });
+    });
+
+    await waitFor(() => expect(document.querySelector('img[src="cindy-media://blobs/settled-older.png"]')).toBeTruthy());
   });
 
   // Basis: bot-group-chat.md §10「群聊里的话题索引与提示」— verifies header 邀请/话题/设置 order, quiet unread dot,

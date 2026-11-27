@@ -65,7 +65,7 @@ let showChat = false;
 let threadRootId: string | undefined;
 const timelineChanges = vi.fn();
 function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : '', threadRootId); useEffect(() => { timelineChanges(); }, [chat.state]); return null; }
-async function render() { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Probe))); }
+async function render(Component = Probe) { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Component))); }
 async function send(input: Record<string, unknown>) {
   await chat.act('send', input);
   const runner = createChatOutboxDelivery({ store: mobileDurableOutbox,
@@ -111,6 +111,31 @@ it('keeps an unchanged direct group timeline stable across refresh and thread hy
   h.auth.apiFetch.mockRejectedValue({ status: 403 });
   await act(async () => { chat.reload(); });
   expect(chat.state.kind).toBe('missing');
+});
+
+it('publishes the first verified read when the server returns the restored disk snapshot unchanged', async () => {
+  showChat = true;
+  await render();
+  await act(async () => { root!.unmount(); root = undefined; });
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  h.auth.apiFetch.mockImplementation(async (path, options) => {
+    await gate;
+    return original(path, options);
+  });
+  const committed = vi.fn();
+  function ReadStatus() {
+    const group = useBotGroupChat(host, id);
+    useEffect(() => { committed(group.verified, group.state.kind); }, [group.verified, group.state.kind]);
+    return null;
+  }
+  await render(ReadStatus);
+  expect(committed).toHaveBeenLastCalledWith(false, 'ready');
+  await act(async () => { release(); });
+  expect(committed).toHaveBeenLastCalledWith(true, 'ready');
 });
 
 it('retains an old mention across a complete group refresh without writing the reply to the timeline cache', async () => {
@@ -1626,6 +1651,7 @@ describe('incremental mobile group sync and 429 resilience', () => {
     showChat = true; await render();
     expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Old msg' }, { content: 'Fresh from list' }] } });
     expect(chat.online).toBe(true);
+    expect(chat.verified).toBe(true);
     // WS still subscribes at cursor '2' instead of failing and disconnecting.
     const ws = opened.at(-1)!;
     await deliver(ws, { type: 'ready', actorId: self });
@@ -1644,6 +1670,7 @@ describe('incremental mobile group sync and 429 resilience', () => {
     });
     expect(chat.state).toMatchObject({ kind: 'ready', group: { messages: [{ content: 'Old msg' }, { content: 'Fresh from list' }, { content: 'During cooldown' }] } });
     expect(h.auth.apiFetch).not.toHaveBeenCalled();
+    expect(chat.verified).toBe(true);
     // Once 429 clears, short-backoff recovery completes metadata well before the old 30s interval.
     executionsError = null;
     h.auth.apiFetch.mockClear();
@@ -1653,6 +1680,7 @@ describe('incremental mobile group sync and 429 resilience', () => {
     executionsError = Object.assign(new Error('NOT_MEMBER'), { status: 403, code: 'NOT_MEMBER' });
     await act(async () => { chat.reload(); await vi.advanceTimersByTimeAsync(50); });
     expect(chat.state.kind).toBe('missing');
+    expect(chat.verified).toBe(false);
   });
 
   it('re-authorizes and wipes cache when WS delivers membership.changed followed by 403', async () => {

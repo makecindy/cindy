@@ -136,7 +136,12 @@ export type DeepLinkPayload =
    */
   | { type: 'focus' }
   /** Device-bound settings navigation from chat or an authenticated controller. */
-  | { type: 'settings-navigation'; target: SettingsNavigationTarget };
+  | { type: 'settings-navigation'; target: SettingsNavigationTarget }
+  /**
+   * 「设置 → 模型供应商」里某个插件引擎的页面。只由 main 在插件页面的请求通过校验后发出
+   * (cindy-brain 的 /harnesses/open-settings)，没有对应的 cindy:// 链接，外部无法构造。
+   */
+  | { type: 'plugin-engine-settings'; engineKey: string };
 
 /**
  * 解析 cindy:// / xdt-maker:// URL 为 typed payload(两种 scheme 都认,
@@ -526,6 +531,17 @@ export function sendWindowDeepLink(
 export function openMainWindowSettingsNavigation(target: SettingsNavigationTarget): void {
   if (!parseSettingsNavigationTarget(target)) throw new Error('Invalid settings target');
   dispatchDeepLink({ type: 'settings-navigation', target });
+}
+
+/**
+ * 在主窗口打开某个插件引擎的供应商设置页；没有可用的主窗口时返回 false，不排队等下次启动。
+ * engineKey 由调用方从引擎注册表取得，这里不接受来自插件或 renderer 的任意字符串。
+ */
+export function openMainWindowPluginEngineSettings(engineKey: string): boolean {
+  const win = mainWindowRef;
+  if (!win || win.isDestroyed() || win.webContents.isLoading()) return false;
+  dispatchDeepLink({ type: 'plugin-engine-settings', engineKey });
+  return true;
 }
 
 /**

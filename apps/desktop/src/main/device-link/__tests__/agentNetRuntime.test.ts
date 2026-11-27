@@ -368,10 +368,17 @@ it('keeps directory certificate denial and late owner changes terminal even with
 // Unit: production directory adapter on the official network. A device removed in Device Link stayed in the Agent-Net
 // directory: the merged list showed it again right after the deletion and every computer kept accepting it on Agent-Net.
 // Minimal input: an Agent-Net member missing from the Device Link list, then a device removed here, then both listed again.
-it('neither lists nor accepts an official Agent-Net member missing from the Device Link list until the list has it again', async () => {
+// CI regression: the old test could finish within one millisecond and never exercise lazy scope initialization after a read.
+// Unit tier, fake clock: first same-scope read takes 0/1ms; the directory and peer admission must agree in both cases.
+it.each([0, 1])('neither lists nor accepts an official Agent-Net member missing from the Device Link list until the list has it again (read takes %ims)', async (lag) => {
+  vi.useFakeTimers();
+  state.owner = `first-membership-read-${lag}`;
   state.official = true;
   const view = (deviceId: string) => ({ certificate: { deviceId }, name: deviceId, online: true, remoteControlEnabled: true, capabilities: [] });
-  state.officialApi = { certificate: { deviceId: 'device-a' }, directory: async () => [view('device-a'), view('kept'), view('removed')] };
+  state.officialApi = { certificate: { deviceId: 'device-a' }, directory: async () => {
+    vi.advanceTimersByTime(lag);
+    return [view('device-a'), view('kept'), view('removed')];
+  } };
   const row = (deviceId: string) => ({ deviceId, name: deviceId, platform: null, appVersion: null, lastSeenAt: null,
     online: true, busy: false, remoteControlEnabled: true, isSelf: deviceId === 'device-a' });
   const ids = (value: { devices: Array<{ deviceId: string }> }) => value.devices.map(device => device.deviceId).sort();
@@ -381,7 +388,7 @@ it('neither lists nor accepts an official Agent-Net member missing from the Devi
   expect(agentNetDeviceAccepted('kept')).toBe(true);
   agentNetNoteDeviceRemoved('kept');
   expect(agentNetDeviceAccepted('kept')).toBe(false);
-  await new Promise(resolve => setTimeout(resolve, 5));
+  vi.advanceTimersByTime(5);
   expect(ids(await readCurrentDeviceDirectory(async () => ({ devices: [row('device-a'), row('kept'), row('removed')] }), () => {})))
     .toEqual(['device-a', 'kept', 'removed']);
   expect(agentNetDeviceAccepted('removed')).toBe(true);
@@ -390,6 +397,7 @@ it('neither lists nor accepts an official Agent-Net member missing from the Devi
 
 // 2026-11-17 第二次 rebase：主干的部分目录（只读到一条腿）会并回上次完整目录里的设备；别的电脑上刚删掉的设备不能因此回到列表。
 it('keeps a device deleted elsewhere out of a partial directory that fills in the last complete one', async () => {
+  vi.useFakeTimers();
   state.official = true;
   const view = (deviceId: string) => ({ certificate: { deviceId }, name: deviceId, online: true, remoteControlEnabled: true, capabilities: [] });
   const row = (deviceId: string) => ({ deviceId, name: deviceId, platform: null, appVersion: null, lastSeenAt: null,
@@ -397,10 +405,65 @@ it('keeps a device deleted elsewhere out of a partial directory that fills in th
   const ids = (value: { devices: Array<{ deviceId: string }> }) => value.devices.map(device => device.deviceId).sort();
   state.officialApi = { certificate: { deviceId: 'device-a' }, directory: async () => [view('device-a'), view('gone')] };
   expect(ids(await readCurrentDeviceDirectory(async () => ({ devices: [row('device-a'), row('gone')] }), () => {}))).toEqual(['device-a', 'gone']);
-  await new Promise(resolve => setTimeout(resolve, 5));
+  vi.advanceTimersByTime(5);
   state.officialApi = { certificate: { deviceId: 'device-a' }, directory: async () => { throw Object.assign(new Error('relay busy'), { status: 503 }); } };
   const partial = await readCurrentDeviceDirectory(async () => ({ devices: [row('device-a')] }), () => {});
   expect([ids(partial), (partial as { partial?: boolean }).partial]).toEqual([['device-a'], true]);
+});
+
+// Same production entry and unit clock as the first-read regression above: late results must neither replace a new
+// account/network's membership nor its push-fallback phone list. Existing denial case changed owner inside Fetch only.
+it.each(['owner', 'network'] as const)('rejects a late directory after changing %s and keeps the new scope membership', async (change) => {
+  vi.useFakeTimers();
+  state.official = true;
+  state.owner = `late-directory-${change}`;
+  const row = (deviceId: string) => ({ deviceId, name: deviceId, platform: 'ios', appVersion: null, lastSeenAt: null,
+    online: true, busy: false, remoteControlEnabled: true, isSelf: deviceId === 'device-a' });
+  state.officialApi = { certificate: { deviceId: 'device-a' }, directory: async () => [] };
+  let release!: (value: { devices: ReturnType<typeof row>[] }) => void;
+  const old = readCurrentDeviceDirectory(() => new Promise(resolve => { release = resolve; }), () => {});
+  const rejected = expect(old).rejects.toThrow('DEVICE_LINK_SCOPE_CHANGED');
+  vi.advanceTimersByTime(1);
+  if (change === 'owner') state.owner += '-new';
+  else state.officialBase = 'https://another-agent-net.example.test';
+  await readCurrentDeviceDirectory(async () => ({ devices: [row('device-a'), row('new-phone')] }), () => {});
+  release({ devices: [row('device-a'), row('old-phone')] });
+  await rejected;
+  expect(agentNetDeviceAccepted('new-phone')).toBe(true);
+  expect(agentNetDeviceAccepted('old-phone')).toBe(false);
+  expect(agentNetListedPhones()).toEqual(['device-a', 'new-phone']);
+});
+
+// First-read coverage used two successful legs only. These unit inputs preserve the last authoritative decision
+// when V1 fails, update it when only V2 fails, and retain it when both fail; no network requests or real waits.
+it.each(['legacy', 'encrypted', 'both'] as const)('keeps membership authoritative when the %s directory fails', async (failure) => {
+  vi.useFakeTimers();
+  state.official = true;
+  state.owner = `directory-failure-${failure}`;
+  const row = (deviceId: string) => ({ deviceId, name: deviceId, platform: null, appVersion: null, lastSeenAt: null,
+    online: true, busy: false, remoteControlEnabled: true, isSelf: deviceId === 'device-a' });
+  const directory = vi.fn(async () => {
+    vi.advanceTimersByTime(1);
+    return ['device-a', 'kept', 'removed'].map(deviceId => ({ certificate: { deviceId }, name: deviceId,
+      online: true, remoteControlEnabled: true, capabilities: [] }));
+  });
+  state.officialApi = { certificate: { deviceId: 'device-a' }, directory };
+  await readCurrentDeviceDirectory(async () => ({ devices: [row('device-a'), row('kept')] }), () => {});
+  vi.advanceTimersByTime(1);
+  const offline = Object.assign(new Error('offline'), { status: 503 });
+  if (failure !== 'legacy') directory.mockRejectedValueOnce(offline);
+  const result = readCurrentDeviceDirectory(async () => {
+    if (failure !== 'encrypted') throw offline;
+    return { devices: [row('device-a')] };
+  }, () => {});
+  if (failure === 'both') await expect(result).rejects.toBe(offline);
+  else {
+    const partial = await result;
+    expect(partial.partial).toBe(true);
+    expect(partial.devices.map(device => device.deviceId).sort()).toEqual(failure === 'legacy' ? ['device-a', 'kept'] : ['device-a']);
+  }
+  expect(agentNetDeviceAccepted('removed')).toBe(false);
+  expect(agentNetDeviceAccepted('kept')).toBe(failure !== 'encrypted');
 });
 
 // 2026-11-17 审查：Agent-Net 送不到的手机经 Device Link 补发推送（notifyFallback.ts）；只看 presence 时，此刻在后台（离线）的手机
