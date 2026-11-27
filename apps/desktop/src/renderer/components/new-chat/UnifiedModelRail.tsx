@@ -155,6 +155,7 @@ export function UnifiedModelRail({
                 : (providerUsage?.deviceId ?? null);
         const pluginEngineQuotaTarget =
           item.kind === 'plugin-engine' &&
+          !isSourceRouteProviderId(item.providerId) &&
           providerUsage !== null &&
           engineTab?.reportsUsage &&
           engineTab.key &&
@@ -280,6 +281,11 @@ export function UnifiedModelRail({
                 <RemoteSourceMark markSize={16}>
                   <PluginEngineIcon size={16} iconDataUrl={engineTab?.iconDataUrl} className="" />
                 </RemoteSourceMark>
+              ) : item.kind === 'plugin-engine' && isSourceRouteProviderId(item.providerId) ? (
+                // 合并了插件执行引擎的供应商路由：插件图标 + 路由角标，与内置供应商路由一致。
+                <RouteSourceMark markSize={16}>
+                  <PluginEngineIcon size={16} iconDataUrl={engineTab?.iconDataUrl} className="" />
+                </RouteSourceMark>
               ) : item.kind === 'plugin-engine' ? (
                 // 和供应商格一样画来源自己的标：提供引擎的插件图标(没有时画通用拼图，跟随格的前景色)。
                 <PluginEngineIcon
