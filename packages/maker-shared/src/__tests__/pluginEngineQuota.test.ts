@@ -152,6 +152,68 @@ describe('pluginEngineQuota', () => {
     expect(strictRow.windows).toEqual([]);
   });
 
+  it('resolves model groups on the full snapshot before dropping expired windows so an expired group never borrows another group', () => {
+    const geminiExpiredWindows: PluginQuotaWindow[] = [
+      { label: 'Gemini Models · weekly', remainingPercent: 10, resetsAt: NOW - 60_000, windowMinutes: 10080 },
+      { label: 'Gemini Models · 5h', remainingPercent: 0, resetsAt: NOW - 60_000, windowMinutes: 300 },
+      { label: 'Claude and GPT models · weekly', remainingPercent: 92, resetsAt: SEVEN_DAYS_LATER, windowMinutes: 10080 },
+      { label: 'Claude and GPT models · 5h', remainingPercent: 84, resetsAt: FIVE_HOURS_LATER, windowMinutes: 300 },
+    ];
+    const snapshot: PluginQuotaSnapshot = { updatedAt: NOW, windows: geminiExpiredWindows };
+
+    // Gemini's own group expired -> never falls into the single-group branch and leaks Claude/GPT.
+    const geminiStrict = selectPluginWindowsForModel(
+      geminiExpiredWindows,
+      { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' },
+      NOW,
+      { strictModelMatch: true, includeExpired: false },
+    );
+    expect(geminiStrict.matchedModel).toBe(true);
+    expect(geminiStrict.groupName).toBe('Gemini Models');
+    expect(geminiStrict.windows).toEqual([]);
+
+    const geminiStatus = selectPluginWindowsForModel(
+      geminiExpiredWindows,
+      { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' },
+      NOW,
+      { strictModelMatch: false, includeExpired: false },
+    );
+    expect(geminiStatus.windows).toEqual([]);
+
+    // Unmatched model in strict mode also stays empty rather than treating live Claude/GPT as single-group.
+    const unmatchedStrict = selectPluginWindowsForModel(
+      geminiExpiredWindows,
+      { id: 'orchestrator-neon', displayName: 'Orchestrator (Neon)' },
+      NOW,
+      { strictModelMatch: true, includeExpired: false },
+    );
+    expect(unmatchedStrict.windows).toEqual([]);
+
+    // Mobile/Desktop picker helper reflects empty for Gemini while keeping Claude/GPT intact.
+    expect(
+      pickPluginModelPickerWindow(snapshot, { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon' }, NOW, {
+        prefer: 'weekly',
+      }).primary,
+    ).toBeNull();
+    expect(
+      pickPluginModelPickerWindow(snapshot, { id: 'claude-opus-5-5', displayName: 'Claude Opus 5.5' }, NOW, {
+        prefer: 'weekly',
+      }).primary?.label,
+    ).toBe('Claude and GPT models · weekly');
+
+    // Explicit models[] scoping behaves identically when a model's scoped window expires.
+    const explicitExpired: PluginQuotaWindow[] = [
+      { label: 'Pro · 5h', remainingPercent: 5, resetsAt: NOW - 60_000, windowMinutes: 300, models: ['model-a'] },
+      { label: 'Flash · 5h', remainingPercent: 95, resetsAt: FIVE_HOURS_LATER, windowMinutes: 300, models: ['model-b'] },
+    ];
+    expect(
+      selectPluginWindowsForModel(explicitExpired, { id: 'model-a', displayName: 'Model A' }, NOW, {
+        strictModelMatch: true,
+        includeExpired: false,
+      }).windows,
+    ).toEqual([]);
+  });
+
   it('orders full usage card windows with the active model group first and short-before-long within each group', () => {
     const ordered = orderPluginUsageCardWindows(ANTIGRAVITY_WINDOWS, {
       id: 'claude-opus-5-5',

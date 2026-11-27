@@ -1158,6 +1158,7 @@ describe('a task running on a plugin engine', () => {
         models: [
           { id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high', 'max'], defaultEffort: 'high' },
           { id: 'claude-opus-4-7', displayName: 'Claude Opus 4.7', efforts: ['high', 'max'], defaultEffort: 'high' },
+          { id: 'orchestrator-neon', displayName: 'Orchestrator (Neon)', efforts: ['high'], defaultEffort: 'high' },
         ],
       });
       const sharedEngine = {
@@ -1169,6 +1170,7 @@ describe('a task running on a plugin engine', () => {
         deviceName: 'Alice Share',
       };
       addModelFavorite({ providerId: agyEngine.providerId, modelId: 'gemini-4-neon', agent: 'cc', effort: 'max' });
+      addModelFavorite({ providerId: agyEngine.providerId, modelId: 'orchestrator-neon', agent: 'cc', effort: 'high' });
 
       renderDraftPicker({ engines: [agyEngine, sharedEngine], active: null, onSelect: vi.fn() });
       // Rail button renders weekly remaining bar (tightest weekly = 60%) + short-low warning dot.
@@ -1183,19 +1185,24 @@ describe('a task running on a plugin engine', () => {
       expect(headerQuota.hasAttribute('data-pool-quota-summary')).toBe(true);
       expect(headerQuota.textContent).toContain('60%');
 
-      // In All view, each model row displays its own model group's tightest quota via [data-model-source-details].
+      // In All view, each model row displays its own model group's tightest quota via [data-model-source-details],
+      // and an unmatched model shows only the engine label without borrowing another group's quota.
       const list = screen.getByRole('listbox', { name: 'Models' });
       const agyGroup = within(list).getByRole('group', { name: 'Antigravity' });
       const geminiRow = within(agyGroup).getByRole('option', { name: /Gemini 4 Neon/ });
       const claudeRow = within(agyGroup).getByRole('option', { name: /Claude Opus 4\.7/ });
+      const unmatchedRow = within(agyGroup).getByRole('option', { name: /Orchestrator \(Neon\)/ });
       expect(geminiRow.querySelector('[data-model-source-details]')?.textContent).toContain('80%');
       expect(geminiRow.querySelector('[data-model-source-details]')?.textContent).not.toContain('8%');
       expect(claudeRow.querySelector('[data-model-source-details]')?.textContent).toContain('8%');
+      expect(unmatchedRow.querySelector('[data-model-source-details]')?.textContent).toBe('Antigravity');
 
-      // Favorite row also carries per-model quota via [data-model-source-details].
+      // Favorite rows mirror strict matching: Gemini keeps 80%, unmatched Orchestrator shows only Antigravity.
       const favGroup = within(list).getByRole('group', { name: 'Favorites' });
       const favRow = within(favGroup).getByRole('option', { name: /Gemini 4 Neon/ });
+      const unmatchedFavRow = within(favGroup).getByRole('option', { name: /Orchestrator \(Neon\)/ });
       expect(favRow.querySelector('[data-model-source-details]')?.textContent).toContain('80%');
+      expect(unmatchedFavRow.querySelector('[data-model-source-details]')?.textContent).toBe('Antigravity');
 
       // Single-engine rail tab omits redundant [data-model-source-details] on model rows.
       fireEvent.click(railButton);

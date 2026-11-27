@@ -495,7 +495,7 @@ describe('SubscriptionAccountsSection for plugin engines', () => {
     const row = await screen.findByTestId('subscription-account');
     expect(within(row).getByText('me@z.ai')).toBeTruthy();
     expect(within(row).getByText('GLM Coding Pro')).toBeTruthy();
-    expect(within(row).getByText('GLM · 5h')).toBeTruthy();
+    expect(within(row).getByText('GLM · quotaCard.fiveHourLabel')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.add' }));
     await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({
       action: 'add', providerId, methodId: 'zai',

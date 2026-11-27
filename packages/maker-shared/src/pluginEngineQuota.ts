@@ -328,20 +328,21 @@ export function selectPluginWindowsForModel(
   options?: { strictModelMatch?: boolean; includeExpired?: boolean },
 ): SelectedPluginQuotaWindows {
   const all = validWindows(rawWindows);
-  const candidates = options?.includeExpired === false ? all.filter((row) => isLiveWindow(row, nowMs)) : all;
-  if (candidates.length === 0) {
+  if (all.length === 0) {
     return { windows: [], matchedModel: false, singleGroup: true, groupName: null };
   }
+  const filterExpired = (rows: readonly PluginQuotaWindow[]): PluginQuotaWindow[] =>
+    options?.includeExpired === false ? rows.filter((row) => isLiveWindow(row, nowMs)) : [...rows];
 
   const modelId = model?.id?.trim() ?? '';
-  const hasExplicitModelScopes = candidates.some((row) => Array.isArray(row.models));
+  const hasExplicitModelScopes = all.some((row) => Array.isArray(row.models));
   if (hasExplicitModelScopes) {
-    const shared = candidates.filter((row) => !Array.isArray(row.models));
+    const shared = all.filter((row) => !Array.isArray(row.models));
     const scoped = modelId && modelId !== 'default'
-      ? candidates.filter((row) => Array.isArray(row.models) && row.models.includes(modelId))
+      ? all.filter((row) => Array.isArray(row.models) && row.models.includes(modelId))
       : [];
     if (scoped.length > 0) {
-      const combined = sortByDurationAscending([...shared, ...scoped]);
+      const combined = sortByDurationAscending(filterExpired([...shared, ...scoped]));
       const groupNames = new Set(
         scoped.map((row) => parsePluginQuotaWindowLabel(row.label).groupName).filter(Boolean),
       );
@@ -354,7 +355,7 @@ export function selectPluginWindowsForModel(
     }
     if (shared.length > 0) {
       return {
-        windows: sortByDurationAscending(shared),
+        windows: sortByDurationAscending(filterExpired(shared)),
         matchedModel: false,
         singleGroup: false,
         groupName: null,
@@ -368,7 +369,7 @@ export function selectPluginWindowsForModel(
 
   const byGroup = new Map<string, PluginQuotaWindow[]>();
   const ungrouped: PluginQuotaWindow[] = [];
-  for (const row of candidates) {
+  for (const row of all) {
     const group = parsePluginQuotaWindowLabel(row.label).groupName;
     if (group) {
       const bucket = byGroup.get(group);
@@ -382,7 +383,7 @@ export function selectPluginWindowsForModel(
   const groupNames = [...byGroup.keys()];
   if (groupNames.length <= 1) {
     return {
-      windows: sortByDurationAscending(candidates),
+      windows: sortByDurationAscending(filterExpired(all)),
       matchedModel: false,
       singleGroup: true,
       groupName: groupNames[0] ?? null,
@@ -392,7 +393,7 @@ export function selectPluginWindowsForModel(
   const matchedGroup = matchGroupNameForModel(groupNames, model);
   if (matchedGroup) {
     return {
-      windows: sortByDurationAscending([...ungrouped, ...(byGroup.get(matchedGroup) ?? [])]),
+      windows: sortByDurationAscending(filterExpired([...ungrouped, ...(byGroup.get(matchedGroup) ?? [])])),
       matchedModel: true,
       singleGroup: false,
       groupName: matchedGroup,
@@ -401,7 +402,7 @@ export function selectPluginWindowsForModel(
 
   if (options?.strictModelMatch) {
     return {
-      windows: ungrouped.length > 0 ? sortByDurationAscending(ungrouped) : [],
+      windows: ungrouped.length > 0 ? sortByDurationAscending(filterExpired(ungrouped)) : [],
       matchedModel: false,
       singleGroup: false,
       groupName: null,
@@ -415,19 +416,19 @@ export function selectPluginWindowsForModel(
       (lowest, row) => (!lowest || row.remainingPercent < lowest.remainingPercent ? row : lowest),
       undefined,
     );
-  const live = candidates.filter((row) => isLiveWindow(row, nowMs));
-  const tightest = pickTightest(live.length > 0 ? live : candidates);
+  const live = all.filter((row) => isLiveWindow(row, nowMs));
+  const tightest = pickTightest(live.length > 0 ? live : all);
   const tightestGroup = tightest ? parsePluginQuotaWindowLabel(tightest.label).groupName : null;
   if (tightestGroup && byGroup.has(tightestGroup)) {
     return {
-      windows: sortByDurationAscending([...ungrouped, ...(byGroup.get(tightestGroup) ?? [])]),
+      windows: sortByDurationAscending(filterExpired([...ungrouped, ...(byGroup.get(tightestGroup) ?? [])])),
       matchedModel: false,
       singleGroup: false,
       groupName: tightestGroup,
     };
   }
   return {
-    windows: sortByDurationAscending(candidates),
+    windows: sortByDurationAscending(filterExpired(all)),
     matchedModel: false,
     singleGroup: false,
     groupName: null,

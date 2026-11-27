@@ -462,7 +462,7 @@ function PluginEngineModelSourceDetails({
     usage?.windows,
     { id: modelId, displayName: modelName },
     nowMs,
-    { strictModelMatch: false, includeExpired: true },
+    { strictModelMatch: true, includeExpired: true },
   );
   const parts = selected.windows
     .filter((window) => Number.isFinite(window.remainingPercent))
@@ -477,7 +477,7 @@ function PluginEngineModelSourceDetails({
       const remaining = Math.round(clampPluginQuotaPercent(window.remainingPercent));
       const used = 100 - remaining;
       return {
-        countdown: pending ? t('quotaCard.resetPending') : (countdown ?? '—'),
+        countdown: expired ? (pending ? t('quotaCard.resetPending') : '—') : (countdown ?? '—'),
         percentage: expired ? null : `${remaining}%`,
         title: expired
           ? pending

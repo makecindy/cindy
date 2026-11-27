@@ -548,6 +548,19 @@ describe('a task running on a plugin engine', () => {
     expect(formatPluginEngineModelQuota(antigravityUsage, 'gemini-4-neon', now, countdown, 'Gemini 4 Neon')).toBe('7d · 95%');
     expect(formatPluginEngineModelQuota(antigravityUsage, 'claude-opus-4-7', now, countdown, 'Claude Opus 4.7')).toBe('6d · 60%');
     expect(formatPluginEngineModelQuota(antigravityUsage, 'unknown-model', now, countdown, 'Mystery')).toBeNull();
+    // When Gemini's windows all expire while Claude/GPT stays live, Gemini and unmatched rows must return null, never Claude's quota.
+    const geminiExpiredUsage = {
+      updatedAt: now,
+      windows: [
+        { label: 'Gemini Models · weekly', windowMinutes: 10080, remainingPercent: 10, resetsAt: now - 60_000 },
+        { label: 'Gemini Models · 5h', windowMinutes: 300, remainingPercent: 0, resetsAt: now - 60_000 },
+        { label: 'Claude and GPT models · weekly', windowMinutes: 10080, remainingPercent: 60, resetsAt: now + 6 * 24 * 3_600_000 },
+        { label: 'Claude and GPT models · 5h', windowMinutes: 300, remainingPercent: 20, resetsAt: now + 2 * 3_600_000 },
+      ],
+    };
+    expect(formatPluginEngineModelQuota(geminiExpiredUsage, 'gemini-4-neon', now, countdown, 'Gemini 4 Neon')).toBeNull();
+    expect(formatPluginEngineModelQuota(geminiExpiredUsage, 'unknown-model', now, countdown, 'Mystery')).toBeNull();
+    expect(formatPluginEngineModelQuota(geminiExpiredUsage, 'claude-opus-4-7', now, countdown, 'Claude Opus 4.7')).toBe('6d · 60%');
 
     const remoteCreateOpts = buildRemoteCreateSessionOptions(applyPluginEnginePick({
       agentKind: 'claude-code', workspaceKind: 'project', workingDir: '/repo', model: 'claude-fable-5',
