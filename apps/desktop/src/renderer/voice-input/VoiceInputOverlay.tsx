@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import { usesMacProtectionOverride } from '../../shared/macControlPermission';
 import {
   useCallback,
   useEffect,
@@ -16,6 +17,7 @@ import type {
   DictationRefinementContext,
   VoiceInputErrorCode,
   VoiceInputState,
+  VoiceInputRendererEvent,
 } from '@cindy/voice-input-core';
 
 import { Spinner } from '@/components/ui/spinner';
@@ -43,8 +45,10 @@ import {
   type VoiceInputUsageOutcome,
 } from '@/hooks/useVoiceInputUsageStats';
 import {
+  createStartCueGate,
   playVoiceInputEndCue,
   playVoiceInputStartCue,
+  type StartCueGate,
 } from './startCue';
 import {
   VOICE_INPUT_REFINEMENT_CACHE_SCOPE,
@@ -78,7 +82,7 @@ import {
 } from './readinessRecovery';
 import { buildRefinementPreviewText } from './refinementPreviewText';
 import { useVoiceProcessingIndicator } from './useVoiceProcessingIndicator';
-import { isVoiceInputEventScopeActive, shouldHandleVoiceInputEvent } from './eventScope';
+import { dispatchVoiceInputEvent } from './eventScope';
 import { VoiceInputStatusErrorIcon, VoiceInputStatusNotice } from './VoiceInputStatusNotice';
 import { useVoiceInputOverlayDrag } from './useVoiceInputOverlayDrag';
 import { useSpeakerFilterNotice } from './useSpeakerFilterNotice';
@@ -105,7 +109,7 @@ type CodexRecoveryPromptAttempt = { attemptId: number; reason: string };
 // 'retained' is not a paste failure: the dictation session itself died and the
 // recognized text was kept for copying. It reuses the paste-error layout but
 // carries the session's own error text instead of a paste hint.
-type PasteErrorCode = 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'retained';
+type PasteErrorCode = 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'appNotAllowed' | 'failed' | 'retained';
 type PermissionPromptKind = 'microphone' | 'accessibility';
 
 export function isCurrentCodexRecoveryPromptAttempt(
@@ -142,6 +146,7 @@ function normalizePasteErrorCode(errorCode: string | undefined): PasteErrorCode 
     errorCode === 'unavailable' ||
     errorCode === 'unconfirmed' ||
     errorCode === 'permission' ||
+    errorCode === 'appNotAllowed' ||
     errorCode === 'failed'
   ) {
     return errorCode;
@@ -249,6 +254,7 @@ export function VoiceInputOverlay() {
   const settingsRef = useRef(getVoiceInputSettings());
   const startupTimelineRef = useRef<VoiceInputStartupTimeline | null>(null);
   const engineRef = useRef<WebMicAudioEngine | null>(null);
+  const startCueGateRef = useRef<StartCueGate | null>(null);
   const runIdRef = useRef<string | null>(null);
   const stateRef = useRef<VoiceInputState>('idle');
   const stopInFlightRef = useRef(false);
@@ -256,13 +262,14 @@ export function VoiceInputOverlay() {
   const draftTextRef = useRef('');
   const finalTextRef = useRef('');
   const rawTranscriptTextRef = useRef('');
+  const useOriginalTextRef = useRef<string | null>(null);
   const pendingPasteTextRef = useRef('');
   const historyEntryIdRef = useRef<string | null>(null);
   const sentAudioMsRef = useRef(0);
   const hasRecordingContentRef = useRef(false);
   const terminalOutcomeRef = useRef<VoiceInputUsageOutcome>('success');
-  const systemAudioMutedRef = useRef(false);
-  const pendingSystemAudioMutePromiseRef = useRef<Promise<void> | null>(null);
+  const recordingIdRef = useRef<string | null>(null);
+  const audioMutePromisesRef = useRef(new Map<string, Promise<void>>());
   const closingRef = useRef(false);
   const startAttemptIdRef = useRef(0);
   const pasteAttemptIdRef = useRef(0);
@@ -334,12 +341,14 @@ export function VoiceInputOverlay() {
     draftTextRef.current = '';
     finalTextRef.current = '';
     rawTranscriptTextRef.current = '';
+    useOriginalTextRef.current = null;
     pendingPasteTextRef.current = '';
     historyEntryIdRef.current = null;
     terminalOutcomeRef.current = 'success';
     runIdRef.current = null;
     ownedRunIdRef.current = null;
     startReadyRef.current = null;
+    recordingIdRef.current = null;
     closingRef.current = false;
     cancelRequestedRef.current = false;
     stopInFlightRef.current = false;
@@ -420,6 +429,8 @@ export function VoiceInputOverlay() {
   }, []);
 
   const stopEngine = useCallback(async () => {
+    // The attempt is ending: nothing is left for the start cue to wait for.
+    startCueGateRef.current?.abandon();
     const engine = engineRef.current;
     engineRef.current = null;
     if (engine) await engine.stop();
@@ -441,6 +452,7 @@ export function VoiceInputOverlay() {
   }, []);
 
   const drainAndStopEngine = useCallback(async () => {
+    startCueGateRef.current?.abandon();
     const engine = engineRef.current;
     if (!engine) return;
     // Keep submit semantics lossless: the worklet can hold a sub-chunk that has
@@ -507,49 +519,40 @@ export function VoiceInputOverlay() {
       });
   }, []);
 
-  const muteSystemAudioForRecording = useCallback((feedback: Promise<void>) => {
-    if (!supportsSystemAudioMute()) {
-      return Promise.resolve();
-    }
-    if (systemAudioMutedRef.current) {
-      return pendingSystemAudioMutePromiseRef.current ?? Promise.resolve();
-    }
-    if (pendingSystemAudioMutePromiseRef.current) return pendingSystemAudioMutePromiseRef.current;
-
+  const muteSystemAudioForRecording = useCallback((feedback: Promise<void>, recordingId: string) => {
+    if (!supportsSystemAudioMute()) return Promise.resolve();
+    const pending = audioMutePromisesRef.current.get(recordingId);
+    if (pending) return pending;
     const mutePromise = feedback.catch(() => undefined)
-      .then(() => window.electronAPI.voiceInput.muteSystemAudio())
+      .then(() => recordingIdRef.current === recordingId
+        ? window.electronAPI.voiceInput.muteSystemAudio({ recordingId })
+        : undefined)
       .then((result) => {
-        if (result.ok) {
-          systemAudioMutedRef.current = true;
-        } else {
+        if (result && !result.ok) {
           log.warn('global system audio mute failed:', result.error);
         }
       })
       .catch((muteError) => {
         log.warn('global system audio mute failed:', muteError instanceof Error ? muteError.message : String(muteError));
-      })
-      .finally(() => {
-        if (pendingSystemAudioMutePromiseRef.current === mutePromise) {
-          pendingSystemAudioMutePromiseRef.current = null;
-        }
       });
-    pendingSystemAudioMutePromiseRef.current = mutePromise;
+    audioMutePromisesRef.current.set(recordingId, mutePromise);
     return mutePromise;
   }, []);
 
-  const restoreSystemAudioForRecording = useCallback(async () => {
-    if (!supportsSystemAudioMute()) return;
-    const pendingMute = pendingSystemAudioMutePromiseRef.current;
-    if (pendingMute) await pendingMute;
-    if (!systemAudioMutedRef.current) return;
-    systemAudioMutedRef.current = false;
+  const restoreSystemAudioForRecording = useCallback(async (recordingId = recordingIdRef.current) => {
+    if (!supportsSystemAudioMute() || !recordingId) return;
+    const pendingMute = audioMutePromisesRef.current.get(recordingId);
+    if (!pendingMute) return;
+    await pendingMute;
     try {
-      const result = await window.electronAPI.voiceInput.restoreSystemAudio();
+      const result = await window.electronAPI.voiceInput.restoreSystemAudio({ recordingId });
       if (!result.ok) {
         log.warn('system audio restore failed:', result.error);
       }
     } catch (restoreError) {
       log.warn('system audio restore failed:', restoreError instanceof Error ? restoreError.message : String(restoreError));
+    } finally {
+      audioMutePromisesRef.current.delete(recordingId);
     }
   }, []);
 
@@ -586,16 +589,18 @@ export function VoiceInputOverlay() {
   }, [clearErrorCloseTimer, closeOverlay]);
 
   const closeOverlayAndReset = useCallback(async (options?: CloseOverlayOptions) => {
+    const presentation = pasteAttemptIdRef.current;
     await closeOverlay(options);
-    resetHiddenOverlaySession();
+    if (pasteAttemptIdRef.current === presentation) resetHiddenOverlaySession();
   }, [closeOverlay, resetHiddenOverlaySession]);
 
   const showStartFailure = useCallback(async (message: string, authErrorReason?: string) => {
     const failureAttemptId = startAttemptIdRef.current;
+    const recordingId = recordingIdRef.current;
     resetOverlayInteraction();
     log.warn('global voice input start failed:', message);
     await stopEngine();
-    await restoreSystemAudioForRecording();
+    await restoreSystemAudioForRecording(recordingId);
     const readiness = await window.electronAPI.voiceInput.getReadiness().catch((readinessError) => {
       log.warn(
         'read voice input readiness after start failure failed:',
@@ -622,6 +627,7 @@ export function VoiceInputOverlay() {
     setVoiceState('error');
     closingRef.current = false;
     const showResult = await window.electronAPI.voiceInput.showGlobalOverlay();
+    if (startAttemptIdRef.current !== failureAttemptId) return;
     if (!showResult.ok) {
       log.warn('show global voice input start failure overlay failed:', showResult.error);
     }
@@ -669,22 +675,25 @@ export function VoiceInputOverlay() {
     cancelRequestedRef.current = true;
     suppressedStartErrorAttemptsRef.current.add(startAttemptIdRef.current);
     closingRef.current = true;
-    startAttemptIdRef.current += 1;
+    invalidateStartAttempt();
     pasteAttemptIdRef.current += 1;
     resolveDoneWaiters();
 
-    const runId = runIdRef.current;
+    const runId = ownedRunIdRef.current ?? runIdRef.current;
+    const recordingId = recordingIdRef.current;
+    recordingIdRef.current = null;
     runIdRef.current = null;
     ownedRunIdRef.current = null;
-    try {
-      await stopEngine();
-      await window.electronAPI.voiceInput.cancel(runId ? { runId } : undefined);
-    } finally {
-      await restoreSystemAudioForRecording();
-      commitUsageStats();
-      setVoiceState('done');
-      await closeOverlayAndReset();
-    }
+    // Queue cancellation now, before a replacement start can enqueue. Device
+    // and provider cleanup must not keep the cached window or Esc shortcut open.
+    void window.electronAPI.voiceInput.cancel(runId ? { runId } : undefined)
+      .catch(() => log.warn('global voice input cancel failed after local cancellation'));
+    void stopEngine()
+      .catch(() => log.warn('global voice input device shutdown failed'))
+      .then(() => restoreSystemAudioForRecording(recordingId));
+    commitUsageStats();
+    setVoiceState('done');
+    await closeOverlayAndReset();
   }, [
     closeOverlayAndReset,
     commitUsageStats,
@@ -692,25 +701,30 @@ export function VoiceInputOverlay() {
     restoreSystemAudioForRecording,
     stopEngine,
     invalidateCodexRecoveryPrompt,
+    invalidateStartAttempt,
   ]);
 
   const failRecording = useCallback(async (message: string) => {
     if (stateRef.current !== 'listening') return;
     log.warn('global microphone capture interrupted:', message);
+    const attemptId = startAttemptIdRef.current;
+    const recordingId = recordingIdRef.current;
     const runId = runIdRef.current;
     runIdRef.current = null;
     ownedRunIdRef.current = null;
     setError(message);
     setVoiceState('error');
     resolveDoneWaiters();
-    await stopEngine();
     try {
-      await window.electronAPI.voiceInput.cancel(runId ? { runId } : undefined);
+      const cancellation = window.electronAPI.voiceInput.cancel(runId ? { runId } : undefined);
+      await Promise.all([stopEngine(), cancellation]);
+    } catch {
+      log.warn('global voice input cleanup failed after capture interruption');
     } finally {
-      await restoreSystemAudioForRecording();
-      commitUsageStats();
+      await restoreSystemAudioForRecording(recordingId);
+      if (startAttemptIdRef.current === attemptId) commitUsageStats();
     }
-    scheduleErrorClose();
+    if (startAttemptIdRef.current === attemptId) scheduleErrorClose();
   }, [
     closeOverlay,
     commitUsageStats,
@@ -788,6 +802,8 @@ export function VoiceInputOverlay() {
     resetOverlayInteraction();
     const attemptId = startAttemptIdRef.current + 1;
     startAttemptIdRef.current = attemptId;
+    const recordingId = crypto.randomUUID();
+    recordingIdRef.current = recordingId;
     createStartReadyState(attemptId);
     suppressedStartErrorAttemptsRef.current.delete(attemptId);
     pasteAttemptIdRef.current += 1;
@@ -795,6 +811,9 @@ export function VoiceInputOverlay() {
     closingRef.current = false;
     cancelRequestedRef.current = false;
     await stopEngine();
+    if (startAttemptIdRef.current !== attemptId) return;
+    stopInFlightRef.current = false;
+    setStopInFlight(false);
     const { elapsedMs } = timeline;
 
     setError(null);
@@ -813,6 +832,7 @@ export function VoiceInputOverlay() {
     draftTextRef.current = '';
     finalTextRef.current = '';
     rawTranscriptTextRef.current = '';
+    useOriginalTextRef.current = null;
     pendingPasteTextRef.current = '';
     historyEntryIdRef.current = null;
     sentAudioMsRef.current = 0;
@@ -824,6 +844,11 @@ export function VoiceInputOverlay() {
     setVoiceState('listening');
 
     log.debug('global voice input bootstrap requested');
+
+    // The start cue and system mute both touch the speakers; hold them until the
+    // microphone is open so capture does not queue behind that (see createStartCueGate).
+    const cueGate = createStartCueGate();
+    startCueGateRef.current = cueGate;
 
     const capturePromise = startVoiceInputCaptureSession({
       label: 'global',
@@ -837,6 +862,7 @@ export function VoiceInputOverlay() {
       isCurrentEngine: (engine) => startAttemptIdRef.current === attemptId && engineRef.current === engine,
       timeline,
       appendAudioChunk,
+      onCaptureReady: () => cueGate.release(),
       onSoundDetected: () => { hasRecordingContentRef.current = true; },
       onInterrupted: (message) => {
         if (isActiveStartAttempt(attemptId)) void failRecording(message);
@@ -850,14 +876,20 @@ export function VoiceInputOverlay() {
       elapsedMs,
     });
 
-    // Start capture first; feedback runs independently without awaiting the
-    // microphone. Only system mute waits for playback to avoid cutting it off.
-    const feedback = Promise.resolve().then(() => {
+    // Start capture first; the cue follows the open microphone (bounded by the
+    // gate's cap) and never waits for service checks or the cloud. Only system
+    // mute waits for playback to avoid cutting it off.
+    const feedback = cueGate.released.then((play) => {
+      if (!play || !settings.playInteractionSound) return;
       if (!isActiveStartAttempt(attemptId) || stateRef.current !== 'listening') return;
-      return settings.playInteractionSound ? playVoiceInputStartCue() : undefined;
+      timeline.mark('start_cue_released');
+      return playVoiceInputStartCue();
     });
+    // A capture that never becomes ready (denied, unavailable, cancelled) has no
+    // cue to wait for; do not leave system mute waiting for the cap.
+    void capturePromise.then((capture) => { if (!capture.ok) cueGate.abandon(); });
     if (settings.muteSystemAudio && supportsSystemAudioMute()) {
-      void muteSystemAudioForRecording(feedback).then(() => timeline.mark('mute_finished'));
+      void muteSystemAudioForRecording(feedback, recordingId).then(() => timeline.mark('mute_finished'));
     } else {
       void feedback.catch(() => undefined);
     }
@@ -893,7 +925,7 @@ export function VoiceInputOverlay() {
       setVoiceState('done');
       closingRef.current = false;
       await stopEngine();
-      await restoreSystemAudioForRecording();
+      await restoreSystemAudioForRecording(recordingId);
       return;
     }
     if (!guards.accessibility.ok) {
@@ -903,7 +935,7 @@ export function VoiceInputOverlay() {
       setVoiceState('done');
       closingRef.current = false;
       await stopEngine();
-      await restoreSystemAudioForRecording();
+      await restoreSystemAudioForRecording(recordingId);
       return;
     }
     if (!guards.readiness.ok) {
@@ -918,6 +950,7 @@ export function VoiceInputOverlay() {
 
     const startResultPromise: Promise<StartVoiceInputResult> = window.electronAPI.voiceInput
       .start({
+        recordingId,
         sourceLanguage: settings.language,
         refinementEnabled: settings.refinementEnabled,
         refinementContext: settings.refinementEnabled ? buildRefinementContext() : undefined,
@@ -949,7 +982,8 @@ export function VoiceInputOverlay() {
         startAttemptIdRef.current += 1;
         cancelStartedRun(startResultPromise);
         suppressedStartErrorAttemptsRef.current.delete(attemptId);
-        await restoreSystemAudioForRecording();
+        await restoreSystemAudioForRecording(recordingId);
+        if (startAttemptIdRef.current !== attemptId + 1) return;
         // setVoiceState('listening') already ran, and this path owns no engine
         // or run, so no later cancel/state event will arrive to clear it.
         // Leaving it would strand the overlay in 'listening' — where the
@@ -963,7 +997,8 @@ export function VoiceInputOverlay() {
       startAttemptIdRef.current += 1;
       cancelStartedRun(startResultPromise);
       suppressedStartErrorAttemptsRef.current.delete(attemptId);
-      await restoreSystemAudioForRecording();
+      await restoreSystemAudioForRecording(recordingId);
+      if (startAttemptIdRef.current !== attemptId + 1) return;
       // Permission revoked after the start guard trusted a positive cache:
       // show the same recovery prompt as a guard-time denial so the user gets
       // the fix on this attempt instead of a raw capture error.
@@ -984,7 +1019,7 @@ export function VoiceInputOverlay() {
       resolveStartReadyState(attemptId, { ok: false, error: 'Voice input start was cancelled.' });
       cancelStartedRun(startResultPromise);
       await stopEngine();
-      await restoreSystemAudioForRecording();
+      await restoreSystemAudioForRecording(recordingId);
       return;
     }
 
@@ -1120,6 +1155,10 @@ export function VoiceInputOverlay() {
     try {
       const requestResult = await requestRendererMicrophonePermission();
       if (requestResult.ok) return;
+      if (requestResult.status === 'device-unavailable') {
+        await showStartFailure(t('settings.voiceInput.microphone.errors.deviceUnavailable'));
+        return;
+      }
       const settingsResult = await window.electronAPI.voiceInput.openMicrophoneSettings();
       if (!settingsResult.ok) {
         log.warn('open microphone settings failed:', settingsResult.error);
@@ -1127,7 +1166,7 @@ export function VoiceInputOverlay() {
     } catch (error) {
       log.warn('open microphone settings failed:', error instanceof Error ? error.message : String(error));
     }
-  }, []);
+  }, [showStartFailure, t]);
 
   const openPermissionPromptSettings = useCallback(() => {
     const prompt = permissionPrompt;
@@ -1178,7 +1217,9 @@ export function VoiceInputOverlay() {
         if (pasteAttemptIdRef.current !== pasteAttemptId) return;
         if (pasteResult.ok) {
           log.debug('global background paste finished', { pasteAttemptId });
-          void hiddenPromise.finally(resetHiddenOverlaySession);
+          void hiddenPromise.finally(() => {
+            if (pasteAttemptIdRef.current === pasteAttemptId) resetHiddenOverlaySession();
+          });
           return;
         }
         void showPasteFailure(pasteResult.error, pasteAttemptId, pasteResult.errorCode);
@@ -1189,14 +1230,33 @@ export function VoiceInputOverlay() {
       });
   }, [resetHiddenOverlaySession, showPasteFailure]);
 
+  const useOriginalAndPaste = useCallback(() => {
+    const runId = ownedRunIdRef.current;
+    const text = rawTranscriptTextRef.current.trim();
+    if (stateRef.current !== 'refining' || !runId || !text || cancelRequestedRef.current) return;
+
+    // Keep the existing stop/paste handoff as the only paste owner. Detach this
+    // run before releasing it so late refinement events cannot replace the
+    // explicitly chosen original, even if cancelling the provider is slow.
+    useOriginalTextRef.current = text;
+    ownedRunIdRef.current = null;
+    stateRef.current = 'done';
+    resolveDoneWaiters();
+    void window.electronAPI.voiceInput.cancel({ runId }).catch((cancelError) => {
+      log.warn('could not cancel refinement after choosing original text', cancelError);
+    });
+  }, [resolveDoneWaiters]);
+
   const stopAndPaste = useCallback(async () => {
     if (closingRef.current) return;
     closingRef.current = true;
+    const presentation = pasteAttemptIdRef.current;
+    const isCurrentStop = () => pasteAttemptIdRef.current === presentation && !cancelRequestedRef.current;
 
     const settings = settingsRef.current;
     if (hasRecordingContentRef.current) setVoiceState('submitting');
     await drainAndStopEngine();
-    if (cancelRequestedRef.current) return;
+    if (!isCurrentStop()) return;
     void restoreSystemAudioAndMaybePlayEndCue(settings.playInteractionSound);
     if (!hasRecordingContentRef.current && !draftTextRef.current.trim() && !finalTextRef.current.trim()) {
       log.info('global silent recording ended without ASR finalization');
@@ -1209,7 +1269,7 @@ export function VoiceInputOverlay() {
     if (!runId && startReadyRef.current) {
       const startReady = startReadyRef.current;
       const startResult = await waitForStartReadyWhileStopping(startReady);
-      if (cancelRequestedRef.current) return;
+      if (!isCurrentStop()) return;
       if (!startResult.ok) {
         if (settingsRecoveryTabRef.current) {
           commitUsageStats();
@@ -1229,12 +1289,15 @@ export function VoiceInputOverlay() {
       // startRecording() after runId is known; drain the IPC queue once more
       // before provider finalization so early-stop audio cannot be stranded.
       await drainAndStopEngine();
+      if (!isCurrentStop()) return;
       await drainQueuedAudioToMain();
+      if (!isCurrentStop()) return;
     }
     startAttemptIdRef.current += 1;
     runIdRef.current = null;
     if (!runId) {
       await window.electronAPI.voiceInput.cancel();
+      if (!isCurrentStop()) return;
       commitUsageStats();
     } else {
       const donePromise = waitForDone();
@@ -1244,10 +1307,12 @@ export function VoiceInputOverlay() {
       try {
         result = await window.electronAPI.voiceInput.stop();
       } finally {
-        stopInFlightRef.current = false;
-        setStopInFlight(false);
+        if (isCurrentStop()) {
+          stopInFlightRef.current = false;
+          setStopInFlight(false);
+        }
       }
-      if (cancelRequestedRef.current) return;
+      if (!isCurrentStop()) return;
       if (!result.ok) {
         setError(result.error);
         setVoiceState('error');
@@ -1256,6 +1321,7 @@ export function VoiceInputOverlay() {
         return;
       }
       await donePromise;
+      if (!isCurrentStop()) return;
       // A stop-time transcription failure resolves the shared done waiter
       // through the error event. Keep the overlay open so the error notice and
       // retry action remain visible instead of closing an empty draft.
@@ -1272,7 +1338,7 @@ export function VoiceInputOverlay() {
     // told the controller to discard the in-flight refine and closed the
     // overlay; running paste here would push stale partial text into the
     // user's target app after they explicitly asked to abandon.
-    if (cancelRequestedRef.current) return;
+    if (!isCurrentStop()) return;
     if (codexSessionPromptActiveRef.current) {
       stateRef.current = 'done';
       setVoiceState('done');
@@ -1281,7 +1347,7 @@ export function VoiceInputOverlay() {
       return;
     }
 
-    const text = (finalTextRef.current || draftTextRef.current).trim();
+    const text = (useOriginalTextRef.current ?? (finalTextRef.current || draftTextRef.current)).trim();
     if (!text) {
       stateRef.current = 'done';
       commitUsageStats();
@@ -1344,12 +1410,16 @@ export function VoiceInputOverlay() {
   }, []);
 
   useEffect(() => {
-    return window.electronAPI.voiceInput.onEvent((event) => {
-      if (!shouldHandleVoiceInputEvent(
-        ownedRunIdRef.current,
-        event.runId,
-        isVoiceInputEventScopeActive(stateRef.current),
-      )) return;
+    let subscribed = true;
+    const unsubscribe = window.electronAPI.voiceInput.onEvent((event) => {
+      dispatchVoiceInputEvent(
+        event,
+        () => subscribed ? ownedRunIdRef.current : null,
+        startReadyRef.current?.promise,
+        handleEvent,
+      );
+    });
+    function handleEvent(event: VoiceInputRendererEvent): void {
       switch (event.type) {
         case 'auth-required':
           codexSessionPromptActiveRef.current = requestCodexSessionExpiredPrompt(event.reason);
@@ -1482,7 +1552,11 @@ export function VoiceInputOverlay() {
           }
           break;
       }
-    });
+    }
+    return () => {
+      subscribed = false;
+      unsubscribe();
+    };
   }, [formatVoiceInputError, requestCodexSessionExpiredPrompt, resolveDoneWaiters, setVoiceState, showSpeakerFiltered]);
 
   useEffect(() => {
@@ -1595,12 +1669,17 @@ export function VoiceInputOverlay() {
   }, [hasBlockingError, hasPasteError, hasPermissionPrompt, pasteErrorCode, state, showProcessing, t]);
   // The retained-transcript panel shows the session's own error (cause + "text
   // was kept"); every other code is an actual paste failure with its own hint.
+  const controlHint = (pasteErrorCode === 'permission' || permissionPrompt === 'accessibility')
+    && usesMacProtectionOverride(window.electronAPI.platform, window.electronAPI.osRelease)
+    ? t('macControlPermission.selectApp', { app: window.electronAPI.macPermissionAppName ?? 'Cindy' })
+    : '';
   const pasteFailureHint = pasteErrorCode === 'retained'
     ? error ?? t('voiceInputOverlay.status.transcriptKept')
-    : t(getPasteErrorHintKey(pasteErrorCode));
-  const permissionPromptHint = permissionPrompt
-    ? t(`voiceInputOverlay.permissionPrompts.${permissionPrompt}.hint`)
-    : '';
+    : pasteErrorCode === 'appNotAllowed'
+      ? t('voiceInputOverlay.pasteErrors.appNotAllowed', { app: window.electronAPI.macPermissionAppName ?? 'Cindy' })
+      : (pasteErrorCode === 'permission' && controlHint) || t(getPasteErrorHintKey(pasteErrorCode));
+  const permissionPromptHint = permissionPrompt &&
+    ((permissionPrompt === 'accessibility' && controlHint) || t(`voiceInputOverlay.permissionPrompts.${permissionPrompt}.hint`));
   const transcriptClassName = hasPasteError || hasPermissionPrompt || hasSettingsRecovery
     ? 'min-h-[44px] max-h-[72px] cursor-default overflow-y-auto whitespace-pre-wrap break-words text-15 leading-6 text-[var(--cmd-palette-item-text)]'
     : 'h-[88px] cursor-default overflow-y-auto whitespace-pre-wrap break-words text-15 leading-6 text-[var(--cmd-palette-item-text)]';
@@ -1641,7 +1720,22 @@ export function VoiceInputOverlay() {
             <span className="min-w-0 truncate text-12">{t('voiceInputOverlay.speakerFiltered')}</span>
           )}
           <div className="ml-auto flex items-center gap-1">
-            {!hasBlockingError && !hasPasteError && !hasPermissionPrompt && (
+            {state === 'refining' && !hasBlockingError && !hasPasteError && !hasPermissionPrompt ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                compact
+                tabIndex={-1}
+                onFocus={preventOverlayButtonFocus}
+                onPointerDown={(event) => {
+                  beginOverlayButtonAction(event);
+                  useOriginalAndPaste();
+                }}
+                onClick={suppressOverlayButtonClick}
+              >
+                {t('voiceInputOverlay.useOriginal')}
+              </Button>
+            ) : !hasBlockingError && !hasPasteError && !hasPermissionPrompt && (
               <Tip text={submitTooltip} side="bottom" delay={150} disabled={actionTipsDisabled}>
                 <button
                   type="button"
@@ -1690,7 +1784,7 @@ export function VoiceInputOverlay() {
             <div className="flex h-full flex-col items-center justify-center gap-3">
               <VoiceInputStatusNotice
                 message={error!}
-                className="w-full justify-start rounded-[12px] shadow-none"
+                className="w-full justify-start rounded-xl shadow-none"
                 maxWidthClassName="max-w-none"
               />
               <Button
@@ -1798,7 +1892,7 @@ export function VoiceInputOverlay() {
               {pasteFailureHint}
             </span>
             <div className="flex shrink-0 items-center gap-2">
-              {pasteErrorCode === 'permission' && (
+              {(pasteErrorCode === 'permission' || pasteErrorCode === 'appNotAllowed') && (
                 <Button
                   variant="cta"
                   size="lg"

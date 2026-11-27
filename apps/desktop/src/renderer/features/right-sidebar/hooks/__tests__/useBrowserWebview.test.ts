@@ -1,8 +1,16 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, render, waitFor } from '@testing-library/react';
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { useBrowserComment, type UseBrowserCommentResult } from '../../plugins/web-browser/useBrowserComment';
+import {
+  BROWSER_COMMENT_COMMAND_RESULT_CHANNEL,
+  BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL,
+  type BrowserCommentCommandEnvelope,
+  type BrowserCommentTargetInfo,
+} from '../../../../../shared/browserComment';
 
 import type { UseBrowserWebviewResult } from '../useBrowserWebview';
 import {
@@ -11,6 +19,7 @@ import {
 } from '../useBrowserWebview';
 
 interface MockWebview {
+  send: ReturnType<typeof vi.fn>;
   addEventListener: ReturnType<typeof vi.fn>;
   removeEventListener: ReturnType<typeof vi.fn>;
   dispatch: (type: string, event?: Record<string, unknown>) => void;
@@ -24,6 +33,17 @@ interface MockWebview {
   goForward: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
 }
+
+const commentMocks = vi.hoisted(() => ({ append: vi.fn() }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('@/lib/composerDraftStore', () => ({
+  appendBrowserCommentToDraft: commentMocks.append,
+  getDraft: () => ({ browserComments: [] }),
+}));
+vi.mock('@/lib/toast', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('@/features/cc-agent/newMakerDraftRightSidebar', () => ({
+  composerDraftKeyForRightSidebarSession: (sessionId: string) => sessionId,
+}));
 
 let mockWebview: MockWebview;
 
@@ -98,6 +118,7 @@ vi.mock('../../lib/rsbBrowserBridge', () => {
 function makeMockWebview(initialUrl: string): MockWebview {
   const listeners = new Map<string, Set<(event: Record<string, unknown>) => void>>();
   return {
+    send: vi.fn(),
     addEventListener: vi.fn((type: string, listener: (event: Record<string, unknown>) => void) => {
       const set = listeners.get(type) ?? new Set();
       set.add(listener);
@@ -135,6 +156,15 @@ function HookProbe({
   return null;
 }
 
+function CommentProbe({ onResult }: {
+  onResult: (browser: UseBrowserWebviewResult, comment: UseBrowserCommentResult) => void;
+}) {
+  const browser = useBrowserWebview('tab-a', 'session-a', true);
+  const comment = useBrowserComment('tab-a', 'session-a', browser.webview, () => browser.url);
+  onResult(browser, comment);
+  return null;
+}
+
 describe('useBrowserWebview', () => {
   beforeEach(() => {
     mockWebview = makeMockWebview('https://www.taptap.cn/');
@@ -144,6 +174,7 @@ describe('useBrowserWebview', () => {
   afterEach(() => {
     cleanup();
     vi.clearAllMocks();
+    vi.unstubAllGlobals();
     poolMocks.releaseListeners.clear();
     poolMocks.entryCreatedListeners.clear();
     bridgeMocks.resourceCb = null;
@@ -246,6 +277,58 @@ describe('useBrowserWebview', () => {
     });
 
     expect(result!.crash).toEqual({ reason: 'killed', cause: 'resource-memory' });
+  });
+
+  // #9639, unit: exercise both production hooks like BrowserTabBody. A child
+  // history event must preserve the top-level URL used by the submitted comment.
+  it('keeps the top-level comment URL after child navigation and follows main navigation', async () => {
+    let browser: UseBrowserWebviewResult | null = null;
+    let comment: UseBrowserCommentResult | null = null;
+    vi.stubGlobal('electronAPI', {
+      rsbBrowserBridge: {
+        captureScreenshotData: vi.fn(async () => ({ data: new Uint8Array([1, 2, 3]) })),
+      },
+      cacheImageFromBuffer: vi.fn(async () => ({ url: 'xdt-image://cached/comment.png' })),
+    });
+    mockWebview.send.mockImplementation((command: string, envelope: BrowserCommentCommandEnvelope) => {
+      queueMicrotask(() => mockWebview.dispatch('ipc-message', {
+        channel: BROWSER_COMMENT_COMMAND_RESULT_CHANNEL,
+        args: [{ requestId: envelope.requestId, command, ok: true }],
+      }));
+    });
+    render(createElement(CommentProbe, {
+      onResult: (nextBrowser, nextComment) => { browser = nextBrowser; comment = nextComment; },
+    }));
+    act(() => comment!.toggle());
+    await waitFor(() => expect(comment!.mode).toBe('selecting'));
+    mockWebview.canGoBack.mockReturnValue(true);
+    act(() => mockWebview.dispatch('did-navigate-in-page', {
+      url: 'https://child.example.com/frame#tick', isMainFrame: false,
+    }));
+    expect(browser!.url).toBe('https://www.taptap.cn/');
+    expect(browser!.canGoBack).toBe(true);
+    expect(comment!.mode).toBe('selecting');
+    const target: BrowserCommentTargetInfo = {
+      kind: 'element', markerNumber: 1, point: { x: 10, y: 20 },
+      viewport: { width: 800, height: 600 }, region: null, selectedText: null,
+      immediate: false, targetTag: 'button', targetLabel: 'Save', targetRole: 'button',
+      targetSelector: '#save', targetPath: 'html > body > button', nearbyText: 'Save',
+      themeVariant: 'light', designBaseline: null,
+    };
+    act(() => mockWebview.dispatch('ipc-message', {
+      channel: BROWSER_COMMENT_ELEMENT_SELECTED_CHANNEL, args: [target],
+    }));
+    act(() => comment!.submit('Keep this target'));
+    await waitFor(() => expect(commentMocks.append).toHaveBeenCalledOnce());
+    expect(commentMocks.append.mock.calls[0]?.[1]).toMatchObject({
+      pageUrl: 'https://www.taptap.cn/', target, comment: 'Keep this target',
+    });
+    await waitFor(() => expect(comment!.mode).toBe('selecting'));
+    act(() => mockWebview.dispatch('did-navigate-in-page', {
+      url: 'https://www.taptap.cn/#next', isMainFrame: true,
+    }));
+    expect(browser!.url).toBe('https://www.taptap.cn/#next');
+    expect(comment!.mode).toBe('off');
   });
 
   it('restores the real webview URL when an optimistic navigation is aborted', () => {

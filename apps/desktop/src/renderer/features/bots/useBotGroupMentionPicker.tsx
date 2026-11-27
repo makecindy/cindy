@@ -1,3 +1,4 @@
+import { botGroupInputElement, type BotGroupTextInput } from './botGroupTextInput';
 /**
  * 群聊 @ 点名候选：主群输入框与 Thread 回复框共用的一套状态与候选列表。
  *
@@ -34,6 +35,7 @@ import { cn } from '@/lib/utils';
 import type { BotGroupMemberView } from '../../../shared/botGroupChat';
 import { BotAvatar } from './BotAvatar';
 import {
+  ambiguousBotGroupMentionLabels,
   filterBotGroupMentionCandidates,
   findBotGroupMentionQuery,
   insertBotGroupMention,
@@ -41,41 +43,51 @@ import {
   retainBotGroupTrackedMentions,
   type BotGroupTrackedMention,
 } from './botGroupMentions';
-import { isActiveBotGroupMember } from './botGroupPresentation';
+import { chatGroupMentionRoster, isActiveBotGroupMember } from '@cindy/maker-shared/botGroupPresentation';
+import { createBotGroupMemberSearch } from '@cindy/maker-shared/botGroupMemberSearch';
 
 type MentionOption =
   | { kind: 'all' | 'allBots'; label: string }
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
-const withoutSelf = (members: readonly BotGroupMemberView[]) => members.filter((member) => member.isSelf !== true);
-
 export function useBotGroupMentionPicker({
   text,
   onTextChange,
   members,
+  conversationKind,
   textareaRef,
   allLabels,
+  disabled = false,
+  allowMentionAll = true,
   allowMentionAllBots = false,
 }: {
   text: string;
+  /** Read-only composer states close the list and reject pending picks. */
+  disabled?: boolean;
   /** Every text change from typing or picking goes through here. */
   onTextChange: (value: string) => void;
-  /** Full roster: active members other than you are offered; everyone but you still resolves. */
+  conversationKind?: 'direct';
   members: readonly BotGroupMemberView[];
-  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  textareaRef: RefObject<BotGroupTextInput | null>;
   /** Labels that mean 「所有人」 when resolving; the first is the one offered. Defaults to the UI label. */
   allLabels?: readonly string[];
+  allowMentionAll?: boolean;
   allowMentionAllBots?: boolean;
 }) {
   const { t } = useTranslation();
   const listboxId = useId();
+  const disabledRef = useRef(disabled);
+  disabledRef.current = disabled;
   const [caret, setCaret] = useState(0);
   const [focused, setFocused] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const [dismissedStart, setDismissedStart] = useState<number | null>(null);
   const [tracked, setTracked] = useState<BotGroupTrackedMention[]>([]);
   const selectionRef = useRef({ start: 0, end: 0 });
+  const textRef = useRef(text);
+  textRef.current = text;
   const pendingCaretRef = useRef<number | null>(null);
+  const composingRef = useRef(false);
   // @ list: glide highlight on the aria-selected option; arrow keys stay in the textarea.
   const listRef = useMenuPanel<HTMLDivElement>(undefined, {
     lockWidth: false,
@@ -90,23 +102,24 @@ export function useBotGroupMentionPicker({
   const allBotsLabel = t('bots.groupChat.mention.allBots');
   const allBotLabels = useMemo(() => [allBotsLabel, 'bots'], [allBotsLabel]);
   const resolveLabels = useMemo(() => allLabels ?? [allLabel], [allLabels, allLabel]);
-  // You never name yourself: the host drops you from the targets (as on mobile).
-  const mentionMembers = useMemo(() => withoutSelf(members), [members]);
+  const mentionMembers = useMemo(() => chatGroupMentionRoster(members, conversationKind), [members, conversationKind]);
   const activeMembers = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
-  const query = focused ? findBotGroupMentionQuery(text, caret) : null;
+  const searchMembers = useMemo(() => createBotGroupMemberSearch(activeMembers), [activeMembers]);
+  const query = focused && !disabled ? findBotGroupMentionQuery(text, caret, activeMembers) : null;
+  const queryText = query?.query;
   const options = useMemo<MentionOption[]>(() => {
-    if (!query || activeMembers.length === 0) return [];
+    if (queryText === undefined || activeMembers.length === 0) return [];
     const everyone: MentionOption[] =
-      filterBotGroupMentionCandidates(query.query, [{ name: allLabel }]).length > 0
+      allowMentionAll && filterBotGroupMentionCandidates(queryText, [{ name: allLabel }]).length > 0
         ? [{ kind: 'all', label: allLabel }]
         : [];
-    const people = filterBotGroupMentionCandidates(query.query, activeMembers).map(
+    const people = searchMembers(queryText).map(
       (member): MentionOption => ({ kind: 'member', label: member.name, member }),
     );
-    const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(query.query, [{ name: allBotsLabel }]).length
+    const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(queryText, [{ name: allBotsLabel }]).length
       ? [{ kind: 'allBots', label: allBotsLabel }] : [];
     return [...everyone, ...allBots, ...people];
-  }, [activeMembers, allLabel, allBotsLabel, allowMentionAllBots, query]);
+  }, [activeMembers.length, allLabel, allBotsLabel, allowMentionAll, allowMentionAllBots, queryText, searchMembers]);
   const open = query !== null && options.length > 0 && dismissedStart !== query.start;
   const activeIndex = Math.min(highlight, Math.max(0, options.length - 1));
 
@@ -127,7 +140,8 @@ export function useBotGroupMentionPicker({
 
   const syncCaret = () => {
     const element = textareaRef.current;
-    if (!element) return;
+    // Focus can return before React writes a picked mention and its new caret.
+    if (!element || pendingCaretRef.current !== null) return;
     selectionRef.current = {
       start: element.selectionStart ?? element.value.length,
       end: element.selectionEnd ?? element.value.length,
@@ -135,42 +149,67 @@ export function useBotGroupMentionPicker({
     setCaret(selectionRef.current.start);
   };
 
-  const choose = (option: MentionOption | undefined) => {
-    if (!option || !query) return;
-    const next = insertBotGroupMention(text, { start: query.start, end: caret }, option.label);
+  const applyChoice = (option: MentionOption, value: string, start: number, end: number) => {
+    if (disabledRef.current) return;
+    const next = insertBotGroupMention(value, { start, end }, option.label);
     // A pick obeys the field's own maxLength, as typing does (a programmatic value would skip it).
     const limit = textareaRef.current?.maxLength ?? -1;
     if (limit >= 0 && next.text.length > limit) return;
     // Re-picking a namesake can leave the text as is; then no re-render moves the caret.
-    if (next.text === text) textareaRef.current?.setSelectionRange(next.caret, next.caret);
+    if (next.text === textRef.current) textareaRef.current?.setSelectionRange(next.caret, next.caret);
     else pendingCaretRef.current = next.caret;
+    textRef.current = next.text;
     onTextChange(next.text);
     selectionRef.current = { start: next.caret, end: next.caret };
     setCaret(next.caret);
     setHighlight(0);
     setTracked((current) => {
-      const remaining = retainBotGroupTrackedMentions(text, next.text, {
+      const remaining = retainBotGroupTrackedMentions(value, next.text, {
         members: mentionMembers,
         allLabels: resolveLabels, allBotLabels,
         tracked: current,
-        editStart: query.start,
-        editEnd: caret,
+        editStart: start,
+        editEnd: end,
       });
       return option.kind === 'member'
-        ? [...remaining, { botId: option.member.botId, label: option.label, start: query.start }]
+        ? [...remaining, { botId: option.member.botId, label: option.label, start }]
         : remaining;
     });
     textareaRef.current?.focus();
   };
 
-  /** The textarea's new value; the caret is read from the element, which already has it. */
-  const onChange = (value: string) => {
-    const nextCaret = textareaRef.current?.selectionStart ?? value.length;
-    const editStart = Math.min(selectionRef.current.start, nextCaret);
-    const editEnd = selectionRef.current.end;
+  const choose = (option: MentionOption | undefined) => {
+    if (!option || !query || disabledRef.current) return;
+    const input = textareaRef.current;
+    const element = botGroupInputElement(input);
+    if (!composingRef.current || !input || !element) {
+      applyChoice(option, text, query.start, caret);
+      return;
+    }
+    // A pointer pick can finish composition. Let the IME settle the draft before
+    // replacing the query, whose length may have changed when the IME committed.
+    element.blur();
+    requestAnimationFrame(() => {
+      if (textareaRef.current !== input || element.ownerDocument.activeElement !== element.ownerDocument.body) return;
+      const value = input.value;
+      const end = input.selectionStart ?? value.length;
+      const current = findBotGroupMentionQuery(value, end, activeMembers);
+      if (current?.start === query.start) applyChoice(option, value, current.start, end);
+    });
+  };
+
+  /** Typing reads the updated DOM; programmatic edits supply the previous range. */
+  const onChange = (value: string, edit?: { start: number; end: number; caret: number }) => {
+    const nextCaret = edit?.caret ?? textareaRef.current?.selectionStart ?? value.length;
+    const editStart = edit?.start ?? Math.min(selectionRef.current.start, nextCaret);
+    const editEnd = edit?.end ?? selectionRef.current.end;
+    // Submitted and refined events can arrive before React commits either value.
+    const previousText = textRef.current;
+    textRef.current = value;
+    if (edit) pendingCaretRef.current = nextCaret;
     onTextChange(value);
     setTracked((current) =>
-      retainBotGroupTrackedMentions(text, value, {
+      retainBotGroupTrackedMentions(previousText, value, {
         members: mentionMembers,
         allLabels: resolveLabels, allBotLabels,
         tracked: current,
@@ -182,11 +221,11 @@ export function useBotGroupMentionPicker({
     setCaret(nextCaret);
     setHighlight(0);
     // A dismissed picker stays closed only for the `@` it was closed on.
-    if (findBotGroupMentionQuery(value, nextCaret)?.start !== dismissedStart) setDismissedStart(null);
+    if (findBotGroupMentionQuery(value, nextCaret, activeMembers)?.start !== dismissedStart) setDismissedStart(null);
   };
 
   /** Arrow keys, Enter / Tab and Esc while the list is open; true when the key was used. */
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>): boolean => {
     if (!open || !query) return false;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
@@ -194,7 +233,8 @@ export function useBotGroupMentionPicker({
       setHighlight((activeIndex + step + options.length) % options.length);
       return true;
     }
-    if (event.key === 'Enter' || event.key === 'Tab') {
+    if ((event.key === 'Enter' || event.key === 'Tab') &&
+        !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
       choose(options[activeIndex]);
       return true;
@@ -219,7 +259,10 @@ export function useBotGroupMentionPicker({
       setFocused(true);
       syncCaret();
     },
-    onBlur: () => setFocused(false),
+    onBlur: () => {
+      composingRef.current = false;
+      setFocused(false);
+    },
   };
 
   /** The text was sent or replaced from outside: forget picks and the caret. */
@@ -240,7 +283,7 @@ export function useBotGroupMentionPicker({
       // Shared menu panel (DESIGN §4): Board border and menu surface; no shadow, per the
       // zero-shadow Bot surfaces (botDesignContract.test.ts). Capped and scrolling so a big
       // roster stays inside a short window or the narrow thread panel.
-      className="absolute bottom-full left-0 z-20 mb-2 flex max-h-72 w-64 max-w-full flex-col gap-0.5 overflow-y-auto rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1.5"
+      className="absolute bottom-full left-0 z-page-float mb-2 flex max-h-72 w-64 max-w-full flex-col gap-0.5 overflow-y-auto rounded-xl border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] p-1.5"
     >
       <MenuHighlightLayer />
       {options.map((option, index) => (
@@ -282,11 +325,15 @@ export function useBotGroupMentionPicker({
     textareaProps,
     onChange,
     onKeyDown,
+    composingRef,
     tracked,
     setTracked,
     reset,
     /** Resolve who the text addresses, using the picks; `roster` defaults to the current members. */
     resolve: (value: string, roster: readonly BotGroupMemberView[] = members) =>
-      resolveBotGroupMentions(value, { members: withoutSelf(roster), allLabels: resolveLabels, allBotLabels, tracked }),
+      resolveBotGroupMentions(value, { members: chatGroupMentionRoster(roster, conversationKind), allLabels: resolveLabels, allBotLabels, tracked }),
+    /** Typed names several members share: they name nobody, so sending asks to pick from the list. */
+    ambiguous: (value: string, roster: readonly BotGroupMemberView[] = members) =>
+      ambiguousBotGroupMentionLabels(value, { members: chatGroupMentionRoster(roster, conversationKind), allLabels: resolveLabels, allBotLabels, tracked }),
   };
 }

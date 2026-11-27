@@ -2,11 +2,13 @@
  * Protects the missing remote/share choices, model access and account-switch fence. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({ devices: [] as unknown[], shares: [] as unknown[], invoke: vi.fn(), api: vi.fn() }));
+// This catalog fixture has no signed-in owner or persisted disable preferences.
+vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => ({ disabledModels: {}, disabledProviders: {} }) }));
 vi.mock('../../device-link/index.js', () => ({ deviceLinkApiBase: 'https://example.invalid', remoteBackgroundInvoke: mock.invoke }));
 vi.mock('../../device-link/providerShareGuest.js', () => ({ getReceivedShares: () => mock.shares }));
-vi.mock('../../device-link/settings-store.js', () => ({ readDeviceLinkSettings: () => ({ disabledControlDeviceIds: ['disabled'], lastKnownDeviceNames: {} }) }));
-vi.mock('../../device-link/deviceLinkApi.js', () => ({ deviceLinkApiFetch: mock.api }));
-vi.mock('../../i18n.js', () => ({ t: () => '来自 {{name}} 的分享' }));
+vi.mock('../../device-link/settings-store.desktop.js', () => ({ readDeviceLinkSettings: () => ({ disabledControlDeviceIds: ['disabled'], lastKnownDeviceNames: {} }) }));
+vi.mock('../../device-link/deviceLinkApi.desktop.js', () => ({ deviceLinkApiFetch: mock.api }));
+vi.mock('../../i18n.desktop.js', () => ({ t: () => '来自 {{name}} 的分享' }));
 import { remoteLocalAgentModels } from '../remoteCatalog.js';
 import { LOCAL_AGENT_ROUTE, type LocalAgentModel } from '../catalog.js';
 import { normalizeProviderGroupConfig } from '../../../shared/providerGroup.js';
@@ -26,7 +28,7 @@ describe('application remote catalog', () => {
   it('collapses online group members and restores them when their group is unavailable', async () => {
     setup();
     mock.devices.push({ deviceId: 'member', name: 'member', online: true, remoteControlEnabled: true });
-    const group = { strategy: 'least', autoSwitch: true, members: [
+    const group = { strategy: 'expiring', autoSwitch: true, members: [
       { kind: 'local' }, { kind: 'device', agentDeviceId: 'member', providerId: 'openai' },
       { kind: 'share', agentDeviceId: 'share:active', providerId: 'openai' },
     ] };
@@ -47,7 +49,7 @@ describe('application remote catalog', () => {
   it.each(['disconnected', 'engine-missing', 'model-missing', 'available'] as const)(
     'only hides members represented by an available local choice (%s)', async state => {
       setup();
-      const group = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true,
+      const group = normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true,
         members: [{ kind: 'local' }, { kind: 'device', agentDeviceId: 'device', providerId: 'openai' },
           { kind: 'share', agentDeviceId: 'share:active', providerId: 'openai' }] }, 'openai')!;
       const localModels: LocalAgentModel[] = state === 'disconnected' ? [] : [{

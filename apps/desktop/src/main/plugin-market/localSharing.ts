@@ -18,7 +18,7 @@ import { getBuildClientEndpoint } from '../clientEndpointsService.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { onQuit } from '../lifecycle.js';
 import { PluginPublisherPutError, putLocalFile } from '../plugin-publisher/putObject.js';
-import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
 import { rememberIssuedClipboardText } from '../textClipboard.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { pluginObjectUrlOptions } from './objectUrlPolicy.js';

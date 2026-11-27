@@ -1,5 +1,7 @@
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
-import type { AgentKind, Effort } from '@cindy/maker-core';
+import { throwIpcError } from '../utils/ipcValidate.js';
+import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
+import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 
 import {
   getSessionProvider,
@@ -8,7 +10,7 @@ import {
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
 // type-only import:编译期擦除,不会把 codex-proxy-host 的运行时依赖拖进本模块/单测。
-import type { CodexProxyAuthInjection } from '../maker-host/codex-proxy-host.js';
+import type { CodexProxyAuthInjection } from '../maker-host/codex-proxy-host.desktop.js';
 import {
   CredentialModeSwitchBusyError,
   isCredentialModeSwitchBusyError,
@@ -16,9 +18,10 @@ import {
   prepareLocalSessionCredentialModeSwitch,
   shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
+import type { PendingCredentialSwitch, PendingCredentialSwitchTarget } from './pendingCredentialSwitch.js';
 
 interface RuntimeSetModelSession {
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   remoteHostId?: string | null;
   codexProxyActive?: boolean | null;
   codexThreadModelProviderId?: string | null;
@@ -40,12 +43,13 @@ interface RuntimeSetModelSession {
     targetContextWindow: number | null;
     windowVerified: boolean;
     reason?: string;
+    modelNotOffered?: true;
   } | undefined>;
 }
 
 interface RuntimeSetModelActiveSession {
   id: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   remoteHostId?: string | null;
   isTurnRunning?: () => boolean;
 }
@@ -59,6 +63,7 @@ export interface RuntimeSetModelMaker {
 interface RuntimeSetModelLogger {
   debug: (message: string, meta?: Record<string, unknown>) => void;
   info: (message: string, meta?: Record<string, unknown>) => void;
+  warn?: (message: string, meta?: Record<string, unknown>) => void;
 }
 
 export interface ApplyRuntimeSetModelChangeInput {
@@ -98,8 +103,11 @@ export interface ApplyRuntimeSetModelChangeInput {
    */
   registerPendingCredentialSwitch?: (
     sessionId: string,
-    target: { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' },
+    target: PendingCredentialSwitchTarget,
   ) => void | Promise<void>;
+  /** A configured route stays in the send-time selection registry when busy. */
+  deferBusyCredentialSwitch?: boolean;
+  deferredSelection?: PendingCredentialSwitch['deferredSelection'];
   /**
    * 「无需切换」分支清掉旧 pending(后选覆盖先选)。典型场景:deferred 登记后
    * renderer 持久化失败发起回滚 set-model、用户改选回与当前进程同族的来源、或
@@ -121,7 +129,7 @@ export interface ApplyRuntimeSetModelChangeInput {
    */
   getPendingCredentialSwitch?: (
     sessionId: string,
-  ) => { model: string; providerId: string | null; forceSessionRebuild?: boolean; selectionSource?: 'agent' } | undefined;
+  ) => PendingCredentialSwitchTarget | undefined;
   /**
    * 当前本地 Codex spawn 的鉴权注入形态(getCodexProxyAuthInjectionState())。
    * shouldCloseSessionForCredentialSwitch 用它解析隐式来源的凭证家族,精确判定
@@ -189,8 +197,27 @@ export async function applyRuntimeSetModelChange(
   input: ApplyRuntimeSetModelChangeInput,
 ): Promise<ApplyRuntimeSetModelChangeResult> {
   const { maker, sessionId, model, providerId, effort, isSessionInTurn, logger } = input;
+  const registerDeferredSwitch = input.deferBusyCredentialSwitch === false
+    ? undefined : input.registerPendingCredentialSwitch;
+  const restorePending = async (target: PendingCredentialSwitchTarget) => {
+    try {
+      await input.registerPendingCredentialSwitch?.(sessionId, target);
+    } catch (error) {
+      logger?.warn?.('set-model: could not restore pending credential switch', {
+        sessionId, error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
   const normalizedProviderId = normalizeSessionProviderId(providerId);
-  const sess = maker.getSession(sessionId);
+  const pluginEngineSession = maker.getSession(sessionId);
+  if (pluginEngineSession && pluginEngineSession.agentKind === 'acp') {
+    // Plugin engines list and switch their own models (ACP config option); there is
+    // no catalog route, credential family or rebuild decision to make here.
+    await pluginEngineSession.setModel(model, effort ? { effort } : undefined);
+    logger?.info('runtime set-model applied to plugin engine', { sessionId, model });
+    return { status: 'applied' };
+  }
+  const sess = pluginEngineSession && hasBuiltinAgentKind(pluginEngineSession) ? pluginEngineSession : undefined;
   const currentProviderId = getSessionProvider(sessionId);
   // model-only 调用以 pending 的 providerId 为「当前来源意图」:用户先 deferred 选了
   // 新来源、再换模型时,决策与登记都要沿用那个来源,不能回落到 store 里的旧值
@@ -205,6 +232,7 @@ export async function applyRuntimeSetModelChange(
         : currentProviderId;
   const credentialModeRequiresRebuild = sess
     ? shouldCloseSessionForCredentialSwitch({
+        sessionId,
         agentKind: sess.agentKind,
         remoteHostId: sess.remoteHostId,
         currentProviderId,
@@ -237,6 +265,7 @@ export async function applyRuntimeSetModelChange(
     throw new Error('Pi model switch preview is unavailable; runtime selection was not changed');
   }
   if (piPreview?.action === 'unavailable') {
+    if (piPreview.modelNotOffered) throwIpcError('MODEL_SELECTION_UNAVAILABLE', piPreview.reason ?? 'Select an available model');
     throw new Error(piPreview.reason ?? 'Pi target model is unavailable; runtime selection was not changed');
   }
   let requiresCodexThreadRelink = typeof input.requiresCodexThreadRelink === 'function'
@@ -299,12 +328,13 @@ export async function applyRuntimeSetModelChange(
     // wire model 命中新来源，造成同 turn 跨计费，甚至因模型不受支持而 4xx。
     // 把 route/model 的生效边界固定在 turn 结束；pending 收口只关闭本 Session，
     // 当前账号保持到回合边界，不能让工具续轮命中新账号。
-    if (input.registerPendingCredentialSwitch) {
+    if (registerDeferredSwitch) {
       if (input.beforeMutation) await input.beforeMutation();
       input.admit?.();
-      await input.registerPendingCredentialSwitch(sessionId, {
+      await registerDeferredSwitch(sessionId, {
         model,
         providerId: nextProviderId,
+        ...(input.deferredSelection ? { deferredSelection: input.deferredSelection } : {}),
       });
       logger?.info('set-model: provider route switch deferred until turn end', {
         sessionId,
@@ -325,12 +355,17 @@ export async function applyRuntimeSetModelChange(
     input.assertSessionCloseSupported?.();
     if (input.beforeMutation) await input.beforeMutation();
     input.admit?.();
-    if (isSelfBusy() && input.registerPendingCredentialSwitch) {
+    const busy = isSelfBusy();
+    if (busy && input.deferBusyCredentialSwitch === false) {
+      throw new CredentialModeSwitchBusyError([sessionId]);
+    }
+    if (busy && registerDeferredSwitch) {
       // A required credential rebuild must also survive close failure: keeping
       // the old process alive cannot be treated as applying the new account.
-      await input.registerPendingCredentialSwitch(sessionId, {
+      await registerDeferredSwitch(sessionId, {
         model,
         providerId: nextProviderId,
+        ...(input.deferredSelection ? { deferredSelection: input.deferredSelection } : {}),
         ...(shouldCloseSession ? { forceSessionRebuild: true } : {}),
       });
       logger?.info('set-model: session rebuild deferred until turn end', {
@@ -376,11 +411,12 @@ export async function applyRuntimeSetModelChange(
       if (
         !requiresCodexThreadRelink &&
         isCredentialModeSwitchBusyError(err) &&
-        input.registerPendingCredentialSwitch
+        registerDeferredSwitch
       ) {
-        input.registerPendingCredentialSwitch(sessionId, {
+        await registerDeferredSwitch(sessionId, {
           model,
           providerId: nextProviderId,
+          ...(input.deferredSelection ? { deferredSelection: input.deferredSelection } : {}),
           ...(shouldCloseSession ? { forceSessionRebuild: true } : {}),
         });
         logger?.info('set-model: credential switch deferred after busy race', {
@@ -391,7 +427,7 @@ export async function applyRuntimeSetModelChange(
       }
       // 非 busy 失败:恢复被清除的 pending,用户的待定来源选择不随异常丢失。
       if (clearedPending && input.registerPendingCredentialSwitch) {
-        input.registerPendingCredentialSwitch(sessionId, clearedPending);
+        await restorePending(clearedPending);
       }
       throw err;
     }
@@ -406,7 +442,7 @@ export async function applyRuntimeSetModelChange(
     } catch (error) {
       // A failed history transfer must not discard an earlier accepted pending route.
       if (clearedPending && input.registerPendingCredentialSwitch) {
-        await input.registerPendingCredentialSwitch(sessionId, clearedPending);
+        await restorePending(clearedPending);
       }
       throw error;
     }
@@ -477,7 +513,7 @@ export async function applyRuntimeSetModelChange(
     // (providerId !== undefined)时旧 pending 已被本次明确选择覆盖,恢复它会静默
     // 撤销用户最后一次选择(Greptile review #1035 七轮)。
     if (pendingTarget && input.registerPendingCredentialSwitch) {
-      input.registerPendingCredentialSwitch(sessionId, pendingTarget);
+      await restorePending(pendingTarget);
     }
     throw err;
   }
@@ -500,7 +536,8 @@ export async function refreshActiveModelContextSettings(input: {
     await input.withSessionLock(active.id, async () => {
       assertCurrent();
       const session = runtime.maker.getSession(active.id);
-      if (!session) return;
+      // Plugin engines have no catalog route or context settings to refresh.
+      if (!session || !hasBuiltinAgentKind(session)) return;
       const source = getSessionProvider(active.id) ?? inferProviderId(session.model, session.agentKind);
       if (targets && !targets.some((t) => t.agent === session.agentKind &&
         (source === null || t.providerId === source) && t.modelId === session.model)) return;

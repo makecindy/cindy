@@ -1,6 +1,12 @@
 import { useMemo, useRef, useSyncExternalStore } from 'react';
 import type { ControlledModelFavoriteSource } from '../../shared/controlledModelCatalog';
-import type { ProviderShareReceived } from '@cindy/device-link';
+import {
+  parseProviderShareFavoriteSource,
+  providerShareFavoriteSource,
+  providerShareFavoriteWireKey,
+  providerSharePickerState,
+  type ProviderShareReceived,
+} from '@cindy/device-link';
 import {
   getDataOwnerGeneration,
   isDataOwnerGenerationCurrent,
@@ -9,39 +15,14 @@ import {
 import type { ProviderShareReceivedSnapshot } from '../../shared/providerShare';
 import {
   accessHostModelFavorites,
-  LOCAL_FAVORITE_PROVIDER_ID_MAX_LENGTH,
   type ModelFavoriteConfig,
   type ModelFavoriteItem,
 } from './modelFavorites';
 import type { FavoriteStore } from './useRemoteModelFavorites';
 
-const PREFIX = 'provider-share-favorite:';
+export { parseProviderShareFavoriteSource, providerShareFavoriteSource };
+
 type Source = { shareId: string; memberId: string; providerId: string; region: ProviderShareReceived['owner']['region'] };
-
-/**
- * 复用受邀者账号的收藏存储；远程同步保留既有长度约束。providerId 是带分享/成员身份的存储键，
- * 按对应分享的目录投影为真实 providerId（包括聚合收藏视图），绝不把存储键用于模型请求。
- * 老客户端不认识这个来源时不会把它误认成本机同名供应商。
- */
-export function providerShareFavoriteSource(source: ControlledModelFavoriteSource): string {
-  const key = PREFIX + JSON.stringify([source.shareId, source.memberId, source.providerId, source.owner.region]);
-  if (!source.shareId || !source.memberId || !source.providerId || key.length > LOCAL_FAVORITE_PROVIDER_ID_MAX_LENGTH)
-    throw new Error('Invalid shared favorite source');
-  return key;
-}
-
-export function parseProviderShareFavoriteSource(value: string): Source | null {
-  if (!value.startsWith(PREFIX)) return null;
-  try {
-    const parts: unknown = JSON.parse(value.slice(PREFIX.length));
-    if (!Array.isArray(parts) || parts.length !== 4 || !parts.every((part) => typeof part === 'string' && part.length > 0) ||
-        (parts[3] !== 'cn' && parts[3] !== 'global'))
-      return null;
-    return { shareId: parts[0], memberId: parts[1], providerId: parts[2], region: parts[3] };
-  } catch {
-    return null;
-  }
-}
 
 let snapshot: { membership: ProviderShareReceivedSnapshot | null; cleanupFailed: boolean } = {
   membership: null, cleanupFailed: false,
@@ -65,16 +46,22 @@ export function getProviderShareFavoriteRegions(ownerId: string | null): Source[
   return providerShareFavoriteRegionsOf(accessHostModelFavorites(ownerId));
 }
 
-/** 可用来源立即发布；仅清理 Main 已确认完整名单的区域，未知区域的收藏保留。 */
+/** 可用来源立即发布；删除收藏需要退出回执或 Main 对成员终止的确认。 */
 export function reconcileProviderShareFavorites(next: ProviderShareReceivedSnapshot): boolean {
   if (!next || !isDataOwnerPushStampCurrent(next.ownerStamp)) return false;
   let cleanupFailed = false;
   try {
     const items = accessHostModelFavorites(next.ownerStamp.dataOwnerId);
-    const sources = new Set(next.received.map(providerShareFavoriteSource));
+    const received = new Map(next.received.map(share => [share.shareId, share]));
+    const left = new Set(next.leftMemberIds);
     for (const item of items) {
       const source = parseProviderShareFavoriteSource(item.providerId);
-      if (!source || !next.confirmedRegions.includes(source.region) || sources.has(item.providerId)) continue;
+      if (!source) continue;
+      const current = received.get(source.shareId);
+      const replaced = next.confirmedRegions.includes(source.region) && current?.owner.region === source.region
+        && current.memberId !== source.memberId;
+      // List omission suspends the projection; the favorite cannot grant access.
+      if (!left.has(source.memberId) && !replaced) continue;
       accessHostModelFavorites(next.ownerStamp.dataOwnerId, { kind: 'remove', expected: item });
     }
   } catch {
@@ -90,16 +77,60 @@ export function useProviderShareFavoriteCleanupFailed(): boolean {
   return !!state.membership && isDataOwnerPushStampCurrent(state.membership.ownerStamp) && state.cleanupFailed;
 }
 
-/** 聚合收藏只解析当前账号仍可用的原授权；同名供应商或重新申请的分享不能接管旧副本。 */
+/**
+ * 聚合收藏只解析当前账号仍可用的原授权；同名供应商或重新申请的分享不能接管旧副本。
+ * 分享者电脑暂时离线时仍解析(与选择器同一条 providerSharePickerState 规则)：收藏随目录置灰，
+ * 不因在线状态来回变化而消失；只有在线但版本过旧(hostCapable=false)的分享不解析。
+ */
 export function useProviderShareFavoriteSources(routed?: ReadonlyMap<string, ControlledModelFavoriteSource>): ReadonlyMap<string, string> {
   const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const current = state.membership && isDataOwnerPushStampCurrent(state.membership.ownerStamp)
     ? state.membership : null;
   return useMemo(() => routed ? new Map([...routed].map(([deviceId, share]) => [providerShareFavoriteSource(share), deviceId])) : new Map(
     (current?.received ?? [])
-      .filter((share) => share.status === 'active' && share.hostOnline && share.hostCapable)
+      .filter((share) => providerSharePickerState(share) !== 'paused' && !(share.hostOnline && !share.hostCapable)
+        && !current?.unavailableShareIds?.includes(share.shareId) && !current?.leftMemberIds?.includes(share.memberId))
       .map((share) => [providerShareFavoriteSource(share), `share:${share.shareId}`]),
   ), [current, routed]);
+}
+
+/**
+ * 按 `share:<shareId>` 反查写入收藏时应使用的来源键（与 useProviderShareFavorites 同一套有效成员判定）。
+ * `wireLimit = true` 时（远控写入被控电脑）遵守收藏通道的 512 字节上限，超长的不提供星标。
+ */
+export function useProviderShareFavoriteKeysByDevice(
+  routed?: ReadonlyMap<string, ControlledModelFavoriteSource>,
+  wireLimit = false,
+): ReadonlyMap<string, { providerId: string; sourceKey: string }> {
+  const state = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const current = state.membership && isDataOwnerPushStampCurrent(state.membership.ownerStamp)
+    ? state.membership : null;
+  return useMemo(() => {
+    const map = new Map<string, { providerId: string; sourceKey: string }>();
+    const encode = (share: { shareId: string; memberId: string; providerId: string; owner: { region: 'cn' | 'global' } }): string | null => {
+      if (wireLimit) return providerShareFavoriteWireKey(share);
+      try {
+        return providerShareFavoriteSource(share);
+      } catch {
+        return null;
+      }
+    };
+    if (routed) {
+      for (const [deviceId, share] of routed) {
+        const sourceKey = encode(share);
+        if (sourceKey) map.set(deviceId, { providerId: share.providerId, sourceKey });
+      }
+      return map;
+    }
+    for (const share of current?.received ?? []) {
+      if (share.status !== 'active'
+        || current?.unavailableShareIds?.includes(share.shareId)
+        || current?.leftMemberIds?.includes(share.memberId)) continue;
+      const sourceKey = encode(share);
+      if (sourceKey) map.set(`share:${share.shareId}`, { providerId: share.providerId, sourceKey });
+    }
+    return map;
+  }, [current, routed, wireLimit]);
 }
 
 export function useProviderShareFavorites(
@@ -115,7 +146,9 @@ export function useProviderShareFavorites(
     ? state.membership : null;
   const routedRef = useRef(routed);
   routedRef.current = routed;
-  const share = routed ? routed.get(deviceId ?? '') : membership?.received.find((item) => `share:${item.shareId}` === deviceId);
+  const share = routed ? routed.get(deviceId ?? '') : membership?.received.find((item) =>
+    `share:${item.shareId}` === deviceId && item.status === 'active'
+    && !membership.unavailableShareIds?.includes(item.shareId) && !membership.leftMemberIds?.includes(item.memberId));
   const source = share ? providerShareFavoriteSource(share) : null;
   const project = (item: ModelFavoriteItem): ModelFavoriteItem => ({ ...item, providerId: share!.providerId });
   const assertCurrent = () => {
@@ -128,7 +161,8 @@ export function useProviderShareFavorites(
     const current = snapshot.membership;
     if (!source || !share || !current || !isDataOwnerGenerationCurrent(owner) || !isDataOwnerPushStampCurrent(current.ownerStamp) ||
         current.ownerStamp.dataOwnerId !== owner.dataOwnerId ||
-        !current.received.some((item) => providerShareFavoriteSource(item) === source))
+        current.unavailableShareIds?.includes(share.shareId) || current.leftMemberIds?.includes(share.memberId) ||
+        !current.received.some((item) => item.status === 'active' && providerShareFavoriteSource(item) === source))
       throw new Error('Shared favorite source unavailable');
   };
   const expected = (uid: string) => {
@@ -156,7 +190,12 @@ export function useProviderShareFavorites(
       const item = { ...before, ...patch };
       accessHostModelFavorites(owner.dataOwnerId, {
         kind: 'update', expected: before,
-        item: { ...item, effort: item.effort ?? undefined, fast: item.fast ? true : undefined },
+        // 速度是三态。收成 true 后，星标对不上 ultrafast，再点会再加一条。
+        item: {
+          ...item,
+          effort: item.effort ?? undefined,
+          fast: item.fast === 'ultrafast' ? 'ultrafast' : item.fast ? true : undefined,
+        },
       });
     },
     remove: (uid) => {

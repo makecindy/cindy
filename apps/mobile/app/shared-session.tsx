@@ -12,6 +12,7 @@ import { goBackGuarded } from '@/utils/backGuard';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useSharedTaskApi } from '@/device-link/useSharedTaskApi';
+import { parseAgentNetSharingInvitation } from '@cindy/agent-net/portable';
 import { getActiveSelfHostedRelay, subscribeSelfHostedRelayRoute } from '@/device-link/selfHostedRelayRouting';
 import { notifySharedTaskMembershipChanged } from '@/device-link/sharedTaskMembershipSignal';
 import { filterVisibleSharedTasks } from '@/device-link/sharedTaskVisibility';
@@ -230,7 +231,8 @@ export default function SharedSessionScreen() {
     router.replace({ pathname: '/sessions/[sessionId]', params: { sessionId: detail.sessionId, deviceId: target, deviceName: targetName } });
   };
   const joinInvitation = (input: string, enter = false) => void run(async (current) => {
-    const parsed = parseSharedTaskInvitation(input, getOfficialDeviceLinkApiBaseUrl());
+    const v2 = parseAgentNetSharingInvitation(input, 'shared-task');
+    const parsed = v2 ? { ok: true as const, invitation: input } : parseSharedTaskInvitation(input, getOfficialDeviceLinkApiBaseUrl());
     if (!parsed.ok) { setNotice(t(parsed.reason === 'different-server' ? 'sharedTask.invitationDifferentServer' : 'sharedTask.invalid')); return; }
     const joined = await api.join(parsed.invitation, sharedTaskAccountName(user?.name));
     notifySharedTaskMembershipChanged();
@@ -246,7 +248,7 @@ export default function SharedSessionScreen() {
   }, false, 'join');
   useEffect(() => {
     if (!incomingInvitation || !isAuthenticated || sessionId || deviceId || sharedTaskId) return;
-    const input = buildSharedTaskInvitationLink(incomingInvitation.invitation, incomingInvitation.server);
+    const input = incomingInvitation.link ?? buildSharedTaskInvitationLink(incomingInvitation.invitation, incomingInvitation.server);
     // Claim before waiting for relay capability. Leaving this screen discards the invitation.
     epoch.current++; pending.current = false; setBusy(false);
     setJoinedId(undefined); setState(null); setEnded(false); setTab('current');
@@ -279,29 +281,38 @@ export default function SharedSessionScreen() {
   const task = remoteSessionStore.getSessions().find((task) => task.id === sessionId && task.deviceLinkDeviceId === deviceId);
   const title = detail?.title ?? task?.title ?? t('sharedTask.title');
   const deviceName = (id: string) => deviceNames[id] ?? remoteSessionStore.getSessions().find((task) => task.deviceLinkDeviceId === id)?.deviceLinkDeviceName ?? t('sharedTask.hostDevice');
-  const closeTasks = (items: SharedTaskListItem[]) => confirm(
-    t('sharedTask.closeAllTitle'),
-    t('sharedTask.closeAllBody'),
-    t('sharedTask.closeAllKeep'), t('sharedTask.closeAllAction', { count: items.length }), async (current) => {
-      const closed = new Set<string>();
-      const failed: SharedTaskListItem[] = [];
-      for (const item of items) {
-        if (!current()) return;
-        try {
-          await api.close(item.sharedTaskId);
+  const closeTasks = (items: SharedTaskListItem[]) => {
+    const privateTasks = new Set(items.filter(item => api.isPrivateOwner(item.sharedTaskId)).map(item => item.sharedTaskId));
+    confirm(
+      t('sharedTask.closeAllTitle'),
+      t('sharedTask.closeAllBody'),
+      t('sharedTask.closeAllKeep'), t('sharedTask.closeAllAction', { count: items.length }), async (current) => {
+        const closed = new Set<string>();
+        const failed: SharedTaskListItem[] = [];
+        for (const item of items) {
           if (!current()) return;
-          closed.add(item.sharedTaskId);
-        } catch {
-          if (!current()) return;
-          failed.push(item);
+          try {
+            if (privateTasks.has(item.sharedTaskId)) {
+              await link.openLink(item.hostDeviceId);
+              if (!current()) return;
+              const result = await link.invoke<{ ok: boolean }>(item.hostDeviceId, SHARED_TASK_HOST_CHANNEL,
+                [{ action: 'close', sharedTaskId: item.sharedTaskId }]);
+              if (result?.ok !== true) throw new Error('Shared task close was not confirmed');
+            } else await api.close(item.sharedTaskId);
+            if (!current()) return;
+            closed.add(item.sharedTaskId);
+          } catch {
+            if (!current()) return;
+            failed.push(item);
+          }
         }
-      }
-      if (closed.size) notifySharedTaskMembershipChanged();
-      if (!current()) return;
-      setOwned((value) => value.filter((item) => !closed.has(item.sharedTaskId)));
-      const failedCount = failed.length;
-      setNotice(t(failedCount ? 'sharedTask.closeFailedToast' : 'sharedTask.closedToast', { count: failedCount || closed.size }));
-    }, true, { items: items.map((item) => item.title + ' · ' + deviceName(item.hostDeviceId)), note: t('sharedTask.closeAllScopeNote') });
+        if (closed.size) notifySharedTaskMembershipChanged();
+        if (!current()) return;
+        setOwned((value) => value.filter((item) => !closed.has(item.sharedTaskId)));
+        const failedCount = failed.length;
+        setNotice(t(failedCount ? 'sharedTask.closeFailedToast' : 'sharedTask.closedToast', { count: failedCount || closed.size }));
+      }, true, { items: items.map((item) => item.title + ' · ' + deviceName(item.hostDeviceId)), note: t('sharedTask.closeAllScopeNote') });
+  };
   const leave = () => confirm(t('sharedTask.leaveTitle'), t('sharedTask.leaveBody'), t('sharedTask.leaveKeep'), t('sharedTask.leave'), async (current) => {
     await api.leave(guestId!);
     notifySharedTaskMembershipChanged();

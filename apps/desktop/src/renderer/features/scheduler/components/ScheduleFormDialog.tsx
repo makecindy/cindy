@@ -1,8 +1,10 @@
 import { ErrorNotice } from '@/components/ui/error-notice';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import type { ModelGroupSelection } from '../../../../shared/modelGroups';
 import * as Dialog from '@radix-ui/react-dialog';
-import { CalendarClock, Check, FolderOpen, Info, Play, Sparkles, X } from 'lucide-react';
+import { CalendarClock, FolderOpen, Info, Maximize2, Minimize2, Play, Sparkles, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SegmentedControl } from '@/components/ui/segmented-control';
@@ -13,6 +15,8 @@ import {
   type ScheduleWebhookPresetId,
 } from '@cindy/maker-scheduler/webhook-formats';
 import { PreRunPluginFields } from './PreRunPluginFields';
+import { PROJECT_AUTOMATION_REL_SEGMENTS } from '../../../../shared/projectAutomationPaths';
+import { teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import * as sessionService from '@/lib/sessionService';
@@ -20,6 +24,7 @@ import { extractIpcError } from '@/utils/ipcError';
 import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
 import { Tip } from '@/components/ui/tooltip';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -41,6 +46,12 @@ import { applyTemplateParams } from '@cindy/maker-scheduler/template-engine';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScriptCapabilityMultiSelect } from './ScriptCapabilityMultiSelect';
 import { WebhookSourceFields } from './WebhookSourceFields';
+import { GithubItemFields } from './GithubItemFields';
+import { GitlabItemFields } from './GitlabItemFields';
+import { GitlabPluginProjectFields } from './GitlabPluginProjectFields';
+import { githubItemUrl, gitlabItemUrl, isGitlabPluginId } from '@cindy/maker-scheduler/github-item';
+import { isGithubPrTriggerUrl } from '@cindy/maker-scheduler/pr-trigger';
+import { usePluginEventSources } from './PluginEventSourceFields';
 import { WebhookAccountManager } from './WebhookAccountManager';
 
 import {
@@ -62,9 +73,21 @@ import {
   resolveScheduleGenerationProviderId,
   resolveScheduleModelEfforts,
   usesBoundSessionGenerationModel,
+  parseGithubRepositories,
 } from '../lib/scheduleFormLogic';
 import type { RunMode, ScheduleFormState } from '../hooks/useScheduleForm';
 import { BoundSessionCard } from './BoundSessionCard';
+import { requestPluginEnginesRefresh, useDevicesPluginEngines, usePluginEngines } from '@/hooks/usePluginEngines';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
+import { deviceDisplayName } from '@/lib/deviceName';
+import {
+  remotePluginEngineChoices,
+  resolveActivePluginEngine,
+  type PluginEngineChoice,
+  type PluginEngineSelection,
+  type PluginEngineSource,
+} from '@/lib/pluginEngineSelection';
+import { isPluginEngineKind } from '../../../../shared/pluginEngines';
 import { TemplateGallery } from './TemplateGallery';
 import { TemplateParamForm } from './TemplateParamForm';
 import {
@@ -78,6 +101,9 @@ import {
   ScheduleSettingsButton,
   ThreadPickerInline,
 } from './ScheduleChips';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { useFieldVoiceInput } from '@/voice-input/useFieldVoiceInput';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
 
 /** 可直接运行的最小协议示例，帮助用户理解 stdout 的 JSONL 约束。 */
 const SCRIPT_PROTOCOL_PYTHON_EXAMPLE = `import json
@@ -139,6 +165,9 @@ interface Props {
   requestedByGhostName?: string | null;
 }
 
+/** Inline field labels share one column so every control in the form lines up. */
+const FIELD_LABEL = 'w-[4.5rem] shrink-0 text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]';
+
 export function ScheduleFormDialog({
   open,
   onOpenChange,
@@ -162,7 +191,12 @@ export function ScheduleFormDialog({
     );
     return () => { current = false; };
   }, []);
-  const { form, setField, selectModelConfiguration, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
+  // 插件事件只在本机交接，不需要账号；未登录时「事件」优先提供插件事件，否则提供指定 PR。
+  const pluginEventCandidates = usePluginEventSources();
+  const pluginEventsAvailable = (pluginEventCandidates?.length ?? 0) > 0;
+  // The official GitLab plugin can be GitLab's connection: it polls with its own account, no Webhook address needed.
+  const gitlabPluginCandidate = pluginEventCandidates?.find((candidate) => isGitlabPluginId(candidate.plugin)) ?? null;
+  const { form, setField, selectModelConfiguration, selectPluginEngine, selectModelGroup, setDestination, setRunMode, selectBoundSession, applyTemplateAgentFields, reset, toInput, validate } = formApi;
   // "运行会话"三态(fresh / persistent / bound)与心跳形态派生值。
   // hasRealBinding = targetSessionId 为真实会话 id(B 已绑 / C 已选 / MCP 手绑),
   // 此时目录 / worktree / fastMode 由绑定会话决定,表单隐藏对应字段。
@@ -193,7 +227,15 @@ export function ScheduleFormDialog({
   // Do not calibrate saved choices against a provisional local or loading snapshot.
   const modelCatalogReady = (!isBound || form.modelAgentDeviceId !== undefined || !!boundSessionReference) && !caps.loading && !providersLoading;
   const hideWorkspaceFields = runMode === 'bound' || isBound;
-  const [activeTab, setActiveTab] = useState<'content' | 'options'>('content');
+  // 长提示词在弹窗里只显示三行,展开后在面板内铺满编辑;收起后回到原来的卡片布局。
+  const [promptExpanded, setPromptExpanded] = useState(false);
+  const promptExpandButtonRef = useRef<HTMLButtonElement>(null);
+  const promptWasExpanded = useRef(false);
+  useEffect(() => {
+    // 展开时被遮住的内容是 inert 的,撤掉之后才聚得进去:收起后把焦点还给入口按钮。
+    if (promptWasExpanded.current && !promptExpanded) promptExpandButtonRef.current?.focus();
+    promptWasExpanded.current = promptExpanded;
+  }, [promptExpanded]);
   const formScrollRef = useRef<HTMLDivElement>(null);
   const formContentRef = useRef<HTMLDivElement>(null);
 
@@ -212,16 +254,23 @@ export function ScheduleFormDialog({
     const content = formContentRef.current;
     if (!viewport || !content?.style.minHeight) return;
     // Returning upwards releases the space without moving the visible content.
-    // The keyed viewport also discards it on tab changes or closing the dialog.
     content.style.minHeight = viewport.scrollTop > 0
       ? `${Math.min(parseFloat(content.style.minHeight), viewport.scrollTop + viewport.clientHeight)}px`
       : '';
   };
-  const tabsId = useId();
   useEffect(() => {
-    if (open) setActiveTab('content');
+    // 关闭时也清掉展开态:否则下次打开会直接停在展开层,焦点也会落到入口按钮上。
+    // promptWasExpanded 一起清:此路径不经用户收起,焦点不应再被还给入口按钮。
+    promptWasExpanded.current = false;
+    setPromptExpanded(false);
   }, [open, initial?.id]);
   const [submitting, setSubmitting] = useState(false);
+  const [stoppingPromptVoice, setStoppingPromptVoice] = useState(false);
+  const [stoppingHookVoice, setStoppingHookVoice] = useState(false);
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const hookGenInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const submittingRef = useRef(false);
+  const hookGenSubmittingRef = useRef(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   useEffect(() => { setSubmitError(null); }, [open, initial]);
   const showSubmitError = (error: unknown) => {
@@ -290,6 +339,119 @@ export function ScheduleFormDialog({
   const isTemplateMode = mode === 'gallery' || !!selectedTemplate;
   // script/agent 双执行模式的唯一判别常量——所有条件渲染共用,避免散拷漂移
   const isScriptMode = (form.executionMode ?? 'agent') === 'script';
+  const promptVoice = useFieldVoiceInput({
+    draftKey: `schedule-prompt:${open}:${initial?.id ?? 'new'}:${isScriptMode}`,
+    inputElementKey: promptExpanded,
+    inputRef: promptInputRef,
+    value: form.prompt,
+    onChange: (next) => {
+      if (selectedTemplate) setPromptDirty(true);
+      setField('prompt', next);
+    },
+    active: open && !isScriptMode && (mode !== 'gallery' || isEdit || isProjectAutomationMode),
+    disabled: submitting,
+  });
+  const hookVoice = useFieldVoiceInput({
+    draftKey: `schedule-hook-gen:${open}:${hookGenOpen}`,
+    inputRef: hookGenInputRef,
+    value: hookGenDesc,
+    onChange: (next) => setHookGenDesc(next),
+    active: open && hookGenOpen,
+    disabled: hookGenerating,
+  });
+  // 插件引擎(docs/plans/acp-plugin-bridge.md)支持本机与同账号其他电脑开放的插件引擎，可用于每次新建任务
+  // 与绑定普通桌面任务临时切换；持续会话(scheduler 任务)、脚本、伙伴例行任务与项目自动化不提供。
+  const pluginEnginesAllowed = (runMode === 'fresh' || runMode === 'bound') && !isScriptMode && !isProjectAutomationMode && initial?.source !== 'bot';
+  const pluginEngineList = usePluginEngines(pluginEnginesAllowed || !!form.pluginEngine);
+  const pluginEngineChoice = pluginEnginesAllowed ? form.pluginEngine ?? null : null;
+  const pluginRouteDevices = useModelRouteDevices({
+    controlledDeviceId: null,
+    leadAgentDeviceId: pluginEngineChoice?.deviceId ?? selectedAgentDeviceId,
+  });
+  const remotePluginSources = useMemo<readonly PluginEngineSource[]>(
+    () => (!pluginEnginesAllowed || form.primaryHostKey
+      ? []
+      : (pluginRouteDevices.devices ?? []).map(({ deviceId, name }) => ({ deviceId, name }))),
+    [pluginEnginesAllowed, form.primaryHostKey, pluginRouteDevices.devices],
+  );
+  const remotePluginDeviceIds = useMemo(
+    () => remotePluginSources.map((device) => device.deviceId),
+    [remotePluginSources],
+  );
+  const { catalogues: remotePluginCatalogues, read: readRemotePluginCatalogues } = useDevicesPluginEngines(remotePluginDeviceIds);
+  const activeRemotePluginDeviceId = pluginEngineChoice?.deviceId ?? null;
+  const activeRemotePluginDeviceListed = !!activeRemotePluginDeviceId
+    && remotePluginDeviceIds.includes(activeRemotePluginDeviceId);
+  useEffect(() => {
+    if (open && activeRemotePluginDeviceListed && activeRemotePluginDeviceId) {
+      readRemotePluginCatalogues(activeRemotePluginDeviceId);
+    }
+  }, [open, activeRemotePluginDeviceListed, activeRemotePluginDeviceId, readRemotePluginCatalogues]);
+  const pluginEngineChoices = useMemo<readonly PluginEngineChoice[]>(() => {
+    const remote = remotePluginEngineChoices(remotePluginSources, remotePluginCatalogues, deviceDisplayName, pluginEngineList);
+    return remote.length ? [...pluginEngineList, ...remote] : pluginEngineList;
+  }, [pluginEngineList, remotePluginSources, remotePluginCatalogues]);
+  const hasLocalPluginEnginesRef = useRef(false);
+  hasLocalPluginEnginesRef.current = pluginEngineList.length > 0;
+  const readPluginEngineCatalogues = useCallback(() => {
+    if (hasLocalPluginEnginesRef.current) requestPluginEnginesRefresh();
+    readRemotePluginCatalogues();
+  }, [readRemotePluginCatalogues]);
+  // 远程电脑列表尚未读回(null)时不误报不可用，保存时由主进程实时准入裁决。
+  const remotePluginCatalogueUnknown = !!activeRemotePluginDeviceId
+    && (remotePluginCatalogues.get(activeRemotePluginDeviceId) ?? null) === null;
+  const pluginEngineUnavailable = !!pluginEngineChoice
+    && !remotePluginCatalogueUnknown
+    && !resolveActivePluginEngine(pluginEngineChoices, pluginEngineChoice);
+  const schedulePluginEngines = useMemo(
+    () => pluginEnginesAllowed && (pluginEngineChoices.length > 0 || remotePluginDeviceIds.length > 0 || !!pluginEngineChoice)
+      ? {
+          engines: pluginEngineChoices,
+          active: pluginEngineChoice,
+          readCatalogue: readPluginEngineCatalogues,
+          onSelect: (selection: PluginEngineSelection) => {
+            const sameChoice = selection.providerId === pluginEngineChoice?.providerId
+              && (selection.deviceId ?? null) === (pluginEngineChoice?.deviceId ?? null);
+            const effort = selection.effort ?? (sameChoice ? pluginEngineChoice?.effort : undefined);
+            selectPluginEngine({
+              providerId: selection.providerId,
+              modelId: selection.modelId,
+              ...(selection.deviceId ? { deviceId: selection.deviceId } : {}),
+              ...(effort ? { effort } : {}),
+            });
+          },
+        }
+      : undefined,
+    [
+      pluginEnginesAllowed,
+      pluginEngineChoices,
+      remotePluginDeviceIds.length,
+      pluginEngineChoice,
+      readPluginEngineCatalogues,
+      selectPluginEngine,
+    ],
+  );
+  // 模型组(model-groups.md §6.3)：新建任务时按模式选来源。脚本不跑 Agent，不提供；记住的模式后来被删掉时按没选处理。
+  const modelGroupsAllowed = !isScriptMode;
+  const navigateToModelGroups = useNavigate();
+  const { config: modelGroupsConfig } = useModelGroups(modelGroupsAllowed);
+  const scheduleModelGroupId = form.modelGroup;
+  const scheduleModelGroups = useMemo(
+    () => modelGroupsAllowed
+      ? {
+          config: modelGroupsConfig,
+          active: scheduleModelGroupId && modelGroupsConfig.routes.some((route) => route.id === scheduleModelGroupId)
+            ? { type: 'route' as const, id: scheduleModelGroupId }
+            : null,
+          onSelect: (selection: ModelGroupSelection) => selectModelGroup(selection.id),
+          // 合并整个供应商的路由像一个供应商列出来：选其中的模型后补记这条路由，每次运行由它决定用哪个成员。
+          // 表单是函数式更新，与紧挨着的选模型在同一次点击里合并。
+          onAttach: (selection: ModelGroupSelection) => selectModelGroup(selection.id),
+          onManage: () => navigateToModelGroups('/settings?tab=model-groups'),
+        }
+      : undefined,
+    [modelGroupsAllowed, modelGroupsConfig, scheduleModelGroupId, selectModelGroup, navigateToModelGroups],
+  );
   // 项目自动化的配置文件不保存插件前置检查(插件装在各自的电脑上),只提供脚本。
   const usePluginSource = form.preRunSource === 'plugin' && !isProjectAutomationMode;
   const setPreRunPluginId = useCallback((pluginId: string) => setField('preRunPluginId', pluginId), [setField]);
@@ -297,9 +459,52 @@ export function ScheduleFormDialog({
     ? t('scheduler.editor.promptDialog.save')
     : t('scheduler.editor.promptDialog.create');
   // UI 三选一；manual 仅表示不启用定时，已有组合配置在未切换触发方式时原样保留。
-  const triggerMode = form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
-  const webhookSettingsVisible = !isProjectAutomationMode && webhookReceiverReady && form.webhookEnabled;
+  // A single PR is one of the event sources (2026-11-24); its storage stays the separate prTrigger field.
+  const triggerMode = form.prEnabled || form.webhookEnabled ? 'webhook' : form.manual ? 'manually' : 'automatic';
+  const eventMode = triggerMode === 'webhook';
+  // 指定对象：GitHub PR / Issue 与 GitLab MR / Issue。PR、MR 存为 prTrigger（按链接区分平台）；GitHub Issue
+  // 存为带编号的 GitHub App 来源，GitLab Issue 存为带项目与编号的 GitLab 地址；*-item 表示尚未识别。
+  const prIsGitlab = !!form.prEnabled && !!form.prUrl && !isGithubPrTriggerUrl(form.prUrl);
+  const githubItemScope = (!!form.prEnabled && !prIsGitlab) || form.webhookPreset === 'github-item'
+    || (form.webhookPreset === 'github-app' && form.githubItemNumber !== undefined);
+  const gitlabItemScope = prIsGitlab || form.webhookPreset === 'gitlab-item' || form.webhookPreset === 'gitlab-mr-poll'
+    || ((form.webhookPreset === 'gitlab' || form.webhookPreset === 'gitlab-token' || form.webhookPreset === 'gitlab-plugin')
+      && form.gitlabItemNumber !== undefined);
+  const gitlabMrItem = prIsGitlab || form.gitlabItemKind === 'mr';
+  const chooseWebhookPreset = (value: string) => {
+    setField('webhookPreset', value);
+    if (value === 'gitlab-plugin' && gitlabPluginCandidate && form.gitlabPluginId !== gitlabPluginCandidate.plugin) {
+      setField('gitlabPluginId', gitlabPluginCandidate.plugin);
+    }
+  };
+  const itemScope = githubItemScope || gitlabItemScope;
+  const githubItemDefaultRepository = form.githubItemRepository
+    || (() => { const repositories = parseGithubRepositories(form.webhookRepositories); return repositories.length === 1 ? repositories[0] : undefined; })();
+  const leaveItemScope = () => {
+    if (form.prEnabled) setField('prEnabled', false);
+    setField('webhookEnabled', true);
+    setField('githubItemNumber', undefined);
+    setField('gitlabItemNumber', undefined);
+    setField('gitlabItemKind', undefined);
+  };
+  const enterGithubItemPending = () => {
+    leaveItemScope();
+    setField('webhookPreset', 'github-item');
+  };
+  const enterGitlabItemPending = () => {
+    leaveItemScope();
+    setField('webhookPreset', 'gitlab-item');
+  };
+  // Address-based senders still need an account; a saved one stays hidden (and preserved) while signed out.
+  const webhookSettingsVisible = !isProjectAutomationMode && form.webhookEnabled
+    && (webhookReceiverReady || form.webhookPreset === 'plugin' || form.webhookPreset === 'gitlab-plugin' || form.webhookPreset === 'gitlab-mr-poll');
 
+  const maybeTeammateSchedule = isProjectAutomationMode && !!initial?.projectConfigId
+    && !!teammateFolderOfProjectPath(projectWorkingDir);
+  const [ownTeammateProject, setOwnTeammateProject] = useState<string | null>(null);
+  const isTeammateSchedule = maybeTeammateSchedule && ownTeammateProject === projectWorkingDir;
+  const [teammateModelReady, setTeammateModelReady] = useState(false);
+  const [teammateModelReadError, setTeammateModelReadError] = useState(false);
   const initialId = initial?.id;
   useEffect(() => {
     if (!open) return;
@@ -333,10 +538,53 @@ export function ScheduleFormDialog({
     setField,
   ]);
 
+  const teammateModelReadFailedText = t('scheduler.editor.reviewModelReadFailed');
+  // Read the durable opt-in, never infer it from an empty model or a matching snapshot.
+  useEffect(() => {
+    if (!open || !maybeTeammateSchedule || !projectWorkingDir) return;
+    let current = true;
+    setOwnTeammateProject(null);
+    setTeammateModelReady(false);
+    setTeammateModelReadError(false);
+    void window.electronAPI.localDb.bots.ownsProject(projectWorkingDir).then(async ownsProject => {
+      if (!current) return;
+      if (!ownsProject) { setTeammateModelReady(true); return; }
+      const result = await window.electronAPI.fileBrowser.readFile({
+        workdir: projectWorkingDir, relPath: PROJECT_AUTOMATION_REL_SEGMENTS.join('/'),
+      });
+      if (!result.ok || result.data.truncated) throw new Error('unreadable config');
+      const file = JSON.parse(result.data.content);
+      const config = file.version === 1 && Array.isArray(file.schedules)
+        ? file.schedules.find((item: { id?: string }) => item.id === initial?.projectConfigId) : null;
+      if (!config) throw new Error('missing automation');
+      if (!current) return;
+      setOwnTeammateProject(projectWorkingDir);
+      setField('followTeammateModel', config.followTeammateModel === true && !config.model?.trim());
+      setTeammateModelReady(true);
+    }).catch(() => {
+      if (current) setTeammateModelReadError(true);
+    });
+    return () => { current = false; };
+  }, [open, maybeTeammateSchedule, projectWorkingDir, initial, initialId, initial?.projectConfigId, setField]);
+
   /** 前置检查「AI 生成」:描述 → utility model 生成脚本落盘 → 命令回填输入框。 */
   const runHookGenerate = useCallback(async () => {
-    const description = hookGenDesc.trim();
-    if (!description || hookGenerating) return;
+    if (hookGenerating || hookGenSubmittingRef.current) return;
+    let nextDesc = hookGenDesc;
+    if (hookVoice.isBusy) {
+      hookGenSubmittingRef.current = true;
+      setStoppingHookVoice(true);
+      try {
+        const stoppedDesc = await hookVoice.stop();
+        if (stoppedDesc === null) return;
+        nextDesc = stoppedDesc;
+      } finally {
+        hookGenSubmittingRef.current = false;
+        setStoppingHookVoice(false);
+      }
+    }
+    const description = nextDesc.trim();
+    if (!description) return;
     const hasSessionTarget = hasRealBinding(form);
     // 脚本在本机生成。Agent 在另一台电脑时它的模型与来源只在那台可用,改用本机的
     // 辅助模型兜底链,不把那台的来源 id 当成本机来源。
@@ -398,6 +646,8 @@ export function ScheduleFormDialog({
   }, [
     hookGenDesc,
     hookGenerating,
+    hookVoice.isBusy,
+    hookVoice.stop,
     providers,
     form.name,
     form.providerId,
@@ -608,7 +858,9 @@ export function ScheduleFormDialog({
     caps.capabilities, claudeDefaultCaps.capabilities, codexDefaultCaps.capabilities, piDefaultCaps.capabilities,
     form.agentKind, form.model, form.providerId, form.effort, setField]);
 
-  const modelUnavailable = !isScriptMode && modelCatalogReady && (
+  // 选着插件引擎时内置模型字段只是切回内置时的初值，不参与可用性判断(插件引擎另判，见下)。
+  // 选着还在的模式时同理：新建任务由模式选来源，存下的具体模型只在模式被删后才用。
+  const modelUnavailable = !isScriptMode && !pluginEngineChoice && !scheduleModelGroups?.active && modelCatalogReady && (
     (!!form.model.trim() && (
       (agentsLoaded && !availableVendors.has(form.agentKind === 'claude-code' ? 'cc' : form.agentKind))
       || (!legacyRemoteCatalog && !effectiveSourceIdForModel(providers, form.providerId || null, form.model, form.agentKind))
@@ -655,17 +907,37 @@ export function ScheduleFormDialog({
   const awaitingNewModelCatalog = !isEdit && !editProjectSchedule && !isScriptMode && !isBound
     && (!modelCatalogReady || defaultCapabilitiesLoading || (!agentsLoaded && agentsLoading));
 
+  const submitBusy = submitting || stoppingPromptVoice;
+
   const handleSubmit = async () => {
-    if (awaitingNewModelCatalog) return;
+    if (submitBusy || submittingRef.current || awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)) return;
+    submittingRef.current = true;
+    let promptOverride: Partial<ScheduleFormState> | undefined;
+    let voiceChangedPrompt = false;
+    if (promptVoice.isBusy) {
+      setStoppingPromptVoice(true);
+      try {
+        const finalPrompt = await promptVoice.stop();
+        if (finalPrompt === null) {
+          submittingRef.current = false;
+          return;
+        }
+        promptOverride = { prompt: finalPrompt };
+        voiceChangedPrompt = finalPrompt !== form.prompt;
+      } finally {
+        setStoppingPromptVoice(false);
+      }
+    }
+    const effectiveForm = promptOverride ? { ...form, ...promptOverride } : form;
     setSubmitError(null);
-    const err = validate();
+    const err = validate(promptOverride);
     if (err) {
-      setActiveTab(err.key.includes('preRun') || err.key.endsWith('selectThread') ? 'options' : 'content');
+      submittingRef.current = false;
       toast.warning(t(err.key, err.values));
       return;
     }
-    if (!canSubmitSessionBinding(form.executionMode ?? 'agent', runMode, boundSessionReference)) {
-      setActiveTab('options');
+    if (!canSubmitSessionBinding(effectiveForm.executionMode ?? 'agent', runMode, boundSessionReference)) {
+      submittingRef.current = false;
       toast.warning(t(
         boundSessionReference?.state === 'available' && boundSessionReference.status === 'archived'
           ? 'scheduler.editor.thread.archivedBinding'
@@ -676,13 +948,19 @@ export function ScheduleFormDialog({
       return;
     }
     if (modelUnavailable) {
-      setActiveTab('content');
-      toast.warning(t('scheduler.editor.validation.modelUnavailable', { model: form.model }));
+      submittingRef.current = false;
+      toast.warning(t('scheduler.editor.validation.modelUnavailable', { model: effectiveForm.model }));
+      return;
+    }
+    // 选的插件引擎已停用、卸载或报告不可用：不保存，也不悄悄换成内置模型。
+    if (pluginEngineUnavailable) {
+      submittingRef.current = false;
+      toast.warning(t('scheduler.editor.validation.pluginEngineUnavailable'));
       return;
     }
     if (isProjectAutomationMode && projectWorkingDir) {
       const id = initial?.projectConfigId ?? generateProjectScheduleId();
-      const config = formToProjectConfig(form, id);
+      const config = formToProjectConfig(effectiveForm, id);
       setSubmitting(true);
       try {
         await window.electronAPI.maker.projectAutomation.upsertSchedule({
@@ -695,15 +973,16 @@ export function ScheduleFormDialog({
       } catch (e) {
         showSubmitError(e);
       } finally {
+        submittingRef.current = false;
         setSubmitting(false);
       }
       return;
     }
-    let input = toInput();
-    if (selectedTemplate && !promptDirty) {
+    let input = toInput(promptOverride);
+    if (selectedTemplate && !promptDirty && !voiceChangedPrompt) {
       const missingLabel = missingRequiredTemplateParamLabel(selectedTemplate, paramValues);
       if (missingLabel) {
-        setActiveTab('content');
+        submittingRef.current = false;
         toast.warning(t('scheduler.editor.validation.templateParamRequired', { label: missingLabel }));
         return;
       }
@@ -713,7 +992,7 @@ export function ScheduleFormDialog({
           prompt: applyTemplateParams(selectedTemplate.prompt ?? '', paramValues, selectedTemplate.parameters),
         };
       } catch {
-        setActiveTab('content');
+        submittingRef.current = false;
         toast.warning(t('scheduler.editor.validation.templateApplyFailed'));
         return;
       }
@@ -721,36 +1000,72 @@ export function ScheduleFormDialog({
     setSubmitting(true);
     try {
       await onSubmit(input, isEdit);
-      if (!isEdit) rememberScheduleFormPrefs(form);
+      if (!isEdit) rememberScheduleFormPrefs(effectiveForm);
       onOpenChange(false);
     } catch (e) {
       showSubmitError(e);
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
 
+  // 紧凑卡片与展开层共用同一个输入框定义:值、占位符、字号与主题都只有一处。
+  const promptField = (className: string, autoFocus?: boolean) => (
+    <textarea
+      ref={promptInputRef}
+      value={promptVoice.displayText}
+      readOnly={promptVoice.isBusy}
+      onChange={(e) => {
+        if (selectedTemplate) setPromptDirty(true);
+        setField('prompt', e.target.value);
+      }}
+      placeholder={t('scheduler.editor.promptDialog.promptPlaceholder')}
+      aria-label={t('scheduler.editor.fields.prompt')}
+      autoFocus={autoFocus}
+      className={cn(
+        'h-full w-full resize-none bg-transparent text-sm leading-[1.43] outline-none',
+        'text-[var(--settings-input-text)] placeholder-[var(--settings-input-placeholder)]',
+        'select-text',
+        className,
+      )}
+    />
+  );
+
   return (
-    <Dialog.Root open={open} onOpenChange={(v) => !submitting && onOpenChange(v)}>
+    <Dialog.Root open={open} onOpenChange={(v) => !submitBusy && onOpenChange(v)}>
       <Dialog.Portal>
         <Dialog.Overlay
-          className={cn('modal-scrim fixed inset-0 z-[10000]')}
+          className={cn('modal-scrim fixed inset-0 z-modal')}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
         <Dialog.Content
           aria-describedby={undefined}
           onPointerDownOutside={(e) => e.preventDefault()}
           onInteractOutside={(e) => e.preventDefault()}
-          onEscapeKeyDown={(e) => submitting && e.preventDefault()}
+          onEscapeKeyDown={(e) => {
+            if (promptVoice.isBusy || hookVoice.isBusy) {
+              e.preventDefault();
+            } else if (promptExpanded) {
+              e.preventDefault();
+              setPromptExpanded(false);
+            } else if (submitBusy) {
+              e.preventDefault();
+            }
+          }}
           className={cn(
-            'modal-panel fixed left-1/2 top-1/2 z-[10000] -translate-x-1/2 -translate-y-1/2',
+            'modal-panel fixed left-1/2 top-1/2 z-modal -translate-x-1/2 -translate-y-1/2',
             'flex h-[640px] max-h-[88vh] w-[760px] max-w-[calc(100vw-32px)] flex-col overflow-hidden',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
-          <header className="flex min-h-[72px] shrink-0 items-center gap-4 pt-[18px] pr-4 pb-[14px] pl-6">
+          {/* 展开编辑时这些内容被盖在下面:inert 让 Tab 与读屏都停在展开层里。 */}
+          <header
+            inert={promptExpanded || undefined}
+            className="flex min-h-[72px] shrink-0 items-center gap-4 pt-4 pr-4 pb-3.5 pl-6"
+          >
             <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <Dialog.Title className="text-24 font-normal leading-[1.33] text-[var(--msg-assistant-text)]">
+              <Dialog.Title className="text-24 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
                 {isProjectAutomationMode
                   ? isEdit
                     ? t('scheduler.editor.promptDialog.titleProjectEdit')
@@ -783,7 +1098,6 @@ export function ScheduleFormDialog({
                     setPromptDirty(false);
                     reset(null);
                   }
-                  setActiveTab('content');
                   setMode(next);
                 }}
               />
@@ -792,7 +1106,7 @@ export function ScheduleFormDialog({
               type="button"
               onClick={() => onOpenChange(false)}
               aria-label={t('scheduler.button.close')}
-              disabled={submitting}
+              disabled={submitBusy}
               className={cn(
                 'flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
                 'text-[var(--cmd-palette-item-meta)] transition-colors dark:text-[var(--settings-section-desc)] hover:bg-[var(--confirm-btn-secondary-hover)] dark:hover:bg-[var(--confirm-btn-secondary-hover)]',
@@ -802,30 +1116,18 @@ export function ScheduleFormDialog({
               <X size={16} />
             </button>
           </header>
-          {(mode !== 'gallery' || isEdit || isProjectAutomationMode) && !isScriptMode && (
-            <div className="shrink-0 px-6 pb-3">
-              <SegmentedControl
-                role="tablist"
-                aria-label={t('scheduler.editor.layout.sections')}
-                value={activeTab}
-                onValueChange={setActiveTab}
-                height={38}
-                options={(['content', 'options'] as const).map((value) => ({
-                  value,
-                  label: t('scheduler.editor.layout.' + value + 'Tab'),
-                  id: tabsId + '-' + value,
-                  'aria-controls': tabsId + '-' + value + '-panel',
-                }))}
-              />
-            </div>
-          )}
+
 
           {!isEdit && !isProjectAutomationMode && mode === 'gallery' ? (
-            <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-[22px]">
+            <div
+              inert={promptExpanded || undefined}
+              className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] px-6 pt-[18px] pb-5"
+            >
               <TemplateGallery onSelect={applyTemplateToForm} selectedId={selectedTemplate?.id} />
             </div>
           ) : (
-            <div key={activeTab} ref={formScrollRef} onScroll={releaseUnusedScrollSpace}
+            <div ref={formScrollRef} onScroll={releaseUnusedScrollSpace}
+              inert={promptExpanded || undefined}
               className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
               <div ref={formContentRef} className="flex flex-col gap-3 px-6 py-3">
                 {modelUnavailable && (
@@ -835,19 +1137,14 @@ export function ScheduleFormDialog({
                     })}
                   />
                 )}
+                {maybeTeammateSchedule && teammateModelReadError && <ErrorNotice message={teammateModelReadFailedText} />}
                 {submitError && (
                   <ErrorNotice
                     message={t(`chat.remoteError.${parseAgentErrorCode(submitError)?.code}`)}
                     details={submitError}
                   />
                 )}
-                {(activeTab === 'content' || isScriptMode) && (
-                  <div
-                    role={isScriptMode ? undefined : 'tabpanel'}
-                    id={tabsId + '-content-panel'}
-                    aria-labelledby={isScriptMode ? undefined : tabsId + '-content'}
-                    className="flex flex-col gap-4"
-                  >
+                  <div data-schedule-form-fields className="flex flex-col gap-4">
                     <div className="flex flex-col gap-2">
                       <label className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
                         {t('scheduler.editor.fields.title')}
@@ -882,7 +1179,7 @@ export function ScheduleFormDialog({
                       {/* Project configuration currently supports Agent execution only. */}
                       {!isProjectAutomationMode && (
                         <div className="flex items-center gap-2.5">
-                          <span className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
+                          <span className={FIELD_LABEL}>
                             {t('scheduler.editor.executionMode.label')}
                           </span>
                           <SegmentedControl
@@ -900,26 +1197,28 @@ export function ScheduleFormDialog({
 
                       {!isScriptMode && (
                         <div className="flex shrink-0 flex-col gap-2">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center justify-between gap-2">
                             <span className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
                               {t('scheduler.editor.fields.prompt')}
                             </span>
+                            <Button
+                              ref={promptExpandButtonRef}
+                              variant="secondary"
+                              tone="quiet"
+                              size="xxs"
+                              compact
+                              type="button"
+                              onClick={() => setPromptExpanded(true)}
+                            >
+                              <Maximize2 size={12} aria-hidden />
+                              {t('scheduler.editor.promptDialog.expandPrompt')}
+                            </Button>
                           </div>
                           <div className="flex h-[144px] flex-col overflow-hidden rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]">
                             <div className="min-h-0 flex-1 p-4">
-                              <textarea
-                                value={form.prompt}
-                                onChange={(e) => {
-                                  if (selectedTemplate) setPromptDirty(true);
-                                  setField('prompt', e.target.value);
-                                }}
-                                placeholder={t('scheduler.editor.promptDialog.promptPlaceholder')}
-                                className={cn(
-                                  'h-full w-full resize-none overflow-y-auto bg-transparent text-sm leading-[1.43] outline-none',
-                                  'text-[var(--settings-input-text)] placeholder-[var(--settings-input-placeholder)]',
-                                  'select-text',
-                                )}
-                              />
+                              {/* 展开时只保留展开层里那一个输入框:两个同名 textarea 会让 Tab
+                                  闯进被遮住的那个,读屏也会重复播报。 */}
+                              {!promptExpanded && promptField('overflow-y-auto')}
                             </div>
                             <div className="flex min-h-[44px] shrink-0 items-center gap-0 border-t border-[var(--settings-input-border)] px-2.5 py-2">
                               <div className="flex min-w-0 flex-1 items-center gap-0">
@@ -952,6 +1251,16 @@ export function ScheduleFormDialog({
                                 )}
                                 <div className="min-w-0 flex-1" />
                                 <ModelEffortChip
+                                  disabled={maybeTeammateSchedule && !teammateModelReady}
+                                  followModel={isTeammateSchedule ? {
+                                    active: form.followTeammateModel === true && !form.model.trim(),
+                                    label: t('scheduler.chips.model.followTeammate'),
+                                    onFollow: () => {
+                                      selectModelConfiguration(null);
+                                      setField('followTeammateModel', true);
+                                    },
+                                  } : undefined}
+                                  hostOnly={!!form.primaryHostKey}
                                   onSelect={({
                                     engine,
                                     modelId,
@@ -974,19 +1283,23 @@ export function ScheduleFormDialog({
                                       null,
                                       boundSessionReference?.agentKind === 'cc'
                                         ? 'claude-code'
-                                        : boundSessionReference?.agentKind,
+                                        : isPluginEngineKind(boundSessionReference?.agentKind)
+                                          ? undefined
+                                          : boundSessionReference?.agentKind,
                                     )
                                   }
                                   agentKind={form.agentKind}
                                   agentDeviceId={selectedAgentDeviceId ?? undefined}
                                   modelValue={form.model}
-                                  onChangeModel={(v) => setField('model', v)}
+                                  onChangeModel={(v) => { setField('model', v); setField('followTeammateModel', false); setField('modelGroup', undefined); }}
                                   effortValue={form.effort}
                                   onChangeEffort={(v) => setField('effort', v)}
                                   followSession={isBound}
                                   providerId={form.providerId}
-                                  onChangeProviderId={(v) => setField('providerId', v)}
+                                  onChangeProviderId={(v) => { setField('providerId', v); setField('modelGroup', undefined); }}
                                   onNavigateToProviders={() => navigate('/settings?tab=providers')}
+                                  {...(schedulePluginEngines ? { pluginEngines: schedulePluginEngines } : {})}
+                                  {...(scheduleModelGroups ? { modelGroups: scheduleModelGroups } : {})}
                                   fastMode={form.fastMode}
                                   onChangeFast={(v) => {
                                     setField('fastMode', v);
@@ -995,10 +1308,20 @@ export function ScheduleFormDialog({
                                       setField('modelAgentKind', form.agentKind);
                                   }}
                                 />
+                                <div className="w-1.5 shrink-0" aria-hidden />
+                                <VoiceInputButton
+                                  {...promptVoice.buttonProps}
+                                  testId="schedule-prompt-voice"
+                                  tipSide="top"
+                                />
                               </div>
                             </div>
                           </div>
-                          {isBound && form.model.trim() !== '' && (
+                          <FieldVoiceInputNotice
+                            error={promptVoice.lastError}
+                            speakerFiltered={promptVoice.speakerFiltered}
+                          />
+                          {isBound && (form.model.trim() !== '' || !!pluginEngineChoice) && (
                             <p className="px-1 text-11 leading-[1.4] text-[var(--cmd-palette-item-meta)]">
                               {t('scheduler.editor.runSession.switchModelHint')}
                             </p>
@@ -1071,177 +1394,12 @@ export function ScheduleFormDialog({
                           />
                         </div>
                       )}
-                    </section>
-                    <section
-                      aria-label={t('scheduler.editor.trigger.label')}
-                      className="flex shrink-0 flex-col gap-3 border-t border-[var(--border-default)] pt-4"
-                    >
-                      <div className="flex flex-wrap items-center gap-2.5">
-                        <span className="text-xs leading-[1.33] text-[var(--cmd-palette-item-meta)] dark:text-[var(--settings-section-desc)]">
-                          {t('scheduler.editor.trigger.label')}
-                        </span>
-                        <SegmentedControl
-                          aria-label={t('scheduler.editor.trigger.label')}
-                          value={triggerMode}
-                          height={34}
-                          onValueChange={(mode) => {
-                            if (mode === triggerMode) return;
-                            preserveTriggerScrollPosition();
-                            setField('webhookEnabled', mode === 'webhook');
-                            setField('manual', mode !== 'automatic');
-                            setField('recurring', mode !== 'manually');
-                          }}
-                          options={[
-                            { value: 'automatic', label: t('scheduler.editor.trigger.timed') },
-                            { value: 'manually', label: t('scheduler.editor.fields.manually') },
-                            ...(!isProjectAutomationMode && (webhookReceiverReady || form.webhookEnabled)
-                              ? [{ value: 'webhook', label: t('scheduler.cell.tagWebhook'), disabled: !webhookReceiverReady }]
-                              : []),
-                          ]}
-                        />
-                        {/* 自动模式:cron chip + 一次(recurring 反向)。手动模式:两者全部隐藏——cron 占位值仍在 form 里,提交合法。 */}
-                        {triggerMode === 'automatic' && (
-                          <>
-                            <ScheduleChip
-                              cronExpr={form.cronExpr}
-                              intervalMs={form.intervalMs}
-                              onChangeSchedule={(value) => {
-                                setField('cronExpr', value.cronExpr);
-                                setField('intervalMs', value.intervalMs);
-                              }}
-                            />
-                            {!form.webhookEnabled && (
-                              <button
-                                type="button"
-                                role="checkbox"
-                                aria-checked={!form.recurring}
-                                onClick={() => setField('recurring', !form.recurring)}
-                                className={cn(
-                                  'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
-                                  'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                                  'transition-colors hover:bg-[var(--surface-hover)]',
-                                  'focus:outline-none',
-                                )}
-                            >
-                              <span
-                                className={cn(
-                                  'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
-                                  !form.recurring
-                                    ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                                    : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
-                                )}
-                                aria-hidden
-                              >
-                                {!form.recurring && (
-                                  <svg
-                                    viewBox="0 0 16 16"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeWidth={2.5}
-                                    className="h-[10px] w-[10px]"
-                                  >
-                                    <path d="M3 8l3.5 3.5L13 5" />
-                                  </svg>
-                                )}
-                              </span>
-                              {t('scheduler.editor.fields.once')}
-                            </button>
-                            )}
-                          </>
-                        )}
-                        {(!form.manual || form.deadline) && (
-                          <Popover>
-                            <PopoverTrigger asChild>
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                tone="quiet"
-                                size="sm"
-                                className="ml-auto shrink-0 gap-2"
-                                aria-label={t('scheduler.deadline.label')}
-                                title={t('scheduler.deadline.label')}
-                              >
-                                <CalendarClock size={14} aria-hidden />
-                                {form.deadline
-                                  ? form.deadline.replace('T', ' ')
-                                  : t('scheduler.deadline.label')}
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent
-                              align="end"
-                              sideOffset={8}
-                              collisionPadding={16}
-                              className="z-[10010] w-[320px] max-w-[calc(100vw-32px)]"
-                            >
-                              <FormField
-                                label={t('scheduler.deadline.label')}
-                                hint={t('scheduler.deadline.hint', {
-                                  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                                })}
-                                labelAction={
-                                  form.deadline ? (
-                                    <Button
-                                      type="button"
-                                      variant="secondary"
-                                      tone="quiet"
-                                      size="sm"
-                                      onClick={() => setField('deadline', '')}
-                                    >
-                                      {t('scheduler.deadline.clear')}
-                                    </Button>
-                                  ) : undefined
-                                }
-                              >
-                                {(control) => (
-                                  <Input
-                                    {...control}
-                                    type="datetime-local"
-                                    value={form.deadline ?? ''}
-                                    onChange={(value) => setField('deadline', value)}
-                                  />
-                                )}
-                              </FormField>
-                            </PopoverContent>
-                          </Popover>
-                        )}
-                      </div>
-                      {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
-                      {webhookSettingsVisible && <WebhookAccountManager allowOpenSchedule={false} />}
-                      {webhookSettingsVisible && (
-                          <WebhookSourceFields
-                            preset={form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
-                            signed={form.webhookSigned !== false}
-                            formatText={form.webhookFormat ?? ''}
-                            events={form.webhookEvents ?? ''}
-                            onEventsChange={(value) => setField('webhookEvents', value)}
-                            onPresetChange={(value) => {
-                              // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。
-                              if (value === 'custom' && !form.webhookFormat?.trim()) {
-                                const current = form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET;
-                                const format = resolveScheduleWebhookFormat(
-                                  scheduleWebhookPreset(current)
-                                    ? { preset: current as ScheduleWebhookPresetId, signed: form.webhookSigned !== false }
-                                    : undefined,
-                                );
-                                setField('webhookFormat', JSON.stringify(format, null, 2));
-                              }
-                              setField('webhookPreset', value);
-                            }}
-                            onSignedChange={(value) => setField('webhookSigned', value)}
-                            onFormatChange={(value) => setField('webhookFormat', value)}
-                          />
-                      )}
-                    </section>
-                  </div>
-                )}
-                {!isScriptMode && activeTab === 'options' && (
-                  <div
-                    role="tabpanel"
-                    id={tabsId + '-options-panel'}
-                    aria-labelledby={tabsId + '-options'}
-                    className="flex flex-col gap-6 divide-y divide-[var(--border-default)]"
-                  >
-                    <ScheduleFormSection inline title={t('scheduler.editor.runSession.label')}>
+                      {!isScriptMode && (
+                        <div className="flex flex-wrap items-start gap-2.5">
+                          <span className={cn(FIELD_LABEL, 'flex min-h-[34px] items-center')}>
+                            {t('scheduler.editor.runSession.label')}
+                          </span>
+                          <div className="min-w-0 flex-1">
                       {!isScriptMode && (
                         <div className="flex flex-col gap-2.5">
                           <div className="flex flex-wrap items-center gap-2.5">
@@ -1293,188 +1451,369 @@ export function ScheduleFormDialog({
                           )}
                         </div>
                       )}
-                    </ScheduleFormSection>
-                    <ScheduleFormSection title={t('scheduler.editor.layout.notifications')}>
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                        <div className="inline-flex h-[34px] items-center gap-1.5">
-                          <button
-                            type="button"
-                            role="checkbox"
-                            aria-checked={form.silentWhenIdle}
-                            onClick={() => setField('silentWhenIdle', !form.silentWhenIdle)}
-                            className={cn(
-                              'inline-flex h-full items-center gap-2 rounded-full px-1.5',
-                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                              'transition-colors hover:bg-[var(--surface-hover)]',
-                              'focus:outline-none',
-                            )}
-                          >
-                            <span
-                              className={cn(
-                                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
-                                form.silentWhenIdle
-                                  ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                                  : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
-                              )}
-                              aria-hidden
-                            >
-                              {form.silentWhenIdle && (
-                                <Check size={10} strokeWidth={3} aria-hidden />
-                              )}
-                            </span>
-                            {t('scheduler.editor.fields.silentRun')}
-                          </button>
-                          <Tip
-                            text={t('scheduler.editor.fields.silentRunTooltip')}
-                            side="top"
-                            contentClassName="z-[10020]"
-                          >
-                            <span
-                              tabIndex={0}
-                              className={cn(
-                                'inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full',
-                                'text-[var(--cmd-palette-item-meta)] outline-none transition-colors',
-                                'hover:bg-[var(--surface-hover)] hover:text-[var(--msg-assistant-text)]',
-                                'focus:bg-[var(--surface-hover)] focus:text-[var(--msg-assistant-text)]',
-                              )}
-                              aria-label={t('scheduler.editor.fields.silentRunInfoAria')}
-                            >
-                              <Info size={13} />
-                            </span>
-                          </Tip>
+                          </div>
                         </div>
-                        {feishuBotReady ? (
-                          <button
-                            type="button"
-                            role="checkbox"
-                            aria-checked={form.notifyFeishu}
-                            onClick={() => setField('notifyFeishu', !form.notifyFeishu)}
-                            className={cn(
-                              'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
-                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                              'transition-colors hover:bg-[var(--surface-hover)]',
-                              'focus:outline-none',
-                            )}
-                          >
-                            <span
-                              className={cn(
-                                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
-                                form.notifyFeishu
-                                  ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                                  : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
-                              )}
-                              aria-hidden
-                            >
-                              {form.notifyFeishu && (
-                                <svg
-                                  viewBox="0 0 16 16"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth={2.5}
-                                  className="h-[10px] w-[10px]"
-                                >
-                                  <path d="M3 8l3.5 3.5L13 5" />
-                                </svg>
-                              )}
-                            </span>
-                            {t('scheduler.editor.fields.finishSendToFeishu')}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={goConfigFeishuBot}
-                            className={cn(
-                              'inline-flex h-[34px] items-center rounded-full px-2',
-                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                              'transition-colors hover:bg-[var(--surface-hover)]',
-                              'focus:outline-none underline-offset-2 hover:underline',
-                            )}
-                          >
-                            {t('scheduler.editor.fields.configFeishu')}
-                          </button>
-                        )}
-                        {wecomGroupReady ? (
-                          <button
-                            type="button"
-                            role="checkbox"
-                            aria-checked={form.notifyWecomGroup === true}
-                            onClick={() =>
-                              setField('notifyWecomGroup', form.notifyWecomGroup !== true)
+                      )}
+                    </section>
+                    <section
+                      aria-label={t('scheduler.editor.trigger.label')}
+                      className="flex shrink-0 flex-col gap-3 border-t border-[var(--border-default)] pt-4"
+                    >
+                      <div className="flex flex-wrap items-center gap-2.5">
+                        <span className={FIELD_LABEL}>
+                          {t('scheduler.editor.trigger.label')}
+                        </span>
+                        <SegmentedControl
+                          aria-label={t('scheduler.editor.trigger.label')}
+                          value={triggerMode}
+                          height={34}
+                          onValueChange={(mode) => {
+                            if (mode === triggerMode) return;
+                            preserveTriggerScrollPosition();
+                            if (mode === 'webhook' && !webhookReceiverReady && !pluginEventsAvailable) {
+                              // Without an account or event plugins, a specific GitHub PR is the source this computer can use.
+                              enterGithubItemPending();
+                            } else {
+                              if (form.prEnabled) setField('prEnabled', false);
+                              setField('webhookEnabled', mode === 'webhook');
+                              // Without an account, address-based senders cannot receive here.
+                              if (mode === 'webhook' && !webhookReceiverReady && form.webhookPreset !== 'plugin') {
+                                setField('webhookPreset', 'plugin');
+                              }
                             }
-                            className={cn(
-                              'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
-                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                              'transition-colors hover:bg-[var(--surface-hover)] focus:outline-none',
+                            setField('manual', mode !== 'automatic');
+                            setField('recurring', mode !== 'manually');
+                          }}
+                          options={[
+                            { value: 'automatic', label: t('scheduler.editor.trigger.timed') },
+                            { value: 'manually', label: t('scheduler.editor.fields.manually') },
+                            // A single PR needs no account, so the event trigger is always available.
+                            ...(!isProjectAutomationMode || eventMode ? [{ value: 'webhook', label: t('scheduler.editor.trigger.event') }] : []),
+                          ]}
+                        />
+                        {/* 自动模式:cron chip + 一次(recurring 反向)。手动模式:两者全部隐藏——cron 占位值仍在 form 里,提交合法。 */}
+                        {triggerMode === 'automatic' && (
+                          <>
+                            <ScheduleChip
+                              cronExpr={form.cronExpr}
+                              intervalMs={form.intervalMs}
+                              onChangeSchedule={(value) => {
+                                setField('cronExpr', value.cronExpr);
+                                setField('intervalMs', value.intervalMs);
+                              }}
+                            />
+                            {!form.webhookEnabled && (
+                              <label
+                                className={cn(
+                                  'inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-full px-1.5',
+                                  'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                                  'transition-colors hover:bg-[var(--surface-hover)]',
+                                )}
+                              >
+                                <Checkbox
+                                  checked={!form.recurring}
+                                  onChange={() => setField('recurring', !form.recurring)}
+                                />
+                                {t('scheduler.editor.fields.once')}
+                              </label>
                             )}
-                          >
-                            <span
-                              className={cn(
-                                'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
-                                form.notifyWecomGroup
-                                  ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                                  : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
-                              )}
-                              aria-hidden
+                          </>
+                        )}
+                        {(!form.manual || form.deadline) && (
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                tone="quiet"
+                                size="sm"
+                                className="ml-auto shrink-0 gap-2"
+                                aria-label={t('scheduler.deadline.label')}
+                                title={t('scheduler.deadline.label')}
+                              >
+                                <CalendarClock size={14} aria-hidden />
+                                {form.deadline
+                                  ? form.deadline.replace('T', ' ')
+                                  : t('scheduler.deadline.label')}
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent
+                              align="end"
+                              sideOffset={8}
+                              collisionPadding={16}
+                              className="w-[320px] max-w-[calc(100vw-32px)]"
                             >
-                              {form.notifyWecomGroup && (
-                                <Check size={10} strokeWidth={3} aria-hidden />
-                              )}
-                            </span>
-                            {t('scheduler.editor.fields.finishSendToWecomGroup')}
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={goConfigWecomGroup}
-                            className={cn(
-                              'inline-flex h-[34px] items-center rounded-full px-2',
-                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
-                              'transition-colors hover:bg-[var(--surface-hover)]',
-                              'focus:outline-none underline-offset-2 hover:underline',
-                            )}
-                          >
-                            {t('scheduler.editor.fields.configWecomGroup')}
-                          </button>
+                              <FormField
+                                label={t('scheduler.deadline.label')}
+                                hint={t('scheduler.deadline.hint', {
+                                  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                                })}
+                                labelAction={
+                                  form.deadline ? (
+                                    <Button
+                                      type="button"
+                                      variant="secondary"
+                                      tone="quiet"
+                                      size="sm"
+                                      onClick={() => setField('deadline', '')}
+                                    >
+                                      {t('scheduler.deadline.clear')}
+                                    </Button>
+                                  ) : undefined
+                                }
+                              >
+                                {(control) => (
+                                  <Input
+                                    {...control}
+                                    type="datetime-local"
+                                    value={form.deadline ?? ''}
+                                    onChange={(value) => setField('deadline', value)}
+                                  />
+                                )}
+                              </FormField>
+                            </PopoverContent>
+                          </Popover>
                         )}
                       </div>
-                    </ScheduleFormSection>
-                    <ScheduleFormSection title={t('scheduler.editor.preRunHook.label')}>
+                      {/* 项目配置不保存接收地址；未登录时保留已配置的触发方式。 */}
+                      {webhookSettingsVisible && webhookReceiverReady && form.webhookPreset !== 'github-app' && form.webhookPreset !== 'plugin'
+                        && form.webhookPreset !== 'gitlab-plugin' && form.webhookPreset !== 'gitlab-mr-poll'
+                        && (!itemScope || (gitlabItemScope && !gitlabMrItem && form.gitlabItemNumber !== undefined))
+                        && <WebhookAccountManager allowOpenSchedule={false} />}
+                      {eventMode && (webhookSettingsVisible || itemScope) && (
+                          <WebhookSourceFields
+                            preset={githubItemScope ? (form.githubItemNumber !== undefined ? 'github-app' : 'github-item')
+                              : gitlabItemScope ? (prIsGitlab || form.webhookPreset === 'gitlab-mr-poll' ? 'gitlab-mr-poll'
+                                : form.gitlabItemNumber !== undefined ? form.webhookPreset ?? 'gitlab' : 'gitlab-item')
+                              : form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET}
+                            itemScope={itemScope}
+                            gitlabMrItem={gitlabMrItem}
+                            itemNeedsConnection={gitlabItemScope && (prIsGitlab || form.webhookPreset === 'gitlab-mr-poll' || form.gitlabItemNumber !== undefined)}
+                            onConnectionChange={(value) => {
+                              if (gitlabItemScope && gitlabMrItem) {
+                                if (value === 'gitlab-mr-poll') {
+                                  if (form.gitlabItemHost && form.gitlabItemProject && form.gitlabItemNumber !== undefined) {
+                                    setField('prEnabled', true);
+                                    setField('webhookEnabled', false);
+                                    setField('prUrl', gitlabItemUrl({
+                                      host: form.gitlabItemHost,
+                                      project: form.gitlabItemProject,
+                                      number: form.gitlabItemNumber,
+                                      kind: 'mr',
+                                    }));
+                                    setField('webhookPreset', 'gitlab-mr-poll');
+                                    if (form.manual) {
+                                      setField('manual', false);
+                                      setField('recurring', true);
+                                      setField('cronExpr', '*/10 * * * *');
+                                      setField('intervalMs', undefined);
+                                    }
+                                  } else {
+                                    setField('prEnabled', false);
+                                    setField('webhookEnabled', true);
+                                    setField('gitlabItemNumber', undefined);
+                                    setField('webhookPreset', 'gitlab-mr-poll');
+                                  }
+                                } else {
+                                  if (form.prEnabled) setField('prEnabled', false);
+                                  setField('webhookEnabled', true);
+                                  chooseWebhookPreset(value);
+                                }
+                                return;
+                              }
+                              // A GitLab issue keeps its project and number while switching how it is received.
+                              if (gitlabItemScope && form.gitlabItemNumber !== undefined) chooseWebhookPreset(value);
+                              else {
+                                leaveItemScope();
+                                chooseWebhookPreset(value);
+                              }
+                            }}
+                            signed={form.webhookSigned !== false}
+                            formatText={form.webhookFormat ?? ''}
+                            events={form.webhookEvents ?? ''}
+                            repositories={form.webhookRepositories ?? ''}
+                            onRepositoriesChange={(value) => setField('webhookRepositories', value)}
+                            onEventsChange={(value) => setField('webhookEvents', value)}
+                            onPresetChange={(value) => {
+                              // A specific item is resolved by its item fields; every other sender is a webhookTrigger.
+                              if (value === 'github-item') {
+                                if (!githubItemScope) enterGithubItemPending();
+                                return;
+                              }
+                              if (value === 'gitlab-item') {
+                                if (!gitlabItemScope) enterGitlabItemPending();
+                                return;
+                              }
+                              leaveItemScope();
+                              // 切到自定义时，用当前预设的格式作为起点，避免从空白开始写。
+                              if (value === 'custom' && !form.webhookFormat?.trim()) {
+                                const current = form.webhookPreset ?? DEFAULT_SCHEDULE_WEBHOOK_PRESET;
+                                const format = resolveScheduleWebhookFormat(
+                                  scheduleWebhookPreset(current)
+                                    ? { preset: current as ScheduleWebhookPresetId, signed: form.webhookSigned !== false }
+                                    : undefined,
+                                );
+                                setField('webhookFormat', JSON.stringify(format, null, 2));
+                              }
+                              chooseWebhookPreset(value);
+                            }}
+                            onSignedChange={(value) => setField('webhookSigned', value)}
+                            onFormatChange={(value) => setField('webhookFormat', value)}
+                            pluginSources={form.webhookPluginSources ?? []}
+                            pluginCandidates={pluginEventCandidates}
+                            onPluginSourcesChange={(value) => setField('webhookPluginSources', value)}
+                            addressSourcesAvailable={webhookReceiverReady}
+                            gitlabPluginAvailable={!!gitlabPluginCandidate}
+                            gitlabPluginFields={
+                              <GitlabPluginProjectFields
+                                project={form.gitlabPluginProject ?? ''}
+                                events={form.gitlabPluginEvents ?? []}
+                                candidate={gitlabPluginCandidate}
+                                onProjectChange={(value) => setField('gitlabPluginProject', value)}
+                                onEventsChange={(value) => setField('gitlabPluginEvents', value)}
+                              />
+                            }
+                            itemFields={gitlabItemScope ? (
+                              <GitlabItemFields
+                                text={form.gitlabItem ?? ''}
+                                known={form.gitlabItemProject ? { host: form.gitlabItemHost, project: form.gitlabItemProject } : undefined}
+                                prChange={form.prChange ?? 'any'}
+                                issueChange={form.gitlabIssueChange}
+                                addressAvailable={webhookReceiverReady || !!gitlabPluginCandidate}
+                                viaPlugin={!prIsGitlab && form.webhookPreset === 'gitlab-plugin'}
+                                mrCanOmitHost={!!gitlabPluginCandidate && !prIsGitlab && form.webhookPreset !== 'gitlab-mr-poll'}
+                                pluginIssueChange={form.gitlabPluginIssueChange}
+                                onPluginIssueChange={(value) => setField('gitlabPluginIssueChange', value)}
+                                applied={prIsGitlab || form.gitlabItemNumber !== undefined}
+                                onTextChange={(value) => setField('gitlabItem', value)}
+                                onResolved={(item) => {
+                                  setField('gitlabItemProject', item.project);
+                                  setField('gitlabItemHost', item.host);
+                                  setField('gitlabItemKind', item.kind);
+                                  if (item.kind === 'mr') {
+                                    // MRs prefer the GitLab plugin when installed; saved prTriggers and explicit poll selection stay on state reads.
+                                    const usePlugin = !!gitlabPluginCandidate && !prIsGitlab && form.webhookPreset !== 'gitlab-mr-poll';
+                                    if (usePlugin) {
+                                      if (form.prEnabled) setField('prEnabled', false);
+                                      setField('webhookEnabled', true);
+                                      chooseWebhookPreset('gitlab-plugin');
+                                      setField('gitlabItemNumber', item.number);
+                                      return;
+                                    }
+                                    if (item.host) {
+                                      setField('prEnabled', true);
+                                      setField('webhookEnabled', false);
+                                      setField('prUrl', gitlabItemUrl({ ...item, host: item.host }));
+                                      setField('gitlabItemNumber', item.number);
+                                      setField('webhookPreset', 'gitlab-mr-poll');
+                                      // GitLab has no push: state changes are found by the timed check, so turn it on.
+                                      if (form.manual) {
+                                        setField('manual', false);
+                                        setField('recurring', true);
+                                        setField('cronExpr', '*/10 * * * *');
+                                        setField('intervalMs', undefined);
+                                      }
+                                    }
+                                    return;
+                                  }
+                                  if (form.prEnabled) setField('prEnabled', false);
+                                  setField('webhookEnabled', true);
+                                  // Issues prefer the GitLab plugin (no Webhook setup) when it is installed.
+                                  const keep = form.webhookPreset === 'gitlab' || form.webhookPreset === 'gitlab-token'
+                                    || form.webhookPreset === 'gitlab-plugin' ? form.webhookPreset : null;
+                                  chooseWebhookPreset(keep ?? (gitlabPluginCandidate ? 'gitlab-plugin' : 'gitlab'));
+                                  setField('gitlabItemNumber', item.number);
+                                  if (!form.gitlabIssueChange) setField('gitlabIssueChange', 'any');
+                                  if (!form.gitlabPluginIssueChange) setField('gitlabPluginIssueChange', 'any');
+                                }}
+                                onUnresolved={() => {
+                                  if (gitlabMrItem && form.webhookPreset === 'gitlab-mr-poll') {
+                                    if (form.prEnabled) setField('prEnabled', false);
+                                    setField('webhookEnabled', true);
+                                    setField('gitlabItemNumber', undefined);
+                                    return;
+                                  }
+                                  enterGitlabItemPending();
+                                }}
+                                onPrChange={(value) => setField('prChange', value)}
+                                onIssueChange={(value) => setField('gitlabIssueChange', value)}
+                              />
+                            ) : (
+                              <GithubItemFields
+                                text={form.githubItem ?? ''}
+                                defaultRepository={githubItemDefaultRepository}
+                                kind={form.prEnabled ? 'pr' : form.githubItemNumber !== undefined ? 'issue' : undefined}
+                                prChange={form.prChange ?? 'any'}
+                                issueChange={form.issueChange}
+                                appEventsAvailable={webhookReceiverReady}
+                                timedCheck={!form.manual}
+                                onTextChange={(value) => setField('githubItem', value)}
+                                onResolved={(item, kind) => {
+                                  setField('githubItemRepository', item.repository);
+                                  if (kind === 'pr') {
+                                    setField('prEnabled', true);
+                                    setField('webhookEnabled', false);
+                                    setField('prUrl', githubItemUrl(item, 'pr'));
+                                    setField('githubItemNumber', undefined);
+                                    setField('webhookPreset', 'github-item');
+                                    return;
+                                  }
+                                  if (form.prEnabled) setField('prEnabled', false);
+                                  setField('webhookEnabled', true);
+                                  setField('webhookPreset', 'github-app');
+                                  setField('githubItemNumber', item.number);
+                                  if (!form.issueChange) setField('issueChange', 'any');
+                                }}
+                                onUnresolved={enterGithubItemPending}
+                                onPrChange={(value) => setField('prChange', value)}
+                                onIssueChange={(value) => setField('issueChange', value)}
+                              />
+                            )}
+                          />
+                      )}
+                      {/* 2026-11-24：所有事件来源都可以同时定时检查，用来兜底离线或漏掉的事件。 */}
+                      {eventMode && (
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <label className="flex min-h-[34px] items-center gap-2 text-13 text-[var(--text-primary)]">
+                            <Checkbox checked={!form.manual} onChange={event => {
+                              const enabled = event.currentTarget.checked;
+                              setField('manual', !enabled);
+                              if (enabled) setField('recurring', true);
+                            }} />
+                            {t('scheduler.prTrigger.timed')}
+                          </label>
+                          {!form.manual && <ScheduleChip cronExpr={form.cronExpr} intervalMs={form.intervalMs}
+                            onChangeSchedule={value => { setField('cronExpr', value.cronExpr); setField('intervalMs', value.intervalMs); }} />}
+                        </div>
+                      )}
+                      {!isScriptMode && (
+                        <div className="flex flex-wrap items-start gap-2.5">
+                          <span className={cn(FIELD_LABEL, 'flex min-h-[34px] items-center')}>
+                            {t('scheduler.editor.preRunHook.label')}
+                          </span>
+                          <div className="min-w-0 flex-1">
                       {/* 前置检查(Pre-run Hook):触发时先执行脚本,exit 0 放行 / exit 2 跳过本轮
                 (不启动 agent、零 token);报错 / 超时会阻止本轮并记录失败。
                 仅 agent 模式展示——script 模式任务本体就是脚本,再叠一层脚本闸门是套娃。 */}
                       {!isScriptMode && (
                         <div className="flex flex-col gap-2">
                           <div className="flex flex-wrap items-center gap-2.5">
-                            <button
-                              type="button"
-                              role="checkbox"
-                              aria-checked={form.preRunHookEnabled}
-                              onClick={() => {
-                                setHookTestResult(null);
-                                setField('preRunHookEnabled', !form.preRunHookEnabled);
-                              }}
+                            <label
                               className={cn(
-                                'inline-flex h-[34px] items-center gap-2 rounded-full px-1.5',
+                                'inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-full px-1.5',
                                 'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
                                 'transition-colors hover:bg-[var(--surface-hover)]',
-                                'focus:outline-none',
                               )}
                             >
-                              <span
-                                className={cn(
-                                  'inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-lg border-[1.5px] transition-colors',
-                                  form.preRunHookEnabled
-                                    ? 'border-[var(--lightbox-cta-bg)] bg-[var(--lightbox-cta-bg)] text-[var(--lightbox-cta-fg)]'
-                                    : 'border-[var(--cmd-palette-item-meta)] bg-transparent dark:border-[var(--settings-section-desc)]',
-                                )}
-                                aria-hidden
-                              >
-                                {form.preRunHookEnabled && (
-                                  <Check size={10} strokeWidth={3} aria-hidden />
-                                )}
-                              </span>
+                              <Checkbox
+                                checked={form.preRunHookEnabled}
+                                onChange={() => {
+                                  setHookTestResult(null);
+                                  setField('preRunHookEnabled', !form.preRunHookEnabled);
+                                }}
+                              />
                               {t('scheduler.editor.preRunHook.enable')}
-                            </button>
+                            </label>
                             <Tip
                               text={t(
                                 usePluginSource
@@ -1482,7 +1821,7 @@ export function ScheduleFormDialog({
                                   : 'scheduler.editor.preRunHook.tooltip',
                               )}
                               side="top"
-                              contentClassName="z-[10020]"
+                              contentClassName="z-modal-popover-nested"
                             >
                               <span
                                 tabIndex={0}
@@ -1614,7 +1953,9 @@ export function ScheduleFormDialog({
                               {hookGenOpen && (
                                 <div className="flex flex-col gap-2 rounded-xl border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] p-3">
                                   <textarea
-                                    value={hookGenDesc}
+                                    ref={hookGenInputRef}
+                                    value={hookVoice.displayText}
+                                    readOnly={hookVoice.isBusy}
                                     onChange={(e) => setHookGenDesc(e.target.value)}
                                     placeholder={t('scheduler.editor.preRunHook.aiPlaceholder')}
                                     rows={2}
@@ -1623,6 +1964,10 @@ export function ScheduleFormDialog({
                                       'w-full resize-none bg-transparent text-13 leading-[1.5] outline-none',
                                       'text-[var(--settings-input-text)] placeholder-[var(--settings-input-placeholder)]',
                                     )}
+                                  />
+                                  <FieldVoiceInputNotice
+                                    error={hookVoice.lastError}
+                                    speakerFiltered={hookVoice.speakerFiltered}
                                   />
                                   {hookGenFailure && (
                                     <ErrorNotice
@@ -1674,6 +2019,11 @@ export function ScheduleFormDialog({
                                     </ErrorNotice>
                                   )}
                                   <div className="flex items-center justify-end gap-2">
+                                    <VoiceInputButton
+                                      {...hookVoice.buttonProps}
+                                      testId="schedule-hook-gen-voice"
+                                      tipSide="top"
+                                    />
                                     <Button
                                       variant="secondary"
                                       size="md"
@@ -1685,7 +2035,7 @@ export function ScheduleFormDialog({
                                         setHookGenDesc('');
                                         setHookGenFailure(null);
                                       }}
-                                      disabled={hookGenerating}
+                                      disabled={hookGenerating || stoppingHookVoice}
                                     >
                                       {t('scheduler.editor.preRunHook.aiCancel')}
                                     </Button>
@@ -1693,10 +2043,10 @@ export function ScheduleFormDialog({
                                       variant="cta"
                                       size="md"
                                       compact
-                                      loading={hookGenerating}
+                                      loading={hookGenerating || stoppingHookVoice}
                                       type="button"
                                       onClick={() => void runHookGenerate()}
-                                      disabled={hookGenerating || !hookGenDesc.trim()}
+                                      disabled={hookGenerating || stoppingHookVoice || !hookVoice.displayText.trim()}
                                     >
                                       {hookGenerating && (
                                         <span
@@ -1751,18 +2101,115 @@ export function ScheduleFormDialog({
                           )}
                         </div>
                       )}
-                    </ScheduleFormSection>
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                    {!isScriptMode && (
+                      <section
+                        aria-label={t('scheduler.editor.layout.notifications')}
+                        className="flex shrink-0 flex-col gap-1.5 border-t border-[var(--border-default)] pt-4"
+                      >
+                        <div className="flex flex-wrap items-start gap-2.5">
+                          <span className={cn(FIELD_LABEL, 'flex min-h-[34px] items-center')}>
+                            {t('scheduler.editor.layout.notifications')}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                        <div className="inline-flex h-[34px] items-center gap-1.5">
+                          <label
+                            className={cn(
+                              'inline-flex h-full cursor-pointer items-center gap-2 rounded-full px-1.5',
+                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                              'transition-colors hover:bg-[var(--surface-hover)]',
+                            )}
+                          >
+                            <Checkbox
+                              checked={form.silentWhenIdle}
+                              onChange={() => setField('silentWhenIdle', !form.silentWhenIdle)}
+                            />
+                            {t('scheduler.editor.fields.silentRun')}
+                          </label>
+                        </div>
+                        {feishuBotReady ? (
+                          <label
+                            className={cn(
+                              'inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-full px-1.5',
+                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                              'transition-colors hover:bg-[var(--surface-hover)]',
+                            )}
+                          >
+                            <Checkbox
+                              checked={form.notifyFeishu}
+                              onChange={() => setField('notifyFeishu', !form.notifyFeishu)}
+                            />
+                            {t('scheduler.editor.fields.finishSendToFeishu')}
+                          </label>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={goConfigFeishuBot}
+                            className={cn(
+                              'inline-flex h-[34px] items-center rounded-full px-2',
+                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                              'transition-colors hover:bg-[var(--surface-hover)]',
+                              'focus:outline-none underline-offset-2 hover:underline',
+                            )}
+                          >
+                            {t('scheduler.editor.fields.configFeishu')}
+                          </button>
+                        )}
+                        {wecomGroupReady ? (
+                          <label
+                            className={cn(
+                              'inline-flex h-[34px] cursor-pointer items-center gap-2 rounded-full px-1.5',
+                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                              'transition-colors hover:bg-[var(--surface-hover)]',
+                            )}
+                          >
+                            <Checkbox
+                              checked={form.notifyWecomGroup === true}
+                              onChange={() =>
+                                setField('notifyWecomGroup', form.notifyWecomGroup !== true)
+                              }
+                            />
+                            {t('scheduler.editor.fields.finishSendToWecomGroup')}
+                          </label>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={goConfigWecomGroup}
+                            className={cn(
+                              'inline-flex h-[34px] items-center rounded-full px-2',
+                              'text-13 leading-none text-[var(--settings-btn-secondary-text)]',
+                              'transition-colors hover:bg-[var(--surface-hover)]',
+                              'focus:outline-none underline-offset-2 hover:underline',
+                            )}
+                          >
+                            {t('scheduler.editor.fields.configWecomGroup')}
+                          </button>
+                        )}
+                      </div>
+                          </div>
+                        </div>
+                        <p className="pl-[calc(4.5rem+0.625rem)] text-xs leading-[1.45] text-[var(--text-secondary)]">
+                          {t('scheduler.editor.fields.silentRunTooltip')}
+                        </p>
+                      </section>
+                    )}
                   </div>
-                )}
               </div>
             </div>
           )}
           {(mode !== 'gallery' || isEdit || isProjectAutomationMode) && (
-            <footer className="flex shrink-0 justify-end border-t border-[var(--border-default)] px-6 py-3">
+            <footer
+              inert={promptExpanded || undefined}
+              className="flex shrink-0 justify-end border-t border-[var(--border-default)] px-6 py-3"
+            >
               <Button
                 variant="primary"
                 size="lg"
-                loading={submitting}
+                loading={submitBusy}
                 type="button"
                 aria-label={
                   isEdit
@@ -1770,45 +2217,54 @@ export function ScheduleFormDialog({
                     : t('scheduler.editor.promptDialog.createAria')
                 }
                 onClick={() => void handleSubmit()}
-                disabled={submitting || awaitingNewModelCatalog}
+                disabled={submitBusy || awaitingNewModelCatalog || (maybeTeammateSchedule && !teammateModelReady)}
                 className="min-w-[68px] shrink-0"
               >
                 {submitLabel}
               </Button>
             </footer>
           )}
+          {promptExpanded && (
+            <div
+              role="group"
+              aria-label={t('scheduler.editor.fields.prompt')}
+              className="absolute inset-0 z-raised flex flex-col bg-[var(--confirm-bg)]"
+            >
+              <header className="flex min-h-[72px] shrink-0 items-center gap-4 px-6 pt-4 pb-3.5">
+                <p className="min-w-0 flex-1 text-24 font-medium leading-[1.33] text-[var(--msg-assistant-text)]">
+                  {t('scheduler.editor.fields.prompt')}
+                </p>
+                <Button variant="secondary" size="lg" type="button" onClick={() => setPromptExpanded(false)}>
+                  <Minimize2 size={12} aria-hidden />
+                  {t('scheduler.editor.promptDialog.collapsePrompt')}
+                </Button>
+              </header>
+              <div className="min-h-0 flex-1 px-6 pb-6">
+                {/* 这一层的边框就是输入框自己的框:多行输入一律 8px(DESIGN §5),
+                    不随铺满面板升成 12px 容器档。紧凑卡片的 12px 属于装着输入框与工具条的外框。 */}
+                <div className="flex h-full flex-col overflow-hidden rounded-lg border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]">
+                  <div className="min-h-0 flex-1 p-4">
+                    {promptField('overflow-y-auto', true)}
+                  </div>
+                  <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <FieldVoiceInputNotice
+                        error={promptVoice.lastError}
+                        speakerFiltered={promptVoice.speakerFiltered}
+                      />
+                    </div>
+                    <VoiceInputButton
+                      {...promptVoice.buttonProps}
+                      testId="schedule-prompt-expanded-voice"
+                      tipSide="top"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
-  );
-}
-
-/** Field groups share the same spacing without adding extra interaction. */
-function ScheduleFormSection({
-  title,
-  children,
-  inline = false,
-}: {
-  title: string;
-  children: React.ReactNode;
-  inline?: boolean;
-}) {
-  return (
-    <section
-      className={cn(
-        'gap-3 [&:not(:first-child)]:pt-5',
-        inline ? 'grid grid-cols-[100px_minmax(0,1fr)] items-start' : 'flex flex-col',
-      )}
-    >
-      <h3
-        className={cn(
-          'text-sm font-medium text-[var(--text-primary)]',
-          inline && 'flex min-h-[34px] items-center',
-        )}
-      >
-        {title}
-      </h3>
-      {children}
-    </section>
   );
 }

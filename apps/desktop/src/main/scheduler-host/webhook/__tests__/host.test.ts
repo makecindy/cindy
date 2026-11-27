@@ -15,18 +15,20 @@ import type { ScheduleWebhookRemoteDeps } from '../remote';
 // - tier：unit，只用回环地址和临时目录。
 
 const dirs = vi.hoisted(() => ({ root: '' }));
-const remoteTransport = vi.hoisted(() => ({ deps: null as ScheduleWebhookRemoteDeps | null }));
+const remoteTransport = vi.hoisted(() => ({ deps: null as ScheduleWebhookRemoteDeps | null, syncs: 0 }));
 
 // Only replace the network boundary; admission, queue transactions and disk IO
 // below still run through the production Host and ScheduleWebhookQueue.
 vi.mock('../remote.js', () => ({
   ScheduleWebhookRemote: class {
     constructor(deps: ScheduleWebhookRemoteDeps) { remoteTransport.deps = deps; }
-    async sync() {}
+    async sync() { remoteTransport.syncs += 1; }
+    async refresh() {}
     stop() {}
     pause() {}
     problem() { return undefined; }
     canDeliver() { return true; }
+    canDeliverGithub() { return true; }
     view() { return { id: 'cloud-endpoint' }; }
   },
 }));
@@ -44,7 +46,9 @@ vi.mock('../../../appSessionState.js', () => ({
 }));
 vi.mock('../../../plugin-oauth/identityStore.js', () => ({ oauthSecureStorageAvailable: () => true }));
 
+import { admitTaskAction, hasTaskActionAuthorization } from '../../../maker-ipc/taskActionAuthorization.js';
 import { ScheduleWebhookHost } from '../index';
+import { publishPluginEvent, subscribedEventPluginIds } from '../pluginEvents.js';
 
 class FakeScheduler extends EventEmitter {
   schedules: Schedule[] = [];
@@ -104,6 +108,31 @@ describe('ScheduleWebhookHost', () => {
     await host.start();
     return remoteTransport.deps!.onBatch;
   }
+
+  // PR #9378: queued/ACKed work must survive presentation-only edits. The
+  // network alone is replaced; Host refresh and persistent queue are production.
+  it('preserves durable App events after equivalent scope reorder and discards a real change', async () => {
+    const source = { preset: 'github-app' as const, repositories: ['example/project', 'other/project'] };
+    const events = ['issues.opened', 'release.published'];
+    const original = { ...withTrigger, webhookTrigger: { ...withTrigger.webhookTrigger!, source, events } };
+    await startCloudHost(original);
+    const comment = { deliveryId: 'reordered-scope', event: 'issues', action: 'opened', repository: 'example/project', receivedAt: Date.now() };
+    await remoteTransport.deps!.onGithubBatch!({ endpointId: 'managed', scheduleId: '__github_pr_watch__',
+      events: [comment], omitted: 0 }, () => true);
+    const stateFile = path.join(dirs.root, 'schedule-webhooks', 'state.json');
+    const before = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    expect(before.endpoints.s1.pending).toEqual([comment]);
+    const synced = remoteTransport.syncs;
+    scheduler.change([{ ...original, webhookTrigger: { ...original.webhookTrigger,
+      source: { ...source, repositories: [...source.repositories].reverse() }, events: [...events].reverse() } }]);
+    await vi.waitFor(() => expect(remoteTransport.syncs).toBeGreaterThan(synced));
+    const reordered = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    expect(reordered.endpoints.s1?.pending).toEqual([comment]);
+    const nextSync = remoteTransport.syncs;
+    scheduler.change([{ ...original, webhookTrigger: { ...original.webhookTrigger, events: ['release.published'] } }]);
+    await vi.waitFor(() => expect(remoteTransport.syncs).toBeGreaterThan(nextSync));
+    expect(JSON.parse(fs.readFileSync(stateFile, 'utf8')).endpoints.s1).toBeUndefined();
+  });
 
   // PR #8470 / discussion_r4488736908, unit: scheduler reconciliation can lag
   // behind a saved filter edit; existing HTTP tests did not exercise cloud admission.
@@ -258,5 +287,111 @@ describe('ScheduleWebhookHost', () => {
       dirs.root = originalRoot;
       await delivery;
     }
+  });
+
+  // docs/product-rules/plugin-event-triggers.md: plugin events need no Cindy account, server
+  // endpoint or secret. Production Host + queue; only the network transport is faked, signed out.
+  it('runs plugin events for the automations that chose them without an account or address', async () => {
+    const stateDir = path.join(dirs.root, 'schedule-webhooks');
+    fs.mkdirSync(stateDir, { recursive: true });
+    // An old firstPendingAt makes the accepted event arm a zero-delay run.
+    fs.writeFileSync(path.join(stateDir, 'state.json'), JSON.stringify({ endpoints: { s1: {
+      endpointId: 'plugin-endpoint', pending: [], omitted: 0, firstPendingAt: Date.now() - 60_000, received: 0, ignored: 0, receipts: {},
+    } } }));
+    const chosen = { id: 's1', status: 'active', webhookTrigger: { endpointId: 'plugin-endpoint',
+      source: { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['message.received'] }] } } } as Schedule;
+    const notSelf = { id: 's3', status: 'active', webhookTrigger: { endpointId: 'not-self-endpoint',
+      source: { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['message.received'],
+        filters: [{ field: 'fromSelf', operator: 'not-equals', value: 'true' }] }] } } } as Schedule;
+    scheduler.schedules = [chosen, notSelf, { ...withTrigger, id: 's2', webhookTrigger: { endpointId: 'endpoint-2' } } as Schedule];
+    host = new ScheduleWebhookHost(scheduler as unknown as Scheduler, {}, { remote: {
+      baseUrl: () => 'https://webhook.example',
+      isSignedIn: () => false,
+      getAccessToken: async () => null,
+      refreshAccessToken: async () => false,
+      fetch: async () => { throw new Error('unexpected network request'); },
+      socketOptions: async () => ({}),
+      logger: {},
+    } });
+    await host.start();
+    expect([...subscribedEventPluginIds()]).toEqual(['public/chat']);
+    expect(host.status(chosen)).toMatchObject({ receiver: 'signed-out', hasSecret: true, plugins: [{ plugin: 'public/chat' }] });
+    const pad = 'x'.repeat(1_000);
+    const tail = 'x'.repeat(990);
+    const message = {
+      id: 'm1',
+      type: 'message.received',
+      occurredAt: 1,
+      data: { p1: pad, p2: pad, p3: pad, p4: tail, chatId: 'c1', fromSelf: true },
+    };
+    // Even after 4,000 chars of earlier fields, `notSelf` sees `fromSelf: true` and stays filtered (`accepted: 1`, only `s1`).
+    expect(await publishPluginEvent('public/chat', message)).toEqual({ accepted: 1, duplicate: false });
+    expect(await publishPluginEvent('public/chat', message)).toEqual({ accepted: 0, duplicate: true });
+    expect(await publishPluginEvent('public/mail', { ...message, id: 'm2' })).toEqual({ accepted: 0, duplicate: false });
+    await vi.waitFor(() => expect(scheduler.runNow).toHaveBeenCalledTimes(1));
+    const [id, options] = (scheduler.runNow.mock.calls as unknown as Array<[string, { webhook: { events: Array<{ fields?: Record<string, unknown>; omittedFields?: string[] }> } }]>)[0]!;
+    expect(id).toBe('s1');
+    expect(options.webhook.events[0]!.omittedFields).toEqual(['chatId', 'fromSelf']);
+    await expect(host.setSecret(chosen)).rejects.toThrow('PLUGIN_EVENT_SOURCE');
+    // Account switch: the previous owner's late stop must not detach its successor.
+    const previous = host;
+    host = new ScheduleWebhookHost(scheduler as unknown as Scheduler, {}, { local: true });
+    await host.start();
+    await previous.stop();
+    expect([...subscribedEventPluginIds()]).toEqual(['public/chat']);
+    expect(await publishPluginEvent('public/chat', { ...message, id: 'm3' })).toEqual({ accepted: 1, duplicate: false });
+    await host.stop();
+    expect(subscribedEventPluginIds().size).toBe(0);
+    expect(await publishPluginEvent('public/chat', { ...message, id: 'm4' })).toEqual({ accepted: 0, duplicate: false });
+  });
+
+  // #11370: a webhook frame is an independent trigger. The receiver socket is opened
+  // inside the tool call that created the schedule, and that call's authorization
+  // context stays on the socket. An idle target then fails enqueue with
+  // TASK_ACTION_AUTHORIZATION_EXPIRED. Cron and manual run-now have no such store.
+  it('fires a webhook without the tool-call authorization that opened the receiver', async () => {
+    const stateDir = path.join(dirs.root, 'schedule-webhooks');
+    fs.mkdirSync(stateDir, { recursive: true });
+    // Pending is empty, so startup does not arm. firstPendingAt is already older
+    // than the debounce, so the frame accepted below arms a zero-delay timer.
+    fs.writeFileSync(path.join(stateDir, 'state.json'), JSON.stringify({
+      endpoints: {
+        s1: {
+          endpointId: 'endpoint-1',
+          pending: [],
+          omitted: 0,
+          firstPendingAt: Date.now() - 60_000,
+          received: 0,
+          ignored: 0,
+          receipts: {},
+        },
+      },
+    }));
+    let inherited: boolean | undefined;
+    scheduler.runNow = vi.fn(async () => {
+      inherited = hasTaskActionAuthorization();
+      return { runId: 'r1' };
+    });
+    const onBatch = await startCloudHost();
+    let timerSawStore: boolean | undefined;
+    const decision = await admitTaskAction(
+      { sessionId: 'creator', server: 'cindy_scheduler', tool: 'schedule_create', args: {} },
+      { key: 'mid-turn', ownerInput: true, delegated: true, assertCurrent: async () => {} },
+    );
+    if (!decision.ok || !decision.run) throw new Error('expected the creating tool call to be admitted');
+    await decision.run(async () => {
+      setTimeout(() => { timerSawStore = hasTaskActionAuthorization(); }, 0);
+      await onBatch({
+        endpointId: 'cloud-endpoint',
+        scheduleId: 's1',
+        events: [{ deliveryId: 'wh-11370', event: 'issues', receivedAt: Date.now() }],
+        omitted: 0,
+      });
+    });
+    // The timer proves the store really does cross the queue delay. If it did not,
+    // this test could not tell a correct exit from a context that was never inherited.
+    await vi.waitFor(() => expect(timerSawStore).toBe(true));
+    await vi.waitFor(() => expect(scheduler.runNow).toHaveBeenCalledTimes(1));
+    expect(inherited).toBe(false);
   });
 });

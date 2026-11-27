@@ -8,13 +8,13 @@ vi.mock('../../cindy-brain/dirDeposit.js', () => ({ isPathInsideDir: (root: stri
   const relative = path.relative(root, file);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 } }));
-vi.mock('../blobStore.js', () => ({ mimeForExt: (ext: string) => ext === '.png' ? 'image/png' : null }));
+vi.mock('../blobStore.desktop.js', () => ({ mimeForExt: (ext: string) => ext === '.png' ? 'image/png' : null }));
 const ingest = vi.hoisted(() => vi.fn());
 const hasRef = vi.hoisted(() => vi.fn());
 const owner = vi.hoisted(() => ({ dataOwnerId: 'owner', generation: 1 }));
 vi.mock('../ingest.js', () => ({ ingestMedia: ingest }));
 vi.mock('../ledger.js', () => ({ hasRef }));
-vi.mock('../refCompensationJournal.js', () => ({ captureMediaRefCompensationScope: () => ({}) }));
+vi.mock('../refCompensationJournal.desktop.js', () => ({ captureMediaRefCompensationScope: () => ({}) }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: 'captured-db' }) }));
 vi.mock('../../appSessionState.js', () => ({ getActiveAppSession: () => ({ ...owner }), isAppSessionBoundaryPending: () => false }));
 import { publishImage } from '../publishImage.js';

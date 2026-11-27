@@ -1,9 +1,10 @@
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED } from '@cindy/maker-shared/botGroupChat';
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
 import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
@@ -13,6 +14,7 @@ import type { BotGroupMemberView, ChatInvitePreview } from '../../../shared/botG
 import { BotAvatar } from './BotAvatar';
 import { refreshBotGroups } from './botGroupStore';
 import { chatErrorKey } from './chatError';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
 
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
@@ -115,7 +117,7 @@ export function ChatInviteDialog({ groupId, initialLink = '', malformedLink = fa
         }
         // Already a member: the invitation's only remaining purpose is to open the group.
         if (result.joined) { onJoined?.(result.groupId); onClose(); return; }
-        const status = await api().status().catch(() => undefined);
+        const status = BOT_GROUP_PERSONAL_REPLIES_ENABLED ? await api().status().catch(() => undefined) : undefined;
         if (!current()) return;
         setMaskSupported(status?.personalMask === true);
         setPreview(result); setNow(Date.now());
@@ -149,11 +151,11 @@ export function ChatInviteDialog({ groupId, initialLink = '', malformedLink = fa
   // Allow dismissal during link generation, but not acceptance or revocation.
   const locked = () => busyRef.current && (revokeConfirm || (!groupId && !(fromLink && !preview)));
   return <Dialog.Root open onOpenChange={open => !open && !locked() && onClose()}>
-    <Dialog.Portal><Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
+    <Dialog.Portal><Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
       <Dialog.Content ref={contentRef} onPointerDownOutside={e => e.preventDefault()}
         onOpenAutoFocus={e => { if (groupId) { e.preventDefault(); contentRef.current?.focus(); } }}
         onEscapeKeyDown={e => { if (e.isComposing || e.keyCode === 229 || locked()) e.preventDefault(); }}
-        className={cn('modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] flex-col outline-none',
+        className={cn('modal-panel fixed inset-0 z-modal-raised m-auto flex h-fit max-h-[85vh] flex-col outline-none',
           groupId && created ? 'w-[min(420px,calc(100vw-32px))]' : 'w-[min(460px,calc(100vw-32px))]',
           groupId ? 'gap-5 p-6' : 'gap-4 p-5')}>
         {groupId ? <div className="flex flex-col items-center gap-3 pt-1 text-center">
@@ -180,8 +182,10 @@ export function ChatInviteDialog({ groupId, initialLink = '', malformedLink = fa
         {!fromLink && (!groupId || link) && <Input aria-label={t(key('inviteLink'))} value={link} readOnly={!!groupId} disabled={busy || revoked}
           size={groupId ? 'md' : 'lg'} inputClassName={groupId ? 'text-12 text-[var(--text-secondary)]' : undefined}
           placeholder={t(key('pasteLink'))} onChange={value => { setLink(value); setPreview(null); setError(''); operation.current = crypto.randomUUID(); }} />}
-        {!groupId && preview && maskSupported && <label className="flex min-h-10 items-center justify-between gap-4 text-13">
-          <span>{t('bots.groupChat.mask.joinSetup')}</span><Switch checked={configureMask} disabled={busy} onCheckedChange={setConfigureMask} aria-label={t('bots.groupChat.mask.joinSetup')} />
+        {!groupId && preview && maskSupported && <label className="flex min-h-10 cursor-pointer items-center gap-2 text-13">
+          {/* Applied only when the user clicks Join: Checkbox, not Switch (DESIGN.md §4). */}
+          <Checkbox checked={configureMask} disabled={busy} onChange={event => setConfigureMask(event.currentTarget.checked)} />
+          <span>{t('bots.groupChat.mask.joinSetup')}</span>
         </label>}
         {fromLink && !preview && !error && <p role="status" className="text-13 leading-normal text-[var(--text-secondary)]">{t(key('loadingInvite'))}</p>}
         {preview && <div className="space-y-1 rounded-lg bg-[var(--surface-elevated)] p-3">
@@ -202,7 +206,7 @@ export function ChatInviteDialog({ groupId, initialLink = '', malformedLink = fa
         </div>
       </Dialog.Content>
     </Dialog.Portal>
-    <ConfirmDialog open={revokeConfirm} cancelFirst presentation="standard"
+    <ConfirmDialog open={revokeConfirm} zIndex={Z_INDEX_LAYERS['modal-nested']}
       onOpenChange={open => { if (!busyRef.current) setRevokeConfirm(open); }}
       title={t(key('revokeLink'))} description={t(key('revokeDescription'))}
       confirmText={t(key('revokeLink'))} confirmVariant="destructive" loading={busy}

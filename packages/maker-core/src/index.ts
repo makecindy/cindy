@@ -16,8 +16,22 @@ export * from './interfaces/index.js';
 
 // agents
 export * from './agents/index.js';
+export {
+  CLAUDE_CLI_STATUS_ARGS,
+  CLAUDE_LONG_LIVED_TOKEN_FILE,
+  CLAUDE_OAUTH_TOKEN_DESCRIPTOR,
+  CLAUDE_OAUTH_TOKEN_DESCRIPTOR_ENV,
+  claudeConfigDirectory,
+  claudeLongLivedTokenFile,
+  parseClaudeCliLoginStatus,
+  readClaudeCliLoginStatusBySpawn,
+  type ClaudeCliLoginStatus,
+  type ClaudeLongLivedTokenSource,
+  type ReadClaudeCliStatusOptions,
+} from './agents/claude-code/cli-login-status.js';
 export { workspaceSettingsFiles, parseClaudeSettingsJson } from './agents/claude-code/workspace-settings-guard.js';
 export * from './agents/pi/managed-command.js';
+export { verifyPiResponsesCompletion } from './agents/pi/responses-completion.js';
 export { evaluatePiProjectTrust, piProjectKey } from './agents/pi/project-trust.js';
 export {
   assertReviewMessageContentPaths,
@@ -91,7 +105,14 @@ export {
   type ConsolidateResult,
 } from './memory/store.js';
 export {
+  createMakerMemoryManagerForHost,
+  attachAgentsToMakerMemory,
+  type MakerMemoryHostContext,
+  type MemoryHostSession,
+} from './memory/host-factory.js';
+export {
   MakerMemoryManager,
+  MEMORY_STORAGE_MIGRATION_RECEIPT,
   type MakerMemoryManagerDeps,
   type MakerMemoryState,
   type SetEnabledResult,
@@ -99,13 +120,16 @@ export {
 } from './memory/manager.js';
 export { isBotMcpServerAllowed } from './agents/shared/bot-runtime-policy.js';
 export { resolveAllowedManagedSkills, snapshotManagedSkillGrants } from './agents/shared/managed-skill-policy.js';
-export { isSkillDisabled } from './agents/shared/skill-activation.js';
+export { canonicalSkillPath, isSkillDisabled, snapshotDisabledSkillPaths } from './agents/shared/skill-activation.js';
 export {
   MemoryFlushController,
   DEFAULT_FLUSH_THRESHOLDS,
   type MemoryFlushControllerDeps,
 } from './memory/flush-controller.js';
 export { MAKER_MEMORY_RULES } from './memory/system-prompt.js';
+export { loadMemoryContext } from './memory/context.js';
 
 export { LIBRARY_READ_ROOT, parseLibraryAssetRef, resolveLibraryAssetPath } from './agents/shared/library-native-read.js';
-export { VoiceCallContext, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';
+export { VoiceCallContext, nativeVoiceCallInstructions, type VoiceCallRecord, type VoiceCallTurn, type VoiceCallHandoff } from './voice-call.js';
+
+export { ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, isolatedBotProfile } from './agents/base-agent.js';

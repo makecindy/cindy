@@ -22,9 +22,17 @@
  * Notification 的实例方法和 isSupported 必须支持(constructor 是顶层 IIFE 触发)。
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Session } from '@cindy/maker-core';
 import type { BrowserWindow } from 'electron';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { getTableConfig } from 'drizzle-orm/sqlite-core';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { DbClient } from '../localDb/client/DbClient';
+import { botProfiles, botSessionLinks, messages, sessions } from '../localDb/schema';
 
 const chatWindow = vi.hoisted(() => ({ url: 'file:///app/index.html#/bots/groups/group-1' }));
 vi.mock('../deepLink', () => ({
@@ -145,15 +153,274 @@ vi.mock('../device-link/broadcast-tap', () => ({
   isDataOwnerBroadcastScopeCurrent: () => ownerScopeCurrent,
 }));
 const drainPersistQueue = vi.fn((): Promise<void> => Promise.resolve());
-vi.mock('../messagePersistBroadcaster', () => ({
+vi.mock('../messagePersistBroadcaster.desktop', () => ({
   drainPersistQueue: () => drainPersistQueue(),
 }));
 const drainSessionActiveTurnWrites = vi.fn((_sessionId: string): Promise<void> => Promise.resolve());
 const getSessionNotificationTurnSignal = vi.fn((_sessionId: string): { id: string; fallbackEventId: string; ended: boolean } | undefined => undefined);
+const getSilentContinuationTiming = vi.fn<typeof import('../localDb/sessionActiveTurn').getSilentContinuationTiming>();
+const startSilentMarker = vi.fn<typeof import('../localDb/sessionActiveTurn').markSessionSilentContinuationStarted>();
+const forgetSilentProjection = vi.fn<typeof import('../localDb/sessionActiveTurn').forgetSilentContinuationProjection>();
+const noteSilentSettlement = vi.fn<(sessionId: string, instanceId: string, generation: number) => void>();
 vi.mock('../localDb/sessionActiveTurn', () => ({
   drainSessionActiveTurnWrites: (sessionId: string) => drainSessionActiveTurnWrites(sessionId),
   getSessionNotificationTurnSignal: (sessionId: string) => getSessionNotificationTurnSignal(sessionId),
+  getSilentContinuationTiming: (...args: Parameters<typeof getSilentContinuationTiming>) => getSilentContinuationTiming(...args),
+  markSessionSilentContinuationStarted: (...args: Parameters<typeof startSilentMarker>) => startSilentMarker(...args),
+  forgetSilentContinuationProjection: (...args: Parameters<typeof forgetSilentProjection>) => forgetSilentProjection(...args),
+  noteSilentContinuationSettled: (...args: Parameters<typeof noteSilentSettlement>) => noteSilentSettlement(...args),
 }));
+
+// L341 / unit with real SQLite and the real notification handler. A recovery
+// start must keep the pre-continuation mobile ID and include the same reply.
+// In the marked case a real late idle must still be filtered by the new row.
+it.each(['parent', 'two continuations'] as const)('keeps the original mobile preview for %s', async (scenario) => {
+  const { initNotificationService } = await freshService();
+  const { clearCurrentDbClient, setCurrentDbClient } = await import('../localDb/client/current');
+  const marker = await vi.importActual<typeof import('../localDb/sessionActiveTurn')>('../localDb/sessionActiveTurn');
+  const preview = await vi.importActual<typeof import('../localDb/sessionNotificationPreview')>('../localDb/sessionNotificationPreview');
+  const sqlite = new Database(':memory:');
+  const db = drizzle(sqlite);
+  const client = { drizzle: db } as unknown as DbClient;
+  for (const table of [sessions, messages, botProfiles, botSessionLinks]) {
+    const { name, columns } = getTableConfig(table);
+    sqlite.exec(`CREATE TABLE "${name}" (${columns.map(column => `"${column.name}" ${column.getSQLType()}`).join(', ')})`);
+  }
+  const task = 'silent-notice';
+  const time = vi.spyOn(Date, 'now').mockReturnValue(1000);
+  const completion = { sessionId: task, title: 'Task', kind: 'done', channels: { desktop: true, mobile: true } };
+  const event = (generation: number) => ({ sessionInstanceId: 'silent-notice-runtime', sessionTurnGeneration: generation });
+  setCurrentDbClient(client, 'notification-fixture');
+  try {
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    getSessionNotificationTurnSignal.mockImplementation(marker.getSessionNotificationTurnSignal);
+    drainSessionActiveTurnWrites.mockImplementation(marker.drainSessionActiveTurnWrites);
+    if (marker.getSilentContinuationTiming) getSilentContinuationTiming.mockImplementation(marker.getSilentContinuationTiming);
+    readSessionNotificationPreview.mockImplementation(preview.readSessionNotificationPreview);
+
+    db.insert(sessions).values({ id: task, source: 'desktop', clearedAt: 1030, createdAt: 0, updatedAt: 0 }).run();
+    for (const [id, text, at] of [['cleared', 'Cleared text', 1020], ['visible', 'Original product reply', 1040]] as const) {
+      db.insert(messages).values({
+        id, clientId: id, sessionId: task, role: 'assistant', content: JSON.stringify(text), createdAt: at,
+        agentMeta: JSON.stringify({ turnCompleted: true, assistantPhase: 'final_answer' }),
+      }).run();
+    }
+    marker.markSessionTurnStarted(task);
+    await marker.drainSessionActiveTurnWrites(task);
+    time.mockReturnValue(1100);
+    marker.markSessionTurnEnded(task);
+    await marker.drainSessionActiveTurnWrites(task);
+    const originalSignal = marker.getSessionNotificationTurnSignal(task);
+    expect(originalSignal).toMatchObject({ ended: true, fallbackEventId: expect.stringContaining('turn:1000:1100:') });
+    const warn = vi.fn();
+    if (scenario === 'two continuations') {
+      time.mockReturnValue(1200);
+      await marker.markSessionSilentContinuationStarted(task, 'silent-notice-runtime', 2, () => client, () => true, warn);
+      time.mockReturnValue(1300);
+      marker.markSessionTurnEndedAfterBarrier(task, Promise.resolve(), event(2));
+      await marker.drainSessionActiveTurnWrites(task);
+      time.mockReturnValue(1400);
+      await marker.markSessionSilentContinuationStarted(task, 'silent-notice-runtime', 3, () => client, () => true, warn);
+      expect(warn).not.toHaveBeenCalled();
+      expect(db.select().from(sessions).get()).toMatchObject({ activeTurnStartedAt: 1400, lastTurnEndedAt: 1300 });
+      expect(await preview.readSessionNotificationPreview(task)).toMatchObject({
+        eventId: 'turn:1000:1100', reply: { clientId: 'visible' },
+      });
+      // A different durable start must use its own unfinished pair even while
+      // the old product signal is still in memory.
+      db.update(sessions).set({ activeTurnStartedAt: 1450 }).run();
+      expect(await preview.readSessionNotificationPreview(task)).toEqual({ suppress: true });
+      db.update(sessions).set({ activeTurnStartedAt: 1400 }).run();
+    }
+
+    time.mockReturnValue(1500);
+    const final = Promise.withResolvers<void>();
+    marker.markSessionTurnEndedAfterBarrier(task, final.promise, event(3));
+    // Production notification drains the existing history barrier before the marker.
+    drainPersistQueue.mockReturnValueOnce(final.promise);
+    await invokeHandler(completion, windowEvent(1));
+    expect(notificationCtor).not.toHaveBeenCalled();
+    final.resolve();
+    await flushAsync();
+    await invokeHandler(completion, windowEvent(2));
+    expect(marker.getSessionNotificationTurnSignal(task)).toEqual(originalSignal);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalledExactlyOnceWith({
+      sessionId: task, title: 'Task', kind: 'done', generation: 7,
+      detail: 'Original product reply', eventId: 'turn:1000:1100', reply: true,
+    });
+    expect(JSON.stringify(await preview.readSessionNotificationPreview(task))).toBe(JSON.stringify({
+      reply: { clientId: 'visible', text: 'Original product reply' }, eventId: 'turn:1000:1100',
+    }));
+    db.update(sessions).set({ clearedAt: 1050 }).run();
+    expect(await preview.readSessionNotificationPreview(task)).toHaveProperty('reply', undefined);
+
+    time.mockReturnValue(2000);
+    marker.markSessionTurnStarted(task);
+    await marker.drainSessionActiveTurnWrites(task);
+    expect(await preview.readSessionNotificationPreview(task)).toEqual({ suppress: true });
+    await invokeHandler(completion);
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+  } finally {
+    getSilentContinuationTiming.mockReset();
+    time.mockRestore();
+    clearCurrentDbClient(client);
+    marker._resetSessionActiveTurnStateForTests();
+    sqlite.close();
+  }
+});
+
+// L341 D3 / unit. The handler's own settle branches used to discard the
+// original product timestamps. Run the same history, budget, and provider
+// outcomes through the Desktop handler and the shared handler without the
+// recovery port. Compare what actual notification IPC and the detail query
+// projection return, including the original reply and the /clear lower bound.
+it.each(['skip', 'budget', 'second send failure'] as const)('matches the parent terminal presentation after %s', async (scenario) => {
+  const { initNotificationService } = await freshService();
+  const { clearCurrentDbClient, setCurrentDbClient } = await import('../localDb/client/current');
+  const { commitVolatileAppSession, getActiveAppSession } = await import('../appSessionState');
+  const marker = await vi.importActual<typeof import('../localDb/sessionActiveTurn')>('../localDb/sessionActiveTurn');
+  const preview = await vi.importActual<typeof import('../localDb/sessionNotificationPreview')>('../localDb/sessionNotificationPreview');
+  const { projectSessionDetail } = await import('../localDb/sessionQueries');
+  const { handleDesktopSilentStopTurnEnd } = await import('../maker-ipc/silentStopTurnEnd.desktop');
+  const { handleSilentStopTurnEndWithPorts } = await import('../maker-ipc/silentStopTurnEnd');
+  const { SilentStopAutoResumeGuard } = await import('../maker-ipc/silentStopAutoResume');
+  const { SilentStopTurnLeaseGate } = await import('../maker-ipc/sessionTurnLease');
+  const { ProductTurnWallClockTracker } = await import('../maker-ipc/turnWallClock');
+  const sqlite = new Database(':memory:');
+  const db = drizzle(sqlite);
+  const client = { drizzle: db } as unknown as DbClient;
+  for (const table of [sessions, messages, botProfiles, botSessionLinks]) {
+    const { name, columns } = getTableConfig(table);
+    sqlite.exec(`CREATE TABLE "${name}" (${columns.map(column => `"${column.name}" ${column.getSQLType()}`).join(', ')})`);
+  }
+  const { configureUserDataDir } = await import('../userDataPath');
+  const userData = mkdtempSync(join(tmpdir(), 'cindy-l341-notification-'));
+  configureUserDataDir(userData);
+  const priorOwner = getActiveAppSession();
+  const owner = commitVolatileAppSession('cloud', 'settlement-fixture');
+  setCurrentDbClient(client, 'settlement-fixture');
+  const time = vi.spyOn(Date, 'now');
+  try {
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    drainSessionActiveTurnWrites.mockImplementation(marker.drainSessionActiveTurnWrites);
+    getSessionNotificationTurnSignal.mockImplementation(marker.getSessionNotificationTurnSignal);
+    readSessionNotificationPreview.mockImplementation(preview.readSessionNotificationPreview);
+    if (marker.getSilentContinuationTiming) getSilentContinuationTiming.mockImplementation(marker.getSilentContinuationTiming);
+    if (marker.markSessionSilentContinuationStarted) startSilentMarker.mockImplementation(marker.markSessionSilentContinuationStarted);
+    if (marker.forgetSilentContinuationProjection) forgetSilentProjection.mockImplementation(marker.forgetSilentContinuationProjection);
+    if (marker.noteSilentContinuationSettled) noteSilentSettlement.mockImplementation(marker.noteSilentContinuationSettled);
+
+    async function run(withRecovery: boolean) {
+      marker._resetSessionActiveTurnStateForTests();
+      const task = withRecovery ? 'desktop-settlement' : 'parent-settlement';
+      db.insert(sessions).values({ id: task, source: 'desktop', clearedAt: 900, createdAt: 1, updatedAt: 1 }).run();
+      db.insert(messages).values({
+        id: task, clientId: 'visible', sessionId: task, role: 'assistant', createdAt: 1050,
+        content: JSON.stringify('Product reply'), agentMeta: JSON.stringify({ turnCompleted: true, assistantPhase: 'final_answer' }),
+      }).run();
+      time.mockReturnValue(1000);
+      marker.markSessionTurnStarted(task);
+      await marker.drainSessionActiveTurnWrites(task);
+      const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn() };
+      const gate = new SilentStopTurnLeaseGate();
+      const guard = new SilentStopAutoResumeGuard({ isEnabled: () => true, log });
+      const clock = new ProductTurnWallClockTracker();
+      clock.start(task);
+      guard.noteUserSend(task);
+      let generation = 1;
+      let attempts = 0;
+      const instanceId = 'settlement-session';
+      const session = {
+        id: task, instanceId, getTurnGeneration: () => generation,
+        async sendHostTurnContinuation(_input: unknown, opts: Parameters<Session['sendHostTurnContinuation']>[1]) {
+          const prior = generation;
+          opts?.onTurnReserved?.(++generation);
+          await opts?.onAccepted?.();
+          opts?.onDispatching?.();
+          attempts++;
+          if (scenario === 'second send failure' && attempts === 2) {
+            generation = prior;
+            throw new Error('fixture: second provider send failed');
+          }
+          return { accepted: true };
+        },
+      } as unknown as Session;
+      const settle = vi.fn(async () => { clock.clear(task); });
+      const banner = vi.fn(async () => {});
+      const ports = {
+        silentStopTurnLeaseGate: gate,
+        agentInputCoordinatorHolder: null,
+        silentStopAutoResumeGuard: guard,
+        sessionListActivityTracker: { captureContinuation: () => () => {} },
+        productTurnWallClockTracker: clock, advanceRuntimeRecoveryNotice: () => {},
+        createDbMessage: async () => ({} as never),
+        settleSilentStopDone: settle, surfaceSilentStopExhaustedBanner: banner, log,
+      };
+      const decisions = scenario === 'budget' ? 3 : 2;
+      for (let index = 0; index < decisions; index++) {
+        const doneAt = 1100 + index * 6000;
+        time.mockReturnValue(doneAt);
+        marker.markSessionTurnEndedAfterBarrier(task, Promise.resolve(), { sessionInstanceId: instanceId, sessionTurnGeneration: generation });
+        await Promise.resolve();
+        await marker.drainSessionActiveTurnWrites(task);
+        const lease = `lease-${index}`;
+        expect(gate.schedule(task, session, lease)).toBe(true);
+        time.mockReturnValue(doneAt + 1500);
+        if (scenario === 'skip' && index === 1) guard.noteSessionReset(task);
+        if (withRecovery) {
+          await handleDesktopSilentStopTurnEnd(session, doneAt, lease, undefined, { ...ports, owner, getBoundSession: () => session });
+        } else {
+          await handleSilentStopTurnEndWithPorts(session, doneAt, lease, undefined, ports);
+        }
+        await marker.drainSessionActiveTurnWrites(task);
+        if (index + 1 < decisions) guard.noteTurnStarted(task);
+      }
+      expect(attempts).toBe(scenario === 'skip' ? 1 : 2);
+      expect(settle).toHaveBeenCalledOnce();
+      sendMobileSessionNotify.mockClear();
+      notificationCtor.mockClear();
+      const payload = { sessionId: task, title: 'Task', kind: 'done', channels: { desktop: true, mobile: true } };
+      await invokeHandler(payload, windowEvent(1));
+      await invokeHandler(payload, windowEvent(2));
+      const notice = await preview.readSessionNotificationPreview(task);
+      const row = db.select().from(sessions).all().find(entry => entry.id === task)!;
+      const timing = marker.getSilentContinuationTiming?.(task, row.activeTurnStartedAt, client);
+      const detail = projectSessionDetail({ ...row, messageCount: 1, latestMessageExtract: null, latestMessageRole: null },
+        undefined, timing?.startedAt ?? undefined, timing?.settledEndAt);
+      sqlite.prepare('UPDATE sessions SET cleared_at = 1060 WHERE id = ?').run(task);
+      const cleared = await preview.readSessionNotificationPreview(task);
+      const sends = sendMobileSessionNotify.mock.calls as unknown as Array<[{ sessionId: string; eventId: string; detail?: string }]>;
+      expect(sends).toHaveLength(1);
+      const [{ eventId, detail: reply }] = sends[0];
+      return {
+        eventId, reply, notice, cleared, signal: marker.getSessionNotificationTurnSignal(task),
+        elapsed: detail.turnElapsedMs, desktopCount: notificationCtor.mock.calls.length,
+        settlements: settle.mock.calls.length, failures: banner.mock.calls.length,
+      };
+    }
+
+    const parent = await run(false);
+    if (process.env.CINDY_L341_D3_REFERENCE_ONLY === '1') {
+      console.info('L341 D3 parent', scenario, JSON.stringify(parent));
+      return;
+    }
+    const desktop = await run(true);
+    if (process.env.CINDY_L341_D3_CAPTURE === '1') console.info('L341 D3 desktop', scenario, JSON.stringify(desktop));
+    expect(desktop).toEqual(parent);
+  } finally {
+    startSilentMarker.mockReset();
+    forgetSilentProjection.mockReset();
+    noteSilentSettlement.mockReset();
+    getSilentContinuationTiming.mockReset();
+    time.mockRestore();
+    clearCurrentDbClient(client);
+    marker._resetSessionActiveTurnStateForTests();
+    sqlite.close();
+    commitVolatileAppSession(priorOwner.mode, priorOwner.dataOwnerId);
+    rmSync(userData, { recursive: true, force: true });
+  }
+});
 
 interface FakeFeishuIM {
   getOwnerOpenId: ReturnType<typeof vi.fn>;
@@ -169,7 +436,9 @@ function makeFeishuIm(ownerOpenId: string | null): FakeFeishuIM {
   };
 }
 
-// notificationService 在顶层做 IIFE / module state, 每个用例都拿一份新的。
+// notificationService 在顶层做 IIFE / module state, 既有用例仍各拿一份新的。
+// 「cross-window failure dedupe on one module」只在 beforeAll 调一次：账本 key 含
+// owner + session + channel，两条用例靠不同 session 和不同 alert id 隔离，不逐条重载。
 async function freshService() {
   vi.resetModules();
   registeredHandlers.clear();
@@ -194,21 +463,31 @@ async function freshService() {
   drainSessionActiveTurnWrites.mockReset().mockResolvedValue(undefined);
   getSessionNotificationTurnSignal.mockReset().mockReturnValue(undefined);
   const service = await import('../notificationService');
-  const { setMainLocale } = await import('../i18n');
+  const { setMainLocale } = await import('../i18n.desktop');
   // 既有分发断言以简中为基准；需要验证其它语言的用例会在调用前显式切换。
   setMainLocale('zh-CN');
   return service;
 }
 
-async function invokeHandler(payload: unknown): Promise<void> {
+function windowEvent(senderId: number): { sender: { id: number } } {
+  return { sender: { id: senderId } };
+}
+
+async function invokeHandler(payload: unknown, event: unknown = {}): Promise<void> {
   const handler = registeredHandlers.get('notification:show-session-event');
   if (!handler) throw new Error('handler not registered');
-  await handler({} as unknown, payload);
+  await handler(event, payload);
   await flushAsync();
 }
 
 /** mobile 分支是 fire-and-forget 的独立 async 块;断言它之前先把微任务队列排空。 */
 const flushAsync = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+// 有的用例会切到假定时器，而且这个文件不止一个 describe。恢复必须盖住整个文件，
+// 否则前一个用例留下的假定时器会让后面用例里的 setTimeout(0) 永远不跑。
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const baseDeps = (feishuIm: FakeFeishuIM) => ({
   getWindow: () => null,
@@ -220,6 +499,76 @@ const baseDeps = (feishuIm: FakeFeishuIM) => ({
 });
 
 describe('notificationService — channels 分发', () => {
+  // Unit regression: direct scheduler/autonomy toasts bypassed the renderer's island gate and
+  // played a second sound. Exercise actual OS options, including the exits that must stay audible.
+  it('applies the sound policy only where a Cindy sound can replace the system one', async () => {
+    const { initNotificationService, showDesktopSessionEvent, showDesktopChatMessage } = await freshService();
+    let silent = true;
+    initNotificationService({ ...baseDeps(makeFeishuIm(null)), shouldSilenceTaskNotification: (kind) => silent && kind !== 'error' });
+    showDesktopSessionEvent(() => null, { sessionId: 'sound-task', title: 'Task', kind: 'done' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: true }));
+    showDesktopSessionEvent(() => null, { sessionId: 'sound-task', title: 'Task', kind: 'error' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
+    // A run that never created a session changes no island state, so nothing else will sound.
+    showDesktopSessionEvent(() => null, { sessionId: '', title: 'Schedule', kind: 'done' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
+    // Group chat rows never get task sounds, so their fallback toast keeps the system sound.
+    const chat = { groupId: 'sound-chat', groupName: 'Chat', messageId: 'reply', senderName: 'Cindy', avatar: '', preview: 'Done' };
+    await showDesktopChatMessage(chat, () => true);
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.not.objectContaining({ silent: true }));
+    silent = false;
+    showDesktopSessionEvent(() => null, { sessionId: 'sound-task', title: 'Task', kind: 'done' });
+    expect(notificationCtor).toHaveBeenLastCalledWith(expect.objectContaining({ silent: false }));
+  });
+
+  // #13214 / unit: main's isTaskAlertShownElsewhere must both suppress local OS toasts
+  // while Agent Notch / Live Activity owns the alert and restore OS fallback when ownership
+  // is released (for example after disconnecting a selected external display), without
+  // overriding an explicit desktop=false preference.
+  it('arbitrates desktop toast suppression and disconnected-display fallback via isTaskAlertShownElsewhere', async () => {
+    const { initNotificationService } = await freshService();
+    let ownedElsewhere = true;
+    initNotificationService({
+      ...baseDeps(makeFeishuIm(null)),
+      isTaskAlertShownElsewhere: () => ownedElsewhere,
+    });
+
+    await invokeHandler({
+      sessionId: 'owned-1', title: 'Task', kind: 'done',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+    await invokeHandler({
+      sessionId: 'owned-2', title: 'Task', kind: 'needs-reply', alertEventId: 'turn:1:ask',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+    await invokeHandler({
+      sessionId: 'owned-3', title: 'Task', kind: 'error', alertEventId: 'turn:1:error',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+    expect(notificationCtor).not.toHaveBeenCalled();
+
+    ownedElsewhere = false;
+    await invokeHandler({
+      sessionId: 'fallback-1', title: 'Task', kind: 'done',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+    await invokeHandler({
+      sessionId: 'fallback-2', title: 'Task', kind: 'needs-reply', alertEventId: 'turn:2:ask',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+    await invokeHandler({
+      sessionId: 'fallback-3', title: 'Task', kind: 'error', alertEventId: 'turn:2:error',
+      channels: { desktop: true, feishu: false, mobile: false },
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(3);
+
+    await invokeHandler({
+      sessionId: 'pref-off', title: 'Task', kind: 'done',
+      channels: { desktop: false, feishu: false, mobile: false },
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(3);
+  });
+
   // Regression: OS click must keep host + original task + reply anchor through reload,
   // and a notification from the previous account must not navigate the new account.
   it('routes desktop notification clicks with their original host and message, fenced by owner', async () => {
@@ -250,13 +599,6 @@ describe('notificationService — channels 分发', () => {
     await showDesktopChatMessage({ ...payload, threadRootId: 'thread-2' }, () => true);
     expect(notificationCtor).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ title: 'Group', body: 'Other: Reply' }));
   });
-  beforeEach(() => {
-    // 每个用例重新注册 handler,避免相互污染。
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   // #6754 review 4373832302 / unit: a finished handoff's delayed event keeps
   // its host-recorded routing decision; current pending state can already differ.
   it('uses request ownership after a handoff ends and rejects unknown or cross-session request IDs', async () => {
@@ -444,113 +786,39 @@ describe('notificationService — channels 分发', () => {
   it('re-checks the mute after preview enrichment so muting during the wait still suppresses', async () => {
     const { initNotificationService } = await freshService();
     const feishuIm = makeFeishuIm('owner');
-    // 交接判定是发出去之前的最后一个 await，就在那里把免打扰打开。
-    const check = vi.fn(async () => {
+    // 取正文是发出去之前的最后一个 await，就在那里把免打扰打开。
+    const preview = vi.fn(async () => {
       isSessionNotificationsMutedSync.mockReturnValue(true);
-      return false;
+      return { eventId: 'turn:1:2' };
     });
-    initNotificationService({ ...baseDeps(feishuIm), isCompletionHandledByTeammate: check });
+    readSessionNotificationPreview.mockImplementation(preview);
+    initNotificationService(baseDeps(feishuIm));
     getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:1:2', fallbackEventId: 'turn:1:2', ended: true });
 
     await invokeHandler({ sessionId: 's1', title: 'Mid-flight', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } });
 
-    expect(check).toHaveBeenCalled();
+    expect(preview).toHaveBeenCalled();
     expect(notificationCtor).not.toHaveBeenCalled();
     expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
-  });
-
-  it('hands off delegated completion on every external channel while preserving task attention and consuming retries', async () => {
-    const { initNotificationService } = await freshService();
-    const feishuIm = makeFeishuIm('owner');
-    const check = vi.fn().mockResolvedValue(true);
-    initNotificationService({ ...baseDeps(feishuIm), isCompletionHandledByTeammate: check });
-    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:100:200', fallbackEventId: 'turn:100:200', ended: true });
-    const payload = { sessionId: 's1', title: 'Delegated', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } };
-    await invokeHandler(payload);
-    expect(markSessionNeedsAttention).toHaveBeenCalledWith('s1');
-    expect(notificationCtor).not.toHaveBeenCalled();
-    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
-    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
-    // Removing the relation cannot resurrect a previously consumed event.
-    check.mockResolvedValue(false);
-    getMobileNotifyGeneration.mockReturnValueOnce(8);
-    await invokeHandler(payload);
-    expect(notificationCtor).not.toHaveBeenCalled();
-    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
-    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:300:400', fallbackEventId: 'turn:300:400', ended: true });
-    await invokeHandler(payload);
-    expect(notificationCtor).toHaveBeenCalledOnce();
-    expect(sendMobileSessionNotify).toHaveBeenCalledOnce();
-    expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
-  });
-
-  it('does not send an old completion when handoff resolution crosses a newer turn', async () => {
-    const { initNotificationService } = await freshService();
-    const feishuIm = makeFeishuIm('owner');
-    let resolve!: (handled: boolean) => void;
-    const check = vi.fn(() => new Promise<boolean>(r => { resolve = r; }));
-    initNotificationService({ ...baseDeps(feishuIm), isCompletionHandledByTeammate: check });
-    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:100:200', fallbackEventId: 'turn:100:200', ended: true });
-    await invokeHandler({ sessionId: 's1', title: 'Delegated', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } });
-    expect(check).toHaveBeenCalledOnce();
-    getSessionNotificationTurnSignal.mockReturnValue({ id: 'turn:300:400', fallbackEventId: 'turn:300:400', ended: true });
-    resolve(false); await flushAsync();
-    expect(notificationCtor).not.toHaveBeenCalled();
-    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
-    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
-    expect(markSessionNeedsAttention).toHaveBeenCalledWith('s1');
-  });
-
-  it('notifies only the teammate final reply after handing off its child completion', async () => {
-    const { initNotificationService } = await freshService();
-    const feishuIm = makeFeishuIm('owner');
-    initNotificationService({ ...baseDeps(feishuIm), isCompletionHandledByTeammate: async id => id === 'child' });
-    readSessionNotificationPreview.mockImplementation(async id => id === 'teammate'
-      ? { teammateName: 'Teammate', teammateBotId: 'bot-a', reply: { clientId: 'final', text: '**Final** result' }, eventId: 'final' }
-      : { eventId: 'child-result' });
-    const channels = { desktop: true, feishu: true, mobile: true };
-    await invokeHandler({ sessionId: 'child', title: 'Background task', kind: 'done', channels });
-    await invokeHandler({ sessionId: 'child', title: 'Background task', kind: 'done', channels });
-    await invokeHandler({ sessionId: 'teammate', title: 'Teammate', kind: 'done', channels });
-    await invokeHandler({ sessionId: 'teammate', title: 'Teammate', kind: 'done', channels });
-    expect(notificationCtor).toHaveBeenCalledOnce();
-    expect(notificationCtor).toHaveBeenCalledWith(expect.objectContaining({ body: 'Final result' }));
-    expect(sendMobileSessionNotify).toHaveBeenCalledOnce();
-    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'teammate', teammateBotId: 'bot-a' }));
-    expect(feishuIm.sendText).toHaveBeenCalledOnce();
-    expect(feishuIm.sendMarkdownText).not.toHaveBeenCalled();
-  });
-
-  it.each(['error', 'needs-reply'])('keeps %s immediate even while a teammate completion check is blocked', async kind => {
-    const { initNotificationService } = await freshService();
-    const feishuIm = makeFeishuIm('owner');
-    const check = vi.fn(() => new Promise<boolean>(() => {}));
-    initNotificationService({ ...baseDeps(feishuIm), isCompletionHandledByTeammate: check });
-    await invokeHandler({ sessionId: 's1', title: 'Delegated', kind, channels: { desktop: true, feishu: true, mobile: true } });
-    expect(check).not.toHaveBeenCalled();
-    expect(notificationCtor).toHaveBeenCalledOnce();
-    expect(sendMobileSessionNotify).toHaveBeenCalledOnce();
-    expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
-  });
-
-  it.each([false, 'reject'])('retains completion fallback when internal handoff is unavailable (%s)', async outcome => {
-    const { initNotificationService } = await freshService();
-    const feishuIm = makeFeishuIm('owner');
-    const check = outcome === false ? vi.fn().mockResolvedValue(false) : vi.fn().mockRejectedValue(new Error('fixture failure'));
-    initNotificationService({ ...baseDeps(feishuIm), isCompletionHandledByTeammate: check });
-    await invokeHandler({ sessionId: 's1', title: 'Delegated', kind: 'done', channels: { desktop: true, feishu: true, mobile: true } });
-    expect(notificationCtor).toHaveBeenCalledOnce();
-    expect(sendMobileSessionNotify).toHaveBeenCalledOnce();
-    expect(feishuIm.sendMarkdownText).toHaveBeenCalledOnce();
   });
 
   it('同步并校验 renderer 持久化的桌面通知总开关', async () => {
-    const { getDesktopNotificationsEnabled, initNotificationService } = await freshService();
+    const { getDesktopNotificationsEnabled, initNotificationService, showPrivacyScreenNotification } = await freshService();
     initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
     const handler = registeredHandlers.get('notification:set-desktop-enabled');
     expect(handler).toBeDefined();
 
+    // Background cover failures follow the same preference. Only a notification
+    // click opens the local privacy settings, never the automatic retry itself.
+    const openSettings = vi.fn();
+    showPrivacyScreenNotification('Privacy screen', 'Control permission required', openSettings);
+    expect(notificationCtor).toHaveBeenCalledExactlyOnceWith({ title: 'Privacy screen', body: 'Control permission required' });
+    expect(openSettings).not.toHaveBeenCalled();
+    notificationClicks[0]!();
+    expect(openSettings).toHaveBeenCalledOnce();
     await handler?.({}, false);
+    showPrivacyScreenNotification('Privacy screen', 'Cover failed', openSettings);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
     expect(getDesktopNotificationsEnabled()).toBe(false);
     expect(() => handler?.({}, 'false')).toThrow(
       'notification desktop enabled must be a boolean',
@@ -590,6 +858,27 @@ describe('notificationService — channels 分发', () => {
     expect(notificationCtor).not.toHaveBeenCalled();
     expect(sendMobileSessionNotify).not.toHaveBeenCalled();
     expect(markSessionNeedsAttention).not.toHaveBeenCalled();
+  });
+
+  // #9575 review: an alert id longer than 256 used to fail the whole payload
+  // check (`invalid session event payload`), so a legitimate long request key
+  // never toasted. The id is only a dedup key: drop it and still deliver.
+  // A repeat of that same over-long id is not kept, so it toasts again.
+  it('does not reject a needs-reply whose alert id is longer than 256', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const tooLong = 'plugin:' + 'k'.repeat(260);
+
+    await expect(invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'needs-reply', alertEventId: tooLong, channels,
+    })).resolves.toBeUndefined();
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+    await invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'needs-reply', alertEventId: tooLong, channels,
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
   });
 
   it('mobile 通道同步抛错不 reject invoke,飞书分支照常执行', async () => {
@@ -652,13 +941,21 @@ describe('notificationService — channels 分发', () => {
       title: 'Fix login',
       kind: 'needs-reply',
       markAttention: false,
+      remoteDeviceId: 'execution-host',
       channels: { desktop: false, feishu: false, mobile: true },
     });
 
     expect(markSessionNeedsAttention).not.toHaveBeenCalled();
-    expect(sendMobileSessionNotify).toHaveBeenCalled();
+    await flushAsync();
+    expect(sendMobileSessionNotify).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'remote-1', remoteDeviceId: 'execution-host', muteExempt: true,
+    }));
     await expect(invokeHandler({ sessionId: 'remote-1', title: 'x', kind: 'done', markAttention: 'no' }))
       .rejects.toThrow('invalid session event payload');
+    for (const remoteDeviceId of ['', 42, 'x'.repeat(257)]) {
+      await expect(invokeHandler({ sessionId: 'remote-1', title: 'x', kind: 'error', remoteDeviceId }))
+        .rejects.toThrow('invalid session event payload');
+    }
   });
 
   it('rejects a caller that is not the Cindy renderer before any channel or badge work', async () => {
@@ -801,7 +1098,8 @@ describe('notificationService — channels 分发', () => {
     getSessionNotificationTurnSignal.mockReturnValue({
       id: 'signal:2', fallbackEventId: 'turn:300:400:signal-2', ended: true,
     });
-    await invokeHandler(payload); // turn B's own terminal
+    await invokeHandler(payload, windowEvent(1)); // turn B's own terminal
+    await invokeHandler(payload, windowEvent(2)); // duplicate from a second renderer, same product turn key
     expect(notificationCtor).toHaveBeenCalledTimes(1);
     expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
     expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
@@ -933,6 +1231,8 @@ describe('notificationService — channels 分发', () => {
       generation: 7,
       detail: '修好了,共改了 3 个文件。',
       eventId: 'reply-id',
+      // 完成的任务可以在通知上直接回复(docs/product-rules/notification-actions.md)。
+      reply: true,
     });
 
     sendMobileSessionNotify.mockClear();
@@ -951,6 +1251,57 @@ describe('notificationService — channels 分发', () => {
       kind: 'error',
       generation: 7,
     });
+  });
+
+  // 通知按钮(docs/product-rules/notification-actions.md):等批准的通知只描述并绑定本机此刻仍在等的那一条请求。
+  // 镜像的远程任务在本机可能有同 id 的无关任务,绝不能把本机的请求挂到它的通知上——那会让手机批准另一条操作。
+  it('等批准或等回答:手机通知带本机那一条请求并按请求去重;远程镜像任务不带', async () => {
+    const { initNotificationService } = await freshService();
+    const permission = { requestId: 'req-1', body: 'Allow?\npnpm test' };
+    const question = { requestId: 'q-1', body: 'Which database?\n1. Postgres\n2. SQLite', options: ['Postgres', 'SQLite'] };
+    const pendingPermissionAlert = vi.fn((): { permission?: typeof permission; question?: typeof question } => ({ permission }));
+    initNotificationService({ ...baseDeps(makeFeishuIm('ou_owner')), pendingInteractionAlert: pendingPermissionAlert });
+    const event = { sessionId: 's1', title: 'Hello', kind: 'needs-reply', channels: { desktop: false, feishu: false, mobile: true } };
+
+    await invokeHandler(event);
+    await flushAsync();
+    expect(pendingPermissionAlert).toHaveBeenCalledWith('s1');
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({
+      kind: 'needs-reply', permission, eventId: 'permission:req-1',
+    }));
+
+    // Execution and mirrored alerts must share the same identity, independently
+    // of action buttons. A request-specific fallback is only for legacy callers.
+    await invokeHandler({ ...event, alertEventId: 'turn:1:permission:req-1' });
+    await flushAsync();
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({
+      permission, eventId: 'turn:1:permission:req-1',
+    }));
+    pendingPermissionAlert.mockClear();
+    await invokeHandler({ ...event, alertEventId: 'turn:1:permission:req-1', remoteDeviceId: 'other-mac', markAttention: false });
+    await flushAsync();
+    expect(pendingPermissionAlert).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({ eventId: 'turn:1:permission:req-1' }));
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ permission: expect.anything() }));
+
+    // 等回答的是一道提问:同样绑定到那一条请求。
+    pendingPermissionAlert.mockReturnValueOnce({ question });
+    await invokeHandler({ ...event, alertEventId: 'turn:1:ask:q-1' });
+    await flushAsync();
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({
+      kind: 'needs-reply', question, eventId: 'turn:1:ask:q-1',
+    }));
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ permission: expect.anything() }));
+
+    sendMobileSessionNotify.mockClear();
+    pendingPermissionAlert.mockClear();
+    await invokeHandler({ ...event, alertEventId: 'turn:1:ask:q-1', remoteDeviceId: 'other-mac', markAttention: false });
+    await flushAsync();
+    expect(pendingPermissionAlert).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.objectContaining({ eventId: 'turn:1:ask:q-1' }));
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ permission: expect.anything() }));
+    expect(sendMobileSessionNotify).toHaveBeenLastCalledWith(expect.not.objectContaining({ question: expect.anything() }));
   });
 
   it('链路代次在 await 之前捕获:等待队列期间换号,透传的仍是发起时的代次', async () => {
@@ -1156,7 +1507,7 @@ describe('notificationService — channels 分发', () => {
 
   it('zh-TW → 桌面与飞书使用繁中，空标题兜底也跟随当前语言', async () => {
     const { initNotificationService, showDesktopSessionEvent } = await freshService();
-    const { setMainLocale } = await import('../i18n');
+    const { setMainLocale } = await import('../i18n.desktop');
     const feishuIm = makeFeishuIm('ou_owner');
     initNotificationService(baseDeps(feishuIm));
     setMainLocale('zh-TW');
@@ -1228,6 +1579,500 @@ describe('notificationService — channels 分发', () => {
     expect(notificationCtor).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]![0]).toContain('feishu send failed');
+  });
+
+  // Bug: same needs-reply / error payload notified twice because the desktop
+  // ledger only recorded kind === 'done'. A repeated alert id is one toast; a
+  // different id is a new request and must still notify. Completions keep their
+  // own turn identity and are not part of this ledger key.
+  it('shows one desktop toast for a repeated needs-reply or error, and another for a new id', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const ask = { sessionId: 's1', title: 'Ask', kind: 'needs-reply', alertEventId: 'ask-1', channels };
+    await invokeHandler(ask);
+    await invokeHandler(ask);
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    await invokeHandler({ ...ask, alertEventId: 'ask-2' });
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    const failed = { sessionId: 's1', title: 'Ask', kind: 'error', alertEventId: 'err-1', channels };
+    await invokeHandler(failed);
+    await invokeHandler(failed);
+    expect(notificationCtor).toHaveBeenCalledTimes(3);
+  });
+
+  // #9317 review / unit: an alert id longer than 256 used to fail the whole
+  // payload check, so the needs-reply or error never toasted. The id is only a
+  // dedup key: drop it and still deliver. A later short id of the same task is
+  // a different alert and must toast again.
+  it('still delivers a needs-reply or error when its alert id is too long to keep', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const tooLong = 'turn:100:' + 'k'.repeat(300);
+    await invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'needs-reply', alertEventId: tooLong, channels,
+    });
+    await invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'error', alertEventId: '', channels,
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    await invokeHandler({
+      sessionId: 's1', title: 'Ask', kind: 'error', alertEventId: 'turn:200:error', channels,
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(3);
+  });
+
+  // #9575 review / unit: two alerts of one task both read the preview before either
+  // finishes. The ledger used to keep whichever id finished last, so an older
+  // alert completing after a newer one rewrote the newer id and the next delivery
+  // of that newer alert toasted again. Order is the turn clock inside the id,
+  // not whose preview read returns first. The repeated id below is the one that
+  // must stay swallowed after the out-of-order completion.
+  //
+  // The replay used to keep the held preview mock. invokeHandler only waits for
+  // the IPC return and one macrotask, so the duplicate toast was still pending
+  // when the count was asserted, and releasing that read afterwards could show
+  // a third toast without failing the test. Settle the chain first, then send
+  // the same id once more: a broken dedup key makes that third delivery toast.
+  it.each([
+    {
+      name: 'newer preview finishes first',
+      first: { kind: 'needs-reply', alertEventId: 'turn:100:ask:1' },
+      second: { kind: 'needs-reply', alertEventId: 'turn:200:ask:2' },
+      finish: 'second-then-first' as const,
+      repeat: 'turn:200:ask:2',
+    },
+    {
+      name: 'older preview finishes first',
+      first: { kind: 'needs-reply', alertEventId: 'turn:100:ask:1' },
+      second: { kind: 'needs-reply', alertEventId: 'turn:200:ask:2' },
+      finish: 'first-then-second' as const,
+      repeat: 'turn:100:ask:1',
+    },
+    {
+      name: 'two different alerts of one turn',
+      first: { kind: 'needs-reply', alertEventId: 'turn:100:ask:1' },
+      second: { kind: 'error', alertEventId: 'turn:100:error' },
+      finish: 'second-then-first' as const,
+      repeat: 'both' as const,
+    },
+  ])('toasts each concurrent alert once ($name)', async ({ first, second, finish, repeat }) => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const pending: Array<() => void> = [];
+    // Each delivery reads the preview once before it can toast. Hold those reads so
+    // this test, not the 1s preview timeout, decides which one finishes first.
+    readSessionNotificationPreview.mockImplementation(() => new Promise(resolve => {
+      pending.push(() => resolve({}));
+    }));
+    const handler = registeredHandlers.get('notification:show-session-event')!;
+    const started = [
+      handler({}, { sessionId: 's1', title: 'Ask', ...first, channels }),
+      handler({}, { sessionId: 's1', title: 'Ask', ...second, channels }),
+    ];
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    const release = finish === 'second-then-first' ? [pending[1]!, pending[0]!] : [pending[0]!, pending[1]!];
+    release[0]();
+    await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(1));
+    release[1]();
+    await Promise.all(started);
+    await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(2));
+    // Drop the held preview before any replay. A still-pending read lets the
+    // duplicate decide after this assertion, so a missed dedup key still passes.
+    readSessionNotificationPreview.mockImplementation(async () => ({}));
+    for (const releaseLeft of pending.splice(0)) releaseLeft();
+    await flushAsync();
+    expect(notificationCtor).toHaveBeenCalledTimes(2);
+    const deliver = async (alertEventId: string) => {
+      const kind = alertEventId === second.alertEventId ? second.kind : first.kind;
+      await invokeHandler({ sessionId: 's1', title: 'Ask', kind, alertEventId, channels });
+    };
+    const again = repeat === 'both' ? [first.alertEventId, second.alertEventId] : [repeat];
+    for (const alertEventId of again) {
+      await deliver(alertEventId);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    }
+    // Third delivery of the same id. The count stays 2 only while that id is
+    // still in the ledger; dropping the key makes this toast and fails here.
+    for (const alertEventId of again) {
+      await deliver(alertEventId);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  // Two BrowserWindows each sample Date.now() for one running frame, so the same
+  // error arrives as turn:1000:error and turn:1002:error. Exact-id dedupe toasts
+  // both. Collapse that pair only because the senders differ: same task, same
+  // content tail, arrivals inside 1s, one toast. The second preview is released
+  // last so a ledger that only keeps the latest id cannot hide the extra toast.
+  // A different request, a different error tail, another task, and the same tail
+  // a full second later each toast.
+  it('toasts once when two renderer clocks 2ms apart report the same alert', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const pending: Array<() => void> = [];
+    readSessionNotificationPreview.mockImplementation(() => new Promise(resolve => {
+      pending.push(() => resolve({}));
+    }));
+    const handler = registeredHandlers.get('notification:show-session-event')!;
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const started = [
+        handler(windowEvent(1), {
+          sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+        }),
+      ];
+      now += 2;
+      started.push(handler(windowEvent(2), {
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      }));
+      await vi.waitFor(() => expect(pending).toHaveLength(2));
+      pending[1]!();
+      await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(1));
+      pending[0]!();
+      await Promise.all(started);
+      await flushAsync();
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+      readSessionNotificationPreview.mockImplementation(async () => ({}));
+      for (const releaseLeft of pending.splice(0)) releaseLeft();
+      await flushAsync();
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      });
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+
+      now += 2;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'needs-reply', alertEventId: 'turn:1004:ask:2', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      now += 2;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1006:error:quota', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(3);
+      now += 2;
+      await invokeHandler({
+        sessionId: 's2', title: 'Other', kind: 'error', alertEventId: 'turn:1008:error', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(4);
+
+      now += 1000;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:9000:error', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(5);
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      });
+      expect(notificationCtor).toHaveBeenCalledTimes(5);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // Same window, two failures, 200ms apart. Stripping the turn clock leaves `error`
+  // for both. A time window alone would collapse them; the sender id must not.
+  it('toasts twice when the same window reports two failures 200ms apart', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1200:error', channels,
+      }, windowEvent(1));
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // Two windows, clocks 2ms apart, arrivals 200ms apart. Different sender ids are
+  // what makes this one event; the shared `error` tail is not enough on its own.
+  it('toasts once when two windows 200ms apart report the same failure', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      }, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // The suppressed window's id has to stay in the ledger. Replaying that same
+  // payload 2s later misses both the exact id and the 1s content window if it
+  // was never recorded, and would toast again.
+  it('does not toast again when a collapsed window replays its payload after 2s', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    const collapsed = {
+      sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+    };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler(collapsed, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      now += 2000;
+      await invokeHandler(collapsed, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // Window 2's collapsed copy used to become a merge anchor: it keeps sender 2 and
+  // the shared `error` tail. Window 1's next failure, 200ms later, differs from
+  // window 1's first id but matches that alias, so both windows swallow the new
+  // failure. The third delivery must toast. Window 2's copy of that same id, a few
+  // ms later, is the duplicate and must not toast again.
+  it('toasts a later failure after the other window only recorded an alias', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1002:error', channels,
+      }, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1200:error', channels,
+      }, windowEvent(1));
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      now += 2;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'error', alertEventId: 'turn:1200:error', channels,
+      }, windowEvent(2));
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // Both windows are in the background. The first failure is one event seen twice,
+  // then the next failure lands inside 1s: 1000 (window 1) → 1002 (window 2) →
+  // 1200 (window 2) → 1200 (window 1). The anchor used to keep only window 1, so
+  // window 2's new failure still matched it (same `error` tail, other sender) and
+  // was recorded as an alias; window 1's copy was then swallowed by that exact id.
+  // The third delivery must toast. Counts are 1, 1, 2, 2.
+  it('toasts the next failure on both windows after both joined the first event', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const deliver = (alertEventId: string, senderId: number) => invokeHandler({
+      sessionId: 's1', title: 'Task', kind: 'error', alertEventId, channels,
+    }, windowEvent(senderId));
+    try {
+      await deliver('turn:1000:error', 1);
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      now += 2;
+      await deliver('turn:1002:error', 2);
+      expect(notificationCtor).toHaveBeenCalledTimes(1);
+      now += 198;
+      await deliver('turn:1200:error', 2);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+      now += 2;
+      await deliver('turn:1200:error', 1);
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // Both background windows sample one turn clock, so the first failure is the
+  // same id twice: 1000 (window 1) → 1000 (window 2) → 1200 (window 2) →
+  // 1200 (window 1), all inside 202ms. Exact-id dedupe used to return before
+  // recording window 2 on that anchor, so window 2's new failure still matched
+  // the first event and was stored as an alias; window 1's copy was then
+  // swallowed by that exact id. Counts are 1, 1, 2, 2.
+  //
+  // #9575 review / unit: dedupe used to wait until preview finished, so the ledger
+  // only knew deliveries whose reads had returned. Two background windows each
+  // report two failures. Arrival is 1000/w1, 1000/w2, 1200/w2, 1200/w1 at
+  // 0/2/200/202ms, but the reads finish 1200/w2, 1000/w1, 1000/w2, 1200/w1.
+  // The old 1000/w1 write then landed as an alias of the already-toasted 1200,
+  // and exact-id dedupe swallowed the rest: one real failure never toasted.
+  // Each turn keeps its own arrival, so Notification.show runs twice — once for
+  // turn 1000, once for turn 1200 — no matter which preview returns first.
+  // 生产入口：notification:show-session-event。可观察结果：两次桌面 toast。
+  // 缺口：此前的 [1,1,2,2] 按到达顺序读完，盖不住「后一轮先读完」。
+  // 最小失败输入：上面这四次到达与相反的 preview 完成序。tier：unit。
+  //
+  // 这两条共用 beforeAll 里加载的一份模块：账本 key 含 owner + session + channel，
+  // 用不同 session 和不同的 turn 时钟隔开，不在每条用例里 vi.resetModules()。
+  describe('cross-window failure dedupe on one module', () => {
+    let initNotificationService: Awaited<ReturnType<typeof freshService>>['initNotificationService'];
+
+    beforeAll(async () => {
+      ({ initNotificationService } = await freshService());
+    });
+
+    beforeEach(() => {
+      initNotificationService(baseDeps(makeFeishuIm(null)));
+      notificationCtor.mockClear();
+      readSessionNotificationPreview.mockReset().mockImplementation(async (sessionId, includeReply = true) => {
+        if (!includeReply) return {};
+        const text = await latestMessageText(sessionId, 'assistant');
+        return text ? { reply: { clientId: 'reply-id', text }, eventId: 'reply-id' } : {};
+      });
+    });
+
+    it('toasts the next failure when both windows share the first alert id', async () => {
+      const channels = { desktop: true, feishu: false, mobile: false };
+      const sessionId = 'shared-id-session';
+      let now = 1_700_000_000_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      const counts: number[] = [];
+      const deliver = async (alertEventId: string, senderId: number) => {
+        await invokeHandler({
+          sessionId, title: 'Task', kind: 'error', alertEventId, channels,
+        }, windowEvent(senderId));
+        counts.push(notificationCtor.mock.calls.length);
+      };
+      try {
+        await deliver('turn:1000:error', 1);
+        now += 2;
+        await deliver('turn:1000:error', 2);
+        now += 198;
+        await deliver('turn:1200:error', 2);
+        now += 2;
+        await deliver('turn:1200:error', 1);
+        expect(counts).toEqual([1, 1, 2, 2]);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('toasts each turn once when a later failure preview finishes before the earlier one', async () => {
+      const channels = { desktop: true, feishu: false, mobile: false };
+      const sessionId = 'preview-order-session';
+      const pending: Array<() => void> = [];
+      readSessionNotificationPreview.mockImplementation(() => new Promise(resolve => {
+        pending.push(() => resolve({}));
+      }));
+      const handler = registeredHandlers.get('notification:show-session-event')!;
+      let now = 1_800_000_000_000;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      const deliver = (alertEventId: string, senderId: number) => handler(windowEvent(senderId), {
+        sessionId, title: 'Task', kind: 'error', alertEventId, channels,
+      });
+      try {
+        const started = [deliver('turn:1000:error', 1)];
+        now += 2;
+        started.push(deliver('turn:1000:error', 2));
+        now += 198;
+        started.push(deliver('turn:1200:error', 2));
+        now += 2;
+        started.push(deliver('turn:1200:error', 1));
+        await vi.waitFor(() => expect(pending).toHaveLength(4));
+        // Finish order: 1200/w2, 1000/w1, 1000/w2, 1200/w1.
+        const finish = [pending[2]!, pending[0]!, pending[1]!, pending[3]!];
+        finish[0]!();
+        await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(1));
+        finish[1]!();
+        await vi.waitFor(() => expect(notificationCtor).toHaveBeenCalledTimes(2));
+        finish[2]!();
+        finish[3]!();
+        await Promise.all(started);
+        await flushAsync();
+        // First finished read is turn 1200 window 2; second is turn 1000 window 1.
+        // Each is its own toast. The two later reads are the other window of that turn.
+        expect(notificationCtor).toHaveBeenCalledTimes(2);
+        // Replaying either turn's id still does not toast. A ledger that aliased
+        // 1000 onto 1200 would already have failed the count above; this pins the
+        // exact ids so a later delivery of the swallowed turn cannot come back.
+        readSessionNotificationPreview.mockImplementation(async () => ({}));
+        for (const releaseLeft of pending.splice(0)) releaseLeft();
+        await flushAsync();
+        await invokeHandler({
+          sessionId, title: 'Task', kind: 'error', alertEventId: 'turn:1000:error', channels,
+        }, windowEvent(1));
+        await invokeHandler({
+          sessionId, title: 'Task', kind: 'error', alertEventId: 'turn:1200:error', channels,
+        }, windowEvent(2));
+        expect(notificationCtor).toHaveBeenCalledTimes(2);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+  });
+
+  // Same window, two needs-reply request keys. Different content must not merge
+  // even inside the 1s window.
+  it('toasts twice when the same window reports two different requests', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    let now = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'needs-reply', alertEventId: 'turn:1000:ask:1', channels,
+      }, windowEvent(1));
+      now += 200;
+      await invokeHandler({
+        sessionId: 's1', title: 'Task', kind: 'needs-reply', alertEventId: 'turn:1200:ask:2', channels,
+      }, windowEvent(1));
+      expect(notificationCtor).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  // #9317 / unit: a done with no turn id and a failed preview read records only a
+  // send time. An alert keeps its own ledger, so a later needs-reply or error of
+  // the same task — even one that also has no id — must still toast.
+  it('still notifies an alert after a completion fell back to a send time', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm(null)));
+    getSessionNotificationTurnSignal.mockReturnValue(undefined);
+    readSessionNotificationPreview.mockRejectedValue(new Error('read unavailable'));
+    const channels = { desktop: true, feishu: false, mobile: false };
+    await invokeHandler({ sessionId: 's1', title: 'Task', kind: 'done', channels });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    await invokeHandler({ sessionId: 's1', title: 'Task', kind: 'needs-reply', channels });
+    await invokeHandler({ sessionId: 's1', title: 'Task', kind: 'error', channels });
+    expect(notificationCtor).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -1501,7 +2346,7 @@ describe('teammate reply previews', () => {
   });
   it('uses localized reply fallback without inventing task completion when there is no body', async () => {
     const { initNotificationService } = await freshService();
-    const { setMainLocale } = await import('../i18n');
+    const { setMainLocale } = await import('../i18n.desktop');
     setMainLocale('en');
     readSessionNotificationPreview.mockResolvedValue({ teammateName: 'Mochi' });
     initNotificationService(baseDeps(makeFeishuIm('owner')));

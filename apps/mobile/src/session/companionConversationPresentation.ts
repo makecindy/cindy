@@ -1,8 +1,57 @@
-import { groupTeammateProcess } from '@cindy/maker-shared/message-render';
+import { collapseLegacyIdleGapCards, groupTeammateProcess } from '@cindy/maker-shared/message-render';
 import { hasRichAnswer } from '@cindy/maker-shared/rich-answer';
 import { botTaskResultKey, readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
+import { collectBotTurnContinuations } from '@cindy/maker-shared/botTimeline';
 import type { MobileMessageRenderItem, MobileWorkGroupItem, MobileWorkChildItem } from './messageRenderModel';
+
+function companionRowKind(item: MobileMessageRenderItem) {
+  if (item.type === 'work_group') return 'process';
+  if (item.type === 'message') {
+    if (item.message.companion) return 'artifact';
+    if (item.message.kind === 'assistant' && !item.message.systemCardType) return 'reply';
+    return 'boundary';
+  }
+  return item.type === 'pending_send' || item.type === 'fork_origin' ? 'boundary' : 'artifact';
+}
+
+export function companionTurnContinuations(items: readonly MobileMessageRenderItem[]): ReadonlySet<string> {
+  return collectBotTurnContinuations(items, item => {
+    const start = item.type === 'work_group' ? item.startedAtMs
+      : 'message' in item ? Date.parse(item.message.createdAt) : undefined;
+    return {
+      kind: companionRowKind(item),
+      completed: item.type === 'message' && item.message.turnCompleted === true,
+      start,
+      end: item.type === 'work_group' && start !== undefined ? start + (item.durationMs ?? 0) : start,
+    };
+  });
+}
+
+/** Display the reply's own clock above the first process row of its turn. */
+export function companionTimeGroupRows(
+  items: readonly MobileMessageRenderItem[],
+  groups: ReadonlyMap<string, number>,
+  continuations: ReadonlySet<string>,
+): ReadonlyMap<string, number> {
+  const rows = new Map<string, number>();
+  let processKey: string | undefined;
+  for (const item of items) {
+    const kind = companionRowKind(item);
+    if (kind === 'process') {
+      if (processKey === undefined || !continuations.has(item.key)) processKey = item.key;
+      continue;
+    }
+    const timestamp = groups.get(item.key);
+    if (timestamp !== undefined) {
+      const owner = kind === 'reply' && continuations.has(item.key) ? processKey : undefined;
+      rows.set(owner ?? item.key, timestamp);
+    }
+    // A later clock must stay below any earlier clock, reply, or turn boundary.
+    if (timestamp !== undefined || kind === 'reply' || kind === 'boundary') processKey = undefined;
+  }
+  return rows;
+}
 
 const expandWorkGroups = (items: readonly MobileMessageRenderItem[]): MobileMessageRenderItem[] =>
   items.flatMap(item => item.type === 'work_group' ? expandWorkGroups(item.children) : [item]);
@@ -135,13 +184,17 @@ export function companionProcessItems(items: readonly MobileMessageRenderItem[],
     isProgress: item => item.type === 'message' && item.message.kind === 'assistant' && !item.message.systemCardType
       && !addressed.has(item) && (item.message.source.agentMeta?.assistantPhase === 'commentary'
         || (liveItems.has(item))),
-    isRecovery: item => item.type === 'message' && ['agent-switch', 'auto-resume', 'context-rebuild'].includes(item.message.systemCardType ?? ''),
+    isRecovery: item => item.type === 'message' && ['auto-resume', 'context-rebuild'].includes(item.message.systemCardType ?? ''),
     start: time,
     end: item => item.type === 'work_group' && item.startedAtMs !== undefined
       ? item.startedAtMs + (item.durationMs ?? 0) : time(item),
     streaming: item => item.type === 'work_group' ? item.isStreaming === true : liveItems.has(item),
     create: (children, key, streaming, start, end) => ({ type: 'work_group', teammateJournal: true, key,
-      children: children as MobileWorkChildItem[], isStreaming: streaming,
+      children: collapseLegacyIdleGapCards(children as MobileWorkChildItem[], child => child.type === 'message' ? {
+        clientId: child.message.source.clientId || child.message.source.id || child.message.key,
+        systemCardType: child.message.systemCardType,
+        systemCardData: child.message.systemCardData,
+      } : undefined), isStreaming: streaming,
       ...(start !== null ? { startedAtMs: start } : {}),
       ...(start !== null && end !== null ? { durationMs: Math.max(0, end - start) } : {}) }),
   });

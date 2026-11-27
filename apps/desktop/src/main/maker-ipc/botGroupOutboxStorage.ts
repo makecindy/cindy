@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { botGroupErrorVariant } from '@cindy/maker-shared/botGroupPresentation';
 import { getActiveAppSession, isAppSessionBoundaryPending, onAppSessionInvalidated, ownerScopedUserDataPath } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { parseBlobUrl } from '../cindy-media/blobStore.js';
+import { parseBlobUrl } from '../cindy-media/blobStore.desktop.js';
 import * as ledger from '../cindy-media/ledger.js';
 import { atomicWriteFileSync, readAtomicFileSync } from '../utils/atomicWriteFile.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -25,6 +25,8 @@ const entrySchema = z.object({ input: z.object({ groupId: identifier, clientId: 
   mentions: z.object({ all: z.boolean(), allBots: z.boolean().optional(), botIds: z.array(identifier).max(200) }),
   conversationKind: z.literal('direct').optional(), division: z.boolean().optional(),
 }).passthrough(), createdAt: z.number().finite(), status: z.enum(['sending', 'sent', 'failed']),
+  retryAt: z.number().int().nonnegative().optional(),
+  postRateLimited: z.literal(true).optional(),
   draft: z.string(), signature: z.string(), attachmentScope: z.string(), after: z.number().finite(),
   tracked: z.array(z.unknown()), attachments: z.array(z.unknown()).max(32),
   files: z.array(mediaSchema).max(32), prepared: z.array(mediaSchema).max(32).optional(),
@@ -73,8 +75,10 @@ function storageFailure(error: unknown): never {
   if (isIpcError(error)) throw error;
   return throwIpcError('INTERNAL', 'OUTBOX_STORAGE_FAILED');
 }
-const permanent = new Set(['QUOTE_UNAVAILABLE', 'MENTION_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED',
+const permanent = new Set(['QUOTE_UNAVAILABLE', 'MENTION_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED', 'ALL_HUMANS_MENTION_FORBIDDEN',
   'INVALID_PARAMS', 'INVALID_ATTACHMENT', 'ATTACHMENT_TOO_LARGE', 'NOT_FOUND', 'PERMISSION_DENIED']);
+const retryBlocked = (row: BotGroupOutboxStoredEntry) =>
+  row.retryAt !== undefined && (row.status === 'failed' || row.retryAt > Date.now());
 
 /** The IPC adapter already authenticates a complete application window. Identity is the actual object. */
 type Sender = Pick<WebContents, 'isDestroyed' | 'on' | 'removeListener'>;
@@ -336,14 +340,23 @@ export function createBotGroupOutboxStorage(deps: StorageDependencies) {
     for (const [key, settlement] of [...state.settlements]) {
       const row = state.rows.get(key);
       if (!row || row.entryRevision !== settlement.entryRevision) continue;
-      const settled: BotGroupOutboxStoredEntry = settlement.result.ok
-        ? { ...row, status: 'sent', messageId: settlement.result.messageId, baseline: undefined }
-        : { ...row, status: 'failed', retryable: !permanent.has(settlement.result.errorCode),
-            quote: settlement.result.errorCode === 'QUOTE_UNAVAILABLE' ? null : row.quote,
-            errorKey: settlement.result.errorCode === 'INVALID_PARAMS' && (row.prepared as unknown[] | undefined)?.length
-              ? 'bots.groupChat.composer.attachmentsFailed'
-              : botGroupErrorVariant(settlement.result.errorCode)
-                ? `bots.groupChat.errors.${botGroupErrorVariant(settlement.result.errorCode)}` : 'bots.groupChat.composer.sendFailed', baseline: undefined };
+      const { result } = settlement;
+      let settled: BotGroupOutboxStoredEntry;
+      if (result.ok) {
+        settled = { ...row, status: 'sent', messageId: result.messageId, baseline: undefined, retryAt: undefined, postRateLimited: undefined };
+      } else if (result.retryAt !== undefined && (row.retryAt === undefined || result.postRateLimited && !row.postRateLimited)) {
+        // A throttled preflight read does not consume the retry for the first actual POST.
+        settled = { ...row, status: 'sending', retryAt: result.retryAt, postRateLimited: result.postRateLimited,
+          baseline: undefined, errorKey: undefined };
+      } else {
+        settled = { ...row, status: 'failed', retryable: !permanent.has(result.errorCode), retryAt: result.retryAt ?? row.retryAt,
+          quote: result.errorCode === 'QUOTE_UNAVAILABLE' ? null : row.quote,
+          errorKey: result.errorCode === 'INVALID_PARAMS' && (row.prepared as unknown[] | undefined)?.length
+            ? 'bots.groupChat.composer.attachmentsFailed'
+            : botGroupErrorVariant(result.errorCode)
+              ? `bots.groupChat.errors.${botGroupErrorVariant(result.errorCode)}` : 'bots.groupChat.composer.sendFailed',
+          baseline: undefined };
+      }
       try {
         await save(state, settled, owner);
         state.settlements.delete(key); state.inFlight.delete(key); state.claims.delete(key);
@@ -405,6 +418,8 @@ export function createBotGroupOutboxStorage(deps: StorageDependencies) {
         state.high.set(queue, ordinal); // Failed commits may leave gaps, never reorder committed rows.
         const row: BotGroupOutboxStoredEntry = { ...original, coordinated: true, entryRevision: (source?.entryRevision ?? 0) + 1,
           queueOrdinal: ordinal, status: 'sending', retryable: true, enqueueOperationId: request.enqueueOperationId,
+          retryAt: source && rowKey(source) === key ? source.retryAt : undefined,
+          postRateLimited: source && rowKey(source) === key ? source.postRateLimited : undefined,
           businessSignature, enqueueSource: request.editSource, editSource: source && rowKey(source) !== key ? request.editSource : undefined };
         for (const field of ['editHold', 'prepared', 'messageId', 'errorKey', 'receiptTick', 'baseline']) delete row[field];
         await save(state, row, owner);
@@ -416,7 +431,7 @@ export function createBotGroupOutboxStorage(deps: StorageDependencies) {
       if (request.action === 'claim') {
         const key = keyOf(request.groupId, request.clientId); let row = state.rows.get(key);
         if (request.entryRevision !== undefined && request.entryRevision !== row?.entryRevision) fail('STALE_ENTRY');
-        if (!row || row.editHold || row.status === 'sent' || row.retryable === false || state.intents.has(key)
+        if (!row || row.editHold || row.status === 'sent' || row.retryable === false || retryBlocked(row) || state.intents.has(key)
           || state.inFlight.has(key) || sourceConsumed(state, key)) fail('NOT_CLAIMABLE');
         if (state.blocked.has(queueKey(row)) || state.migrationFailed.has(queueKey(row))) fail('QUEUE_INVALID');
         let claim = state.claims.get(key);
@@ -486,7 +501,7 @@ export function createBotGroupOutboxStorage(deps: StorageDependencies) {
       await flush(state, owner);
       const row = validate(state, sender, execution); const key = rowKey(row); const queue = queueKey(row);
       if (state.blocked.has(queue) || state.migrationFailed.has(queue)) fail('QUEUE_INVALID');
-      if (state.inFlight.has(key) || row.status === 'sent' || row.retryable === false) fail('BUSY');
+      if (state.inFlight.has(key) || row.status === 'sent' || row.retryable === false || retryBlocked(row)) fail('BUSY');
       const head = [...state.rows.values()].filter(candidate => queueKey(candidate) === queue && candidate.status !== 'sent'
         && !candidate.editHold && !sourceConsumed(state, rowKey(candidate)))
         .sort((a, b) => a.queueOrdinal! - b.queueOrdinal!)[0];
@@ -536,7 +551,7 @@ export function createBotGroupOutboxStorage(deps: StorageDependencies) {
       if (request.action === 'put') {
         // Metadata is Main-owned; old uncoordinated clients cannot mint an execution generation.
         const row = { ...request.entry } as BotGroupOutboxStoredEntry;
-        for (const field of ['coordinated', 'entryRevision', 'queueOrdinal', 'editHold', 'editSource', 'enqueueSource', 'enqueueOperationId', 'businessSignature']) delete row[field];
+        for (const field of ['coordinated', 'entryRevision', 'queueOrdinal', 'editHold', 'editSource', 'enqueueSource', 'enqueueOperationId', 'businessSignature', 'retryAt', 'postRateLimited']) delete row[field];
         await save(state, row, request.owner);
       } else await erase(state, key, request.owner);
       return [];

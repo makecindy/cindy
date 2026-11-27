@@ -28,18 +28,20 @@ import { open, realpath, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { FILE_INLINE_MAX_BYTES } from '@cindy/device-link';
 
-import * as imageCacheStore from '../imageCacheStore.js';
+import * as imageCacheStore from '../imageCacheStore.desktop.js';
 import * as videoCacheStore from '../videoCacheStore.js';
-import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
+import * as cindyMediaBlobStore from '../cindy-media/blobStore.desktop.js';
 import { getSensitiveMediaBlocklist, isPathAllowedAgainst } from '../filePathPolicy.js';
 import { materializeSshRemoteMedia } from '../file-browser/ssh-media.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
-import { mimeOf, uploadLocalFile } from './mediaTransfer.js';
+import { mimeOf, uploadLocalFile } from './mediaTransfer.desktop.js';
 import { createLogger } from '../logger.js';
 import { getDeviceLinkInvokeContext } from './invoke-context.js';
 import { sharedTaskMediaId, withSharedTaskMedia } from './sharedTaskMediaContext.js';
 import { assertSharedTaskMedia } from './sharedTaskMediaAccess.js';
-import { fileVersion } from './fileVersion.js';
+import { readFileVersion } from './fileVersion.js';
+import { activeOwnerScopeKey } from '../appSessionState.js';
+import { agentNetMediaCacheScope } from './agentNetMediaRouting.js';
 
 const log = createLogger('device-link:mediaFetch');
 
@@ -422,7 +424,10 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
 
   // 大小门禁:必须在 uploadLocalFile 之前(review P2)。SSH 分支已在 materialize 内部按
   // 远端 stat 判过,这里只管本机分支(realpath 后 stat,与后续上传读的是同一个 inode)。
-  if (constraints.maxBytes !== null && !sshOrigin) {
+  // 静态图片带 thumbnail:true 时由下方缩图分支按 THUMB_INPUT_MAX_BYTES 放行降采样;
+  // 若缩图失败回退到原图上传,则在进入上传路径前强制执行 maxBytes,不产生超限上传。
+  const deferMaxBytesForThumbnail = record.thumbnail === true && canThumbnail(absPath, mimeType);
+  if (constraints.maxBytes !== null && !sshOrigin && !deferMaxBytesForThumbnail) {
     const sizeStat = await stat(absPath);
     if (sizeStat.size > constraints.maxBytes) {
       log.warn(
@@ -439,16 +444,23 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
   };
 }
 
-export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResult> {
+export function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResult> {
+  const scope = activeOwnerScopeKey();
+  const assertCurrent = () => { if (scope !== activeOwnerScopeKey()) throw new Error('DEVICE_LINK_SCOPE_CHANGED'); };
+  return fetchLocalMediaForOwner(arg, assertCurrent).then((result) => { assertCurrent(); return result; });
+}
+async function fetchLocalMediaForOwner(arg: unknown, assertCurrent: () => void): Promise<MediaFetchResult> {
   const record =
     arg && typeof arg === 'object'
       ? (arg as { url?: unknown; skipCache?: unknown; thumbnail?: unknown; prepareOnly?: unknown; metadataOnly?: unknown })
       : {};
   const { absPath, mimeType, uploadExtHint, maxBytes, sourceVersion } = await resolveAuthorizedMedia(arg);
+  assertCurrent();
   const url = record.url as string;
   const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
   const mediaScope = sharedTask?.author.sharedTaskId ?? sharedTaskMediaId();
-  const cacheKey = mediaScope ? `${mediaScope}:${url}` : url;
+  const transportScope = agentNetMediaCacheScope();
+  const cacheKey = (transportScope ? transportScope + '\0' : '') + (mediaScope ? `${mediaScope}:${url}` : url);
   const skipCache = record.skipCache === true;
   if (record.prepareOnly === true && record.thumbnail !== true) {
     const file = await open(absPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -456,10 +468,11 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
       const before = await file.stat();
       if (!before.isFile()) throw new Error('REMOTE_FILE_NOT_REGULAR');
       if (maxBytes !== null && before.size > maxBytes) throw new Error('REMOTE_FILE_TOO_LARGE');
+      const identity = await readFileVersion(file, absPath, before, sourceVersion);
       const result = {
         ossKey: '',
         size: before.size,
-        version: fileVersion(absPath, before, sourceVersion),
+        version: identity.version,
         mimeType:
           mimeType ??
           mimeOf((uploadExtHint ?? path.extname(absPath)).replace(/^\./, '').toLowerCase()),
@@ -469,15 +482,15 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
         return { ...result, transferRequired: true };
       }
       // Bounded read: a growing file cannot allocate an unbounded relay response.
-      const bytes = Buffer.alloc(before.size);
-      let offset = 0;
+      const bytes = identity.bytes ?? Buffer.alloc(before.size);
+      let offset = identity.bytes ? bytes.length : 0;
       while (offset < bytes.length) {
         const read = await file.read(bytes, offset, bytes.length - offset, offset);
         if (!read.bytesRead) throw new Error('REMOTE_FILE_CHANGED');
         offset += read.bytesRead;
       }
       const after = await file.stat();
-      if (fileVersion(absPath, after, sourceVersion) !== result.version)
+      if ((await readFileVersion(file, absPath, after, sourceVersion)).version !== result.version)
         throw new Error('REMOTE_FILE_CHANGED');
       log.debug(`media:fetch prepare → inline size=${before.size} mime=${result.mimeType}`);
       return { ...result, inlineBase64: bytes.toString('base64') };
@@ -493,7 +506,9 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
       const inputStat = await stat(absPath);
       if (inputStat.size > 0 && inputStat.size <= THUMB_INPUT_MAX_BYTES) {
         const thumb = await withRenderTimeout(thumbnailRenderer(absPath), THUMB_RENDER_TIMEOUT_MS);
-        if (thumb && thumb.byteLength > 0 && thumb.byteLength <= THUMB_INLINE_MAX_BYTES) {
+        const inlineCap =
+          maxBytes !== null ? Math.min(THUMB_INLINE_MAX_BYTES, maxBytes) : THUMB_INLINE_MAX_BYTES;
+        if (thumb && thumb.byteLength > 0 && thumb.byteLength <= inlineCap) {
           log.debug(`media:fetch thumb ${url.slice(0, 40)} → inline ${thumb.byteLength}B`);
           return {
             ossKey: '',
@@ -509,7 +524,17 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
         url: url.slice(0, 60),
       });
     }
-    // 缩不动(输入超限/产物超限/超时/失败)→ 继续走下面的原图上传路径。
+    // 缩不动(输入超限/产物超限/超时/失败)→ 回退原图上传前先执行 maxBytes 门禁,
+    // 避免连 readIdentity 哈希/上传预签名都白做。
+    if (maxBytes !== null) {
+      const fallbackStat = await stat(absPath);
+      if (fallbackStat.size > maxBytes) {
+        log.warn(
+          `media:fetch rejected oversize fallback ${fallbackStat.size}B > ${maxBytes}B ${url.slice(0, 60)}`,
+        );
+        throw new Error(`资源超出取件大小上限(${fallbackStat.size} > ${maxBytes} 字节)`);
+      }
+    }
   }
 
   // cindy-media 地址=内容指纹,永不变更,是最理想的上传去重键。
@@ -517,7 +542,18 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
   const versioned = !cacheable && !/^(audio|video)\//.test(
     mimeType ?? mimeOf((uploadExtHint ?? path.extname(absPath)).replace(/^\./, '').toLowerCase()),
   );
-  const st = cacheable || versioned ? await stat(absPath) : null;
+  const readIdentity = async () => {
+    const file = await open(absPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const st = await file.stat();
+      if (!st.isFile()) throw new Error('REMOTE_FILE_NOT_REGULAR');
+      return { stat: st, ...(await readFileVersion(file, absPath, st, sourceVersion)) };
+    } finally {
+      await file.close();
+    }
+  };
+  const beforeUpload = versioned ? await readIdentity() : null;
+  const st = beforeUpload?.stat ?? (cacheable ? await stat(absPath) : null);
   if (cacheable && st) {
     if (!skipCache) {
       const hit = lookupUploadCache(cacheKey, st.size, st.mtimeMs, Date.now());
@@ -529,7 +565,9 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
   }
 
   if (sharedTask && !sharedTask.isCurrent()) throw new Error('[PERMISSION_DENIED] Shared task access revoked');
+  assertCurrent();
   const uploaded = await withSharedTaskMedia(sharedTask?.author.sharedTaskId, () => uploadLocalFile(absPath, {
+    assertCurrent,
     ...(maxBytes !== null ? { maxBytes } : {}),
     ...(mimeType ? { contentType: mimeType } : {}),
     ...(uploadExtHint ? { extHint: uploadExtHint } : {}),
@@ -547,10 +585,10 @@ export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResu
   log.debug(`media:fetch ${url.slice(0, 40)} → ossKey=${uploaded.key} size=${uploaded.size}`);
   // Fallback downloads can join the same durable version cache as direct transfers.
   // A changing source remains viewable but must never be indexed under an old version.
-  const afterUpload = versioned ? await stat(absPath).catch(() => null) : null;
-  const version = st && afterUpload && uploaded.size === st.size
-    && fileVersion(absPath, st, sourceVersion) === fileVersion(absPath, afterUpload, sourceVersion)
-    ? fileVersion(absPath, st, sourceVersion) : undefined;
+  const afterUpload = versioned ? await readIdentity().catch(() => null) : null;
+  const version = beforeUpload && afterUpload && uploaded.size === beforeUpload.stat.size
+    && beforeUpload.version === afterUpload.version
+    ? beforeUpload.version : undefined;
   return { ossKey: uploaded.key, mimeType: uploaded.contentType, size: uploaded.size, ...(version ? { version } : {}) };
 }
 

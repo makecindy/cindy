@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { activeOwnerScopeKey } from '../appSessionState';
 import path from 'node:path';
 import { ResourceUsageWindowController } from '../resource-usage-window/controller';
-import { getResolvedMainLocale, t } from '../i18n';
+import { getResolvedMainLocale, t } from '../i18n.desktop';
 import type { SupportedLocale } from '../../shared/locale';
 import { onScreenshotTranslationPreferenceChanged, readScreenshotTranslationPreference, writeScreenshotTranslationPreference } from './translationPreferences';
 import { isScreenshotTranslationLanguage, resolveScreenshotTranslationLanguage } from '../../shared/screenshotTranslation';

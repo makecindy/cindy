@@ -1,0 +1,4 @@
+module CindyAgentNetNative {
+  header "cindy_agent_net.h"
+  export *
+}

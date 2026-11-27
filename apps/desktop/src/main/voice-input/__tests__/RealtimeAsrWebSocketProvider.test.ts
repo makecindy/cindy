@@ -528,6 +528,55 @@ describe('RealtimeAsrWebSocketProvider helpers', () => {
     }
   });
 
+  // #10094 / PR #8505: existing tests start after upgrade, missing ws's
+  // asynchronous CONNECTING abort error. Keep real loopback I/O but advance
+  // only the prewarm timer; both paths must settle and release the transport.
+  it.each(['timeout', 'invalidation'] as const)('safely closes a connecting prewarm on %s', async (reason) => {
+    let pendingSocket: import('node:net').Socket | undefined;
+    let signalHandshake!: () => void;
+    let signalClosed!: () => void;
+    const handshake = new Promise<void>((resolve) => { signalHandshake = resolve; });
+    const closed = new Promise<void>((resolve) => { signalClosed = resolve; });
+    const server = new WebSocketServer({
+      host: '127.0.0.1',
+      port: 0,
+      verifyClient(info, _done) {
+        void _done;
+        pendingSocket = info.req.socket;
+        pendingSocket.once('end', () => {
+          pendingSocket?.destroy();
+          signalClosed();
+        });
+        // Withhold the upgrade response until production abandons the socket.
+        signalHandshake();
+      },
+    });
+
+    try {
+      await new Promise<void>((resolve) => server.once('listening', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected local test server address.');
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+      const prewarm = prewarmRealtimeAsrWebSocketSession({
+        accessTokenProvider: async () => 'test-key',
+        realtimeUrl: `ws://127.0.0.1:${address.port}/v1/realtime`,
+      });
+      await handshake;
+      if (reason === 'timeout') await vi.advanceTimersByTimeAsync(8_000);
+      else invalidatePrewarmedRealtimeAsrWebSocketSession();
+      await prewarm;
+      // Keep ws's real nextTick error delivery visible to Vitest.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await closed;
+      expect(pendingSocket?.destroyed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      pendingSocket?.destroy();
+      invalidatePrewarmedRealtimeAsrWebSocketSession();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it('closes a prewarmed socket when readiness fails after upgrade', async () => {
     const server = new WebSocketServer({ port: 0 });
     let serverSocket: WebSocket | undefined;

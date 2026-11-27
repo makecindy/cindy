@@ -1,40 +1,13 @@
-import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { getSessionProvider } from '../maker-host/session-provider-store.js';
-import { isUserProviderSession } from '../maker-host/provider-route.js';
-import { getSessionFastMode } from '../maker-host/session-effort-store.js';
-import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
-import type { UsageBillingSource } from '@cindy/maker-shared/usage-cost-details';
-import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from '../maker-host/subscription-account-auth.js';
+// The desktop's turnUsageContext: its core (turnUsageContextCore.ts, shared with the Node Host), with the desktop
+// functions it imported before bound to its ports (turnUsagePorts.ts), each resolved when called.
+// The core calls no port while its module loads (export * evaluates it before the binding below runs);
+// each port is resolved when it is called. This module's imports are the ones turnUsageContext.ts had.
+import '../maker-host/subscription-account-auth.js';
+import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.desktop.js';
+import { bindTurnUsagePorts } from './turnUsagePorts.js';
 
-/** Non-secret billing identity captured with the existing product-turn metadata.
- * Deleting or editing a connection must not reclassify requests already sent.
- */
-export function captureTurnUsageContext(sessionId: string) {
-  const providerId = getSessionProvider(sessionId);
-  const accessKind = providerId
-    ? getActiveCatalog().providers.find(provider => provider.id === providerId)?.access?.kind
-    : undefined;
-  return {
-    providerId,
-    providerName: getActiveCatalog().providers.find(provider => provider.id === providerId)?.name,
-    accessKind,
-    isUserProviderRoute: isUserProviderSession(sessionId),
-    subscriptionKind: isOpenAiSubscriptionProviderId(providerId) ? 'codex' as const
-      : isClaudeSubscriptionProviderId(providerId) ? 'claude' as const
-        : isXaiSubscriptionProviderId(providerId) ? 'xai' as const : null,
-    piFastMode: getSessionFastMode(sessionId),
-  };
-}
-export type TurnUsageContext = ReturnType<typeof captureTurnUsageContext>;
+bindTurnUsagePorts({
+  isOpenAiSubscriptionProviderId: (...args) => isOpenAiSubscriptionProviderId(...args),
+});
 
-export function turnBillingSource(context: TurnUsageContext, route: string): UsageBillingSource {
-  if (route === 'xd-gateway' && context.providerId !== 'xd') {
-    return { providerId: 'xd', billingSource: 'cindy-ai' };
-  }
-  return {
-    ...(context.providerId ? { providerId: context.providerId } : {}),
-    ...(context.providerName ? { providerName: context.providerName } : {}),
-    billingSource: route === 'subscription' ? 'subscription' : route === 'xd-gateway' ? 'cindy-ai'
-      : route === 'provider-api' ? 'provider' : 'unknown',
-  };
-}
+export * from './turnUsageContextCore.js';

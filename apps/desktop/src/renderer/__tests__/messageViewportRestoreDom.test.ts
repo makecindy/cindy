@@ -6,7 +6,7 @@ import { createElement, useLayoutEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { describe, expect, it } from 'vitest';
-import { findRestorableViewportItemIdx, pickIntersectingChildAnchor, readViewportChildAnchorClientId, viewportRestoreNeedsMoreContent } from '../components/chat/MessageStream';
+import { findRestorableViewportItemIdx, pickIntersectingChildAnchor, readViewportChildAnchorClientId, resolveViewportRestoreMessage, viewportRestoreNeedsMoreContent, type RenderItem } from '../components/chat/MessageStream';
 import { findRenderItemElement, measureRestoredScrollGeometry, viewportAnchorCorrection } from '../components/chat/messageViewportCompensation';
 
 // Run the actual capture and positioning callbacks with a deterministic layout.
@@ -16,17 +16,19 @@ const source = ts.createSourceFile('MessageStream.tsx', readFileSync(
 ), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const component = source.statements.find((node): node is ts.FunctionDeclaration =>
   ts.isFunctionDeclaration(node) && node.name?.text === 'MessageStream')!;
-const names = ['measureViewportTop', 'scrollMessageToViewportTop'];
+const names = ['measureViewportTop', 'scrollMessageToViewportTop', 'applyRestore'];
 const statements = component.body!.statements.filter(node => ts.isVariableStatement(node) &&
   node.declarationList.declarations.some(d => names.includes(d.name.getText(source))));
 if (statements.length !== names.length) throw new Error('Viewport callbacks not found');
 const query = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'queryMessageElement')!;
 const code = ts.transpileModule([query, ...statements].map(node => node.getText(source)).join('\n') +
-  '\nreturn {capture:measureViewportTop,restore:scrollMessageToViewportTop};', {
+  '\nreturn {capture:measureViewportTop,restore:scrollMessageToViewportTop,restoreSnapshot:applyRestore};', {
   compilerOptions: { target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-function setup() {
+type ViewportSnapshot = Parameters<typeof resolveViewportRestoreMessage>[1];
+
+function setup(renderItems: RenderItem[] = []) {
   const container = document.createElement('div');
   const items = container.appendChild(document.createElement('div'));
   container.scrollTop = 100;
@@ -39,17 +41,27 @@ function setup() {
       bottom: y - container.scrollTop + height, height }) as DOMRect;
   };
   measure(row, 120);
+  Object.defineProperties(container, {
+    clientHeight: { value: 400 },
+    scrollHeight: { value: 2000 },
+  });
   const bindings = {
     useCallback: (callback: unknown) => callback,
-    scrollRef: { current: container }, itemsRef: { current: items },
+    messageViewportRef: { current: null }, scrollRef: { current: container }, itemsRef: { current: items },
     pickIntersectingChildAnchor, readViewportChildAnchorClientId, viewportAnchorCorrection,
     CSS: { escape: (id: string) => id }, isLoadingMore: false,
     prevScrollHeightRef: { current: 0 }, prevScrollTopAtLoadRef: { current: 0 },
     beginProgrammaticScroll: () => 1, finishProgrammaticScroll: () => false,
     requestAnimationFrame: (callback: () => void) => { callback(); return 1; },
+    restoreSnapshotRef: { current: null as ViewportSnapshot | null },
+    visibleRenderItemsRef: { current: renderItems },
+    findRestorableViewportItemIdx, findRenderItemElement, resolveViewportRestoreMessage,
+    viewportRestoreNeedsMoreContent, windowCoversEndRef: { current: true },
+    restoreLoadRef: { current: 'idle' }, refreshViewportAnchor: () => {},
+    restoredScrollGeometryRef: { current: null }, measureRestoredScrollGeometry,
   };
   const callbacks = new Function(...Object.keys(bindings), code)(...Object.values(bindings));
-  return { container, row, measure, ...callbacks };
+  return { container, row, measure, snapshotRef: bindings.restoreSnapshotRef, ...callbacks };
 }
 
 describe('message viewport capture and restore across remount', () => {
@@ -89,6 +101,36 @@ describe('message viewport capture and restore across remount', () => {
     view.measure(view.row, 192);
     expect(view.restore(saved.messageClientId, saved.messageOffset)).toBe(true);
     expect(view.row.getBoundingClientRect().top).toBe(52);
+  });
+
+  // Unit regression for #7594: the earlier DOM cases keep the same message.
+  // Two merged cards suffice: the old detail offset can exceed the new card's height.
+  it('restores to the remaining card when the removed card had open details', () => {
+    const groupKey = 'work-journal-old';
+    const view = setup([{
+      type: 'work_group', key: groupKey, teammateJournal: true, isStreaming: false,
+      children: [{
+        type: 'message', key: 'msg-kept', collapsedClientIds: ['old'],
+        message: { clientId: 'kept', role: 'assistant', content: '',
+          systemCardType: 'context-rebuild', systemCardData: { reason: 'idle-gap' } },
+      }],
+    }]);
+    view.row.dataset.renderItemKey = groupKey;
+    delete view.row.dataset.messageClientId;
+    const card = view.row.appendChild(document.createElement('div'));
+    card.dataset.messageClientId = 'old';
+    view.measure(view.row, 100, 600);
+    view.measure(card, 130, 500);
+    view.container.scrollTop = 530;
+    view.snapshotRef.current = view.capture();
+    expect(view.snapshotRef.current).toMatchObject({ messageClientId: 'old', messageOffset: 440 });
+
+    card.dataset.messageClientId = 'kept';
+    view.measure(view.row, 100, 90);
+    view.measure(card, 130, 34);
+    view.container.scrollTop = 0;
+    expect(view.restoreSnapshot()).toBe(true);
+    expect(card.getBoundingClientRect().top).toBe(view.container.getBoundingClientRect().top);
   });
 });
 
@@ -148,7 +190,7 @@ it('bounds synchronous expansion rounds through thousands of non-rendering rows'
     restoreSnapshotRef: { current: { viewportTopKey: 'anchor', offset: 0 } },
     scrollRef: { current: container }, itemsRef: { current: { children: [row] } },
     visibleRenderItemsRef: { current: [{ key: 'anchor' }] },
-    findRestorableViewportItemIdx, findRenderItemElement, viewportAnchorCorrection,
+    findRestorableViewportItemIdx, findRenderItemElement, viewportAnchorCorrection, resolveViewportRestoreMessage,
     viewportRestoreNeedsMoreContent, windowCoversEndRef: coversEnd,
     restoreLoadRef: { current: 'idle' }, anchoredForwardItemsRef: count,
     restoredScrollGeometryRef: { current: null }, measureRestoredScrollGeometry,

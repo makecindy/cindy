@@ -24,7 +24,14 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/lib/toast', () => ({ toast }));
-vi.mock('@/lib/composerDraftStore', () => ({ getAllDraftAttachmentUrls: () => [] }));
+vi.mock('@/lib/composerDraftStore', () => ({
+  getAllDraftAttachmentUrls: () => [],
+  subscribeAllDraftPresence: () => () => undefined,
+}));
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ dataOwnerId: 'storage-test-owner', dataOwnerGeneration: 1, dataOwnerRecoveryEpoch: 0 }),
+  useOptionalDataOwnerGeneration: () => 1,
+}));
 
 import { StorageManagementCard } from '../StorageManagementCard';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
@@ -127,6 +134,12 @@ beforeEach(() => {
     configurable: true,
     value: {
       cindyMediaStorage: storageApi(),
+      taskManagement: {
+        read: vi.fn(async () => ({ enabled: false, days: 7 })),
+        preview: vi.fn(async () => ({ candidateCount: 0, keptCount: 23, lastCheckAt: null })),
+        onChanged: vi.fn(() => () => undefined),
+        onArchived: vi.fn(() => () => undefined),
+      },
       localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
     },
   });
@@ -222,6 +235,7 @@ describe('StorageManagementCard fixed cache directories', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
+        ...window.electronAPI,
         cindyMediaStorage: api,
         localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
       },
@@ -243,6 +257,7 @@ describe('StorageManagementCard fixed cache directories', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
+        ...window.electronAPI,
         cindyMediaStorage: api,
         localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
       },
@@ -281,6 +296,7 @@ describe('StorageManagementCard fixed cache directories', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
+        ...window.electronAPI,
         cindyMediaStorage: api,
         localDb: { maintenance: maintenanceApi(), databaseSizeWarning: databaseSizeWarningApi() },
       },
@@ -311,6 +327,7 @@ describe('StorageManagementCard fixed cache directories', () => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
+        ...window.electronAPI,
         cindyMediaStorage: storageApi(),
         localDb: { maintenance: maintenanceApi(), databaseSizeWarning: warningApi },
       },
@@ -406,8 +423,9 @@ describe('StorageManagementCard fixed cache directories', () => {
       thresholdGiB: 12, disabled: false, isCustomized: false, defaultThresholdGiB: 12,
     });
     render(<StorageManagementCard />);
-    const reset = screen.getByRole('button', { name: 'settings.defaults.restore' });
-    await waitFor(() => expect((reset as HTMLButtonElement).disabled).toBe(false));
+    // Per-setting reset only appears once the saved settings are customized (CONTROLS decision 3).
+    const reset = await screen.findByRole('button', { name: 'settings.defaults.restore' });
+    expect((reset as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(reset);
 
     await waitFor(() => {
@@ -416,7 +434,7 @@ describe('StorageManagementCard fixed cache directories', () => {
       expect(screen.getByRole('switch', {
         name: 'settings.about.storage.dbSizeWarningDisableLabel',
       }).getAttribute('aria-checked')).toBe('false');
-      expect((reset as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.queryByRole('button', { name: 'settings.defaults.restore' })).toBeNull();
     });
     expect(api.setSettings).not.toHaveBeenCalled();
   });
@@ -428,13 +446,15 @@ describe('StorageManagementCard fixed cache directories', () => {
     });
     vi.mocked(api.resetSettings).mockRejectedValue(new Error('[INTERNAL] failed to reset settings'));
     render(<StorageManagementCard />);
-    const reset = screen.getByRole('button', { name: 'settings.defaults.restore' });
-    await waitFor(() => expect((reset as HTMLButtonElement).disabled).toBe(false));
+    const reset = await screen.findByRole('button', { name: 'settings.defaults.restore' });
+    expect((reset as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(reset);
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('ipcError.INTERNAL'));
     expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('25');
-    expect((reset as HTMLButtonElement).disabled).toBe(false);
+    await waitFor(() => expect(
+      (screen.getByRole('button', { name: 'settings.defaults.restore' }) as HTMLButtonElement).disabled,
+    ).toBe(false));
   });
 
   it('subscribes to setting changes without recalculating storage and unsubscribes on unmount', async () => {
@@ -450,8 +470,8 @@ describe('StorageManagementCard fixed cache directories', () => {
     const disabledSwitch = screen.getByRole('switch', {
       name: 'settings.about.storage.dbSizeWarningDisableLabel',
     });
-    const reset = screen.getByRole('button', { name: 'settings.defaults.restore' }) as HTMLButtonElement;
     await waitFor(() => expect(api.getSettings).toHaveBeenCalledOnce());
+    expect(screen.queryByRole('button', { name: 'settings.defaults.restore' })).toBeNull();
 
     vi.mocked(api.getSettings).mockResolvedValue({
       thresholdGiB: 25, disabled: true, isCustomized: true, defaultThresholdGiB: 10,
@@ -460,7 +480,9 @@ describe('StorageManagementCard fixed cache directories', () => {
     await waitFor(() => {
       expect(input.value).toBe('25');
       expect(disabledSwitch.getAttribute('aria-checked')).toBe('true');
-      expect(reset.disabled).toBe(false);
+      expect(
+        (screen.getByRole('button', { name: 'settings.defaults.restore' }) as HTMLButtonElement).disabled,
+      ).toBe(false);
     });
 
     vi.mocked(api.getSettings).mockResolvedValue({
@@ -470,7 +492,7 @@ describe('StorageManagementCard fixed cache directories', () => {
     await waitFor(() => {
       expect(input.value).toBe('10');
       expect(disabledSwitch.getAttribute('aria-checked')).toBe('false');
-      expect(reset.disabled).toBe(true);
+      expect(screen.queryByRole('button', { name: 'settings.defaults.restore' })).toBeNull();
     });
     expect(api.measure).toHaveBeenCalledOnce();
     expect(window.electronAPI.cindyMediaStorage.stats).toHaveBeenCalledOnce();
@@ -715,7 +737,10 @@ describe('StorageManagementCard database cleanup', () => {
   it('offers only 7 days, 1 month, 3 months, and 6 months, defaulting to 7 days', async () => {
     render(<StorageManagementCard />);
 
-    const threshold = screen.getByRole('combobox');
+    await waitFor(() => expect(
+      screen.getByRole('switch', { name: 'taskManagement.enabled' }).hasAttribute('disabled'),
+    ).toBe(false));
+    const threshold = screen.getByRole('combobox', { name: 'settings.about.storage.dbSlimmingArchiveAgeLabel' });
     expect(threshold.textContent).toContain(
       'settings.about.storage.dbSlimmingArchiveAgeOption7Days',
     );
@@ -729,16 +754,16 @@ describe('StorageManagementCard database cleanup', () => {
     ]);
     fireEvent.click(options[0]!);
     expect(
-      screen
-        .getByRole('switch', { name: 'settings.about.storage.dbSlimmingBackupLabel' })
-        .getAttribute('aria-checked'),
-    ).toBe('true');
+      (screen.getByRole('checkbox', {
+        name: 'settings.about.storage.dbSlimmingBackupLabel',
+      }) as HTMLInputElement).checked,
+    ).toBe(true);
     fireEvent.click(screen.getByText('settings.about.storage.dbSlimmingBackupLabel'));
     expect(
-      screen
-        .getByRole('switch', { name: 'settings.about.storage.dbSlimmingBackupLabel' })
-        .getAttribute('aria-checked'),
-    ).toBe('false');
+      (screen.getByRole('checkbox', {
+        name: 'settings.about.storage.dbSlimmingBackupLabel',
+      }) as HTMLInputElement).checked,
+    ).toBe(false);
     fireEvent.click(screen.getByText('settings.about.storage.dbSlimmingBackupLabel'));
     const scanButton = screen.getByRole('button', {
       name: 'settings.about.storage.dbSlimmingScanButton',

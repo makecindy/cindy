@@ -25,7 +25,10 @@ export default {
   name: 'group-chat',
   // Voice capture is outside this fixture.
   stubs: {
-    'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => { throw new Error("Voice input is not covered by this fixture"); };',
+    // Rich component bodies read account context, but sign-in is not under test.
+    'src/renderer/contexts/AuthContext': { partial: `export const useAuth = () => ({ mode: 'local', dataOwnerId: 'fixture-account', user: null });` },
+    // The group voice hook resolves its URL on render; capture is not exercised.
+    'src/renderer/voice-input/workletUrl': 'export function getVoiceInputWorkletUrl() { return ""; }',
     // The file preview pulls in pdf.js' and draw.io's workers through Vite's ?url, which the single-page builder does not implement; no group case opens a file.
     'src/renderer/features/cc-agent/workdir-browse/FileBodyView': 'export const FileBodyView = () => null;',
   },
@@ -33,8 +36,21 @@ export default {
   viewport: { width: 1280, height: 800 },
   real: 'BotGroupChatView (timeline, composer, send button, header registration), ControlledBanner, ContentHeader shell, Markdown, theme, fonts and translations',
   notCovered:
-    'Real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, plans and attachment IO; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state cases and is otherwise an empty frame',
+    'Account sign-in, audio capture, native voice shortcuts, real IPC/network sending (send-status/share-pending control host receipts), round control, real device-link control and revocation, answering pending owner interactions, server plan scheduling and attachment IO; plan-read cases control the full-read receipt; the bubbles case shows a task snapshot, not a live task; the sidebar renders the real group row for work-state/topic-preview cases and is otherwise an empty frame',
   cases: {
+    'topic-preview': { about: 'Sidebar source label stays plain non-interactive preview text and opens the main group chat',
+      viewport: { width: 1000, height: 700 }, data: { ...base, name: 'Cindy 讨论', bubbles: true, topicPreview: true } },
+    'reply-composer': {
+      about: 'Real thread reply composer with microphone and editable draft at narrow width',
+      viewport: { width: 420, height: 600 },
+      data: { ...base, sidebar: false, replyComposer: true },
+    },
+    'public-cindy': { about: 'Public Cindy work remains visible to a peer without private process or stop access',
+      data: { ...base, members: [{ botId: 'a', name: 'Cindy', assistant: true, isOwned: false }], sidebar: false, messages: 1, workState: 'unknown', canStop: false } },
+
+    'plan-read-talk': { about: '#9398: delayed plan details never flash an organizer or missing bubble; talk is independent', data: { ...base, sidebar: false, messages: 1, planRead: 'talk' } },
+    'plan-read-work': { about: '#9398: delayed work details preserve the selected organizer', data: { ...base, sidebar: false, messages: 1, planRead: 'work' } },
+    'plan-read-missing': { about: '#9398: a confirmed missing plan has a neutral visible fallback', data: { ...base, sidebar: false, messages: 1, planRead: 'missing' } },
     'share-pending': {
       about: 'Pending topic copy appears in the main chat while the host receipt is unresolved',
       data: { ...base, bubbles: true, threadPanel: true, sharePending: true },
@@ -53,6 +69,7 @@ export default {
     'process-history': { about: 'Owned teammate historical process, final reply outside', data: { ...base, sidebar: false, processRecord: true, workRemote: true } },
     'process-empty': { about: 'Final-only reply explains the empty process', data: { ...base, sidebar: false, processRecord: true, processEmpty: true, workRemote: true } },
     'process-unavailable': { about: 'Unavailable process shows a retry action', data: { ...base, sidebar: false, processRecord: true, processUnavailable: true, workRemote: true } },
+    'process-late': { about: 'Thinking persisted after the final seal remains inspectable', data: { ...base, sidebar: false, processRecord: true, processVariant: 'late', workRemote: true } },
     'process-other-owner': { about: 'Other members never receive a private process entry', data: { ...base, sidebar: false, processRecord: true, processOtherOwner: true, workRemote: true } },
     'work-thinking': { about: 'Actual group work status, scenario data: thinking', data: { ...base, messages: 2, workState: 'thinking' } },
     'work-tools': { about: 'Actual group work status, scenario data: command execution', data: { ...base, messages: 2, workState: 'testing' } },
@@ -63,7 +80,10 @@ export default {
     'work-unknown': { about: 'Remote work with no readable task: generic activity, no invented thinking', data: { ...base, messages: 2, workState: 'unknown' } },
     'work-remote': { about: 'Authenticated remote target projection, scenario data (not a live device-link run)', data: { ...base, messages: 2, workState: 'testing', workRemote: true } },
     'work-parallel': { about: 'Two concurrent execution rows, separate task entries and one group stop', data: { ...base, messages: 2, workState: 'testing', workParallel: true } },
+    'work-requesters': { about: 'Cindy progress keeps each requester visible', data: { ...base, members: [{ botId: 'a', name: 'Cindy' }, { botId: 'b', name: 'Cindy' }], messages: 3, workState: 'testing', workParallel: true, workReadonly: true, workRequesterNames: ['nana', 'chris'] } },
+    'work-chronology': { about: 'Concurrent work follows request time; another requester remains read-only', data: { ...base, messages: 3, workState: 'testing', workParallel: true, workReadonly: true } },
     'work-parallel-stopping': { about: 'Last execution is stopping while the first still runs: the group stop control remains available', data: { ...base, messages: 2, workState: 'testing', workParallel: true, workLastStopping: true } },
+    'planning-foreign': { about: 'My local arrangement decision remains cancellable when its organizer belongs to someone else', data: { ...base, messages: 2, sidebar: false, planningForeign: true } },
     'body-answer': {
       about: '#6550: component body is readable; literal punctuation and surrounding Markdown are retained',
       viewport: { width: 720, height: 700 },
@@ -88,8 +108,16 @@ export default {
     },
     'no-sidebar': { about: 'Collapsed sidebar layout', data: { ...base, sidebar: false } },
     bubbles: {
-      about: 'Teammate bubbles: quote, corner reaction, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',
+      about: 'Teammate bubbles: quote, corner reactions, thread entry, task card, long text at the width cap; hover shows the toolbar beside the bubble',
       data: { ...base, bubbles: true },
+    },
+    'reaction-motion': {
+      about: 'A local pick flies to its badge and plays once even offline; reduced motion goes straight to the selected state',
+      data: { ...base, bubbles: true, reactionMotion: true },
+    },
+    'reaction-colors': {
+      about: 'The picker replaces message actions without moving the bubble; keyboard focus and full-color emoji are preserved',
+      data: { ...base, bubbles: true, reactionMotion: true },
     },
     arrangement: {
       about: 'Single-speaker server group, nobody named: the queue card stands on its own, Aster answered and Nova is speaking next by itself',
@@ -118,17 +146,20 @@ export default {
       data: { ...base, division: 'auto' },
     },
     settings: {
-      about: 'Single-speaker group settings: reply mode, organizer, project folder and 分工交接 (off) as before; no speaking mode',
+      about: 'Group settings retain reply mode and project folder',
       data: { ...base, arrangement: 'running', settings: true },
     },
     division: {
-      about: 'Single-speaker group: 「+」→ 安排分工 is offered again; tagged, the composer says steps may be written out',
+      about: 'The composer offers attachments without a division mode',
       data: { ...base, arrangement: 'done' },
     },
     'thread-unread': {
-      about: 'Server read state: unread thread entries (with @you), the in-chat 话题 hint above the composer and its list of this group\'s Threads',
+      about: 'Thread entries show the total reply count while unread and mention indicators appear in the group thread hint',
       data: { ...base, bubbles: true, threadUnread: true },
     },
+    'thread-work': { about: 'Concurrent topic work stays in its own thread', data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true } },
+    'thread-work-no-stop': { about: 'Source topic retains public progress without unauthorized stop controls', data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true, canStop: false } },
+    'thread-work-overflow': { about: 'Long topic work scrolls while reply composer stays visible', viewport: { width: 1280, height: 600 }, data: { ...base, bubbles: true, threadUnread: true, threadPanel: true, threadWork: true, threadWorkTall: true } },
     'thread-follow': {
       about: 'The Thread panel\'s 关注 switch, off by default; switched on it reads 已关注',
       data: { ...base, bubbles: true, threadUnread: true, threadPanel: true },
@@ -165,7 +196,7 @@ export default {
         members: [{ botId: 'g', actorId: 'g', name: 'Ada' }, { botId: 'h', actorId: 'h', name: 'Kai' }] },
     },
     'bubbles-wrapped': {
-      about: 'PR #6549: wrapped reactions keep both toolbars level with their bubbles; server messages with empty mention ids still open unique member cards',
+      about: 'Stacked reactions keep both toolbars level with their bubbles; server messages with empty mention ids still open unique member cards',
       viewport: { width: 800, height: 800 },
       data: { ...base, bubbles: true, wrappedReactions: true },
     },
@@ -175,11 +206,263 @@ export default {
   },
   async check(page, ui) {
     const definition = this.cases[ui.case];
+    if (ui.case === 'topic-preview') {
+      const row = page.locator('[data-bot-group-id="fixture-group"]');
+      const group = row.getByRole('button', { name: 'Cindy 讨论', exact: true });
+      const sourceText = await ui.t('bots.groupChat.sidebar.threadReply');
+      assert.equal(await row.getByRole('button', { name: new RegExp(await ui.t('bots.groupChat.server.thread.viewThread')) }).count(), 0, 'thread preview is not a separate button');
+      assert.equal(await row.locator('button').count(), 1, 'whole row is a single group button');
+      const subtitle = row.getByText(sourceText);
+      const originalHeight = await row.evaluate(el => el.getBoundingClientRect().height);
+      const fits = await subtitle.evaluate(el => {
+        const container = el.parentElement.getBoundingClientRect();
+        return el.getBoundingClientRect().right <= container.right;
+      });
+      assert.ok(fits, 'source label fits without clipping');
+      await group.click();
+      assert.equal(await page.locator('aside [data-share-message-id="40000000-0000-4000-8000-000000000002"]').count(), 0, 'clicking the group row stays in main chat');
+      assert.equal(await row.evaluate(el => el.getBoundingClientRect().height), originalHeight, 'row geometry stays stable');
+      await ui.capture('main-chat');
+      return;
+    }
+    if (definition.data.planningForeign) {
+      await page.getByTestId('bot-group-speaking').waitFor();
+      const stop = page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true });
+      await stop.waitFor();
+      assert.equal(await stop.isEnabled(), true, 'My local planning stays cancellable with a foreign organizer');
+      await ui.capture('planning');
+      return;
+    }
+    if (ui.case === 'reaction-motion') {
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      const row = page.locator('[data-bot-group-message-id="b1"]');
+      const add = row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
+      await row.hover();
+      await add.click();
+      const gapToPrevious = () => row.evaluate(node => {
+        const previous = node.previousElementSibling;
+        return node.querySelector('[data-testid="bot-group-bubble"]').getBoundingClientRect().top - previous.getBoundingClientRect().bottom;
+      });
+      const originalGap = await gapToPrevious();
+      const choice = page.getByRole('button', { name: '❤️', exact: true });
+      const mac = ui.platform === 'darwin';
+      const quickGlyph = choice.locator('.chat-reaction-glyph');
+      assert.equal(await quickGlyph.locator('.chat-reaction-strip').count(), mac ? 0 : 1);
+      if (mac) assert.match(await quickGlyph.evaluate(el => getComputedStyle(el).fontFamily), /^"Apple Color Emoji"/);
+      await choice.click();
+      const flight = row.locator('.chat-reaction-flight[data-from-picker]');
+      const effect = await flight.evaluate(el => {
+        const fixedGlyph = el.parentElement.previousElementSibling;
+        return {
+          animation: getComputedStyle(el.firstElementChild).animationName,
+          fixedGlyph: getComputedStyle(fixedGlyph).visibility,
+          distance: Math.hypot(...['--flight-x', '--flight-y'].map(v => parseFloat(getComputedStyle(el).getPropertyValue(v)))),
+        };
+      });
+      assert.ok(effect.distance > 1, 'the flight starts away from the badge');
+      if (mac) assert.deepEqual([effect.animation, effect.fixedGlyph], ['chat-reaction-bounce', 'hidden']);
+      const anchor = row.locator('.chat-reaction-anchor');
+      const rect = await anchor.boundingBox();
+      assert.ok(rect?.width > 0 && rect.height > 0);
+      const badge = row.getByRole('button', { name: /❤️/ });
+      assert.equal(await badge.getAttribute('aria-pressed'), 'true');
+      assert.equal(await gapToPrevious(), originalGap);
+      const rowHeight = await row.evaluate(node => node.offsetHeight);
+      await ui.capture('reaction-landing');
+      await anchor.waitFor({ state: 'detached' });
+      assert.equal(await row.evaluate(node => node.offsetHeight), rowHeight, 'playing the effect never resizes the row');
+      assert.equal(await badge.getAttribute('aria-pressed'), 'true', 'failed write leaves the selected badge visible');
+      await badge.click();
+      assert.equal(await gapToPrevious(), originalGap);
+      assert.equal(await anchor.count(), 0, 'undo is quiet');
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await row.hover();
+      await add.click();
+      await page.getByRole('button', { name: '❤️', exact: true }).click();
+      assert.equal(await badge.getAttribute('aria-pressed'), 'true');
+      assert.equal(await anchor.count(), 0, 'reduced motion skips the flight and sprite');
+      return;
+    }
+    if (ui.case === 'reaction-colors') {
+      const row = page.locator('[data-bot-group-message-id="a1"]');
+      const corner = row.locator('[data-message-reactions]');
+      await row.scrollIntoViewIfNeeded();
+      await corner.getByTestId('reaction-avatars').getByText('Y', { exact: true }).waitFor();
+      await ui.capture('corner-avatar');
+      await row.hover();
+      const trigger = row.getByRole('button', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
+      const toolbar = row.locator('[data-bot-group-message-actions]');
+      const before = await row.boundingBox();
+      await trigger.click();
+      const picker = page.getByRole('dialog', { name: await ui.t('bots.groupChat.server.addReaction'), exact: true });
+      await picker.waitFor();
+      assert.equal(await toolbar.isVisible(), false, 'the selector replaces the action bar');
+      assert.equal(await corner.isVisible(), false, 'the active corner yields to the selector');
+      assert.deepEqual(await row.boundingBox(), before, 'opening the selector keeps the message in place');
+      assert.ok(await picker.evaluate(el => el === document.activeElement), 'pointer entry focuses the palette');
+      await ui.capture('reaction-picker');
+      // Visual regression: translucent text ink also fades native color emoji.
+      // jsdom cannot paint color fonts; sample the actual computed ink alpha in Electron.
+      const inkAlpha = element => {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext('2d');
+        context.fillStyle = getComputedStyle(element).color;
+        context.fillRect(0, 0, 1, 1);
+        return context.getImageData(0, 0, 1, 1).data[3];
+      };
+      const choice = picker.getByRole('button', { name: '👍', exact: true });
+      const glyph = choice.locator('.chat-reaction-glyph');
+      assert.equal(await glyph.evaluate(inkAlpha), 255, 'picker emoji must not inherit translucent text ink');
+      assert.equal(await picker.locator('button[aria-pressed]').count(), 6, 'six quick reactions before expanding');
+      const label = await ui.t('bots.groupChat.server.addReaction');
+      const openOn = async target => {
+        await target.hover();
+        const add = target.getByRole('button', { name: label, exact: true });
+        await add.click();
+        await picker.waitFor();
+        assert.equal(await target.locator('[data-bot-group-message-actions][data-open]').count(), 1);
+        assert.equal(await page.getByRole('dialog').count(), 1);
+      };
+      const second = page.locator('[data-bot-group-message-id="b1"]');
+      const third = page.locator('[data-bot-group-message-id="b2"]');
+      await openOn(second);
+      await openOn(third);
+      await second.locator('[data-reaction-anchor]').click();
+      await picker.waitFor({ state: 'hidden' });
+      await openOn(row);
+      const more = picker.getByRole('button', { name: await ui.t('bots.groupChat.server.moreReactions') });
+      await more.click();
+      const search = picker.locator('[data-epr-part="search-input"]');
+      await search.waitFor();
+      await picker.locator('[data-epr-part="category-tab"]').first().waitFor();
+      assert.ok(await picker.evaluate(el => {
+        const bounds = el.getBoundingClientRect();
+        return bounds.top >= 0 && bounds.bottom <= window.innerHeight + 1;
+      }), 'expanded picker fits the window');
+      await ui.capture('reaction-picker-expanded');
+      await search.fill(ui.locale.startsWith('zh') ? '奶茶' : 'bubble tea');
+      const tea = picker.locator('[data-epr-part="emoji"]').filter({ hasText: '🧋' }).first();
+      await tea.waitFor();
+      assert.equal(await tea.evaluate(inkAlpha), 255);
+      if (ui.platform === 'darwin') {
+        const font = await tea.locator('.epr-emoji-native').evaluate(el => getComputedStyle(el).fontFamily);
+        assert.match(font, /^"Apple Color Emoji"/);
+      }
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await tea.click();
+      const flyingTea = corner.locator('.chat-reaction-flight[data-from-picker]');
+      assert.equal(await flyingTea.evaluate(el => el.parentElement.previousElementSibling.textContent), '🧋',
+        'a catalog choice lands on its own glyph in the multi-reaction badge');
+      await flyingTea.waitFor({ state: 'detached' });
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await picker.waitFor({ state: 'hidden' });
+      await second.hover();
+      await page.waitForFunction(el => getComputedStyle(el).opacity === '0' && getComputedStyle(el).pointerEvents === 'none',
+        await toolbar.elementHandle(), { timeout: 2000 });
+      const latestGlyph = corner.locator('.chat-reaction-glyph').first();
+      assert.equal(await latestGlyph.textContent(), '🧋', 'newest reaction leads the corner badge');
+      if (ui.platform === 'darwin') assert.match(await latestGlyph.evaluate(el => getComputedStyle(el).fontFamily), /^"Apple Color Emoji"/);
+      await openOn(row);
+      await picker.getByRole('button', { name: '🎉', exact: true }).click();
+      await picker.waitFor({ state: 'hidden' });
+      await second.hover();
+      await page.waitForFunction(el => getComputedStyle(el).opacity === '0', await toolbar.elementHandle(), { timeout: 2000 });
+      const totalLabel = await ui.t('bots.groupChat.server.reactionTotal', { emoji: '🎉 🧋', count: 3 });
+      await corner.getByRole('button', { name: totalLabel, exact: true }).click();
+      const details = page.getByRole('dialog');
+      const selected = details.getByRole('button', { name: /🧋/ });
+      assert.equal(await toolbar.isVisible(), false, 'the reaction details also replace the action bar');
+      assert.equal(await corner.isVisible(), false);
+      assert.ok((await details.getByRole('button').first().getAttribute('aria-label')).startsWith('🎉'), 'newest reaction leads the expanded list');
+      assert.equal(await selected.getAttribute('aria-pressed'), 'true');
+      await selected.click();
+      await details.waitFor({ state: 'hidden', timeout: 2000 });
+      await corner.getByRole('button', { name: await ui.t('bots.groupChat.server.reactionTotal', { emoji: '🎉 👍', count: 2 }), exact: true }).waitFor();
+      await row.hover();
+      await trigger.focus();
+      await page.keyboard.press('Enter');
+      await choice.waitFor();
+      assert.ok(await choice.evaluate(el => el === document.activeElement && el.matches(':focus-visible')), 'keyboard entry highlights the first emoji');
+      await choice.hover();
+      assert.equal(await glyph.evaluate(inkAlpha), 255, 'hover and focus preserve emoji colors');
+      await page.keyboard.press('Escape');
+      await picker.waitFor({ state: 'hidden' });
+      // The popover restores focus after its close lifecycle finishes.
+      await page.waitForFunction(el => el === document.activeElement, await trigger.elementHandle(), { timeout: 2000 });
+      await second.hover();
+      assert.equal(await toolbar.evaluate(el => getComputedStyle(el).pointerEvents), 'auto', 'keyboard focus keeps its toolbar accessible');
+      assert.equal(await corner.isVisible(), true);
+      const badge = corner.locator('button .chat-reaction-glyph').first();
+      assert.equal(await badge.evaluate(inkAlpha), 255, 'reaction badges preserve emoji colors');
+      return;
+    }
+
+    if (ui.case === 'public-cindy') {
+      await page.getByTestId('bot-group-work').waitFor();
+      assert.equal(await page.getByTestId('bot-group-work').count(), 1);
+      assert.ok((await page.getByTestId('bot-group-work').innerText()).includes('Cindy'));
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.progress.viewProcess'), exact: true }).count(), 0);
+      assert.equal(await page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true }).count(), 0);
+      await ui.capture('public-work');
+      return;
+    }
+
+    if (definition.data.planRead) {
+      const missing = page.getByText(await ui.t('bots.groupChat.plan.missing'), { exact: true });
+      const organizer = page.getByText(await ui.t('bots.groupChat.organizer'), { exact: true });
+      await page.evaluate(() => window.dispatchEvent(new Event('fixture-plan-hold')));
+      await ui.emit('botGroupChanged', { groupId: 'fixture-group', change: 'messages', historyRevision: 'fixture-live', messages: [
+        { id: 'p1-card', sequence: 2, kind: 'plan', planId: 'p1', authorKind: 'user', authorBotId: null,
+          authorName: 'You', content: '', mentions: { all: false, botIds: [] }, noticeCode: null, files: [], attachments: [], createdAt: 1700000000000 },
+        { id: 'ordinary-delta', sequence: 10, kind: 'message', planId: null, authorKind: 'bot', authorBotId: 'a',
+          authorName: 'Aster', content: '普通消息无需等待安排详情。', mentions: { all: false, botIds: [] }, noticeCode: null, files: [], attachments: [], createdAt: 1700000000000 },
+      ] });
+      await page.getByText('普通消息无需等待安排详情。', { exact: true }).waitFor();
+      await ui.capture('details-pending');
+      assert.equal(await missing.count(), 0);
+      assert.equal(await organizer.count(), 0);
+      await page.evaluate(() => window.dispatchEvent(new Event('fixture-plan-ready')));
+      if (definition.data.planRead === 'missing') {
+        await missing.waitFor();
+        assert.equal(await organizer.count(), 0);
+        assert.equal(await missing.locator('xpath=ancestor::article').count(), 0);
+      } else if (definition.data.planRead === 'talk') {
+        const card = page.getByTestId('bot-group-arrangement');
+        await card.waitFor();
+        assert.equal(await organizer.count(), 0);
+        assert.equal(await card.locator('xpath=ancestor::article').count(), 0);
+      } else {
+        await organizer.waitFor();
+        assert.match(await organizer.locator('..').innerText(), /Nova/);
+      }
+      if (definition.data.planRead !== 'missing') assert.equal(await missing.count(), 0);
+      await ui.capture('details-settled');
+      return;
+    }
     if (definition.data.processRecord) {
       const journal = page.locator('[data-teammate-process]');
       await page.getByText('任务与 PR 的进展已整理，以下是需要跟进的事项。').waitFor();
       if (definition.data.processOtherOwner) { assert.equal(await journal.count(), 0); return; }
       await journal.waitFor();
+      // 2026-11-09: one group-message identity precedes its process and reply.
+      // Use the real group row; private-chat MessageStream is outside this scenario.
+      const assertReplyOwnership = async () => {
+        const row = page.locator('[data-bot-group-message-id="process-answer"]');
+        const portrait = row.locator('article > div').first();
+        const reply = row.getByTestId('bot-group-bubble');
+        const author = row.locator('article > div').nth(1).locator(':scope > span').first();
+        const [recordBox, portraitBox, authorBox, replyBox] = await Promise.all([journal.boundingBox(), portrait.boundingBox(), author.boundingBox(), reply.boundingBox()]);
+        assert.ok(portraitBox.y <= recordBox.y + 0.5, 'The shared avatar precedes the process, never below it');
+        assert.ok(authorBox.y + authorBox.height <= recordBox.y + 0.5, 'The author header precedes the process');
+        assert.ok(recordBox.y + recordBox.height <= replyBox.y + 0.5, 'The process precedes the reply body');
+        assert.ok(Math.abs(recordBox.x - replyBox.x) <= 0.5, 'The group record and reply share the same content column');
+        assert.equal(await row.locator('article [data-teammate-process]').count(), 1, 'Process and reply belong to the same message article');
+        assert.equal(await portrait.locator(':scope > span').count(), 1, 'Only the shared message identity owns an avatar');
+        assert.equal(await row.locator('article').count(), 1, 'The record stays owned by one reply row');
+      };
+      await assertReplyOwnership();
       const heading = journal.locator(':scope > button');
       assert.equal(await heading.getAttribute('aria-expanded'), 'false');
       await heading.click();
@@ -191,8 +474,18 @@ export default {
         assert.equal(await heading.getAttribute('aria-expanded'), 'false');
         await ui.capture('process-collapsed');
         return;
+      } else if (definition.data.processVariant === 'late') {
+        await journal.getByText(await ui.t('chat.teammateProcess.thought'), { exact: true }).waitFor();
+        assert.equal(await journal.getByText('Hidden reasoning').count(), 0);
+        await ui.capture('late-work-expanded');
+        await heading.click();
+        await heading.click();
+        await journal.getByText(await ui.t('chat.teammateProcess.thought'), { exact: true }).waitFor();
+        await ui.capture('late-work-reopened');
+        return;
       }
       await journal.getByText('我先核对任务的最近进展，再看未完成 PR 的阻塞点。').waitFor();
+      await assertReplyOwnership();
       await ui.capture('history-expanded');
       const endError = await journal.evaluate(root => {
         const rail = root.querySelector('[data-process-guide]').getBoundingClientRect();
@@ -201,6 +494,7 @@ export default {
       });
       assert.ok(endError <= 0.5, `Group guide footer alignment error: ${endError}`);
       await heading.click();
+      await assertReplyOwnership();
       await ui.capture('history-collapsed');
       return;
     }
@@ -277,11 +571,18 @@ export default {
         startedAtMs: definition.data.workNoStart ? null : Date.now() - 83_000, lastActivityAtMs: Date.now(), attention: false,
         gracefulStopState: state === 'stopping' ? 'requested' : 'none', source: 'live' }]);
       await page.getByTestId('bot-group-progress').first().waitFor();
+      const avatars = page.locator('[data-testid="bot-group-work"] > div:first-child > span');
+      assert.ok(await avatars.count(), 'running work shows its teammate avatar');
+      for (const avatar of await avatars.all()) {
+        const box = await avatar.boundingBox();
+        assert.ok(box, 'work avatar is visible');
+        assert.equal(box.width, 28, 'work avatar matches the final reply avatar width');
+        assert.equal(box.height, 28, 'work avatar matches the final reply avatar height');
+      }
       if (definition.data.workQueuedStep) {
         const header = await page.getByTestId('bot-group-content-header').innerText();
-        const sidebar = await page.getByTestId('bot-group-running').innerText();
         assert.ok(header.includes(await ui.t('bots.groupChat.header.speaking', { name: 'Nova' })));
-        assert.ok(sidebar.includes('Nova') && !sidebar.includes('Aster'));
+        assert.equal(await page.getByTestId('bot-group-running').count(), 0);
         const progress = await page.getByTestId('bot-group-progress').allTextContents();
         assert.equal(progress.length, 2);
         assert.ok(progress[0].includes(await ui.t('bots.groupChat.progress.queued')));
@@ -289,7 +590,7 @@ export default {
         const header = await page.getByTestId('bot-group-content-header').innerText();
         const progress = await page.getByTestId('bot-group-progress').innerText();
         assert.ok(header.includes(await ui.t('bots.groupChat.header.queued', { name: 'Aster' })));
-        assert.ok((await page.getByTestId('bot-group-running').innerText()).includes(await ui.t('bots.groupChat.header.queued', { name: 'Aster' })));
+        assert.equal(await page.getByTestId('bot-group-running').count(), 0);
         assert.ok(progress.includes(await ui.t('bots.groupChat.progress.queued')));
         const elapsedLabel = (await ui.t('chat.teammateProcess.elapsed', { duration: '__TIME__' })).replace('__TIME__', '').trim();
         assert.ok(!progress.includes(elapsedLabel));
@@ -301,6 +602,13 @@ export default {
         assert.ok(!(await strip.innerText()).includes(elapsed), 'unknown start time must not display elapsed time');
         const timeline = page.getByTestId('bot-group-timeline');
         await timeline.getByRole('button', { name: await ui.t('bots.groupChat.progress.viewProcess'), exact: true }).last().waitFor();
+      }
+      if (ui.case === 'work-chronology') {
+        const rows = page.getByTestId('bot-group-work');
+        assert.equal(await rows.count(), 2);
+        assert.equal(await rows.nth(1).getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0);
+        const order = await page.getByTestId('bot-group-timeline').evaluate(el => [...el.querySelectorAll('[data-testid="bot-group-work"], [data-bot-group-message-id]')].map(row => row.getAttribute('data-bot-group-message-id') ?? 'work'));
+        assert.ok(order.indexOf('work') < order.lastIndexOf('m2'), 'earlier live work precedes later messages');
       }
       if (ui.case === 'work-parallel-stopping') {
         const stop = page.getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true });
@@ -318,13 +626,17 @@ export default {
       assert.ok(!(await timeline.innerText()).includes('"op":"create"'));
       const text = await timeline.innerText();
       assert.ok(text.includes('图片说明保留') && text.includes('图片标题保留'));
-      assert.ok(text.includes('🖼'), 'an undescribed image has a neutral placeholder');
-      assert.ok(!text.includes('cindy-media://') && !text.includes('/private/tmp/fixture-image.png'));
-      for (const kind of ['image', 'video', 'audio']) {
-        const url = `https://example.test/public-${kind}`;
-        const link = timeline.getByRole('link', { name: url, exact: true });
-        assert.equal(await link.count(), 1, 'public media keep an actionable web link');
-        assert.equal(await link.getAttribute('href'), url);
+      assert.equal(await timeline.getByText(await ui.t('richAnswer.invalidImageReference'), { exact: true }).count(), 1, 'invalid managed image references have an explicit recovery state');
+      assert.equal(await timeline.locator('a[href^="cindy-media:"], a[href^="/private/"], img[src^="/private/"]').count(), 0, 'unavailable references must not become privileged links or file requests');
+      // Group replies now render rich media instead of the former text-only projection.
+      // Serve checked-in assets from the fixture origin; never relax its network CSP.
+      const picture = timeline.locator('img[alt="public-image"]');
+      await picture.waitFor();
+      assert.equal(await picture.evaluate(img => img.complete && img.naturalWidth > 0), true);
+      for (const kind of ['video', 'audio']) {
+        const media = timeline.locator(kind);
+        assert.equal(await media.count(), 1, `${kind} keeps a native media control`);
+        assert.ok((await media.getAttribute('src'))?.startsWith('http://cindy-ui.test/assets/'));
       }
       return;
     }
@@ -495,6 +807,13 @@ export default {
       return;
     }
     const input = page.locator('textarea');
+    if (ui.case === 'reply-composer') {
+      assert.equal(await page.locator('button[aria-pressed="false"]').count(), 1, 'microphone entry is visible');
+      await input.fill('A reply draft ready for dictation');
+      assert.equal(await input.inputValue(), 'A reply draft ready for dictation');
+      await ui.capture('reply-draft');
+      return;
+    }
     const chip = page.locator('[data-controlled-banner-chip]');
     const collapsedDot = page.locator('[data-controlled-banner="collapsed"]');
     const scroller = page.getByTestId('bot-group-timeline');
@@ -525,10 +844,9 @@ export default {
       const replyMode = drawer.getByRole('combobox', { name: await ui.t('bots.groupChat.settings.replyMode'), exact: true });
       await replyMode.waitFor();
       assert.equal(await replyMode.innerText(), await ui.t('bots.groupChat.settings.replyModeAll'));
-      // Reply mode and the 分工 settings stay; one teammate at a time leaves no speaking mode (bot-group-chat.md §4.0).
-      assert.equal(await drawer.getByText(await ui.t('bots.groupChat.settings.speakingMode'), { exact: true }).count(), 0, 'speakingMode');
-      for (const key of ['bots.groupChat.organizer', 'bots.groupChat.settings.projectDir', 'bots.groupChat.plan.autoContinue'])
-        assert.ok(await drawer.getByText(await ui.t(key), { exact: true }).count() > 0, key);
+      for (const key of ['bots.groupChat.settings.speakingMode', 'bots.groupChat.organizer', 'bots.groupChat.plan.autoContinue'])
+        assert.equal(await drawer.getByText(await ui.t(key), { exact: true }).count(), 0, key);
+      await drawer.getByText(await ui.t('bots.groupChat.server.settings.projectFolder'), { exact: true }).first().waitFor();
       await ui.capture('manage');
       return;
     }
@@ -543,9 +861,10 @@ export default {
     }
     if (ui.case === 'division') {
       await page.getByRole('button', { name: '更多操作' }).click();
-      await page.getByRole('menuitem', { name: /安排分工/ }).click();
-      await page.waitForFunction(() => document.querySelector('textarea')?.getAttribute('placeholder')?.startsWith('写好谁做什么'));
-      await ui.capture('tagged');
+      await page.getByRole('menuitem').first().waitFor();
+      assert.equal(await page.getByRole('menuitem').count(), 1);
+      assert.equal(await page.getByRole('menuitem', { name: /安排分工/ }).count(), 0);
+      await ui.capture('attachments');
       return;
     }
     if (ui.case === 'work-mentioned') {
@@ -565,11 +884,69 @@ export default {
       assert.ok(ui.case === 'arrangement' ? placeholder.includes('正在说') : !placeholder.includes('改改'), placeholder);
       return;
     }
+    if (['thread-work', 'thread-work-overflow', 'thread-work-no-stop'].includes(ui.case)) {
+      assert.equal(await page.getByTestId('bot-group-work').count(), 0, 'topic work must not appear in main');
+      const mainStop = page.getByRole('button', { name: await ui.t('bots.groupChat.composer.stop'), exact: true });
+      if (ui.case === 'thread-work-no-stop') assert.equal(await mainStop.count(), 0);
+      else await mainStop.waitFor();
+      await page.locator('[data-thread-preview="a1"]').first().click();
+      await page.getByTestId('bot-group-work').first().waitFor();
+      assert.equal(await page.getByTestId('bot-group-work').count(), ui.case === 'thread-work-overflow' ? 19 : 1, 'only the selected topic work');
+      if (ui.case === 'thread-work-no-stop') {
+        assert.equal(await page.locator('aside.thread-panel').getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true }).count(), 0, 'topic respects group stop capability');
+      }
+      if (ui.case === 'thread-work') {
+        const order = await page.locator('aside.thread-panel').evaluate(panel => {
+          const first = panel.querySelector('[data-bot-group-message-id="r1"]');
+          const second = panel.querySelector('[data-bot-group-message-id="r2"]');
+          const work = panel.querySelector('[data-testid="bot-group-work"]');
+          return !!first && !!second && !!work && !!(first.compareDocumentPosition(work) & Node.DOCUMENT_POSITION_FOLLOWING)
+            && !!(work.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
+        });
+        assert.ok(order, 'topic work retains its original timestamp between replies');
+        const stop = page.locator('aside.thread-panel').getByRole('button', { name: await ui.t('bots.groupChat.progress.stop'), exact: true });
+        await stop.click();
+        assert.equal(await page.locator('body').getAttribute('data-fixture-stop-scope'), 'mine');
+        assert.equal(await page.getByRole('menuitem', { name: await ui.t('bots.groupChat.progress.stopAll') }).count(), 0);
+      }
+      if (ui.case === 'thread-work-overflow') {
+        const panel = page.locator('aside.thread-panel');
+        const composer = panel.locator('textarea');
+        const geometry = await composer.evaluate(element => {
+          const panel = element.closest('aside');
+          const work = panel.querySelector('[data-testid="bot-group-work"]');
+          let scroller = work.parentElement;
+          while (scroller && getComputedStyle(scroller).overflowY !== 'auto') scroller = scroller.parentElement;
+          const bounds = panel.getBoundingClientRect(), input = element.getBoundingClientRect();
+          return { visible: input.top >= bounds.top && input.bottom <= bounds.bottom,
+            scrollable: !!scroller && scroller.scrollHeight > scroller.clientHeight };
+        });
+        assert.ok(geometry.visible, 'reply composer stays inside the fixed panel');
+        assert.ok(geometry.scrollable, 'long work has a reachable scroll range');
+        await panel.getByTestId('bot-group-work').last().scrollIntoViewIfNeeded();
+        await composer.fill('回复仍可输入');
+        assert.equal(await composer.inputValue(), '回复仍可输入');
+      }
+      await ui.capture('topic-work');
+      return;
+    }
     if (ui.case === 'thread-unread') {
       await page.getByText('Android 更新卡那个 PR', { exact: false }).waitFor();
-      // Unread replies replace the last-reply time on the entry; an @you is named there too.
-      assert.equal(await page.locator('[data-thread-preview="a1"] [data-thread-unread="2"]').count(), 1);
-      assert.equal(await page.locator('[data-thread-preview="q4"] [data-thread-unread]').count(), 0, 'a read Thread keeps its last-reply time');
+      // One unread reply used to add a second count to the entry and its accessible name.
+      const newReply = await ui.t('bots.groupChat.server.thread.newReplies', { count: 1 });
+      const mentioned = await ui.t('bots.groupChat.server.thread.mentionedYou');
+      for (const [id, count] of [['q2', 1], ['q3', 3]]) {
+        const entry = page.locator(`[data-thread-preview="${id}"]`);
+        const total = await ui.t('bots.groupChat.server.replyCount', { count });
+        assert.equal(await entry.getByText(total, { exact: true }).count(), 1);
+        assert.equal(await entry.getByText(newReply, { exact: true }).count(), 0, 'the entry omits the new-reply reminder');
+        assert.equal(await entry.getByText(mentioned, { exact: true }).count(), 0);
+        assert.equal(await entry.getAttribute('aria-label'), await ui.t('bots.groupChat.server.thread.open', { count }));
+        assert.equal(await entry.locator('time').count(), 0);
+      }
+      const timestamp = page.locator('[data-thread-preview="q4"] time');
+      assert.equal(await timestamp.count(), 1, 'a read topic shows a standalone timestamp');
+      assert.match(await timestamp.textContent(), /\b\d{1,2}:\d{2}\b/);
       const hint = page.locator('[data-thread-hint]');
       await hint.waitFor();
       const geometry = await page.evaluate(() => {
@@ -579,7 +956,7 @@ export default {
         return { aboveComposer: box.bottom <= composer.top + 1, inside: box.right <= timeline.right + 1 && box.left >= timeline.left };
       });
       assert.ok(geometry.inside, 'the hint stays inside the chat column');
-      // Threads that name the reader or that they follow ask for attention; others wait at their entry.
+      // The separate hint still alerts the reader to mentions and replies in followed threads.
       const label = await hint.textContent();
       assert.ok(label.includes('3'), `the hint counts the two Threads that mention the reader and the one they follow (${label})`);
       await ui.capture('hint');
@@ -628,27 +1005,44 @@ export default {
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const bubble = document.querySelector(`${row} [data-testid="bot-group-bubble"]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
-        return { gap: bar.left - bubble.right, inside: bar.right <= timeline.right };
+        const narrow = document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480;
+        return { gap: bar.left - bubble.right, inside: bar.right <= timeline.right, narrow,
+          below: bar.top > bubble.top && bar.left >= bubble.left && bar.right <= bubble.right };
       }, row);
-      assert.ok(geometry.gap >= 0 && geometry.gap <= 32, `toolbar sits beside the bubble (gap ${geometry.gap}px)`);
+      assert.ok(geometry.narrow ? geometry.below : geometry.gap >= 0 && geometry.gap <= 32,
+        `toolbar stays below narrow content or beside wide content: ${JSON.stringify(geometry)}`);
       assert.ok(geometry.inside, 'toolbar stays inside the timeline');
       assert.ok(await toolbar.isVisible());
-      // Reactions wider than a short message's text stay over its own bubble and inside the timeline.
+      // Many reactions share a single corner badge and leave message geometry unchanged.
       const corners = await page.evaluate(() => ['a2', 'q3'].map((id) => {
         const row = `[data-bot-group-message-id="${id}"]`;
-        const reactions = document.querySelector(`${row} [data-reaction-corner]`);
-        const corner = reactions.getBoundingClientRect();
+        const reactions = document.querySelector(`${row} [data-message-reactions]`);
+        const badge = reactions.getBoundingClientRect();
         const bubble = document.querySelector(`${row} [data-testid="bot-group-bubble"], ${row} [data-testid="bot-group-self-bubble"]`).getBoundingClientRect();
         const bar = document.querySelector(`${row} [data-bot-group-message-actions]`).getBoundingClientRect();
         const timeline = document.querySelector('[data-testid="bot-group-timeline"]').getBoundingClientRect();
-        return { id, left: corner.left - bubble.left, right: corner.right - bubble.right, inside: corner.left >= timeline.left && corner.right <= timeline.right,
-          toolbarTop: bar.top - bubble.top, wrapped: corner.height > reactions.firstElementChild.getBoundingClientRect().height };
+        const anchor = document.querySelector(row);
+        const offset = () => {
+          const rect = anchor.querySelector('[data-testid$="bubble"]').getBoundingClientRect();
+          return [rect.top - anchor.getBoundingClientRect().top, rect.width, rect.height, anchor.offsetHeight];
+        };
+        const withReactions = offset();
+        reactions.style.display = 'none';
+        const withoutReactions = offset();
+        reactions.style.removeProperty('display');
+        return { id, withReactions, withoutReactions, corner: badge.top < bubble.top && badge.bottom > bubble.top
+          && Math.abs(id === 'a2' ? badge.right - bubble.right : badge.left - bubble.left) <= 5,
+          inside: badge.left >= timeline.left && badge.right <= timeline.right,
+          narrow: document.querySelector(`${row} .chat-bubble-layout`).getBoundingClientRect().width <= 480,
+          toolbarTop: bar.top - bubble.top, stack: reactions.querySelectorAll('button[aria-haspopup="dialog"]').length };
       }));
       for (const c of corners) {
         assert.ok(c.inside, `${c.id} reactions stay inside the timeline`);
-        assert.ok(c.left >= -12 && c.right <= 12, `${c.id} reactions stay over the bubble (${c.left}, ${c.right})`);
-        assert.ok(Math.abs(c.toolbarTop) <= 1, `${c.id} toolbar aligns with bubble top (${c.toolbarTop}px)`);
-        if (ui.case === 'bubbles-wrapped') assert.ok(c.wrapped, `${c.id} exercises multiple reaction rows`);
+        assert.ok(c.corner, `${c.id} reactions touch the outer top corner`);
+        assert.deepEqual(c.withReactions, c.withoutReactions, `${c.id} geometry is stable`);
+        assert.ok(c.narrow ? c.toolbarTop > 0 : Math.abs(c.toolbarTop) <= 1,
+          `${c.id} toolbar follows the available content width (${c.toolbarTop}px)`);
+        assert.equal(c.stack, 1, `${c.id} has one stack`);
       }
       // r4324819612: the opposite of the long-root case — the entry is wider
       // than this short message's text, and must still share the bubble's left edge.
@@ -665,27 +1059,25 @@ export default {
       assert.ok(shortThread.entryWiderThanText, 'short root exercises an entry wider than its text');
       assert.ok(Math.abs(shortThread.offset) <= 1, `short self thread entry aligns with bubble left (${shortThread.offset}px)`);
       assert.ok(Math.abs(shortThread.right) <= 1, `short self bubble stays right-aligned (${shortThread.right}px)`);
-      // r4325061150: self-authored shares must also follow their wider siblings,
-      // both when a share becomes a root and when only its reactions make it wider.
+      // A self-authored share anchors both its thread entry and its reaction badge.
       for (const id of ['q4', 'q5']) {
         const shared = page.locator(`[data-bot-group-message-id="${id}"]`);
         await shared.scrollIntoViewIfNeeded();
         const geometry = await shared.evaluate(row => {
           const card = row.querySelector('figure').getBoundingClientRect();
           const entry = row.querySelector('[data-thread-preview]')?.getBoundingClientRect();
-          const reactions = row.querySelector('[data-reaction-corner]')?.getBoundingClientRect();
+          const reactions = row.querySelector('[data-message-reactions]')?.getBoundingClientRect();
           const article = row.querySelector('article').getBoundingClientRect();
           return { width: card.width, right: article.right - card.right,
             entryLeft: entry ? entry.left - card.left : null,
-            reactionLeft: reactions ? reactions.left - card.left : null,
-            reactionRight: reactions ? reactions.right - card.right : null };
+            reactionLeft: reactions ? reactions.left - card.left : null };
         });
         assert.ok(geometry.width <= 560, 'shared reply keeps its existing width cap');
         assert.ok(Math.abs(geometry.right) <= 1, 'shared reply stays right-aligned');
         if (geometry.entryLeft !== null) assert.ok(Math.abs(geometry.entryLeft) <= 1, `shared root entry aligns with card (${geometry.entryLeft}px)`);
         if (geometry.reactionLeft !== null) {
-          assert.ok(Math.abs(geometry.reactionLeft + 10) <= 1, `shared reply reactions stay on the left corner (${geometry.reactionLeft}px)`);
-          assert.ok(geometry.reactionRight <= 1, 'shared reply reactions stay inside the card width');
+          assert.ok(Math.abs(geometry.reactionLeft) <= 5, `shared reply reactions align with the leading corner (${geometry.reactionLeft}px)`);
+
         }
       }
       await ui.capture('shared-reply');
@@ -742,11 +1134,16 @@ export default {
         await action();
         assert.ok((await bottomGap()) < 1, `${step} keeps the thread pinned to the bottom`);
       }
-      const before = await scroller.evaluate((el) => {
-        el.scrollTop = 180;
-        el.dispatchEvent(new Event('scroll', { bubbles: true }));
-        return el.scrollTop;
+      // Use the reader's upward wheel gesture. A synthetic scroll after a
+      // banner resize can legitimately remain in automatic-follow mode.
+      const top = await scroller.evaluate((el) => el.scrollTop);
+      await scroller.hover();
+      await page.mouse.wheel(0, 180 - top);
+      await page.waitForFunction(() => {
+        const el = document.querySelector('[data-testid="bot-group-timeline"]');
+        return el && Math.abs(el.scrollTop - 180) < 1;
       });
+      const before = await scroller.evaluate((el) => el.scrollTop);
       for (const [step, action] of [
         ['connection', () => connect()],
         ['collapse', collapse],

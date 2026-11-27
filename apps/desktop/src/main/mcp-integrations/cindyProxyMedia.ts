@@ -6,7 +6,7 @@ import {
   createSeedanceProvider,
 } from '../cindy-proxy-media/video/providers/seedance.js';
 import { createHappyhorseProvider } from '../cindy-proxy-media/video/providers/happyhorse.js';
-import { resolveSafe as resolveXdtImage } from '../imageCacheStore.js';
+import { resolveSafe as resolveXdtImage } from '../imageCacheStore.desktop.js';
 import { createBlobImageStorage, createBlobVideoStorage } from '../cindy-media/generatedMedia.js';
 import { VideoProviderRegistry } from '../cindy-proxy-media/video/registry.js';
 import { createLogger } from '../logger.js';

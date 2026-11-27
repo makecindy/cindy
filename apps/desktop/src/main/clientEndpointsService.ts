@@ -42,10 +42,12 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { getInstanceConfig } from './instance-runtime/config.js';
 
 import { app, clipboard, dialog, ipcMain, net, netLog } from 'electron';
 
 import {
+  getBundledEndpointManifest,
   resolveClientEndpointsStrict,
   classifyEndpointManifestFailure,
   type ResilientEndpointResult,
@@ -153,6 +155,8 @@ export interface ResolveEndpointSourceInput {
  * XDT_ENDPOINTS_CDN='1' 切回完整 CDN 链路。
  */
 export function resolveEndpointSource(input: ResolveEndpointSourceInput): EndpointSource {
+  const instance = getInstanceConfig();
+  if (instance) return { kind: 'file', filePath: instance.endpointFile };
   if (input.isPackaged) return { kind: 'cdn' };
   if (input.env.XDT_ENDPOINTS_CDN === '1') return { kind: 'cdn' };
   const override = input.env.XDT_ENDPOINT_MANIFEST_FILE?.trim();
@@ -1124,24 +1128,28 @@ export function isUsingCachedClientEndpoints(): boolean {
  * 炸出来(随包兜底也必须先经过启动解析;--smoke-test 旁路不消费端点)。
  */
 function runtimeEndpoint(endpoints: ClientEndpointMap, key: ClientEndpointKey, region: ClientEndpointRegion): string {
-  const local = !app.isPackaged && key === 'deviceLinkApiBaseUrl'
-    ? (region === 'cn'
-      ? process.env.XDT_DEVICE_LINK_CN_LOCAL_URL ?? process.env.XDT_DEVICE_LINK_LOCAL_URL
-      : process.env.XDT_DEVICE_LINK_GLOBAL_LOCAL_URL)?.trim()
-    : undefined;
+  // A personal build is not a test-service opt-in. Only explicit development
+  // overrides may replace the shared Webhook endpoint.
+  const local = app.isPackaged ? undefined : key === 'webhookApiBaseUrl'
+    ? (region === 'cn' ? process.env.XDT_WEBHOOK_CN_LOCAL_URL : process.env.XDT_WEBHOOK_GLOBAL_LOCAL_URL)?.trim()
+    : key === 'deviceLinkApiBaseUrl'
+      ? (region === 'cn'
+        ? process.env.XDT_DEVICE_LINK_CN_LOCAL_URL ?? process.env.XDT_DEVICE_LINK_LOCAL_URL
+        : process.env.XDT_DEVICE_LINK_GLOBAL_LOCAL_URL)?.trim()
+      : undefined;
   if (!local) return endpoints[key];
   let url: URL;
   try {
     url = new URL(local);
   } catch {
-    throw new Error('Device-link development override requires a loopback HTTP(S) URL with an explicit port');
+    throw new Error('Development endpoint override requires a loopback HTTP(S) URL with an explicit port');
   }
   if (
     !['http:', 'https:'].includes(url.protocol) ||
     !['127.0.0.1', '[::1]'].includes(url.hostname) ||
     !url.port || url.username || url.password || url.pathname !== '/' || url.search || url.hash
   ) {
-    throw new Error('Device-link development override requires a loopback HTTP(S) URL with an explicit port');
+    throw new Error('Development endpoint override requires a loopback HTTP(S) URL with an explicit port');
   }
   return url.origin;
 }
@@ -1221,6 +1229,22 @@ export function getClientEndpointForRealm(
     throw new Error(`client endpoints for realm '${region}' not loaded`);
   }
   return runtimeEndpoint(endpoints, key, region);
+}
+
+/**
+ * 本客户端是否配置了云实例服务:任一区域的清单填了 cloudInstanceApiBaseUrl。已加载的区域看
+ * 实际清单;另一区域的清单要到跨区登录才拉取,此前看随包清单。只读内存,不发请求。
+ */
+export function isCloudInstanceServiceConfigured(): boolean {
+  return (['cn', 'global'] as const).some((region) => {
+    const loaded = realmEndpointCache.get(region);
+    if (loaded) return loaded.cloudInstanceApiBaseUrl !== '';
+    if (resolvedEndpoints === null || !crossRealmOrgLoginEnabled) return false;
+    const bundled = resolveClientEndpointsStrict(
+      getBundledEndpointManifest(region, `${realmManifestBaseUrls[region]}/${MANIFEST_FILE_NAME}`),
+    );
+    return bundled.ok && bundled.endpoints.cloudInstanceApiBaseUrl !== '';
+  });
 }
 
 export function activateClientEndpointRealm(region: ClientEndpointRegion): void {

@@ -13,10 +13,15 @@ const h = vi.hoisted(() => {
   log.child.mockReturnValue(log);
   return {
     blocked, log, ipcHandle: vi.fn(), snapshotHandler: vi.fn(), transferHandler: vi.fn(),
+    // Blocked like every other host boundary unless a case supplies one scan result.
+    scanAllSkills: vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => {
+      throw new Error('unexpected Skill scan in register test');
+    }),
     oldBearer: vi.fn(() => 'fake-orphaned-old-bearer'),
     deps: undefined as SetupMigrationServiceDeps | undefined,
     normalize: undefined as ((raw: unknown) => PersistedSetupMigrationState) | undefined,
     disk: '',
+    instance: null as object | null,
   };
 });
 
@@ -46,7 +51,7 @@ vi.mock('../../logger.js', () => ({ createLogger: () => h.log }));
 vi.mock('../../maker-host/logger-adapter.js', () => ({ desktopMakerLogger: h.log }));
 vi.mock('../settingsGroups.js', () => ({ SETUP_SETTINGS_GROUPS: [] }));
 vi.mock('../rendererPrefsHost.js', () => ({ registerSetupMigrationRendererHost: () => ({ read: h.blocked }) }));
-vi.mock('../../device-link/dispatch.js', () => ({
+vi.mock('../../device-link/dispatch.desktop.js', () => ({
   setSetupSnapshotRemoteHandler: h.snapshotHandler, setSetupTransferRemoteHandler: h.transferHandler,
 }));
 vi.mock('../transfer.js', () => ({ createSetupTransferSource: () => h.blocked, requestSetupTransfer: h.blocked }));
@@ -56,11 +61,12 @@ vi.mock('../transfer.js', () => ({ createSetupTransferSource: () => h.blocked, r
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: h.blocked, getActiveAppSession: h.blocked, isAppSessionBoundaryPending: h.blocked, ownerScopedUserDataPath: h.blocked }));
 vi.mock('../../cindy-brain/index.js', () => ({ createWindowGhostInstallConsentPrompt: h.blocked, getGhostManager: h.blocked, getGhostSetupAssessment: h.blocked, readGhostUserSecretsForSetup: h.blocked, hasGhostUserSecretsForSetup: h.blocked, setGhostEnabledForUser: h.blocked, storeGhostUserSecretsForSetup: h.blocked }));
 vi.mock('../../device-link/index.js', () => ({ remoteBackgroundInvoke: h.blocked }));
+vi.mock('../../instance-runtime/config.js', () => ({ getInstanceConfig: () => h.instance }));
 vi.mock('../../device-link/ipc.js', () => ({ defaultDeps: h.blocked, handleListDevices: h.blocked }));
-vi.mock('../../device-link/settings-store.js', () => ({ readDeviceLinkSettings: h.blocked }));
+vi.mock('../../device-link/settings-store.desktop.js', () => ({ readDeviceLinkSettings: h.blocked }));
 vi.mock('../../im/ownerScopedStorage.js', () => ({ ownerScopedImSecrets: h.blocked }));
 vi.mock('../../maker-host/active-catalog.js', () => ({ getActiveCatalog: h.blocked }));
-vi.mock('../../maker-host/custom-mcp-store.js', () => ({ listCustomMcpNamesForSetup: h.blocked, listCustomMcpServers: h.blocked }));
+vi.mock('../../maker-host/custom-mcp-store.desktop.js', () => ({ listCustomMcpNamesForSetup: h.blocked, listCustomMcpServers: h.blocked }));
 vi.mock('../../maker-host/custom-provider-header-secrets.js', () => ({ hydrateCustomProviderHeaders: h.blocked }));
 vi.mock('../../maker-host/custom-provider-store.js', () => ({ listCustomProviders: h.blocked }));
 vi.mock('../../maker-ipc/mcpHandlers.js', () => ({ createCustomMcpServerForSetup: h.blocked }));
@@ -74,7 +80,7 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendere
 vi.mock('../../skillhub/activationPreferences.js', () => ({ setCindySkillEnabled: h.blocked }));
 vi.mock('../../skillhub/installService.js', () => ({ install: h.blocked }));
 vi.mock('../../skillhub/installLock.js', () => ({ tryAcquireSkillInstallLock: h.blocked }));
-vi.mock('../../skillhub/scanner.js', () => ({ scanAllSkills: h.blocked }));
+vi.mock('../../skillhub/scanner.js', () => ({ scanAllSkills: h.scanAllSkills }));
 vi.mock('../../utils/ipcValidate.js', () => ({ throwIpcError: h.blocked }));
 vi.mock('../transferPrompt.js', () => ({ confirmSetupTransfer: h.blocked }));
 
@@ -97,12 +103,12 @@ const stateWith = (checklist: unknown[]) => ({
 
 beforeAll(async () => {
   const { registerSetupMigration } = await import('../register.js');
-  registerSetupMigration({ getMaker: h.blocked, getManagedSkillRoots: h.blocked, getBuiltInSkills: h.blocked, getMainWindow: h.blocked });
+  registerSetupMigration({ getMaker: h.blocked, getManagedSkillRoots: h.blocked, getBuiltInSkills: h.blocked, getMainWindow: h.blocked, getLegacyMigrated: h.blocked });
   expect(h.normalize).toBeTypeOf('function');
   expect(h.deps).toBeDefined();
   expect(h.snapshotHandler).toHaveBeenCalledTimes(1);
   expect(h.transferHandler).toHaveBeenCalledTimes(1);
-  expect(h.ipcHandle).toHaveBeenCalledTimes(5);
+  expect(h.ipcHandle).toHaveBeenCalledTimes(6);
   expect(h.blocked).not.toHaveBeenCalled();
 });
 beforeEach(() => {
@@ -151,6 +157,17 @@ describe('real setup-migration registration callbacks', () => {
     expect(h.blocked).not.toHaveBeenCalled();
   });
 
+  it('does not suggest a migration on a managed cloud instance', async () => {
+    h.instance = {};
+    try {
+      // Decided before reading plugins, providers or MCP servers.
+      await expect(deps().looksNew()).resolves.toBe(false);
+      expect(h.blocked).not.toHaveBeenCalled();
+    } finally {
+      h.instance = null;
+    }
+  });
+
   it('keeps old/manual done on disk even when no new-copy flag is available', async () => {
     await deps().writeState(normalize(stateWith([item({ done: true })])));
     const restored = deps().readState().lastRun!.checklist[0];
@@ -159,5 +176,33 @@ describe('real setup-migration registration callbacks', () => {
     // service.ts preserves done before consulting this live predicate (covered there).
     expect(h.oldBearer).not.toHaveBeenCalled();
     expect(h.blocked).not.toHaveBeenCalled();
+  });
+});
+
+// PR #12070 review: startup only warms the shared Skill preparation, and that pass is rejected
+// while a saved owner is restored. Setup migration scans installed Skills for the snapshot this
+// computer sends and the plan it builds, so it must join the same preparation first. Runs last:
+// it registers again, replacing the dependencies the cases above captured.
+describe('setup migration Skill scans', () => {
+  it('joins shared Skill preparation before scanning global Skills', async () => {
+    const order: string[] = [];
+    h.scanAllSkills.mockImplementationOnce(async () => {
+      order.push('scan');
+      return { skills: [], sources: [] };
+    });
+    const { registerSetupMigration } = await import('../register.js');
+    registerSetupMigration({
+      getMaker: () => ({}) as never,
+      getManagedSkillRoots: () => [],
+      getBuiltInSkills: () => [],
+      prepareSharedSkills: async () => {
+        order.push('prepare');
+      },
+      getMainWindow: h.blocked,
+      getLegacyMigrated: h.blocked,
+    });
+
+    await expect(deps().localSkills()).resolves.toEqual(new Map());
+    expect(order).toEqual(['prepare', 'scan']);
   });
 });

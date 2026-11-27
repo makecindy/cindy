@@ -712,18 +712,6 @@
         "$value": "{reference.themes.cindy-dark.value-chat-input-text}",
         "$description": "墨水 白 82%: 正文(2026-10-22 用户裁决,取代实色灰)"
       },
-      "chat-input-placeholder-subtle": {
-        "$type": "color",
-        "$value": "{reference.themes.cindy-dark.value-text-placeholder}",
-        "$description": "聊天输入框占位文字直接用占位档,不再叠 40% 透明度(2026-10-22 用户裁决随附:占位文字统一用占位档)",
-        "$extensions": {
-          "com.cindy.desktop": {
-            "cssAlias": "text-placeholder",
-            "wrapper": "var",
-            "mode": "dark"
-          }
-        }
-      },
       "thinking-body-text": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-text-secondary}",
@@ -1099,7 +1087,7 @@
       "sidebar-item-hover": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-sidebar-item-hover}",
-        "$description": "玻璃面 hover 半透明化 2026-07-21:白 9% 叠加(原实色 hsl(0 2.2% 18%) 在暗玻璃底上的等价叠加量),壁纸可继续透过"
+        "$description": "墨水 白 6%: 菜单/侧栏悬停并入墨水阶梯(2026-11-11 维护者裁决 E-02,取代 2026-07-21 玻璃面白 9%),壁纸可继续透过"
       },
       "sidebar-search-bg": {
         "$type": "color",
@@ -1109,7 +1097,7 @@
       "sidebar-search-input-bg": {
         "$type": "color",
         "$value": "{reference.themes.cindy-dark.value-sidebar-search-input-bg}",
-        "$description": "玻璃面搜索输入框 2026-07-21:黑 25% 下陷字段感(与 hover 白 9% 方向相反,可区分\"可输入\")"
+        "$description": "玻璃面搜索输入框 2026-07-21:黑 25% 下陷字段感(与 hover 白 6% 方向相反,可区分\"可输入\")"
       },
       "sidebar-muted": {
         "$type": "color",
@@ -1608,18 +1596,6 @@
         "$type": "color",
         "$value": "{reference.themes.cindy-light.value-chat-input-text}",
         "$description": "墨水 黑 88%: 正文(2026-10-22 用户裁决,取代实色灰)"
-      },
-      "chat-input-placeholder-subtle": {
-        "$type": "color",
-        "$value": "{reference.themes.cindy-light.value-text-placeholder}",
-        "$description": "聊天输入框占位文字直接用占位档,不再叠 40% 透明度(2026-10-22 用户裁决随附:占位文字统一用占位档)",
-        "$extensions": {
-          "com.cindy.desktop": {
-            "cssAlias": "text-placeholder",
-            "wrapper": "var",
-            "mode": "light"
-          }
-        }
       },
       "thinking-body-text": {
         "$type": "color",
@@ -4401,6 +4377,10 @@
       "sidebar-item-active": {
         "$type": "color",
         "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG_HSL}"
+      },
+      "sidebar-item-active-border": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-BLUE_PRIMARY}"
       },
       "splash-bg": {
         "$type": "color",

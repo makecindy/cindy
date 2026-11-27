@@ -1,8 +1,10 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { i18n } from '@/i18n';
+import { sliceRenderedSelection } from '@/session/selectionQuote';
 import { PR_WATCH_EXPANDED_BLANK_FIXTURE } from '@/__tests__/fixtures/prWatchExpandedBlank';
 import {
   collectMobileMarkdownImages,
+  mobileMarkdownListMarkerText,
   isMobileMarkdownImageDirectUrl,
   mobileMarkdownImageTitle,
   mobileMarkdownImageUrlForWorkdir,
@@ -2041,6 +2043,111 @@ describe('LaTeX math(块级 $$ 围栏与 inline $ 定界符)', () => {
     const groups = groupMobileMarkdownSelectableBlocks(blocks);
     expect(groups.map((group) => group.type)).toEqual(['text_run', 'single', 'text_run']);
   });
+
+  it('同行多个 $$a$$ + $$b$$ 不被贪婪吞成单个 math 块', () => {
+    const blocks = parseMobileMarkdown('$$a = 1$$ + $$b = 2$$');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      type: 'paragraph',
+      inlines: [
+        { type: 'math', text: 'a = 1' },
+        { type: 'text', text: ' + ' },
+        { type: 'math', text: 'b = 2' },
+      ],
+    });
+  });
+
+  it('首尾行带内容的跨行 $$ 围栏正确识别为 math 块,未闭合流式仍保段落', () => {
+    const streaming = parseMobileMarkdown('$$ \\Delta z = f(x, y) - f(0, 0)\n= 0 \\cdot x');
+    expect(streaming).toHaveLength(1);
+    expect(streaming[0]).toMatchObject({ type: 'paragraph' });
+
+    const closed = parseMobileMarkdown('$$ \\Delta z = f(x, y) - f(0, 0)\n= 0 \\cdot x + 0 \\cdot y + o(\\rho) $$');
+    expect(closed).toEqual([
+      {
+        type: 'math',
+        key: 'math:0:0',
+        text: '\\Delta z = f(x, y) - f(0, 0)\n= 0 \\cdot x + 0 \\cdot y + o(\\rho)',
+      },
+    ]);
+  });
+
+  // 截图同形回归(双端一致): 含 `\[...\]` 转义方括号的会话/普通/本地链接在表格与有序列表中
+  // 不被误转成 display math 块, 且移动端链接解析器正确匹配并反转义 label 里的方括号。
+  it('转义方括号链接在表格、有序列表与货币混排中保持完整结构(双端一致)', () => {
+    const md = [
+      '| 类别 | 数量 | 说明与代表项 |',
+      '| --- | ---: | --- |',
+      '| 过期定时任务 | 10 | `torchlight2` 旧巡检，如 [\\[Schedule\\] PR 审查](cindy://session/s1?device=d1)、[\\[Schedule\\] 每日汇总](cindy://session/s2?device=d1) 等 |',
+      '',
+      '1. [NAS管理](cindy://session/s3)（11-20）',
+      '2. [\\[飞书·Cindy·CRT鸣谢添加感谢zkyo创意\\] 805a77](cindy://session/s4)（10-21）',
+      '3. [新西兰公司年报缴纳指南](cindy://session/s5)（10-11）— GST（$11,629.25）付款码 `GST31032027` 与 [码头泊位](cindy://session/s6) NZ$5M。',
+    ].join('\n');
+
+    const blocks = parseMobileMarkdown(md);
+    expect(blocks.map((block) => block.type)).toEqual([
+      'table',
+      'list_item',
+      'list_item',
+      'list_item',
+    ]);
+
+    const table = blocks[0];
+    if (table.type !== 'table') throw new Error('expected table');
+    expect(table.rows).toHaveLength(1);
+    expect(table.rows[0].cells[2]).toEqual([
+      { type: 'code', text: 'torchlight2' },
+      { type: 'text', text: ' 旧巡检，如 ' },
+      { type: 'link', text: '[Schedule] PR 审查', url: 'cindy://session/s1?device=d1' },
+      { type: 'text', text: '、' },
+      { type: 'link', text: '[Schedule] 每日汇总', url: 'cindy://session/s2?device=d1' },
+      { type: 'text', text: ' 等' },
+    ]);
+
+    const item2 = blocks[2];
+    if (item2.type !== 'list_item') throw new Error('expected list_item');
+    expect(item2.inlines).toEqual([
+      { type: 'link', text: '[飞书·Cindy·CRT鸣谢添加感谢zkyo创意] 805a77', url: 'cindy://session/s4' },
+      { type: 'text', text: '（10-21）' },
+    ]);
+
+    const item3 = blocks[3];
+    if (item3.type !== 'list_item') throw new Error('expected list_item');
+    expect(item3.inlines).toEqual([
+      { type: 'link', text: '新西兰公司年报缴纳指南', url: 'cindy://session/s5' },
+      { type: 'text', text: '（10-11）— GST（$11,629.25）付款码 ' },
+      { type: 'code', text: 'GST31032027' },
+      { type: 'text', text: ' 与 ' },
+      { type: 'link', text: '码头泊位', url: 'cindy://session/s6' },
+      { type: 'text', text: ' NZ$5M。' },
+    ]);
+  });
+
+  it('移动端链接 label 支持转义方括号、平衡嵌套方括号、行内代码方括号与本地路径链接, 异常大量括号保持线性', () => {
+    expect(
+      parseMobileMarkdownInlines(
+        '见 [[WIP] 文档](https://example.com/a)、[`arr[0`](https://example.com/b)、[`arr]0`](https://example.com/c) 和 [\\[RFC\\] `arr[0` 源码](src/a.ts "标题")',
+      ),
+    ).toEqual([
+      { type: 'text', text: '见 ' },
+      { type: 'link', text: '[WIP] 文档', url: 'https://example.com/a' },
+      { type: 'text', text: '、' },
+      { type: 'link', text: '`arr[0`', url: 'https://example.com/b' },
+      { type: 'text', text: '、' },
+      { type: 'link', text: '`arr]0`', url: 'https://example.com/c' },
+      { type: 'text', text: ' 和 ' },
+      { type: 'link', text: '[RFC] `arr[0` 源码', url: 'src/a.ts' },
+    ]);
+
+    // 验证大量嵌套/未配对 `](` 与非本地 URL 目标在单遍括号表下保持严格 O(n) 线性
+    const nestedNonLocal = '['.repeat(5000) + '](not-a-path)'.repeat(5000);
+    const nestedHttp = '['.repeat(5000) + '](https://example.com/a)'.repeat(200);
+    const started = Date.now();
+    parseMobileMarkdownInlines(nestedNonLocal);
+    parseMobileMarkdownInlines(nestedHttp);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
 });
 
 describe('title 剥离不得灾难性回溯(ReDoS)', () => {
@@ -2175,4 +2282,70 @@ it('validates a distant image once per paragraph without losing following images
     ]);
     expect(normalizations).toBeLessThanOrEqual(2);
   } finally { spy.mockRestore(); }
+});
+
+// #8603 / unit: production parsing used by iOS and Android must distinguish
+// nested input from the flat control; earlier coverage only checked item text.
+describe('nested mobile lists (#8603)', () => {
+  const depths = (source: string) => parseMobileMarkdown(source).filter(b => b.type === 'list_item')
+    .map(b => ('depth' in b ? b.depth : 0));
+  it.each(['  ', '    ', '\t'])('preserves sibling and parent levels with %j indentation', indent => {
+    const nested = `- A\n${indent}- B\n${indent}${indent}- C\n${indent}${indent}- D\n${indent}- E\n- F`;
+    expect(depths(nested)).toEqual([0, 1, 2, 2, 1, 0]);
+    expect(depths(nested.replace(/^[ \t]+/gm, ''))).toEqual([0, 0, 0, 0, 0, 0]);
+  });
+  it('retains mixed ordered/task nesting across blank-line incremental checkpoints', () => {
+    const source = 'intro\n\n1. A\n\n    - [x] B\n\n        2) C\n    - D\n2. E\n\nafter\n\n- F';
+    let result = parseMobileMarkdownIncremental('');
+    for (let n = 1; n <= source.length; n++) {
+      result = parseMobileMarkdownIncremental(source.slice(0, n), result);
+      expect(result.blocks).toEqual(parseMobileMarkdownDocument(source.slice(0, n)).blocks);
+    }
+    expect(depths(source)).toEqual([0, 1, 2, 1, 0, 0]);
+    expect(result.blocks.filter(b => b.type === 'list_item')[1]).toMatchObject({ checked: true });
+  });
+  // PR #10103: unit / real parser. Previous nesting tests skipped all child
+  // content blocks, so flushing a continuation silently flattened later items.
+  it.each([
+    ['continuation', '- A\n  - B\n    explanation\n  - C', [0, 1, 1]],
+    ['loose paragraph', '- A\n\n  explanation\n\n  - B', [0, 1]],
+    ['fence', '- A\n\n  ```text\nnot indented inside fence\n  ```\n\n  - B', [0, 1]],
+    ['mermaid fence', '- A\n\n  ```mermaid\nflowchart LR\nA-->B\n  ```\n\n  - B', [0, 1]],
+    ['quote', '- A\n\n  > explanation\n\n  - B', [0, 1]],
+    ['ancestor continuation', '- A\n  - B\n    - C\n  explanation for A\n  - D', [0, 1, 2, 1]],
+    ['exit through paragraph', '- A\n  - B\n\noutside\n\n  - new list', [0, 1, 0]],
+    ['paragraph dedent', '- A\n\n  explanation\noutside\n\n  - new list', [0, 0]],
+  ] as const)('retains only enclosing list context through %s', (_name, source, expected) => {
+    expect(depths(source)).toEqual(expected);
+    let result = parseMobileMarkdownIncremental('');
+    for (let n = 1; n <= source.length; n++) {
+      result = parseMobileMarkdownIncremental(source.slice(0, n), result);
+      expect(result.blocks).toEqual(parseMobileMarkdownDocument(source.slice(0, n)).blocks);
+    }
+  });
+});
+
+// #8603: run limits must count the exact prefix used by native selection, and
+// continuation chunks must not duplicate either the indentation or the marker.
+it('includes nested prefixes in bounded native text runs without duplicating continuation markers', () => {
+  const blocks = parseMobileMarkdown('- parent\n  12. child😀text');
+  const groups = groupMobileMarkdownSelectableBlocks(blocks, { maxTextRunUtf16Length: 9 });
+  const chunks = groups.flatMap(g => g.type === 'text_run' ? g.blocks : []);
+  const rendered = chunks.map(b => {
+    const prefix = b.type === 'list_item' && !b.textRunContinuation ? mobileMarkdownListMarkerText(b) : '';
+    return { prefix, text: prefix + b.inlines.map(i => i.type === 'image' ? i.alt : i.text).join('') };
+  });
+  expect(rendered.map(r => r.text).join('')).toBe('• parent\u200312. child😀text');
+  expect(rendered.every(r => r.text.length <= 9)).toBe(true);
+  expect(rendered.filter(r => r.prefix.startsWith('\u2003'))).toHaveLength(1);
+});
+
+it('uses rendered nested-prefix offsets when quoting text with an emoji', () => {
+  const blocks = parseMobileMarkdown('- A\n  - B😀C');
+  const item = blocks[1];
+  if (item.type !== 'list_item') throw new Error('list item expected');
+  const prefix = mobileMarkdownListMarkerText(item);
+  const rendered = prefix + item.inlines.map(i => i.type === 'image' ? i.alt : i.text).join('');
+  expect(sliceRenderedSelection([rendered], prefix.length, rendered.length)).toBe('B😀C');
+  expect(sliceRenderedSelection([rendered], 0, rendered.length)).toBe('\u2003◦ B😀C');
 });

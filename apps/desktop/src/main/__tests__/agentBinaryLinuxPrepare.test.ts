@@ -260,6 +260,8 @@ describe('packaged Linux agent binary prepare', () => {
     expect(prepareLinuxRuntimeFallback).toHaveBeenCalledWith('claude-code', {
       signal: undefined,
       onProgress: expect.any(Function),
+      onRetry: expect.any(Function),
+      onVerifying: expect.any(Function),
     });
   });
 
@@ -276,10 +278,14 @@ describe('packaged Linux agent binary prepare', () => {
     expect(prepareLinuxRuntimeFallback).toHaveBeenNthCalledWith(1, 'claude-code', {
       signal: undefined,
       onProgress: expect.any(Function),
+      onRetry: expect.any(Function),
+      onVerifying: expect.any(Function),
     });
     expect(prepareLinuxRuntimeFallback).toHaveBeenNthCalledWith(2, 'codex', {
       signal: controller.signal,
       onProgress: expect.any(Function),
+      onRetry: expect.any(Function),
+      onVerifying: expect.any(Function),
     });
   });
 

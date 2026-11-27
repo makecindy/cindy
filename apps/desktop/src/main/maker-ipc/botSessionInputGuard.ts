@@ -4,6 +4,9 @@ export interface BotSessionInputSnapshot {
   profileStatus: string | null;
 }
 
+/** 伙伴已暂停 / 归档时的拒绝原因; IM 伙伴连接解析不出伙伴时复用同一句。 */
+export const BOT_INACTIVE_INPUT_MESSAGE = 'Bot 当前未启用，请先恢复 Bot 后再发送消息';
+
 export function botSessionInputBlockReason(
   snapshot: BotSessionInputSnapshot | null,
 ): string | null {
@@ -15,13 +18,13 @@ export function botSessionInputBlockReason(
     return 'Bot 历史任务为只读，不能继续发送消息';
   }
   if (snapshot.profileStatus !== 'active') {
-    return 'Bot 当前未启用，请先恢复 Bot 后再发送消息';
+    return BOT_INACTIVE_INPUT_MESSAGE;
   }
   return null;
 }
 
 export const SHADOWED_COMPANION_INPUT_MESSAGE =
-  'This teammate now runs on its main computer; continue it there or take it over on this computer';
+  'This buddy now runs on its main computer; continue it there or take it over on this computer';
 
 /**
  * A demoted copy's companion runs on another computer (cloud-companions.md §3): its main

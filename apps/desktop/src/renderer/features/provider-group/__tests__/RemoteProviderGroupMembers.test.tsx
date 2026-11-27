@@ -38,7 +38,8 @@ vi.mock('lucide-react', () => ({
 }));
 
 
-vi.mock('@/components/status/usageCardModel', () => ({
+vi.mock('@/components/status/usageCardModel', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/components/status/usageCardModel')>()),
   formatQuotaResetAt: () => 'reset',
 }));
 
@@ -56,7 +57,7 @@ const VM = {
   weight: 1,
   paused: false,
 };
-const CONFIG: ProviderGroupConfig = { strategy: 'least', autoSwitch: true, members: [VM] };
+const CONFIG: ProviderGroupConfig = { strategy: 'expiring', autoSwitch: true, members: [VM] };
 type DeviceVersions = { devices: Array<{ deviceId: string; appVersion: string | null }> };
 
 function deferred<T>() {
@@ -70,6 +71,7 @@ function mountWith(
   options: {
     config?: ProviderGroupConfig;
     devices?: DeviceVersions['devices'];
+    onWindowHiddenChange?: (callback: (hidden: boolean) => void) => () => void;
     readDevices?: () => Promise<DeviceVersions>;
     readView?: () => Promise<ProviderGroupView>;
   } = {},
@@ -84,7 +86,7 @@ function mountWith(
   };
   const command = vi.fn(options.readView ?? (async () => view));
   const listDevices = vi.fn(options.readDevices ?? (async () => ({ devices })));
-  Object.assign(window, { electronAPI: { providerGroup: { command }, deviceLink: { listDevices } } });
+  Object.assign(window, { electronAPI: { onWindowHiddenChange: options.onWindowHiddenChange, providerGroup: { command }, deviceLink: { listDevices } } });
   const mounted = render(<RemoteProviderGroupMembers deviceId="mini" providerId="anthropic" config={config} />);
   return { command, listDevices, ...mounted };
 }
@@ -122,6 +124,38 @@ afterEach(() => {
 });
 
 describe('RemoteProviderGroupMembers', () => {
+  // Unit regression for #12404: a native hide while the document is visible must retire the
+  // pending worker, stop interval reads and coalesce duplicate show signals into one refresh.
+  it('pauses member dispatch on native hide and refreshes once when shown', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const pending = deferred<ProviderGroupView>();
+    const roster: ProviderGroupView = { providerId: 'anthropic', config: CONFIG, members: [], rosterOnly: true };
+    let notify!: (hidden: boolean) => void;
+    const readView = vi.fn().mockResolvedValueOnce(roster).mockReturnValueOnce(pending.promise)
+      .mockResolvedValue(viewWithBudget(CONFIG));
+    mountWith({}, { readView, onWindowHiddenChange: handler => { notify = handler; return () => {}; } });
+    await flushAsync();
+    expect(readView).toHaveBeenCalledTimes(2);
+    act(() => notify(true));
+    await act(async () => pending.resolve(viewWithBudget(CONFIG)));
+    await act(async () => vi.advanceTimersByTimeAsync(30_000));
+    expect(readView).toHaveBeenCalledTimes(2);
+    act(() => { notify(false); document.dispatchEvent(new Event('visibilitychange')); });
+    await flushAsync();
+    expect(readView).toHaveBeenCalledTimes(3);
+    expect(screen.getByTestId('remote-provider-group-member').getAttribute('data-member-state')).toBe('available');
+  });
+
+  // Unit regression: the same-account read-only list must retain the owner's
+  // confirmed exhaustion reason without dropping running tasks or requiring expansion.
+  it('shows confirmed quota exhaustion in the collapsed remote row and keeps the running count', async () => {
+    mountWith({ state: 'cooling', usageLimit: { resetAtMs: null } });
+    await screen.findByText('providerGroup.member.status.quotaExhausted');
+    expect(screen.getByText('providerGroup.member.runningCount:{"count":2}')).toBeTruthy();
+    expect(screen.queryByText('providerGroup.member.status.idle')).toBeNull();
+    expect(screen.getByRole('button', { expanded: false })).toBeTruthy();
+  });
+
   it('reads versions from this computer’s device directory when an older group host omits them', async () => {
     const config: ProviderGroupConfig = { ...CONFIG, members: [
       { ...VM, key: 'local:anthropic', kind: 'local', agentDeviceId: null, label: 'Group host' },
@@ -270,13 +304,14 @@ describe('RemoteProviderGroupMembers', () => {
   it('does not present a stale group snapshot as live status', async () => {
     const view: ProviderGroupView = {
       providerId: 'anthropic', config: CONFIG,
-      members: [{ ...VM, label: 'grok-bot-vm', state: 'available', running: 2 }],
+      members: [{ ...VM, label: 'grok-bot-vm', state: 'cooling', running: 2, usageLimit: { resetAtMs: null } }],
       providerContinuity: { stale: true, remainingMs: 1000 },
     };
     mountWith({}, { readView: async () => view });
     await waitFor(() => expect(screen.getByTestId('remote-provider-group-member')
       .getAttribute('data-member-state')).toBe('loading'));
     expect(screen.getByText('providerGroup.member.status.checking')).toBeTruthy();
+    expect(screen.queryByText('providerGroup.member.status.quotaExhausted')).toBeNull();
     expect(screen.queryByText('providerGroup.member.runningCount:{"count":2}')).toBeNull();
   });
 

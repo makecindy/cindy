@@ -35,6 +35,7 @@ import {
   type ThemeColors,
 } from "@/theme";
 import { NativePullDownMenu, usesNativePullDownMenu } from "@/platform/chrome";
+import { usePreviewChromeFrame } from "./usePreviewChromeFrame";
 import { SheetModal } from "./SheetModal";
 import {
   NATIVE_PREVIEW_CHROME,
@@ -192,21 +193,28 @@ export function PreviewToolbar({ children }: { children: ReactNode }) {
 /** Always reachable, including when the content hides its playback/gesture chrome. */
 export function PreviewHeader({
   name,
+  showTitle = true,
   detail,
   onClose,
   actions = [],
   closeDisabled = false,
   closeTestID = "preview.close",
+  standalone = true,
+  sheetMenu = false,
 }: {
   name: string;
+  showTitle?: boolean;
   detail?: string;
   onClose: () => void;
   actions?: readonly PreviewAction[];
   closeDisabled?: boolean;
   closeTestID?: string;
+  standalone?: boolean;
+  sheetMenu?: boolean;
 }) {
   const { t } = useTranslation();
   const insets = useSafeAreaInsets();
+  const chrome = usePreviewChromeFrame();
   const styles = useThemedStyles(makeStyles);
   const [menu, setMenu] = useState(false);
   const afterClose = useRef<(() => void) | null>(null);
@@ -220,21 +228,24 @@ export function PreviewHeader({
     },
     ...actions,
   ];
-  const nativeMenu = usesNativePullDownMenu();
+  const nativeMenu = !sheetMenu && usesNativePullDownMenu();
   const frame = [
     styles.header,
     {
-      height: insets.top + PREVIEW_HEADER_HEIGHT,
-      paddingTop: insets.top,
-      paddingLeft: insets.left + spacing.md,
-      paddingRight: insets.right + spacing.md,
+      top: chrome.top,
+      height: chrome.documentHeaderHeight,
+      minHeight: chrome.documentHeaderHeight,
+      paddingBottom: chrome.sharedStatusRow || chrome.documentHeaderHeight < PREVIEW_HEADER_HEIGHT ? 0 : spacing.sm,
+      paddingLeft: chrome.left,
+      paddingRight: chrome.right,
     },
   ];
   if (NATIVE_PREVIEW_CHROME)
     return (
       <View testID="preview.header" pointerEvents="box-none" style={frame}>
         <NativePreviewHeader
-          name={name}
+          standalone={standalone}
+          name={showTitle ? name : undefined}
           onClose={onClose}
           closeLabel={t("message.attachmentPreview.close")}
           closeDisabled={closeDisabled}
@@ -262,14 +273,17 @@ export function PreviewHeader({
           />
         </PreviewGlassGroup>
         <View pointerEvents="box-none" style={styles.titleSlot}>
-          <View style={[styles.glass, styles.glassFallback, styles.titleCapsule]}>
-            <Text numberOfLines={1} style={[styles.title, styles.titleText]} testID="preview.title">
-              {name}
-            </Text>
-          </View>
+          {showTitle ? (
+            <View style={[styles.glass, styles.glassFallback, styles.titleCapsule]}>
+              <Text numberOfLines={1} style={[styles.title, styles.titleText]} testID="preview.title">
+                {name}
+              </Text>
+            </View>
+          ) : null}
         </View>
         {menuActions.length ? (
           <NativePullDownMenu
+            disabled={sheetMenu}
             accessibilityLabel={t("message.attachmentPreview.more")}
             actions={menuActions.map((action) => ({
               id: action.key,

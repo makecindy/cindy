@@ -45,6 +45,28 @@ describe('create_task_worktree MCP', () => {
       });
       expect(createTaskWorktree).toHaveBeenLastCalledWith({ callerSessionId: 'caller', repoDir: '/repo' });
 
+      // A base that could not be refreshed must say so instead of passing as the latest code.
+      createTaskWorktree.mockResolvedValueOnce({
+        ok: true,
+        worktreePath: '/repo/.cindy-worktrees/brave-ada',
+        branch: 'cindy/brave-ada',
+        baseRepo: '/repo',
+        sourceBranch: 'refs/remotes/origin/main',
+        created: true,
+        staleBaseReason: 'stale-remote-ref',
+      } as never);
+      const stale = await call({});
+      expect(stale).toMatchObject({ ok: true, base_fetched: false });
+      expect(stale.warning).toContain('stale-remote-ref');
+
+      // #9513:base_ref is optional; when given it reaches the host as the explicit base branch.
+      expect(await call({ repo_dir: '/repo', base_ref: 'release/2.x' })).toMatchObject({ ok: true });
+      expect(createTaskWorktree).toHaveBeenLastCalledWith({
+        callerSessionId: 'caller',
+        repoDir: '/repo',
+        baseRef: 'release/2.x',
+      });
+
       createTaskWorktree.mockResolvedValueOnce({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: 'not a git repository' } as never);
       expect(await call({})).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE' });
       expect(createTaskWorktree).toHaveBeenLastCalledWith({ callerSessionId: 'caller' });

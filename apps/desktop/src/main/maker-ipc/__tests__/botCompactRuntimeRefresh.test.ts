@@ -56,14 +56,17 @@ describe('profile refresh after model selection', () => {
 function createSession(id = 'bot-session', instanceId = 'runtime-1') {
   let running = false;
   let backgroundTasks = 0;
+  let pendingContinuations = 0;
   const session: BotCompactRuntimeSession = {
     id,
     instanceId,
     isTurnRunning: () => running,
+    countPendingWakeContinuations: () => pendingContinuations,
     listBackgroundTasks: () => Array.from({ length: backgroundTasks }),
   };
   return {
     session,
+    setPendingContinuations: (value: number) => { pendingContinuations = value; },
     setRunning: (value: boolean) => { running = value; },
     setBackgroundTasks: (value: number) => { backgroundTasks = value; },
   };
@@ -89,7 +92,7 @@ describe('Bot compact runtime refresh coordinator', () => {
   it('rechecks ownership after preflight and swaps only in the safe order', async () => {
     const calls: string[] = [];
     await expect(replaceBotRuntimeAfterPreflight({
-      preflight: async () => { calls.push('preflight'); },
+      preflight: async () => { calls.push('preflight'); return true; },
       isCurrentOwner: () => {
         calls.push('owner');
         return true;
@@ -103,11 +106,26 @@ describe('Bot compact runtime refresh coordinator', () => {
     expect(calls).toEqual(['preflight', 'owner', 'close', 'bootstrap']);
 
     await expect(replaceBotRuntimeAfterPreflight({
-      preflight: async () => undefined,
+      preflight: async () => true,
       isCurrentOwner: () => false,
       close: async () => { throw new Error('must not close'); },
       bootstrap: async () => 'unreachable',
     })).rejects.toThrow('owner changed');
+  });
+
+  // A memory/skill/profile save signals a refresh; when the preflight shows the
+  // runtime epoch is unchanged (e.g. a V2 teammate memory edit, which is not in
+  // the prompt), the live runtime must not be closed and rebuilt.
+  it('keeps the live runtime when the preflight reports an unchanged epoch', async () => {
+    const calls: string[] = [];
+    await expect(replaceBotRuntimeAfterPreflight({
+      preflight: async () => { calls.push('preflight'); return false; },
+      isCurrentOwner: () => { calls.push('owner'); return true; },
+      isIdle: () => true,
+      close: async () => { calls.push('close'); },
+      bootstrap: async () => { calls.push('bootstrap'); return 'new-runtime'; },
+    })).resolves.toBeNull();
+    expect(calls).toEqual(['preflight']);
   });
 
   it('waits for the final idle boundary instead of refreshing at compact_boundary', async () => {
@@ -185,6 +203,25 @@ describe('Bot compact runtime refresh coordinator', () => {
     expect(retryCoordinator.hasPending(h.session.id)).toBe(false);
   });
 
+  it.each([false, true])('wakes after rebuilding a closed runtime only when no newer epoch is pending (%s)', async (newerEpoch) => {
+    const oldRuntime = createSession();
+    const replacement = createSession(oldRuntime.session.id, 'replacement');
+    const onReady = vi.fn();
+    const coordinator = createBotCompactRuntimeRefreshCoordinator({
+      hasPendingInteraction: () => false,
+      refresh: async session => {
+        coordinator.clearForClosedSession(session);
+        if (newerEpoch) coordinator.noteBoundary(replacement.session);
+        return 'refreshed';
+      },
+      onReady,
+    });
+    coordinator.noteBoundary(oldRuntime.session);
+    await expect(coordinator.attempt(oldRuntime.session)).resolves.toBe('refreshed');
+    expect(coordinator.hasPending(oldRuntime.session.id)).toBe(newerEpoch);
+    expect(onReady.mock.calls).toEqual(newerEpoch ? [] : [[oldRuntime.session.id]]);
+  });
+
   it('clears only the matching closed runtime', () => {
     const oldRuntime = createSession('bot-session', 'runtime-old');
     const otherRuntime = createSession('bot-session', 'runtime-new');
@@ -202,6 +239,51 @@ describe('Bot compact runtime refresh coordinator', () => {
 
 describe('capability refresh input admission', () => {
   const botChat = { role: 'canonical', source: 'bot', status: 'active', workingDir: '/virtual/bot' };
+
+  it('keeps a send temporarily deferred when a permission card opens during resource preflight', async () => {
+    const h = createSession();
+    let hasInteraction = false;
+    const close = vi.fn(async () => {});
+    const coordinator = createBotCompactRuntimeRefreshCoordinator({
+      hasPendingInteraction: () => hasInteraction,
+      refresh: async () => {
+        // The check before entering refresh saw an idle session.
+        await replaceBotRuntimeAfterPreflight({
+          preflight: async () => { hasInteraction = true; return true; },
+          isCurrentOwner: () => true,
+          isIdle: () => !hasInteraction,
+          close,
+          bootstrap: async () => h.session,
+        });
+        return 'refreshed';
+      },
+    });
+    await expect(prepareBotCapabilityEpochBeforeSend(h.session, {
+      readSession: async () => botChat,
+      preflight: async () => true,
+      coordinator,
+    })).resolves.toBe('deferred');
+    expect(close).not.toHaveBeenCalled();
+    expect(coordinator.hasPending(h.session.id)).toBe(true);
+  });
+
+  it('waits for an in-flight idle refresh before admitting a queued turn', async () => {
+    const h = createSession();
+    let finish!: (outcome: 'refreshed') => void;
+    const refresh = vi.fn(() => new Promise<'refreshed'>(resolve => { finish = resolve; }));
+    const coordinator = createBotCompactRuntimeRefreshCoordinator({ hasPendingInteraction: () => false, refresh });
+    coordinator.noteBoundary(h.session);
+    const idleRefresh = coordinator.attempt(h.session);
+    h.setRunning(true);
+    const admission = prepareBotCapabilityEpochBeforeSend(h.session, {
+      readSession: async () => botChat, preflight: async () => true, coordinator,
+    });
+    finish('refreshed');
+    await expect(admission).resolves.toBe('refreshed');
+    await idleRefresh;
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(coordinator.hasPending(h.session.id)).toBe(false);
+  });
 
   it.each([undefined, { ...botChat, role: 'delegation' }, { ...botChat, source: 'desktop' }])(
     'does not block ordinary or delegated input after mid-turn compaction (%j)', async row => {
@@ -263,7 +345,7 @@ describe('capability refresh input admission', () => {
     const admit = () => prepareBotCapabilityEpochBeforeSend(h.session, {
       readSession: async () => botChat, preflight: async () => true, coordinator,
     });
-    await expect(admit()).resolves.toBe('deferred');
+    await expect(admit()).resolves.toBe('refresh-failed');
     expect(coordinator.hasPending(h.session.id)).toBe(true);
     await expect(admit()).resolves.toBe('refreshed');
     expect(coordinator.hasPending(h.session.id)).toBe(false);
@@ -320,4 +402,47 @@ describe('capability refresh input admission', () => {
     expect(coordinator.hasPending(h.session.id)).toBe(false);
     await expect(coordinator.attempt(h.session)).resolves.toBe('not-bot');
   });
+});
+
+// #8952: empty task snapshots do not prove that native follow-up was delivered.
+// Unit, real coordinator/admission; synthetic Session state isolates this gate.
+it('keeps capability refresh pending while a completed background task awaits native follow-up', async () => {
+  const h = createSession();
+  const refresh = vi.fn(async () => 'refreshed' as const);
+  const coordinator = createBotCompactRuntimeRefreshCoordinator({ hasPendingInteraction: () => false, refresh });
+  h.setPendingContinuations(1);
+  const deps = {
+    coordinator,
+    readSession: async () => ({ role: 'thread', source: 'bot', status: 'active', workingDir: 'workspace' }),
+    preflight: async () => true,
+  };
+  await expect(prepareBotCapabilityEpochBeforeSend(h.session, deps)).resolves.toBe('kept-current-runtime');
+  expect(refresh).not.toHaveBeenCalled();
+  expect(coordinator.hasPending(h.session.id)).toBe(true);
+  h.setPendingContinuations(0);
+  await expect(coordinator.attempt(h.session)).resolves.toBe('refreshed');
+  expect(refresh).toHaveBeenCalledOnce();
+});
+
+// #8952: provider activity can arrive while resource preflight awaits.
+it('rechecks native continuation retention immediately before closing after preflight', async () => {
+  let release!: (changed: boolean) => void;
+  let pending = false;
+  let closed = false;
+  const operation = replaceBotRuntimeAfterPreflight({
+    preflight: () => new Promise<boolean>(resolve => { release = resolve; }),
+    isCurrentOwner: () => true,
+    isIdle: () => !pending,
+    close: async () => { closed = true; },
+    bootstrap: async () => 'replacement',
+  });
+  pending = true;
+  release(true);
+  await expect(operation).rejects.toThrow('became busy');
+  expect(closed).toBe(false);
+  await expect(replaceBotRuntimeAfterPreflight({
+    preflight: async () => true, isCurrentOwner: () => true, isIdle: () => true,
+    close: async () => { closed = true; }, bootstrap: async () => 'replacement',
+  })).resolves.toBe('replacement');
+  expect(closed).toBe(true);
 });

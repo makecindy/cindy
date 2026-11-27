@@ -8,6 +8,8 @@ import {
   registerAccountUnavailableHandler,
 } from '@/api/client';
 import { __testing as relayRoutingTesting, setActiveSelfHostedRelay } from '@/device-link/selfHostedRelayRouting';
+const nativeMedia = vi.hoisted(() => ({ request: vi.fn() }));
+vi.mock('@/device-link/agentNetMediaApi', () => ({ mobileAgentNetMediaRequest: nativeMedia.request }));
 
 // 文案已 i18n 化;固定 zh-CN 让字面量断言与语言环境解耦(全局 mock 默认 en-US)。
 beforeAll(async () => {
@@ -16,9 +18,37 @@ beforeAll(async () => {
 
 describe('apiFetchRaw', () => {
   afterEach(() => {
+    nativeMedia.request.mockReset();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     setMobileDebugSink(undefined);
+  });
+  it('routes an encrypted reference through its native adapter without passing the account token to it or HTTP', async () => {
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const value = { getUrl: 'file:///unit-cache/decrypted', expiresAt: '2099-01-01T00:00:00Z' };
+    nativeMedia.request.mockResolvedValue({ handled: true, value });
+    await expect(apiFetchRaw('/api/device-link/media/presign-get', { baseUrl: 'https://relay.example.invalid',
+      method: 'POST', body: { key: 'agent-net-v3/public-unit-reference' }, token: 'unit-account-token' })).resolves.toBe(value);
+    expect(nativeMedia.request.mock.calls[0][1]).not.toHaveProperty('token');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it('rejects a native media result when the caller scope changes while the native operation is pending', async () => {
+    let finish!: (result: unknown) => void, current = true;
+    nativeMedia.request.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const work = apiFetchRaw('/api/device-link/media/presign-get', { baseUrl: 'https://relay.example.invalid', method: 'POST',
+      body: { key: 'agent-net-v3/public-unit-reference' }, assertCurrent: () => { if (!current) throw new Error('OWNER_CHANGED'); } });
+    const rejected = expect(work).rejects.toThrow('OWNER_CHANGED');
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'), { interval: 1, timeout: 80 });
+    current = false; finish({ handled: true, value: {} }); await rejected;
+  });
+
+  // Unit: invitation shares carry account authorization and may not follow
+  // redirects. Existing API coverage checked headers/cache, not redirect policy.
+  it('passes an explicit redirect refusal to the native transport', async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    await apiFetchRaw('/api/shares', { baseUrl: 'https://share.example.invalid', redirect: 'error' });
+    expect(fetch.mock.calls[0]?.[1]).toMatchObject({ redirect: 'error' });
   });
 
   it.each([
@@ -62,17 +92,30 @@ describe('apiFetchRaw', () => {
     expect(fetch.mock.calls[0]![1].headers).toMatchObject({ 'X-Chat-Actor': 'actor-1', Authorization: 'Bearer tok', 'Content-Type': 'application/json' });
   });
 
-  it('classifies RN offline failures as a typed NETWORK_UNAVAILABLE ApiError (中文文案,可被重试层识别)', async () => {
-    // RN 离线时 fetch 抛 TypeError("Network request failed")——不含 "fetch" 子串,
-    // 历史实现匹配不到,英文原文一路透传到 UI。
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Network request failed')));
+  // #4841 (unit): the Expo 58 wrapper extends Error, so the RN case alone
+  // misses Android DNS failures at the real API boundary.
+  it.each([
+    ['RN', new TypeError('Network request failed')],
+    ['Expo Android DNS', new Error('fetch failed: java.net.UnknownHostException: Unable to resolve host "relay.example.invalid": No address associated with hostname')],
+  ])('classifies %s offline failures as localized NETWORK_UNAVAILABLE', async (_runtime, transportError) => {
+    const log = vi.fn();
+    setMobileDebugSink(log);
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(transportError));
 
     const err = await apiFetchRaw('/api/auth/login', { baseUrl: 'https://auth.example.invalid' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).code).toBe('NETWORK_UNAVAILABLE');
-    expect((err as ApiError).message).toContain('网络连接不可用');
-    // 非 web 环境不追加 CORS 提示
-    expect((err as ApiError).message).not.toContain('CORS');
+    expect((err as ApiError).message).toBe(i18n.t('apiErrors.networkUnavailable', { webHint: '' }));
+    expect(log).toHaveBeenCalledWith('warn', 'network', ['request failed', transportError]);
+  });
+
+  it.each([
+    'fetch failed: javax.net.ssl.SSLHandshakeException: Certificate rejected',
+    'fetch failed: java.lang.SecurityException: Permission denied',
+  ])('preserves other Expo transport rejections (%s)', async (message) => {
+    const error = new Error(message);
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(error));
+    await expect(apiFetchRaw('/api/resource', { baseUrl: 'https://api.example.invalid' })).rejects.toBe(error);
   });
 
   it('turns browser fetch failures into an actionable local-dev message', async () => {
@@ -282,6 +325,21 @@ describe('apiFetchRaw', () => {
     } finally {
       dispose();
     }
+  });
+
+  it('parses Retry-After onto ApiError.retryAt for 429 and 503 responses', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-26T04:00:00.000Z'));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(
+      JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'slow down' } }),
+      { status: 429, headers: { 'Retry-After': '12' } },
+    )));
+    await expect(apiFetchRaw('/v1/conversations', { baseUrl: 'https://chat.example.invalid' }))
+      .rejects.toMatchObject({
+        code: 'RATE_LIMITED',
+        status: 429,
+        retryAt: Date.parse('2026-11-26T04:00:12.000Z'),
+      });
   });
 });
 

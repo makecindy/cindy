@@ -48,7 +48,7 @@ vi.mock('../logger', () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() }),
 }));
 // 被控开关:由 h.settings 控制(双层门禁第一道)。
-vi.mock('../device-link/settings-store', () => ({
+vi.mock('../device-link/settings-store.desktop', () => ({
   readDeviceLinkSettings: () => h.settings,
 }));
 import {
@@ -57,16 +57,23 @@ import {
   setRemoteWorkingDirGuard,
   setRemoteSettingsPersist,
   __testing as dispatchTesting,
-} from '../device-link/dispatch';
+} from '../device-link/dispatch.desktop';
 import { createRemoteWorkingDirGuard } from '../device-link/remote-workdir-guard';
 import { createIpcError } from '../../shared/ipc-errors';
 import { __testing as registry } from '../device-link/invoke-registry';
 import type { InvokeResultPayload } from '@cindy/device-link';
 
 const SRC = 'controller-device';
+const zhipuRead = vi.hoisted(() => vi.fn());
+const remoteAllowed = vi.hoisted(() => vi.fn(() => false));
+vi.mock('../maker-host/remote-provider-access-store.js', async (original) => ({
+  ...await original<typeof import('../maker-host/remote-provider-access-store.js')>(),
+  isRemoteProviderInvocationAllowed: remoteAllowed,
+}));
 const kimiRead = vi.hoisted(() => vi.fn());
 const opencodeGoRead = vi.hoisted(() => vi.fn());
 vi.mock('../maker-host/provider-account-usage.js', () => ({
+  readZhipuCodingPlanAccountUsage: zhipuRead,
   readKimiCodingAccountUsage: kimiRead,
   readOpenCodeGoAccountUsage: opencodeGoRead,
 }));
@@ -120,6 +127,16 @@ function registerHandler(channel: string, impl: (...args: unknown[]) => unknown)
 }
 
 describe('device-link host dispatch (runInvoke) — real gate + async fs guard + routing', () => {
+  // The desktop assembly does not supply the registry-presence port. This allowlisted,
+  // unregistered channel reaches the original IPC dispatcher in the existing unit fixture.
+  it('preserves the desktop IPC error when the local handler is missing', async () => {
+    const channel = 'model-groups:get';
+    expect(await runInvoke(SRC, { channel, args: [] })).toEqual({
+      ok: false,
+      error: { code: 'IPC_ERROR', message: `[NOT_FOUND] no local IPC handler for channel '${channel}'` },
+    });
+  });
+
   // #7117:生产 runInvoke 必须把 SSH 的 POSIX 路径交给对应主机,而非 Windows fs。
   // 既有覆盖只有本机路径;最小失败输入为不存在于本机的路径 + remoteHostId。
   // tier:unit,SSH/数据库用内存依赖,dispatch 与目录守卫使用真实生产入口。
@@ -304,7 +321,7 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
 
   // 远程 worktree:worktree:create 的 baseRepo 与 create-session 的 workingDir 同口径收敛
   // (决定在被控端哪个仓库下跑 git worktree add)。
-  it.each(['worktree:create', 'worktree:sync-branch'])('%s 的 baseRepo 是真实存在目录 → 放行到 handler', async (channel) => {
+  it.each(['worktree:create', 'worktree:sync-branch', 'worktree:checkout'])('%s 的 baseRepo 是真实存在目录 → 放行到 handler', async (channel) => {
     const handler = registerHandler(channel, () => ({ ok: true }));
     const res = (await runInvoke(SRC, {
       channel,
@@ -314,7 +331,7 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['worktree:create', 'worktree:sync-branch'])('%s 的 baseRepo 不存在 → 结构化拒绝,不落到 handler', async (channel) => {
+  it.each(['worktree:create', 'worktree:sync-branch', 'worktree:checkout'])('%s 的 baseRepo 不存在 → 结构化拒绝,不落到 handler', async (channel) => {
     const handler = registerHandler(channel, () => ({ ok: true }));
     const res = (await runInvoke(SRC, {
       channel,
@@ -474,6 +491,24 @@ describe('Kimi same-account quota read', () => {
   });
 });
 
+// Tier 2: a stale catalog must never authorize reading a disabled connection.
+it('checks current GLM permission and returns only the quota summary', async () => {
+  const query = { channel: 'maker:usage:zhipu-coding-plan', args: [{ providerId: 'glm' }] };
+  expect(await runInvoke(SRC, query)).toEqual({ ok: true, result: { status: 'unsupported' } });
+  expect(zhipuRead).not.toHaveBeenCalled();
+  remoteAllowed.mockReturnValue(true);
+  const window = { usedPercent: 12, resetsAt: null };
+  const snapshot = { kind: 'zhipu-coding-plan-quota', level: 'pro', noPlan: false, fiveHour: window, weekly: null, fetchedAt: 123 };
+  zhipuRead.mockResolvedValue({ status: 'ready', stale: false, dashboardUrl: 'private', snapshot: {
+    ...snapshot, fiveHour: { ...window, extra: 'private' }, extra: 'private',
+  } });
+  expect(await runInvoke(SRC, query)).toEqual({ ok: true, result: { status: 'ready', stale: false, snapshot } });
+  expect(zhipuRead).toHaveBeenCalledWith({ providerId: 'glm' });
+  remoteAllowed.mockReturnValueOnce(true).mockReturnValueOnce(false);
+  expect(await runInvoke(SRC, query)).toEqual({ ok: true, result: { status: 'unsupported' } });
+  remoteAllowed.mockReset();
+});
+
 describe('OpenCode Go same-account quota read', () => {
   it('forwards only the validated query and preserves the read-only result', async () => {
     opencodeGoRead.mockResolvedValueOnce({ status: 'unavailable', error: 'auth' });
@@ -489,6 +524,7 @@ describe('OpenCode Go same-account quota read', () => {
 // Tier 2: the real tunnel must advertise quota support without releasing routes.
 it('advertises Kimi quota only from official routes in the redacted remote catalog', async () => {
   registerHandler('maker:provider:list', async () => ({ providers: [
+    { id: 'glm', connected: true, remoteInvocationEnabled: true, auth: { method: 'apiKey' }, routing: { pi: { upstream: 'https://api.z.ai/api/coding/paas/v4' } } },
     { id: 'kimi', name: 'Kimi', auth: { method: 'apiKey' }, agents: ['pi'], models: {}, routing: { pi: { upstream: 'https://api.kimi.com/coding/v1', authStrategy: 'api-key-header' } } },
     { id: 'proxy', name: 'Proxy', auth: { method: 'apiKey' }, agents: ['pi'], models: {}, kimiCodingUsageAgents: ['pi'], routing: { pi: { upstream: 'https://proxy.example/coding/v1' } } },
     { id: 'opencode-go', name: 'OpenCode Go', source: 'user', auth: { method: 'apiKey' }, agents: ['codex'], models: {}, routing: { codex: { upstream: 'https://opencode.ai/zen/go/v1', authStrategy: 'api-key-header' } } },
@@ -496,6 +532,7 @@ it('advertises Kimi quota only from official routes in the redacted remote catal
   ] }));
   const result = await runInvoke(SRC, { channel: 'maker:provider:list', args: [] });
   expect(result).toMatchObject({ ok: true, result: { providers: [
+    { id: 'glm', zhipuCodingPlanUsage: true },
     { id: 'kimi', kimiCodingUsageAgents: ['pi'] }, { id: 'proxy' },
     { id: 'opencode-go', opencodeGoUsageAgents: ['codex'] }, { id: 'fake-opencode' },
   ] } });

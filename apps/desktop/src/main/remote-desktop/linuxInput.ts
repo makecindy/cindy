@@ -20,6 +20,7 @@ export function resolveLinuxInputBinary(): Promise<string> {
       'main.c',
       'x11.h',
       'x11-text.h',
+      'gnome.h',
       'build.mjs',
       'virtual-keyboard-unstable-v1.xml',
       'wlr-virtual-pointer-unstable-v1.xml',
@@ -55,18 +56,21 @@ export function isX11Desktop(platform: string = process.platform): boolean {
   );
 }
 
-/** Probe registry support without creating devices or injecting input. */
-export async function readLinuxDesktopInputSupport(): Promise<boolean> {
+/** Probe registry support without creating devices or injecting input.
+ * `gnome` selects Mutter's RemoteDesktop API (the caller has verified a GNOME
+ * Wayland session); the probe creates no session. */
+export async function readLinuxDesktopInputSupport(gnome = false): Promise<boolean> {
   const x11 = isX11Desktop();
   if (
     !x11 &&
+    !(gnome && isWaylandDesktop(process.platform, process.env)) &&
     (!isWaylandDesktop(process.platform, process.env) || !process.env.HYPRLAND_INSTANCE_SIGNATURE)
   )
     return false;
   try {
     const { stdout } = await exec(
       await resolveLinuxInputBinary(),
-      x11 ? ['--x11', '--check'] : ['--check'],
+      x11 ? ['--x11', '--check'] : gnome ? ['--gnome', '--check'] : ['--check'],
       {
         timeout: 3000,
         maxBuffer: 1024,

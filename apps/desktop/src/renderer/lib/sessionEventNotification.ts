@@ -1,4 +1,3 @@
-import { getAgentIslandEnabled, isAgentIslandSupported } from '@/hooks/useAgentIslandSettings';
 import { getFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSettings';
 import { getNotificationsEnabled } from '@/hooks/useNotificationSettings';
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
@@ -117,6 +116,12 @@ export function sendSessionEventNotification(
     inputHandoff?: true;
     /** The request that caused this event, independent of later task state. */
     inputHandoffRequestId?: string;
+    /**
+     * Stable identity of a repeated needs-reply or error. Main collapses two
+     * deliveries of the same id into one desktop toast. Absent when the turn
+     * that produced the event has no clock yet; that delivery still notifies.
+     */
+    alertEventId?: string;
   } = {},
 ): void {
   // The user is already looking at Cindy. In-app attention remains available,
@@ -203,20 +208,26 @@ function deliverSessionEventNotification(
   title: string,
   kind: SessionEventNotificationKind,
   remoteDevice: boolean,
-  options: { mobile?: boolean; feishu?: boolean },
+  options: { mobile?: boolean; feishu?: boolean; remoteDeviceId?: string | null; alertEventId?: string },
 ): void {
   // A handoff can finish after the user has opened Cindy or changed preferences.
   if (typeof document !== 'undefined' && document.hasFocus()) return;
 
-  const islandActive = isAgentIslandSupported() && getAgentIslandEnabled();
   if (!remoteDevice) void window.electronAPI.notificationMarkSessionAttention(sessionId);
   void window.electronAPI.notificationShowSessionEvent({
     sessionId,
     title,
     kind,
     ...(remoteDevice ? { markAttention: false } : {}),
+    ...(options.remoteDeviceId ? { remoteDeviceId: options.remoteDeviceId } : {}),
+    // Completions keep their own turn identity in main. An alert id on a done
+    // payload is rejected, so only carry it for the two kinds it describes.
+    ...(kind !== 'done' && options.alertEventId ? { alertEventId: options.alertEventId } : {}),
     channels: {
-      desktop: !remoteDevice && getNotificationsEnabled() && !islandActive,
+      // Main arbitrates live Agent Notch display visibility and Live Activity alert
+      // ownership via `isTaskAlertShownElsewhere`; renderer only gates the global
+      // desktop notification preference and remote-device scope.
+      desktop: !remoteDevice && getNotificationsEnabled(),
       feishu: options.feishu !== false && getFeishuNotificationsEnabled(),
       // Mobile owns registration/unregistration of its push token. There is
       // deliberately no second desktop setting for the same channel.

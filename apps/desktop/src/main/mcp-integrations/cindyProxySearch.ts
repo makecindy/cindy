@@ -1,9 +1,11 @@
+import { withAuxiliaryUsage } from '../usage/auxiliaryUsage.js';
+import { parseAuxiliaryResponse } from '../../shared/auxiliaryUsage.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { createLogger } from '../logger.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { reportCindyGatewayKeyRejected } from '../model-access/gatewayKeyRejection.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
-import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop.js';
 import {
   matchesDeterministicUsageExhaustionText,
   redactSensitiveText,
@@ -473,6 +475,7 @@ function webSearchRequestsOf(raw: unknown): number | undefined {
 export function createCindyProxySearchService(deps: CindyProxySearchDeps): CindyProxySearchService {
   return {
     async search({ query, limit }): Promise<CindyProxySearchOutcome> {
+      return withAuxiliaryUsage({ source: 'web-search', providerId: 'xd', model: CINDY_SEARCH_MODEL_NAME, transport: 'anthropic-messages' }, async record => {
       const baseUrl = deps.getBaseUrl().trim().replace(/\/+$/, '');
       const apiKey = deps.getApiKey();
       if (!baseUrl || !apiKey) {
@@ -556,6 +559,8 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
           ...(requestId ? { requestId } : {}),
         };
       }
+      const observed = parseAuxiliaryResponse(body, 'anthropic-messages');
+      if (observed.tokens) await record(observed.tokens, observed.model ? { model: observed.model } : {});
       const latencyMs = Date.now() - startedAt;
       if (!response.ok) {
         const failure = classifyHttpFailure(response.status, body);
@@ -625,6 +630,7 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
         ...(webSearchRequests !== undefined ? { webSearchRequests } : {}),
         ...(requestId ? { requestId } : {}),
       };
+      });
     },
   };
 }

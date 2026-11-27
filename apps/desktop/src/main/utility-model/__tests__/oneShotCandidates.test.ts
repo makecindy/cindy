@@ -1,5 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const usageSink = vi.hoisted(() => ({ record: vi.fn(async () => {}), close: vi.fn(), begin: vi.fn() }));
+import { saveAuxiliaryModelSettings } from '../../maker-ipc/auxiliary-model-settings.js';
+vi.mock('../../app-settings/runtime.js', () => ({ registerRuntimeSettingsSection: vi.fn() }));
+vi.mock('../../cindyAiProviderName.js', () => ({ getCindyAiProviderName: () => 'Cindy AI' }));
+vi.mock('../oneshotProviderUsability.js', () => ({ hasOneshotProviderCredential: () => true }));
+vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendererEvent: vi.fn() }));
+const writeChain = vi.hoisted(() => vi.fn());
+vi.mock('../auxiliary-model-settings-store.js', () => ({ writeAuxiliaryModelSettingsPatch: writeChain }));
+vi.mock('../../usage/auxiliaryUsage.js', () => ({
+  createAuxiliaryUsageRecorder: (attribution: unknown) => {
+    usageSink.begin(attribution);
+    return Object.assign(usageSink.record, { close: usageSink.close });
+  },
+}));
 const localReady = vi.hoisted(() => vi.fn(async () => {}));
+const acquireAccount = vi.hoisted(() => vi.fn(async (): Promise<import('../../subscription-accounts/runtime.js').SubscriptionAccountLease | null> => null));
+const poolMembership = vi.hoisted(() => ({ provider: 'pool-a' }));
+const projectedCatalog = vi.hoisted(() => vi.fn<() => import('@cindy/model-providers').Catalog | undefined>());
+vi.mock('../../subscription-accounts/placement.js', () => ({ accountProviderId: () => poolMembership.provider }));
+vi.mock('../../subscription-accounts/runtime.js', () => ({ acquireSubscriptionAccount: acquireAccount }));
+vi.mock('../../maker-host/createDesktopProviderService.js', async () => {
+  const { getActiveCatalog } = await import('../../maker-host/active-catalog.js');
+  return { getDesktopSelectableCatalog: () => projectedCatalog() ?? getActiveCatalog() };
+});
 vi.mock('../../local-model-runtime/preflight.js', () => ({ ensureManagedOllamaReadyForSession: localReady }));
 
 vi.mock('electron', () => ({
@@ -40,6 +63,7 @@ vi.mock('../resolveAuxiliaryModelChain.js', () => ({
 
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: () => ownerState.key,
+  getActiveDataOwnerPushStamp: () => ({ dataOwnerId: ownerState.key, ownerGeneration: 1 }),
   isAppSessionBoundaryPending: () => ownerState.pending,
 }));
 
@@ -52,13 +76,15 @@ vi.mock('../../maker-host/anthropic-responses-bridge-host.js', () => ({
   getChatgptBridgeAuthForDispatch: vi.fn(),
 }));
 
-vi.mock('../../maker-host/grok-oauth-login.js', () => ({
+vi.mock('../../maker-host/grok-oauth-login.desktop.js', () => ({
   getGrokAccessToken: vi.fn(),
   getGrokOAuthCredentialGeneration: vi.fn(() => 0),
 }));
 
-vi.mock('../../maker-host/generic-oauth.js', () => ({
+vi.mock('../../maker-host/generic-oauth.desktop.js', () => ({
   readCachedGenericOAuthAccessToken: vi.fn(),
+  readGenericOAuthAccessToken: vi.fn(),
+  getGenericOAuthLoginGeneration: vi.fn(() => 0),
 }));
 
 vi.mock('../../maker-host/active-catalog.js', () => ({
@@ -112,8 +138,8 @@ import { fetch as undiciFetch } from 'undici';
 import { getAppCapabilities } from '../../appCapabilities.js';
 import { readClaudeApiKey } from '../../maker-host/auth-adapters.js';
 import { getChatgptBridgeAuth, getChatgptBridgeAuthForDispatch } from '../../maker-host/anthropic-responses-bridge-host.js';
-import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../../maker-host/grok-oauth-login.js';
-import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
+import { getGrokAccessToken, getGrokOAuthCredentialGeneration } from '../../maker-host/grok-oauth-login.desktop.js';
+import { readCachedGenericOAuthAccessToken, readGenericOAuthAccessToken } from '../../maker-host/generic-oauth.desktop.js';
 import {
   getActiveCatalog,
   isXdGatewayPaymentRequiredRoute,
@@ -135,15 +161,17 @@ import {
   requestUtilityText,
   toAnthropicApiModelId,
 } from '../oneShotCandidates.js';
+import { __testing as health, dismissAuxiliaryModelNotice, setAuxiliaryModelHealthBroadcaster, getAuxiliaryModelHealthSnapshot } from '../auxiliary-model-health.js';
 import { resetUtilityReasoningMemory } from '../utilityReasoningPlan.js';
 import { AUTO_AUXILIARY_MODEL_CHAIN } from '../../../shared/auxiliaryModelChain.js';
+import { setAuxiliaryChainOutcomeListener } from '../auxiliaryChainOutcomeSink.js';
 
 const getProfiles = vi.mocked(getUtilityModelChainProfiles);
 const appCapabilities = vi.mocked(getAppCapabilities);
 const readKey = vi.mocked(readClaudeApiKey);
 const readCodexCreds = vi.mocked(getChatgptBridgeAuth);
 const readCodexDispatchAuth = vi.mocked(getChatgptBridgeAuthForDispatch);
-const codexAuthorizationCurrent = vi.fn((_providerId: string) => true);
+const codexAuthorizationCurrent = vi.fn<(providerId: string) => boolean>(() => true);
 const readGrokToken = vi.mocked(getGrokAccessToken);
 const grokCredentialGeneration = vi.mocked(getGrokOAuthCredentialGeneration);
 const readGenericOAuthToken = vi.mocked(readCachedGenericOAuthAccessToken);
@@ -167,6 +195,10 @@ function makerMock(authenticated: boolean): Maker {
 describe('utility one-shot candidates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    health.reset();
+    acquireAccount.mockReset().mockResolvedValue(null);
+    projectedCatalog.mockReset();
+    poolMembership.provider = 'pool-a';
     fetchMock.mockReset();
     resetUtilityReasoningMemory();
     chainState.source = 'auto';
@@ -184,6 +216,7 @@ describe('utility one-shot candidates', () => {
     readGrokToken.mockRejectedValue(new Error('not authenticated'));
     grokCredentialGeneration.mockReturnValue(0);
     readGenericOAuthToken.mockReturnValue(null);
+    vi.mocked(readGenericOAuthAccessToken).mockImplementation(async (...args) => readGenericOAuthToken(...args));
     providerRouteMutationInProgress.mockReturnValue(false);
     providerRouteCredentialRevision.mockReturnValue(0);
     readCustomKey.mockReturnValue(null);
@@ -244,9 +277,597 @@ describe('utility one-shot candidates', () => {
 
     afterEach(() => { vi.useRealTimers(); });
 
+    // Unit: the title dispatcher used to discard failed attempts on backup success.
+    // Stream synthetic upstream bodies through the production BYOK route and store.
+    it.each([
+      [403, JSON.stringify({ error: { message: 'This account only allows Codex official clients', trace: 'PRIVATE_ECHO' } }), 'This account only allows Codex official clients'],
+      [200, 'data: {"type":"response.failed","response":{"error":{"message":"Stream failed."}}}\n\n', 'Stream failed.'],
+      [200, 'event: error\ndata: {"type":"error",\ndata: "error":{"code":"insufficient_quota","message":"Allowance used."}}\n\n', 'Allowance used.'],
+      [200, 'event: error\rdata: {"code":"insufficient_quota",\rdata: "message":"Quota empty."}\r\r', 'Quota empty.'],
+      [429, '{"error":"insufficient_quota"}', undefined],
+      [403, 'Cannot process cedar.', undefined],
+      [403, 'Invalid input: “ Q7 ”', undefined],
+      [403, 'Unknown project Q7X.', undefined],
+      [403, '{"message":"  ","error":{"message":"Nested detail."}}', 'Nested detail.'],
+      [503, ': keep-alive', undefined],
+      [403, 'Denied Today!\nTry again later.', 'Denied Today!\nTry again later.'],
+      [403, JSON.stringify({ message: 'Forbidden', request: 'PRIVATE_ECHO' }), 'Forbidden'],
+      [403, 'x'.repeat(5000), undefined],
+      [401, JSON.stringify({ detail: { message: 'Invalid review-a-secret.' } }), 'Invalid [REDACTED].'],
+      [404, 'data: {"type":"response.failed","response":{"error":{"message":"Gone."}}}\n\n', 'Gone.'],
+      [429, 'Slow down', 'Slow down'],
+      [429, 'insufficient_quota', 'insufficient_quota'],
+      [503, '', undefined],
+      [500, '<html>PRIVATE_ECHO</html>', undefined],
+      [502, '{"request":{"message":"PRIVATE_ECHO"}}', undefined],
+      [502, 'Request: name this conversation', undefined],
+      [502, 'Cookie: PRIVATE_ECHO', undefined],
+      [502, 'Adapter in /home/example/adapter.js failed', undefined],
+      [502, 'Error\n    at update (internal.js:22:8)', undefined],
+      [503, 'a'.repeat(1200), 'a'.repeat(1024) + '…'],
+    ] as const)('shows only the safe provider message in the owner’s UI (case %#)', async (status, body, message) => {
+      const push = vi.fn();
+      setAuxiliaryModelHealthBroadcaster(push);
+      try {
+        fetchMock.mockImplementation(async url => String(url).includes('review-a')
+          ? new Response(body, { status }) as never : response('Short title'));
+        const result = await requestUtilityText(makerMock(true), 'name this conversation about project cedar Q7 Q7X please', { source: 'title', sessionId: 'chat' });
+        expect(result).toMatchObject({ ok: true, providerId: 'review-b' });
+        expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+        const [row] = getAuxiliaryModelHealthSnapshot();
+        expect(row).toMatchObject({ httpStatus: status, switchedToBackup: true,
+          status: ([401, 403, 404].includes(status) || body.includes('insufficient_quota')) ? 'isolated' : 'monitoring', failureCount: 1, attemptCount: 1 });
+        expect(row.upstreamMessage).toBe(message);
+        expect(getAuxiliaryModelHealthSnapshot()[0].upstreamMessage).toBe(message);
+        expect(getAuxiliaryModelHealthSnapshot('elsewhere')).toEqual([]);
+        expect(JSON.stringify([result, push.mock.calls])).not.toMatch(/upstreamMessage|PRIVATE_ECHO/);
+        if (message) expect(JSON.stringify([result, push.mock.calls])).not.toContain(JSON.stringify(message).slice(1, -1));
+        ownerState.key = 'owner-b';
+        expect(getAuxiliaryModelHealthSnapshot()).toEqual([]);
+      } finally {
+        setAuxiliaryModelHealthBroadcaster(undefined);
+      }
+    });
+
+    // Unit: identical routes in the automatic and saved chains must produce the
+    // same HTTP/health outcomes but different conversation snapshots and toasts.
+    it.each(['auto', 'env', 'custom'] as const)('limits conversation alerts to committed custom routing (%s)', async source => {
+      vi.useFakeTimers();
+      chainState.source = source;
+      const push = vi.fn();
+      setAuxiliaryModelHealthBroadcaster(push);
+      let status = 503;
+      fetchMock.mockImplementation(async url => String(url).includes('review-a') && status !== 200
+        ? new Response(JSON.stringify({ error: { message: 'Local refusal.' } }), { status }) as never
+        : response('Short title'));
+      const title = () => requestUtilityText(makerMock(true), 'Name this chat', { source: 'title', sessionId: 'chat' });
+      try {
+        for (const failure of [503, 402]) {
+          health.reset();
+          push.mockClear();
+          status = failure;
+          const limit = failure === 402 ? 1 : 5;
+          for (let count = 1; count <= limit; count++) {
+            expect(await title()).toMatchObject({ ok: true, providerId: 'review-b' });
+            const expected = count === limit ? 'isolated' : count >= 3 ? 'warning' : 'monitoring';
+            expect(getAuxiliaryModelHealthSnapshot()[0]).toMatchObject({ status: expected, failureCount: count, switchedToBackup: true });
+            expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+          }
+          status = 200;
+          vi.advanceTimersByTime(60_001);
+          expect(await title()).toMatchObject({ ok: true, providerId: 'review-a' });
+          expect(getAuxiliaryModelHealthSnapshot()[0]?.status).toBe('recovered');
+          expect(push.mock.calls.some(([, event]) => event.notify)).toBe(false);
+          expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+        }
+      } finally { setAuxiliaryModelHealthBroadcaster(undefined); }
+    });
+
+    // Unit: the outcome of the whole dispatch owns the chat notice. Settings still
+    // need the health of both models, including attempts that produced no notice.
+    it.each(['auto', 'custom'] as const)('debounces a complete %s outage, then silently clears it on backup success', async source => {
+      chainState.source = source;
+      vi.useFakeTimers();
+      const push = vi.fn();
+      setAuxiliaryModelHealthBroadcaster(push);
+      const unavailable = () => new Response('Service temporarily unavailable.', { status: 503 }) as never;
+      const title = () => requestUtilityText(makerMock(true), 'Create title', { source: 'title', sessionId: 'chat' });
+      try {
+        fetchMock.mockImplementation(async () => unavailable());
+        for (let n = 1; n <= 5; n++) {
+          expect((await title()).ok).toBe(false);
+          expect(getAuxiliaryModelHealthSnapshot('chat')).toHaveLength(source === 'custom' && n >= 3 ? 2 : 0);
+        }
+        expect(push.mock.calls.filter(([, e]) => e.notify)).toHaveLength(source === 'custom' ? 1 : 0);
+        expect(getAuxiliaryModelHealthSnapshot().every(row => row.status === 'isolated')).toBe(true);
+        vi.advanceTimersByTime(60_001);
+        const sent = Promise.withResolvers<void>();
+        const pending = Promise.withResolvers<Response>();
+        fetchMock.mockResolvedValueOnce(unavailable()).mockImplementationOnce(async () => {
+          sent.resolve(); return await pending.promise as never;
+        });
+        push.mockClear();
+        const running = title();
+        await sent.promise;
+        expect(push.mock.calls.filter(([, e]) => e.notify)).toEqual([]);
+        pending.resolve(response('Backup title'));
+        expect(await running).toMatchObject({ ok: true, providerId: 'review-b' });
+        expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+        expect(push.mock.calls.filter(([, e]) => e.notify)).toEqual([]);
+      } finally { setAuxiliaryModelHealthBroadcaster(undefined); }
+    });
+
+    // Unit: the same two routes can serve different operations while paused. The
+    // conversation must describe this dispatch, without leaking arbitrary source text.
+    it('attributes each complete outage to its own operation and conversation', async () => {
+      vi.useFakeTimers();
+      const push = vi.fn();
+      setAuxiliaryModelHealthBroadcaster(push);
+      const run = (sessionId: string, source: string, automaticTitle?: boolean) =>
+        requestUtilityText(makerMock(true), 'local input', { sessionId, source, automaticTitle });
+      try {
+        fetchMock.mockImplementation(async () => new Response('Insufficient balance.', { status: 402 }) as never);
+        await run('chat', 'title', true);
+        expect(getAuxiliaryModelHealthSnapshot('chat').map(row => row.operation)).toEqual(['auto-title', 'auto-title']);
+        expect(push.mock.calls.find(([, event]) => event.notify)?.[1]).toMatchObject({ sessionId: 'chat', operation: 'auto-title' });
+        await run('other', 'title');
+        await run('chat', 'task-summary');
+        expect(getAuxiliaryModelHealthSnapshot('chat').map(row => row.operation)).toEqual(['task-summary', 'task-summary']);
+        expect(getAuxiliaryModelHealthSnapshot('other').map(row => row.operation)).toEqual(['title', 'title']);
+        expect(getAuxiliaryModelHealthSnapshot().every(row => row.operation === undefined)).toBe(true);
+        await run('other', 'unrecognized private source');
+        expect(getAuxiliaryModelHealthSnapshot('other').map(row => row.operation)).toEqual([undefined, undefined]);
+        vi.advanceTimersByTime(60_001);
+        fetchMock.mockResolvedValue(response('A summary'));
+        await run('chat', 'task-summary');
+        const recovered = getAuxiliaryModelHealthSnapshot('chat');
+        expect(recovered[0].status).toBe('recovered');
+        expect(recovered[0].operation).toBeUndefined();
+        dismissAuxiliaryModelNotice('chat', recovered[0].noticeId!);
+        fetchMock.mockImplementation(async () => new Response('Denied', { status: 403 }) as never);
+        await run('chat', 'title');
+        expect(getAuxiliaryModelHealthSnapshot('chat')[0]?.operation).toBe('title');
+      } finally { setAuxiliaryModelHealthBroadcaster(undefined); }
+    });
+
+    // Unit: another failure or a remounted chat cannot reopen a dismissed outage;
+    // a successful real request ends it so the next outage gets its own close action.
+    it('dismisses only the displayed incident and keeps diagnostics until real recovery', async () => {
+      vi.useFakeTimers();
+      const title = (sessionId: string) => requestUtilityText(makerMock(true), 'Title', { source: 'title', sessionId });
+      fetchMock.mockImplementation(async () => new Response('Insufficient balance.', { status: 402 }) as never);
+      await title('chat');
+      const incident = getAuxiliaryModelHealthSnapshot('chat')[0].noticeId!;
+      await title('other');
+      dismissAuxiliaryModelNotice('chat', incident);
+      expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+      expect(getAuxiliaryModelHealthSnapshot('other')).toHaveLength(2);
+      vi.advanceTimersByTime(60_001);
+      await title('chat');
+      expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+      expect(getAuxiliaryModelHealthSnapshot().map(row => row.failureCount)).toEqual([2, 2]);
+      vi.advanceTimersByTime(60_001);
+      fetchMock.mockResolvedValueOnce(response('New title'));
+      expect((await title('chat')).ok).toBe(true);
+      expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+      await title('chat');
+      dismissAuxiliaryModelNotice('chat', incident);
+      expect(getAuxiliaryModelHealthSnapshot('chat')).toHaveLength(2);
+      expect(getAuxiliaryModelHealthSnapshot('chat')[0].noticeId).not.toBe(incident);
+    });
+
+    // Unit, PR #12303: the earlier tests recover in the same chat. A real success
+    // on either saved route in B must also retire A's incident, without a toast in A.
+    it.each(['primary', 'backup'])('silently retires other chats’ outages on %s success', async winner => {
+      vi.useFakeTimers();
+      const title = (sessionId: string) => requestUtilityText(makerMock(true), 'Title', { source: 'title', sessionId });
+      const denied = () => new Response('Insufficient balance.', { status: 402 }) as never;
+      const push = vi.fn();
+      setAuxiliaryModelHealthBroadcaster(push);
+      try {
+        fetchMock.mockImplementation(async () => denied());
+        await title('A');
+        const incident = getAuxiliaryModelHealthSnapshot('A')[0].noticeId;
+        vi.advanceTimersByTime(60_001);
+        push.mockClear();
+        if (winner === 'backup') fetchMock.mockResolvedValueOnce(denied());
+        fetchMock.mockResolvedValueOnce(response('Title'));
+        expect((await title('B')).ok).toBe(true);
+        expect(getAuxiliaryModelHealthSnapshot('A')).toEqual([]);
+        expect(push.mock.calls.some(([, e]) => e.sessionId === 'A' && e.removed)).toBe(true);
+        expect(push.mock.calls.some(([, e]) => e.notify)).toBe(false);
+        await title('A');
+        expect(getAuxiliaryModelHealthSnapshot('A')[0].noticeId).not.toBe(incident);
+      } finally { setAuxiliaryModelHealthBroadcaster(undefined); }
+    });
+
+    // Unit, PR #12303: the 32-entry detail cache must not undo a dismissal in
+    // an ongoing outage. Recovery in a different chat starts a new incident.
+    it('keeps a dismissal through 33 other chats until the saved chain works again', async () => {
+      vi.useFakeTimers();
+      const title = (sessionId: string) => requestUtilityText(makerMock(true), 'Title', { source: 'title', sessionId });
+      fetchMock.mockImplementation(async () => new Response('Insufficient balance.', { status: 402 }) as never);
+      await title('A');
+      const incident = getAuxiliaryModelHealthSnapshot('A')[0].noticeId!;
+      dismissAuxiliaryModelNotice('A', incident);
+      for (let i = 0; i < 33; i++) await title('other-' + i);
+      await title('A');
+      expect(getAuxiliaryModelHealthSnapshot('A')).toEqual([]);
+      vi.advanceTimersByTime(60_001);
+      fetchMock.mockResolvedValueOnce(response('Title'));
+      await title('B');
+      await title('A');
+      expect(getAuxiliaryModelHealthSnapshot('A')[0].noticeId).not.toBe(incident);
+    });
+
+    // Unit, PR #12303: an attempted readiness check can fail before HTTP.
+    // Count each real check exactly once and never probe an isolated route early.
+    it.each(['agent_unavailable', 'auth_probe_failed'] as const)('debounces a failed %s preparation before rechecking the route', async reason => {
+      vi.useFakeTimers();
+      chainState.refs = ['codex-gpt-5.4-mini'];
+      const maker = makerMock(true);
+      const available = vi.spyOn(maker, 'listAvailableAgents');
+      const auth = vi.mocked(maker.getAgentAuthState);
+      if (reason === 'agent_unavailable') available.mockReturnValue([]);
+      else auth.mockRejectedValue(new Error('fixture'));
+      const run = () => requestUtilityText(maker, 'Title', { source: 'title', sessionId: 'chat' });
+      for (let n = 1; n <= 5; n++) {
+        expect((await run()).ok).toBe(false);
+        expect(getAuxiliaryModelHealthSnapshot()[0]).toMatchObject({ reason, failureCount: n, attemptCount: n });
+        expect(getAuxiliaryModelHealthSnapshot('chat').map(row => row.status)).toEqual(n < 3 ? [] : [n === 5 ? 'isolated' : 'warning']);
+      }
+      await run();
+      expect(available).toHaveBeenCalledTimes(5);
+      expect(auth).toHaveBeenCalledTimes(reason === 'agent_unavailable' ? 0 : 5);
+      vi.advanceTimersByTime(60_001);
+      available.mockReturnValue(['codex']);
+      auth.mockResolvedValue({ authenticated: true });
+      expect((await run()).ok).toBe(true);
+      expect(getAuxiliaryModelHealthSnapshot('chat')[0].status).toBe('recovered');
+    });
+
+    it.each(['auto', 'custom'] as const)('keeps %s fallback success silent when the preferred auth probe fails', async source => {
+      chainState.source = source;
+      chainState.refs = ['codex-gpt-5.4-mini', chainState.refs[1]];
+      const maker = makerMock(true);
+      vi.mocked(maker.getAgentAuthState).mockRejectedValue(new Error('fixture'));
+      fetchMock.mockResolvedValue(response('Backup title'));
+      for (let i = 0; i < 6; i++) {
+        expect(await requestUtilityText(maker, 'Title', { source: 'title', sessionId: 'chat' })).toMatchObject({ ok: true });
+      }
+      expect(maker.getAgentAuthState).toHaveBeenCalledTimes(5);
+      expect(getAuxiliaryModelHealthSnapshot()[0]).toMatchObject({ status: 'isolated', failureCount: 5, attemptCount: 5 });
+      expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+    });
+
+    it('discards a failed preparation if its caller cancels before the backup', async () => {
+      chainState.refs.unshift('codex-gpt-5.4-mini');
+      const maker = makerMock(true);
+      vi.mocked(maker.getAgentAuthState).mockRejectedValue(new Error('fixture'));
+      await requestUtilityText(maker, 'Title', {
+        source: 'title', sessionId: 'chat',
+        beforeDispatch: async route => route.providerId === 'openai',
+      });
+      expect(maker.getAgentAuthState).toHaveBeenCalledOnce();
+      expect(getAuxiliaryModelHealthSnapshot()).toEqual([]);
+    });
+
+    it('requires evidence from every saved route including unavailable credentials, and ignores cancellation', async () => {
+      readCustomKey.mockImplementation(id => id === 'review-a' ? null : 'review-b-secret');
+      const run = (signal?: AbortSignal) => requestUtilityText(makerMock(true), 'Title', { source: 'title', sessionId: 'chat', signal });
+      fetchMock.mockResolvedValueOnce(response('Title'));
+      await run();
+      expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+      const cancel = new AbortController();
+      fetchMock.mockImplementationOnce(async () => {
+        cancel.abort();
+        return new Response('Denied.', { status: 403 }) as never;
+      });
+      await run(cancel.signal);
+      expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+      fetchMock.mockResolvedValueOnce(new Response('Denied.', { status: 403 }) as never);
+      await run();
+      expect(getAuxiliaryModelHealthSnapshot('chat').map(row => row.reason)).toEqual(['api_key_missing', 'permission_denied']);
+    });
+
+    it('does not surface an automatic warning on a successful title after saving the same models', async () => {
+      chainState.source = 'auto';
+      fetchMock.mockImplementation(async url => String(url).includes('review-a')
+        ? new Response('Service temporarily unavailable.', { status: 503 }) as never : response('Title'));
+      const title = () => requestUtilityText(makerMock(true), 'Name this chat', { source: 'title', sessionId: 'chat' });
+      for (let i = 0; i < 3; i++) await title();
+      expect(getAuxiliaryModelHealthSnapshot()[0].status).toBe('warning');
+      fetchMock.mockResolvedValue(response('Title'));
+      writeChain.mockImplementationOnce(async () => { chainState.source = 'custom'; });
+      expect((await saveAuxiliaryModelSettings({ models: chainState.refs }, new Set(chainState.refs), new Set(),
+        { maker: makerMock(true) })).ok).toBe(true);
+      await title();
+      expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+    });
+
+    // Unit: an unsuccessful draft cannot opt in or out. Resetting a saved
+    // chain retires the chat view even when automatic uses exactly those refs.
+    it('keeps the old notice policy until save succeeds and ignores a late custom failure after reset', async () => {
+      const refs = [...chainState.refs];
+      const save = (models: string[]) => saveAuxiliaryModelSettings({ models }, new Set(refs), new Set(), { maker: makerMock(true) });
+      writeChain.mockImplementation(async ({ models }: { models?: string[] }) => {
+        chainState.source = models?.length ? 'custom' : 'auto';
+      });
+      const title = () => requestUtilityText(makerMock(true), 'Create title', { source: 'title', sessionId: 'chat' });
+      let status = 402;
+      fetchMock.mockImplementation(async () => status !== 200
+        ? new Response('Insufficient balance.', { status }) as never : response('Title'));
+      chainState.source = 'auto';
+      try {
+        expect((await save(refs)).ok).toBe(false);
+        await title();
+        expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+        status = 200;
+        expect((await save(refs)).ok).toBe(true);
+        expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+        status = 402;
+        await title();
+        expect((await save(refs.slice(0, 1))).ok).toBe(false);
+        expect(getAuxiliaryModelHealthSnapshot('chat')[0]?.status).toBe('isolated');
+        vi.useFakeTimers();
+        vi.advanceTimersByTime(60_001);
+        const pending = Promise.withResolvers<Response>();
+        const sent = Promise.withResolvers<void>();
+        fetchMock.mockImplementationOnce(async () => { sent.resolve(); return await pending.promise as never; });
+        const late = title();
+        await sent.promise;
+        expect((await save([])).ok).toBe(true);
+        pending.resolve(new Response('Insufficient balance.', { status: 402 }));
+        await late;
+        expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+        expect(getAuxiliaryModelHealthSnapshot()[0]).toMatchObject({ status: 'isolated', httpStatus: 402 });
+      } finally { writeChain.mockReset(); }
+    });
+
+    // Identical pins do not reauthorize a late result from before the two saves.
+    it('discards a pending title from an earlier custom A after saving B and then A', async () => {
+      const refs = [...chainState.refs];
+      const pending = Promise.withResolvers<Response>();
+      const sent = Promise.withResolvers<void>();
+      fetchMock.mockImplementationOnce(async () => { sent.resolve(); return await pending.promise as never; })
+        .mockResolvedValue(response('Title'));
+      writeChain.mockImplementation(async ({ models }: { models: string[] }) => { chainState.refs = [...models]; });
+      try {
+        const title = requestUtilityText(makerMock(true), 'Create title', { source: 'title', sessionId: 'chat' });
+        await sent.promise;
+        for (const models of [[refs[1]], refs]) {
+          expect((await saveAuxiliaryModelSettings({ models }, new Set(refs), new Set(), { maker: makerMock(true) })).ok).toBe(true);
+        }
+        pending.resolve(new Response('Insufficient balance.', { status: 402 }));
+        await title;
+        expect(getAuxiliaryModelHealthSnapshot('chat')).toEqual([]);
+      } finally { writeChain.mockReset(); }
+    });
+
+    it('does not attach a newly isolated credential to a previous conversation that skipped the old one', async () => {
+      const title = (sessionId: string) => requestUtilityText(makerMock(true), 'Create title', { source: 'title', sessionId });
+      fetchMock.mockResolvedValueOnce(new Response('First key', { status: 402 }) as never).mockResolvedValueOnce(response('Title'));
+      await title('first');
+      const pending = Promise.withResolvers<Response>();
+      const sent = Promise.withResolvers<void>();
+      fetchMock.mockImplementationOnce(async () => { sent.resolve(); return await pending.promise as never; });
+      const skipped = title('skipped');
+      await sent.promise;
+      providerRouteCredentialRevision.mockImplementation(id => Number(id === 'review-a'));
+      fetchMock.mockResolvedValueOnce(new Response('Second key', { status: 402 }) as never).mockResolvedValueOnce(new Response('Second backup failure', {status: 403}) as never);
+      await title('new');
+      pending.resolve(new Response(JSON.stringify({ choices: [{ message: { content: 'Title' } }] })));
+      await skipped;
+      expect(getAuxiliaryModelHealthSnapshot('new')[0]?.status).toBe('isolated');
+      expect(getAuxiliaryModelHealthSnapshot('skipped')).toEqual([]);
+    });
+
+    // Unit: the save dispatcher must return only the provider message on all
+    // three wires, including routes still using a legacy Authorization scheme.
+    it.each([
+      ['openai-chat', '/chat/completions'],
+      ['openai-responses', '/responses'],
+      ['anthropic-messages', '/messages'],
+    ] as const)('returns the safe upstream message on %s without activating the draft', async (wire, suffix) => {
+      const provider = getActiveCatalog().providers[0]!;
+      const routing = provider.routing.codex!;
+      routing.wireProtocol = wire;
+      routing.headerOverride = { Authorization: 'Token example-private-value' };
+      readCustomKey.mockReturnValue(null);
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: {
+        message: 'Rejected example-private-value.', trace: 'PRIVATE_ECHO',
+      } }), { status: 403 }) as never);
+      const models = chainState.refs.slice(0, 1);
+      const saved = await saveAuxiliaryModelSettings({ models }, new Set(models), new Set(), { maker: makerMock(true) });
+      expect(saved).toEqual({ ok: false, model: models[0], reason: 'permission_denied', httpStatus: 403,
+        upstreamMessage: 'Rejected [REDACTED].' });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(String(fetchMock.mock.calls[0][0]).endsWith(suffix)).toBe(true);
+      expect(writeChain).not.toHaveBeenCalled();
+    });
+
+    // Unit: failed calls can be billable. Count their tokens without sending
+    // an arbitrary provider string to telemetry under the model field.
+    it.each([[200, 'billed-model'], [429, 'billed-model'], [200, 'PRIVATE_ECHO']] as const)(
+      'meters rejected HTTP %s with reported model %s on the default title chain', async (status, reported) => {
+        chainState.refs = chainState.refs.slice(0, 1);
+        const models = getActiveCatalog().providers[0].models.codex!;
+        models.push({ ...models[0], id: 'billed-model' });
+        fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ model: reported, error: { message: 'Not now.', trace: reported === 'PRIVATE_ECHO' ? 'x'.repeat(5000) : '' },
+          usage: { prompt_tokens: 5, completion_tokens: 2 } }), { status }) as never);
+        await requestUtilityText(makerMock(true), 'Create title', { source: 'title' });
+        expect(usageSink.record).toHaveBeenCalledWith(expect.objectContaining({ inputTokens: 5, outputTokens: 2 }),
+          expect.objectContaining({ providerId: 'review-a', model: reported === 'PRIVATE_ECHO' ? 'small' : reported }));
+        expect(JSON.stringify(usageSink.record.mock.calls)).not.toMatch(/PRIVATE_ECHO|Not now/);
+      });
+
+    // Unit: billed tokens and a finished empty choice are both HTTP successes, but
+    // neither proves that a draft can generate a title. Only a usable title may commit.
+    it('requires returned title text before enabling a model', async () => {
+      const models = chainState.refs.slice(0, 1);
+      const save = () => saveAuxiliaryModelSettings({ models }, new Set(models), new Set(), { maker: makerMock(true) });
+      for (const payload of [
+        { usage: { completion_tokens: 3 } },
+        { choices: [{ message: { content: '' }, finish_reason: 'stop' }] },
+      ]) {
+        fetchMock.mockImplementation(async () => new Response(JSON.stringify(payload)) as never);
+        expect(await save()).toMatchObject({ ok: false, model: models[0] });
+        expect(writeChain).not.toHaveBeenCalled();
+      }
+      fetchMock.mockResolvedValue(response('Desk organization'));
+      expect(await save()).toMatchObject({ ok: true, tested: models });
+      expect(writeChain).toHaveBeenCalledExactlyOnceWith({ models }, expect.any(Function));
+    });
+
+    it('keeps a rejected backup out of settings, then saves both tested routes after a retry', async () => {
+      const save = () => saveAuxiliaryModelSettings({ models: chainState.refs }, new Set(chainState.refs), new Set(), { maker: makerMock(true) });
+      fetchMock.mockResolvedValueOnce(new Response('Denied', { status: 403 }) as never);
+      fetchMock.mockResolvedValueOnce(response('Title'));
+      await requestUtilityText(makerMock(true), 'title', { source: 'title' });
+      expect(getAuxiliaryModelHealthSnapshot()[0].status).toBe('isolated');
+      fetchMock.mockClear();
+      fetchMock.mockResolvedValueOnce(response('Title'));
+      fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'This account only allows Codex official clients.' }), { status: 403 }) as never);
+      expect(await save()).toEqual({ ok: false, model: chainState.refs[1], reason: 'permission_denied', httpStatus: 403, upstreamMessage: 'This account only allows Codex official clients.' });
+      expect(writeChain).not.toHaveBeenCalled();
+      expect(getAuxiliaryModelHealthSnapshot()[0].status).toBe('isolated');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      fetchMock.mockResolvedValue(response('Title'));
+      expect(await save()).toEqual({ ok: true, tested: chainState.refs });
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(getAuxiliaryModelHealthSnapshot()[0].status).toBe('recovered');
+      expect(writeChain).toHaveBeenCalledExactlyOnceWith({ models: chainState.refs }, expect.any(Function));
+    });
+
+    // Unit: a tested primary can change while a later backup is in flight.
+    it('refuses to commit the chain after a tested primary credential is edited', async () => {
+      fetchMock.mockResolvedValueOnce(response('Title')).mockImplementationOnce(async () => {
+        providerRouteCredentialRevision.mockImplementation(id => id === 'review-a' ? 1 : 0);
+        return response('Title');
+      });
+      await expect(saveAuxiliaryModelSettings({ models: chainState.refs }, new Set(chainState.refs),
+        new Set(), { maker: makerMock(true) })).rejects.toThrow(/connection changed/);
+      expect(writeChain).not.toHaveBeenCalled();
+    });
+
+    // Unit: an old-key 401 must not pause the same model after the key changes.
+    it('discards late failures and retired pauses after a route credential changes', async () => {
+      chainState.refs = chainState.refs.slice(0, 1);
+      const run = () => requestUtilityText(makerMock(true), 'Generate title', { source: 'title' });
+      fetchMock.mockImplementationOnce(async () => {
+        providerRouteCredentialRevision.mockReturnValue(1);
+        return new Response('Old key.', { status: 401 }) as never;
+      });
+      await run();
+      expect(getAuxiliaryModelHealthSnapshot()).toEqual([]);
+      fetchMock.mockResolvedValueOnce(new Response('Current key.', { status: 401 }) as never);
+      await run();
+      expect(getAuxiliaryModelHealthSnapshot()[0].status).toBe('isolated');
+      providerRouteCredentialRevision.mockReturnValue(2);
+      fetchMock.mockResolvedValueOnce(response('Short title'));
+      expect(await run()).toMatchObject({ ok: true });
+      expect(getAuxiliaryModelHealthSnapshot()).toEqual([]);
+    });
+
+    // Unit: sharing a paused route must not move private diagnostics between conversations.
+    it('keeps separate backup outcomes when another conversation skips a paused primary', async () => {
+      const run = (sessionId: string) => requestUtilityText(makerMock(true), 'Generate title', { source: 'title', sessionId });
+      fetchMock.mockResolvedValueOnce(new Response('Private diagnostic.', { status: 403 }) as never)
+        .mockResolvedValueOnce(response('Short title'));
+      await run('first');
+      fetchMock.mockResolvedValueOnce(new Response('Other diagnostic.', { status: 403 }) as never);
+      await run('second');
+      expect(getAuxiliaryModelHealthSnapshot('first')).toEqual([]);
+      const second = getAuxiliaryModelHealthSnapshot('second').find(row => row.providerId === 'review-a');
+      expect(second?.upstreamMessage).toBeUndefined();
+      expect(second?.switchedToBackup).toBe(false);
+    });
+
+    it('drops alerts after replacing the chain and ignores a slow save superseded by reset', async () => {
+      const [first, backup] = chainState.refs;
+      fetchMock.mockResolvedValueOnce(new Response('Denied', { status: 403 }) as never);
+      fetchMock.mockResolvedValueOnce(response('Short title'));
+      await requestUtilityText(makerMock(true), 'title', { source: 'title' });
+      expect(getAuxiliaryModelHealthSnapshot()[0].auxiliaryRef).toBe(first);
+      const pending = Promise.withResolvers<Response>();
+      const dispatched = Promise.withResolvers<void>();
+      fetchMock.mockImplementationOnce(async () => { dispatched.resolve(); return await pending.promise as never; });
+      const save = (models: string[]) => saveAuxiliaryModelSettings({ models }, new Set([first, backup]), new Set(), { maker: makerMock(true) });
+      const slow = save([first]);
+      await dispatched.promise;
+      chainState.refs = [backup]; // what the resolver sees after restoring automatic mode
+      await save([]);
+      expect(getAuxiliaryModelHealthSnapshot()).toEqual([]);
+      pending.resolve(new Response(JSON.stringify({ choices: [{ message: { content: 'Title' } }] })));
+      await expect(slow).rejects.toThrow(/newer/);
+      expect(writeChain).toHaveBeenCalledExactlyOnceWith({ models: [] }, expect.any(Function));
+    });
+
+    it('reports a missing credential without counting a network attempt', async () => {
+      chainState.refs = chainState.refs.slice(0, 1);
+      readCustomKey.mockReturnValue(null);
+      await requestUtilityText(makerMock(true), 'title', { source: 'title' });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(getAuxiliaryModelHealthSnapshot()[0]).toMatchObject({ reason: 'api_key_missing', status: 'isolated', attemptCount: 0 });
+    });
+
+    it('preserves caller validation fallback without pausing a working transport', async () => {
+      chainState.refs = chainState.refs.slice(0, 1);
+      fetchMock.mockResolvedValue(response('Plain text'));
+      for (let i = 0; i < 5; i++) {
+        const result = await requestUtilityText(makerMock(true), 'Return JSON', { validateResponse: () => false });
+        expect(result.ok).toBe(false);
+      }
+      expect(getAuxiliaryModelHealthSnapshot()).toEqual([]);
+      expect(await requestUtilityText(makerMock(true), 'Generate title', { source: 'title' })).toMatchObject({ ok: true });
+    });
+
+    it('records an actual transport timeout without showing a warning or counting a skipped candidate', async () => {
+      chainState.refs = chainState.refs.slice(0, 1);
+      fetchMock.mockRejectedValueOnce(new DOMException('PRIVATE_ECHO', 'AbortError'));
+      await requestUtilityText(makerMock(true), 'title', { source: 'title' });
+      expect(getAuxiliaryModelHealthSnapshot()[0].upstreamMessage).toBeUndefined();
+      expect(getAuxiliaryModelHealthSnapshot()).toMatchObject([{ reason: 'timeout', attemptCount: 1, status: 'monitoring' }]);
+    });
+
+    it('retries a paused single model on real demand and discards an old owner’s in-flight outcome', async () => {
+      chainState.refs = chainState.refs.slice(0, 1);
+      vi.useFakeTimers();
+      fetchMock.mockResolvedValueOnce(new Response('Forbidden', { status: 403 }) as never);
+      const run = () => requestUtilityText(makerMock(true), 'title', { source: 'title', sessionId: 'chat' });
+      await run();
+      await run();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(getAuxiliaryModelHealthSnapshot()[0]).toMatchObject({ status: 'isolated', switchedToBackup: false, attemptCount: 1 });
+      vi.advanceTimersByTime(60_001);
+      fetchMock.mockResolvedValueOnce(response('Short title'));
+      await run();
+      expect(getAuxiliaryModelHealthSnapshot()[0]).toMatchObject({ status: 'recovered', failureRate: 0.5 });
+      fetchMock.mockImplementationOnce(async () => {
+        ownerState.key = 'owner-b';
+        return new Response('Forbidden', { status: 403 }) as never;
+      });
+      await run();
+      expect(getAuxiliaryModelHealthSnapshot()).toEqual([]);
+      fetchMock.mockResolvedValueOnce(response('New title'));
+      expect(await run()).toMatchObject({ ok: true });
+    });
+
     it.each(['auto', 'env'] as const)('does not use a %s auxiliary chain', (source) => {
       chainState.source = source;
       expect(createCustomAutoReviewFallback()).toBeUndefined();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(readCustomKey).not.toHaveBeenCalled();
+    });
+
+    // Unit regression: the former remote pin must never dispatch to a same-name
+    // local supplier. Both public consumers need coverage; local fixtures are ready.
+    it.each(['text', 'review'] as const)('does not reinterpret remote pins for %s', async consumer => {
+      chainState.refs = ['remote-cat:other:cat:review-a:codex:small'];
+      const result = consumer === 'text'
+        ? await requestUtilityText(makerMock(true), prompt)
+        : await createCustomAutoReviewFallback()!(prompt, options);
+      expect(result.ok).toBe(false);
       expect(fetchMock).not.toHaveBeenCalled();
       expect(readCustomKey).not.toHaveBeenCalled();
     });
@@ -360,6 +981,21 @@ describe('utility one-shot candidates', () => {
       const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
       expect(body).toMatchObject({ reasoning: { effort: 'medium' }, max_output_tokens: 384 });
       expect(body).not.toHaveProperty('thinking');
+    });
+
+    // #8706 unit: the real explicit fallback must classify a gateway quota
+    // rejection before spending requests on the parameter-compatibility ladder.
+    it.each([400, 422])('keeps HTTP %s quota ahead of parameter retries', async (status) => {
+      chainState.refs = ['cat:review-a:codex:small'];
+      fetchMock.mockImplementation(async () => new Response(
+        '{"error":{"type":"insufficient_balance_error","message":"PRIVATE_ECHO"}}', { status },
+      ) as never);
+      const result = await createCustomAutoReviewFallback()!(prompt, options);
+      expect(result).toMatchObject({ ok: false, attempts: [expect.objectContaining({
+        reason: 'http_error', httpStatus: status, quotaExhausted: true,
+      })] });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(JSON.stringify(result)).not.toContain('PRIVATE_ECHO');
     });
 
     it('does not expand an exhausted custom chain into defaults or the gateway', async () => {
@@ -718,6 +1354,56 @@ describe('utility one-shot candidates', () => {
       ],
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // docs/product-rules/auxiliary-model-health.md: every default-chain request tells the
+  // health tracker whether the chain could run. Cancelled or superseded requests say
+  // nothing (an account switch must not raise a problem for the new account).
+  describe('auxiliary health outcome', () => {
+    const outcomes: string[] = [];
+    beforeEach(() => {
+      outcomes.length = 0;
+      setAuxiliaryChainOutcomeListener((outcome) => { outcomes.push(outcome); });
+    });
+    afterEach(() => setAuxiliaryChainOutcomeListener(null));
+
+    it.each([
+      ['no candidate can run', () => makerMock(false), [] as string[], 'no_candidate'],
+      ['every candidate failed', () => {
+        const maker = makerMock(true);
+        vi.mocked(maker.oneShot).mockRejectedValueOnce(new Error('codex down'));
+        return maker;
+      }, ['codex-gpt-5.4-mini'], 'failed'],
+      ['a candidate answered', () => makerMock(true), ['codex-gpt-5.4-mini'], 'success'],
+    ] as const)('%s', async (_name, makeMaker, refs, expected) => {
+      if (refs.length) chainState.refs = [...refs];
+      await requestUtilityText(makeMaker(), 'hello');
+      expect(outcomes).toEqual([expected]);
+    });
+
+    it('stays silent when the caller rejects the final LiteLLM dispatch', async () => {
+      chainState.refs = ['litellm-gpt-5.4-mini'];
+      readKey.mockReturnValue('proxy-key');
+      const beforeDispatch = vi.fn<() => Promise<boolean>>()
+        .mockResolvedValueOnce(true).mockResolvedValueOnce(true).mockResolvedValue(false);
+
+      const result = await requestUtilityText(makerMock(false), 'superseded', { beforeDispatch });
+
+      expect(result.ok).toBe(false);
+      expect(beforeDispatch).toHaveBeenCalledTimes(3);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(outcomes).toEqual([]);
+    });
+
+    it('stays silent when the account changes during the request', async () => {
+      const maker = makerMock(true);
+      vi.mocked(maker.getAgentAuthState).mockImplementation(async () => {
+        ownerState.key = 'owner-b';
+        return { authenticated: true };
+      });
+      await requestUtilityText(maker, 'hello');
+      expect(outcomes).toEqual([]);
+    });
   });
 
   it('falls through failed codex execution and succeeds on LiteLLM', async () => {
@@ -2250,7 +2936,7 @@ describe('utility one-shot candidates', () => {
     expect(init.headers['X-Tenant']).toBe('tenant-a');
   });
 
-  it('uses a generic OAuth token for a custom Codex provider', async () => {
+  it.each([true, false])('waits for a generic OAuth token for a custom Codex provider (refresh succeeds=%s)', async succeeds => {
     activeCatalog.mockReturnValue({
       providers: [{
         id: 'codex-oauth',
@@ -2279,16 +2965,32 @@ describe('utility one-shot candidates', () => {
       }],
     } as never);
     readGenericOAuthToken.mockReturnValue('oauth-access-token');
+    let release!: (token: string) => void;
+    let fail!: (error: Error) => void;
+    vi.mocked(readGenericOAuthAccessToken).mockReturnValue(new Promise<string>((resolve, reject) => {
+      release = resolve;
+      fail = reject;
+    }));
     fetchMock.mockResolvedValueOnce({
       ok: true,
       text: async () => 'data: {"type":"response.output_text.delta","delta":"script"}\ndata: [DONE]\n',
     } as never);
 
-    const result = await requestUtilityText(makerMock(false), 'generate', {
+    const pending = requestUtilityText(makerMock(false), 'generate', {
       providerId: 'codex-oauth',
       agentKind: 'codex',
       model: 'codex-oauth-5-5',
     });
+    await vi.waitFor(() => expect(readGenericOAuthAccessToken).toHaveBeenCalled());
+    expect(fetchMock).not.toHaveBeenCalled();
+    if (!succeeds) {
+      fail(new Error('provider_oauth_refresh_failed'));
+      expect(await pending).toMatchObject({ ok: false });
+      expect(fetchMock).not.toHaveBeenCalled();
+      return;
+    }
+    release('oauth-access-token');
+    const result = await pending;
 
     expect(result).toMatchObject({ ok: true, providerId: 'codex-oauth' });
     const init = fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> };
@@ -2810,6 +3512,71 @@ describe('utility one-shot candidates', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  // Unit regression: the public text entry must reserve the selected pool's account,
+  // send only that account's credentials, and release it on every completion path.
+  // Existing tests cover legacy OAuth only, which cannot represent a created pool.
+  it.each(['success', 'http-error', 'revoked', 'auth-error', 'moved', 'timeout', 'cancel'] as const)(
+    'uses and releases the selected subscription pool account: %s', async (outcome) => {
+      projectedCatalog.mockReturnValue({ providers: [{
+        id: 'pool-a', name: 'My subscription', source: 'builtin', subscriptionPool: 'openai',
+        agents: ['codex'], auth: { method: 'oauth' },
+        routing: { codex: { upstream: 'https://chatgpt.example/api/v1', authStrategy: 'oauth-passthrough' } },
+        models: { codex: [{ id: 'gpt-5.5', name: 'GPT-5.5', contextWindow: 272_000 }] },
+      }] } as never);
+      const lease = { account: { id: 'pool-account' }, assertDispatchable: vi.fn(),
+        observeFailure: vi.fn(), running: vi.fn(), release: vi.fn() };
+      const accountLease = lease as unknown as import('../../subscription-accounts/runtime.js').SubscriptionAccountLease;
+      if (outcome === 'timeout' || outcome === 'cancel') {
+        vi.useFakeTimers();
+        let finish!: (value: typeof accountLease) => void;
+        acquireAccount.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+        const controller = new AbortController();
+        const pending = requestUtilityText(makerMock(false), 'garden title', {
+          providerId: 'pool-a', agentKind: 'codex', model: 'gpt-5.5',
+          timeoutMs: 12_000, signal: controller.signal,
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        if (outcome === 'cancel') controller.abort();
+        else await vi.advanceTimersByTimeAsync(12_000);
+        await expect(pending).resolves.toMatchObject({ ok: false, reason: 'timeout' });
+        finish(accountLease);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(lease.release).toHaveBeenCalledOnce();
+        expect(lease.running).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+        return;
+      }
+      acquireAccount.mockResolvedValue(accountLease);
+      readCodexDispatchAuth.mockImplementation(async (_provider, account) => {
+        expect(_provider).toBe('openai');
+        expect(account).toBe(lease.account);
+        if (outcome === 'auth-error') throw new Error('expired');
+        if (outcome === 'moved') poolMembership.provider = 'pool-b';
+        return { accessToken: 'fake-pool-token', accountId: 'pool-account', canDispatch: () => outcome !== 'revoked' };
+      });
+      fetchMock.mockResolvedValue(outcome === 'http-error'
+        ? { ok: false, status: 503, text: async () => 'unavailable' } as never
+        : { ok: true, text: async () => 'data: {"type":"response.output_text.delta","delta":"garden"}\ndata: [DONE]\n' } as never);
+      const maker = makerMock(false);
+      const result = await requestUtilityText(maker, 'garden title', {
+        providerId: 'pool-a', agentKind: 'codex', model: 'gpt-5.5',
+      });
+      expect(result.ok).toBe(outcome === 'success');
+      expect(acquireAccount).toHaveBeenCalledWith('pool-a', 'gpt-5.5', [], false, { resuming: false });
+      expect(lease.release).toHaveBeenCalledOnce();
+      if (outcome === 'http-error') {
+        expect(lease.observeFailure).toHaveBeenCalledWith({ errorStatus: 503 }, 'gpt-5.5', 'run');
+        expect(lease.observeFailure.mock.invocationCallOrder[0]).toBeLessThan(lease.release.mock.invocationCallOrder[0]!);
+      }
+      expect(readCodexCreds).not.toHaveBeenCalled();
+      expect(maker.oneShot).not.toHaveBeenCalled();
+      if (outcome === 'revoked' || outcome === 'auth-error' || outcome === 'moved') expect(fetchMock).not.toHaveBeenCalled();
+      else expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+        Authorization: 'Bearer fake-pool-token', 'chatgpt-account-id': 'pool-account',
+      });
+    },
+  );
+
   it('uses OpenAI Codex OAuth and strips the bridge model prefix on the selected route', async () => {
     activeCatalog.mockReturnValue({
       providers: [{
@@ -2944,6 +3711,48 @@ describe('utility one-shot candidates', () => {
       max_tokens: 384,
       messages: [{ role: 'user', content: 'classify' }],
     });
+  });
+
+  // #8706 unit: real Response streams through the production HTTP entry. Existing HTTP
+  // failures cover status only, not quota classification, bounded reads or body privacy.
+  it.each([
+    [429, '{"type":"budget_exceeded","message":"ExceededBudget: PRIVATE_ECHO"}', true],
+    [429, '{"message":"Too Many Requests; rate limit exceeded"}', false],
+    [402, 'Payment Required', true],
+    [400, '{"type":"insufficient_balance_error","message":"PRIVATE_ECHO"}', true],
+    [422, '{"code":"insufficient_quota","message":"PRIVATE_ECHO"}', true],
+    [400, '{"message":"invalid parameter"}', false],
+    [422, '{"message":"invalid parameter"}', false],
+    [500, 'budget_exceeded', false],
+  ])('classifies HTTP %s body %s safely', async (status, body, quota) => {
+    readKey.mockReturnValue('synthetic-key');
+    fetchMock.mockResolvedValueOnce(new Response(body, { status }) as never);
+    const result = await requestDedicatedAutoReviewCandidateText('classify', DEDICATED_AUTO_REVIEW_CANDIDATES[0], { timeoutMs: 8000 });
+    expect(result).toMatchObject({ ok: false, attempts: [expect.objectContaining({
+      reason: 'http_error', httpStatus: status, ...(quota ? { quotaExhausted: true } : {}),
+    })] });
+    if (!result.ok && !quota) expect(result.attempts[0]).not.toHaveProperty('quotaExhausted');
+    expect(JSON.stringify(result)).not.toMatch(/PRIVATE_ECHO|Payment Required|Too Many Requests/);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([429, 400, 422].flatMap(status => [true, false].map(earlyQuota => [status, earlyQuota] as const)))(
+    'bounds and cancels an unfinished HTTP %s error stream (early quota=%s)', async (status, earlyQuota) => {
+    readKey.mockReturnValue('synthetic-key');
+    const cancel = vi.fn();
+    let chunks = 0;
+    const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) => {
+      // A finite safety ceiling lets the unfixed reader fail without unbounded allocation.
+      if (++chunks > 2) { controller.close(); return; }
+      controller.enqueue(new TextEncoder().encode(earlyQuota ? 'budget_exceeded PRIVATE_ECHO' : 'x'.repeat(8192)));
+    });
+    fetchMock.mockResolvedValueOnce(new Response(new ReadableStream({ pull, cancel }), { status }) as never);
+    const result = await requestDedicatedAutoReviewCandidateText('classify', DEDICATED_AUTO_REVIEW_CANDIDATES[0], { timeoutMs: 8000 });
+    expect(result).toMatchObject({ ok: false, attempts: [expect.objectContaining({ reason: 'http_error', httpStatus: status })] });
+    if (!result.ok) expect(result.attempts[0]).toMatchObject(earlyQuota ? { quotaExhausted: true } : { reason: 'http_error' });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(pull.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_ECHO');
   });
 
   it('keeps Auto-review policy on the system channel and evidence on the user channel', async () => {
@@ -3097,8 +3906,11 @@ describe('utility one-shot candidates', () => {
       }],
     } as never);
     let resolveAuth: ((auth: { accessToken: string; accountId: string }) => void) | undefined;
+    let authStarted!: () => void;
+    const started = new Promise<void>(resolve => { authStarted = resolve; });
     readCodexCreds.mockImplementationOnce(() => new Promise((resolve) => {
       resolveAuth = resolve;
+      authStarted();
     }));
     const controller = new AbortController();
 
@@ -3107,7 +3919,7 @@ describe('utility one-shot candidates', () => {
       DEDICATED_AUTO_REVIEW_CANDIDATES[1],
       { timeoutMs: 12_000, signal: controller.signal },
     );
-    await Promise.resolve();
+    await started;
     controller.abort();
     resolveAuth?.({ accessToken: 'late-token', accountId: 'late-account' });
 
@@ -4551,15 +5363,18 @@ describe('utility one-shot candidates', () => {
     it('keeps the output-budget retry on the accepted native step', async () => {
       activeCatalog.mockReturnValue(xdCatalog('codex', [GPT_SOL]) as never);
       readKey.mockReturnValue('xd-key');
-      const truncated = {
-        ok: true,
-        text: async () => 'data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"},"output":[]}}\n',
-      };
+      const truncated = new Response('data: '+JSON.stringify({ type: 'response.incomplete', response: {
+        model: 'first-backend', usage: { input_tokens: 100, output_tokens: 200 },
+        incomplete_details: { reason: 'max_output_tokens' }, output: [],
+      } })+'\n\n', { headers: { 'content-type': 'text/event-stream' } });
       fetchMock
         .mockResolvedValueOnce(truncated as never)
-        .mockResolvedValueOnce(responsesOk('full answer') as never);
+         .mockResolvedValueOnce({ ok: true, text: async () =>
+          'data: {"type":"response.output_text.delta","delta":"full answer"}\n' +
+          'data: {"type":"response.completed","response":{"model":"second-backend","usage":{"input_tokens":110,"output_tokens":20}}}\n' } as never);
 
       const result = await requestExplicitUtilityText('summarize', {
+        source: 'task-summary', sessionId: 'task-1',
         providerId: 'xd',
         agentKind: 'codex',
         model: 'gpt-6.1-sol',
@@ -4569,6 +5384,14 @@ describe('utility one-shot candidates', () => {
 
       expect(result).toMatchObject({ ok: true, text: 'full answer' });
       expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(usageSink.record).toHaveBeenCalledTimes(2);
+      expect(usageSink.record).toHaveBeenNthCalledWith(1, expect.objectContaining({ inputTokens: 100, outputTokens: 200 }),
+        expect.objectContaining({ source: 'task-summary', sessionId: 'task-1', model: 'first-backend', providerId: 'xd' }));
+      expect(usageSink.record).toHaveBeenNthCalledWith(2, expect.objectContaining({ inputTokens: 110, outputTokens: 20 }),
+        expect.objectContaining({ model: 'second-backend' }));
+      expect(usageSink.close).toHaveBeenCalledOnce();
+      expect(bodyOf(0)).not.toHaveProperty('sessionId');
+      expect(bodyOf(0)).not.toHaveProperty('source');
       expect(urlOf(1)).toBe(`${GATEWAY}/v1/responses`);
       expect(bodyOf(1)).toMatchObject({ reasoning: { effort: 'low' } });
       expect(Number(bodyOf(1).max_output_tokens)).toBeGreaterThan(200);

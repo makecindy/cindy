@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Diagnostic des notifications",
+    "read": "Lire l’état des notifications",
+    "busy": "Lecture…",
+    "failed": "Impossible de lire l’état des notifications. Réessayez.",
+    "copyFailed": "Impossible de copier le jeton.",
+    "copied": "Jeton copié.",
+    "bundle": "Identifiant de l’app",
+    "build": "Build",
+    "environment": "Environnement APNs",
+    "permission": "Autorisation système",
+    "alerts": "Bannières",
+    "lockScreen": "Écran verrouillé",
+    "notificationCenter": "Centre de notifications",
+    "copy": "Copier le jeton APNs",
+    "hide": "Masquer le résultat",
+    "unknown": "Inconnu",
+    "on": "Activé",
+    "off": "Désactivé",
+    "hint": "Lecture à votre demande uniquement. Le jeton APNs reste à l’écran, sans enregistrement dans le diagnostic ni envoi par cet outil. Il disparaît en quittant l’écran ou en passant en arrière-plan. Copiez-le uniquement pour la console de notifications Apple ; le texte copié reste dans le presse-papiers.",
+    "permissions": {
+      "granted": "Autorisée",
+      "denied": "Refusée",
+      "undetermined": "Non demandée",
+      "provisional": "Livraison silencieuse"
+    }
+  },
   "localLogs": {
     "upload": "Envoyer les journaux",
     "uploadResult": {
@@ -20,6 +47,12 @@
     "footer": "Les journaux restent sur ce téléphone jusqu'à 7 jours ou 8 Mo et ne sont jamais envoyés automatiquement. Les journaux exportés excluent le texte des conversations et les identifiants ; les envois ne transmettent que des enregistrements d'exécution filtrés et des informations de version."
   },
   "title": "Paramètres",
+  "promptRecommendation": {
+    "label": "Suggestions de saisie",
+    "description": "Suggérer quoi écrire après une réponse. Uniquement sur ce téléphone.",
+    "saveFailed": "Le réglage est actif pour le moment, mais n’a pas pu être enregistré.",
+    "reset": "Rétablir le réglage par défaut"
+  },
   "appearance": {
     "title": "Apparence",
     "modeLabel": "Mode d'apparence",
@@ -29,6 +62,28 @@
       "dark": "Sombre"
     },
     "saveFailed": "Échec de l'enregistrement du mode d'apparence. Le réglage précédent sera rétabli au redémarrage.",
+    "wallpaper": {
+      "title": "Fond d'écran",
+      "choose": "Choisir une photo ou une vidéo",
+      "replace": "Remplacer le fond d'écran",
+      "remove": "Retirer le fond d'écran",
+      "importing": "Traitement…",
+      "tooLarge": "Choisissez une photo de 20 Mo maximum ou une vidéo de 100 Mo maximum.",
+      "importFailed": "Impossible d’importer cette photo ou cette vidéo.",
+      "saveFailed": "Impossible d’enregistrer le réglage du fond d’écran.",
+      "static": "Statique",
+      "dynamic": "Dynamique",
+      "motionLabel": "Affichage",
+      "options": {
+        "none": "Aucun",
+        "custom": "Fond d'écran personnalisé",
+        "cindy-whisper": "Murmure",
+        "cindy-night-glance": "Regard nocturne",
+        "cindy-scarlet-stroll": "Promenade écarlate",
+        "cindy-neon": "Silhouette néon",
+        "cindy-prism": "Éclats de prisme"
+      }
+    },
     "userBubble": {
       "title": "Couleur de mes bulles",
       "presets": "Couleur",
@@ -38,7 +93,7 @@
       "sage": "Étincelle",
       "blue": "Rêverie",
       "lavender": "Chat de nuit",
-      "red": "Col rouge",
+      "red": "Collier rouge",
       "custom": "Couleur personnalisée",
       "hue": "Teinte",
       "preview": "Aperçu du message",
@@ -52,6 +107,16 @@
       "reset": "Réinitialiser",
       "apply": "Appliquer",
       "hex": "Valeur de couleur"
+    },
+    "appIcon": {
+      "label": "Icône de l’app",
+      "saveFailed": "Impossible de modifier l’icône de l’app. Veuillez réessayer.",
+      "options": {
+        "default": "Par défaut",
+        "cat": "Chat noir",
+        "wordmark": "Logotype Cindy",
+        "mark": "Symbole Cindy"
+      }
     }
   },
   "language": {
@@ -81,7 +146,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Prose classique (par défaut)",
+        "prose": "Prose classique",
         "tang-poetry": "Poésie Tang",
         "song-ci": "Ci des Song",
         "yuan-qu": "Qu des Yuan",
@@ -135,11 +200,20 @@
     "permissionDenied": "Autorisez les notifications de Cindy dans les paramètres du système.",
     "unregisterQueued": "Désactivé. La désinscription se terminera dès que vous serez de nouveau en ligne.",
     "preview": "Aperçus des conversations",
-    "background": "Rester connecté en arrière-plan",
+    "background": "Notifications en arrière-plan",
     "backgroundActive": "Réception des messages en arrière-plan",
     "backgroundStop": "Arrêter la réception",
-    "backgroundHint": "La connexion en arrière-plan fonctionne sans Google et affiche une notification permanente. Vous pouvez l'arrêter depuis cette notification.",
-    "googleUnavailable": "Les notifications push Google sont indisponibles. Activez la connexion de conversation en arrière-plan pour recevoir les messages."
+    "backgroundHint": "Cindy maintient automatiquement une connexion si les notifications Google risquent d’être indisponibles. Une notification permanente s’affiche pendant la connexion.",
+    "googleUnavailable": "Les notifications Google sont indisponibles. La connexion en arrière-plan suit vos réglages de notification.",
+    "backgroundModes": {
+      "auto": "Automatique",
+      "on": "Toujours activées",
+      "off": "Désactivées"
+    },
+    "actionReplyPlaceholder": "Saisir une réponse",
+    "actionNotDelivered": "Cela n’est pas parvenu à votre ordinateur. Ouvrez Cindy pour répondre.",
+    "actionReplyNotDelivered": "Votre réponse n’a pas été envoyée. Ouvrez Cindy pour la renvoyer : {{text}}",
+    "actionRequestEnded": "Cette demande a déjà reçu une réponse ou a expiré."
   },
   "about": {
     "sectionTitle": "À propos de ce téléphone",
@@ -211,7 +285,7 @@
     "openUserAgreement": "Ouvrir le contrat d'utilisation",
     "appFilingNumber": "Numéro d'enregistrement",
     "analytics": "Statistiques d'utilisation",
-    "analyticsHint": "Nous aide à comprendre les lancements et la fidélisation. Transmet des informations sur l'appareil (modèle, système d'exploitation, version de l'application) et un identifiant d'appareil, ainsi que l'ID de votre compte une fois connecté ; jamais les conversations, les fichiers ni les prompts.",
+    "analyticsHint": "Si vous activez cette option, nous utilisons un pseudonyme de compte et un identifiant d’appareil pour compter les lancements et les visites récurrentes. Cela nous aide à améliorer le produit. Les paiements utilisent un autre pseudonyme. Ces statistiques ne contiennent ni vos conversations, ni vos fichiers, ni vos instructions.\nLes anciens relevés contiennent les identifiants de compte d’origine. Une personne qui y a accès pourrait relier un nouveau pseudonyme au compte grâce au même identifiant d’appareil.",
     "analyticsSaveFailed": "Impossible d'enregistrer ce réglage ; il pourrait être rétabli après un redémarrage.",
     "analyticsReset": "Réinitialiser",
     "analyticsResetAction": "Réinitialiser"
@@ -388,7 +462,92 @@
       "voice": "Maintenir pour parler",
       "scrollKeys": "Stick droit",
       "scroll": "Faire défiler",
-      "page": "Page précédente / suivante"
+      "page": "Page précédente / suivante",
+      "triggerScrollKeys": "L2 / R2 + croix haut/bas",
+      "triggerScroll": "Faire défiler le contenu visible",
+      "sendText": "Envoyer le texte saisi",
+      "taskHint": "Ces raccourcis fonctionnent dans les pages de session. Un bouton affecté à la voix conserve cette priorité ; le relâcher laisse le texte dans la zone de message."
     }
+  },
+  "projectInfo": {
+    "automatic": "Utiliser l’icône du projet",
+    "autoLoading": "Recherche de l’icône…",
+    "autoNone": "Les initiales du nom du projet sont utilisées.",
+    "autoSource": "Source",
+    "githubAvatar": "Utiliser l’avatar GitHub",
+    "title": "Paramètres du projet",
+    "name": "Nom affiché",
+    "saveName": "Enregistrer le nom",
+    "reset": "Rétablir par défaut",
+    "icon": "Icône",
+    "directory": "Dossier du projet",
+    "done": "Terminé",
+    "failed": "Échec de l’enregistrement. Réessayez.",
+    "unavailable": "Paramètres indisponibles. Connectez un ordinateur à jour et réessayez.",
+    "back": "Retour",
+    "cancel": "Annuler",
+    "changeIcon": "Changer l’icône",
+    "chooseIcon": "Choisir une icône",
+    "save": "Enregistrer",
+    "symbols": "Icônes",
+    "emoji": "Emoji",
+    "letters": "Lettres",
+    "image": "Image",
+    "upload": "Importer une image",
+    "imageHint": "PNG, JPG ou WebP · recadrage carré",
+    "imageError": "Impossible de lire cette image. Essayez un PNG ou JPG plus petit.",
+    "search": "Rechercher une icône",
+    "customEmoji": "Ou coller un emoji",
+    "lettersHint": "Une ou deux lettres ou chiffres.",
+    "thisComputer": "Cet ordinateur",
+    "nameHint": "Nom dans la liste des projets. Le dossier ne sera pas renommé.",
+    "copy": "Copier le chemin",
+    "copied": "Copié",
+    "applyIcon": "Utiliser l’icône",
+    "noResults": "Aucune icône trouvée",
+    "discardHint": "Abandonner les modifications non enregistrées ?",
+    "keepEditing": "Continuer",
+    "discard": "Abandonner",
+    "colors": {
+      "default": "Par défaut (selon le thème)"
+    },
+    "directories": "Dossiers du projet",
+    "directoriesHint": "S’applique à toutes les tâches de ce projet dès le prochain tour. Les dossiers propres à chaque tâche sont conservés.",
+    "removeDirectory": "Retirer le dossier",
+    "directoryPath": "Chemin complet du dossier",
+    "addDirectory": "Ajouter un dossier",
+    "browseDirectory": "Parcourir les dossiers",
+    "mainDirectory": "Dossier principal",
+    "createTitle": "Nouveau projet",
+    "createAction": "Créer le projet",
+    "repository": "URL du dépôt",
+    "repositoryHint": "Compatible avec GitHub, GitLab et les autres dépôts Git via HTTPS ou SSH.",
+    "autoDirectory": "Sans dossier choisi, création dans {{path}}. Un numéro est ajouté si le nom existe.",
+    "cloning": "Clonage du dépôt…",
+    "invalidRepository": "Saisissez une URL de dépôt GitHub, GitLab ou Git valide.",
+    "createFailed": "Impossible de créer le projet. Vérifiez les droits en écriture, l’URL et l’accès Git de cet ordinateur. Le dossier de clonage doit être vide.",
+    "createNamePlaceholder": "Nom du projet",
+    "createNameHint": "Donnez un nom à votre projet pour commencer.",
+    "createFromRepository": "Créer depuis un dépôt de code",
+    "createBlank": "Passer à un projet vide",
+    "source_blank": "Projet vide",
+    "source_existing": "Ouvrir un dossier existant",
+    "source_repository": "Importer un dépôt de code",
+    "sourceHint_blank": "Saisissez un nom. Le dossier sera créé automatiquement.",
+    "sourceHint_existing": "Choisissez un dossier de projet sur cet ordinateur.",
+    "sourceHint_repository": "Collez un lien de dépôt pour le télécharger sur cet ordinateur.",
+    "source": "Origine du projet",
+    "sourceShort_blank": "Nouveau",
+    "sourceShort_existing": "Dossier",
+    "sourceShort_repository": "Dépôt",
+    "automaticMain": "Principal · Automatique",
+    "source_local": "Dossier local",
+    "sourceShort_local": "Dossier local",
+    "sourceHint_local": "Saisissez un nom pour créer un dossier ou choisissez un dossier existant.",
+    "chooseExistingFolder": "Choisir un dossier existant",
+    "changeMainDirectory": "Modifier"
+  },
+  "navigation": {
+    "unavailable": "Impossible d’ouvrir les paramètres de l’ordinateur cible. Vérifiez qu’il est en ligne et autorise le contrôle à distance ; mettez Cindy à jour si nécessaire."
   }
 }

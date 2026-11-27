@@ -28,8 +28,10 @@ describe('invoke-capture health check ordering', () => {
   });
 
   it('自检与 makerIpcsRegistered 同段(splash 后延迟注册块内)', () => {
-    const flag = bootstrapSource.indexOf('makerIpcsRegistered = true');
     const healthCheck = bootstrapSource.indexOf('assertCaptureHealthy()');
+    // Explicit Host mode has its own early return; inspect the desktop commit
+    // immediately preceding the health check, not the Host-only branch.
+    const flag = bootstrapSource.lastIndexOf('makerIpcsRegistered = true', healthCheck);
     expect(flag).toBeGreaterThanOrEqual(0);
     // 自检紧随 makerIpcsRegistered=true 之后(同一 try 块末尾)。
     expect(healthCheck).toBeGreaterThan(flag);

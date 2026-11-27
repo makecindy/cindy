@@ -101,6 +101,74 @@ export function parseEmulatorAvdName(output) {
     .find((line) => line && line !== 'OK') ?? null;
 }
 
+/** Read-only diagnostics: an adb error must never look like an absent app/device. */
+export function runAndroidProbe(adb, args, execFile = execFileSync) {
+  try {
+    const output = execFile(adb, args, {
+      encoding: 'utf8', windowsHide: true, timeout: 15_000,
+      stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 4 * 1024 * 1024,
+    });
+    if (/^(?:Error:|cmd: Can't find service)/m.test(output)) throw new Error('adb service unavailable');
+    return String(output).trim();
+  } catch (error) {
+    throw Object.assign(new Error('Android adb 检查失败；请检查目标模拟器与 adb 连接。'), {
+      code: error.code === 'ETIMEDOUT' ? 'ANDROID_PROBE_TIMEOUT' : 'ANDROID_PROBE_FAILED',
+    });
+  }
+}
+
+export function inspectAndroidSimulator({ adb, serial, run = runAndroidProbe }) {
+  const booted = parseAdbEmulatorSerials(run(adb, ['devices']));
+  const candidates = serial ? booted.filter((device) => device === serial) : booted;
+  const selected = candidates.length === 1 ? candidates[0] : null;
+  const ready = selected && run(adb, ['-s', selected, 'shell', 'getprop', 'sys.boot_completed']) === '1';
+  return {
+    deviceSet: { name: 'android', path: null }, booted,
+    targetBooted: ready ? [selected] : [], serial: selected,
+    avd: ready ? parseEmulatorAvdName(run(adb, ['-s', selected, 'emu', 'avd', 'name'])) : null,
+  };
+}
+
+export function inspectAndroidInstalledApp({ adb, serial, packageName, run = runAndroidProbe }) {
+  if (!/^[A-Za-z][\w]*(?:\.[\w]+)+$/.test(packageName)) throw new Error('Android package name 无效');
+  const target = ['-s', serial, 'shell'];
+  // pm path exits 1 with empty output for an absent package. List first so that
+  // path/read failures for an installed package remain diagnostic failures.
+  const packages = run(adb, [...target, 'pm', 'list', 'packages', packageName]);
+  const packageLines = packages.split(/\r?\n/).filter(Boolean);
+  if (packageLines.some((line) => !/^package:[\w.]+$/.test(line))) {
+    throw new Error('无法读取 Android 已安装包列表。');
+  }
+  if (!packageLines.includes(`package:${packageName}`)) return null;
+  const paths = run(adb, [...target, 'pm', 'path', packageName]);
+  const apk = paths.split(/\r?\n/).find((line) => /^package:\/.*\/base\.apk$/.test(line))?.slice(8);
+  if (!apk) throw new Error('无法读取 Android base.apk 路径，不能判断原生兼容性。');
+  const dump = run(adb, [...target, 'dumpsys', 'package', packageName]);
+  const version = dump.match(/\bversionName=(\S+)/)?.[1];
+  const buildNumber = dump.match(/\bversionCode=(\d+)/)?.[1];
+  if (!version || !buildNumber) throw new Error('无法读取 Android 已安装版本。');
+  return { apk, version, buildNumber, debuggable: /\b(?:pkgFlags|flags)=\[[^\]]*\bDEBUGGABLE\b/.test(dump) };
+}
+
+/** Expo Updates embeds the build hash at assets/fingerprint, also in debug APKs. */
+export function readAndroidInstalledFingerprint({ adb, serial, apk, run = runAndroidProbe }) {
+  // adb shell joins its arguments into a shell command, so quote the package-manager path.
+  const quotedApk = `'${apk.replaceAll("'", "'\\''")}'`;
+  const unzip = ['-s', serial, 'shell', 'unzip'];
+  try {
+    return run(adb, [...unzip, '-p', quotedApk, 'assets/fingerprint']);
+  } catch (error) {
+    if (error?.code !== 'ANDROID_PROBE_FAILED') throw error;
+    // Some unzip implementations fail for an unmatched entry instead of
+    // returning empty output. Only a successful APK listing proves absence;
+    // a corrupt/unreadable archive or a failed listing must remain a failure.
+    const entries = run(adb, [...unzip, '-l', quotedApk]).split(/\r?\n/)
+      .map((line) => line.match(/^\s*\d+\s+\S+\s+\S+\s+(.+)$/)?.[1].trim()).filter(Boolean);
+    if (entries.length > 0 && !entries.includes('assets/fingerprint')) return '';
+    throw error;
+  }
+}
+
 function runText(execFile, command, args) {
   try {
     return execFile(command, args, {

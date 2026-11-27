@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { deleteCustomMcpServer, listCustomMcpServers } from '@/lib/customMcpServers';
+import { SettingsCard, SettingsSection } from '@/components/ui/settings-rows';
 import { McpServerDialog } from './McpServerDialog';
 import { McpDuplicateNotice } from './McpDuplicateNotice';
 
@@ -50,14 +51,16 @@ function Divider() {
   return <div className="border-t" style={{ borderColor: 'var(--settings-theme-card-border)' }} />;
 }
 
-function McpRow({
+export function McpRow({
   config,
   onEdit,
   onDelete,
+  actions,
 }: {
   config: CustomMcpConfig;
-  onEdit: () => void;
-  onDelete: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
+  actions?: React.ReactNode;
 }) {
   const { t } = useTranslation();
   return (
@@ -87,14 +90,19 @@ function McpRow({
         </span>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        <RowIconButton icon={<Pencil size={16} />} label={t('settings.mcp.editAria')} onClick={onEdit} />
-        <RowIconButton icon={<Trash2 size={16} />} label={t('settings.mcp.deleteAria')} onClick={onDelete} />
+        {onEdit && (
+          <RowIconButton icon={<Pencil size={16} />} label={t('settings.mcp.editAria')} onClick={onEdit} />
+        )}
+        {onDelete && (
+          <RowIconButton icon={<Trash2 size={16} />} label={t('settings.mcp.deleteAria')} onClick={onDelete} />
+        )}
+        {actions}
       </div>
     </div>
   );
 }
 
-function AddRow({ onClick }: { onClick: () => void }) {
+export function McpAddRow({ onClick }: { onClick: () => void }) {
   const { t } = useTranslation();
   return (
     <button
@@ -156,11 +164,11 @@ export function McpServersSection() {
   const handleDelete = useCallback(
     async (config: CustomMcpConfig) => {
       const ok = await confirm({
-        presentation: 'standard',
         title: t('settings.mcp.deleteConfirm.title', { name: config.name }),
         description: t('settings.mcp.deleteConfirm.message'),
         confirmText: t('settings.mcp.deleteConfirm.confirm'),
         cancelText: t('settings.mcp.cancel'),
+        confirmVariant: 'destructive',
       });
       if (!ok) return;
       try {
@@ -174,24 +182,11 @@ export function McpServersSection() {
   );
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1">
-        <h2
-          className="text-16 font-medium leading-[1.2]"
-          style={{ color: 'var(--settings-section-title)' }}
-        >
-          {t('settings.mcp.title')}
-        </h2>
-        <p className="text-13 leading-[1.5]" style={{ color: 'var(--settings-section-desc)' }}>
-          {t('settings.mcp.subtitle')}
-        </p>
-      </div>
-
+    <SettingsSection title={t('settings.mcp.title')} description={t('settings.mcp.subtitle')}>
       <McpDuplicateNotice />
+      {/* MCP 列表自带传输类型图标与行尾操作，行样式保留 */}
       {!loading && (
-        <div
-          className="flex flex-col rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]"
-        >
+        <SettingsCard className="flex flex-col">
           {servers.map((s, i) => (
             <Fragment key={s.id}>
               {i > 0 && <Divider />}
@@ -203,8 +198,8 @@ export function McpServersSection() {
             </Fragment>
           ))}
           {servers.length > 0 && <Divider />}
-          <AddRow onClick={() => setDialog({ mode: 'create' })} />
-        </div>
+          <McpAddRow onClick={() => setDialog({ mode: 'create' })} />
+        </SettingsCard>
       )}
 
       {dialog && (
@@ -218,6 +213,6 @@ export function McpServersSection() {
           }}
         />
       )}
-    </div>
+    </SettingsSection>
   );
 }

@@ -1,3 +1,4 @@
+import { receivedWindowImages } from '../shared/receivedImageHistory';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 
@@ -45,7 +46,7 @@ function replyContextParts(event: IMMessageEvent): {
   replyContext?: IMMessageEvent['replyContext'];
 } {
   if (!event.replyContext) return { replyBlock: '' };
-  return { replyBlock: buildImReplyContextBlock(event.replyContext), replyContext: event.replyContext };
+  return { replyBlock: buildImReplyContextBlock(event.replyContext, event.text), replyContext: event.replyContext };
 }
 
 export interface WecomAdapterOptions {
@@ -191,7 +192,11 @@ export function buildWecomAdapter(
           ...(replyContext ? { replyContext } : {}),
         };
       }
+      const images = await receivedWindowImages({ provider: WECOM_PERSONAL_GROUP_WINDOW.providerOf(event.contextId),
+        chatId: chatId, threadId: '' }, assembly.attachmentMessageIds ?? [], event.attachments)
+        .catch(() => { log.warn('wecom history images unavailable'); return []; });
       return {
+        ...(images.length ? { contextAttachments: images } : {}),
         agentText: `${assembly.prefix}${replyBlock}${event.text}`,
         contextSnapshot: captureImContext({
           groupPrefix: assembly.prefix,

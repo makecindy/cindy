@@ -23,6 +23,7 @@ import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
 import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
+import { Kbd } from '@/components/ui/kbd';
 import { Button } from '@/components/ui/button';
 import type { PendingPermission } from '@/lib/makerChatStore';
 import { describeSessionPermissionScope } from '@/lib/permissionSuggestionScope';
@@ -89,11 +90,15 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
   // 插件安装确认由 Host 渲染成纯文本：首行是版本与来源，其余是权限清单。手机按原样
   // 逐行显示；这里首行作说明，清单放进可滚动区域，不显示内部参数。
   const isPluginInstallConsent = toolName === GHOST_INSTALL_CONSENT_TOOL_NAME;
+  const isFirstInstall = isPluginInstallConsent && input.operation === 'install';
   const [consentHead, ...consentBody] = isPluginInstallConsent
     ? (description ?? '').split('\n')
     : [];
+  const [reviewedRequest, setReviewedRequest] = useState<string | null>(null);
+  const showInstallSummary = isPluginInstallConsent && reviewedRequest !== permission.requestId;
   const promptDescription = autoReviewUnavailable
-    ? t('newChat.permissionPrompt.autoReviewUnavailable')
+    ? t(permission.autoReviewQuotaExhausted
+      ? 'chat.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA' : 'newChat.permissionPrompt.autoReviewUnavailable')
     : isPluginInstallConsent
       ? consentHead
       : description;
@@ -107,7 +112,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
     ? consentBody.join('\n')
     : formatToolInput(toolName, input);
   const sessionSuggestions = useMemo(() => filterSessionScopedSuggestions(suggestions), [suggestions]);
-  const canAlwaysAllowForSession = sessionSuggestions.length > 0;
+  const canAlwaysAllowForSession = !isPluginInstallConsent && sessionSuggestions.length > 0;
   // 这个按钮加的是 agent 给的一条具体规则(Bash 多为 `curl:*` 这类前缀模式),
   // 范围远小于「总是允许」的字面。把范围写到按钮上,别让用户猜。
   // 描述不全时返回 null(见该函数顶注:点击会转发**全部** suggestions,文案漏项就是说谎),
@@ -122,10 +127,12 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
   const handleAllowOnce = useCallback(() => {
     if (submitting) return;
-    onRespond({
-      behavior: 'allow',
-    });
-  }, [onRespond, submitting]);
+    if (showInstallSummary && !isFirstInstall) {
+      setReviewedRequest(permission.requestId);
+      return;
+    }
+    onRespond({ behavior: 'allow' });
+  }, [onRespond, permission.requestId, showInstallSummary, isFirstInstall, submitting]);
 
   const handleAlwaysAllow = useCallback(() => {
     if (submitting) return;
@@ -155,6 +162,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
     const handler = (e: KeyboardEvent) => {
       // 按键已有归属时不替用户做授权决定：输入法组字、正在打字、刚被菜单处理的 Esc、
       // 焦点在「拒绝」等按钮上的回车（交给按钮本身激活）都让位。
+      if (e.repeat && isPluginInstallConsent) return;
       if (e.key !== 'Enter' && e.key !== 'Escape') return;
       const shortcutKind =
         e.key === 'Escape' ? 'dismiss' : e.ctrlKey || e.metaKey ? 'modifiedActivate' : 'activate';
@@ -173,7 +181,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [handleAllowOnce, handleAlwaysAllow, handleDeny]);
+  }, [handleAllowOnce, handleAlwaysAllow, handleDeny, isPluginInstallConsent]);
 
   // ── Render ──
 
@@ -189,7 +197,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       <div className="flex items-center gap-2.5">
         {companion ? <BotAvatar bot={companion} size="sm" /> : null}
         <div className="min-w-0">
-          <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
+          <p className="text-15 font-medium leading-tight text-[var(--chat-input-text)]">
             {companion ? t('bots.permissionRequest', { name: companion.name }) : displayTitle}
           </p>
           {companion ? (
@@ -216,10 +224,10 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
         </p>
       )}
 
-      {/* Code block */}
-      <div
+      {/* Keep the complete permission list available in place. */}
+      {!showInstallSummary && <div
         className={cn(
-          'mt-3 overflow-auto rounded-[8px] border px-3.5 py-2.5',
+          'mt-3 overflow-auto rounded-lg border px-3.5 py-2.5',
           'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
           isPluginInstallConsent
             ? 'max-h-[240px] text-13 leading-relaxed text-[var(--chat-input-text)]'
@@ -239,7 +247,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
         ) : (
           <pre className="whitespace-pre-wrap break-all">{codeContent}</pre>
         )}
-      </div>
+      </div>}
 
       {/* Action buttons — inline text + kbd badges, right-aligned.
           flex-wrap:带范围的「本对话都允许 …」按钮会比原来长,窄宽(doc rail portal)
@@ -250,6 +258,13 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
         </p>
       )}
       <div className="mt-4 flex flex-wrap items-center justify-end gap-2 [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50">
+        {isFirstInstall && (
+          <button type="button" className="mr-auto min-h-9 text-13 text-[var(--status-bar-meta)] underline"
+            aria-expanded={!showInstallSummary} disabled={submitting}
+            onClick={() => setReviewedRequest(showInstallSummary ? permission.requestId : null)}>
+            {t('settings.ghosts.contribution.viewDetails')}
+          </button>
+        )}
         {/* Deny */}
         <Button
           pressFeedback={false}
@@ -260,9 +275,9 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
           className={secondaryActionClass}
         >
           <span>{t(isMcpUrl ? 'newChat.permissionPrompt.mcpCancel' : isMediaDownload ? 'newChat.mediaDownload.defer' : 'agentIsland.native.deny')}</span>
-          <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
+          <Kbd>
             Esc
-          </kbd>
+          </Kbd>
         </Button>
 
         {canAlwaysAllowForSession && (
@@ -293,12 +308,12 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
                   ? t('newChat.permissionPrompt.alwaysAllowScoped', { scope: allowScope })
                   : t('agentIsland.native.alwaysAllowForSession')}
               </span>
-              <kbd className="shrink-0 rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
+              <Kbd className="shrink-0">
                 Ctrl
-              </kbd>
-              <kbd className="-ml-1 shrink-0 rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
+              </Kbd>
+              <Kbd className="-ml-1 shrink-0">
                 Enter
-              </kbd>
+              </Kbd>
             </Button>
           </Tip>
         )}
@@ -313,10 +328,10 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
           disabled={submitting}
           className={allowActionClass}
         >
-          <span>{t(isMcpUrl ? 'newChat.permissionPrompt.mcpComplete' : isMediaDownload ? 'newChat.mediaDownload.allow' : 'agentIsland.native.allowOnce')}</span>
-          <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
+          <span>{t(isFirstInstall ? 'settings.ghosts.installConsent.confirmInstall' : showInstallSummary ? 'settings.ghosts.contribution.viewDetails' : isMcpUrl ? 'newChat.permissionPrompt.mcpComplete' : isMediaDownload ? 'newChat.mediaDownload.allow' : 'agentIsland.native.allowOnce')}</span>
+          <Kbd tone="onSolid">
             Enter
-          </kbd>
+          </Kbd>
         </Button>
       </div>
     </div>

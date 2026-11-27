@@ -5,8 +5,47 @@
  * 预设角色、新建任务的首个 Worker 任务拼接,以及被控端 wire 记录的防御性解析。
  */
 
-/** 创建 Worker 面板的预设角色(与桌面 CreateWorkerPopover 同一份)。 */
-export const ORCA_PREDEFINED_WORKER_ROLES = ['developer', 'designer', 'reviewer', 'tester', 'merger'] as const;
+/**
+ * 创建 Worker 面板的预设角色(桌面创建 / 编辑弹窗与手机协同面板同一份)。
+ * 只留主流分工里最常用的三类：审查、实现、测试(2026-11-10 用户要求精简，审查排第一)；
+ * 拆解与规划由 Lead 承担，其余分工用自定义角色名。
+ */
+export const ORCA_PREDEFINED_WORKER_ROLES = ['reviewer', 'developer', 'tester'] as const;
+
+/**
+ * 带现成首条任务的内置角色：它们检查的对象就是 Lead 已有的工作，不需要用户再描述。
+ * 其余角色要做的事因人而异，任务留空由用户填写或交给 Lead 分派。文字由各端自己的文案提供。
+ */
+export const ORCA_STARTER_TASK_WORKER_ROLES: readonly string[] = ['reviewer', 'tester'];
+
+/**
+ * 添加角色时输入的名字对应的角色：输入的是某个内置角色的角色名或它在当前语言下的显示名时
+ * (不分大小写)，就是那个内置角色 —— 移除过的内置角色这样找回来；其余按输入的名字。
+ */
+export function resolveOrcaWorkerRoleName(
+  name: string,
+  builtinDisplayName: (role: string) => string,
+): string {
+  const typed = name.trim();
+  const lower = typed.toLowerCase();
+  return (
+    ORCA_PREDEFINED_WORKER_ROLES.find(
+      (role) => role === lower || builtinDisplayName(role).trim().toLowerCase() === lower,
+    ) ?? typed
+  );
+}
+
+/**
+ * 换角色后任务框里应有的内容：只有任务框为空，或仍是上一个角色原样带出的任务时才替换；
+ * 用户自己写过或改过的内容保持不动。
+ */
+export function orcaWorkerTaskAfterRoleChange(
+  current: string,
+  previousDefault: string,
+  nextDefault: string,
+): string {
+  return current.trim() === '' || current === previousDefault ? nextDefault : current;
+}
 
 /** 自定义角色名的长度上限(被控端 `maker:worker:create` 同口径校验)。 */
 export const ORCA_WORKER_ROLE_MAX_LENGTH = 32;
@@ -143,7 +182,13 @@ export interface OrcaTeamWorker {
   label: string | null;
   status: OrcaWorkerStatus;
   focused: boolean;
+  /** 插件引擎 Worker 时只是占位(旧端口径)，以 pluginEngineProviderId 为准。 */
   agentKind: OrcaWorkerAgentKind;
+  /**
+   * 仅插件引擎 Worker(docs/plans/acp-plugin-bridge.md)：哪一个引擎(acp-plugin:<插件>:<引擎>)。
+   * 界面据此显示引擎名，而不是 agentKind 的占位 Harness。
+   */
+  pluginEngineProviderId?: string;
   model: string | null;
   effort: string | null;
   title: string | null;
@@ -236,6 +281,9 @@ export function parseOrcaTeamWorkers(value: unknown): OrcaTeamWorker[] {
       status: workerStatus(row.status),
       focused: row.focused === true,
       agentKind: agentKind(session?.agentKind),
+      ...(session?.agentKind === 'acp' && text(session?.providerId)
+        ? { pluginEngineProviderId: text(session?.providerId)! }
+        : {}),
       model: text(session?.model),
       effort: text(session?.effort),
       title: text(session?.title),
@@ -295,4 +343,149 @@ export function readOrcaCollabPolicy(
     return { enabled: false, unsupported: true };
   }
   return { enabled: row?.effectiveEnabled === true, unsupported: false };
+}
+
+/** 供收件箱分桶与归档保护汇总协同 Worker 的会话最小形状（桌面与手机共用）。 */
+export interface OrcaLeadWorkerSessionLike {
+  id: string;
+  status: string;
+  deviceLinkDeviceId?: string | null;
+  canonicalDeviceId?: string | null;
+  orcaRole?: string | null;
+  orcaLeadSessionId?: string | null;
+  orcaRemoteLead?: {
+    leadDeviceId: string;
+    leadSessionId: string;
+    releasedAt?: number;
+  } | null;
+}
+
+/** Worker 实际承载自动化绑定的会话位置（`deviceId: null` 表示当前桌面本机）。 */
+export interface OrcaBoundSessionRef {
+  sessionId: string;
+  deviceId: string | null;
+}
+
+/** 桌面已展开团队的 Worker 投影条目（补足会话列表尚未覆盖到的活跃 Worker）。 */
+export type OrcaRetainedWorkerProjection = readonly [
+  leadSessionId: string,
+  leadDeviceId: string | null,
+  workers: readonly OrcaBoundSessionRef[],
+];
+
+/** 将设备 id 归一到当前视图口径：与本机 `selfDeviceId` 相同则归一为 `null`（本机）。 */
+export function normalizeOrcaDeviceId(
+  deviceId: string | null | undefined,
+  selfDeviceId?: string | null,
+): string | null {
+  if (!deviceId) return null;
+  return selfDeviceId && deviceId === selfDeviceId ? null : deviceId;
+}
+
+/** 设备作用域内的 Lead 索引键，避免不同电脑上的同 ID 任务互相串扰。 */
+export function orcaLeadSessionKey(
+  sessionId: string,
+  deviceId?: string | null,
+  selfDeviceId?: string | null,
+): string {
+  const normalized = normalizeOrcaDeviceId(deviceId, selfDeviceId);
+  return `${normalized ?? ''}\0${sessionId}`;
+}
+
+function appendUniqueWorkerRef(
+  index: Map<string, OrcaBoundSessionRef[]>,
+  leadKey: string,
+  ref: OrcaBoundSessionRef,
+): void {
+  const list = index.get(leadKey);
+  if (!list) {
+    index.set(leadKey, [ref]);
+    return;
+  }
+  if (!list.some((item) => item.sessionId === ref.sessionId && item.deviceId === ref.deviceId)) {
+    list.push(ref);
+  }
+}
+
+/**
+ * 构建 `Lead key → 活跃协同 Worker 会话位置` 反向索引，同时覆盖：
+ * - 同机 Worker（`orcaRole === 'worker'` 且 `orcaLeadSessionId` 指向活跃团队）；
+ * - 跨设备远端 Worker（`orcaRemoteLead` 存在且未 `releasedAt`）；
+ * - 桌面已保留的团队投影（含本机与远端 `executionDevice`）。
+ *
+ * 已归档/已删除的 Worker 与已结束协同的远端 Worker 均不计入。
+ */
+export function indexActiveOrcaWorkersByLead(
+  sessions: Iterable<OrcaLeadWorkerSessionLike>,
+  options?: {
+    selfDeviceId?: string | null;
+    retainedProjections?: Iterable<OrcaRetainedWorkerProjection>;
+  },
+): Map<string, OrcaBoundSessionRef[]> {
+  const selfDeviceId = options?.selfDeviceId ?? null;
+  const index = new Map<string, OrcaBoundSessionRef[]>();
+  for (const session of sessions) {
+    if (session.status !== 'active') continue;
+    const workerRef: OrcaBoundSessionRef = {
+      sessionId: session.id,
+      deviceId: normalizeOrcaDeviceId(session.deviceLinkDeviceId, selfDeviceId),
+    };
+    const remote = session.orcaRemoteLead;
+    if (remote) {
+      if (remote.releasedAt != null) continue;
+      const leadKey = orcaLeadSessionKey(remote.leadSessionId, remote.leadDeviceId, selfDeviceId);
+      appendUniqueWorkerRef(index, leadKey, workerRef);
+      continue;
+    }
+    if (session.orcaRole === 'worker' && session.orcaLeadSessionId) {
+      const primaryKey = orcaLeadSessionKey(
+        session.orcaLeadSessionId,
+        session.deviceLinkDeviceId,
+        selfDeviceId,
+      );
+      appendUniqueWorkerRef(index, primaryKey, workerRef);
+      if (session.canonicalDeviceId && session.canonicalDeviceId !== session.deviceLinkDeviceId) {
+        const canonicalKey = orcaLeadSessionKey(
+          session.orcaLeadSessionId,
+          session.canonicalDeviceId,
+          selfDeviceId,
+        );
+        appendUniqueWorkerRef(index, canonicalKey, workerRef);
+      }
+    }
+  }
+  if (options?.retainedProjections) {
+    for (const [leadSessionId, leadDeviceId, workers] of options.retainedProjections) {
+      const leadKey = orcaLeadSessionKey(leadSessionId, leadDeviceId, selfDeviceId);
+      for (const worker of workers) {
+        appendUniqueWorkerRef(index, leadKey, {
+          sessionId: worker.sessionId,
+          deviceId: normalizeOrcaDeviceId(worker.deviceId, selfDeviceId),
+        });
+      }
+    }
+  }
+  return index;
+}
+
+/** 读取某个 Lead 当前所有活跃协同 Worker 的会话位置（同机 + 跨设备去重）。 */
+export function getActiveOrcaWorkersForLead(
+  index: ReadonlyMap<string, readonly OrcaBoundSessionRef[]>,
+  lead: { id: string; deviceLinkDeviceId?: string | null; canonicalDeviceId?: string | null },
+  selfDeviceId?: string | null,
+): readonly OrcaBoundSessionRef[] {
+  const primary = index.get(orcaLeadSessionKey(lead.id, lead.deviceLinkDeviceId, selfDeviceId));
+  if (!lead.canonicalDeviceId || lead.canonicalDeviceId === lead.deviceLinkDeviceId) {
+    return primary ?? [];
+  }
+  const canonical = index.get(orcaLeadSessionKey(lead.id, lead.canonicalDeviceId, selfDeviceId));
+  if (!canonical?.length) return primary ?? [];
+  if (!primary?.length) return canonical;
+  const merged = [...primary];
+  for (const ref of canonical) {
+    if (!merged.some((item) => item.sessionId === ref.sessionId && item.deviceId === ref.deviceId)) {
+      merged.push(ref);
+    }
+  }
+  return merged;
 }

@@ -1,3 +1,4 @@
+import { isCanonicalBase64 } from '@cindy/maker-shared';
 import { validateCspDomains } from '@cindy/plugin-protocol';
 import { Buffer } from 'node:buffer';
 import type { ReadResourceResult, Tool } from '@modelcontextprotocol/sdk/types.js';
@@ -85,7 +86,7 @@ export function readAppResource(
   result: ReadResourceResult,
   uri: string,
   fallbackMeta?: unknown,
-): { html: string; meta: McpUiResourceMeta } {
+): { html: string; meta: McpUiResourceMeta; hostFullscreenButton: boolean } {
   const item = result.contents.find(
     (content) => content.uri === uri && content.mimeType === RESOURCE_MIME_TYPE,
   );
@@ -93,7 +94,7 @@ export function readAppResource(
   if (
     'blob' in item &&
     (item.blob.length > Math.ceil(MCP_APPS_MAX_BYTES / 3) * 4 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(item.blob))
+      !isCanonicalBase64(item.blob))
   )
     throw new Error('MCP_APP_INVALID_RESOURCE');
   const html = 'text' in item ? item.text : Buffer.from(item.blob, 'base64').toString('utf8');
@@ -101,7 +102,7 @@ export function readAppResource(
   const meta = McpUiResourceMetaSchema.parse(item._meta?.ui ?? fallbackMeta ?? {});
   // Validate before any document is supplied to a renderer.
   appCsp(meta);
-  return { html, meta };
+  return { html, meta, hostFullscreenButton: item._meta?.['cindy/host-fullscreen-button'] !== false };
 }
 
 export function safeAppLink(value: string): string {

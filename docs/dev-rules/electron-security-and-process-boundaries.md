@@ -2,7 +2,14 @@
 
 > **状态**：权威开发规则（authoritative）
 > **读取时机**：修改 Desktop Renderer、preload、BrowserWindow、WebView、IPC、CSP、
-> 导航、外链、文件／数据库／凭证访问或 Electron 特权能力之前
+> 导航、外链、文件／数据库／凭证访问或 Electron 特权能力之前；新增或修改独立窗口、
+> 辅助窗口或弹出型 `BrowserWindow` 之前（§3.1「独立辅助窗口统一生命周期基线」）
+> **适用路径**：`apps/desktop/src/preload/**`、`apps/desktop/src/main/security/**`、
+> `apps/desktop/src/main/webview-security.ts`、`apps/desktop/src/main/bootstrap-electron.ts`、
+> `apps/desktop/src/main/secondary-windows.ts`、`apps/desktop/src/main/*-window/**`、
+> `apps/desktop/src/main/**/window.ts`、`apps/desktop/src/main/**/ipc.ts`、
+> `apps/desktop/src/main/**/*Ipc.ts`、`apps/desktop/src/main/maker-ipc/{register,channels}.ts`、
+> `apps/desktop/forge.config.ts`、`apps/desktop/src/renderer/index.html`
 
 本规则以 [Electron 官方安全指南](https://www.electronjs.org/docs/latest/tutorial/security)
 为基线，并结合 Cindy 当前 Electron 41 的实际架构补充项目约束。安全优先级高于为了
@@ -98,7 +105,7 @@ Renderer 可以负责组件渲染、交互状态、表单状态、展示数据�
    再次显示时先展示保留快照并异步刷新。例外：承载实时会话的窗口（远程桌面查看器）
    以 `pauseWhenHidden: false` 让会话跨越最小化、切换 Space 与原生全屏切换，只在用户
    关闭窗口时结束——macOS 会把后两者及完全遮挡都报告成原生 hide；隐藏期间改由被控端
-   暂停视频（见 `protocol-compatibility.md`「远程桌面查看窗口隐藏时暂停视频」）。
+   暂停视频（见 `protocol-compatibility/remote-desktop-pause-video-when-hidden.md`「远程桌面查看窗口隐藏时暂停视频」）。
 4. **隐藏时重置交互态**：必须清除焦点，并重置自绘窗口按钮、hover／pressed、确认框、
    选中项与待执行操作等瞬时状态，确保二次打开不会继承上次关闭时的视觉或交互状态。
 5. **使用真正的轻量入口**：独立窗口不得先进入完整 `App` 再在组件树内分流；使用独立的
@@ -197,8 +204,10 @@ macOS 在用户请求的回放窗口实际显示前激活应用，再聚焦回�
 main 按所属窗口、顶层 frame 和当前 token 校验每次采集，只向面板发送裁剪后的像素；
 不授予 Renderer 通用屏幕媒体流，不扩大 device-link 的远程 IPC 白名单。
 Windows 滚动截图与录制由当前用户会话的截图 helper 直接读取已选矩形（单帧最多 3200 万像素），不启动 SYSTEM broker；
-Windows 首次定格同样优先使用该 helper，仅对已确认的 8-bit sRGB 显示器启用，按物理坐标和原分辨率采集；
-HDR、广色域、未知色彩配置或 helper 不可用时，整组显示器回退 Electron 原采集路径。
+Windows 首次定格按显示器独立选择采集路径。对符合采集条件的 8 或 10 位全范围 RGB 显示器，helper 按物理坐标和原分辨率采集。
+DXGI 确认对应输出为 HDR10（全范围 PQ / BT.2020）时，GDI 返回桌面的 SDR 位图。helper 标记 `sdrFromHdr`，主机直接使用该位图并忽略显示器 ICC，避免预览和导出时再次转换颜色。
+除标准 8 位 sRGB 外，原生 SDR 设备像素必须经 DXGI 确认对应输出为 SDR，并附有该显示器的 ICC 配置。Chromium 报告的 P3/sRGB 也可能来自 HDR10 屏。对已确认的 SDR 设备像素，冻结预览使用该屏 ICC，导出时将选区转换到 sRGB 再合成标注。
+色彩空间不受支持、所需的输出确认或 ICC 缺失、原生帧不可用或尺寸不匹配时，用 Electron 补采对应显示器，保留其他屏幕的有效原生帧。
 Windows helper 的 `frame` 请求可显式指定 `encoding: "bgra"`，响应为一行 JSON 头加
 `byteLength` 个原始像素字节；未指定时保留旧 Base64 JSON，新主机也接受旧 helper 的回复。
 主机按请求 ID、尺寸和 3200 万像素上限校验后才分配独立的定长缓冲，按管道分段填充，
@@ -255,7 +264,8 @@ auth-server）+ origin 命中 `setLoginCaptchaOriginResolver` 注入的 auth 端
 也不需要新增 preload / IPC 注入面。主窗 CSP 保持不动：挑战页是独立 origin 的 guest
 文档，`installContentSecurityPolicy` 只注入 app 自有文档，`frame-src 'none'` 也不约束
 `<webview>`。回归用例钉在 `main/__tests__/webview-security.test.ts` 的 captcha 分区
-测试组。
+测试组。云端登录辅助窗口复用该分支；其安全窗口工厂只为登录启用 captcha，
+并拒绝其他 partition 的 webview，不获得主窗口的通用浏览器能力。
 
 ## 4．preload 与 Context Bridge
 
@@ -329,6 +339,19 @@ MCP 请求钩子。此身份要求来自 YouTube 官方文档，不伪装成第�
   仍使用 `file://` 是存量架构，迁移需要单独设计和验证，不能在普通功能 PR 中顺带改动。
 - 打包必须保留现有 Fuses：关闭 RunAsNode、Node options 和 CLI inspect，开启 cookie 加密、
   ASAR 完整性校验并只从 ASAR 加载应用。
+- 主进程不得从比程序文件本身更容易被改写、又不受 ASAR 完整性校验保护的位置加载代码或字节码。
+  V8 会原样执行编译缓存里的字节码，因此主进程编译缓存（`mainCompileCache.ts`）在正式版只对代码
+  位于当前用户目录下的 Windows 安装开启：这类安装的程序文件本来就能被同一用户改写，缓存不扩大
+  攻击面。判断用解析 junction／符号链接后的真实路径，经用户目录下的 junction 启动受保护目录的
+  安装不算在内；路径无法解析时不开启。
+  macOS、Linux 正式版以及装在受保护目录的 Windows 不由 Cindy 开启；在 macOS 上，注入的代码还会
+  继承应用已获得的录屏、辅助功能等系统权限。要让这些平台受益，应在打包时生成缓存并放进受签名
+  保护的安装包，不能改成运行时写入用户目录。
+  这道开关只决定 Cindy 自己是否开启。启动环境里的 `NODE_COMPILE_CACHE` 会让 Node 在任何应用代码
+  运行前直接启用缓存（Electron 42 主进程实测，2026-11-22）。Node options fuse 不覆盖这个变量，
+  这一入口在引入编译缓存之前就存在。等应用代码能检查时入口块已经加载，应用内无法关闭：在不允许
+  开启的安装上只记录 `enabled-by-environment` 警告供排查，不沿用、不清理该目录。真正关闭需要
+  Electron 提供对应 fuse，或由启动器清理环境变量。
 - 使用当前受支持的 Electron 版本；升级时重新核对官方安全清单、默认值变化和 breaking
   changes，不因“默认已经安全”删除显式配置。
 

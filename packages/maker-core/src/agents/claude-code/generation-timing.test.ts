@@ -11,7 +11,10 @@ import {
   resetClaudeGenerationTiming,
   resumeClaudeGeneration,
 } from './generation-timing.js';
+import { expandRecordedStream, type RecordedStream } from './recorded-stream-fixture.js';
 import { newRuntimeState, translateSdkMessage, type TurnState } from './translator.js';
+import fableSummarized from './fixtures/recorded-stream-fable-summarized.json';
+import sonnetRedacted from './fixtures/recorded-stream-sonnet-redacted.json';
 
 describe('claude generation timing', () => {
   afterEach(() => {
@@ -688,7 +691,7 @@ describe('claude generation pause boundaries', () => {
       generationReliable: true,
     });
     expect(events).toContainEqual(expect.objectContaining({
-      type: 'tool_result_full', data: { toolUseId: 'child-bash', fullText: 'child done' },
+      type: 'tool_result_full', data: { toolUseId: 'child-bash', fullText: 'child done', isError: false },
     }));
     if (hasEnvelope) {
       expect(events).toContainEqual(expect.objectContaining({
@@ -1473,6 +1476,120 @@ describe('claude generation pause boundaries', () => {
     vi.useRealTimers();
   });
 
+  // Real Claude turns: a quarter finished without their speed chart. When the result aggregate
+  // and the request segments disagree (subagent output counted on one side only), the legacy
+  // counters fail closed, and the chart went with them although the meter only ever timed the
+  // parent's own requests. Unit tier through translateSdkMessage; smallest input: one parent
+  // request, one child request, and a result that leaves the child out.
+  it('keeps the parent speed chart when subagent output makes the turn aggregate disagree', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'tool_use', id: 'toolu-agent', name: 'Agent', input: {} },
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(1_800);
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 80 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.pendingToolIds.has('toolu-agent')).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 5 } },
+        },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'stream_event',
+        parent_tool_use_id: 'toolu-agent',
+        event: {
+          type: 'message_delta',
+          usage: { output_tokens: 500 },
+        },
+      },
+      queue,
+      ctx,
+    );
+    expect(ctx.rt.generation.reliable).toBe(true);
+    expect(ctx.rt.generation.sawSubagent).toBe(true);
+
+    translateSdkMessage(
+      {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'toolu-agent', content: 'child done' }],
+        },
+      },
+      queue,
+      ctx,
+    );
+    vi.setSystemTime(2_200);
+    translateSdkMessage(
+      {
+        type: 'result',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        num_turns: 1,
+        usage: { input_tokens: 15, output_tokens: 80 },
+      },
+      queue,
+      ctx,
+    );
+    queue.end();
+    const events: AgentEvent[] = [];
+    for await (const event of queue) events.push(event);
+
+    const doneStatus = events.find(
+      (event) => event.type === 'status' && (event.data as { status?: string }).status === 'Done',
+    );
+    // The legacy usage-paired timing still fails closed...
+    expect(doneStatus?.data).toMatchObject({ generationReliable: false });
+    // ...but the finished turn keeps the chart of the parent's own request.
+    const done = events.find((event) => event.type === 'done');
+    expect((done?.data as { generationTrace?: { requests: number } })?.generationTrace).toMatchObject({ requests: 1 });
+    resetClaudeGenerationTiming(ctx.rt.generation);
+    vi.useRealTimers();
+  });
+
   it('fails closed when a subagent is present but parent streamed output is incomplete', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -2038,10 +2155,11 @@ describe('claude live token speed', () => {
     stream({ type: 'message_delta', usage: { output_tokens: 12 } }, 2_000);
     // Subagent output is not the main thread's speed.
     stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'x y z' } }, 5_000, 'toolu_1');
-    expect(ctx.rt.generation.tokenSpeed.snapshot(5_000)).toMatchObject({ tokens: 15, elapsedMs: 1_000 });
+    // The request's real output replaces the stream estimate as soon as it is reported.
+    expect(ctx.rt.generation.tokenSpeed.snapshot(5_000)).toMatchObject({ tokens: 12, elapsedMs: 1_000 });
     stream({ type: 'message_start', message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } }, 12_000);
     stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 12_000);
-    stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'five six' } }, 12_000);
+    stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'five six' } }, 12_400);
     stream({ type: 'message_delta', usage: { output_tokens: 18 } }, 12_500);
     vi.setSystemTime(12_500);
     translateSdkMessage(
@@ -2063,15 +2181,17 @@ describe('claude live token speed', () => {
     const liveSpeed = statuses
       .map((event) => (event.data as { tokenSpeed?: unknown }).tokenSpeed)
       .find(Boolean);
-    expect(liveSpeed).toMatchObject({ streaming: true, tokens: 4, elapsedMs: 500 });
+    expect(liveSpeed).toMatchObject({ streaming: true, elapsedMs: 500 });
+    expect((liveSpeed as { tokens: number }).tokens).toBeGreaterThan(0);
     const done = statuses.find((event) => (event.data as { status?: string }).status === 'Done');
-    // 11.5s wall clock minus the 10s tool pause, estimate snapped to the streamed 12 + 18 tokens.
+    // The streamed 12 + 18 real tokens. The 10s tool pause is not generation time, and the
+    // second request is too short to time, so it counts at the 12 tok/s measured before it.
     expect((done?.data as { tokenSpeed?: unknown }).tokenSpeed).toMatchObject({
       streaming: false,
       tokens: 30,
-      elapsedMs: 1_500,
-      average: 20,
-      rate: 20,
+      elapsedMs: 2_500,
+      average: 12,
+      rate: 12,
     });
     resetClaudeGenerationTiming(ctx.rt.generation);
     expect(ctx.rt.generation.tokenSpeed.snapshot()).toBeUndefined();
@@ -2094,7 +2214,7 @@ describe('claude live token speed', () => {
     stream({ type: 'message_start', message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } }, 11_500);
     stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 11_500);
     stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'five six seven eight' } }, 12_000);
-    expect(ctx.rt.generation.tokenSpeed.snapshot(12_000)).toMatchObject({ tokens: 8, elapsedMs: 1_000 });
+    expect(ctx.rt.generation.tokenSpeed.snapshot(12_000)).toMatchObject({ elapsedMs: 1_000 });
     resetClaudeGenerationTiming(ctx.rt.generation);
     queue.end();
   });
@@ -2110,7 +2230,7 @@ describe('claude live token speed', () => {
     stream({ type: 'message_start', message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } }, 1_000);
     stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 1_000);
     stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'one two three four five' } }, 1_500);
-    expect(ctx.rt.generation.tokenSpeed.snapshot(1_500)?.tokens).toBe(5);
+    expect(ctx.rt.generation.tokenSpeed.snapshot(1_500)?.tokens).toBeGreaterThan(0);
     // The lid closes for five minutes: no heartbeat fires until the stream resumes.
     stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'six seven' } }, 301_500);
     stream({ type: 'message_delta', usage: { output_tokens: 7 } }, 302_000);
@@ -2146,5 +2266,376 @@ describe('claude live token speed', () => {
     expect(ctx.rt.generation.tokenSpeed.snapshot()?.elapsedMs).toBe(1_000);
     resetClaudeGenerationTiming(ctx.rt.generation);
     queue.end();
+  });
+
+  // The tests below pin what recorded turns showed (scripts/token-speed-replay.ts):
+  // while a turn ran, the panel counted 20–50% of the real output and drew readings near
+  // zero after every stretch of thinking.
+  function speedHarness() {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    const readings: number[] = [];
+    const send = (msg: Record<string, unknown>, at: number) => {
+      // Advance rather than jump: the suspend heartbeat has to see time pass.
+      vi.advanceTimersByTime(Math.max(0, at - Date.now()));
+      translateSdkMessage(msg as never, queue, ctx);
+    };
+    const stream = (event: Record<string, unknown>, at: number) => send({ type: 'stream_event', event }, at);
+    const speed = (at: number) => ctx.rt.generation.tokenSpeed.snapshot(at);
+    /** Deltas of `chars` characters every `everyMs`, from `from` (exclusive) to `to`. */
+    const flow = (index: number, delta: (text: string) => Record<string, unknown>, chars: number, from: number, to: number, everyMs = 50) => {
+      for (let at = from + everyMs; at <= to; at += everyMs) {
+        stream({ type: 'content_block_delta', index, delta: delta('a'.repeat(chars)) }, at);
+        const shown = speed(at);
+        if (shown?.streaming && shown.rate > 0) readings.push(shown.rate);
+      }
+    };
+    const text = (value: string) => ({ type: 'text_delta', text: value });
+    const thinking = (value: string) => ({ type: 'thinking_delta', thinking: value });
+    const start = (at: number) =>
+      stream({ type: 'message_start', message: { model: 'claude-sonnet-4.5', usage: { input_tokens: 10 } } }, at);
+    const finish = () => {
+      resetClaudeGenerationTiming(ctx.rt.generation);
+      queue.end();
+    };
+    return { queue, send, stream, speed, flow, text, thinking, start, finish, readings };
+  }
+
+  it('reads summarized thinking at the pace the finished request reported', () => {
+    const { stream, speed, flow, thinking, start, finish, readings } = speedHarness();
+    // 20s of thinking whose summary carries 107 characters (50 estimated tokens) every 500ms.
+    start(0);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, 0);
+    flow(0, thinking, 107, 0, 20_000, 500);
+    stream({ type: 'content_block_stop', index: 0 }, 20_000);
+    expect(speed(20_000)?.measurement).toEqual({ latest: null, average: null });
+    // The request really thought three tokens for every estimated one: 300 tok/s.
+    stream({ type: 'message_delta', usage: { output_tokens: 6_000, output_tokens_details: { thinking_tokens: 6_000 } } }, 20_000);
+    expect(speed(20_000)).toMatchObject({ tokens: 6_000, elapsedMs: 20_000, average: 300 });
+
+    readings.length = 0;
+    start(25_000);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, 25_000);
+    flow(0, thinking, 107, 25_000, 45_000, 500);
+    // The same summary now counts for what it stood for last time, while it is still streaming.
+    const live = speed(45_000);
+    expect(live?.measurement).toMatchObject({ average: 300, latest: { kind: 'request', rate: 300, measuredAt: 20_000 } });
+    expect(live?.tokens).toBeGreaterThan(11_000);
+    expect(live?.tokens).toBeLessThan(12_300);
+    expect(Math.min(...readings)).toBeGreaterThan(270);
+    expect(Math.max(...readings)).toBeLessThan(320);
+    finish();
+  });
+
+  // Review of PR 9597: a held-back burst inside an otherwise steady window read as a spike
+  // (the window stayed below the ceiling) and kept the peak for the whole turn.
+  it('keeps a burst released at once out of the readings and the peak', () => {
+    const { stream, speed, flow, text, start, finish, readings } = speedHarness();
+    start(0);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 0);
+    flow(0, text, 11, 0, 4_000);
+    // 12 000 estimated tokens released within a few milliseconds.
+    stream({ type: 'content_block_delta', index: 0, delta: text('a'.repeat(25_700)) }, 4_005);
+    flow(0, text, 11, 4_005, 8_000);
+    expect(Math.max(...readings)).toBeLessThan(115);
+    expect(speed(8_000)!.peak).toBeLessThan(115);
+    finish();
+  });
+
+  it('takes no reading from the silence before visible output', () => {
+    const { stream, flow, text, start, finish, readings } = speedHarness();
+    start(0);
+    // Redacted thinking: 20s in which the model generates and nothing streams.
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, 0);
+    stream({ type: 'content_block_stop', index: 0 }, 20_000);
+    stream({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }, 20_000);
+    // 11 characters every 50ms is about 103 tok/s.
+    flow(1, text, 11, 20_000, 26_000);
+    expect(readings.length).toBeGreaterThan(0);
+    // Dividing the first output by the 20s before it read below 1 tok/s.
+    expect(Math.min(...readings)).toBeGreaterThan(95);
+    expect(Math.max(...readings)).toBeLessThan(110);
+    finish();
+  });
+
+  it('credits the time a response spent generating before its first byte', () => {
+    const { stream, speed, flow, text, start, finish } = speedHarness();
+    start(0);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 0);
+    // 428 characters over 2s: 200 real tokens at 100 tok/s.
+    flow(0, text, 107, 0, 2_000, 500);
+    stream({ type: 'content_block_stop', index: 0 }, 2_000);
+    stream({ type: 'message_delta', usage: { output_tokens: 200 } }, 2_000);
+    expect(speed(2_000)).toMatchObject({ tokens: 200, elapsedMs: 2_000, average: 100 });
+    // A short reply held back by the provider arrives whole with its first byte.
+    start(5_000);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 5_000);
+    stream({ type: 'content_block_delta', index: 0, delta: text('a'.repeat(214)) }, 5_000);
+    stream({ type: 'content_block_stop', index: 0 }, 5_001);
+    stream({ type: 'message_delta', usage: { output_tokens: 100 } }, 5_001);
+    // Its 100 tokens took a second somewhere; counting them over 1ms read 150 tok/s.
+    const settled = speed(5_001);
+    expect(settled?.tokens).toBe(300);
+    expect(settled?.average).toBeGreaterThan(98);
+    expect(settled?.average).toBeLessThan(102);
+    finish();
+  });
+
+  it.each([
+    ['summarized thinking', fableSummarized as RecordedStream],
+    ['redacted thinking', sonnetRedacted as RecordedStream],
+  ])('follows a recorded turn with %s within reach of its real usage', async (_name, recorded) => {
+    const { queue, send, speed, finish } = speedHarness();
+    let realOutput = 0;
+    let streamMs = 0;
+    let requestStart = 0;
+    const readings: number[] = [];
+    for (const { t, msg } of expandRecordedStream(recorded)) {
+      const event = msg.event as { type?: string; usage?: { output_tokens?: number } } | undefined;
+      if (event?.type === 'message_start') requestStart = t;
+      if (event?.type === 'message_delta') {
+        realOutput += event.usage?.output_tokens ?? 0;
+        streamMs += t - requestStart;
+        // Right before a request reports its usage the panel still shows the stream's own count.
+        const shown = speed(t)?.tokens ?? 0;
+        if ((event.usage?.output_tokens ?? 0) >= 1_000) {
+          expect(shown / realOutput).toBeGreaterThan(0.85);
+          expect(shown / realOutput).toBeLessThan(1.15);
+        }
+      }
+      if (msg.type === 'result') {
+        send({ type: 'result', stop_reason: 'end_turn', total_cost_usd: 0, num_turns: 1, usage: { input_tokens: 1, output_tokens: realOutput } }, t);
+      } else {
+        send(msg, t);
+      }
+      const shown = speed(t);
+      if (shown?.streaming && shown.rate > 0) readings.push(shown.rate);
+    }
+    finish();
+    const realTps = (realOutput * 1_000) / streamMs;
+    let final: { streaming: boolean; tokens: number; average: number } | undefined;
+    for await (const event of queue) {
+      const data = event.data as { status?: string; tokenSpeed?: typeof final };
+      if (event.type === 'status' && data.status === 'Done') final = data.tokenSpeed;
+    }
+    expect(final).toMatchObject({ streaming: false, tokens: realOutput });
+    expect(final!.average / realTps).toBeGreaterThan(0.97);
+    expect(final!.average / realTps).toBeLessThan(1.01);
+    // No reading may collapse towards zero after thinking or spike on a flushed burst.
+    expect(Math.min(...readings) / realTps).toBeGreaterThan(0.4);
+    expect(Math.max(...readings) / realTps).toBeLessThan(2.2);
+  });
+
+  it('publishes live thinking rate within 2.5s for non-Claude verbatim thinking streams', () => {
+    const { stream, speed, flow, thinking, finish, readings } = speedHarness();
+    stream({ type: 'message_start', message: { model: 'antigravity/gemini-4-hydrogen', usage: { input_tokens: 10 } } }, 0);
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, 0);
+    flow(0, thinking, 107, 0, 2_500, 250);
+    expect(readings.length).toBeGreaterThan(0);
+    expect(speed(2_500)?.rate).toBeGreaterThan(150);
+    finish();
+  });
+});
+
+describe('claude proxied response usage segments', () => {
+  const MESSAGE_ID = '0217956000000000000000000000000000000000000000000000';
+
+  function requestStart(usage: Record<string, number>, id = MESSAGE_ID, parent?: string) {
+    return {
+      type: 'stream_event' as const,
+      ...(parent ? { parent_tool_use_id: parent } : {}),
+      event: {
+        type: 'message_start',
+        message: { id, model: 'deepseek-flash-latest', usage },
+      },
+    };
+  }
+
+  function requestDelta(usage: Record<string, number>, parent?: string) {
+    return {
+      type: 'stream_event' as const,
+      ...(parent ? { parent_tool_use_id: parent } : {}),
+      event: {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage,
+      },
+    };
+  }
+
+  function requestStop(parent?: string) {
+    return {
+      type: 'stream_event' as const,
+      ...(parent ? { parent_tool_use_id: parent } : {}),
+      event: { type: 'message_stop' },
+    };
+  }
+
+  function completedRequest(info: {
+    usage: Record<string, number>;
+    id?: string;
+    parent?: string;
+  }) {
+    return [
+      requestStart(info.usage, info.id, info.parent),
+      requestDelta(info.usage, info.parent),
+      requestStop(info.parent),
+    ] as const;
+  }
+
+  function toolResult(parent?: string) {
+    return {
+      type: 'user' as const,
+      ...(parent ? { parent_tool_use_id: parent } : {}),
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'ok' }],
+      },
+    };
+  }
+
+  function resultEvent(usage: Record<string, number>) {
+    return {
+      type: 'result' as const,
+      stop_reason: 'end_turn',
+      total_cost_usd: 0,
+      result: 'ok',
+      usage,
+      modelUsage: {
+        'deepseek-flash-latest': {
+          inputTokens: usage.input_tokens ?? 0,
+          outputTokens: usage.output_tokens ?? 0,
+          cacheReadInputTokens: usage.cache_read_input_tokens ?? 0,
+          cacheCreationInputTokens: 0,
+          costUSD: 0,
+        },
+      },
+    };
+  }
+
+  async function run(...events: Array<Record<string, unknown>>) {
+    const ctx = createTranslatorCtx();
+    const queue = createAsyncQueue<AgentEvent>();
+    for (const event of events) translateSdkMessage(event as never, queue, ctx);
+    queue.end();
+    const out: AgentEvent[] = [];
+    for await (const event of queue) out.push(event);
+    return out.find((event) => event.type === 'done')?.data as
+      | { usageSegments?: Array<Record<string, unknown>> }
+      | undefined;
+  }
+
+  it('merges provider cycles that reuse one message id into a single request segment', async () => {
+    // A proxied response is split into a thinking cycle and a text cycle. Both carry
+    // the same provider message id; the first message_delta reports no output yet.
+    const done = await run(
+      ...completedRequest({ usage: { input_tokens: 1000, cache_read_input_tokens: 50000 } }),
+      ...completedRequest({
+        usage: { input_tokens: 1000, cache_read_input_tokens: 50000, output_tokens: 120 },
+      }),
+      resultEvent({
+        input_tokens: 2000,
+        cache_read_input_tokens: 100000,
+        cache_creation_input_tokens: 0,
+        output_tokens: 120,
+      }),
+    );
+
+    expect(done?.usageSegments).toHaveLength(1);
+    expect(done?.usageSegments?.[0]).toMatchObject({
+      inputTokens: 1000,
+      outputTokens: 120,
+      cacheReadTokens: 50000,
+      complete: true,
+    });
+  });
+
+  it('keeps distinct provider message ids as separate request segments', async () => {
+    const done = await run(
+      ...completedRequest({ usage: { input_tokens: 1000, output_tokens: 10 } }),
+      ...completedRequest({
+        usage: { input_tokens: 2000, output_tokens: 20 },
+        id: 'another-message-id',
+      }),
+      resultEvent({ input_tokens: 3000, output_tokens: 30 }),
+    );
+
+    expect(done?.usageSegments).toHaveLength(2);
+    expect(done?.usageSegments?.map((segment) => segment.inputTokens)).toEqual([1000, 2000]);
+  });
+
+  it('starts a new segment when a tool result separates requests reusing one id', async () => {
+    const done = await run(
+      ...completedRequest({ usage: { input_tokens: 1000, output_tokens: 10 } }),
+      toolResult(),
+      ...completedRequest({ usage: { input_tokens: 2000, output_tokens: 20 } }),
+      resultEvent({ input_tokens: 3000, output_tokens: 30 }),
+    );
+
+    expect(done?.usageSegments).toHaveLength(2);
+    expect(done?.usageSegments?.map((segment) => segment.inputTokens)).toEqual([1000, 2000]);
+  });
+
+  it('does not drop a concurrent stream split-cycle record when another parent reports a tool result', async () => {
+    // Stream A's two cycles straddle a tool result belonging to stream B. Clearing
+    // split-cycle bookkeeping globally would split A's response and bill it twice.
+    const done = await run(
+      ...completedRequest({
+        usage: { input_tokens: 1000, cache_read_input_tokens: 50000 },
+        parent: 'agent-a',
+      }),
+      toolResult('agent-b'),
+      ...completedRequest({
+        usage: { input_tokens: 1000, cache_read_input_tokens: 50000, output_tokens: 120 },
+        parent: 'agent-a',
+      }),
+      ...completedRequest({
+        usage: { input_tokens: 2000, cache_read_input_tokens: 60000, output_tokens: 10 },
+        parent: 'agent-b',
+      }),
+      resultEvent({ input_tokens: 2000, cache_read_input_tokens: 100000, output_tokens: 130 }),
+    );
+
+    const agentA = done?.usageSegments?.filter((segment) =>
+      String(segment.id).endsWith(':agent-a'));
+    const agentB = done?.usageSegments?.filter((segment) =>
+      String(segment.id).endsWith(':agent-b'));
+    expect(agentA).toHaveLength(1);
+    expect(agentA?.[0]).toMatchObject({ inputTokens: 1000, outputTokens: 120, cacheReadTokens: 50000 });
+    expect(agentB).toHaveLength(1);
+    expect(agentB?.[0]).toMatchObject({ inputTokens: 2000, outputTokens: 10, cacheReadTokens: 60000 });
+  });
+
+  it('starts a fresh segment when a retry reuses the id of a billable partial response', async () => {
+    const done = await run(
+      ...completedRequest({ usage: { input_tokens: 1000, cache_read_input_tokens: 50000 } }),
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 1,
+        max_retries: 3,
+        retry_delay_ms: 1000,
+        error_status: 529,
+        error: 'overloaded_error',
+      },
+      ...completedRequest({ usage: { input_tokens: 1200, cache_read_input_tokens: 60000 } }),
+      ...completedRequest({
+        usage: { input_tokens: 1200, cache_read_input_tokens: 60000, output_tokens: 80 },
+      }),
+      resultEvent({ input_tokens: 2200, cache_read_input_tokens: 110000, output_tokens: 80 }),
+    );
+
+    // The failed attempt stays billable; the retry and its own split cycles merge once.
+    expect(done?.usageSegments).toHaveLength(2);
+    expect(done?.usageSegments?.[0]).toMatchObject({
+      inputTokens: 1000,
+      cacheReadTokens: 50000,
+    });
+    expect(done?.usageSegments?.[1]).toMatchObject({
+      inputTokens: 1200,
+      outputTokens: 80,
+      cacheReadTokens: 60000,
+    });
   });
 });

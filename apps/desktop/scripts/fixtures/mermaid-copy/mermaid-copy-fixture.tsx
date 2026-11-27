@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { EditorView } from '@codemirror/view';
 import { markdownMermaidDecorationField } from '../../../src/renderer/components/markdown/markdownMermaidLivePreview';
 import '../../../src/renderer/themes/colors';
@@ -28,7 +29,7 @@ const decode = HTMLImageElement.prototype.decode;
 function Message({ raw, simplified }: { raw: string; simplified: boolean }) {
   useDisableContextMenu();
   return (
-    <AssistantMessage
+    <AssistantMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
       content={'```mermaid\n' + raw + '\n```'}
       simplifiedBotConversation={simplified}
     />

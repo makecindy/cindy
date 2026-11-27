@@ -30,6 +30,7 @@ import type { WebContents } from 'electron';
 import type { TabRegistry } from '../../rsb-browser-bridge/registry.js';
 import { dispatchTabOp } from '../../rsb-browser-bridge/renderer-bridge.js';
 import type { RendererBridgeOptions } from '../../rsb-browser-bridge/renderer-bridge.js';
+import { runWebContentsOpWithGuard } from '../../rsb-browser-bridge/webContentsGuard.js';
 import type {
   BackendRequest,
   BackendResult,
@@ -87,6 +88,10 @@ export interface RsbWebviewBackendOptions {
    * only — production uses the defaults below).
    */
   reattachWait?: { totalMs: number; pollMs: number };
+  /** Maximum time to wait for `capturePage()` before failing and releasing the tab pin. */
+  captureTimeoutMs?: number;
+  /** Maximum time to wait for `printToPDF()` before failing and releasing the tab pin. */
+  pdfTimeoutMs?: number;
 }
 
 /**
@@ -102,6 +107,8 @@ export interface RsbWebviewBackendOptions {
 const TAB_REATTACH_TOTAL_MS = 5000;
 const TAB_REATTACH_POLL_MS = 250;
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 60_000;
+const DEFAULT_CAPTURE_PAGE_TIMEOUT_MS = 15_000;
+const DEFAULT_PRINT_TO_PDF_TIMEOUT_MS = 30_000;
 const DEFAULT_DISPOSE_GRACE_MS = 1_500;
 const RESTARTING_MESSAGE =
   'embedded browser control is restarting; retry shortly. If this persists, open Settings > Automation and choose one-click recovery';
@@ -290,6 +297,12 @@ export class RsbWebviewBackend implements BrowserBackend {
     this.lifecycleAbort.abort();
     this.disposePromise = this.performDispose();
     return this.disposePromise;
+  }
+
+  /** An open-tab reply can precede the guest's dom-ready/registry report. Keep
+   * that observation in the drain boundary rather than freezing in this gap. */
+  canReleaseClient(): boolean {
+    return !this.disposing && this.activeCalls.size === 0 && this.backgroundCalls.size === 0;
   }
 
   private async performDispose(): Promise<void> {
@@ -624,8 +637,21 @@ export class RsbWebviewBackend implements BrowserBackend {
     }
     const resolved = await this.resolveTabForDirectAction(req, tabId);
     if (!resolved.ok) return resolved.result;
+    const timeoutMs =
+      typeof req.timeoutMs === 'number' && Number.isFinite(req.timeoutMs) && req.timeoutMs > 0
+        ? req.timeoutMs
+        : (this.opts.captureTimeoutMs ?? DEFAULT_CAPTURE_PAGE_TIMEOUT_MS);
     return this.withTabPin(tabId, async () => {
-      const image = await resolved.wc.capturePage();
+      const image = await runWebContentsOpWithGuard(
+        resolved.wc,
+        () => resolved.wc.capturePage(),
+        {
+          label: 'capturePage',
+          timeoutMs,
+          signal: this.lifecycleAbort.signal,
+        },
+      );
+      this.assertActive();
       // Honor `type` instead of always encoding PNG: JPEG via toJPEG(85),
       // matching the CDP path's default quality. MIME/bytes follow the buffer.
       const type = req.type === 'jpeg' ? 'jpeg' : 'png';
@@ -646,8 +672,21 @@ export class RsbWebviewBackend implements BrowserBackend {
     if (!tabId) return actionFailed(req.action, 'targetId required');
     const resolved = await this.resolveTabForDirectAction(req, tabId);
     if (!resolved.ok) return resolved.result;
+    const timeoutMs =
+      typeof req.timeoutMs === 'number' && Number.isFinite(req.timeoutMs) && req.timeoutMs > 0
+        ? req.timeoutMs
+        : (this.opts.pdfTimeoutMs ?? DEFAULT_PRINT_TO_PDF_TIMEOUT_MS);
     return this.withTabPin(tabId, async () => {
-      const pdf = await resolved.wc.printToPDF({});
+      const pdf = await runWebContentsOpWithGuard(
+        resolved.wc,
+        () => resolved.wc.printToPDF({}),
+        {
+          label: 'printToPDF',
+          timeoutMs,
+          signal: this.lifecycleAbort.signal,
+        },
+      );
+      this.assertActive();
       return actionOk(req.action, {
         tabId,
         mimeType: 'application/pdf',

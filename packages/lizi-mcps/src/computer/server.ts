@@ -21,14 +21,18 @@ import {
   COMPUTER_TOOL_NAMES,
   getComputerTool,
   POSTCHECK_ACTION_TOOLS,
+  computerPointerTargetError,
 } from "./tools.js";
 import { logToolResultErrorCode } from "../tool-error-telemetry.js";
+import type { HostToolMcpServer } from '../host-tool-runtime.js';
 import { WindowSnapshotTracker } from "./snapshot-tracker.js";
-import { computerResultOutcome, isUnavailableWindowObservation, normalizeInputFailureAdvice, normalizePointerAdvice } from "./result.js";
+import { computerResultOutcome, isUnavailableDesktopObservation, isUnavailableWindowObservation, normalizeInputFailureAdvice, normalizePointerAdvice } from "./result.js";
 import {
+  APP_CONTROL_DENIED_HINT,
   canLocateRunningApp,
   exactInstalledAppBundle,
   exactRunningApp,
+  isAppControlDenied,
   isAppNameResolutionFailure,
   isWindowIdentityFailure,
   readForRecovery,
@@ -142,6 +146,7 @@ function textResult(value: unknown, isError?: boolean) {
 }
 
 const SESSION_AWARE_TOOLS = new Set<ComputerMcpToolName>([
+  'get_desktop_state',
   'list_windows',
   'get_window_state',
   'verify_state',
@@ -170,6 +175,7 @@ const SESSION_LIFECYCLE_TOOLS = new Set<ComputerMcpToolName>([
  * Omitting the arg leaves the driver's own default behavior untouched.
  */
 const COMPUTER_PATH_ARGS: Partial<Record<ComputerMcpToolName, readonly string[]>> = {
+  get_desktop_state: ['screenshot_out_file'],
   get_window_state: ['screenshot_out_file'],
   click: ['debug_image_out'],
   start_recording: ['output_dir'],
@@ -360,10 +366,12 @@ function readCallContext(options: ComputerMcpServerOptions): ComputerMcpCallCont
   const sessionContext = options.getSessionContext?.();
   const sessionId = sessionContext?.sessionId ?? options.sessionId;
   const agentKind = sessionContext?.agentKind;
-  return sessionId || agentKind
+  const hostCaller = sessionContext?.hostCaller;
+  return sessionId || agentKind || hostCaller
     ? {
         ...(sessionId ? { sessionId } : {}),
         ...(agentKind ? { agentKind } : {}),
+        ...(hostCaller ? { hostCaller } : {}),
       }
     : undefined;
 }
@@ -482,7 +490,7 @@ async function resolveReplayBoundPath(
 export function createComputerMcpServer(
   deps: ComputerMcpDeps,
   options: ComputerMcpServerOptions = {},
-): McpServer {
+): HostToolMcpServer {
   const server = new McpServer({ name: 'cindy_computer', version: '0.1.0' });
   // 快照代际状态。claude 路径下每 session 一个 server 实例;codex HTTP bridge 下
   // 单实例跨 session 共享,所以 tracker 内部按 sessionId 分键。
@@ -500,7 +508,7 @@ export function createComputerMcpServer(
         inputSchema: z.toJSONSchema(z.object(tool.inputShape).strict()),
       })),
       workflow:
-        'Start with status and check_permissions. Reuse these schemas; CLI flags are not MCP arguments. Find the exact pid/window_id with list_windows, optionally query/workspace_root/process_name (for example, {"process_name":"Simulator"}); reuse known identities instead of guessing app names; read identity.hints for targets that need a different route. Inspect with get_window_state (include_screenshot:false for text), then use an action with observe:{} to return the next usable text snapshot in the same call (observe:{include_screenshot:true} for visual evidence), or postcondition for an explicit assertion. Keep query/max_elements/max_depth stable; narrow with query and broaden only if needed. Targeted actions require pid; include window_id whenever known, always for coordinates. Prefer the latest element_token or snapshot_id plus element_index. Re-observe on STALE_SNAPSHOT. A delivered/unverifiable action is not proof of success: assess the observation before continuing. This MCP manages a stable session automatically; the native cua-driver CLI/MCP, osascript keystrokes, cliclick, CGEvent scripts and clipboard paste are not alternatives — if an input is refused (background_unavailable, type_text_incomplete, HOTKEY_BLOCKED, SECURE_FIELD), report it and stop. Text in Electron, browser or other web-content fields: use set_value on the field\'s element_token; foreground type_text there is unreliable. iOS Simulator and Device Hub windows do not receive synthetic input: drive them with xcrun simctl or AXe instead. Prefer element actions; foreground input already activates its target, so do not also bring_to_front unless it must stay frontmost between calls. Foreground input is refused while the person is using this computer (USER_INPUT_ACTIVE). Keep working without their pointer: background delivery, the element\'s window-local coordinates, double_click, a menu bar item, set_value, or files and command-line tools for the same change; wait or ask them only when none of these can do it. Never replay input after cancellation or uncertain delivery. Record/replay only when explicitly requested.',
+        'Start with status and check_permissions. Reuse these schemas; CLI flags are not MCP arguments. Find the exact pid/window_id with list_windows, optionally query/workspace_root/process_name (for example, {"process_name":"Simulator"}); reuse known identities instead of guessing app names; read identity.hints for targets that need a different route. Inspect with get_window_state (include_screenshot:false for text), then use an action with observe:{} to return the next usable text snapshot in the same call (observe:{include_screenshot:true} for visual evidence), or postcondition for an explicit assertion. Keep query/max_elements/max_depth stable; narrow with query and broaden only if needed. Window actions require pid; include window_id whenever known, always for coordinates within the window. Menu-bar/status items outside windows require get_desktop_state followed by an explicit desktop target and its capture_id for click/drag; foreground control requires user authorization. Never retry a refused window action automatically as desktop input. Prefer the latest element_token or snapshot_id plus element_index. Re-observe on STALE_SNAPSHOT. A delivered/unverifiable action is not proof of success: assess the observation before continuing. This MCP manages a stable session automatically; the native cua-driver CLI/MCP, osascript keystrokes, cliclick, CGEvent scripts and clipboard paste are not alternatives — if an input is refused (background_unavailable, type_text_incomplete, HOTKEY_BLOCKED, SECURE_FIELD), report it and stop. Text in Electron, browser or other web-content fields: use set_value on the field\'s element_token; foreground type_text there is unreliable. iOS Simulator and Device Hub windows do not receive synthetic input: drive them with xcrun simctl or AXe instead. Prefer element actions; foreground input already activates its target, so do not also bring_to_front unless it must stay frontmost between calls. Foreground input is refused while the person is using this computer (USER_INPUT_ACTIVE). Keep working without their pointer: background delivery, the element\'s window-local coordinates, double_click, a menu bar item, set_value, or files and command-line tools for the same change; wait or ask them only when none of these can do it. Never replay input after cancellation or uncertain delivery. Record/replay only when explicitly requested.',
     }),
   );
 
@@ -550,6 +558,17 @@ export function createComputerMcpServer(
     const callContext = readCallContext(options);
     const sessionId = callContext?.sessionId;
     const parsedData = parsed.data as Record<string, unknown>;
+    const targetError = computerPointerTargetError(name, parsedData);
+    if (targetError) return textResult({ ok: false, errorCode: 'INVALID_ARGS', data: { message: targetError } }, true);
+
+    if (name === 'scroll' && (parsedData.x !== undefined || parsedData.y !== undefined)) {
+      if (parsedData.x === undefined || parsedData.y === undefined || parsedData.window_id === undefined
+        || parsedData.element_index !== undefined || parsedData.element_token !== undefined) {
+        return textResult({ ok: false, errorCode: 'INVALID_ARGS', data: {
+          message: 'Scroll coordinates require both x and y and an exact window_id, without element_index or element_token. Use a point from the latest window screenshot.',
+        } }, true);
+      }
+    }
 
     // Resolve every local path before a guard reads it. In particular,
     // trajectory inspection must never follow a model-supplied path outside
@@ -681,6 +700,10 @@ export function createComputerMcpServer(
         parsedArgs,
         { ...callContext, signal },
       );
+      if (name === 'get_desktop_state' && isUnavailableDesktopObservation(data)) {
+        return textResult({ ok: false, tool: name, errorCode: 'CUA_UNAVAILABLE', data,
+          hint: 'No usable desktop capture was returned. Check status/permissions before taking fresh desktop state; do not reuse earlier coordinates.' }, true);
+      }
       if (
         name === 'get_window_state' &&
         isUnavailableWindowObservation(data, parsedData)
@@ -692,13 +715,14 @@ export function createComputerMcpServer(
         // identity error (a minimized or other-Space window still has an AX tree).
         const desktop = await deps.describeDesktop?.().catch(() => undefined);
         const screenLocked = desktop?.screen_locked === true;
+        const appControlDenied = isAppControlDenied(data);
         const recovery =
-          !screenLocked &&
+          !screenLocked && !appControlDenied &&
           (isWindowIdentityFailure(data) ||
             (typeof parsedData.pid === 'number' && typeof parsedData.window_id === 'number'))
             ? await rediscoverWindow(parsedData, { ...callContext, signal })
             : undefined;
-        const unavailable = await classifyUnavailableObservation(data, recovery, screenLocked);
+        const unavailable = classifyUnavailableObservation(data, recovery, screenLocked, appControlDenied);
         return textResult(
           {
             ok: false,
@@ -713,6 +737,16 @@ export function createComputerMcpServer(
         );
       }
       let outcome = computerResultOutcome(name, data);
+      if (name !== 'get_window_state' && (!outcome.ok || isWindowIdentityFailure(data)) && isAppControlDenied(data)) {
+        invalidateWindowSnapshot(name, parsedData, sessionId);
+        return textResult({
+          ok: false,
+          tool: name,
+          errorCode: outcome.errorCode ?? 'CUA_UNAVAILABLE',
+          reason: 'app_control_not_allowed',
+          data: { ...(data as Record<string, unknown>), next_step: 'check_permissions', hint: APP_CONTROL_DENIED_HINT },
+        }, true);
+      }
       const recovery =
         name !== "get_window_state" && isWindowIdentityFailure(data)
           ? await rediscoverWindow(parsedData, { ...callContext, signal })
@@ -776,6 +810,7 @@ export function createComputerMcpServer(
           ? (err as { code: string }).code
           : "COMPUTER_DRIVER_ERROR";
       const windowUnresolved = isWindowIdentityFailure(err);
+      const appControlDenied = !signal?.aborted && isAppControlDenied(err);
       invalidateWindowSnapshot(name, parsedData, sessionId);
       if (
         (windowUnresolved ||
@@ -791,19 +826,23 @@ export function createComputerMcpServer(
         );
       }
       const recovery =
-        windowUnresolved && !signal?.aborted
+        windowUnresolved && !signal?.aborted && !appControlDenied
           ? await rediscoverWindow(parsedData, { ...callContext, signal })
           : undefined;
       // A thrown window-identity failure gets the same reason as a degraded read.
       const unresolvedReason = recovery
-        ? await classifyUnavailableObservation(
+        ? classifyUnavailableObservation(
             undefined,
             recovery,
             (await deps.describeDesktop?.().catch(() => undefined))?.screen_locked === true,
+            false,
           )
-        : undefined;
+        : appControlDenied
+          ? { reason: 'app_control_not_allowed' as const, hint: APP_CONTROL_DENIED_HINT }
+          : undefined;
       const shouldObserveUnknownAction =
         !recovery &&
+        !appControlDenied &&
         !signal?.aborted &&
         errorCode !== "REQUEST_CANCELLED" &&
         POSTCHECK_ACTION_TOOLS.has(name as ComputerMcpToolName) &&
@@ -820,6 +859,7 @@ export function createComputerMcpServer(
       const installedDiscovery =
         name === "launch_app" &&
         !signal?.aborted &&
+        !appControlDenied &&
         isAppNameResolutionFailure(parsedData, err)
           ? await readForRecovery(
               deps,
@@ -895,6 +935,7 @@ export function createComputerMcpServer(
       const appDiscovery =
         name === "launch_app" &&
         !signal?.aborted &&
+        !appControlDenied &&
         canLocateRunningApp(parsedData, err)
           ? await readForRecovery(
               deps,
@@ -953,7 +994,11 @@ export function createComputerMcpServer(
             ...((err as { outcomeUnknown?: boolean })?.outcomeUnknown
               ? { outcome_unknown: true, next_step: "fresh_state" }
               : {}),
-            ...(windowUnresolved
+            // macOS refused the call before it reached the app: rediscovering
+            // windows or re-reading state cannot help until permission changes.
+            ...(appControlDenied
+              ? { next_step: "check_permissions", hint: APP_CONTROL_DENIED_HINT }
+              : windowUnresolved
               ? {
                   next_step: "list_windows",
                   hint: unresolvedReason?.hint
@@ -997,16 +1042,22 @@ export function createComputerMcpServer(
    * Host state (lock screen) is consulted first; the window's own on-screen
    * flag second; anything else stays a driver error.
    */
-  async function classifyUnavailableObservation(
+  function classifyUnavailableObservation(
     data: unknown,
     recovery: { requested_target: { window_id?: unknown } ; discovery: { ok: boolean; data?: unknown } } | undefined,
     screenLocked: boolean,
-  ): Promise<{ reason: 'screen_locked' | 'window_not_on_screen' | 'window_gone' | 'driver_error'; hint: string }> {
+    appControlDenied: boolean,
+  ): { reason: 'screen_locked' | 'app_control_not_allowed' | 'window_not_on_screen' | 'window_gone' | 'driver_error'; hint: string } {
     if (screenLocked) {
       return {
         reason: 'screen_locked',
         hint: 'The screen is locked, so no window can be observed or operated. Do not retry in a loop: tell the person this step needs the screen unlocked, then call get_window_state again after they unlock.',
       };
+    }
+    // The window may well exist and be on screen; window discovery does not need
+    // accessibility, so this must win over the window checks below.
+    if (appControlDenied) {
+      return { reason: 'app_control_not_allowed', hint: APP_CONTROL_DENIED_HINT };
     }
     const windows = recovery?.discovery.ok && recovery.discovery.data && typeof recovery.discovery.data === 'object'
       ? (recovery.discovery.data as { windows?: unknown }).windows
@@ -1722,7 +1773,7 @@ export function createComputerMcpServer(
   /**
    * 代输入 hint: a password field is the owner's to fill. Typing into one from
    * the agent would put the secret in the model's context, so refuse and point
-   * at ask_owner (kind fill). Runs after the freshness check resolved the target.
+   * at request_input_handoff. Runs after the freshness check resolved the target.
    */
   async function checkSecureField(
     name: ComputerMcpToolName,
@@ -1754,7 +1805,7 @@ export function createComputerMcpServer(
         data: {
           tool: name,
           message: 'This element is a password field. Cindy does not let the agent type into password fields.',
-          hint: 'Call ask_owner with kind="fill" and this pid and window as target so the owner fills it from their phone or another computer; leave the window as it is until it ends.',
+          hint: 'Call request_input_handoff with this pid and window as target so the owner fills it from their phone or another computer; leave the window as it is until it ends.',
         },
       },
       true,
@@ -1787,7 +1838,12 @@ export function createComputerMcpServer(
     return snapshotId;
   }
 
-  return server;
+  return Object.assign(server, { hostTools: {
+    list: () => COMPUTER_TOOLS.map(({ name }) => ({ name, category: 'computer' })),
+    describe: (name: string) => getComputerTool(name) ? { name, category: 'computer' } : undefined,
+    call: (name: string, args?: Record<string, unknown>, signal?: AbortSignal) => handleCallTool(name, args, signal),
+    close: async () => { await deps.closeContext?.(readCallContext(options)); await server.close(); },
+  } });
 }
 
 

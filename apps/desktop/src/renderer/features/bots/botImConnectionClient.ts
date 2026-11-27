@@ -6,6 +6,12 @@
  */
 import { useEffect, useRef, useState } from 'react';
 
+import {
+  DiscordChannelAccessUnsupportedError,
+  type DiscordChannelAccessSource,
+} from '@/hooks/useDiscordChannelAccess';
+
+import { BOT_IM_DISCORD_ACCESS_VERSION } from '../../../shared/botImConnection';
 import type {
   BotImAdoptablePersonalBotsPayload,
   BotImAdoptPersonalBotInput,
@@ -99,6 +105,26 @@ export function setBotImConnectionGroupActivation(
 ): Promise<BotImConnectionGroupsPayload> {
   if (!api?.setGroupActivation) return Promise.reject(new Error('botImConnection IPC unavailable'));
   return api.setGroupActivation({ id, chatId, mode });
+}
+
+/** 旧 preload / 旧电脑没有 Discord 频道白名单接口时整个小节不显示。 */
+export function botImConnectionDiscordChannelsSupported(api: BotImConnectionApi | null = botImConnectionApi()): boolean {
+  return !!api && typeof api.listDiscordChannels === 'function' && typeof api.setDiscordChannelAccess === 'function';
+}
+
+/** 某条 Discord 连接自己的白名单读写（只带连接 id，归属校验在主进程 / 伙伴设置操作里）。 */
+export function discordChannelAccessSourceFor(api: BotImConnectionApi, id: string): DiscordChannelAccessSource {
+  return {
+    async load() {
+      const payload = await api.listDiscordChannels!({ id });
+      // 对端电脑太旧（读到的不是含服务器级设置的白名单版本）：整段拒绝编辑，不猜、不写。
+      if (payload.accessVersion !== BOT_IM_DISCORD_ACCESS_VERSION) throw new DiscordChannelAccessUnsupportedError();
+      return { guilds: payload.guilds, access: payload.access, online: payload.online };
+    },
+    async save(access) {
+      return (await api.setDiscordChannelAccess!({ id, access })).access;
+    },
+  };
 }
 
 /** 旧 preload 没有隐藏任务接口时整个小节不显示。 */

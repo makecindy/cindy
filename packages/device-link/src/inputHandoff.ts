@@ -164,6 +164,8 @@ export interface InputHandoffSnapshot {
    * Older clients ignore it and still show `agentControlled` and skip.
    */
   agentPicture?: true;
+  /** A Host-owned account check can open the scan view and confirm completion. */
+  accountVerification?: true;
   /** Remote controllers may submit values through the signed v3 exchange. */
   remoteInput?: true;
   /** The request has settled; kept briefly for terminal feedback only. */
@@ -186,6 +188,8 @@ export interface InputHandoffSnapshot {
    * know this, and for devices without a live view.
    */
   directSignIn?: true;
+  /** Prefer the verified logical form on remote clients; local sign-in still uses its original window. */
+  preferRemoteForm?: true;
   /**
    * The step only shows a sign-in code and a link to open (device-code
    * sign-in). The owner copies the code and opens the link on their own

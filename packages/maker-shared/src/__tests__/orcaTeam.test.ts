@@ -3,8 +3,12 @@ import {
   DEFAULT_ORCA_COLLABORATION_SETTINGS,
   buildDraftWorkerInitialTask,
   createWorkerLabel,
+  getActiveOrcaWorkersForLead,
+  indexActiveOrcaWorkersByLead,
+  normalizeOrcaDeviceId,
   normalizeOrcaWorkerLabel,
   normalizeOrcaWorkerRole,
+  orcaLeadSessionKey,
   orcaWorkerSessionTitle,
   orcaWorkerSlotState,
   parseOrcaCollaborationSettings,
@@ -84,6 +88,17 @@ describe('orca team shared helpers', () => {
     expect(partial).not.toHaveProperty('executionDevice');
   });
 
+  // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md 第二期「协作」)：手机据此显示引擎，而不是占位的 Claude Code。
+  // 最小失败输入：agentKind=acp 带 providerId；内置 Worker 带 providerId 也不算插件引擎。unit。
+  it('marks a plugin engine Worker by its engine, and only that kind', () => {
+    const [engine, builtIn] = parseOrcaTeamWorkers([
+      { id: 'w-1', sessionId: 's-1', session: { agentKind: 'acp', providerId: 'acp-plugin:dsh-acp:dsh', model: 'dsh-pro' } },
+      { id: 'w-2', sessionId: 's-2', session: { agentKind: 'codex', providerId: 'openai' } },
+    ]);
+    expect(engine!.pluginEngineProviderId).toBe('acp-plugin:dsh-acp:dsh');
+    expect(builtIn).not.toHaveProperty('pluginEngineProviderId');
+  });
+
   it('parses worker records defensively and drops rows without identity', () => {
     const workers = parseOrcaTeamWorkers([
       {
@@ -158,5 +173,49 @@ describe('orca team shared helpers', () => {
   it('reads the Lead id from a team record', () => {
     expect(readOrcaTeamLeadSessionId({ leadSessionId: 'lead-1' })).toBe('lead-1');
     expect(readOrcaTeamLeadSessionId(null)).toBeNull();
+  });
+
+  // 规则：task-inbox.md / archive-pauses-automations.md；统一索引同机与跨设备活跃协同 Worker。
+  it('indexes active local, remote and retained Orca workers per device-scoped lead and skips released or archived rows', () => {
+    const index = indexActiveOrcaWorkersByLead(
+      [
+        { id: 'w-local', status: 'active', orcaRole: 'worker', orcaLeadSessionId: 'lead-1' },
+        { id: 'w-archived', status: 'archived', orcaRole: 'worker', orcaLeadSessionId: 'lead-1' },
+        { id: 'w-other-dev', status: 'active', deviceLinkDeviceId: 'dev-b', orcaRole: 'worker', orcaLeadSessionId: 'lead-1' },
+        {
+          id: 'w-remote-for-local',
+          status: 'active',
+          deviceLinkDeviceId: 'dev-b',
+          orcaRemoteLead: { leadDeviceId: 'dev-self', leadSessionId: 'lead-1' },
+        },
+        {
+          id: 'w-released',
+          status: 'active',
+          deviceLinkDeviceId: 'dev-b',
+          orcaRemoteLead: { leadDeviceId: 'dev-self', leadSessionId: 'lead-1', releasedAt: 1700000000000 },
+        },
+      ],
+      {
+        selfDeviceId: 'dev-self',
+        retainedProjections: [
+          ['lead-1', null, [
+            { sessionId: 'w-local', deviceId: null },
+            { sessionId: 'w-retained', deviceId: 'dev-c' },
+          ]],
+        ],
+      },
+    );
+
+    expect(normalizeOrcaDeviceId('dev-self', 'dev-self')).toBeNull();
+    expect(orcaLeadSessionKey('lead-1', 'dev-self', 'dev-self')).toBe(orcaLeadSessionKey('lead-1', null, 'dev-self'));
+    expect(getActiveOrcaWorkersForLead(index, { id: 'lead-1' }, 'dev-self')).toEqual([
+      { sessionId: 'w-local', deviceId: null },
+      { sessionId: 'w-remote-for-local', deviceId: 'dev-b' },
+      { sessionId: 'w-retained', deviceId: 'dev-c' },
+    ]);
+    // Device-scoped isolation: dev-b's same-ID lead sees only dev-b's worker.
+    expect(getActiveOrcaWorkersForLead(index, { id: 'lead-1', deviceLinkDeviceId: 'dev-b' }, 'dev-self')).toEqual([
+      { sessionId: 'w-other-dev', deviceId: 'dev-b' },
+    ]);
   });
 });

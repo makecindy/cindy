@@ -3,10 +3,30 @@
  * 手机读不到另一个账号的电脑，所以由被控电脑代读分享者电脑的 `maker:provider:list` 后转交；
  * 身份只有昵称与头像，目录里分享者的账号身份(登录邮箱等)在每一跳都去掉。
  */
+import { providerShareFavoriteSource, type ProviderShareFavoriteSource } from './modelFavorites.js';
 import { PROVIDER_RUNNING_TURNS_FIELD } from './providerGroup.js';
 import { providerShareIdentifier, sharedTaskDeviceId } from './protocol.js';
 
 export const PROVIDER_SHARE_RECEIVED_CATALOGS_CHANNEL = 'maker:provider-share:received-catalogs';
+
+/**
+ * 一条收到的分享此刻在选择器里怎么出现。Desktop(本机与远控)、Mobile、收藏与额度入口共用这一条，
+ * 不再各自判断在线状态(2026-11-23 用户裁决「保留并标注」)：
+ * - `paused`：已暂停，不列(任务正用着时由调用方保留一行)；
+ * - `available`：分享者电脑在线，或有已授权的待机副本在线；
+ * - `offline`：分享者电脑暂时离线。仍然列出并标注「暂时离线」，不因在线状态来回变化而一会儿有一会儿无；
+ *   能否选用、目录是否可信仍按目录自身的信任期与执行时的实时校验判断。
+ */
+export type ProviderSharePickerState = 'available' | 'offline' | 'paused';
+
+export function providerSharePickerState(share: {
+  status: string;
+  hostOnline?: boolean;
+  standbyOnline?: boolean;
+}): ProviderSharePickerState {
+  if (share.status !== 'active') return 'paused';
+  return share.hostOnline === true || share.standbyOnline === true ? 'available' : 'offline';
+}
 
 /**
  * 分享者电脑的名字不给受邀者(provider-sharing.md §6)：生成链接与转交已收到的分享时，
@@ -76,6 +96,11 @@ export interface ProviderShareReceivedCatalog {
   owner: { displayName: string; avatarUrl: string | null };
   status: 'active' | 'paused';
   hostOnline: boolean;
+  /**
+   * 收藏身份（分享、成员、供应商与归属区域）。只用于写成被控电脑收藏里的来源键，
+   * 不是凭证，也不授予运行权限。旧客户端忽略；没有该字段时不得用别的成员身份代替。
+   */
+  favoriteSource?: ProviderShareFavoriteSource;
   /** 分享者电脑上 `maker:provider:list` 的结果(只含分享的那个供应商)；读不到时为 null。 */
   catalog: unknown;
 }
@@ -173,10 +198,13 @@ export function scrubSharedProvider<T>(provider: T): T {
   const groupSize = readProviderShareGroupSize(provider);
   const groupStatus = readProviderShareGroupStatus(provider);
   const guestRunning = readProviderShareGuestRunning(provider);
-  const { subscriptionAccount, openAiAccount, ...fields } = provider as Record<string, unknown>;
+  const { subscriptionAccount, openAiAccount, subscriptionPoolAlias: _poolAlias, ...fields } = provider as Record<string, unknown>;
+  delete fields.subscriptionPoolTarget;
+  delete fields.subscriptionAccountKeys;
   delete fields.group;
-  // Sharing a gateway must not disclose the owner's organization identity.
-  if (fields.id === 'xd') delete fields.logoKind;
+  delete fields.customIcon;
+  // Gateway and organization artwork must not disclose the owner's organization identity.
+  if (fields.id === 'xd' || fields.source === 'organization' || fields.logoKind === 'personal' || fields.logoKind === 'work' || (typeof fields.logoKind === 'string' && fields.logoKind.startsWith('mark-'))) delete fields.logoKind;
   delete fields[PROVIDER_RUNNING_TURNS_FIELD];
   delete fields[PROVIDER_SHARE_GROUP_SIZE_FIELD];
   delete fields[PROVIDER_SHARE_GROUP_STATUS_FIELD];
@@ -221,6 +249,35 @@ function avatar(value: unknown): string | null {
   }
 }
 
+/** 可选收藏身份必须就是这一条分享。不合法时丢掉字段，保留目录。 */
+function readFavoriteSource(
+  item: Record<string, unknown>,
+  shareId: string,
+  providerId: string,
+): ProviderShareFavoriteSource | undefined {
+  const raw = item.favoriteSource;
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const source = raw as Record<string, unknown>;
+  const owner = source.owner && typeof source.owner === 'object' && !Array.isArray(source.owner)
+    ? source.owner as Record<string, unknown> : {};
+  const region = owner.region === 'cn' || owner.region === 'global' ? owner.region : undefined;
+  if (!region) return undefined;
+  try {
+    const favoriteSource: ProviderShareFavoriteSource = {
+      shareId: providerShareIdentifier(source.shareId),
+      memberId: providerShareIdentifier(source.memberId),
+      providerId: text(source.providerId, 256),
+      owner: { region },
+    };
+    if (favoriteSource.shareId !== shareId || favoriteSource.providerId !== providerId) return undefined;
+    providerShareFavoriteSource(favoriteSource);
+    return favoriteSource;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 严格解析；单条不合法时丢弃这一条，不影响其他分享。 */
 export function parseProviderShareReceivedCatalogs(value: unknown): ProviderShareReceivedCatalog[] {
   const shares = value && typeof value === 'object' && !Array.isArray(value) ? (value as { shares?: unknown }).shares : undefined;
@@ -233,15 +290,18 @@ export function parseProviderShareReceivedCatalogs(value: unknown): ProviderShar
       const shareId = providerShareIdentifier(item.shareId);
       if (item.agentDeviceId !== `share:${shareId}`) continue;
       const owner = item.owner && typeof item.owner === 'object' ? item.owner as Record<string, unknown> : {};
+      const providerId = text(item.providerId, 256);
+      const favoriteSource = readFavoriteSource(item, shareId, providerId);
       out.push({
         agentDeviceId: `share:${shareId}`,
         shareId,
-        providerId: text(item.providerId, 256),
+        providerId,
         providerLabel: scrubProviderShareLabel(text(item.providerLabel, 256)),
         deviceName: text(sharedTaskDeviceId(item.deviceName), 256),
         owner: { displayName: text(owner.displayName, 128), avatarUrl: avatar(owner.avatarUrl) },
         status: item.status === 'paused' ? 'paused' : 'active',
         hostOnline: item.hostOnline === true,
+        ...(favoriteSource ? { favoriteSource } : {}),
         catalog: scrubSharedProviderCatalog(item.catalog ?? null),
       });
     } catch {

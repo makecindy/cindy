@@ -1,0 +1,65 @@
+{
+  "node": "v22.22.3",
+  "platform": "darwin",
+  "samples": 50,
+  "receiptBytes": 497,
+  "scope": "Isolated production Node Host tool assembly; real receipt IO, fake DB port; excludes app startup and GhostManager projection.",
+  "idleControl": {
+    "elapsedMs": 2002.3704999999995,
+    "cpuMs": 17.178,
+    "cpuPercentOfOneCore": 0.8578831939443776,
+    "heapUsedDelta": 34520,
+    "rssDelta": -67567616
+  },
+  "assemblyMs": 5.27612500000032,
+  "resourcesBefore": [],
+  "resourcesAfter": [],
+  "idleUnusedAssembly": {
+    "elapsedMs": 2001.522,
+    "cpuMs": 48.213,
+    "cpuPercentOfOneCore": 2.408816890346446,
+    "heapUsedDelta": 21256,
+    "rssDelta": -179060736
+  },
+  "calls": [
+    {
+      "tool": "terminal_list",
+      "readsPerCall": [
+        29
+      ],
+      "p50Ms": 5.4812089999995806,
+      "p95Ms": 10.69512500000019,
+      "meanReceiptMsPerCall": 2.714018319999377
+    },
+    {
+      "tool": "host_services",
+      "readsPerCall": [
+        27
+      ],
+      "p50Ms": 5.039667000000918,
+      "p95Ms": 9.937082999998893,
+      "meanReceiptMsPerCall": 2.713461639999914
+    },
+    {
+      "tool": "storage_request",
+      "op": "providers",
+      "readsPerCall": [
+        28
+      ],
+      "p50Ms": 5.246208000000479,
+      "p95Ms": 9.62945800000125,
+      "meanReceiptMsPerCall": 2.623549939999539
+    },
+    {
+      "tool": "storage_request",
+      "op": "call",
+      "readsPerCall": [
+        34
+      ],
+      "p50Ms": 5.605000000001382,
+      "p95Ms": 11.672833000000537,
+      "meanReceiptMsPerCall": 3.0059314400006043
+    }
+  ],
+  "resourcesAfterClose": []
+}

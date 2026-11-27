@@ -1,5 +1,5 @@
 import { getActiveGlobalTabId, requestRevealSessionTab, setActiveGlobalTabId } from '../globalTabs';
-import { addTab, ensureHydrated, getBucket, setActiveTab } from '../store';
+import { addTab, ensureHydrated, getBucket, patchTabState, setActiveTab } from '../store';
 import type { PluginTaskTabState } from '../plugins/plugin-task';
 import { getTabGroup, setGroupActiveTabId } from '../tabGroups';
 import { isTabPoppedOut } from '@/lib/sidebarTabWindowState';
@@ -14,11 +14,16 @@ import { requestRightSidebarVisibility } from './sidebarCommands';
 export async function openPluginTaskTab(
   sessionId: string,
   instanceId: string,
-  options: { userInitiated?: boolean } = {},
+  options: { userInitiated?: boolean; resourceViewId?: string; resourceInput?: Record<string, unknown>; resourceWorkingDir?: string } = {},
 ): Promise<void> {
   const userInitiated = options.userInitiated !== false;
+  const resource = {
+    ...(options.resourceViewId ? { resourceViewId: options.resourceViewId } : {}),
+    ...(options.resourceInput ? { resourceInput: options.resourceInput } : {}),
+    ...(options.resourceWorkingDir ? { resourceWorkingDir: options.resourceWorkingDir } : {}),
+  };
   const route = await routeSidebarCommand(
-    { type: 'open-plugin-task', sessionId, instanceId },
+    { type: 'open-plugin-task', sessionId, instanceId, ...resource },
     { userInitiated },
   );
   if (route === 'attached') {
@@ -27,13 +32,17 @@ export async function openPluginTaskTab(
     const existing = bucket.tabs.find(
       (tab) =>
         tab.kind === 'plugin-task' &&
-        (tab.state as PluginTaskTabState | null)?.instanceId === instanceId,
+        (tab.state as PluginTaskTabState | null)?.instanceId === instanceId &&
+        (tab.state as PluginTaskTabState | null)?.resourceViewId === options.resourceViewId,
     );
     let tabId = existing?.id;
     if (existing) {
+      if (options.resourceViewId || options.resourceInput) {
+        await patchTabState(sessionId, existing.id, state => ({ ...(state as PluginTaskTabState), resourceInput: options.resourceInput ?? {}, resourceWorkingDir: options.resourceWorkingDir }));
+      }
       await setActiveTab(sessionId, existing.id, { userInitiated });
     } else {
-      tabId = (await addTab(sessionId, 'plugin-task', { instanceId } satisfies PluginTaskTabState))
+      tabId = (await addTab(sessionId, 'plugin-task', { instanceId, ...resource } satisfies PluginTaskTabState))
         .id;
     }
     if (tabId) {

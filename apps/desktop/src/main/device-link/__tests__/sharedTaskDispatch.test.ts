@@ -16,6 +16,18 @@ function capture(): SharedTaskPeerCapture {
 }
 afterEach(() => { setSharedTaskQueueReader(null); setSharedTaskInteractionReader(null); });
 describe('sharedTask dispatch scope', () => {
+  it('admits only current repository differences for the active shared task', () => {
+    const invoke = (op: string, sessionId: string, source?: string) =>
+      assertSharedTaskInvoke(capture(), { channel: 'git-review:remote-op', args: [{ op, payload: { sessionId, source } }] });
+    expect(() => invoke('get', 'task')).not.toThrow();
+    expect(() => invoke('file-diff', 'task', 'staged')).not.toThrow();
+    expect(() => invoke('file-diff', 'task', 'unstaged')).not.toThrow();
+    expect(() => invoke('get', 'other')).toThrow('PERMISSION_DENIED');
+    expect(() => invoke('file-diff', 'task', 'commit')).toThrow('PERMISSION_DENIED');
+    for (const op of ['stage', 'commits', 'markdown-preview', 'image-preview', 'turn-get']) {
+      expect(() => invoke(op, 'task')).toThrow('PERMISSION_DENIED');
+    }
+  });
   it('reads subagent context only through the shared parent task', () => {
     for (const channel of ['local-db:subagent-runs:list', 'local-db:subagent-runs:detail', 'local-db:subagent-runs:transcript']) {
       const request = { sessionId: 'task', provider: 'pi', runIdOrAlias: 'child' };
@@ -123,6 +135,17 @@ describe('sharedTask dispatch scope', () => {
       'plan-1': { sessionId: 'task', kind: 'plan_review' },
     };
     setSharedTaskInteractionReader((requestId) => interactions[requestId]);
+    for (const confirmed of [true, false]) {
+      // The generic Agent reader never contains host-owned issue confirmations.
+      // Neither a host-only id nor a forged generic id may accept/replay them.
+      for (const requestId of ['issue-1', 'permission-1']) {
+        for (const phase of ['invoke', 'result'] as const) {
+          expect(() => assertSharedTaskInvoke(capture(), {
+            channel: 'maker:resolve-interaction', args: [requestId, { kind: 'issue_confirm', confirmed }],
+          }, undefined, phase)).toThrow('PERMISSION_DENIED');
+        }
+      }
+    }
     for (const [requestId, decision] of [
       ['permission-1', { kind: 'permission', behavior: 'allow' }],
       ['question-1', { kind: 'ask_user_question', answers: { choice: 'A' } }],

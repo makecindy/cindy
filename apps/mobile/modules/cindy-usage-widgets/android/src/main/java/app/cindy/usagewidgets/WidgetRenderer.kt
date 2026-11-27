@@ -170,6 +170,13 @@ object WidgetRenderer {
       val numSize = if (s.kind == "balance") size - 2 else size
       val ink = if (s.stale) withAlpha(pal.ink, 0.5f) else pal.ink
       val unit = s.unit
+      if (s.reserve && unit != null) {
+        val unitStyle = sys(unitSize, if (s.stale) withAlpha(pal.ink3, 0.5f) else pal.ink3)
+        val unitTop = bottom - p.lineHeight(unitStyle)
+        p.fitText(value, x, unitTop - 1f - p.lineHeight(num(numSize, ink)), num(numSize, ink), width, Align.Center, minScale = 0.7f)
+        p.fitText(unit, x, unitTop, unitStyle, width, Align.Center, minScale = 0.7f)
+        return
+      }
       var scale = 1f
       val natural = p.textWidth(value, num(numSize, ink)) + (if (unit != null) 1f + p.textWidth(unit, num(unitSize, ink)) else 0f)
       if (natural > width) scale = max(0.7f, width / natural)
@@ -197,17 +204,17 @@ object WidgetRenderer {
 
     fun column(
       s: WidgetSource, x: Float, top: Float, width: Float, tubeWidth: Float, tubeHeight: Float,
-      valueSize: Float, unitSize: Float, nameSize: Float = 10.5f, whenSize: Float = 10f, stacked: Boolean = false, coarseWhen: Boolean = false,
+      valueSize: Float, unitSize: Float, nameSize: Float = 10.5f, whenSize: Float = 10f, stacked: Boolean = false, coarseWhen: Boolean = false, creditHeaderHeight: Float = 0f,
     ) {
       var y = top
-      sourceValue(s, x, y + valueSize + 2f, width, valueSize, unitSize)
-      y += valueSize + 2f + (if (stacked) 6f else 4f)
+      sourceValue(s, x, y + valueSize + 2f + (if (s.reserve && s.unit != null) creditHeaderHeight else 0f), width, valueSize, unitSize)
+      y += valueSize + 2f + creditHeaderHeight + (if (stacked) 6f else 4f)
       tube(s, x + (width - tubeWidth) / 2, y, tubeWidth, tubeHeight)
       y += tubeHeight + (if (stacked) 8f else 6f)
       val nameStyle = sys(nameSize, pal.ink2)
       if (stacked) {
         val logo = nameSize + 1.5f
-        p.logo(s.logo, s.monogram, x + (width - logo) / 2, y, logo, pal.ink)
+        p.logo(s.displayLogo, s.monogram, x + (width - logo) / 2, y, logo, pal.ink)
         y += logo + 4f
         p.fitText(s.name, x + 2, y, nameStyle, width - 4, Align.Center)
         y += p.lineHeight(nameStyle)
@@ -215,7 +222,7 @@ object WidgetRenderer {
         val textWidth = min(p.textWidth(s.name, nameStyle), width - 13f)
         val left = x + (width - (10f + 3f + textWidth)) / 2
         val rowHeight = max(10f, p.lineHeight(nameStyle))
-        p.logo(s.logo, s.monogram, left, y + (rowHeight - 10f) / 2, 10f, pal.ink)
+        p.logo(s.displayLogo, s.monogram, left, y + (rowHeight - 10f) / 2, 10f, pal.ink)
         p.fitText(s.name, left + 13f, y + (rowHeight - p.lineHeight(nameStyle)) / 2, nameStyle, textWidth)
         y += rowHeight
       }
@@ -229,13 +236,14 @@ object WidgetRenderer {
       tubeWidth: Float, tubeHeight: Float, maxTubeHeight: Float, valueSize: Float, unitSize: Float,
       nameSize: Float, whenSize: Float, stacked: Boolean, coarseWhen: Boolean,
     ) {
-      val fixed = columnHeight(valueSize, nameSize, whenSize, stacked)
-      val tubeH = (bottom - top - fixed).coerceIn(min(tubeHeight, 32f), min(maxTubeHeight, tubeWidth * 8))
+      val creditHeaderHeight = if (list.any { it.reserve && it.value != null && it.unit != null }) p.lineHeight(sys(unitSize, pal.ink3)) + 1f else 0f
+      val fixed = columnHeight(valueSize, nameSize, whenSize, stacked) + creditHeaderHeight
+      val tubeH = (bottom - top - fixed).coerceIn(max(8f, min(tubeHeight, 32f) - creditHeaderHeight), min(maxTubeHeight, tubeWidth * 8))
       val colWidth = (right - left - gap * (list.size - 1)) / list.size
       // Taller than the tubes can sensibly grow (a tall, narrow cell): center the block instead of leaving the top empty.
       val blockTop = top + max(0f, (bottom - top - fixed - tubeH) / 2)
       list.forEachIndexed { i, s ->
-        column(s, left + i * (colWidth + gap), blockTop, colWidth, tubeWidth, tubeH, valueSize, unitSize, nameSize, whenSize, stacked, coarseWhen)
+        column(s, left + i * (colWidth + gap), blockTop, colWidth, tubeWidth, tubeH, valueSize, unitSize, nameSize, whenSize, stacked, coarseWhen, creditHeaderHeight)
       }
     }
 
@@ -276,7 +284,13 @@ object WidgetRenderer {
         tube(s, x + 2, top, 12f, tubeHeight)
         val tx = x + 2 + 12f + 7f
         val width = colWidth - (tx - x) - 2f
-        var y = (h - stack) / 2
+        val extra = if (s.reserve && s.value != null && s.unit != null) p.lineHeight(sys(10f, pal.ink3)) + 1f else 0f
+        val textHeight = stack + extra
+        val textScale = min(1f, (h - 8f) / textHeight)
+        p.canvas.save()
+        p.canvas.scale(textScale, textScale, tx, h / 2)
+        val textWidth = width / textScale
+        var y = (h - textHeight) / 2
         val value = s.value
         if (value != null) {
           val ink = if (s.stale) withAlpha(pal.ink, 0.5f) else pal.ink
@@ -284,15 +298,21 @@ object WidgetRenderer {
           val unit = s.unit
           val unitStyle = num(10f, pal.ink3)
           val baseline = y + p.ascent(numStyle)
-          p.textAt(value, tx, baseline, numStyle)
-          if (unit != null) p.textAt(unit, tx + p.textWidth(value, numStyle) + 1f, baseline, unitStyle)
+          if (s.reserve && unit != null) {
+            p.fitText(value, tx, y, numStyle, textWidth, minScale = 0.7f)
+            p.fitText(unit, tx, y + p.lineHeight(valueStyle) + 1f, sys(10f, pal.ink3), textWidth, minScale = 0.7f)
+          } else {
+            p.textAt(value, tx, baseline, numStyle)
+            if (unit != null) p.textAt(unit, tx + p.textWidth(value, numStyle) + 1f, baseline, unitStyle)
+          }
         } else {
           p.fitText(s.label ?: "—", tx, y, sys(10.5f, pal.ink2, Weight.Semibold), width)
         }
-        y += p.lineHeight(valueStyle)
-        p.fitText(s.name, tx, y, nameStyle, width)
+        y += p.lineHeight(valueStyle) + extra
+        p.fitText(s.name, tx, y, nameStyle, textWidth)
         y += p.lineHeight(nameStyle)
-        p.fitText(f.whenText(s, coarse = true), tx, y, sys(9.5f, pal.level(f.resetLevel(s)) ?: pal.ink2, Weight.Medium), width)
+        p.fitText(f.whenText(s, coarse = true), tx, y, sys(9.5f, pal.level(f.resetLevel(s)) ?: pal.ink2, Weight.Medium), textWidth)
+        p.canvas.restore()
       }
     }
 
@@ -367,7 +387,7 @@ object WidgetRenderer {
       val title = sys(size, pal.ink, Weight.Semibold)
       val plan = sys(size - 2.5f, pal.ink3, Weight.Medium)
       val rowHeight = max(size, p.lineHeight(title))
-      p.logo(s.logo, s.monogram, x, y + (rowHeight - size) / 2, size, pal.ink)
+      p.logo(s.displayLogo, s.monogram, x, y + (rowHeight - size) / 2, size, pal.ink)
       var left = x + size + 5
       val titleWidth = min(p.textWidth(d.title, title), width - (left - x))
       p.fitText(d.title, left, y + (rowHeight - p.lineHeight(title)) / 2, title, titleWidth)

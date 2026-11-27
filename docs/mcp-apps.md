@@ -21,6 +21,20 @@ Codex 原生未必自行发送 MCP 取消；服务仍须限制长操作，并区
 
 ## 插件的交互页面
 
+具名页面与 Cindy 原生位置的增量见随包作者手册
+[插件界面扩展](../apps/desktop/resources/system-skills/cindy-plugin-creator/references/plugin-host-ui.md)。
+`mcpApps.host` 引用同一个 MCP Apps 资源，复用原 Host/SDK/隔离/工具审批；
+支持真实全局/任务来源、原生入口、可选正文展示和按批准开放的宿主操作。
+这一增量尚未发布，不能套用下文历史 SDK 版本下限。新入口目前仅 Desktop 本机；原远程和手机卡片不变。
+
+原生控件沿既有插件管子和窗口 IPC 更新；窗口合并实际消费需求，先有消费者才构造、推送状态。
+`message.menu` 将已批准动作加入消息「更多」菜单；菜单关闭时不订阅这些菜单项，打开后才接状态，关闭释放。
+页面状态沿标准 host context，普通历史消息只查本地候选，不增加逐消息 SQL、IPC 或插件渲染调用。
+入口旁页面使用 `presentation:"popover"`，沿同一个 MCP App presenter，关闭或不可见即释放。
+草稿选区替换使用原编辑器与 revision；区域显隐使用原布局和面板停放机制，释放插件后恢复。
+外观资源与可写字段逐项批准，经原设置所有者应用；字体按资源缓存。
+实现回归见 `nativeState.test.ts`、`ghostNativeUi.test.ts`、`PluginUiContributions.test.tsx`、`MessageActionBar.test.tsx` 与 `hostUi.test.ts`。
+
 首个支持版本为 `0.1.122-beta`（`PLUGIN_UI_MIN_CINDY_VERSION`）。声明交互页面的包须填写
 不低于它的 `minCindyVersion`；`0.1.122-beta.1`、`0.1.122` 满足，`0.1.121`、`0.1.121-beta` 不满足。
 该下限用于打包校验和市场兼容版本投影，不新增客户端安装闸门。
@@ -52,7 +66,12 @@ CSP 域名不得超出 `network.hosts`。旧 Host 保留 v3 顶层未知 `mcpApp
 后，下次调用即可显示页面，不改变当前任务工具注册。旧 Host 不识别 visibility，作者不能
 依赖旧 Host 隐藏工具。停用、卸载、更新、账号切换与睡眠撤销页面；晚到的调用结果不再交付。
 
-卡片由宿主显示插件名与信任等级。页面进度与本机文件只读地址见下文。
+卡片由宿主显示插件名；仅第三方来源、本地安装、来源未知追加提醒色标签。来源来自宿主的安装记录，
+不是插件自报名称或签名等级；Cindy 官方、组织市场与公开插件市场不追加标签。旧卡片缺来源时只显示插件名。
+非插件 MCP 卡片显示用户在设置中起的服务名与「自定义 MCP」，名称来自 Host 配置快照，
+不使用工具名、服务自报名称或 ID；改名不追改旧卡片。没有名称记录的旧卡片保留工具标题/工具名与该标签。
+公开历史只保留这项展示名，组织插件的来源只保留 kind、不发送 namespace；不改变详情和安装确认中的来源信息。
+插件详情中的来源与签名分别展示。页面进度与本机文件只读地址见下文。
 同账号手机与远程 Desktop 复用 plugins 远程管理事务和现有插件确认界面。Host 快照中的
 可选 `uiCapabilityApproval:true` 表示支持；`approve-ui` / `defer-ui` 携带 `uiConsentVersion:1`，
 与操作 fingerprint 绑定。三端使用同一份页面、域名及页面可调用工具事实（含默认 model+app）。
@@ -72,10 +91,21 @@ CSP 域名不得超出 `network.hosts`。旧 Host 保留 v3 顶层未知 `mcpApp
 
 ### 页面尺寸与操作确认
 
-内联高度范围为 80–5000 像素，超出部分在卡内滚动。离屏页面仍卸载，边缘留 80 像素缓冲；
-卸载撤回该页面待确认的操作。仅宽度或尺寸上限变化会更新尺寸上下文，退出全屏重新发送内联尺寸。
-短时间连续增高或来回振荡会锁定高度并记日志，宽度变化后重新测量。不要同时使用 `100vh`
-和 SDK `autoResize`；它会把 Host 分配的高度再次当内容高度反馈。内容多时使用全屏。
+对话卡片使用 28px 高、12px 字的紧凑标题栏，保留边框；内容高度范围为 80–5000 像素，
+通过 `containerDimensions: {width, maxHeight}` 通知页面。资源可以声明可选的 `initialHeight`（80–720 CSS px）作为首帧占位，宿主仍以页面就绪后上报的实际尺寸为准。短时间连续增高或来回振荡的保护仅用于内容高度模式。
+不要在此模式同时使用 `100vh` 和 SDK `autoResize`，以免分配高度又被当作内容高度反馈。
+本机卡片离屏保留、挂起与释放沿既有生命周期；远程卡片离屏即释放，卸载撤回待确认操作。
+
+桌面对话卡片加载完成后，若 Host 和 App 都支持 fullscreen，标题栏显示全屏按钮；退出按钮在同一位置，Esc 退出。
+`mcpApps.ui.resources[].hostFullscreenButton: false` 只隐藏宿主按钮，不限制插件主动调用 `requestDisplayMode`。
+自定义 MCP 使用资源 `_meta["cindy/host-fullscreen-button"]: false`；缺省为 true。
+旧执行端缺少明确按钮信息时，新查看端隐藏按钮。手机只有 inline，不显示全屏按钮。
+
+右侧栏页签（含分离侧栏窗口）不重复显示标题，页面铺满且无卡片边框与外边距；加载与错误在页面区域提示。
+页签和全屏使用固定 `containerDimensions: {width, height}`，尺寸变化沿现有 host-context 通道更新；
+隐藏或尺寸为 0 时不发送新尺寸，固定尺寸不使用自动增高锁定。页面需自行处理内部滚动，不能关掉页面自身滚动。
+入口旁弹层和侧栏折叠区同样隐藏标题，但仍按内容高度。面板的例外来源只出现在页签或入口悬停提示里。
+`message.body`、`tool.body`、`settings.section` 保留紧凑标题与内容高度。
 
 插件页面与自定义 MCP 页面操作在卡片标题下及输入框上方浮层显示同一个待确认请求；
 浮层不挤压对话区，多个请求合并呈现。页面调用与 AI 调用同一工具时审批一致，由任务权限模式决定。
@@ -156,7 +186,7 @@ App 的完整 CSP，proxy 的资源地址由宿主固定，不能被普通桥消
 同一个 WebView；卡片离屏或实际页面卸载后，先将内容移回屏幕外 host，保留消息回调，
 收到 teardown 响应或满 1 秒后移除 WebView、停止两项资源服务并清理专属缓存。退后台
 关闭旧 View，原生资源最多保留本次后台代次 1 秒；回前台打开新 View，不重放工具调用。
-这改变两端 runtime fingerprint，必须有针对冷更的明确确认并发布原生新包；不能仅 OTA 交付。
+这改变两端 runtime fingerprint，必须按冷更边界在 PR 中写明原因、存量装机影响与发版节奏，并发布原生新包；不能仅 OTA 交付。
 旧安装包缺少 App 承载能力时保留已保存文本并提示更新手机，不回退到同源或 opaque-origin
 `srcdoc`。下次进程首次打开时清理中断遗留的本功能随机目录。iOS 使用非持久 WebView
 数据存储；Android 不使用会清空其他 View cookie 的 incognito 开关，只删除本 View 的
@@ -174,10 +204,34 @@ iOS 另保留显式顶层请求拦截；可信 proxy 同时检查实际 `event.o
 
 ## 接入
 
-在 Cindy 设置中添加普通自定义 MCP，选择 Streamable HTTP 或 SSE 地址及所需认证。
-凭证留在 Main 的现有密钥存储中，不进入 iframe。Claude Code、Codex、Pi 都通过同一
-Host facade 调用自定义 MCP；支持 Apps 的工具执行时生成独立卡片，历史卡片可重新连接。
-不支持 UI 扩展的普通 MCP 保持文本工具使用方式。
+### 配置自定义 MCP 服务器
+
+在 Cindy 桌面端打开「设置 → 工具 → 外部工具」，选择「添加 MCP 服务器」。填写显示名称、
+传输类型（Streamable HTTP 或 SSE）和端点 URL，例如 `https://mcp.example.org/mcp`。
+需要认证时，在表单中填写 Bearer token 或服务要求的请求头。只有本地命令和参数的
+stdio 服务无法在这里启动，需要服务方先提供 Cindy 桌面端能访问的 HTTP 或 SSE 端点。
+
+也可以在本机桌面任务里请 Cindy 添加服务。助手用 `request_mcp_setup` 打开同一张表单，
+可预填名称、公开 URL 和传输类型。用户在表单内输入凭证并保存；取消会结束此次添加。
+远程任务或手机上无法打开此表单时，请在运行任务的桌面端设置中添加。
+
+### 外部配置管理工具能写到哪里？
+
+Cindy 当前没有供 magpie 等外部工具管理自定义 MCP 列表的全局 `mcp.json`、CLI 或公开本地 API。
+写入 Claude Code、Codex 或 Pi 的原生配置文件也不会更新 Cindy 设置中的列表。例如，本机 Claude Code
+任务可使用原生连接；Cindy 读取这些配置来识别重复连接，用户可在设置中选择保留的来源。
+
+外部工具可向用户
+展示服务名称、公开端点和传输类型，引导用户在上述表单中保存。请勿把凭证放进示例 URL 或聊天消息。
+
+桌面端将服务列表保存在当前账号的本地数据库中。Bearer token 单独保存在安全存储中，
+非空自定义请求头经 Electron `safeStorage` 加密后随配置入库。数据库属于应用内部存储，
+直接修改数据库或复制凭证文件均不属于受支持的配置方式。换电脑时可使用 Cindy 的
+[新设备配置迁移](product-rules/new-device-setup-migration.md)。请求头的保存方式详见[自定义 MCP 请求头](dev-rules/credentials-and-local-storage.md#自定义-mcp-请求头)。
+
+保存后，桌面端刷新 Claude Code、Codex 和 Pi 的工具列表；新建或重启的普通 Agent 会话使用更新后的配置。
+伙伴在本对话的配置表单中添加工具后，下一条消息就可以使用。三个引擎通过 Cindy 的 MCP Apps Host
+调用服务，凭证不会传给页面。普通 MCP 可直接提供文本工具；支持 Apps 的工具还可生成独立卡片，历史卡片可重新连接。
 
 App 发起的 `tools/call` 在 Host 到 MCP server 这一段有 30 分钟总时限；服务端进度不会
 延长这个总时限。Host 按单次请求映射进度 token，再将原始进度值、总量与消息转发给

@@ -1,6 +1,41 @@
+import type { TaskTag } from './taskTags.js';
 import { projectDraftSessionTitle } from './sessionTitle.js';
-import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
+import { collapseWorktreeDirForGrouping, sessionTaskProjectDirectory } from './worktreePaths.js';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from './cindyMakeFeature.js';
+
+/** Explicit search syntax is carried in query, so every UI uses the same parser. */
+export function parseConversationSearchQuery(query: string) {
+  const parts: string[] = query.match(/"[^"]*"|“[^”]*”|\S+/gu) ?? [];
+  const all = parts.includes('+');
+  const terms = parts.filter((part) => part !== '+').map((raw) => {
+    const quoted = (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1)
+      || (raw.startsWith('“') && raw.endsWith('”'));
+    return { raw, text: quoted ? raw.slice(1, -1) : raw, quoted };
+  }).filter((term) => term.text.length > 0);
+  return { all, terms, explicit: all || parts.some((part) => /^".*"$|^“.*”$/u.test(part)) };
+}
+
+export function setConversationSearchAll(query: string, all: boolean): string {
+  const { terms } = parseConversationSearchQuery(query);
+  return `${all ? '+ ' : ''}${terms.map((term) => term.raw).join(' ')}`;
+}
+
+export function matchExplicitConversationSearchText(
+  text: string,
+  parsed: ReturnType<typeof parseConversationSearchQuery>,
+): { score: number; indices: number[] } | null {
+  const indices = new Set<number>();
+  let matched = 0;
+  for (const term of parsed.terms) {
+    const expression = term.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const hit = new RegExp(expression, 'iu').exec(text);
+    if (!hit) continue;
+    matched++;
+    for (let offset = 0; offset < hit[0].length; offset++) indices.add(hit.index + offset);
+  }
+  if (!matched || (parsed.all && matched !== parsed.terms.length)) return null;
+  return { score: matched, indices: [...indices].sort((a, b) => a - b) };
+}
 
 /**
  * 任务搜索的跨端契约与纯合并函数。
@@ -52,10 +87,14 @@ export interface ConversationSearchFilters {
 export type ConversationSearchMatchKind = 'title' | 'content' | 'both';
 
 export interface ConversationSearchSessionSummary {
+  /** Optional for search responses from older hosts. */
+  tags?: TaskTag[];
   id: string;
   title: string;
   workingDir: string | null;
   projectDir?: string | null;
+  /** Display-only Buddy project membership; execution directories remain unchanged. */
+  taskProjectDir?: string;
   workspaceKind: ConversationSearchWorkspaceKind;
   agentKind: ConversationSearchAgentKind;
   status: ConversationSearchSessionStatus;
@@ -66,7 +105,7 @@ export interface ConversationSearchSessionSummary {
   companion?: {
     id: string;
     name: string;
-    role: 'canonical' | 'history';
+    role: 'canonical' | 'history' | 'channel';
     readOnly: boolean;
   };
   userSendAt: string | null;
@@ -104,12 +143,35 @@ export function conversationSearchTitle(title: string, unnamedLabel?: string | n
 }
 
 export interface ConversationSearchResponse {
+  /** Optional acknowledgement; older hosts interpret query as ordinary OR text. */
+  querySyntaxVersion?: 1;
   query: string;
   results: ConversationSearchResultItem[];
   vectorUsed: boolean;
   vectorSkipReason: string | null;
   poolCapped: boolean;
   remoteResults?: ConversationSearchResultItem[];
+}
+
+/** A legacy host cannot certify explicit syntax. Keep only independently
+ * provable title/message hits and disclose that its limited snippets may omit hits. */
+export function enforceExplicitConversationSearchResponse<Item extends ConversationSearchResultItem>(
+  response: Omit<ConversationSearchResponse, 'results' | 'remoteResults'> & { results: Item[]; remoteResults?: Item[] },
+  request: Pick<ConversationSearchRequest, 'query' | 'unnamedLabel'>,
+) {
+  const parsed = parseConversationSearchQuery(request.query);
+  if (!parsed.explicit || response.querySyntaxVersion === 1) return response;
+  const results = response.results.flatMap((item): Item[] => {
+    const title = matchExplicitConversationSearchText(conversationSearchTitle(item.session.title, request.unnamedLabel), parsed);
+    const sourceHits = item.contentHits?.length ? item.contentHits : item.contentHit ? [item.contentHit] : [];
+    const contentHits = sourceHits.filter((hit) => [hit.preview, hit.snippet?.replace(/<\/?mark>/g, '')]
+      .some((text) => text != null && matchExplicitConversationSearchText(text, parsed)));
+    if (!title && !contentHits.length) return [];
+    return [{ ...item, matchKind: title ? contentHits.length ? 'both' : 'title' : 'content',
+      titleMatchIndices: title?.indices ?? [], titleScore: title?.score ?? null,
+      contentHits, contentHit: contentHits[0] ?? null }];
+  });
+  return { ...response, results, vectorUsed: false, poolCapped: true };
 }
 
 const LAST_ACTIVITY_DAY_COUNTS: Record<
@@ -146,6 +208,7 @@ export function stampRemoteSearchResponse(
 ): ConversationSearchResponse {
   const results = Array.isArray(response?.results) ? response.results : [];
   return {
+    ...(response?.querySyntaxVersion != null ? { querySyntaxVersion: response.querySyntaxVersion } : {}),
     query: response?.query ?? '',
     vectorUsed: response?.vectorUsed === true,
     vectorSkipReason: response?.vectorSkipReason ?? null,
@@ -220,7 +283,7 @@ export function remoteIndexedSearchIgnoredWorkingDirs(
   const allowed = normalizeWorkingDirSet(workingDirs);
   if (allowed == null) return false;
   const results = Array.isArray(response?.results) ? response.results : [];
-  return results.some((item) => !matchesWorkingDirSet(item.session.projectDir ?? item.session.workingDir, allowed));
+  return results.some((item) => !matchesWorkingDirSet(sessionTaskProjectDirectory(item.session), allowed));
 }
 
 export function filterResultsByWorkingDirs(
@@ -243,7 +306,7 @@ export function filterResultsByRequestFilters(
     ...response,
     results: response.results.filter((item) => {
       if (!CINDY_MAKE_ENABLED && isCindyMakeSource(item.session.source)) return false;
-      if (!matchesWorkingDirSet(item.session.projectDir ?? item.session.workingDir, allowedDirs)) return false;
+      if (!matchesWorkingDirSet(sessionTaskProjectDirectory(item.session), allowedDirs)) return false;
       if (!matchesStatus(item.session.status, status)) return false;
       if (agentKind !== 'all' && item.session.agentKind !== agentKind) return false;
       if (activityCutoff !== null && sessionActivityMs(item.session) < activityCutoff) {

@@ -5,11 +5,13 @@
  * sends the result to the native helper. Every product sentence is decided here so the
  * Swift side never reasons about accounts, only renders.
  *
- * Wording rules: Cindy does not switch accounts on its own and has no default Codex
- * account, so nothing here may claim it does. Suggestions describe the data ("has the most
- * left", "resets Wednesday") and actions are explicit ("start a task with X").
+ * Suggestions describe the data ("has the most left", "resets Wednesday"). Starting a
+ * task selects a provider; its account pool still owns dispatch, so an account's detail
+ * must not promise that the new task will use that particular account.
  */
 
+import { isAntigravityProviderId } from '@cindy/maker-shared/branding';
+import { ANTIGRAVITY_LOGO } from './logos.js';
 import {
   QUOTA_CRIT_REMAINING_PERCENT,
   QUOTA_WARN_REMAINING_PERCENT,
@@ -38,17 +40,22 @@ import {
   type MenubarView,
 } from '../../shared/menubarQuota.js';
 
-export type MenubarHarness = 'claude-code' | 'codex' | 'pi';
-export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi' | 'opencode-go' | 'shared';
+export type MenubarHarness = 'claude-code' | 'codex' | 'pi' | 'acp';
+export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi' | 'opencode-go' | 'zhipu' | 'plugin' | 'shared';
 
 export interface MenubarWindowInput {
-  kind: 'session' | 'week' | 'scoped' | 'period';
-  /** Model name for scoped windows ("Fable"). */
+  kind: 'session' | 'week' | 'scoped' | 'period' | 'custom';
+  /** Model name for scoped windows ("Fable"), or plugin-provided label for custom windows. */
   label?: string | null;
   /** 0...100 used. */
   usedPercent: number;
   resetsAtMs: number | null;
   windowMinutes: number;
+}
+
+export interface MenubarCurrencyBalance {
+  currency: string;
+  amount: number;
 }
 
 export interface MenubarSubscriptionInput {
@@ -66,6 +73,8 @@ export interface MenubarSubscriptionInput {
   plan: string | null;
   /** Empty while the first read is still pending. */
   windows: MenubarWindowInput[];
+  /** Currency balances reported by a plugin engine (may accompany or replace percentage windows). */
+  balances?: readonly MenubarCurrencyBalance[];
   /** Codex extra credits; null when the account reports none. */
   credits: number | null;
   creditsUnlimited: boolean;
@@ -74,6 +83,8 @@ export interface MenubarSubscriptionInput {
   updatedAtMs: number | null;
   /** Identity keys used only to recognize one account read on two computers; never shown. */
   accountKeys?: readonly string[];
+  /** Account-pool projection; routing still selects an account within providerId. */
+  pooled?: boolean;
   /** A running task on this computer uses this account. */
   consuming?: boolean;
   /** Set when the account is signed in on another of the user's computers. */
@@ -151,6 +162,7 @@ export interface MenubarTaskInput {
   sessionId: string;
   title: string;
   harness: MenubarHarness;
+  logoSvg?: string;
   model: string;
   tokensToday: number;
   valueToday: number;
@@ -172,6 +184,7 @@ export interface MenubarUsageDeviceInput {
 }
 
 export interface MenubarUsageScopeInput {
+  currency?: 'USD' | 'CNY';
   daily: MenubarUsageScopeData['daily'];
   models: MenubarUsageScopeData['models'];
   devices: MenubarUsageDeviceInput[];
@@ -181,7 +194,7 @@ export interface MenubarUsageScopeInput {
 
 /** The models with the most tokens in the last 30 days; each day lists theirs, then everything else. */
 export interface MenubarModelSeries {
-  models: { name: string; harness: MenubarHarness }[];
+  models: { name: string; harness: MenubarHarness | 'auxiliary' }[];
   /** Value per day, aligned with `MenubarUsageInput.days`; `models.length + 1` entries, the rest last. */
   daily: number[][];
   /** Tokens per day, same shape as `daily`. */
@@ -223,13 +236,15 @@ const MIN_PACE_ELAPSED = 0.03;
 const ROOMY_CELL_LIMIT = 4;
 /** Settings' soft daily limit for a period quota: period total / 30 × 4.5 (a display hint, not a cap). */
 const DAILY_SOFT_LIMIT_FACTOR = 4.5;
-const FAMILY_ORDER: Record<MenubarFamily, number> = { claude: 0, codex: 1, grok: 2, kimi: 3, 'opencode-go': 4, shared: 5 };
+const FAMILY_ORDER: Record<MenubarFamily, number> = { claude: 0, codex: 1, grok: 2, kimi: 3, 'opencode-go': 4, zhipu: 5, plugin: 6, shared: 7 };
 const FAMILY_COLORS: Record<MenubarFamily, MenubarColor[]> = {
   claude: ['claude', 'claude2', 'claude3'],
   codex: ['codex'],
   grok: ['fill'],
   kimi: ['fill'],
   'opencode-go': ['fill'],
+  zhipu: ['fill'],
+  plugin: ['fill'],
   shared: ['fill'],
 };
 const HARNESS_ORDER: MenubarHarness[] = ['claude-code', 'codex', 'pi'];
@@ -400,6 +415,32 @@ class Builder {
     return `${currency === 'CNY' ? '¥' : '$'}${amount}`;
   }
 
+  /** Format an arbitrary ISO-4217 currency balance from a plugin engine. */
+  private currencyMoney(value: number, currency: string, exact = false): string {
+    if (currency === 'USD' || currency === 'CNY') {
+      return exact ? this.exactMoney(value, currency) : this.balanceMoney(value, currency);
+    }
+    try {
+      return new Intl.NumberFormat(this.input.locale, {
+        style: 'currency',
+        currency,
+        ...(exact
+          ? { minimumFractionDigits: 2, maximumFractionDigits: 2 }
+          : { maximumFractionDigits: value >= 100 ? 0 : 2 }),
+      }).format(value);
+    } catch {
+      return `${currency} ${value.toFixed(2)}`;
+    }
+  }
+
+  private validBalances(source: MenubarSubscriptionInput): MenubarCurrencyBalance[] {
+    return (source.balances ?? []).filter((row) => typeof row.currency === 'string' && Number.isFinite(row.amount));
+  }
+
+  private primaryBalance(source: MenubarSubscriptionInput): MenubarCurrencyBalance | null {
+    return this.validBalances(source)[0] ?? null;
+  }
+
   private tokens(value: number): string {
     const millions = value / 1e6;
     if (millions >= 1000) return `${(millions / 1000).toFixed(1)}B`;
@@ -468,6 +509,7 @@ class Builder {
   }
 
   private windowLabel(window: MenubarWindowInput): string {
+    if (window.kind === 'custom') return window.label?.trim() || this.t('window.week');
     if (window.kind === 'period') return this.t(window.label === 'limit_month_code' ? 'window.kimiMonthCode' : 'window.kimiMonthTotal');
     if (window.kind === 'session') return this.t('window.session', { hours: Math.round(window.windowMinutes / 60) });
     if (window.kind === 'scoped') return this.t('window.scoped', { model: window.label ?? '' });
@@ -498,14 +540,32 @@ class Builder {
   }
 
   /** Short name under a tube and in sentences: the other computer, else the account handle, else the brand. */
-  private who(source: MenubarSourceInput): string {
-    if (source.kind === 'subscription') return this.sharedIdentity(source)?.label ?? source.device?.name ?? this.handle(source) ?? source.brand;
+  private baseName(source: MenubarSourceInput): string {
+    if (source.kind === 'subscription') return this.sharedIdentity(source)?.label ??
+      (source.pooled ? this.handle(source) ?? source.device?.name : source.device?.name ?? this.handle(source)) ?? source.brand;
     if (source.kind === 'balance') return this.t('balance.short');
     return source.name;
   }
 
+  private who(source: MenubarSourceInput): string {
+    const name = this.baseName(source);
+    if (source.kind !== 'subscription' || !source.pooled || source.shared) return name;
+    const peers = this.input.sources.filter((candidate): candidate is MenubarSubscriptionInput =>
+      candidate.kind === 'subscription' && !!candidate.pooled && !candidate.shared && this.baseName(candidate) === name);
+    if (peers.length < 2) return name;
+    const plan = source.plan?.trim() || '';
+    const samePlan = peers.filter(candidate => (candidate.plan?.trim() || '') === plan);
+    // Prefix the distinguishing part so narrow tubes do not truncate it away. Use
+    // opaque source IDs only for stable ordering, never as user-facing identity.
+    const ordinal = samePlan.length > 1
+      ? String(samePlan.map(candidate => candidate.id).sort().indexOf(source.id) + 1)
+      : '';
+    const qualifier = [plan, ordinal].filter(Boolean).join(' ');
+    return qualifier ? `${qualifier} · ${name}` : name;
+  }
+
   private sourceTitle(source: MenubarSourceInput): string {
-    if (source.kind === 'subscription') return this.sharedIdentity(source)?.label ?? source.device?.name ?? this.handle(source) ?? source.brand;
+    if (source.kind === 'subscription') return this.who(source);
     if (source.kind === 'balance') return this.t(source.quota ? 'balance.quotaName' : 'balance.name');
     return source.name;
   }
@@ -536,7 +596,9 @@ class Builder {
           || FAMILY_ORDER[a.family] - FAMILY_ORDER[b.family],
       );
     if (subscriptions[0]) return subscriptions[0];
-    return this.visible.find((source) => source.kind === 'balance' && source.available > 0) ?? null;
+    const wallet = this.visible.find((source) => source.kind === 'balance' && source.available > 0);
+    if (wallet) return wallet;
+    return this.visibleSubscriptions().find((source) => !source.lastSeenAtMs && (this.primaryBalance(source)?.amount ?? 0) > 0) ?? null;
   }
 
   /** The subscription closest to empty that still has room. */
@@ -597,7 +659,7 @@ class Builder {
       // "Used up" is only true when something was actually measured empty.
       const measured =
         this.visible.some((source) => source.kind === 'balance')
-        || this.visibleSubscriptions().some((source) => this.usableRemaining(source) !== null);
+        || this.visibleSubscriptions().some((source) => this.usableRemaining(source) !== null || (!source.lastSeenAtMs && this.primaryBalance(source) !== null));
       if (!measured) {
         const unread = this.visibleSubscriptions().length > 0;
         return unread
@@ -689,6 +751,29 @@ class Builder {
     const state = this.state(source);
     const name = this.who(source);
     if (!state.limit || state.remaining === null) {
+      const balance = this.primaryBalance(source);
+      if (balance) {
+        const seenAtMs = source.lastSeenAtMs ?? null;
+        const formatted = this.currencyMoney(balance.amount, balance.currency);
+        const level: MenubarLevel = balance.amount > 0 ? 'normal' : 'error';
+        const labelName = source.brand === name ? name : `${source.brand} ${name}`;
+        return {
+          ...base,
+          emphasized,
+          name,
+          value: formatted,
+          valueUnit: null,
+          valueLabel: null,
+          level,
+          fill: balance.amount > 0 ? 1 : 0,
+          reserve: false,
+          when: seenAtMs !== null ? this.ago(seenAtMs) : '',
+          whenLevel: 'normal',
+          resetsAtMs: null,
+          ...(seenAtMs !== null ? { stale: true } : {}),
+          accessibilityLabel: `${labelName} ${formatted}`,
+        };
+      }
       return {
         ...base,
         emphasized: false,
@@ -707,6 +792,10 @@ class Builder {
     const remaining = state.remaining;
     const level = levelOf(remaining);
     const reserve = remaining <= 0 && (source.creditsUnlimited || (source.credits ?? 0) > 0);
+    // Keep the narrow tube header readable, including fractional and unlimited credits.
+    const creditValue = source.creditsUnlimited ? '∞' : new Intl.NumberFormat(this.input.locale, {
+      notation: 'compact', maximumSignificantDigits: 3,
+    }).format(source.credits ?? 0);
     const limit = state.limit;
     // Read together with the percentage above: "90% · resets in 6d 7h", for the window shown.
     // An unreachable computer's reading says how old it is instead of a countdown.
@@ -725,9 +814,9 @@ class Builder {
     return {
       ...base,
       name,
-      value: reserve ? null : String(Math.round(remaining)),
-      valueUnit: reserve ? null : '%',
-      valueLabel: reserve ? this.t('cell.credits') : null,
+      value: reserve ? creditValue : String(Math.round(remaining)),
+      valueUnit: reserve ? this.t('cell.credits') : '%',
+      valueLabel: null,
       level,
       fill: clamp(remaining / 100, 0, 1),
       reserve,
@@ -737,7 +826,7 @@ class Builder {
       ...(unusedAtReset ? { unusedAtReset: true } : {}),
       ...(seenAtMs !== null ? { stale: true } : {}),
       accessibilityLabel: reserve
-        ? this.t('a11y.reserve', { name: `${source.brand} ${name}` })
+        ? `${this.t('a11y.reserve', { name: `${source.brand} ${name}` })} · ${source.creditsUnlimited ? this.t('fact.unlimited') : source.credits?.toLocaleString(this.input.locale, { maximumSignificantDigits: 21 })} ${this.t('cell.credits')}`
         : this.t('a11y.remaining', { name: source.brand === name ? name : `${source.brand} ${name}`, n: Math.round(remaining) }),
     };
   }
@@ -894,11 +983,39 @@ class Builder {
     // An account on another computer runs there; this computer cannot start a task on it directly.
     let actionLabel = source.device || source.shared
       ? this.t('action.openApp')
-      : this.t('action.newTask', { name: handle ?? source.brand });
+      : this.t('action.newTask', { name: source.pooled ? source.brand : handle ?? source.brand });
     let action: MenubarDetailAction = source.device || source.shared
       ? { kind: 'open-app' }
       : { kind: 'new-task', providerId: source.providerId };
     if (!limit) {
+      const balances = this.validBalances(source);
+      if (balances.length > 0) {
+        const primary = balances[0]!;
+        const updated = source.updatedAtMs ? this.t('fact.updatedAgo', { ago: this.ago(source.updatedAtMs) }) : '';
+        const balanceFacts: MenubarFact[] = balances.map((row, index) => ({
+          label: this.t('fact.balance'),
+          value: this.currencyMoney(row.amount, row.currency, true),
+          sub: index === 0 ? updated : row.currency,
+        }));
+        return {
+          id: source.id,
+          logoSvg: source.logoSvg,
+          title,
+          plan: source.plan ?? '',
+          rings: [{ fraction: primary.amount > 0 ? 1 : 0, color: primary.amount > 0 ? 'ink' : 'error' }],
+          bigValue: this.currencyMoney(primary.amount, primary.currency),
+          bigUnit: null,
+          bigColor: null,
+          bigCompact: true,
+          bigCaption: this.t('detail.balanceCaption'),
+          legend: [],
+          sayPrimary: this.t('say.balance'),
+          saySecondary: null,
+          facts: [...balanceFacts, ...this.accountFacts(source)],
+          actionLabel,
+          action,
+        };
+      }
       return {
         id: source.id,
         logoSvg: source.logoSvg,
@@ -1016,6 +1133,13 @@ class Builder {
     if (source.prepaidUsd !== null) {
       facts.push({ label: this.t('fact.prepaid'), value: `$${source.prepaidUsd.toFixed(2)}`, sub: this.t('fact.xaiAccount') });
     }
+    for (const row of this.validBalances(source)) {
+      facts.push({
+        label: this.t('fact.balance'),
+        value: this.currencyMoney(row.amount, row.currency, true),
+        sub: source.brand,
+      });
+    }
     facts.push(...this.accountFacts(source));
     return {
       id: source.id,
@@ -1071,7 +1195,7 @@ class Builder {
           sessionId: task.sessionId,
           title: this.input.settings.privacy ? this.t('tasks.private', { harness: this.harnessName(task.harness) }) : task.title,
           harness: task.harness,
-          logoSvg: this.input.harnessLogos[task.harness],
+          logoSvg: task.logoSvg ?? (isAntigravityProviderId(task.providerId) ? ANTIGRAVITY_LOGO : this.input.harnessLogos[task.harness]),
           value: task.valueToday,
           tokens: task.tokensToday,
           running: task.running,
@@ -1084,6 +1208,7 @@ class Builder {
   }
 
   private harnessName(harness: MenubarHarness): string {
+    if (harness === 'acp') return 'ACP';
     return this.t(`harness.${harness}`);
   }
 
@@ -1138,7 +1263,9 @@ class Builder {
       .join(' + ');
     const subtitle = source.family === 'codex'
       ? `Codex${plan}`
-      : this.t('manage.subscription', { plan: source.plan ?? source.brand, windows: windows || '—' });
+      : !windows && this.primaryBalance(source)
+        ? this.t('manage.balance')
+        : this.t('manage.subscription', { plan: source.plan ?? source.brand, windows: windows || '—' });
     return source.device ? this.t('manage.onDevice', { name: source.device.name, subtitle }) : subtitle;
   }
 
@@ -1146,9 +1273,17 @@ class Builder {
     if (source.kind === 'balance') return this.balanceMoney(source.available, source.currency);
     if (source.kind === 'payg') return '—';
     const remaining = this.remaining(source);
-    if (remaining === null) return '—';
+    if (remaining === null) {
+      const balance = this.primaryBalance(source);
+      return balance ? this.currencyMoney(balance.amount, balance.currency) : '—';
+    }
     if (remaining <= 0 && (source.creditsUnlimited || (source.credits ?? 0) > 0)) return this.t('cell.credits');
     return `${Math.round(remaining)}%`;
+  }
+
+  private taskMoneySymbol(): string {
+    const currency = this.input.usage.scopes.local.currency;
+    return currency ? (currency === 'CNY' ? '¥' : '$') : this.input.moneySymbol;
   }
 
   private statusTexts(): Record<MenubarStatusTextMode, string | null> {
@@ -1161,7 +1296,7 @@ class Builder {
       icon: null,
       lowest: tightest ? `${Math.round(this.remaining(tightest) ?? 0)}%` : hasSubscriptions ? '0%' : null,
       today: today ? this.money(today.money.reduce((sum, value) => sum + value, 0)) : null,
-      task: running.length ? this.money(running.reduce((sum, task) => sum + task.valueToday, 0)) : null,
+      task: running.length ? this.money(running.reduce((sum, task) => sum + task.valueToday, 0), this.taskMoneySymbol()) : null,
     };
   }
 
@@ -1171,6 +1306,7 @@ class Builder {
     return {
       locale: this.input.locale,
       moneySymbol: this.input.moneySymbol,
+      taskMoneySymbol: this.taskMoneySymbol(),
       strings: this.input.uiStrings,
       statusTextByMode: this.input.gate ? { icon: null, lowest: null, today: null, task: null } : this.statusTexts(),
       updatedAtMs: this.input.updatedAtMs,
@@ -1202,7 +1338,16 @@ class Builder {
       }
       if (source.kind !== 'subscription') continue;
       const remaining = this.usableRemaining(source);
-      if (remaining === null) continue;
+      if (remaining === null) {
+        if (!source.lastSeenAtMs) {
+          const balance = this.primaryBalance(source);
+          if (balance) {
+            known += 1;
+            if (balance.amount > 0) return false;
+          }
+        }
+        continue;
+      }
       known += 1;
       if (remaining > QUOTA_CRIT_REMAINING_PERCENT) return false;
     }

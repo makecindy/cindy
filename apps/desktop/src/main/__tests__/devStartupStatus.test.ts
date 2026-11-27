@@ -12,8 +12,11 @@ import {
   recordDesktopDevAuthStartupResult,
   recordDesktopDevLocalDbStartupResult,
   observeDesktopStartupResult,
+  enableDesktopDevQuitRequests,
 } from '../devStartupStatus.js';
 import { withLocalProfileMigrationStartupBarrier } from '../localProfileDataMigration.js';
+import { desktopRuntimeKind } from '../hostDelegationEnv.js';
+import { findConcurrentLiveInstancePids } from '../concurrentInstanceScan.js';
 
 const readIdentity = vi.hoisted(() => vi.fn());
 vi.mock('../desktopProcessIdentity.js', () => ({ readDesktopProcessIdentity: readIdentity }));
@@ -35,6 +38,46 @@ describe('devStartupStatus', () => {
     cleanup?.();
     delete process.env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE;
     fs.rmSync(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  // Unit: a Windows restart used to kill main before it could record a clean exit.
+  // Exercise the real request consumer; stale generations and expired requests must not quit.
+  it('consumes only a live quit request for this instance, once, and cleans up its watcher', async () => {
+    cleanup = await beginDesktopDevInstance({ userDataDir: tempDir, dbFilePrefix: 'cindy',
+      rootDir: tempDir, passive: false, isolated: true, pid: 4242 });
+    const recordPath = path.join(tempDir, '.dev-instances', '4242.json');
+    const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+    expect(record.quitRequestProtocol).toBeUndefined();
+    let changed!: () => void;
+    vi.spyOn(fs, 'watchFile').mockImplementation(((_file: unknown, _options: unknown, listener: () => void) => {
+      changed = listener;
+    }) as typeof fs.watchFile);
+    const unwatch = vi.spyOn(fs, 'unwatchFile').mockImplementation(() => {});
+    const quit = vi.fn();
+    const stop = enableDesktopDevQuitRequests(quit);
+    const requestPath = path.join(tempDir, '.dev-instances', `${record.pid}-${record.instanceId}.quit`);
+    try {
+      markDesktopDevWindowReady();
+      markDesktopDevReady();
+      expect(JSON.parse(fs.readFileSync(recordPath, 'utf8')).quitRequestProtocol).toBe(1);
+      const request = { action: 'quit', pid: record.pid, instanceId: record.instanceId, expiresAt: Date.now() + 20_000 };
+      for (const invalid of [
+        { ...request, instanceId: 'old-instance' }, { ...request, pid: 999 },
+        { ...request, expiresAt: Date.now() - 1 }, { ...request, expiresAt: Date.now() + 60_000 },
+        { ...request, action: 'other' },
+      ]) {
+        fs.writeFileSync(requestPath, JSON.stringify(invalid));
+        changed();
+      }
+      expect(quit).not.toHaveBeenCalled();
+      fs.writeFileSync(requestPath, JSON.stringify(request));
+      changed();
+      changed();
+      expect(quit).toHaveBeenCalledTimes(1);
+    } finally { stop(); }
+    expect(unwatch).toHaveBeenCalledWith(requestPath, changed);
+    expect(fs.existsSync(requestPath)).toBe(false);
   });
 
   it('marks startup ready only after both the window and application are ready', async () => {
@@ -100,6 +143,32 @@ describe('devStartupStatus', () => {
     expect(
       JSON.parse(fs.readFileSync(path.join(tempDir, '.dev-instances', '4242.json'), 'utf8')),
     ).toMatchObject({ processIdentity: identity, startedAtMs: 100, state: 'ready' });
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：index.ts 用 desktopRuntimeKind(process.env) 填 beginDesktopDevInstance 的
+  //   runtime，登记记录里写出 `runtime`。同一 profile 上的 Node Host 据此把它的客户端（CINDY_HOST_API）
+  //   和自己开库的桌面分开，并存方案 A，审核方 2026-11-17 定。
+  // - 规则：client 当且仅当 resolveHostDelegation 会进入客户端模式（变量非空白）；没有这个字段的旧记录，
+  //   读取方按 embedded 处理。已有的登记表扫描（concurrentInstanceScan）不认识这个字段，照常认出进程。
+  // - 现有覆盖缺口：现有用例只断言 passive / isolated / identity 等字段。
+  // - 最小失败输入：设了、空白、没设三种环境。tier：unit。
+  it.each([
+    [{ CINDY_HOST_API: 'http://127.0.0.1:4100' }, 'client'],
+    [{ CINDY_HOST_API: '   ' }, 'embedded'],
+    [{}, 'embedded'],
+  ] as const)('records the runtime a Node Host reads (%o: %s), and the registry scan still sees it', async (env, runtime) => {
+    cleanup = await beginDesktopDevInstance({ userDataDir: tempDir, dbFilePrefix: 'cindy', rootDir: tempDir,
+      passive: false, isolated: false, pid: 4242, runtime: desktopRuntimeKind(env) });
+    const record = JSON.parse(fs.readFileSync(path.join(tempDir, '.dev-instances', '4242.json'), 'utf8'));
+    expect(record.runtime).toBe(runtime);
+    expect(record.schemaVersion).toBe(1);
+    const live = await findConcurrentLiveInstancePids({
+      readdir: (dir) => fs.promises.readdir(dir), readFile: (file) => fs.promises.readFile(file, 'utf8'),
+      readlink: (file) => fs.promises.readlink(file), lstat: (file) => fs.promises.lstat(file),
+      selfPid: () => -1, isPidAlive: (pid) => pid === 4242, readProcessIdentity: () => null,
+    }, tempDir);
+    expect(live).toEqual([4242]);
   });
 
   it('does not delay bootstrap for OS identity and preserves readiness on late enrichment', async () => {

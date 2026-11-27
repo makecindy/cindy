@@ -4,6 +4,8 @@ import { ErrorNotice } from '@/components/ui/error-notice';
  * Cindy quick answers and by the tasks the plugin creates) plus the task
  * permission and working-directory rows. Reuses the ordinary model/permission
  * controls; persistence stays in ghost-errand-prefs.json via ghosts:errand-prefs.
+ * Plugins that create tasks list the same sources as an ordinary task, including
+ * other computers and shares; the chosen run location is saved with the model.
  */
 
 import { useCallback, useRef, useState, type ReactNode } from 'react';
@@ -13,12 +15,17 @@ import { Bot, FolderOpen, X } from 'lucide-react';
 import type { PluginTaskPreferences } from '@cindy/device-link';
 import { Button } from '@/components/ui/button';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
+import { useModelRouteDevices } from '@/hooks/useModelRouteDevices';
 import { extractIpcError } from '@/utils/ipcError';
 import { cn } from '@/lib/utils';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { previewModelGroup, useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import { resolveDeviceModelGroup, useDeviceModelGroups } from '@/features/model-groups/remoteModelGroups';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
+import { MODEL_GROUPS_DEFAULTS, type ModelGroupSelection } from '../../shared/modelGroups';
 import { getEffortForModel, getFastModeForModel } from '@/state/newMakerDraft';
 import type { Effort } from '@/lib/userPreferences.types';
+import { modelCatalogKey } from '../../shared/controlledModelCatalog';
 import type { GhostErrandPermissionMode } from '../../shared/ghost.js';
 import { isPluginTaskPermissionMode, PLUGIN_TASK_PERMISSION_MODES } from '../../shared/pluginTasks.js';
 
@@ -31,6 +38,9 @@ interface TaskConfig {
   effort?: string;
   fastMode?: boolean | 'ultrafast';
   providerId?: string;
+  /** A remote location, or null for an explicit choice of the plugin's computer. */
+  agentDeviceId?: string | null;
+  modelGroup?: string;
   permissionMode?: GhostErrandPermissionMode;
   workingDir?: string;
 }
@@ -107,16 +117,72 @@ export function PluginTaskPrefs({
     config.providerId,
     config.effort,
     config.fastMode,
+    config.modelGroup,
   ].some((value) => value !== undefined);
+  const localGroups = useModelGroups(!remote);
+  const remoteGroups = useDeviceModelGroups(remote?.deviceId ?? null, !!remote);
+  const groupsConfig = remote ? remoteGroups.config ?? MODEL_GROUPS_DEFAULTS : localGroups.config;
+  const groupsAvailable = !remote || !!remoteGroups.config;
+  const lastUnifiedTaskRef = useRef<TaskConfig | null>(null);
+  const selectPluginModelGroup = async (selection: ModelGroupSelection) => {
+    const preview = remote
+      ? await resolveDeviceModelGroup(remote.deviceId, selection, undefined, showTaskRows ? undefined : { agentDeviceId: null })
+      : await previewModelGroup(selection);
+    if (preview?.outcome !== 'routed') return;
+    await save({
+      ...config,
+      agentKind: preview.route.agentKind,
+      providerId: preview.route.providerId,
+      model: preview.route.model,
+      agentDeviceId: showTaskRows ? (preview.route.agentDeviceId ?? null) : null,
+      effort: TASK_EFFORTS.has(preview.route.effort ?? '') ? preview.route.effort : undefined,
+      fastMode: preview.route.fastMode ?? false,
+      modelGroup: selection.id,
+    });
+  };
   const vendor = config.agentKind;
+  const agentDeviceId = config.agentDeviceId ?? null;
+  // Same candidates as an ordinary task on this plugin's computer. Quick-answer-only
+  // plugins stay local (one-shot requests cannot run elsewhere); an older controlled
+  // Host that does not save a location keeps its own models only.
+  const remoteRoutesSupported = showTaskRows && (!remote || remote.value.remoteRoutes === true);
+  const routeDevices = useModelRouteDevices({
+    controlledDeviceId: remote ? remote.deviceId : null,
+    leadAgentDeviceId: agentDeviceId,
+  });
   const pickerAgents = useModelPickerAgents(
     vendor === 'cc' ? 'claude-code' : (vendor ?? 'codex'),
-    remote?.deviceId,
+    agentDeviceId ?? remote?.deviceId,
   );
+  const agentDeviceName = agentDeviceId
+    ? (routeDevices.devices?.find((device) => device.deviceId === agentDeviceId)?.name ?? null)
+    : null;
+  const remoteAgent =
+    remoteRoutesSupported && routeDevices.devices
+      ? {
+          devices: routeDevices.devices,
+          selectedDeviceId: agentDeviceId,
+          ...(remote ? { homeDeviceId: remote.deviceId } : {}),
+          ...(routeDevices.catalogHostDeviceId
+            ? { catalogHostDeviceId: routeDevices.catalogHostDeviceId }
+            : {}),
+        }
+      : undefined;
+  const modelSource = !showTaskRows
+    ? { localOnlyReason: 'one-shot-local-request' as const }
+    : { remoteAgent };
+  // The field resolves the saved model on its route's own catalog (another computer or a share),
+  // keyed relative to the plugin's computer like the panel; otherwise a saved remote model reads
+  // "model info unavailable". Without route choices it stays on the plugin computer's catalog.
+  const triggerCatalogDeviceId = remoteAgent
+    ? modelCatalogKey(agentDeviceId ?? remote?.deviceId, remoteAgent.catalogHostDeviceId)
+    : remote?.deviceId;
   const shownModel = config.model ?? '';
+  // Local model memory belongs to this computer's catalog; a remote row shows its saved values.
+  const localMemory = !remote && !agentDeviceId;
   const shownEffort = (config.effort ??
-    (remote ? '' : (getEffortForModel(shownModel) ?? 'high'))) as Effort;
-  const shownFast = config.fastMode ?? (remote ? false : getFastModeForModel(shownModel));
+    (localMemory ? (getEffortForModel(shownModel) ?? 'high') : '')) as Effort;
+  const shownFast = config.fastMode ?? (localMemory ? getFastModeForModel(shownModel) : false);
   const permissionMode =
     config.permissionMode ??
     (remote
@@ -183,19 +249,41 @@ export function PluginTaskPrefs({
         <>
           <div className="min-w-0 flex-1">
             <ModelSelector
-              localOnlyReason={showTaskRows ? 'plugin-task-local-route' : 'one-shot-local-request'}
+              {...modelSource}
+              {...(triggerCatalogDeviceId ? { deviceId: triggerCatalogDeviceId } : {})}
+              agentDevice={agentDeviceId ? { deviceId: agentDeviceId, name: agentDeviceName } : undefined}
               disabled={saving || disabled}
               unifiedAgents={pickerAgents}
-              onUnifiedSelect={({ engine, providerId, modelId, effort, fast }) =>
-                save({
+              {...(groupsAvailable ? {
+                modelGroups: {
+                  config: groupsConfig,
+                  active: config.modelGroup && groupsConfig.routes.some((r) => r.id === config.modelGroup)
+                    ? { type: 'route' as const, id: config.modelGroup }
+                    : null,
+                  onSelect: (selection: ModelGroupSelection) => { void selectPluginModelGroup(selection); },
+                  onAttach: (selection: ModelGroupSelection) => {
+                    const last = lastUnifiedTaskRef.current;
+                    lastUnifiedTaskRef.current = null;
+                    if (last) void save({ ...last, modelGroup: selection.id });
+                  },
+                  ...(remote ? {} : { onManage: () => { window.location.hash = '#/settings?tab=model-groups'; } }),
+                },
+              } : {})}
+              onUnifiedSelect={({ engine, providerId, modelId, effort, fast, agentDevice }) => {
+                const next: TaskConfig = {
                   ...config,
                   agentKind: engine,
                   providerId,
                   model: modelId,
+                  // The row's computer is part of the choice; a local row clears the location.
+                  agentDeviceId: agentDevice?.deviceId ?? null,
                   effort: TASK_EFFORTS.has(effort ?? '') ? effort : undefined,
                   fastMode: fast,
-                })
-              }
+                  modelGroup: undefined,
+                };
+                lastUnifiedTaskRef.current = next;
+                return save(next);
+              }}
               modelId={shownModel}
               effort={shownEffort}
               fastMode={shownFast}
@@ -257,6 +345,13 @@ export function PluginTaskPrefs({
           ) : null}
         </>,
       )}
+
+      {agentDeviceId ? (
+        // Quick answers are one-shot requests from this computer; they cannot follow a remote model.
+        <p className="text-12 leading-[1.667] text-[var(--text-tertiary)]">
+          {t('settings.ghosts.detail.errandPrefs.remoteQuickAnswerHint')}
+        </p>
+      ) : null}
 
       {showTaskRows
         ? row(

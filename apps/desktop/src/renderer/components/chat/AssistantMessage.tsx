@@ -1,4 +1,5 @@
 import { BotChatReplyTarget } from '@/features/bots/BotChatQuoteViews';
+import { BotStartedTasksFooter, type BotStartedTask } from './BotStartedTasks';
 import { useBotChatQuote } from '@/features/bots/botChatQuoteContext';
 import { botReplyQuoteFor } from '@/features/bots/botDmQuote';
 import { hasRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
@@ -27,7 +28,7 @@ import { botTaskResultKey, type BotCollaborationMeta } from '@cindy/maker-shared
  *   Stream 期间把 content 切成两段:
  *     - committedText  = 累积到最后一个 '\n' 为止的部分 (含换行)
  *     - pendingLine    = 最后一个 '\n' 之后的不完整行
- *   committedText 走完整 MarkdownRenderer (享受 100ms throttle),
+ *   committedText 走完整 MarkdownRenderer (由 useStreamingReveal 控制发布节奏),
  *   pendingLine 走 plain-text <span>。这样收效:
  *     - 已经完整的行实时格式化, 屏幕上 95% 的内容用户看到的是渲染后样式,
  *       不会看到一堆 raw `**` `##` 标记
@@ -60,6 +61,7 @@ import type { KnownLocalFileRef } from '@/lib/localPathResolver';
 import type { AgentKind as RendererAgentKind } from '@/lib/ccAgent.types';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import type { RegionalMoney } from '../../../shared/regionalMoney';
+import { isPluginEngineKind } from '../../../shared/pluginEngines';
 import { useAgentCapabilities, type AgentKind as MakerAgentKind } from '@/hooks/useAgentCapabilities';
 import { useSessionFileOrigin } from './ChatSessionFileContext';
 import { originDeviceId } from '@/lib/sessionFileOrigin';
@@ -69,6 +71,7 @@ import { insertSessionLinkIntoComposer } from '@/lib/composerActionsBus';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { handleAssistantCopy } from '@/lib/assistantSelectionCopy';
 import { MessageActionBar } from './MessageActionBar';
+import { PluginUiSlot, renderPluginUiBody, type PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { shareSelectionStore } from './shareSelectionStore';
 import { useForkAtMessage } from './useForkAtMessage';
 import { useDeleteMessage } from './useDeleteMessage';
@@ -79,8 +82,9 @@ import {
 
 /**
  * Streaming 渲染策略开关 (代码级 / 编译期):
- *   - false (默认) = 原方案: 全程把累积 content 喂给 MarkdownRenderer,靠它内部
- *                    的 100ms throttle 节流。视觉零取舍, streaming 中所有 markdown
+ *   - false (默认) = 原方案: 全程把累积 content 喂给 MarkdownRenderer,由它内部
+ *                    的 useStreamingReveal 匀速放出并按渲染耗时退避(DESIGN.md §14.4
+ *                    Stream pacing)。视觉零取舍, streaming 中所有 markdown
  *                    即时格式化, 但主线程负载最高 (大答复 + 大 doc 共存时易卡)。
  *   - true         = 行级提交方案 (codex 风格): 切成 committedText + pendingLine,
  *                    committedText 走 MarkdownRenderer + memo 跳过, pendingLine
@@ -117,8 +121,8 @@ function splitAtLastNewline(text: string): { committedText: string; pendingLine:
  *     被 memo 包过, 拿到相同 string 引用就跳过整次 react-markdown 解析。结果就是
  *     "每次新 token 但还没换行" 时, markdown 子树完全不重渲染, 只有底下那个
  *     pending <span> 的 textContent 变, 浏览器开销几乎为 0。
- *   - MarkdownRenderer 仍然带 isStreaming=true → 100ms throttle 还在, 当多个
- *     新行短时间内连续到达时合并成一次 parse。
+ *   - MarkdownRenderer 仍然带 isStreaming=true → useStreamingReveal 按帧合并
+ *     发布, 多个新行短时间内连续到达时合并成一次 parse。
  *   - pendingLine 用 <span> 而不是 <div>, 接在 markdown 输出尾部不会换行 — 视觉
  *     上接续上一段最后那个块级元素的末尾, 和 codex 行级提交后那行 "正在打字"
  *     的观感一致。如果 markdown 最后一个块是 <p>, 浏览器会把 <span> 渲在该 <p>
@@ -167,7 +171,16 @@ const StreamingBody = memo(function StreamingBody({
   );
 });
 
+/**
+ * Text a completed reply shows. /goal 裁决 JSON 块与伙伴开场选项只在显示层剥离(原文仍保留在
+ * DB / transcript)。The task image gallery collects reply images from this same text.
+ */
+export function assistantDisplayContent(content: string, botStarterOptions?: readonly string[]): string {
+  return stripStarterOptionList(stripGoalVerdictBlock(content), botStarterOptions ?? []);
+}
+
 interface AssistantMessageProps {
+  pluginUi: PluginUiMessageCandidates;
   /** F1 transit: pass through to MarkdownRenderer for local-path resolution
    *  in markdown links. Stable per-session; doesn't trigger extra renders. */
   workingDir: string;
@@ -214,6 +227,8 @@ interface AssistantMessageProps {
   botStarterOptions?: string[];
   starterOptionsLocked?: boolean;
   botTaskResults?: BotCollaborationMeta[];
+  /** Teammate chat: tasks this reply started, shown at the foot of its bubble. */
+  botStartedTasks?: readonly BotStartedTask[];
   /** Per-turn 费用 (USD) — 仅该轮最后一条 assistant 有值, action bar 时间旁显示。 */
   turnMoney?: RegionalMoney;
   turnCostUsd?: number;
@@ -235,6 +250,7 @@ interface AssistantMessageProps {
 }
 
 export const AssistantMessage = memo(function AssistantMessage({
+  pluginUi,
   workingDir,
   allowPrivilegedLinks = true,
   localFileRefs,
@@ -253,6 +269,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   showActionBar = false,
   simplifiedBotConversation = false,
   botTaskResults,
+  botStartedTasks,
   botLearning,
   botStarterOptions,
   starterOptionsLocked,
@@ -282,17 +299,20 @@ export const AssistantMessage = memo(function AssistantMessage({
   // 到新会话（语义在 main 侧 forkSessionAtMessage 按 role 分支）。capability /
   // remote gate 与 UserMessage 同款；assistant 分叉无可预填文本 → 不传 draftText。
   const makerKind: MakerAgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
+  // 插件引擎任务(agent_kind = 'acp')不读内置 Harness 的能力；它的分叉由主进程从 Cindy 的记录交接
+  // (docs/plans/acp-plugin-bridge.md)，与引擎能否复制原生历史无关。
+  const pluginEngineTask = isPluginEngineKind(agentKind);
   // device-link 远程会话:fork 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // deviceId 取自 ChatSessionFileContext(MessageStream 顶层订阅式构造,见该文件注释)。
   const sessionFileOrigin = useSessionFileOrigin();
   const { capabilities } = useAgentCapabilities(
-    makerKind,
+    pluginEngineTask ? null : makerKind,
     currentSessionId ? originDeviceId(sessionFileOrigin) : undefined,
   );
   const isRemote = Boolean(remoteHostId);
   const sharedGuest = isSharedTaskPeer(originDeviceId(sessionFileOrigin) ?? '');
   const forkSupported =
-    !isRemote && (!agentKind || (capabilities?.fork?.supported ?? true));
+    !isRemote && (pluginEngineTask || !agentKind || (capabilities?.fork?.supported ?? true));
   const handleFork = useForkAtMessage({
     sessionId: currentSessionId,
     messageClientId,
@@ -338,9 +358,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     });
   }, [botQuote, content, currentSessionId, messageClientId, messageDeepLink]);
 
-  // /goal:隐藏助手输出末尾由 goal 协议要求模型吐出的裁决 JSON 块(仅显示层剥离,
-  // 原文仍保留在 DB / transcript)。pattern:末尾的 ```json {...goal_status...} ``` 围栏块。
-  const displayContent = stripStarterOptionList(stripGoalVerdictBlock(content), botStarterOptions ?? []);
+  const displayContent = assistantDisplayContent(content, botStarterOptions);
   const streamFadeKey = messageClientId
     ? `${currentSessionId ?? ''}\u0000${messageClientId}`
     : undefined;
@@ -353,6 +371,7 @@ export const AssistantMessage = memo(function AssistantMessage({
 
   const actionBar = !isStreaming && showActionBar ? (
     <MessageActionBar
+      pluginUi={pluginUi}
       sessionId={currentSessionId}
       clientId={messageClientId}
       createdAt={createdAt}
@@ -387,12 +406,15 @@ export const AssistantMessage = memo(function AssistantMessage({
 
   return (
     <div
-      className={cn('flex w-full flex-col items-start gap-1.5', botBubble && 'group/message')}
+      data-selection-quote-scope=""
+      className={cn('flex w-full flex-col items-start gap-1.5', botBubble && 'group/message chat-bubble-layout')}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onCopy={handleAssistantCopy}
     >
       <ChatBubble
+        data-plugin-appearance-region
+        data-plugin-appearance-speaker="assistant"
         bare={!botBubble}
         {...(botBubble ? { 'data-bot-reply-bubble': '' } : {})}
         className={botBubble ? cn(CHAT_BUBBLE_COLUMN_CLASS, hasRichAnswer(content) ? 'w-full' : 'w-fit') : undefined}
@@ -405,46 +427,53 @@ export const AssistantMessage = memo(function AssistantMessage({
             {t('chat.failedSamplingAttempt')}
           </div>
         )}
-        {ghostRenderCard && messageClientId && !showOriginal ? (
-          // 出口钩子自绘:意识卡片替换气泡(净化后的静态 HTML,沙箱 iframe)。
-          // 复用 GhostToolCard(自带主机身份头 + 主题注入 + 沙箱),turn 级无
-          // 工具名/参数,running 恒 false(turn 已结束)。
-          <GhostToolCard
-            callId={messageClientId}
-            ghostId={ghostRenderCard.ghostId}
-            toolName=""
-            toolInput={undefined}
-            html={ghostRenderCard.html}
-            height={ghostRenderCard.height}
-            running={false}
-            sessionId={currentSessionId}
-          />
-        ) : isStreaming && USE_LINE_COMMIT_STREAMING && !hasRichAnswer(content) ? (
-          <StreamingBody
-            workingDir={workingDir}
-            content={displayContent}
-            localFileRefs={localFileRefs}
-            currentSessionId={currentSessionId}
-            currentSessionTitle={currentSessionTitle}
-            streamFadeKey={streamFadeKey}
-            allowPrivilegedLinks={allowPrivilegedLinks}
-          />
-        ) : (
-          // 默认分支 (USE_LINE_COMMIT_STREAMING=false) + 非 streaming 都走完整
-          // MarkdownRenderer。isStreaming 透传 — true 时 MarkdownRenderer 内部启用
-          // 100ms throttle, false 时无节流, 行为和该文件性能优化前完全一致。
-          <MarkdownRenderer
-            renderRichAnswers
-            workingDir={workingDir}
-            content={displayContent}
-            isStreaming={isStreaming}
-            streamFadeKey={streamFadeKey}
-            localFileRefs={localFileRefs}
-            currentSessionId={currentSessionId}
-            currentSessionTitle={currentSessionTitle}
-            allowPrivilegedLinks={allowPrivilegedLinks}
-          />
-        )}
+        <div data-selection-quote-body="" className="contents">
+          {renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'assistant', sessionId: currentSessionId, clientId: messageClientId,
+            disabled: !!ghostRenderCard || !!remoteHostId,
+            context: () => ({ message: { clientId: messageClientId, role: 'assistant', content, isStreaming } }) } : undefined,
+          ghostRenderCard && messageClientId && !showOriginal ? (
+            // 出口钩子自绘:意识卡片替换气泡(净化后的静态 HTML,沙箱 iframe)。
+            // 复用 GhostToolCard(自带主机身份头 + 主题注入 + 沙箱),turn 级无
+            // 工具名/参数,running 恒 false(turn 已结束)。
+            <GhostToolCard
+              callId={messageClientId}
+              ghostId={ghostRenderCard.ghostId}
+              toolName=""
+              toolInput={undefined}
+              html={ghostRenderCard.html}
+              height={ghostRenderCard.height}
+              running={false}
+              sessionId={currentSessionId}
+            />
+          ) : isStreaming && USE_LINE_COMMIT_STREAMING && !hasRichAnswer(content) ? (
+            <StreamingBody
+              workingDir={workingDir}
+              content={displayContent}
+              localFileRefs={localFileRefs}
+              currentSessionId={currentSessionId}
+              currentSessionTitle={currentSessionTitle}
+              streamFadeKey={streamFadeKey}
+              allowPrivilegedLinks={allowPrivilegedLinks}
+            />
+          ) : (
+            // 默认分支 (USE_LINE_COMMIT_STREAMING=false) + 非 streaming 都走完整
+            // MarkdownRenderer。isStreaming 透传 — true 时 MarkdownRenderer 内部匀速
+            // 放出(useStreamingReveal), false 时直接渲染全文(积压在 ≤150ms 内收尾)。
+            <MarkdownRenderer
+              renderRichAnswers
+              workingDir={workingDir}
+              content={displayContent}
+              isStreaming={isStreaming}
+              streamFadeKey={streamFadeKey}
+              galleryMessageKey={messageClientId}
+              localFileRefs={localFileRefs}
+              currentSessionId={currentSessionId}
+              currentSessionTitle={currentSessionTitle}
+              allowPrivilegedLinks={allowPrivilegedLinks}
+            />
+          ))}
+        </div>
+        {pluginUi.turnFooter && !isStreaming && showActionBar && <PluginUiSlot position="turn.footer" sessionId={currentSessionId} clientId={messageClientId} role="assistant" />}
         {/* 自绘卡在场:提供原文 ↔ 意识卡片切换(信任边界,主机绘制,始终可切回原文)。 */}
         {ghostRenderCard && (
           <button
@@ -470,6 +499,9 @@ export const AssistantMessage = memo(function AssistantMessage({
             shared/modelMismatch.ts)。常显不随 hover —— 用户需要在不悬停的情况
             下知道这轮不是自己选的模型回答的;icon 用 warning 语义色(token 豁免
             簇),文字保持 tertiary 灰阶,不喧宾夺主。 */}
+        {botBubble && botStartedTasks?.length ? (
+          <BotStartedTasksFooter tasks={botStartedTasks} hostSessionId={currentSessionId} />
+        ) : null}
         {modelMismatch && (
           <div className="mt-1 flex items-center gap-1.5 text-11" style={{ color: 'var(--text-tertiary)' }}>
             <TriangleAlert size={11} style={{ color: 'var(--warning-fg)' }} aria-hidden />

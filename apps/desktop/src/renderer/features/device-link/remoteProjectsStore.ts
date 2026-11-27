@@ -1,5 +1,10 @@
 import { normalizeTaskTags, reconcileTaskTags } from '@cindy/maker-shared';
 import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy-make-feature';
+import { projectSessionWithOfflineInboxIntent } from '@cindy/maker-shared/offline-inbox-intent';
+import {
+  getOfflineInboxIntent,
+  subscribeOfflineInboxIntents,
+} from './offlineInboxIntentsStore';
 /**
  * remoteProjectsStore —— 控制端「远程项目」内存层(device-link 跨设备远程控制)。
  * ---------------------------------------------------------------------------
@@ -40,6 +45,7 @@ import { CINDY_MAKE_ENABLED, isCindyMakeSource } from '@cindy/maker-shared/cindy
  */
 
 import { useSyncExternalStore } from 'react';
+import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 import type { DeviceLinkConnectionStatus, Session } from '@/lib/ccAgent.types';
 import type { ListStatusFilter } from '@/lib/sessionService';
@@ -63,12 +69,43 @@ interface DeviceShard {
 }
 
 const EMPTY_SCHEDULE_BINDINGS: readonly ScheduleBinding[] = Object.freeze([]);
+/** Display-only until the creating host returns. Never feed these rows to the mirror cache. */
+export type CreationPreview = {
+  row: Session;
+  message: import('@/lib/makerChatStore').ChatMessage;
+  handedOff?: boolean;
+  dispatching?: boolean;
+  editAfterFailure?: () => void;
+};
+const creationPreviews = new Map<string, CreationPreview>();
 const shards = new Map<string, DeviceShard>();
+// A read only needs timing pushes that arrive before it settles.
+const pendingScheduleIndexTimings = new Map<string, Map<string, number>>();
 let mergedScheduleIndex: ReadonlyMap<string, AutomationScheduleSessionInfo> = new Map();
 function recomputeScheduleIndex(): void {
   const next = new Map([...shards.values()].flatMap((shard) => [...(shard.scheduleIndex ?? [])]));
   if (JSON.stringify([...next]) !== JSON.stringify([...mergedScheduleIndex]))
     mergedScheduleIndex = next;
+}
+function applyScheduleTimings(
+  index: ReadonlyMap<string, AutomationScheduleSessionInfo>,
+  timings: ReadonlyMap<string, number>,
+): ReadonlyMap<string, AutomationScheduleSessionInfo> {
+  if (timings.size === 0) return index;
+  let next: Map<string, AutomationScheduleSessionInfo> | undefined;
+  for (const [sessionId, info] of index) {
+    const nextFireAt = timings.get(info.scheduleId);
+    if (nextFireAt === undefined || nextFireAt === info.nextFireAt) continue;
+    next ??= new Map(index);
+    next.set(sessionId, {
+      ...info,
+      nextFireAt,
+      ...(info.latestFailedRun && info.scheduleStatus === 'active'
+        ? { latestFailedRun: { ...info.latestFailedRun, nextFireAt } }
+        : {}),
+    });
+  }
+  return next ?? index;
 }
 const subs = new Set<() => void>();
 // A cold renderer has not read its cache or discovered devices yet. An empty
@@ -107,6 +144,21 @@ const removedSubs = new Set<(sessionId: string) => void>();
 
 function emitRemoved(sessionId: string): void {
   for (const fn of removedSubs) fn(sessionId);
+}
+
+type RemoteSessionPatchListener = (
+  deviceId: string,
+  sessionId: string,
+  patch: Partial<Session>,
+) => void;
+/**
+ * 远端会话 patch 订阅（含不在当前有界分片窗口内的任务）。与 `sessionsStore.subscribePatches`
+ * 对称，供搜索结果等旁路视图即时同步窗口外远端任务的归档/恢复/重命名/置顶/删除状态。
+ */
+const patchSubs = new Set<RemoteSessionPatchListener>();
+
+function emitPatched(deviceId: string, sessionId: string, patch: Partial<Session>): void {
+  for (const fn of patchSubs) fn(deviceId, sessionId, patch);
 }
 
 /**
@@ -151,6 +203,7 @@ function snapshotEpochKey(deviceId: string, status: RemoteSessionStatus): string
 }
 
 function invalidateDeviceSnapshotEpochs(deviceId: string): void {
+  pendingScheduleIndexTimings.delete(deviceId);
   if (detailDeviceEpoch.has(deviceId)) {
     detailDeviceEpoch.set(deviceId, detailDeviceEpoch.get(deviceId)! + 1);
   }
@@ -471,8 +524,13 @@ function settlePendingStatuses(
   return settled;
 }
 
+function isVisibleSession(session: Session): boolean {
+  return !isCindyMakeSource(session.source);
+}
+
 /** 重算扁平快照 + origin 注册表,然后通知订阅者。所有 mutation 走这里。 */
 function recompute(): void {
+  const previousMerged = mergedSnapshot;
   recomputeScheduleIndex();
   sessionDeviceIndex.clear();
   sessionTitleIndex.clear();
@@ -485,9 +543,12 @@ function recompute(): void {
     const flat: Session[] = [];
     for (const shard of shards.values()) {
       for (const s of shard.sessions) {
-        const projected = withPendingStatus(
-          withPendingFirstSend(withPendingTitle(s)),
-          shard.deviceId,
+        const projected = projectSessionWithOfflineInboxIntent(
+          withPendingStatus(
+            withPendingFirstSend(withPendingTitle(s)),
+            shard.deviceId,
+          ),
+          getOfflineInboxIntent(shard.deviceId, s.id),
         );
         flat.push(projected);
         const pinnedDeviceId = pinnedOrigins.get(s.id);
@@ -500,18 +561,37 @@ function recompute(): void {
     mergedSnapshot = flat;
   }
   const nextVisible = CINDY_MAKE_ENABLED
-    ? mergedSnapshot
-    : mergedSnapshot.filter((session) => !isCindyMakeSource(session.source));
+    ? [...mergedSnapshot]
+    : mergedSnapshot.filter(isVisibleSession);
   // Share only the UI projection. Authoritative rows must keep their new content
   // identities so captureSessionRead still rejects details predating a snapshot.
-  // Compare the complete JSON payload (including nested metadata), not a field
-  // whitelist that could leave a newly added sidebar field stale. Same-id tasks
-  // on different computers are distinct; only the last visible set is retained.
-  const visibleKey = (session: Session) => JSON.stringify([session.deviceLinkDeviceId, session.id]);
-  const previousVisible = new Map(visibleMergedSnapshot.map((session) => [visibleKey(session), session]));
+  // The previous visible rows align with the previous filtered projection,
+  // followed by any creation previews. A projection reused by reference was
+  // already compared with its visible row. Compare full JSON for new references.
+  for (const preview of creationPreviews.values()) {
+    if (!nextVisible.some(row => row.id === preview.row.id && row.deviceLinkDeviceId === preview.row.deviceLinkDeviceId)) {
+      nextVisible.push(preview.row);
+      sessionTitleIndex.set(preview.row.id, preview.row.title);
+    }
+  }
+  const previousProjection = CINDY_MAKE_ENABLED
+    ? previousMerged
+    : previousMerged.filter(isVisibleSession);
+  const previousVisibleIndexes = new Map<Session['deviceLinkDeviceId'], Map<string, number>>();
+  visibleMergedSnapshot.forEach((visible, index) => {
+    let indexes = previousVisibleIndexes.get(visible.deviceLinkDeviceId);
+    if (!indexes) {
+      indexes = new Map();
+      previousVisibleIndexes.set(visible.deviceLinkDeviceId, indexes);
+    }
+    indexes.set(visible.id, index);
+  });
   const sharedVisible = nextVisible.map((session) => {
-    const previous = previousVisible.get(visibleKey(session));
-    return previous && (previous === session || JSON.stringify(previous) === JSON.stringify(session))
+    const index = previousVisibleIndexes.get(session.deviceLinkDeviceId)?.get(session.id);
+    if (index === undefined) return session;
+    const previous = visibleMergedSnapshot[index];
+    return previous === session || previousProjection[index] === session ||
+      JSON.stringify(previous) === JSON.stringify(session)
       ? previous
       : session;
   });
@@ -541,6 +621,10 @@ function recompute(): void {
   recomputeArchivedLoadedDeviceIds();
   subs.forEach((fn) => fn());
 }
+
+subscribeOfflineInboxIntents(() => {
+  if (shards.size > 0) recompute();
+});
 
 /** 更新某个状态桶的读取态但不通知；调用方与其它 mutation 合并成一次通知。 */
 function setSessionStatusLoading(
@@ -657,6 +741,7 @@ function markAllUnreachable(target: UnreachableStatus, matchesDevice?: (deviceId
     }
     return;
   }
+  pendingScheduleIndexTimings.clear();
   for (const [k, v] of snapshotEpoch) snapshotEpoch.set(k, v + 1);
   for (const [k, v] of detailDeviceEpoch) detailDeviceEpoch.set(k, v + 1);
   const bootstrapStateChanged =
@@ -692,6 +777,19 @@ function markAllUnreachable(target: UnreachableStatus, matchesDevice?: (deviceId
 }
 
 const actions = {
+  setCreationPreview(preview: CreationPreview): void {
+    const previous = creationPreviews.get(preview.row.id);
+    creationPreviews.set(preview.row.id, preview);
+    // Attachment copies and delivery state only change the open task.
+    if (previous?.row === preview.row) subs.forEach(fn => fn());
+    else recompute();
+  },
+  getCreationPreview(sessionId?: string): CreationPreview | undefined {
+    return sessionId ? creationPreviews.get(sessionId) : undefined;
+  },
+  clearCreationPreview(sessionId: string): void {
+    if (creationPreviews.delete(sessionId)) recompute();
+  },
   /** The synchronizer owns initialization; late completion cannot settle a newer run. */
   beginInitialDiscovery(): () => void {
     const generation = ++initialDiscoveryGeneration;
@@ -718,16 +816,51 @@ const actions = {
   getSessionScheduleBindings(deviceId: string, sessionId: string): readonly ScheduleBinding[] {
     return shards.get(deviceId)?.scheduleBindings?.get(sessionId) ?? EMPTY_SCHEDULE_BINDINGS;
   },
-  setDeviceScheduleIndex(
+  beginDeviceScheduleIndexRead(deviceId: string) {
+    const timings = new Map<string, number>();
+    pendingScheduleIndexTimings.set(deviceId, timings);
+    return {
+      commit(index: ReadonlyMap<string, AutomationScheduleSessionInfo>) {
+        if (pendingScheduleIndexTimings.get(deviceId) !== timings) return false;
+        const shard = shards.get(deviceId);
+        const next = applyScheduleTimings(index, timings);
+        if (shard && JSON.stringify([...(shard.scheduleIndex ?? [])]) !== JSON.stringify([...next])) {
+          shard.scheduleIndex = next;
+          recomputeScheduleIndex();
+          subs.forEach((fn) => fn());
+        }
+        return true;
+      },
+      release() {
+        if (pendingScheduleIndexTimings.get(deviceId) === timings)
+          pendingScheduleIndexTimings.delete(deviceId);
+      },
+    };
+  },
+  clearPendingDeviceScheduleTiming(deviceId: string, scheduleId?: string): void {
+    const timings = pendingScheduleIndexTimings.get(deviceId);
+    if (scheduleId === undefined) timings?.clear();
+    else timings?.delete(scheduleId);
+  },
+  patchDeviceScheduleTiming(
     deviceId: string,
-    index: ReadonlyMap<string, AutomationScheduleSessionInfo>,
-  ): void {
+    patch: { scheduleId: string; nextFireAt: number; preRunCheckSucceeded?: boolean },
+  ): boolean {
     const shard = shards.get(deviceId);
-    if (!shard || JSON.stringify([...(shard.scheduleIndex ?? [])]) === JSON.stringify([...index]))
-      return;
-    shard.scheduleIndex = index;
-    recomputeScheduleIndex();
-    subs.forEach((fn) => fn());
+    if (!shard?.scheduleIndex) return false;
+    for (const info of shard.scheduleIndex.values()) {
+      if (info.scheduleId === patch.scheduleId && patch.preRunCheckSucceeded && info.hasFailedRun) {
+        return false;
+      }
+    }
+    pendingScheduleIndexTimings.get(deviceId)?.set(patch.scheduleId, patch.nextFireAt);
+    const next = applyScheduleTimings(shard.scheduleIndex, new Map([[patch.scheduleId, patch.nextFireAt]]));
+    if (next !== shard.scheduleIndex) {
+      shard.scheduleIndex = next;
+      recomputeScheduleIndex();
+      subs.forEach((fn) => fn());
+    }
+    return true;
   },
   getSessionScheduleInfo(sessionId: string): AutomationScheduleSessionInfo | undefined {
     const deviceId = sessionDeviceIndex.get(sessionId);
@@ -736,7 +869,7 @@ const actions = {
   /**
    * 写入 / 覆盖某台设备的整份会话列表(bootstrap 订阅后拉一次 / reconnect 重拉 / reseed)。
    * rawSessions 是被控端 local-db:sessions:list 原样返回的 Session[],本函数负责打标记。
-   * 逐字节不变时跳过(避免无谓重渲染);epoch 乱序保护在调用方(listing tier)用
+   * 顺序及完整内容不变时跳过(避免无谓重渲染);epoch 乱序保护在调用方(listing tier)用
    * nextSnapshotEpoch/isLatestSnapshotEpoch 完成,本函数无条件替换。
    */
   setDeviceSessions(
@@ -746,12 +879,21 @@ const actions = {
     status: RemoteSessionStatus = 'active',
   ): void {
     const connectionStatus: DeviceLinkConnectionStatus = 'connected';
+    const existing = shards.get(deviceId);
+    // userSendAt 在被控端只会从空变成时间、不会清回空。一次早于首条受理就发出的列表读取
+    // 可能晚于 sessions:patched 才落地，整行替换会把已知的发送时间退回空；而首条标记
+    // (pendingFirstSendAt)此时已经让位回收，新任务就会按「未发送 + 0 条消息」掉出项目、
+    // 等下一次回流才回来。所以列表里为空时沿用已知值。
+    const knownUserSendAt = new Map<string, string>();
+    for (const session of existing?.sessions ?? []) {
+      if (session.userSendAt != null) knownUserSendAt.set(session.id, session.userSendAt);
+    }
     // 状态桶本身是权威筛选条件：跨版本兼容行 / 测试夹具可能缺 status，统一按本次
     // 请求桶补齐；refresh 层已在到达这里之前拒绝混入其它状态的协议损坏响应。
-    const stamped = rawSessions.map((session) =>
-      stamp({ ...session, status }, deviceId, deviceName, connectionStatus),
-    );
-    const existing = shards.get(deviceId);
+    const stamped = rawSessions.map((session) => {
+      const userSendAt = session.userSendAt ?? knownUserSendAt.get(session.id) ?? session.userSendAt;
+      return stamp({ ...session, status, userSendAt }, deviceId, deviceName, connectionStatus);
+    });
     const loadingStateCleared =
       status === 'active'
         ? setBootstrapState(deviceId, 'idle')
@@ -783,6 +925,9 @@ const actions = {
       existing &&
       existing.connectionStatus === connectionStatus &&
       existing.deviceName === deviceName &&
+      // Membership and order can disprove equality without encoding either list.
+      existing.sessions.length === nextSessions.length &&
+      existing.sessions.every((session, index) => session.id === nextSessions[index].id) &&
       JSON.stringify(existing.sessions) === JSON.stringify(nextSessions)
     ) {
       if (!statusWasLoaded) {
@@ -803,7 +948,7 @@ const actions = {
     if (existing) {
       const kept = new Set(nextSessions.map((session) => session.id));
       for (const session of existing.sessions) {
-        if (!kept.has(session.id)) dropSessionOverlays(session.id);
+        if (!kept.has(session.id) && !creationPreviews.has(session.id)) dropSessionOverlays(session.id);
       }
     }
     const loadedStatuses = new Set(existing?.loadedStatuses ?? []);
@@ -967,7 +1112,14 @@ const actions = {
     if (deleted) clearCachedMessages(deviceId, sessionId);
     // 浏览栈等旁路状态只看得到 sessionId:删除通知必须发在下面所有早退之前,会话不在
     // 当前分片时也要能收到(同一行的消息缓存清理已出于同样理由前置)。
-    if (deleted) emitRemoved(sessionId);
+    if (deleted) {
+      if (creationPreviews.get(sessionId)?.row.deviceLinkDeviceId === deviceId) {
+        dropSessionOverlays(sessionId);
+        actions.clearCreationPreview(sessionId);
+      }
+      emitRemoved(sessionId);
+    }
+    emitPatched(deviceId, sessionId, patch as Partial<Session>);
     // 状态迁移叠加层:删除一律让位。active / archived 推送不带 updatedAt,可能是写库前
     // 迟到的旧推送,不动叠加层,交给写库后的列表按内容确认(见 pendingStatuses)。
     if (deleted && pendingStatuses.get(sessionId)?.token.deviceId === deviceId) {
@@ -977,7 +1129,7 @@ const actions = {
     if (!shard) return;
     const idx = shard.sessions.findIndex((s) => s.id === sessionId);
     if (idx === -1) {
-      if (patch.status === 'active') requestRemoteReseed(deviceId, 'active');
+      if (patch.status === 'active' || patch.sideChatPromoted === true) requestRemoteReseed(deviceId, 'active');
       if (patch.status === 'archived' && shard.loadedStatuses.has('archived')) {
         requestRemoteReseed(deviceId, 'archived');
       }
@@ -1067,6 +1219,13 @@ const actions = {
     // **自增**该设备 epoch(不 delete,见 snapshotEpoch 注释的 ABA):在途 refreshRemoteDeviceSessions
     // 的 epoch 立即失效,且下次 bootstrap 拿到更高 epoch,不会与断连前在途的 epoch 撞值。即使尚未建
     // shard(首拉未完成就被移除)也要 bump,否则在途首拉 await 回来仍能通过 isLatestSnapshotEpoch 加回。
+    let removedPreview = false;
+    for (const preview of creationPreviews.values()) {
+      if (preview.row.deviceLinkDeviceId !== deviceId) continue;
+      dropSessionOverlays(preview.row.id);
+      creationPreviews.delete(preview.row.id);
+      removedPreview = true;
+    }
     invalidateDeviceSnapshotEpochs(deviceId);
     // 标题叠加层随分片一起丢弃:撤销授权 / 关闭控制后该设备的会话已不在视图里,
     // 留着会在下次重新接入时把边界前的旧预览顶回一个仍是系统占位的会话上。
@@ -1081,7 +1240,7 @@ const actions = {
     const bootstrapStateCleared = setBootstrapState(deviceId, 'idle');
     const archivedLoadingCleared = setSessionStatusLoading(deviceId, 'archived', false);
     const archivedFailureCleared = setSessionStatusFailed(deviceId, 'archived', false);
-    if (shardDeleted) recompute();
+    if (shardDeleted || removedPreview) recompute();
     else if (bootstrapStateCleared || archivedLoadingCleared || archivedFailureCleared) {
       subs.forEach((fn) => fn());
     }
@@ -1109,10 +1268,13 @@ const actions = {
     }
     // 所有设备 epoch 无条件**自增**(不 clear-to-0,见 snapshotEpoch 注释的 ABA):清空时在途
     // 首拉立即失效;下一轮 bootstrap 拿到更高 epoch,不会与清空前的 epoch 撞值把陈旧 snapshot 盖回。
+    pendingScheduleIndexTimings.clear();
     for (const [k, v] of snapshotEpoch) snapshotEpoch.set(k, v + 1);
     for (const [k, v] of detailDeviceEpoch) detailDeviceEpoch.set(k, v + 1);
     // 登出 / device-link stopped 是明确的生命周期边界:叠加层是本次会话期的临时
     // 显示态,跨过边界后不该复活(也避免长期留存用户输入的文本)。
+    const previewsChanged = creationPreviews.size > 0;
+    creationPreviews.clear();
     pendingTitlePreview.clear();
     landedSystemTitles.clear();
     synthesizedPreviewSessions.clear();
@@ -1128,7 +1290,8 @@ const actions = {
     if (bootstrapFailedDeviceIds.size > 0) bootstrapFailedDeviceIds = new Set();
     if (archivedFailedDeviceIds.size > 0) archivedFailedDeviceIds = new Set();
     if (shards.size === 0) {
-      if (bootstrapStateChanged || initialDiscoveryChanged) subs.forEach((fn) => fn());
+      if (previewsChanged) recompute();
+      else if (bootstrapStateChanged || initialDiscoveryChanged) subs.forEach(fn => fn());
       return;
     }
     shards.clear();
@@ -1143,6 +1306,24 @@ const actions = {
   /** 用户界面使用的远端会话投影；旧 Cindy Make 行保留在原始镜像中但不可见。 */
   getVisibleMergedRemoteSessions(): Session[] {
     return visibleMergedSnapshot;
+  },
+
+  /**
+   * 每台被控设备最近一次可见任务的活跃时间(unix ms)。
+   * 复用 `visibleMergedSnapshot`(已过滤隐藏来源并叠加首条发送与创建预览时间戳),
+   * 供新建页设备切换器在尚未有本地显式选择记录时,也能按真实最近使用顺序排布对端设备。
+   */
+  getDeviceLatestActivityAt(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const session of visibleMergedSnapshot) {
+      const deviceId = session.deviceLinkDeviceId;
+      if (!deviceId || session.status === 'deleted') continue;
+      const ts = Date.parse(getSessionListActivityAt(session));
+      if (Number.isFinite(ts) && ts > (out[deviceId] ?? 0)) {
+        out[deviceId] = ts;
+      }
+    }
+    return out;
   },
 
   /**
@@ -1277,6 +1458,19 @@ const actions = {
   /** 测试专用:清空 origin 钉子(生产期刻意不清,见 pinnedOrigins)。 */
   __resetPinnedOriginsForTest(): void {
     pinnedOrigins.clear();
+    recompute();
+  },
+
+  /** A verified detail can populate one row while both full lists remain pending. */
+  addSessionDetail(deviceId: string, row: Session): void {
+    const shard = shards.get(deviceId) ?? {
+      deviceId, deviceName: '', connectionStatus: 'connected', sessions: [], loadedStatuses: new Set<RemoteSessionStatus>(),
+    };
+    if (shard.sessions.some(session => session.id === row.id)) return;
+    shards.set(deviceId, {
+      ...shard,
+      sessions: [...shard.sessions, stamp(row, deviceId, shard.deviceName, shard.connectionStatus)],
+    });
     recompute();
   },
 
@@ -1486,6 +1680,13 @@ export function subscribeRemoteSessionRemoval(fn: (sessionId: string) => void): 
   };
 }
 
+export function subscribeRemoteSessionPatches(fn: RemoteSessionPatchListener): () => void {
+  patchSubs.add(fn);
+  return () => {
+    patchSubs.delete(fn);
+  };
+}
+
 /** listing tier 挂载时注册「重拉某设备」的实现;卸载时传 null 清。 */
 export function setRemoteReseedImpl(
   fn: ((deviceId: string, status: RemoteSessionStatus) => void) | null,
@@ -1586,6 +1787,7 @@ export const remoteProjectsStore = {
   subscribe,
   subscribeRename,
   subscribeRemoved: subscribeRemoteSessionRemoval,
+  subscribePatches: subscribeRemoteSessionPatches,
 };
 
 /** 便捷导出:传输层只关心 origin 判定。 */

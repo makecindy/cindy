@@ -1,9 +1,12 @@
+import type { GithubUserGrant } from '../../git-context/githubAppAuthorization.js';
+import { followedGithubPrs, GITHUB_WATCH_SCHEDULE, matchingGithubPrs, type GithubAppStatus, type GithubPrRefresh } from './github';
 /**
  * 自动化任务 Webhook 的服务器通道：地址和密钥走 webhook-server，事件经 Desktop 主动拨出的
  * 长连接送达，本机不开端口。合同见 cindy-server 仓 docs/webhook-server.md。
  */
 import { connectionBackoffDelayMs } from '@cindy/im/connection-retry';
 import {
+  isManagedWebhookSource,
   parseWebhookFormat,
   resolveScheduleWebhookFormat,
   type Schedule,
@@ -11,6 +14,7 @@ import {
   type WebhookFormat,
 } from '@cindy/maker-scheduler';
 import WebSocket, { type ClientOptions } from 'ws';
+import { beginGithubConnect } from './githubConnect';
 import type { WebhookAccountOverview } from '../../../shared/webhookAccount';
 
 const CLOSE_TOKEN_EXPIRED = 4401;
@@ -19,6 +23,10 @@ const CLOSE_REPLACED = 4409;
 
 /** 服务器偶发错误或账号被封停，都不值得频繁重试。 */
 const RECONCILE_RETRY_MS = 60_000;
+// The existing server pings every 30s. A quiet repository is healthy; a silent socket is not.
+const SOCKET_HEALTH_MS = 70_000;
+/** Coalesce repeated webhook-server overflow batches into at most one full PR sweep per window. */
+const GITHUB_OVERFLOW_COOLDOWN_MS = 5 * 60_000;
 
 export interface RemoteEndpointView {
   id: string;
@@ -45,13 +53,14 @@ interface WantedEndpoint {
 }
 
 export interface RemoteWebhookBatch {
+  batchId?: string;
   endpointId: string;
   scheduleId: string;
   events: ScheduleWebhookEvent[];
   omitted: number;
 }
 
-export type RemoteEndpointProblem = 'limit' | 'failed' | 'released';
+export type RemoteEndpointProblem = 'limit' | 'failed' | 'unsupported' | 'released';
 
 /** 账号今天的 Webhook 接收次数已用完。 */
 export interface RemoteWebhookQuota {
@@ -61,6 +70,11 @@ export interface RemoteWebhookQuota {
 }
 
 export interface ScheduleWebhookRemoteDeps {
+  onGithubAuthorized?(grant: GithubUserGrant): Promise<void>;
+  onGithubDisconnected?(): Promise<void>;
+  onGithubBatch?(batch: RemoteWebhookBatch, isCurrent: () => boolean): Promise<void>;
+  onGithubPrs?(urls: string[], isCurrent: () => boolean, refresh: GithubPrRefresh): Promise<void>;
+  githubPrHeads?(urls: readonly string[]): Promise<Readonly<Record<string, string>>>;
   /** 空字符串表示当前环境没有部署 webhook-server。 */
   baseUrl(): string;
   getAccessToken(): Promise<string | null>;
@@ -100,6 +114,35 @@ const sameEvents = (a: readonly string[], b: readonly string[]): boolean =>
 const sameFormat = (a: unknown, b: WebhookFormat): boolean =>
   JSON.stringify(parseWebhookFormat(a)) === JSON.stringify(parseWebhookFormat(b));
 
+function computeLocalSyncKey(
+  githubPrs: readonly string[],
+  githubAutomations: ReadonlyMap<string, Schedule>,
+  wanted: ReadonlyMap<string, WantedEndpoint>,
+): string {
+  const prs = [...new Set(githubPrs.map((url) => url.toLowerCase()))].sort();
+  const automations = [...githubAutomations.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, schedule]) => {
+      const trigger = schedule.webhookTrigger;
+      const repos = trigger?.source?.preset === 'github-app'
+        ? [...new Set(trigger.source.repositories.map((repo) => repo.toLowerCase()))].sort()
+        : [];
+      const events = [...new Set(trigger?.events ?? [])].sort();
+      return [id, trigger?.endpointId ?? '', repos, events];
+    });
+  const endpoints = [...wanted.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([id, item]) => [
+      id,
+      item.identity,
+      [...item.events].sort(),
+      item.format ? parseWebhookFormat(item.format) : null,
+      item.scheduleName,
+      item.deviceName ?? null,
+    ]);
+  return JSON.stringify([prs, automations, endpoints]);
+}
+
 function parseEvent(value: unknown): ScheduleWebhookEvent | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Record<string, unknown>;
@@ -134,6 +177,21 @@ function parseBatch(frame: Record<string, unknown>): (RemoteWebhookBatch & { bat
 }
 
 export class ScheduleWebhookRemote {
+  private githubPrs: string[] = [];
+  private github: GithubAppStatus = { available: false };
+  private githubSynced = '';
+  private localSyncKey = '';
+  private pendingReconciles = 0;
+  private githubInstallPending = false;
+  private githubError: unknown = null;
+  private readonly githubVerified = new Set<string>();
+  private githubBatchFailed = false;
+  private lastGithubOverflowAt = 0;
+  private githubOverflowTimer: ReturnType<typeof setTimeout> | null = null;
+  private githubAutomations = new Map<string, Schedule>();
+  private closeGithubConnect: (() => void) | undefined;
+  private githubConnectAttempt = 0;
+  private lastSocketActivity = 0;
   private wanted = new Map<string, WantedEndpoint>();
   private readonly views = new Map<string, RemoteEndpointView>();
   private readonly problems = new Map<string, RemoteEndpointProblem>();
@@ -145,6 +203,10 @@ export class ScheduleWebhookRemote {
   private replaced = false;
   private exhausted: RemoteWebhookQuota | null = null;
   private work: Promise<void> = Promise.resolve();
+  private githubWork: Promise<void> = Promise.resolve();
+  private githubRecoveryQueued = false;
+  private githubCheckedAt = 0;
+  private githubHealthQueued = false;
   private socket: WebSocket | null = null;
   private connecting = false;
   private connected = false;
@@ -169,30 +231,65 @@ export class ScheduleWebhookRemote {
 
   /** 同步“哪些任务需要接收”。登录后调用；未登录时调用也安全。 */
   sync(schedules: readonly Schedule[]): Promise<void> {
+    const githubPrs = followedGithubPrs(schedules);
+    const githubAutomations = new Map(schedules.filter(schedule => schedule.status === 'active'
+      && schedule.webhookTrigger?.source?.preset === 'github-app'
+      && (schedule.expireAt === undefined || schedule.expireAt > Date.now())).map(schedule => [schedule.id, schedule]));
     const wanted = new Map<string, WantedEndpoint>();
     for (const schedule of schedules) {
       const trigger = schedule.webhookTrigger;
+      // Managed sources (GitHub App, plugin events) have no per-task server address.
+      if (isManagedWebhookSource(trigger?.source)) continue;
       if (trigger) wanted.set(schedule.id, {
         identity: trigger.endpointId,
         events: trigger.events ?? [], format: resolveScheduleWebhookFormat(trigger.source),
+        // eslint-disable-next-line no-control-regex -- Strip control characters from display names.
         scheduleName: schedule.name.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200),
+        // eslint-disable-next-line no-control-regex -- Same display-name sanitization for devices.
         deviceName: this.deps.deviceName?.().replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200),
       });
     }
+    const nextSyncKey = computeLocalSyncKey(githubPrs, githubAutomations, wanted);
+    this.githubPrs = githubPrs;
+    this.githubAutomations = githubAutomations;
     this.wanted = wanted;
+    if (
+      this.running &&
+      this.loaded &&
+      this.pendingReconciles === 0 &&
+      !this.suspended &&
+      !this.replaced &&
+      !this.githubError &&
+      !this.githubInstallPending &&
+      nextSyncKey === this.localSyncKey
+    ) {
+      return this.work;
+    }
     this.running = true;
     return this.enqueueReconcile();
   }
 
   /** 退出登录或换账号：断开连接、丢弃账号相关的缓存，任务配置不动。 */
   pause(): void {
+    this.closeGithubConnect?.();
+    this.closeGithubConnect = undefined;
+    this.githubWork = Promise.resolve();
+    this.githubRecoveryQueued = false;
+    this.githubCheckedAt = 0;
+    this.githubHealthQueued = false;
     this.generation += 1;
     this.running = false;
     this.loaded = false;
+    this.localSyncKey = '';
     this.suspended = false;
     this.replaced = false;
     this.exhausted = null;
     this.views.clear();
+    this.github = { available: false };
+    this.githubError = null;
+    this.githubSynced = '';
+    this.localSyncKey = '';
+    this.githubInstallPending = false;
     this.problems.clear();
     this.releases.clear();
     this.clearTimers();
@@ -209,9 +306,38 @@ export class ScheduleWebhookRemote {
     return this.connected;
   }
 
+  githubEventsHealthy(url: string): boolean {
+    return this.running && this.loaded && this.connected && !this.suspended && !this.replaced
+      && !this.githubError && !this.githubBatchFailed && this.github.deliveryHealthy !== false
+      && Date.now() - this.githubCheckedAt < 90_000
+      && (!this.quota() || this.github.dailyQuotaExempt === true)
+      && Date.now() - this.lastSocketActivity < SOCKET_HEALTH_MS
+      && this.githubVerified.has(url.toLowerCase())
+      && this.coveredGithubPrs().some(pr => pr.toLowerCase() === url.toLowerCase());
+  }
+
+  private coveredGithubPrs(): string[] {
+    if (!this.github.available || !this.github.login || !this.github.endpointId) return [];
+    const repositories = new Set(this.github.repositories?.map(repo => repo.toLowerCase()));
+    const unavailable = new Set(this.github.unavailable?.map(repo => repo.toLowerCase()));
+    return this.githubPrs.filter(url => {
+      const repository = url.split('/').slice(3, 5).join('/').toLowerCase();
+      return repositories.has(repository) && !unavailable.has(repository);
+    });
+  }
+
   canDeliver(scheduleId: string): boolean {
+    if (this.githubAutomations.has(scheduleId)) return this.canDeliverGithub(scheduleId);
     return this.running && this.loaded && this.views.has(scheduleId) && !this.releases.has(scheduleId)
       && this.wanted.has(scheduleId) && this.identities.get(scheduleId) === this.wanted.get(scheduleId)?.identity;
+  }
+
+  canDeliverGithub(scheduleId: string): boolean {
+    const source = this.githubAutomations.get(scheduleId)?.webhookTrigger?.source;
+    return source?.preset === 'github-app' && this.running && this.loaded && !this.suspended
+      && !this.githubError && this.github.automationSubscriptions === true && !!this.github.login && !!this.github.endpointId
+      && source.repositories.every(repo => this.github.repositories?.some(value => value.toLowerCase() === repo.toLowerCase())
+        && !this.github.unavailable?.some(value => value.toLowerCase() === repo.toLowerCase()));
   }
 
   view(scheduleId: string): RemoteEndpointView | undefined {
@@ -219,11 +345,177 @@ export class ScheduleWebhookRemote {
   }
 
   problem(scheduleId: string): RemoteEndpointProblem | undefined {
+    if (this.githubAutomations.has(scheduleId)) return this.canDeliverGithub(scheduleId) ? undefined : 'failed';
     return this.problems.get(scheduleId);
   }
 
   isSuspended(): boolean {
     return this.suspended;
+  }
+
+  async githubStatus(): Promise<GithubAppStatus> {
+    const generation = this.generation;
+    if (!this.deps.baseUrl() || !(await this.deps.getAccessToken())) return { available: false };
+    if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+    return this.enqueue(async () => {
+      // Complete the explicit installation flow when its UI returns. Background
+      // refreshes must not consume this invalidation before installation finishes.
+      const installation = this.githubInstallPending;
+      this.githubInstallPending = false;
+      if (installation) this.githubSynced = '';
+      try {
+        this.loaded = false;
+        this.localSyncKey = '';
+        await this.reconcile();
+        if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+        if (this.githubError) throw this.githubError;
+        if (this.running && !this.loaded) throw new Error('GITHUB_CONNECTION_UNAVAILABLE');
+        // A successful read can still precede the user's GitHub grant. Keep the
+        // explicit recheck until the requested repositories are accessible.
+        if (installation && this.github.unavailable?.length) this.githubInstallPending = true;
+        // Capture this refresh's result before the next queued refresh resets loaded.
+        return this.github;
+      } catch (error) {
+        if (installation && generation === this.generation) this.githubInstallPending = true;
+        throw error;
+      }
+    });
+  }
+
+  async installGithub(): Promise<string | undefined> {
+    const { installUrl } = await this.githubStatus();
+    if (installUrl) this.githubInstallPending = true;
+    return installUrl;
+  }
+
+  async connectGithub(): Promise<string> {
+    this.closeGithubConnect?.();
+    const attemptId = ++this.githubConnectAttempt;
+    const baseUrl = this.deps.baseUrl();
+    const generation = this.generation;
+    const status = await this.githubStatus();
+    if (generation !== this.generation || attemptId !== this.githubConnectAttempt) throw new Error('GITHUB_CONNECT_CANCELLED');
+    const includeUserToken = Boolean(status.userAuthorization && this.deps.onGithubAuthorized);
+    const attempt = await beginGithubConnect({
+      start: input => this.request('POST', '/github/connect', input),
+      complete: input => this.request('POST', '/github/connect/complete', { ...input, ...(includeUserToken ? { includeUserToken: true } : {}) }),
+      isCurrent: () => baseUrl === this.deps.baseUrl() && generation === this.generation && attemptId === this.githubConnectAttempt && this.running,
+      onConnected: async grant => {
+        if (includeUserToken) {
+          if (!grant) throw new Error('GITHUB_USER_AUTHORIZATION_MISSING');
+          await this.deps.onGithubAuthorized!(grant);
+        }
+        // OAuth completes before the browser proceeds to repository installation.
+        this.githubInstallPending = true;
+        this.githubSynced = '';
+        void this.refresh().catch(() => undefined);
+      },
+    });
+    this.closeGithubConnect = attempt.close;
+    return attempt.url;
+  }
+
+  async disconnectGithub(): Promise<void> {
+    this.githubConnectAttempt++;
+    this.closeGithubConnect?.();
+    this.closeGithubConnect = undefined;
+    await this.request('DELETE', '/github');
+    await this.deps.onGithubDisconnected?.();
+    this.github = { available: true, login: null, userAuthorization: this.github.userAuthorization };
+    this.githubSynced = '';
+    this.localSyncKey = '';
+    this.githubInstallPending = false;
+    this.githubVerified.clear();
+    this.clearGithubOverflowState();
+    this.updateConnection();
+  }
+
+  /** Returns a grant, `{recovery}` (rotated but unverified; caller must keep it), or null when expired. */
+  async refreshGithubAuthorization(credential: { refreshToken: string } | { recovery: string }): Promise<GithubUserGrant | { recovery: string } | null> {
+    try { return await this.request('POST', '/github/user-token/refresh', credential); }
+    catch (error) {
+      if (error instanceof RemoteRequestError && error.status === 400 && error.code === 'GITHUB_AUTHORIZATION_EXPIRED') return null;
+      throw new Error('GITHUB_AUTHORIZATION_REFRESH_FAILED');
+    }
+  }
+
+  private async syncGithub(
+    githubPrsSnapshot: readonly string[],
+    githubAutomationsSnapshot: ReadonlyMap<string, Schedule>,
+  ): Promise<void> {
+    const state = await this.request<GithubAppStatus>('GET', '/github').catch(error => {
+      if (error instanceof RemoteRequestError && error.status === 404) return { available: false } as GithubAppStatus;
+      throw error;
+    });
+    if (state.login !== this.github.login || state.endpointId !== this.github.endpointId) {
+      this.githubVerified.clear();
+      this.clearGithubOverflowState();
+    }
+    if (this.github.login && (state.login !== this.github.login || state.endpointId !== this.github.endpointId)) {
+      for (const id of githubAutomationsSnapshot.keys()) await this.deps.onInvalidated?.(id);
+    }
+    this.github = state;
+    this.githubCheckedAt = Date.now();
+    this.githubError = null;
+    if (!state.available || !state.login) { this.githubSynced = ''; return; }
+    const prs = [...new Set(githubPrsSnapshot.map(url => url.toLowerCase()))].sort().map(url => ({
+      repository: url.split('/').slice(3, 5).join('/'), number: Number(url.split('/')[6]),
+    }));
+    const repositorySubscriptions = state.automationSubscriptions
+      ? [...new Set([...githubAutomationsSnapshot.values()].flatMap(schedule => {
+        const source = schedule.webhookTrigger?.source;
+        return source?.preset === 'github-app' ? source.repositories.map(repo => repo.toLowerCase()) : [];
+      }))].sort() : [];
+    const repositories = [...new Set([...prs.map(pr => pr.repository), ...repositorySubscriptions])];
+    // Capability negotiation keeps old servers working. Above the precise-list
+    // bound retain repository delivery, rather than silently omitting follows.
+    const subscription = { repositories, ...(state.prSubscriptions && prs.length <= 1_000 ? { pullRequests: prs } : {}),
+      ...(state.automationSubscriptions ? { repositorySubscriptions } : {}) };
+    const key = JSON.stringify([state.login, state.endpointId, subscription]);
+    if (key !== this.githubSynced) {
+      this.github = await this.request<GithubAppStatus>('PUT', '/github/repositories', subscription);
+      this.githubSynced = JSON.stringify([this.github.login, this.github.endpointId, subscription]);
+    }
+    // Recovery uses the GitHub lane. A slow GitHub read cannot block ordinary
+    // Webhook admission, configuration refreshes or event-triggered script tasks.
+    if (!this.githubRecoveryQueued && this.connected && this.coveredGithubPrs().some(url => !this.githubVerified.has(url.toLowerCase()))) {
+      this.githubRecoveryQueued = true;
+      const generation = this.generation;
+      void this.enqueueGithub(() => this.recoverGithubPrs()).catch(error => {
+        if (generation !== this.generation) return;
+        this.deps.logger.warn?.('[schedule-webhook] GitHub status recovery failed', { error: String(error) });
+        this.scheduleRetry();
+      }).finally(() => {
+        if (generation !== this.generation) return;
+        this.githubRecoveryQueued = false;
+        if (this.running && this.coveredGithubPrs().some(url => !this.githubVerified.has(url.toLowerCase()))) this.scheduleRetry();
+      });
+    }
+  }
+
+  private async recoverGithubPrs(): Promise<void> {
+    const socket = this.socket;
+    if (!this.connected || !socket) return;
+    const covered = this.coveredGithubPrs();
+    const coveredKeys = new Set(covered.map(url => url.toLowerCase()));
+    for (const url of this.githubVerified) if (!coveredKeys.has(url)) this.githubVerified.delete(url);
+    const missing = covered.filter(url => !this.githubVerified.has(url.toLowerCase()));
+    if (!missing.length) return;
+    const isCurrent = this.githubGuard(socket);
+    if (!this.deps.onGithubPrs) throw new Error('GITHUB_RECEIVER_UNAVAILABLE');
+    await this.deps.onGithubPrs(missing, isCurrent, { reason: 'reconnect', notify: missing });
+    if (isCurrent()) for (const url of missing) this.githubVerified.add(url.toLowerCase());
+  }
+
+  private refreshGithubHealth(): void {
+    if (!this.running || !this.github.login || this.githubHealthQueued || Date.now() - this.githubCheckedAt < 60_000) return;
+    const generation = this.generation;
+    this.githubHealthQueued = true;
+    // Reuse server pings: one cached status read per minute, without re-registering
+    // subscriptions or calling GitHub. A stale response cannot suppress fallback.
+    void this.enqueueReconcile().catch(() => undefined).finally(() => {
+      if (generation === this.generation) this.githubHealthQueued = false;
+    });
   }
 
   async accountOverview(): Promise<WebhookAccountOverview> {
@@ -239,6 +531,7 @@ export class ScheduleWebhookRemote {
     await this.enqueue(async () => {
       await this.request('DELETE', `/account/endpoints/${encodeURIComponent(id)}`);
       this.loaded = false;
+      this.localSyncKey = '';
       await this.reconcile();
     });
   }
@@ -247,6 +540,7 @@ export class ScheduleWebhookRemote {
     await this.enqueue(async () => {
       const generation = this.generation;
       this.loaded = false;
+      this.localSyncKey = '';
       await this.reconcile();
       if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
       const releaseId = this.releases.get(scheduleId);
@@ -265,7 +559,11 @@ export class ScheduleWebhookRemote {
 
   /** 打开详情、回到窗口或服务器通知时读取最新状态；不增加常驻轮询。 */
   async refresh(): Promise<void> {
-    await this.enqueue(async () => { this.loaded = false; await this.reconcile(); });
+    await this.enqueue(async () => {
+      this.loaded = false;
+      this.localSyncKey = '';
+      await this.reconcile();
+    });
   }
 
   /** 服务器不发恢复通知，到了恢复时刻自然失效。 */
@@ -291,28 +589,66 @@ export class ScheduleWebhookRemote {
 
   /** 先把最新配置同步到服务器，避免在旧格式上设置密钥。 */
   private async currentView(scheduleId: string): Promise<RemoteEndpointView> {
-    await this.enqueueReconcile();
-    const view = this.view(scheduleId);
+    this.pendingReconciles += 1;
+    const view = await this.enqueue(async () => {
+      await this.reconcile();
+      // Capture inside the serialized lane before a queued refresh() resets loaded=false.
+      return this.view(scheduleId);
+    }).finally(() => {
+      this.pendingReconciles = Math.max(0, this.pendingReconciles - 1);
+    });
     if (!view) throw new Error('Webhook endpoint is not available');
     return view;
   }
 
   private enqueueReconcile(): Promise<void> {
-    return this.enqueue(() => this.reconcile());
+    this.pendingReconciles += 1;
+    return this.enqueue(() => this.reconcile()).finally(() => {
+      this.pendingReconciles = Math.max(0, this.pendingReconciles - 1);
+    });
   }
 
-  private enqueue(operation: () => Promise<void>): Promise<void> {
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
     const generation = this.generation;
     const run = this.work.then(() => {
       if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
       return operation();
     });
-    this.work = run.catch(() => undefined);
+    this.work = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private githubGuard(socket: WebSocket): () => boolean {
+    const generation = this.generation;
+    const subscription = this.githubSynced;
+    let current = true;
+    return () => current && (current = this.running && this.socket === socket
+      && generation === this.generation && subscription === this.githubSynced);
+  }
+
+  private enqueueGithub<T>(operation: () => Promise<T>): Promise<T> {
+    const generation = this.generation;
+    const reconciled = this.work;
+    const run = this.githubWork.then(() => reconciled).then(() => {
+      if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+      return operation();
+    });
+    this.githubWork = run.then(() => undefined, () => undefined);
     return run;
   }
 
   private async reconcile(): Promise<void> {
     const generation = this.generation;
+    // Capture an immutable snapshot before any network await so concurrent sync() mutations
+    // during an in-flight request can never be stamped as synced before their own reconcile runs.
+    const wantedSnapshot = new Map(this.wanted);
+    const githubPrsSnapshot = [...this.githubPrs];
+    const githubAutomationsSnapshot = new Map(this.githubAutomations);
+    const snapshotSyncKey = computeLocalSyncKey(
+      githubPrsSnapshot,
+      githubAutomationsSnapshot,
+      wantedSnapshot,
+    );
     try {
       if (!this.running || !this.deps.baseUrl() || !(await this.deps.getAccessToken()) || generation !== this.generation) return;
       if (!this.loaded) {
@@ -337,7 +673,7 @@ export class ScheduleWebhookRemote {
         for (const endpoint of endpoints) this.views.set(endpoint.scheduleId, endpoint);
         this.loaded = true;
       }
-      for (const [scheduleId, wanted] of this.wanted) {
+      for (const [scheduleId, wanted] of wantedSnapshot) {
         if (generation !== this.generation) return;
         if (this.releases.has(scheduleId)) continue;
         let view = this.views.get(scheduleId);
@@ -365,18 +701,31 @@ export class ScheduleWebhookRemote {
       }
       for (const [scheduleId, view] of this.views) {
         if (generation !== this.generation) return;
-        if (this.wanted.has(scheduleId)) continue;
+        if (wantedSnapshot.has(scheduleId)) continue;
         await this.request('DELETE', `/endpoints/${view.id}`);
         this.views.delete(scheduleId);
         this.problems.delete(scheduleId);
       }
       for (const scheduleId of this.identities.keys()) {
-        if (!this.wanted.has(scheduleId)) this.rememberIdentity(scheduleId, undefined);
+        if (!wantedSnapshot.has(scheduleId)) this.rememberIdentity(scheduleId, undefined);
       }
+      try { await this.syncGithub(githubPrsSnapshot, githubAutomationsSnapshot); }
+      catch (error) {
+        if (generation !== this.generation) return;
+        this.githubError = error;
+        this.localSyncKey = '';
+        this.scheduleRetry();
+      }
+      if (generation !== this.generation) return;
       this.suspended = false;
+      const latestKey = computeLocalSyncKey(this.githubPrs, this.githubAutomations, this.wanted);
+      this.localSyncKey = this.loaded && !this.githubError && latestKey === snapshotSyncKey
+        ? snapshotSyncKey
+        : '';
     } catch (error) {
       if (generation !== this.generation) return;
       this.loaded = false;
+      this.localSyncKey = '';
       if (error instanceof RemoteRequestError && error.code === 'WEBHOOK_ACCOUNT_SUSPENDED') this.suspended = true;
       this.deps.logger.warn?.('[schedule-webhook] sync failed', { error: String(error) });
       this.scheduleRetry();
@@ -389,7 +738,7 @@ export class ScheduleWebhookRemote {
     // 本机认不出发送方时沿用服务器上的格式；新建时没有可沿用的，只能报错。
     const effective = format ?? this.views.get(scheduleId)?.format ?? null;
     if (!effective) {
-      this.problems.set(scheduleId, 'failed');
+      this.problems.set(scheduleId, 'unsupported');
       return;
     }
     try {
@@ -405,18 +754,23 @@ export class ScheduleWebhookRemote {
       if (!(error instanceof RemoteRequestError) || error.status >= 500 || error.status === 403) throw error;
       // 这一个任务的问题，不挡住其他任务。
       this.problems.set(scheduleId, error.code === 'WEBHOOK_ENDPOINT_LIMIT' ? 'limit'
-        : error.code === 'WEBHOOK_ENDPOINT_RELEASED' ? 'released' : 'failed');
+        : error.code === 'WEBHOOK_ENDPOINT_RELEASED' ? 'released'
+          // 400／422 是服务器不认这份端点定义，实际只有格式版本不一致这一种；重试不会变。
+          : error.status === 400 || error.status === 422 ? 'unsupported' : 'failed');
     }
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const generation = this.generation;
+    const baseUrl = this.deps.baseUrl();
     const send = async (): Promise<Response> => {
       const token = await this.deps.getAccessToken();
-      if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+      if (generation !== this.generation || baseUrl !== this.deps.baseUrl()) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
       if (!token) throw new RemoteRequestError(401, 'SIGNED_OUT');
-      return this.deps.fetch(`${this.deps.baseUrl()}/api/v1${path}`, {
+      return this.deps.fetch(`${baseUrl}/api/v1${path}`, {
         method,
+        redirect: 'error',
+        signal: AbortSignal.timeout(30_000),
         headers: {
           authorization: `Bearer ${token}`,
           ...(body === undefined ? {} : { 'content-type': 'application/json' }),
@@ -425,16 +779,16 @@ export class ScheduleWebhookRemote {
       });
     };
     let response = await send();
-    if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+    if (generation !== this.generation || baseUrl !== this.deps.baseUrl()) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
     if (response.status === 401 && (await this.deps.refreshAccessToken())) response = await send();
-    if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+    if (generation !== this.generation || baseUrl !== this.deps.baseUrl()) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
     if (!response.ok) {
       const parsed = (await response.json().catch(() => null)) as { error?: { code?: string } } | null;
-      if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+      if (generation !== this.generation || baseUrl !== this.deps.baseUrl()) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
       throw new RemoteRequestError(response.status, parsed?.error?.code);
     }
     const result = response.status === 204 ? undefined : await response.json();
-    if (generation !== this.generation) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
+    if (generation !== this.generation || baseUrl !== this.deps.baseUrl()) throw new Error('WEBHOOK_ACCOUNT_CHANGED');
     return result as T;
   }
 
@@ -449,7 +803,7 @@ export class ScheduleWebhookRemote {
 
   /** 只有需要接收事件时才保持连接。 */
   private updateConnection(): void {
-    if (this.running && this.wanted.size > 0 && !this.suspended && !this.replaced) void this.connect();
+    if (this.running && (this.wanted.size > 0 || (this.github.login && (this.githubPrs.length > 0 || this.githubAutomations.size > 0))) && !this.suspended && !this.replaced) void this.connect();
     else this.closeSocket();
   }
 
@@ -479,12 +833,21 @@ export class ScheduleWebhookRemote {
       ...options,
     });
     this.socket = socket;
+    this.githubVerified.clear();
+    this.githubBatchFailed = false;
+    this.clearGithubOverflowState();
+    this.lastSocketActivity = 0;
     let rejected = false;
     socket.on('unexpected-response', (_request, response) => {
       rejected = response.statusCode === 401;
       socket.terminate();
     });
     socket.on('message', (raw) => this.onFrame(socket, String(raw)));
+    socket.on('ping', () => {
+      if (this.socket !== socket) return;
+      this.lastSocketActivity = Date.now();
+      this.refreshGithubHealth();
+    });
     socket.on('error', (error) => {
       this.deps.logger.warn?.('[schedule-webhook] connection error', { error: String(error) });
     });
@@ -493,6 +856,7 @@ export class ScheduleWebhookRemote {
       this.socket = null;
       const wasConnected = this.connected;
       this.connected = false;
+      this.githubVerified.clear();
       if (code === CLOSE_REPLACED) this.replaced = true;
       if (wasConnected) this.deps.onChanged?.();
       void this.onClosed(code, rejected);
@@ -535,6 +899,7 @@ export class ScheduleWebhookRemote {
 
   private onFrame(socket: WebSocket, raw: string): void {
     if (this.socket !== socket) return;
+    this.lastSocketActivity = Date.now();
     let frame: Record<string, unknown>;
     try {
       frame = JSON.parse(raw) as Record<string, unknown>;
@@ -561,11 +926,86 @@ export class ScheduleWebhookRemote {
     const batch = parseBatch(frame);
     if (!batch) return;
     const { batchId, ...delivery } = batch;
-    this.deps.onBatch(delivery).then(
+    let canAcknowledge = () => this.socket === socket && this.running;
+    // Persist task doorbells on the ordinary admission lane. Only PR lookups
+    // join the GitHub lane, so a slow PR cannot delay an unrelated App task.
+    const receive = this.enqueue(async () => {
+      if (this.socket !== socket || !this.running) return;
+      if (delivery.scheduleId !== GITHUB_WATCH_SCHEDULE) { await this.deps.onBatch(delivery); return; }
+      if (delivery.endpointId !== this.github.endpointId || !this.github.login) throw new Error('GitHub subscription is not reconciled');
+      const isCurrent = this.githubGuard(socket);
+      canAcknowledge = isCurrent;
+      await this.deps.onGithubBatch?.({ ...delivery, batchId }, isCurrent);
+      return isCurrent;
+    }).then(async (isCurrent) => {
+      if (!isCurrent?.()) return;
+      const covered = this.coveredGithubPrs();
+      const heads = await this.deps.githubPrHeads?.(covered) ?? {};
+      if (!isCurrent()) return;
+      // Unknown/evicted heads are re-read once, never every PR in the repository.
+      const unknown = covered.filter(url => !heads[url] && delivery.events.some(event => ['check_run', 'check_suite', 'status', 'workflow_run'].includes(event.event) && event.number === undefined
+        && event.repository?.toLowerCase() === url.split('/').slice(3, 5).join('/').toLowerCase()));
+      const eventUrls = [...new Set([...matchingGithubPrs(covered, delivery.events, heads), ...unknown])];
+      const eventNotify = matchingGithubPrs(covered,
+        delivery.events.filter(event => !['check_run', 'check_suite', 'status'].includes(event.event)), heads);
+      const elapsedSinceOverflow = this.lastGithubOverflowAt > 0
+        ? Date.now() - this.lastGithubOverflowAt
+        : Number.POSITIVE_INFINITY;
+      const deferOverflow = delivery.omitted > 0 && !this.githubBatchFailed
+        && elapsedSinceOverflow >= 0 && elapsedSinceOverflow < GITHUB_OVERFLOW_COOLDOWN_MS;
+      const recover = (delivery.omitted > 0 && !deferOverflow) || this.githubBatchFailed;
+      if (recover && covered.length) this.githubBatchFailed = true;
+      if (deferOverflow && covered.length && !this.deps.onGithubPrs) {
+        throw new Error('GITHUB_RECEIVER_UNAVAILABLE');
+      }
+      const urls = recover ? covered : eventUrls;
+      if (urls.length) {
+        if (!this.deps.onGithubPrs) throw new Error('GITHUB_RECEIVER_UNAVAILABLE');
+        await this.enqueueGithub(async () => {
+          if (!isCurrent()) return;
+          const now = Date.now();
+          const queuedElapsed = this.lastGithubOverflowAt > 0 ? now - this.lastGithubOverflowAt : Number.POSITIVE_INFINITY;
+          // If another queued overflow sweep just completed while this batch waited in the
+          // GitHub lane, coalesce into one trailing sweep and only refresh explicit event targets now.
+          const coalesceQueuedOverflow = recover && delivery.omitted > 0 && !this.githubBatchFailed
+            && queuedElapsed >= 0 && queuedElapsed < GITHUB_OVERFLOW_COOLDOWN_MS;
+          const runRecover = recover && !coalesceQueuedOverflow;
+          const runUrls = runRecover ? covered : eventUrls;
+          if (!runUrls.length) {
+            if (coalesceQueuedOverflow && covered.length) {
+              this.scheduleGithubOverflowSweep(socket, GITHUB_OVERFLOW_COOLDOWN_MS - queuedElapsed);
+            }
+            return;
+          }
+          const runNotify = runRecover ? covered : eventNotify;
+          const reviews = matchingGithubPrs(covered, delivery.events.filter(event => ['pull_request_review', 'pull_request_review_comment', 'pull_request_review_thread'].includes(event.event)));
+          const closed = matchingGithubPrs(covered, delivery.events.filter(event => event.event === 'pull_request' && event.action === 'closed'));
+          await this.deps.onGithubPrs!(runUrls, isCurrent, { reason: runRecover ? 'overflow' : 'event', notify: runNotify,
+            ...(reviews.length ? { reviews } : {}), ...(closed.length ? { closed } : {}) });
+          if (isCurrent()) {
+            this.githubBatchFailed = false;
+            if (runRecover) {
+              this.lastGithubOverflowAt = Date.now();
+              if (this.githubOverflowTimer) {
+                clearTimeout(this.githubOverflowTimer);
+                this.githubOverflowTimer = null;
+              }
+            } else if (coalesceQueuedOverflow && covered.length) {
+              this.scheduleGithubOverflowSweep(socket, GITHUB_OVERFLOW_COOLDOWN_MS - queuedElapsed);
+            }
+          }
+        });
+      }
+      if (deferOverflow && covered.length && isCurrent()) {
+        this.scheduleGithubOverflowSweep(socket, GITHUB_OVERFLOW_COOLDOWN_MS - elapsedSinceOverflow);
+      }
+    });
+    receive.then(
       () => {
-        if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ type: 'ack', batchId }));
+        if (canAcknowledge() && socket.readyState === socket.OPEN) socket.send(JSON.stringify({ type: 'ack', batchId }));
       },
       (error) => {
+        if (canAcknowledge() && delivery.scheduleId === GITHUB_WATCH_SCHEDULE) this.githubBatchFailed = true;
         // 不 ack：服务器保留这批事件，之后重发。
         this.deps.logger.warn?.('[schedule-webhook] batch not stored', { error: String(error) });
       },
@@ -577,7 +1017,59 @@ export class ScheduleWebhookRemote {
     if (this.exhausted?.resetAt === resetAt) return;
     this.exhausted = { limit, resetAt };
     this.deps.onChanged?.();
-    this.deps.onQuotaExhausted?.(this.exhausted);
+    // The generic allowance is still visible to ordinary Webhook tasks. A
+    // GitHub-only device must not show an unrelated "notifications stopped" alert.
+    if (this.wanted.size || !this.github.dailyQuotaExempt) this.deps.onQuotaExhausted?.(this.exhausted);
+  }
+
+  private clearGithubOverflowState(): void {
+    this.lastGithubOverflowAt = 0;
+    if (this.githubOverflowTimer) {
+      clearTimeout(this.githubOverflowTimer);
+      this.githubOverflowTimer = null;
+    }
+  }
+
+  private scheduleGithubOverflowSweep(socket: WebSocket, delayMs: number): void {
+    if (this.githubOverflowTimer || !this.running || this.socket !== socket) return;
+    const generation = this.generation;
+    const login = this.github.login;
+    const endpointId = this.github.endpointId;
+    if (!login || !endpointId) return;
+    // Bind only to the account/connection boundary here, not to the earlier `githubSynced` snapshot:
+    // adding or removing a followed PR before the cooldown expires must not drop an already-ACKed
+    // overflow sweep for the remaining PRs.
+    const sameConnection = () => this.running && this.socket === socket && generation === this.generation
+      && this.github.login === login && this.github.endpointId === endpointId;
+    this.githubOverflowTimer = setTimeout(() => {
+      this.githubOverflowTimer = null;
+      if (!sameConnection()) return;
+      if (!this.deps.onGithubPrs) {
+        if (this.coveredGithubPrs().length) this.githubBatchFailed = true;
+        return;
+      }
+      void this.enqueueGithub(async () => {
+        if (!sameConnection()) return;
+        const currentCovered = this.coveredGithubPrs();
+        if (!currentCovered.length) return;
+        const isCurrent = this.githubGuard(socket);
+        await this.deps.onGithubPrs!(currentCovered, isCurrent, { reason: 'overflow', notify: currentCovered });
+        if (isCurrent()) {
+          this.githubBatchFailed = false;
+          this.lastGithubOverflowAt = Date.now();
+        } else if (sameConnection()) {
+          // Subscription changed while this sweep was in flight on the same account/connection;
+          // re-run once under the updated subscription instead of dropping the owed sweep.
+          this.scheduleGithubOverflowSweep(socket, 0);
+        }
+      }).catch((error) => {
+        if (!sameConnection()) return;
+        this.githubBatchFailed = true;
+        this.deps.logger.warn?.('[schedule-webhook] GitHub overflow recovery failed', { error: String(error) });
+        this.scheduleGithubOverflowSweep(socket, RECONCILE_RETRY_MS);
+      });
+    }, Math.max(0, delayMs));
+    this.githubOverflowTimer.unref?.();
   }
 
   private clearTimers(): void {
@@ -585,6 +1077,7 @@ export class ScheduleWebhookRemote {
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.reconnectTimer = null;
     this.retryTimer = null;
+    this.clearGithubOverflowState();
     this.attempt = 0;
     this.refreshedAfterRejection = false;
   }
@@ -593,6 +1086,10 @@ export class ScheduleWebhookRemote {
     const socket = this.socket;
     this.socket = null;
     this.connected = false;
+    this.githubVerified.clear();
+    this.githubBatchFailed = false;
+    this.clearGithubOverflowState();
+    this.lastSocketActivity = 0;
     if (!socket) return;
     socket.removeAllListeners('close');
     socket.on('error', () => undefined);

@@ -7,6 +7,11 @@ let memorySettings = {
   pi: false,
 };
 
+import { configureUserDataDir } from '../../userDataPath.js';
+
+// The settings stores read the profile root from the injected host facts.
+configureUserDataDir('/tmp/xdt-maker-test-user-data');
+
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
@@ -40,8 +45,11 @@ vi.mock('../../model-access/effectiveEndpoint.js', async () => {
 });
 
 describe('runtime-configs', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
+    // resetModules clears the injected host facts, so reinstall them per test.
+    const { configureUserDataDir: configure } = await import('../../userDataPath.js');
+    configure('/tmp/xdt-maker-test-user-data');
     memorySettings = {
       maker: true,
       claudeCode: false,
@@ -102,6 +110,31 @@ describe('runtime-configs', () => {
     expect(route('xd', 'gateway-key')).toBe('chatgpt/gpt-5.5');
   });
 
+  // 2026-11-26 用户裁决(Subagent 也能选智能路由) / unit：失效后果是存下的 route:<id> 原样当成模型名注入，Claude Code
+  // 用不存在的模型开子代理；或者用了路由里另一个供应商的模型(子代理跑在主任务的来源上，用不了)。
+  // 最小输入：一条两个成员(Cindy AI 上的 a、Anthropic 上的 b)的路由，主任务分别在 xd 与 anthropic 上。
+  it('Subagent 选了智能路由时用路由里与主任务同一个供应商的成员', async () => {
+    vi.doMock('../memory-settings-store.js', () => ({ readMemorySettings: () => memorySettings }));
+    vi.doMock('../subagent-model-settings-store.js', () => ({
+      readSubagentModelSettings: () => ({ claudeCode: 'route:cheap' }),
+    }));
+    vi.doMock('../model-disable-store.js', () => ({ readModelDisableOverrides: () => ({}) }));
+    vi.doMock('../../utility-model/auxiliaryRouteRefs.js', () => ({
+      localRouteCandidatesInPickOrder: (id: string) => (id === 'cheap' ? [
+        { agentKind: 'cc', providerId: 'xd', model: 'deepseek/deepseek-v4-flash' },
+        { agentKind: 'codex', providerId: 'openai', model: 'gpt-6-luna' },
+        { agentKind: 'cc', providerId: 'anthropic', model: 'claude-haiku-5-5' },
+      ] : []),
+    }));
+    const { buildDesktopClaudeRuntimeConfig } = await import('../runtime-configs.js');
+    const route = buildDesktopClaudeRuntimeConfig(() => 'http://127.0.0.1:1234').subagentModelForRoute!;
+
+    expect(route('xd', 'gateway-key')).toBe('deepseek/deepseek-v4-flash');
+    expect(route(null, 'oauth-bearer')).toBe('claude-haiku-5-5');
+    // 主任务所在的供应商不在路由里：不注入，用 Claude Code 自己的默认。
+    expect(route('byok-7', 'gateway-key')).toBeUndefined();
+  });
+
   it('places generic Cindy-side Skill precedence in Claude and Codex only', async () => {
     vi.doMock('../memory-settings-store.js', () => ({
       readMemorySettings: () => memorySettings,
@@ -122,6 +155,9 @@ describe('runtime-configs', () => {
       // 来源判定必须落在可观察的清单标注上，并且无标注时 fail-closed 回落到
       // 「先跑 Cindy 侧 Skill」，否则这条规则对模型不可执行 (#1650 review)。
       expect(prompt).toMatch(/available-Skills listing already labels each Skill/u);
+      // Cindy 自有 Skill 在 Claude 里挂在 `cindy` / `cindy-plugin-<id>` 插件命名空间下
+      // (managed-skills.ts)。规则只写「有插件命名空间即下游」时，会把它们排到下游之后。
+      expect(prompt).toMatch(/`cindy` or\s+`cindy-plugin-\*` namespace marks a Cindy-side Skill/u);
       expect(prompt).toMatch(
         /no usable source\s+label, treat the Skill as downstream and still run the applicable Cindy-side Skill first/u,
       );
@@ -142,6 +178,8 @@ describe('runtime-configs', () => {
 
     for (const prompt of [claudeConfig.systemPrompt, desktopCodexRuntimeConfig.systemPrompt]) {
       expect(prompt).toContain('## User-facing plans');
+      expect(prompt?.match(/## User-facing plans/gu)).toHaveLength(1);
+      expect(prompt).not.toContain('cindy_mcp_list_tools');
       expect(prompt).toContain('Write for a general user, not as internal engineering notes.');
       expect(prompt).toContain('Name the real action and visible result instead.');
     }
@@ -150,6 +188,8 @@ describe('runtime-configs', () => {
 
 it('never treats a retired independent Claude account as a connected subscription for spawn flags', async () => {
   vi.resetModules();
+  const { configureUserDataDir: configure } = await import('../../userDataPath.js');
+  configure('/tmp/xdt-maker-test-user-data');
   const readBuiltin = vi.fn(() => true);
   vi.doMock('../active-catalog.js', () => ({ getActiveCatalog: () => ({ providers: [
     { id: 'claude-work', auth: { method: 'oauth', native: 'claude' } },

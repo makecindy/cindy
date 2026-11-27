@@ -40,16 +40,63 @@ export interface HistoryViewTransport<T extends HistoryMessageSource> {
   expanded(refs: readonly HistoryWorkReference[]): Promise<void>;
   /** Local diagnostics only: counts and lifecycle, never message bodies. */
   diagnostic?(event: HistoryViewDiagnostic): void;
+  /** A mounted surface kept releasing and re-retaining a range; ids and counts only. */
+  expansionLoop?(event: HistoryViewExpansionLoop): void;
 }
 
+/**
+ * A render feedback loop: retaining a range changed the display so its surface
+ * unmounted (releasing it), which changed the display back and remounted it.
+ * The controller keeps the range retained to break the loop; this records why.
+ */
+export interface HistoryViewExpansionLoop {
+  key: string;
+  /** All keys the looping surface retained together. */
+  retainedWith: readonly string[];
+  releases: number;
+  itemCount: number;
+  expandedCount: number;
+  range?: {
+    preview: boolean;
+    isStreaming: boolean;
+    revision: string;
+    firstMessageId: string;
+    lastMessageId: string;
+    messageCount: number;
+    hasLines: boolean;
+    /** For a preview key: the enclosing range's state. */
+    fullExpanded?: boolean;
+  };
+  detail?: { revision: string; loading: boolean; complete: boolean; failed: boolean; messageCount: number };
+}
+
+/** Releases of one range within one synchronous update before the guard keeps it retained. */
+const EXPANSION_LOOP_RELEASES = 3;
+
 export interface HistoryViewDiagnostic {
-  source: 'cache' | 'latest' | 'older' | 'details' | 'fallback' | 'reset';
+  source: 'cache' | 'latest' | 'older' | 'details' | 'fallback' | 'reset' | 'failed';
   previousItemCount: number;
   itemCount: number;
   messageCount: number;
   detailMessageCount: number;
   ready: boolean;
   stale: boolean;
+  /**
+   * 只在 source='failed' 时出现:哪一种分页读取失败,以及错误码(`[CODE]` 前缀,缺省 UNKNOWN)。
+   * 只带枚举,不带错误正文 —— 正文可能含路径或对端返回内容。
+   */
+  failure?: { read: 'latest' | 'older'; code: string };
+}
+
+/**
+ * 诊断只取 `[CODE] …` 前缀里的错误码;其它形状一律记 UNKNOWN。
+ * Desktop 的读取经 `ipcRenderer.invoke`,失败消息带 Electron 包装:
+ * `Error invoking remote method '<channel>': Error: [CODE] …`,同样只取其中的错误码。
+ */
+export function historyViewErrorCode(error: unknown): string {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return /^(?:Error invoking remote method '[^']*': (?:[A-Za-z]*Error: )?)?\[([A-Z][A-Z0-9_]{0,63})\]/
+    .exec(message)?.[1] ?? 'UNKNOWN';
 }
 
 /** Display-only artifact paths and live tool inputs are not read-request inputs. */
@@ -97,6 +144,11 @@ export class HistoryViewController<T extends HistoryMessageSource> {
   private cacheGeneration = 0;
   private detailRuns = new Map<string, { promise: Promise<void> }>();
   private expandedHolds = new Map<string, number>();
+  // Release counts within the current synchronous update (cleared on the next task), and
+  // ranges kept retained after a loop. See `guardReleaseLoop`.
+  private loopReleases = new Map<string, number>();
+  private loopReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+  private loopPinned = new Set<string>();
   private active = true;
   private networkAvailable = true;
   private pagePromise: Promise<void> | null = null;
@@ -150,7 +202,11 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
-  private publish(patch: Partial<HistoryViewSnapshot<T>>, source?: HistoryViewDiagnostic['source']): void {
+  private publish(
+    patch: Partial<HistoryViewSnapshot<T>>,
+    source?: HistoryViewDiagnostic['source'],
+    failure?: HistoryViewDiagnostic['failure'],
+  ): void {
     const previousItemCount = this.state.items.length;
     this.state = { ...this.state, ...patch };
     if (source && this.transport.diagnostic) {
@@ -159,7 +215,8 @@ export class HistoryViewController<T extends HistoryMessageSource> {
           messageCount: historyViewLeaves(this.state.items).reduce((count, item) =>
             count + (item.type === 'messages' ? item.messages.length : 0), 0),
           detailMessageCount: [...this.state.details.values()].reduce((count, detail) => count + detail.messages.length, 0),
-          ready: this.state.ready, stale: this.state.stale === true });
+          ready: this.state.ready, stale: this.state.stale === true,
+          ...(failure ? { failure } : {}) });
       } catch { /* Diagnostics must not interrupt cache restoration or remote reads. */ }
     }
     for (const listener of this.listeners) listener();
@@ -172,6 +229,38 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     const cached = await read().catch(() => null);
     if (!cached || this.state.ready || isHistoryViewUnavailable(this.state.error) || generation !== this.cacheGeneration) return;
     this.publish({ ...cached, loading: this.state.loading, error: this.state.error, stale: true }, 'cache');
+  }
+
+  /**
+   * Update a detached retained view with a newer prefetched snapshot in place so
+   * reopening does not drop back to an empty controller and wait for disk IO.
+   */
+  applyPrefetchedSnapshot(snapshot: HistoryViewSnapshot<T>): void {
+    if (this.active || !snapshot.ready || isHistoryViewUnavailable(this.state.error)) return;
+    this.cacheGeneration++;
+    const previous = new Map(this.state.items.map((item) => [item.key, item]));
+    const items = snapshot.items.map((item) => {
+      const cached = previous.get(item.key);
+      return cached && JSON.stringify(cached) === JSON.stringify(item) ? cached : item;
+    });
+    const stableItems = items.length === this.state.items.length
+      && items.every((item, index) => item === this.state.items[index]) ? this.state.items : items;
+    const presentKeys = new Set(historyWorkSummaries(stableItems).map((summary) => summary.key));
+    for (const key of this.detailRuns.keys()) {
+      if (!presentKeys.has(key)) this.detailRuns.delete(key);
+    }
+    this.publish({
+      items: stableItems,
+      details: snapshot.details,
+      expanded: snapshot.expanded,
+      nextCursor: snapshot.nextCursor,
+      hasMore: snapshot.hasMore,
+      ready: true,
+      loading: false,
+      error: null,
+      stale: true,
+      readReceipt: snapshot.readReceipt,
+    }, 'cache');
   }
 
   refresh(older = false, fresh = false): Promise<void> {
@@ -267,8 +356,18 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       for (const key of this.detailRuns.keys()) {
         if (!presentKeys.has(key)) this.detailRuns.delete(key);
       }
-      this.publish({ items: stableItems, ready: true, loading: false,
-        details: this.trimCollapsedDetails(this.state.expanded, stableItems),
+      // A range kept retained by the loop guard is released once it leaves the page
+      // (a finished run drops its preview), unless a surface holds it again.
+      let expanded = this.state.expanded;
+      for (const key of this.loopPinned) {
+        if (presentKeys.has(key)) continue;
+        this.loopPinned.delete(key);
+        if (this.expandedHolds.has(key) || !expanded.has(key)) continue;
+        if (expanded === this.state.expanded) expanded = new Set(expanded);
+        (expanded as Set<string>).delete(key);
+      }
+      this.publish({ items: stableItems, ready: true, loading: false, expanded,
+        details: this.trimCollapsedDetails(expanded, stableItems),
         ...(older ? {} : { stale: false, readReceipt }),
         hasMore: retained.hasMore, nextCursor: retained.nextCursor }, older ? 'older' : 'latest');
       if (!older) this.latestReadOkStartedAtMs = readStartedAt;
@@ -288,20 +387,49 @@ export class HistoryViewController<T extends HistoryMessageSource> {
           this.refreshTimer = null;
           this.publish({ items: [], details: new Map(), expanded: new Set(), ready: false,
             nextCursor: null, hasMore: false, loading: false, error }, 'fallback');
-        } else this.publish({ loading: false, error });
+        } else {
+          // 读取失败过去不留任何诊断:界面停在缓存上,事后无从判断是没发出去还是发出去失败了。
+          this.publish({ loading: false, error }, 'failed',
+            { read: older ? 'older' : 'latest', code: historyViewErrorCode(error) });
+        }
       }
     }
   }
 
   setExpanded(key: string, expanded: boolean): void {
-    if (this.state.expanded.has(key) === expanded) return;
-    const next = new Set(this.state.expanded);
-    if (expanded) next.add(key); else next.delete(key);
-    if (!expanded) this.detailRuns.delete(key);
-    this.publish({ expanded: next, ...(!expanded ? { details: this.trimCollapsedDetails(next) } : {}) });
+    if (!expanded) {
+      this.collapseDetails([key]);
+      return;
+    }
+    if (this.state.expanded.has(key)) return;
+    this.publish({ expanded: new Set(this.state.expanded).add(key) });
     this.sendIntent();
     const summary = historyWorkSummaries(this.state.items).find((value) => value.key === key);
-    if (expanded && summary) void this.loadDetails(summary);
+    if (summary) void this.loadDetails(summary);
+  }
+
+  private collapseDetails(keys: readonly string[]): void {
+    const collapsed = keys.filter(key => this.state.expanded.has(key));
+    if (!collapsed.length) return;
+
+    const next = new Set(this.state.expanded);
+    for (const key of collapsed) {
+      next.delete(key);
+      this.detailRuns.delete(key);
+      this.loopPinned.delete(key);
+    }
+    // Apply the warm-cache budget to the final collapsed set, after cancelling
+    // all of its pending reads so they cannot pin a body or publish a late reply.
+    const trimmed = this.trimCollapsedDetails(next);
+    let settled: Map<string, HistoryWorkDetailState<T>> | undefined;
+    for (const key of collapsed) {
+      const detail = trimmed.get(key);
+      if (detail?.loading) {
+        (settled ??= new Map(trimmed)).set(key, { ...detail, loading: false });
+      }
+    }
+    this.publish({ expanded: next, details: settled ?? trimmed });
+    this.sendIntent();
   }
 
   private trimCollapsedDetails(expanded: ReadonlySet<string>, items = this.state.items) {
@@ -336,6 +464,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     return () => {
       if (released) return;
       released = true;
+      const collapsed: string[] = [];
       for (const key of keys) {
         const holds = (this.expandedHolds.get(key) ?? 1) - 1;
         if (holds > 0) {
@@ -343,9 +472,64 @@ export class HistoryViewController<T extends HistoryMessageSource> {
           continue;
         }
         this.expandedHolds.delete(key);
-        this.setExpanded(key, false);
+        collapsed.push(key);
       }
+      this.collapseDetails(this.guardReleaseLoop(collapsed, keys));
     };
+  }
+
+  /**
+   * Break a retain/release feedback loop before React aborts the page (#185).
+   * A surface that releases the same range repeatedly within one synchronous
+   * update is oscillating with its own display. Keep that range retained, which
+   * is a fixed point: further retains are no-ops and publish nothing. It is
+   * collapsed by a user toggle, a later normal release, or once it leaves the page.
+   */
+  private guardReleaseLoop(keys: readonly string[], retainedWith: readonly string[]): string[] {
+    if (!keys.length) return [];
+    this.loopReleaseTimer ??= setTimeout(() => {
+      this.loopReleaseTimer = null;
+      this.loopReleases.clear();
+    }, 0);
+    const released: string[] = [];
+    for (const key of keys) {
+      const releases = (this.loopReleases.get(key) ?? 0) + 1;
+      this.loopReleases.set(key, releases);
+      if (releases <= EXPANSION_LOOP_RELEASES) {
+        this.loopPinned.delete(key);
+        released.push(key);
+        continue;
+      }
+      if (this.loopPinned.has(key)) continue;
+      this.loopPinned.add(key);
+      this.reportExpansionLoop(key, retainedWith, releases);
+    }
+    return released;
+  }
+
+  private reportExpansionLoop(key: string, retainedWith: readonly string[], releases: number): void {
+    if (!this.transport.expansionLoop) return;
+    try {
+      const summaries = historyWorkSummaries(this.state.items);
+      // Summaries list previews too; a preview key is identified by its enclosing range.
+      const owner = summaries.find((summary) => summary.preview?.key === key);
+      const summary = owner?.preview ?? summaries.find((summary) => summary.key === key);
+      const detail = this.state.details.get(key);
+      this.transport.expansionLoop({
+        key, retainedWith: [...retainedWith], releases,
+        itemCount: this.state.items.length, expandedCount: this.state.expanded.size,
+        ...(summary ? { range: {
+          preview: !!owner, isStreaming: summary.isStreaming, revision: summary.revision,
+          firstMessageId: summary.firstMessageId, lastMessageId: summary.lastMessageId,
+          messageCount: summary.messageCount, hasLines: !!summary.lines,
+          ...(owner ? { fullExpanded: this.state.expanded.has(owner.key) } : {}),
+        } } : {}),
+        ...(detail ? { detail: {
+          revision: detail.revision, loading: detail.loading, complete: detail.complete,
+          failed: detail.error != null, messageCount: detail.messages.length,
+        } } : {}),
+      });
+    } catch { /* Diagnostics must not interrupt the guard. */ }
   }
 
   private sendIntent(): void {
@@ -387,12 +571,14 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       const completed = this.state.details.get(summary.key);
       if (completed?.complete && completed.revision === summary.revision && !patch.complete) return;
       const details = new Map(this.state.details);
-      // A reread keeps the previous window until it settles. Publishing each
-      // incoming page would replace the old window with a partial slice of the
-      // new range: the rendered list collapses to the first page and shifts a
-      // bottom-pinned stream before the tail lands.
+      // Only a full range using the detail-preview fallback needs an atomic
+      // first read: a partial body can split past the render-window boundary,
+      // release its full-range owner and switch back to the preview in a loop.
+      // Host lines (including []) do not use that fallback. Ordinary history
+      // and previews keep incremental reads; rereads retain the previous body.
       const settled = patch.complete === true;
-      const messages = !settled && existing?.messages?.length ? existing.messages
+      const deferFirstBody = !!summary.preview && !summary.lines;
+      const messages = !settled && (existing?.messages?.length || deferFirstBody) ? (existing?.messages ?? [])
         : collected.length ? collected : (existing?.messages ?? []);
       details.set(summary.key, { messages, revision: summary.revision,
         lastMessageId: summary.lastMessageId, loading: true, complete: false, error: null, ...patch });
@@ -496,6 +682,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     this.generation++;
     this.cacheGeneration++;
     this.detailRuns.clear();
+    this.loopPinned.clear();
     this.publish({ items: [], details: new Map(), expanded: new Set(), ready: false,
       nextCursor: null, hasMore: false, loading: false, error: null, stale: false, readReceipt: undefined }, 'reset');
     this.sendIntent();

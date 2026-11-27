@@ -14,11 +14,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { GroupMessagePayload } from '@cindy/slack-hook-protocol';
 
-const holder = vi.hoisted(() => ({ drizzle: null as unknown }));
+const holder = vi.hoisted(() => ({
+  drizzle: null as unknown,
+  sqlite: null as InstanceType<typeof Database> | null,
+  resolveGroupHistoryImageFile: vi.fn(),
+}));
 
 vi.mock('../../localDb/client/current.js', () => ({
-  getDbClient: () => ({ drizzle: holder.drizzle }),
-  tryGetDbClient: () => ({ drizzle: holder.drizzle }),
+  getDbClient: () => ({
+    drizzle: holder.drizzle,
+    query: async (sqlText: string, params: unknown[] = []) =>
+      holder.sqlite!.prepare(sqlText).all(...params),
+  }),
+  tryGetDbClient: () => ({
+    drizzle: holder.drizzle,
+    query: async (sqlText: string, params: unknown[] = []) =>
+      holder.sqlite!.prepare(sqlText).all(...params),
+  }),
+}));
+
+vi.mock('../../im/shared/groupHistoryImages.js', () => ({
+  resolveGroupHistoryImageFile: (...args: unknown[]) =>
+    holder.resolveGroupHistoryImageFile(...args),
 }));
 
 import {
@@ -32,6 +49,7 @@ import {
   sweepGroupWindowExpired,
   GROUP_WINDOW_RETENTION,
 } from '../groupWindow.js';
+import { collectOfficialGroupHistoryImages } from '../groupHistoryImages.js';
 
 const PRINCIPAL_ID = '9';
 
@@ -70,7 +88,9 @@ let sqlite: InstanceType<typeof Database>;
 beforeEach(async () => {
   sqlite = new Database(':memory:');
   sqlite.exec(migrationSql());
+  holder.sqlite = sqlite;
   holder.drizzle = drizzle(sqlite);
+  holder.resolveGroupHistoryImageFile.mockReset();
   await resetGroupContextCursors();
 });
 
@@ -625,6 +645,22 @@ describe('mergeTelegramGroupActivationViews', () => {
 describe('buildGroupContextPrefix', () => {
   const externalKey = 'telegram:group:1:-900:42:9:g1';
 
+  it('points to the native image message when a later group turn has no attachment', async () => {
+    await recordGroupMessage(frame({
+      messageId: '101', text: '', fileNames: ['telegram-photo.jpg'],
+      imageRefs: [{ fileId: 'private-file-id', name: 'telegram-photo.jpg', mimeType: 'image/jpeg' }],
+    }));
+    const turn = { requestId: 'image', externalKey, workspace: 'chat', sessionId: null,
+      prompt: '前面的图片', source: { im: 'telegram' as const, triggerMessageId: '102' } };
+    const assembly = await buildGroupContextPrefix(turn);
+    expect(assembly.prefix).toContain('[图片消息 #101]');
+    expect(assembly.prefix.split('</group_chat_context>')[1]).toContain('get_images');
+    expect(assembly.prefix).not.toContain('private-file-id');
+    await assembly.commit();
+    await recordGroupMessage(frame({ messageId: '103', text: '下一条' }));
+    expect((await buildGroupContextPrefix(turn)).prefix).not.toContain('get_images');
+  });
+
   it('counts picked messages, not multiline bodies or truncation markers', async () => {
     for (let i = 0; i < 20; i += 1) {
       await recordGroupMessage(
@@ -865,5 +901,139 @@ describe('buildGroupContextPrefix', () => {
     });
     expect(assembly.prefix).toContain('当前账号的上下文');
     expect(assembly.prefix).not.toContain('前一账号的私密上下文');
+  });
+
+  it('在途入窗写入未落盘前触发组装时等待同群写完成，避免漏读刚收到的转发图', async () => {
+    const realDrizzle = holder.drizzle as { insert: (...args: unknown[]) => unknown };
+    let releaseInsert!: () => void;
+    const insertGate = new Promise<void>((resolve) => {
+      releaseInsert = resolve;
+    });
+    let delayedOnce = false;
+    holder.drizzle = new Proxy(realDrizzle as Record<string, unknown>, {
+      get(target, prop, receiver) {
+        if (prop !== 'insert') return Reflect.get(target, prop, receiver);
+        return (...insertArgs: unknown[]) => {
+          const builder = (target.insert as (...args: unknown[]) => Record<string, unknown>)(
+            ...insertArgs,
+          );
+          if (delayedOnce) return builder;
+          delayedOnce = true;
+          const origValues = builder.values as (...args: unknown[]) => Record<string, unknown>;
+          builder.values = (...vArgs: unknown[]) => {
+            const afterValues = origValues.apply(builder, vArgs);
+            const origConflict = afterValues.onConflictDoNothing as () => Record<string, unknown>;
+            afterValues.onConflictDoNothing = () => {
+              const afterConflict = origConflict.apply(afterValues);
+              const origRun = afterConflict.run as () => unknown;
+              afterConflict.run = () => insertGate.then(() => origRun.apply(afterConflict));
+              return afterConflict;
+            };
+            return afterValues;
+          };
+          return builder;
+        };
+      },
+    });
+
+    const writePromise = recordGroupMessage(
+      frame({ messageId: '88', text: '刚转发的图片消息', author: { name: 'Tom' } }),
+    );
+    const readPromise = buildGroupContextPrefix({
+      requestId: 'r-sync',
+      externalKey: 'telegram:group:1:-900:42:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: '看看',
+    });
+    releaseInsert();
+    const [, assembly] = await Promise.all([writePromise, readPromise]);
+    expect(assembly.prefix).toContain('刚转发的图片消息');
+  });
+
+  it('collectOfficialGroupHistoryImages 优先取同发言人 2 分钟内最多 2 张图，跳过超龄图并尊重账号代次', async () => {
+    const now = Date.now();
+    await recordGroupMessage(
+      frame({
+        messageId: '101',
+        author: { name: 'Tom' },
+        text: '很久以前的图',
+        sentAt: now - 5 * 60_000,
+        imageRefs: [{ fileId: 'old', name: 'old.jpg', mimeType: 'image/jpeg', downloadToken: 'tok-old' }],
+      }),
+    );
+    await recordGroupMessage(
+      frame({
+        messageId: '102',
+        author: { name: 'Alice' },
+        text: '别人刚发的图',
+        sentAt: now - 30_000,
+        imageRefs: [{ fileId: 'alice', name: 'alice.jpg', mimeType: 'image/jpeg', downloadToken: 'tok-alice' }],
+      }),
+    );
+    await recordGroupMessage(
+      frame({
+        messageId: '103',
+        author: { name: 'Tom' },
+        text: '我的图1',
+        sentAt: now - 20_000,
+        imageRefs: [{ fileId: 'tom1', name: 'tom1.jpg', mimeType: 'image/jpeg', downloadToken: 'tok-tom1' }],
+      }),
+    );
+    await recordGroupMessage(
+      frame({
+        messageId: '104',
+        author: { name: 'Tom' },
+        text: '我的图2',
+        sentAt: now - 10_000,
+        imageRefs: [{ fileId: 'tom2', name: 'tom2.jpg', mimeType: 'image/jpeg', downloadToken: 'tok-tom2' }],
+      }),
+    );
+    await recordGroupMessage(
+      frame({
+        messageId: '105',
+        author: { name: 'Tom' },
+        text: '@bot 看看这两张',
+        sentAt: now,
+      }),
+    );
+
+    const payload = {
+      requestId: 'r-hist-img',
+      externalKey: 'telegram:group:1:-900:42:9:g1',
+      workspace: 'chat',
+      sessionId: null,
+      prompt: '看看这两张',
+      source: { im: 'telegram' as const, triggerMessageId: '105' },
+    };
+    const assembly = await buildGroupContextPrefix(payload);
+    expect(assembly.triggerAuthor).toBe('Tom');
+    expect(assembly.imageMessages?.map((m) => m.messageId)).toEqual(['101', '102', '103', '104']);
+
+    holder.resolveGroupHistoryImageFile.mockImplementation(
+      async ({ ref }: { ref: { fileId: string; mimeType: string } }) => ({
+        absPath: `/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/${ref.fileId}.jpg`,
+        mimeType: ref.mimeType,
+      }),
+    );
+    const collected = await collectOfficialGroupHistoryImages(payload, assembly, () => true);
+    expect(collected.images).toEqual([
+      {
+        absPath: '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/tom1.jpg',
+        originalName: 'tom1.jpg',
+        mimeType: 'image/jpeg',
+        author: 'Tom',
+      },
+      {
+        absPath: '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/tom2.jpg',
+        originalName: 'tom2.jpg',
+        mimeType: 'image/jpeg',
+        author: 'Tom',
+      },
+    ]);
+
+    // Stale account generation stops immediately.
+    const expired = await collectOfficialGroupHistoryImages(payload, assembly, () => false);
+    expect(expired.images).toEqual([]);
   });
 });

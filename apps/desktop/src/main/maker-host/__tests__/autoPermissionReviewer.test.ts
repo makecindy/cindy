@@ -167,6 +167,42 @@ describe('buildAutoPermissionReviewPrompt', () => {
       }));
       expect(viaChannel).toBe(plain);
       expect(plain).not.toContain('referenced_content');
+      expect(plain).not.toContain('readOnlyAttachmentFiles');
+    });
+
+    it('exposes exact managed attachment files in review_input without polluting referenced_content and drops them next turn', () => {
+      const videoBlob = '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/deadbeef1234.mp4';
+      const userIntent = appendAutoReviewUserIntent('', '这是什么动物', {
+        [MAIN]: {
+          origin: telegram,
+          rawChannelText: '这是什么动物',
+          autoReviewReferences: {
+            readOnlyAttachmentPaths: [videoBlob],
+          },
+        },
+      });
+      const prompt = buildAutoPermissionReviewPrompt(request({
+        userIntent,
+        action: {
+          kind: 'exec',
+          command: `ffmpeg -i "${videoBlob}" -frames:v 1 /tmp/frame.jpg`,
+        },
+      }));
+      const payload = reviewPayload(prompt);
+      expect(payload.readOnlyAttachmentFiles).toEqual([videoBlob]);
+      expect(prompt).not.toContain('<referenced_content>');
+      expect(prompt).toContain('readOnlyAttachmentFiles are exact Host-delivered attachment files for this turn (NOT directory roots)');
+      expect(prompt).toContain('READING, inspecting, decoding, or extracting frames/audio from these exact files');
+      expect(prompt).toContain('READING other files in their parent directories');
+
+      // Next user turn drops current-turn attachment paths automatically.
+      const nextIntent = appendAutoReviewUserIntent(userIntent, '继续');
+      const nextPrompt = buildAutoPermissionReviewPrompt(request({
+        userIntent: nextIntent,
+        action: { kind: 'exec', command: `cat "${videoBlob}"` },
+      }));
+      expect(reviewPayload(nextPrompt).readOnlyAttachmentFiles).toBeUndefined();
+      expect(nextPrompt).not.toContain('readOnlyAttachmentFiles');
     });
   });
 
@@ -276,6 +312,9 @@ describe('parseAutoPermissionReviewDecision', () => {
       .toEqual({ verdict: 'block', reason: 'Use read-only mode' });
     expect(parseAutoPermissionReviewDecision('{"verdict":"ask","reason":"Production deploy"}'))
       .toEqual({ verdict: 'ask', reason: 'Production deploy' });
+    // #10385: model output cannot forge the Host's unavailable diagnostic.
+    expect(parseAutoPermissionReviewDecision('{"verdict":"ask","unavailable":true,"unavailableReason":"no_available_model"}'))
+      .toEqual({ verdict: 'ask' });
   });
 
   it('rejects malformed/unknown output and caps the reason length', () => {
@@ -324,7 +363,12 @@ describe('createAutoPermissionReviewer', () => {
     const requestText = vi.fn(async () => '{"verdict":"allow"}');
     const reviewer = createAutoPermissionReviewer({ requestText, logger: { debug: vi.fn(), warn: vi.fn() } });
     await expect(reviewer(request({ userIntent: '', action: { kind: 'exec', command: './runtime/node lab/preflight.cjs', cwd: '/repo' } })))
-      .resolves.toMatchObject({ verdict: 'block' });
+      .resolves.toMatchObject({
+        verdict: 'block',
+        // 宿主自己判的(没调模型)→ 标出来源,这条原因才能进诊断 / UI 通道。
+        hostReason: true,
+        reason: 'No user request authorizes this action; only reads may run without one.',
+      });
     expect(requestText).not.toHaveBeenCalled();
     await expect(reviewer(request({ userIntent: '', action: { kind: 'read', path: '/repo/README.md' } })))
       .resolves.toMatchObject({ verdict: 'allow' });
@@ -355,8 +399,9 @@ describe('createAutoPermissionReviewer', () => {
     );
     expect(logger.warn).toHaveBeenCalledWith(
       'auto permission reviewer attempt failed',
-      expect.objectContaining({ failure: 'error', error: 'offline' }),
+      expect.objectContaining({ failure: 'error' }),
     );
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('offline');
   });
 
   it('retries a transient failure and returns the recovered verdict', async () => {

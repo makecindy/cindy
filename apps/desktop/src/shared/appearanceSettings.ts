@@ -1,4 +1,8 @@
+import { APP_ICONS, isAppIcon, type AppIcon } from '@cindy/maker-shared/app-icons';
 import { DEFAULT_FONT_SIZES } from './generated/appearance-tokens';
+import { normalizePluginAppearanceSettings, type PluginAppearanceSettingsFields } from './pluginAppearance';
+import type { AppearanceFontResource } from './pluginAppearance';
+import type { DownloadProgress } from './downloadProgress';
 
 /**
  * Desktop appearance preferences shared by main, preload and renderer.
@@ -7,7 +11,10 @@ import { DEFAULT_FONT_SIZES } from './generated/appearance-tokens';
  * the effective snapshot returned by main.
  */
 
-export interface AppearanceOverrides {
+export interface AppearanceOverrides extends PluginAppearanceSettingsFields {
+  density?: number;
+  motion?: number;
+  terminalFontResource?: AppearanceFontResource;
   uiFamily?: string;
   codeFamily?: string;
   uiSize?: number;
@@ -27,13 +34,8 @@ export interface AppearanceOverrides {
   appIcon?: AppIcon;
 }
 
-/** macOS Dock icon choices; mark and wordmark also have light and dark artwork. */
-export const APP_ICONS = ['default', 'cat', 'wordmark', 'mark'] as const;
-export type AppIcon = (typeof APP_ICONS)[number];
-
-export function isAppIcon(value: unknown): value is AppIcon {
-  return APP_ICONS.includes(value as AppIcon);
-}
+/** macOS Dock icon choices; the list and artwork are shared with Mobile. */
+export { APP_ICONS, isAppIcon, type AppIcon };
 
 export type WallpaperMotion = 'static' | 'dynamic';
 
@@ -44,11 +46,19 @@ export const WALLPAPER_DOWNLOAD_PROGRESS_CHANNEL =
 export interface WallpaperDownloadProgress {
   wallpaperId: WallpaperId;
   kind: 'image' | 'video';
+  /** Raw bytes of the current attempt; the tile bar draws this. */
   loaded: number;
   total: number;
+  /** Standard phase (retrying and why, completed) for assistive text. */
+  download?: DownloadProgress;
 }
 
-export interface AppearanceSettings {
+export interface AppearanceSettings extends PluginAppearanceSettingsFields {
+  /** Read-only projection from the Host override owner, never a writable field. */
+  customizedKeys?: readonly string[];
+  density: number;
+  motion: number;
+  terminalFontResource?: AppearanceFontResource;
   uiFamily: string;
   codeFamily: string;
   uiSize: number;
@@ -67,6 +77,7 @@ export interface AppearanceSettings {
   appIcon: AppIcon;
   /** Read-only, host-owned media reference; never accepted by set-patch. */
   customWallpaperUrl?: string;
+  customWallpaperFallbackUrl?: string;
 }
 
 /** Keep the terminal's existing platform fallbacks independent of code fonts. */
@@ -74,6 +85,8 @@ export const DEFAULT_TERMINAL_FONT_FAMILY =
   '"SF Mono", Menlo, Monaco, "Cascadia Code", "Courier New", monospace';
 
 export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
+  density: 1,
+  motion: 1,
   uiFamily: '',
   codeFamily: '',
   uiSize: DEFAULT_FONT_SIZES.uiSize,
@@ -193,6 +206,32 @@ export function clampAppearanceWallpaperOverlay(
   );
 }
 
+const MAX_APPEARANCE_FONT_FAMILY_LENGTH = 256;
+
+/** 持久 override 与 Host 工具共用严格边界；旧 UI 的夹取与取整仍由 normalize 负责。 */
+export function isValidAppearanceSetting(key: string, value: unknown): value is string | number | null {
+  if (key === 'appIcon') return isAppIcon(value);
+  if (key === 'desktopVisibility') {
+    return value === null || (typeof value === 'number' && Number.isFinite(value)
+      && value >= APPEARANCE_LIMITS.wallpaperVisibility.min && value <= APPEARANCE_LIMITS.wallpaperVisibility.max);
+  }
+  if (key === 'uiFamily' || key === 'codeFamily' || key === 'terminalFamily') {
+    return typeof value === 'string' && value.length <= MAX_APPEARANCE_FONT_FAMILY_LENGTH
+      // eslint-disable-next-line no-control-regex
+      && !/[\x00-\x1f]/.test(value);
+  }
+  if (key === 'wallpaperId') return (WALLPAPER_IDS as readonly unknown[]).includes(value);
+  if (key === 'wallpaperMotion') return value === 'static' || value === 'dynamic';
+  if (key === 'wallpaperOverlay' || key === 'wallpaperVisibility' || key === 'wallpaperBlur') {
+    const limits = APPEARANCE_LIMITS[key];
+    return typeof value === 'number' && Number.isFinite(value) && value >= limits.min && value <= limits.max;
+  }
+  if (key !== 'uiSize' && key !== 'codeSize' && key !== 'terminalSize' && key !== 'windowZoom') return false;
+  const limits = APPEARANCE_LIMITS[key];
+  return typeof value === 'number' && Number.isFinite(value) && value >= limits.min && value <= limits.max
+    && (key === 'windowZoom' || Number.isInteger(value));
+}
+
 export function clampAppearanceUiSize(
   value: number,
   fallback = DEFAULT_APPEARANCE_SETTINGS.uiSize,
@@ -243,6 +282,13 @@ export function normalizeAppearanceSettings(raw: unknown): AppearanceSettings {
   }
   const value = raw as Record<string, unknown>;
   return {
+    ...normalizePluginAppearanceSettings(value),
+    ...(Array.isArray(value.customizedKeys) && value.customizedKeys.length <= 128 && value.customizedKeys.every(key => typeof key === 'string')
+      ? { customizedKeys: value.customizedKeys as string[] } : {}),
+    density: typeof value.density === 'number' && Number.isFinite(value.density) ? Math.min(1.25, Math.max(0.75, value.density)) : 1,
+    motion: typeof value.motion === 'number' && Number.isFinite(value.motion) ? Math.min(2, Math.max(0, value.motion)) : 1,
+    ...(value.terminalFontResource ? { terminalFontResource: normalizePluginAppearanceSettings({ codeFontResource: value.terminalFontResource }).codeFontResource } : {}),
+    ...(normalizeCustomWallpaperUrl(value.customWallpaperFallbackUrl) ? { customWallpaperFallbackUrl: normalizeCustomWallpaperUrl(value.customWallpaperFallbackUrl) } : {}),
     uiFamily: normalizeFamily(value.uiFamily),
     codeFamily: normalizeFamily(value.codeFamily),
     terminalFamily: normalizeFamily(value.terminalFamily),
@@ -289,7 +335,7 @@ function normalizeWallpaperId(value: unknown): WallpaperId {
 }
 
 function normalizeFamily(value: unknown): string {
-  return typeof value === 'string' ? value.trim().slice(0, 256) : '';
+  return typeof value === 'string' ? value.trim().slice(0, MAX_APPEARANCE_FONT_FAMILY_LENGTH) : '';
 }
 
 function clampInteger(value: number, min: number, max: number, fallback: number): number {

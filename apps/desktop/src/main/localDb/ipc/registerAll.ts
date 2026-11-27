@@ -1,8 +1,8 @@
+import { refineCreatedTaskTitle } from '../../maker-ipc/createdTaskTitles.js';
+import { isTaskBusyForArchive } from '../../task-management/service.js';
+import { reconcileDeletedTaskViewState } from '../../mcp-apps/viewStateStore.js';
 import { registerCompanionImport } from '../../bot-import/registration.js';
 import { registerTaskTagsIpc } from './taskTags';
-import { registerRoutineRemoteResources } from '../../routines/remote.js';
-import { registerRoutinesIpc } from '../../routines/service.js';
-import { registerNightlyLearningIpc } from '../../routines/nightlyLearningIpc.js';
 /**
  * chat-data-localization F2/F5：聚合注册所有 localDb IPC handlers + ensure-ready。
  *
@@ -20,6 +20,7 @@ import { getCurrentDbClientUserId, tryGetDbClient } from '../client/current';
 import {
   registerSessionIpc,
   type RegisterSessionIpcOpts,
+  type SessionWorktreeRecycle,
   setSessionWorktreeBindingLookup,
   setSessionWorktreeRecycle,
 } from './sessions';
@@ -29,12 +30,12 @@ import { registerSessionImportIpc } from '../../session-import/ipc';
 import { registerSessionShareIpc } from './session-share';
 import { registerRecentWorkdirsIpc } from './recentWorkdirs';
 import { registerProjectAliasesIpc } from './projectAliases';
-import { registerRightSidebarTabsIpc } from './rightSidebarTabs';
+import { registerRightSidebarTabsIpc } from './rightSidebarTabs.desktop';
 import { registerSubagentRunsIpc } from './subagentRuns';
-import { enqueueDurableWrite } from '../../messagePersistBroadcaster';
+import { enqueueDurableWrite } from '../../messagePersistBroadcaster.desktop';
 import { registerDevSqliteVecIpc } from './dev/sqliteVec';
-import { registerSearchIpc } from './search';
-import { registerRemoteHistoryIpc } from './history';
+import { registerSearchIpc } from './search.desktop';
+import { registerRemoteHistoryIpc } from './history.desktop';
 import { registerHistoryQueryIpc } from './historyQuery';
 import { recoverActiveTeammateInvitations, registerBotIpc } from './bots';
 import { registerBotSkillSettingsIpc } from './botSkillSettingsIpc';
@@ -43,11 +44,12 @@ import { registerBotRemoteResourceProvider } from './botRemoteResourceProvider';
 
 import { createLogger } from '../../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../../devStartupStatus';
+import { isDataOwnerPushStamp, type DataOwnerPushStamp } from '../../../shared/dataOwnerPush.js';
 import { createOwnerEnsureCoordinator } from './ownerEnsureCoordinator';
 import { replyToEnsureReady, type EnsureReadyReply } from '../ensureReadyReply.js';
 import { reconcileSessionMediaRefsForDeletedSessions } from '../../cindy-media/sessionCleanup';
 import { reconcileGeneratedImageRecovery } from '../../cindy-media/generatedImageRecovery';
-import { reconcileMediaRefCompensationsForOwner } from '../../cindy-media/refCompensationJournal';
+import { reconcileMediaRefCompensationsForOwner } from '../../cindy-media/refCompensationJournal.desktop';
 import { setSessionRouteLockImplementation } from '../sessionRouteLock';
 import { LOCAL_DATA_OWNER_ID } from '../../appSessionState';
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
@@ -93,17 +95,18 @@ export interface RegisterLocalDbIpcOpts {
   readHistoryLiveMessages?: (sessionId: string) => import('../../../renderer/lib/ccAgent.types').Message[];
   resolveContextWindow?: RegisterSessionIpcOpts['resolveContextWindow'];
   /** Current stable app-session owner. False makes queued/in-flight work stale. */
-  isOwnerCurrent?: (userId: string) => boolean;
+  isOwnerCurrent?: (userId: string, recovery?: DataOwnerPushStamp) => boolean;
   /** Dispose any secondary DB client committed by a stale onReady callback. */
   discardStaleOwner?: (userId: string) => void | Promise<void>;
   /** ensureReady 打开/创建目标库前执行；失败时阻断，避免跳过认领后创建空库。 */
-  beforeEnsureReady?: (userId: string) => void | Promise<void>;
+  beforeEnsureReady?: (userId: string, recovery?: DataOwnerPushStamp) => void | Promise<void>;
   /** Record worktree recycle intent before a terminal session status is persisted. */
-  requestWorktreeRecycle?: (sessionId: string, resources?: readonly string[]) => Promise<void>;
+  requestWorktreeRecycle?: SessionWorktreeRecycle;
   /** 当前 worktree 绑定（worktreeStore 是 source of truth，DB 只存反范式快照）。 */
   lookupSessionWorktreeBinding?: (sessionId: string) => string | null;
-  /** Close a moved local Pi/Codex runtime after revalidating that its turn is idle. */
-  closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
+  localPluginWorktrees?: RegisterSessionIpcOpts['localPluginWorktrees'];
+  /** Recheck turn idleness before a local move; leave an idle Claude runtime for transcript relocation. */
+  closeIdleSessionForMove?: (sessionId: string, storedAgentKind: string) => Promise<boolean>;
   /** Apply a persisted task-level context window budget to the live runtime. */
   applyContextWindowBudget?: RegisterSessionIpcOpts['applyContextWindowBudget'];
   /** Serialize startup tombstone cleanup with task restore/start/send operations. */
@@ -135,6 +138,8 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
     isOwnerCurrent: opts.isOwnerCurrent ?? (() => true),
     beforeEnsureReady: opts.beforeEnsureReady,
     ensureReady,
+    getCorruptionError: (userId) => getCurrentDbClientUserId() === userId
+      ? tryGetDbClient()?.corruptionError ?? null : null,
     onReady: async (userId) => {
       await opts.onReady?.(userId);
       const client = tryGetDbClient();
@@ -168,6 +173,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
       // Resume saved invitations after the database and account boundary are ready.
       await recoverActiveTeammateInvitations();
       if (!isReadyOwnerCurrent()) return;
+      void reconcileDeletedTaskViewState(client, isReadyOwnerCurrent);
       startMediaRefCompensationReconcile(userId, client, isReadyOwnerCurrent);
       const withSessionLock = opts.withSessionLock;
       const db = client.drizzle;
@@ -207,27 +213,31 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
       await opts.discardStaleOwner?.(userId);
     },
   });
-  ipcMain.handle('local-db:ensure-ready', (_e, userId: unknown) =>
+  ipcMain.handle('local-db:ensure-ready', (_e, userId: unknown, recovery: unknown) =>
     replyToEnsureReady(userId, {
-      run: (id) => runEnsureReady(id) as Promise<EnsureReadyReply>,
+      run: (id) => {
+        if (recovery !== undefined && (!isDataOwnerPushStamp(recovery) || recovery.dataOwnerId !== id)) {
+          return Promise.resolve({ ready: false, error: { code: 'DB_INIT_FAILED', message: 'invalid database recovery request' } });
+        }
+        return runEnsureReady(id, recovery) as Promise<EnsureReadyReply>;
+      },
       record: recordDesktopDevLocalDbStartupResult as (result: EnsureReadyReply) => void,
       log,
     }));
 
   registerSessionIpc(getCurrentDbClientUserId, {
+    isBusyForProjectArchive: isTaskBusyForArchive,
     resolveContextWindow: opts.resolveContextWindow,
     closeIdleSessionForMove: opts.closeIdleSessionForMove,
     applyContextWindowBudget: opts.applyContextWindowBudget,
+    localPluginWorktrees: opts.localPluginWorktrees,
   });
   registerMessageIpc(opts.isSessionTurnPendingCompletion, opts.readHistoryLiveMessages);
   registerRemoteHistoryIpc();
   registerHistoryQueryIpc();
-  registerBotIpc();
+  registerBotIpc((id, subject, initialTitle) => { void refineCreatedTaskTitle(id, subject, { initialTitle }); });
   registerBotSkillSettingsIpc();
   registerCompanionImport();
-  registerRoutinesIpc();
-  registerNightlyLearningIpc();
-  registerRoutineRemoteResources(botRemoteManagement);
   registerBotRemoteResourceProvider(botRemoteManagement);
   registerSessionImportIpc();
   registerSessionShareIpc();

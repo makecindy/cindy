@@ -4,9 +4,11 @@ import { Routes, Route } from 'react-router-dom';
 import { AppFrame, ctx, forbid, mountPage, subscription } from '../../ui-page/harness';
 import { FadeSwitcher } from '../../../src/renderer/components/layout/FadeSwitcher';
 import { BotGroupChatView } from '../../../src/renderer/features/bots/BotGroupChatView';
+import { GroupMaskProvider } from '../../../src/renderer/features/bots/GroupMaskProvider';
 import { BotGroupSettingsDrawer } from '../../../src/renderer/features/bots/BotGroupSettingsDrawer';
 import { refreshBotGroups } from '../../../src/renderer/features/bots/botGroupStore';
 import { GroupMaskContext, type GroupMaskSettings, type GroupMaskStatus, type GroupMaskPresentation, type GroupMaskMention } from '../../../src/renderer/features/bots/groupMaskPresentation';
+import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
 
 const groupId = 'mask-preview-group';
 const self = { id: 'self', name: 'Alex', avatar: '', avatarUrl: ctx.data.selfAvatar ? 'https://avatar.example.test/self.jpg' : undefined, avatarColor: 'gray' };
@@ -43,10 +45,27 @@ const listeners = new Set<(event: { groupId: string; change: string }) => void>(
 function changed() { for (const notify of listeners) notify({ groupId, change: 'message' }); void refreshBotGroups(); }
 let sendPresence: (() => void) | undefined;
 let counter = 10;
+// UI Check can serve the fixture from a non-secure origin, unlike the desktop
+// renderer. Supply deterministic IDs only for this isolated fault/retry case.
+if (ctx.case === 'mention-read-error' && !crypto.randomUUID) {
+  let mockId = 0;
+  Object.defineProperty(crypto, 'randomUUID', { value: () => `00000000-0000-4000-8000-${String(++mockId).padStart(12, '0')}` });
+}
+let failMentionRead = true;
+let fixtureMentions = [{ messageId: root.id, sequence: '2', authorName: root.authorName, text: root.content }];
 
 void mountPage({
   route: `/bots/groups/${groupId}`,
   host: () => ({
+    voiceInput: {
+      getDataSnapshot: () => ({ settings: { ...getDefaultVoiceInputSettings('win32'), fastActivationEnabled: false }, history: [] }),
+      onDataChanged: subscription('voiceDataChanged'),
+      onEvent: subscription('voiceEvent'),
+      onGlobalShortcutTrigger: subscription('voiceShortcut'),
+      setGlobalShortcut: async () => ({ ok: true }),
+      prewarm: async () => ({ ok: true }),
+      start: forbid('voiceInput.start'),
+    },
     maker: {
       resolveCompanionAvatar: async () => ctx.data.selfAvatar ?? null,
       listBotGroups: async () => ({ ok: true, groups: [group] }),
@@ -66,6 +85,17 @@ void mountPage({
         group = { ...group, ...input }; changed(); return { ok: true };
       },
       chatServer: {
+        ...(ctx.case !== 'mention-read-error' ? {} : {
+          mask: forbid('chatServer.mask'),
+          mentions: async ({ readIds }: { readIds?: string[] }) => {
+            if (readIds && failMentionRead) {
+              failMentionRead = false;
+              return { ok: false, errorCode: 'NETWORK_ERROR' };
+            }
+            if (readIds) fixtureMentions = fixtureMentions.filter(entry => !readIds.includes(entry.messageId));
+            return { ok: true, mentions: fixtureMentions, hasMore: false };
+          },
+        }),
         ownedBots: async () => ({ ok: true, bots: [] }),
         manage: async ({ action }: { action: { type: string; name?: string; nickname?: string } }) => {
           const me = group.members.find(m => m.botId === 'self')!;
@@ -82,7 +112,11 @@ void mountPage({
     },
     deviceLink: { getState: async () => ({ controlledBy: [] }), onControlledState: subscription('controlledState') },
   }),
-  render: () => <Fixture />,
+  render: () => ctx.case === 'mention-read-error'
+    ? <GroupMaskProvider groupId={groupId}><AppFrame><FadeSwitcher><Routes>
+        <Route path="/bots/groups/:groupId" element={<BotGroupChatView />} />
+      </Routes></FadeSwitcher></AppFrame></GroupMaskProvider>
+    : <Fixture />,
 });
 
 function Fixture() {

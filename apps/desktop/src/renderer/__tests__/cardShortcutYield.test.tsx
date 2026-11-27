@@ -22,7 +22,7 @@ import { MERMAID_EDIT_EVENT } from '@/components/markdown/markdownMermaidLivePre
 import { AskUserQuestionPrompt } from '@/components/new-chat/AskUserQuestionPrompt';
 import { PermissionPrompt } from '@/components/new-chat/PermissionPrompt';
 import { PlanActionCard } from '@/components/new-chat/PlanActionCard';
-import { shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
+import { editableTargetConsumesKey, shouldCardShortcutYield } from '@/lib/editableKeyboardTarget';
 import type { PendingPermission } from '@/lib/makerChatStore';
 
 afterEach(cleanup);
@@ -87,6 +87,23 @@ describe('shouldCardShortcutYield', () => {
     expect(shouldCardShortcutYield(event(plain, {key: 'Escape'}), 'dismiss', owner)).toBe(true);
     expect(shouldCardShortcutYield(event(outsideButton, {key: 'Escape'}), 'dismiss', owner)).toBe(true);
     expect(shouldCardShortcutYield(event(outsideButton, {key: '1'}), 'character', owner)).toBe(true);
+  });
+});
+
+// #12342 评审 PRRT_kwDOTgdRUs67KjKu：消息列表的翻页键、分享栏的 Esc / ⌘A、设置页的 Esc 用它判断
+// 焦点控件是否自己要这个键。勾选框从 button 换成原生 input 后，只有真正收文字的控件才整键吞掉；
+// 复选框只要空格，单选还要方向键，其余按键与焦点在按钮上时一样交给页面。
+describe('editableTargetConsumesKey', () => {
+  const input = (type: string) => Object.assign(document.createElement('input'), {type});
+  it.each([
+    ['text input', input('text'), ['a', 'Escape', 'PageUp', ' ', 'ArrowUp'], []],
+    ['textarea', document.createElement('textarea'), ['Escape', 'Home'], []],
+    ['checkbox', input('checkbox'), [' '], ['Escape', 'a', 'PageUp', 'ArrowUp', 'Home', 'End']],
+    ['radio', input('radio'), [' ', 'ArrowUp', 'ArrowDown'], ['Escape', 'PageUp', 'Home']],
+    ['button', document.createElement('button'), [], [' ', 'Escape', 'PageUp']],
+  ] as const)('%s', (_name, target, consumed, released) => {
+    for (const key of consumed) expect(editableTargetConsumesKey(target, key), key).toBe(true);
+    for (const key of released) expect(editableTargetConsumesKey(target, key), key).toBe(false);
   });
 });
 
@@ -185,10 +202,10 @@ describe('PlanActionCard 快捷键不跟着菜单一起触发', () => {
 });
 
 describe('AskUserQuestionPrompt 数字键只在无人认领时作答', () => {
-  function renderAsk(onAnswer = vi.fn()) {
+  function renderAsk(onAnswer = vi.fn(), multiSelect = false) {
     render(createElement('div', null, createElement(Elsewhere), createElement(AskUserQuestionPrompt, {
       sessionId: 's1',
-      pending: {requestId: 'q1', questions: [{question: 'Which?', options: [{label: 'A'}, {label: 'B'}]}]},
+      pending: {requestId: 'q1', questions: [{question: 'Which?', multiSelect, options: [{label: 'A'}, {label: 'B'}]}]},
       onAnswer,
       viewerState: 'expanded',
       onViewerStateChange: () => {},
@@ -209,6 +226,16 @@ describe('AskUserQuestionPrompt 数字键只在无人认领时作答', () => {
     const onAnswer = renderAsk();
     keyOn(document.body, '2');
     expect(onAnswer).toHaveBeenCalledWith('q1', {'Which?': 'B'});
+  });
+
+  it('多选项是原生复选框：焦点停在选项上时，数字键仍切换选项、Esc 仍跳过', () => {
+    const onAnswer = renderAsk(vi.fn(), true);
+    const [first, second] = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    first.focus();
+    keyOn(first, '2');
+    expect(second.checked).toBe(true);
+    keyOn(first, 'Escape');
+    expect(onAnswer).toHaveBeenCalled();
   });
 });
 

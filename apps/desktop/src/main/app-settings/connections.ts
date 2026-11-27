@@ -1,3 +1,4 @@
+import { clearGlmFlashDiscovery, hasGlmFlashDiscovery } from '../../shared/glmRealtimeDiscovery.js';
 import { randomUUID } from 'node:crypto';
 import {
   isLoopbackProviderUrl,
@@ -36,7 +37,12 @@ function describeRuntimes(runtimes: CustomProviderConfig['runtimes']) {
         ...(runtime.modelsUrl ? { modelsUrl: publicEndpoint(runtime.modelsUrl) } : {}),
         wireProtocol: runtime.wireProtocol,
         supportsImageGeneration: runtime.supportsImageGeneration,
-        models: runtime.models.map((model) => ({ id: model.id, name: model.name })),
+        imageApi: runtime.imageApi,
+        videoApi: runtime.videoApi,
+        models: runtime.models.map((model) => ({ id: model.id, name: model.name,
+          ...(model.mode ? { mode: model.mode } : {}),
+          ...(model.modalities ? { modalities: model.modalities } : {}),
+        })),
       },
     ]),
   );
@@ -233,14 +239,17 @@ export async function manageProviderConnection(
   }
   const fetched = change.action === 'refreshModels' ? await api.fetch(config, change.agent) : null;
   await guard();
-  if (fetched && !fetched.ok)
-    return {
-      ok: false,
-      providerId: change.providerId,
-      errorCode: fetched.code ?? 'MODEL_DISCOVERY_FAILED',
-      status: fetched.status,
-      saved: false,
-    };
+  const catalogFailure = fetched && !fetched.ok ? {
+    ok: false,
+    providerId: change.providerId,
+    errorCode: fetched.code ?? 'MODEL_DISCOVERY_FAILED',
+    status: fetched.status,
+  } : null;
+  const flashAccessRevoked = fetched?.glmFlashProbe === 'unavailable'
+    && config.runtimes[change.agent]?.models.some(hasGlmFlashDiscovery);
+  if (catalogFailure && !flashAccessRevoked) {
+    return { ...catalogFailure, saved: false };
+  }
   const next = (current: CustomProviderConfig): CustomProviderConfig => {
     keepCurrent(current);
     const runtime = current.runtimes[change.agent]!;
@@ -252,7 +261,10 @@ export async function manageProviderConnection(
             name: model.name ?? runtime.models.find((old) => old.id === model.id)?.name ?? model.id,
             ...(model.name !== undefined ? { nameExplicit: true } : {}),
           }))
-        : mergeDiscoveredRuntimeModels(runtime.models, fetched?.models ?? []);
+        : mergeDiscoveredRuntimeModels(
+          fetched?.glmFlashProbe === 'unavailable' ? runtime.models.map(clearGlmFlashDiscovery) : runtime.models,
+          fetched?.models ?? [],
+        );
     return {
       ...current,
       runtimes: { ...current.runtimes, [change.agent]: { ...runtime, models } },
@@ -260,6 +272,7 @@ export async function manageProviderConnection(
   };
   const result = await api.update(config, {}, guard, next, interrupt);
   await guard();
+  if (result.ok && catalogFailure) return { ...catalogFailure, saved: true };
   return {
     ...result,
     saved: result.ok,

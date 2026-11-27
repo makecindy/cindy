@@ -1,19 +1,31 @@
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PluginPublisherBadge } from './PluginPublisherBadge';
-import { PluginSharedUsage } from './PluginSharedUsage';
-import { ChevronRight, Plus, RotateCw } from 'lucide-react';
+import { PluginDetailHero } from './PluginDetailHero';
+import { ChevronRight, Info, Plus, RotateCw, Search } from 'lucide-react';
 import { Select } from '@/components/ui/select';
 import { Tip } from '@/components/ui/tooltip';
 import type { GhostPluginListItem } from './lib/ghostPluginViewModel';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
 import { AccountSwitcherDialog } from '@/components/sidebar/AccountSwitcherDialog';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { PluginVersionFacts } from './PluginVersionFacts';
+import { SETTINGS_PAGE_TITLE_CLASS } from '@/components/ui/settings-rows';
+import { cn } from '@/lib/utils';
+import {
+  buildPluginVersionRows,
+  pluginSubmissionDate,
+  pluginSubmissionStatus,
+  PluginPublishVersions,
+  releaseKey,
+  restorePluginVersionSelection,
+  versionEventSnapshot,
+  versionSnapshotEvent,
+  VersionStatusIcon,
+} from './PluginPublishVersions';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePluginReviewUpdates } from '@/contexts/PluginReviewUpdatesContext';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
@@ -35,10 +47,10 @@ import { GhostPluginIcon } from './GhostPluginIcon';
 import { PluginPublishDialog, type PluginPublishDialogRequest, type PluginSubmitOptions } from './PluginPublishDialog';
 export type { PluginSubmitOptions } from './PluginPublishDialog';
 import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
+import './plugin-detail-layout.css';
+import './plugin-publish-list.css';
 
 const copy = 'settings.ghosts.contribution';
-const releaseKey = (release: ContributionReleaseView) =>
-  JSON.stringify([release.releaseId, release.revision, release.sha256, release.submissionId]);
 
 export interface MyPluginsPageCache {
   ownerKey?: string;
@@ -61,8 +73,6 @@ export function MyPluginsPage({
   onPrepare,
   onViewLocal,
   cache,
-  renderVersionFacts,
-  onInstallPublished,
   onReadPublished,
   submitBusy = false,
   submissionRevision = 0,
@@ -74,8 +84,6 @@ export function MyPluginsPage({
   cache: MyPluginsPageCache;
   onSubmitUpdate: (instanceId: string, options?: PluginSubmitOptions) => Promise<boolean>;
   onPrepare?: (instanceId: string) => Promise<PreparedPluginContribution>;
-  renderVersionFacts?: (plugin: MyPluginView) => ReactNode;
-  onInstallPublished?: (pluginId: string) => Promise<void>;
   onReadPublished?: (pluginId: string) => Promise<PluginMarketDetail>;
   submitBusy?: boolean;
   submissionRevision?: number;
@@ -98,12 +106,10 @@ export function MyPluginsPage({
   const { confirm } = useConfirmDialog();
   const reviewUpdates = usePluginReviewUpdates();
   const [cancelBusy, setCancelBusy] = useState(false);
-  const [installBusy, setInstallBusy] = useState(false);
   const [publishedContent, setPublishedContent] = useState<{
     key: string; value: PluginMarketDetail | null; loading: boolean;
   } | null>(null);
   const publishedRequest = useRef(0);
-  const [historyOpenKey, setHistoryOpenKey] = useState<string | null>(null);
   const [cancelResult, setCancelResult] = useState<{
     owner: string;
     pluginId: string;
@@ -145,7 +151,6 @@ export function MyPluginsPage({
   const writeKey = JSON.stringify([ownerKey, selectedId, installedRevision]);
   const currentWriteKey = useRef(writeKey);
   currentWriteKey.current = writeKey;
-  const historyOpen = historyOpenKey === JSON.stringify([ownerKey, selectedId]);
   const writeReady = writeRead === writeKey && navigator.onLine;
   const snapshots = ownerMatches ? storedSnapshots : {};
   const snapshotLoading = ownerMatches ? storedSnapshotLoading : null;
@@ -190,7 +195,6 @@ export function MyPluginsPage({
       setFailure(null);
       setPicker(null);
       setPublishedContent(null);
-      setHistoryOpenKey(null);
       setSnapshots({});
       setVersionPage(null);
       setSelectedRelease(undefined);
@@ -379,8 +383,6 @@ export function MyPluginsPage({
     lastReviewRefresh.current = signature;
     void refreshAll();
   }, [ownerKey, reviewSignature, refreshAll]);
-  useEffect(() => { setInstallBusy(false); }, [ownerKey, selectedId]);
-  useEffect(() => { setHistoryOpenKey(null); }, [ownerKey, selectedId]);
   usePluginMarketForegroundRefresh(refreshAll, lastRefresh);
   useEffect(() => {
     const online = () => {
@@ -453,83 +455,14 @@ export function MyPluginsPage({
     value
       ? new Date(value).toLocaleString(i18n.resolvedLanguage ?? i18n.language)
       : t(`${copy}.timeUnavailable`);
-  const status = (release: ContributionReleaseView, plugin?: MyPluginView) =>
-    t(
-      `${copy}.review.${
-        release.reviewStatus === 'approved' &&
-        plugin?.market.state === 'available' &&
-        plugin.market.releaseId === release.releaseId
-          ? 'published'
-          : (release.reviewStatus ?? release.revisionState)
-      }`,
-    );
-
-  const releaseContent = (release: ContributionReleaseView) => (
-    <>
-      {release.content ? (
-        <div className="space-y-3 text-14 leading-6 text-[var(--text-primary)]">
-          <div className="flex items-center gap-3">
-            <GhostPluginIcon
-              iconDataUrl={release.content.iconUrl ?? undefined}
-              iconId={release.releaseId}
-              iconName={release.content.name}
-            />
-            <p className="font-medium">{release.content.name}</p>
-          </div>
-          <p className="whitespace-pre-wrap break-words">{release.content.description}</p>
-          {release.content.permissions.length > 0 ? (
-            <ul className="list-inside list-disc">
-              {release.content.permissions.map((permission) => (
-                <li key={permission.key}>
-                  {t(`settings.ghosts.perm.${permission.labelKey}`, permission.labelArgs)}
-                  {permission.detailKey ? (
-                    <p className="text-13 text-[var(--text-secondary)]">
-                      {t(`settings.ghosts.perm.${permission.detailKey}`, permission.detailArgs)}
-                    </p>
-                  ) : null}
-                  {permission.detail ? (
-                    <p className="whitespace-pre-wrap text-13 text-[var(--text-secondary)]">
-                      {permission.detail}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      ) : (
-        <p className="text-13 text-[var(--text-secondary)]">{t(`${copy}.snapshotUnavailable`)}</p>
-      )}
-      <p className="mt-3 text-12 text-[var(--text-secondary)]">
-        {formatDate(release.submittedAt)}
-        {release.source
-          ? ` · ${t(`${copy}.source.${release.source}`, { defaultValue: t(`${copy}.source.unknown`) })}`
-          : ''}
-      </p>
-      <details className="mt-3 text-12 text-[var(--text-secondary)]">
-        <summary className="cursor-pointer select-none">{t(`${copy}.technicalDetails`)}</summary>
-        <dl className="mt-2 space-y-1 break-all">
-          <dt>{t(`${copy}.releaseSha`)}</dt>
-          <dd>{release.sha256}</dd>
-          {release.uploadedSha256 ? (
-            <>
-              <dt>{t(`${copy}.uploadedSha`)}</dt>
-              <dd>{release.uploadedSha256}</dd>
-            </>
-          ) : null}
-          <dt>{t(`${copy}.releaseId`)}</dt>
-          <dd>{release.releaseId}</dd>
-          <dt>{t(`${copy}.revision`)}</dt>
-          <dd>{release.revision}</dd>
-        </dl>
-        {release.content ? (
-          <pre className="mt-3 whitespace-pre-wrap break-words">
-            {JSON.stringify(release.content.manifestView, null, 2)}
-          </pre>
-        ) : null}
-      </details>
-    </>
-  );
+  const formatDetailDate = (value: string) => new Date(value).toLocaleString(i18n.resolvedLanguage ?? i18n.language, {
+    year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
+  const detailTime = (value: string | null) => value
+    ? <time dateTime={value} title={formatDate(value)}>{formatDetailDate(value)}</time>
+    : t(`${copy}.timeUnavailable`);
+  const locale = i18n.resolvedLanguage ?? i18n.language;
+  const shortDate = useMemo(() => new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }), [locale]);
 
   const currentDetail = detail?.plugin.pluginId === selectedId ? detail : null;
   const plugin = currentDetail?.plugin;
@@ -571,44 +504,46 @@ export function MyPluginsPage({
   const latest = plugin?.latestSubmission ? [plugin.latestSubmission] : [];
   const unreadReview = reviewUpdates.updates.find(item => item.pluginId === selectedId && item.unread);
   const unreadMarket = unreadReview && unreadReview.status !== 'approved' && unreadReview.status !== 'rejected' ? unreadReview : null;
-  const unreadRelease = unreadReview && [...latest, ...candidates].find(item =>
-    item.releaseId === unreadReview.releaseId && item.sha256 === unreadReview.sha256 && item.revision === unreadReview.revision);
   const detailIsNewer =
     !versionPage || Date.parse(currentDetail?.queriedAt ?? '') >= Date.parse(versionPage.queriedAt);
   const releases = (detailIsNewer ? [...latest, ...candidates] : [...candidates, ...latest]).filter(
     (release, index, all) =>
       all.findIndex((entry) => releaseKey(entry) === releaseKey(release)) === index,
   );
-  const selectedSummary =
-    (selectedRelease?.pluginId === selectedId
-      ? releases.find((release) => releaseKey(release) === selectedRelease.key)
-      : null) ??
-    unreadRelease ??
-    releases.find(
-      (release) =>
-        plugin?.latestSubmission && releaseKey(release) === releaseKey(plugin.latestSubmission),
-    ) ??
-    releases[0];
-  const snapshot = selectedSummary?.submissionId ? snapshots[selectedSummary.submissionId] : null;
-  const shownRelease =
-    selectedSummary && snapshot && releaseKey(snapshot) === releaseKey(selectedSummary)
-      ? { ...selectedSummary, content: snapshot.content }
-      : selectedSummary &&
-          plugin?.latestSubmission &&
-          releaseKey(plugin.latestSubmission) === releaseKey(selectedSummary)
-        ? { ...selectedSummary, content: plugin.latestSubmission.content }
-        : selectedSummary;
-  const selectedKey = selectedSummary ? releaseKey(selectedSummary) : null;
-  const snapshotId = selectedSummary?.submissionId;
-  const hasContent = Boolean(shownRelease?.content);
-  const visibleRelease = historyOpen ? shownRelease : plugin?.latestSubmission;
-  const visibleReview = unreadReview && visibleRelease && currentDetail &&
-    visibleRelease.releaseId === unreadReview.releaseId && visibleRelease.sha256 === unreadReview.sha256 &&
-    visibleRelease.revision === unreadReview.revision && visibleRelease.reviewStatus === unreadReview.status &&
-    visibleRelease.reviewedAt === unreadReview.decidedAt ? unreadReview : null;
+  const unreadRelease = unreadReview && releases.find(item =>
+    item.releaseId === unreadReview.releaseId && item.sha256 === unreadReview.sha256 && item.revision === unreadReview.revision);
+  const versions = buildPluginVersionRows(plugin, releases, currentDetail?.history ?? [], installedLocal);
+  const latestKey = plugin?.latestSubmission ? releaseKey(plugin.latestSubmission) : undefined;
+  const savedVersionKey = selectedRelease?.pluginId === selectedId ? selectedRelease?.key : undefined;
+  const unreadVersionKey = unreadRelease ? releaseKey(unreadRelease) : undefined;
+  const manualVersion = restorePluginVersionSelection(versions, savedVersionKey);
+  const selectedVersion = currentDetail
+    ? manualVersion ??
+      versions.rows.find(row => row.kind === 'submission' &&
+        row.release.reviewStatus === 'pending' && row.release.revisionState === 'current') ??
+      versions.rows.find(row => row.key === unreadVersionKey) ??
+      versions.rows.find(row => row.key === latestKey) ??
+      versions.rows.find(row => row.kind === 'submission') ??
+      versions.localRow ?? versions.publishedRow ?? versions.rows[0]
+    : undefined;
+  const selectedSummary = selectedVersion?.kind === 'submission' ? selectedVersion.release : undefined;
+  const selectedEvent = versionSnapshotEvent(selectedVersion);
+  const primarySubmissionId = selectedSummary?.submissionId ?? selectedEvent?.submissionId;
+  const selectedSnapshot = primarySubmissionId ? snapshots[primarySubmissionId] : undefined;
+  const latestSnapshot = plugin?.latestSubmission?.submissionId ? snapshots[plugin.latestSubmission.submissionId] : undefined;
+  const currentSubmission = plugin?.latestSubmission && latestSnapshot && releaseKey(latestSnapshot) === latestKey
+    ? { ...plugin.latestSubmission, content: latestSnapshot.content ?? plugin.latestSubmission.content } : plugin?.latestSubmission;
+  const shownRelease = selectedSummary ? {
+    ...selectedSummary,
+    content: (selectedSnapshot && releaseKey(selectedSnapshot) === selectedVersion?.key ? selectedSnapshot.content : null) ??
+      (selectedVersion?.key === latestKey ? currentSubmission?.content : null) ?? selectedSummary.content,
+  } : selectedEvent ? versionEventSnapshot(selectedEvent, snapshots) : undefined;
+  const exactUnreadResult = unreadReview && unreadRelease && unreadRelease.reviewStatus === unreadReview.status &&
+    unreadRelease.reviewedAt === unreadReview.decidedAt;
+  const visibleReview = exactUnreadResult && selectedVersion?.key === unreadVersionKey ? unreadReview : null;
   const visibleReviewKey = visibleReview?.key;
   const visibleReviewPlugin = visibleReview?.pluginId;
-  const visibleReleaseKey = visibleRelease ? releaseKey(visibleRelease) : null;
+  const visibleReleaseKey = visibleReview ? unreadVersionKey : undefined;
   useEffect(() => {
     if (!visibleReviewKey || !visibleReviewPlugin || !visibleReleaseKey || document.visibilityState !== 'visible') return;
     // Keep the exact result selected after acknowledging it; do not jump to a newer pending version.
@@ -647,7 +582,6 @@ export function MyPluginsPage({
           setVersionPage({ ...result, pluginId: target.pluginId, releases: collected });
           if (match) {
             setSelectedRelease({ pluginId: target.pluginId, key: releaseKey(match) });
-            setHistoryOpenKey(JSON.stringify([owner, target.pluginId]));
             setVersionFailure(null);
           } else setVersionFailure(`${copy}.loadFailed`);
           return;
@@ -662,24 +596,18 @@ export function MyPluginsPage({
         setVersionsLoading(false);
     }
   };
-  const latestSnapshot = plugin?.latestSubmission?.submissionId ? snapshots[plugin.latestSubmission.submissionId] : null;
-  const currentSubmission = plugin?.latestSubmission && latestSnapshot && releaseKey(latestSnapshot) === releaseKey(plugin.latestSubmission)
-    ? { ...plugin.latestSubmission, content: latestSnapshot.content } : plugin?.latestSubmission;
-  const visibleSnapshotId = historyOpen ? snapshotId : currentSubmission?.submissionId;
-  const visibleHasContent = historyOpen ? hasContent : Boolean(currentSubmission?.content);
+  const selectedKey = selectedVersion?.key;
+  const visibleHasContent = Boolean(shownRelease?.content);
+  const waitingForSelection = !manualVersion && versionPage?.pluginId !== selectedId && !versionFailure &&
+    Boolean(savedVersionKey || unreadReview && !unreadMarket && !unreadRelease || selectedVersion?.kind === 'history');
+  const snapshotToRead = waitingForSelection ? undefined : primarySubmissionId;
   useEffect(() => {
     snapshotRequest.current++;
     setSnapshotLoading(null);
-    if (visibleSnapshotId && !visibleHasContent) void loadSnapshot(visibleSnapshotId);
-  }, [selectedKey, visibleSnapshotId, visibleHasContent, loadSnapshot, historyOpen]);
+    if (snapshotToRead && !visibleHasContent) void loadSnapshot(snapshotToRead);
+  }, [selectedKey, snapshotToRead, visibleHasContent, loadSnapshot]);
   const isDetail = Boolean(selectedId);
   const listEmpty = page?.plugins.length === 0;
-  const rowAction = (
-    <span className="my-plugins-chevron inline-flex items-center justify-end gap-1 text-13 text-[var(--text-secondary)]">
-      {t(`${copy}.versionManagement`)}
-      <ChevronRight size={16} className="shrink-0" aria-hidden="true" />
-    </span>
-  );
   const cancelReview = async (plugin: MyPluginView, release: ContributionReleaseView) => {
     if (cancelling.current || !writeReady || !plugin.actions.submitUpdate || !release.canCancelReview || !navigator.onLine) return;
     const owner = ownerKey;
@@ -737,31 +665,8 @@ export function MyPluginsPage({
     }
   };
   const chooseRelease = (key: string) => {
-    if (!selectedId) return;
-    const release = releases.find((entry) => releaseKey(entry) === key);
-    if (!release) return;
-    setSelectedRelease({ pluginId: selectedId, key });
+    if (selectedId) setSelectedRelease({ pluginId: selectedId, key });
   };
-  const reviewTimes = (release: ContributionReleaseView) => (
-    <dl className="flex flex-wrap gap-x-6 gap-y-2 text-12 leading-5 text-[var(--text-tertiary)]">
-      <div className="flex flex-wrap gap-x-2">
-        <dt>{t(`${copy}.submittedAt`)}</dt>
-        <dd>{formatDate(release.submittedAt)}</dd>
-      </div>
-      {release.reviewStatus === 'approved' ? (
-        <div className="flex flex-wrap gap-x-2">
-          <dt>{t(`${copy}.approvedAt`)}</dt>
-          <dd>{release.approvedAt ? formatDate(release.approvedAt) : t(`${copy}.timeUnavailable`)}</dd>
-        </div>
-      ) : null}
-      {release.cancelledAt ? (
-        <div className="flex flex-wrap gap-x-2">
-          <dt>{t(`${copy}.cancelledAt`)}</dt>
-          <dd>{formatDate(release.cancelledAt)}</dd>
-        </div>
-      ) : null}
-    </dl>
-  );
   const refreshButton = (
     <Tip text={t(`${copy}.${isDetail ? 'refreshDetail' : 'refreshList'}`)}>
       <Button
@@ -778,10 +683,6 @@ export function MyPluginsPage({
       </Button>
     </Tip>
   );
-  const notes = shownRelease?.content?.manifestView.releaseNotes;
-
-  const factsPlugin = plugin ? { ...plugin, localInstallation: localInstallation ?? { state: 'unavailable' as const } } : null;
-  const versions = factsPlugin ? renderVersionFacts?.(factsPlugin) ?? <PluginVersionFacts plugin={factsPlugin} /> : null;
   const knownPublishBlocker = installedLocal && (
     plugin?.latestSubmission?.reviewStatus === 'pending' && plugin.latestSubmission.revisionState === 'current'
       ? 'PLUGIN_PENDING_RELEASE_EXISTS'
@@ -802,305 +703,121 @@ export function MyPluginsPage({
   const updateBlocker = currentUpdateDraft?.prepared?.preflight?.blockers[0];
   const published = publishedContent?.key === publishedKey ? publishedContent : null;
   const listedDetail = plugin?.market.state === 'available' ? published?.value : null;
-  const currentNotes = currentSubmission?.content?.manifestView.releaseNotes;
-  const publishingContent = currentDetail && plugin ? (
-    <div className="space-y-6 pb-8">
-      <section aria-label={t(`${copy}.localVersion`)} className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="space-y-1">
-            <h2 className="text-16 font-medium leading-6 text-[var(--text-primary)]">{t(`${copy}.localVersion`)}</h2>
-            <p className="text-14 leading-6 text-[var(--text-secondary)]">
-              {installedLocal ? `${installedLocal.version} · ${t(`settings.ghosts.page.origin.${installedLocal.origin}`)} · ${t(`${copy}.${installedLocal.enabled ? 'localEnabled' : 'localDisabled'}`)}`
-                : localCandidates.length > 1 ? t(`${copy}.chooseVersion`) : t(`${copy}.localState.${localInstallation?.state ?? 'unavailable'}`)}
-            </p>
-          </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            {localCandidates.length > 1 ? (
-              <Select label={t(`${copy}.localVersion`)} value={installedLocal?.instanceId ?? ''}
-                options={localCandidates.map(candidate => ({ value: candidate.instanceId,
-                  label: `${candidate.version} · ${t(`settings.ghosts.page.origin.${candidate.origin}`)}` }))}
-                onValueChange={instanceId => setSelectedInstallation({ context: installationSelectionContext, instanceId })}
-                className="w-full min-w-0 sm:w-64" />
-            ) : null}
-            {installedLocal && canPrepareUpdate && currentUpdateDraft?.prepared?.preflight?.actions.canSubmit && !updateBlocker ? (
-              <Button variant="cta" size="sm" loading={submitBusy} disabled={submitBusy}
-                onClick={() => {
-                  const token = updateContext.current.token;
-                  void onSubmitUpdate(installedLocal.instanceId, {
-                    prepared: currentUpdateDraft.prepared,
-                    isCurrent: () => mounted.current && updateContext.current.token === token,
-                  }).catch(error => {
-                    if (mounted.current && updateContext.current.token === token) setFailure(contributionErrorKey(error));
-                  }).finally(() => {
-                    if (mounted.current && updateContext.current.token === token) setUpdateRefresh(value => value + 1);
-                  });
-                }}>{t(`${copy}.submitVersion`, { version: installedLocal.version })}</Button>
-            ) : null}
-            {localInstallation?.state === 'missing' && plugin.market.state === 'available' && onInstallPublished && writeReady ? (
-              <Button variant="secondary" size="sm" loading={installBusy} disabled={installBusy}
-                onClick={() => {
-                  const key = writeKey, owner = ownerKey, pluginId = plugin.pluginId;
-                  setInstallBusy(true);
-                  void onInstallPublished(plugin.pluginId).then(() => {
-                    if (mounted.current && currentOwner.current === owner && selectedPlugin.current === pluginId) void refreshAllRef.current();
-                  }).catch(error => {
-                    if (mounted.current && currentWriteKey.current === key) setFailure(contributionErrorKey(error));
-                  }).finally(() => {
-                    if (mounted.current && currentOwner.current === owner && selectedPlugin.current === pluginId) setInstallBusy(false);
-                  });
-                }}>{t(`${copy}.installPublished`)}</Button>
-            ) : null}
-          </div>
-        </div>
-        {updateUnavailable && (installedLocal || plugin.publisherKind === 'official') ? <p role="status" className="text-12 leading-5 text-[var(--text-tertiary)]">{updateUnavailable}</p> : null}
-        {canPrepareUpdate ? currentUpdateDraft?.prepared ? <>
-          <p className="text-13 font-medium leading-5 text-[var(--text-primary)]">{currentUpdateDraft.prepared.name} · {currentUpdateDraft.prepared.version}</p>
-          <p className="select-text whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-secondary)]">{currentUpdateDraft.prepared.description}</p>
-          {currentUpdateDraft.prepared.releaseNotes?.trim() ? <>
-            <h3 className="text-13 font-medium leading-5 text-[var(--text-secondary)]">{t(`${copy}.releaseNotes`)}</h3>
-            <p className="select-text whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-primary)]">{currentUpdateDraft.prepared.releaseNotes}</p>
-          </> : null}
-          {updateBlocker ? <p role="status" className="text-13 leading-5 text-[var(--text-secondary)]">{t(`${copy}.errors.${updateBlocker.code}`, { defaultValue: t(`${copy}.errors.PRECONDITION_FAILED`) })}</p> : null}
-        </> : <p role={currentUpdateDraft?.error ? 'alert' : 'status'} className="text-13 leading-5 text-[var(--text-secondary)]">{t(currentUpdateDraft?.error ?? `${copy}.preparing`)}</p> : null}
-      </section>
-      <section aria-label={t(`${copy}.listedVersion`)} className="space-y-3 border-t border-[var(--border-default)] pt-5">
-        <h2 className="text-16 font-medium leading-6 text-[var(--text-primary)]">
-          {t(`${copy}.listedVersion`)}{plugin.market.state === 'available' ? ` · ${plugin.market.version}` : ''}
-        </h2>
-        {plugin.market.state !== 'available' ? <p className="text-14 leading-6 text-[var(--text-secondary)]">{t(`${copy}.market.${plugin.market.state}`)}</p>
-          : published?.value ? <>
-            <p className="select-text whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-primary)]">{published.value.description || published.value.manifest.description}</p>
-            {published.value.manifest.releaseNotes?.trim() ? <>
-              <h3 className="text-13 font-medium leading-5 text-[var(--text-secondary)]">{t(`${copy}.releaseNotes`)}</h3>
-              <p className="select-text whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-primary)]">{published.value.manifest.releaseNotes}</p>
-            </> : null}
-          </> : <p role="status" className="text-14 leading-6 text-[var(--text-secondary)]">{t(`${copy}.${published?.loading ? 'loading' : 'publishedContentUnavailable'}`)}</p>}
-        {plugin.market.reason ? <p className="select-text whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-secondary)]">{plugin.market.reason}</p> : null}
-      </section>
-      <section aria-label={t(`${copy}.currentSubmission`)} className="space-y-3 border-t border-[var(--border-default)] pt-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-16 font-medium leading-6 text-[var(--text-primary)]">{t(`${copy}.currentSubmission`)}</h2>
-          {currentSubmission?.canCancelReview && plugin.actions.submitUpdate && writeReady ? (
-            <Button variant="secondary" size="sm" loading={cancelBusy} disabled={cancelBusy}
-              onClick={() => void cancelReview(plugin, currentSubmission)}>{t(`${copy}.cancelReview`)}</Button>
-          ) : null}
-        </div>
-        {currentSubmission ? <>
-          <p className="flex flex-wrap gap-x-2 text-14 leading-6 text-[var(--text-primary)]"><span>{currentSubmission.version}</span><span aria-hidden="true">·</span><span>{status(currentSubmission, plugin)}</span></p>
-          {reviewTimes(currentSubmission)}
-          {cancelResult?.owner === ownerKey && cancelResult.pluginId === plugin.pluginId && cancelResult.releaseId === currentSubmission.releaseId ? (
-            <p role="status" className="text-13 leading-5 text-[var(--text-secondary)]">{t(`${copy}.${cancelResult.cancelled ? 'cancelReviewCompleted' : 'cancelReviewAlreadyFinal'}`)}</p>
-          ) : null}
-          {currentSubmission.reason ? <p className="select-text whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-primary)]">{currentSubmission.reason}</p> : null}
-          <h3 className="text-13 font-medium leading-5 text-[var(--text-secondary)]">{t('settings.ghosts.detail.infoDescription')}</h3>
-          <p className="select-text whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-primary)]">
-            {currentSubmission.content ? currentSubmission.content.description : t(`${copy}.snapshotUnavailable`)}
-          </p>
-          {typeof currentNotes === 'string' && currentNotes.trim() ? <>
-            <h3 className="text-13 font-medium leading-5 text-[var(--text-secondary)]">{t(`${copy}.releaseNotes`)}</h3>
-            <p className="select-text whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-primary)]">{currentNotes}</p>
-          </> : null}
-          <details className="group/current">
-            <summary className="flex cursor-pointer list-none items-center gap-2 text-13 font-medium leading-5 text-[var(--text-secondary)] [&::-webkit-details-marker]:hidden">
-              <ChevronRight size={14} aria-hidden="true" className="shrink-0 group-open/current:rotate-90" />{t(`${copy}.submittedContent`)}
-            </summary>
-            <div className="pt-3">{releaseContent(currentSubmission)}</div>
-          </details>
-        </> : <p className="text-14 leading-6 text-[var(--text-secondary)]">{t(`${copy}.noSubmission`)}</p>}
-      </section>
-      {unreadReview && !visibleReview && !visibleMarket ? (
-        <Button variant="secondary" size="sm" loading={versionsLoading}
-          disabled={versionsLoading || !navigator.onLine} onClick={() => void openUnreadResult()}>
-          <AttentionDot tone={unreadReview.status === 'approved' || unreadReview.status === 'enabled' ? 'done' : 'error'} />
-          {unreadMarket ? t(`${copy}.viewMarketResult`) : t(`${copy}.viewReviewResult`, { version: unreadReview.version })}
-        </Button>
-      ) : null}
-      {versionFailure ? (
-        <p role="alert" className="text-13 text-[var(--text-secondary)]">
-          {t(versionFailure, { defaultValue: t(`${copy}.loadFailed`) })}
-        </p>
-      ) : null}
-      <details key={JSON.stringify([ownerKey, selectedId])} open={historyOpen}
-        onToggle={event => setHistoryOpenKey(event.currentTarget.open ? JSON.stringify([ownerKey, selectedId]) : null)}
-        className="group/history border-t border-[var(--border-default)] pt-4">
-        <summary className="flex cursor-pointer list-none items-center gap-2 text-13 font-medium leading-5 text-[var(--text-secondary)] [&::-webkit-details-marker]:hidden">
-          <ChevronRight size={14} aria-hidden="true" className="shrink-0 group-open/history:rotate-90" />
-          {t(`${copy}.history`)}
-        </summary>
-        {historyOpen ? <div className="space-y-4 pt-4">
-      {shownRelease ? (
-        <section className="space-y-4" aria-label={t(`${copy}.versionContent`)}>
-          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-3">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <span className="text-14 text-[var(--text-primary)]">
-                {t(`${copy}.version`)}
-              </span>
-              {releases.length > 1 ? (
-                <Select
-                  label={t(`${copy}.chooseVersion`)}
-                  value={releaseKey(shownRelease)}
-                  options={releases.map((release) => ({
-                    value: releaseKey(release),
-                    label: release.version,
-                    title: release.version,
-                    endAdornment: (
-                      <span className="text-12 text-[var(--text-tertiary)]">
-                        {status(release, plugin)}
-                      </span>
-                    ),
-                  }))}
-                  onValueChange={chooseRelease}
-                  truncateOptions
-                  className="h-8 w-28 min-w-0 gap-3 font-normal"
-                  contentClassName="min-w-[240px] max-w-[calc(100vw-16px)]"
-                  aria-describedby="my-plugin-version-status"
-                />
-              ) : (
-                <span className="min-w-0 break-words text-14 text-[var(--text-primary)]">
-                  {shownRelease.version}
-                </span>
-              )}
-              <span
-                id="my-plugin-version-status"
-                className="rounded-full bg-[var(--surface-chip)] px-2 py-0.5 text-12 text-[var(--text-primary)]"
-              >
-                {status(shownRelease, plugin)}
-              </span>
-            </div>
-          </div>
-          {reviewTimes(shownRelease)}
-          {shownRelease.reason ? (
-            <section className="space-y-2">
-              <h3 className="text-13 font-medium text-[var(--text-primary)]">
-                {t(`${copy}.reason`)}
-              </h3>
-              <p className="select-text whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-primary)]">
-                {shownRelease.reason}
-              </p>
-            </section>
-          ) : null}
-          {snapshotLoading === shownRelease.submissionId && snapshotLoading && !shownRelease.content ? (
-            <p role="status" className="text-13 text-[var(--text-tertiary)]">
-              {t(`${copy}.loading`)}
-            </p>
-          ) : (
-            <>
-              <section className="space-y-3 pt-2">
-                <div className="space-y-1">
-                  <h3 className="text-14 font-medium leading-5 text-[var(--text-primary)]">
-                    {t('settings.ghosts.detail.infoDescription')}
-                  </h3>
-                </div>
-                <p className="select-text whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-primary)]">
-                  {shownRelease.content ? shownRelease.content.description : t(`${copy}.snapshotUnavailable`)}
-                </p>
-                {typeof notes === 'string' && notes.trim() ? <>
-                  <h3 className="text-14 font-medium leading-5 text-[var(--text-primary)]">{t(`${copy}.releaseNotes`)}</h3>
-                  <p className="select-text whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-primary)]">{notes}</p>
-                </> : null}
-              </section>
-              <details className="group/version border-t border-[var(--border-default)] pt-4">
-                <summary className="flex cursor-pointer list-none items-center gap-2 text-13 font-medium leading-5 text-[var(--text-secondary)] [&::-webkit-details-marker]:hidden">
-                  <ChevronRight size={14} aria-hidden="true" className="shrink-0 group-open/version:rotate-90" />
-                  {t(`${copy}.versionContent`)}
-                </summary>
-                <div className="pt-4">{releaseContent(shownRelease)}</div>
-              </details>
-            </>
-          )}
-        </section>
-      ) : (
-        <p className="text-14 text-[var(--text-tertiary)]">
-          {t(`${copy}.noSubmission`)}
-        </p>
-      )}
-      {versionPage?.pluginId === selectedId && versionPage.nextCursor ? (
-        <Button
-          variant="secondary"
-          size="sm"
-          compact
-          loading={versionsLoading}
-          onClick={() => void loadVersions(versionPage.nextCursor!)}
-        >
-          {t(`${copy}.loadMoreVersions`)}
-        </Button>
-      ) : null}
-          {currentDetail.history.map((event) => (
-            <article
-              key={event.eventId}
-              className="space-y-2 border-b border-[var(--border-default)] pb-4"
-            >
-              <p className="break-words text-14 text-[var(--text-primary)]">
-                {event.version ? `${event.version} · ` : ''}
-                {t(`${copy}.event.${event.pluginStatus === 'archived' ? 'archived' : event.type}`)}
-              </p>
-              <p className="text-12 text-[var(--text-tertiary)]">
-                {formatDate(event.at)}
-              </p>
-              {event.reason ? (
-                <p className="select-text whitespace-pre-wrap break-words text-14 leading-6 text-[var(--text-primary)]">
-                  {event.reason}
-                </p>
-              ) : null}
-              {event.submissionId ? (
-                <div>
-                  {!snapshots[event.submissionId] ? (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      compact
-                      loading={snapshotLoading === event.submissionId}
-                      onClick={() => void loadSnapshot(event.submissionId!)}
-                    >
-                      {t(`${copy}.submittedContent`)}
-                    </Button>
-                  ) : null}
-                  {snapshots[event.submissionId] ? (
-                    <div className="mt-3">
-                      {releaseContent(snapshots[event.submissionId])}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-              {event.revision ? (
-                <details className="text-12 text-[var(--text-tertiary)]">
-                  <summary className="cursor-pointer select-none">
-                    {t(`${copy}.technicalDetails`)}
-                  </summary>
-                  <p className="mt-2 break-all">
-                    {event.revision.releaseId}
-                    <br />
-                    {event.revision.sha256}
-                    <br />
-                    {event.revision.displayUpdatedAt}
-                  </p>
-                </details>
-              ) : null}
-            </article>
-          ))}
-          {currentDetail.nextCursor ? (
-            <Button
-              variant="secondary"
-              loading={loading}
-              onClick={() => void refresh(currentDetail.nextCursor!)}
-            >
-              {t(`${copy}.loadMoreHistory`)}
-            </Button>
-          ) : null}
-        </div> : null}
-      </details>
-    </div>
+  const listedVersion = plugin?.market.state === 'available' ? plugin.market.version : null;
+  const submitVersionAction = installedLocal && canPrepareUpdate && currentUpdateDraft?.prepared?.preflight?.actions.canSubmit && !updateBlocker ? (
+    <Button variant="cta" size="lg" loading={submitBusy} disabled={submitBusy}
+      onClick={() => {
+        const token = updateContext.current.token;
+        void onSubmitUpdate(installedLocal.instanceId, {
+          prepared: currentUpdateDraft.prepared,
+          isCurrent: () => mounted.current && updateContext.current.token === token,
+        }).catch(error => {
+          if (mounted.current && updateContext.current.token === token) setFailure(contributionErrorKey(error));
+        }).finally(() => {
+          if (mounted.current && updateContext.current.token === token) setUpdateRefresh(value => value + 1);
+        });
+      }}>{t(`${copy}.submitVersion`, { version: installedLocal.version })}</Button>
   ) : null;
-  const publishing = <section aria-label={t(`${copy}.versionManagement`)}>
-    {versions ? <div className="mb-6">{versions}</div> : null}
-    {publishingContent}
-  </section>;
+  const listedContentLoading = plugin?.market.state === 'available' && !listedDetail &&
+    (published?.loading === true || (!published && Boolean(onReadPublished && plugin.market.releaseId)));
+  const versionCursor = versionPage?.pluginId === selectedId ? versionPage?.nextCursor : null;
+  const historyCursor = currentDetail?.nextCursor;
+  const loadMoreVersions = async () => {
+    const expectedSequence = versionRequest.current + (versionCursor ? 1 : 0);
+    if (versionCursor) await loadVersions(versionCursor);
+    if (historyCursor && mounted.current && currentWriteKey.current === writeKey &&
+      versionRequest.current === expectedSequence)
+      await refresh(historyCursor);
+  };
+  const localVersionPicker = localCandidates.length > 1 ? (
+    <Select label={t(`${copy}.localVersion`)} value={installedLocal?.instanceId ?? ''}
+      options={localCandidates.map(candidate => ({ value: candidate.instanceId,
+        label: `${candidate.version} · ${t(`settings.ghosts.page.origin.${candidate.origin}`)}` }))}
+      onValueChange={instanceId => setSelectedInstallation({ context: installationSelectionContext, instanceId })}
+      size="compact" className="plugin-publish-version-picker" />
+  ) : null;
+  const unreadTone = unreadReview?.status === 'approved' || unreadReview?.status === 'enabled' ? 'done' : 'error';
+  const unreadAction = unreadReview && (unreadMarket ? !visibleMarket : !exactUnreadResult) ? (
+    <Button variant="secondary" size="sm" className="plugin-publish-version-unread"
+      loading={versionsLoading} disabled={versionsLoading || !navigator.onLine} onClick={() => void openUnreadResult()}>
+      <AttentionDot tone={unreadTone} />
+      {unreadMarket ? t(`${copy}.viewMarketResult`) : t(`${copy}.viewReviewResult`, { version: unreadReview.version })}
+    </Button>
+  ) : null;
+  const cancelAction = selectedSummary?.canCancelReview && plugin?.actions.submitUpdate && writeReady ? (
+    <Button variant="secondary" size="sm" compact loading={cancelBusy} disabled={cancelBusy}
+      className="ms-auto max-w-full whitespace-normal" onClick={() => void cancelReview(plugin, selectedSummary)}>
+      {t(`${copy}.cancelReview`)}
+    </Button>
+  ) : null;
+  const cancelMessage = selectedSummary && cancelResult?.owner === ownerKey && cancelResult.pluginId === selectedId &&
+    cancelResult.releaseId === selectedSummary.releaseId
+    ? t(`${copy}.${cancelResult.cancelled ? 'cancelReviewCompleted' : 'cancelReviewAlreadyFinal'}`) : undefined;
+  const publishing = plugin ? (
+    <PluginPublishVersions
+      key={JSON.stringify([ownerKey, plugin.pluginId])}
+      plugin={plugin}
+      rows={versions.rows}
+      selected={selectedVersion}
+      installed={installedLocal}
+      installedKey={versions.installedKey}
+      installationState={!installedLocal ? (localInstallation?.state === 'missing' ? 'missing' : 'unavailable') : undefined}
+      installationPicker={localVersionPicker}
+      unreadKey={unreadVersionKey}
+      unreadTone={unreadTone}
+      unreadAction={unreadAction}
+      versionFailure={versionFailure}
+      rowRelease={shownRelease}
+      primarySubmissionId={primarySubmissionId}
+      draft={{
+        prepared: currentUpdateDraft?.prepared ?? undefined,
+        preparing: canPrepareUpdate && !currentUpdateDraft?.prepared && !currentUpdateDraft?.error,
+        versionAlreadySubmitted: updateBlocker?.code === 'VERSION_ALREADY_SUBMITTED',
+        error: currentUpdateDraft?.error ?? undefined,
+        blocker: updateBlocker
+          ? t(`${copy}.errors.${updateBlocker.code}`, { defaultValue: t(`${copy}.errors.PRECONDITION_FAILED`) })
+          : plugin.publisherKind === 'official' ? undefined : updateUnavailable,
+      }}
+      published={listedDetail ?? null}
+      publishedLoading={listedContentLoading}
+      cancelAction={cancelAction}
+      cancelMessage={cancelMessage}
+      loadMore={versionCursor || historyCursor ? () => void loadMoreVersions() : undefined}
+      loadingMore={versionsLoading || loading}
+      onSelect={chooseRelease}
+      snapshots={snapshots}
+      snapshotLoading={waitingForSelection ? primarySubmissionId ?? null : snapshotLoading}
+      loadSnapshot={submissionId => void loadSnapshot(submissionId)}
+      detailTime={detailTime}
+    />
+  ) : null;
+
+  const market = plugin?.market;
+  const marketStatus = market ? t(market.state === 'available' ? `${copy}.listedVersion` : `${copy}.market.${market.state}`) : null;
+  const marketReasons = [...new Set([market?.reason, versions.noticeEvent?.reason]
+    .map(reason => reason?.trim()).filter((reason): reason is string => Boolean(reason)))];
+  const showMarketNotice = market && (marketReasons.length > 0 ||
+    (market.state === 'not_listed' ? Boolean(versions.noticeEvent?.at) : market.state !== 'available'));
+  const description = listedDetail ? listedDetail.description || listedDetail.manifest.description
+    : listedContentLoading ? null : currentSubmission?.content?.description;
+  const marketNotice = showMarketNotice ? (
+    <section className="mt-7 grid grid-cols-[16px_minmax(0,1fr)] gap-x-2.5 rounded-xl bg-[var(--surface-chip)] px-4 py-3.5">
+      <Info size={16} className="mt-0.5 text-[var(--text-secondary)]" aria-hidden="true" />
+      <div className="min-w-0">
+        <h2 className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-14 font-medium leading-normal text-[var(--text-primary)]">
+          {marketStatus}
+          {versions.noticeEvent ? <span className="text-12 font-normal tabular-nums text-[var(--text-tertiary)]">{detailTime(versions.noticeEvent.at)}</span> : null}
+        </h2>
+        {marketReasons.map(reason => <p key={reason} className="mt-1 select-text whitespace-pre-wrap text-14 leading-[1.6] text-[var(--text-secondary-mid)] [overflow-wrap:anywhere]">{reason}</p>)}
+      </div>
+    </section>
+  ) : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <main
         ref={scrollFrame}
-        className="app-wallpaper-surface min-h-0 flex-1 overflow-y-auto bg-[var(--surface)]"
+        className={`app-wallpaper-surface min-h-0 flex-1 overflow-y-auto bg-[var(--surface)] ${isDetail ? 'plugin-publish-detail' : 'plugin-publish-list'}`}
         onScroll={(event) => {
           onScroll(event);
           if (!isDetail) listScroll.current = event.currentTarget.scrollTop;
@@ -1108,61 +825,66 @@ export function MyPluginsPage({
         }}
       >
         <PluginDetailTopBar
-          label={isDetail ? t(`${copy}.myPlugins`) : t('settings.ghosts.title')}
+          label={isDetail ? t(`${copy}.backToPublish`) : t('settings.ghosts.title')}
           onBack={back}
           scrolled={scrolled}
-          frameClassName={PLUGIN_MANAGEMENT_FRAME_CLASS}
-        />
-        <PluginManagementPage className={isDetail ? 'pt-6' : undefined}>
-          <header className={`flex min-w-0 flex-wrap justify-between gap-4 ${isDetail ? 'mb-6 items-start' : 'mb-5 items-center'}`}>
-            <div className={`flex min-w-0 flex-1 gap-4 ${isDetail ? 'items-start' : 'items-center'}`}>
-              {isDetail && plugin ? (
-                <GhostPluginIcon
-                  iconDataUrl={plugin?.iconUrl ?? undefined}
-                  iconId={plugin.pluginId}
-                  iconName={plugin.name}
-                  size="detail"
-                />
-              ) : null}
-              <div className="min-w-0">
-                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-                  <h1 className={`min-w-0 break-words font-medium text-[var(--text-primary)] [overflow-wrap:anywhere] ${isDetail ? 'text-20 leading-7' : 'text-24 leading-8'}`}>
-                    {isDetail
-                      ? (plugin?.name ?? t(`${copy}.myPlugins`))
-                      : t(`${copy}.myPlugins`)}
-                  </h1>
-                </div>
-                {isDetail && plugin?.publisherKind === 'official' ? <div className="mt-1"><PluginPublisherBadge kind={plugin.publisherKind} /></div> : null}
-                {isDetail && (plugin?.displayAuthor || listedDetail) ? (
-                  <div className="plugin-detail-metadata mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-13 leading-5 text-[var(--text-tertiary)]">
-                    {plugin?.displayAuthor ? <span className="min-w-0 break-words">{plugin.displayAuthor}</span> : null}
-                    {listedDetail ? <>
-                      {plugin?.displayAuthor ? <span aria-hidden="true">·</span> : null}
-                      <span>v{listedDetail.version}</span>
-                      <PluginSharedUsage detail={listedDetail} />
-                    </> : null}
-                  </div>
-                ) : null}
-                {!isDetail ? (
-                  <p className="mt-1 text-14 leading-6 text-[var(--text-tertiary)]">
-                    {t(`${copy}.intro`)}
-                  </p>
-                ) : null}
-              </div>
-            </div>
-            {!isDetail ? (
-              <Button
-                variant="cta"
-                disabled={!contributor || !ownerMatches}
-                onClick={openPicker}
-              >
-                <Plus size={16} />
+          actions={<>
+            {contributor ? refreshButton : null}
+            {!isDetail && (!listEmpty || query || filter !== 'all') ? (
+              <Button variant="cta" size="lg" disabled={!contributor || !ownerMatches} onClick={openPicker}>
+                <Plus size={16} aria-hidden="true" />
                 {t(`${copy}.publishPlugin`)}
               </Button>
-            ) : (
-              refreshButton
-            )}
-          </header>
+            ) : null}
+          </>}
+          frameClassName={isDetail ? `${PLUGIN_MANAGEMENT_FRAME_CLASS} plugin-publish-detail-frame` : PLUGIN_MANAGEMENT_FRAME_CLASS}
+        />
+        <PluginManagementPage className={isDetail ? 'plugin-publish-detail-frame pt-6' : undefined}>
+          {isDetail ? (
+            <header>
+              {plugin ? (
+                <PluginDetailHero id={plugin.pluginId} name={plugin.name} iconDataUrl={plugin.iconUrl ?? undefined}
+                  author={plugin.displayAuthor} publisherKind={plugin.publisherKind}
+                  status={plugin.market.state === 'available' ? undefined : marketStatus}
+                  marketItem={listedDetail} version={listedVersion} versionLabel="listed" actions={submitVersionAction} />
+              ) : <h1 className={SETTINGS_PAGE_TITLE_CLASS}>{t(`${copy}.myPlugins`)}</h1>}
+              {description?.trim() ? (
+                <p className="mt-5 select-text whitespace-pre-wrap text-pretty text-15 leading-[1.65] text-[var(--text-secondary-mid)] [overflow-wrap:anywhere]">{description}</p>
+              ) : null}
+              {market?.state === 'available' && !listedDetail ? (
+                <p role="status" className={`${description?.trim() ? 'mt-3' : 'mt-5'} max-w-[680px] text-12 leading-normal text-[var(--text-tertiary)]`}>
+                  {t(`${copy}.${listedContentLoading ? 'loading' : 'publishedContentUnavailable'}`)}
+                </p>
+              ) : null}
+              {plugin?.publisherKind === 'official' ? (
+                <p role="status" className="mt-3 max-w-[680px] text-12 leading-normal text-[var(--text-tertiary)]">{t(`${copy}.unavailable.officialGithubRequired`)}</p>
+              ) : null}
+            </header>
+          ) : (
+            <header className="mb-5 flex min-w-0 flex-wrap items-center justify-between gap-4">
+              <div className="flex min-w-0 flex-1 items-center gap-4">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+                    <h1 className={cn('min-w-0 [overflow-wrap:anywhere]', SETTINGS_PAGE_TITLE_CLASS)}>{t(`${copy}.myPlugins`)}</h1>
+                  </div>
+                </div>
+              </div>
+              {contributor && (!listEmpty || query || filter !== 'all') ? (
+                <div className="flex min-w-0 max-w-full items-center gap-2 max-[540px]:basis-full">
+                  <Select label={t(`${copy}.filterLabel`)} value={filter} size="compact" width="xs"
+                    truncateOptions options={(['all', 'pending', 'needs_action', 'published'] as const).map(value => ({
+                      value, label: t(`${copy}.filter.${value}`),
+                    }))}
+                    onValueChange={value => setFilter(value as MyPluginFilter)} />
+                  <div className="relative min-w-0 max-[540px]:ml-auto">
+                    <Search size={15} aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-3 z-raised my-auto text-[var(--text-tertiary)]" />
+                    <Input size="sm" type="search" value={query} onChange={setQuery}
+                      placeholder={t(`${copy}.search`)} aria-label={t(`${copy}.search`)} inputClassName="pl-9" />
+                  </div>
+                </div>
+              ) : null}
+            </header>
+          )}
           {!contributor ? (
             <div className="space-y-4">
               <p role="status" className="text-14 leading-6 text-[var(--text-secondary)]">
@@ -1199,34 +921,6 @@ export function MyPluginsPage({
               ) : null}
               {!isDetail ? (
                 <>
-                  {!listEmpty || query || filter !== 'all' ? (
-                    <div className="mb-5 flex flex-wrap items-center gap-3">
-                      <Input
-                        size="sm"
-                        value={query}
-                        onChange={setQuery}
-                        placeholder={t(`${copy}.search`)}
-                        aria-label={t(`${copy}.search`)}
-                        className="min-w-0 max-w-xs"
-                      />
-                      <div className="flex flex-wrap gap-1" aria-label={t(`${copy}.filterLabel`)}>
-                        {(['all', 'pending', 'needs_action', 'published'] as const).map((value) => (
-                          <Button
-                            key={value}
-                            variant={filter === value ? 'primary' : 'secondary'}
-                            tone={filter === value ? 'default' : 'quiet'}
-                            size="sm"
-                            compact
-                            aria-pressed={filter === value}
-                            onClick={() => setFilter(value)}
-                          >
-                            {t(`${copy}.filter.${value}`)}
-                          </Button>
-                        ))}
-                      </div>
-                      <span className="ml-auto">{refreshButton}</span>
-                    </div>
-                  ) : null}
                   {loading && !page ? (
                     <p role="status" className="text-14 text-[var(--text-secondary)]">
                       {t(`${copy}.loading`)}
@@ -1236,77 +930,90 @@ export function MyPluginsPage({
                     <div className="flex min-h-72 flex-col items-center justify-center gap-4 py-8 text-center text-14 leading-6 text-[var(--text-tertiary)]">
                       <p>{t(`${copy}.${query || filter !== 'all' ? 'noMatches' : 'empty'}`)}</p>
                       {!query && filter === 'all' ? (
-                        <Button variant="secondary" onClick={openPicker} disabled={!ownerMatches}>
+                        <Button variant="cta" size="lg" onClick={openPicker} disabled={!ownerMatches}>
                           {t(`${copy}.goPublish`)}
                         </Button>
                       ) : null}
                     </div>
                   ) : null}
                   {page?.plugins.length ? (
-                    <div className="my-plugins-table">
-                      <div
-                        className="my-plugins-columns border-b border-[var(--border-default)] pb-3 text-12 text-[var(--text-tertiary)]"
-                        aria-hidden="true"
-                      >
-                        <span>{t(`${copy}.pluginColumn`)}</span>
-                        <span>{t(`${copy}.localVersion`)}</span>
-                        <span>{t(`${copy}.currentMarket`)}</span>
-                        <span>{t(`${copy}.latestState`)}</span>
-                        <span />
-                      </div>
-                      {page?.plugins.map((entry) => {
+                    <ul className="-mx-3 grid gap-0.5">
+                      {[...page.plugins].sort((a, b) =>
+                        Number(b.latestSubmission?.reviewStatus === 'rejected') - Number(a.latestSubmission?.reviewStatus === 'rejected'),
+                      ).map((entry) => {
                         const local = listInstallationRead === JSON.stringify([ownerKey, installedRevision]) && navigator.onLine
                           ? entry.localInstallation : undefined;
                         const review = reviewUpdates.updates.find(item => item.pluginId === entry.pluginId && item.unread);
+                        const release = entry.latestSubmission;
+                        const status = release ? pluginSubmissionStatus(release, entry.market) : null;
+                        const rejected = status === 'rejected';
+                        const reason = rejected ? release?.reason?.trim() : null;
+                        const description = reason || entry.description?.trim();
+                        const marketFact = status === 'published' ? null
+                          : entry.market.state !== 'available' ? t(`${copy}.market.${entry.market.state}`)
+                            : entry.market.version ? t(`${copy}.marketVersion`, { version: entry.market.version })
+                              : t(`${copy}.listedVersion`);
+                        const localFact = local?.state === 'installed'
+                          ? t(`${copy}.localState.installed`, { version: local.version })
+                          : t(`${copy}.localState.${local?.state ?? 'unavailable'}`);
+                        const date = release?.reviewStatus && status ? pluginSubmissionDate(release, status) : null;
+                        const time = date ? new Date(date) : null;
                         return (
-                          <button
-                            type="button"
-                            key={entry.pluginId}
-                            className="my-plugins-row w-full border-b border-[var(--border-default)] py-5 text-left hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
-                            onClick={() => openDetail(entry.pluginId)}
-                          >
-                            <span className="my-plugins-identity flex min-w-0 items-center gap-3">
-                              <GhostPluginIcon
-                                iconDataUrl={entry.iconUrl ?? undefined}
-                                iconId={entry.pluginId}
-                                iconName={entry.name}
-                              />
-                              <span className="min-w-0">
-                                <span className="block break-words text-16 font-medium leading-6 text-[var(--text-primary)]">{entry.name}</span>
-                                <PluginPublisherBadge kind={entry.publisherKind} />
-                                {entry.displayAuthor ? <span className="block break-words text-13 leading-5 text-[var(--text-tertiary)]">{entry.displayAuthor}</span> : null}
+                          <li key={entry.pluginId}>
+                            <button type="button"
+                              className="plugin-publish-list-row grid w-full min-w-0 items-center rounded-xl px-3 py-3.5 text-left transition-colors duration-[var(--motion-fast)] hover:bg-[var(--surface-hover-soft)] active:bg-[var(--surface-chip)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
+                              onClick={() => openDetail(entry.pluginId)}
+                            >
+                              <span className="plugin-publish-list-icon flex">
+                                <GhostPluginIcon iconDataUrl={entry.iconUrl ?? undefined} iconId={entry.pluginId} iconName={entry.name} />
                               </span>
-                              {review ? <span role="img" className="inline-flex" aria-label={t(`${copy}.unreadReview`)}><AttentionDot tone={review.status === 'approved' || review.status === 'enabled' ? 'done' : 'error'} /></span> : null}
-                            </span>
-                            <span className="my-plugins-local min-w-0 break-words text-13 leading-5 text-[var(--text-primary)]">
-                              <span className="my-plugins-mobile-label">{t(`${copy}.localVersion`)} ·{' '}</span>
-                              {local?.state === 'installed' ? local.version : t(`${copy}.localState.${local?.state ?? 'unavailable'}`)}
-                            </span>
-                            <span className="my-plugins-market min-w-0 break-words text-13 leading-5 text-[var(--text-tertiary)]">
-                              <span className="my-plugins-mobile-label">
-                                {t(`${copy}.currentMarket`)} ·{' '}
+                              <span className="plugin-publish-list-info grid min-w-0 gap-px">
+                                <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-15 font-medium leading-[1.4] text-[var(--text-primary)]">
+                                  <span className="min-w-0 [overflow-wrap:anywhere]">{entry.name}</span>
+                                  <PluginPublisherBadge kind={entry.publisherKind} />
+                                  {review ? <span role="img" className="inline-flex" aria-label={t(`${copy}.unreadReview`)}><AttentionDot tone={review.status === 'approved' || review.status === 'enabled' ? 'done' : 'error'} /></span> : null}
+                                </span>
+                                {description ? (
+                                  <span className="truncate text-13 leading-[1.54] text-[var(--text-secondary)]">
+                                    {reason ? (
+                                      <Trans i18nKey={`${copy}.rejectionReasonLine`} components={{
+                                        reasonLabel: <span className="text-[var(--text-primary)]" />,
+                                        reasonText: <span>{reason}</span>,
+                                      }} />
+                                    ) : description}
+                                  </span>
+                                ) : null}
+                                <span className="text-12 leading-normal tabular-nums text-[var(--text-tertiary)] [overflow-wrap:anywhere]">
+                                  {[marketFact, localFact, entry.displayAuthor].filter(Boolean).join(' · ')}
+                                </span>
                               </span>
-                              {entry.market.state === 'available'
-                                ? entry.market.version
-                                : t(`${copy}.market.${entry.market.state}`)}
-                            </span>
-                            <span className="my-plugins-latest min-w-0 break-words text-13 leading-5 text-[var(--text-primary)]">
-                              <span className="my-plugins-mobile-label">
-                                {t(`${copy}.latestState`)} ·{' '}
+                              <span className="plugin-publish-list-revision grid min-w-0 gap-y-0.5 [overflow-wrap:anywhere]">
+                                <span className={`flex min-w-0 items-center gap-1.5 text-13 leading-[1.54] ${rejected ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}>
+                                  {status ? <VersionStatusIcon status={status} size={16} className={rejected ? undefined : 'text-[var(--text-tertiary)]'} /> : null}
+                                  <span className="min-w-0">{t(status ? `${copy}.review.${status}` : `${copy}.noSubmission`)}</span>
+                                </span>
+                                {release ? (
+                                  <span className="plugin-publish-list-revision-meta min-w-0 text-12 leading-normal tabular-nums text-[var(--text-tertiary)]">
+                                    {release.version}
+                                    {date && time && Number.isFinite(time.getTime()) ? (
+                                      <> · <time dateTime={date} title={formatDate(date)}>{shortDate.format(time)}</time></>
+                                    ) : null}
+                                  </span>
+                                ) : null}
                               </span>
-                              {entry.latestSubmission
-                                ? `${entry.latestSubmission.version} · ${status(entry.latestSubmission, entry)}`
-                                : t(`${copy}.noSubmission`)}
-                            </span>
-                            {rowAction}
-                          </button>
+                              <ChevronRight size={16} aria-hidden="true" className="plugin-publish-list-chevron justify-self-end text-[var(--text-tertiary)]" />
+                            </button>
+                          </li>
                         );
                       })}
-                    </div>
+                    </ul>
                   ) : null}
                   {page?.nextCursor ? (
                     <Button
                       variant="secondary"
+                      size="sm"
+                      compact
+                      className="self-start"
                       loading={loading}
                       onClick={() => void refresh(page.nextCursor!)}
                     >
@@ -1316,6 +1023,7 @@ export function MyPluginsPage({
                 </>
               ) : currentDetail && plugin ? (
                 <>
+                  {marketNotice}
                   {publishing}
                 </>
               ) : loading ? (
@@ -1324,15 +1032,15 @@ export function MyPluginsPage({
                 </p>
               ) : null}
               <footer
-                className="mt-6 flex items-center justify-between gap-3 pb-4 text-12 text-[var(--text-tertiary)]"
+                className={`flex items-center justify-between gap-3 pb-4 text-12 text-[var(--text-tertiary)] ${isDetail ? 'mt-10 tabular-nums' : 'mt-6'}`}
                 aria-live="polite"
               >
                 <span>
                   {timestamp
-                    ? t(`${copy}.lastRefreshed`, { time: formatDate(timestamp) })
+                    ? isDetail ? <span title={formatDate(timestamp)}>{t(`${copy}.lastRefreshed`, { time: formatDetailDate(timestamp) })}</span>
+                      : t(`${copy}.lastRefreshed`, { time: formatDate(timestamp) })
                     : ''}
                 </span>
-                {!isDetail && listEmpty && !query && filter === 'all' ? refreshButton : null}
               </footer>
             </>
           )}

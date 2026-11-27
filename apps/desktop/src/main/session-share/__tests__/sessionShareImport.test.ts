@@ -127,7 +127,7 @@ vi.mock('../../maker-host/codex-local-sessions.js', () => ({
 vi.mock('../../maker-orchestration/claudeTranscriptAnchors.js', () => ({
   defaultClaudeConfigDirCandidates: () => [path.join(tmpRoot, 'claude-home')],
 }));
-vi.mock('../../imageCacheStore.js', () => ({
+vi.mock('../../imageCacheStore.desktop.js', () => ({
   getCacheRoot: () => path.join(tmpRoot, 'cc-agent', 'images'),
   getSessionDir: (sessionId: string) => path.join(tmpRoot, 'cc-agent', 'images', sessionId),
   removeSession: async (sessionId: string) => {
@@ -265,7 +265,8 @@ interface BundleOverrides {
   /** 覆盖 session.json snapshot 字段(导出方会话配置不进导入行的语义测试)。 */
   session?: Record<string, unknown>;
   omitTranscript?: boolean;
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
+  providerId?: string | null;
   /** 伪造 media-map 里 image entry 的 filename 字段(路径穿越攻击面测试)。 */
   imageFilenameOverride?: string;
   /** 额外加一条不同 old host 的图片 URL(fork 祖先链多 host 测试)。 */
@@ -276,9 +277,10 @@ interface BundleOverrides {
   looseAudio?: { bytes: Buffer };
   /** v1 旧包没有逐消息 agentKind。 */
   omitMessageAgentKind?: boolean;
-  /** 协同包:附带一个 Worker(cc 或 codex),manifest 升到 v2 + orca 段。 */
+  /** 协同包:附带一个 Worker(cc / codex / acp),manifest 升到 v2(内置)或 v3(含 acp)。 */
   orcaWorker?: {
-    agentKind: 'cc' | 'codex';
+    agentKind: 'cc' | 'codex' | 'acp';
+    providerId?: string | null;
     status?: 'idle' | 'running' | 'done' | 'error';
     snapshot?: Record<string, unknown>;
   };
@@ -324,7 +326,18 @@ async function buildBundle(overrides: BundleOverrides = {}): Promise<Buffer> {
       rewindAt: null,
     },
   ];
-  zip.file('session.json', JSON.stringify({ model: 'claude-sonnet-4-6', effort: 'high', permissionMode: 'ask', createdAt: 1700000000000, userSendAt: 1700000000100, ...overrides.session }));
+  zip.file(
+    'session.json',
+    JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      effort: 'high',
+      permissionMode: 'ask',
+      createdAt: 1700000000000,
+      userSendAt: 1700000000100,
+      ...(agentKind === 'acp' ? { providerId: overrides.providerId ?? 'acp-plugin:demo:lead', sdkSessionId: null } : {}),
+      ...overrides.session,
+    }),
+  );
   zip.file('messages.jsonl', messages.map((m) => JSON.stringify(m)).join('\n'));
   const transcriptPath =
     agentKind === 'cc'
@@ -332,7 +345,7 @@ async function buildBundle(overrides: BundleOverrides = {}): Promise<Buffer> {
       : agentKind === 'pi'
         ? `transcripts/pi/${PI_SID}`
         : `transcripts/codex/rollout-x-${SID}.jsonl`;
-  if (!overrides.omitTranscript) zip.file(transcriptPath, '{"line":1}\n');
+  if (agentKind !== 'acp' && !overrides.omitTranscript) zip.file(transcriptPath, '{"line":1}\n');
   if (agentKind === 'codex') {
     zip.file('codex-state/thread.json', JSON.stringify({ threads: [{ id: SID }], threadDynamicTools: [], threadSpawnEdges: [] }));
   }
@@ -390,6 +403,14 @@ async function buildBundle(overrides: BundleOverrides = {}): Promise<Buffer> {
         createdAt: 1700000001000,
         userSendAt: 1700000001100,
         totalTokenUsage: 42,
+        ...(workerAgent === 'acp'
+          ? {
+              providerId: overrides.orcaWorker.providerId ?? 'acp-plugin:demo:worker',
+              model: 'acp-worker-model',
+              effort: 'medium',
+              sdkSessionId: null,
+            }
+          : {}),
         ...overrides.orcaWorker.snapshot,
       }),
     );
@@ -407,7 +428,9 @@ async function buildBundle(overrides: BundleOverrides = {}): Promise<Buffer> {
         rewindAt: null,
       }),
     );
-    zip.file(workerTranscriptPath, '{"worker-line":1}\n');
+    if (workerAgent !== 'acp') {
+      zip.file(workerTranscriptPath, '{"worker-line":1}\n');
+    }
     if (workerAgent === 'codex') {
       zip.file(
         'orca/workers/0/codex-state/thread.json',
@@ -420,36 +443,53 @@ async function buildBundle(overrides: BundleOverrides = {}): Promise<Buffer> {
         {
           index: 0,
           agentKind: workerAgent,
+          ...(workerAgent === 'acp'
+            ? { providerId: overrides.orcaWorker.providerId ?? 'acp-plugin:demo:worker' }
+            : {}),
           title: 'Worker 1',
           role: 'developer',
           label: 'dev-1',
           status: overrides.orcaWorker.status ?? 'running',
           focused: true,
-          sdkSessionIds: [WORKER_SID],
-          activeSdkSessionId: WORKER_SID,
+          sdkSessionIds: workerAgent === 'acp' ? [] : [WORKER_SID],
+          activeSdkSessionId: workerAgent === 'acp' ? null : WORKER_SID,
           counts: { messages: 1 },
-          transcripts: [{ sdkSessionId: WORKER_SID, path: workerTranscriptPath }],
+          transcripts: workerAgent === 'acp' ? [] : [{ sdkSessionId: WORKER_SID, path: workerTranscriptPath }],
         },
       ],
     };
   }
+  const hasAcp = agentKind === 'acp' || overrides.orcaWorker?.agentKind === 'acp';
+  const manifestVersion = hasAcp ? 3 : orcaSection ? 2 : 1;
+  const defaultFidelity =
+    agentKind === 'acp'
+      ? 'db-only'
+      : overrides.omitTranscript
+        ? 'db-only'
+        : overrides.orcaWorker?.agentKind === 'acp'
+          ? 'partial'
+          : 'full';
   const manifest = {
-    formatVersion: orcaSection ? 2 : 1,
-    minReaderVersion: orcaSection ? 2 : 1,
+    formatVersion: manifestVersion,
+    minReaderVersion: manifestVersion,
     ...(orcaSection ? { orca: orcaSection } : {}),
     appVersion: '9.9.9',
     platform: 'darwin',
     exportedAt: '2026-07-04T00:00:00.000Z',
     agentKind,
+    ...(agentKind === 'acp' ? { providerId: overrides.providerId ?? 'acp-plugin:demo:lead' } : {}),
     title: '分享会话',
     workspaceKind: 'project',
     originalWorkingDir: '/old/machine/proj',
-    sdkSessionIds: [sdkSessionId],
-    activeSdkSessionId: sdkSessionId,
-    exportFidelity: overrides.omitTranscript ? 'db-only' : 'full',
+    sdkSessionIds: agentKind === 'acp' ? [] : [sdkSessionId],
+    activeSdkSessionId: agentKind === 'acp' ? null : sdkSessionId,
+    exportFidelity: defaultFidelity,
     counts: { messages: 2, media: 2 },
     entries: [],
-    transcripts: [{ sdkSessionId, path: overrides.omitTranscript ? null : transcriptPath }],
+    transcripts:
+      agentKind === 'acp'
+        ? []
+        : [{ sdkSessionId, path: overrides.omitTranscript ? null : transcriptPath }],
     ...overrides.manifest,
   };
   zip.file('manifest.json', JSON.stringify(manifest));
@@ -1933,5 +1973,267 @@ describe('sessionShareImport', () => {
       }),
     ).rejects.toMatchObject({ code: 'SHARE_FILE_INVALID' });
     expect(dbMock.txCalls).toHaveLength(0);
+  });
+
+  it('imports a plain ACP v3 bundle preserving plugin config and writing a hidden context_rebuild handoff', async () => {
+    const filePath = await writeBundleFile(
+      await buildBundle({
+        agentKind: 'acp',
+        providerId: 'acp-plugin:demo:codex',
+        session: {
+          model: 'acp-custom-model',
+          effort: 'medium',
+          providerId: 'acp-plugin:demo:codex',
+        },
+      }),
+    );
+    const inspect = await inspectShareFile(filePath);
+    expect(inspect.encrypted).toBe(false);
+    if (inspect.encrypted) return;
+    expect(inspect.preview).toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:demo:codex',
+      fidelity: 'db-only',
+    });
+
+    // Built-in draftPrefs must NOT overwrite ACP providerId/model/effort/fastMode.
+    const result = await commitShareImport({
+      draftId: inspect.draftId,
+      workingDir: newWorkdir,
+      projectsRootOverride: projectsRoot,
+      sharedMediaRootOverride: sharedMediaRoot,
+      draftPrefs: {
+        model: 'claude-sonnet-4-6',
+        providerId: 'anthropic',
+        effort: 'max',
+        fastMode: true,
+        planMode: true,
+      },
+    });
+    expect(result.fidelity).toBe('db-only');
+    expect(dbMock.txCalls).toHaveLength(1);
+    const txArgs = dbMock.txCalls[0].args as {
+      session: Record<string, unknown>;
+      messages: Array<{ role: string; content: string; createdAt: number; rewindAt: number | null; agentKind: string | null }>;
+    };
+    expect(txArgs.session).toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:demo:codex',
+      model: 'acp-custom-model',
+      effort: 'medium',
+      fastMode: false,
+      planModeEnabled: false,
+      sdkSessionId: null,
+      codexHistoryHasProductPrompt: null,
+    });
+    const handoffRow = txArgs.messages.find((m) => m.role === 'context_rebuild');
+    expect(handoffRow).toBeDefined();
+    expect(handoffRow!.rewindAt).toBe(handoffRow!.createdAt);
+    expect(handoffRow!.agentKind).toBe('acp');
+    const payload = JSON.parse(handoffRow!.content) as {
+      consumed: boolean;
+      reason: string;
+      sourceAgentKind: string;
+      sourceProviderId: string;
+      handoff: string;
+    };
+    expect(payload).toMatchObject({
+      consumed: false,
+      reason: 'native-session-recovery',
+      sourceAgentKind: 'acp',
+      sourceProviderId: 'acp-plugin:demo:codex',
+    });
+    expect(payload.handoff).toContain('ok');
+  });
+
+  it('imports an Orca v3 bundle with CC lead and ACP worker, writing handoff only for the ACP worker', async () => {
+    const filePath = await writeBundleFile(
+      await buildBundle({
+        agentKind: 'cc',
+        orcaWorker: {
+          agentKind: 'acp',
+          providerId: 'acp-plugin:demo:worker',
+          status: 'running',
+          snapshot: {
+            model: 'acp-w-model',
+            effort: 'low',
+            providerId: 'acp-plugin:demo:worker',
+          },
+        },
+      }),
+    );
+    const inspect = await inspectShareFile(filePath);
+    expect(inspect.encrypted).toBe(false);
+    if (inspect.encrypted) return;
+    expect(inspect.preview).toMatchObject({
+      agentKind: 'cc',
+      fidelity: 'partial',
+      orcaWorkerCount: 1,
+      hasAcpWorker: true,
+    });
+
+    const result = await commitShareImport({
+      draftId: inspect.draftId,
+      workingDir: newWorkdir,
+      projectsRootOverride: projectsRoot,
+      sharedMediaRootOverride: sharedMediaRoot,
+    });
+    expect(result.fidelity).toBe('partial');
+    expect(result.orcaWorkers).toBe(1);
+    const txArgs = dbMock.txCalls[0].args as {
+      session: Record<string, unknown>;
+      messages: Array<{ role: string }>;
+      orca?: {
+        workers: Array<{
+          record: Record<string, unknown>;
+          session: Record<string, unknown>;
+          messages: Array<{ role: string; rewindAt: number | null; content: string }>;
+        }>;
+      };
+    };
+    expect(txArgs.messages.some((m) => m.role === 'context_rebuild')).toBe(false);
+    const worker = txArgs.orca!.workers[0];
+    expect(worker.record.status).toBe('idle');
+    expect(worker.session).toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:demo:worker',
+      model: 'acp-w-model',
+      effort: 'low',
+      fastMode: false,
+      sdkSessionId: null,
+    });
+    const workerHandoff = worker.messages.find((m) => m.role === 'context_rebuild');
+    expect(workerHandoff).toBeDefined();
+    expect(workerHandoff!.rewindAt).not.toBeNull();
+    expect(JSON.parse(workerHandoff!.content)).toMatchObject({
+      consumed: false,
+      sourceAgentKind: 'acp',
+      sourceProviderId: 'acp-plugin:demo:worker',
+    });
+  });
+
+  it('migration import accepts ACP lead (db-only) and CC+ACP team (partial) while rejecting missing CC transcripts or unavailable ACP plugins', async () => {
+    const acpFile = await writeBundleFile(
+      await buildBundle({
+        agentKind: 'acp',
+        providerId: 'acp-plugin:demo:lead~ab12cd34',
+        session: { providerId: 'acp-plugin:demo:lead~ab12cd34' },
+      }),
+    );
+    const acpInspect = await inspectShareFile(acpFile);
+    if (acpInspect.encrypted) return;
+    // Target missing required ACP plugin must fail with MIGRATION_TARGET_MODEL_UNAVAILABLE.
+    await expect(
+      commitShareImport(
+        {
+          draftId: acpInspect.draftId,
+          workingDir: newWorkdir,
+          projectsRootOverride: projectsRoot,
+          sharedMediaRootOverride: sharedMediaRoot,
+        },
+        {
+          sessionId: 'migrated-acp-missing',
+          workingDir: newWorkdir,
+          agentPrefs: { acp: { permissionMode: 'ask', planMode: false, fastMode: false } },
+          availableAcpProviders: new Set(['acp-plugin:other:engine']),
+        },
+      ),
+    ).rejects.toMatchObject({ message: 'MIGRATION_TARGET_MODEL_UNAVAILABLE' });
+
+    // Target with the canonical plugin succeeds and strips machine-local ~suffix.
+    const acpInspect2 = await inspectShareFile(acpFile);
+    if (acpInspect2.encrypted) return;
+    const acpRes = await commitShareImport(
+      {
+        draftId: acpInspect2.draftId,
+        workingDir: newWorkdir,
+        projectsRootOverride: projectsRoot,
+        sharedMediaRootOverride: sharedMediaRoot,
+      },
+      {
+        sessionId: 'migrated-acp-1',
+        workingDir: newWorkdir,
+        agentPrefs: { acp: { permissionMode: 'ask', planMode: false, fastMode: false } },
+        availableAcpProviders: new Set(['acp-plugin:demo:lead']),
+      },
+    );
+    expect(acpRes.fidelity).toBe('db-only');
+    expect((dbMock.txCalls[0].args as { session: Record<string, unknown> }).session.providerId).toBe(
+      'acp-plugin:demo:lead',
+    );
+
+    // Orca team with ACP worker whose plugin is missing on target must be rejected before commit.
+    const missingWorkerPluginFile = await writeBundleFile(
+      await buildBundle({
+        agentKind: 'cc',
+        orcaWorker: {
+          agentKind: 'acp',
+          providerId: 'acp-plugin:demo:worker',
+          snapshot: { migrationSourceId: 'source-acp-w', workspaceKind: 'project' },
+        },
+        manifest: { exportFidelity: 'partial' },
+      }),
+    );
+    const missingWorkerInspect = await inspectShareFile(missingWorkerPluginFile);
+    if (missingWorkerInspect.encrypted) return;
+    expect(missingWorkerInspect.preview.acpWorkerProviderIds).toEqual(['acp-plugin:demo:worker']);
+    await expect(
+      commitShareImport(
+        {
+          draftId: missingWorkerInspect.draftId,
+          workingDir: newWorkdir,
+          projectsRootOverride: projectsRoot,
+          sharedMediaRootOverride: sharedMediaRoot,
+        },
+        {
+          sessionId: 'migrated-missing-worker-plugin',
+          workingDir: newWorkdir,
+          workers: [
+            { sourceSessionId: 'source-acp-w', sessionId: 'target-acp-w', workingDir: newWorkdir },
+          ],
+          agentPrefs: {
+            cc: { model: 'm', providerId: 'p', permissionMode: 'default' },
+            acp: { permissionMode: 'ask', planMode: false, fastMode: false },
+          },
+          availableAcpProviders: new Set(['acp-plugin:demo:lead']),
+        },
+      ),
+    ).rejects.toMatchObject({ message: 'MIGRATION_TARGET_MODEL_UNAVAILABLE' });
+
+    const brokenTeamFile = await writeBundleFile(
+      await buildBundle({
+        agentKind: 'cc',
+        omitTranscript: true,
+        orcaWorker: {
+          agentKind: 'acp',
+          snapshot: { migrationSourceId: 'source-acp-w', workspaceKind: 'project' },
+        },
+        manifest: { exportFidelity: 'partial' },
+      }),
+    );
+    const brokenInspect = await inspectShareFile(brokenTeamFile);
+    if (brokenInspect.encrypted) return;
+    await expect(
+      commitShareImport(
+        {
+          draftId: brokenInspect.draftId,
+          workingDir: newWorkdir,
+          projectsRootOverride: projectsRoot,
+          sharedMediaRootOverride: sharedMediaRoot,
+        },
+        {
+          sessionId: 'migrated-broken-team',
+          workingDir: newWorkdir,
+          workers: [
+            { sourceSessionId: 'source-acp-w', sessionId: 'target-acp-w', workingDir: newWorkdir },
+          ],
+          agentPrefs: {
+            cc: { model: 'm', providerId: 'p', permissionMode: 'default' },
+            acp: { permissionMode: 'ask', planMode: false, fastMode: false },
+          },
+          availableAcpProviders: new Set(['acp-plugin:demo:worker']),
+        },
+      ),
+    ).rejects.toMatchObject({ message: 'MIGRATION_INCOMPLETE_CONTEXT' });
   });
 });

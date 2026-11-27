@@ -1,7 +1,7 @@
 import { useCallback, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from 'react';
 import { useMessageViewport } from './useMessageViewport';
 
-export type MessageViewportApi = Pick<ReturnType<typeof useMessageViewport>, 'syncViewport' | 'reconcileViewport'> & {
+export type MessageViewportApi = Pick<ReturnType<typeof useMessageViewport>, 'syncViewport' | 'reconcileViewport' | 'getViewportTopRow'> & {
   connect: () => void;
 };
 
@@ -31,7 +31,8 @@ export function MessageViewport({ apiRef, options, children }: {
   useImperativeHandle(apiRef, () => ({
     syncViewport: viewport.syncViewport,
     reconcileViewport: viewport.reconcileViewport,
+    getViewportTopRow: viewport.getViewportTopRow,
     connect,
-  }), [viewport.syncViewport, viewport.reconcileViewport, connect]);
+  }), [viewport.syncViewport, viewport.reconcileViewport, viewport.getViewportTopRow, connect]);
   return children(viewport);
 }

@@ -1,3 +1,5 @@
+import { detectCwd } from './detectCwd.js';
+export { detectCwd } from './detectCwd.js';
 /**
  * worktree-parallel-sessions M1: 主入口。
  *
@@ -12,7 +14,6 @@
 
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { currentOperationBudget, operationWait } from '../utils/operationBudget';
 import fs from 'node:fs/promises';
 
 import {
@@ -26,7 +27,7 @@ import {
   validateWorktreeName,
 } from './nameGenerator';
 import { readAttachedWorktreeBranch } from './attachedBranch';
-import { createCwdProbeScheduler } from './cwdProbeScheduler';
+import { refreshSelectedDefaultSource } from './freshBase';
 import { classifyError, type ClassifyInput } from './errorClassifier';
 import {
   gitExec,
@@ -36,27 +37,32 @@ import {
 } from './gitExec';
 import { gitPathOutput } from './gitPathOutput';
 import { ensureManagedWorktreeExcluded } from './managedWorktreeExclude';
+import {
+  buildMultiboxAddArgs,
+  buildMultiboxRemoveArgs,
+  logMultiboxAddResult,
+  shouldUseMultibox,
+} from './multibox';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
-import { hasKeepSentinel, isManagedWorktreePath } from './safety';
+import { hasKeepSentinel } from './safety';
 import {
+  isIncompleteCheckoutWorktreeDirty,
   isWorktreeDirty,
   listNonReproducibleIgnoredFiles,
 } from './dirty';
 import { hasLiveSessionReference, loadLiveSessionPathKeys } from './liveSessionRefs';
 import { withWorktreeRestoreMutation } from './restoreLock';
-import { recycleManagedWorktree } from './managedRecycle';
-import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
+import { worktreeManagerPorts } from './WorktreeManagerPorts.js';
+import { withWorktreeResourceLock } from './resourceLock';
 import {
   acquireWorktreeRuntimeLease,
   recordWorktreeRuntimeLeaseChild,
   reclaimOrphanedWorktreeRuntimeLeases,
   releaseWorktreeRuntimeLease,
 } from './runtimeLeases';
-import * as store from './worktreeStore';
-import { assertPrecreatedSessionNotCancelled, sealPrecreatedSessionCancellation, withPrecreatedSessionOperationLock } from './precreatedCancellation';
+import * as store from './worktreeStore.js';
 import { createLogger } from '../logger';
-import { realpathWorkingDirectory } from '../workdir-probe-host/index';
 import { getDbClient } from '../localDb/client/current';
 import {
   getManagedWorktreeBasePath,
@@ -68,7 +74,6 @@ const log = createLogger('WorktreeManager');
 import type {
   CreateWorktreeReq,
   CreateWorktreeResp,
-  DetectCwdResp,
   ListBranchesResp,
   WorktreeMeta,
 } from './types';
@@ -348,7 +353,10 @@ const MIN_RECOVERY_KEY_LENGTH = 16;
 const MAX_RECOVERY_KEY_LENGTH = 256;
 const RECOVERY_KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
 
-async function withCreateWorktreeQueue<T>(baseRepo: string, fn: () => Promise<T>): Promise<T> {
+async function withCreateWorktreeQueue<T>(
+  baseRepo: string,
+  fn: (releaseQueue: () => void) => Promise<T>,
+): Promise<T> {
   const key = path.resolve(baseRepo);
   const previous = createWorktreeQueues.get(key) ?? Promise.resolve();
   let releaseCurrent!: () => void;
@@ -361,14 +369,21 @@ async function withCreateWorktreeQueue<T>(baseRepo: string, fn: () => Promise<T>
   );
   createWorktreeQueues.set(key, queued);
 
-  await previous.catch(() => {});
-  try {
-    return await fn();
-  } finally {
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
     releaseCurrent();
     if (createWorktreeQueues.get(key) === queued) {
       createWorktreeQueues.delete(key);
     }
+  };
+
+  await previous.catch(() => {});
+  try {
+    return await fn(release);
+  } finally {
+    release();
   }
 }
 
@@ -394,7 +409,7 @@ async function withPrecreatedWorktreeOperationQueue<T>(
 
   await previous.catch(() => {});
   try {
-    return await withPrecreatedSessionOperationLock(sessionId, fn);
+    return await worktreeManagerPorts().withPrecreatedSessionOperationLock(sessionId, fn);
   } finally {
     releaseCurrent();
     if (precreatedWorktreeOperationQueues.get(sessionId) === queued) {
@@ -408,144 +423,6 @@ async function withPrecreatedWorktreeOperationQueue<T>(
 /**
  * 探测 cwd 状态: 是否 git repo / 是否在 worktree 内 / git 是否可用 / 当前分支 / repo root
  */
-const scheduledDetectCwd = createCwdProbeScheduler(detectCwdOnce);
-export function detectCwd(cwd: string): Promise<DetectCwdResp> {
-  // Automatic snapshots own cancellation. Never lend their abortable probe to
-  // an unrelated UI request (or borrow an unabortable pending UI probe).
-  return currentOperationBudget() ? operationWait(detectCwdOnce(cwd)) : scheduledDetectCwd(cwd);
-}
-
-// Share the work budget across realpath and every Git query. Git's additional
-// 3s process-tree cleanup still leaves response headroom under Mobile's 15s wait.
-const CWD_PROBE_TIMEOUT_MS = 10_000;
-
-async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
-  const deadline = performance.now() + CWD_PROBE_TIMEOUT_MS;
-  const probeGit = async (args: readonly string[], dir?: string) => {
-    currentOperationBudget()?.check();
-    const timeoutMs = Math.ceil(deadline - performance.now());
-    if (timeoutMs <= 0) {
-      throw new GitExecError({
-        args, exitCode: null, stdout: '', stderr: 'directory probe deadline exceeded', timedOut: true,
-      });
-    }
-    return gitExec(args, dir, { timeoutMs, deadlineAtMs: deadline });
-  };
-  // Git resolves relative metadata paths from the physical process cwd. A
-  // symlink spelling can otherwise make an ordinary repo look like a linked
-  // worktree. Keep Git's existing error handling if the directory is unavailable.
-  cwd = await realpathWorkingDirectory(cwd).catch((err) => {
-    // Keep timeout/pool exhaustion unknown; falling back to a symlink spelling
-    // could recreate the false linked-worktree result we are trying to avoid.
-    if (err?.code === 'WORKDIR_PROBE_TIMEOUT' || err?.code === 'WORKDIR_PROBE_UNAVAILABLE') throw err;
-    return cwd;
-  });
-  // One Git process returns the same snapshot that previously needed five.
-  // Unborn HEADs, older Git versions and newline-containing paths retain the
-  // individual-query fallback below rather than changing the IPC contract.
-  try {
-    const { stdout } = await probeGit(
-      ['rev-parse', '--show-toplevel', '--abbrev-ref', 'HEAD', '--git-dir', '--git-common-dir'],
-      cwd,
-    );
-    const lines = gitPathOutput(stdout).split(process.platform === 'win32' ? /\r?\n/ : /\n/);
-    if (lines.length === 4 && lines.every((line) => line.trim().length > 0)) {
-      const [root, branch, gitDir, commonDir] = lines;
-      return {
-        isGitRepo: true,
-        isInsideWorktree: path.resolve(cwd, gitDir) !== path.resolve(cwd, commonDir),
-        gitInstalled: true,
-        supportsRecoveryKeyDiscard: true,
-        repoRoot: path.resolve(root),
-        ...(branch !== 'HEAD' ? { currentBranch: branch.trim() } : {}),
-      };
-    }
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    // Preserve the existing partial results and error classification.
-  }
-  const out: DetectCwdResp = {
-    isGitRepo: false,
-    isInsideWorktree: false,
-    gitInstalled: true,
-    supportsRecoveryKeyDiscard: true,
-  };
-  // 1. git --version 探测安装
-  try {
-    await probeGit(['--version']);
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    if (err instanceof GitExecError && err.cause?.code === 'ENOENT') {
-      out.gitInstalled = false;
-      return out;
-    }
-    // 其他失败也视为不可用(极罕见)
-    out.gitInstalled = false;
-    return out;
-  }
-
-  // 2. rev-parse --show-toplevel: 拿 repo 根
-  try {
-    const { stdout } = await probeGit(['rev-parse', '--show-toplevel'], cwd);
-    const toplevel = gitPathOutput(stdout);
-    if (toplevel) {
-      out.isGitRepo = true;
-      out.repoRoot = path.resolve(toplevel);
-    }
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    out.isGitRepo = false;
-  }
-
-  if (!out.isGitRepo) return out;
-
-  // 3. 当前分支
-  try {
-    const { stdout } = await probeGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
-    const branch = stdout.trim();
-    if (branch && branch !== 'HEAD') out.currentBranch = branch;
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    // ignore — 分支信息不影响主流程
-  }
-
-  // 4. 是否在 linked worktree 内
-  // 权威判定: `git rev-parse --git-dir` 在 linked worktree 里指向 `.git/worktrees/<name>`,
-  // 而 `--git-common-dir` 始终指向主仓库的 `.git`。两者解析后的绝对路径不一致 → linked worktree。
-  // 这种判断是 git 自己用来区分主/linked worktree 的方式, 不依赖目录命名约定 ——
-  // 任何工具(CC Desktop / 手工 git worktree add 等) 创建的 worktree 都能被检出。
-  try {
-    // 任一命令失败后仍等另一条完成清理，不能提前释放目录探测槽位。
-    const results = await Promise.allSettled([
-      probeGit(['rev-parse', '--git-dir'], cwd),
-      probeGit(['rev-parse', '--git-common-dir'], cwd),
-    ]);
-    for (const result of results) {
-      if (result.status === 'rejected' && result.reason instanceof GitExecError && result.reason.timedOut) {
-        throw result.reason;
-      }
-    }
-    const [gitDirResult, commonDirResult] = results;
-    if (gitDirResult.status === 'rejected') throw gitDirResult.reason;
-    if (commonDirResult.status === 'rejected') throw commonDirResult.reason;
-    const gitDirRaw = gitDirResult.value.stdout;
-    const gitCommonDirRaw = commonDirResult.value.stdout;
-    const gitDir = path.resolve(cwd, gitPathOutput(gitDirRaw));
-    const gitCommonDir = path.resolve(cwd, gitPathOutput(gitCommonDirRaw));
-    if (gitDir && gitCommonDir && gitDir !== gitCommonDir) {
-      out.isInsideWorktree = true;
-    }
-  } catch (err) {
-    if (err instanceof GitExecError && err.timedOut) throw err;
-    // 解析失败 → 兜底走托管目录名启发式, 至少识别出 Cindy 自己创建的 worktree
-    const normalizedRepoRoot = out.repoRoot?.replace(/\\/g, '/');
-    if (normalizedRepoRoot && getManagedWorktreeBasePath(normalizedRepoRoot) != null) {
-      out.isInsideWorktree = true;
-    }
-  }
-
-  return out;
-}
 
 /**
  * 列出 baseRepo 的所有本地分支 + 当前分支。
@@ -651,102 +528,6 @@ export function getForSession(sessionId: string): WorktreeMeta | null {
   return store.get(sessionId);
 }
 
-/** Caller holds the session/resource locks. Unknown DB outcomes retain the intent. */
-async function reconcileSessionTransferLocked(meta: WorktreeMeta, beforeMutation?: () => Promise<void>): Promise<void> {
-  const transfer = meta.pendingSessionTransfer;
-  if (!transfer) return;
-  if (!transfer.sessionId || transfer.sessionId === meta.sessionId
-    || !transfer.delegationId || !transfer.requestingBotId) {
-    throw new Error('Invalid worktree transfer intent preserved');
-  }
-  const row = await getDbClient().queryOne<{
-    childSessionId: string; requestingBotId: string; worktreePath: string | null; persistedSessionId: string | null;
-    targetExists: number;
-  }>(`SELECT d.child_session_id AS childSessionId, d.requesting_bot_id AS requestingBotId,
-      s.worktree_path AS worktreePath, s.id AS persistedSessionId,
-      EXISTS(SELECT 1 FROM sessions WHERE id = ?) AS targetExists
-    FROM bot_delegations d LEFT JOIN sessions s ON s.id = d.child_session_id WHERE d.id = ?`,
-  [transfer.sessionId, transfer.delegationId]);
-  if (!row || !row.persistedSessionId || row.requestingBotId !== transfer.requestingBotId
-    // The previous registry is authoritative if its historical display snapshot
-    // is absent. A committed target must have the snapshot from the same DB tx.
-    || (row.childSessionId === transfer.sessionId && !row.worktreePath)
-    || (row.worktreePath && await physicalWorktreeKey(row.worktreePath) !== await physicalWorktreeKey(meta.path))
-    || (row.childSessionId !== transfer.sessionId
-      && (row.childSessionId !== meta.sessionId || row.targetExists))) {
-    throw new Error('Worktree ownership changed; pending transfer preserved for reconciliation');
-  }
-  const key = await physicalWorktreeKey(meta.path);
-  for (const other of store.getAll()) {
-    if (other.sessionId !== meta.sessionId && await physicalWorktreeKey(other.path) === key) {
-      throw new Error('Worktree ownership changed; another session owns this resource');
-    }
-  }
-  const next = { ...meta, sessionId: row.childSessionId };
-  delete next.pendingSessionTransfer;
-  await store.replace(meta.sessionId, next.sessionId, next, meta, beforeMutation);
-}
-
-/** Startup/dispatch/retry reconciliation, scoped to the affected execution only. */
-export async function reconcileSessionTransfer(sessionId: string, beforeMutation?: () => Promise<void>): Promise<void> {
-  const pending = store.getAll().find(meta => meta.pendingSessionTransfer
-    && (meta.sessionId === sessionId || meta.pendingSessionTransfer.sessionId === sessionId));
-  if (!pending?.pendingSessionTransfer) return;
-  if (pending.pendingSessionTransfer.sessionId === pending.sessionId) throw new Error('Invalid worktree transfer intent preserved');
-  await withWorktreeRestoreMutation(pending.sessionId, () =>
-    withWorktreeRestoreMutation(pending.pendingSessionTransfer!.sessionId, () =>
-      withWorktreeResourceLock(pending.path, async () => {
-        const current = store.get(pending.sessionId);
-        if (current?.pendingSessionTransfer) await reconcileSessionTransferLocked(current, beforeMutation);
-      })));
-}
-
-/** Journal before the DB transaction; move registration only after authoritative readback. */
-export async function withTransferredSession<T extends { reopened: boolean }>(
-  previousSessionId: string,
-  sessionId: string,
-  worktreePath: string,
-  commit: () => Promise<T>,
-  identity: { delegationId: string; requestingBotId: string },
-): Promise<T> {
-  if (previousSessionId === sessionId) throw new Error('Worktree transfer requires a new session');
-  return withWorktreeRestoreMutation(previousSessionId, () =>
-    withWorktreeRestoreMutation(sessionId, () =>
-      withWorktreeResourceLock(worktreePath, async () => {
-        const previous = store.get(previousSessionId);
-        if (!previous || previous.pendingSessionTransfer || path.resolve(previous.path) !== path.resolve(worktreePath)
-          || store.get(sessionId)) {
-          throw new Error('Worktree ownership changed; restore the previous task before continuing');
-        }
-        const key = await physicalWorktreeKey(worktreePath);
-        for (const other of store.getAll()) {
-          if (other.sessionId !== previousSessionId && await physicalWorktreeKey(other.path) === key) {
-            throw new Error('Worktree ownership changed; another session owns this resource');
-          }
-        }
-        const pending = { ...previous, pendingSessionTransfer: { ...identity, sessionId } };
-        await store.replace(previousSessionId, previousSessionId, pending, previous);
-        try {
-          const result = await commit();
-          await reconcileSessionTransferLocked(pending);
-          return result;
-        } catch (error) {
-          // A rejected worker receipt is not proof of rollback. Never reverse a
-          // committed transfer; failed readback leaves durable retry evidence.
-          const current = store.get(previousSessionId);
-          if (JSON.stringify(current) === JSON.stringify(pending)) {
-            await reconcileSessionTransferLocked(pending).catch(reconcileError => {
-              log.warn('Worktree transfer reconciliation deferred', { sessionId: previousSessionId,
-                error: reconcileError instanceof Error ? reconcileError.message : String(reconcileError) });
-            });
-          }
-          throw error;
-        }
-      }),
-    ),
-  );
-}
-
 export function listAll(): WorktreeMeta[] {
   return store.getAll();
 }
@@ -784,6 +565,7 @@ const STAGE_CHECKOUT_PATHS = [
 async function stageCheckout(
   worktreePath: string,
   onCheckoutChildSpawn?: (pid: number) => void,
+  signal?: AbortSignal,
 ): Promise<{ fullCheckoutPromise: Promise<void> }> {
   const t0 = Date.now();
 
@@ -811,12 +593,16 @@ async function stageCheckout(
     );
   }
 
+  // 新 worktree 还没有子模块的 gitdir。两个阶段都只检出父仓库，避免继承的
+  // submodule.recurse 在 Git 写完索引前中断 checkout。
   // 2. 选择性 checkout 白名单文件(同步, 用户可见)
   if (existingPaths.length > 0) {
     try {
-      await gitExec(['checkout', 'HEAD', '--', ...existingPaths], worktreePath, {
-        onSpawn: onCheckoutChildSpawn,
-      });
+      await gitExec(
+        ['checkout', '--no-recurse-submodules', 'HEAD', '--', ...existingPaths],
+        worktreePath,
+        { extraEnv: { LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' }, onSpawn: onCheckoutChildSpawn },
+      );
       log.info(
         `[stageCheckout] selective checkout done in ${Date.now() - t0}ms (${existingPaths.length} paths)`,
       );
@@ -830,12 +616,19 @@ async function stageCheckout(
 
   // 3. 后台跑全 checkout: 排除已 checkout 的目录避免重复 / 覆盖
   //    (单文件如 CLAUDE.md 即使重复 checkout 也无害, 不需要 exclude)
-  //    LC_ALL=C 让 git 报错文案一致, 便于解析。
+  //    LC_ALL=C 让 git 报错文案一致, 便于解析; GIT_TERMINAL_PROMPT=0 避免主进程无 TTY 时挂死。
   const bgT0 = Date.now();
   const fullCheckoutPromise = gitExec(
-    ['checkout', 'HEAD', '--', '.', ':(exclude).claude', ':(exclude).sivi'],
+    [
+      'checkout', '--no-recurse-submodules', 'HEAD', '--', '.',
+      ':(exclude).claude', ':(exclude).sivi',
+    ],
     worktreePath,
-    { extraEnv: { LC_ALL: 'C' }, onSpawn: onCheckoutChildSpawn },
+    {
+      extraEnv: { LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' },
+      onSpawn: onCheckoutChildSpawn,
+      ...(signal ? { signal } : {}),
+    },
   )
     .then(() => {
       log.info(
@@ -860,18 +653,70 @@ interface CreatedSnapshot {
   /** 已 mkdirp 的父目录(dirname). 若 worktree add 失败需要清理。 */
   parentEnsured?: string;
   /** git worktree add 已成功执行(此时 worktree path 真实存在)。 */
-  worktreeAdded?: { path: string; baseRepo: string };
+  worktreeAdded?: { path: string; baseRepo: string; multibox?: boolean };
+  /** Wait for writers before any failed-create rollback, even when metadata was never published. */
+  backgroundCheckout?: Promise<void>;
+  /** Abort an in-flight staged checkout during failed-create rollback so it does not stall cleanup. */
+  backgroundCheckoutAbort?: AbortController;
+  /** True once the staged full checkout completed cleanly. */
+  backgroundCheckoutCompleted?: boolean;
 }
 
 async function rollbackPartialCreate(snap: CreatedSnapshot): Promise<void> {
+  // An unpublished record cannot be found by recovery-key discard later. Abort
+  // and wait for its checkout writer before the failed-create rollback returns.
+  snap.backgroundCheckoutAbort?.abort();
+  await snap.backgroundCheckout?.catch(() => undefined);
   // A failed create may already have launched checkout or acquired a task reference.
   if (snap.worktreeAdded) {
-    const { path: wp, baseRepo } = snap.worktreeAdded;
+    const { path: wp, baseRepo, multibox } = snap.worktreeAdded;
     try {
       await withWorktreeResourceLock(wp, async () => {
         if (hasKeepSentinel(wp) || hasLiveSessionReference({ path: wp }, await loadLiveSessionPathKeys())) return;
-        if ((await listNonReproducibleIgnoredFiles(baseRepo, wp)).length > 0) return;
-        await gitExec(['worktree', 'remove', wp], baseRepo);
+        // A Multibox worktree's ignored files were all cloned from the base checkout earlier in
+        // this same, never-published create (engine caches: often 100k+ files, tens of GB), so
+        // the byte-by-byte comparison would only hold this repository's create queue for hours.
+        if (!multibox && (await listNonReproducibleIgnoredFiles(baseRepo, wp)).length > 0) return;
+        const incompleteCheckout = Boolean(snap.backgroundCheckout && !snap.backgroundCheckoutCompleted);
+        if (!multibox && incompleteCheckout) {
+          if (await isIncompleteCheckoutWorktreeDirty(wp)) return;
+          // Quarantine the worktree before `--force` removal so concurrent writes to
+          // the original path cannot race the final dirty check.
+          const quarantinePath = `${wp}.xdt-removing-${randomUUID()}`;
+          await gitExec(['worktree', 'move', wp, quarantinePath], baseRepo);
+          const restoreQuarantine = async (): Promise<void> => {
+            try {
+              await gitExec(['worktree', 'move', quarantinePath, wp], baseRepo);
+            } catch (restoreErr) {
+              log.warn(
+                `[worktree] failed to restore quarantined rollback worktree ${quarantinePath}:`,
+                restoreErr instanceof Error ? restoreErr.message : String(restoreErr),
+              );
+            }
+          };
+          try {
+            const liveKeys = await loadLiveSessionPathKeys();
+            if (
+              hasKeepSentinel(quarantinePath)
+              || hasLiveSessionReference({ path: wp, quarantinePath }, liveKeys)
+              || (await listNonReproducibleIgnoredFiles(baseRepo, quarantinePath)).length > 0
+              || (await isIncompleteCheckoutWorktreeDirty(quarantinePath))
+            ) {
+              await restoreQuarantine();
+              return;
+            }
+            await gitExec(['worktree', 'remove', '--force', quarantinePath], baseRepo);
+          } catch (quarantineErr) {
+            log.warn(
+              `[worktree] rollback quarantined remove failed for ${quarantinePath}:`,
+              quarantineErr instanceof Error ? quarantineErr.message : String(quarantineErr),
+            );
+            await restoreQuarantine();
+          }
+          return;
+        }
+        // Both forms refuse dirty worktrees without force.
+        await gitExec(multibox ? buildMultiboxRemoveArgs(wp) : ['worktree', 'remove', wp], baseRepo);
       });
     } catch (err) {
       log.warn(
@@ -882,13 +727,6 @@ async function rollbackPartialCreate(snap: CreatedSnapshot): Promise<void> {
     }
   }
   // parentEnsured 不清理 — 托管 worktree 根目录本身留着没坏处, 下次复用
-}
-
-async function configureHooksPath(worktreePath: string, baseRepo: string): Promise<void> {
-  // 让 worktree 的 hooks 仍指向源 repo 的 .git/hooks(共享 husky / pre-commit 等)
-  // git config 的路径以正斜杠书写最稳妥(Windows 下反斜杠会被转义), 这里统一标准化
-  const hooksPath = path.join(baseRepo, '.git', 'hooks').replace(/\\/g, '/');
-  await gitExec(['-C', worktreePath, 'config', 'core.hooksPath', hooksPath]);
 }
 
 const CLAUDE_COPY_EXCLUDED_TOP_LEVEL_DIRS = new Set(['worktrees']);
@@ -1046,20 +884,34 @@ export async function copyClaudeSiviDirs(
  *   4. mkdirp parent
  *   5. git worktree add -b cindy/<name> <path> <sourceBranch>
  *      失败时若 stderr 含 core.longpaths → 自动 git config --global core.longpaths true 重试一次
- *   6. configureHooksPath
- *   7. copyClaudeSiviDirs(跳过 .claude/worktrees 这类历史工作区状态)
- *   8. applyWorktreeIncludeFile
- *   9. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
+ *   6. copyClaudeSiviDirs(跳过 .claude/worktrees 这类历史工作区状态)
+ *   7. applyWorktreeIncludeFile
+ *   8. worktreeStore.set(sessionId, meta) → 同步写 sessions.worktree_path
  *   (不再无条件写全局 safe.directory:dubious-ownership 时由 gitExec 幂等按需处理;
  *    删除/归档时由 removeWorktreeForSession 清理该 path 的条目, 见 #2627)
  */
-// Only opt-in creators retain a handle for failure compensation; normal startup stays asynchronous.
-const backgroundCheckouts = new Map<string, Promise<void>>();
+interface ActiveBackgroundCheckout {
+  controller: AbortController;
+  path: string;
+  done: Promise<void>;
+}
+
+const activeBackgroundCheckouts = new Map<string, ActiveBackgroundCheckout>();
+
 export async function awaitBackgroundCheckout(sessionId: string): Promise<void> {
-  await backgroundCheckouts.get(sessionId)?.catch(() => undefined);
+  await activeBackgroundCheckouts.get(sessionId)?.done;
+}
+
+async function abortAndAwaitBackgroundCheckout(sessionId: string, expectedPath: string): Promise<void> {
+  const active = activeBackgroundCheckouts.get(sessionId);
+  if (!active || path.resolve(active.path) !== path.resolve(expectedPath)) return;
+  active.controller.abort();
+  await active.done;
 }
 
 export interface CreateWorktreeOptions {
+  /** Internal opt-in to refresh a selected full remote default ref. */
+  refreshDefaultSource?: boolean;
   /** Keep a handle on the background checkout so failure compensation can wait for it. */
   trackBackgroundCheckout?: boolean;
   /**
@@ -1067,17 +919,26 @@ export interface CreateWorktreeOptions {
    * For callers that hand the directory to a running agent, which must not see a half-written tree.
    */
   awaitFullCheckout?: boolean;
+  /** Host profile/owner fence, checked again immediately before metadata publication. */
+  assertWriteAllowed?: () => void;
+  /** Local task creation can become stale while queued or while Git is running. */
+  assertCurrent?: () => void;
 }
 
 export async function createWorktree(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
-  const create = () => withCreateWorktreeQueue(req.baseRepo, () => {
-    assertPrecreatedSessionNotCancelled(req.sessionId);
-    return createWorktreeInner(req, options);
+  options?.assertWriteAllowed?.();
+  const create = () => withCreateWorktreeQueue(req.baseRepo, (releaseRepoQueue) => {
+    worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
+    return createWorktreeInner(req, options, releaseRepoQueue);
   });
   return withPrecreatedWorktreeOperationQueue(req.sessionId, create);
 }
 
-async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorktreeOptions): Promise<CreateWorktreeResp> {
+async function createWorktreeInner(
+  req: CreateWorktreeReq,
+  options: CreateWorktreeOptions | undefined,
+  releaseRepoQueue: () => void,
+): Promise<CreateWorktreeResp> {
   const snap: CreatedSnapshot = {};
   const totalStartedAt = Date.now();
   try {
@@ -1117,6 +978,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
 
     // 1. detect
     const cwdInfo = await timed('detect cwd', () => detectCwd(req.baseRepo));
+    options?.assertCurrent?.();
     if (!cwdInfo.gitInstalled) {
       return {
         ok: false,
@@ -1137,23 +999,34 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
     }
     const baseRepo = cwdInfo.repoRoot ?? path.resolve(req.baseRepo);
 
+    let sourceBranch = req.sourceBranch;
+    if (options?.refreshDefaultSource && sourceBranch?.startsWith('origin/')) {
+      // The new-task picker sends short local names and full remote refs.
+      const localRef = `refs/heads/${sourceBranch}`;
+      if (await revParseCommit(baseRepo, localRef)) sourceBranch = localRef;
+    }
+
     // 2. branches — sourceBranch 既可以是本地分支(常规 schedule),也可以是
     //    任意 commit-ish。
     //    本地分支命中优先,否则用 rev-parse 校验是不是合法 commit-ish。
     const { branches } = await timed('list branches', () => listBranches(baseRepo));
-    if (!branches.includes(req.sourceBranch)) {
+    if (!branches.includes(sourceBranch)) {
       try {
-        await gitExec(['rev-parse', '--verify', `${req.sourceBranch}^{commit}`], baseRepo);
+        await gitExec(['rev-parse', '--verify', `${sourceBranch}^{commit}`], baseRepo);
       } catch {
         return {
           ok: false,
           error: {
             kind: 'unknown',
-            message: `源分支 "${req.sourceBranch}" 不存在`,
+            message: `源分支 "${sourceBranch}" 不存在`,
             hint: '请刷新分支列表或选择其他源分支',
           },
         };
       }
+    }
+
+    if (options?.refreshDefaultSource) {
+      await refreshSelectedDefaultSource(baseRepo, sourceBranch);
     }
 
     // 3. 路径冲突避让
@@ -1182,8 +1055,28 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       attempts += 1;
     }
 
+    let bgFinished = false;
+    let publishedGeneration: string | null = null;
+    const clearBackgroundCheckoutPending = async (generation: string): Promise<void> => {
+      try {
+        await withWorktreeResourceLock(worktreePath, async () => {
+          const current = store.get(req.sessionId);
+          if (!current || current.generation !== generation || !current.backgroundCheckoutPending) return;
+          const next = { ...current };
+          delete next.backgroundCheckoutPending;
+          await store.set(req.sessionId, next);
+        });
+      } catch (err) {
+        log.warn(
+          `[worktree] failed to clear backgroundCheckoutPending for ${worktreePath}:`,
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    };
+
     // 4. mkdirp parent
-    return await withWorktreeResourceLock(worktreePath, async (): Promise<CreateWorktreeResp> => {
+    const resp = await withWorktreeResourceLock(worktreePath, async (): Promise<CreateWorktreeResp> => {
+      options?.assertCurrent?.();
       await ensureManagedWorktreeExcluded(baseRepo, worktreePath);
       const parentDir = path.dirname(worktreePath);
       await timed('ensure parent directory', () => fs.mkdir(parentDir, { recursive: true }));
@@ -1192,65 +1085,127 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
       // 5. git worktree add(--no-checkout 跳过文件解压, 加速主流程; longpaths 自动重试)
       //    对齐 CC Desktop: 大型仓库的全 checkout 可能耗时数十秒, 改成只建 worktree 元数据,
       //    后续 stageCheckout 同步拉关键文件, 全 checkout 后台跑。
+      //    仓库使用 Multibox 时改走 git multibox add(见 ./multibox): 一次给出带引擎缓存的
+      //    完整目录, 不带 --no-checkout(带上会退回普通 worktree), 失败原样返回不改用 git 重试。
       const branch = getBranchName(name);
-      const addArgs = buildWorktreeAddArgs(branch, worktreePath, req.sourceBranch);
-      try {
-        await timed('git worktree add', () => gitExec(addArgs, baseRepo));
-      } catch (err) {
-        if (err instanceof GitExecError && /filename too long|core\.longpaths/i.test(err.stderr)) {
-          // 启用 core.longpaths 后重试一次
-          try {
-            await gitExec(['config', '--global', 'core.longpaths', 'true']);
-            await timed('git worktree add retry', () => gitExec(addArgs, baseRepo));
-          } catch (retryErr) {
-            return { ok: false, error: classifyError(classifyAny(retryErr)) };
-          }
-        } else {
+      const useMultibox = await timed('detect multibox', () => shouldUseMultibox(baseRepo));
+      if (useMultibox) {
+        try {
+          const added = await timed('git multibox add', () =>
+            gitExec(buildMultiboxAddArgs(branch, worktreePath, sourceBranch), baseRepo));
+          logMultiboxAddResult(worktreePath, added.stdout);
+        } catch (err) {
           return { ok: false, error: classifyError(classifyAny(err)) };
         }
-      }
-      snap.worktreeAdded = { path: worktreePath, baseRepo };
-
-      // 5b. stageCheckout: 同步拉 agent 启动必读文件(.claude/.sivi/CLAUDE.md/...),
-      //     后台跑全 checkout。fullCheckoutPromise 故意 fire-and-forget,
-      //     失败仅日志, 不阻塞 IPC 返回。
-      let bgPromise: Promise<void> | undefined;
-      const checkoutLease = await acquireWorktreeRuntimeLease(`checkout:${req.sessionId}`, worktreePath);
-      if (!checkoutLease) throw new Error('managed checkout runtime lease is missing');
-      try {
-        const stageRes = await timed('stage checkout', () => stageCheckout(
-          worktreePath,
-          (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
-        ));
-        bgPromise = stageRes.fullCheckoutPromise.finally(() => releaseWorktreeRuntimeLease(checkoutLease));
-        if (options?.trackBackgroundCheckout) {
-          const settled = bgPromise.catch(() => undefined);
-          backgroundCheckouts.set(req.sessionId, settled);
-          void settled.finally(() => {
-            if (backgroundCheckouts.get(req.sessionId) === settled) backgroundCheckouts.delete(req.sessionId);
-          });
+      } else {
+        const addArgs = buildWorktreeAddArgs(branch, worktreePath, sourceBranch);
+        try {
+          await timed('git worktree add', () => gitExec(addArgs, baseRepo));
+        } catch (err) {
+          if (err instanceof GitExecError && /filename too long|core\.longpaths/i.test(err.stderr)) {
+            // 启用 core.longpaths 后重试一次
+            try {
+              await gitExec(['config', '--global', 'core.longpaths', 'true']);
+              await timed('git worktree add retry', () => gitExec(addArgs, baseRepo));
+            } catch (retryErr) {
+              return { ok: false, error: classifyError(classifyAny(retryErr)) };
+            }
+          } else {
+            return { ok: false, error: classifyError(classifyAny(err)) };
+          }
         }
-      } catch (err) {
-        await releaseWorktreeRuntimeLease(checkoutLease);
-        // stageCheckout 内部已记 warn, 这里再保险记一条; 不视为致命
-        log.warn(
-          `[worktree] stageCheckout failed for ${worktreePath}:`,
-          err instanceof Error ? err.message : String(err),
-        );
+      }
+      snap.worktreeAdded = { path: worktreePath, baseRepo, multibox: useMultibox };
+
+      // Built-in task startup still gets the staged fast path. Callers that need
+      // the complete tree can check it out once, without the selective pass or
+      // its exclusions. Multibox already returns a complete tree.
+      //
+      // Once the branch and worktree directory exist (and the checkout lease is
+      // recorded for non-Multibox), release the repo-level create queue before
+      // running per-worktree checkout / copy / include / metadata work. That way
+      // a slow full checkout (e.g. huge repo or slow Git LFS download) never
+      // head-of-line blocks other worktree creations on the same repository, while
+      // `withWorktreeResourceLock(worktreePath)` keeps this checkout isolated.
+      let bgPromise: Promise<void> | undefined;
+      let bgDone: Promise<void> | undefined;
+      let bgAbortController: AbortController | undefined;
+      if (useMultibox) {
+        releaseRepoQueue();
+      } else {
+        const checkoutLease = await acquireWorktreeRuntimeLease(`checkout:${req.sessionId}`, worktreePath);
+        if (!checkoutLease) throw new Error('managed checkout runtime lease is missing');
+        releaseRepoQueue();
+        try {
+          if (options?.awaitFullCheckout) {
+            await timed('full checkout', () => gitExec(
+              ['checkout', '--no-recurse-submodules', 'HEAD', '--', '.'],
+              worktreePath,
+              {
+                extraEnv: { LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' },
+                onSpawn: (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
+              },
+            ));
+          } else {
+            bgAbortController = new AbortController();
+            const stageRes = await timed('stage checkout', () => stageCheckout(
+              worktreePath,
+              (pid) => recordWorktreeRuntimeLeaseChild(checkoutLease, pid),
+              bgAbortController!.signal,
+            ));
+            let bgCleanupUnconfirmed = false;
+            bgPromise = stageRes.fullCheckoutPromise
+              .then(async () => {
+                bgFinished = true;
+                snap.backgroundCheckoutCompleted = true;
+                if (publishedGeneration) {
+                  await clearBackgroundCheckoutPending(publishedGeneration);
+                }
+              })
+              .catch((err: unknown) => {
+                if (err instanceof GitExecError && err.cleanupUnconfirmed) {
+                  bgCleanupUnconfirmed = true;
+                }
+                throw err;
+              })
+              .finally(async () => {
+                if (!bgCleanupUnconfirmed) {
+                  await releaseWorktreeRuntimeLease(checkoutLease);
+                }
+              });
+            bgDone = bgPromise.catch(() => undefined);
+            snap.backgroundCheckout = bgDone;
+            snap.backgroundCheckoutAbort = bgAbortController;
+            const bgEntry: ActiveBackgroundCheckout = {
+              controller: bgAbortController,
+              path: worktreePath,
+              done: bgDone,
+            };
+            activeBackgroundCheckouts.set(req.sessionId, bgEntry);
+            void bgDone.finally(() => {
+              if (activeBackgroundCheckouts.get(req.sessionId) === bgEntry) {
+                activeBackgroundCheckouts.delete(req.sessionId);
+              }
+            });
+          }
+        } catch (err) {
+          if (options?.awaitFullCheckout) throw err;
+          // Preserve the staged path's existing fail-soft behavior.
+          log.warn(
+            `[worktree] stageCheckout failed for ${worktreePath}:`,
+            err instanceof Error ? err.message : String(err),
+          );
+        } finally {
+          if (!bgPromise) await releaseWorktreeRuntimeLease(checkoutLease);
+        }
       }
       // 防止 unhandled rejection(stageCheckout 已设 .catch 但再保险一次)
       bgPromise?.catch(() => {});
 
-      // 6. hooks
-      try {
-        await timed('configure hooks', () => configureHooksPath(worktreePath, baseRepo));
-      } catch (err) {
-        if (options?.trackBackgroundCheckout) await awaitBackgroundCheckout(req.sessionId);
-        await rollbackPartialCreate(snap);
-        return { ok: false, error: classifyError(classifyAny(err)) };
-      }
+      // Git already shares default hooks. Preserve core.hooksPath (including
+      // inherited/relative settings); writing it here changes every checkout.
 
-      // 7. copy .claude / .sivi(目录不存在则跳过)
+      // 6. copy .claude / .sivi(目录不存在则跳过)
       try {
         await timed('copy .claude/.sivi', () => copyClaudeSiviDirs(baseRepo, worktreePath));
       } catch (err) {
@@ -1261,10 +1216,13 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
         );
       }
 
-      // 8. include patterns
+      // 7. include patterns
+      //    Multibox 已按 .worktreeinclude 克隆过同一批文件(同盘为 reflink); 只补缺,
+      //    不用整份复制覆盖它们。
       try {
-        const results = await timed('apply include file', () =>
-          applyWorktreeIncludeFile(baseRepo, worktreePath),
+        const results = await timed('apply include file', () => (useMultibox
+          ? applyWorktreeIncludeFile(baseRepo, worktreePath, { overwriteExisting: false })
+          : applyWorktreeIncludeFile(baseRepo, worktreePath)),
         );
         const failed = results.filter((r) => r.status === 'failed');
         if (failed.length > 0) {
@@ -1280,16 +1238,18 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
         );
       }
 
-      // 9. Recheck after asynchronous Git/setup work before publishing metadata.
+      // 8. Recheck after asynchronous Git/setup work before publishing metadata.
       // The profile/session lock also closes the check -> store.set window.
       try {
-        assertPrecreatedSessionNotCancelled(req.sessionId);
+        options?.assertWriteAllowed?.();
+        worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
+        options?.assertCurrent?.();
       } catch (error) {
         // Rollback must not race our own background checkout writer.
-        await bgPromise?.catch(() => undefined);
+        bgAbortController?.abort();
+        await bgDone?.catch(() => undefined);
         throw error;
       }
-      if (options?.awaitFullCheckout && bgPromise) await bgPromise;
       // store + DB
       const meta: WorktreeMeta = {
         sessionId: req.sessionId,
@@ -1297,18 +1257,35 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
         path: worktreePath,
         baseRepo,
         branch,
-        sourceBranch: req.sourceBranch,
+        sourceBranch,
         createdAt: nowIso(),
         generation: randomUUID(),
         ...(recoveryKey ? { recoveryKey } : {}),
+        ...(bgPromise && !bgFinished ? { backgroundCheckoutPending: true } : {}),
         ephemeral: req.ephemeral ?? false,
       };
-      await timed('persist metadata', () => store.set(req.sessionId, meta));
+      await timed('persist metadata', () => store.set(req.sessionId, meta, async () => {
+        // The registry lock wait is async too: recheck after acquiring it,
+        // immediately before the synchronous read/modify/write.
+        options?.assertWriteAllowed?.();
+        worktreeManagerPorts().assertPrecreatedSessionNotCancelled(req.sessionId);
+        options?.assertCurrent?.();
+      }));
 
       log.info(`[worktree:create] total completed in ${Date.now() - totalStartedAt}ms`);
       return { ok: true, meta };
     });
+    if (resp.ok && resp.meta.generation) {
+      publishedGeneration = resp.meta.generation;
+      if (bgFinished && resp.meta.backgroundCheckoutPending) {
+        await clearBackgroundCheckoutPending(publishedGeneration);
+      }
+    }
+    return resp;
   } catch (err) {
+    // Release the repo-level create queue before waiting on checkout or rollback.
+    releaseRepoQueue();
+    snap.backgroundCheckoutAbort?.abort();
     // Failed worker creation must also wait when metadata has not been published yet.
     if (options?.trackBackgroundCheckout) await awaitBackgroundCheckout(req.sessionId);
     // 兜底: 任何未捕获的异常走 classifier + rollback
@@ -1328,7 +1305,7 @@ async function createWorktreeInner(req: CreateWorktreeReq, options?: CreateWorkt
  */
 export async function getRemovalPreview(
   sessionId: string,
-): Promise<{ hasWorktree: boolean; dirty: boolean }> {
+): Promise<{ hasWorktree: boolean; dirty: boolean; canDiscardChanges?: true }> {
   const meta = store.get(sessionId);
   if (!meta || meta.ephemeral) return { hasWorktree: false, dirty: false };
   const worktreePath = activeWorktreePath(meta);
@@ -1337,7 +1314,11 @@ export async function getRemovalPreview(
   } catch {
     return { hasWorktree: false, dirty: false };
   }
-  return { hasWorktree: true, dirty: await isWorktreeDirty(worktreePath) };
+  return {
+    hasWorktree: true,
+    dirty: await isWorktreeDirty(worktreePath),
+    ...(meta.quarantinePath ? {} : { canDiscardChanges: true as const }),
+  };
 }
 
 // ── removeWorktreeForSession (无 IPC, 仅会话显式删除/归档路径调) ─────────────
@@ -1386,7 +1367,7 @@ export async function removeWorktreeForSession(
   if (!options.preserveDirty) {
     const meta = store.get(sessionId);
     if (!meta) return;
-    await withWorktreeRestoreMutation(sessionId, () => recycleManagedWorktree(meta, {
+    await withWorktreeRestoreMutation(sessionId, () => worktreeManagerPorts().recycleManagedWorktree(meta, {
       ...options,
       onRemoved: () => removeWorktreeSafeDirectory(meta.baseRepo, meta.path),
     }));
@@ -1549,7 +1530,7 @@ async function removeWorktreeForSessionInner(
     if (!(await canRemoveWorktree(removalOptions, worktreePath, sessionId))) return;
   }
 
-  const finishRemoval = async (): Promise<void> => {
+  const finishRemoval = async (useIncompleteCheckoutForce: boolean): Promise<void> => {
     if (!(await canRemoveWorktree(removalOptions, activeWorktreePath(meta), sessionId))) return;
 
     let removalPath = activeWorktreePath(meta);
@@ -1653,6 +1634,13 @@ async function removeWorktreeForSessionInner(
         await restoreQuarantine();
         return;
       }
+      if (useIncompleteCheckoutForce && (await isIncompleteCheckoutWorktreeDirty(removalPath))) {
+        log.info(
+          `[worktree] preserved worktree at ${removalPath}: uncommitted changes appeared before removal`,
+        );
+        await restoreQuarantine();
+        return;
+      }
       if (!(await canRemoveWorktree(removalOptions, removalPath, sessionId))) {
         await restoreQuarantine();
         return;
@@ -1668,7 +1656,16 @@ async function removeWorktreeForSessionInner(
     }
 
     try {
-      await gitExec(['worktree', 'remove', removalPath], meta.baseRepo);
+      // Multibox remove keeps the same dirty check without -f; --wait makes the lstat below meaningful.
+      // Incomplete staged checkouts (--no-checkout whose background checkout was aborted or failed)
+      // leave missing-from-checkout (` D`) entries that Git refuses to remove without --force, even
+      // after quarantine + temp-index verification proved zero user modifications or untracked files.
+      const removeArgs = await shouldUseMultibox(meta.baseRepo)
+        ? buildMultiboxRemoveArgs(removalPath)
+        : useIncompleteCheckoutForce
+          ? ['worktree', 'remove', '--force', removalPath]
+          : ['worktree', 'remove', removalPath];
+      await gitExec(removeArgs, meta.baseRepo);
     } catch (error) {
       // A precreated compensation may never bypass Git's final dirty check.
       log.warn('[worktree] pre-created removal failed; preserving', error instanceof Error ? error.message : String(error));
@@ -1685,11 +1682,15 @@ async function removeWorktreeForSessionInner(
     await store.del(sessionId);
   };
 
+  let useIncompleteCheckoutForce = false;
   if (await isWorktreeDirty(worktreePath)) {
-    log.info(`[worktree] pre-created worktree at ${worktreePath} has uncommitted changes; preserving`);
-    return;
+    if (!meta.backgroundCheckoutPending || (await isIncompleteCheckoutWorktreeDirty(worktreePath))) {
+      log.info(`[worktree] pre-created worktree at ${worktreePath} has uncommitted changes; preserving`);
+      return;
+    }
+    useIncompleteCheckoutForce = true;
   }
-  await finishRemoval();
+  await finishRemoval(useIncompleteCheckoutForce);
 }
 
 export type DiscardPrecreatedWorktreeResult =
@@ -1716,7 +1717,7 @@ export async function cancelPrecreatedWorktree(
     }
     if (meta?.ephemeral) return { status: 'preserved' };
     if (!options.canRemove || !(await options.canRemove())) return { status: 'preserved' };
-    sealPrecreatedSessionCancellation(sessionId);
+    worktreeManagerPorts().sealPrecreatedSessionCancellation(sessionId);
     return meta
       ? discardPrecreatedWorktree(sessionId, meta.path, {
         ...options,
@@ -1725,7 +1726,9 @@ export async function cancelPrecreatedWorktree(
       : { status: 'absent' };
   });
 }
-export { assertPrecreatedSessionNotCancelled } from './precreatedCancellation';
+export function assertPrecreatedSessionNotCancelled(sessionId: string): void {
+  worktreeManagerPorts().assertPrecreatedSessionNotCancelled(sessionId);
+}
 
 /**
  * 手机在 worktree:create 之前先持久化 sessionId + recoveryKey；若进程在 create
@@ -1743,7 +1746,10 @@ export async function discardPrecreatedWorktreeByRecoveryKey(
     if (!meta.recoveryKey || meta.recoveryKey !== recoveryKey) {
       return { status: 'path-mismatch' };
     }
-    return discardPrecreatedWorktree(sessionId, meta.path, options);
+    return discardPrecreatedWorktree(sessionId, meta.path, {
+      ...options,
+      reclaimOrphanedRuntimeLeases: options.reclaimOrphanedRuntimeLeases ?? true,
+    });
   });
 }
 
@@ -1772,6 +1778,17 @@ export async function discardPrecreatedWorktree(
     return { status: 'path-mismatch' };
   }
   if (meta.ephemeral) return { status: 'preserved' };
+
+  if (activeBackgroundCheckouts.has(sessionId)) {
+    const guardedPaths = [...new Set([meta.path, activeWorktreePath(meta)])];
+    if (guardedPaths.some((candidate) => hasKeepSentinel(candidate))) {
+      return { status: 'preserved' };
+    }
+    if (options.canRemove && !(await options.canRemove())) {
+      return { status: 'preserved' };
+    }
+    await abortAndAwaitBackgroundCheckout(sessionId, meta.path);
+  }
 
   await removeWorktreeForSession(sessionId, {
     ...options,

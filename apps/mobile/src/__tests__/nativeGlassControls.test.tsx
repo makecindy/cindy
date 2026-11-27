@@ -1,3 +1,4 @@
+vi.mock("../session/ProjectPickerIcon", () => ({ ProjectPickerIcon: () => null }));
 // @vitest-environment jsdom
 import { act, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -10,10 +11,11 @@ import { NewTaskSelectionSheet } from "../session/NewTaskSelectionSheet.ios";
 import { ContextSheetFooterButton, ContextSheetRow } from "../session/ContextSheet.ios";
 import { PermissionGuideView } from "../remote-desktop/PermissionGuideView.ios";
 import { HomeDisplayMenu } from "../session/HomeDisplayMenu.ios";
+import { NativePreviewHeader } from "../session/PreviewNativeChrome.ios";
 import { buildHomeDisplayPullDownActions, homeDisplayActionPatch, type HomeDisplayMenuState } from "../session/homeChromeMenus";
 import type { NewTaskSelectionSheetProps } from "../session/NewTaskSelectionSheet";
 
-const state = vi.hoisted(() => ({ glass: true, mode: "light" }));
+const state = vi.hoisted(() => ({ glass: true, mode: "light", toggleRenders: 0 }));
 vi.mock("@/theme", () => ({
   navigationChrome: {
     target: 44,
@@ -26,7 +28,7 @@ vi.mock("@/theme", () => ({
   iconStroke: { regular: 2 },
   radius: { pill: 9999 },
   typeScale: { body: 16 },
-  spacing: { md: 12 },
+  spacing: { sm: 8, md: 12, lg: 16 },
   textStyles: { caption: {} },
   useTheme: () => ({
     mode: state.mode,
@@ -59,6 +61,13 @@ vi.mock("@/platform/chrome/NativePullDownMenu", () => ({
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
+vi.mock("expo-router", () => ({
+  Stack: { Toolbar: Object.assign(() => null, { Menu: () => null, MenuAction: () => null }) },
+}));
+vi.mock("@/platform/chrome/SystemNavigationBack", () => ({
+  SystemNavigationBack: () => null,
+  useSystemNavigationBack: () => false,
+}));
 vi.mock("@/session/ComposerSheet", () => ({
   ComposerSheet: ({ children, footer }: any) => <div>{children}{footer}</div>,
 }));
@@ -75,13 +84,16 @@ vi.mock("@/session/ComposerNativeSection", () => ({
 vi.mock("@/session/newSessionMessages", () => ({ newSessionText: (key: string) => key }));
 vi.mock("@/components/AppText", () => ({ Text: ({ children }: any) => <span>{children}</span> }));
 vi.mock("react-native", () => ({
-  View: ({ children, style }: any) => <div data-rn-style={JSON.stringify(style)}>{children}</div>,
+  View: ({ children, style, pointerEvents }: any) => (
+    <div data-rn-style={JSON.stringify(style)} data-pointer-events={pointerEvents}>{children}</div>
+  ),
   Image: () => null,
 }));
 vi.mock("lucide-react-native", () => {
   const Icon = () => null;
   return {
     CircleAlert: Icon,
+    ListChecks: Icon,
     LogOut: Icon,
     Monitor: Icon,
     Search: Icon,
@@ -90,7 +102,9 @@ vi.mock("lucide-react-native", () => {
   };
 });
 vi.mock("@expo/ui", () => ({
-  Host: ({ children }: any) => <div>{children}</div>,
+  Host: ({ children, matchContents, style }: any) => (
+    <div data-host-layout={JSON.stringify({ matchContents, style })}>{children}</div>
+  ),
 }));
 vi.mock("@expo/ui/swift-ui", () => {
   const Container = ({ children }: any) => <div>{children}</div>;
@@ -99,13 +113,18 @@ vi.mock("@expo/ui/swift-ui", () => {
     VStack: Container,
     Spacer: () => null,
     RNHostView: Container,
-    Text: ({ children, modifiers }: any) => <span data-text-style={JSON.stringify(modifiers)}>{children}</span>,
+    Text: ({ children, modifiers, testID }: any) => (
+      <span data-testid={testID} data-text-style={JSON.stringify(modifiers)}>{children}</span>
+    ),
     Picker: Container,
-    Toggle: ({ children, isOn, onIsOnChange, testID, modifiers = [] }: any) => (
+    Toggle: ({ children, isOn, onIsOnChange, testID, modifiers = [] }: any) => {
+      state.toggleRenders += 1;
+      return (
       <button data-testid={testID} aria-checked={isOn} data-button-style={JSON.stringify(modifiers)}
         disabled={modifiers.some((m: any) => m.name === "disabled" && m.value)}
         onClick={() => onIsOnChange(!isOn)}>{children}</button>
-    ),
+      );
+    },
     Menu: ({ children, label, testID }: any) => <div data-testid={testID}>{label}{children}</div>,
     Section: Container,
     Divider: () => null,
@@ -144,6 +163,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => {
     "font",
     "labelStyle",
     "lineLimit",
+    "truncationMode",
     "tint",
     "pickerStyle",
     "tag",
@@ -169,6 +189,7 @@ afterEach(() => {
   act(() => roots.splice(0).forEach((root) => root.unmount()));
   state.glass = true;
   state.mode = "light";
+  state.toggleRenders = 0;
 });
 function mount(children: ReactNode) {
   const host = document.createElement("div");
@@ -177,6 +198,107 @@ function mount(children: ReactNode) {
   act(() => root.render(children));
   return host;
 }
+
+// attachment-preview.md: the title slot passes touches to the canvas and caps
+// the glass at 560 pt. The native layout props are the contract at this boundary.
+it.each(["clip.mp4", "Antigravity-English-UI-Cindy-Animated-Product-Walkthrough.mp4"])(
+  "bounds the noninteractive preview title between the actions and exposes the full name for %s",
+  (name) => {
+    const close = vi.fn();
+    const fileInfo = vi.fn();
+    const host = mount(<NativePreviewHeader
+      name={name}
+      onClose={close}
+      closeLabel="Close"
+      closeDisabled={false}
+      closeTestID="preview.close"
+      moreLabel="More"
+      actions={[{ key: "fileInfo", label: "File info", onPress: fileInfo }]}
+    />);
+    const title = host.querySelector('[data-testid="preview.title"]')!;
+    const closeButton = host.querySelector<HTMLButtonElement>('[data-testid="preview.close"]')!;
+    const menu = host.querySelector('[data-testid="preview.more"]')!;
+    const titleHost = title.closest("[data-host-layout]")!;
+    const closeHost = closeButton.closest("[data-host-layout]")!;
+    const menuHost = menu.closest("[data-host-layout]")!;
+    const titleSlot = titleHost.parentElement!;
+    const row = titleSlot.parentElement!;
+    const hostLayout = (node: Element) => JSON.parse(node.getAttribute("data-host-layout")!);
+
+    expect(closeHost.nextElementSibling).toBe(titleSlot);
+    expect(titleSlot.nextElementSibling).toBe(menuHost);
+    expect(JSON.parse(row.getAttribute("data-rn-style")!)).toMatchObject({ flexDirection: "row", gap: 8 });
+    expect(titleSlot.getAttribute("data-pointer-events")).toBe("none");
+    expect(JSON.parse(titleSlot.getAttribute("data-rn-style")!)).toMatchObject({
+      flex: 1, minWidth: 0, alignItems: "center",
+    });
+    expect(hostLayout(titleHost)).toEqual({ style: { width: "100%", maxWidth: 560, height: 44 } });
+    expect(hostLayout(closeHost).style).toEqual({ width: 44, height: 44 });
+    expect(hostLayout(menuHost).style).toEqual({ width: 44, height: 44 });
+    expect(title.textContent).toBe(name);
+    expect(JSON.parse(title.getAttribute("data-text-style")!)).toEqual(expect.arrayContaining([
+      { name: "lineLimit", value: 1 },
+      { name: "truncationMode", value: "tail" },
+      { name: "accessibilityLabel", value: name },
+    ]));
+    act(() => closeButton.click());
+    act(() => menu.querySelector("button")!.click());
+    expect(close).toHaveBeenCalledOnce();
+    expect(fileInfo).toHaveBeenCalledOnce();
+  },
+);
+
+it("keeps the preview actions available when the title is omitted", () => {
+  const close = vi.fn();
+  const fileInfo = vi.fn();
+  const host = mount(<NativePreviewHeader
+    onClose={close}
+    closeLabel="Close"
+    closeDisabled={false}
+    closeTestID="preview.close"
+    moreLabel="More"
+    actions={[{ key: "fileInfo", label: "File info", onPress: fileInfo }]}
+  />);
+
+  expect(host.querySelector('[data-testid="preview.title"]')).toBeNull();
+  act(() => host.querySelector<HTMLButtonElement>('[data-testid="preview.close"]')!.click());
+  act(() => host.querySelector<HTMLButtonElement>('[data-testid="preview.more"] button')!.click());
+  expect(close).toHaveBeenCalledOnce();
+  expect(fileInfo).toHaveBeenCalledOnce();
+});
+
+// Sidebar scrolling and task selection update the trigger without changing its
+// choices. Those updates must not resend every Toggle through the native bridge.
+it("keeps native choices idle on trigger updates and refreshes changed choices and callbacks", () => {
+  const actions = [{ id: "status.active", title: "Active", state: "on" as const }];
+  const onAction = vi.fn();
+  const host = mount(<HomeDisplayMenu actions={actions} onAction={onAction} accessibilityLabel="Display">
+    <span>More</span>
+  </HomeDisplayMenu>);
+  const root = roots.at(-1)!;
+  const initialRenders = state.toggleRenders;
+  act(() => root.render(<HomeDisplayMenu actions={actions} onAction={onAction} accessibilityLabel="Updated display">
+    <span>Updated trigger</span>
+  </HomeDisplayMenu>));
+  expect(host.textContent).toContain("Updated trigger");
+  expect(state.toggleRenders).toBe(initialRenders);
+
+  const latestAction = vi.fn();
+  act(() => root.render(<HomeDisplayMenu actions={actions} onAction={latestAction} accessibilityLabel="Display">
+    <span>More</span>
+  </HomeDisplayMenu>));
+  act(() => (host.querySelector('[data-testid="home.displayMenu.status.active"]') as HTMLButtonElement).click());
+  expect(latestAction).toHaveBeenCalledWith("status.active");
+  expect(onAction).not.toHaveBeenCalled();
+
+  act(() => root.render(<HomeDisplayMenu actions={[{ ...actions[0], state: "off" }]}
+    onAction={latestAction} accessibilityLabel="Display"><span>More</span></HomeDisplayMenu>));
+  const option = host.querySelector('[data-testid="home.displayMenu.status.active"]') as HTMLButtonElement;
+  expect(option.getAttribute("aria-checked")).toBe("false");
+  act(() => option.click());
+  expect(latestAction).toHaveBeenCalledTimes(2);
+  expect(onAction).not.toHaveBeenCalled();
+});
 
 // Unit: Duo's sidebar display settings must deliver deep leaf IDs to the real
 // preference reducer. Existing menu-model tests never cross the native presenter.
@@ -513,4 +635,37 @@ it.each(["light", "dark"])("pairs permission-guide primary labels without changi
         .toContainEqual({ name: "foregroundStyle", value: primary ? (mode === "dark" ? "black" : "white") : "primary" });
     });
   }
+});
+
+// PR #9826 / unit: iOS must show the failure without disabling an already loaded folder.
+it("allows an explicit folder retry while displaying a move error", () => {
+  const props = directoryProps({ actionError: "Move failed" });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  expect(host.textContent).toContain("Move failed");
+  act(() => (host.querySelector('[data-testid="newSession.remoteBrowseSelectCurrent"]') as HTMLButtonElement).click());
+  expect(props.onChoose).toHaveBeenCalledExactlyOnceWith("/project");
+});
+
+// PR #9826 / unit: keep current project membership selected and disabled in move mode.
+it("does not dispatch the disabled current project membership", () => {
+  const props = directoryProps({ page: "workspace", workspaces: [{ title: "Project", workingDir: "/project", disabled: true }] });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  const row = host.querySelector('[data-testid="newSession.workspaceProjectOption"]') as HTMLButtonElement;
+  expect(row.getAttribute("aria-pressed")).toBe("true");
+  expect(row.disabled).toBe(true);
+  act(() => row.click());
+  expect(props.onProject).not.toHaveBeenCalled();
+});
+
+// PR #9826: browseLoading may stay true after returning to workspace on the new-task page.
+it.each([false, true])("gates workspace selection only for its own loading (%s)", workspaceLoading => {
+  const props = directoryProps({ page: "workspace", loading: true, workspaceLoading,
+    workspaces: [{ title: "Project", workingDir: "/project" }] });
+  const host = mount(<NewTaskSelectionSheet {...props} />);
+  for (const name of ["Dialogue", "Project", "Browse"]) {
+    act(() => (host.querySelector(`[data-testid="newSession.workspace${name}Option"]`) as HTMLButtonElement).click());
+  }
+  expect(props.onDialogue).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
+  expect(props.onProject).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
+  expect(props.onBrowse).toHaveBeenCalledTimes(workspaceLoading ? 0 : 1);
 });

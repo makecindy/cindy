@@ -68,6 +68,26 @@ export const appearanceSettings = defineSettings({
     titleKey: 'settings.appearance.sidebarAndPanels',
     sectionKey: 'settings.appearance.sidebarAndPanels',
   },
+  chatLayout: {
+    id: 'appearance.chatLayout',
+    tab: 'appearance',
+    targetId: 'settings-chat-layout',
+    titleKey: 'settings.appearance.chatLayout.label',
+    sectionKey: 'settings.appearance.sidebarAndPanels',
+    options: [
+      { value: 'standard', labelKey: 'settings.appearance.chatLayout.standard' },
+      { value: 'wide', labelKey: 'settings.appearance.chatLayout.wide' },
+    ],
+  },
+  chatWidth: {
+    id: 'appearance.chatWidth',
+    tab: 'appearance',
+    targetId: 'settings-chat-width',
+    fallbackTargetId: 'settings-chat-layout',
+    titleKey: 'settings.appearance.chatLayout.width',
+    descriptionKey: 'settings.appearance.chatLayout.hint',
+    sectionKey: 'settings.appearance.sidebarAndPanels',
+  },
   wallpaperCustomChoose: {
     id: 'settings.appearance.wallpaper.customChoose',
     fallbackTargetId: 'settings-search-target-appearance-wallpaper',
@@ -85,6 +105,7 @@ export const appearanceSettings = defineSettings({
       'settings.appearance.wallpaper.desktopVisibilityHint',
       'settings.appearance.wallpaper.desktopBlurLabel',
       'settings.appearance.wallpaper.desktopBlurHint',
+      'settings.appearance.wallpaper.desktopBlurSwitchHint',
 
     ],
     options: [
@@ -123,6 +144,15 @@ export const appearanceSettings = defineSettings({
     tab: 'appearance',
     targetId: 'settings-search-settings-appearance-themeLabel',
     titleKey: 'settings.appearance.themeLabel',
+    sectionKey: 'settings.appearance.themeLabel',
+  },
+  createTheme: {
+    id: 'appearance.createTheme',
+    tab: 'appearance',
+    targetId: 'settings-search-target-appearance-create-theme',
+    fallbackTargetId: 'settings-search-target-appearance-theme',
+    titleKey: 'settings.appearance.createTheme.label',
+    descriptionKey: 'settings.appearance.createTheme.hint',
     sectionKey: 'settings.appearance.themeLabel',
   },
   wallpaperTitle: {

@@ -69,6 +69,7 @@ import {
   markdownDarkEditorTheme,
 } from './codemirrorGithubTheme';
 import { getCodeMirrorLanguage } from './codemirrorLanguages';
+import { diffLineHighlight, isDiffLanguage } from './codemirrorDiffLines';
 import {
   clamp,
   findMarkdownTableAtLine,
@@ -88,9 +89,11 @@ import {
 import {
   imageBaseDirFacet,
   imageLocaleFacet,
+  imageRemoteOriginFacet,
   markdownImageDecorationField,
   findImageTargets,
 } from './markdownImageLivePreview';
+import type { RemoteMediaOrigin } from '../../../shared/remoteMediaUrl';
 import {
   docSearchIndexOfLine,
   docSearchRangesField,
@@ -188,6 +191,9 @@ export interface PlaintextEditorProps {
    *  父目录(不是 session cwd)。不传 / 空串时相对路径图片显示"无法解析"占位
    *  卡。仅 markdown chrome 消费,其它模式忽略。 */
   imageBaseDir?: string;
+  /** 远程会话(device-link / SSH)媒体来源:Markdown live-preview 图片解析后经
+   *  cindy-remote-media:// 拉取。null / undefined 表示本地会话。 */
+  imageRemoteOrigin?: RemoteMediaOrigin | null;
   /** view.scrollDOM 滚动事件回调,带最新 scrollTop。passive listener,无
    *  额外 React state,父组件可以把它直接落到 fileScrollStore。 */
   onScroll?: (top: number, line: number | null, offset: number | null) => void;
@@ -1081,6 +1087,7 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
       initialScrollLine,
       initialScrollOffset,
       imageBaseDir,
+      imageRemoteOrigin = null,
       onScroll,
     },
     ref,
@@ -1146,11 +1153,14 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
     const tableLabelsCompartment = useRef(new Compartment()).current;
     const mermaidLocaleCompartment = useRef(new Compartment()).current;
     const imageBaseDirCompartment = useRef(new Compartment()).current;
+    const imageRemoteOriginCompartment = useRef(new Compartment()).current;
 
     // imageBaseDir 走 ref 保鲜:init effect 不能依赖它(否则 prop identity 变化
     // 会重建 EditorView 丢滚动位置);运行时变更由下面的 reconfigure effect 处理。
     const imageBaseDirRef = useRef(imageBaseDir ?? '');
     imageBaseDirRef.current = imageBaseDir ?? '';
+    const imageRemoteOriginRef = useRef<RemoteMediaOrigin | null>(imageRemoteOrigin);
+    imageRemoteOriginRef.current = imageRemoteOrigin;
 
     const tableMenuLabels = useMemo<TableMenuLabels>(
       () => ({
@@ -1318,6 +1328,8 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
         lineNumbersCompartment.of(
           (showLineNumbers ?? initialConfig.useCodeChrome) ? lineNumbers() : []),
         ...highlightExtensions,
+        // .diff/.patch rows keep their red/green fill even when highlighting is skipped.
+        ...(isDiffLanguage(initialConfig.language) ? [diffLineHighlight] : []),
         ...(initialConfig.isMarkdown
           ? [
               // 命中集合先于表格 decoration 挂上:markdownTableDecorationField
@@ -1330,6 +1342,9 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
               markdownMermaidDecorationField,
               markdownImageDecorationField,
               imageBaseDirCompartment.of(imageBaseDirFacet.of(imageBaseDirRef.current)),
+              imageRemoteOriginCompartment.of(
+                imageRemoteOriginFacet.of(imageRemoteOriginRef.current),
+              ),
               // mermaid / image widget 的 i18n 文案都在 toDOM 时读取,共用同一个
               // locale compartment,语言切换时一次 reconfigure 触发两个 field 重建。
               mermaidLocaleCompartment.of([
@@ -1514,6 +1529,21 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
         ),
       });
     }, [isMarkdown, imageBaseDir, imageBaseDirCompartment]);
+
+    const imageRemoteOriginKey = imageRemoteOrigin
+      ? imageRemoteOrigin.kind === 'device'
+        ? `device:${imageRemoteOrigin.deviceId}`
+        : `ssh:${imageRemoteOrigin.remoteHostId}:${imageRemoteOrigin.workdir}`
+      : '';
+    useEffect(() => {
+      const view = cmViewRef.current;
+      if (!view || !isMarkdown) return;
+      view.dispatch({
+        effects: imageRemoteOriginCompartment.reconfigure(
+          imageRemoteOriginFacet.of(imageRemoteOriginRef.current),
+        ),
+      });
+    }, [isMarkdown, imageRemoteOriginKey, imageRemoteOriginCompartment]);
 
     // readOnly 切换 → 通过 Compartment.reconfigure 在 EditorView 内运行时改写,
     // 不销毁 view、不重建 DOM,scrollTop 自然保留。配合父组件移除 key 里的

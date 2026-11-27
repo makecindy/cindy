@@ -10,7 +10,7 @@ import {
 import { randomUUID } from 'node:crypto';
 
 import { createLogger } from '../logger';
-import { getResolvedMainLocale } from '../i18n';
+import { getResolvedMainLocale } from '../i18n.desktop';
 import { onScreenshotTranslationPreferenceChanged, readScreenshotTranslationPreference, writeScreenshotTranslationPreference } from './translationPreferences';
 import { isScreenshotTranslationLanguage, resolveScreenshotTranslationLanguage, type ScreenshotTranslationLanguage } from '../../shared/screenshotTranslation';
 import { acquireOverlayEscape } from '../overlayEscape';
@@ -46,6 +46,7 @@ const MAX_COLOR_TEXT = 64;
 
 export interface DisplayCapture {
   display: Display;
+  previewProfile?: Uint8Array<ArrayBuffer>;
   /** 定格原图，浮层显示与最终导出的唯一来源。 */
   image: NativeImage;
 }
@@ -248,6 +249,7 @@ export class RegionScreenshotSession {
       locale,
       translationPreference: readScreenshotTranslationPreference(),
       viewport,
+      previewProfile: capture.previewProfile,
       scaleFactor: display.scaleFactor,
       frame: {
         width: size.width,

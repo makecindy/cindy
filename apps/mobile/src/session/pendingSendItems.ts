@@ -1,3 +1,4 @@
+import { isAnsweredAsyncQuestionClientId } from '@cindy/maker-shared/interaction';
 import { forwardedRequestDisplayText } from '@cindy/maker-shared/message-source';
 /**
  * 待发送消息 → 消息流渲染项。
@@ -43,6 +44,7 @@ import type { MobileMessageRenderItem } from '@/session/messageRenderModel';
 import {
   automationOriginLabel,
   orcaMessageTitle,
+  orcaAutoBridgeBatchCount,
   sessionOriginLabel,
   sourceIdText,
   sourcePluginLabel,
@@ -88,6 +90,8 @@ export interface MobilePendingSendItem {
   /** Structured quote / pasted-text / Slash atoms used by the optimistic renderer. */
   sentInlineTokens: SentInlineToken[];
   phase: MobilePendingSendPhase;
+  pendingDelivery?: boolean;
+  waitingForRemoteAccount?: true;
   /** 队列序号(从 1 起,用于无障碍播报);不在队列里的条目为 null。 */
   queueIndex: number | null;
   thumbs: MobileOutboxThumb[];
@@ -183,7 +187,7 @@ export function mergePendingSendItems(
 }
 
 type PendingSendTextSource = Pick<QueuedRemoteMessage, 'text' | 'chatMessage'>
-  & Partial<Pick<QueuedRemoteMessage, 'persistedContent' | 'files' | 'origin'>>;
+  & Partial<Pick<QueuedRemoteMessage, 'clientId' | 'persistedContent' | 'files' | 'origin'>>;
 
 function readRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -290,7 +294,7 @@ export function pendingSendSource(
     const senderLabel = readNonEmptyString(origin.senderLabel);
     const direction = readOrcaPersistedSource(item.persistedContent)
       ?? (senderLabel?.toLowerCase() === 'lead' ? 'lead' : 'worker');
-    return { kind: 'orca', label: orcaMessageTitle(direction, senderLabel) };
+    return { kind: 'orca', label: orcaMessageTitle(direction, senderLabel, orcaAutoBridgeBatchCount(origin)) };
   }
   return null;
 }
@@ -399,7 +403,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   const seen = new Set<string>();
 
   const pushQueued = (item: QueuedRemoteMessage, phase: MobilePendingSendPhase, queueIndex: number | null) => {
-    if (seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) return;
+    if (isAnsweredAsyncQuestionClientId(item.clientId) || seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) return;
     seen.add(item.clientId);
     const attachments = queuedAttachmentThumbs(item, input.previewByOssRef, input.getImagePreview);
     const presentation = queueIndex === null
@@ -421,6 +425,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
         slashCommandRanges: item.chatMessage.slashCommandRanges,
       }),
       phase,
+      ...(phase === 'queued' && item.waitingForRemoteAccount === true ? { waitingForRemoteAccount: true as const } : {}),
       queueIndex,
       thumbs: attachments.thumbs,
       fileCount: attachments.fileCount,
@@ -452,7 +457,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
   });
   // 本地 outbox 恒在最后:它们是最晚发出的消息。
   for (const item of input.outbox) {
-    if (seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) continue;
+    if (isAnsweredAsyncQuestionClientId(item.clientId) || seen.has(item.clientId) || input.hiddenClientIds.has(item.clientId)) continue;
     seen.add(item.clientId);
     const uploadsPending = item.attachmentCount > 0 && item.uploadedCount < item.attachmentCount;
     // 断开时整条投递(含附件上传)都停着:附件没传完也写「等连上」,图片不再转圈。
@@ -475,6 +480,7 @@ export function buildPendingSendItems(input: BuildPendingSendItemsInput): Mobile
       uploadedCount: item.uploadedCount,
       errorText: item.errorText,
       canCancel: item.canCancel,
+      pendingDelivery: item.pendingDelivery,
       actions: null,
       hint: null,
       source: null,

@@ -1,3 +1,9 @@
+import { companionDragProps } from './companionDragProps';
+import {
+  isSidebarNewWindowActivation,
+  openTargetInNewWindow,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 import { Users } from 'lucide-react';
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -10,6 +16,7 @@ import { useBotProfiles } from './botStore';
 import { useCompanionCloud } from './companionCloudStore';
 import { cloudRemoteBots, withoutShadowedBots } from './companionCloudPresentation';
 import { useRemoteBots } from './useRemoteBots';
+import { Badge } from '@/components/ui/badge';
 
 export interface TeammateSearchMatch {
   key: string;
@@ -39,6 +46,7 @@ export function useTeammateSearchMatches(
   const bots = useMemo(() => withoutShadowedBots(allBots, cloud), [allBots, cloud]);
   const remoteBots = useMemo(() => cloudRemoteBots(cloud, rosterRemoteBots), [rosterRemoteBots, cloud]);
   const { groups } = useBotGroupList();
+  const { t } = useTranslation();
   return useMemo(() => {
     const query = rawQuery.trim().toLocaleLowerCase();
     if (!query || lockedSessionGroupName !== null) return [];
@@ -72,12 +80,12 @@ export function useTeammateSearchMatches(
         kind: 'group',
         name: group.name,
         archived: Boolean(group.archived),
-        detail: group.members.map((member) => member.name).join('、'),
+        detail: group.members.map((member) => member.name).join(t('commonUi.listSeparator')),
         route: `/bots/groups/${encodeURIComponent(group.id)}`,
         avatar: group.members[0] ?? null,
       }));
     return [...local, ...remote, ...groupMatches];
-  }, [bots, remoteBots, groups, rawQuery, lockedSessionGroupName]);
+  }, [bots, remoteBots, groups, rawQuery, lockedSessionGroupName, t]);
 }
 
 /** 与会话结果行同几何(rounded-lg、px-3 py-2.5、20px 标记、13 号标题、类型小标签)。 */
@@ -97,9 +105,23 @@ export function TeammateSearchResults({
       {matches.map((match) => (
         <button
           key={match.key}
-          type="button"
-          onClick={() => {
+          type="button" {...companionDragProps(match.route, match.name)}
+          onMouseDown={preventMiddleClickAutoscroll}
+          onClick={(event) => {
+            if (isSidebarNewWindowActivation(event)) {
+              event.preventDefault();
+              void openTargetInNewWindow(match.route);
+              onSelected?.();
+              return;
+            }
             navigate(match.route);
+            onSelected?.();
+          }}
+          onAuxClick={(event) => {
+            if (event.button !== 1) return;
+            event.preventDefault();
+            event.stopPropagation();
+            void openTargetInNewWindow(match.route);
             onSelected?.();
           }}
           className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[var(--cmd-palette-item-hover)]"
@@ -117,9 +139,9 @@ export function TeammateSearchResults({
               {match.archived ? (
                 <span className="shrink-0 text-10 leading-none text-[var(--text-tertiary)]">{t('bots.archived')}</span>
               ) : null}
-              <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 py-0.5 text-10 leading-none text-[var(--text-tertiary)]">
+              <Badge size="xs">
                 {match.kind === 'group' ? t('bots.groupChat.sidebar.title') : t('bots.title')}
-              </span>
+              </Badge>
             </span>
             {match.detail ? (
               <span className="mt-1 block truncate text-11 leading-none text-[var(--text-tertiary)]">{match.detail}</span>

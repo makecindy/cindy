@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import type { AgentEvent } from '@cindy/maker-core';
@@ -12,7 +13,7 @@ import { localTaskImagePath } from '../../cindy-media/taskImageMarkdown';
 import { collectOutboundAttachments } from '../../hook-control/outbound';
 import { mapClaudeHostedEvent } from '../controller/eventMap';
 import { createRemoteAgentHandle } from '../controller/proxyHandle';
-import type { RemoteAgentRunClient } from '../controller/runClient';
+import { RemoteAgentRunClient, type RemoteAgentPoller } from '../controller/runClient';
 import { RemoteExecutor } from '../executor/executor';
 import { ExecutorGate } from '../executor/gate';
 import { ExecutorWorkspace } from '../executor/workspace';
@@ -21,15 +22,15 @@ let root: string;
 beforeEach(() => { root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-event-projection-'))); });
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
-function setup(virtual: string, callWithId: () => Promise<void> = async () => undefined) {
+function setup(virtual: string, callWithId: () => Promise<void> = async () => undefined, client?: RemoteAgentRunClient) {
   const real = path.join(root, '真实 目录');
   fs.mkdirSync(real);
   const workspace = new ExecutorWorkspace({ workingDir: real, aliases: [{ from: virtual, to: real }] });
   workspace.setVirtualRoot(virtual);
   const controller = createRemoteAgentHandle({
-    client: { callWithId } as unknown as RemoteAgentRunClient,
+    client: client ?? { callWithId } as unknown as RemoteAgentRunClient,
     started: { id: 'sdk-1', agentKind: 'claude-code', model: 'm', shadowDir: virtual, virtualWorkspace: true, methods: [], state: {} },
-    workspace, mapEvent: mapClaudeHostedEvent, recordApproval: () => {}, newId: () => 'request-id', dispose: async () => {},
+    workspace, mapEvent: mapClaudeHostedEvent, recordApproval: () => {}, newId: client ? randomUUID : () => 'request-id', dispose: async () => {},
   });
   return { real, workspace, controller };
 }
@@ -47,13 +48,46 @@ async function eventsFrom(controller: ReturnType<typeof setup>['controller'], in
 // Unit regression: a quota terminal followed by a missing remote run must keep
 // the actionable error (and its reset time), rather than replacing it with EXPIRED.
 describe('remote terminal error ownership', () => {
+  // Unit regression: Session graceful Stop cancels SendOptions.signal before
+  // invoking the remote stop method. The real proxy + client must reject the
+  // unaccepted send locally; client-only abort tests miss this handoff.
+  it('keeps a cancelled preparation undispatched while allowing the next send', async () => {
+    const requests: unknown[] = [];
+    const client = new RemoteAgentRunClient(randomUUID(), {
+      async invoke(args: unknown[]) {
+        requests.push(args[0]);
+        const request = args[0] as { op: string; callId?: string };
+        if (request.op === 'call') client.onData(Buffer.from(`${JSON.stringify({
+          t: 'result', callId: request.callId, ok: true, value: null,
+        })}\n`), false);
+        return {};
+      },
+      unregister() {},
+    } as unknown as RemoteAgentPoller, {
+      onEvent() {}, onState() {}, onWs() {}, onClosed() {},
+      onRequest: async () => ({ type: 'callback', value: null }),
+    }, randomUUID);
+    const { controller } = setup('/remote/workspace', undefined, client);
+    const abort = new AbortController();
+    abort.abort();
+    await expect(controller.handle.send({ type: 'user', content: 'x'.repeat(70 * 1024) },
+      { signal: abort.signal })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(requests).toEqual([]);
+    expect(client.hasPendingWork).toBe(false);
+    expect(controller.isQuiet()).toBe(true);
+    await expect(controller.handle.send({ type: 'user', content: 'fresh message' })).resolves.toBeUndefined();
+    expect(requests).toHaveLength(1);
+    client.abandon('fixture-complete');
+    controller.onClosed('closed');
+  });
+
   // Unit regression: local in-flight tracking must not turn a rejected send into
   // a restart candidate, or acknowledge an uncertain steer as delivered.
   it('leaves a rejected send idle and does not manufacture a restart continuation', async () => {
     const { controller } = setup('/remote/workspace', async () => { throw new Error('rejected'); });
     await expect(controller.handle.send({ type: 'user', content: 'work' })).rejects.toThrow('rejected');
     expect(controller.isQuiet()).toBe(true);
-    controller.onInterrupted();
+    controller.onInterrupted({ reason: 'provider-restarting', runId: 'run-before-restart' });
     expect(await eventsFrom(controller, [])).toEqual([]);
   });
 
@@ -61,7 +95,7 @@ describe('remote terminal error ownership', () => {
     let interrupt = false;
     const { controller } = setup('/remote/workspace', async () => {
       if (!interrupt) return;
-      controller.onInterrupted();
+      controller.onInterrupted({ reason: 'provider-restarting', runId: 'run-before-restart' });
       throw new Error('steer delivery unknown');
     });
     await controller.handle.send({ type: 'user', content: 'work' });
@@ -77,11 +111,18 @@ describe('remote terminal error ownership', () => {
       message: "You've hit your weekly limit · resets 9am (Pacific/Auckland)",
       sdkError: 'rate_limit', usageResetAt: 1792612800000,
     } };
+    // An automatic turn can fail before producing any text. Its explicit start
+    // must survive the same remote projection as the quota error and deadline.
+    const start: AgentEvent = { type: 'status', source: 'claude-code', data: {
+      isRunning: true, providerInitiatedTurn: true,
+    } };
+    controller.onEvent(start);
     controller.onEvent(error);
     if (done) controller.onEvent({ type: 'done', source: 'claude-code', data: {} });
     controller.onClosed('missing', '[REMOTE_AGENT_EXPIRED] The task is no longer running on the other computer.');
     const events: AgentEvent[] = [];
     for await (const event of controller.handle.events()) events.push(event);
+    expect(events[0]).toEqual(start);
     expect(events.filter(event => event.type === 'error')).toEqual([error]);
   });
 
@@ -285,6 +326,48 @@ describe('remote file references on the task computer', () => {
     expect(imagePath && path.normalize(imagePath)).toBe(path.join(real, 'a.png'));
     expect(fs.readFileSync(imagePath!, 'utf8')).toBe('image bytes');
   });
+
+  // 远程供应商(尤其 macOS 宿主)的影子目录含空格(Library/Application Support/...)，模型输出
+  // 未编码空格的 `[文件名](file:///...)`、`<file:///...>` 或裸 `file:///...` 时，旧逻辑在空格处
+  // 截断 URL 导致影子路径原样露出且 Markdown 链接失效。tier：unit(内存与临时目录)。
+  describe.each([['完整回复', true], ['逐字流式', false]])('file:// links with bare spaces (%s)', (_delivery, final) => it.each([
+    ['macOS 影子目录', '/Users/agent/Library/Application Support/Cindy/remote-agent/workspaces/run-1/fs/workspace'],
+    ['Windows 影子目录', 'C:\\Users\\Agent Name\\Cindy\\workspaces\\run-1\\fs\\workspace'],
+    ['含中文标点影子目录', '/Users/张（测试）/workspace'],
+  ])('restores unencoded file:// links, line anchors, parens and bare URLs at %s', async (_name, virtual) => {
+    const { real, controller } = setup(virtual);
+    const native = virtual.startsWith('C:') ? path.win32 : path.posix;
+    const prefix = 'file://' + (virtual.startsWith('C:') ? '/' : '');
+    const spell = (rel: string) => prefix + native.join(virtual, ...rel.split('/')).replace(/\\/g, '/');
+    const fileA = path.join(real, 'Client', 'CursorSystem_InputMode.cs');
+    const fileB = path.join(real, 'Client', 'Gamepad (1).cs');
+    fs.mkdirSync(path.dirname(fileA), { recursive: true });
+    fs.writeFileSync(fileA, 'input-mode');
+    fs.writeFileSync(fileB, 'gamepad');
+    const encodeLink = (local: string, hash = '') =>
+      pathToFileURL(local).href.replace(/\(/g, '%28').replace(/\)/g, '%29') + hash;
+    const unmapped = 'file:///Users/other/Application Support/untouched.cs';
+    const reply = [
+      `1. M1 ([CursorSystem_InputMode.cs](${spell('Client/CursorSystem_InputMode.cs')})、[Gamepad (1).cs](${spell('Client/Gamepad (1).cs')}#L10-L20))`,
+      `标题：[双引号](${spell('Client/CursorSystem_InputMode.cs')} "章节)说明")、[单引号](${spell('Client/CursorSystem_InputMode.cs')} '章节)说明')、[括号](${spell('Client/CursorSystem_InputMode.cs')} (报告标题))、[空白]( ${spell('Client/CursorSystem_InputMode.cs')} )`,
+      `尖括号：[A](<${spell('Client/CursorSystem_InputMode.cs')}#L3>)`,
+      `裸链接：${spell('Client/CursorSystem_InputMode.cs')}，保持：[原样](${unmapped})`,
+    ].join('\n');
+    const output = await eventsFrom(controller, final ? [
+      { type: 'text', source: 'codex', data: { text: reply, isFinal: true } },
+    ] : [...reply].map((character) => ({
+      type: 'text', source: 'codex', data: { text: character, isFinal: false, agentMessageId: 'message-1' },
+    })));
+    const projected = output.map(text).join('');
+    expect(projected).toBe([
+      `1. M1 ([CursorSystem_InputMode.cs](${encodeLink(fileA)})、[Gamepad (1).cs](${encodeLink(fileB, '#L10-L20')}))`,
+      `标题：[双引号](${encodeLink(fileA)} "章节)说明")、[单引号](${encodeLink(fileA)} '章节)说明')、[括号](${encodeLink(fileA)} (报告标题))、[空白]( ${encodeLink(fileA)} )`,
+      `尖括号：[A](<${pathToFileURL(fileA).href}#L3>)`,
+      `裸链接：${pathToFileURL(fileA).href}，保持：[原样](${unmapped})`,
+    ].join('\n'));
+    expect(fs.readFileSync(fileURLToPath(encodeLink(fileA)), 'utf8')).toBe('input-mode');
+    expect(fs.readFileSync(fileURLToPath(encodeLink(fileB)), 'utf8')).toBe('gamepad');
+  }));
 
   it('restores nested file changes and media file URLs while preserving external URLs, media identities and vendor metadata', async () => {
     const virtual = '/Users/agent/workspace';

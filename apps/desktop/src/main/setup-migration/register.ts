@@ -47,13 +47,14 @@ import {
   storeGhostUserSecretsForSetup,
 } from '../cindy-brain/index.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
-import { setSetupSnapshotRemoteHandler, setSetupTransferRemoteHandler } from '../device-link/dispatch.js';
+import { getInstanceConfig } from '../instance-runtime/config.js';
+import { setSetupSnapshotRemoteHandler, setSetupTransferRemoteHandler } from '../device-link/dispatch.desktop.js';
 import { defaultDeps as deviceDirectoryDeps, handleListDevices } from '../device-link/ipc.js';
-import { readDeviceLinkSettings } from '../device-link/settings-store.js';
+import { readDeviceLinkSettings } from '../device-link/settings-store.desktop.js';
 import { ownerScopedImSecrets } from '../im/ownerScopedStorage.js';
 import { createLogger } from '../logger.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { listCustomMcpNamesForSetup, listCustomMcpServers } from '../maker-host/custom-mcp-store.js';
+import { listCustomMcpNamesForSetup, listCustomMcpServers } from '../maker-host/custom-mcp-store.desktop.js';
 import { hydrateCustomProviderHeaders } from '../maker-host/custom-provider-header-secrets.js';
 import { listCustomProviders } from '../maker-host/custom-provider-store.js';
 import { createCustomMcpServerForSetup } from '../maker-ipc/mcpHandlers.js';
@@ -82,6 +83,7 @@ import { setCindySkillEnabled } from '../skillhub/activationPreferences.js';
 import * as skillInstallService from '../skillhub/installService.js';
 import { tryAcquireSkillInstallLock } from '../skillhub/installLock.js';
 import { scanAllSkills, type Skill } from '../skillhub/scanner.js';
+import { joinSharedSkillPreparation } from '../skillhub/sharedSkillPreparation.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { registerSetupMigrationRendererHost } from './rendererPrefsHost.js';
 import {
@@ -102,8 +104,15 @@ export interface RegisterSetupMigrationOptions {
   getMaker(): Maker;
   getManagedSkillRoots(): readonly string[];
   getBuiltInSkills(): readonly BuiltInSkillDescriptor[];
+  /**
+   * Joins the shared Skill preparation before installed Skills are scanned, for both the
+   * snapshot this computer sends and the plan it builds. Startup only warms it up.
+   */
+  prepareSharedSkills?(): Promise<void>;
   /** Window the keys/SSH question is shown over on this computer. */
   getMainWindow(): BrowserWindow | null;
+  /** Earlier-version data was brought over during this process's sign-in. */
+  getLegacyMigrated(): boolean;
 }
 
 const IM_CHANNEL_SECRETS: ReadonlyArray<[string, string]> = [
@@ -336,6 +345,7 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
   const market = () => getPluginMarketService();
 
   const globalSkills = async (): Promise<Skill[]> => {
+    await joinSharedSkillPreparation(options.prepareSharedSkills, 'setup-migration');
     const result = await scanAllSkills(
       { projects: [] },
       options.getMaker(),
@@ -378,8 +388,12 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
     targetGhosts: () => listGhosts().map(ghostFact),
     catalog: async (plugins: SetupSnapshotPlugin[]) => {
       const out = new Map<string, TargetCatalogFact>();
-      const snapshot = await market().snapshot({ discoveryOnly: true });
-      const visible = new Set(snapshot.items.map((item) => item.pluginId));
+      const ids = [...new Set(plugins.map(plugin => plugin.ghostId))];
+      const visible = new Set<string>();
+      for (let offset = 0; offset < ids.length; offset += 100) {
+        const snapshot = await market().lookup(ids.slice(offset, offset + 100));
+        for (const item of snapshot.items) visible.add(item.pluginId);
+      }
       const wanted = plugins.filter(
         (plugin) => plugin.pluginId && visible.has(plugin.pluginId) && !findGhost(plugin.ghostId, plugin.namespace),
       );
@@ -549,7 +563,10 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
           return null;
       }
     },
+    legacyMigrated: () => options.getLegacyMigrated(),
     looksNew: async () => {
+      // A cloud instance is set up by its provisioning, not as a new computer; Settings still opens migration.
+      if (getInstanceConfig() !== null) return false;
       const ghosts = listGhosts().filter((ghost) => ghost.builtin !== true);
       if (ghosts.length > 0) {
         const snapshot = await market().snapshot({ discoveryOnly: true });
@@ -568,7 +585,20 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
       readRendererPrefs: () => rendererHost.read(),
       readPlugins: async () => {
         const snapshot = await market().snapshot({ discoveryOnly: true });
+        // Without the official catalog only custom-market items come back; the local
+        // install records still know which plugins came from the official market.
+        const catalogUnavailable = snapshot.unavailableReason !== null;
+        const installedServerRecords = catalogUnavailable
+          ? await market().installedServerMarketRecords().catch((error: unknown) => {
+            log.warn('setup plugin install records unavailable', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return [];
+          })
+          : [];
         return {
+          catalogUnavailable,
+          installedServerRecords,
           ghosts: listGhosts().map((ghost) => ({
             ...ghostFact(ghost),
             name: ghost.manifest.name,
@@ -694,6 +724,10 @@ export function registerSetupMigration(options: RegisterSetupMigrationOptions): 
     assertTrustedAppRendererEvent(event);
     return service.dismiss(parseDismissRequest(raw));
   });
+  ipcMain.handle(SETUP_MIGRATION_IPC.FIRST_RUN_GUIDE, (event) => {
+    assertTrustedAppRendererEvent(event);
+    return service.firstRunGuide();
+  });
 }
 
 function stringList(value: unknown, max: number): string[] {
@@ -718,7 +752,7 @@ export function parseApplyRequest(raw: unknown): SetupMigrationApplyRequest {
 
 export function parseDismissRequest(raw: unknown): SetupMigrationDismissRequest {
   const value = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  if (value.kind === 'suggestion' || value.kind === 'checklist') return { kind: value.kind };
+  if (value.kind === 'checklist') return { kind: 'checklist' };
   if (value.kind === 'checklist-item' && typeof value.id === 'string' && value.id.length <= 600) {
     return { kind: 'checklist-item', id: value.id };
   }

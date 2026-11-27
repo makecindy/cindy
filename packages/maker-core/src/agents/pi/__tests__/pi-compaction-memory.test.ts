@@ -156,6 +156,25 @@ describe('PiAgent compaction → memory digest', () => {
     await handle.close();
   });
 
+  it('an engine-level memory switch does not turn off a teammate whose own switch decided', async () => {
+    // A V2 teammate works in its project (no `bot:` scope); its memory follows its own setting.
+    const agent = new PiAgent(buildDeps(true));
+    await agent.setMemory(false);
+    const ordinary = await agent.startSession({ sessionId: 'plain', workingDir: cwd, model: 'm' });
+    fireCompaction('ordinary task summary');
+    await flush();
+    expect(writeMock).not.toHaveBeenCalled();
+    await ordinary.close();
+
+    const teammate = await agent.startSession({
+      sessionId: 'mate', workingDir: cwd, model: 'm', makerMemorySwitchOwned: true,
+    });
+    fireCompaction('teammate summary');
+    await flush();
+    expect(writeMock).toHaveBeenCalledTimes(1);
+    await teammate.close();
+  });
+
   it('does not write when there is no summary text', async () => {
     const handle = await start(true);
     fireCompaction(undefined);

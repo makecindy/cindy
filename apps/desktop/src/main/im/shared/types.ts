@@ -1,4 +1,7 @@
 import type { ImContextSnapshot } from '../../../shared/imMessageSource';
+import type { ImDefaultAgentKind, ImDefaultEffort } from '../../../shared/imDefaultSettings';
+import type { ProviderView } from '@cindy/model-providers';
+import type { ResolvedImSessionDefaults } from '../defaultSessionSettings';
 /**
  * main/im/shared/types.ts
  * ---------------------------------------------------------------------------
@@ -27,7 +30,7 @@ import type {
   TurnPermissionPolicy,
 } from '@cindy/maker-core';
 import type { GroupHistoryAccessScope } from './groupHistoryAccess';
-import type { ChannelToolScope } from './channelToolScope';
+import type { ChannelToolScope, TelegramReplyMediaScope } from './channelToolScope';
 import type { ImChannelNoteSource } from './channelNote';
 import type { ImOutputDriver, IMAttachment, IMMessageEvent, IMUnsupportedEntry, TextChannelIM } from '@cindy/im';
 
@@ -39,7 +42,31 @@ export type ImChannelName =
   | 'wechat'
   | 'telegram'
   | 'dingtalk'
-  | 'wecom';
+  | 'wecom'
+  | 'imessage';
+
+/**
+ * 路由键所在项目的默认设置(个人飞书 bot: 群绑定了项目 →「项目与模型」里那个项目的一行,
+ * 与插件、官方机器人同一份、同一个解析)。见 ImSessionNamespace.laneProjectDefaultsFor。
+ */
+export interface ImLaneProjectDefaults {
+  /** 这一行此刻的设置指纹(与 resolve 结果的 fingerprint 同一口径); 跟随记录据此判断要不要换。 */
+  fingerprint: string;
+  /** 项目设置的权限档; 路由键自己没单独设置权限时用它。null = 项目的档位不可用, 回到渠道设置。 */
+  permissionMode: PermissionMode | null;
+  /** 按这一行解析新任务的路由; 模型不可用时抛错(同插件与官方机器人)。 */
+  resolve(providerSnapshot?: ProviderView[] | null, options?: { dryRun?: boolean }): Promise<ResolvedImSessionDefaults>;
+}
+
+/** 按路由键覆写的新任务模型路由(见 ImSessionNamespace.routeOverrideFor)。 */
+export interface ImLaneRouteOverride {
+  agentKind: ImDefaultAgentKind;
+  model: string;
+  providerId: string | null;
+  agentDeviceId: string | null;
+  effort: ImDefaultEffort | '';
+  modelGroup?: string | null;
+}
 
 /**
  * IM 编排层的产品默认配置(由 main/im/index.ts 产品接线层注入)。
@@ -88,8 +115,11 @@ export interface ImSessionNamespace {
    * workingDir 是 app 托管目录(im-working-dir),不该以它聚成假项目组。
    */
   workspaceKind?: 'project' | 'dialogue';
-  /** 该渠道 session 的工作目录(必须已创建好)。 */
-  ensureWorkingDir(botContextId: string): string;
+  /**
+   * 该渠道 session 的工作目录(必须已创建好)。`userId` 只给「一个路由键一个独立目录」的会话
+   * 用(Discord 服务器频道 / thread lane); 其余渠道忽略它, 私聊目录保持 botContextId 一个。
+   */
+  ensureWorkingDir(botContextId: string, userId?: string): string;
   /** 渠道专属列(feishu: feishuBotAppId/feishuOpenId;slack: imBotContextId/imUserId)。 */
   extraInsertColumns(botContextId: string, userId: string): Record<string, unknown>;
   /**
@@ -99,8 +129,28 @@ export interface ImSessionNamespace {
    *     那是用户对群的显式选择)。
    * 返回 null/缺省 = 用渠道默认。只影响**新建**行(含 `/new` 重开上下文);
    * 已存在行的权限归 owner 管(`/permission`)。
+   * `projectPermissionMode`: 新任务落在路由键绑定的项目里时, 那个项目设置的权限档
+   * (laneProjectDefaultsFor); 渠道按自己的优先级决定是否采用。
    */
-  permissionModeFor?(userId: string): PermissionMode | null;
+  permissionModeFor?(userId: string, projectPermissionMode?: PermissionMode | null): PermissionMode | null;
+  /**
+   * 按路由键覆写新任务的模型路由(个人飞书 bot 的按群设置: 群 / 话题 lane → 该群固定的
+   * Agent、模型、来源、执行位置与推理强度)。返回 null/缺省 = 用渠道「新对话配置」。
+   * 建任务、`/new` 与「跟随默认」的切换都按它解析, 跟随记录的指纹随之变化。
+   */
+  routeOverrideFor?(botContextId: string, userId: string): ImLaneRouteOverride | null;
+  /**
+   * 按路由键给新任务指定项目目录(个人飞书 bot 的按群项目)。null 表示选用渠道对话目录，
+   * undefined 表示不为该路由键指定目录。只在建任务与 `/new` 时生效。
+   * 返回的目录必须仍是侧栏里的本机项目且确实存在。
+   */
+  laneWorkingDirFor?(botContextId: string, userId: string): Promise<string | null | undefined>;
+  /**
+   * 任务落在路由键绑定的项目目录 `workingDir` 里、且没有 routeOverrideFor 时, 模型路由与权限
+   * 跟随这个项目的设置(个人飞书 bot: 群绑定的项目 →「项目与模型」)。返回 null/缺省 = 用渠道
+   * 「新对话配置」。建任务、`/new` 与「跟随默认」都按它; 还留在别的目录里的任务不受影响。
+   */
+  laneProjectDefaultsFor?(botContextId: string, userId: string, workingDir: string): ImLaneProjectDefaults | null;
   /**
    * 建行/复活行后异步解析正式标题(飞书群 lane → 拉群名拼 `[飞书·群] {群名}`)。
    * 返回 null/缺省 = 保持 defaultTitle。幂等(值稳定), 失败不阻塞建行。
@@ -155,6 +205,14 @@ export interface ImChannelAdapter {
    * 实现; 缺省 = 这个渠道的连接不能交给伙伴, 保持原有路由。
    */
   companionLane?: (userId: string) => ImCompanionLane;
+  steerWhileBusy?(botId: string, chatId: string): boolean;
+  /** An explicitly delegated chat stays on its recipient even when the recipient is unavailable. */
+  requiresCompanionLane?(userId: string): boolean;
+  /**
+   * 公共对话(服务器频道 / thread)不接入本机桌面任务与项目: /ctr /exctr /session /project 及其卡片
+   * 按钮对这个 userId 一律不执行。接管会把主人私人桌面任务挂到公共场合, 与频道隔离的承诺冲突。
+   */
+  blocksLocalTaskAccess?: (userId: string) => boolean;
   /** Resolve an authenticated private notification topic before any default-session or command routing. */
   resolveNotificationReply?: (event: IMMessageEvent) => Promise<string | null>;
   notificationReplyText?: { unavailable: string; commands: string };
@@ -170,6 +228,10 @@ export interface ImChannelAdapter {
   getBotDisplayName?(): string;
   /** Terminal output strategy; existing channels use rich-card. */
   output: ImOutputDriver;
+  /** Resolve a persisted dedicated lane against this connection's current chat allowlist. */
+  connectedChatForLane?(botId: string, routeKey: string): string | undefined;
+  /** Legacy scheduler envelope on text transports. Undefined keeps normal formatting, null suppresses the publication. */
+  scheduledNotificationText?(text: string): string | null | undefined;
   config: ImOrchestratorConfig;
   ui: ImUiTextPack;
   sessions: ImSessionNamespace;
@@ -190,8 +252,8 @@ export interface ImChannelAdapter {
    */
   interactionExpiredNotice?: string;
   /**
-   * `/project` 项目切换开关(个人 Telegram: true)。开启后 slash 层放行
-   * /project 命令: 列出 desktop 端项目工作区, 选中后把当前 (bot, user/lane)
+   * `/project` 项目切换开关(个人 Telegram、个人飞书: true)。开启后 slash 层放行
+   * /project 命令: 列出侧栏的本机项目, 选中后把当前 (bot, user/lane)
    * 会话行切到该项目目录并重开上下文(bot 原生会话, 非接管)。开启时
    * ui.cards.project 必须提供(orchestrator 接线期断言)。
    */
@@ -294,6 +356,8 @@ export interface ImChannelAdapter {
    * provider 开始前登记、终态释放(channelToolScope.ts)；不实现即本轮没有渠道工具。
    */
   channelToolScopeFor?(event: IMMessageEvent): ChannelToolScope | undefined;
+  /** Only for an already admitted background reply to this exact lane. */
+  replyMediaScopeFor?(userId: string): TelegramReplyMediaScope;
   /**
    * 本条消息的 `[渠道说明]` 来源事实（只进模型正文, 见 channelNote.ts）。
    * 缺省按入站事件通用推断（imChannelNoteSourceFromEvent）; 渠道有更准确的
@@ -347,6 +411,8 @@ export interface ImUiTextPack {
       effort: string;
       permission: string;
     }) => string;
+    /** blocksLocalTaskAccess 的会话里收到接管 / 项目类命令时的提示。缺省回 unknownCommand。 */
+    localTaskAccessUnavailable?: (cmd: string) => string;
     detachedBySlash: string;
     detachedByRevoke: string;
     notAttached: string;

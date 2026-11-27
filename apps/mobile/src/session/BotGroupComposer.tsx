@@ -16,26 +16,17 @@ import type { TextInputInstance } from 'react-native';
  *
  * 输入 `@` 在输入框上方弹出点名候选，第一项固定是「所有人」。发送时以正文重新解析点名
  * （与桌面同一套规则，见 @cindy/maker-shared/botGroupMentions），clientId 作为幂等键：同一段
- * 文字、同一批点名目标、同一个「分工」标签、同一批附件重发沿用同一个 clientId。一轮进行中输入框为空且没有
- * 附件时，发送按钮变成停止；否则照常发送（插话本身就会作废当前一轮）。
- *
- * 附件与一对一聊天同一套（照片与视频、拍照、文件、iOS 最近照片、粘贴图片，见
- * useBotGroupComposerAttachments）：电脑声明 `supportsAttachments` 且在线时，「+」打开与任务
- * 输入框相同的面板；旧电脑会丢掉附件，「+」保持原来的小菜单。附件托盘在输入框聚焦时显示在
- * 卡片里，收起时是一枚小徽标（与会话页一致）。附件只在发出成功后离开托盘。
- *
- * 「+」里的「安排分工」给这条消息加上可去掉的「分工」标签（`division: true`）；安排进行中
- * 或等继续时不能再安排新的：小菜单时点「+」只说明原因，面板里这一行置灰并写明原因（同桌面）。
- * 占位文字跟随未结束的安排。
+ * 文字、点名目标和附件未变时重试沿用同一个 clientId。支持附件时，「+」打开附件面板。
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Keyboard, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { randomUUID } from 'expo-crypto';
-import { Camera, Circle, CircleCheck, Folder, Image as ImageIcon, Plus, Square, Users, X } from 'lucide-react-native';
+import { Camera, Circle, CircleCheck, Folder, Image as ImageIcon, Plus, Square, Users } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { useConfirmLeaveWhileUploading } from '@/session/useConfirmLeaveWhileUploading';
 import { BOT_GROUP_MESSAGE_MAX_CHARS, type BotGroupMemberView, type BotGroupMention } from '@cindy/maker-shared/botGroupChat';
 import {
+  ambiguousBotGroupMentionLabels,
   filterBotGroupMentionCandidates,
   findBotGroupMentionQuery,
   insertBotGroupMention,
@@ -43,9 +34,10 @@ import {
   retainBotGroupTrackedMentions,
   type BotGroupTrackedMention,
 } from '@cindy/maker-shared/botGroupMentions';
+import { createBotGroupMemberSearch } from '@cindy/maker-shared/botGroupMemberSearch';
 import {
+  chatGroupMentionRoster,
   isActiveBotGroupMember,
-  isBotGroupDivisionBlocked,
   type BotGroupComposerPlanState,
 } from '@cindy/maker-shared/botGroupPresentation';
 import { Text } from '@/components/AppText';
@@ -54,11 +46,11 @@ import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { iconStroke, motionDuration, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { BOT_GROUP_STEP_AVATAR_SIZE, BotGroupAvatar } from './BotGroupAvatars';
-import { BotGroupMenu } from './BotGroupMenu';
 import type { BotGroupIdentityLookup } from './BotGroupPlan';
 import { ComposerAttachmentCollapsedBadge, ComposerAttachmentTray } from './ComposerAttachmentTray';
 import { useComposerPendingImagePreview } from './useComposerPendingImagePreview';
 import { ContextSheet, ContextSheetGroup, ContextSheetRow } from './ContextSheet';
+import { ContextSheetMediaAddButton, useContextSheetMediaSelection } from './ContextSheetMediaSelection';
 import { RecentPhotosStrip } from './ContextSheetMediaViews';
 import { ImageLightbox } from './ImageLightbox';
 import { ComposerToolbarLeftGroup, ComposerToolbarSpacer } from './MobileComposerInputRow';
@@ -71,7 +63,6 @@ import type { UseMobileLocalAttachmentsOptions } from './useMobileLocalAttachmen
 
 const CONTROL_SIZE = 34;
 const CONTROL_HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 } as const;
-const TAG_HIT_SLOP = { top: 12, bottom: 12, left: 8, right: 12 } as const;
 /** Five candidate rows stay visible above the keyboard; the rest scroll. */
 const PICKER_MAX_HEIGHT = 5 * 44;
 
@@ -90,29 +81,32 @@ type MentionOption =
   | { kind: 'member'; label: string; member: BotGroupMemberView };
 
 export function BotGroupComposer({
-  pullThrough, members, identityFor, deviceId, online, allowMentionAllBots = false, running, planState, attachmentsSupported, divisionSupported = true, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
+  pullThrough, members, conversationKind, identityFor, deviceId, online, allowMentionAll = true, allowMentionAllBots = false, running, canStop = true, stopPending = false, planState, attachmentsSupported, uploadAttachment, quoteMessageId, focusRequest, onSend, onStop, topic = false, placeholder: placeholderOverride, maskIndicator, onParticipate,
 }: {
   pullThrough?: ComposerPullThroughBridge;
   maskIndicator?: import('react').ReactNode;
   onParticipate?(): void;
   members: readonly BotGroupMemberView[];
+  conversationKind?: 'direct';
+  allowMentionAll?: boolean;
   allowMentionAllBots?: boolean;
   identityFor: BotGroupIdentityLookup;
   deviceId: string;
   online: boolean;
   running: boolean;
+  canStop?: boolean;
+  stopPending?: boolean;
   planState: BotGroupComposerPlanState | null;
   /** The active server/computer path takes attachments on send. */
   attachmentsSupported: boolean;
   uploadAttachment?: UseMobileLocalAttachmentsOptions['upload'];
-  divisionSupported?: boolean;
   topic?: boolean;
   placeholder?: string;
   /** The message being replied to; part of the send intent. */
   quoteMessageId?: string;
   /** Bumped on every reply tap, so replying to the same message again still focuses the input. */
   focusRequest?: number;
-  /** Rejects with the host's error; the draft (and its tag) come back and the attachments stay. */
+  /** Rejects with the host's error; the draft comes back and the attachments stay. */
   onSend(input: BotGroupSendInput): Promise<void>;
   onStop(): Promise<void>;
 }) {
@@ -124,7 +118,6 @@ export function BotGroupComposer({
   const [forcedSelection, setForcedSelection] = useState<{ start: number; end: number } | undefined>(undefined);
   const [focused, setFocused] = useState(false);
   const [tracked, setTracked] = useState<BotGroupTrackedMention[]>([]);
-  const [division, setDivision] = useState(false);
   const [alsoSendToMain, setAlsoSendToMain] = useState(false);
   const [sending, setSending] = useState(false);
   const [waitingUploads, setWaitingUploads] = useState(false);
@@ -152,6 +145,13 @@ export function BotGroupComposer({
     upload: uploadAttachment,
     onPicked: () => { setSheetOpen(false); focusInput(); },
   });
+  // Photos picked with their selection circles wait in the sheet until its bottom button adds them.
+  const mediaSelection = useContextSheetMediaSelection({
+    open: sheetOpen,
+    getRemainingSlots: tray.getRemainingSlots,
+    onLimitReached: tray.reportLimit,
+    onChanged: () => tray.setError(null),
+  });
   const pendingImagePreview = useComposerPendingImagePreview(tray);
   const attachmentsEnabled = attachmentsSupported && online;
   // Paste handlers stay mounted for the whole screen (the input would remount otherwise); they
@@ -161,23 +161,25 @@ export function BotGroupComposer({
   const mediaLibraryEnabled = canBrowsePhotoLibraryDirectly(Platform.OS);
 
   const activeMembers = useMemo(() => members.filter(isActiveBotGroupMember), [members]);
-  const mentionMembers = useMemo(() => members.filter(member => member.isSelf !== true), [members]);
+  const mentionMembers = useMemo(() => chatGroupMentionRoster(members, conversationKind), [members, conversationKind]);
   const mentionCandidates = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
+  const searchMembers = useMemo(() => createBotGroupMemberSearch(mentionCandidates), [mentionCandidates]);
   const allLabel = t('groupChat.mention.all');
   const allBotsLabel = t('groupChat.mention.allBots');
   const allBotLabels = [allBotsLabel, 'bots'];
-  const query = focused ? findBotGroupMentionQuery(text, caret) : null;
+  const query = focused ? findBotGroupMentionQuery(text, caret, mentionCandidates) : null;
+  const queryText = query?.query;
   const options = useMemo<MentionOption[]>(() => {
-    if (!query || mentionCandidates.length === 0) return [];
-    const everyone: MentionOption[] = filterBotGroupMentionCandidates(query.query, [{ name: allLabel }]).length > 0
+    if (queryText === undefined || mentionCandidates.length === 0) return [];
+    const everyone: MentionOption[] = allowMentionAll && filterBotGroupMentionCandidates(queryText, [{ name: allLabel }]).length > 0
       ? [{ kind: 'all', label: allLabel }]
       : [];
-    const people = filterBotGroupMentionCandidates(query.query, mentionCandidates)
+    const people = searchMembers(queryText)
       .map((member): MentionOption => ({ kind: 'member', label: member.name, member }));
-    const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(query.query, [{ name: allBotsLabel }]).length
+    const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(queryText, [{ name: allBotsLabel }]).length
       ? [{ kind: 'allBots', label: allBotsLabel }] : [];
     return [...everyone, ...allBots, ...people];
-  }, [mentionCandidates, allLabel, allBotsLabel, allowMentionAllBots, query]);
+  }, [mentionCandidates.length, allLabel, allBotsLabel, allowMentionAll, allowMentionAllBots, queryText, searchMembers]);
   const pickerOpen = query !== null && options.length > 0;
 
   const trimmed = text.trim();
@@ -187,8 +189,7 @@ export function BotGroupComposer({
   // Attachments picked while the computer said yes stay unsendable if it later says no.
   const canSend = online && (trimmed.length > 0 || hasAttachments) && !tooLong && hasMembers
     && (attachmentsSupported || !hasAttachments);
-  const showStop = running && trimmed.length === 0 && !hasAttachments;
-  const divisionBlocked = isBotGroupDivisionBlocked(planState);
+  const showStop = canStop && running && trimmed.length === 0 && !hasAttachments;
   const window = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const keyboard = useMobileKeyboardState();
@@ -231,7 +232,7 @@ export function BotGroupComposer({
     setForcedSelection({ start: next.caret, end: next.caret });
     setTracked(current => {
       const remaining = retainBotGroupTrackedMentions(text, next.text, {
-        members: members.map(member => ({ botId: member.botId, name: member.name })),
+        members: mentionMembers,
         allLabels: [allLabel], allBotLabels, tracked: current, editStart: query.start, editEnd: caret,
       });
       return option.kind === 'member' ? [...remaining, { botId: option.member.botId, label: option.label, start: query.start }] : remaining;
@@ -244,20 +245,26 @@ export function BotGroupComposer({
     const draft = text;
     const draftText = trimmed;
     const draftTracked = tracked;
-    const draftDivision = division;
+    // One @ names one member: a typed name several members share stays in the draft to be picked.
+    const [ambiguousName] = ambiguousBotGroupMentionLabels(draft, {
+      members: mentionMembers,
+      allLabels: [allLabel], allBotLabels, tracked: draftTracked,
+    });
+    if (ambiguousName) {
+      Alert.alert(t('groupChat.errors.mentionAmbiguous', { name: ambiguousName }));
+      return;
+    }
     sendingRef.current = true;
     setSending(true);
     // Clear at once like any chat; a failed send puts the draft back if nothing new was typed.
     setText('');
     setCaret(0);
     setTracked([]);
-    setDivision(false);
     const restoreDraft = () => {
       if (textRef.current) return;
       setText(draft);
       setTracked(draftTracked);
       // The tag comes back only with its own draft, never onto newly typed text.
-      if (draftDivision) setDivision(true);
     };
     let release: (() => void) | null = null;
     try {
@@ -276,12 +283,12 @@ export function BotGroupComposer({
       }
       const attachmentIds = attachments.map((attachment) => attachment.id);
       const mentions = resolveBotGroupMentions(draft, {
-        members: mentionMembers.map((member) => ({ botId: member.botId, name: member.name })),
+        members: mentionMembers,
         allLabels: [allLabel], allBotLabels,
         tracked: draftTracked,
       });
-      // Targets, tag and attachments are part of the same send intent.
-      const attempt = nextBotGroupSendAttempt(attemptRef.current, draftText, draftDivision, randomUUID, attachmentIds, mentions, quoteMessageId);
+      // Targets and attachments are part of the same send intent.
+      const attempt = nextBotGroupSendAttempt(attemptRef.current, draftText, false, randomUUID, attachmentIds, mentions, quoteMessageId);
       attemptRef.current = attempt;
       release = tray.holdForSend(attachmentIds);
       await onSend({ text: attempt.text, mentions, clientId: attempt.clientId, division: attempt.division, attachments,
@@ -289,6 +296,11 @@ export function BotGroupComposer({
       attemptRef.current = null;
       setAlsoSendToMain(false);
       tray.clearSent(attachmentIds);
+      // 发出后收起输入框与软键盘(与下拉收起同口径),把屏幕让给群聊;等待期间又打了字就不打断。
+      if (!textRef.current) {
+        inputRef.current?.blur();
+        setFocused(false);
+      }
     } catch {
       restoreDraft();
     } finally {
@@ -299,7 +311,7 @@ export function BotGroupComposer({
   };
 
   const stop = async () => {
-    if (stoppingRef.current) return;
+    if (stopPending || stoppingRef.current) return;
     stoppingRef.current = true;
     setStopping(true);
     try { await onStop(); } catch { /* the screen reports the failure */ } finally {
@@ -313,9 +325,7 @@ export function BotGroupComposer({
     : tooLong ? t('groupChat.composer.tooLong', { max: BOT_GROUP_MESSAGE_MAX_CHARS }) : tray.error;
   const placeholder = placeholderOverride ?? (!hasMembers
     ? t('groupChat.composer.noMembers')
-    : division
-      ? t('groupChat.composer.placeholderDivision')
-      : planState?.kind === 'proposed'
+    : planState?.kind === 'proposed'
         ? t('groupChat.composer.placeholderPlanProposed')
         : planState?.kind === 'running' && planState.botName
           ? t('groupChat.composer.placeholderPlanRunning', { name: planState.botName })
@@ -330,17 +340,7 @@ export function BotGroupComposer({
     testID="botGroup.composer.more">
     <Plus size={iconSize.sm} color={colors.textSecondary} strokeWidth={iconStroke.regular} />
   </Pressable>;
-  const plus = !divisionSupported && !attachmentsSupported ? null : attachmentsEnabled
-    // The same panel as a 1:1 chat's 「+」: attachments, then the group's own 安排分工.
-    ? plusButton(() => { tray.armMediaTap(); setSheetOpen(true); })
-    : divisionBlocked
-      // Nothing to pick while a plan runs or waits; say why instead of showing a dead menu.
-      ? plusButton(() => Alert.alert(t('groupChat.composer.division'), t('groupChat.composer.divisionBusy')))
-      : <BotGroupMenu title={moreLabel} accessibilityLabel={moreLabel} disabled={!online} testID="botGroup.composer.menu"
-        sections={[{ id: 'more', options: [{ id: 'division', title: t('groupChat.composer.division'), subtitle: t('groupChat.composer.divisionDescription') }] }]}
-        onSelect={(id) => { if (id === 'division') { setDivision(true); inputRef.current?.focus(); } }}>
-        {(open) => plusButton(open)}
-      </BotGroupMenu>;
+  const plus = attachmentsSupported ? plusButton(() => { tray.armMediaTap(); setSheetOpen(true); }) : null;
   const leading = hasAttachments ? <View style={styles.leading}>
     {plus}
     <ComposerAttachmentCollapsedBadge attachments={tray.attachments} previews={tray.previews} pendingUploads={tray.pendingUploads}
@@ -349,10 +349,10 @@ export function BotGroupComposer({
   </View> : plus;
   const previewUrl = previewId ? tray.galleryImages.find((image) => image.key === previewId)?.url ?? null : null;
 
-  const actionDisabled = showStop ? stopping : !canSend || sending;
+  const actionDisabled = showStop ? stopping || stopPending : !canSend || sending;
   const trailing = <Pressable accessibilityRole="button"
     accessibilityLabel={showStop ? t('groupChat.composer.stop') : t('groupChat.composer.send')}
-    accessibilityState={{ disabled: actionDisabled, busy: sending || stopping || undefined }}
+    accessibilityState={{ disabled: actionDisabled, busy: sending || stopping || stopPending || undefined }}
     disabled={actionDisabled} hitSlop={CONTROL_HIT_SLOP} onPress={() => void (showStop ? stop() : send())}
     style={({ pressed }) => [styles.control, styles.send, actionDisabled && styles.sendInactive, pressed && mobileInteractionStyles.pressed]}
     testID={showStop ? 'botGroup.composer.stop' : 'botGroup.composer.send'}>
@@ -382,16 +382,6 @@ export function BotGroupComposer({
       </ScrollView>
     </View> : null}
     {hint ? <Text accessibilityLiveRegion="polite" style={styles.hint}>{hint}</Text> : null}
-    {division ? <View style={styles.tagRow}>
-      <View style={styles.tag} testID="botGroup.divisionTag">
-        <Users size={iconSize.xs} color={colors.textSecondary} />
-        <Text style={styles.tagText}>{t('groupChat.composer.divisionTag')}</Text>
-        <Pressable accessibilityRole="button" accessibilityLabel={t('groupChat.composer.removeDivision')} hitSlop={TAG_HIT_SLOP}
-          onPress={() => setDivision(false)} testID="botGroup.divisionTag.remove">
-          <X size={iconSize.xs} color={colors.textTertiary} />
-        </Pressable>
-      </View>
-    </View> : null}
     <ResizableComposerInputRow
       resize={resize}
       autoMaxHeight={shell.composerMaxHeight}
@@ -419,7 +409,7 @@ export function BotGroupComposer({
         const { start: editStart, end: editEnd } = selectionRef.current;
         setText(value);
         setTracked(current => retainBotGroupTrackedMentions(text, value, {
-          members: members.map(member => ({ botId: member.botId, name: member.name })),
+          members: mentionMembers,
           allLabels: [allLabel], allBotLabels,
           tracked: current,
           editStart,
@@ -433,10 +423,6 @@ export function BotGroupComposer({
       }}
       onFocus={() => setFocused(true)}
       onBlur={() => setFocused(false)}
-      onKeyPress={(event) => {
-        // Backspace in an empty input takes the 「分工」 tag off (Desktop behavior).
-        if (event.nativeEvent.key === 'Backspace' && division && !textRef.current) setDivision(false);
-      }}
       onPasteImages={(uris) => {
         if (pasteAllowedRef.current) void tray.addPastedImages(uris);
         else tray.dropPastedImages(uris);
@@ -450,17 +436,17 @@ export function BotGroupComposer({
         onPreview={setPreviewId} onRemove={tray.removeAttachment} onRemovePending={tray.removePendingUpload}
         onRetryPending={tray.retryPendingUpload} removeDisabled={sending} testIDPrefix="botGroup" /> : null}
       toolbar={cardActive ? <>
-        <ComposerToolbarLeftGroup>{topic ? <Pressable accessibilityRole="checkbox"
+        <ComposerToolbarLeftGroup>{plus}{topic ? <Pressable accessibilityRole="checkbox"
           accessibilityState={{ checked: alsoSendToMain, disabled: sending || !online }} disabled={sending || !online}
           onPress={() => { setAlsoSendToMain(value => !value); attemptRef.current = null; }}
           style={styles.topicOption} testID="botGroup.thread.alsoSend">
           {alsoSendToMain ? <CircleCheck size={iconSize.lg} color={colors.textPrimary} /> : <Circle size={iconSize.lg} color={colors.textSecondary} />}
           <Text style={styles.topicOptionText}>{t('groupChat.thread.alsoSend')}</Text>
-        </Pressable> : plus}{!topic && maskIndicator}</ComposerToolbarLeftGroup>
+        </Pressable> : maskIndicator}</ComposerToolbarLeftGroup>
         <ComposerToolbarSpacer />
         {trailing}
       </> : undefined}
-      leading={topic ? undefined : leading}
+      leading={!topic || hasAttachments ? leading : undefined}
       trailing={trailing}
       testID="botGroup.composer.row"
     />
@@ -470,11 +456,14 @@ export function BotGroupComposer({
       title={moreLabel}
       keyboardAvoidingBehavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       error={tray.error}
-      // The panel only opens while attachments are possible; if the computer drops off meanwhile
-      // the attachment entries go away and only 安排分工 is left.
+      // If attachment access goes away while open, keep only supported group actions.
       media={mediaLibraryEnabled && attachmentsEnabled ? <RecentPhotosStrip busyAssetIds={tray.busyAssetIds}
         enabled={sheetOpen} onToggleAsset={tray.toggleMediaAsset} selectedAssetIds={tray.selectedAssetIds}
-        testID="botGroup.contextSheetPhotos" /> : null}
+        selection={mediaSelection} testID="botGroup.contextSheetPhotos" /> : null}
+      footer={mediaLibraryEnabled && attachmentsEnabled && mediaSelection.assets.length > 0
+        ? <ContextSheetMediaAddButton onAddAssets={tray.addMediaAssets} selection={mediaSelection}
+          testID="botGroup.contextSheetAddPhotosButton" />
+        : undefined}
       testID="botGroup.contextSheet"
     >
       {attachmentsEnabled ? <ContextSheetGroup label={Platform.OS === 'ios' && mediaLibraryEnabled ? '' : t('session.common.groupAdd')}>
@@ -488,13 +477,6 @@ export function BotGroupComposer({
           icon={<Folder color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
           label={t('session.common.file')} onPress={() => void tray.addDocument()} testID="botGroup.contextSheetFileRow" />
       </ContextSheetGroup> : null}
-      <ContextSheetGroup label={t('session.common.groupMode')}>
-        <ContextSheetRow disabled={divisionBlocked} dismissBeforePress
-          icon={<Users color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-          label={t('groupChat.composer.division')}
-          detail={t(divisionBlocked ? 'groupChat.composer.divisionBusy' : 'groupChat.composer.divisionDescription')}
-          onPress={() => { setDivision(true); inputRef.current?.focus(); }} testID="botGroup.contextSheetDivisionRow" />
-      </ContextSheetGroup>
     </ContextSheet>
     {pendingImagePreview.host}
     {previewUrl ? <ImageLightbox images={tray.galleryImages} initialUrl={previewUrl} onClose={() => setPreviewId(null)} /> : null}
@@ -502,8 +484,8 @@ export function BotGroupComposer({
 }
 
 const makeStyles = (colors: ThemeColors) => StyleSheet.create({
-  topicOption: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, minHeight: 44 },
-  topicOptionText: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
+  topicOption: { flexDirection: 'row', flexShrink: 1, minWidth: 0, alignItems: 'center', gap: spacing.sm, minHeight: 44 },
+  topicOptionText: { flexShrink: 1, color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   wrap: { gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.xs, paddingBottom: spacing.sm },
   // The badge brings its own trailing margin (shared with the task composer).
   leading: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
@@ -514,10 +496,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   sendInactive: { backgroundColor: colors.surfaceChip, borderColor: colors.border },
   disabled: { opacity: 0.46 },
   hint: { color: colors.textSecondary, fontSize: typeScale.footnote, lineHeight: lineHeight.caption, paddingHorizontal: spacing.xs },
-  tagRow: { flexDirection: 'row' },
-  tag: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, minHeight: 28, paddingLeft: spacing.sm, paddingRight: spacing.sm,
-    borderRadius: radius.pill, backgroundColor: colors.surfaceChip },
-  tagText: { color: colors.textPrimary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.medium },
   picker: { backgroundColor: colors.surfaceElevated, borderColor: colors.border, borderWidth: StyleSheet.hairlineWidth,
     borderRadius: radius.container, paddingVertical: spacing.xs, overflow: 'hidden' },
   pickerScroll: { maxHeight: PICKER_MAX_HEIGHT },

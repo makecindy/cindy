@@ -4,9 +4,7 @@
  * 该入口只暴露 cindy_helper 已有 history reader 的只读能力，不开放跨会话扫描。
  * 参数在被控端再次校验，避免 allowlist 只能校验 channel、不能校验 payload 的缺口。
  */
-import { ipcMain } from 'electron';
 import { eq } from 'drizzle-orm';
-import { DL_HISTORY_MESSAGES_CHANNEL } from '@cindy/device-link';
 
 import {
   getMessagesForHistory,
@@ -301,9 +299,9 @@ const defaultDeps: RemoteHistoryIpcDeps = {
   readTerminal: readLatestSessionTerminal,
 };
 
-/** Register the allowlisted, read-only remote history handler. */
-export function registerRemoteHistoryIpc(deps: RemoteHistoryIpcDeps = defaultDeps): void {
-  ipcMain.handle(DL_HISTORY_MESSAGES_CHANNEL, async (_event, value: unknown) => {
+/** The allowlisted, read-only history operation shared by Desktop and Node Host. */
+export function createRemoteHistoryHandler(deps: RemoteHistoryIpcDeps = defaultDeps) {
+  return async (value: unknown) => {
     const request = parseRemoteHistoryMessagesRequest(value);
     if (!(await deps.sessionExists(request.sessionId))) {
       throwIpcError('NOT_FOUND', 'Session does not exist');
@@ -340,5 +338,5 @@ export function registerRemoteHistoryIpc(deps: RemoteHistoryIpcDeps = defaultDep
       ),
       terminal: terminal ?? null,
     };
-  });
+  };
 }

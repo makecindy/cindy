@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 // @vitest-environment jsdom
 
 /**
@@ -66,6 +67,8 @@ vi.mock('@/lib/localPathResolver', () => ({ toLocalFileUrl: (p: string) => `xdt-
 import { AgentActionRow, humanizeDocumentToolResult } from '@/components/chat/AgentActionRow';
 import { ChatSessionFileProvider } from '@/components/chat/ChatSessionFileContext';
 import { AgentActionsBlock } from '@/components/chat/AgentActionsBlock';
+import { FilePreviewLightboxProvider } from '@/components/chat/FilePreviewLightboxHost';
+import { WorkGroupBlock } from '@/components/chat/WorkGroupBlock';
 import { __test_internals as expandMemory } from '@/hooks/useExpandedBlockMemory';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
@@ -87,8 +90,31 @@ const mkTool = (id: string, toolName: string, toolInput: unknown): ChatMessage =
   toolInput,
 });
 
+// #12851 (unit): the latest-five projection tests replace the clickable tool row.
+// Open the oldest Write chip, then let an unrelated sixth action evict its row.
+it('keeps the opened Write snapshot when its chip leaves the running group', () => {
+  const calls = Array.from({ length: 6 }, (_, index) =>
+    mkTool(String(index), 'Write', { file_path: `/repo/file-${index}.ts`, content: `snapshot-${index}` }));
+  const group = (count: number) => createElement(WorkGroupBlock, {
+    pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+    blockId: 'work:preview', isStreaming: true,
+    childItems: [{ kind: 'tools', key: 'tools', toolCalls: calls.slice(0, count),
+      resultMap: new Map(), settledIds: new Set<string>() }],
+  });
+  const stream = (count: number, key = 'task') => createElement(FilePreviewLightboxProvider, { key }, group(count));
+  const view = render(stream(5));
+  const chip = screen.getByText('file-0.ts');
+  fireEvent.click(chip);
+  expect(document.body.textContent).toContain('snapshot-0');
+  view.rerender(stream(6));
+  expect(chip.isConnected).toBe(false);
+  expect(document.body.textContent).toContain('snapshot-0');
+  view.rerender(stream(6, 'next-task'));
+  expect(document.body.textContent).not.toContain('snapshot-0');
+});
+
 it.each(['ContextMenu', 'F10'])('passes the focused tool row to its file menu (%s)', (key) => {
-  render(createElement(AgentActionRow, {
+  render(createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
     message: mkTool('read-file', 'Read', { file_path: '/repo/example.ts' }),
   }));
   const row = screen.getByRole('button');
@@ -112,7 +138,7 @@ describe('AgentActionRow — ghost_call 插件名称', () => {
     const toolInput = namespace === undefined
       ? { ghost_id: ghostId, tool: 'echo' }
       : { ghost_id: ghostId, namespace, tool: 'echo' };
-    render(createElement(AgentActionRow, {
+    render(createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
       message: mkTool('ghost', 'mcp__cindy__ghost_call', toolInput),
     }));
   };
@@ -201,7 +227,7 @@ describe('document tool result presentation', () => {
 describe('AgentActionRow — 行主文案', () => {
   it('Bash 有 description:显示描述、隐藏动词、hover title 为命令原文', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'git status', description: '查看工作区状态' }),
       }),
     );
@@ -212,7 +238,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('工作动作模式:Bash 首行保留 description，命令原文收进点击详情', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'git status', description: '查看工作区状态' }),
         showRawCommand: true,
       }),
@@ -225,7 +251,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('exec 无法分类时回退为动词 + 命令文本', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'exec', { command: 'docker ps' }),
       }),
     );
@@ -235,7 +261,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('工作动作模式:历史 Codex wrapper 无 displayCommand 也会友好化并在详情解包', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'exec', {
           command: "/bin/zsh -lc 'git status --short'",
         }),
@@ -251,7 +277,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('工作动作模式:无法识别的命令仍用第二行原文兜底', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'exec', { command: 'docker ps' }),
         showRawCommand: true,
       }),
@@ -267,7 +293,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('exec 带 codex commandActions:意图动词 + 目标,hover 保留命令原文', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'exec', {
           command: 'rg -n useMemo src/renderer | head -40',
           commandActions: [
@@ -289,7 +315,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('exec 无 commandActions 时本地规则解析意图:pnpm test → 运行测试动词', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'exec', { command: 'pnpm --filter desktop test' }),
       }),
     );
@@ -300,7 +326,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('MCP 行:显示 server · tool 人话标签,title 保留原始 toolName', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'mcp__feishu__read_by_url', { url: 'https://f.cn/doc' }),
       }),
     );
@@ -311,7 +337,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('file_change:主行显示文件数与总 diff，点击后直接进入共享 diff lightbox', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'file_change', {
           changes: [
             {
@@ -345,7 +371,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('file_change:单文件重命名直接显示源文件和目标文件', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'file_change', {
           changes: [
             {
@@ -364,7 +390,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('pi bash:小写工具名照样解析出意图动词,不再是「调用 bash」', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'bash', { command: 'git status' }),
       }),
     );
@@ -375,7 +401,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('pi bash:无法分类的命令回退为运行动词 + 命令原文', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'bash', { command: 'docker ps' }),
       }),
     );
@@ -385,7 +411,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('pi read:path 字段渲染成文件 chip 与读取动词', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'read', { path: '/repo/src/app.ts' }),
       }),
     );
@@ -396,14 +422,14 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('pi grep / find:搜索动词 + 搜索目标', () => {
     const { rerender } = render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'grep', { pattern: 'TODO', path: 'src/' }),
       }),
     );
     expect(screen.getByText('chat.agentActionRow.verb.searched')).toBeTruthy();
     expect(screen.getByText('TODO')).toBeTruthy();
     rerender(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'find', { pattern: '**/*.spec.ts' }),
       }),
     );
@@ -413,7 +439,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('pi write:创建动词 + 行内 +N 统计,点击进共享 diff lightbox', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'write', { path: '/repo/src/new.ts', content: 'a\nb' }),
       }),
     );
@@ -427,7 +453,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('pi edit:edits[].oldText/newText 汇成编辑动词与 diff lightbox', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'edit', {
           path: '/repo/src/app.ts',
           edits: [{ oldText: 'old', newText: 'new' }],
@@ -447,7 +473,7 @@ describe('AgentActionRow — 行主文案', () => {
   // 会让这种事件退化成空 diff 与 +0 -0。
   it('pi edit:legacy 顶层 oldText/newText 也给出真实统计与非空 diff', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'edit', {
           path: '/repo/src/app.ts',
           oldText: 'old A\nold B',
@@ -468,14 +494,14 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('状态图标:running / done 经 aria-label 可达,缺省为 done', () => {
     const { rerender } = render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'ls' }),
         status: 'running',
       }),
     );
     expect(screen.getByLabelText('chat.agentActionRow.status.running')).toBeTruthy();
     rerender(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'ls' }),
       }),
     );
@@ -484,7 +510,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('就地展开区:命令原文保留,不再出现 # description 重复行', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'git status', description: '查看工作区状态' }),
         toolResult: 'clean',
       }),
@@ -498,7 +524,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('已精简的工具结果显示释放提示与原始大小', () => {
     render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'git status' }),
         toolResult: JSON.stringify({
           type: 'tool_result_compacted',
@@ -516,7 +542,7 @@ describe('AgentActionRow — 行主文案', () => {
 
   it('exposes the tool clientId as a viewport child anchor', () => {
     const { container } = render(
-      createElement(AgentActionRow, {
+      createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         message: mkTool('t1', 'Bash', { command: 'ls' }),
       }),
     );
@@ -533,6 +559,7 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
   it('streaming 中无 result 的行 running,有 result 的行 done;块头出现 spinner', () => {
     const { container } = render(
       createElement(AgentActionsBlock, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         toolCalls: [
           mkTool('t1', 'Bash', { command: 'ls' }),
           mkTool('t2', 'Bash', { command: 'pwd' }),
@@ -551,6 +578,7 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
   it('settledIds(被隐藏的 orca 空结果)按 done 渲染,不出现永久 spinner', () => {
     const { container } = render(
       createElement(AgentActionsBlock, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         toolCalls: [mkTool('t1', 'mcp__orca_worker_bridge__send_to_lead', { message: 'hi' })],
         resultMap: new Map(),
         settledIds: new Set(['t1']),
@@ -565,6 +593,7 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
   it('非 streaming(历史 / 中断会话)一律 done,即便没有 result', () => {
     const { container } = render(
       createElement(AgentActionsBlock, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
         toolCalls: [mkTool('t1', 'Bash', { command: 'ls' })],
         resultMap: new Map(),
       }),
@@ -572,6 +601,115 @@ describe('AgentActionsBlock — 状态判定与块头', () => {
     expect(container.querySelector('.animate-spinner')).toBeNull();
     expandBlock();
     expect(screen.getByLabelText('chat.agentActionRow.status.done')).toBeTruthy();
+  });
+
+  it('formats collab:* control calls without exposing raw JSON or thread UUIDs and collapses consecutive collab:wait rows', () => {
+    const uuid1 = '019d8f44-1111-7222-8333-444444444444';
+    const uuid2 = '019d8f44-2222-7222-8333-444444444444';
+
+    // 1) Named targets from V2 collab:wait + legacy bare "completed" result: zero JSON or UUID leakage.
+    render(
+      createElement(AgentActionRow, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        message: mkTool('w1', 'collab:wait', {
+          senderThreadId: uuid1,
+          receiverThreadIds: [],
+          targets: ['scout', 'reviewer'],
+          targetCount: 2,
+        }),
+        toolResult: 'completed',
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.collab.wait')).toBeTruthy();
+    expect(screen.getByText('scout, reviewer')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button'));
+    expect(document.body.textContent).not.toContain('senderThreadId');
+    expect(document.body.textContent).not.toContain(uuid1);
+    expect(screen.getByText('chat.agentActionRow.collab.targets')).toBeTruthy();
+    expect(screen.getByText('chat.agentActionRow.status.done')).toBeTruthy();
+    cleanup();
+
+    // 2) Legacy collab:wait with only receiverThreadIds shows count phrasing without leaking UUIDs.
+    render(
+      createElement(AgentActionRow, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        message: mkTool('w-legacy', 'collab:wait', {
+          senderThreadId: uuid1,
+          receiverThreadIds: [uuid1, uuid2],
+        }),
+        toolResult: `${uuid1}: done`,
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.collab.waitCount:2')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button'));
+    expect(document.body.textContent).not.toContain(uuid1);
+    expect(document.body.textContent).not.toContain(uuid2);
+    expect(screen.getByText('chat.agentActionRow.collab.targetCount:2')).toBeTruthy();
+    cleanup();
+
+    // 3) sendInput / resumeAgent / closeAgent use dedicated verbs and human-readable details.
+    render(
+      createElement(AgentActionRow, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        message: mkTool('send-1', 'collab:sendInput', {
+          senderThreadId: uuid1,
+          receiverThreadIds: [uuid2],
+          targets: ['scout'],
+          prompt: 'Check the failing test',
+        }),
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.collab.sendInput')).toBeTruthy();
+    expect(screen.getByText('scout')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button'));
+    expect(document.body.textContent).not.toContain('senderThreadId');
+    expect(document.body.textContent).not.toContain(uuid2);
+    expect(screen.getByText(/chat\.agentActionRow\.collab\.prompt/)).toBeTruthy();
+    cleanup();
+
+    // 4) Consecutive non-error collab:wait calls collapse into a single row with ×3 badge in AgentActionsBlock.
+    const { container } = render(
+      createElement(AgentActionsBlock, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        toolCalls: [
+          mkTool('wait-1', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+          mkTool('wait-2', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+          mkTool('wait-3', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+        ],
+        resultMap: new Map([
+          ['wait-1', ''],
+          ['wait-2', ''],
+        ]),
+        settledIds: new Set(['wait-1', 'wait-2']),
+        isSessionStreaming: true,
+      }),
+    );
+    expandBlock();
+    expect(screen.getAllByText('chat.agentActionRow.collab.wait')).toHaveLength(1);
+    expect(container.querySelector('[data-agent-action-repeat-count="3"]')?.textContent).toBe('×3');
+    expect(screen.getByLabelText('chat.agentActionRow.status.running')).toBeTruthy();
+    cleanup();
+
+    // 5) Consecutive waits targeting different subagents stay separate rows so earlier results remain inspectable.
+    const distinct = render(
+      createElement(AgentActionsBlock, {
+        pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
+        toolCalls: [
+          mkTool('wait-scout', 'collab:wait', { targets: ['scout'], targetCount: 1 }),
+          mkTool('wait-reviewer', 'collab:wait', { targets: ['reviewer'], targetCount: 1 }),
+        ],
+        resultMap: new Map([
+          ['wait-scout', 'scout: completed'],
+          ['wait-reviewer', 'reviewer: completed'],
+        ]),
+        isSessionStreaming: false,
+      }),
+    );
+    expandBlock();
+    expect(screen.getAllByText('chat.agentActionRow.collab.wait')).toHaveLength(2);
+    expect(screen.getByText('scout')).toBeTruthy();
+    expect(screen.getByText('reviewer')).toBeTruthy();
+    expect(distinct.container.querySelector('[data-agent-action-repeat-count]')).toBeNull();
   });
 });
 
@@ -585,7 +723,7 @@ it.each(['local', 'device'] as const)('retries image delivery through the %s tas
   try {
     render(createElement(ChatSessionFileProvider, { value: {
       sessionId: 'task', workingDir: '/task', origin: kind === 'device' ? { kind, deviceId: 'task-host' } : { kind },
-    }, children: createElement(AgentActionRow, {
+    }, children: createElement(AgentActionRow, { pluginUi: EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES,
       message: mkTool('image', 'imagegen', {}),
       toolResult: JSON.stringify({ kind: 'generation', native_image_delivery: { id: 'a'.repeat(64), state: 'failed' } }),
     }) }));

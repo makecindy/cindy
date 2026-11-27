@@ -50,7 +50,7 @@ cindy.onHostMessage(async function (msg) {
   收集文字(textarea,回车发送/Esc 取消),card-action 事件多带 `prompt` 字段
   (≤2000 字)——输入交互由主机代管;
 - **App 图标**:`span` / `div` 加 `data-ghost-icon="settings"`,主机换成 App 里同一个设置图标(Lucide,
-  颜色跟随 `currentColor`,尺寸跟随你给这个位置的宽高)。目前只登记了 `settings`;位置里写一个兜底图形,
+  颜色跟随 `currentColor`,尺寸跟随你给这个位置的宽高)。目前登记了 `settings` 和 `copy`;位置里写一个兜底图形,
   旧版客户端会照常显示它;
 - **模型下拉框**(如「用哪个模型跟进」):按钮上再加 `data-ghost-model-select="当前模型 JSON"`
   (`{agentKind,providerId,model,effort,fastMode}`,与 `cindy.pickModel` 返回的 route 同形,经 HTML
@@ -125,12 +125,30 @@ cindy.onHostMessage(async function (msg) {
   同一份状态把这些部分藏起来,手机上也不再显示;状态查不到时原样显示,旧版主机忽略这个属性。
   手机只在卡片含 PR 状态位或指向该 PR 的链接时定时重读,所以带这个标记的卡片要同时保留其中之一
   (例如标题链接到 PR),否则手机上的卡片要等重新进入页面才会更新。
+- **PR 可合并时的实时合并按钮**:在合并 `button` 上加 `data-ghost-pr-merge-ready="owner/repo#123"`
+  (仅限带动作的 `button`)。主机按标题栏同一份 PR 状态实时控制它的显隐:状态为 `open` 且 `mergeState === 'CLEAN'`
+  时在桌面端以 `inline-flex` 露出并在手机投影中保留,明确非 `CLEAN` 或已合并/关闭时隐藏;查不到状态或旧版
+  主机缺 `mergeState` 时回退到插件写入的初始 `display` 快照。当账号与分支规则已核实允许、仅在等 CI/评审变
+  `CLEAN` 时,可写成休眠按钮(`style="display:none"` + `data-ghost-pr-merge-ready` + `data-ghost-pr-merge-action="pr:merge"`,
+  **不要同时写 `data-ghost-action`**):旧版主机与旧手机会丢弃未知属性、按钮始终隐藏;新版主机净化器会把它提升为
+  `data-ghost-action="pr:merge"`,状态变 `CLEAN` 后即可点击。点击后仍由插件重新向平台核实提交、分支与权限再弹出确认。
+  最小示例:
+  ```html
+  <!-- 已可合并:直接可见,状态变脏/失败时由主机自动隐藏 -->
+  <button data-ghost-action="pr:merge" data-ghost-pr-merge-ready="owner/repo#123" data-ghost-primary aria-label="合并" style="display:inline-flex"></button>
+  <!-- 等待 CI/评审:默认隐藏,状态变 CLEAN 后由新版主机实时露出并激活 -->
+  <button data-ghost-pr-merge-ready="owner/repo#123" data-ghost-pr-merge-action="pr:merge" data-ghost-primary aria-label="合并" style="display:none"></button>
+  ```
 - **PR 结束后的归档任务按钮**:`button` 加 `data-ghost-task-archive="owner/repo#123"`,不要再加
   `data-ghost-action` / `data-ghost-link`(加了主机就不认这个标记)。写成 `display:none`,按钮名放在
   `aria-label`,用你自己的样式(如 `::before{content:attr(aria-label)}`)画出文字。主机按标题栏同一份状态在
   PR 已合并或关闭时露出它(查不到状态时看 `data-ghost-task-archive-state="merged|closed"` 快照),点击由主机
   走标准归档流程,插件收不到这次点击。用户开了自动归档时再加空值 `data-ghost-task-archive-auto`:主机自己确认
   已合并、用户看过并离开、且归档不会丢东西时才归档。旧版主机和手机不显示这颗按钮。
+- **复制链接按钮**:`button` 加 `data-ghost-copy-link="https://…"`(只认整串 http/https),不要再加
+  `data-ghost-action` / `data-ghost-link` / `data-ghost-task-archive`(加了主机就不认这个标记)。写成
+  `display:none`,里面放 `<span data-ghost-icon="copy">` 图标位;主机认得时把它露成 `inline-flex`,按钮名
+  换成 App 的「复制链接」,点击由主机把链接写进剪贴板并提示,插件收不到这次点击。旧版主机和手机不显示这颗按钮。
 - **手机端呈现提示**(手机不跑卡片 HTML,只收文字和原生按钮;这几个属性让它画得更像卡片):
   - 主操作 `button` 加空值属性 `data-ghost-primary`,手机画成主按钮;
   - 开关型设置的 `button` 加 `data-ghost-toggle="on|off"`,按钮里第一行文字是标题、其余是说明,

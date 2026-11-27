@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-/** Portable developer builds. Never installs plugins into a live profile or switches a running app. */
+/** Portable developer builds and explicitly requested supervised personal upgrades. */
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resumableCompose } from './personal-build/composition.mjs';
+import { nativeIdentity } from './personal-build/native-capabilities.mjs';
 
 export function run(command, args, cwd) {
   return execFileSync(command, args, { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
@@ -34,6 +35,22 @@ export function configFrom(file) {
     invariant(!repo.exclude || (Array.isArray(repo.exclude) && repo.exclude.every(n => Number.isSafeInteger(n) && n > 0)), `${key}: exclude must contain PR numbers`);
   }
   invariant(!c.author || /^[a-z\d](?:[a-z\d-]{0,38})$/i.test(c.author), 'Invalid GitHub author');
+  for (const key of ['stateDir','dataDir']) {
+    if (typeof c.runtime?.[key] === 'string') c.runtime[key] = path.resolve(base, c.runtime[key]);
+  }
+  if (c.mobileConfig) {
+    invariant(!c.mobile, 'Use mobile or mobileConfig, not both');
+    const source = fs.realpathSync(path.resolve(base, c.mobileConfig));
+    c.mobile = json(source);
+    c.mobile.stateDir = path.resolve(path.dirname(source), c.mobile.stateDir);
+    if (c.mobile.regionConfigFile) c.mobile.regionConfigFile = path.resolve(path.dirname(source), c.mobile.regionConfigFile);
+    delete c.mobileConfig; // Freeze delivery identity alongside the PR snapshot.
+  }
+  if (c.mobile) {
+    invariant(typeof c.mobile.stateDir === 'string' && c.mobile.stateDir.length > 0, 'mobile.stateDir is required');
+    c.mobile.stateDir = path.resolve(base, c.mobile.stateDir);
+    if (c.mobile.regionConfigFile) c.mobile.regionConfigFile = fs.realpathSync(path.resolve(base, c.mobile.regionConfigFile));
+  }
   c.localPlugins ??= {};
   invariant(c.localPlugins && !Array.isArray(c.localPlugins) && typeof c.localPlugins === 'object', 'localPlugins must be an object');
   if (c.localPluginSources !== undefined) {
@@ -92,6 +109,50 @@ export function discover(repo, author, exec = run) {
     excluded: excluded.map(p => p.number) };
 }
 
+/** Re-query both repositories before accepting an upgrade; never silently reuse a stale selection. */
+export function verifyFreshSelection(config, report, exec = run) {
+  const author = config.author || exec('gh', ['api', 'user', '--jq', '.login'], config.app.checkout);
+  invariant(report.author?.toLowerCase() === author.toLowerCase(), 'Build author changed; prepare a new build');
+  const prs = values => values.map(p => [p.number, p.sha, p.draft === true]).sort((a,b) => a[0]-b[0]);
+  for (const key of ['app', 'plugins']) {
+    const repo = config[key], built = report[key === 'app' ? 'app' : 'pluginRepository'];
+    if (!repo) { invariant(!built, `${key}: repository removed; prepare a new build`); continue; }
+    invariant(built?.repository === repo.repository, `${key}: repository changed; prepare a new build`);
+    const latest = discover(repo, author, exec);
+    invariant(built.base === latest.base && built.baseSha === latest.baseSha &&
+      JSON.stringify(prs(built.prs || [])) === JSON.stringify(prs(latest.selected)) &&
+      JSON.stringify([...(built.excluded || [])].sort()) === JSON.stringify([...latest.excluded].sort()),
+      `${key}: main or PR selection changed (including drafts); prepare a new build`);
+    const refs = (repo.localRefs || []).map(ref => [ref, exec('git', ['rev-parse', '--verify', `${ref}^{commit}`], repo.checkout)]).sort();
+    invariant(JSON.stringify(refs) === JSON.stringify((built.localRefs || []).map(p => [p.ref,p.sha]).sort()),
+      `${key}: local refs changed; prepare a new build`);
+  }
+  return { checkedAt: new Date().toISOString(), author };
+}
+
+/** Validate the immutable selection captured at upgrade start, without re-querying GitHub. */
+export function verifyUpgradeSnapshot(config, report) {
+  const snapshot = report.upgradeSnapshot;
+  invariant(snapshot?.version === 1 && Number.isFinite(Date.parse(snapshot.capturedAt)), 'Missing upgrade snapshot; prepare a new build');
+  invariant(snapshot.author === report.author && (!config.author || config.author.toLowerCase() === snapshot.author.toLowerCase()), 'Upgrade author changed');
+  const commits = values => values.map(p => [p.number ?? p.ref, p.sha, p.draft === true]).sort((a,b) => String(a[0]).localeCompare(String(b[0])));
+  for (const key of ['app', 'plugins']) {
+    const repo = config[key], frozen = snapshot.repositories[key], built = report[key === 'app' ? 'app' : 'pluginRepository'];
+    if (!repo) { invariant(!frozen && !built, `${key}: repository changed`); continue; }
+    invariant(frozen?.repository === repo.repository && built?.repository === repo.repository,
+      `${key}: snapshot repository mismatch`);
+    invariant(built.base === frozen.base && built.baseSha === frozen.baseSha &&
+      JSON.stringify(commits(built.prs || [])) === JSON.stringify(commits(frozen.selected)) &&
+      JSON.stringify(commits(built.localRefs || [])) === JSON.stringify(commits(frozen.localRefs)) &&
+      JSON.stringify([...(built.excluded || [])].sort()) === JSON.stringify([...frozen.excluded].sort()),
+      `${key}: build differs from upgrade snapshot`);
+    invariant(JSON.stringify([...(repo.localRefs || [])].sort()) === JSON.stringify(frozen.localRefs.map(p => p.ref).sort()) &&
+      JSON.stringify([...(repo.exclude || [])].sort()) === JSON.stringify([...(snapshot.configuration[key].exclude || [])].sort()),
+      `${key}: upgrade configuration changed`);
+  }
+  return { capturedAt: snapshot.capturedAt, author: snapshot.author };
+}
+
 /** Hash exactly the copyable package, rejecting symlinks instead of following them outside its root. */
 export function pluginFiles(dir) {
   const files = [];
@@ -113,7 +174,26 @@ export function packageHash(dir) {
   }
   return hash.digest('hex');
 }
-export function copyPlugin(id, source, dest) {
+// The browser bridge loads the packaged executable, even when the seed came from source.
+function browserNativeHost(manifest) {
+  return manifest.id === 'my-browser' && manifest.browserExtension?.nativeHost;
+}
+
+function verifyBrowserNative(dir, manifest) {
+  const native = browserNativeHost(manifest);
+  if (!native) return;
+  invariant(native.binary === 'native-host/bin', 'Unsupported Cindy Chrome native host layout');
+  for (const platform of ['darwin', 'linux', 'win32']) {
+    for (const arch of ['arm64', 'x64']) {
+      const filename = 'cindy-browser-native' + (platform === 'win32' ? '.exe' : '');
+      const file = path.join(dir, native.binary, platform + '-' + arch, filename);
+      const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+      invariant(stat?.isFile() && stat.size > 0, 'Missing Cindy Chrome native host: ' + file);
+    }
+  }
+}
+
+export function copyPlugin(id, source, dest, { repositoryRoot } = {}) {
   const files = pluginFiles(source), manifest = json(path.join(source, 'ghost.json'));
   invariant(manifest.id === id, `Plugin manifest ID differs: ${id}`);
   invariant(!fs.existsSync(dest), `Plugin destination already exists: ${id}`);
@@ -121,6 +201,12 @@ export function copyPlugin(id, source, dest) {
   for (const [rel, src] of files) {
     const to = path.join(dest, rel); fs.mkdirSync(path.dirname(to), { recursive: true }); fs.copyFileSync(src, to);
   }
+  if (browserNativeHost(manifest) && repositoryRoot) {
+    invariant(path.resolve(source) === path.resolve(repositoryRoot, id), 'Browser build must use the composed plugin checkout');
+    execFileSync(process.execPath, [path.join(repositoryRoot, 'scripts/build-browser-native.mjs'),
+      path.join(dest, 'native-host'), path.join(dest, 'native-host/bin')], { cwd: repositoryRoot, stdio: 'inherit' });
+  }
+  verifyBrowserNative(dest, manifest);
   // Source versions are facts. Never make an old local tree outrank a public
   // release by manufacturing a higher version during packaging.
   invariant(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(manifest.version), `${id}: invalid version`);
@@ -150,8 +236,10 @@ export function prepareLocalPlugins(config, checkout, destination, provenance = 
   for (const id of Object.keys(config.localPlugins).sort()) {
     const source = localPluginSource(config, id, checkout);
     const dest = path.join(destination, id);
-    const entry = copyPlugin(id, source, dest);
-    invariant(packageHash(source) === entry.sha256, `${id}: source changed while copying`);
+    const sourceHash = packageHash(source);
+    const repositoryRoot = typeof config.localPlugins[id] === 'string' ? undefined : checkout;
+    const entry = copyPlugin(id, source, dest, { repositoryRoot });
+    invariant(packageHash(source) === sourceHash, `${id}: source changed while copying`);
     entries.push({ ...entry, namespace: 'local', contentHash: pluginContentHash(dest),
       provenance: typeof config.localPlugins[id] === 'string' ? { kind: 'directory', directory: source } : { kind: 'repository', ...provenance } });
   }
@@ -184,13 +272,25 @@ export function prepare(config, out, exec = run, { resume = false } = {}) {
   report.state = 'preparing'; delete report.error; report.directory = path.join(out, 'app');
   write(file, report);
   try {
-    const author = config.author || exec('gh', ['api', 'user', '--jq', '.login'], config.app.checkout);
+    const author = report.upgradeSnapshot?.author || config.author || exec('gh', ['api', 'user', '--jq', '.login'], config.app.checkout);
     report.author = author;
+    // Query BOTH repositories before composing either. Continuation reuses exactly this snapshot.
+    if (!report.upgradeSnapshot) {
+      invariant(!resume, 'Old preparation has no upgrade snapshot; prepare a new build');
+      const repositories = {};
+      for (const key of ['app', 'plugins']) {
+        const repo = config[key]; if (!repo) continue;
+        repositories[key] = { repository: repo.repository, ...discover(repo, author, exec),
+          localRefs: (repo.localRefs || []).map(ref => ({ref, sha:exec('git', ['rev-parse', '--verify', `${ref}^{commit}`], repo.checkout)})) };
+      }
+      report.upgradeSnapshot = {version:1, capturedAt:new Date().toISOString(), author, repositories, configuration:config};
+      write(file, report);
+    }
     for (const key of ['app', 'plugins']) {
       const repo = config[key]; if (!repo) continue;
       const field = key === 'app' ? 'app' : 'pluginRepository';
       if (report[field]?.target) continue;
-      const selection = report[field]?.selected ? report[field] : discover(repo, author, exec);
+      const selection = report.upgradeSnapshot.repositories[key];
       report[field] = { repository: repo.repository, ...selection }; write(file, report);
       report[field] = resumableCompose(repo, selection, path.join(out, key), path.join(out, `${key}-composition.json`), exec);
       write(file, report);
@@ -213,13 +313,14 @@ export function prepare(config, out, exec = run, { resume = false } = {}) {
           continue;
         }
         const dest = path.join(report.directory, 'apps/desktop/resources/builtin-ghosts/official', id);
-        report.plugins.push({ ...copyPlugin(id, source, dest), localOverride: false });
+        report.plugins.push({ ...copyPlugin(id, source, dest, { repositoryRoot: checkout }), localOverride: false });
       }
       report.localPlugins = prepareLocalPlugins(config, checkout,
         path.join(report.directory, 'apps/desktop/resources/personal-plugins'),
         { repository: repo.repository, commit: info.target, prs: info.prs, localRefs: info.localRefs });
       if (report.localPlugins.length) report.localPluginsHash = packageHash(path.join(report.directory, 'apps/desktop/resources/personal-plugins'));
     }
+    verifyUpgradeSnapshot(config, report);
     report.state = 'prepared'; write(file, report); return report;
   } catch (error) {
     report.state = 'failed'; report.error = error.message; write(file, report); throw error;
@@ -228,12 +329,17 @@ export function prepare(config, out, exec = run, { resume = false } = {}) {
 
 export function verifyReport(file) {
   const r = json(file);
+  if (r.nativeCapabilities) invariant(nativeIdentity(r.directory), 'Native capability receipt missing; run check again');
   invariant(r.version === 1 && ['prepared', 'checked'].includes(r.state) && shaPattern.test(r.app?.target), 'Build is not prepared');
   invariant(run('git', ['rev-parse', 'HEAD'], r.directory) === r.app.target, 'Build HEAD changed; prepare again');
   invariant(run('git', ['status', '--porcelain', '--untracked-files=no'], r.directory) === '', 'Build has tracked changes; prepare again');
   for (const p of r.plugins) invariant(packageHash(path.join(r.directory, 'apps/desktop/resources/builtin-ghosts/official', p.id)) === p.sha256, `Plugin ${p.id} changed; prepare again`);
   const personal = path.join(r.directory, 'apps/desktop/resources/personal-plugins');
   invariant((r.localPluginsHash ?? null) === (fs.existsSync(personal) ? packageHash(personal) : null), 'Personal plugin inventory changed; prepare again');
+  for (const base of [path.join(r.directory, 'apps/desktop/resources/builtin-ghosts/official'), personal]) {
+    const dir = path.join(base, 'my-browser');
+    if (fs.existsSync(dir)) verifyBrowserNative(dir, json(path.join(dir, 'ghost.json')));
+  }
   const seeds = path.join(r.directory, 'apps/desktop/resources/builtin-ghosts');
   if (fs.existsSync(seeds)) {
     invariant(fs.readdirSync(seeds).every(n => n === 'official'), 'Unexpected seed root; prepare again');
@@ -249,18 +355,45 @@ function pnpm(args, cwd) {
 }
 export async function main(argv) {
   const [command, ...rest] = argv;
+  if (command === 'conflicts') {
+    const { conflictForwardCommand } = await import('./personal-build/conflict-forward.mjs');
+    console.log(JSON.stringify(conflictForwardCommand(rest), null, 2));
+    return;
+  }
   if (command === 'legacy-build') { const { legacyBuild } = await import('./personal-build/legacy-build.mjs'); return legacyBuild(rest); }
   const options = {};
   for (let i = 0; i < rest.length; i += 2) {
     invariant(/^--[a-z-]+$/.test(rest[i]) && rest[i + 1] && !rest[i + 1].startsWith('--'), 'Options require a value');
-    invariant(['config', 'out', 'app', 'plugins', 'report', 'brain', 'action'].includes(rest[i].slice(2)), `Unknown option ${rest[i]}`);
+    invariant(['config', 'out', 'app', 'plugins', 'report', 'brain', 'action', 'receipt', 'expected-pid', 'database-plan', 'approve-database-upgrade', 'approve-unmerged-migration-pr'].includes(rest[i].slice(2)), `Unknown option ${rest[i]}`);
     options[rest[i].slice(2)] = rest[i + 1];
   }
   const need = key => { invariant(options[key], `--${key} is required`); return path.resolve(options[key]); };
-  if (['auto-check', 'auto-launch', 'auto-status', 'auto-recover', 'auto-bootstrap'].includes(command)) { const { automaticCommand } = await import('./personal-build/automatic.mjs'); return automaticCommand(command, options); }
+  if (command === 'prune-plan') {
+    const {managedConfig} = await import('./personal-build/managed.mjs');
+    const {retentionPlan} = await import('./personal-build/retention.mjs');
+    console.log(JSON.stringify(retentionPlan(managedConfig(need('config'))),null,2)); return;
+  }
+  if (['mobile-build', 'mobile-next', 'mobile-record', 'mobile-status'].includes(command)) {
+    const {mobileCommand} = await import('./personal-build/mobile.mjs'); return mobileCommand(command, options);
+  }
+  if (command === 'reconcile-running') { const {reconcileRunning} = await import('./personal-build/reconcile-running.mjs'); return reconcileRunning(options); }
+  if (['database-plan', 'auto-check', 'auto-launch', 'auto-status', 'auto-recover', 'auto-bootstrap', 'supervisor-release', 'registry-clean', 'install-recover', 'manual-check', 'manual-activate', 'manual-restart'].includes(command)) { const { automaticCommand } = await import('./personal-build/automatic.mjs'); return automaticCommand(command, options); }
   if (['launch', 'stage', 'apply', 'rollback', 'doctor', 'sync-plugins', 'select', 'request', 'export'].includes(command)) {
     const { managedCommand } = await import('./personal-build/managed.mjs');
     return managedCommand(command, options);
+  }
+  if (command === 'upgrade-check') {
+    const c = configFrom(need('config')), out = need('out');
+    prepare(c, out);
+    await main(['check', '--report', path.join(out, 'report.json')]);
+    await main(['manual-check', '--config', need('config'), '--report', path.join(out, 'report.json'), '--out', path.join(out, 'manual-upgrade.json')]);
+    return;
+  }
+  if (command === 'snapshot') {
+    console.log(JSON.stringify(verifyUpgradeSnapshot(configFrom(need('config')), verifyReport(need('report'))))); return;
+  }
+  if (command === 'freshness') {
+    console.log(JSON.stringify(verifyFreshSelection(configFrom(need('config')), verifyReport(need('report'))))); return;
   }
   if (command === 'bundle-tools') {
     const { toolBundle } = await import('./personal-build/managed.mjs');
@@ -288,9 +421,18 @@ export async function main(argv) {
     const file = need('report'), r = verifyReport(file);
     r.state = 'prepared'; delete r.checkedAt; delete r.checkError; write(file, r);
     try {
+      // Inspect the final composition and all side parents before installing dependencies
+      // or preparing native capabilities. A failed check cannot become a checked build.
+      execFileSync(process.execPath, ['scripts/check-built-in-skills.mjs', '--base-ref', r.app.baseSha], {
+        cwd: r.directory, stdio: 'inherit',
+      });
       pnpm(['install', '--frozen-lockfile'], r.directory);
       for (const args of [['--filter', 'desktop', 'db:validate'], ['check:design-inventory'], ['--filter', 'desktop', 'run', 'typecheck']]) pnpm(args, r.directory);
+      const { prepareStableNativeCapabilities } = await import('./personal-build/native-capabilities.mjs');
+      r.nativeCapabilities = prepareStableNativeCapabilities(r.directory, {name:r.name, region:r.region, stateDir:r.configuration.runtime?.stateDir, dataDir:r.configuration.runtime?.dataDir});
       verifyReport(file); r.state = 'checked'; r.checkedAt = new Date().toISOString(); write(file, r);
+      const {mobileFollowup} = await import('./personal-build/mobile.mjs');
+      r.mobileDelivery = await mobileFollowup(file); write(file, r);
     } catch (error) { r.state = 'prepared'; r.checkError = error.message; write(file, r); throw error; }
     return;
   }
@@ -301,7 +443,7 @@ export async function main(argv) {
     pnpm(['restart:desktop:remote', '--', `--region=${r.region}`, `--isolated=${r.name}`], r.directory); return;
   }
   invariant(!command || command === 'help', `Unknown command ${command}`);
-  console.log('personal-build: init --config FILE [--app CHECKOUT] [--plugins CHECKOUT]\nprepare --config FILE --out NEW_DIRECTORY\ncheck|start|status --report FILE\naudit --brain CINDY_BRAIN_DIRECTORY\ncontinue --report FILE\nexport --report FILE --out NEW_DIRECTORY\nlaunch|doctor|sync-plugins|stage|apply|rollback --config FILE\nselect --config FILE --report FILE\nrequest --config FILE --action stage|stage-restart|restart\nbundle-tools --out NEW_DIRECTORY\nauto-launch|auto-check|auto-status|auto-recover --config FILE\nauto-bootstrap --config FILE --report BOOTSTRAP_REPORT\nManaged macOS lifecycle requires explicit runtime configuration. Restart only follows a request.');
+  console.log('personal-build: reconcile-running --config FILE --app REPAIRED_CHECKOUT --expected-pid PID --out NEW_RECEIPT\ninit --config FILE [--app CHECKOUT] [--plugins CHECKOUT]\nprepare --config FILE --out NEW_DIRECTORY\ncheck|start|status --report FILE\nconflicts list|check|prepare|push (source PR follow-up)\naudit --brain CINDY_BRAIN_DIRECTORY\ncontinue --report FILE\nexport --report FILE --out NEW_DIRECTORY\nlaunch|doctor|sync-plugins|stage|apply|rollback --config FILE\nprune-plan --config FILE (read-only retention inventory)\nselect --config FILE --report FILE\nrequest --config FILE --action stage|stage-restart|restart\nbundle-tools --out NEW_DIRECTORY\nauto-launch|auto-check|auto-status|auto-recover --config FILE\nauto-bootstrap --config FILE --report BOOTSTRAP_REPORT\ndatabase-plan --config FILE --report BUILD_REPORT --out NEW_PLAN --approve-database-upgrade yes [--approve-unmerged-migration-pr NUMBER]\nmanual-check --config FILE --report BUILD_REPORT --out NEW_MANUAL_REPORT [--database-plan PLAN]\nmanual-activate --config FILE --report MANUAL_REPORT\nmanual-restart --config FILE --report MANUAL_REPORT --expected-pid PID --out NEW_RECEIPT\nsupervisor-release --config FILE --expected-pid PID\nregistry-clean --config FILE (explicit LaunchServices repair; no TCC changes)\ninstall-recover --config FILE --report CHECKED_BUILD_REPORT (stopped filesystem transition only)\nfreshness|snapshot --config FILE --report BUILD_REPORT\nmobile-build|mobile-next|mobile-status --report BUILD_REPORT\nmobile-record --report BUILD_REPORT --action devices|info|install --receipt PLUGIN_RECEIPT\nManaged macOS lifecycle requires explicit runtime configuration. Restart only follows a request.');
 }
 if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).catch(error => { console.error(error.message); process.exitCode = 1; });

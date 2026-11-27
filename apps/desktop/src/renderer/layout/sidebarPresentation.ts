@@ -15,100 +15,101 @@ export function useSidebarPresentation(
   collapsed: boolean,
   ready: boolean,
   expansionWidth: () => number,
-  sidebarWidth: () => number = () => 0,
 ): SidebarPresentation {
   const [presentation, setPresentation] = useState<SidebarPresentation>({ collapsed, instant: false });
   const expansion = useRef(expansionWidth);
   expansion.current = expansionWidth;
-  const measureSidebar = useRef(sidebarWidth);
-  measureSidebar.current = sidebarWidth;
-  const openedGeometry = useRef<{ growth: number; sidebar: number } | null>(null);
-  const pendingGrowth = useRef<number | null>(null);
-  const pendingAdopt = useRef(false);
   const previous = useRef<boolean | null>(null);
-  // The expansion was retracted because the sidebar became unavailable (e.g. a Settings route).
-  const retracted = useRef(false);
-  const generation = useRef(0);
-  const frame = useRef<number | null>(null);
   const latest = useRef(presentation);
   latest.current = presentation;
+  /** Viewport width before the last expansion — the size a collapse returns to. */
+  const preExpandViewport = useRef<number | null>(null);
 
   useLayoutEffect(() => {
     const wasCollapsed = previous.current;
     previous.current = ready ? collapsed : null;
     if (ready && wasCollapsed === collapsed) return;
-    const id = ++generation.current;
-    if (frame.current !== null) cancelAnimationFrame(frame.current);
-    frame.current = null;
     const resize = window.electronAPI.windowSidebarExpansion;
     const width = root.current?.getBoundingClientRect().width ?? 0;
-    // Returning to a sidebar route re-expands; only a first mount adopts the restored bounds.
-    const reentering = ready && wasCollapsed === null && retracted.current && !collapsed;
-    if (ready) retracted.current = false;
-    if (!ready || (wasCollapsed === null && !reentering) || !resize || width <= 0) {
+    // Saved native bounds are standalone; a restored-open sidebar expands normally.
+    const openingFromMount = ready && wasCollapsed === null && !collapsed;
+    if (!ready || (wasCollapsed === null && collapsed) || !resize || width <= 0) {
       if (!ready && wasCollapsed === false && resize) {
-        retracted.current = true;
-        openedGeometry.current = null;
         void resize(0).catch(() => undefined);
       }
-      pendingAdopt.current = ready && !collapsed && width > 0 && !!resize;
       setPresentation({ collapsed, instant: true,
         ...(ready && !collapsed && width > 0 ? { expandedWidth: width } : {}),
       });
       return;
     }
     // The sidebar consumes this same snapshot, so it cannot begin its own animation yet.
-    setPresentation({ ...latest.current, ...(reentering ? { collapsed: true } : {}), frozenWidth: width });
+    setPresentation({ ...latest.current, ...(openingFromMount ? { collapsed: true } : {}), frozenWidth: width });
     const viewport = window.innerWidth;
-    const geometry = openedGeometry.current;
-    const shrink = collapsed && geometry
-      ? Math.max(0, geometry.growth + measureSidebar.current() - geometry.sidebar) : undefined;
-    void resize(collapsed ? 0 : expansion.current(), shrink).then((delta) => {
-      if (id !== generation.current) return;
-      const growth = typeof delta === 'number' ? delta : 0;
-      const target = viewport + growth;
-      const started = performance.now();
-      const finish = () => {
-        if (id !== generation.current) return;
-        // The invoke reply can arrive before Chromium observes the new native bounds.
-        // A hidden/closing window must not retain a frozen layout indefinitely.
-        if (growth !== 0 && Math.abs(window.innerWidth - target) > 1 && performance.now() - started < 1000) {
-          frame.current = requestAnimationFrame(finish);
-          return;
-        }
-        frame.current = null;
-        pendingGrowth.current = !collapsed && growth > 0 ? growth : null;
-        if (collapsed) openedGeometry.current = null;
-        setPresentation({ collapsed, instant: growth !== 0,
-          ...(!collapsed ? { expandedWidth: width + growth } : {}),
-        });
-      };
-      if (growth === 0) finish();
-      else frame.current = requestAnimationFrame(finish);
+    const requested = collapsed ? 0 : expansion.current();
+    if (!collapsed) preExpandViewport.current = viewport;
+    let active = true;
+    let frame: number | null = null;
+    let growth: number | null = null;
+    let replyAt: number | null = null;
+    const listener = new AbortController();
+    const stopWaiting = () => {
+      active = false;
+      listener.abort();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+    const settle = (observed: number) => {
+      if (!active) return;
+      stopWaiting();
+      setPresentation({ collapsed, instant: observed !== 0,
+        ...(!collapsed ? { expandedWidth: width + observed } : {}),
+      });
+    };
+    const atViewport = (candidate: number): boolean => Math.abs(window.innerWidth - candidate) <= 1;
+    // On Linux/Wayland setBounds is synchronous and its reply outlives the viewport
+    // landing, so a reply-gated unfreeze keeps the frozen layout up an extra frame.
+    // Settle the moment the viewport reaches the expected size instead; only trust a
+    // change that matches the resize we asked for, so an unrelated resize is ignored.
+    const tryViewport = (): void => {
+      if (!active) return;
+      const observed = window.innerWidth - viewport;
+      if (observed === 0) return;
+      if (growth !== null) {
+        if (!atViewport(viewport + growth)) return;
+        settle(growth);
+        return;
+      }
+      if (collapsed ? observed > 0 : observed < 0) return;
+      const expected = collapsed ? preExpandViewport.current : viewport + requested;
+      if (expected === null || expected === undefined || !atViewport(expected)) return;
+      settle(observed);
+    };
+    const poll = (): void => {
+      if (!active) return;
+      tryViewport();
+      if (!active) return;
+      // Once the reply arrives, bound the wait for a missing viewport update.
+      if (replyAt !== null && performance.now() - replyAt >= 1000) { settle(growth ?? 0); return; }
+      frame = requestAnimationFrame(poll);
+    };
+    // Arm before the IPC call: the native bounds can land before the reply returns.
+    window.addEventListener('resize', tryViewport, { signal: listener.signal });
+    frame = requestAnimationFrame(poll);
+    void resize(requested).then((delta) => {
+      if (!active) return;
+      replyAt = performance.now();
+      growth = typeof delta === 'number' ? delta : 0;
+      // No native change → nothing to wait for; run the ordinary animation now.
+      if (growth === 0) { settle(0); return; }
+      tryViewport();
     }).catch(() => {
-      if (id === generation.current) setPresentation({ collapsed, instant: false });
+      if (!active) return;
+      stopWaiting();
+      setPresentation({ collapsed, instant: false });
     });
+    return stopWaiting;
   }, [collapsed, ready, root]);
 
-  useLayoutEffect(() => {
-    if (pendingAdopt.current && !presentation.collapsed && presentation.frozenWidth === undefined) {
-      pendingAdopt.current = false;
-      const sidebar = measureSidebar.current();
-      const id = generation.current;
-      if (sidebar > 0) void window.electronAPI.windowSidebarExpansion?.(0, sidebar + 1, true).then((growth) => {
-        if (id === generation.current && typeof growth === 'number' && growth > 0) {
-          openedGeometry.current = { growth, sidebar };
-        }
-      }).catch(() => undefined);
-    }
-    if (pendingGrowth.current === null || presentation.collapsed || presentation.frozenWidth !== undefined) return;
-    openedGeometry.current = { growth: pendingGrowth.current, sidebar: measureSidebar.current() };
-    pendingGrowth.current = null;
-  }, [presentation]);
-
   useLayoutEffect(() => () => {
-    generation.current++;
-    if (frame.current !== null) cancelAnimationFrame(frame.current);
     // StrictMode's second mount must establish a fresh baseline.
     previous.current = null;
   }, []);

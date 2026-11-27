@@ -8,7 +8,7 @@
 import type { AgentKind } from '@cindy/maker-core';
 
 import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
-import { getResolvedMainLocale } from '../i18n.js';
+import { getResolvedMainLocale } from '../i18n.desktop.js';
 import { getMaker } from '../maker-host/index.js';
 import { validateTitleOutput } from '../maker-host/title-output-validation.js';
 import { requestUtilityText, type UtilityTextRequestOptions } from '../utility-model/oneShotCandidates.js';
@@ -176,7 +176,10 @@ function sessionStillEligibleForPrediction(
   if (!row || row.status === 'deleted' || row.source === 'review' || row.remoteHostId) {
     return false;
   }
-  if (dbToMakerAgentKind(row.agentKind) !== params.agentKind) return false;
+  // Plugin engine tasks (agent_kind 'acp') are predicted by the auxiliary chain like any task; they
+  // keep their own kind so a switch to or from a built-in engine still invalidates the request.
+  const rowKind = row.agentKind === 'acp' ? 'acp' : dbToMakerAgentKind(row.agentKind);
+  if (rowKind !== params.agentKind) return false;
   if (row.lastTurnEndedAt !== params.completionRevision) return false;
   if (
     row.activeTurnStartedAt != null
@@ -189,7 +192,8 @@ function sessionStillEligibleForPrediction(
 
 export interface PromptPredictionParams {
   sessionId: string;
-  agentKind: AgentKind;
+  /** 'acp' = plugin-engine task (the auxiliary chain is engine-independent). */
+  agentKind: AgentKind | 'acp';
   messages: SlimMessage[];
   workingDir?: string;
   /** 本次预测对应的 sessions.lastTurnEndedAt，provider 派发紧前再次复核。 */
@@ -256,6 +260,7 @@ export async function generatePromptPrediction(
   const modelsSnapshot = JSON.stringify(readAuxiliaryModelSettings().models);
 
   const requestOptions: UtilityTextRequestOptions = {
+    source: 'prompt-prediction', sessionId: params.sessionId,
     maxTokens: 96,
     timeoutMs: 12_000,
     disableReasoning: true,

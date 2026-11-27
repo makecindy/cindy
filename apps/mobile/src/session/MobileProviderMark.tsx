@@ -1,14 +1,16 @@
 /**
  * MobileProviderMark —— provider-aware 模型下拉里每行前缀 / trigger 药丸的「来源徽标」。
  *
- * 对齐桌面 ProviderMark:目录供应商用**官方单色 mark**，品牌路径与 provider id/upstream
+ * 对齐桌面 ProviderMark:目录供应商用**品牌 mark**，品牌路径与 provider id/upstream
  * 识别由 @cindy/model-providers/branding 双端共享；未知自定义供应商回退首字母 monogram，使用与桌面一致的 4px 方盒。XD mark 非正方形(158:282),渲染时在 size×size 盒内
  * 垂直居中,保证与正方形 mark 同行对齐。
  */
-import type { ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
+import { Image } from 'expo-image';
+import { utf8Bytes } from '@cindy/device-link';
 import { StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
-import Svg, { G, Path } from 'react-native-svg';
+import Svg, { Defs, G, LinearGradient, Path, Stop } from 'react-native-svg';
 
 import {
   ANTHROPIC_PROVIDER_PATH,
@@ -18,10 +20,12 @@ import {
   XD_VIEW_BOX,
 } from '@/components/vendorIconPaths';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
-import { fontWeight as fontWeightToken, lineHeight, radius, typeScale } from '@/theme/tokens';
+import { fontWeight as fontWeightToken, iconStroke, lineHeight, radius, typeScale } from '@/theme/tokens';
 import {
+  MODEL_SPECTRUM_COLORS,
   PROVIDER_LOGO_PATHS,
   CINDY_MARK_TRANSFORM, CINDY_MARK_PATH, CINDY_MARK_EARRING_PATH, CINDY_MARK_EARRING_COLOR,
+  CONNECTION_BRANDS, isConnectionBrand, isProviderConnectionImage,
   isProviderLogoKind,
   resolveProviderLogoKind,
   type ProviderLogoRouting,
@@ -30,6 +34,7 @@ import { resolveModelIconKind } from '@cindy/model-providers/sections';
 
 import { providerMonogram } from './providerModelSections';
 import { RemoteSourceMark } from './RemoteSourceMark';
+import { resolveProviderSvgColorScheme } from './resolveProviderSvgColorScheme';
 
 const MARK_SIZE = 18;
 /** 官方 mark 的字形边长:比 monogram 容器缩一档(桌面同比:行内 mark ≈ 12.3 vs 容器 18),避免视觉过重。 */
@@ -42,13 +47,53 @@ const GLYPH_INSET = { x: (MARK_SIZE - GLYPH_SIZE) / 2, y: (MARK_SIZE - GLYPH_SIZ
 const XD_INSET = { x: (MARK_SIZE - XD_WIDTH) / 2, y: (MARK_SIZE - XD_WIDTH * XD_ASPECT) / 2 };
 const MONOGRAM_INSET = { x: 0, y: 0 };
 
-/** remote → 叠远程标记(右上角波纹 + 点);图形本身大小与位置不变。 */
+/** 智能路由角标(Waypoints 几何，纯 react-native-svg Path，不引入 lucide-react-native)。 */
+const ROUTED_BADGE_SIZE = 9;
+const ROUTED_BADGE_PATH =
+  'M9.5 4.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0'
+  + 'M2 12a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0'
+  + 'M17 12a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0'
+  + 'M9.5 19.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0'
+  + 'M10.2 6.3 6.3 10.2M7 12h10M13.8 17.7 17.7 13.8';
+
+/** routed → 叠智能路由角标；remote → 叠远程标记(右上角波纹 + 点)；两者互斥，图形本身大小与位置不变。 */
 function withRemote(
   node: ReactNode,
   remote: boolean | undefined,
   inset: { x: number; y: number },
   color: string,
+  routed?: boolean,
 ) {
+  if (routed) {
+    return (
+      <View
+        accessibilityElementsHidden
+        importantForAccessibility="no-hide-descendants"
+        pointerEvents="none"
+        style={{ height: MARK_SIZE, width: MARK_SIZE }}
+      >
+        {node}
+        <View
+          style={{
+            position: 'absolute',
+            right: Math.max(-4, inset.x - 5),
+            top: Math.max(-3, inset.y - 4),
+          }}
+        >
+          <Svg height={ROUTED_BADGE_SIZE} viewBox="0 0 24 24" width={ROUTED_BADGE_SIZE}>
+            <Path
+              d={ROUTED_BADGE_PATH}
+              fill="none"
+              stroke={color}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={iconStroke.bold}
+            />
+          </Svg>
+        </View>
+      </View>
+    );
+  }
   if (!remote) return node;
   return (
     <RemoteSourceMark color={color} inset={inset} size={MARK_SIZE}>
@@ -92,30 +137,97 @@ export interface MobileProviderMarkProps {
   routing?: ProviderLogoRouting;
   /** 被控端剥离 routing 前解析出的非敏感品牌;device-link 场景优先使用。 */
   logoKind?: string;
+  customIcon?: string;
   /** 供应商展示名(monogram 取首字母;官方 mark 分支不消费)。 */
   name: string;
   /** mark 单色;缺省 textSecondary(列表行口径,trigger 场景可传 textPrimary)。 */
   color?: string;
   /** true → 另一台电脑上的供应商:右上角叠远程标记(波纹 + 点),图形不缩放不移位。 */
   remote?: boolean;
+  /** true → 合并后的智能路由条目或当前由智能路由持续托管:右上角叠路由角标。 */
+  routed?: boolean;
 }
 
 /** 渲染单个供应商的来源徽标(官方 mark 或 monogram)。 */
-export function MobileProviderMark({
+export function MobileProviderMark(props: MobileProviderMarkProps) {
+  const fallback = <DefaultProviderMark {...props} />;
+  if (typeof props.customIcon !== 'string' || !props.customIcon) return fallback;
+  return (
+    <MobileCustomProviderIcon
+      key={props.customIcon}
+      svg={props.customIcon}
+      color={props.color}
+      remote={props.remote}
+      routed={props.routed}
+    >
+      {fallback}
+    </MobileCustomProviderIcon>
+  );
+}
+
+function MobileCustomProviderIcon({ svg, children, color, remote, routed }: {
+  svg: string;
+  children: ReactNode;
+  color?: string;
+  remote?: boolean;
+  routed?: boolean;
+}) {
+  const { mode } = useTheme();
+  const themedSvg = isProviderConnectionImage(svg) ? svg : resolveProviderSvgColorScheme(svg, mode);
+  return (
+    <MobileProviderImage
+      key={themedSvg}
+      svg={themedSvg}
+      fallback={children}
+      color={color}
+      remote={remote}
+      routed={routed}
+    />
+  );
+}
+
+function MobileProviderImage({ svg, fallback, color, remote, routed }: {
+  svg: string;
+  fallback: ReactNode;
+  color?: string;
+  remote?: boolean;
+  routed?: boolean;
+}) {
+  const [failed, setFailed] = useState(false);
+  const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  if (failed) return fallback;
+  // expo-image's native data URL loaders support base64 on both platforms.
+  const uri = isProviderConnectionImage(svg) ? svg : `data:image/svg+xml;base64,${btoa(String.fromCharCode(...utf8Bytes(svg)))}`;
+  return withRemote(
+    <View accessible={false} style={styles.markBox}>
+      <Image source={{ uri }} contentFit="contain" style={{ width: GLYPH_SIZE, height: GLYPH_SIZE }}
+        onError={() => setFailed(true)} />
+    </View>,
+    remote,
+    GLYPH_INSET,
+    color ?? colors.textSecondary,
+    routed,
+  );
+}
+
+function DefaultProviderMark({
   providerId,
   routing,
   logoKind,
   name,
   color,
   remote,
+  routed,
 }: MobileProviderMarkProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const fill = color ?? colors.textSecondary;
 
-  const kind = isProviderLogoKind(logoKind)
+  const selected = isProviderLogoKind(logoKind)
     ? logoKind
     : resolveProviderLogoKind(providerId ?? '', routing);
+  const kind = isConnectionBrand(selected) ? CONNECTION_BRANDS[selected] : selected;
 
   switch (kind) {
     case 'anthropic':
@@ -128,7 +240,10 @@ export function MobileProviderMark({
         remote,
         GLYPH_INSET,
         fill,
+        routed,
       );
+    case 'openai-spectrum':
+      return withRemote(<View accessible={false} style={styles.markBox}><OpenAISpectrumArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill, routed);
     case 'openai':
       return withRemote(
         <View accessible={false} style={styles.markBox}>
@@ -139,9 +254,10 @@ export function MobileProviderMark({
         remote,
         GLYPH_INSET,
         fill,
+        routed,
       );
     case 'cindy':
-      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
+      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill, routed);
     case 'xd':
       return withRemote(
         <View accessible={false} style={styles.markBox}>
@@ -154,6 +270,7 @@ export function MobileProviderMark({
         remote,
         XD_INSET,
         fill,
+        routed,
       );
   }
 
@@ -167,6 +284,7 @@ export function MobileProviderMark({
       remote,
       GLYPH_INSET,
       fill,
+      routed,
     );
   }
 
@@ -179,6 +297,7 @@ export function MobileProviderMark({
     remote,
     MONOGRAM_INSET,
     fill,
+    routed,
   );
 }
 
@@ -189,33 +308,38 @@ export interface MobileModelIconMarkProps {
   providerId?: string;
   routing?: ProviderLogoRouting;
   logoKind?: string;
+  customIcon?: string;
   name: string;
   color?: string;
   /** 同 MobileProviderMark.remote。 */
   remote?: boolean;
+  /** 同 MobileProviderMark.routed。 */
+  routed?: boolean;
 }
 
 /**
  * 模型行 / composer 药丸的图标 —— 统一规则(与桌面 ModelIconMark 同源,共享
- * resolveModelIconKind 口径):模型条目带 `icon`(**AI Gateway / 目录设定**)就渲染
- * 对应厂牌 mark;缺省或未知值回落来源供应商标。禁止在客户端按 model id 猜厂牌。
+ * resolveModelIconKind 口径):已选的连接图标优先，否则使用模型厂牌 `icon`，缺省时回落来源供应商标。
+ * 禁止在客户端按 model id 猜厂牌。
  */
 export function MobileModelIconMark({
   icon,
+  customIcon,
   providerId,
   routing,
   logoKind,
   name,
   color,
   remote,
+  routed,
 }: MobileModelIconMarkProps) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const kind = resolveModelIconKind(icon);
+  const kind = resolveModelIconKind(icon, logoKind, customIcon);
   if (kind) {
     const fill = color ?? colors.textSecondary;
     if (kind === 'cindy') {
-      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill);
+      return withRemote(<View accessible={false} style={styles.markBox}><CindyArtwork fill={fill} /></View>, remote, GLYPH_INSET, fill, routed);
     }
 
     return withRemote(
@@ -230,6 +354,7 @@ export function MobileModelIconMark({
       remote,
       GLYPH_INSET,
       fill,
+      routed,
     );
   }
   return (
@@ -239,7 +364,9 @@ export function MobileModelIconMark({
       providerId={providerId}
       routing={routing}
       logoKind={logoKind}
+      customIcon={customIcon}
       remote={remote}
+      routed={routed}
     />
   );
 }
@@ -250,5 +377,23 @@ function CindyArtwork({ fill }: { fill: string }) {
       <Path d={CINDY_MARK_PATH} fill={fill} />
       <Path d={CINDY_MARK_EARRING_PATH} fill={CINDY_MARK_EARRING_COLOR} />
     </G>
+  </Svg>;
+}
+
+/** Adds spectrum color to the OpenAI blossom only for XD's byok-openai-codex
+ * provider. Temporary stand-in: remove when administrators can upload provider
+ * icons in the backend. Never reuse for other brands or as a general UI gradient. */
+function OpenAISpectrumArtwork({ fill }: { fill: string }) {
+  const { mode } = useTheme();
+  const gradientId = `openai-spectrum-${useId().replace(/:/g, '')}`;
+  const colors = MODEL_SPECTRUM_COLORS[mode];
+  return <Svg width={GLYPH_SIZE} height={GLYPH_SIZE} viewBox="0 0 24 24">
+    <Defs>
+      <LinearGradient id={gradientId} gradientUnits="userSpaceOnUse" x1={2} y1={2} x2={22} y2={22}>
+        {colors.map((color, index) => <Stop key={index} offset={index / (colors.length - 1)} stopColor={color} />)}
+      </LinearGradient>
+    </Defs>
+    <Path d={OPENAI_PROVIDER_PATH} fill={fill} opacity={mode === 'dark' ? 0.30 : 0.35} />
+    <Path d={OPENAI_PROVIDER_PATH} fill={`url(#${gradientId})`} opacity={mode === 'dark' ? 0.78 : 0.72} />
   </Svg>;
 }

@@ -19,11 +19,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import * as blobStore from './blobStore';
+import * as blobStore from './blobStore.desktop';
 import { ingestMedia } from './ingest';
 import type { LedgerDb } from './ledger';
-import { sniffMediaMime } from './sniffMediaMime';
-import { readBoundedFileNoFollow } from '../utils/readBoundedFile';
+import { generatedImageBytes, type GeneratedImageSource } from './generatedImageBytes';
 
 /** 与 @cindy/mcps SavedImage 结构对齐(structural typing,不 import 包内类型)。 */
 export interface SavedBlobImage {
@@ -159,44 +158,12 @@ export function createBlobVideoStorage(db?: LedgerDb): {
 
 // ── codex 生成图物化(register.ts 的 thin adapter 调用,规则 14:逻辑在此可测)──
 
-export interface GeneratedImageSource {
-  data?: string;
-  url?: string;
-  path?: string;
-  pathOrigin?: 'remote-agent';
-}
-
-export const MAX_GENERATED_IMAGE_BYTES = 20 * 1024 * 1024;
-
-/** Decode only in the Host. Declared MIME and filename do not establish the image type. */
-export function generatedImageBytes(data: GeneratedImageSource): { mimeType: string; buffer: Buffer } | null {
-  const encoded = data.data ?? (data.url?.startsWith('data:')
-    ? /^data:image\/[a-zA-Z0-9.+-]+;base64,([\s\S]*)$/.exec(data.url)?.[1]
-    : undefined);
-  if (encoded === undefined) return null;
-  if (encoded.length > Math.ceil(MAX_GENERATED_IMAGE_BYTES / 3) * 4 + 4096)
-    throw new Error('MEDIA_TOO_LARGE');
-  const compact = encoded.replace(/\s/g, '');
-  if (!compact || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact) || compact.length % 4 === 1)
-    throw new Error('INVALID_IMAGE');
-  const buffer = Buffer.from(compact, 'base64');
-  if (buffer.length > MAX_GENERATED_IMAGE_BYTES) throw new Error('MEDIA_TOO_LARGE');
-  if (buffer.toString('base64').replace(/=+$/, '') !== compact.replace(/=+$/, ''))
-    throw new Error('INVALID_IMAGE');
-  const mimeType = sniffMediaMime(buffer);
-  if (!mimeType?.startsWith('image/')) throw new Error('INVALID_IMAGE');
-  return { buffer, mimeType };
-}
-
-/** Read on the machine that owns the native file, before crossing the transport boundary. */
-export async function readGeneratedImageFile(sourcePath: string): Promise<{ buffer: Buffer; mimeType: string }> {
-  if (/^[\\/]{2}|^[\\/]\?\?[\\/]/.test(sourcePath)) throw new Error('INVALID_IMAGE_SOURCE');
-  const buffer = await readBoundedFileNoFollow(sourcePath, MAX_GENERATED_IMAGE_BYTES, { nonBlocking: true });
-  if (!buffer?.length) throw new Error('INVALID_IMAGE_SOURCE');
-  const mimeType = sniffMediaMime(buffer);
-  if (!mimeType?.startsWith('image/')) throw new Error('INVALID_IMAGE');
-  return { buffer, mimeType };
-}
+export {
+  MAX_GENERATED_IMAGE_BYTES,
+  generatedImageBytes,
+  readGeneratedImageFile,
+  type GeneratedImageSource,
+} from './generatedImageBytes';
 
 /** 从 URL / 路径推导展示文件名;推不出兜底 generated-image.png。 */
 export function safeGeneratedImageFilename(raw: string): string {

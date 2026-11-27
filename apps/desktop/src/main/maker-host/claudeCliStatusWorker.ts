@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { readClaudeCliLoginStatusBySpawn } from '@cindy/maker-core/claude-cli-login-status';
 // eslint-disable-next-line no-restricted-imports -- CLI startup can block Electron Main on Windows.
 import { parentPort, workerData } from 'node:worker_threads';
 
@@ -6,32 +6,18 @@ export interface ClaudeCliStatusRequest {
   binary: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
+  /** A path only: the reader hands the open file to the CLI and never reads it. */
+  oauthTokenFile?: string;
 }
 
 // Only the bundled CLI's read-only status query runs here. Login cancellation
 // and interactive login continue to use their existing process lifecycle.
 if (parentPort) {
+  const port = parentPort;
   const request = workerData as ClaudeCliStatusRequest;
-  try {
-    const stdout = execFileSync(request.binary, ['auth', 'status', '--json'], {
-      env: request.env,
-      timeout: request.timeoutMs,
-      encoding: 'utf8',
-      windowsHide: true,
-      maxBuffer: 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    parentPort.postMessage({ stdout });
-  } catch (error) {
-    // Some CLI versions return logged-out JSON with a non-zero exit status.
-    // Never forward stderr/environment through diagnostics.
-    const result = error as { status?: number | null; stdout?: string; signal?: string };
-    if (typeof result.status === 'number' && typeof result.stdout === 'string') {
-      parentPort.postMessage({ stdout: result.stdout });
-    } else {
-      parentPort.postMessage({ failed: true });
-    }
-  } finally {
-    parentPort.close();
-  }
+  void readClaudeCliLoginStatusBySpawn(request)
+    .then(status => port.postMessage({ status }))
+    // Never forward CLI output or environment through error diagnostics.
+    .catch(() => port.postMessage({ failed: true }))
+    .finally(() => port.close());
 }

@@ -1,4 +1,4 @@
-import type { SettingsSearchContext } from './settingsSearchTypes';
+import type { SettingsSearchContext, SettingsSearchEntry } from './settingsSearchTypes';
 import type { ComponentType, ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { LucideProps } from 'lucide-react';
@@ -26,6 +26,8 @@ import {
 import { cn } from '@/lib/utils';
 import { TAB_LABEL_KEY, type SettingsTab, type VisibleSettingsTab } from '@/lib/tabLabels';
 import { SettingsSearchBox } from './SettingsSearchBox';
+import type { SettingsSearchDocument } from './settingsSearchCatalog';
+import type { PluginSettingsPage } from './pluginSettingsNavigation';
 
 const NAV_ITEM_CLASS = 'flex h-9 items-center gap-2.5 rounded-full px-3 text-sm transition-colors';
 const NAV_ITEM_IDLE_CLASS =
@@ -69,6 +71,7 @@ const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   usage: ChartColumn,
   personalization: Sparkles,
   providers: Boxes,
+  'model-groups': Sparkles,
   'voice-input': Mic,
   shortcuts: Keyboard,
   'agent-island': AgentIslandNavIcon,
@@ -84,40 +87,88 @@ const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   storage: Database,
 };
 
+/** A category of the page that is not a settings tab. */
+interface SettingsNavExtraTab {
+  id: string;
+  label: string;
+  icon: SettingsNavIcon;
+  selected: boolean;
+  onSelect(): void;
+}
+
 interface SettingsSidebarNavProps {
+  requestedQuery?: string;
   tabIds: readonly VisibleSettingsTab[];
+  /** Categories search looks in; the listed tabs when not given. */
+  searchTabIds?: readonly VisibleSettingsTab[];
   searchContext?: SettingsSearchContext;
-  activeTab: SettingsTab;
+  allowSearchEntry?: (entry: SettingsSearchEntry) => boolean;
+  activeTab: SettingsTab | null;
+  activePanelId?: string;
+  leadingTab?: SettingsNavExtraTab;
+  trailingTab?: SettingsNavExtraTab;
   onSelectTab: (tab: SettingsTab) => void;
   onSelectSearchResult?: (result: { tab: SettingsTab; sectionId: string }) => void;
+  pluginPages?: readonly PluginSettingsPage[];
+  pluginSearchDocuments?: readonly SettingsSearchDocument[];
+  selectedPluginPage?: string;
+  onSelectPluginPage?: (page: PluginSettingsPage) => void;
 }
 
 /** Settings left nav. Every item is an in-panel tab with a matching lucide mark. */
 export function SettingsSidebarNav({
+  requestedQuery,
   tabIds,
+  searchTabIds,
   searchContext,
+  allowSearchEntry,
   activeTab,
+  activePanelId,
   onSelectTab,
   onSelectSearchResult,
+  pluginPages,
+  pluginSearchDocuments,
+  selectedPluginPage,
+  onSelectPluginPage,
+  leadingTab,
+  trailingTab,
 }: SettingsSidebarNavProps) {
   const { t } = useTranslation();
+  const items = [
+    ...(leadingTab ? [leadingTab] : []),
+    // 「智能路由」(model-groups) 并在模型供应商页里，是可路由的标签但不在左侧单独列出（2026-11-24 用户裁决）。
+    ...tabIds.filter((tabId) => tabId !== 'model-groups').map((tabId) => ({
+      id: tabId,
+      label: t(TAB_LABEL_KEY[tabId]),
+      icon: TAB_ICON[tabId],
+      selected: activeTab === tabId && !selectedPluginPage,
+      onSelect: () => onSelectTab(tabId),
+    })),
+    ...(trailingTab ? [trailingTab] : []),
+  ];
 
   return (
     <>
-      <SettingsSearchBox visibleTabIds={tabIds} searchContext={searchContext} onSelect={onSelectSearchResult} />
+      <SettingsSearchBox
+        allowSearchEntry={allowSearchEntry}
+        requestedQuery={requestedQuery}
+        visibleTabIds={searchTabIds ?? tabIds}
+        searchContext={searchContext}
+        additionalDocuments={pluginSearchDocuments}
+        onSelect={onSelectSearchResult}
+      />
       <nav role="tablist" aria-label={t('settings.title')} className="flex flex-col gap-0.5">
-        {tabIds.map((tabId) => {
-          const selected = activeTab === tabId;
-          const Icon = TAB_ICON[tabId];
+        {items.map(({ id: tabId, label, icon: Icon, selected, onSelect }) => {
           return (
             <button
               key={tabId}
+              data-settings-search-action="Navigate to the selected settings category"
               id={`settings-tab-${tabId}`}
               type="button"
               role="tab"
               aria-selected={selected}
-              aria-controls={`settings-panel-${tabId}`}
-              onClick={() => onSelectTab(tabId)}
+              aria-controls={selected && activePanelId ? activePanelId : `settings-panel-${tabId}`}
+              onClick={onSelect}
               className={cn(NAV_ITEM_CLASS, selected ? NAV_ITEM_ACTIVE_CLASS : NAV_ITEM_IDLE_CLASS)}
             >
               <Icon
@@ -131,10 +182,20 @@ export function SettingsSidebarNav({
                     : 'text-[var(--settings-menu-text)]',
                 )}
               />
-              <span className="leading-none">{t(TAB_LABEL_KEY[tabId])}</span>
+              <span className="leading-none">{label}</span>
             </button>
           );
         })}
+        {!!pluginPages?.length && <>
+          <div className="px-3 pt-5 pb-1 text-12 text-[var(--text-secondary)]">{t('pluginUi.settings')}</div>
+          {pluginPages.map(page => <button data-settings-search-action="Open plugin settings indexed from the approved manifest" key={page.id} type="button" role="tab"
+            id={`settings-tab-${page.id}`} aria-selected={selectedPluginPage === page.id}
+            aria-controls={page.id} onClick={() => onSelectPluginPage?.(page)}
+            className={cn(NAV_ITEM_CLASS, selectedPluginPage === page.id ? NAV_ITEM_ACTIVE_CLASS : NAV_ITEM_IDLE_CLASS)}>
+            <Plug size={15} strokeWidth={1.8} className="shrink-0" aria-hidden="true" />
+            <span className="truncate leading-none" title={page.title}>{page.title}</span>
+          </button>)}
+        </>}
       </nav>
     </>
   );

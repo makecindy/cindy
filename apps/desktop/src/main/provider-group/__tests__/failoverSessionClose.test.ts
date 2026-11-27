@@ -7,19 +7,21 @@
 import type { SessionStatus } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { readFileSync } from 'node:fs';
+import { ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../../../shared/interruptedTurn';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import type { ProviderGroupConfig, ProviderGroupMember } from '../../../shared/providerGroup';
-import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator';
+import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.desktop';
 import { shouldPreserveWaitingContinuationOnlyAutoResume } from '../../maker-ipc/interruptedTurnAutoResume';
 import { createSessionBindingLifecycle, runSessionCloseCleanup } from '../../maker-ipc/sessionBindingLifecycle';
 import type { IpcHandler } from '../../maker-ipc/ipcHandlerRegistry';
 import { registerStopSessionBackgroundTasksHandler } from '../../maker-ipc/stopSessionBackgroundTasksHandler';
-import type { ProviderGroupBinding } from '../bindings';
+import type { ProviderGroupBinding } from '../bindings.desktop';
 import type { ProviderGroupDirectory, ResolvedMemberState, ResolvedProviderGroupMember } from '../directory';
 import { createProviderGroupRouter } from '../router';
+import { createProviderGroupGuestSwitch } from '../guestSwitch';
 import {
   createProviderGroupService,
   type ProviderGroupServiceDeps,
@@ -86,6 +88,19 @@ function item(clientId: string, text: string): AgentInputQueuedMessage {
  * 下面的「全部停止」用例按同一份原文接线(resetAutomaticRecoveryForExplicitStop 用 spy 代替)。
  */
 const REGISTER_SOURCE = readFileSync(new URL('../../maker-ipc/register.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+// Execute the production close callback, rather than copying its hold-only
+// predicate: scheduled turns intentionally do not create that ordinary UI hold.
+const closeContextStart = REGISTER_SOURCE.indexOf('  captureCloseContext: (session: WiredSession) => {');
+const closeContextEnd = REGISTER_SOURCE.indexOf('  cleanupClosedSession:', closeContextStart);
+if (closeContextStart < 0 || closeContextEnd < closeContextStart) throw new Error('Session close context not found');
+const compiledCloseContext = transpileModule(`return ({${REGISTER_SOURCE.slice(closeContextStart, closeContextEnd)}}).captureCloseContext;`, {
+  compilerOptions: { target: ScriptTarget.ES2022 },
+}).outputText;
+function createSessionCloseContextHarness<S>(bindings: Record<string, unknown>):
+  (session: S) => { closeReason: string; preserveAutoResumeIntent: boolean } {
+  return new Function(...Object.keys(bindings), compiledCloseContext)(...Object.values(bindings));
+}
+
 const STOP_ALL_NOTE_SESSION_RESET = [
   'noteSessionReset: (sessionId) => {',
   'resetAutomaticRecoveryForExplicitStop(sessionId);',
@@ -128,9 +143,10 @@ interface FakeSession {
   listeners: Set<(status: SessionStatus) => void>;
   onStatusChange(listener: (status: SessionStatus) => void): () => void;
   setInteractionListener(listener: unknown): void;
+  wasClosedByRuntime(): boolean;
 }
 
-function setup(options: { bComesBack?: boolean } = {}) {
+function setup(options: { bComesBack?: boolean; scheduled?: boolean; shared?: boolean } = {}) {
   let running = false;
   const config: ProviderGroupConfig = { strategy: 'order', autoSwitch: true, members: [MAC_B, LOCAL] };
   const offline = new Set<string>([MAC_B.key]);
@@ -139,9 +155,13 @@ function setup(options: { bComesBack?: boolean } = {}) {
     agentKind: 'claude-code', model: MODEL, providerId: MAC_B.providerId, agentDeviceId: MAC_B.agentDeviceId,
     remoteHostId: null, sdkSessionId: 'native-on-b',
   };
+  if (options.shared) row.agentDeviceId = 'share:group';
+  const guestSwitch = createProviderGroupGuestSwitch(() => 1_000_000);
 
   // ── 真实的输入协调器 ──
+  const scheduledOriginsAtSend: Array<AgentInputQueuedMessage['origin']> = [];
   const sendToAgent = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (_sid, _message, _createOpts, sendOpts) => {
+    scheduledOriginsAtSend.push(coordinator.scheduledQuotaOrigin(_sid, sendOpts.persistUserMessage?.clientId));
     const persist = sendOpts.persistUserMessage;
     (persist as { onPersisting?: () => void } | undefined)?.onPersisting?.();
     await persist?.onPersisted?.();
@@ -149,6 +169,9 @@ function setup(options: { bComesBack?: boolean } = {}) {
     return { kind: 'session-dispatch', source: 'test', dispatched: true };
   });
   let service!: ReturnType<typeof createProviderGroupService>;
+  const pendingSchedulerAutoResumeRunBySession = new Map<string, {
+    runId: string; usageLimitToken: number; providerGroupPending: boolean;
+  }>();
   const coordinator = new AgentInputCoordinator({
     sendToAgent,
     steerToAgent: vi.fn(async () => {}),
@@ -164,7 +187,12 @@ function setup(options: { bComesBack?: boolean } = {}) {
     onResumableTurnError: () => null,
     providerGroupSwitchCandidate: (sessionId, signals) =>
       service.mayHandleTurnError(sessionId, signals) ? 'unavailable' : null,
-    onUsageLimitedTurnError: (sessionId, signals, _item, token) => {
+    onUsageLimitedTurnError: (sessionId, signals, input, token) => {
+      if (input.origin?.kind === 'scheduler') {
+        pendingSchedulerAutoResumeRunBySession.set(sessionId, {
+          runId: input.origin.runId!, usageLimitToken: token, providerGroupPending: true,
+        });
+      }
       turnError = service.onTurnError(sessionId, signals, token, hooks);
     },
   });
@@ -178,7 +206,9 @@ function setup(options: { bComesBack?: boolean } = {}) {
   };
 
   // ── 真实的会话关闭接线(与 register.ts 的 captureCloseContext / cleanupClosedSession 相同的判定与顺序) ──
-  const resetAutoResume = vi.fn();
+  // The real close teardown calls abandonAutoResume even when no interrupted
+  // retry timer exists. A no-op here missed the scheduled recovery being lost.
+  const resetAutoResume = vi.fn(() => coordinator.abandonAutoResume(SID));
   const closeContexts: Array<{ closeReason: string; preserveAutoResumeIntent: boolean }> = [];
   const lifecycle = createSessionBindingLifecycle<FakeSession, { closeReason: string; preserveAutoResumeIntent: boolean }>({
     log: { warn: vi.fn() },
@@ -186,24 +216,27 @@ function setup(options: { bComesBack?: boolean } = {}) {
     beforeReplace: () => {},
     onBind: () => {},
     broadcastStatus: () => {},
-    captureCloseContext: (session) => {
-      const coordinatorAttemptToken = coordinator.getAutoResumeAttemptToken(session.id);
-      const preserveAutoResumeIntent = shouldPreserveWaitingContinuationOnlyAutoResume({
+    captureCloseContext: createSessionCloseContextHarness<FakeSession>({
+      getWiredSessionCloseReason: (session: FakeSession) => session.closeReason,
+      getDirectAbortBoundaryForClosingSession: () => null,
+      agentInputCoordinatorHolder: coordinator,
+      pendingSchedulerAutoResumeRunBySession,
+      pendingContinuationOnlyAutoResumeRebuilds: new WeakMap(),
+      shouldPreserveSessionRuntimeFallbackAutoResume: () => false,
+      shouldPreserveContinuationOnlyAutoResume: (session: FakeSession) => shouldPreserveWaitingContinuationOnlyAutoResume({
         closeReason: session.closeReason,
         // 这次错误没有中断自愈的尝试：register 的 pendingContinuationOnlyAutoResumeRebuilds / guard / book 都没有它。
         leasedAttemptToken: undefined,
         guardIsCurrentAttempt: false,
         bookIsCurrentAttempt: false,
-        coordinatorAttemptToken,
+        coordinatorAttemptToken: coordinator.getAutoResumeAttemptToken(session.id),
         hasLiveSchedule: false,
         hasQueuedAutoResume: coordinator.hasQueuedAutoResume(session.id),
         isContinuationOnly: coordinator.isContinuationOnlyAutoResume(session.id),
-      });
-      const context = { closeReason: session.closeReason, preserveAutoResumeIntent };
-      closeContexts.push(context);
-      return context;
-    },
+      }),
+    }),
     cleanupClosedSession: (session, context) => {
+      closeContexts.push({ closeReason: context.closeReason, preserveAutoResumeIntent: context.preserveAutoResumeIntent });
       runSessionCloseCleanup(context.preserveAutoResumeIntent, {
         cleanupInteractions: () => {},
         preserveAutoResume: () => {},
@@ -226,6 +259,7 @@ function setup(options: { bComesBack?: boolean } = {}) {
         return () => this.listeners.delete(listener);
       },
       setInteractionListener: () => {},
+      wasClosedByRuntime: () => false,
     };
     const registration = lifecycle.beginBinding(session);
     if (registration) lifecycle.attachStatusListener(registration);
@@ -259,7 +293,6 @@ function setup(options: { bComesBack?: boolean } = {}) {
     listBindings: () => Object.fromEntries(bindings),
     isTurnRunning: () => false,
     now: () => 1_000_000,
-    random: () => 0,
   });
   let readRowGate: { opened: Promise<void>; open: () => void } | null = null;
   let probeGate: { opened: Promise<void>; open: () => void } | null = null;
@@ -270,7 +303,8 @@ function setup(options: { bComesBack?: boolean } = {}) {
     router,
     directory,
     readGroup: (id: string) => (id === 'anthropic' ? config : null),
-    readBinding: (id: string) => bindings.get(id) ?? null,
+    readBinding: (id: string) => options.shared ? null : bindings.get(id) ?? null,
+    guestSwitch,
     writeBinding: vi.fn(async (id: string, binding: { providerId: string; memberKey: string } | null) => {
       const pending = writeBindingGate;
       writeBindingGate = null;
@@ -307,6 +341,11 @@ function setup(options: { bComesBack?: boolean } = {}) {
     switchAgentLocation: vi.fn(async (_id: string, route: { agentDeviceId: string | null; providerId: string | null }, switchOptions?: { isCurrent?: () => boolean }) => {
       if (switchOptions?.isCurrent && !switchOptions.isCurrent()) throw new Error('superseded');
       closeSession(live, 'agent-switch');
+      if (switchOptions?.isCurrent && !switchOptions.isCurrent()) throw new Error('superseded');
+      if (options.shared) {
+        expect(guestSwitch.takeForOpen(SID)).toBe('synthetic-switch-offer');
+        guestSwitch.release(SID);
+      }
       row.agentDeviceId = route.agentDeviceId;
       row.providerId = route.providerId;
       row.sdkSessionId = null;
@@ -315,7 +354,7 @@ function setup(options: { bComesBack?: boolean } = {}) {
     isTurnRunning: vi.fn(() => false),
     hasLiveSession: vi.fn(() => true),
     continueSession: vi.fn(async (sessionId: string, token: number, info: Parameters<ProviderGroupServiceDeps['continueSession']>[2]) =>
-      coordinator.continueAfterUsageLimitReset(sessionId, token, info)),
+      coordinator.continueAfterProviderGroupRecovery(sessionId, token, info)),
     fallback: vi.fn(),
     readResetAt: vi.fn(() => null),
     now: () => 1_000_000,
@@ -339,10 +378,15 @@ function setup(options: { bComesBack?: boolean } = {}) {
     message: B_LOST.message,
     signals: { reason: B_LOST.reason },
   }) {
-    coordinator.enqueue(SID, item('q-1', 'long running task'));
+    const input = item('q-1', 'long running task');
+    if (options.scheduled) input.origin = {
+      kind: 'scheduler', scheduleId: 'schedule', scheduleName: 'Check', runId: 'scheduled-run',
+    };
+    coordinator.enqueue(SID, input);
     await flush();
     expect(sendToAgent).toHaveBeenCalledTimes(1);
     running = false;
+    if (options.shared) guestSwitch.offer(SID, 'synthetic-switch-offer');
     coordinator.onTurnEvent(SID, 'error', failure.message, failure.signals);
   }
 
@@ -376,9 +420,11 @@ function setup(options: { bComesBack?: boolean } = {}) {
     row,
     bindings,
     sendToAgent,
+    scheduledOriginsAtSend,
     leaseResults,
     closeContexts,
     resetAutoResume,
+    pendingSchedulerAutoResumeRunBySession,
     pauseNextReadSessionRow: () => {
       readRowGate = gate();
       held = readRowGate.open;
@@ -424,6 +470,46 @@ function expectSwitchedToLocalAndContinued(h: ReturnType<typeof setup>) {
 }
 
 describe('provider group failover vs. the terminal-error drain close (#5880)', () => {
+  // Unit regression, provider-groups §6.1 / usage-limit-auto-continue: an accepted
+  // scheduled turn has no ordinary UI hold. Run the actual register close policy,
+  // coordinator and group service; assert one replacement dispatch with the same
+  // run. Earlier fixtures copied the close predicate and made teardown a no-op.
+  it.each(['switch', 'same-account', 'stopped', 'stale-run', 'stale-token', 'quota-wait'] as const)(
+    'preserves only the live scheduled group relocation across source close: %s', async mode => {
+      const h = setup({ scheduled: true, shared: mode !== 'same-account' });
+      h.pauseNextReadSessionRow();
+      await h.failOnB({ message: 'usage limit', signals: { codexErrorInfo: 'usageLimitExceeded' } });
+      await flush();
+      expect(h.coordinator.hasProviderGroupSwitchHold(SID)).toBe(false);
+      const pending = h.pendingSchedulerAutoResumeRunBySession.get(SID)!;
+      expect(pending).toMatchObject({ runId: 'scheduled-run', providerGroupPending: true });
+      if (mode === 'stopped') await h.stopAll();
+      if (mode === 'stale-run') pending.runId = 'another-run';
+      if (mode === 'stale-token') pending.usageLimitToken += 1;
+      if (mode === 'quota-wait') pending.providerGroupPending = false;
+      await h.releaseAndSettle();
+      if (mode === 'switch' || mode === 'same-account') {
+        expect(h.closeContexts).toEqual([expect.objectContaining({ closeReason: 'agent-switch', preserveAutoResumeIntent: true })]);
+        expect(h.resetAutoResume).not.toHaveBeenCalled();
+        if (mode === 'same-account') expectSwitchedToLocalAndContinued(h);
+        else {
+          expect(h.row.agentDeviceId).toBe('share:group');
+          expect(h.deps.switchAgentLocation).toHaveBeenCalledOnce();
+          expect(h.deps.continueSession).toHaveBeenCalledOnce();
+          expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+          expect(h.sendToAgent.mock.calls[1]![1]).toEqual({ type: 'user', content: CONTINUE_AFTER_ERROR_PROMPT });
+          expect(h.hooks.resumed).toHaveBeenCalledOnce();
+          expect(h.deps.fallback).not.toHaveBeenCalled();
+        }
+        expect(h.scheduledOriginsAtSend[1]).toMatchObject({ runId: 'scheduled-run', scheduleId: 'schedule' });
+      } else {
+        expect(h.closeContexts).toEqual([expect.objectContaining({ preserveAutoResumeIntent: false })]);
+        expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+        expect(h.deps.continueSession).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it('the drain-timeout close does not preserve the auto-resume intent for this error', async () => {
     const h = setup();
     h.pauseNextReadSessionRow();
@@ -524,6 +610,7 @@ describe('provider group failover vs. the terminal-error drain close (#5880)', (
     expect(h.router.coolingUntil('anthropic', MAC_B.key, MODEL)).not.toBeNull();
     expect(h.markTried).toHaveBeenCalledWith(SID, MAC_B.key);
     expectSwitchedToLocalAndContinued(h);
+    expect(h.closeContexts.at(-1)).toEqual({ closeReason: 'agent-switch', preserveAutoResumeIntent: true });
   });
 
   it('a new message sent while the checks are pending stops before cooling or marking B tried', async () => {

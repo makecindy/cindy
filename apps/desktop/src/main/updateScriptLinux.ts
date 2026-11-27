@@ -1,3 +1,4 @@
+import path from 'node:path';
 import userInstallerSource from '../../resources/linux/install-user.sh?raw';
 import type { LinuxUserInstallation } from './linuxInstallation';
 
@@ -20,6 +21,8 @@ export interface LinuxUpdateScriptTimings {
   verifyTimeoutSeconds: number;
   /** Second at which relaunch is retried (only if the first launch failed). */
   verifyRetryAtSeconds: number;
+  /** Consecutive seconds the launched process must stay alive to count as started. */
+  verifyStableSeconds: number;
   /** Seconds between lock-file heartbeats while pkexec may be waiting. */
   lockHeartbeatSeconds: number;
 }
@@ -29,8 +32,40 @@ export const DEFAULT_LINUX_UPDATE_SCRIPT_TIMINGS: LinuxUpdateScriptTimings = {
   exitAbortAfterSeconds: 135,
   verifyTimeoutSeconds: 30,
   verifyRetryAtSeconds: 15,
+  verifyStableSeconds: 5,
   lockHeartbeatSeconds: 5,
 };
+
+/**
+ * Display-backend switches a user may have added to their launcher. Electron
+ * cannot start on a Wayland-only session without the Ozone choice, so the
+ * relaunch must keep them. URLs and task arguments are still not carried over.
+ */
+const LINUX_RELAUNCH_DISPLAY_SWITCHES = new Set([
+  'ozone-platform',
+  'ozone-platform-hint',
+  'enable-features',
+  'disable-features',
+  'enable-wayland-ime',
+  'wayland-text-input-version',
+  'disable-gpu',
+  'disable-gpu-compositing',
+  'use-gl',
+  'use-angle',
+  'gtk-version',
+  'force-device-scale-factor',
+]);
+
+/** Keep the original launcher's display switches, in order, from process.argv. */
+export function linuxRelaunchDisplayArgs(argv: readonly string[]): string[] {
+  const kept: string[] = [];
+  for (const arg of argv.slice(1)) {
+    if (arg === '--') break; // Chromium stops parsing switches here.
+    const match = /^--([a-z0-9-]+)(?:=([\w.,:/+=-]{0,1024}))?$/.exec(arg);
+    if (match && LINUX_RELAUNCH_DISPLAY_SWITCHES.has(match[1])) kept.push(arg);
+  }
+  return kept;
+}
 
 export interface LinuxUpdateScriptParams {
   /** PID of the exiting app process the script must wait for. */
@@ -95,6 +130,9 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
   const userInstallation = params.userInstallation;
   const launchPath = userInstallation ? `${userInstallation.prefix}/current/Cindy` : exePath;
   const launch = [launchPath, ...(params.relaunchArgs ?? [])].map(shellSingleQuote).join(' ');
+  // The relaunched app's own stdout/stderr, rewritten on every relaunch so it
+  // keeps only the latest run. Chromium reports a display-backend failure only there.
+  const qAppLog = shellSingleQuote(path.posix.join(path.posix.dirname(logPath), 'cindy-relaunch.log'));
 
   return [
     '#!/bin/bash',
@@ -135,13 +173,26 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
     // 先等心跳真正退出再清锁:kill 只是发信号,不保证进程已死;bash 在
     // 前台等待 sleep 时会推迟处理 SIGTERM,若此刻直接 rm 锁,心跳醒来后
     // 仍可能再写一次锁,让新拉起的 Cindy 卡在等锁。wait 收口这个窗口。
+    // 每次拉起都把新进程的 stdout/stderr 写进清空后的 cindy-relaunch.log:
+    // 图形后端初始化失败时 Chromium 只在 stderr 留下原因。日志不可写(或不是
+    // 普通文件,例如 FIFO 会让打开阻塞)时退回 /dev/null——日志问题绝不能挡住拉起。
+    'start_app() {',
+    `    if [ ! -e ${qAppLog} ] || [ -f ${qAppLog} ]; then`,
+    `        { : > ${qAppLog}; } 2>/dev/null`,
+    '    fi',
+    `    if [ -f ${qAppLog} ] && [ -w ${qAppLog} ]; then`,
+    `        setsid nohup ${launch} >> ${qAppLog} 2>&1 &`,
+    '    else',
+    `        setsid nohup ${launch} >/dev/null 2>&1 &`,
+    '    fi',
+    '    LAUNCHED_PID=$!',
+    '}',
     'relaunch_app() {',
     `    kill "$LOCK_HEARTBEAT_PID" 2>/dev/null`,
     `    wait "$LOCK_HEARTBEAT_PID" 2>/dev/null`,
     '    rm -f "$INSTALL_PID_FILE"',
     `    rm -f ${qLock}`,
-    `    setsid nohup ${launch} >/dev/null 2>&1 &`,
-    '    LAUNCHED_PID=$!',
+    '    start_app',
     '}',
     '(',
     '    while true; do',
@@ -284,26 +335,46 @@ export function buildLinuxUpdateScript(params: LinuxUpdateScriptParams): string 
     `echo "[$(date)] relaunch spawn exit code: $OPEN_EXIT" >> ${qLog}`,
     '',
     'VERIFIED=0',
-    'sleep 2',
+    'RETRIED=0',
+    // 连续存活秒数;-1 = 已确认退出并记过日志。只看一瞬间的 kill -0 会把
+    // 「起来 1 秒后图形后端初始化失败 exit(1)」的进程误报成成功。
+    'ALIVE_FOR=0',
     `for i in $(seq 1 ${t.verifyTimeoutSeconds}); do`,
+    '    sleep 1',
     // 按启动的子 PID 验证(kill -0),不用 pgrep 按进程名找:等锁的旧实例
     // 进程名同样是 Cindy,会把它误判成更新后的进程;updater 自己的
     // bash -c 也永远匹配不上这个子 PID。
     `    if kill -0 "$LAUNCHED_PID" 2>/dev/null; then`,
-    '        VERIFIED=1',
-    '        break',
+    '        ALIVE_FOR=$((ALIVE_FOR+1))',
+    `        if [ "$ALIVE_FOR" -ge ${t.verifyStableSeconds} ]; then`,
+    '            VERIFIED=1',
+    '            break',
+    '        fi',
+    '    elif [ "$ALIVE_FOR" -ge 0 ]; then',
+    // 子进程已退出:wait 取回退出码(bash 已代收的子进程仍能取到),并把它
+    // 留在 stderr 里的最后输出抄进更新日志,失败现场不再丢失。
+    '        wait "$LAUNCHED_PID" 2>/dev/null',
+    '        LAUNCH_EXIT=$?',
+    `        echo "[$(date)] launched pid $LAUNCHED_PID exited with code $LAUNCH_EXIT (seen alive \${ALIVE_FOR}s)" >> ${qLog}`,
+    `        if [ -f ${qAppLog} ]; then`,
+    `            tail -c 4096 ${qAppLog} 2>/dev/null | awk '{ print "    app: " $0 }' >> ${qLog}`,
+    '        fi',
+    '        ALIVE_FOR=-1',
+    '        if [ "$RETRIED" -eq 1 ]; then',
+    '            break',
+    '        fi',
     '    fi',
-    `    if [ "$i" -eq ${t.verifyRetryAtSeconds} ]; then`,
-    `        echo "[$(date)] still not up after ${t.verifyRetryAtSeconds}s — retrying relaunch" >> ${qLog}`,
-    `        setsid nohup ${launch} >/dev/null 2>&1 &`,
-    '        LAUNCHED_PID=$!',
+    `    if [ "$ALIVE_FOR" -lt 0 ] && [ "$RETRIED" -eq 0 ] && [ "$i" -ge ${t.verifyRetryAtSeconds} ]; then`,
+    `        echo "[$(date)] still not up after \${i}s — retrying relaunch" >> ${qLog}`,
+    '        start_app',
+    '        RETRIED=1',
+    '        ALIVE_FOR=0',
     '    fi',
-    '    sleep 1',
     'done',
     'if [ "$VERIFIED" -eq 1 ]; then',
-    `    echo "[$(date)] PROCESS VERIFIED: launched pid $LAUNCHED_PID is running" >> ${qLog}`,
+    `    echo "[$(date)] PROCESS VERIFIED: launched pid $LAUNCHED_PID stayed up for ${t.verifyStableSeconds}s" >> ${qLog}`,
     'else',
-    `    echo "[$(date)] WARNING: relaunch not verified within ${t.verifyTimeoutSeconds}s" >> ${qLog}`,
+    `    echo "[$(date)] WARNING: relaunch not verified — no launched process stayed up for ${t.verifyStableSeconds}s within ${t.verifyTimeoutSeconds}s" >> ${qLog}`,
     'fi',
     '',
     `echo "[$(date)] Update script finished" >> ${qLog}`,

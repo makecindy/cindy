@@ -1,5 +1,6 @@
+import { cardPrLinkKey } from '@cindy/maker-shared';
 import { ghostCardSessionLinkId } from '@cindy/maker-shared/ghost-card-form';
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { prStatusItemKeys, type PrStatusKind, type PrStatusResult } from "@cindy/maker-shared";
 import {
   parseGhostCardForm,
@@ -21,6 +22,7 @@ import {
 } from "@cindy/maker-shared/ghost-card-form";
 import {
   AccessibilityInfo,
+  ActivityIndicator,
   Alert,
   Animated,
   AppState,
@@ -31,14 +33,19 @@ import {
   Pressable,
   StyleSheet,
   Switch,
+  useWindowDimensions,
   View,
+  type ViewInstance,
 } from "react-native";
 import { useIsFocused } from "expo-router";
 import { useTranslation } from "react-i18next";
 import {
   REMOTE_RESOURCE_INVOKE_CHANNEL,
+  type PluginModelPickerRequest,
   type PluginPageConfirm,
   type PluginPagePoll,
+  type PluginNativeIntent as NativeIntent,
+  type PluginPageFetchResult,
 } from "@cindy/device-link";
 import { Text, TextInput } from "@/components/AppText";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
@@ -63,9 +70,13 @@ import { MobileMailHtmlPreview } from "./MobileMailHtmlPreview";
 import { pickMobileMailAttachment } from "./mobileMailAttachment";
 import { PluginCardRecipients } from "./PluginCardRecipients";
 import { invokePlugin } from "./pluginClient";
+import { PluginModelPicker } from "./PluginModelPicker";
+import { PluginNativeIntent } from "./PluginNativeIntent";
 import { FileTypeIcon } from '@/components/FileTypeIcon';
 import { Check, CircleMinus, CircleX, Clock, ExternalLink, Settings, ChevronDown } from 'lucide-react-native';
 import { prStatusVisual } from '@/session/prStatusVisual';
+import { MessageListItemViewableContext } from '@/session/messageListVisibility';
+import { taskAutoArchive } from './taskAutoArchive';
 import { formatByteSize } from '@cindy/maker-shared/file-preview';
 
 interface Action {
@@ -83,6 +94,8 @@ interface Action {
 }
 const PR_STATES: readonly PrStatusKind[] = ["open", "draft", "merged", "closed"];
 interface PrStatusSlot { key: string; fallback: string[]; status?: Extract<PrStatusResult, { ok: true }> }
+/** The host's word that every PR of the task is merged (the card's archive button); `auto`: archive on leaving. */
+interface TaskArchive { auto: boolean }
 
 function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -124,6 +137,7 @@ function parse(value: unknown): {
   mailUpload?: boolean;
   live?: string;
   prStatus: PrStatusSlot[];
+  taskArchive?: TaskArchive;
 } | null {
   if (!value || typeof value !== "object") return null;
   const data = value as Record<string, unknown>;
@@ -163,7 +177,11 @@ function parse(value: unknown): {
       typeof data.changeAction === "string" ? data.changeAction : undefined,
     live: typeof data.live === "string" && data.live.length <= 64 ? data.live : undefined,
     prStatus: parsePrStatusSlots(data.prStatus),
+    ...(isTaskArchive(data.taskArchive) ? { taskArchive: { auto: data.taskArchive.auto } } : {}),
   };
+}
+function isTaskArchive(value: unknown): value is TaskArchive {
+  return !!value && typeof value === "object" && typeof (value as { auto?: unknown }).auto === "boolean";
 }
 export function PluginCardActions({
   data,
@@ -208,6 +226,7 @@ function CardControls({
   items,
   live,
   prStatus,
+  taskArchive,
   deviceId,
   sessionId,
   callId,
@@ -218,6 +237,7 @@ function CardControls({
   text?: string;
   live?: string;
   prStatus: PrStatusSlot[];
+  taskArchive?: TaskArchive;
   form: GhostCardFormField[] | null;
   changeAction?: string;
   mail?: MailCardData | null;
@@ -243,7 +263,7 @@ function CardControls({
   // The GitHub card has a stable action vocabulary. Keep its settings controls together
   // instead of mixing them into the footer. Unknown/legacy cards retain the generic layout.
   const hasLegacySettings = items.some(action => ['prset:rename', 'prset:follow', 'prset:archive'].includes(action.id) && !action.toggle);
-  const settingsAction = compact && !hasLegacySettings && projectedLines.length > 0 && pluginId === 'cindy-github'
+  const settingsAction = compact && !hasLegacySettings && projectedLines.length > 0 && ['cindy-github', 'cindy-gitlab', '_root__cindy-github', '_root__cindy-gitlab'].includes(pluginId ?? '')
     ? items.find(action => action.id === 'prui:settings') : undefined;
   const settingsOpen = !!settingsAction && items.some(action => action.toggle);
   const modelChoices = settingsOpen ? items.filter(action => ['prset:modelTask', 'prset:model'].includes(action.id)) : [];
@@ -258,8 +278,8 @@ function CardControls({
   const titleHost = titleLink?.url ? linkHost(titleLink.url) : undefined;
   // A PR link leads with the app's own PR icon in its status colour (as on the home task row);
   // other links end with a quiet external-link mark.
-  const titlePr = titleLink?.url && /^https:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/pull\/\d+/.test(titleLink.url)
-    ? prStatusVisual(titleLink.prState ?? prStatus.find((slot) => slot.key === githubPrKeyOfUrl(titleLink.url!))?.status?.status ?? null, colors) : undefined;
+  const titleKey = titleLink?.url && cardPrLinkKey(titleLink.url);
+  const titlePr = titleKey ? prStatusVisual(titleLink?.prState ?? prStatus.find(slot => slot.key === titleKey)?.status?.status ?? null, colors) : undefined;
   const buttons = (history ? [] : items).filter((action) => !action.toggle && action !== titleLink && action !== settingsAction && !modelChoices.includes(action) && action !== modelPicker);
   const { getAccessToken } = useAuth();
   const readonly = history || ['sent', 'sending', 'unconfirmed', 'deleting', 'deleted'].includes(mail?.state ?? '');
@@ -289,6 +309,40 @@ function CardControls({
   const [foreground, setForeground] = useState(
     AppState.currentState === "active",
   );
+  // Archive button and auto-archive (desktop's card rule): this card arms auto-archive while the host says its PR and the
+  // task's other PRs are merged and the plugin asked for it. Unmounting does not disarm: leaving the task unmounts cards,
+  // which is exactly when the task page archives.
+  const autoArchive = !history && !!taskArchive?.auto;
+  // undefined: nothing reported yet. Every mount reports once, even `false`, so a cancellation kept from an earlier visit
+  // is forgotten when the host no longer allows auto-archive.
+  const armedRef = useRef<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (armedRef.current === autoArchive) return;
+    armedRef.current = autoArchive;
+    taskAutoArchive.setArmed(sessionId, callId, autoArchive);
+  }, [sessionId, callId, autoArchive]);
+  const autoArchiveState = useSyncExternalStore(
+    taskAutoArchive.onChange,
+    () => taskAutoArchive.getState(sessionId),
+  );
+  // "Seen": this armed card was on screen in the focused task page with the app in front, not merely mounted.
+  // The message row is only the first gate (a row can hold several cards and passes at 5%): the notice itself must be
+  // inside the window. A frame that cannot be measured does not count, and neither does one that scrolled into view later
+  // inside a tall row (no event reports it); both only mean no auto-archive, never an archive nobody saw.
+  const viewable = useContext(MessageListItemViewableContext) ?? true;
+  const { height: windowHeight } = useWindowDimensions();
+  const noticeRef = useRef<ViewInstance>(null);
+  const seenGate = useRef({ pending: false, viewable, focused, foreground });
+  seenGate.current = { pending: autoArchive && autoArchiveState === "pending", viewable, focused, foreground };
+  const checkNoticeSeen = useCallback(() => {
+    const gate = seenGate.current;
+    if (!gate.pending || !gate.viewable || !gate.focused || !gate.foreground) return;
+    noticeRef.current?.measureInWindow((_x, y, _width, height) => {
+      if (Number.isFinite(y) && height > 0 && y + height > 0 && y < windowHeight) taskAutoArchive.markSeen(sessionId);
+    });
+  }, [sessionId, windowHeight]);
+  useEffect(checkNoticeSeen, [checkNoticeSeen, autoArchive, autoArchiveState, viewable, focused, foreground]);
+  const archiveHint = autoArchive && autoArchiveState !== "inactive" ? autoArchiveState : undefined;
   const [prompt, setPrompt] = useState<Action>();
   const [draft, setDraft] = useState("");
   const formKey = changeAction ?? JSON.stringify(form);
@@ -317,14 +371,20 @@ function CardControls({
     setFormState({ key: formKey, values: formValues, base: incoming });
   }
   const [confirm, setConfirm] = useState<PluginPageConfirm>();
-  const [busy, setBusy] = useState(false),
+  const [modelRequest, setModelRequest] = useState<PluginModelPickerRequest>();
+  // A poll already in flight can still list the request just answered.
+  const lastAnsweredModel = useRef<string | undefined>(undefined);
+  const [previewIntent, setPreviewIntent] = useState<Extract<NativeIntent, { kind: 'preview' }>>();
+  const dismissedPreviews = useRef(new Set<string>());
+  const [busyAction, setBusyAction] = useState<string>(),
     [unknown, setUnknown] = useState(false),
     [answering, setAnswering] = useState(false);
+  const busy = busyAction !== undefined;
   const current = () =>
     lifetime.current.active && isMobileAuthOwnerCurrent(lifetime.current.owner);
   useEffect(() => {
     sending.current = false;
-    setBusy(false);
+    setBusyAction(undefined);
     setUnknown(false);
   }, [revision]);
   useEffect(() => {
@@ -347,6 +407,9 @@ function CardControls({
   useEffect(() => {
     if (!lease) return;
     if (!focused || !foreground || status !== "online") {
+      setModelRequest(undefined);
+      // The host discards preview resources on suspend. Resume only from a fresh receipt.
+      setPreviewIntent(undefined);
       if (current() && status === "online")
         void invokePlugin(invoke, deviceId, pluginId, "suspend", {
           pageId: lease,
@@ -365,11 +428,29 @@ function CardControls({
           "poll",
           { pageId: lease, after: 0 },
         );
-        if (!disposed && current()) setConfirm(result.confirms[0]);
-      } catch {
         if (!disposed && current()) {
-          setUnknown(true);
+          setConfirm(result.confirms[0]);
+          setModelRequest(result.modelPickers?.find(request => request.requestId !== lastAnsweredModel.current));
+          setPreviewIntent(result.intents?.find(
+            (intent): intent is Extract<NativeIntent, { kind: 'preview' }> =>
+              intent.kind === 'preview' && !dismissedPreviews.current.has(intent.id),
+          ));
+        }
+      } catch (error) {
+        if (!disposed && current()) {
+          // A failed read says nothing about the delivery of a card action. Keep
+          // that separate unknown state intact, and hide stale interaction UI.
           setConfirm(undefined);
+          setModelRequest(undefined);
+          setPreviewIntent(undefined);
+          if (error instanceof Error && error.message.startsWith('[NOT_FOUND] ')
+            && page.current === lease) {
+            // The host retired this lease. Only the next deliberate click opens
+            // a new one; never replay the action that originally opened it.
+            page.current = undefined;
+            setLease(undefined);
+            return;
+          }
         }
       }
       if (!disposed && current()) timer = setTimeout(() => void poll(), 1000);
@@ -393,7 +474,8 @@ function CardControls({
       (!passive && unknown) ||
       action.disabled || (readonly && !(!history && mail && (
         (mail.state === 'sent' && action.id === `mail:continue:${mail.key}`) ||
-        (mail.pendingSend && [`mail:cancel:${mail.key}`, `mail:now:${mail.key}`].includes(action.id))
+        (mail.pendingSend && [`mail:cancel:${mail.key}`, `mail:now:${mail.key}`].includes(action.id)) ||
+        (mail.state === 'sending' && !!mail.cancelLabel && action.id === `mail:cancel:${mail.key}`)
       ))) ||
       (action.submit && !form) ||
       status !== "online" ||
@@ -409,7 +491,7 @@ function CardControls({
       isMobileAuthOwnerCurrent(token.owner);
     if (!passive) {
       sending.current = true;
-      setBusy(true);
+      setBusyAction(action.id);
     }
     try {
       if (!passive && action.submit && !(await changeQueue.current))
@@ -482,7 +564,7 @@ function CardControls({
         setDraft("");
         if (!action.submit) {
           sending.current = false;
-          setBusy(false);
+          setBusyAction(undefined);
         }
       }
       if (passive && valid()) setUnknown(false);
@@ -492,7 +574,7 @@ function CardControls({
       if (valid()) {
         setUnknown(true);
         if (!passive) {
-          setBusy(false);
+          setBusyAction(undefined);
           sending.current = false;
         }
       }
@@ -597,6 +679,47 @@ function CardControls({
   }
   return (
     <View style={[styles.root, mail && !history && styles.mailCard]}>
+      {modelRequest && lease && focused && foreground && status === 'online' && current() && !previewIntent && !confirm && !prompt ? (
+        <PluginModelPicker key={modelRequest.requestId} request={modelRequest} deviceId={deviceId}
+          onAnswer={async route => {
+            if (!current() || page.current !== lease || !focusedRef.current || AppState.currentState !== 'active')
+              return { handled: false, accepted: false };
+            const { requestId } = modelRequest;
+            const result = await invokePlugin<{ handled: boolean; accepted: boolean }>(
+              invoke, deviceId, pluginId, 'answer-model-picker', { pageId: lease, requestId, route },
+            );
+            if (current() && page.current === lease && (result.accepted || !result.handled)) {
+              lastAnsweredModel.current = requestId;
+              setModelRequest(pending => pending?.requestId === requestId ? undefined : pending);
+            }
+            return result;
+          }}
+        />
+      ) : null}
+      {previewIntent && lease && focused && foreground && status === 'online' && current() ? (
+        <PluginNativeIntent
+          key={previewIntent.id}
+          intent={previewIntent}
+          deviceId={deviceId}
+          onClose={() => {
+            const token = lifetime.current;
+            const intentId = previewIntent.id;
+            dismissedPreviews.current.add(intentId);
+            setPreviewIntent(undefined);
+            void invokePlugin(invoke, deviceId, pluginId, 'intent:ack', { pageId: lease, intentId })
+              .catch(() => { if (lifetime.current === token && current()) setUnknown(true); });
+          }}
+          readPreview={(url, offset, revision) => {
+            if (!current() || !focusedRef.current || AppState.currentState !== 'active')
+              return Promise.reject(new Error('PLUGIN_PAGE_CLOSED'));
+            return invokePlugin<PluginPageFetchResult>(invoke, deviceId, pluginId, 'preview:fetch', {
+              pageId: lease, intentId: previewIntent.id, url, offset,
+              ...(revision ? { revision } : {}),
+            });
+          }}
+          readMedia={() => Promise.reject(new Error('PLUGIN_PAGE_CLOSED'))}
+        />
+      ) : null}
       {lines.length ? (
         <View style={styles.headerRow}>
         <View style={[styles.cardHeader, styles.headerContent]}>
@@ -624,14 +747,14 @@ function CardControls({
         {settingsAction ? <Pressable
           accessibilityRole="button"
           accessibilityLabel={settingsAction.label}
-          accessibilityState={{ expanded: settingsOpen }}
+          accessibilityState={{ expanded: settingsOpen, busy: busyAction === settingsAction.id }}
           disabled={settingsAction.disabled || busy || unknown || status !== "online"}
           onPress={() => choose(settingsAction)}
           hitSlop={6}
           style={({ pressed }) => [styles.settingsButton, pressed && styles.pressed]}
         >
           {settingsOpen ? <View pointerEvents="none" style={styles.settingsButtonActive} /> : null}
-          <Settings size={iconSize.md} strokeWidth={iconStroke.regular} color={settingsOpen ? colors.textPrimary : colors.textTertiary} />
+          {busyAction === settingsAction.id ? <ActivityIndicator size="small" color={colors.textPrimary} /> : <Settings size={iconSize.md} strokeWidth={iconStroke.regular} color={settingsOpen ? colors.textPrimary : colors.textTertiary} />}
         </Pressable> : null}
         </View>
       ) : null}
@@ -734,7 +857,7 @@ function CardControls({
           );
         })}
       </View> : null}
-      {(mail && !history) || prStatus.length || buttons.length || live || items.some((action) => action.toggle) ? <View style={mail && !history ? styles.mailFooter : compact ? styles.compactFooter : undefined}>
+      {(mail && !history) || prStatus.length || buttons.length || live || taskArchive || items.some((action) => action.toggle) ? <View style={mail && !history ? styles.mailFooter : compact ? styles.compactFooter : undefined}>
         {mail && !history ? (
           <View style={styles.mailInfo}>
             <Text style={styles.note}>{mail.fromLabel}: {mail.from}</Text>
@@ -753,7 +876,9 @@ function CardControls({
               <Text style={styles.label}>{action.toggle!.title}</Text>
               {action.toggle!.hint ? <Text style={styles.note}>{action.toggle!.hint}</Text> : null}
             </View>
+            {busyAction === action.id ? <ActivityIndicator size="small" color={colors.textPrimary} /> : null}
             <Switch
+              accessibilityState={{ busy: busyAction === action.id }}
               accessibilityLabel={action.toggle!.title}
               value={action.toggle!.on}
               disabled={action.disabled || busy || unknown || status !== "online"}
@@ -768,26 +893,40 @@ function CardControls({
             {modelChoices.map(action => {
               const selected = action.id === (modelPicker ? 'prset:model' : 'prset:modelTask');
               return <Pressable key={action.id} accessibilityRole="radio"
-                accessibilityLabel={action.label} accessibilityState={{ checked: selected }}
+                accessibilityLabel={action.label} accessibilityState={{ checked: selected, busy: busyAction === action.id }}
                 disabled={action.disabled || busy || unknown || status !== 'online'}
                 onPress={() => choose(action)}
                 style={({ pressed }) => [styles.modelChoice, selected && styles.modelChoiceSelected, pressed && styles.pressed]}>
-                <Text style={[styles.settingLabel, !selected && styles.quietLabel]}>{action.label}</Text>
+                <View style={styles.buttonContent}>
+                  {busyAction === action.id ? <ActivityIndicator size="small" color={colors.textPrimary} /> : null}
+                  <Text style={[styles.settingLabel, styles.buttonText, !selected && styles.quietLabel]}>{action.label}</Text>
+                </View>
               </Pressable>;
             })}
           </View>
           {modelPicker ? <Pressable accessibilityRole="button" accessibilityLabel={modelPicker.label}
+            accessibilityState={{ busy: busyAction === modelPicker.id }}
             disabled={modelPicker.disabled || busy || unknown || status !== 'online'}
             onPress={() => choose(modelPicker)}
             style={({ pressed }) => [styles.modelPicker, pressed && styles.pressed]}>
             <Text style={[styles.settingLabel, styles.headerContent]}>{modelPicker.label}</Text>
-            <ChevronDown size={iconSize.sm} strokeWidth={iconStroke.regular} color={colors.textSecondary} />
+            {busyAction === modelPicker.id ? <ActivityIndicator size="small" color={colors.textPrimary} /> : <ChevronDown size={iconSize.sm} strokeWidth={iconStroke.regular} color={colors.textSecondary} />}
           </Pressable> : null}
         </View> : null}
         </View> : null}
-        {buttons.length || live ? <View style={[styles.actions, compact && styles.compactActions]}>
+        {archiveHint ? <View ref={noticeRef} onLayout={checkNoticeSeen} style={styles.archiveHint} accessibilityLiveRegion="polite">
+          <Text style={styles.note}>{t(archiveHint === "pending" ? "plugins.taskArchive.pending" : "plugins.taskArchive.cancelled")}</Text>
+          {archiveHint === "pending" ? <Pressable accessibilityRole="button" accessibilityLabel={t("plugins.taskArchive.cancel")}
+            hitSlop={{ top: spacing.xs, bottom: spacing.xs }}
+            style={({ pressed }) => [styles.button, styles.compactButton, pressed && styles.pressed]}
+            onPress={() => taskAutoArchive.cancel(sessionId)}>
+            <Text style={[styles.label, styles.compactLabel]}>{t("plugins.taskArchive.cancel")}</Text>
+          </Pressable> : null}
+        </View> : null}
+        {buttons.length || live || (taskArchive && !history) ? <View style={[styles.actions, compact && styles.compactActions]}>
           {buttons.map((action) => {
             const sendNow = !!mail?.pendingSend && action.id === `mail:now:${mail.key}`;
+            const canCancelPreparing = !history && mail?.state === 'sending' && !!mail.cancelLabel && action.id === `mail:cancel:${mail.key}`;
             const primary = action.primary || (!!mail && action.id === `mail:send:${mail.key}`);
             const host = action.url && !ghostCardSessionLinkId(action.url) ? linkHost(action.url) : undefined;
             const label = host ? t("plugins.openLinkHost", { host }) : action.label;
@@ -795,8 +934,9 @@ function CardControls({
               <Pressable
                 key={action.id}
                 accessibilityRole={action.url ? "link" : "button"}
+                accessibilityState={{ busy: busyAction === action.id }}
                 accessibilityLabel={sendNow && mail ? `${action.label}, ${mailCardStatus(mail, countdownNow)}` : host ? `${label}: ${action.label}` : action.label}
-                disabled={action.disabled || busy || uploading || unknown || status !== "online" || (readonly && !mail?.pendingSend && !action.id.startsWith('mail:continue:'))}
+                disabled={action.disabled || busy || uploading || unknown || status !== "online" || (readonly && !mail?.pendingSend && !canCancelPreparing && !action.id.startsWith('mail:continue:'))}
                 hitSlop={compact ? { top: spacing.xs, bottom: spacing.xs } : undefined}
                 style={[styles.button, compact && styles.compactButton, primary && styles.sendButton, sendNow && styles.sendNowButton, host && styles.quietButton]}
                 onPress={() => choose(action)}
@@ -806,10 +946,20 @@ function CardControls({
                     <View style={[styles.countdownFill, { width: `${(1 - mailSendRemainingFraction(mail, countdownNow)) * 100}%` }]} />
                   </View>
                 ) : null}
-                <Text style={[styles.label, compact && styles.compactLabel, primary && styles.sendLabel, host && styles.quietLabel]}>{label}</Text>
+                <View style={styles.buttonContent}>
+                  {busyAction === action.id ? <ActivityIndicator size="small" color={primary ? colors.ctaText : colors.textPrimary} /> : null}
+                  <Text style={[styles.label, styles.buttonText, compact && styles.compactLabel, primary && styles.sendLabel, host && styles.quietLabel]}>{label}</Text>
+                </View>
               </Pressable>
             );
           })}
+          {taskArchive && !history ? <Pressable accessibilityRole="button" accessibilityLabel={t("plugins.taskArchive.now")}
+            disabled={status !== "online"}
+            hitSlop={compact ? { top: spacing.xs, bottom: spacing.xs } : undefined}
+            style={({ pressed }) => [styles.button, compact && styles.compactButton, pressed && styles.pressed]}
+            onPress={() => taskAutoArchive.requestArchive(sessionId)}>
+            <Text style={[styles.label, compact && styles.compactLabel]}>{t("plugins.taskArchive.now")}</Text>
+          </Pressable> : null}
           {live ? <View style={compact && styles.liveEnd}><LiveStatus label={live} /></View> : null}
         </View> : null}
       </View> : null}
@@ -877,11 +1027,6 @@ function CardControls({
     </View>
   );
 }
-/** `owner/repo#N` (lower-case) of a GitHub pull request URL, the key the Host's PR status slots use. */
-function githubPrKeyOfUrl(url: string): string | undefined {
-  const m = /^https:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/.exec(url);
-  return m ? `${m[1].toLowerCase()}/${m[2].toLowerCase()}#${Number(m[3])}` : undefined;
-}
 /** A plugin link reads as "open github.com" instead of repeating the card's title. */
 function linkHost(url: string): string | undefined {
   try {
@@ -932,7 +1077,7 @@ function PrStatusRow({ slot }: { slot: PrStatusSlot }) {
           );
         }
         const color = key === "threadsOpen" ? styles.statusAccentText : tone === "bad" ? styles.statusBadText
-          : key === "mergeReady" || key === "merged" ? styles.statusGoodText : undefined;
+          : key === "merged" ? styles.statusMergedText : key === "mergeReady" ? styles.statusGoodText : undefined;
         return (
           <Text key={key} style={[styles.note, color]}>
             {t(`plugins.prStatus.${key}`, count === undefined ? undefined : { count })}
@@ -1019,6 +1164,7 @@ const makeStyles = (c: ThemeColors) =>
     compactButton: { minHeight: 36, paddingVertical: 0, paddingHorizontal: spacing.md },
     compactLabel: { fontSize: typeScale.bodySmall, lineHeight: lineHeight.bodySmall },
     liveEnd: { marginLeft: "auto" },
+    archiveHint: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: spacing.sm, rowGap: spacing.xs },
     compactFooter: { gap: spacing.xs },
     headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
     headerContent: { flex: 1, minWidth: 0 },
@@ -1051,6 +1197,7 @@ const makeStyles = (c: ThemeColors) =>
     statusItem: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
     statusDot: { width: 7, height: 7, borderRadius: radius.pill },
     statusGoodText: { color: c.statusDone },
+    statusMergedText: { color: c.prMerged },
     statusBadText: { color: c.errorText },
     statusAccentText: { color: c.statusAccent },
     statusCount: { fontWeight: fontWeight.medium, fontVariant: ["tabular-nums"] },
@@ -1063,6 +1210,8 @@ const makeStyles = (c: ThemeColors) =>
     sendLabel: { color: c.ctaText },
     countdownFill: { height: "100%", backgroundColor: c.textPrimary, opacity: 0.14 },
     sendNowButton: { backgroundColor: c.surface, overflow: "hidden", borderWidth: StyleSheet.hairlineWidth, borderColor: c.border },
+    buttonText: { flexShrink: 1 },
+    buttonContent: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
     button: {
       minHeight: 44,
       padding: spacing.md,

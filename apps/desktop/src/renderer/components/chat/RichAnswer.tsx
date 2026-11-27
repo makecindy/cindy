@@ -1,3 +1,4 @@
+import '@/styles/chatContentDirection.css';
 import {
   Mail,
   CalendarDays,
@@ -57,6 +58,18 @@ import { Slider } from '@/components/ui/slider';
 import { useSessionQuickSend } from './SessionQuickSendContext';
 import './rich-answer.css';
 
+/**
+ * A component image whose cindy-media address is a placeholder or truncated: it renders
+ * the invalid-image status instead of an image (and stays out of the task gallery).
+ * Both media namespaces are served by the Desktop protocol; reloading such a
+ * reference cannot recover the existing image.
+ */
+export function isInvalidRichImageSource(source: string): boolean {
+  return /^cindy-media:/i.test(source)
+    && !/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.[a-zA-Z0-9]+$/.test(source)
+    && !/^cindy-media:\/\/client-wallpaper\/[a-f0-9]{64}\.(webp|mp4)$/.test(source);
+}
+
 /** Answer colors are Cindy theme tokens, so they follow the mode without re-rendering. */
 const palette: RichPalette = {
   primary: 'var(--text-primary)',
@@ -103,7 +116,7 @@ function RichSendAction({ node, text, receiptKey, ready, style }: {
   const sender = useSessionQuickSend();
   const status = useSyncExternalStore(submissions.subscribe, () => submissions.status(receiptKey, text));
   const disabled = !ready || !sender || !text || status === 'sending' || status === 'sent';
-  return <div className="rich-answer-layout rich-answer-stack" style={style}>
+  return <div className="rich-answer-layout rich-answer-stack rich-answer-send" style={style}>
     {text && <p className="rich-answer-caption" style={{ whiteSpace: 'pre-wrap' }}>{text}</p>}
     <Button type="button" variant="secondary" disabled={disabled}
       onClick={() => { if (!disabled) void submissions.submit(receiptKey, text, value => sender.send(value, { literalText: true, independent: true })); }}>
@@ -204,11 +217,7 @@ function RichAnswerDocument({
     const node = doc.nodes.get(id);
     if (!node) return null;
     const imageSource = node.kind === 'image' ? richString(node, 'src').trim() : '';
-    // Both media namespaces are served by the Desktop protocol. Reloading a
-    // placeholder or truncated reference cannot recover the existing image.
-    if (/^cindy-media:/i.test(imageSource)
-      && !/^cindy-media:\/\/blobs\/[a-f0-9]{64}\.[a-zA-Z0-9]+$/.test(imageSource)
-      && !/^cindy-media:\/\/client-wallpaper\/[a-f0-9]{64}\.(webp|mp4)$/.test(imageSource)) {
+    if (isInvalidRichImageSource(imageSource)) {
       const message = t('richAnswer.requestImageAgainMessage', {
         name: JSON.stringify(richString(node, 'alt', id)),
         source: JSON.stringify(imageSource),
@@ -256,6 +265,7 @@ function RichAnswerDocument({
         const vector = richVector(node, palette);
         return (
           <svg
+            data-chat-rich-svg
             role="img"
             aria-label={label || richString(node, 'alt')}
             viewBox={vector.viewBox}
@@ -486,7 +496,7 @@ function RichAnswerDocument({
                       <dd>{item.value}</dd>
                     </div>
                     {richString(node, 'variant') !== 'line' && (
-                      <div className="rich-answer-track">
+                      <div className="rich-answer-track" data-chat-rich-bar>
                         <div
                           style={{
                             backgroundColor:
@@ -546,6 +556,7 @@ function AnswerLineChart({
   return (
     <div ref={ref}>
       <svg
+        data-chat-rich-svg="chart"
         role="img"
         aria-label={`${label}. ${data.map((item) => `${item.label}: ${item.value}`).join(', ')}`}
         viewBox={`0 0 ${plot.width} ${plot.height}`}

@@ -1,4 +1,12 @@
 import type { Schedule, ScheduleWebhookEvent } from './types.js';
+import {
+  pluginEventMatches,
+  pluginEventSourceId,
+  pluginPublishedEventMatches,
+  toPluginWebhookEvent,
+  type PluginPublishedEvent,
+} from './plugin-events.js';
+import { isManagedWebhookSource } from './webhook-formats.js';
 
 /** Host policy, not user-configurable: bursts from one push collapse and wake at most once per gap. */
 export const SCHEDULE_WEBHOOK_LIMITS = {
@@ -54,6 +62,23 @@ const emptyEndpoint = (): ScheduleWebhookEndpointState => ({ pending: [], omitte
 export function scheduleWebhookEventMatches(allowed: readonly string[] | undefined, event: Pick<ScheduleWebhookEvent, 'event' | 'action'>): boolean {
   if (!allowed?.length) return true;
   return allowed.includes(event.event) || (event.action !== undefined && allowed.includes(`${event.event}.${event.action}`));
+}
+
+function matchesTrigger(trigger: Schedule['webhookTrigger'], event: ScheduleWebhookEvent): boolean {
+  const source = trigger?.source;
+  // Plugin events only ever match plugin sources, and only from the plugin the user chose.
+  if (source?.preset === 'plugin') return pluginEventMatches(source.sources, event);
+  if (event.source !== undefined) return false;
+  if (!scheduleWebhookEventMatches(trigger?.events, event)) return false;
+  if (source?.preset === 'github-app') {
+    return source.repositories.some(repo => repo.toLowerCase() === event.repository?.toLowerCase())
+      && (source.number === undefined || event.number === source.number);
+  }
+  // An address-based sender narrowed to one item (e.g. a specific GitLab issue).
+  if (source && 'number' in source && source.number !== undefined) {
+    return event.number === source.number && event.repository?.toLowerCase() === source.repository;
+  }
+  return true;
 }
 
 function canReceive(schedule: Schedule | null, now: number): schedule is Schedule {
@@ -116,6 +141,54 @@ export class ScheduleWebhookQueue {
     return (await this.acceptBatch(id, [event]))[0]!;
   }
 
+  /** Match a plugin event against untruncated fields before persisting its bounded doorbell copy. */
+  async acceptPlugin(
+    id: string,
+    plugin: string,
+    published: PluginPublishedEvent,
+    expectedEndpointId?: string,
+  ): Promise<ScheduleWebhookAcceptResult> {
+    if (this.stopped) throw new Error('schedule webhook queue is stopped');
+    const deliveryId = `${pluginEventSourceId(plugin)}:${published.id}`;
+    const result = await this.mutate(async (state): Promise<ScheduleWebhookAcceptResult> => {
+      const schedule = await this.deps.getSchedule(id);
+      const now = this.deps.now();
+      const endpointId = schedule?.webhookTrigger?.endpointId;
+      if (expectedEndpointId && endpointId !== expectedEndpointId) return 'ignored';
+      const endpoint = state.endpoints[id] ??= emptyEndpoint();
+      if (endpointId && endpoint.endpointId && endpoint.endpointId !== endpointId) {
+        this.discardPending(endpoint);
+        endpoint.receipts = {};
+      }
+      if (endpointId) endpoint.endpointId = endpointId;
+      endpoint.lastReceivedAt = now;
+      if (endpoint.receipts[deliveryId] !== undefined && now - endpoint.receipts[deliveryId] < SCHEDULE_WEBHOOK_LIMITS.receiptTtlMs) {
+        return 'duplicate';
+      }
+      const source = schedule?.webhookTrigger?.source;
+      if (source?.preset !== 'plugin' || !pluginPublishedEventMatches(source.sources, plugin, published)) {
+        return 'filtered';
+      }
+      const outcome = canReceive(schedule, now) ? 'queued' : 'ignored';
+      if (outcome === 'queued') {
+        const priorityFields = source.sources
+          .filter((item) => item.plugin === plugin)
+          .flatMap((item) => (item.filters ?? []).map((filter) => filter.field));
+        endpoint.received += 1;
+        endpoint.pending.push(toPluginWebhookEvent(plugin, published, now, priorityFields));
+        endpoint.firstPendingAt ??= now;
+        this.capPending(endpoint);
+      } else {
+        endpoint.ignored += 1;
+      }
+      endpoint.receipts[deliveryId] = now;
+      this.pruneReceipts(endpoint, now);
+      return outcome;
+    });
+    if (result === 'queued') this.arm(id);
+    return result;
+  }
+
   /** Details, receipts and upstream omitted counts form one durable admission. */
   async acceptBatch(id: string, events: ScheduleWebhookEvent[], omitted = 0, expectedEndpointId?: string): Promise<ScheduleWebhookAcceptResult[]> {
     if (this.stopped) throw new Error('schedule webhook queue is stopped');
@@ -134,7 +207,7 @@ export class ScheduleWebhookQueue {
       endpoint.lastReceivedAt = now;
       const results = events.map((event): ScheduleWebhookAcceptResult => {
         if (endpoint.receipts[event.deliveryId] !== undefined && now - endpoint.receipts[event.deliveryId] < SCHEDULE_WEBHOOK_LIMITS.receiptTtlMs) return 'duplicate';
-        if (!scheduleWebhookEventMatches(schedule?.webhookTrigger?.events, event)) return 'filtered';
+        if (!matchesTrigger(schedule?.webhookTrigger, event)) return 'filtered';
         const result = canReceive(schedule, now) ? 'queued' : 'ignored';
         if (result === 'queued') {
           endpoint.received += 1;
@@ -248,6 +321,19 @@ export class ScheduleWebhookQueue {
         if (!canReceive(schedule, this.deps.now()) || endpoint.endpointId !== schedule.webhookTrigger?.endpointId) {
           this.discardPending(endpoint);
           return;
+        }
+        const itemScoped = !!schedule.webhookTrigger?.source && 'number' in schedule.webhookTrigger.source
+          && schedule.webhookTrigger.source.number !== undefined;
+        if (isManagedWebhookSource(schedule.webhookTrigger?.source) || itemScoped) {
+          // Recheck restored data too: earlier test builds persisted unscoped
+          // github.reconcile markers that must never bypass selected filters.
+          const retained = endpoint.pending.filter(event => matchesTrigger(schedule.webhookTrigger, event));
+          endpoint.ignored += endpoint.pending.length - retained.length;
+          endpoint.pending = retained;
+          if (!retained.length) {
+            endpoint.omitted = 0;
+            endpoint.firstPendingAt = undefined;
+          }
         }
         if (!endpoint.pending.length) return;
         const preparing = { events: endpoint.pending, omitted: endpoint.omitted, firstPendingAt: endpoint.firstPendingAt };

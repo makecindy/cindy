@@ -3,6 +3,10 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import ts from 'typescript';
 import { i18n } from '@/i18n';
+import { projectScheduleEvent } from '@cindy/maker-shared/schedule-events';
+import { applyRemoteScheduleTimingsToIndex, type RemoteScheduleTimingPatch } from '@/scheduler/remoteScheduleEvents';
+import { replaceSessionScheduleIndexEntries } from '@/session/scheduleIndex';
+import type { RemoteSessionScheduleInfo } from '@/session/sessionList';
 import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
 import { resolveConnectionBannerSyncActionVisibility, resolveConnectionBannerVisibility, resolveHomeConnectionFeedback } from '@/components/connectionBannerVisibility';
 import { connectionHealthCopy, describeRemoteError } from '@/device-link/remoteStatus';
@@ -482,7 +486,10 @@ describe('mobile home desktop-first surface', () => {
     expect(desktopVendorIconSource).toContain('<CodexMark size={size} />');
     expect(desktopVendorIconSource).toContain('<ClaudeMark size={size} />');
     expect(desktopVendorIconSource).toContain("export type VendorIconKind = 'cc' | 'codex' | 'pi'");
-    expect(desktopVendorIconSource).toContain('vendor: VendorIconKind;');
+    // The desktop prop also accepts plugin engines ('acp', docs/plans/acp-plugin-bridge.md); the built-in
+    // marks above are unchanged.
+    expect(desktopVendorIconSource).toContain("export type EngineIconKind = VendorIconKind | 'acp'");
+    expect(desktopVendorIconSource).toContain('vendor: EngineIconKind;');
     expect(desktopVendorIconSource).toContain('session-status-breathing');
     expect(vendorIconSource).not.toContain('XD_SYMBOL_PATHS');
     expect(vendorIconSource).not.toContain('XD_INC_MARK_ASPECT_RATIO');
@@ -694,7 +701,8 @@ describe('mobile home desktop-first surface', () => {
     expect(sessionRowSource).toContain('testID={`home.sessionRowPreview.${item.session.id}`}');
     expect(sessionRowSource).toContain('const showPreviewLine = !textMode && (!!group || !!preview?.trim() || showSchedule || showPinned);');
     expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionListRowSingleLine');
-    expect(sessionRowSource).toContain('!showPreviewLine && styles.sessionIconCellSingleLine');
+    expect(sessionRowSource).toContain('singleLine={!showPreviewLine}');
+    expect(listStyles).toContain('singleLine && styles.sessionIconCellSingleLine');
     expect(sessionRowSource).toContain('{showPreviewLine ? (');
     expect(sessionRowSource).not.toContain('numberOfLines={2}');
     // 相对时间下沉到独家订阅分钟心跳的叶子组件(行主体 memo 化后由它单独保鲜,风暴修复)
@@ -729,8 +737,10 @@ describe('mobile home desktop-first surface', () => {
     expect(stylesSource).toContain('height: HOME_SESSION_ROW_HEIGHT');
     expect(stylesSource).toContain('height: HOME_SESSION_SINGLE_LINE_ROW_HEIGHT');
     expect(stylesSource).not.toContain('height: CINDY_LIST_ROW_HEIGHT');
-    // 通栏:项目子行回 surface 全宽底(用户改稿 2026-07-21)。
-    expect(stylesSource).toContain('projectChildren: {\n    backgroundColor: colors.surface,');
+    // 项目子行沿用通栏列表底色；开启壁纸时同一块背景要透出壁纸。
+    expect(source).toContain('const makeStyles = (colors: ThemeColors, listSurface: string = colors.surface)');
+    expect(source).toContain("makeStyles(colors, 'transparent')");
+    expect(stylesSource).toContain('projectChildren: {\n    backgroundColor: listSurface,');
     expect(stylesSource).not.toContain('sessionListRowIndentedCindy');
     expect(stylesSource).not.toContain('sessionListRowDeepIndentedCindy');
     expect(stylesSource).not.toContain('automationGroupChildrenCindy');
@@ -740,7 +750,7 @@ describe('mobile home desktop-first surface', () => {
     const source = readSource('src/session/HomeSurface.tsx');
 
     expect(source).toContain('void loadHome({ visible: false });');
-    expect(source).toMatch(/startBoundedStartupRead\(\s*getCachedHomeListSnapshot\(homeCacheUserId\)/);
+    expect(source).toMatch(/startBoundedStartupRead\(\s*getCachedHomeListState\(homeCacheUserId\)/);
     expect(source).toContain('await syncInFlightRef.current;');
     expect(source).toMatch(/startBoundedStartupRead\(\s*loadDeviceIdentityCache\(\)/);
     expect(source).toMatch(/startBoundedStartupRead<HomeViewPreferences \| null>\(\s*readHomeViewPreferences\(preferenceOwnerRef\.current\)/);
@@ -787,7 +797,6 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('collectFreshPresenceDeviceIds(presenceFreshnessRef.current, presenceEpochAtFetchStart)');
     expect(source).toContain('progressViewOffset={residentList.enabled ? 0 : chromeHeight}');
     // 下拉刷新与同步按钮都走可见的 loadHome,并一起刷新伙伴段。
-    expect(source).toMatch(/const refreshHome = useCallback\(\(\) => \{\n    void loadHome\(\{ visible: true \}\);/);
     expect(source).toContain('onRefresh={refreshHome}');
     expect(source).toContain('onPress={refreshHome}');
     expect(source).toContain('patchDeviceViewsWithPresence(');
@@ -890,7 +899,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('const headerNewSession = newSessionInHeader && newSessionEntryVisible;');
     // 顶栏新建与浮动按钮走同一入口(openNewSession → guardedPush → 抽屉 runNavigation 先关再跳)。
     expect(source).toContain('onPress={() => openNewSession()} testID="home.headerNewSessionButton">');
-    expect(source).toContain("if (run) run(() => push(href)); else push(href);");
+    expect(source).toContain("const guardedPush = useTaskListNavigation({ sidebar: sidebarNavigation, runNavigation });");
     // 抽屉与首页左上角都只打开系统菜单(HomeChromeDrawer 自有渲染测试),不再有关闭分支。
     expect(source).toContain('onPress={openChromeMenu}\n          testID="home.chromeMenu"');
     expect(source).not.toContain('onDismiss');
@@ -1033,6 +1042,79 @@ describe('Home list sync wiring', () => {
     const focus = source.slice(source.indexOf('useFocusEffect(\n    useCallback(() => {\n      // The focus event'));
     expect(focus.indexOf('screenFocusedRef.current = true;')).toBeLessThan(focus.indexOf('refreshHomeScheduleIndexes('));
     expect(focus).toContain('const scheduleDirty = new Set(homeScheduleIndexDirtyRef.current.keys());');
+  });
+
+  // Unit: exercise the production subscription with the exact overflow
+  // payload, then a retained completed event for an already-visible session.
+  it('reseeds only the affected session list after schedule overflow', () => {
+    const start = source.indexOf('useEffect(() => remoteScheduleEventStore.subscribe(');
+    const effect = source.slice(start, source.indexOf('}), [refreshDeviceScheduleIndex]);', start) + '}, [refreshDeviceScheduleIndex]);'.length);
+    const code = ts.transpileModule(effect, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const session = [{ id: 'known', deviceLinkDeviceId: 'dev' }];
+    const requestReseed = vi.fn();
+    const refreshDeviceScheduleIndex = vi.fn();
+    let emit!: () => void;
+    let version = 1;
+    let lastProjection = projectScheduleEvent({ type: 'resync' });
+    const bindings = {
+      useEffect: (effect: () => void) => effect(),
+      remoteScheduleEventStore: {
+        subscribe: (cb: () => void) => { emit = cb; },
+        getSnapshot: () => ({ version, lastProjection, scheduleTimings: new Map() }),
+      },
+      applyRemoteScheduleTimingsToIndex,
+      setScheduleIndex: vi.fn(),
+      devicesRef: { current: [{ deviceId: 'dev' }] },
+      homeSyncTargetDeviceIdsRef: { current: new Set(['dev']) },
+      scheduleEventVersionsRef: { current: new Map() },
+      remoteSessionStore: { getSessions: () => session, requestReseed },
+      screenFocusedRef: { current: true },
+      markHomeScheduleIndexDirty: vi.fn(),
+      refreshDeviceScheduleIndex,
+    };
+    new Function(...Object.keys(bindings), code)(...Object.values(bindings));
+    emit();
+    emit();
+    expect(requestReseed).toHaveBeenCalledExactlyOnceWith('dev');
+    expect(refreshDeviceScheduleIndex).not.toHaveBeenCalled();
+    lastProjection = projectScheduleEvent({ type: 'completed', scheduleId: 'sched', runId: 'run', sessionId: 'known' });
+    version++;
+    emit();
+    expect(requestReseed).toHaveBeenCalledTimes(1);
+    expect(refreshDeviceScheduleIndex).toHaveBeenCalledExactlyOnceWith('dev', ['known']);
+  });
+
+  // Unit: an index read launched by fired returns after the skipped patch.
+  it('keeps the newer skipped timing when the in-flight Home index read arrives', async () => {
+    const refresh = source.slice(source.indexOf('const refreshDeviceScheduleIndex = useCallback('), source.indexOf('const hydrateDeviceSessionsOnce = useCallback('));
+    const code = ts.transpileModule(refresh, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const timing = new Map<string, RemoteScheduleTimingPatch>();
+    const stale = new Map<string, RemoteSessionScheduleInfo>([
+      ['s1', { scheduleId: 'sched', scheduleName: 'Heartbeat', running: true, latestRunAt: 60_000, unreadRunIds: [], unreadCount: 0 }],
+    ]);
+    let index = new Map<string, RemoteSessionScheduleInfo>();
+    let finish!: (value: typeof stale) => void;
+    const load = new Promise<typeof stale>((resolve) => { finish = resolve; });
+    const bindings = {
+      useCallback: (fn: unknown) => fn,
+      accountGeneration: 1, homeAccountGenerationRef: { current: 1 },
+      homeSyncTargetDeviceIdsRef: { current: new Set(['dev']) },
+      homeSyncGenerationByDeviceRef: { current: new Map([['dev', 1]]) },
+      screenFocusedRef: { current: true }, AppState: { currentState: 'active' },
+      markHomeScheduleIndexDirty: () => 1, homeScheduleIndexDirtyRef: { current: new Map() },
+      isCurrentHomeSyncTarget: () => true, getScheduleIndexInvalidationVersion: () => 0,
+      homeDeviceSyncLimiterRef: { current: { run: (task: () => Promise<unknown>) => task() } },
+      loadDeviceSessionScheduleIndex: () => load, invoke: vi.fn(),
+      remoteScheduleEventStore: { getSnapshot: () => ({ scheduleTimings: timing }) },
+      applyRemoteScheduleTimingsToIndex, replaceSessionScheduleIndexEntries,
+      setScheduleIndex: (apply: (value: typeof index) => typeof index) => { index = apply(index); },
+    };
+    const run = new Function(...Object.keys(bindings), code + '; return refreshDeviceScheduleIndex;')(...Object.values(bindings));
+    run('dev', ['s1']);
+    timing.set('sched', { scheduleId: 'sched', lastFinishedAt: 61_000, nextFireAt: 120_000 });
+    finish(stale);
+    await vi.waitFor(() => expect(index.get('s1')).toMatchObject({ running: false, nextFireAt: 120_000 }));
+    expect(bindings.invoke).not.toHaveBeenCalled();
   });
 
   it('keeps automation badge refreshes pending until one is applied', () => {

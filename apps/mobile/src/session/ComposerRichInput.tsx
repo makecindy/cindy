@@ -129,6 +129,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     const snapshotSequenceRef = useRef(0);
     const pendingSnapshotRef = useRef<{
       requestId: number;
+      startedAt: number;
       documentId: number;
       isCurrent?: () => boolean;
       resolve(document: ComposerDocument): void;
@@ -198,12 +199,19 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
     const { generation, current: currentGeneration } = recovery;
     const focusEditor = useCallback(() => {
       if (!readyRef.current) {
+        recovery.onInteraction();
         pendingFocusRef.current = true;
         return;
       }
       inject('window.cindyComposer.focus();');
       if (Platform.OS === 'android') webViewRef.current?.requestFocus();
-    }, [inject]);
+    }, [inject, recovery.onInteraction]);
+    const handleTouchStart = useCallback(() => {
+      if (hidden || !editable) return;
+      // Healthy touches keep WebKit's native caret/selection behavior. A dead
+      // page cannot consume the touch, so focus its replacement once ready.
+      if (recovery.onInteraction()) pendingFocusRef.current = true;
+    }, [editable, hidden, recovery.onInteraction]);
     const applyDocument = useCallback((value: ComposerDocument, focusAfter = false, caret?: { nodeIndex: number; offset: number }) => {
       rejectSnapshot();
       if (value !== webDocumentRef.current.document && selectionRef.current?.atomRange) selectionRef.current = null;
@@ -239,7 +247,7 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
           rejectSnapshot();
           return new Promise<ComposerDocument>((resolve, reject) => {
             const requestId = ++snapshotSequenceRef.current;
-            pendingSnapshotRef.current = { requestId, documentId: webDocumentRef.current.id, isCurrent,
+            pendingSnapshotRef.current = { requestId, startedAt: Date.now(), documentId: webDocumentRef.current.id, isCurrent,
               resolve, reject, timer: setTimeout(rejectSnapshot, 3000) };
             inject(`window.cindyComposer.snapshot(${requestId});`);
           });
@@ -447,10 +455,13 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
         }
         return;
       }
-      if (message.type === 'change' || message.type === 'snapshot') {
-        const pending = message.type === 'snapshot' ? pendingSnapshotRef.current : null;
-        if (message.type === 'snapshot') {
-          if (!pending || pending.requestId !== message.requestId) return;
+      if (message.type === 'change' || message.type === 'snapshot' || message.type === 'hidden-snapshot') {
+        const pending = message.type === 'change' ? null : pendingSnapshotRef.current;
+        if (message.type !== 'change') {
+          if (!pending) return;
+          if (message.type === 'snapshot' && pending.requestId !== message.requestId) return;
+          if (message.type === 'hidden-snapshot' && (message.capturedAt < pending.startedAt
+            || message.documentId !== pending.documentId)) return;
           // Cancellation can restore the caller's draft before its next render.
           // Reject before touching editor state or invoking the persistence callback.
           if (pending.isCurrent?.() === false) { rejectSnapshot(); return; }
@@ -539,7 +550,8 @@ const ComposerWebInput = forwardRef<ComposerRichInputHandle, ComposerRichInputPr
       // WebView's imperative ref is a command handle, not a Fabric host ref.
       // Animate its native View container and let the WebView fill that frame.
       <GestureDetector gesture={touchGesture}>
-      <Animated.View style={[styles.frame, heightStyle, { opacity: hidden ? 0 : 1 }]}>
+      <Animated.View style={[styles.frame, heightStyle, { opacity: hidden ? 0 : 1 }]}
+        onTouchStart={handleTouchStart}>
       <WebView
         key={generation}
         ref={webViewRef}

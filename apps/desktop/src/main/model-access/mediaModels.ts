@@ -5,6 +5,7 @@ import {
   MODEL_ACCESS_MODELS_PATH,
   parseListModelsResponse,
   type MediaCapability,
+  type AgentKind,
   type ModelDisableOverrides,
   type ModelCatalogEntry,
 } from '@cindy/model-providers';
@@ -17,16 +18,47 @@ import {
 } from '../../shared/mediaInvocation.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
-import { listProviderMediaModels } from '../cindy-media/providerMediaRuntime.js';
+import { listSharedImageModels } from '../cindy-media/sharedImageCatalog.js';
+import { supportsLegacyMediaInput } from '../cindy-media/legacyMediaInvocation.js';
+import { listProviderMediaModels, providerMediaGuideScope, providerMediaGuideProtocol, providerMediaGuideTarget } from '../cindy-media/providerMediaRuntime.js';
+import { resolveMediaGuide, type MediaGuideSource } from '../cindy-media/guideResolver.js';
+import { createLocalGuideStore, type MediaGuideTarget } from '../cindy-media/localGuideStore.js';
+import { activeDataOwnerId, isOwnerBoundaryPending, ownerScopedPath } from '../ownerContext.js';
 import { isCatalogMediaModelVisible } from '../cindy-brain/mediaDisplayVisibility.js';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
-import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
 
 const MEDIA_MODEL_REQUEST_TIMEOUT_MS = 20_000;
 const MEDIA_GUIDE_PREFLIGHT_TIMEOUT_MS = 5_000;
 const CINDY_AI_PROVIDER_ID = 'xd';
 const MEDIA_MODELS_PATH =
   `${MODEL_ACCESS_MODELS_PATH}?schemaVersion=${MODEL_ACCESS_CATALOG_V5_SCHEMA_VERSION}` as const;
+
+export const localMediaGuides = createLocalGuideStore(() => {
+  if (!activeDataOwnerId() || isOwnerBoundaryPending()) throw new Error('OWNER_SCOPE_CHANGED');
+  return ownerScopedPath('media-guides.json');
+});
+
+async function readPublicGuide(modelId: string, protocol: string) {
+  try { return await fetchMediaInvocationGuide(modelId, protocol, MEDIA_GUIDE_PREFLIGHT_TIMEOUT_MS); }
+  catch (error) {
+    if (error instanceof ServerApiError && error.code === 'MEDIA_INVOCATION_GUIDE_NOT_FOUND') return null;
+    throw error;
+  }
+}
+
+/** Shared by management get and prepare; public lookup never changes the target. */
+export async function getMediaGuide(target: MediaGuideTarget, source: MediaGuideSource = 'auto') {
+  target = providerMediaGuideTarget(target);
+  const connectionScope = providerMediaGuideScope(target);
+  if (!connectionScope) throw new Error('MEDIA_DECLARATION_REQUIRED');
+  const protocol = providerMediaGuideProtocol(target) ?? 'gateway';
+  const resolved = await resolveMediaGuide(source, {
+    readCustom: () => localMediaGuides.read(target, connectionScope)?.guide ?? null,
+    readOfficial: async () => (await readPublicGuide(target.modelId, protocol))?.guide ?? null,
+  });
+  return resolved ? { ...resolved, protocol } : null;
+}
 
 export type MediaGuideCompatibilityErrorCode =
   | 'CLIENT_UPGRADE_REQUIRED'
@@ -55,6 +87,8 @@ export class MediaModelCatalogError extends Error {
 
 export interface UnavailableMediaModel {
   modelId: string;
+  providerId?: string;
+  sourceAgent?: AgentKind;
   errorCode:
     | MediaGuideCompatibilityErrorCode
     | 'GUIDE_NOT_AVAILABLE'
@@ -70,7 +104,7 @@ export interface ExecutableMediaModelsResult {
   candidateCount: number;
 }
 
-export type ExecutableMediaModel = ModelCatalogEntry & { providerId: string };
+export type ExecutableMediaModel = ModelCatalogEntry & { providerId: string; guideDriven?: boolean; sourceAgent?: AgentKind; sourceAgents?: AgentKind[] };
 type GatewayMediaCatalogEntry = ModelCatalogEntry & {
   availability?: 'available' | 'requires_payment';
 };
@@ -78,7 +112,7 @@ type GatewayMediaCatalogEntry = ModelCatalogEntry & {
 interface ExecutableMediaSnapshot {
   models: ModelCatalogEntry[];
   capabilitiesByModel: Map<string, ReadonlySet<MediaCapability>>;
-  guideIdsByModel: Map<string, string>;
+  legacyCapabilitiesByModel: Map<string, ReadonlySet<MediaCapability>>;
   unavailableByModel: Map<string, UnavailableMediaModel>;
 }
 
@@ -108,28 +142,36 @@ export function isMediaModelExecutable(
   return executableMediaSnapshot?.capabilitiesByModel.get(modelId)?.has(capability) === true;
 }
 
-export function isMediaModelExecutableForGuide(
+export function isMediaModelExecutableForLegacyInput(
   modelId: string,
-  guideId: string,
   capability: MediaCapability,
 ): boolean {
   return (
-    executableMediaSnapshot?.guideIdsByModel.get(modelId) === guideId &&
+    executableMediaSnapshot?.legacyCapabilitiesByModel.get(modelId)?.has(capability) === true &&
     isMediaModelExecutable(modelId, capability)
   );
 }
 
 export { supportsMediaCapability } from '../cindy-media/mediaCapabilities.js';
 
-function availableProviderMediaModels(capability?: MediaCapability): ExecutableMediaModel[] {
-  return listProviderMediaModels()
+async function availableProviderMediaModels(
+  capabilities: readonly MediaCapability[] = [],
+  includeSharedImages = true,
+  providerId?: string,
+): Promise<ExecutableMediaModel[]> {
+  const shared = includeSharedImages && capabilities.every(capability => capability === 'image.generate')
+    ? await listSharedImageModels(providerId) : [];
+  return [...listProviderMediaModels(capabilities), ...shared]
     .filter(
-      (model) => capability === undefined || supportsMediaCapability(model.modalities, capability),
+      (model) => capabilities.every(capability => supportsMediaCapability(model.modalities, capability)),
     )
     .map((model) => ({
       id: model.id,
       name: model.name,
       providerId: model.providerId,
+      ...(model.guideDriven ? { guideDriven: true } : {}),
+      ...(model.sourceAgent ? { sourceAgent: model.sourceAgent } : {}),
+      ...(model.sourceAgents ? { sourceAgents: [...model.sourceAgents] } : {}),
       mode: model.mode,
       modalities: {
         input: [...model.modalities.input],
@@ -145,7 +187,7 @@ function mergeMediaModels(
   const seen = new Set<string>();
   const models: ExecutableMediaModel[] = [];
   for (const model of [...preferred, ...fallback]) {
-    const key = `${model.providerId}\u0000${model.id}`;
+    const key = JSON.stringify([model.providerId, model.mode, model.id]);
     if (seen.has(key)) continue;
     seen.add(key);
     models.push(model);
@@ -227,9 +269,9 @@ async function fetchGatewayMediaModels(): Promise<GatewayMediaCatalogEntry[]> {
 
 export async function listAvailableMediaModels(
   capability?: MediaCapability,
-  options?: { skipGateway?: boolean },
+  options?: { skipGateway?: boolean; providerId?: string },
 ): Promise<ExecutableMediaModel[]> {
-  const providerModels = availableProviderMediaModels(capability);
+  const providerModels = await availableProviderMediaModels(capability ? [capability] : [], true, options?.providerId);
   if (options?.skipGateway) return providerModels;
   try {
     const gatewayModels = filterEnabledGatewayMediaModels(
@@ -242,6 +284,8 @@ export async function listAvailableMediaModels(
           CINDY_AI_PROVIDER_ID,
           model.id,
           'defaultEnabled' in model ? model.defaultEnabled : undefined,
+          undefined,
+          model.mode === 'video_generation' ? 'video' : 'image',
         ),
       )
       .map((model) => ({ ...model, providerId: CINDY_AI_PROVIDER_ID }));
@@ -254,24 +298,22 @@ export async function listAvailableMediaModels(
 
 export async function fetchMediaInvocationGuide(
   modelId: string,
+  protocol = 'gateway',
   timeoutMs = MEDIA_MODEL_REQUEST_TIMEOUT_MS,
 ): Promise<ResolvedMediaInvocationGuide> {
-  const guideModelId = mediaInvocationGuideModelId(modelId);
-  const query = new URLSearchParams({ modelId: guideModelId });
+  const query = new URLSearchParams({ modelId, protocol });
   const payload = await serverApiFetch<unknown>(
     `${MODEL_ACCESS_INVOCATION_GUIDE_PATH}?${query.toString()}`,
     {
       baseUrl: () => getClientEndpoint('modelAccessApiBaseUrl'),
       timeoutMs,
       logLabel: MODEL_ACCESS_INVOCATION_GUIDE_PATH,
+      token: null,
+      skipAutoRefresh: true,
+      skipSessionInvalidation: true,
     },
   );
-  return parseResolvedGuidePayload(payload, guideModelId);
-}
-
-/** Guide 只按模型协议名查询；provider/routing namespace 仍保留在真实调用身份中。 */
-export function mediaInvocationGuideModelId(modelId: string): string {
-  return modelId.slice(modelId.lastIndexOf('/') + 1);
+  return parseResolvedGuidePayload(payload, modelId);
 }
 
 function parseResolvedGuidePayload(
@@ -390,7 +432,7 @@ async function buildExecutableMediaSnapshot(): Promise<ExecutableMediaSnapshot> 
   );
   const batch = await fetchMediaInvocationGuideBatch();
   const capabilitiesByModel = new Map<string, ReadonlySet<MediaCapability>>();
-  const guideIdsByModel = new Map<string, string>();
+  const legacyCapabilitiesByModel = new Map<string, ReadonlySet<MediaCapability>>();
   const unavailableByModel = new Map<string, UnavailableMediaModel>();
 
   for (const model of models) {
@@ -430,13 +472,15 @@ async function buildExecutableMediaSnapshot(): Promise<ExecutableMediaSnapshot> 
         continue;
       }
       capabilitiesByModel.set(model.id, operations);
-      guideIdsByModel.set(model.id, resolvedGuide.guide.guideId);
+      legacyCapabilitiesByModel.set(model.id, new Set(resolvedGuide.guide.operations
+        .filter((operation) => operations.has(operation.capability) && supportsLegacyMediaInput(operation.inputSchema))
+        .map((operation) => operation.capability)));
     } catch (error) {
       unavailableByModel.set(model.id, unavailableFromGuideError(model.id, error));
     }
   }
 
-  return { models, capabilitiesByModel, guideIdsByModel, unavailableByModel };
+  return { models, capabilitiesByModel, legacyCapabilitiesByModel, unavailableByModel };
 }
 
 async function getExecutableMediaSnapshot(forceRefresh = false): Promise<ExecutableMediaSnapshot> {
@@ -483,16 +527,16 @@ async function getExecutableMediaSnapshot(forceRefresh = false): Promise<Executa
 }
 
 /**
- * 当前客户端真正可执行的媒体模型投影。一次批量 Guide 成功会重建全部图片/视频能力；
- * 后续调用只读内存，目录或身份变化时由 reset 显式失效。
+ * Gateway 沿用批量协议预检。自定义连接按声明呈现，准备调用时再按需
+ * 获取 Guide；目录查询不尝试调用，不提前替 Agent 判定接口是否适配。
  */
 export async function listExecutableMediaModels(
   capabilities: readonly MediaCapability[] = [],
-  options: { includeDisabled?: boolean; forceRefresh?: boolean } = {},
+  options: { includeDisabled?: boolean; forceRefresh?: boolean; skipGateway?: boolean; includeSharedImages?: boolean } = {},
 ): Promise<ExecutableMediaModelsResult> {
-  const providerModels = availableProviderMediaModels().filter((model) =>
-    capabilities.every((capability) => supportsMediaCapability(model.modalities, capability)),
-  );
+  const providerModels = await availableProviderMediaModels(capabilities, options.includeSharedImages);
+  if (options.skipGateway || (!options.includeDisabled && isProviderDisabled(readModelDisableOverrides(), CINDY_AI_PROVIDER_ID)))
+    return { models: providerModels, unavailable: [], candidateCount: providerModels.length };
   let snapshot: ExecutableMediaSnapshot;
   try {
     snapshot = await getExecutableMediaSnapshot(options.forceRefresh === true);
@@ -514,6 +558,8 @@ export async function listExecutableMediaModels(
       CINDY_AI_PROVIDER_ID,
       model.id,
       'defaultEnabled' in model ? model.defaultEnabled : undefined,
+      undefined,
+      model.mode === 'video_generation' ? 'video' : 'image',
     );
   });
   const gatewayModels: ExecutableMediaModel[] = [];

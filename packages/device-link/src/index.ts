@@ -8,6 +8,7 @@
  *  - client: DeviceLinkClient(重连 / 心跳 / 请求配对状态机)
  */
 export * from "./protocol.js";
+export * from "./deviceNameMerge.js";
 export * from "./allowlist.js";
 export * from "./client.js";
 export * from "./routedClient.js";
@@ -18,6 +19,10 @@ export * from "./directRtcRuntime.js";
 export { DIRECT_LINK_RUNTIME_SOURCE } from "./directRuntimeSource.js";
 export * from "./transport.js";
 export * from "./invokeTransfer.js";
+export { INVOKE_DELTA_CHANNELS, InvokeDeltaBases, isInvokeDeltaChannel, type InvokeResultDelta, type InvokeResultPatch } from "./invokeDelta.js";
+export { InvokeScheduler } from "./invokeScheduler.js";
+export * from "./pushTransfer.js";
+export * from "./pushTransferDictionary.js";
 export * from "./topics.js";
 export * from "./attachmentOssRef.js";
 export * from "./contactsSyncProtocol.js";
@@ -35,6 +40,7 @@ export * from "./remoteClipboard.js";
 export * from "./remoteCursor.js";
 export * from "./peerRecoveryScheduler.js";
 export * from "./invokePolicy.js";
+export * from "./listingReadCoalescer.js";
 export * from "./filePeer.js";
 export * from "./peerTransferCooldown.js";
 export * from "./peerInvoke.js";
@@ -57,8 +63,13 @@ export * from "./metadataContinuity.js";
 export * from "./providerShareEnvelope.js";
 export * from "./providerGroup.js";
 export * from "./modelFavorites.js";
+export * from "./orcaWorkerRoles.js";
 export * from "./sessionListTransport.js";
 export * from "./sessionMessageReuse.js";
+export * from "./historyViewDelta.js";
+export * from "./toolBodyStub.js";
+export * from "./historyRelinkFolded.js";
+export * from "./toolResultLiveLimit.js";
 
 export * from "./clipboardSync.js";
 export * from "./clipboardSyncFailure.js";
@@ -66,6 +77,7 @@ export * from "./clipboardTransfer.js";
 
 export * from "./selfHostedRelay.js";
 export * from "./selfHostedRelayAuth.js";
+export * from "./relayAccountDirectory.js";
 
 export * from "./pluginOauth.js";
 export * from "./pluginSettings.js";
@@ -83,6 +95,8 @@ export * from "./remoteAgent.js";
 export * from "./orcaRemoteWorker.js";
 export * from "./companionCloud.js";
 export * from "./machineStatus.js";
+export * from "./agentNetSwitch.js";
+export * from "./peerAppUpdate.js";
 export * from "./pluginPages.js";
 
-export { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation } from './stallDiagnostics.js';
+export { StallDiagnostics, diagnosticChannel, diagnosticRef, diagnosticOperation, shortDeviceRef } from './stallDiagnostics.js';

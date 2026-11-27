@@ -3,8 +3,8 @@ import { eq, lt, sql } from 'drizzle-orm';
 import { getDeviceId } from '../authManager';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current';
 import { githubObservations } from '../localDb/schema';
-import { outboundFetch } from '../maker-host/outbound-fetch';
-import { getSharedGhCliTokenSource } from './ghCliTokenSource';
+import { outboundFetch } from '../maker-host/outbound-fetch.desktop';
+import { readGithubTokenDetailed } from './githubToken.desktop.js';
 import { GithubReadService, type Journal } from './githubReadService';
 import { GithubReadTransport } from './githubReadTransport';
 import { readGithubDetails, readGithubFirstPages, type Connection } from './githubPrDetails';
@@ -15,9 +15,43 @@ const digest = (value: string) => createHash('sha256').update(value).digest('hex
 
 export async function githubReadScope(): Promise<string> {
   const account = getCurrentDbClientSnapshot();
-  const read = await getSharedGhCliTokenSource().readTokenDetailed();
+  const read = await readGithubTokenDetailed();
   if (account !== getCurrentDbClientSnapshot()) throw new Error('ACCOUNT_CHANGED');
   return `${account?.userId ?? 'none'}:${account?.clientEpoch ?? 0}:${read.ok ? digest(read.token) : 'no-token'}`;
+}
+
+/** 自动化「指定 PR 或 Issue」的识别结果；只含识别所需的公开信息。 */
+export type GithubItemResolution =
+  | { ok: true; kind: 'pr' | 'issue'; title: string; state: 'open' | 'closed' }
+  | { ok: false; reason: 'not-connected' | 'not-found' | 'unavailable' };
+
+/**
+ * GitHub 的 PR 与 Issue 共用编号；Issues 接口对两者都返回，PR 带 pull_request 字段。
+ * 复用账号级的条件读取与限速，不缓存失败。
+ */
+export async function resolveGithubItem(repository: string, number: number): Promise<GithubItemResolution> {
+  if (!/^[a-z\d][a-z\d-]{0,38}\/[a-z\d_.-]{1,100}$/i.test(repository) || !Number.isSafeInteger(number) || number < 1) {
+    return { ok: false, reason: 'not-found' };
+  }
+  const read = await readGithubTokenDetailed();
+  if (!read.ok) return { ok: false, reason: 'not-connected' };
+  try {
+    const scope = await githubReadScope();
+    const data = await githubTransport.read(scope, read.token, `/repos/${repository.toLowerCase()}/issues/${number}`, { ttl: 60_000 }) as {
+      title?: unknown; state?: unknown; pull_request?: unknown;
+    };
+    return {
+      ok: true,
+      kind: data.pull_request ? 'pr' : 'issue',
+      title: typeof data.title === 'string' ? data.title.slice(0, 300) : '',
+      state: data.state === 'closed' ? 'closed' : 'open',
+    };
+  } catch (error) {
+    const status = (error as { status?: unknown }).status;
+    if (status === 404 || status === 410) return { ok: false, reason: 'not-found' };
+    if (status === 401) return { ok: false, reason: 'not-connected' };
+    return { ok: false, reason: 'unavailable' };
+  }
 }
 
 /** Give GithubClient the same conditional transport and identity-wide rate-limit budget. */
@@ -45,7 +79,7 @@ export function createGithubReadService(statusService: PrStatusService): GithubR
   return new GithubReadService(async () => {
     const account = getCurrentDbClientSnapshot();
     if (!account) throw new Error('HOST_NOT_READY');
-    const read = await getSharedGhCliTokenSource().readTokenDetailed();
+    const read = await readGithubTokenDetailed();
     if (!read.ok) throw new Error(read.reason);
     const scope = digest(`${account.userId}:${read.token}`);
     const transportScope = await githubReadScope();

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Folder, ChevronDown, Check } from 'lucide-react';
+import { Folder, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   FolderPickerPopover,
@@ -8,10 +8,12 @@ import {
 import { BranchWorktreeChip } from '@/components/new-chat/WorktreeChipsRow';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { workingDirEquals } from '../../../shared/workingDir';
-import type {
-  WorkerProjectContext,
-  WorkerWorktreeRequest,
+import {
+  qualifyLocalWorkerBranch,
+  type WorkerProjectContext,
+  type WorkerWorktreeRequest,
 } from '../../../shared/orca-worker-project';
 
 const basename = (value: string) =>
@@ -19,6 +21,11 @@ const basename = (value: string) =>
     .replace(/[\\/]$/, '')
     .split(/[\\/]/)
     .pop() || value;
+
+/** 选中项目的显示名:主仓目录名,不带 worktree 后缀。 */
+export function workerProjectName(context: WorkerProjectContext): string {
+  return basename(context.selected.baseRepo ?? context.selected.directory);
+}
 
 export function useWorkerProjectSelection(
   open: boolean,
@@ -118,11 +125,15 @@ export function useWorkerProjectSelection(
     !!context.selected.baseRepo &&
     context.selected.headState !== 'unborn' &&
     !(sameProject && context.dialogue);
-  const branch =
-    sourceBranch ||
-    (snapshot?.key === key ? snapshot.preferredBranch : undefined) ||
-    context?.selected.branch ||
-    '';
+  const explicitBranch =
+    sourceBranch || (snapshot?.key === key ? snapshot.preferredBranch : undefined);
+  const currentBranch = context?.selected.branch ?? '';
+  const branch = explicitBranch || currentBranch;
+  // Picker and preference values already use a full ref for the remote option.
+  const checkoutSource =
+    explicitBranch || context?.selected.headState === 'branch'
+      ? qualifyLocalWorkerBranch(branch)
+      : branch;
   return {
     context,
     sameProject,
@@ -148,7 +159,7 @@ export function useWorkerProjectSelection(
           ...(context.selected.directory !== context.recordedDirectory
             ? { workingDir: context.selected.directory }
             : {}),
-          ...(checked && canWorktree ? { worktree: { sourceBranch: branch } } : {}),
+          ...(checked && canWorktree ? { worktree: { sourceBranch: checkoutSource } } : {}),
         }
       : {}) as { projectPath?: string; workingDir?: string; worktree?: WorkerWorktreeRequest },
   };
@@ -202,9 +213,7 @@ export function WorkerProjectField({
         if (request === branchRequest.current) setBranchLoading(false);
       });
   };
-  const selectedName = context
-    ? basename(context.selected.baseRepo ?? context.selected.directory)
-    : '';
+  const selectedName = context ? workerProjectName(context) : '';
   const sharedName = context
     ? `${selectedName}${context.selected.isWorktree ? ` (${context.selected.worktreeName ?? basename(context.selected.directory)})` : ''}`
     : '';
@@ -287,19 +296,11 @@ export function WorkerProjectField({
           ) : canWorktree ? (
             <>
               <label className="flex min-h-8 cursor-pointer items-center gap-2">
-                <input
-                  className="peer sr-only"
-                  type="checkbox"
+                <Checkbox
                   checked={checked}
                   disabled={disabled}
                   onChange={(event) => selection.setChecked(event.target.checked)}
                 />
-                <span
-                  aria-hidden
-                  className={`inline-flex size-3.5 shrink-0 items-center justify-center rounded border peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--focus-ring)] ${checked ? 'border-[var(--create-agent-send-bg)] bg-[var(--create-agent-send-bg)] text-[var(--create-agent-send-icon)]' : 'border-[var(--text-secondary)]'}`}
-                >
-                  {checked && <Check size={10} />}
-                </span>
                 {t('orca.workerProject.newWorktree')}
               </label>
               {checked && (

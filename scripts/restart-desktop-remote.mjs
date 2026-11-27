@@ -22,14 +22,15 @@ import {
   restartContextFromArgv,
   SHARED_USERDATA_ARG,
 } from './desktop-dev-verdict.mjs';
-import { PROCESS_TABLE_MAX_BYTES, collectDesktopWhoamiReport } from './desktop-whoami.mjs';
+import { PROCESS_TABLE_MAX_BYTES, collectDesktopWhoamiReport, identifyDesktopProcesses } from './desktop-whoami.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const gracefulTimeoutMs = 3000;
 const forceTimeoutMs = 5000;
 const pollIntervalMs = 150;
-const startupReadyTimeoutMs = 120_000;
+// Includes the cold Forge/Vite build as well as window/auth/database startup.
+const startupReadyTimeoutMs = 180_000;
 export const ISOLATED_AUTH_LAUNCH_PROOF_FILE = '.isolated-auth-launch-proof.json';
 const isolatedAuthLaunchProofTtlMs = 10 * 60_000;
 const forceKillLabel = process.platform === 'win32' ? 'taskkill /F /T' : 'kill -9';
@@ -246,6 +247,12 @@ export function partitionDesktopDevProcesses(processes, ownRootDir, checkoutPath
     (commandBelongsToCheckout(proc.command, ownRootDir, checkoutPaths) ? targets : preserved).push(proc);
   }
   return { targets, preserved };
+}
+// Personal smoke callers must refuse an occupied checkout, irrespective of userData.
+export const PERSONAL_SAFE_ISOLATED_START = 1;
+export function assertNoRestartTargets(processes, ownRootDir, checkoutPaths = []) {
+  const { targets } = partitionDesktopDevProcesses(processes, ownRootDir, checkoutPaths);
+  if (targets.length) throw new Error(`Isolated startup refuses occupied checkout (${targets.length} process(es)); no process stopped or cache cleared`);
 }
 
 function run(command, args, options = {}) {
@@ -469,6 +476,7 @@ function hasDesktopDevSignature(command) {
     command.includes('dev:desktop') ||
     command.includes('pnpm --filter desktop dev') ||
     command.includes('/node_modules/electron/') ||
+    (/\.app\/contents\/macos\/electron /.test(command) && command.includes('/apps/desktop')) ||
     (command.includes('/apps/desktop/') && (
       command.includes('vite.main.config') ||
       command.includes('vite.renderer.config') ||
@@ -522,6 +530,59 @@ function forceKillProcess(pid) {
   return true;
 }
 
+export function requestWindowsDesktopQuit(instance, now = Date.now()) {
+  if (!instance.userDataDir) return null;
+  const dir = path.join(instance.userDataDir, '.dev-instances');
+  try {
+    const record = JSON.parse(fs.readFileSync(path.join(dir, `${instance.pid}.json`), 'utf8'));
+    if (record.quitRequestProtocol !== 1 || record.pid !== instance.pid
+      || typeof record.rootDir !== 'string' || normalize(record.rootDir) !== normalize(instance.rootDir)
+      || typeof record.instanceId !== 'string' || !/^[a-f0-9-]{36}$/.test(record.instanceId)) return null;
+    const requestPath = path.join(dir, `${record.pid}-${record.instanceId}.quit`);
+    fs.writeFileSync(requestPath, JSON.stringify({ action: 'quit', pid: record.pid,
+      instanceId: record.instanceId, expiresAt: now + 30_000 }), { mode: 0o600 });
+    return () => { try { fs.rmSync(requestPath, { force: true }); } catch { /* Best effort. */ } };
+  } catch {
+    return null; // Older dev builds or unavailable provenance use the bounded force fallback.
+  }
+}
+
+/** Do not terminate launchers or renderers until main has finished normal disposal.
+ * Wait past lifecycle's 16s async budget / 20s watchdog, then reclaim survivors. */
+export async function stopWindowsDesktopDevProcesses(targets, targetRoot, {
+  requestQuit = requestWindowsDesktopQuit,
+  waitForExit = waitForDesktopDevProcessesToExit,
+  listProcesses = listDesktopDevProcesses,
+  forceKill = forceKillProcess,
+  log = console.log,
+} = {}) {
+  const instances = identifyDesktopProcesses(targets, [{ rootDir: targetRoot }]);
+  const requested = new Set();
+  const cleanups = [];
+  try {
+    for (const instance of instances) {
+      const cleanup = requestQuit(instance);
+      if (!cleanup) {
+        log(`    normal quit unavailable for ${instance.pid}; using force fallback`);
+        continue;
+      }
+      requested.add(instance.pid);
+      cleanups.push(cleanup);
+      log(`    requesting normal quit: ${instance.pid}`);
+    }
+    if (requested.size) await waitForExit(25_000, (proc) => requested.has(proc.pid));
+    // Re-scan: an exited parent must never be killed using the old PID snapshot.
+    const original = new Map(targets.map((proc) => [proc.pid, proc.command]));
+    for (const proc of listProcesses()) {
+      if (original.get(proc.pid) !== proc.command) continue;
+      log(`    taskkill /F /T ${proc.pid}: ${proc.command.slice(0, 180)}`);
+      forceKill(proc.pid);
+    }
+  } finally {
+    for (const cleanup of cleanups) cleanup();
+  }
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -546,6 +607,38 @@ async function waitForDesktopDevProcessesToExit(timeoutMs, filter = () => true) 
 
 function hasInteractiveTty() {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+}
+
+// A supervised personal launch has a live input terminal, but redirects the
+// coordinator's output to a file. Reuse stdin's terminal explicitly instead of
+// mistaking redirected stdout for a headless launch and opening another window.
+export function currentDarwinTerminal() {
+  if (process.platform !== 'darwin' || !process.stdin.isTTY) {
+    throw new Error('--reuse-terminal requires a live macOS terminal');
+  }
+  const result = spawnSync('/usr/bin/tty', [], {
+    stdio: ['inherit', 'pipe', 'pipe'], encoding: 'utf8',
+  });
+  const terminal = result.stdout?.trim();
+  if (result.status !== 0 || !terminal?.startsWith('/dev/tty')) {
+    throw new Error('Cannot identify the current terminal; no extra window opened');
+  }
+  return terminal;
+}
+
+export function launchDarwinDevInCurrentTerminal(command, logPath, { cwd = rootDir, env = process.env } = {}) {
+  const terminal = currentDarwinTerminal();
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  // Clean up any legacy in-tree FIFO left by older builds so recursive tools never block on logs/.
+  fs.rmSync(`${logPath}.fifo`, { force: true });
+  const output = fs.openSync(terminal, 'w');
+  try {
+    // Only this layer creates a PTY. Its output goes directly to the existing
+    // terminal; the bounded file drain remains alive for the entire dev process.
+    return spawn('/bin/zsh', ['-c', darwinTerminalLoggedCommand(command, logPath)], {
+      cwd, env, stdio: ['inherit', output, output],
+    });
+  } finally { fs.closeSync(output); }
 }
 
 function psSingleQuote(value) {
@@ -594,19 +687,24 @@ export function desktopDevTerminalLogPath(root = rootDir) {
 // Agent 没有 TTY 时 dev 跑在新开的 Terminal 标签页里，进程退出后标签页随之关闭，
 // 失败原因就看不到了。script(1) 继续给子进程一个 pty（electron-forge 依赖 TTY），
 // 输出经命名管道只把前 maxBytes 写进日志、其余丢弃：dev 会把 trace 级日志镜像到
-// 终端，长期运行的实例不能让这份文件无限增长。每次启动覆盖，退出码与子进程一致。
+// 终端，长期运行的实例不能让这份文件无限增长。命名管道建在临时目录而不是仓库的
+// apps/desktop/logs/ 下，避免 dev 运行期间递归 grep/tar 等工具误打开活跃 FIFO 而
+// 永久阻塞（并抢走日志字节）。每次启动覆盖，退出码与子进程一致。
 // 返回一个 `{ ...; }` 命令组，可以整体接在 `cd … &&` 后面；envPrefix 只作用于 script。
 export function darwinTerminalLoggedCommand(
   command,
   logPath,
-  { envPrefix = '', maxBytes = DEV_TERMINAL_LOG_MAX_BYTES } = {},
+  { envPrefix = '', maxBytes = DEV_TERMINAL_LOG_MAX_BYTES, fifoDir = os.tmpdir() } = {},
 ) {
   const log = shellSingleQuote(logPath);
-  const fifo = shellSingleQuote(`${logPath}.fifo`);
+  const fifoTemplate = shellSingleQuote(path.join(fifoDir, 'cindy-dev-term.XXXXXX'));
   return [
-    `{ rm -f ${fifo}; mkfifo ${fifo} && { { head -c ${maxBytes} > ${log}; cat > /dev/null; } < ${fifo} & }; `,
-    `${envPrefix}/usr/bin/script -q -F ${fifo} ${command}; `,
-    `cindyDevExit=$?; rm -f ${fifo}; (exit $cindyDevExit); }`,
+    `{ cindyDevFifoDir=$(mktemp -d ${fifoTemplate}) && `,
+    `cindyDevFifo="$cindyDevFifoDir/dev-terminal.fifo" && `,
+    `mkfifo -m 0600 "$cindyDevFifo" && `,
+    `{ { head -c ${maxBytes} > ${log}; cat > /dev/null; } < "$cindyDevFifo" & } && `,
+    `${envPrefix}/usr/bin/script -q -F "$cindyDevFifo" ${command}; `,
+    `cindyDevExit=$?; [ -n "$cindyDevFifoDir" ] && rm -rf -- "$cindyDevFifoDir"; (exit $cindyDevExit); }`,
   ].join('');
 }
 
@@ -987,12 +1085,12 @@ function devScriptForMode(mode) {
   return mode === 'local' ? 'dev:desktop' : 'dev:desktop:remote';
 }
 
-function packageManagerCommand(mode) {
+function packageManagerCommand(mode, startupArgs = []) {
   const runnerPath = path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs');
   if (process.platform === 'win32') {
-    return `${cmdDoubleQuote(process.execPath)} ${cmdDoubleQuote(runnerPath)} ${mode}`;
+    return `${cmdDoubleQuote(process.execPath)} ${cmdDoubleQuote(runnerPath)} ${mode}${startupArgs.map((arg) => ` ${cmdDoubleQuote(arg)}`).join('')}`;
   }
-  return `${shellSingleQuote(process.execPath)} ${shellSingleQuote(runnerPath)} ${shellSingleQuote(mode)}`;
+  return `${shellSingleQuote(process.execPath)} ${shellSingleQuote(runnerPath)} ${shellSingleQuote(mode)}${startupArgs.map((arg) => ` ${shellSingleQuote(arg)}`).join('')}`;
 }
 
 function darwinEnvPrefix() {
@@ -1060,7 +1158,12 @@ function devEnvEntries(env) {
     ['XDT_SIMULATE_ARM64_TRANSLATION', env.XDT_SIMULATE_ARM64_TRANSLATION],
     // A long-lived Terminal can retain a previous smoke run's environment.
     // Override its value even when this invocation did not request the smoke.
-    ['CINDY_CUA_SMOKE', ['1', 'cursor-goal'].includes(env.CINDY_CUA_SMOKE) ? env.CINDY_CUA_SMOKE : '0'],
+    ['CINDY_CUA_SMOKE', [
+      '1',
+      'cursor-goal',
+      'desktop-pointer',
+      'folder-picker',
+    ].includes(env.CINDY_CUA_SMOKE) ? env.CINDY_CUA_SMOKE : '0'],
     // 一次性 Grok wire 归因探针(dev-only;正常环境不设置,不产生额外日志)。
     ['XDT_WIRE_DIAGNOSTICS', env.XDT_WIRE_DIAGNOSTICS],
     // 一次性 Grok strict tool spike(dev-only;必须与 wire probe 一起显式开启)。
@@ -1075,11 +1178,14 @@ function devEnvEntries(env) {
     ['XDT_DEVICE_LINK_LOCAL_URL', env.XDT_DEVICE_LINK_LOCAL_URL],
     ['XDT_DEVICE_LINK_CN_LOCAL_URL', env.XDT_DEVICE_LINK_CN_LOCAL_URL],
     ['XDT_DEVICE_LINK_GLOBAL_LOCAL_URL', env.XDT_DEVICE_LINK_GLOBAL_LOCAL_URL],
+    ['XDT_WEBHOOK_CN_LOCAL_URL', env.XDT_WEBHOOK_CN_LOCAL_URL],
+    ['XDT_WEBHOOK_GLOBAL_LOCAL_URL', env.XDT_WEBHOOK_GLOBAL_LOCAL_URL],
     // 模型目录闭环调试覆写。dev 默认仍不联网；只有显式给 URL 时，主进程才允许
     // 从该地址拉取 Catalog。PATH / DISABLE 同步透传，避免 runner 吞掉已有契约。
     ['XDT_MODELS_URL', env.XDT_MODELS_URL],
     ['XDT_MODELS_PATH', env.XDT_MODELS_PATH],
     ['XDT_DISABLE_MODELS_FETCH', env.XDT_DISABLE_MODELS_FETCH],
+    ['XDT_DISABLE_GLOBAL_SHORTCUTS', env.XDT_DISABLE_GLOBAL_SHORTCUTS],
     // 启动即自动打开 DevTools(main 的 ready-to-show 里消费;见 bootstrap-electron)。
     // 给"快捷键/菜单打不开 DevTools"的环境兜底,QA 控制台验证依赖它。
     ['OPEN_DEVTOOLS', env.OPEN_DEVTOOLS],
@@ -1087,8 +1193,15 @@ function devEnvEntries(env) {
     ['XDT_DESKTOP_DEV_STARTUP_STATUS_FILE', env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE],
     ['CINDY_PERSONAL_MONITOR_DIR', env.CINDY_PERSONAL_MONITOR_DIR],
     ['CINDY_PERSONAL_GENERATION', env.CINDY_PERSONAL_GENERATION],
+    ['CINDY_PERSONAL_FIXED_APP', env.CINDY_PERSONAL_FIXED_APP],
+    ['CINDY_PERSONAL_ASSET_DIGEST', env.CINDY_PERSONAL_ASSET_DIGEST],
     // 插件存储启动边界的 dev 黑盒验收：仅显式临时结果路径时启用。
     ['XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE', env.XDT_PLUGIN_STORAGE_SMOKE_RESULT_FILE],
+    // IPC 通道调用计数报告（ipcChannelUsage.ts，仅源码运行）：Host 通道覆盖排行用。
+    ['CINDY_IPC_USAGE_FILE', env.CINDY_IPC_USAGE_FILE],
+    // 客户端模式目标（host-delegation.ts，只接受回环地址）：隔离沙箱里验收窗口连 Host。
+    // main() 已用 retainHostClientTargetForIsolated 把非隔离启动里的值删掉。
+    ['CINDY_HOST_API', env.CINDY_HOST_API],
   ];
 }
 
@@ -1114,9 +1227,9 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     .join(' ') + ' ';
 }
 
-function launchInSystemTerminal(mode) {
+function launchInSystemTerminal(mode, startupArgs) {
   if (process.platform === 'win32') {
-    const command = `cd /d ${cmdDoubleQuote(rootDir)} && ${devEnvPrefix()}${packageManagerCommand(mode)}`;
+    const command = `cd /d ${cmdDoubleQuote(rootDir)} && ${devEnvPrefix()}${packageManagerCommand(mode, startupArgs)}`;
     const script = [
       "Start-Process -FilePath 'cmd.exe'",
       `-ArgumentList @('/c', ${psSingleQuote(command)})`,
@@ -1138,7 +1251,7 @@ function launchInSystemTerminal(mode) {
     fs.mkdirSync(path.dirname(logPath), { recursive: true });
     fs.rmSync(logPath, { force: true });
     fs.rmSync(`${logPath}.fifo`, { force: true });
-    const command = `${darwinEnvPrefix()}${darwinStaleDevEnvUnset()}cd ${shellSingleQuote(rootDir)} && ${darwinTerminalLoggedCommand(packageManagerCommand(mode), logPath, { envPrefix: devEnvPrefix() })}; exitCode=$?; exit $exitCode`;
+    const command = `${darwinEnvPrefix()}${darwinStaleDevEnvUnset()}cd ${shellSingleQuote(rootDir)} && ${darwinTerminalLoggedCommand(packageManagerCommand(mode, startupArgs), logPath, { envPrefix: devEnvPrefix() })}; exitCode=$?; exit $exitCode`;
     const { scriptPath, args } = prepareDarwinTerminalLaunch(command);
     // osascript 在 do script 之前失败（自动化权限被拒、脚本错误）时临时脚本不会被 source，
     // 首行自删不会发生；按失败退出尽力删除，避免留下含开发环境变量的文件。
@@ -1172,14 +1285,17 @@ function launchInSystemTerminal(mode) {
   return null;
 }
 
-function startDesktopDev(mode) {
+function startDesktopDev(mode, reuseTerminal = false, startupArgs = []) {
   console.log(`==> Starting desktop ${mode} dev...`);
 
-  if (!hasInteractiveTty() && (process.platform === 'win32' || process.platform === 'darwin')) {
-    return launchInSystemTerminal(mode) ?? null;
+  if (!reuseTerminal && !hasInteractiveTty() && (process.platform === 'win32' || process.platform === 'darwin')) {
+    return launchInSystemTerminal(mode, startupArgs) ?? null;
   }
 
-  const child = spawn(process.execPath, [path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs'), mode], {
+  const logPath = reuseTerminal ? desktopDevTerminalLogPath() : null;
+  const child = reuseTerminal
+    ? launchDarwinDevInCurrentTerminal(packageManagerCommand(mode, startupArgs), logPath)
+    : spawn(process.execPath, [path.join(rootDir, 'scripts', 'desktop-dev-runner.mjs'), mode, ...startupArgs], {
     cwd: rootDir,
     stdio: 'inherit',
     windowsHide: false,
@@ -1192,7 +1308,7 @@ function startDesktopDev(mode) {
     if (signal) process.kill(process.pid, signal);
     process.exit(code ?? 0);
   });
-  return null;
+  return logPath;
 }
 
 function createStartupStatusPath() {
@@ -1243,10 +1359,29 @@ function attachStartupFailure(error, status) {
   return error;
 }
 
-export async function waitForDesktopStartup(statusPath, timeoutMs = startupReadyTimeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+export function resolveDesktopLaunchPolicy(argv, {
+  env = process.env, platform = process.platform, stdoutIsTTY = process.stdout.isTTY,
+} = {}) {
+  const reuseRequested = argv.includes('--reuse-terminal');
+  const supervised = platform === 'darwin' && reuseRequested &&
+    Boolean(env.CINDY_PERSONAL_MONITOR_DIR && env.CINDY_PERSONAL_GENERATION);
+  // The unattended shared launcher can have a tty on stdin that is already at EOF.
+  // Give the long-lived Forge process its own Terminal instead of that descriptor.
+  const needsOwnTerminal = supervised && argv.includes('--shared') && env.CINDY_PERSONAL_FIXED_APP && !stdoutIsTTY;
+  return { reuseTerminal: reuseRequested && !needsOwnTerminal, coldBuildTimeoutMs: supervised ? 600_000 : null };
+}
+
+export async function waitForDesktopStartup(statusPath, timeoutMs = startupReadyTimeoutMs, {
+  coldBuildTimeoutMs = null, now = Date.now, wait = sleep,
+} = {}) {
+  let waitingForWindow = coldBuildTimeoutMs !== null;
+  let deadline = now() + (coldBuildTimeoutMs ?? timeoutMs);
+  while (now() < deadline) {
     const status = readDesktopStartupStatus(statusPath);
+    if (waitingForWindow && status?.state === 'window-ready') {
+      waitingForWindow = false;
+      deadline = now() + timeoutMs;
+    }
     if (status?.state === 'ready') {
       console.log(`==> Desktop dev is ready (window + auth/local database, pid ${status.pid ?? 'unknown'}).`);
       fs.rmSync(statusPath, { force: true });
@@ -1261,21 +1396,16 @@ export async function waitForDesktopStartup(statusPath, timeoutMs = startupReady
         status,
       );
     }
-    await sleep(pollIntervalMs);
+    await wait(pollIntervalMs);
   }
-  // Keep a tombstone so a late Electron startup signal cannot recreate a stale
-  // status file after this waiter has already reported timeout to its caller.
-  writeDesktopStartupStatus(statusPath, { state: 'abandoned', at: Date.now() });
-  throw attachStartupFailure(
-    new Error(
-      `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s. Check the dev terminal and apps/desktop/logs/.`,
-    ),
-    {
-      state: 'failed',
-      code: 'STARTUP_TIMEOUT',
-      message: `Desktop dev did not finish window/auth/database startup within ${Math.round(timeoutMs / 1000)}s.`,
-    },
-  );
+  // A late Electron signal must not recreate the status file after a timeout.
+  writeDesktopStartupStatus(statusPath, { state: 'abandoned', at: now() });
+  const phase = waitingForWindow ? 'cold build and first window'
+    : coldBuildTimeoutMs !== null ? 'auth/database startup after window-ready' : 'window/auth/database startup';
+  const limit = waitingForWindow ? coldBuildTimeoutMs : timeoutMs;
+  const message = `Desktop dev did not finish ${phase} within ${Math.round(limit / 1000)}s.`;
+  throw attachStartupFailure(new Error(`${message} Check the dev terminal and apps/desktop/logs/.`),
+    { state: 'failed', code: 'STARTUP_TIMEOUT', message });
 }
 
 /**
@@ -1294,6 +1424,20 @@ export function clearInheritedIsolatedAuthAuthorization(env = process.env) {
   delete env.XDT_ISOLATED_AUTH_PROOF;
 }
 
+/**
+ * CINDY_HOST_API is the only switch that turns a desktop into a cindy-host
+ * client. Keep it only for an isolated sandbox started by this invocation, so a
+ * shared or production profile never starts in client mode because the caller's
+ * shell (for example a client-mode window's own child) carries the variable.
+ * Every launch path inherits process.env, so the value is removed there.
+ */
+export function retainHostClientTargetForIsolated(env, isolated) {
+  if (!env.CINDY_HOST_API) return 'absent';
+  if (isolated) return 'kept';
+  delete env.CINDY_HOST_API;
+  return 'dropped';
+}
+
 async function main() {
   // These capabilities are granted below only for this invocation's accepted --isolated-auth.
   clearInheritedIsolatedAuthAuthorization();
@@ -1306,12 +1450,18 @@ async function main() {
   else delete process.env.XDT_UI_MOCK;
   const rawIsolatedArg = argv.find((arg) => arg === '--isolated' || arg.startsWith('--isolated='));
   const isolatedArg = resolveIsolatedArg(rawIsolatedArg, rootDir, foldCaseOption(rootDir));
+  if (retainHostClientTargetForIsolated(process.env, Boolean(isolatedArg)) === 'dropped') {
+    console.log('==> Ignoring CINDY_HOST_API: host client mode is only allowed with --isolated.');
+  }
   if (rawIsolatedArg && isolatedArg && isolatedArg !== rawIsolatedArg) {
     argv = argv.map((arg) => (arg === rawIsolatedArg ? isolatedArg : arg));
     console.log(`==> Isolated sandbox from worktree: ${parseIsolationName(isolatedArg)}`);
   }
   const killOnly = argv.includes('--kill-only');
   const waitReady = argv.includes('--wait-ready');
+  const { reuseTerminal, coldBuildTimeoutMs } = resolveDesktopLaunchPolicy(argv);
+  // Fail before the stop stage if the requested terminal has disappeared.
+  if (reuseTerminal) currentDarwinTerminal();
   const preserveRunning = argv.includes('--preserve-running');
   const replaceRunningArg = argv.find((arg) => arg.startsWith('--replace-running-root='));
   const replaceRunningRoot = replaceRunningArg
@@ -1578,6 +1728,7 @@ async function main() {
   }
 
   const allTargets = listDesktopDevProcesses();
+  if (argv.includes('--refuse-running')) assertNoRestartTargets(allTargets, rootDir, checkoutPaths);
   // kill 作用域 = 当前 checkout。其他 worktree / 命名沙箱的实例一律保留。
   const ownScope = partitionDesktopDevProcesses(allTargets, rootDir, checkoutPaths);
   const targets = replaceRunningRoot
@@ -1603,9 +1754,13 @@ async function main() {
       console.log('==> No running desktop dev processes were found for the requested replacement root.');
     } else {
       console.log(`==> Stopping ${targets.length} desktop dev process(es) from the requested replacement root...`);
-      for (const target of targets) {
-        console.log(`    kill ${target.pid}: ${target.command.slice(0, 180)}`);
-        killProcess(target.pid);
+      if (process.platform === 'win32') {
+        await stopWindowsDesktopDevProcesses(targets, replaceRunningRoot);
+      } else {
+        for (const target of targets) {
+          console.log(`    kill ${target.pid}: ${target.command.slice(0, 180)}`);
+          killProcess(target.pid);
+        }
       }
 
       const matchesReplacementRoot = (proc) => commandContainsPath(proc.command, replaceRunningRoot);
@@ -1642,9 +1797,13 @@ async function main() {
     console.log('==> No existing Cindy desktop dev processes found for this checkout.');
   } else {
     console.log(`==> Stopping ${targets.length} existing Cindy desktop dev process(es) from this checkout...`);
-    for (const target of targets) {
-      console.log(`    kill ${target.pid}: ${target.command.slice(0, 180)}`);
-      killProcess(target.pid);
+    if (process.platform === 'win32') {
+      await stopWindowsDesktopDevProcesses(targets, rootDir);
+    } else {
+      for (const target of targets) {
+        console.log(`    kill ${target.pid}: ${target.command.slice(0, 180)}`);
+        killProcess(target.pid);
+      }
     }
 
     // 等待/强杀同样限定在本 checkout —— 不带过滤器会把其他 checkout 仍在跑的
@@ -1676,7 +1835,10 @@ async function main() {
 
   if (killOnly) return;
 
-  if (!preserveRunning) clearDesktopDevCaches(rootDir);
+  if (process.env.CINDY_PERSONAL_ASSET_DIGEST && process.env.CINDY_PERSONAL_MONITOR_DIR && process.env.CINDY_PERSONAL_GENERATION) {
+    const { verifyInterface } = await import('./personal-build/interface-assets.mjs');
+    verifyInterface(rootDir, process.env.CINDY_PERSONAL_ASSET_DIGEST);
+  } else if (!preserveRunning) clearDesktopDevCaches(rootDir);
 
   let startupStatusPath = null;
   if (waitReady) {
@@ -1690,7 +1852,12 @@ async function main() {
       isolationName: process.env.XDT_ISOLATED_NAME || '',
     });
   }
-  const terminalLogPath = startDesktopDev(mode);
+  // Re-pass the explicit file as CLI intent: the child wrapper must still ignore
+  // unrelated inherited XDT_ENDPOINT_MANIFEST_FILE values.
+  const startupArgs = argv.some((arg) => arg === '--endpoints-file' || arg.startsWith('--endpoints-file='))
+    ? [`--endpoints-file=${path.resolve(rootDir, startupConfig.endpointManifestFile)}`]
+    : [];
+  const terminalLogPath = startDesktopDev(mode, reuseTerminal, startupArgs);
   // 所有非 ready 的结论（启动失败、超时、ready 后进程退出导致的 WHOAMI_MISMATCH）
   // 都先打印终端日志末尾，并在 verdict 里带上 log=。
   const printFailedVerdict = (verdict) => {
@@ -1703,7 +1870,7 @@ async function main() {
   };
   if (startupStatusPath) {
     try {
-      await waitForDesktopStartup(startupStatusPath);
+      await waitForDesktopStartup(startupStatusPath, startupReadyTimeoutMs, { coldBuildTimeoutMs });
       const report = collectDesktopWhoamiReport({
         rootDir,
         userDataDir: process.env.XDT_USER_DATA_DIR,

@@ -12,8 +12,10 @@ import { act, renderHook } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 
 import '../../themes/colors';
-import { bootstrapLocalThemesSync } from '../../themes/local-themes';
+import { bootstrapLocalThemesSync, getLocalThemes } from '../../themes/local-themes';
 import { themeService } from '../../themes/theme-service';
+import { tryGetFamily } from '../../themes/families';
+import { DEFAULT_APPEARANCE_SETTINGS } from '../../../shared/appearanceSettings';
 import type { LocalThemesResult } from '../../../shared/local-themes';
 import {
   __resetLoginFirstLaunchLightGateForTest,
@@ -25,6 +27,8 @@ import {
 } from '../useTheme';
 
 const applyVibrancyMock = vi.fn();
+vi.mock('../../lib/toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('../../i18n', () => ({ default: { t: (key: string) => key } }));
 let systemPrefersDark = false;
 
 // jsdom 无 matchMedia,ThemeProvider 初始化与 system 模式需要它。
@@ -67,6 +71,195 @@ describe('useTheme 跨窗口主题同步(D2-3)', () => {
     };
     applyVibrancyMock.mockClear();
   });
+
+  // Unit, real ThemeProvider/setters and browser storage: old users must not
+  // depend on the Host appearance file to start or switch builtin themes.
+  // Earlier migration tests asserted the replacement ownership, not this
+  // compatibility contract. A throwing Host plus an old dark/default choice
+  // reproduces both the startup regression and the lost synchronous setter.
+  it('starts and switches builtin themes from legacy storage even when Host settings are unreadable', () => {
+    const unavailable = vi.fn(() => { throw new Error('Appearance file unreadable'); });
+    Object.assign(window.electronAPI, { appearanceSettings: {
+      getSync: unavailable, selectTheme: unavailable, migrateTheme: unavailable,
+      onChanged: unavailable,
+    } });
+    localStorage.setItem('theme', 'dark');
+    localStorage.setItem('theme.familyId', 'default');
+    expect(getInitialThemeVariant().theme.type).toBe('dark');
+    const { result } = renderHook(() => useTheme(), { wrapper });
+    expect(result.current.familyId).toBe('default');
+    expect(localStorage.getItem('theme')).toBe('dark');
+    for (const mode of ['system', 'light', 'dark'] as const) {
+      act(() => result.current.setTheme(mode));
+      expect(result.current.theme).toBe(mode);
+      expect(localStorage.getItem('theme')).toBe(mode);
+    }
+    act(() => result.current.setFamily('cindy'));
+    expect(result.current.familyId).toBe('cindy');
+    expect(localStorage.getItem('theme.familyId')).toBe('cindy');
+    expect(unavailable).not.toHaveBeenCalled();
+  });
+
+  // Unit through the real cache and ThemeProvider: a package adds metadata and
+  // async preparation without changing old Theme objects or stored selection.
+  // Minimum: one local package then a builtin; legacy storage tests miss this exit.
+  it('prepares an explicit package before saving its selection and clears defaults only when leaving a package', async () => {
+    vi.mocked(themeService.applyTheme).mockRestore();
+    localStorage.setItem('theme', 'light');
+    localStorage.setItem('theme.familyId', 'default');
+    const builtin = structuredClone(tryGetFamily('cindy'));
+    const loose = { id: 'loose-local', name: 'Loose', type: 'light' as const, colors: {} };
+    const install = (themes: LocalThemesResult['themes']) => {
+      Object.assign(window.electronAPI, { localThemes: {
+        listSync: () => ({ success: true, themes, diagnostics: [] }), onChanged: () => () => {},
+      } });
+      bootstrapLocalThemesSync();
+    };
+    install([loose]);
+    const originalLoose = getLocalThemes()[0];
+    install([{ ...loose, appearance: { density: 0.9 } }, {
+      id: 'paper-light-local', family: 'paper', name: 'Paper', type: 'light', colors: {},
+      packageSha256: 'a'.repeat(64), appearance: { uiFont: { family: 'Theme Font' }, motion: 0 },
+    }]);
+    expect(getLocalThemes()[0]).toEqual(originalLoose);
+    expect(tryGetFamily('cindy')).toEqual(builtin);
+    let complete!: (value: typeof DEFAULT_APPEARANCE_SETTINGS) => void;
+    const selectTheme = vi.fn(() => new Promise<typeof DEFAULT_APPEARANCE_SETTINGS>(resolve => { complete = resolve; }));
+    Object.assign(window.electronAPI, { appearanceSettings: {
+      getSync: () => DEFAULT_APPEARANCE_SETTINGS, onChanged: () => () => {}, selectTheme,
+    } });
+    const { result, unmount } = renderHook(() => useTheme(), { wrapper });
+    expect(selectTheme).not.toHaveBeenCalled();
+    const previousTheme = document.documentElement.dataset.theme;
+    act(() => { result.current.setFamily('paper-local'); });
+    expect(document.documentElement.dataset.theme).toBe(previousTheme);
+    expect(result.current.familyId).toBe('default');
+    expect(localStorage.getItem('theme.familyId')).toBe('default');
+    expect(selectTheme).toHaveBeenCalledExactlyOnceWith({ mode: 'light', familyId: 'paper-local' });
+    await act(async () => { complete(DEFAULT_APPEARANCE_SETTINGS); });
+    expect(document.documentElement.dataset.theme).toBe('paper-light-local');
+    expect(result.current.familyId).toBe('paper-local');
+    expect(localStorage.getItem('theme.familyId')).toBe('paper-local');
+    selectTheme.mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
+    await act(async () => { result.current.setFamily('default'); });
+    expect(selectTheme).toHaveBeenLastCalledWith(null);
+    expect(selectTheme).toHaveBeenCalledTimes(2);
+    await act(async () => { result.current.setFamily('loose-local'); result.current.setTheme('dark'); });
+    expect(selectTheme).toHaveBeenCalledTimes(2);
+    expect(localStorage.getItem('theme.familyId')).toBe('loose-local');
+    unmount();
+  });
+
+  // Unit, real setters/storage/palette: an explicit bad package must never write
+  // the selection, even temporarily. The former rollback tests checked only the
+  // final state and missed writes propagated to other windows before rejection.
+  it.each(['builtin', 'absent', 'package', 'mode', 'accepted'])(
+    'keeps the original selection and palette throughout package rejection (%s)', async scenario => {
+      vi.mocked(themeService.applyTheme).mockRestore();
+      const packaged = (family: string, type: 'light' | 'dark') => ({
+        id: `${family}-${type}-local`, family, name: family, type, colors: { surface: '#fafafa' },
+        packageSha256: 'a'.repeat(64), appearance: { density: 0.9 },
+      });
+      let previousFamily = scenario === 'builtin' ? 'default' : scenario === 'absent' ? 'cindy' : 'kept-local';
+      if (scenario !== 'absent') {
+        localStorage.setItem('theme', 'system');
+        localStorage.setItem('theme.familyId', previousFamily);
+      }
+      let stored = [localStorage.getItem('theme'), localStorage.getItem('theme.familyId')];
+      const selectTheme = vi.fn().mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
+      Object.assign(window.electronAPI, { localThemes: {
+        listSync: () => ({ success: true, themes: ['kept', 'broken', 'newer'].flatMap(family =>
+          [packaged(family, 'light'), packaged(family, 'dark')]), diagnostics: [] }),
+        onChanged: () => () => {},
+      }, appearanceSettings: { getSync: () => DEFAULT_APPEARANCE_SETTINGS,
+        onChanged: () => () => {}, selectTheme } });
+      bootstrapLocalThemesSync();
+      const { result, unmount } = renderHook(() => useTheme(), { wrapper });
+      await act(async () => {});
+      if (scenario === 'accepted') {
+        await act(async () => { result.current.setFamily('newer-local'); });
+        previousFamily = 'newer-local';
+        stored = [localStorage.getItem('theme'), localStorage.getItem('theme.familyId')];
+      }
+      const previousTheme = themeService.getCurrentTheme();
+      const acceptedCalls = selectTheme.mock.calls.length;
+      const writes = vi.spyOn(Storage.prototype, 'setItem');
+      const rejects: Array<(reason: Error) => void> = [];
+      selectTheme.mockImplementation((selection: unknown) => selection === null
+        ? Promise.resolve(DEFAULT_APPEARANCE_SETTINGS)
+        : new Promise((_resolve, reject) => { rejects.push(reject); }));
+      act(() => {
+        if (scenario === 'mode') result.current.setTheme('dark');
+        else result.current.setFamily('broken-local');
+      });
+      expect(result.current.familyId).toBe(previousFamily);
+      expect(result.current.theme).toBe('system');
+      expect([localStorage.getItem('theme'), localStorage.getItem('theme.familyId')]).toEqual(stored);
+      expect(themeService.getCurrentTheme()).toBe(previousTheme);
+      expect(writes).not.toHaveBeenCalled();
+      const requests = rejects.length;
+      await act(async () => { rejects.at(-1)!(new Error('Invalid resource')); await vi.dynamicImportSettled(); });
+      expect(result.current.familyId).toBe(previousFamily);
+      expect(result.current.theme).toBe('system');
+      expect([localStorage.getItem('theme'), localStorage.getItem('theme.familyId')]).toEqual(stored);
+      expect(themeService.getCurrentTheme()).toBe(previousTheme);
+      expect(document.documentElement.dataset.theme).toBe(previousTheme!.id);
+      expect(selectTheme).toHaveBeenCalledTimes(acceptedCalls + requests);
+      expect(writes).not.toHaveBeenCalled();
+      writes.mockRestore();
+      selectTheme.mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
+      act(() => result.current.setFamily('default'));
+      await act(async () => {});
+      unmount();
+    },
+  );
+
+  // Unit: two successful preparations complete out of order, or a synchronous
+  // builtin/loose selection cancels one. Existing rejection tests miss late
+  // success overwriting a newer choice. Deferred IPC keeps the test under 5s.
+  it.each(['package', 'builtin', 'loose', 'same-mode', 'storage'] as const)(
+    'discards a successful package preparation superseded by %s', async next => {
+      vi.mocked(themeService.applyTheme).mockRestore();
+      localStorage.setItem('theme', 'light');
+      localStorage.setItem('theme.familyId', 'default');
+      const complete: Array<(value: typeof DEFAULT_APPEARANCE_SETTINGS) => void> = [];
+      const selectTheme = vi.fn((selection: unknown) => selection === null
+        ? Promise.resolve(DEFAULT_APPEARANCE_SETTINGS)
+        : new Promise<typeof DEFAULT_APPEARANCE_SETTINGS>(resolve => { complete.push(resolve); }));
+      Object.assign(window.electronAPI, { localThemes: {
+        listSync: () => ({ success: true, diagnostics: [], themes: [
+          ...['first', 'last'].map(family => ({ id: `${family}-light-local`, family, name: family,
+            type: 'light', colors: {}, packageSha256: 'a'.repeat(64), appearance: { density: 0.9 } })),
+          { id: 'loose-local', name: 'Loose', type: 'light', colors: {} },
+        ] }), onChanged: () => () => {},
+      }, appearanceSettings: { getSync: () => DEFAULT_APPEARANCE_SETTINGS,
+        onChanged: () => () => {}, selectTheme } });
+      bootstrapLocalThemesSync();
+      const { result, unmount } = renderHook(() => useTheme(), { wrapper });
+      act(() => { result.current.setFamily('first-local'); });
+      act(() => {
+        if (next === 'storage') {
+          localStorage.setItem('theme.familyId', 'cindy');
+          dispatchStorage('theme.familyId', 'cindy');
+        } else if (next === 'same-mode') result.current.setTheme('light');
+        else result.current.setFamily(next === 'package' ? 'last-local' : next === 'builtin' ? 'cindy' : 'loose-local');
+      });
+      if (next === 'package') {
+        expect(result.current.familyId).toBe('default');
+        await act(async () => { complete[1](DEFAULT_APPEARANCE_SETTINGS); });
+      }
+      const expected = next === 'package' ? 'last-local' : next === 'builtin' || next === 'storage' ? 'cindy' : next === 'loose' ? 'loose-local' : 'default';
+      const palette = themeService.getCurrentTheme();
+      expect(result.current.familyId).toBe(expected);
+      await act(async () => { complete[0](DEFAULT_APPEARANCE_SETTINGS); });
+      expect(result.current.familyId).toBe(expected);
+      expect(localStorage.getItem('theme.familyId')).toBe(expected);
+      expect(themeService.getCurrentTheme()).toBe(palette);
+      selectTheme.mockResolvedValue(DEFAULT_APPEARANCE_SETTINGS);
+      await act(async () => { result.current.setFamily('default'); });
+      unmount();
+    },
+  );
 
   it('把应用主题模式同步给 main 作为下次 Windows 创建期 backing 镜像', () => {
     localStorage.setItem('theme', 'dark');

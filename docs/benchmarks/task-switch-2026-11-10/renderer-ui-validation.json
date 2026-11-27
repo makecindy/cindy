@@ -1,0 +1,359 @@
+{
+  "baseline": "70eb974da4d3792cc5feabc8bdc9ee1e1f06233d",
+  "broadCheck": {
+    "command": "pnpm ui:check --changed --theme all",
+    "status": "failed",
+    "executedVariants": 1222,
+    "passed": 1121,
+    "failed": 100,
+    "interrupted": 1,
+    "totalMs": 2254648,
+    "cleanup": {
+      "runtimeClosed": true,
+      "scratchRemoved": true
+    }
+  },
+  "representativeCheck": {
+    "selectedCases": 13,
+    "scope": "Only feature-context.tsx differs between rendered before/after bundles; all scenarios are current.",
+    "timings": {
+      "buildMs": 93404,
+      "launchMs": 184,
+      "variantsMs": 134026,
+      "overviewMs": 1192,
+      "closeMs": 189,
+      "totalMs": 232444
+    },
+    "cleanup": {
+      "runtimeClosed": true,
+      "scratchRemoved": true
+    },
+    "pages": [
+      {
+        "name": "group-chat",
+        "changedProductFiles": [
+          "apps\\desktop\\src\\renderer\\features\\feature-context.tsx"
+        ]
+      },
+      {
+        "name": "group-jump-bottom",
+        "changedProductFiles": [
+          "apps\\desktop\\src\\renderer\\features\\feature-context.tsx"
+        ]
+      },
+      {
+        "name": "im-default-model",
+        "changedProductFiles": [
+          "apps\\desktop\\src\\renderer\\features\\feature-context.tsx"
+        ]
+      },
+      {
+        "name": "mail-reading",
+        "changedProductFiles": [
+          "apps\\desktop\\src\\renderer\\features\\feature-context.tsx"
+        ]
+      },
+      {
+        "name": "model-protocol-paths",
+        "changedProductFiles": [
+          "apps\\desktop\\src\\renderer\\features\\feature-context.tsx"
+        ]
+      },
+      {
+        "name": "model-selector-performance",
+        "changedProductFiles": [
+          "apps\\desktop\\src\\renderer\\features\\feature-context.tsx"
+        ]
+      },
+      {
+        "name": "plugin-install-mail",
+        "changedProductFiles": [
+          "apps\\desktop\\src\\renderer\\features\\feature-context.tsx"
+        ]
+      },
+      {
+        "name": "pr-popover",
+        "changedProductFiles": [
+          "apps\\desktop\\src\\renderer\\features\\feature-context.tsx"
+        ]
+      },
+      {
+        "name": "pr-task-archive",
+        "changedProductFiles": [
+          "apps\\desktop\\src\\renderer\\features\\feature-context.tsx"
+        ]
+      },
+      {
+        "name": "provider-detection",
+        "changedProductFiles": [
+          "apps\\desktop\\src\\renderer\\features\\feature-context.tsx"
+        ]
+      },
+      {
+        "name": "provider-share-sources",
+        "changedProductFiles": [
+          "apps\\desktop\\src\\renderer\\features\\feature-context.tsx"
+        ]
+      },
+      {
+        "name": "provider-template-catalog",
+        "changedProductFiles": [
+          "apps\\desktop\\src\\renderer\\features\\feature-context.tsx"
+        ]
+      }
+    ],
+    "variants": [
+      {
+        "id": "group-chat.body-answer.light.zh-CN.720x700",
+        "role": "before",
+        "status": "before-failed",
+        "errors": [
+          "locator.waitFor: Timeout 10000ms exceeded.",
+          "useAuth must be used within AuthProvider"
+        ],
+        "checkWarnings": []
+      },
+      {
+        "id": "group-chat.body-answer.light.zh-CN.720x700",
+        "role": "after",
+        "status": "failed",
+        "errors": [
+          "locator.waitFor: Timeout 10000ms exceeded.",
+          "useAuth must be used within AuthProvider"
+        ],
+        "checkWarnings": []
+      },
+      {
+        "id": "group-jump-bottom.thread-process.light.zh-CN.1280x800",
+        "role": "before",
+        "status": "captured",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "group-jump-bottom.thread-process.light.zh-CN.1280x800",
+        "role": "after",
+        "status": "passed",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "im-default-model.default.light.zh-CN.660x520",
+        "role": "before",
+        "status": "before-failed",
+        "errors": [
+          "Error: page failed to start: Uncaught Error: useAuth must be used within AuthProvider",
+          "useAuth must be used within AuthProvider"
+        ],
+        "checkWarnings": []
+      },
+      {
+        "id": "im-default-model.default.light.zh-CN.660x520",
+        "role": "after",
+        "status": "failed",
+        "errors": [
+          "Error: page failed to start: Uncaught Error: useAuth must be used within AuthProvider",
+          "useAuth must be used within AuthProvider"
+        ],
+        "checkWarnings": []
+      },
+      {
+        "id": "mail-reading.default.light.zh-CN.640x700",
+        "role": "before",
+        "status": "captured",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "mail-reading.default.light.zh-CN.640x700",
+        "role": "after",
+        "status": "passed",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "model-protocol-paths.default.light.zh-CN.1000x800",
+        "role": "before",
+        "status": "before-failed",
+        "errors": [
+          "Error: page failed to start: Uncaught TypeError: window.electronAPI.maker.getModelPriceOverride is not a function",
+          "window.electronAPI.maker.getModelPriceOverride is not a function"
+        ],
+        "checkWarnings": []
+      },
+      {
+        "id": "model-protocol-paths.default.light.zh-CN.1000x800",
+        "role": "after",
+        "status": "failed",
+        "errors": [
+          "Error: page failed to start: Uncaught TypeError: window.electronAPI.maker.getModelPriceOverride is not a function",
+          "window.electronAPI.maker.getModelPriceOverride is not a function"
+        ],
+        "checkWarnings": []
+      },
+      {
+        "id": "model-selector-performance.stress.light.zh-CN.1100x800",
+        "role": "before",
+        "status": "captured",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "model-selector-performance.stress.light.zh-CN.1100x800",
+        "role": "after",
+        "status": "passed",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "plugin-install-mail.participant-avatars.light.zh-CN.360x720",
+        "role": "before",
+        "status": "captured",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "plugin-install-mail.participant-avatars.light.zh-CN.360x720",
+        "role": "after",
+        "status": "passed",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "pr-popover.default.light.zh-CN.920x850",
+        "role": "before",
+        "status": "captured",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "pr-popover.default.light.zh-CN.920x850",
+        "role": "after",
+        "status": "passed",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "pr-task-archive.default.light.zh-CN.900x420",
+        "role": "before",
+        "status": "captured",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "pr-task-archive.default.light.zh-CN.900x420",
+        "role": "after",
+        "status": "passed",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "provider-detection.cloudflare-gateway-scheme.light.zh-CN.900x900",
+        "role": "before",
+        "status": "captured",
+        "errors": [],
+        "checkWarnings": [
+          "check on HEAD stopped: locator.click: Timeout 10000ms exceeded."
+        ]
+      },
+      {
+        "id": "provider-detection.cloudflare-gateway-scheme.light.zh-CN.900x900",
+        "role": "after",
+        "status": "failed",
+        "errors": ["locator.click: Timeout 10000ms exceeded."],
+        "checkWarnings": []
+      },
+      {
+        "id": "provider-share-sources.subscription-pool.light.zh-CN.1000x720",
+        "role": "before",
+        "status": "captured",
+        "errors": [],
+        "checkWarnings": ["check on HEAD stopped: alex@example.com: 5 小时"]
+      },
+      {
+        "id": "provider-share-sources.subscription-pool.light.zh-CN.1000x720",
+        "role": "after",
+        "status": "failed",
+        "errors": ["AssertionError [ERR_ASSERTION]: alex@example.com: 5 小时"],
+        "checkWarnings": []
+      },
+      {
+        "id": "provider-template-catalog.address-sub2api-0.light.zh-CN.1000x900",
+        "role": "before",
+        "status": "captured",
+        "errors": [],
+        "checkWarnings": [
+          "check on HEAD stopped: locator.click: Timeout 10000ms exceeded."
+        ]
+      },
+      {
+        "id": "provider-template-catalog.address-sub2api-0.light.zh-CN.1000x900",
+        "role": "after",
+        "status": "failed",
+        "errors": ["locator.click: Timeout 10000ms exceeded."],
+        "checkWarnings": []
+      },
+      {
+        "id": "provider-template-catalog.wizard-moonshot-kimi-global.light.zh-CN.1000x900",
+        "role": "before",
+        "status": "captured",
+        "errors": [],
+        "checkWarnings": ["check on HEAD stopped: missing selected model codex"]
+      },
+      {
+        "id": "provider-template-catalog.wizard-moonshot-kimi-global.light.zh-CN.1000x900",
+        "role": "after",
+        "status": "failed",
+        "errors": [
+          "AssertionError [ERR_ASSERTION]: missing selected model codex"
+        ],
+        "checkWarnings": []
+      }
+    ]
+  },
+  "historyPositionCheck": {
+    "command": "pnpm ui:check --page group-chat --case long-thread --theme all --compare HEAD",
+    "timings": {
+      "buildMs": 9113,
+      "launchMs": 168,
+      "variantsMs": 6055,
+      "overviewMs": 242,
+      "closeMs": 133,
+      "totalMs": 16084
+    },
+    "cleanup": {
+      "runtimeClosed": true,
+      "scratchRemoved": true
+    },
+    "variants": [
+      {
+        "id": "group-chat.long-thread.light.zh-CN.800x600",
+        "role": "before",
+        "status": "captured",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "group-chat.long-thread.light.zh-CN.800x600",
+        "role": "after",
+        "status": "passed",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "group-chat.long-thread.dark.zh-CN.800x600",
+        "role": "before",
+        "status": "captured",
+        "errors": [],
+        "checkWarnings": []
+      },
+      {
+        "id": "group-chat.long-thread.dark.zh-CN.800x600",
+        "role": "after",
+        "status": "passed",
+        "errors": [],
+        "checkWarnings": []
+      }
+    ]
+  }
+}

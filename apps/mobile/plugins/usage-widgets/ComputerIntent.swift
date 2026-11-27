@@ -42,6 +42,7 @@ struct ComputerQuery: EntityQuery {
 /// logo and name too (`AccountKey`), so a choice still finds the account on another computer.
 struct AccountEntity: AppEntity {
   let key: AccountKey
+  var sourceLogo: String? = nil
 
   var id: String { key.encoded }
 
@@ -49,7 +50,8 @@ struct AccountEntity: AppEntity {
   static var defaultQuery = AccountQuery()
 
   var displayRepresentation: DisplayRepresentation {
-    let image = key.logo.map { DisplayRepresentation.Image(named: "logo-\($0)") }
+    let logo = sourceLogo ?? widgetDisplayLogo(id: key.id, name: key.name, logo: key.logo)
+    let image = logo.map { DisplayRepresentation.Image(named: "logo-\($0)") }
     return DisplayRepresentation(title: "\(key.name)", image: image)
   }
 }
@@ -57,16 +59,31 @@ struct AccountEntity: AppEntity {
 /// The accounts of the widget's chosen computer, in that computer's order. Hidden ones on the
 /// computer are not sent, so they are not offered either.
 struct AccountQuery: EntityQuery {
+  #if os(iOS)
   @IntentParameterDependency<QuotaWidgetIntent>(\.$computer)
   var config
+  #endif
 
   func entities(for identifiers: [String]) async throws -> [AccountEntity] {
-    identifiers.map { AccountEntity(key: AccountKey(encoded: $0)) }
+    guard !identifiers.isEmpty else { return [] }
+    let sources = currentSources()
+    return identifiers.map {
+      let key = AccountKey(encoded: $0)
+      return AccountEntity(key: key, sourceLogo: key.match(in: sources)?.displayLogo)
+    }
   }
 
   func suggestedEntities() async throws -> [AccountEntity] {
-    let sources = WidgetState.load(computer: config?.computer.id).snapshot?.sources ?? []
-    return sources.map { AccountEntity(key: AccountKey(source: $0)) }
+    currentSources().map { AccountEntity(key: AccountKey(source: $0), sourceLogo: $0.displayLogo) }
+  }
+
+  private func currentSources() -> [WidgetSource] {
+    #if os(iOS)
+    let computer = config?.computer.id
+    #else
+    let computer: String? = nil
+    #endif
+    return WidgetState.load(computer: computer).snapshot?.sources ?? []
   }
 }
 
@@ -84,10 +101,15 @@ struct SelectComputerIntent: UsageWidgetConfiguration {
   static var title: LocalizedStringResource = "Data source"
   static var description = IntentDescription("Choose which computer this widget shows.")
 
+  #if os(iOS)
   @Parameter(title: "Computer")
   var computer: ComputerEntity?
 
   var computerID: String? { computer?.id }
+  #else
+  /// A Mac widget always shows the Mac it runs on.
+  var computerID: String? { nil }
+  #endif
   var pinnedAccounts: [String]? { nil }
   var hiddenAccounts: [String]? { nil }
 }
@@ -96,6 +118,7 @@ struct SelectComputerIntent: UsageWidgetConfiguration {
 /// accounts hidden; every other account, including ones added later, follows in the computer's
 /// order.
 struct QuotaWidgetIntent: UsageWidgetConfiguration {
+  #if os(iOS)
   static var title: LocalizedStringResource = "Data source"
   static var description = IntentDescription(
     "Choose which computer this widget shows, which accounts come first and which to hide. Other accounts, including ones added later, follow in that computer's order."
@@ -103,6 +126,16 @@ struct QuotaWidgetIntent: UsageWidgetConfiguration {
 
   @Parameter(title: "Computer")
   var computer: ComputerEntity?
+
+  var computerID: String? { computer?.id }
+  #else
+  static var title: LocalizedStringResource = "Accounts"
+  static var description = IntentDescription(
+    "Choose which accounts come first and which to hide. Other accounts, including ones added later, follow in the menu bar's order."
+  )
+
+  var computerID: String? { nil }
+  #endif
 
   /// Up to what each size shows; a plain number would mean exactly that many, with no way to
   /// remove one or clear the choice.
@@ -119,7 +152,6 @@ struct QuotaWidgetIntent: UsageWidgetConfiguration {
   @Parameter(title: "Hidden accounts")
   var hidden: [AccountEntity]?
 
-  var computerID: String? { computer?.id }
   var pinnedAccounts: [String]? { pinned?.map(\.id) }
   var hiddenAccounts: [String]? { hidden?.map(\.id) }
 }

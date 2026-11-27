@@ -27,12 +27,19 @@ import {
 import { resolveVoiceInputStartGuards } from '@/voice-input/startGuards';
 import { startVoiceInputCaptureSession } from '@/voice-input/captureSession';
 import { getVoiceInputWorkletUrl } from '@/voice-input/workletUrl';
-import { playVoiceInputEndCue, playVoiceInputStartCue, prepareVoiceInputCues } from '@/voice-input/startCue';
+import {
+  createStartCueGate,
+  playVoiceInputEndCue,
+  playVoiceInputStartCue,
+  prepareVoiceInputCues,
+  type StartCueGate,
+} from '@/voice-input/startCue';
 import {
   isVoiceInputEventScopeActive,
-  shouldHandleVoiceInputEvent,
+  dispatchVoiceInputEvent,
 } from '@/voice-input/eventScope';
 import { useSpeakerFilterNotice } from '@/voice-input/useSpeakerFilterNotice';
+import type { RecordingSamplesRef } from '@/voice-input/ComposerRecordingBars';
 import type { WebMicAudioEngine } from '@/voice-input/WebMicAudioEngine';
 import { useTranslation } from 'react-i18next';
 
@@ -70,6 +77,7 @@ export function useAskUserDictation(
   lastError: string | null;
   /** The voiceprint filter just muted someone else's speech in this run. */
   speakerFiltered: boolean;
+  samplesRef: RecordingSamplesRef;
   start: () => boolean;
   stop: () => Promise<boolean>;
   cancel: () => Promise<void>;
@@ -90,6 +98,7 @@ export function useAskUserDictation(
   const attemptRef = useRef(0);
   const runIdRef = useRef<string | null>(null);
   const engineRef = useRef<WebMicAudioEngine | null>(null);
+  const startCueGateRef = useRef<StartCueGate | null>(null);
   const anchorRef = useRef<Anchor | null>(null);
   const submittedRef = useRef<SubmittedSpan | null>(null);
   const stopInFlightRef = useRef<Promise<boolean> | null>(null);
@@ -98,6 +107,7 @@ export function useAskUserDictation(
   const startReadyRef = useRef<Promise<void>>(Promise.resolve());
   const mutedRef = useRef(false);
   const pendingMuteRef = useRef<Promise<void> | null>(null);
+  const samplesRef = useRef<RecordingSamplesRef['current']>(null);
   targetRef.current = target;
   optionsRef.current = options;
 
@@ -139,6 +149,8 @@ export function useAskUserDictation(
   }, []);
 
   const stopEngine = useCallback(async () => {
+    // The attempt is ending: nothing is left for the start cue to wait for.
+    startCueGateRef.current?.abandon();
     const engine = engineRef.current;
     if (!engine) return;
     try {
@@ -180,12 +192,21 @@ export function useAskUserDictation(
   useEffect(() => {
     const subscribe = window.electronAPI?.voiceInput?.onEvent;
     if (!subscribe) return;
-    return subscribe((event: VoiceInputRendererEvent) => {
-      if (!shouldHandleVoiceInputEvent(
-        runIdRef.current,
-        event.runId,
-        anchorRef.current !== null && isVoiceInputEventScopeActive(stateRef.current),
-      )) return;
+    let subscribed = true;
+    const unsubscribe = subscribe((event: VoiceInputRendererEvent) => {
+      const attempt = attemptRef.current;
+      dispatchVoiceInputEvent(
+        event,
+        () => subscribed ? runIdRef.current : null,
+        startReadyRef.current.then(() => (
+          attemptRef.current === attempt && runIdRef.current
+            ? { ok: true as const, runId: runIdRef.current }
+            : { ok: false as const }
+        )),
+        handleEvent,
+      );
+    });
+    function handleEvent(event: VoiceInputRendererEvent): void {
       if (event.type === 'draft') {
         const anchor = anchorRef.current;
         if (!anchor) return;
@@ -264,7 +285,11 @@ export function useAskUserDictation(
         void stopEngine();
         void restoreMute();
       }
-    });
+    }
+    return () => {
+      subscribed = false;
+      unsubscribe();
+    };
   }, [formatError, reportError, restoreMute, setVoiceState, showSpeakerFiltered, stopEngine, t]);
 
   const start = useCallback((): boolean => {
@@ -301,6 +326,10 @@ export function useAskUserDictation(
     void (async () => {
       try {
       const settings = getVoiceInputSettings();
+      // The start cue and system mute both touch the speakers; hold them until the
+      // microphone is open so capture does not queue behind that (see createStartCueGate).
+      const cueGate = createStartCueGate();
+      startCueGateRef.current = cueGate;
       // Like the composer, retain opening words while readiness is checked.
       const capturePromise = startVoiceInputCaptureSession({
         label: 'ask-user',
@@ -311,8 +340,10 @@ export function useAskUserDictation(
         setEngine: (engine) => { engineRef.current = engine; },
         isCurrentEngine: (engine) => attemptRef.current === attempt && engineRef.current === engine,
         onCaptureReady: () => {
+          cueGate.release();
           if (attemptRef.current === attempt && stateRef.current === 'listening') setCaptureReady(true);
         },
+        onSamples: (pcm) => samplesRef.current?.(pcm),
         appendAudioChunk: (chunk) => { api.appendAudio(chunk); },
         onInterrupted: (message) => { if (attemptRef.current === attempt) void fail(message); },
         onStateChange: () => undefined,
@@ -320,11 +351,15 @@ export function useAskUserDictation(
         onFallback: (message) => toast.warning(message),
         formatStartError: (error) => error instanceof Error ? error.message : String(error),
       });
-      let feedback: Promise<unknown> = Promise.resolve();
-      if (settings.playInteractionSound) {
-        prepareVoiceInputCues();
-        feedback = playVoiceInputStartCue();
-      }
+      if (settings.playInteractionSound) prepareVoiceInputCues();
+      const feedback: Promise<unknown> = cueGate.released.then((play) => {
+        if (!play || !settings.playInteractionSound) return;
+        if (attemptRef.current !== attempt || stateRef.current !== 'listening') return;
+        return playVoiceInputStartCue();
+      });
+      // A capture that never becomes ready has nothing to wait for; do not
+      // leave system mute waiting for the cap.
+      void capturePromise.then((capture) => { if (!capture.ok) cueGate.abandon(); });
       if (settings.muteSystemAudio && supportsSystemAudioMute()) {
         const muteRequest = feedback.catch(() => undefined).then(async () => {
           if (attemptRef.current !== attempt || stateRef.current !== 'listening') return;
@@ -515,6 +550,7 @@ export function useAskUserDictation(
     liveText,
     lastError,
     speakerFiltered,
+    samplesRef,
     start,
     stop,
     cancel,

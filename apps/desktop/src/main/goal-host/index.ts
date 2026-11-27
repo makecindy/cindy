@@ -10,15 +10,22 @@ import { randomUUID } from 'node:crypto';
 
 import type { Maker } from '@cindy/maker-core';
 
+import { accountUsageLimitFromExhaustedResets } from '../../shared/accountUsageLimit.js';
+import { isOpenCodeGoProvider, opencodeGoUsageEndpoint } from '../../shared/opencodeGoUsage.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import { readOpenCodeGoAccountUsage } from '../maker-host/provider-account-usage.js';
+import { providerRoutingForModel } from '../maker-host/provider-route.js';
 import { createLogger } from '../logger.js';
 import {
   hasRestoredCodexQuota,
+  readLocalSubscriptionTaskUsageLimit,
   acquirePendingAgentSwitchForDirectSend,
   isSessionInTurn,
   ensureGoalInputReady,
   isGoalInputBlocked,
   resolveSessionRuntimeRoute,
   stopActiveGoalTurnForClear,
+  tryGoalModelGroupRecovery,
 } from '../maker-ipc/register.js';
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { createMessage } from '../localDb/ipc/messages.js';
@@ -31,7 +38,8 @@ import {
 } from '../usage/accountUsageLimit.js';
 import { readClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import { onCodexAutoResetRestored } from '../maker-ipc/usage.js';
-import { GoalController } from './controller';
+import { GoalController, GoalControllerDisposedError } from './controller';
+import { createMakerStartupGate } from '../maker-host/startup-gate.js';
 import { readTurnUsageResetAt } from './usageLimit.js';
 import { restoreSessionForGoal } from './sessionRestore.js';
 import { GoalStorage, type GoalDrizzleDb } from './storage';
@@ -40,6 +48,9 @@ import type { GoalStatusUpdate, SessionLike } from './types';
 export interface StartGoalControllerDeps {
   maker: Maker;
   getDb: () => GoalDrizzleDb;
+  /** 项目资源漂移回收 seam(pi 本地根任务):空闲时经 Maker 以 runtime-refresh 原因
+   * 关闭旧运行时,goal 直派随后的 ensureSession 活化即重扫重建。默认用 deps.maker。 */
+  recyclePiRuntimeIfResourcesDrifted?: (sessionId: string) => Promise<boolean>;
   /** 状态变化广播到 renderer(→ GOAL_STATUS_CHANGED)。 */
   broadcastStatus: (update: GoalStatusUpdate) => void;
   beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
@@ -47,6 +58,8 @@ export interface StartGoalControllerDeps {
 }
 
 let _controller: GoalController | null = null;
+// Reuse the bounded startup gate, with one instance per controller lifetime.
+let _controllerReady = createMakerStartupGate();
 onCodexAutoResetRestored(async providerId => {
   await _controller?.resumeRestoredQuota(id => hasRestoredCodexQuota(id, providerId));
 });
@@ -61,6 +74,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
   const storage = new GoalStorage(deps.getDb);
   const controller = new GoalController({
     storage,
+    // 插件引擎任务同样能设目标(2026-11-25)：每轮按与用户发送相同的路径交给它自己的引擎。
     getSession: (id): SessionLike | undefined => deps.maker.getSession(id),
     // 确保会话活着:已活直接返回;未活按存档 SessionMeta resume(spawn agent),
     // 仿 scheduler 心跳。修"开了对话没发消息 → goal 发不出第一轮"的根因。
@@ -70,6 +84,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
         warn: (message, meta) => logger.warn(message, meta),
       }),
     acquirePendingAgentSwitch: acquirePendingAgentSwitchForDirectSend,
+    recyclePiRuntimeIfResourcesDrifted: deps.recyclePiRuntimeIfResourcesDrifted,
     isSessionInTurn,
     ensureInputReady: ensureGoalInputReady,
     isInputBlocked: isGoalInputBlocked,
@@ -109,9 +124,25 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       });
     },
     // 按实际订阅账号处理限额错误与重置时刻；其它订阅保留主动配额检测。
-    getAccountLimit: async (agentKind, sessionId, turnError) => {
+    getAccountLimit: async (engineKind, sessionId, turnError) => {
+      // Plugin engines use their own CLI's login: Cindy has no account window to read. A rejected turn
+      // still stops the goal through the turn error itself (passive path).
+      if (engineKind === 'acp') return null;
+      const agentKind = engineKind;
       const row = await getSessionRowSnapshot(sessionId);
       const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
+      const provider = providerId && getActiveCatalog().providers.find(p => p.id === providerId);
+      if (provider && isOpenCodeGoProvider(provider, agentKind)) {
+        // Go uses an API key for its subscription. A rejected turn can consult
+        // the official allowance for this runtime; successful turns carry on.
+        if (turnError === undefined || !row || sessionUsesOtherMachineAccount(row)) return null;
+        const route = providerRoutingForModel(provider, agentKind, modelId ?? undefined);
+        if (!route || !opencodeGoUsageEndpoint(route.upstream)) return null;
+        const result = await readOpenCodeGoAccountUsage({ providerId: provider.id, agent: agentKind }, 'after-limit');
+        if (result.status !== 'ready' || result.stale || result.snapshot.kind !== 'opencode-go-quota') return null;
+        const exhausted = result.snapshot.windows.filter(w => w.limited);
+        return accountUsageLimitFromExhaustedResets(exhausted.map(w => w.resetsAt), Date.now());
+      }
       const family = subscriptionFamilyOf(agentKind, providerId);
       // ChatGPT windows do not establish credit-backed admission, and cached credits
       // may be stale or unknown. Let the next normal turn reach the provider; retain
@@ -135,9 +166,17 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       // 那台的独立账号本机目录认不出(上面判不出订阅家族)时也到这里,同样不读。
       // SSH 沿用原有的网关预算回落。
       if (row?.agentDeviceId && !row.remoteHostId) return null;
-      const subscription = await readAccountUsageLimit(agentKind, providerId, modelId).catch(
-        () => null,
-      );
+      const subscription = await (async () => {
+        if (family === 'claude' || family === 'codex') {
+          const pooled = await readLocalSubscriptionTaskUsageLimit(
+            family,
+            { sessionId, nativeSessionId: row?.sdkSessionId, providerId, agentKind, modelId },
+            { fresh: turnError !== undefined },
+          );
+          if (pooled !== undefined) return pooled;
+        }
+        return readAccountUsageLimit(agentKind, providerId, modelId);
+      })().catch(() => null);
       if (subscription !== undefined) return subscription;
       // 非订阅的 Claude Code 会话(Cindy 网关):读 LiteLLM 预算周期。
       if (agentKind === 'claude-code') {
@@ -153,6 +192,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     },
     // usageLimited 到点自动续跑时,落一条"用量已恢复,继续目标"提示(渲染成 system card)。
     isSessionShared: (sessionId) => isSessionSharedTaskActive(sessionId),
+    tryModelGroupRecovery: (sessionId, signals) => tryGoalModelGroupRecovery(sessionId, signals),
     persistGoalNotice: async (sessionId, kind) => {
       await createMessage(sessionId, {
         clientId: randomUUID(),
@@ -163,6 +203,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     },
   });
   _controller = controller;
+  _controllerReady.complete();
   logger.info('[goal-host] started');
   // resumeActiveGoals 异步(storage 是 async proxy);fire-and-forget,失败非致命。
   void controller.resumeActiveGoals().catch((err) => {
@@ -176,11 +217,23 @@ export function getGoalController(): GoalController | null {
   return _controller;
 }
 
+/** Wait for this lifetime only; Scheduler failure must not strand Goal queries. */
+export async function waitForGoalController(): Promise<GoalController | null> {
+  if (_controller) return _controller;
+  const generation = _teardownGeneration;
+  const ready = await _controllerReady.wait(30_000);
+  if (generation !== _teardownGeneration) throw new GoalControllerDisposedError();
+  return ready ? _controller : null;
+}
+
 /** 切账号 / 登出时调(与 resetScheduler 对齐;当前 bootstrap 不联动)。 */
 export async function resetGoalController(): Promise<void> {
   const controller = _controller;
   _controller = null;
   _teardownGeneration++;
+  // Wake old callers so they reject as superseded, never join the next owner.
+  _controllerReady.complete();
+  _controllerReady = createMakerStartupGate();
   if (controller) await controller.dispose();
 }
 

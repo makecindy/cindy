@@ -91,12 +91,17 @@ function parseLegacyWindow(v: unknown): ClaudeUsageWindow | null {
   };
 }
 
+function extraUsageNumber(value: unknown): number | null {
+  if (typeof value !== 'number' && !(typeof value === 'string' && value.trim())) return null;
+  return toFiniteNumber(value);
+}
+
 function parseExtraUsage(v: unknown): ClaudeExtraUsageSnapshot | null {
   if (!isPlainObject(v)) return null;
   const isEnabled = v.is_enabled === true;
-  const utilization = toFiniteNumber(v.utilization);
-  const usedCredits = toFiniteNumber(v.used_credits);
-  const monthlyLimit = toFiniteNumber(v.monthly_limit);
+  const utilization = extraUsageNumber(v.utilization);
+  const usedCredits = extraUsageNumber(v.used_credits);
+  const monthlyLimit = extraUsageNumber(v.monthly_limit);
   if (!isEnabled && utilization === null && usedCredits === null) return null;
   return {
     isEnabled,
@@ -110,7 +115,7 @@ function parseExtraUsage(v: unknown): ClaudeExtraUsageSnapshot | null {
  * 解析 GET /api/oauth/usage 的响应 JSON。
  *
  * 优先走新 schema 的 `limits[]`(带 severity / scoped 模型信息);旧 schema 顶层键兜底。
- * 未知字段(实验性混淆键等)一律忽略。解析不出任何窗口时返回 null。
+ * 未知字段一律忽略。没有时间窗口时，仅接受已启用且有读数的额外用量。
  */
 export function parseClaudeOAuthUsageResponse(
   data: unknown,
@@ -170,13 +175,15 @@ export function parseClaudeOAuthUsageResponse(
     if (window) scoped.push({ ...window, modelDisplayName: displayName });
   }
 
-  if (!fiveHour && !sevenDay && scoped.length === 0) return null;
+  const extraUsage = parseExtraUsage(data.extra_usage);
+  const hasExtraReading = extraUsage?.isEnabled && (extraUsage.usedCredits != null || extraUsage.utilization != null);
+  if (!fiveHour && !sevenDay && scoped.length === 0 && !hasExtraReading) return null;
 
   return {
     fiveHour,
     sevenDay,
     scoped,
-    extraUsage: parseExtraUsage(data.extra_usage),
+    extraUsage,
     source: 'oauth-endpoint',
     updatedAt: now,
   };
@@ -243,8 +250,9 @@ export function parseClaudeUnifiedRateLimitHeaders(
  * 解析 Claude Code SDK 的 `rate_limit_event.rate_limit_info`(CLI 从同一组 unified headers
  * 解析出的额度信息;订阅会话由 CLI 直连 Anthropic,host 只能从这里拿到余量)。
  *
- * 每条事件只描述一个窗口(rateLimitType);只认 5h / 7d 总窗口,分模型周窗口与 overage
- * 不在 headers 口径内,跳过。按 headers 源(`unified-headers`)的增量语义合并。
+ * 旧版每条事件只描述一个窗口(rateLimitType);新版在 unifiedWindows 里同时给出 5h / 7d。
+ * 只认这两个总窗口,分模型周窗口与 overage 不在 headers 口径内,跳过。按 headers 源
+ * (`unified-headers`)的增量语义合并。
  * utilization 与 headers 同为 0.0-1.0 分数(>1 时按已是百分比处理);resetsAt 为 epoch
  * 秒(误给毫秒时折算)。无可用窗口也无状态时返回 null。
  */
@@ -264,8 +272,22 @@ export function parseClaudeSdkRateLimitInfo(
     ? null
     : Math.floor(rawResetsAt > 1e12 ? rawResetsAt / 1000 : rawResetsAt);
   const window = utilization === null ? null : { utilization, resetsAt };
-  const fiveHour = rateLimitType === 'five_hour' ? window : null;
-  const sevenDay = rateLimitType === 'seven_day' ? window : null;
+  // CLI 2.1.321 起事件不再带顶层 utilization,5h / 7d 两个窗口各自的用量与重置时刻放在
+  // unifiedWindows 里(实测)。有就以它为准:一条事件同时更新两个窗口。
+  const unified = isPlainObject(info.unifiedWindows) ? info.unifiedWindows : null;
+  const unifiedWindow = (name: 'five_hour' | 'seven_day') => {
+    const entry = unified?.[name];
+    if (!isPlainObject(entry)) return null;
+    const used = toFiniteNumber(entry.utilization);
+    if (used === null) return null;
+    const reset = toFiniteNumber(entry.resetsAt);
+    return {
+      utilization: clampPercent(used <= 1 ? used * 100 : used),
+      resetsAt: reset === null || reset <= 0 ? null : Math.floor(reset > 1e12 ? reset / 1000 : reset),
+    };
+  };
+  const fiveHour = unifiedWindow('five_hour') ?? (rateLimitType === 'five_hour' ? window : null);
+  const sevenDay = unifiedWindow('seven_day') ?? (rateLimitType === 'seven_day' ? window : null);
   if (!fiveHour && !sevenDay && !status) return null;
   return {
     fiveHour,
@@ -277,15 +299,48 @@ export function parseClaudeSdkRateLimitInfo(
   };
 }
 
+/** Headers omit severity. Keep it only while the previous window is still valid;
+ * a full endpoint snapshot or an explicit severity can confirm recovery. */
+function mergeHeaderWindow(
+  previous: ClaudeUsageWindow | null | undefined,
+  incoming: ClaudeUsageWindow | null | undefined,
+  updatedAt: number | null | undefined,
+  previousSource: ClaudeSubscriptionUsageSnapshot['source'],
+): ClaudeUsageWindow | null | undefined {
+  const authority = previous?.utilizationSource ?? previousSource;
+  const known: ClaudeUsageWindow | null | undefined = previous && (authority === 'oauth-endpoint' || authority === 'unified-headers')
+    ? { ...previous, utilizationSource: authority }
+    : previous;
+  if (!incoming) return known;
+  const changedWindow = previous?.resetsAt != null && incoming.resetsAt != null
+    && previous.resetsAt !== incoming.resetsAt;
+  const expiredWindow = previous?.resetsAt != null && updatedAt != null
+    && previous.resetsAt * 1000 <= updatedAt;
+  if (!previous || changedWindow || expiredWindow)
+    return { ...incoming, utilizationSource: 'unified-headers' };
+  // The endpoint owns percentages for a known live window. SDK events may use
+  // a different precision; alternating those values makes remaining quota jump.
+  // Status is still merged immediately below, independently of this percentage.
+  if (authority === 'oauth-endpoint' && previous.resetsAt != null && updatedAt != null
+      && previous.resetsAt * 1000 > updatedAt)
+    return { ...known!, severity: incoming.severity ?? previous.severity };
+  return {
+    ...incoming,
+    utilizationSource: 'unified-headers',
+    resetsAt: incoming.resetsAt ?? previous.resetsAt,
+    severity: incoming.severity ?? previous.severity,
+  };
+}
+
 // ── 双源合并 ─────────────────────────────────────────────────────────────────
 
 /**
  * 双源合并:
- *   - incoming 为 headers 源 → 以 prev 为底做增量:只覆盖 headers 有的 5h / 7d 窗口与
+ *   - incoming 为 headers 源 → 以 prev 为底做增量:只补缺失或已换周期的 5h / 7d 百分比与
  *     整体状态,保留 endpoint 独有的 scoped / extraUsage / subscriptionType / severity
  *     不被清掉(headers 没有这些维度,不代表它们消失了)。
  *   - incoming 为 endpoint 源 → 全量替换(endpoint 是权威全集),仅 subscriptionType /
- *     headers 独有的 rateLimitStatus 在 incoming 缺失时沿用 prev。
+ *     accountFingerprint 沿用 prev; 瞬时限流状态不沿用。
  */
 export function mergeClaudeSubscriptionUsageSnapshot(
   prev: ClaudeSubscriptionUsageSnapshot | null,
@@ -305,15 +360,24 @@ export function mergeClaudeSubscriptionUsageSnapshot(
     return incoming;
   }
 
+  if (typeof prev.updatedAt === 'number' && typeof incoming.updatedAt === 'number'
+      && incoming.updatedAt < prev.updatedAt) return prev;
+
   if (incoming.source === 'unified-headers') {
     return {
       ...prev,
-      fiveHour: incoming.fiveHour ?? prev.fiveHour,
-      sevenDay: incoming.sevenDay ?? prev.sevenDay,
+      fiveHour: mergeHeaderWindow(prev.fiveHour, incoming.fiveHour, incoming.updatedAt, prev.source),
+      sevenDay: mergeHeaderWindow(prev.sevenDay, incoming.sevenDay, incoming.updatedAt, prev.source),
       rateLimitStatus: incoming.rateLimitStatus ?? prev.rateLimitStatus,
-      representativeClaim: incoming.representativeClaim ?? prev.representativeClaim,
+      // A new status owns its claim, including an unknown/null claim. Reusing
+      // an older shared-window claim misattributes a later model-only rejection.
+      representativeClaim: incoming.rateLimitStatus != null
+        ? incoming.representativeClaim ?? null
+        : incoming.representativeClaim ?? prev.representativeClaim,
       updatedAt: incoming.updatedAt ?? prev.updatedAt,
       accountFingerprint: incoming.accountFingerprint ?? prev.accountFingerprint,
+      // Quota-only events omit the label; an attached status may explicitly clear it.
+      planDisplayName: incoming.planDisplayName === undefined ? prev.planDisplayName : incoming.planDisplayName,
       // 展示来源标为最近一次更新者;scoped / extraUsage 仍是 endpoint 的旧值。
       source: 'unified-headers',
     };
@@ -328,8 +392,42 @@ export function mergeClaudeSubscriptionUsageSnapshot(
   return {
     ...incoming,
     subscriptionType: incoming.subscriptionType ?? prev.subscriptionType,
+    planTier: incoming.planTier ?? prev.planTier,
+    planDisplayName: incoming.planDisplayName === undefined ? prev.planDisplayName : incoming.planDisplayName,
     accountFingerprint: incoming.accountFingerprint ?? prev.accountFingerprint,
   };
+}
+
+/** Combine a successful endpoint read with only headers observed while it waited.
+ * The delta describes this combined observation, so its timestamp is the later
+ * observation time. Reusing the full cache would discard fresh endpoint fields. */
+export function mergeClaudeSubscriptionUsageDuringRead(
+  before: ClaudeSubscriptionUsageSnapshot | null | undefined,
+  read: ClaudeSubscriptionUsageSnapshot,
+  latest: ClaudeSubscriptionUsageSnapshot,
+): ClaudeSubscriptionUsageSnapshot {
+  if (read.accountFingerprint && latest.accountFingerprint && read.accountFingerprint !== latest.accountFingerprint)
+    return read;
+  const oldWindow = (key: 'fiveHour' | 'sevenDay') => {
+    const readReset = read[key]?.resetsAt;
+    const eventReset = latest[key]?.resetsAt;
+    return readReset != null && eventReset != null && eventReset < readReset;
+  };
+  const oldClaim = latest.representativeClaim === 'five_hour' ? oldWindow('fiveHour')
+    : latest.representativeClaim === 'seven_day' ? oldWindow('sevenDay') : false;
+  const deltaWindow = (key: 'fiveHour' | 'sevenDay') => {
+    const window = latest[key];
+    if (!window || window === before?.[key] || oldWindow(key)) return undefined;
+    return { ...window, severity: window.severity !== before?.[key]?.severity ? window.severity : undefined };
+  };
+  return mergeClaudeSubscriptionUsageSnapshot(read, {
+    source: 'unified-headers',
+    updatedAt: Math.max(read.updatedAt ?? 0, latest.updatedAt ?? 0),
+    fiveHour: deltaWindow('fiveHour'),
+    sevenDay: deltaWindow('sevenDay'),
+    rateLimitStatus: oldClaim ? undefined : latest.rateLimitStatus,
+    representativeClaim: oldClaim ? undefined : latest.representativeClaim,
+  });
 }
 
 // ── 告警判定(chip 变红的口径;tooltip 另有 status 分流,见 TodaySpendChip) ───

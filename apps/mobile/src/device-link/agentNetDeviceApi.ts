@@ -1,0 +1,249 @@
+import { mergeAgentNetDeviceRow, normalizeAgentNetBackfillName, type DeviceView } from '@cindy/device-link';
+import type { ApiFetchOptions } from '@/api/client';
+import { ApiError } from '@/api/client';
+import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { isMobileAgentNetActive, noteMobileAgentNetDeviceList } from './agentNetRuntime';
+import { ensureMobileAgentNetIdentity, type MobileAgentNetEnrollmentOptions } from './agentNetIdentity';
+import { getMobileAgentNetPreferences, mobileAgentNetRequiresEncryption } from './agentNetPreferences';
+import { getActiveSelfHostedRelay, getSelfHostedRelayRouteGeneration, isAgentNetOnlyRoute, normalizeSelfHostedRelayBase } from './selfHostedRelayRouting';
+import { writeMobileAgentNetDirectory } from './agentNetDirectoryCache';
+
+interface MobileLegacyCustomNameBackfill {
+  deviceId: string;
+  name: string;
+  selfName: string | null;
+  isSelf: boolean;
+}
+
+let mobileMutationSeq = 0;
+const activeMobileMutations = new Map<string, number>();
+const inflightMobileBackfillPromises = new Map<string, Promise<void>>();
+let mobileBackfillScopeKey: string | null = null;
+const attemptedMobileBackfills = new Map<string, string>();
+const inflightMobileBackfills = new Set<string>();
+
+/** Test-only reset for background custom-name backfill dedupe state. */
+export function __resetMobileAgentNetNameBackfillForTests(): void {
+  mobileBackfillScopeKey = null;
+  attemptedMobileBackfills.clear();
+  inflightMobileBackfills.clear();
+  inflightMobileBackfillPromises.clear();
+}
+
+function trackMobileBackfill(deviceId: string, request: Promise<unknown>): void {
+  const previous = inflightMobileBackfillPromises.get(deviceId);
+  const settled = request.then(() => undefined, () => undefined);
+  const chained = previous ? previous.then(() => settled, () => settled) : settled;
+  inflightMobileBackfillPromises.set(deviceId, chained);
+  void chained.finally(() => {
+    if (inflightMobileBackfillPromises.get(deviceId) === chained) inflightMobileBackfillPromises.delete(deviceId);
+  });
+}
+
+async function waitForMobileBackfill(deviceId: string): Promise<void> {
+  const pending = inflightMobileBackfillPromises.get(deviceId);
+  if (pending) await pending;
+}
+
+function beginMobileMutation(deviceId: string): () => void {
+  mobileMutationSeq += 1;
+  activeMobileMutations.set(deviceId, (activeMobileMutations.get(deviceId) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    // Advance on completion too so directory reads started *during* a dual-write
+    // cannot backfill a torn V1/V2 snapshot after the mutation finishes.
+    mobileMutationSeq += 1;
+    const count = (activeMobileMutations.get(deviceId) ?? 1) - 1;
+    if (count <= 0) activeMobileMutations.delete(deviceId);
+    else activeMobileMutations.set(deviceId, count);
+  };
+}
+
+function scheduleMobileLegacyCustomNameBackfill(options: {
+  scopeKey: string;
+  api: { request(method: 'PATCH', path: string, body: unknown): Promise<unknown> };
+  items: MobileLegacyCustomNameBackfill[];
+  readMutationSeq: number;
+  isCurrent: () => boolean;
+}): void {
+  const { scopeKey, api, readMutationSeq, isCurrent } = options;
+  if (mobileBackfillScopeKey !== scopeKey) {
+    mobileBackfillScopeKey = scopeKey;
+    attemptedMobileBackfills.clear();
+    inflightMobileBackfills.clear();
+  }
+  const ordered = [...options.items].sort((a, b) => Number(b.isSelf) - Number(a.isSelf));
+  const pending = ordered.filter((item) => {
+    const signature = `${item.name}\0${item.selfName ?? ''}`;
+    return attemptedMobileBackfills.get(item.deviceId) !== signature && !inflightMobileBackfills.has(item.deviceId);
+  });
+  if (pending.length === 0) return;
+
+  void (async () => {
+    for (const item of pending) {
+      if (!isCurrent() || mobileBackfillScopeKey !== scopeKey || readMutationSeq !== mobileMutationSeq) return;
+      if ((activeMobileMutations.get(item.deviceId) ?? 0) > 0) continue;
+      const signature = `${item.name}\0${item.selfName ?? ''}`;
+      if (attemptedMobileBackfills.get(item.deviceId) === signature || inflightMobileBackfills.has(item.deviceId)) continue;
+      attemptedMobileBackfills.set(item.deviceId, signature);
+      inflightMobileBackfills.add(item.deviceId);
+      try {
+        const request = api.request('PATCH', '/devices/' + encodeURIComponent(item.deviceId), { name: item.name });
+        trackMobileBackfill(item.deviceId, request);
+        await request;
+      } catch {
+        // Best-effort sync; merged hybrid directory already preserves the V1 custom name.
+      } finally {
+        if (mobileBackfillScopeKey === scopeKey) inflightMobileBackfills.delete(item.deviceId);
+      }
+    }
+  })();
+}
+
+/** Preserve the ordinary device API and mixed-version directory. V2 devices
+ * use certificate authentication on the selected network; V1-only devices keep
+ * their original authenticated management route unless encryption is required. */
+export async function mobileAgentNetDeviceRequest<T>(path: string, opts: Omit<ApiFetchOptions, 'token'>,
+  enrollment: MobileAgentNetEnrollmentOptions, readLegacy: () => Promise<T>): Promise<{ handled: false } | { handled: true; value: T }> {
+  const match = /^\/api\/device-link\/devices(?:\/([^/?#]+))?$/.exec(path);
+  if (!match || normalizeSelfHostedRelayBase(opts.baseUrl) !== normalizeSelfHostedRelayBase(DEVICE_LINK_API_BASE_URL)) return { handled: false };
+  if (!isMobileAgentNetActive()) {
+    if (mobileAgentNetRequiresEncryption()) throw new Error('AGENT_NET_ENCRYPTED_IDENTITY_REQUIRED');
+    return { handled: false };
+  }
+  const owner = getMobileAuthOwner(), route = getSelfHostedRelayRouteGeneration(), generation = getMobileAgentNetPreferences().generation;
+  const guard = () => {
+    opts.assertCurrent?.();
+    if (opts.signal?.aborted || !isMobileAuthOwnerCurrent(owner) || route !== getSelfHostedRelayRouteGeneration()
+      || generation !== getMobileAgentNetPreferences().generation) throw new Error('AGENT_NET_OWNER_CHANGED');
+  };
+  guard();
+  const identity = await ensureMobileAgentNetIdentity(enrollment); guard();
+  try {
+    const method = opts.method ?? 'GET';
+    let result: unknown;
+    if (!match[1] && method === 'GET') {
+      const readEncrypted = async () => {
+        const directory = await identity.api.directory(); guard();
+        await writeMobileAgentNetDirectory(identity, directory); guard();
+        const devices: DeviceView[] = directory.map(view => ({ deviceId: view.certificate.deviceId, name: view.name, selfName: view.selfName ?? null,
+          platform: view.platform ?? null, app: view.app, appVersion: view.appVersion ?? null,
+          lastSeenAt: view.lastSeenAt ? new Date(view.lastSeenAt).toISOString() : null,
+          online: view.online, busy: !!view.busy, remoteControlEnabled: view.remoteControlEnabled,
+          isSelf: view.certificate.deviceId === enrollment.deviceId }));
+        return { devices };
+      };
+      if (mobileAgentNetRequiresEncryption()) result = await readEncrypted();
+      else {
+        const readMutationSeq = mobileMutationSeq;
+        const startedAt = Date.now();
+        const legacyDirectory = readLegacy().then(value => {
+          guard();
+          const list = value as { devices: DeviceView[] };
+          if (!getActiveSelfHostedRelay() && Array.isArray(list.devices)) {
+            noteMobileAgentNetDeviceList(list.devices.map(device => device.deviceId), startedAt);
+          }
+          return value;
+        });
+        const [legacy, encrypted] = await Promise.allSettled([legacyDirectory, readEncrypted()]); guard();
+        // Only a transient directory outage can use the other live result;
+        // invalid membership, certificates and owner changes stay terminal.
+        for (const response of [legacy, encrypted]) {
+          if (response.status === 'rejected' && !directoryUnavailable(response.reason)) throw response.reason;
+        }
+        if (encrypted.status === 'rejected') {
+          if (legacy.status === 'rejected') throw encrypted.reason;
+          result = legacy.value;
+        } else if (legacy.status === 'rejected') result = encrypted.value;
+        else {
+          const previous = legacy.value as { devices: DeviceView[] };
+          const devices = new Map(previous.devices.map(device => [device.deviceId, device]));
+          const backfills: MobileLegacyCustomNameBackfill[] = [];
+          for (const device of encrypted.value.devices) {
+            const old = devices.get(device.deviceId);
+            const { device: merged, backfilledCustomName } = mergeAgentNetDeviceRow(old, device);
+            devices.set(device.deviceId, merged);
+            if (backfilledCustomName) {
+              const normalized = normalizeAgentNetBackfillName(backfilledCustomName);
+              if (normalized) {
+                backfills.push({
+                  deviceId: device.deviceId,
+                  name: normalized,
+                  selfName: device.selfName ?? null,
+                  isSelf: device.isSelf,
+                });
+              }
+            }
+          }
+          result = { ...previous, devices: [...devices.values()] };
+          if (
+            backfills.length > 0 &&
+            typeof identity.api.request === 'function' &&
+            readMutationSeq === mobileMutationSeq
+          ) {
+            scheduleMobileLegacyCustomNameBackfill({
+              scopeKey: JSON.stringify([owner, route, generation]),
+              api: identity.api,
+              items: backfills,
+              readMutationSeq,
+              isCurrent: () =>
+                isMobileAuthOwnerCurrent(owner) &&
+                route === getSelfHostedRelayRouteGeneration() &&
+                generation === getMobileAgentNetPreferences().generation,
+            });
+          }
+        }
+      }
+    } else if (match[1] && ['PATCH', 'DELETE'].includes(method)) {
+      const target = decodeURIComponent(match[1]);
+      const endMutation = beginMobileMutation(target);
+      try {
+      const relay = getActiveSelfHostedRelay();
+      const synchronizePrivateLegacy = !!relay && !isAgentNetOnlyRoute(relay);
+      const synchronizeLegacyWrite = synchronizePrivateLegacy || (!relay && method === 'PATCH');
+      if (!mobileAgentNetRequiresEncryption() || synchronizePrivateLegacy) {
+        const directory = await identity.api.directory(); guard();
+        if (!directory.some(view => view.certificate.deviceId === target)) {
+          if (!synchronizePrivateLegacy) return { handled: false };
+          const value = await readLegacy(); guard();
+          return { handled: true, value };
+        }
+      }
+      await waitForMobileBackfill(target); guard();
+      const response = await identity.api.request<{ name?: string }>(method, '/devices/' + encodeURIComponent(target), method === 'PATCH' ? opts.body : undefined, { signal: opts.signal });
+      guard();
+      if (synchronizeLegacyWrite) {
+        // V1 and V2 keep independent management records on both official and private relays.
+        // Keep legacy display names synchronized on PATCH (and private DELETE), matching Desktop.
+        try { await readLegacy(); }
+        catch (error) {
+          const legacy = error as { status?: unknown; code?: unknown };
+          if (legacy.status !== 404 || legacy.code !== 'NOT_FOUND') throw error;
+        }
+        guard();
+      }
+      result = method === 'DELETE' ? { deviceId: target, deleted: true }
+        : { deviceId: target, name: response.name ?? (opts.body as { name: string }).name };
+      } finally {
+        endMutation();
+      }
+    } else throw new Error('AGENT_NET_UNSUPPORTED_DEVICE_REQUEST');
+    guard(); return { handled: true, value: result as T };
+  } catch (error) {
+    guard();
+    const status = (error as { status?: unknown }).status, code = (error as { code?: unknown }).code;
+    // A certificate rejection belongs to this network, not the account login.
+    if (typeof status === 'number' && typeof code === 'string') throw new ApiError(code, status, code);
+    throw error;
+  }
+}
+
+function directoryUnavailable(error: unknown): boolean {
+  const value = error as { status?: unknown; code?: unknown } | null;
+  if (typeof value?.code === 'string' && /INVALID|DENIED|REVOKED|UNAUTHORIZED|FORBIDDEN|SCOPE_CHANGED|OWNER_CHANGED/.test(value.code)) return false;
+  return value?.status === 0 || value?.status === 429
+    || typeof value?.status === 'number' && value.status >= 500 && value.status < 600;
+}

@@ -1,10 +1,12 @@
-import { compareCindyVersions, getPluginToolUi, pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
+import { MarketSourceStore } from '../sources/store';
+import { compareCindyVersions, getPluginToolUi, parsePluginResolveRequest, pluginHasToolUi, pluginToolVisible } from '@cindy/plugin-protocol';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createGhostBackgroundRefresh } from '../../cindy-brain/ghostBackgroundRefresh.js';
 import { GhostManager } from '../../cindy-brain/GhostManager.js';
+import { createGhostInstallReceipt } from '../../cindy-brain/ghostInstallReceipt.js';
 import { runGhostSnapshotWorkerRequest } from '../../cindy-brain/ghostSnapshotWorkerProcess.js';
 import { writeTestCindyPackage } from '../../cindy-brain/__tests__/cindyPackageFixture.js';
 import { assertGhostInstallConsent, confirmedUiCapability, type GhostInstallConsentDecision } from '../../cindy-brain/ghostInstallConsent.js';
@@ -25,16 +27,20 @@ import {
 } from '../../../shared/ghost.js';
 const runtime = vi.hoisted(() => ({
   receiptManager: null as GhostManager | null,
+  readInstanceForContent: vi.fn<GhostManager['readInstanceForContent']>(() => null),
+  readApprovedInstallReceipt: vi.fn<GhostManager['readApprovedInstallReceipt']>(() => null),
   listScans: 0,
   installationScanComplete: true,
   onList: undefined as (() => void) | undefined,
+  readBackgroundGhosts: undefined as (() => Promise<InstalledGhost[]>) | undefined,
+  findInstalledInstance: undefined as ((id: string) => InstalledGhost | undefined) | undefined,
   confirmLegacyLibraryReattach: vi.fn<(plugin: unknown) => Promise<boolean>>(async () => false),
   ghosts: [] as Array<{
     manifest: Record<string, unknown>;
     dir: string;
     enabled: boolean;
     namespace?: string | null;
-    namespaceState?: 'pending';
+    namespaceState?: 'pending' | 'confirmed' | 'unconfirmed';
     approval?: GhostInstallApproval;
     trust?: GhostTrustInfo;
   }>,
@@ -67,6 +73,7 @@ const runtime = vi.hoisted(() => ({
   currentOrganization: null as {
     organizationId: string;
     pluginPrefix: string | null;
+    orgSlug?: string;
   } | null,
   boundaryPending: false,
   approvedInstallEvidence: vi.fn(
@@ -125,9 +132,11 @@ vi.mock('../../cindy-brain/index.js', () => ({
     isInstallationScanComplete: () => runtime.installationScanComplete,
     createBackgroundRefresh() {
       const state = () => ({ owner: JSON.stringify(runtime.session), mutation: runtime, identity: JSON.stringify(runtime.ghosts) });
-      return createGhostBackgroundRefresh({ state, scan: async () => ({ ghosts: this.list() as unknown as InstalledGhost[], registry: emptyPluginInstanceRegistry(), state: state() }) });
+      return createGhostBackgroundRefresh({ state, scan: async () => ({ ghosts: runtime.readBackgroundGhosts
+        ? await runtime.readBackgroundGhosts() : this.list() as unknown as InstalledGhost[], registry: emptyPluginInstanceRegistry(), state: state() }) });
     },
     async listAsync() { return this.list(); },
+    findInstalledInstance: (id: string) => runtime.findInstalledInstance?.(id),
     resumePendingResidentsOffline: runtime.resumeOfflineResidents,
     reconcilePendingRootNamespaces: runtime.reconcilePendingRootNamespaces,
     list: () => {
@@ -165,6 +174,8 @@ vi.mock('../../cindy-brain/index.js', () => ({
       });
     },
     approvedInstallEvidence: runtime.approvedInstallEvidence,
+    readInstanceForContent: runtime.readInstanceForContent,
+    readApprovedInstallReceipt: runtime.readApprovedInstallReceipt,
     inspect: runtime.inspect,
     readApprovedInstallOriginStrict: (ghostId: string) => {
       if (runtime.installOriginError) throw new Error('receipt unreadable');
@@ -254,6 +265,7 @@ import {
   type PluginMarketInstallationRecord,
 } from '../ledger';
 import {
+  installedGhostMatchingMarketPluginNow,
   organizationDefaultTakeoverEligibility,
   PluginMarketService,
   type PluginMarketInstallContext,
@@ -263,9 +275,13 @@ import {
 const TEST_INSTALL_CONTEXT: PluginMarketInstallContext = {
   consent: { prompt: async () => true, initiator: 'user' },
 };
-import type { PluginMarketApi } from '../api';
+import { PluginMarketEndpointUnsupportedError, PluginMarketApi } from '../api';
 import { downloadVerifiedPlugin } from '../download';
 import { createOrganizationPrefixStore } from '../organizationPrefixStore';
+
+import { createPluginMarketAgentTools } from '../agentTools';
+import { extractIpcError } from '../../../shared/ipcError';
+import { pluginMarketErrorKey } from '../../../renderer/features/plugin/lib/pluginMarketErrorKey';
 
 const roots: string[] = [];
 const PLUGIN_ID = `c${'a'.repeat(24)}`;
@@ -283,6 +299,10 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
 
 afterEach(() => {
   runtime.receiptManager = null;
+  runtime.readInstanceForContent.mockReset();
+  runtime.readInstanceForContent.mockReturnValue(null);
+  runtime.readApprovedInstallReceipt.mockReset();
+  runtime.readApprovedInstallReceipt.mockReturnValue(null);
   vi.mocked(downloadVerifiedPlugin).mockReset();
   vi.mocked(downloadVerifiedPlugin).mockResolvedValue(undefined);
   runtime.listScans = 0;
@@ -309,6 +329,8 @@ afterEach(() => {
   runtime.installOriginError = false;
   runtime.authIdentity = { membershipKind: 'org', orgId: 'org-1', orgSlug: 'acme' };
   runtime.authStateOverrides = {};
+  runtime.readBackgroundGhosts = undefined;
+  runtime.findInstalledInstance = undefined;
   runtime.resumeOfflineResidents.mockClear();
   runtime.reconcilePendingRootNamespaces.mockReset();
   runtime.currentOrganization = null;
@@ -474,11 +496,46 @@ function harness(items: VisiblePluginSummary[], removals: PluginRemovalNotice[] 
   roots.push(root);
   const ledger = new PluginMarketLedger(path.join(root, 'ledger.json'));
   const api = {
-    listAll: vi.fn(async (): Promise<Awaited<ReturnType<PluginMarketApi['listAll']>>> => ({
+    read: vi.fn(async (): Promise<Awaited<ReturnType<PluginMarketApi['listAll']>>> => ({
         plugins: items,
         removals,
       currentOrganization: runtime.currentOrganization,
     })),
+    // In-memory server contract. `read` is fixture state, not a production full-catalog request.
+    listAll: vi.fn(async (): Promise<Awaited<ReturnType<PluginMarketApi['listAll']>>> => api.read()),
+    defaults: vi.fn(async (): Promise<Awaited<ReturnType<PluginMarketApi['defaults']>>> => {
+      const state = await api.read();
+      return { schemaVersion: 2, plugins: state.plugins.filter(item => item.defaultInstall), nextCursor: null,
+        currentOrganization: state.currentOrganization, ...(state.organizationAccessError ? { organizationAccessError: state.organizationAccessError } : {}) };
+    }),
+    resolve: vi.fn(async (targets: Parameters<PluginMarketApi['resolve']>[0], query?: string): Promise<Awaited<ReturnType<PluginMarketApi['resolve']>>> => {
+      const state = await api.read();
+      const matches = (item: { id: string; ghostId: string; namespace?: string | null }, target: typeof targets[number]) =>
+        target.pluginId ? item.id === target.pluginId : item.ghostId === target.ghostId && (item.namespace ?? null) === target.namespace;
+      return { schemaVersion: 2, currentOrganization: state.currentOrganization,
+        ...(state.organizationAccessError ? { organizationAccessError: state.organizationAccessError } : {}),
+        removals: state.removals.filter(notice => targets.some(target => matches({ ...notice, id: notice.pluginId }, target))),
+        results: targets.map(target => {
+          const candidates = state.plugins.filter(item => matches(item, target));
+          return candidates.length !== 1 ? { key: target.key, status: 'unavailable' }
+            : { key: target.key, status: 'available', plugin: candidates[0]!, matchesQuery: !query
+              || [candidates[0]!.name, candidates[0]!.description, candidates[0]!.author, candidates[0]!.ghostId].some(text => text?.toLocaleLowerCase().includes(query.toLocaleLowerCase())) };
+        }) };
+    }),
+    catalog: vi.fn(async (options: NonNullable<Parameters<PluginMarketApi['catalog']>[0]> = {}): Promise<Awaited<ReturnType<PluginMarketApi['catalog']>>> => {
+      const state = await api.read();
+      const matches = state.plugins.filter(item => !options.query
+        || [item.name, item.description, item.author, item.ghostId].some(text => text?.toLocaleLowerCase().includes(options.query!.toLocaleLowerCase())));
+      const counts = { all: matches.length, public: 0, organization: 0, personal: 0,
+        official: matches.filter(item => item.scope === 'public' && item.publisherKind === 'official').length,
+        community: matches.filter(item => item.scope === 'public' && item.publisherKind === 'personal').length };
+      for (const item of matches) counts[item.scope]++;
+      const selected = matches.filter(item => !options.scope || options.scope === 'all' || options.scope === item.scope);
+      const offset = Number(options.cursor ?? 0), limit = options.limit ?? 12;
+      return { schemaVersion: 2, plugins: selected.slice(offset, offset + limit), currentOrganization: state.currentOrganization,
+        ...(state.organizationAccessError ? { organizationAccessError: state.organizationAccessError } : {}),
+        counts: options.counts === false ? null : counts, nextCursor: offset + limit < selected.length ? String(offset + limit) : null };
+    }),
     detail: vi.fn(async (pluginId: string): Promise<VisiblePluginDetail> => {
       const item = items.find((candidate) => candidate.id === pluginId);
       if (!item) throw new Error('not found');
@@ -648,7 +705,7 @@ describe('workflow display author projection', () => {
     { displayAuthor: undefined, expected: 'Cindy' },
   ])('uses the workflow name and preserves old-server compatibility (%j)', async ({ displayAuthor, expected }) => {
     const h = harness([summary({ displayAuthor })]);
-    expect((await h.service.snapshot({ discoveryOnly: true })).items[0].author).toBe(expected);
+    expect((await h.service.query()).items[0].author).toBe(expected);
   });
 });
 
@@ -760,7 +817,345 @@ describe('same-release legacy organization source recovery', () => {
   });
 });
 
+it('finds canonical root and organization instance keys without listing', () => {
+  const root = { ...ghostEntry('hello'), namespace: null, dir: '/ghosts/_ns/_root/hello',
+    approval: { state: 'approved', revision: 'root-revision' } } as unknown as InstalledGhost;
+  const organization = { ...ghostEntry('hello'), namespace: 'acme', dir: '/ghosts/_ns/acme/hello',
+    approval: { state: 'approved', revision: 'org-revision' } } as unknown as InstalledGhost;
+  runtime.ghosts = [root, organization] as unknown as typeof runtime.ghosts;
+  runtime.findInstalledInstance = vi.fn((id: string) =>
+    id === '_root__hello' ? root : id === '_ns__acme__hello' ? organization : undefined);
+  runtime.listScans = 0;
+  expect(installedGhostMatchingMarketPluginNow({ ghostId: 'hello', namespace: null })).toBe(root);
+  expect(installedGhostMatchingMarketPluginNow({ ghostId: 'hello', namespace: 'acme' })).toBe(organization);
+  expect(runtime.findInstalledInstance).toHaveBeenCalledWith('_root__hello');
+  expect(runtime.findInstalledInstance).toHaveBeenCalledWith('_ns__acme__hello');
+  expect(runtime.listScans).toBe(0);
+});
+
 describe('PluginMarketService migration and defaultInstall', () => {
+  it('preserves the sorted cursor and treats a server rejection as a catalog restart', async () => {
+    const h = harness([summary()]);
+    const opaqueCursor = 'v1.' + 'a'.repeat(180);
+    const sortValue = '2026-11-22T15:40:00Z';
+    const sorts = [{ key: 'updated', label: '最近更新', metric: { kind: 'date' as const, label: '更新时间' } }];
+    h.api.catalog.mockResolvedValueOnce({
+      schemaVersion: 2, plugins: [{ ...summary(), sortValue }], counts: null, nextCursor: opaqueCursor, sort: 'updated',
+      sorts, currentOrganization: null,
+    });
+    const page = await h.service.query({ scope: 'public', sort: 'default', counts: false });
+    expect(page).toMatchObject({ sort: 'updated', sorts, items: [{ sortValue }] });
+    expect(page.nextCursor).not.toBeNull();
+    await expect(h.service.query({ scope: 'public', sort: 'trending', counts: false, cursor: page.nextCursor }))
+      .rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    h.api.catalog.mockRejectedValueOnce(Object.assign(new Error('request failed'), {
+      code: 'INVALID_PARAMS', statusCode: 400,
+    }));
+    await expect(h.service.query({ scope: 'public', sort: 'updated', counts: false, cursor: page.nextCursor }))
+      .rejects.toMatchObject({ code: 'PLUGIN_LIST_CHANGED' });
+    expect(h.api.catalog).toHaveBeenLastCalledWith(expect.objectContaining({ sort: 'updated', cursor: opaqueCursor }));
+  });
+
+  // Unit regression: even with custom sources configured, official engine discovery must not
+  // open a local source or enumerate installations for each candidate on the cold or warm path.
+  it('classifies public official engines by release without opening custom sources or scanning installations', async () => {
+    const engine = summary({ publisherKind: 'official' });
+    const community = summary({ id: `c${'b'.repeat(24)}`, publisherKind: 'personal' });
+    const tool = summary({ id: `c${'c'.repeat(24)}`, publisherKind: 'official' });
+    const h = harness([community, engine, tool]);
+    const sourceStore = new MarketSourceStore(() => { throw new Error('unexpected local source read'); });
+    const bindSources = vi.spyOn(sourceStore, 'bind').mockReturnValue(sourceStore);
+    const service = new PluginMarketService(h.api as unknown as PluginMarketApi, h.ledger, sourceStore);
+    h.api.detail.mockResolvedValueOnce(parsedDetail(engine, {
+      ...manifest(engine.ghostId), node: { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['engine.js'] },
+      harnesses: [{ id: 'engine', name: 'Engine', protocol: 'acp', entry: 'engine.js' }],
+    }));
+    // Legacy servers already returned the entire catalog, including the engine after page one.
+    const firstPage = await h.api.catalog();
+    h.api.catalog.mockClear();
+    h.api.catalog.mockResolvedValueOnce({ ...firstPage, plugins: [community], nextCursor: 'legacy:1',
+      legacyQueryPlugins: [community, engine, tool] });
+    for (let open = 0; open < 2; open++) {
+      const page = await service.officialModelPlugins();
+      expect(page.items.map(item => item.pluginId)).toEqual([engine.id]);
+      expect(page.nextCursor).toBeNull();
+    }
+    expect(h.api.catalog).toHaveBeenCalledTimes(2);
+    expect(h.api.detail.mock.calls).toEqual([[engine.id], [tool.id]]);
+    expect(h.api.resolve).not.toHaveBeenCalled();
+    expect(bindSources).not.toHaveBeenCalled();
+    expect(runtime.listScans).toBe(0);
+  });
+
+  // A closed picker must not start the next manifest read while an already-sent one completes.
+  it('stops cold manifest reads after the picker closes', async () => {
+    const first = summary({ publisherKind: 'official' });
+    const next = summary({ id: `c${'c'.repeat(24)}`, publisherKind: 'official' });
+    const h = harness([first, next]);
+    let active = true;
+    h.api.detail.mockImplementationOnce(async () => {
+      active = false;
+      return detail(first);
+    });
+    await h.service.officialModelPlugins(null, () => active);
+    expect(h.api.detail.mock.calls).toEqual([[first.id]]);
+  });
+
+  // Unit: the three new read paths must not invoke the synchronous disk scanner.
+  // A held worker snapshot also proves simultaneous readers share one pending scan.
+  it('shares background installation reads across catalog, lookup and recommendations without synchronous scans', async () => {
+    const item = summary({ namespace: null });
+    const h = harness([item]);
+    Object.assign(h.api, { recommendations: vi.fn(async () => ({ plugins: [item] })) });
+    const gate = deferred();
+    runtime.readBackgroundGhosts = vi.fn(async () => { await gate.promise; return []; });
+    runtime.onList = () => { throw new Error('synchronous installation scan blocked the main process'); };
+    const reads = [h.service.query(), h.service.lookup([item.ghostId]), h.service.recommendations()] as const;
+    gate.resolve();
+    const [catalog, lookup, recommendations] = await Promise.all(reads);
+    expect(catalog.items.map(item => item.ghostId)).toEqual([item.ghostId]);
+    expect(lookup.items.map(item => item.ghostId)).toEqual([item.ghostId]);
+    expect(recommendations.map(item => item.ghostId)).toEqual([item.ghostId]);
+    expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit regressions for #9487: existing paging fixtures did not cover a namespace
+  // learned mid-batch, protocol-length keys, or a page containing only installed matches.
+  it('looks up an organization plugin when the first response supplies its namespace', async () => {
+    runtime.authIdentity!.orgSlug = null;
+    runtime.currentOrganization = { organizationId: 'org-1', pluginPrefix: null, orgSlug: 'acme' };
+    const h = harness([summary({ scope: 'organization', organizationId: 'org-1', namespace: 'acme' })]);
+    const result = await h.service.lookup(['cindy-test']);
+    expect(result.items.map(item => item.namespace)).toEqual(['acme']);
+  });
+
+  it.each(['lookup', 'maintenance'] as const)('uses protocol-safe keys for long logical identities during %s', async operation => {
+    const namespace = 'n'.repeat(100);
+    const ghostId = 'g'.repeat(32);
+    runtime.authIdentity!.orgSlug = namespace;
+    runtime.currentOrganization = { organizationId: 'org-1', pluginPrefix: null, orgSlug: namespace };
+    runtime.ghosts = [{ ...ghostEntry(ghostId), namespace }];
+    const h = harness([summary({ ghostId, scope: 'organization', organizationId: 'org-1', namespace })]);
+    const resolve = h.api.resolve.getMockImplementation()!;
+    h.api.resolve.mockImplementation(async (targets, query) => {
+      parsePluginResolveRequest({ targets });
+      return resolve(targets, query);
+    });
+    const result = operation === 'lookup' ? await h.service.lookup([ghostId]) : await h.service.snapshot();
+    expect(result.unavailableReason).toBeNull();
+    expect(result.items.some(item => item.ghostId === ghostId && item.namespace === namespace)).toBe(true);
+    expect(h.api.resolve).toHaveBeenCalled();
+  });
+
+  it.each(['', 'Tool'])('returns a continuation without scanning later pages of installed matches for query "%s"', async query => {
+    const items = Array.from({ length: 30 }, (_, index) => summary({
+      id: `c${String(index).padStart(24, '0')}`, ghostId: `tool-${index}`, name: `Tool ${index}`, namespace: null,
+    }));
+    const h = harness(items);
+    runtime.ghosts = items.map(item => ({ ...ghostEntry(item.ghostId), namespace: null }));
+    for (const item of items) h.ledger.upsertInstallation(recordForTest(item, { installed: true }));
+    const first = await h.service.query({ query, limit: 10, excludeInstalled: true, counts: false });
+    expect(first.items).toEqual([]);
+    expect(first.nextCursor).not.toBeNull();
+    expect(h.api.catalog).toHaveBeenCalledTimes(1);
+    expect(h.api.resolve).not.toHaveBeenCalled();
+  });
+
+  // Unit: the market must show and count only uninstalled matches, keeping source
+  // conflicts. Previous paging fixtures covered empty installed pages without counts.
+  // A current install, an update, an uninstalled item and an unmanaged conflict are
+  // the minimum distinct states; count-free paging must not repeat ID verification.
+  it('counts uninstalled market matches through bounded ID verification and retains source conflicts', async () => {
+    const items = Array.from({ length: 4 }, (_, index) => summary({
+      id: `c${String(index).padStart(24, '0')}`, ghostId: `tool-${index}`, name: `Tool ${index}`, namespace: null,
+      publisherKind: index % 2 ? 'personal' : 'official',
+    }));
+    const h = harness(items);
+    runtime.ghosts = [items[0]!, items[1]!, items[3]!].map(item => ({ ...ghostEntry(item.ghostId), namespace: null }));
+    h.ledger.upsertInstallation(recordForTest(items[0]!, { namespace: null }));
+    h.ledger.upsertInstallation(recordForTest(items[1]!, { namespace: null, releaseId: 'older-release' }));
+
+    const first = await h.service.query({ limit: 10, excludeInstalled: true });
+    expect(first.items.map(item => [item.ghostId, item.installState])).toEqual([
+      ['tool-2', 'not-installed'], ['tool-3', 'conflict'],
+    ]);
+    expect(first.counts).toMatchObject({ all: 2, public: 2, official: 1, community: 1 });
+    expect(h.api.resolve).toHaveBeenCalledExactlyOnceWith([
+      { key: items[0]!.id, pluginId: items[0]!.id },
+      { key: items[1]!.id, pluginId: items[1]!.id },
+    ], undefined);
+
+    const searched = await h.service.query({ query: 'Tool 2', limit: 10, excludeInstalled: true });
+    expect(searched.items.map(item => item.ghostId)).toEqual(['tool-2']);
+    expect(searched.counts).toMatchObject({ all: 1, public: 1, official: 1, community: 0 });
+    expect(h.api.resolve).toHaveBeenLastCalledWith(expect.any(Array), 'Tool 2');
+    await h.service.query({ limit: 10, excludeInstalled: true, counts: false });
+    expect(h.api.resolve).toHaveBeenCalledTimes(2);
+    expect(h.api.listAll).not.toHaveBeenCalled();
+  });
+
+  // Unit: PR #10162 ordinary browsing made legacy count deduction download the
+  // full catalog again. Use the real API fallback, not the in-memory server fake;
+  // public/organization installs, one available entry and a conflict cover both
+  // accurate source-wide counts and query matching without another HTTP read.
+  it.each(['', 'Tool 2'])('reuses the current legacy catalog for installed counts with query "%s"', async query => {
+    const items = Array.from({ length: 4 }, (_, index) => summary({
+      id: `c${String(index).padStart(24, '0')}`, ghostId: `tool-${index}`, name: `Tool ${index}`, namespace: null,
+      ...(index === 1 ? { scope: 'organization' as const, organizationId: 'org-1', namespace: 'acme' } : {}),
+    }));
+    runtime.currentOrganization = { organizationId: 'org-1', pluginPrefix: null, orgSlug: 'acme' };
+    const h = harness(items);
+    runtime.ghosts = [items[0]!, items[1]!, items[3]!].map(item => ({ ...ghostEntry(item.ghostId), namespace: item.namespace }));
+    for (const item of items.slice(0, 2)) h.ledger.upsertInstallation(recordForTest(item, { namespace: item.namespace }));
+    const fetcher = vi.fn();
+    fetcher.mockImplementation(async (request: string) => {
+      if (!request.startsWith('/api/plugins?')) throw Object.assign(new Error('unsupported'), { statusCode: 404 });
+      const search = new URL(request, 'https://plugin.test.invalid').searchParams.get('query');
+      return { schemaVersion: 2, plugins: items.filter(item => !search || item.name.includes(search)),
+        removals: [], nextCursor: null, currentOrganization: runtime.currentOrganization };
+    });
+    const api = new PluginMarketApi(fetcher);
+    const resolve = vi.spyOn(api, 'resolve');
+    const service = new PluginMarketService(api, h.ledger);
+    const page = await service.query({ query, scope: 'public', limit: 10, excludeInstalled: true });
+    expect(page.unavailableReason).toBeNull();
+    expect(page.items.map(item => [item.ghostId, item.installState])).toEqual(query
+      ? [['tool-2', 'not-installed']] : [['tool-2', 'not-installed'], ['tool-3', 'conflict']]);
+    expect(page.counts).toMatchObject({ all: query ? 1 : 2, public: query ? 1 : 2, organization: 0 });
+    expect(fetcher.mock.calls.filter(([request]) => request.startsWith('/api/plugins?'))).toHaveLength(1);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(page).not.toHaveProperty('legacyQueryPlugins');
+  });
+
+  // unit：v7.5 首屏只读一页，搜索覆盖未加载项；原 snapshot 用例不能证明不追全量目录。
+  it('pages the complete market without a full catalog and searches entries beyond the first page', async () => {
+    const items = Array.from({ length: 30 }, (_, index) => summary({
+      id: `c${String(index).padStart(24, '0')}`, ghostId: `tool-${index}`, name: `Tool ${index}`, namespace: null,
+    }));
+    const h = harness(items);
+    const first = await h.service.query({ limit: 12 });
+    expect(first.items).toHaveLength(12);
+    expect(first.counts?.all).toBe(30);
+    const next = await h.service.query({ limit: 12, cursor: first.nextCursor });
+    expect(next.items).toHaveLength(12);
+    expect(next.items[0]!.pluginId).not.toBe(first.items[0]!.pluginId);
+    expect((await h.service.query({ query: 'Tool 29' })).items.map(item => item.ghostId)).toEqual(['tool-29']);
+    expect(h.api.listAll).not.toHaveBeenCalled();
+  });
+
+  it('reuses one installation scan across sequential market pages', async () => {
+    const items = Array.from({ length: 30 }, (_, index) => summary({
+      id: 'c' + String(index).padStart(24, '0'),
+      ghostId: 'tool-' + index,
+      name: 'Tool ' + index,
+      namespace: null,
+    }));
+    const h = harness(items);
+    runtime.readBackgroundGhosts = vi.fn(async () => []);
+    let cursor: string | null = null;
+    for (let page = 0; page < 10; page += 1) {
+      const result = await h.service.query({ limit: 3, cursor });
+      cursor = result.nextCursor;
+    }
+    expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebuilds the installation context for a new query action', async () => {
+    const items = Array.from({ length: 6 }, (_, index) => summary({
+      id: 'c' + String(index).padStart(24, '0'),
+      ghostId: 'tool-' + index,
+      name: 'Tool ' + index,
+      namespace: null,
+    }));
+    const h = harness(items);
+    runtime.readBackgroundGhosts = vi.fn(async () => []);
+    await h.service.query({ limit: 2 });
+    await h.service.query({ limit: 2 });
+    expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes a reused installation context after the TTL', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const items = Array.from({ length: 6 }, (_, index) => summary({
+        id: 'c' + String(index).padStart(24, '0'),
+        ghostId: 'tool-' + index,
+        name: 'Tool ' + index,
+        namespace: null,
+      }));
+      const h = harness(items);
+      runtime.readBackgroundGhosts = vi.fn(async () => []);
+      const first = await h.service.query({ limit: 2 });
+      await h.service.query({ limit: 2, cursor: first.nextCursor });
+      expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(10 * 60 * 1_000 + 1);
+      await h.service.query({ limit: 2, cursor: first.nextCursor });
+      expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rescans installation state after the installed identity changes', async () => {
+    const items = Array.from({ length: 6 }, (_, index) => summary({
+      id: 'c' + String(index).padStart(24, '0'),
+      ghostId: 'tool-' + index,
+      name: 'Tool ' + index,
+      namespace: null,
+    }));
+    const h = harness(items);
+    runtime.readBackgroundGhosts = vi.fn(async () => []);
+    await h.service.query({ limit: 3 });
+    expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(1);
+    runtime.ghosts = [ghostEntry('tool-0')];
+    await h.service.query({ limit: 3 });
+    expect(runtime.readBackgroundGhosts).toHaveBeenCalledTimes(2);
+  });
+
+  it('hides counts instead of unbounded installed-count resolution', async () => {
+    const item = summary({ id: 'c000000000000000000000001', ghostId: 'tool-0', namespace: null });
+    const h = harness([item]);
+    (h.service as unknown as { countDeductionMaxBatches: number }).countDeductionMaxBatches = 1;
+    for (let index = 0; index < 101; index += 1) {
+      h.ledger.upsertInstallation(recordForTest({
+        ...item,
+        id: 'c' + String(index).padStart(24, '0'),
+        ghostId: 'installed-' + index,
+      }, { installed: true }));
+    }
+    const result = await h.service.query({ limit: 3, excludeInstalled: true });
+    expect(result.counts).toBeNull();
+    expect(h.api.resolve).not.toHaveBeenCalled();
+  });
+
+  it('keeps unavailable installed targets when a bounded maintenance batch fails', async () => {
+    const item = summary({ scope: 'organization', organizationId: 'org-1', namespace: 'acme' });
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item, { namespace: 'acme', installed: true }));
+    Object.assign(h.api, { resolve: vi.fn().mockRejectedValueOnce(new Error('target batch unavailable')) });
+    const result = await h.service.snapshot();
+    expect(result.unavailableReason).toBe('target batch unavailable');
+    expect(runtime.uninstall).not.toHaveBeenCalled();
+    expect(h.ledger.installationForPlugin({ ghostId: item.ghostId, namespace: 'acme' })?.installed).toBe(true);
+    expect(h.api.listAll).not.toHaveBeenCalled();
+  });
+
+  // unit：客户端先于 plugin-server 上线（无 defaults 接口）时，插件页与迁移仍要读到官方目录。
+  it('falls back to the full catalog only when the server lacks the defaults endpoint', async () => {
+    const item = summary({ namespace: null });
+    const h = harness([item]);
+    h.api.defaults.mockRejectedValueOnce(new PluginMarketEndpointUnsupportedError());
+    const result = await h.service.snapshot();
+    expect(result.unavailableReason).toBeNull();
+    expect(result.items.map(entry => entry.pluginId)).toContain(item.id);
+    expect(h.api.listAll).toHaveBeenCalledTimes(1);
+
+    h.api.defaults.mockRejectedValueOnce(new Error('network down'));
+    expect((await h.service.snapshot()).unavailableReason).toBe('network down');
+    expect(h.api.listAll).toHaveBeenCalledTimes(1);
+  });
+
   it('upgrades the official simulator through the old route and atomically replaces its ledger key', async () => {
     const item = summary({ ghostId: 'cindy-simulator', namespace: null,
       currentRelease: { ...summary().currentRelease, id: RELEASE_ID, version: '2.0.0' } });
@@ -1061,7 +1456,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const h = harness([item]);
     h.ledger.upsertInstallation(recordForTest(item, { namespace: 'acme', installed: true }));
     const before = h.ledger.installationForPlugin({ ghostId: 'helper', namespace: 'acme' });
-    h.api.listAll.mockRejectedValueOnce(Object.assign(new Error('请求失败 (' + status + ')'), { code, status }));
+    h.api.read.mockRejectedValueOnce(Object.assign(new Error('请求失败 (' + status + ')'), { code, status }));
     h.api.detail.mockRejectedValueOnce(Object.assign(new Error('请求失败 (' + status + ')'), { code, status }));
     h.api.download.mockRejectedValueOnce(Object.assign(new Error('请求失败 (' + status + ')'), { code, status }));
     await expect(h.service.snapshot()).resolves.toMatchObject({
@@ -1076,7 +1471,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
   it('resumes eligible pending residents only when market discovery is unavailable', async () => {
     const h = harness([]);
-    h.api.listAll.mockRejectedValueOnce(new Error('market offline'));
+    h.api.read.mockRejectedValueOnce(new Error('market offline'));
     await h.service.snapshot();
     expect(runtime.resumeOfflineResidents).toHaveBeenCalledOnce();
     await h.service.snapshot();
@@ -1251,22 +1646,22 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const h = harness([]);
     const results = await Promise.all(Array.from({ length: 3 }, () => h.service.snapshot({ discoveryOnly: true })));
     expect(results.map((result) => result.items)).toEqual([[], [], []]);
-    expect(h.api.listAll).toHaveBeenCalledTimes(1);
+    expect(h.api.read).toHaveBeenCalledTimes(1);
     expect(runtime.listScans).toBe(1);
     await h.service.snapshot({ discoveryOnly: true });
-    expect(h.api.listAll).toHaveBeenCalledTimes(2);
+    expect(h.api.read).toHaveBeenCalledTimes(2);
   });
 
   it('does not add a catalog fetch or installation scan when foreground overlaps full maintenance', async () => {
     const h = harness([]);
-    const catalog = h.api.listAll.getMockImplementation()!;
+    const catalog = h.api.read.getMockImplementation()!;
     const gate = deferred();
-    h.api.listAll.mockImplementationOnce(async () => { await gate.promise; return catalog(); });
+    h.api.read.mockImplementationOnce(async () => { await gate.promise; return catalog(); });
     const full = h.service.snapshot();
     const foreground = h.service.refreshCatalogForForeground();
     gate.resolve();
     await Promise.all([full, foreground]);
-    expect(h.api.listAll).toHaveBeenCalledOnce();
+    expect(h.api.read).toHaveBeenCalledOnce();
     const overlappingScans = runtime.listScans;
     runtime.listScans = 0;
     await h.service.snapshot();
@@ -1280,7 +1675,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const request = h.service.snapshot({ discoveryOnly: true });
     runtime.session = { ...runtime.session, dataOwnerId: 'user-2', generation: runtime.session.generation + 1 };
     await expect(request).rejects.toThrow('active account changed');
-    expect(h.api.listAll).not.toHaveBeenCalled();
+    expect(h.api.read).not.toHaveBeenCalled();
   });
 
   it('does not provision plugins from an incomplete installation scan', async () => {
@@ -1306,6 +1701,8 @@ describe('PluginMarketService migration and defaultInstall', () => {
       mimeType: 'image/png', sizeBytes: 42, sha256: 'b'.repeat(64),
     };
     const h = harness(items);
+    // Foreground maintenance now observes installed/default identities, not unrelated market entries.
+    h.ledger.upsertInstallation(recordForTest(items[0]!));
     await h.service.snapshot();
     runtime.listScans = 0;
     items[0]!.currentRelease.icon.url = 'https://icons.test.invalid/icon?signature=new';
@@ -1522,11 +1919,19 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
+  // Unit: catalog and detail must expose the server's actual package size.
+  it('projects the published package size into catalog and detail items', async () => {
+    const item = summary();
+    const h = harness([item]);
+    await expect(h.service.query()).resolves.toMatchObject({ items: [{ sizeBytes: item.currentRelease.sizeBytes }] });
+    await expect(h.service.detail(item.id)).resolves.toMatchObject({ sizeBytes: item.currentRelease.sizeBytes });
+  });
+
   it('passes exact server download statistics through snapshots and details', async () => {
     const downloadStatistics = { requestCount: '18446744073709551615', last7DaysRequestCount: '12' };
     const item = { ...summary(), downloadStatistics };
     const h = harness([item]);
-    await expect(h.service.snapshot()).resolves.toMatchObject({ items: [{ downloadStatistics }] });
+    await expect(h.service.query()).resolves.toMatchObject({ items: [{ downloadStatistics }] });
     await expect(h.service.detail(item.id)).resolves.toMatchObject({ downloadStatistics });
   });
 
@@ -1539,7 +1944,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     vi.mocked(ownerScopedUserDataPath).mockImplementation((...parts: string[]) =>
       path.join(prefixRoot, ...parts),
     );
-    h.api.listAll.mockResolvedValue({
+    h.api.read.mockResolvedValue({
       plugins: [item],
       removals: [],
       currentOrganization: { organizationId: 'org-acme', pluginPrefix: 'acme' },
@@ -1556,7 +1961,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
   it('still returns the market snapshot when the organization prefix cache write fails', async () => {
     const item = summary();
     const h = harness([item]);
-    h.api.listAll.mockResolvedValue({
+    h.api.read.mockResolvedValue({
       plugins: [item],
       removals: [],
       currentOrganization: { organizationId: 'org-acme', pluginPrefix: 'acme' },
@@ -1571,7 +1976,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
     try {
       // Excludes allowing a reconstructable cache write failure to reject the whole catalog.
-      await expect(h.service.snapshot()).resolves.toMatchObject({
+      await expect(h.service.query()).resolves.toMatchObject({
         items: [{ pluginId: item.id }],
         unavailableReason: null,
       });
@@ -1598,7 +2003,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       }),
     ]);
 
-    await expect(h.service.snapshot()).resolves.toMatchObject({
+    await expect(h.service.query()).resolves.toMatchObject({
       items: [{ icon }],
       unavailableReason: null,
     });
@@ -1620,10 +2025,10 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
     // Maintenance stages each read the whole ledger a fixed number of times: the
     // count must not grow with market items, and stays within the per-stage budget
-    // (one read added by the stale default-install opt-out repair stage).
+    // (one read added by the stale opt-out repair stage, one by bounded target selection).
     const reads = await ledgerReadsFor(50);
     expect(reads).toBe(await ledgerReadsFor(1));
-    expect(reads).toBeLessThan(11);
+    expect(reads).toBeLessThan(12);
   });
 
   it('shows only public market plugins in account-free local mode', async () => {
@@ -1632,7 +2037,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       dataOwnerId: 'local-v1',
       generation: 2,
     };
-    const publicPlugin = summary();
+    const publicPlugin = summary({ publisherKind: 'personal' });
     const organizationPlugin = summary({
       id: `c${'b'.repeat(24)}`,
       ghostId: 'cindy-team-only',
@@ -1641,11 +2046,12 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
     const h = harness([publicPlugin, organizationPlugin]);
 
-    await expect(h.service.snapshot()).resolves.toMatchObject({
+    await expect(h.service.query()).resolves.toMatchObject({
       items: [{ pluginId: publicPlugin.id, scope: 'public' }],
+      counts: { all: 1, public: 1, official: 0, community: 1, organization: 0 },
       unavailableReason: null,
     });
-    expect(h.api.listAll).toHaveBeenCalledTimes(1);
+    expect(h.api.read).toHaveBeenCalledTimes(1);
   });
 
   it('shows public market plugins when signed out without leaking local install state', async () => {
@@ -1676,7 +2082,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       customSourceNames: [],
       unavailableCustomSourceNames: [],
     });
-    expect(h.api.listAll).toHaveBeenCalledTimes(1);
+    expect(h.api.read).toHaveBeenCalledTimes(1);
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
@@ -1764,6 +2170,8 @@ describe('PluginMarketService migration and defaultInstall', () => {
       const canonicalId = `c${'z'.repeat(24)}`;
       const h = harness([item]);
       h.api.detail.mockResolvedValueOnce(detail(item));
+      h.api.resolve.mockResolvedValueOnce({ schemaVersion: 2, currentOrganization: null, removals: [],
+        results: [{ key: 'selected', status: 'available', plugin: item, matchesQuery: true }] });
 
       await expect(h.service.detail(canonicalId)).resolves.toMatchObject({
         pluginId: item.id, scope: 'public',
@@ -1793,7 +2201,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     const h = harness([item]);
 
     await expect(h.service.detail(item.id)).rejects.toThrow('[PRECONDITION_FAILED]');
-    expect(h.api.listAll).not.toHaveBeenCalled();
+    expect(h.api.read).not.toHaveBeenCalled();
     expect(h.api.detail).not.toHaveBeenCalled();
   });
 
@@ -1812,7 +2220,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       customSourceNames: [],
       unavailableCustomSourceNames: [],
     });
-    expect(h.api.listAll).not.toHaveBeenCalled();
+    expect(h.api.read).not.toHaveBeenCalled();
   });
 
   it('uses a switching reason while the account boundary is pending', async () => {
@@ -1825,7 +2233,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       customSourceNames: [],
       unavailableCustomSourceNames: [],
     });
-    expect(h.api.listAll).not.toHaveBeenCalled();
+    expect(h.api.read).not.toHaveBeenCalled();
   });
 
   it.each(['xd-probe', 'filo-probe'])('does not adopt a new Forge %s through legacy prefix recognition', async (id) => {
@@ -2450,7 +2858,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     expect(await h.service.snapshot({
       deferReconciliation: true, onDefaultReconciliationOutcome: secondOutcome,
     })).toBe(snapshot);
-    expect(h.api.listAll).toHaveBeenCalledOnce();
+    expect(h.api.read).toHaveBeenCalledOnce();
     downloadGate.resolve();
     await settled.promise;
     expect(runtime.install).toHaveBeenCalledOnce();
@@ -2690,7 +3098,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
     // 安装入口用目录 summary 做 detail 身份绑定(防止把 A 的确认导向 B 的内容),
     // 因此手动安装也会先取一次目录,但不做任何 listAll 之外的多余请求。
-    expect(h.api.listAll).toHaveBeenCalledTimes(1);
+    expect(h.api.read).toHaveBeenCalledTimes(1);
     // 锁定装完即开的最终结果:装入入口返回的 ghost 必须是启用态。
     expect(ghost?.enabled).toBe(true);
   });
@@ -2785,7 +3193,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     ).resolves.toMatchObject({ ghost: { manifest: { id: selected.ghostId } } });
     expect(h.api.detail).toHaveBeenCalledWith(selected.id);
     // 安装入口用目录 summary 绑定 detail 身份,共享 ghostId 的另一条目也一并取回。
-    expect(h.api.listAll).toHaveBeenCalledTimes(1);
+    expect(h.api.read).toHaveBeenCalledTimes(1);
   });
 
   it('server-market 只为 cindy-github 安装显式传 Host 官方身份', async () => {
@@ -3423,15 +3831,15 @@ describe('PluginMarketService migration and defaultInstall', () => {
 
   // 测试价值
   // - 生产入口与可观察结果：snapshot() 的市场投影与随后的自动更新——内置种子覆盖过的商店安装
-  //   在种子已撤或当前种子不比 Release 新时被更新回商店包，否则保持冲突、不下载。
+  //   在种子已撤或当前种子不比 Release 新时可更新回商店包，但不允许覆盖更高的已装版本。
   // - 规则依据：种子与商店按版本取新、相同取商店（2026-11）；只放行播种台账内的实例。
   // - 现有覆盖缺口：上一条用例只覆盖普通本地漂移（冲突、不自动更新）。
   // - 最小失败输入：已装字节与账本不符且在播种台账内，当前 Release 与种子同版本；
-  //   或种子已撤而已装的旧种子版本更高（本地测试抬过版本号）。
+  //   种子已撤但已装版本更高时也不得自动降级（2026-11-11 回归）。
   // - tier：unit（内存 runtime）。
   it.each([
     { installed: '2.0.0', seed: '2.0.0' as string | null | undefined, updates: true },
-    { installed: '3.0.0', seed: null, updates: true },
+    { installed: '3.0.0', seed: null, updates: false },
     { installed: '3.0.0', seed: '3.0.0', updates: false },
     { installed: '2.0.0', seed: undefined, updates: false },
   ])('installed $installed with seed $seed yields to release 2.0.0: $updates', async ({ installed, seed, updates }) => {
@@ -3467,7 +3875,8 @@ describe('PluginMarketService migration and defaultInstall', () => {
       });
     } else {
       expect(runtime.install).not.toHaveBeenCalled();
-      expect(items[0]?.installState).toBe('conflict');
+      expect(items[0]?.installState).toBe(seed === null ? 'update-available' : 'conflict');
+      expect(runtime.ghosts[0]?.manifest.version).toBe(installed);
     }
   });
 
@@ -3509,6 +3918,51 @@ describe('PluginMarketService migration and defaultInstall', () => {
     } else {
       expect(runtime.install).not.toHaveBeenCalled();
       expect(items[0]?.installState).toBe('installed');
+    }
+  });
+
+  // #10296, unit: a root seed receipt on a retained organization instance must
+  // reach the same market update route, while another resource cannot claim it.
+  // Existing seed tests only exercised root instances and bypassed the registry.
+  it.each([true, false])('restores the retained organization route only with matching provenance: %s', async matches => {
+    const item = summary({ namespace: 'acme', scope: 'organization', organizationId: 'org-1',
+      currentRelease: { ...summary().currentRelease, version: '2.0.0' } });
+    const seedManifest = manifest(item.ghostId, '1.0.0');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-org-seed-'));
+    roots.push(root);
+    const dir = path.join(root, item.ghostId);
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'ghost.json'), JSON.stringify(seedManifest));
+    const receipt = createGhostInstallReceipt({ manifest: seedManifest, localeResources: {}, enabled: false,
+      namespace: null, packageSha256: 'b'.repeat(64), skillContentSha256: {},
+      trust: { level: 'unverified', publisherSigned: false, publisherVerified: false, reviewed: false } });
+    runtime.ghosts = [{ manifest: seedManifest, dir, enabled: false, namespace: 'acme',
+      namespaceState: 'unconfirmed', approval: { state: 'approved', revision: receipt.revision } }];
+    runtime.hostSeedVersions.set(item.ghostId, '1.0.0');
+    runtime.readInstanceForContent.mockReturnValue({ instanceKey: item.ghostId, contentRelId: item.ghostId,
+      ghostId: item.ghostId, namespace: 'acme', namespaceState: 'unconfirmed', source: 'market', active: true,
+      pluginId: matches ? item.id : 'another-resource', receiptRevision: receipt.revision, packageSha256: receipt.packageSha256! });
+    runtime.readApprovedInstallReceipt.mockReturnValue(receipt);
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item, { namespace: 'acme',
+      manifestDigest: ghostManifestDigest(manifest(item.ghostId, '2.0.0')) }));
+    runtime.install.mockImplementationOnce(async () => {
+      const ghost = { manifest: manifest(item.ghostId, '2.0.0'), dir, enabled: false, namespace: 'acme' };
+      runtime.ghosts = [ghost];
+      return ghost;
+    });
+    const snapshot = await h.service.snapshot();
+    if (matches) {
+      expect(runtime.install).toHaveBeenCalledTimes(1);
+      expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({ namespace: 'acme',
+        expectedInstalledApproval: ghostInstallApprovalToken({ state: 'approved', revision: receipt.revision }) });
+      expect(runtime.install.mock.calls[0]?.[1]?.sourceChanged).not.toBe(true);
+      expect(h.ledger.installationForAuthorization({ ghostId: item.ghostId, namespace: 'acme' })).toMatchObject({
+        pluginId: item.id, namespace: 'acme', version: '2.0.0', installed: true });
+      expect(runtime.ghosts[0]?.enabled).toBe(false);
+    } else {
+      expect(runtime.install).not.toHaveBeenCalled();
+      expect(snapshot.items[0]?.installState).toBe('conflict');
     }
   });
 
@@ -3617,6 +4071,34 @@ describe('PluginMarketService migration and defaultInstall', () => {
       expect(snapshot.items[0]).toMatchObject({ installState: 'update-available' });
     },
   );
+
+  // Regression (unit): snapshot must preserve a newer installed package/ledger when
+  // client compatibility filtering returns an older release (1.5.11 -> 1.3.0).
+  // Existing upgrade tests only covered increasing versions, not this data-loss path.
+  it.each([false, true])('does not automatically downgrade a tracked release (defaultInstall=%s)', async (defaultInstall) => {
+    const item = summary({
+      scope: defaultInstall ? 'organization' : 'public',
+      organizationId: defaultInstall ? 'org-1' : null,
+      defaultInstall,
+      currentRelease: { ...summary().currentRelease, id: 'compatible-old', version: '1.3.0' },
+    });
+    const installedManifest = manifest(item.ghostId, '1.5.11');
+    const dir = installRuntimeGhost(installedManifest);
+    const h = harness([item]);
+    h.ledger.upsertInstallation(recordForTest(item, {
+      releaseId: 'installed-new', version: '1.5.11',
+      manifestDigest: ghostManifestDigest(installedManifest),
+    }));
+    const before = h.ledger.read();
+
+    await h.service.snapshot();
+
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.ghosts[0]?.manifest.version).toBe('1.5.11');
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'ghost.json'), 'utf8')).version).toBe('1.5.11');
+    expect(h.ledger.read().installations[item.ghostId]?.releaseId).toBe(before.installations[item.ghostId]?.releaseId);
+  });
 
   it('silently updates an organization defaultInstall package and preserves disabled state', async () => {
     const item = summary({
@@ -3743,7 +4225,9 @@ describe('PluginMarketService migration and defaultInstall', () => {
       items: [{ installState: 'installed', version: '2.0.0' }],
       unavailableReason: null,
     });
-    expect(h.api.listAll).toHaveBeenCalledTimes(1);
+    expect(h.api.defaults).toHaveBeenCalledOnce();
+    expect(h.api.resolve).toHaveBeenCalledOnce();
+    expect(h.api.listAll).not.toHaveBeenCalled();
     expect(h.api.detail).toHaveBeenCalledWith(item.id);
     expect(h.api.download).toHaveBeenCalledWith(item.id, 'release-2');
     expect(runtime.install).toHaveBeenCalledTimes(1);
@@ -4445,7 +4929,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
       items: [{ pluginId: item.id, ghostId: 'cindy-art', installState: 'not-installed' }],
       unavailableReason: null,
     });
-    expect(h.api.listAll).toHaveBeenCalledOnce();
+    expect(h.api.read).toHaveBeenCalledOnce();
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
@@ -4749,7 +5233,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     h.ledger.upsertInstallation(removalRecord({ ghostId: 'helper', namespace: null }));
     await h.service.snapshot();
     expect(runtime.uninstall).not.toHaveBeenCalled();
-    h.api.listAll.mockResolvedValueOnce({ plugins: [], removals: [{ ...notice, namespace: 'unknown' }], currentOrganization: null });
+    h.api.read.mockResolvedValueOnce({ plugins: [], removals: [{ ...notice, namespace: 'unknown' }], currentOrganization: null });
     await h.service.snapshot();
     expect(runtime.uninstall).not.toHaveBeenCalled();
   });
@@ -5256,7 +5740,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
 
     await expect(h.service.install(item.id, reviewedInstallOptions(item), TEST_INSTALL_CONTEXT)).rejects.toThrow(
-      '[PRECONDITION_FAILED]',
+      '[GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED]',
     );
     expect(runtime.install).not.toHaveBeenCalled();
   });
@@ -5539,6 +6023,20 @@ describe('organization default Plugin takeover', () => {
       uniqueGhostId: false, installed, record: null, installOrigin: 'manual',
       runtimeAvailable: true, optedOut: false, builtinRemoved: true, busy: false,
     })).toEqual({ eligible: true });
+  });
+
+  // Unit: default-source takeover is another background replacement path;
+  // unlike tracked upgrades it starts from a conflict without a matching ledger.
+  it('does not automatically downgrade a newer manual plugin during default takeover', async () => {
+    setCurrentOrganization();
+    const item = organizationDefaultSummary();
+    installRuntimeGhost(manifest(item.ghostId, '9.0.0'));
+    const h = harness([item]);
+    await h.service.snapshot();
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.ghosts[0]?.manifest.version).toBe('9.0.0');
+    expect(h.ledger.installationForGhost(item.ghostId)).toBeNull();
   });
 
   it('re-downloads and replaces a same-release bad target record without writing opt-out', async () => {
@@ -6388,6 +6886,27 @@ describe('organization default Plugin takeover', () => {
 });
 
 describe('market detail 响应身份绑定', () => {
+  it('reads recent updates without scanning other plugin installations', async () => {
+    const item = summary({ namespace: null });
+    const h = harness([item]);
+    const rawManifest = manifest(item.ghostId);
+    const dir = installRuntimeGhost(rawManifest);
+    runtime.ghosts.push(...Array.from({ length: 29 }, (_, index) => ghostEntry(`unrelated-${index}`)));
+    const installed = { ...runtime.ghosts[0], dir, namespace: null,
+      approval: { state: 'approved', revision: 'fixture' } } as unknown as InstalledGhost;
+    runtime.findInstalledInstance = vi.fn((id: string) => id === item.ghostId ? installed : undefined);
+    const updates = [{ version: '1.0.0', publishedAt: '2026-07-23T00:00:00.000Z', releaseNotes: 'Notes' }];
+    const response = { ...detail(item), updates };
+    h.api.detail.mockResolvedValueOnce(response);
+
+    const result = await h.service.detail(item.id, { includeUpdates: true });
+
+    expect(result.updates).toEqual(updates);
+    expect(h.api.resolve).toHaveBeenCalledTimes(1);
+    expect(h.api.detail).toHaveBeenCalledExactlyOnceWith(item.id, { includeUpdates: true });
+    expect(runtime.listScans).toBe(0);
+  });
+
   it('rejects a detail response that changes the default-install policy', async () => {
     const item = organizationDefaultSummary();
     const h = harness([item]);
@@ -6679,7 +7198,7 @@ describe('PluginMarketService install consent', () => {
 
     const next = { ...item, currentRelease: { ...item.currentRelease, id: 'release-2', version: '2.0.0' } };
     const nextManifest = manifest(item.ghostId, '2.0.0', ['notify', 'fs']);
-    h.api.listAll.mockResolvedValue({ plugins: [next], removals: [], currentOrganization: null });
+    h.api.read.mockResolvedValue({ plugins: [next], removals: [], currentOrganization: null });
     h.api.detail.mockImplementation(async () => {
       runtime.inspectedManifest = nextManifest;
       return { ...next, currentRelease: { ...next.currentRelease, manifest: nextManifest } };
@@ -6711,6 +7230,80 @@ describe('PluginMarketService install consent', () => {
 
     expect(h.ledger.isDefaultInstallSuppressed('user-1', item.id)).toBe(true);
     expect(h.ledger.installationForGhost(item.ghostId)?.installed).toBe(false);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：PluginMarketService.install 的 onProgress；插件页据此显示
+  //   准备、下载、校验、等待确认、安装、完成／失败这些步骤。
+  // - Bug／规则依据：verified-downloads.md「下载进度与界面」登记的缺口——插件市场安装没有进度通道，
+  //   界面只能转圈然后突然结束。
+  // - 现有覆盖缺口：既有用例只断言安装结果，不关心中途向界面报告了什么。
+  // - 最小失败输入：一次带 onProgress 的首装；下载失败；用户在确认框里取消；监听方抛错。
+  // - tier：unit（沿用本文件的内存 harness，下载器已 mock）。
+  it.each([
+    {
+      name: 'reports every step of a confirmed install',
+      steps: ['preparing', 'downloading', 'verifying', 'verifying+consent', 'verifying', 'installing', 'completed'],
+    },
+    { name: 'ends as failed when the download fails', downloadFails: true, steps: ['preparing', 'failed'] },
+    {
+      name: 'ends as cancelled, not failed, when the user declines',
+      declined: true,
+      steps: ['preparing', 'downloading', 'verifying', 'verifying+consent', 'verifying', 'cancelled'],
+    },
+    { name: 'still installs when the progress listener throws', listenerThrows: true, steps: [] },
+  ] as Array<{ name: string; steps: string[]; downloadFails?: true; declined?: true; listenerThrows?: true }>)(
+    '$name',
+    async ({ steps, downloadFails, declined, listenerThrows }) => {
+      const item = summary();
+      const h = harness([item]);
+      runtime.install.mockResolvedValue({
+        manifest: manifest(), dir: path.join(os.tmpdir(), 'market-install'), enabled: true,
+      });
+      vi.mocked(downloadVerifiedPlugin).mockImplementationOnce(async (_url, expected, _target, progress) => {
+        if (downloadFails) throw new Error('Plugin download failed');
+        progress?.onProgress?.({ loaded: expected.sizeBytes / 2, total: expected.sizeBytes, percent: 50, speedBps: 0 });
+        progress?.onVerifying?.();
+      });
+      const seen: string[] = [];
+      let lastPercent: number | null = null;
+
+      const install = h.service.install(item.id, reviewedInstallOptions(item), {
+        consent: { prompt: async () => !declined, initiator: 'user' },
+        onProgress: (progress) => {
+          if (listenerThrows) throw new Error('renderer went away');
+          expect(progress.pluginId).toBe(item.id);
+          const step = `${progress.download.phase}${progress.awaitingConsent ? '+consent' : ''}`;
+          if (seen.at(-1) !== step) seen.push(step);
+          lastPercent = progress.download.percent;
+        },
+      });
+
+      if (downloadFails) await expect(install).rejects.toThrow('Plugin download failed');
+      else if (declined) await expect(install).rejects.toMatchObject({ code: 'MUTATION_CANCELLED' });
+      else await expect(install).resolves.toMatchObject({ ghost: { manifest: { id: item.ghostId } } });
+      expect(seen).toEqual(steps);
+      // The package size is known up front, so the amount shown is exact from the first byte.
+      if (steps.at(-1) === 'completed') expect(lastPercent).toBe(100);
+      if (steps.at(-1) === 'cancelled') expect(lastPercent).toBe(50);
+    },
+  );
+
+  it.each(['personal', 'official'] as const)('uses the catalog publisher for the %s install notice', async publisherKind => {
+    const item = summary({ publisherKind });
+    const { service } = harness([item]);
+    const prompt = vi.fn<PluginMarketInstallContext['consent']['prompt']>(async () => false);
+
+    await expect(service.install(item.id, reviewedInstallOptions(item), {
+      consent: { prompt, initiator: 'user' },
+    })).rejects.toMatchObject({ code: 'MUTATION_CANCELLED' });
+    expect(prompt).toHaveBeenCalledOnce();
+    const request = prompt.mock.calls[0]![0];
+    expect(request).toMatchObject({
+      origin: 'market',
+      facts: { kind: 'install' },
+    });
+    expect(request.communityMarket).toBe(publisherKind === 'personal' ? true : undefined);
   });
 
   it('does not hold the plugin mutation while waiting for install confirmation', async () => {
@@ -6830,7 +7423,7 @@ describe('organization catalog access error', () => {
   ] as const)('keeps public plugins and the installed organization plugin through %s', async (_label, options) => {
     const publicItem = summary();
     const h = harness([publicItem]);
-    h.api.listAll.mockResolvedValue(deniedCatalog(publicItem));
+    h.api.read.mockResolvedValue(deniedCatalog(publicItem));
     installOrganizationHelper();
     h.ledger.upsertInstallation(removalRecord({
       pluginId: ORGANIZATION_PLUGIN_ID,
@@ -6846,7 +7439,7 @@ describe('organization catalog access error', () => {
 
     expect(snapshot.organizationAccessError).toBe('PLUGIN_NAMESPACE_CLIENT_REQUIRED');
     expect(snapshot.unavailableReason).toBeNull();
-    expect(snapshot.items.map((entry) => entry.pluginId)).toContain(publicItem.id);
+    expect((await h.service.query()).items.map((entry) => entry.pluginId)).toContain(publicItem.id);
     expect(runtime.uninstall).not.toHaveBeenCalled();
     expect(h.ledger.installationForPlugin({ ghostId: 'helper', namespace: 'acme' })).toEqual(organizationRecord);
   });
@@ -6858,7 +7451,7 @@ describe('organization catalog access error', () => {
   ])('reports %s instead of NOT_FOUND for an unlisted plugin without reading its detail', async (code) => {
     const publicItem = summary();
     const h = harness([publicItem]);
-    h.api.listAll.mockResolvedValue(deniedCatalog(publicItem, code));
+    h.api.read.mockResolvedValue(deniedCatalog(publicItem, code));
     const organizationItem = summary({ id: ORGANIZATION_PLUGIN_ID, ghostId: 'helper', scope: 'organization', organizationId: 'org-1' });
 
     await expect(h.service.detail(ORGANIZATION_PLUGIN_ID)).rejects.toThrow(`[${code}]`);
@@ -6875,7 +7468,7 @@ describe('organization catalog access error', () => {
   it('keeps NOT_FOUND for an unlisted plugin when the reason is not a known access code', async () => {
     const publicItem = summary();
     const h = harness([publicItem]);
-    h.api.listAll.mockResolvedValue(deniedCatalog(publicItem, 'PLUGIN_FUTURE_REASON'));
+    h.api.read.mockResolvedValue(deniedCatalog(publicItem, 'PLUGIN_FUTURE_REASON'));
 
     await expect(h.service.detail(ORGANIZATION_PLUGIN_ID)).rejects.toThrow('[NOT_FOUND]');
     expect(h.api.detail).not.toHaveBeenCalled();
@@ -6884,14 +7477,14 @@ describe('organization catalog access error', () => {
   it('keeps a future organization access code with the public catalog', async () => {
     const item = summary();
     const h = harness([item]);
-    h.api.listAll.mockResolvedValueOnce({
+    h.api.read.mockResolvedValueOnce({
       plugins: [item],
       removals: [],
       currentOrganization: { organizationId: 'org-1', orgSlug: 'acme', pluginPrefix: 'acme' },
       organizationAccessError: { code: 'PLUGIN_FUTURE_REASON', message: '以后再说' },
     });
 
-    const snapshot = await h.service.snapshot({ discoveryOnly: true });
+    const snapshot = await h.service.query();
 
     expect(snapshot.organizationAccessError).toBe('PLUGIN_FUTURE_REASON');
     expect(snapshot.unavailableReason).toBeNull();
@@ -7152,5 +7745,68 @@ describe('server default UI approval receipts', () => {
     await h.service.snapshot().catch(() => undefined);
     expect(h.read()!.uiCapabilityApproved).toBeUndefined();
     expect(h.read()!.packageSha256).toBe(before.packageSha256);
+  });
+});
+
+// #6357: the public install entry must preserve service-generated expiry through
+// real IPC decoding, Agent adaptation and renderer mapping. API, package IO and
+// installed state use this file's isolated fixture; this is not a live market test.
+describe('download authorization failure semantics (#6357)', () => {
+  it.each(['install', 'update'] as const)('keeps expiry distinct from metadata drift on %s', async (operation) => {
+    const item = summary();
+    const h = harness([item]);
+    if (operation === 'update') {
+      runtime.ghosts = [ghostEntry(item.ghostId)];
+      h.ledger.upsertInstallation(recordForTest(item, { installed: true, manifestDigest: ghostManifestDigest(manifest(item.ghostId)) }));
+    }
+    const options = {
+      ...reviewedInstallOptions(item),
+      ...(operation === 'update' ? { expectedInstalledApproval: APPROVED_INSTALL_TOKEN } : {}),
+    };
+    const authorization = await h.api.download(item.id, item.currentRelease.id);
+    for (const expiresAt of ['2000-01-01T00:00:00.000Z', 'invalid-date']) {
+      h.api.download.mockResolvedValue({ ...authorization, expiresAt });
+      const error = await h.service.install(item.id, options, TEST_INSTALL_CONTEXT).catch(error => error);
+      expect(extractIpcError(error)?.code).toBe('GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED');
+      // Electron drops Error.code; use the actual service's encoded message.
+      const serialized = new Error(`Error invoking remote method: Error: ${error.message}`);
+      expect(pluginMarketErrorKey(serialized)).toBe('settings.ghosts.market.errors.downloadAuthorizationExpired');
+      expect(downloadVerifiedPlugin).not.toHaveBeenCalled();
+      expect(runtime.install).not.toHaveBeenCalled();
+    }
+    h.api.download.mockResolvedValue({ ...authorization, sha256: 'b'.repeat(64) });
+    const changed = await h.service.install(item.id, options, TEST_INSTALL_CONTEXT).catch(error => error);
+    expect(extractIpcError(changed)?.code).toBe('PRECONDITION_FAILED');
+    expect(pluginMarketErrorKey(new Error(changed.message))).toBe('settings.ghosts.market.errors.stateChanged');
+    expect(downloadVerifiedPlugin).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
+
+    // A valid authorization must still reach package IO; deliberately stop here.
+    h.api.download.mockResolvedValue(authorization);
+    vi.mocked(downloadVerifiedPlugin).mockRejectedValueOnce(new Error('SYNTHETIC_DOWNLOAD_BOUNDARY'));
+    await expect(h.service.install(item.id, options, TEST_INSTALL_CONTEXT)).rejects.toThrow('SYNTHETIC_DOWNLOAD_BOUNDARY');
+    expect(downloadVerifiedPlugin).toHaveBeenCalledOnce();
+    expect(runtime.install).not.toHaveBeenCalled();
+  });
+
+  it('preserves the service-generated reason in the real Agent install response', async () => {
+    const item = summary();
+    const h = harness([item]);
+    const authorization = await h.api.download(item.id, item.currentRelease.id);
+    h.api.download.mockResolvedValue({ ...authorization, expiresAt: '2000-01-01T00:00:00.000Z' });
+    const release = vi.fn();
+    const tools = createPluginMarketAgentTools({
+      market: h.service,
+      installedState: () => ({ exists: false, errorCode: null }),
+      captureRead: () => () => undefined,
+      captureInstall: () => ({ assertCurrent: () => undefined, release, ownerGeneration: 1, consentPrompt: () => async () => true }),
+    });
+    const result = await tools.install({ pluginId: item.id, releaseId: item.currentRelease.id });
+    expect(result).toMatchObject({ ok: false, errorCode: 'GHOST_DOWNLOAD_AUTHORIZATION_EXPIRED' });
+    expect(result.message).toContain('download authorization expired');
+    expect(result.message).not.toContain('Installation was not confirmed');
+    expect(release).toHaveBeenCalledOnce();
+    expect(downloadVerifiedPlugin).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
   });
 });

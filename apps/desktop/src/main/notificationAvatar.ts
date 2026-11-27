@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
 import { NOTIFY_AVATAR_JPEG_MAX_LENGTH, type NotifySender } from '@cindy/device-link';
 import { isManagedBotAvatarUrl, isSingleBotAvatarGrapheme, BOT_AVATAR_MAX_BYTES } from '../shared/botAvatarValue';
-import { resolveSafe } from './cindy-media/blobStore';
+import { resolveSafe } from './cindy-media/blobStore.desktop';
 
 /** No public avatar upload, remote URL, extra credential or persistent thumbnail cache. */
 export async function notificationAvatar(value: string): Promise<NotifySender['avatar']> {

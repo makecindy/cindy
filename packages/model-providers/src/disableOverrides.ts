@@ -1,9 +1,11 @@
 /**
  * disableOverrides —— 「模型 / 供应商停用」override 的形状与决策(纯逻辑,跨端共享)。
  *
- * 与「显示 / 隐藏」(modelVisibilityPrefs,renderer localStorage)是**两根正交的轴**:
- *   - 显示轴:纯陈列 —— 只决定模型选择面板里列不列;隐藏的模型被显式点名(MCP /
- *     IM / 记忆偏好)或参与自动兜底时照常可用。
+ * 与「显示 / 隐藏」是**两根正交的轴**,供应商与模型两级各有一份:
+ *   - 显示轴:纯陈列 —— 只决定模型选择面板里列不列;隐藏的供应商 / 模型被显式点名
+ *     (MCP / IM / 记忆偏好)、已在使用、或参与自动兜底(辅助模型链)时照常可用。
+ *     模型级存在 renderer 的 modelVisibilityPrefs;供应商级是本模块的 `hiddenProviders`
+ *     (整家隐藏不改写名下逐模型开关,取消隐藏后原样恢复)。
  *   - 停用轴(本模块):准入 —— 停用的模型 / 供应商不可被任何**新**路由选中,
  *     所有清单派生(modelList.ts)与来源解析(registry.ts)统一过滤;已在运行的
  *     会话不打断(选择器的 keepSelected 豁免仍然生效)。
@@ -20,11 +22,21 @@ export interface ModelDisableOverrides {
   disabledModels?: Record<string, boolean>;
   /** key = providerId。供应商级停用:凭证保留,整体不可路由(盖住其下全部模型)。 */
   disabledProviders?: Record<string, boolean>;
+  /**
+   * key = providerId(或 remoteProviderDisableKey)。供应商级隐藏:只从模型选择器里收起,
+   * **不是准入**——路由、辅助模型链、已建会话与显式点名都不看它。
+   */
+  hiddenProviders?: Record<string, boolean>;
 }
 
 /** 停用表的 key。与 store / UI 写入端共用,防三处手拼漂移。 */
 export function modelDisableKey(providerId: string, modelId: string): string {
   return `${providerId}:${modelId}`;
+}
+
+/** Receiving-device preference; never aliases a local provider or another peer. */
+export function remoteProviderDisableKey(deviceId: string, providerId: string): string {
+  return `remote:${JSON.stringify([deviceId, providerId])}`;
 }
 
 /** 该供应商是否被整体停用。 */
@@ -33,6 +45,14 @@ export function isProviderDisabled(
   providerId: string,
 ): boolean {
   return access?.disabledProviders?.[providerId] === true;
+}
+
+/** 该供应商是否被整体隐藏(只影响模型选择器的陈列,见头注)。 */
+export function isProviderHidden(
+  access: ModelDisableOverrides | undefined,
+  providerId: string,
+): boolean {
+  return access?.hiddenProviders?.[providerId] === true;
 }
 
 /** 该 (供应商, 模型) 是否被停用(不含供应商级 —— 供应商级由 ProviderView.suspended 表达)。 */

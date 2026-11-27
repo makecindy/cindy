@@ -183,8 +183,14 @@ vi.mock("../rpc-client.js", () => {
         }
         if (response.success && command.type === "get_commands" &&
             !Array.isArray((response.data as { commands?: unknown } | undefined)?.commands)) {
-          return { success: true, data: { commands: captured.hasRefreshCommand
-            ? [{ name: 'cindy-native-provider-refresh', source: 'extension' }] : [] } };
+          // Match the real RPC envelope and provenance contract. Malformed
+          // defaults start catalog retries that can leak into a later case's
+          // shared request buffer on slower runners (Windows unit shard 1/4).
+          return { type: 'response', command: 'get_commands', success: true,
+            data: { commands: captured.hasRefreshCommand
+              ? [{ name: 'cindy-native-provider-refresh', source: 'extension',
+                sourceInfo: { path: path.join(String(captured.env.PI_CODING_AGENT_DIR),
+                  'extensions', 'cindy-native-provider-refresh.ts') } }] : [] } };
         }
         if (response.success && command.type === "set_model") {
           captured.runtimeProvider = String(command.provider);
@@ -226,6 +232,7 @@ import { PiAgent, pickSupportedEffort } from "../index.js";
 import { PiRpcRequestTimeoutError } from "../rpc-client.js";
 import {
   PiNativeProviderProxyNotReadyError,
+  PiByomRouteAbsentError,
   MAIN_OWNED_SEND_CONTEXT,
   type AgentDeps,
   type PiNativeProvidersResult,
@@ -262,6 +269,8 @@ function testSubagentRunnerHost() {
 
 describe("Pi provider-aware model routing", () => {
   let agentHome = "";
+  const openSessions = new Set<Awaited<ReturnType<PiAgent['startSession']>>>();
+  let restoreStartSession = () => {};
 
   /**
    * runtime 文件名带每运行时 nonce(dev + 打包版 / passive 共用 userData 时的跨实例隔离),
@@ -300,11 +309,66 @@ describe("Pi provider-aware model routing", () => {
     captured.requestHandler = undefined;
     agentHome = mkdtempSync(path.join(tmpdir(), "pi-provider-home-"));
     cwd = mkdtempSync(path.join(tmpdir(), "pi-provider-cwd-"));
+    const startSession = PiAgent.prototype.startSession;
+    const spy = vi.spyOn(PiAgent.prototype, 'startSession').mockImplementation(async function(this: PiAgent, options) {
+      const handle = await startSession.call(this, options);
+      const close = handle.close.bind(handle);
+      openSessions.add(handle);
+      handle.close = async (closeOptions) => {
+        openSessions.delete(handle);
+        await close(closeOptions);
+      };
+      return handle;
+    });
+    restoreStartSession = () => { spy.mockRestore(); };
   });
 
-  afterEach(() => {
-    rmSync(agentHome, { recursive: true, force: true });
-    rmSync(cwd, { recursive: true, force: true });
+  afterEach(async () => {
+    // Closing only the mock RPC process does not dispose the real handle's
+    // retry lifecycle. Stop remaining sessions before deleting their fixtures;
+    // explicit closes remove themselves, so teardown never double-closes them.
+    try {
+      await Promise.all([...openSessions].map((handle) => handle.close()));
+    } finally {
+      openSessions.clear();
+      restoreStartSession();
+      rmSync(agentHome, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  // #12920, unit: the existing switch tests only cover a running task. At
+  // startup an inherited Codex model missing from both Pi catalogs must fail
+  // before spawning Pi, while the same saved route may still open.
+  it('rejects an unsupported inherited model only for a new Maker task', async () => {
+    const agent = new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [{
+          id: 'openai-codex', sourceProviderId: 'openai', name: 'OpenAI',
+          baseUrl: 'http://127.0.0.1:9', api: 'openai-codex-responses',
+          models: [{ id: 'gpt-6-sol' }],
+        }],
+        env: {},
+      }),
+    });
+    const options = { workingDir: cwd, model: 'chatgpt/gpt-6.2-sol', providerId: 'openai' };
+
+    await expect(agent.startSession({ ...options, isNewMakerTask: async () => true }))
+      .rejects.toThrow("Model 'chatgpt/gpt-6.2-sol' is unavailable in the current Pi catalog.");
+    expect(captured.spawnBinaryPath).toBeUndefined();
+
+    const existing = await agent.startSession({ ...options, isNewMakerTask: async () => false });
+    await existing.close();
   });
 
   // Standard: the actual Pi launch passes the host account to auth and both authenticated proxy scopes.
@@ -1030,6 +1094,18 @@ describe("Pi provider-aware model routing", () => {
               },
             ],
           },
+          {
+            // #11460: a custom provider has no row in Pi's bundled catalog, so every
+            // model here is a full entry. Custom providers legitimately have no price
+            // sheet, yet Pi still dereferences `model.cost.tiers` when a turn finishes.
+            id: "mify",
+            sourceProviderId: "mify",
+            name: "Mify",
+            baseUrl: "https://mify.example/v1",
+            api: "openai-completions",
+            inheritModels: false,
+            models: [{ id: "xiaomi/mimo-v2.6-flash", name: "MiMo" }],
+          },
         ],
         env: { CINDY_PI_OPENAI_PROXY_KEY: "placeholder-jwt" },
       }),
@@ -1061,7 +1137,7 @@ describe("Pi provider-aware model routing", () => {
     ) as {
       providers: Record<
         string,
-        { api?: string; models?: Array<{ id: string; api?: string }> }
+        { api?: string; models?: Array<{ id: string; api?: string; cost?: Record<string, number> }> }
       >;
     };
     expect(models.providers.anthropic).not.toHaveProperty("api");
@@ -1094,6 +1170,23 @@ describe("Pi provider-aware model routing", () => {
       }),
     ]);
     expect(models.providers.xai?.models?.[0]).not.toHaveProperty("api");
+    // #11460: Pi charges every finished turn through `calculateCost`, which reads
+    // `model.cost.tiers` without a guard, and pi-harness.md §5 makes the host catalog
+    // the only source of rates with "缺省按 0". No row may omit `cost` — otherwise the
+    // turn dies on `undefined is not an object (evaluating 'model.cost.tiers')`.
+    expect(models.providers.mify?.models).toEqual([
+      expect.objectContaining({
+        id: "xiaomi/mimo-v2.6-flash",
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      }),
+    ]);
+    for (const model of [
+      ...(models.providers.mify?.models ?? []),
+      ...(models.providers["openai-codex"]?.models ?? []),
+      ...(models.providers.xai?.models ?? []),
+    ]) {
+      expect(model.cost, `${model.id} cost`).toBeDefined();
+    }
     expect(
       JSON.parse(readFileSync(path.join(configHome, "settings.json"), "utf8")),
     ).toEqual({
@@ -3084,6 +3177,270 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
+  // #12298: 断开的订阅来源不得进子代理路由 —— 按它的名字派发会在首次上游请求时必败。
+  it("keeps a disconnected subscription source out of the subagent model routes", async () => {
+    const deps = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: "openai-codex",
+            sourceProviderId: "openai",
+            name: "OpenAI (ChatGPT)",
+            baseUrl: "http://openai.test",
+            api: "openai-codex-responses" as const,
+            modelIdAliases: {
+              "chatgpt/gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+              "gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+            },
+            models: [{ id: "chatgpt/gpt-5.5-pro", wireId: "gpt-5.5-pro" }],
+          },
+          {
+            id: "magpie",
+            sourceProviderId: "magpie-211d8cf5",
+            name: "Magpie",
+            baseUrl: "http://magpie.test",
+            api: "openai-responses" as const,
+            models: [{ id: "gpt-5.5-pro", wireId: "gpt-5.5-pro" }],
+          },
+        ],
+        env: {},
+      }),
+      [
+        {
+          id: "local-model",
+          displayName: "Local",
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    );
+    // 宿主知道自己这条来源已断开(账号断开或被移除)。
+    deps.isNativeProviderSourceConnected = sourceProviderId => sourceProviderId !== "openai";
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "subagent-disconnected-subscription",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "xd",
+    });
+    const runtime = JSON.parse(
+      readFileSync(
+        runtimeFileOf("subagent", "subagent-disconnected-subscription"),
+        "utf8",
+      ),
+    ) as {
+      modelRoutes: Record<
+        string,
+        Array<{ provider: string; model: string; sourceProviderId?: string }>
+      >;
+    };
+    // 断开来源的两个名字都不再出现在路由里。
+    expect(runtime.modelRoutes["chatgpt/gpt-5.5-pro"]).toBeUndefined();
+    // 另一个仍连接的同名来源照常可指定。
+    expect(runtime.modelRoutes["gpt-5.5-pro"]).toEqual([
+      {
+        provider: "magpie",
+        model: "gpt-5.5-pro",
+        sourceProviderId: "magpie-211d8cf5",
+      },
+    ]);
+    await handle.close();
+  });
+
+  it("keeps a subscription source the host knows is connected in the subagent model routes", async () => {
+    const deps = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: "openai-codex",
+            sourceProviderId: "openai",
+            name: "OpenAI (ChatGPT)",
+            baseUrl: "http://openai.test",
+            api: "openai-codex-responses" as const,
+            modelIdAliases: {
+              "chatgpt/gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+            },
+            models: [{ id: "chatgpt/gpt-5.5-pro", wireId: "gpt-5.5-pro" }],
+          },
+          {
+            id: "xai",
+            sourceProviderId: "xai",
+            name: "xAI",
+            baseUrl: "http://xai.test",
+            api: "openai-responses" as const,
+            models: [{ id: "xai/grok-4.6", wireId: "grok-4.6" }],
+          },
+        ],
+        env: {},
+      }),
+      [
+        {
+          id: "local-model",
+          displayName: "Local",
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    );
+    deps.isNativeProviderSourceConnected = () => true;
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "subagent-connected-subscription",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "xd",
+    });
+    const runtime = JSON.parse(
+      readFileSync(
+        runtimeFileOf("subagent", "subagent-connected-subscription"),
+        "utf8",
+      ),
+    ) as {
+      modelRoutes: Record<
+        string,
+        Array<{ provider: string; model: string; sourceProviderId?: string }>
+      >;
+    };
+    expect(runtime.modelRoutes["chatgpt/gpt-5.5-pro"]).toEqual([
+      {
+        provider: "openai-codex",
+        model: "gpt-5.5-pro",
+        sourceProviderId: "openai",
+      },
+    ]);
+    expect(runtime.modelRoutes["xai/grok-4.6"]).toEqual([
+      { provider: "xai", model: "grok-4.6", sourceProviderId: "xai" },
+    ]);
+    await handle.close();
+  });
+
+  it("keeps subscription sources in the subagent model routes when the host has no connection state", async () => {
+    // 宿主没给判据(读不到结论)→ 不剔除:宁可多列也不误伤可用来源。
+    const deps = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: "openai-codex",
+            sourceProviderId: "openai",
+            name: "OpenAI (ChatGPT)",
+            baseUrl: "http://openai.test",
+            api: "openai-codex-responses" as const,
+            modelIdAliases: {
+              "chatgpt/gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+            },
+            models: [{ id: "chatgpt/gpt-5.5-pro", wireId: "gpt-5.5-pro" }],
+          },
+          {
+            id: "xai",
+            sourceProviderId: "xai",
+            name: "xAI",
+            baseUrl: "http://xai.test",
+            api: "openai-responses" as const,
+            models: [{ id: "xai/grok-4.6", wireId: "grok-4.6" }],
+          },
+        ],
+        env: {},
+      }),
+      [
+        {
+          id: "local-model",
+          displayName: "Local",
+          contextWindow: 200_000,
+          efforts: [],
+          defaultEffort: null,
+        },
+      ],
+    );
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "subagent-unknown-connection-state",
+      workingDir: cwd,
+      model: "local-model",
+      providerId: "xd",
+    });
+    const runtime = JSON.parse(
+      readFileSync(
+        runtimeFileOf("subagent", "subagent-unknown-connection-state"),
+        "utf8",
+      ),
+    ) as {
+      modelRoutes: Record<
+        string,
+        Array<{ provider: string; model: string; sourceProviderId?: string }>
+      >;
+    };
+    expect(runtime.modelRoutes["chatgpt/gpt-5.5-pro"]).toEqual([
+      {
+        provider: "openai-codex",
+        model: "gpt-5.5-pro",
+        sourceProviderId: "openai",
+      },
+    ]);
+    expect(runtime.modelRoutes["xai/grok-4.6"]).toEqual([
+      { provider: "xai", model: "grok-4.6", sourceProviderId: "xai" },
+    ]);
+    await handle.close();
+  });
+
+  // greptile P1 on #12329: the startup filter alone is not enough — a live catalog
+  // refresh rebuilds every native route from the provider list, which carries no
+  // connection state, so a disconnected source would re-enter modelRoutes and
+  // restore the #12298 dispatch-then-fail path.
+  it("keeps a disconnected subscription source out of the routes after a live catalog refresh", async () => {
+    let magpieUrl = "http://magpie.test";
+    const deps = byomDeps(
+      async () => ({
+        providers: [
+          {
+            id: "openai-codex",
+            sourceProviderId: "openai",
+            name: "OpenAI (ChatGPT)",
+            baseUrl: "http://openai.test",
+            api: "openai-codex-responses" as const,
+            modelIdAliases: {
+              "chatgpt/gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+              "gpt-5.5-pro": "chatgpt/gpt-5.5-pro",
+            },
+            models: [{ id: "chatgpt/gpt-5.5-pro", wireId: "gpt-5.5-pro" }],
+          },
+          {
+            id: "magpie",
+            sourceProviderId: "magpie",
+            name: "Magpie",
+            baseUrl: magpieUrl,
+            api: "openai-responses" as const,
+            models: [{ id: "gpt-5.5-pro", wireId: "gpt-5.5-pro", contextWindow: 200_000 }],
+          },
+        ],
+        env: {},
+      }),
+    );
+    deps.isNativeProviderSourceConnected = sourceProviderId => sourceProviderId !== "openai";
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: "subagent-refresh-disconnected",
+      workingDir: cwd,
+      model: "gpt-5.5-pro",
+      providerId: "magpie",
+    });
+    const readRoutes = (): Record<string, Array<{ provider: string; model: string }>> =>
+      (JSON.parse(readFileSync(runtimeFileOf("subagent", "subagent-refresh-disconnected"), "utf8")) as {
+        modelRoutes: Record<string, Array<{ provider: string; model: string }>>;
+      }).modelRoutes;
+    // 启动时过滤已生效:断开来源不在路由里。
+    expect(readRoutes()["chatgpt/gpt-5.5-pro"]).toBeUndefined();
+    // 改动当前 provider 的端点 → 预演判为 refresh,刷新会按 provider 清单整体重建路由。
+    magpieUrl = "http://magpie-b.test";
+    expect(await handle.previewModelSwitch?.("gpt-5.5-pro", { providerId: "magpie" }))
+      .toMatchObject({ action: "refresh" });
+    await handle.setModel!("gpt-5.5-pro", { providerId: "magpie" });
+    const routes = readRoutes();
+    // 刷新后断开来源仍不得回到路由里;仍连接的来源照常在。
+    expect(routes["chatgpt/gpt-5.5-pro"]).toBeUndefined();
+    expect(routes["gpt-5.5-pro"]).toEqual([
+      { provider: "magpie", model: "gpt-5.5-pro", sourceProviderId: "magpie" },
+    ]);
+    await handle.close();
+  });
+
   it("fails closed when provider-less aliases are ambiguous", async () => {
     const agent = new PiAgent(
       byomDeps(async () => ({
@@ -3429,6 +3786,7 @@ describe("Pi provider-aware model routing", () => {
   it.each([
     ["anthropic-messages", "messages-model", undefined],
     ["openai-responses", "responses-model", "http://127.0.0.1:9988/v1"],
+    ["openai-responses", "google/gemini-4-argon", "http://127.0.0.1:9988/v1"],
     ["openai-completions", "moonshotai/kimi-k3", "http://127.0.0.1:9988/v1"],
     [
       "google-generative-ai",
@@ -3525,6 +3883,9 @@ describe("Pi provider-aware model routing", () => {
       );
       expect(model).toMatchObject({ api });
       expect(model?.baseUrl).toBe(baseUrl);
+      if (api === "openai-responses" && modelId === "google/gemini-4-argon") {
+        expect(model?.headers).toBeUndefined();
+      }
       if (api === "openai-completions") {
         expect(model?.compat).toMatchObject({
           maxTokensField: "max_tokens",
@@ -3601,6 +3962,33 @@ describe("Pi provider-aware model routing", () => {
     ]);
     expect(captured.requests).toContainEqual({ type: 'set_thinking_level', level: 'max' });
     await handle.close();
+  });
+
+  // #9043: startSession must preserve the native off capability independently
+  // of the server effort list. Missing off means supported in Pi, not disabled.
+  it.each([null, 'low', undefined])('preserves explicit Gateway off capability %s', async off => {
+    const handle = await new PiAgent({
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }), logout: async () => {},
+        getAuthEnv: async () => ({ CINDY_PI_API_KEY: 'gateway-key' }),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9988/' },
+      binaryPath: path.join(agentHome, 'pi'), logger: noopLogger,
+      capabilityAdditions: { availableModels: [{ id: 'google/gemini-4-argon', displayName: 'Argon',
+        contextWindow: 1_048_576, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' }] },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiGatewayModelSpec: () => ({ api: 'google-generative-ai',
+        thinkingLevelMap: { ...(off !== undefined ? { off } : {}), low: 'low', medium: 'medium', high: 'high' } }),
+    }).startSession({ sessionId: 'gateway-off-capability', workingDir: cwd,
+      model: 'google/gemini-4-argon', providerId: 'xd', thinkingEnabled: false });
+    try {
+      const models = JSON.parse(readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'));
+      const map = models.providers.cindy.models[0].thinkingLevelMap;
+      expect(map).toEqual({ ...(off !== undefined ? { off } : {}),
+        minimal: null, low: 'low', medium: 'medium', high: 'high', xhigh: null, max: null });
+      expect(captured.requests).toContainEqual({ type: 'set_thinking_level', level: 'off' });
+    } finally { await handle.close(); }
   });
 
   it('keeps unsupported Gateway thinking levels null when server efforts omit them', async () => {
@@ -3968,6 +4356,188 @@ describe("Pi provider-aware model routing", () => {
     await handle.setEffort!("medium");
     expect(captured.requests).toContainEqual({ type: "set_thinking_level", level: "medium" });
     await handle.close();
+  });
+
+  // #9037: native snapshots expose max, while Cindy may retain the user's ultra selection.
+  // Exercise real PiAgent controls and assert their wire levels, not a copy of the mapper.
+  it.each(['setEffort', 'atomic switch', 'retained switch'] as const)(
+    'preserves ultra as native max through %s and thinking re-enable',
+    async (operation) => {
+      const agent = new PiAgent(byomDeps(async () => ({
+        providers: [{
+          id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-responses',
+          models: ['local-model', 'target-model'].map((id) => ({
+            id, reasoning: true,
+            thinkingLevelMap: { minimal: null, low: 'low', medium: null, high: null, xhigh: null, max: 'max' },
+          })),
+        }], env: {},
+      }), ['local-model', 'target-model'].map((id) => ({
+        id, displayName: id, contextWindow: 200_000,
+        efforts: ['low', 'max', 'ultra'], defaultEffort: 'low',
+      }))));
+      const handle = await agent.startSession({
+        sessionId: 'native-ultra', workingDir: cwd,
+        model: 'local-model', providerId: 'native-a', effort: 'ultra',
+      });
+      try {
+        const before = captured.requests.length;
+        if (operation === 'setEffort') await handle.setEffort!('ultra');
+        else await handle.setModel!('target-model', operation === 'atomic switch'
+          ? { providerId: 'native-a', effort: 'ultra', thinkingEnabled: true }
+          : { providerId: 'native-a' });
+        const levels = captured.requests.slice(before)
+          .filter((request) => request.type === 'set_thinking_level')
+          .map((request) => request.level);
+        expect(levels.length).toBeGreaterThan(0);
+        expect(levels.every((level) => level === 'max')).toBe(true);
+        expect(handle.getEffort!()).toBe('ultra');
+
+        await handle.setThinkingEnabled!(false);
+        expect(captured.requests.at(-1)).toEqual({ type: 'set_thinking_level', level: 'off' });
+        await handle.setThinkingEnabled!(true);
+        expect(captured.requests.at(-1)).toEqual({ type: 'set_thinking_level', level: 'max' });
+        expect(handle.getEffort!()).toBe('ultra');
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  it.each([
+    { thinkingEnabled: true, offBefore: true, levels: ['max'] },
+    { thinkingEnabled: false, offBefore: false, levels: ['off'] },
+    { thinkingEnabled: undefined, offBefore: false, levels: ['max'] },
+    { thinkingEnabled: undefined, offBefore: true, levels: [] },
+  ])('applies a new ultra selection on the same route: $thinkingEnabled, previously off=$offBefore', async ({ thinkingEnabled, offBefore, levels }) => {
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [{
+      id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-responses',
+      models: [{ id: 'local-model', reasoning: true, thinkingLevelMap: { max: 'max' } }],
+    }], env: {} })));
+    const handle = await agent.startSession({ sessionId: 'same-route-ultra', workingDir: cwd,
+      model: 'local-model', providerId: 'native-a', effort: 'low' });
+    try {
+      if (offBefore) await handle.setThinkingEnabled!(false);
+      const before = captured.requests.length;
+      await handle.setModel!('local-model', { providerId: 'native-a', effort: 'ultra', thinkingEnabled });
+      const changes = captured.requests.slice(before);
+      expect(changes.some((request) => request.type === 'set_model')).toBe(false);
+      expect(changes.filter((request) => request.type === 'set_thinking_level').map((request) => request.level)).toEqual(levels);
+      expect(handle.getEffort!()).toBe('ultra');
+      await handle.setThinkingEnabled!(true);
+      expect(captured.requests.at(-1)).toEqual({ type: 'set_thinking_level', level: 'max' });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('does not remember an unconfirmed same-route ultra selection', async () => {
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [{
+      id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-responses',
+      models: [{ id: 'local-model', reasoning: true, thinkingLevelMap: { max: 'max' } }],
+    }], env: {} })));
+    const handle = await agent.startSession({ sessionId: 'rejected-same-route-ultra', workingDir: cwd,
+      model: 'local-model', providerId: 'native-a', effort: 'low' });
+    try {
+      await handle.setThinkingEnabled!(false);
+      captured.failThinkingLevel = 'reject';
+      await expect(handle.setModel!('local-model', {
+        providerId: 'native-a', effort: 'ultra', thinkingEnabled: true,
+      })).rejects.toThrow(/set_thinking_level failed/);
+      expect(handle.getEffort!()).toBe('low');
+      captured.failThinkingLevel = null;
+      const before = captured.requests.length;
+      await handle.setModel!('local-model', { providerId: 'native-a' });
+      expect(captured.requests.slice(before).some((request) => request.type === 'set_thinking_level')).toBe(false);
+      await handle.setThinkingEnabled!(true);
+      expect(captured.requests.at(-1)).toEqual({ type: 'set_thinking_level', level: 'low' });
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each(['setEffort', 'atomic switch'] as const)(
+    'does not admit max through %s when the gateway only declares ultra',
+    async (operation) => {
+      const deps = byomDeps(undefined, ['local-model', 'target-model'].map((id) => ({
+        id, displayName: id, contextWindow: 200_000, efforts: ['ultra'], defaultEffort: 'ultra',
+      })));
+      deps.resolvePiGatewayModelSpec = () => ({ api: 'openai-responses' });
+      const handle = await new PiAgent(deps).startSession({
+        sessionId: 'gateway-ultra-only', workingDir: cwd, model: 'local-model', effort: 'ultra',
+      });
+      try {
+        const before = captured.requests.length;
+        await expect(operation === 'setEffort' ? handle.setEffort!('max')
+          : handle.setModel!('target-model', { effort: 'max' })).rejects.toThrow(/applied model catalog/);
+        expect(captured.requests.slice(before).some((request) =>
+          request.type === 'set_model' || request.type === 'set_thinking_level',
+        )).toBe(false);
+        expect(handle.model).toBe('local-model');
+        await handle.setEffort!('ultra');
+        expect(captured.requests.at(-1)).toEqual({ type: 'set_thinking_level', level: 'max' });
+        expect(handle.getEffort!()).toBe('ultra');
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  it.each(['setEffort', 'atomic switch'] as const)(
+    'rejects ultra before RPC through %s when native max is unsupported',
+    async (operation) => {
+      const agent = new PiAgent(byomDeps(async () => ({
+        providers: [{
+          id: 'native-a', name: 'Native A', baseUrl: 'http://a.test', api: 'openai-responses',
+          models: ['local-model', 'target-model'].map((id) => ({
+            id, reasoning: true,
+            thinkingLevelMap: { minimal: null, low: 'low', medium: null, high: null, xhigh: null, max: null },
+          })),
+        }], env: {},
+      })));
+      const handle = await agent.startSession({
+        sessionId: 'unsupported-native-ultra', workingDir: cwd,
+        model: 'local-model', providerId: 'native-a', effort: 'low',
+      });
+      try {
+        const before = captured.requests.length;
+        await expect(operation === 'setEffort'
+          ? handle.setEffort!('ultra')
+          : handle.setModel!('target-model', { providerId: 'native-a', effort: 'ultra' }),
+        ).rejects.toThrow(/applied model catalog/);
+        expect(captured.requests.slice(before).some((request) =>
+          request.type === 'set_model' || request.type === 'set_thinking_level',
+        )).toBe(false);
+        expect(handle.model).toBe('local-model');
+        expect(handle.getEffort!()).toBe('low');
+      } finally {
+        await handle.close();
+      }
+    },
+  );
+
+  it('does not carry ultra onto a gateway tier that only declares max', async () => {
+    // codex P1：ultra→max 只对 native Pi 快照成立（Pi 没有 ultra）。网关快照是
+    // Server/XD 下放的权威能力表：只声明 max 的模型不得因为映射而"接受" ultra，
+    // 否则切过去仍记着 ultra，getEffort() 报出目标并不支持的档位。
+    const handle = await new PiAgent(byomDeps(undefined, [
+      { id: 'ultra-model', displayName: 'Ultra', contextWindow: 200_000, efforts: ['low', 'max', 'ultra'], defaultEffort: 'low' },
+      { id: 'max-model', displayName: 'Max', contextWindow: 200_000, efforts: ['low', 'max'], defaultEffort: 'low' },
+    ])).startSession({
+      sessionId: 'gateway-max-from-ultra', workingDir: cwd, model: 'ultra-model', effort: 'ultra',
+    });
+    try {
+      expect(handle.getEffort!()).toBe('ultra');
+      const before = captured.requests.length;
+      await handle.setModel!('max-model');
+      const levels = captured.requests.slice(before)
+        .filter((request) => request.type === 'set_thinking_level')
+        .map((request) => String(request.level));
+      // 不能把 ultra 下发成 max 并继续记着 ultra；按目标默认档收敛。
+      expect(levels).toEqual(['low']);
+      expect(handle.getEffort!()).toBe('low');
+    } finally {
+      await handle.close();
+    }
   });
 
   it("freezes active BYOM effort selection to the startup models.json snapshot", async () => {
@@ -4881,7 +5451,7 @@ describe("Pi provider-aware model routing", () => {
     await handle.close();
   });
 
-  it("keeps thinking off and the remembered tier on a same-route select of a non-thinking model", async () => {
+  it.each([false, true])("keeps the remembered tier across a non-thinking model's low placeholder, explicitly off=%s", async (explicitlyOff) => {
     // 同路由重选不支持思考的模型：下发 xhigh 会让请求"成功"但改动档位记忆，
     // 用户之后切回支持 xhigh 的模型就被静默改成 xhigh。
     const denseMap = {
@@ -4923,17 +5493,19 @@ describe("Pi provider-aware model routing", () => {
       effort: "high",
     });
     await handle.setModel!("model-plain", { providerId: "native-a" });
+    if (explicitlyOff) await handle.setThinkingEnabled!(false);
     const beforeSwitch = captured.requests.length;
 
-    await handle.setModel!("model-plain", { providerId: "native-a", thinkingEnabled: true });
+    await handle.setModel!("model-plain", { providerId: "native-a", effort: 'low',
+      thinkingEnabled: explicitlyOff ? undefined : true });
 
     const levels = captured.requests
       .slice(beforeSwitch)
       .filter((request) => request.type === "set_thinking_level")
       .map((request) => String(request.level));
-    expect(levels).toEqual(["off"]);
+    expect(levels).toEqual(explicitlyOff ? [] : ["off"]);
     expect(handle.getEffort!()).toBe("high");
-    // 发 off 是能力所致，不是用户主动关闭：不带档位切回推理模型时必须恢复思考。
+    // Capability-off restores on return; explicit-off stays off until explicitly re-enabled.
     const beforeBack = captured.requests.length;
     await handle.setModel!("model-a", { providerId: "native-a" });
     const restored = captured.requests
@@ -4941,7 +5513,11 @@ describe("Pi provider-aware model routing", () => {
       .filter((request) => request.type === "set_thinking_level")
       .map((request) => String(request.level));
     // 至少下发一次 high（开启逻辑与切模收尾都可能各下一次，后者是幂等的）。
-    expect(restored).toContain("high");
+    if (explicitlyOff) {
+      expect(restored).toEqual([]);
+      await handle.setThinkingEnabled!(true);
+      expect(captured.requests.at(-1)).toEqual({ type: 'set_thinking_level', level: 'high' });
+    } else expect(restored).toContain("high");
     await handle.close();
   });
 
@@ -6136,9 +6712,10 @@ describe("Pi provider-aware model routing", () => {
         model: "local-model",
         providerId: "my-local",
       }),
-    ).rejects.toThrow(
-      /BYOM provider 'my-local' cannot serve model 'local-model'/,
-    );
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/BYOM provider 'my-local' cannot serve model 'local-model'/),
+      cause: expect.not.objectContaining({ name: "PiByomRouteAbsentError" }),
+    });
     // 未走到 spawn(--provider 参数从未拼装)。
     expect(captured.args).toEqual([]);
   });
@@ -6168,9 +6745,10 @@ describe("Pi provider-aware model routing", () => {
         model: "local-model",
         providerId: "my-local",
       }),
-    ).rejects.toThrow(
-      /cannot serve model 'local-model'.*refusing to fall back/s,
-    );
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/cannot serve model 'local-model'.*refusing to fall back/s),
+      cause: expect.not.objectContaining({ name: "PiByomRouteAbsentError" }),
+    });
     expect(captured.args).toEqual([]);
   });
 
@@ -6196,7 +6774,10 @@ describe("Pi provider-aware model routing", () => {
         model: "local-model",
         providerId: "my-local",
       }),
-    ).rejects.toThrow(/refusing to fall back to the Cindy gateway/);
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/refusing to fall back to the Cindy gateway/),
+      cause: expect.any(PiByomRouteAbsentError),
+    });
     expect(captured.args).toEqual([]);
   });
 
@@ -6255,6 +6836,8 @@ describe("Pi provider-aware model routing", () => {
       model: "local-model",
       providerId: "native-a",
     });
+    await expect(handle.previewModelSwitch!("ghost-model", { providerId: "native-a" }))
+      .resolves.toMatchObject({ action: "unavailable", modelNotOffered: true });
     await expect(
       handle.setModel!("ghost-model", { providerId: "native-a" }),
     ).rejects.toThrow(/does not offer model 'ghost-model'/);
@@ -6310,7 +6893,11 @@ describe("Pi provider-aware model routing", () => {
             }));
           } else {
             await expect(sent).rejects.toMatchObject({ code: "PI_IMAGE_INPUT_UNSUPPORTED" });
-            expect(captured.requests).toHaveLength(0);
+            // Runtime capability discovery can issue get_commands in the background.
+            // Rejected images must never reach Pi as user input.
+            expect(captured.requests.filter((request) =>
+              request.type === "prompt" || request.type === "steer",
+            )).toHaveLength(0);
           }
         }
       }
@@ -7143,13 +7730,53 @@ describe("Pi provider-aware model routing", () => {
     },
   );
 
-  it('reports the oversized history response before retry accepts another prompt', async () => {
+  // #11339, unit: a stopped Pi turn can leave a hidden native extension
+  // marker as the retry parent. The RPC must confirm that raw leaf and send
+  // the retried prompt once; existing tests only navigated to visible parents.
+  it('confirms retry navigation to a hidden native subagent history parent', async () => {
+    let navigated = false;
+    const marker = {
+      id: 'marker', parentId: 'previous', type: 'custom',
+      customType: 'cindy-native-subagent-call', data: { toolCallId: 'call' },
+    };
+    captured.requestHandler = async command => {
+      if (command.type === 'get_state') return { success: true, data: {
+        sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
+      } };
+      if (command.type === 'get_tree') return { success: true, data: {
+        leafId: navigated ? 'marker' : 'failed',
+        tree: [{ entry: { id: 'previous', type: 'message', message: { role: 'assistant' } }, children: [
+          { entry: marker, children: [{ entry: {
+            id: 'accepted', parentId: 'marker', type: 'message', message: { role: 'user' },
+          }, children: [{ entry: {
+            id: 'failed', parentId: 'accepted', type: 'message',
+            message: { role: 'assistant', stopReason: 'error', content: [] },
+          }, children: [] }] }] },
+        ] }],
+      } };
+      if (command.type === 'prompt' && String(command.message).startsWith('/cindy-branch-switch ')) navigated = true;
+      return { success: true, data: {} };
+    };
+    const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
+    const handle = await agent.startSession({ sessionId: 'retry-hidden-parent', workingDir: cwd, model: 'local-model' });
+    try {
+      await handle.send({ type: 'user', content: 'same input' }, { retryTranscriptUserEntryId: 'accepted' });
+      expect(captured.requests.filter(r => r.type === 'prompt' && r.message === 'same input')).toHaveLength(1);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([
+    ['RPC response exceeded 16 MiB and was discarded.', 'pi-retry-history-frame-too-large', undefined],
+    ['550 status code (no body)', 'pi-retry-history-unavailable', 550],
+  ])('rejects a failed history read before retry accepts another prompt: %s', async (error, diagnostic, upstreamStatus) => {
     captured.requestHandler = async command => {
       if (command.type === 'get_state') return { success: true, data: {
         sessionFile: '/mock/s.jsonl', model: { contextWindow: 200_000 },
       } };
       if (command.type === 'get_tree') return {
-        success: false, error: 'RPC response exceeded 16 MiB and was discarded.',
+        success: false, error,
       };
       return { success: true, data: {} };
     };
@@ -7158,7 +7785,13 @@ describe("Pi provider-aware model routing", () => {
     const retryStart = captured.requests.length;
     await expect(handle.send({ type: 'user', content: 'same input' }, {
       retryTranscriptUserEntryId: 'accepted',
-    })).rejects.toThrow('RPC response exceeded 16 MiB and was discarded.');
+    })).rejects.toMatchObject({
+      message: diagnostic === 'pi-retry-history-frame-too-large'
+        ? `Pi retry history unavailable: ${error}`
+        : 'Pi retry history unavailable',
+      diagnostic,
+      upstreamStatus,
+    });
     expect(captured.requests.slice(retryStart).filter(r => r.type === 'prompt')).toHaveLength(0);
     await handle.close();
   });
@@ -7639,6 +8272,140 @@ describe("Pi provider-aware model routing", () => {
     ).rejects.toThrow(/\[REMOTE_LOCAL_ONLY_PROVIDER\]/);
     // 未走到 spawn(transport 从未创建)。
     expect(captured.args).toEqual([]);
+  });
+
+  // #9148: the existing rejection covered only an absent reachability capability.
+  // Exercise actual PiAgent startup/configuration and model switching, not a copied gate.
+  // unit tier: remote file/RPC ports are in-memory; no SSH, native Pi or HTTP is claimed.
+  it.each(["explicit", "inferred"])("starts a reachable remote loopback BYOM (%s route) without forwarding it", async (route) => {
+    const modelBaseUrl = "http://127.0.0.2:23425/v1";
+    const probe = vi.fn(async (_host: string, url: string) => url === modelBaseUrl);
+    let baseUrl = "http://127.0.0.9:23425/v1";
+    let refreshedBaseUrl: string | undefined;
+    const deps = byomDeps(async input => ({ providers: [{
+      id: "shared-loopback", name: "Shared loopback",
+      baseUrl: input.purpose === 'live-refresh' ? refreshedBaseUrl ?? baseUrl : baseUrl,
+      api: "openai-completions", modelIdAliases: { "local-model": "native-model" },
+      models: [{ id: "native-model", wireId: "wire-model", baseUrl: modelBaseUrl },
+        { id: "second-model", baseUrl: "http://127.0.0.3:23425/v1" }],
+    }, {
+      id: "other-loopback", name: "Other loopback", baseUrl: "http://127.0.0.3:23425/v1",
+      api: "openai-completions", models: [{ id: "other-model", baseUrl: "http://127.0.0.5:23425/v1" }],
+    }], env: {} }));
+    const agent = new PiAgent({
+      ...deps,
+      probeRemotePiProviderEndpoint: probe,
+      getRemotePiAgentProxyEnv: async () => ({ HTTP_PROXY: 'http://proxy.test:8080',
+        NO_PROXY: 'localhost,127.0.0.1,::1', no_proxy: 'corp.test' }),
+      resolveRemotePiBinaryPath: async () => "/remote/pi",
+      getRemotePiFileOps: () => ({
+        mkdirp: async () => {},
+        writeFile: async (file, content) => { captured.remoteModels.set(file, content); },
+        stat: async () => null, rm: async () => {}, listDir: async () => [],
+        readFile: async (file) => captured.remoteModels.get(file) ?? "",
+        sha256File: async () => "unused",
+      }),
+      getRemotePiTransport: async (host, options) => {
+        expect(host).toBe("shared-network-host");
+        expect(options.hostProxyForwards).toEqual([]);
+        captured.args = [...options.args];
+        captured.env = { ...options.env };
+        return { writeLine: async () => {}, onLine: () => () => {}, onStderr: () => () => {},
+          onClose: () => () => {}, close: async () => {}, isClosed: () => false,
+          pid: undefined, killRemoteSession: async () => {}, remoteBinaryPath: "/remote/pi" };
+      },
+    });
+    const handle = await agent.startSession({ sessionId: `remote-reachable-${route}`, workingDir: cwd,
+      model: "local-model", ...(route === "explicit" ? { providerId: "shared-loopback" } : {}),
+      remoteHostId: "shared-network-host" });
+    try {
+      expect(probe).toHaveBeenCalledExactlyOnceWith("shared-network-host", modelBaseUrl);
+      const models = JSON.parse([...captured.remoteModels].find(([file]) => file.endsWith("/models.json"))![1]);
+      expect(models.providers["shared-loopback"].baseUrl).toBe(baseUrl);
+      expect(models.providers["shared-loopback"].models).toContainEqual(expect.objectContaining({ id: "wire-model", baseUrl: modelBaseUrl }));
+      // #11573 P1: successful --noproxy probe must agree with the keyed Pi
+      // process, for the selected alias and an initially unselected catalog route.
+      expect(captured.env.NO_PROXY?.split(',')).toEqual(expect.arrayContaining([
+        '127.0.0.2', '127.0.0.3', '127.0.0.5', '127.0.0.9', '127.0.0.1', 'localhost', '::1', 'corp.test',
+      ]));
+      expect(captured.env.no_proxy).toBeUndefined();
+      expect(captured.env.HTTP_PROXY).toBe('http://proxy.test:8080');
+      expect(captured.env.NO_PROXY?.split(',')).not.toContain('*');
+      // Recheck on an explicit route operation: success at startup must not become a
+      // permanent exemption if the service disappears, nor affect the current route.
+      probe.mockResolvedValue(false);
+      captured.requests.length = 0;
+      await expect(handle.setModel!("local-model", { providerId: "shared-loopback" }))
+        .rejects.toThrow(/\[REMOTE_LOCAL_ONLY_PROVIDER\]/);
+      expect(captured.requests).not.toContainEqual(expect.objectContaining({ type: "set_model" }));
+      expect(handle.model).toBe("local-model");
+      await expect(handle.setModel!("second-model", { providerId: "shared-loopback" }))
+        .rejects.toThrow(/\[REMOTE_LOCAL_ONLY_PROVIDER\]/);
+      expect(probe).toHaveBeenLastCalledWith("shared-network-host", "http://127.0.0.3:23425/v1");
+      expect(handle.model).toBe("local-model");
+      const filesBeforeRefresh = [...captured.remoteModels];
+      const probesBeforeRefresh = probe.mock.calls.length;
+      baseUrl = 'http://127.0.0.4:23425/v1';
+      await expect(handle.previewModelSwitch!('local-model', { providerId: 'shared-loopback' }))
+        .resolves.toMatchObject({ action: 'rebuild', reason: expect.stringContaining('proxy bypass') });
+      await expect(handle.setModel!('local-model', { providerId: 'shared-loopback' })).rejects.toThrow(/restart/);
+      expect([...captured.remoteModels]).toEqual(filesBeforeRefresh);
+      expect(probe).toHaveBeenCalledTimes(probesBeforeRefresh);
+      // A resolver changing after a safe preview must also fail before writes.
+      baseUrl = 'http://127.0.0.2:23425/v2';
+      refreshedBaseUrl = 'http://127.0.0.4:23425/v1';
+      await expect(handle.setModel!('local-model', { providerId: 'shared-loopback' })).rejects.toThrow(/proxy bypass/);
+      expect([...captured.remoteModels]).toEqual(filesBeforeRefresh);
+      refreshedBaseUrl = undefined;
+      baseUrl = 'http://127.0.0.9:23425/v1';
+      // A late successful probe must not write a route snapshot after teardown.
+      let releaseProbe!: (reachable: boolean) => void;
+      let enteredProbe!: () => void;
+      const probing = new Promise<void>(resolve => { enteredProbe = resolve; });
+      probe.mockImplementationOnce(() => new Promise<boolean>(resolve => {
+        releaseProbe = resolve;
+        enteredProbe();
+      }));
+      const switching = handle.setModel!("local-model", { providerId: "shared-loopback" })
+        .catch(error => error);
+      await probing;
+      await handle.close();
+      const filesAfterClose = [...captured.remoteModels];
+      releaseProbe(true);
+      expect(await switching).toBeInstanceOf(Error);
+      expect([...captured.remoteModels]).toEqual(filesAfterClose);
+    } finally {
+      await handle.close();
+      await agent.dispose();
+    }
+  });
+
+  it.each(["unreachable", "probe-error"])("keeps remote loopback startup fail-closed when %s", async (mode) => {
+    const transport = vi.fn();
+    const writeFile = vi.fn();
+    const modelBaseUrl = 'http://127.0.0.5:23425/v1?secret=invalid-test-secret';
+    const probe = vi.fn(async (_host: string, url: string) => {
+      if (mode === "probe-error") throw new Error("invalid-test-secret");
+      return url !== modelBaseUrl; // The provider default responds; the selected model does not.
+    });
+    const agent = new PiAgent({
+      ...byomDeps(async () => ({ providers: [{ id: "local", name: "Local",
+        baseUrl: "http://127.0.0.1:23425/v1?secret=invalid-test-secret", api: "openai-completions",
+        models: [{ id: "local-model", baseUrl: modelBaseUrl }] }], env: {} })),
+      probeRemotePiProviderEndpoint: probe,
+      getRemotePiTransport: transport,
+      getRemotePiFileOps: () => ({ mkdirp: async () => {}, writeFile, stat: async () => null,
+        rm: async () => {}, listDir: async () => [], readFile: async () => "", sha256File: async () => "" }),
+    });
+    try {
+      const error = await agent.startSession({ sessionId: "remote-probe-failure", workingDir: cwd,
+        model: "local-model", providerId: "local", remoteHostId: "remote-host" }).catch(error => error);
+      expect(String(error)).toContain("[REMOTE_LOCAL_ONLY_PROVIDER]");
+      expect(String(error)).not.toContain("invalid-test-secret");
+      expect(probe).toHaveBeenCalledExactlyOnceWith("remote-host", modelBaseUrl);
+      expect(transport).not.toHaveBeenCalled();
+      expect(writeFile).not.toHaveBeenCalled();
+    } finally { await agent.dispose(); }
   });
 
   it("rejects a local-only OpenAI context profile before resolving or spawning remote Pi", async () => {

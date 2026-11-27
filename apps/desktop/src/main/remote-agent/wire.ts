@@ -26,7 +26,10 @@ import {
   type UserContentBlock,
   type UserMessage,
 } from '@cindy/maker-core';
-import { projectAutoReviewUserReferences } from '@cindy/maker-shared/auto-review-intent';
+import {
+  projectAutoReviewUserReferences,
+  type AutoReviewUserIntent,
+} from '@cindy/maker-shared/auto-review-intent';
 import { REMOTE_AGENT_RELAY_KEY_PATTERN, type RemoteAgentKind } from '@cindy/device-link';
 
 import {
@@ -114,8 +117,12 @@ export interface RemoteAgentWireStartOptions {
   botProfileContextPrompt?: string;
   botUserProfilePrompt?: string;
   makerMemoryEnabled?: boolean;
+  /** 记忆开关由伙伴自己的设置决定；旧被控端解码时丢弃。 */
+  makerMemorySwitchOwned?: boolean;
   makerMemoryScopeKey?: string;
   makerMemoryIndexSnapshot?: string;
+  /** Optional project file locator; older executors retain their legacy tool-based recall. */
+  makerMemoryProjectDir?: string;
   /** 本机(任务所在电脑)的插件花名册段；旧控制端不带，旧被控端解码时丢弃。 */
   ghostRosterSnapshot?: string;
   permissionMode?: string;
@@ -242,6 +249,9 @@ export function managedSkillPluginLayout(command: string): { root: string; dir: 
 export interface RemoteAgentOpenPayload {
   /** Controller can acknowledge durable image delivery; absent on legacy controllers. */
   acceptsImageDeliveryReceipts?: boolean;
+  acceptsNativeHistoryBackup?: boolean;
+  /** Receiver can preserve budget-omitted attachments in the owning task. */
+  acceptsAttachmentPreservation?: boolean;
   /** Task Host clear generation, preserved through provider-group relays. */
   imageDeliveryEpoch?: number;
   /** 控制端任务 id。 */
@@ -274,6 +284,8 @@ export interface RemoteAgentOpenPayload {
   acceptsGroupSwitch?: boolean;
   /** 自动交接后重新打开时带回的那张一次性凭证：组所在电脑据此避开出问题的那台。 */
   groupSwitchToken?: string;
+  /** The owner must confirm the current direct assignment was handed off before opening. */
+  requireGroupSwitchToken?: true;
   options: RemoteAgentWireStartOptions;
   workspace: RemoteAgentWireWorkspace;
   projectFiles: RemoteAgentWireFile[];
@@ -323,11 +335,11 @@ const PERSONAL_PREFIXES = ['.claude/skills/', '.claude/agents/', '.claude/comman
 
 const START_STRING_FIELDS = [
   'effort', 'userPrompt', 'botProfilePrompt', 'botProfileContextPrompt', 'botUserProfilePrompt',
-  'makerMemoryScopeKey', 'makerMemoryIndexSnapshot', 'ghostRosterSnapshot', 'permissionMode', 'displayReasoning',
+  'makerMemoryScopeKey', 'makerMemoryIndexSnapshot', 'makerMemoryProjectDir', 'ghostRosterSnapshot', 'permissionMode', 'displayReasoning',
   'resumeSessionId',
 ] as const;
 const START_BOOL_FIELDS = [
-  'fastMode', 'thinkingEnabled', 'makerMemoryEnabled', 'planMode', 'codexHistoryHasProductPrompt',
+  'fastMode', 'thinkingEnabled', 'makerMemoryEnabled', 'makerMemorySwitchOwned', 'planMode', 'codexHistoryHasProductPrompt',
 ] as const;
 
 /** vendorOptions 里只有这些是可序列化、对另一台电脑有意义的。 */
@@ -442,6 +454,8 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
   return {
     sessionId,
     ...(value.acceptsImageDeliveryReceipts === true ? { acceptsImageDeliveryReceipts: true } : {}),
+    ...(value.acceptsNativeHistoryBackup === true ? { acceptsNativeHistoryBackup: true } : {}),
+    ...(value.acceptsAttachmentPreservation === true ? { acceptsAttachmentPreservation: true } : {}),
     ...(typeof value.imageDeliveryEpoch === 'number' && Number.isSafeInteger(value.imageDeliveryEpoch) && value.imageDeliveryEpoch >= 0
       ? { imageDeliveryEpoch: value.imageDeliveryEpoch } : {}),
     ...(value.virtualWorkspace === true ? { virtualWorkspace: true } : {}),
@@ -455,6 +469,7 @@ export function decodeOpenPayload(value: unknown): RemoteAgentOpenPayload {
     ...(typeof value.groupSwitchToken === 'string' && REMOTE_AGENT_RELAY_KEY_PATTERN.test(value.groupSwitchToken)
       ? { groupSwitchToken: value.groupSwitchToken }
       : {}),
+    ...(value.requireGroupSwitchToken === true ? { requireGroupSwitchToken: true as const } : {}),
     options: decodeStartOptions(value.options),
     workspace: decodeWorkspace(value.workspace),
     projectFiles,
@@ -757,12 +772,26 @@ export async function encodeSendOptions(
   }
   const cindy: NonNullable<RemoteAgentWireSendOptions['cindy']> = {};
   const mainOwned = opts[MAIN_OWNED_SEND_CONTEXT];
-  if (mainOwned) cindy.mainOwned = jsonSafe(mainOwned) as NonNullable<typeof cindy.mainOwned>;
+  if (mainOwned) {
+    // Strip Host-local attachment paths before crossing the remote wire boundary:
+    // paths on the controller are meaningless and unauthorized on the controlled machine.
+    const wireMainOwned = mainOwned.autoReviewReferences
+      ? prune({
+          ...mainOwned,
+          autoReviewReferences: projectAutoReviewUserReferences(
+            mainOwned.autoReviewReferences,
+            { allowAttachmentPaths: false },
+          ),
+        })
+      : mainOwned;
+    cindy.mainOwned = jsonSafe(wireMainOwned) as NonNullable<typeof cindy.mainOwned>;
+  }
   const sourceContent = opts[AUTO_REVIEW_SOURCE_CONTENT];
   if (sourceContent !== undefined) {
     cindy.autoReviewSourceContent = await encodeUserMessage({ type: 'user', content: sourceContent }, readImage);
   }
-  if (opts[AUTO_REVIEW_USER_INTENT] !== undefined) cindy.autoReviewUserIntent = jsonSafe(opts[AUTO_REVIEW_USER_INTENT]);
+  const sanitizedIntent = sanitizeWireAutoReviewUserIntent(opts[AUTO_REVIEW_USER_INTENT]);
+  if (sanitizedIntent !== undefined) cindy.autoReviewUserIntent = jsonSafe(sanitizedIntent);
   if (opts[AUTO_REVIEW_DELEGATED_CONTINUATION]) cindy.delegatedContinuation = true;
   if (typeof opts[INHERITED_CAPABILITY_SELECTION] === 'string') cindy.inheritedCapabilitySelection = opts[INHERITED_CAPABILITY_SELECTION];
   if (Object.keys(cindy).length) wire.cindy = cindy;
@@ -771,6 +800,33 @@ export async function encodeSendOptions(
     ...(opts.onTranscriptUserEntry ? { onTranscriptUserEntry: opts.onTranscriptUserEntry } : {}),
     ...(policy?.onInteractionStateChange ? { onInteractionStateChange: policy.onInteractionStateChange } : {}),
   };
+}
+
+/**
+ * Re-project `AUTO_REVIEW_USER_INTENT` on both sides of the remote wire boundary:
+ * keep only documented intent fields and strip controller-local attachment paths
+ * (`allowAttachmentPaths: false`) so remote peers cannot inject arbitrary local paths.
+ */
+function sanitizeWireAutoReviewUserIntent(value: unknown): AutoReviewUserIntent | undefined {
+  if (typeof value === 'string') return value;
+  if (
+    !isRecord(value) ||
+    typeof value.currentUserMessage !== 'string' ||
+    !Array.isArray(value.earlierUserMessages) ||
+    !value.earlierUserMessages.every((item) => typeof item === 'string')
+  ) {
+    return undefined;
+  }
+  const currentUserReferences = projectAutoReviewUserReferences(
+    value.currentUserReferences,
+    { allowAttachmentPaths: false },
+  );
+  return prune({
+    earlierUserMessages: [...value.earlierUserMessages],
+    currentUserMessage: value.currentUserMessage,
+    historyOmitted: value.historyOmitted === true ? (true as const) : undefined,
+    currentUserReferences,
+  });
 }
 
 function decodeOrigin(value: unknown): TurnPermissionOrigin | undefined {
@@ -782,7 +838,7 @@ function decodeOrigin(value: unknown): TurnPermissionOrigin | undefined {
     case 'hook':
       return typeof value.source === 'string' ? { kind: 'hook', source: value.source } : undefined;
     case 'im': {
-      const channels = ['feishu', 'discord', 'slack', 'wechat', 'telegram', 'dingtalk', 'wecom'] as const;
+      const channels = ['feishu', 'discord', 'slack', 'wechat', 'telegram', 'dingtalk', 'wecom', 'imessage'] as const;
       const channel = channels.find((item) => item === value.channel);
       return channel ? prune({ kind: 'im' as const, channel, taskId: optString(value.taskId, 256) }) : undefined;
     }
@@ -811,47 +867,50 @@ export async function decodeSendOptions(value: unknown, callbacks: DecodeSendCal
     toolsDisabled: optBool(value.toolsDisabled),
   });
   if (value.transcriptCallback === true) opts.onTranscriptUserEntry = callbacks.onTranscriptUserEntry;
-  if (isRecord(value.turnPolicy)) {
+  if (value.turnPolicy !== undefined) {
     const policy = value.turnPolicy;
+    if (!isRecord(policy)) throw new Error('REMOTE_AGENT_INVALID: invalid turn permission policy');
     const origin = decodeOrigin(policy.origin);
+    if (!origin) throw new Error('REMOTE_AGENT_INVALID: unsupported turn permission origin');
     const surface = policy.confirmationSurface === 'channel' ? 'channel' : 'desktop';
     const force = policy.forceConfirm === 'channel'
       ? channelForceConfirmToolCall
       : policy.forceConfirm === 'channel-mutating'
         ? channelForceConfirmMutatingToolCall
         : () => true;
-    if (origin) {
-      opts.turnPermissionPolicy = prune({
-        origin,
-        confirmationSurface: surface,
-        confirmationTimeoutMs: optNumber(policy.confirmationTimeoutMs),
-        autoReviewContext: isRecord(policy.autoReviewContext) ? policy.autoReviewContext : undefined,
-        onInteractionStateChange: policy.stateCallback === true ? callbacks.onInteractionStateChange : undefined,
-        forceConfirmToolCall: force,
-      }) as unknown as TurnPermissionPolicy;
-    }
+    opts.turnPermissionPolicy = prune({
+      origin,
+      confirmationSurface: surface,
+      confirmationTimeoutMs: optNumber(policy.confirmationTimeoutMs),
+      autoReviewContext: isRecord(policy.autoReviewContext) ? policy.autoReviewContext : undefined,
+      onInteractionStateChange: policy.stateCallback === true ? callbacks.onInteractionStateChange : undefined,
+      forceConfirmToolCall: force,
+    }) as unknown as TurnPermissionPolicy;
   }
   if (isRecord(value.cindy)) {
     const cindy = value.cindy;
-    if (isRecord(cindy.mainOwned)) {
+    if (cindy.mainOwned !== undefined) {
+      if (!isRecord(cindy.mainOwned)) throw new Error('REMOTE_AGENT_INVALID: invalid Main-owned send context');
       const origin = decodeOrigin(cindy.mainOwned.origin);
-      if (origin) {
-        opts[MAIN_OWNED_SEND_CONTEXT] = prune({
-          origin,
-          rawChannelText: optString(cindy.mainOwned.rawChannelText),
-          // Re-projected here: shape and bounds are never taken from the wire as-is.
-          autoReviewReferences: projectAutoReviewUserReferences(cindy.mainOwned.autoReviewReferences),
-        });
-      }
+      if (!origin) throw new Error('REMOTE_AGENT_INVALID: unsupported Main-owned origin');
+      opts[MAIN_OWNED_SEND_CONTEXT] = prune({
+        origin,
+        rawChannelText: optString(cindy.mainOwned.rawChannelText),
+        // Re-projected here: shape and bounds are never taken from the wire as-is,
+        // and local attachment file paths are never accepted from a remote peer.
+        autoReviewReferences: projectAutoReviewUserReferences(
+          cindy.mainOwned.autoReviewReferences,
+          { allowAttachmentPaths: false },
+        ),
+      });
     }
     if (isRecord(cindy.autoReviewSourceContent)) {
       const message = await decodeUserMessage(cindy.autoReviewSourceContent, callbacks.writeAttachment);
       opts[AUTO_REVIEW_SOURCE_CONTENT] = message.content;
     }
-    const intent = cindy.autoReviewUserIntent;
-    if (typeof intent === 'string' || (isRecord(intent) && typeof intent.currentUserMessage === 'string'
-      && Array.isArray(intent.earlierUserMessages) && intent.earlierUserMessages.every((item) => typeof item === 'string'))) {
-      opts[AUTO_REVIEW_USER_INTENT] = intent;
+    const sanitizedIntent = sanitizeWireAutoReviewUserIntent(cindy.autoReviewUserIntent);
+    if (sanitizedIntent !== undefined) {
+      opts[AUTO_REVIEW_USER_INTENT] = sanitizedIntent;
     }
     if (cindy.delegatedContinuation === true) opts[AUTO_REVIEW_DELEGATED_CONTINUATION] = true;
     const inherited = optString(cindy.inheritedCapabilitySelection);

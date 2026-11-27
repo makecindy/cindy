@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -28,6 +29,8 @@ vi.mock('../../../plugin-oauth/identityStore.js', () => ({ oauthSecureStorageAva
 
 import { ScheduleWebhookHost } from '../index';
 import { ScheduleWebhookRemote } from '../remote';
+import { beginGithubConnect } from '../githubConnect';
+import { matchingGithubPrs, type GithubPrRefresh } from '../github';
 
 class FakeScheduler extends EventEmitter {
   schedules: Schedule[] = [];
@@ -62,6 +65,14 @@ interface FakeEndpoint {
 
 /** 与 webhook-server 合同相同的最小实现。 */
 class FakeServer {
+  github: { available: boolean; login: string; endpointId: string; repositories: string[]; unavailable?: string[];
+    installUrl?: string; userAuthorization?: boolean; prSubscriptions?: boolean; dailyQuotaExempt?: boolean; automationSubscriptions?: boolean; deliveryHealthy?: boolean } | null = null;
+  githubAllowedRepositories: string[] | undefined;
+  githubConnect: { state: string; redirectUri: string } | undefined;
+  githubGrant: unknown;
+  githubCompleteBody: Record<string, unknown> | undefined;
+  githubUnavailable = false;
+  githubSubscriptionBodies: Record<string, unknown>[] = [];
   readonly releases = new Map<string, string>();
   accountManagement = false;
   readonly requests: string[] = [];
@@ -74,6 +85,7 @@ class FakeServer {
   suspended = false;
   unavailable = false;
   rejectDeletes = false;
+  rejectUpsert = false;
   dropNextUpsertResponse = false;
   private readonly created = new Map<string, number>();
   validToken = 'token-1';
@@ -150,11 +162,29 @@ class FakeServer {
           return reply(201, endpoint);
         }
       }
+      if (this.github && route === 'GET /api/v1/github') return reply(this.githubUnavailable ? 500 : 200, this.githubUnavailable ? {} : this.github);
+      if (this.github && route === 'POST /api/v1/github/connect') {
+        this.githubConnect = body() as { state: string; redirectUri: string };
+        return reply(200, { url: `https://github.com/login/oauth/authorize?state=${this.githubConnect.state}&code_challenge_method=S256` });
+      }
+      if (this.github && route === 'POST /api/v1/github/connect/complete') {
+        this.githubCompleteBody = body();
+        return reply(200, { url: this.github.installUrl, ...(this.githubCompleteBody.includeUserToken ? { grant: this.githubGrant } : {}) });
+      }
+      if (this.github && route === 'PUT /api/v1/github/repositories') {
+        this.githubSubscriptionBodies.push(body());
+        const requested = body().repositories as string[];
+        const accepted = requested.filter(repo => !this.githubAllowedRepositories || this.githubAllowedRepositories.includes(repo));
+        this.github.repositories = accepted;
+        this.github.unavailable = requested.filter(repo => !accepted.includes(repo));
+        return reply(200, this.github);
+      }
       if (route === 'GET /api/v1/endpoints') return reply(200, { endpoints: [...this.endpoints.values()] });
       if (upsert?.[1]) {
         const scheduleId = upsert[1];
         if (this.releases.has(scheduleId)) return reply(409, { error: { code: 'WEBHOOK_ENDPOINT_RELEASED' } });
         const { events, format } = body() as { events: string[]; format: unknown };
+        if (this.rejectUpsert) return reply(400, { error: { code: 'BAD_REQUEST' } });
         const existing = this.endpoints.get(scheduleId);
         if (!existing && this.endpoints.size >= this.endpointLimit) return reply(409, { error: { code: 'WEBHOOK_ENDPOINT_LIMIT' } });
         const serial = this.created.get(scheduleId) ?? 0;
@@ -233,6 +263,7 @@ describe('ScheduleWebhookHost 服务器通道', () => {
   let signedIn: boolean;
   let token: string;
   let serverUrl: string;
+  const batchWarning = vi.fn();
   let refresh: ReturnType<typeof vi.fn<() => Promise<boolean>>>;
 
   async function start(
@@ -243,7 +274,7 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     scheduler.schedules = schedules;
     const baseUrl = baseUrlOverride ?? (await server.listen());
     serverUrl = baseUrl;
-    host = new ScheduleWebhookHost(scheduler as unknown as Scheduler, {}, {
+    host = new ScheduleWebhookHost(scheduler as unknown as Scheduler, { warn: batchWarning }, {
       ...(onQuotaExhausted ? { onQuotaExhausted } : {}),
       remote: {
         isSignedIn: () => signedIn,
@@ -252,7 +283,7 @@ describe('ScheduleWebhookHost 服务器通道', () => {
         refreshAccessToken: refresh,
         fetch,
         socketOptions: async () => ({}),
-        logger: {},
+        logger: { warn: batchWarning },
       },
     });
     await host.start();
@@ -271,6 +302,84 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await host.stop();
     await server.close();
     fs.rmSync(dirs.root, { recursive: true, force: true });
+  });
+
+  // Real HTTP/WS and durable Host queue: repository selection, event filtering, dedup,
+  // task invocation and pause use the same path as ordinary automatic tasks.
+  it('runs a selected repository automation from App events without creating a task Webhook address', async () => {
+    server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [],
+      prSubscriptions: true, dailyQuotaExempt: true, automationSubscriptions: true };
+    const task = { ...schedule('app-script', ['issue_comment.created'], { preset: 'github-app', repositories: ['example/project'] }),
+      executionMode: 'script', scriptConfig: { command: 'node report.mjs', capabilities: [] } } as Schedule;
+    await start([task]);
+    await vi.waitFor(() => expect(host.status(task)?.connected).toBe(true));
+    expect(server.githubSubscriptionBodies.at(-1)).toEqual({ repositories: ['example/project'], pullRequests: [], repositorySubscriptions: ['example/project'] });
+    expect(server.endpoints.size).toBe(0);
+    await expect(host.setSecret(task)).rejects.toThrow('GITHUB_APP_MANAGED_CONNECTION');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const comment = { deliveryId: 'app-comment', event: 'issue_comment', action: 'created', repository: 'example/project', number: 10, receivedAt: Date.now() };
+      const batch = { batchId: 'app-batch', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
+        events: [comment, { ...comment, deliveryId: 'other', repository: 'private/other' },
+          { ...comment, deliveryId: 'ci', event: 'check_run', action: 'completed' }] };
+      server.push(batch);
+      await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'app-batch' }));
+      expect(host.status(task)?.received).toBe(1);
+      server.push({ ...batch, batchId: 'duplicate-batch' });
+      await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'duplicate-batch' }));
+      expect(host.status(task)?.received).toBe(1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.waitFor(() => expect(scheduler.runNow).toHaveBeenCalledTimes(1));
+      expect(scheduler.runNow.mock.calls[0]).toEqual(['app-script', expect.objectContaining({
+        webhook: { events: [comment], omitted: 0 }, onRunCreated: expect.any(Function),
+      })]);
+      scheduler.schedules = [{ ...task, status: 'paused' }];
+      scheduler.emit('changed');
+      await vi.waitFor(() => expect(server.githubSubscriptionBodies.at(-1)?.repositorySubscriptions).toEqual([]));
+      server.push({ ...batch, batchId: 'paused-batch', events: [{ ...comment, deliveryId: 'paused-comment' }] });
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(scheduler.runNow).toHaveBeenCalledTimes(1);
+    } finally { await host.stop(); vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  // PR #9378: a transient status failure cannot ACK an automation event
+  // that was never persisted. Real Host + HTTP/WS + disk queue, unit tier.
+  it('retries App automation batches after a transient status failure without ACKing lost events', async () => {
+    server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], automationSubscriptions: true };
+    const task = schedule('app-retry', ['issue_comment.created'], { preset: 'github-app', repositories: ['example/project'] });
+    await start([task]);
+    await vi.waitFor(() => expect(host.status(task)?.connected).toBe(true));
+    server.githubUnavailable = true;
+    await expect(host.githubStatus()).rejects.toThrow();
+    batchWarning.mockClear();
+    const batch = { batchId: 'retry-app', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
+      events: [{ deliveryId: 'retry-comment', event: 'issue_comment', action: 'created', repository: 'example/project', receivedAt: Date.now() }] };
+    server.push(batch);
+    await vi.waitFor(() => expect(batchWarning).toHaveBeenCalledWith('[schedule-webhook] batch not stored', expect.anything()));
+    expect(server.frames).not.toContainEqual({ type: 'ack', batchId: batch.batchId });
+    expect(host.status(task)?.received).toBe(0);
+    server.githubUnavailable = false;
+    await host.githubStatus();
+    server.push(batch);
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: batch.batchId }));
+    expect(host.status(task)?.received).toBe(1);
+  });
+
+  // Overflow has no repository/event provenance. It must not wake scripts or
+  // agents outside their selected filters; known matching details still persist.
+  it('does not widen App task filters for shared overflow metadata', async () => {
+    server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], automationSubscriptions: true };
+    const release = schedule('release', ['release.published'], { preset: 'github-app', repositories: ['example/project'] });
+    const other = schedule('other', ['issue_comment'], { preset: 'github-app', repositories: ['other/project'] });
+    const matching = schedule('matching', ['issue_comment.created'], { preset: 'github-app', repositories: ['example/project'] });
+    await start([release, other, matching]);
+    await vi.waitFor(() => expect(host.status(matching)?.connected).toBe(true));
+    server.push({ batchId: 'unscoped-overflow', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 100,
+      events: [{ deliveryId: 'overflow-comment', event: 'issue_comment', action: 'created', repository: 'example/project', receivedAt: Date.now() }] });
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'unscoped-overflow' }));
+    expect(host.status(release)?.received).toBe(0);
+    expect(host.status(other)?.received).toBe(0);
+    expect(host.status(matching)?.received).toBe(1);
   });
 
   // PR #8470: disabling while disconnected, then enabling with a new trigger
@@ -326,6 +435,9 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await start([original]);
     await host.setSecret(original);
     await vi.waitFor(() => expect(host.status(original)?.connected).toBe(true));
+    // Welcome starts an asynchronous reconcile; connected alone is not a ready
+    // baseline for the revocation scenario below.
+    await host.refreshStatus();
     server.push({ batchId: 'before-disable', endpointId: 'whk-s1', scheduleId: 's1', events: [event('before-disable')], omitted: 0 });
     await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'before-disable' }));
     await host.stop();
@@ -388,6 +500,8 @@ describe('ScheduleWebhookHost 服务器通道', () => {
 
   it('旧服务明确提示账号管理未部署，原接收能力继续工作', async () => {
     await start([schedule('s1')]);
+    await vi.waitFor(() => expect(host.status(schedule('s1'))?.connected).toBe(true));
+    await host.refreshStatus();
     await expect(host.accountOverview()).rejects.toThrow('WEBHOOK_MANAGEMENT_UNAVAILABLE');
     expect(host.status(schedule('s1'))?.url).toBeTruthy();
   });
@@ -611,8 +725,15 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await start([schedule('s1', ['push'], future), schedule('s2', [], future)]);
     await vi.waitFor(() => expect(server.endpoints.get('s1')?.events).toEqual(['push']));
     expect(server.endpoints.get('s1')?.format).toEqual(custom);
-    await vi.waitFor(() => expect(host.status(schedule('s2'))?.problem).toBe('failed'));
+    await vi.waitFor(() => expect(host.status(schedule('s2'))?.problem).toBe('unsupported'));
     expect(server.endpoints.has('s2')).toBe(false);
+  });
+
+  // 服务器版本落后于客户端时，它拒绝的是格式本身：这不是暂时性的，不能显示成“暂时不可用”。
+  it('服务器不认发送方格式时不显示成暂时不可用', async () => {
+    server.rejectUpsert = true;
+    await start([schedule('s1', ['push'])]);
+    await vi.waitFor(() => expect(host.status(schedule('s1'))?.problem).toBe('unsupported'));
   });
 
   it('没有任务需要接收时不保持连接', async () => {
@@ -623,4 +744,670 @@ describe('ScheduleWebhookHost 服务器通道', () => {
     await vi.waitFor(() => expect(server.endpoints.size).toBe(0));
     await vi.waitFor(() => expect(server.sockets[0]?.readyState).toBe(server.sockets[0]?.CLOSED));
   });
+});
+
+// New protocol outcome: managed GitHub events reach only active PR follow-up gates,
+// through the production remote receiver; stale account deliveries cannot cross owners.
+it('returns the completed GitHub snapshot even when another refresh is queued', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  const baseUrl = await server.listen();
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch: async () => {} });
+  try {
+    await remote.sync([]);
+    // Opening settings and regaining focus can ask for the same state together.
+    const results = await Promise.allSettled([remote.githubStatus(), remote.githubStatus()]);
+    for (const result of results) {
+      expect(result.status).toBe('fulfilled');
+      if (result.status === 'fulfilled') expect(result.value.login).toBe('example-user');
+    }
+    // A genuine failed refresh must still reject instead of claiming stale success.
+    server.unavailable = true;
+    await expect(remote.githubStatus()).rejects.toThrow('GITHUB_CONNECTION_UNAVAILABLE');
+    server.unavailable = false;
+    await expect(remote.githubStatus()).resolves.toMatchObject({ login: 'example-user' });
+  } finally { remote.stop(); await server.close(); }
+});
+
+it('discards a GitHub reconciliation response after the account is paused', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  const baseUrl = await server.listen();
+  let complete!: () => void;
+  const pending = new Promise<void>(resolve => { complete = resolve; });
+  let waiting = false;
+  const onChanged = vi.fn();
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch: async (input, init) => {
+      const response = await fetch(input, init);
+      if (String(input).endsWith('/github')) { waiting = true; await pending; }
+      return response;
+    }, socketOptions: async () => ({}), logger: {}, onBatch: async () => {}, onChanged });
+  try {
+    const sync = remote.sync([]);
+    await vi.waitFor(() => expect(waiting).toBe(true));
+    remote.pause();
+    onChanged.mockClear();
+    complete();
+    await sync;
+    expect(onChanged).not.toHaveBeenCalled();
+    expect(remote.isConnected()).toBe(false);
+    expect(server.requests).not.toContain('PUT /api/v1/github/repositories');
+  } finally { complete(); remote.stop(); await server.close(); }
+});
+
+it('routes managed GitHub events to matching active follow-ups and acknowledges after processing', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  const baseUrl = await server.listen();
+  let complete!: () => void;
+  const pending = new Promise<void>(resolve => { complete = resolve; });
+  const onGithubPrs = vi.fn<(urls: string[], isCurrent: () => boolean, refresh: GithubPrRefresh) => Promise<void>>(
+    (_urls, _isCurrent, refresh) => refresh.reason === 'reconnect' ? Promise.resolve() : pending);
+  const onBatch = vi.fn(async () => {});
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch, onGithubPrs });
+  const follow = (number: number, status = 'active') => ({ id: `follow-${number}`, name: 'Follow PR', status,
+    recurring: true, manual: false, preRunHook: { command: `node gate.mjs https://github.com/example/project/pull/${number}` } }) as Schedule;
+  try {
+    await remote.sync([follow(12), follow(123), follow(9, 'paused')]);
+    await vi.waitFor(() => expect(remote.githubEventsHealthy('https://github.com/example/project/pull/12')).toBe(true));
+    expect(onGithubPrs.mock.calls[0]?.[0]).toEqual(['https://github.com/example/project/pull/12', 'https://github.com/example/project/pull/123']);
+    onGithubPrs.mockClear();
+    server.push({ batchId: 'github-batch', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
+      events: [{ deliveryId: 'g-1', event: 'pull_request_review_comment', repository: 'example/project', number: 12, receivedAt: 1 }] });
+    await vi.waitFor(() => expect(onGithubPrs).toHaveBeenCalledOnce());
+    expect(onGithubPrs.mock.calls[0]?.[0]).toEqual(['https://github.com/example/project/pull/12']);
+    expect(onGithubPrs.mock.calls[0]?.[2].reviews).toEqual(['https://github.com/example/project/pull/12']);
+    expect(onBatch).not.toHaveBeenCalled();
+    expect(server.frames).not.toContainEqual({ type: 'ack', batchId: 'github-batch' });
+    expect(server.github.repositories).toEqual(['example/project']);
+    complete();
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'github-batch' }));
+    const stillCurrent = onGithubPrs.mock.calls[0]?.[1];
+    expect(stillCurrent?.()).toBe(true);
+    remote.pause();
+    expect(stillCurrent?.()).toBe(false);
+  } finally { complete(); remote.stop(); await server.close(); }
+});
+
+// Production routing/ACK entry, real loopback WS with a fake server. Missing CI
+// numbers used to fan out to every PR; omitted batches used to be silently ACKed.
+it('matches CI by current commit, without matching unrelated or ambiguous unknown commits', () => {
+  const urls = [12, 13, 14].map(n => `https://github.com/example/project/pull/${n}`);
+  const heads = { [urls[0]!]: 'a'.repeat(40), [urls[1]!]: 'b'.repeat(40), [urls[2]!]: 'a'.repeat(40) };
+  const ci = { deliveryId: 'ci', event: 'check_run', receivedAt: 1, repository: 'EXAMPLE/PROJECT', headSha: 'a'.repeat(40) };
+  expect(matchingGithubPrs(urls, [ci], heads)).toEqual([urls[0], urls[2]]);
+  expect(matchingGithubPrs(urls, [{ ...ci, headSha: 'c'.repeat(40) }], heads)).toEqual([]);
+  expect(matchingGithubPrs(urls, [{ ...ci, headSha: undefined }], heads)).toEqual([]);
+  expect(matchingGithubPrs(urls, [{ ...ci, number: 13 }], heads)).toEqual([urls[1]]);
+  expect(matchingGithubPrs(urls, [{ ...ci, repository: 'other/project' }], heads)).toEqual([]);
+});
+
+it('recovers omissions before ACK, retries failed recovery, and reduces polling only while delivery is healthy', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  const baseUrl = await server.listen();
+  const urls = [12, 13].map(n => `https://github.com/example/project/pull/${n}`);
+  const heads = { [urls[0]!]: 'a'.repeat(40), [urls[1]!]: 'b'.repeat(40) };
+  const onGithubPrs = vi.fn<(urls: string[], current: () => boolean, refresh: GithubPrRefresh) => Promise<void>>(async () => {});
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch: async () => {},
+    onGithubPrs, githubPrHeads: async () => heads });
+  const follows = urls.map(url => ({ id: url, name: 'Follow', status: 'active', recurring: true,
+    preRunHook: { command: `node gate ${url}` } }) as Schedule);
+  const batch = (batchId: string, omitted: number, headSha = heads[urls[0]!]!) => ({ batchId, omitted,
+    endpointId: 'whk-github', scheduleId: '__github_pr_watch__',
+    events: [{ deliveryId: batchId, event: 'check_run', repository: 'example/project', headSha, receivedAt: 1 }] });
+  try {
+    await remote.sync(follows);
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(urls[0]!)).toBe(true));
+    expect(remote.githubEventsHealthy('https://github.com/example/project/pull/99')).toBe(false);
+    onGithubPrs.mockClear();
+    server.push(batch('ci', 0));
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'ci' }));
+    expect(onGithubPrs.mock.calls[0]?.[0]).toEqual([urls[0]]);
+    expect(onGithubPrs.mock.calls[0]?.[2]).toEqual({ reason: 'event', notify: [] });
+
+    onGithubPrs.mockRejectedValueOnce(new Error('offline'));
+    server.push(batch('lost', 30));
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(urls[0]!)).toBe(false));
+    expect(onGithubPrs.mock.calls.at(-1)?.[0]).toEqual(urls);
+    expect(server.frames).not.toContainEqual({ type: 'ack', batchId: 'lost' });
+    server.push(batch('lost', 30));
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'lost' }));
+    expect(onGithubPrs.mock.calls.at(-1)?.[2]).toEqual({ reason: 'overflow', notify: urls });
+    expect(remote.githubEventsHealthy(urls[0]!)).toBe(true);
+
+    const date = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 71_000);
+    expect(remote.githubEventsHealthy(urls[0]!)).toBe(false);
+    date.mockRestore();
+    server.sockets.at(-1)!.send(JSON.stringify({ type: 'quota', limit: 3000, resetAt: Date.now() + 60_000 }));
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(urls[0]!)).toBe(false));
+    remote.pause();
+    expect(remote.githubEventsHealthy(urls[0]!)).toBe(false);
+    await remote.sync(follows);
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(urls[0]!)).toBe(true));
+    expect(onGithubPrs.mock.calls.at(-1)?.[2].reason).toBe('reconnect');
+    await remote.sync([follows[0]!]);
+    expect(remote.githubEventsHealthy(urls[1]!)).toBe(false);
+  } finally { remote.stop(); await server.close(); }
+});
+
+it('keeps the App connection visible when baseline reads fail, and excludes unavailable repositories', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  const baseUrl = await server.listen();
+  const url = 'https://github.com/example/project/pull/12';
+  const onGithubPrs = vi.fn<() => Promise<void>>(async () => { throw new Error('PR_VERIFICATION_FAILED'); });
+  const time = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(time);
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch: async () => {}, onGithubPrs });
+  try {
+    await remote.sync([{ id: 'follow', name: 'Follow', status: 'active', recurring: true, preRunHook: { command: `node gate ${url}` } } as Schedule]);
+    await vi.waitFor(() => expect(onGithubPrs).toHaveBeenCalled());
+    expect(remote.githubEventsHealthy(url)).toBe(false);
+    await expect(remote.githubStatus()).resolves.toMatchObject({ login: 'example-user', repositories: ['example/project'] });
+    onGithubPrs.mockImplementation(async () => {});
+    await remote.refresh();
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(url)).toBe(true));
+    const registrations = server.requests.filter(route => route === 'PUT /api/v1/github/repositories').length;
+    server.github.deliveryHealthy = false;
+    clock.mockReturnValue(time + 60_001);
+    server.sockets.at(-1)!.ping();
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(url)).toBe(false));
+    server.github.deliveryHealthy = true;
+    clock.mockReturnValue(time + 120_002);
+    server.sockets.at(-1)!.ping();
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(url)).toBe(true));
+    clock.mockReturnValue(time + 220_003);
+    expect(remote.githubEventsHealthy(url)).toBe(false); // A stale status cannot hide a failed drain.
+    server.sockets.at(-1)!.ping();
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(url)).toBe(true));
+    expect(server.requests.filter(route => route === 'PUT /api/v1/github/repositories')).toHaveLength(registrations);
+    server.github.unavailable = ['example/project'];
+    await remote.refresh();
+    expect(remote.githubEventsHealthy(url)).toBe(false);
+  } finally { clock.mockRestore(); remote.stop(); await server.close(); }
+});
+
+// Real HTTP wire: narrowing/changing PRs in the same repository must reach the
+// server; legacy servers must receive the original body and keep quota behavior.
+it('negotiates precise PR subscriptions and separates custom Webhook quota from built-in GitHub delivery', async () => {
+  const onQuotaExhausted = vi.fn();
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [],
+    prSubscriptions: true, dailyQuotaExempt: true };
+  const baseUrl = await server.listen();
+  const follow = (number: number) => ({ id: String(number), name: 'Follow', status: 'active', recurring: true,
+    preRunHook: { command: `node gate https://github.com/example/project/pull/${number}` } }) as Schedule;
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {},
+    onBatch: async () => {}, onGithubPrs: async () => {}, onQuotaExhausted });
+  try {
+    await remote.sync([follow(12), { ...follow(99), webhookTrigger: {
+      endpointId: 'explicit-app', source: { preset: 'github-app', repositories: ['example/project'] },
+    } }]);
+    await vi.waitFor(() => expect(remote.githubEventsHealthy('https://github.com/example/project/pull/12')).toBe(true));
+    expect(server.githubSubscriptionBodies.at(-1)).toEqual({ repositories: ['example/project'],
+      pullRequests: [{ repository: 'example/project', number: 12 }] });
+    await remote.sync([follow(13)]);
+    expect(server.githubSubscriptionBodies.at(-1)?.pullRequests).toEqual([{ repository: 'example/project', number: 13 }]);
+    server.sockets.at(-1)!.send(JSON.stringify({ type: 'quota', limit: 3000, resetAt: Date.now() + 60_000 }));
+    await vi.waitFor(() => expect(remote.quota()).not.toBeNull());
+    expect(onQuotaExhausted).not.toHaveBeenCalled();
+    expect(remote.githubEventsHealthy('https://github.com/example/project/pull/13')).toBe(true);
+    delete server.github.prSubscriptions;
+    delete server.github.dailyQuotaExempt;
+    await remote.refresh();
+    expect(server.githubSubscriptionBodies.at(-1)).toEqual({ repositories: ['example/project'] });
+    expect(remote.githubEventsHealthy('https://github.com/example/project/pull/13')).toBe(false);
+  } finally { remote.stop(); await server.close(); }
+});
+
+// Native callback uses a real ephemeral loopback listener; only the authenticated
+// server requests are substituted. No OAuth credential is needed by this regression.
+it('returns OAuth through the initiating Desktop once, with a matching private verifier', async () => {
+  let input!: { state: string; codeChallenge: string; redirectUri: string };
+  const onConnected = vi.fn();
+  const complete = vi.fn<(input: { state: string; code: string; verifier: string }) => Promise<{ url: string }>>(
+    async () => ({ url: 'https://github.com/apps/example-app/installations/new' }));
+  const attempt = await beginGithubConnect({ start: async value => {
+    input = value; return { url: `https://github.com/login/oauth/authorize?state=${value.state}&code_challenge_method=S256` };
+  },
+    complete, onConnected, isCurrent: () => true });
+  try {
+    expect(new URL(input.redirectUri).hostname).toBe('127.0.0.1');
+    expect((await fetch(`${input.redirectUri}?state=wrong&code=synthetic`, { redirect: 'manual' })).status).toBe(400);
+    expect(complete).not.toHaveBeenCalled();
+    const response = await fetch(`${input.redirectUri}?state=${input.state}&code=synthetic`, { redirect: 'manual' });
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toBe('https://github.com/apps/example-app/installations/new');
+    expect(complete).toHaveBeenCalledTimes(1);
+    const redemption = complete.mock.calls[0]![0];
+    expect(redemption.state).toBe(input.state);
+    expect(createHash('sha256').update(redemption.verifier).digest('base64url')).toBe(input.codeChallenge);
+    expect(onConnected).toHaveBeenCalledTimes(1);
+  } finally { attempt.close(); }
+});
+
+it('rejects the legacy unbound OAuth flow before opening the browser and closes its listener', async () => {
+  let redirect = '';
+  const complete = vi.fn();
+  await expect(beginGithubConnect({
+    start: async input => {
+      redirect = input.redirectUri;
+      return { url: 'https://github.com/login/oauth/authorize?state=legacy-server-state&code_challenge_method=S256' };
+    },
+    complete, onConnected: vi.fn(), isCurrent: () => true,
+  })).rejects.toThrow('GITHUB_CLIENT_BINDING_UNSUPPORTED');
+  await expect(fetch(redirect)).rejects.toThrow();
+  expect(complete).not.toHaveBeenCalled();
+});
+
+// A slow GitHub API must not hold the ordinary Webhook ACK lane or account controls.
+// Unit HTTP boundary: repeated UI/task refreshes must read status without rewriting
+// an unchanged subscription; changing the watched PR must still register once.
+it('keeps the acknowledged subscription across refresh and connection checks', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], prSubscriptions: true };
+  const baseUrl = await server.listen();
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {},
+    onBatch: async () => {}, onGithubPrs: async () => {} });
+  const follow = (number: number) => ({ ...schedule('follow'), webhookTrigger: undefined, recurring: true,
+    preRunHook: { command: `node gate.mjs https://github.com/example/project/pull/${number}` } }) as Schedule;
+  try {
+    await remote.sync([follow(1)]);
+    await vi.waitFor(() => expect(remote.githubEventsHealthy('https://github.com/example/project/pull/1')).toBe(true));
+    const count = server.githubSubscriptionBodies.length;
+    await remote.refresh();
+    await remote.githubStatus();
+    await remote.refresh();
+    expect(server.githubSubscriptionBodies).toHaveLength(count);
+    const requestsAfterExplicitRefresh = server.requests.length;
+    // Schedule run completions that only advance timing fields must not re-query /api/v1/github.
+    await remote.sync([{ ...follow(1), lastFiredAt: 100, lastFinishedAt: 120, nextFireAt: 420 } as Schedule]);
+    expect(server.requests).toHaveLength(requestsAfterExplicitRefresh);
+    await remote.sync([follow(2)]);
+    expect(server.githubSubscriptionBodies).toHaveLength(count + 1);
+  } finally { remote.stop(); await server.close(); }
+});
+
+// 测试价值
+// - 生产入口与可观察结果：ScheduleWebhookRemote.sync 在远端请求尚未完成时本地订阅发生变化（含 A->B 与已同步 A 下的 B->A 回退），未落地的指纹绝不会被标为已同步，最终服务器订阅与最新本地集合一致。
+// - 规则依据：docs/dev-rules/server-channel-review.md —— 单飞对账必须绑定发起时的不可变快照，禁止把在途期间新产生的本地订阅变更静默吞掉。
+// - 现有覆盖缺口：既有测试仅串行 await remote.sync(...)，未覆盖 PUT /api/v1/github/repositories 在途期间并发修改 followed PRs。
+// - 最小失败输入：卡住在途 PUT /api/v1/github/repositories 时连续调用 remote.sync([follow(1), follow(2)]) 及回退到 [follow(1)]。
+// - tier：unit（回环 HTTP/WS 假服务器）。
+it('never marks an unsynced subscription fingerprint as synced when local PRs change mid-flight', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], prSubscriptions: true };
+  const baseUrl = await server.listen();
+  let holdPut = false;
+  let putEntered = false;
+  let releasePut!: () => void;
+  const resetGate = () => {
+    putEntered = false;
+    return new Promise<void>((resolve) => {
+      releasePut = resolve;
+    });
+  };
+  let putGate = resetGate();
+  const remote = new ScheduleWebhookRemote({
+    baseUrl: () => baseUrl,
+    getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false,
+    fetch: async (input, init) => {
+      if (holdPut && String(input).endsWith('/api/v1/github/repositories') && init?.method === 'PUT') {
+        putEntered = true;
+        holdPut = false;
+        await putGate;
+      }
+      return fetch(input, init);
+    },
+    socketOptions: async () => ({}),
+    logger: {},
+    onBatch: async () => {},
+    onGithubPrs: async () => {},
+  });
+  const follow = (number: number) => ({
+    id: `follow-${number}`,
+    name: `Follow #${number}`,
+    status: 'active',
+    recurring: true,
+    preRunHook: { command: `node gate.mjs https://github.com/example/project/pull/${number}` },
+  }) as Schedule;
+  try {
+    // Case 1: [1] is in flight when local state expands to [1, 2] -> server MUST converge to [1, 2].
+    holdPut = true;
+    const firstSync = remote.sync([follow(1)]);
+    await vi.waitFor(() => expect(putEntered).toBe(true));
+    const secondSync = remote.sync([follow(1), follow(2)]);
+    releasePut();
+    await Promise.all([firstSync, secondSync]);
+    expect(server.githubSubscriptionBodies.at(-1)?.pullRequests).toEqual([
+      { repository: 'example/project', number: 1 },
+      { repository: 'example/project', number: 2 },
+    ]);
+
+    // Case 2 (ABA): [1, 2] is already synced; [1] starts in flight, then local state reverts to [1, 2]
+    // before [1] finishes -> pendingReconciles prevents short-circuiting on stale localSyncKey=[1, 2].
+    putGate = resetGate();
+    holdPut = true;
+    const shrinkSync = remote.sync([follow(1)]);
+    await vi.waitFor(() => expect(putEntered).toBe(true));
+    const revertSync = remote.sync([follow(1), follow(2)]);
+    releasePut();
+    await Promise.all([shrinkSync, revertSync]);
+    expect(server.githubSubscriptionBodies.at(-1)?.pullRequests).toEqual([
+      { repository: 'example/project', number: 1 },
+      { repository: 'example/project', number: 2 },
+    ]);
+  } finally {
+    releasePut?.();
+    remote.stop();
+    await server.close();
+  }
+});
+
+// Installing the App changes permissions without changing the followed PRs.
+// Only the explicit browser round trip may bypass subscription deduplication.
+it.each(['installation', 'oauth', 'retry', 'early-installation', 'early-oauth'])('rechecks repositories after installation (%s) without repeated background writes', async (outcome) => {
+  const server = new FakeServer();
+  const installUrl = 'https://github.com/apps/example-app/installations/new';
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], installUrl };
+  server.githubAllowedRepositories = [];
+  const baseUrl = await server.listen();
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {},
+    onBatch: async () => {}, onGithubPrs: async () => {} });
+  const follow = { ...schedule('follow'), webhookTrigger: undefined, recurring: true,
+    preRunHook: { command: 'node gate.mjs https://github.com/example/project/pull/1' } } as Schedule;
+  try {
+    await remote.sync([follow]);
+    await expect(remote.githubStatus()).resolves.toMatchObject({ repositories: [], unavailable: ['example/project'] });
+    if (outcome.endsWith('oauth')) {
+      await remote.connectGithub();
+      const { redirectUri, state } = server.githubConnect!;
+      // Only the ephemeral port comes from the captured request. Keep the test
+      // request on loopback even if a broken callback advertises another host.
+      const port = Number(new URL(redirectUri).port);
+      const callback = await fetch(`http://127.0.0.1:${port}/github/callback?state=${encodeURIComponent(state)}&code=synthetic`, { redirect: 'manual' });
+      expect(callback.headers.get('location')).toBe(installUrl);
+    } else {
+      await expect(remote.installGithub()).resolves.toBe(installUrl);
+    }
+    // Regular task refreshes while the browser is open must not consume the pending recheck.
+    await remote.refresh();
+    let registrations = outcome.endsWith('oauth') ? 2 : 1;
+    expect(server.githubSubscriptionBodies).toHaveLength(registrations);
+    if (outcome.startsWith('early-')) {
+      // PR #10508: a successful status read is not installation completion.
+      // The user returns once before granting access, then returns after granting it.
+      await expect(remote.githubStatus()).resolves.toMatchObject({ repositories: [], unavailable: ['example/project'] });
+      registrations++;
+      expect(server.githubSubscriptionBodies).toHaveLength(registrations);
+      await remote.refresh();
+      expect(server.githubSubscriptionBodies).toHaveLength(registrations);
+    }
+    server.githubAllowedRepositories = ['example/project'];
+    if (outcome === 'retry') {
+      server.githubUnavailable = true;
+      await expect(remote.githubStatus()).rejects.toThrow();
+      server.githubUnavailable = false;
+    }
+    await expect(remote.githubStatus()).resolves.toMatchObject({ repositories: ['example/project'], unavailable: [] });
+    expect(server.githubSubscriptionBodies).toHaveLength(registrations + 1);
+    await remote.refresh();
+    await remote.githubStatus();
+    expect(server.githubSubscriptionBodies).toHaveLength(registrations + 1);
+  } finally { remote.stop(); await server.close(); }
+});
+
+it('keeps ordinary Webhooks and connection status usable while a GitHub batch is waiting', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], automationSubscriptions: true };
+  const baseUrl = await server.listen();
+  let release!: () => void;
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  const onGithubPrs = vi.fn(async (_urls: string[], _current: () => boolean, refresh: GithubPrRefresh) => {
+    if (refresh.reason === 'event') await waiting;
+  });
+  const onBatch = vi.fn(async () => {});
+  const onGithubBatch = vi.fn(async () => {});
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch, onGithubPrs, onGithubBatch });
+  const url = 'https://github.com/example/project/pull/1';
+  try {
+    await remote.sync([schedule('app', ['issues'], { preset: 'github-app', repositories: ['other/project'] }), schedule('ordinary'), { ...schedule('follow'), webhookTrigger: undefined, recurring: true,
+      preRunHook: { command: `node gate.mjs ${url}` } }]);
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(url)).toBe(true));
+    server.push({ batchId: 'slow-github', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
+      events: [{ deliveryId: 'comment', event: 'issue_comment', repository: 'example/project', number: 1, receivedAt: 1 }] });
+    await vi.waitFor(() => expect(onGithubPrs).toHaveBeenCalledTimes(2));
+    server.push({ batchId: 'ordinary', endpointId: server.endpoints.get('ordinary')!.id, scheduleId: 'ordinary', omitted: 0,
+      events: [{ deliveryId: 'ordinary-event', event: 'issues', receivedAt: 1 }] });
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'ordinary' }));
+    expect(onBatch).toHaveBeenCalledTimes(1);
+    server.push({ batchId: 'fast-app', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 0,
+      events: [{ deliveryId: 'issue', event: 'issues', repository: 'other/project', number: 2, receivedAt: 2 }] });
+    await vi.waitFor(() => expect(onGithubBatch).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'fast-app' }));
+
+    expect(server.frames).not.toContainEqual({ type: 'ack', batchId: 'slow-github' });
+    await expect(remote.githubStatus()).resolves.toMatchObject({ login: 'example-user' });
+    release();
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'slow-github' }));
+  } finally { release(); remote.stop(); await server.close(); }
+});
+
+// New credentials are delivered only to main and must be persisted before reporting success.
+it.each([false, true])('persists an App user grant before redirecting the browser (storage failure: %s)', async fails => {
+  let input!: { state: string; codeChallenge: string; redirectUri: string };
+  const grant = { userId: '12', login: 'example', accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh',
+    expiresAt: 999_999_999_999_999, refreshExpiresAt: 999_999_999_999_999 };
+  let saved = false;
+  const attempt = await beginGithubConnect({ start: async value => {
+    input = value; return { url: `https://github.com/login/oauth/authorize?state=${value.state}&code_challenge_method=S256` };
+  }, complete: async () => ({ url: 'https://github.com/apps/example-app/installations/new', grant }),
+    isCurrent: () => true, onConnected: async value => {
+      expect(value).toEqual(grant);
+      if (fails) throw new Error('storage unavailable');
+      saved = true;
+    } });
+  try {
+    const response = await fetch(`${input.redirectUri}?state=${input.state}&code=synthetic`, { redirect: 'manual' });
+    expect(response.status).toBe(fails ? 400 : 303);
+    expect(saved).toBe(!fails);
+    const visible = JSON.stringify([...response.headers]) + await response.text();
+    expect(visible).not.toContain(grant.accessToken);
+    expect(visible).not.toContain(grant.refreshToken);
+  } finally { attempt.close(); }
+});
+
+it.each([false, true])('negotiates App user authorization without changing the old server contract (%s)', async userAuthorization => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example', endpointId: 'whk-github', repositories: [],
+    userAuthorization, installUrl: 'https://github.com/apps/example-app/installations/new' };
+  server.githubGrant = { userId: '12', login: 'example', accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh',
+    expiresAt: 999_999_999_999_999, refreshExpiresAt: 999_999_999_999_999 };
+  const baseUrl = await server.listen();
+  const authorized = vi.fn(async () => {});
+  const remote = new ScheduleWebhookRemote({ baseUrl: () => baseUrl, getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false, fetch, socketOptions: async () => ({}), logger: {}, onBatch: async () => {},
+    onGithubAuthorized: authorized });
+  try {
+    await remote.sync([]);
+    await remote.connectGithub();
+    const { redirectUri, state } = server.githubConnect!;
+    // Only the ephemeral port comes from the captured request; the test request stays on loopback.
+    const port = Number(new URL(redirectUri).port);
+    const callback = await fetch(`http://127.0.0.1:${port}/github/callback?state=${encodeURIComponent(state)}&code=synthetic`, { redirect: 'manual' });
+    expect(callback.status).toBe(303);
+    expect(server.githubCompleteBody?.includeUserToken).toBe(userAuthorization ? true : undefined);
+    expect(authorized).toHaveBeenCalledTimes(userAuthorization ? 1 : 0);
+    if (userAuthorization) expect(authorized).toHaveBeenCalledWith(server.githubGrant);
+  } finally { remote.stop(); await server.close(); }
+});
+
+// 测试价值：
+// - 防退化点：webhook-server 连续发出 omitted>0 批次时，每次都全量重刷所有覆盖 PR，曾在 35 分钟内制造
+//   16 轮全量扫表放大 GitHub 限流风暴。
+// - 触发条件：在真实 loopback WebSocket 上连续推送 3 批 omitted>0（含窗口内匹配单个 PR 的评论事件与无关仓库事件），
+//   以及冷却窗口过期后的下一批 omitted>0。
+// - 生产入口与可观察结果：ScheduleWebhookRemote.onFrame -> onGithubPrs 与 ACK 帧，断言首批执行一次全量 overflow，
+//   冷却期内只刷新批次显式命中的 PR（reason='event'）且无关批次 0 次全量扫表，窗口结束后恢复全量 overflow。
+// - 依赖策略：仅用同文件 FakeServer 与 Date.now spy，不等待真实 5 分钟时钟。
+// - 对应规则或根因：docs/dev-rules/server-channel-review.md（突发与持续通知下的合并/节流）。
+it('coalesces repeated GitHub overflow bursts within cooldown while still refreshing matched events', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [] };
+  const baseUrl = await server.listen();
+  const urls = [12, 13, 14].map(n => `https://github.com/example/project/pull/${n}`);
+  const heads = { [urls[0]!]: 'a'.repeat(40), [urls[1]!]: 'b'.repeat(40), [urls[2]!]: 'c'.repeat(40) };
+  const onGithubPrs = vi.fn<(urls: string[], current: () => boolean, refresh: GithubPrRefresh) => Promise<void>>(async () => {});
+  let now = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const remote = new ScheduleWebhookRemote({
+    baseUrl: () => baseUrl,
+    getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false,
+    fetch,
+    socketOptions: async () => ({}),
+    logger: {},
+    onBatch: async () => {},
+    onGithubPrs,
+    githubPrHeads: async () => heads,
+  });
+  const follows = urls.map(url => ({ id: url, name: 'Follow', status: 'active', recurring: true,
+    preRunHook: { command: `node gate ${url}` } }) as Schedule);
+  try {
+    await remote.sync(follows);
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(urls[0]!)).toBe(true));
+    onGithubPrs.mockClear();
+
+    // 1. First overflow runs full sweep across all covered PRs and ACKs.
+    server.push({
+      batchId: 'ov-1', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 30,
+      events: [{ deliveryId: 'd-1', event: 'check_run', repository: 'example/project', headSha: heads[urls[0]!]!, receivedAt: 1 }],
+    });
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'ov-1' }));
+    expect(onGithubPrs).toHaveBeenCalledTimes(1);
+    expect(onGithubPrs.mock.calls[0]?.[0]).toEqual(urls);
+    expect(onGithubPrs.mock.calls[0]?.[2]).toEqual({ reason: 'overflow', notify: urls });
+
+    // 2. Second overflow 30s later carries an explicit review comment on #12: only #12 refreshes as 'event'.
+    now += 30_000;
+    server.push({
+      batchId: 'ov-2', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 25,
+      events: [{ deliveryId: 'd-2', event: 'pull_request_review_comment', repository: 'example/project', number: 12, receivedAt: 2 }],
+    });
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'ov-2' }));
+    expect(onGithubPrs).toHaveBeenCalledTimes(2);
+    expect(onGithubPrs.mock.calls[1]?.[0]).toEqual([urls[0]]);
+    expect(onGithubPrs.mock.calls[1]?.[2]).toEqual({ reason: 'event', notify: [urls[0]], reviews: [urls[0]] });
+
+    // 3. Third overflow 60s later has only unrelated repository events: 0 immediate PR refreshes, still ACKed.
+    now += 30_000;
+    server.push({
+      batchId: 'ov-3', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 40,
+      events: [{ deliveryId: 'd-3', event: 'check_run', repository: 'unrelated/repo', headSha: 'd'.repeat(40), receivedAt: 3 }],
+    });
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'ov-3' }));
+    expect(onGithubPrs).toHaveBeenCalledTimes(2);
+
+    // 4. After cooldown expires (>5m since ov-1), next overflow runs a full sweep again.
+    now += 5 * 60_000;
+    server.push({
+      batchId: 'ov-4', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 12,
+      events: [],
+    });
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'ov-4' }));
+    expect(onGithubPrs).toHaveBeenCalledTimes(3);
+    expect(onGithubPrs.mock.calls[2]?.[0]).toEqual(urls);
+    expect(onGithubPrs.mock.calls[2]?.[2]).toEqual({ reason: 'overflow', notify: urls });
+  } finally {
+    clock.mockRestore();
+    remote.stop();
+    await server.close();
+  }
+});
+
+// 测试价值：
+// - 防退化点：冷却期内遗漏批次已 ACK，若尾部补查绑定旧的 githubSynced，则在定时器触发前增删跟进 PR
+//   会让 isCurrent() 返回 false 并静默丢弃对既有 PR 的遗漏补查。
+// - 触发条件：首个 overflow 成功后，在冷却结束前 30ms 收到第二个 omitted>0 批次，并在定时器触发前
+//   通过 remote.sync() 新增一个跟进 PR 改变 githubSynced。
+// - 生产入口与可观察结果：ScheduleWebhookRemote.onFrame + sync -> 尾部定时器触发 onGithubPrs，
+//   断言使用最新订阅覆盖全部 PR（含原 PR 与新增 PR）执行一次 reason='overflow' 补查；切换/pause 后不误触发。
+// - 依赖策略：真实 loopback FakeServer + Date.now spy（尾部定时器仅余 30ms，无长等待）。
+// - 对应规则或根因：PR #13282 Greptile P1（订阅变化不丢弃已 ACK 的尾部补查，同时保留账号/连接边界）。
+it('runs a deferred trailing GitHub overflow sweep even if PR subscriptions change during cooldown', async () => {
+  const server = new FakeServer();
+  server.github = { available: true, login: 'example-user', endpointId: 'whk-github', repositories: [], prSubscriptions: true };
+  const baseUrl = await server.listen();
+  const initialUrls = [12, 13].map(n => `https://github.com/example/project/pull/${n}`);
+  const addedUrl = 'https://github.com/example/project/pull/14';
+  const allUrls = [...initialUrls, addedUrl];
+  const heads = { [initialUrls[0]!]: 'a'.repeat(40), [initialUrls[1]!]: 'b'.repeat(40), [addedUrl]: 'c'.repeat(40) };
+  const onGithubPrs = vi.fn<(urls: string[], current: () => boolean, refresh: GithubPrRefresh) => Promise<void>>(async () => {});
+  let now = Date.now();
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const remote = new ScheduleWebhookRemote({
+    baseUrl: () => baseUrl,
+    getAccessToken: async () => 'token-1',
+    refreshAccessToken: async () => false,
+    fetch,
+    socketOptions: async () => ({}),
+    logger: {},
+    onBatch: async () => {},
+    onGithubPrs,
+    githubPrHeads: async () => heads,
+  });
+  const makeFollow = (url: string) => ({ id: url, name: 'Follow', status: 'active', recurring: true,
+    preRunHook: { command: `node gate ${url}` } }) as Schedule;
+  const repoPuts = () => server.requests.filter(r => r === 'PUT /api/v1/github/repositories').length;
+  try {
+    await remote.sync(initialUrls.map(makeFollow));
+    await vi.waitFor(() => expect(remote.githubEventsHealthy(initialUrls[0]!)).toBe(true), { interval: 5 });
+    onGithubPrs.mockClear();
+
+    // 1. First overflow completes and arms the 5-minute cooldown at `now`.
+    server.push({
+      batchId: 'sub-ov-1', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 20,
+      events: [],
+    });
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'sub-ov-1' }), { interval: 5 });
+    expect(onGithubPrs).toHaveBeenCalledTimes(1);
+    onGithubPrs.mockClear();
+
+    // 2. Second overflow arrives 80ms before cooldown ends: ACKed and schedules one trailing sweep.
+    now += 5 * 60_000 - 80;
+    server.push({
+      batchId: 'sub-ov-2', endpointId: 'whk-github', scheduleId: '__github_pr_watch__', omitted: 15,
+      events: [],
+    });
+    await vi.waitFor(() => expect(server.frames).toContainEqual({ type: 'ack', batchId: 'sub-ov-2' }), { interval: 5 });
+
+    // 3. Before the trailing timer fires, add a third PR on the same account/connection (mutating githubSynced).
+    const putsBefore = repoPuts();
+    await remote.sync(allUrls.map(makeFollow));
+    expect(repoPuts()).toBe(putsBefore + 1);
+    expect(onGithubPrs.mock.calls.filter(([, , refresh]) => refresh.reason === 'overflow')).toHaveLength(0);
+
+    // 4. Trailing overflow sweep must STILL run and cover all PRs (including the original ones), not be dropped!
+    await vi.waitFor(() => {
+      const overflowCalls = onGithubPrs.mock.calls.filter(([, , refresh]) => refresh.reason === 'overflow');
+      expect(overflowCalls).toHaveLength(1);
+      expect(overflowCalls[0]?.[0]).toEqual(allUrls);
+      expect(overflowCalls[0]?.[2]).toEqual({ reason: 'overflow', notify: allUrls });
+    }, { interval: 10 });
+  } finally {
+    clock.mockRestore();
+    remote.stop();
+    await server.close();
+  }
 });

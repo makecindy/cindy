@@ -1,9 +1,9 @@
 import { openPluginTaskTab } from './openPluginTaskTab';
-import { openRoutinesTab } from './openRoutinesTab';
+import { openPluginUiView } from './openPluginUiView';
 import { openMailPreview, openMailCard } from './mailPreview';
 /** 执行 main 已裁决并推给当前 renderer host 的 RSB command。 */
 
-import type { RsbWindowCommand } from '../../../../shared/rightSidebarWindow';
+import type { RsbWindowCommand, RsbWindowContext } from '../../../../shared/rightSidebarWindow';
 import { addOrFocusSingletonTab, closeTab, ensureHydrated, getBucket } from '../store';
 import {
   closeOrcaWorkersTabAfterTeamEnd,
@@ -20,7 +20,14 @@ import { openTurnReview } from './openTurnReview';
 import { openUrlInSidebarBrowser } from './openInSidebarBrowser';
 
 /** 在 main 已选定的当前 renderer host 中执行命令，不自行选择宿主。 */
-export async function executeSidebarCommand(command: RsbWindowCommand): Promise<void> {
+export async function executeSidebarCommand(
+  command: RsbWindowCommand,
+  attachedContext?: Pick<RsbWindowContext, 'sessionId' | 'deviceLinkDeviceId'>,
+): Promise<void> {
+  if (command.type === 'open-plugin-view') {
+    await openPluginUiView(command.instanceId, command.resourceViewId, null, command.resourceInput);
+    return;
+  }
   if (command.type === 'open-mail-card') {
     await openMailCard(command.sessionId, command.callId);
     return;
@@ -32,15 +39,21 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
   if (command.type === 'open-plugin-task') {
     await openPluginTaskTab(command.sessionId, command.instanceId, {
       userInitiated: command.userInitiated === true,
+      ...(command.resourceViewId ? { resourceViewId: command.resourceViewId } : {}),
+      ...(command.resourceWorkingDir ? { resourceWorkingDir: command.resourceWorkingDir } : {}),
+      ...(command.resourceInput ? { resourceInput: command.resourceInput } : {}),
     });
     return;
   }
-  if (command.type === 'open-routines-tab') {
-    await openRoutinesTab(command.sessionId, command.botId);
-    return;
-  }
   if (command.type === 'open-web-browser') {
-    await openUrlInSidebarBrowser(command.sessionId, command.url);
+    if (command.pluginPreview) {
+      await openUrlInSidebarBrowser(command.sessionId, command.url, {
+        pluginPreview: command.pluginPreview,
+        userInitiated: false,
+      });
+    } else {
+      await openUrlInSidebarBrowser(command.sessionId, command.url);
+    }
     return;
   }
   if (command.type === 'open-file-browser') {
@@ -94,6 +107,8 @@ export async function executeSidebarCommand(command: RsbWindowCommand): Promise<
     return;
   }
   if (command.type === 'toggle-review-tab') {
+    const context = attachedContext ?? await window.electronAPI.rightSidebarWindow.getContext();
+    if (context?.sessionId !== command.sessionId || context.deviceLinkDeviceId === undefined) return;
     await ensureHydrated(command.sessionId);
     const bucket = getBucket(command.sessionId);
     const reviewTab = bucket.tabs.find((tab) => tab.kind === 'review');

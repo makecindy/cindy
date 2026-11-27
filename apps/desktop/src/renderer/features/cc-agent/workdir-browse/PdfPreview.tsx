@@ -278,6 +278,7 @@ function PdfPage({
       data-pdf-page={pageNumber}
       data-pdf-page-placeholder={renderState !== 'rendered' ? 'true' : undefined}
       aria-busy={renderState !== 'rendered'}
+      // PDF 纸张自身的小圆角，属内容几何（DESIGN.md §5 插画登记，阴影见 §6）
       className="relative mb-2 shrink-0 overflow-hidden rounded-sm bg-white shadow-sm last:mb-0"
       style={{
         width: `${Math.floor(pageSize.width)}px`,
@@ -771,7 +772,7 @@ export function PdfPreview({ workdir, relPath, size, mtimeMs }: PdfPreviewProps)
                 onKeyDown={(event) => {
                   if (event.key === 'Escape') setPageInput(null);
                 }}
-                className="h-8 w-12 rounded-full border border-[var(--border-default)] bg-transparent text-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--text-primary)]"
+                className="h-8 w-12 rounded-full border border-[var(--border-default)] bg-transparent text-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               />
               <span>/ {pageCount}</span>
             </form>

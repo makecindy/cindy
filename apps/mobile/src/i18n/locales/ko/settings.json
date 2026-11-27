@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "푸시 알림 진단",
+    "read": "푸시 상태 읽기",
+    "busy": "읽는 중…",
+    "failed": "푸시 상태를 읽을 수 없습니다. 다시 시도하세요.",
+    "copyFailed": "토큰을 복사할 수 없습니다.",
+    "copied": "토큰을 복사했습니다.",
+    "bundle": "앱 ID",
+    "build": "빌드",
+    "environment": "APNs 환경",
+    "permission": "시스템 권한",
+    "alerts": "알림 배너",
+    "lockScreen": "잠금 화면",
+    "notificationCenter": "알림 센터",
+    "copy": "APNs 토큰 복사",
+    "hide": "결과 숨기기",
+    "unknown": "알 수 없음",
+    "on": "켜짐",
+    "off": "꺼짐",
+    "hint": "버튼을 누를 때만 읽습니다. APNs 토큰은 이 화면에만 표시되며 진단 기록에 저장되거나 이 도구로 업로드되지 않습니다. 화면을 나가거나 백그라운드로 전환하면 숨겨집니다. Apple 푸시 알림 콘솔용으로만 복사하세요. 복사한 내용은 클립보드에 남습니다.",
+    "permissions": {
+      "granted": "허용됨",
+      "denied": "거부됨",
+      "undetermined": "요청하지 않음",
+      "provisional": "조용히 전달"
+    }
+  },
   "localLogs": {
     "upload": "로그 업로드",
     "uploadResult": {
@@ -20,6 +47,12 @@
     "footer": "로그는 휴대폰에 최대 7일, 8MB까지 저장되며 자동으로 업로드되지 않습니다. 내보낸 로그에는 대화 본문과 자격 증명이 포함되지 않고, 업로드 시에는 필터링된 실행 기록과 버전 정보만 보냅니다."
   },
   "title": "설정",
+  "promptRecommendation": {
+    "label": "다음 입력 제안",
+    "description": "답변 후 다음에 입력할 내용을 제안합니다. 이 휴대폰에만 적용됩니다.",
+    "saveFailed": "설정은 현재 사용 중에는 적용되지만 저장하지 못했습니다.",
+    "reset": "기본값으로 재설정"
+  },
   "appearance": {
     "title": "외관",
     "modeLabel": "표시 모드",
@@ -29,6 +62,28 @@
       "dark": "다크"
     },
     "saveFailed": "표시 모드를 저장하지 못했습니다. 다시 열면 이전 설정으로 돌아갑니다.",
+    "wallpaper": {
+      "title": "배경화면",
+      "choose": "사진 또는 동영상 선택",
+      "replace": "배경화면 교체",
+      "remove": "배경화면 제거",
+      "importing": "처리 중…",
+      "tooLarge": "20MB 이하의 사진이나 100MB 이하의 동영상을 선택하세요.",
+      "importFailed": "사진 또는 동영상을 가져오지 못했습니다.",
+      "saveFailed": "배경화면 설정을 저장하지 못했습니다.",
+      "static": "정적",
+      "dynamic": "동적",
+      "motionLabel": "표시 방식",
+      "options": {
+        "none": "없음",
+        "custom": "사용자 지정 배경화면",
+        "cindy-whisper": "속삭임",
+        "cindy-night-glance": "밤의 눈길",
+        "cindy-scarlet-stroll": "붉은 밤 산책",
+        "cindy-neon": "네온 옆모습",
+        "cindy-prism": "프리즘 조각"
+      }
+    },
     "userBubble": {
       "title": "내 메시지 말풍선 색상",
       "presets": "색상",
@@ -52,6 +107,16 @@
       "reset": "기본값으로 복원",
       "apply": "적용",
       "hex": "색상 코드"
+    },
+    "appIcon": {
+      "label": "앱 아이콘",
+      "saveFailed": "앱 아이콘을 변경하지 못했습니다. 다시 시도해 주세요",
+      "options": {
+        "default": "기본",
+        "cat": "검은 고양이",
+        "wordmark": "Cindy 워드마크",
+        "mark": "Cindy 심볼"
+      }
     }
   },
   "language": {
@@ -81,7 +146,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "문언문(기본)",
+        "prose": "문언문",
         "tang-poetry": "당시",
         "song-ci": "송사",
         "yuan-qu": "원곡",
@@ -135,11 +200,20 @@
     "permissionDenied": "시스템 설정에서 Cindy 알림을 허용해 주세요.",
     "unregisterQueued": "껐습니다. 다시 온라인이 되면 등록 해제가 완료됩니다.",
     "preview": "채팅 내용 미리 보기",
-    "background": "백그라운드 채팅 연결 유지",
-    "backgroundActive": "백그라운드에서 채팅 메시지 수신 중",
+    "background": "백그라운드 알림",
+    "backgroundActive": "백그라운드에서 알림 수신 중",
     "backgroundStop": "수신 중지",
-    "backgroundHint": "Google 없이 연결하며 상시 알림이 표시됩니다. 알림에서 언제든 중지할 수 있습니다.",
-    "googleUnavailable": "Google 푸시를 사용할 수 없습니다. 백그라운드 채팅 연결로 메시지를 받을 수 있습니다."
+    "backgroundHint": "Google 푸시를 사용하기 어려운 경우 Cindy가 자동으로 백그라운드 연결을 유지합니다. 연결 중에는 상시 알림이 표시됩니다.",
+    "googleUnavailable": "Google 푸시를 사용할 수 없습니다. 알림 설정에 따라 백그라운드 연결을 사용합니다.",
+    "backgroundModes": {
+      "auto": "자동",
+      "on": "항상 켜기",
+      "off": "끄기"
+    },
+    "actionReplyPlaceholder": "답장 입력",
+    "actionNotDelivered": "컴퓨터에 전달되지 않았습니다. Cindy를 열어 처리해 주세요.",
+    "actionReplyNotDelivered": "답장이 전송되지 않았습니다. Cindy를 열어 다시 보내 주세요: {{text}}",
+    "actionRequestEnded": "이 요청은 이미 처리되었거나 만료되었습니다."
   },
   "about": {
     "sectionTitle": "이 휴대폰 정보",
@@ -172,14 +246,14 @@
   },
   "devServerEnvironment": {
     "title": "서버 환경",
-    "description": "CindyDev가 연결하는 업무 서버에만 영향을 줍니다",
+    "description": "CindyDev가 연결하는 백엔드 서버에만 영향을 줍니다",
     "accessibility": "서버 환경 전환",
     "options": {
       "dev": "Dev",
       "release": "Release"
     },
     "confirmTitle": "{{environment}} 환경으로 전환할까요?",
-    "confirmBody": "전환하면 현재 계정에서 로그아웃되고 App이 다시 시작됩니다.",
+    "confirmBody": "전환하면 현재 계정에서 로그아웃되고 앱이 다시 시작됩니다.",
     "cancel": "취소",
     "switchAction": "전환",
     "switching": "전환 중",
@@ -211,7 +285,7 @@
     "openUserAgreement": "이용약관 열기",
     "appFilingNumber": "앱 등록 번호",
     "analytics": "사용 통계",
-    "analyticsHint": "실행 및 지속 사용 현황 파악에 사용합니다. 기기 모델, OS·앱 버전, 기기 식별자 등의 정보와 로그인 후 계정 ID를 전송하며, 대화·파일·프롬프트는 포함하지 않습니다.",
+    "analyticsHint": "이 설정을 켜면 계정 ID 대신 가명을 사용하고, 기기 식별자와 함께 앱 실행과 재방문 현황을 파악해 제품을 개선하는 데 활용합니다. 결제에는 별도의 가명을 사용합니다. 대화, 파일, 프롬프트는 이 통계에 포함되지 않습니다.\n이전 버전의 기록에는 원래 계정 ID가 있습니다. 이 기록을 볼 수 있는 사람은 같은 기기 식별자를 통해 새 가명을 원래 계정과 연결할 수도 있습니다.",
     "analyticsSaveFailed": "설정을 저장하지 못했습니다. 다시 시작하면 이전 값으로 되돌아갈 수 있습니다.",
     "analyticsReset": "기본값으로 되돌리기",
     "analyticsResetAction": "되돌리기"
@@ -388,7 +462,92 @@
       "voice": "길게 눌러 말하기",
       "scrollKeys": "오른쪽 스틱",
       "scroll": "스크롤",
-      "page": "페이지 이동"
+      "page": "페이지 이동",
+      "triggerScrollKeys": "L2 / R2 + 방향키 위/아래",
+      "triggerScroll": "표시된 내용 스크롤",
+      "sendText": "입력한 글 보내기",
+      "taskHint": "이 단축키는 세션 화면에서 사용할 수 있습니다. 음성 키로 지정한 버튼은 음성 입력이 우선되며, 놓으면 글이 입력란에 남습니다."
     }
+  },
+  "projectInfo": {
+    "automatic": "프로젝트 아이콘 사용",
+    "autoLoading": "아이콘 찾는 중…",
+    "autoNone": "프로젝트 이름으로 만든 문자 아이콘을 사용합니다.",
+    "autoSource": "출처",
+    "githubAvatar": "GitHub 계정 이미지 사용",
+    "title": "프로젝트 설정",
+    "name": "표시 이름",
+    "saveName": "이름 저장",
+    "reset": "기본값 복원",
+    "icon": "아이콘",
+    "directory": "프로젝트 폴더",
+    "done": "완료",
+    "failed": "저장하지 못했습니다. 다시 시도하세요.",
+    "unavailable": "설정을 사용할 수 없습니다. 업데이트된 컴퓨터에 연결하고 다시 시도하세요.",
+    "back": "뒤로",
+    "cancel": "취소",
+    "changeIcon": "아이콘 변경",
+    "chooseIcon": "아이콘 선택",
+    "save": "저장",
+    "symbols": "아이콘",
+    "emoji": "이모지",
+    "letters": "문자",
+    "image": "이미지",
+    "upload": "이미지 업로드",
+    "imageHint": "PNG, JPG, WebP · 정사각형으로 자르기",
+    "imageError": "이미지를 읽을 수 없습니다. 더 작은 PNG 또는 JPG를 사용하세요.",
+    "search": "아이콘 검색",
+    "customEmoji": "이모지 붙여넣기",
+    "lettersHint": "문자 또는 숫자 1~2개를 입력하세요.",
+    "thisComputer": "이 컴퓨터",
+    "nameHint": "프로젝트 목록에 표시됩니다. 폴더 이름은 바뀌지 않습니다.",
+    "copy": "경로 복사",
+    "copied": "복사됨",
+    "applyIcon": "아이콘 사용",
+    "noResults": "일치하는 아이콘이 없습니다",
+    "discardHint": "저장하지 않은 변경을 취소할까요?",
+    "keepEditing": "계속 편집",
+    "discard": "변경 취소",
+    "colors": {
+      "default": "기본 색상 (테마에 맞춤)"
+    },
+    "directories": "프로젝트 디렉터리",
+    "directoriesHint": "다음 턴부터 이 프로젝트의 모든 작업에 적용됩니다. 기존 작업별 디렉터리는 유지됩니다.",
+    "removeDirectory": "디렉터리 제거",
+    "directoryPath": "전체 디렉터리 경로",
+    "addDirectory": "디렉터리 추가",
+    "browseDirectory": "디렉터리 찾아보기",
+    "mainDirectory": "기본 디렉터리",
+    "createTitle": "새 프로젝트",
+    "createAction": "프로젝트 만들기",
+    "repository": "저장소 URL",
+    "repositoryHint": "GitHub, GitLab 및 다른 Git 저장소의 HTTPS / SSH 링크를 지원합니다.",
+    "autoDirectory": "디렉터리를 선택하지 않으면 {{path}}에 만듭니다. 이름이 겹치면 번호를 붙입니다.",
+    "cloning": "저장소 복제 중…",
+    "invalidRepository": "유효한 GitHub, GitLab 또는 Git 저장소 URL을 입력하세요.",
+    "createFailed": "프로젝트를 만들 수 없습니다. 디렉터리 쓰기 권한, 저장소 URL 및 이 컴퓨터의 Git 접근 권한을 확인하세요. 복제 대상은 비어 있어야 합니다.",
+    "createNamePlaceholder": "프로젝트 이름",
+    "createNameHint": "프로젝트 이름을 정하고 시작하세요.",
+    "createFromRepository": "코드 저장소에서 만들기",
+    "createBlank": "빈 프로젝트로 전환",
+    "source_blank": "빈 프로젝트 만들기",
+    "source_existing": "기존 폴더 열기",
+    "source_repository": "코드 저장소 가져오기",
+    "sourceHint_blank": "이름을 입력하면 폴더가 자동으로 생성됩니다.",
+    "sourceHint_existing": "이 컴퓨터의 기존 프로젝트 폴더를 선택하세요.",
+    "sourceHint_repository": "저장소 링크를 붙여 넣어 이 컴퓨터에 다운로드하세요.",
+    "source": "프로젝트 소스",
+    "sourceShort_blank": "새 프로젝트",
+    "sourceShort_existing": "폴더",
+    "sourceShort_repository": "저장소",
+    "automaticMain": "기본 · 자동 생성",
+    "source_local": "로컬 폴더",
+    "sourceShort_local": "로컬 폴더",
+    "sourceHint_local": "이름을 입력해 새로 만들거나 기존 폴더를 선택하세요.",
+    "chooseExistingFolder": "기존 폴더 선택",
+    "changeMainDirectory": "변경"
+  },
+  "navigation": {
+    "unavailable": "대상 컴퓨터의 설정을 열 수 없습니다. 온라인 상태이고 원격 제어가 허용되어 있는지 확인하세요. 이전 버전이라면 Cindy를 업데이트하세요."
   }
 }

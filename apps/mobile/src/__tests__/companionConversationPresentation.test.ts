@@ -2,7 +2,8 @@ import { redactMessageRowForSharedGuest } from '../../../desktop/src/main/device
 import { HISTORY_GAP_SPLIT_MS } from '@cindy/maker-shared/history-gap';
 import { expect, it } from 'vitest';
 import { buildMobileMessageRenderItems } from '../session/messageRenderModel';
-import { companionConversationItems } from '../session/companionConversationPresentation';
+import { companionConversationItems, companionProcessItems } from '../session/companionConversationPresentation';
+import { findMobileRenderItemKeyByClientId } from '../session/messageScroll';
 import type { RemoteMessage } from '../session/types';
 const row = (id: string, role: RemoteMessage['role'], content: unknown, agentMeta: RemoteMessage['agentMeta'] = null): RemoteMessage => ({
   id, clientId: id, sessionId: 'chat', role, content, agentMeta, toolUseId: null, createdAt: new Date(1000 + Number(id.replace(/\D/g, '') || 0)).toISOString(),
@@ -11,6 +12,32 @@ const bodies = (messages: RemoteMessage[], running: boolean) => companionConvers
 const base = [row('u0', 'user', 'Help'), row('a1', 'assistant', 'Public progress'),
   row('t2', 'tool_use', { toolName: 'Read', toolUseId: 't', input: { path: 'private' } }),
   row('r3', 'tool_result', { toolUseId: 't', result: 'technical details' })];
+
+// Unit regression for #7594: two persisted idle-gap rows suffice to make an expanded
+// work group show duplicates. Exercise normalization, projection and focus lookup.
+it('folds repeated legacy recovery cards and preserves each source as a focus target', () => {
+  const card = (id: string, handoff = 'Same handoff', reason = 'idle-gap', coverage = 'complete') =>
+    row(id, 'assistant', '', { contextRebuild: { reason, handoff, handoffCoverage: coverage } });
+  const lateCard = { ...card('late9'), createdAt: new Date(1010 + HISTORY_GAP_SPLIT_MS).toISOString() };
+  const source = [
+    card('old1'), card('old2'), row('u3', 'user', 'New topic'),
+    card('old4'), card('old5'), card('old6', 'Different handoff'),
+    card('old7', 'Different handoff', 'idle-gap', 'condensed'),
+    card('old8', 'Different handoff', 'context-overflow', 'condensed'),
+    card('old9'), lateCard,
+  ];
+  const raw = buildMobileMessageRenderItems(source);
+  const items = companionProcessItems(raw, false);
+  const children = items.flatMap(item => item.type === 'work_group' ? item.children : []);
+  expect(children.flatMap(item => item.type === 'message' ? [item.message.source.clientId] : []))
+    .toEqual(['old2', 'old5', 'old6', 'old7', 'old8', 'old9', 'late9']);
+  expect(items.filter(item => item.type === 'work_group')).toHaveLength(3);
+  expect(items.some(item => item.type === 'message' && item.message.body === 'New topic')).toBe(true);
+  expect(findMobileRenderItemKeyByClientId(items, 'old1')).toBe(findMobileRenderItemKeyByClientId(items, 'old2'));
+  expect(findMobileRenderItemKeyByClientId(items, 'old2')).not.toBeNull();
+  expect(findMobileRenderItemKeyByClientId(items, 'old4')).toBe(findMobileRenderItemKeyByClientId(items, 'old5'));
+  expect(raw.filter(item => item.type === 'message' && item.message.systemCardType === 'context-rebuild')).toHaveLength(9);
+});
 // B2B host metadata must survive native history projection without exposing internal prose.
 it.each([true, false])('keeps internal B2B prose hidden in streaming and reloaded companion history (%s)', running => {
   const internal = row('a1', 'assistant', 'Internal reply', { botPrivateReply: true, turnCompleted: true });
@@ -248,19 +275,20 @@ it('keeps a component progress answer visible before finalization and later tool
 
 // Unit: actual normalize → ordinary grouping → teammate journal. A streaming
 // commentary followed by one tool used to become separate top-level messages.
-it('keeps mobile progress in one stable process across tools, switch and completion', async () => {
+it('keeps the standard mobile switch card outside process disclosures', async () => {
   const { companionProcessItems } = await import('../session/companionConversationPresentation');
   const stages = [base.slice(0, 1).concat(row('a1', 'assistant', 'Checking', { assistantPhase: 'commentary' })),
     base, [...base, row('s4', 'agent_switch', { fromAgentKind: 'codex', toAgentKind: 'pi' }), row('a5', 'assistant', 'Continuing', { assistantPhase: 'commentary' })]];
-  const keys = stages.map(source => {
+  const keys = stages.map((source, index) => {
     const items = companionProcessItems(buildMobileMessageRenderItems(source, { isSessionStreaming: true }), true);
-    expect(items.filter(item => item.type === 'work_group')).toHaveLength(1);
+    expect(items.filter(item => item.type === 'work_group')).toHaveLength(index === 2 ? 2 : 1);
     return items.find(item => item.type === 'work_group')!.key;
   });
   expect(new Set(keys).size).toBe(1);
   const done = companionProcessItems(buildMobileMessageRenderItems([...stages[2], row('a6', 'assistant', 'Result', { turnCompleted: true })], { isSessionStreaming: false }), false);
   expect(done.find(item => item.type === 'work_group')?.key).toBe(keys[0]);
-  expect(done.filter(item => item.type === 'message').map(item => item.message.body)).toEqual(['Help', 'Result']);
+  expect(done.flatMap(item => item.type === 'message' && !item.message.systemCardType ? [item.message.body] : [])).toEqual(['Help', 'Result']);
+  expect(done.some(item => item.type === 'message' && item.message.systemCardType === 'agent-switch')).toBe(true);
   expect(JSON.stringify(done)).toContain('technical details');
   expect(JSON.stringify(done)).toContain('Continuing');
 });

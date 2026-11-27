@@ -1,23 +1,28 @@
-import { codexAccountState } from '../../maker-host/codex-account-auth.js';
-vi.mock('../../maker-host/codex-account-auth.js', () => ({ codexAccountState: vi.fn() }));
+import { codexAccountState } from '../../maker-host/codex-account-auth.desktop.js';
+vi.mock('../../maker-host/codex-account-auth.desktop.js', () => ({ codexAccountState: vi.fn() }));
 /**
  * oneshotProviderUsability.test.ts — 凭证同步探测单测(store 全 mock)。
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+const poolState = vi.hoisted(() => ({ models: null as null | [], connected: false }));
+vi.mock('../../subscription-accounts/runtime.js', () => ({
+  readSubscriptionPoolCodexModels: () => poolState.models,
+  hasConnectedSubscriptionPool: () => poolState.connected,
+}));
 import type { Provider } from '@cindy/model-providers';
 
 vi.mock('../../maker-host/auth-adapters.js', () => ({ readClaudeApiKey: vi.fn() }));
 vi.mock('../../maker-host/codex-oauth-readiness.js', () => ({ hasChatgptOneshotReadiness: vi.fn() }));
-vi.mock('../../maker-host/generic-oauth.js', () => ({ readCachedGenericOAuthAccessToken: vi.fn() }));
-vi.mock('../../maker-host/grok-oauth-login.js', () => ({ hasGrokOAuthLogin: vi.fn() }));
+vi.mock('../../maker-host/generic-oauth.desktop.js', () => ({ readCachedGenericOAuthAccessToken: vi.fn() }));
+vi.mock('../../maker-host/grok-oauth-login.desktop.js', () => ({ hasGrokOAuthLogin: vi.fn() }));
 vi.mock('../../model-access/effectiveEndpoint.js', () => ({ effectiveXdGatewayBaseUrl: vi.fn() }));
 vi.mock('../../secrets/providerSecretStore.js', () => ({ readCustomProviderKey: vi.fn() }));
 
 import { readClaudeApiKey } from '../../maker-host/auth-adapters.js';
 import { hasChatgptOneshotReadiness } from '../../maker-host/codex-oauth-readiness.js';
-import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.js';
-import { hasGrokOAuthLogin } from '../../maker-host/grok-oauth-login.js';
+import { readCachedGenericOAuthAccessToken } from '../../maker-host/generic-oauth.desktop.js';
+import { hasGrokOAuthLogin } from '../../maker-host/grok-oauth-login.desktop.js';
 import { effectiveXdGatewayBaseUrl } from '../../model-access/effectiveEndpoint.js';
 import { readCustomProviderKey } from '../../secrets/providerSecretStore.js';
 
@@ -36,6 +41,8 @@ function provider(over: Partial<Provider> & { id: string }): Provider {
 }
 
 beforeEach(() => {
+  poolState.models = null;
+  poolState.connected = false;
   vi.mocked(readClaudeApiKey).mockReset();
   vi.mocked(hasChatgptOneshotReadiness).mockReset();
   vi.mocked(readCachedGenericOAuthAccessToken).mockReset();
@@ -45,6 +52,16 @@ beforeEach(() => {
 });
 
 describe('hasOneshotProviderCredential · 内置四家', () => {
+  // Unit regression: a connected pool must not depend on the legacy default CLI file.
+  it('uses pool connection state instead of an unrelated default login', () => {
+    const p = provider({ id: 'pool-a', subscriptionPool: 'openai', auth: { method: 'oauth' } });
+    poolState.models = [];
+    poolState.connected = true;
+    expect(hasOneshotProviderCredential(p, 'codex')).toBe(true);
+    poolState.connected = false;
+    vi.mocked(hasChatgptOneshotReadiness).mockReturnValue(true);
+    expect(hasOneshotProviderCredential(p, 'codex')).toBe(false);
+  });
   it('xd:key 与端点都要在', () => {
     vi.mocked(readClaudeApiKey).mockReturnValue('k');
     vi.mocked(effectiveXdGatewayBaseUrl).mockReturnValue('https://gw.example.com');

@@ -1,3 +1,5 @@
+import type { MessageSourcePluginRelay } from '@cindy/maker-shared/message-source';
+
 /** Displayable context captured from the same filtered prefixes used for this turn.
  * Never includes persona/system instructions or binary history attachments.
  */
@@ -40,6 +42,7 @@ const IM_CHANNEL_DISPLAY_NAMES: Record<string, string> = {
   wecom: '企业微信',
   dingtalk: '钉钉',
   discord: 'Discord',
+  imessage: 'iMessage',
   slack: 'Slack',
   x: 'X',
 };
@@ -56,6 +59,43 @@ export function createLocalImSource(
   origin?: ImMessageOrigin,
 ): ImMessageSource {
   return { im, userText, contentFormat: 'user-text', contextSnapshot, ...(origin ? { origin } : {}) };
+}
+
+/**
+ * 插件转发的 IM 消息（`sourcePlugin.relay`，宿主盖章）→ 桌面 IM 卡片的展示模型。只在投影层派生，
+ * 不落库成 imSource / hookSource（那会被伙伴镜像、交接和访客投影当成真渠道消息）。
+ * 正文只放插件的可见 text；附带资料里只取插件按 groupWindowCore 格式附上的
+ * `<group_chat_context>` 块作群聊背景，`[渠道说明]` 等技术指引不显示。
+ * 插件标明是主人本人时按主人措辞（「Cindy · 来自 X」）；插件来源标签另在卡片上方照常显示。
+ */
+export function createPluginRelayImSource(
+  relay: MessageSourcePluginRelay,
+  message: { text: string; context?: string },
+): ImMessageSource {
+  const origin: ImMessageOrigin | undefined = relay.sender.isOwner
+    ? undefined
+    : {
+        chat: { kind: relay.chatType, ...(relay.chatName ? { name: relay.chatName } : {}) },
+        sender: { id: relay.sender.id, name: relay.sender.name, isOwner: false },
+      };
+  return createLocalImSource(relay.platform, message.text, pluginRelayGroupContext(message.context), origin);
+}
+
+const GROUP_CHAT_CONTEXT_TAG = '<group_chat_context>';
+
+function pluginRelayGroupContext(context: string | undefined): ImContextSnapshot {
+  let block = '';
+  if (context?.startsWith(GROUP_CHAT_CONTEXT_TAG)) {
+    block = context;
+  } else if (context) {
+    const at = context.indexOf(`\n${GROUP_CHAT_CONTEXT_TAG}`);
+    if (at >= 0) block = context.slice(at + 1);
+  }
+  if (!block) return {};
+  // captureImContext is anchored: hand it the block only, never the plugin's guidance paragraph.
+  // The plugin reports no per-message count, so the card shows no count (never guessed from lines).
+  const { groupContext } = captureImContext({ groupPrefix: block });
+  return groupContext ? { groupContext } : {};
 }
 
 /** Only call on a host-generated prefix, never search arbitrary message bodies. */

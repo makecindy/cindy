@@ -22,7 +22,7 @@ const comparePublishedSkill = vi.fn();
 vi.mock('../publishedComparison', () => ({ comparePublishedSkill }));
 const showOpenDialog = vi.fn();
 const showMessageBox = vi.fn();
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 const assertTrustedAppRendererEvent = vi.fn();
 const isTrustedAppRendererWindow = vi.fn();
 const publishServiceOptions = vi.hoisted(() => ({ onProgress: null as null | ((event: unknown) => void) }));
@@ -63,6 +63,34 @@ vi.mock('electron', () => ({
       handlers.set(channel, handler);
     }),
   },
+}));
+
+// Captures the remote Skills provider that registerSkillhubIpc publishes when relay is online.
+const registeredRemoteProviders = vi.hoisted(
+  () => [] as Array<{ list?: (context: { controllerDeviceId: string }) => Promise<unknown> }>,
+);
+vi.mock('../../device-link/remoteResourceRegistry', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../device-link/remoteResourceRegistry')>()),
+  remoteResourceRegistry: {
+    register: (provider: (typeof registeredRemoteProviders)[number]) => {
+      registeredRemoteProviders.push(provider);
+      return () => undefined;
+    },
+  },
+}));
+// Remote access for that provider: control enabled, owner scope current, peer still authorized.
+vi.mock('../../device-link/settings-store.desktop', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../device-link/settings-store.desktop')>()),
+  readDeviceLinkSettings: () => ({ remoteControlEnabled: true, revokedControllers: [] }),
+}));
+vi.mock('../../device-link/broadcast-tap', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../device-link/broadcast-tap')>()),
+  captureDataOwnerBroadcastScope: () => ({}),
+  isDataOwnerBroadcastScopeCurrent: () => true,
+}));
+vi.mock('../../plugin-oauth/runtime', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../plugin-oauth/runtime')>()),
+  capturePluginOauthPeer: () => () => undefined,
 }));
 
 vi.mock('../../security/trustedAppRenderer.js', () => ({
@@ -224,7 +252,7 @@ describe('registerSkillhubIpc usage handlers', () => {
         if (transition === 'revoked') getAllowedProjectRoots.mockResolvedValueOnce([]);
         if (transition === 'failure') throw new Error('unreadable local directory');
         if (['429', '503', 'network', '404'].includes(transition)) {
-          const { ServerApiError } = await import('../../serverApiClient');
+          const { ServerApiError } = await import('../../serverApiClient.desktop');
           throw new ServerApiError('TEST_ERROR', transition === 'network' ? 0 : Number(transition), 'remote failure');
         }
         return { status: 'different', version: '1.0.0', pending: false, changes: [{ oldContent: 'private content' }] };
@@ -335,6 +363,78 @@ describe('registerSkillhubIpc usage handlers', () => {
     })).resolves.toMatchObject({ success: false, message: expect.stringContaining('cannot be published') });
     expect(assertTrustedAppRendererEvent).toHaveBeenCalledWith(event);
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  // PR #12070 review: startup only warms the shared Skill preparation in the background, and
+  // that pass is rejected while a saved owner is restored. A scan must join the preparation
+  // before reading the built-in bundle, and a failed preparation must not hide the list.
+  it.each([
+    ['joins preparation before reading built-in Skills', false],
+    ['still lists when preparation fails', true],
+  ] as const)('skillhub:scan %s', async (_name, fails) => {
+    let prepared = false;
+    const descriptor = {
+      name: 'cindy-skill-creator',
+      absolutePath: path.join(fixtureRoot, 'prepared', 'cindy-skill-creator'),
+      nativeClaudePath: path.join(fixtureRoot, 'prepared-native', 'cindy-skill-creator'),
+    };
+    const { registerSkillhubIpc } = await import('../registerIpc');
+    registerSkillhubIpc({
+      getMaker: () => ({ listAgentSkills }) as never,
+      getManagedSkillRoots,
+      getBuiltInSkills: () => (prepared ? [descriptor] : []),
+      prepareSharedSkills: async () => {
+        await Promise.resolve();
+        if (fails) throw new Error('owner is not stable');
+        prepared = true;
+      },
+      getAllowedProjectRoots,
+      marketService: marketService as never,
+      publishService: { publish, cancel } as never,
+    });
+    scanAllSkills.mockResolvedValueOnce({ skills: [], sources: [] });
+
+    const result = await handlers.get('skillhub:scan')!({ sender: { id: 31, on: vi.fn(), once: vi.fn() } }, { projects: [] });
+
+    expect(result).toMatchObject({ success: true });
+    expect(scanAllSkills).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), expect.anything(), fails ? [] : [descriptor],
+    );
+  });
+
+  // PR #12070 review: the remote Skills list served to a phone or another computer reads the
+  // same built-in bundle, so it must join the same preparation before scanning.
+  it('remote Skills list joins shared preparation before reading built-in Skills', async () => {
+    const order: string[] = [];
+    const { registerSkillhubIpc } = await import('../registerIpc');
+    registerSkillhubIpc({
+      remoteIsRelayOnline: () => true,
+      getMaker: () => ({ listAgentSkills }) as never,
+      getManagedSkillRoots,
+      getBuiltInSkills: () => {
+        order.push('read-built-ins');
+        return [];
+      },
+      prepareSharedSkills: async () => {
+        order.push('prepare');
+      },
+      getAllowedProjectRoots,
+      marketService: marketService as never,
+      publishService: { publish, cancel } as never,
+    });
+    scanAllSkills.mockImplementationOnce(async () => {
+      order.push('scan');
+      return { skills: [], sources: [] };
+    });
+
+    try {
+      await expect(registeredRemoteProviders.at(-1)!.list!({ controllerDeviceId: 'phone' }))
+        .resolves.toMatchObject({ collectionId: 'skills' });
+      expect(order).toEqual(['prepare', 'read-built-ins', 'scan']);
+    } finally {
+      // Never let an unconsumed scan result leak into later cases.
+      scanAllSkills.mockReset();
+    }
   });
 
   it('rejects publishing a path absent from the sender latest scan', async () => {

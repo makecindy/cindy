@@ -1,4 +1,5 @@
-export type ImDefaultAgentKind = 'claude-code' | 'codex' | 'pi';
+export type ImDefaultBuiltinAgentKind = 'claude-code' | 'codex' | 'pi';
+export type ImDefaultAgentKind = ImDefaultBuiltinAgentKind | 'acp';
 export type ImDefaultPermissionMode =
   'ask' | 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
 export type ImDefaultEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -9,7 +10,7 @@ export type ImDefaultEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 
  * 在这个键上 — 两者互不影响。
  */
 export type ImDefaultSettingsChannel =
-  'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom';
+  'feishu' | 'slack' | 'discord' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom' | 'imessage';
 
 export interface ImDefaultAgentSettings {
   /** Agent 所在电脑；share:<id> 表示分享供应商，缺省为本机。 */
@@ -20,7 +21,25 @@ export interface ImDefaultAgentSettings {
   effort: ImDefaultEffort;
 }
 
-export type ImDefaultAgentSettingsMap = Record<ImDefaultAgentKind, ImDefaultAgentSettings>;
+/** 插件引擎(acp)的默认路由槽：effort 为 '' 表示使用引擎默认思考强度。 */
+export interface ImDefaultPluginEngineSettings {
+  /** Agent 所在电脑；缺省为本机。 */
+  agentDeviceId?: string | null;
+  providerId: string | null;
+  model: string;
+  effort: ImDefaultEffort | '';
+}
+
+export type ImDefaultAgentSettingsMap = Record<ImDefaultBuiltinAgentKind, ImDefaultAgentSettings> & {
+  /** 可选插件引擎槽；缺省省略以保持存量 v2/v3 默认配置结构与 legacy 检测兼容。 */
+  acp?: ImDefaultPluginEngineSettings;
+};
+
+export const IM_DEFAULT_PLUGIN_ENGINE_SETTINGS: ImDefaultPluginEngineSettings = {
+  providerId: null,
+  model: '',
+  effort: '',
+};
 
 export interface ImDefaultSettings {
   agentKind: ImDefaultAgentKind;
@@ -40,6 +59,8 @@ export interface ImDefaultSettings {
    * 的事只看这一行), 私聊那条设成完全访问不会顺带放开群。
    */
   groupPermissionMode: ImDefaultPermissionMode;
+  /** 可选智能路由 id；为空或省略时直接按 agents[agentKind] 里的具体模型启动。 */
+  modelGroup?: string | null;
   agents: ImDefaultAgentSettingsMap;
 }
 
@@ -55,7 +76,7 @@ export interface ImDefaultSettingsState extends ImDefaultSettings {
   defaults: ImDefaultSettings;
 }
 
-export const IM_DEFAULT_SETTINGS: ImDefaultSettings = {
+export const IM_DEFAULT_SETTINGS: ImDefaultSettings & { agentKind: ImDefaultBuiltinAgentKind } = {
   agentKind: 'claude-code',
   permissionMode: 'auto',
   groupPermissionMode: 'auto',
@@ -87,6 +108,7 @@ export const IM_DEFAULT_SETTINGS_CHANNELS: readonly ImDefaultSettingsChannel[] =
   'telegram',
   'dingtalk',
   'wecom',
+  'imessage',
 ];
 
 export const IM_DEFAULT_EFFORT_OVERRIDES: Readonly<Partial<Record<string, ImDefaultEffort>>> = {
@@ -94,7 +116,8 @@ export const IM_DEFAULT_EFFORT_OVERRIDES: Readonly<Partial<Record<string, ImDefa
   'codex/gpt-5.5': 'high',
 };
 
-const AGENT_KINDS = new Set<ImDefaultAgentKind>(['claude-code', 'codex', 'pi']);
+const BUILTIN_AGENT_KINDS = new Set<ImDefaultBuiltinAgentKind>(['claude-code', 'codex', 'pi']);
+const AGENT_KINDS = new Set<ImDefaultAgentKind>(['claude-code', 'codex', 'pi', 'acp']);
 const EFFORTS = new Set<ImDefaultEffort>([
   'minimal',
   'low',
@@ -136,12 +159,29 @@ export function isUnconditionalTurnPolicyChannel(channel: ImDefaultSettingsChann
   return UNCONDITIONAL_TURN_POLICY_CHANNELS.includes(channel);
 }
 
+export function isImDefaultBuiltinAgentKind(value: unknown): value is ImDefaultBuiltinAgentKind {
+  return typeof value === 'string' && BUILTIN_AGENT_KINDS.has(value as ImDefaultBuiltinAgentKind);
+}
+
 export function isImDefaultAgentKind(value: unknown): value is ImDefaultAgentKind {
   return typeof value === 'string' && AGENT_KINDS.has(value as ImDefaultAgentKind);
 }
 
 export function isImDefaultEffort(value: unknown): value is ImDefaultEffort {
   return typeof value === 'string' && EFFORTS.has(value as ImDefaultEffort);
+}
+
+export function isImDefaultPluginEngineEffort(value: unknown): value is ImDefaultEffort | '' {
+  return value === '' || isImDefaultEffort(value);
+}
+
+export function activeImDefaultAgentSettings(
+  settings: ImDefaultSettings,
+): ImDefaultAgentSettings | ImDefaultPluginEngineSettings {
+  if (settings.agentKind === 'acp') {
+    return settings.agents.acp ?? IM_DEFAULT_PLUGIN_ENGINE_SETTINGS;
+  }
+  return settings.agents[settings.agentKind];
 }
 
 export function isImDefaultPermissionMode(value: unknown): value is ImDefaultPermissionMode {

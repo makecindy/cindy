@@ -120,9 +120,20 @@ pnpm --filter desktop preview:island-mascots
   伙伴的任务在等你处理或已回复时，左侧换成伙伴头像（`ContentState.companion`：沿用岛上已压到 2 KB 以内的
   JPEG 缩略图，没有图时用表情或首字配色相底）；运行中仍显示角色。内容更新整体不能超过 4 KB，超限的头像
   直接丢掉、改用首字。动态图片用 `NSImage(data:)` 可以正常显示，只有从文件读的才会变灰块。
-  颜色与计数格式跟我们的岛一致：运行中橙、等你处理青、未读完成绿，计数写成「等你处理 · 运行中」。
-- **提醒展开**：只有「等你处理的任务变多」或「转为已完成」时带 `AlertConfiguration` 更新，系统会把活动
-  短暂展开（菜单栏里是药丸下方的展开卡片）；计数下降和普通进度更新不提醒，首次发起也不提醒。提醒音用
+  颜色与计数格式跟任务胶囊一致：运行中橙、等你处理青、未读完成绿，计数写成「待关注 · 运行中」。
+  待关注总数直接取胶囊的 `pillSnapshot.attentionCount`（含未读完成与伙伴聊天），通过可选的
+  `ContentState.attentionTotal` 下发；旧活动缺字段时沿用原 `attentionCount`（仅等待交互），
+  不改变旧字段的含义。任务状态、标题、头像与点击目标沿用胶囊优先展示的同一任务；其他任务仍在
+  运行时也能展示已完成结果，并在状态行补上运行中的数量。
+- **点击任务**：主进程把当前展示任务的 `taskUrl`（远程任务带 `device`）随内容下发，Widget 的 banner 与 Dynamic Island 都用 `widgetURL` 打开；标题和计数相同但目标变化时也必须更新。字段可选以兼容旧活动。群聊汇总不是任务 ID，暂保留打开应用的行为。
+- **展开计数解释**：只在系统实时活动的展开区域与 `ActivityBanner` 显示两个数字的名称。
+  系统灵动岛在摄像头左侧显示头像，头像旁显示当前任务状态，并在有待查看事项时用第二行分解
+  「等你处理 / 未读结果」。摄像头右侧显示计数，下方整行居中显示任务标题，两端等距留白。各区域由 WidgetKit 分配宽度。
+  普通显示器的 `ActivityBanner` 仍在标题下用单行显示状态与分解。紧凑数字和任务胶囊保持不变。文案通过可选 `countLabels`
+  下发，旧活动缺字段时沿用原有的无标签计数与状态文案；仅语言变化也会触发内容更新。未读部分包含结果与伙伴
+  消息，按 `attentionTotal - attentionCount` 展示，不把全部未读都叫完成成功。
+- **提醒展开**：只有「等你处理的任务变多」或「未读完成任务变多」时带 `AlertConfiguration` 更新，系统会把活动
+  短暂展开（菜单栏里是药丸下方的展开卡片）；计数下降、切到已有未读结果和普通进度更新不提醒，首次发起也不提醒。提醒音用
   应用 `Resources` 里的静音 `cindy-live-activity-silent.caf`（`build.mjs` 生成），声音仍由我们的岛和通知负责。
   系统会限制提醒频率，连续提醒时后一次可能延迟出现。
 - **和任务胶囊的分工**：角色与事件音效两边共用（设置页「共用设置」）。任务胶囊关闭时它的 helper 已挂起，
@@ -134,5 +145,5 @@ pnpm --filter desktop preview:island-mascots
   `DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer node build.mjs addon <out.node> arm64`，
   再对打包好的 `.app` 运行 `build.mjs extension <App.app> arm64`。
 - **发布签名**：扩展必须带 App Sandbox。`scripts/ci/lib.mjs` 的 `signMacAppWithIdentity` 在签主 app 之前，
-  先用 `live-activity/extension.entitlements` 和发布身份单独签 `Contents/PlugIns/*.appex`；对整个包 `--deep`
+  先用 `live-activity/extension.entitlements` 和发布身份单独签 `Contents/PlugIns/` 里的扩展（桌面小组件扩展除外，它保留安装时生成的 entitlements，见 `native/desktop-widgets/AGENTS.md`）；对整个包 `--deep`
   统一签会丢掉扩展的沙盒权限，扩展将无法加载。

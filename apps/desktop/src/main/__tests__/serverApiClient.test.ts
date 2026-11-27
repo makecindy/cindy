@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   getAccessToken: vi.fn(),
   refresh: vi.fn(),
   invalidateSession: vi.fn(),
+  ownerScope: 'cloud:account-a:1',
+  authRealm: 'global',
+  ownerInvalidations: new Set<() => void>(),
   logger: {
     debug: vi.fn(),
     error: vi.fn(),
@@ -18,12 +21,22 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({ net: { fetch: mocks.netFetch } }));
+vi.mock('../appSessionState.js', () => ({
+  activeOwnerScopeKey: () => mocks.ownerScope,
+  getActiveAppSession: () => ({ mode: 'cloud', dataOwnerId: mocks.ownerScope.split(':')[1], generation: Number(mocks.ownerScope.split(':')[2]) }),
+  isAppSessionBoundaryPending: () => false,
+  onAppSessionInvalidated: (listener: () => void) => {
+    mocks.ownerInvalidations.add(listener);
+    return () => mocks.ownerInvalidations.delete(listener);
+  },
+}));
 vi.mock('../authManager', () => ({
+  getActiveAuthRealm: () => mocks.authRealm,
   getAccessToken: mocks.getAccessToken,
   refresh: mocks.refresh,
   invalidateSession: mocks.invalidateSession,
 }));
-vi.mock('../i18n.js', () => ({
+vi.mock('../i18n.desktop.js', () => ({
   getResolvedMainLocale: () => 'zh-CN',
 }));
 vi.mock('../clientEndpointsService.js', () => ({
@@ -33,12 +46,201 @@ vi.mock('../logger', () => ({
   createLogger: () => mocks.logger,
 }));
 
-import { serverApiFetch, ServerApiError } from '../serverApiClient';
-import { readOrganizationAccountUsage } from '../usage/organizationAccountUsage';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop';
+import { createServerApiClient } from '../serverApiClient.js';
+import { createCreditUsageRateLimitFetch } from '../model-access/creditUsageRateLimit.js';
+
+function creditHarness() {
+  const state = { owner: 'member-a', generation: 1, enabled: true, endpoint: 'https://credit-a.example.test' };
+  const transport = vi.fn();
+  const refresh = vi.fn(async () => true);
+  const fetch = createCreditUsageRateLimitFetch(createServerApiClient({
+    fetch: transport, locale: () => 'en', log: mocks.logger,
+    auth: { getAccessToken: () => 'fixture-token', refresh, invalidateSession: vi.fn() },
+  }), () => state.enabled ? state : null);
+  const read = (options = {}) => fetch('/api/model-access/credit-usage', { baseUrl: () => state.endpoint, ...options });
+  const limited = () => new Response('{}', { status: 429, headers: { 'Retry-After': '120' } });
+  return { state, transport, refresh, fetch, read, limited };
+}
 
 describe('serverApiFetch', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.authRealm = 'global';
+  });
+
+  // Unit, engineering-conventions §3.2: the shared production HTTP entry must
+  // honor credit-usage Retry-After across callers. Existing tests only checked
+  // header parsing. Minimal regression: 429, then a second read before expiry.
+  it('does not physically reread credit usage before Retry-After expires', async () => {
+    vi.useFakeTimers();
+    const baseUrl = 'https://credit-limit.example.test';
+    const request = () => serverApiFetch('/api/model-access/credit-usage', { baseUrl });
+    try {
+      mocks.netFetch.mockResolvedValueOnce(new Response('{}', { status: 429, headers: { 'Retry-After': '120' } }));
+      await expect(request()).rejects.toMatchObject({ statusCode: 429 });
+      mocks.netFetch.mockResolvedValue(new Response('{"available":"7"}'));
+      await expect(request()).rejects.toMatchObject({ statusCode: 429, retryAt: Date.now() + 120_000 });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await expect(request()).resolves.toEqual({ available: '7' });
+      expect(mocks.netFetch).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); mocks.netFetch.mockReset(); }
+  });
+
+  it('isolates the same membership and endpoint in different authenticated realms', async () => {
+    const baseUrl = 'https://credit-realms.example.test';
+    const read = () => serverApiFetch('/api/model-access/credit-usage', { baseUrl });
+    mocks.netFetch.mockResolvedValueOnce(new Response('{}', { status: 429, headers: { 'Retry-After': '120' } }));
+    await expect(read()).rejects.toMatchObject({ statusCode: 429 });
+    mocks.authRealm = 'cn';
+    mocks.netFetch.mockResolvedValueOnce(new Response('{"available":"3"}'));
+    await expect(read()).resolves.toEqual({ available: '3' });
+    mocks.authRealm = 'global';
+    await expect(read()).rejects.toMatchObject({ statusCode: 429 });
+    expect(mocks.netFetch).toHaveBeenCalledTimes(2);
+  });
+
+  // Same production client/fake transport, unit: isolate members and endpoints,
+  // but retain the server's deadline when only the window generation is repaired.
+  it('keeps retry deadlines scoped to membership and endpoint across generation repairs', async () => {
+    const h = creditHarness();
+    h.transport.mockResolvedValueOnce(h.limited());
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    h.state.generation++;
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    h.transport.mockImplementation(async () => new Response('{"available":"8"}'));
+    h.state.owner = 'member-b';
+    await expect(h.read()).resolves.toEqual({ available: '8' });
+    h.state.owner = 'member-a'; h.state.endpoint = 'https://credit-b.example.test';
+    await expect(h.read()).resolves.toEqual({ available: '8' });
+    h.state.endpoint = 'https://credit-a.example.test';
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    expect(h.transport).toHaveBeenCalledTimes(3);
+  });
+
+  // #13008 review: the production HTTP entry must stop another Credits read
+  // as soon as 429 headers arrive. Existing tests waited for rejection/abort,
+  // missing the interval where the response body was still pending. Unit;
+  // minimal input: a 429 with Retry-After and an unresolved body, then reread.
+  it('blocks another credit read while the rate-limited response body is still pending', async () => {
+    const h = creditHarness();
+    let entered!: () => void, finish!: (body: object) => void;
+    const bodyStarted = new Promise<void>(resolve => { entered = resolve; });
+    const body = new Promise<object>(resolve => { finish = resolve; });
+    h.transport.mockResolvedValueOnce({ status: 429, ok: false, headers: new Headers({ 'Retry-After': '120' }),
+      json: () => { entered(); return body; },
+    });
+    const pending = h.read();
+    try {
+      await bodyStarted;
+      h.transport.mockImplementation(async () => new Response('{}'));
+      await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+      expect(h.transport).toHaveBeenCalledOnce();
+      h.state.endpoint = 'https://credit-b.example.test';
+      await expect(h.read()).resolves.toEqual({});
+      expect(h.transport).toHaveBeenCalledTimes(2);
+    } finally {
+      finish({});
+      await expect(pending).rejects.toMatchObject({ statusCode: 429 });
+    }
+  });
+
+  it('preserves the HTTP rejection when a retry deadline observer throws', async () => {
+    const h = creditHarness();
+    h.transport.mockResolvedValueOnce(h.limited());
+    await expect(h.read({ onRetryAfter: () => { throw new Error('private observer details'); } }))
+      .rejects.toMatchObject({ statusCode: 429 });
+    expect(JSON.stringify(mocks.logger.warn.mock.calls)).not.toContain('private observer details');
+    expect(h.transport).toHaveBeenCalledOnce();
+  });
+
+  it('rechecks the refreshed physical endpoint before sending a 401 retry', async () => {
+    const h = creditHarness();
+    h.state.endpoint = 'https://credit-b.example.test';
+    h.transport.mockResolvedValueOnce(h.limited());
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    h.state.endpoint = 'https://credit-a.example.test';
+    h.transport.mockResolvedValueOnce(new Response('{"error":{"code":"TOKEN_EXPIRED"}}', { status: 401 }));
+    h.refresh.mockImplementationOnce(async () => { h.state.endpoint = 'https://credit-b.example.test'; return true; });
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429, servedBaseUrl: 'https://credit-b.example.test' });
+    expect(h.refresh).toHaveBeenCalledOnce();
+    expect(h.transport).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not clear a concurrent 429 when an earlier success arrives late', async () => {
+    const h = creditHarness();
+    let finish!: (response: Response) => void;
+    h.transport.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+    const earlier = h.read();
+    h.transport.mockResolvedValueOnce(h.limited());
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    finish(new Response('{"available":"9"}'));
+    await expect(earlier).resolves.toEqual({ available: '9' });
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    expect(h.transport).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['account', 'generation', 'endpoint', 'disabled'] as const)('drops a credit result overtaken by %s change', async change => {
+    const h = creditHarness();
+    let finish!: (response: Response) => void;
+    h.transport.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+    const pending = h.read();
+    if (change === 'account') h.state.owner = 'member-b';
+    if (change === 'generation') h.state.generation++;
+    if (change === 'endpoint') h.state.endpoint = 'https://credit-b.example.test';
+    if (change === 'disabled') h.state.enabled = false;
+    finish(new Response('{"available":"9"}'));
+    await expect(pending).rejects.toMatchObject({ statusCode: 409 });
+    expect(h.transport).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a Retry-After learned before a caller aborts a stalled 429 body', async () => {
+    const h = creditHarness();
+    const controller = new AbortController();
+    let entered!: () => void;
+    const bodyStarted = new Promise<void>(resolve => { entered = resolve; });
+    h.transport.mockImplementationOnce((_url: string, init: RequestInit) => Promise.resolve({
+      status: 429, ok: false, headers: new Headers({ 'Retry-After': '120' }),
+      json: () => new Promise((_resolve, reject) => {
+        init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true });
+        entered();
+      }),
+    }));
+    const pending = h.read({ signal: controller.signal });
+    await bodyStarted;
+    const reason = new Error('caller stopped waiting');
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    expect(h.transport).toHaveBeenCalledOnce();
+  });
+
+  it('does not let an obsolete generation record a deadline for the new generation', async () => {
+    const h = creditHarness();
+    let finish!: (response: Response) => void;
+    h.transport.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+    const pending = h.read();
+    h.state.generation++;
+    finish(h.limited());
+    await expect(pending).rejects.toMatchObject({ statusCode: 409 });
+    h.transport.mockResolvedValueOnce(new Response('{"available":"4"}'));
+    await expect(h.read()).resolves.toEqual({ available: '4' });
+    expect(h.transport).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not throttle other routes, writes, explicit credentials or a 429 without a deadline', async () => {
+    const h = creditHarness();
+    h.transport.mockResolvedValueOnce(new Response('{}', { status: 429 }));
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    h.transport.mockResolvedValueOnce(h.limited());
+    await expect(h.read()).rejects.toMatchObject({ statusCode: 429 });
+    h.transport.mockImplementation(async () => new Response('{}'));
+    await expect(h.fetch('/api/model-access/balance', { baseUrl: h.state.endpoint })).resolves.toEqual({});
+    await expect(h.fetch('/api/model-access/models', { baseUrl: h.state.endpoint })).resolves.toEqual({});
+    await expect(h.read({ method: 'POST', body: {} })).resolves.toEqual({});
+    await expect(h.read({ token: 'explicit-fixture-token' })).resolves.toEqual({});
+    expect(h.transport).toHaveBeenCalledTimes(6);
   });
 
   // Unit: cancellation must cover HTTP and a shared auth refresh. Existing retry
@@ -106,26 +308,220 @@ describe('serverApiFetch', () => {
     expect(JSON.stringify(mocks.logger.warn.mock.calls)).not.toContain('private upstream details');
   });
 
-  // Unit: exercise the real quota reader through the HTTP client. Previously its
-  // mocked client hid recurring warnings for a successful legacy fallback.
-  it.each([
-    { status: 404, code: 'NOT_FOUND', fallback: true },
-    { status: 501, code: 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED', fallback: true },
-    { status: 501, code: 'OTHER_FAILURE', fallback: false },
-    { status: 503, code: 'MODEL_ACCESS_QUOTA_NOT_SUPPORTED', fallback: false },
-    { status: 403, code: 'FORBIDDEN', fallback: false },
-    { status: 401, code: 'ACCOUNT_UNAVAILABLE', fallback: false },
-  ])('only downgrades expected quota fallback logs: $status $code', async ({ status, code, fallback }) => {
-    mocks.netFetch.mockResolvedValueOnce(new Response(JSON.stringify({
-      error: { code, message: 'private upstream message' },
-    }), { status }));
-    const result = await readOrganizationAccountUsage();
-    expect(result).toBe(fallback ? undefined : null);
-    expect(mocks.logger.warn).toHaveBeenCalledTimes(fallback ? 0 : 1);
-    expect(mocks.logger.debug).toHaveBeenCalledTimes(fallback ? 1 : 0);
-    expect(JSON.stringify([...mocks.logger.warn.mock.calls, ...mocks.logger.debug.mock.calls]))
-      .not.toContain('private upstream message');
-    if (status === 401) expect(mocks.invalidateSession).toHaveBeenCalledWith('account-unavailable');
+  // Unit: a response body that stalls past our own deadline is a **timeout**, not
+  // an empty 200. Swallowing it made the caller see EMPTY_RESPONSE/200, which reads
+  // as an authoritative answer — the device directory then dropped its bounded
+  // snapshot for a failure it had meant to treat as temporary.
+  it('reports a stalled response body as a temporary status-0 failure', async () => {
+    mocks.netFetch.mockImplementationOnce((_url: string, opts: RequestInit) => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => new Promise((_yes, no) => {
+        opts.signal?.addEventListener('abort', () => {
+          const error = new Error('the body read was aborted');
+          error.name = 'AbortError';
+          no(error);
+        }, { once: true });
+      }),
+    } as unknown as Response));
+    try {
+      await serverApiFetch('/api/device-link/devices', {
+        baseUrl: 'https://api.example.invalid', timeoutMs: 5,
+      });
+      expect.fail('the stalled body must reject');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'NETWORK_ERROR', statusCode: 0 });
+    }
+  });
+
+  // Unit: a 429 whose **body** stalls must still carry the server's retry deadline.
+  // The deadline lives in the response headers; reading the body first used to lose
+  // it, so the caller kept polling on its own cadence and the limit window slid.
+  it('keeps the 429 retry deadline when the response body stalls', async () => {
+    const now = Date.now();
+    const headers = new Headers({ 'Retry-After': '120' });
+    mocks.netFetch.mockImplementationOnce((_url: string, opts: RequestInit) => Promise.resolve({
+      ok: false,
+      status: 429,
+      headers,
+      json: () => new Promise((_yes, no) => {
+        opts.signal?.addEventListener('abort', () => {
+          const error = new Error('the body read was aborted');
+          error.name = 'AbortError';
+          no(error);
+        }, { once: true });
+      }),
+    } as unknown as Response));
+    try {
+      await serverApiFetch('/api/device-link/devices', {
+        baseUrl: 'https://api.example.invalid', timeoutMs: 5,
+      });
+      expect.fail('the stalled body must reject');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ServerApiError);
+      expect(error).toHaveProperty('retryAt', expect.any(Number));
+      expect((error as ServerApiError).retryAt).toBeGreaterThanOrEqual(now + 120_000);
+    }
+  });
+
+  // 限流期限要记在**真正服务了这次响应**的线路上:401 之后的共享刷新会把重试发到另一个
+  // 端点,抛出的 ServerApiError 必须带出那一跳实际用的 base URL(servedBaseUrl)——
+  // 调用方按它分桶记限流期限,记错桶会把没限流的端点也限住(Codex review #9360)。
+  it('carries the base URL that actually served the 429 (servedBaseUrl) after a region-switching refresh', async () => {
+    let baseUrl = 'https://resource.cn.example.com';
+    mocks.getAccessToken.mockReturnValueOnce('token-cn').mockReturnValueOnce('token-global');
+    mocks.refresh.mockImplementation(async () => {
+      baseUrl = 'https://resource.global.example.com';
+      return true;
+    });
+    mocks.netFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: { code: 'TOKEN_EXPIRED' } }),
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: new Headers({ 'Retry-After': '60' }),
+        json: async () => ({ error: { code: 'RATE_LIMITED', message: 'rate limited' } }),
+      } as unknown as Response);
+    const error = await serverApiFetch('/api/resource', {
+      baseUrl: () => baseUrl,
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ServerApiError);
+    expect((error as ServerApiError).statusCode).toBe(429);
+    expect((error as ServerApiError).retryAt).toBeGreaterThan(Date.now());
+    // 服务这次响应的是刷新后的新端点:期限属于它,不是进请求时的旧端点。
+    expect((error as ServerApiError).servedBaseUrl).toBe('https://resource.global.example.com');
+  });
+
+  // Unit: a 429 whose **headers** arrived but whose body stalls must still hand the
+  // caller its rate-limit deadline when the **caller's** own deadline fires. The
+  // device-link reader arms a signal for the whole read and registers it first, so
+  // rawFetch rethrows the bare abort reason — without the deadline the caller keeps
+  // polling inside the server's window (Codex review #9360).
+  it('keeps the 429 retry deadline when the caller deadline fires while the body stalls', async () => {
+    const now = Date.now();
+    const headers = new Headers({ 'Retry-After': '120' });
+    mocks.netFetch.mockImplementationOnce((_url: string, opts: RequestInit) => Promise.resolve({
+      ok: false,
+      status: 429,
+      headers,
+      json: () => new Promise((_yes, no) => {
+        opts.signal?.addEventListener('abort', () => {
+          const error = new Error('the body read was aborted');
+          error.name = 'AbortError';
+          no(error);
+        }, { once: true });
+      }),
+    } as unknown as Response));
+    const controller = new AbortController();
+    const expired = Object.assign(new Error('device directory read deadline'), { name: 'TimeoutError' });
+    const pending = serverApiFetch('/api/device-link/devices', {
+      baseUrl: 'https://api.example.invalid', signal: controller.signal,
+    }).then(() => { throw new Error('the aborted request must not succeed'); }, (error: unknown) => error);
+    await vi.waitFor(() => expect(mocks.netFetch).toHaveBeenCalledTimes(1));
+    controller.abort(expired);
+    const error = await pending;
+    // 中止本身照样是调用方给的那个原因(身份不变),只是上面补了期限与线路。
+    expect(error).toBe(expired);
+    expect(error).toHaveProperty('retryAt', expect.any(Number));
+    expect((error as { retryAt: number }).retryAt).toBeGreaterThanOrEqual(now + 120_000);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:`serverApiFetch` 读响应体时调用方总期限到点,抛给调用方的
+  //   中止原因上带出的 `httpStatus`。
+  // - Bug/规则依据:Codex review #9360「Preserve terminal status across response-body
+  //   timeouts」—— 响应头已到、服务端已表态(401/403/404/429),只是正文卡住。状态被丢掉
+  //   后调用方只能把它归一成「连不上」:设备目录那一路的失效广播不触发、终态也不停重读,
+  //   渲染侧退避带着旧快照每 5–60 秒重试那个端点。
+  // - 现有覆盖缺口:上面两个「正文卡住」用例只断言 retryAt(429)与身份不变,没有一个
+  //   覆盖「非 OK 状态要被带出去」;也没有覆盖反例(200 + 卡住的正文不该带状态)。
+  // - 最小失败输入:响应 ok:false/status:401 + json() 永不 settle + 调用方 abort。
+  // - tier:unit(electron net 为进程内 fake)。
+  it('carries the already-known non-OK status on the abort reason when the body stalls', async () => {
+    mocks.netFetch.mockImplementationOnce((_url: string, opts: RequestInit) => Promise.resolve({
+      ok: false,
+      status: 401,
+      json: () => new Promise((_yes, no) => {
+        opts.signal?.addEventListener('abort', () => {
+          const error = new Error('the body read was aborted');
+          error.name = 'AbortError';
+          no(error);
+        }, { once: true });
+      }),
+    } as unknown as Response));
+    const controller = new AbortController();
+    const expired = Object.assign(new Error('device directory read deadline'), { name: 'TimeoutError' });
+    const pending = serverApiFetch('/api/device-link/devices', {
+      baseUrl: 'https://api.example.invalid', signal: controller.signal,
+    }).then(() => { throw new Error('the aborted request must not succeed'); }, (error: unknown) => error);
+    await vi.waitFor(() => expect(mocks.netFetch).toHaveBeenCalledTimes(1));
+    controller.abort(expired);
+    const error = await pending;
+    // 身份不变(仍是调用方给的中止原因),只是上面补了已知的响应状态。
+    expect(error).toBe(expired);
+    expect(error).toHaveProperty('httpStatus', 401);
+  });
+
+  // 反例:200 + 卡住的正文是**暂时性**失败。带了状态上去,调用方会把一次超时当成权威
+  // 响应处理,把有界旧快照一起丢掉(Codex review #9360 同一处)。
+  it('does not attach a status when a 200 response body stalls', async () => {
+    mocks.netFetch.mockImplementationOnce((_url: string, opts: RequestInit) => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => new Promise((_yes, no) => {
+        opts.signal?.addEventListener('abort', () => {
+          const error = new Error('the body read was aborted');
+          error.name = 'AbortError';
+          no(error);
+        }, { once: true });
+      }),
+    } as unknown as Response));
+    const controller = new AbortController();
+    const expired = Object.assign(new Error('device directory read deadline'), { name: 'TimeoutError' });
+    const pending = serverApiFetch('/api/device-link/devices', {
+      baseUrl: 'https://api.example.invalid', signal: controller.signal,
+    }).then(() => { throw new Error('the aborted request must not succeed'); }, (error: unknown) => error);
+    await vi.waitFor(() => expect(mocks.netFetch).toHaveBeenCalledTimes(1));
+    controller.abort(expired);
+    const error = await pending;
+    expect(error).toBe(expired);
+    expect(error).not.toHaveProperty('httpStatus');
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果:`serverApiFetch` 的真实入口,**只有 timeoutMs**(没有调用方
+  //   signal)时响应头已到但正文卡住 → 抛出的 ServerApiError 带真实状态码,且 401 仍然
+  //   走共享刷新路径。
+  // - Bug/规则依据:Codex review #9360「Preserve HTTP status on internal response-body
+  //   timeouts」—— 自己的超时把正文掐断时状态被归一成 0,已知的 401 不再进刷新 / 登出
+  //   路径,400/403/404 也被当成连不上。
+  // - 现有覆盖缺口:上面两个「正文卡住」用例都带调用方 signal(状态挂在中止原因上),
+  //   没有覆盖**只有 timeoutMs** 的调用方(状态无处可挂,只能由响应本身带出去)。
+  // - 最小失败输入:ok:false/status:401 + json() 永不 settle + 只传 timeoutMs。
+  // - tier:unit(electron net 为进程内 fake)。
+  it('keeps the known status when our own deadline cuts a non-OK body short', async () => {
+    mocks.netFetch.mockImplementation((_url: string, opts: RequestInit) => Promise.resolve({
+      ok: false,
+      status: 401,
+      json: () => new Promise((_yes, no) => {
+        opts.signal?.addEventListener('abort', () => {
+          const error = new Error('the body read was aborted');
+          error.name = 'AbortError';
+          no(error);
+        }, { once: true });
+      }),
+    } as unknown as Response));
+    const error = await serverApiFetch('/api/device-link/devices', {
+      baseUrl: 'https://api.example.invalid', timeoutMs: 5,
+    }).then(() => { throw new Error('the stalled body must reject'); }, (error: unknown) => error);
+    expect(error).toBeInstanceOf(ServerApiError);
+    expect((error as ServerApiError).statusCode).toBe(401);
+    // 状态保住之后,401 仍然走共享刷新(归一成 status 0 时这一步不会发生)。
+    expect(mocks.refresh).toHaveBeenCalled();
   });
 
   it('keeps an unfamiliar original error and its cause while redacting secrets before logging', async () => {
@@ -295,6 +691,46 @@ describe('serverApiFetch', () => {
     expect(mocks.refresh).not.toHaveBeenCalled();
     expect(mocks.invalidateSession).not.toHaveBeenCalled();
     expect(mocks.getAccessToken).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['read', 'ACCOUNT_UNAVAILABLE'], ['select', 'TOKEN_EXPIRED'], ['renew', 'ACCOUNT_UNAVAILABLE'],
+  ] as const)('cancels the automation host %s request when its account changes', async (action, code) => {
+    const { pluginAutomationAccount } = await import('../device-link/pluginAutomationHost.desktop.js');
+    mocks.ownerScope = 'cloud:account-a:1';
+    mocks.getAccessToken.mockReturnValue('test-token-a');
+    let finish!: (response: Response) => void;
+    mocks.netFetch.mockReturnValueOnce(new Promise<Response>(resolve => { finish = resolve; }));
+    const account = pluginAutomationAccount('public/cindy-contacts');
+    const requests = {
+      read: () => account.read(),
+      select: () => account.select(1, true),
+      renew: () => account.run('renew', 'test-run', new AbortController().signal),
+    };
+    const pending = requests[action]();
+    expect(mocks.netFetch).toHaveBeenCalledOnce();
+    const requestSignal: AbortSignal = mocks.netFetch.mock.calls[0][1].signal;
+    for (const invalidate of mocks.ownerInvalidations) invalidate();
+    mocks.ownerScope = 'cloud:account-b:2';
+    finish(new Response(JSON.stringify({ error: { code } }), { status: 401 }));
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(requestSignal.aborted).toBe(true);
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(mocks.invalidateSession).not.toHaveBeenCalled();
+    expect(mocks.ownerInvalidations.size).toBe(0);
+  });
+
+  it('retries a host selection for the same account and releases its listener on success', async () => {
+    const { pluginAutomationAccount } = await import('../device-link/pluginAutomationHost.desktop.js');
+    mocks.getAccessToken.mockReturnValue('test-token');
+    mocks.refresh.mockResolvedValueOnce(true);
+    const choice = { revision: 2, selected: true, isPrimary: true, deviceName: 'Home' };
+    mocks.netFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { code: 'TOKEN_EXPIRED' } }), { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(choice)));
+    await expect(pluginAutomationAccount('public/cindy-contacts').select(1, true)).resolves.toEqual(choice);
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+    expect(mocks.ownerInvalidations.size).toBe(0);
   });
 
   it.each(['INVALID_TOKEN', 'UNAUTHORIZED'])('%s refresh 一次后重试', async (code) => {

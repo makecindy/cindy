@@ -21,6 +21,105 @@ function harness() {
 }
 
 describe('permanent Bot model selection', () => {
+  it('hands an existing chat from its current model to the model saved in the companion settings', async () => {
+    const h = harness();
+    const plugin = { harness: 'acp' as const, model: 'chosen', providerId: 'acp-plugin:sample:engine', effort: 'high', fastMode: false };
+    h.state.chain = [plugin];
+    await h.reconcile.profileChanged('canonical');
+    expect(h.apply).toHaveBeenCalledWith('canonical',
+      { agentKind: 'acp', providerId: plugin.providerId, model: 'chosen', effort: 'high', fastMode: false }, h.state.current);
+  });
+
+  // Saving a model during a plugin reply must keep the current prompt and apply the latest choice before the next one.
+  it('waits for a running plugin reply before applying the saved model on the next send', async () => {
+    const providerId = 'acp-plugin:sample:engine';
+    let model = 'first';
+    let idle = false;
+    let saved = 'second';
+    const setModel = vi.fn(async (_id: string, route: { model: string }) => { model = route.model; });
+    const accepted = vi.fn(async () => {});
+    const reconcile = createBotModelRouteReconciler({
+      ownerEpoch: () => 'owner',
+      read: async () => ({
+        current: { agentKind: 'acp', model, providerId, effort: null, fastMode: false },
+        chain: [{ harness: 'acp', model: saved, providerId, effort: '', fastMode: false }], hasRuntimeOverride: false,
+      }),
+      apply: createBotModelRouteApplier({ stage: setModel, isIdle: () => idle,
+        applyPendingSwitch: async () => {}, hasPendingSwitch: () => false, onApplied: accepted }),
+    });
+    await expect(reconcile.profileChanged('companion')).rejects.toThrow('Saved companion route is still pending');
+    saved = 'latest';
+    await expect(reconcile.profileChanged('companion')).rejects.toThrow('Saved companion route is still pending');
+    expect(setModel).not.toHaveBeenCalled();
+    expect(accepted).not.toHaveBeenCalled();
+    idle = true;
+    await reconcile('companion', true);
+    expect(model).toBe('latest');
+    expect(setModel).toHaveBeenCalledOnce();
+    expect(accepted).toHaveBeenCalledOnce();
+  });
+
+  // 依据：用户反馈（2026-11-20）「模型组设置好，伙伴还是不能用」；model-groups.md §6.2。
+  // 生产入口：reconcile / preview。可观察结果：首选是模型组时套用的是组挑出的来源，套用成功后才记一次选择；
+  // 预览只看不记；组用不了时按存下的具体模型。最小失败输入：首选带 modelGroup 的链。tier：unit。
+  it.each([
+    { name: 'applies the group pick and commits it once applied', pick: true },
+    { name: 'keeps the saved route when the group has nothing usable', pick: false },
+  ])('model group primary: $name', async ({ pick }) => {
+    const h = harness();
+    h.state.chain = [{ harness: 'codex', model: 'luna', providerId: 'xd', effort: '', fastMode: false, modelGroup: 'night' }];
+    const commit = vi.fn();
+    const picked = { agentKind: 'claude-code' as const, model: 'sonnet', providerId: 'sub', effort: 'high', fastMode: false };
+    const pickModelGroup = vi.fn(async () => (pick ? { route: picked, commit } : null));
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: h.read, apply: h.apply, pickModelGroup });
+    expect(await reconcile.preview('canonical')).toEqual(expect.objectContaining({ model: pick ? 'sonnet' : 'luna' }));
+    expect(pickModelGroup).toHaveBeenLastCalledWith('night', expect.anything(), { dryRun: true });
+    expect(commit).not.toHaveBeenCalled();
+    await reconcile('canonical');
+    expect(pickModelGroup).toHaveBeenLastCalledWith('night', expect.anything(), { dryRun: false });
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('canonical',
+      expect.objectContaining(pick ? { agentKind: 'claude-code', model: 'sonnet', providerId: 'sub' } : { agentKind: 'codex', model: 'luna' }),
+      h.state.current);
+    expect(commit).toHaveBeenCalledTimes(pick ? 1 : 0);
+    // Already applied: the next send neither re-picks nor commits again.
+    await reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledOnce();
+    expect(commit).toHaveBeenCalledTimes(pick ? 1 : 0);
+  });
+  // PR #11683 评审：改了组的选法 / 时段例外，已有对话下一轮要按新规则重选（链本身没变）。tier：unit。
+  it('re-picks when the rules of a model group it uses change', async () => {
+    const h = harness();
+    const state = { ...h.state, chain: [{ harness: 'codex' as const, model: 'luna', providerId: 'xd', effort: '', fastMode: false, modelGroup: 'night' }],
+      modelGroupsSignature: '[{"strategy":"order"}]' };
+    let pickedModel = 'sonnet';
+    const pickModelGroup = vi.fn(async () => ({ route: { agentKind: 'claude-code' as const, model: pickedModel, providerId: 'sub', effort: null, fastMode: false }, commit: () => {} }));
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: async () => state, apply: h.apply, pickModelGroup });
+    await reconcile('lane');
+    state.current = { agentKind: 'claude-code', model: 'sonnet', providerId: 'sub', effort: null, fastMode: false };
+    await reconcile('lane');
+    expect(h.apply).toHaveBeenCalledOnce();
+    pickedModel = 'haiku';
+    state.modelGroupsSignature = '[{"strategy":"cheapest"}]';
+    await reconcile('lane');
+    expect(h.apply).toHaveBeenLastCalledWith('lane', expect.objectContaining({ model: 'haiku' }), state.current);
+    expect(h.apply).toHaveBeenCalledTimes(2);
+  });
+  // PR #11683 评审：设置页选组先存组、预览回来再存组挑出的模型；第二次保存若算新配置，轮流组会被推进两次。
+  // 最小失败输入：同一组项只换存下的具体模型。tier：unit。
+  it('does not pick again when only the saved model of a group entry is filled in', async () => {
+    const h = harness();
+    const state = { ...h.state, chain: [{ harness: 'codex', model: 'luna', providerId: 'xd', effort: '', fastMode: false, modelGroup: 'night' }] as BotModelRoute[],
+      modelGroupsSignature: '[{"strategy":"rotate"}]' };
+    const commit = vi.fn();
+    const pickModelGroup = vi.fn(async () => ({ route: { agentKind: 'claude-code' as const, model: 'sonnet', providerId: 'sub', effort: null, fastMode: false }, commit }));
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: async () => state, apply: h.apply, pickModelGroup });
+    await reconcile('lane');
+    state.current = { agentKind: 'claude-code', model: 'sonnet', providerId: 'sub', effort: null, fastMode: false };
+    state.chain = [{ harness: 'claude', model: 'sonnet', providerId: 'sub', effort: 'high', fastMode: false, modelGroup: 'night' }];
+    await reconcile('lane');
+    expect(h.apply).toHaveBeenCalledOnce();
+    expect(commit).toHaveBeenCalledOnce();
+  });
   // Unit regression: ordinary sends/reopen must keep a verified group member
   // after failover; the old fallback tests only covered runtime overrides.
   it('keeps the selected group member across sends and reopen, but applies an explicit profile save', async () => {
@@ -40,6 +139,37 @@ describe('permanent Bot model selection', () => {
     expect(h.apply).toHaveBeenCalledExactlyOnceWith('canonical', expect.objectContaining({
       agentDeviceId: 'group-owner', providerId: 'xd',
     }), h.state.current);
+  });
+  // 依据：Slack 反馈（2026-11-06）——例行任务里手动换的模型每跑一次就被改回伙伴的模型；
+  // 实测确认重开任务后内存记录丢失。最小失败输入：已套用配置后任务里换了模型，再发送 / 重启再发送。tier：unit。
+  it('keeps a model picked in the task across sends and restart until the configuration changes', async () => {
+    const h = harness();
+    const saved = new Map<string, string>();
+    const applied = { get: async (id: string) => saved.get(id), set: async (id: string, key: string) => { saved.set(id, key); } };
+    const deps = { ownerEpoch: () => 'owner', read: h.read, apply: h.apply, applied };
+    await createBotModelRouteReconciler(deps)('lane');
+    expect(h.apply).toHaveBeenCalledOnce();
+    h.apply.mockClear();
+    h.state.current = { agentKind: 'pi', model: 'picked', providerId: 'xd', effort: 'high', fastMode: false };
+    const reconcile = createBotModelRouteReconciler(deps);
+    await reconcile('lane');
+    await createBotModelRouteReconciler(deps)('lane');
+    expect(h.apply).not.toHaveBeenCalled();
+    h.state.chain = [{ harness: 'codex', model: 'sol', providerId: 'xd', effort: 'medium', fastMode: false }];
+    await reconcile('lane');
+    expect(h.apply).toHaveBeenCalledExactlyOnceWith('lane', expect.objectContaining({ model: 'sol' }), h.state.current);
+  });
+  // 实测（2026-11-07）：例行任务跑过一次后留下自动化临时路由，之后在任务里换模型，下次运行仍被改回。tier：unit。
+  it('keeps a task choice made after an automation ran on the task', async () => {
+    const h = harness();
+    const state = { ...h.state, scheduledModelBaseline: JSON.stringify({ ...h.state.current, scopeId: 'automation' }) as string | null };
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: async () => state, apply: h.apply });
+    await reconcile('lane');
+    state.scheduledModelBaseline = null;
+    state.current = { agentKind: 'pi', model: 'picked', providerId: 'xd', effort: 'high', fastMode: false };
+    await reconcile.acceptTaskChoice('lane');
+    await reconcile('lane');
+    expect(h.apply).not.toHaveBeenCalled();
   });
   it.each(['model', 'group', 'unbound'] as const)('applies a changed %s instead of preserving an unrelated group member', async change => {
     const h = harness();
@@ -62,9 +192,14 @@ describe('permanent Bot model selection', () => {
     await reconcile('canonical');
     await createBotModelRouteReconciler(deps)('canonical');
     expect(h.apply).not.toHaveBeenCalled();
+    // The automation scope restores the task's own route itself; the unchanged
+    // configuration is not applied over it, but a changed one is.
     state.scheduledModelBaseline = null;
     await reconcile('canonical');
-    expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ model: 'luna' }), state.current);
+    expect(h.apply).not.toHaveBeenCalled();
+    state.chain = [{ harness: 'codex', model: 'sol', providerId: 'xd', effort: 'medium', fastMode: false }];
+    await reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ model: 'sol' }), state.current);
   });
   // Capability grants apply to the next ordinary turn, including after restart.
   // The temporary automation route must not choose a different Harness catalog.
@@ -237,12 +372,13 @@ describe('permanent Bot model selection', () => {
     h.state.next = { ...h.state.current, model: 'new-fallback' };
     expect(await h.reconcile.preview('canonical', draft)).toEqual(h.state.next);
   });
-  it('invalidates fallback when a later chain candidate changes, even with the same primary', async () => {
+  it('ignores a later chain candidate: only the first route counts, so the runtime is left alone', async () => {
     const h = harness();
     h.state.hasRuntimeOverride = true;
     await h.reconcile('canonical');
     const draft: BotModelRoute[] = [...h.state.chain, { ...h.state.chain[0]!, harness: 'pi', model: 'secondary' }];
-    expect(await h.reconcile.preview('canonical', draft)).toMatchObject({ agentKind: 'codex', model: 'luna' });
+    // 2026-11-26 单模型决定：多出的后备候选被裁掉，等同没有变化。
+    expect(await h.reconcile.preview('canonical', draft)).toEqual(h.state.current);
     expect(h.apply).not.toHaveBeenCalled();
   });
   it('normalizes draft chains the same way as the persisted profile', async () => {
@@ -382,13 +518,15 @@ function automationHarness() {
   const original = { ...h.state.current, model: 'runtime-fallback' };
   let baseline: string | null = JSON.stringify({ ...original, scopeId: 'automation' });
   h.apply.mockImplementation(async (_id, route) => {
-    h.state.current = { ...route, effort: route.effort as SessionRuntimeProfile['effort'] };
+    if (route.agentKind === 'acp') throw new Error('expected a built-in route in this fixture');
+    h.state.current = { ...route, agentKind: route.agentKind, effort: route.effort as SessionRuntimeProfile['effort'] };
   });
   h.onSelectionAccepted.mockImplementation(async () => { baseline = null; });
   const scope = createScheduledModelScope({
     read: async () => ({ profile: h.state.current, baseline }),
     write: async (_id, value) => { baseline = value ? JSON.stringify(value) : null; },
     apply: async (_id, profile) => {
+      if (profile.agentKind === 'acp') throw new Error('expected a built-in route in this fixture');
       const { agentKind, model, providerId, effort, fastMode } = profile;
       h.state.current = { agentKind, model, providerId, effort, fastMode };
     },
@@ -548,7 +686,8 @@ it('rereads a newer durable save when acceptance loses its database compare-and-
     ownerEpoch: () => 'owner', read: async () => ({ ...h.state, scheduledModelBaseline: baseline }),
     onSelectionAccepted: accepted,
     apply: async (_id, route) => {
-      h.state.current = { ...route, effort: route.effort as SessionRuntimeProfile['effort'] };
+      if (route.agentKind === 'acp') throw new Error('expected a built-in route in this fixture');
+      h.state.current = { ...route, agentKind: route.agentKind, effort: route.effort as SessionRuntimeProfile['effort'] };
       if (route.model === 'luna') {
         h.state.chain = [{ ...h.state.chain[0]!, model: 'newest-model' }];
         baseline = JSON.stringify({ ...h.state.current, scopeId: 'automation', pendingBotProfileVersion: 3 });
@@ -574,7 +713,8 @@ it.each(['same-engine', 'cross-engine'] as const)('keeps accepted recovery until
   let effective = current;
   const apply = createBotModelRouteApplier({
     stage: async (_id, route) => {
-      const profile: SessionRuntimeProfile = { ...route, effort: 'medium' };
+      if (route.agentKind === 'acp') throw new Error('expected a built-in route in this fixture');
+      const profile: SessionRuntimeProfile = { ...route, agentKind: route.agentKind, effort: 'medium' };
       if (kind === 'same-engine') acceptSessionRuntimeMutation({ sessionId, source: 'agent', profile, deferred });
       else harnessPending = deferred;
       if (!deferred) effective = profile;

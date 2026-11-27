@@ -4,7 +4,7 @@
     "failed": "Não foi possível entregar a imagem. Tente transferir novamente a imagem existente.",
     "retry": "Tentar entregar novamente",
     "retrying": "Entregando…",
-    "retryFailed": "O envio ainda está indisponível. Verifique se o computador de origem está online."
+    "retryFailed": "A entrega ainda está indisponível. Verifique se o computador de origem está online."
   },
   "agentActionRow": {
     "noContent": "Nada para exibir",
@@ -85,7 +85,7 @@
       "gitWorktreePrune": "Limpar referências a worktrees removidas",
       "ghPrList": "Listar pull requests",
       "ghPrView": "Ver pull request",
-      "ghPrChecks": "Verificar resultados dos testes do pull request",
+      "ghPrChecks": "Ver verificações do pull request",
       "ghPrStatus": "Verificar status do pull request",
       "ghPrDiff": "Ver alterações do pull request",
       "ghPrCreate": "Criar pull request",
@@ -122,6 +122,28 @@
     "status": {
       "running": "Em execução",
       "done": "Concluído"
+    },
+    "collab": {
+      "wait": "Aguardar Subagent",
+      "waitCount_one": "Aguardar {{count}} Subagent",
+      "waitCount_other": "Aguardar {{count}} Subagents",
+      "waitCount_many": "Aguardar {{count}} Subagents",
+      "sendInput": "Enviar instruções ao Subagent",
+      "sendInputCount_one": "Enviar instruções a {{count}} Subagent",
+      "sendInputCount_other": "Enviar instruções a {{count}} Subagents",
+      "sendInputCount_many": "Enviar instruções a {{count}} Subagents",
+      "resume": "Retomar Subagent",
+      "resumeCount_one": "Retomar {{count}} Subagent",
+      "resumeCount_other": "Retomar {{count}} Subagents",
+      "resumeCount_many": "Retomar {{count}} Subagents",
+      "close": "Fechar Subagent",
+      "closeCount_one": "Fechar {{count}} Subagent",
+      "closeCount_other": "Fechar {{count}} Subagents",
+      "closeCount_many": "Fechar {{count}} Subagents",
+      "spawn": "Iniciar Subagent",
+      "spawnCount_one": "Iniciar {{count}} Subagent",
+      "spawnCount_other": "Iniciar {{count}} Subagents",
+      "spawnCount_many": "Iniciar {{count}} Subagents"
     }
   },
   "agentActions": {
@@ -134,8 +156,8 @@
       "ran_other": "executou {{count}} comandos",
       "read_one": "leu um arquivo",
       "read_other": "leu {{count}} arquivos",
-      "updated_one": "atualizou as tarefas pendentes",
-      "updated_other": "atualizou as tarefas pendentes",
+      "updated_one": "atualizou a lista de afazeres",
+      "updated_other": "atualizou a lista de afazeres",
       "searched_one": "pesquisou",
       "searched_other": "pesquisou",
       "fetched_one": "buscou conteúdo na web",
@@ -200,5 +222,25 @@
       }
     },
     "failed_many": "{{count}} chamadas falharam"
+  },
+  "geminiRateLimit": {
+    "retried": "Nova tentativa automática após a espera indicada pelo Gemini",
+    "title": "O limite de entrada por minuto do Gemini foi atingido.",
+    "exhausted": "O Gemini ainda está limitado após uma nova tentativa. Você pode tentar novamente manualmente.",
+    "retryIn": "Nova tentativa automática em {{seconds}} s"
+  },
+  "subscriptionAccountError": {
+    "unreachable": "O serviço de contas do Codex está temporariamente inacessível.",
+    "rechecking": "O serviço de contas do Codex está temporariamente inacessível. Nova tentativa às {{resetAt}}.",
+    "poolModelLimited": "O uso da assinatura para este modelo atingiu o limite. Você pode trocar de modelo.",
+    "poolRetryUntil": "Tente novamente após {{resetAt}}.",
+    "poolOtherSignedOut": "Outra conta de assinatura está desconectada. Entre nessa conta no computador que executa a tarefa e tente novamente.",
+    "poolUnavailable": "Nenhuma conta de assinatura está disponível para este modelo. Troque de modelo ou verifique as contas no computador que executa a tarefa.",
+    "limited": "A conta de assinatura desta tarefa atingiu o limite de uso. Aguarde a redefinição ou escolha outra origem de modelos.",
+    "limitedUntil": "A conta de assinatura desta tarefa atingiu o limite de uso. Redefinição prevista: {{resetAt}}. Aguarde até lá ou escolha outra origem de modelos.",
+    "loginRequired": "A conta de assinatura desta tarefa exige um novo login. Entre novamente no computador que executa a tarefa e tente de novo.",
+    "signingIn": "O login na conta de assinatura desta tarefa está em andamento. Tente de novo quando terminar.",
+    "unavailable": "A conta de assinatura atribuída a esta tarefa não pode ser usada nesta solicitação. Verifique a conta nas configurações do provedor de modelos no computador que executa a tarefa ou escolha outra origem de modelos.",
+    "legacy": "A conta de assinatura atribuída a esta tarefa não está disponível. Verifique o login e o uso no computador que executa a tarefa ou escolha outra origem de modelos. A conta não muda automaticamente."
   }
 }

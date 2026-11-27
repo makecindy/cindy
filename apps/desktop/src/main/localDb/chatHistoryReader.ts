@@ -22,6 +22,7 @@ import { historyPageWithinBudget } from './historyPageBudget';
 import { sessions, messages } from './schema';
 import { messageToCamel } from './mapper';
 import { parseOrcaRemoteLead, type OrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
+import { parseSessionCreatedBy, type SessionCreatedBy } from '../../shared/sessionOrigin.js';
 import { remoteVisibleSessionSql } from './ipc/botRemoteVisibility.js';
 import {
   managedDialogueRootLikePatterns,
@@ -34,6 +35,11 @@ const messageRowid = sql<number>`"messages"."rowid"`;
 function remoteOrcaHistoryIdentity(raw: unknown): { orcaRemoteLead?: OrcaRemoteLead } {
   const lead = parseOrcaRemoteLead(raw);
   return lead ? { orcaRemoteLead: lead } : {};
+}
+
+function sessionCreatedByHistoryIdentity(raw: unknown): { createdBySession?: SessionCreatedBy } {
+  const origin = parseSessionCreatedBy(raw);
+  return origin ? { createdBySession: origin } : {};
 }
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -190,6 +196,8 @@ export interface ListSessionsParams {
 }
 
 export interface SessionSummary {
+  pinnedAt: number | null;
+  hiddenAt: number | null;
   lastActivityAt: number;
   companion: HistoryCompanion | null;
   id: string;
@@ -202,6 +210,7 @@ export interface SessionSummary {
   source: string;
   orcaRole: string | null;
   orcaRemoteLead?: OrcaRemoteLead;
+  createdBySession?: SessionCreatedBy;
   parentSessionId: string | null;
   createdAt: number; // unix ms
   updatedAt: number;
@@ -270,9 +279,12 @@ export async function listSessionsForHistory(
       workspaceKind: sessions.workspaceKind,
       model: sessions.model,
       status: sessions.status,
+      pinnedAt: sessions.pinnedAt,
+      hiddenAt: sessions.hiddenAt,
       source: sessions.source,
       orcaRole: sessions.orcaRole,
       orcaRemoteLead: sessions.orcaRemoteLead,
+      createdBySession: sessions.createdBySession,
       parentSessionId: sessions.parentSessionId,
       createdAt: sessions.createdAt,
       updatedAt: sessions.updatedAt,
@@ -310,9 +322,12 @@ export async function listSessionsForHistory(
     workspaceKind: r.workspaceKind,
     model: r.model,
     status: r.status,
+    pinnedAt: r.pinnedAt,
+    hiddenAt: r.hiddenAt,
     source: r.source,
     orcaRole: r.orcaRole,
     ...remoteOrcaHistoryIdentity(r.orcaRemoteLead),
+    ...sessionCreatedByHistoryIdentity(r.createdBySession),
     parentSessionId: r.parentSessionId,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
@@ -350,6 +365,7 @@ export interface GetMessagesParams {
   toMs: number | null;
   agentKind: HistoryAgentKind | null;
   roles: HistoryRole[] | null;
+  pluginProgressInputId?: string;
   includeRewound: boolean;
   limit: number;
   cursor: HistoryCursor | null; // (messages.createdAt(ms), messages.rowid); id remains for legacy cursors
@@ -443,6 +459,11 @@ export async function getMessagesForHistory(
   }
   if (params.fromMs !== null) conds.push(gte(messages.createdAt, params.fromMs));
   if (params.toMs !== null) conds.push(lt(messages.createdAt, params.toMs));
+  if (params.pluginProgressInputId !== undefined) {
+    conds.push(eq(messages.role, 'assistant'),
+      sql`json_extract(${messages.agentMeta}, '$.pluginProgressInputId') = ${params.pluginProgressInputId}`,
+      sql`json_extract(${messages.agentMeta}, '$.failedSamplingAttempt') IS NULL`);
+  }
   if (params.roles !== null && params.roles.length > 0) {
     conds.push(inArray(messages.role, params.roles));
   }

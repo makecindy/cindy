@@ -1,6 +1,13 @@
 {
+  "assistant": {
+    "actingFor": "{{name}} · {{person}} の代わり"
+  },
   "progress": {
-    "stop": "停止"
+    "stop": "停止",
+    "stopMine": "自分の依頼を停止",
+    "stopAll": "すべて停止",
+    "stopAllHint": "他の人の依頼も含みます",
+    "step": "ステップ {{step}}/{{total}}"
   },
   "title": "グループチャット",
   "memberSeparator": "、",
@@ -79,7 +86,8 @@
     "planDone_one": "{{count}} ステップすべて完了しました",
     "planDone_other": "{{count}} ステップすべて完了しました",
     "planDoneGeneric": "役割分担が完了しました",
-    "olderOnComputer": "それより前のメッセージはパソコンで確認できます"
+    "olderOnComputer": "それより前のメッセージはパソコンで確認できます",
+    "endTalk": "終了"
   },
   "quote": {
     "label": "{{name}} を引用：{{summary}}",
@@ -89,6 +97,8 @@
   },
   "notice": {
     "memberJoined": "{{name}}さんがグループに参加しました",
+    "memberJoinedList": "{{names}}がグループに参加しました",
+    "memberJoinedSummary": "{{names}}ほか{{others}}人がグループに参加しました",
     "memberFailed": "{{name}} は今回返信できませんでした",
     "memberTimeout": "{{name}} の返信に時間がかかりすぎたため、今回はスキップしました",
     "memberUnavailable": "{{name}} は現在利用できないため、今回は発言しませんでした",
@@ -98,6 +108,13 @@
     "stepFailed": "{{name}} はエラーのため、このステップを完了できませんでした",
     "stepTimeout": "{{name}} の作業に時間がかかりすぎたため、このステップを止めました",
     "stepUnavailable": "{{name}} は現在利用できないため、このステップを進められません",
+    "runtimeFailureReason": {
+      "unclaimed_timeout": {
+        "summary": "{{name}}は待機期限内に処理を開始できませんでした。今回のリクエストは終了しました。",
+        "advice": "仲間の所有者に、その仲間のパソコンで Cindy が正常に動作し、ネットワークに接続されているか確認してもらってください。",
+        "details": "Cindy とネットワークが正常に戻ったら、メッセージを再送してください。"
+      }
+    },
     "runtimeFailure": {
       "REMOTE_DEVICE_LIMIT": {
         "summary": "{{name}}は返信できません：この仲間のデバイスのリモートセッション数が上限に達しました。",
@@ -106,13 +123,13 @@
       },
       "REMOTE_TOTAL_LIMIT": {
         "summary": "{{name}}は返信できません：リモートのパソコンのセッション総数が上限に達しました。",
-        "advice": "リモートコンピューターの所有者に、未使用のセッションの整理または上限の引き上げを依頼してください。",
+        "advice": "リモートのパソコンの所有者に、未使用のセッションの解放または上限の引き上げを依頼してください。",
         "details": "そのパソコンの所有者に不要なセッションの解放、または「リモートと共有」での上限変更を依頼してください。"
       },
       "IMAGE_INPUT_UNSUPPORTED": {
         "summary": "{{name}}は返信できませんでした。現在のモデルは画像に対応していません。",
         "advice": "画像対応のモデルに切り替えてください。",
-        "details": "画像対応モデルに切り替えるか、「設定 → パーソナライズ → ビジョンブリッジ」を有効にして視覚モデルを設定し、メッセージを再送してください。"
+        "details": "画像対応のモデルに切り替えてください。"
       },
       "MODEL_UNAVAILABLE": {
         "summary": "{{name}}は返信できませんでした。利用可能なモデルがありません。",
@@ -121,7 +138,7 @@
       },
       "AUTH_REQUIRED": {
         "summary": "{{name}}は返信できませんでした。モデルの接続に再認証が必要です。",
-        "advice": "モデルの接続先に再接続してください。",
+        "advice": "モデルのプロバイダーに再接続してください。",
         "details": "設定でモデルのプロバイダーに再接続し、メッセージを再送してください。"
       },
       "RATE_LIMITED": {
@@ -136,7 +153,7 @@
       },
       "QUOTA_EXCEEDED": {
         "summary": "{{name}}は返信できませんでした。モデルの使用量が上限に達しました。",
-        "advice": "利用枠を確認するか、別のモデルを選択してください。",
+        "advice": "クォータを確認するか、別のモデルを選択してください。",
         "details": "プロバイダーのクォータを確認するか、別の利用可能なモデルを選んでください。"
       },
       "NETWORK_ERROR": {
@@ -159,7 +176,10 @@
     "capability": {
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
-      "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。"
+      "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}} さん、Cindy に代わりに作業してもらうには、あなたの Cindy を接続してください（現在オンラインの Cindy がありません）。",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}さん、このグループで使うコンピュータを選ぶと、この依頼を続行できます。",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}}さんがこのグループで選んだコンピュータはオフラインです。"
     }
   },
   "plan": {
@@ -169,6 +189,8 @@
     "start": "開始する",
     "dismiss": "今回はやめる",
     "editHint": "担当や手順を変えたいときは、そのまま話しかけてください",
+    "autoContinue": "終わったら自動で次のステップへ",
+    "autoContinueSaveFailed": "ステップの引き継ぎを保存できませんでした。もう一度お試しください。",
     "autoNote": "ステップが終わると自動で次へ進みます。",
     "pauseNote": "1 ステップ終わるごとに止まり、「次へ進む」を押すまで待ちます。",
     "superseded": "更新済み",
@@ -197,7 +219,7 @@
     "stepSkipped": "スキップ済み",
     "skippingTurn": "スキップ中…",
     "queueWaiting": "続行待ち",
-    "skipTurnLabel": "スキップ {{name}}",
+    "skipTurnLabel": "{{name}} をスキップ",
     "stepSpoken": "発言済み",
     "allTurns_one": "全 {{count}} 人",
     "allTurns_other": "全 {{count}} 人",
@@ -212,12 +234,6 @@
     "stopping": "停止中…",
     "planning": "役割分担を考えています…",
     "step": "作業中…"
-  },
-  "work": {
-    "queued": "待機中 {{count}}",
-    "active": "進行中 {{count}}",
-    "expand": "チームメイトの状況を展開",
-    "collapse": "チームメイトの状況を折りたたむ"
   },
   "task": {
     "state": {
@@ -279,7 +295,7 @@
     "organizerSaveFailed": "まとめ役を変更できませんでした。もう一度お試しください",
     "projectDir": "プロジェクトフォルダ",
     "projectDirNone": "未選択",
-    "projectDirNote": "役割分担で作業するとき、仲間はここで作業します。選ばなくてもかまいません。その場合はこのグループチャット専用のフォルダを使います。git プロジェクトを選ぶと、役割分担のたびに新しい worktree とブランチを作るので、手元のコードには触れません。",
+    "projectDirNote": "このコンピュータにある既存のプロジェクトを選べます。未選択の場合はリポジトリに対応するプロジェクト、次に担当する仲間のプロジェクトを使います。Git での分担には専用のワークツリーを使います。",
     "add": "仲間を追加",
     "projectDirOnComputer": "パソコンで選択・変更できます",
     "memberActions": "{{name}} の操作",
@@ -297,13 +313,18 @@
       "loading": "設定を読み込み中…",
       "unavailable": "グループ設定を読み込めませんでした。もう一度お試しください。"
     },
+    "allowMemberInvites": "全メンバーによる友達の招待を許可",
+    "allowMemberInvitesHint": "オンにすると、参加済みの全メンバーが友達を招待できます。変更できるのはグループオーナーと管理者のみです。",
+    "allowMemberMentionAll": "すべてのメンバーに @全員 を許可",
+    "allowMemberMentionAllHint": "オンにすると全メンバーが @全員 を使用でき、オフのときはグループオーナーと管理者のみ使用できます。変更できるのはグループオーナーと管理者のみです。",
     "allowMentionAllBots": "すべての仲間への @ を許可",
-    "allowMentionAllBotsHint": "変更できるのはグループ所有者のみです。全員が返信する可能性があるため、大人数のグループでは慎重に有効にしてください。本人に代わる AI の返信には影響しません。"
+    "allowMentionAllBotsHint": "変更できるのはオーナーのみです。全員が返信する可能性があるため、大人数のグループでは慎重に有効にしてください。本人に代わる AI の返信には影響しません。"
   },
   "errors": {
     "memberLimit": "グループチャットには仲間が 2〜6 人必要です",
     "memberUnavailable": "利用できない仲間がいます。別の仲間を選んで再試行してください",
     "mentionUnavailable": "メンションしたメンバーは現在利用できません。送信する前に選び直してください。",
+    "mentionAmbiguous": "「{{name}}」という名前のメンバーが複数います。@ リストから選んでください。",
     "notFound": "このグループチャットはもう存在しません",
     "hostNotReady": "Cindy の準備がまだ終わっていません。しばらくしてから再試行してください",
     "planOpen": "役割分担の途中です。終わるか停止してから新しく始めてください",
@@ -323,8 +344,11 @@
     "lifecycleUnavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
     "groupDissolved": "このグループは解散しました。閲覧権限のある履歴は引き続き確認できます。",
     "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。",
-    "allBotsMentionDisabled": "グループ所有者がすべての仲間への @ を有効にしていません。",
-    "turnAlreadyStarted": "この仲間はすでに実行を開始しているため、スキップできません"
+    "allBotsMentionDisabled": "オーナーがすべての仲間への @ を有効にしていません。",
+    "allHumansMentionForbidden": "@全員 を使用できるのはグループ所有者と管理者のみです。",
+    "turnAlreadyStarted": "この仲間はすでに実行を開始しているため、スキップできません",
+    "stopOwnershipUnknown": "一部の作業を停止できませんでした。依頼者を確認できません。",
+    "nothingToStop": "停止できる進行中の作業はありません。"
   },
   "followUp": {
     "next": "分担 · 次のステップ",
@@ -352,7 +376,7 @@
     "dissolve": "グループを解散",
     "dissolveNote": "この操作は取り消せません。全員がメッセージを送信できなくなり、進行中の作業は停止し、招待は無効になります。メンバーはこれまで閲覧できた履歴を引き続き確認できます。",
     "hide": "自分のリストから削除",
-    "hideNote": "すべての自分のデバイスでリストからこのチャットを削除します。メンバーの状態、履歴、進行中の作業、他のメンバーには影響しません。",
+    "hideNote": "自分のすべてのデバイスで、リストからこのチャットを削除します。メンバーの状態、履歴、進行中の作業、他のメンバーには影響しません。",
     "leave": "グループを退出",
     "leaveNote": "あなたとあなたの仲間がグループから退出します。新しいメッセージは届かなくなり、グループの履歴を閲覧できなくなります。",
     "unavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
@@ -411,7 +435,36 @@
     "select": "メッセージを選択",
     "sidebarOwn": "スレッドの返信を共有しました",
     "sidebarOther": "{{name}} がスレッドの返信を共有しました",
-    "shareFailed_many": "{{count}} 件の返信はスレッドに送信されましたが、メインチャットには送信できませんでした。"
+    "shareFailed_many": "{{count}} 件の返信はスレッドに送信されましたが、メインチャットには送信できませんでした。",
+    "openIndex": "スレッド",
+    "indexTitle": "スレッド",
+    "filterAria": "スレッドを絞り込む",
+    "filterMine": "自分に関連",
+    "filterAll": "すべて",
+    "searchPlaceholder": "スレッド・返信・メンバーを検索",
+    "clearSearch": "検索をクリア",
+    "listRecent": "最近",
+    "indexParticipatedTag": "参加済み",
+    "indexMentionedTag": "メンションあり",
+    "indexEmptyMine": "参加したスレッドやメンションされたスレッドはまだありません",
+    "indexEmptyAll": "このグループにはまだスレッドがありません",
+    "indexEmptySearch": "一致するスレッドがありません",
+    "viewAllThreads": "すべてのスレッドを見る",
+    "emptyReply": "テキストなし",
+    "listNews": "新しい返信",
+    "hintOne": "スレッドに新しい返信があります",
+    "hintMany_one": "{{count}} 件のスレッドに新しい返信",
+    "hintMany_other": "{{count}} 件のスレッドに新しい返信",
+    "syncingHistory": "以前のスレッドを読み込み中…",
+    "rootKind": {
+      "task": "タスク",
+      "image": "画像",
+      "video": "動画",
+      "audio": "音声",
+      "file": "ファイル",
+      "share": "共有された返信",
+      "card": "カード"
+    }
   },
   "mask": {
     "toolAccess": "ツールの権限",
@@ -426,11 +479,11 @@
     },
     "title": "AI代理返信モード",
     "settings": "AI代理返信の設定",
-    "companion": "自分のパートナー",
-    "choose": "パートナーを選ぶ",
+    "companion": "自分の仲間",
+    "choose": "仲間を選ぶ",
     "enabled": "自動で代理返信",
     "triggerLabel": "起動方法",
-    "resumeAfter": "不在時の再開まで",
+    "resumeAfter": "再開までの不在時間",
     "start": "開始時刻",
     "end": "終了時刻",
     "startManual": "今すぐ開始",
@@ -456,7 +509,7 @@
       "off": "自動の代理返信はオフ",
       "offline": "代理返信を一時停止 · PCオフライン",
       "waiting": "手動の開始待ち",
-      "unbound": "パートナー未選択",
+      "unbound": "仲間が未選択",
       "enabled": "仲間が代わりに返信できる状態です"
     },
     "trigger": {
@@ -474,18 +527,20 @@
     "attribution": "{{name}} が {{owner}} に代わって返信",
     "digestNow": "今すぐ整理",
     "digestWorking": "整理中…",
-    "digestSent": "パートナーとのチャットに送信済み",
+    "digestSent": "仲間とのチャットに送信済み",
     "digestFailed": "整理できませんでした。再試行してください。",
     "digestEmpty": "新しく整理する内容はありません",
     "access": {
       "chat": "グループ内の会話のみ",
       "tools": "ツールと情報の利用を許可済み",
       "authorizeTitle": "{{name}} のツールと情報の利用を許可しますか？",
-      "toolsHint": "メンバーはパートナーの既存ツールと個人情報を利用できます。結果は全員に公開され、既存の承認ルールが適用されます。取り消すと実行中の要求は停止しますが、実行済みの操作は元に戻せません。",
-      "confirm": "確認"
+      "toolsHint": "メンバーはこの仲間の既存ツールと個人情報を利用できます。結果は全員に公開され、既存の承認ルールが適用されます。取り消すと実行中の要求は停止しますが、実行済みの操作は元に戻せません。",
+      "confirm": "ツールの使用を許可"
     }
   },
   "groupSettings": {
+    "assistantComputer": "実行するコンピュータ",
+    "chooseComputer": "コンピュータを選択",
     "tabSettings": "設定",
     "youAreOwner": "あなたはオーナーです",
     "youAreAdmin": "あなたは管理者です",
@@ -520,21 +575,24 @@
     "searchMembers": "メンバーを検索",
     "membersNoMatch": "「{{query}}」に一致するメンバーはいません",
     "you": "あなた",
-    "companionOf": "{{name}} のパートナー",
+    "companionOf": "{{name}} の仲間",
     "teammateTag": "仲間",
     "paused": "一時停止中",
-    "accessNone": "オーナーのみ",
+    "accessNone": "所有者のみ",
     "accessChat": "グループ内の会話のみ",
     "accessTools": "ツールと情報を利用可",
+    "memberPermissions": "メンバーの権限",
     "replies": "仲間の返信",
+    "assistant": "グループの Cindy",
+    "assistantHint": "@ した人のパソコンで動きます。",
     "replyModeMentionedNote": "@ されない限り、仲間は返信しません。",
     "work": "役割分担",
     "organizerHint": "誰がどのステップを担当するかを決めます。既定は最初の仲間です。",
-    "ownFolder": "グループ専用フォルダ",
+    "ownFolder": "自動選択",
     "archive": "グループをアーカイブ",
     "unarchive": "アーカイブを解除",
-    "archiveHint": "アーカイブすると、すべてのメンバーに対して新しいメッセージとパートナーの実行が停止します。履歴は保持されます。グループを検索して履歴を閲覧したり、アーカイブを解除したりできます。",
-    "unarchiveHint": "アーカイブを解除すると、すべてのメンバーに対してメッセージとパートナーの実行が再開します。",
+    "archiveHint": "アーカイブすると、すべてのメンバーに対して新しいメッセージと仲間の実行が停止します。履歴は保持されます。グループを検索して履歴を閲覧したり、アーカイブを解除したりできます。",
+    "unarchiveHint": "アーカイブを解除すると、すべてのメンバーに対してメッセージと仲間の実行が再開します。",
     "archiveRowHint": "全員に対して停止し、履歴は残ります",
     "unarchiveRowHint": "メッセージと仲間の作業を再開します",
     "dissolveRowHint": "元に戻せません。誰もメッセージを送れなくなります",
@@ -565,8 +623,13 @@
     "transferTitle": "{{name}} に所有権を譲渡しますか？",
     "transferHint": "相手がオーナーになり、あなたは管理者になります。",
     "removeTitle": "{{name}} をグループから削除しますか？",
-    "removeHint": "メッセージの閲覧と送信ができなくなります。そのメンバーのパートナーも退出します。",
-    "confirm": "確認",
+    "removeHint": "メッセージの閲覧と送信ができなくなります。そのメンバーの仲間も退出します。",
+    "removeOwn": "グループから退出",
+    "removeOwnScope": "このグループにのみ適用されます。仲間はアカウントに残ります。",
+    "removeOwnHint": "{{name}} は「{{group}}」のメッセージを受信しなくなります。履歴は保持され、他のグループや個別チャットには影響しません。",
+    "removeOwnActiveHint": "このグループでの処理中のリクエストは停止します。独立して開始したタスクは続行します。",
+    "stopAndRemove": "停止して退出",
+    "confirm": "ツールの使用を許可",
     "inviteTitle": "グループに招待",
     "reusableLink": "有効期限なし · 複数の人が繰り返し利用可能",
     "singleUseUntil": "1 回のみ利用可能 · {{date}} まで有効",
@@ -581,7 +644,7 @@
     "projectDirOnComputer": "プロジェクトフォルダはパソコンで選択・変更します。",
     "saveFailed": "保存できませんでした。もう一度お試しください。",
     "authorizeTitle": "{{name}} のツールと情報の利用を許可しますか？",
-    "toolsHint": "メンバーはパートナーの既存ツールと個人情報を利用できます。結果は全員に公開され、既存の承認ルールが適用されます。取り消すと実行中の要求は停止しますが、実行済みの操作は元に戻せません。",
+    "toolsHint": "メンバーはこの仲間の既存ツールと個人情報を利用できます。結果は全員に公開され、既存の承認ルールが適用されます。取り消すと実行中の要求は停止しますが、実行済みの操作は元に戻せません。",
     "yourTeammate": "あなたの仲間"
   },
   "invitation": {
@@ -623,5 +686,7 @@
       "uncertain": "参加結果を確認できていません"
     },
     "externalFormatError": "元のメッセージから完全なリンクを開き直してください。"
-  }
+  },
+  "waitingForOwner": "所有者の確認待ち",
+  "externalBadge": "外部"
 }

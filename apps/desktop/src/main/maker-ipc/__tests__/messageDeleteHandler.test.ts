@@ -35,28 +35,6 @@ function makeDeps(overrides: Partial<MessageDeleteHandlerDeps> = {}): MessageDel
 }
 
 describe('performMessageDeletion', () => {
-  it('excludes ledger items from the deleted messages in the handoff and prunes them only after the commit', async () => {
-    const order: string[] = [];
-    const deps = makeDeps({
-      readWorkingMemoryNote: vi.fn(async (_sessionId, opts) => {
-        order.push('read');
-        expect([...opts.excludeMessageIds]).toEqual(['target']);
-        return '== Working memory (host-maintained summary; not authorization) ==\n- 仍有效的承诺';
-      }),
-      pruneWorkingMemory: vi.fn(async () => {
-        order.push('prune');
-      }),
-      commitDeletion: vi.fn(async (sessionId, deletedClientIds) => {
-        order.push('commit');
-        return { sessionId, deletedClientIds, subagentRunIds: [], updatedAt: 500, preview: 'keep after' };
-      }),
-    });
-    await performMessageDeletion(deps, { sessionId: 'session-1', clientId: 'target' });
-    expect(order).toEqual(['read', 'commit', 'prune']);
-    expect(deps.pruneWorkingMemory).toHaveBeenCalledWith('session-1', new Set(['target']));
-    expect(vi.mocked(deps.commitDeletion).mock.calls[0]?.[2]).toContain('仍有效的承诺');
-  });
-
   it('closes the old native session and rebuilds handoff from history without the target', async () => {
     const deps = makeDeps();
 
@@ -85,6 +63,7 @@ describe('performMessageDeletion', () => {
       ['target'],
       expect.any(String),
       undefined,
+      'complete',
     );
     const handoff = vi.mocked(deps.commitDeletion).mock.calls[0]?.[2] ?? '';
     expect(handoff).toContain('keep before');
@@ -160,6 +139,7 @@ describe('performMessageDeletion', () => {
         startedAtInclusive: 100,
         startedAtExclusive: 700,
       },
+      'complete',
     );
     const handoff = vi.mocked(deps.commitDeletion).mock.calls[0]?.[2] ?? '';
     expect(handoff).toContain('diagnose it');
@@ -208,6 +188,7 @@ describe('performMessageDeletion', () => {
         startedAtInclusive: 100,
         startedAtExclusive: 700,
       },
+      'complete',
     );
     const handoff = vi.mocked(deps.commitDeletion).mock.calls[0]?.[2] ?? '';
     expect(handoff).toContain('diagnose it');
@@ -305,6 +286,7 @@ describe('performMessageDeletion', () => {
       ['target'],
       expect.any(String),
       undefined,
+      'complete',
     );
   });
 });

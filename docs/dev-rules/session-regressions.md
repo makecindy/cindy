@@ -7,16 +7,23 @@
 
 | 场景 | 要保住的行为 | 现有回归入口 |
 | --- | --- | --- |
+| 历史任务精确搜索 | 普通输入保留原有召回；英文双引号或中文双引号包住连续文本，独立的 `+`（如 `登录 + 缓存` 或 `+ 登录 缓存`）要求全部关键词在同一条可见消息中出现。标题独立匹配，不跨消息或跨标题与正文凑词；`C++` 不视为运算符。显式搜索不混入语义扩展结果，清空／回退消息及隐藏字段不参与匹配 | [查询语法](../../packages/maker-shared/src/conversationSearch.ts)、[跨端兼容与召回边界](protocol-compatibility/task-search-query.md)、[实际搜索回归](../../apps/desktop/src/main/localDb/__tests__/conversationSearch.test.ts) |
 | 导入 Codex 历史后继续发送 | 导入时一次性把历史复制进 Cindy，之后只走实时写入，打开或翻页都不再重读原 rollout，同一回复只显示一份；旧版按需导入留下的任务首次打开时接入新导入记录，不重复写消息 | [messagesListImportSideEffects](../../apps/desktop/src/main/localDb/ipc/__tests__/messagesListImportSideEffects.test.ts) 的接入场景；[codexLocalSessions](../../apps/desktop/src/main/__tests__/codexLocalSessions.test.ts) 的分页 rollout 接管与续跑准备 |
+| 导入任务在任务列表的预览 | 列表显示最后一条真实消息；导入标记等空正文的 assistant 行不参与预览，旧版本存下的空预览在下次读取列表时自愈；最新消息被改写为空时，推送的是列表实际会显示的那一条 | [sessionListPagination](../../apps/desktop/src/main/localDb/__tests__/sessionListPagination.test.ts) 的导入任务场景；[sessionListProjection](../../apps/desktop/src/main/localDb/__tests__/sessionListProjection.test.ts) 的空行与回填场景；[assistantFinalRetraction](../../apps/desktop/src/main/localDb/ipc/__tests__/assistantFinalRetraction.test.ts) 的改写场景 |
 | 本地插件或历史文件多时切换任务、输入 | 通知发现只合并在途扫描，投递前重新核验安装与账号；展示用目录偏好异步读取，旧目录结果不覆盖新目录；历史定位只 stat 匹配 ID 的文件；麦克风热路径不等待 main | [subscriptionGateway](../../apps/desktop/src/main/cindy-brain/__tests__/subscriptionGateway.test.ts)、[codexLocalSessions](../../apps/desktop/src/main/__tests__/codexLocalSessions.test.ts)、[useInstalledGhosts](../../apps/desktop/src/renderer/cindy-brain/__tests__/useInstalledGhosts.test.tsx)、[microphonePermissionSnapshot](../../apps/desktop/src/preload/__tests__/microphonePermissionSnapshot.test.ts)；[性能对比与复跑方法](../acceptance/main-thread-stalls-2026-11-02.md) |
 | 打开技能列表时校验大量参考文件 | 完整内容指纹校验异步让出主线程，不延长信任缓存；校验中活动版本、清单或已经读取的文件／目录变化时不赋予官方身份；结束时核对文件与目录元数据，录制只保存固定阶段名与耗时 | [built-in-skills](../../apps/desktop/src/main/maker-host/__tests__/built-in-skills.test.ts)、[managed-skills](../../apps/desktop/src/main/maker-host/__tests__/managed-skills.test.ts)、[performanceTrace](../../apps/desktop/src/main/performance-trace/__tests__/performanceTrace.test.ts) |
+| 云端连接未完成就结束语音，随后立即再次录音 | 旧录音迟到的 done/error 不得结束新录音或丢失麦克风引用；启动期事件等待本次 start-ready 后按 runId 匹配，当前录音的早到授权事件仍须保留；普通输入、浮窗与提问卡共用事件分发 | [useVoiceInput.startup](../../apps/desktop/src/renderer/voice-input/__tests__/useVoiceInput.startup.test.ts)、[eventScope](../../apps/desktop/src/renderer/voice-input/__tests__/eventScope.test.ts) |
 | 语音浮窗、词典提示窗口初始化 | 辅助窗口只登记麦克风状态读取权限，不升级为 app-content；同步请求含拒绝路径均恰好回复一次；子 frame、未登记窗口和导航后的窗口不能读取或继续收到推送 | [microphonePermissionIpc](../../apps/desktop/src/main/voice-input/__tests__/microphonePermissionIpc.test.ts)、[globalShortcut](../../apps/desktop/src/main/voice-input/__tests__/globalShortcut.test.ts) |
 | 长历史中使用 Tab、读取语音设置或调用插件 | Tab 按原生顺序逐步进入离屏控件，不全量展开历史；保留全选、查找和无障碍文本访问；语音热读取不跨进程等待，切换账号失败不泄漏旧快照；插件同次投影复用校验，执行前仍重验精确安装实例 | [messageViewportVirtualization](../../apps/desktop/src/renderer/__tests__/messageViewportVirtualization.test.tsx)、[voiceInputDataSnapshot](../../apps/desktop/src/preload/__tests__/voiceInputDataSnapshot.test.ts)、[GhostManager](../../apps/desktop/src/main/cindy-brain/__tests__/GhostManager.test.ts)、[ghostVisibility](../../apps/desktop/src/main/cindy-brain/__tests__/ghostVisibility.test.ts)、[ghostWorkdirGate](../../apps/desktop/src/main/mcp-integrations/__tests__/ghostWorkdirGate.test.ts) |
 | 新任务创建中继续输入，创建或发送失败后回编辑 | 第一条消息立即出现；后续文字和附件留在草稿；取消、删除和迟到的回复不复活任务 | [newSessionCreation](../../apps/mobile/src/__tests__/newSessionCreation.test.ts)、[真实恢复 hook](../../apps/mobile/src/__tests__/useNewSessionDraftRecovery.test.tsx)、[创建草稿落盘](../../apps/mobile/src/__tests__/newSessionCreationPersistence.test.ts) |
+| 插件引擎新建任务启用 worktree（#11956；本机、引擎在另一台电脑、远程控制的项目） | 等选定源分支完整检出（远程项目由被控端先建 worktree），再创建任务并在同一新目录发送首条；失败保留草稿和附件，不在原仓库启动 | [新建页提交](../../apps/desktop/src/renderer/features/cc-agent/__tests__/newMakerDraftSubmission.test.ts)、[任务落库](../../apps/desktop/src/main/localDb/ipc/__tests__/sessionsUpdate.test.ts)、[真实 Git 标记文件](../../apps/desktop/src/main/__tests__/worktreeDetectCwd.git-integration.test.ts) |
+| 插件引擎（ACP）身份保留、切换分隔卡、插话降级与单任务草稿遮罩（#13153 / #13231 / #13238 / #13274） | ACP 任务切换模型必须写入切换分隔卡；feedback 与 `get_task_digest` 保留 ACP 身份不回落 Claude；不支持插话或运行期撤回能力时通过 `onCapabilitiesChange` 与 `steerUnsupported` 同步到桌面与手机并改走排队；单任务草稿临时替换时遮罩已保存的插件路由模型与模型组模式；ACP 空 MCP 工具结果经本机桥回填以保证插件卡片展示 | [ACP 会话](../../packages/maker-core/src/agents/acp/acp-session.test.ts)、[分隔卡归因](../../apps/desktop/src/main/maker-ipc/__tests__/turnModelAttribution.test.ts)、[摘要宿主](../../apps/desktop/src/main/mcp-integrations/__tests__/taskDigestHost.test.ts)、[草稿替换遮罩](../../apps/desktop/src/renderer/features/cc-agent/__tests__/alternateDraftModel.test.ts)、[远端能力同步](../../apps/desktop/src/main/remote-agent/__tests__/roundtrip.test.ts)、[手机输入投影](../../apps/mobile/src/__tests__/inputProjection.test.ts) |
 | 断线时读历史，恢复连接后补齐 | 保留已显示的历史；遗漏 push 只标记需要补读；旧查询不能覆盖新的正文和删除状态 | [remoteSessionStore](../../apps/mobile/src/__tests__/remoteSessionStore.test.ts) 中 `requests history reconciliation after a dropped push without clearing cached messages` 与消息 authority 场景；[durableOutbox](../../apps/mobile/src/__tests__/durableOutbox.test.ts) 验证重复投递和账号归属 |
+| 手机发送遇到电脑清空任务、重连或并发队列更新 | 保留发送时记录的清空边界，缓存过期时按电脑状态核对；清空前的输入不能被自动重新入队。队列查询和入队回执各自绑定发起时的连接和队列代次，旧回包不能覆盖新队列或更新缓存。若旧回执已确认被控端接手输入，仍结算发件箱投递记录 | [durableOutbox](../../apps/mobile/src/__tests__/durableOutbox.test.ts) 的首次发送清空边界和队列回包场景 |
 | 归档先收起，后台未成功时恢复 | 预览阶段只隐藏列表行，详情元数据与正文保留；结束旧预览不影响新操作，不复活已删除任务 | [remoteSessionStore](../../apps/mobile/src/__tests__/remoteSessionStore.test.ts) 的两个 `archive preview` 场景；覆盖 store 行为，实际错误提示与滑动动画还需页面验收 |
 | 普通任务与伙伴运行中切换权限 | 以 Host 接受并持久化后的状态为准；失败不假报成功、不发旧状态回滚；确认规则共用 | [sessionPermissionPersistence](../../apps/desktop/src/main/maker-ipc/__tests__/sessionPermissionPersistence.test.ts)、[botPermissionSwitch](../../apps/desktop/src/renderer/features/bots/__tests__/botPermissionSwitch.test.ts)、[permissionMode](../../packages/maker-shared/src/__tests__/permissionMode.test.ts) |
 | 重启后发现中断任务、运行中断后续跑 | 启动候选与运行期续跑分别验证；已结束、已清空、已删除等边界不能误续跑 | [sessionActiveTurn](../../apps/desktop/src/main/localDb/__tests__/sessionActiveTurn.test.ts)、[interruptedTurnAutoResume](../../apps/desktop/src/main/maker-ipc/__tests__/interruptedTurnAutoResume.test.ts) |
+| 终态错误后追加跨机恢复／模型／历史边界卡 | 零回复的超时仍在输入框上方显示原因与原有恢复操作；仅实际显示的横幅认领精确错误行，只读、独立消息流或续跑等待时保留历史错误；旧 Host 无错误 ID 时按共享尾部判据及文案匹配认领／持久关闭；边界卡不是恢复成功，后续真实输入或产出、已关闭的错误不能复活旧横幅；直发续跑与关闭只处置原错误，不抹掉期间到达的新失败 | [terminalErrorTail](../../apps/desktop/src/renderer/components/chat/__tests__/terminalErrorTail.test.tsx)、[makerChatStoreTextDeltaBatching](../../apps/desktop/src/renderer/__tests__/makerChatStoreTextDeltaBatching.test.ts) 的恢复／关闭／direct-send 场景；单页 `error-identity-restore` 的 `terminal`、`terminal-live`、`terminal-readonly`、`terminal-standalone`、`terminal-pending` 场景验证真实消息流单一显示归属与历史回退 |
 | 供应商与模型缓存先显示，更新不覆盖手选 | 初值来自现有默认与缓存；任务内手动选择后不被后台默认值重置；伙伴默认与新任务选择独立 | [newSessionHostDefaults](../../apps/mobile/src/__tests__/newSessionHostDefaults.test.tsx)、[newMakerDefaultTuple](../../apps/desktop/src/renderer/lib/__tests__/newMakerDefaultTuple.test.ts)、[botDefaultModelChain](../../apps/desktop/src/shared/__tests__/botDefaultModelChain.test.ts) |
 | 新 worktree 没有个人开发配置 | Global/CN 实际打包不要求或带入私有 dev 配置；显式 dev 仍要求自己的配置 | [envBundleTransform](../../apps/mobile/src/__tests__/envBundleTransform.test.ts)，覆盖 Expo 转换、Metro 依赖收集和解析 |
 | Windows 读取辅助功能树后，刷新或重新打开代码差异 | 未变的高亮节点与文字选区保持；切回时首轮使用已有高亮缓存；高亮代码保留代码语义父节点，避免逐 token 的节点出现事件 | [PlainUnifiedDiff](../../apps/desktop/src/renderer/features/right-sidebar/plugins/review/DiffViewer/__tests__/PlainUnifiedDiff.test.ts) 的统一／分栏刷新与代码语义场景；[highlight](../../apps/desktop/src/renderer/features/right-sidebar/plugins/review/DiffViewer/__tests__/highlight.test.ts) 的首轮缓存与内容变化场景 |
@@ -50,3 +57,32 @@ pnpm --filter desktop exec vitest run src/main/maker-ipc/__tests__/sessionPermis
 遇到新的复现，优先补在表中已有行为测试里，并写出触发条件和用户结果；只有出现新的业务边界时再建模块。本文只链接测试，不复制测试断言，不维护通过次数或临时任务状态。
 
 Windows 审查页的辅助功能回归须在隔离 Electron 中分别检查首次打开、切出再切回、焦点刷新和滚动，覆盖统一／分栏视图。先确认面板真正可见并通过原生 API 读取其内容，再记录主进程的 `BrowserAccessibilityManager::OnAccessibilityEvents`／`NotifyWinEvent`；仅测 renderer 帧率或读取 `accessibilitySupportEnabled` 不能证明 Windows 通知路径没有阻塞。`get_window_state` 等树读取自身可能改变事件生成条件，重启前后的测量不能直接当成同条件对照。
+
+
+## 冷任务的历史操作无需发送消息（2026-11-11）
+
+回退预览、回退提交（含编辑重发）在既有发送锁内恢复持久化原生会话，再执行操作。
+Pi 会话树、HTML 导出，以及 Pi / Codex 手动压缩共用 `sessionActionRuntime`；恢复只
+启动运行环境，不发送占位消息、不触发模型回答。手动压缩本身仍是用户主动请求的模型操作。
+任务状态必须为 active，保留供应商的 null 语义、执行设备、SSH 主机、权限与目录授权，
+恢复期间账号代次变化即停止。Claude 首轮回退后没有原生 ID 的任务继续走既有 DB-only 回退。
+
+历史操作通过 `_cindyRequireNativeResume` 禁用缺失历史时的新会话兜底；Codex / Pi 原生
+历史不可用时不清旧绑定、不执行后续回退。普通发送仍保留原先的 fresh fallback。
+故障半径：① 只表示当前任务的内存实例不存在；② 只恢复该任务、复用其原生历史；
+③ 不重启应用、不拆共享连接、不恢复已归档或删除的任务，也不重放发送。
+
+恢复边界：个性化提示词、记忆开关只在 renderer 的启动选项里，不落库，所以为回退 / 手动压缩
+临时恢复出的运行环境，在动作结束后立即以 `runtime-refresh` 关闭，下一次发送再带着正常启动
+选项冷启动；不能让它被后续发送静默复用。例外：Claude 回退提交后，原生回退（`pendingRewindTo`）只挂在该运行
+环境上、由它的下一次发送执行，所以成功提交后保留运行环境，否则下次发送会续上未裁剪的原生历史。严格恢复标记（`_cindyRequireNativeResume`）不经
+远程 Agent 线协议传到另一台电脑，所以 Agent 在另一台电脑上的任务，回退 / 手动压缩的冷恢复
+会拒绝并提示先在那台电脑恢复；要支持需另行评审线协议兼容（`protocol-compatibility.md`）。
+回退入口与其他会启动 Agent 的 IPC 一样，非 device-link 调用必须来自受信顶层页面。
+
+同类入口排查：上下文用量查询已有懒恢复；模型/权限设置已有持久化路径；插话必须确有
+运行中的轮次，不能通过隐式发消息来制造。没有把这些不同语义改成一律启动 Agent。
+
+回归入口：Desktop `sessionActionRuntime.test.ts`（冷启动、并发、状态、账号切换），
+`rewind-ipc.test.ts`（预览/提交接线与恢复失败不提交）、`rewind.test.ts`（历史与文件回退）；
+maker-core `codex/index.test.ts` 与 Pi `pi-auto-review-dispatch.test.ts` 的 strict resume 用例。

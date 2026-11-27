@@ -21,6 +21,7 @@
  * 截断工具与常量。
  */
 
+import { imText } from './imText';
 // 只做 type-only 依赖: 本模块被 hook-control/interactions 复用, 那条链路刻意
 // 不在运行期加载 maker-core barrel(session-runner 单测按最小面 mock 该包)。
 import type {
@@ -49,8 +50,13 @@ export const BTN_LABEL_MAX = 30;
  */
 export const HOOK_PERMISSION_INPUT_SUMMARY_MAX = 600;
 export const IM_PERMISSION_INPUT_PREVIEW_MAX = 800;
-/** 无选项降级时唯一按钮的文案(两侧一致)。 */
-export const ASK_CONTINUE_LABEL = '继续';
+/** IM 问答卡单个选项 preview 与整卡累计 preview 的 UTF-8 字节上限（远低于飞书 30 KB 整卡限制）。 */
+export const IM_ASK_OPTION_PREVIEW_MAX_BYTES = 2400;
+export const IM_ASK_TOTAL_PREVIEW_MAX_BYTES = 6000;
+/** 无选项降级时唯一按钮的文案(两侧一致, 跟随界面语言)。 */
+export function askContinueLabel(): string {
+  return imText('imBot.text.shared.card.askContinue');
+}
 /**
  * 把打勾卡勾选结果编成 answers value。
  *
@@ -88,13 +94,60 @@ export function formatAskAnswersForDisplay(answers: Record<string, string>): str
 /** IM 卡片截断: 折行后追加「…(已截断)」(卡片正文有排版空间)。 */
 export function truncateBlock(s: string, max: number): string {
   if (!s) return '';
-  return s.length > max ? `${s.slice(0, max)}\n\n…(已截断)` : s;
+  return s.length > max ? `${s.slice(0, max)}\n\n${imText('imBot.text.shared.card.truncated')}` : s;
 }
 
 /** hook 卡片截断: 单行省略号(标题 / 单行摘要用)。 */
 export function truncateInline(s: string, max: number): string {
   if (!s) return '';
   return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+/** 按 UTF-8 字节上限在 Unicode 码点边界截断，避免切坏代理对或撑爆飞书 30 KB 卡片限制。 */
+function sliceUtf8Bytes(text: string, maxBytes: number): { text: string; truncated: boolean } {
+  if (maxBytes <= 0) return { text: '', truncated: text.length > 0 };
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return { text, truncated: false };
+  let bytes = 0;
+  let end = 0;
+  for (const ch of text) {
+    const chBytes = Buffer.byteLength(ch, 'utf8');
+    if (bytes + chBytes > maxBytes) break;
+    bytes += chBytes;
+    end += ch.length;
+  }
+  return { text: text.slice(0, end), truncated: true };
+}
+
+/**
+ * 把 AskUserQuestion 选项 preview 编排成 Markdown 引用块行数组：
+ * - 只用 `.trim()` 判空，保留首行缩进（如四空格代码块 / ASCII 示意图），只去尾部空白；
+ * - 受单选项字节上限和整卡累计字节预算共同约束，防止长预览或累计多选项超过飞书 30 KB 上限导致整卡发送失败。
+ */
+export function formatAskOptionPreviewLines(
+  preview: string | undefined,
+  budget: { remainingBytes: number },
+): string[] {
+  if (!preview || !preview.trim()) return [];
+  const raw = preview.trimEnd();
+  const truncatedLine = `> ${imText('imBot.text.shared.card.truncated')}`;
+  const markerBytes = Buffer.byteLength(truncatedLine, 'utf8') + 1;
+  const optionBudget = Math.min(IM_ASK_OPTION_PREVIEW_MAX_BYTES, Math.max(0, budget.remainingBytes));
+  if (optionBudget <= markerBytes) {
+    budget.remainingBytes = 0;
+    return [truncatedLine];
+  }
+  const quotedAll = raw.split('\n').map((line) => (line.length > 0 ? `> ${line}` : '>')).join('\n');
+  const fullBytes = Buffer.byteLength(quotedAll, 'utf8');
+  if (fullBytes <= optionBudget) {
+    budget.remainingBytes = Math.max(0, budget.remainingBytes - fullBytes);
+    return quotedAll.split('\n');
+  }
+  const sliced = sliceUtf8Bytes(quotedAll, optionBudget - markerBytes);
+  const lines = sliced.text.length > 0 ? sliced.text.split('\n') : [];
+  lines.push(truncatedLine);
+  const usedBytes = Buffer.byteLength(lines.join('\n'), 'utf8');
+  budget.remainingBytes = Math.max(0, budget.remainingBytes - usedBytes);
+  return lines;
 }
 
 // ── 决策构造(唯一出处) ──────────────────────────────────────────────────────
@@ -129,6 +182,10 @@ export function buildAskAnswersDecision(answers: Record<string, string>): Intera
   return { kind: 'ask_user_question', answers };
 }
 
+export function isOneTimePermission(request: Pick<SessionPermissionRequest, 'metadata'>): boolean {
+  return request.metadata?.permissionScope === 'once';
+}
+
 /** permission: 只允许这一次。 */
 export function buildPermissionAllowOnceDecision(): InteractionDecision {
   return { kind: 'permission', behavior: 'allow' };
@@ -149,6 +206,7 @@ export function buildPermissionAllowOnceDecision(): InteractionDecision {
  * maker-core 运行期依赖; 漂移由本模块单测钉住(见 __tests__)。
  */
 export function buildPermissionAllowAlwaysDecision(request: SessionPermissionRequest): InteractionDecision {
+  if (isOneTimePermission(request)) return buildPermissionAllowOnceDecision();
   // 本机凭证卡的授权范围由宿主定义，不能转换成普通工具的 addRules。
   if (request.metadata?.hostOwnedConfirmation === 'shared_provider_credential'
     && isProviderShareCredentialSessionApproval(request.suggestions)) {
@@ -303,7 +361,7 @@ export function composeInteractionModel(req: InteractionRequest): InteractionMod
               {
                 choiceId: 'ask:continue',
                 index: 0,
-                label: ASK_CONTINUE_LABEL,
+                label: askContinueLabel(),
                 answerText: '',
                 style: 'default',
                 decision: buildAskAnswerDecision(question.question, ''),

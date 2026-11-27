@@ -53,6 +53,70 @@ async function fillBothQuestions(view: ReturnType<typeof render>) {
 }
 
 describe('AskUserQuestionPrompt identity', () => {
+  // A mid-edit withdrawal must retain text and choices as an editable supplement, without stale actions.
+  // Entry: real prompt rerender; tier: unit.
+  it('turns selected choices and text into a supplement when withdrawn', () => {
+    const props = { ...makeProps(), pending: { requestId: 'withdrawn', delivery: 'async' as const,
+      questions: [{ question: 'Choose?', options: [{ label: 'A' }, { label: 'B' }], multiSelect: true }] },
+      draft: { requestId: 'withdrawn', currentIndex: 0, answers: {}, started: true,
+        customInput: 'More detail', selectedLabels: ['A'], showCustomInput: true },
+    };
+    const view = render(createElement(AskUserQuestionPrompt, props));
+    view.rerender(createElement(AskUserQuestionPrompt, { ...props,
+      pending: { ...props.pending, withdrawalReason: 'Already found' } }));
+    expect(view.queryByRole('button', { name: 'Skip' })).toBeNull();
+    expect(view.queryByText('B')).toBeNull();
+    expect((view.getByPlaceholderText('Type your answer…') as HTMLTextAreaElement).value).toBe('A\nMore detail');
+    fireEvent.click(view.getByRole('button', { name: 'Send additional information' }));
+    expect(props.onAnswer).toHaveBeenCalledWith('withdrawn', { 'Choose?': 'A\nMore detail' });
+    expect(view.getByRole('button', { name: 'Close' })).toBeTruthy();
+  });
+
+  // Claude Agent SDK AskUserQuestion options carry optional `preview` markdown.
+  // Clicking/selecting inside the preview must never submit a single-select choice.
+  // Entry: real AskUserQuestionPrompt; tier: unit.
+  it('renders option preview outside the option button so reading it never submits', () => {
+    const props = {
+      ...makeProps(),
+      pending: {
+        requestId: 'req-preview',
+        questions: [{
+          question: 'Send this group message?',
+          header: 'Sync',
+          options: [
+            { label: 'Send (Recommended)', description: 'Post the preview verbatim.', preview: '1. **Desktop image** ready\n2. Host list updated' },
+            { label: 'Edit first', description: 'Revise before sending.', preview: '   ' },
+          ],
+        }],
+      },
+    };
+    const view = render(createElement(AskUserQuestionPrompt, props));
+    const previewBox = view.getByTestId('ask-user-option-preview-1');
+    expect(previewBox.textContent).toContain('Desktop image');
+    expect(previewBox.textContent).toContain('Host list updated');
+    expect(view.queryByTestId('ask-user-option-preview-2')).toBeNull();
+    // Clicking the preview must not trigger single-select submission.
+    fireEvent.click(previewBox);
+    expect(props.onAnswer).not.toHaveBeenCalled();
+    // While a file preview lightbox is open (even if focus stayed on a link inside the card),
+    // number keys and Escape must not submit or skip the underlying question.
+    const lightboxCard = document.createElement('div');
+    lightboxCard.setAttribute('data-text-lightbox-card', 'true');
+    document.body.appendChild(lightboxCard);
+    try {
+      fireEvent.keyDown(window, { key: '1' });
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(props.onAnswer).not.toHaveBeenCalled();
+    } finally {
+      lightboxCard.remove();
+    }
+    // Clicking the option button still submits the choice label.
+    fireEvent.click(view.getByRole('button', { name: /Send \(Recommended\)/ }));
+    expect(props.onAnswer).toHaveBeenCalledExactlyOnceWith('req-preview', {
+      'Send this group message?': 'Send (Recommended)',
+    });
+  });
+
   it('submits distinct ids for two identical question titles', async () => {
     const props = { ...makeProps(), pending: { requestId: 'duplicate-titles', questions: [
       { id: 'first', question: 'Choose', options: [{ label: 'A' }] },
@@ -78,7 +142,7 @@ describe('AskUserQuestionPrompt identity', () => {
         customInput: 'Keep this answer', showCustomInput: true, selectedLabels: [] },
     };
     const view = render(createElement(AskUserQuestionPrompt, props));
-    fireEvent.click(view.getAllByRole('button', { name: 'Submit' })[0]);
+    fireEvent.click(view.getAllByRole('button', { name: 'Send answer' })[0]);
     // A failed/unconfirmed submission keeps the card mounted. No acknowledgement
     // means the visible field and the persisted draft must both remain retryable.
     expect((view.getByPlaceholderText('Type your answer…') as HTMLTextAreaElement).value).toBe('Keep this answer');
@@ -86,11 +150,25 @@ describe('AskUserQuestionPrompt identity', () => {
     expect(draft).toMatchObject({ customInput: 'Keep this answer', showCustomInput: true });
     view.unmount();
     const restored = render(createElement(AskUserQuestionPrompt, { ...props, draft }));
-    fireEvent.click(restored.getAllByRole('button', { name: 'Submit' })[0]);
+    fireEvent.click(restored.getAllByRole('button', { name: 'Send answer' })[0]);
     expect(props.onAnswer).toHaveBeenCalledTimes(2);
     expect(props.onAnswer).toHaveBeenLastCalledWith('request-1', {
       'Final?': multiSelect ? JSON.stringify(['Keep this answer']) : 'Keep this answer',
     });
+  });
+
+  it('navigates independent pending questions without submitting the current draft', () => {
+    const props = makeProps();
+    const first: PendingAskUser = { requestId: 'first', delivery: 'async', questions: [{ question: 'First?' }] };
+    const second: PendingAskUser = { requestId: 'second', delivery: 'async', questions: [{ question: 'Second?' }] };
+    const onSelectQuestion = vi.fn();
+    const view = render(createElement(AskUserQuestionPrompt, { ...props, pending: first,
+      pendingQuestions: [first, second], onSelectQuestion }));
+    fireEvent.change(view.getByPlaceholderText('Type your answer…'), { target: { value: 'Draft' } });
+    fireEvent.click(view.getByRole('button', { name: 'Next' }));
+    expect(onSelectQuestion).toHaveBeenCalledExactlyOnceWith('second');
+    expect(props.onAnswer).not.toHaveBeenCalled();
+    expect(props.onDraftChange.mock.lastCall?.[0]).toMatchObject({ requestId: 'first', customInput: 'Draft' });
   });
 
   it('starts protection on IME composition, but not focus or opening the text field', () => {
@@ -135,7 +213,7 @@ describe('AskUserQuestionPrompt identity', () => {
     expect(input.value).toBe('Unsubmitted detail');
     expect(view.queryByText('Second question')).not.toBeNull();
     expect(view.queryByText('2/2')).not.toBeNull();
-    fireEvent.click(view.getByRole('button', { name: 'Submit' }));
+    fireEvent.click(view.getByRole('button', { name: 'Send answer' }));
     expect(props.onAnswer).toHaveBeenCalledWith('request-1', {
       'First question': 'First draft answer',
       'Second question': JSON.stringify(['A', 'Unsubmitted detail']),
@@ -148,6 +226,7 @@ describe('AskUserQuestionPrompt identity', () => {
     { label: 'selection mode', update: { multiSelect: false } },
     { label: 'header', update: { header: 'Updated header' } },
     { label: 'option description', update: { options: [{ label: 'A', description: 'Updated meaning' }, { label: 'B' }] } },
+    { label: 'option preview', update: { options: [{ label: 'A', preview: 'Updated preview body' }, { label: 'B' }] } },
     { label: 'question count', update: null },
   ])('resets answers when $label changes within the same request', async ({ update }) => {
     const props = makeProps();
@@ -180,7 +259,7 @@ describe('AskUserQuestionPrompt identity', () => {
       await waitFor(() => expect(view.queryByRole('button', { name: /Back/ })).not.toBeNull());
       const label = second.options![0].label;
       fireEvent.click(view.getByText(label));
-      if (second.multiSelect) fireEvent.click(view.getByRole('button', { name: 'Submit' }));
+      if (second.multiSelect) fireEvent.click(view.getByRole('button', { name: 'Send answer' }));
       expectedAnswers[second.question] = second.multiSelect ? JSON.stringify([label]) : label;
     }
     expect(props.onAnswer).toHaveBeenCalledWith('request-1', expectedAnswers);
@@ -214,9 +293,9 @@ describe('AskUserQuestionPrompt identity', () => {
     await waitFor(() => expect(view.queryByText('Second question')).not.toBeNull());
     await waitFor(() => expect(view.queryByRole('button', { name: /Back/ })).not.toBeNull());
     expect(view.queryByPlaceholderText('Type your answer…')).toBeNull();
-    expect((view.getByRole('button', { name: 'Submit' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((view.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(view.getByText('B'));
-    fireEvent.click(view.getByRole('button', { name: 'Submit' }));
+    fireEvent.click(view.getByRole('button', { name: 'Send answer' }));
     expect(props.onAnswer).toHaveBeenCalledWith(requestId, {
       'First question': 'First option',
       'Second question': JSON.stringify(['B']),

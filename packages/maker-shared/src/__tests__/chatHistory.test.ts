@@ -18,10 +18,128 @@ function fixture() {
     if (route.startsWith('/changes?')) return batch;
     return [message('2'), message('1')];
   });
-  const open = () => createChatHistory({ api: api as <T>(route: string) => Promise<T>, store, current: () => live, newGeneration: () => String(++generation) });
+  const open = (readerId?: string) => createChatHistory({ api: api as <T>(route: string) => Promise<T>, store, current: () => live, newGeneration: () => String(++generation), readerId });
   const page = new URLSearchParams('limit=100&before=5');
   return { disk, store, api, open, message, page, setBatch: (value: ChatHistoryBatch) => { batch = value; }, leave: () => { live = false; } };
 }
+
+// Unit: an unrelated join used to discard the opened topic and its older pages.
+it('retains an open topic across a verified peer join and drops it on a reader membership change', async () => {
+  const f = fixture();
+  const cache = f.open('self');
+  const reader = { id: 'self', state: 'joined', accessRevision: 1 };
+  const snapshot = { room: { id: 'room' }, messages: [], members: [reader], cursor: '10' };
+  f.api.mockResolvedValueOnce(snapshot);
+  const initial = await cache.snapshot('room');
+  const page = new URLSearchParams('threadRootId=root&before=5');
+  const replies = await cache.page('room', page);
+  const members = [reader, { id: 'peer', state: 'joined' }];
+  f.api.mockResolvedValueOnce({ ...snapshot, members, cursor: '11' });
+  await cache.receive('room', { cursor: '11', changes: [{ type: 'membership.changed', entityId: 'peer' }] }, '10');
+  expect(cache.committedSnapshot('room')).toMatchObject({ members, cacheGeneration: initial.cacheGeneration });
+  f.api.mockClear();
+  expect(await cache.page('room', page)).toEqual(replies);
+  expect(f.api).not.toHaveBeenCalled();
+  await cache.receive('room', { cursor: '12', changes: [{ type: 'membership.changed', entityId: 'self' }] }, '11');
+  expect(cache.committedSnapshot('room')).toBeUndefined();
+});
+
+// Unit: rejecting receive() interrupts the shared push connection on a single room's HTTP failure.
+it('invalidates only the unverified room when its join snapshot is throttled', async () => {
+  const f = fixture();
+  const cache = f.open('self');
+  for (const id of ['room', 'other']) {
+    f.api.mockResolvedValueOnce({ room: { id }, cursor: '10', messages: [], members: [{ id: 'self', state: 'joined' }] });
+    await cache.snapshot(id);
+  }
+  f.api.mockRejectedValueOnce(new Error('RATE_LIMITED'));
+  await expect(cache.receive('room', { cursor: '11', changes: [{ type: 'membership.changed', entityId: 'peer' }] }, '10'))
+    .resolves.toBeUndefined();
+  expect(f.disk.has('room')).toBe(false);
+  expect(await cache.receive('other', { cursor: '11', changes: [] }, '10')).toBe('11');
+});
+
+// Unit tier, phone group-open latency: a store that rewrites the whole room per commit was
+// asked to commit after every step of one read (delta, metadata, page, each root lookup).
+describe('one commit per room operation (coalesceWrites)', () => {
+  const coalesced = (f: ReturnType<typeof fixture>) => createChatHistory({ api: f.api as <T>(route: string) => Promise<T>, store: f.store,
+    current: () => true, newGeneration: () => 'generation', coalesceWrites: true });
+  it('commits a delta and its metadata refresh together, and nothing for an unchanged room', async () => {
+    const f = fixture(); const cache = coalesced(f);
+    await cache.snapshot('room');
+    expect(f.store.write).toHaveBeenCalledTimes(1);
+    // The same cursor comes back: there is nothing to make durable.
+    cache.invalidate('room'); await cache.snapshot('room');
+    expect(f.store.write).toHaveBeenCalledTimes(1);
+    f.setBatch({ cursor: '11', changes: [{ type: 'message.updated', data: { message: f.message('9', 2) } }, { type: 'conversation.updated' }] });
+    cache.invalidate('room'); await cache.snapshot('room');
+    expect(f.api.mock.calls.filter(([route]) => route.endsWith('/snapshot'))).toHaveLength(2);
+    expect(f.store.write).toHaveBeenCalledTimes(2);
+    expect(f.disk.get('room')).toMatchObject({ cursor: '11', metadataDirty: false, messages: { 9: { revision: 2 } } });
+  });
+  it('keeps a metadata invalidation until the refresh that answers it is durable', async () => {
+    const f = fixture(); const cache = coalesced(f);
+    await cache.snapshot('room');
+    const write = f.store.write as ReturnType<typeof vi.fn>;
+    write.mockRejectedValueOnce(new Error('disk full'));
+    cache.invalidate('room', true);
+    await expect(cache.snapshot('room')).rejects.toThrow('disk full');
+    const before = f.api.mock.calls.filter(([route]) => route.endsWith('/snapshot')).length;
+    // The failed commit consumed nothing: the next read refreshes the metadata again.
+    await cache.snapshot('room');
+    expect(f.api.mock.calls.filter(([route]) => route.endsWith('/snapshot')).length).toBe(before + 1);
+    await cache.snapshot('room');
+    expect(f.api.mock.calls.filter(([route]) => route.endsWith('/snapshot')).length).toBe(before + 1);
+  });
+  it('reads several roots in one operation, keeps a missing one to itself and still rejects a lost room', async () => {
+    const f = fixture(); const cache = coalesced(f);
+    f.api.mockImplementation(async route => {
+      if (route.endsWith('/snapshot')) return { room: { id: 'room', kind: 'group' }, messages: [f.message('9')], cursor: '10' };
+      if (route.startsWith('/changes?')) return { cursor: '10', changes: [] };
+      const id = route.split('/').at(-1)!;
+      if (id === 'gone') throw Object.assign(new Error('gone'), { status: 404, code: 'MESSAGE_NOT_FOUND' });
+      if (id === 'denied') throw Object.assign(new Error('left'), { status: 403, code: 'NOT_MEMBER' });
+      return f.message(id);
+    });
+    await cache.snapshot('room');
+    const found = await cache.lookup('room', ['3', '4', 'gone', '3']);
+    expect([...found.keys()]).toEqual(['3', '4', 'gone']);
+    expect(found.get('3')).toMatchObject({ message: { id: '3' } });
+    expect(found.get('gone')).toMatchObject({ error: { code: 'MESSAGE_NOT_FOUND' } });
+    // Bootstrap, then the whole batch: two commits, and the room's verified state survives the miss.
+    expect(f.store.write).toHaveBeenCalledTimes(2);
+    expect(cache.hasFreshMessages('room')).toBe(true);
+    const calls = f.api.mock.calls.length;
+    expect((await cache.lookup('room', ['3', '4'])).get('4')).toMatchObject({ message: { id: '4' } });
+    expect(f.api.mock.calls.length).toBe(calls);
+    await expect(cache.lookup('room', ['5', 'denied'])).rejects.toMatchObject({ code: 'NOT_MEMBER' });
+    expect(f.disk.has('room')).toBe(false);
+  });
+  // Review finding: one history per account kept every room it had ever read in memory.
+  it('lets go of idle rooms over the memory budget and restores them from the store unchanged', async () => {
+    const f = fixture();
+    const read = vi.spyOn(f.store, 'read');
+    f.api.mockImplementation(async route => {
+      const room = /conversations\/([^/]+)/.exec(route)?.[1] ?? '';
+      if (route.endsWith('/snapshot')) return { room: { id: room, kind: 'group' }, messages: [f.message('9')], cursor: '10' };
+      if (route.startsWith('/changes?')) return { cursor: '10', changes: [] };
+      return [f.message('2'), f.message('1')];
+    });
+    const cache = createChatHistory({ api: f.api as <T>(route: string) => Promise<T>, store: f.store, current: () => true,
+      newGeneration: () => 'generation', coalesceWrites: true, maxIdleMessages: 4 });
+    const page = new URLSearchParams('limit=100');
+    for (const room of ['a', 'b']) { await cache.snapshot(room); await cache.page(room, page); }
+    // Three messages each: the room used last stays, the older one is only on disk now.
+    expect(cache.cursor('a')).toBeUndefined();
+    expect(cache.cursor('b')).toBe('10');
+    const requests = f.api.mock.calls.length, restores = read.mock.calls.length;
+    expect((await cache.page('a', page)).map(message => message.id)).toEqual(['2', '1']);
+    expect(read.mock.calls.length).toBe(restores + 1);
+    // Still within its verified window: restoring it asks the server nothing.
+    expect(f.api.mock.calls.length).toBe(requests);
+    expect(cache.cursor('b')).toBeUndefined();
+  });
+});
 
 describe('durable chat history', () => {
   // Unit, topic latency reproduction: each new head kept an overlapping page;
@@ -147,6 +265,55 @@ describe('durable chat history', () => {
     readSeq = '10'; cache.invalidate('room', true); finish(); await pending;
     f.api.mockImplementation(responding);
     expect(await cache.snapshot('room')).toMatchObject({ reads: [{ read_seq: '10' }] });
+  });
+
+  // Unit, #13325: in-order pushes exercise shifted cursors but miss a late row inside saved coverage.
+  it('retains late messages in exact and stitched history pages across restart', async () => {
+    const f = fixture();
+    const cache = f.open();
+    const latest = new URLSearchParams('limit=3');
+    f.api.mockResolvedValueOnce({ room: { id: 'room' }, messages: [], cursor: '10' })
+      .mockResolvedValueOnce(['20', '18', '16'].map(id => f.message(id)));
+    await cache.page('room', latest);
+    for (const [index, id] of ['22', '24', '19', '26'].entries()) {
+      await cache.receive('room', { cursor: String(11 + index), changes: [
+        { type: 'message.created', data: { message: f.message(id) } },
+      ] }, String(10 + index));
+    }
+    const reopened = f.open();
+    f.api.mockReset().mockResolvedValueOnce({ cursor: '14', changes: [] });
+    const read = async (query: string) => (await reopened.page('room', new URLSearchParams(query))).map(m => m.id);
+    expect(await read('limit=3')).toEqual(['26', '24', '22']);
+    expect(await read('limit=3&before=22')).toEqual(['20', '19', '18']);
+    expect(await read('limit=3&before=21')).toEqual(['20', '19', '18']);
+    expect(f.api).toHaveBeenCalledTimes(1); // Only the restart cursor check.
+  });
+
+  it('inserts late replies only into matching bounded windows', async () => {
+    const f = fixture();
+    const cache = f.open();
+    await cache.snapshot('room');
+    const windows = [
+      ['before=20', []],
+      ['before=20&threadRootId=other', []],
+      ['before=19&all=true', []],
+      ['before=20&all=true&after=19', []],
+      ['before=20&threadRootId=topic', ['19']],
+      ['before=20&all=true', ['19']],
+    ] as const;
+    for (const [key] of windows) {
+      f.api.mockResolvedValueOnce([]);
+      await cache.page('room', new URLSearchParams(key));
+    }
+    f.api.mockClear();
+    for (const cursor of ['11', '12']) {
+      await cache.receive('room', { cursor, changes: [{ type: 'message.created',
+        data: { message: { ...f.message('19'), threadRootId: 'topic' } } }] }, String(Number(cursor) - 1));
+    }
+    for (const [key, expected] of windows) {
+      expect((await cache.page('room', new URLSearchParams(key))).map(m => m.id)).toEqual(expected);
+    }
+    expect(f.api).not.toHaveBeenCalled();
   });
 
   it('stitches known ranges when a new message shifts all older pagination boundaries', async () => {

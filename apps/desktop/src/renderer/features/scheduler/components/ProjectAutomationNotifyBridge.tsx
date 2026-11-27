@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useAppShellCover } from '@/contexts/AppShellCoverContext';
 import { toast } from '@/lib/toast';
 import { isSecondaryWindow } from '@/lib/secondaryWindow';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
@@ -9,9 +10,10 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 export function ProjectAutomationNotifyBridge() {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const { localDbGateStatus } = useAppShellCover();
 
   useEffect(() => {
-    if (isSecondaryWindow() || isSidebarWindow()) return;
+    if (localDbGateStatus !== 'ready' || isSecondaryWindow() || isSidebarWindow()) return;
     let active = true;
     const pendingImports = new Map<string, ProjectAutomationImport>();
     let toastId: string | undefined;
@@ -60,6 +62,11 @@ export function ProjectAutomationNotifyBridge() {
                 if (result.pendingImport) offerImport(result.pendingImport);
                 else if (pendingImports.get(pending.workingDir)?.configHash === pending.configHash) {
                   pendingImports.delete(pending.workingDir);
+                }
+                if (active && result.skipped === 'no-file') {
+                  toast.warning(t('scheduler.projectAutomation.import.fileMissing', {
+                    projectName: lastPathSegment(pending.workingDir),
+                  }));
                 }
               } catch (error) {
                 if (active) toast.error(error instanceof Error ? error.message : String(error));
@@ -116,7 +123,7 @@ export function ProjectAutomationNotifyBridge() {
       unsubscribe();
       if (toastId) toast.dismiss(toastId);
     };
-  }, [confirm, t]);
+  }, [confirm, t, localDbGateStatus]);
 
   return null;
 }

@@ -13,7 +13,8 @@ import {
   setCodexEnvironmentShutdownHook,
   shutdownCodexEnvironment,
   unregisterCodexMcpThreadContext,
-} from '../codexEnvironment.js';
+  closeCodexMcpSessionInstance,
+} from '../codexEnvironment.desktop.js';
 import { CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY, CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../codexBuiltinToolPolicy.js';
 import { registerAppServer, clearAppServerConfigs } from '../../mcp-apps/runtime.js';
 import { CINDY_MAKE_VENDOR_OPTION_KEY } from '../../../shared/cindyMakeSession.js';
@@ -81,6 +82,43 @@ describe('codexEnvironment', () => {
     clearAppServerConfigs();
   });
 
+  // Regression: Codex handle cleanup used to remove only thread identity, retaining
+  // full McpServer objects without a client DELETE. Unit tier, real loopback bridge;
+  // existing tests covered routing but not retained transports across ended instances.
+  it('releases ended instance transports without closing a sibling or a replacement thread', async () => {
+    const config = await getCodexExtraSpawnConfig({ mcpProviders: [testProvider()], logger: noopLogger() });
+    const bridge = config.bridge!;
+    const initialize = async (instance: string) => {
+      const url = new URL(bridge.url('cindy_test'));
+      url.searchParams.set('instance', instance);
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${bridge.token}`, accept: 'application/json, text/event-stream', 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+          protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' },
+        } }),
+      });
+      expect(response.status).toBe(200);
+      await response.text();
+    };
+    await initialize('sibling');
+    for (const instance of ['first', 'second', 'third']) {
+      const ctx = { agentKind: 'codex' as const, sessionId: 'task', sessionInstanceId: instance, workingDir: '/repo', vendorOptions: {} };
+      registerCodexMcpThreadContext('thread', ctx);
+      await initialize(instance);
+      expect(bridge.mcpSessionCount()).toBe(2);
+      // Rewind/fork keeps the same instance and must not lose its already-started MCP client.
+      unregisterCodexMcpThreadContext('thread', instance);
+      registerCodexMcpThreadContext('replacement-thread', ctx);
+      expect(bridge.mcpSessionCount()).toBe(2);
+      unregisterCodexMcpThreadContext('replacement-thread', instance);
+      closeCodexMcpSessionInstance(instance);
+      expect(bridge.mcpSessionCount()).toBe(1);
+    }
+    closeCodexMcpSessionInstance('sibling');
+    expect(bridge.mcpSessionCount()).toBe(0);
+  });
+
   it('reuses one bridge and exposes unbound MCP server URLs', async () => {
     const logger = noopLogger();
     const providers = [testProvider()];
@@ -124,6 +162,7 @@ describe('codexEnvironment', () => {
     const appProxy = vi.fn((read: () => AppServerConfig, context: McpProviderContext) => {
       expect(read()).toEqual({
         id: 'custom_test',
+        name: 'Custom Test',
         url: 'https://example.test/mcp',
         transport,
         headers: { Authorization: 'Bearer test-only-token' },

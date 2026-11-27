@@ -40,17 +40,27 @@ const bot = z.object({
   /** The same per value for the companion store (store.ts), whose revisions are its own. */
   stored: z.record(z.string(), pref).optional(),
   storeSeeded: z.boolean().optional(),
+  /** Local restore failed for these cloud keys. No local value or deletion may replace them. */
+  restoreBlockedKeys: z.array(z.string()).optional(),
   /** This computer gave the companion away; never re-register it as home here. */
   demoted: z.boolean().optional(),
   /** Cloud history was added while the canonical Session was busy; rebuild at the next idle point. */
   pendingRebuild: z.boolean().optional(),
   /** The never-synced local copy was backed up before a take-over; retries do not back it up again. */
   backedUp: z.boolean().optional(),
+  /** Owner-approved correction for an unfinished restore; local/account scoped, never sent on the wire. */
+  profileCorrection: z.object({
+    homeDeviceId: z.string(), version: z.string(),
+    values: z.object({ identitySource: z.string().max(12000).optional(), userContextSource: z.string().max(12000).optional() }),
+    backedUp: z.boolean().optional(),
+    /** Once restored, the uploader owns retries. Drop this only after its profile revision advances. */
+    restored: z.object({ preference: z.number(), store: z.number() }).optional(),
+  }).optional(),
   /**
    * What the last take-over could not keep of the old setup (cloud-companions.md §2): shown once
    * after the move, then cleared by the owner.
    */
-  arrivalNotices: z.array(z.enum(['permissions', 'model'])).optional(),
+  arrivalNotices: z.array(z.enum(['permissions', 'model', 'model_setup', 'partial_content'])).optional(),
   /** Room file holding each skill file's content (by sha256), so unchanged files are not sent again. */
   skillFileMedia: z.record(z.string(), z.string()).optional(),
   /** Skill files the cloud does not have, learned at take-over; passed on until this computer has them. */

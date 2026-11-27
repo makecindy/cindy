@@ -121,9 +121,9 @@ export interface Capabilities {
    */
   sessionHtmlExport?: CapabilityStatus;
   /**
-   * 手动压缩会话上下文 —— pi 原生 compact RPC(可带聚焦指令,调 LLM 生成摘要)。
+   * 手动压缩会话上下文 —— Pi compact / Codex thread/compact/start 原生 RPC。
    * 支持时 handle 实现 compactSession;UI 据此决定是否显示「压缩会话」入口。
-   * CC/Codex 的 /compact 走各自 agent 内置斜杠命令,不经此能力(缺省视为不支持)。
+   * Claude Code 的 /compact 走内置斜杠命令，不经此能力。聚焦指令仅 Pi 支持。
    */
   manualCompact?: CapabilityStatus;
 }

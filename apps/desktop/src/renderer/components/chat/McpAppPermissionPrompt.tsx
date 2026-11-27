@@ -24,9 +24,10 @@ export function McpAppPermissionPrompt({
     <section
       aria-label={t('mcpApps.awaitingApproval')}
       data-mcp-app-permission
+      data-plugin-ui-keep-visible={floating ? '' : undefined}
       className={
         floating
-          ? 'absolute inset-x-0 bottom-full z-40 mb-2 max-h-[min(420px,60vh)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-[var(--surface-elevated)] p-3 shadow-[shadow:var(--shadow-menu)]'
+          ? 'absolute inset-x-0 bottom-full z-page-top mb-2 max-h-[min(420px,60vh)] overflow-y-auto overscroll-contain rounded-xl border border-border bg-[var(--surface-elevated)] p-3 shadow-[shadow:var(--shadow-menu)]'
           : 'border-t border-border px-3 py-2 text-13 text-[var(--text-secondary)]'
       }
     >
@@ -44,8 +45,8 @@ export function McpAppPermissionPrompt({
             <p className="break-words text-12 text-[var(--text-secondary)]">
               {permission.mcpApp.serverId}
             </p>
-            {permission.autoReviewReason && (
-              <p className="text-12 text-[var(--text-secondary)]">{permission.autoReviewReason}</p>
+            {(permission.autoReviewQuotaExhausted || permission.autoReviewReason) && (
+              <p className="text-12 text-[var(--text-secondary)]">{permission.autoReviewQuotaExhausted ? t('chat.remoteError.AUTO_REVIEW_UNAVAILABLE_QUOTA') : permission.autoReviewReason}</p>
             )}
             <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-12 text-[var(--text-secondary)]">
               {JSON.stringify(permission.input, null, 2)}

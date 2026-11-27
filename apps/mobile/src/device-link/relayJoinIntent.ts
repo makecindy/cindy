@@ -8,7 +8,7 @@
  * 接手,换账号即丢弃。
  */
 import { useSyncExternalStore } from 'react';
-import { parseRelayJoinLink, type RelayJoinLink } from '@cindy/device-link';
+import { parseRelayJoinLink, type RelayAccountOffer, type RelayJoinLink } from '@cindy/device-link';
 
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 
@@ -19,8 +19,10 @@ const RELAY_JOIN_INTENT_TTL_MS = 10 * 60_000;
 export interface RelayJoinIntent {
   /** 每收到一条链接加一;加入页据此在打开期间换成新链接。 */
   id: number;
-  /** null = 收到了链接但不合法或已丢弃(加入页显示「链接无效」)。 */
+  /** null = 收到了链接但不合法或已丢弃(加入页显示「链接无效」);同账号加入时由加入页去要。 */
   link: RelayJoinLink | null;
+  /** 加入同账号电脑正在用的中转:不用链接,那台电脑回写链接并自动放行。 */
+  account?: RelayAccountOffer;
 }
 
 let pending: RelayJoinIntent | null = null;
@@ -78,6 +80,18 @@ export function receiveRelayJoinIntent(path: string): boolean {
   }
   notify();
   return true;
+}
+
+/** 设置页里点了同账号电脑的中转:交给加入页去要链接。只在已登录时调用,换账号即丢弃。 */
+export function startRelayAccountJoin(offer: RelayAccountOffer): void {
+  release();
+  const owner = getMobileAuthOwner();
+  pending = { id: ++sequence, link: null, account: offer };
+  expiry = setTimeout(clearRelayJoinIntent, RELAY_JOIN_INTENT_TTL_MS);
+  stopWatching = subscribeMobileAuthOwner(() => {
+    if (!isMobileAuthOwnerCurrent(owner)) clearRelayJoinIntent();
+  });
+  notify();
 }
 
 /** 加入码已提交(中转已作废它)、用户放弃或页面换了链接时调用。 */

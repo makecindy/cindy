@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { cronToHuman } from '../cronToHuman';
+import { cronToHuman } from '../../../../../shared/scheduleCronLabel';
 
 import i18next from 'i18next';
 import zhCN from '@/i18n/locales/zh-CN/common.json';

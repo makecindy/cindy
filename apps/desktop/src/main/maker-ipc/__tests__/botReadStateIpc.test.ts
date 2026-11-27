@@ -10,7 +10,9 @@ vi.mock('electron', () => ({ BrowserWindow: { fromWebContents: electron.from } }
 import { markAppContentWindow } from '../../windowFocusClassifier';
 import { isTrustedAppRendererEventForLocation, isTrustedAppRendererWindowForLocation } from '../../security/trustedAppRenderer';
 import { throwIpcError } from '../../utils/ipcValidate';
+import * as atomic from '../../utils/atomicWriteFile';
 import { createBotReadStateIpc, createBotWindowAccess } from '../botReadStateLocalIpc';
+import { createBotReadStateStorage } from '../botReadStateStorage';
 
 const location = { devServerUrl: 'http://localhost:5173', packagedRendererFile: '/unused/index.html' };
 let root: string;
@@ -21,6 +23,7 @@ let owner: { dataOwnerId: string; generation: number };
 let roots: ReturnType<typeof vi.fn>;
 let currentOwner: ReturnType<typeof vi.fn>;
 let access: ReturnType<typeof createBotWindowAccess>;
+let storage: ReturnType<typeof createBotReadStateStorage>;
 let handler: ReturnType<typeof createBotReadStateIpc>;
 function makeWindow(url = 'http://localhost:5173/') {
   const frame = { url, parent: null };
@@ -46,8 +49,10 @@ beforeEach(() => {
     } });
   roots = vi.fn(() => path.join(root, owner.dataOwnerId));
   currentOwner = vi.fn(() => owner);
-  handler = createBotReadStateIpc({ assertTrustedSender: access.assertSender, currentOwner,
-    boundaryPending: () => false, ownerRoot: roots });
+  storage = createBotReadStateStorage({
+    currentOwner, boundaryPending: () => false, ownerRoot: roots,
+  });
+  handler = createBotReadStateIpc(access.assertSender, storage);
 });
 afterEach(() => { vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }); });
 
@@ -56,6 +61,16 @@ it('shares committed positions through real main/secondary IPC entries', async (
   expect((await handler(event(secondary), request('snapshot'))).positions).toEqual([
     { identity: { kind: 'group', id: 'room' }, ackAt: 100 },
   ]);
+  const identity = { kind: 'group', id: 'room' } as const;
+  await expect(storage.readPosition(owner, identity)).resolves.toBe(100);
+  const restartedStorage = createBotReadStateStorage({ currentOwner, boundaryPending: () => false, ownerRoot: roots });
+  const readSync = vi.spyOn(atomic, 'readAtomicFileSync');
+  await expect(restartedStorage.readPosition(owner, identity)).resolves.toBe(100);
+  expect(readSync).not.toHaveBeenCalled();
+  const previous = owner;
+  owner = { dataOwnerId: 'account-b', generation: 2 };
+  await expect(storage.readPosition(previous, identity)).rejects.toThrow('BOT_READ_OWNER_CHANGED');
+  await expect(storage.readPosition(owner, identity)).resolves.toBeUndefined();
 });
 
 it('rejects a trusted app-content utility before consulting the owner or disk', () => {

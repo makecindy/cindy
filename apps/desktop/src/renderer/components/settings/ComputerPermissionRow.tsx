@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
@@ -5,45 +6,62 @@ import { Spinner } from '@/components/ui/spinner';
 export function ComputerPermissionRow({
   label,
   iconSrc,
+  icon,
   granted,
   pending,
+  disabled = pending,
   actionLabel,
   onAction,
   compact = false,
 }: {
   compact?: boolean;
   label: string;
-  iconSrc: string;
+  /** System Settings artwork; `icon` is used when the pane has no extracted artwork. */
+  iconSrc?: string;
+  icon?: ReactNode;
   granted: boolean;
   pending: boolean;
+  disabled?: boolean;
   actionLabel: string;
   onAction: () => void;
 }) {
   return (
-    <button
+    <button data-settings-search-action="Grant or open the listed computer permission"
       type="button"
       onClick={onAction}
-      disabled={pending}
+      disabled={disabled}
       className={cn(
         'flex w-full min-w-0 items-center text-left',
         compact
-          ? 'min-h-8 gap-2 rounded-md py-1'
+          ? 'min-h-8 gap-2 rounded-lg py-1'
           : 'min-h-[64px] gap-3 rounded-xl border border-solid border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3.5 py-3',
         'transition-colors hover:bg-[var(--settings-menu-bg-hover)]',
         'disabled:cursor-default disabled:hover:bg-[var(--settings-input-bg)]',
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
       )}
     >
-      <img
-        className={cn(
-          'shrink-0 object-contain grayscale opacity-70',
-          compact ? 'size-4' : 'size-8',
-        )}
-        src={iconSrc}
-        alt=""
-        aria-hidden="true"
-      />
-      <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--settings-section-title)]">
+      {iconSrc ? (
+        <img
+          className={cn(
+            'shrink-0 object-contain grayscale opacity-70',
+            compact ? 'size-4' : 'size-8',
+          )}
+          src={iconSrc}
+          alt=""
+          aria-hidden="true"
+        />
+      ) : (
+        <span
+          className={cn(
+            'grid shrink-0 place-items-center text-[var(--text-tertiary)]',
+            compact ? 'size-4' : 'size-8',
+          )}
+          aria-hidden="true"
+        >
+          {icon}
+        </span>
+      )}
+      <span className="min-w-0 flex-1 break-words text-13 font-medium text-[var(--settings-section-title)]">
         {label}
       </span>
       <span

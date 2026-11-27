@@ -11,6 +11,10 @@ import { _clearSmartResolveCache } from '@/lib/localPathResolver';
 import { AskUserQuestionPrompt } from '../components/new-chat/AskUserQuestionPrompt';
 import { BotGroupPendingInteraction } from '../features/bots/BotGroupPendingInteraction';
 import { Tooltip } from '@/components/ui/tooltip';
+// This test exercises keyboard ownership in the real preview, not its cold
+// bundle load. Preload once before rendering: React may start the lazy import
+// only when async act commits, after dynamicImportSettled has already returned.
+import '@/components/chat/TextLightbox';
 
 const links = vi.hoisted(() => ({ html: vi.fn(), url: vi.fn(), lane: {} as Record<string, unknown>, answer: vi.fn() }));
 vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {
@@ -23,6 +27,13 @@ vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: {
 vi.mock('@/state/agentIslandActivity', () => ({ useAgentIslandActivity: () => null }));
 vi.mock('@/components/chat/useOpenWithMenu', async (original) => ({
   ...await original<typeof import('@/components/chat/useOpenWithMenu')>(),
+  openHtmlFileByPreference: links.html,
+  activateMessageUrl: links.url,
+}));
+// Navigation helpers moved out of the hook module; components import them
+// directly, so the test must mock that module too.
+vi.mock('@/components/chat/messageLinkActions', async (original) => ({
+  ...await original<typeof import('@/components/chat/messageLinkActions')>(),
   openHtmlFileByPreference: links.html,
   activateMessageUrl: links.url,
 }));
@@ -73,7 +84,12 @@ describe('AskUserQuestionPrompt action labels', () => {
     })));
     const link = await view.findByRole('link', { name: 'notes.txt' });
     link.focus();
-    fireEvent.click(link);
+    // PR #9754 CI: the real editor's cold import can exceed the DOM wait's
+    // 1s budget on Windows. Finish loading before checking keyboard behavior.
+    await act(async () => {
+      fireEvent.click(link);
+      await import('../components/chat/TextLightbox');
+    });
     await waitFor(() => expect(document.querySelector('[data-text-lightbox-card]')).not.toBeNull());
     await view.findByRole('tooltip');
     vi.useFakeTimers();
@@ -189,8 +205,8 @@ describe('AskUserQuestionPrompt action labels', () => {
     fireEvent.change(view.getByPlaceholderText('Type your answer…'), {
       target: { value: 'Updated answer' },
     });
-    expect(view.getAllByRole('button', { name: 'Submit' })).toHaveLength(1);
-    fireEvent.click(view.getByRole('button', { name: 'Submit' }));
+    expect(view.getAllByRole('button', { name: 'Send answer' })).toHaveLength(1);
+    fireEvent.click(view.getByRole('button', { name: 'Send answer' }));
 
     expect(onAnswer).toHaveBeenCalledWith('req-submit', {
       'Final question': 'Updated answer',
@@ -203,7 +219,7 @@ describe('AskUserQuestionPrompt action labels', () => {
       questions: [{ question: 'Final question', options: [{ label: 'A' }] }],
     });
 
-    expect(view.queryByRole('button', { name: 'Submit' })).toBeNull();
+    expect(view.queryByRole('button', { name: 'Send answer' })).toBeNull();
   });
 
   it('keeps the footer Submit for a final multi-select question', () => {
@@ -222,7 +238,7 @@ describe('AskUserQuestionPrompt action labels', () => {
       onAnswer,
     );
 
-    const submit = view.getByRole('button', { name: 'Submit' }) as HTMLButtonElement;
+    const submit = view.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
 
     fireEvent.click(view.getByText('A'));
@@ -236,11 +252,11 @@ describe('AskUserQuestionPrompt action labels', () => {
 
   it('provides localized prompt copy in every supported locale', async () => {
     const expected = {
-      en: ['Next', 'Submit'],
-      'zh-CN': ['下一题', '提交'],
-      'zh-TW': ['下一題', '提交'],
-      ja: ['次へ', '送信'],
-      ko: ['다음', '제출'],
+      en: ['Next', 'Send answer'],
+      'zh-CN': ['下一题', '发送答复'],
+      'zh-TW': ['下一題', '傳送答覆'],
+      ja: ['次へ', '回答を送信'],
+      ko: ['다음', '답변 보내기'],
     } as const;
     // 非英文语言包按需加载；t(key, { lng }) 只读已加载的语言。
     await i18n.loadLanguages(Object.keys(expected));

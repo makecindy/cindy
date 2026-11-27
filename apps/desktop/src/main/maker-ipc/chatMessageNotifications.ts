@@ -1,3 +1,5 @@
+import { chatGroupNotificationMode } from '@cindy/maker-shared/botGroupChat';
+
 /** Live chat notifications. Server reads/mute state win over delayed or replayed socket events. */
 export interface ChatMessageNotification {
   groupId: string;
@@ -17,19 +19,24 @@ export interface ChatNotificationMessage {
 }
 
 export interface ChatAttentionSnapshot<M extends ChatNotificationMessage> {
-  room: { name: string; kind?: string; archived?: boolean; dissolved_at?: string | null };
+  room: { name: string; default_notification_scope?: 'all' | 'mentions'; kind?: string; archived?: boolean; dissolved_at?: string | null };
   messages: M[];
   reads?: Array<{ thread_key: string; read_seq: string; muted?: boolean; following?: boolean; notification_scope?: 'all' | 'mentions' | null }>;
 }
 
-/** One eligibility rule for native notifications and the island's unread projection. */
+/**
+ * One eligibility rule for native notifications and the island's unread projection:
+ * a message the group's notification setting would not alert never reaches the island either.
+ */
 export function isChatMessageAttention<M extends ChatNotificationMessage>(snapshot: ChatAttentionSnapshot<M>, message: M, selfId: string): boolean {
-  if (!snapshot.reads || snapshot.room.archived || snapshot.room.dissolved_at
-    || snapshot.reads.some(read => read.thread_key === 'main' && read.muted)
+  const main = snapshot.reads?.find(read => read.thread_key === 'main');
+  if (!snapshot.reads || snapshot.room.archived || snapshot.room.dissolved_at || main?.muted
     || message.deleted || message.origin === 'system' || message.origin === 'import' || message.authorId === selfId) return false;
+  const mentioned = message.mentions?.includes(selfId) === true;
+  if (snapshot.room.kind !== 'direct' && chatGroupNotificationMode(snapshot.room, main) === 'mentions' && !mentioned) return false;
   const read = snapshot.reads.find(read => read.thread_key === (message.threadRootId ?? 'main'));
   if (read?.muted || BigInt(message.seq) <= BigInt(read?.read_seq ?? '0')) return false;
-  return !message.threadRootId || read?.following === true || message.mentions?.includes(selfId) === true;
+  return !message.threadRootId || read?.following === true || mentioned;
 }
 
 /** An unread mention wins; otherwise show the newest eligible message, regardless of snapshot order. */
@@ -76,19 +83,20 @@ export function createChatMessageNotifications<M extends ChatNotificationMessage
       const snapshot = await deps.snapshot(groupId);
       if (!stillCurrent()) throw new Error('CHAT_NOTIFICATION_CHANGED');
       if (!current() || !snapshot.reads || snapshot.room.archived || snapshot.room.dissolved_at) return;
-      const main = snapshot.reads.find(read => read.thread_key === 'main');
-      if (main?.muted) return;
-      const mentionsOnly = snapshot.room.kind !== 'direct' && main?.notification_scope === 'mentions';
+      if (snapshot.reads.find(read => read.thread_key === 'main')?.muted) return;
       for (const id of ids) {
         if (handled.has(id)) continue;
         const message = snapshot.messages.find(message => message.id === id) ?? await deps.message?.(groupId, id);
         if (!current()) return;
         if (!message) continue;
-        if ((mentionsOnly && !message.mentions?.includes(deps.selfId()))
-          || !isChatMessageAttention(snapshot, message, deps.selfId()) || deps.shouldAlert?.(message, snapshot, groupId) === false) { remember(id); continue; }
+        if (!isChatMessageAttention(snapshot, message, deps.selfId()) || deps.shouldAlert?.(message, snapshot, groupId) === false) { remember(id); continue; }
         const presentation = await deps.present(groupId, message);
         if (!current()) return;
         if (!stillCurrent()) throw new Error('CHAT_NOTIFICATION_CHANGED');
+        // A second flush can pass the pre-await handled check for the same id
+        // while this presentation is still loading. Claim it with no await
+        // between the recheck and notify, so both flushes cannot toast.
+        if (handled.has(id)) continue;
         deps.notify({ ...presentation, groupId, groupName: snapshot.room.name, messageId: message.id,
           ...(message.threadRootId ? { threadRootId: message.threadRootId } : {}) }, stillCurrent);
         remember(id);

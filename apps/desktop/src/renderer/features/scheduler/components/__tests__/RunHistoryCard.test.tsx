@@ -34,6 +34,9 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 vi.mock('@/lib/sessionAttentionStore', () => ({
   clearSessionAttentionMany: vi.fn(),
 }));
+vi.mock('../../hooks/useProjectLabel', () => ({
+  useProjectLabel: () => (workingDir: string) => workingDir,
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { exists: () => true } }),
@@ -125,17 +128,43 @@ describe('RunHistoryCard 会话引用状态', () => {
 });
 
 describe('RunHistoryCard 前置检查结果', () => {
+  // Issue 8351: unit/DOM, real history card. A passed hook must not hide a later
+  // undispatched skip; the previous tests only covered hook-driven skips.
+  it('shows queue-timeout recovery even when the pre-run hook passed', () => {
+    const resultText = '[QUEUE_WAIT_TIMEOUT] Prompt not dispatched within 30min. Use Run now after the session is idle.';
+    renderRun({ id: 'queue-timeout', scheduleId: 'schedule-1', sessionId: 'busy-task',
+      firedAt: 1, finishedAt: 1_800_001, status: 'skipped', readAt: 1_800_001, resultText,
+      preRunHookResult: { status: 'passed', decision: 'run', durationMs: 1, exitCode: 0, timedOut: false, aborted: false,
+        stdout: '', stderr: '', stdoutTruncated: false, stderrTruncated: false },
+    });
+    expect(screen.getByText(resultText, { exact: false })).toBeTruthy();
+    expect(screen.getByText('scheduler.runs.queueWaitTimeoutRecovery')).toBeTruthy();
+    expect(screen.getByText('scheduler.runs.status.skipped')).toBeTruthy();
+    expect(screen.queryByText('chat.unreadFailedScheduleBanner.text')).toBeNull();
+  });
+
   // A failed model selection is persisted in errorMsg, not an agent message.
   // Verify this separate consumer also hides technical text behind details.
-  it('shows switch guidance with expandable diagnostics in failed run history', () => {
+  it.each(['', 'scheduled task auto-resume failed: '])('shows switch guidance with expandable diagnostics in failed run history (%s)', (prefix) => {
     renderRun({ id: 'run-selection', scheduleId: 'schedule-1', firedAt: 1,
       finishedAt: 2, status: 'failed', readAt: 2,
-      errorMsg: '[MODEL_SELECTION_UNAVAILABLE] Scheduled model test is unavailable' });
+      errorMsg: prefix + '[MODEL_SELECTION_UNAVAILABLE] Scheduled model test is unavailable' });
     expect(screen.getByText('chat.remoteError.MODEL_SELECTION_UNAVAILABLE')).toBeTruthy();
     expect(screen.queryByText(/Scheduled model test/)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(/Scheduled model test/)).toBeTruthy();
   });
+  // Issue 12714, unit: the runner stores English diagnostics; the card must show translated recovery first.
+  it('localizes one-time rebuild recovery and preserves the stored diagnostics', () => {
+    const errorMsg = 'schedule model switch requires rebuilding the session before dispatch (model "test"). The prompt was not sent. Use Run now to retry the automation.';
+    renderRun({ id: 'rebuild', scheduleId: 'one-time', firedAt: 1, finishedAt: 2,
+      status: 'failed', errorMsg });
+    expect(screen.getByText('chat.unreadFailedScheduleBanner.modelRebuildRetry')).toBeTruthy();
+    expect(screen.queryByText(errorMsg)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(errorMsg)).toBeTruthy();
+  });
+
   it('diagnoses an execution failure before a task was created without fabricating a link', () => {
     renderRun({ id: 'early-run', scheduleId: 'schedule-1', firedAt: 1,
       finishedAt: 2, status: 'failed', errorMsg: 'provider mismatch' });

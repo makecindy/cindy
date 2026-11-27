@@ -13,10 +13,15 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { zstdCompressSync } from 'node:zlib';
 
 import Database from 'better-sqlite3';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import * as codexSessions from '../../maker-host/codex-local-sessions';
+import { defaultClassifyEnv, groupFor } from '../classify';
+import { claudeAdapter } from '../sources/claude';
+import { codexAdapter } from '../sources/codex';
 import { cursorAdapter } from '../sources/cursor';
 import { deepseekAdapter } from '../sources/deepseek';
 import { factoryAdapter } from '../sources/factory';
@@ -61,6 +66,105 @@ afterAll(async () => {
 });
 
 describe('foreign source adapters', () => {
+  // #10209: existing fixtures do not combine a Codex state DB with rollout metadata.
+  // Exercise real SQLite/list/read/grouping; only discovery is scoped to this temporary home.
+  it('Codex fills missing state metadata from rollouts without inventing a home directory or listing subagents', async () => {
+    const codexHome = path.join(home, '.codex');
+    await mkdir(codexHome, { recursive: true });
+    const db = new Database(path.join(codexHome, 'state_5.sqlite'));
+    db.exec('CREATE TABLE threads (id TEXT, cwd TEXT, thread_source TEXT, source TEXT, title TEXT, rollout_path TEXT, updated_at INTEGER)');
+    const insert = db.prepare('INSERT INTO threads VALUES (?,?,?,?,?,?,?)');
+    const id = (n: number) => `019dcd5a-6e54-7960-95e0-${String(n).padStart(12, '0')}`;
+    const rollout = (n: number) => `.codex/sessions/rollout-2026-11-12T10-00-00-${id(n)}.jsonl`;
+    const cases = [
+      { n: 1, cwd: '', metaCwd: project(), source: 'vscode', title: '' },
+      { n: 2, cwd: null, metaCwd: path.join(home, 'work', 'another-app'), source: 'vscode', title: 'Named project', compressed: true },
+      { n: 3, cwd: project(), metaCwd: path.join(home, 'old-project'), source: 'vscode', title: 'Keep database cwd' },
+      { n: 4, cwd: '', metaCwd: '', source: 'vscode', title: 'Unknown directory' },
+      { n: 5, cwd: '', metaCwd: project(), source: { subagent: { spawn: { parent_thread_id: id(1) } } }, title: 'Internal child' },
+      { n: 6, cwd: project(), metaCwd: project(), source: 'subagent', title: 'Internal child with cwd', compressed: true },
+      { n: 7, cwd: null, metaCwd: project(), source: 'vscode', title: '', paginated: true },
+      { n: 8, cwd: '', metaCwd: project(), source: 'voice_chat', title: 'User voice conversation' },
+    ];
+    for (const c of cases) {
+      const lines = [
+        { type: 'session_meta', payload: { id: id(c.n), cwd: c.metaCwd, source: c.source,
+          ...(c.paginated ? { history_mode: 'paginated', history_base: { thread_id: id(1), end_byte_offset: 1 } } : {}) } },
+        ...(!c.paginated ? [{ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `Question ${c.n}` }] } }] : []),
+      ];
+      const file = await put(rollout(c.n) + (c.compressed ? '.zst' : ''), '');
+      const content = lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
+      await writeFile(file, c.compressed ? zstdCompressSync(Buffer.from(content)) : content);
+      insert.run(id(c.n), c.cwd, null, 'vscode', c.title, path.join(home, rollout(c.n)), 1000);
+    }
+    // An extra page for a DB-backed internal thread must not make it appear or count twice.
+    await put(rollout(5).replace('.jsonl', `_${id(50)}.jsonl`), [
+      { type: 'session_meta', payload: { id: id(5), cwd: project(), source: 'subagent' } },
+    ]);
+    for (const n of [9, 10]) {
+      const file = await put(rollout(n), 'not valid json\n');
+      insert.run(id(n), n === 9 ? '' : project(), null, 'vscode', 'Damaged rollout', file, 1000);
+    }
+    insert.run(id(11), '', null, 'vscode', 'Missing rollout', path.join(home, rollout(11)), 1000);
+    db.close();
+    const discovery = vi.spyOn(codexSessions, 'discoverExternalCodexHomesSync').mockReturnValue([codexHome]);
+    try {
+      const listed = await codexAdapter.list({ homeDir: home, cindyUserDataDir: null });
+      const byId = new Map(listed.sessions.map((s) => [s.sourceSessionId, s]));
+      expect.soft(listed.internalCount).toBe(2);
+      expect.soft(listed.unreadableCount).toBe(1);
+      expect.soft(byId.has(id(5))).toBe(false);
+      expect.soft(byId.has(id(6))).toBe(false);
+      expect.soft(byId.has(id(11))).toBe(false);
+      for (const n of [1, 3, 7, 8, 10]) expect.soft(byId.get(id(n))?.cwd).toBe(project());
+      expect.soft(byId.get(id(2))?.cwd).toBe(path.join(home, 'work', 'another-app'));
+      for (const n of [4, 9]) {
+        expect.soft(byId.get(id(n))?.cwd).toBeNull();
+        expect.soft(byId.get(id(n))?.dialogue).toBe(true);
+      }
+      const env = { ...defaultClassifyEnv({ appDataDir: null, dialogueRoots: [] }), homeDir: home };
+      const groups = [1, 2, 4].map((n) => {
+        const s = byId.get(id(n))!;
+        return groupFor(s.cwd, s.dialogue === true, env, () => null);
+      });
+      expect.soft(groups.map((g) => g.groupName)).toEqual(['my-app', 'another-app', '']);
+      expect.soft(groups[2]!.dialogue).toBe(true);
+      const messages: NormalizedMessage[] = [];
+      for await (const m of codexAdapter.read(byId.get(id(2))!, { cindySessionId: 'test-import' })) messages.push(m);
+      expect.soft(brief(messages)).toEqual(['user:Question 2']);
+      // Scanning may enrich the candidate, but must never repair the external source DB.
+      const sourceDb = new Database(path.join(codexHome, 'state_5.sqlite'), { readonly: true });
+      try { expect.soft(sourceDb.prepare('SELECT cwd FROM threads WHERE id = ?').get(id(1))).toEqual({ cwd: '' }); }
+      finally { sourceDb.close(); }
+    } finally { discovery.mockRestore(); }
+  });
+
+  it('Codex caps an overlong thread title at the device task title limit', async () => {
+    // #9403：Codex 自己的标题可能是整条首条消息。设备灯位按 512 字符收任务标题，
+    // 超长会让整份任务列表被主进程拒收，所以导入时就要截到同一上限。
+    const codexHome = path.join(home, 'codex-long-title');
+    await mkdir(codexHome, { recursive: true });
+    const db = new Database(path.join(codexHome, 'state_5.sqlite'));
+    db.exec('CREATE TABLE threads (id TEXT, cwd TEXT, thread_source TEXT, source TEXT, title TEXT, rollout_path TEXT, updated_at INTEGER)');
+    const threadId = '019dcd5a-6e54-7960-95e0-000000000099';
+    const rollout = `.codex/sessions/rollout-2026-11-12T10-00-00-${threadId}.jsonl`;
+    const file = await put(rollout, [
+      { type: 'session_meta', payload: { id: threadId, cwd: project(), source: 'vscode' } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Question' }] } },
+    ]);
+    db.prepare('INSERT INTO threads VALUES (?,?,?,?,?,?,?)').run(
+      threadId, project(), null, 'vscode', 'a'.repeat(600), file, 1000,
+    );
+    db.close();
+    const discovery = vi.spyOn(codexSessions, 'discoverExternalCodexHomesSync').mockReturnValue([codexHome]);
+    try {
+      const listed = await codexAdapter.list({ homeDir: home, cindyUserDataDir: null });
+      const found = listed.sessions.find((s) => s.sourceSessionId === threadId);
+      expect(found?.title).toHaveLength(512);
+      expect(found?.title).toBe('a'.repeat(512));
+    } finally { discovery.mockRestore(); }
+  });
+
   it('Gemini CLI folds overwrites, patches and rewinds and maps the project folder', async () => {
     await put('.gemini/projects.json', JSON.stringify({ projects: { [project()]: 'my-app' } }));
     await put('.gemini/tmp/my-app/chats/session-2026-10-30T10-00-abcd1234.jsonl', [
@@ -240,5 +344,49 @@ describe('foreign source adapters', () => {
     // Cursor recovers the folder from its dashed name, so Windows separators come back as '/'.
     expect(path.resolve(listed.sessions[0]!.cwd!)).toBe(project());
     expect(brief(Object.values(messages)[0]!).map((m) => (m.startsWith('tool_use') ? 'tool_use' : m))).toEqual(expected);
+  });
+
+  // Unit: Claude Code `claude -p` (entrypoint=sdk-cli), Python SDK (sdk-py), and
+  // internal daemon sessions must count as internal instead of polluting import candidates,
+  // while interactive CLI, legacy transcripts without entrypoint, and Cindy SDK sessions remain intact.
+  it('Claude Code filters claude -p and daemon sessions as internal without hiding interactive or Cindy sessions', async () => {
+    const claudeDir = path.join(home, '.claude-test');
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = claudeDir;
+    const id = (n: number) => `019dcd5a-6e54-7960-95e0-${String(n).padStart(12, '0')}`;
+    const putClaude = (n: number, lines: unknown[]) =>
+      put(path.join('.claude-test', 'projects', '-work-my-app', `${id(n)}.jsonl`), lines);
+    try {
+      await putClaude(1, [
+        { type: 'user', entrypoint: 'cli', cwd: project(), sessionId: id(1), timestamp: '2026-11-26T10:00:00Z', message: { role: 'user', content: 'interactive task' } },
+        { type: 'assistant', entrypoint: 'cli', cwd: project(), sessionId: id(1), timestamp: '2026-11-26T10:00:01Z', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } },
+      ]);
+      await putClaude(2, [
+        { type: 'user', cwd: project(), sessionId: id(2), timestamp: '2026-11-26T10:00:00Z', message: { role: 'user', content: 'legacy claude task' } },
+      ]);
+      await putClaude(3, [
+        { type: 'user', entrypoint: 'sdk-cli', cwd: project(), sessionId: id(3), timestamp: '2026-11-26T10:00:00Z', message: { role: 'user', content: 'claude -p quick check' } },
+      ]);
+      await putClaude(4, [
+        { type: 'user', entrypoint: 'sdk-py', cwd: project(), sessionId: id(4), timestamp: '2026-11-26T10:00:00Z', message: { role: 'user', content: 'python headless' } },
+      ]);
+      await putClaude(5, [
+        { type: 'user', sessionKind: 'daemon-worker', cwd: project(), sessionId: id(5), timestamp: '2026-11-26T10:00:00Z', message: { role: 'user', content: 'daemon worker' } },
+      ]);
+      await putClaude(6, [
+        { type: 'user', entrypoint: 'sdk-ts', cwd: project(), sessionId: id(6), timestamp: '2026-11-26T10:00:00Z', message: { role: 'user', content: '[消息来源]\nfrom cindy\n\nactual prompt' } },
+      ]);
+
+      const listed = await claudeAdapter.list({ homeDir: home, cindyUserDataDir: null });
+      const byId = new Map(listed.sessions.map((s) => [s.sourceSessionId, s]));
+      expect(listed.internalCount).toBe(3);
+      expect([...byId.keys()].sort()).toEqual([id(1), id(2), id(6)].sort());
+      expect(byId.get(id(1))?.ranByCindy).toBeUndefined();
+      expect(byId.get(id(2))?.ranByCindy).toBeUndefined();
+      expect(byId.get(id(6))?.ranByCindy).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
   });
 });

@@ -1,4 +1,5 @@
 import { FILE_BROWSER_EVENT_CHANNEL, FILE_BROWSER_REMOTE_OP_CHANNEL, fsWatchTopic, isSharedTaskPeer, parseFsWatchTopic, parseSharedTaskPeer, isSharedTaskAttachment, type InvokePayload, type InvokeResultPayload, type SharedTaskQueueItem } from '@cindy/device-link';
+import { GIT_REVIEW_REMOTE_OP_CHANNEL } from '@cindy/device-link';
 import type { SharedTaskHost } from './sharedTaskHost.js';
 import * as subscriptions from './subscriptions.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
@@ -293,6 +294,14 @@ export function assertSharedTaskInvoke(
     }
     return;
   }
+  if (channel === GIT_REVIEW_REMOTE_OP_CHANNEL) {
+    const request = record(args[0]);
+    const query = record(request?.payload);
+    if (args.length !== 1 || !query || query.sessionId !== sessionId || !capture.authorize('file.read')) deny();
+    if (request?.op === 'get') return;
+    if (request?.op === 'file-diff' && (query.source === 'staged' || query.source === 'unstaged')) return;
+    deny();
+  }
   if (channel === FILE_BROWSER_REMOTE_OP_CHANNEL) {
     // Workdir ownership needs the host DB; device-op binds it before any file access.
     const request = record(args[0]);
@@ -346,6 +355,6 @@ export function captureSharedTaskPush(source: string, channel: string, payload: 
       channel.startsWith('usage:message-') || channel === 'usage:session-spend-changed' || channel === 'usage:session-tokens-changed')) return null;
   if (channel === 'maker:event:batch' && (!Array.isArray(row.events) || row.events.some((event) => record(event)?.sessionId !== sessionId))) return null;
   // 代输入 is the owner's own sign-in step; guests never see or answer it.
-  if (channel === 'maker:interaction-request' && record(row.request)?.kind === 'input_handoff') return null;
+  if (channel === 'maker:interaction-request' && ['input_handoff', 'issue_confirm'].includes(String(record(row.request)?.kind))) return null;
   return () => capture.isCurrent();
 }

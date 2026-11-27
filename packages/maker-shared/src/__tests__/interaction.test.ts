@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  askQuestionOptions,
   splitQuestionReferences,
   asyncQuestionNeedsSupplement,
+  asyncQuestionReplyDisplayText,
+  formatAsyncQuestionReplyDisplay,
   formatAsyncQuestionSupplement,
+  withdrawnQuestionDraftText,
   buildAskQuestionProgressSummary,
   buildAskQuestionReviewPresentation,
   buildAskUserQuestionDecision,
@@ -29,7 +33,6 @@ import {
   isFreeTextAskOptionLabel,
   normalizeAskQuestions,
   normalizeIssueConfirm,
-  pendingInteractionsBlockRemoteComposer,
   permissionRiskSummary,
   permissionTitle,
   remoteInteractionHandling,
@@ -110,6 +113,33 @@ describe('interaction shared model', () => {
     expect(formatAsyncQuestionSupplement([{ question: 'Scope?\nDetails?', header: 'Scope' }, { question: 'Skipped?' }],
       { Scope: 'Mobile too', 'Skipped?': '' })).toBe('> Scope?\n> Details?\n\nMobile too');
     expect(formatAsyncQuestionSupplement([{ question: 'Q?' }], {})).toBe('');
+  });
+
+
+  it('keeps delayed-answer context outside the native reply and never sends an empty reply', () => {
+    const question = { id: '["request_user_input_async","item",0]', question: 'Install?' };
+    const text = formatAsyncQuestionSupplement([question], { [question.id]: 'Yes' }, { late: true });
+    expect(text).toContain('</send_user_message_question_reply>\n\n<cindy_question_context>');
+    expect(text).toContain('whether the question still applies');
+    expect(text).toContain("not part of the user's answer or new authorization");
+    expect(formatAsyncQuestionSupplement([question], {}, { late: true })).toBe('');
+    expect(withdrawnQuestionDraftText('Details', ['A', 'B'])).toBe('A\nB\nDetails');
+    expect(withdrawnQuestionDraftText('', [], '["A","B"]')).toBe('A\nB');
+  });
+
+  // Bug: an answer to a Codex question appeared in the conversation as the reply markup and
+  // the delayed-answer note sent to the model. Entry: the shared formatters every client uses.
+  it('reads an answer as question and answer, including rows saved in the model format', () => {
+    const question = { id: '["request_user_input_async","item",0]', question: 'Install?\nNow?' };
+    const answers = { [question.id]: ' Yes ' };
+    expect(formatAsyncQuestionReplyDisplay([question], answers)).toBe('> Install?\n> Now?\n\nYes');
+    expect(formatAsyncQuestionReplyDisplay([question], {})).toBe('');
+    expect(asyncQuestionReplyDisplayText(formatAsyncQuestionSupplement([question], answers, { late: true })))
+      .toBe('> Install?\n> Now?\n\nYes');
+    expect(asyncQuestionReplyDisplayText(formatAsyncQuestionSupplement([{ question: 'Q?' }], { 'Q?': 'A' }, { late: true })))
+      .toBe('> Q?\n\nA');
+    const unreadable = '<send_user_message_question_reply>\nnot a reply list\n</send_user_message_question_reply>';
+    expect(asyncQuestionReplyDisplayText(unreadable)).toBe(unreadable);
   });
 
   it('never supplements an accepted native answer', async () => {
@@ -509,14 +539,19 @@ describe('interaction shared model', () => {
         header: '选择',
         multiSelect: true,
         options: [
-          { label: 'React Native', description: '原生端' },
-          { label: 'Expo' },
+          { label: 'React Native', description: '原生端', preview: '  const app = true;\n' },
+          { label: 'Expo', preview: '   \n  ' },
         ],
       },
       { question: 123 },
     ]);
 
     expect(questions).toHaveLength(1);
+    expect(questions[0].options).toEqual([
+      { label: 'React Native', description: '原生端', preview: '  const app = true;\n' },
+      { label: 'Expo' },
+    ]);
+    expect(askQuestionOptions(questions[0])).toEqual(questions[0].options);
     const answer = encodeMultiSelectAnswer(
       questions[0].options ?? [],
       new Set(['Expo']),
@@ -758,7 +793,7 @@ describe('interaction shared model', () => {
     ]);
   });
 
-  it('normalizes issue confirmation and builds bridge-compatible decisions', () => {
+  it.each(['Claude Code', 'ACP'])('normalizes issue confirmation for %s and builds bridge-compatible decisions', (harness) => {
     const payload = normalizeIssueConfirm({
       kind: 'issue_confirm',
       requestId: 'i1',
@@ -767,7 +802,7 @@ describe('interaction shared model', () => {
         appVersion: '0.1.0',
         platform: 'darwin',
         arch: 'arm64',
-        harness: 'Claude Code',
+        harness,
         modelId: ' custom\nmodel ',
       },
     });
@@ -778,7 +813,7 @@ describe('interaction shared model', () => {
         appVersion: '0.1.0',
         platform: 'darwin',
         arch: 'arm64',
-        harness: 'Claude Code',
+        harness,
         modelId: 'custom model',
       },
     });
@@ -793,6 +828,7 @@ describe('interaction shared model', () => {
   });
 
   it('only lets remotely resolvable interactions take over the controller composer', () => {
+    expect(remoteInteractionHandling({ request: { kind: 'issue_confirm', requestId: 'i1', remoteConfirmSupported: true } })).toBe('resolvable');
     expect(remoteInteractionHandling({ request: { kind: 'permission', requestId: 'p1' } })).toBe('resolvable');
     expect(remoteInteractionHandling({ request: { kind: 'ask_user_question', requestId: 'a1' } })).toBe('resolvable');
     expect(remoteInteractionHandling({ request: { kind: 'plan_review', requestId: 'pl1' } })).toBe('resolvable');
@@ -815,6 +851,15 @@ describe('interaction shared model', () => {
     expect(interactionBlocksRemoteComposer({ request: { kind: 'plugin_setup', requestId: 's1', revision: 1 } })).toBe(false);
     expect(interactionBlocksRemoteComposer({ request: { kind: 'future_kind', requestId: 'f1' } })).toBe(false);
     expect(interactionBlocksRemoteComposer(null)).toBe(false);
+    // Feedback review must keep normal chat available.
+    // It remains resolvable only through its confirmation, and cannot hide
+    // another pending permission's composer gate. Tier: unit, shared entry.
+    const feedback = { request: { kind: 'issue_confirm', requestId: 'i1', remoteConfirmSupported: true } };
+    expect(remoteInteractionHandling(feedback)).toBe('resolvable');
+    expect(pendingInteractionsBlockRemoteComposer([feedback])).toBe(false);
+    expect(pendingInteractionsBlockRemoteComposer([feedback,
+      { request: { kind: 'permission', requestId: 'p1' } },
+    ])).toBe(true);
   });
 
   it('lets the controller answer 代输入 without taking over its composer', () => {

@@ -1,6 +1,9 @@
 import { i18n } from '@/i18n';
+import { retryAfterDeadline } from '@cindy/auth-client';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { selfHostedRelayAuthorizationFor } from '@/device-link/selfHostedRelayRouting';
+import { isAgentNetMediaReference } from '@cindy/agent-net-protocol';
+import { isExpoAndroidDnsFailure } from './expoAndroidDnsFailure';
 
 /** 自建中转的 401 统一成这个码:只表示中转凭证失效,不可刷新账号 token,也不触发账号退出。 */
 export const RELAY_CREDENTIAL_INVALID = 'RELAY_CREDENTIAL_INVALID';
@@ -14,6 +17,8 @@ export class ApiError extends Error {
     message: string,
     /** The server's structured `error.details`, when it sent an object. */
     public readonly details?: Record<string, unknown>,
+    /** Absolute epoch ms parsed from `Retry-After` on 429 / 503 responses. */
+    public readonly retryAt?: number,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -28,6 +33,8 @@ export interface ApiFetchOptions {
   body?: unknown;
   timeoutMs?: number;
   cache?: 'no-store';
+  /** Sensitive share requests must not follow redirects to another origin. */
+  redirect?: 'error';
   /** Reject stale account-scoped work before transport or auth side effects. */
   assertCurrent?: () => void;
   /** Extra request headers (e.g. Chat Server's X-Chat-Actor); never overrides auth or content type. */
@@ -60,6 +67,14 @@ export async function apiFetchRaw<T>(
 ): Promise<T> {
   opts.assertCurrent?.();
   if (opts.signal?.aborted) throw requestAborted();
+  if (path.startsWith('/api/device-link/media') && typeof (opts.body as { key?: unknown })?.key === 'string'
+    && isAgentNetMediaReference((opts.body as { key: string }).key)) {
+    const { mobileAgentNetMediaRequest } = await import('@/device-link/agentNetMediaApi');
+    const { token: _accountToken, ...nativeOptions } = opts;
+    const result = await mobileAgentNetMediaRequest<T>(path, nativeOptions);
+    opts.assertCurrent?.();
+    if (result.handled) return result.value;
+  }
   // 自建中转(docs/self-hosted-relay-plan.md §5.3):按目标地址换成中转凭证,账号 token 不发过去。
   const relayAuth = selfHostedRelayAuthorizationFor(opts.baseUrl);
   if (relayAuth?.kind === 'blocked') {
@@ -92,6 +107,7 @@ export async function apiFetchRaw<T>(
         body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
         signal: controller?.signal ?? opts.signal,
         ...(opts.cache ? { cache: opts.cache } : {}),
+        ...(opts.redirect ? { redirect: opts.redirect } : {}),
       });
       let nextData: unknown = null;
       try {
@@ -133,7 +149,7 @@ export async function apiFetchRaw<T>(
     if (isAbortError(err)) {
       throw new ApiError('REQUEST_TIMEOUT', 0, i18n.t('apiErrors.requestTimeout'));
     }
-    if (err instanceof TypeError) {
+    if (err instanceof TypeError || (err instanceof Error && isExpoAndroidDnsFailure(err.message))) {
       // fetch 的网络层失败统一走类型化离线错误:RN 离线抛 "Network request failed"
       // (不含 "fetch" 子串,旧分支匹配不到,英文原文会一路透传到 UI);浏览器
       // (Web 预览)抛 "Failed to fetch",还可能是 CORS——只在 web 环境附加提示。
@@ -165,7 +181,10 @@ export async function apiFetchRaw<T>(
         // Preserve the original typed API error even if local cleanup fails.
       }
     }
-    throw new ApiError(code, response.status, error.message ?? i18n.t('apiErrors.requestFailed'), error.details);
+    const retryAt = (response.status === 429 || response.status === 503)
+      ? retryAfterDeadline(response)
+      : undefined;
+    throw new ApiError(code, response.status, error.message ?? i18n.t('apiErrors.requestFailed'), error.details, retryAt);
   }
 
   return data as T;

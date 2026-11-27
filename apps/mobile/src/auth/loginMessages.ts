@@ -17,6 +17,7 @@ export type LoginLocale = SupportedLocale;
 const messages = {
   "zh-TW": {
     title: "登入 Cindy",
+    restoringSession: "正在恢復登入狀態",
     phonePlaceholder: "輸入手機號",
     emailPlaceholder: "輸入電子郵件地址",
     invalidEmail: "請輸入正確的電子郵件地址",
@@ -129,6 +130,9 @@ const messages = {
     accountDeletionRestoredCopy:
       "本次登入已取消刪除帳號，Cindy 登入帳號將繼續保留。",
     errorFallback: "登入未完成，請重試。",
+    renderErrorTitle: "畫面顯示出錯",
+    renderErrorSubtitle: "重新載入後仍出錯，請重新開啟 Cindy。",
+    renderErrorAction: "重新載入畫面",
     endpointGateTitle: "無法取得伺服器設定",
     endpointGateSubtitle: "請檢查網路連線後重試({reason})",
     endpointGateResetToDev: "返回 Dev",
@@ -137,6 +141,7 @@ const messages = {
   },
   "zh-Hant-x-lzh": {
     title: "登 Cindy 之門",
+    restoringSession: "復其登入中",
     phonePlaceholder: "書手機號",
     emailPlaceholder: "書電子郵件地址",
     invalidEmail: "電子郵件地址有誤，請正書之",
@@ -249,6 +254,9 @@ const messages = {
     accountDeletionRestoredCopy:
       "此番登門已撤銷刪除，Cindy 登門名籍仍予保留。",
     errorFallback: "登入未成，請再試。",
+    renderErrorTitle: "畫面顯示有誤",
+    renderErrorSubtitle: "重載而誤猶在，請重啟 Cindy。",
+    renderErrorAction: "重載畫面",
     endpointGateTitle: "無從取得伺服器設定",
     endpointGateSubtitle: "請察網路連線後再試({reason})",
     endpointGateResetToDev: "歸 Dev",
@@ -257,6 +265,7 @@ const messages = {
   },
   "zh-Hans-x-lzh": {
     title: "登 Cindy 之门",
+    restoringSession: "复其登录中",
     phonePlaceholder: "书手机号",
     emailPlaceholder: "书电子邮件地址",
     invalidEmail: "电子邮件地址有误，请正书之",
@@ -369,6 +378,9 @@ const messages = {
     accountDeletionRestoredCopy:
       "此番登门已撤销删除，Cindy 登门名籍仍予保留。",
     errorFallback: "登录未成，请再试。",
+    renderErrorTitle: "画面显示有误",
+    renderErrorSubtitle: "重载而误犹在，请重启 Cindy。",
+    renderErrorAction: "重载画面",
     endpointGateTitle: "无从取得服务器设置",
     endpointGateSubtitle: "请察网络连接后再试({reason})",
     endpointGateResetToDev: "归 Dev",
@@ -377,6 +389,7 @@ const messages = {
   },
   "zh-CN": {
     title: "登录 Cindy",
+    restoringSession: "正在恢复登录状态",
     phonePlaceholder: "输入手机号",
     emailPlaceholder: "输入邮箱地址",
     invalidEmail: "请输入正确邮箱",
@@ -489,6 +502,9 @@ const messages = {
     accountDeletionRestoredCopy:
       "本次登录已取消账号注销，Cindy 登录账号将继续保留。",
     errorFallback: "登录未完成，请重试。",
+    renderErrorTitle: "页面显示出错",
+    renderErrorSubtitle: "重新加载后仍出错，请重新打开 Cindy。",
+    renderErrorAction: "重新加载页面",
     endpointGateTitle: "无法获取服务器配置",
     endpointGateSubtitle: "请检查网络连接后重试({reason})",
     endpointGateResetToDev: "返回 Dev",
@@ -497,6 +513,7 @@ const messages = {
   },
   en: {
     title: "Sign in to Cindy",
+    restoringSession: "Restoring your session",
     phonePlaceholder: "Phone number",
     emailPlaceholder: "Email address",
     invalidEmail: "Please enter a valid email address",
@@ -621,6 +638,9 @@ const messages = {
     accountDeletionRestoredCopy:
       "This sign-in canceled account deletion. Your Cindy sign-in account will be kept.",
     errorFallback: "Sign-in did not complete. Please try again.",
+    renderErrorTitle: "Couldn't Display This Screen",
+    renderErrorSubtitle: "If reloading doesn't help, reopen Cindy.",
+    renderErrorAction: "Reload Screen",
     endpointGateTitle: "Unable to load server configuration",
     endpointGateSubtitle:
       "Check your network connection and try again ({reason})",
@@ -631,6 +651,7 @@ const messages = {
   },
   ja: {
     title: "Cindy にログイン",
+    restoringSession: "ログイン状態を復元しています",
     phonePlaceholder: "携帯電話番号",
     emailPlaceholder: "メールアドレスを入力",
     invalidEmail: "正しいメールアドレスを入力してください",
@@ -754,6 +775,9 @@ const messages = {
     accountDeletionRestoredCopy:
       "今回のログインでアカウント削除を取り消しました。Cindy ログインアカウントは引き続き保持されます。",
     errorFallback: "ログインが完了しませんでした。もう一度お試しください。",
+    renderErrorTitle: "画面を表示できませんでした",
+    renderErrorSubtitle: "再読み込みしても直らない場合は、Cindy を開き直してください。",
+    renderErrorAction: "画面を再読み込み",
     endpointGateTitle: "サーバー設定を取得できません",
     endpointGateSubtitle:
       "ネットワーク接続を確認してから再試行してください({reason})",
@@ -764,6 +788,7 @@ const messages = {
   },
   ko: {
     title: "Cindy 로그인",
+    restoringSession: "로그인 상태 복원 중",
     phonePlaceholder: "휴대전화 번호",
     emailPlaceholder: "이메일 주소 입력",
     invalidEmail: "올바른 이메일 주소를 입력하세요",
@@ -884,6 +909,9 @@ const messages = {
     accountDeletionRestoredCopy:
       "이번 로그인으로 계정 삭제가 취소되었습니다. Cindy 로그인 계정은 계속 유지됩니다.",
     errorFallback: "로그인이 완료되지 않았습니다. 다시 시도해 주세요.",
+    renderErrorTitle: "화면을 표시하지 못했습니다",
+    renderErrorSubtitle: "다시 불러와도 해결되지 않으면 Cindy를 다시 열어 주세요.",
+    renderErrorAction: "화면 다시 불러오기",
     endpointGateTitle: "서버 설정을 가져올 수 없습니다",
     endpointGateSubtitle:
       "네트워크 연결을 확인한 후 다시 시도해 주세요({reason})",
@@ -894,6 +922,7 @@ const messages = {
 
   "es": {
     "title": "Iniciar sesión en Cindy",
+    restoringSession: "Restaurando tu sesión",
     "phonePlaceholder": "Número de teléfono",
     "emailPlaceholder": "Dirección de correo electrónico",
     "invalidEmail": "Ingresa un correo electrónico válido",
@@ -993,6 +1022,9 @@ const messages = {
     "accountDeletionRestoredTitle": "Cuenta restaurada",
     "accountDeletionRestoredCopy": "Este inicio de sesión canceló la eliminación de la cuenta. Tu cuenta de inicio de sesión de Cindy se conservará.",
     "errorFallback": "El inicio de sesión no se completó. Por favor inténtalo de nuevo.",
+    "renderErrorTitle": "No se pudo mostrar la pantalla",
+    "renderErrorSubtitle": "Si recargar no lo soluciona, vuelva a abrir Cindy.",
+    "renderErrorAction": "Recargar pantalla",
     "endpointGateTitle": "No se puede cargar la configuración del servidor",
     "endpointGateSubtitle": "Verifique su conexión de red e inténtelo nuevamente ({reason})",
     "endpointGateResetToDev": "Volver a Dev",
@@ -1001,6 +1033,7 @@ const messages = {
   },
   "fr": {
     "title": "Se connecter à Cindy",
+    restoringSession: "Restauration de votre session",
     "phonePlaceholder": "Numéro de téléphone",
     "emailPlaceholder": "Adresse e-mail",
     "invalidEmail": "Veuillez saisir une adresse e-mail valide",
@@ -1100,6 +1133,9 @@ const messages = {
     "accountDeletionRestoredTitle": "Compte restauré",
     "accountDeletionRestoredCopy": "Cette connexion a annulé la suppression du compte. Votre compte de connexion Cindy sera conservé.",
     "errorFallback": "La connexion n'a pas abouti. Veuillez réessayer.",
+    "renderErrorTitle": "Impossible d'afficher cet écran",
+    "renderErrorSubtitle": "Si le rechargement ne suffit pas, rouvrez Cindy.",
+    "renderErrorAction": "Recharger l'écran",
     "endpointGateTitle": "Impossible de charger la configuration du serveur",
     "endpointGateSubtitle": "Vérifiez votre connexion réseau et réessayez ({reason})",
     "endpointGateResetToDev": "Revenir à Dev",
@@ -1108,6 +1144,7 @@ const messages = {
   },
   "de": {
     "title": "Bei Cindy anmelden",
+    restoringSession: "Sitzung wird wiederhergestellt",
     "phonePlaceholder": "Telefonnummer",
     "emailPlaceholder": "E-Mail-Adresse",
     "invalidEmail": "Gib eine gültige E-Mail-Adresse ein",
@@ -1207,6 +1244,9 @@ const messages = {
     "accountDeletionRestoredTitle": "Konto wiederhergestellt",
     "accountDeletionRestoredCopy": "Diese Anmeldung hat die Kontolöschung abgebrochen. Dein Cindy-Anmeldekonto bleibt erhalten.",
     "errorFallback": "Die Anmeldung wurde nicht abgeschlossen. Versuche es erneut.",
+    "renderErrorTitle": "Bildschirm konnte nicht angezeigt werden",
+    "renderErrorSubtitle": "Wenn das Neuladen nicht hilft, öffne Cindy neu.",
+    "renderErrorAction": "Bildschirm neu laden",
     "endpointGateTitle": "Serverkonfiguration konnte nicht geladen werden",
     "endpointGateSubtitle": "Prüfe deine Netzwerkverbindung und versuche es erneut ({reason})",
     "endpointGateResetToDev": "Zurück zu Dev",
@@ -1215,6 +1255,7 @@ const messages = {
   },
   "pt-PT": {
     "title": "Iniciar sessão na Cindy",
+    restoringSession: "A restaurar a sessão",
     "phonePlaceholder": "Número de telemóvel",
     "emailPlaceholder": "Endereço de e-mail",
     "invalidEmail": "Introduza um endereço de e-mail válido",
@@ -1314,6 +1355,9 @@ const messages = {
     "accountDeletionRestoredTitle": "Conta restaurada",
     "accountDeletionRestoredCopy": "Este início de sessão cancelou a eliminação da conta. A sua conta de acesso à Cindy será mantida.",
     "errorFallback": "Não foi possível concluir o início de sessão. Tente novamente.",
+    "renderErrorTitle": "Não foi possível mostrar o ecrã",
+    "renderErrorSubtitle": "Se recarregar não resolver, volte a abrir o Cindy.",
+    "renderErrorAction": "Recarregar ecrã",
     "endpointGateTitle": "Não foi possível carregar a configuração do servidor",
     "endpointGateSubtitle": "Verifique a sua ligação de rede e tente novamente ({reason})",
     "endpointGateResetToDev": "Voltar a Dev",
@@ -1322,6 +1366,7 @@ const messages = {
   },
   "pt-BR": {
     "title": "Entrar na Cindy",
+    restoringSession: "Restaurando sua sessão",
     "phonePlaceholder": "Número de celular",
     "emailPlaceholder": "Endereço de e-mail",
     "invalidEmail": "Digite um endereço de e-mail válido",
@@ -1421,6 +1466,9 @@ const messages = {
     "accountDeletionRestoredTitle": "Conta restaurada",
     "accountDeletionRestoredCopy": "Este login cancelou a exclusão da conta. Sua conta de acesso à Cindy será mantida.",
     "errorFallback": "Não foi possível concluir o login. Tente novamente.",
+    "renderErrorTitle": "Não foi possível exibir a tela",
+    "renderErrorSubtitle": "Se recarregar não resolver, abra o Cindy novamente.",
+    "renderErrorAction": "Recarregar tela",
     "endpointGateTitle": "Não foi possível carregar a configuração do servidor",
     "endpointGateSubtitle": "Verifique sua conexão de rede e tente novamente ({reason})",
     "endpointGateResetToDev": "Voltar para Dev",
@@ -1781,6 +1829,34 @@ export const authErrorMessages: Record<string, Record<LoginLocale, string>> = {
   "pt-PT": "O serviço de início de sessão está temporariamente indisponível.",
   "pt-BR": "O serviço de login está temporariamente indisponível.",
 },
+  AUTH_VAULT_INVALID: {
+    "zh-CN": "无法恢复本机登录记录，请重新登录。",
+    "zh-TW": "無法恢復本機登入記錄，請重新登入。",
+    "zh-Hant-x-lzh": "本機登入之錄不可復，請再登門。",
+    "zh-Hans-x-lzh": "本机登录之录不可复，请再登门。",
+    en: "Your saved sign-in could not be restored. Sign in again.",
+    ja: "保存されたログイン情報を復元できませんでした。再度ログインしてください。",
+    ko: "저장된 로그인 정보를 복원할 수 없습니다. 다시 로그인해 주세요.",
+    es: "No se pudo restaurar tu inicio de sesión guardado. Vuelve a iniciar sesión.",
+    fr: "Impossible de restaurer votre connexion enregistrée. Veuillez vous reconnecter.",
+    de: "Die gespeicherte Anmeldung konnte nicht wiederhergestellt werden. Melde dich erneut an.",
+    "pt-PT": "Não foi possível restaurar o início de sessão guardado. Inicie sessão novamente.",
+    "pt-BR": "Não foi possível restaurar seu login salvo. Entre novamente.",
+  },
+  SESSION_EXPIRED: {
+    "zh-CN": "登录已失效，请重新登录。",
+    "zh-TW": "登入已失效，請重新登入。",
+    "zh-Hant-x-lzh": "登入已失效，請再登門。",
+    "zh-Hans-x-lzh": "登录已失效，请再登门。",
+    en: "Your session expired. Sign in again.",
+    ja: "ログインの有効期限が切れました。もう一度ログインしてください。",
+    ko: "세션이 만료되었습니다. 다시 로그인해 주세요.",
+    es: "Tu sesión ha caducado. Vuelve a iniciar sesión.",
+    fr: "Votre session a expiré. Veuillez vous reconnecter.",
+    de: "Deine Sitzung ist abgelaufen. Melde dich erneut an.",
+    "pt-PT": "A sessão expirou. Inicie sessão novamente.",
+    "pt-BR": "Sua sessão expirou. Entre novamente.",
+  },
   ACCOUNT_UNAVAILABLE: {
     "zh-CN": "当前账号不可用，已退出登录。",
     "zh-TW": "目前帳號不可用，已登出。",

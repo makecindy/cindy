@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import { detectCwd } from '../worktree/WorktreeManager';
+import { detectCwd } from '../worktree/detectCwd';
 import { GitExecError, type GitExecOpts } from '../worktree/gitExec';
 import { OperationBudget, currentOperationBudget } from '../utils/operationBudget';
 
@@ -38,7 +38,7 @@ beforeEach(() => {
   // Synchronous Git fixtures consume no work budget; fake-timer cases replace this clock.
   vi.spyOn(performance, 'now').mockReturnValue(0);
   // Synthetic paths need no filesystem I/O, including fake-timer timeout tests.
-  realpathMock.mockReset().mockRejectedValue(Object.assign(new Error('missing directory'), { code: 'ENOENT' }));
+  realpathMock.mockReset().mockImplementation(async (cwd: string) => cwd);
 });
 
 afterEach(() => {
@@ -77,6 +77,31 @@ function setupGitMock(opts: {
 }
 
 describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
+  // PR #10251, unit tier: a read-only status probe must not inherit the result of
+  // a same-directory probe that repairs global trust. Existing tests share one policy.
+  it('keeps read-only ownership failures separate from pending repairing probes', async () => {
+    let releaseRepair!: () => void;
+    let enteredRepair!: () => void;
+    const entered = new Promise<void>((resolve) => { enteredRepair = resolve; });
+    gitExecMock.mockImplementation((args: readonly string[], _cwd: string, opts: GitExecOpts) => {
+      if (args[0] === '--version') return Promise.resolve({ stdout: 'git version 2.45.0\n', stderr: '' });
+      if (opts.repairSafeDirectory === false) {
+        throw new GitExecError({ args, exitCode: 128, stdout: '', stderr: 'fatal: detected dubious ownership' });
+      }
+      enteredRepair();
+      return new Promise((resolve) => {
+        releaseRepair = () => resolve({ stdout: '/probe-repo\nmain\n.git\n.git\n', stderr: '' });
+      });
+    });
+    const repairing = detectCwd('/probe-repo');
+    await entered;
+    const readOnly = detectCwd('/probe-repo', { repairSafeDirectory: false });
+    releaseRepair();
+    const [repaired, untrusted] = await Promise.all([repairing, readOnly]);
+    expect(repaired.isGitRepo).toBe(true);
+    expect(untrusted).toMatchObject({ isGitRepo: false, gitInstalled: true });
+  });
+
   // #7259, unit tier: a cancellable snapshot probe must not share a pending UI
   // probe. The two callers own different lifetimes even for the same directory.
   it('isolates a cancelled snapshot probe from a pending UI probe of the same directory', async () => {
@@ -178,18 +203,31 @@ describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
     }
   });
 
-  // #6409: a failed physical-cwd lookup must preserve Git's partial/error result.
+  // #13175, unit tier: realpath ENOENT used to launch Git in the missing cwd
+  // despite returning the correct status. Only the installation check can succeed.
   it.each([true, false])('preserves missing-directory results when gitInstalled=%s', async (gitInstalled) => {
+    realpathMock.mockRejectedValueOnce(Object.assign(new Error('missing directory'), { code: 'ENOENT' }));
     gitExecMock.mockImplementation(async (args: readonly string[]) => {
       if (gitInstalled && args[0] === '--version') return { stdout: 'git version 2.45.0\n', stderr: '' };
       throw new GitExecError({ args, exitCode: null, stderr: '', stdout: '',
         cause: Object.assign(new Error('not found'), { code: 'ENOENT' }) });
     });
-    expect(await detectCwd('/missing')).toMatchObject({
+    expect(await detectCwd('/missing')).toEqual({
       isGitRepo: false,
       isInsideWorktree: false,
       gitInstalled,
+      supportsRecoveryKeyDiscard: true,
+      supportsCheckout: true,
     });
+    expect(gitExecMock.mock.calls.map(([args, cwd]) => [args, cwd])).toEqual([[['--version'], undefined]]);
+  });
+
+  it('uses the supplied directory when realpath fails with a permission error', async () => {
+    const cwd = path.resolve('/repo');
+    realpathMock.mockRejectedValueOnce(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+    gitExecMock.mockResolvedValue({ stdout: `${cwd}\nmain\n.git\n.git\n` });
+    expect(await detectCwd(cwd)).toMatchObject({ isGitRepo: true, repoRoot: cwd });
+    expect(gitExecMock.mock.calls[0][1]).toBe(cwd);
   });
 
   it('releases all four hung probes after Git timeout and allows queued work and same-path retries', async () => {
@@ -258,6 +296,7 @@ describe('detectCwd → isInsideWorktree (I-1 fix)', () => {
         isInsideWorktree: linked,
         gitInstalled: true,
         supportsRecoveryKeyDiscard: true,
+        supportsCheckout: true,
         repoRoot: path.resolve('/repo'),
         ...(branch !== 'HEAD' ? { currentBranch: branch } : {}),
       });

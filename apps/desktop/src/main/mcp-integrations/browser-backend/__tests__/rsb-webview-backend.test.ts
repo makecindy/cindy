@@ -11,6 +11,9 @@ import { writeFileSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { createBrowserMcpServer } from '@cindy/mcps';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WebContents } from 'electron';
 
@@ -148,6 +151,54 @@ describe('RsbWebviewBackend — bundled recipe sessions', () => {
       expect((await backend.call({ ...request, recipeCommand: { method: 'Cindy.end', sessionId } })).ok).toBe(true);
       expect(listeners.size).toBeLessThan(before);
     } finally { await backend.dispose(); }
+  });
+
+  // Tool layer joined to this backend (unit tier, real MCP entry and real backend, fake guest).
+  // Rule: docs/dev-rules/browser-use.md, shared-layer work must hold on every backend that supports
+  // it. Gap: the tool-layer tests script the runtime and the test above drives the backend alone, so
+  // nothing proved the agent-facing cdp action speaks this backend's session contract (begin returns
+  // no tab id here; every command must stay on the same guest and the session must be released).
+  it('carries the agent cdp action through to the owning guest and releases the session', async () => {
+    const wc = fakeWc();
+    const sent: Array<[string, Record<string, unknown> | undefined]> = [];
+    const send = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      sent.push([method, params]);
+      if (method === 'Accessibility.getFullAXTree') return { nodes: [{ nodeId: '1', role: { value: 'button' }, name: { value: 'Reveal code' }, backendDOMNodeId: 41 }] };
+      if (method === 'DOM.getContentQuads') return { quads: [[10, 20, 110, 20, 110, 60, 10, 60]] };
+      return {};
+    });
+    const listeners = new Set<unknown>();
+    Object.assign(wc, { removeListener: vi.fn(), debugger: {
+      isAttached: () => true, sendCommand: send,
+      on: (_event: string, listener: unknown) => { listeners.add(listener); },
+      removeListener: (_event: string, listener: unknown) => { listeners.delete(listener); },
+    } });
+    const backend = new RsbWebviewBackend({
+      registry: fakeRegistry([{ sessionId: 'owner', tabId: 't', webContentsId: 1 }], new Map([['t', wc]])),
+      getActiveSessionId: () => 'owner',
+      bridge: { getHostWebContents: () => null, logger: logger() }, logger: logger(),
+    });
+    const server = createBrowserMcpServer({ getRuntime: () => backend, getBackendKind: () => 'rsb-webview' });
+    const client = new Client({ name: 'rsb-cdp', version: '0.0.0' });
+    const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
+    try {
+      const run = () => client.callTool({ name: 'call_tool', arguments: { name: 'browser', args: {
+        action: 'cdp', targetId: 't', commands: [{ method: 'nodes' }, { method: 'click', params: { node: 41 } }],
+      } } });
+      const reply = await run();
+      // The tab's network monitor keeps its own listeners; a finished call must not add to them.
+      const afterFirst = listeners.size;
+      const body = JSON.parse((reply.content as Array<{ text: string }>)[0].text);
+      expect(body).toMatchObject({ ok: true, data: { results: [
+        { method: 'nodes', result: { nodes: '[41] button "Reveal code"', count: 1 } },
+        { method: 'click', result: { clicked: 41, x: 60, y: 40 } },
+      ] } });
+      expect(sent.filter(([method]) => method === 'Input.dispatchMouseEvent').map(([, params]) => [params?.type, params?.x, params?.y]))
+        .toEqual([['mouseMoved', 60, 40], ['mousePressed', 60, 40], ['mouseReleased', 60, 40]]);
+      expect((await run()).isError).toBeFalsy();
+      expect(listeners.size).toBe(afterFirst);
+    } finally { await client.close(); await server.close(); await backend.dispose(); }
   });
 });
 
@@ -533,6 +584,95 @@ describe('RsbWebviewBackend — direct WebContents actions', () => {
       mimeType: 'application/pdf',
       data: Buffer.from('PDFDATA').toString('base64'),
     });
+  });
+
+  // Regression (P0-2): capturePage() and printToPDF() on a hidden guest webview previously had
+  // no timeout, keeping the tab pinned forever (exempting its OS PID from BrowserGuestResourceWatchdog)
+  // and leaking activeCalls.
+  // Production entry: RsbWebviewBackend.call({ action: 'screenshot' | 'pdf' }); unit tier, fake timers.
+  it.each([
+    ['screenshot', 'capturePageMock', 'captureTimeoutMs', 'capturePage timed out'],
+    ['pdf', 'printToPDFMock', 'pdfTimeoutMs', 'printToPDF timed out'],
+  ] as const)('%s times out cleanly, releases tab pin, and clears activeCalls', async (action, mockKey, timeoutKey, expectedMessage) => {
+    vi.useFakeTimers();
+    try {
+      const wc = fakeWc();
+      wc[mockKey].mockImplementation(() => new Promise(() => {}));
+      const registry = fakeRegistry(
+        [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+        new Map([['t1', wc]]),
+      );
+      const backend = new RsbWebviewBackend({
+        registry,
+        getActiveSessionId: () => 's1',
+        bridge: { getHostWebContents: () => null, logger: logger() },
+        logger: logger(),
+        [timeoutKey]: 1000,
+      });
+
+      const pending = backend.call({ action, targetId: 't1' } as never);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(registry.isPinned('t1')).toBe(true);
+      expect(backend.canReleaseClient()).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(900);
+      const res = await pending;
+      expect(res.ok).toBe(false);
+      expect(res.message).toContain(expectedMessage);
+      expect(registry.isPinned('t1')).toBe(false);
+      expect(registry.pinHistory).toEqual([
+        { op: 'pin', tabId: 't1' },
+        { op: 'unpin', tabId: 't1' },
+      ]);
+      expect(backend.canReleaseClient()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('screenshot and pdf abort immediately on webContents destroyed or backend dispose and unpin the tab', async () => {
+    const listeners = new Map<string, Array<() => void>>();
+    const wc = fakeWc();
+    wc.capturePageMock.mockImplementation(() => new Promise(() => {}));
+    wc.printToPDFMock.mockImplementation(() => new Promise(() => {}));
+    Object.assign(wc, {
+      once: (event: string, fn: () => void) => {
+        const list = listeners.get(event) ?? [];
+        list.push(fn);
+        listeners.set(event, list);
+      },
+      removeListener: (event: string, fn: () => void) => {
+        const list = listeners.get(event);
+        if (list) listeners.set(event, list.filter((f) => f !== fn));
+      },
+    });
+    const registry = fakeRegistry(
+      [{ sessionId: 's1', tabId: 't1', webContentsId: 101 }],
+      new Map([['t1', wc]]),
+    );
+    const backend = new RsbWebviewBackend({
+      registry,
+      getActiveSessionId: () => 's1',
+      bridge: { getHostWebContents: () => null, logger: logger() },
+      logger: logger(),
+      captureTimeoutMs: 60_000,
+      pdfTimeoutMs: 60_000,
+    });
+
+    const screenshotPending = backend.call({ action: 'screenshot', targetId: 't1' } as never);
+    await vi.waitFor(() => expect(registry.isPinned('t1')).toBe(true));
+    for (const fn of listeners.get('destroyed') ?? []) fn();
+    const screenshotRes = await screenshotPending;
+    expect(screenshotRes.ok).toBe(false);
+    expect(screenshotRes.message).toContain('destroyed');
+    expect(registry.isPinned('t1')).toBe(false);
+
+    const pdfPending = backend.call({ action: 'pdf', targetId: 't1' } as never);
+    await vi.waitFor(() => expect(registry.isPinned('t1')).toBe(true));
+    await backend.dispose();
+    const pdfRes = await pdfPending;
+    expect(pdfRes.ok).toBe(false);
+    expect(registry.isPinned('t1')).toBe(false);
   });
 });
 

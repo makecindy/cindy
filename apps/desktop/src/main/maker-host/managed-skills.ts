@@ -1,18 +1,20 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { app } from 'electron';
-import matter from 'gray-matter';
+import { getGhostManager, listAvailableGhostsAsync, loadGhostFirstPartyFactsForGhost } from '../cindy-brain/index.js';
 import {
-  activeOwnerScopeKey,
   getActiveAppSession,
-  isAppSessionBoundaryPending,
 } from '../appSessionState.js';
-import type { AgentDeps } from '@cindy/maker-core';
-import { builtInSkillDescriptorsAsync, sharedBuiltInSkillsRoot } from './built-in-skills.js';
-import { getGhostManager, listAvailableGhostsAsync } from '../cindy-brain/index.js';
 import { withSharedGlobalSkillProjectionMutation } from '../authBoundaryQuarantine.js';
 import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
-import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import { createManagedSkills, type ManagedSkill } from './managedSkillsCore.js';
+
+// The listing lives in managedSkillsCore.ts (shared with the Node Host); this
+// module binds the desktop plugin registry and keeps the Codex projection.
+// Ports resolve the cindy-brain functions when called, not when this module
+// loads: the two modules import each other and this one is evaluated first.
+const managedSkills = createManagedSkills({
+  listAvailableGhosts: () => listAvailableGhostsAsync(),
+  getGhostManager: () => getGhostManager(),
+  loadGhostFirstPartyFactsForGhost: (id, purpose) => loadGhostFirstPartyFactsForGhost(id, purpose),
+});
 
 /** Reconcile the selected app-server home, including independently routed accounts. */
 export async function prepareCindyCodexSkills(codexHome: string): Promise<void> {
@@ -27,56 +29,14 @@ export async function prepareCindyCodexSkills(codexHome: string): Promise<void> 
 
 /** Ownership roots for retiring private Codex links, never directories to scan. */
 export async function cindyManagedSkillRoots(): Promise<string[]> {
-  return [app.getPath('userData'), sharedBuiltInSkillsRoot(app.getPath('appData'))];
+  return managedSkills.cindyManagedSkillRoots();
 }
 
-export const listCindyManagedSkills: NonNullable<AgentDeps['getManagedSkills']> = async () => {
-  const owner = activeOwnerScopeKey();
-  if (isAppSessionBoundaryPending()) throw new Error('Skill owner is changing');
-  const builtIns = await builtInSkillDescriptorsAsync(app.getPath('userData'), app.getPath('appData'));
-  const skills: Awaited<ReturnType<NonNullable<AgentDeps['getManagedSkills']>>> = [];
-  const addSkill = (directory: string, name: string, namespace: string, description?: string) => {
-    try {
-      // Bind the verified source itself, not a mutable discovery projection.
-      const file = fs.realpathSync.native(path.join(directory, 'SKILL.md'));
-      const { data } = matter(fs.readFileSync(file, 'utf8'));
-      skills.push({
-        kind: 'agent-skill',
-        name,
-        description:
-          description ??
-          (typeof data.description === 'string' ? data.description.trim() : undefined),
-        source: 'skill',
-        scope: 'user',
-        path: file,
-        enabled: true,
-        claudeCommandName: `${namespace}:${name}`,
-      });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
-  };
-  for (const skill of builtIns) addSkill(skill.absolutePath, skill.name, 'cindy');
-  // Reuse receipt verification. Occupants preserved in the projection directory
-  // (real directories, foreign links, stale slots) are not an approval catalog.
-  const manager = getGhostManager();
-  for (const ghost of await listAvailableGhostsAsync()) {
-    if (
-      !ghost.enabled ||
-      !ghost.approvedSkillRoot ||
-      !(await manager.verifyApprovedSkillSnapshot(ghost))
-    )
-      continue;
-    for (const item of ghost.manifest.skill?.items ?? []) {
-      addSkill(
-        path.join(ghost.approvedSkillRoot, item.dir),
-        item.name,
-        `cindy-plugin-${installedGhostStoragePart(ghost)}`,
-        item.description,
-      );
-    }
-  }
-  if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending())
-    throw new Error('Skill owner changed during discovery');
-  return skills;
-};
+export const listCindyManagedSkills = (): Promise<ManagedSkill[]> => managedSkills.listCindyManagedSkills();
+
+/** Attest from the actual installed source, never from a name or skill frontmatter. */
+export async function markCindyOfficialSkills<T extends { path?: string }>(
+  skills: readonly T[], remoteHostId?: string,
+): Promise<Array<T & { cindyOfficial: boolean; enabled?: boolean }>> {
+  return managedSkills.markCindyOfficialSkills(skills, remoteHostId);
+}

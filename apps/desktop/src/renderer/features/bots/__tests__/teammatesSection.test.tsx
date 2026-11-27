@@ -8,7 +8,7 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/makerChatStore', () => { const running = new Map(); return { makerChatStore: { subscribeAll: () => () => {}, getRunningSnapshot: () => running } }; });
+vi.mock('@/lib/makerChatStore', () => ({ makerChatStore: { subscribeAll: () => () => {}, getRunningSnapshot: () => mocks.running } }));
 
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
 beforeAll(() => { HTMLElement.prototype.scrollIntoView = vi.fn(); });
@@ -23,15 +23,17 @@ vi.mock('@/components/onboarding/ConnectProviderCard', () => ({
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }) }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }), useOptionalAuthDeviceId: () => null }));
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: translate, i18n: { resolvedLanguage: 'en' } }),
 }));
 
 const mocks = vi.hoisted(() => ({
+  realStore: false,
   navigate: vi.fn(),
   observeSession: vi.fn(),
   profiles: [] as unknown[],
+  running: new Map<string, { isRunning: boolean }>(),
   remoteBots: [] as import('../remoteBotRoster').RemoteBot[],
   devices: [] as Array<{ deviceId: string; name: string; isSelf: boolean }>,
   health: new Map<string, string>(),
@@ -42,11 +44,16 @@ const mocks = vi.hoisted(() => ({
   setBotHidden: vi.fn(async () => undefined),
   setBotPinned: vi.fn(async () => undefined),
   duplicateBotProfile: vi.fn(async () => ({ id: 'copy' })),
+  toastError: vi.fn(),
   /** 灵动岛活动镜像:sessionId -> phase。侧栏据此显示「正在输入…」。 */
   islandActivity: new Map<string, { sessionId: string; phase: string; compactDetail?: string }>(),
   cloud: { enabled: false, selfDeviceId: null, humanActorId: null, actors: [], demotedBotIds: [] } as import('../../../../shared/companionCloud').CompanionCloudSnapshot,
 }));
 vi.mock('../companionCloudStore', () => ({ useCompanionCloud: () => mocks.cloud }));
+vi.mock('@/lib/toast', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/lib/toast')>();
+  return { ...actual, toast: { ...actual.toast, error: mocks.toastError } };
+});
 
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
 vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
@@ -76,10 +83,16 @@ vi.mock('react-router-dom', async importOriginal => ({
     ? `/bots/remote/${mocks.params.deviceId}/${mocks.params.botId}`
     : mocks.params.botId ? `/bots/${mocks.params.botId}` : '/bots', search: '', hash: '' }),
 }));
-vi.mock('../botStore', () => ({
-  useBotProfiles: () => mocks.profiles,
+vi.mock('../botStore', async importOriginal => {
+  const actual = await importOriginal<typeof import('../botStore')>();
+  return ({
+  ...actual,
+  getBotProfiles: () => mocks.realStore ? actual.getBotProfiles() : mocks.profiles,
+  useBotProfiles: () => mocks.realStore ? actual.useBotProfiles() : mocks.profiles,
+  useBotProfilesLoadState: () => mocks.realStore ? actual.useBotProfilesLoadState() : 'ready',
+  hasLoadedBotProfiles: () => mocks.realStore ? actual.hasLoadedBotProfiles() : true,
   useBotUnreadCounts: () => mocks.unread,
-  refreshBotProfiles: mocks.refreshBotProfiles,
+  refreshBotProfiles: () => mocks.realStore ? actual.refreshBotProfiles() : mocks.refreshBotProfiles(),
   setBotHidden: mocks.setBotHidden,
   setBotPinned: mocks.setBotPinned,
   duplicateBotProfile: mocks.duplicateBotProfile,
@@ -87,16 +100,18 @@ vi.mock('../botStore', () => ({
     sessions?: Array<{ id: string; role?: string; kind?: string }>;
   }) =>
     bot.sessions?.find((session) => session.role === 'canonical' || session.kind === 'chat')?.id,
-}));
+});
+});
 vi.mock('../BotDeleteDialog', () => ({
   BotDeleteDialog: ({ bot }: { bot: { name: string } | null }) =>
     bot ? <div data-testid="bot-delete-dialog">{bot.name}</div> : null,
 }));
 
 import { TeammatesSection } from '../TeammatesSection';
+import { BotModelSelectionRequiredError } from '../botStore';
 import { BotConnectionStatus } from '../BotConnectionStatus';
 import { markBotRead, resetBotReadStateForTests } from '../botReadState';
-import { readTeammatesSectionCollapsed } from '../teammatesSectionPrefs';
+import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed, writeTeammatesViewMode } from '../teammatesSectionPrefs';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 interface BotFixture {
@@ -134,6 +149,7 @@ async function renderSidebar() {
 }
 
 beforeEach(() => {
+  mocks.realStore = false;
   messageListeners = [];
   window.localStorage.clear();
   resetBotReadStateForTests();
@@ -147,11 +163,13 @@ beforeEach(() => {
   mocks.setBotHidden.mockResolvedValue(undefined);
   mocks.setBotPinned.mockResolvedValue(undefined);
   mocks.duplicateBotProfile.mockResolvedValue({ id: 'copy' });
+  mocks.toastError.mockReset();
   mocks.health = new Map();
   mocks.unread = {};
   mocks.groupMessages = new Map();
   mocks.params = {};
   mocks.profiles = [];
+  mocks.running = new Map();
   mocks.remoteBots = [];
   mocks.devices = [];
   mocks.islandActivity = new Map();
@@ -175,12 +193,38 @@ beforeEach(() => {
   });
 });
 
+// Unit regression: dragging the name inside a companion button must carry
+// that chat to the split/window receiver without producing a bogus task link.
+it('starts a task-style window drag from the companion name', async () => {
+  mocks.profiles = [bot({ id: 'mate', name: 'Mate' })];
+  const { getByText } = await renderSidebar();
+  const data = new Map<string, string>();
+  const name = getByText('Mate');
+  const row = name.closest('button')!;
+  expect(row.draggable).toBe(true);
+  fireEvent.dragStart(name, { dataTransfer: { setData: (key: string, value: string) => data.set(key, value) } });
+  expect([...data.values()]).toEqual(['/bots/mate']);
+  fireEvent.dragEnd(row);
+});
+
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
 });
 
 describe('one Cindy entry across devices', () => {
+  // #8585, unit: two legacy Cindy choices must not absorb the newly reachable
+  // same-home cloud recovery row, which is intentionally outside their picker.
+  it('keeps cloud recovery separate from the legacy Cindy picker', async () => {
+    mocks.profiles = [{ ...bot({ id: 'legacy-local', name: 'Legacy local' }), templateId: 'cindy' },
+      bot({ id: 'cindy-default', name: 'Recovered Cindy' })];
+    mocks.remoteBots = [{ ...remote('legacy-desk', 'Legacy desk'), id: 'legacy-remote', templateId: 'cindy' }];
+    mocks.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['cindy-default'], actors: [
+      { id: 'actor-cindy', externalId: 'cindy-default', name: 'Recovered Cindy', avatar: null, homeDeviceId: 'desk' }] };
+    await renderSidebar();
+    fireEvent.click(screen.getByRole('button', { name: /Recovered Cindy/ }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/desk/cindy-default');
+  });
   const remote = (deviceId: string, deviceName: string, extra = {}) => ({
     id: 'cindy-default', deviceId, deviceName, name: 'Cindy', avatar: '🤖', avatarColor: 'violet',
     description: '', preview: `${deviceName} preview`, activityAt: 1, sessionId: `${deviceId}-chat`, online: true, ...extra,
@@ -481,63 +525,107 @@ describe('teammate host labels', () => {
 describe('TeammatesSection header', () => {
   const header = () => screen.getByRole('button', { name: 'bots.title' });
 
-  // #6444: six rows used to shrink to five before SectionCollapse could animate.
-  // Existing tests cover the avatar end state, not the closing interval. Unit tier:
-  // render the real section with six entries and advance fake time (no real wait).
-  it('keeps the full list mounted until the section collapse finishes', () => {
-    vi.useFakeTimers();
-    mocks.profiles = Array.from({ length: 6 }, (_, index) => bot({
-      id: `mate-${index}`, name: `Mate ${index}`, lastMessagePreview: 'Ready',
-    }));
-    render(<TeammatesSection />);
-    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.sidebar.showAllSessions:{"count":6}' }));
-    expect(screen.getAllByText('Ready')).toHaveLength(6);
-    fireEvent.click(header());
-    expect(screen.getAllByText('Ready')).toHaveLength(6);
-    act(() => vi.advanceTimersByTime(200));
-    expect(screen.queryByText('Ready')).toBeNull();
-    fireEvent.click(header());
-    expect(screen.getAllByText('Ready')).toHaveLength(5);
-  });
-
-  it('starts expanded and collapses into a row of avatars that is remembered per account', async () => {
-    mocks.profiles = [
-      bot({ id: 'bot-1', name: 'PR steward', lastMessagePreview: 'Two checks are still red' }),
-      bot({ id: 'bot-2', name: 'Writer' }),
-    ];
-    mocks.unread = { 'bot-2': 1 };
+  // Unit: the opt-in restores read avatars without changing fold or expanded style.
+  // Existing attention-only tests lack this override; one read and one unread bot
+  // distinguish all-avatars from the default, including remount and disabling it again.
+  it.each(['list', 'icons'] as const)('toggles collapsed avatars independently of %s mode and remembers the choice', async mode => {
+    mocks.profiles = [bot({ id: 'idle', name: 'Idle' }), bot({ id: 'unread', name: 'Unread' })];
+    mocks.unread = { unread: 1 };
+    writeTeammatesViewMode('fixture-owner', mode);
+    writeTeammatesSectionCollapsed('fixture-owner', true);
     await renderSidebar();
-    expect(header().getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByText('Two checks are still red')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'PR steward' })).toBeNull();
-    expect(readTeammatesSectionCollapsed('fixture-owner')).toBe(false);
-
-    fireEvent.click(header());
+    expect(screen.queryByRole('button', { name: 'Idle' })).toBeNull();
+    expect(screen.queryByText('Idle')).toBeNull();
+    const toggleAvatars = (checked: boolean) => {
+      fireEvent.keyDown(screen.getByRole('button', { name: 'ccAgent.sidebar.viewStyle' }), { key: 'Enter' });
+      const option = screen.getByRole('menuitemcheckbox', { name: 'bots.list.showCollapsedTeammateAvatars' });
+      expect(option.getAttribute('aria-checked')).toBe(String(checked));
+      fireEvent.click(option);
+    };
+    toggleAvatars(false);
     expect(header().getAttribute('aria-expanded')).toBe('false');
-    expect(readTeammatesSectionCollapsed('fixture-owner')).toBe(true);
-    // Collapsed: one avatar per chat; an unread teammate says so in its label.
-    fireEvent.click(screen.getByRole('button', { name: 'PR steward' }));
-    expect(mocks.navigate).toHaveBeenLastCalledWith('/bots/bot-1');
-    expect(screen.getByRole('button', { name: 'Writer · bots.avatarStatus.unread' })).toBeTruthy();
-    // The full rows leave once the collapse animation has finished.
-    await waitFor(() => expect(screen.queryByText('Two checks are still red')).toBeNull());
-
-    // A fresh mount (another route, a relaunch) restores the saved choice.
+    expect(screen.getByRole('button', { name: 'Idle' })).toBeTruthy();
+    expect(readCollapsedTeammateAvatars('fixture-owner')).toBe(true);
+    expect(readTeammatesViewMode('fixture-owner')).toBe(mode);
     cleanup();
     await renderSidebar();
-    expect(header().getAttribute('aria-expanded')).toBe('false');
-    expect(screen.queryByText('Two checks are still red')).toBeNull();
-    expect(screen.getByRole('button', { name: 'PR steward' })).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'bots.list.sectionExpand' }));
+    expect(screen.getByRole('button', { name: 'Idle' })).toBeTruthy();
+    fireEvent.click(header());
     expect(header().getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getByText('Two checks are still red')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'PR steward' })).toBeNull();
-    expect(readTeammatesSectionCollapsed('fixture-owner')).toBe(false);
-    expect(window.localStorage.getItem('sidebar.teammatesSection.v1.owner.fixture-owner')).toBe('expanded');
+    expect(mode === 'list' ? screen.getByText('Idle') : screen.getByRole('button', { name: 'Idle' })).toBeTruthy();
+    fireEvent.click(header());
+    toggleAvatars(true);
+    expect(header().getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByRole('button', { name: 'Idle' })).toBeNull();
+    expect(screen.queryByText('Idle')).toBeNull();
+    expect(mode === 'list' ? screen.getByText('Unread') : screen.getByRole('button', { name: /^Unread ·/ })).toBeTruthy();
+    expect(readCollapsedTeammateAvatars('fixture-owner')).toBe(false);
   });
 
-  it('keeps the collapsed row on one line and folds the rest into +N', async () => {
+  // New collapse contract: ordinary chats disappear, unread and pending feedback survive
+  // beyond the five-row preview, then disappear when resolved (real component, unit tier).
+  it('collapses fully while retaining unread and pending feedback across remounts', async () => {
+    mocks.profiles = [bot({ id: 'idle', name: 'Idle' }), bot({ id: 'unread', name: 'Unread' }), bot({ id: 'waiting', name: 'Waiting' })];
+    mocks.unread = { unread: 1 };
+    mocks.islandActivity = new Map([['waiting-chat', { sessionId: 'waiting-chat', phase: 'needs-interaction' }]]);
+    const view = await renderSidebar();
+    fireEvent.click(header());
+    expect(screen.queryByText('Idle')).toBeNull();
+    expect(screen.getByText('Unread')).toBeTruthy();
+    expect(screen.getByText('Waiting')).toBeTruthy();
+    expect(readTeammatesSectionCollapsed('fixture-owner')).toBe(true);
+    mocks.unread = {};
+    mocks.islandActivity = new Map();
+    view.rerender(<TeammatesSection />);
+    await waitFor(() => expect(screen.queryByText('Waiting')).toBeNull());
+    cleanup();
+    await renderSidebar();
+    expect(screen.queryByText('Idle')).toBeNull();
+    fireEvent.click(header());
+    expect(screen.getByText('Idle')).toBeTruthy();
+  });
+
+  // Regression: reading the open chat must not remove its navigation target.
+  // Existing collapse coverage only checks unselected chats. Unit: clear unread
+  // while selected, then switch route; exercise both production presentations.
+  it.each(['list', 'icons'] as const)('keeps the read chat until navigation leaves it in %s mode', async (mode) => {
+    mocks.profiles = [bot({ id: 'reader', name: 'Reader' }), bot({ id: 'other', name: 'Other' })];
+    mocks.unread = { reader: 1 };
+    mocks.params = { botId: 'reader' };
+    writeTeammatesViewMode('fixture-owner', mode);
+    const view = await renderSidebar();
+    fireEvent.click(header());
+    const reader = () => mode === 'icons'
+      ? screen.queryByRole('button', { name: /^Reader(?: ·|$)/ })
+      : screen.queryByText('Reader');
+    expect(reader()).not.toBeNull();
+    mocks.unread = {};
+    view.rerender(<TeammatesSection />);
+    expect(reader()).not.toBeNull();
+    // Explicitly expand and collapse while still selected: the read row must hide.
+    fireEvent.click(header());
+    fireEvent.click(header());
+    await waitFor(() => expect(reader()).toBeNull());
+    // A new unread event restores the row and its read-until-leaving protection.
+    mocks.unread = { reader: 1 };
+    view.rerender(<TeammatesSection />);
+    expect(reader()).not.toBeNull();
+    mocks.unread = {};
+    view.rerender(<TeammatesSection />);
+    expect(reader()).not.toBeNull();
+    mocks.params = { botId: 'other' };
+    view.rerender(<TeammatesSection />);
+    expect(reader()).toBeNull();
+    // Leaving a still-pending chat must not hide its request for feedback.
+    mocks.params = { botId: 'reader' };
+    mocks.islandActivity = new Map([['reader-chat', { sessionId: 'reader-chat', phase: 'needs-interaction' }]]);
+    view.rerender(<TeammatesSection />);
+    mocks.params = { botId: 'other' };
+    view.rerender(<TeammatesSection />);
+    expect(reader()).not.toBeNull();
+  });
+
+  it.each([false, true])('folds avatar overflow into +N and opens the full list (collapsed avatars: %s)', async collapsedAvatars => {
     const original = globalThis.ResizeObserver;
     // 5 slots: 4 avatars + the +N chip (40px target, 4px gap).
     globalThis.ResizeObserver = class {
@@ -550,8 +638,13 @@ describe('TeammatesSection header', () => {
       mocks.profiles = Array.from({ length: 6 }, (_, index) => bot({ id: `bot-${index}`, name: `Mate ${index}` }));
       mocks.unread = { 'bot-5': 1 };
       mocks.params = { botId: 'bot-4' };
+      if (collapsedAvatars) {
+        writeCollapsedTeammateAvatars('fixture-owner', true);
+        writeTeammatesSectionCollapsed('fixture-owner', true);
+      } else {
+        writeTeammatesViewMode('fixture-owner', 'icons');
+      }
       await renderSidebar();
-      fireEvent.click(header());
       const avatars = screen.getAllByRole('button', { name: /^Mate \d$/ });
       expect(avatars).toHaveLength(4);
       // The open chat keeps a slot even when it sorts past the cut.
@@ -559,17 +652,54 @@ describe('TeammatesSection header', () => {
       const more = screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' });
       fireEvent.click(more);
       expect(header().getAttribute('aria-expanded')).toBe('true');
+      expect(readTeammatesViewMode('fixture-owner')).toBe('list');
+      expect(screen.getByText('Mate 5')).toBeTruthy();
     } finally {
       globalThis.ResizeObserver = original;
     }
   });
 
-  it('marks the open chat in the collapsed avatar row', async () => {
+  // Unit regression: the real section must measure each newly mounted icon row.
+  // Existing capacity coverage starts with a mounted row; six read buddies and an
+  // initially collapsed section reproduce the missing +N entry after expansion.
+  it('measures icon rows after empty states and list-mode remounts', async () => {
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() { this.callback([{ contentRect: { width: 216 } } as ResizeObserverEntry], this as unknown as ResizeObserver); }
+      disconnect() {}
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      mocks.profiles = Array.from({ length: 6 }, (_, index) => bot({ id: `bot-${index}`, name: `Mate ${index}` }));
+      writeTeammatesViewMode('fixture-owner', 'icons');
+      writeTeammatesSectionCollapsed('fixture-owner', true);
+      const view = await renderSidebar();
+      expect(screen.queryByRole('button', { name: 'Mate 0' })).toBeNull();
+      fireEvent.click(header());
+      expect(screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' })).not.toBeNull();
+      // +N replaces the icon row with the list; switching back must measure again.
+      fireEvent.click(screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' }));
+      fireEvent.keyDown(screen.getByRole('button', { name: 'ccAgent.sidebar.viewStyle' }), { key: 'Enter' });
+      fireEvent.click(screen.getByRole('menuitem', { name: 'bots.list.viewIcons' }));
+      expect(screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' })).not.toBeNull();
+      // The roster can also become empty and return without changing view mode.
+      mocks.profiles = [];
+      view.rerender(<TeammatesSection />);
+      mocks.profiles = Array.from({ length: 6 }, (_, index) => bot({ id: `bot-${index}`, name: `Mate ${index}` }));
+      view.rerender(<TeammatesSection />);
+      expect(screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' })).not.toBeNull();
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
+  });
+
+  it('marks the open chat in icon mode', async () => {
     mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' }), bot({ id: 'bot-2', name: 'Writer' })];
     mocks.unread = { 'bot-1': 2 };
     mocks.params = { botId: 'bot-1' };
+    writeTeammatesViewMode('fixture-owner', 'icons');
     await renderSidebar();
-    fireEvent.click(header());
     // Routing alone does not acknowledge a reply; the existing read receipt owns clearing.
     expect(screen.getByRole('button', { name: 'PR steward · bots.avatarStatus.unread' }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByRole('button', { name: 'Writer' }).hasAttribute('aria-current')).toBe(false);
@@ -602,7 +732,7 @@ describe('TeammatesSection header', () => {
     expect(view.container.querySelector('[data-teammate-status="error"]')).toBeNull();
   });
 
-  it('keeps pending attention ahead of errors in the collapsed overflow', async () => {
+  it('keeps pending attention ahead of errors in the icon overflow', async () => {
     const original = globalThis.ResizeObserver;
     globalThis.ResizeObserver = class {
       constructor(private readonly callback: ResizeObserverCallback) {}
@@ -613,8 +743,8 @@ describe('TeammatesSection header', () => {
     try {
       mocks.profiles = [bot({ id: 'waiting', name: 'Waiting' }), bot({ id: 'failed', name: 'Failed', needsAttention: true })];
       mocks.islandActivity = new Map([['waiting-chat', { sessionId: 'waiting-chat', phase: 'needs-interaction' }]]);
+      writeTeammatesViewMode('fixture-owner', 'icons');
       await renderSidebar();
-      fireEvent.click(screen.getByRole('button', { name: 'bots.title' }));
       const overflow = screen.getByRole('button', { name: 'bots.list.sectionExpand · +2' });
       expect(overflow.querySelector('[data-teammate-status="awaiting"]')).not.toBeNull();
       expect(overflow.querySelector('[data-teammate-status="error"]')).toBeNull();
@@ -818,6 +948,17 @@ describe('TeammatesSection rows', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1');
   });
 
+  // A healthy main chat skips the /bots/:botId spinner hand-off; the state lets the
+  // chat gate hand back to that page if its fresh read disagrees (see botOpenRoute).
+  it('opens a healthy main chat straight from the row', async () => {
+    mocks.profiles = [{ ...bot({ id: 'bot-1', name: 'PR steward' }), sessions: [
+      { id: 'main', kind: 'chat', role: 'canonical', status: 'active', title: '', updatedAt: 1 },
+    ] }];
+    await renderSidebar();
+    fireEvent.click(screen.getByText('PR steward'));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/bot-1/session/main', { state: { botDirectEntry: true } });
+  });
+
   it('keeps legacy stopped Bots reachable for deletion without presenting archive or restore', async () => {
     mocks.profiles = [
       { ...bot({ id: 'legacy-stopped', name: 'Legacy stopped' }), status: 'archived' },
@@ -914,6 +1055,49 @@ describe('TeammatesSection rows', () => {
     expect(mocks.setBotPinned).toHaveBeenCalledExactlyOnceWith('bot-1', true);
   });
 
+  // Regression: roster writes are not optimistic, so a rejected pin / hide used to
+  // leave the row unchanged with no feedback (an unhandled rejection).
+  it.each([
+    { item: 'bots.list.pin', write: () => mocks.setBotPinned, message: 'bots.list.pinFailed' },
+    { item: 'bots.list.hide', write: () => mocks.setBotHidden, message: 'bots.list.hideFailed' },
+  ])('reports a failed $item instead of silently doing nothing', async ({ item, write, message }) => {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    mocks.params = { botId: 'bot-1' };
+    write().mockRejectedValueOnce(new Error('ipc down'));
+    await renderSidebar();
+    fireEvent.contextMenu(screen.getByText('PR steward'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: item }));
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledExactlyOnceWith(message));
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  // Regression: duplicating reads the avatar and waits for the new profile with no
+  // progress, and a missing default model rejected silently.
+  it.each([
+    { error: new BotModelSelectionRequiredError(), message: 'bots.list.duplicateModelRequired' },
+    { error: new Error('create failed'), message: 'bots.list.duplicateFailed' },
+  ])('shows duplicate progress in the row, then explains $message', async ({ error, message }) => {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    let reject!: (reason: unknown) => void;
+    mocks.duplicateBotProfile.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
+    await renderSidebar();
+    fireEvent.contextMenu(screen.getByText('PR steward'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'bots.list.duplicate' }));
+    expect(await screen.findByRole('status', { name: 'bots.list.duplicating' })).toBeTruthy();
+
+    // A second request while the first is in flight must not start another copy.
+    fireEvent.contextMenu(screen.getByText('PR steward'));
+    const again = await screen.findByRole('menuitem', { name: 'bots.list.duplicate' });
+    expect(again.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(again);
+    expect(mocks.duplicateBotProfile).toHaveBeenCalledTimes(1);
+
+    await act(async () => { reject(error); });
+    expect(mocks.toastError).toHaveBeenCalledExactlyOnceWith(message);
+    expect(screen.queryByRole('status', { name: 'bots.list.duplicating' })).toBeNull();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
   it('re-reads the list when a Bot conversation is marked read', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
@@ -929,6 +1113,109 @@ describe('TeammatesSection rows', () => {
     });
     // Debounced the same way as the message feed: one refresh per burst.
     expect(mocks.refreshBotProfiles).toHaveBeenCalledTimes(1);
+  });
+
+  // Regression / unit: the real sync hook must publish the new preview even if
+  // an older list read replaces profiles during the 120 ms refresh window.
+  // The ordinary message test below never replaced the profile array mid-burst.
+  it('keeps a pending message refresh when an older list response replaces profiles', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const old = bot({ id: 'bot-1', name: 'PR steward', lastMessagePreview: 'Old reply' });
+    mocks.profiles = [old];
+    const view = render(<><UnreadSync /><TeammatesSection /></>);
+    mocks.refreshBotProfiles.mockImplementation(() => {
+      mocks.profiles = [{ ...old, lastMessagePreview: 'New reply' }];
+    });
+
+    act(() => { for (const listener of messageListeners) listener({ sessionId: 'bot-1-chat' }); });
+    mocks.profiles = [{ ...old }];
+    view.rerender(<><UnreadSync /><TeammatesSection /></>);
+    expect(screen.getByText('Old reply')).toBeTruthy();
+    act(() => { vi.advanceTimersByTime(120); });
+    view.rerender(<><UnreadSync /><TeammatesSection /></>);
+    expect(screen.getByText('New reply')).toBeTruthy();
+    expect(screen.queryByText('Old reply')).toBeNull();
+  });
+
+  // Regression / unit: message + read receipts previously owned separate timers,
+  // so one visible update caused two list reads. Internal tool rows need neither.
+  it('coalesces read and message updates and ignores tool activity', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    mocks.running = new Map([['bot-1-chat', { isRunning: true }]]);
+    render(<UnreadSync />);
+    mocks.refreshBotProfiles.mockClear();
+    act(() => {
+      for (const role of ['tool_use', 'tool_result', 'thinking']) {
+        for (const listener of messageListeners) listener({ sessionId: 'bot-1-chat', message: { role } });
+      }
+      vi.advanceTimersByTime(120);
+    });
+    expect(mocks.refreshBotProfiles).not.toHaveBeenCalled();
+    act(() => {
+      for (const listener of messageListeners) listener({ sessionId: 'bot-1-chat', message: { role: 'assistant' } });
+      markBotRead('bot-1', 2_000);
+      vi.advanceTimersByTime(120);
+    });
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledTimes(1);
+  });
+
+  // Unit regression: final-seal and message events previously used independent
+  // refresh paths. The displayed final preview must update once for their burst.
+  it('coalesces a turn stop with its final message and still accepts late tool rows', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const old = bot({ id: 'bot-1', name: 'PR steward', lastMessagePreview: 'Old reply' });
+    mocks.profiles = [old];
+    mocks.running = new Map([['bot-1-chat', { isRunning: true }]]);
+    const view = render(<><UnreadSync /><TeammatesSection /></>);
+    mocks.refreshBotProfiles.mockImplementation(() => {
+      mocks.profiles = [{ ...old, lastMessagePreview: 'Sealed reply' }];
+    });
+    mocks.refreshBotProfiles.mockClear();
+    mocks.running = new Map();
+    view.rerender(<><UnreadSync /><TeammatesSection /></>);
+    act(() => {
+      for (const listener of messageListeners) listener({ sessionId: 'bot-1-chat', message: { role: 'assistant' } });
+      vi.advanceTimersByTime(120);
+    });
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledTimes(1);
+    view.rerender(<><UnreadSync /><TeammatesSection /></>);
+    expect(screen.getByText('Sealed reply')).toBeTruthy();
+
+    mocks.refreshBotProfiles.mockClear();
+    act(() => {
+      for (const listener of messageListeners) listener({ sessionId: 'bot-1-chat', message: { role: 'tool_result' } });
+      vi.advanceTimersByTime(120);
+    });
+    expect(mocks.refreshBotProfiles).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses current session membership and drops pending refreshes after an owner change or unmount', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    const view = render(<UnreadSync />);
+    mocks.profiles = [bot({ id: 'bot-2', name: "New buddy" })];
+    view.rerender(<UnreadSync />);
+    mocks.refreshBotProfiles.mockClear();
+    act(() => {
+      for (const listener of messageListeners) listener({ sessionId: 'bot-1-chat' });
+      vi.advanceTimersByTime(120);
+    });
+    expect(mocks.refreshBotProfiles).not.toHaveBeenCalled();
+    act(() => {
+      for (const listener of messageListeners) listener({ sessionId: 'bot-2-chat' });
+      // Owner publication precedes React's render/cleanup during account switches.
+      setDataOwnerGeneration('next-owner', 2);
+      vi.advanceTimersByTime(120);
+    });
+    expect(mocks.refreshBotProfiles).not.toHaveBeenCalled();
+    view.rerender(<UnreadSync />);
+    mocks.refreshBotProfiles.mockClear();
+    act(() => { for (const listener of messageListeners) listener({ sessionId: 'bot-2-chat' }); });
+    view.unmount();
+    act(() => { vi.advanceTimersByTime(120); });
+    expect(mocks.refreshBotProfiles).not.toHaveBeenCalled();
+    expect(messageListeners).toHaveLength(0);
   });
 
   it('refreshes the list when a message lands in a Bot task, and ignores other tasks', async () => {
@@ -987,4 +1274,126 @@ describe('cloud companions in the roster', () => {
     expect(screen.queryByTestId('cindy-device-row')).toBeNull();
     expect(screen.getByText('Laptop preview')).toBeTruthy();
   });
+});
+
+// #9978 / unit: mount the production sidebar with its real store. Existing row
+// fixtures replaced the store and could not distinguish a failed read from empty.
+describe('startup roster read failures', () => {
+  it.each(['list', 'icons', 'collapsed'] as const)('keeps failed startup distinct from empty and recovers through the visible retry (%s)', async mode => {
+    mocks.realStore = true;
+    writeTeammatesViewMode('fixture-owner', mode === 'icons' ? 'icons' : 'list');
+    writeTeammatesSectionCollapsed('fixture-owner', mode === 'collapsed');
+    const store = await vi.importActual<typeof import('../botStore')>('../botStore');
+    setDataOwnerGeneration(`startup-failed-${mode}`);
+    const list = vi.fn().mockRejectedValueOnce(new Error('[PRECONDITION_FAILED] DbClient not ready'))
+      .mockResolvedValue([bot({ id: 'existing', name: 'Existing buddy' })]);
+    window.electronAPI.localDb!.bots = { list } as never;
+    await store.ensureBotProfilesLoaded();
+    const view = await renderSidebar();
+    expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.rosterReload' }));
+    await waitFor(() => expect(store.getBotProfiles().map(row => row.id)).toEqual(['existing']));
+    expect(screen.queryByRole('alert')).toBeNull();
+    if (mode === 'collapsed') fireEvent.click(screen.getByRole('button', { name: 'bots.title' }));
+    if (mode === 'icons') expect(screen.getByRole('button', { name: 'Existing buddy' })).toBeTruthy();
+    else expect(view.container.textContent).toContain('Existing buddy');
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for a successful empty snapshot before offering empty-roster creation', async () => {
+    mocks.realStore = true;
+    const store = await vi.importActual<typeof import('../botStore')>('../botStore');
+    setDataOwnerGeneration('startup-empty');
+    let finish!: (rows: unknown[]) => void;
+    const list = vi.fn(() => new Promise<unknown[]>(resolve => { finish = resolve; }));
+    window.electronAPI.localDb!.bots = { list } as never;
+    const pending = store.ensureBotProfilesLoaded();
+    await renderSidebar();
+    try {
+      expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
+      expect(screen.getByRole('status').textContent).toContain('ccAgent.common.loading');
+    } finally {
+      await act(async () => { finish([]); await pending; });
+    }
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.getByRole('button', { name: 'bots.add' })).toBeTruthy();
+    expect(list).toHaveBeenCalledOnce();
+  });
+});
+
+// #9706 / unit-jsdom: loading must remain visible in all sidebar presentation
+// modes. Execute the production store/section and settle the read in finally.
+it.each(['list', 'icons', 'collapsed'] as const)('shows the pending roster until its current-owner read succeeds (%s)', async mode => {
+  mocks.realStore = true;
+  writeTeammatesViewMode('fixture-owner', mode === 'icons' ? 'icons' : 'list');
+  writeTeammatesSectionCollapsed('fixture-owner', mode === 'collapsed');
+  const store = await vi.importActual<typeof import('../botStore')>('../botStore');
+  setDataOwnerGeneration(`startup-pending-${mode}`);
+  let finish!: (rows: unknown[]) => void;
+  const list = vi.fn(() => new Promise<unknown[]>(resolve => { finish = resolve; }));
+  window.electronAPI.localDb!.bots = { list } as never;
+  const pending = store.ensureBotProfilesLoaded();
+  await renderSidebar();
+  try {
+    expect(screen.getByRole('status').textContent).toContain('ccAgent.common.loading');
+    expect(screen.queryByRole('button', { name: 'bots.add' })).toBeNull();
+  } finally {
+    await act(async () => { finish([bot({ id: 'existing', name: 'Existing buddy' })]); await pending; });
+  }
+  expect(screen.queryByRole('status')).toBeNull();
+  expect(store.getBotProfiles().map(row => row.id)).toEqual(['existing']);
+  expect(list).toHaveBeenCalledOnce();
+});
+
+it('opens local, remote and icon-strip teammates in a new window on primary-mod click, middle click, and context menu', async () => {
+  const openSessionInNewWindow = vi.fn(async () => undefined);
+  const prevApi = window.electronAPI;
+  (window as unknown as { electronAPI: unknown }).electronAPI = {
+    ...(prevApi as unknown as Record<string, unknown>),
+    platform: 'darwin',
+    maker: {
+      ...((prevApi as { maker?: Record<string, unknown> } | undefined)?.maker ?? {}),
+      openSessionInNewWindow,
+    },
+  };
+  try {
+    mocks.profiles = [bot({ id: 'bot-1', name: 'PR steward' })];
+    mocks.remoteBots = [
+      {
+        id: 'cloud-1',
+        deviceId: 'mac-mini',
+        deviceName: 'Mac mini',
+        name: 'Cloud helper',
+        avatar: '🤖',
+        avatarColor: 'blue',
+        description: '',
+        preview: '',
+        sessionId: null,
+        online: true,
+        connectionKnown: true,
+        activityAt: 2,
+      },
+    ];
+    await renderSidebar();
+
+    const localRow = screen.getByText('PR steward').closest('button')!;
+    const remoteRow = screen.getByText('Cloud helper').closest('button')!;
+
+    fireEvent.click(localRow, { metaKey: true });
+    fireEvent(remoteRow, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    // macOS Ctrl+click must not trigger new-window open.
+    fireEvent.click(localRow, { ctrlKey: true });
+
+    expect(openSessionInNewWindow).toHaveBeenNthCalledWith(1, '/bots/bot-1', undefined, undefined);
+    expect(openSessionInNewWindow).toHaveBeenNthCalledWith(2, '/bots/remote/mac-mini/cloud-1', undefined, undefined);
+    expect(openSessionInNewWindow).toHaveBeenCalledTimes(2);
+    expect(mocks.navigate).toHaveBeenCalledTimes(1);
+
+    fireEvent.contextMenu(localRow);
+    const menuItem = await screen.findByRole('menuitem', { name: 'ccAgent.sidebar.sessionMenu.openInNewWindow' });
+    fireEvent.click(menuItem);
+    expect(openSessionInNewWindow).toHaveBeenNthCalledWith(3, '/bots/bot-1', undefined, undefined);
+  } finally {
+    (window as unknown as { electronAPI: unknown }).electronAPI = prevApi;
+  }
 });

@@ -1,0 +1,86 @@
+[
+  {
+    "step": "check",
+    "command": [
+      "cargo",
+      "check",
+      "--profile",
+      "sim",
+      "--workspace",
+      "--all-targets",
+      "--features",
+      "agent-net-sim/kcp",
+      "--locked",
+      "--offline"
+    ],
+    "exit": 0,
+    "seconds": 0.39
+  },
+  {
+    "step": "tests",
+    "command": [
+      "cargo",
+      "test",
+      "--profile",
+      "sim",
+      "--workspace",
+      "--features",
+      "agent-net-sim/kcp",
+      "--locked",
+      "--offline"
+    ],
+    "exit": 0,
+    "seconds": 98.16
+  },
+  {
+    "step": "build",
+    "command": [
+      "cargo",
+      "build",
+      "--release",
+      "-p",
+      "agent-net-sim",
+      "--features",
+      "kcp",
+      "--bin",
+      "compare",
+      "--bin",
+      "netperf"
+    ],
+    "exit": 0,
+    "seconds": 2.93
+  },
+  {
+    "step": "matrix-auto",
+    "exit": 0,
+    "seconds": 42.54,
+    "scenarios": 32,
+    "seeds": 16,
+    "windows": [
+      128,
+      1024
+    ]
+  },
+  {
+    "step": "matrix-lean",
+    "exit": 0,
+    "seconds": 10.02,
+    "scenarios": 32,
+    "seeds": 16,
+    "windows": [
+      128,
+      1024
+    ]
+  },
+  {
+    "step": "matrix-fast",
+    "exit": 0,
+    "seconds": 109.84,
+    "scenarios": 32,
+    "seeds": 16,
+    "windows": [
+      128,
+      1024
+    ]
+  }
+]

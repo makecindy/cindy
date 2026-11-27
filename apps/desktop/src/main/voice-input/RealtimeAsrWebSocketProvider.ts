@@ -3,7 +3,7 @@ import type { ClientRequest, IncomingMessage } from 'node:http';
 import type { AsrEvent, AsrProvider, AudioTrace } from '@cindy/voice-input-core';
 import type { VoiceInputRealtimeProtocolProfile } from '../../shared/voiceInputAsrProfiles.js';
 import { createLogger } from '../logger.js';
-import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.js';
+import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
 import { openAiLanguageCode } from './language.js';
 import { describeAsrHandshakeTraceId, describeAsrWebSocketTarget } from './voiceInputAsrConfig.js';
 import {
@@ -408,6 +408,9 @@ function createWarmRealtimeSession(
         // leave that unauthenticated/idle socket alive after its promise has
         // rejected; it can otherwise linger until the upstream closes it.
         if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+          // ws aborts a pending handshake with an asynchronous error, after
+          // cleanup removed onError. Keep it handled until the socket is gone.
+          if (socket.readyState === WebSocket.CONNECTING) socket.on('error', () => undefined);
           socket.terminate();
         }
         reject(error);

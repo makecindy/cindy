@@ -1,5 +1,6 @@
 import {
   interactionKind as sharedInteractionKind,
+  interactionPriority,
   normalizeAskQuestions as sharedNormalizeAskQuestions,
   permissionToolName as sharedPermissionToolName,
   planReviewFilePath as sharedPlanReviewFilePath,
@@ -89,7 +90,9 @@ export function selectPendingInteractionByRequestId<T extends PendingInteraction
 ): T | null {
   const fallback = sharedSelectActivePendingInteraction(interactions) as T | null;
   if (!requestId) return fallback;
-  return interactions.find((item) => sharedReadRequestId(item) === requestId) ?? fallback;
+  const selected = interactions.find((item) => sharedReadRequestId(item) === requestId);
+  if (!selected || (fallback && interactionPriority(fallback) < interactionPriority(selected))) return fallback;
+  return selected;
 }
 
 export function shouldUseFullHeightPendingInteractionSurface(input: {
@@ -100,6 +103,9 @@ export function shouldUseFullHeightPendingInteractionSurface(input: {
   // 收起时不能再吃固定高度:那正是「收起后仍然霸屏」的成因,收起的全部意义就是把
   // 屏幕还给消息流。
   if (input.collapsed) return false;
+  // Feedback owns its scrolling body and pinned publication footer, like the
+  // expanded plan viewer. An outer ScrollView would scroll the action away.
+  if (input.activeKind === 'issue_confirm') return true;
   return input.activeKind === 'plan_review'
     && (input.planViewerState === 'expanded' || input.planViewerState === 'edit');
 }

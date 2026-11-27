@@ -18,7 +18,7 @@ import {
 } from '../../../../shared/ghost';
 import { installedGhostStoragePart } from '../../../../shared/pluginIdentity';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
-import { marketItemMatchesInstalledGhost } from './pluginMarketPresentation';
+import { marketItemMatchesInstalledGhost, type PluginPresentationOrigin } from './pluginMarketPresentation';
 
 export interface GhostPluginListItem {
   /** Instance key (storage part). Use this for enable/uninstall/panel IPC. */
@@ -30,6 +30,8 @@ export interface GhostPluginListItem {
   name: string;
   description: string;
   publisherKind?: PluginMarketItem['publisherKind'];
+  /** Source facts from the Host; omitted for unverifiable/legacy installations. */
+  origin?: PluginPresentationOrigin;
   version: string;
   enabled: boolean;
   canUse: boolean;
@@ -50,6 +52,7 @@ export interface GhostPluginListItem {
   retirement?: InstalledGhost['retirement'];
   oauthAuthorizationExpired?: boolean;
   trust?: GhostTrustInfo;
+  installationSource?: InstalledGhost['installationSource'];
   iconDataUrl?: string;
 }
 
@@ -94,7 +97,7 @@ export interface GhostPluginDetail extends GhostPluginListItem {
  * 展示投影只覆盖用户能看到的四个字段；运行时仍完全来自本地安装包。
  *
  * `iconDataUrl` 是有意要求存在的字段：服务端市场项的 `icon: null` 仍覆盖本地
- * 包图标。Git 市场是窄例外：精确匹配到已安装版本时，可复用安装包里已验证的图标。
+ * 包图标。Git 和本地文件夹市场精确匹配已安装版本时，可复用安装包里已验证的图标。
  */
 export interface GhostPluginMarketPresentation {
   name: string;
@@ -135,10 +138,12 @@ export function marketPresentationForInstalledGhost(
   ) return null;
   const publisherKind = marketItem.sourceType === 'server' && marketItem.scope === 'public'
     ? marketItem.publisherKind : undefined;
+  const publicAnonymous = marketItem.sourceType === 'server' && marketItem.scope === 'public'
+    && publisherKind !== 'official';
   if (marketItem.sourceType === 'server' && marketItem.installState === 'update-available'
     && marketItem.installedAuthor !== undefined) {
     return { name: ghost.manifest.name, description: ghost.manifest.description ?? '',
-      iconDataUrl: ghost.iconDataUrl, author: marketItem.installedAuthor, publisherKind };
+      iconDataUrl: ghost.iconDataUrl, author: publicAnonymous ? null : marketItem.installedAuthor, publisherKind };
   }
   if (
     marketItem.installState !== 'installed' ||
@@ -149,10 +154,10 @@ export function marketPresentationForInstalledGhost(
   return {
     name: marketItem.name,
     description: marketItem.description ?? '',
-    author: marketItem.author,
+    author: publicAnonymous ? null : marketItem.author,
     publisherKind,
     iconDataUrl:
-      marketItem.sourceType === 'git-market' && !marketItem.icon
+      (marketItem.sourceType === 'git-market' || marketItem.sourceType === 'local-market') && !marketItem.icon
         ? ghostPluginIconSource(ghost.iconDataUrl)
         : ghostPluginIconSource(marketItem.icon?.url, marketItem.icon?.sha256),
   };
@@ -313,6 +318,10 @@ export function toGhostPluginListItem(
     name: display.name,
     description: display.description,
     publisherKind: presentation?.publisherKind,
+    origin: ghost.publishingSource?.kind === 'public-market' ? 'public'
+      : ghost.publishingSource?.kind === 'local' || (ghost.namespaceState === 'confirmed' && ghost.namespace === 'local') ? 'local'
+        : ghost.namespaceState === 'confirmed' && ghost.namespace && ghost.namespace !== 'local'
+          ? 'organization' : undefined,
     version: manifest.version,
     enabled: ghost.enabled,
     canUse: Boolean(manifest.command),
@@ -323,6 +332,7 @@ export function toGhostPluginListItem(
     mainViewTitle: manifest.mainView ? (manifest.mainView.title ?? manifest.name) : null,
     retirement: ghost.retirement,
     oauthAuthorizationExpired: ghost.oauthAuthorizationExpired !== undefined,
+    installationSource: ghost.installationSource,
     trust: ghost.trust ?? {
       level: 'unverified',
       publisherSigned: false,
@@ -349,7 +359,8 @@ export function toGhostPluginDetail(
     ...listItem,
     trust: listItem.trust!,
     releaseNotes: manifest.releaseNotes,
-    author: presentation ? presentation.author : ghostFallbackDisplayAuthor(ghost),
+    author: listItem.origin === 'public' && listItem.publisherKind !== 'official'
+      ? null : presentation ? presentation.author : ghostFallbackDisplayAuthor(ghost),
     contents: ghostContentKeys(manifest),
     permissions: ghostPermissionItems(manifest),
     tools: manifest.tools ?? [],

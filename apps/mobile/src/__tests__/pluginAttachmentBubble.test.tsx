@@ -6,11 +6,20 @@ import { describe, expect, it, vi } from 'vitest';
 const viewportHarness = vi.hoisted(() => ({ list: null as any, finishReveal: null as any, renders: 0, expanded: false }));
 
 // Keep site-video's native surface out of this Node message-rendering test.
+// Window geometry is a native boundary; preview placement has its own production-hook suite.
+vi.mock('@/session/usePreviewChromeFrame', () => ({ usePreviewChromeFrame: () => ({
+  top: 0, bottom: 0, left: 12, right: 12, contentTop: 48,
+  documentContentTop: 64, documentHeaderHeight: 64, sharedStatusRow: false,
+}) }));
 vi.mock('@/platform/gestureHandler', () => {
   const chain = (): any => new Proxy({}, { get: (_target, key) => key === 'then' ? undefined : () => chain() });
   return { GestureDetector: ({ children }: { children: unknown }) => children, Gesture: { LongPress: chain } };
 });
 vi.mock('react-native-webview', () => ({ WebView: () => null }));
+// Card previews are covered separately; retain this suite's attachment/message rendering assertions.
+vi.mock('@/plugins/PluginNativeIntent', () => ({ PluginNativeIntent: () => null }));
+// Model selection has its own card regression; keep native catalogs out of this message test.
+vi.mock('@/plugins/PluginModelPicker', () => ({ PluginModelPicker: () => null }));
 vi.mock('expo-modules-core', () => ({
   requireOptionalNativeModule: () => null,
   requireNativeViewManager: () => () => null,
@@ -21,6 +30,7 @@ vi.mock('@/session/NativeVideoPlayer', () => ({ NativeVideoPlayer: () => null })
 // Only native surfaces and unrelated heavy viewers are replaced for Node rendering.
 vi.mock('react-native', async () => {
   const React = await import('react');
+  const window = { width: 402, height: 874, scale: 3, fontScale: 1 };
   const view = ({ children, testID, accessibilityLabel, onPress }: any) => React.createElement('div', { 'data-testid': testID, 'aria-label': accessibilityLabel, onClick: onPress }, children);
   class Value { constructor(public value: number) {} interpolate() { return 0; } setValue() {} stopAnimation() {} }
   return {
@@ -32,6 +42,7 @@ vi.mock('react-native', async () => {
     StyleSheet: { create: (s: any) => s, flatten: (s: any) => s, hairlineWidth: 1 },
     Easing: { linear: (n: number) => n, bezier: () => (n: number) => n },
     AccessibilityInfo: { isReduceMotionEnabled: () => Promise.resolve(true), addEventListener: () => ({ remove() {} }) }, Alert: {}, Linking: {}, StatusBar: {},
+    Dimensions: { get: () => window, addEventListener: () => ({ remove() {} }) },
     useWindowDimensions: () => ({ width: 402, height: 874, scale: 3, fontScale: 1 }),
   };
 });
@@ -88,7 +99,7 @@ vi.mock('@/session/messageActions', async (original) => ({ ...await original<obj
 
 import { MessageRenderer } from '@/session/MessageRenderer';
 import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
-import { companionConversationItems } from '@/session/companionConversationPresentation';
+import { companionConversationItems, companionProcessItems } from '@/session/companionConversationPresentation';
 import type { RemoteMessage } from '@/session/types';
 const msg = (id: string, role: RemoteMessage['role'], content: unknown, extra: Partial<RemoteMessage> = {}): RemoteMessage => ({ id, clientId: id, sessionId: 's', role, content, toolUseId: null, agentMeta: null, createdAt: '2026-01-01T00:00:00Z', ...extra });
 
@@ -287,9 +298,10 @@ describe('partner conversation presentation', () => {
     for (const element of cases) expect(renderClient(element)).not.toContain('companion.taskResult');
   });
 
-  // Regression: the process and final reply each own one portrait; nested details do not.
-  // Exercise the production projection and renderer, including nested work groups.
-  it('shows one process portrait and one reply portrait without repeating them in expanded details', () => {
+  // #8864 regression: one user -> process -> final reply looked like two replies.
+  // Production projection + renderer, unit tier: the entire turn owns one portrait,
+  // including expanded details. The old test explicitly required the duplicate.
+  it('shares one portrait between the process and final reply, including expanded details', () => {
     const items = companionConversationItems(buildMobileMessageRenderItems([
       msg('u', 'user', 'Check it'),
       msg('p', 'assistant', 'Checking the details', { agentMeta: { assistantPhase: 'commentary' } }),
@@ -303,10 +315,30 @@ describe('partner conversation presentation', () => {
       expect(html).toContain('message.toolRow');
       expect(html.match(/companion\.replyRow/g)).toHaveLength(1);
       expect(html.match(/companion\.processRow/g)).toHaveLength(1);
-      expect(html.match(/partner-portrait/g)).toHaveLength(2);
+      expect(html.match(/partner-portrait/g)).toHaveLength(1);
     } finally {
       viewportHarness.expanded = false;
     }
+  });
+
+  // Same production entry as above: seals must reset the portrait even when a
+  // proactive turn has no new user message; a reply-only turn still has a face.
+  it.each([true, false])('retains one portrait for each subsequent turn (user boundary=%s)', userBoundary => {
+    const items = companionConversationItems(buildMobileMessageRenderItems([
+      msg('u', 'user', 'First request'),
+      msg('t1', 'tool_use', { toolName: 'Bash', toolUseId: 't1', input: { command: 'pwd' } }, { toolUseId: 't1' }),
+      msg('f1', 'assistant', 'First result', { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
+      ...(userBoundary ? [msg('u2', 'user', 'Second request')] : []),
+      msg('t2', 'tool_use', { toolName: 'Bash', toolUseId: 't2', input: { command: 'pwd' } }, { toolUseId: 't2' }),
+      msg('f2', 'assistant', 'Second result', { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
+      msg('u3', 'user', 'A quick question'),
+      msg('f3', 'assistant', 'Direct result', { agentMeta: { assistantPhase: 'final_answer', turnCompleted: true } }),
+    ], { isSessionStreaming: false }));
+    const host = document.createElement('div');
+    host.innerHTML = renderClient(<MessageRenderer items={items} companion companionAvatar={<i data-testid="partner-portrait" />} />);
+    expect(host.querySelectorAll('[data-testid="partner-portrait"]')).toHaveLength(3);
+    expect([...host.querySelectorAll('[data-testid="companion.replyRow"]')].map(row =>
+      row.querySelectorAll('[data-testid="partner-portrait"]').length)).toEqual([0, 0, 1]);
   });
 
   // PR #8864: an Agent's nested tool work must not inherit the main partner's
@@ -336,6 +368,30 @@ describe('partner conversation presentation', () => {
     } finally {
       viewportHarness.expanded = false;
     }
+  });
+
+  it.each([true, false])('places the five-minute reply stamp before its process (streaming=%s)', streaming => {
+    const items = companionProcessItems(buildMobileMessageRenderItems([
+      msg('ask', 'user', 'Check it', { createdAt: '2026-01-01T09:00:00Z' }),
+      msg('work', 'tool_use', { toolName: 'Read', toolUseId: 'work', input: {} }, {
+        toolUseId: 'work', createdAt: '2026-01-01T09:04:59Z',
+      }),
+      msg('answer', 'assistant', 'Here is the result', {
+        createdAt: '2026-01-01T09:05:00Z', agentMeta: { assistantPhase: 'final_answer', turnCompleted: !streaming, isStreaming: streaming },
+      }),
+    ], { isSessionStreaming: streaming }), streaming);
+    const html = renderClient(<MessageRenderer items={items} companion isSessionStreaming={streaming} companionAvatar={<i />} />);
+    const host = document.createElement('div');
+    host.innerHTML = html;
+    const stamps = host.querySelectorAll('[data-testid="companion.timeGroup"]');
+    const process = host.querySelector('[data-testid="companion.processRow"]')!;
+    const reply = host.querySelector('[data-testid="companion.replyRow"]')!;
+    expect(stamps).toHaveLength(2);
+    expect(stamps[1]?.textContent).toMatch(/:05/);
+    expect(process).toBeTruthy();
+    expect(reply).toBeTruthy();
+    expect(stamps[1]!.compareDocumentPosition(process) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(process.compareDocumentPosition(reply) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('hangs replies from the partner portrait and stamps five-minute groups like Desktop', () => {

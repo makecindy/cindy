@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { chunkDiscordText } from '../chunk.js';
+import { chunkDiscordFinalText } from '../chunk.js';
 import { markdownToDiscord } from '../markdown.js';
 import { startStreaming, UPDATE_THROTTLE_MS } from '../streamingText.js';
 
@@ -79,6 +79,26 @@ describe('discord streaming text', () => {
     expect(deps.send.mock.calls[1][0].length).toBeLessThanOrEqual(2000);
   });
 
+  it('sends the final reply as a new message when the placeholder can no longer be edited', async () => {
+    const deps = makeDeps();
+    deps.edit.mockRejectedValueOnce(new Error('Missing Access'));
+    const handle = await startStreaming(deps);
+
+    await handle.finalize('final answer');
+
+    expect(deps.send).toHaveBeenLastCalledWith('final answer');
+    expect(deps.remove).toHaveBeenCalledWith('dm-1|m1');
+  });
+
+  it('still fails when neither editing nor re-sending the final reply works', async () => {
+    const deps = makeDeps();
+    deps.edit.mockRejectedValueOnce(new Error('Missing Access'));
+    const handle = await startStreaming(deps);
+    deps.send.mockRejectedValueOnce(new Error('Missing Permissions'));
+
+    await expect(handle.finalize('final answer')).rejects.toThrow('Missing Permissions');
+  });
+
   it('finalize is idempotent', async () => {
     const deps = makeDeps();
     const handle = await startStreaming(deps);
@@ -137,9 +157,9 @@ function makeDeps() {
     edit: vi.fn(async (...args: [string, string]) => {
       void args;
     }),
-    remove: vi.fn(async (_messageId: string) => {}),
+    remove: vi.fn<(messageId: string) => Promise<void>>(async () => {}),
     markdownToDiscord,
-    chunk: chunkDiscordText,
+    chunk: chunkDiscordFinalText,
     resolveImageUrl: vi.fn((url: string) => `/tmp/${url.replace('xdt-image://', '')}.png`),
     uploadImages: vi.fn(async (...args: [string, string[]]) => {
       void args;

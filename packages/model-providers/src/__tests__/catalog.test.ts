@@ -206,6 +206,10 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
       "chatgpt/gpt-5.6-sol",
       "chatgpt/gpt-5.6-terra",
       "chatgpt/gpt-6-astra",
+      "chatgpt/gpt-6-luna",
+      "chatgpt/gpt-6-sol",
+      "chatgpt/gpt-6.1-sol",
+      "chatgpt/gpt-6.1-terra",
     ]);
     expect(
       provider("openai").models.pi?.some(
@@ -296,6 +300,8 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
   it("xai ships the Grok Imagine subscription video model", () => {
     expect(provider("xai").videoModels).toEqual([
       { id: "xai/grok-imagine-video", name: "Grok Imagine Video", mode: "video_generation", nativeApi: "xai-videos", modalities: { input: ["text", "image"], output: ["video"] } },
+      { id: "xai/grok-imagine-video-1.5", name: "Grok Imagine Video 1.5", mode: "video_generation", nativeApi: "xai-videos",
+        officialDocs: "https://docs.x.ai/developers/model-capabilities/video/reference-to-video", modalities: { input: ["text", "image"], output: ["video"] } },
     ]);
   });
 

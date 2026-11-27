@@ -24,8 +24,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { SegmentedControl } from '@/components/ui/segmented-control';
-import { Select } from '@/components/ui/select';
+import { SETTINGS_HINT, SETTINGS_SECTION_TITLE_CLASS, SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
@@ -33,20 +32,20 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
 import {
-  PROVIDER_GROUP_MAX_LIMIT,
-  PROVIDER_GROUP_MAX_WEIGHT,
-  PROVIDER_GROUP_STRATEGIES,
+  concurrencyLimitPatch,
   providerGroupDeviceCount,
   type ProviderGroupConfig,
   type ProviderGroupMember,
   type ProviderGroupMemberStatus,
-  type ProviderGroupStrategy,
 } from '../../../shared/providerGroup';
+import type { RouteStrategy } from '../../../shared/routeStrategy';
+import { RouteStrategyNote } from '@/components/settings/RouteStrategyNote';
 import { providerShareComputerName, useProviderShareOwnerNameOf } from '../provider-share/providerShareNames';
 import { GroupMemberQuota, groupMemberQuotaTarget } from './GroupMemberQuota';
 import { GroupMemberReshare, reshareSummaryText } from './GroupMemberReshare';
 import { GroupMemberDetailsButton, GroupMemberVersion } from './GroupMemberVersion';
 import { ProviderGroupAddDialog } from './ProviderGroupAddDialog';
+import { ProviderGroupLimitSelect, ProviderGroupStrategyControl, ProviderGroupWeightSelect } from './ProviderGroupAllocationControls';
 import {
   groupProviderGroupItems,
   memberStatusText,
@@ -58,15 +57,8 @@ import { providerManagementErrorKey } from './providerManagement';
 
 export { memberStatusText };
 
-/**
- * Claude 订阅的配额排序已对所有组策略生效(provider-groups.md §5，2026-10-15)，不再单列「用量均衡」；
- * 旧组存的 `usage` 与最少占用挑法相同，按最少占用显示，用户改选时才写回新值。
- */
-const SELECTABLE_STRATEGIES = PROVIDER_GROUP_STRATEGIES.filter((value) => value !== 'usage');
-const selectableStrategy = (strategy: ProviderGroupStrategy): ProviderGroupStrategy =>
-  strategy === 'usage' ? 'least' : strategy;
-const LIMIT_OPTIONS = Array.from({ length: PROVIDER_GROUP_MAX_LIMIT }, (_, i) => String(i + 1));
-const WEIGHT_OPTIONS = ['1', '2', '3', '5', '10', '20', '50', String(PROVIDER_GROUP_MAX_WEIGHT)];
+const MEMBER_MORE_BUTTON =
+  'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
 
 export function ProviderGroupSection({ providerId, providerName, deviceId, deviceName, initialConfig, remoteProvider, fastPolicySupported, onConfigChange }: {
   providerId: string;
@@ -130,7 +122,6 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
       if (!config) return;
       const last = config.members.length === 1;
       const ok = await confirm({
-        presentation: 'standard',
         title: t('providerGroup.member.removeConfirm.title', { name: label }),
         description: last
           ? t('providerGroup.member.removeConfirm.lastDescription', { provider: providerName })
@@ -149,7 +140,6 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
 
   const deleteGroup = useCallback(async () => {
     const ok = await confirm({
-      presentation: 'standard',
       title: t('providerGroup.deleteConfirm.title', { provider: providerName }),
       description: t('providerGroup.deleteConfirm.description'),
       confirmText: t('providerGroup.deleteConfirm.confirm'),
@@ -170,14 +160,15 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
   return (
     <section className="mt-6 shrink-0" aria-labelledby="provider-group-title" data-testid="provider-group-section">
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <h3 id="provider-group-title" className="text-13 font-medium text-[var(--settings-section-title)]">
+        <h3 id="provider-group-title" className={SETTINGS_SECTION_TITLE_CLASS}>
           {t('providerGroup.section.title')}
         </h3>
         {/* 台数按电脑算：一台电脑上的几个账号算一台(与入口的「N 台电脑」一致)。 */}
         {config && <span className="text-13 text-[var(--text-tertiary)]">{providerGroupDeviceCount(config.members)}</span>}
         <span className="flex-1" />
         {config && (
-          <Button variant="secondary" size="sm" compact tone="quiet" disabled={blocked} onClick={() => void deleteGroup()}>
+          // Deleting the group is irreversible: danger tone (DESIGN.md §4 destructive actions).
+          <Button variant="secondary" size="sm" compact tone="danger" disabled={blocked} onClick={() => void deleteGroup()}>
             {t('providerGroup.section.delete')}
           </Button>
         )}
@@ -186,7 +177,7 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
         </Button>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-theme-card-bg)]">
+      <SettingsCard>
         {!config ? (
           <p className="px-4 py-7 text-center text-13 leading-[1.5] text-[var(--text-secondary)]">
             {group.loading
@@ -230,63 +221,53 @@ export function ProviderGroupSection({ providerId, providerName, deviceId, devic
                 </div>
               );
             })}
-            <div className="flex flex-col gap-1.5 border-t border-[var(--settings-theme-card-border)] px-4 py-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="text-13 text-[var(--text-primary)]">{t('providerGroup.strategy.label')}</span>
-                <SegmentedControl
-                  value={selectableStrategy(config.strategy)}
-                  onValueChange={(strategy: ProviderGroupStrategy) => void save({ ...config, strategy })}
-                  aria-label={t('providerGroup.strategy.label')}
-                  options={SELECTABLE_STRATEGIES.map((value) => ({
-                    value,
-                    label: t(`providerGroup.strategy.${value}`),
-                    disabled: blocked,
-                  }))}
+            {/* 组里的几台电脑就是一条自动路由：选法在「智能路由」里改，这里说明现状并给出入口。
+                组在另一台电脑上(deviceId)时这台的智能路由管不到它，选法仍在这里改，存到那台。 */}
+            {deviceId ? (
+              <ProviderGroupStrategyControl strategy={config.strategy} disabled={blocked}
+                onChange={strategy => void save({ ...config, strategy })} />
+            ) : (
+              <SettingsBlock>
+                <RouteStrategyNote strategy={config.strategy} providerId={providerId} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1" />
+              </SettingsBlock>
+            )}
+            <SettingsRow
+              title={t('providerGroup.autoSwitch.label')}
+              hint={t('providerGroup.autoSwitch.description')}
+              trailing={
+                <Switch
+                  checked={config.autoSwitch}
+                  disabled={blocked}
+                  aria-label={t('providerGroup.autoSwitch.label')}
+                  onCheckedChange={(autoSwitch) => void save({ ...config, autoSwitch })}
                 />
-                <span className="flex-1" />
-                <span className="text-12 text-[var(--text-secondary)]">
-                  {t(`providerGroup.strategy.description.${selectableStrategy(config.strategy)}`)}
-                </span>
-              </div>
-              <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
-                {t('providerGroup.strategy.quotaFirst')}
-              </span>
-            </div>
-            <div className="flex items-start justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-3">
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-13 text-[var(--text-primary)]">{t('providerGroup.autoSwitch.label')}</span>
-                <span className="text-12 leading-[1.4] text-[var(--text-tertiary)]">
-                  {t('providerGroup.autoSwitch.description')}
-                </span>
-              </div>
-              <Switch
-                checked={config.autoSwitch}
-                disabled={blocked}
-                aria-label={t('providerGroup.autoSwitch.label')}
-                onCheckedChange={(autoSwitch) => void save({ ...config, autoSwitch })}
-              />
-            </div>
+              }
+            />
             {fastPolicySupported && (
-              <div className="flex items-start justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-4">
-                <div className="flex min-w-0 flex-col gap-1">
-                  <span className="text-13 font-medium text-[var(--text-primary)]">{t('subscriptionFastPolicy.label')}</span>
-                  <span className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t('subscriptionFastPolicy.groupHint')}</span>
-                  {group.view?.fastPolicyPending && <span role="status" className="text-12 leading-[1.4] text-[var(--text-secondary)]">{t('subscriptionFastPolicy.pending')}</span>}
-                </div>
-                <Switch checked={config.allowFast !== false} disabled={blocked} aria-label={t('subscriptionFastPolicy.label')}
-                  onCheckedChange={allowFast => void save({ ...config, allowFast })} />
-              </div>
+              <SettingsRow
+                title={t('subscriptionFastPolicy.label')}
+                hint={
+                  <span className="flex flex-col gap-1">
+                    <span>{t('subscriptionFastPolicy.groupHint')}</span>
+                    {group.view?.fastPolicyPending && <span role="status">{t('subscriptionFastPolicy.pending')}</span>}
+                  </span>
+                }
+                trailing={
+                  <Switch checked={config.allowFast !== false} disabled={blocked} aria-label={t('subscriptionFastPolicy.label')}
+                    onCheckedChange={allowFast => void save({ ...config, allowFast })} />
+                }
+              />
             )}
           </>
         )}
-      </div>
+      </SettingsCard>
       {config && group.failed && (
-        <p role="status" className="mt-2 text-12 leading-[1.5] text-[var(--text-secondary)]">
+        <p role="status" className={cn('mt-2', SETTINGS_HINT)}>
           {t(group.errorKey ?? 'providerGroup.section.loadFailed')}
         </p>
       )}
       {config && (
-        <p className="mt-2 text-12 leading-[1.5] text-[var(--text-tertiary)]">{t('providerGroup.section.note')}</p>
+        <p className={cn('mt-2', SETTINGS_HINT)}>{t('providerGroup.section.note')}</p>
       )}
 
       {addOpen && (
@@ -377,7 +358,7 @@ function MemberRow({
 }: {
   member: ProviderGroupMember;
   status: ProviderGroupMemberStatus | undefined;
-  strategy: ProviderGroupStrategy;
+  strategy: RouteStrategy;
   first: boolean;
   /** 同一台电脑上有几个账号时，这是第几个(从 1 起)：行收在电脑下面，只写账号；不传就是一台电脑一行。 */
   account?: number;
@@ -395,6 +376,7 @@ function MemberRow({
   // 无障碍标签与移出确认用：账号行带上电脑名，同一台电脑的几个账号不会重名。
   const label = accountName === null ? computer : `${computer} · ${accountName}`;
   const ready = status?.state === 'available' || status?.state === 'full';
+  const quotaExhausted = status?.state === 'cooling' && status.usageLimit != null;
   const running = status?.running ?? 0;
   // 能用的时候状态词本身就报负载(「空闲」/「N 个任务运行中」)，所以每行永远看得出这台现在跑了几个；
   // 「已满」等于跑满上限，上限就在旁边的下拉里，不必再报一遍数。其余状态(冷却、不在线、已暂停)
@@ -453,15 +435,17 @@ function MemberRow({
                 />
               </span>
               <span className="flex flex-wrap items-center gap-1.5 text-12 text-[var(--text-secondary)]">
-                <span
-                  aria-hidden="true"
-                  className="h-1.5 w-1.5 shrink-0 rounded-full"
-                  style={{ background: ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
-                />
+                <span className="inline-flex min-w-0 max-w-full items-center gap-1.5">
+                  <span
+                    aria-hidden="true"
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ background: quotaExhausted ? 'var(--quota-bar-crit)' : ready ? 'var(--remote-status-ready)' : 'var(--remote-status-disconnected)' }}
+                  />
+                  <span className="min-w-0">{member.kind === 'local' && status?.state === 'paused'
+                    ? t('providerGroup.member.status.pausedLocal')
+                    : memberStatusText(t, status, i18n.language)}</span>
+                </span>
                 {/* 运行数是状态，上限是设置：各说一次，不再出现「0 / 10」与下拉里重复同一个上限。 */}
-                <span>{member.kind === 'local' && status?.state === 'paused'
-                  ? t('providerGroup.member.status.pausedLocal')
-                  : memberStatusText(t, status, i18n.language)}</span>
                 {appendRunning && (
                   <>
                     <span aria-hidden="true">·</span>
@@ -483,24 +467,11 @@ function MemberRow({
             </span>
           </GroupMemberDetailsButton>
           <div className="flex shrink-0 items-center gap-1.5">
-            <Select
-              label={t('providerGroup.member.limitAria', { name: label })}
-              value={String(member.limit)}
-              options={LIMIT_OPTIONS.map((value) => ({ value, label: t('providerGroup.member.limitOption', { count: Number(value) }) }))}
-              onValueChange={(value) => onChange({ limit: Number(value) })}
-              disabled={disabled}
-              className="w-[104px]"
-            />
-            {strategy === 'weight' && (
-              <Select
-                label={t('providerGroup.member.weightAria', { name: label })}
-                value={String(member.weight)}
-                options={WEIGHT_OPTIONS.map((value) => ({ value, label: t('providerGroup.member.weightOption', { weight: value }) }))}
-                onValueChange={(value) => onChange({ weight: Number(value) })}
-                disabled={disabled}
-                /* 权重最大 100，各语言的「权重 100」都比「上限 16」长：按内容定宽，避免 trigger 自己截断。 */
-                className="w-[120px]"
-              />
+            <ProviderGroupLimitSelect name={label} member={member} disabled={disabled}
+              onChange={limit => onChange(concurrencyLimitPatch(limit))} />
+            {strategy === 'weighted' && (
+              <ProviderGroupWeightSelect name={label} weight={member.weight} disabled={disabled}
+                onChange={weight => onChange({ weight })} />
             )}
             <Switch
               checked={!member.paused}
@@ -510,8 +481,18 @@ function MemberRow({
                 : 'providerGroup.member.assignAria', { name: label })}
               onCheckedChange={(on) => onChange({ paused: !on })}
             />
+            {/* 保留行尾按钮以对齐各行；aria-disabled 让不可移出的电脑仍能通过悬停和键盘聚焦查看原因。 */}
             {member.kind === 'local' ? (
-              <span aria-hidden="true" className="h-8 w-8 shrink-0" />
+              <Tip text={t('providerGroup.member.removeLocalBlocked')}>
+                <button
+                  type="button"
+                  aria-disabled="true"
+                  aria-label={t('providerGroup.member.moreAria', { name: label })}
+                  className={cn(MEMBER_MORE_BUTTON, 'cursor-default opacity-40')}
+                >
+                  <MoreHorizontal size={18} />
+                </button>
+              </Tip>
             ) : (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -519,7 +500,7 @@ function MemberRow({
                     <button
                       type="button"
                       aria-label={t('providerGroup.member.moreAria', { name: label })}
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                      className={cn(MEMBER_MORE_BUTTON, 'transition-colors hover:bg-[var(--surface-hover)]')}
                     >
                       <MoreHorizontal size={18} />
                     </button>

@@ -1,16 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PreparationCache } from '../preparation-cache.js';
+import { existsSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const state = vi.hoisted(() => ({
   owner: { dataOwnerId: 'a', generation: 1, mode: 'cloud' },
   boundary: false,
   bridge: vi.fn(),
+  builtIns: vi.fn(),
   links: vi.fn(),
   fingerprint: 'fp-1',
   logs: [] as Array<{ level: string; scope: string; warning?: unknown }>,
 }));
 vi.mock('electron', () => ({ app: { getPath: () => '', getAppPath: () => '', isPackaged: true }, safeStorage: {} }));
 vi.mock('@cindy/maker-core', () => ({}));
+vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyGateway: false }) }));
 vi.mock('../../appSessionState.js', async (original) => ({
   ...await original<typeof import('../../appSessionState.js')>(),
   getActiveAppSession: () => ({ ...state.owner }),
@@ -25,7 +30,7 @@ vi.mock('../shared-global-skills.js', async (original) => ({
 vi.mock('../built-in-skills.js', async (original) => ({
   ...await original<typeof import('../built-in-skills.js')>(),
   resolveBundledSystemSkillsRoot: () => 'unused-bundle',
-  prepareBuiltInSkills: async () => ({ descriptors: [], projectionSafe: false, warnings: [] }),
+  prepareBuiltInSkills: state.builtIns,
 }));
 vi.mock('../../authBoundaryQuarantine.js', async (original) => ({
   ...await original<typeof import('../../authBoundaryQuarantine.js')>(),
@@ -50,12 +55,36 @@ beforeEach(() => {
   state.owner = { dataOwnerId: 'a', generation: 1, mode: 'cloud' };
   state.boundary = false;
   state.bridge.mockReset().mockResolvedValue({ warnings: [], routingFailures: [] });
+  state.builtIns.mockReset().mockResolvedValue({ descriptors: [], projectionSafe: false, warnings: [], persistentWarnings: [] });
   state.links.mockReset();
   state.fingerprint = 'fp-1';
   state.logs = [];
 });
 
 describe('asset preparation boundaries', () => {
+  // Unit regression: startup must not initialize unused Codex runtime assets.
+  // Existing coverage exercised launch preparation only, not the startup entry.
+  it('reconciles existing login at startup without preparing runtime assets', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-lazy-assets-'));
+    const home = path.join(root, 'codex-home');
+    try {
+      const reconcile = vi.fn().mockResolvedValue(undefined);
+      const adapter = Object.assign(Object.create(DesktopCodexAuthAdapter.prototype), {
+        ensureInvalidationMarkerLoaded: vi.fn(),
+        reconcileWithSystemCodex: reconcile,
+        ensureGlobalCodexAssets: async () => { mkdirSync(home); },
+      }) as DesktopCodexAuthAdapter;
+      Object.defineProperty(adapter, 'codexHome', { value: home });
+      await adapter.warmUp();
+      expect(existsSync(home)).toBe(false);
+      expect(reconcile).toHaveBeenCalledOnce();
+      expect(await adapter.getAuthEnv({ credentialMode: 'gateway-key' })).toEqual({ CODEX_HOME: home });
+      expect(existsSync(home)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('rechecks plugin capability revocation and Skill projections at each launch', async () => {
     const skills = vi.fn(async () => true);
     // Avoid constructor credential reconciliation; exercise the real preparation entry points.
@@ -74,10 +103,10 @@ describe('asset preparation boundaries', () => {
   });
 
   it('does not reuse a completion across owner generations or an in-progress boundary', async () => {
-    const prepare = vi.fn(async () => true);
-    const adapter = Object.assign(Object.create(DesktopClaudeAuthAdapter.prototype), {
-      sharedSkillsPreparation: new PreparationCache(30_000), runEnsureSharedGlobalSkills: prepare,
-    }) as DesktopClaudeAuthAdapter;
+    // The preparation moved into sharedGlobalSkillsPreparationCore.ts (shared with the Host); count
+    // its runs through the shared-link step it always reaches, on the real adapter entry.
+    const prepare = state.links.mockResolvedValue({ warnings: [], persistentWarnings: [] });
+    const adapter = new DesktopClaudeAuthAdapter();
     await adapter.ensureSharedGlobalSkills();
     await adapter.ensureSharedGlobalSkills();
     expect(prepare).toHaveBeenCalledTimes(1);
@@ -124,5 +153,31 @@ describe('asset preparation boundaries', () => {
       'cannot link skill y: EACCES',
       'cannot link skill y: EACCES',
     ]);
+  });
+
+  // Regression (idle CPU / log spam): keeping a newer installed built-in Skill bundle on an older
+  // build is stable state; returning it only as a transient warning defeated the 30s completion cache.
+  it('caches past persistent built-in Skill bundle warnings and logs them once', async () => {
+    const kept = 'kept built-in Skill bundle 237; this build only carries older bundle 228';
+    state.builtIns.mockResolvedValue({
+      descriptors: [],
+      projectionSafe: true,
+      warnings: [kept],
+      persistentWarnings: [kept],
+    });
+    state.links.mockResolvedValue({ warnings: [], persistentWarnings: [] });
+    const adapter = new DesktopClaudeAuthAdapter();
+    await adapter.ensureSharedGlobalSkills();
+    await adapter.ensureSharedGlobalSkills();
+    expect(state.builtIns).toHaveBeenCalledTimes(1);
+    expect(state.links).toHaveBeenCalledTimes(1);
+    const reported = () => state.logs.filter((entry) => entry.scope === 'auth-adapters:asset-prep');
+    expect(reported()).toEqual([{ level: 'warn', scope: 'auth-adapters:asset-prep', warning: kept }]);
+
+    // Even when a fingerprint change triggers a rerun, the unchanged persistent warning is not logged again.
+    state.fingerprint = 'fp-2';
+    await adapter.ensureSharedGlobalSkills();
+    expect(state.builtIns).toHaveBeenCalledTimes(2);
+    expect(reported()).toHaveLength(1);
   });
 });

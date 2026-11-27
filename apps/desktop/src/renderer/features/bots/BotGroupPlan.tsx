@@ -14,6 +14,7 @@ import { Check, ChevronDown, ChevronUp, Circle, CircleAlert, CircleCheck, Circle
 import { botGroupPlanStepState, botGroupQueueWindow, canSkipBotGroupPlanStep } from '@cindy/maker-shared/botGroupPresentation';
 import { useTranslation } from 'react-i18next';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -65,9 +66,9 @@ function stepIdentity(step: BotGroupPlanStepView, members: readonly BotGroupMemb
 export function BotGroupOrganizerTag() {
   const { t } = useTranslation();
   return (
-    <span className="inline-flex min-h-[18px] shrink-0 select-none items-center rounded-full bg-[var(--surface-chip)] px-1.5 py-px text-11 font-medium leading-tight text-[var(--text-secondary)]">
+    <Badge>
       {t('bots.groupChat.organizer')}
-    </span>
+    </Badge>
   );
 }
 
@@ -78,10 +79,10 @@ function StepLead({ plan, step, index }: { plan: BotGroupPlanView; step: BotGrou
   if (plan.status === 'proposed' || plan.status === 'superseded' || plan.status === 'dismissed') {
     return <span className="text-12 tabular-nums text-[var(--text-tertiary)]">{index + 1}</span>;
   }
+  if (state === 'skipped') return <CircleMinus size={16} aria-hidden className="text-[var(--text-tertiary)]" />;
   if (step.status === 'done') {
     return <CircleCheck size={16} aria-hidden className="text-[var(--text-secondary)]" />;
   }
-  if (state === 'skipped') return <CircleMinus size={16} aria-hidden className="text-[var(--text-tertiary)]" />;
   if (state === 'running') {
     // Same running mark as the group speaking row (DESIGN.md §2 Thinking Orange).
     return <Sparkles size={15} aria-hidden className="text-[var(--status-bar-accent)]" />;
@@ -335,7 +336,7 @@ export function BotGroupPlanCard({
       className="bot-group-talk-card w-full max-w-[720px] min-w-0 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3.5 py-2.5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <Circle size={16} aria-hidden className="shrink-0 text-[var(--text-tertiary)]" />
-        <span className="flex-1 text-15 font-semibold leading-6 text-[var(--text-primary)]">{t('bots.groupChat.plan.talkTitle')}</span>
+        <span className="flex-1 text-15 font-medium leading-6 text-[var(--text-primary)]">{t('bots.groupChat.plan.talkTitle')}</span>
         <span className="text-12 leading-6 tabular-nums text-[var(--text-tertiary)]">{progress}</span>
       </div>
       <ol className="mt-2 flex flex-col">
@@ -343,7 +344,7 @@ export function BotGroupPlanCard({
           const identity = stepIdentity(step, members);
           const state = botGroupPlanStepState(plan, step);
           return <li key={step.position} data-testid="bot-group-plan-step"
-            className="bot-group-talk-step grid min-h-10 min-w-0 grid-cols-[20px_minmax(0,1fr)] items-start gap-x-2.5 gap-y-0.5 py-[7px]">
+            className="bot-group-talk-step grid min-h-10 min-w-0 grid-cols-[20px_minmax(0,1fr)] items-start gap-x-2.5 gap-y-0.5 py-1.5">
             <BotAvatar bot={identity} size="xs" className="h-5 w-5 shrink-0 text-11" />
             <span className="min-w-0 flex-1 break-words text-13 font-medium leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]">{identity.name}</span>
             <span className="bot-group-talk-tail col-start-2 flex min-w-0 items-center justify-between gap-2.5">
@@ -579,6 +580,7 @@ export function BotGroupPlanFollowUpRow({
         >
           {t(followUp.kind === 'continue' ? 'bots.groupChat.timeline.continuePlan' : 'bots.groupChat.timeline.retryStep')}
         </Button>
+        {(plan?.kind ? plan.canStop === true : plan?.canStop !== false) && (
         <Button
           type="button"
           variant="secondary"
@@ -590,7 +592,7 @@ export function BotGroupPlanFollowUpRow({
           onClick={onEnd}
         >
           {t(talk ? 'bots.groupChat.timeline.endTalk' : 'bots.groupChat.timeline.endPlan')}
-        </Button>
+        </Button>)}
       </span>
     </DividerRow>
   );

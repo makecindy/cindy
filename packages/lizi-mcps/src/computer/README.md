@@ -67,8 +67,16 @@ is usually redundant.
   waiting or asking only when none works.
 - `HOTKEY_BLOCKED`: lock-screen, log-out and sleep chords never reach the driver.
 - `CUA_UNAVAILABLE` carries `reason`: `screen_locked` (host power monitor),
-  `window_gone` / `window_not_on_screen` (from recovery discovery) or
-  `driver_error`. Recovery discovery is compacted to window identity fields.
+  `app_control_not_allowed`, `window_gone` / `window_not_on_screen` (from
+  recovery discovery) or `driver_error`. Recovery discovery is compacted to
+  window identity fields.
+- `app_control_not_allowed` (2026-11-24): the driver reported AXError -25211
+  (`kAXErrorAPIDisabled`) for the target. On macOS 27.3 and later a person can
+  allow CuaDriver to control only chosen apps, and every other app answers this
+  way while its window stays visible to discovery, so the window checks must not
+  run first. A thrown action error with the same evidence carries the same
+  `reason` and `next_step: "check_permissions"`. The driver only reports it in
+  prose, so [recovery.ts](recovery.ts) matches the code and its name.
 - `list_windows` identities add `ios-simulator` (Simulator.app, Device Hub) with a
   hint that synthetic input is not delivered there, and a `set_value` hint for
   Electron / browser targets. `set_value` was verified on Cindy's own composer:
@@ -93,6 +101,27 @@ Xcode's project navigator stays on "No Selection". Cindy reports it as
 `unknown` with a hint to click the row's coordinates or `double_click` it. The
 variant where the driver delivered a coordinate click and read the selection
 back stays confirmed.
+
+## Window-local scroll coordinates
+
+`scroll` accepts `x/y` in the latest `get_window_state` screenshot's pixels,
+with an exact `pid/window_id`. Supply both coordinates and omit element selectors.
+The host forwards the point through the ordinary session, input-ownership and
+driver-contract checks; it does not convert the point to screen coordinates.
+Drivers that do not advertise coordinates reject the call before delivery instead
+of dropping the point and scrolling somewhere else.
+
+On Windows, [cua-driver 0.46.1](https://github.com/trycua/cua/blob/cua-driver-rs-v0.46.1/libs/cua-driver/rust/crates/platform-windows/src/tools/scroll.rs)
+tries the indexed element's UIA scroll action first.
+For a project-row button without that action, its foreground wheel fallback uses
+the window center unless `x/y` is supplied. Use a screenshot point for nested web
+scrollers. A fresh observation must confirm movement; do not replay an uncertain
+scroll automatically. Background refusals and input guards still apply.
+
+This coordinate entry fixes Cindy's previously closed schema, which described
+point targeting but rejected `x/y`. It does not change the upstream element fallback.
+The MCP-entry regression covers coordinate delivery and malformed targets; native
+movement must be validated separately against the running version.
 
 ## Input failure advice
 

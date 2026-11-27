@@ -12,11 +12,13 @@ import {
   type WorkerProjectProbe,
 } from '../git-context/sessionDirResolver';
 import { gitExec } from '../worktree/gitExec';
+import { checkWorktreeSourceRef } from '../worktree/sourceRef';
 import * as WorktreeManager from '../worktree/WorktreeManager';
-import type {
-  WorkerProjectContext,
-  WorkerOwnedWorktree,
-  WorkerWorktreeSourceSelection,
+import {
+  qualifyLocalWorkerBranch,
+  type WorkerProjectContext,
+  type WorkerOwnedWorktree,
+  type WorkerWorktreeSourceSelection,
 } from '../../shared/orca-worker-project';
 
 const log = createLogger('orca-worker-project');
@@ -250,16 +252,15 @@ export async function readWorkerProjectContext(
 }
 
 function validateWorktreeSource(sourceBranch: string | undefined): void {
-  if (
-    sourceBranch !== undefined &&
-    (typeof sourceBranch !== 'string' ||
-      !sourceBranch.trim() ||
-      sourceBranch.length > 1024 ||
-      sourceBranch.startsWith('-') ||
-      Array.from(sourceBranch).some((character) => character.charCodeAt(0) < 32))
-  ) {
+  if (sourceBranch === undefined) return;
+  if (!checkWorktreeSourceRef(sourceBranch).ok) {
     throw new Error('Worktree source_branch must be a valid branch or commit');
   }
+}
+
+/** Orca's explicit origin shorthand always names the remote tracking ref. */
+function qualifyWorkerRemoteSource(source: string): string {
+  return source.startsWith('origin/') ? `refs/remotes/${source}` : source;
 }
 
 /** Resolve the optional tool revision before reserving a slot or creating a checkout. */
@@ -303,6 +304,8 @@ export async function resolveWorkerWorktreeSourceSelection(
       if (sourceBranch !== undefined) {
         try {
           validateWorktreeSource(sourceBranch);
+          // The new-task picker stores the remote option as a full tracking ref.
+          sourceBranch = qualifyLocalWorkerBranch(sourceBranch);
           await gitExec(
             ['rev-parse', '--verify', '--quiet', '--end-of-options', `${sourceBranch}^{commit}`],
             directory,
@@ -321,6 +324,7 @@ export async function resolveWorkerWorktreeSourceSelection(
   }
   validateWorktreeSource(sourceBranch);
   if (sourceBranch !== undefined && source === 'explicit') {
+    sourceBranch = qualifyWorkerRemoteSource(sourceBranch);
     try {
       await gitExec(
         ['rev-parse', '--verify', '--quiet', '--end-of-options', `${sourceBranch}^{commit}`],
@@ -335,7 +339,10 @@ export async function resolveWorkerWorktreeSourceSelection(
   if (info.headState === 'unborn' || !info.branch) {
     throw new Error('Worker worktree requires a repository with a commit');
   }
-  return { sourceBranch: info.branch, source, ...(fallbackReason ? { fallbackReason } : {}) };
+  // A checkout's attached branch is local even when its name looks like an origin ref.
+  const currentBranch =
+    info.headState === 'branch' ? qualifyLocalWorkerBranch(info.branch) : info.branch;
+  return { sourceBranch: currentBranch, source, ...(fallbackReason ? { fallbackReason } : {}) };
 }
 
 /** Compatibility reader for callers that only need the resolved revision. */
@@ -359,9 +366,11 @@ export async function createWorkerWorktree(
 ): Promise<string> {
   const info = await probeWorkerProject(directory);
   if (!info.baseRepo) throw new Error('Worker worktree requires a Git repository');
+  // A Worker based on the origin default starts from a freshly fetched ref, like the
+  // Desktop new-task entry; other sources (the lead's branch, a commit) are unchanged.
   const created = await WorktreeManager.createWorktree(
-    { sessionId, baseRepo: info.baseRepo, name: '', sourceBranch },
-    { trackBackgroundCheckout: true },
+    { sessionId, baseRepo: info.baseRepo, name: '', sourceBranch: qualifyWorkerRemoteSource(sourceBranch) },
+    { trackBackgroundCheckout: true, refreshDefaultSource: true },
   );
   if (!created.ok) throw new Error(`Worker worktree creation failed: ${created.error.message}`);
   // Probe paths are realpaths, so a symlink spelling cannot change the subproject offset.

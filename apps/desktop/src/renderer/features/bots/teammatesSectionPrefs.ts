@@ -13,3 +13,24 @@ export function readTeammatesSectionCollapsed(ownerId: string | null): boolean {
 export function writeTeammatesSectionCollapsed(ownerId: string | null, collapsed: boolean): void {
   writeSidebarOwnerStorage(KEY, ownerId, collapsed ? 'collapsed' : 'expanded');
 }
+
+export type TeammatesViewMode = 'icons' | 'list';
+const VIEW_KEY = 'sidebar.teammatesView.v1';
+
+export function readTeammatesViewMode(ownerId: string | null): TeammatesViewMode {
+  return readSidebarOwnerStorage(VIEW_KEY, ownerId) === 'icons' ? 'icons' : 'list';
+}
+
+export function writeTeammatesViewMode(ownerId: string | null, mode: TeammatesViewMode): void {
+  writeSidebarOwnerStorage(VIEW_KEY, ownerId, mode);
+}
+
+const COLLAPSED_AVATARS_KEY = 'sidebar.teammatesCollapsedAvatars.v1';
+
+export function readCollapsedTeammateAvatars(ownerId: string | null): boolean {
+  return readSidebarOwnerStorage(COLLAPSED_AVATARS_KEY, ownerId) === 'true';
+}
+
+export function writeCollapsedTeammateAvatars(ownerId: string | null, enabled: boolean): void {
+  writeSidebarOwnerStorage(COLLAPSED_AVATARS_KEY, ownerId, String(enabled));
+}

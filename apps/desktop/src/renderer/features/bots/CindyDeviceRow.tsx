@@ -1,3 +1,8 @@
+import { companionDragProps } from './companionDragProps';
+import {
+  preventMiddleClickAutoscroll,
+  type SidebarClickModifiers,
+} from '@/lib/sidebarNewWindowActivation';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
 import type { KeyboardEventHandler, MouseEventHandler, ReactNode } from 'react';
 import { Pin } from 'lucide-react';
@@ -31,7 +36,7 @@ export function CindyDeviceRow({
   subtitle: ReactNode;
   timestamp: string;
   typing?: boolean;
-  onOpen: () => void;
+  onOpen: (event?: SidebarClickModifiers) => void;
   onSelect: (option: CindyDeviceOption) => void;
   onContextMenu?: MouseEventHandler<HTMLButtonElement>;
   onKeyDown?: KeyboardEventHandler<HTMLButtonElement>;
@@ -53,8 +58,15 @@ export function CindyDeviceRow({
       )}
     >
       <button
-        type="button"
-        onClick={onOpen}
+        type="button" {...companionDragProps(current.route, bot.name)}
+        onMouseDown={preventMiddleClickAutoscroll}
+        onClick={(event) => onOpen(event)}
+        onAuxClick={(event) => {
+          if (event.button !== 1) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onOpen(event);
+        }}
         aria-current={selected ? 'page' : undefined}
         onContextMenu={onContextMenu}
         onKeyDown={onKeyDown}

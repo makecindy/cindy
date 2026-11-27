@@ -1,10 +1,10 @@
 import { app, BrowserWindow, ipcMain, screen } from 'electron';
 import { assertTrustedAppRendererEvent, isTrustedAppRendererWindow } from './security/trustedAppRenderer';
 import { throwIpcError } from './utils/ipcValidate';
-import { SidebarWindowExpansion } from './sidebarWindowExpansion';
+import { sidebarWindowExpansion } from './sidebarWindowExpansion';
 
 export function registerSidebarWindowExpansionIpc(): void {
-  const expansion = new SidebarWindowExpansion();
+  const expansion = sidebarWindowExpansion;
   const watch = (win: BrowserWindow) => {
     let userResized = false;
     win.on('will-resize', (_event, next) => {
@@ -39,8 +39,8 @@ export function registerSidebarWindowExpansionIpc(): void {
     const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
     const nativeShrink = typeof shrink === 'number' ? shrink * scale : undefined;
     const delta = adopt === true
-      ? expansion.adopt(win, nativeShrink ?? 0)
-      : expansion.update(win, width * scale, screen.getDisplayMatching(win.getBounds()).workArea, nativeShrink);
+      ? expansion.update(win, nativeShrink ?? 0, screen.getDisplayMatching(win.getBounds()).workArea, screen)
+      : expansion.update(win, width * scale, screen.getDisplayMatching(win.getBounds()).workArea, screen);
     return delta / scale;
   });
 }

@@ -1,4 +1,4 @@
-import { sharedTaskHostPeer } from '@cindy/device-link';
+import { DeviceLinkError, sharedTaskHostPeer } from '@cindy/device-link';
 import { sharedTaskGuestPeer } from '@cindy/device-link';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSharedTaskApi, parseSharedTaskSnapshot, type SharedTaskDetail } from '@cindy/device-link';
@@ -7,6 +7,14 @@ import { SharedTaskHost, type SharedTaskHostOptions } from '../sharedTaskHost.js
 import { captureSharedTaskAgentCommand, executeSharedTaskAccountCommand, executeSharedTaskHostCommand } from '../sharedTaskCommands.js';
 import { createIpcError } from '../../../shared/ipc-errors.js';
 import { createSharedTaskTools, type SharedTaskCaller } from '../../mcp-integrations/sharedTaskTools.js';
+import { createSharedTaskProgressReader } from '../../mcp-integrations/sharedTaskProgress.js';
+import { assertSharedTaskInvoke } from '../sharedTaskDispatch.js';
+import { buildSessionDeepLink } from '../../../renderer/lib/deepLink.js';
+import { reconcileSessionRefsForText } from '../../../shared/agentInputQueue.js';
+import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import { createSharedTaskDelivery } from '../../mcp-integrations/sharedTaskDelivery.js';
+import { parseSharedTaskTarget } from '../../mcp-integrations/sharedTaskTarget.js';
+import { stampSharedTaskInput } from '../../maker-ipc/sharedTaskInput.js';
 
 const detail = (revision = 1): SharedTaskDetail => ({
   sharedTaskId: 'sharedTask', sessionId: 'session', ownerAccountId: 'owner', hostDeviceId: 'desktop',
@@ -54,6 +62,163 @@ beforeEach(() => {
   };
   host = new SharedTaskHost(options);
 });
+// Unit, shared-task-mode.md: copying used to be hidden; ordinary history cannot
+// read a guest peer. Follow the same copied link across a new reply and removal.
+it('follows a copied guest link through the scoped host and stops on membership loss', async () => {
+  await host.open('session');
+  const peer = sharedTaskHostPeer('sharedTask', 'desktop');
+  const link = buildSessionDeepLink('session', { deviceId: peer });
+  expect(reconcileSessionRefsForText(link + ' cindy://session/mine', undefined)).toEqual([{ sessionId: 'mine' }]);
+  let running = true;
+  let answer = 'Tests are running';
+  const earlierQuestion = 'Which platform needs the build?';
+  const invoke = vi.fn(async (target: string, channel: string, args: unknown[]) => {
+    expect(target).toBe(peer);
+    const capture = host.capturePeer(sharedTaskGuestPeer('sharedTask', 'member-a', 'phone-a'));
+    if (!capture) return { ok: false as const, error: { code: 'ACCESS_REVOKED' as const, message: 'removed' } };
+    assertSharedTaskInvoke(capture, { channel, args });
+    if (channel === 'local-db:sessions:get') return { ok: true as const, result: { id: 'session', title: 'Tests' } };
+    if (channel === 'maker:session-in-turn') return { ok: true as const, result: running };
+    expect(channel).toBe('local-db:messages:list');
+    const history = [
+      { sessionId: 'session', id: 'latest', role: 'assistant', content: answer },
+      ...Array.from({ length: 19 }, (_, n) => ({ sessionId: 'session', id: `resume-${n}`, role: 'user', content: '[UI_ACTION_TRIGGER] continue' })),
+      { sessionId: 'session', id: 'question', role: 'ask_user', content: { questions: [{ question: earlierQuestion }] } },
+    ];
+    const { before, limit } = args[1] as { before?: string; limit: number };
+    const start = before ? history.findIndex(row => row.id === before) + 1 : 0;
+    return { ok: true as const, result: history.slice(start, start + limit) };
+  });
+  const reader = createSharedTaskProgressReader({ invoke, captureGroupAccess: async () => null,
+    caller: () => ({ key: 'caller', current: true, accountScoped: true, planMode: true }) });
+  const context = { agentKind: 'codex', workingDir: '/fixture', sessionId: 'mine', sessionInstanceId: 'instance' };
+  expect(await reader({ task_link: buildSessionDeepLink('session', { deviceId: 'desktop' }) }, context)).toMatchObject({ ok: false });
+  expect(invoke).not.toHaveBeenCalled();
+  const read = (before?: string) => reader({ task_link: link, before }, context);
+  const first = await read();
+  expect(first).toMatchObject({ ok: true, inTurn: true, nextBefore: 'resume-18', events: [{ role: 'assistant', text: answer }] });
+  if (!first.ok || !first.nextBefore) throw new Error('Expected a page cursor');
+  expect(await read(first.nextBefore)).toMatchObject({ ok: true, nextBefore: null, events: [{ role: 'ask_user', text: earlierQuestion }] });
+  running = false;
+  answer = 'Tests passed';
+  expect(await read()).toMatchObject({ ok: true, inTurn: false, events: [{ role: 'assistant', text: answer }] });
+  serverDetail = { ...detail(2), guests: [] };
+  await host.refresh('sharedTask');
+  expect(await read()).toMatchObject({ ok: false, errorCode: 'REMOTE_ACCESS_REVOKED' });
+  expect(api.invite).not.toHaveBeenCalled();
+});
+
+// Unit integration, shared-task-mode.md「本机任务向已加入的共享任务发消息」:
+// copied links had no handoff route. Exercise delivery -> real membership gate ->
+// input stamping. Coordinator draining is covered in agent-input-coordinator.test.ts.
+// Minimum failure: one guest link plus one explicit message. Windows standalone:
+// 11.10s (9.40s collection, 1.11s tests); uses existing in-memory Host fixtures.
+describe('native handoff into a received shared task', () => {
+  const context = { agentKind: 'codex', workingDir: '/source', sessionId: 'local-source', sessionInstanceId: 'instance' };
+  const peer = sharedTaskHostPeer('sharedTask', 'desktop');
+  const link = buildSessionDeepLink('session', { deviceId: peer });
+  async function setup() {
+    await host.open('session');
+    let source: SharedTaskCaller = { key: 'guest:source:input', current: true, accountScoped: true, planMode: false };
+    let readOnly = false, lostAck = false, loseReads = false, oldHost = false, loseReceiptAfterAck = false;
+    let beforeSend: (() => void) | undefined;
+    const terminal = new Map<string, 'accepted' | 'removed'>();
+    const pendingQueue: AgentInputQueuedMessage[] = [];
+    const task = { agentKind: 'pi' as const, model: 'original-model', workingDir: '/original-workdir', permissionMode: 'ask', providerId: 'owner-provider' };
+    const invoke = vi.fn(async (target: string, channel: string, args: unknown[], options: { preSend: () => void }) => {
+      expect(target).toBe(peer);
+      if (channel === 'maker:input:enqueue') beforeSend?.();
+      options.preSend();
+      const actual = host.capturePeer(sharedTaskGuestPeer('sharedTask', 'member-a', 'phone-a'));
+      if (!actual) return { ok: false as const, error: { code: 'ACCESS_REVOKED' as const, message: 'Membership removed' } };
+      const capture = { ...actual, authorize: (op: string) => (!readOnly || op !== 'input.send') && actual.authorize(op) };
+      try { assertSharedTaskInvoke(capture, { channel, args }); }
+      catch (error) { return { ok: false as const, error: { code: 'IPC_ERROR' as const, message: (error as Error).message } }; }
+      if (channel === 'local-db:sessions:get') return { ok: true as const, result: { id: 'session', status: 'active', agentKind: 'cc', clearedAt: null } };
+      if (channel === 'maker:input:get-projection') {
+        if (loseReads) throw new DeviceLinkError('NOT_CONNECTED', 'Lost receipt read before dispatch');
+        const ids = (args[1] as { deliveryClientIds: string[] }).deliveryClientIds;
+        return { ok: true as const, result: { sessionId: 'session', pendingQueue,
+          ...(!oldHost ? { inputDeliveryVersion: 1, deliveryReceipts: ids.map(clientId => ({ clientId,
+            state: terminal.get(clientId) ?? (pendingQueue.some(item => item.clientId === clientId) ? 'pending' : 'unknown') })) } : {}) } };
+      }
+      expect(channel).toBe('maker:input:enqueue');
+      const item = stampSharedTaskInput(args[1] as AgentInputQueuedMessage, capture, task);
+      pendingQueue.push(item);
+      if (lostAck) { loseReads = true; throw new Error('Enqueue ack lost'); }
+      if (loseReceiptAfterAck) loseReads = true;
+      return { ok: true as const, result: { sessionId: 'session', pendingQueue } };
+    });
+    const action = vi.fn(async () => {});
+    const delivery = createSharedTaskDelivery({ invoke, caller: () => source,
+      captureGroupAccess: async () => null, assertActionCurrent: action });
+    const send = (deliveryId?: string, target = link) => delivery({ target, message: 'Selected Feishu result', deliveryId, context });
+    return { send, invoke, pendingQueue, task, terminal,
+      change: (patch: Partial<SharedTaskCaller>) => { source = { ...source, ...patch }; },
+      readOnly: () => { readOnly = true; }, oldHost: () => { oldHost = true; },
+      lostAck: () => { lostAck = true; }, loseReceipt: () => { loseReceiptAfterAck = true; }, restoreReads: () => { loseReads = false; },
+      beforeSend: (fn: () => void) => { beforeSend = fn; } };
+  }
+
+  it('queues explicit text on the original running task with verified guest author and unchanged execution settings', async () => {
+    const h = await setup();
+    const sent = await h.send();
+    expect(sent).toMatchObject({ ok: true, task_link: link, target_session_id: link, wake_kind: 'queued', delivery_state: 'pending' });
+    const [item] = h.pendingQueue;
+    expect(item).toMatchObject({ text: 'Selected Feishu result', persistedContent: 'Selected Feishu result',
+      createOpts: h.task, model: 'original-model', workingDir: '/original-workdir', permissionMode: 'ask',
+      sharedTaskAuthor: { accountId: 'guest-a', memberId: 'member-a', sessionId: 'session' } });
+    for (const key of ['files', 'sessionRefs', 'origin', 'sourceDevice', 'sourcePlugin']) expect(item).not.toHaveProperty(key);
+    if (!sent.ok) throw new Error('Expected receipt');
+    h.terminal.set(sent.delivery_id, 'accepted');
+    expect(await h.send(sent.delivery_id)).toMatchObject({ ok: true, delivery_state: 'accepted', wake_kind: 'accepted' });
+    expect(h.invoke.mock.calls.filter(([, channel]) => channel === 'maker:input:enqueue')).toHaveLength(1);
+  });
+
+  it.each(['enqueue-ack', 'receipt-read'] as const)('reconciles a lost %s and never resends unknown, pending or removed delivery IDs', async lost => {
+    const h = await setup();
+    if (lost === 'enqueue-ack') h.lostAck(); else h.loseReceipt();
+    const uncertain = await h.send();
+    expect(uncertain).toMatchObject({ ok: false, errorCode: 'DELIVERY_UNKNOWN', task_link: link, delivery_id: expect.any(String) });
+    if (uncertain.ok || !uncertain.delivery_id) throw new Error('Expected recovery ID');
+    h.restoreReads();
+    expect(await h.send(uncertain.delivery_id)).toMatchObject({ ok: true, delivery_state: 'pending' });
+    expect(await h.send('not-observed')).toMatchObject({ ok: false, errorCode: 'DELIVERY_UNKNOWN' });
+    h.terminal.set(uncertain.delivery_id, 'removed');
+    expect(await h.send(uncertain.delivery_id)).toMatchObject({ ok: false, errorCode: 'DELIVERY_REMOVED' });
+    expect(h.invoke.mock.calls.filter(([, channel]) => channel === 'maker:input:enqueue')).toHaveLength(1);
+  });
+
+  it.each(['not-owner-input', 'plan', 'old-host', 'read-only', 'removed', 'source-changed'] as const)('does not enqueue for %s', async reason => {
+    const h = await setup();
+    if (reason === 'not-owner-input') h.change({ accountScoped: false });
+    if (reason === 'plan') h.change({ planMode: true });
+    if (reason === 'old-host') h.oldHost();
+    if (reason === 'read-only') h.readOnly();
+    if (reason === 'removed') { serverDetail = { ...detail(2), guests: [] }; await host.refresh('sharedTask'); }
+    if (reason === 'source-changed') h.beforeSend(() => h.change({ key: 'other-account' }));
+    const expected = { 'not-owner-input': 'PERMISSION_DENIED', plan: 'PLAN_MODE', 'old-host': 'UNSUPPORTED_CAPABILITY',
+      'read-only': 'PERMISSION_DENIED', removed: 'REMOTE_ACCESS_REVOKED', 'source-changed': 'REMOTE_ACCESS_REVOKED' };
+    expect(await h.send()).toMatchObject({ ok: false, errorCode: expected[reason] });
+    expect(h.pendingQueue).toHaveLength(0);
+  });
+
+  it('preserves scoped IDs containing separators and rejects invitation, local and mixed target identities', async () => {
+    const h = await setup();
+    const scoped = sharedTaskHostPeer('sharedTask', 'desktop::part');
+    expect(parseSharedTaskTarget(`${scoped}::session::part`)).toMatchObject({ peer: scoped, sessionId: 'session::part' });
+    expect(parseSharedTaskTarget(`${peer}::session`)).toMatchObject({ peer, sessionId: 'session', taskLink: link });
+    for (const target of [buildSessionDeepLink('session'), buildSessionDeepLink('session', { deviceId: 'desktop' }),
+      'https://relay.example.test/shared-task/join#invitation', 'desktop::session',
+      buildSessionDeepLink('session', { deviceId: sharedTaskGuestPeer('sharedTask', 'member-a', 'phone-a') }),
+      `${link}&device=desktop`, `${link}#other`, `cindy://session/%ZZ?device=${encodeURIComponent(peer)}`,
+      `cindy://session/wrong/../session?device=${encodeURIComponent(peer)}`]) {
+      expect(await h.send(undefined, target)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    }
+    expect(h.invoke).not.toHaveBeenCalled();
+  });
+});
+
 // Unit: the public helper uses the real native host/command path. A lost create
 // receipt and changes during invitation were not covered by the UI lifecycle tests.
 // shared-task-mode.md: one original task, owner-only, read before uncertain retry.
@@ -279,6 +444,26 @@ describe('native task invitation helper', () => {
 });
 
 describe('task host sharedTask lifecycle', () => {
+  // V2 private-authority outage must not permanently close a V1/V2 journal row.
+  // Existing restore tests assumed all rows came from one authoritative service.
+  // Minimal input: a successful partial list omits one unavailable resource.
+  // Unit tier; public Host restore/authorize/journal, no real waits.
+  it('preserves an unavailable share and still reconciles another authority that closed its share', async () => {
+    await host.open('session');
+    const other = { ...detail(), sharedTaskId: 'other-share', sessionId: 'other-session' };
+    records.set('other-share', { sharedTaskId: other.sharedTaskId, sessionId: other.sessionId,
+      terminal: false, snapshot: parseSharedTaskSnapshot(other) });
+    const partial = Object.assign([], { unavailableSharedTaskIds: ['sharedTask'], authorityIncomplete: true as const });
+    api.list.mockResolvedValue(partial);
+    await host.restore();
+    expect(records.get('sharedTask')?.terminal).toBe(false);
+    expect(canRead()).toBe(true);
+    expect(records.get('other-share')?.terminal).toBe(true);
+    api.list.mockResolvedValue([]);
+    await host.restore();
+    expect(records.get('sharedTask')?.terminal).toBe(true);
+    expect(canRead()).toBe(false);
+  });
   it.each(['cindy-make', 'cindy-make-merge'])('closes an upgraded %s share and removes it from owner and guest directories', async (source) => {
     records.set('sharedTask', { sharedTaskId: 'sharedTask', sessionId: 'session', terminal: false, snapshot: parseSharedTaskSnapshot(detail()) });
     options.readSession = vi.fn(async id => ({ id, title: 'Task', status: 'active', source }));

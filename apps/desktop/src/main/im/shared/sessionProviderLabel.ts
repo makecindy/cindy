@@ -1,14 +1,17 @@
 /**
  * 失败时按任务实际路由读取定位信息；目录不可读也保留任务名和模型 ID。
  */
+import { imText } from './imText';
 import { eq } from 'drizzle-orm';
 import { actualSourceIdForModel } from '@cindy/model-providers';
 
-import { dbToMakerAgentKind } from '../../../shared/agentKindConversion.js';
+import { dbToMakerEngineKind } from '../../../shared/agentKindConversion.js';
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines.js';
 import { getDbClient } from '../../localDb/client/current';
 import { sessions } from '../../localDb/schema';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService';
 import { getSessionProvider, hasSessionProvider } from '../../maker-host/session-provider-store';
+import { getPluginHarnessRegistry } from '../../cindy-brain/pluginHarnesses';
 
 export async function resolveSessionErrorContext(sessionId: string): Promise<{
   providerLabel?: string;
@@ -28,10 +31,26 @@ export async function resolveSessionErrorContext(sessionId: string): Promise<{
       .limit(1);
     if (!row) return {};
     const context = {
-      taskLabel: `${row.title || '任务'}（${sessionId.slice(0, 8)}）`,
+      taskLabel: imText('imBot.text.shared.quota.taskLabel', {
+        title: row.title || imText('imBot.text.shared.quota.untitledTask'),
+        id: sessionId.slice(0, 8),
+      }),
       ...(row.model ? { modelLabel: row.model } : {}),
     };
     if (!row.model) return context;
+    const engineKind = dbToMakerEngineKind(row.agentKind);
+    if (engineKind === 'acp') {
+      const key = pluginEngineKeyFromProviderId(row.providerId);
+      const baseKey = key?.replace(/~[a-z0-9]{8}$/, '') ?? null;
+      const harness = baseKey
+        ? getPluginHarnessRegistry().list().find((item) => item.key === baseKey)
+        : undefined;
+      return {
+        ...context,
+        modelLabel: row.model,
+        ...(harness?.name ? { providerLabel: harness.name } : {}),
+      };
+    }
     const providers = await getDesktopProviderService()
       .listProviders({ allowSideEffects: false })
       .catch(() => []);
@@ -44,10 +63,10 @@ export async function resolveSessionErrorContext(sessionId: string): Promise<{
       providers,
       selected?.trim() || null,
       row.model,
-      dbToMakerAgentKind(row.agentKind),
+      engineKind,
     );
     const provider = providers.find((provider) => provider.id === providerId);
-    const model = provider?.models[dbToMakerAgentKind(row.agentKind)]?.find(
+    const model = provider?.models[engineKind]?.find(
       (entry) => entry.id === row.model,
     );
     return { ...context, modelLabel: model?.name || row.model, providerLabel: provider?.name };

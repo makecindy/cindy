@@ -45,6 +45,7 @@ import {
   OPEN_SHARE_FILE_FLAG,
   focusMainWindow,
   handleIncomingDeepLink,
+  handleIncomingShareFile,
   openMainWindowVoiceSettings,
   openMainWindowSession,
   openMainWindowRemoteControlSettings,
@@ -84,6 +85,19 @@ describe('OS deep-link registration', () => {
     expect(registerWindowsDeepLinkName).not.toHaveBeenCalled();
   });
 
+  it.each(['--smoke-test', '--no-protocol-registration'])('preserves installed handlers for %s', flag => {
+    vi.spyOn(app, 'isPackaged', 'get').mockReturnValue(true);
+    const argv = process.argv;
+    process.argv = ['cindy', flag];
+    try {
+      registerDeepLinkProtocol();
+      expect(app.setAsDefaultProtocolClient).not.toHaveBeenCalled();
+      expect(registerWindowsDeepLinkName).not.toHaveBeenCalled();
+    } finally {
+      process.argv = argv;
+    }
+  });
+
   it('registers every supported scheme for packaged clients without a dev launch command', () => {
     vi.spyOn(app, 'isPackaged', 'get').mockReturnValue(true);
     vi.mocked(app.setAsDefaultProtocolClient).mockReturnValue(true);
@@ -121,6 +135,17 @@ function providerImportUrl(scheme: 'cindy' | 'xdt-maker'): string {
   return `${scheme}://provider/import?v=1&data=${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
 }
 
+describe('cloud computer device links', () => {
+  it('focuses only an exact device ID in the local device list', () => {
+    expect(parseDeepLink('cindy://devices/guest-42')).toEqual({
+      type: 'settings', tab: 'remote-control', focusDeviceId: 'guest-42',
+    });
+    for (const suffix of ['/restart', '?action=delete', '#extra', '%2f']) {
+      expect(parseDeepLink('cindy://devices/guest-42' + suffix)).toBeNull();
+    }
+  });
+});
+
 describe('history task links', () => {
   it.each([
     ['task/一', 'host', 'task/一', 'host'],
@@ -131,6 +156,20 @@ describe('history task links', () => {
     expect(parseDeepLink(url)).toEqual({ type: 'session', id: sessionId, deviceId });
     expect(new URL(url).searchParams.get('device')).toBe(deviceId);
     expect(url).not.toContain('::');
+  });
+});
+
+describe('gift card link', () => {
+  const code = 'G0123456789ABCDE';
+  it('yields the canonical redeem code for the forms the gift page and users produce', () => {
+    for (const link of ['cindy://gift/G0123456789ABCDE', 'cindy://gift/G012-3456-789A-BCDE', 'cindy://gift/g012-3456-789a-bcde/', 'xdt-maker://gift/G0123456789ABCDE?from=web']) {
+      expect(parseDeepLink(link)).toEqual({ type: 'gift-card', code });
+    }
+  });
+  it('ignores links that do not carry a complete redeem code', () => {
+    for (const link of ['cindy://gift/', 'cindy://gift/G012-3456-789A-BCD', 'cindy://gift/G012-3456-789A-BCDU', 'cindy://gift/%E0%A4%A']) {
+      expect(parseDeepLink(link)).toBeNull();
+    }
   });
 });
 
@@ -580,6 +619,16 @@ describe('dual scheme (cindy primary + legacy xdt-maker)', () => {
     expect(takePendingDeepLink()).toEqual({ type: 'session', id: 'external-task' });
   });
 
+  // Unit: a plugin package is account-owned, unlike an external file-open intent.
+  // The old share-file entry could not bind a buffered wizard to its owner.
+  it('drops a buffered native package wizard after its owner changes', () => {
+    setDeepLinkMainWindow(null);
+    takePendingDeepLink();
+    handleIncomingShareFile('/fixture/task.cshare', 'host-tool', { ownerScopeKey: String(owner.generation) });
+    owner.generation += 1;
+    expect(takePendingDeepLink()).toBeNull();
+  });
+
   it('buffers only the opaque provider import id during cold start', () => {
     setDeepLinkMainWindow(null);
     handleIncomingDeepLink(providerImportUrl('cindy'), 'test');
@@ -883,4 +932,13 @@ describe('fixed local plugin share navigation', () => {
   it.each(['?install=1', '?url=https://example.test/file', '#auto', '/other', '/../other'])('rejects extra behavior %s', suffix => {
     expect(parseDeepLink(`cindy://plugin-share/${snapshotId}${suffix}`)).toBeNull();
   });
+});
+
+// Unit: a device-qualified URL must never degrade to the old local-only settings path.
+it('preserves settings device identity and refuses ambiguous settings links', () => {
+  expect(parseDeepLink('cindy://settings-link/general?device=computer-a&query=font')).toEqual({
+    type: 'settings-navigation', target: { tab: 'general', deviceId: 'computer-a', query: 'font' },
+  });
+  expect(parseDeepLink('cindy://settings-link/providers?device=a&device=b')).toBeNull();
+  expect(parseDeepLink('cindy://settings-link/providers?device=a&command=run')).toBeNull();
 });

@@ -45,6 +45,14 @@ describe('newMakerDraft remote host identity', () => {
     expect(m2.getDraft().remoteHostId).toBe('remote-host-a');
   });
 
+  it('does not use a device-link project as a local directory on reload', async () => {
+    const draft = await loadModule();
+    draft.patchDraft({ workingDir: '/studio/only', deviceLinkDeviceId: 'studio' });
+    // reset-modules: simulate an app restart so the draft reloads the remote path and device identity from storage.
+    vi.resetModules();
+    expect((await loadModule()).getDraft()).toMatchObject({ workingDir: null, deviceLinkDeviceId: null });
+  });
+
   it('clears remoteHostId when switching to a local project or dialogue', async () => {
     const { getDraft, patchDraft } = await loadModule();
     patchDraft({ workingDir: '/srv/app', remoteHostId: 'remote-host-a' });

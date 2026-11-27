@@ -1,7 +1,9 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { parseBase64DataUrl } from '@cindy/maker-shared';
 import { reconcileOutboundReasoningEffort } from './outbound-reasoning-effort.js';
 import { withOpenCodeGoSessionHeader } from './opencode-go-session.js';
 import { withProviderAppAttribution } from './provider-app-attribution.js';
+import { withCopilotResponsesHeaders } from './copilot-account-url.js';
 import { once } from 'node:events';
 import type { ServerResponse } from 'node:http';
 import { ChatSseTranslator, translateResponsesRequestWithContext, isUnsupportedResponsesFeatureError, unsupportedFeatureErrorBody, type ResponsesRequest } from '@cindy/responses-chat-bridge';
@@ -19,7 +21,7 @@ import { PI_REASONING_EFFORTS, PROVIDER_MODEL_CATALOG, providerEndpointBindings,
 export function invocationModelRecord(model: CatalogModel, upstream: string, api?: PiModelApi): ProviderModelRecord | undefined {
   const selected = model.api ?? api;
   const known = providerModelRecord(model.id, upstream, selected)
-    ?? (selected ? providerPresetModelRecord(model.catalogPresetId, model.id, selected) : undefined)
+    ?? (selected ? providerPresetModelRecord(model.catalogPresetId, model.id, selected, upstream) : undefined)
     ?? providerModelGenerationRecord(model.id, upstream, selected, model.catalogPresetId);
   if (!selected && !known) return undefined;
   // The active catalog is authoritative; unknown capability must not silently
@@ -62,7 +64,9 @@ export async function readBoundedResponseText(
       size += take.byteLength;
     }
   } finally {
-    await reader.cancel().catch(() => undefined);
+    // A cloned response's cancellation waits for the other branch to settle.
+    // The adapter cannot consume that branch until this diagnostic read returns.
+    void reader.cancel().catch(() => undefined);
   }
   return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8');
 }
@@ -92,6 +96,12 @@ function validHistoryContent(value: unknown): value is AssistantMessage['content
     (block.type === 'toolCall' && typeof block.id === 'string' && typeof block.name === 'string' && block.arguments && typeof block.arguments === 'object'
       && !Array.isArray(block.arguments) && (block.thoughtSignature === undefined || typeof block.thoughtSignature === 'string'))));
 }
+
+/** Remove only provider-invalid remnants from a failed assistant attempt. */
+export function sanitizePiAssistantContent(content: AssistantMessage['content']): AssistantMessage['content'] {
+  return content.filter(block => !(block.type === 'thinking' && block.thinkingSignature === ''));
+}
+
 function nativeHistory(request: ResponsesRequest, identity: string): Map<string, AssistantMessage['content'][]> {
   const saved = new Map<string, AssistantMessage['content'][]>();
   for (const item of Array.isArray(request.input) ? request.input : []) {
@@ -100,8 +110,10 @@ function nativeHistory(request: ResponsesRequest, identity: string): Map<string,
     try {
       const value = JSON.parse(Buffer.from(encrypted.slice(HISTORY_PREFIX.length), 'base64').toString());
       if (value.identity !== identity || !validHistoryContent(value.content)) continue;
-      const key = visibleHistoryKey(value.content);
-      saved.set(key, [...(saved.get(key) ?? []), value.content]);
+      const content = sanitizePiAssistantContent(value.content);
+      if (content.length === 0) continue;
+      const key = visibleHistoryKey(content);
+      saved.set(key, [...(saved.get(key) ?? []), content]);
     } catch { /* Foreign or incomplete opaque history never becomes native content. */ }
   }
   return saved;
@@ -115,6 +127,7 @@ export interface PiProviderTransportOptions {
   catalogPresetId?: string;
   /** Account-specific destination; the catalog row still identifies its adapter. */
   upstream?: string;
+  copilotOAuth?: boolean;
   apiKey: string;
   headers?: Record<string, string>;
   env?: Record<string, string>;
@@ -206,6 +219,7 @@ function nativeInvocationModel(options: PiProviderTransportOptions, modelId: str
   const row = options.row;
   const destination = options.upstream ?? row.upstream;
   assertHostCredentialEndpoint(row.execution.pi.api, destination, options.apiKey);
+  const headers = withProviderAppAttribution(destination, options.headers, row.execution.pi.headers);
   const model: Model<Api> = { id: modelId, name: row.name, provider: providerModelAdapterId(row) ?? options.providerId,
     api: row.execution.pi.api, baseUrl: destination, contextWindow: row.contextWindow ?? 200_000,
     maxTokens: row.maxOutput ?? Math.min(4096, row.contextWindow ?? 200_000), reasoning: row.reasoning ?? (row.efforts?.length ?? 0) > 0,
@@ -216,7 +230,9 @@ function nativeInvocationModel(options: PiProviderTransportOptions, modelId: str
       [level, row.efforts?.includes(level) ? row.execution.pi.thinkingLevelMap?.[level] ?? level : null])) },
     compat: row.execution.pi.compat,
     samplingParams: row.execution.pi.samplingParams,
-    headers: withProviderAppAttribution(destination, options.headers, row.execution.pi.headers),
+    headers: options.copilotOAuth && row.execution.pi.api === 'openai-responses'
+      ? withCopilotResponsesHeaders(destination, headers)
+      : headers,
   };
   return model;
 }
@@ -258,8 +274,10 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
           ? [{ type: 'text', text: message.content }] : message.content.map(part => {
             if (part.type === 'text') return { type: 'text', text: part.text };
             if (part.type === 'image_url') {
-              const match = /^data:([^;,]+);base64,([\s\S]+)$/.exec(part.image_url.url);
-              if (match) return { type: 'image', mimeType: match[1], data: match[2] };
+              const parsed = parseBase64DataUrl(part.image_url.url, /^data:([^;,]+);base64$/, {
+                allowLineTerminators: true,
+              });
+              if (parsed) return { type: 'image', mimeType: parsed.header[1], data: parsed.payload };
             }
             throw new Error('This native API requires inline text or image content');
           });
@@ -272,8 +290,10 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
           toolNames.set(tool.id, tool.function.name);
           content.push({ type: 'toolCall', id: tool.id, name: tool.function.name, arguments: JSON.parse(tool.function.arguments) });
         }
+        const sanitized = sanitizePiAssistantContent(content);
+        if (sanitized.length === 0) continue;
         context.messages.push({ role: 'assistant', api: model.api, provider: model.provider,
-          model: model.id, content: savedHistory.get(visibleHistoryKey(content))?.shift() ?? content, usage: zeroUsage(), stopReason: message.tool_calls?.length ? 'toolUse' : 'stop', timestamp: 0 });
+          model: model.id, content: savedHistory.get(visibleHistoryKey(sanitized))?.shift() ?? sanitized, usage: zeroUsage(), stopReason: message.tool_calls?.length ? 'toolUse' : 'stop', timestamp: 0 });
       } else if (message.role === 'tool') {
         context.messages.push({ role: 'toolResult', toolCallId: message.tool_call_id,
           toolName: toolNames.get(message.tool_call_id) ?? '', content: [{ type: 'text', text: message.content }], isError: false, timestamp: 0 });
@@ -288,11 +308,40 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
     // Keep diagnostics local to this invocation. Adapter error messages may contain
     // response bodies, credentials or user content, so never forward those strings.
     let httpStatus: number | undefined;
+    let rejectionReason: 'context_length_exceeded' | undefined;
     const diagnosticFetch: typeof fetch = async (input, init) => {
       httpStatus = undefined;
+      rejectionReason = undefined;
       const response = await options.fetchImpl(input, init);
       httpStatus = response.status;
-      return response;
+      if (response.status !== 400 || !response.body) return response;
+      // Observe the SDK's existing read, with no tee, extra request or delayed body
+      // consumption. Only a complete bounded JSON object can supply a safe enum;
+      // arbitrary messages (including strings resembling codes) stay private.
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      const body = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          size += chunk.byteLength;
+          if (chunk.byteLength && size <= NATIVE_ADAPTER_ERROR_BODY_LIMIT) chunks.push(chunk.slice());
+          else if (size > NATIVE_ADAPTER_ERROR_BODY_LIMIT) chunks.length = 0;
+          controller.enqueue(chunk);
+        },
+        flush() {
+          if (size > NATIVE_ADAPTER_ERROR_BODY_LIMIT) return;
+          try {
+            const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+            const error = (parsed as Record<string, unknown>).error;
+            if (!error || typeof error !== 'object' || Array.isArray(error)) return;
+            const { code, type } = error as Record<string, unknown>;
+            if (code === 'context_length_exceeded' || type === 'context_length_exceeded') {
+              rejectionReason = 'context_length_exceeded';
+            }
+          } catch { /* Unknown, malformed or incomplete bodies retain the safe fallback. */ }
+        },
+      }));
+      return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
     };
     const failureMessage = (phase: 'adapter-event' | 'stream-read') => {
       const category = httpStatus === 401 ? 'authentication'
@@ -303,7 +352,8 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
         : 'unknown';
       const status = httpStatus !== undefined && httpStatus >= 400 && httpStatus < 600
         ? `; HTTP ${httpStatus}` : '';
-      return `Native provider request failed [phase=${phase}${status}; category=${category}; request=${responseId}]`;
+      const reason = rejectionReason ? `; reason=${rejectionReason}` : '';
+      return `Native provider request failed [phase=${phase}${status}; category=${category}${reason}; request=${responseId}]`;
     };
     const cloudflareGateway = model.provider === 'cloudflare-ai-gateway';
     // Conversation identity is per request. OpenCode Go rejects requests without a stable
@@ -366,6 +416,21 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
               chunk({}, event.reason === 'toolUse' ? 'tool_calls' : event.reason === 'length' ? 'length' : 'stop',
                 { prompt_tokens: usage.input + usage.cacheRead + usage.cacheWrite, completion_tokens: usage.output,
                   prompt_tokens_details: { cached_tokens: usage.cacheRead } });
+              // Names such as create_worker/create_workers keep the shorter tool
+              // pending until finish(). Flush those reserved output indices before
+              // assigning an index to native history; otherwise history can occupy
+              // the pending tool's slot and the Anthropic bridge drops the call.
+              const closingEvents: unknown[] = [];
+              const terminalEvents: unknown[] = [];
+              for (const value of translator.finish(true)) {
+                const type = (value as Record<string, unknown>).type;
+                if (type === 'response.completed' || type === 'response.incomplete' || type === 'response.failed') {
+                  terminalEvents.push(value);
+                } else {
+                  closingEvents.push(value);
+                }
+              }
+              emit(closingEvents);
               if (event.message.content.some(block => ('thinkingSignature' in block && block.thinkingSignature) || ('thoughtSignature' in block && block.thoughtSignature) || ('textSignature' in block && block.textSignature))) {
                 historyItem = { type: 'reasoning', id: `rs_${randomUUID().replaceAll('-', '')}`, summary: [],
                   encrypted_content: HISTORY_PREFIX + Buffer.from(JSON.stringify({ identity, content: event.message.content })).toString('base64') };
@@ -373,7 +438,7 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
                 emit([{ type: 'response.output_item.added', output_index, item: { ...historyItem, encrypted_content: undefined } },
                   { type: 'response.output_item.done', output_index, item: historyItem }]);
               }
-              emit(translator.finish(true)); ended = true;
+              emit(terminalEvents); ended = true;
             } else if (event.type === 'error') { emit(translator.fail(failureMessage('adapter-event'))); ended = true; }
           }
           if (pending.length) controller.enqueue(pending.shift()!);

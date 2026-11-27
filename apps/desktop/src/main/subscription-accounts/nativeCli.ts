@@ -1,19 +1,25 @@
 /** Official CLI login/control APIs only. No Claude credential access. */
+import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { codexAccountDisplayKey, codexWorkspaceIdFromTokens } from '../maker-host/codex-auth-identity.js';
 import { open } from 'node:fs/promises';
 import { statSync, type Stats } from 'node:fs';
-import { cleanProcessEnv, type AuthState } from '@cindy/maker-core';
+import { cleanProcessEnv, type AccountRateLimitsResponse, type AuthState } from '@cindy/maker-core';
 import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import {
   refreshClaudeCliLoginStatus,
   readClaudeCliPlanUsage,
+  removeClaudeCliLongLivedToken,
   runClaudeCliLogin,
-} from '../maker-host/claude-native-cli.js';
+  runClaudeCliLongLivedToken,
+} from '../maker-host/claude-native-cli.desktop.js';
+import type { ClaudeLongLivedTokenSource } from '@cindy/maker-core/claude-cli-login-status';
 import { parseClaudeOAuthUsageResponse } from '../../shared/claudeSubscriptionUsage.js';
 import { providerGroupCodexUsageFromReads } from '../provider-group/usage.js';
 import type { SubscriptionProvider } from '../../shared/subscriptionAccounts.js';
+import { AccountServiceUnreachableError, isAccountServiceUnreachable } from './accountServiceError.js';
 
 /** Preserve the old adapter's owner/revocation checks; do not adopt ~/.codex on upgrade. */
 export async function readLegacyCodexAccount(): Promise<AuthState> {
@@ -36,6 +42,43 @@ export async function loginLegacyCodexAccount(signal: AbortSignal): Promise<void
   }
 }
 
+/** Imported connections keep their original revocation checks and native login lifecycle. */
+export async function readLegacyCodexProviderAccount(providerId: string, directory: string) {
+  const { codexAccountState } = await import('../maker-host/codex-account-auth.desktop.js');
+  const state = codexAccountState(providerId);
+  // Right after a restart the connection may not be in the provider catalog yet (custom providers
+  // load once the database is ready). That says nothing about the login: report a failed read, so
+  // the snapshot retries within seconds instead of caching "requires login" and failing the
+  // interrupted task's automatic resume (2026-11-18).
+  if (state.errorReason === 'provider_unavailable') throw new Error('Codex connection is not loaded');
+  return state.authenticated ? readNativeAccount('openai', directory) : state;
+}
+
+export async function loginLegacyCodexProviderAccount(providerId: string, signal: AbortSignal): Promise<void> {
+  const { loginCodexAccount, cancelCodexAccountLogin } = await import('../maker-host/codex-account-auth.desktop.js');
+  if (signal.aborted) throw new Error('login_cancelled');
+  const cancel = () => cancelCodexAccountLogin(providerId);
+  signal.addEventListener('abort', cancel, { once: true });
+  try {
+    const result = await loginCodexAccount(providerId, () => !signal.aborted);
+    if (signal.aborted) throw new Error('login_cancelled');
+    if (!result.ok) throw new Error(result.reason ?? 'login_failed');
+  } finally {
+    signal.removeEventListener('abort', cancel);
+  }
+}
+
+// Only used to classify; the CLI's own wording never leaves this module.
+const UNREACHABLE_CLI_ERROR = /time(?:d)?\s*out|timeout|network|connect|dns|unreachable|sending request|tls|certificate|proxy|offline/i;
+
+function codexRequestError(error: unknown): Error {
+  const message = typeof (error as { message?: unknown })?.message === 'string'
+    ? (error as { message: string }).message : '';
+  return UNREACHABLE_CLI_ERROR.test(message)
+    ? new AccountServiceUnreachableError('Codex account request failed')
+    : new Error('Codex account request failed');
+}
+
 function codexProfileEnv(directory: string): Record<string, string> {
   const env = { ...cleanProcessEnv() };
   const replaced = new Set([
@@ -53,29 +96,122 @@ function codexProfileEnv(directory: string): Record<string, string> {
   return env;
 }
 
+export type NativeAccountState = AuthState & {
+  plan?: string; planTier?: string; planDisplayName?: string; planType?: string; loginExpiresAt?: string;
+  /**
+   * Claude: tasks run on a long-lived token. Identity, plan and `loginExpiresAt` then come from the
+   * ordinary login kept beside it; `storedLogin` says whether that login is still signed in.
+   */
+  longLivedToken?: { source: ClaudeLongLivedTokenSource; storedLogin?: boolean; version?: string };
+};
+
+const claudeConfigDir = (directory: string) => directory === path.join(homedir(), '.claude') ? undefined : directory;
+
+/** Run the official `claude setup-token` for this account and keep its token in the account directory. */
+export async function createNativeLongLivedToken(directory: string, signal: AbortSignal): Promise<void> {
+  const result = await runClaudeCliLongLivedToken(signal, claudeConfigDir(directory));
+  if (!result.ok) throw new Error(result.reason);
+}
+
+export async function removeNativeLongLivedToken(directory: string): Promise<void> {
+  await removeClaudeCliLongLivedToken(claudeConfigDir(directory));
+}
+
 export async function readNativeAccount(
   provider: SubscriptionProvider,
   directory: string,
-): Promise<AuthState & { plan?: string }> {
+  options?: { force?: boolean; codexCanDispatch?: () => boolean | Promise<boolean> },
+): Promise<NativeAccountState> {
   if (provider === 'anthropic') {
     const result = await refreshClaudeCliLoginStatus({
       configDir: directory === path.join(homedir(), '.claude') ? undefined : directory,
+      ...(options?.force ? { force: true, requireFresh: true } : {}),
     });
     return {
       authenticated: result.loggedIn,
       identity: result.email,
       authSource: 'oauth',
       plan: result.subscriptionType,
+      planTier: result.planTier,
+      planDisplayName: result.planDisplayName,
+      ...(result.loginExpiresAt ? { loginExpiresAt: result.loginExpiresAt } : {}),
+      ...(result.loggedIn && result.longLivedToken
+        ? {
+            longLivedToken: {
+              source: result.longLivedToken,
+              ...(result.storedLogin !== undefined ? { storedLogin: result.storedLogin } : {}),
+              ...(result.longLivedTokenVersion ? { version: result.longLivedTokenVersion } : {}),
+            },
+          }
+        : {}),
     };
   }
-  const result = (await codexAccountRpc(directory, 'account/read', { refreshToken: false })) as {
+  return parseNativeCodexAccount(await codexAccountRpc(directory, 'account/read', { refreshToken: false }, options?.codexCanDispatch));
+}
+
+/** Verify the current CLI identity without fetching quota or opening a browser. */
+export async function readExistingLogin(provider: SubscriptionProvider, directory: string) {
+  const auth = await readNativeAccount(provider, directory, { force: true });
+  const identity = auth.identity?.trim();
+  if (!auth.authenticated || !identity || identity.length > 320) return null;
+  let accountKey: string | undefined;
+  if (provider === 'openai') {
+    const tokens = await readNativeCodexTokens(directory);
+    if (!tokens.canDispatch()) return null;
+    accountKey = codexAccountDisplayKey(identity, tokens.chatgptAccountId);
+    if (!accountKey) return null;
+  }
+  return { login: { directory, identity, ...(accountKey ? { accountKey } : {}) },
+    plan: auth.planDisplayName ?? auth.planType ?? auth.plan };
+}
+
+function parseNativeCodexAccount(value: unknown): AuthState & { plan?: string; planType?: string } {
+  const result = value as {
     account?: { type?: string; email?: string; planType?: string } | null;
+    requiresOpenaiAuth?: boolean;
   };
   return {
     authenticated: result.account?.type === 'chatgpt',
     identity: result.account?.email,
     plan: result.account?.planType,
+    planType: result.account?.planType,
     authSource: 'oauth',
+    // The CLI can hide an existing ChatGPT login when its active provider owns
+    // authentication. Repeating login cannot make that provider expose the account.
+    ...(result.account === null && result.requiresOpenaiAuth === false
+      ? { errorReason: 'codex_provider_managed_auth' }
+      : {}),
+  };
+}
+
+/** The initial identity and quota can share startup while the selected credential stays current. */
+export async function readNativeCodexAccountAndRateLimits(
+  directory: string,
+  assertCurrent: () => void | Promise<void>,
+) {
+  await assertCurrent();
+  const tokens = await readNativeCodexTokens(directory);
+  const checkCredential = () => {
+    if (!tokens.canDispatch()) throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
+  };
+  const canDispatch = async () => {
+    await assertCurrent();
+    return true;
+  };
+  const [account, response] = await runCodexAccountRpc(directory, [
+    { method: 'account/read', params: { refreshToken: false } },
+    { method: 'account/rateLimits/read', params: {}, checkPrevious: previous => {
+      const auth = parseNativeCodexAccount(previous);
+      if (!auth.authenticated || !auth.identity)
+        throw new Error('PRECONDITION_FAILED: ChatGPT account changed');
+    } },
+  ], { canDispatch, checkCredential });
+  await assertCurrent();
+  checkCredential();
+  const auth = parseNativeCodexAccount(account);
+  return {
+    identity: { email: auth.identity ?? null, accountId: tokens.chatgptAccountId },
+    response: response as AccountRateLimitsResponse,
   };
 }
 
@@ -88,10 +224,16 @@ export async function readNativeAccountUsage(provider: SubscriptionProvider, dir
       claudeUsage: usage ? parseClaudeOAuthUsageResponse(usage.rateLimits, Date.now()) : null,
     };
   }
-  const rateLimits = await codexAccountRpc(directory, 'account/rateLimits/read', {});
+  const rateLimits = await codexAccountRpc(directory, 'account/rateLimits/read', {}) as {
+    rateLimits?: { planType?: unknown };
+  } | null;
   return {
     codexUsage: providerGroupCodexUsageFromReads(null, rateLimits, Date.now()),
     codexCredits: codexCredits(rateLimits),
+    // Legacy auth adapters expose identity but no plan. Preserve metadata from
+    // this same profile's quota response before the scheduler sanitizes it.
+    codexPlan: typeof rateLimits?.rateLimits?.planType === 'string'
+      ? rateLimits.rateLimits.planType.trim() || undefined : undefined,
   };
 }
 
@@ -125,6 +267,17 @@ export async function readNativeCodexTokens(directory: string, refresh = false) 
       if (codexRefreshes.get(directory) === pending) codexRefreshes.delete(directory);
     }
   }
+  const tokens = await readCodexTokenFile(directory, false);
+  if (!tokens.accessToken || tokens.chatgptAccountId === null) throw new Error('Codex account authentication bridge is unavailable');
+  return { ...tokens, accessToken: tokens.accessToken, chatgptAccountId: tokens.chatgptAccountId };
+}
+
+/** WHAM can read usage without a workspace header; the external-auth bridge requires one. */
+export function readCodexWebTokens(directory: string) {
+  return readCodexTokenFile(directory, true);
+}
+
+async function readCodexTokenFile(directory: string, webUsage: boolean) {
   const authPath = path.join(directory, 'auth.json');
   const file = await open(authPath, 'r');
   const sameFile = (a: Stats, b: Stats) =>
@@ -146,16 +299,19 @@ export async function readNativeCodexTokens(directory: string, refresh = false) 
         return false;
       }
     };
-    if (
-      !sameFile(before, after) ||
-      !canDispatch() ||
-      typeof raw.tokens?.access_token !== 'string' ||
-      typeof raw.tokens?.account_id !== 'string'
-    )
+    if (!sameFile(before, after) || !canDispatch())
+      throw new Error('Codex account authentication bridge is unavailable');
+    const hasApiKey = typeof raw.OPENAI_API_KEY === 'string' && raw.OPENAI_API_KEY.trim().length > 0;
+    if (webUsage && (raw.auth_mode === 'apikey' || (raw.auth_mode == null && hasApiKey && !raw.tokens?.access_token))) {
+      if (!hasApiKey) throw new Error('Codex account authentication bridge is unavailable');
+      return { accessToken: null, chatgptAccountId: null, canDispatch };
+    }
+    if (typeof raw.tokens?.access_token !== 'string' || !raw.tokens.access_token)
       throw new Error('Codex account authentication bridge is unavailable');
     return {
       accessToken: raw.tokens.access_token as string,
-      chatgptAccountId: raw.tokens.account_id as string,
+      chatgptAccountId: webUsage ? codexWorkspaceIdFromTokens(raw.tokens)
+        : typeof raw.tokens.account_id === 'string' ? raw.tokens.account_id as string : null,
       canDispatch,
     };
   } finally {
@@ -168,7 +324,22 @@ export function codexAccountRpc(
   directory: string,
   method: string,
   params: unknown,
+  canDispatch?: () => boolean | Promise<boolean>,
+  refreshId?: string,
 ): Promise<unknown> {
+  return runCodexAccountRpc(directory, [{ method, params }], { canDispatch, refreshId })
+    .then(([result]) => result);
+}
+
+function runCodexAccountRpc(
+  directory: string,
+  requests: ReadonlyArray<{ method: string; params: unknown; checkPrevious?: (result: unknown) => void }>,
+  { canDispatch, refreshId, checkCredential }: {
+    canDispatch?: () => boolean | Promise<boolean>;
+    refreshId?: string;
+    checkCredential?: () => void;
+  },
+): Promise<unknown[]> {
   const binary = getReadyBinaryPath('codex');
   if (!binary) return Promise.reject(new Error('Codex CLI unavailable'));
   return new Promise((resolve, reject) => {
@@ -178,18 +349,46 @@ export function codexAccountRpc(
       stdio: ['pipe', 'pipe', 'ignore'],
       windowsHide: true,
     });
+    // Codex's own model-manager log identifies each probe by process id.
+    if (refreshId) desktopMakerLogger.debug('Codex model/list probe started', { refreshId, pid: child.pid });
     let settled = false;
     let buffer = '';
-    const finish = (error?: Error, result?: unknown) => {
+    const results: unknown[] = [];
+    let expectedId: number | undefined = 1;
+    const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       child.kill();
       if (error) reject(error);
-      else resolve(result);
+      else resolve(results);
     };
-    const timer = setTimeout(() => finish(new Error('Codex account read timed out')), 15_000);
+    // A stalled read is almost always the CLI waiting on its account service (startup refreshes).
+    const startTimeout = () => setTimeout(
+      () => finish(new AccountServiceUnreachableError('Codex account read timed out')), 15_000);
+    let timer = startTimeout();
     const send = (message: unknown) => child.stdin.write(JSON.stringify(message) + '\n');
+    const dispatch = async () => {
+      try {
+        const request = requests[results.length];
+        request.checkPrevious?.(results.at(-1));
+        if (canDispatch) {
+          const allowed = canDispatch();
+          // Existing synchronous proofs and the write must stay in the same synchronous segment.
+          if (!(typeof allowed === 'boolean' ? allowed : await allowed))
+            return finish(new Error('Codex account changed before dispatch'));
+        }
+        // An asynchronous credential/source check can outlive this control connection.
+        if (!settled) {
+          // Check the file again synchronously after an asynchronous owner/source check.
+          checkCredential?.();
+          expectedId = results.length + 2;
+          send({ id: expectedId, method: request.method, params: request.params });
+        }
+      } catch {
+        finish(new Error('Codex account changed before dispatch'));
+      }
+    };
     child.stdin.on('error', () => finish(new Error('Codex account connection closed')));
     child.on('error', () => finish(new Error('Codex CLI unavailable')));
     child.on('close', () => finish(new Error('Codex account connection closed')));
@@ -206,11 +405,23 @@ export function codexAccountRpc(
         } catch {
           continue;
         }
-        if (message.error) return finish(new Error('Codex account request failed'));
+        if (message.error) return finish(codexRequestError(message.error));
+        if (expectedId === undefined || message.id !== expectedId) continue;
+        expectedId = undefined;
         if (message.id === 1) {
           send({ method: 'initialized', params: {} });
-          send({ id: 2, method, params });
-        } else if (message.id === 2) finish(undefined, message.result);
+          // Startup may await configuration/auth refresh. A reset must still use
+          // the exact credential observed before spawning this control connection.
+          void dispatch();
+        } else {
+          results.push(message.result);
+          if (results.length === requests.length) finish();
+          else {
+            clearTimeout(timer);
+            timer = startTimeout();
+            void dispatch();
+          }
+        }
       }
     });
     send({
@@ -228,11 +439,13 @@ export async function loginNativeAccount(
   provider: SubscriptionProvider,
   directory: string,
   signal: AbortSignal,
+  options?: { renew?: boolean; expectedEmail?: string },
 ): Promise<void> {
   if (provider === 'anthropic') {
     const result = await runClaudeCliLogin(
       signal,
       directory === path.join(homedir(), '.claude') ? undefined : directory,
+      options,
     );
     if (!result.ok) throw new Error(result.reason);
     return;
@@ -266,6 +479,19 @@ export async function loginNativeAccount(
       else resolve();
     });
   });
-  if (!(await readNativeAccount(provider, directory)).authenticated)
-    throw new Error('not_a_subscription');
+  let state: Awaited<ReturnType<typeof readNativeAccount>>;
+  try {
+    state = await readNativeAccount(provider, directory);
+  } catch (error) {
+    // The CLI finished its browser login; only this follow-up read could not reach the service.
+    // The caller confirms the sign-in itself and reports the connection problem if it persists.
+    if (isAccountServiceUnreachable(error)) return;
+    throw error;
+  }
+  if (!state.authenticated)
+    throw new Error(
+      state.errorReason === 'codex_provider_managed_auth'
+        ? 'codex_provider_managed_auth'
+        : 'not_a_subscription',
+    );
 }

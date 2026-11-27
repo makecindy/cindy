@@ -41,10 +41,15 @@ describe("cloud companion device-link contract", () => {
         { deviceId: "" },
         "x",
         { deviceId: "b" },
+        // Version 4 homes list a computer too old for a V2 teammate as not selectable.
+        { deviceId: "c", name: "C", online: true, outdated: true },
+        { deviceId: "d", online: true, outdated: "yes" },
       ]),
     ).toEqual([
       { deviceId: "a", name: "A", online: true },
       { deviceId: "b", name: "", online: false },
+      { deviceId: "c", name: "C", online: true, outdated: true },
+      { deviceId: "d", name: "", online: true },
     ]);
     expect(parseCompanionCloudRemoteTargets({})).toEqual([]);
     expect(
@@ -64,5 +69,18 @@ describe("cloud companion device-link contract", () => {
       ok: false,
       code: "FAILED",
     });
+  });
+
+  // #12112, unit: desktop and phone parse a hand-over refusal before they can identify the skill.
+  it("keeps only valid skill details on an incompatible target's reply", () => {
+    const refusal = { ok: false, code: "SKILL_TARGET_OUTDATED" };
+    const oversizedSkill = { slug: "research-paper-writing", bodyBytes: 71_560 };
+    expect(parseCompanionCloudRemoteActionResult({ ...refusal, oversizedSkill: { ...oversizedSkill, content: "private" } }))
+      .toEqual({ ...refusal, oversizedSkill });
+    expect(parseCompanionCloudRemoteActionResult(refusal)).toEqual(refusal);
+    for (const invalid of [{ ...oversizedSkill, bodyBytes: -1 }, { ...oversizedSkill, slug: "../bad" }]) {
+      expect(parseCompanionCloudRemoteActionResult({ ...refusal, oversizedSkill: invalid })).toEqual(refusal);
+    }
+    expect(parseCompanionCloudRemoteActionResult({ ok: false, code: "BUSY", oversizedSkill })).toEqual({ ok: false, code: "BUSY" });
   });
 });

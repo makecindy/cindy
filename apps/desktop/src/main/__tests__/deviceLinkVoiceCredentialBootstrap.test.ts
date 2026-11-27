@@ -21,6 +21,7 @@ import {
   DL_SUBSCRIBE_CHANNEL,
   isProviderSharePeer,
   isSharedTaskPeer,
+  parseProviderSharePeer,
   parseSharedTaskPeer,
   PROTOCOL_VERSION,
   providerShareGuestPeer,
@@ -28,17 +29,21 @@ import {
   sharedTaskGuestPeer,
   sharedTaskHostPeer,
   sharedTaskTopics,
+  shortDeviceRef,
   type Envelope,
   type InvokePayload,
   type InvokeResultPayload,
   type LinkOpenPayload,
   type WsLike,
 } from '@cindy/device-link';
+import * as deviceLink from '@cindy/device-link';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc';
 import { requiresSessionLink } from '../device-link/linkRecovery';
 import { createSubscriptionReplayScheduler } from '../device-link/subscriptionReplayScheduler';
+import { createResponsivenessTracker, isDeviceResponsivenessProbeEligible } from '../device-link/responsivenessTracker';
+import { BREAKER_FAILURE_THRESHOLD, BREAKER_PROBE_BACKOFF_MAX_MS } from '@cindy/maker-shared/device-responsiveness';
 import type * as SubscriptionRegistry from '../device-link/subscriptions';
 
 const mainRoot = resolve(__dirname, '..');
@@ -84,11 +89,196 @@ const inboundAcceptedRegistration = new Script(ts.transpileModule(inboundAccepte
 }).outputText);
 
 function productionFunction(source: ts.SourceFile, name: string): string {
-  const declaration = source.statements.find((node): node is ts.FunctionDeclaration =>
-    ts.isFunctionDeclaration(node) && node.name?.text === name);
+  let declaration: ts.FunctionDeclaration | undefined;
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === name) declaration = node;
+    else ts.forEachChild(node, visit);
+  };
+  visit(source);
   if (!declaration) throw new Error(`Missing production function: ${name}`);
   return declaration.getText(source).replace(/^export /, '');
 }
+
+// Shared-provider recovery uses the same real bootstrap callbacks as the replay
+// cases below. Guard tier: importing index.ts starts the Electron singleton.
+// The tracker unit tests set presence manually and cannot catch missing wiring.
+// Minimum regressions: three timeouts followed by route-offline, with or without
+// a fresh handshake. A scoped host has no ordinary device-presence online edge;
+// waiting for acceptance before allowing the probe that opens the link deadlocks.
+function productionExpression(predicate: (node: ts.Node) => boolean): Script {
+  const matches: ts.Node[] = [];
+  const visit = (node: ts.Node): void => {
+    if (predicate(node)) matches.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(deviceLinkSource);
+  if (matches.length !== 1) throw new Error(`Expected one bootstrap expression, found ${matches.length}`);
+  return new Script(ts.transpileModule(matches[0].getText(deviceLinkSource), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText);
+}
+function registrationNamed(node: ts.Node, receiver: string, name: string): boolean {
+  return ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+    && node.expression.expression.getText(deviceLinkSource) === receiver && node.expression.name.text === name;
+}
+const routeOfflineRegistration = productionExpression(node => registrationNamed(node, 'client', 'onPeerRouteStateChanged'));
+const scopedStatusRegistration = productionExpression(node => registrationNamed(node, 'routedClient', 'onScopedConnectionStatus'));
+const probeEligibility = productionExpression(node => ts.isArrowFunction(node)
+  && ts.isPropertyAssignment(node.parent) && node.parent.name.getText(deviceLinkSource) === 'isProbeEligible');
+
+function providerRecoveryHarness() {
+  const peer = providerShareHostPeer('recovery-share', 'recovery-host');
+  const other = providerShareHostPeer('other-share', 'other-host');
+  const retained = providerShareHostPeer('retained-share', 'retained-host');
+  const ordinary = 'healthy-device';
+  const presence = new Map<string, boolean>();
+  const online = new Map<string, boolean>();
+  const revoked = new Set<string>();
+  const disabled: string[] = [];
+  let owner = true;
+  let relayOnline = true;
+  let now = 0;
+  let accepted!: (peer: string, streamId: string) => void;
+  let routeOffline!: (change: { state: string; deviceId: string; connectionEpoch: number; linkGeneration: number }) => void;
+  let scopedStatus!: (connection: unknown, status: string) => void;
+  const connection = { getStatus: () => relayOnline ? 'online' : 'disconnected', getConnectionEpoch: () => 3, getPeerLinkGeneration: () => 4 };
+  const otherConnection = { getStatus: () => 'online' };
+  const connectionFor = (id: string) => id === peer || id === retained ? connection : otherConnection;
+  const client = { connectionFor, hasOfflineDirectPath: () => false,
+    onPeerStreamAccepted: (cb: typeof accepted) => { accepted = cb; },
+    onPeerRouteStateChanged: (cb: typeof routeOffline) => { routeOffline = cb; } };
+  const context = createContext({
+    client, routedClient: { connectionFor, onScopedConnectionStatus: (cb: typeof scopedStatus) => { scopedStatus = cb; } },
+    presenceAvailableByDevice: presence, presenceOnlineByDevice: online,
+    isProviderSharePeer, isScopedPeer: (id: string) => isProviderSharePeer(id) || isSharedTaskPeer(id),
+    parseProviderSharePeer, parseSharedTaskPeer, shortDeviceRef, isDeviceResponsivenessProbeEligible,
+    revokedByRemote: revoked, readDeviceLinkSettings: () => ({ disabledControlDeviceIds: disabled }),
+    arbiter: { isOwner: () => owner }, hasOfflineDirectPath: (id: string) => id === retained,
+    invalidatePluginOauth: () => {}, handleControllerOffline: () => {}, remoteControlConsent: { peerGone: () => {} },
+    broadcast: () => {}, DEVICE_LINK_PUSH, sharedHostStreams: new Map(), sharedHostSourceEpoch: 0,
+    replayActiveSubscriptions: () => {}, deactivateAllControllers: () => {}, transportTimeoutReopen: { disposeWhere: () => {} },
+    flushMakerEventBatchesOnReconnect: () => {}, snapshotSubscriptions: () => [], flushRemoteInvokeResultOutboxOnReconnect: () => {},
+  });
+  routeOfflineRegistration.runInContext(context);
+  acceptedRegistration.runInContext(context);
+  scopedStatusRegistration.runInContext(context);
+  const eligible = probeEligibility.runInContext(context) as (id: string) => boolean;
+  let finish!: () => void;
+  let fail!: (error: Error) => void;
+  const probe = vi.fn(() => new Promise<void>((resolve, reject) => { finish = resolve; fail = reject; }));
+  const tracker = createResponsivenessTracker({ now: () => now, isProbeEligible: eligible,
+    probeInvoke: probe, onUnresponsiveChanged: () => {} });
+  return { peer, other, retained, ordinary, presence, online, revoked, disabled, tracker, probe, eligible,
+    accept: () => accepted(peer, 'fresh-stream'), connection, client, scopedStatus,
+    setOwner: (value: boolean) => { owner = value; }, finish: () => finish(), fail: () => fail(new DeviceLinkError('INVOKE_TIMEOUT', 'still unreachable')),
+    setRelayOnline: (value: boolean) => { relayOnline = value; },
+    offline: (connectionEpoch = 3, linkGeneration = 4) => routeOffline({ state: 'offline', deviceId: peer, connectionEpoch, linkGeneration }),
+    advance: () => { now += BREAKER_PROBE_BACKOFF_MAX_MS; },
+    trip: async () => {
+      for (let i = 0; i < BREAKER_FAILURE_THRESHOLD; i++) {
+        await expect(tracker.guardInvoke(peer, 'maker:remote-agent:v1', async () => {
+          throw new DeviceLinkError('INVOKE_TIMEOUT', 'transport timeout');
+        })).rejects.toMatchObject({ code: 'INVOKE_TIMEOUT' });
+        now += 1000;
+      }
+      expect(tracker.isUnresponsive(peer)).toBe(true);
+    },
+  };
+}
+
+describe('provider-share recovery bootstrap', () => {
+  it('resumes one bounded live probe after fresh acceptance, and closes only on its response', async () => {
+    const h = providerRecoveryHarness();
+    h.presence.set(h.other, false); h.online.set(h.other, false);
+    await h.trip(); h.offline();
+    h.tracker.probeTick(); expect(h.probe).not.toHaveBeenCalled();
+    h.accept();
+    expect(h.tracker.isUnresponsive(h.peer)).toBe(true);
+    h.advance();
+    h.tracker.probeTick(); h.accept(); h.tracker.probeTick();
+    expect(h.probe).toHaveBeenCalledExactlyOnceWith(h.peer, 'maker:remote-agent:v1', [{ op: 'caps' }]);
+    await expect(h.tracker.guardInvoke(h.peer, 'maker:remote-agent:v1', async () => 'must not run')).rejects.toMatchObject({ code: 'DEVICE_UNRESPONSIVE' });
+    await expect(h.tracker.guardInvoke(h.ordinary, 'maker:remote-agent:v1', async () => 'healthy')).resolves.toBe('healthy');
+    expect(h.presence.get(h.other)).toBe(false); expect(h.online.get(h.other)).toBe(false);
+    h.fail(); await Promise.resolve(); await Promise.resolve();
+    expect(h.tracker.isUnresponsive(h.peer)).toBe(true);
+    h.tracker.probeTick(); expect(h.probe).toHaveBeenCalledTimes(1);
+    h.advance(); h.tracker.probeTick(); expect(h.probe).toHaveBeenCalledTimes(2);
+    h.finish(); await Promise.resolve(); await Promise.resolve();
+    expect(h.tracker.isUnresponsive(h.peer)).toBe(false);
+  });
+
+  it('probes a route-offline shared host without waiting for a new handshake or relay generation', async () => {
+    const h = providerRecoveryHarness();
+    await h.trip(); h.offline();
+    h.tracker.probeTick(); expect(h.probe).not.toHaveBeenCalled();
+    h.advance(); h.tracker.probeTick(); h.tracker.probeTick();
+    expect(h.probe).toHaveBeenCalledExactlyOnceWith(h.peer, 'maker:remote-agent:v1', [{ op: 'caps' }]);
+    expect(h.presence.get(h.peer)).toBe(false);
+    expect(h.tracker.isUnresponsive(h.peer)).toBe(true);
+    await expect(h.tracker.guardInvoke(h.peer, 'maker:remote-agent:v1', async () => 'must not run')).rejects.toMatchObject({ code: 'DEVICE_UNRESPONSIVE' });
+    await expect(h.tracker.guardInvoke(h.ordinary, 'maker:remote-agent:v1', async () => 'healthy')).resolves.toBe('healthy');
+    h.fail(); await Promise.resolve(); await Promise.resolve();
+    h.tracker.probeTick(); expect(h.probe).toHaveBeenCalledTimes(1);
+    h.advance(); h.tracker.probeTick(); expect(h.probe).toHaveBeenCalledTimes(2);
+    h.accept();
+    expect(h.tracker.isUnresponsive(h.peer)).toBe(true);
+    h.finish(); await Promise.resolve();
+    expect(h.tracker.isUnresponsive(h.peer)).toBe(false);
+  });
+
+  it('keeps explicit offline presence gates for ordinary peers and share guests', () => {
+    const h = providerRecoveryHarness();
+    for (const peer of [h.ordinary, providerShareGuestPeer('recovery-share', 'member', 'guest-device'), sharedTaskHostPeer('task', 'host')]) {
+      h.presence.set(peer, false);
+      expect(h.eligible(peer)).toBe(false);
+    }
+  });
+
+  it.each(['revoked', 'disabled', 'not owner', 'relay offline'])('offline recovery preserves the %s probe boundary', async gate => {
+    const h = providerRecoveryHarness();
+    await h.trip(); h.offline(); h.advance();
+    if (gate === 'revoked') h.revoked.add(h.peer);
+    if (gate === 'disabled') h.disabled.push(h.peer);
+    if (gate === 'not owner') h.setOwner(false);
+    if (gate === 'relay offline') h.setRelayOnline(false);
+    h.tracker.probeTick();
+    expect(h.probe).not.toHaveBeenCalled();
+    h.accept(); h.tracker.probeTick();
+    expect(h.probe).not.toHaveBeenCalled();
+    expect(h.tracker.isUnresponsive(h.peer)).toBe(true);
+    h.revoked.clear(); h.disabled.length = 0; h.setOwner(true); h.setRelayOnline(true);
+    h.tracker.probeTick(); expect(h.probe).toHaveBeenCalledTimes(1);
+    h.finish(); await Promise.resolve();
+    expect(h.tracker.isUnresponsive(h.peer)).toBe(false);
+  });
+
+  it('invalidates only stale presence on the ended scoped carrier, preserving direct and unrelated paths', async () => {
+    const h = providerRecoveryHarness();
+    await h.trip();
+    for (const id of [h.peer, h.other, h.retained]) { h.presence.set(id, false); h.online.set(id, false); }
+    h.presence.set(h.ordinary, true); h.online.set(h.ordinary, true);
+    h.scopedStatus(h.client, 'disconnected');
+    expect(h.presence.get(h.peer)).toBe(false);
+    h.scopedStatus(h.connection, 'disconnected');
+    expect(h.presence.has(h.peer)).toBe(false); expect(h.online.has(h.peer)).toBe(false);
+    for (const id of [h.other, h.retained]) { expect(h.presence.get(id)).toBe(false); expect(h.online.get(id)).toBe(false); }
+    expect(h.presence.get(h.ordinary)).toBe(true);
+    expect(h.tracker.isUnresponsive(h.peer)).toBe(true);
+    h.advance(); h.tracker.probeTick(); expect(h.probe).toHaveBeenCalledTimes(1);
+    h.finish(); await Promise.resolve();
+    expect(h.tracker.isUnresponsive(h.peer)).toBe(false);
+  });
+
+  it('does not let an old carrier or link generation reapply offline after recovery', () => {
+    const h = providerRecoveryHarness();
+    h.offline(); h.accept();
+    h.offline(2, 4); h.offline(3, 3);
+    expect(h.presence.has(h.peer)).toBe(false); expect(h.online.has(h.peer)).toBe(false);
+    h.offline(3, 4);
+    expect(h.presence.get(h.peer)).toBe(false); expect(h.online.get(h.peer)).toBe(false);
+  });
+});
 const dispatchSource = ts.createSourceFile('dispatch.ts',
   readFileSync(resolve(mainRoot, 'device-link/dispatch.ts'), 'utf8'), ts.ScriptTarget.Latest, true);
 const inboundDispatch = new Script(ts.transpileModule([
@@ -101,11 +291,16 @@ const remoteSubscribeEntry = new Script(ts.transpileModule(
   { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
 ).outputText);
 // Each simulated desktop needs its own module-level registry. Compile the actual
-// dependency-free module once, then instantiate separate exports; no resetModules.
+// module once, then instantiate separate exports; no resetModules. Its only runtime
+// import is the shared device-link package, handed to each instance as-is.
 const subscriptionRegistry = new Script(ts.transpileModule(
   readFileSync(resolve(mainRoot, 'device-link/subscriptions.ts'), 'utf8'),
   { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } },
 ).outputText);
+function subscriptionRegistryRequire(id: string): unknown {
+  if (id === '@cindy/device-link') return deviceLink;
+  throw new Error(`subscriptions.ts sandbox: unexpected runtime import ${id}`);
+}
 
 /** FIFO relay adapter only: production clients perform handshake, ACK and recovery. */
 class RecoveryRelay {
@@ -174,7 +369,7 @@ class RecoverySocket implements WsLike {
 
 function recoveryDesktop(relay: RecoveryRelay, id: string) {
   const exports = {} as typeof SubscriptionRegistry;
-  subscriptionRegistry.runInNewContext({ exports });
+  subscriptionRegistry.runInNewContext({ exports, require: subscriptionRegistryRequire });
   const registry = exports;
   const diagnostic = { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const client = new DeviceLinkClient({
@@ -185,7 +380,7 @@ function recoveryDesktop(relay: RecoveryRelay, id: string) {
   });
   const noOp = () => {};
   const context = createContext({
-    client, subscriptions: registry, isProviderSharePeer, isSharedTaskPeer,
+    client, ports: {}, subscriptions: registry, isProviderSharePeer, isSharedTaskPeer,
     cancelLinkAcceptRetry: noOp, readDeviceLinkSettings: () => ({ remoteControlEnabled: true }),
     isControllerRevoked: () => false, resolveControllerName: (_peer: string, name: string) => name,
     // This recovery-only harness fixes permissions to allowed; bind the new
@@ -201,7 +396,8 @@ function recoveryDesktop(relay: RecoveryRelay, id: string) {
     scheduleLinkAcceptRetry: () => { throw new Error('Unexpected failed link accept'); },
     onOrdinaryPeerLinkAccepted: undefined,
     setOrdinaryPeerLinkAcceptedListener: (listener: (peer: string) => void) => { context.onOrdinaryPeerLinkAccepted = listener; },
-    log: diagnostic, shortId: (peer: string) => peer.slice(0, 8),
+    // Extracted production callbacks retain their real diagnostic dependency.
+    log: diagnostic, shortId: shortDeviceRef, shortDeviceRef,
   });
   const accept = inboundDispatch.runInContext(context) as
     (client: DeviceLinkClient, src: string, requestId: string, payload: LinkOpenPayload) => void;
@@ -262,7 +458,7 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     // presence(wasAvailable=undefined)同样必须触发重放,接续 DEVICE_OFFLINE
     // 结束的恢复轮次(#1520 review P1)。
     expect(deviceLinkHost).toContain('if (available && wasAvailable !== true)');
-    expect(deviceLinkHost).toContain('replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);');
+    expect(deviceLinkHost).toContain('replayActiveSubscriptions(`presence-online:${shortDeviceRef(snap.deviceId)}`, snap.deviceId);');
     expect(deviceLinkHost).toContain('createSubscriptionReplayScheduler({');
     // Preserve unknown after reconnect; only explicit unavailability stops retries.
     expect(deviceLinkHost).toContain(
@@ -292,20 +488,31 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     // 验证恢复事件是否交给该 peer 的调度器。不是双机故障恢复的端到端验收。
     const callbacks: Array<(peer: string, streamId: string) => void> = [];
     const replayActiveSubscriptions = vi.fn();
+    const broadcast = vi.fn();
     const sharedHostStreams = new Map<string, { streamId: string; epoch: number }>();
     if (sameStream) sharedHostStreams.set(peer, { streamId: 'accepted-stream', epoch: 1 });
     acceptedRegistration.runInNewContext({
       client: { onPeerStreamAccepted: (callback: typeof callbacks[number]) => callbacks.push(callback) },
       isProviderSharePeer,
       parseSharedTaskPeer,
+      shortDeviceRef,
       replayActiveSubscriptions,
       sharedHostStreams,
       sharedHostSourceEpoch: 1,
+      presenceOnlineByDevice: new Map(),
+      presenceAvailableByDevice: new Map(),
+      broadcast, DEVICE_LINK_PUSH,
     });
     expect(callbacks).toHaveLength(1);
     expect(replayActiveSubscriptions).not.toHaveBeenCalled();
 
     callbacks[0](peer, 'accepted-stream');
+    // #11120: even the same stream can have a gap with a tokenless completion.
+    // Run the actual acceptance callback and verify notification precedes replay.
+    if (parseSharedTaskPeer(peer)?.role === 'host') {
+      expect(broadcast).toHaveBeenCalledWith(DEVICE_LINK_PUSH.PEER_LINK_REOPENED, { deviceId: peer });
+      expect(broadcast.mock.invocationCallOrder[0]).toBeLessThan(replayActiveSubscriptions.mock.invocationCallOrder[0]);
+    } else expect(broadcast).not.toHaveBeenCalled();
 
     // Exact target matters: losing the peer argument would replay healthy peers.
     // Ordinary/guest peers and an unchanged shared-host stream must still replay
@@ -508,7 +715,9 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
     const dispatch = readFileSync(resolve(mainRoot, 'device-link/dispatch.ts'), 'utf8');
 
     expect(dispatch).toContain('DL_VOICE_DICTIONARY_LEARNING_CHANNEL');
-    expect(dispatch).toContain("import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';");
+    const desktop = readFileSync(resolve(mainRoot, 'device-link/dispatch.desktop.ts'), 'utf8');
+    expect(desktop).toContain("import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';");
+    expect(desktop).toContain('adviseAndRecordVoiceInputDictionaryLearning: (...args) => adviseAndRecordVoiceInputDictionaryLearning(...args)');
     expect(dispatch).toContain('if (payload.channel === DL_VOICE_DICTIONARY_LEARNING_CHANNEL)');
     expect(dispatch).toContain('handleMobileVoiceDictionaryLearning(src, (payload.args ?? [])[0])');
   });

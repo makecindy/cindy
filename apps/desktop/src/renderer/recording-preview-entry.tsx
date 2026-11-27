@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import '@fontsource-variable/inter';
-import 'harmonyos-sans-sc-webfont-splitted';
+import './styles/cjk-webfont.css';
 import i18n from '@/i18n';
 import './themes/colors';
 import './styles/globals.css';

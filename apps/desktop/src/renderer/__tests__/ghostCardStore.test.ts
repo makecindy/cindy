@@ -14,6 +14,7 @@ import {
   getGhostCardEntry,
   getGhostCardSnapshot,
   ingestCardPush,
+  retainLocalCardSession,
   subscribeGhostCards,
 } from '@/cindy-brain/ghostCardStore';
 
@@ -51,6 +52,83 @@ const push = (callId: string, over: Partial<Parameters<typeof ingestCardPush>[0]
 });
 
 describe('ghostCardStore', () => {
+  // Unit: the 513th saved card crosses the budget. Finished animations and cards
+  // from callers without a session ID must be recoverable by call ID alone.
+  it.each([
+    { sessionId: 'old', animatedHtml: '<b>live</b>', state: 'done' as const },
+    { sessionId: 'old', animatedHtml: '<b>live</b>', state: null },
+    { sessionId: null },
+  ])(
+    'reclaims finished historical pushes %o', async (extra) => {
+      mockApi(async () => ({ card: { ghostId: 'g1', html: '<p>x</p>', height: 240 } }));
+      for (let i = 0; i <= 512; i++) ingestCardPush(push(String(i), extra));
+      await vi.waitFor(() => expect(getGhostCardEntry('0')).toBeUndefined());
+      ensureCard('0', 'reopened');
+      await vi.waitFor(() => expect(getGhostCardEntry('0')).toMatchObject({ status: 'ready', html: '<p>x</p>' }));
+    },
+  );
+
+  // Unit: at the first over-budget entry a fork can still reference the source card,
+  // including when its push races the fork's first history lookup.
+  it.each([true, false])('protects a fork reference across a racing push (%s)', async racing => {
+    const saved = { ghostId: 'g1', html: '<p>x</p>', height: 240 };
+    mockApi(async () => ({ card: saved }));
+    const closeSource = retainLocalCardSession('source');
+    const closeFork = retainLocalCardSession('fork');
+    if (racing) ensureCard('shared', 'fork');
+    ingestCardPush(push('shared', { sessionId: racing ? null : 'source' }));
+    if (!racing) ensureCard('shared', 'fork');
+    closeSource();
+    for (let i = 0; i < 512; i++) ingestCardPush(push(String(i), { sessionId: 'fork' }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(getGhostCardEntry('shared')?.status).toBe('ready');
+    closeFork();
+    await vi.waitFor(() => expect(getGhostCardEntry('shared')).toBeUndefined());
+  });
+
+  // Unit: an idle window must retry an unsaved card after persistence recovers.
+  it('retries the history check without another push or view change', async () => {
+    vi.useFakeTimers();
+    try {
+      let persisted = false;
+      mockApi(async () => ({ card: persisted ? { ghostId: 'g1', html: '<p>x</p>', height: 240 } : null }));
+      retainLocalCardSession('open');
+      ingestCardPush(push('retry', { sessionId: 'closed' }));
+      for (let i = 0; i < 512; i++) ingestCardPush(push(String(i), { sessionId: 'open' }));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getGhostCardEntry('retry')?.status).toBe('ready');
+      persisted = true;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(getGhostCardEntry('retry')).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Unit: two consumers can share an active task. Crossing the 512-card limit by
+  // one must preserve both their history and a push whose database write failed.
+  it('keeps the last visible view and restores evicted history after it closes', async () => {
+    const rows = Array.from({ length: 512 }, (_, i) => ({
+      callId: 'history-' + i, ghostId: 'g1', html: '<p>saved</p>', height: 80,
+    }));
+    const list = vi.fn(async () => ({ cards: rows }));
+    mockApi(async () => ({ card: null }), list);
+    ingestCardPush(push('unsaved', { sessionId: 'background', turnCard: true }));
+    const closeTask = retainLocalCardSession('task');
+    const closePreview = retainLocalCardSession('task');
+    await vi.waitFor(() => expect(getGhostCardEntry('history-0')?.status).toBe('ready'));
+    closeTask();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(getGhostCardEntry('history-0')?.status).toBe('ready');
+    closePreview();
+    await vi.waitFor(() => expect(getGhostCardEntry('history-0')).toBeUndefined());
+    expect(getGhostCardEntry('unsaved')?.status).toBe('ready');
+    const closeAgain = retainLocalCardSession('task');
+    await vi.waitFor(() => expect(getGhostCardEntry('history-0')?.status).toBe('ready'));
+    expect(list).toHaveBeenCalledTimes(2);
+    closeAgain();
+  });
+
   it('preserves the logical identity of an in-place plugin on its live card', () => {
     ingestCardPush(push('org', { ghostId: 'helper', logicalGhostId: '_ns__acme__helper', sessionId: 'session-a' }));
     expect(getGhostCardSnapshot().liveCards[0]).toMatchObject({
@@ -204,8 +282,9 @@ describe('PR popover card identity', () => {
     ingestCardPush(push('mine', { sessionId: 'task-a', html }));
     ingestCardPush(push('foreign', { sessionId: 'task-b', html }));
     ingestCardPush(push('other-pr', { sessionId: 'task-a', html: html.replace('#42', '#43') }));
-    expect(findSessionPrCard(getGhostCardSnapshot(), 'task-a', 'github:github.com/octo/repo#42')?.callId).toBe('mine');
-    expect(findSessionPrCard(getGhostCardSnapshot(), 'task-a', 'github:github.com/octo/repo#42')?.settingsLabel).toBe('PR 设置');
+    const mine = findSessionPrCard(getGhostCardSnapshot(), 'task-a', 'github:github.com/octo/repo#42');
+    expect(mine?.callId).toBe('mine');
+    expect(projectPrCard(mine!.html, 'Following').settingsLabel).toBe('PR 设置');
     ingestCardPush(push('mine', { html: html.replace('Following', 'Stopped') }));
     expect(findSessionPrCard(getGhostCardSnapshot(), 'task-a', 'github:github.com/octo/repo#42')?.html).toContain('Stopped');
     expect(findSessionPrCard(getGhostCardSnapshot(), 'task-c', 'github:github.com/octo/repo#42')).toBeNull();
@@ -229,15 +308,17 @@ describe('PR popover card identity', () => {
 describe('PR popover presentation', () => {
   it('separates the existing controls from the duplicate card header and CI', async () => {
     const { default: cards } = await import('../../../scripts/fixtures/pr-popover/cards.json');
-    const following = projectPrCard(cards['on-summary-task']);
+    const following = projectPrCard(cards['on-summary-task'], 'Following');
     const footer = document.createElement('div');
     footer.innerHTML = following.summaryHtml!;
     expect(footer.querySelector('[data-ghost-action="pr:stop"]')).not.toBeNull();
-    expect(footer.querySelector('[data-ghost-live-label]')).not.toBeNull();
+    const live = footer.querySelector('[data-ghost-live-label="Following"]');
+    expect(live?.textContent).toBe('Following');
+    expect(live?.querySelector('[data-ghost-live]')).not.toBeNull();
     expect(footer.querySelector('[data-ghost-pr-status]')).toBeNull();
     expect(footer.textContent).not.toContain('build(mobile)');
     expect(following.settingsHtml).toBeNull();
-    const settings = projectPrCard(cards['off-settings-custom']);
+    const settings = projectPrCard(cards['off-settings-custom'], 'Following');
     const panel = document.createElement('div');
     panel.innerHTML = settings.settingsHtml!;
     expect(settings.settingsLabel).toBe('PR 设置');
@@ -247,8 +328,21 @@ describe('PR popover presentation', () => {
     expect(settings.summaryHtml).not.toContain('prset:modelPick');
   });
   it('keeps a pending action visible even when the plugin temporarily removes buttons', () => {
-    const pending = projectPrCard('<div data-ghost-pr-open-only="octo/repo#42" style="margin-left:auto">正在开启跟进…</div>');
+    const pending = projectPrCard('<div data-ghost-pr-open-only="octo/repo#42" style="margin-left:auto">正在开启跟进…</div>', 'Following');
     expect(pending.summaryHtml).toContain('正在开启跟进…');
     expect(pending.settingsHtml).toBeNull();
+  });
+  // A PR followed by another task used to leave the popover without any follow state,
+  // which read as a missing feature. Its card has no open-only controls, so the cases
+  // above never reached it. Unit tier, sanitized plugin snapshot as input.
+  it('shows the state and task link of a PR followed by another task', async () => {
+    const { default: cards } = await import('../../../scripts/fixtures/pr-popover/cards.json');
+    const reference = projectPrCard(cards['reference-task'], 'Following');
+    const row = document.createElement('div');
+    row.innerHTML = reference.summaryHtml!;
+    expect(row.querySelector('.pr-summary-actions')?.textContent).toBe('其他任务正在跟进打开跟进任务 ↗');
+    expect(row.querySelector('[data-ghost-action="pr:open-task"]')?.getAttribute('data-ghost-session-link'))
+      .toBe('cindy://session/follow-task');
+    expect(reference.settingsLabel).toBeNull();
   });
 });

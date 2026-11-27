@@ -250,7 +250,7 @@ vi.mock('electron', () => ({
 vi.mock('../../logger.js', () => ({
   createLogger: () => ({ warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() }),
 }));
-vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => h.ownerScope }));
+vi.mock('../../appSessionState.js', () => ({ getDataOwnerLifetime: () => 0, activeOwnerScopeKey: () => h.ownerScope }));
 vi.mock('../../localDb/client/current.js', () => ({
   getDbClient: () => ({
     drizzle: {
@@ -281,7 +281,7 @@ vi.mock('../promptPrediction.js', () => ({
 vi.mock('../../maker-host/index.js', () => ({
   getMaker: vi.fn(() => ({})),
 }));
-vi.mock('../../messagePersistBroadcaster.js', () => ({
+vi.mock('../../messagePersistBroadcaster.desktop.js', () => ({
   drainPersistQueue: h.drainPersistQueue,
 }));
 vi.mock('../../localDb/latestMessageText.js', () => ({

@@ -1,5 +1,10 @@
 import type { ProviderView } from '@cindy/model-providers';
-import { describe, expect, it } from 'vitest';
+import { codexAccountDisplayKey } from '../../maker-host/codex-auth-identity';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { remoteProviderDisableKey } from '@cindy/model-providers';
+const disabled = vi.hoisted(() => ({ providers: {} as Record<string, boolean> }));
+vi.mock('../../maker-host/model-disable-store.js', () => ({ readModelDisableOverrides: () => ({ disabledProviders: disabled.providers }) }));
+beforeEach(() => { disabled.providers = {}; });
 
 import {
   kimiSource,
@@ -9,15 +14,21 @@ import {
   dayKeysEndingAt,
   distinctRemoteSubscriptions,
   paygSource,
-  planLabel,
+  pluginEngineSource,
   type MenubarCollectDeps,
   modelDisplayNames,
   opencodeGoSource,
   usageScope,
 } from '../collect';
-import { retainRemoteSubscriptions, REMOTE_RETAIN_MS, type RemoteSeen } from '../remoteSubscriptions';
-import { topModels, type MenubarSubscriptionInput } from '../snapshot';
+import { readRemoteSubscriptions, retainRemoteSubscriptions, REMOTE_RETAIN_MS, type RemoteSeen, type RemoteSubscriptionDeps } from '../remoteSubscriptions';
+import { buildMenubarView, topModels, type MenubarSubscriptionInput } from '../snapshot';
+import { ANTIGRAVITY_LOGO, MENUBAR_HARNESS_LOGOS, monogramLogo } from '../logos';
+import { buildMenubarUiStrings, createMenubarTranslate } from '../strings';
+import { mainStringKeysUnder, rawMainString } from '../../i18n.desktop';
+import { DEFAULT_MENUBAR_SETTINGS } from '../../../shared/menubarQuota';
+import type { ProviderAccountUsageResult, ZhipuCodingPlanQuotaSnapshot } from '../../../shared/providerAccountUsage';
 import type { UsageHistoryPayload, UsageHistoryTask } from '../../usage/usageHistory';
+import type { SubscriptionPoolView } from '../../../shared/subscriptionAccounts';
 
 const NOW = Date.UTC(2026, 9, 11, 3, 0, 0);
 const nowSec = NOW / 1000;
@@ -72,7 +83,7 @@ describe('source mapping', () => {
     const source = claudeSource(
       provider({ id: 'anthropic' }),
       {
-        subscriptionType: 'max',
+        subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra',
         fiveHour: { utilization: 10, resetsAt: nowSec + 3600 },
         sevenDay: { utilization: 30, resetsAt: nowSec + 86_400 },
         scoped: [{ modelDisplayName: 'Fable', utilization: 50, resetsAt: nowSec + 86_400 }],
@@ -80,6 +91,7 @@ describe('source mapping', () => {
       NOW,
     );
     expect(source.account).toBeNull();
+    expect(source.plan).toBe('Ultra');
     expect(source.windows.map((w) => [w.kind, w.label ?? null, w.usedPercent])).toEqual([
       ['session', null, 10],
       ['week', null, 30],
@@ -94,12 +106,6 @@ describe('source mapping', () => {
       kind: 'payg',
       billing: 'api',
     });
-  });
-
-  it('formats plan labels', () => {
-    expect(planLabel('max_20x')).toBe('Max 20x');
-    expect(planLabel('SuperGrok Heavy')).toBe('SuperGrok Heavy');
-    expect(planLabel('  ')).toBeNull();
   });
 
   it('lists calendar days across a month boundary', () => {
@@ -154,6 +160,145 @@ describe('collectMenubarInputs', () => {
     };
   }
 
+  const glmQuota: ZhipuCodingPlanQuotaSnapshot = {
+    kind: 'zhipu-coding-plan-quota',
+    noPlan: false,
+    level: null,
+    fiveHour: { usedPercent: 20, resetsAt: null },
+    weekly: { usedPercent: 35, resetsAt: NOW + 2 * 86_400_000 },
+    fetchedAt: NOW,
+  };
+  const ready = (snapshot = glmQuota, stale = false): ProviderAccountUsageResult =>
+    ({ status: 'ready', snapshot, stale });
+  const glm = provider({ id: 'glm', auth: { method: 'apiKey' }, routing: {
+    pi: { upstream: 'https://api.z.ai/api/coding/paas/v4', authStrategy: 'api-key-header' },
+  } });
+
+  async function panel(collectDeps: MenubarCollectDeps) {
+    const raw = (key: string) => rawMainString(key, 'en');
+    return buildMenubarView({
+      ...await collectMenubarInputs(collectDeps),
+      nowMs: NOW, locale: 'en', moneySymbol: '$', settings: DEFAULT_MENUBAR_SETTINGS,
+      harnessLogos: MENUBAR_HARNESS_LOGOS, uiStrings: buildMenubarUiStrings(mainStringKeysUnder('menubar.ui'), raw, 'en'),
+      t: createMenubarTranslate('en', raw),
+    });
+  }
+
+  it.each([
+    { label: 'a missing 5-hour reset', reading: ready(), value: '65', fills: [0.8, 0.65], resets: ['Weekly resets'], plan: '' },
+    {
+      label: 'a named plan with both resets',
+      reading: ready({ ...glmQuota, level: 'pro', fiveHour: { usedPercent: 20, resetsAt: NOW + 3_600_000 } }),
+      value: '65', fills: [0.8, 0.65], resets: ['5-hour resets', 'Weekly resets'], plan: 'PRO',
+    },
+    { label: 'the old plan', reading: ready({ ...glmQuota, weekly: null }), value: '80', fills: [0.8], resets: [], plan: '' },
+    { label: 'an expired weekly window', reading: ready({ ...glmQuota, weekly: { usedPercent: 35, resetsAt: NOW } }), value: '80', fills: [0.8], resets: [], plan: '' },
+    {
+      label: 'two expired windows',
+      reading: ready({ ...glmQuota, fiveHour: { usedPercent: 20, resetsAt: NOW }, weekly: { usedPercent: 35, resetsAt: NOW - 1 } }),
+      value: '—', fills: [], resets: [], plan: '',
+    },
+    { label: 'no plan', reading: ready({ ...glmQuota, level: 'pro', noPlan: true }), value: '—', fills: [], resets: [], plan: '' },
+    { label: 'stale data', reading: ready({ ...glmQuota, level: 'pro' }, true), value: '—', fills: [], resets: [], plan: '' },
+    { label: 'a failed read', reading: { status: 'unavailable', error: 'network' } as const, value: '—', fills: [], resets: [], plan: '' },
+  ])('shows the correct GLM amount in the panel for $label', async ({ reading, value, fills, resets, plan }) => {
+    const readZhipu = vi.fn(async () => reading);
+    const collectDeps = deps({
+      listProviders: async () => [
+        glm,
+        provider({ id: 'glm-payg', auth: { method: 'apiKey' }, routing: { pi: { upstream: 'https://api.z.ai/api/paas/v4' } } } as Partial<ProviderView> & { id: string }),
+        provider({ id: 'glm-preview', auth: { method: 'apiKey' }, routing: { pi: { upstream: 'https://api.z.ai/api/anthropic-preview' } } } as Partial<ProviderView> & { id: string }),
+      ],
+    });
+    const view = await panel({ ...collectDeps, readZhipu });
+    expect(readZhipu.mock.calls).toEqual([['glm']]);
+    expect(view.sources.map(source => [source.id, source.value ?? source.valueLabel])).toEqual([['glm', value]]);
+    const detail = view.details.glm;
+    expect(detail.bigValue).toBe(value);
+    expect(detail.plan).toBe(plan);
+    expect(detail.legend).toHaveLength(fills.length > 1 ? fills.length : 0);
+    expect(detail.rings.map(ring => ring.fraction)).toEqual(fills.length ? fills : [0]);
+    expect(detail.facts.filter(fact => fact.label.includes('resets')).map(fact => fact.label).sort()).toEqual(resets);
+    expect(view.sources[0]?.resetsAtMs ?? null).toBe(resets.length ? glmQuota.weekly?.resetsAt : null);
+  });
+
+  it('falls back to the 5-hour GLM quota if weekly resets during collection', async () => {
+    let now = NOW;
+    const view = await panel(deps({
+      now: () => now,
+      listProviders: async () => [glm],
+      readZhipu: async () => {
+        now = NOW + 1;
+        return ready({ ...glmQuota, weekly: { usedPercent: 35, resetsAt: now } });
+      },
+    }));
+    expect(view.sources[0]).toMatchObject({ id: 'glm', value: '80', resetsAtMs: null });
+    expect(view.details.glm.facts.map(fact => fact.label)).not.toContain('Weekly resets');
+  });
+
+  // Tier 2: the same cached peer result is reused across a window reset.
+  it('drops expired remote GLM windows at each menu bar collection', async () => {
+    const peers = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: ready({
+      ...glmQuota, fiveHour: { usedPercent: 20, resetsAt: NOW + 2 }, weekly: { usedPercent: 35, resetsAt: NOW + 1 },
+    }) }), [provider({ id: 'glm-peer', agents: ['pi'], models: { pi: [] }, remoteInvocationEnabled: true,
+      zhipuCodingPlanUsage: true } as never)], 'unrelated'));
+    let now = NOW;
+    const cached = deps({ listProviders: async () => [], readRemoteSubscriptions: async () => peers.sources, now: () => now });
+    expect((await collectMenubarInputs(cached)).sources).toMatchObject([{ windows: [{ kind: 'session' }, { kind: 'week' }] }]);
+    now += 1;
+    expect((await collectMenubarInputs(cached)).sources).toMatchObject([{ windows: [{ kind: 'session' }] }]);
+    now += 1;
+    expect((await collectMenubarInputs(cached)).sources).toEqual([]);
+    expect(peers.sources[0]?.windows).toHaveLength(2);
+  });
+
+  it('keeps existing providers’ amounts, resets, details and relative order with GLM connected', async () => {
+    const reset = NOW + 86_400_000;
+    const providers = [
+      provider({ id: 'openai', auth: { method: 'oauth', native: 'codex' } }),
+      provider({ id: 'anthropic' }),
+      provider({ id: 'xai' }),
+      provider({ id: 'kimi-coding', auth: { method: 'apiKey' }, routing: {
+        pi: { upstream: 'https://api.kimi.com/coding/v1', authStrategy: 'api-key-header' },
+      } }),
+      provider({ id: 'opencode-go', auth: { method: 'apiKey' }, routing: {
+        pi: { upstream: 'https://opencode.ai/zen/go/v1', authStrategy: 'api-key-header' },
+      } }),
+    ];
+    const collectDeps = deps({
+      listProviders: async () => providers,
+      readClaude: async () => ({ sevenDay: { utilization: 10, resetsAt: reset / 1000 } }) as never,
+      readXai: async () => ({ creditUsagePercent: 15, resetsAt: reset / 1000, updatedAt: NOW }),
+      readKimi: async () => ({ status: 'ready', stale: false, snapshot: {
+        kind: 'kimi-coding-quota', fetchedAt: NOW, windows: [{ id: 'limit_7d', usedPercent: 20, resetsAt: reset }],
+      } }),
+      readOpenCodeGo: async () => ({ status: 'ready', stale: false, snapshot: {
+        kind: 'opencode-go-quota', fetchedAt: NOW, windows: [{ id: 'weekly', usedPercent: 25, limited: false, resetsAt: reset }],
+      } }),
+      readZhipu: async () => ready(),
+    });
+    const before = await panel(collectDeps);
+    expect(before.sources).toHaveLength(providers.length);
+    expect(Object.fromEntries(before.sources.map(source => [source.id, [source.value, source.resetsAtMs]]))).toEqual({
+      openai: ['80', reset], anthropic: ['90', reset], xai: ['85', reset],
+      'kimi-coding': ['80', reset], 'opencode-go': ['75', reset],
+    });
+    const after = await panel({ ...collectDeps, listProviders: async () => [...providers, glm] });
+    expect(after.sources.filter(source => source.id !== glm.id)).toEqual(before.sources);
+    for (const provider of providers) {
+      expect(after.details[provider.id]).toEqual(before.details[provider.id]);
+    }
+  });
+
+  it('includes auxiliary task tokens without charging them at the conversation model rate', async () => {
+    const input = usage([task('mixed')]);
+    input.taskDaily![0].tokens = 10100;
+    input.taskDaily![0].auxiliaryTokens = 10000;
+    const collected = await collectMenubarInputs(deps({ readUsage: async () => input }));
+    expect(collected.tasks[0].tokensToday).toBe(10100);
+    expect(collected.tasks[0].valueToday).toBeCloseTo(0.1);
+  });
+
   it('keeps the other sources when one reader fails', async () => {
     const errors: string[] = [];
     const collected = await collectMenubarInputs(deps({ onError: (scope) => errors.push(scope) }));
@@ -161,6 +306,277 @@ describe('collectMenubarInputs', () => {
     expect(errors).toEqual(['claude:anthropic']);
     const claude = collected.sources[1];
     expect(claude.kind === 'subscription' && claude.windows).toEqual([]);
+  });
+
+  // #10110, unit: collectMenubarInputs must display accounts rather than provider entries.
+  // Existing coverage only deduplicated remote sources. Minimal failure: one provider,
+  // two accounts; or two local providers pointing at the same account.
+  const pool: SubscriptionPoolView = {
+    providerId: 'openai', configured: true, strategy: 'rotate',
+    accounts: ['default', 'extra'].map((id, index) => ({
+      id, paused: false, limit: 4, weight: 1, directory: `/fixture/${id}`,
+      identity: `${id}@example.com`, plan: index ? 'pro' : 'plus', status: 'ready', running: index,
+      usage: { codex: { credits: null, buckets: { codex: {
+        limitId: 'codex', limitName: null, updatedAt: NOW,
+        primary: null, secondary: { usedPercent: index ? 35 : 90, windowMinutes: 10_080, resetsAt: nowSec + 86_400 },
+      } } } },
+    })),
+  };
+
+  it('shows each pooled account with its own plan, quota and running marker', async () => {
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai', openAiAccount: { identity: 'wrong@example.com' } } as never)],
+      readSubscriptionPool: async () => pool,
+      readCodexResets: async () => ({ count: 2, earliestExpiryMs: null }),
+    }));
+    expect(collected.sources).toMatchObject([
+      { id: 'openai', account: 'default@example.com', plan: 'Plus', consuming: false,
+        windows: [{ usedPercent: 90 }], resetCredits: { count: 2 } },
+      { id: 'openai:account:extra', providerId: 'openai', account: 'extra@example.com', plan: 'Pro', consuming: true,
+        windows: [{ usedPercent: 35 }], resetCredits: null },
+    ]);
+  });
+
+  // #10405, unit: a legacy connection can own several accounts. Previous fixtures only
+  // used built-in ids, hiding both the missed pool read and the wrong Claude projection.
+  it.each(['local', 'remote'])('reads a legacy Codex target pool on %s', async location => {
+    const legacy = provider({ id: 'legacy-codex', subscriptionAccountPool: 'openai',
+      auth: { method: 'oauth', native: 'codex' }, remoteInvocationEnabled: true,
+      agents: ['codex'], models: { codex: [] } });
+    const owned: SubscriptionPoolView = { ...pool, providerId: legacy.id, kind: 'openai',
+      accounts: pool.accounts.map((account, index) => ({ ...account, id: `owned-${index}` })) };
+    const calls: string[] = [];
+    const remote = location === 'remote' ? (await readRemoteSubscriptions(remoteDeps(async (_device, channel) => {
+      calls.push(channel);
+      return { ok: true, result: owned };
+    }, [legacy]))).sources.filter(source => source.providerId === legacy.id) : [];
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => location === 'local' ? [legacy] : [],
+      readSubscriptionPool: async id => { expect(id).toBe(legacy.id); return owned; },
+      readRemoteSubscriptions: async () => remote,
+    }));
+    expect(collected.sources).toMatchObject([
+      { providerId: legacy.id, family: 'codex', account: 'default@example.com', windows: [{ usedPercent: 90 }] },
+      { providerId: legacy.id, family: 'codex', account: 'extra@example.com', windows: [{ usedPercent: 35 }] },
+    ]);
+    if (location === 'remote') expect(calls).not.toContain('maker:usage:account');
+  });
+
+  // #10110 review: email is not a Codex workspace identity. Previous fixtures
+  // only covered different emails; two legal pool entries sharing an email lost
+  // one quota and transferred its running marker. Unit, real collector/peer reader.
+  it.each(['local', 'remote'])('keeps same-email Codex workspaces separate on %s', async (location) => {
+    const workspaces = { ...pool, accounts: pool.accounts.map((account, index) => ({
+      ...account, identity: 'same@example.com', plan: index ? 'team' : 'plus',
+    })) };
+    const remote = location === 'remote'
+      ? (await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: workspaces })))).sources : [];
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => location === 'local' ? [provider({ id: 'openai' })] : [],
+      readSubscriptionPool: async () => workspaces,
+      readRemoteSubscriptions: async () => remote,
+    }));
+    expect(collected.sources).toHaveLength(2);
+    expect(collected.sources).toMatchObject([
+      { plan: 'Plus', windows: [{ usedPercent: 90 }], consuming: false },
+      { plan: 'Team', windows: [{ usedPercent: 35 }], consuming: location === 'local' },
+    ]);
+  });
+
+  it('counts a verified pooled subscription once across providers and own computers', async () => {
+    const owned = { ...pool, accounts: [{ ...pool.accounts[0], accountKey: 'verified-person-workspace' }] };
+    const peer = (await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: owned })))).sources;
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai' }), provider({ id: 'independent', subscriptionAccountPool: 'openai' })],
+      readSubscriptionPool: async id => ({ ...owned, providerId: id, kind: 'openai',
+        accounts: owned.accounts.map(account => ({ ...account, running: id === 'independent' ? 1 : 0 })) }),
+      readRemoteSubscriptions: async () => peer,
+    }));
+    expect(collected.sources).toHaveLength(1);
+    expect(collected.sources[0]).toMatchObject({ providerId: 'openai', consuming: true, windows: [{ usedPercent: 90 }] });
+  });
+
+  it('recognizes the same native login before and after adding an account pool', async () => {
+    const identity = 'default@example.com';
+    const key = codexAccountDisplayKey(identity, 'workspace')!;
+    const owned = { ...pool, accounts: [{ ...pool.accounts[0], accountKey: key }] };
+    const peer = (await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: owned })))).sources;
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai', auth: { method: 'oauth', native: 'codex' }, openAiAccount: { identity, source: 'oauth' } })],
+      readCodex: async () => ({ accountId: 'workspace', primary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } }) as never,
+      readRemoteSubscriptions: async () => peer,
+    }));
+    expect(collected.sources).toHaveLength(1);
+    expect(collected.sources[0]).toMatchObject({ id: 'openai', account: identity });
+  });
+
+  it('deduplicates local accounts while retaining different people in one workspace', async () => {
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => ['openai', 'legacy', 'other'].map((id) => provider({
+        id, auth: { method: 'oauth', native: 'codex' },
+        openAiAccount: { identity: id === 'other' ? 'other@example.com' : 'same@example.com' },
+      } as never)),
+      readCodex: async () => ({ accountId: 'workspace', primary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } }) as never,
+    }));
+    expect(collected.sources.map((source) => source.id)).toEqual(['openai', 'other']);
+  });
+
+  // #10204 review, unit: quota-only plan metadata was overwritten with null.
+  // Prior fixtures supplied the same plan in both places and missed this loss.
+  it.each(['local', 'remote'])('keeps Claude pool plans and per-model windows attached to their account on %s', async location => {
+    const claudePool: SubscriptionPoolView = {
+      ...pool, providerId: 'anthropic', accounts: pool.accounts.map((account, index) => ({
+        ...account, plan: index ? 'pro' : undefined, planTier: index ? 'pro' : undefined,
+        planDisplayName: index ? 'Ultra' : undefined, usage: { claude: {
+          updatedAt: NOW, subscriptionType: 'pro',
+          fiveHour: { utilization: index ? 25 : 80, resetsAt: nowSec + 3600 },
+          sevenDay: { utilization: index ? 35 : 90, resetsAt: nowSec + 86_400 },
+          scoped: [{ modelDisplayName: 'Sonnet', utilization: index ? 40 : 95, resetsAt: nowSec + 86_400 }],
+        } },
+      })),
+    };
+    const remote = location === 'remote'
+      ? (await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: claudePool }), [], 'anthropic'))).sources : [];
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => location === 'local' ? [provider({ id: 'anthropic' })] : [],
+      readSubscriptionPool: async () => claudePool,
+      readRemoteSubscriptions: async () => remote,
+    }));
+    const prefix = location === 'remote' ? 'remote:peer:' : '';
+    expect(collected.sources).toMatchObject([
+      { id: `${prefix}anthropic`, account: 'default@example.com', plan: 'Pro',
+        windows: [{ usedPercent: 80 }, { usedPercent: 90 }, { label: 'Sonnet', usedPercent: 95 }] },
+      { id: `${prefix}anthropic:account:extra`, account: 'extra@example.com', plan: 'Ultra',
+        windows: [{ usedPercent: 25 }, { usedPercent: 35 }, { label: 'Sonnet', usedPercent: 40 }] },
+    ]);
+  });
+
+  it('does not resurrect a paused pooled account through its migrated provider alias', async () => {
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai' }), provider({ id: 'legacy', subscriptionPoolAlias: true,
+        auth: { method: 'oauth', native: 'codex' }, openAiAccount: { identity: 'extra@example.com' } } as never)],
+      readSubscriptionPool: async () => ({ ...pool, accounts: pool.accounts.map(account => ({ ...account, paused: true })) }),
+    }));
+    expect(collected.sources).toEqual([]);
+  });
+
+  it.each(['paused', 'signed-out', 'unavailable', 'failed'] as const)('never borrows default quota when pool is %s', async (state) => {
+    const collected = await collectMenubarInputs(deps({
+      listProviders: async () => [provider({ id: 'openai', openAiAccount: { identity: 'wrong@example.com' } } as never)],
+      readSubscriptionPool: async () => {
+        if (state === 'failed') throw new Error('offline');
+        return { ...pool, accounts: [ { ...pool.accounts[1],
+          paused: state === 'paused', status: state === 'paused' ? 'ready' : state,
+        } ] };
+      },
+    }));
+    if (state === 'paused') expect(collected.sources).toEqual([]);
+    else {
+      expect(collected.sources).toHaveLength(1);
+      expect(collected.sources[0]).toMatchObject({ windows: [] });
+      expect(collected.sources[0]).not.toMatchObject({ account: 'wrong@example.com' });
+    }
+  });
+
+  // Same regression through the peer reader: provider identity must never label another
+  // pooled account's quota. Only unsupported peers may use the default-account fallback.
+  function remoteDeps(invoke: RemoteSubscriptionDeps['invoke'], aliases: ProviderView[] = [], providerId = 'openai'): RemoteSubscriptionDeps {
+    return { nowMs: NOW, listDevices: async () => ({ devices: [{
+      deviceId: 'peer', name: 'Peer', isSelf: false, online: true, remoteControlEnabled: true,
+      controlEnabled: true, platform: 'darwin', appVersion: '9.0.0',
+    }] as never }), invoke: async (id, channel, args) => channel === 'maker:provider:list'
+      ? { ok: true, result: { providers: [provider({ id: providerId, remoteInvocationEnabled: true,
+          agents: ['codex'], models: { codex: [] }, openAiAccount: { identity: 'wrong@example.com' } } as never), ...aliases] } }
+      : channel === 'maker:list-plugin-engines'
+        ? { ok: true, result: [] }
+        : invoke(id, channel, args),
+    };
+  }
+
+  // Tier 2: a redacted catalog offers GLM via its host hint only. Old and
+  // disabled connections must not trigger a quota query or inherit a local account.
+  it('reads GLM windows only for an offered same-account connection', async () => {
+    const glm = { agents: ['pi'], models: { pi: [] }, remoteInvocationEnabled: true, zhipuCodingPlanUsage: true };
+    const read = vi.fn<RemoteSubscriptionDeps['invoke']>(async () => ({ ok: true, result: { status: 'ready', stale: false, snapshot: {
+      kind: 'zhipu-coding-plan-quota', level: 'pro', fetchedAt: NOW, noPlan: false,
+      fiveHour: { usedPercent: 42, resetsAt: null }, weekly: { usedPercent: 33, resetsAt: NOW + 1000 },
+    } } }));
+    const deps = remoteDeps(read, [
+      provider({ ...glm, id: 'offered' } as never),
+      provider({ ...glm, id: 'closed', remoteInvocationEnabled: false } as never),
+      provider({ ...glm, id: 'old', zhipuCodingPlanUsage: undefined } as never),
+    ], 'unrelated');
+    const result = await readRemoteSubscriptions(deps);
+    expect(read.mock.calls).toEqual([['peer', 'maker:usage:zhipu-coding-plan', [{ providerId: 'offered' }]]]);
+    expect(result.sources).toMatchObject([{ id: 'remote:peer:offered', family: 'zhipu', plan: 'PRO',
+      windows: [{ kind: 'session', usedPercent: 42 }, { kind: 'week', usedPercent: 33 }],
+    }]);
+    read.mockResolvedValue({ ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } });
+    expect(await readRemoteSubscriptions(deps)).toMatchObject({ sources: [], incomplete: false });
+  });
+
+  it('removes locally stopped remote accounts from live quota and offline retention', async () => {
+    const first = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: pool })));
+    expect(first.sources.length).toBeGreaterThan(0);
+    const previous = retainRemoteSubscriptions(new Map(), first, NOW).seen;
+    disabled.providers[remoteProviderDisableKey('peer', 'openai')] = true;
+    const next = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: pool })));
+    expect(next.sources).toEqual([]);
+    const offline = { ...next, unreachable: new Set(['peer']) };
+    expect(retainRemoteSubscriptions(previous, offline, NOW + 1).sources).toEqual([]);
+  });
+
+  it('does not resurrect paused peer accounts through migrated aliases', async () => {
+    const calls: unknown[] = [];
+    const result = await readRemoteSubscriptions(remoteDeps(async (_id, channel, args) => {
+      calls.push([channel, args]);
+      return { ok: true, result: { ...pool, accounts: pool.accounts.map(account => ({ ...account, paused: true })) } };
+    }, [provider({ id: 'legacy', subscriptionPoolAlias: true, remoteInvocationEnabled: true,
+      agents: ['codex'], models: { codex: [] }, auth: { method: 'oauth', native: 'codex' } } as never)]));
+    expect(result.sources).toEqual([]);
+    expect(result.failed.size).toBe(0);
+    expect(calls).toEqual([['maker:subscription-accounts', [{ action: 'read', providerId: 'openai' }]]]);
+  });
+
+  it('expands the peer account pool and retains its entries across a temporary read failure', async () => {
+    const result = await readRemoteSubscriptions(remoteDeps(async (_id, channel) => {
+      expect(channel).toBe('maker:subscription-accounts');
+      return { ok: true, result: pool };
+    }));
+    expect(result.sources).toMatchObject([
+      { id: 'remote:peer:openai', account: 'default@example.com', plan: 'Plus', consuming: false, windows: [{ usedPercent: 90 }] },
+      { id: 'remote:peer:openai:account:extra', account: 'extra@example.com', plan: 'Pro', consuming: false, windows: [{ usedPercent: 35 }] },
+    ]);
+    const previous = retainRemoteSubscriptions(new Map(), result, NOW);
+    const failed = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: false, error: { code: 'TIMEOUT', message: 'offline' } })));
+    expect(failed.sources).toEqual([]);
+    expect(retainRemoteSubscriptions(previous.seen, failed, NOW + 1000).sources).toHaveLength(2);
+    const removed = await readRemoteSubscriptions(remoteDeps(async () => ({ ok: true, result: { ...pool, accounts: [] } })));
+    expect(retainRemoteSubscriptions(previous.seen, removed, NOW + 1000).sources).toEqual([]);
+  });
+
+  it.each(['openai', 'anthropic'])('uses a serializable default scope for an older %s peer', async (providerId) => {
+    const result = await readRemoteSubscriptions(remoteDeps(async (_id, channel, args) => {
+      if (channel === 'maker:subscription-accounts') return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'old peer' } };
+      // A missing array argument becomes null over device-link; the legacy reader rejects
+      // null provider IDs, so pass an explicit provider instead of an undefined placeholder.
+      expect(JSON.parse(JSON.stringify(args))).toEqual(providerId === 'openai'
+        ? ['codex', 'openai', 'default-subscription-account']
+        : ['anthropic', false, 'default-subscription-account']);
+      return { ok: true, result: providerId === 'openai'
+        ? { primary: { usedPercent: 20, windowMinutes: 10_080, resetsAt: nowSec + 86_400 } }
+        : { sevenDay: { utilization: 20, resetsAt: nowSec + 86_400 } } };
+    }, [], providerId));
+    expect(result.sources).toMatchObject([{ id: `remote:peer:${providerId}`, windows: [{ usedPercent: 20 }] }]);
+  });
+
+  it('rejects a peer pool for the wrong provider without borrowing default quota', async () => {
+    const result = await readRemoteSubscriptions(remoteDeps(async (_id, channel) => {
+      expect(channel).toBe('maker:subscription-accounts');
+      return { ok: true, result: { ...pool, providerId: 'anthropic' } };
+    }));
+    expect(result.sources).toEqual([]);
+    expect(result.failed.has('remote:peer:openai')).toBe(true);
   });
 
   it('keeps a Codex account that needs reconnecting as a subscription without numbers', async () => {
@@ -199,6 +615,24 @@ describe('collectMenubarInputs', () => {
       expect.objectContaining({ sessionId: 's1', title: 'Fix the chart', harness: 'codex', running: true, startedAtMs: NOW - 60_000 }),
     ]);
     expect(collected.usage.days).toHaveLength(90);
+  });
+
+  // Unit / #12735: a running task carries only the legacy provider ID. Its
+  // rendered icon must come from the catalogue name, even without quota data.
+  it('uses the catalog mark for a legacy Antigravity task without quota data', async () => {
+    const providerId = 'acp-plugin:legacy:cli';
+    const view = await panel(deps({
+      listProviders: async () => [],
+      listPluginEngines: () => [{
+        key: 'legacy:cli', providerId, ghostId: 'legacy', harnessId: 'cli', name: 'Antigravity',
+        availability: { state: 'available' }, models: [],
+        permissionModes: [{ id: 'ask', displayName: 'Ask' }], defaultPermissionMode: 'ask',
+      }],
+      activities: () => [{ sessionId: 's1', phase: 'running', startedAtMs: NOW } as never],
+      sessionRow: async () => ({ title: 'Legacy task', model: 'gemini', providerId, agentKind: 'acp' }),
+    }));
+    expect(view.sources).toEqual([]);
+    expect(view.tasks).toMatchObject([{ sessionId: 's1', logoSvg: ANTIGRAVITY_LOGO }]);
   });
 
   it.each(['cindy-make', 'cindy-make-merge'])('hides %s usage tasks without changing accounting totals', async (source) => {
@@ -436,4 +870,218 @@ it('labels usage with catalog display names and folds route variants together', 
   const series = usageScope(payload, days, [], names).modelSeries!;
   expect(series.models.map((m) => m.name)).toEqual(['Opus 5.5', 'GPT-6 Astra', 'mystery-1']);
   expect(series.tokens[0]).toEqual([200, 100, 100, 0]);
+});
+
+it('includes auxiliary tokens in widget totals without inventing a Claude harness', () => {
+  const money = { amount: 0, currency: 'USD', approximate: false, kind: 'actual-cost' } as const;
+  const payload = { modelDaily: [{ day: '2026-11-17', agentKind: 'auxiliary', model: 'helper',
+    tokens: 1100, money, apiMoney: money, subscriptionEstimateMoney: money }] } as UsageHistoryPayload;
+  const scope = usageScope(payload, ['2026-11-17'], []);
+  expect(scope.daily[0].tokens).toEqual([0, 0, 0, 1100]);
+  expect(scope.daily[0].tokens.reduce((a, b) => a + b, 0)).toBe(1100);
+  expect(scope.models['30']).toEqual([]);
+  expect(scope.modelSeries?.models).toEqual([{ name: 'helper', harness: 'auxiliary' }]);
+  expect(scope.modelSeries?.tokens).toEqual([[1100, 0]]);
+});
+
+// Unit: plugin engines reporting account usage must enter the menu bar collector (windows and
+// balance-only), mark running ACP tasks as consuming, stay distinct across engines/computers,
+// and appear in remote peer collection when offered remotely. Minimal failing inputs: collector
+// skips listPluginEngines, consumingSourceIds ignores acp-plugin: providerId, or remote read
+// omits maker:list-plugin-engines / maker:get-plugin-engine-usage.
+describe('plugin engine quota collection', () => {
+  const engine = (overrides: Record<string, unknown> = {}) => ({
+    key: 'dsh:dsh',
+    providerId: 'acp-plugin:dsh:dsh',
+    ghostId: 'dsh',
+    harnessId: 'dsh',
+    name: 'DeepSeek Harness',
+    availability: { state: 'available' as const },
+    reportsUsage: true as const,
+    models: [],
+    permissionModes: [],
+    defaultPermissionMode: 'ask' as const,
+    ...overrides,
+  });
+
+  it('collects local reporting plugin engines (windows and balance-only), drops expired windows, and marks running ACP tasks', async () => {
+    const dsh = engine();
+    const gemini = engine({ key: 'gem:cli', providerId: 'acp-plugin:gem:cli', ghostId: 'gem', harnessId: 'cli', name: 'Gemini CLI' });
+    const silent = engine({ key: 'off:cli', providerId: 'acp-plugin:off:cli', reportsUsage: undefined });
+    const suspended = engine({ key: 'sus:cli', providerId: 'acp-plugin:sus:cli', suspended: true as const, availability: { state: 'unavailable' as const } });
+
+    const collected = await collectMenubarInputs({
+      nowMs: NOW,
+      listProviders: async () => [],
+      listPluginEngines: () => [dsh, gemini, silent, suspended],
+      readPluginEngineUsage: async (key) => {
+        if (key === 'dsh:dsh') {
+          return {
+            updatedAt: NOW - 10_000,
+            windows: [
+              { label: 'Weekly', remainingPercent: 72, resetsAt: NOW + 86_400_000 },
+              { label: 'Expired', remainingPercent: 0, resetsAt: NOW - 1 },
+            ],
+            balances: [{ currency: 'CNY', amount: '18.50' }],
+          };
+        }
+        if (key === 'gem:cli') {
+          return { updatedAt: NOW - 5_000, balances: [{ currency: 'USD', amount: '9.25' }] };
+        }
+        return null;
+      },
+      readCodex: async () => null,
+      readClaude: async () => null,
+      readXai: async () => null,
+      readBalance: async () => null,
+      readUsage: async () => null,
+      activities: () => [{ sessionId: 'acp-run', phase: 'running' } as never],
+      sessionRow: async () => ({ title: 'ACP task', model: 'deepseek-v4', agentKind: 'acp', providerId: dsh.providerId }),
+      selfDeviceName: 'Mac',
+    });
+
+    const dshSource = collected.sources.find((s) => s.id === dsh.providerId);
+    const gemSource = collected.sources.find((s) => s.id === gemini.providerId);
+    expect(dshSource).toMatchObject({
+      kind: 'subscription',
+      family: 'plugin',
+      brand: 'DeepSeek Harness',
+      consuming: true,
+      windows: [{ kind: 'custom', label: 'Weekly', usedPercent: 28, resetsAtMs: NOW + 86_400_000 }],
+      balances: [{ currency: 'CNY', amount: 18.5 }],
+    });
+    expect(gemSource).toMatchObject({
+      kind: 'subscription',
+      family: 'plugin',
+      brand: 'Gemini CLI',
+      windows: [],
+      balances: [{ currency: 'USD', amount: 9.25 }],
+    });
+    expect(collected.sources.map((s) => s.id)).toEqual([dsh.providerId, gemini.providerId]);
+  });
+
+  // Unit: quota cards must keep the Antigravity silhouette across installed,
+  // scoped and older catalog identities, and preserve other engines' monograms.
+  it.each([
+    ['agy', 'acp-plugin:agy:agy', 'My renamed engine', ANTIGRAVITY_LOGO],
+    [undefined, 'acp-plugin:_root__agy-plugin:agy', 'My renamed engine', ANTIGRAVITY_LOGO],
+    [undefined, 'acp-plugin:_ns__local__agy-acp:agy~second', 'My renamed engine', ANTIGRAVITY_LOGO],
+    [undefined, 'acp-plugin:legacy:cli', 'Antigravity', ANTIGRAVITY_LOGO],
+    ['other', 'acp-plugin:other:cli', 'Another engine', monogramLogo('Another engine')],
+  ])('uses the correct quota card logo for %s / %s', (ghostId, providerId, name, logoSvg) => {
+    expect(pluginEngineSource({ key: providerId, providerId, ghostId, name }, null, NOW).logoSvg).toBe(logoSvg);
+  });
+
+  it('keeps distinct plugin engines separate even with identical window percentages and collects remote offered engines', async () => {
+    const localA = pluginEngineSource(
+      { key: 'a:eng', providerId: 'acp-plugin:a:eng', name: 'Alpha' },
+      { updatedAt: NOW, windows: [{ label: 'Quota', remainingPercent: 100, resetsAt: NOW + 3600_000 }] },
+      NOW,
+    );
+    const remoteB = {
+      ...pluginEngineSource(
+        { key: 'b:eng', providerId: 'acp-plugin:b:eng', name: 'Beta' },
+        { updatedAt: NOW, windows: [{ label: 'Quota', remainingPercent: 100, resetsAt: NOW + 3600_000 }] },
+        NOW,
+        'desk-2',
+      ),
+      id: 'remote:desk-2:acp-plugin:b:eng',
+      device: { id: 'desk-2', name: 'Office Mac' },
+    };
+    const remoteBal = {
+      ...pluginEngineSource(
+        { key: 'c:eng', providerId: 'acp-plugin:c:eng', name: 'Gamma' },
+        { updatedAt: NOW, balances: [{ currency: 'USD', amount: '12.00' }] },
+        NOW,
+        'desk-2',
+      ),
+      id: 'remote:desk-2:acp-plugin:c:eng',
+      device: { id: 'desk-2', name: 'Office Mac' },
+    };
+    expect(distinctRemoteSubscriptions([localA], [remoteB, remoteBal]).map((s) => s.id)).toEqual([
+      'remote:desk-2:acp-plugin:b:eng',
+      'remote:desk-2:acp-plugin:c:eng',
+    ]);
+
+    const read = await readRemoteSubscriptions({
+      nowMs: NOW,
+      listDevices: async () => ({
+        devices: [{
+          deviceId: 'desk-2', name: 'Office Mac', platform: 'darwin', isSelf: false,
+          online: true, remoteControlEnabled: true, controlEnabled: true, appVersion: '9.0.0',
+        } as never],
+      }),
+      invoke: async (_deviceId, channel, args) => {
+        if (channel === 'maker:provider:list') return { ok: true, result: { providers: [] } };
+        if (channel === 'maker:list-plugin-engines') {
+          return {
+            ok: true,
+            result: [
+              engine({ remoteUse: { supported: true, enabled: true } }),
+              engine({ key: 'closed:eng', providerId: 'acp-plugin:closed:eng', remoteUse: { supported: true, enabled: false } }),
+            ],
+          };
+        }
+        if (channel === 'maker:get-plugin-engine-usage' && args[0] === 'dsh:dsh') {
+          return { ok: true, result: { updatedAt: NOW, windows: [{ label: 'Pro', remainingPercent: 60, resetsAt: NOW + 7200_000 }] } };
+        }
+        return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } };
+      },
+    } as RemoteSubscriptionDeps);
+
+    expect(read.sources).toHaveLength(1);
+    expect(read.sources[0]).toMatchObject({
+      id: 'remote:desk-2:acp-plugin:dsh:dsh',
+      family: 'plugin',
+      brand: 'DeepSeek Harness',
+      device: { id: 'desk-2', name: 'Office Mac' },
+      windows: [{ kind: 'custom', label: 'Pro', usedPercent: 40 }],
+    });
+
+    // Regression (#12247 review): transient plugin-list failure must retain previously seen remote
+    // plugin quota and mark the read incomplete instead of treating the error as an empty list.
+    const previousSeen = new Map([[read.sources[0]!.id, { source: read.sources[0]!, seenAtMs: NOW }]]);
+    const transientFail = await readRemoteSubscriptions({
+      nowMs: NOW + 60_000,
+      listDevices: async () => ({
+        devices: [{
+          deviceId: 'desk-2', name: 'Office Mac', platform: 'darwin', isSelf: false,
+          online: true, remoteControlEnabled: true, controlEnabled: true, appVersion: '9.0.0',
+        } as never],
+      }),
+      invoke: async (_deviceId, channel) => {
+        if (channel === 'maker:provider:list') return { ok: true, result: { providers: [] } };
+        if (channel === 'maker:list-plugin-engines') {
+          return { ok: false, error: { code: 'TIMEOUT', message: 'request timed out' } };
+        }
+        return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } };
+      },
+    } as RemoteSubscriptionDeps);
+
+    expect(transientFail.incomplete).toBe(true);
+    expect(transientFail.failed.has('remote:desk-2:plugin-engines')).toBe(true);
+    const retained = retainRemoteSubscriptions(previousSeen, transientFail, NOW + 60_000);
+    expect(retained.sources).toHaveLength(1);
+    expect(retained.sources[0]).toMatchObject({
+      id: 'remote:desk-2:acp-plugin:dsh:dsh',
+      lastSeenAtMs: NOW,
+    });
+
+    // An old host returning CHANNEL_NOT_ALLOWED (or an explicit empty list) is complete and drops removed engines.
+    const unsupported = await readRemoteSubscriptions({
+      nowMs: NOW + 120_000,
+      listDevices: async () => ({
+        devices: [{
+          deviceId: 'desk-2', name: 'Office Mac', platform: 'darwin', isSelf: false,
+          online: true, remoteControlEnabled: true, controlEnabled: true, appVersion: '9.0.0',
+        } as never],
+      }),
+      invoke: async (_deviceId, channel) => {
+        if (channel === 'maker:provider:list') return { ok: true, result: { providers: [] } };
+        return { ok: false, error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unsupported' } };
+      },
+    } as RemoteSubscriptionDeps);
+    expect(unsupported.incomplete).toBe(false);
+    expect(retainRemoteSubscriptions(previousSeen, unsupported, NOW + 120_000).sources).toEqual([]);
+  });
 });

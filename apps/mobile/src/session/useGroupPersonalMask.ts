@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { useIsFocused } from 'expo-router';
 import { randomUUID } from 'expo-crypto';
-import type { ChatMaskAction, ChatMaskMention, ChatMaskSettings, ChatMaskState, BotGroupRemoteActionId } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED, type ChatMaskAction, type ChatMaskMention, type ChatMaskSettings, type ChatMaskState, type BotGroupRemoteActionId } from '@cindy/maker-shared/botGroupChat';
+import { THREAD_BACKFILL_MAX_MESSAGES, type ChatMessage } from '@/chat/chatServerClient';
 import { useChatClient } from '@/chat/useChatServer';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 
@@ -14,10 +15,10 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
   const key = `${api.owner}:${deviceId}:${groupId}`;
   const active = useRef(key); active.current = key;
   const mounted = useRef(true), busy = useRef(false), pending = useRef(false), version = useRef(0), authority = useRef(0);
-  const deps = useRef({ act, enabled }); deps.current = { act, enabled };
+  const deps = useRef({ act, enabled, change }); deps.current = { act, enabled, change };
   const queue = useRef(Promise.resolve()), failed = useRef(new Map<string, () => Promise<void>>());
   const operations = useRef(new Map<string, () => Promise<void>>());
-  const [data, setData] = useState<{ key: string; state: ChatMaskState | null; mentions: ChatMaskMention[] }>({ key, state: null, mentions: [] });
+  const [data, setData] = useState<{ key: string; state: ChatMaskState | null; mentions: ChatMaskMention[]; threadMessages?: ChatMessage[] }>({ key, state: null, mentions: [] });
   const state = data.key === key ? data.state : null, mentions = data.key === key ? data.mentions : [];
   const stateRef = useRef(state); stateRef.current = state;
   const [saving, setSaving] = useState(false), [error, setError] = useState(false), [connectionLost, setConnectionLost] = useState(false);
@@ -37,22 +38,30 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
     busy.current = true;
     const revision = version.current, valid = () => current() && version.current === revision;
     try {
-      const response = await call('mask');
-      if (!valid()) return;
-      if (!('state' in response) || !response.state) { setData({ key, state: null, mentions: [] }); return; }
+      let config: ChatMaskState | null = null;
+      if (BOT_GROUP_PERSONAL_REPLIES_ENABLED) {
+        const response = await call('mask');
+        if (!valid()) return;
+        if (!('state' in response) || !response.state) { setData({ key, state: null, mentions: [] }); return; }
+        config = response.state;
+      }
       const all: ChatMaskMention[] = [];
+      const threadMessages: ChatMessage[] = [];
       let before: string | undefined;
       do {
         const page = await call('mask-mentions', { before });
         if (!valid()) return;
         if (!('mentions' in page) || !page.mentions) throw new Error('INVALID_MASK_RESPONSE');
         all.push(...page.mentions);
+        if ('threadMessages' in page && page.threadMessages) {
+          threadMessages.push(...page.threadMessages.slice(0, THREAD_BACKFILL_MAX_MESSAGES - threadMessages.length));
+        }
         if (!page.hasMore || !page.mentions.length) break;
         const next = page.mentions.at(-1)!.sequence;
         if (before && BigInt(next) >= BigInt(before)) throw new Error('INVALID_MASK_CURSOR');
         before = next;
       } while (valid());
-      if (valid()) { stateRef.current = response.state; setData({ key, state: response.state, mentions: all }); setError(failed.current.size > 0); setConnectionLost(false); }
+      if (valid()) { stateRef.current = config; setData({ key, state: config, mentions: all, threadMessages }); setError(failed.current.size > 0); setConnectionLost(false); }
     } catch (e) {
       if (valid()) {
         if (e && typeof e === 'object' && 'status' in e && (e.status === 403 || e.status === 404)) {
@@ -69,14 +78,22 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
     setError(false); setSaving(false); setConnectionLost(false);
     if (!enabled) { stateRef.current = null; setData({ key, state: null, mentions: [] }); }
   }, [key, enabled]);
+  // What the last read was started for. Opening the screen reads once; afterwards only a
+  // change of the group itself asks again (plus the interval and a return to the foreground).
+  const readFor = useRef<{ reload: typeof reload; change: unknown } | null>(null);
   useEffect(() => {
-    if (!enabled || !focused) return;
+    if (!enabled || !focused) { readFor.current = null; return; }
+    readFor.current = { reload, change: deps.current.change };
     void reload();
     const timer = setInterval(() => void reload(), 15000);
     const subscription = AppState.addEventListener('change', value => { if (value === 'active') void reload(); });
     return () => { clearInterval(timer); subscription.remove(); };
   }, [enabled, focused, reload]);
-  useEffect(() => { if (focused) void reload(); }, [change, focused, reload]);
+  useEffect(() => {
+    if (!focused || (readFor.current?.reload === reload && readFor.current.change === change)) return;
+    readFor.current = { reload, change };
+    void reload();
+  }, [change, focused, reload]);
   const run = useCallback((retryKey: string, work: (valid: () => boolean) => Promise<void>) => {
     const generation = authority.current;
     const valid = () => current() && generation === authority.current;
@@ -126,7 +143,7 @@ export function useGroupPersonalMask(groupId: string, deviceId: string, enabled:
   }, [call, current, run]);
   const lastParticipation = useRef(0);
   const homeOffline = !!state?.homeDeviceId && getPresenceAvailability(state.homeDeviceId) === false;
-  return { state: state ? { ...state, status: (connectionLost || homeOffline) && state.status === 'enabled' ? 'offline' as const : state.status, settings: { ...state.settings, companionId: state.settings.companionId ?? state.defaultCompanionId ?? null } } : null, mentions, saving, error, reload, markRead,
+  return { threadMessages: data.key === key ? data.threadMessages : undefined, state: state ? { ...state, status: (connectionLost || homeOffline) && state.status === 'enabled' ? 'offline' as const : state.status, settings: { ...state.settings, companionId: state.settings.companionId ?? state.defaultCompanionId ?? null } } : null, mentions, saving, error, reload, markRead,
     update: (patch: Partial<ChatMaskSettings>) => action(`save:${Object.keys(patch).sort().join(',')}`, s => ({ type: 'save', expectedRevision: s.revision,
       settings: { ...s.settings, companionId: s.settings.companionId ?? s.defaultCompanionId ?? null, ...patch, timeZone: s.revision ? s.settings.timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone } })),
     perform: (type: 'resume' | 'stop' | 'digest' | 'participate') => action(type, () => ({ type })),

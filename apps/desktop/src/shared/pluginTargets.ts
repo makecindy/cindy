@@ -22,7 +22,8 @@ export interface PluginTargetCandidate {
 export type PluginTargetRequest =
   | { kind: 'capabilities' }
   | { kind: 'list'; targetKind: PluginTargetKind }
-  | { kind: 'resolve'; target: PluginTargetRef }
+  | { kind: 'resolve'; target: PluginTargetRef; session?: never }
+  | { kind: 'resolve'; session: string; target?: never }
   | {
       kind: 'send';
       requestKey: string;

@@ -18,6 +18,14 @@ import { splitAutoReviewUserReferences } from '@cindy/maker-shared/auto-review-i
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 
 import { untrustedJsonBlock } from '../../shared/untrustedPrompt.js';
+import type { UtilityTextAttempt } from '../../shared/utilityTextResult.js';
+
+/** Host-owned diagnostics, never parsed from model output or exception text. */
+export type AutoReviewTextFailure = {
+  failure: 'no_available_model' | 'quota_exhausted' | 'configuration_unavailable' | 'http_error'
+    | 'request_failed' | 'timeout' | 'empty_response' | 'malformed';
+  reviewCandidates?: UtilityTextAttempt[];
+};
 
 interface AutoPermissionReviewerLogger {
   debug(message: string, fields?: Record<string, unknown>): void;
@@ -29,7 +37,7 @@ export interface AutoPermissionReviewerDeps {
     request: AutoReviewRequest,
     prompt: string,
     context: { signal: AbortSignal },
-  ): Promise<string | null>;
+  ): Promise<string | AutoReviewTextFailure | null>;
   logger: AutoPermissionReviewerLogger;
   /**
    * `true` when requestText owns candidate fallback and transient retries. The reviewer then
@@ -81,7 +89,7 @@ const RETRY_BACKOFF_MS = AUTO_REVIEW_RETRY_BACKOFF_MS;
 const RETRY_SCHEDULING_SLACK_MS = AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS;
 
 /** 单次尝试的失败形态。区分它们决定了「该不该再试一次」。 */
-type AttemptFailure = 'timeout' | 'empty' | 'malformed' | 'error';
+type AttemptFailure = 'timeout' | 'empty' | 'malformed' | 'error' | AutoReviewTextFailure['failure'];
 
 /**
  * 只有基础设施性的失败才值得重试。
@@ -143,9 +151,20 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
   const writableSet = new Set(writableRoots);
   const referenceRoots = request.workspaceRoots.filter((root) => !writableSet.has(root));
   // Referenced content is third-party data: keep it out of the user-authored field entirely.
-  const { intent: userIntent, references } = splitAutoReviewUserReferences(
+  // Host-managed attachment paths belong in `<review_input>` (path semantics), not in `<referenced_content>`.
+  const { intent: userIntent, references: rawReferences } = splitAutoReviewUserReferences(
     normalizeAutoReviewUserIntent(request.userIntent),
   );
+  const readOnlyAttachmentFiles = (rawReferences?.readOnlyAttachmentPaths ?? [])
+    .slice(0, MAX_WORKSPACE_ROOTS - 1)
+    .map((filePath) => compactText(filePath, MAX_WORKSPACE_ROOT_CHARS));
+  const references =
+    rawReferences && (rawReferences.attachments || rawReferences.quotedMessages)
+      ? {
+          ...(rawReferences.attachments ? { attachments: rawReferences.attachments } : {}),
+          ...(rawReferences.quotedMessages ? { quotedMessages: rawReferences.quotedMessages } : {}),
+        }
+      : undefined;
   const agentLastReplyToUser = agentContextText(request.agentContext?.lastReplyToUser);
   const agentStatedPurpose = agentContextText(request.agentContext?.statedPurpose);
   // Ordered by how often each part changes, so the reviewer's prompt cache keeps the longest prefix.
@@ -170,6 +189,7 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
     readOnlyReferenceRoots: referenceRoots
       .slice(0, MAX_WORKSPACE_ROOTS - 1)
       .map((root) => compactText(root, MAX_WORKSPACE_ROOT_CHARS)),
+    ...(readOnlyAttachmentFiles.length > 0 ? { readOnlyAttachmentFiles } : {}),
     platform: request.platform,
   };
   // Authorization is assessed against the actual action, not a fixed list of tool names.
@@ -264,6 +284,11 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
     "- readOnlyReferenceRoots are explicit restrictions, unlike unlisted paths:",
     "  READING anything inside them is routine reference work -> allow.",
     "  WRITING, deleting, or modifying anything inside them -> block.",
+    ...(readOnlyAttachmentFiles.length > 0 ? [
+    "- readOnlyAttachmentFiles are exact Host-delivered attachment files for this turn (NOT directory roots):",
+    "  READING, inspecting, decoding, or extracting frames/audio from these exact files (e.g., ffmpeg/ffprobe) is routine work on the current attachment, NOT accessing private app data -> allow (subject to explicit limits and guest authority).",
+    "  READING other files in their parent directories (such as cindy-media or userData), or WRITING, deleting, or modifying these files -> block.",
+    ] : []),
     "",
     "Evidence: a file change or write must name concrete paths (scripts may supply relative paths); cwd alone",
     "is not a target -> block so the agent retries with paths. Write access to '/' for a local server is excessive -> block.",
@@ -314,7 +339,7 @@ async function attemptReview(
   request: AutoReviewRequest,
   prompt: string,
   requestTimeoutMs: number,
-): Promise<{ decision: AutoReviewDecision } | { failure: AttemptFailure; error?: string }> {
+): Promise<{ decision: AutoReviewDecision } | { failure: AttemptFailure; reviewCandidates?: UtilityTextAttempt[] }> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const controller = new AbortController();
   try {
@@ -329,14 +354,13 @@ async function attemptReview(
     ]);
     if (text === REVIEW_TIMEOUT) return { failure: 'timeout' };
     if (!text) return { failure: 'empty' };
+    if (typeof text !== 'string') return text;
     const decision = parseAutoPermissionReviewDecision(text);
     if (!decision) return { failure: 'malformed' };
     return { decision };
-  } catch (error) {
-    return {
-      failure: 'error',
-      error: error instanceof Error ? error.message : String(error),
-    };
+  } catch {
+    // Provider exceptions can contain request bodies, credentials, or model output.
+    return { failure: 'error' };
   } finally {
     if (timeout) clearTimeout(timeout);
   }
@@ -370,7 +394,13 @@ export function createAutoPermissionReviewer(
     // Risk-first models wave "low risk" steps through even when nothing at all was user-authored.
     // Decide that case here, after the Host attached any delegated task.
     if (!request.delegatedTask && request.action.kind !== 'read' && hasNoUserIntent(request.userIntent)) {
-      return { verdict: 'block', reason: 'No user request authorizes this action; only reads may run without one.' };
+      // 宿主写死的判定(没有调用模型):标 hostReason,让这条原因能进诊断 / UI 通道 ——
+      // 否则它会被当成模型自由文本过滤掉,用户只看到一句通用「被拦截」。
+      return {
+        verdict: 'block',
+        reason: 'No user request authorizes this action; only reads may run without one.',
+        hostReason: true,
+      };
     }
     const startedAt = Date.now();
     let prompt: string;
@@ -450,24 +480,27 @@ export function createAutoPermissionReviewer(
       lastFailure = result.failure;
       deps.logger.warn('auto permission reviewer attempt failed', {
         agentKind: request.agentKind,
-        providerId: request.providerId ?? null,
-        model: request.model,
+        ...(result.reviewCandidates ? { reviewCandidates: result.reviewCandidates,
+          taskProviderId: request.providerId ?? null, taskModel: request.model }
+          : { providerId: request.providerId ?? null, model: request.model }),
         attempt: attempt + 1,
         maxAttempts: attempts,
         failure: result.failure,
         durationMs: Date.now() - startedAt,
-        ...(result.error ? { error: result.error } : {}),
       });
       if (!isRetriableFailure(result.failure)) break;
     }
 
     deps.logger.warn('auto permission reviewer exhausted attempts', {
       agentKind: request.agentKind,
-      providerId: request.providerId ?? null,
-      model: request.model,
+      taskProviderId: request.providerId ?? null,
+      taskModel: request.model,
       failure: lastFailure,
       durationMs: Date.now() - startedAt,
     });
+    if (lastFailure === 'no_available_model' || lastFailure === 'quota_exhausted') {
+      return { verdict: 'ask', unavailable: true, unavailableReason: lastFailure };
+    }
     return null;
   };
 }

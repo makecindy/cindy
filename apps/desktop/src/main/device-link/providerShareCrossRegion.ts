@@ -16,7 +16,6 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 
 import { app } from 'electron';
-import WebSocket from 'ws';
 
 import {
   DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1,
@@ -38,8 +37,8 @@ import {
 import { getActiveAuthRealm, getAuthState, getCurrentUserId, getDeviceId } from '../authManager.js';
 import { getClientEndpointForRealm, loadClientEndpointsForRealm } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
-import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.js';
-import { serverApiFetch } from '../serverApiClient.js';
+import { openLinkWebSocket } from './linkWebSocket.desktop.js';
+import { serverApiFetch } from '../serverApiClient.desktop.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { deviceName } from './deviceName.js';
 import { desktopDirectRuntime } from './directLink.js';
@@ -79,7 +78,9 @@ interface RegionState {
   timer: ReturnType<typeof setTimeout> | null;
   /** 连续失败次数，用于退避重试(网络或对方区域暂时不可用时不让分享整段消失)。 */
   failures: number;
+  lastFailureWasNetwork: boolean;
   loaded: boolean;
+  listConfirmed: boolean;
   /** Request start of the last successful authoritative list for this region. */
   viewAnchor: ViewAnchor | null;
   requestRevision: number;
@@ -429,10 +430,7 @@ function createClient(rt: Runtime, state: RegionState): DeviceLinkClient {
       remoteControlEnabled: false,
       busy: false,
     }),
-    createWebSocket: async (url, headers) => new WebSocket(url, {
-      headers,
-      agent: await createOutboundHttpAgent(url),
-    } as WebSocket.ClientOptions),
+    createWebSocket: (url, headers) => openLinkWebSocket('device-link', url, { headers }),
     logger: {
       debug: (...args) => log.debug(...args),
       info: (...args) => log.info(...args),
@@ -446,7 +444,7 @@ function createClient(rt: Runtime, state: RegionState): DeviceLinkClient {
     noteHostOnline(rt, state, client, frame.src, true);
     const peer = parseProviderSharePeer(frame.src);
     const payload = frame.payload as { channel?: unknown };
-    if (peer?.role !== 'host' || payload?.channel !== 'maker:provider:changed') return;
+    if (!state.listConfirmed || peer?.role !== 'host' || payload?.channel !== 'maker:provider:changed') return;
     if (state.shares.some(share => share.shareId === peer.shareId && share.hostDeviceId === peer.deviceId && share.status === 'active')) {
       rt.events.catalogChanged?.(`share:${peer.shareId}`);
     }
@@ -465,7 +463,8 @@ function scheduleRefresh(rt: Runtime, state: RegionState): void {
 }
 
 function initialRegionState(region: Region, loaded = false): RegionState {
-  return { region, apiBase: '', credential: null, expiresAt: 0, shares: [], client: null, refreshing: null, refreshingRevision: 0, timer: null, failures: 0, loaded, viewAnchor: null, requestRevision: 0 };
+  return { region, apiBase: '', credential: null, expiresAt: 0, shares: [], client: null, refreshing: null, refreshingRevision: 0, timer: null, failures: 0, lastFailureWasNetwork: false, loaded, viewAnchor: null, requestRevision: 0,
+    listConfirmed: false };
 }
 
 /** 用新名片换取这台电脑在对方区域的分享列表与连接凭证。 */
@@ -514,6 +513,7 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       state.expiresAt = expiresAt;
       const previousShares = state.shares;
       state.shares = preserveNewerHostOnline(previousShares, shares, requestedHostOnlineSequence);
+      state.listConfirmed = true;
       noteSharePermissions(previousShares, state.shares);
       state.loaded = true;
       if (shares.length === 0 || !credential) {
@@ -533,11 +533,12 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
       rt.events.changed();
     } catch (error) {
       if (isCurrent()) {
+        const wasConfirmed = target.listConfirmed;
+        target.listConfirmed = false;
         log.warn('cross-region session refresh failed', { region, error: error instanceof Error ? error.message : String(error) });
         if (isAuthoritativeShareListDenial(error)) {
-          // An explicit refusal is not a pause. Retire only this region's
-          // directory and report a confirmed empty list so the next successful
-          // response can establish a new source.
+          // Retire this region's directory immediately. A refusal does not
+          // count as a successful membership response for preference cleanup.
           target.shares = [];
           target.loaded = true;
           target.client?.stop();
@@ -545,8 +546,12 @@ function refreshRegion(rt: Runtime, region: Region): Promise<void> {
           target.credential = null;
           target.expiresAt = 0;
           rt.events.changed();
+        } else if (wasConfirmed) {
+          rt.events.changed();
         }
         // 退避重试：1 → 2 → 4 … 最多 30 分钟；关闭跨区开关等确定性错误同样按退避慢慢重试。
+        target.lastFailureWasNetwork = error instanceof Error
+          && error.message.startsWith('[DEVICE_LINK_NOT_CONNECTED]');
         target.failures += 1;
         if (target.timer) clearTimeout(target.timer);
         target.timer = setTimeout(() => { void refreshRegion(rt, region); }, Math.min(30 * 60_000, 60_000 * 2 ** Math.min(target.failures - 1, 5)));
@@ -618,6 +623,17 @@ export function restoreCrossRegionReceivedForRemoteGroup(shareIds: readonly stri
   return run;
 }
 
+/** A known cross-region share may try once after its first transport failure. */
+export function retryCrossRegionReceivedForShare(shareId: string): Promise<void> | undefined {
+  const rt = runtime;
+  if (!rt || !current(rt)) return;
+  const state = stateForShare(shareId);
+  if (!state || state.listConfirmed || !state.shares.some(share => share.shareId === shareId && share.status === 'active')) return;
+  if (state.refreshing) return state.refreshing;
+  // A rate limit, refusal, or repeated failure keeps the existing backoff.
+  if (state.lastFailureWasNetwork && state.failures === 1) return refreshRegion(rt, state.region);
+}
+
 /** Missing shares are not removed until account discovery has answered successfully. */
 export async function waitForCrossRegionReceived(): Promise<boolean> {
   const rt = runtime;
@@ -656,6 +672,28 @@ export function isCrossRegionReceivedComplete(): boolean {
 export function getConfirmedCrossRegionReceivedRegions(): Region[] {
   const rt = runtime;
   return rt && current(rt) ? [...rt.regions.values()].filter((state) => state.loaded).map((state) => state.region) : [];
+}
+
+/** Only a successful /session result can confirm absence for preference cleanup. */
+export function getMembershipConfirmedCrossRegionReceivedRegions(): Region[] {
+  const rt = runtime;
+  return rt && current(rt) ? [...rt.regions.values()].filter(state => state.loaded && state.listConfirmed).map(state => state.region) : [];
+}
+
+export function isCrossRegionShareListUnavailable(shareId: string): boolean {
+  return stateForShare(shareId)?.listConfirmed === false;
+}
+
+/** Whether any current cross-region membership list is still unconfirmed. */
+export function hasUnconfirmedCrossRegionReceivedList(): boolean {
+  const rt = runtime;
+  return !!rt && current(rt) && [...rt.regions.values()].some(state => !state.listConfirmed);
+}
+
+export function getUnavailableCrossRegionShareIds(): string[] {
+  const rt = runtime;
+  if (!rt || !current(rt)) return [];
+  return [...rt.regions.values()].flatMap(state => state.listConfirmed ? [] : state.shares.map(share => share.shareId));
 }
 
 /** Per-region display budgets from successful cross-region list requests.
@@ -752,7 +790,7 @@ function crossRegionClientStopped(client: DeviceLinkClient | null): boolean {
 }
 
 export async function crossRegionInvoke(peerKey: string, channel: string, args: unknown[], timeoutMs?: number,
-  options?: { preSend?: () => void; liveProviderMetadata?: true }): Promise<InvokeResultPayload> {
+  options?: { preSend?: () => void; beforeDispatch?: () => void; liveProviderMetadata?: true; ownFreshness?: true }): Promise<InvokeResultPayload> {
   const rt = runtime;
   const peer = parseProviderSharePeer(peerKey);
   const state = peer ? stateForShare(peer.shareId) : null;
@@ -766,14 +804,16 @@ export async function crossRegionInvoke(peerKey: string, channel: string, args: 
     }
   };
   const preSend = () => { assertActive(); options?.preSend?.(); };
-  if (options?.liveProviderMetadata) return crossRegionInvokeLive(peerKey, channel, args, timeoutMs, { preSend });
+  const sendOptions = { preSend, beforeDispatch: options?.beforeDispatch };
+  if (options?.liveProviderMetadata) return crossRegionInvokeLive(peerKey, channel, args, timeoutMs, sendOptions);
   return invokeProviderMetadataContinuity(peerKey, channel, args,
-    () => crossRegionInvokeLive(peerKey, channel, args, timeoutMs, { preSend }),
-    () => { try { preSend(); return true; } catch { return false; } });
+    () => crossRegionInvokeLive(peerKey, channel, args, timeoutMs, sendOptions),
+    () => { try { preSend(); return true; } catch { return false; } },
+    options?.ownFreshness ? { ownFreshness: true } : undefined);
 }
 
 async function crossRegionInvokeLive(peerKey: string, channel: string, args: unknown[], timeoutMs?: number,
-  options?: { preSend?: () => void }): Promise<InvokeResultPayload> {
+  options?: { preSend?: () => void; beforeDispatch?: () => void }): Promise<InvokeResultPayload> {
   const rt = runtime;
   const peer = parseProviderSharePeer(peerKey);
   const state = peer ? stateForShare(peer.shareId) : null;
@@ -800,11 +840,11 @@ async function crossRegionInvokeLive(peerKey: string, channel: string, args: unk
     if (!client.isLinkReady(peerKey)) await open();
     let response: InvokeResultPayload;
     try {
-      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend });
+      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend, beforeDispatch: options?.beforeDispatch });
     } catch (error) {
       if (!(error instanceof DeviceLinkError) || error.code !== 'LINK_NOT_OPEN') throw error;
       await open();
-      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend });
+      response = await client.invoke(peerKey, { channel, args }, timeoutMs, { preSend, beforeDispatch: options?.beforeDispatch });
     }
     if (response.ok) noteOnline(true);
     else if (response.error.code === 'DEVICE_OFFLINE') noteOnline(false);
@@ -815,13 +855,29 @@ async function crossRegionInvokeLive(peerKey: string, channel: string, args: unk
   }
 }
 
-export async function crossRegionLeave(memberId: string): Promise<boolean> {
+export async function crossRegionLeave(memberId: string, onLeft?: () => void): Promise<boolean> {
   const rt = runtime;
   if (!rt) return false;
+  if (!current(rt)) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Account changed');
   for (const state of rt.regions.values()) {
     if (!state.shares.some((share) => share.memberId === memberId)) continue;
     if (!state.credential) throwIpcError('DEVICE_LINK_NOT_CONNECTED', 'Cross-region share is not connected');
     await peerRequest(state.apiBase, `/received/${encodeURIComponent(memberId)}/leave`, {}, state.credential);
+    if (!current(rt)) return true;
+    // Retire only this membership immediately. A pre-leave /session must neither
+    // reinstall it nor rotate the shared client back to an obsolete credential.
+    state.requestRevision++;
+    const next = state.shares.filter((share) => share.memberId !== memberId);
+    noteSharePermissions(state.shares, next);
+    state.shares = next;
+    if (next.length === 0) {
+      state.client?.stop();
+      state.client = null;
+      state.credential = null;
+      state.expiresAt = 0;
+    }
+    onLeft?.();
+    rt.events.changed();
     await refreshRegion(rt, state.region);
     return true;
   }

@@ -49,6 +49,24 @@ async function loadModule() {
 }
 
 describe('providerModelMemory store', () => {
+  // PR #10445 / configuration-and-overrides §4, unit: reset a disabled MiMo
+  // switch through the real store. Existing clear tests covered only effort/Fast.
+  it('clears thinking defaults across source copies without deleting other preferences', async () => {
+    const m = await loadModule();
+    m.setProviderModelThinking('pi', 'mimo-cn', 'mimo-v2.6-pro', false);
+    m.setProviderModelThinking('pi', 'mimo-sgp', 'mimo-v2.6-pro', false);
+    m.setProviderModelThinking('pi', 'mimo-cn', 'mimo-v2.6', false);
+    m.setProviderModelEffort('pi', 'mimo-cn', 'mimo-v2.6-pro', 'high');
+    m.clearProviderModelThinking('pi', 'mimo-cn', 'mimo-v2.6-pro');
+    const saved = memStorage.getItem(m.__STORAGE_KEY)!;
+    m.__resetForTest();
+    memStorage.setItem(m.__STORAGE_KEY, saved);
+    expect(m.getProviderModelThinking('pi', 'mimo-cn', 'mimo-v2.6-pro')).toBeUndefined();
+    expect(m.getProviderModelThinking('pi', 'mimo-sgp', 'mimo-v2.6-pro')).toBeUndefined();
+    expect(m.getProviderModelThinking('pi', 'mimo-cn', 'mimo-v2.6')).toBe(false);
+    expect(m.getProviderModelEffort('pi', 'mimo-cn', 'mimo-v2.6-pro')).toBe('high');
+  });
+
   // Standard tier: speed presets must survive persistence without collapsing Ultrafast to true.
   it('preserves Ultrafast in saved model presets and host snapshots', async () => {
     const m = await loadModule();

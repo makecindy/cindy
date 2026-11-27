@@ -1,8 +1,8 @@
 import { lstat, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { isFormattedUploadCode } from '../../shared/logUpload';
 
 export const TRACE_RETENTION_MS = 7 * 86400_000;
-const REPORT_ID = /^[23456789ABCDEFGHJKMNPQRSTVWXYZ]{4}-[23456789ABCDEFGHJKMNPQRSTVWXYZ]{4}$/;
 
 /** Only generated report directories under the captured owner root are eligible. */
 export async function cleanupTraceReports(
@@ -12,7 +12,7 @@ export async function cleanupTraceReports(
 ): Promise<void> {
   try {
     for (const entry of await readdir(root, { withFileTypes: true })) {
-      if (!entry.isDirectory() || !REPORT_ID.test(entry.name)) continue;
+      if (!entry.isDirectory() || !isFormattedUploadCode(entry.name)) continue;
       const dir = path.resolve(root, entry.name);
       if (path.dirname(dir) !== path.resolve(root)) continue;
       try {

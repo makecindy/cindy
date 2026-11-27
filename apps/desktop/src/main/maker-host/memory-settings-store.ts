@@ -1,3 +1,4 @@
+import { validateAdditionalSettingsOverrides } from '../../shared/settingsEditableCatalog.js';
 /**
  * memory-settings-store —— memory 开关的 main 端持久化 source of truth。
  *
@@ -19,7 +20,6 @@
  * read 失败 (corrupt JSON / 文件不存在) → 走默认值, 同时清掉坏文件避免反复报错。
  */
 
-import { app } from 'electron';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './logger-adapter.js';
@@ -28,9 +28,21 @@ import {
   portableOverrideSettings,
   type OverrideSettingsState,
 } from './override-settings-file.js';
-import { getActiveAppSession, ownerScopedUserDataPath } from '../appSessionState.js';
+import { hasCommittedOwner, ownerScopedPath } from '../ownerContext.js';
+import { userDataPath } from '../userDataPath.js';
+
+import { inspectSettingsFile, isSettingBoolean, validateOptionalSettingsFields } from './settings-inspection.js';
 
 const log = desktopMakerLogger.child('memory-settings-store');
+
+/** 调用方传入已捕获的 owner 目录；此入口不得加载或修复会话意图。 */
+export function inspectMemorySettings(ownerRoot: string) {
+  return inspectSettingsFile({ filePath: () => settingsFilePath(ownerRoot), defaults: DEFAULTS, normalize,
+    validate: (raw) => validateOptionalSettingsFields(raw, {
+      maker: isSettingBoolean, claudeCode: isSettingBoolean, codex: isSettingBoolean, pi: isSettingBoolean,
+    }),
+  });
+}
 
 export interface MemorySettings {
   maker: boolean;
@@ -47,7 +59,7 @@ const DEFAULTS: MemorySettings = {
 };
 
 function settingsFilePath(rootPath?: string): string {
-  return path.join(rootPath ?? app.getPath('userData'), 'memory-settings.json');
+  return rootPath ? path.join(rootPath, 'memory-settings.json') : userDataPath('memory-settings.json');
 }
 
 function normalize(raw: unknown): MemorySettings {
@@ -64,11 +76,13 @@ function normalize(raw: unknown): MemorySettings {
 const stores = new Map<string, ReturnType<typeof createOverrideSettingsFile<MemorySettings>>>();
 
 function currentStore(rootPath?: string) {
-  const ownerRoot = rootPath ?? (getActiveAppSession().dataOwnerId ? ownerScopedUserDataPath() : null);
+  const ownerRoot = rootPath ?? (hasCommittedOwner() ? ownerScopedPath() : null);
   const key = ownerRoot ?? '<global>';
   let current = stores.get(key);
   if (!current) {
     current = createOverrideSettingsFile<MemorySettings>({
+  // Cloud settings reads only; ordinary writes are unchanged.
+  validateOverrides: raw => validateAdditionalSettingsOverrides('memory', raw),
       filePath: () => settingsFilePath(ownerRoot ?? undefined),
       defaults: DEFAULTS,
       normalize,
@@ -138,3 +152,5 @@ export function resetMemorySettings(): MemorySettings {
 
 /** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
 export const memoryPortableSettings = portableOverrideSettings(() => currentStore());
+/** Internal Host settings adapter; no new IPC or persistence location. */
+export function getMemorySettingsStore() { return currentStore(); }

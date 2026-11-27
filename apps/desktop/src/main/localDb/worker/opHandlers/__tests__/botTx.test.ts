@@ -21,7 +21,7 @@ describe('Bot named worker transactions', () => {
         scheduled_model_baseline TEXT,
         sdk_session_id TEXT, total_token_usage INTEGER NOT NULL, total_cost_usd REAL NOT NULL,
         context_tokens INTEGER NOT NULL, context_window INTEGER NOT NULL, fast_mode INTEGER NOT NULL,
-        plan_mode_enabled INTEGER NOT NULL, cleared_at INTEGER, pinned_at INTEGER, user_send_at INTEGER,
+        plan_mode_enabled INTEGER NOT NULL, cleared_at INTEGER, pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, user_send_at INTEGER,
         agent_kind TEXT NOT NULL, orca_role TEXT, parent_session_id TEXT, forked_at_message_id TEXT,
         worktree_path TEXT, extra_dirs TEXT NOT NULL, remote_host_id TEXT, provider_id TEXT, agent_device_id TEXT,
         source TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
@@ -105,7 +105,8 @@ describe('Bot named worker transactions', () => {
       },
       apply: async (_id, route) => {
         if (failApply) throw new Error('provider unavailable');
-        current = { ...route, effort: route.effort as ScheduledModelSelection['effort'] };
+        if (route.agentKind === 'acp') throw new Error('expected a built-in route in this fixture');
+        current = { ...route, agentKind: route.agentKind, effort: route.effort as ScheduledModelSelection['effort'] };
       },
       onSelectionAccepted: async () => { writeBaseline(null); },
     });
@@ -325,6 +326,45 @@ describe('Bot named worker transactions', () => {
     expect(h.current().model).toBe('runtime-fallback');
   });
 
+  // #9960: exercise the worker transaction, not a projection of its singleton predicate.
+  // Shadow ids are a main-owned input; legacy callers omit it. No row is archived or re-keyed.
+  it('excludes only the supplied inactive Cindy from creation and restore, preserving effective conflicts', () => {
+    const args = { id: 'orphan', displayName: 'Old Cindy', description: '', avatar: '🤖', avatarColor: 'blue',
+      identitySource: 'Identity', capabilitiesJson: '{"templateId":"cindy"}', now: 1 };
+    tx(db, { name: 'bots.createProfile', args });
+    const original = db.prepare('SELECT * FROM bot_profiles WHERE id = ?').get('orphan');
+    tx(db, { name: 'bots.createProfile', args: { ...args, id: 'incoming', displayName: 'Cloud Cindy', inactiveCindyIds: ['orphan'] } });
+    expect(db.prepare('SELECT * FROM bot_profiles WHERE id = ?').get('orphan')).toEqual(original);
+    // A second live Cindy is still rejected even though the orphan is excluded.
+    expect(() => tx(db, { name: 'bots.createProfile', args: { ...args, id: 'third', displayName: 'Third', inactiveCindyIds: ['orphan'] } }))
+      .toThrow('matching companion');
+    expect(() => tx(db, { name: 'bots.updateProfile', args: { id: 'orphan', expectedCurrentVersion: 1, now: 2,
+      inactiveCindyIds: [], profileContentChanged: false } })).toThrow('matching companion');
+    // Deleting reserves the identity until that lifecycle finishes, even for a shadowed id.
+    db.prepare("UPDATE bot_profiles SET status = 'deleting' WHERE id = 'orphan'").run();
+    db.prepare("UPDATE bot_profiles SET status = 'archived' WHERE id = 'incoming'").run();
+    expect(() => tx(db, { name: 'bots.createProfile', args: { ...args, id: 'third', displayName: 'Third', inactiveCindyIds: ['orphan'] } }))
+      .toThrow('matching companion');
+    expect(() => tx(db, { name: 'bots.createProfile', args: { ...args, id: 'third', inactiveCindyIds: true } }))
+      .toThrow('inactiveCindyIds');
+  });
+
+  // #6578: a confirmed cloud deletion releases the name, without deleting the local identity/history.
+  // Existing archive coverage bypassed the cloud-copy transaction; this is the smallest worker/db input.
+  it('retires a cloud copy without deleting its profile version, and releases its name', () => {
+    const args = { id: 'old', displayName: 'Mia', description: '', avatar: '🤖', avatarColor: 'blue', identitySource: 'Identity', capabilitiesJson: '{}', now: 1 };
+    tx(db, { name: 'bots.createProfile', args });
+    expect(tx(db, { name: 'bots.retireCloudCopy', args: { botId: 'old', at: 2 } })).toEqual({ changed: true });
+    expect(tx(db, { name: 'bots.retireCloudCopy', args: { botId: 'old', at: 3 } })).toEqual({ changed: false });
+    tx(db, { name: 'bots.createProfile', args: { ...args, id: 'new' } });
+    expect(db.prepare('SELECT id,status FROM bot_profiles ORDER BY id').all()).toEqual([
+      { id: 'new', status: 'active' }, { id: 'old', status: 'archived' },
+    ]);
+    expect(db.prepare('SELECT identity_source FROM bot_profile_versions WHERE bot_id=?').get('old')).toEqual({ identity_source: 'Identity' });
+    db.prepare("UPDATE bot_profiles SET status='deleting' WHERE id='new'").run();
+    expect(tx(db, { name: 'bots.retireCloudCopy', args: { botId: 'new', at: 4 } })).toEqual({ changed: false });
+  });
+
   it('atomically rejects duplicate names and a second Cindy without touching the first profile', () => {
     const args = { id: 'first', displayName: 'Renamed', description: '', avatar: '🤖', avatarColor: 'blue', identitySource: 'Custom identity', capabilitiesJson: '{"templateId":"cindy"}', now: 1 };
     tx(db, { name: 'bots.createProfile', args });
@@ -516,21 +556,16 @@ describe('Bot named worker transactions', () => {
       botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1, session: session('main'), now: 1,
     } });
     tx(db, { name: 'bots.createChannelLane', args: { botId: 'bot-1', routeKey: 'im:feishu:g:1', session: session('feishu') } });
-    // Routine context is keyed by the standing instruction, never the main task.
-    expect(tx(db, { name: 'bots.createRoutineLane', args: { botId: 'bot-1', routeKey: 'routine:r1', session: session('routine') } }))
-      .toMatchObject({ sessionId: 'routine', created: true });
-    expect(tx(db, { name: 'bots.createRoutineLane', args: { botId: 'bot-1', routeKey: 'routine:r1', session: session('duplicate') } }))
-      .toMatchObject({ sessionId: 'routine', created: false });
-    expect(tx(db, { name: 'bots.createRoutineLane', args: { botId: 'bot-1', routeKey: 'routine:r2', session: session('second-routine') } }))
-      .toMatchObject({ sessionId: 'second-routine', created: true });
     expect(db.prepare("SELECT canonical_session_id FROM bot_profiles WHERE id = 'bot-1'").pluck().get()).toBe('main');
-    for (const role of ['group', 'thread', 'delegation', 'history']) {
+    // `routine` lanes of the removed V1 routines remain in older databases.
+    for (const [id, role] of [['group', 'group'], ['thread', 'thread'], ['delegation', 'delegation'], ['history', 'history'],
+      ['routine', 'routine'], ['second-routine', 'routine']]) {
       db.prepare(`INSERT INTO sessions SELECT ?, title, working_dir, project_dir, workspace_kind, model, effort, permission_mode, status,
         scheduled_model_baseline, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode,
-        plan_mode_enabled, cleared_at, pinned_at, user_send_at, agent_kind, orca_role, parent_session_id, forked_at_message_id,
-        worktree_path, extra_dirs, remote_host_id, provider_id, agent_device_id, source, created_at, updated_at FROM sessions WHERE id = 'main'`).run(role);
+        plan_mode_enabled, cleared_at, pinned_at, snoozed_until, snoozed_at, user_send_at, agent_kind, orca_role, parent_session_id, forked_at_message_id,
+        worktree_path, extra_dirs, remote_host_id, provider_id, agent_device_id, source, created_at, updated_at FROM sessions WHERE id = 'main'`).run(id);
       db.prepare('INSERT INTO bot_session_links (id, bot_id, session_id, profile_version, role, created_at, archived_at) VALUES (?, ?, ?, 1, ?, 1, ?)')
-        .run(role, 'bot-1', role, role, role === 'history' ? 1 : null);
+        .run(id, 'bot-1', id, role, role === 'history' ? 1 : null);
     }
     const mode = (id: string) => db.prepare('SELECT permission_mode FROM sessions WHERE id = ?').pluck().get(id);
     for (const next of ['bypassPermissions', 'auto', 'ask']) {
@@ -561,6 +596,72 @@ describe('Bot named worker transactions', () => {
     expect(mode('routine')).toBe('ask');
     expect(tx(db, { name: 'bots.reconcileLanePermission', args: { sessionId: 'history' } })).toMatchObject({ mode: null });
     expect(db.prepare('SELECT COUNT(*) FROM sessions').pluck().get()).toBe(9);
+  });
+
+  // Test value: the startup cleanup (`bots.pruneEmptyLegacyRoutineHistory`) deletes user data, so it pins
+  // exactly what goes: an archived single-run V1 routine task in teammate history that its run records prove
+  // never reached the model, with no message and no other reference (bot-routines.md, 2026-10-30 ruling).
+  // A real account had 102 such shells; the 18 runs with messages must stay. Minimal failure: a reused task,
+  // a task without that proof, a rewound message, a run record or an attachment ref that the predicate
+  // overlooks.
+  // Unit tier, isolated SQLite.
+  it('removes only proven-undispatched empty single-run V1 routine tasks from teammate history, once', () => {
+    db.exec(`
+      CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        rewind_at INTEGER);
+      CREATE TABLE schedule_runs (id TEXT PRIMARY KEY, session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL);
+      -- A polymorphic reference: no foreign key, and a column name that says nothing about tasks.
+      CREATE TABLE media_refs (id TEXT PRIMARY KEY, ref_kind TEXT NOT NULL, ref_id TEXT NOT NULL);
+      CREATE VIRTUAL TABLE messages_fts USING fts5(content);
+    `);
+    tx(db, { name: 'bots.createProfile', args: {
+      id: 'bot-1', displayName: 'Hermes', description: '', avatar: '🤖', avatarColor: 'violet',
+      identitySource: 'identity', capabilitiesJson: '{}', now: 1,
+    } });
+    tx(db, { name: 'bots.replaceCanonicalSession', args: {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      session: { id: 'main', title: 'Hermes', workingDir: '/tmp/fixture', workspaceKind: 'dialogue', model: 'm',
+        effort: 'high', permissionMode: 'ask', agentKind: 'codex', extraDirs: '[]', source: 'bot', createdAt: 1, updatedAt: 1 },
+      now: 1,
+    } });
+    const uuid = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    const rows: Array<[id: string, role: string, routeKey: string | null, status: string]> = [
+      ['empty-fresh', 'history', `routine:r1:${uuid}`, 'archived'],
+      ['empty-persistent', 'history', 'routine:r2', 'archived'],
+      ['empty-unproven', 'history', `routine:r1:${uuid.replace('0f', '6f')}`, 'archived'],
+      ['with-message', 'history', `routine:r1:${uuid.replace('0f', '1f')}`, 'archived'],
+      ['with-rewound', 'history', `routine:r1:${uuid.replace('0f', '2f')}`, 'archived'],
+      ['with-run', 'history', `routine:r1:${uuid.replace('0f', '3f')}`, 'archived'],
+      ['with-media', 'history', `routine:r1:${uuid.replace('0f', '5f')}`, 'archived'],
+      ['old-canonical', 'history', null, 'archived'],
+      ['delegated', 'history', 'delegation:d1', 'archived'],
+      ['restored', 'history', `routine:r1:${uuid.replace('0f', '4f')}`, 'active'],
+      ['routine-lane', 'routine', 'routine:r3', 'archived'],
+    ];
+    for (const [id, role, routeKey, status] of rows) {
+      db.prepare(`INSERT INTO sessions SELECT ?, title, working_dir, project_dir, workspace_kind, model, effort, permission_mode, ?,
+        scheduled_model_baseline, sdk_session_id, total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode,
+        plan_mode_enabled, cleared_at, pinned_at, snoozed_until, snoozed_at, user_send_at, agent_kind, orca_role, parent_session_id, forked_at_message_id,
+        worktree_path, extra_dirs, remote_host_id, provider_id, agent_device_id, source, created_at, updated_at FROM sessions WHERE id = 'main'`).run(id, status);
+      db.prepare(`INSERT INTO bot_session_links (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
+        VALUES (?, 'bot-1', ?, 1, ?, ?, 1, ?)`).run(id, id, role, routeKey, role === 'history' ? 2 : null);
+    }
+    db.prepare("INSERT INTO messages (id, session_id, rewind_at) VALUES ('m1', 'with-message', NULL), ('m2', 'with-rewound', 5)").run();
+    db.prepare("INSERT INTO schedule_runs (id, session_id) VALUES ('run-1', 'with-run')").run();
+    db.prepare("INSERT INTO media_refs (id, ref_kind, ref_id) VALUES ('ref-1', 'session-attachment', 'with-media')").run();
+    const remaining = () => db.prepare('SELECT id FROM sessions ORDER BY id').pluck().all();
+    const kept = ['delegated', 'empty-persistent', 'empty-unproven', 'main', 'old-canonical', 'restored', 'routine-lane',
+      'with-media', 'with-message', 'with-rewound', 'with-run'];
+    // Everything but `empty-unproven` comes with run records saying it never reached the model.
+    const args = { neverDispatchedSessionIds: rows.map(([id]) => id).filter((id) => id !== 'empty-unproven') };
+
+    expect(tx(db, { name: 'bots.pruneEmptyLegacyRoutineHistory', args })).toEqual({ removed: 1, botIds: ['bot-1'] });
+    expect(remaining()).toEqual(kept);
+    expect(db.prepare("SELECT COUNT(*) FROM bot_session_links WHERE session_id = 'empty-fresh'").pluck().get()).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) FROM messages').pluck().get()).toBe(2);
+    // Repeating it (another window, the next start) changes nothing.
+    expect(tx(db, { name: 'bots.pruneEmptyLegacyRoutineHistory', args })).toEqual({ removed: 0, botIds: [] });
+    expect(remaining()).toEqual(kept);
   });
 
   it('does not insert a losing canonical CAS session', () => {
@@ -665,4 +766,75 @@ describe('Bot named worker transactions', () => {
     expect(db.prepare("SELECT role FROM bot_session_links WHERE bot_id = 'bot-1'").pluck().get())
       .toBe('route');
   });
+  // A buddy created from a template keeps the template name as its canonical chat
+  // title. Hand-off chips read that title, so a rename has to carry over.
+  it('renames the canonical chat together with the buddy', () => {
+    tx(db, { name: 'bots.createProfile', args: {
+      id: 'renamed-bot', displayName: 'Old Name', description: '', avatar: '', avatarColor: 'blue',
+      identitySource: 'identity', capabilitiesJson: JSON.stringify({ modelChain: [] }), now: 1,
+    } });
+    tx(db, { name: 'bots.replaceCanonicalSession', args: {
+      botId: 'renamed-bot', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+      session: { id: 'renamed-session', title: 'Old Name', workingDir: '/tmp/renamed-session',
+        workspaceKind: 'dialogue', model: 'temporary', effort: 'high', permissionMode: 'ask',
+        agentKind: 'codex', remoteHostId: null, providerId: null, extraDirs: '[]',
+        source: 'bot', createdAt: 2, updatedAt: 2 }, now: 2,
+    } });
+    tx(db, { name: 'bots.updateProfile', args: {
+      id: 'renamed-bot', expectedCurrentVersion: 1, now: 3,
+      displayName: 'New Name', profileContentChanged: false,
+    } });
+    expect(db.prepare('SELECT title FROM sessions WHERE id = ?').pluck().get('renamed-session'))
+      .toBe('New Name');
+  });
+
+  // Greptile P1 regression: while a built-in task is temporarily switched to a plugin engine
+  // (which narrowed sessions.permission_mode to 'default'), manual permission changes must update
+  // the owner's saved baseline without forcing an unsupported mode onto the temporary plugin row.
+  it('updates scheduled_model_baseline permissionMode without corrupting a temporary plugin row', () => {
+    const baseline = JSON.stringify({
+      scopeId: 'scope-1',
+      agentKind: 'claude-code',
+      agentDeviceId: null,
+      model: 'claude-sonnet-4-6',
+      providerId: null,
+      effort: 'high',
+      fastMode: false,
+      permissionMode: 'acceptEdits',
+    });
+    db.prepare(`INSERT INTO sessions
+      (id, title, workspace_kind, model, effort, permission_mode, status, scheduled_model_baseline,
+       total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, plan_mode_enabled,
+       agent_kind, extra_dirs, source, created_at, updated_at)
+      VALUES ('temp-acp', 'Task', 'dialogue', 'gemini-4', '', 'default', 'active', ?,
+       0, 0, 0, 0, 0, 0, 'acp', '[]', 'desktop', 1, 1)`).run(baseline);
+
+    expect(tx(db, { name: 'bots.persistSessionPermission', args: { sessionId: 'temp-acp', mode: 'bypassPermissions' } }))
+      .toEqual({ updated: true });
+    const row = db.prepare('SELECT permission_mode, scheduled_model_baseline FROM sessions WHERE id = ?')
+      .get('temp-acp') as { permission_mode: string; scheduled_model_baseline: string };
+    expect(row.permission_mode).toBe('default');
+    expect(JSON.parse(row.scheduled_model_baseline)).toMatchObject({
+      agentKind: 'claude-code',
+      permissionMode: 'bypassPermissions',
+    });
+
+    // Same-family temporary built-in override updates both the row and the baseline.
+    db.prepare(`INSERT INTO sessions
+      (id, title, workspace_kind, model, effort, permission_mode, status, scheduled_model_baseline,
+       total_token_usage, total_cost_usd, context_tokens, context_window, fast_mode, plan_mode_enabled,
+       agent_kind, extra_dirs, source, created_at, updated_at)
+      VALUES ('temp-codex', 'Task 2', 'dialogue', 'gpt-5.4', 'high', 'acceptEdits', 'active', ?,
+       0, 0, 0, 0, 0, 0, 'codex', '[]', 'desktop', 1, 1)`).run(baseline);
+    expect(tx(db, { name: 'bots.persistSessionPermission', args: { sessionId: 'temp-codex', mode: 'ask' } }))
+      .toEqual({ updated: true });
+    const builtinRow = db.prepare('SELECT permission_mode, scheduled_model_baseline FROM sessions WHERE id = ?')
+      .get('temp-codex') as { permission_mode: string; scheduled_model_baseline: string };
+    expect(builtinRow.permission_mode).toBe('ask');
+    expect(JSON.parse(builtinRow.scheduled_model_baseline)).toMatchObject({
+      agentKind: 'claude-code',
+      permissionMode: 'ask',
+    });
+  });
+
 });

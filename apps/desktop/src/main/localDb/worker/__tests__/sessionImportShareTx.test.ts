@@ -23,6 +23,7 @@ function createTables(db: Database.Database): void {
       sdk_session_id TEXT,
       total_token_usage INTEGER NOT NULL DEFAULT 0,
       total_cost_usd REAL NOT NULL DEFAULT 0,
+      total_cost_usd_is_approximate INTEGER DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
@@ -39,6 +40,12 @@ function createTables(db: Database.Database): void {
       user_send_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE mcp_app_view_states (
+      message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      server_id TEXT NOT NULL, server_revision TEXT NOT NULL, plugin_instance TEXT,
+      state_json TEXT NOT NULL, byte_length INTEGER NOT NULL
     );
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,

@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import net from 'node:net';
 
 import { createNativeBinding } from '../native-binding';
+import * as registrationLocks from '../../device-link/crossProcessLock';
 
 const EXT = 'a'.repeat(32);
 const dirs: string[] = [];
@@ -48,6 +49,22 @@ async function fixture() {
 }
 
 describe('native-binding', () => {
+  // Unit regression: an occupied registration lock must not leave the binding "preparing"
+  // forever, otherwise the slot's transient-failure recovery skips it.
+  it('reports a busy registration as unavailable and installs after the lock is released', async () => {
+    const { binaryDir, profile, root } = await fixture();
+    const binding = createNativeBinding({ hostName: 'com.example.browser', binaryDir, root,
+      profiles: [profile], platform: 'darwin', arch: 'arm64' });
+    const lock = vi.spyOn(registrationLocks, 'withSecurityBoundaryLock')
+      .mockImplementationOnce(async (_path, _options, work) => work({ held: false, reason: 'busy' }));
+    try {
+      expect(await binding.install(18819, [EXT])).toMatchObject({ ok: false, reason: 'REGISTRATION_BUSY' });
+      expect(binding.status()).toBe('unavailable');
+      expect(await binding.install(18819, [EXT])).toEqual({ ok: true });
+      expect(binding.status()).toBe('ready');
+    } finally { lock.mockRestore(); await binding.close(); }
+  });
+
   // Contract: distinct installed instances cannot overwrite the same system host
   // registration until the owner confirms. Existing cases covered only one shared instance.
   it('requires explicit takeover and leaves the new registration intact when the old binding closes', async () => {
@@ -145,7 +162,8 @@ describe('native-binding', () => {
 
   it.each([
     { input: 'access-denied', reason: 'EACCES' },
-    { input: 'malformed', reason: 'INSTALL_FAILED' },
+    { input: 'timeout', reason: 'REGISTRY_READ_TIMEOUT' },
+    { input: 'malformed', reason: 'REGISTRY_READ_FAILED' },
     { input: 'missing-manifest', reason: 'ENOENT' },
   ])('does not overwrite Windows registrations when the query is $input', async ({ input, reason }) => {
     const { dir, binaryDir, root } = await fixture();
@@ -153,6 +171,7 @@ describe('native-binding', () => {
     await fs.writeFile(path.join(binaryDir, 'win32-x64', 'cindy-browser-native.exe'), 'fixture');
     const run = vi.fn(async () => {
       if (input === 'access-denied') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+      if (input === 'timeout') throw Object.assign(new Error('deadline'), { killed: true });
       return { stdout: input === 'malformed' ? 'invalid JSON' : JSON.stringify([path.join(dir, 'absent.json')]) };
     });
     const n = createNativeBinding({ hostName: 'com.example.browser', binaryDir, root,
@@ -160,6 +179,32 @@ describe('native-binding', () => {
     expect(await n.install(18819, [EXT])).toMatchObject({ ok: false, reason });
     await expect(fs.access(path.join(root, 'com.example.browser.json'))).rejects.toThrow();
     await expect(fs.access(path.join(root, 'cindy-browser-native.exe'))).rejects.toThrow();
+  });
+
+  // Unit regression for #11579: native-reader failures must stop installation before publication.
+  it.each([
+    ['conflict', 'NATIVE_HOST_IN_USE'],
+    ['invalid', 'NATIVE_PATH_UNSAFE'],
+    ['unreadable', 'REGISTRY_READ_FAILED'],
+  ])('leaves Windows registrations untouched when the native reader reports %s', async (input, reason) => {
+    const { dir, binaryDir, root } = await fixture();
+    const foreign = path.join(dir, 'foreign.json');
+    const content = JSON.stringify({ path: path.join(dir, 'foreign.exe') });
+    await fs.writeFile(foreign, content);
+    const run = vi.fn(async () => ({ stdout: '[]' }));
+    const binding = createNativeBinding({
+      hostName: 'com.example.browser', binaryDir, root, platform: 'win32', arch: 'x64', run,
+      loadWindowsManifestReader: async () => key => {
+        if (!key.includes('BraveSoftware')) return null;
+        if (input === 'conflict') return foreign;
+        throw new Error(input === 'invalid' ? 'NATIVE_PATH_UNSAFE' : 'read failed');
+      },
+    });
+    expect(await binding.install(18819, [EXT])).toMatchObject({ ok: false, reason });
+    expect(run).not.toHaveBeenCalled();
+    for (const file of ['com.example.browser.json', path.join('connections', '18819.json')])
+      await expect(fs.access(path.join(root, file))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(foreign, 'utf8')).toBe(content);
   });
 
   it('registers only allowed origins; the private authority never enters the browser manifest', async () => {
@@ -331,7 +376,11 @@ describe('native-binding', () => {
     const { dir, binaryDir } = await fixture();
     await fs.mkdir(path.join(binaryDir, 'win32-x64'), { recursive: true });
     await fs.writeFile(path.join(binaryDir, 'win32-x64', 'cindy-browser-native.exe'), 'fixture');
-    const run = vi.fn(async (_file: string, _args: string[]) => ({ stdout: '[]' }));
+    // #11579: the native reader must let an install finish even on a machine
+    // where the portable PowerShell reader times out on every invocation.
+    const run = vi.fn(async (file: string, _args: string[]) => {
+      if (file.endsWith('powershell.exe')) throw Object.assign(new Error('deadline'), { killed: true });
+    });
     const n = createNativeBinding({
       hostName: 'com.example.browser',
       binaryDir,
@@ -339,6 +388,14 @@ describe('native-binding', () => {
       platform: 'win32',
       arch: 'x64',
       env: { SystemRoot: 'C:\\Windows' },
+      loadWindowsManifestReader: async () => {
+        // Another installer can acquire the real registration lock during a cold addon load.
+        const lockPath = path.join(dir, 'native', 'com.example.browser.lock');
+        await registrationLocks.withSecurityBoundaryLock(lockPath, { label: 'competing installer', waitMs: 0 }, async lock => {
+          expect(lock.held).toBe(true);
+        });
+        return () => null;
+      },
       run,
     });
     expect((await n.install(18819, [EXT])).ok).toBe(true);
@@ -358,7 +415,7 @@ describe('native-binding', () => {
   it('fails closed when the executable is absent or the registration directory is a symlink', async () => {
     const { dir, binaryDir, profile } = await fixture();
     const link = path.join(dir, 'link');
-    await fs.symlink(profile, link);
+    await fs.symlink(profile, link, process.platform === 'win32' ? 'junction' : 'dir');
     const linked = createNativeBinding({
       hostName: 'com.example.browser',
       binaryDir,
@@ -380,6 +437,9 @@ describe('native-binding', () => {
       platform: 'darwin',
       arch: 'arm64',
     });
-    expect(await missing.install(18819, [EXT])).toMatchObject({ ok: false, reason: 'ENOENT' });
+    // A missing package cannot heal by rewriting registration files every few seconds.
+    expect(await missing.install(18819, [EXT])).toMatchObject({ ok: false, reason: 'NATIVE_BINARY_MISSING' });
+    expect(missing.status()).toBe('unavailable');
+    await expect(fs.access(path.join(dir, 'native2', 'connections', '18819.json'))).rejects.toThrow();
   });
 });

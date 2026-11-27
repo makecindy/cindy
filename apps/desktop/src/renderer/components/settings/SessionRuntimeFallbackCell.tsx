@@ -63,7 +63,7 @@ export function SessionRuntimeFallbackCell() {
   }, [setEnabled, setIsCustomized, t]);
 
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-[14px]">
+    <div className="flex items-center justify-between gap-3 px-4 py-3.5">
       <div className="flex items-center gap-3">
         <div
           className={cn(
@@ -73,7 +73,7 @@ export function SessionRuntimeFallbackCell() {
         >
           <RefreshCcw size={18} className="text-[var(--settings-section-title)]" />
         </div>
-        <div className="flex flex-col gap-[8px]">
+        <div className="flex flex-col gap-2">
           <p className="text-14 font-medium leading-none text-[var(--settings-section-title)]">
             {t('settings.sessionRuntimeFallback.cell.label')}
           </p>

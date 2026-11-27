@@ -11,9 +11,28 @@ const schedule: Schedule = {
   webhookTrigger: { events: ['issues.opened'], source: { preset: 'github' } },
 };
 
+// Issue #10224: automation prompts are often dozens of lines long.
+const longPrompt = Array.from({ length: 40 }, (_, index) =>
+  `${index + 1}. 检查项目的新动态，按负责人分组并总结需要跟进的事项。`).join('\n');
+
+// The official GitLab plugin (event names from its manifest), installed only in the gitlab-plugin-* cases.
+const gitlabPlugin = ctx.case.startsWith('gitlab-plugin') ? [{
+  plugin: 'cindy-gitlab', name: 'GitLab', state: 'listening',
+  events: [['merge_request.opened', 'MR 新建'], ['merge_request.updated', 'MR 有新提交或更新'], ['merge_request.comment', 'MR 新评论'],
+    ['merge_request.approved', 'MR 被批准'], ['merge_request.pipeline', 'MR 流水线出结果'], ['merge_request.merged', 'MR 已合并'],
+    ['issue.opened', 'Issue 新建'], ['issue.comment', 'Issue 新评论'], ['issue.closed', 'Issue 已关闭']]
+    .map(([type, name]) => ({ type, name, fields: ['host', 'project', 'iid'] })),
+}] : [];
+
 void mountPage({
   route: '/cc-agent/scheduled',
-  host: { maker: {
+  host: { ghosts: { listEventSources: async () => gitlabPlugin, onChanged: subscription('ghostsChanged') }, gitContext: {
+    githubAppStatus: async () => ({ available: true, login: null }),
+    // Fixture lookup: #7 is an issue, every other number a pull request.
+    resolveGithubItem: async (_repository: string, number: number) => number === 7
+      ? { ok: true, kind: 'issue', title: '启动时崩溃', state: 'open' }
+      : { ok: true, kind: 'pr', title: '修复启动流程', state: 'open' },
+  }, maker: {
     listAvailableAgents: async () => ['codex'],
     onAgentsChanged: subscription('agentsChanged'),
     schedule: {
@@ -21,7 +40,11 @@ void mountPage({
     webhookAccount: async () => ({ used: 1, limit: 10, endpoints: [] }),
     scriptCapabilityStatus: async () => ({ statuses: [] }),
   } } },
-  render: () => <ScheduleFormDialog open initial={ctx.case === 'create' ? null : schedule}
+  render: () => <ScheduleFormDialog open
+    initial={ctx.case === 'script-settings' ? { ...schedule, webhookTrigger: undefined, executionMode: 'script',
+      scriptConfig: { command: 'node read-status.mjs', capabilities: ['settings.read', 'usage.read'] } }
+      : ctx.case === 'create' ? null
+      : ctx.case === 'long-prompt' || ctx.case === 'expanded' ? { ...schedule, prompt: longPrompt } : schedule}
     initialValues={ctx.case === 'create' ? { webhookEnabled: true } : undefined}
     onOpenChange={() => {}} onSubmit={forbid('save automation')} />,
 });

@@ -13,14 +13,31 @@ export default {
     authoring: { about: 'Choose the exact local or market instance before submission', viewport: { width: 360, height: 900 } },
     market: { about: 'Market details do not offer in-place file updates' },
     permissions: { about: 'Explicit auto-tool and native-host permission rows', viewport: { width: 360, height: 900 } },
+    'host-tools': { about: 'Installed Host tool declarations without supplementary approval' },
+    'remote-source': { about: 'Remote plugin provenance without a misleading local detail link', viewport: { width: 360, height: 240 } },
+    'host-tool-permissions': { about: 'Install consent for the five Host tool groups', viewport: { width: 360, height: 900 } },
   },
   async check(page, ui) {
-    if (ui.case === 'permissions') return;
+    if (ui.case === 'remote-source') {
+      assert.equal(await page.getByRole('button').count(), 0);
+      return;
+    }
+    if (ui.case === 'permissions' || ui.case === 'host-tool-permissions') return;
+    if (ui.case === 'host-tools') {
+      await ui.capture('installed-host-capabilities');
+      await page.getByRole('button', { name: await ui.t('settings.ghosts.detail.viewAllPermissions'), exact: true }).click();
+      for (const key of ['hostTools_history', 'hostTools_control', 'hostTools_handoff', 'hostTools_settings', 'hostTools_scheduler', 'subscribeMessage', 'subscribeTaskState']) {
+        assert.equal(await page.getByRole('dialog').getByText(await ui.t(`settings.ghosts.perm.${key}`), { exact: true }).count(), 1);
+      }
+      await page.getByRole('dialog').getByText(await ui.t('settings.ghosts.perm.hostTools_schedulerDetail'), { exact: true }).scrollIntoViewIfNeeded();
+      await ui.capture('scheduler-permission');
+      return;
+    }
     if (ui.case === 'authoring') {
-      const local = page.getByRole('region', { name: await ui.t('settings.ghosts.contribution.localVersion'), exact: true });
-      await local.getByRole('combobox').click();
+      const versions = page.getByRole('navigation', { name: await ui.t('settings.ghosts.contribution.history'), exact: true });
+      await versions.getByRole('combobox', { name: await ui.t('settings.ghosts.contribution.localVersion'), exact: true }).click();
       await page.getByRole('option', { name: `1.1.0 · ${await ui.t('settings.ghosts.page.origin.local')}`, exact: true }).click();
-      const button = local.getByRole('button', { name: await ui.t('settings.ghosts.contribution.submitVersion', { version: '1.1.0' }), exact: true });
+      const button = page.getByRole('button', { name: await ui.t('settings.ghosts.contribution.submitVersion', { version: '1.1.0' }), exact: true });
       await button.waitFor();
       await ui.capture('local-selected');
       await button.click();
@@ -34,7 +51,10 @@ export default {
       return;
     }
 
-    assert.ok((await page.locator('main').innerText()).includes(await ui.t('settings.ghosts.detail.localDevelopment')));
+    const details = page.getByText(await ui.t('settings.ghosts.detail.infoTitle'), { exact: true });
+    await details.click();
+    await page.getByText(await ui.t('settings.ghosts.detail.localDevelopment'), { exact: true }).waitFor();
+    await details.click();
     const button = page.getByRole('button', { name: await ui.t('settings.ghosts.detail.browserUse'), exact: true });
     await button.click();
     await page.getByRole('status').filter({ hasText: await ui.t('settings.ghosts.detail.browserActivated') }).waitFor();

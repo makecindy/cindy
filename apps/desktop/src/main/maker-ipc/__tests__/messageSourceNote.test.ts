@@ -38,6 +38,7 @@ describe('buildWireMessageSourceNote', () => {
       .toContain('主人对本任务的请求');
     expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'delegated-continuation', request: { ...request, ownerVerified: true } } }))
       .toContain('主人对本任务的请求');
+    expect(verified).not.toContain('不是用户本人输入');
     const unverified = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request } });
     expect(unverified).toContain('未核实为主人本人');
     expect(unverified).not.toContain('主人对本任务的请求');
@@ -54,11 +55,34 @@ describe('buildWireMessageSourceNote', () => {
       request: { ...request, delegatedText: 'Fix #12 and merge it.' } } });
     expect(checked).toContain('代表用户对本任务的请求');
     expect(checked).not.toContain('用户原话');
+    // 2026-11-21: a verified hand-off must not open with "not the user's input" before the host's check.
+    expect(checked).toBe('[消息来源] 本条由伙伴 (bot_id: filo) 通过任务 (session_id: s-1) 发送。'
+      + '宿主已核实这条消息代表用户对本任务的请求，按用户的请求处理，范围以这条消息为限。');
+    // The owner's words in a task-card thread carry the same checked receipt.
+    const thread = { kind: 'session', senderSessionId: '', displayText: 'Ship it',
+      groupThread: { groupId: 'g-1', groupName: 'Launch', speakerId: 'm-1', speakerName: 'Chris' } };
+    expect(buildWireMessageSourceNote({ origin: thread, autoReviewUserText: { kind: 'agent-request',
+      request: { ...request, delegatedText: 'Ship it' } } }))
+      .toBe('[消息来源] 本条由「Chris」(member_id: m-1)在群聊「Launch」(group_id: g-1)的话题里发送。'
+        + '宿主已核实这条消息代表用户对本任务的请求，按用户的请求处理，范围以这条消息为限。');
+    expect(buildWireMessageSourceNote({ origin: thread })).toContain('不是用户本人输入');
     expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request } }))
       .toBe(buildWireMessageSourceNote({ origin }));
     // The older owner mark alone does not make a plain relay speak for the owner.
     expect(buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request', request: { ...request, ownerVerified: true } } }))
       .toBe(buildWireMessageSourceNote({ origin }));
+  });
+
+  // bot-group-chat.md「群里的 Cindy」: its note already says the speaker is this owner; the review
+  // receipt that carries the owner's words must not add a second, differently worded owner clause.
+  it('states a request to the group Cindy once, without the relay clause', () => {
+    const origin = { kind: 'session', senderSessionId: '', displayText: 'Fix it',
+      groupRequest: { groupId: 'g-1', groupName: 'Launch', speakerId: 'm-1', speakerName: 'Chris' } };
+    const note = buildWireMessageSourceNote({ origin, autoReviewUserText: { kind: 'agent-request',
+      request: { sessionId: 's-1', clientId: 'group-cindy:e:1', plainBody: true, delegatedText: 'Fix it' } } });
+    expect(note).toBe(buildWireMessageSourceNote({ origin }));
+    expect(note).toContain('发言人就是本机主人');
+    expect(note).not.toContain('代表用户对本任务的请求');
   });
 
   it('describes task, partner, plugin and shared-member senders with ids', () => {
@@ -78,6 +102,53 @@ describe('buildWireMessageSourceNote', () => {
     expect(
       buildWireMessageSourceNote({ sharedTaskAuthor: { memberId: 'm-1', displayName: 'Alice' } }),
     ).toBe('[消息来源] 本条由共享任务成员「Alice」(member_id: m-1) 发送，不是任务所有者本人。');
+  });
+
+  it('adds a reply route only for a task source when the current engine can send', () => {
+    const source = { origin: taskOrigin };
+    const claude = buildWireMessageSourceNote(source, {
+      sendToSession: { agentKind: 'claude-code', supportsRemote: true },
+    });
+    expect(claude).toContain('需要回复时再用 cindy_helper 的 call_tool');
+    expect(claude).toContain('name="send_to_session"');
+    expect(claude).toContain('target_session_id="s-1"');
+    expect(claude).toContain('只有用户要求你回复，或确实需要回复时才这样做');
+    expect(claude).toContain('不要主动只为说“收到”或“好的”回复');
+
+    const pi = buildWireMessageSourceNote(source, {
+      sendToSession: { agentKind: 'pi', supportsRemote: true },
+    });
+    expect(pi).toContain('cindy_mcp_call_tool');
+    expect(pi).toContain('server="cindy_helper"');
+    expect(pi).toContain('tool="call_tool"');
+    expect(pi).toContain('target_session_id":"s-1"');
+    expect(buildWireMessageSourceNote(source)).not.toContain('send_to_session');
+  });
+
+  it('keeps qualified cross-device source ids and never adds the hint to a handoff summary', () => {
+    const source = { origin: { ...taskOrigin, senderSessionId: 'studio::s-1' } };
+    const note = buildWireMessageSourceNote(source, {
+      sendToSession: { agentKind: 'claude-code', supportsRemote: true },
+    });
+    expect(note).toContain('target_session_id="studio::s-1"');
+    expect(note).toContain('需要回复时再用');
+    expect(note).toContain('只有用户要求你回复，或确实需要回复时才这样做');
+    expect(note).toContain('不要主动只为说“收到”或“好的”回复');
+  });
+
+  it('does not route group messages through send_to_session, and states a remote limitation', () => {
+    const group = buildWireMessageSourceNote({ origin: {
+      kind: 'session', senderSessionId: 'group-source', senderSessionTitle: 'Group',
+      groupThread: { groupId: 'g-1', groupName: 'Design', speakerId: 'm-1', speakerName: 'Alice' },
+    } }, { sendToSession: { agentKind: 'claude-code', supportsRemote: true } });
+    expect(group).not.toContain('需要回复时再用');
+    expect(group).not.toContain('send_to_session');
+
+    const remote = buildWireMessageSourceNote({ origin: {
+      kind: 'session', senderSessionId: 'studio::s-1', senderSessionTitle: 'Remote',
+    } }, { sendToSession: { agentKind: 'claude-code', supportsRemote: false } });
+    expect(remote).toContain('不能直接给另一台电脑上的这个任务发消息');
+    expect(remote).not.toContain('name="send_to_session"');
   });
 
   it('adds nothing for local input or sources that already carry their own notes', () => {
@@ -139,6 +210,7 @@ describe('delivery-path wiring (source contract)', () => {
   const register = read('src/main/maker-ipc/register.ts');
   const coordinator = read('src/main/maker-ipc/agent-input-coordinator.ts');
   const transaction = read('src/main/maker-ipc/makerSendTransaction.ts');
+  const steer = read('src/main/maker-ipc/makerSteerTransaction.ts');
   const queue = read('src/shared/agentInputQueue.ts');
 
   const between = (source: string, start: string, end: string) => {
@@ -151,8 +223,8 @@ describe('delivery-path wiring (source contract)', () => {
 
   it('builds the note at exactly three final dispatch points, never in the queue', () => {
     expect(transaction.match(/buildWireMessageSourceNote\(/g)).toHaveLength(1);
-    // steerToAgentAccepted + sendUserMessageWithAwaitedGitBaseline.
-    expect(register.match(/buildWireMessageSourceNote\(/g)).toHaveLength(2);
+    expect(steer.match(/buildWireMessageSourceNote\(/g)).toHaveLength(1);
+    expect(register.match(/buildWireMessageSourceNote\(/g)).toHaveLength(1);
     expect(coordinator).not.toContain('buildWireMessageSourceNote');
     expect(queue).not.toMatch(/build(Wire)?MessageSourceNote|buildClientDeviceNote/);
     expect(between(queue, 'export function getAgentFacingText', '\n}\n')).not.toContain('source');
@@ -182,11 +254,7 @@ describe('delivery-path wiring (source contract)', () => {
   });
 
   it('steer prepends the source note from coordinator-transmitted fields', () => {
-    const steer = between(
-      register,
-      'const steerToAgentAccepted = async',
-      'const trustedDesktopSteerText',
-    );
+    expect(register).toContain('const steerToAgentAccepted = createMakerSteerTransaction(');
     expect(steer).toContain('origin: so.sourceOrigin');
     expect(steer).toContain('sourcePlugin: so.sourcePlugin');
     expect(steer).toContain('sharedTaskAuthor: so.sharedTaskAuthor');
@@ -198,9 +266,11 @@ describe('delivery-path wiring (source contract)', () => {
       'dispatch: async (pluginId, taskId, clientId, text',
       'inspect: async taskId =>',
     );
+    // The optional relay (message-source.md, 2026-11-16) is appended only after Host sanitization.
     expect(pluginDispatch).toContain(
-      'sourcePlugin: { pluginId, ...(pluginName ? { name: pluginName } : {}) }',
+      'sourcePlugin: { pluginId, ...(pluginName ? { name: pluginName } : {}), ...(sourceRelay ? { relay: sourceRelay } : {}) }',
     );
+    expect(pluginDispatch).toContain('const sourceRelay = readMessageSourcePluginRelay(relay);');
     expect(pluginDispatch).toContain('sanitizeSourceName(getInstalledGhostName(pluginId))');
     expect(pluginDispatch).not.toContain('origin:');
   });

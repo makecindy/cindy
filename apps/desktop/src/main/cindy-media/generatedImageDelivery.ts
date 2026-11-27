@@ -7,22 +7,22 @@ import {
   REMOTE_AGENT_READ_MAX_BYTES,
 } from '@cindy/device-link';
 import { sessions, messages } from '../localDb/schema';
-import { broadcastMessageRow, createMessage } from '../localDb/ipc/messages';
 import { captureDataOwnerBroadcastScope } from '../device-link/broadcast-tap';
+import type { DataOwnerBroadcastScope } from '../device-link/broadcastTapCore';
+import type { AgentMeta, Message, MessageRole } from '../../renderer/lib/ccAgent.types';
 import {
-  captureGeneratedImageStorage,
   generatedImageErrorCode,
-  releaseGeneratedImageUpstream,
-} from './generatedImageStorage';
+  type GeneratedImageInvoke,
+  type GeneratedImageStorageScope,
+} from './generatedImageStorageCore';
 import {
   generatedImageId,
   initialGeneratedImageRecord,
   type GeneratedImageCleanup,
   type GeneratedImageRecord,
 } from './generatedImageJournal';
-import { commitChatImageUrls } from './chatAttachments';
-import { MAX_GENERATED_IMAGE_BYTES } from './generatedMedia';
-import { t } from '../i18n';
+import type { LedgerDb } from './ledger';
+import { MAX_GENERATED_IMAGE_BYTES } from './generatedImageBytes';
 
 const taskFields = {
   id: sessions.id,
@@ -36,7 +36,54 @@ const taskFields = {
 /** Additive journal metadata: old share aliases meant O, never a dynamic executor. */
 type LegacyImageOrigin = { legacyOwnerRoute?: string };
 
-export interface GeneratedImageDeliveryDeps {
+/**
+ * The process's storage, message writer and copy, which this module imported from the desktop
+ * before the Node Host shared it: the desktop binds them in generatedImageDelivery.desktop.ts,
+ * the Host in apps/host/src/agent/generated-images.ts.
+ */
+export interface GeneratedImageDeliveryPlatform {
+  captureGeneratedImageStorage(): GeneratedImageStorageScope;
+  releaseGeneratedImageUpstream(
+    storage: GeneratedImageStorageScope,
+    record: GeneratedImageRecord,
+    invoke: GeneratedImageInvoke,
+  ): Promise<void>;
+  createMessage(
+    sessionId: string,
+    body: {
+      clientId: string;
+      role: MessageRole;
+      content: unknown;
+      toolUseId?: string;
+      agentMeta?: AgentMeta | null;
+      agentKind?: 'cc' | 'codex' | 'pi' | null;
+      createdAt?: number;
+    },
+    opts: {
+      beforePublish?: () => Promise<void>;
+      deferMediaRefs?: boolean;
+      broadcastOwnerScope?: DataOwnerBroadcastScope | null;
+      shouldBroadcast?: () => boolean;
+    },
+  ): Promise<Message>;
+  broadcastMessageRow(
+    sessionId: string,
+    msg: Message,
+    ownerScope?: DataOwnerBroadcastScope | null,
+  ): void;
+  commitChatImageUrls(
+    params: {
+      sessionId: string;
+      urls: string[];
+      originKind?: 'user' | 'tool';
+      assertStillValid?: () => Promise<void>;
+    },
+    db?: LedgerDb,
+  ): Promise<{ committed: number; skipped: number; failed: number }>;
+  t(key: string): string;
+}
+
+export interface GeneratedImageDeliveryDeps extends GeneratedImageDeliveryPlatform {
   invoke(
     deviceId: string,
     channel: string,
@@ -70,6 +117,20 @@ export interface GeneratedImageDeliveryRun {
 /** Deliberately has no Agent.send/imagegen dependency. Every retry reuses an existing artifact. */
 export function createGeneratedImageDelivery(deps: GeneratedImageDeliveryDeps) {
   const inFlight = new Map<string, GeneratedImageDeliveryRun>();
+  // The platform ports, under the names the body below imported them by.
+  const captureGeneratedImageStorage = () => deps.captureGeneratedImageStorage();
+  const releaseGeneratedImageUpstream: GeneratedImageDeliveryPlatform['releaseGeneratedImageUpstream'] =
+    (storage, record, invoke) => deps.releaseGeneratedImageUpstream(storage, record, invoke);
+  const createMessage: GeneratedImageDeliveryPlatform['createMessage'] = (sessionId, body, opts) =>
+    deps.createMessage(sessionId, body, opts);
+  const broadcastMessageRow: GeneratedImageDeliveryPlatform['broadcastMessageRow'] = (
+    sessionId,
+    msg,
+    ownerScope,
+  ) => deps.broadcastMessageRow(sessionId, msg, ownerScope);
+  const commitChatImageUrls: GeneratedImageDeliveryPlatform['commitChatImageUrls'] = (params, db) =>
+    deps.commitChatImageUrls(params, db);
+  const t = (key: string) => deps.t(key);
 
   async function authorizeSource(sessionId: string, source: string, assertCurrent: () => void) {
     assertCurrent();

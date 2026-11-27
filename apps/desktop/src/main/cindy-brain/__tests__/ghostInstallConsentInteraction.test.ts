@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { GhostPermissionItem } from '../../../shared/ghost.js';
 import type { GhostInstallConsentRequest } from '../../../shared/ghostInstallConsent.js';
 
-vi.mock('../../i18n.js', () => ({ t: (key: string) => key }));
+vi.mock('../../i18n.desktop.js', () => ({ t: (key: string) => key }));
 
 import {
   buildGhostInstallConsentInteraction,
@@ -53,11 +53,38 @@ const INSTALL: Omit<GhostInstallConsentRequest, 'requestId'> = {
 };
 
 describe('plugin install confirmation card', () => {
+  // #9496: task/IM installation confirmation uses a separate text presenter.
+  // Unit: one Host capability must be readable without changing its projection.
+  it('renders host permissions as readable text in task installation confirmation', () => {
+    const permission: GhostPermissionItem = { key: 'ui:host:capability:draft', kind: 'panel', labelKey: 'uiHost',
+      detailKey: 'uiHostAccess', detailArgs: { subject: 'capability:draft', access: 'draft' } };
+    const before = JSON.stringify(permission);
+    const text = renderGhostInstallConsentText({ ...INSTALL, facts: { ...INSTALL.facts,
+      kind: 'install', permissions: [permission] } }, key => key === 'settings.ghosts.perm.hostUi.capabilities.draft'
+      ? 'Read and edit the message draft' : translate(key));
+    expect(text.description).toContain('Read and edit the message draft');
+    expect(text.description).not.toContain('capability:draft');
+    expect(JSON.stringify(permission)).toBe(before);
+  });
   it('renders the source on the first line and the permission list below', () => {
     expect(renderGhostInstallConsentText(INSTALL, translate)).toEqual({
       title: 'Install Weather?',
       description: 'v1.0.0 · Agent · From market\nConfirm to install.\nIt will have:\n• Reach api.weather.test',
     });
+  });
+
+  it.each([
+    ['custom-market', undefined, 'settings.ghosts.installConsent.customMarketSourceNotice'],
+    ['local-file', undefined, 'settings.ghosts.installConsent.localFileSourceNotice'],
+    ['market', true, 'settings.ghosts.market.communityDisclaimer'],
+  ] as const)('puts the %s source notice before the permission list', (origin, communityMarket, key) => {
+    const notice = 'Review the source before installing.';
+    const text = renderGhostInstallConsentText({ ...INSTALL, origin, communityMarket }, name =>
+      name === key ? notice : translate(name),
+    );
+    expect(text.description.split('\n').slice(1)).toEqual([
+      'Confirm to install.', notice, 'It will have:', '• Reach api.weather.test',
+    ]);
   });
 
   it('shows only what changes for an update', () => {

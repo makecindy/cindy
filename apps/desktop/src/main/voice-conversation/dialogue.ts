@@ -26,6 +26,7 @@ export class CompanionCallDialogue {
   private clearBoundary: number | null = null;
   private polling = false;
   private knownInputs = new Map<string, string>();
+  private nativeReference = '';
 
   constructor(
     private readonly input: {
@@ -33,6 +34,7 @@ export class CompanionCallDialogue {
       botId: string;
       sessionId: string;
       emit(record: VoiceCallRecord): void;
+      nativeResult?(taskId: string, text: string): void;
     },
   ) {}
 
@@ -91,12 +93,17 @@ export class CompanionCallDialogue {
       /* Identity still works with an old incomplete profile. */
     }
     this.assertActive();
+    this.nativeReference = JSON.stringify({
+      identity: `${profile.name}\n${profile.identity}\n${userContext}`.slice(0, 32_000),
+      mainChat: [...recent].reverse(), memoryIndex: memory,
+    }).slice(0, 72_000);
     this.context = new VoiceCallContext({
       callId: this.input.callId,
       identity: `${profile.name}\n${profile.identity}\n${userContext}`.slice(0, 32_000),
       reference: JSON.stringify({ mainChat: recent.reverse(), memoryIndex: memory }).slice(-40_000),
       generate: async (prompt, systemPrompt, signal, onText) => {
         const result = await requestExplicitUtilityText(prompt, {
+          source: 'voice-dialogue', sessionId: this.input.sessionId,
           ...route,
           systemPrompt,
           signal,
@@ -151,12 +158,13 @@ export class CompanionCallDialogue {
         if (accepted && !this.ended) this.schedulePoll();
         return accepted;
       },
-      changed: (record) => {
+      changed: (record, persist) => {
         if (this.current()) this.input.emit(record);
         // Serialize snapshots so an older streaming update cannot overwrite the
         // terminal record. Save only complete turns / handoff changes.
-        if (record.turns.at(-1)?.complete !== false || record.endedAt) this.save(record);
+        if (persist) this.save(record);
       },
+      result: this.input.nativeResult,
     });
     this.save(this.context.record);
     await this.saveTail;
@@ -164,6 +172,21 @@ export class CompanionCallDialogue {
     if (!this.saved) throw new Error('call_record_unavailable');
     this.input.emit(this.context.record);
   }
+
+  nativeContext(): string { this.assertActive(); return this.nativeReference; }
+  beginNativeTurn(id: string): void {
+    this.assertActive();
+    this.context?.beginNativeTurn(id);
+  }
+  nativeTurn(id: string, role: 'user' | 'assistant', text: string, complete = true): boolean {
+    this.assertActive();
+    return this.context?.recordNativeTurn(id, role, text, complete) ?? false;
+  }
+  nativeHandoff(id: string, supplement: string): Promise<boolean> {
+    this.assertActive();
+    return this.context?.handoffNativeTurn(id, supplement) ?? Promise.resolve(false);
+  }
+  nativeInterrupt(id: string): void { if (!this.ended) this.context?.interruptNativeTurn(id); }
 
   private save(record: VoiceCallRecord): void {
     const snapshot = structuredClone(record);
@@ -261,26 +284,6 @@ export class CompanionCallDialogue {
     try {
       if (!this.current() || this.ended || !this.context || !this.db) return;
       for (const task of this.context.record.handoffs.filter((item) => item.state === 'accepted')) {
-        // Background tasks inherit the protected user-source receipt. Match
-        // that provenance, never titles, text similarity or the latest child.
-        const delegated = await this.db.client.query<{ status: string; result: string | null }>(
-          `SELECT status, result_summary AS result FROM bot_delegations
-            WHERE parent_session_id = ?
-              AND json_extract(permission_snapshot_json, '$.taskInput.requestSource.sessionId') = ?
-              AND json_extract(permission_snapshot_json, '$.taskInput.requestSource.clientId') = ?`,
-          [this.input.sessionId, this.input.sessionId, task.inputId],
-        );
-        if (!this.current() || this.ended) return;
-        if (delegated.length) {
-          if (
-            delegated.every((item) =>
-              ['completed', 'failed', 'cancelled', 'timed-out'].includes(item.status),
-            )
-          ) {
-            this.context.deliverResult(task.id, JSON.stringify(delegated).slice(0, 32_000));
-          }
-          continue;
-        }
         // Observe only the canonical reply after this exact accepted input,
         // stopping at the next user input. Unrelated replies cannot flow back.
         const rows = await this.db.client.query<{

@@ -1292,21 +1292,25 @@ it('falls back to bounded GETs for oversized batches', async () => {
 });
 
 // Released hosts list no bot lanes, but provide owner-scoped history links; unit, real refresh/store path.
-it('lists routine and channel tasks from legacy history with ownership, excluding canonical and group chats', async () => {
+it('lists projectless group tasks from legacy history with ownership, excluding private conversations', async () => {
   const device = did();
   historyInvoke.mockResolvedValueOnce({ ok: true, sessions: [
     { id: 'main', source: 'bot', status: 'active', companion: { id: 'cindy', role: 'canonical' } },
     { id: 'im', source: 'bot', status: 'active', companion: { id: 'cindy', role: 'channel', channel: 'feishu' } },
   ], hasMore: true, nextCursor: 'next' }).mockResolvedValueOnce({ ok: true, sessions: [
     { id: 'routine', source: 'bot', status: 'active', companion: { id: 'cindy', role: 'routine' } },
-    { id: 'group', source: 'bot', status: 'active', companion: { id: 'cindy', role: 'group' } },
+    { id: 'group', source: 'bot', status: 'active', workspaceKind: 'dialogue', projectDir: null, companion: { id: 'cindy', role: 'group' } },
   ], hasMore: false });
   invoke.mockImplementation(async (_device, channel, args) => channel === 'local-db:sessions:list'
     ? [session('ordinary')] : session(args[0], { source: 'bot' }));
   expect(await refreshRemoteDeviceSessions(device)).toBe('ok');
   const rows = remoteProjectsStore.getDeviceSessions(device);
-  expect(rows.map(row => row.id).sort()).toEqual(['im', 'ordinary', 'routine']);
+  expect(rows.map(row => row.id).sort()).toEqual(['group', 'im', 'ordinary', 'routine']);
   expect(rows.find(row => row.id === 'im')).toMatchObject({ deviceLinkDeviceId: device, companion: { id: 'cindy', role: 'channel', channel: 'feishu' } });
+  expect(rows.find(row => row.id === 'group')).toMatchObject({
+    deviceLinkDeviceId: device, workspaceKind: 'dialogue', companion: { id: 'cindy', role: 'group' },
+  });
+  expect(rows.find(row => row.id === 'group')?.projectDir ?? null).toBeNull();
   expect(historyInvoke).toHaveBeenCalledTimes(2);
 });
 

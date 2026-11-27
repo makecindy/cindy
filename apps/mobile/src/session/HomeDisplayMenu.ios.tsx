@@ -17,7 +17,7 @@ import {
   menuOrder,
   menuStyle,
 } from "@expo/ui/swift-ui/modifiers";
-import type { ComponentProps, ReactNode } from "react";
+import { useMemo, type ComponentProps, type ReactNode } from "react";
 import { View } from "react-native";
 import type { NativePullDownAction } from "@/platform/chrome/NativePullDownMenu";
 import { useNativeMenuReminderImage } from "@/platform/chrome/useNativeMenuReminderImage";
@@ -33,6 +33,12 @@ export function HomeDisplayMenu(props: HomeDisplayMenuProps) {
   const reminderImage = useNativeMenuReminderImage(true);
   const size = navigationChrome.target;
   const glassStyle = useNativeGlassButtonStyle({ shape: "circle" });
+  // Keep unchanged choices out of native bridge updates caused by the sidebar
+  // trigger (scrolling, task selection, geometry). Host still supplies live theme.
+  const items = useMemo(
+    () => menuItems(props.actions, props.onAction, reminderImage),
+    [props.actions, props.onAction, reminderImage],
+  );
   return (
     <Host
       colorScheme={mode}
@@ -41,7 +47,7 @@ export function HomeDisplayMenu(props: HomeDisplayMenuProps) {
       style={{ width: size, height: size }}
     >
       <Menu
-        testID="home.displaySettingsButton"
+        testID={props.testID ?? "home.displaySettingsButton"}
         label={
           <RNHostView matchContents>
             {/* Only artwork in the label: Menu owns the glass and activation. */}
@@ -68,7 +74,7 @@ export function HomeDisplayMenu(props: HomeDisplayMenuProps) {
           accessibilityLabel(props.accessibilityLabel),
         ]}
       >
-        {menuItems(props.actions, props.onAction, reminderImage)}
+        {items}
       </Menu>
     </Host>
   );

@@ -1,29 +1,20 @@
-/**
- * claude-native-cli —— Claude 订阅的唯一接入面:Cindy 内置的官方 Claude Code CLI。
- *
- * Anthropic 只允许用户用自己的订阅登录**未修改的 Claude Code**;第三方应用不得提供
- * Claude.ai 登录,也不得收集、存储或中转订阅凭证(Claude Code 法律与合规文档)。所以:
- *
- *   - 登录 = 拉起内置 CLI 的 `claude auth login --claudeai`。浏览器授权与 token 交换
- *     全在 CLI 里完成,凭证落在 CLI 的默认凭证库(macOS 钥匙串 / ~/.claude),与终端里
- *     的 `claude` 共用同一份;
- *   - 登录态 = `claude auth status --json` 的结果。Cindy 从不读取凭证库本身;
- *   - 会话 = SDK 拉起同一个 CLI,由它自己读取、刷新凭证并直连 Anthropic
- *     (maker-core env-builder `nativeCliAuth`)。
- *
- * 「断开」只撤销 Cindy 的使用许可(nativeProviderAuthBinding),不登出 CLI。
- */
-
+import { cloudCliAuthorization } from '../host-settings/managementCliAuthorization.js';
+import { cloudManagementExecution } from '../host-settings/managementCalls.js';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { homedir } from 'node:os';
 
 import { cleanProcessEnv } from '@cindy/maker-core';
+import { claudeLongLivedTokenFile } from '@cindy/maker-core/claude-cli-login-status';
 import { hasProxyEnvConfig, parseOutboundProxyUrl } from '@cindy/anthropic-compat-proxy';
 
-import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import { createLogger } from '../logger.js';
-import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
-import { ensureClaudeCliProxyBridge } from './claude-cli-proxy-bridge.js';
-import { readClaudeCliStatusInWorker } from './claudeCliStatusWorkerClient.js';
+import { ensureCliProxyBridge } from './cli-proxy-bridge.js';
+import {
+  removeClaudeLongLivedToken,
+  replaceClaudeLongLivedToken,
+  type PendingClaudeLongLivedToken,
+} from './claude-long-lived-token.js';
+import { runClaudeSetupToken, type SpawnSetupTokenTerminal } from './claude-setup-token.js';
 import {
   isClaudeCliLoginStatusFresh,
   peekClaudeCliLoginStatus,
@@ -39,6 +30,34 @@ export {
   type ClaudeCliLoginStatus,
 } from './claude-native-cli-status.js';
 
+
+export interface ClaudeCliPlanUsage {
+  /** `get_usage` 响应的 `rate_limits`(与 claude.ai /usage 同形,由 shared 解析器 fail-safe 解析)。 */
+  rateLimits: unknown;
+  subscriptionType?: string;
+}
+
+export type ClaudeCliLoginResult =
+  | { ok: true; status: ClaudeCliLoginStatus }
+  | {
+      ok: false;
+      reason: 'login_cancelled' | 'timeout' | 'local_unavailable' | 'login_failed' | 'not_a_subscription' | 'account_mismatch';
+    };
+export type ClaudeCliLongLivedTokenResult =
+  | { ok: true; status: ClaudeCliLoginStatus }
+  | {
+      ok: false;
+      reason: 'login_cancelled' | 'timeout' | 'local_unavailable' | 'login_failed' | 'not_signed_in'
+        | 'token_not_permitted' | 'token_unsupported';
+    };
+/** Shared official CLI lifecycle; launchers supply binary discovery and status IO. */
+export function createClaudeNativeCli(ports: {
+  binaryPath(): string | null;
+  resolveOutboundProxy(url: string): string | null | undefined | Promise<string | null | undefined>;
+  readStatus(options: { binary: string; env: NodeJS.ProcessEnv; timeoutMs: number; oauthTokenFile?: string }): Promise<ClaudeCliLoginStatus | null>;
+  /** Pseudo-terminal launcher for `claude setup-token`. Hosts without one cannot create long-lived tokens. */
+  spawnTerminal?: SpawnSetupTokenTerminal;
+}) {
 const log = createLogger('claude-native-cli');
 setClaudeCliLoginStatusListenerErrorHandler((err) => {
   log.warn('claude cli status listener failed', { error: String(err) });
@@ -59,17 +78,17 @@ const LOOPBACK_NO_PROXY = 'localhost,127.0.0.1,::1';
  *   - Anthropic 直连 / 解析失败:不下发,CLI 进程树的环境保持原样;
  *   - 代理 env 给的 HTTP 代理:不动(子进程继承,保留用户自己的 NO_PROXY 语义);
  *   - 系统代理,或代理 env 给的 SOCKS5:HTTPS_PROXY 指向本机 CONNECT 桥
- *     (claude-cli-proxy-bridge)。环境变量对整棵进程树生效(含 Bash 工具里的 git / npm),
+ *     (cli-proxy-bridge)。环境变量对整棵进程树生效(含 Bash 工具里的 git / npm),
  *     所以桥对每个目标重新按系统代理 / PAC 决定直连还是走代理,内网例外照旧直连;
  *     明文 HTTP 不下发代理,保持直连。
  * 用户在 ~/.claude/settings.json 的 env 里配的代理由 CLI 自己应用,优先于这里。
  * HTTPS 经代理走 CONNECT 隧道,TLS 端到端,代理、桥与 Cindy 都看不到凭证。
  */
-export async function claudeCliNetworkEnv(): Promise<Record<string, string>> {
+async function claudeCliNetworkEnv(): Promise<Record<string, string>> {
   const fromEnv = hasProxyEnvConfig();
   let raw: string | null | undefined = null;
   try {
-    raw = await resolveDesktopOutboundProxy(ANTHROPIC_API_ORIGIN);
+    raw = await ports.resolveOutboundProxy(ANTHROPIC_API_ORIGIN);
   } catch (err) {
     log.debug('proxy resolution failed; CLI connects directly', {
       message: err instanceof Error ? err.message : String(err),
@@ -81,7 +100,7 @@ export async function claudeCliNetworkEnv(): Promise<Record<string, string>> {
   if (fromEnv && target.kind === 'http') return {};
   let bridge: string;
   try {
-    bridge = await ensureClaudeCliProxyBridge(resolveDesktopOutboundProxy);
+    bridge = await ensureCliProxyBridge(ports.resolveOutboundProxy);
   } catch {
     return {};
   }
@@ -90,7 +109,7 @@ export async function claudeCliNetworkEnv(): Promise<Record<string, string>> {
 }
 
 function cliBinaryPath(): string | null {
-  return getReadyBinaryPath('claude-code') ?? null;
+  return ports.binaryPath();
 }
 
 /**
@@ -105,45 +124,9 @@ async function cliEnv(options: { network: boolean; configDir?: string }): Promis
   };
 }
 
-function optionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
-}
-
-/** 解析 `claude auth status --json`;形状不符按未登录处理(不抛)。 */
-export function parseClaudeCliLoginStatus(stdout: string): ClaudeCliLoginStatus | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout.trim());
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-  const record = parsed as Record<string, unknown>;
-  if (typeof record.loggedIn !== 'boolean') return null;
-  const authMethod = optionalString(record.authMethod);
-  const apiProvider = optionalString(record.apiProvider);
-  if (!record.loggedIn || authMethod === 'none') return { loggedIn: false };
-  // 只认 Claude.ai 订阅账号的 OAuth 登录。CLI 对 Console 账号(`/login managed key`)也报
-  // authMethod 'claude.ai',但会同时给出 apiKeySource;API Key / apiKeyHelper / 中转 token
-  // (ANTHROPIC_AUTH_TOKEN 等)与 Bedrock / Vertex 等第三方云都不是「Claude 订阅」。
-  const subscription =
-    authMethod === 'claude.ai' &&
-    optionalString(record.apiKeySource) === undefined &&
-    (apiProvider === undefined || apiProvider === 'firstParty');
-  if (!subscription) return { loggedIn: false, notSubscription: true };
-  const subscriptionType = optionalString(record.subscriptionType);
-  const email = optionalString(record.email);
-  return {
-    loggedIn: true,
-    ...(authMethod ? { authMethod } : {}),
-    ...(subscriptionType ? { subscriptionType } : {}),
-    ...(email ? { email } : {}),
-  };
-}
-
 function runCli(
   args: string[],
-  options: { env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal },
+  options: { env: NodeJS.ProcessEnv; timeoutMs: number; signal?: AbortSignal; cloudLogin?: boolean },
 ): Promise<{ code: number | null; stdout: string; stderr: string; reason?: 'timeout' | 'cancelled' }> {
   const binary = cliBinaryPath();
   if (!binary) return Promise.reject(new Error('claude cli unavailable'));
@@ -167,8 +150,13 @@ function runCli(
     const onAbort = () => stop('cancelled');
     if (options.signal?.aborted) onAbort();
     else options.signal?.addEventListener('abort', onAbort, { once: true });
+    const present = options.cloudLogin ? cloudCliAuthorization((line) => child.stdin?.write(line)) : undefined;
+    child.stdin?.on('error', () => stop('cancelled'));
     child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
+      if (present) {
+        void present(chunk.toString('utf8')).catch(() => stop('cancelled'));
+      }
+      stdout = (stdout + chunk.toString('utf8')).slice(-65_536);
     });
     child.stderr?.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf8');
@@ -186,6 +174,13 @@ function runCli(
   });
 }
 
+/** Local display helper for usage payloads; status parsing lives in maker-core. */
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+
+
 // ── 登录态 ────────────────────────────────────────────────────────────────────
 
 let statusInflight: Promise<ClaudeCliLoginStatus> | null = null;
@@ -197,15 +192,18 @@ const profileStatuses = new Map<string, { value?: ClaudeCliLoginStatus; at: numb
 function readProfileStatus(configDir: string, force = false): Promise<ClaudeCliLoginStatus> {
   const entry = profileStatuses.get(configDir) ?? { at: 0 };
   profileStatuses.set(configDir, entry);
-  if (entry.flight) return entry.flight;
+  if (entry.flight) return force
+    ? entry.flight.catch(() => {}).then(() => readProfileStatus(configDir, true))
+    : entry.flight;
   if (!force && entry.value && Date.now() - entry.at < STATUS_FAILURE_BACKOFF_MS) return Promise.resolve(entry.value);
   const flight = (async () => {
     const binary = cliBinaryPath();
     if (!binary) throw new Error('claude cli unavailable');
-    const stdout = await readClaudeCliStatusInWorker({
+    const oauthTokenFile = claudeLongLivedTokenFile(configDir);
+    const status = await ports.readStatus({
       binary, env: await cliEnv({ network: false, configDir }), timeoutMs: STATUS_TIMEOUT_MS,
+      ...(oauthTokenFile ? { oauthTokenFile } : {}),
     });
-    const status = parseClaudeCliLoginStatus(stdout);
     if (!status) throw new Error('claude auth status unavailable');
     entry.value = status;
     entry.at = Date.now();
@@ -226,10 +224,15 @@ function statusFallback(): ClaudeCliLoginStatus {
  * 并在 STATUS_FAILURE_BACKOFF_MS 内不再重试(force 除外,如用户主动登录)。
  * 内置 CLI 尚未就绪(启动期二进制还在准备)不算失败、不进退避:就绪后启动流程会再读一次。
  */
-export function refreshClaudeCliLoginStatus(options?: { force?: boolean; configDir?: string }): Promise<ClaudeCliLoginStatus> {
+function refreshClaudeCliLoginStatus(options?: { force?: boolean; configDir?: string; requireFresh?: boolean }): Promise<ClaudeCliLoginStatus> {
+  if (options?.requireFresh) options = { ...options, force: true };
   if (options?.configDir) return readProfileStatus(options.configDir, options.force);
-  if (statusInflight) return statusInflight;
-  if (!cliBinaryPath()) return Promise.resolve(statusFallback());
+  if (statusInflight) return options?.force
+    ? statusInflight.catch(() => {}).then(() => refreshClaudeCliLoginStatus(options))
+    : statusInflight;
+  if (!cliBinaryPath()) return options?.requireFresh
+    ? Promise.reject(new Error('claude cli unavailable'))
+    : Promise.resolve(statusFallback());
   if (
     options?.force !== true &&
     lastStatusFailureAt !== null &&
@@ -239,13 +242,14 @@ export function refreshClaudeCliLoginStatus(options?: { force?: boolean; configD
   }
   const flight = (async () => {
     try {
-      const stdout = await readClaudeCliStatusInWorker({
+      const oauthTokenFile = claudeLongLivedTokenFile();
+      const status = await ports.readStatus({
         binary: cliBinaryPath()!,
         env: await cliEnv({ network: false }),
         timeoutMs: STATUS_TIMEOUT_MS,
+        ...(oauthTokenFile ? { oauthTokenFile } : {}),
       });
-      const status = parseClaudeCliLoginStatus(stdout);
-      if (!status) {
+        if (!status) {
         lastStatusFailureAt = Date.now();
         log.warn('claude auth status returned an unexpected payload');
         return statusFallback();
@@ -263,7 +267,10 @@ export function refreshClaudeCliLoginStatus(options?: { force?: boolean; configD
   void flight.finally(() => {
     if (statusInflight === flight) statusInflight = null;
   });
-  return flight;
+  return options?.requireFresh ? flight.then(status => {
+    if (lastStatusFailureAt !== null) throw new Error('claude auth status unavailable');
+    return status;
+  }) : flight;
 }
 
 /**
@@ -274,7 +281,7 @@ export function refreshClaudeCliLoginStatus(options?: { force?: boolean; configD
  * 时也不等待,按未登录返回。结果变化由 onClaudeCliLoginStatusChange 通知。用于列表类
  * 读取,不让与 Claude 订阅无关的操作等 CLI 进程。
  */
-export async function readClaudeCliLoginStatus(options?: {
+async function readClaudeCliLoginStatus(options?: {
   maxAgeMs?: number;
   staleWhileRevalidate?: boolean;
   configDir?: string;
@@ -292,27 +299,30 @@ export async function readClaudeCliLoginStatus(options?: {
 // ── 套餐余量 ──────────────────────────────────────────────────────────────────
 
 const PLAN_USAGE_TIMEOUT_MS = 20_000;
+const PLAN_USAGE_EXIT_GRACE_MS = 3_000;
 const PLAN_USAGE_REQUEST_ID = 'cindy-plan-usage';
 
-export interface ClaudeCliPlanUsage {
-  /** `get_usage` 响应的 `rate_limits`(与 claude.ai /usage 同形,由 shared 解析器 fail-safe 解析)。 */
-  rateLimits: unknown;
-  subscriptionType?: string;
-}
 
 /**
  * 读 Claude 订阅套餐余量:拉起内置 CLI 的 SDK 模式,发 `get_usage` 控制请求(CLI 的
- * /usage 同源,结构化返回),拿到响应即结束进程。请求由 CLI 用自己的登录发出,Cindy
- * 不接触凭证;不发用户消息,不产生模型调用。
+ * /usage 同源,结构化返回),拿到响应后发送 EOF,给 CLI 留出收尾退出的时间。
+ * 请求由 CLI 用自己的登录发出,Cindy 不接触凭证;不发用户消息,不产生模型调用。
  *
  * `get_usage` 是 CLI 标注为 Experimental 的控制请求,响应形状可能变化 —— 这里只取
  * `rate_limits` 原样交给调用方解析。CLI 明确声明当前账号没有套餐余量
  * (`rate_limits_available: false`)时返回 null;启动失败、超时、控制请求报错或响应缺
  * `rate_limits` 时抛错,由调用方退避。
+ *
+ * 账号改用长期令牌后,余量仍由它旁边那份普通登录来查(长期令牌只有模型请求权限,查不了):
+ * 这里不交令牌句柄;令牌在用户设置里时跳过用户设置,让 CLI 改读存着的普通登录。普通登录
+ * 已退出或到期时抛错,调用方沿用任务运行时带回的余量,不把「查不了」当成「没有套餐」。
  */
-export async function readClaudeCliPlanUsage(configDir?: string): Promise<ClaudeCliPlanUsage | null> {
+async function readClaudeCliPlanUsage(configDir?: string): Promise<ClaudeCliPlanUsage | null> {
   const binary = cliBinaryPath();
   if (!binary) throw new Error('claude cli unavailable');
+  const status = configDir ? profileStatuses.get(configDir)?.value : peekClaudeCliLoginStatus();
+  if (status?.longLivedToken && status.storedLogin === false) throw new Error('claude stored login unavailable');
+  const viaStoredLogin = !!status?.longLivedToken;
   const env = await cliEnv({ network: true, configDir });
   // --setting-sources user:不读工作区的项目级设置(它们可改写上游 / 鉴权);
   // --strict-mcp-config:不拉起用户配置的 MCP server;--no-session-persistence:不落会话记录。
@@ -323,7 +333,7 @@ export async function readClaudeCliPlanUsage(configDir?: string): Promise<Claude
     '--verbose',
     '--no-session-persistence',
     '--strict-mcp-config',
-    '--setting-sources', 'user',
+    '--setting-sources', status?.longLivedToken === 'settings' ? '' : 'user',
   ];
   return new Promise((resolve, reject) => {
     let child: ChildProcess;
@@ -335,21 +345,30 @@ export async function readClaudeCliPlanUsage(configDir?: string): Promise<Claude
     }
     let settled = false;
     let buffer = '';
+    let exitTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = (err: Error | null, value?: ClaudeCliPlanUsage | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      child.kill();
       if (err) reject(err);
       else resolve(value ?? null);
     };
-    const timer = setTimeout(() => finish(new Error('claude get_usage timed out')), PLAN_USAGE_TIMEOUT_MS);
-    child.once('error', (err) => finish(err));
-    child.once('close', (code) => finish(new Error(`claude cli exited before get_usage response (code ${code})`)));
+    const fail = (err: Error) => {
+      if (settled) return;
+      finish(err);
+      child.kill();
+    };
+    const timer = setTimeout(() => fail(new Error('claude get_usage timed out')), PLAN_USAGE_TIMEOUT_MS);
+    child.once('error', fail);
+    child.once('close', (code) => {
+      clearTimeout(exitTimer);
+      finish(new Error(`claude cli exited before get_usage response (code ${code})`));
+    });
     child.stdin?.on('error', () => {
       /* 进程提前退出时写 stdin 会 EPIPE,由 close 分支给结论。 */
     });
     child.stdout?.on('data', (chunk: Buffer) => {
+      if (settled) return;
       buffer += chunk.toString('utf8');
       let newline: number;
       while ((newline = buffer.indexOf('\n')) >= 0) {
@@ -357,7 +376,18 @@ export async function readClaudeCliPlanUsage(configDir?: string): Promise<Claude
         buffer = buffer.slice(newline + 1);
         if (!line) continue;
         const outcome = parseClaudeCliPlanUsageLine(line);
-        if (outcome) finish(outcome.error ? new Error(outcome.error) : null, outcome.usage);
+        if (!outcome) continue;
+        if (outcome.error) {
+          fail(new Error(outcome.error));
+          return;
+        }
+        // Quota readers have their own deadlines. Return the reply while EOF
+        // lets the SDK process finish outstanding writes before exiting.
+        if (viaStoredLogin && !outcome.usage) finish(new Error('claude stored login has no plan usage'));
+        else finish(null, outcome.usage);
+        exitTimer = setTimeout(() => child.kill('SIGKILL'), PLAN_USAGE_EXIT_GRACE_MS);
+        child.stdin?.end();
+        return;
       }
     });
     const write = (message: unknown) => child.stdin?.write(`${JSON.stringify(message)}\n`);
@@ -374,7 +404,7 @@ export async function readClaudeCliPlanUsage(configDir?: string): Promise<Claude
  * 解析 CLI stream-json 输出的一行。不是 `get_usage` 的 control_response 时返回 null
  * (继续读);是则返回结论:error 为控制请求失败,usage 为 null 表示账号没有套餐余量。
  */
-export function parseClaudeCliPlanUsageLine(
+function parseClaudeCliPlanUsageLine(
   line: string,
 ): { error?: string; usage: ClaudeCliPlanUsage | null } | null {
   let parsed: unknown;
@@ -408,7 +438,7 @@ export function parseClaudeCliPlanUsageLine(
 let currentLogin: { key: string | undefined; abort: AbortController } | null = null;
 
 /** 开始一次登录;同一时刻只保留一个,新登录会取消旧的。 */
-export function beginClaudeCliLogin(loginKey?: string): AbortSignal {
+function beginClaudeCliLogin(loginKey?: string): AbortSignal {
   cancelClaudeCliLogin();
   const abort = new AbortController();
   currentLogin = { key: loginKey, abort };
@@ -416,36 +446,44 @@ export function beginClaudeCliLogin(loginKey?: string): AbortSignal {
 }
 
 /** 取消进行中的登录(传 loginKey 时只取消同一次)。 */
-export function cancelClaudeCliLogin(loginKey?: string): void {
+function cancelClaudeCliLogin(loginKey?: string): void {
   if (!currentLogin) return;
   if (loginKey && currentLogin.key !== loginKey) return;
   currentLogin.abort.abort();
   currentLogin = null;
 }
 
-export type ClaudeCliLoginResult =
-  | { ok: true; status: ClaudeCliLoginStatus }
-  | {
-      ok: false;
-      reason: 'login_cancelled' | 'timeout' | 'local_unavailable' | 'login_failed' | 'not_a_subscription';
-    };
+
 
 /**
- * 已登录则直接返回;否则拉起 `claude auth login --claudeai`,由 CLI 打开浏览器并等待
+ * 普通连接已登录则直接返回；明确续签始终拉起官方登录，由 CLI 打开浏览器并等待
  * 授权回调。CLI 退出后重读登录态作为结论。
  *
  * CLI 已用非订阅方式登录(API Key、中转 token 等)时直接返回 not_a_subscription,不替用户
  * 改 CLI 的登录:这类配置在 CLI 里优先于订阅登录,改了也用不上,还会影响终端里的 claude。
  */
-export async function runClaudeCliLogin(signal: AbortSignal, configDir?: string): Promise<ClaudeCliLoginResult> {
-  const before = await refreshClaudeCliLoginStatus({ force: true, configDir });
+async function runClaudeCliLogin(
+  signal: AbortSignal,
+  configDir?: string,
+  options: { renew?: boolean; expectedEmail?: string } = {},
+): Promise<ClaudeCliLoginResult> {
+  let before: ClaudeCliLoginStatus;
+  try {
+    before = await refreshClaudeCliLoginStatus({ force: true, configDir, requireFresh: options.renew });
+  } catch {
+    return { ok: false, reason: 'local_unavailable' };
+  }
   if (signal.aborted) return { ok: false, reason: 'login_cancelled' };
-  if (before.loggedIn) return { ok: true, status: before };
+  if (before.loggedIn && !options.renew) return { ok: true, status: before };
   if (before.notSubscription) return { ok: false, reason: 'not_a_subscription' };
   if (!cliBinaryPath()) return { ok: false, reason: 'local_unavailable' };
+  const expectedEmail = options.expectedEmail?.trim() || (options.renew ? before.email : undefined);
   try {
-    const result = await runCli(['auth', 'login', '--claudeai'], {
-      env: await cliEnv({ network: true, configDir }),
+    // --email is only a browser hint. Verify the returned identity below as well.
+    const result = await runCli(['auth', 'login', '--claudeai', ...(expectedEmail ? ['--email', expectedEmail] : [])], {
+      env: { ...await cliEnv({ network: true, configDir }),
+        ...(cloudManagementExecution() && process.platform === 'linux' ? { BROWSER: '/bin/true' } : {}) },
+      cloudLogin: !!cloudManagementExecution(),
       timeoutMs: LOGIN_TIMEOUT_MS,
       signal,
     });
@@ -453,22 +491,99 @@ export async function runClaudeCliLogin(signal: AbortSignal, configDir?: string)
     if (result.reason === 'timeout') return { ok: false, reason: 'timeout' };
     if (result.code !== 0) {
       log.warn('claude auth login exited with an error', { code: result.code });
+      if (options.renew) return { ok: false, reason: 'login_failed' };
     }
   } catch (err) {
     log.warn('claude auth login failed to start', { error: err instanceof Error ? err.message : String(err) });
     return { ok: false, reason: 'local_unavailable' };
   }
-  const after = await refreshClaudeCliLoginStatus({ force: true, configDir });
+  let after: ClaudeCliLoginStatus;
+  try {
+    // Cached display metadata is never proof of a successful browser login.
+    after = await refreshClaudeCliLoginStatus({ requireFresh: true, configDir });
+  } catch {
+    return { ok: false, reason: 'local_unavailable' };
+  }
   if (signal.aborted) return { ok: false, reason: 'login_cancelled' };
+  if (after.loggedIn && expectedEmail && after.email?.toLowerCase() !== expectedEmail.toLowerCase())
+    return { ok: false, reason: 'account_mismatch' };
   if (after.loggedIn) return { ok: true, status: after };
   return { ok: false, reason: after.notSubscription ? 'not_a_subscription' : 'login_failed' };
 }
 
+// ── 长期令牌 ──────────────────────────────────────────────────────────────────
+
+/**
+ * 给已登录的账号换上长期令牌:在伪终端里跑官方 `claude setup-token`,浏览器授权由 CLI 打开,
+ * 授权后把令牌写进该账号的配置目录,再重读登录态作为结论。令牌不经过本函数之外的任何地方。
+ *
+ * 只接受已有普通登录的账号:长期令牌说不出自己属于谁,账号的邮箱与套餐靠那份普通登录来认。
+ */
+async function runClaudeCliLongLivedToken(
+  signal: AbortSignal,
+  configDir?: string,
+): Promise<ClaudeCliLongLivedTokenResult> {
+  const binary = cliBinaryPath();
+  if (!binary) return { ok: false, reason: 'local_unavailable' };
+  if (!ports.spawnTerminal) return { ok: false, reason: 'token_unsupported' };
+  let before: ClaudeCliLoginStatus;
+  try {
+    before = await refreshClaudeCliLoginStatus({ requireFresh: true, configDir });
+  } catch {
+    return { ok: false, reason: 'local_unavailable' };
+  }
+  if (signal.aborted) return { ok: false, reason: 'login_cancelled' };
+  // An account already on a token whose ordinary login has ended is signed in, but nameless.
+  if (!before.loggedIn || (before.longLivedToken && before.storedLogin !== true))
+    return { ok: false, reason: 'not_signed_in' };
+  const minted = await runClaudeSetupToken({
+    binary,
+    env: await cliEnv({ network: true, configDir }),
+    cwd: homedir(),
+    signal,
+    timeoutMs: LOGIN_TIMEOUT_MS,
+    spawn: ports.spawnTerminal,
+  });
+  if (!minted.ok) return minted;
+  if (signal.aborted) return { ok: false, reason: 'login_cancelled' };
+  let pending: PendingClaudeLongLivedToken;
+  try {
+    pending = await replaceClaudeLongLivedToken(configDir, minted.token);
+  } catch (err) {
+    // The error of a failed write names the path only, never the token.
+    log.warn('claude long-lived token could not be saved', { error: err instanceof Error ? err.name : typeof err });
+    return { ok: false, reason: 'login_failed' };
+  }
+  let after: ClaudeCliLoginStatus | null = null;
+  try {
+    after = await refreshClaudeCliLoginStatus({ requireFresh: true, configDir });
+  } catch {
+    after = null;
+  }
+  if (!signal.aborted && after?.longLivedToken) {
+    await pending.commit();
+    return { ok: true, status: after };
+  }
+  // Cancelled, or the CLI does not confirm the new token: restore any previous token (or remove the new one).
+  await pending.rollback().catch(() => {});
+  await refreshClaudeCliLoginStatus({ force: true, configDir }).catch(() => {});
+  return { ok: false, reason: signal.aborted ? 'login_cancelled' : after ? 'login_failed' : 'local_unavailable' };
+}
+
+/** 拿掉账号的长期令牌,回到它的普通登录。令牌在 Anthropic 那边仍有效到期满,官方没有作废命令。 */
+async function removeClaudeCliLongLivedToken(configDir?: string): Promise<ClaudeCliLoginStatus> {
+  await removeClaudeLongLivedToken(configDir);
+  return refreshClaudeCliLoginStatus({ requireFresh: true, configDir });
+}
+
 /** @internal 单测用。 */
-export function resetClaudeNativeCliForTest(): void {
+function resetClaudeNativeCliForTest(): void {
   resetClaudeCliLoginStatusForTest();
   statusInflight = null;
   lastStatusFailureAt = null;
   currentLogin = null;
   profileStatuses.clear();
+}
+
+return { claudeCliNetworkEnv, refreshClaudeCliLoginStatus, readClaudeCliLoginStatus, readClaudeCliPlanUsage, parseClaudeCliPlanUsageLine, beginClaudeCliLogin, cancelClaudeCliLogin, runClaudeCliLogin, runClaudeCliLongLivedToken, removeClaudeCliLongLivedToken, resetClaudeNativeCliForTest };
 }

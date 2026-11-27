@@ -1,4 +1,4 @@
-export { AuthApiError, CindyAuthClient, retryAfterDeadline } from "./client.js";
+export { AuthApiError, CindyAuthClient, authRequestId, retryAfterDeadline } from "./client.js";
 export {
   accountVaultKey,
   isStoredAccountMetadata,
@@ -71,10 +71,14 @@ export {
   tokenPairSchema,
 } from "./types.js";
 export type {
+  AccountContact,
   AccountDeletionAvailability,
   AccountDeletionChallenge,
   AccountDeletionStatus,
   AccountMembership,
+  ContactChangeCodeSent,
+  ContactChangeTarget,
+  ContactChangeTicket,
   AccountTokenPair,
   AuthClientType,
   AuthFlowAction,

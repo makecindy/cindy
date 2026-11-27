@@ -21,7 +21,7 @@ import {
 } from '../device-link/broadcast-tap.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
-import { t } from '../i18n.js';
+import { t } from '../i18n.desktop.js';
 import { createMessage } from '../localDb/ipc/messages.js';
 import { createLogger } from '../logger.js';
 import { readRelaunchBackgroundActivity } from '../relaunchBusyActivityIpc.js';
@@ -29,6 +29,7 @@ import {
   applyConfirmedAppUpdateForAgent,
   checkAppUpdateForAgent,
   readAutoRelaunchOnIdleForAgent,
+  supportsUnattendedAppUpdateForAgent,
   setAutoRelaunchOnIdleForAgent,
 } from '../updateService.js';
 import { compareAppUpdateVersions } from '../updateVersionPolicy.js';
@@ -96,6 +97,7 @@ function getService(): AgentAppUpdateService {
   service ??= createAgentAppUpdateService({
     appVersion: () => app.getVersion(),
     platform: process.platform,
+    supportsUnattendedInstall: supportsUnattendedAppUpdateForAgent,
     pid: process.pid,
     now: () => Date.now(),
     check: checkAppUpdateForAgent,

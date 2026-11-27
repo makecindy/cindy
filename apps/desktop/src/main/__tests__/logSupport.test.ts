@@ -19,7 +19,7 @@ vi.mock('../logger', () => ({
   getLogDir: mocks.getLogDir,
   createLogger: () => ({ warn: mocks.warn }),
 }));
-vi.mock('../i18n', () => ({ t: (key: string) => key }));
+vi.mock('../i18n.desktop', () => ({ t: (key: string) => key }));
 
 import { createOpenLogsMenuItem, openLogsDirectory } from '../logSupport';
 

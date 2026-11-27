@@ -1,0 +1,90 @@
+--- a/src/connection.rs
++++ b/src/connection.rs
+@@ -21,7 +21,7 @@
+ const UNPACED_SEGMENTS: u32 = 4;
+ /// 拥塞窗口的下限，单位是分片。
+ const MIN_CWND_SEGMENTS: u64 = 16;
+-const INITIAL_CWND_SEGMENTS: u64 = 64;
++const INITIAL_CWND_SEGMENTS: u64 = 4;
+ /// 丢包率估计的平滑系数。太短的话丢 1% 时估计值大起大落，四分之一的时间捎带是关着的。
+ const LOSS_SMOOTHING: u32 = 256;
+ /// 最近丢包率超过这个值才捎带，单位百万分之一。干净网络上不多花一个字节。
+@@ -1145,6 +1145,7 @@
+         if self.timeout_deadline().is_some_and(|at| at <= now_us) {
+             // 一次判完所有超龄的包。只判最老的几个的话，其余的要等退避，整个窗口好几秒才能恢复。
+             let age = self.timeout_age_us();
++            let initial_probe = self.rtt.srtt_us() == 0 && self.consecutive_timeouts < 1;
+             let mut lost_data = false;
+             while let Some(&packet) = self.sent.front() {
+                 if packet.sent_at + age > now_us || self.parity_hold_until(&packet).is_some_and(|at| at > now_us) {
+@@ -1154,6 +1155,7 @@
+                 self.stats.timeout_losses += 1;
+                 lost_data |= packet.segment_count > 0;
+                 self.declare_lost(now_us, &packet);
++                if initial_probe { break; }
+             }
+             if lost_data {
+                 self.consecutive_timeouts += 1;
+@@ -1230,7 +1232,7 @@
+ 
+     /// 现在要不要发校验包，要的话每隔多少个新分片发一个。只有速度卡在窗口上时才值得：
+     /// 带宽才是瓶颈时，校验包要占数据的位置，比重传贵。瓶颈溢出和限速时再多发只会丢得更多。
+-    fn parity_interval(&self) -> Option<u32> {
++    fn parity_interval(&self) -> Option<u32> { return None; #[allow(unreachable_code)] {
+         // 晚到的包和丢掉的包一样堵窗口，校验包都能修。
+         let holes = self.loss_ppm + self.late_ppm;
+         let useful = (PARITY_MIN_LOSS_PPM..=PARITY_MAX_LOSS_PPM).contains(&holes);
+@@ -1242,6 +1244,8 @@
+             return None;
+         }
+         Some(parity::repair_interval(holes, self.congestion.window_is_the_limit()))
++    }
++
+     }
+ 
+     /// 校验包覆盖的范围：最近发出的、对端可能还缺的分片。
+@@ -1275,12 +1279,14 @@
+         used
+     }
+ 
+-    fn should_duplicate(&self) -> bool {
++    fn should_duplicate(&self) -> bool { return false; #[allow(unreachable_code)] {
+         let threshold = if self.parity_interval().is_some() { DUPLICATE_WITH_PARITY_LOSS_PPM } else { DUPLICATE_LOSS_PPM };
+         self.congestion.random_loss_ppm() >= threshold
+             && !self.congestion.is_rate_limited()
+             && self.duplicates.len() < MAX_DUPLICATES_QUEUED
+             && self.snd_sent >= self.new_data_limit()
++    }
++
+     }
+ 
+     fn new_data_limit(&self) -> u64 {
+@@ -1420,7 +1426,7 @@
+             count += 1;
+         }
+         let bundling = self.loss_ppm >= BUNDLE_LOSS_PPM || now_us < self.bundle_until || self.loss_samples < BUNDLE_WARMUP_PACKETS;
+-        if count > 0 && bundling {
++        if false && count > 0 && bundling {
+             (used, bundled_count) = self.bundle_unacked(out, used, &segments[..count], &mut bundled, bundled_count);
+         }
+ 
+--- a/src/congestion.rs
++++ b/src/congestion.rs
+@@ -5,7 +5,7 @@
+ //! 既不把瓶颈队列塞满，也不会被随机丢包吓住。
+ 
+ /// 增益用千分比表示。
+-const STARTUP_GAIN: u64 = 2885;
++const STARTUP_GAIN: u64 = 1500;
+ const DRAIN_GAIN: u64 = 347;
+ const CWND_GAIN: u64 = 2000;
+ const PROBE_CYCLE: [u64; 8] = [1250, 750, 1000, 1000, 1000, 1000, 1000, 1000];
+@@ -16,7 +16,7 @@
+ const FULL_BW_GROWTH: u64 = 1250;
+ const FULL_BW_ROUNDS: u8 = 3;
+ /// 还没有测量值时的发送速率，约 8 Mbit/s。第一批确认到达后就换成实测值。
+-const INITIAL_RATE: u64 = 4_000_000;
++const INITIAL_RATE: u64 = 500_000;
+ /// 允许提前这么久发送，避免为每个包都单独起一次计时器。
+ const PACING_QUANTUM_US: u64 = 1_000;
+ /// 连续超时这么多次（约 20 个往返没有任何确认），旧的带宽估计就不能再信了。

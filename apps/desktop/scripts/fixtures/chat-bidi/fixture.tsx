@@ -1,0 +1,117 @@
+import { useState } from 'react';
+import { mountPage, subscription } from '../../ui-page/harness';
+import { MarkdownRenderer } from '../../../src/renderer/components/chat/MarkdownRenderer';
+import { UserMessage } from '../../../src/renderer/components/chat/UserMessage';
+import { ChatInput } from '../../../src/renderer/components/new-chat/ChatInput';
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '../../../src/renderer/cindy-brain/PluginUiContributions';
+import { getDefaultVoiceInputSettings } from '../../../src/shared/voiceInputData';
+import { useAttachments } from '../../../src/renderer/hooks/useAttachments';
+import { UI_MOCK_BIDI_TASK, UI_MOCK_BIDI_TEXT, UI_MOCK_BIDI_MARKDOWN } from '../../../../../packages/maker-shared/src/uiMockBidi';
+
+// Teammate reports reach the card as Markdown, like assistant output.
+const ORCA_MARKDOWN = [
+  '## 汇报',
+  '',
+  '### 详情',
+  '',
+  UI_MOCK_BIDI_TEXT.split('\n').join('\n\n'),
+  '',
+  '- **要点**：`index.html` 与 [文档](https://example.com/docs)。',
+  '',
+  '```js',
+  'const greeting = "سلام";',
+  '```',
+].join('\n');
+
+const ORCA_MESSAGES = (['lead', 'worker'] as const).map((orcaSource) =>
+  JSON.stringify({ orcaSource, content: ORCA_MARKDOWN }));
+
+function Fixture({ composerOnly = false }: { composerOnly?: boolean }) {
+  const [stream, setStream] = useState('...');
+  const attachments = useAttachments('fixture-bidi');
+  return <main className="p-4 space-y-4" data-ui-page-subject>
+    {!composerOnly && <>
+    <section data-testid="user"><UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
+      content={UI_MOCK_BIDI_TEXT} workingDir="" simplifiedBotConversation /></section>
+    <section data-testid="markdown"><MarkdownRenderer content={UI_MOCK_BIDI_MARKDOWN} workingDir="" allowPrivilegedLinks={false} /></section>
+    <section data-testid="rich"><MarkdownRenderer content={(UI_MOCK_BIDI_TASK.messages[2] as { text: string }).text}
+      workingDir="" renderRichAnswers allowPrivilegedLinks={false} /></section>
+    <section data-testid="stream"><MarkdownRenderer content={stream} workingDir="" isStreaming allowPrivilegedLinks={false} /></section>
+    <button data-ui-page-control data-testid="stream-next" onClick={() => setStream('... سلام API 123.\n\nEnglish 456.')}>Append stream</button>
+    </>}
+    <ChatInput sessionId="fixture-bidi" initialWorkingDir="" runtimeAgentKind="codex" vendorKey="codex"
+      attachmentState={attachments}
+      initialModel="fixture-chat" initialProviderId="openai" hideRuntimeControls showFolderPicker={false}
+      disableAutofocus onSend={async () => true} />
+  </main>;
+}
+
+function SourceMessagesFixture() {
+  const hookText = Array(4).fill(UI_MOCK_BIDI_TEXT).join('\n');
+  return <main className="p-4 space-y-4" data-ui-page-subject>
+    <section data-testid="letter"><UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
+      content={UI_MOCK_BIDI_TEXT} workingDir="" simplifiedBotConversation
+      automationOrigin={{ kind: 'session', senderSessionTitle: 'BiDi source' }} /></section>
+    <section data-testid="hook"><UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES}
+      content={hookText} workingDir=""
+      hookSource={{ im: 'feishu', contentFormat: 'user-text', userText: hookText }} /></section>
+  </main>;
+}
+
+function OrcaMessagesFixture() {
+  return <main className="p-4 space-y-4" data-ui-page-subject>
+    {ORCA_MESSAGES.map((content) => <UserMessage key={content}
+      pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content={content} workingDir="" />)}
+  </main>;
+}
+
+function HookContextFixture() {
+  return <main className="p-4" data-ui-page-subject>
+    <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} content="Context layout" workingDir=""
+      hookSource={{ im: 'feishu', contentFormat: 'user-text', userText: 'Context layout',
+        threadContext: [{ author: 'Alex', text: UI_MOCK_BIDI_TEXT }],
+        contextSnapshot: { replyContext: UI_MOCK_BIDI_TEXT, replyMessageCount: 1,
+          groupContext: UI_MOCK_BIDI_TEXT, groupMessageCount: 1 } }} />
+  </main>;
+}
+
+function LongInlineCodeFixture() {
+  // #11312: a single unbroken inline-code token (long path / long identifier)
+  // must wrap inside the bubble instead of widening the bubble past its
+  // max width. Mirrors the issue screenshot, where one long `*.tsx` name pushed
+  // the whole paragraph outside the bubble edge.
+  const longToken = 'src/renderer/features/workflow/components/JudgeAttributeFieldWithVeryLongName.tsx';
+  const content = [
+    `工作区里还有另一处正在修改的改动不属于我，涉及 \`${longToken}\`、\`attributeJudge.ts\`、\`useWorkflowModelDict.ts\`。我都没有改动，也没有提交。`,
+    '',
+    `单个超长 token 独占一段时的极限情况：\`${'a'.repeat(220)}.tsx\``,
+  ].join('\n');
+  return <main className="p-4" data-ui-page-subject>
+    <section data-testid="long-inline"><MarkdownRenderer content={content} workingDir="" allowPrivilegedLinks={false} /></section>
+  </main>;
+}
+
+void mountPage({
+  route: '/bots/fixture-bidi',
+  host: {
+    maker: {
+      onDesktopCommandTriggered: subscription('desktop-command'),
+      onSessionCredentialSwitchApplied: subscription('credential-applied'),
+      onSessionCredentialSwitchFailed: subscription('credential-failed'),
+      onPiPackagesChanged: subscription('pi-packages'),
+      listAgentSkills: async () => ({ success: true, skills: [] }),
+      getSessionAgentSwitchIntent: async () => null,
+    },
+    voiceInput: {
+      getDataSnapshot: () => ({ settings: { ...getDefaultVoiceInputSettings('win32'), playInteractionSound: false } }),
+      onDataChanged: subscription('voice-data'),
+      getMicrophonePermissionCached: () => ({ ok: true, status: 'granted' }),
+      onGlobalShortcutTrigger: subscription('voice-shortcut'),
+    },
+    deviceLink: { onRemotePush: subscription('remote-push') },
+    ghosts: { listSync: () => ({ ghosts: [] }) },
+  },
+  render: (ctx) => ctx.case === 'context' ? <HookContextFixture /> : ctx.case === 'orca' ? <OrcaMessagesFixture />
+    : ctx.case === 'sources' ? <SourceMessagesFixture />
+    : ctx.case === 'long-inline-code' ? <LongInlineCodeFixture /> : <Fixture composerOnly={ctx.case === 'lists'} />,
+});

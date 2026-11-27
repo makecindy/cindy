@@ -1,4 +1,5 @@
-import { observeBotLearningTurn } from './botLearningFeedback.js';
+import { turnUsageAdmission } from '../usage/turnUsageAdmission.js';
+import { observeBotLearningEvent } from './botLearningFeedback.js';
 import { projectQuietScheduledOutput } from '../scheduler-host/silent-output.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 import { prepareSessionEvent, type PrepareSessionEventDeps } from './sessionEventPreparation.js';
@@ -12,6 +13,7 @@ import {
   type FinishSessionTerminalEventDeps,
 } from './sessionEventTerminal.js';
 import { recordSessionEventSnapshots } from './sessionEventSnapshots.js';
+import { recordSessionAcpTurnUsage } from './sessionAcpTurnUsage.js';
 import {
   recordSessionClaudeTurnUsage,
   type RecordSessionClaudeTurnUsageDeps,
@@ -41,8 +43,10 @@ export function handleSessionEvent(
   deps: SessionEventDependencies,
   session: Session,
   event: AgentEvent,
+  admitUsage?: () => boolean,
+  observeUnbilledUsage?: () => void,
 ): void {
-  const prepared = prepareSessionEvent(deps, session, event);
+  const prepared = prepareSessionEvent(deps, session, event, admitUsage);
   if (!prepared) return;
   const project = projectQuietScheduledOutput;
   const projected = project(prepared.event);
@@ -53,20 +57,29 @@ export function handleSessionEvent(
     // Project the already-redacted event independently; never copy raw fields back into it.
     prepared.broadcastEvent = project(prepared.broadcastEvent) ?? prepared.broadcastEvent;
   }
-  if (event.type === 'tool_use' && event.turnScope !== 'background') observeBotLearningTurn(session, event.sessionTurnGeneration);
+  observeBotLearningEvent(session, prepared.attributedEvent);
   const stream = persistSessionStreamEvent(deps, session, prepared);
+  // The existing durable row push carries ACP input patches to all clients. Broadcasting a
+  // second tool_use on the live stream would add a second card on older controllers.
+  if (stream.persistedOnly) return;
   const delivery = deliverSessionEvent(deps, session, prepared, stream);
   const terminal = finishSessionTerminalEvent(deps, session, prepared, delivery);
   recordSessionEventSnapshots(session, prepared);
-  recordSessionClaudeTurnUsage(
-    deps,
-    session,
-    event,
-    terminal.turnAssistantPersistId,
-    prepared.completedTurnWallClockMs,
-    prepared.isContinuationBoundary,
-  );
-  recordSessionCodexTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
-  recordSessionPiTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
-  deps.recordProviderPartyUsage?.(session, event);
+  const record = () => {
+    recordSessionClaudeTurnUsage(
+      deps,
+      session,
+      event,
+      terminal.turnAssistantPersistId,
+      prepared.completedTurnWallClockMs,
+      prepared.isContinuationBoundary,
+    );
+    recordSessionCodexTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
+    recordSessionPiTurnUsage(deps, session, event, terminal.turnAssistantPersistId);
+    recordSessionAcpTurnUsage(session, event);
+    deps.recordProviderPartyUsage?.(session, event);
+  };
+  if (admitUsage === undefined) record();
+  else if (admitUsage()) turnUsageAdmission.run(admitUsage, record);
+  else observeUnbilledUsage?.();
 }

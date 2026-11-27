@@ -10,7 +10,10 @@
  * 同时也是 sessions.worktree_path 反范式快照的来源。
  */
 export interface WorktreeMeta {
-  /** Durable intent; DB delegation ownership decides whether to finish or discard it. */
+  /**
+   * Left by a V1 teammate background task that was reopened in a new task and interrupted
+   * before the move finished. Nothing writes it any more; a worktree carrying it is kept, never recycled.
+   */
   pendingSessionTransfer?: { sessionId: string; delegationId: string; requestingBotId: string };
   /** New physical contents at the same path invalidate old recycle requests. */
   generation?: string;
@@ -37,6 +40,12 @@ export interface WorktreeMeta {
    * 进程崩溃后可从该字段继续回收 quarantine 目录。
    */
   quarantinePath?: string;
+  /**
+   * Set while a staged `createWorktree` still has an unfinished background full checkout
+   * (`git worktree add --no-checkout` followed by async `git checkout HEAD -- .`).
+   * Cleared once that background checkout succeeds.
+   */
+  backgroundCheckoutPending?: boolean;
   /** true = scheduler 创建的临时 worktree，session 关闭时可池化复用而非销毁。 */
   ephemeral?: boolean;
 }
@@ -92,6 +101,8 @@ export interface DetectCwdResp {
    * 旧 Desktop 会省略该字段；控制端必须在创建副作用前把省略视为不支持。
    */
   supportsRecoveryKeyDiscard?: boolean;
+  /** Explicit opt-in for switching the main checkout; old hosts omit this. */
+  supportsCheckout?: boolean;
 }
 
 export interface ListBranchesReq {

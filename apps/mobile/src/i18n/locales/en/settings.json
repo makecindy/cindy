@@ -1,4 +1,31 @@
 {
+  "pushDiagnostics": {
+    "title": "Push diagnostics",
+    "read": "Read push status",
+    "busy": "Reading…",
+    "failed": "Could not read push status. Try again.",
+    "copyFailed": "Could not copy the token.",
+    "copied": "Token copied.",
+    "bundle": "App ID",
+    "build": "Build",
+    "environment": "APNs environment",
+    "permission": "System permission",
+    "alerts": "Alerts",
+    "lockScreen": "Lock screen",
+    "notificationCenter": "Notification Center",
+    "copy": "Copy APNs token",
+    "hide": "Hide result",
+    "unknown": "Unknown",
+    "on": "On",
+    "off": "Off",
+    "hint": "Read only when requested. The APNs token is shown locally, never saved in diagnostics or uploaded by this tool, and hidden when you leave or background this screen. Copy only for Apple’s Push Notifications Console; copied text remains in your clipboard.",
+    "permissions": {
+      "granted": "Allowed",
+      "denied": "Denied",
+      "undetermined": "Not requested",
+      "provisional": "Quiet delivery"
+    }
+  },
   "localLogs": {
     "upload": "Upload logs",
     "uploadResult": {
@@ -12,7 +39,7 @@
     "export": "Export logs",
     "clear": "Clear logs",
     "busy": "Working…",
-    "failed": "Unable to save or share logs. Please try again.",
+    "failed": "Unable to save or share logs. Try again.",
     "clearHint": "Delete the saved diagnostic logs?",
     "cancel": "Cancel",
     "uploadCopied": "Logs uploaded. Code {{code}} copied",
@@ -20,6 +47,12 @@
     "footer": "Logs stay on this phone for up to 7 days or 8 MB and are never uploaded automatically. Exported logs exclude conversation text and credentials; uploads send only filtered run records and version info."
   },
   "title": "Settings",
+  "promptRecommendation": {
+    "label": "Input Suggestions",
+    "description": "Suggest what to say next after a reply. Applies only to this phone.",
+    "saveFailed": "The setting applies for now, but could not be saved.",
+    "reset": "Reset to Default"
+  },
   "appearance": {
     "title": "Appearance",
     "modeLabel": "Appearance Mode",
@@ -29,6 +62,28 @@
       "dark": "Dark"
     },
     "saveFailed": "Failed to save appearance mode. The previous setting will return after restart.",
+    "wallpaper": {
+      "title": "Wallpaper",
+      "choose": "Choose photo or video",
+      "replace": "Replace Wallpaper",
+      "remove": "Remove Wallpaper",
+      "importing": "Working…",
+      "tooLarge": "Choose a photo up to 20 MB or a video up to 100 MB.",
+      "importFailed": "Couldn’t import this photo or video.",
+      "saveFailed": "Couldn’t save the wallpaper setting.",
+      "static": "Static",
+      "dynamic": "Dynamic",
+      "motionLabel": "Display",
+      "options": {
+        "none": "None",
+        "custom": "Custom wallpaper",
+        "cindy-whisper": "Whisper",
+        "cindy-night-glance": "Night Glance",
+        "cindy-scarlet-stroll": "Scarlet Stroll",
+        "cindy-neon": "Neon Silhouette",
+        "cindy-prism": "Prism Shards"
+      }
+    },
     "userBubble": {
       "title": "My message bubble color",
       "presets": "Color",
@@ -52,6 +107,16 @@
       "reset": "Reset to default",
       "apply": "Apply",
       "hex": "Color value"
+    },
+    "appIcon": {
+      "label": "App icon",
+      "saveFailed": "Couldn’t change the app icon. Try again.",
+      "options": {
+        "default": "Default",
+        "cat": "Black cat",
+        "wordmark": "Cindy wordmark",
+        "mark": "Cindy symbol"
+      }
     }
   },
   "language": {
@@ -81,7 +146,7 @@
         "hant": "繁體"
       },
       "styles": {
-        "prose": "Classical prose (default)",
+        "prose": "Classical prose",
         "tang-poetry": "Tang poetry",
         "song-ci": "Song ci",
         "yuan-qu": "Yuan qu",
@@ -101,7 +166,7 @@
     "updateMethodUnavailable": "Development builds can’t update in the app.",
     "checkAction": "Check for Updates",
     "testFlightCheckAction": "Check for Content Updates",
-    "checking": "Checking",
+    "checking": "Checking…",
     "checkingAccessibility": "Checking for updates",
     "testFlightCheckingAccessibility": "Checking for content updates",
     "testFlightUpdateManaged": "Install new test builds from TestFlight.",
@@ -113,7 +178,7 @@
     "bundleUpdateFound": "App package update available",
     "upToDate": "Already up to date",
     "bundleUpToDateNoOta": "Up to date. This version doesn’t support hot updates.",
-    "downloadedRestarting": "Update downloaded, restarting",
+    "downloadedRestarting": "Update downloaded. Restarting…",
     "downloadedRestartRequired": "Update downloaded. Fully quit and reopen the app to apply it.",
     "bundleCheckFailed": "Could not check for app package updates. Try again later.",
     "checkFailedDetail": "Update check failed: {{detail}}",
@@ -135,11 +200,20 @@
     "permissionDenied": "Allow Cindy notifications in your system settings.",
     "unregisterQueued": "Turned off. Unregistering will finish once you’re back online.",
     "preview": "Show chat previews",
-    "background": "Keep chat connected in background",
-    "backgroundActive": "Receiving chat messages in background",
+    "background": "Background notifications",
+    "backgroundActive": "Receiving notifications in background",
     "backgroundStop": "Stop receiving",
-    "backgroundHint": "The background connection works without Google and shows an ongoing notification. You can stop it from that notification.",
-    "googleUnavailable": "Google push is unavailable. Enable the background chat connection to receive messages."
+    "backgroundHint": "Cindy automatically keeps a background connection when Google push may be unavailable. An ongoing notification is shown while connected.",
+    "googleUnavailable": "Google push is unavailable. Background delivery follows your notification settings.",
+    "backgroundModes": {
+      "auto": "Automatic",
+      "on": "Always on",
+      "off": "Off"
+    },
+    "actionReplyPlaceholder": "Message",
+    "actionNotDelivered": "This didn’t reach your computer. Open Cindy to respond.",
+    "actionReplyNotDelivered": "Your reply wasn’t sent. Open Cindy to send it again: {{text}}",
+    "actionRequestEnded": "This request was already answered or has expired."
   },
   "about": {
     "sectionTitle": "About This Phone",
@@ -182,7 +256,7 @@
     "confirmBody": "Switching signs you out and restarts the app.",
     "cancel": "Cancel",
     "switchAction": "Switch",
-    "switching": "Switching",
+    "switching": "Switching…",
     "switchFailed": "Could not switch the server environment. Try again."
   },
   "updateInfo": {
@@ -211,7 +285,7 @@
     "openUserAgreement": "Open the user agreement",
     "appFilingNumber": "App Filing Number",
     "analytics": "Usage statistics",
-    "analyticsHint": "Helps us understand launches and retention. Reports device info such as model, OS and app version, and a device identifier, plus your account ID once signed in; never conversations, files, or prompts.",
+    "analyticsHint": "When this is on, we use an alias in place of your account ID and a device identifier to understand app launches and return visits. This helps us improve the product. Payments use a separate alias. These statistics don’t include your chats, files or prompts.\nOlder records contain original account IDs. Someone with access to them may be able to link a new alias to an account using the same device identifier.",
     "analyticsSaveFailed": "Couldn't save this setting; it may revert after a restart.",
     "analyticsReset": "Reset to default",
     "analyticsResetAction": "Reset"
@@ -221,7 +295,7 @@
     "logoutConfirmRunning": "Some sessions are still running. They keep running on your computer, but this phone stops receiving and controlling them, and every account and local mirror saved on this phone is cleared.",
     "logoutHint": "Clears every account and the remote mirror on this phone. Sessions on your computer are not affected.",
     "logout": "Sign Out",
-    "loggingOut": "Signing out",
+    "loggingOut": "Signing Out…",
     "loggingOutAccessibility": "Signing out"
   },
   "copyRow": {
@@ -246,12 +320,12 @@
     "noDesktops": "Sign in to the same account on a computer to sync your dictionary."
   },
   "voiceSpeakerFilter": {
-    "actionFailed": "The change could not be saved. Please try again.",
+    "actionFailed": "The change could not be saved. Try again.",
     "title": "Recognize my voice",
     "sectionTitle": "Voiceprint filter",
     "label": "Recognize my voice",
     "entryHint": "Mutes other people during voice input. Your voiceprint stays on this phone.",
-    "openAccessibility": "Open recognize my voice settings",
+    "openAccessibility": "Open “Recognize my voice” settings",
     "on": "On",
     "off": "Off",
     "hint": "Mutes other people during voice input so only your speech is transcribed; speech overlapping yours can’t be fully removed. Your voiceprint is encrypted on this phone and never uploaded or synced.",
@@ -309,7 +383,7 @@
       "passages": {
         "p1": "This morning I will go over the plan for the week, and in the afternoon I will list the questions we need to discuss and send them out so everyone can read them first.",
         "p2": "If the weather is nice tomorrow, we can leave a little earlier, pick up some fruit and snacks on the way, and have lunch in the park.",
-        "p3": "Please make this text more concise, keep the key numbers and conclusions, and then sum up the main points in three to five sentences."
+        "p3": "Make this text more concise, keep the key numbers and conclusions, and then sum up the main points in three to five sentences."
       },
       "errors": {
         "too_short": "Too little speech was detected in passage {{index}}. Record it again.",
@@ -325,7 +399,7 @@
       "stepStatus": {
         "pending": "Not recorded",
         "recorded": "Recorded",
-        "retry": "Record again",
+        "retry": "Needs re-recording",
         "recording": "Recording"
       },
       "rerecordStep": "Record Passage {{index}} Again",
@@ -388,7 +462,92 @@
       "voice": "Hold to talk",
       "scrollKeys": "Right stick",
       "scroll": "Scroll",
-      "page": "Page up / down"
+      "page": "Page up / down",
+      "triggerScrollKeys": "L2 / R2 + D-pad up/down",
+      "triggerScroll": "Scroll visible content",
+      "sendText": "Send entered text",
+      "taskHint": "These shortcuts work on session pages. A key assigned to voice takes priority; releasing it keeps the text in the message box."
     }
+  },
+  "projectInfo": {
+    "automatic": "Use project icon",
+    "autoLoading": "Finding project icon…",
+    "autoNone": "Using initials from the project name.",
+    "autoSource": "Source",
+    "githubAvatar": "Use GitHub account avatar",
+    "title": "Project settings",
+    "name": "Display name",
+    "saveName": "Save name",
+    "reset": "Restore default",
+    "icon": "Icon",
+    "directory": "Project directory",
+    "done": "Done",
+    "failed": "Could not save. Try again.",
+    "unavailable": "Project settings are unavailable. Connect to an updated computer and try again.",
+    "back": "Back",
+    "cancel": "Cancel",
+    "changeIcon": "Change icon",
+    "chooseIcon": "Choose an icon",
+    "save": "Save",
+    "symbols": "Icons",
+    "emoji": "Emoji",
+    "letters": "Letters",
+    "image": "Image",
+    "upload": "Upload image",
+    "imageHint": "PNG, JPG or WebP · cropped to square",
+    "imageError": "Could not read this image. Try a smaller PNG or JPG.",
+    "search": "Search icons",
+    "customEmoji": "Or paste an emoji",
+    "lettersHint": "Use one or two letters or numbers.",
+    "thisComputer": "This computer",
+    "nameHint": "Shown in your project list. The folder name stays the same.",
+    "copy": "Copy path",
+    "copied": "Copied",
+    "applyIcon": "Use icon",
+    "noResults": "No matching icons",
+    "discardHint": "Discard unsaved changes?",
+    "keepEditing": "Keep editing",
+    "discard": "Discard",
+    "colors": {
+      "default": "Default (follow theme)"
+    },
+    "directories": "Project directories",
+    "directoriesHint": "Applies to all tasks in this project from their next turn. Existing task-specific directories are kept.",
+    "removeDirectory": "Remove directory",
+    "directoryPath": "Full directory path",
+    "addDirectory": "Add directory",
+    "browseDirectory": "Browse directories",
+    "mainDirectory": "Main directory",
+    "createTitle": "New project",
+    "createAction": "Create project",
+    "repository": "Repository URL",
+    "repositoryHint": "Supports GitHub, GitLab and other Git repositories via HTTPS or SSH.",
+    "autoDirectory": "Without a selected directory, create in {{path}}. Name conflicts get a number.",
+    "cloning": "Cloning repository…",
+    "invalidRepository": "Enter a valid GitHub, GitLab or Git repository URL.",
+    "createFailed": "Could not create the project. Check directory write access, the repository URL and Git access on this computer. A clone destination must be empty.",
+    "createNamePlaceholder": "Project name",
+    "createNameHint": "Give your project a name to get started.",
+    "createFromRepository": "Create from a code repository",
+    "createBlank": "Switch to a blank project",
+    "source_blank": "New blank project",
+    "source_existing": "Open existing folder",
+    "source_repository": "Import code repository",
+    "sourceHint_blank": "Enter a name. The project folder is created automatically.",
+    "sourceHint_existing": "Choose an existing project folder on this computer.",
+    "sourceHint_repository": "Paste a repository link to download it to this computer.",
+    "source": "Project source",
+    "sourceShort_blank": "Blank",
+    "sourceShort_existing": "Folder",
+    "sourceShort_repository": "Repository",
+    "automaticMain": "Primary · Automatic",
+    "source_local": "Local folder",
+    "sourceShort_local": "Local folder",
+    "sourceHint_local": "Enter a name to create a folder, or choose an existing one.",
+    "chooseExistingFolder": "Choose existing folder",
+    "changeMainDirectory": "Change"
+  },
+  "navigation": {
+    "unavailable": "Could not open settings on the target computer. Check that it is online and allows remote control; update Cindy if it is an older version."
   }
 }

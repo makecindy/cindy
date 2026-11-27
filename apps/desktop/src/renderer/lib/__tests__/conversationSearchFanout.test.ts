@@ -51,6 +51,17 @@ function session(partial: Partial<Session> & Pick<Session, 'id' | 'title'>): Ses
   } as Session;
 }
 
+// Offline fallback uses the same query syntax as the host; quotes are not
+// literal punctuation in a title and AND must not become fuzzy OR (unit).
+it('matches quoted phrases and conjunctions in cached titles', () => {
+  const sessions = [session({ id: 'exact', title: 'login error cache' }), session({ id: 'gap', title: 'login other error' })];
+  for (const query of ['"login error"', 'login + cache']) {
+    const page = searchCachedSessionsByTitle(sessions, { query });
+    expect(page.results.map((item) => item.session.id)).toEqual(['exact']);
+    expect(page.poolCapped).toBe(true);
+  }
+});
+
 function result(
   id: string,
   rankScore: number,
@@ -696,6 +707,10 @@ describe('filterResultsByWorkingDirs', () => {
     expect(filterResultsByWorkingDirs(page, ['/project']).results).toHaveLength(1);
     expect(filterResultsByWorkingDirs(page, ['/tmp/checkout']).results).toHaveLength(0);
     expect(remoteIndexedSearchIgnoredWorkingDirs(page, ['/project'])).toBe(false);
+    const buddy = response([result('group', 1, { taskProjectDir: '/buddy', projectDir: '/group-repo', workingDir: '/group-repo' })]);
+    expect(filterResultsByWorkingDirs(buddy, ['/buddy']).results).toHaveLength(1);
+    expect(filterResultsByWorkingDirs(buddy, ['/group-repo']).results).toHaveLength(0);
+    expect(remoteIndexedSearchIgnoredWorkingDirs(buddy, ['/buddy'])).toBe(false);
   });
   it('drops remote hits that belong to another project', () => {
     const page = filterResultsByWorkingDirs(
@@ -816,4 +831,12 @@ describe('remoteIndexedSearchIgnoredWorkingDirs', () => {
       ),
     ).toBe(false);
   });
+});
+
+// Unit regression: offline/legacy title search discarded tags during projection;
+// the existing cached-search cases only supplied untagged tasks.
+it('keeps task labels in cached title search results', () => {
+  const tags = [{ id: 'red', name: 'Important', color: 'red' as const, favoriteOrder: null, revision: 1 }];
+  const page = searchCachedSessionsByTitle([session({ id: 'tagged', title: 'needle', tags })], { query: 'needle' });
+  expect(page.results[0]?.session.tags).toEqual(tags);
 });

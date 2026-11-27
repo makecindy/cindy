@@ -19,6 +19,12 @@ import { WebSocket, WebSocketServer } from 'ws';
 
 const proxyUpstream = vi.hoisted(() => ({ url: '' }));
 
+// Proxy routing does not perform standby-share cloud mutations. Keep this
+// external writer outside the test process rather than booting the whole app.
+vi.mock('../../device-link/providerShareAvailabilityTransport.js', () => ({
+  disableShareAvailability: () => { throw new Error('Unexpected standby-share mutation in proxy test'); },
+}));
+
 vi.mock('electron', () => ({
   app: { isPackaged: false, getPath: vi.fn(() => '/tmp/cindy-codex-encrypted-recovery-test'), getAppPath: vi.fn(() => process.cwd()) },
 }));
@@ -66,7 +72,7 @@ import {
   registerComposed,
   setCodexProxyAuthInjection,
   unregister,
-} from '../codex-proxy-host';
+} from '../codex-proxy-host.desktop';
 
 const ENCRYPTED_ERROR = {
   type: 'error',
@@ -97,28 +103,171 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-describe('codex encrypted-content recovery after WebSocket → HTTP fallback', () => {
+// Test value (#11278): exercise the production host/proxy/retry chain, which the
+// mocked codexProxyHost tests cannot cover. Minimal failure: a historic tool MP3
+// followed by attachment-free text receives this exact 400. Unit tier, ephemeral
+// loopback upstream only; no native transcript, account or provider is accessed.
+const AUDIO_ERROR = { error: { type: 'invalid_request_error', param: 'input', message: 'Audio input is not available.' } };
+const AUDIO_PART = { type: 'input_audio', audio_url: 'data:audio/mpeg;base64,SUQz' };
+const AUDIO_HISTORY = {
+  model: 'gpt-6.2-sol',
+  input: [
+    { type: 'custom_tool_call', id: 'ctc_audio', call_id: 'call_audio', name: 'play', input: 'music' },
+    { type: 'custom_tool_call_output', id: 'ctco_audio', call_id: 'call_audio', output: [
+      { type: 'input_text', text: 'Here is the recording.' }, AUDIO_PART,
+      { type: 'input_image', image_url: 'https://example.invalid/cover.png' },
+    ] },
+    { type: 'reasoning', id: 'rs_audio', summary: [], encrypted_content: 'valid-opaque-reasoning' },
+    { role: 'user', content: 'Continue with text only.' },
+  ],
+};
+
+async function postReplay(body: unknown, threadId = 'thread-audio') {
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const req = httpRequest(`${getCodexProxyEndpoint()}/v1/responses`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'thread-id': threadId },
+    }, (res) => { void readBody(res).then(body => resolve({ status: res.statusCode!, body }), reject); });
+    req.once('error', reject);
+    req.end(JSON.stringify(body));
+  });
+}
+
+describe('Codex historic tool audio recovery (#11278)', () => {
+  afterEach(async () => {
+    unregister('session-audio');
+    unregister('session-other');
+    await disposeCodexProxy();
+  });
+
+  it('recovers text-only replay and scopes later stripping to the recovered thread, model and upstream', async () => {
+    const sent: typeof AUDIO_HISTORY[] = [];
+    let acceptsAudio = false;
+    const upstream = createServer(async (req, res) => {
+      const body = JSON.parse(await readBody(req));
+      sent.push(body);
+      const hasAudio = JSON.stringify(body.input).includes('input_audio');
+      res.writeHead(hasAudio && !acceptsAudio ? 400 : 200, { 'content-type': 'application/json', connection: 'close' });
+      res.end(JSON.stringify(hasAudio && !acceptsAudio ? AUDIO_ERROR : { id: 'resp_ok', output: [] }));
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    proxyUpstream.url = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    const original = JSON.stringify(AUDIO_HISTORY);
+    try {
+      setCodexProxyAuthInjection('oauth-bearer');
+      await ensureCodexProxyReady();
+      registerComposed('session-audio', 'thread-audio', 'PRODUCT_PROMPT');
+      registerComposed('session-other', 'thread-other', 'PRODUCT_PROMPT');
+      expect((await postReplay(AUDIO_HISTORY)).status).toBe(200);
+      expect(sent).toHaveLength(2);
+      expect(sent[0]!.input).toEqual(AUDIO_HISTORY.input);
+      const expected = structuredClone(AUDIO_HISTORY.input);
+      expected[1]!.output![1] = { type: 'input_text', text: '[Audio omitted: this model does not accept audio input.]' };
+      expect(sent[1]!.input).toEqual(expected);
+      expect(JSON.stringify(AUDIO_HISTORY)).toBe(original);
+
+      expect((await postReplay(AUDIO_HISTORY)).status).toBe(200);
+      expect(sent).toHaveLength(3);
+      expect(sent[2]!.input).toEqual(expected);
+      acceptsAudio = true;
+      await postReplay(AUDIO_HISTORY, 'thread-other');
+      expect(sent.at(-1)!.input).toEqual(AUDIO_HISTORY.input);
+      await postReplay({ ...AUDIO_HISTORY, model: 'gpt-audio' });
+      expect(sent.at(-1)!.input).toEqual(AUDIO_HISTORY.input);
+      // Switching back cannot resurrect the old marker.
+      await postReplay(AUDIO_HISTORY);
+      expect(sent.at(-1)!.input).toEqual(AUDIO_HISTORY.input);
+
+      acceptsAudio = false;
+      await postReplay(AUDIO_HISTORY);
+      await disposeCodexProxy();
+      await ensureCodexProxyReady();
+      registerComposed('session-audio', 'thread-audio', 'PRODUCT_PROMPT');
+      acceptsAudio = true;
+      await postReplay(AUDIO_HISTORY);
+      expect(sent.at(-1)!.input).toEqual(AUDIO_HISTORY.input);
+
+      acceptsAudio = false;
+      await postReplay(AUDIO_HISTORY);
+      acceptsAudio = true;
+      // Same wire model on a different upstream must be tried with intact audio.
+      proxyUpstream.url += '/alternate';
+      await postReplay(AUDIO_HISTORY);
+      expect(sent.at(-1)!.input).toEqual(AUDIO_HISTORY.input);
+
+      acceptsAudio = false;
+      await postReplay(AUDIO_HISTORY);
+      unregister('session-audio');
+      registerComposed('session-audio', 'thread-audio', 'PRODUCT_PROMPT');
+      acceptsAudio = true;
+      await postReplay(AUDIO_HISTORY);
+      expect(sent.at(-1)!.input).toEqual(AUDIO_HISTORY.input);
+    } finally {
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
+  });
+
+  it('does not retry unrelated failures or user audio, and retries a matching rejection at most once', async () => {
+    const sent: unknown[] = [];
+    let error = AUDIO_ERROR;
+    let status = 400;
+    const upstream = createServer(async (req, res) => {
+      sent.push(JSON.parse(await readBody(req)));
+      res.writeHead(status, { 'content-type': 'application/json', connection: 'close' });
+      res.end(JSON.stringify(error));
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    proxyUpstream.url = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    try {
+      setCodexProxyAuthInjection('oauth-bearer');
+      await ensureCodexProxyReady();
+      registerComposed('session-audio', 'thread-audio', 'PRODUCT_PROMPT');
+      error = { error: { ...AUDIO_ERROR.error, message: 'Invalid audio format.' } };
+      expect((await postReplay(AUDIO_HISTORY)).status).toBe(400);
+      expect(sent).toHaveLength(1);
+      error = AUDIO_ERROR;
+      status = 500;
+      expect((await postReplay(AUDIO_HISTORY)).status).toBe(500);
+      expect(sent).toHaveLength(2);
+      status = 400;
+      expect((await postReplay({ model: AUDIO_HISTORY.model, input: [{ role: 'user', content: [AUDIO_PART] }] })).status).toBe(400);
+      expect(sent).toHaveLength(3);
+      const rejected = await postReplay(AUDIO_HISTORY);
+      expect(rejected.status).toBe(400);
+      expect(JSON.parse(rejected.body)).toEqual(AUDIO_ERROR);
+      expect(sent).toHaveLength(5);
+    } finally {
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
+  });
+});
+
+describe('codex body recovery after WebSocket → HTTP fallback', () => {
   afterEach(async () => {
     unregister('session-switched');
     await disposeCodexProxy();
   });
 
-  it('strips undecryptable reasoning on the first HTTP replay instead of waiting for an upstream 400', async () => {
+  it.each([
+    { reason: 'encrypted_content', history: HISTORY, error: ENCRYPTED_ERROR, rejectedField: 'encrypted_content' },
+    { reason: 'responses_tool_audio', history: { ...AUDIO_HISTORY, stream: true }, error: { type: 'error', status: 400, ...AUDIO_ERROR }, rejectedField: 'input_audio' },
+  ])('repairs $reason on the first HTTP replay instead of waiting for an upstream 400', async ({ reason, history, error, rejectedField }) => {
     const httpBodies: string[] = [];
     // 模拟 ChatGPT 订阅后端：WS 回 400 错误帧；HTTP 对同样的历史回 200 + SSE error，不给 400。
     const upstream = createServer(async (req, res) => {
       const body = await readBody(req);
       httpBodies.push(body);
       res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
-      if (body.includes('encrypted_content')) {
-        res.end(`event: error\ndata: ${JSON.stringify(ENCRYPTED_ERROR)}\n\n`);
+      if (body.includes(rejectedField)) {
+        res.end(`event: error\ndata: ${JSON.stringify(error)}\n\n`);
         return;
       }
       res.end(`event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response: { id: 'resp_ok', output: [] } })}\n\n`);
     });
     const wss = new WebSocketServer({ noServer: true });
     upstream.on('upgrade', (req, socket, head) => wss.handleUpgrade(req, socket, head, (ws) => {
-      ws.on('message', () => ws.send(JSON.stringify(ENCRYPTED_ERROR)));
+      ws.on('message', () => ws.send(JSON.stringify(error)));
     }));
     await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
     proxyUpstream.url = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
@@ -133,13 +282,13 @@ describe('codex encrypted-content recovery after WebSocket → HTTP fallback', (
       client = new WebSocket(`${proxyUrl.replace(/^http/, 'ws')}/v1/responses`, { headers: { 'thread-id': 'thread-switched' } });
       await once(client, 'open');
       const rejection = once(client, 'message');
-      client.send(JSON.stringify({ type: 'response.create', ...HISTORY }));
+      client.send(JSON.stringify({ type: 'response.create', ...history }));
       const [frame] = await rejection;
       expect(armCodexHttpRecovery({
         sessionId: 'session-switched',
         threadId: 'thread-switched',
         message: JSON.stringify(JSON.parse(frame.toString())),
-      })).toBe('encrypted_content');
+      })).toBe(reason);
 
       // Codex 收到 426 后改发 HTTP，带着同一份历史。
       const replay = await new Promise<string>((resolve, reject) => {
@@ -148,16 +297,21 @@ describe('codex encrypted-content recovery after WebSocket → HTTP fallback', (
           headers: { 'content-type': 'application/json', 'thread-id': 'thread-switched' },
         }, (res) => { void readBody(res).then(resolve, reject); });
         req.once('error', reject);
-        req.end(JSON.stringify(HISTORY));
+        req.end(JSON.stringify(history));
       });
 
       expect(replay).toContain('response.completed');
       expect(httpBodies).toHaveLength(1);
       const sent = JSON.parse(httpBodies[0]!) as { input: Array<Record<string, unknown>> };
-      expect(JSON.stringify(sent.input)).not.toContain('encrypted_content');
+      expect(JSON.stringify(sent.input)).not.toContain(rejectedField);
+      if (reason === 'responses_tool_audio') {
+        expect(sent.input[1]).toMatchObject({ id: 'ctco_audio', call_id: 'call_audio' });
+        expect(sent.input[2]).toEqual(AUDIO_HISTORY.input[2]);
+        expect(sent.input[3]).toEqual(AUDIO_HISTORY.input[3]);
+      }
       // 可读的对话内容保持原样，只丢掉解不开的密文。
       expect(sent.input.filter((item) => item.type === 'message')).toEqual(
-        HISTORY.input.filter((item) => item.type === 'message'),
+        history.input.filter((item) => item.type === 'message'),
       );
     } finally {
       client?.terminate();
@@ -165,6 +319,66 @@ describe('codex encrypted-content recovery after WebSocket → HTTP fallback', (
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       upstream.closeAllConnections();
       await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+});
+
+describe('Codex Responses search dialect (Issue 8170)', () => {
+  afterEach(async () => {
+    unregister('session-search');
+    await disposeCodexProxy();
+  });
+
+  const search = { type: 'web_search', search_context_size: 'low' };
+  const ordinaryTool = { type: 'function', name: 'lookup', parameters: { type: 'object' } };
+  const payload = {
+    model: 'gpt-fixture',
+    input: 'Look up the fixture',
+    tools: [ordinaryTool, search],
+    tool_choice: { type: 'web_search' },
+  };
+  const rejected = "Invalid JSON data: tools[1].type: unknown variant `web_search`, expected one of `function`, `web_search_preview`, `mcp`";
+
+  it.each([
+    ['legacy', 200, 2],
+    ['modern', 200, 1],
+    ['unsupported', 400, 1],
+    ['rejected again', 400, 2],
+  ] as const)('uses one explicit retry for %s', async (dialect, expectedStatus, requestCount) => {
+    const sent: typeof payload[] = [];
+    const upstream = createServer(async (req, res) => {
+      const body = JSON.parse(await readBody(req)) as typeof payload;
+      sent.push(body);
+      const accepted = dialect === 'modern' || (dialect === 'legacy'
+        && body.tools[1]?.type === 'web_search_preview' && body.tool_choice.type === 'web_search_preview');
+      res.writeHead(accepted ? 200 : 400, { 'content-type': 'application/json', connection: 'close' });
+      res.end(JSON.stringify(accepted ? { id: 'resp_ok', output: [] } : {
+        error: {
+          code: 'json_parse_error',
+          message: dialect === 'unsupported' ? rejected.replace(', `web_search_preview`', '') : rejected,
+        },
+      }));
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    proxyUpstream.url = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    try {
+      setCodexProxyAuthInjection('oauth-bearer');
+      await ensureCodexProxyReady();
+      registerComposed('session-search', 'thread-search', 'PRODUCT_PROMPT');
+      expect((await postReplay(payload, 'thread-search')).status).toBe(expectedStatus);
+      expect(sent).toHaveLength(requestCount);
+      expect(sent[0]!.tools).toEqual(payload.tools);
+      expect(sent[0]!.tool_choice).toEqual(payload.tool_choice);
+      if (requestCount === 2) {
+        expect(sent[1]).toEqual({
+          ...sent[0],
+          tools: [ordinaryTool, { ...search, type: 'web_search_preview' }],
+          tool_choice: { type: 'web_search_preview' },
+        });
+      }
+    } finally {
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
     }
   });
 });

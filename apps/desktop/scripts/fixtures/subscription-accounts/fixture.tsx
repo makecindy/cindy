@@ -1,61 +1,249 @@
+import { useTranslation } from 'react-i18next';
 import { mountPage, subscription } from '../../ui-page/harness';
 import { SubscriptionAccountsSection } from '../../../src/renderer/components/settings/SubscriptionAccountsSection';
+import { SubscriptionSignInChoices } from '../../../src/renderer/components/settings/SubscriptionSignInChoices';
+import { ToastContainer } from '../../../src/renderer/components/ui/toast';
+import { QuotaHoverCard } from '../../../src/renderer/components/status/QuotaHoverCard';
+import { buildClaudeUsageCard } from '../../../src/renderer/components/status/usageCardModel';
+import type { ClaudeSubscriptionUsageSnapshot } from '../../../src/shared/claudeSubscriptionUsage';
+import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type {
   SubscriptionAccountCommand,
+  SubscriptionAccountUsage,
   SubscriptionPoolView,
 } from '../../../src/shared/subscriptionAccounts';
 
+// The isolated HTTP fixture lacks secure-context UUIDs; these only correlate mock logins.
+if (!crypto.randomUUID) {
+  let sequence = 0;
+  crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
+}
+
+const now = Date.now();
+const hours = (value: number) => Math.round(now / 1000 + value * 3600);
+const claude = (
+  fiveHour: number,
+  sevenDay: number,
+  fable: number | null,
+  resets: [number, number],
+): ClaudeSubscriptionUsageSnapshot => ({
+  source: 'oauth-endpoint',
+  updatedAt: now,
+  subscriptionType: 'max',
+  fiveHour: { utilization: fiveHour, resetsAt: hours(resets[0]) },
+  sevenDay: { utilization: sevenDay, resetsAt: hours(resets[1]) },
+  scoped:
+    fable === null
+      ? []
+      : [
+          {
+            modelId: 'claude-fable',
+            modelDisplayName: 'Fable',
+            utilization: fable,
+            resetsAt: hours(resets[1]),
+          },
+        ],
+});
+// Every account carries its own quota, including the login in the official CLI directory.
+const defaultSnapshot = claude(2, 92, 16, [3.6, 76]);
+const usage = (snapshot: ClaudeSubscriptionUsageSnapshot): SubscriptionAccountUsage => ({
+  claude: snapshot,
+});
+const codex = (primary: number, secondary: number): SubscriptionAccountUsage => ({
+  codex: {
+    buckets: {
+      codex: {
+        limitId: 'codex',
+        limitName: null,
+        updatedAt: now,
+        primary: { usedPercent: primary, windowMinutes: 300, resetsAt: hours(2.2) },
+        secondary: { usedPercent: secondary, windowMinutes: 10_080, resetsAt: hours(98) },
+      },
+    },
+    credits: null,
+  },
+});
+
+/** A plugin engine provider with accounts (plugin engine accounts, 2026-11-23). */
+const PLUGIN_PROVIDER = 'acp-plugin:zcode-plugin:zcode';
+const pluginUsage = (fiveHour: number, weekly: number): SubscriptionAccountUsage => ({
+  plugin: { updatedAt: now, windows: [
+    { label: 'GLM · 5h', remainingPercent: fiveHour, resetsAt: now + 2.4 * 3_600_000, windowMinutes: 300 },
+    { label: 'GLM · Weekly', remainingPercent: weekly, resetsAt: now + 4 * 86_400_000, windowMinutes: 10_080 },
+  ] },
+});
+
+/** Mirrors ProvidersSection: the old provider card is only an unavailable-endpoint fallback. */
+function Section({ codexPool, signedOut, plugin }: { codexPool: boolean; signedOut: boolean; plugin: boolean }) {
+  const { t } = useTranslation();
+  if (plugin) return <SubscriptionAccountsSection providerId={PLUGIN_PROVIDER} providerName="ZCode" />;
+  if (codexPool) return <SubscriptionAccountsSection providerId="openai" />;
+  return (
+    <SubscriptionAccountsSection
+      providerId="anthropic"
+      // Signed out, the provider has no usage card to hand over.
+      defaultUsage={
+        signedOut ? undefined : (
+          <QuotaHoverCard
+            variant="embedded"
+            hideIdentity
+            account={buildClaudeUsageCard(defaultSnapshot, t)}
+          />
+        )
+      }
+      dashboard={{ label: t('settings.providers.usage.openClaudeUsage'), onOpen: () => undefined }}
+    />
+  );
+}
+
 void mountPage({
   host: (ctx) => {
-    const providerId = ctx.case === 'codex' ? 'openai' : 'anthropic';
+    const isCodex = ctx.case.startsWith('codex') || ctx.case === 'narrow-weight' || ctx.case.startsWith('provider-auth');
     let view: SubscriptionPoolView = {
-      providerId,
+      providerId: isCodex ? 'openai' : 'anthropic',
       configured: true,
-      strategy: ctx.case === 'codex' ? 'weight' : 'least',
+      strategy: isCodex ? 'weighted' : 'expiring',
       accounts: [
         {
           id: 'default',
           identity: 'alex@example.com',
-          plan: 'Max',
-          directory: '/Users/alex/.claude',
+          plan: isCodex ? 'pro' : 'max',
+          ...(isCodex ? { planType: 'pro' } : { planTier: 'max_20x' }),
+          directory: isCodex ? '/Users/alex/.codex' : '/Users/alex/.claude',
           status: 'ready',
           running: 2,
-          limit: 4,
+          limit: 10,
           weight: 1,
           paused: false,
-          quota: { usedPercent: 28, resetAtMs: 1794096000000, windowMs: 604800000 },
+          usage: isCodex ? codex(18, 41) : usage({ ...defaultSnapshot, planTier: 'max_20x' }),
+          ...(!isCodex ? { loginExpiresAt: new Date(now + 18 * 86_400_000).toISOString() } : {}),
         },
         {
           id: 'second',
           identity: 'long.work.account@research.example.com',
-          plan: 'Pro',
+          plan: isCodex ? 'plus' : 'max',
+          ...(isCodex ? { planType: 'plus' } : { planTier: 'max_5x' }),
           directory: '/Users/alex/.claude-cindy-opaque-id',
-          status: 'limited',
+          status: 'ready',
           running: 0,
-          limit: 2,
+          limit: 10,
           weight: 3,
           paused: false,
-          quota: { usedPercent: 100, resetAtMs: 1794096000000, windowMs: 18000000 },
+          ...(!isCodex ? { loginExpiresAt: new Date(now + 3 * 86_400_000).toISOString() } : {}),
+          usage: isCodex ? codex(100, 64) : usage(claude(16, 24, 0, [2.8, 121])),
         },
         {
           id: 'third',
           identity: 'personal@example.com',
-          plan: 'Max',
+          plan: 'pro',
           directory: '/Users/alex/.claude-cindy-another-id',
-          status: 'ready',
-          running: 0,
+          status: 'limited',
+          running: 1,
           limit: 4,
           weight: 1,
           paused: true,
-          quota: { usedPercent: 62, resetAtMs: 1794096000000, windowMs: 604800000 },
+          usage: isCodex ? codex(7, 12) : usage(claude(100, 61, null, [0.4, 30])),
         },
       ],
     };
+    if (ctx.case.startsWith('official-plan-name')) {
+      view.accounts[0] = {
+        ...view.accounts[0], plan: 'pro', planTier: 'pro', planDisplayName: 'Ultra',
+        usage: usage({ ...defaultSnapshot, subscriptionType: 'pro', planTier: 'pro', planDisplayName: 'Ultra' }),
+      };
+    }
+    if (ctx.case.startsWith('codex-no-usage')) view.accounts[1].usage = undefined;
+    if (ctx.case.startsWith('plugin-engine'))
+      view = {
+        providerId: PLUGIN_PROVIDER,
+        configured: true,
+        strategy: 'expiring',
+        pluginEngine: {
+          engineKey: 'zcode-plugin:zcode',
+          methods: [
+            { id: 'zai-key', label: 'Z.ai API Key', kind: 'secret', secretLabel: 'Z.ai Coding Plan API Key' },
+            { id: 'zai-browser', label: 'Z.ai', kind: 'browser' },
+          ],
+        },
+        accounts: [
+          { id: 'default', identity: 'me@z.ai', plan: 'GLM Coding Plan Pro', directory: '', status: 'ready',
+            running: 1, limit: 4, weight: 1, paused: false, usage: pluginUsage(62, 81) },
+          { id: 'cindy-0123456789ab-00000000-0000-4000-8000-000000000002', identity: 'BigModel API Key ····a1b2',
+            plan: 'GLM Coding Plan Lite', directory: '/Users/alex/Library/Application Support/Cindy/owners/u/plugin-engine-accounts/zcode-plugin/zcode/cindy-…',
+            status: 'limited', running: 0, limit: 2, limitSet: true, weight: 1, paused: false, usage: pluginUsage(0, 44) },
+        ],
+      };
+    if (ctx.case === 'expiry-past')
+      view.accounts[1].loginExpiresAt = new Date(now - 86_400_000).toISOString();
+    // Two accounts moved onto a long-lived token: one checked with its ordinary sign-in still
+    // active, one nearing the token's end after the ordinary sign-in has gone.
+    if (ctx.case.startsWith('long-lived-token')) {
+      view.accounts[0].longLivedToken = {
+        expiresAt: new Date(now + 300 * 86_400_000).toISOString(), storedLogin: true, verification: 'verified',
+      };
+      view.accounts[1].loginExpiresAt = undefined;
+      view.accounts[1].longLivedToken = {
+        expiresAt: new Date(now + 20 * 86_400_000).toISOString(), storedLogin: false, verification: 'pending',
+      };
+    }
+    // Nothing signed in yet: the host lists only the unbound CLI default slot.
+    if (ctx.case === 'empty')
+      view = {
+        providerId: 'anthropic',
+        configured: false,
+        strategy: 'expiring',
+        accounts: [
+          {
+            id: 'default',
+            directory: '/Users/alex/.claude',
+            status: 'signed-out',
+            running: 0,
+            limit: 4,
+            weight: 1,
+            paused: false,
+          },
+        ],
+      };
     return {
+      openPath: async () => ({ success: true }),
+      // Providers an account may move to; none of the same kind in these cases.
+      maker: { listProviders: async () => ({ providers: [] }), usage: {
+        getCodexRateLimits: async (providerId = 'openai'): Promise<MobileCodexRateLimitsResult> => ({
+          providerId, account: { email: 'ac***@example.com', accountId: '…account', planType: 'pro' },
+          rateLimits: {}, rateLimitsByLimitId: null, resetOffer: null,
+          rateLimitResetCredits: { availableCount: 1, credits: [{ status: 'available', resetType: 'codexRateLimits',
+            grantedAt: 1, expiresAt: hours(24 * 30), title: null, description: null }] },
+          autoUse: { accountKey: providerId, settings: { enabled: providerId === 'openai',
+            lowQuota: true, minimumDays: 3, expiring: true, expiryMinutes: 60 }, customized: false, lastUsedAt: null },
+        }),
+      } },
       subscriptionAccounts: {
         onChanged: subscription('subscriptionAccounts'),
+        existingLogins: async () => ({ computer: 'Mac mini', candidates: ctx.case.startsWith('existing-login')
+          ? [{ identity: 'studio@example.com', plan: 'Pro', directory: '~/.claude-person', receipt: 'fixture' }] : [] }),
         command: async (command: SubscriptionAccountCommand) => {
           if (ctx.case === 'error') throw new Error('Fixture read failure');
+          // The first read never lands, so the placeholder stays for the capture.
+          if (ctx.case === 'loading' && command.action === 'read') return new Promise<never>(() => {});
+          if (ctx.case === 'provider-auth-preview' && command.action === 'preview')
+            return {
+              ...view,
+              configured: false,
+              accounts: [{
+                ...view.accounts[0],
+                identity: undefined,
+                plan: undefined,
+                usage: undefined,
+                status: 'signed-out',
+                authIssue: 'codex-provider-managed-auth',
+              }],
+            };
+          if (ctx.case === 'provider-auth' && command.action === 'add')
+            throw new Error(
+              '[SUBSCRIPTION_CODEX_PROVIDER_AUTH] The active Codex provider does not expose a ChatGPT account',
+            );
+          if (ctx.case === 'identity-unknown' && command.action === 'login')
+            throw new Error('[SUBSCRIPTION_CLAUDE_IDENTITY_UNKNOWN] Account identity is unknown');
           if (command.action === 'configure')
             view = {
               ...view,
@@ -66,7 +254,10 @@ void mountPage({
                   : a,
               ),
             };
-          else if (command.action !== 'read')
+          else if (command.action === 'login') {
+            view = { ...view, accounts: view.accounts.map(account => account.id === command.accountId
+              ? { ...account, loginExpiresAt: new Date(now + 30 * 86_400_000).toISOString() } : account) };
+          } else if (command.action !== 'read')
             throw new Error('Fixture does not authenticate real accounts');
           return view;
         },
@@ -74,8 +265,25 @@ void mountPage({
     };
   },
   render: (ctx) => (
-    <main className="mx-auto w-full max-w-[680px] min-w-0" style={ctx.case === 'narrow' ? { maxWidth: 320 } : undefined}>
-      <SubscriptionAccountsSection providerId={ctx.case === 'codex' ? 'openai' : 'anthropic'} />
+    <main
+      className="mx-auto w-full max-w-[680px] min-w-0"
+      style={ctx.case === 'narrow' || ctx.case === 'narrow-weight' || ctx.case.endsWith('-narrow') ? { maxWidth: 320 } : undefined}
+    >
+      {ctx.case === 'provider-auth-preview' ? (
+        <SubscriptionSignInChoices
+          providerId="openai"
+          busy={false}
+          onConnect={() => undefined}
+          onCancel={() => undefined}
+        />
+      ) : (
+        <Section
+          codexPool={ctx.case.startsWith('codex') || ctx.case === 'narrow-weight' || ctx.case === 'provider-auth'}
+          signedOut={ctx.case === 'empty'}
+          plugin={ctx.case.startsWith('plugin-engine')}
+        />
+      )}
+      <ToastContainer />
     </main>
   ),
 });

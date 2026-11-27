@@ -26,14 +26,14 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import type { GhostNodeChildToWorkerMessage } from '../../shared/ghost.js';
-import { GHOST_NODE_CHILD_MODE_FLAG } from '../../shared/ghost.js';
+import { GHOST_NODE_CHILD_MODE_FLAG, GHOST_NODE_STDIO_B64_MAX_CHARS } from '../../shared/ghost.js';
 import { installVirtualStdin } from './nodeRuntimeVirtualStdin.js';
 import { NodeRequestScopes } from './nodeRequestScope.js';
 import { NodeDeviceAuthorizationClient } from './nodeDeviceAuthorizationClient.js';
 import { NodeHostServicesClient } from './nodeHostServicesClient.js';
 import { NodeAuthorizationClient } from './nodeAuthorizationClient.js';
 
-interface ParentPortLike {
+export interface NodeWorkerParentPort {
   postMessage(message: unknown): void;
   on(event: 'message', listener: (event: { data: unknown }) => void): void;
 }
@@ -42,10 +42,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-const parentPort = (process as unknown as { parentPort?: ParentPortLike }).parentPort;
-const entryPath = process.argv[2];
-const childMode = process.argv[3] === GHOST_NODE_CHILD_MODE_FLAG;
-const childArgs = childMode ? process.argv.slice(4) : [];
+export function runNodeRuntimeWorker(parentPort: NodeWorkerParentPort, entryPath: string, args: string[] = []) {
+const childMode = args[0] === GHOST_NODE_CHILD_MODE_FLAG;
+const childArgs = childMode ? args.slice(1) : [];
 
 if (!parentPort) throw new Error('Node 插件工作进程缺少 parentPort');
 if (
@@ -217,7 +216,7 @@ parentPort.on('message', (event) => {
   }
   // 子进程原样模式的字节口(base64,防多字节字符被 chunk 边界切坏)。
   if (data.type === 'stdin-b64' && typeof data.chunk === 'string') {
-    if (data.chunk.length <= 2 * 1024 * 1024) virtualStdin.feed(Buffer.from(data.chunk, 'base64'));
+    if (data.chunk.length <= GHOST_NODE_STDIO_B64_MAX_CHARS) virtualStdin.feed(Buffer.from(data.chunk, 'base64'));
     return;
   }
   if (data.type === 'stdin-end') {
@@ -251,6 +250,16 @@ if (childMode) {
   // 的认知读参数;不暴露 spawnEntry(树深恒为 1,子进程不能再生孙进程)。
   process.argv = [process.argv[0], entryPath, ...childArgs];
 } else {
+  Object.defineProperty(globalThis, 'cindy', {
+    configurable: false, enumerable: false, writable: false,
+    value: Object.freeze({ host: Object.freeze({ call: (server: string, tool: string, args: Record<string, unknown> = {}) =>
+      hostServices.hostCall(server, tool, args) }),
+      fetch: (request: Record<string, unknown>) => hostServices.network({ ...request, op: 'fetch' }),
+      network: Object.freeze(Object.fromEntries(['open', 'read', 'send', 'close'].map(op => [op,
+        (request: Record<string, unknown>) => hostServices.network({ ...request, op }),
+      ]))),
+    }),
+  });
   // 普通模式 argv 保持旧形状([electron, 引导层, entryPath]),存量插件零变化。
   Object.defineProperty(globalThis, '__CINDY_NODE__', {
     configurable: false,
@@ -262,5 +271,7 @@ if (childMode) {
   });
 }
 
-const requireFromWorker = createRequire(__filename);
+const requireFromWorker = createRequire(entryPath);
 requireFromWorker(entryPath);
+
+}

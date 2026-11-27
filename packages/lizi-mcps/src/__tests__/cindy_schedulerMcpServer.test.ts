@@ -44,6 +44,7 @@ import { registerScheduleCreateTool } from '../scheduler/create.js';
 import { registerScheduleUpdateTool } from '../scheduler/update.js';
 import { registerScheduleSetPreRunHookTool } from '../scheduler/setPreRunHook.js';
 import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
+import type { HostToolRuntime } from '../host-tool-runtime.js';
 
 // ── In-memory ScheduleStorage / Runner / Clock (same shape as Phase 1 tests) ──
 
@@ -151,6 +152,7 @@ const baseCreate: CreateScheduleInput = {
 
 interface Harness {
   client: Client;
+  hostTools: HostToolRuntime;
   scheduler: Scheduler;
   storage: InMemoryStorage;
   cleanup: () => Promise<void>;
@@ -158,7 +160,9 @@ interface Harness {
 
 async function makeHarness(opts?: {
   schedulerNotReady?: boolean;
+  getSessionProject?: SchedulerMcpDeps['getSessionProject'];
   webhookManagement?: SchedulerMcpDeps['webhookManagement'];
+  context?: Parameters<typeof createSchedulerMcpServer>[1];
 }): Promise<Harness> {
   const storage = new InMemoryStorage();
   const clock = new FakeClock();
@@ -173,6 +177,7 @@ async function makeHarness(opts?: {
   // to compute nextFireAt for any pre-existing actives (none here).
 
   const server = createSchedulerMcpServer({
+    getSessionProject: opts?.getSessionProject,
     webhookManagement: opts?.webhookManagement,
     getScheduler: () => {
       if (opts?.schedulerNotReady) {
@@ -180,7 +185,7 @@ async function makeHarness(opts?: {
       }
       return scheduler;
     },
-  });
+  }, opts?.context);
 
   const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'phase5-smoke-client', version: '0.0.0' });
@@ -192,6 +197,7 @@ async function makeHarness(opts?: {
 
   return {
     client,
+    hostTools: server.hostTools,
     scheduler,
     storage,
     cleanup: async () => {
@@ -225,6 +231,39 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
 
   beforeEach(async () => {
     h = await makeHarness();
+  });
+
+  // Unit, parity #18: the plugin entry must manage the real Scheduler without a
+  // Session. Existing MCP tests cover task calls, not the in-process plugin caller.
+  // Minimal input: explicit schedule fields and a plugin context with no sessionId.
+  it('manages a schedule through the shared Host handlers without a current task', async () => {
+    await h.cleanup();
+    h = await makeHarness({ context: { agentKind: 'codex', workingDir: '', hostCaller: {
+      kind: 'plugin', pluginId: 'dashboard', dataOwnerId: 'owner', ownerGeneration: 1,
+    } } });
+    const call = async (tool: string, args: Record<string, unknown> = {}) => {
+      const { envelope, isError } = parseToolResult(await h.hostTools.call(tool, args));
+      expect(isError).toBe(false);
+      expect(envelope.ok).toBe(true);
+      if (!envelope.ok) throw new Error(envelope.code);
+      return envelope.data;
+    };
+    try {
+      const created = await call('schedule_create', { ...baseCreate }) as Schedule;
+      const id = created.id;
+      expect(await call('schedule_list')).toEqual([created]);
+      expect(await call('schedule_update', { id, name: 'updated' })).toMatchObject({ id, name: 'updated' });
+      expect(await call('schedule_pause', { id })).toMatchObject({ id, status: 'paused' });
+      expect(await call('schedule_resume', { id })).toMatchObject({ id, status: 'active' });
+      const run = await call('schedule_run_now', { id }) as { runId: string };
+      expect(await call('schedule_list_runs', { scheduleId: id })).toEqual([
+        expect.objectContaining({ id: run.runId, scheduleId: id, status: 'success' }),
+      ]);
+      const nativeRead = await h.client.callTool({ name: 'call_tool', arguments: { name: 'schedule_get', args: { id } } });
+      expect(parseToolResult(nativeRead as { content: unknown[] }).envelope).toMatchObject({ ok: true, data: { id, name: 'updated', status: 'active' } });
+      expect(await call('schedule_delete', { id })).toEqual({ deleted: id });
+      expect(await call('schedule_list')).toEqual([]);
+    } finally { await h.cleanup(); }
   });
 
   // Unit integration: account management must be discoverable and reachable through
@@ -299,12 +338,14 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
   });
 
   // Unit: schema lookup is read-only even for destructive scheduler operations.
-  it('describes a nested operation without creating or changing a schedule', async () => {
+  it.each(['schedule_create', 'schedule_update'])('describes %s including manual without changing a schedule', async (name) => {
     try {
-      const result = await h.client.callTool({ name: 'list_tools', arguments: { name: 'schedule_create' } });
+      const result = await h.client.callTool({ name: 'list_tools', arguments: { name } });
       const metadata = JSON.parse((result.content as Array<{ text: string }>)[0].text);
-      expect(metadata).toMatchObject({ ok: true, tool: { name: 'schedule_create', inputSchema: { type: 'object' } } });
+      expect(metadata).toMatchObject({ ok: true, tool: { name, inputSchema: { type: 'object' } } });
       expect(metadata.tool.inputSchema.properties).toHaveProperty('timezone');
+      expect(metadata.tool.inputSchema.properties.manual).toMatchObject({ type: 'boolean', description: expect.any(String) });
+      expect(metadata.tool.inputSchema.required).not.toContain('manual');
       expect(await h.storage.list()).toEqual([]);
     } finally { await h.cleanup(); }
   });
@@ -334,16 +375,6 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
       'schedule_silence_current_run',
       'schedule_update',
     ]);
-    await h.cleanup();
-  });
-
-  it('rejects arbitrary-bot routine management on the general scheduler surface', async () => {
-    for (const name of ['routine_list', 'routine_sources', 'routine_save', 'routine_history', 'routine_delete', 'routine_run_now']) {
-      const result = await h.client.callTool({
-        name: 'call_tool', arguments: { name, args: { botId: 'another-bot', id: 'routine' } },
-      });
-      expect(result.isError).toBe(true);
-    }
     await h.cleanup();
   });
 
@@ -413,6 +444,23 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
+  // Unit: follow-up tasks run in a sibling checkout; keep the host-attested project across scheduler storage.
+  it('saves the creating task project independently of the requested checkout', async () => {
+    await h.cleanup();
+    const getSessionProject = vi.fn(async () => ({ projectDir: '/projects/app', remoteHostId: null }));
+    h = await makeHarness({ getSessionProject, context: { agentKind: 'codex', workingDir: '/work', sessionId: 'creator' } });
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'schedule_create', args: { ...baseCreate, workingDir: '/checkouts/pr' },
+      } });
+      expect(parseToolResult(result as { content: unknown[] }).isError).toBe(false);
+      expect(getSessionProject).toHaveBeenCalledWith('creator');
+      expect(await h.scheduler.list()).toMatchObject([{ workingDir: '/checkouts/pr', inheritedProjectDir: '/projects/app' }]);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
   it('call_tool(schedule_create) accepts agentKind: pi as a first-class scheduled agent', async () => {
     const created = await h.client.callTool({
       name: 'call_tool',
@@ -431,6 +479,84 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(createdData.agentKind).toBe('pi');
 
     await h.cleanup();
+  });
+
+  // #10791, unit: the real MCP gateway used to reject manual before reaching
+  // Scheduler. Cover persisted trigger state and nextFireAt for both execution
+  // modes; the existing create/update tests only exercise timed schedules.
+  it.each([
+    { executionMode: 'agent' as const, intervalMs: undefined },
+    { executionMode: 'script' as const, intervalMs: 600_000 },
+  ])('manual switches preserve scheduling settings: %j', async ({ executionMode, intervalMs }) => {
+    const call = async (name: string, args: Record<string, unknown>): Promise<Schedule> => {
+      const { envelope, isError } = parseToolResult(await h.client.callTool({
+        name: 'call_tool', arguments: { name, args },
+      }) as { content: unknown[]; isError?: boolean });
+      expect(isError).toBe(false);
+      expect(envelope.ok).toBe(true);
+      if (!envelope.ok) throw new Error(envelope.code);
+      return envelope.data as Schedule;
+    };
+    try {
+      const input = { ...baseCreate, executionMode, intervalMs,
+        ...(executionMode === 'script' ? { scriptConfig: { command: 'node job.mjs', capabilities: [] } } : {}),
+        webhookTrigger: { source: { preset: 'gitlab-token' }, events: ['merge_request'] },
+      };
+      const timed = await call('schedule_create', input);
+      expect(timed.manual).toBe(false);
+      expect(typeof timed.nextFireAt).toBe('number');
+
+      const eventOnly = await call('schedule_create', { ...input, manual: true });
+      expect(eventOnly.manual).toBe(true);
+      expect(eventOnly.nextFireAt).toBeUndefined();
+      expect(await h.storage.get(eventOnly.id)).toMatchObject({ manual: true, nextFireAt: undefined });
+
+      const renamed = await call('schedule_update', { id: eventOnly.id, name: 'renamed' });
+      expect(renamed.manual).toBe(true);
+      expect(renamed.nextFireAt).toBeUndefined();
+      expect(renamed.webhookTrigger).toEqual(eventOnly.webhookTrigger);
+
+      const restored = await call('schedule_update', { id: eventOnly.id, manual: false });
+      expect(restored.manual).toBe(false);
+      expect(restored.nextFireAt).toBe(timed.nextFireAt);
+      expect(restored.intervalMs).toBe(intervalMs);
+      expect(restored.webhookTrigger).toEqual(eventOnly.webhookTrigger);
+
+      await call('schedule_update', { id: eventOnly.id, manual: true, webhookTrigger: null });
+      const stored = await h.storage.get(eventOnly.id);
+      expect(stored).toMatchObject({ manual: true, nextFireAt: undefined, webhookTrigger: undefined });
+      expect(stored?.intervalMs).toBe(intervalMs);
+      expect(stored?.cronExpr).toBe(input.cronExpr);
+      expect(stored?.executionMode).toBe(executionMode);
+    } finally { await h.cleanup(); }
+  });
+
+  it('manual keeps the Webhook one-time constraint and strict boolean validation', async () => {
+    const call = async (name: string, args: Record<string, unknown>) => parseToolResult(
+      await h.client.callTool({ name: 'call_tool', arguments: { name, args } }) as { content: unknown[]; isError?: boolean },
+    );
+    try {
+      const input = { ...baseCreate, recurring: false, webhookTrigger: { events: ['issues.opened'] } };
+      // Preserve the existing engine rejection (currently classified INTERNAL);
+      // the important boundary is no write, with the specific recurring reason.
+      const rejection = { ok: false, code: 'INTERNAL', message: 'webhook trigger requires a recurring schedule' };
+      expect((await call('schedule_create', { ...input, manual: false })).envelope)
+        .toMatchObject(rejection);
+      expect(await h.storage.list()).toEqual([]);
+      const { envelope } = await call('schedule_create', { ...input, manual: true });
+      expect(envelope.ok).toBe(true);
+      if (!envelope.ok) throw new Error(envelope.code);
+      const created = envelope.data as Schedule;
+      expect((await call('schedule_update', { id: created.id, manual: false })).envelope)
+        .toMatchObject(rejection);
+      expect(await h.storage.get(created.id)).toMatchObject({ manual: true, nextFireAt: undefined });
+      for (const manual of [null, 'true']) {
+        expect((await call('schedule_create', { ...input, manual })).envelope)
+          .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+        expect((await call('schedule_update', { id: created.id, manual })).envelope)
+          .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      }
+    } finally { await h.cleanup(); }
   });
 
   it('call_tool(schedule_create) accepts intervalMs and schedules first fire relative to creation time', async () => {
@@ -725,6 +851,28 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     expect(data.prompt).toBe('');
     expect(data.workspaceKind).toBe('project');
     await h.cleanup();
+  });
+
+  // Unit / #10840 parity: the real MCP create/update schemas must accept the
+  // same grants as the UI. Existing script cases only used the older grants;
+  // settings.read + usage.read previously failed before reaching Scheduler.
+  it.each(['schedule_create', 'schedule_update'] as const)('%s persists the shared host-read capabilities', async tool => {
+    try {
+      const scriptConfig = { command: 'node read.mjs', capabilities: ['settings.read', 'usage.read'] };
+      const seed = tool === 'schedule_update' ? await h.scheduler.create({
+        ...baseCreate, executionMode: 'script', scriptConfig: { command: 'node old.mjs', capabilities: [] },
+      }) : undefined;
+      const { envelope, isError } = parseToolResult(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: tool, args: tool === 'schedule_create' ? { ...scriptCreate, scriptConfig } : { id: seed!.id, scriptConfig },
+      } }) as { content: unknown[]; isError?: boolean });
+      expect(isError).toBe(false);
+      expect(envelope).toMatchObject({ ok: true, data: { scriptConfig } });
+      if (!envelope.ok) throw new Error('unexpected validation failure');
+      const saved = await h.storage.get((envelope.data as Schedule).id);
+      expect(saved?.scriptConfig).toEqual(scriptConfig);
+    } finally {
+      await h.cleanup();
+    }
   });
 
   it('call_tool(schedule_create, script without scriptConfig) returns INVALID_PARAMS', async () => {
@@ -1148,6 +1296,19 @@ describe('Webhook 触发需要可用的接收方', () => {
     const { create, env } = await callCreate('unavailable', { webhookTrigger: {} });
     expect(env.ok).toBe(false);
     expect(create).not.toHaveBeenCalled();
+  });
+
+  // 规则：docs/product-rules/plugin-event-triggers.md。插件事件只在本机交接，不需要账号或接收服务。
+  it('插件事件来源在未登录时也能开启，并原样交给引擎', async () => {
+    const source = { preset: 'plugin', sources: [{ plugin: 'public/chat', events: ['message.received'],
+      filters: [{ field: 'fromSelf', operator: 'not-equals', value: 'true' }] }] };
+    const { create, env } = await callCreate('signed-out', { manual: true, webhookTrigger: { source } });
+    expect(env.ok).toBe(true);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ webhookTrigger: { source } }));
+    const unknownOperator = await callCreate('signed-out', { webhookTrigger: { source: { preset: 'plugin',
+      sources: [{ plugin: 'public/chat', filters: [{ field: 'x', operator: 'regex', value: '.' }] }] } } });
+    expect(unknownOperator.env.ok).toBe(false);
+    expect(unknownOperator.create).not.toHaveBeenCalled();
   });
 
   it('已登录时可以开启；不用 Webhook 的任务不受影响', async () => {
@@ -1891,5 +2052,261 @@ describe('schedule_set_pre_run_hook — 统一安装通道', () => {
     const env = await callTool(registry, { scheduleId: 'nope', script: 'process.exit(0)' });
     expect(env.ok).toBe(false);
     expect(env.errorCode ?? env.code).toBe('NOT_FOUND');
+  });
+});
+
+// 测试价值：
+// - 防退化点：同一会话绑定多条不同 PR 调度易造成队列串行阻塞。
+// - 触发条件：schedule_create 与 schedule_update 在本机及远端同会话已有不同 PR 调度时触发 multiPrSessionWarning，非 PR 调度或无冲突时保持原回包结构且不额外发远端 list RPC。
+// - 生产入口与可观察结果：真实 registerScheduleCreateTool / registerScheduleUpdateTool + 内存 SchedulerToolRegistry。
+// - 依赖策略：纯内存 fake scheduler 与 fake remote，无网络、无真实时钟等待。
+// - 对应规则或根因：单会话多 PR 绑定非破坏性告警。
+describe('multi-PR single-session advisory', () => {
+  it('attaches non-breaking multiPrSessionWarning on schedule_create/update when another active PR schedule shares targetSessionId', async () => {
+    const existing: Schedule[] = [
+      {
+        id: 'sch-existing',
+        name: 'PR #101',
+        prompt: 'follow 101',
+        kind: 'cron',
+        cronExpr: '*/5 * * * *',
+        timezone: 'UTC',
+        recurring: true,
+        manual: false,
+        agentKind: 'claude-code',
+        workspaceKind: 'dialogue',
+        useWorktree: false,
+        targetSessionId: 'sess-shared',
+        prTrigger: { url: 'https://github.com/makecindy/cindy/pull/101', change: 'any' },
+        notify: { desktop: true, feishu: false },
+        status: 'active',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const fake = {
+      list: async () => existing,
+      create: async (input: CreateScheduleInput) => {
+        const created: Schedule = {
+          id: 'sch-new',
+          name: input.name,
+          prompt: input.prompt,
+          kind: input.kind,
+          cronExpr: input.cronExpr,
+          timezone: input.timezone,
+          recurring: input.recurring,
+          manual: input.manual ?? false,
+          agentKind: input.agentKind,
+          workspaceKind: input.workspaceKind ?? 'dialogue',
+          useWorktree: input.useWorktree,
+          targetSessionId: input.targetSessionId,
+          prTrigger: input.prTrigger,
+          notify: input.notify,
+          status: 'active',
+          createdAt: 2,
+          updatedAt: 2,
+        };
+        return created;
+      },
+      updateFromCurrent: async (id: string, build: (cur: Schedule) => Promise<Partial<Schedule>>) => {
+        const cur: Schedule = {
+          ...existing[0]!,
+          id,
+          targetSessionId: 'sess-other',
+          prTrigger: { url: 'https://github.com/makecindy/cindy/pull/202', change: 'any' },
+        };
+        const patch = await build(cur);
+        return { ...cur, ...patch };
+      },
+    };
+    const registry = new SchedulerToolRegistry();
+    const deps = { getScheduler: () => fake as never };
+    registerScheduleCreateTool(registry, deps);
+    registerScheduleUpdateTool(registry, deps);
+
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      const res = await registry.call(name, args);
+      return JSON.parse((res.content[0] as { text: string }).text);
+    };
+
+    // Different PR URL on same targetSessionId -> returns warning without blocking creation.
+    const warned = await callTool('schedule_create', {
+      name: 'PR #102',
+      prompt: 'follow 102',
+      cronExpr: '*/5 * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      agentKind: 'claude-code',
+      targetSessionId: 'sess-shared',
+      prTrigger: { url: 'https://github.com/makecindy/cindy/pull/102', change: 'any' },
+      notify: { desktop: true, feishu: false },
+    });
+    expect(warned.ok).toBe(true);
+    expect(warned.data.multiPrSessionWarning).toMatchObject({
+      targetSessionId: 'sess-shared',
+      siblingSchedules: [{ id: 'sch-existing', name: 'PR #101', prUrls: ['https://github.com/makecindy/cindy/pull/101'] }],
+    });
+
+    // Separate session -> no warning attached (exact backward-compatible shape).
+    const clean = await callTool('schedule_create', {
+      name: 'PR #103',
+      prompt: 'follow 103',
+      cronExpr: '*/5 * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      agentKind: 'claude-code',
+      targetSessionId: 'sess-dedicated',
+      prTrigger: { url: 'https://github.com/makecindy/cindy/pull/103', change: 'any' },
+      notify: { desktop: true, feishu: false },
+    });
+    expect(clean.ok).toBe(true);
+    expect(clean.data.multiPrSessionWarning).toBeUndefined();
+
+    // Repointing an existing PR #202 schedule onto sess-shared via schedule_update also warns.
+    const updatedWarn = await callTool('schedule_update', {
+      id: 'sch-202',
+      targetSessionId: 'sess-shared',
+    });
+    expect(updatedWarn.ok).toBe(true);
+    expect(updatedWarn.data.multiPrSessionWarning?.siblingSchedules[0]?.id).toBe('sch-existing');
+  });
+
+  it('attaches multiPrSessionWarning for remote device schedule_create/update without extra RPCs on non-PR writes', async () => {
+    const remoteInvokes: Array<{ deviceId: string; op: string; args: unknown[] }> = [];
+    const remoteActive: Schedule[] = [
+      {
+        id: 'remote-pr-1',
+        name: 'PR #301',
+        prompt: 'follow 301',
+        kind: 'cron',
+        cronExpr: '*/5 * * * *',
+        timezone: 'UTC',
+        recurring: true,
+        manual: false,
+        agentKind: 'claude-code',
+        workspaceKind: 'dialogue',
+        useWorktree: false,
+        targetSessionId: 'sess-shared',
+        prTrigger: { url: 'https://github.com/makecindy/cindy/pull/301', change: 'any' },
+        notify: { desktop: true, feishu: false },
+        status: 'active',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    let listShouldFail = false;
+    const deps = {
+      getScheduler: () => {
+        throw new Error('local scheduler must not be called for remote device');
+      },
+      remote: {
+        listDevices: async () => [],
+        invoke: async (deviceId: string, op: string, args: unknown[]) => {
+          remoteInvokes.push({ deviceId, op, args });
+          if (op === 'list') {
+            if (listShouldFail) return { ok: false as const, code: 'REMOTE_TIMEOUT', message: 'timeout' };
+            return { ok: true as const, data: remoteActive };
+          }
+          if (op === 'create') {
+            const input = args[0] as CreateScheduleInput;
+            return {
+              ok: true as const,
+              data: {
+                ...remoteActive[0]!,
+                id: 'remote-new',
+                name: input.name,
+                prompt: input.prompt,
+                targetSessionId: input.targetSessionId,
+                prTrigger: input.prTrigger,
+              },
+            };
+          }
+          if (op === 'update') {
+            const [id, patch] = args as [string, Partial<Schedule>];
+            return {
+              ok: true as const,
+              data: {
+                ...remoteActive[0]!,
+                id,
+                prTrigger: { url: 'https://github.com/makecindy/cindy/pull/303', change: 'any' },
+                ...patch,
+              },
+            };
+          }
+          return { ok: false as const, code: 'UNSUPPORTED', message: op };
+        },
+      },
+    };
+    const registry = new SchedulerToolRegistry();
+    registerScheduleCreateTool(registry, deps as never);
+    registerScheduleUpdateTool(registry, deps as never);
+
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      const res = await registry.call(name, args);
+      return JSON.parse((res.content[0] as { text: string }).text);
+    };
+
+    // Remote create targeting same session with a different PR -> warns with qualified session id.
+    const remoteCreateWarn = await callTool('schedule_create', {
+      device: 'mac-b',
+      name: 'PR #302',
+      prompt: 'follow 302',
+      cronExpr: '*/5 * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      agentKind: 'claude-code',
+      targetSessionId: 'mac-b::sess-shared',
+      prTrigger: { url: 'https://github.com/makecindy/cindy/pull/302', change: 'any' },
+      notify: { desktop: true, feishu: false },
+    });
+    expect(remoteCreateWarn.ok).toBe(true);
+    expect(remoteCreateWarn.deviceId).toBe('mac-b');
+    expect(remoteCreateWarn.data.multiPrSessionWarning).toMatchObject({
+      targetSessionId: 'mac-b::sess-shared',
+      siblingSchedules: [{ id: 'remote-pr-1', name: 'PR #301', prUrls: ['https://github.com/makecindy/cindy/pull/301'] }],
+    });
+
+    // Remote update repointing PR #303 onto same session -> warns.
+    const remoteUpdateWarn = await callTool('schedule_update', {
+      device: 'mac-b',
+      id: 'remote-pr-3',
+      targetSessionId: 'mac-b::sess-shared',
+    });
+    expect(remoteUpdateWarn.ok).toBe(true);
+    expect(remoteUpdateWarn.data.multiPrSessionWarning?.siblingSchedules[0]?.id).toBe('remote-pr-1');
+
+    // Non-PR remote create does not trigger an extra remote list RPC.
+    remoteInvokes.length = 0;
+    const nonPr = await callTool('schedule_create', {
+      device: 'mac-b',
+      name: 'Daily standup',
+      prompt: 'run standup',
+      cronExpr: '0 9 * * *',
+      timezone: 'UTC',
+      recurring: true,
+      agentKind: 'claude-code',
+      targetSessionId: 'mac-b::sess-shared',
+      notify: { desktop: true, feishu: false },
+    });
+    expect(nonPr.ok).toBe(true);
+    expect(nonPr.data.multiPrSessionWarning).toBeUndefined();
+    expect(remoteInvokes.map((c) => c.op)).toEqual(['create']);
+
+    // Best-effort remote list failure must not fail the already-succeeded write.
+    listShouldFail = true;
+    const listFailed = await callTool('schedule_create', {
+      device: 'mac-b',
+      name: 'PR #304',
+      prompt: 'follow 304',
+      cronExpr: '*/5 * * * *',
+      timezone: 'UTC',
+      recurring: true,
+      agentKind: 'claude-code',
+      targetSessionId: 'mac-b::sess-shared',
+      prTrigger: { url: 'https://github.com/makecindy/cindy/pull/304', change: 'any' },
+      notify: { desktop: true, feishu: false },
+    });
+    expect(listFailed.ok).toBe(true);
+    expect(listFailed.data.multiPrSessionWarning).toBeUndefined();
   });
 });

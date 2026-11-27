@@ -8,6 +8,7 @@ export interface ChatHistoryRead {
 }
 export interface ChatHistorySnapshot {
   room: { id: string; kind?: string }; cursor: string; messages: ChatHistoryMessage[]; reads?: ChatHistoryRead[];
+  members?: Array<{ id: string; state: string }>;
 }
 export interface ChatHistoryState {
   generation: string;
@@ -36,11 +37,27 @@ export interface ChatHistoryChange {
 export interface ChatHistoryBatch { cursor: string; changes: ChatHistoryChange[]; hasMore?: boolean }
 type Api = <T>(route: string) => Promise<T>;
 const isCursor = (value: unknown): value is string => typeof value === 'string' && /^\d+$/.test(value);
+/** The caller can no longer read this room at all (distinct from one missing message). */
+const ROOM_LOST = ['FORBIDDEN', 'NOT_MEMBER', 'NOT_A_MEMBER', 'CONVERSATION_NOT_FOUND', 'ACTOR_NOT_FOUND', 'ACCOUNT_UNAVAILABLE'];
 const errorCode = (error: unknown) => error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
   ? error.code : error instanceof Error ? error.message : '';
 
-export function createChatHistory(input: { api: Api; store: ChatHistoryStore; current: () => boolean; newGeneration: () => string }) {
+export function createChatHistory(input: {
+  api: Api; store: ChatHistoryStore; current: () => boolean; newGeneration: () => string;
+  readerId?: string;
+  /** Commit once when a room operation finishes instead of after each of its steps. Whole-file
+   * stores (the phone) rewrite the room on every commit; the operation still resolves only after it. */
+  coalesceWrites?: boolean;
+  /** For a history that outlives the screens using it: how many messages rooms with no
+   * operation in flight may keep in memory. Beyond it the least recently used rooms are
+   * dropped and restored from the store on their next use; nothing durable is lost. Leave
+   * unset where callers read the in-memory state directly (cursor, committedSnapshot). */
+  maxIdleMessages?: number;
+}) {
   const chains = new Map<string, Promise<unknown>>();
+  // coalesceWrites: the room state awaiting its single commit, and what may run only after it.
+  const unsaved = new Map<string, ChatHistoryState>();
+  const afterCommit = new Map<string, Array<() => void>>();
   const states = new Map<string, ChatHistoryState>();
   const checked = new Map<string, number>();
   const metadataConnection = new Map<string, number>();
@@ -55,11 +72,24 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
     const pending = (chains.get(room) ?? Promise.resolve()).catch(() => undefined).then(async () => {
       assertCurrent();
       for (let attempt = 0; ; attempt++) {
-        try { const result = await run(); assertCurrent(); return result; }
+        try {
+          const result = await run();
+          const state = unsaved.get(room);
+          if (state) {
+            unsaved.delete(room);
+            await input.store.write(room, state);
+            assertCurrent();
+            for (const done of afterCommit.get(room) ?? []) done();
+          }
+          afterCommit.delete(room);
+          assertCurrent(); release(room);
+          return result;
+        }
         catch (error) {
+          unsaved.delete(room); afterCommit.delete(room);
           states.delete(room); checked.delete(room); metadataConnection.delete(room);
           if (errorCode(error) === 'CHAT_CACHE_CONFLICT' && attempt < 2) continue;
-          if (['FORBIDDEN', 'NOT_MEMBER', 'NOT_A_MEMBER', 'CONVERSATION_NOT_FOUND', 'ACTOR_NOT_FOUND', 'ACCOUNT_UNAVAILABLE'].includes(errorCode(error))) {
+          if (ROOM_LOST.includes(errorCode(error))) {
             assertCurrent();
             try { await input.store.write(room, null); }
             catch (cleanupError) {
@@ -75,6 +105,20 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
     chains.set(room, pending);
     void pending.finally(() => { if (chains.get(room) === pending) chains.delete(room); }).catch(() => undefined);
     return pending;
+  }
+  /** Keep the room just used, then let go of the longest-idle ones over the budget. */
+  function release(used: string) {
+    if (input.maxIdleMessages === undefined) return;
+    const current = states.get(used);
+    if (current) { states.delete(used); states.set(used, current); }
+    let held = 0;
+    for (const state of states.values()) held += Object.keys(state.messages).length;
+    for (const [room, state] of [...states]) {
+      if (held <= input.maxIdleMessages) break;
+      // Every commit happens before its operation ends, so an idle room equals its stored copy.
+      if (room === used || chains.has(room)) continue;
+      states.delete(room); held -= Object.keys(state.messages).length;
+    }
   }
   async function restore(room: string) {
     const state = await input.store.read(room);
@@ -98,8 +142,19 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
     state.staleLookups = state.staleLookups?.filter(id => state.lookups?.includes(id));
     state.staleAggregates = state.staleAggregates?.filter(id => retained.has(id));
     for (const id of Object.keys(state.messages)) if (!retained.has(id)) delete state.messages[id];
+    if (input.coalesceWrites) { states.set(room, state); unsaved.set(room, state); return; }
     await input.store.write(room, state);
     assertCurrent(); states.set(room, state);
+  }
+  /** Bookkeeping that is only true once the state it describes is durable. */
+  function committed(room: string, done: () => void) {
+    if (!input.coalesceWrites) { done(); return; }
+    afterCommit.set(room, [...(afterCommit.get(room) ?? []), done]);
+  }
+  /** A removal replaces whatever this operation still had to commit. */
+  async function remove(room: string) {
+    unsaved.delete(room); afterCommit.delete(room);
+    await input.store.write(room, null); states.delete(room); checked.delete(room); metadataConnection.delete(room);
   }
   async function bootstrap(room: string) {
     dirty.delete(room);
@@ -110,7 +165,7 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
     const state: ChatHistoryState = { generation: input.newGeneration(), snapshot, cursor: snapshot.cursor, messages: {}, pages: {}, staleAggregates: [], metadataDirty: false };
     for (const message of snapshot.messages) state.messages[message.id] = message;
     await save(room, state);
-    if (metadataDirty.get(room) === invalidation) metadataDirty.delete(room);
+    committed(room, () => { if (metadataDirty.get(room) === invalidation) metadataDirty.delete(room); });
     if (epoch === connection) { checked.set(room, Date.now()); metadataConnection.set(room, epoch); }
     return state;
   }
@@ -120,10 +175,34 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
       state.messages[message.id] = { ...previous, ...message };
   }
   /** Returns false when the membership/history boundary requires a new bootstrap. */
-  function apply(state: ChatHistoryState, batch: ChatHistoryBatch): boolean {
+  async function apply(state: ChatHistoryState, batch: ChatHistoryBatch, source: 'push' | 'catch-up'): Promise<boolean> {
     if (!isCursor(batch.cursor) || !Array.isArray(batch.changes)) throw new Error('CHAT_RESPONSE_INVALID');
     if (BigInt(batch.cursor) <= BigInt(state.cursor)) return true;
-    if (batch.changes.some(c => c.type === 'membership.changed')) return false;
+    const membership = batch.changes.filter(change => change.type === 'membership.changed');
+    let joinedSnapshot: ChatHistorySnapshot | undefined;
+    if (membership.length) {
+      const prior = state.snapshot.members;
+      const reader = prior?.find(member => member.id === input.readerId);
+      if (!reader || reader.state !== 'joined' || !prior) return false;
+      const targets = new Set(membership.map(change => change.entityId));
+      if ([...targets].some(id => !id || id === state.snapshot.room.id || prior.some(member => member.id === id && member.state === 'joined'))) return false;
+      // Only preserve open pages for confirmed peer joins under the same reader membership.
+      let fresh: ChatHistorySnapshot;
+      try {
+        fresh = await input.api<ChatHistorySnapshot>(`/conversations/${state.snapshot.room.id}/snapshot`);
+      } catch (error) {
+        if (source === 'catch-up') throw error;
+        // A failed join check invalidates this room. Other rooms share the push connection.
+        assertCurrent();
+        return false;
+      }
+      if (fresh.room.id !== state.snapshot.room.id || !isCursor(fresh.cursor) || BigInt(fresh.cursor) < BigInt(batch.cursor)
+        || JSON.stringify(fresh.members?.find(member => member.id === input.readerId)) !== JSON.stringify(reader)
+        || ![...targets].every(id => fresh.members?.some(member => member.id === id && member.state === 'joined'))) return false;
+      // A newer snapshot may already include another join or message. Leave that
+      // metadata to the ordinary catch-up rather than skipping intervening deltas.
+      if (fresh.cursor === batch.cursor) joinedSnapshot = fresh;
+    }
     // Legacy stale flags have no target identity; repair them through the old page path first.
     if (!state.stalePages?.length && !state.staleLookups?.length) state.staleAggregates ??= [];
     for (const change of batch.changes) {
@@ -151,27 +230,38 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
           }
         }
         if (change.type === 'message.created') {
+          const seq = BigInt(message.seq);
           for (const key of Object.keys(state.pages)) {
             const query = new URLSearchParams(key);
-            if (query.has('before')) continue;
+            const before = query.get('before');
+            if (before !== null && seq >= BigInt(before)) continue;
             if (query.get('all') !== 'true' && (query.get('threadRootId') ?? null) !== (message.threadRootId ?? null)) continue;
             const ids = state.pages[key]!;
+            const after = query.get('after');
+            if (after !== null && seq <= BigInt(after)) continue;
             // Preserve the old window as bounded coverage: new arrivals shift pagination
             // boundaries, but must not make every older page download again.
             const first = ids[0] && state.messages[ids[0]];
-            if (first) {
+            if (before === null && first && seq > BigInt(first.seq)) {
               query.set('before', String(BigInt(first.seq) + 1n)); state.pages[query.toString()] = ids;
               if (state.stalePages?.includes(key)) stale(state, query.toString());
             }
             if (query.has('after')) { delete state.pages[key]; continue; }
-            // The authorized change body is enough to maintain the latest page.
-            // Keep the old bounded range for pagination without re-downloading the head.
+            // Exact hits and stitched reads both depend on each window retaining its top rows.
+            const limit = Number(query.get('limit') ?? 100);
+            const last = ids.at(-1);
+            if (last && ids.length >= limit && seq <= BigInt(state.messages[last]!.seq)) continue;
             state.pages[key] = [...new Set([message.id, ...ids])]
               .sort((a, b) => BigInt(state.messages[a]!.seq) > BigInt(state.messages[b]!.seq) ? -1 : 1)
-              .slice(0, Number(query.get('limit') ?? 100));
+              .slice(0, limit);
           }
         }
       } else if (!['execution.changed', 'plan.changed'].includes(change.type)) state.metadataDirty = true;
+    }
+    if (joinedSnapshot) {
+      for (const message of joinedSnapshot.messages) merge(state, message);
+      state.snapshot = joinedSnapshot;
+      state.metadataDirty = false;
     }
     state.snapshot.messages = state.snapshot.messages.map(m => state.messages[m.id] ?? m);
     state.cursor = batch.cursor;
@@ -255,8 +345,10 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
       for (let page = 0; page < 20; page++) {
         const batch = await input.api<ChatHistoryBatch>(`/changes?scope=conversation:${room}&after=${state.cursor}&limit=100`);
         if (batch.hasMore && batch.cursor === state.cursor) throw new Error('CHAT_SYNC_STALLED');
-        if (!apply(state, batch)) return bootstrap(room);
-        await save(room, state);
+        const moved = batch.cursor !== state.cursor;
+        if (!await apply(state, batch, 'catch-up')) return bootstrap(room);
+        // An empty delta changes nothing durable; do not rewrite the room for it.
+        if (moved || !input.coalesceWrites) await save(room, state);
         if (!batch.hasMore) {
           if (state.metadataDirty) {
             const snapshot = await input.api<ChatHistorySnapshot>(`/conversations/${room}/snapshot`);
@@ -265,7 +357,7 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
             state.snapshot = { ...snapshot, cursor: state.cursor, messages: snapshot.messages.map(m => state!.messages[m.id]!) };
             state.metadataDirty = false;
             await save(room, state);
-            if (metadataDirty.get(room) === invalidation) metadataDirty.delete(room);
+            committed(room, () => { if (metadataDirty.get(room) === invalidation) metadataDirty.delete(room); });
           }
           if (epoch === connection) { checked.set(room, Date.now()); metadataConnection.set(room, epoch); }
           return state;
@@ -330,6 +422,36 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
       }
       return state.messages[id] as M;
     }),
+    /** Several roots/sources in one room operation: bounded parallel reads and one commit. A
+     * per-message failure is returned for that ID; losing the room itself still rejects. */
+    lookup: <M extends ChatHistoryMessage>(room: string, ids: readonly string[]): Promise<Map<string, { message: M } | { error: unknown }>> => serial(room, async () => {
+      let state = await ensure(room);
+      const wanted = [...new Set(ids)];
+      const aggregates = wanted.filter(id => state.staleAggregates?.includes(id));
+      if (aggregates.length) state = await refreshAggregates(room, state, aggregates);
+      const missing = wanted.filter(id => !state.lookups?.includes(id) || !state.messages[id] || state.staleLookups?.includes(id));
+      const failed = new Map<string, unknown>();
+      // Returned from here even if a long batch pushes an earlier lookup out of the retained 100.
+      const found = new Map<string, M>();
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(4, missing.length) }, async () => {
+        while (next < missing.length) {
+          const id = missing[next++]!;
+          try {
+            const message = await input.api<M>(`/conversations/${room}/messages/${encodeURIComponent(id)}`);
+            if (message?.id !== id || !isCursor(message.seq)) throw new Error('CHAT_RESPONSE_INVALID');
+            merge(state, message); found.set(id, state.messages[id] as M);
+            state.lookups = [...(state.lookups ?? []).filter(value => value !== id), id].slice(-100);
+            state.staleLookups = state.staleLookups?.filter(value => value !== id);
+          } catch (error) { failed.set(id, error); }
+        }
+      }));
+      for (const error of failed.values()) if (ROOM_LOST.includes(errorCode(error))) throw error;
+      for (const id of wanted) if (!found.has(id) && !failed.has(id) && state.messages[id]) found.set(id, state.messages[id] as M);
+      if (missing.length > failed.size) await save(room, state);
+      return new Map(wanted.map(id => [id, found.has(id)
+        ? { message: found.get(id)! } : { error: failed.get(id) ?? new Error('CHAT_RESPONSE_INVALID') }]));
+    }),
     snapshot: <S extends ChatHistorySnapshot>(room: string): Promise<S & { cacheGeneration: string }> => serial(room, async () => {
       const state = await ensure(room);
       return { ...state.snapshot, cursor: state.cursor, cacheGeneration: state.generation } as S & { cacheGeneration: string };
@@ -354,6 +476,7 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
         || (read.markedUnread !== undefined && typeof read.markedUnread !== 'boolean'))) return false;
       const state = states.get(room);
       if (!state?.snapshot.reads) return false; // Legacy servers/caches retain the full refresh fallback.
+      let changed = false;
       for (const read of reads as Array<{ threadRootId?: string | null; readSeq: string; following: boolean; muted: boolean; markedUnread?: boolean; notificationScope?: ChatHistoryRead['notification_scope'] }>) {
         const key = typeof read.threadRootId === 'string' ? read.threadRootId : 'main';
         const previous: ChatHistoryRead | undefined = state.snapshot.reads.find(item => item.thread_key === key);
@@ -363,9 +486,13 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
           // only advance the position, never roll back that event's follow/mute state.
           ...(sequenceOnly && previous ? { following: previous.following, muted: previous.muted, notification_scope: previous.notification_scope, marked_unread: previous.marked_unread }
             : { following: read.following, muted: read.muted, notification_scope: read.notificationScope, ...(typeof read.markedUnread === 'boolean' ? { marked_unread: read.markedUnread } : {}) }) };
+        // The echo of a receipt already merged repeats it; that is nothing new to commit.
+        if (previous && (Object.keys(next) as Array<keyof ChatHistoryRead>).every(field => previous[field] === next[field])
+          && Object.keys(previous).length === Object.keys(next).length) continue;
+        changed = true;
         state.snapshot.reads = previous ? state.snapshot.reads.map(item => item.thread_key === key ? next : item) : [...state.snapshot.reads, next];
       }
-      await save(room, state);
+      if (changed) await save(room, state);
       return true;
     }),
     /** A reconnect must verify membership and catch up before returning persisted content. */
@@ -376,6 +503,12 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
     },
     cursor(room: string) { return states.get(room)?.cursor; },
     generation(room: string) { return states.get(room)?.generation; },
+    /** Read-only view of messages already loaded in memory for this room (zero I/O). */
+    cachedMessages: <M extends ChatHistoryMessage>(room: string): M[] => {
+      assertCurrent();
+      const state = states.get(room);
+      return state ? Object.values(state.messages) as M[] : [];
+    },
     projection: <M extends ChatHistoryMessage>(room: string, ids: string[]) => serial(room, async () => {
       let state = await ensure(room);
       if (state.staleAggregates?.some(id => ids.includes(id))) state = await refreshAggregates(room, state, ids);
@@ -390,16 +523,11 @@ export function createChatHistory(input: { api: Api; store: ChatHistoryStore; cu
       // Another foreground snapshot may have started this subscription beyond our durable cursor.
       // Catch up that gap instead of acknowledging unseen edits/deletions.
       if (!subscribedAfter || BigInt(subscribedAfter) > BigInt(state.cursor)) return (await ensure(room, true)).cursor;
-      if (!apply(state, batch)) {
-        await input.store.write(room, null); states.delete(room); checked.delete(room); metadataConnection.delete(room);
-        return undefined;
-      }
+      if (!await apply(state, batch, 'push')) { await remove(room); return undefined; }
       await save(room, state);
       return state.cursor;
     }),
-    clear: (room: string) => serial(room, async () => {
-      await input.store.write(room, null); states.delete(room); checked.delete(room); metadataConnection.delete(room);
-    }),
+    clear: (room: string) => serial(room, () => remove(room)),
   };
 }
 export type ChatHistory = ReturnType<typeof createChatHistory>;

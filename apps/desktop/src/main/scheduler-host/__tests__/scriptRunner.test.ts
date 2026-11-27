@@ -1,12 +1,28 @@
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as appSessionState from '../../appSessionState.js';
+import { workingDirectoryRecovery } from '../../maker-ipc/workingDirectoryRecovery.desktop.js';
+import { configureUserDataDir, getUserDataDir } from '../../userDataPath.js';
 
 const spawnMock = vi.fn();
 const executePreRunHookMock = vi.hoisted(() => vi.fn());
 const restoreArchivedSessionForSend = vi.hoisted(() => vi.fn());
-vi.mock('../../localDb/ipc/sessions', () => ({ restoreArchivedSessionForSend }));
+const getSessionRowSnapshotStrict = vi.hoisted(() => vi.fn());
+const getManagedWorktreeReadinessForSession = vi.hoisted(() =>
+  vi.fn<() => Promise<'ready' | 'gone' | 'retry'>>(async () => 'ready'),
+);
+vi.mock('../../localDb/ipc/sessions', () => ({
+  restoreArchivedSessionForSend,
+  getSessionRowSnapshotStrict,
+}));
+vi.mock('../../worktree/restore', () => ({
+  getManagedWorktreeReadinessForSession,
+}));
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -53,7 +69,8 @@ vi.mock('../proc-util', async (importOriginal) => {
   return { ...actual, killProcessTree: killProcessTreeMock };
 });
 
-import { ScriptScheduleRunner, buildScriptEnv } from '../script-runner';
+import { ScriptScheduleRunner, buildScriptEnv } from '../script-runner.desktop';
+import { ScheduleNotifier } from '../notifier';
 
 function childProcess() {
   const child = new EventEmitter() as EventEmitter & {
@@ -104,6 +121,9 @@ describe('ScriptScheduleRunner', () => {
     spawnMock.mockReset();
     executePreRunHookMock.mockReset();
     restoreArchivedSessionForSend.mockReset();
+    getSessionRowSnapshotStrict.mockReset();
+    getManagedWorktreeReadinessForSession.mockReset();
+    getManagedWorktreeReadinessForSession.mockResolvedValue('ready');
     killProcessTreeMock.mockClear();
   });
 
@@ -919,6 +939,59 @@ describe('ScriptScheduleRunner', () => {
     );
   });
 
+  it('reports the end of stderr when debug output exceeds the collection limit', async () => {
+    const child = childProcess();
+    spawnMock.mockReturnValue(child);
+    const notifier = { notify: vi.fn(async () => {}) };
+    const runner = new ScriptScheduleRunner({ broker: { call: vi.fn() }, logger: {}, notifier });
+    const resultPromise = runner.fire(schedule(), {
+      runId: 'run-1', firedAt: 1, signal: new AbortController().signal,
+    });
+
+    child.stderr.write('DEBUG log\n'.repeat(7_000));
+    const error = Buffer.from('fatal: 连接失败\n');
+    child.stderr.write(error.subarray(0, 8));
+    child.stderr.write(error.subarray(8));
+    child.emit('close', 1);
+
+    await expect(resultPromise).rejects.toThrow('fatal: 连接失败');
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ status: 'failed', errorMsg: expect.stringContaining('fatal: 连接失败') }),
+    );
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ errorMsg: expect.stringMatching(/^[\s\S]{0,1030}$/) }),
+    );
+  });
+
+  // Issue #10698 / integration: the external notification must retain the actual
+  // error after a long stderr stream, for both channels sharing the formatter.
+  it('delivers the script error tail to Feishu and WeCom', async () => {
+    const child = childProcess();
+    spawnMock.mockReturnValue(child);
+    const sendMarkdownText = vi.fn(async (_owner: string, _text: string) => ({}));
+    const publishMarkdown = vi.fn(async (_text: string) => undefined);
+    const notifier = new ScheduleNotifier({
+      feishuIm: { getOwnerOpenId: () => 'owner', sendMarkdownText } as never,
+      wecomGroupPublisher: { publishMarkdown } as never,
+      logger: {}, shouldNotifyDesktop: () => false, isRunAlertShownElsewhere: () => false,
+    }, {
+      getMobileNotifyGeneration: () => 0, isSessionNotificationsMutedSync: () => false,
+      showSessionNotification: () => {}, sendMobileSessionNotify: () => {},
+    });
+    const runner = new ScriptScheduleRunner({ broker: { call: vi.fn() }, logger: {}, notifier });
+    const result = runner.fire({ ...schedule(), notify: { desktop: false, feishu: true, wecomGroup: true } }, {
+      runId: 'run-1', firedAt: 1, signal: new AbortController().signal,
+    });
+    child.stderr.write('DEBUG log\n'.repeat(7000) + 'fatal: connection failed\n');
+    child.emit('close', 1);
+    await expect(result).rejects.toThrow('fatal: connection failed');
+    await vi.waitFor(() => expect(publishMarkdown).toHaveBeenCalledOnce());
+    expect(sendMarkdownText.mock.calls[0]?.[1]).toContain('fatal: connection failed');
+    expect(publishMarkdown.mock.calls[0]?.[0]).toContain('fatal: connection failed');
+  });
+
   it('still notifies when a genuine failure message happens to contain the word "abort" (codex review 三次发现)', async () => {
     // 只认 ctx.signal.aborted 这个权威信号,不按错误文本猜——脚本自己的失败
     // stderr 恰好含 'abort' 字样(如某工具打印 "operation aborted")不代表这是
@@ -1100,6 +1173,89 @@ describe('ScriptScheduleRunner', () => {
       }),
     ).rejects.toThrow('local project workspace');
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  // Bound script schedules only rely on the owner's worktree when schedule.workingDir points at
+  // (or inside) that worktree. Otherwise an owner whose old worktree is permanently gone still
+  // falls back to its conversation workspace while the script executes in schedule.workingDir.
+  describe('bound script owner with permanently gone managed worktree', () => {
+    const tempRoots: string[] = [];
+    let priorUserDataDir: string;
+    let ownerPathSpy: { mockRestore(): void } | null = null;
+
+    afterEach(async () => {
+      workingDirectoryRecovery.clear();
+      ownerPathSpy?.mockRestore();
+      ownerPathSpy = null;
+      if (priorUserDataDir) configureUserDataDir(priorUserDataDir);
+      await Promise.all(tempRoots.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    });
+
+    it.each([
+      { relation: 'separate-project', expectsFallback: true },
+      { relation: 'same-worktree', expectsFallback: false },
+      { relation: 'worktree-child', expectsFallback: false },
+    ] as const)('handles gone owner worktree for $relation', async ({ relation, expectsFallback }) => {
+      priorUserDataDir = getUserDataDir();
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-script-wt-fallback-'));
+      tempRoots.push(tempRoot);
+      const ownerRoot = path.join(tempRoot, 'owners', 'owner-1');
+      await fs.mkdir(ownerRoot, { recursive: true });
+      configureUserDataDir(tempRoot);
+      ownerPathSpy = vi.spyOn(appSessionState, 'ownerScopedUserDataPath').mockImplementation((...parts: string[]) =>
+        path.join(ownerRoot, ...parts),
+      );
+
+      const repoDir = path.join(tempRoot, 'repo');
+      const goneWorktree = path.join(repoDir, '.cindy-worktrees', 'gone-task');
+      const scriptWorkingDir =
+        relation === 'separate-project'
+          ? repoDir
+          : relation === 'same-worktree'
+            ? goneWorktree
+            : path.join(goneWorktree, 'packages', 'app');
+
+      const owner = { status: 'active', workingDir: goneWorktree, remoteHostId: null };
+      const db = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [owner] }) }) }) };
+      getSessionRowSnapshotStrict.mockResolvedValue(owner);
+      getManagedWorktreeReadinessForSession.mockResolvedValue('gone');
+      executePreRunHookMock.mockResolvedValue({
+        decision: 'skip',
+        exitCode: 2,
+        durationMs: 1,
+        stdout: '',
+        stderr: '',
+        timedOut: false,
+      });
+
+      const runner = new ScriptScheduleRunner({
+        broker: { call: vi.fn() },
+        logger: {},
+        getDb: () => db as never,
+        scheduler: { pause: vi.fn() } as never,
+      });
+
+      const call = runner.fire(
+        {
+          ...schedule(),
+          targetSessionId: `script-owner-${relation}`,
+          workingDir: scriptWorkingDir,
+          preRunHook: { command: 'node check.mjs' },
+        },
+        { runId: `run-${relation}`, firedAt: 1, signal: new AbortController().signal },
+      );
+
+      if (expectsFallback) {
+        await expect(call).resolves.toMatchObject({ skipped: true });
+        expect(executePreRunHookMock).toHaveBeenCalledWith(
+          expect.objectContaining({ cwd: scriptWorkingDir }),
+        );
+      } else {
+        await expect(call).rejects.toThrow(/worktree could not be restored/i);
+        expect(executePreRunHookMock).not.toHaveBeenCalled();
+      }
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
   });
 
 });

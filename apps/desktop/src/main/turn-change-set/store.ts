@@ -1,4 +1,3 @@
-import { app, BrowserWindow } from 'electron';
 import { createId } from '@paralleldrive/cuid2';
 import { createTwoFilesPatch, formatPatch, parsePatch, reversePatch } from 'diff';
 import { realpathSync } from 'node:fs';
@@ -25,6 +24,7 @@ import type { FileDiff } from '../../shared/gitReviewWire.js';
 import { parseGitDiffs } from '../git-review/diffParser.js';
 import { GitRunError, runGit } from '../git-review/gitRunner.js';
 import { getDbClient } from '../localDb/client/current.js';
+import { userDataPath } from '../userDataPath.js';
 import { createLogger } from '../logger.js';
 import { detectSensitivePath } from '../security/sensitivePath.js';
 import * as broadcastTap from '../device-link/broadcast-tap.js';
@@ -85,7 +85,7 @@ interface TurnChangeActionStateV1 {
   states: Record<string, { workspaceState: TurnChangeWorkspaceState; updatedAt: number }>;
 }
 
-const PROVIDERS = new Set<TurnChangeProvider>(['codex', 'claude-code', 'pi']);
+const PROVIDERS = new Set<TurnChangeProvider>(['codex', 'claude-code', 'pi', 'acp']);
 const STATES = new Set<TurnChangeSetState>(['complete', 'partial']);
 const WORKSPACE_STATES = new Set<TurnChangeWorkspaceState>(['applied', 'undone']);
 const INCOMPLETE_REASONS = new Set<TurnChangeIncompleteReason>([
@@ -117,6 +117,16 @@ export interface KnownFileWriteCapture {
   provider: TurnChangeProvider;
   cwd: string;
   targetPath: string;
+  remote?: boolean;
+}
+
+export interface KnownFilePreimageCapture {
+  sessionId: string;
+  provider: TurnChangeProvider;
+  cwd: string;
+  targetPath: string;
+  beforeExists: boolean;
+  beforeText: string;
   remote?: boolean;
 }
 
@@ -166,11 +176,11 @@ function assertSafeSegment(value: string, label: string): void {
 }
 
 function storageRoot(): string {
-  return turnChangeSetStorageRoot(app.getPath('userData'));
+  return turnChangeSetStorageRoot(userDataPath());
 }
 
 function sessionDir(sessionId: string): string {
-  return turnChangeSetSessionDirectory(app.getPath('userData'), sessionId);
+  return turnChangeSetSessionDirectory(userDataPath(), sessionId);
 }
 
 function detailPath(sessionId: string, id: string): string {
@@ -760,19 +770,25 @@ async function persistValue(value: PersistedTurnChangeSetV1): Promise<void> {
   });
 }
 
+/** The desktop injects its window fan-out; the host leaves it unset. */
+let windowBroadcast: ((payload: TurnChangeSetUpdatedPayload, ownerStamp?: unknown) => void) | null = null;
+
+export function setTurnChangeSetWindowBroadcast(
+  broadcast: ((payload: TurnChangeSetUpdatedPayload, ownerStamp?: unknown) => void) | null,
+): void {
+  windowBroadcast = broadcast;
+}
+
 function broadcastUpdated(
   payload: TurnChangeSetUpdatedPayload,
   ownerScope = broadcastTap.captureDataOwnerBroadcastScope(),
 ): void {
   if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
   broadcastTap.tapWindowBroadcast(MAKER_PUSH.TURN_CHANGE_SET_UPDATED, payload, ownerScope.ownerStamp);
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
-    try {
-      win.webContents.send(MAKER_PUSH.TURN_CHANGE_SET_UPDATED, payload, ownerScope.ownerStamp);
-    } catch (error) {
-      log.warn('renderer turn change-set broadcast failed', { error });
-    }
+  try {
+    windowBroadcast?.(payload, ownerScope.ownerStamp);
+  } catch (error) {
+    log.warn('renderer turn change-set broadcast failed', { error });
   }
 }
 
@@ -962,7 +978,73 @@ export async function captureKnownFileBefore(input: KnownFileWriteCapture): Prom
       beforeMode: before.mode,
     });
     pending.capturedBytes += captureBytes;
-  })().finally(() => pending.captureTasks.delete(captureKey));
+  })().finally(() => {
+    if (pending.captureTasks.get(captureKey) === captureTask) {
+      pending.captureTasks.delete(captureKey);
+    }
+  });
+  pending.captureTasks.set(captureKey, captureTask);
+  return captureTask;
+}
+
+/**
+ * Records an exact text preimage supplied by a structured diff (for example ACP
+ * `tool_call_update` content diffs under `bypassPermissions`). Honors all workspace
+ * containment, sensitivity, file-count and byte-budget guards, and never overwrites
+ * an earlier authoritative preimage for the same file within the same turn.
+ */
+export async function recordKnownFilePreimage(input: KnownFilePreimageCapture): Promise<void> {
+  if (input.remote) return;
+  const pending = ensurePending(input.sessionId, input.provider, input.cwd);
+  const target = safeRelativeTarget(input.cwd, input.targetPath);
+  if (!target) {
+    return;
+  }
+  if (detectSensitivePath(target.relativePath, { allowEnvTemplates: true })) {
+    addIncompleteReason(pending, 'sensitive-file');
+    return;
+  }
+  const captureKey = captureFileKey(target.absolutePath);
+  if (pending.capturedFiles.has(captureKey)) return;
+  const inFlight = pending.captureTasks.get(captureKey);
+  if (inFlight) return inFlight;
+  const captureTask = (async () => {
+    if (pending.capturedFiles.has(captureKey)) return;
+    if (!await isRealTargetInsideWorkspace(input.cwd, target.absolutePath)) {
+      addIncompleteReason(pending, 'outside-workspace');
+      return;
+    }
+    if (pending.capturedFiles.size >= MAX_CAPTURED_FILES) {
+      addIncompleteReason(pending, 'diff-too-large');
+      return;
+    }
+    const beforeText = input.beforeExists ? input.beforeText : '';
+    const captureBytes = byteLength(beforeText);
+    if (captureBytes > MAX_CAPTURE_FILE_BYTES) {
+      addIncompleteReason(pending, 'file-too-large');
+      return;
+    }
+    if (pending.capturedBytes + captureBytes > MAX_CAPTURE_TOTAL_BYTES) {
+      addIncompleteReason(pending, 'diff-too-large');
+      return;
+    }
+    let beforeMode: number | null = null;
+    if (input.beforeExists) {
+      const stat = await fs.stat(target.absolutePath).catch(() => null);
+      beforeMode = stat?.isFile() ? stat.mode : null;
+    }
+    pending.capturedFiles.set(captureKey, {
+      ...target,
+      beforeExists: input.beforeExists,
+      beforeText,
+      beforeMode,
+    });
+    pending.capturedBytes += captureBytes;
+  })().finally(() => {
+    if (pending.captureTasks.get(captureKey) === captureTask) {
+      pending.captureTasks.delete(captureKey);
+    }
+  });
   pending.captureTasks.set(captureKey, captureTask);
   return captureTask;
 }
@@ -989,7 +1071,8 @@ export function noteTurnDiffEvent(sessionId: string, event: AgentEvent, remote =
   pending.incompleteReasons.delete('sensitive-file');
   pending.incompleteReasons.delete('diff-too-large');
   const safeDiff = filterSensitiveDiffBlocks(pending, data.diff);
-  if (byteLength(safeDiff) > TURN_CHANGE_SET_MAX_DIFF_BYTES) {
+  // A diff the host dropped at the app-server line limit is always above this limit too.
+  if (data.omitted === 'oversized' || byteLength(safeDiff) > TURN_CHANGE_SET_MAX_DIFF_BYTES) {
     pending.nativeDiff = null;
     // Without the immutable detail payload, showing file rows would imply that they
     // can be reviewed exactly. Keep only an explicit partial-coverage card instead.

@@ -8,12 +8,17 @@ review 的完整口径见 `docs/dev-rules/development-workflow.md` §3，本文�
 
 本仓的规则是正本，不要凭通用最佳实践判断对错：
 
-- `AGENTS.md` —— 规则索引与触发条件，先看它决定该读哪几份。
+- `AGENTS.md` —— 全局约束、红线与各模块入口。
+- `docs/dev-rules/rule-index.md` —— 规则索引：每份规则的读取时机与适用路径，由各规则文档
+  开头的声明生成。
 - `docs/dev-rules/` —— 工程规则；`docs/product-rules/` —— 产品行为规则；
   `docs/design-rules/DESIGN.md` —— 权威视觉规范。
 - `.github/PULL_REQUEST_TEMPLATE.md` —— 风险分类的口径。
 
-diff 命中哪个模块，就读 `AGENTS.md` 索引里对应那条指向的规则文件，再评审。
+拿 diff 改到的每个路径去规则索引「适用路径」一表里比对，命中的规则都要读；判定为「主题」
+的规则不能由路径判定，按它写的读取时机判断这次改动是否相关。读完再评审。评审环境不能运行脚本
+（第 5 节），所以直接读索引文件；能运行时 `node scripts/rule-index.mjs for <路径…>` 给出
+同一结果。
 
 ## 2. 严重度映射
 
@@ -64,17 +69,27 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   按实际影响报告有证据的问题，并按第 2 节映射评论标签；P2 缺陷也要报告。
   指出触发条件、共享约束与用户影响，
   不以通用性能建议替代缺陷证据，不据此要求新增 CI 或统一限流机制。
+- **读取、变化通知与轮询性能**：列表、分页、批量读取、插件扫描、缓存、轮询、收到变化通知
+  后的重读或挂在每个任务上的常驻组件，按 `docs/dev-rules/engineering-conventions.md` §8 核对
+  每个用户动作和每次通知的 list/scan/IPC/写事务次数、常驻组件是否共用读取、隐藏/卸载后是否
+  停止读取和轮询（有界保留和到期回收除外）、缓存是否按 owner/revision/query 及目标电脑隔离；
+  界面频繁触发的持久化写入是否合并、有界、提交后才确认；读远程数据时同时按上一条核对通道
+  压力。插件市场、统计与远程插件状态的特有边界见
+  `docs/dev-rules/plugin-security-and-authoring.md` §5.4。
 - **凭证与本地存储**：凭证、令牌、授权文件是否写进了仓库或可能被 Git 跟踪的路径；
   用户数据落盘位置是否越界。见 `docs/dev-rules/credentials-and-local-storage.md`。
 - **Electron 进程边界**：renderer／preload／IPC／CSP／WebView／导航与特权能力的改动
   是否扩大了攻击面。见 `docs/dev-rules/electron-security-and-process-boundaries.md`。
-- **数据库**：新 migration 的正确性与可回滚性、companion 脚本必须是 CommonJS
-  （生产 Electron 用 `require()` 加载，ESM 语法只在用户端炸）。见
-  `docs/dev-rules/database-and-migrations.md`。
+- **数据库**：先按 `docs/dev-rules/database-and-migrations.md` 的「Schema 变更克制原则」
+  核对新增表／列／migration 是否必要（有明确真实读写闭环、无法用现有结构或运行期机制合理替代、
+  全链路收益大于成本）；为低频或假设性场景引入不可回退 schema 按规范违反（P2）上报。同时核对
+  新 migration 的正确性与可回滚性、companion 脚本必须是 CommonJS
+  （生产 Electron 用 `require()` 加载，ESM 语法只在用户端炸）。
 - **mobile 冷更边界**：改动是否触碰 `app.json`／`app.config.js`／`eas.json`／
   `apps/mobile/package.json`／`plugins/`／`modules/` 等进入 runtime fingerprint 的输入。
-  命中就在评论里点名——这类 PR 合并前需要把关人对冷更单独确认；可保持 Ready 并正常
-  审查，不因冷更要求新建讨论 issue 或转为 draft。见
+  命中就在评论里点名，并核对是否确实必须冷更（能用不动指纹的写法达成时要求改写），
+  以及 PR Description 是否写明冷更原因、存量装机影响与发版节奏；缺项按规范违反上报。
+  这类 PR 可保持 Ready 并正常审查，不需要把关人另外确认。见
   `docs/dev-rules/mobile-development.md`。
 - **协议兼容**：本地协议 package、device-link／relay／隧道 payload、IPC allowlist
   等跨端 wire protocol 的向后兼容性。见 `docs/dev-rules/protocol-compatibility.md`。
@@ -86,6 +101,13 @@ P1／P2。按下表转换，**不要**把仓库口径的 P2 改写成评论里�
   `docs/dev-rules/remote-and-mobile-adaptation.md` 的「恢复动作先回答故障半径」。
 - **system prompt 与 Agent 行为**：进入模型 system 段的提示词、tool／MCP 暴露、
   usage 计量。见 `docs/dev-rules/maker-core-and-agent-behavior.md`。
+- **四引擎（含 ACP 插件引擎）与插件模型影响面**：凡改动涉及任务创建／草稿、模型选择器／
+  收藏、权限与审批、IM／自动化／Orca／伙伴／目标模式、用量统计／切换分隔卡／图标／摘要与
+  反馈、远控／手机，或任何枚举 `claude-code | codex | pi` 的分支，必须核对：(a) 是否处理了
+  `acp`（且完整透传 `providerId` 与 `agentDeviceId`）或在不支持时显式 fail-closed；
+  (b) 是否存在隐式 `else → claude-code` 回落或丢失 ACP 身份；(c) 触及新任务草稿或选择器时，
+  是否同时核对插件执行引擎（ACP）与插件路由模型（`route`）的遮罩与互斥边界。见
+  `docs/product-rules/plugin-engines-and-models.md` 与 `docs/dev-rules/acp-plugin-harness.md`。
 - **插件沙箱**：`.cindy` 运行时的权限、能力 slot、网络／凭证／文件交接。见
   `docs/dev-rules/plugin-security-and-authoring.md`。
 - **存量插件兼容（红线，优先级等同凭证与安全）**：改了宿主侧批准状态记录（receipt 一类）

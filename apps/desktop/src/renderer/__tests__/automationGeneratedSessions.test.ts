@@ -103,6 +103,7 @@ describe('automation-generated sessions', () => {
   it('keeps scheduler sessions in the desktop-visible source contract', () => {
     // 所有会生成本地会话的 IM 渠道均进入 desktop sidebar。
     // (feishu 2026-07-16 起以「对话」分组回归, 见 sessionSource.ts 注释)。
+    // 官方 Discord 的任务用 discord-hook(与个人 Discord bot 的 discord 分开), 同样可见。
     // Bot-owned Session 仍是真实 Cindy 任务，但只由 Bots 面板投影；普通任务列表
     // 不再重复展示同一批主对话、渠道与 worker。
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toEqual([
@@ -113,9 +114,11 @@ describe('automation-generated sessions', () => {
       'telegram',
       'x',
       'discord',
+      'discord-hook',
       'wechat',
       'dingtalk',
       'wecom',
+      'imessage',
       'scheduler',
       'learn',
       'review',
@@ -480,7 +483,7 @@ describe('automation-generated sessions', () => {
     expect(entries[0].group.sessions.map((session) => session.id)).toEqual(['brief-2', 'brief-1']);
   });
 
-  it('shows every recent run as its own row when expanded (primary not hidden into header)', () => {
+  it('keeps the task represented by the header in expanded children', () => {
     const group = {
       id: 'schedule:sched-jira',
       title: 'Jira 自动修复',
@@ -491,14 +494,15 @@ describe('automation-generated sessions', () => {
       attentionSessionIds: ['jira-1'],
     };
 
-    // 展开态:全部运行(含被组头代表的最新未读 jira-1)都各自成行,前 5 条内全显示。
+    // 展开列表仍包含组头代表的 jira-1，无论它是否未读。
     expect(
       getVisibleAutomationGroupSessions(group, {
         notifications: new Set(['jira-1']),
         showAll: false,
+        headerSessionId: 'jira-1',
       }).map((session) => session.id),
     ).toEqual(['jira-2', 'jira-1']);
-    // 组头点击目标仍是 primary(最新未读),与它的列表行是两个入口指向同一 session。
+    // 组头仍可打开它代表的任务。
     expect(getAutomationGroupPrimarySession(group, new Set(['jira-1']))?.id).toBe('jira-1');
   });
 
@@ -787,32 +791,31 @@ describe('automation-generated sessions', () => {
         notifications: new Set(['run-0', 'run-3']),
         showAll: false,
         collapsed: true,
-        alertSessionIds: new Set(['run-3']),
+        collapsedAttentionSessionIds: new Set(['run-3']),
       });
       expect(view.visibleSessions.map((session) => session.id)).toEqual(['run-3']);
       expect(view.isOverflowing).toBe(false);
       expect(view.totalCount).toBe(1);
     });
 
-    it('caps lifted alerts at five and counts only alerts in the overflow label', () => {
+    it('keeps every lifted attention run visible beyond five', () => {
       const alerts = ['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-5'];
       const view = getAutomationGroupChildView(alertGroup(8), {
         notifications: new Set(alerts),
         showAll: false,
         collapsed: true,
-        alertSessionIds: new Set(alerts),
+        collapsedAttentionSessionIds: new Set(alerts),
       });
-      expect(view.visibleSessions).toHaveLength(5);
-      expect(view.isOverflowing).toBe(true);
-      expect(view.hiddenCount).toBe(1);
-      // 「显示全部 N 个」的 N 是告警数,不是整组运行数(收起态列表语义就是告警)。
+      expect(view.visibleSessions).toHaveLength(6);
+      expect(view.isOverflowing).toBe(false);
+      expect(view.hiddenCount).toBe(0);
       expect(view.totalCount).toBe(6);
 
       const expanded = getAutomationGroupChildView(alertGroup(8), {
         notifications: new Set(alerts),
         showAll: true,
         collapsed: true,
-        alertSessionIds: new Set(alerts),
+        collapsedAttentionSessionIds: new Set(alerts),
       });
       expect(expanded.visibleSessions.map((session) => session.id)).toEqual(alerts);
       expect(expanded.isOverflowing).toBe(false);
@@ -823,7 +826,7 @@ describe('automation-generated sessions', () => {
         notifications: new Set(),
         showAll: false,
         collapsed: true,
-        alertSessionIds: new Set(['run-4']),
+        collapsedAttentionSessionIds: new Set(['run-4']),
         frozenVisibleSessionIds: ['run-0', 'run-1', 'run-2'],
       });
       expect(view.visibleSessions.map((session) => session.id)).toEqual(['run-4']);
@@ -834,7 +837,7 @@ describe('automation-generated sessions', () => {
         notifications: new Set(),
         showAll: false,
         collapsed: false,
-        alertSessionIds: new Set(['run-6']),
+        collapsedAttentionSessionIds: new Set(['run-6']),
       });
       expect(view.visibleSessions.map((session) => session.id)).toEqual([
         'run-0',
@@ -854,7 +857,7 @@ describe('automation-generated sessions', () => {
         notifications: new Set(),
         showAll: true,
         collapsed: false,
-        alertSessionIds: new Set(['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-5']),
+        collapsedAttentionSessionIds: new Set(['run-0', 'run-1', 'run-2', 'run-3', 'run-4', 'run-5']),
       });
       expect(view.visibleSessions).toHaveLength(7);
       expect(view.totalCount).toBe(7);
@@ -1033,7 +1036,7 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('scheduleFocusPath(group.scheduleId)');
     // 组头点击:展开打开最新一条;收起且整组是红时打开贡献红点的那条。
     expect(source).toContain('resolveCollapsedGroupHeaderSessionId({');
-    expect(source).toContain('onSessionClick(targetId)');
+    expect(source).toContain('onSessionClick(targetId, modifiers)');
     expect(source).toContain('getAutomationGroupLatestSession(group)');
     expect(source).toContain('visibleSessionIds: visibleSessions.map((session) => session.id)');
     // 自动任务只是展示分组，展开后的每条运行仍须保留普通会话行的移动菜单与搜索高亮。
@@ -1125,7 +1128,7 @@ describe('automation-generated sessions', () => {
 
     expect(source).toContain('maker?.schedule');
     expect(source).toContain("event.type === 'session-bound'");
-    expect(source).toContain('sessionsStore.forceRefreshAll()');
+    expect(source).toContain('sessionsStore.forceRefreshAll(');
   });
 
   it('does not clear automation conversation attention just by browsing schedules', () => {

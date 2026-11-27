@@ -251,10 +251,11 @@ describe('prepareTaskWorktree', () => {
   const caller = { workingDir: BASE, status: 'active', source: 'desktop' };
 
   it('binds a new worktree to the calling task, branched from the fresh remote default', async () => {
-    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main' }));
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main', fetched: true }));
     const deps = makeDeps({ resolveFreshSource });
     const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', caller });
     expect(res).toMatchObject({ ok: true, created: true, meta: { sessionId: 'task-1' } });
+    expect(res).not.toHaveProperty('staleBaseReason');
     expect(resolveFreshSource).toHaveBeenCalledWith(BASE, 'main');
     expect(deps.createWorktree).toHaveBeenCalledWith({
       sessionId: 'task-1',
@@ -262,6 +263,18 @@ describe('prepareTaskWorktree', () => {
       name: 'fresh-name',
       sourceBranch: 'refs/remotes/origin/main',
     });
+  });
+
+  // 拉取失败时退用本地引用曾经静默进行,Agent 以为是最新代码就开工;结果必须带上原因。
+  // 没有 remote 的纯本地仓库无所谓落后,不能误报。
+  it.each([
+    ['a failed fetch', 'stale-remote-ref', 'stale-remote-ref'],
+    ['a repository without a remote', 'no-remote', undefined],
+  ] as const)('reports the stale base for %s only when the base may be behind', async (_label, reason, expected) => {
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main', fetched: false, reason }));
+    const res = await prepareTaskWorktree(makeDeps({ resolveFreshSource }), { sessionId: 'task-1', caller });
+    expect(res).toMatchObject({ ok: true, created: true });
+    expect((res as { staleBaseReason?: string }).staleBaseReason).toBe(expected);
   });
 
   it('returns the existing binding instead of creating a second worktree', async () => {
@@ -295,6 +308,56 @@ describe('prepareTaskWorktree', () => {
     });
     expect(res.ok).toBe(true);
     expect(deps.detectCwd).toHaveBeenCalledWith(repo);
+  });
+
+  // #9513:显式基线分支。默认路径取远端默认分支,给出 base_ref 时按该引用切出,
+  // 且引用解析不了必须报错而不是回退默认分支。
+  it('branches from the explicit base ref instead of the remote default branch', async () => {
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main' }));
+    const deps = makeDeps({ resolveFreshSource });
+    const res = await prepareTaskWorktree(deps, {
+      sessionId: 'task-1',
+      caller,
+      baseRef: 'release/2.x',
+    });
+    expect(res).toMatchObject({ ok: true, created: true, meta: { sourceBranch: 'release/2.x' } });
+    expect(deps.createWorktree).toHaveBeenCalledWith({
+      sessionId: 'task-1',
+      baseRepo: BASE,
+      name: 'fresh-name',
+      sourceBranch: 'release/2.x',
+    });
+    expect(resolveFreshSource).not.toHaveBeenCalled();
+  });
+
+  it('fails instead of falling back to the default branch when the base ref does not resolve', async () => {
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'refs/remotes/origin/main' }));
+    const deps = makeDeps({
+      resolveFreshSource,
+      createWorktree: vi.fn(async () => ({
+        ok: false as const,
+        error: { kind: 'unknown' as const, message: '源分支 "release/2.x" 不存在' },
+      })),
+    });
+    const res = await prepareTaskWorktree(deps, {
+      sessionId: 'task-1',
+      caller,
+      baseRef: 'release/2.x',
+    });
+    expect(res).toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE' });
+    expect(res.ok === false && res.message).toContain('release/2.x');
+    expect(resolveFreshSource).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['option injection', '-upload-pack=evil'],
+    ['empty', '   '],
+    ['control character', 'release/2.x\u0000'],
+  ] as const)('rejects a malformed base ref (%s) without touching git', async (_label, baseRef) => {
+    const deps = makeDeps();
+    const res = await prepareTaskWorktree(deps, { sessionId: 'task-1', caller, baseRef });
+    expect(res).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(deps.createWorktree).not.toHaveBeenCalled();
   });
 
   it('reports a directory that is not a git repository as WORKTREE_UNAVAILABLE', async () => {

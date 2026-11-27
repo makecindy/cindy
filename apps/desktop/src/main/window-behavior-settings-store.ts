@@ -1,3 +1,4 @@
+import { validateAdditionalSettingsOverrides } from '../shared/settingsEditableCatalog.js';
 /**
  * window-behavior-settings-store —— main 进程对窗口交互行为开关的持久化。
  *
@@ -30,7 +31,21 @@ import {
 } from '../shared/windowBehavior.js';
 import { isAwayGuardDelaySeconds, type AwayGuardDelaySeconds } from '../shared/awayGuard.js';
 
+import { inspectSettingsFile, isSettingBoolean, validateOptionalSettingsFields } from './maker-host/settings-inspection.js';
+
 const log = desktopMakerLogger.child('window-behavior-settings-store');
+
+export function inspectWindowBehaviorSettings() {
+  return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize,
+    validate: (raw) => validateOptionalSettingsFields(raw, {
+      swallowActivationClick: isSettingBoolean,
+      windowsCloseBehavior: (value) => value === null || isWindowsCloseBehavior(value),
+      linuxCloseBehavior: (value) => value === null || isLinuxCloseBehavior(value),
+      awayGuard: isSettingBoolean,
+      awayGuardDelaySeconds: (value) => value === null || isAwayGuardDelaySeconds(value),
+    }),
+  });
+}
 
 export interface WindowBehaviorSettings {
   swallowActivationClick: boolean;
@@ -74,6 +89,7 @@ function normalize(raw: unknown): WindowBehaviorSettings {
 }
 
 const store = createOverrideSettingsFile<WindowBehaviorSettings>({
+  validateOverrides: raw => validateAdditionalSettingsOverrides('linuxWindow', raw),
   filePath: settingsFilePath,
   defaults: DEFAULTS,
   normalize,
@@ -116,3 +132,5 @@ export const __testing = { normalize };
 // The away guard needs this computer's own Accessibility grant, like remote desktop,
 // so it is turned on per computer instead of being copied over.
 export const windowBehaviorPortableSettings = portableOverrideSettings(store, { omitKeys: ['awayGuard'] });
+/** Internal Host settings adapter; no new IPC or persistence location. */
+export function getWindowBehaviorSettingsStore() { return store; }

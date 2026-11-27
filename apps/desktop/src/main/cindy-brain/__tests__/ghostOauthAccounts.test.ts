@@ -13,9 +13,16 @@ import {
   GhostOauthAccountManager,
   missingAuthScopes,
   type GhostOauthDecl,
+  type GhostOauthAccountManagerDeps,
   type GhostOauthVault,
 } from '../ghostOauthAccounts.js';
 import type { GhostOauthAvatarHop } from '../ghostOauthFlow.js';
+import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
+
+const createAccountReuseIpc = createGhostProductionCallbacks<{
+  list(event: { trusted: boolean }, id: string): unknown;
+  change(event: { trusted: boolean }, id: string, request: unknown): Promise<{ ok: boolean }>;
+}>({ callbacks: { list: ['ipcMain.handle', 'ghosts:reusable-accounts'], change: ['ipcMain.handle', 'ghosts:reuse-account'] } });
 
 /** invalid_grant 路径的即时延时假体(不注入会真等 2 秒拖慢用例)。 */
 const instantSleep = async (): Promise<void> => {};
@@ -129,6 +136,205 @@ function oauthManifestWithoutBuiltinClient(): GhostManifest {
   if (secret?.source === 'oauth' && secret.oauth) delete secret.oauth.clientId;
   return manifest;
 }
+
+// Tier 1: existing OAuth tests only cover per-plugin token storage. Delegated
+// accounts must refresh at the original owner and immediately observe removal.
+describe('reuse of owner-selected existing OAuth accounts', () => {
+  function setup(withMutationLock?: GhostOauthAccountManagerDeps['withMutationLock']) {
+    const vault = seededVault('source-refresh');
+    const consumer = 'consumer-plugin';
+    const sourceManifest = oauthManifest('source-client');
+    const consumerManifest = { ...oauthManifest('different-client'), id: consumer, name: 'Consumer' };
+    let available = true;
+    const fetchImpl = vi.fn(async () => jsonResponse({ access_token: 'source-access', token_type: 'Bearer', expires_in: 3600 }));
+    const connectionSource = vi.fn((id: string) => id === consumer ? { instanceKey: consumer, name: 'Consumer', manifest: consumerManifest }
+      : id === GHOST && available ? { instanceKey: GHOST, name: 'Source', manifest: sourceManifest } : null);
+    const connectionSources = vi.fn(() => [{ instanceKey: consumer, name: 'Consumer', manifest: consumerManifest },
+      ...(available ? [{ instanceKey: GHOST, name: 'Source', manifest: sourceManifest }] : [])]);
+    const mgr = new GhostOauthAccountManager({ vault, fetchImpl: fetchImpl as typeof fetch, openExternal: vi.fn(),
+      connectionSource, connectionSources, withMutationLock,
+    });
+    const selection = { instanceKey: GHOST, secretKey: KEY, accountId: 'acc-1' };
+    return { mgr, vault, fetchImpl, connectionSource, connectionSources, consumer, sourceManifest, consumerManifest, selection,
+      hideSource: () => { available = false; } };
+  }
+
+  // #10130 / 4561806989, unit: functional reuse tests missed catalogue IO on
+  // each token/stream guard. The real manager must query only exact instances,
+  // still observe revocation, and leave ordinary OAuth on its original path.
+  it('resolves and rechecks tokens without enumerating the source catalogue', async () => {
+    const h = setup();
+    const decl = h.consumerManifest.network!.secrets![0]!.oauth!;
+    expect(h.mgr.listReusableAccounts(h.consumer, KEY, decl)).toHaveLength(1);
+    expect(await h.mgr.reuseAccount(h.consumer, KEY, decl, h.selection)).toMatchObject({ ok: true });
+    h.connectionSources.mockClear(); h.connectionSource.mockClear();
+    const token = await h.mgr.getFreshAccessToken(h.consumer, KEY, decl);
+    expect(token).toMatchObject({ ok: true, reused: true });
+    if (!token.ok) return;
+    for (let i = 0; i < 3; i++) token.assertCurrent?.();
+    expect(h.connectionSources).not.toHaveBeenCalled();
+    expect(h.connectionSource).toHaveBeenCalledWith(h.consumer);
+    expect(h.connectionSource).toHaveBeenCalledWith(GHOST);
+    h.hideSource();
+    expect(() => token.assertCurrent?.()).toThrow('OAUTH_REFERENCE_CHANGED');
+    expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: false, error: 'AUTH_EXPIRED' });
+    expect(h.connectionSources).not.toHaveBeenCalled();
+    h.connectionSource.mockClear();
+    expect(await h.mgr.getFreshAccessToken(GHOST, KEY, h.sourceManifest.network!.secrets![0]!.oauth!)).toMatchObject({ ok: true });
+    expect(h.connectionSource).not.toHaveBeenCalled();
+    expect(h.connectionSources).not.toHaveBeenCalled();
+  });
+
+  it('stores a reference without another confirmation, reuses the source refresh path, and forwards 401 invalidation', async () => {
+    const h = setup();
+    const decl = h.consumerManifest.network!.secrets![0]!.oauth!;
+    expect(h.mgr.listReusableAccounts(h.consumer, KEY, decl)).toMatchObject([{ instanceKey: GHOST, secretKey: KEY, accountId: 'acc-1', label: 'a@b.com' }]);
+    const connected = await h.mgr.reuseAccount(h.consumer, KEY, decl, h.selection);
+    expect(connected).toMatchObject({ ok: true, account: { reused: true } });
+    expect(h.mgr.clientConfigured(h.consumer, KEY, decl)).toBe(true);
+    const first = await h.mgr.getFreshAccessToken(h.consumer, KEY, decl);
+    expect(first).toMatchObject({ ok: true, accessToken: 'source-access', reused: true });
+    expect(h.fetchImpl).toHaveBeenCalledOnce();
+    if (!first.ok) return;
+    h.mgr.invalidateAccessToken(h.consumer, KEY, first.accountId);
+    expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: true });
+    expect(h.fetchImpl).toHaveBeenCalledTimes(2);
+    expect(await h.mgr.getNodeAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: false, error: 'HOST_INJECTION_REQUIRED' });
+    expect(await h.mgr.getNodeAccessToken(GHOST, KEY, h.sourceManifest.network!.secrets![0]!.oauth!)).toMatchObject({ ok: true, accessToken: 'source-access' });
+    const consumerData = [...h.vault.data].filter(([key]) => key.startsWith(h.consumer + '\u0000'));
+    expect(JSON.stringify(consumerData)).not.toMatch(/source-refresh|source-access|csec/);
+    expect(h.vault.read(GHOST, KEY + '-rt-acc-1')).toBe('source-refresh');
+    h.hideSource();
+    expect(() => first.assertCurrent?.()).toThrow('OAUTH_REFERENCE_CHANGED');
+    expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: false, error: 'AUTH_EXPIRED' });
+    expect(h.fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('moves only incoming reused OAuth rows with source archival and removes them on uninstall', async () => {
+    const h = setup();
+    const decl = h.consumerManifest.network!.secrets![0]!.oauth!;
+    expect(await h.mgr.reuseAccount(h.consumer, KEY, decl, h.selection)).toMatchObject({ ok: true });
+    const targets = [{ instanceKey: h.consumer, keys: [KEY + '-accounts'] }];
+    await h.mgr.relocateSourceReferences(GHOST, 'archive-source', targets);
+    expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: false, error: 'AUTH_EXPIRED' });
+    await h.mgr.relocateSourceReferences('archive-source', GHOST, targets);
+    expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: true, accessToken: 'source-access' });
+    await h.mgr.relocateSourceReferences(GHOST, null, targets);
+    expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: false, error: 'NO_ACCOUNT' });
+    expect(h.vault.read(GHOST, KEY + '-rt-acc-1')).toBe('source-refresh');
+    expect(await h.mgr.getFreshAccessToken(GHOST, KEY, h.sourceManifest.network!.secrets![0]!.oauth!)).toMatchObject({ ok: true });
+  });
+
+  // Unit regression: a strict read error used to block uninstall before the
+  // consumer lock could retire the unreadable manifest. Archive stays strict.
+  it('retires an unreadable manifest under the consumer lock only on uninstall', async () => {
+    let held = false;
+    const h = setup(async (_id, run) => {
+      held = true;
+      try { return await run(); }
+      finally { held = false; }
+    });
+    const decl = h.consumerManifest.network!.secrets![0]!.oauth!;
+    expect(await h.mgr.reuseAccount(h.consumer, KEY, decl, h.selection)).toMatchObject({ ok: true });
+    const key = KEY + '-accounts';
+    const readError = new Error('test unreadable manifest');
+    h.vault.readStrict = () => { throw readError; };
+    h.vault.readForUninstall = (id, storageKey) => {
+      expect(held).toBe(true);
+      h.vault.remove(id, storageKey);
+      return null;
+    };
+    const targets = [{ instanceKey: h.consumer, keys: [key] }];
+    await expect(h.mgr.relocateSourceReferences(GHOST, 'archive-source', targets)).rejects.toBe(readError);
+    expect(h.vault.read(h.consumer, key)).not.toBeNull();
+    await h.mgr.relocateSourceReferences(GHOST, null, targets);
+    expect(h.vault.read(h.consumer, key)).toBeNull();
+    expect(await h.mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: false, error: 'NO_ACCOUNT' });
+  });
+
+  it('does not bind to an incompatible service', async () => {
+    const h = setup();
+    const secret = h.consumerManifest.network!.secrets![0]!;
+    secret.inject.hosts = ['outside.example.com'];
+    expect(h.mgr.listReusableAccounts(h.consumer, KEY, secret.oauth!)).toEqual([]);
+    expect(await h.mgr.reuseAccount(h.consumer, KEY, secret.oauth!, h.selection)).toMatchObject({ ok: false });
+    expect(h.mgr.listAccounts(h.consumer, KEY, secret.oauth!)).toEqual([]);
+  });
+
+  it('disconnects only the consumer reference and preserves the original account', async () => {
+    const h = setup();
+    const decl = h.consumerManifest.network!.secrets![0]!.oauth!;
+    const connected = await h.mgr.reuseAccount(h.consumer, KEY, decl, h.selection);
+    expect(connected.ok).toBe(true);
+    if (!connected.ok) return;
+    h.mgr.disconnectAccount(h.consumer, KEY, connected.account.id);
+    expect(h.mgr.listAccounts(h.consumer, KEY, decl)).toEqual([]);
+    expect(h.mgr.listAccounts(GHOST, KEY)).toHaveLength(1);
+    expect(h.vault.read(GHOST, KEY + '-rt-acc-1')).toBe('source-refresh');
+  });
+
+  it('fences source removal while waiting for the mutation lock and during token refresh', async () => {
+    let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    const consent = setup(async (_id, task) => { enter(); await ready; return task(); });
+    const decl = consent.consumerManifest.network!.secrets![0]!.oauth!;
+    const binding = consent.mgr.reuseAccount(consent.consumer, KEY, decl, consent.selection);
+    await entered;
+    consent.hideSource(); release();
+    expect(await binding).toMatchObject({ ok: false });
+    expect(consent.mgr.listAccounts(consent.consumer, KEY)).toEqual([]);
+
+    const h = setup();
+    const consumerDecl = h.consumerManifest.network!.secrets![0]!.oauth!;
+    expect(await h.mgr.reuseAccount(h.consumer, KEY, consumerDecl, h.selection)).toMatchObject({ ok: true });
+    let finish!: (value: Response) => void;
+    h.fetchImpl.mockImplementation(() => new Promise<Response>(resolve => { finish = resolve; }));
+    const fetching = h.mgr.getFreshAccessToken(h.consumer, KEY, consumerDecl);
+    expect(h.fetchImpl).toHaveBeenCalledOnce();
+    h.hideSource(); finish(jsonResponse({ access_token: 'late-source-access', expires_in: 3600 }));
+    expect(await fetching).toMatchObject({ ok: false, error: 'AUTH_EXPIRED' });
+  });
+
+  it('refreshes a reused broker account only under its original authorized installation', async () => {
+    const h = setup();
+    h.sourceManifest.network!.secrets![0]!.oauth!.tokenBroker = 'google';
+    const refresh = vi.fn(async () => ({ ok: true as const, bundle: { accessToken: 'broker-access', refreshToken: null, expiresAt: Date.now() + 3600000, grantedScope: null } }));
+    const mgr = new GhostOauthAccountManager({ vault: h.vault, fetchImpl: vi.fn(), openExternal: vi.fn(),
+      connectionSource: h.connectionSource,
+      connectionSources: () => [{ instanceKey: GHOST, name: 'Source', manifest: h.sourceManifest }, { instanceKey: h.consumer, name: 'Consumer', manifest: h.consumerManifest }],
+      isTokenBrokerAuthorized: id => id === GHOST,
+      broker: { refresh, exchange: vi.fn() },
+    });
+    const decl = h.consumerManifest.network!.secrets![0]!.oauth!;
+    expect(await mgr.reuseAccount(h.consumer, KEY, decl, h.selection)).toMatchObject({ ok: true });
+    expect(await mgr.getFreshAccessToken(h.consumer, KEY, decl)).toMatchObject({ ok: true, accessToken: 'broker-access', reused: true });
+    expect(refresh).toHaveBeenCalledWith('google', { refreshToken: 'source-refresh' });
+  });
+
+  it('permits only the trusted Cindy UI and keeps reference revocation available while disabled', async () => {
+    const h = setup();
+    const ghost = { manifest: h.consumerManifest, enabled: true, approval: { state: 'approved' } };
+    const handlers = createAccountReuseIpc({
+      assertTrustedAppRendererEvent: (event: { trusted: boolean }) => { if (!event.trusted) throw new Error('UNTRUSTED'); },
+      isGhostInstanceId: () => true, requireGhostAvailableForActiveSession: () => {}, findGhostForInstanceId: () => ghost,
+      getGhostOauthAccountManager: () => h.mgr, getGhostSetupChangeBus: () => ({ emit() {} }),
+      withActiveOwnerGhostOauthMutationLock: (_id: string, task: () => unknown) => Promise.resolve(task()),
+      throwIpcError: (code: string) => { throw new Error(code); },
+    });
+    expect(() => handlers.list({ trusted: false }, h.consumer)).toThrow('UNTRUSTED');
+    await expect(handlers.change({ trusted: false }, h.consumer, { kind: 'connect', secretKey: KEY, source: h.selection })).rejects.toThrow('UNTRUSTED');
+    expect(await handlers.change({ trusted: true }, h.consumer, { kind: 'connect', secretKey: KEY, source: { ...h.selection, extra: 'untrusted-field' } })).toEqual({ ok: true });
+    const list = handlers.list({ trusted: true }, h.consumer) as Array<{ accounts: { id: string }[] }>;
+    const accountId = list[0]!.accounts[0]!.id;
+    expect(JSON.stringify(list)).not.toMatch(/source-refresh|source-access|untrusted-field/);
+    ghost.enabled = false;
+    expect(await handlers.change({ trusted: true }, h.consumer, { kind: 'disconnect', secretKey: KEY, accountId })).toEqual({ ok: true });
+    expect(h.mgr.listAccounts(h.consumer, KEY)).toEqual([]);
+    expect(h.mgr.listAccounts(GHOST, KEY)).toHaveLength(1);
+    await expect(handlers.change({ trusted: true }, h.consumer, { kind: 'connect', secretKey: KEY, source: h.selection })).rejects.toThrow('PERMISSION_DENIED');
+  });
+});
 
 describe('插件 OAuth clientId 迁移', () => {
   it('仅内置 clientId 变化时标记迁移过期，保留且不再消费旧 refresh token', async () => {
@@ -1723,6 +1929,11 @@ describe('getFreshAccessToken', () => {
     expect(a).toMatchObject({ ok: true, accessToken: 'at-sf' });
     expect(b).toMatchObject({ ok: true, accessToken: 'at-sf' });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    // #10130 / 4577903614: both the refresh owner and its single-flight joiner
+    // must invalidate their previously returned credentials after disconnect.
+    expect(mgr.disconnectAccount(GHOST, KEY, 'acc-1')).toBe(true);
+    expect(() => a.ok && a.assertCurrent?.()).toThrow('OAUTH_ACCOUNT_CHANGED');
+    expect(() => b.ok && b.assertCurrent?.()).toThrow('OAUTH_ACCOUNT_CHANGED');
   });
 
   it('invalid_grant → AUTH_EXPIRED + 账号标 expired + rt 清除', async () => {
@@ -2157,6 +2368,56 @@ describe('tokenBroker 模式', () => {
     expect(exchange).toHaveBeenCalledTimes(1);
     // token 交换不直连 tokenUrl。
     expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain(BROKER_DECL.tokenUrl);
+  });
+
+  /*
+   * 测试价值:connectAccount(设置页与聊天卡共用的生产入口)对声明 deviceAuthorizationUrl
+   * 的插件必须把用户自填 client 与设备码端点交给设备码登录,并照常落库账号与 refresh token;
+   * 接线漏传时会静默退回 loopback 授权码流程,用户永远等不到回调。unit,假计时器 + 注入 fetch。
+   */
+  it('connect:声明设备码端点时走设备码登录,用自填 client 认证并落库账号', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const vault = memoryVault({
+        [`${KEY}-client-id`]: 'cli-device',
+        [`${KEY}-client-secret`]: 'device-secret',
+      });
+      const decl: GhostOauthDecl = {
+        authorizeUrl: 'https://accounts.example.com/authorize',
+        tokenUrl: 'https://accounts.example.com/token',
+        deviceAuthorizationUrl: 'https://accounts.example.com/device',
+        scopes: ['scope.a'],
+      };
+      const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        if (String(url) === decl.deviceAuthorizationUrl) {
+          expect(new URLSearchParams(String(init?.body)).get('client_id')).toBe('cli-device');
+          return jsonResponse({
+            device_code: 'dc-1',
+            user_code: 'ABCD-EFGH',
+            verification_uri_complete: 'https://accounts.example.com/verify?code=ABCD-EFGH',
+            interval: 1,
+          });
+        }
+        expect(String(url)).toBe(decl.tokenUrl);
+        expect(new URLSearchParams(String(init?.body)).get('client_secret')).toBe('device-secret');
+        return jsonResponse({ access_token: 'at-dev', refresh_token: 'rt-dev', expires_in: 7200 });
+      });
+      const openExternal = vi.fn();
+      const mgr = new GhostOauthAccountManager({
+        vault,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        openExternal,
+      });
+      const pending = mgr.connectAccount(GHOST, KEY, decl);
+      await vi.advanceTimersByTimeAsync(2_000);
+      const result = await pending;
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(openExternal).toHaveBeenCalledWith('https://accounts.example.com/verify?code=ABCD-EFGH');
+      expect(vault.read(GHOST, `${KEY}-rt-${result.account.id}`)).toBe('rt-dev');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('connect: missing first-party grant denies even an official-looking id', async () => {

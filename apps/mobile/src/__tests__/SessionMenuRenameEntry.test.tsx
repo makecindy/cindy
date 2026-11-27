@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
+const projectMove = vi.hoisted(() => ({ allowed: false, open: vi.fn(), parentClosed: vi.fn() }));
+vi.mock('@/session/SessionProjectMoveSheet', () => ({
+  sessionAllowsProjectMove: () => projectMove.allowed,
+  useSessionProjectMoveSheet: () => ({ ...projectMove, sheet: null }),
+}));
 vi.mock('@/session/TaskTags', () => ({ TaskTagsPanel: () => <div data-testid="session.testTags" /> }));
 vi.mock('@/session/SessionPrLinks', () => ({ SessionPrLinks: () => null }));
+vi.mock('@/session/SessionMenuPrLinks', () => ({ SessionMenuPrLinks: () => null }));
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
@@ -252,3 +258,24 @@ it("Worker details hide ordinary actions and wait for archive confirmation befor
     expect(props.onClose).toHaveBeenCalledOnce();
   } finally { await act(async () => root.unmount()); }
 });
+
+// Unit: connect the task-details entry to the same delayed move flow as the task list.
+it('opens project moving from task details after the menu closes', async () => {
+  projectMove.allowed = true;
+  projectMove.open.mockClear(); projectMove.parentClosed.mockClear();
+  const props = baseProps({ initialView: 'menu', tagDeviceId: 'computer-a' });
+  const { root, click } = await renderSheet(props);
+  try {
+    await click('session.moveToProject');
+    expect(projectMove.open).toHaveBeenCalledExactlyOnceWith(props.session, props.onClose, 'computer-a');
+    expect(projectMove.parentClosed).not.toHaveBeenCalled();
+    await act(async () => sheetLifecycle.closed?.());
+    expect(projectMove.parentClosed).toHaveBeenCalledOnce();
+  } finally {
+    projectMove.allowed = false;
+    await act(async () => root.unmount());
+  }
+});
+
+// These menu tests exercise the entry only; the project form owns native media dependencies.
+vi.mock('../session/ProjectSettingsSheet', () => ({ ProjectSettingsSheet: () => null }));

@@ -20,10 +20,28 @@ describe('working directory diagnostics scope', () => {
   });
 });
 
+describe('session start timing scope', () => {
+  it('allows only the numeric timing scope, not future children or the maker-ipc root', () => {
+    expect(isAllowedScope('session-start-timing')).toBe(true);
+    for (const scope of ['session-start-timing:detail', 'session-start-timing/x', 'r:session-start-timing', 'session-start', 'maker-ipc']) {
+      expect(isAllowedScope(scope)).toBe(false);
+    }
+  });
+});
+
 describe('memory usage scope', () => {
   it('allows only the numeric sample scope, not future children', () => {
     expect(isAllowedScope('memory-usage')).toBe(true);
     for (const scope of ['memory-usage:titles', 'memory-usage/heap', 'r:memory-usage', 'memory']) {
+      expect(isAllowedScope(scope)).toBe(false);
+    }
+  });
+});
+
+describe('remote desktop display backend scope', () => {
+  it('allows only the XWayland diagnostic, not the remote-desktop root or its other children', () => {
+    expect(isAllowedScope('remote-desktop:display-backend')).toBe(true);
+    for (const scope of ['remote-desktop', 'remote-desktop:controller', 'remote-desktop:display-backend/x', 'r:remote-desktop:display-backend']) {
       expect(isAllowedScope(scope)).toBe(false);
     }
   });

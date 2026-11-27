@@ -46,13 +46,14 @@ import {
   type BotGroupDetail,
   type BotGroupFailure,
   type BotGroupMessageView,
+  type BotGroupPlanView,
   type BotGroupRemoteActionId,
   type BotGroupRemoteChatData,
   type BotGroupSummary,
   type BotGroupThreadShareView,
 } from '../../shared/botGroupChat.js';
 import type { BotGroupChatService } from './botGroupChatService.js';
-import { botGroupActivityAt, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
+import { botGroupActivityAt, chatGroupMembership, projectBotGroupExecutionFailures } from '@cindy/maker-shared/botGroupPresentation';
 
 const FALLBACK_MESSAGES = 20;
 const FALLBACK_MESSAGE_CHARS = 280;
@@ -70,21 +71,6 @@ const COPY = {
   "zh-Hant-x-lzh": "群議",
   "zh-Hans-x-lzh": "群议",
 },
-  planning: {
-    en: '{name} is splitting the work…',
-    'zh-CN': '{name}正在安排…',
-    'zh-TW': '{name}正在安排…',
-    ja: '{name} が役割分担を考えています…',
-    ko: '{name} 님이 역할을 나누는 중…',
-
-  "es": "{name} está repartiendo el trabajo…",
-  "fr": "{name} répartit le travail…",
-  "de": "{name} teilt die Arbeit auf…",
-  "pt-PT": "{name} está a dividir o trabalho…",
-  "pt-BR": "{name} está dividindo o trabalho…",
-  "zh-Hant-x-lzh": "{name}方籌劃…",
-  "zh-Hans-x-lzh": "{name}方筹划…",
-},
   proposed: {
     en: '{name}: plan ready, waiting for you',
     'zh-CN': '{name}：安排好了，等你开始',
@@ -99,21 +85,6 @@ const COPY = {
   "pt-BR": "{name}: plano pronto, esperando por você",
   "zh-Hant-x-lzh": "{name}：籌劃已定，待君啟之",
   "zh-Hans-x-lzh": "{name}：筹划已定，待君启之",
-},
-  running: {
-    en: 'Step {step}/{total} · {name} is working',
-    'zh-CN': '分工 {step}/{total} · {name}正在做',
-    'zh-TW': '分工 {step}/{total} · {name}正在做',
-    ja: '分担 {step}/{total} · {name} が作業中',
-    ko: '분담 {step}/{total} · {name} 작업 중',
-
-  "es": "Paso {step}/{total} · {name} está trabajando",
-  "fr": "Étape {step}/{total} · {name} travaille",
-  "de": "Schritt {step}/{total} · {name} arbeitet",
-  "pt-PT": "Passo {step}/{total} · {name} está a trabalhar",
-  "pt-BR": "Etapa {step}/{total} · {name} está trabalhando",
-  "zh-Hant-x-lzh": "分工 {step}/{total} · {name}方行",
-  "zh-Hans-x-lzh": "分工 {step}/{total} · {name}方行",
 },
   stepDone: {
     en: '{name} is done — continue when ready',
@@ -205,6 +176,20 @@ const COPY = {
   "zh-Hant-x-lzh": "{name} 貼回一則話題之覆",
   "zh-Hans-x-lzh": "{name} 贴回一则话题之覆",
 },
+  externalBadge: {
+    en: 'External',
+    'zh-CN': '外部',
+    'zh-TW': '外部',
+    ja: '外部',
+    ko: '외부',
+    es: 'Externo',
+    fr: 'Externe',
+    de: 'Extern',
+    'pt-PT': 'Externo',
+    'pt-BR': 'Externo',
+    'zh-Hant-x-lzh': '外部',
+    'zh-Hans-x-lzh': '外部',
+  },
 } satisfies Record<string, Copy>;
 
 function fill(template: string, vars: Record<string, string | number>): string {
@@ -223,15 +208,12 @@ function groupRef(groupId: string): RemoteResourceRef {
   return { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: groupId };
 }
 
-/** Sidebar line for a group, the same states the desktop sidebar shows. */
+/** Sidebar line for a group, the same states the desktop sidebar shows.
+ *  In-progress executions stay inside the chat so the row keeps showing the latest message. */
 export function botGroupRemotePreview(group: BotGroupSummary): RemoteLocalizedText | string | undefined {
   const name = (botId: string | null) => group.members.find((member) => member.botId === botId)?.name ?? '';
-  if (group.planningBotId) return localized(COPY.planning, { name: name(group.planningBotId) });
   const plan = group.openPlan;
   if (plan?.status === 'proposed') return localized(COPY.proposed, { name: name(group.organizerBotId) });
-  if (plan?.status === 'running' && plan.currentStep !== null) {
-    return localized(COPY.running, { step: plan.currentStep + 1, total: plan.stepCount, name: plan.currentBotName ?? '' });
-  }
   if (plan?.status === 'waiting' && plan.currentBotName) {
     return localized(plan.currentStepStatus === 'failed' ? COPY.stepFailed : COPY.stepDone, { name: plan.currentBotName });
   }
@@ -250,20 +232,20 @@ export function botGroupRemotePreview(group: BotGroupSummary): RemoteLocalizedTe
 }
 
 export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem {
-  const busy = group.speakingBotIds.length > 0 || group.planningBotId !== null;
+  const activity = teammateGroupActivity(group);
   const preview = botGroupRemotePreview(group);
   return {
     ref: groupRef(group.id),
     display: {
       title: group.name,
-      teammateActivity: teammateGroupActivity(group),
+      teammateActivity: activity,
       subtitle: group.members.map((member) => member.name).join('、'),
       ...(preview ? { preview } : {}),
       timestamp: botGroupActivityAt(group),
       lastReplyAt: group.lastReplyAt,
       // Early local groups keep their read position on this computer (server groups on the Chat Server).
       ...(group.serverBacked ? {} : { lastReadAt: localGroupReadPosition(group.id) }),
-      ...(busy ? { generation: { phase: 'processing', startedAt: null } } : {}),
+      ...(group.external === true ? { badges: [{ tone: 'external', label: localized(COPY.externalBadge), accessibilityLabel: localized(COPY.externalBadge) }] } : {}),
     },
     links: group.members.map((member) => ({
       rel: BOT_GROUP_MEMBER_LINK_REL,
@@ -274,9 +256,10 @@ export function botGroupRemoteItem(group: BotGroupSummary): RemoteCollectionItem
       label: member.name,
     })),
     revision: JSON.stringify([
-      teammateGroupActivity(group).phase,
+      activity.phase,
       group.updatedAt,
       group.name,
+      group.external === true,
       group.members.map((member) => [member.botId, member.name, member.status]),
       group.organizerBotId,
       group.lastMessage?.createdAt ?? null,
@@ -301,13 +284,19 @@ function shareWithoutPaths(share: BotGroupThreadShareView): BotGroupThreadShareV
   return share.attachments.length > 0 ? { ...share, attachments: withoutPaths(share.attachments) } : share;
 }
 
+function canSetAutoContinue(detail: BotGroupDetail, plan: BotGroupPlanView): boolean {
+  return detail.serverBacked === true && detail.singleSpeaker === true && !detail.archived && !detail.dissolvedAt
+    && detail.openPlan?.id === plan.id && plan.kind === 'work' && plan.canManage === true
+    && typeof plan.autoContinue === 'boolean' && ['proposed', 'running', 'waiting'].includes(plan.status);
+}
+
 /** Host paths stay on the computer; the phone gets the folder name and attachment names only. */
 export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteChatData {
   return {
     ...detail,
     projectDir: null,
     projectDirName: detail.projectDir ? path.basename(detail.projectDir) : null,
-    plans: detail.plans.map((plan) => ({ ...plan, workDir: null })),
+    plans: detail.plans.map((plan) => ({ ...plan, workDir: null, canSetAutoContinue: canSetAutoContinue(detail, plan) })),
     // Older phones consume message views only; derive from this read's state here.
     messages: projectBotGroupExecutionFailures(detail.messages, detail.executionFailures).map((message) => {
       const view = message.attachments.length > 0 ? { ...message, attachments: withoutPaths(message.attachments) } : message;
@@ -316,11 +305,15 @@ export function botGroupRemoteChatData(detail: BotGroupDetail): BotGroupRemoteCh
     ...(detail.threadShareUpdates ? { threadShareUpdates: Object.fromEntries(Object.entries(detail.threadShareUpdates)
       .map(([id, share]) => [id, shareWithoutPaths(share)])) } : {}),
     supportsAttachments: true,
+    canStopAll: false,
+    supportsScopedStop: detail.serverBacked === true && detail.singleSpeaker === true,
     supportsReadReceipts: detail.serverBacked === true,
     ...(detail.serverBacked === true ? {} : { supportsLocalReadSync: true }),
     supportsPersonalMask: detail.serverBacked === true,
     supportsMemberRemoval: detail.serverBacked === true,
+    supportsOwnBotRemoval: detail.serverBacked === true,
     supportsSettingsManagement: detail.serverBacked === true,
+    ...(detail.serverBacked && detail.supportsGroupAssistant ? { supportsAssistantManagement: true } : {}),
   };
 }
 
@@ -553,6 +546,27 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           ownerService();
           return { result: receipt, effects: [] };
         }
+        case 'assistantDevice': {
+          const deviceId = input.deviceId;
+          if (!current.chatServer || typeof deviceId !== 'string' || !visibleGroup.assistantComputers?.some(device => device.id === deviceId))
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'DEVICE_UNAVAILABLE');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'assistantDevice', deviceId } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          return { effects: [{ kind: 'refresh-collection', collectionId: BOT_GROUP_REMOTE_COLLECTION_ID }] };
+        }
+        case 'set-assistant': {
+          if (!visibleGroup.serverBacked || !visibleGroup.supportsGroupAssistant || !current.chatServer)
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'UNSUPPORTED_OPERATION');
+          if (visibleGroup.archived || visibleGroup.dissolvedAt || !chatGroupMembership(visibleGroup).manager)
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'ROLE_REQUIRED');
+          if (typeof input.assistant !== 'boolean' || typeof input.expectedRevision !== 'number')
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'update', assistant: input.assistant,
+            expectedRevision: input.expectedRevision, name: visibleGroup.name, topic: visibleGroup.topic ?? '', description: visibleGroup.description ?? '' } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          result = { ok: true };
+          break;
+        }
         case 'notifications': {
           if (!visibleGroup.supportsNotificationSettings || !current.chatServer || !['all', 'mentions', 'none'].includes(String(input.mode)))
             throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
@@ -588,12 +602,15 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           result = await current.continueRound(groupId);
           break;
         case 'stop':
-          result = await current.stopRound(groupId);
+          if (input.scope !== undefined && input.scope !== 'all') throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          if (input.scope === 'all')
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'ROLE_REQUIRED');
+          result = await current.stopRound(groupId, input.scope);
           break;
         case 'update': {
           // A phone cannot point the group at a folder on this computer.
           const patch: Record<string, unknown> = { groupId };
-          for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId', 'allowMentionAllBots'] as const) {
+          for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId', 'allowMentionAllBots', 'allowMemberMentionAll', 'allowMemberInvites'] as const) {
             if (input[key] !== undefined) patch[key] = input[key];
           }
           if (input.expectedRevision !== undefined) patch.expectedRevision = input.expectedRevision;
@@ -650,6 +667,15 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
         case 'plan-retry':
           result = await current.retryPlan(planInput);
           break;
+        case 'plan-auto-continue': {
+          if (typeof input.autoContinue !== 'boolean') throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          const plan = visibleGroup.plans.find(plan => plan.id === input.planId);
+          if (!plan || !canSetAutoContinue(visibleGroup, plan)) throw new RemoteResourceRegistryError('INVALID_PARAMS', 'PERMISSION_DENIED');
+          if (input.expectedPlanRevision !== undefined && (!Number.isSafeInteger(input.expectedPlanRevision) || input.expectedPlanRevision !== plan.revision))
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'PRECONDITION_FAILED');
+          result = await current.updateGroup({ groupId, autoContinue: input.autoContinue });
+          break;
+        }
         case 'plan-edit':
           result = await current.editPlanStep({ ...planInput, position: input.position, action: input.action, botId: input.botId,
             ...(input.action === 'skip' ? { executionId: input.executionId } : {}) });

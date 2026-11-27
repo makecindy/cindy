@@ -53,6 +53,7 @@ import { deviceLinkMediaApiBaseUrl } from '@/device-link/selfHostedRelayRouting'
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import { formatRemoteError } from '@/device-link/remoteStatus';
+import { filePreviewFailureText } from '@/session/filePreviewFailure';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import type { FileBrowserReadFileResult, MobileMakerTransport } from '@/device-link/mobileMakerTransport';
@@ -78,6 +79,10 @@ import { prepareMobileHtmlPreview, type PrepareMobileHtmlPreview } from '@/sessi
 import { useHtmlSnapshot } from '@/session/useHtmlSnapshot';
 import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { MarkdownFileReader } from '@/session/MarkdownFileReader';
+import {
+  useMarkdownDocumentImages,
+  type MarkdownLightboxSession,
+} from '@/session/useMarkdownDocumentImages';
 import { RemoteMediaPlayerWebView } from '@/session/mediaPlayerWebView';
 import { NativeVideoPlayer } from '@/session/NativeVideoPlayer';
 import {
@@ -241,6 +246,7 @@ function RemoteFilePreviewContent() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [markdownLightbox, setMarkdownLightbox] = useState<MarkdownLightboxSession | null>(null);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 当前页是否处在「HTML 渲染态」——外层横滑要为它让路(见 pager 的 scrollEnabled)。
@@ -589,7 +595,7 @@ function RemoteFilePreviewContent() {
       if (run.cancelled) return;
       await sharing.shareAsync(localUri, { mimeType: mime });
     } catch (err) {
-      if (!run.cancelled) showNotice(formatRemoteError(err));
+      if (!run.cancelled) showNotice(filePreviewFailureText(err));
     } finally {
       if (exportRunRef.current === run) {
         exportRunRef.current = null;
@@ -602,6 +608,22 @@ function RemoteFilePreviewContent() {
     await Clipboard.setStringAsync(absolutePathOf(item.relPath));
     showNotice(t('files.preview.copiedPath'));
   }, [absolutePathOf, showNotice, t]);
+
+  const shareMarkdownLightboxImage = useCallback(async (
+    media: MobileMessageGalleryImage['payload']['media'],
+    displayUri: string,
+    mimeType?: string,
+  ) => {
+    const fileName = media.title || pathDisplayName(media.url.split('?')[0]) || 'image.png';
+    const mime = mimeType || media.mimeType || shareMimeForFileName(fileName);
+    const localUri = await downloadRemoteMediaShareTemp(displayUri, mime, fileName);
+    if (!localUri) {
+      showNotice(t('files.preview.downloadFailed'));
+      return;
+    }
+    const sharing = await import('expo-sharing');
+    await sharing.shareAsync(localUri, { mimeType: mime });
+  }, [showNotice, t]);
 
   const sendToSession = useCallback((item: FileBrowserGridItem) => {
     const merged = mergePathIntoComposerDraft(sessionId, item.relPath);
@@ -711,11 +733,7 @@ function RemoteFilePreviewContent() {
   return (
     <SafeAreaView edges={[]} style={styles.safeArea} testID="filePreview.screen">
       <FlatList
-        style={
-          siblings.length > 1
-            ? { marginBottom: 56 + chromeFrame.bottom }
-            : undefined
-        }
+        style={{ flex: 1 }}
         onLayout={(event) => setMeasuredPageWidth(Math.max(1, event.nativeEvent.layout.width))}
         data={siblings}
         getItemLayout={(_, index) => ({ index, length: pageWidth, offset: pageWidth * index })}
@@ -752,6 +770,10 @@ function RemoteFilePreviewContent() {
               prepareHtmlPreview={prepareHtmlPreview}
               item={item}
               maker={maker}
+              openLink={openLink}
+              presignGet={presignGet}
+              deleteResourceOssObject={deleteResourceOssObject}
+              sshMediaContext={sshMediaContext}
               onDownload={() => void downloadAndShare(item)}
               htmlBrowserActions={{
                 meta: [
@@ -786,6 +808,7 @@ function RemoteFilePreviewContent() {
               }}
               readTextFile={readTextFile}
               onOpenLightbox={setLightboxUrl}
+              onOpenMarkdownLightbox={setMarkdownLightbox}
               recoveryEpoch={recoveryEpoch}
               targetLine={item.relPath === (singleAbsPath ?? initialRelPath) ? targetLine : null}
               workdir={workdir}
@@ -814,6 +837,17 @@ function RemoteFilePreviewContent() {
             }}
           />
       ) : null}
+
+      {markdownLightbox ? (
+        <ImageLightbox
+          images={markdownLightbox.images}
+          initialUrl={markdownLightbox.initialUrl}
+          initialImageKey={markdownLightbox.initialImageKey}
+          onResolveRemoteMedia={markdownLightbox.onResolveRemoteMedia}
+          onShareImage={shareMarkdownLightboxImage}
+          onClose={() => setMarkdownLightbox(null)}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
@@ -829,11 +863,16 @@ function FilePreviewPage({
   item,
   htmlBrowserActions,
   maker,
+  openLink,
+  presignGet,
+  deleteResourceOssObject,
+  sshMediaContext,
   onDownload,
   onHtmlPanChange,
   onMarkdownPagerChange,
   onMarkdownPageSwipe,
   onOpenLightbox,
+  onOpenMarkdownLightbox,
   onQuoteSelection,
   readTextFile,
   recoveryEpoch,
@@ -848,13 +887,18 @@ function FilePreviewPage({
   prepareHtmlPreview: PrepareMobileHtmlPreview;
   item: FileBrowserGridItem;
   htmlBrowserActions: HtmlBrowserActions;
-  maker: Pick<MobileMakerTransport, 'fileBrowser'>;
+  maker: Pick<MobileMakerTransport, 'fileBrowser' | 'fetchRemoteMedia'>;
+  openLink(deviceId: string): Promise<unknown>;
+  presignGet(ossKey: string): Promise<MobileRemoteMediaPresignResult>;
+  deleteResourceOssObject(ossKey: string): void;
+  sshMediaContext: RemoteMediaSshContext | null;
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,仅文本页产出)。 */
   onHtmlPanChange?: (key: string, wants: boolean) => void;
   onMarkdownPagerChange?: (key: string, wants: boolean) => void;
   onMarkdownPageSwipe?: (key: string, direction: 'previous' | 'next') => void;
   onOpenLightbox(url: string): void;
+  onOpenMarkdownLightbox(session: MarkdownLightboxSession): void;
   /** chat-text-quote:markdown 渲染态的选中引用回调(仅文本页消费)。 */
   onQuoteSelection?: (text: string) => void;
   readTextFile(relPath: string, signal?: AbortSignal): Promise<FileBrowserReadFileResult>;
@@ -869,7 +913,7 @@ function FilePreviewPage({
   const insets = useSafeAreaInsets();
   const chromeFrame = usePreviewChromeFrame();
   const contentPadding = {
-    paddingTop: insets.top + 64,
+    paddingTop: chromeFrame.documentContentTop,
     paddingBottom: insets.bottom + spacing.xs,
     paddingLeft: insets.left,
     paddingRight: insets.right,
@@ -910,11 +954,17 @@ function FilePreviewPage({
         active={active}
         prepareHtmlPreview={prepareHtmlPreview}
         item={item}
+        maker={maker}
+        openLink={openLink}
+        presignGet={presignGet}
+        deleteResourceOssObject={deleteResourceOssObject}
+        sshMediaContext={sshMediaContext}
         htmlBrowserActions={htmlBrowserActions}
         onDownload={onDownload}
         onHtmlPanChange={onHtmlPanChange}
         onMarkdownPagerChange={onMarkdownPagerChange}
         onMarkdownPageSwipe={onMarkdownPageSwipe}
+        onOpenMarkdownLightbox={onOpenMarkdownLightbox}
         onQuoteSelection={onQuoteSelection}
         readTextFile={readTextFile}
         targetLine={targetLine}
@@ -1090,6 +1140,7 @@ function PdfPreviewPage({
   workdir: string;
 }) {
   const insets = useSafeAreaInsets();
+  const chromeFrame = usePreviewChromeFrame();
   const model = /\.(glb|gltf)$/i.test(item.relPath);
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
@@ -1181,7 +1232,7 @@ function PdfPreviewPage({
   return (
     <View
       style={[styles.pdfView,
-        !model && { paddingTop: insets.top + 64, paddingBottom: insets.bottom },
+        !model && { paddingTop: chromeFrame.documentContentTop, paddingBottom: insets.bottom, paddingLeft: insets.left, paddingRight: insets.right },
       ]}>
     <>
         {model ? (
@@ -1205,11 +1256,17 @@ function TextPreviewPage({
   active,
   prepareHtmlPreview,
   item,
+  maker,
+  openLink,
+  presignGet,
+  deleteResourceOssObject,
+  sshMediaContext,
   htmlBrowserActions,
   onDownload,
   onHtmlPanChange,
   onMarkdownPagerChange,
   onMarkdownPageSwipe,
+  onOpenMarkdownLightbox,
   onQuoteSelection,
   readTextFile,
   targetLine,
@@ -1224,12 +1281,18 @@ function TextPreviewPage({
   /** 下载完整目录并返回受控网页预览,签名地址不进入页面。 */
   prepareHtmlPreview: PrepareMobileHtmlPreview;
   item: FileBrowserGridItem;
+  maker: Pick<MobileMakerTransport, 'fetchRemoteMedia'>;
+  openLink(deviceId: string): Promise<unknown>;
+  presignGet(ossKey: string): Promise<MobileRemoteMediaPresignResult>;
+  deleteResourceOssObject(ossKey: string): void;
+  sshMediaContext: RemoteMediaSshContext | null;
   htmlBrowserActions: HtmlBrowserActions;
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,见调用处说明)。 */
   onHtmlPanChange?: (key: string, wants: boolean) => void;
   onMarkdownPagerChange?: (key: string, wants: boolean) => void;
   onMarkdownPageSwipe?: (key: string, direction: 'previous' | 'next') => void;
+  onOpenMarkdownLightbox?: (session: MarkdownLightboxSession) => void;
   /** chat-text-quote:markdown 渲染态的选中引用回调(源码态暂不支持,见 PR 说明)。 */
   onQuoteSelection?: (text: string) => void;
   /** 屏级注入:readFile 带瞬断重试 + openLink(与列表/搜索/导出同路径)。 */
@@ -1248,7 +1311,7 @@ function TextPreviewPage({
   const chromeFrame = usePreviewChromeFrame();
   const browserTop = chromeFrame.top;
   const browserBottom = chromeFrame.bottom;
-  const browserContentInset = { top: richKind === "html" ? chromeFrame.contentTop : insets.top + 64, bottom: browserBottom + (richKind === 'html' ? HTML_BROWSER_CONTROL_SIZE : 0) + spacing.xs };
+  const browserContentInset = { top: richKind === "html" ? chromeFrame.contentTop : chromeFrame.documentContentTop, bottom: browserBottom + (richKind === 'html' ? HTML_BROWSER_CONTROL_SIZE : 0) + spacing.xs };
   const browserRef = useRef<WebView>(null);
   const [website, setWebsite] = useState<WebsiteVisit | null>(null);
   const [browserNavigation, setBrowserNavigation] = useState<{
@@ -1367,6 +1430,19 @@ function TextPreviewPage({
     return () => onMarkdownPagerChange?.(item.key, false);
   }, [item.key, markdownPagerWanted, onMarkdownPagerChange]);
 
+  const markdownImages = useMarkdownDocumentImages({
+    enabled: markdownPagerWanted,
+    markdown: state.status === 'ready' ? (state.content ?? '') : '',
+    docAbsPath: absolutePathOf(item.relPath),
+    versionMs: item.mtimeMs,
+    deviceId,
+    maker,
+    openLink,
+    presignGet,
+    deleteOssObject: deleteResourceOssObject,
+    ssh: sshMediaContext,
+  });
+
   if (website) return visible ? (
       <HtmlWebsiteBrowser
     visit={website}
@@ -1446,6 +1522,13 @@ function TextPreviewPage({
             markdown={ready?.content ?? ''}
             viewportInsets={{ ...browserContentInset, top: clipped ? 0 : browserContentInset.top, left: insets.left, right: insets.right }}
             onPageSwipe={onMarkdownPageSwipe ? (direction) => onMarkdownPageSwipe(item.key, direction) : undefined}
+            onImagePress={onOpenMarkdownLightbox
+              ? (imageIndex) => {
+                  const lightboxSession = markdownImages.buildLightboxSession(imageIndex);
+                  if (lightboxSession) onOpenMarkdownLightbox(lightboxSession);
+                }
+              : undefined}
+            resolvedImages={markdownImages.resolvedImages}
             onQuoteSelection={onQuoteSelection}
             targetLine={targetLine}
             testID="filePreview.markdownRendered"
@@ -1566,11 +1649,13 @@ function ImagePreviewPage({
     if (!active || requestedRef.current || !workdir) return undefined;
     requestedRef.current = true;
     let cancelled = false;
+    let completed = false;
     setFailure(null);
-    void exportToUrl(item.relPath, item.mtimeMs, { stream: false })
+    void exportToUrl(item.relPath, item.mtimeMs, { stream: false, isCancelled: () => cancelled })
       .then((url) => retainRemoteFilePreview(url, shareMimeForFileName(item.name), item.name))
       .then((source) => {
         if (cancelled) { source.release(); return; }
+        completed = true;
         releaseSourceRef.current?.();
         releaseSourceRef.current = source.release;
         setFullUrl(source.uri);
@@ -1578,10 +1663,13 @@ function ImagePreviewPage({
       .catch((err) => {
         if (cancelled) return;
         requestedRef.current = false; // 允许「重试」按钮/重进再次发起
-        setFailure(formatRemoteError(err));
+        setFailure(filePreviewFailureText(err));
       });
     return () => {
       cancelled = true;
+      // A pending request cancelled by paging or a transport refresh must be
+      // eligible to restart; otherwise the thumbnail remains forever.
+      if (!completed) requestedRef.current = false;
     };
   }, [active, attempt, exportToUrl, item.mtimeMs, item.name, item.relPath, workdir,
   ]);

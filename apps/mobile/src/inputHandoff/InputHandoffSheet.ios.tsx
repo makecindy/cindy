@@ -7,6 +7,7 @@
  */
 import { useRef, useState, type ReactNode } from "react";
 import { View, useWindowDimensions } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTranslation } from "react-i18next";
 import { Host } from "@expo/ui";
 import {
@@ -16,6 +17,7 @@ import {
   HStack,
   Image,
   RNHostView,
+  ScrollView,
   SecureField,
   Spacer,
   Text,
@@ -38,6 +40,11 @@ import {
   frame,
   keyboardType,
   lineLimit,
+  layoutPriority,
+  onGeometryChange,
+  presentationDetents,
+  scrollDismissesKeyboard,
+  useScrollGeometryChange,
   multilineTextAlignment,
   onSubmit,
   padding,
@@ -73,6 +80,8 @@ const sheetRow = (colors: { sheetActionSurface: string; sheetActionBorder: strin
   strokeBorder({ color: colors.sheetActionBorder, shape: "roundedRectangle", cornerRadius, style: { lineWidth: 1 } }),
 ];
 const FIELD_HEIGHT = 50;
+/** Window heights below this get the compact header. */
+const COMPACT_HEIGHT = 760;
 const BUTTON_HEIGHT = 52;
 
 export function InputHandoffSheet(props: InputHandoffSheetProps) {
@@ -83,6 +92,34 @@ export function InputHandoffSheet(props: InputHandoffSheetProps) {
   const remote = snapshot.remoteInput === true;
   const fieldsDisabled = busy || !remote;
   const fields = inputHandoffTextFields(snapshot);
+  const { height, width, fontScale } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const [bodySize, setBodySize] = useState({ width: 0, height: 0 });
+  const [headerSize, setHeaderSize] = useState({ width: 0, height: 0 });
+  const [footerSize, setFooterSize] = useState({ width: 0, height: 0 });
+  const geometry = useScrollGeometryChange((size) => {
+    setBodySize((previous) =>
+      previous.width === size.containerWidth &&
+      previous.height === size.contentHeight
+        ? previous
+        : { width: size.containerWidth, height: size.contentHeight },
+    );
+  });
+  // Native scroll geometry is local; the floating sheet scales global geometry.
+  const localHeight = (size: { width: number; height: number }) =>
+    size.height *
+    (bodySize.width && size.width ? bodySize.width / size.width : 1);
+  const contentHeight =
+    bodySize.height +
+    localHeight(headerSize) +
+    localHeight(footerSize) +
+    28 +
+    spacing.md +
+    2 * spacing.lg;
+  const sheetHeight = Math.min(
+    height * 0.86 - insets.bottom,
+    bodySize.width ? Math.ceil(contentHeight) : height * 0.86 - insets.bottom,
+  );
   const focusers = useRef(new Map<string, () => void>());
   const focusAfter = (id: string) => {
     const next = fields[fields.findIndex((f) => f.id === id) + 1];
@@ -98,109 +135,120 @@ export function InputHandoffSheet(props: InputHandoffSheetProps) {
           onPress: mode === "code" ? props.onDone : props.onSubmit,
         };
   // A QR step shows just the code; the whole window stays one tap away.
-  const quietPicture = !snapshot.command && !snapshot.agentPicture && (!snapshot.picture || mode === "qr");
+  const quietPicture = !snapshot.accountVerification && !snapshot.command && !snapshot.agentPicture && (!snapshot.picture || mode === "qr");
   return (
     <Host colorScheme={scheme} seedColor={colors.textPrimary} pointerEvents="none" style={{ position: "absolute" }}>
       <BottomSheet
         isPresented={visible}
-        fitToContents
         onIsPresentedChange={(open) => {
           if (!open && visible) onClose();
         }}
       >
-        <Group modifiers={[presentationDragIndicator("visible")]}>
+        {/* Reflow native focus after text size/orientation changes; in-memory drafts restore the fields. */}
+        <Group key={`${width}:${fontScale}`} modifiers={[presentationDragIndicator("visible"), presentationDetents([{ height: sheetHeight }])]}>
           <VStack spacing={spacing.lg} modifiers={[padding({ top: 28, leading: SIDE, trailing: SIDE, bottom: spacing.md })]}>
-            <SheetHeader snapshot={snapshot} />
-            {mode !== "fields" ? (
-              <Embedded>{embedded}</Embedded>
-            ) : (
-              <>
-                {embedded ? <Embedded>{embedded}</Embedded> : null}
-                <VStack spacing={spacing.md} alignment="leading">
-                  {snapshot.controls.map((control) =>
-                    control.kind === "note" ? (
-                      <HStack key={control.id} spacing={6} alignment="top">
-                        <Image systemName="exclamationmark.circle.fill" size={iconSize.sm} color={colors.statusError} />
-                        <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.errorText), frame({ maxWidth: Infinity, alignment: "leading" })]}>
-                          {control.text}
-                        </Text>
-                      </HStack>
-                    ) : (
-                      <SheetField
-                        key={`${props.stepKey}:${control.id}`}
-                        control={control}
-                        label={inputHandoffFieldLabel(control, t)}
-                        last={fields[fields.length - 1]?.id === control.id}
-                        disabled={fieldsDisabled}
-                        onChange={(value) => props.onChange(control.id, value)}
-                        onReturn={() => focusAfter(control.id)}
-                        registerFocus={(focus) => {
-                          if (focus) focusers.current.set(control.id, focus);
-                          else focusers.current.delete(control.id);
-                        }}
-                      />
-                    ),
-                  )}
-                </VStack>
-              </>
-            )}
-            {error ? (
-              <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.errorText), multilineTextAlignment("center"), frame({ maxWidth: Infinity })]}>
-                {error}
-              </Text>
-            ) : null}
-            {mode === "qr" && props.qr ? (
-              <QrActions qr={props.qr} busy={busy} onClose={onClose} onDone={snapshot.agentPicture ? props.onDone : undefined} />
-            ) : null}
-            {primary ? (
-              <VStack spacing={spacing.xs}>
-                <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary), multilineTextAlignment("center"), frame({ maxWidth: Infinity })]}>
-                  {t("interaction.inputHandoff.sheetNote")}
-                </Text>
-                <Button
-                  onPress={primary.onPress}
-                  modifiers={[buttonStyle("plain"), disabledModifier(primary.disabled), padding({ top: spacing.sm }), accessibilityLabel(primary.label)]}
-                >
-                  <Text
-                    modifiers={[
-                      font({ textStyle: "body", weight: "semibold" }),
-                      foregroundStyle(colors.ctaText),
-                      frame({ maxWidth: Infinity, minHeight: BUTTON_HEIGHT }),
-                      background(primary.disabled ? colors.textTertiary : colors.cta, shapes.capsule()),
-                      contentShape(shapes.capsule()),
-                    ]}
-                  >
-                    {busy ? t("interaction.inputHandoff.phase.working") : primary.label}
+            <VStack modifiers={[frame({ maxWidth: Infinity }), layoutPriority(1), onGeometryChange(setHeaderSize)]}>
+              {/* Short screens (iPhone SE, a folded iPhone Duo) drop the icon so the fields stay in view. */}
+              <SheetHeader snapshot={snapshot} compact={fields.length > 3 || width > height || height < COMPACT_HEIGHT || fontScale > 1.3} />
+            </VStack>
+            <ScrollView modifiers={[frame({ maxHeight: bodySize.height || Infinity }), scrollDismissesKeyboard("interactively"), ...(geometry ? [geometry] : [])]}>
+              <VStack spacing={spacing.lg} modifiers={[frame({ maxWidth: Infinity }), padding({ bottom: spacing.sm })]}>
+                <SheetContext snapshot={snapshot} />
+                {mode !== "fields" ? (
+                  <Embedded>{embedded}</Embedded>
+                ) : (
+                  <>
+                    {embedded ? <Embedded>{embedded}</Embedded> : null}
+                    <VStack spacing={spacing.md} alignment="leading">
+                      {snapshot.controls.map((control) =>
+                        control.kind === "note" ? (
+                          <HStack key={control.id} spacing={6} alignment="top">
+                            <Image systemName="exclamationmark.circle.fill" size={iconSize.sm} color={colors.statusError} />
+                            <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.errorText), frame({ maxWidth: Infinity, alignment: "leading" })]}>
+                              {control.text}
+                            </Text>
+                          </HStack>
+                        ) : (
+                          <SheetField
+                            key={`${props.stepKey}:${control.id}`}
+                            control={control}
+                            initialValue={props.draft[control.id] ?? ""}
+                            label={inputHandoffFieldLabel(control, t)}
+                            last={fields[fields.length - 1]?.id === control.id}
+                            disabled={fieldsDisabled}
+                            onChange={(value) => props.onChange(control.id, value)}
+                            onReturn={() => focusAfter(control.id)}
+                            registerFocus={(focus) => {
+                              if (focus) focusers.current.set(control.id, focus);
+                              else focusers.current.delete(control.id);
+                            }}
+                          />
+                        ),
+                      )}
+                    </VStack>
+                  </>
+                )}
+                {error ? (
+                  <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.errorText), multilineTextAlignment("center"), frame({ maxWidth: Infinity })]}>
+                    {error}
                   </Text>
-                </Button>
-                <Button onPress={onClose} modifiers={[buttonStyle("plain")]}>
-                  <Text
-                    modifiers={[
-                      font({ textStyle: "body", weight: "medium" }),
-                      foregroundStyle(colors.textPrimary),
-                      frame({ maxWidth: Infinity, minHeight: BUTTON_HEIGHT - 8 }),
-                      contentShape(shapes.rectangle()),
-                    ]}
-                  >
-                    {t("interaction.inputHandoff.action.close")}
-                  </Text>
-                </Button>
-              </VStack>
-            ) : null}
-            {quietPicture || props.onLiveView ? (
-              <HStack spacing={spacing.xl}>
-                <Spacer />
-                {mode === "qr" && props.qr?.view.text ? (
-                  <QuietLink
-                    label={t(props.qr.view.link ? "interaction.inputHandoff.qr.copyLink" : "interaction.inputHandoff.qr.copyText")}
-                    onPress={props.qr.onCopy}
-                  />
                 ) : null}
-                {quietPicture ? <QuietLink label={t("interaction.inputHandoff.action.picture")} disabled={busy} onPress={props.onPicture} /> : null}
-                {props.onLiveView ? <QuietLink label={t("interaction.inputHandoff.action.liveView")} onPress={props.onLiveView} /> : null}
-                <Spacer />
-              </HStack>
-            ) : null}
+              </VStack>
+            </ScrollView>
+            <VStack spacing={spacing.sm} modifiers={[layoutPriority(1), onGeometryChange(setFooterSize)]}>
+              {mode === "qr" && props.qr ? (
+                <QrActions qr={props.qr} busy={busy} onClose={onClose} onDone={snapshot.agentPicture ? props.onDone : undefined} />
+              ) : null}
+              {primary ? (
+                <VStack spacing={spacing.xs}>
+                  <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary), multilineTextAlignment("center"), frame({ maxWidth: Infinity }), fixedSize({ horizontal: false, vertical: true })]}>
+                    {t("interaction.inputHandoff.sheetNote")}
+                  </Text>
+                  <Button
+                    onPress={primary.onPress}
+                    modifiers={[buttonStyle("plain"), disabledModifier(primary.disabled), padding({ top: spacing.sm }), accessibilityLabel(primary.label)]}
+                  >
+                    <Text
+                      modifiers={[
+                        font({ textStyle: "body", weight: "semibold" }),
+                        foregroundStyle(colors.ctaText),
+                        frame({ maxWidth: Infinity, minHeight: BUTTON_HEIGHT }),
+                        background(primary.disabled ? colors.textTertiary : colors.cta, shapes.capsule()),
+                        contentShape(shapes.capsule()),
+                      ]}
+                    >
+                      {busy ? t("interaction.inputHandoff.phase.working") : primary.label}
+                    </Text>
+                  </Button>
+                  <Button onPress={onClose} modifiers={[buttonStyle("plain")]}>
+                    <Text
+                      modifiers={[
+                        font({ textStyle: "body", weight: "medium" }),
+                        foregroundStyle(colors.textPrimary),
+                        frame({ maxWidth: Infinity, minHeight: BUTTON_HEIGHT - 8 }),
+                        contentShape(shapes.rectangle()),
+                      ]}
+                    >
+                      {t("interaction.inputHandoff.action.close")}
+                    </Text>
+                  </Button>
+                </VStack>
+              ) : null}
+              {quietPicture || props.onLiveView ? (
+                <HStack spacing={spacing.xl}>
+                  <Spacer />
+                  {!snapshot.accountVerification && mode === "qr" && props.qr?.view.text ? (
+                    <QuietLink
+                      label={t(props.qr.view.link ? "interaction.inputHandoff.qr.copyLink" : "interaction.inputHandoff.qr.copyText")}
+                      onPress={props.qr.onCopy}
+                    />
+                  ) : null}
+                  {quietPicture ? <QuietLink label={t("interaction.inputHandoff.action.picture")} disabled={busy} onPress={props.onPicture} /> : null}
+                  {props.onLiveView ? <QuietLink label={t("interaction.inputHandoff.action.liveView")} onPress={props.onLiveView} /> : null}
+                  <Spacer />
+                </HStack>
+              ) : null}
+            </VStack>
           </VStack>
         </Group>
       </BottomSheet>
@@ -208,29 +256,39 @@ export function InputHandoffSheet(props: InputHandoffSheetProps) {
   );
 }
 
-function SheetHeader({ snapshot }: { snapshot: InputHandoffSnapshot }) {
-  const { t } = useTranslation();
+function SheetHeader({ snapshot, compact }: { snapshot: InputHandoffSnapshot; compact: boolean }) {
   const { colors } = useTheme();
   const place = inputHandoffPlace(snapshot.source);
   const kind = inputHandoffPlaceKind(snapshot);
   return (
     <VStack spacing={spacing.sm}>
-      <Image
+      {!compact ? <Image
         systemName={snapshot.qr === "scan" ? "qrcode" : kind === "web" ? "globe" : kind === "terminal" ? "terminal" : "macwindow"}
         size={iconSize.xl}
         color={colors.textPrimary}
         modifiers={[frame({ width: 60, height: 60 }), ...sheetRow(colors, radius.container)]}
-      />
-      <Text modifiers={[font({ textStyle: "title3", weight: "semibold" }), multilineTextAlignment("center"), padding({ top: spacing.xs })]}>
+      /> : null}
+      {/* Up to three full lines, never squeezed to one: the header stays bounded so the fields keep room to scroll. */}
+      <Text modifiers={[font({ textStyle: "title3", weight: "semibold" }), multilineTextAlignment("center"), lineLimit(3), fixedSize({ horizontal: false, vertical: true }), padding({ top: spacing.xs })]}>
         {snapshot.purpose}
       </Text>
       <HStack spacing={4}>
         {place.secure ? <Image systemName="lock.fill" size={iconSize.xs} color={colors.textSecondary} /> : null}
         <Text modifiers={[font({ textStyle: "subheadline" }), foregroundStyle(colors.textSecondary), lineLimit(1)]}>{place.label}</Text>
       </HStack>
+    </VStack>
+  );
+}
+
+function SheetContext({ snapshot }: { snapshot: InputHandoffSnapshot }) {
+  const { t } = useTranslation();
+  const { colors } = useTheme();
+  if (!snapshot.note && !snapshot.command && !inputHandoffWarnings(snapshot, t).length) return null;
+  return (
+    <VStack spacing={spacing.sm}>
       {snapshot.note ? (
         <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary), multilineTextAlignment("center")]}>
-          {t("interaction.inputHandoff.agentNote", { note: snapshot.note })}
+          {snapshot.accountVerification ? snapshot.note : t("interaction.inputHandoff.agentNote", { note: snapshot.note })}
         </Text>
       ) : null}
       {snapshot.command ? (
@@ -259,6 +317,7 @@ function SheetHeader({ snapshot }: { snapshot: InputHandoffSnapshot }) {
 
 function SheetField({
   control,
+  initialValue,
   label,
   last,
   disabled,
@@ -267,6 +326,7 @@ function SheetField({
   registerFocus,
 }: {
   control: InputHandoffTextControl;
+  initialValue: string;
   label: string;
   last: boolean;
   disabled: boolean;
@@ -277,7 +337,7 @@ function SheetField({
   const { t } = useTranslation();
   const { colors } = useTheme();
   // Shared by both field kinds, so revealing a password keeps what was typed.
-  const text = useNativeState("");
+  const text = useNativeState(initialValue);
   const [revealed, setRevealed] = useState(false);
   const secure = control.contentType === "password";
   const traits = swiftFieldTraits(control.contentType);
@@ -364,13 +424,16 @@ function QrActions({ qr, busy, onClose, onDone }: { qr: InputHandoffQrSheet; bus
   const { colors } = useTheme();
   const shown = qr.view.state === "shown";
   const link = qr.view.link;
+  const secondary = qr.verification
+    ? { label: t("interaction.inputHandoff.refreshVerification"), onPress: qr.verification.refresh }
+    : { label: t("interaction.inputHandoff.qr.share"), onPress: qr.onShare };
   const primary = link
     ? { label: t(link.web ? "interaction.inputHandoff.qr.open" : "interaction.inputHandoff.qr.openApp", { site: link.site }), onPress: qr.onOpen }
-    : { label: t("interaction.inputHandoff.qr.share"), onPress: qr.onShare };
-  const disabled = busy || !shown;
+    : secondary;
+  const disabled = busy || (!shown && (link !== null || !qr.verification));
   return (
     <VStack spacing={spacing.xs}>
-      {onDone ? null : (
+      {onDone || qr.verification ? null : (
         <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary), multilineTextAlignment("center"), frame({ maxWidth: Infinity }), fixedSize({ horizontal: false, vertical: true })]}>
           {t(link ? "interaction.inputHandoff.qr.hintLink" : "interaction.inputHandoff.qr.hint")}
         </Text>
@@ -394,7 +457,7 @@ function QrActions({ qr, busy, onClose, onDone }: { qr: InputHandoffQrSheet; bus
         </Text>
       </Button>
       {link ? (
-        <Button onPress={qr.onShare} modifiers={[buttonStyle("plain"), disabledModifier(disabled), padding({ top: spacing.xs })]}>
+        <Button onPress={secondary.onPress} modifiers={[buttonStyle("plain"), disabledModifier(qr.verification ? busy : disabled), padding({ top: spacing.xs })]}>
           <Text
             modifiers={[
               font({ textStyle: "body", weight: "medium" }),
@@ -405,7 +468,7 @@ function QrActions({ qr, busy, onClose, onDone }: { qr: InputHandoffQrSheet; bus
               contentShape(shapes.capsule()),
             ]}
           >
-            {t("interaction.inputHandoff.qr.share")}
+            {secondary.label}
           </Text>
         </Button>
       ) : null}
@@ -430,7 +493,7 @@ function QrActions({ qr, busy, onClose, onDone }: { qr: InputHandoffQrSheet; bus
           </Text>
         </Button>
       ) : null}
-      <Button onPress={onClose} modifiers={[buttonStyle("plain")]}>
+      <Button onPress={qr.verification?.cancel ?? onClose} modifiers={[buttonStyle("plain"), disabledModifier(!!qr.verification && busy)]}>
         <Text
           modifiers={[
             font({ textStyle: "body", weight: "medium" }),
@@ -457,11 +520,11 @@ function QuietLink({ label, disabled = false, onPress }: { label: string; disabl
 
 /** React Native content (screenshot step, sign-in code) inside the native sheet. */
 function Embedded({ children }: { children: ReactNode }) {
-  // The hosted view sizes to its content, so the width is given outright.
-  const { width } = useWindowDimensions();
+  // Width comes from the sheet, height from the content. The sheet can be narrower than the
+  // window (iPhone Duo keeps its status bar on the side), so a window-derived width overflows.
   return (
-    <RNHostView matchContents>
-      <View style={{ width: width - SIDE * 2 }}>{children}</View>
+    <RNHostView matchContents={{ vertical: true }}>
+      <View>{children}</View>
     </RNHostView>
   );
 }

@@ -1,3 +1,4 @@
+import type { HandoffFieldPlan } from './types.js';
 import { randomUUID } from 'node:crypto';
 import {
   parseInputHandoffDecision,
@@ -21,7 +22,7 @@ import {
 import type { HandoffDriver } from './macDriver.js';
 import { markSecretEntered } from './secretTaint.js';
 import { TerminalPromptSession, type TerminalProgram, type TerminalPromptStep } from './terminalPrompt.js';
-import { ImageQrHandoffSession } from './imageQr.js';
+import { type PictureQr, ImageQrHandoffSession } from './imageQr.js';
 import { qrContent } from './qrCode.js';
 
 /**
@@ -36,6 +37,7 @@ export interface InputHandoffStartRequest {
   purpose: string;
   note?: string;
   requester?: string;
+  fields?: HandoffFieldPlan[];
   target: HandoffTargetSpec;
   completeWhen?: HandoffCompletionHints;
   timeoutMinutes?: number;
@@ -58,9 +60,21 @@ export type InputHandoffImageStartError = InputHandoffStartError | 'NOT_AN_IMAGE
 
 /** Why a target cannot be handed off, known before starting. */
 export interface InputHandoffTargetProblem {
-  errorCode: 'TARGET_IS_CINDY' | 'TARGET_NOT_FOUND' | 'TARGET_AMBIGUOUS';
+  errorCode: 'TARGET_IS_CINDY' | 'TARGET_NOT_FOUND' | 'TARGET_AMBIGUOUS' | 'TARGET_PERMISSION_DENIED' | 'SCREEN_LOCKED';
   message: string;
 }
+
+/**
+ * What the agent tells the owner when the screen is locked, both when the
+ * request starts and when the card was already open. The owner is often on
+ * their phone, so it names the way they have from there.
+ */
+const SCREEN_LOCKED_NEXT = 'This computer\'s screen is locked (a display going to sleep locks it too), so nothing was read or typed. '
+  + 'Ask the owner to wake and unlock it. If they are away from it, they can try to unlock it through Cindy\'s remote desktop '
+  + 'from an iPhone or another Mac that has automatic unlock turned on for this Mac (not from the single-window view on the input handoff card); '
+  + 'if that is not available, ask them to unlock it at the computer. '
+  + 'Request a window input handoff again only after they confirm it is unlocked. '
+  + 'A terminal password prompt (sudo -A, ssh, git over HTTPS) does not read the screen and can still be answered from their phone.';
 
 /** A password prompt from a verified terminal program in the task's shell. */
 export interface TerminalPromptRequest {
@@ -163,15 +177,15 @@ export function buildInputHandoffContinuation(result: HandoffResult): string {
     : result.scanned && result.status === 'succeeded'
     ? 'The owner says they scanned the code. Check yourself whether the sign-in finished; if the code had expired, take a fresh screenshot and ask again.'
     : result.failure === 'nothing_to_fill'
-    ? 'The screen has no field for the owner to type into. Press its buttons or pick its options yourself; request input handoff again only when a field appears that needs the owner.'
+    ? 'The screen has no field for the owner to type into. Press its buttons or pick its options yourself; request input handoff again only when a field appears that needs the owner. If it waits for a passkey, Touch ID, a security key or an approval on a phone, ask the owner in the conversation to finish it on this computer.'
     : result.status === 'succeeded' && result.steps === 0 && result.reason === 'detected'
     ? 'The owner finished on the window itself: the fields you asked about are gone. Check the current screen yourself and continue; ask again only if something still needs them.'
     : result.status === 'succeeded'
     ? 'The owner\'s fields were typed in and confirmed. Check the current screen yourself and handle any buttons or options left; values they entered were not shared with you.'
     : result.failure === 'permission'
-      ? 'Cindy lacks macOS Accessibility permission for input handoff. Ask the owner to allow it on this computer, or continue another way.'
+      ? 'Cindy lacks macOS Accessibility permission for input handoff, or (macOS 27.3 and later) may control only apps the owner chose and this app is not one of them. Ask the owner to allow it on this computer, or continue another way.'
     : result.failure === 'screen_locked'
-      ? 'This computer\'s screen is locked (a display going to sleep locks it too), so nothing was read or typed. Ask the owner to wake and unlock it; request input handoff again only after they say it is unlocked.'
+      ? SCREEN_LOCKED_NEXT
       : 'The handoff did not complete. Do not retry it automatically; tell the owner what is still needed or continue another way.';
   return `${INPUT_HANDOFF_ENDED_PREFIX} ${facts}. ${next}`;
 }
@@ -201,6 +215,7 @@ export class InputHandoffService {
       ...(request.note ? { note: request.note } : {}),
       ...(request.requester ? { requester: request.requester } : {}),
       target: request.target,
+      fields: request.fields,
       ...(request.completeWhen ? { completeWhen: request.completeWhen } : {}),
       timeoutMs: timeoutMs(request.timeoutMinutes),
       hostPid: this.deps.hostPid,
@@ -219,15 +234,27 @@ export class InputHandoffService {
    * it named Cindy itself or a window that is not there (it used to get a
    * pending receipt and a target_gone minutes later). Null: go ahead; the
    * session still resolves the window itself. Without macOS Accessibility the
-   * session asks for it as before, so nothing is checked here.
+   * session asks for it as before, so nothing is checked here. A screen
+   * already locked is reported now too, before the request counts against
+   * the task's hourly limit.
    */
   async checkTarget(target: HandoffTargetSpec): Promise<InputHandoffTargetProblem | null> {
     const driver = this.deps.createDriver();
     if (!driver) return null;
     if ((await driver.permission().catch(() => 'unknown' as const)) !== 'granted') return null;
-    const list = await driver.windows({ background: true }).catch(() => null);
+    const list = await driver.windows({ background: true }).catch((error: unknown) =>
+      (error instanceof Error && error.message === 'locked' ? 'locked' as const : null));
+    if (list === 'locked') return { errorCode: 'SCREEN_LOCKED', message: SCREEN_LOCKED_NEXT };
     if (!list) return null;
     const resolved = resolveHandoffTarget(list, target, this.deps.hostPid);
+    if (resolved === 'permission') {
+      return {
+        errorCode: 'TARGET_PERMISSION_DENIED',
+        message: 'macOS did not allow Cindy to read windows in the target app. Ask the owner to allow the app in '
+          + 'System Settings > Privacy & Security > System & App Protection Override > Cindy. '
+          + 'If macOS is asking for temporary access, have the owner respond on that Mac before trying again.',
+      };
+    }
     if (resolved) {
       // Guessing could send the owner to the wrong window (the agent's page is often minimized behind theirs).
       // Without a pid the program may run as several processes (profiles, an automation copy): all of them count.
@@ -244,7 +271,7 @@ export class InputHandoffService {
     // The program is there but nothing carries that title: say what its windows are called now.
     if (target.windowTitle) {
       const sameProgram = resolveHandoffTarget(list, { ...target, windowTitle: undefined }, this.deps.hostPid);
-      if (sameProgram) {
+      if (sameProgram && sameProgram !== 'permission') {
         const titles = list.apps
           .filter((app) => (target.pid !== undefined ? app.pid === sameProgram.pid : app.pid !== this.deps.hostPid && app.bundleId === sameProgram.bundleId))
           .flatMap((app) => app.windows.map((w) => w.title))
@@ -269,7 +296,7 @@ export class InputHandoffService {
         errorCode: 'TARGET_IS_CINDY',
         message: (frontIsHost ? 'Cindy itself is in front, and ' : '')
           + 'Cindy\'s own window cannot be handed off. A screen shown inside Cindy (such as the device simulator) is not a '
-          + 'window here: for a sign-in QR code on it, ask again with kind="scan" and `image` set to a fresh screenshot; '
+          + 'window here: for a sign-in QR code on it, call request_input_handoff with `image` set to a fresh screenshot; '
           + 'for other fields there, tell the owner what is needed.',
       };
     }
@@ -307,7 +334,7 @@ export class InputHandoffService {
     }
     if (found && 'error' in found) {
       return found.error === 'not_image'
-        ? { ok: false, errorCode: 'NOT_AN_IMAGE', message: 'That file is not a picture Cindy can read (use PNG or JPEG).' }
+        ? { ok: false, errorCode: 'NOT_AN_IMAGE', message: 'That file is not a picture Cindy can read (use PNG, JPEG or WebP).' }
         : { ok: false, errorCode: 'QR_UNREADABLE', message: 'Cindy could not read that picture right now. Tell the owner what is needed instead.' };
     }
     const qr = found ? qrContent(found.text) : null;
@@ -359,6 +386,23 @@ export class InputHandoffService {
       return run;
     });
     return started.ok ? { ...started, abandon: () => run?.abandon() } : started;
+  }
+
+  /** The live engine owns this handoff. Only its provider check may resume the pending turn. */
+  startAccountVerification(request: { sessionId: string; purpose: string; note: string; picture: PictureQr;
+    checkAccount(): void; finished(result: HandoffResult): void }) {
+    const refused = this.admit(request.sessionId);
+    if (refused) return null;
+    let card!: ImageQrHandoffSession;
+    this.launch(request.sessionId, true, (requestId, entry) => {
+      card = new ImageQrHandoffSession({
+        ...request, requestId, remoteInput: this.deps.remoteInputAvailable(), timeoutMs: timeoutMs(undefined),
+        publish: snapshot => this.publish(entry, snapshot),
+        finish: result => { this.finish(entry, result); request.finished(result); },
+      });
+      return card;
+    });
+    return card;
   }
 
   /** A Main-owned secret input, delivered only to its waiting host operation, never the model. */

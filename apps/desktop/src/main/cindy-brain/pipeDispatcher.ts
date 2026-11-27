@@ -49,7 +49,7 @@ export interface PipeDispatcherDeps {
   /** 拉起沙箱(幂等;fused/stopping 拒绝)。 */
   spawn(ghost: InstalledGhost): Promise<{ ok: true } | { ok: false; reason: string }>;
   /** 把下行消息发到该意识的电子脑逻辑页;false = 逻辑页不在线。 */
-  sendToGhost(ghostId: string, payload: GhostPipeToolCall): boolean;
+  sendToGhost(ghostId: string, payload: GhostPipeToolCall): boolean | Promise<boolean>;
   ownerScope?: GhostOwnerScope;
   prepareUsage?(ghost: InstalledGhost, callId: string, toolName: string, sessionId?: string): GhostCallUsageObserver | null;
   /** 单次调用超时(默认 330s,见 DEFAULT_TIMEOUT_MS 注释)。 */
@@ -219,6 +219,8 @@ export class GhostPipeDispatcher {
     signal?: AbortSignal;
     /** Trusted Host session attribution, never accepted from plugin input. */
     sessionId?: string;
+    /** Optional live authority captured by the host for a pinned startup tool. */
+    isCurrent?: () => boolean;
     /** Host debug actions are explicitly excluded. Never exposed in plugin payloads. */
     recordUsage?: false;
     onProgress?: (progress: GhostToolProgress) => void;
@@ -263,6 +265,9 @@ export class GhostPipeDispatcher {
     }
     if (!this.ownerScopeUsable(storagePart, ownerScopeSnapshot)) {
       return this.ownerBoundaryResult();
+    }
+    if (request.isCurrent && !request.isCurrent()) {
+      return { ok: false, errorCode: 'PERMISSION_DENIED', message: 'The plugin tool authorization changed before dispatch.' };
     }
     if (this.deps.runtimeStateOf(storagePart) !== 'running') {
       return { ok: false, errorCode: 'GHOST_CRASHED', message: '插件就绪前已停止' };
@@ -310,15 +315,28 @@ export class GhostPipeDispatcher {
         this.settle(callId, this.ownerBoundaryResult());
         return;
       }
-      if (!this.deps.sendToGhost(storagePart, payload)) {
+      const delivered = (accepted: boolean) => {
+        if (!this.ownerScopeUsable(storagePart, ownerScopeSnapshot)) {
+          this.settle(callId, this.ownerBoundaryResult());
+          return;
+        }
+        if (!accepted) {
         // 逻辑页不在线(拉起后瞬时死亡等):立即收卷。
         this.settle(callId, { ok: false, errorCode: 'GHOST_CRASHED', message: '电子脑离线,派发失败' });
-      } else {
+        } else {
         entry.usageAccepted = true;
         this.observeUsage(() => entry.usage?.accepted(Date.now()));
         // A synchronous transport/test may already have returned the result.
         if (entry.usageOutcome) this.observeUsage(() => entry.usage?.settled(entry.usageOutcome!));
-      }
+        }
+      };
+      try {
+        const delivery = this.deps.sendToGhost(storagePart, payload);
+        // Desktop IPC is synchronous; the headless Chromium transport confirms
+        // delivery asynchronously. Both use the same once-only result record.
+        if (typeof delivery === 'boolean') delivered(delivery);
+        else void delivery.then(delivered, () => delivered(false));
+      } catch { delivered(false); }
     });
   }
 

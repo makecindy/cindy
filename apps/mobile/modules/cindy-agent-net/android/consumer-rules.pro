@@ -1,0 +1,2 @@
+-keep class app.cindy.agentnet.CindyAgentNetModule { *; }
+-keep class app.cindy.agentnet.AgentNetNotifications { *; }

@@ -53,6 +53,8 @@ interface SlashCommandPaletteProps {
   query: string;
   /** Merged list of available commands (desktop + agent-builtin + agent-skill). */
   commands: UnifiedCommand[];
+  additionalCommands?: UnifiedCommand[];
+  showBuddyNewHint?: boolean;
   /** Currently focused row index within the filtered list. */
   focusedIndex: number;
   onFocusedIndexChange: (i: number) => void;
@@ -90,6 +92,8 @@ function accessibleName(cmd: UnifiedCommand): string {
 export function SlashCommandPalette({
   query,
   commands,
+  additionalCommands,
+  showBuddyNewHint,
   focusedIndex,
   onFocusedIndexChange,
   onSelect,
@@ -100,7 +104,10 @@ export function SlashCommandPalette({
   maxHeight = 400,
 }: SlashCommandPaletteProps) {
   const { t } = useTranslation();
-  const filtered = useMemo(() => filterSlashCommands(commands, query), [commands, query]);
+  const filtered = useMemo(() => {
+    const original = filterSlashCommands(commands, query);
+    return additionalCommands?.length ? [...original, ...additionalCommands] : original;
+  }, [commands, query, additionalCommands]);
   const rootRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   // Glide highlight on the focused index; arrow keys are pressed in the editor.
@@ -244,7 +251,7 @@ export function SlashCommandPalette({
     <div
       ref={rootRef}
       className={cn(
-        'pointer-events-auto absolute left-0 bottom-full mb-2 z-50',
+        'pointer-events-auto absolute left-0 bottom-full mb-2 z-float',
       )}
     >
       {/* Panel */}
@@ -254,7 +261,7 @@ export function SlashCommandPalette({
         {...menuPanelAttrs}
         className={cn(
           'relative w-[320px] overflow-y-auto',
-          'rounded-[12px] border p-[6px]',
+          'rounded-xl border p-1.5',
           'bg-[var(--cmd-palette-bg)]',
           'border-[var(--cmd-palette-border)]',
           // mount-only 入场:面板锚在输入框上方,从左下角轻长出(DESIGN.md
@@ -265,7 +272,14 @@ export function SlashCommandPalette({
         style={{ boxShadow: 'var(--shadow-menu)', maxHeight }}
       >
         <MenuHighlightLayer />
-        {filtered.length === 0 ? (
+        {filtered.length === 0 ? showBuddyNewHint ? (
+          <p role="status" className="px-2.5 py-2 text-13 leading-normal text-[var(--cmd-palette-tooltip-body)]">
+            {t('commandPalette.buddyNewHint', {
+              restart: t('bots.lifecycle.restart'),
+              startTopic: t('bots.groupChat.server.startTopic'),
+            })}
+          </p>
+        ) : (
           <div
             className={cn(
               'flex items-center justify-center',
@@ -302,7 +316,7 @@ export function SlashCommandPalette({
                 className={cn(
                   COMPOSER_MENU_ROW,
                   'flex w-full items-center justify-between',
-                  'h-[36px] px-[10px] text-left',
+                  'h-[36px] px-2.5 text-left',
                   unavailable && 'cursor-not-allowed opacity-50',
                 )}
               >
@@ -330,7 +344,7 @@ export function SlashCommandPalette({
           onMouseLeave={() => onTooltipHoverChange?.(false)}
           onMouseDown={() => onTooltipHoverChange?.(true)}
           className={cn(
-            'fixed z-[60] w-[280px] overflow-y-auto rounded-[12px] border p-[14px]',
+            'fixed z-float-top w-[280px] overflow-y-auto rounded-xl border p-3.5',
             'bg-[var(--cmd-palette-bg)]',
             'border-[var(--cmd-palette-border)]',
           )}
@@ -361,7 +375,7 @@ export function SlashCommandPalette({
               </Tip>
             )}
           </div>
-          <div className="mt-[8px] text-13 leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
+          <div className="mt-2 text-13 leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
             {isSlashCommandUnavailable(focusedCmd)
               ? t('commandPalette.projectSkillNotLoaded')
               : focusedDescription}

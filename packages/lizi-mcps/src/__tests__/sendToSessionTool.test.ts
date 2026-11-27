@@ -15,6 +15,7 @@ import {
   registerSendToSessionTool,
   type SendToRemoteSessionCallback,
   type SendToSessionCallback,
+  type SendToSessionDeps,
 } from '../xdt-helper/send_to_session.js';
 
 type SendResult = Awaited<ReturnType<SendToSessionCallback>>;
@@ -55,6 +56,75 @@ function parse(result: XdtHelperToolResult) {
 }
 
 describe('send_to_session tool', () => {
+  // Unit, shared-task-mode.md: shared links previously fell through to local
+  // lookup; neither remote-ID nor create tests covered the guest route.
+  // Minimal failure: one copied shared link. Standalone: 1.7s on Windows.
+  it('routes copied links and scoped references only to shared delivery, including reconciliation', async () => {
+    const registry = new XdtHelperToolRegistry();
+    const sendToSession = vi.fn();
+    const sendToRemoteSession = vi.fn();
+    const context = { sessionId: 'mine', sessionInstanceId: 'instance', agentKind: 'codex', workingDir: '/fixture' };
+    const receipt = { ok: true as const, target_session_id: 'cindy://session/shared?device=scoped',
+      task_link: 'cindy://session/shared?device=scoped', delivery_id: 'delivery',
+      delivery_state: 'pending' as const, wake_kind: 'queued' as const };
+    const sendToSharedTask = vi.fn<NonNullable<SendToSessionDeps['sendToSharedTask']>>(async () => receipt);
+    registerSendToSessionTool(registry, { getSessionContext: () => context, sendToSession, sendToRemoteSession, sendToSharedTask });
+    for (const target of ['cindy://session/shared?device=scoped', JSON.stringify(['share', 'host', null, 'owner']).padEnd(129, '~') + '::shared']) {
+      expect(parse(await registry.call('send_to_session', { target_session_id: target, message: 'Only selected text', delivery_id: 'delivery', model: 'ignored' }))).toEqual(receipt);
+      expect(sendToSharedTask).toHaveBeenLastCalledWith({ target, message: 'Only selected text', deliveryId: 'delivery', context });
+    }
+    expect(sendToSession).not.toHaveBeenCalled();
+    expect(sendToRemoteSession).not.toHaveBeenCalled();
+    expect(parse(await registry.call('send_to_session', { message: 'x', delivery_id: 'delivery' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    expect(parse(await registry.call('send_to_session', { target_session_id: 'local-task', message: 'x', delivery_id: 'delivery' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    expect(parse(await registry.call('send_to_session', { target_session_id: receipt.task_link, device: 'owner', message: 'x' }))).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    sendToSharedTask.mockResolvedValueOnce({ ok: false, errorCode: 'DELIVERY_UNKNOWN', message: 'Reconcile first', task_link: receipt.task_link, delivery_id: 'delivery' });
+    expect(parse(await registry.call('send_to_session', { target_session_id: receipt.task_link, message: 'x' }))).toMatchObject({ errorCode: 'DELIVERY_UNKNOWN', data: { target_session_id: receipt.task_link, delivery_id: 'delivery' } });
+  });
+
+  it('refuses shared target syntax on older hosts without trying local or same-account delivery', async () => {
+    const { registry, sendToSession } = setup();
+    for (const target of ['cindy://session/shared?device=scoped', '["share","host",null,"owner"]::shared', 'https://relay.example.test/shared-task/join#invitation']) {
+      expect(parse(await registry.call('send_to_session', { target_session_id: target, message: 'hi' }))).toMatchObject({ errorCode: 'UNSUPPORTED_CAPABILITY' });
+    }
+    expect(sendToSession).not.toHaveBeenCalled();
+  });
+  // #12060, unit: exercise schema parsing and the actual handoff arguments.
+  // A provider-only create used to silently lose the requested connection.
+  it('forwards the provider only on explicit create and preserves legacy calls', async () => {
+    const { registry, sendToSession } = setup();
+    for (const args of [
+      { provider_id: 'second' },
+      {},
+      { target_session_id: UUID, provider_id: 'second' },
+    ]) {
+      expect(parse(await registry.call('send_to_session', { message: 'Work', ...args })).ok).toBe(true);
+    }
+    const calls = sendToSession.mock.calls;
+    expect(calls[0]).toEqual([expect.objectContaining({ providerId: 'second' })]);
+    for (const [request] of calls.slice(1) as unknown as [object][]) {
+      expect(request).not.toHaveProperty('providerId');
+    }
+  });
+
+  // Unit contract: task host and provider location are independent; conflicting aliases
+  // must fail before host dispatch, and uncertain creation returns an address to inspect.
+  it('routes creation locations independently and preserves a recovery address', async () => {
+    const { registry, sendToSession } = setup({ result: { ok: false, errorCode: 'DELIVERY_UNKNOWN',
+      message: 'Inspect before retrying', recoverySessionId: 'work-pc::new-task' } });
+    const result = parse(await registry.call('send_to_session', { message: 'Work', device: 'work-pc',
+      provider_device_id: 'model-pc', project_path: '/remote/project' }));
+    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({ device: 'work-pc',
+      agentDeviceId: 'model-pc', projectDir: '/remote/project' }));
+    expect(result).toMatchObject({ ok: false, errorCode: 'DELIVERY_UNKNOWN', data: { target_session_id: 'work-pc::new-task' } });
+    for (const args of [
+      { target_session_id: 'existing', device: 'work-pc' },
+      { provider_device_id: 'one', agent_device_id: 'two' },
+    ]) expect(parse(await registry.call('send_to_session', { message: 'Work', ...args })))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(sendToSession).toHaveBeenCalledOnce();
+  });
+
   // Unit: preserve omitted vs null membership through the real tool boundary;
   // the host resolves inheritance independently of the execution checkout.
   it.each([undefined, null])('passes project choice %j without replacing it with cwd', async project_path => {
@@ -81,19 +151,33 @@ describe('send_to_session tool', () => {
     }));
     expect(result).toMatchObject({ ok: true, project_path: '/projects/product', working_dir: '/temporary/checkout' });
   });
+  // Unit: when the caller omits project_path the host decides membership, so the receipt
+  // must say where the task landed and how to choose otherwise. Before this note a
+  // projectless result was only a bare null and callers kept starting tasks outside projects.
+  it.each([
+    { name: 'placed by execution directory', args: {}, host: { projectDir: '/projects/product', projectFromWorkingDir: true as const }, note: 'contains working_dir' },
+    { name: 'left without a project', args: {}, host: { projectDir: null }, note: 'not in any project' },
+    { name: 'inherited from the source', args: {}, host: { projectDir: '/projects/product' }, note: null },
+    { name: 'explicitly projectless', args: { project_path: null }, host: { projectDir: null }, note: null },
+  ])('explains host-decided membership in the creation receipt: $name', async ({ args, host, note }) => {
+    const { registry } = setup({ result: {
+      ok: true, targetSessionId: 'child', agentKind: 'codex', wakeKind: 'created',
+      targetTitle: 'Work', targetLastUserSendAt: null, workingDir: '/projects/product/app', ...host,
+    } });
+    const result = parse(await registry.call('send_to_session', {
+      message: 'Start work', working_dir: '/projects/product/app', ...args,
+    }));
+    expect(result).toMatchObject({ ok: true, project_path: host.projectDir });
+    if (note === null) expect(result).not.toHaveProperty('project_note');
+    else expect(result.project_note).toContain(note);
+  });
+
   it('注册到 handoff 类目, 不混入 control(改名场景选错隔离的核心)', () => {
     const { registry } = setup();
     const handoff = registry.list('handoff').map((t) => t.name);
     const control = registry.list('control').map((t) => t.name);
     expect(handoff).toContain('send_to_session');
     expect(control).not.toContain('send_to_session');
-  });
-
-  it.each(['coordination', 'user-visible'])('passes message purpose with the bound caller identity: %s', async purpose => {
-    const { registry, sendToSession } = setup();
-    const result = await registry.call('send_to_session', { target_session_id: 'parent', message: 'Update', message_purpose: purpose });
-    expect(result.isError).toBeUndefined();
-    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({ targetSessionId: 'parent', messagePurpose: purpose, dispatcherSessionId: expect.any(String) }));
   });
 
   it('缺 message → INVALID_ARGS, host 不被调', async () => {
@@ -299,6 +383,50 @@ describe('send_to_session tool', () => {
     }));
   });
 
+  // 2026-11-27: standalone task creation must accept plugin engines (agent_kind="acp" + provider_id + model + effort)
+  // and echo the resolved acp route back to the caller.
+  it('create: 插件引擎配置(agent_kind=acp)通过 schema 完整透传并回显', async () => {
+    const { registry, sendToSession } = setup({
+      result: {
+        ok: true,
+        targetSessionId: 'tgt-acp',
+        agentKind: 'acp',
+        wakeKind: 'created',
+        targetTitle: 'Fix mobile QA ordering',
+        targetLastUserSendAt: null,
+        model: 'gemini-4-neon',
+        effort: 'xhigh',
+        fastMode: false,
+        providerId: 'acp-plugin:antigravity:antigravity',
+      },
+    });
+    const res = await registry.call('send_to_session', {
+      project_path: '/repo',
+      message: '修复手机端 Q/A 顺序',
+      agent_kind: 'acp',
+      provider_id: 'acp-plugin:antigravity:antigravity',
+      model: 'gemini-4-neon',
+      effort: 'xhigh',
+    });
+
+    expect(res.isError).toBeUndefined();
+    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:antigravity:antigravity',
+      model: 'gemini-4-neon',
+      effort: 'xhigh',
+    }));
+    expect(parse(res)).toMatchObject({
+      ok: true,
+      target_session_id: 'tgt-acp',
+      agent_kind: 'acp',
+      provider_id: 'acp-plugin:antigravity:antigravity',
+      model: 'gemini-4-neon',
+      effort: 'xhigh',
+      fast_mode: false,
+    });
+  });
+
   it.each([
     { agent_kind: 'not-an-agent' },
     { effort: 'extreme' },
@@ -372,8 +500,8 @@ describe('send_to_session tool', () => {
     const tool = registry.get('send_to_session')!;
     // inputShape 是 z.ZodRawShape（值是 core $ZodType，不声明 description），按 classic ZodType 读取说明文案。
     const shape = tool.inputShape as unknown as Record<string, { description?: string } | undefined>;
-    expect(shape.agent_device_id?.description).toContain('locations[].agent_device_id');
-    expect(tool.description).toContain('【agent_device_id(仅 create 模式)】');
+    expect(shape.agent_device_id?.description).toContain('locations[].provider_device_id');
+    expect(tool.description).toContain('【provider_device_id(旧名 agent_device_id，仅 create 模式)】');
     expect(tool.description).toMatch(/PROVIDER_ROUTE_UNAVAILABLE: 仅 create/);
     expect(tool.description).toMatch(/INVALID_ARGS: .*agent_device_id/);
   });
@@ -586,10 +714,9 @@ describe('send_to_session → 另一台电脑上的任务', () => {
     }
   });
 
-  it('宿主不支持、内部协调用途、无来源任务时明确拒绝, 不发出', async () => {
+  it('宿主不支持、无来源任务时明确拒绝, 不发出', async () => {
     const cases = [
       [remoteSetup({ remote: false }), {}, 'REMOTE_UNSUPPORTED'],
-      [remoteSetup(), { message_purpose: 'coordination' }, 'INVALID_ARGS'],
       [remoteSetup({ sessionId: undefined }), {}, 'LEAD_NOT_SUPPORTED'],
     ] as const;
     for (const [s, extra, errorCode] of cases) {
@@ -613,9 +740,18 @@ describe('send_to_session → 另一台电脑上的任务', () => {
     expect(parseQualifiedSessionId('mbp::a::b')).toEqual({ deviceId: 'mbp', sessionId: 'a::b' });
   });
 
-  it('工具说明写明跨电脑寻址与结果未知时的处理', () => {
-    const description = remoteSetup().registry.list('handoff')[0]!.description;
-    expect(description).toContain('deviceId::sessionId');
-    expect(description).toContain('DELIVERY_UNKNOWN');
+  it('工具说明写明跨电脑寻址与结果未知时的处理', async () => {
+    const s = remoteSetup();
+    const tool = s.registry.list('handoff')[0]!;
+    expect(tool.description).toContain('deviceId::sessionId');
+    expect(tool.description).toContain('DELIVERY_UNKNOWN');
+    // Unit contract: create mode stays user-visible and directs temporary internal
+    // reviews/sub-steps to native engine subagents instead of spawning standalone tasks.
+    expect(tool.description).toContain('subagent');
+    expect(tool.description).toContain('侧边栏可见');
+    const rejected = await s.registry.call('send_to_session', { message: 'hi', hidden: true });
+    expect(rejected.isError).toBe(true);
+    expect(parse(rejected)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(s.sendToSession).not.toHaveBeenCalled();
   });
 });

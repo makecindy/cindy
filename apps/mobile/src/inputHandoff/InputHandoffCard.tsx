@@ -17,6 +17,7 @@ import type {
 import {
   inputHandoffHeldElsewhere,
   inputHandoffStepKey,
+  isInputHandoffDeviceCode,
 } from "@cindy/device-link";
 import { useAuth } from "@/auth/AuthContext";
 import { Text } from "@/components/AppText";
@@ -81,10 +82,16 @@ export function InputHandoffCard({
   const started = useRef(false);
   const [draft, setDraft] = useState<InputHandoffValues>({});
   const [sending, setSending] = useState(false);
+  // The sealed receipt can arrive before the next screen snapshot. Never
+  // reopen a cleared form until a new step or an explicit retry arrives.
+  const [acceptedStep, setAcceptedStep] = useState<{ key: string; revision: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Stays wanted across steps: after Continue the sheet hides while the
   // computer types and comes back by itself for the next screen to fill.
   const [sheetWanted, setSheetWanted] = useState(false);
+  useEffect(() => {
+    if (snapshot.accountVerification) setSheetWanted(true);
+  }, [snapshot.requestId, snapshot.accountVerification]);
   // The owner chose the form over the live view (it could not be opened, or they prefer it).
   const [formFor, setFormFor] = useState<string | null>(null);
   const push = useGuardedPush();
@@ -113,6 +120,9 @@ export function InputHandoffCard({
     setDraft((d) => ({ ...d, [id]: value }));
   };
 
+  const retryRequested = snapshot.phase === "ready" && !!snapshot.failure &&
+    acceptedStep !== null && snapshot.revision > acceptedStep.revision;
+  const awaitingNextStep = acceptedStep?.key === stepKey && !retryRequested;
   const busy = decisionBusy || sending;
   const decide = (action: Decision) => {
     if (action === "picture")
@@ -124,7 +134,7 @@ export function InputHandoffCard({
     });
   };
   const submit = async (action: InputHandoffAction) => {
-    if (busy || snapshot.remoteInput !== true) return;
+    if (busy || awaitingNextStep || snapshot.remoteInput !== true) return;
     setSending(true);
     setError(null);
     const values = changedInputHandoffValues(snapshot, draft);
@@ -134,6 +144,7 @@ export function InputHandoffCard({
         values,
         action,
       });
+      setAcceptedStep({ key: stepKey, revision: snapshot.revision });
       setDraft({});
       setFieldEpoch((n) => n + 1);
     } catch (e) {
@@ -147,7 +158,7 @@ export function InputHandoffCard({
     }
   };
 
-  const sheetContent = inputHandoffSheetHasContent(snapshot, heldElsewhere);
+  const sheetContent = !awaitingNextStep && inputHandoffSheetHasContent(snapshot, heldElsewhere);
   // Scan-to-sign-in: the code arrives sealed while the sheet is open, and follows refreshes by itself.
   const qrScan = snapshot.qr === "scan" && snapshot.picture === true;
   const [qrNotice, setQrNotice] = useState<string | null>(null);
@@ -163,6 +174,7 @@ export function InputHandoffCard({
   const qrSheet: InputHandoffQrSheet | null = qrScan
     ? {
         view: qrView,
+        ...(snapshot.accountVerification ? { verification: { refresh: () => decide("refresh"), cancel: () => decide("cancel") } } : {}),
         notice: qrNotice,
         onOpen: () => {
           const qr = qrView.picture?.qr;
@@ -238,6 +250,10 @@ export function InputHandoffCard({
         ? `interaction.inputHandoff.failure.${snapshot.failure}`
         : `interaction.inputHandoff.terminal.${snapshot.phase}`,
     );
+  } else if (awaitingNextStep && snapshot.phase === "ready") {
+    status = t("interaction.inputHandoff.phase.working");
+    spinner = true;
+    actions = [skip];
   } else if (snapshot.phase === "ready" && heldElsewhere) {
     status = t("interaction.inputHandoff.holder.elsewhere", {
       device: holderLabel(snapshot, t),
@@ -262,6 +278,7 @@ export function InputHandoffCard({
   } else if (
     snapshot.phase === "ready" &&
     snapshot.directSignIn &&
+    !snapshot.preferRemoteForm &&
     openLiveView &&
     formFor !== snapshot.requestId
   ) {
@@ -378,6 +395,7 @@ export function InputHandoffCard({
       ) : null}
       {snapshot.phase === "ready" &&
       snapshot.directSignIn &&
+      !snapshot.preferRemoteForm &&
       openLiveView &&
       sheetContent &&
       formFor !== snapshot.requestId ? (
@@ -413,7 +431,7 @@ export function InputHandoffCard({
         embedded={
           // Mounted only while the sheet shows: a hidden SwiftUI sheet still renders its children.
           !(sheetWanted && sheetContent) ? null : qrScan ? (
-            <InputHandoffQrCode view={qrView} side={qrSide} />
+            <InputHandoffQrCode view={qrView} side={qrSide} onOpen={snapshot.accountVerification ? qrSheet?.onOpen : undefined} />
           ) : snapshot.picture ? (
             // One screenshot per revision; no quiet claim here (it would bump the revision).
             <InputHandoffPictureStep
@@ -424,9 +442,9 @@ export function InputHandoffCard({
               onDecide={decide}
               onError={setError}
             />
-          ) : (
+          ) : isInputHandoffDeviceCode(snapshot.deviceCode) ? (
             <InputHandoffDeviceCode snapshot={snapshot} />
-          )
+          ) : null
         }
         onChange={change}
         onSubmit={() => void submit({ kind: "submit" })}

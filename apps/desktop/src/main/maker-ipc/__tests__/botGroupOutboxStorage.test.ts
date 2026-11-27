@@ -14,7 +14,7 @@ import type { BotGroupOutboxCommandRequest, BotGroupOutboxExecution, BotGroupOut
 vi.mock('../../appSessionState.js', () => ({ getActiveAppSession: () => ({ dataOwnerId: null, generation: 0 }),
   isAppSessionBoundaryPending: () => false, ownerScopedUserDataPath: () => '', onAppSessionInvalidated: () => () => {} }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: {} }) }));
-vi.mock('../../cindy-media/blobStore.js', () => ({ parseBlobUrl: () => null }));
+vi.mock('../../cindy-media/blobStore.desktop.js', () => ({ parseBlobUrl: () => null }));
 vi.mock('../../cindy-media/ledger.js', () => ({}));
 import * as atomic from '../../utils/atomicWriteFile.js';
 import { createBotGroupOutboxStorage } from '../botGroupOutboxStorage.js';
@@ -128,6 +128,55 @@ it('snapshot does not claim, competing windows cannot steal, same-owner repair p
   expect(repaired.claimToken).toBe(execution.claimToken);
   await expect(storage.send(a, row.input as unknown as BotGroupSendInput, execution, success)).rejects.toThrow('OWNER_CHANGED');
   await storage.send(a, row.input as unknown as BotGroupSendInput, repaired, success);
+});
+
+it('persists cooldowns across restart, fences both windows and leaves a second POST 429 as a normal failure', async () => {
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+  let storage = make();
+  const a = windowSender().sender; const b = windowSender().sender; const row = draft('limited');
+  const input = row.input as unknown as BotGroupSendInput;
+  const post = vi.fn()
+    .mockResolvedValueOnce({ ok: false, errorCode: 'SERVICE_ERROR', message: 'limited', retryAt: 8_000 })
+    .mockResolvedValueOnce({ ok: false, errorCode: 'SERVICE_ERROR', message: 'limited', retryAt: 12_000, postRateLimited: true })
+    .mockResolvedValueOnce({ ok: false, errorCode: 'SERVICE_ERROR', message: 'limited', retryAt: 20_000, postRateLimited: true })
+    .mockResolvedValueOnce({ ok: true, messageId: 'receipt' });
+  await enqueue(storage, a, row);
+  await storage.send(a, input, await claim(storage, a, row), post);
+  storage = make();
+  expect((await command(storage, b, { action: 'snapshot' })).entries[0]).toMatchObject({
+    input, status: 'sending', retryAt: 8_000,
+  });
+  now.mockReturnValue(7_999);
+  await expect(claim(storage, a, row)).rejects.toThrow('NOT_CLAIMABLE');
+  await expect(claim(storage, b, row)).rejects.toThrow('NOT_CLAIMABLE');
+  expect(post).toHaveBeenCalledOnce();
+
+  now.mockReturnValue(8_000);
+  await storage.send(a, input, await claim(storage, a, row), post);
+  expect((await command(storage, b, { action: 'snapshot' })).entries[0]).toMatchObject({
+    input, status: 'sending', retryAt: 12_000, postRateLimited: true,
+  });
+  await expect(claim(storage, b, row)).rejects.toThrow('NOT_CLAIMABLE');
+  expect(post).toHaveBeenCalledTimes(2);
+
+  now.mockReturnValue(12_000);
+  const retry = await claim(storage, b, row);
+  await expect(claim(storage, a, row)).rejects.toThrow('ALREADY_CLAIMED');
+  await storage.send(b, input, retry, post);
+  expect((await command(storage, a, { action: 'snapshot' })).entries[0]).toMatchObject({
+    input, status: 'failed', retryAt: 20_000, retryable: true,
+  });
+  now.mockReturnValue(19_999);
+  await expect(claim(storage, a, row)).rejects.toThrow('NOT_CLAIMABLE');
+  expect(post).toHaveBeenCalledTimes(3);
+
+  await command(storage, a, { action: 'retry', groupId: 'room', clientId: 'limited', entryRevision: retry.entryRevision });
+  await expect(claim(storage, a, row)).rejects.toThrow('NOT_CLAIMABLE');
+  expect(post).toHaveBeenCalledTimes(3);
+  now.mockReturnValue(20_000);
+  await storage.send(a, input, await claim(storage, a, row), post);
+  expect(post.mock.calls).toEqual([[input], [input], [input], [input]]);
+  expect((await command(storage, a, { action: 'snapshot' })).entries[0]).toMatchObject({ status: 'sent', messageId: 'receipt' });
 });
 
 it.each(['destroyed', 'render-process-gone', 'did-navigate'])('%s releases preparation but not a Main request still in flight', async event => {

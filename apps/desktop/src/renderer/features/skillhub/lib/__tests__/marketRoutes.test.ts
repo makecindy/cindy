@@ -13,7 +13,7 @@ const localDetailSource = readFileSync(resolve(skillhubDir, 'SkillhubDetailView.
 
 describe('market route scope', () => {
   it('uses one detail route and redirects old detail URLs', () => {
-    expect(routerSource).toContain('<SkillhubDetailRoute />');
+    expect(routerSource).toContain('Component: SkillhubDetailRoute');
     expect(routerSource).toContain('<LegacySkillDetailRedirect market />');
     expect(routerSource).toContain('<LegacySkillDetailRedirect />');
     expect(routerSource).not.toContain('SkillhubMarketManageView');
@@ -198,7 +198,7 @@ describe('market management copy and errors', () => {
       'skill hub PATCH /api/s2s/v1/skills/lark-calendar returned 404',
       'HUB_404',
       i18n.t,
-    )).toBe('Hub management API is not ready. Please try again later');
+    )).toBe('Hub management API is not ready. Try again later.');
   });
 
   it('does not hide real authorization failures behind missing endpoint copy', () => {

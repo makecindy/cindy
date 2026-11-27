@@ -17,6 +17,7 @@ import {
   PROVIDER_GROUP_LOCAL_MEMBER_KEY,
   providerGroupDeviceCount,
   providerGroupSummaryForWire,
+  publicProviderGroupConfig,
   type ProviderGroupConfig,
   type ProviderGroupRebalanceSuggestion,
   type ProviderGroupRemotePick,
@@ -51,6 +52,7 @@ export interface ProviderGroupRemoteHandlerDeps {
   rebalanceSuggestion?(sessionId: string): Promise<ProviderGroupRebalanceSuggestion>;
   /** 记下用户确认的换号。 */
   rebalanceDecision?(sessionId: string, memberKey: string, remember: boolean, clientId?: string): Promise<boolean>;
+  rebalancePreference?(sessionId: string, enabled: boolean): Promise<boolean>;
 }
 
 /** 每个账号、每台报告来的电脑最近收下的用量报告序号(乱序到达的旧份丢弃)。按账号的负载对象区分账号。 */
@@ -130,6 +132,9 @@ export async function handleProviderGroupRemote(
   if (request.action === 'rebalance-suggestion') {
     return deps.rebalanceSuggestion ? await deps.rebalanceSuggestion(request.sessionId) : null;
   }
+  if (request.action === 'rebalance-preference') {
+    return { ok: await deps.rebalancePreference?.(request.sessionId, request.enabled) ?? false };
+  }
   if (request.action === 'rebalance-decision') {
     return {
       ok: deps.rebalanceDecision
@@ -150,6 +155,8 @@ export async function handleProviderGroupRemote(
           agentKind: request.agentKind,
           model: request.model,
           exclude: excluded,
+          // dispatch 只把同账号电脑的请求交到这里(受邀者另走 guestRelay)。
+          ownComputer: true,
           ...(request.quotaRebalance ? { quotaRebalance: request.quotaRebalance } : {}),
           // 带着这一轮试过的来问：那台电脑试过不行，本机现读最新状态再选(状态以本机为准，2026-10-11)。
           ...(excluded.size > 0 ? { fresh: true } : {}),
@@ -162,7 +169,7 @@ export async function handleProviderGroupRemote(
         if (pick.kind === 'unavailable')
           return {
             kind: 'unavailable',
-            ...(pick.usageLimit ? { usageLimit: pick.usageLimit } : {}),
+            ...(pick.full ? { full: true as const } : pick.usageLimit ? { usageLimit: pick.usageLimit } : {}),
           };
         const { key, kind, agentDeviceId, providerId: memberProviderId } = pick.member;
         try {
@@ -220,7 +227,9 @@ export async function handleProviderGroupRemote(
       return {};
     case 'view': {
       if (!deps.isRemoteAllowed(request.providerId)) return { providerId: request.providerId, config: null, members: [] };
-      const options = request.agentKind !== undefined
+      const options = request.display !== undefined
+        ? { display: request.display, includeGuestSupport: request.includeGuestSupport === true }
+        : request.agentKind !== undefined
         ? { model: request.model, agentKind: request.agentKind, includeGuestSupport: request.includeGuestSupport === true }
         : request.model !== undefined
         ? request.includeGuestSupport === true
@@ -233,7 +242,8 @@ export async function handleProviderGroupRemote(
       }
       // The view is an allowed object-form read. The host, not the caller,
       // owns the first-hop budget; an existing shorter stamp wins.
-      return { ...view, providerContinuity: readProviderMetadataContinuity(view)
+      return { ...view, config: view.config ? publicProviderGroupConfig(view.config) : null,
+        providerContinuity: readProviderMetadataContinuity(view)
         ?? { stale: false, remainingMs: PROVIDER_METADATA_TRUST_MS } };
     }
     case 'usage':

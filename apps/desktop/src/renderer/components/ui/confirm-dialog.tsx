@@ -7,14 +7,16 @@ import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { cn } from '@/lib/utils';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { Button } from '@/components/ui/button';
-import { Spinner } from '@/components/ui/spinner';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Tooltip } from '@/components/ui/tooltip';
+import { Z_INDEX_LAYERS } from '@/styles/generated/token-mappings';
+import { useHeldWhileBlockingPrompt } from '@/components/ui/blocking-prompt-hold';
+
+// 长按钮文案在面板内换行、按钮纵向长高,不冲出弹窗也不截断(DESIGN.md §4)。
+const CONFIRM_ACTION_CLASS =
+  'h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] py-1.5';
 
 export interface ConfirmDialogProps {
-  /** Explicit pilot opt-in; unselected callers retain their existing presentation. */
-  presentation?: 'standard';
-  /** Explicit design opt-in for standard dialogs; existing callers keep confirm-first order. */
-  cancelFirst?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
@@ -42,8 +44,8 @@ export interface ConfirmDialogProps {
   showCancel?: boolean;
   /** Dismiss without invoking the footer cancel action, which may have its own meaning. */
   showCloseButton?: boolean;
-  /** 可选的第三按钮(如「不保存」)。设了即渲染,在 confirm/cancel 之间。
-   *  典型场景:文件未保存时关闭 tab → 保存(primary) / 不保存(tertiary) / 取消(secondary)。 */
+  /** 可选的第三按钮(如「不保存」)。设了即渲染,在 cancel/confirm 之间。
+   *  典型场景:文件未保存时关闭 tab → 取消(secondary) / 不保存(tertiary) / 保存(primary)。 */
   tertiaryText?: string;
   /** 设了就在底部加一个"下次不再提示"复选框,onConfirm 携带勾选状态回传。 */
   dontShowAgainLabel?: string;
@@ -58,6 +60,8 @@ export interface ConfirmDialogProps {
    * 把这个开关打开,让默认焦点落到主按钮,避免取消按钮天然带 focus ring。
    */
   autoFocusConfirm?: boolean;
+  /** Return focus to a surviving control when the original opener was inside a popover. */
+  restoreFocusTarget?: () => HTMLElement | null;
   /** Disable the primary action until caller-owned validation has passed. */
   confirmDisabled?: boolean;
   /** 要求逐字输入 expected 才能确认；匹配不做 trim 或大小写折叠。 */
@@ -72,6 +76,7 @@ export interface ConfirmDialogProps {
   zIndex?: number;
   /** Destructive actions use the semantic destructive theme tokens. */
   confirmVariant?: 'default' | 'destructive';
+  checkedOverrides?: { description: string; confirmText: string; confirmVariant?: 'destructive' };
   /**
    * 主按钮文字前的小图标(如 Full access 确认的警示三角)。跟随按钮文字颜色,
    * 不引入新的语义色;loading 时与文字一起被 spinner 顶掉。
@@ -99,12 +104,10 @@ export interface ConfirmDialogProps {
 }
 
 export function ConfirmDialog({
-  open,
-  presentation,
-  cancelFirst = false,
+  open: requestedOpen,
   onOpenChange,
   title,
-  description,
+  description: defaultDescription,
   textClassName,
   descriptionClassName,
   content,
@@ -117,25 +120,32 @@ export function ConfirmDialog({
   dontShowAgainLabel,
   checkboxDefaultChecked = false,
   autoFocusConfirm,
+  restoreFocusTarget,
   confirmDisabled = false,
   requireTypedConfirmation,
   contentSelectable = false,
-  confirmVariant = 'default',
+  confirmVariant: defaultConfirmVariant = 'default',
+  checkedOverrides,
   confirmIcon,
   describeContent = false,
   loading = false,
   onConfirm,
   onCancel,
   onTertiary,
-  zIndex = 10000,
+  zIndex = Z_INDEX_LAYERS.modal,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
+  // 登录过期等阻断提示显示期间,独立挂载的确认框(如关窗确认)暂缓到它关闭后再出现。
+  const open = useHeldWhileBlockingPrompt(requestedOpen);
   // describeContent 用:让 aria-describedby 覆盖整个「description + content」滚动区。
   const bodyId = useId();
-  const resolvedConfirmText = confirmText ?? t('commonUi.confirmDialog.confirm');
   const resolvedCancelText = cancelText ?? t('commonUi.confirmDialog.cancel');
   // 每次打开复位到初始勾选态,避免上一轮的勾选残留到下一次弹窗。
   const [dontShowAgain, setDontShowAgain] = useState(checkboxDefaultChecked);
+  const overrides = dontShowAgain ? checkedOverrides : undefined;
+  const description = overrides?.description ?? defaultDescription;
+  const confirmVariant = overrides?.confirmVariant ?? defaultConfirmVariant;
+  const resolvedConfirmText = overrides?.confirmText ?? confirmText ?? t('commonUi.confirmDialog.confirm');
   useEffect(() => {
     if (open) setDontShowAgain(checkboxDefaultChecked);
   }, [open, checkboxDefaultChecked]);
@@ -166,15 +176,6 @@ export function ConfirmDialog({
     });
     return () => cancelAnimationFrame(raf);
   }, [open]);
-  const standardCancel = showCancel && (
-    <AlertDialog.Cancel asChild>
-      <Button size="lg" variant="secondary" disabled={loading} onClick={() => onCancel?.()}
-        palette="confirmation"
-        className="h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] py-1.5">
-        {resolvedCancelText}
-      </Button>
-    </AlertDialog.Cancel>
-  );
   return (
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Portal>
@@ -192,7 +193,7 @@ export function ConfirmDialog({
             套一层 Presence)。 */}
         <AlertDialog.Overlay
           className={cn(
-            'modal-scrim fixed inset-0 z-[10000]',
+            'modal-scrim fixed inset-0 z-modal',
           )}
           style={{ ...WINDOW_DRAG_STYLE, zIndex }}
         >
@@ -202,7 +203,7 @@ export function ConfirmDialog({
               // 命中区域按布局矩形计算、不跟随 transform（ChromeActions.tsx 的既有结论），
               // transform 定位会让 no-drag 挖洞与弹窗视觉位置错位，点弹窗内容会变成拖窗。
               // inset-0 + m-auto + h-fit：布局矩形即视觉矩形，挖洞与弹窗严格重合。
-              'modal-panel fixed inset-0 z-[10000] m-auto h-fit',
+              'modal-panel fixed inset-0 z-modal m-auto h-fit',
               'flex max-h-[85vh] flex-col',
               'w-full p-4',
               contentSelectable ? 'select-text' : 'select-none',
@@ -219,6 +220,13 @@ export function ConfirmDialog({
                 : {})}
             onEscapeKeyDown={(e) => {
               if (loading) e.preventDefault();
+            }}
+            onCloseAutoFocus={(event) => {
+              const target = restoreFocusTarget?.();
+              if (target?.isConnected) {
+                event.preventDefault();
+                target.focus();
+              }
             }}
             onOpenAutoFocus={
               requireTypedConfirmation || autoFocusConfirm
@@ -285,6 +293,7 @@ export function ConfirmDialog({
               >
                 {description && (
                   <AlertDialog.Description
+                    aria-live={checkedOverrides ? 'polite' : undefined}
                     className={cn('text-base text-[var(--confirm-desc)]', textClassName, descriptionClassName)}
                   >
                     {description}
@@ -300,11 +309,9 @@ export function ConfirmDialog({
                   'text-[var(--confirm-desc)]',
                 )}
               >
-                <input
-                  type="checkbox"
+                <Checkbox
                   checked={dontShowAgain}
                   onChange={(e) => setDontShowAgain(e.target.checked)}
-                  className="size-3.5 cursor-pointer accent-[var(--confirm-btn-primary-bg)]"
                 />
                 {dontShowAgainLabel}
               </label>
@@ -346,106 +353,61 @@ export function ConfirmDialog({
                 />
               </div>
             )}
-            {presentation === 'standard' ? (
-              <div className="mt-6 flex shrink-0 flex-wrap justify-end gap-2.5">
-                {cancelFirst && standardCancel}
-                <AlertDialog.Action asChild>
-                  <Button
-                    ref={confirmBtnRef}
-                    size="lg"
-                    variant="primary"
-                    disabled={confirmBlocked}
-                    loading={loading}
-                    aria-label={resolvedConfirmText}
-                    onClick={() => onConfirm?.({ dontShowAgain })}
-                    palette="confirmation"
-                    tone={confirmVariant === 'destructive' ? 'danger-solid' : 'default'}
-                    className="h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] py-1.5"
-                  >
-                    {confirmIcon && (
-                      <span aria-hidden="true" className="inline-flex shrink-0">
-                        {confirmIcon}
-                      </span>
-                    )}
-                    {resolvedConfirmText}
-                  </Button>
-                </AlertDialog.Action>
-                {tertiaryText && (
+            {/* DESIGN.md §4 Dialog & Modal：取消在最左、可选第三按钮居中、主操作在最右。
+                默认焦点仍由 Radix 交给 Cancel(与 DOM 位置无关),autoFocusConfirm /
+                typed 输入分支见上方 onOpenAutoFocus。 */}
+            <div className="mt-6 flex shrink-0 flex-wrap justify-end gap-2.5">
+              {showCancel && (
+                <AlertDialog.Cancel asChild>
                   <Button
                     size="lg"
                     variant="secondary"
                     disabled={loading}
-                    onClick={() => onTertiary?.()}
+                    onClick={() => onCancel?.()}
                     palette="confirmation"
-                    className="h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] py-1.5"
+                    className={CONFIRM_ACTION_CLASS}
                   >
-                    {tertiaryText}
+                    {resolvedCancelText}
                   </Button>
-                )}
-                {!cancelFirst && standardCancel}
-              </div>
-            ) : (
-              <div className="mt-6 flex shrink-0 flex-wrap justify-end gap-2.5">
-                <AlertDialog.Action asChild>
-                  <Button
-                    variant="cta"
-                    palette="confirmation"
-                    size="lg"
-                    tone={confirmVariant === 'destructive' ? 'danger-solid' : 'default'}
-                    loading={loading}
-                    ref={confirmBtnRef}
-                    disabled={confirmBlocked}
-                    aria-busy={loading || undefined}
-                    aria-label={resolvedConfirmText}
-                    onClick={() => onConfirm?.({ dontShowAgain })}
-                    className="min-w-[96px] whitespace-nowrap"
-                  >
-                    {loading ? (
-                      <Spinner size={14} />
-                    ) : (
-                      <>
-                        {confirmIcon && (
-                          <span className="mr-1.5 inline-flex shrink-0" aria-hidden="true">
-                            {confirmIcon}
-                          </span>
-                        )}
-                        {resolvedConfirmText}
-                      </>
-                    )}
-                  </Button>
-                </AlertDialog.Action>
-                {tertiaryText && (
-                  // tertiary 走 secondary 同款轮廓样式 —— 视觉上 "中性可选";
-                  // 不用 AlertDialog.Action / Cancel,自己 onClick 触发,Radix 不会
-                  // 自动关 dialog,因此外层得在 onTertiary 里手动 onOpenChange(false)。
-                  <Button
-                    variant="secondary"
-                    palette="confirmation"
-                    size="lg"
-                    type="button"
-                    disabled={loading}
-                    onClick={() => onTertiary?.()}
-                    className="min-w-[96px] whitespace-nowrap"
-                  >
-                    {tertiaryText}
-                  </Button>
-                )}
-                {showCancel && (
-                  <AlertDialog.Cancel asChild>
-                    <Button
-                      variant="secondary"
-                      palette="confirmation"
-                      size="lg"
-                      disabled={loading}
-                      onClick={() => onCancel?.()}
-                      className="min-w-[96px] whitespace-nowrap"
-                    >
-                      {resolvedCancelText}
-                    </Button>
-                  </AlertDialog.Cancel>
-                )}
-              </div>
-            )}
+                </AlertDialog.Cancel>
+              )}
+              {tertiaryText && (
+                // tertiary 走 secondary 同款轮廓样式 —— 视觉上 "中性可选";
+                // 不用 AlertDialog.Action / Cancel,自己 onClick 触发,Radix 不会
+                // 自动关 dialog,因此外层得在 onTertiary 里手动 onOpenChange(false)。
+                <Button
+                  size="lg"
+                  variant="secondary"
+                  disabled={loading}
+                  onClick={() => onTertiary?.()}
+                  palette="confirmation"
+                  className={CONFIRM_ACTION_CLASS}
+                >
+                  {tertiaryText}
+                </Button>
+              )}
+              <AlertDialog.Action asChild>
+                <Button
+                  ref={confirmBtnRef}
+                  size="lg"
+                  variant="primary"
+                  disabled={confirmBlocked}
+                  loading={loading}
+                  aria-label={resolvedConfirmText}
+                  onClick={() => onConfirm?.({ dontShowAgain })}
+                  palette="confirmation"
+                  tone={confirmVariant === 'destructive' ? 'danger-solid' : 'default'}
+                  className={CONFIRM_ACTION_CLASS}
+                >
+                  {confirmIcon && (
+                    <span aria-hidden="true" className="inline-flex shrink-0">
+                      {confirmIcon}
+                    </span>
+                  )}
+                  {resolvedConfirmText}
+                </Button>
+              </AlertDialog.Action>
+            </div>
           </AlertDialog.Content>
         </AlertDialog.Overlay>
       </AlertDialog.Portal>

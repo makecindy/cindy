@@ -1,3 +1,4 @@
+import { EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES } from '@/cindy-brain/PluginUiContributions';
 import { useState, useSyncExternalStore } from 'react';
 import { getDraft, subscribeDraft } from '../../../src/renderer/lib/composerDraftStore';
 import { Route, Routes } from 'react-router-dom';
@@ -31,7 +32,7 @@ function QuoteScenario({ content }: { content: string }) {
     getMessage: () => loaded ? message : undefined, isFirstReplyFor: () => false,
     showReplyTargets: false, quote: setQuote, locate: () => {} };
   return <div className="p-4 space-y-4" data-ui-page-subject><BotChatQuoteProvider value={context}>
-    <UserMessage workingDir="" sessionId="quote-task" messageClientId={message.clientId}
+    <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} workingDir="" sessionId="quote-task" messageClientId={message.clientId}
       content={content} automationOrigin={message.automationOrigin} simplifiedBotConversation />
     {quote && <div data-ui-quote-preview>
       <BotChatQuoteComposerPreview sessionId="quote-task" quote={quote} getMessage={context.getMessage} names={context.names} />
@@ -79,7 +80,7 @@ void mountPage({
     if (ctx.case === 'search') return <SearchScenario content={content} />;
     if (['task', 'fork', 'rewind'].includes(ctx.case)) return <div className="p-4" data-ui-page-subject>
       <DraftProbe sessionId={ctx.case === 'fork' ? 'forwarded-fork' : 'forwarded-task'} content={content} />
-      <UserMessage workingDir="" sessionId="forwarded-task" messageClientId="forwarded-user-2" agentKind="cc" content={content} automationOrigin={{ kind: 'session', senderSessionId: 'sender', senderBotName: 'Cindy', senderBotId: 'bot-a' }} />
+      <UserMessage pluginUi={EMPTY_PLUGIN_UI_MESSAGE_CANDIDATES} workingDir="" sessionId="forwarded-task" messageClientId="forwarded-user-2" agentKind="cc" content={content} automationOrigin={{ kind: 'session', senderSessionId: 'sender', senderBotName: 'Cindy', senderBotId: 'bot-a' }} />
     </div>;
     if (ctx.case === 'card') return <AppFrame sidebarWidth={0}><Routes><Route path="/bots/:botId/direct/thread" element={<div className="p-4" data-ui-page-subject>
       <BotDirectMessageCard data={{ v: 1, threadId: 'opened-thread', viewerBotId: 'bot-a', peerBotId: 'bot-b', peerBotName: 'Filo', direction: 'sent', sequence: 1, preview: content.slice(0, 400) }} />

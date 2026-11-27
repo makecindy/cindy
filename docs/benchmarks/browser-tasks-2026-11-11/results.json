@@ -1,0 +1,1638 @@
+{
+ "date": "2026-11-11",
+ "note": "Seconds unless a field name says otherwise. See README.md in this folder for method and limits.",
+ "summary": {
+  "correct": {
+   "cindyNew": "27/27",
+   "cindyOld": "27/27",
+   "claudeApp": "27/27",
+   "codexApp": "26/27"
+  },
+  "meanSeconds": {
+   "cindyNew": 15.8,
+   "cindyOld": 20.6,
+   "claudeApp": 29.7,
+   "codexApp": 35.2,
+   "codexAppWithApproval": 41.1
+  },
+  "meanOperations": {
+   "cindyNew": 3.2,
+   "cindyOld": 6.7,
+   "claudeAppActions": 7.1,
+   "codexApp": 5.5
+  },
+  "perScene": {
+   "form": {
+    "scene": "填写并提交一张表单",
+    "cindyNew": 20.9,
+    "cindyOld": 20.8,
+    "claudeApp": 29.2,
+    "codexApp": 39.8,
+    "codexAppWithApproval": 47.0
+   },
+   "catalog": {
+    "scene": "逐个查看 4 个商品页",
+    "cindyNew": 12.2,
+    "cindyOld": 19.0,
+    "claudeApp": 21.6,
+    "codexApp": 37.6,
+    "codexAppWithApproval": 41.5
+   },
+   "orders": {
+    "scene": "翻页查找一条订单",
+    "cindyNew": 18.3,
+    "cindyOld": 19.9,
+    "claudeApp": 23.8,
+    "codexApp": 26.2,
+    "codexAppWithApproval": 30.6
+   },
+   "report": {
+    "scene": "点按钮生成报告再读数",
+    "cindyNew": 13.5,
+    "cindyOld": 13.0,
+    "claudeApp": 20.2,
+    "codexApp": 35.4,
+    "codexAppWithApproval": 40.2
+   },
+   "settings": {
+    "scene": "进入设置、修改并保存",
+    "cindyNew": 22.0,
+    "cindyOld": 24.4,
+    "claudeApp": 38.2,
+    "codexApp": 49.9,
+    "codexAppWithApproval": 54.5
+   },
+   "vault": {
+    "scene": "点击后等内容出现再读取",
+    "cindyNew": 17.3,
+    "cindyOld": 20.4,
+    "claudeApp": 28.2,
+    "codexApp": 35.2,
+    "codexAppWithApproval": 39.8
+   },
+   "badge": {
+    "scene": "填写页面内嵌组件里的表单",
+    "cindyNew": 16.4,
+    "cindyOld": 49.6,
+    "claudeApp": 53.9,
+    "codexApp": 57.4,
+    "codexAppWithApproval": 72.3
+   },
+   "embed": {
+    "scene": "读取嵌入页面里的内容",
+    "cindyNew": 7.6,
+    "cindyOld": 7.9,
+    "claudeApp": 38.8,
+    "codexApp": 15.3,
+    "codexAppWithApproval": 20.0
+   },
+   "directory": {
+    "scene": "站内搜索一个人",
+    "cindyNew": 13.7,
+    "cindyOld": 10.5,
+    "claudeApp": 13.2,
+    "codexApp": 20.0,
+    "codexAppWithApproval": 24.4
+   }
+  }
+ },
+ "cindy": {
+  "model": "claude-opus-5-5",
+  "effort": "medium",
+  "baselineSha": "799a8b40ee85b4379e9482b27c398080fb84b62e",
+  "headSha": "cc055c5a257f947d91a0e933bc54ce7a50884750",
+  "runs": [
+   {
+    "task": "form",
+    "version": "old",
+    "repetition": 0,
+    "passed": true,
+    "turns": 9,
+    "browserCalls": 7,
+    "costUsd": 0.1765,
+    "seconds": 19.4,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:fill",
+     "act:select",
+     "act:click",
+     "act:click",
+     "act:evaluate",
+     "act:click"
+    ]
+   },
+   {
+    "task": "form",
+    "version": "old",
+    "repetition": 1,
+    "passed": true,
+    "turns": 13,
+    "browserCalls": 11,
+    "costUsd": 0.1851,
+    "seconds": 22.8,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:type",
+     "act:type",
+     "act:select",
+     "act:fill",
+     "act:click",
+     "act:click",
+     "act:type",
+     "act:type",
+     "act:evaluate",
+     "act:click"
+    ]
+   },
+   {
+    "task": "form",
+    "version": "old",
+    "repetition": 2,
+    "passed": true,
+    "turns": 9,
+    "browserCalls": 7,
+    "costUsd": 0.1693,
+    "seconds": 20.1,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:fill",
+     "act:select",
+     "act:click",
+     "act:click",
+     "act:evaluate",
+     "act:click"
+    ]
+   },
+   {
+    "task": "form",
+    "version": "new",
+    "repetition": 0,
+    "passed": true,
+    "turns": 6,
+    "browserCalls": 4,
+    "costUsd": 0.1654,
+    "seconds": 21.0,
+    "calls": [
+     "list_tools",
+     "open",
+     "batch(type,type,select,fill,click,click,type,snapshot)",
+     "batch(type,click,click,type,evaluate)",
+     "act:click"
+    ]
+   },
+   {
+    "task": "form",
+    "version": "new",
+    "repetition": 1,
+    "passed": true,
+    "turns": 6,
+    "browserCalls": 4,
+    "costUsd": 0.164,
+    "seconds": 21.1,
+    "calls": [
+     "list_tools",
+     "open",
+     "batch(type,type,select,fill,click,click,type,snapshot)",
+     "batch(type,click,click,type,snapshot)",
+     "act:click"
+    ]
+   },
+   {
+    "task": "form",
+    "version": "new",
+    "repetition": 2,
+    "passed": true,
+    "turns": 6,
+    "browserCalls": 4,
+    "costUsd": 0.1638,
+    "seconds": 20.6,
+    "calls": [
+     "list_tools",
+     "open",
+     "batch(type,type,select,fill,click,click,type,snapshot)",
+     "batch(type,click,click,type,snapshot)",
+     "act:click"
+    ]
+   },
+   {
+    "task": "catalog",
+    "version": "old",
+    "repetition": 0,
+    "passed": true,
+    "turns": 7,
+    "browserCalls": 5,
+    "costUsd": 0.1811,
+    "seconds": 19.2,
+    "calls": [
+     "list_tools",
+     "open",
+     "navigate",
+     "navigate",
+     "navigate",
+     "navigate"
+    ]
+   },
+   {
+    "task": "catalog",
+    "version": "old",
+    "repetition": 1,
+    "passed": true,
+    "turns": 7,
+    "browserCalls": 5,
+    "costUsd": 0.1738,
+    "seconds": 19.7,
+    "calls": [
+     "list_tools",
+     "open",
+     "navigate",
+     "navigate",
+     "navigate",
+     "navigate"
+    ]
+   },
+   {
+    "task": "catalog",
+    "version": "old",
+    "repetition": 2,
+    "passed": true,
+    "turns": 7,
+    "browserCalls": 5,
+    "costUsd": 0.1728,
+    "seconds": 18.0,
+    "calls": [
+     "list_tools",
+     "open",
+     "navigate",
+     "navigate",
+     "navigate",
+     "navigate"
+    ]
+   },
+   {
+    "task": "catalog",
+    "version": "new",
+    "repetition": 0,
+    "passed": true,
+    "turns": 4,
+    "browserCalls": 2,
+    "costUsd": 0.1498,
+    "seconds": 12.1,
+    "calls": [
+     "list_tools",
+     "open",
+     "batch(navigate,snapshot,navigate,snapshot,navigate,snapshot,navigate,snapshot)"
+    ]
+   },
+   {
+    "task": "catalog",
+    "version": "new",
+    "repetition": 1,
+    "passed": true,
+    "turns": 4,
+    "browserCalls": 2,
+    "costUsd": 0.1499,
+    "seconds": 12.9,
+    "calls": [
+     "list_tools",
+     "open",
+     "batch(navigate,snapshot,navigate,snapshot,navigate,snapshot,navigate,snapshot)"
+    ]
+   },
+   {
+    "task": "catalog",
+    "version": "new",
+    "repetition": 2,
+    "passed": true,
+    "turns": 4,
+    "browserCalls": 2,
+    "costUsd": 0.1502,
+    "seconds": 11.7,
+    "calls": [
+     "list_tools",
+     "open",
+     "batch(navigate,snapshot,navigate,snapshot,navigate,snapshot,navigate,snapshot)"
+    ]
+   },
+   {
+    "task": "orders",
+    "version": "old",
+    "repetition": 0,
+    "passed": true,
+    "turns": 7,
+    "browserCalls": 5,
+    "costUsd": 0.2164,
+    "seconds": 19.2,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:click",
+     "act:click",
+     "act:click",
+     "act:click"
+    ]
+   },
+   {
+    "task": "orders",
+    "version": "old",
+    "repetition": 1,
+    "passed": true,
+    "turns": 7,
+    "browserCalls": 5,
+    "costUsd": 0.2174,
+    "seconds": 19.6,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:click",
+     "act:click",
+     "act:click",
+     "act:click"
+    ]
+   },
+   {
+    "task": "orders",
+    "version": "old",
+    "repetition": 2,
+    "passed": true,
+    "turns": 7,
+    "browserCalls": 5,
+    "costUsd": 0.2183,
+    "seconds": 20.8,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:click",
+     "act:click",
+     "act:click",
+     "act:click"
+    ]
+   },
+   {
+    "task": "orders",
+    "version": "new",
+    "repetition": 0,
+    "passed": true,
+    "turns": 5,
+    "browserCalls": 3,
+    "costUsd": 0.161,
+    "seconds": 19.3,
+    "calls": [
+     "list_tools",
+     "open",
+     "requests",
+     "batch(click,wait,extract,click,wait,extract,click,wait,extract,click,wait,extract)"
+    ]
+   },
+   {
+    "task": "orders",
+    "version": "new",
+    "repetition": 1,
+    "passed": true,
+    "turns": 5,
+    "browserCalls": 3,
+    "costUsd": 0.1679,
+    "seconds": 18.0,
+    "calls": [
+     "list_tools",
+     "open",
+     "requests",
+     "batch(click,wait,extract,click,wait,extract,click,wait,extract,click,wait,extract)"
+    ]
+   },
+   {
+    "task": "orders",
+    "version": "new",
+    "repetition": 2,
+    "passed": true,
+    "turns": 6,
+    "browserCalls": 4,
+    "costUsd": 0.1621,
+    "seconds": 17.7,
+    "calls": [
+     "list_tools",
+     "open",
+     "requests",
+     "batch(click,wait,extract)",
+     "act:evaluate"
+    ]
+   },
+   {
+    "task": "report",
+    "version": "old",
+    "repetition": 0,
+    "passed": true,
+    "turns": 5,
+    "browserCalls": 3,
+    "costUsd": 0.1337,
+    "seconds": 13.3,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:click",
+     "act:wait"
+    ]
+   },
+   {
+    "task": "report",
+    "version": "old",
+    "repetition": 1,
+    "passed": true,
+    "turns": 5,
+    "browserCalls": 3,
+    "costUsd": 0.1335,
+    "seconds": 13.2,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:click",
+     "act:wait"
+    ]
+   },
+   {
+    "task": "report",
+    "version": "old",
+    "repetition": 2,
+    "passed": true,
+    "turns": 5,
+    "browserCalls": 3,
+    "costUsd": 0.1333,
+    "seconds": 12.6,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:click",
+     "act:wait"
+    ]
+   },
+   {
+    "task": "report",
+    "version": "new",
+    "repetition": 0,
+    "passed": true,
+    "turns": 4,
+    "browserCalls": 2,
+    "costUsd": 0.1205,
+    "seconds": 13.6,
+    "calls": [
+     "list_tools",
+     "open",
+     "batch(click,wait,snapshot)"
+    ]
+   },
+   {
+    "task": "report",
+    "version": "new",
+    "repetition": 1,
+    "passed": true,
+    "turns": 5,
+    "browserCalls": 3,
+    "costUsd": 0.1278,
+    "seconds": 13.4,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:click",
+     "batch(wait,snapshot)"
+    ]
+   },
+   {
+    "task": "report",
+    "version": "new",
+    "repetition": 2,
+    "passed": true,
+    "turns": 4,
+    "browserCalls": 2,
+    "costUsd": 0.1204,
+    "seconds": 13.4,
+    "calls": [
+     "list_tools",
+     "open",
+     "batch(click,wait,snapshot)"
+    ]
+   },
+   {
+    "task": "settings",
+    "version": "old",
+    "repetition": 0,
+    "passed": true,
+    "turns": 10,
+    "browserCalls": 8,
+    "costUsd": 0.183,
+    "seconds": 23.8,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:click",
+     "act:click",
+     "act:click",
+     "act:click",
+     "act:select",
+     "act:evaluate",
+     "act:click"
+    ]
+   },
+   {
+    "task": "settings",
+    "version": "old",
+    "repetition": 1,
+    "passed": true,
+    "turns": 10,
+    "browserCalls": 8,
+    "costUsd": 0.183,
+    "seconds": 25.3,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:click",
+     "act:click",
+     "act:click",
+     "act:click",
+     "act:select",
+     "act:evaluate",
+     "act:click"
+    ]
+   },
+   {
+    "task": "settings",
+    "version": "old",
+    "repetition": 2,
+    "passed": true,
+    "turns": 10,
+    "browserCalls": 8,
+    "costUsd": 0.1832,
+    "seconds": 24.1,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:click",
+     "act:click",
+     "act:click",
+     "act:click",
+     "act:select",
+     "act:evaluate",
+     "act:click"
+    ]
+   },
+   {
+    "task": "settings",
+    "version": "new",
+    "repetition": 0,
+    "passed": true,
+    "turns": 8,
+    "browserCalls": 6,
+    "costUsd": 0.1725,
+    "seconds": 23.4,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:click",
+     "act:click",
+     "batch(click,click,select)",
+     "act:evaluate",
+     "act:click"
+    ]
+   },
+   {
+    "task": "settings",
+    "version": "new",
+    "repetition": 1,
+    "passed": true,
+    "turns": 7,
+    "browserCalls": 5,
+    "costUsd": 0.1644,
+    "seconds": 22.0,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:click",
+     "act:click",
+     "batch(click,click,select,snapshot)",
+     "act:click"
+    ]
+   },
+   {
+    "task": "settings",
+    "version": "new",
+    "repetition": 2,
+    "passed": true,
+    "turns": 7,
+    "browserCalls": 5,
+    "costUsd": 0.1625,
+    "seconds": 20.6,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:click",
+     "act:click",
+     "batch(click,click,select,snapshot)",
+     "act:click"
+    ]
+   },
+   {
+    "task": "vault",
+    "version": "old",
+    "repetition": 0,
+    "passed": true,
+    "turns": 7,
+    "browserCalls": 5,
+    "costUsd": 0.1575,
+    "seconds": 19.8,
+    "calls": [
+     "list_tools",
+     "open",
+     "screenshot",
+     "act:evaluate",
+     "act:clickCoords",
+     "screenshot"
+    ]
+   },
+   {
+    "task": "vault",
+    "version": "old",
+    "repetition": 1,
+    "passed": true,
+    "turns": 8,
+    "browserCalls": 6,
+    "costUsd": 0.1616,
+    "seconds": 21.0,
+    "calls": [
+     "list_tools",
+     "open",
+     "screenshot",
+     "act:evaluate",
+     "act:evaluate",
+     "act:clickCoords",
+     "screenshot"
+    ]
+   },
+   {
+    "task": "vault",
+    "version": "old",
+    "repetition": 2,
+    "passed": true,
+    "turns": 7,
+    "browserCalls": 5,
+    "costUsd": 0.1561,
+    "seconds": 20.4,
+    "calls": [
+     "list_tools",
+     "open",
+     "screenshot",
+     "act:evaluate",
+     "act:clickCoords",
+     "screenshot"
+    ]
+   },
+   {
+    "task": "vault",
+    "version": "new",
+    "repetition": 0,
+    "passed": true,
+    "turns": 7,
+    "browserCalls": 5,
+    "costUsd": 0.1463,
+    "seconds": 19.6,
+    "calls": [
+     "list_tools",
+     "open",
+     "cdp(nodes)",
+     "cdp(click,nodes)",
+     "screenshot",
+     "cdp(call)"
+    ]
+   },
+   {
+    "task": "vault",
+    "version": "new",
+    "repetition": 1,
+    "passed": true,
+    "turns": 6,
+    "browserCalls": 4,
+    "costUsd": 0.1352,
+    "seconds": 16.1,
+    "calls": [
+     "list_tools",
+     "open",
+     "cdp(nodes)",
+     "cdp(click,nodes)",
+     "screenshot"
+    ]
+   },
+   {
+    "task": "vault",
+    "version": "new",
+    "repetition": 2,
+    "passed": true,
+    "turns": 6,
+    "browserCalls": 4,
+    "costUsd": 0.1353,
+    "seconds": 16.2,
+    "calls": [
+     "list_tools",
+     "open",
+     "cdp(nodes)",
+     "cdp(click,nodes)",
+     "cdp(call)"
+    ]
+   },
+   {
+    "task": "badge",
+    "version": "old",
+    "repetition": 0,
+    "passed": true,
+    "turns": 25,
+    "browserCalls": 23,
+    "costUsd": 0.2765,
+    "seconds": 48.1,
+    "calls": [
+     "list_tools",
+     "open",
+     "snapshot",
+     "act:evaluate",
+     "screenshot",
+     "act:evaluate",
+     "act:clickCoords",
+     "act:type",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "screenshot",
+     "act:clickCoords",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "screenshot",
+     "act:clickCoords",
+     "screenshot"
+    ]
+   },
+   {
+    "task": "badge",
+    "version": "old",
+    "repetition": 1,
+    "passed": true,
+    "turns": 23,
+    "browserCalls": 21,
+    "costUsd": 0.2599,
+    "seconds": 47.6,
+    "calls": [
+     "list_tools",
+     "open",
+     "screenshot",
+     "act:evaluate",
+     "act:clickCoords",
+     "act:type",
+     "act:press",
+     "screenshot",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:clickCoords",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "screenshot",
+     "act:clickCoords",
+     "screenshot"
+    ]
+   },
+   {
+    "task": "badge",
+    "version": "old",
+    "repetition": 2,
+    "passed": true,
+    "turns": 25,
+    "browserCalls": 23,
+    "costUsd": 0.2843,
+    "seconds": 53.2,
+    "calls": [
+     "list_tools",
+     "open",
+     "snapshot",
+     "act:evaluate",
+     "act:evaluate",
+     "screenshot",
+     "act:evaluate",
+     "act:clickCoords",
+     "act:type",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:clickCoords",
+     "act:press",
+     "act:press",
+     "act:press",
+     "act:press",
+     "screenshot",
+     "act:clickCoords",
+     "screenshot"
+    ]
+   },
+   {
+    "task": "badge",
+    "version": "new",
+    "repetition": 0,
+    "passed": true,
+    "turns": 6,
+    "browserCalls": 4,
+    "costUsd": 0.1407,
+    "seconds": 16.3,
+    "calls": [
+     "list_tools",
+     "open",
+     "cdp(nodes)",
+     "cdp(type,type,click,nodes)",
+     "screenshot"
+    ]
+   },
+   {
+    "task": "badge",
+    "version": "new",
+    "repetition": 1,
+    "passed": true,
+    "turns": 6,
+    "browserCalls": 4,
+    "costUsd": 0.1363,
+    "seconds": 15.7,
+    "calls": [
+     "list_tools",
+     "open",
+     "cdp(nodes)",
+     "cdp(type,type,click)",
+     "cdp(nodes)"
+    ]
+   },
+   {
+    "task": "badge",
+    "version": "new",
+    "repetition": 2,
+    "passed": true,
+    "turns": 6,
+    "browserCalls": 4,
+    "costUsd": 0.1418,
+    "seconds": 17.1,
+    "calls": [
+     "list_tools",
+     "open",
+     "cdp(nodes)",
+     "cdp(type,type,click,nodes)",
+     "screenshot"
+    ]
+   },
+   {
+    "task": "embed",
+    "version": "old",
+    "repetition": 0,
+    "passed": true,
+    "turns": 3,
+    "browserCalls": 1,
+    "costUsd": 0.1138,
+    "seconds": 9.4,
+    "calls": [
+     "list_tools",
+     "open"
+    ]
+   },
+   {
+    "task": "embed",
+    "version": "old",
+    "repetition": 1,
+    "passed": true,
+    "turns": 3,
+    "browserCalls": 1,
+    "costUsd": 0.1135,
+    "seconds": 7.3,
+    "calls": [
+     "list_tools",
+     "open"
+    ]
+   },
+   {
+    "task": "embed",
+    "version": "old",
+    "repetition": 2,
+    "passed": true,
+    "turns": 3,
+    "browserCalls": 1,
+    "costUsd": 0.1135,
+    "seconds": 6.9,
+    "calls": [
+     "list_tools",
+     "open"
+    ]
+   },
+   {
+    "task": "embed",
+    "version": "new",
+    "repetition": 0,
+    "passed": true,
+    "turns": 3,
+    "browserCalls": 1,
+    "costUsd": 0.1079,
+    "seconds": 7.8,
+    "calls": [
+     "list_tools",
+     "open"
+    ]
+   },
+   {
+    "task": "embed",
+    "version": "new",
+    "repetition": 1,
+    "passed": true,
+    "turns": 3,
+    "browserCalls": 1,
+    "costUsd": 0.108,
+    "seconds": 7.4,
+    "calls": [
+     "list_tools",
+     "open"
+    ]
+   },
+   {
+    "task": "embed",
+    "version": "new",
+    "repetition": 2,
+    "passed": true,
+    "turns": 3,
+    "browserCalls": 1,
+    "costUsd": 0.1083,
+    "seconds": 7.6,
+    "calls": [
+     "list_tools",
+     "open"
+    ]
+   },
+   {
+    "task": "directory",
+    "version": "old",
+    "repetition": 0,
+    "passed": true,
+    "turns": 4,
+    "browserCalls": 2,
+    "costUsd": 0.1226,
+    "seconds": 10.7,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:type"
+    ]
+   },
+   {
+    "task": "directory",
+    "version": "old",
+    "repetition": 1,
+    "passed": true,
+    "turns": 4,
+    "browserCalls": 2,
+    "costUsd": 0.1226,
+    "seconds": 10.0,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:type"
+    ]
+   },
+   {
+    "task": "directory",
+    "version": "old",
+    "repetition": 2,
+    "passed": true,
+    "turns": 4,
+    "browserCalls": 2,
+    "costUsd": 0.1228,
+    "seconds": 10.7,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:type"
+    ]
+   },
+   {
+    "task": "directory",
+    "version": "new",
+    "repetition": 0,
+    "passed": true,
+    "turns": 4,
+    "browserCalls": 2,
+    "costUsd": 0.117,
+    "seconds": 10.1,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:type"
+    ]
+   },
+   {
+    "task": "directory",
+    "version": "new",
+    "repetition": 1,
+    "passed": true,
+    "turns": 5,
+    "browserCalls": 3,
+    "costUsd": 0.1293,
+    "seconds": 16.0,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:type",
+     "batch(wait,snapshot)"
+    ]
+   },
+   {
+    "task": "directory",
+    "version": "new",
+    "repetition": 2,
+    "passed": true,
+    "turns": 5,
+    "browserCalls": 3,
+    "costUsd": 0.1288,
+    "seconds": 15.1,
+    "calls": [
+     "list_tools",
+     "open",
+     "act:type",
+     "batch(wait,snapshot)"
+    ]
+   }
+  ]
+ },
+ "codexApp": {
+  "version": "26.1103.41825",
+  "model": "GPT-6.1 Sol",
+  "reasoning": "high",
+  "approvals": "automatic",
+  "rounds": [
+   {
+    "round": 1,
+    "ranAlongsideClaudeApp": true,
+    "usedForTiming": false,
+    "tasks": {
+     "form": {
+      "passed": true,
+      "logSeconds": 51.7,
+      "calls": 9,
+      "approvals": 1,
+      "approvalSeconds": 4.5,
+      "toolSeconds": 8.3,
+      "modelSeconds": 38.8
+     },
+     "catalog": {
+      "passed": true,
+      "logSeconds": 31.2,
+      "calls": 7,
+      "approvals": 1,
+      "approvalSeconds": 3.6,
+      "toolSeconds": 2.7,
+      "modelSeconds": 24.9
+     },
+     "orders": {
+      "passed": true,
+      "logSeconds": 43.0,
+      "calls": 6,
+      "approvals": 1,
+      "approvalSeconds": 4.1,
+      "toolSeconds": 3.0,
+      "modelSeconds": 35.9
+     },
+     "report": {
+      "passed": true,
+      "logSeconds": 31.6,
+      "calls": 5,
+      "approvals": 1,
+      "approvalSeconds": 4.9,
+      "toolSeconds": 2.1,
+      "modelSeconds": 24.6
+     },
+     "settings": {
+      "passed": true,
+      "logSeconds": 43.7,
+      "calls": 7,
+      "approvals": 1,
+      "approvalSeconds": 4.2,
+      "toolSeconds": 3.0,
+      "modelSeconds": 36.5
+     },
+     "vault": {
+      "passed": true,
+      "logSeconds": 65.6,
+      "calls": 8,
+      "approvals": 1,
+      "approvalSeconds": 6.0,
+      "toolSeconds": 2.7,
+      "modelSeconds": 56.8
+     },
+     "badge": {
+      "passed": true,
+      "logSeconds": 140.2,
+      "calls": 17,
+      "approvals": 1,
+      "approvalSeconds": 5.2,
+      "toolSeconds": 64.3,
+      "modelSeconds": 70.7,
+      "note": "Switched from its built-in browser to the system Chrome; one tool call waited 33.9 s for a system permission."
+     },
+     "embed": {
+      "passed": true,
+      "logSeconds": 22.2,
+      "calls": 2,
+      "approvals": 1,
+      "approvalSeconds": 4.8,
+      "toolSeconds": 1.7,
+      "modelSeconds": 15.7
+     },
+     "directory": {
+      "passed": true,
+      "logSeconds": 20.9,
+      "calls": 3,
+      "approvals": 1,
+      "approvalSeconds": 4.2,
+      "toolSeconds": 2.5,
+      "modelSeconds": 14.1
+     }
+    }
+   },
+   {
+    "round": 2,
+    "ranAlongsideClaudeApp": false,
+    "usedForTiming": true,
+    "tasks": {
+     "form": {
+      "passed": true,
+      "logSeconds": 52.1,
+      "calls": 6,
+      "approvals": 3,
+      "approvalSeconds": 9.8,
+      "toolSeconds": 3.0,
+      "modelSeconds": 39.3,
+      "fromSendSeconds": 54.2
+     },
+     "catalog": {
+      "passed": true,
+      "logSeconds": 38.0,
+      "calls": 7,
+      "approvals": 1,
+      "approvalSeconds": 3.9,
+      "toolSeconds": 2.5,
+      "modelSeconds": 31.6,
+      "fromSendSeconds": 40.1
+     },
+     "orders": {
+      "passed": true,
+      "logSeconds": 26.2,
+      "calls": 5,
+      "approvals": 1,
+      "approvalSeconds": 4.6,
+      "toolSeconds": 2.9,
+      "modelSeconds": 18.6,
+      "fromSendSeconds": 28.3
+     },
+     "report": {
+      "passed": true,
+      "logSeconds": 40.4,
+      "calls": 4,
+      "approvals": 1,
+      "approvalSeconds": 4.7,
+      "toolSeconds": 2.5,
+      "modelSeconds": 33.2,
+      "fromSendSeconds": 42.6
+     },
+     "settings": {
+      "passed": true,
+      "logSeconds": 51.6,
+      "calls": 9,
+      "approvals": 1,
+      "approvalSeconds": 4.2,
+      "toolSeconds": 3.0,
+      "modelSeconds": 44.4,
+      "fromSendSeconds": 53.7
+     },
+     "vault": {
+      "passed": true,
+      "logSeconds": 45.7,
+      "calls": 8,
+      "approvals": 1,
+      "approvalSeconds": 5.3,
+      "toolSeconds": 4.2,
+      "modelSeconds": 36.2,
+      "fromSendSeconds": 47.8
+     },
+     "badge": {
+      "passed": true,
+      "logSeconds": 47.8,
+      "calls": 7,
+      "approvals": 1,
+      "approvalSeconds": 5.5,
+      "toolSeconds": 3.4,
+      "modelSeconds": 38.9,
+      "fromSendSeconds": 50.0
+     },
+     "embed": {
+      "passed": true,
+      "logSeconds": 19.8,
+      "calls": 2,
+      "approvals": 1,
+      "approvalSeconds": 4.6,
+      "toolSeconds": 1.8,
+      "modelSeconds": 13.4,
+      "fromSendSeconds": 21.9
+     },
+     "directory": {
+      "passed": true,
+      "logSeconds": 25.6,
+      "calls": 3,
+      "approvals": 1,
+      "approvalSeconds": 4.4,
+      "toolSeconds": 2.9,
+      "modelSeconds": 18.3,
+      "fromSendSeconds": 27.8
+     }
+    }
+   },
+   {
+    "round": 3,
+    "ranAlongsideClaudeApp": false,
+    "usedForTiming": true,
+    "tasks": {
+     "form": {
+      "passed": true,
+      "logSeconds": 37.7,
+      "calls": 5,
+      "approvals": 1,
+      "approvalSeconds": 4.6,
+      "toolSeconds": 2.2,
+      "modelSeconds": 30.9,
+      "fromSendSeconds": 39.8
+     },
+     "catalog": {
+      "passed": true,
+      "logSeconds": 40.9,
+      "calls": 7,
+      "approvals": 1,
+      "approvalSeconds": 4.0,
+      "toolSeconds": 2.9,
+      "modelSeconds": 34.1,
+      "fromSendSeconds": 43.0
+     },
+     "orders": {
+      "passed": true,
+      "logSeconds": 30.3,
+      "calls": 6,
+      "approvals": 1,
+      "approvalSeconds": 4.3,
+      "toolSeconds": 3.3,
+      "modelSeconds": 22.7,
+      "fromSendSeconds": 33.0
+     },
+     "report": {
+      "passed": true,
+      "logSeconds": 35.6,
+      "calls": 5,
+      "approvals": 1,
+      "approvalSeconds": 4.9,
+      "toolSeconds": 2.4,
+      "modelSeconds": 28.3,
+      "fromSendSeconds": 37.8
+     },
+     "settings": {
+      "passed": true,
+      "logSeconds": 53.3,
+      "calls": 9,
+      "approvals": 1,
+      "approvalSeconds": 5.0,
+      "toolSeconds": 3.4,
+      "modelSeconds": 44.9,
+      "fromSendSeconds": 55.4
+     },
+     "vault": {
+      "passed": true,
+      "logSeconds": 30.2,
+      "calls": 4,
+      "approvals": 1,
+      "approvalSeconds": 4.0,
+      "toolSeconds": 2.4,
+      "modelSeconds": 23.7,
+      "fromSendSeconds": 31.9
+     },
+     "badge": {
+      "passed": false,
+      "logSeconds": 92.4,
+      "calls": 7,
+      "approvals": 7,
+      "approvalSeconds": 24.2,
+      "toolSeconds": 2.3,
+      "modelSeconds": 65.9,
+      "fromSendSeconds": 94.6,
+      "note": "Could not operate the embedded panel in its built-in browser, stopped and asked for permission to use the system Chrome; automatic approval declined that switch."
+     },
+     "embed": {
+      "passed": true,
+      "logSeconds": 15.9,
+      "calls": 2,
+      "approvals": 1,
+      "approvalSeconds": 4.8,
+      "toolSeconds": 1.8,
+      "modelSeconds": 9.3,
+      "fromSendSeconds": 18.1
+     },
+     "directory": {
+      "passed": true,
+      "logSeconds": 18.6,
+      "calls": 3,
+      "approvals": 1,
+      "approvalSeconds": 4.3,
+      "toolSeconds": 2.6,
+      "modelSeconds": 11.7,
+      "fromSendSeconds": 20.9
+     }
+    }
+   }
+  ]
+ },
+ "claudeApp": {
+  "model": "Opus 5.5 Medium",
+  "permissions": "Auto",
+  "round1": {
+   "ranAlongsideCodexApp": true,
+   "usedForTiming": false,
+   "passed": {
+    "form": true,
+    "catalog": true,
+    "orders": true,
+    "report": true,
+    "settings": true,
+    "vault": true,
+    "badge": true,
+    "embed": true,
+    "directory": true
+   }
+  },
+  "samples": {
+   "form": [
+    {
+     "round": 2,
+     "passed": true,
+     "appBuild": "4.23118.0",
+     "usedForTiming": false,
+     "firstRequestSeconds": 8.2,
+     "lastKeyRequestSeconds": 24.5,
+     "answerAbsentSeconds": 24.5,
+     "answerPresentSeconds": 37.8,
+     "actions": null
+    },
+    {
+     "round": 2,
+     "passed": true,
+     "appBuild": "4.23118.1",
+     "usedForTiming": true,
+     "firstRequestSeconds": 8.4,
+     "lastKeyRequestSeconds": 22.3,
+     "answerAbsentSeconds": 27.2,
+     "answerPresentSeconds": 28.9,
+     "actions": 6
+    },
+    {
+     "round": 3,
+     "passed": true,
+     "appBuild": "4.23118.1",
+     "usedForTiming": true,
+     "firstRequestSeconds": 8.6,
+     "lastKeyRequestSeconds": 25.2,
+     "answerAbsentSeconds": 29.4,
+     "answerPresentSeconds": 31.3,
+     "actions": 6
+    }
+   ],
+   "catalog": [
+    {
+     "round": 2,
+     "passed": true,
+     "appBuild": "4.23118.0",
+     "usedForTiming": true,
+     "firstRequestSeconds": 6.8,
+     "lastKeyRequestSeconds": 19.7,
+     "answerAbsentSeconds": 19.7,
+     "answerPresentSeconds": 23.2,
+     "actions": 5
+    },
+    {
+     "round": 3,
+     "passed": true,
+     "appBuild": "4.23118.1",
+     "usedForTiming": true,
+     "firstRequestSeconds": 6.9,
+     "lastKeyRequestSeconds": 18.9,
+     "answerAbsentSeconds": 21.0,
+     "answerPresentSeconds": 22.7,
+     "actions": 5
+    }
+   ],
+   "orders": [
+    {
+     "round": 2,
+     "passed": true,
+     "appBuild": "4.23118.0",
+     "usedForTiming": true,
+     "firstRequestSeconds": 6.5,
+     "lastKeyRequestSeconds": 19.0,
+     "answerAbsentSeconds": 22.2,
+     "answerPresentSeconds": 29.3,
+     "actions": null
+    },
+    {
+     "round": 2,
+     "passed": true,
+     "appBuild": "4.23118.1",
+     "usedForTiming": true,
+     "firstRequestSeconds": 6.7,
+     "lastKeyRequestSeconds": 14.6,
+     "answerAbsentSeconds": 19.4,
+     "answerPresentSeconds": 21.1,
+     "actions": 5
+    },
+    {
+     "round": 3,
+     "passed": true,
+     "appBuild": "4.23118.1",
+     "usedForTiming": true,
+     "firstRequestSeconds": 7.6,
+     "lastKeyRequestSeconds": 18.9,
+     "answerAbsentSeconds": 24.4,
+     "answerPresentSeconds": 26.1,
+     "actions": 11
+    }
+   ],
+   "report": [
+    {
+     "round": 2,
+     "passed": true,
+     "appBuild": "4.23118.0",
+     "usedForTiming": true,
+     "firstRequestSeconds": 8.8,
+     "lastKeyRequestSeconds": 14.4,
+     "answerAbsentSeconds": 17.7,
+     "answerPresentSeconds": 21.0,
+     "actions": 4
+    },
+    {
+     "round": 3,
+     "passed": true,
+     "appBuild": "4.23118.1",
+     "usedForTiming": true,
+     "firstRequestSeconds": 6.6,
+     "lastKeyRequestSeconds": 11.2,
+     "answerAbsentSeconds": 20.1,
+     "answerPresentSeconds": 21.8,
+     "actions": 5
+    }
+   ],
+   "settings": [
+    {
+     "round": 2,
+     "passed": true,
+     "appBuild": "4.23118.0",
+     "usedForTiming": true,
+     "firstRequestSeconds": 7.2,
+     "lastKeyRequestSeconds": 34.4,
+     "answerAbsentSeconds": 37.6,
+     "answerPresentSeconds": 40.8,
+     "actions": 12
+    },
+    {
+     "round": 3,
+     "passed": true,
+     "appBuild": "4.23118.1",
+     "usedForTiming": true,
+     "firstRequestSeconds": 6.7,
+     "lastKeyRequestSeconds": 27.5,
+     "answerAbsentSeconds": 36.3,
+     "answerPresentSeconds": 38.0,
+     "actions": 12
+    }
+   ],
+   "vault": [
+    {
+     "round": 2,
+     "passed": true,
+     "appBuild": "4.23118.0",
+     "usedForTiming": false,
+     "firstRequestSeconds": 8.3,
+     "lastKeyRequestSeconds": 17.2,
+     "answerAbsentSeconds": 23.9,
+     "answerPresentSeconds": null,
+     "actions": null
+    },
+    {
+     "round": 2,
+     "passed": true,
+     "appBuild": "4.23118.0",
+     "usedForTiming": true,
+     "firstRequestSeconds": 8.6,
+     "lastKeyRequestSeconds": 17.5,
+     "answerAbsentSeconds": 27.9,
+     "answerPresentSeconds": 29.6,
+     "actions": 6
+    },
+    {
+     "round": 3,
+     "passed": true,
+     "appBuild": "4.23118.1",
+     "usedForTiming": true,
+     "firstRequestSeconds": 8.3,
+     "lastKeyRequestSeconds": 17.0,
+     "answerAbsentSeconds": 26.9,
+     "answerPresentSeconds": 28.6,
+     "actions": 6
+    }
+   ],
+   "badge": [
+    {
+     "round": 2,
+     "passed": true,
+     "appBuild": "4.23118.0",
+     "usedForTiming": true,
+     "firstRequestSeconds": 10.9,
+     "lastKeyRequestSeconds": 37.7,
+     "answerAbsentSeconds": 51.4,
+     "answerPresentSeconds": 57.4,
+     "actions": 10
+    },
+    {
+     "round": 3,
+     "passed": true,
+     "appBuild": "4.23118.1",
+     "usedForTiming": true,
+     "firstRequestSeconds": 11.7,
+     "lastKeyRequestSeconds": 38.7,
+     "answerAbsentSeconds": 52.5,
+     "answerPresentSeconds": 54.2,
+     "actions": 11
+    }
+   ],
+   "embed": [
+    {
+     "round": 2,
+     "passed": true,
+     "appBuild": "4.23118.0",
+     "usedForTiming": true,
+     "firstRequestSeconds": 8.0,
+     "lastKeyRequestSeconds": 8.0,
+     "answerAbsentSeconds": 28.9,
+     "answerPresentSeconds": 30.7,
+     "actions": 7
+    },
+    {
+     "round": 3,
+     "passed": true,
+     "appBuild": "4.23118.1",
+     "usedForTiming": true,
+     "firstRequestSeconds": 7.6,
+     "lastKeyRequestSeconds": 7.6,
+     "answerAbsentSeconds": 43.2,
+     "answerPresentSeconds": 52.2,
+     "actions": 10
+    }
+   ],
+   "directory": [
+    {
+     "round": 2,
+     "passed": true,
+     "appBuild": "4.23118.0",
+     "usedForTiming": true,
+     "firstRequestSeconds": 6.3,
+     "lastKeyRequestSeconds": 10.9,
+     "answerAbsentSeconds": 11.4,
+     "answerPresentSeconds": 13.1,
+     "actions": 3
+    },
+    {
+     "round": 3,
+     "passed": true,
+     "appBuild": "4.23118.1",
+     "usedForTiming": true,
+     "firstRequestSeconds": 6.6,
+     "lastKeyRequestSeconds": 11.6,
+     "answerAbsentSeconds": 13.5,
+     "answerPresentSeconds": 14.9,
+     "actions": 3
+    }
+   ]
+  }
+ }
+}

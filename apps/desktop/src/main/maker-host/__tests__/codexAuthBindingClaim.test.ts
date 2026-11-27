@@ -1,3 +1,5 @@
+import { canLinkFile } from './codexAuthTestFs.js';
+import { configureOwnerContext } from '../../ownerContext.js';
 /**
  * Codex OAuth 绑定自愈(claimDetectedCodexOAuthBinding)+ readState 绑定 gate 集成测试。
  *
@@ -17,6 +19,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const dirs: string[] = [];
 const h = vi.hoisted(() => ({ userDataDir: '', dataOwnerId: null as string | null }));
+
+// Mirror this fixture's changing profile/owner through the Host-neutral ports.
+vi.mock('../../userDataPath.js', () => ({ getUserDataDir: () => h.userDataDir, userDataPath: (...parts: string[]) => path.join(h.userDataDir, ...parts) }));
+configureOwnerContext({
+  read: () => ({ dataOwnerId: h.dataOwnerId, generation: 1, boundaryPending: false }),
+  fallbackBaseDir: () => h.userDataDir,
+});
 
 vi.mock('electron', () => ({
   app: {
@@ -121,11 +130,22 @@ afterEach(() => {
 });
 
 describe('codex OAuth binding auto-claim on reconcile', () => {
-  it('binds the detected system CLI credential to the current owner within one getState call', async () => {
-    const { bindingFile } = fixture();
+  it('binds the detected system CLI credential only after establishing a shared file link', async () => {
+    const { bindingFile, systemAuth, localAuth } = fixture();
     h.dataOwnerId = 'owner-a';
     writeStableProjectionOwner('owner-a');
     const adapter = new DesktopCodexAuthAdapter();
+
+    if (!canLinkFile) {
+      const bytes = fs.readFileSync(systemAuth);
+      await expect(adapter.getState()).resolves.toMatchObject({ authenticated: false });
+      await expect(adapter.getAccessToken()).resolves.toBeNull();
+      expect(fs.existsSync(localAuth)).toBe(false);
+      expect(fs.existsSync(bindingFile)).toBe(false);
+      expect(fs.readFileSync(systemAuth)).toEqual(bytes);
+      expect(fs.statSync(systemAuth).nlink).toBe(1);
+      return;
+    }
 
     await expect(adapter.getState()).resolves.toMatchObject({
       authenticated: true,
@@ -139,7 +159,7 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     await expect(adapter.getAccessToken()).resolves.toBe('system-token');
   });
 
-  it('repairs a claim that the one-shot migration consumed before the reconcile hardlink existed', async () => {
+  it.skipIf(!canLinkFile)('repairs a claim that the one-shot migration consumed before the reconcile hardlink existed', async () => {
     const { bindingFile } = fixture();
     // 竞态残局:legacyClaimOwner 已写下,openai 名额被 false 消费。
     fs.writeFileSync(bindingFile, JSON.stringify({ legacyClaimOwner: 'owner-a' }));
@@ -157,7 +177,7 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     });
   });
 
-  it('keeps another owner fail-closed and stops reporting the unbound OAuth as connected', async () => {
+  it.skipIf(!canLinkFile)('keeps another owner fail-closed and stops reporting the unbound OAuth as connected', async () => {
     const { bindingFile } = fixture();
     fs.writeFileSync(
       bindingFile,
@@ -198,7 +218,7 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     expect(fs.existsSync(bindingFile)).toBe(false);
   });
 
-  it('drops the claim when the app session switches owners during an in-flight reconcile', async () => {
+  it.skipIf(!canLinkFile)('drops the claim when the app session switches owners during an in-flight reconcile', async () => {
     // review P1:claim 只允许写给「reconcile 发起时」的会话;在途期间切换账号必须放弃,
     // 绝不把 A 时代发起的认领写到 B 名下。B 自己的下一次 reconcile 会按 B 的规则重试。
     const { bindingFile } = fixture();
@@ -216,7 +236,7 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     expect(fs.existsSync(bindingFile)).toBe(false);
   });
 
-  it('runs the model-discovery follow-up exactly once when the claim succeeds', async () => {
+  it.skipIf(!canLinkFile)('runs the model-discovery follow-up exactly once when the claim succeeds', async () => {
     // 首启回归：本机已有 ChatGPT 凭证这条路径不走 OAuth 登录动作，拿不到 onLoginSuccess。
     // 认领完不补拉，供应商就停在「已连接 + 零模型」，清单要等用户打开某个面板才出现。
     const { bindingFile } = fixture();
@@ -251,7 +271,7 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     expect(claimed).not.toHaveBeenCalled();
   });
 
-  it('keeps the claim successful when the follow-up throws or rejects', async () => {
+  it.skipIf(!canLinkFile)('keeps the claim successful when the follow-up throws or rejects', async () => {
     // 补拉是「认领之后要做什么」，它失败不该被记成认领失败，更不该把 reconcile 链路搞挂。
     const { bindingFile } = fixture();
     h.dataOwnerId = 'owner-a';
@@ -273,7 +293,7 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     expect(readBindingFile(bindingFile)).toMatchObject({ openai: 'owner-a' });
   });
 
-  it('keeps pre-session behavior without writing any binding when no owner is committed', async () => {
+  it.skipIf(!canLinkFile)('keeps pre-session behavior without writing any binding when no owner is committed', async () => {
     const { bindingFile } = fixture();
     writeStableProjectionOwner(null);
     const adapter = new DesktopCodexAuthAdapter();
@@ -283,5 +303,34 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
       authSource: 'oauth',
     });
     expect(fs.existsSync(bindingFile)).toBe(false);
+  });
+});
+
+/**
+ * 共享凭证连不上时的报错归因(#10301)。
+ *
+ * 系统侧 Codex 已登录、但 Cindy 建不出指向它的共享链接(Windows 没有创建符号链接的
+ * 权限时 symlink 直接 EPERM)—— 凭证是「连不上」而不是「没登录」。旧实现把这个结论
+ * 只写进日志,readState 于是回落到通用 no_oauth / 无 reason,界面只显示「回复未完成」,
+ * 用户既看不出卡点,也无法行动(反复重登解决不了链接权限)。
+ */
+describe('codex shared auth link unavailable 的报错归因', () => {
+  it('连不上已登录的系统凭证时报可执行的原因,而不是通用未登录', async () => {
+    const { systemAuth, localAuth } = fixture();
+    h.dataOwnerId = 'owner-a';
+    writeStableProjectionOwner('owner-a');
+    // Windows 无符号链接权限:链接根本建不出来。
+    vi.spyOn(fs.promises, 'symlink').mockRejectedValue(
+      Object.assign(new Error('operation not permitted'), { code: 'EPERM' }),
+    );
+    const adapter = new DesktopCodexAuthAdapter();
+
+    await expect(adapter.getState()).resolves.toEqual({
+      authenticated: false,
+      errorReason: 'codex_shared_auth_link_unavailable',
+    });
+    // 这条路径绝不搬走或复制 token:系统凭证原样保留,本地没有半截凭证。
+    expect(fs.existsSync(systemAuth)).toBe(true);
+    expect(fs.existsSync(localAuth)).toBe(false);
   });
 });

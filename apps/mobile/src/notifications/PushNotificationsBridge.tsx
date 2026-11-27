@@ -1,13 +1,20 @@
+import { NotificationReconciliationBridge } from './NotificationReconciliationBridge';
 import { useGlobalSearchParams, usePathname, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef } from 'react';
 import { AppState } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthContext';
 import { useSelfHostedRelay } from '@/device-link/selfHostedRelay';
+import { useMobileAgentNetPreferences } from '@/device-link/agentNetPreferences';
+import { mobileAgentNetPushScope, mobileAgentNetPushSelected, subscribeMobileAgentNetPushScope } from '@/device-link/agentNetPushRegistry';
 import Notifications from './nativeNotifications';
 import { ChatBackgroundBridge } from './ChatBackgroundBridge';
+import { isNotificationRouteVisible } from './notificationBadge';
 import { notificationRecoveryRoute, parseNotificationResponseDeepLink } from './pushRegistrationModel';
+import { handleNotificationActionResponse } from './notificationActionRunner';
 import {
   configureForegroundNotificationBehavior,
+  registerNotificationActionCategories,
   isPushSupported,
   readPushEnabled,
   retryPendingUnregister,
@@ -30,15 +37,20 @@ type NotificationResponse = Parameters<
  */
 export function PushNotificationsBridge() {
   const auth = useAuth();
+  const pushAccountId = auth.user?.id;
+  const previousProfile = useRef(auth.user);
+  const onProfileRefresh = useRef<(() => void) | null>(null);
+  const { i18n: { language } } = useTranslation();
   const router = useRouter();
   const pathname = usePathname();
-  const { threadRootId } = useGlobalSearchParams<{ threadRootId?: string }>();
-  const visibleChat = useRef({ pathname, threadRootId });
-  visibleChat.current = { pathname, threadRootId };
+  const { threadRootId, deviceId } = useGlobalSearchParams<{ threadRootId?: string; deviceId?: string }>();
+  const visibleChat = useRef({ pathname, threadRootId, deviceId });
+  visibleChat.current = { pathname, threadRootId, deviceId };
   const routerRef = useRef(router);
   routerRef.current = router;
   /** 冷启动点通知时 auth 可能未就绪,先存下待路由的深链。 */
   const pendingDeepLinkRef = useRef<string | null>(null);
+  const pendingAgentNetScopeRef = useRef<string | null>(null);
   const authStateRef = useRef({
     initialized: auth.initialized,
     isAuthenticated: auth.isAuthenticated,
@@ -50,64 +62,122 @@ export function PushNotificationsBridge() {
   const apiFetchRef = useRef(auth.apiFetch);
   apiFetchRef.current = auth.apiFetch;
   // 自建中转下不登记 device-link 推送;切回官方中转后按本机开关重新同步一次。
-  const selfHostedRelay = useSelfHostedRelay() !== null;
+  const selfHostedRelay = useSelfHostedRelay();
+  const agentNetPreferences = useMobileAgentNetPreferences();
 
   useEffect(() => {
     if (!isPushSupported()) return;
     configureForegroundNotificationBehavior(route => {
-      const [path, query] = route.split('?');
-      const thread = new URLSearchParams(query).get('threadRootId') ?? undefined;
-      return visibleChat.current.pathname === path && visibleChat.current.threadRootId === thread;
-    });
+      return AppState.currentState === 'active' && isNotificationRouteVisible(route, visibleChat.current);
+    }, () => authStateRef.current.initialized && authStateRef.current.isAuthenticated);
   }, []);
 
-  // 登录态就绪后同步注册状态(开关关闭 / 从未注册时是 no-op)
+  // 通知上的按钮(允许一次 / 拒绝 / 回复):按当前界面语言向系统登记,换语言后重新登记。
   useEffect(() => {
     if (!isPushSupported()) return;
-    if (!auth.initialized || !auth.isAuthenticated) return;
+    void registerNotificationActionCategories().catch(() => undefined);
+  }, [language]);
+
+  // 登录态就绪后同步注册状态；账号代次或路由改变时重新登记，同账号的资料刷新只用于失败恢复。
+  useEffect(() => {
+    if (!isPushSupported()) return;
+    if (!auth.initialized || !auth.isAuthenticated || !pushAccountId) return;
     let cancelled = false;
-    void (async () => {
-      // 只用当前会话补偿当前区域的注销，再按本机开关同步注册状态。
-      await retryPendingUnregister(apiFetchRef.current).catch(() => undefined);
-      if (cancelled) return;
-      const enabled = await readPushEnabled();
-      if (cancelled || !enabled) return;
-      await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current }).catch(() => undefined);
-    })();
+    let running = false;
+    let replay = false;
+    let profileRetryAvailable = true;
+    async function reconcile(skipConfirmed: boolean) {
+      if (running) { replay = true; return; }
+      running = true;
+      try {
+        const unregistered = await retryPendingUnregister(apiFetchRef.current);
+        if (cancelled) return;
+        const enabled = await readPushEnabled();
+        if (cancelled) return;
+        if (enabled) {
+          const result = await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current, skipConfirmed });
+          if (result === 'registered') profileRetryAvailable = true;
+        } else if (unregistered) {
+          profileRetryAvailable = true;
+        }
+      } catch {
+        // A profile-triggered failure waits for foreground before another retry.
+      } finally {
+        running = false;
+        if (replay && !cancelled) { replay = false; void reconcile(true); }
+      }
+    }
+    onProfileRefresh.current = () => {
+      if (!profileRetryAvailable) return;
+      profileRetryAvailable = false;
+      void reconcile(true);
+    };
+    const foreground = AppState.addEventListener('change', state => {
+      if (state !== 'active') return;
+      profileRetryAvailable = true;
+      void reconcile(true);
+    });
+    void reconcile(false);
     return () => {
       cancelled = true;
+      onProfileRefresh.current = null;
+      foreground.remove();
     };
-  }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated, auth.user, selfHostedRelay]);
+  }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated, pushAccountId, selfHostedRelay, agentNetPreferences.generation]);
+
+  useEffect(() => {
+    if (previousProfile.current?.id === auth.user?.id && previousProfile.current !== auth.user) {
+      onProfileRefresh.current?.();
+    }
+    previousProfile.current = auth.user;
+  }, [auth.user]);
 
   // APNs token 轮换 → 重新上报(仅开关开启且已登录时)
   useEffect(() => {
     if (!isPushSupported()) return;
     if (!auth.initialized || !auth.isAuthenticated) return;
-    const sub = Notifications.addPushTokenListener(() => {
+    let lastToken: string | undefined;
+    let cancelled = false;
+    const sub = Notifications.addPushTokenListener((deviceToken) => {
+      if (typeof deviceToken.data !== 'string' || !deviceToken.data.trim()) return;
+      const token = `${deviceToken.type}:${deviceToken.data}`;
+      if (lastToken === token) return;
+      lastToken = token;
       void (async () => {
         const enabled = await readPushEnabled();
-        if (!enabled) return;
-        await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current }).catch(
-          () => undefined,
-        );
-      })();
+        if (cancelled) return;
+        if (!enabled) { if (lastToken === token) lastToken = undefined; return; }
+        const result = await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current, deviceToken });
+        if (result !== 'registered' && lastToken === token) lastToken = undefined;
+      })().catch(() => { if (lastToken === token) lastToken = undefined; });
     });
-    return () => sub.remove();
-  }, [auth.initialized, auth.isAuthenticated]);
+    return () => { cancelled = true; sub.remove(); };
+  }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated]);
 
   const flushPendingDeepLink = useCallback((): void => {
     const target = pendingDeepLinkRef.current;
     if (!target) return;
     const { initialized, isAuthenticated } = authStateRef.current;
     if (!initialized || !isAuthenticated) return; // 待 auth 就绪后由下方 effect 重放
+    const scope = pendingAgentNetScopeRef.current;
+    if (scope) {
+      const current = mobileAgentNetPushScope();
+      if (!current && mobileAgentNetPushSelected()) return; // Wait for this account's V2 identity.
+      if (scope !== current) { pendingDeepLinkRef.current = null; pendingAgentNetScopeRef.current = null; return; }
+    }
     pendingDeepLinkRef.current = null;
+    pendingAgentNetScopeRef.current = null;
     routerRef.current.push(target as never);
   }, []);
+  useEffect(() => subscribeMobileAgentNetPushScope(flushPendingDeepLink), [flushPendingDeepLink]);
 
   // 通知点击路由:后台点击经 response listener,冷启动 / 回前台经 last response 补偿
   useEffect(() => {
     if (!isPushSupported()) return;
     const consumeResponse = (response: NotificationResponse): void => {
+      // A button on the alert (allow / deny / reply) is carried out in the background;
+      // only an ordinary tap navigates.
+      if (handleNotificationActionResponse(response)) return;
       const deepLink = parseNotificationResponseDeepLink(response);
       if (!deepLink) return;
       const identifier = response.notification.request.identifier;
@@ -116,6 +186,8 @@ export function PushNotificationsBridge() {
       consumedNotificationResponseKeys.add(dedupeKey);
       void Notifications.clearLastNotificationResponseAsync?.()?.catch(() => undefined);
       pendingDeepLinkRef.current = notificationRecoveryRoute(deepLink, dedupeKey);
+      const data = response.notification.request.content.data;
+      pendingAgentNetScopeRef.current = typeof data?.agentNetScope === 'string' ? data.agentNetScope : null;
       flushPendingDeepLink();
     };
 
@@ -146,5 +218,5 @@ export function PushNotificationsBridge() {
     flushPendingDeepLink();
   }, [auth.initialized, auth.isAuthenticated, flushPendingDeepLink]);
 
-  return <ChatBackgroundBridge />;
+  return <><ChatBackgroundBridge /><NotificationReconciliationBridge /></>;
 }

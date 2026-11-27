@@ -7,7 +7,10 @@
  */
 import { isProviderShareAgentDeviceId, PROVIDER_SHARE_AGENT_DEVICE_PREFIX } from './providerShare.js';
 import type { ProviderManagementRequest, ProviderManagementResult } from './providerManagement';
+import type { OpenAiGroupAccount, OpenAiGroupAccountDetail, OpenAiGroupApiAgent, OpenAiGroupProbeResult } from './openAiAccountGroup.js';
+import type { SubscriptionAccountView } from './subscriptionAccounts.js';
 import { readProviderMetadataContinuity, type ProviderMetadataContinuity } from '@cindy/device-link';
+import { legacyPoolStrategy, routeStrategyOf, type LegacyPoolStrategy, type RouteStrategy } from './routeStrategy.js';
 
 export const PROVIDER_GROUP_IPC = {
   /** Renderer → Main：全部操作走同一个命令通道。 */
@@ -16,15 +19,47 @@ export const PROVIDER_GROUP_IPC = {
   CHANGED: 'provider-group:changed',
 } as const;
 
-export type ProviderGroupStrategy = 'least' | 'round' | 'order' | 'weight' | 'usage';
-export const PROVIDER_GROUP_STRATEGIES: readonly ProviderGroupStrategy[] = ['least', 'round', 'order', 'weight', 'usage'];
 
 export type ProviderGroupMemberKind = 'local' | 'device' | 'share';
 
-/** 每台组内电脑默认同时接几个任务。 */
+/**
+ * 没设置过并发上限时存的值(旧版的默认上限)。2026-11-11 起没设置过 = 不限制并发；旧版写下的 4 也按没设置过处理，
+ * 旧版读到的仍是原来的默认值。实际上限一律经 effectiveConcurrencyLimit 读取。
+ */
 export const PROVIDER_GROUP_DEFAULT_LIMIT = 4;
 /** 远程 Agent 对每个控制端最多 16 个任务，组内电脑的并发上限不超过它。 */
 export const PROVIDER_GROUP_MAX_LIMIT = 16;
+
+/**
+ * 组内电脑与供应商内订阅账号的实际并发上限(2026-11-11 用户裁决：达到上限就不再分新任务；没设置过的不限制)。
+ * 设置过 = 新版写了 limitSet，或旧版存了默认 4 以外的值(旧版只能主动改出别的值)。没设置过返回 Infinity。
+ */
+export function effectiveConcurrencyLimit(entry: { limit: number; limitSet?: boolean }): number {
+  return entry.limitSet === true || entry.limit !== PROVIDER_GROUP_DEFAULT_LIMIT
+    ? entry.limit
+    : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * 设置页写回并发上限，覆盖到原设置上：null = 不限制(清除设置，存回旧版默认值，旧版读到的不变)。
+ * limitSet 显式给 undefined，覆盖时清掉之前的标记；保存时丢弃。
+ */
+export function concurrencyLimitPatch(limit: number | null): { limit: number; limitSet: true | undefined } {
+  return limit === null ? { limit: PROVIDER_GROUP_DEFAULT_LIMIT, limitSet: undefined } : { limit, limitSet: true };
+}
+
+/** 设置页并发下拉的取值：「不限制」排第一，其后 1～16。 */
+export const CONCURRENCY_LIMIT_UNLIMITED = 'unlimited';
+export const CONCURRENCY_LIMIT_OPTIONS: readonly string[] = [
+  CONCURRENCY_LIMIT_UNLIMITED,
+  ...Array.from({ length: PROVIDER_GROUP_MAX_LIMIT }, (_, i) => String(i + 1)),
+];
+export function concurrencyLimitOptionValue(entry: { limit: number; limitSet?: boolean }): string {
+  return Number.isFinite(effectiveConcurrencyLimit(entry)) ? String(entry.limit) : CONCURRENCY_LIMIT_UNLIMITED;
+}
+export function concurrencyLimitFromOption(value: string): number | null {
+  return value === CONCURRENCY_LIMIT_UNLIMITED ? null : Number(value);
+}
 export const PROVIDER_GROUP_DEFAULT_WEIGHT = 1;
 export const PROVIDER_GROUP_MAX_WEIGHT = 100;
 /**
@@ -51,8 +86,10 @@ export interface ProviderGroupMember {
    * 按一台电脑展示与计数，不显示、不用于连接；不会发给受邀者。旧组没有时由组所在电脑对账补上(removedShares.ts)。
    */
   hostDeviceId?: string;
-  /** 并发上限：只统计经本组分到这台的任务。 */
+  /** 并发上限：只统计经本组分到这台的任务。实际上限见 effectiveConcurrencyLimit。 */
   limit: number;
+  /** 用户在新版设置过上限；缺省时按 effectiveConcurrencyLimit 推断，旧版会丢弃这个字段。 */
+  limitSet?: true;
   weight: number;
   /** 暂停组内新任务分配；本机成员只暂停接收外部新任务，不影响本机自用或已有任务。 */
   paused: boolean;
@@ -61,10 +98,54 @@ export interface ProviderGroupMember {
 export interface ProviderGroupConfig {
   /** Subscription-only speed policy. Absent preserves the existing allowed default. */
   allowFast?: boolean;
-  strategy: ProviderGroupStrategy;
+  /** 选法与智能路由是同一套(shared/routeStrategy.ts)；旧版存下的四种分配方式读取时换成对应的选法。 */
+  strategy: RouteStrategy;
   /** 组内电脑失败时自动换一台继续，默认开启。 */
   autoSwitch: boolean;
   members: ProviderGroupMember[];
+  /** Additional local connections, never published in the remote group directory. */
+  localAccountIds?: string[];
+  /** Local task allocation only. Never included in a public group view. */
+  localAccountSettings?: { weights?: Record<string, number>; order?: string[];
+    limits?: Record<string, number | null>; paused?: string[] };
+}
+
+export type ProviderGroupAccountAllocation =
+  | { strategy: RouteStrategy }
+  | { accountId: string; weight: number }
+  | { accountId: string; limit: number | null }
+  | { accountId: string; paused: boolean }
+  | { order: string[] };
+
+export function providerGroupLocalAccountKey(providerId: string): string {
+  return 'local:' + providerId;
+}
+
+export function withLocalProviderGroupAccounts(config: ProviderGroupConfig, groupProviderId: string): ProviderGroupConfig {
+  if (!config.localAccountIds?.length) return config;
+  const localMember = (providerId: string, key = providerGroupLocalAccountKey(providerId)): ProviderGroupMember => ({
+    key, kind: 'local', agentDeviceId: null, providerId,
+    limit: PROVIDER_GROUP_DEFAULT_LIMIT, weight: PROVIDER_GROUP_DEFAULT_WEIGHT, paused: false,
+  });
+  const members = config.members.some(member => member.kind === 'local') ? [...config.members]
+    : [localMember(groupProviderId, PROVIDER_GROUP_LOCAL_MEMBER_KEY), ...config.members];
+  members.push(...config.localAccountIds.map(id => localMember(id)));
+  const settings = config.localAccountSettings;
+  const byId = new Map(members.filter(member => member.kind === 'local').map(member => [member.providerId, member]));
+  const order = (settings?.order ?? [...byId.keys()]).map(id => byId.get(id)!);
+  const paused = new Set(settings?.paused);
+  let index = 0;
+  // Reorder the local connections within their slots. The remote members keep
+  // their relative order and positions in the existing group configuration.
+  return { ...config, members: members.map(member => {
+    if (member.kind !== 'local') return member;
+    const local = order[index++]!;
+    const id = local.providerId;
+    const limits = settings?.limits;
+    const limit = limits && Object.hasOwn(limits, id) ? limits[id] : undefined;
+    return { ...local, ...(limit !== undefined ? concurrencyLimitPatch(limit) : {}),
+      weight: settings?.weights?.[id] ?? local.weight, paused: paused.has(id) };
+  }) };
 }
 
 export type ProviderGroupMemberState =
@@ -106,11 +187,15 @@ export interface ProviderGroupMemberStatus {
   reason?: ProviderGroupUnavailableReason;
   /** 经本组分到这台、正在运行的任务数。 */
   running: number;
+  /** 与组设置相同的存储值；实际上限经 effectiveConcurrencyLimit 读取。 */
   limit: number;
+  limitSet?: true;
   weight: number;
   paused: boolean;
   /** 冷却到何时(unix ms)。 */
   coolingUntil?: number;
+  /** 可信配额快照确认已耗尽；仅展示原因与配额重置时刻，不从普通冷却推断。只发给同账号电脑。 */
+  usageLimit?: ProviderGroupUsageLimit;
   /**
    * 选电脑时排序用的那个配额窗口(provider-groups.md §5)：本机与同账号电脑的订阅才有，读不到时省略。
    * 发给同账号电脑，用来提议任务进行中换号(§6.2)，界面不显示；不进受邀者的匿名状态。
@@ -193,7 +278,18 @@ export interface ProviderGroupReshareSummary {
   guests: ProviderGroupReshareGuest[];
 }
 
+/** Optional same-account settings read. Older owners ignore display and return the full view. */
+export type ProviderGroupDisplayRead = 'roster' | { memberKey: string; details?: true };
+
+export function parseProviderGroupDisplayRead(raw: unknown): ProviderGroupDisplayRead | undefined {
+  if (raw === undefined || raw === 'roster') return raw;
+  const value = remoteRecord(raw);
+  return { memberKey: remoteMemberKey(value.memberKey), ...(value.details === true ? { details: true } : {}) };
+}
+
 export interface ProviderGroupView {
+  /** Acknowledges a roster-only read. Absent on old group owners. */
+  rosterOnly?: true;
   providerContinuity?: ProviderMetadataContinuity;
   /** Some executors have not confirmed this group's subscription speed policy yet. */
   fastPolicyPending?: boolean;
@@ -237,6 +333,13 @@ export interface ProviderGroupCandidate {
 
 export type ProviderGroupLocalCommand =
   | { action: 'get'; providerId: string }
+  | { action: 'account-list'; providerId: string }
+  | { action: 'account-detail'; providerId: string }
+  | { action: 'account-quota'; providerId: string; accountId: string }
+  | { action: 'account-merge'; providerId: string; targetProviderId: string }
+  | { action: 'account-remove'; providerId: string; accountId: string }
+  | { action: 'account-test'; providerId: string; accountId: string; agent?: OpenAiGroupApiAgent }
+  | { action: 'account-allocation'; providerId: string; expectedConfig: ProviderGroupConfig; edit: ProviderGroupAccountAllocation }
   | { action: 'candidates'; providerId: string }
   | { action: 'save'; providerId: string; config: ProviderGroupConfig }
   | { action: 'delete'; providerId: string }
@@ -244,7 +347,7 @@ export type ProviderGroupLocalCommand =
   | { action: 'save-if-current'; providerId: string; config: ProviderGroupConfig; expectedConfig: ProviderGroupConfig | null }
   | { action: 'delete-if-current'; providerId: string; expectedConfig: ProviderGroupConfig | null }
   /** 同账号另一台电脑上这个供应商的组与组内电脑状态(只读)。 */
-  | { action: 'remote-view'; providerId: string; deviceId: string }
+  | { action: 'remote-view'; providerId: string; deviceId: string; display?: ProviderGroupDisplayRead }
   /** 本机全部组的设置(不读远端)。 */
   | { action: 'list' }
   /** 这个任务此刻归哪个组(模型列表把它显示在组那一项下)。 */
@@ -252,7 +355,9 @@ export type ProviderGroupLocalCommand =
   /** 用户发下一条消息前：要不要提议换号(provider-groups.md §6.2「任务进行中换号」)。 */
   | { action: 'rebalance-suggestion'; sessionId: string }
   /** 用户确认换号：这个任务的下一条消息先换到 `memberKey`；`remember` = 这个任务以后自动换。 */
-  | { action: 'rebalance-decision'; sessionId: string; memberKey: string; remember: boolean; clientId?: string };
+  | { action: 'rebalance-decision'; sessionId: string; memberKey: string; remember: boolean; clientId?: string }
+  /** 独立动作使旧端明确拒绝，不能误记成一次换号确认。 */
+  | { action: 'rebalance-preference'; sessionId: string; enabled: boolean };
 
 export type ProviderGroupCommand = ProviderGroupLocalCommand
   | { action: 'remote-manage'; deviceId: string; request: ProviderManagementRequest };
@@ -265,6 +370,11 @@ export type ProviderGroupSessionGroup = { groupDeviceId: string | null; provider
 
 export type ProviderGroupCommandResult<C extends ProviderGroupCommand> =
   C extends { action: 'remote-manage'; request: infer R extends ProviderManagementRequest } ? ProviderManagementResult<R>
+  : C extends { action: 'account-list' } ? OpenAiGroupAccount[]
+  : C extends { action: 'account-detail' } ? OpenAiGroupAccountDetail
+  : C extends { action: 'account-quota' } ? Pick<SubscriptionAccountView, 'id' | 'identity' | 'usage'>[]
+  : C extends { action: 'account-merge' | 'account-test' | 'account-remove' } ? OpenAiGroupProbeResult
+  : C extends { action: 'account-allocation' } ? ProviderGroupConfig
   : C extends { action: 'list' } ? Record<string, ProviderGroupConfig>
   : C extends { action: 'get' } ? ProviderGroupView
     : C extends { action: 'candidates' } ? ProviderGroupCandidate[]
@@ -273,7 +383,7 @@ export type ProviderGroupCommandResult<C extends ProviderGroupCommand> =
           : C extends { action: 'remote-view' } ? ProviderGroupView
             : C extends { action: 'session-group' } ? ProviderGroupSessionGroup
               : C extends { action: 'rebalance-suggestion' } ? ProviderGroupRebalanceSuggestion
-                : C extends { action: 'rebalance-decision' } ? { ok: boolean }
+                : C extends { action: 'rebalance-decision' | 'rebalance-preference' } ? { ok: boolean }
                   : never;
 
 const PROVIDER_ID_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/;
@@ -338,6 +448,7 @@ function normalizeMember(raw: unknown, groupProviderId: string): ProviderGroupMe
     ...(providerName ? { providerName } : {}),
     ...(hostDeviceId ? { hostDeviceId } : {}),
     limit: clampInt(value.limit, 1, PROVIDER_GROUP_MAX_LIMIT, PROVIDER_GROUP_DEFAULT_LIMIT),
+    ...(value.limitSet === true ? { limitSet: true as const } : {}),
     weight: clampInt(value.weight, 1, PROVIDER_GROUP_MAX_WEIGHT, PROVIDER_GROUP_DEFAULT_WEIGHT),
     paused: value.paused === true,
   };
@@ -377,9 +488,8 @@ export function normalizeProviderGroupConfig(raw: unknown, groupProviderId: stri
   if (!isProviderGroupProviderId(groupProviderId)) return null;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const value = raw as Record<string, unknown>;
-  const strategy = PROVIDER_GROUP_STRATEGIES.includes(value.strategy as ProviderGroupStrategy)
-    ? value.strategy as ProviderGroupStrategy
-    : 'least';
+  // 新版电脑发来的摘要把真实选法放在 pick，strategy 留给旧版读(providerGroupSummaryForWire)。
+  const strategy = routeStrategyOf(value.pick ?? value.strategy);
   const members: ProviderGroupMember[] = [];
   const seen = new Set<string>();
   for (const entry of Array.isArray(value.members) ? value.members : []) {
@@ -390,7 +500,33 @@ export function normalizeProviderGroupConfig(raw: unknown, groupProviderId: stri
     members.push(member);
   }
   if (members.length === 0) return null;
+  const localAccountIds = Array.isArray(value.localAccountIds)
+    ? [...new Set(value.localAccountIds.filter((id): id is string => isProviderGroupProviderId(id) && id !== groupProviderId))]
+      .slice(0, PROVIDER_GROUP_STORAGE_MEMBER_CAP - members.length)
+    : [];
+  const settings = value.localAccountSettings as ProviderGroupConfig['localAccountSettings'];
+  const localIds = [groupProviderId, ...localAccountIds];
+  const weights = Object.fromEntries(localIds.flatMap(id => {
+    const weight = settings?.weights && Object.hasOwn(settings.weights, id) ? settings.weights[id] : undefined;
+    return typeof weight === 'number' && Number.isFinite(weight)
+      ? [[id, clampInt(weight, 1, PROVIDER_GROUP_MAX_WEIGHT, PROVIDER_GROUP_DEFAULT_WEIGHT)]] : [];
+  }));
+  const savedOrder = Array.isArray(settings?.order)
+    ? [...new Set(settings.order.slice(0, PROVIDER_GROUP_STORAGE_MEMBER_CAP).filter(id => localIds.includes(id)))] : [];
+  const order = savedOrder.length ? [...savedOrder, ...localIds.filter(id => !savedOrder.includes(id))] : [];
+  const limits = Object.fromEntries(localIds.flatMap(id => {
+    const limit = settings?.limits && Object.hasOwn(settings.limits, id) ? settings.limits[id] : undefined;
+    return limit === null || (typeof limit === 'number' && Number.isFinite(limit))
+      ? [[id, limit === null ? null : clampInt(limit, 1, PROVIDER_GROUP_MAX_LIMIT, PROVIDER_GROUP_DEFAULT_LIMIT)]] : [];
+  }));
+  const paused = Array.isArray(settings?.paused)
+    ? localIds.filter(id => settings.paused!.includes(id)) : [];
+  const localAccountSettings = localAccountIds.length && (Object.keys(weights).length || order.length || Object.keys(limits).length || paused.length)
+    ? { ...(Object.keys(weights).length ? { weights } : {}), ...(order.length ? { order } : {}),
+      ...(Object.keys(limits).length ? { limits } : {}), ...(paused.length ? { paused } : {}) } : undefined;
   return { strategy, autoSwitch: value.autoSwitch !== false, members,
+    ...(localAccountIds.length > 0 ? { localAccountIds } : {}),
+    ...(localAccountSettings ? { localAccountSettings } : {}),
     ...(typeof value.allowFast === 'boolean' ? { allowFast: value.allowFast } : {}) };
 }
 
@@ -402,7 +538,9 @@ export function normalizeProviderGroupConfig(raw: unknown, groupProviderId: stri
  */
 export interface ProviderGroupWireSummary {
   allowFast?: boolean;
-  strategy: ProviderGroupStrategy;
+  /** 旧版电脑只认识原来的四种分配方式，这里写最接近的那一种；新版读 pick。 */
+  strategy: LegacyPoolStrategy;
+  pick?: RouteStrategy;
   autoSwitch: boolean;
   members: Array<Pick<ProviderGroupMember,
     'key' | 'kind' | 'agentDeviceId' | 'providerId' | 'label' | 'providerName' | 'hostDeviceId' | 'paused'>>;
@@ -411,7 +549,8 @@ export interface ProviderGroupWireSummary {
 export function providerGroupSummaryForWire(config: ProviderGroupConfig): ProviderGroupWireSummary {
   return {
     ...(config.allowFast !== undefined ? { allowFast: config.allowFast } : {}),
-    strategy: config.strategy,
+    strategy: legacyPoolStrategy(config.strategy),
+    pick: config.strategy,
     autoSwitch: config.autoSwitch,
     members: config.members.map((m) => ({
       key: m.key,
@@ -430,7 +569,17 @@ export function providerGroupSummaryForWire(config: ProviderGroupConfig): Provid
 
 /** 读另一台电脑目录里的组摘要；格式不对返回 null(当作没有组)。 */
 export function readProviderGroupSummary(raw: unknown, groupProviderId: string): ProviderGroupConfig | null {
-  return normalizeProviderGroupConfig(raw, groupProviderId);
+  const config = normalizeProviderGroupConfig(raw, groupProviderId);
+  if (!config) return null;
+  return publicProviderGroupConfig(config);
+}
+
+export function publicProviderGroupConfig(config: ProviderGroupConfig): ProviderGroupConfig {
+  if (!config.localAccountIds && !config.localAccountSettings) return config;
+  const publicConfig = { ...config };
+  delete publicConfig.localAccountIds;
+  delete publicConfig.localAccountSettings;
+  return publicConfig;
 }
 
 /** 换电脑的原因里，会让组所在电脑冷却那台的几种(连不上只由发现它的电脑自己避开，不替全组判断)。 */
@@ -482,7 +631,7 @@ export type ProviderGroupRemoteRequest =
   /** 这台电脑经组运行、正在跑的任务(整体替换上一份；seq 只增，乱序到达的旧份丢弃)。 */
   | { action: 'leases'; seq: number; entries: ProviderGroupRemoteLease[] }
   /** 组内电脑的状态(发送前检查、设置页展示)。 */
-  | { action: 'view'; providerId: string; model?: string; agentKind?: 'claude-code' | 'codex' | 'pi'; includeGuestSupport?: true }
+  | { action: 'view'; providerId: string; model?: string; agentKind?: 'claude-code' | 'codex' | 'pi'; includeGuestSupport?: true; display?: ProviderGroupDisplayRead }
   /**
    * 这台电脑经组、在组里别的电脑上运行的用量(组所在电脑经手不到)：整体替换这台从 sinceDay 起(含；null = 全部)
    * 报过的行。seq 只增，乱序到达的旧份丢弃。
@@ -497,7 +646,8 @@ export type ProviderGroupRemoteRequest =
   | { action: 'session-group'; sessionId: string }
   /** 发给任务所在的电脑(手机、远程控制)：同本机命令的 `rebalance-suggestion` / `rebalance-decision`。 */
   | { action: 'rebalance-suggestion'; sessionId: string }
-  | { action: 'rebalance-decision'; sessionId: string; memberKey: string; remember: boolean; clientId?: string };
+  | { action: 'rebalance-decision'; sessionId: string; memberKey: string; remember: boolean; clientId?: string }
+  | { action: 'rebalance-preference'; sessionId: string; enabled: boolean };
 
 /** `session-group` 的回包：坐标是任务所在电脑视角(`groupDeviceId` 为 null = 那台自己建的组)。 */
 export interface ProviderGroupRemoteSessionGroup {
@@ -506,7 +656,7 @@ export interface ProviderGroupRemoteSessionGroup {
 
 /** Only verified subscription exhaustion; never inferred from a generic cooldown. */
 export interface ProviderGroupUsageLimit {
-  /** Earliest reset of an otherwise eligible member; null when no reset is known. */
+  /** Required quota reset; pick replies use the earliest eligible member's reset. Null when unknown. */
   resetAtMs: number | null;
 }
 
@@ -515,7 +665,8 @@ export type ProviderGroupRemotePick =
   | { kind: 'none' }
   | { kind: 'member'; member: Pick<ProviderGroupMember, 'key' | 'kind' | 'agentDeviceId' | 'providerId'>; label: string;
       continuity?: { id: string; remainingMs: number; config: ProviderGroupConfig } }
-  | { kind: 'unavailable'; usageLimit?: ProviderGroupUsageLimit };
+  /** full：组里能接的电脑全部达到并发上限；旧版组所在电脑不带，按原「没有能用的电脑」提示。 */
+  | { kind: 'unavailable'; usageLimit?: ProviderGroupUsageLimit; full?: true };
 
 /** 一次最多报告的运行中任务数(每台电脑的任务上限远低于此)。 */
 export const PROVIDER_GROUP_REMOTE_MAX_LEASES = 512;
@@ -638,6 +789,7 @@ export function parseProviderGroupRemoteRequest(raw: unknown): ProviderGroupRemo
         providerId: remoteProviderId(value.providerId),
         ...(value.model !== undefined ? { model: value.model } : {}),
         ...(value.agentKind !== undefined ? { agentKind: value.agentKind as 'claude-code' | 'codex' | 'pi' } : {}),
+        ...(value.display !== undefined ? { display: parseProviderGroupDisplayRead(value.display) } : {}),
         ...(value.includeGuestSupport === true ? { includeGuestSupport: true } : {}),
       };
     }
@@ -659,6 +811,9 @@ export function parseProviderGroupRemoteRequest(raw: unknown): ProviderGroupRemo
       return { action: 'session-group', sessionId: remoteSessionId(value.sessionId) };
     case 'rebalance-suggestion':
       return { action: 'rebalance-suggestion', sessionId: remoteSessionId(value.sessionId) };
+    case 'rebalance-preference':
+      if (typeof value.enabled !== 'boolean') invalidRemote('invalid enabled');
+      return { action: 'rebalance-preference', sessionId: remoteSessionId(value.sessionId), enabled: value.enabled as boolean };
     case 'rebalance-decision':
       if (typeof value.remember !== 'boolean') invalidRemote('invalid remember');
       return {
@@ -681,6 +836,7 @@ export function parseProviderGroupRemotePick(raw: unknown, groupProviderId: stri
     const limit = value.usageLimit as Partial<ProviderGroupUsageLimit> | null | undefined;
     const reset = limit?.resetAtMs;
     const valid = limit && (reset === null || (typeof reset === 'number' && Number.isSafeInteger(reset) && reset > 0));
+    if (value.full === true) return { kind: 'unavailable', full: true };
     return { kind: 'unavailable', ...(valid ? { usageLimit: { resetAtMs: reset } as ProviderGroupUsageLimit } : {}) };
   }
   if (value.kind !== 'member') return { kind: 'none' };
@@ -730,7 +886,7 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
   const model = typeof value.model === 'string' && value.model.length > 0 && value.model.length <= 512
     ? value.model
     : undefined;
-  const config = normalizeProviderGroupConfig(value.config, groupProviderId);
+  const config = readProviderGroupSummary(value.config, groupProviderId);
   if (!config) return empty;
   const keys = new Set(config.members.map((m) => m.key));
   const count = (v: unknown, max: number) =>
@@ -752,7 +908,12 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
     const guestSupport = ['supported', 'needs-update', 'unknown'].includes(item.guestSupport as string)
       ? item.guestSupport as ProviderGroupGuestSupport : undefined;
     const coolingUntil = typeof item.coolingUntil === 'number' && Number.isFinite(item.coolingUntil) ? item.coolingUntil : undefined;
-    // 分享来的电脑不读配额(provider-groups.md §5「分享边界」)：回包里有也不收。
+    const limit = item.usageLimit as Partial<ProviderGroupUsageLimit> | null | undefined;
+    const reset = limit?.resetAtMs;
+    const usageLimit = member.kind !== 'share' && state === 'cooling' && limit
+      && (reset === null || (typeof reset === 'number' && Number.isSafeInteger(reset) && reset > 0))
+      ? { resetAtMs: reset } as ProviderGroupUsageLimit : undefined;
+    // 分享来的电脑的额度只在组所在电脑内部排先后，不随组状态外传(provider-groups.md §5「分享边界」)：回包里有也不收。
     const quota = member.kind === 'share' ? undefined : readProviderGroupMemberQuota(item.quota);
     const fiveHourTight = quota !== undefined && item.fiveHourTight === true;
     return [{
@@ -767,14 +928,16 @@ export function parseProviderGroupRemoteView(raw: unknown, groupProviderId: stri
       ...(reason ? { reason } : {}),
       running: count(item.running, 10_000),
       limit: member.limit,
+      ...(member.limitSet ? { limitSet: true as const } : {}),
       weight: member.weight,
       paused: member.paused,
       ...(coolingUntil !== undefined ? { coolingUntil } : {}),
+      ...(usageLimit ? { usageLimit } : {}),
       ...(quota ? { quota } : {}),
       ...(fiveHourTight ? { fiveHourTight: true as const } : {}),
     }];
   });
-  return { providerId: groupProviderId, config, members, ...(model ? { model } : {}),
+  return { providerId: groupProviderId, config, members, ...(value.rosterOnly === true ? { rosterOnly: true as const } : {}), ...(model ? { model } : {}),
     ...(readProviderMetadataContinuity(raw) ? { providerContinuity: readProviderMetadataContinuity(raw) } : {}),
     ...(value.fastPolicyPending === true ? { fastPolicyPending: true } : {}) };
 }

@@ -27,6 +27,10 @@ vi.mock('../logger-adapter', () => ({
     child: vi.fn(() => ({ trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() })),
   },
 }));
+// 后台活动模块(claude-session-background-activity)直接读 main logger,静音即可。
+vi.mock('../../logger.js', () => ({
+  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
 vi.mock('../runtime-configs', () => ({
   claudeUpstreamEndpoint: () => 'https://gateway.example.com',
 }));
@@ -53,6 +57,12 @@ import {
   setClaudeProxyGatewayKeyReader,
   setClaudeProxySessionIdResolver,
 } from '../anthropic-compat-proxy-host';
+import {
+  getClaudeSessionBackgroundActivity,
+  noteClaudeSessionTurnState,
+  recordClaudeApiActivity,
+  resetClaudeBackgroundActivityForTests,
+} from '../claude-session-background-activity';
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store';
 import {
   readClaudeSessionRoute,
@@ -190,5 +200,36 @@ describe('claude session route observation (routing transform ② 段)', () => {
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     );
     expect(readClaudeSessionRoute('sess-1')).toBe('gateway');
+  });
+
+  // #8671 请求侧对照:count_tokens 用量探测不经这里的记录点点亮「后台子任务运行中」
+  // (经 anthropic-responses-bridge 本地应答的供应商,请求侧是唯一记录点),真实
+  // /v1/messages 采样照常点亮。判据与响应侧 observer 共用同一导出,响应侧语义由
+  // claudeSessionBackgroundActivity.test 锁定,这里锁它在真实 transform 入口生效。
+  it('count_tokens 探测不经请求侧记录点亮后台活动;真实采样仍点亮(#8671)', async () => {
+    resetClaudeBackgroundActivityForTests();
+    vi.useFakeTimers();
+    try {
+      noteClaudeSessionTurnState('sess-1', true);
+      recordClaudeApiActivity('sdk-abc', 'sess-1');
+      noteClaudeSessionTurnState('sess-1', false);
+      const transform = createModelRoutingTransform();
+      // turn 结束宽限(2.5s)之外的一笔计量探测:不得点亮。
+      vi.advanceTimersByTime(2_600);
+      await transform(
+        { model: 'claude-opus-4-8[1m]' },
+        { ...ctxWith(SESSION_HEADER, 31), url: '/v1/messages/count_tokens?beta=true' },
+      );
+      expect(getClaudeSessionBackgroundActivity('sess-1')).toBe(false);
+      // 对照:同一时刻的真实采样请求照常点亮。
+      await transform(
+        { model: 'claude-opus-4-8[1m]' },
+        { ...ctxWith(SESSION_HEADER, 32), url: '/v1/messages' },
+      );
+      expect(getClaudeSessionBackgroundActivity('sess-1')).toBe(true);
+    } finally {
+      resetClaudeBackgroundActivityForTests();
+      vi.useRealTimers();
+    }
   });
 });

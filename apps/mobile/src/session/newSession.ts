@@ -1,8 +1,12 @@
+import { composerSlashInvocationName, leadingSlashInvocation } from '@cindy/maker-shared/composer-palette';
+import { resolvePermissionModeForOptions } from '@cindy/maker-shared/permission-mode';
+import { buildComposerPaletteCacheKey } from './composerPaletteCache';
 import { deviceDisplayName } from '@/device-link/deviceName';
 import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
 import { modelNeedsReselection } from './modelReselection';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
+import { isTeammateProjectPath } from '@cindy/maker-shared/teammate-project';
 import { normalizeProjectOrderPath } from '@cindy/maker-shared/project-order-sync';
 import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from '@cindy/maker-shared/project-alias-sync';
 import {
@@ -12,6 +16,7 @@ import {
 import { i18n } from '@/i18n';
 import type {
   CreateSessionOptions,
+  MobileMakerTransport,
   RemoteDirectoryDrive,
   RemoteDirectoryEntry,
 } from '@/device-link/mobileMakerTransport';
@@ -60,6 +65,7 @@ export interface NewSessionDraft {
   permissionMode: string;
   fastMode: boolean | 'ultrafast';
   firstMessage: string;
+  selectedSkill?: { name: string; invocation: string; context: string } | null;
   extraDirs?: string[];
   /**
    * 远程 Agent:Agent 在哪台电脑运行——同账号另一台电脑的 deviceId,或别人分享给被控电脑的
@@ -67,6 +73,77 @@ export interface NewSessionDraft {
    * (见 applyRemoteAgentPick),模型与来源随之属于那台电脑的目录。
    */
   agentDeviceId?: string | null;
+  /**
+   * 插件提供的执行引擎(Desktop docs/plans/acp-plugin-bridge.md)：只在提交时由选中的引擎写入
+   * (applyPluginEnginePick)，不进持久草稿。存在时任务按 agent_kind = 'acp' 创建，内置的
+   * agentKind / model / providerId / Fast 不发；engine 只来自被控电脑的 listPluginEngines。
+   */
+  pluginEngine?: NewSessionPluginEngine | null;
+}
+
+/** 新任务选中的插件引擎(已按引擎规则校准：模型、思考深度、权限模式)。 */
+export interface NewSessionPluginEngine {
+  providerId: string;
+  model: string;
+  /** '' = 引擎自己决定。 */
+  effort: string;
+  permissionMode: string;
+  /** 远程 / 共享插件引擎所在电脑或分享 id；缺省 / null = 被控电脑本机。 */
+  agentDeviceId?: string | null;
+}
+
+/** 提交时把选中的插件引擎写进要创建的草稿；没有选插件引擎时原样返回。 */
+export function applyPluginEnginePick(
+  draft: NewSessionDraft,
+  pick: NewSessionPluginEngine | null,
+): NewSessionDraft {
+  if (!pick) return draft;
+  return { ...draft, pluginEngine: pick, agentDeviceId: pick.agentDeviceId ?? null };
+}
+
+export async function lookupMobileSkillInvocation(
+  maker: Pick<MobileMakerTransport, 'listAgentSkills'>,
+  agentKind: NewSessionAgentKind | 'acp',
+  workingDir: string,
+  name: string,
+): Promise<string> {
+  const result = await maker.listAgentSkills(agentKind, { ...(workingDir ? { workingDir } : {}) });
+  if (!result.success) throw new Error(result.error || 'Skill list unavailable');
+  const match = result.skills?.find(item => item.kind === 'agent-skill' && item.name === name && item.enabled !== false);
+  return match ? composerSlashInvocationName(match) : name;
+}
+
+/** Resolve a menu choice against the final engine when preparing delivery. */
+export async function resolveNewSessionSkillDraft(
+  draft: NewSessionDraft,
+  deviceId: string,
+  maker: Pick<MobileMakerTransport, 'listAgentSkills'>,
+): Promise<NewSessionDraft> {
+  const skill = draft.selectedSkill;
+  if (!skill) return draft;
+  const token = leadingSlashInvocation(draft.firstMessage);
+  if (!token || (token.name !== skill.name && token.name !== skill.invocation)) return draft;
+  const workingDir = draft.workspaceKind === 'project' ? draft.workingDir.trim() : '';
+  const targetAgentKind = draft.pluginEngine ? ('acp' as const) : draft.agentKind;
+  const targetAgentDeviceId = draft.pluginEngine
+    ? (draft.pluginEngine.agentDeviceId ?? null)
+    : (draft.agentDeviceId ?? null);
+  const context = buildComposerPaletteCacheKey(targetAgentDeviceId || deviceId, targetAgentKind, workingDir);
+  let invocation = skill.invocation;
+  if (context !== skill.context) {
+    // The controlled computer's catalog describes only its own engine.
+    invocation = skill.name;
+    if (!targetAgentDeviceId) {
+      invocation = targetAgentKind === 'acp'
+        ? await lookupMobileSkillInvocation(maker, targetAgentKind, workingDir, skill.name).catch(() => skill.name)
+        : await lookupMobileSkillInvocation(maker, targetAgentKind, workingDir, skill.name);
+    }
+  }
+  return {
+    ...draft,
+    firstMessage: draft.firstMessage.slice(0, token.start) + '/' + invocation + draft.firstMessage.slice(token.end),
+    selectedSkill: { ...skill, context, invocation },
+  };
 }
 
 /**
@@ -119,11 +196,34 @@ export interface NewSessionDeviceOption {
   name: string;
 }
 
+export const BUILTIN_AGENT_PERMISSION_MODES: Record<NewSessionAgentKind, readonly string[]> = {
+  'claude-code': ['ask', 'acceptEdits', 'auto', 'bypassPermissions'],
+  codex: ['ask', 'auto', 'bypassPermissions'],
+  pi: ['ask', 'auto', 'bypassPermissions'],
+};
+
+/** 将跨引擎统一的权限选择解析为指定内置 Agent 支持的权限档（ask <-> default，不支持时安全回落）。 */
+export function resolvePermissionModeForNewSessionAgent(
+  agentKind: NewSessionAgentKind,
+  preferred: string | null | undefined,
+  supportedIds?: readonly string[],
+): string {
+  const options = supportedIds && supportedIds.length > 0
+    ? supportedIds
+    : BUILTIN_AGENT_PERMISSION_MODES[agentKind];
+  return resolvePermissionModeForOptions(preferred, options, 'ask');
+}
+
 export interface NewSessionStoredPreferences {
   agentKind: NewSessionAgentKind | null;
   device: NewSessionDeviceOption | null;
   /** 上次显式选择的项目/对话模式；null 表示尚未选择，沿用入口默认。 */
   workspaceKind: NewSessionWorkspaceKind | null;
+  /**
+   * 跨内置 Harness / 插件引擎统一的最近一次新建任务权限选择；
+   * 切换任意内置引擎或插件引擎时优先沿用它，不支持时按目标引擎安全回落。
+   */
+  lastPermissionMode?: string | null;
   /**
    * 每个 agent 上次在新建页显式选过的权限档(对齐桌面 lastByVendor 的权限记忆语义);
    * 没选过 = 缺失,回落该 agent 的安全种子默认。'plan' 不入记忆(计划模式是独立开关)。
@@ -136,11 +236,21 @@ export interface NewSessionStoredPreferences {
    */
   workingDirByDevice: Record<string, string>;
   /**
+   * 每台被控电脑上次在新建页显式选择的工作区模式(deviceId → 'project' | 'dialogue')。
+   * 按账号与设备保存，切换电脑时按目标电脑自己的记忆恢复项目或对话。
+   */
+  workspaceKindByDevice: Record<string, NewSessionWorkspaceKind>;
+  /**
    * 每台被控电脑上、每个 agent 上次在新建页显式选的另一台电脑或分享来的模型
    * (被控电脑 deviceId → agent → 选择)。选回被控电脑自己的模型即清掉;打开新建页时恢复,
    * 那台电脑 / 那个分享此刻用不了时回到被控电脑的默认。与 workingDirByDevice 同样按账号存。
    */
   remoteAgentByDevice: Record<string, Partial<Record<NewSessionAgentKind, NewSessionRemoteAgentPick>>>;
+  /**
+   * 每台被控电脑上次在新建页显式选中的插件引擎（本机、同账号远程或分享）；
+   * 选回内置模型或模型组时清掉。按账号保存，与 remoteAgentByDevice 同口径。
+   */
+  pluginEngineByDevice?: Record<string, import('./pluginEngines').MobilePluginEngineSelection>;
 }
 
 export interface NewSessionDraftSummary {
@@ -240,7 +350,7 @@ export function validateNewSessionDraft(
   if (draft.workspaceKind === 'project' && !draft.workingDir.trim()) {
     return i18n.t('session.new.enterProjectPath');
   }
-  if (!draft.model.trim()) return i18n.t('session.new.enterModel');
+  if (!(draft.pluginEngine?.model ?? draft.model).trim()) return i18n.t('session.new.enterModel');
   if (!hasFirstMessagePayload(draft, content)) return i18n.t('session.new.enterFirstMessageOrAttachment');
   return null;
 }
@@ -257,7 +367,7 @@ export function isNewSessionDraftMissingPayloadOnly(
   content: NewSessionDraftContentState = {},
 ): boolean {
   if (draft.workspaceKind === 'project' && !draft.workingDir.trim()) return false;
-  if (!draft.model.trim()) return false;
+  if (!(draft.pluginEngine?.model ?? draft.model).trim()) return false;
   return !hasFirstMessagePayload(draft, content);
 }
 
@@ -266,9 +376,19 @@ export function summarizeNewSessionDraft(
   content: NewSessionDraftContentState = {},
 ): NewSessionDraftSummary {
   const validationMessage = validateNewSessionDraft(draft, content);
-  const agentLabel = draft.agentKind === 'codex' ? 'Codex' : draft.agentKind === 'pi' ? 'Pi' : 'Claude';
-  const model = draft.model.trim() || i18n.t('session.new.noModelSelected');
-  const effort = draft.effort.trim();
+  const agentLabel = draft.pluginEngine
+    ? i18n.t('models.pluginEngines.genericName')
+    : draft.agentKind === 'codex' ? 'Codex' : draft.agentKind === 'pi' ? 'Pi' : 'Claude';
+  const rawModel = draft.pluginEngine ? draft.pluginEngine.model.trim() : draft.model.trim();
+  const model = draft.pluginEngine && rawModel === 'default'
+    ? i18n.t('models.pluginEngines.defaultModel')
+    : rawModel || i18n.t('session.new.noModelSelected');
+  const effort = (draft.pluginEngine ? (draft.pluginEngine.effort ?? '') : draft.effort).trim();
+  const fastLabel = draft.pluginEngine
+    ? null
+    : draft.fastMode === 'ultrafast'
+      ? i18n.t('models.options.speed.ultrafast')
+      : draft.fastMode ? 'Fast' : null;
   const workspaceLabel = draft.workspaceKind === 'dialogue'
     ? i18n.t('session.new.workspaceDialogue')
     : i18n.t('session.new.workspaceProject');
@@ -277,7 +397,7 @@ export function summarizeNewSessionDraft(
   return {
     agentLabel,
     canCreate: validationMessage === null,
-    runtimeLabel: [agentLabel, model, effort || null, draft.fastMode === 'ultrafast' ? i18n.t('models.options.speed.ultrafast') : draft.fastMode ? 'Fast' : null].filter(Boolean).join(' · '),
+    runtimeLabel: [agentLabel, model, effort || null, fastLabel].filter(Boolean).join(' · '),
     scopeLabel: draft.workspaceKind === 'dialogue'
       ? i18n.t('session.new.assignedDialogueDir')
       : trimmedWorkingDir
@@ -379,7 +499,8 @@ export function buildRecentWorkspaceOptions(
     if (session.workspaceKind !== 'project') continue;
     if (session.orcaRole === 'worker') continue;
     const rawWorkingDir = sessionProjectDirectory(session)?.trim();
-    if (!rawWorkingDir) continue;
+    // A teammate's project is reached from the teammate, not offered for new tasks.
+    if (!rawWorkingDir || isTeammateProjectPath(rawWorkingDir)) continue;
     const workingDir = collapseWorktreeDirForGrouping(rawWorkingDir);
     // Match home project grouping; keep the original path for display and remote actions.
     const pathKey = normalizeProjectOrderPath(workingDir);
@@ -480,8 +601,8 @@ export function validateModelProviderId(
  *   3) 没有任何来源提供该模型 → 落目录首项(连同其 provider);
  *   4) 目录为空 → 模型留空 + 默认路由,由用户自己选;
  * catalogReady=false 时不评判,维持信任语义(见 validateModelProviderId)。
- * 通用于「跟随最近会话」的自动默认与「提交点 / 目录就绪」的草稿终检(codex review P2:
- * 提交终检时同样联合回退)。
+ * 自动默认可以推荐替代来源；已有草稿的终检必须 preserveExplicitProvider，
+ * 来源不可用时保留选择，由提交入口要求用户重选，不能按同名模型替换账号。
  */
 export function resolveRecentModelAndProvider(
   modelRows: readonly ProviderModelRow[],
@@ -490,6 +611,7 @@ export function resolveRecentModelAndProvider(
   catalogReady: boolean,
   providers: readonly ProviderView[],
   visibilityOverrides?: Record<string, boolean> | null,
+  options: { preserveExplicitProvider?: boolean } = {},
 ): { model: string; providerId: string | null } {
   if (!catalogReady || modelNeedsReselection(visibilityOverrides, agentKind, recent.model, recent.providerId)) {
     return { model: recent.model, providerId: recent.providerId };
@@ -531,6 +653,7 @@ export function resolveRecentModelAndProvider(
   }
   const valid = validateModelProviderId(modelRows, recent.providerId, recent.model, true);
   if (valid) return { model: recent.model, providerId: valid };
+  if (options.preserveExplicitProvider) return recent;
   // 显式来源失效的替代选择:与 null 分支同口径(codex review P2:按 Agent 默认
   // 规则选择失效来源的替代项)——同名模型多来源时**不得取目录首行**(目录顺序
   // ≠ Agent 原生默认顺序,如 Codex 候选 [custom, xd] 会被首行绑定到 custom,
@@ -1087,11 +1210,78 @@ export function pickInitialNewSessionWorkspace(
   return recentWorkspaces[0]?.workingDir ?? null;
 }
 
-export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateSessionOptions {
+/**
+ * Resolve the initial workspace mode when the new-task screen opens for a settled device.
+ * Uses the device's own remembered workspace mode first, falling back to the legacy global
+ * workspaceKind when that device has no per-device entry.
+ */
+export function resolveInitialNewSessionWorkspaceKind(input: {
+  deviceId: string;
+  preferences: Pick<NewSessionStoredPreferences, 'workspaceKind' | 'workspaceKindByDevice'> | null;
+  workspaceKindOverrides?: Record<string, NewSessionWorkspaceKind>;
+}): NewSessionWorkspaceKind | null {
+  const deviceId = input.deviceId.trim();
+  if (deviceId) {
+    const deviceKind =
+      input.workspaceKindOverrides?.[deviceId]
+      ?? input.preferences?.workspaceKindByDevice?.[deviceId]
+      ?? null;
+    if (deviceKind) return deviceKind;
+  }
+  return input.preferences?.workspaceKind ?? null;
+}
+
+/**
+ * Resolve the target device's workspace when switching computers in the new-task form.
+ * Restores that device's own last chosen project or explicit dialogue instead of letting
+ * another computer's dialogue mode hide this device's remembered project.
+ */
+export function resolveWorkspaceForDeviceSwitch(input: {
+  currentWorkspaceKind: NewSessionWorkspaceKind;
+  targetDeviceId: string;
+  preferences: Pick<NewSessionStoredPreferences, 'workingDirByDevice' | 'workspaceKindByDevice'> | null;
+  workingDirOverrides?: Record<string, string>;
+  workspaceKindOverrides?: Record<string, NewSessionWorkspaceKind>;
+}): { workspaceKind: NewSessionWorkspaceKind; workingDir: string } {
+  const rememberedKind =
+    input.workspaceKindOverrides?.[input.targetDeviceId]
+    ?? input.preferences?.workspaceKindByDevice?.[input.targetDeviceId]
+    ?? null;
+  const rememberedDir =
+    input.workingDirOverrides?.[input.targetDeviceId]
+    ?? input.preferences?.workingDirByDevice?.[input.targetDeviceId]
+    ?? null;
+  if (rememberedKind === 'dialogue') {
+    return { workspaceKind: 'dialogue', workingDir: '' };
+  }
+  if (rememberedDir?.trim()) {
+    return { workspaceKind: 'project', workingDir: rememberedDir };
+  }
+  if (rememberedKind === 'project') {
+    return { workspaceKind: 'project', workingDir: '' };
+  }
+  return {
+    workspaceKind: input.currentWorkspaceKind,
+    workingDir: '',
+  };
+}
+
+export function buildRemoteCreateSessionOptions(draft: NewSessionDraft, projectDir?: string): CreateSessionOptions {
   const extraDirs = normalizeExtraDirs(draft.extraDirs);
   const effort = draft.effort.trim();
   const providerId = draft.providerId?.trim();
-  const base = {
+  const engine = draft.pluginEngine;
+  // 插件引擎任务：Desktop 接受带 acp-plugin: 标识的 'acp'（远程/共享引擎附带 agentDeviceId）；没有 Fast。
+  const base = engine ? {
+    agentKind: 'acp' as const,
+    workspaceKind: draft.workspaceKind,
+    model: engine.model || 'default',
+    permissionMode: engine.permissionMode,
+    fastMode: false,
+    effort: engine.effort,
+    providerId: engine.providerId,
+    ...(engine.agentDeviceId ? { agentDeviceId: engine.agentDeviceId } : {}),
+  } : {
     agentKind: draft.agentKind,
     workspaceKind: draft.workspaceKind,
     model: draft.model.trim(),
@@ -1107,7 +1297,9 @@ export function buildRemoteCreateSessionOptions(draft: NewSessionDraft): CreateS
   return {
     ...base,
     workingDir: draft.workingDir.trim(),
-    ...(extraDirs.length > 0 ? { extraDirs } : {}),
+    ...(projectDir ? { projectDir } : {}),
+    // 插件引擎不接受额外目录(与桌面一致，桌面对插件引擎隐藏这一项)。
+    ...(extraDirs.length > 0 && !engine ? { extraDirs } : {}),
   };
 }
 
@@ -1127,7 +1319,7 @@ export function normalizeCreateSessionResult(value: unknown): CreateSessionResul
 
 export function sessionFromCreateResult(
   result: CreateSessionResult,
-  fallback: Pick<NewSessionDraft, 'agentKind' | 'workspaceKind' | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'workingDir' | 'providerId' | 'agentDeviceId'> & {
+  fallback: Pick<NewSessionDraft, 'agentKind' | 'workspaceKind' | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'workingDir' | 'providerId' | 'agentDeviceId' | 'pluginEngine'> & {
     firstMessage?: string;
     attachments?: readonly { name?: string; originalName?: string; path?: string; category?: string }[];
   },
@@ -1135,6 +1327,8 @@ export function sessionFromCreateResult(
 ): RemoteSession {
   const iso = now.toISOString();
   const first = fallback.attachments?.[0];
+  const engine = fallback.pluginEngine ?? null;
+  const resolvedAgentDeviceId = engine ? (engine.agentDeviceId ?? fallback.agentDeviceId ?? null) : (fallback.agentDeviceId ?? null);
   const optimisticTitle = deriveOptimisticSessionTitle({
     text: fallback.firstMessage,
     fileNames: (fallback.attachments ?? [])
@@ -1151,20 +1345,22 @@ export function sessionFromCreateResult(
     title: optimisticTitle || DEFAULT_DRAFT_SESSION_TITLE,
     workingDir: result.workDir ?? fallback.workingDir,
     workspaceKind: fallback.workspaceKind,
-    model: fallback.model,
-    effort: fallback.effort,
-    permissionMode: fallback.permissionMode,
-    fastMode: fallback.fastMode,
+    model: engine ? (engine.model || 'default') : fallback.model,
+    effort: engine ? engine.effort : fallback.effort,
+    permissionMode: engine ? engine.permissionMode : fallback.permissionMode,
+    fastMode: engine ? false : fallback.fastMode,
     status: 'active',
-    agentKind: fallback.agentKind === 'claude-code' ? 'cc' : fallback.agentKind,
+    agentKind: engine || result.agentKind === 'acp'
+      ? 'acp'
+      : fallback.agentKind === 'claude-code' ? 'cc' : fallback.agentKind,
     userSendAt: iso,
     createdAt: iso,
     updatedAt: iso,
     // 兜底/乐观会话必须带出来源:buildQueuedTextMessage 从这里复制 providerId 进
     // createOpts,缺了它,创建确认前排队的首条消息会丢来源路由(codex review P1)。
-    providerId: fallback.providerId ?? null,
+    providerId: engine ? engine.providerId : (fallback.providerId ?? null),
     // 乐观行就带上 Agent 所在电脑:会话页的模型药丸与目录从一开始就按那台显示。
-    ...(fallback.agentDeviceId ? { agentDeviceId: fallback.agentDeviceId } : {}),
+    ...(resolvedAgentDeviceId ? { agentDeviceId: resolvedAgentDeviceId } : {}),
     _count: { messages: 0 },
   };
 }

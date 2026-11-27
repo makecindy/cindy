@@ -1,3 +1,5 @@
+import { validateOptionalSettingsFields } from './maker-host/settings-inspection.js';
+import { inspectSettingsJson } from './maker-host/inspect-settings-json.js';
 /**
  * browser-backend-settings-store — controls which backend the MCP `browser`
  * tool drives (Phase 5).
@@ -64,7 +66,6 @@
  * rather than overwriting with a frozen snapshot).
  */
 
-import { app } from 'electron';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './maker-host/logger-adapter.js';
@@ -74,7 +75,6 @@ import {
 } from './maker-host/override-settings-file.js';
 import type { BackendKind } from './mcp-integrations/browser-backend/index.js';
 
-const log = desktopMakerLogger.child('browser-backend-settings-store');
 
 export interface BrowserBackendSettings {
   kind: BackendKind;
@@ -85,6 +85,11 @@ export interface BrowserBackendSettings {
    */
   useRealProfile: boolean;
 }
+export function createBrowserBackendSettingsStore(getUserDataDir: () => string) {
+const app = { getPath: (_: string) => getUserDataDir() };
+
+
+const log = desktopMakerLogger.child('browser-backend-settings-store');
 
 const DEFAULTS: BrowserBackendSettings = {
   kind: 'external',
@@ -109,6 +114,7 @@ function normalize(raw: unknown): BrowserBackendSettings {
 }
 
 const store = createOverrideSettingsFile<BrowserBackendSettings>({
+  validateOverrides: raw => validateOptionalSettingsFields(raw, { kind: value => VALID_KINDS.includes(value as BackendKind), useRealProfile: value => typeof value === 'boolean' }),
   filePath: settingsFilePath,
   defaults: DEFAULTS,
   normalize,
@@ -116,27 +122,38 @@ const store = createOverrideSettingsFile<BrowserBackendSettings>({
   label: 'browser-backend',
 });
 
-export function readBrowserBackendSettings(): BrowserBackendSettings {
+function inspectBrowserBackendSettings(root: string) {
+  return inspectSettingsJson(path.join(root, 'browser-backend-settings.json'), raw => {
+    validateOptionalSettingsFields(raw, { kind: value => VALID_KINDS.includes(value as BackendKind), useRealProfile: value => typeof value === 'boolean' });
+    return normalize(raw);
+  });
+}
+
+function readBrowserBackendSettings(): BrowserBackendSettings {
   return store.read();
 }
 
-export function readBrowserBackendSettingsState(): OverrideSettingsState<BrowserBackendSettings> {
+function getHostBrowserBackendStore() { return store; }
+
+function readBrowserBackendSettingsState(): OverrideSettingsState<BrowserBackendSettings> {
   return store.readState();
 }
 
-export function writeBrowserBackendKind(kind: BackendKind): void {
+function writeBrowserBackendKind(kind: BackendKind): void {
   store.writePatch({ kind }, { preserveDefaults: true });
   log.info('browser-backend kind written', { kind });
 }
 
-export function writeBrowserUseRealProfile(useRealProfile: boolean): void {
+function writeBrowserUseRealProfile(useRealProfile: boolean): void {
   store.writePatch({ useRealProfile });
   log.info('browser-backend useRealProfile written', { useRealProfile });
 }
 
 /** Reset = clear user override, fall back to current system default. */
-export function resetBrowserBackendSettings(): BrowserBackendSettings {
+function resetBrowserBackendSettings(): BrowserBackendSettings {
   return store.reset();
 }
 
-export const __testing = { normalize, DEFAULTS };
+const __testing = { normalize, DEFAULTS };
+return { readBrowserBackendSettings, readBrowserBackendSettingsState, writeBrowserBackendKind, writeBrowserUseRealProfile, resetBrowserBackendSettings, __testing, inspectBrowserBackendSettings, getHostBrowserBackendStore };
+}

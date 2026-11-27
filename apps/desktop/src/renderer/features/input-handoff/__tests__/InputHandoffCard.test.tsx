@@ -320,6 +320,13 @@ describe('InputHandoffCard', () => {
         close: mocks.close,
       }));
 
+    it('opens the account verification code without a click on the strip', async () => {
+      answerWith('https://example.test/verify', 'https://example.test/verify');
+      render(<InputHandoffCard sessionId="task" snapshot={qrStep({ accountVerification: true })} />);
+      await waitFor(() => expect(mocks.openPicture).toHaveBeenCalledOnce());
+      expect(screen.getByRole('dialog')).toBeTruthy();
+    });
+
     it('shows the code from the computer, opens its link here first, copies it, and clicks it there', async () => {
       const link = 'https://login.example.com/qr?t=1';
       answerWith(link, link);
@@ -408,9 +415,9 @@ describe('InputHandoffCard', () => {
       Object.assign(window, { electronAPI: { maker: { raiseInputHandoff: raise }, openRemoteDesktop: mocks.openRemoteDesktop } });
     };
 
-    it('sends the owner to the window on this computer, with no form', async () => {
+    it.each([undefined, true] as const)('sends the owner to the local window even when preferRemoteForm is %s', async (preferRemoteForm) => {
       stubDesktop();
-      render(<InputHandoffCard sessionId="s1" snapshot={signIn()} />);
+      render(<InputHandoffCard sessionId="s1" snapshot={signIn({ preferRemoteForm })} />);
       expect(screen.getByRole('status').textContent).toBe('inputHandoff.directSignIn.hint');
       expect(screen.queryByRole('button', { name: 'inputHandoff.action.fill' })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'inputHandoff.action.openWindow' }));
@@ -446,6 +453,14 @@ describe('InputHandoffCard', () => {
       render(<InputHandoffCard sessionId="s1" snapshot={signIn()} />);
       expect(screen.getByRole('button', { name: 'inputHandoff.action.fill' })).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'inputHandoff.action.openRemoteDesktop' })).toBeNull();
+    });
+
+    it('prefers the planned form on another computer even with a live view', () => {
+      mocks.hostDeviceId = 'mac';
+      render(<InputHandoffCard sessionId="s1" snapshot={signIn({ liveView: true, preferRemoteForm: true })} />);
+      fireEvent.click(screen.getByRole('button', { name: 'inputHandoff.action.fill' }));
+      expect(screen.queryByRole('button', { name: 'inputHandoff.action.openRemoteDesktop' })).toBeNull();
+      expect(screen.getByLabelText('Email')).toBeTruthy();
     });
   });
 });

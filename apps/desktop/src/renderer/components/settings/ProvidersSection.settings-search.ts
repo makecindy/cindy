@@ -3,6 +3,24 @@ import { defineSettings, type SettingsSearchModule } from './settingsSearchTypes
 
 /** Static search metadata owned by this settings module; no component mounting or IPC. */
 export const providersSettings = defineSettings({
+  localImport: {
+    id: 'providers.localImport',
+    tab: 'providers',
+    targetId: 'settings-provider-local-import',
+    fallbackTargetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.import.local.title',
+    descriptionKey: 'settings.providers.import.local.note',
+    sectionKey: 'settings.tabs.providers',
+    keywordKeys: [
+      'settings.providers.import.local.edit',
+      'settings.providers.import.local.editNote',
+      'settings.providers.import.local.name',
+      'settings.providers.import.local.baseUrl',
+      'settings.providers.import.local.protocol',
+      'settings.providers.import.local.apiKey',
+    ],
+    aliases: ['Alma', 'CC Switch', 'Claude Code', 'Codex', 'OpenCode', 'local API import'],
+  },
   subscriptionAccounts: {
     id: 'providers.subscriptionAccounts',
     tab: 'providers',
@@ -12,11 +30,18 @@ export const providersSettings = defineSettings({
     sectionKey: 'settings.tabs.providers',
     keywordKeys: [
       'subscriptionAccounts.add',
-      'subscriptionAccounts.strategy',
-      'subscriptionAccounts.note',
+      'subscriptionAccounts.existing.connect',
+      'subscriptionAccounts.existing.choose',
+      'modelGroups.auto.adjust',
+      'settings.providers.detail.sameAccountConnections',
+      'settings.providers.detail.sameAccountConnectionsHint',
     ],
     aliases: [
       '多账号',
+      'Claude 路径',
+      '配置目录',
+      'CLAUDE_CONFIG_DIR',
+      'CODEX_HOME',
       '订阅账号',
       '并发上限',
       '权重',
@@ -59,8 +84,9 @@ export const providersSettings = defineSettings({
       'settings.providers.detail.remoteAccess.label',
       'settings.providers.detail.remoteAccess.description',
       'providerGroup.section.title',
+      'settings.providers.detail.runLocation.label',
     ],
-    aliases: ['供应商分享', '供应商组', 'provider group', 'provider sharing'],
+    aliases: ['供应商分享', '电脑组', '供应商组', 'computer group', 'provider group', 'provider sharing', '运行于', '借用', 'run on', 'borrow'],
   },
   modelCompaction: {
     id: 'model-compaction',
@@ -76,6 +102,42 @@ export const providersSettings = defineSettings({
     targetId: 'settings-panel-providers',
     titleKey: TAB_LABEL_KEY['providers'],
     sectionKey: 'settings.sections.providers',
+    keywordKeys: ['settings.providers.remote.modelsTitle', 'settings.providers.menu.appearance',
+      'settings.providers.menu.icon', 'settings.providers.menu.ownImage', 'settings.providers.wizard.nameLabel'],
+  },
+  pluginProviders: {
+    id: 'providers.pluginProviders',
+    tab: 'providers',
+    targetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.plugin.title',
+    descriptionKey: 'settings.providers.plugin.note',
+    sectionKey: 'settings.tabs.providers',
+    // 其他电脑开放的插件引擎也列在这一页(OwnRemotePluginEngines)，行的悬停提示是「引擎 · 电脑名」。
+    keywordKeys: [
+      'settings.providers.remote.rowLabel',
+      'settings.providers.models.advanced.defaultEffort',
+      'settings.providers.models.advanced.defaultEffortHint',
+      'settings.providers.models.advanced.antigravityHydrogenDescription',
+      'settings.providers.models.advanced.providerLabel',
+    ],
+    aliases: [
+      '插件供应商', '插件引擎', '其他电脑的插件引擎', 'plugin provider', 'plugin engine', 'plugin engine on another computer',
+    ],
+  },
+  videoApi: {
+    id: 'providers.videoApi',
+    tab: 'providers',
+    targetId: 'settings-panel-providers',
+    titleKey: 'settings.providers.custom.fields.openaiVideos',
+    sectionKey: 'settings.tabs.providers',
+    keywordKeys: [
+      'settings.providers.custom.fields.openaiVideosHint',
+      'settings.providers.custom.fields.minimaxVideos',
+      'settings.providers.custom.fields.minimaxVideosHint',
+      'settings.providers.custom.fields.xaiVideos',
+      'settings.providers.custom.fields.xaiVideosHint',
+    ],
+    aliases: ['视频接口', '视频生成', 'MiniMax-H3', '/v1/videos', 'video API', 'video generation'],
   },
   addProvider: {
     id: 'settings.providers.addProvider',
@@ -87,6 +149,8 @@ export const providersSettings = defineSettings({
       'settings.providers.local.title',
       'settings.providers.llamacpp.title',
       'settings.providers.custom.nameSearchHint',
+      'settings.providers.wizard.officialModelPlugins',
+      'settings.ghosts.detail.settingsTitle',
     ],
     sectionKey: 'settings.tabs.providers',
   },

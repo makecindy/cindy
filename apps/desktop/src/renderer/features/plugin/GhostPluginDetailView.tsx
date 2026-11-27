@@ -1,7 +1,9 @@
-import { getPluginToolUi } from '@cindy/plugin-protocol';
+import { parsePluginInstallationSource } from '@cindy/maker-shared/mcp-apps';
+import { getPluginToolUi, type GhostReadmeContent } from '@cindy/plugin-protocol';
 import { pluginHasToolUi } from '@cindy/plugin-protocol';
 import type { PreparedPluginContribution } from '../../../shared/pluginContributions';
 import { PluginShareButton } from './PluginShareButton';
+import { PluginUiMenu } from '@/cindy-brain/PluginUiContributions';
 import { Button } from '@/components/ui/button';
 import { GithubAccountCard } from '@/features/cc-agent/GithubAccountCard';
 import { shouldShowOpenPathError } from '../../../shared/openPathResult';
@@ -9,13 +11,12 @@ import { shouldShowOpenPathError } from '../../../shared/openPathResult';
  * Plugin detail presentation for configuration, Tools, permissions, and factual metadata.
  *
  * Inputs: the renderer-safe Plugin detail model plus the installed Ghost when available.
- * Outputs: accessible detail interactions, Host-owned configuration rows, a wrapping responsive
- * action hero with the shared Switch, and the sticky top bar with back and macOS window dragging.
+ * Outputs: a list-aligned detail frame, responsive identity and actions, Host-owned configuration,
+ * and the accordion with source, publisher information, tools and permissions.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
 import {
   AppWindow,
   AlertTriangle,
@@ -27,24 +28,32 @@ import {
   FolderOpen,
   LayoutTemplate,
   MoreVertical,
-  Shield,
-  type LucideIcon,
+  Info,
   Trash2,
-  X,
 } from 'lucide-react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
+import { formatBytes } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
 
-import { PluginUsageCard } from './PluginUsageCard';
 import { PluginReadmeSection, usePluginReadme } from './PluginReadmeSection';
-import { PluginSharedUsage } from './PluginSharedUsage';
-import type { PluginMarketItem } from '../../../shared/pluginMarket';
+import { PluginDetailDisclosure, PluginRecentUpdates, usePluginTextLines } from './PluginRecentUpdates';
+import { PluginPublisherDescription } from './PluginPublisherBadge';
+import { PluginDetailHero, type PluginDetailHeroProps } from './PluginDetailHero';
+import { pluginPresentationOrigin } from './lib/pluginMarketPresentation';
+import type { PluginMarketItem, PluginMarketUpdate } from '../../../shared/pluginMarket';
 import { GhostLibrarySection } from './GhostLibrarySection';
 import { GhostHandoffFilesSection } from './GhostHandoffFilesSection';
+import { GhostAccountReuseSection } from './GhostAccountReuseSection';
 import { PluginBackgroundTasksSection } from './PluginBackgroundTasksSection';
 import { PluginControlPointsSection } from './PluginControlPointsSection';
+import { PluginEngineRemoteUseCards, usePluginRemoteUseEngines } from './PluginEngineRemoteUse';
+import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
+import { providerShareGate } from '@/features/provider-share/providerShareFormat';
+import { ProviderShareManagePage } from '@/features/provider-share/ProviderShareManagePage';
+import { useRemoteControlEnabled } from '@/hooks/useRemoteControlEnabled';
 import { PluginTaskPrefs } from '@/cindy-brain/PluginTaskPrefs';
+import { PluginFileOpenerSwitch } from './PluginFileOpenerSwitch';
 import { GhostSettingsWebview } from '@/cindy-brain/GhostSettingsWebview';
-import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -54,11 +63,13 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Switch } from '@/components/ui/switch';
+import { Tip } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import {
   declaredGhostControlPoints,
   ghostDeclaresHiddenTasks,
+  ghostInstallApprovalToken,
   ghostToolDeclaresHandoff,
   ghostTrustLabelKey,
   type GhostPermissionItem,
@@ -66,7 +77,6 @@ import {
   type InstalledGhost,
 } from '../../../shared/ghost';
 import { type GhostPluginDetail } from './lib/ghostPluginViewModel';
-import { GhostPluginIcon } from './GhostPluginIcon';
 import {
   hasPluginPlacementMemory,
   useGlobalTabs,
@@ -80,9 +90,17 @@ import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { installedGhostStoragePart } from '../../../shared/pluginIdentity';
 import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
 import { ghostPrimaryAction } from './lib/ghostPluginViewModel';
-import { permissionItemIcon } from './lib/permissionItemIcon';
-import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
+import { PluginLimitedList, PluginPermissionList, usePluginPermissionFacts, type PluginPermissionFact } from './PluginPermissionList';
+import {
+  PluginDetailPermissionRow, PluginDetailRecord, PluginDetailRecordRow, PluginDetailSection,
+  usePluginDetailChoice, usePluginDetailLayout, usePluginDetailRelaxed,
+} from './PluginDetailRecord';
+import { PluginMoreDetails, type PluginRelatedCatalog } from './PluginMoreDetails';
+import { PluginInstalledDetailFrame } from './PluginDetailTopBar';
+import { PluginInstallRing } from './PluginInstallRing';
+import { usePluginInstallProgress } from './lib/pluginInstallProgress';
 import './plugin-motion.css';
+import './plugin-detail-layout.css';
 
 interface GhostPluginDetailViewProps {
   /** Remote configuration section, including its heading or disabled notice. */
@@ -94,11 +112,13 @@ interface GhostPluginDetailViewProps {
   sharePluginId?: string;
   detail: GhostPluginDetail;
   marketItem?: PluginMarketItem | null;
+  installationPending?: boolean;
   panelStatus: string | null;
   enabledOverride?: boolean;
   onBack: () => void;
-  usageOwnerKey?: string;
-  confirmClearUsage?: () => Promise<boolean>;
+  backLabel?: string;
+  relatedCatalog?: PluginRelatedCatalog;
+  onOpenRelated?: (item: PluginMarketItem) => void;
   publishingSection?: ReactNode;
   onToggle: (enabled: boolean) => void;
   /** 主动作:面板型「使用」/ 指令或 Host 能力型「对话」;纯工具型不渲染主按钮。 */
@@ -117,6 +137,8 @@ interface GhostPluginDetailViewProps {
   onUpdateFromFile: () => void;
   /** 市场存在新版本时的目标版本号;设置后头部展示显著的更新按钮。 */
   updateVersion?: string;
+  updateNotes?: string;
+  releaseUpdates?: readonly PluginMarketUpdate[];
   updateBusy?: boolean;
   onUninstall: () => void;
   /** 导出 .cindy;当前详情非已装插件(纯市场视图)时缺省,菜单项不渲染。 */
@@ -130,10 +152,6 @@ interface GhostPluginDetailViewProps {
   onIconLoadError?: () => void;
 }
 
-const DETAIL_SECTION_CLASS = 'mt-10';
-const DETAIL_SECTION_HEADING_CLASS =
-  'text-18 font-medium leading-[1.444] text-[var(--text-primary)]';
-const DETAIL_SECTION_CONTENT_CLASS = 'mt-5 max-w-[760px]';
 const DETAIL_SURFACE_CLASS =
   'border border-[color-mix(in_srgb,var(--border-default)_72%,transparent)] bg-[color-mix(in_srgb,var(--surface-elevated)_82%,var(--surface))]';
 const DETAIL_SURFACE_INTERACTIVE_CLASS =
@@ -150,18 +168,22 @@ export function GhostPluginDetailView({
   panelStatus,
   enabledOverride,
   onBack,
+  backLabel,
+  relatedCatalog,
+  onOpenRelated,
   publishingSection,
   onToggle,
   onUse,
   marketItem,
-  usageOwnerKey,
-  confirmClearUsage,
+  installationPending = false,
   mainViewSidebarVisible = true,
   onMainViewSidebarVisibleChange,
   onUpdate,
   onReapprove,
   onUpdateFromFile,
   updateVersion,
+  updateNotes,
+  releaseUpdates,
   updateBusy = false,
   onUninstall,
   onExport,
@@ -174,7 +196,22 @@ export function GhostPluginDetailView({
 }: GhostPluginDetailViewProps) {
   const { t, i18n } = useTranslation();
   const uiLanguage = i18n.resolvedLanguage ?? i18n.language;
-  const { scrolled, onScroll } = usePluginDetailScrolled();
+  const presentationOrigin = marketItem ? pluginPresentationOrigin(marketItem) : detail.origin;
+  const publisherKind = marketItem?.sourceType === 'server' && marketItem.scope === 'public'
+    ? marketItem.publisherKind : detail.publisherKind;
+  const installationLabel = detail.installationLabelKey
+    ? t(`settings.ghosts.detail.${detail.installationLabelKey}`, { name: detail.installationNamespace })
+    : undefined;
+  // 只有本窗口发起的更新才有进度;远程设备上的插件仍按回执显示。
+  const updateProgress = usePluginInstallProgress(remote ? null : marketItem?.pluginId);
+  const updateFailed = updateProgress?.download.phase === 'failed';
+  const updateLabel =
+    !updateVersion || updateVersion === detail.version
+      ? t('settings.ghosts.market.update')
+      : t('settings.ghosts.market.updateTo', { version: updateVersion });
+  const targetReleaseNotes = updateVersion ? updateNotes?.trim() : undefined;
+  const noteVersion = targetReleaseNotes && updateVersion ? updateVersion : detail.version;
+  const fallbackNotes = targetReleaseNotes || detail.releaseNotes?.trim();
   const enableSwitchId = useId();
   const publicationBlocked = publishingPreview?.preflight?.actions.canSubmit === false;
   const [githubConnectionVersion, setGithubConnectionVersion] = useState(0);
@@ -184,6 +221,7 @@ export function GhostPluginDetailView({
   const needsReapproval = detail.approvalState !== 'approved';
   const enabled = (enabledOverride ?? detail.enabled) && !needsReapproval;
   const primaryAction = ghostPrimaryAction(detail);
+  const authorizationExpired = !remote && enabled && detail.oauthAuthorizationExpired;
   const primaryEnabled =
     enabled &&
     (primaryAction === 'panel' ||
@@ -192,57 +230,157 @@ export function GhostPluginDetailView({
   const hasGithubConnection =
     !remote && !needsReapproval &&
     ghost?.manifest.network?.secrets?.some(secret => secret.source === 'gh-cli') === true;
+  // 这个插件在本机提供的执行引擎：每个引擎一张「允许被远程调用」的卡片(远程查看别的电脑的插件时不显示，
+  // 开关只能在装着插件的那台电脑上改)。
+  const remoteUseEngines = usePluginRemoteUseEngines(!remote && ghost ? detail.id : null);
+  const remoteControlEnabled = useRemoteControlEnabled();
+  const [shareManageSelection, setShareManageSelection] = useState<{ ghostId: string; engineKey: string } | null>(null);
+  const shareManageEngine = !remote && shareManageSelection?.ghostId === detail.id
+    ? remoteUseEngines.find((engine) => engine.key === shareManageSelection.engineKey && engine.remoteUse?.shareSupported === true) ?? null
+    : null;
   const hasConfiguration =
-    hasGithubConnection ||
+    (hasGithubConnection && Boolean(ghost?.manifest.routineEvents)) ||
     Boolean(ghost?.manifest.browserExtension) ||
+    Boolean(ghost?.manifest.fileOpener) ||
     detail.hasMainView ||
     detail.hasSettingsUi ||
-    detail.hasTaskPreferences;
-  const summary = hasGithubConnection
-    ? t('ccAgent.gitContext.pr.setup.account.summary')
-    : ghostPluginSummary(detail.description, detail.ghostId);
+    detail.hasTaskPreferences ||
+    remoteUseEngines.length > 0;
+  const summary = ghostPluginSummary(detail.description, detail.ghostId);
   // 远程文件更新按目标 Host 能力判断，不能使用控制端的 DEV 状态。
   const localUpdateAvailable = (!remote || remoteFileUpdate) && ghost?.publishingSource?.kind !== 'public-market';
   const hasAdditionalActions = localUpdateAvailable || onExport !== undefined;
   // 远程设备的插件目录不在本机，详细介绍只在本机详情页读取。
-  const readme = usePluginReadme(
+  const { readme } = usePluginReadme(
     ghost ? `${detail.id}@${ghost.manifest.version}@${uiLanguage}` : null,
     ghost?.manifest.readme && !remote ? () => window.electronAPI.ghosts.readme(detail.id, uiLanguage) : null,
   );
+  const permissionFacts = usePluginPermissionFacts(detail.permissions.filter(item => item.kind !== 'tool'));
+  const toolUiDeclared = Boolean(ghost && pluginHasToolUi(ghost.manifest));
+  const accountReuseDeclared = ghost?.manifest.network?.secrets?.some(
+    secret => !secret.source || secret.source === 'user' || secret.source === 'oauth',
+  ) === true;
+  const libraryDeclared = ghost?.manifest.library === true;
+  const handoffDeclared = (ghost?.manifest.tools ?? []).some(tool => ghostToolDeclaresHandoff(tool));
+  const controlPointsDeclared = Boolean(ghost && declaredGhostControlPoints(ghost.manifest).length);
+  const hiddenTasksDeclared = ghostDeclaresHiddenTasks(ghost?.manifest);
+  const layout = usePluginDetailLayout({
+    id: `installed:${detail.id}`,
+    navigationScope: !remote && relatedCatalog?.local ? relatedCatalog.cache : undefined,
+    hasParent: Boolean(backLabel),
+    blocks: {
+      description: Boolean(summary), updates: Boolean(releaseUpdates?.length || fallbackNotes),
+      readme: Boolean(readme?.markdown.trim()), permissions: permissionFacts.length > 0, facts: true,
+    },
+  });
   const localShareAvailable = !remote && ghost?.publishingSource?.kind === 'local' &&
     ghost.approval.state === 'approved' && ghost.namespaceState === 'confirmed' && (ghost.namespace === null || ghost.namespace === 'local') &&
     !ghost.builtin;
 
+  if (shareManageEngine) {
+    return (
+      <main className="app-wallpaper-surface plugin-motion-root h-full min-h-0 w-full overflow-hidden bg-[var(--surface)]">
+        <div className="mx-auto h-full w-full max-w-[824px] px-8 pt-5 max-[760px]:px-6">
+          <ProviderShareManagePage
+            key={`local:${shareManageEngine.providerId}`}
+            providerId={shareManageEngine.providerId}
+            providerName={shareManageEngine.name}
+            providerIcon={<PluginEngineIcon size={18} iconDataUrl={shareManageEngine.iconDataUrl} />}
+            backLabel={detail.name}
+            gate={providerShareGate({
+              remoteControlEnabled,
+              invocationEnabled: shareManageEngine.remoteUse?.enabled === true,
+            })}
+            onBack={() => setShareManageSelection(null)}
+          />
+        </div>
+      </main>
+    );
+  }
+
   return (
-    <main
-      className="app-wallpaper-surface plugin-motion-root h-full min-h-0 w-full overflow-y-auto bg-[var(--surface)] [scrollbar-gutter:stable_both-edges]"
-      onScroll={onScroll}
+    <PluginInstalledDetailFrame
+      label={backLabel ?? t('settings.ghosts.detail.backToList')}
+      onBack={() => { layout.rememberBack(); onBack(); }}
+      layout={layout}
+      actions={<>
+          {sharePluginId ? <PluginShareButton pluginId={sharePluginId} /> : localShareAvailable && ghost ? <PluginShareButton ghost={ghost} /> : null}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Tip text={t('settings.ghosts.detail.moreActions')}>
+                <Button variant="secondary" tone="quiet" size="lg" className="w-9 px-0"
+                  aria-label={t('settings.ghosts.detail.moreActions')}>
+                  <MoreVertical size={18} aria-hidden="true" />
+                </Button>
+              </Tip>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              sideOffset={8}
+              className="w-56 p-1.5"
+            >
+              {localUpdateAvailable ? (
+                <DropdownMenuItem
+                  onSelect={onUpdateFromFile}
+                  disabled={updateBusy}
+                >
+                  {t('settings.ghosts.detail.updateFromFile')}
+                </DropdownMenuItem>
+              ) : null}
+              {onExport ? (
+                <DropdownMenuItem
+                  onSelect={onExport}
+                  className="gap-2.5"
+                >
+                  <Download size={15} aria-hidden="true" />
+                  {t('settings.ghosts.detail.exportPackage')}
+                </DropdownMenuItem>
+              ) : null}
+              {hasAdditionalActions ? (
+                <DropdownMenuSeparator />
+              ) : null}
+              <DropdownMenuItem
+                onSelect={onUninstall}
+                disabled={updateBusy}
+                variant="danger"
+                className="gap-2.5"
+              >
+                <Trash2 size={15} aria-hidden="true" />
+                {t('settings.ghosts.uninstall')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </>}
     >
-      <PluginDetailTopBar
-        label={t('settings.ghosts.detail.backToList')}
-        onBack={onBack}
-        scrolled={scrolled}
-        actions={sharePluginId ? <PluginShareButton pluginId={sharePluginId} /> : localShareAvailable && ghost ? <PluginShareButton ghost={ghost} /> : undefined}
-      />
-      <article className="plugin-detail-frame mx-auto w-full max-w-[824px] px-8 pb-16 pt-5 max-[760px]:px-6">
         <PluginDetailHeader
           id={detail.id}
           name={detail.name}
           description={summary}
+          readme={readme}
+          fallbackFacts={{
+            permissionCount: permissionFacts.length,
+            toolCount: detail.tools.length,
+            source: presentationOrigin ? t(`settings.ghosts.page.origin.${presentationOrigin}`) : undefined,
+          }}
           author={detail.author}
           version={detail.version}
           marketItem={marketItem}
-          installationLabel={detail.installationLabelKey ? t(`settings.ghosts.detail.${detail.installationLabelKey}`, { name: detail.installationNamespace }) : undefined}
+          origin={presentationOrigin}
+          publisherKind={publisherKind}
+          installationPending={installationPending}
+          versionLabel={updateVersion ? 'installed' : 'current'}
           iconDataUrl={detail.iconDataUrl}
           onIconLoadError={onIconLoadError}
+          sourceNotice={marketItem && marketItem.sourceType !== 'server' ? (
+            <p className="mt-3 text-12 leading-[1.667] text-[var(--text-tertiary)]">
+              {t('settings.ghosts.installConsent.customMarketSourceNotice')}
+            </p>
+          ) : null}
           actions={
-            <div
-              className="plugin-detail-actions flex min-w-0 flex-wrap items-center gap-1.5"
-              style={WINDOW_NO_DRAG_STYLE}
-            >
+            <>
               {needsReapproval && !detail.builtin && onReapprove ? (
                 <Button
-                  variant="secondary"
+                  variant="cta"
                   size="lg"
                   type="button"
                   onClick={onReapprove}
@@ -250,39 +388,50 @@ export function GhostPluginDetailView({
                 >
                   {t('settings.ghosts.reapproval.action')}
                 </Button>
-              ) : updateVersion ? (
-                // 更新提级(设计定稿):有新版本时黑色主 CTA 直达市场更新确认流。
+              ) : (
+                <>
+                  {/* 更新进行中:圆环原位替换更新按钮;失败时圆环停在原处,按钮回来供重试。 */}
+                  {updateProgress && (!updateFailed || updateVersion) ? (
+                    <PluginInstallRing
+                      label={updateLabel}
+                      progress={updateProgress}
+                      size={24}
+                      explainRetry
+                      className="max-w-[260px] px-1 text-13 font-medium"
+                    />
+                  ) : null}
+                  {updateVersion && (!updateProgress || updateFailed) ? (
+                    // 更新提级(设计定稿):有新版本时黑色主 CTA 直达市场更新确认流。
+                    <Button
+                      variant="cta"
+                      size="lg"
+                      loading={updateBusy}
+                      type="button"
+                      onClick={onUpdate}
+                      disabled={updateBusy}
+                      aria-label={updateLabel}
+                      aria-busy={updateBusy || undefined}
+                    >
+                      {updateFailed ? (
+                        t('commonUi.retry')
+                      ) : (
+                        <>
+                          <ArrowUp size={14} aria-hidden="true" />
+                          {updateLabel}
+                        </>
+                      )}
+                    </Button>
+                  ) : null}
+                </>
+              )}
+              {!remote && !needsReapproval && primaryAction !== 'manage' ? (
                 <Button
-                  variant="cta"
-                  size="lg"
-                  loading={updateBusy}
-                  type="button"
-                  onClick={onUpdate}
-                  disabled={updateBusy}
-                  aria-label={
-                    updateVersion === detail.version
-                      ? t('settings.ghosts.market.update')
-                      : t('settings.ghosts.market.updateTo', { version: updateVersion })
-                  }
-                  aria-busy={updateBusy || undefined}
-                >
-                  <>
-                    <ArrowUp size={14} aria-hidden="true" />
-                    {updateVersion === detail.version
-                      ? t('settings.ghosts.market.update')
-                      : t('settings.ghosts.market.updateTo', { version: updateVersion })}
-                  </>
-                </Button>
-              ) : null}
-              {!remote && primaryAction !== 'manage' ? (
-                <Button
-                  variant={updateVersion ? 'secondary' : 'cta'}
+                  variant={updateVersion || authorizationExpired || ghost?.oauthScopeStale ? 'secondary' : 'cta'}
                   size="lg"
                   type="button"
                   onClick={onUse}
                   disabled={!primaryEnabled}
                   title={!enabled ? t('settings.ghosts.detail.useDisabled') : undefined}
-                  className="plugin-detail-primary-action min-w-[88px] whitespace-nowrap"
                 >
                   {primaryAction === 'command' ? (
                     <MessageCircle size={14} aria-hidden="true" />
@@ -306,83 +455,37 @@ export function GhostPluginDetailView({
                   {t('settings.ghosts.contribution.publishPlugin')}
                 </Button>
               ) : null}
-              {/* 启用开关带明确文字(设计定稿):状态一目了然,点文字同样可切换。 */}
-              <label
-                htmlFor={enableSwitchId}
+            </>
+          }
+          enableControl={
+            <label
+              htmlFor={enableSwitchId}
+              className={cn(
+                'flex items-center gap-2 rounded-full py-1 pl-2 transition-colors duration-[var(--motion-fast)]',
+                'hover:bg-[var(--surface-hover-soft)]',
+                toggleDisabled || needsReapproval ? 'cursor-not-allowed' : 'cursor-pointer',
+              )}
+            >
+              <span
                 className={cn(
-                  'flex shrink-0 items-center gap-2 rounded-full py-1 pl-3 pr-1 transition-colors duration-150',
-                  'hover:bg-[var(--surface-hover-soft)]',
-                  toggleDisabled || needsReapproval ? 'cursor-not-allowed' : 'cursor-pointer',
+                  'min-w-0 text-13 text-[var(--text-secondary)] [overflow-wrap:anywhere]',
+                  (toggleDisabled || needsReapproval) && 'opacity-60',
                 )}
               >
-                <span
-                  className={cn(
-                    'text-12',
-                    (toggleDisabled || needsReapproval) && 'opacity-60',
-                    enabled ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
-                  )}
-                >
-                  {t(
-                    enabled
-                      ? 'settings.ghosts.detail.enabledLabel'
-                      : 'settings.ghosts.detail.disabledLabel',
-                  )}
-                </span>
-                <Switch
-                  id={enableSwitchId}
-                  checked={enabled}
-                  disabled={toggleDisabled || needsReapproval}
-                  onCheckedChange={onToggle}
-                  aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
-                />
-              </label>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    aria-label={t('settings.ghosts.detail.moreActions')}
-                    className="grid size-10 shrink-0 place-items-center rounded-full text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] data-[state=open]:bg-[var(--surface-chip)]"
-                  >
-                    <MoreVertical size={18} aria-hidden="true" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="end"
-                  sideOffset={8}
-                  className="w-56 p-1.5"
-                >
-                  {localUpdateAvailable ? (
-                    <DropdownMenuItem
-                      onSelect={onUpdateFromFile}
-                      disabled={updateBusy}
-                    >
-                      {t('settings.ghosts.detail.updateFromFile')}
-                    </DropdownMenuItem>
-                  ) : null}
-                  {onExport ? (
-                    <DropdownMenuItem
-                      onSelect={onExport}
-                      className="gap-2.5"
-                    >
-                      <Download size={15} aria-hidden="true" />
-                      {t('settings.ghosts.detail.exportPackage')}
-                    </DropdownMenuItem>
-                  ) : null}
-                  {hasAdditionalActions ? (
-                    <DropdownMenuSeparator />
-                  ) : null}
-                  <DropdownMenuItem
-                    onSelect={onUninstall}
-                    disabled={updateBusy}
-                    variant="danger"
-                    className="gap-2.5"
-                  >
-                    <Trash2 size={15} aria-hidden="true" />
-                    {t('settings.ghosts.uninstall')}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
+                {t(
+                  enabled
+                    ? 'settings.ghosts.detail.enabledLabel'
+                    : 'settings.ghosts.detail.disabledLabel',
+                )}
+              </span>
+              <Switch
+                id={enableSwitchId}
+                checked={enabled}
+                disabled={toggleDisabled || needsReapproval}
+                onCheckedChange={onToggle}
+                aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
+              />
+            </label>
           }
         >
 
@@ -402,35 +505,22 @@ export function GhostPluginDetailView({
               </p>
             </div>
           ) : null}
+          {!remote && (authorizationExpired || (detail.hasSettingsUi && ghost?.oauthScopeStale)) ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {authorizationExpired ? <OauthScopeStaleBadge expired /> : null}
+              {detail.hasSettingsUi && ghost?.oauthScopeStale ? <OauthScopeStaleBadge /> : null}
+            </div>
+          ) : null}
         </PluginDetailHeader>
 
-        {ghost && !remote ? (
-          <PluginUsageCard
-            key={`${usageOwnerKey ?? 'local'}:${detail.id}`}
-            ghostId={detail.id}
-            confirmClear={confirmClearUsage}
-          />
-        ) : null}
-
-        <PluginReadmeSection readme={readme} />
+        <PluginRecentUpdates key={`updates:${detail.id}`} updates={releaseUpdates} fallback={fallbackNotes ? {
+          version: noteVersion, releaseNotes: fallbackNotes,
+          publishedAt: marketItem?.sourceType === 'server' && marketItem.version === noteVersion ? marketItem.publishedAt : undefined,
+        } : undefined} />
 
         {remote ? remoteConfiguration : hasConfiguration ? (
-          <section
-            className={hasGithubConnection ? 'mt-6' : DETAIL_SECTION_CLASS}
-            aria-labelledby={hasGithubConnection ? undefined : 'ghost-configuration-title'}
-          >
-            {!hasGithubConnection && (
-              <DetailSectionHeader
-                id="ghost-configuration-title"
-                title={t('settings.ghosts.detail.configurationTitle')}
-              />
-            )}
-            <div
-              className={cn(
-                hasGithubConnection ? 'max-w-[760px]' : DETAIL_SECTION_CONTENT_CLASS,
-                'space-y-3',
-              )}
-            >
+          <PluginDetailSection title={t('settings.ghosts.detail.configurationTitle')}>
+            <div className="min-w-0 space-y-3">
               {ghost?.manifest.browserExtension ? (
                 <div className="flex flex-wrap items-center gap-3">
                   <Button variant="secondary" disabled={!enabled || browserActivation?.id === detail.id && browserActivation.state === 'pending'}
@@ -480,24 +570,31 @@ export function GhostPluginDetailView({
                   />
                 </div>
               ) : null}
+              {ghost?.manifest.fileOpener ? (
+                <PluginFileOpenerSwitch
+                  ghostId={detail.id}
+                  name={detail.name}
+                  extensions={ghost.manifest.fileOpener.extensions}
+                  surfaceClassName={DETAIL_SURFACE_CLASS}
+                />
+              ) : null}
               {detail.hasSettingsUi ? (
                 ghost ? (
-                  <>
-                    {ghost.oauthScopeStale ? <OauthScopeStaleBadge /> : null}
-                    <GhostSettingsWebview
-                      reloadKey={githubConnectionVersion}
-                      account={
-                        hasGithubConnection ? (
-                          <GithubAccountCard
-                            onConnected={() => setGithubConnectionVersion((version) => version + 1)}
-                          />
-                        ) : undefined
-                      }
-                      ghost={ghost}
-                      title={t('settings.ghosts.detail.settingsTitle', { name: detail.name })}
-                      appearance="plugin"
-                    />
-                  </>
+                  <GhostSettingsWebview
+                    reloadKey={githubConnectionVersion}
+                    account={
+                      hasGithubConnection ? (
+                        <GithubAccountCard
+                          pluginSettings
+                          includeEvents={ghost.manifest.id === 'cindy-github' && ghost.namespace === null}
+                          onConnected={() => setGithubConnectionVersion((version) => version + 1)}
+                        />
+                      ) : undefined
+                    }
+                    ghost={ghost}
+                    title={t('settings.ghosts.detail.settingsTitle', { name: detail.name })}
+                    appearance="plugin"
+                  />
                 ) : (
                   <div
                     className={cn(
@@ -521,6 +618,11 @@ export function GhostPluginDetailView({
                   </div>
                 )
               ) : null}
+              <PluginEngineRemoteUseCards
+                engines={remoteUseEngines}
+                onManageShare={(engine) => setShareManageSelection({ ghostId: detail.id, engineKey: engine.key })}
+                surfaceClassName={DETAIL_SURFACE_CLASS}
+              />
               {ghost?.manifest.routineEvents ? (
                 <p className="text-13 text-[var(--text-secondary)]">
                   {t('routines.pluginCapability')}
@@ -532,31 +634,32 @@ export function GhostPluginDetailView({
                   legacyDefault={ghost?.manifest.agent?.errand === true && !ghost.manifest.agent?.tasks && !ghost.manifest.workspace} />
               ) : null}
             </div>
-          </section>
+          </PluginDetailSection>
         ) : null}
 
         <PluginBackgroundTasksSection
           ghostId={detail.id}
           installed={ghost !== null}
-          hiddenTasksDeclared={ghostDeclaresHiddenTasks(ghost?.manifest)}
+          hiddenTasksDeclared={hiddenTasksDeclared}
         />
 
         {ghost && !remote ? (
           <PluginControlPointsSection
             ghostId={detail.id}
-            declared={declaredGhostControlPoints(ghost.manifest).length > 0}
+            declared={controlPointsDeclared}
           />
         ) : null}
 
-        {detail.tools.length > 0 ? <ToolsSection tools={detail.tools} /> : null}
-
-        {detail.permissions.length > 0 ? <PermissionSummary items={detail.permissions} /> : null}
-        {ghost && pluginHasToolUi(ghost.manifest) && <section className="mt-4 space-y-3">
+        {ghost && toolUiDeclared && <section className="mt-4 space-y-3">
+          {!remote && <PluginUiMenu ghostId={detail.id} />}
           <h3 className="text-14 font-medium text-[var(--text-primary)]">{t('settings.ghosts.perm.mcpUi')}</h3>
-          {ghost.manifest.tools?.filter(tool => getPluginToolUi(ghost.manifest)?.tools[tool.name]).map(tool => <div key={tool.name} className="text-13 text-[var(--text-secondary)]">
-            <p>{tool.name}</p>
-            <p className="break-all text-12">{getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility && !getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility!.includes('model') ? t('settings.ghosts.perm.mcpAppOnly') : `ghost_call: ${tool.name}`}</p>
-          </div>)}
+          <PluginLimitedList items={(ghost.manifest.tools ?? []).filter(tool => getPluginToolUi(ghost.manifest)?.tools[tool.name])}
+            className="space-y-3" choiceKey="interactiveTools" renderItem={tool => (
+              <li key={tool.name} className="text-13 text-[var(--text-secondary)]">
+                <p>{tool.name}</p>
+                <p className="break-all text-12">{getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility && !getPluginToolUi(ghost.manifest)?.tools[tool.name].visibility!.includes('model') ? t('settings.ghosts.perm.mcpAppOnly') : `ghost_call: ${tool.name}`}</p>
+              </li>
+            )} />
           {!remote && enabled && ghost.uiCapabilityApproved !== true && <Button variant="secondary" size="sm" disabled={taskApprovalPending} onClick={async () => {
             setTaskApprovalPending(true);
             try { await window.electronAPI.ghosts.requestUiApproval(detail.id); }
@@ -607,270 +710,172 @@ export function GhostPluginDetailView({
             {t('settings.ghosts.perm.agentCompanionsRequest')}
           </Button>
         ) : null}
+        {!remote && enabled && ghost?.manifest.agent?.checks === true && ghost.checksCapabilityApproved !== true ? (
+          <Button variant="secondary" size="sm" className="mt-4" disabled={taskApprovalPending} onClick={async () => {
+            setTaskApprovalPending(true);
+            try {
+              await window.electronAPI.ghosts.requestTaskApproval(detail.id, 'checks');
+            } catch {
+              toast.error(t('settings.ghosts.errors.generic'));
+            } finally {
+              setTaskApprovalPending(false);
+            }
+          }}>
+            {t('settings.ghosts.perm.agentChecksRequest')}
+          </Button>
+        ) : null}
 
-        {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={ghost?.manifest.library === true} /> : null}
+        {!remote ? <GhostAccountReuseSection key={`${detail.id}:${ghostInstallApprovalToken(ghost?.approval)}`} ghostId={detail.id} enabled={enabled} declared={accountReuseDeclared} /> : null}
+        {!remote ? <GhostLibrarySection ghostId={detail.id} enabled={libraryDeclared} /> : null}
         {!remote ? (
           <GhostHandoffFilesSection
             ghostId={detail.id}
-            declared={(ghost?.manifest.tools ?? []).some((tool) => ghostToolDeclaresHandoff(tool))}
+            declared={handoffDeclared}
           />
         ) : null}
 
         {publishingSection}
 
-        <DetailsSection detail={remote ? { ...detail, installDir: null } : detail} panelStatus={panelStatus} />
-      </article>
-    </main>
+        <PluginDetailRecord key={`record:${detail.id}`}>
+          <PluginPermissionSummary items={permissionFacts} />
+          <DetailsSection
+            detail={remote ? { ...detail, installDir: null } : detail}
+            marketItem={marketItem}
+            panelStatus={panelStatus}
+            installationLabel={installationLabel}
+            publisherDescription={<PluginPublisherDescription origin={presentationOrigin} kind={publisherKind} />}
+          />
+        </PluginDetailRecord>
+        {!remote && !needsReapproval && !ghost?.retirement ? (
+          <PluginMoreDetails detailId={marketItem?.pluginId ?? `installed:${detail.id}`} catalog={relatedCatalog}
+            onSelect={onOpenRelated && (item => { layout.rememberForward(item.pluginId); onOpenRelated(item); })} />
+        ) : null}
+    </PluginInstalledDetailFrame>
   );
 }
 
 /** 宿主侧非阻塞角标；重新连接动作继续复用插件设置区已有入口。 */
-export function OauthScopeStaleBadge() {
+export function OauthScopeStaleBadge({ expired = false }: { expired?: boolean } = {}) {
   const { t } = useTranslation();
   return (
     <div
       role="status"
-      className="inline-flex w-fit max-w-full items-center gap-1.5 rounded-full bg-[var(--warning-bg-soft)] px-3 py-1.5 text-12 leading-5 text-[var(--text-secondary)]"
+      className="flex w-fit max-w-full items-center gap-1.5 rounded-full bg-[var(--warning-bg-soft)] px-3 py-1.5 text-12 leading-[1.667] text-[var(--text-secondary)]"
     >
       <AlertTriangle size={13} className="shrink-0 text-[var(--warning-fg)]" aria-hidden="true" />
-      <span>{t('settings.ghosts.detail.oauthScopeStale')}</span>
+      <span>{t(expired ? 'settings.ghosts.page.oauthAuthorizationExpired' : 'settings.ghosts.detail.oauthScopeStale')}</span>
     </div>
   );
 }
 
 export function PluginDetailHeader({
-  id,
-  name,
   description,
-  author,
-  version,
-  marketItem,
-  installationLabel,
-  iconDataUrl,
-  actions,
+  readme,
+  sourceNotice,
   children,
-  onIconLoadError,
-}: {
-  id: string;
-  name: string;
+  ...hero
+}: PluginDetailHeroProps & {
   description: string;
-  author?: string | null;
-  version?: string;
-  marketItem?: PluginMarketItem | null;
-  installationLabel?: string;
-  iconDataUrl?: string;
-  actions?: ReactNode;
+  readme?: GhostReadmeContent | null;
+  sourceNotice?: ReactNode;
   children?: ReactNode;
-  onIconLoadError?: () => void;
 }) {
-  const { t } = useTranslation();
-  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
-  const [descriptionOverflows, setDescriptionOverflows] = useState(false);
-  const descriptionRef = useRef<HTMLParagraphElement>(null);
-  useLayoutEffect(() => {
-    setDescriptionExpanded(false);
-    const description = descriptionRef.current;
-    if (!description) return;
-    const measure = () => {
-      const computedStyle = window.getComputedStyle(description);
-      const lineHeight = Number.parseFloat(computedStyle.lineHeight);
-      const width = description.getBoundingClientRect().width;
-      if (!Number.isFinite(lineHeight) || width <= 0) {
-        setDescriptionOverflows(false);
-        return;
-      }
-
-      // Chromium reports the clamped element's scrollHeight as the visible height.
-      // Measure an unclamped, off-screen clone so the affordance only appears when
-      // the complete description genuinely exceeds three lines.
-      const measurement = description.cloneNode(true) as HTMLParagraphElement;
-      measurement.classList.remove('line-clamp-3');
-      Object.assign(measurement.style, {
-        position: 'fixed',
-        left: '-10000px',
-        top: '0',
-        width: `${width}px`,
-        height: 'auto',
-        maxHeight: 'none',
-        overflow: 'visible',
-        visibility: 'hidden',
-        pointerEvents: 'none',
-        WebkitLineClamp: 'unset',
-        WebkitBoxOrient: 'initial',
-      });
-      document.body.appendChild(measurement);
-      const fullHeight = measurement.getBoundingClientRect().height;
-      measurement.remove();
-      setDescriptionOverflows(fullHeight > lineHeight * 3 + 1);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(description);
-    return () => observer.disconnect();
-  }, [id, description]);
   return (
     <header>
-      <div className="plugin-detail-hero grid grid-cols-[64px_minmax(0,1fr)_auto] items-center gap-3">
-        <GhostPluginIcon
-          iconDataUrl={iconDataUrl}
-          iconId={id}
-          iconName={name}
-          size="detail"
-          onIconLoadError={onIconLoadError}
-        />
-        <div className="min-w-0">
-          <h1 className="truncate text-28 font-medium leading-[1.214] text-[var(--text-primary)]">
-            {name}
-          </h1>
-          <GhostPluginMetadata author={author} version={version} marketItem={marketItem} />
-          {installationLabel ? <p className="mt-1 break-words text-12 text-[var(--text-tertiary)]">{installationLabel}</p> : null}
-        </div>
-
-        {actions}
-      </div>
-      <div className="mt-5">
-        <p
-          ref={descriptionRef}
-          className={cn(
-            'text-14 leading-[1.571] text-[var(--text-secondary)]',
-            !descriptionExpanded && 'line-clamp-3',
-          )}
-        >
-          {description}
-        </p>
-        {descriptionOverflows ? (
-          <button
-            type="button"
-            onClick={() => setDescriptionExpanded((expanded) => !expanded)}
-            aria-expanded={descriptionExpanded}
-            className="mt-1.5 rounded-full text-13 leading-5 text-[var(--text-secondary)] transition-colors duration-150 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]"
-          >
-            {t(
-              descriptionExpanded
-                ? 'settings.ghosts.detail.descriptionCollapse'
-                : 'settings.ghosts.detail.descriptionExpand',
-            )}
-          </button>
-        ) : null}
-      </div>
+      <PluginDetailHero {...hero} />
+      <PluginDetailDescription key={hero.id} description={description} readme={readme} />
+      {sourceNotice}
       {children}
     </header>
   );
 }
 
-/** Compact factual metadata with one shared color and stable product order. */
-export function GhostPluginMetadata({
-  author,
-  version,
-  marketItem,
-}: {
-  author?: string | null;
-  version?: string;
-  marketItem?: PluginMarketItem | null;
+export function PluginDetailDescription({ description, readme }: {
+  description: string;
+  readme?: GhostReadmeContent | null;
 }) {
   const { t } = useTranslation();
-  if (!author && !version && !marketItem) return null;
+  const id = useId();
+  const [choice, setChoice] = usePluginDetailChoice('description');
+  const { ref, lines } = usePluginTextLines(description);
+  const relaxedDescription = usePluginDetailRelaxed('description');
+  const relaxedReadme = usePluginDetailRelaxed('readme');
+  const hasReadme = Boolean(readme?.markdown.trim());
+  const roomier = choice === undefined && relaxedDescription;
+  const preview = choice === undefined && relaxedReadme && hasReadme;
+  const expand = choice !== true && (hasReadme || lines > (roomier ? 6 : 3));
+  const collapse = choice === true || preview || (roomier && lines > 3);
+  if (!description.trim() && !hasReadme) return null;
   return (
-    <div className="plugin-detail-metadata mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-13 leading-5 text-[var(--text-tertiary)]">
-      {author ? (
-        <>
-          <span className="min-w-0 truncate">
-            {t('settings.ghosts.detail.byAuthor', { author })}
-          </span>
-          {version ? <MetadataDivider /> : null}
-        </>
+    <div className="mt-7">
+      <div id={id}>
+        <p
+          ref={ref}
+          className={cn(
+            'whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-16 leading-[1.7] text-[var(--text-primary)]',
+            choice !== true && (roomier ? 'line-clamp-6' : lines > 3 && 'line-clamp-2'),
+          )}
+        >
+          {description}
+        </p>
+        {hasReadme && (choice || preview) ? <PluginReadmeSection readme={readme ?? null} preview={preview} /> : null}
+      </div>
+      {expand || collapse ? (
+        <div className="mt-1 flex flex-wrap gap-x-2">
+          {expand && <PluginDetailDisclosure expanded={false} controls={id} onClick={() => setChoice(true)}>
+            {t('settings.ghosts.detail.descriptionExpand')}
+          </PluginDetailDisclosure>}
+          {collapse && <PluginDetailDisclosure expanded controls={id} onClick={() => setChoice(false)}>
+            {t('settings.ghosts.detail.descriptionCollapse')}
+          </PluginDetailDisclosure>}
+        </div>
       ) : null}
-      {version ? <span className="shrink-0">v{version}</span> : null}
-      {marketItem ? <PluginSharedUsage detail={marketItem} /> : null}
     </div>
   );
 }
 
-function MetadataDivider() {
+/** Compact factual metadata with one shared color and stable product order. */
+export function ToolsSection({ tools }: { tools: readonly (Pick<GhostToolDecl, 'name' | 'description'> & Partial<GhostToolDecl>)[] }) {
+  const { t } = useTranslation();
+  if (!tools.length) return null;
   return (
-    <span className="shrink-0" aria-hidden="true">
-      ·
-    </span>
-  );
-}
-
-export function DetailSectionHeader({
-  id,
-  title,
-  action,
-}: {
-  id: string;
-  title: string;
-  action?: ReactNode;
-}) {
-  return (
-    <div className="flex min-h-[26px] items-center justify-between gap-4">
-      <h2 id={id} className={DETAIL_SECTION_HEADING_CLASS}>
-        {title}
-      </h2>
-      {action}
+    <div className="mt-5">
+      <h3 className="mb-2 text-13 font-medium text-[var(--text-secondary)]">
+        {t('settings.ghosts.detail.toolsTitle')}{' '}
+        <span className="tabular-nums">{t('settings.ghosts.detail.toolCount', { count: tools.length })}</span>
+      </h3>
+      <PluginLimitedList items={tools} limit={6} choiceKey="tools" className="divide-y divide-[var(--border-default)]"
+        renderItem={tool => <ToolDescriptionRow key={tool.name} tool={tool} />} />
     </div>
   );
 }
 
-function SectionTextAction({
-  expanded,
-  onClick,
-  children,
-}: {
-  expanded?: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-expanded={expanded}
-      onClick={onClick}
-      className="shrink-0 rounded-md px-1 py-0.5 text-13 text-[var(--text-secondary)] transition-colors duration-150 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-    >
-      {children}
-    </button>
-  );
-}
-
-export function ToolsSection({
-  tools,
-}: {
-  tools: readonly (Pick<GhostToolDecl, 'name' | 'description'> & Partial<GhostToolDecl>)[];
-}) {
+function ToolDescriptionRow({ tool }: { tool: Pick<GhostToolDecl, 'name' | 'description'> }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const canExpand = tools.length > 6;
+  const [clipped, setClipped] = useState(false);
+  const ref = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node || expanded) return;
+    const measure = () => setClipped(node.scrollHeight > node.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [expanded, tool.description]);
   return (
-    <section className={DETAIL_SECTION_CLASS} aria-labelledby="ghost-tools-title">
-      <DetailSectionHeader
-        id="ghost-tools-title"
-        title={t('settings.ghosts.detail.toolsTitle')}
-        action={
-          canExpand ? (
-            <SectionTextAction expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-              {t(
-                expanded
-                  ? 'settings.ghosts.detail.collapseTools'
-                  : 'settings.ghosts.detail.viewAllTools',
-              )}
-            </SectionTextAction>
-          ) : undefined
-        }
-      />
-      <div
-        className={cn(
-          DETAIL_SECTION_CONTENT_CLASS,
-          'flex flex-wrap gap-2',
-          !expanded && canExpand && 'max-h-8 overflow-hidden',
-        )}
-      >
-        {tools.map((tool) => (
-          <ToolDescriptionChip key={tool.name} tool={tool} />
-        ))}
-      </div>
-    </section>
+    <li className="grid min-w-0 gap-x-3 gap-y-1 py-3 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)_auto]">
+      <code className="break-words text-13 text-[var(--text-primary)]">{tool.name}</code>
+      <p ref={ref} className={cn('whitespace-pre-line break-words text-13 leading-[1.54] text-[var(--text-secondary)]', !expanded && 'line-clamp-2')}>
+        {tool.description || t('settings.ghosts.detail.noToolDescription')}
+      </p>
+      {clipped || expanded ? <Button type="button" tone="quiet" variant="secondary" size="xs" compact className="justify-self-start" aria-expanded={expanded}
+        aria-label={t('settings.ghosts.detail.openTool', { name: tool.name })} onClick={() => setExpanded(value => !value)}>
+        <ChevronDown size={14} className={expanded ? 'rotate-180' : undefined} aria-hidden="true" />
+      </Button> : null}
+    </li>
   );
 }
 
@@ -897,7 +902,7 @@ export function ToolDescriptionChip({ tool }: { tool: Pick<GhostToolDecl, 'name'
         sideOffset={8}
         className={cn(
           DETAIL_SURFACE_CLASS,
-          'z-[10000] w-[320px] rounded-xl p-4 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)] data-[state=open]:animate-none data-[state=closed]:animate-none',
+          'w-[320px] rounded-xl p-4 text-[var(--text-primary)] shadow-[shadow:var(--shadow-menu)] data-[state=open]:animate-none data-[state=closed]:animate-none',
         )}
       >
         <p className="text-13 leading-5 text-[var(--text-secondary)]">
@@ -909,128 +914,58 @@ export function ToolDescriptionChip({ tool }: { tool: Pick<GhostToolDecl, 'name'
 }
 
 export function PermissionSummary({ items }: { items: readonly GhostPermissionItem[] }) {
+  return <PluginPermissionSummary items={usePluginPermissionFacts(items.filter(item => item.kind !== 'tool'))} />;
+}
+
+export function PluginPermissionSummary({ items }: { items: readonly PluginPermissionFact[] }) {
   const { t } = useTranslation();
   return (
-    <PluginPermissionSummary
-      items={items
-        .filter((item) => item.kind !== 'tool')
-        .map((item) => ({
-          key: item.key,
-          title: t('settings.ghosts.perm.' + item.labelKey, item.labelArgs),
-          descriptions: [
-            item.detailKey ? t('settings.ghosts.perm.' + item.detailKey, item.detailArgs) : '',
-            item.detail ?? '',
-          ].filter(Boolean),
-          icon: permissionItemIcon(item),
-        }))}
-    />
+    <PluginDetailPermissionRow summary={<PluginPermissionCount items={items} />}>
+      {limit => items.length ? <PluginPermissionList items={items} limit={limit} choiceKey="permissionList" /> : (
+        <p className="text-13 text-[var(--text-tertiary)]">{t('settings.ghosts.market.noPermissions')}</p>
+      )}
+    </PluginDetailPermissionRow>
   );
 }
 
-interface PluginPermissionFact {
-  key: string;
-  title: string;
-  descriptions: readonly string[];
-  icon?: LucideIcon;
-}
-
-export function PluginPermissionSummary({
-  items: permissionItems,
-}: {
-  items: readonly PluginPermissionFact[];
-}) {
+export function PluginPermissionCount({ items }: { items: readonly PluginPermissionFact[] }) {
   const { t } = useTranslation();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  if (permissionItems.length === 0) return null;
-  const permissionCardLabel = `${t('settings.ghosts.detail.permissionsTitle')}: ${permissionItems
-    .map((item) => item.title)
-    .join(', ')}`;
-  return (
-    <section className={DETAIL_SECTION_CLASS} aria-labelledby="ghost-permissions-title">
-      <DetailSectionHeader
-        id="ghost-permissions-title"
-        title={t('settings.ghosts.detail.permissionsTitle')}
-        action={
-          <SectionTextAction onClick={() => setDialogOpen(true)}>
-            {t('settings.ghosts.detail.viewAllPermissions')}
-          </SectionTextAction>
-        }
-      />
-      <button
-        type="button"
-        aria-label={permissionCardLabel}
-        onClick={() => setDialogOpen(true)}
-        className={cn(
-          DETAIL_SURFACE_CLASS,
-          DETAIL_SURFACE_INTERACTIVE_CLASS,
-          DETAIL_SECTION_CONTENT_CLASS,
-          'grid w-full grid-cols-2 gap-x-8 gap-y-0 rounded-xl p-4 text-left',
-        )}
-      >
-        {permissionItems.map((item) => {
-          const Icon = item.icon ?? Shield;
-          return (
-            <span
-              key={item.key}
-              className="flex min-h-9 min-w-0 items-center gap-2.5 text-[var(--text-primary)]"
-            >
-              <Icon
-                size={20}
-                strokeWidth={1.8}
-                className="shrink-0 text-[var(--text-secondary)]"
-                aria-hidden="true"
-              />
-              <span className="min-w-0 break-words text-13 font-normal leading-5">
-                {item.title}
-              </span>
-            </span>
-          );
-        })}
-      </button>
-      <PermissionDetailDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        items={permissionItems}
-      />
-    </section>
-  );
+  const count = t('settings.ghosts.perm.itemCount', { count: items.length });
+  return items.some(item => item.highRisk) ? `${t('settings.ghosts.detail.includesHighRisk')} · ${count}` : count;
 }
 
-function PermissionDetailRow({ item }: { item: PluginPermissionFact }) {
-  const Icon = item.icon ?? Shield;
-  return (
-    <div className="flex items-start gap-3 py-4 first:pt-0 last:pb-0">
-      <Icon
-        size={18}
-        strokeWidth={1.8}
-        className="mt-0.5 shrink-0 text-[var(--text-secondary)]"
-        aria-hidden="true"
-      />
-      <div className="min-w-0 flex-1">
-        <p className="break-words text-14 font-medium leading-[1.571] text-[var(--text-primary)]">
-          {item.title}
-        </p>
-        {item.descriptions.map((description, index) => (
-          <p
-            key={index}
-            className="mt-1 whitespace-pre-line break-words text-13 leading-5 text-[var(--text-secondary)]"
-          >
-            {description}
-          </p>
-        ))}
-      </div>
-    </div>
-  );
+export function pluginPackageSizeFacts(t: TFunction, item: PluginMarketItem | null | undefined, installedVersion?: string) {
+  if (item?.sourceType !== 'server' || item.sizeBytes === undefined) return [];
+  const size = formatBytes(item.sizeBytes);
+  const listedVersion = item.version.replace(/^v/, '');
+  return [{
+    key: 'packageSize',
+    label: t('settings.ghosts.detail.infoPackageSize'),
+    value: installedVersion !== undefined && installedVersion.replace(/^v/, '') !== listedVersion
+      ? t('settings.ghosts.detail.infoPackageSizeWithVersion', { size, version: `v${listedVersion}` })
+      : size,
+  }];
 }
 
 export function DetailsSection({
   detail,
+  marketItem,
   panelStatus,
+  installationLabel,
+  publisherDescription,
 }: {
   detail: GhostPluginDetail;
+  marketItem?: PluginMarketItem | null;
   panelStatus: string | null;
+  installationLabel?: string;
+  publisherDescription?: ReactNode;
 }) {
   const { t } = useTranslation();
+  const installationSource = parsePluginInstallationSource(detail.installationSource);
+  const sourceLabel = t(`mcpApps.source.${installationSource.kind}`, { namespace: installationSource.namespace });
+  const sourceValue = installationLabel && installationSource.kind !== 'unknown' &&
+    installationSource.kind !== 'market' && installationLabel !== sourceLabel
+    ? `${installationLabel} · ${sourceLabel}` : installationLabel ?? sourceLabel;
   const trustLabelKey = ghostTrustLabelKey(detail.trust);
   const globalTabs = useGlobalTabs();
   useTabGroupAssignments();
@@ -1042,8 +977,6 @@ export function DetailsSection({
   );
   // 用户拖过 / 弹过 / 已套过默认边:给「恢复默认位置」。
   const canResetPlacement = hasPluginPlacementMemory(detail.id);
-  const placementActionClass =
-    'shrink-0 rounded-md px-2 py-1 text-12 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]';
   const facts: Array<{
     key: string;
     label: string;
@@ -1057,6 +990,7 @@ export function DetailsSection({
       label: t('settings.ghosts.detail.infoVersion'),
       value: `v${detail.version}`,
     },
+    ...pluginPackageSizeFacts(t, marketItem, detail.version),
     ...(detail.author
       ? [
           {
@@ -1067,8 +1001,13 @@ export function DetailsSection({
         ]
       : []),
     {
+      key: 'source',
+      label: t('mcpApps.sourceLabel'),
+      value: sourceValue,
+    },
+    {
       key: 'trust',
-      label: t('settings.ghosts.detail.infoTrust'),
+      label: t('mcpApps.signatureLabel'),
       value: t(`settings.ghosts.trust.${trustLabelKey}`, {
         publisher: detail.trust.publisherName ?? t('settings.ghosts.trust.unknownPublisher'),
       }),
@@ -1105,26 +1044,30 @@ export function DetailsSection({
             action: (
               <span className="flex shrink-0 items-center gap-1">
                 {detail.enabled && !inSidebar && (
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
+                    tone="quiet"
+                    size="xs"
+                    compact
                     onClick={() => {
                       if (installedGhost) void openPluginInSidebar(installedGhost, 'panel');
                     }}
-                    className={placementActionClass}
                   >
                     {t('settings.ghosts.detail.openInSidebar')}
-                  </button>
+                  </Button>
                 )}
                 {canResetPlacement && (
-                  <button
-                    type="button"
+                  <Button
+                    variant="secondary"
+                    tone="quiet"
+                    size="xs"
+                    compact
                     onClick={() => {
                       if (installedGhost) void resetPluginPlacementAndReturn(installedGhost);
                     }}
-                    className={placementActionClass}
                   >
                     {t('settings.ghosts.detail.resetPlacement')}
-                  </button>
+                  </Button>
                 )}
               </span>
             ),
@@ -1150,7 +1093,7 @@ export function DetailsSection({
                   }}
                   title={t('settings.ghosts.detail.copyLocation')}
                   aria-label={t('settings.ghosts.detail.copyLocation')}
-                  className="grid size-7 shrink-0 place-items-center rounded-md text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  className="grid size-7 shrink-0 place-items-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                 >
                   <Copy size={14} aria-hidden="true" />
                 </button>
@@ -1169,7 +1112,7 @@ export function DetailsSection({
                   }}
                   title={t('settings.ghosts.detail.openLocation')}
                   aria-label={t('settings.ghosts.detail.openLocation')}
-                  className="grid size-7 shrink-0 place-items-center rounded-md text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+                  className="grid size-7 shrink-0 place-items-center rounded-lg text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                 >
                   <FolderOpen size={14} aria-hidden="true" />
                 </button>
@@ -1179,11 +1122,15 @@ export function DetailsSection({
         ]
       : []),
   ];
-  return <PluginDetailFactsSection facts={facts} />;
+  return <PluginDetailFactsSection facts={facts}>
+    {publisherDescription}
+    <ToolsSection tools={detail.tools} />
+  </PluginDetailFactsSection>;
 }
 
 export function PluginDetailFactsSection({
   facts,
+  children,
 }: {
   facts: readonly {
     key: string;
@@ -1193,12 +1140,14 @@ export function PluginDetailFactsSection({
     action?: ReactNode;
     fullWidth?: boolean;
   }[];
+  children?: ReactNode;
 }) {
   const { t } = useTranslation();
+  const [choice, setChoice] = usePluginDetailChoice('facts');
+  const relaxed = usePluginDetailRelaxed('facts');
   return (
-    <section className={DETAIL_SECTION_CLASS} aria-labelledby="ghost-details-title">
-      <DetailSectionHeader id="ghost-details-title" title={t('settings.ghosts.detail.infoTitle')} />
-      <div className={cn(DETAIL_SECTION_CONTENT_CLASS, 'grid grid-cols-3 gap-x-10 gap-y-7')}>
+    <PluginDetailRecordRow icon={Info} title={t('settings.ghosts.detail.infoTitle')} open={choice ?? relaxed} onOpenChange={setChoice}>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {facts.map((fact) => (
           <div key={fact.key} className={cn('min-w-0', fact.fullWidth && 'col-span-full')}>
             <p className="truncate text-13 leading-5 text-[var(--text-secondary)]">{fact.label}</p>
@@ -1211,7 +1160,8 @@ export function PluginDetailFactsSection({
           </div>
         ))}
       </div>
-    </section>
+      {children}
+    </PluginDetailRecordRow>
   );
 }
 
@@ -1288,74 +1238,5 @@ function ExpandableDetailValue({
         </button>
       ) : null}
     </div>
-  );
-}
-
-function DialogFrame({ children }: { children: ReactNode }) {
-  return (
-    <Dialog.Portal>
-      <Dialog.Overlay
-        className="modal-scrim fixed inset-0 z-[10000]"
-        style={WINDOW_NO_DRAG_STYLE}
-      />
-      <Dialog.Content
-        onPointerDownOutside={(event) => event.preventDefault()}
-        className="modal-panel fixed left-1/2 top-1/2 z-[10000] flex max-h-[70vh] w-[calc(100vw-48px)] max-w-[560px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden text-[var(--text-primary)] focus:outline-none"
-        style={WINDOW_NO_DRAG_STYLE}
-      >
-        {children}
-      </Dialog.Content>
-    </Dialog.Portal>
-  );
-}
-
-function DialogCloseButton() {
-  const { t } = useTranslation();
-  return (
-    <Dialog.Close
-      aria-label={t('settings.ghosts.detail.closeDialog')}
-      className="grid size-9 shrink-0 place-items-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
-    >
-      <X size={17} aria-hidden="true" />
-    </Dialog.Close>
-  );
-}
-
-/** Complete non-Tool permission inventory with host- and manifest-provided descriptions. */
-function PermissionDetailDialog({
-  open,
-  onOpenChange,
-  items,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  items: readonly PluginPermissionFact[];
-}) {
-  const { t } = useTranslation();
-  return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <DialogFrame>
-        <div className="flex items-start gap-4 border-b-[0.5px] border-[var(--border-default)] px-6 py-5">
-          <div className="min-w-0 flex-1">
-            <Dialog.Title className="text-18 font-medium">
-              {t('settings.ghosts.detail.permissionsTitle')}
-            </Dialog.Title>
-            <Dialog.Description className="mt-1 text-13 leading-5 text-[var(--text-tertiary)]">
-              {t('settings.ghosts.detail.permissionsDialogDescription', {
-                count: items.length,
-              })}
-            </Dialog.Description>
-          </div>
-          <DialogCloseButton />
-        </div>
-        <div className="overflow-y-auto px-6 py-5">
-          <div className="divide-y-[0.5px] divide-[var(--border-default)]">
-            {items.map((item) => (
-              <PermissionDetailRow key={item.key} item={item} />
-            ))}
-          </div>
-        </div>
-      </DialogFrame>
-    </Dialog.Root>
   );
 }

@@ -1,3 +1,4 @@
+import { validateAdditionalSettingsOverrides } from '../../shared/settingsEditableCatalog.js';
 /**
  * git-safety-settings-store —— Git safety workflow machine settings.
  *
@@ -9,7 +10,7 @@
  * changes can flow to users who never changed the setting.
  */
 
-import { app } from 'electron';
+import { getUserDataDir } from '../userDataPath.js';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './logger-adapter.js';
@@ -19,9 +20,16 @@ import {
   type OverrideSettingsState,
 } from './override-settings-file.js';
 
+import { inspectSettingsFile, isSettingBoolean, validateOptionalSettingsFields } from './settings-inspection.js';
+
 const log = desktopMakerLogger.child('git-safety-settings-store');
 
 export type GitSafetyMode = 'off' | 'existing-git' | 'all-projects';
+export function inspectGitSafetySettings() {
+  return inspectSettingsFile({ filePath: settingsFilePath, defaults: derive(DEFAULTS), normalize: raw => derive(normalize(raw)),
+    validate: (raw) => validateOptionalSettingsFields(raw, { mode: value => ['off', 'existing-git', 'all-projects'].includes(String(value)), autoSnapshotEnabled: isSettingBoolean }),
+  });
+}
 
 export interface GitSafetySettings {
   mode: GitSafetyMode;
@@ -40,7 +48,7 @@ const DEFAULTS: PersistedGitSafetySettings = {
 };
 
 function settingsFilePath(): string {
-  return path.join(app.getPath('userData'), 'git-safety-settings.json');
+  return path.join(getUserDataDir(), 'git-safety-settings.json');
 }
 
 function normalize(raw: unknown): PersistedGitSafetySettings {
@@ -91,6 +99,8 @@ function mergeOverrides({
 }
 
 const store = createOverrideSettingsFile<PersistedGitSafetySettings>({
+  // Cloud settings reads only; ordinary writes are unchanged.
+  validateOverrides: raw => validateAdditionalSettingsOverrides('gitSafety', raw),
   filePath: settingsFilePath,
   defaults: DEFAULTS,
   normalize,
@@ -135,3 +145,5 @@ export const __testing = { mergeOverrides, normalize };
 
 /** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
 export const gitSafetyPortableSettings = portableOverrideSettings(store);
+/** Internal Host settings adapter; no new IPC or persistence location. */
+export function getGitSafetySettingsStore() { return store; }

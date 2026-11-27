@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { serializeModelRoutes } from '@cindy/maker-shared/model-route';
 import { createBotRemoteSettingsResource, type BotRemoteSettingsDeps } from '../botRemoteSettingsResource.js';
 
 function fixture() {
@@ -24,6 +25,14 @@ function actionId(resource: Awaited<ReturnType<ReturnType<typeof fixture>['get']
   return (resource.blocks!.find(block => block.id === id)!.data as { actionId: string }).actionId;
 }
 describe('opaque teammate settings actions', () => {
+  // 2026-11-10 owner: a V2 teammate has the same capabilities in every session, so the phone
+  // shows no capability references for it (third-round review #1).
+  it('shows no capability references for a V2 teammate', async () => {
+    const f = fixture();
+    expect((await f.get()).blocks?.some(block => block.id === 'connections')).toBe(true);
+    Object.assign(f.settings, { projectMode: true });
+    expect((await f.get()).blocks?.some(block => block.id === 'connections')).toBe(false);
+  });
   it('detects display-only edits without treating arriving chat messages as a settings conflict', async () => {
     const f = fixture(); const original = await f.get();
     f.source.activityAt++; f.source.updatedAt++;
@@ -119,7 +128,7 @@ describe('opaque teammate settings actions', () => {
     const paused = await f.get();
     expect(paused.blocks!.some(block => block.id === 'restart')).toBe(false);
     const resume = paused.actions!.find(action => action.id === actionId(paused, 'resume'))!;
-    expect(resume.confirmation?.title).toMatchObject({ fallback: 'Resume Teammate' });
+    expect(resume.confirmation?.title).toMatchObject({ fallback: "Resume Buddy" });
     expect(resume.confirmation?.body).not.toEqual(restart.confirmation?.body);
     expect(resume.confirmation?.body).toMatchObject({ translations: { 'zh-CN': expect.stringContaining('恢复后伙伴重新接收消息') } });
     for (const locale of ['zh-CN', 'zh-TW', 'ja', 'ko']) expect((resume.confirmation?.body as { translations: Record<string, string> }).translations[locale]).toBeTruthy();
@@ -167,43 +176,61 @@ describe('opaque teammate settings actions', () => {
   });
 });
 
-it('saves the complete model chain and can restore application defaults', async () => {
+it('saves a host plugin from a remote editor and restores the companion default, keeping only the first route of an older peer chain', async () => {
   const f = fixture();
-  const route = { harness: 'pi', model: 'selected', providerId: 'source', effort: 'high', fastMode: false };
+  const routes = [
+    { harness: 'acp' as const, model: 'default', providerId: 'acp-plugin:sample:engine', effort: '', fastMode: false },
+    { harness: 'pi' as const, model: 'selected', providerId: 'source', effort: 'high', fastMode: false },
+  ];
   const resource = await f.get();
-  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: false, modelChain: JSON.stringify([route]) }));
-  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', acceptSavedModelSelectionVersion: 3, capabilities: { modelChainOverride: [route], modelOverride: null } }, 3);
+  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: false, modelChain: serializeModelRoutes(routes) }));
+  // 2026-11-26 单模型决定：旧端的后备模型被裁掉，只存第一条。
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', acceptSavedModelSelectionVersion: 3, capabilities: { modelChainOverride: routes.slice(0, 1), modelOverride: null } }, 3);
   const fresh = await f.get();
   await f.host.invoke(f.context, f.request(actionId(fresh, 'models'), { followsDefault: true }));
   expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', acceptSavedModelSelectionVersion: 4, capabilities: { modelChainOverride: null, modelOverride: null } }, 4);
 });
-it('rejects invalid, duplicate and oversized model chains without modifying the profile', async () => {
+// model-groups.md §6.2, user 2026-11-20「漏了补全客户端」: the phone and another computer pick this computer's model
+// groups for a companion. Production entry: get / invoke of the settings resource. Observable: the models form
+// carries the host's groups (none from a host without groups); a saved group entry is filled by the host's pick
+// before the existing profile update. Minimal input: one group entry from the controller. tier: unit.
+it('offers this computer\'s model groups and saves a chosen group with its current source', async () => {
+  const f = fixture();
+  const groups = { routes: [{ id: 'night', name: 'Night', strategy: 'order' as const, candidates: [{ agentKind: 'pi' as const, providerId: 'source', model: 'a' }] }] };
+  f.deps.modelGroups = () => groups;
+  f.deps.fillModelGroups = vi.fn(async (chain: Parameters<NonNullable<BotRemoteSettingsDeps['fillModelGroups']>>[0]) => chain.map(route => (route.modelGroup ? { ...route, model: 'picked', providerId: 'picked-source' } : route)));
+  const resource = await f.get();
+  expect(resource.blocks?.find(block => block.id === 'models')?.data).toMatchObject({ modelGroups: groups });
+  const chosen = { harness: 'pi', model: 'previous', providerId: 'source', effort: '', fastMode: false, modelGroup: 'night' };
+  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: false, modelChain: JSON.stringify([chosen]) }));
+  expect(f.deps.update).toHaveBeenLastCalledWith(expect.objectContaining({
+    capabilities: { modelChainOverride: [{ ...chosen, model: 'picked', providerId: 'picked-source' }], modelOverride: null },
+  }), 3);
+  f.deps.modelGroups = () => ({ routes: [] });
+  expect((await f.get()).blocks?.find(block => block.id === 'models')?.data).not.toHaveProperty('modelGroups');
+});
+it('rejects invalid and oversized (more than 5) model chains without modifying the profile', async () => {
   const f = fixture(); const resource = await f.get();
   const route = { harness: 'pi', model: 'selected', providerId: null, effort: '', fastMode: false };
-  for (const value of ['not json', '{}', '[]', JSON.stringify([route, route]), JSON.stringify(Array.from({ length: 6 }, (_, index) => ({ ...route, model: String(index) }))), JSON.stringify([{ ...route, harness: 'unknown' }])]) {
+  for (const value of ['not json', '{}', '[]', JSON.stringify(Array.from({ length: 6 }, (_, index) => ({ ...route, model: String(index) }))), JSON.stringify([{ ...route, harness: 'unknown' }])]) {
     await expect(f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: false, modelChain: value }))).rejects.toThrow();
   }
   expect(f.deps.update).not.toHaveBeenCalled();
 });
 
 
-it('saves and clears a task model without changing the primary model', async () => {
+// 2026-11-09: the teammate task model setting is retired. The models form no longer lists it; an
+// older controller's task fields are ignored, and on their own they are refused as no change.
+it('ignores an older controller\'s retired task model fields', async () => {
   const f = fixture();
   const route = { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false };
   let resource = await f.get();
-  expect((resource.blocks?.find(block => block.id === 'models')?.data as any).values.taskFollowsPrimary).toBe(true);
-  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: false, taskModel: JSON.stringify([route]) }));
-  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { taskModelOverride: route } }, 3);
-  resource = await f.get();
-  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: true }));
-  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { taskModelOverride: null } }, 4);
-});
-
-it('rejects task model submissions that discard the harness identity', async () => {
-  const f = fixture(); const resource = await f.get();
-  await expect(f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: false,
-    taskModel: JSON.stringify([{ model: 'gpt-6-astra', providerId: 'openai', effort: 'high', fastMode: false }]) }))).rejects.toThrow();
+  expect(Object.keys((resource.blocks?.find(block => block.id === 'models')?.data as { values: object }).values)).toEqual(['followsDefault', 'modelChain']);
+  await expect(f.host.invoke(f.context, f.request(actionId(resource, 'models'), { taskFollowsPrimary: false, taskModel: JSON.stringify([route]) }))).rejects.toThrow();
   expect(f.deps.update).not.toHaveBeenCalled();
+  resource = await f.get();
+  await f.host.invoke(f.context, f.request(actionId(resource, 'models'), { followsDefault: true, taskFollowsPrimary: true, taskModel: JSON.stringify([route]) }));
+  expect(f.deps.update).toHaveBeenLastCalledWith({ id: 'bot-a', capabilities: { modelChainOverride: null, modelOverride: null }, acceptSavedModelSelectionVersion: 3 }, 3);
 });
 
 it('keeps pending profile fields read-only while models remain available, including after welcome failure', async () => {

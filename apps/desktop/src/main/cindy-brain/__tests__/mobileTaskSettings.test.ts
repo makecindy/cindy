@@ -17,7 +17,7 @@ const route = {
   effort: 'medium',
   fastMode: true,
 };
-function setup() {
+function setup(validate: (config: PluginTaskConfig) => Promise<void> = async () => {}) {
   let config: PluginTaskConfig = {
     workingDir: '/private/selected-directory',
     permissionMode: 'plan',
@@ -27,7 +27,7 @@ function setup() {
   const service = new MobileTaskSettings({
     read: () => config,
     write,
-    validate: async () => {},
+    validate,
     providers,
     agents: async () => ['codex'],
   });
@@ -135,5 +135,48 @@ describe('native mobile task preferences', () => {
       ),
     ).rejects.toThrow('OWNER_CHANGED');
     expect(h.write).not.toHaveBeenCalled();
+  });
+  // Rule (2026-11-16, model-selector-unified.md): plugin task settings list other computers
+  // and shares like an ordinary task. The location is saved with the model and checked
+  // against that location's catalog, never this Host's; a Host model clears it. tier: unit.
+  it('saves a remote run location without the Host catalog and clears it for a Host model', async () => {
+    const validate = vi.fn(async (_config: PluginTaskConfig) => {});
+    const h = setup(validate),
+      before = h.service.read('plugin', 'installed-1');
+    expect(before.remoteRoutes).toBe(true);
+    const remote = { ...route, providerId: 'only-on-share', agentDeviceId: 'share:abc' };
+    const saved = await h.service.update(
+      'plugin', 'installed-1', { expectedRevision: before.revision, model: remote }, () => {});
+    expect(h.providers).not.toHaveBeenCalled();
+    expect(validate).toHaveBeenLastCalledWith(expect.objectContaining({ agentDeviceId: 'share:abc' }));
+    expect(saved.config).toEqual({ ...remote, permissionMode: 'plan' });
+    const local = await h.service.update(
+      'plugin', 'installed-1', { expectedRevision: saved.revision, model: route }, () => {});
+    expect(local.config).toEqual({ ...route, permissionMode: 'plan' });
+    await expect(h.service.update('plugin', 'installed-1',
+      { expectedRevision: local.revision, model: { ...route, agentDeviceId: 'local' } }, () => {}))
+      .rejects.toThrow('PLUGIN_SETTINGS_INVALID');
+    const restored = await h.service.update('plugin', 'installed-1',
+      { expectedRevision: local.revision, model: remote }, () => {});
+    const reset = await h.service.update('plugin', 'installed-1',
+      { expectedRevision: restored.revision, model: null }, () => {});
+    expect(reset.config).toEqual({ permissionMode: 'plan' });
+  });
+  // Old Desktop controllers resend the complete model while changing permissions or tuning.
+  // That echo must not replace a remote source with the Host's same-named provider. tier: unit.
+  it('preserves the remote source in legacy model echoes and accepts an explicit same-named Host choice', async () => {
+    const h = setup(), remote = { ...route, agentDeviceId: 'share:abc' };
+    const saved = await h.service.update('plugin', 'installed-1',
+      { expectedRevision: h.service.read('plugin', 'installed-1').revision, model: remote }, () => {});
+    const permission = await h.service.update('plugin', 'installed-1',
+      { expectedRevision: saved.revision, model: route, permissionMode: 'auto' }, () => {});
+    expect(permission.config).toEqual({ ...remote, permissionMode: 'auto' });
+    const tuned = await h.service.update('plugin', 'installed-1',
+      { expectedRevision: permission.revision, model: { ...route, effort: 'high', fastMode: false } }, () => {});
+    expect(tuned.config).toEqual({ ...remote, effort: 'high', fastMode: false, permissionMode: 'auto' });
+    expect(h.providers).not.toHaveBeenCalled();
+    const local = await h.service.update('plugin', 'installed-1',
+      { expectedRevision: tuned.revision, model: { ...route, agentDeviceId: null } }, () => {});
+    expect(local.config).toEqual({ ...route, agentDeviceId: null, permissionMode: 'auto' });
   });
 });

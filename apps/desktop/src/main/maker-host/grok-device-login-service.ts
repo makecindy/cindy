@@ -5,7 +5,7 @@ import {
   isGrokOAuthLoginInProgress,
   runGrokOAuthLogin,
   type GrokDeviceCode,
-} from './grok-oauth-login.js';
+} from './grok-oauth-login.desktop.js';
 
 interface Flight {
   owner: string;

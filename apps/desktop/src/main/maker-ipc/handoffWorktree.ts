@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import { isReviewSessionSource } from '../../shared/sessionSource.js';
+import { checkWorktreeSourceRef } from '../worktree/sourceRef.js';
 
 import type {
   CreateWorktreeReq,
@@ -44,12 +45,23 @@ export interface HandoffWorktreeDeps {
    * 新任务基底解析(worktree/freshBase.ts 的 resolveFreshSourceBranch):fetch 基准
    * remote 默认分支并返回 `<remote>/<默认分支>`,失败回退 fallback。不注入时保持
    * 旧行为(直接用 baseRepo 当前分支)——仅用于测试或明确要跟随本地状态的调用方。
+   * fetched=false 表示没能刷新远端,reason 说明退用了哪种本地基底。
    */
-  resolveFreshSource?: (baseRepo: string, fallback: string) => Promise<{ sourceBranch: string }>;
+  resolveFreshSource?: (
+    baseRepo: string,
+    fallback: string,
+  ) => Promise<{ sourceBranch: string; fetched?: boolean; reason?: string }>;
 }
 
 export type PrepareHandoffWorktreeResult =
-  { ok: true; sessionId: string; meta: WorktreeMeta } | { ok: false; message: string };
+  | {
+      ok: true;
+      sessionId: string;
+      meta: WorktreeMeta;
+      /** 走了新鲜基底解析但没能 fetch 时的原因:基底来自本地已有引用,可能落后远端。 */
+      staleBaseReason?: string;
+    }
+  | { ok: false; message: string };
 
 /** a 是否等于 b 或位于 b 目录之下(大小写按 Windows 习惯不敏感比较,POSIX 敏感)。 */
 function isSamePathOrUnder(a: string, b: string): boolean {
@@ -120,11 +132,14 @@ export function shouldRecycleHandoffWorktreeOnFailure(sessionCreated: boolean): 
  *  - 其它情况(从主仓 / 未绑定目录派发)→ 视为「新任务」:经 resolveFreshSource 取
  *    fetch 后的远端默认分支为源。主仓 checkout 常年停在旧工作分支时,旧行为切出的
  *    工作区可落后上游上千 commit(实踩),这是本分支语义的直接动因。
+ *  - 显式给出 sourceRef(调用方点名的基线)→ 直接用该引用为源,不再取默认分支。
+ *    引用解析不了由 createWorktree 的 rev-parse 校验报错,不静默回退默认分支(#9513)。
  */
 export async function prepareHandoffWorktree(
   deps: HandoffWorktreeDeps,
   dispatcherSessionId: string | undefined,
   workingDir: string,
+  options?: { sourceRef?: string },
 ): Promise<PrepareHandoffWorktreeResult> {
   const resolved = await resolveHandoffBaseRepo(deps, dispatcherSessionId, workingDir);
   if (resolved.baseRepo === null) return { ok: false, message: resolved.message };
@@ -135,7 +150,11 @@ export async function prepareHandoffWorktree(
   const continuingDispatcherWork =
     !!dispatcherWorktree && isSamePathOrUnder(workingDir, dispatcherWorktree.path);
   let sourceBranch: string;
-  if (continuingDispatcherWork) {
+  let staleBaseReason: string | undefined;
+  if (options?.sourceRef) {
+    // 显式基线优先:调用方点名了分支/远端引用,就不再按默认分支或 dispatcher 在途分支推导。
+    sourceBranch = options.sourceRef;
+  } else if (continuingDispatcherWork) {
     // 派生子任务:源分支取 dispatcher worktree 里当前检出的分支——baseRepo 主 checkout
     // 的 current 可能是另一条分支,用它会丢 dispatcher 分支上的在途提交。
     const { current } = await deps.listBranches(dispatcherWorktree.path);
@@ -151,20 +170,28 @@ export async function prepareHandoffWorktree(
   } else {
     const { current } = await deps.listBranches(baseRepo);
     const fallback = current || 'HEAD';
-    sourceBranch = deps.resolveFreshSource
-      ? (await deps.resolveFreshSource(baseRepo, fallback)).sourceBranch
-      : fallback;
+    if (deps.resolveFreshSource) {
+      const fresh = await deps.resolveFreshSource(baseRepo, fallback);
+      sourceBranch = fresh.sourceBranch;
+      // 只在明确报告未 fetch 时标记;未返回 fetched 的注入方按未知处理,不误报。
+      // 没有 remote 的纯本地仓库无所谓落后,也不标记。
+      if (fresh.fetched === false && fresh.reason !== 'no-remote') {
+        staleBaseReason = fresh.reason ?? 'fetch-failed';
+      }
+    } else {
+      sourceBranch = fallback;
+    }
   }
   const sessionId = deps.createId();
   const resp = await deps.createWorktree({ sessionId, baseRepo, name, sourceBranch });
   if (!resp.ok) {
     return { ok: false, message: resp.error.message || resp.error.kind };
   }
-  return { ok: true, sessionId, meta: resp.meta };
+  return { ok: true, sessionId, meta: resp.meta, ...(staleBaseReason ? { staleBaseReason } : {}) };
 }
 
 export type PrepareTaskWorktreeResult =
-  | { ok: true; meta: WorktreeMeta; created: boolean }
+  | { ok: true; meta: WorktreeMeta; created: boolean; staleBaseReason?: string }
   | { ok: false; errorCode: 'PRECONDITION_FAILED' | 'INVALID_ARGS' | 'WORKTREE_UNAVAILABLE'; message: string };
 
 /**
@@ -173,6 +200,9 @@ export type PrepareTaskWorktreeResult =
  * 任务的 workingDir 与 Agent 进程保持不变:徽标与归档回收都以 worktreeStore 绑定为准,
  * Agent 在返回的路径里干活即可。已有绑定时原样返回(created=false),不会建第二个。
  * 没有 dispatcher 语义:调用方此刻没有 worktree,按「新任务」从刚 fetch 的远端默认分支切出。
+ *
+ * baseRef:显式基线(本地分支或远端引用)。给出时按该引用切出,不再取远端默认分支;
+ * 引用解析不了直接报错,不静默回退默认分支(#9513)。
  */
 export async function prepareTaskWorktree(
   deps: Omit<HandoffWorktreeDeps, 'createId'>,
@@ -180,6 +210,7 @@ export async function prepareTaskWorktree(
     sessionId: string;
     caller: { workingDir: string | null; status: string; source: string | null };
     repoDir?: string;
+    baseRef?: string;
   },
 ): Promise<PrepareTaskWorktreeResult> {
   const { sessionId, caller, repoDir } = input;
@@ -194,11 +225,37 @@ export async function prepareTaskWorktree(
   if (repoDir !== undefined && !path.isAbsolute(repoDir)) {
     return { ok: false, errorCode: 'INVALID_ARGS', message: 'repo_dir must be an absolute path.' };
   }
+  let baseRef: string | undefined;
+  if (input.baseRef !== undefined) {
+    const check = checkWorktreeSourceRef(input.baseRef);
+    if (!check.ok) {
+      return { ok: false, errorCode: 'INVALID_ARGS', message: `base_ref ${check.message}.` };
+    }
+    baseRef = check.value;
+  }
   const directory = repoDir ?? caller.workingDir;
   if (!directory) {
     return { ok: false, errorCode: 'INVALID_ARGS', message: 'This task has no working directory; pass repo_dir.' };
   }
-  const prepared = await prepareHandoffWorktree({ ...deps, createId: () => sessionId }, undefined, directory);
-  if (!prepared.ok) return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prepared.message };
-  return { ok: true, meta: prepared.meta, created: true };
+  const prepared = await prepareHandoffWorktree(
+    { ...deps, createId: () => sessionId },
+    undefined,
+    directory,
+    baseRef ? { sourceRef: baseRef } : undefined,
+  );
+  if (!prepared.ok) {
+    return {
+      ok: false,
+      errorCode: 'WORKTREE_UNAVAILABLE',
+      message: baseRef
+        ? `Could not create the worktree from base_ref "${baseRef}": ${prepared.message}`
+        : prepared.message,
+    };
+  }
+  return {
+    ok: true,
+    meta: prepared.meta,
+    created: true,
+    ...(prepared.staleBaseReason ? { staleBaseReason: prepared.staleBaseReason } : {}),
+  };
 }

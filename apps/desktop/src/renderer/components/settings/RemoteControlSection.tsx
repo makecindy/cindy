@@ -6,7 +6,18 @@ import { remoteControlSettings } from './RemoteControlSection.settings-search';
  *   1. 我的设备:同账号设备一处管理 —— 本机承载被控总开关 + relay 状态,其余设备逐台管
  *      「我控制它 / 允许它控制本机」+ 重命名 / 删除(MyDevicesPanel)
  *   2. SSH:原 RemoteSection 原样嵌入(showTitle=false,标题由本页统一给)
+ * 云实例就是「我的设备」里的一台设备:白名单账号(instanceAccess.allowed)在它的设备卡上多一组
+ * 实例运维(CloudDeviceDirectory),且云实例卡与本机卡一起常驻,「我的设备」收起时
+ * 也可见;其余账号的页面与请求不变。
+ * 「我的设备」也是设备管理(用户裁决 2026-11-25):有云主机入口的组织成员在本机卡下面多一行「云主机」
+ * (CloudComputerRow),添加、查看进度和管理都去网页;开好的云主机就是列表里的设备。
  * (Slack 连接子块已迁至「IM 机器人」页 Cindy 栏, 见 ImBotSection.tsx + HookConnectionsSection.tsx)
+ *
+ * 「Agent-Net (Beta)」开关(useRemoteConnectionV2,默认关，由主进程保存并切换这台电脑的传输):
+ * 打开后在「我的设备」下面多一块拓扑图(features/remote-connection-v2),拓扑只管连接。
+ * 「我的设备」开不开都一样列出全部设备(用户裁决 2026-11-25,取代 2026-11-07「只留本机卡片、
+ * 其它设备在拓扑里看」);设备深链也都由「我的设备」定位(useRemoteDevicesDeepLink 给出聚焦目标),
+ * 拓扑不再另开那台设备的卡片。连接线路与 SSH 开不开都一样。
  *
  * 两个子块都是无上限列表,页面默认全部收起;收起态 header 右侧带状态摘要,
  * 各子块独立展开,状态不持久化(刷新回默认,与 PinnedSection 先例一致)。
@@ -18,33 +29,29 @@ import { remoteControlSettings } from './RemoteControlSection.settings-search';
  * SSH 主机摘要由本组件自取轻量快照(list + onStatusChanged),不侵入 RemoteSection。
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 
 import { useDeviceLinkSettings, type DeviceLinkSettings } from '@/hooks/useDeviceLinkSettings';
+import { Switch } from '@/components/ui/switch';
 import { MyDevicesPanel } from './MyDevicesPanel';
 import { RelayServicePanel, useSelfHostedRelayState } from './RelayServicePanel';
 import { RemoteDesktopSetting } from './RemoteDesktopSetting';
 import { RemoteSection } from './RemoteSection';
+import { CollapsibleSubSection } from './CollapsibleSubSection';
+import { CloudComputerRow } from './CloudComputerRow';
+import { useRemoteDevicesDeepLink } from './useRemoteDevicesDeepLink';
 import { useAuth } from '@/contexts/AuthContext';
+import { CloudDeviceDirectory } from '@/features/cloud-settings/CloudDeviceDirectory';
 import { useSettingsSearchNavigation } from './SettingsSearchNavigation';
+import { useRemoteConnectionV2 } from '@/features/remote-connection-v2/useRemoteConnectionV2';
+import { RemoteConnectionV2Section } from '@/features/remote-connection-v2/RemoteConnectionV2Section';
+import { toast } from '@/lib/toast';
+import type { AgentNetSwitchRejoin } from '../../../shared/selfHostedRelay';
+import { SETTINGS_SECTION_TITLE_CLASS, SettingsCard, SettingsPageHeader, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
-const DEVICES_SECTION_PARAMS = ['devices', 'remoteControl.devices'];
-
-function isDevicesSection(search: string): boolean {
-  return DEVICES_SECTION_PARAMS.includes(new URLSearchParams(search).get('section') ?? '');
-}
-
-/**
- * 深链 `?section=devices&device=<id>`:展开「我的设备」并把该设备行滚入视野、短暂高亮
- * (消息气泡上的设备标签由此进入)。只在 devices 段深链下生效;收起列表时随 section 一起清掉。
- */
-function focusDeviceParam(search: string): string | null {
-  if (!isDevicesSection(search)) return null;
-  return new URLSearchParams(search).get('device')?.trim() || null;
-}
+export { CollapsibleSubSection } from './CollapsibleSubSection';
 
 /** SSH 状态 → 摘要状态点的优先级:有已连接给绿,其次进行中给橙,再次失败给红,否则灰。 */
 const SSH_PROGRESS_STATUSES: ReadonlySet<RemoteHostSnapshot['status']> = new Set([
@@ -53,63 +60,6 @@ const SSH_PROGRESS_STATUSES: ReadonlySet<RemoteHostSnapshot['status']> = new Set
   'reconnecting',
 ]);
 
-function CollapsibleSubSection({
-  id,
-  title,
-  summary,
-  dotColor,
-  open,
-  onToggle,
-  pinned,
-  children,
-}: {
-  id?: string;
-  title: string;
-  /** 收起态 header 右侧的状态摘要;null = 数据未就绪,整块不显示(避免闪一帧错误状态)。 */
-  summary: string | null;
-  dotColor: string | null;
-  open: boolean;
-  onToggle: () => void;
-  /** 不随折叠隐藏的常驻内容(如「我的设备」的本机卡),渲染在 header 与折叠区之间。 */
-  pinned?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section id={id} className="flex flex-col gap-3">
-      <button data-settings-search-action="Expand or collapse the remote-control section"
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="group flex w-full items-center justify-between gap-3 text-left"
-      >
-        <span className="shrink-0 text-14 font-medium text-[var(--text-primary)]">{title}</span>
-        <div className="flex min-w-0 items-center gap-2">
-          {!open && summary ? (
-            <>
-              {dotColor ? (
-                <span
-                  className="h-1.5 w-1.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: dotColor }}
-                  aria-hidden
-                />
-              ) : null}
-              <span className="truncate text-12 text-[var(--text-tertiary)]">{summary}</span>
-            </>
-          ) : null}
-          <span
-            className="shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--text-primary)]"
-            aria-hidden
-          >
-            {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          </span>
-        </div>
-      </button>
-      {pinned}
-      <div hidden={!open}>{children}</div>
-    </section>
-  );
-}
-
 /**
  * 「我的设备」收起态摘要:其它设备数量。本机卡常驻外层,relay 状态与被控开关
  * 在卡上直接可见,摘要不再重复;状态点也免了(本机卡自带)。
@@ -117,9 +67,11 @@ function CollapsibleSubSection({
 function deviceSummary(
   s: DeviceLinkSettings,
   t: (k: string, o?: Record<string, unknown>) => string,
+  /** 常驻在折叠区外的云实例:收起时已经可见,不计入「其它设备」。 */
+  pinned: (deviceId: string) => boolean = () => false,
 ): string | null {
   if (s.devices === null) return null;
-  const others = s.devices.filter((d) => !d.isSelf).length;
+  const others = s.devices.filter((d) => !d.isSelf && !pinned(d.deviceId)).length;
   return others === 0
     ? t('settings.remoteControl.summary.noOtherDevices')
     : t('settings.remoteControl.summary.otherDevices', { count: others });
@@ -155,19 +107,43 @@ function sshSummary(
   return { text: parts.join(' · '), dot };
 }
 
-export function RemoteControlSection() {
+export function RemoteControlSection({ children }: { children?: ReactNode }) {
   const { entry, activation } = useSettingsSearchNavigation();
   const { t } = useTranslation();
   const { mode } = useAuth();
-  const location = useLocation();
-  const navigate = useNavigate();
   const deviceLinkAvailable = mode === 'cloud';
   const s = useDeviceLinkSettings(deviceLinkAvailable);
-
-  // 深链 ?section=devices 必须在首帧就是展开态:放到 effect 里会先画一帧收起,
-  // 再把下方内容顶开一格。
-  const [devicesOpen, setDevicesOpen] = useState(() => isDevicesSection(location.search));
+  const v2 = useRemoteConnectionV2();
+  useEffect(() => {
+    const report = (event: Event) => {
+      const code = (event as CustomEvent<{ code: string }>).detail?.code;
+      const known = ['NOT_SIGNED_IN', 'SECURE_STORAGE_UNAVAILABLE', 'PORT_IN_USE', 'START_FAILED', 'FAILED'].includes(code) ? code : 'FAILED';
+      toast.error(t(`settings.remoteControl.relay.errors.${known}`));
+    };
+    // Turning Agent-Net on rejoined this computer first (it was removed from the account): same wording as 「重新加入」 in 我的设备.
+    const rejoined = (event: Event) => {
+      const result = (event as CustomEvent<{ result: AgentNetSwitchRejoin }>).detail?.result;
+      if (result === 'rejoined') toast.success(t('settings.devices.rejoin.done'));
+      else if (result === 'agent-net-unavailable') toast.success(t('settings.devices.rejoin.doneWithoutAgentNet'));
+      else toast.error(t(result === 'unsupported' ? 'settings.devices.rejoin.unsupported' : 'settings.devices.rejoin.failed'));
+    };
+    window.addEventListener('agent-net-preference-error', report);
+    window.addEventListener('agent-net-rejoin-result', rejoined);
+    return () => {
+      window.removeEventListener('agent-net-preference-error', report);
+      window.removeEventListener('agent-net-rejoin-result', rejoined);
+    };
+  }, [t]);
+  const deepLink = useRemoteDevicesDeepLink();
+  // 设备深链由「我的设备」定位;拓扑只管连接,不再打开深链指向的那台设备的卡片(用户裁决 2026-11-25)。
+  const topologyDeepLink = { ...deepLink, focusDeviceId: null, focusRequestKey: null };
+  // The device list's names, for the cloud cards' own names (CloudDeviceDirectory).
+  const deviceNames = useMemo(
+    () => new Map((s.devices ?? []).map((device) => [device.deviceId, device.name] as const)),
+    [s.devices],
+  );
   const relay = useSelfHostedRelayState(deviceLinkAvailable);
+  const location = useLocation();
   const [sshOpen, setSshOpen] = useState(
     () => new URLSearchParams(location.search).get('section') === 'remoteControl.ssh',
   );
@@ -176,50 +152,9 @@ export function RemoteControlSection() {
   // 这里不外提它的状态是有意的(979 行组件不为一行摘要重构)。
   const [hosts, setHosts] = useState<RemoteHostSnapshot[] | null>(null);
 
-  useEffect(() => {
-    if (isDevicesSection(location.search)) setDevicesOpen(true);
-  }, [location.search]);
-
-  // 同一深链再次进入(location.key 变)也要重新聚焦;列表展开后才交给面板,
-  // 否则隐藏的行滚不进视野。
-  const focusDeviceId = devicesOpen ? focusDeviceParam(location.search) : null;
-  const focusRequestKey = focusDeviceId ? `${focusDeviceId}:${location.key}` : null;
-
   useLayoutEffect(() => {
     if (entry?.targetId === 'settings-search-target-remote-ssh') setSshOpen(true);
-    if (entry?.targetId === 'settings-search-target-remote-devices') setDevicesOpen(true);
   }, [entry, activation]);
-
-  const collapseRequestedRef = useRef(false);
-  const toggleDevices = useCallback(() => {
-    setDevicesOpen((previous) => {
-      // 只有用户主动收起才需要清 URL;更新函数里只记录这次意图,幂等、可重入。
-      collapseRequestedRef.current = previous;
-      return !previous;
-    });
-  }, []);
-
-  // 收起后把 ?section=devices 摘掉,否则刷新/返回还会再展开一次。挂 effect 是为了
-  // 让 toggle 保持函数式更新;必须再看 collapseRequestedRef,否则「页面已挂载时才
-  // 导航进深链」那一帧会读到还没提交的 devicesOpen=false,把刚进来的深链清掉。
-  useEffect(() => {
-    if (devicesOpen || !collapseRequestedRef.current) return;
-    collapseRequestedRef.current = false;
-
-    const next = new URLSearchParams(location.search);
-    if (!DEVICES_SECTION_PARAMS.includes(next.get('section') ?? '')) return;
-    next.delete('section');
-    // device 聚焦参数只依附于 devices 段深链,一并摘掉。
-    next.delete('device');
-    const search = next.toString();
-    navigate(
-      {
-        pathname: location.pathname,
-        search: search ? `?${search}` : '',
-      },
-      { replace: true },
-    );
-  }, [devicesOpen, location.pathname, location.search, navigate]);
 
   const refreshHosts = useCallback(async () => {
     try {
@@ -256,51 +191,74 @@ export function RemoteControlSection() {
     void refreshHosts();
   }, [refreshHosts]);
 
-  const devSumText = deviceSummary(s, t);
   const sshSum = sshSummary(hosts, t);
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-          {t('settings.remoteControl.title')}
-        </h2>
-        <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-          {t('settings.remoteControl.description')}
-        </p>
-      </div>
+      <SettingsPageHeader
+        title={t('settings.remoteControl.title')}
+        description={t('settings.remoteControl.description')}
+      />
 
       <div className="mt-4 flex flex-col gap-6">
         {deviceLinkAvailable ? (
           <>
-            <CollapsibleSubSection
-              id={remoteControlSettings.devices.targetId}
-              title={t(remoteControlSettings.devices.titleKey)}
-              summary={devSumText}
-              dotColor={null}
-              open={devicesOpen}
-              onToggle={toggleDevices}
-              pinned={
-                <MyDevicesPanel
-                  s={s}
-                  variant="self"
-                  selfSettings={<RemoteDesktopSetting />}
-                  focusDeviceId={focusDeviceId}
-                  focusRequestKey={focusRequestKey}
-                />
-              }
+            {/* 「我的设备」就是设备管理:Agent-Net 开不开都列出全部设备(用户裁决 2026-11-25),
+                拓扑图在它下面只管连接。 */}
+            <CloudDeviceDirectory
+              enabled={deviceLinkAvailable}
+              directory={s.listError ? [] : (s.devices?.map((device) => device.deviceId) ?? null)}
+              names={deviceNames}
+              offline={s.devices?.filter((device) => !device.online).map((device) => device.deviceId)}
+              devicesOpen={deepLink.devicesOpen}
             >
-              <MyDevicesPanel
-                s={s}
-                variant="others"
-                focusDeviceId={focusDeviceId}
-                focusRequestKey={focusRequestKey}
-              />
-            </CollapsibleSubSection>
+              {(cloud) => (
+                <CollapsibleSubSection
+                  id={remoteControlSettings.devices.targetId}
+                  title={t(remoteControlSettings.devices.titleKey)}
+                  summary={deviceSummary(s, t, cloud?.isManaged)}
+                  dotColor={null}
+                  open={deepLink.devicesOpen}
+                  onToggle={deepLink.toggleDevices}
+                  pinned={
+                    // 本机卡、云端 Cindy 的卡和「云主机」一行常驻,「我的设备」收起时也可见。
+                    <div className="flex flex-col gap-2">
+                      <MyDevicesPanel
+                        s={s}
+                        variant="self"
+                        selfSettings={<div className="flex flex-col gap-2"><RemoteDesktopSetting /></div>}
+                        focusDeviceId={deepLink.focusDeviceId}
+                        focusRequestKey={deepLink.focusRequestKey}
+                      />
+                      {cloud && (
+                        <MyDevicesPanel
+                          s={s}
+                          variant="cloud"
+                          cloud={cloud}
+                          focusDeviceId={deepLink.focusDeviceId}
+                          focusRequestKey={deepLink.focusRequestKey}
+                        />
+                      )}
+                      <CloudComputerRow />
+                    </div>
+                  }
+                >
+                  <MyDevicesPanel
+                    s={s}
+                    variant="others"
+                    cloud={cloud}
+                    focusDeviceId={deepLink.focusDeviceId}
+                    focusRequestKey={deepLink.focusRequestKey}
+                  />
+                </CollapsibleSubSection>
+              )}
+            </CloudDeviceDirectory>
+            {/* 设备深链(消息上的设备标签等)由上面的设备列表定位,拓扑不再另开那台设备的卡片。 */}
+            {v2.enabled ? <RemoteConnectionV2Section s={s} relay={relay} deepLink={topologyDeepLink} /> : null}
             {/* 设备之间经哪条线路连接:紧跟在「我的设备」下面直接展示,当前线路一眼可见,不再单独占一个入口。 */}
             <section id={remoteControlSettings.relay.targetId} className="flex flex-col gap-3">
               <div className="flex flex-col gap-0.5">
-                <h3 className="text-14 font-medium text-[var(--text-primary)]">
+                <h3 className={SETTINGS_SECTION_TITLE_CLASS}>
                   {t(remoteControlSettings.relay.titleKey)}
                 </h3>
                 <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
@@ -323,6 +281,48 @@ export function RemoteControlSection() {
         >
           <RemoteSection showTitle={false} />
         </CollapsibleSubSection>
+
+        {children}
+
+        {deviceLinkAvailable ? (
+          <SettingsSection title={t(remoteControlSettings.v2.sectionKey)} headingLevel={3}>
+            <SettingsCard id={remoteControlSettings.v2.targetId}>
+              <SettingsRow
+                title={t(remoteControlSettings.v2.titleKey)}
+                hint={
+                  v2.removed && !v2.enabled ? (
+                    <>
+                      {t(remoteControlSettings.v2.descriptionKey)}
+                      {/* 被移除过而自动关掉（2026-11-26）：重新打开即可重新加入（agent-net-device-removal.md） */}
+                      <span className="mt-1 block text-[var(--text-secondary)]">{t('settings.remoteControl.v2.removedOff')}</span>
+                    </>
+                  ) : v2.changedBy && v2.changedBy.enabled === v2.enabled ? (
+                    <>
+                      {t(remoteControlSettings.v2.descriptionKey)}
+                      {/* 原型:别的设备远程改了这个开关时，写明是谁、几点(agent-net.md「远程切换其他电脑的连接方式」) */}
+                      <span className="mt-1 block text-[var(--text-secondary)]">
+                        {t(v2.changedBy.enabled ? 'settings.remoteControl.v2.peerSwitch.changedBy.on' : 'settings.remoteControl.v2.peerSwitch.changedBy.off', {
+                          name: v2.changedBy.deviceName,
+                          time: new Date(v2.changedBy.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        })}
+                      </span>
+                    </>
+                  ) : (
+                    t(remoteControlSettings.v2.descriptionKey)
+                  )
+                }
+                trailing={
+                  <Switch
+                    data-setting-id={remoteControlSettings.v2.id}
+                    checked={v2.enabled}
+                    onCheckedChange={v2.setEnabled}
+                    aria-label={t(remoteControlSettings.v2.titleKey)}
+                  />
+                }
+              />
+            </SettingsCard>
+          </SettingsSection>
+        ) : null}
       </div>
     </div>
   );

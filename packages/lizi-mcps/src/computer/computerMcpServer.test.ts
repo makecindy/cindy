@@ -75,6 +75,50 @@ async function makeHarness(
 }
 
 describe('createComputerMcpServer', () => {
+  // #9887 acceptance: status items are outside AXWindow. Unit coverage through
+  // the real MCP entry; existing tests only cover window-scoped pointer input.
+  it('dispatches explicit desktop capture/click/drag without inventing a window target', async () => {
+    const capture = { capture_id: 'desktop-capture', screenshot_frame_valid: true };
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async () => capture) };
+    const h = await makeHarness(deps, { sessionId: 'desktop-test' });
+    try {
+      for (const [name, args] of [
+        ['get_desktop_state', { max_image_dimension: 1600 }],
+        ['click', { target: { kind: 'desktop', display_id: 'primary' }, capture_id: capture.capture_id, delivery_mode: 'foreground', x: 12, y: 8 }],
+        ['drag', { target: { kind: 'desktop', display_id: 'primary' }, capture_id: capture.capture_id, delivery_mode: 'foreground', from_x: 12, from_y: 8, to_x: 40, to_y: 8, modifier: ['cmd'] }],
+      ] as const) {
+        expect(textPayload(await h.client.callTool({ name: 'call_tool', arguments: { name, args } }))).toMatchObject({ ok: true });
+        expect(deps.callTool).toHaveBeenLastCalledWith(name, { ...args, session: 'desktop-test' }, expect.objectContaining({ sessionId: 'desktop-test' }));
+      }
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    { pid: 42 }, { window_id: 7 }, { element_token: 's00000001:3' },
+    { snapshot_id: 'ws-old' }, { from_zoom: true }, { action: 'press' },
+    { capture_id: undefined }, { delivery_mode: 'background' }, { delivery_mode: undefined },
+    { observe: {} }, { x: undefined },
+  ])('rejects ambiguous or ungrounded desktop click before input: %j', async (extra) => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn() };
+    const h = await makeHarness(deps);
+    try {
+      const result = await h.client.callTool({ name: 'call_tool', arguments: { name: 'click', args: {
+        target: { kind: 'desktop', display_id: 'primary' }, capture_id: 'desktop-capture',
+        delivery_mode: 'foreground', x: 12, y: 8, ...extra,
+      } } });
+      expect(textPayload(result)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      expect(deps.callTool).not.toHaveBeenCalled();
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([{ screenshot_frame_valid: false, capture_id: 'failed' }, {}])('does not report an unusable desktop capture as success: %j', async (data) => {
+    const h = await makeHarness({ getStatus: vi.fn(), callTool: vi.fn(async () => data) });
+    try {
+      expect(textPayload(await h.client.callTool({ name: 'call_tool', arguments: { name: 'get_desktop_state', args: {} } })))
+        .toMatchObject({ ok: false, errorCode: 'CUA_UNAVAILABLE' });
+    } finally { await h.cleanup(); }
+  });
+
   // Audit regression: discovery returned every schema even when only one was
   // needed. Exercise the real MCP list entry with no driver/process side effects.
   it('returns only requested schemas for focused discovery', async () => {
@@ -822,6 +866,57 @@ describe('createComputerMcpServer', () => {
       by: 'page',
     }, { signal: expect.any(AbortSignal) });
     await h.cleanup();
+  });
+
+  // #9695 acceptance: Windows falls back to the window center when an indexed
+  // button has no UIA ScrollPattern. Exercise the real MCP entry so a screenshot
+  // point reaches the driver unchanged; the direction-only case above missed
+  // this strict-schema rejection. Unit tier, no native input or real waiting.
+  it('discovers and dispatches window-local scroll coordinates in the owning session', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ effect: 'unverifiable', summary: 'Wheel delivered' })),
+    };
+    const h = await makeHarness(deps, { sessionId: 'scroll-owner' });
+    try {
+      const catalogue = textPayload(await h.client.callTool({
+        name: 'list_tools', arguments: { names: ['scroll'] },
+      })) as { tools: Array<{ inputSchema: { properties: Record<string, unknown> } }> };
+      const args = { pid: 123, window_id: 7, x: 1055.5, y: 609, direction: 'down', amount: 1, by: 'line', delivery_mode: 'foreground' };
+      const payload = textPayload(await h.client.callTool({
+        name: 'call_tool', arguments: { name: 'scroll', args },
+      })) as { ok: boolean; outcome: { status: string } };
+      expect(payload.ok).toBe(true);
+      expect(payload.outcome.status).toBe('unknown');
+      expect(deps.callTool).toHaveBeenCalledWith('scroll', { ...args, session: 'scroll-owner' }, {
+        signal: expect.any(AbortSignal), sessionId: 'scroll-owner',
+      });
+      expect(catalogue.tools[0].inputSchema.properties).toMatchObject({
+        x: { type: 'number' }, y: { type: 'number' },
+      });
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it.each([
+    { window_id: 7, x: 10 },
+    { window_id: 7, y: 20 },
+    { x: 10, y: 20 },
+    { window_id: 7, x: 10, y: 20, element_index: 2 },
+    { window_id: 7, x: 10, y: 20, element_token: 's1:2' },
+  ])('refuses incomplete or ambiguous scroll coordinates before dispatch: %j', async (target) => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn() };
+    const h = await makeHarness(deps);
+    try {
+      const payload = textPayload(await h.client.callTool({
+        name: 'call_tool', arguments: { name: 'scroll', args: { pid: 123, direction: 'down', ...target } },
+      })) as { ok: boolean; errorCode: string };
+      expect(payload).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+      expect(deps.callTool).not.toHaveBeenCalled();
+    } finally {
+      await h.cleanup();
+    }
   });
 
   it('injects the current session id into session-aware action tools', async () => {
@@ -2108,6 +2203,55 @@ describe('unavailable observations get window state without an identity error', 
       } })) as { reason?: string };
       expect(result.reason).toBe('screen_locked');
       expect(callTool.mock.calls.map(([name]) => name)).toEqual(['get_window_state']);
+    } finally { await h.cleanup(); }
+  });
+});
+
+describe('a target app macOS refuses to the driver is named as a permission problem', () => {
+  // macOS 27.3 lets the person allow CuaDriver to control only chosen apps. A target outside
+  // that list answers AX with kAXErrorAPIDisabled while CGWindowList still shows the window,
+  // so the old classification sent the model to rediscover a window that was never missing.
+  const denied = "ax_window_unresolved: window_id 9 exists and is owned by pid 7, but reading that pid's AXWindows failed with AXError -25211 (kAXErrorAPIDisabled). The tree is returned EMPTY on purpose";
+  const onScreen = { windows: [{ pid: 7, window_id: 9, app_name: 'Notes', is_on_screen: true }] };
+
+  it.each([
+    ['a degraded read', () => ({ degraded: true, degraded_reason: denied, elements: [], tree_markdown: '' }), 'app_control_not_allowed'],
+    ['a thrown read', () => { throw Object.assign(new Error(denied), { code: 'ax_window_unresolved' }); }, 'app_control_not_allowed'],
+    // Other AX errors mean the app did not answer, not that macOS refused it.
+    ['an unanswered read', () => ({ degraded: true, degraded_reason: denied.replace('-25211 (kAXErrorAPIDisabled)', '-25204 (kAXErrorCannotComplete)'), elements: [], tree_markdown: '' }), 'driver_error'],
+  ])('get_window_state: %s', async (_label, read, reason) => {
+    const callTool = vi.fn(async (name: string) => name === 'list_windows' ? onScreen : read());
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: `denied-${reason}` });
+    try {
+      const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 7, window_id: 9, include_screenshot: false },
+      } })) as { reason?: string; hint?: string; data?: { hint?: string; next_step?: string }; recovery?: unknown };
+      expect(result.reason).toBe(reason);
+      // #12506 review: denied reads cannot be recovered by re-enumerating windows (unit).
+      expect(callTool.mock.calls.map(([name]) => name)).toEqual(
+        reason === 'app_control_not_allowed' ? ['get_window_state'] : ['get_window_state', 'list_windows'],
+      );
+      if (reason === 'app_control_not_allowed') {
+        expect(result.recovery).toBeUndefined();
+        expect(result.hint ?? result.data?.hint).toContain('System & App Protection Override');
+      }
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    ['thrown', () => { throw new Error('click failed: AXUIElementPerformAction returned AXError -25211 (kAXErrorAPIDisabled)'); }],
+    ['returned', () => ({ ok: false, degraded_reason: denied })],
+  ])('points a %s refused action at check_permissions instead of a retry', async (_label, refuse) => {
+    const callTool = vi.fn(async (_name: string) => refuse());
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: 'denied-click' });
+    try {
+      const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'click', args: { pid: 7, window_id: 9, x: 10, y: 10 },
+      } })) as { errorCode?: string; reason?: string; data?: { next_step?: string; hint?: string }; recovery?: unknown };
+      expect(result).toMatchObject({ errorCode: 'COMPUTER_DRIVER_ERROR', reason: 'app_control_not_allowed' });
+      expect(result.data).toMatchObject({ next_step: 'check_permissions' });
+      expect(result.recovery).toBeUndefined();
+      expect(callTool.mock.calls.map(([name]) => name)).toEqual(['click']);
     } finally { await h.cleanup(); }
   });
 });

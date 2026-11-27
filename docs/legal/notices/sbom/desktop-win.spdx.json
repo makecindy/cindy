@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-win",
-  "documentNamespace": "https://cindy.app/spdx/desktop-win/356ef0b53c7edc959f8f73e6fef2fc84dc05a755b4e231d924f76bb20fced496",
+  "documentNamespace": "https://cindy.app/spdx/desktop-win/94ec0a915fe4de84058335bd2a12f6115863b075c820a3742d13bd560a2c7113",
   "creationInfo": {
-    "created": "2026-10-22T12:27:42Z",
+    "created": "2026-11-26T11:54:25Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -42,6 +42,16 @@
       "copyrightText": "NOASSERTION"
     },
     {
+      "name": "Cindy agent-net WebAssembly core",
+      "SPDXID": "SPDXRef-Package-4f87c16230f51606",
+      "versionInfo": "sha256:420e3217ba5863676d57db473aa00e388fefb7c9ef5f6d73ed89e46b6996ca2a",
+      "downloadLocation": "https://github.com/makecindy/cindy/tree/main/packages/agent-net-core",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
       "name": "drawio viewer (vendored)",
       "SPDXID": "SPDXRef-Package-ef29a7e5a6f64477",
       "versionInfo": "30.0.4",
@@ -59,6 +69,16 @@
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "JetBrains Mono fonts",
+      "SPDXID": "SPDXRef-Package-4aed76e603981340",
+      "versionInfo": "bundled",
+      "downloadLocation": "https://github.com/JetBrains/JetBrainsMono",
+      "filesAnalyzed": false,
+      "licenseConcluded": "OFL-1.1",
+      "licenseDeclared": "OFL-1.1",
       "copyrightText": "NOASSERTION"
     },
     {
@@ -86,6 +106,16 @@
       "SPDXID": "SPDXRef-Package-4ca8318bb935f57f",
       "versionInfo": "adapted",
       "downloadLocation": "https://github.com/yetone/magpie/blob/main/site/public/img/magpie-small.svg",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "Microsoft Fluent Emoji Animated (reaction artwork)",
+      "SPDXID": "SPDXRef-Package-c6e47fb4feeee3c3",
+      "versionInfo": "daa0365c09795789ed2bc6e8b228c97736cb6669",
+      "downloadLocation": "https://github.com/microsoft/fluentui-emoji-animated",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -163,8 +193,8 @@
     },
     {
       "name": "pi coding agent (runtime-downloaded binary)",
-      "SPDXID": "SPDXRef-Package-9a414e8a6f3ff55d",
-      "versionInfo": "1.0.2",
+      "SPDXID": "SPDXRef-Package-5e31973826ede72e",
+      "versionInfo": "1.5.2",
       "downloadLocation": "https://github.com/earendil-works/pi",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -6753,6 +6783,23 @@
       ]
     },
     {
+      "name": "@leichtgewicht/ip-codec",
+      "SPDXID": "SPDXRef-Package-5d7439e04ab04bba",
+      "versionInfo": "2.0.5",
+      "downloadLocation": "https://github.com/martinheidegger/ip-codec",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40leichtgewicht/ip-codec@2.0.5"
+        }
+      ]
+    },
+    {
       "name": "@lezer/common",
       "SPDXID": "SPDXRef-Package-4abc19b2db84d371",
       "versionInfo": "1.5.2",
@@ -8109,6 +8156,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40replit/codemirror-lang-csharp@6.2.0"
+        }
+      ]
+    },
+    {
+      "name": "@replit/codemirror-lang-solidity",
+      "SPDXID": "SPDXRef-Package-eef17efa9f388331",
+      "versionInfo": "6.0.2",
+      "downloadLocation": "https://github.com/replit/codemirror-lang-solidity",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40replit/codemirror-lang-solidity@6.0.2"
         }
       ]
     },
@@ -9490,6 +9554,23 @@
       ]
     },
     {
+      "name": "@xterm/addon-serialize",
+      "SPDXID": "SPDXRef-Package-b6bebc8fad10fa32",
+      "versionInfo": "0.14.0",
+      "downloadLocation": "https://github.com/xtermjs/xterm.js/tree/master/addons/addon-serialize",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40xterm/addon-serialize@0.14.0"
+        }
+      ]
+    },
+    {
       "name": "@xterm/addon-web-links",
       "SPDXID": "SPDXRef-Package-552fdb035bd86265",
       "versionInfo": "0.11.0",
@@ -10119,6 +10200,23 @@
       ]
     },
     {
+      "name": "bonjour-service",
+      "SPDXID": "SPDXRef-Package-82f6fb044695e6f6",
+      "versionInfo": "1.4.4",
+      "downloadLocation": "https://github.com/onlxltd/bonjour-service",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/bonjour-service@1.4.4"
+        }
+      ]
+    },
+    {
       "name": "bowser",
       "SPDXID": "SPDXRef-Package-e6dc4c803635e83c",
       "versionInfo": "2.14.1",
@@ -10357,6 +10455,23 @@
       ]
     },
     {
+      "name": "canvas-confetti",
+      "SPDXID": "SPDXRef-Package-22afc36c76ab3608",
+      "versionInfo": "1.9.4",
+      "downloadLocation": "https://github.com/catdad/canvas-confetti",
+      "filesAnalyzed": false,
+      "licenseConcluded": "ISC",
+      "licenseDeclared": "ISC",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/canvas-confetti@1.9.4"
+        }
+      ]
+    },
+    {
       "name": "ccount",
       "SPDXID": "SPDXRef-Package-8454f0e154fad702",
       "versionInfo": "2.0.1",
@@ -10557,6 +10672,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/clsx@2.1.1"
+        }
+      ]
+    },
+    {
+      "name": "cm6-graphql",
+      "SPDXID": "SPDXRef-Package-df0e4fa5e8eaab39",
+      "versionInfo": "1.0.0",
+      "downloadLocation": "https://github.com/graphql/graphiql",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/cm6-graphql@1.0.0"
         }
       ]
     },
@@ -11734,6 +11866,23 @@
       ]
     },
     {
+      "name": "debounce-promise",
+      "SPDXID": "SPDXRef-Package-97b89e210cee7a96",
+      "versionInfo": "3.1.2",
+      "downloadLocation": "https://github.com/bjoerge/debounce-promise",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/debounce-promise@3.1.2"
+        }
+      ]
+    },
+    {
       "name": "debug",
       "SPDXID": "SPDXRef-Package-7133ecd87a199313",
       "versionInfo": "2.6.9",
@@ -12057,6 +12206,23 @@
       ]
     },
     {
+      "name": "dns-packet",
+      "SPDXID": "SPDXRef-Package-5119e2a57b7e9367",
+      "versionInfo": "5.6.1",
+      "downloadLocation": "https://github.com/mafintosh/dns-packet",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/dns-packet@5.6.1"
+        }
+      ]
+    },
+    {
       "name": "docx",
       "SPDXID": "SPDXRef-Package-5fcae62518b2d23a",
       "versionInfo": "9.7.1",
@@ -12274,6 +12440,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/electron-window-state@5.0.3"
+        }
+      ]
+    },
+    {
+      "name": "emoji-picker-react",
+      "SPDXID": "SPDXRef-Package-69887a9596f99d4a",
+      "versionInfo": "5.1.4",
+      "downloadLocation": "https://github.com/ealush/emoji-picker-react",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/emoji-picker-react@5.1.4"
         }
       ]
     },
@@ -13298,6 +13481,23 @@
       ]
     },
     {
+      "name": "gifenc",
+      "SPDXID": "SPDXRef-Package-489972220a87f19b",
+      "versionInfo": "1.0.3",
+      "downloadLocation": "https://github.com/mattdesl/gifenc",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/gifenc@1.0.3"
+        }
+      ]
+    },
+    {
       "name": "github-from-package",
       "SPDXID": "SPDXRef-Package-986647e01a0c4195",
       "versionInfo": "0.0.0",
@@ -13464,6 +13664,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/graceful-fs@4.2.11"
+        }
+      ]
+    },
+    {
+      "name": "graphql-language-service",
+      "SPDXID": "SPDXRef-Package-ecdf48924fdc5a25",
+      "versionInfo": "6.0.1",
+      "downloadLocation": "https://github.com/graphql/graphiql",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/graphql-language-service@6.0.1"
         }
       ]
     },
@@ -13821,6 +14038,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/highlight.js@11.11.1"
+        }
+      ]
+    },
+    {
+      "name": "highlightjs-solidity",
+      "SPDXID": "SPDXRef-Package-e0540e3f62a42dc3",
+      "versionInfo": "2.0.6",
+      "downloadLocation": "https://github.com/pospi/highlightjs-solidity",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/highlightjs-solidity@2.0.6"
         }
       ]
     },
@@ -16834,6 +17068,23 @@
       ]
     },
     {
+      "name": "multicast-dns",
+      "SPDXID": "SPDXRef-Package-54d8f2a5837075b3",
+      "versionInfo": "7.2.5",
+      "downloadLocation": "https://github.com/mafintosh/multicast-dns",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/multicast-dns@7.2.5"
+        }
+      ]
+    },
+    {
       "name": "nan",
       "SPDXID": "SPDXRef-Package-b042af2bbdcd2653",
       "versionInfo": "2.28.0",
@@ -17548,6 +17799,23 @@
       ]
     },
     {
+      "name": "pinyin-pro",
+      "SPDXID": "SPDXRef-Package-01d3652e4685d328",
+      "versionInfo": "3.29.5",
+      "downloadLocation": "https://github.com/zh-lx/pinyin-pro",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/pinyin-pro@3.29.5"
+        }
+      ]
+    },
+    {
       "name": "pkce-challenge",
       "SPDXID": "SPDXRef-Package-a6595739edac3756",
       "versionInfo": "5.0.1",
@@ -17583,8 +17851,8 @@
     },
     {
       "name": "playwright-core",
-      "SPDXID": "SPDXRef-Package-64393d6e64b8bda4",
-      "versionInfo": "1.60.0",
+      "SPDXID": "SPDXRef-Package-cef2817a15cc7b24",
+      "versionInfo": "1.63.0",
       "downloadLocation": "https://github.com/microsoft/playwright",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
@@ -17594,7 +17862,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/playwright-core@1.60.0"
+          "referenceLocator": "pkg:npm/playwright-core@1.63.0"
         }
       ]
     },
@@ -19061,6 +19329,23 @@
       ]
     },
     {
+      "name": "shipstyles",
+      "SPDXID": "SPDXRef-Package-2e7f4cf6ef50598a",
+      "versionInfo": "1.0.0",
+      "downloadLocation": "https://github.com/ealush/shipstyles",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/shipstyles@1.0.0"
+        }
+      ]
+    },
+    {
       "name": "side-channel",
       "SPDXID": "SPDXRef-Package-b92f70c0533794b9",
       "versionInfo": "1.1.1",
@@ -19635,6 +19920,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/tar-stream@2.2.0"
+        }
+      ]
+    },
+    {
+      "name": "thunky",
+      "SPDXID": "SPDXRef-Package-8fb0010ead09cdb1",
+      "versionInfo": "1.1.0",
+      "downloadLocation": "https://github.com/mafintosh/thunky",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/thunky@1.1.0"
         }
       ]
     },
@@ -20455,6 +20757,23 @@
       ]
     },
     {
+      "name": "vscode-languageserver-types",
+      "SPDXID": "SPDXRef-Package-89fb3f73f04bfa0f",
+      "versionInfo": "3.18.5",
+      "downloadLocation": "https://github.com/Microsoft/vscode-languageserver-node",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/vscode-languageserver-types@3.18.5"
+        }
+      ]
+    },
+    {
       "name": "w3c-keyname",
       "SPDXID": "SPDXRef-Package-20e81863fc210b19",
       "versionInfo": "2.2.8",
@@ -20848,12 +21167,22 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-4f87c16230f51606"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-ef29a7e5a6f64477"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-bf1afe61354bc40a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-4aed76e603981340"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -20869,6 +21198,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4ca8318bb935f57f"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-c6e47fb4feeee3c3"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -20908,7 +21242,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-9a414e8a6f3ff55d"
+      "relatedSpdxElement": "SPDXRef-Package-5e31973826ede72e"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -22863,6 +23197,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-5d7439e04ab04bba"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4abc19b2db84d371"
     },
     {
@@ -23259,6 +23598,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-33c2e99d0e34a9ac"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-eef17efa9f388331"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -23668,6 +24012,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-b6bebc8fad10fa32"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-552fdb035bd86265"
     },
     {
@@ -23853,6 +24202,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-82f6fb044695e6f6"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-e6dc4c803635e83c"
     },
     {
@@ -23923,6 +24277,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-22afc36c76ab3608"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-8454f0e154fad702"
     },
     {
@@ -23979,6 +24338,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-f9793c9476b945b5"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-df0e4fa5e8eaab39"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -24328,6 +24692,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-97b89e210cee7a96"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-7133ecd87a199313"
     },
     {
@@ -24423,6 +24792,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-5119e2a57b7e9367"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-5fcae62518b2d23a"
     },
     {
@@ -24484,6 +24858,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-f5b7f8b4505e5f29"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-69887a9596f99d4a"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -24788,6 +25167,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-489972220a87f19b"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-986647e01a0c4195"
     },
     {
@@ -24834,6 +25218,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4c9832a644fd345d"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-ecdf48924fdc5a25"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -24939,6 +25328,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-1b8d7a04515e3678"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e0540e3f62a42dc3"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -25828,6 +26222,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-54d8f2a5837075b3"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-b042af2bbdcd2653"
     },
     {
@@ -26038,6 +26437,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-01d3652e4685d328"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-a6595739edac3756"
     },
     {
@@ -26048,7 +26452,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-64393d6e64b8bda4"
+      "relatedSpdxElement": "SPDXRef-Package-cef2817a15cc7b24"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -26483,6 +26887,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-2e7f4cf6ef50598a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-b92f70c0533794b9"
     },
     {
@@ -26649,6 +27058,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-0cc8d0816415e06d"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-8fb0010ead09cdb1"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -26889,6 +27303,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-6b90d60faa288494"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-89fb3f73f04bfa0f"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

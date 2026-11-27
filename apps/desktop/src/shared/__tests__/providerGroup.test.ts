@@ -65,6 +65,27 @@ describe('group detail diagnostics compatibility', () => {
       .members[0].quota).toEqual({ usedPercent: 0, resetAtMs: null, windowMs: week });
   });
 
+  // Unit protocol: confirmed exhaustion must survive remote viewing; old/malformed
+  // replies must not turn a generic cooldown into a claim that the quota is spent.
+  it('preserves confirmed quota exhaustion only for a cooling own-account member', () => {
+    expect(parseProviderGroupRemoteView(payload({ state: 'cooling', usageLimit: { resetAtMs: 5_000 } }), 'anthropic')
+      .members[0]).toMatchObject({ state: 'cooling', usageLimit: { resetAtMs: 5_000 } });
+    expect(parseProviderGroupRemoteView(payload({ state: 'cooling', usageLimit: { resetAtMs: null } }), 'anthropic')
+      .members[0].usageLimit).toEqual({ resetAtMs: null });
+    for (const extra of [
+      { state: 'cooling' }, { state: 'cooling', usageLimit: { resetAtMs: '5000' } },
+      { state: 'cooling', usageLimit: { resetAtMs: -1 } }, { state: 'cooling', usageLimit: { resetAtMs: Infinity } },
+      { usageLimit: { resetAtMs: 5_000 } },
+    ]) {
+      expect(parseProviderGroupRemoteView(payload(extra), 'anthropic').members[0]).not.toHaveProperty('usageLimit');
+    }
+    const shared = {
+      config: { members: [{ kind: 'share', agentDeviceId: 'share:s1', providerId: 'anthropic' }] },
+      members: [{ key: 'share:s1:anthropic', state: 'cooling', usageLimit: { resetAtMs: 5_000 } }],
+    };
+    expect(parseProviderGroupRemoteView(shared, 'anthropic').members[0]).not.toHaveProperty('usageLimit');
+  });
+
   it.each([
     'full', { usedPercent: '40', resetAtMs: 5_000, windowMs: 1 }, { usedPercent: 40, windowMs: 1 },
     { usedPercent: 40, resetAtMs: -1, windowMs: 1 }, { usedPercent: 40, resetAtMs: 5_000, windowMs: 0 },
@@ -191,14 +212,19 @@ describe('providerGroupMemberKey', () => {
 });
 
 describe('normalizeProviderGroupConfig', () => {
-  it('round-trips the opt-in usage strategy without changing the default', () => {
-    expect(normalizeProviderGroupConfig({ strategy: 'usage', members: [{ kind: 'local' }] }, 'anthropic')?.strategy).toBe('usage');
-    expect(normalizeProviderGroupConfig({ members: [{ kind: 'local' }] }, 'anthropic')?.strategy).toBe('least');
+  // 2026-11-24：组策略与智能路由合成一套选法。旧版存下的值、旧版电脑发来的摘要读成对应的选法；
+  // 新版电脑发来的摘要把真实选法放在 pick。
+  it('reads former group strategies as route strategies and prefers the real strategy sent by a new computer', () => {
+    const read = (raw: Record<string, unknown>) => normalizeProviderGroupConfig({ ...raw, members: [{ kind: 'local' }] }, 'anthropic')?.strategy;
+    expect(['usage', 'least', 'round', 'order', 'weight'].map((strategy) => read({ strategy })))
+      .toEqual(['expiring', 'expiring', 'rotate', 'order', 'weighted']);
+    expect(read({})).toBe('expiring');
+    expect(read({ strategy: 'order', pick: 'drain' })).toBe('drain');
   });
 
   it('keeps valid members, fills defaults and pins the local member to the group provider', () => {
     const config = normalizeProviderGroupConfig({
-      strategy: 'round',
+      strategy: 'rotate',
       members: [
         { kind: 'local', providerId: 'something-else', limit: 2 },
         { kind: 'device', agentDeviceId: 'dev-1', providerId: 'anthropic-1a2b3c4d', label: ' Studio ' },
@@ -206,7 +232,7 @@ describe('normalizeProviderGroupConfig', () => {
       ],
     }, 'anthropic');
     expect(config).toEqual({
-      strategy: 'round',
+      strategy: 'rotate',
       autoSwitch: true,
       members: [
         { key: 'local', kind: 'local', agentDeviceId: null, providerId: 'anthropic', limit: 2, weight: 1, paused: false },
@@ -246,14 +272,14 @@ describe('normalizeProviderGroupConfig', () => {
         'junk',
       ],
     }, 'x');
-    expect(config?.strategy).toBe('least');
+    expect(config?.strategy).toBe('expiring');
     expect(config?.autoSwitch).toBe(false);
     expect(config?.members).toHaveLength(1);
     expect(config?.members[0].limit).toBe(PROVIDER_GROUP_MAX_LIMIT);
   });
 
   it('returns null when nothing is left: removing the last member deletes the group', () => {
-    expect(normalizeProviderGroupConfig({ strategy: 'least', members: [] }, 'anthropic')).toBeNull();
+    expect(normalizeProviderGroupConfig({ strategy: 'expiring', members: [] }, 'anthropic')).toBeNull();
     expect(normalizeProviderGroupConfig(null, 'anthropic')).toBeNull();
     expect(normalizeProviderGroupConfig({ members: [{ kind: 'local' }] }, 'bad id')).toBeNull();
   });

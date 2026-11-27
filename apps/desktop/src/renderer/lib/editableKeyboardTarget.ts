@@ -29,6 +29,8 @@ const INTERACTIVE_SELECTOR = [
   '[role="tab"]',
   '[role="radio"]',
   '[role="checkbox"]',
+  'input[type="checkbox"]',
+  'input[type="radio"]',
   '[role="switch"]',
   '[role="combobox"]',
   '[role="slider"]',
@@ -54,6 +56,27 @@ export function isForeignKeyboardControl(target: Element): boolean {
     || target.closest(LAYER_SELECTOR) !== null;
 }
 
+/** 原生复选框 / 单选：不收文字，只有空格切换，按键归属与按钮相同。 */
+function isToggleInput(target: EventTarget | null): target is HTMLInputElement {
+  return target instanceof HTMLInputElement && (target.type === 'checkbox' || target.type === 'radio');
+}
+
+const RADIO_KEYS = new Set([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+
+/**
+ * 焦点所在的控件是否自己要这个键。收文字的控件（输入框、文本域、下拉、可编辑区）要所有键；
+ * 原生复选框只要空格，单选要空格和方向键，其余键与焦点在按钮上时一样交给页面。
+ *
+ * isEditableKeyboardTarget 仍把所有 input 当可编辑：设置页「第一下 Esc 只失焦」、导航键的空格
+ * 判断与图片标注的空格平移各有自己的约定，不随这里改变。只有原本面对 button role=checkbox、
+ * 换成原生勾选框后被挡住的快捷键（分享栏 Esc / ⌘A、消息列表翻页键、设置页 Esc）改用本函数。
+ */
+export function editableTargetConsumesKey(target: EventTarget | null, key: string): boolean {
+  if (!isEditableKeyboardTarget(target)) return false;
+  if (!isToggleInput(target)) return true;
+  return target.type === 'radio' ? RADIO_KEYS.has(key) : key === ' ';
+}
+
 /**
  * 替代输入框的交互卡片（授权、计划审批、提问）在 window 上挂了回车 / Esc / 数字键
  * 快捷键。这些按键同时可能属于别处：焦点所在的按钮、刚被关闭的菜单、正在打字的
@@ -64,6 +87,7 @@ export function isForeignKeyboardControl(target: Element): boolean {
  * - 焦点在卡片外的按钮、链接等控件上：让位，按键属于那个控件所在的界面。
  * - 焦点在卡片自己的控件上：普通回车 / 空格让给控件原生激活（在「拒绝」上按回车就是拒绝）；
  *   Esc 与数字键没有原生含义，仍按卡片快捷键处理。带修饰键的卡片快捷键也保留自己的语义。
+ *   原生复选框 / 单选按控件处理，不当作文字输入框（提问卡片的多选项就是复选框）。
  */
 export function shouldCardShortcutYield(
   event: KeyboardEvent,
@@ -72,7 +96,7 @@ export function shouldCardShortcutYield(
 ): boolean {
   if (event.defaultPrevented || event.isComposing) return true;
   const target = event.target;
-  if (isEditableKeyboardTarget(target)) return true;
+  if (isEditableKeyboardTarget(target) && !isToggleInput(target)) return true;
   if (!(target instanceof Element)) return false;
   const insideOwner = owner?.contains(target) ?? false;
   if (!insideOwner && target.closest(LAYER_SELECTOR)) return true;

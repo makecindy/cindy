@@ -1,8 +1,9 @@
-import path from 'node:path';
+import { isSafeSessionPathSegment } from '../sessionIds.js';
 import { isLibraryExtraDirSlot } from './extraDirsValidator.js';
 
-import type { AgentKind, CreateSessionOptions, WorkspaceKind } from '@cindy/maker-core';
+import { acpHarnessKeyFromProviderId, type CreateSessionOptions, type EngineKind, type WorkspaceKind } from '@cindy/maker-core';
 
+import { isSharedTaskPeer, parseProviderSharePeer } from '@cindy/device-link';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 
 /**
@@ -11,11 +12,6 @@ import { requireObject, requireString, throwIpcError } from '../utils/ipcValidat
  * basename so a remote `maker:create-session` caller can't use `..` / path separators /
  * absolute paths in `id` to escape that root and bypass the remote working-directory guard.
  */
-function isSafePathSegment(value: string): boolean {
-  if (value === '.' || value === '..') return false;
-  if (value.includes('/') || value.includes('\\') || value.includes('\0')) return false;
-  return path.basename(value) === value;
-}
 
 export interface MakerSessionCreateOpts extends CreateSessionOptions {
   orcaRole?: 'lead' | 'worker' | null;
@@ -59,10 +55,15 @@ export interface MakerSessionCreateOpts extends CreateSessionOptions {
    * 已解析的来源,保证 Worker 与其模型选择使用同一条凭证路由。
    */
   providerId?: string | null;
+  /**
+   * 入口按模式选好来源时的凭据(model-groups/sessionStart.ts prepare)：bootstrapSession 把它挂到这个任务上，
+   * 第一轮派发时提交选路、记下任务经哪个模式建的并写说明。不传 = 没经模式。只在 main 内部传。
+   */
+  modelGroupStart?: string;
   [key: string]: unknown;
 }
 
-type StderrLogger = (agentKind: AgentKind, line: string) => void;
+type StderrLogger = (agentKind: EngineKind, line: string) => void;
 
 export interface ReadCreateSessionOptsDeps {
   allocateDialogueWorkspace?: (sessionId: string, nowMs: number) => string;
@@ -70,8 +71,10 @@ export interface ReadCreateSessionOptsDeps {
   now?: () => number;
 }
 
-function readAgentKind(value: unknown): AgentKind {
+function readAgentKind(value: unknown): EngineKind {
   if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
+  // Plugin ACP engine (docs/plans/acp-plugin-bridge.md); further checks in readCreateSessionOpts.
+  if (value === 'acp') return value;
   throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
 
@@ -99,7 +102,7 @@ function readDialogueSessionId(value: unknown, createSessionId: (() => string) |
   if (typeof value !== 'string' || value.trim() === '') {
     throwIpcError('INVALID_PARAMS', 'id must be a non-empty string');
   }
-  if (!isSafePathSegment(value)) {
+  if (!isSafeSessionPathSegment(value)) {
     throwIpcError('INVALID_PARAMS', 'id must be a safe path segment (no separators or ..)');
   }
   return value;
@@ -132,7 +135,7 @@ export function readCreateSessionOpts(
   // 外部(含 device-link)可控的 session id 会被下游拼进磁盘路径(如 Pi 权限档
   // perm-<id>.json)。未校验的 `../../..` 之类 id 经 path.join 逃出 runtimeDir,writeFile
   // 可覆盖任意可写文件(codex review)。在边界统一限制为安全单段值;缺省(自动生成)放行。
-  if (typeof id === 'string' && id.length > 0 && !isSafePathSegment(id)) {
+  if (typeof id === 'string' && id.length > 0 && !isSafeSessionPathSegment(id)) {
     throwIpcError('INVALID_PARAMS', 'session id must be a safe path segment');
   }
   const workingDir = needsDialogueWorkspace
@@ -150,8 +153,24 @@ export function readCreateSessionOpts(
       throwIpcError('INVALID_PARAMS', 'agentDeviceId cannot be combined with remoteHostId');
     }
   }
+  if (agentKind === 'acp') {
+    // Plugin engines are chosen through their harness id. They run on this computer, on another
+    // computer of the same account, or on a direct provider share (never SSH or invalid peer ids).
+    if (!acpHarnessKeyFromProviderId(typeof body.providerId === 'string' ? body.providerId : null)) {
+      throwIpcError('INVALID_PARAMS', 'a plugin engine task needs providerId acp-plugin:<plugin>:<harness>');
+    }
+    if (typeof body.remoteHostId === 'string' && body.remoteHostId.trim()) {
+      throwIpcError('INVALID_PARAMS', 'plugin engine tasks do not run in SSH workspaces');
+    }
+    if (typeof body.agentDeviceId === 'string' && (isSharedTaskPeer(body.agentDeviceId) || parseProviderSharePeer(body.agentDeviceId))) {
+      throwIpcError('INVALID_PARAMS', 'invalid plugin engine target device');
+    }
+  }
+  // 模型组凭据只由 main 内部的入口交给 bootstrapSession，界面与其他设备传来的一律不认。
+  const callerOpts: Record<string, unknown> = { ...body };
+  delete callerOpts.modelGroupStart;
   return {
-    ...body,
+    ...callerOpts,
     id,
     agentKind,
     workspaceKind,
@@ -176,4 +195,22 @@ export function withCreateSessionStderr(
     ...opts,
     vendorOptions: { ...vendorOptions, onStderrLine },
   };
+}
+
+export function createSessionStderrOptions(log: { warn(message: string): void }) {
+  return function buildCreateOptsWithStderr(o: MakerSessionCreateOpts) {
+    // 把 vendor 子进程 stderr 引到主进程日志,否则 "process exited with code 1" 之类
+    // 的失败信息会被默默丢掉。renderer 仍可以通过 vendorOptions 自定义,这里只在缺省时兜底。
+    return withCreateSessionStderr(o, (agentKind, line) =>
+      log.warn(`[${agentKind}/stderr] ${line}`),
+    );
+  };
+}
+
+export function isSessionRunningError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const code = (err as { code?: unknown }).code;
+  if (code === 'SESSION_RUNNING') return true;
+  const message = (err as { message?: unknown }).message;
+  return typeof message === 'string' && message.startsWith('SESSION_RUNNING:');
 }

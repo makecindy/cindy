@@ -2,6 +2,7 @@ import { app, ipcMain, shell, type BrowserWindow, type WebContents } from 'elect
 import { mkdir, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { CURRENT_CINDY_REGION } from '../../shared/brandRegion';
 import {
   PERFORMANCE_TRACE_CHANNEL,
   PERFORMANCE_TRACE_EVENTS_CHANNEL,
@@ -42,7 +43,7 @@ export function initPerformanceTraceService(getMainWindow: () => BrowserWindow |
   const controller = new PerformanceTraceController({
     now: Date.now,
     owner: activeOwnerScopeKey,
-    reportId: () => generateUploadCode((size) => crypto.randomBytes(size)),
+    reportId: () => generateUploadCode((size) => crypto.randomBytes(size), CURRENT_CINDY_REGION),
     environment: () => ({
       appVersion: app.getVersion(),
       platform: process.platform,

@@ -8,7 +8,8 @@ import type { MailCardData } from '@cindy/maker-shared/ghost-card-form';
 import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-form';
 import { enableGhostCardTaskAutoArchive, isGhostCardTaskAutoArchivePending } from '@/cindy-brain/ghostCardTaskArchive';
 
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+const labels = vi.hoisted(() => ({ t: (key: string) => key }));
+vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: labels.t }) }));
 vi.mock('@/cindy-brain/useGhostCardThemeVars', () => ({ useGhostCardThemeVars: () => '' }));
 vi.mock('@/features/right-sidebar/lib/mailPreview', () => ({ openMailCard: vi.fn() }));
 const prStatuses = vi.hoisted(() => new Map<string, unknown>());
@@ -105,6 +106,30 @@ it('releases a failed view on unmount and allows the remounted editor to sync', 
   expect(pendingGhostCardFormDelivery(props.sessionId)).toBeUndefined();
 });
 
+// User regression (unit): a transient failed mail:change previously left Send
+// silently dead in the same editor view even though Send carries the full form.
+it('still delivers Send with full form values after a transient edit sync failure in the same view', async () => {
+  vi.stubGlobal('matchMedia', () => ({ matches: true }));
+  const dispatch = vi.fn().mockResolvedValueOnce({ ok: false }).mockResolvedValue({ ok: true });
+  vi.stubGlobal('electronAPI', { ghosts: { dispatchCardAction: dispatch } });
+  const mail: MailCardData = { accountId: 'account', draftId: 'draft', key: '40000000-0000-0000-0000-000000000000',
+    from: 'sender', fields: ['to', 'cc', 'bcc', 'subject', 'body'].map(name => ({ name, label: name, value: '', multiline: name === 'body' })),
+    attachments: [], state: 'draft', status: 'Synced', sendLabel: 'Send', fromLabel: 'From' };
+  render(<MailCardEditor callId="retry-send" sessionId="retry-send-session" height={80} html={renderMailCard(mail)} />);
+  const frame = screen.getByTitle('mailReader.title') as HTMLIFrameElement;
+  frame.contentDocument!.open(); frame.contentDocument!.write(frame.srcdoc); frame.contentDocument!.close();
+  fireEvent.load(frame);
+  fireEvent.change(screen.getByLabelText('body'), { target: { value: 'Unsynced edit' } });
+  await act(async () => {});
+  expect(await pendingGhostCardFormDelivery('retry-send-session')).toBe(false);
+  fireEvent.click(frame.contentDocument!.querySelector('[data-ghost-submit]')!);
+  await act(async () => {});
+  expect(dispatch).toHaveBeenCalledTimes(2);
+  expect(dispatch.mock.calls[1][1]).toBe(`mail:send:${mail.key}`);
+  expect(dispatch.mock.calls[1][3].body).toBe('Unsynced edit');
+  expect(pendingGhostCardFormDelivery('retry-send-session')).toBeUndefined();
+});
+
 // Regression boundary (unit): two views of one draft. Form-only tests do not
 // cover the send bridge: sending from the stale view must use the delivered edit.
 it('sends the latest delivered text when the other view has not repainted yet', async () => {
@@ -198,4 +223,62 @@ it('withdraws auto-archive when the card is replaced by content without PR marke
   expect(isGhostCardTaskAutoArchivePending('review-session')).toBe(false);
   disable();
   prStatuses.clear();
+});
+
+// Rule (2026-11-14): the PR card's copy button matches the title-bar PR popover. The plugin hides it, the host
+// reveals it, and a click copies the declared link on the host side without dispatching to the plugin.
+// Production entry: the card canvas with sanitizer-shaped HTML.
+it('reveals the copy-link button and copies its link without dispatching a card action', async () => {
+  const writeText = vi.fn(() => Promise.resolve());
+  const dispatch = vi.fn();
+  vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+  vi.stubGlobal('electronAPI', { ghosts: { dispatchCardAction: dispatch } });
+  render(<MailCardEditor callId="copy-card" sessionId="copy-session" height={80}
+    html={'<div><button data-ghost-copy-link="https://github.com/octo/repo/pull/9" type="button" style="display:none"></button></div>'} />);
+  const frame = screen.getByTitle('mailReader.title') as HTMLIFrameElement;
+  frame.contentDocument!.open(); frame.contentDocument!.write(frame.srcdoc); frame.contentDocument!.close();
+  fireEvent.load(frame);
+  const button = frame.contentDocument!.querySelector<HTMLElement>('button[data-ghost-copy-link]')!;
+  expect(button.style.display).toBe('inline-flex');
+  expect(button.getAttribute('aria-label')).toBe('sharing.copyLink');
+  fireEvent.click(button);
+  await act(async () => {});
+  expect(writeText).toHaveBeenCalledExactlyOnceWith('https://github.com/octo/repo/pull/9');
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
+// PR #10521 regression (unit): existing copy coverage never combined open-only with copy-link
+// or changed the language on a live iframe. The real editor must preserve visibility across
+// merged/closed → open → merged and update accessible labels without duplicating copy events.
+it.each(['merged', 'closed'])('keeps copy visibility under PR status control (%s) and refreshes labels', async (ended) => {
+  const props = { callId: 'copy-status', sessionId: 'copy-status-session', height: 80,
+    html: '<button data-ghost-pr-open-only="octo/repo#9" data-ghost-copy-link="https://github.com/octo/repo/pull/9" style="display:none"></button>' };
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+  const originalT = labels.t;
+  prStatuses.set('octo/repo#9', { ok: true, status: ended });
+  const view = render(<MailCardEditor {...props} />);
+  try {
+    const frame = screen.getByTitle('mailReader.title') as HTMLIFrameElement;
+    frame.contentDocument!.open(); frame.contentDocument!.write(frame.srcdoc); frame.contentDocument!.close();
+    fireEvent.load(frame);
+    const button = frame.contentDocument!.querySelector('button')!;
+    expect(button.style.display).toBe('none');
+    prStatuses.set('octo/repo#9', { ok: true, status: 'open' });
+    labels.t = (key: string) => key === 'sharing.copyLink' ? '复制链接' : key;
+    view.rerender(<MailCardEditor {...props} />);
+    expect(button.style.display).toBe('inline-flex');
+    expect(button.getAttribute('aria-label')).toBe('复制链接');
+    expect(button.title).toBe('复制链接');
+    fireEvent.click(button);
+    await act(async () => {});
+    expect(writeText).toHaveBeenCalledExactlyOnceWith('https://github.com/octo/repo/pull/9');
+    prStatuses.set('octo/repo#9', { ok: true, status: ended });
+    labels.t = originalT;
+    view.rerender(<MailCardEditor {...props} />);
+    expect(button.style.display).toBe('none');
+  } finally {
+    labels.t = originalT;
+    prStatuses.clear();
+  }
 });

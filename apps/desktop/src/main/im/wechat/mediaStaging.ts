@@ -5,7 +5,7 @@ import path from 'node:path';
 import type { IMAttachment } from '@cindy/im';
 import type { WechatMediaRef, WechatTransport } from '@cindy/wechat-ilink';
 
-import * as blobStore from '../../cindy-media/blobStore';
+import * as blobStore from '../../cindy-media/blobStore.desktop';
 import { ingestMedia } from '../../cindy-media/ingest';
 import type {
   WechatPollFileAttachmentInput,

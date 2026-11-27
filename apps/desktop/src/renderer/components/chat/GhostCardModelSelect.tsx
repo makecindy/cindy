@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { ModelSelectorContent } from '@/components/new-chat/ModelSelector';
+import { previewModelGroup, useModelGroups } from '@/features/model-groups/modelGroupsClient';
+import type { ModelGroupSelection } from '../../../shared/modelGroups';
 import { useTransientModelPickerPreferences } from '@/components/new-chat/modelPickerPreferences';
 import { useProviderShareAgentDevices } from '@/features/provider-share/useProviderShareAgentDevices';
 import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
@@ -19,14 +21,12 @@ export function GhostCardModelSelect({
   initial,
   onSelect,
   onClose,
-  inDialog = false,
 }: {
   /** 被点按钮在卡片锚容器内的位置。 */
   rect: { top: number; left: number; width: number; height: number };
   initial: GhostCardModelSelection | null;
   onSelect(route: GhostCardModelSelection): void;
   onClose(): void;
-  inDialog?: boolean;
 }) {
   const [route, setRoute] = useState(initial);
   const draft = useRef(initial);
@@ -35,6 +35,7 @@ export function GhostCardModelSelect({
   const picked = useRef(false);
   const agentDeviceId = route?.agentDeviceId ?? null;
   const preferenceStore = useTransientModelPickerPreferences();
+  const { config: modelGroupsConfig } = useModelGroups();
   const agents = useModelPickerAgents(
     route?.agentKind === 'cc' ? 'claude-code' : (route?.agentKind ?? 'codex'),
   );
@@ -54,6 +55,20 @@ export function GhostCardModelSelect({
     draft.current = next;
     setRoute(next);
   };
+  const pickGroup = async (selection: ModelGroupSelection) => {
+    const preview = await previewModelGroup(selection);
+    if (preview?.outcome !== 'routed') return;
+    picked.current = true;
+    update({
+      providerId: preview.route.providerId,
+      model: preview.route.model,
+      agentKind: preview.route.agentKind,
+      effort: preview.route.effort ?? '',
+      fastMode: preview.route.fastMode ?? false,
+      ...(preview.route.agentDeviceId ? { agentDeviceId: preview.route.agentDeviceId } : {}),
+      modelGroup: selection.id,
+    });
+  };
   const close = () => {
     if (closed.current) return;
     closed.current = true;
@@ -72,9 +87,8 @@ export function GhostCardModelSelect({
         sideOffset={4}
         collisionPadding={8}
         className={cn(
-          'flex min-h-0 w-auto max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-[12px] p-0',
+          'flex min-h-0 w-auto max-h-[var(--radix-popover-content-available-height)] flex-col overflow-hidden rounded-xl p-0',
           'border border-[var(--model-dropdown-border)] bg-[var(--model-dropdown-bg)]',
-          inDialog && 'z-[10001]',
         )}
       >
         <ModelSelectorContent
@@ -85,6 +99,18 @@ export function GhostCardModelSelect({
           effort={(route?.effort ?? '') as Effort}
           fastMode={route?.fastMode ?? false}
           unifiedAgents={agents}
+          modelGroups={{
+            config: modelGroupsConfig,
+            active: route?.modelGroup && modelGroupsConfig.routes.some((r) => r.id === route.modelGroup)
+              ? { type: 'route', id: route.modelGroup }
+              : null,
+            onSelect: (selection) => { void pickGroup(selection); },
+            onAttach: (selection) => {
+              if (!draft.current) return;
+              picked.current = true;
+              update({ ...draft.current, modelGroup: selection.id });
+            },
+          }}
           remoteAgent={{ devices, selectedDeviceId: agentDeviceId }}
           onDismiss={close}
           onModelChange={() => false}

@@ -1,8 +1,27 @@
 import { describe, expect, it } from 'vitest';
 
-import { ghostPublishedModelText, parseGhostModelsNeeds, parseGhostPublishedModels } from '../pluginModels.js';
+import { ghostPublishedModelText, parseGhostModelRoute, parseGhostModelsNeeds, parseGhostPublishedModels } from '../pluginModels.js';
 
 const route = { id: 'auto', name: 'Auto', target: { type: 'route' } };
+
+// Runtime routing must use the same explicit source as new-task routing. A malformed
+// location must not silently choose this computer, and request options must survive.
+describe('parseGhostModelRoute', () => {
+  const selected = { agentKind: 'pi', model: 'test-model', providerId: 'test-provider' };
+
+  it('preserves the explicit route and its request preferences, excluding unknown fields', () => {
+    expect(parseGhostModelRoute({ ...selected, agentDeviceId: 'other-computer', effort: 'high', fastMode: true, endpoint: 'ignored' }))
+      .toEqual({ ...selected, agentDeviceId: 'other-computer', effort: 'high', fastMode: true });
+    expect(parseGhostModelRoute(selected)).toEqual(selected);
+  });
+
+  it.each([null, [], {}, { ...selected, agentKind: 'unknown' }, { ...selected, model: '' },
+    { ...selected, agentDeviceId: '' }, { ...selected, agentDeviceId: 1 },
+    { ...selected, agentDeviceId: 'x'.repeat(129) }, { ...selected, fastMode: 'priority' }])
+  ('rejects an invalid explicit route: %j', value => {
+    expect(parseGhostModelRoute(value)).toBeUndefined();
+  });
+});
 
 // Rule: a plugin's list reaches the model picker only after this parser, so bad input must not
 // get through, and a type this Host cannot run must not hide the models it can.

@@ -7,7 +7,10 @@
  */
 
 export const VERSION = '0.0.0';
-export { buildInboundMessageFacts } from './inboundFacts.js';
+export { setTransportTextResolver } from './transportText.js';
+export type { TransportTextResolver, TransportTextVars } from './transportText.js';
+export { UnsupportedInboundMediaError } from './inboundKind.js';
+export { GROUP_HISTORY_NOTE, QUOTE_AS_REQUEST_NOTE, buildInboundMessageFacts, quotedMessageNote } from './inboundFacts.js';
 export type { InboundMessageFacts } from './inboundFacts.js';
 
 export { BaseIM } from './BaseIM.js';
@@ -36,10 +39,14 @@ export type {
   InteractiveCardButton,
   InteractiveCardSpec,
   StreamingTextHandle,
+  StreamingFinalizeOptions,
+  StreamingProcessRecord,
   SendFileResult,
 } from './types.js';
 
 export { FeishuIM, createFeishuIM } from './feishu/index.js';
+export { startFeishuTurnCarrier } from './feishu/streamingText.js';
+export type { FeishuStreamingDeps, FeishuTurnCarrier } from './feishu/streamingText.js';
 export type { FeishuIMOptions } from './feishu/index.js';
 export {
   decodeLaneUserId as decodeFeishuLaneUserId,
@@ -53,10 +60,31 @@ export type {
 export { FeishuApiError } from './feishu/outbound.js';
 export type { FeishuApiMethod, FeishuChatMembersPage } from './feishu/outbound.js';
 export type { AttachmentRef as FeishuAttachmentRef } from './feishu/incomingContent.js';
+export { FEISHU_MERGE_FORWARD_PLACEHOLDER } from './feishu/incomingContent.js';
 export type { DownloadResult as FeishuDownloadResult } from './feishu/attachmentDownloader.js';
 
 export { DiscordIM, createDiscordIM } from './discord/index.js';
 export type { DiscordConfigState, DiscordIMOptions } from './discord/index.js';
+export { DiscordOperationError, discordOperationFailure } from './discord/operations.js';
+export type { DiscordOperations, DiscordHistoryMessage } from './discord/operations.js';
+export type { DiscordFinalTextStorage } from './discord/finalTextOutbox.js';
+export {
+  decodeDiscordLaneUserId,
+  encodeDiscordLaneUserId,
+  EMPTY_DISCORD_CHANNEL_ACCESS,
+  isDiscordLaneAdmitted,
+  isDiscordLaneEnabled,
+  normalizeDiscordChannelAccess,
+} from './discord/lane.js';
+export type {
+  DiscordChannelAccessConfig,
+  DiscordChannelAccessEntry,
+  DiscordChannelAccessStore,
+  DiscordGuildAccessEntry,
+  DiscordGuildMode,
+  DiscordLane,
+} from './discord/lane.js';
+export type { DiscordGuildChannelInfo, DiscordGuildInfo } from './discord/guildDirectory.js';
 
 export { TelegramIM, createTelegramIM } from './telegram/index.js';
 // expressive 档变体池 —— 官方 bot 的 ack 表情复用同一份, 两个 bot 的表情语义
@@ -76,7 +104,13 @@ export type {
 } from './telegram/index.js';
 export { TELEGRAM_OUTBOUND_MEDIA } from './telegram/index.js';
 export { TelegramApiError } from './telegram/api.js';
-export type { TelegramApiClient, TgChatMemberUpdated, TgMessage } from './telegram/api.js';
+export type {
+  TelegramApiClient,
+  TgChatMemberUpdated,
+  TgExternalReplyInfo,
+  TgMessage,
+  TgMessageOrigin,
+} from './telegram/api.js';
 export { TELEGRAM_DEFAULT_BEHAVIOR } from './telegram/index.js';
 export type { TelegramBehaviorConfig } from './telegram/index.js';
 export { TELEGRAM_PERSONAL_CAPABILITIES } from './telegram/presentationCapabilities.js';
@@ -154,3 +188,10 @@ export type {
 } from './binding/index.js';
 
 export type { TelegramHistoryImageRef } from './telegram/inbound.js';
+
+export { BlueBubblesIM, parseBlueBubblesConfig, BLUEBUBBLES_SECRET_KEYS } from './bluebubbles/index.js';
+export type { BlueBubblesConfig, BlueBubblesOptions } from './bluebubbles/index.js';
+export type { BlueBubblesState, BlueBubblesStateStorage } from './bluebubbles/state.js';
+export { LocalWebhookReceiver } from './localWebhook.js';
+
+export { applyBlueBubblesReceiptUpdate, type BlueBubblesReceiptUpdate } from './bluebubbles/state.js';

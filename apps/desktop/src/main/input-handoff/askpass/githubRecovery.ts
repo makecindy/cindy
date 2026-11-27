@@ -3,7 +3,7 @@ import { deliveryNamespaceFields, installedGhostStoragePart } from '../../../sha
 import {
   classifyInstalledGhostVisibility,
   type GhostVisibilityDeps,
-} from '../../cindy-brain/ghostVisibility.js';
+} from '../../cindy-brain/ghostVisibility.desktop.js';
 import type { AuthRecoveryRequest } from './host.js';
 
 interface SessionContext {

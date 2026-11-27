@@ -146,6 +146,7 @@ export type MemoryErrorCode =
   | 'version-conflict'
   | 'already-exists'
   | 'not-found'
+  | 'ambiguous-address'
   | 'path-traversal'
   | 'io-error'
   | 'not-ready';
@@ -165,9 +166,9 @@ export interface SearchHit {
   filename: string;
   type: MemoryType;
   title: string;
-  /** FTS5 snippet() 高亮片段 */
+  /** 命中片段: MATCH 臂为 FTS5 snippet() 高亮, LIKE 臂为命中窗口（多词按词分窗） + <mark> 标记 */
   snippet: string;
-  /** bm25 score, 越小越相关 */
+  /** 越小越相关; MATCH 臂为 bm25, LIKE 臂为基准分减质量分, 两臂之间不可比 */
   score: number;
 }
 

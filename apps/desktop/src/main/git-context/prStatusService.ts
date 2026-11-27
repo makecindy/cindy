@@ -45,6 +45,18 @@ export function filterPrStatusQueriesForRefs(
   return queries.filter((query) => allowed.has(prStatusKey(query)));
 }
 
+/**
+ * Status chips never read `metadata` (PR body, author and reviewer objects); only the
+ * main-process GitHub read tools do, and they call the service directly. Dropping it from
+ * the status channel keeps each answer small: over device-link it averaged ~11 KB and was
+ * the second-largest result stream after agent events.
+ */
+export function withoutPrMetadata(result: PrStatusResult): PrStatusResult {
+  if (!result.ok || result.metadata === undefined) return result;
+  const { metadata: _metadata, ...rest } = result;
+  return rest;
+}
+
 /** 单条 PR 的远端原始字段(github-client GithubPullRequest 的子集 + thread 统计)。 */
 export interface PrRemoteState {
   state: 'open' | 'closed';
@@ -77,6 +89,10 @@ export interface PrStatusServiceDeps {
   fetchPr: (token: string, q: PrStatusQuery) => Promise<PrRemoteState>;
   /** 缓存 TTL,默认 60s。测试可注小值。 */
   cacheTtlMs?: number;
+  /** Event-covered PRs may reuse successful summaries longer; evaluated on every read. */
+  eventCacheTtlMs?: (query: PrStatusQuery) => number | undefined;
+  /** Adaptive low-quota TTL extension for background reads; auto-recovers once quota resets. */
+  adaptiveCacheTtlMs?: (query: PrStatusQuery, scope: string) => number | undefined;
   /**
    * 过期后仍可直接回答的时长,默认 10 分钟:过期条目先原样返回,再后台向 GitHub 复核,
    * 下一次查询拿到新值。PR 状态变化以分钟计,但每次 60s 过期都让侧栏 / 手机等一次
@@ -86,6 +102,7 @@ export interface PrStatusServiceDeps {
   now?: () => number;
   scope?: () => Promise<string>;
   /** Every fresh, cached result (ok / not-found) as it lands; for prFollowWatch. Must not throw. */
+  onInvalidated?: () => void;
   onObserved?: (query: PrStatusQuery, result: PrStatusResult) => void;
 }
 
@@ -99,6 +116,7 @@ export function mapRemoteToStatus(remote: PrRemoteState): PrStatusKind {
 
 interface CacheEntry {
   result: PrStatusResult;
+  fetchedAt: number;
   expiresAt: number;
   /** 过期后到此刻之前仍可直接回答(后台复核);之后必须同步重查。 */
   staleUntil: number;
@@ -122,6 +140,7 @@ export class PrStatusService {
 
   invalidate(): void {
     this.generation += 1;
+    this.deps.onInvalidated?.();
     this.cache.clear();
     this.inFlight.clear();
   }
@@ -181,6 +200,13 @@ export class PrStatusService {
     );
   }
 
+  /** Matching doorbells never causes a network read of unrelated PRs. Account-scoped. */
+  async cachedStatuses(queries: readonly PrStatusQuery[]): Promise<(PrStatusResult | undefined)[]> {
+    const scope = (await this.deps.scope?.()) ?? '';
+    if (scope !== this.scope) return queries.map(() => undefined);
+    return queries.map(q => this.cache.get(prStatusKey(q))?.result);
+  }
+
   private async getOne(
     q: PrStatusQuery,
     waitForFresh = false,
@@ -189,7 +215,15 @@ export class PrStatusService {
     const key = prStatusKey(q);
     const cached = this.cache.get(key);
     const now = this.now();
-    if (!refresh && cached && cached.expiresAt > now) return cached.result;
+    const eventTtl = cached?.result.ok ? this.deps.eventCacheTtlMs?.(q) : undefined;
+    const adaptiveTtl = cached?.result.ok ? this.deps.adaptiveCacheTtlMs?.(q, this.scope) : undefined;
+    const extendedTtl =
+      eventTtl !== undefined || adaptiveTtl !== undefined
+        ? Math.max(this.ttlMs, eventTtl ?? 0, adaptiveTtl ?? 0)
+        : undefined;
+    const expiresAt = cached && extendedTtl !== undefined
+      ? cached.fetchedAt + extendedTtl : cached?.expiresAt;
+    if (!refresh && cached && expiresAt! > now) return cached.result;
     if (!refresh && !waitForFresh && cached && cached.staleUntil > now) {
       // Stale-while-revalidate: answer now, refresh once in the background.
       void this.revalidate(key, q).catch(() => undefined);
@@ -218,6 +252,7 @@ export class PrStatusService {
             this.cache.delete(this.cache.keys().next().value!);
           this.cache.set(key, {
             result,
+            fetchedAt,
             expiresAt: fetchedAt + this.ttlMs,
             staleUntil: fetchedAt + this.ttlMs + this.staleTtlMs,
           });
@@ -291,9 +326,11 @@ export class PrStatusService {
         return { ok: false, ...base, reason: gitlab ? 'glab-not-logged-in' : 'gh-not-logged-in' };
       }
       if (status === 404) return { ok: false, ...base, reason: 'not-found' };
+      const code = (err as { code?: unknown })?.code;
       log.warn('fetch pr status failed', {
         key: `${q.owner}/${q.repo}#${q.prNumber}`,
         status: typeof status === 'number' ? status : undefined,
+        ...(typeof code === 'string' ? { code } : {}),
       });
       return { ok: false, ...base, reason: 'fetch-failed' };
     }

@@ -29,7 +29,7 @@ import { app } from 'electron';
 
 import { remoteInvoke } from '../device-link/index.js';
 import { tryUploadPeerAttachment } from '../device-link/filePeer.js';
-import { MAX_MEDIA_BYTES, removeRemote, uploadLocalFile } from '../device-link/mediaTransfer.js';
+import { MAX_MEDIA_BYTES, removeRemote, uploadLocalFile } from '../device-link/mediaTransfer.desktop.js';
 import { createLogger } from '../logger.js';
 import { packDirectory } from './dir-archive.js';
 import { sendParts } from '../task-migration/transferParts.js';
@@ -57,6 +57,8 @@ export interface DirExportStatus {
 interface Job extends DirExportStatus {
   polledAt: number;
   abort: AbortController;
+  /** The existing background chain, including terminal status and cleanup. */
+  settled?: Promise<void>;
 }
 
 export interface DirExportDeps {
@@ -99,7 +101,7 @@ export function startDirExport(dir: string, controller: string, deps: DirExportD
     if (Date.now() - job.polledAt > ABANDON_MS) job.abort.abort();
   }, ABANDON_MS / 4);
   watchdog.unref?.();
-  void runDirExport(job, dir, controller, deps)
+  job.settled = runDirExport(job, dir, controller, deps)
     .then((file) => finish(id, job, { state: 'done', file }))
     .catch((err) => {
       log.warn('dir export failed', { id, aborted: job.abort.signal.aborted }, err);

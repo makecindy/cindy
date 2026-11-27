@@ -12,7 +12,7 @@ import { createLogger } from '../logger.js';
 import * as authManager from '../authManager.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { isExternalOrganizationByokUser } from './organizationManaged.js';
-import { serverApiFetch, ServerApiError } from '../serverApiClient.js';
+import { serverApiFetch, ServerApiError } from '../serverApiClient.desktop.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import {
@@ -64,7 +64,8 @@ import {
   listExecutableMediaModels,
   resetExecutableMediaModelCache,
 } from './mediaModels.js';
-export { isModelAccessReady } from './readiness.js';
+import { noteModelAccessSyncState } from './readiness.js';
+export { isModelAccessReady, isModelAccessTransientlyUnavailable } from './readiness.js';
 
 const log = createLogger('modelAccess');
 
@@ -419,6 +420,7 @@ function getSync(): CredentialsSync {
       writeXdKey: writeXdKeyWithCodexSideEffect,
       store: getModelAccessCredentialsStore(),
       onStatusChange: (status) => {
+        noteModelAccessSyncState(status.state);
         const auth = authManager.getAuthState();
         noteQuotaCredentialStatus(
           cloudQuotaOwnerKey(auth),
@@ -606,23 +608,23 @@ export function initModelAccess(): void {
   };
   app.on('browser-window-focus', foregroundRefreshListener);
   ipcMain.handle('model-access:get-status', () => getModelAccessStatus());
-  registerByokIpc(ipcMain, {
+  const byokControl = {
     getStatus: () => byok.getStatus(),
     // 设置页的显式刷新不受节流限制,但要记时间戳,避免紧接着的聚焦再拉一轮。
     sync: () => {
       lastByokSyncStartedAt = Date.now();
       return byok.sync();
     },
-  }, assertTrustedAppRendererEvent);
+  };
+  registerByokIpc(ipcMain, byokControl, assertTrustedAppRendererEvent);
 
-  ipcMain.handle('model-access:retry', async (): Promise<ModelAccessStatus> => {
+  const retry = async (): Promise<ModelAccessStatus> => {
     if (!getAppCapabilities().canUseCindyGateway) {
       throwIpcError('PERMISSION_DENIED', 'Cindy AI requires a Cindy account.');
     }
     return statusWithAccountTier(await sync.retry());
-  });
-
-  ipcMain.handle('model-access:rotate', async (): Promise<ModelAccessStatus> => {
+  };
+  const rotate = async (): Promise<ModelAccessStatus> => {
     if (!getAppCapabilities().canUseCindyGateway) {
       throwIpcError('PERMISSION_DENIED', 'Cindy AI requires a Cindy account.');
     }
@@ -631,7 +633,31 @@ export function initModelAccess(): void {
     } catch (err) {
       mapServerError(err);
     }
-  });
+  };
+  ipcMain.handle('model-access:retry', retry);
+  ipcMain.handle('model-access:rotate', rotate);
+  cloudControl = {
+    status: getModelAccessStatus,
+    retry,
+    rotate,
+    byokStatus: byokControl.getStatus,
+    byokRetry: async () => {
+      await byokControl.sync();
+      return byokControl.getStatus();
+    },
+  };
+}
+
+let cloudControl: {
+  status(): ModelAccessStatus;
+  retry(): Promise<ModelAccessStatus>;
+  rotate(): Promise<ModelAccessStatus>;
+  byokStatus(): ReturnType<ReturnType<typeof createByokRuntime>['getStatus']>;
+  byokRetry(): Promise<ReturnType<ReturnType<typeof createByokRuntime>['getStatus']>>;
+} | null = null;
+/** The cloud providers page: the same handlers as this Host's own Settings page. */
+export function cloudModelAccessControl(): NonNullable<typeof cloudControl> | null {
+  return cloudControl;
 }
 
 /** 仅测试:重置单例。 */

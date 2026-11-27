@@ -1,7 +1,9 @@
+import { qualifiedCardPrKey } from '@cindy/maker-shared';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useTranslation } from 'react-i18next';
 import { readGhostCardSupersededBy } from '@cindy/maker-shared/ghost-card-form';
 import {
-  ensureSessionCards,
+  retainLocalCardSession,
   getGhostCardSnapshot,
   subscribeGhostCards,
   type GhostCardSnapshot,
@@ -12,24 +14,23 @@ import { findInstalledGhostByInstanceId } from '../../shared/pluginIdentity';
 
 /** Only cards belonging to this task may operate its follow-up. Never borrow another task's card. */
 export function findSessionPrCard(snapshot: GhostCardSnapshot, sessionId: string, prKey: string) {
-  let match: { callId: string; ghostId: string; html: string } | null = null;
+  let match: { callId: string; ghostId: string; html: string; remote: boolean } | null = null;
   for (const [callId, entry] of snapshot.byCallId) {
     if (
       entry.status !== 'ready' ||
       entry.sessionId !== sessionId ||
-      `github:github.com/${readPrStatusSlotKey(entry.html)}` !== prKey ||
+      qualifiedCardPrKey(readPrStatusSlotKey(entry.html)) !== prKey ||
       readGhostCardSupersededBy(entry.html)
     )
       continue;
-    match = { callId, ghostId: entry.ghostId, html: entry.html };
+    match = { callId, ghostId: entry.ghostId, html: entry.html, remote: !!entry.remote };
   }
-  if (!match) return null;
-  return { ...match, ...projectPrCard(match.html) };
+  return match;
 }
 
 /** Present existing plugin controls without nesting its complete chat card. The
  * original action attributes and call identity remain owned by the card bridge. */
-export function projectPrCard(html: string) {
+export function projectPrCard(html: string, followingLabel: string) {
   const container = document.createElement('div');
   container.innerHTML = html;
   const styles = [...container.querySelectorAll('style')].map((el) => el.outerHTML).join('');
@@ -54,7 +55,16 @@ export function projectPrCard(html: string) {
     actions.style.minHeight = '32px';
     actions.style.justifyContent = 'space-between';
     const live = actions.querySelector('[data-ghost-live-label]');
-    if (live) actions.prepend(live);
+    if (live) {
+      // The plugin stores its own locale in the snapshot. Preserve the live dot
+      // and localize the adjacent text when projecting the active follow controls.
+      const label = live.lastChild;
+      if (actions.querySelector('[data-ghost-action="pr:stop"]') && label?.nodeType === Node.TEXT_NODE) {
+        label.textContent = followingLabel;
+        live.setAttribute('data-ghost-live-label', followingLabel);
+      }
+      actions.prepend(live);
+    }
     // Keep the stop control in the tab order and reserve its space while hidden.
     // The original chat card's selectors target its outer wrapper, absent here.
     summaryHtml =
@@ -67,6 +77,34 @@ export function projectPrCard(html: string) {
     </style>` +
       actions.outerHTML +
       (gear?.outerHTML ?? '');
+  } else {
+    // Another task follows this PR: this task's card is a read-only reference whose
+    // only control is the link to that task. Show the same state and link here.
+    const taskLink = container.querySelector<HTMLButtonElement>(
+      'button[data-ghost-action="pr:open-task"]',
+    );
+    if (taskLink) {
+      let card: Element = taskLink;
+      while (card.parentElement && card.parentElement !== container) card = card.parentElement;
+      // The card header ends with its state, after the last separator of the meta line.
+      const state = [...(card.firstElementChild?.querySelectorAll('span') ?? [])]
+        .map((separator) => separator.nextSibling)
+        .filter((node) => node?.nodeType === Node.TEXT_NODE && node.textContent?.trim())
+        .pop()
+        ?.textContent?.trim();
+      const row = document.createElement('div');
+      row.className = 'pr-summary-actions';
+      row.style.cssText =
+        'display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;min-height:32px';
+      if (state) {
+        const label = document.createElement('div');
+        label.style.cssText = 'padding:0 4px;font-size:13px;color:var(--text-secondary)';
+        label.textContent = state;
+        row.append(label);
+      }
+      row.append(taskLink);
+      summaryHtml = styles + row.outerHTML;
+    }
   }
   let settingsHtml: string | null = null;
   if (settingsPanel) {
@@ -85,16 +123,22 @@ export function projectPrCard(html: string) {
 }
 
 export function useSessionPrCard(sessionId: string, prKey: string, enabled: boolean) {
+  const { t } = useTranslation();
   const snapshot = useSyncExternalStore(subscribeGhostCards, getGhostCardSnapshot);
   useEffect(() => {
-    if (enabled) ensureSessionCards(sessionId);
+    if (enabled) return retainLocalCardSession(sessionId);
   }, [enabled, sessionId]);
   const ghosts = useInstalledGhosts(enabled);
   return useMemo(() => {
     if (!enabled) return null;
     const card = findSessionPrCard(snapshot, sessionId, prKey);
-    if (!card?.summaryHtml) return null;
-    const ghost = findInstalledGhostByInstanceId(ghosts, card.ghostId);
-    return ghost?.enabled && ghost.approval.state === 'approved' ? card : null;
-  }, [snapshot, sessionId, prKey, enabled, ghosts]);
+    if (!card) return null;
+    // A remote task's card belongs to the plugin on that computer, which checks every click itself.
+    if (!card.remote) {
+      const ghost = findInstalledGhostByInstanceId(ghosts, card.ghostId);
+      if (!ghost?.enabled || ghost.approval.state !== 'approved') return null;
+    }
+    const projection = projectPrCard(card.html, t('ccAgent.gitContext.pr.following'));
+    return projection.summaryHtml ? { ...card, ...projection } : null;
+  }, [snapshot, sessionId, prKey, enabled, ghosts, t]);
 }

@@ -1,5 +1,5 @@
 import { PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES } from '@cindy/plugin-protocol';
-import { download, DownloadError } from '../downloader/index.js';
+import { download, DownloadError, type DownloadOptions } from '../downloader/index.js';
 import { createIpcError } from '../../shared/ipc-errors.js';
 import { pluginObjectUrlAllowed, pluginObjectUrlOptions } from './objectUrlPolicy.js';
 
@@ -8,6 +8,8 @@ export async function downloadVerifiedPlugin(
   url: string,
   expected: { sizeBytes: number; sha256: string },
   targetPath: string,
+  /** Display-only progress callbacks; they never change how the package is fetched or checked. */
+  progress?: Pick<DownloadOptions, 'onProgress' | 'onRetry' | 'onVerifying'>,
 ): Promise<void> {
   if (
     !Number.isSafeInteger(expected.sizeBytes) ||
@@ -29,8 +31,10 @@ export async function downloadVerifiedPlugin(
       redirect: 'error',
       resume: false,
       existingTarget: 'error',
-      retry: { maxAttempts: 1 },
+      // Up to 3 tries within the same total budget (user decision 2026-11-17).
+      retry: { maxAttempts: 3 },
       timeout: { connectMs: 60_000, idleMs: 60_000, totalMs: 120_000 },
+      ...progress,
     });
   } catch (error) {
     if (error instanceof DownloadError) {

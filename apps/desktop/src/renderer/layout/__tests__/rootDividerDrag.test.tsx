@@ -9,6 +9,8 @@ import {
 } from '../../panels/BuiltinPanelBridge';
 import { __resetBuiltinPanelsForTest } from '../../panels/builtinPanels';
 import { __resetPanelRegistryForTest, registerPanelKind } from '../../panels/registry';
+import type { BrowserWindow } from 'electron';
+import { SidebarWindowExpansion } from '../../../main/sidebarWindowExpansion';
 import { LayoutRoot } from '../LayoutRoot';
 import { ContentAvailableWidthProvider, usePanelWidth } from '../paneWidths';
 
@@ -414,7 +416,7 @@ it('remembers native edge resizing and reopens at the saved pixel width', async 
   expect((saved.content as SplitNode).children[1].node).toHaveProperty('preferredWidth', 500);
   await act(async () => { rendered.rerender(view(true)); });
   await act(async () => { rendered.rerender(view(false)); });
-  expect(expand).toHaveBeenLastCalledWith(501, undefined);
+  expect(expand).toHaveBeenLastCalledWith(501);
   expect(screen.getByTestId('w-right-tabs').textContent).toContain('calc(100cqw - 700px)');
   // A constrained open/fullscreen resize alone never rewrites the explicit preference.
   const count = setCalls.length;
@@ -422,4 +424,54 @@ it('remembers native edge resizing and reopens at the saved pixel width', async 
   mockPaneWidth('right-tabs', 350);
   fireEvent(window, new Event('resize'));
   expect(setCalls).toHaveLength(count);
+});
+
+// Unit regression for the full open → divider drag → close → reopen path.
+// Existing tests stubbed native growth to zero or never reopened after dragging,
+// so they could not detect a changed total width despite saved panel pixels.
+it('reopens with the same combined width and divider allocation', async () => {
+  const viewport = window.innerWidth;
+  let bounds = { x: 0, y: 0, width: 800, height: 800 };
+  const native = {
+    isDestroyed: () => false, isMaximized: () => false,
+    isFullScreen: () => false, isSimpleFullScreen: () => false,
+    getBounds: () => ({ ...bounds }),
+    setBounds: (next: typeof bounds) => { bounds = next; window.innerWidth = next.width; },
+  } as unknown as BrowserWindow;
+  const controller = new SidebarWindowExpansion();
+  window.innerWidth = bounds.width;
+  window.electronAPI.windowSidebarExpansion = async (width) =>
+    controller.update(native, width, { x: 0, y: 0, width: 3000, height: 1200 });
+  const frames: FrameRequestCallback[] = [];
+  const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+    frames.push(callback); return frames.length;
+  });
+  const view = (collapsed: boolean) => (
+    <BuiltinPanelBridgeProvider value={bridge}><LayoutRoot rightTabsCollapsed={collapsed} /></BuiltinPanelBridgeProvider>
+  );
+  try {
+    const rendered = render(view(true));
+    const root = screen.getByTestId('layout-root-content');
+    root.getBoundingClientRect = () => ({ width: bounds.width }) as DOMRect;
+    const toggle = async (collapsed: boolean) => {
+      await act(async () => { rendered.rerender(view(collapsed)); });
+      act(() => { frames.splice(0).forEach((callback) => callback(0)); });
+    };
+    await toggle(false);
+    const expanded = bounds.width;
+    mockPaneWidth('chat-main', expanded / 2 - 1);
+    mockPaneWidth('right-tabs', expanded / 2);
+    dragDividerLeft(rendered.container, 100);
+    const allocation = screen.getByTestId('w-right-tabs').textContent;
+    const saved = structuredClone(currentLayout);
+    await toggle(true);
+    expect(bounds.width).toBe(800);
+    await toggle(false);
+    expect(bounds.width).toBe(expanded);
+    expect(screen.getByTestId('w-right-tabs').textContent).toBe(allocation);
+    expect(currentLayout).toEqual(saved);
+  } finally {
+    raf.mockRestore();
+    window.innerWidth = viewport;
+  }
 });

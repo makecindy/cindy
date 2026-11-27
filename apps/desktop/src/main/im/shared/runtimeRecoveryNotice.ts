@@ -1,5 +1,5 @@
 import type { Session } from '@cindy/maker-core';
-import { t } from '../../i18n';
+import { t } from '../../i18n.desktop';
 
 // One actual channel owner per runtime. A product terminal does not unsubscribe:
 // retirement can fail afterwards. Runtime termination/replacement releases it.

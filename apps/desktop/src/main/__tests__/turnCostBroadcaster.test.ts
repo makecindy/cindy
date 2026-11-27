@@ -41,7 +41,7 @@ vi.mock('../scheduler-host/runCostLedger.js', () => ({
   applyScheduleRunCostMetaChange: vi.fn(async () => undefined),
   recordScheduleRunCostDirect: vi.fn(async () => null),
 }));
-vi.mock('../messagePersistBroadcaster.js', () => ({
+vi.mock('../messagePersistBroadcaster.desktop.js', () => ({
   enqueueDurableWrite: vi.fn((_label: string, fn: () => unknown) => Promise.resolve(fn())),
 }));
 
@@ -155,6 +155,20 @@ describe('recordTurnCostOnMessage', () => {
     } }, deps);
     expect(patchCalls[0].patch.turnCost).toEqual(usdMoney(1));
     expect(broadcasts[0]).toMatchObject({ userTurnMoney: { amount: 3 }, userTurnCostIsEstimate: true });
+  });
+  // Unit: a USD primary used to hide a CNY charge on both the stored and live message.
+  it('records both actual currencies once and includes earlier segments in the display total', async () => {
+    const { deps, patchCalls, broadcasts } = makeDeps(true, {
+      money: cnyMoney(2), costUsd: 0, hasEstimatedValue: false,
+    });
+    const segment = [usdMoney(1), cnyMoney(3)];
+    await recordSchedulerTurnCost({ ...ARGS, money: segment[0], actualAmounts: segment }, {
+      recordOnMessage: args => recordTurnCostOnMessage(args, deps),
+      recordDirect: vi.fn(),
+    });
+    const details = { actualAmounts: segment, userTurnAmounts: [cnyMoney(5), usdMoney(1)] };
+    expect(patchCalls[0].patch).toMatchObject({ turnCost: usdMoney(1), turnUsageDetails: details });
+    expect(broadcasts[0]).toMatchObject({ turnMoney: usdMoney(1), turnUsageDetails: details });
   });
   it('owner boundary after patch keeps success and suppresses stale broadcast', async () => {
     const { deps, broadcasts } = makeDeps(true);
@@ -690,6 +704,22 @@ describe('recordSchedulerTurnCost', () => {
 
     expect(recordOnMessage).toHaveBeenCalledOnce();
     expect(recordDirect).not.toHaveBeenCalled();
+  });
+
+  // #6777: a shared estimate stays on its message even for a scheduled turn or a rewound message (unit).
+  it('derives a scheduled shared estimate only from a persisted message', async () => {
+    const money = usdMoney(0.42, 'value-estimate');
+    for (const present of [true, false]) {
+      const { deps, broadcasts, runCostCalls } = makeDeps(present);
+      const recordDirect = vi.fn();
+      await recordSchedulerTurnCost({ ...ARGS, money, turnOrigin: schedulerOrigin, requireMessage: true }, {
+        recordOnMessage: args => recordTurnCostOnMessage(args, deps),
+        recordDirect,
+      });
+      expect(broadcasts.map(payload => payload.turnMoney)).toEqual(present ? [money] : []);
+      expect(runCostCalls.map(call => call.next.turnCost)).toEqual(present ? [money] : []);
+      expect(recordDirect).not.toHaveBeenCalled();
+    }
   });
 
   it('owner boundary after message ledger commit does not fall back to direct charging', async () => {

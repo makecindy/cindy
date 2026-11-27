@@ -76,6 +76,13 @@
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import {
+  assertWorkspaceMoveReady,
+  provisionDecoupledWorkspace,
+} from '../workspace-migration/service.js';
+import { readBuddyWorkspaceRootForOwner } from '../buddy-workspace-settings.js';
+
+import { teammateFolderName } from '@cindy/maker-shared/teammate-project';
 
 /** 原子写的临时文件序号,进程内自增 —— 见 writeTextAtomic 里的并发说明。 */
 let writeSeq = 0;
@@ -109,7 +116,7 @@ export class BotProfileFolderError extends Error {
 function botDirName(botId: string): string {
   const trimmed = botId.trim();
   if (!trimmed) throw new BotProfileFolderError('INVALID_ARGS', 'botId required');
-  const safe = trimmed.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^\.+/, '');
+  const safe = teammateFolderName(trimmed);
   if (!safe) {
     throw new BotProfileFolderError('INVALID_ARGS', 'botId is not usable as a directory name');
   }
@@ -131,8 +138,19 @@ export async function ensureBotWorkspaceDir(
   legacyUserDataDir?: string,
 ): Promise<string> {
   await migrateLegacyBotProfileFolder(userDataDir, legacyUserDataDir, botId);
+  await assertWorkspaceMoveReady(userDataDir, botId);
   const workspace = path.join(botProfileDir(userDataDir, botId), 'workspace');
-  await fs.mkdir(workspace, { recursive: true });
+  const existing = await fs.lstat(workspace).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!existing) {
+    const customRoot = await readBuddyWorkspaceRootForOwner(userDataDir);
+    if (customRoot) {
+      return provisionDecoupledWorkspace(userDataDir, botId, customRoot);
+    }
+    await fs.mkdir(workspace, { recursive: true });
+  }
   return workspace;
 }
 
@@ -165,7 +183,7 @@ export async function ensureBotContentDirs(
   await migrateLegacyBotProfileFolder(userDataDir, legacyUserDataDir, botId);
   const home = botProfileDir(userDataDir, botId);
   const workspace = path.join(home, 'workspace');
-  const dirs = [workspace, path.join(home, 'memories'), path.join(home, 'skills')];
+  const dirs = [path.join(home, 'memories'), path.join(home, 'skills')];
   await Promise.all(dirs.map((dir) => fs.mkdir(dir, { recursive: true })));
   return [workspace];
 }

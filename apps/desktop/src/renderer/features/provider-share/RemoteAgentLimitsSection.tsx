@@ -14,6 +14,8 @@ import {
   type RemoteAgentLimitsView,
 } from '../../../shared/remoteAgentLimits';
 import { providerManagementErrorKey, providerShareManagementCommand } from '../provider-group/providerManagement';
+import { SETTINGS_SECTION_TITLE_CLASS } from '@/components/ui/settings-rows';
+import { ResetGroupButton } from '@/components/ui/reset-buttons';
 
 type LimitKey = 'perDevice' | 'total' | 'idleMinutes';
 
@@ -99,7 +101,7 @@ export function RemoteAgentLimitsSection({ deviceId }: { deviceId?: string }) {
 
   return (
     <section className="mt-8 shrink-0" data-testid="remote-agent-limits" aria-labelledby="remote-agent-limits-title">
-      <h3 id="remote-agent-limits-title" className="text-13 font-medium text-[var(--settings-section-title)]">
+      <h3 id="remote-agent-limits-title" className={SETTINGS_SECTION_TITLE_CLASS}>
         {t('providerShare.runLimits.title')}
       </h3>
       <p className="mt-1 text-12 leading-[1.5] text-[var(--settings-section-desc)]">{t('providerShare.runLimits.description')}</p>
@@ -135,7 +137,8 @@ export function RemoteAgentLimitsSection({ deviceId }: { deviceId?: string }) {
           <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">{t('providerShare.runLimits.applyHint')}</p>
           <div className="flex flex-wrap gap-2">
             <Button type="submit" variant="cta" size="sm" disabled={busy || !valid || !changed || Boolean(errorKey)}>{t('providerShare.runLimits.save')}</Button>
-            <Button type="button" variant="secondary" size="sm" disabled={busy || !view.isCustomized || Boolean(errorKey)} onClick={() => void save(true)}>{t('providerShare.runLimits.reset')}</Button>
+            <ResetGroupButton disabled={busy || !view.isCustomized || Boolean(errorKey)} onClick={() => void save(true)}
+              label={t('providerShare.runLimits.reset')} />
           </div>
         </form>
       )}

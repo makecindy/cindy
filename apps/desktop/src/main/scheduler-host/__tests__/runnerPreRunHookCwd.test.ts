@@ -5,10 +5,18 @@
  *     (PR #608 review thread:Resolve heartbeat workdir before running hooks)。
  *   - 显式 workingDir 任务保持原行为,不额外查 meta。
  */
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { Maker } from '@cindy/maker-core';
+import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
 import type { FireContext, Logger, Notifier, Schedule } from '@cindy/maker-scheduler';
+import * as appSessionState from '../../appSessionState.js';
+import * as dialogueRecoveryWorkspace from '../../maker-ipc/dialogueRecoveryWorkspace.js';
+import { worktreeConversationFallbackDir } from '../../maker-ipc/workingDirectoryRecovery.js';
+import { workingDirectoryRecovery } from '../../maker-ipc/workingDirectoryRecovery.desktop.js';
+import { configureUserDataDir, getUserDataDir } from '../../userDataPath.js';
 
 const mocks = vi.hoisted(() => ({
   executePreRunHook: vi.fn(),
@@ -57,7 +65,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner.desktop';
 
 function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
   return {
@@ -100,6 +108,7 @@ function createRunner(getSessionMeta: Maker['getSessionMeta']) {
     getSessionMeta,
     isSessionAlive: vi.fn(() => false),
     closeSession: vi.fn(async () => undefined),
+    recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
   } as unknown as Maker;
   const runner = new MakerScheduleRunner({
     maker,
@@ -373,5 +382,312 @@ describe('MakerScheduleRunner pre-run hook cwd 解析', () => {
     const payloads = mocks.executePreRunHook.mock.calls.map(([options]) => (options as { stdinPayload: Record<string, unknown> }).stdinPayload);
     expect(payloads[0]).toMatchObject({ trigger });
     expect(payloads[1]).not.toHaveProperty('trigger');
+  });
+
+  // Regression (2026-11-26): when a bound task's managed worktree and branch are permanently gone
+  // (`ready === 'gone'`), interactive sends already continue in `dialogues/worktree-recovery/<hash>`,
+  // but scheduled runs threw `Scheduled task worktree could not be restored` on every fire.
+  // Rule: docs/dev-rules/development-workflow.md §2「托管 worktree 不可用时的任务连续性」.
+  describe('bound target with permanently gone managed worktree', () => {
+    const tempRoots: string[] = [];
+    let priorUserDataDir: string;
+    let ownerPathSpy: { mockRestore(): void } | null = null;
+
+    async function setupOwnerRoot(): Promise<{ tempRoot: string; ownerRoot: string }> {
+      priorUserDataDir = getUserDataDir();
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-sched-wt-fallback-'));
+      tempRoots.push(tempRoot);
+      const ownerRoot = path.join(tempRoot, 'owners', 'owner-1');
+      await fs.mkdir(ownerRoot, { recursive: true });
+      configureUserDataDir(tempRoot);
+      ownerPathSpy = vi.spyOn(appSessionState, 'ownerScopedUserDataPath').mockImplementation((...parts: string[]) =>
+        path.join(ownerRoot, ...parts),
+      );
+      return { tempRoot, ownerRoot };
+    }
+
+    afterEach(async () => {
+      workingDirectoryRecovery.clear();
+      ownerPathSpy?.mockRestore();
+      ownerPathSpy = null;
+      if (priorUserDataDir) configureUserDataDir(priorUserDataDir);
+      await Promise.all(tempRoots.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+    });
+
+    it('falls back to the unrestored-worktree conversation workspace for hooks and stays on it in the same runtime', async () => {
+      const { tempRoot, ownerRoot } = await setupOwnerRoot();
+      const sessionId = 'gone-hook-owner';
+      const missingWorktree = path.join(tempRoot, 'repo', '.cindy-worktrees', 'calm-panini');
+      const expectedFallback = worktreeConversationFallbackDir(
+        path.join(ownerRoot, 'dialogues'),
+        sessionId,
+        missingWorktree,
+      );
+      const target = { status: 'active', workingDir: missingWorktree };
+      mocks.getSessionRowSnapshot.mockImplementation(async () => ({ ...target }));
+      mocks.getManagedWorktreeReadinessForSession.mockResolvedValue('gone');
+
+      const { runner, maker } = createRunner(vi.fn(async () => ({ workDir: missingWorktree })) as never);
+
+      await expect(
+        runner.fire(baseSchedule({ targetSessionId: sessionId }), createFireContext()),
+      ).resolves.toMatchObject({ skipped: true });
+      expect(mocks.executePreRunHook).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: expectedFallback,
+          stdinPayload: expect.objectContaining({ workingDir: expectedFallback }),
+        }),
+      );
+      expect((await fs.stat(expectedFallback)).isDirectory()).toBe(true);
+      await expect(fs.stat(missingWorktree)).rejects.toMatchObject({ code: 'ENOENT' });
+
+      // Same process keeps the fallback without re-probing Git worktree restoration.
+      await expect(
+        runner.fire(baseSchedule({ targetSessionId: sessionId }), createFireContext()),
+      ).resolves.toMatchObject({ skipped: true });
+      expect(mocks.getManagedWorktreeReadinessForSession).toHaveBeenCalledTimes(1);
+      expect(mocks.executePreRunHook).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cwd: expectedFallback }),
+      );
+      expect(maker.createSession).not.toHaveBeenCalled();
+    });
+
+    it('starts the bound session in the fallback dir, prepends the recovery note once, and consumes it on accept', async () => {
+      const { tempRoot, ownerRoot } = await setupOwnerRoot();
+      const sessionId = 'gone-send-owner';
+      const missingWorktree = path.join(tempRoot, 'repo', '.cindy-worktrees', 'gone-send');
+      const expectedFallback = worktreeConversationFallbackDir(
+        path.join(ownerRoot, 'dialogues'),
+        sessionId,
+        missingWorktree,
+      );
+      const target = { status: 'active', workingDir: missingWorktree };
+      mocks.getSessionRowSnapshot.mockImplementation(async () => ({ ...target }));
+      mocks.getManagedWorktreeReadinessForSession.mockResolvedValue('gone');
+      mocks.executePreRunHook.mockResolvedValue({
+        status: 'passed',
+        decision: 'run',
+        exitCode: 0,
+        timedOut: false,
+        aborted: false,
+        durationMs: 4,
+        stdout: 'changed',
+        stderr: '',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+      });
+
+      const sentContents: string[] = [];
+      const listeners: Array<(event: AgentEvent) => void> = [];
+      const fakeSession = {
+        id: sessionId,
+        agentKind: 'codex',
+        model: 'gpt-6-astra',
+        workDir: expectedFallback,
+        send: vi.fn(async (msg: { content: string }, opts?: { onAccepted?: () => Promise<void> }): Promise<SessionSendResult> => {
+          sentContents.push(msg.content);
+          await opts?.onAccepted?.();
+          queueMicrotask(() => {
+            for (const listener of [...listeners]) listener({ type: 'done', data: {} });
+          });
+          return { accepted: true };
+        }),
+        onEvent(listener: (event: AgentEvent) => void) {
+          listeners.push(listener);
+          return () => {
+            const idx = listeners.indexOf(listener);
+            if (idx >= 0) listeners.splice(idx, 1);
+          };
+        },
+        abort: vi.fn(async () => undefined),
+        close: vi.fn(async () => undefined),
+      } as unknown as Session;
+
+      const { runner, maker } = createRunner(
+        vi.fn(async () => ({ workDir: missingWorktree, agentKind: 'codex', model: 'gpt-6-astra' })) as never,
+      );
+      (maker.createSession as ReturnType<typeof vi.fn>).mockResolvedValue(fakeSession);
+
+      const schedule = baseSchedule({ targetSessionId: sessionId, model: 'gpt-6-astra' });
+      await runner.fire(schedule, createFireContext());
+
+      expect(maker.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: sessionId, workingDir: expectedFallback }),
+      );
+      expect(sentContents).toHaveLength(1);
+      expect(sentContents[0]).toContain('[Working directory recovery]');
+      expect(sentContents[0]).toContain(JSON.stringify(missingWorktree));
+      expect(sentContents[0]).toContain(JSON.stringify(expectedFallback));
+
+      // Subsequent run in the same process must not repeat the already-consumed recovery note.
+      await runner.fire(schedule, createFireContext());
+      expect(sentContents).toHaveLength(2);
+      expect(sentContents[1]).not.toContain('[Working directory recovery]');
+    });
+
+    it('closes and rebuilds an idle live session on the gone worktree in direct-send mode, and defers while busy', async () => {
+      const { tempRoot, ownerRoot } = await setupOwnerRoot();
+      const sessionId = 'gone-live-owner';
+      const missingWorktree = path.join(tempRoot, 'repo', '.cindy-worktrees', 'gone-live');
+      const expectedFallback = worktreeConversationFallbackDir(
+        path.join(ownerRoot, 'dialogues'),
+        sessionId,
+        missingWorktree,
+      );
+      mocks.getSessionRowSnapshot.mockImplementation(async () => ({
+        status: 'active',
+        workingDir: missingWorktree,
+      }));
+      mocks.getManagedWorktreeReadinessForSession.mockResolvedValue('gone');
+      mocks.executePreRunHook.mockResolvedValue({
+        status: 'passed',
+        decision: 'run',
+        exitCode: 0,
+        timedOut: false,
+        aborted: false,
+        durationMs: 4,
+        stdout: 'changed',
+        stderr: '',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+      });
+
+      let staleTurnRunning = true;
+      const sentByDir: Array<{ workDir: string; content: string }> = [];
+      const makeSession = (workDir: string, isTurnRunning = () => false): Session => {
+        const listeners: Array<(event: AgentEvent) => void> = [];
+        return {
+          id: sessionId,
+          agentKind: 'codex',
+          model: 'gpt-6-astra',
+          workDir,
+          remoteHostId: null,
+          isTurnRunning,
+          send: vi.fn(async (msg: { content: string }, opts?: { onAccepted?: () => Promise<void> }): Promise<SessionSendResult> => {
+            sentByDir.push({ workDir, content: msg.content });
+            await opts?.onAccepted?.();
+            queueMicrotask(() => {
+              for (const listener of [...listeners]) listener({ type: 'done', data: {} });
+            });
+            return { accepted: true };
+          }),
+          onEvent(listener: (event: AgentEvent) => void) {
+            listeners.push(listener);
+            return () => {
+              const idx = listeners.indexOf(listener);
+              if (idx >= 0) listeners.splice(idx, 1);
+            };
+          },
+          abort: vi.fn(async () => undefined),
+          close: vi.fn(async () => undefined),
+        } as unknown as Session;
+      };
+
+      const activeSessions = new Map<string, Session>([
+        [sessionId, makeSession(missingWorktree, () => staleTurnRunning)],
+      ]);
+      const notifier: Notifier = { notify: vi.fn(async () => undefined) };
+      const logger: Logger = { warn: vi.fn(), info: vi.fn(), debug: vi.fn(), error: vi.fn() };
+      const closeSession = vi.fn(async (id: string) => {
+        activeSessions.delete(id);
+      });
+      const createSession = vi.fn(async (opts: { id: string; workingDir: string }) => {
+        // Mirror real Maker.createSession: return an existing active instance unchanged.
+        const existing = activeSessions.get(opts.id);
+        if (existing) return existing;
+        const created = makeSession(opts.workingDir);
+        activeSessions.set(opts.id, created);
+        return created;
+      });
+      const maker = {
+        createSession,
+        getSessionMeta: vi.fn(async () => ({
+          workDir: missingWorktree,
+          agentKind: 'codex',
+          model: 'gpt-6-astra',
+        })),
+        getSession: vi.fn((id: string) => activeSessions.get(id)),
+        isSessionAlive: vi.fn((id: string) => activeSessions.has(id)),
+        listActiveSessions: vi.fn(() => [...activeSessions.values()]),
+        closeSession,
+        recyclePiRuntimeIfResourcesDrifted: vi.fn(async () => false),
+      } as unknown as Maker;
+      const runner = new MakerScheduleRunner({
+        maker,
+        getDb: () => ({}) as never,
+        notifier,
+        logger,
+      });
+
+      const schedule = baseSchedule({ targetSessionId: sessionId, model: 'gpt-6-astra' });
+
+      // While the stale live session is still mid-turn, defer instead of killing the turn or consuming the note.
+      const busyResult = await runner.fire(schedule, createFireContext());
+      expect(busyResult).toMatchObject({ deferred: true });
+      expect(closeSession).not.toHaveBeenCalled();
+      expect(sentByDir).toHaveLength(0);
+      expect(workingDirectoryRecovery.peek(sessionId, missingWorktree)).toContain('[Working directory recovery]');
+
+      // Once idle, close the stale live session and rebuild in the fallback directory before sending.
+      staleTurnRunning = false;
+      await runner.fire(schedule, createFireContext());
+      expect(closeSession).toHaveBeenCalledTimes(1);
+      expect(closeSession).toHaveBeenCalledWith(sessionId, 'runtime-refresh');
+      expect(createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ id: sessionId, workingDir: expectedFallback }),
+      );
+      expect(sentByDir).toHaveLength(1);
+      expect(sentByDir[0]!.workDir).toBe(expectedFallback);
+      expect(sentByDir[0]!.content).toContain('[Working directory recovery]');
+
+      // Subsequent fire reuses the already-rebuilt fallback live session without closing it or repeating the note.
+      await runner.fire(schedule, createFireContext());
+      expect(closeSession).toHaveBeenCalledTimes(1);
+      expect(sentByDir).toHaveLength(2);
+      expect(sentByDir[1]!.workDir).toBe(expectedFallback);
+      expect(sentByDir[1]!.content).not.toContain('[Working directory recovery]');
+    });
+
+    it('fails closed when fallback allocation fails, and checks expectedPreRunWorkingDir against the persisted path', async () => {
+      const { tempRoot, ownerRoot } = await setupOwnerRoot();
+      const missingWorktree = path.join(tempRoot, 'repo', '.cindy-worktrees', 'gone-fail');
+      mocks.getSessionRowSnapshot.mockImplementation(async () => ({ status: 'active', workingDir: missingWorktree }));
+      mocks.getManagedWorktreeReadinessForSession.mockResolvedValue('gone');
+
+      const allocSpy = vi.spyOn(dialogueRecoveryWorkspace, 'allocateDialogueRecoveryWorkspace')
+        .mockRejectedValueOnce(Object.assign(new Error('disk full'), { code: 'ENOSPC' }));
+      const { runner } = createRunner(vi.fn(async () => ({ workDir: missingWorktree })) as never);
+
+      await expect(
+        runner.fire(baseSchedule({ targetSessionId: 'gone-alloc-fail' }), createFireContext()),
+      ).rejects.toThrow(/worktree could not be restored/i);
+      expect(mocks.executePreRunHook).not.toHaveBeenCalled();
+
+      allocSpy.mockRestore();
+
+      const sessionId = 'gone-approval-owner';
+      const expectedFallback = worktreeConversationFallbackDir(
+        path.join(ownerRoot, 'dialogues'),
+        sessionId,
+        missingWorktree,
+      );
+      await expect(
+        runner.fire(baseSchedule({ targetSessionId: sessionId }), {
+          ...createFireContext(),
+          expectedPreRunWorkingDir: path.join(tempRoot, 'other-project'),
+        }),
+      ).rejects.toThrow(/execution directory changed/i);
+      expect(mocks.executePreRunHook).not.toHaveBeenCalled();
+
+      await expect(
+        runner.fire(baseSchedule({ targetSessionId: sessionId }), {
+          ...createFireContext(),
+          expectedPreRunWorkingDir: missingWorktree,
+        }),
+      ).resolves.toMatchObject({ skipped: true });
+      expect(mocks.executePreRunHook).toHaveBeenCalledWith(
+        expect.objectContaining({ cwd: expectedFallback }),
+      );
+    });
   });
 });

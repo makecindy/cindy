@@ -23,6 +23,7 @@ import { parseIsoMs } from './_history_time.js';
 import { stringArrayParam } from './_array-param.js';
 import { encodeCursor, decodeCursor } from './_history_cursor.js';
 import { resolveHistoryScope } from './_history_scope.js';
+import { containsManagedImageReference, HISTORY_IMAGE_VIEW_HINT } from './historyImageHint.js';
 
 const ROLE_VALUES = [
   'user',
@@ -91,8 +92,10 @@ const DESCRIPTION = [
   '  - sessions: { [sessionId]: { workingDir, agentKind, title } } —— 涉及到的 session 元数据,',
   '    按 id 索引一次, 避免在每条 message 上重复(同 session 拉 N 条消息 → 元数据只出现一次)。',
   '  - messages: 数组, 每行字段 id / sessionId / role / content(已 JSON 解析) / createdAt(ISO);',
-  '    可选字段(仅在非 null 时出现): toolUseId / agentMeta(已 JSON 解析) / rewindAt(ISO)。',
+  '    可选字段: clientId（源记录提供时返回）/ toolUseId / agentMeta(已 JSON 解析) / rewindAt(ISO)。',
   '  要拿某条 message 的 workdir / agentKind / title, 用 sessions[message.sessionId] 查。',
+  '【用户消息链接】取目标用户消息的 clientId，在原 sessionUrl 上设置 message 查询参数并保留 device 等现有参数，例如 cindy://session/s1?device=d1&message=c1。',
+  '  示例：const url = new URL(sessionUrl); url.searchParams.set("message", clientId); 使用 url.href。clientId 缺失时引用原任务链接。消息行 id 和 agentMeta.uuid 不能用作消息锚点。',
   '',
   '【分页】游标分页, 默认 200/次, 最大 1000。串联 nextCursor 多次调用拿全量, 信息不丢。',
   '源设备可按完整记录的 64 KiB 软预算提前分页；单条超大记录仍完整返回。limit 是条数上限，继续读 nextCursor，不要按返回条数判断结束。',
@@ -188,7 +191,7 @@ export function registerGetChatHistoryTool(
       ) {
         return errorPayload(
           'HISTORY_SCOPE_DENIED',
-          '请求的任务不在当前伙伴可读取的历史范围内。不要把空结果解释成对方没有回复；请改用伙伴状态或可追踪委派结果。',
+          '请求的任务不在当前伙伴可读取的历史范围内。不要把空结果解释成对方没有回复；请改用伙伴状态或任务摘要（get_task_digest）。',
           { denied_session_ids: scope.deniedSessionIds },
         );
       }
@@ -284,13 +287,16 @@ export function registerGetChatHistoryTool(
           createdAt: new Date(m.createdAt).toISOString(),
         };
         if (m.toolUseId !== null) out.toolUseId = m.toolUseId;
+        if (m.clientId !== undefined) out.clientId = m.clientId;
         if (m.agentMeta !== null && m.agentMeta !== undefined) out.agentMeta = m.agentMeta;
         if (m.rewindAt !== null) out.rewindAt = new Date(m.rewindAt).toISOString();
         return out;
       });
+      const imageViewHint = containsManagedImageReference(messagesOut) ? { image_view_hint: HISTORY_IMAGE_VIEW_HINT } : {};
       return okPayload({
         sessions: sessionsMap,
         messages: messagesOut,
+        ...imageViewHint,
         nextCursor: page.nextCursor ? encodeCursor(page.nextCursor) : null,
         hasMore: page.hasMore,
         query: {

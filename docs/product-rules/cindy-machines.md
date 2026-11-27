@@ -1,7 +1,11 @@
 # Cindy 的机器：账号下的电脑都是它的身体
 
-> 新增或修改 `list_machines`、`maker:machine:status`，或让 Agent 使用多台机器的能力前必须先读本文。
-> 主力电脑、接手与资料随行见 [云端伙伴](cloud-companions.md)。
+> **读取时机**：新增或修改 `list_machines`、`maker:machine:status`，让 Agent 使用多台机器的能力
+> （机器状态、按机器执行），或要为 Agent 的资源使用加上限之前。
+> **适用路径**：`apps/desktop/src/main/machines/**`、`packages/device-link/src/**/machineStatus*`、
+> `packages/lizi-mcps/src/xdt-helper/list_machines.ts`、
+> `packages/lizi-mcps/src/__tests__/listMachinesTool.test.ts`
+> **相关规则**：主力电脑、接手与资料随行见 [云端伙伴](cloud-companions.md)。
 
 ## 1. 产品方向（2026-11-02 用户确认）
 
@@ -50,6 +54,7 @@
 - 协议：`packages/device-link/src/machineStatus.ts`，登记于 `allowlist.ts`（不进共享任务访客白名单）。
 - Desktop：`apps/desktop/src/main/machines/`（`localStatus.ts` 读本机，`sshStatus.ts` 读 SSH，`directory.ts` 汇总），
   工具接线在 `mcp-integrations/mcp-providers.ts`，channel 处理在 `maker-ipc/register.ts`。
+- Node Host 同样在后台链路处理 `maker:machine:status`，CPU、内存和磁盘复用 Desktop 的 `localStatusCore.ts`。桌面 Electron 继续读原有的空闲和电源接口，Node Host 在 macOS 按需读系统状态，其他平台尚无可靠来源时返回 `null`。
 - 工具：`packages/lizi-mcps/src/xdt-helper/list_machines.ts`。
 
 ## 5. 验收注意
@@ -61,3 +66,13 @@
 
 按机器执行（`shell` / `read_file` / `await_shell` / `copy_file`）、账号级模型资源、失败时换到另一台、大脑租约按顺序另行交付，
 不在当前实现内。
+
+## 请求远程控制授权（2026-11-10）
+
+`request_remote_control` 使用 `list_machines` 返回的精确设备 ID 和工作目的，向同账号在线
+电脑发起本机确认。CC/Codex 顶层可见，统一 helper 目录也提供 `devices.remote-consent`
+发现与 `call_tool` 入口（包含 Pi）。共享任务拒绝；手机、SSH、离线与撤权设备不可请求。
+用户点「开启远程控制」后复用现有持久设置与 presence 广播；提示说明运行任务、访问文件
+及持续有效的范围。Agent 等明确 enabled 后继续原工作，其余结果不授予权限。
+旧版／网络无响应如实报告，不猜测已批准，也不自动重复弹窗。拒绝、到期、并发请求与重复
+请求的处理见 [协议说明](../dev-rules/protocol-compatibility/device-link-remote-control-consent.md)。

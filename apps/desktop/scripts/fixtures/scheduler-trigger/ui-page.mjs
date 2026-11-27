@@ -5,10 +5,15 @@ export default {
   real: 'ScheduleFormDialog, form state, Webhook fields, Collapse, segmented controls, dialog positioning and theme',
   notCovered: 'Fixture catalogs/account; model and project picker buttons are placeholders. No server writes.',
   stubs: {
-    'src/renderer/contexts/AuthContext': 'export const useOptionalDataOwnerGeneration = () => 0;',
-    'src/renderer/hooks/useAgentCapabilities': './catalog-hooks.ts',
+    'src/renderer/contexts/AuthContext': { partial: 'export const useOptionalDataOwnerGeneration = () => 0; export const useOptionalAuthUser = () => null;' },
+    'src/renderer/hooks/useAgentCapabilities': {
+      partial: `export { getCachedCapabilities, evictDeviceCapabilities, prefetchDeviceCapabilities,
+        refreshLocalCapabilities, useAgentCapabilities } from './scripts/fixtures/scheduler-trigger/catalog-hooks';`,
+    },
     'src/renderer/hooks/useProviders': './catalog-hooks.ts',
-    'src/renderer/hooks/useDeviceProviders': './catalog-hooks.ts',
+    'src/renderer/hooks/useDeviceProviders': {
+      partial: "export { useDeviceProviders } from './scripts/fixtures/scheduler-trigger/catalog-hooks';",
+    },
     'src/renderer/hooks/useFeishuBot': 'export const useFeishuBot = () => ({status: "disconnected"});',
     'src/renderer/hooks/useWecomGroupNotificationSettings': 'export const useWecomGroupNotificationSettings = () => ({});',
     'src/renderer/hooks/useProjectPickerOptions': 'export const useProjectPickerOptions = () => [];',
@@ -16,35 +21,135 @@ export default {
     'src/renderer/lib/sessionService': 'export const resolveReferences = async () => [];',
     'src/renderer/features/scheduler/components/BoundSessionCard': 'export const BoundSessionCard = () => null;',
     'src/renderer/features/scheduler/components/TemplateGallery': 'export const TemplateGallery = () => null;',
-    'src/renderer/features/scheduler/components/ScheduleChips': `import React from 'react'; const chip = label => React.createElement('button', {type: 'button', style: {height: 34}}, label); export const ProjectChip = () => chip('对话'); export const ModelEffortChip = () => chip('Codex'); export const ScheduleChip = () => chip('09:00'); export const ScheduleSettingsButton = () => null; export const ThreadPickerInline = () => null;`,
+    'src/renderer/features/scheduler/components/ScheduleChips': `import React from 'react'; const chip = label => React.createElement('button', {type: 'button', style: {height: 34}}, label); export const ProjectChip = () => chip('对话'); export const ModelEffortChip = () => chip('Codex'); export const ScheduleChip = ({intervalMs}) => chip(intervalMs === 300000 ? '每 5 分钟' : '09:00'); export const ScheduleSettingsButton = () => null; export const ThreadPickerInline = () => null;`,
   },
-  cases: { default: { about: 'Webhook → 手动 → 定时 → Webhook，弹窗及触发选择器不跳动' },
+  cases: { 'gitlab-plugin-project': { about: '装了 GitLab 插件：整个项目默认「通过 GitLab 插件」，填项目、勾事件，不需要 Webhook' },
+    'gitlab-plugin-issue': { about: '装了 GitLab 插件：指定 Issue 默认通过插件，条件多「有新评论」' }, 'gitlab-mr': { about: 'GitLab 指定 MR：粘贴链接，状态变化才运行，自动打开定时检查' }, 'gitlab-issue': { about: 'GitLab 指定 Issue：#编号 / 链接，需要选签名方式' }, 'single-issue': { about: '同一个输入框填 owner/repo#7，识别为 Issue 后条件换成 Issue 的选项' }, 'single-pr': { about: '在「事件」的 GitHub 里选择「指定 PR」并配置定时补查' }, 'script-settings': { about: '现有脚本能力选择器分别显示成员与用量读取及完整范围说明' },
+    default: { about: 'Webhook → 手动 → 定时 → Webhook，弹窗及触发选择器不跳动' },
     create: { about: '新建表单使用相同的稳定切换布局' },
-    scrolled: { about: '小窗口滚动后切换触发方式，配置区收起不拉回滚动位置', viewport: { width: 780, height: 620 } } },
+    scrolled: { about: '小窗口滚动后切换触发方式，配置区收起不拉回滚动位置', viewport: { width: 780, height: 620 } },
+    expanded: { about: '四十行提示词：卡片仍是原来的三行并滚动，展开编辑铺满弹窗，收起后回到卡片' } },
   async ready(page) {
+    const scriptLabel = await page.evaluate(() => window.__uiPage.ctx.case === 'script-settings'
+      ? window.__uiPage.t('scheduler.editor.script.capabilitiesLabel') : null);
+    if (scriptLabel) {
+      await page.getByRole('button', { name: scriptLabel, exact: true }).waitFor();
+      return;
+    }
     const label = await page.evaluate(() => window.__uiPage.t('scheduler.editor.webhook.eventPicker.choose'));
     await page.getByRole('button', { name: label, exact: true }).waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'gitlab-plugin-project' || ui.case === 'gitlab-plugin-issue') {
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.trigger.event'), exact: true }).click();
+      await page.getByRole('combobox', { name: await ui.t('scheduler.editor.webhook.sourceLabel'), exact: true }).click();
+      await page.getByRole('option', { name: 'GitLab', exact: true }).click();
+      if (ui.case === 'gitlab-plugin-issue') {
+        await page.getByRole('radio', { name: await ui.t('scheduler.editor.webhook.scope.gitlabItem'), exact: true }).check();
+        await page.getByRole('textbox', { name: await ui.t('scheduler.editor.webhook.gitlabItem.label') }).fill('https://gitlab.example.com/group/app/-/issues/3');
+      } else {
+        await page.getByRole('textbox', { name: await ui.t('scheduler.editor.webhook.gitlabPlugin.projectLabel') }).fill('https://gitlab.example.com/group/app');
+        await page.getByRole('checkbox', { name: 'MR 已合并', exact: true }).check();
+      }
+      const plugin = page.getByRole('radio', { name: await ui.t('scheduler.editor.webhook.gitlabPluginConnection'), exact: true });
+      assert.equal(await plugin.isChecked(), true, 'GitLab plugin is the default connection');
+      await page.locator('[data-schedule-form-fields]').evaluate(panel => {
+        const label = window.__uiPage.t('scheduler.editor.trigger.label');
+        [...panel.querySelectorAll('[role="radiogroup"]')].find(el => el.getAttribute('aria-label') === label)?.scrollIntoView({ block: 'start' });
+      });
+      await ui.capture(ui.case);
+      // The fields below the connection: project + events, or the issue's conditions.
+      await page.getByText(await ui.t(ui.case === 'gitlab-plugin-issue'
+        ? 'scheduler.editor.webhook.gitlabItem.issuePluginHint' : 'scheduler.editor.webhook.gitlabPlugin.eventsHint'), { exact: true })
+        .evaluate(el => el.scrollIntoView({ block: 'end' }));
+      await ui.capture(`${ui.case}-fields`);
+      return;
+    }
+    if (ui.case === 'gitlab-mr' || ui.case === 'gitlab-issue') {
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.trigger.event'), exact: true }).click();
+      await page.getByRole('combobox', { name: await ui.t('scheduler.editor.webhook.sourceLabel'), exact: true }).click();
+      await page.getByRole('option', { name: 'GitLab', exact: true }).click();
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.webhook.scope.gitlabItem'), exact: true }).check();
+      await page.getByRole('textbox', { name: await ui.t('scheduler.editor.webhook.gitlabItem.label') }).fill(ui.case === 'gitlab-mr'
+        ? 'https://gitlab.example.com/group/app/-/merge_requests/12' : 'https://gitlab.example.com/group/app/-/issues/3');
+      await page.getByText(await ui.t(`scheduler.editor.webhook.gitlabItem.${ui.case === 'gitlab-mr' ? 'mrHint' : 'issueHint'}`), { exact: true }).waitFor();
+      await page.locator('[data-schedule-form-fields]').evaluate(panel => {
+        const label = window.__uiPage.t('scheduler.editor.trigger.label');
+        [...panel.querySelectorAll('[role="radiogroup"]')].find(el => el.getAttribute('aria-label') === label)?.scrollIntoView({ block: 'start' });
+      });
+      await ui.capture(ui.case);
+      await page.getByText(await ui.t(`scheduler.editor.webhook.gitlabItem.${ui.case === 'gitlab-mr' ? 'mrHint' : 'issueHint'}`), { exact: true }).scrollIntoViewIfNeeded();
+      await ui.capture(`${ui.case}-conditions`);
+      return;
+    }
+    if (ui.case === 'single-issue') {
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.trigger.event'), exact: true }).click();
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.webhook.scope.item'), exact: true }).check();
+      await page.getByRole('textbox', { name: await ui.t('scheduler.editor.webhook.item.label') }).fill('example/project#7');
+      await page.getByText(await ui.t('scheduler.editor.webhook.item.issueHint'), { exact: true }).waitFor();
+      await page.getByText(await ui.t('scheduler.editor.webhook.item.resolving'), { exact: true }).waitFor({ state: 'detached' });
+      await page.locator('[data-schedule-form-fields]').evaluate(panel => {
+        const label = window.__uiPage.t('scheduler.editor.trigger.label');
+        [...panel.querySelectorAll('[role="radiogroup"]')].find(el => el.getAttribute('aria-label') === label)?.scrollIntoView({ block: 'start' });
+      });
+      await ui.capture('issue-item');
+      return;
+    }
+    if (ui.case === 'single-pr') {
+      // 2026-11-24: a single PR is chosen as an event source, not a separate trigger mode.
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.trigger.event'), exact: true }).click();
+      await page.getByRole('radio', { name: await ui.t('scheduler.editor.webhook.scope.item'), exact: true }).check();
+      await page.getByRole('textbox', { name: await ui.t('scheduler.editor.webhook.item.label') }).fill('https://github.com/example/project/pull/42');
+      await page.getByText(await ui.t('scheduler.prTrigger.timed'), { exact: true }).click();
+      await page.getByText(await ui.t('scheduler.editor.webhook.item.resolving'), { exact: true }).waitFor({ state: 'detached' });
+      await page.locator('[data-schedule-form-fields]').evaluate(panel => {
+        const label = window.__uiPage.t('scheduler.editor.trigger.label');
+        const group = [...panel.querySelectorAll('[role="radiogroup"]')].find(el => el.getAttribute('aria-label') === label);
+        group?.scrollIntoView({ block: 'start' });
+      });
+      await ui.capture('pull-request-trigger');
+      return;
+    }
+    if (ui.case === 'script-settings') {
+      // Script read scope: render the real selector; unit broker tests cannot
+      // prove translated labels, descriptions and popup geometry remain usable.
+      const label = await ui.t('scheduler.editor.script.capabilitiesLabel');
+      const trigger = page.getByRole('button', { name: label, exact: true });
+      assert.ok((await trigger.textContent()).includes(await ui.t('scheduler.editor.script.capabilities.settings_read')));
+      await trigger.click();
+      await page.getByText(await ui.t('scheduler.editor.script.capabilityDescs.settings_read'), { exact: true }).scrollIntoViewIfNeeded();
+      await ui.capture('settings-read');
+      await page.getByText(await ui.t('scheduler.editor.script.capabilityDescs.usage_read'), { exact: true }).scrollIntoViewIfNeeded();
+      await ui.capture('usage-read');
+      return;
+    }
+    // Issue #10224: the compact field still shows the original three lines; a long
+    // prompt scrolls inside it, and the expand button above it opens a large editor.
+    const promptField = page.getByRole('textbox', { name: await ui.t('scheduler.editor.fields.prompt'), exact: true });
+    const prompt = await promptField.evaluate((el) => ({
+      height: el.getBoundingClientRect().height, clientHeight: el.clientHeight, scrollHeight: el.scrollHeight,
+    }));
+    console.log(`prompt field: ${JSON.stringify(prompt)}`);
+    assert.ok(prompt.height <= 60, `Compact prompt field is taller than its original three lines: ${JSON.stringify(prompt)}`);
     // Regression: the previous centered, content-sized dialog shrank immediately
     // when Webhook fields unmounted, then grew while run settings expanded.
     // jsdom form tests cannot observe rendered geometry; sample actual paint frames.
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     for (const [key, capture] of [['scheduler.editor.fields.manually', 'manual'],
-      ['scheduler.editor.trigger.timed', 'timed'], ['scheduler.cell.tagWebhook', 'webhook']]) {
+      ['scheduler.editor.trigger.timed', 'timed'], ['scheduler.editor.trigger.event', 'webhook']]) {
       const label = await ui.t(key);
       const choice = page.getByRole('radio', { name: label, exact: true });
       // UI regression: removing Webhook fields used to clamp scrollTop and move
       // this control by 144px in a short window. Start measuring after the user
       // has scrolled the control into view, not before Playwright's auto-scroll.
       await choice.scrollIntoViewIfNeeded();
-      await choice.evaluate((element, triggerLabel) => {
+      await choice.evaluate((element, { triggerLabel, promptElement }) => {
         const frames = []; window.__triggerFrames = frames; window.__triggerFramesDone = false;
         const sample = () => {
           const box = document.querySelector('[role="dialog"]').getBoundingClientRect();
           const trigger = [...document.querySelectorAll('[role="radiogroup"]')]
             .find(el => el.getAttribute('aria-label') === triggerLabel).getBoundingClientRect();
-          const prompt = document.querySelector('textarea').getBoundingClientRect();
+          const prompt = promptElement.getBoundingClientRect();
           frames.push({y: box.y, height: box.height, triggerY: trigger.y, triggerX: trigger.x, promptY: prompt.y});
         };
         sample();
@@ -55,7 +160,7 @@ export default {
             else window.__triggerFramesDone = true;
           }; tick();
         }, {once: true});
-      }, await ui.t('scheduler.editor.trigger.label'));
+      }, { triggerLabel: await ui.t('scheduler.editor.trigger.label'), promptElement: await promptField.elementHandle() });
       await choice.click();
       await page.waitForFunction(() => window.__triggerFramesDone);
       const frames = await page.evaluate(() => window.__triggerFrames);
@@ -69,13 +174,13 @@ export default {
     }
     if (ui.case === 'scrolled') {
       await page.getByRole('radio', { name: await ui.t('scheduler.editor.fields.manually'), exact: true }).click();
-      await page.getByRole('tabpanel').evaluate((panel) => {
+      await page.locator('[data-schedule-form-fields]').evaluate((panel) => {
         panel.parentElement.parentElement.scrollTop = 0;
       });
       // The scroll anchor must not leave a permanently long, empty form after
       // the user scrolls back up. Compare actual content bounds, not CSS values.
       await page.waitForFunction(() => {
-        const panel = document.querySelector('[role="tabpanel"]');
+        const panel = document.querySelector('[data-schedule-form-fields]');
         const content = panel.parentElement;
         const viewport = content.parentElement;
         const naturalBottom = panel.getBoundingClientRect().bottom - viewport.getBoundingClientRect().top
@@ -84,6 +189,31 @@ export default {
           && Math.abs(viewport.scrollHeight - Math.max(viewport.clientHeight, naturalBottom)) <= 1;
       });
       await ui.capture('manual-scrolled-back');
+    }
+    if (ui.case === 'expanded') {
+      assert.ok(prompt.scrollHeight > prompt.clientHeight,
+        `Long prompt must scroll inside the compact field: ${JSON.stringify(prompt)}`);
+      const expand = await ui.t('scheduler.editor.promptDialog.expandPrompt');
+      await page.getByRole('button', { name: expand, exact: true }).click();
+      const panel = page.getByRole('group', { name: await ui.t('scheduler.editor.fields.prompt'), exact: true });
+      await panel.waitFor();
+      // Exactly one field may exist while expanded: a second, covered textarea
+      // would take Tab and be announced twice.
+      assert.equal(await page.locator('textarea').count(), 1);
+      const field = await panel.locator('textarea').evaluate((el) => ({
+        height: el.getBoundingClientRect().height, value: el.value.length,
+      }));
+      console.log(`expanded prompt field: ${JSON.stringify(field)}`);
+      assert.ok(field.height >= 360, `Expanded editor is not the full panel height: ${JSON.stringify(field)}`);
+      assert.ok(field.value > 0, 'Expanded editor lost the prompt text');
+      await ui.capture('expanded');
+      const collapse = await ui.t('scheduler.editor.promptDialog.collapsePrompt');
+      await page.getByRole('button', { name: collapse, exact: true }).click();
+      await panel.waitFor({ state: 'detached' });
+      const back = await promptField.evaluate((el) => ({ height: el.getBoundingClientRect().height }));
+      assert.ok(back.height <= 60, `Collapsing did not restore the compact field: ${JSON.stringify(back)}`);
+      // Focus returns to the entry button instead of restarting at the top.
+      assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), expand);
     }
   },
 };

@@ -5,7 +5,7 @@ const f = vi.hoisted(() => ({ realpath: vi.fn(), stat: vi.fn(), canRead: vi.fn()
 vi.mock('node:fs/promises', () => ({ default: { stat: f.stat, realpath: f.realpath } }));
 vi.mock('../../cindy-media/taskImageDelivery.js', () => ({ materializeTaskImageTextResult: f.materialize }));
 vi.mock('../../cindy-media/ledger.js', () => ({ sessionCanRead: f.canRead }));
-vi.mock('../../cindy-media/blobStore.js', async original => ({ ...await original<typeof import('../../cindy-media/blobStore.js')>(), resolveSafe: f.resolve }));
+vi.mock('../../cindy-media/blobStore.desktop.js', async original => ({ ...await original<typeof import('../../cindy-media/blobStore.desktop.js')>(), resolveSafe: f.resolve }));
 vi.mock('../../localDb/client/current.js', () => ({ getDbClient: () => ({ drizzle: f.db }) }));
 import { materializeTaskImageMarkdown } from '../../cindy-media/taskImageMarkdown.js';
 import { prepareChatReplyImages } from '../chatServerReplyImages.js';
@@ -87,6 +87,16 @@ describe('generated reply image attachments', () => {
     expect(result.attachments.map(image => image.url)).toEqual([url, other]);
     expect(result.text).toBe(source);
     expect(f.canRead.mock.calls.map(call => call[0])).toEqual(['a'.repeat(64), 'b'.repeat(64)]);
+  });
+  // #11712, unit: the group reply preparer omitted managed MP4 nodes from attachments.
+  it('delivers a task-owned video once and refuses it when the task loses ownership', async () => {
+    const video = url.replace('.png', '.mp4');
+    const source = rich({ kind: 'video', props: { src: video } }, { kind: 'video', props: { src: video } });
+    f.resolve.mockReturnValue({ absPath: path.resolve('fixture', 'video.mp4'), mimeType: 'video/mp4' });
+    const result = await prepareChatReplyImages(source, 'lane', vi.fn());
+    expect(result.attachments).toEqual([expect.objectContaining({ url: video, mimeType: 'video/mp4', path: null })]);
+    f.canRead.mockResolvedValue(false);
+    await expect(prepareChatReplyImages(source, 'lane', vi.fn())).rejects.toThrow('ATTACHMENT_UNAVAILABLE');
   });
   it('ignores code/text/src examples while collecting real image nodes', async () => {
     const source = rich(

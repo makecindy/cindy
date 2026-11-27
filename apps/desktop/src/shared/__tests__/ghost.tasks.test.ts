@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   diffGhostPermissionItems,
+  diffInstalledGhostPermissionItems,
+  type InstalledGhost,
   ghostDeclaresHiddenTasks,
+  ghostDeclaresModelPreferences,
   ghostManifestToLegacyV2DigestFormat,
   ghostPermissionItems,
   validateGhostManifest,
@@ -18,6 +21,24 @@ const base = {
   version: '1.0.0',
   entry: 'main.js',
 };
+
+describe('independent change-check permission', () => {
+  it('keeps an old declaration unapproved when the host gains support', () => {
+    const parsed = validateGhostManifest({ ...base, agent: { checks: true, checkSources: ['mail'] } });
+    if (!parsed.ok) throw new Error(parsed.reason);
+    const installed = { manifest: parsed.manifest, approval: { state: 'approved', revision: 'fixture' } } as InstalledGhost;
+    expect(diffInstalledGhostPermissionItems(installed, parsed.manifest).added.map(item => item.key)).toEqual(['agent:checks']);
+    expect(diffInstalledGhostPermissionItems({ ...installed, checksCapabilityApproved: true }, parsed.manifest).added).toEqual([]);
+  });
+
+  it.each([
+    { checks: 'yes' }, { checkSources: ['mail'] }, { checks: true, checkSources: [] },
+    { checks: true, checkSources: ['mail', 'mail'] }, { checks: true, checkSources: ['bad/source'] },
+    { checks: true, checkSources: Array.from({ length: 17 }, (_, i) => `source-${i}`) },
+  ])('rejects invalid new check declarations: %j', agent => {
+    expect(validateGhostManifest({ ...base, agent }).ok).toBe(false);
+  });
+});
 describe('plugin tasks permission compatibility', () => {
   it('adds a distinct permission without changing old errand permissions', () => {
     const old = validateGhostManifest({ ...base, agent: { errand: true } });
@@ -153,6 +174,32 @@ it('declares observe as its own permission without requiring tasks', () => {
   if (!installed.ok) throw new Error('historical plugin disabled');
   expect(installed.manifest.agent).toEqual({ observe: 'yes' });
   expect(ghostPermissionItems(installed.manifest).some(item => item.key === 'agent:observe')).toBe(false);
+});
+
+// unit: model favorites/recents access (agent.modelPreferences) is its own permission line, so adding it
+// on update is a permission increase; existing installs without it, or with an old non-boolean value,
+// still validate unchanged and are not granted it (plugin-security §5 red line).
+it('declares modelPreferences as its own permission and keeps existing installs unchanged', () => {
+  const standalone = validateGhostManifest({ ...base, agent: { modelPreferences: true } });
+  if (!standalone.ok) throw new Error(standalone.reason);
+  expect(standalone.manifest.agent).toEqual({ modelPreferences: true });
+  expect(ghostDeclaresModelPreferences(standalone.manifest)).toBe(true);
+  expect(ghostPermissionItems(standalone.manifest).find(item => item.key === 'agent:model-preferences'))
+    .toMatchObject({ kind: 'agent', labelKey: 'agentModelPreferences', detailKey: 'agentModelPreferencesDetail' });
+  const previous = validateGhostManifest({ ...base, agent: { tasks: true } });
+  const next = validateGhostManifest({ ...base, agent: { tasks: true, modelPreferences: true } });
+  if (!previous.ok || !next.ok) throw new Error('invalid fixture');
+  expect(diffGhostPermissionItems(previous.manifest, next.manifest).added.map(item => item.key)).toEqual(['agent:model-preferences']);
+  expect(validateGhostManifest({ ...base, agent: { modelPreferences: 'yes' } }).ok).toBe(false);
+  for (const agent of [{ tasks: true }, { modelPreferences: 'yes' }]) {
+    const installed = validateInstalledGhostManifest({ ...base, agent });
+    if (!installed.ok) throw new Error('existing plugin disabled');
+    expect(installed.manifest.agent).toEqual(agent);
+    expect(ghostDeclaresModelPreferences(installed.manifest)).toBe(false);
+    expect(ghostPermissionItems(installed.manifest).some(item => item.key === 'agent:model-preferences')).toBe(false);
+    const again = validateNormalizedGhostManifest(ghostManifestToAuthorFormat(installed.manifest));
+    expect(again.ok && again.manifest).toEqual(installed.manifest);
+  }
 });
 
 // unit: companion viewing is standalone and never widens an existing tasks/targets/observe grant.

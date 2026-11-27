@@ -189,7 +189,7 @@ describe('createByokImageChannel', () => {
       size: '1536x1024',
     });
 
-    origin = 'https://gateway-rotated.example.invalid';
+    origin = 'https://gateway-rotated.example.invalid/v1/';
     await channel.generateImage({
       model: MODEL,
       prompt: '一只猫',
@@ -356,7 +356,8 @@ describe('Art BYOK image channel host wiring', () => {
     expect(body).toContain('registerByokImageChannels');
     expect(body).toContain("readByokCredential(providerId, 'image')");
     expect(body).toContain('readByokInferenceBase(providerId)');
-    expect(body).toContain("registry.register('xd'");
+    // XD requests now use the Server operation through Core, without a second channel.
+    expect(body).not.toContain("registry.register('xd'");
     expect(body).toContain("registry.register('openai'");
     expect(body).toMatch(/registry\.register\(\s*'gemini'/);
     expect(body).toMatch(/registry\.register\(\s*'xai'/);

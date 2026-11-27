@@ -14,8 +14,18 @@ vi.mock('../logger.js', () => ({
 
 import type { BrowserWindow } from 'electron';
 import {
+  fitMacBackdropToWindow,
+  fitWindowsBackdropToWindow,
+  isMacTransparentWindow,
+  isWindowsTransparentWindow,
+  markMacTransparentWindow,
+  markWindowsTransparentWindow,
+  needsMacTransparentWindow,
+  needsWindowsTransparentWindow,
+  resolveMacWindowTransparent,
   resolveVibrancyConfig,
   resolveWindowVibrancyConfig,
+  resolveWindowsWindowTransparent,
   setWindowWallpaperCovered,
   setWindowDesktopBlur,
 } from '../vibrancyConfig';
@@ -156,7 +166,7 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
     process.env.XDT_BACKDROP_MATERIAL = 'none';
     expect(
       resolveVibrancyConfig('cindy', false, 'win32', {
-        getSystemVersion: () => '10.0.22000',
+        getSystemVersion: () => '10.0.22621',
       }),
     ).toEqual({
       vibrancy: null,
@@ -188,6 +198,17 @@ describe('E4D resolveVibrancyConfig(familyId→vibrancy/backgroundColor 映射)'
     expect(
       resolveVibrancyConfig('cindy', false, 'win32', {
         getSystemVersion: () => '10.0.19045',
+      }),
+    ).toEqual({
+      vibrancy: null,
+      backgroundColor: '#f8f8f6',
+      backgroundMaterial: 'none',
+    });
+    // Windows 11 21H2 has no Electron system backdrop: keep the opaque surface instead
+    // of a translucent Acrylic backing without its material.
+    expect(
+      resolveVibrancyConfig('cindy', false, 'win32', {
+        getSystemVersion: () => '10.0.22000',
       }),
     ).toEqual({
       vibrancy: null,
@@ -263,4 +284,123 @@ it('keeps desktop blur per window and restores it after removing artwork', () =>
   }).backgroundMaterial).toBe('acrylic');
   setWindowDesktopBlur(win, null);
   expect(resolveWindowVibrancyConfig(win, 'default', true, 'darwin').backgroundColor).toBe('#1f1f1e');
+});
+
+// Regression (2026-11-11, Windows 11 build 26200): the main window was created transparent and
+// carried Acrylic. Each time any desktop window was shown or hidden, DWM stopped drawing what was
+// behind it for a few frames and the sidebar flashed to a flat dark fill. Earlier tests only
+// covered the material and backing, never which kind of window carries them.
+describe('Windows transparent window vs system backdrop', () => {
+  const win11 = { getSystemVersion: () => '10.0.22631' };
+  const win10 = { getSystemVersion: () => '10.0.19045' };
+  const acrylic = resolveVibrancyConfig('cindy', true, 'win32', win11);
+  const clearDesktop = resolveVibrancyConfig('cindy', true, 'win32', { ...win11, desktopBlur: 0 });
+  const blurredDesktop = resolveVibrancyConfig('cindy', true, 'win32', { ...win11, desktopBlur: 8 });
+  const opaque = resolveVibrancyConfig('eclipse', true, 'win32', win11);
+
+  it('only a clear desktop needs a transparent window', () => {
+    expect(needsWindowsTransparentWindow(acrylic)).toBe(false);
+    expect(needsWindowsTransparentWindow(blurredDesktop)).toBe(false);
+    expect(needsWindowsTransparentWindow(opaque)).toBe(false);
+    expect(needsWindowsTransparentWindow(clearDesktop)).toBe(true);
+  });
+
+  it('creates a regular window whenever a system backdrop is shown', () => {
+    expect(resolveWindowsWindowTransparent(acrylic, undefined, win11)).toBe(false);
+    expect(resolveWindowsWindowTransparent(acrylic, false, win11)).toBe(false);
+    expect(resolveWindowsWindowTransparent(opaque, undefined, win11)).toBe(false);
+  });
+
+  it('creates a transparent window when the last session needed a clear desktop', () => {
+    expect(resolveWindowsWindowTransparent(acrylic, true, win11)).toBe(true);
+    expect(resolveWindowsWindowTransparent(clearDesktop, undefined, win11)).toBe(true);
+  });
+
+  it('keeps transparent windows where no system backdrop exists', () => {
+    const win10Default = resolveVibrancyConfig('cindy', true, 'win32', win10);
+    expect(win10Default.backgroundMaterial).toBe('none');
+    expect(resolveWindowsWindowTransparent(win10Default, undefined, win10)).toBe(true);
+  });
+
+  it('keeps a regular window frosted when a clear desktop is requested mid-session', () => {
+    expect(fitWindowsBackdropToWindow(clearDesktop, false, win11)).toEqual({
+      ...clearDesktop,
+      backgroundMaterial: 'acrylic',
+    });
+    expect(fitWindowsBackdropToWindow(clearDesktop, true, win11)).toBe(clearDesktop);
+    expect(fitWindowsBackdropToWindow(acrylic, false, win11)).toBe(acrylic);
+    expect(fitWindowsBackdropToWindow(opaque, false, win11)).toBe(opaque);
+  });
+
+  it('remembers which windows were created transparent', () => {
+    const transparent = {} as BrowserWindow;
+    const regular = {} as BrowserWindow;
+    markWindowsTransparentWindow(transparent);
+    expect(isWindowsTransparentWindow(transparent)).toBe(true);
+    expect(isWindowsTransparentWindow(regular)).toBe(false);
+  });
+});
+
+// Regression (#11670, macOS 27.2.1 + 4K HiDPI): creating every macOS BrowserWindow with
+// `transparent: true` forced NSWindow.backgroundColor to clearColor, causing ~7-10x higher
+// WindowServer GPU usage even for default CINDY vibrancy and opaque themes. Earlier tests only
+// covered vibrancyConfig outputs and Windows window transparency, never macOS window creation
+// or mid-session desktop-blur fallback on a regular window.
+describe('macOS transparent window vs system vibrancy (#11670)', () => {
+  const hud = resolveVibrancyConfig('cindy', true, 'darwin');
+  const opaque = resolveVibrancyConfig('eclipse', true, 'darwin');
+  const wallpaper = resolveVibrancyConfig('cindy', true, 'darwin', { wallpaperCovered: true });
+  const clearDesktop = resolveVibrancyConfig('cindy', true, 'darwin', { desktopBlur: 0 });
+  const blurredDesktop = resolveVibrancyConfig('cindy', true, 'darwin', { desktopBlur: 8 });
+
+  it('only custom desktop-blur or unblurred see-through modes need a transparent window', () => {
+    expect(needsMacTransparentWindow(hud)).toBe(false);
+    expect(needsMacTransparentWindow(opaque)).toBe(false);
+    expect(needsMacTransparentWindow(wallpaper)).toBe(false);
+    expect(needsMacTransparentWindow(clearDesktop)).toBe(true);
+    expect(needsMacTransparentWindow(blurredDesktop)).toBe(true);
+
+    process.env.XDT_VIBRANCY_MATERIAL = 'none';
+    try {
+      const noMaterial = resolveVibrancyConfig('cindy', true, 'darwin');
+      expect(needsMacTransparentWindow(noMaterial)).toBe(true);
+    } finally {
+      delete process.env.XDT_VIBRANCY_MATERIAL;
+    }
+  });
+
+  it('creates a regular window by default for system vibrancy and opaque themes', () => {
+    expect(resolveMacWindowTransparent(hud, undefined)).toBe(false);
+    expect(resolveMacWindowTransparent(hud, false)).toBe(false);
+    expect(resolveMacWindowTransparent(opaque, undefined)).toBe(false);
+  });
+
+  it('creates a transparent window when the last session or creation config needs desktop blur', () => {
+    expect(resolveMacWindowTransparent(hud, true)).toBe(true);
+    expect(resolveMacWindowTransparent(clearDesktop, undefined)).toBe(true);
+    expect(resolveMacWindowTransparent(blurredDesktop, false)).toBe(true);
+  });
+
+  it('falls back to system vibrancy when desktop blur is requested mid-session on a regular window', () => {
+    expect(fitMacBackdropToWindow(clearDesktop, false)).toEqual({
+      vibrancy: 'under-window',
+      backgroundColor: '#00000000',
+    });
+    expect(fitMacBackdropToWindow(blurredDesktop, false)).toEqual({
+      vibrancy: 'under-window',
+      backgroundColor: '#00000000',
+    });
+    expect(fitMacBackdropToWindow(clearDesktop, true)).toBe(clearDesktop);
+    expect(fitMacBackdropToWindow(blurredDesktop, true)).toBe(blurredDesktop);
+    expect(fitMacBackdropToWindow(hud, false)).toBe(hud);
+    expect(fitMacBackdropToWindow(opaque, false)).toBe(opaque);
+  });
+
+  it('remembers which macOS windows were created transparent', () => {
+    const transparent = {} as BrowserWindow;
+    const regular = {} as BrowserWindow;
+    markMacTransparentWindow(transparent);
+    expect(isMacTransparentWindow(transparent)).toBe(true);
+    expect(isMacTransparentWindow(regular)).toBe(false);
+  });
 });

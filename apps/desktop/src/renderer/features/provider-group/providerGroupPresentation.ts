@@ -2,7 +2,7 @@
  * 供应商组的界面按物理电脑聚合(2026-10-15 用户要求)：同一台电脑上登录了几个同品牌账号时，
  * 底层仍是几个独立的组内账号(各自的上限、暂停与冷却)，界面上收在同一台电脑下面；只有一个账号的电脑不分两层。
  */
-import { formatQuotaResetAt } from '@/components/status/usageCardModel';
+import { formatQuotaResetAt, formatQuotaResetCountdown } from '@/components/status/usageCardModel';
 import type { useTranslation } from 'react-i18next';
 
 import {
@@ -74,6 +74,15 @@ export function memberStatusText(
     case 'paused':
       return t('providerGroup.member.status.paused');
     case 'cooling': {
+      if (status.usageLimit) {
+        const time = formatQuotaResetCountdown(
+          status.usageLimit.resetAtMs === null ? null : status.usageLimit.resetAtMs / 1000,
+          nowMs,
+          t,
+        );
+        const reason = t('providerGroup.member.status.quotaExhausted');
+        return time ? `${reason} · ${time}` : reason;
+      }
       // 不在今天恢复的(周上限等)带上日期，不让「约 16:00 恢复」看起来像今天就能用。
       const time = status.coolingUntil ? formatQuotaResetAt(status.coolingUntil / 1000, nowMs, locale) : null;
       return time

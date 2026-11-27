@@ -7,7 +7,7 @@
  * 机器上没有可用的 python 时整组 skip(不阻塞无 Python 的 CI 环境)。
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,19 +15,42 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { FireContext, Schedule, ScriptCapability } from '@cindy/maker-scheduler';
 
-import { ScriptScheduleRunner, type ScriptCapabilityBroker } from '../script-runner';
+import { ScriptScheduleRunner, type ScriptCapabilityBroker } from '../script-runner.desktop';
 
 const PYTHON_CLIENT_DIR = fileURLToPath(new URL('../python-client/', import.meta.url));
 
-function detectPython(): string | null {
+const tmp = mkdtempSync(path.join(tmpdir(), 'cindy-script-proto-'));
+
+// Python writes its bytecode cache under HOME (macOS: ~/Library/Caches/com.apple.python). Every
+// Python this file starts, the script runner's included (it passes HOME and USERPROFILE through),
+// gets a home inside the fixture instead of the test runner's.
+const fixtureHome = path.join(tmp, 'home');
+mkdirSync(fixtureHome);
+const runnerHome = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+process.env.HOME = fixtureHome;
+process.env.USERPROFILE = fixtureHome;
+
+afterAll(() => {
+  for (const [name, value] of Object.entries(runnerHome)) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+  rmSync(tmp, { recursive: true, force: true });
+});
+
+function detectPython(): { command: string; executable: string } | null {
   for (const cmd of ['python', 'python3']) {
     try {
-      const probe = spawnSync(cmd, ['-c', 'import sys; sys.stdout.write("cindy-python-probe")'], {
+      const probe = spawnSync(cmd, ['-S', '-c', 'import json, sys; print(json.dumps(sys.executable))'], {
         encoding: 'utf8',
         windowsHide: true,
         timeout: 10_000,
       });
-      if (probe.status === 0 && probe.stdout === 'cindy-python-probe') return cmd;
+      if (probe.status !== 0) continue;
+      const executable: unknown = JSON.parse(probe.stdout);
+      if (typeof executable === 'string' && path.isAbsolute(executable)) {
+        return { command: cmd, executable };
+      }
     } catch {
       // try next candidate
     }
@@ -36,10 +59,6 @@ function detectPython(): string | null {
 }
 
 const PYTHON = detectPython();
-
-const tmp = mkdtempSync(path.join(tmpdir(), 'cindy-script-proto-'));
-
-afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 function schedule(command: string): Schedule {
   return {
@@ -110,9 +129,12 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
       context: {},
     })}\n`;
     const runClient = (env: NodeJS.ProcessEnv): Record<string, unknown> => {
+      const startedAt = performance.now();
       const probe = spawnSync(
-        PYTHON!,
+        PYTHON!.executable,
         [
+          // Only the stdlib and the fixture are needed. Skip machine-specific site startup.
+          '-S',
           '-c',
           // This probe checks protocol negotiation, not OS pipe delivery. Use
           // in-memory streams so a Windows spawnSync stdin stall cannot mask
@@ -135,10 +157,27 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
           timeout: 10_000,
         },
       );
-      expect(
-        probe.status,
-        `stderr=${probe.stderr} error=${String(probe.error ?? '')} signal=${String(probe.signal ?? '')}`,
-      ).toBe(0);
+      const diagnostics = {
+        host: env.CINDY_SCRIPT_PROTOCOL ? 'current' : 'legacy',
+        executable: PYTHON!.executable,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        status: probe.status,
+        signal: probe.signal,
+        error: probe.error?.message,
+        stderr: probe.stderr,
+      };
+      // Successful worker output is suppressed. The unit shard uploads the whole
+      // timings directory; its aggregation script reads only .json files.
+      const timings = process.env.XDT_VITEST_FILE_TIMINGS;
+      if (timings) {
+        const directory = path.dirname(timings);
+        mkdirSync(directory, { recursive: true });
+        writeFileSync(
+          path.join(directory, `python-negotiation-${diagnostics.host}.txt`),
+          `${JSON.stringify(diagnostics)}\n`,
+        );
+      }
+      expect(probe.status, JSON.stringify(diagnostics)).toBe(0);
       return JSON.parse(probe.stdout.trim()) as Record<string, unknown>;
     };
 
@@ -160,7 +199,7 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
       logger: { info: logInfo, warn: vi.fn(), error: vi.fn() },
     });
     const ctx: FireContext = { runId: 'run-1', firedAt: Date.now(), signal: new AbortController().signal };
-    const result = await runner.fire(schedule(`${PYTHON} demo.py`), ctx);
+    const result = await runner.fire(schedule(`${PYTHON!.command} demo.py`), ctx);
 
     // jira.read 已授予且响应含中文 + 转义引号(锁 UTF-8 编码链路)
     expect(result.resultText).toContain('jira ok');
@@ -197,7 +236,7 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
       logger: { info: logInfo, warn: vi.fn(), error: vi.fn() },
     });
     const ctx: FireContext = { runId: 'run-2', firedAt: Date.now(), signal: new AbortController().signal };
-    const result = await runner.fire(schedule(`${PYTHON} noisy.py`), ctx);
+    const result = await runner.fire(schedule(`${PYTHON!.command} noisy.py`), ctx);
 
     expect(result.resultText).toBe('ok=DING-1');
     const completedLog = logInfo.mock.calls.find((c) => String(c[0]).includes('script completed'));
@@ -234,9 +273,9 @@ describe.skipIf(!PYTHON)('script automation Python client', () => {
       },
     };
     const runner = new ScriptScheduleRunner({ broker, logger: {} });
-    const sched = schedule(`${PYTHON} adf_comment.py`);
+    const sched = schedule(`${PYTHON!.command} adf_comment.py`);
     sched.scriptConfig = {
-      command: `${PYTHON} adf_comment.py`,
+      command: `${PYTHON!.command} adf_comment.py`,
       capabilities: ['jira.read', 'jira.comment'],
       timeoutMs: 30_000,
     };

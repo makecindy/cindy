@@ -43,7 +43,11 @@ describe('create_task_worktree compensation', () => {
 
   it('publishes the worktree while the task is still active', async () => {
     h.rows = [{ workingDir: '/repo', status: 'active', source: null }, { status: 'active', source: null }];
-    await expect(createTaskWorktreeHost()({ callerSessionId: 's1' })).resolves.toMatchObject({ ok: true, worktreePath: '/wt', created: true });
+    // The stale-base reason must survive the host mapping so the tool can warn the agent.
+    h.prepare.mockResolvedValueOnce({ ok: true, created: true, meta, staleBaseReason: 'stale-remote-ref' });
+    await expect(createTaskWorktreeHost()({ callerSessionId: 's1' })).resolves.toMatchObject({
+      ok: true, worktreePath: '/wt', created: true, staleBaseReason: 'stale-remote-ref',
+    });
     expect(h.recycle).not.toHaveBeenCalled();
     expect(h.broadcast).toHaveBeenCalledWith('s1');
   });
@@ -75,5 +79,15 @@ describe('create_task_worktree compensation', () => {
     h.prepare.mockResolvedValue({ ok: true, created: false, meta });
     await expect(createTaskWorktreeHost()({ callerSessionId: 's5' })).resolves.toMatchObject({ ok: true, created: false });
     expect(h.recycle).not.toHaveBeenCalled();
+  });
+
+  // #9513:the explicit base ref must reach the worktree preparation, not be dropped by the host.
+  it('forwards the explicit base ref to the worktree preparation', async () => {
+    h.rows = [{ workingDir: '/repo', status: 'active', source: null }, { status: 'active', source: null }];
+    await createTaskWorktreeHost()({ callerSessionId: 's6', baseRef: 'release/2.x' });
+    expect(h.prepare).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sessionId: 's6', baseRef: 'release/2.x' }),
+    );
   });
 });

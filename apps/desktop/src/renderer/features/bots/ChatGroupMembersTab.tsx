@@ -3,14 +3,16 @@
  * 身份一行；能操作的成员在行尾有「⋯」，右键同一行打开同一个菜单。菜单项只出现自己
  * 能做的：自己的伙伴调「在本群的权限」，群主/管理员设管理员、转让群主（只转给人）、移出。
  */
-import { useState } from 'react';
-import { MoreHorizontal, Search } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { createBotGroupMemberSearch } from '@cindy/maker-shared/botGroupMemberSearch';
+import { MoreHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { Input } from '@/components/ui/input';
+import { SearchInput } from '@/components/ui/search-input';
 import type { BotGroupMemberView, BotGroupSummary } from '../../../shared/botGroupChat';
 import { BotAvatar } from './BotAvatar';
+import { BotGroupExternalBadge } from './BotGroupExternalBadge';
 import { botGroupMemberDisplayName } from './BotGroupTimelineModel';
 import { SETTINGS_DIVIDER, SETTINGS_HINT, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
@@ -31,13 +33,10 @@ export function ChatGroupMembersTab({ group, owner, manager, busy, actions }: {
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
-  const needle = query.trim().toLocaleLowerCase();
-  const shown = needle ? group.members.filter(member => botGroupMemberDisplayName(member).toLocaleLowerCase().includes(needle)) : group.members;
+  const searchMembers = useMemo(() => createBotGroupMemberSearch(group.members, botGroupMemberDisplayName), [group.members]);
+  const shown = useMemo(() => searchMembers(query), [searchMembers, query]);
   return <>
-    <div className="relative">
-      <Search size={16} aria-hidden className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]" />
-      <Input size="sm" value={query} onChange={setQuery} placeholder={t(key('searchMembers'))} aria-label={t(key('searchMembers'))} inputClassName="pl-9" />
-    </div>
+    <SearchInput value={query} onChange={setQuery} placeholder={t(key('searchMembers'))} aria-label={t(key('searchMembers'))} />
     <SettingsSection title={t(shared('members'))} count={shown.length} testId="chat-group-members">
       {shown.length
         ? <SettingsCard>{shown.map(member => <MemberRow key={member.actorId ?? member.botId} member={member} group={group}
@@ -55,19 +54,25 @@ function MemberRow({ member, group, owner, manager, busy, actions }: {
   const name = botGroupMemberDisplayName(member);
   const bot = member.actorKind === 'bot';
   const paused = bot && member.status === 'paused';
-  const mine = bot && member.isOwned === true;
+  const mine = bot && member.isOwned === true && member.assistant !== true;
+  // The group's own Cindy is turned on and off in group management, never managed as a member.
+  const assistant = member.assistant === true;
   // Owners manage everyone but themselves; admins manage everyone but the owner.
-  const manageable = manager && !member.isSelf && !!member.actorId && (owner || member.role !== 'owner');
+  const manageable = manager && !assistant && !member.isSelf && !!member.actorId && (owner || member.role !== 'owner');
   // Ownership goes to a person, including yourself when your teammate holds it.
   const transferable = owner && !!member.actorId && member.actorKind === 'human' && member.role !== 'owner';
   const menuable = !group.dissolvedAt && (manageable || transferable || (mine && !!member.actorId));
-  const hint = bot
+  const orgInfo = !bot
+    ? (member.departmentPath || member.department || (member.nickname && member.orgName ? member.orgName : null))
+    : null;
+  const hint = assistant ? t(key('assistantHint')) : bot
     ? `${t(key('teammateTag'))} · ${t(paused ? key('paused') : ACCESS_LABELS[member.guestAccess ?? 'chat'])}`
-    : t(key(member.role ?? 'member'));
+    : [t(key(member.role ?? 'member')), orgInfo].filter(Boolean).join(' · ');
   // The wrapper carries the card divider: the row inside is always its first child.
   return <div className={SETTINGS_DIVIDER} onContextMenu={menuable ? event => { event.preventDefault(); setOpen(true); } : undefined}>
     <SettingsRow media lead={<BotAvatar bot={member} size="sm" className={paused ? 'h-8 w-8 opacity-60' : 'h-8 w-8'} />}
-      title={name} tag={member.isSelf ? t(key('you')) : undefined} hint={hint}
+      title={member.external ? <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5"><span>{name}</span><BotGroupExternalBadge /></span> : name}
+      tag={member.isSelf ? t(key('you')) : undefined} hint={hint}
       trailing={menuable ? <DropdownMenu open={open} onOpenChange={setOpen}>
         <DropdownMenuTrigger asChild>
           <button type="button" aria-label={name} data-testid="chat-group-member-menu" disabled={busy}
@@ -79,7 +84,7 @@ function MemberRow({ member, group, owner, manager, busy, actions }: {
           {mine && <DropdownMenuItem onSelect={() => actions.access(member)}>{t(key('accessMenu'))}</DropdownMenuItem>}
           {manageable && <DropdownMenuItem onSelect={() => actions.role(member)}>{t(key(member.role === 'admin' ? 'removeAdmin' : 'makeAdmin'))}</DropdownMenuItem>}
           {transferable && <DropdownMenuItem onSelect={() => actions.transfer(member)}>{t(key('transfer'))}</DropdownMenuItem>}
-          {manageable && <>
+          {(manageable || (mine && !!member.actorId)) && <>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="danger" onSelect={() => actions.remove(member)}>{t(shared('remove'))}</DropdownMenuItem>
           </>}

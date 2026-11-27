@@ -18,7 +18,7 @@ import { throwIpcError } from '../utils/ipcValidate.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import type { CustomMcpListContext } from '../../shared/customMcp.js';
 import type { McpDuplicateChoice, McpDuplicateReport } from '../../shared/customMcp.js';
-import { BOT_MODEL_CHAIN_MAX, type BotModelRoute } from '../../shared/botModelChain.js';
+import { BOT_MODEL_CHAIN_INPUT_MAX, type BotModelRoute } from '../../shared/botModelChain.js';
 import type { BotProfileRuntimeDeps } from './botProfileRuntime.js';
 import {
   createCustomMcpServer,
@@ -28,7 +28,7 @@ import {
   updateCustomMcpServer,
   validateCustomMcpConfig,
   type CustomMcpConfig,
-} from '../maker-host/custom-mcp-store.js';
+} from '../maker-host/custom-mcp-store.desktop.js';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
@@ -74,7 +74,7 @@ const listContextSchema = z.object({
     providerId: z.string().nullable(),
     effort: z.string(),
     fastMode: z.union([z.boolean(), z.literal('ultrafast')]),
-  })).min(1).max(BOT_MODEL_CHAIN_MAX).optional(),
+  })).min(1).max(BOT_MODEL_CHAIN_INPUT_MAX).optional(),
 }).refine((value) => value.modelChain === undefined || value.botSessionId !== undefined);
 
 /** Internal receipt only; never returned by the public MCP create IPC. */

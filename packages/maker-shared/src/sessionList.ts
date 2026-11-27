@@ -4,11 +4,11 @@ import { presentationDate, presentationText, type PresentationLocalizer } from '
 import { isSyntheticTriggerText } from './syntheticTrigger.js';
 import { getSessionListActivityAt, hasPendingSessionInterruption, type SessionInterruptionState } from './sessionActivity.js';
 import type { RemoteSchedule, RemoteScheduleRun } from './scheduleTypes.js';
-import { toMillis, isUnreadScheduleRun, isUnreadFailedScheduleRun, activeScheduleFailures, classifyScheduleFailure, compareFailedScheduleRuns, scheduleRunMissingPlugin, type FailedScheduleRunSnapshot } from './scheduleModel.js';
+import { toMillis, isUnreadScheduleRun, isUnreadFailedScheduleRun, activeScheduleFailures, classifyScheduleFailure, compareFailedScheduleRuns, scheduleRunMissingPlugin, readPrCheckDiagnosis, type FailedScheduleRunSnapshot } from './scheduleModel.js';
 import { sessionCollaborationLabel, sessionWorktreeLabel } from './sessionIdentity.js';
 import { isDefaultDraftSessionTitle } from './sessionTitle.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
-import { collapseWorktreeDirForGrouping, sessionProjectDirectory } from './worktreePaths.js';
+import { collapseWorktreeDirForGrouping, sessionTaskProjectDirectory } from './worktreePaths.js';
 import { normalizeProjectOrderPath } from './projectOrderSync.js';
 import { resolveProjectAliasForSessions, type ProjectAliasDisplayIndex } from './projectAliasSync.js';
 
@@ -26,6 +26,8 @@ export function compareSessionListStrings(left: string, right: string): number {
 }
 
 export interface RemoteSessionListSessionLike extends SessionInterruptionState {
+  snoozedUntil?: string | null;
+  snoozedAt?: string | null;
   tags?: import('./taskTags').TaskTag[];
   _count?: { messages?: number } | null;
   agentKind: 'cc' | 'codex' | string;
@@ -40,6 +42,23 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   id: string;
   model: string;
   orcaRole?: 'lead' | 'worker' | string | null;
+  orcaRemoteLead?: {
+    leadDeviceId: string;
+    leadDeviceName: string;
+    leadSessionId: string;
+    leadTitle: string;
+    workerLabel: string;
+    releasedAt?: number;
+  } | null;
+  createdBySession?: {
+    kind: 'session';
+    sessionId: string;
+    title?: string;
+    deviceId?: string;
+    deviceName?: string;
+    botId?: string;
+    botName?: string;
+  } | null;
   permissionMode?: string | null;
   pinnedAt?: string | null;
   source?: string | null;
@@ -52,6 +71,12 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   workspaceKind?: 'project' | 'dialogue' | string | null;
   workingDir: string | null;
   projectDir?: string | null;
+  companion?: {
+    id?: string;
+    role?: string;
+    routineId?: string;
+    taskProjectDir?: string | null;
+  } | null;
   remoteHostId?: string | null;
   deviceLinkDeviceId?: string | null;
   worktreePath?: string | null;
@@ -59,6 +84,7 @@ export interface RemoteSessionListSessionLike extends SessionInterruptionState {
   // 由桌面 sessionToCamel 产出(已处理 clearedAt / rewind / 角色过滤);idle 会话直接显示,
   // 无需 load 完整消息。sessionRowMessagePreview 会读取它。
   preview?: string | null;
+  summary?: string | null;
 }
 
 export interface RemoteSessionListMessageLike {
@@ -140,6 +166,8 @@ export interface RemoteSessionScheduleInfo {
   nextFireAt?: number;
   /** 同一会话的所有已知 schedule 绑定都已 paused / expired 时为 true；缺失按 false。 */
   allSchedulesStopped?: boolean;
+  /** An active PR follow-up currently targets this task, including between runs. */
+  hasActiveFollowUp?: boolean;
   unreadRunIds: string[];
   hasUnreadFailedRun?: boolean;
   latestFailedRun?: FailedScheduleRunSnapshot;
@@ -261,7 +289,7 @@ export function summarizeRemoteSessionOverview(
     if (session.pinnedAt) pinned += 1;
     // 与 buildProjectSections 同一把折叠口径:worktree 会话算进它所属主仓,
     // 否则概览里的项目数会比列表里的项目分区多出来。
-    const projectDir = sessionProjectDirectory(session);
+    const projectDir = sessionTaskProjectDirectory(session);
     if (projectDir) projects.add(normalizeProjectOrderPath(projectDir));
     if ((pendingInteractionIndex.get(session.id) ?? 0) > 0) waiting += 1;
     if (isAutomationSession(session, scheduleIndex)) automation += 1;
@@ -402,7 +430,7 @@ function remoteSessionListHint(statusFilter: RemoteSessionStatusFilter, searchQu
  * `C:\Repo\App` 与 `c:/repo/app` 落成两个分区，概览的 projectCount 也会重复计数。
  */
 function projectGroupKey(session: RemoteSession): string {
-  return normalizeProjectOrderPath(sessionProjectDirectory(session) ?? 'unknown');
+  return normalizeProjectOrderPath(sessionTaskProjectDirectory(session) ?? 'unknown');
 }
 
 function buildProjectSections(
@@ -445,7 +473,7 @@ function buildProjectSections(
     // 标题用组内首条会话的原始目录(只折 worktree),保留用户自己的大小写与分隔符风格。
     // 折叠前先去掉外围空白:分组键按 trim 后的路径归一,若标题仍用原串,
     // ` /repo/app/ ` 这种受支持的输入会让 projectTitle() 只剩一个空格,分区标题变成空白。
-    const displayDir = collapseWorktreeDirForGrouping((sessionProjectDirectory(data[0].session) ?? workingDir).trim());
+    const displayDir = collapseWorktreeDirForGrouping((sessionTaskProjectDirectory(data[0].session) ?? workingDir).trim());
     sections.push({
       key: `project:${workingDir}`,
       title: resolveProjectAliasForSessions(projectMembers.get(workingDir) ?? [], options.projectAliases, options.projectAliasDeviceId)
@@ -501,7 +529,7 @@ export function toRemoteSessionListItem(
     subtitle: [
       sessionCollaborationLabel(session),
       worktreeLabel,
-      agentLabel(session.agentKind),
+      agentLabel(session.agentKind, localizer),
       session.model,
       isDialogueSession(session) ? 'dialogue' : null,
     ].filter(Boolean).join(' · '),
@@ -709,9 +737,11 @@ export function buildSessionScheduleIndex(
         unreadRunIds.push(run.id);
       }
       const candidate = activeFailures.has(run.id) ? {
-        runId: run.id, firedAt, scheduleId: run.scheduleId,
+        runId: run.id, firedAt, finishedAt: toMillis(run.finishedAt) || undefined, scheduleId: run.scheduleId,
+        ...(schedule?.status === 'active' ? nextFireAtField(schedule) : {}),
         failureKind: classifyScheduleFailure(run),
         errorMsg: run.status === 'failed' ? run.errorMsg : undefined,
+        prCheckDiagnosis: run.status === 'failed' ? readPrCheckDiagnosis(run.prCheckDiagnosis ?? run.preRunHookResult?.prCheckDiagnosis) : undefined,
         missingPlugin: run.status === 'failed' ? scheduleRunMissingPlugin(run) : undefined,
       } : undefined;
       const latestFailedRun = candidate && (!existing?.latestFailedRun || compareFailedScheduleRuns(candidate, existing.latestFailedRun) > 0)
@@ -739,7 +769,11 @@ export function buildSessionScheduleIndex(
       const status = schedulesById.get(scheduleId)?.status;
       return status === 'paused' || status === 'expired';
     });
-    index.set(sessionId, { ...info, allSchedulesStopped });
+    const hasActiveFollowUp = Array.from(scheduleIds).some((scheduleId) => {
+      const schedule = schedulesById.get(scheduleId);
+      return schedule?.status === 'active' && schedule.targetSessionId === sessionId;
+    });
+    index.set(sessionId, { ...info, allSchedulesStopped, hasActiveFollowUp });
   }
   return index;
 }
@@ -837,7 +871,7 @@ function normalizeSearchQuery(value: string | undefined): string {
 }
 
 function isDialogueSession(session: RemoteSession): boolean {
-  return session.workspaceKind === 'dialogue' || !session.workingDir;
+  return !session.companion?.taskProjectDir && (session.workspaceKind === 'dialogue' || !session.workingDir);
 }
 
 function lastActivity(session: RemoteSession): string {
@@ -853,7 +887,8 @@ function projectTitle(workingDir: string): string {
 const SCHEDULE_PREFIX = '[Schedule] ';
 
 function isAutomationGeneratedSession(session: RemoteSession): boolean {
-  return session.source === 'scheduler' || session.title.startsWith(SCHEDULE_PREFIX);
+  return session.source === 'scheduler'
+    || (typeof session.title === 'string' && session.title.startsWith(SCHEDULE_PREFIX));
 }
 
 function isAutomationSession(
@@ -864,10 +899,11 @@ function isAutomationSession(
 }
 
 function automationDisplayTitle(session: RemoteSession): string {
-  if (!isAutomationGeneratedSession(session)) return session.title || '';
-  return session.title.startsWith(SCHEDULE_PREFIX)
-    ? session.title.slice(SCHEDULE_PREFIX.length)
-    : session.title || '';
+  const title = typeof session.title === 'string' ? session.title : '';
+  if (!isAutomationGeneratedSession(session)) return title;
+  return title.startsWith(SCHEDULE_PREFIX)
+    ? title.slice(SCHEDULE_PREFIX.length)
+    : title;
 }
 
 function fallbackScheduleInfo(session: RemoteSession): RemoteSessionScheduleInfo | null {
@@ -928,16 +964,47 @@ export function groupAutomationListItems(
   return next;
 }
 
+/** 伙伴例行任务 Session（含旧主机不带 routineId 的行），供自动化筛选与归组共用。 */
+export function isTeammateRoutineSession(session: RemoteSessionListItem['session']): boolean {
+  const like = session as {
+    source?: unknown;
+    orcaRole?: unknown;
+    companion?: { role?: unknown } | null;
+  };
+  return like.source === 'bot' && like.orcaRole !== 'worker' && like.companion?.role === 'routine';
+}
+
 /**
- * 单条列表项的自动化组键(不含 scopeKey 前缀):`schedule:<id>`,或无 run 记录的 legacy 会话
- * 兜底 `fallback:...`。导出给「自动化任务作用域」页用同一算法反查某任务的全部运行。
+ * 列表自动化任务统一判定（分组与「隐藏自动化任务」筛选共用）：
+ * 覆盖定时自动化（`source === 'scheduler'` 及历史 `[Schedule] ` 标题前缀）与伙伴例行任务。
+ */
+export function isAutomationSidebarSession(session: RemoteSessionListItem['session']): boolean {
+  return isAutomationGeneratedSession(session) || isTeammateRoutineSession(session);
+}
+
+/**
+ * 旧伙伴例行任务专线(`source='bot'`、`companion.role='routine'`)按例行规则归组,与桌面
+ * getAutomationSidebarGroupInfo 同口径;旧主机不带 routineId 时返回 null,维持逐条显示。
+ */
+function teammateRoutineGroupKey(session: RemoteSessionListItem['session']): string | null {
+  if (!isTeammateRoutineSession(session)) return null;
+  const companion = (session as { companion?: { id?: string | null; routineId?: string | null } | null }).companion;
+  if (!companion?.id || !companion.routineId) return null;
+  return `routine:${companion.id}:${companion.routineId}`;
+}
+
+/**
+ * 单条列表项的自动化组键(不含 scopeKey 前缀):`schedule:<id>`、旧伙伴例行任务 `routine:<伙伴>:<规则>`,
+ * 或无 run 记录的 legacy 会话兜底 `fallback:...`。导出给「自动化任务作用域」页用同一算法反查某任务的全部运行。
  */
 export function automationGroupKey(item: RemoteSessionListItem): string | null {
+  const routineKey = teammateRoutineGroupKey(item.session);
+  if (routineKey) return routineKey;
   if (!isAutomationGeneratedSession(item.session)) return null;
   const scheduleInfo = item.scheduleInfo;
   if (scheduleInfo?.scheduleId) return `schedule:${scheduleInfo.scheduleId}`;
   const workspace = item.session.workspaceKind ?? 'project';
-  const dir = sessionProjectDirectory(item.session) ?? '__no_working_dir__';
+  const dir = sessionTaskProjectDirectory(item.session) ?? '__no_working_dir__';
   return `fallback:${workspace}:${dir}:${item.title}`;
 }
 
@@ -966,7 +1033,7 @@ function toAutomationGroupListItem(
       '自动化',
       `${group.length} 个任务`,
       primary.worktreeLabel,
-      agentLabel(primary.session.agentKind),
+      agentLabel(primary.session.agentKind, localizer),
       primary.session.model,
     ].filter(Boolean).join(' · '),
     detail: [
@@ -1021,6 +1088,7 @@ function mergeScheduleInfo(group: readonly RemoteSessionListItem[]): RemoteSessi
   const unreadRunIds = Array.from(new Set(group.flatMap((item) => item.scheduleInfo?.unreadRunIds ?? [])));
   return {
     ...base,
+    hasActiveFollowUp: group.some((item) => item.scheduleInfo?.hasActiveFollowUp === true),
     allSchedulesStopped: group.every((item) => item.scheduleInfo?.allSchedulesStopped === true),
     unreadRunIds,
     unreadCount: unreadRunIds.length,
@@ -1030,8 +1098,16 @@ function mergeScheduleInfo(group: readonly RemoteSessionListItem[]): RemoteSessi
   };
 }
 
-function agentLabel(agentKind: RemoteSession['agentKind']): string {
-  return agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : 'Claude Code';
+function agentLabel(
+  agentKind: RemoteSession['agentKind'],
+  localizer?: PresentationLocalizer,
+): string {
+  if (agentKind === 'codex') return 'Codex';
+  if (agentKind === 'pi') return 'Pi';
+  if (agentKind === 'acp') {
+    return presentationText(localizer, 'models.pluginEngines.genericName', '插件引擎');
+  }
+  return 'Claude Code';
 }
 
 function sessionStatusLabel(status: RemoteSession['status']): string {

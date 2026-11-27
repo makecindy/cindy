@@ -14,7 +14,6 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
   ArrowRight,
-  Check,
   ChevronDown,
   ChevronRight,
   CircleCheck,
@@ -24,12 +23,10 @@ import {
   FileUp,
   Folder,
   FolderOpen,
-  ListFilter,
   MessageSquare,
   Minus,
   RefreshCw,
   RotateCw,
-  Search,
   TriangleAlert,
   X,
 } from 'lucide-react';
@@ -38,7 +35,10 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { emitRefresh } from '@/lib/sessionsBus';
 import { Button } from '@/components/ui/button';
+import { SearchInput } from '@/components/ui/search-input';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Collapse } from '@/components/ui/collapse';
+import { Select } from '@/components/ui/select';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Spinner } from '@/components/ui/spinner';
 import { Tip } from '@/components/ui/tooltip';
@@ -67,6 +67,7 @@ import {
 } from '../../../shared/sessionImport';
 import { normalizeWorkingDirForGrouping } from '../../../shared/workingDir';
 import { SessionShareImportWizard } from './SessionShareImportWizard';
+import { SettingsPageHeader } from '@/components/ui/settings-rows';
 
 const MB = 1024 * 1024;
 /** 结果里「可以继续」超过这么多条时折叠成一行。 */
@@ -98,7 +99,7 @@ function isoOf(ms: number): string | undefined {
   return ms > 0 ? new Date(ms).toISOString() : undefined;
 }
 
-function useFormatSize(): (bytes: number) => string {
+export function useFormatSize(): (bytes: number) => string {
   const { i18n } = useTranslation();
   return useCallback(
     (bytes: number) => {
@@ -111,7 +112,7 @@ function useFormatSize(): (bytes: number) => string {
 }
 
 /** 大致时间：按约 12 MB/s 的读写速度加每条任务的固定开销估算，至少 1 分钟。 */
-function estimateMinutes(count: number, bytes: number): number {
+export function estimateMinutes(count: number, bytes: number): number {
   return Math.max(1, Math.ceil((bytes / (12 * MB) + count * 0.6) / 60));
 }
 
@@ -138,23 +139,17 @@ function checkStateOf(items: ImportCandidate[], selected: Set<string>): CheckSta
   return n === 0 ? 'off' : n === items.length ? 'on' : 'mixed';
 }
 
-/** 16px 复选框外观（交互由外层按钮承担）。 */
-function CheckBox({ state, disabled = false }: { state: CheckState; disabled?: boolean }) {
-  const filled = state !== 'off';
+/** 菜单项里的勾选外观：共享 Checkbox 只作显示，勾选由菜单项本身承担。 */
+function MenuCheckMark({ checked }: { checked: boolean }) {
   return (
-    <span
+    <Checkbox
+      data-settings-search-action="Show the check state of a session import category filter; the menu item toggles it"
+      checked={checked}
+      readOnly
+      tabIndex={-1}
       aria-hidden
-      className={cn(
-        'flex h-4 w-4 shrink-0 items-center justify-center rounded-[4px] border transition-colors duration-[var(--motion-instant)]',
-        filled
-          ? 'border-[var(--accent-cta-bg-pure)] bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]'
-          : 'border-[var(--border-default)] bg-[var(--settings-theme-card-bg)]',
-        disabled && 'opacity-40',
-      )}
-    >
-      {state === 'on' && <Check size={12} strokeWidth={2.5} />}
-      {state === 'mixed' && <Minus size={12} strokeWidth={2.5} />}
-    </span>
+      className="pointer-events-none"
+    />
   );
 }
 
@@ -238,14 +233,6 @@ export function SessionImportSection() {
     };
   }, []);
 
-  // 导入结束：侧栏刷新出新任务。
-  const finishedRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!job || job.status === 'running' || finishedRef.current === job.requestId) return;
-    finishedRef.current = job.requestId;
-    emitRefresh();
-  }, [job]);
-
   const projectKey = useMemo(() => (projectParam ? platformKey(projectParam) : null), [projectParam]);
   const projectName = useMemo(() => {
     if (!projectParam) return '';
@@ -317,7 +304,6 @@ export function SessionImportSection() {
     try {
       const view = await window.electronAPI.localDb.sessionImport.start(keys);
       jobIdRef.current = view.requestId;
-      finishedRef.current = null;
       setJob(view);
       setSelected(new Set());
     } catch (err) {
@@ -376,16 +362,13 @@ export function SessionImportSection() {
       <>
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--settings-input-border)] px-4 py-3">
           <SourceFilter value={source} counts={sourceCounts} total={listable.length} onChange={setSource} />
-          <label className="flex h-8 w-[240px] min-w-0 items-center gap-2 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)] px-3 text-[var(--text-tertiary)] focus-within:border-[var(--focus-ring)]">
-            <Search size={14} aria-hidden />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={t('settings.sessionImport.search')}
-              aria-label={t('settings.sessionImport.search')}
-              className="min-w-0 flex-1 bg-transparent text-13 text-[var(--text-primary)] outline-none placeholder:text-[var(--settings-input-placeholder)]"
-            />
-          </label>
+          <SearchInput
+            className="w-[240px] min-w-0"
+            value={query}
+            onChange={setQuery}
+            placeholder={t('settings.sessionImport.search')}
+            aria-label={t('settings.sessionImport.search')}
+          />
           {projectKey && (
             <span className="inline-flex h-8 max-w-[220px] items-center gap-1.5 rounded-full border border-[var(--settings-input-border)] pl-3 pr-1 text-13 text-[var(--text-primary)]">
               <Folder size={14} className="shrink-0 text-[var(--text-secondary)]" aria-hidden />
@@ -427,16 +410,15 @@ export function SessionImportSection() {
             </div>
           ) : (
             <>
-              <button
-                type="button"
-                role="checkbox"
-                aria-checked={allState === 'on' ? true : allState === 'mixed' ? 'mixed' : false}
-                onClick={() => toggleKeys(selectable.map((c) => c.key), allState !== 'on')}
-                className="flex h-9 w-full items-center gap-2.5 border-b border-[var(--settings-input-border)] px-4 text-12 font-medium text-[var(--text-secondary)] select-none"
-              >
-                <CheckBox state={allState} />
+              <label className="flex h-9 w-full cursor-pointer items-center gap-2.5 border-b border-[var(--settings-input-border)] px-4 text-12 font-medium text-[var(--text-secondary)] select-none">
+                <Checkbox
+                  data-settings-search-action="Select every importable task in the session import list"
+                  checked={allState === 'on'}
+                  indeterminate={allState === 'mixed'}
+                  onChange={() => toggleKeys(selectable.map((c) => c.key), allState !== 'on')}
+                />
                 {t('settings.sessionImport.selectAll')}
-              </button>
+              </label>
               {groups.map((g, i) => (
                 <ImportGroup
                   key={g.key}
@@ -476,36 +458,34 @@ export function SessionImportSection() {
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-4">
-      <header className="flex shrink-0 items-end justify-between gap-6">
-        <div className="flex min-w-0 max-w-[560px] flex-col gap-1">
-          <h2 className="text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">
-            {t('settings.sessionImport.title')}
-          </h2>
-          <p className="text-13 leading-[1.5] text-[var(--settings-section-desc)]">
-            {t('settings.sessionImport.description')}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2 select-none">
-          <Button variant="secondary" size="lg" type="button" onClick={() => setShareWizardOpen(true)}>
-            <FileUp size={15} />
-            {t('sessionShare.import.entryButton')}
-          </Button>
-          <Tip text={t('settings.sessionImport.rescan')}>
-            <Button
-              variant="secondary"
-              size="lg"
-              type="button"
-              compact
-              aria-label={t('settings.sessionImport.rescan')}
-              disabled={scanning || !!job}
-              onClick={() => void runScan(true)}
-              className="w-9 px-0"
-            >
-              <RefreshCw size={15} className={cn(scanning && 'animate-spin')} />
-            </Button>
-          </Tip>
-        </div>
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col gap-6">
+      <header className="shrink-0">
+        <SettingsPageHeader
+          title={t('settings.sessionImport.title')}
+          description={t('settings.sessionImport.description')}
+          action={
+            <div className="flex shrink-0 items-center gap-2 select-none">
+              <Button variant="secondary" size="lg" type="button" onClick={() => setShareWizardOpen(true)}>
+                <FileUp size={15} />
+                {t('sessionShare.import.entryButton')}
+              </Button>
+              <Tip text={t('settings.sessionImport.rescan')}>
+                <Button
+                  variant="secondary"
+                  size="lg"
+                  type="button"
+                  compact
+                  aria-label={t('settings.sessionImport.rescan')}
+                  disabled={scanning || !!job}
+                  onClick={() => void runScan(true)}
+                  className="w-9 px-0"
+                >
+                  <RefreshCw size={15} className={cn(scanning && 'animate-spin')} />
+                </Button>
+              </Tip>
+            </div>
+          }
+        />
       </header>
 
       {shareWizardOpen && <SessionShareImportWizard open={shareWizardOpen} onOpenChange={setShareWizardOpen} />}
@@ -515,8 +495,6 @@ export function SessionImportSection() {
       </section>
 
       <ConfirmDialog
-        presentation="standard"
-        cancelFirst
         open={confirmOpen}
         onOpenChange={(next) => !starting && setConfirmOpen(next)}
         title={t('settings.sessionImport.confirm.title', { count: selectedList.length })}
@@ -546,36 +524,26 @@ function SourceFilter({
   onChange: (value: ImportSourceId | 'all') => void;
 }) {
   const { t } = useTranslation();
-  const label = value === 'all' ? t('settings.sessionImport.allSources') : IMPORT_SOURCE_NAMES[value];
+  // A single-value field is the shared Select, not a menu (DESIGN.md §4 Desktop settings controls).
+  const count = (n: number) => (
+    <span className="text-12 tabular-nums text-[var(--text-tertiary)]">{n}</span>
+  );
+  // Importing every task of the chosen source drops it from the rescan counts; keep it as a
+  // 0-count option so the trigger still names the active filter (as the old menu trigger did).
+  const options: Array<[ImportSourceId, number]> =
+    value !== 'all' && !counts.some(([id]) => id === value) ? [...counts, [value, 0]] : counts;
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="inline-flex h-8 shrink-0 items-center gap-2 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-theme-card-bg)] pl-3 pr-2.5 text-13 font-medium text-[var(--text-primary)] select-none hover:bg-[var(--settings-menu-bg-hover)]"
-        >
-          {value === 'all' ? <ListFilter size={14} aria-hidden /> : <ImportSourceMark source={value} size={14} />}
-          <span>{label}</span>
-          <ChevronDown size={14} className="text-[var(--text-tertiary)]" aria-hidden />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-[232px]">
-        <DropdownMenuItem onSelect={() => onChange('all')} className="gap-2.5">
-          <span className="flex w-4 justify-center">{value === 'all' && <Check size={16} />}</span>
-          {t('settings.sessionImport.allSources')}
-          <DropdownMenuShortcut className="tracking-normal tabular-nums">{total}</DropdownMenuShortcut>
-        </DropdownMenuItem>
-        {counts.length > 0 && <DropdownMenuSeparator />}
-        {counts.map(([id, n]) => (
-          <DropdownMenuItem key={id} onSelect={() => onChange(id)} className="gap-2.5">
-            <span className="flex w-4 justify-center">{value === id && <Check size={16} />}</span>
-            <ImportSourceMark source={id} size={16} />
-            {IMPORT_SOURCE_NAMES[id]}
-            <DropdownMenuShortcut className="tracking-normal tabular-nums">{n}</DropdownMenuShortcut>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Select
+      data-settings-search-action="Filters the importable task list by its source tool"
+      label={t('settings.sessionImport.sourceFilterAria')}
+      value={value}
+      size="compact"
+      options={[
+        { value: 'all', label: t('settings.sessionImport.allSources'), endAdornment: count(total) },
+        ...options.map(([id, n]) => ({ value: id, label: IMPORT_SOURCE_NAMES[id], endAdornment: count(n) })),
+      ]}
+      onValueChange={(next) => onChange(next as ImportSourceId | 'all')}
+    />
   );
 }
 
@@ -602,7 +570,7 @@ function HiddenMenu({
       disabled={count === 0}
       className="gap-2.5"
     >
-      <CheckBox state={shown.has(cat) ? 'on' : 'off'} />
+      <MenuCheckMark checked={shown.has(cat)} />
       {label}
       <DropdownMenuShortcut className="tracking-normal tabular-nums">{count}</DropdownMenuShortcut>
     </DropdownMenuItem>
@@ -671,17 +639,16 @@ function ImportGroup({
     <div className={cn(!first && 'border-t border-[var(--settings-input-border)]')}>
       <div className="grid h-11 grid-cols-[16px_minmax(0,1fr)] items-center gap-x-2.5 pl-4 transition-colors duration-[var(--motion-fast)] hover:bg-[var(--settings-menu-bg-hover)]">
         <Tip text={t('settings.sessionImport.selectGroup')}>
-          <button
-            type="button"
-            role="checkbox"
-            aria-checked={state === 'on' ? true : state === 'mixed' ? 'mixed' : false}
-            aria-label={t('settings.sessionImport.selectGroup')}
-            disabled={selectable.length === 0}
-            onClick={() => onToggleKeys(selectable.map((c) => c.key), state !== 'on')}
-            className="-m-2 flex rounded-lg p-2"
-          >
-            <CheckBox state={state} disabled={selectable.length === 0} />
-          </button>
+          <label className="-m-2 flex cursor-pointer rounded-lg p-2">
+            <Checkbox
+              data-settings-search-action="Select every importable task in this session import group"
+              aria-label={t('settings.sessionImport.selectGroup')}
+              checked={state === 'on'}
+              indeterminate={state === 'mixed'}
+              disabled={selectable.length === 0}
+              onChange={() => onToggleKeys(selectable.map((c) => c.key), state !== 'on')}
+            />
+          </label>
         </Tip>
         <button
           type="button"
@@ -737,15 +704,18 @@ function ImportRow({ item, checked, onToggle }: { item: ImportCandidate; checked
   const title = item.title || t('settings.sessionImport.untitled');
   const tag = disabled ? t('settings.sessionImport.unsupported') : item.archived ? t('settings.sessionImport.archived') : '';
   return (
-    <button
-      type="button"
-      role="checkbox"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={onToggle}
-      className="grid h-9 w-full grid-cols-[16px_16px_16px_minmax(0,1fr)_auto_84px] items-center gap-x-2.5 px-4 text-left transition-colors duration-[var(--motion-fast)] select-none enabled:hover:bg-[var(--settings-menu-bg-hover)] disabled:cursor-default"
+    <label
+      className={cn(
+        'grid h-9 w-full grid-cols-[16px_16px_16px_minmax(0,1fr)_auto_84px] items-center gap-x-2.5 px-4 text-left transition-colors duration-[var(--motion-fast)] select-none',
+        disabled ? 'cursor-default' : 'cursor-pointer hover:bg-[var(--settings-menu-bg-hover)]',
+      )}
     >
-      <CheckBox state={checked ? 'on' : 'off'} disabled={disabled} />
+      <Checkbox
+        data-settings-search-action="Choose whether this task is included in the session import"
+        checked={checked}
+        disabled={disabled}
+        onChange={onToggle}
+      />
       <span />
       <Tip text={IMPORT_SOURCE_NAMES[item.source]}>
         <span className={cn('flex text-[var(--text-primary)]', disabled && 'opacity-40')}>
@@ -766,7 +736,7 @@ function ImportRow({ item, checked, onToggle }: { item: ImportCandidate; checked
       >
         {formatSidebarTime(isoOf(item.updatedAt), t)}
       </time>
-    </button>
+    </label>
   );
 }
 

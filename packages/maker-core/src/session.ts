@@ -12,6 +12,8 @@ import { parseOutputLimitDetails, type OutputLimitDetails } from '@cindy/maker-s
  */
 
 import { appendAutoReviewUserIntent, type AutoReviewUserIntent } from './agents/shared/auto-review-decision.js';
+import { bindSessionSendOwner, readSessionSendTerminalOwner } from './session-send-terminal.js';
+export { markSessionSendTerminal, readSessionSendTerminalStatus } from './session-send-terminal.js';
 import { randomUUID } from 'node:crypto';
 import { ToolLoopGuard } from './agents/shared/loop-guard.js';
 import { AsyncUserQuestions } from './agents/shared/async-user-questions.js';
@@ -33,6 +35,7 @@ import type {
   Effort,
   PermissionMode,
   AgentKind,
+  EngineKind,
   UserMessage,
 } from './types/common.js';
 import type {
@@ -43,7 +46,6 @@ import type {
   SessionTreeSnapshot,
 } from './types/capabilities.js';
 import { NotSupportedError } from './types/capabilities.js';
-import type { VisionBridgeHook } from './types/vision-bridge.js';
 import type {
   AgentEvent,
   AskUserQuestionItem,
@@ -72,15 +74,16 @@ import type {
   SendOptions,
   StartSessionOptions,
   TurnContinuationState,
+  TurnContinuationCancellationReason,
 } from './agents/base-agent.js';
 import {
   AUTO_REVIEW_SOURCE_CONTENT,
   ASYNC_QUESTION_ANSWER,
+  SUPERSEDE_ASYNC_QUESTIONS,
   AUTO_REVIEW_USER_INTENT,
   TurnDispatchRejectedError,
   TurnDispatchUnconfirmedError,
 } from './agents/base-agent.js';
-import { formatManagedImageReferences } from './agents/shared/managed-image-reference.js';
 import type { Logger } from './interfaces/logger.js';
 
 export type SessionStatus = 'active' | 'aborting' | 'closed' | 'error';
@@ -161,6 +164,35 @@ const GRACEFUL_STOP_CONFIRMATION_TIMEOUT_MS = 5_000;
 export const SESSION_CLOSED_MID_TURN_MESSAGE = 'Session closed before the current turn delivered a terminal event';
 
 /**
+ * 运行时已经无法接收新输入。
+ *
+ * 与 `SESSION_RUNNING`（竞态，可排队重试）区分：这里代表这条运行时本身不可再用，宿主
+ * 只能重建会话或明说失败。放在 `code` 上而不是让宿主去解析 message —— 飞书等渠道会把
+ * 派发前失败的原因直接回给用户，解析人话文案既脆弱又会把内部措辞漏出去；固定标识符
+ * 既安全又能进日志。
+ */
+export const SESSION_UNAVAILABLE_CODES = [
+  /** 底层句柄已关闭。 */
+  'SESSION_CLOSED',
+  /** 拆除已开始（含 close 尚未确认完成、以及静默停止后的运行时退场）。 */
+  'SESSION_CLOSING',
+  /** 上一次 close/detach 失败，句柄停在 error 态。 */
+  'SESSION_ERROR',
+] as const;
+
+export type SessionUnavailableCode = (typeof SESSION_UNAVAILABLE_CODES)[number];
+
+/** 带稳定 `code` 的不可用错误；message 保持原有措辞，供本地日志与人读。 */
+export function createSessionUnavailableError(
+  code: SessionUnavailableCode,
+  message: string,
+): Error & { code: SessionUnavailableCode } {
+  const err = new Error(message) as Error & { code: SessionUnavailableCode };
+  err.code = code;
+  return err;
+}
+
+/**
  * turn 零事件看门狗的计时分片长度。额度按片累加,片尾核对真实经过时间,
  * 借此把系统挂起(合盖睡眠)的那段排除掉 —— 见 armTurnStallSlice。
  */
@@ -186,11 +218,12 @@ export type SessionStartupPreferences = Readonly<Pick<StartSessionOptions,
   'userPrompt' | 'makerMemoryEnabled' | 'displayReasoning'>>;
 
 export interface SessionOptions {
+  beforeTurn?: (session: Session) => Promise<void>;
   hostStartupPreferences?: SessionStartupPreferences;
   id: string;
   /** 与 Agent MCP context 同源的本次内存实例代号；省略时由 Session 自铸。 */
   sessionInstanceId?: string;
-  agentKind: AgentKind;
+  agentKind: EngineKind;
   workDir: string;
   handle: AgentSessionHandle;
   capabilities: Capabilities;
@@ -222,12 +255,6 @@ export interface SessionOptions {
    * 缺省 = 永不抑制,与旧行为一致。
    */
   isHostShuttingDown?: () => boolean;
-  /**
-   * 可选：视觉桥钩子（层 B）。host 注入后，session.send 在组装 UserMessage、交给
-   * handle 前调用一次，把用户贴图替换为视觉描述。host 不注入 = 完全跳过，字节级零干扰
-   * （见 docs/vision-bridge-design.md 层 B）。
-   */
-  visionBridge?: VisionBridgeHook;
   /**
    * 可选：工具循环疑似命中时的辅助模型复核入口（host 注入）。缺省 = 疑似即中断，
    * 与未接入复核前一致。
@@ -313,29 +340,6 @@ function redactNestedStrings(value: unknown, onChange: () => void): unknown {
   return copy;
 }
 
-/**
- * Vision bridging replaces image blocks before the provider adapter sees them.
- * Preserve the Host-managed attachment identities as ordinary per-turn text,
- * without exposing them to the external vision backend or changing image bytes.
- */
-function appendManagedImageReferences(
-  source: UserMessage,
-  bridged: UserMessage,
-): UserMessage {
-  const references = formatManagedImageReferences(source.content);
-  if (!references) return bridged;
-  if (typeof bridged.content === 'string') {
-    return {
-      ...bridged,
-      content: bridged.content ? `${bridged.content}\n${references}` : references,
-    };
-  }
-  return {
-    ...bridged,
-    content: [...bridged.content, { type: 'text', text: references }],
-  };
-}
-
 export interface SessionSendOptions extends SendOptions {
   /**
    * Host-owned authorization refresh after all preparation, before vendor dispatch.
@@ -377,10 +381,12 @@ export interface SessionSendOptions extends SendOptions {
 }
 
 export interface SessionTurnLifecycleObserver {
+  /** A reservation precedes async preparation; it may never reach provider dispatch. */
+  onTurnReserved?(generation: number): ((dispatched: boolean) => void) | void;
   /** Last synchronous authorization check; no asynchronous work may follow before handle.send. */
   onDispatching?(): void;
   /** Awaited after option validation and before any provider-owned start hook or send. */
-  beforeProviderStart(turnGeneration: number): void | Promise<void>;
+  beforeProviderStart(turnGeneration: number, signal?: AbortSignal): void | Promise<void>;
   /** Called when a prepared generation never crosses the provider dispatch boundary. */
   onUndispatched(turnGeneration: number): void | Promise<void>;
   /** Called before event listeners for a foreground unclaimed done or terminal error. */
@@ -409,6 +415,9 @@ export type SessionSendResult =
   | {
       accepted: false;
       reason: 'cancelled-before-dispatch' | 'provider-rejected-before-dispatch';
+      diagnostic?: TurnDispatchRejectedError['diagnostic'];
+      /** 上游拒绝这次派发时的 HTTP 状态（400–599），有界数值。 */
+      upstreamStatus?: number;
     };
 
 export interface SessionTurnControlSnapshot {
@@ -426,6 +435,36 @@ export type SessionGracefulStopResult =
   | { status: 'requested'; turnGeneration: number }
   | { status: 'unconfirmed'; turnGeneration: number; reason: string };
 
+const MAX_STALL_DIAGNOSTIC_TOOLS = 5;
+const SAFE_TOOL_LABEL_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+/** ACP 规范定义的固定 ToolKind 白名单；ACP 的 toolName 来自展示标题，不能当工具标识符放行。 */
+const ACP_TOOL_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
+  'read',
+  'edit',
+  'delete',
+  'move',
+  'search',
+  'execute',
+  'think',
+  'fetch',
+  'switch_mode',
+  'other',
+]);
+
+/**
+ * 仅保留受控工具标识，供超时告警日志与错误详情使用：
+ * ACP 会话只认固定 ToolKind 白名单，避免标题里的短文件名（如 payroll.csv / .env）或命令进入诊断。
+ */
+function safeActiveToolLabel(agentKind: EngineKind, data: Record<string, unknown>): string | null {
+  if (agentKind === 'acp' || typeof data.acpKind === 'string') {
+    const acpKind = typeof data.acpKind === 'string' ? data.acpKind.trim().toLowerCase() : '';
+    return ACP_TOOL_KIND_ALLOWLIST.has(acpKind) ? acpKind : null;
+  }
+  const toolName = typeof data.toolName === 'string' ? data.toolName.trim() : '';
+  if (toolName && SAFE_TOOL_LABEL_RE.test(toolName)) return toolName;
+  return null;
+}
+
 type TurnControlState = {
   generation: number;
   toolLoopMonitor: ToolLoopMonitor | null;
@@ -433,6 +472,8 @@ type TurnControlState = {
   /** 已送达完整结果、尚未送达结果摘要的工具;终态错误必须排在它们的摘要之后。 */
   awaitingToolResultSummaries: Set<string>;
   activeToolIds: Set<string>;
+  /** 仅保存无用户正文的安全工具标签（短标识符或 ACP kind），供超时诊断使用。 */
+  activeToolLabels: Map<string, string>;
   anonymousActiveTools: number;
   pendingInteractionToolIds: Map<string, number>;
   gracefulStopState: SessionGracefulStopState;
@@ -476,9 +517,23 @@ export class Session {
   readonly id: string;
   /** business id 可复用；instanceId 精确标识本次内存 Session incarnation。 */
   readonly instanceId: string;
-  readonly agentKind: AgentKind;
+  readonly agentKind: EngineKind;
+  /** `AgentEvent.source` names built-in engines only; plugin engines leave it unset. */
+  private get eventSource(): AgentKind | undefined {
+    return this.agentKind === 'acp' ? undefined : this.agentKind;
+  }
   readonly workDir: string;
-  readonly capabilities: Capabilities;
+  private readonly initialCapabilities: Capabilities;
+  get capabilities(): Capabilities {
+    return this.agentKind === 'acp'
+      ? this.handle.negotiatedCapabilities ?? this.initialCapabilities
+      : this.initialCapabilities;
+  }
+
+  /** ACP-only command names used when sanitizing host-added wire notes. */
+  getPluginEngineCommandNames(): readonly string[] {
+    return this.handle.getPluginEngineCommandNames?.() ?? [];
+  }
   /** 见 SessionOptions.remoteHostId。 */
   readonly remoteHostId: string | null;
   /** 见 SessionOptions.agentDeviceId。 */
@@ -486,8 +541,6 @@ export class Session {
 
   private readonly handle: AgentSessionHandle;
   private readonly logger: Logger;
-  /** 视觉桥钩子（层 B）。缺省 = 未启用，send 完全跳过。 */
-  private readonly visionBridge: VisionBridgeHook | undefined;
   private readonly toolLoopReviewer: ToolLoopReviewer | undefined;
   private toolLoopUserIntent: AutoReviewUserIntent | undefined;
   private permissionModeStateValue: PermissionModeState;
@@ -629,8 +682,6 @@ export class Session {
   private turnStallSliceStartedAt = 0;
   /** 正在等用户回应的交互数；>0 期间不计 stall 额度（没事件是正常的）。 */
   private pendingInteractions = 0;
-  /** Blocking question cards take precedence over optional async cards. */
-  private pendingUserQuestions = 0;
   /** 最近一次 fan-out 事件的时刻，仅用于日志诊断。 */
   private lastEventAt = 0;
   /**
@@ -646,12 +697,17 @@ export class Session {
   private turnGeneration = 0;
   /** 已为哪个 turn 代号排过 abort 复核；同一 turn 上重复 abort 不重复排。 */
   private abortRecoveryScheduledFor: number | null = null;
+  /** Host operations can start new work without creating a user-turn generation. */
+  private abortRecoveryEpoch = 0;
   private lastEventType: string | null = null;
   /** 优雅停止所需的 turn 控制事实；不承担 UI/MCP 会话状态投影。 */
   private turnControlState: TurnControlState | null = null;
   private readonly asyncUserQuestions: AsyncUserQuestions;
 
+  private readonly beforeTurn?: (session: Session) => Promise<void>;
+
   constructor(opts: SessionOptions) {
+    this.beforeTurn = opts.beforeTurn;
     this.hostStartupPreferences = opts.hostStartupPreferences
       ? Object.freeze({ ...opts.hostStartupPreferences }) : undefined;
     this.id = opts.id;
@@ -659,7 +715,7 @@ export class Session {
     this.agentKind = opts.agentKind;
     this.workDir = opts.workDir;
     this.handle = opts.handle;
-    this.capabilities = opts.capabilities;
+    this.initialCapabilities = opts.capabilities;
     this.remoteHostId = opts.remoteHostId ?? null;
     this.agentDeviceId = opts.agentDeviceId ?? null;
     this.logger = opts.logger.child(`s:${this.id}`);
@@ -671,35 +727,56 @@ export class Session {
       opts.turnStallMs ?? parseTurnStallMs(process.env.XDT_SESSION_TURN_STALL_MS);
     this.eventStreamHoldMs = opts.eventStreamHoldMs ?? EVENT_STREAM_HOLD_MS;
     this.isHostShuttingDown = opts.isHostShuttingDown ?? (() => false);
-    this.visionBridge = opts.visionBridge;
     this.toolLoopReviewer = opts.toolLoopReviewer;
     this.asyncUserQuestions = new AsyncUserQuestions({
+      currentOrigin: () => this.currentTurnOrigin,
       isActive: (generation) => this.status === 'active' && !this.terminationStarted
-        && generation === this.turnGeneration && this.handle.isTurnRunning?.() === true,
+        && generation === this.turnGeneration,
+      isLateAnswer: (generation) => generation !== this.turnGeneration || !this.handle.isTurnRunning?.(),
       resolve: (request) => this.interactionListener!(request),
-      deliver: (text, signal) => this.steer(text, { signal, [ASYNC_QUESTION_ANSWER]: true }),
-      dismiss: (requestId, reason) => this.fanOutEvent({
-        type: 'interaction_dismissed', data: { requestId, reason, resolvedAs: 'deny' }, source: this.agentKind,
+      deliver: async (text, signal, requestId, displayText, origin) => {
+        if (this.asyncQuestionAnswerDispatcher) return this.asyncQuestionAnswerDispatcher(text, signal, requestId, displayText, origin);
+        const options = { signal, [ASYNC_QUESTION_ANSWER]: true as const };
+        if (this.handle.isTurnRunning?.()) {
+          try { await this.steer(text, options); return; } catch (error) {
+            // Only a definite idle rejection can start a new turn. Unknown delivery is never replayed.
+            if (!/has no active turn to steer/.test(String(error))) throw error;
+          }
+        }
+        if (signal.aborted) return;
+        const result = await this.send(text, options);
+        if (!result.accepted) throw new Error('Async question answer was not accepted');
+      },
+      dismiss: (requestId, reason, withdrawalReason) => this.fanOutEvent({
+        type: 'interaction_dismissed', data: { requestId, reason, resolvedAs: 'deny', ...(withdrawalReason ? { withdrawalReason } : {}) }, source: this.eventSource,
       }),
-      reportError: () => this.fanOutEvent({ type: 'error', source: this.agentKind,
+      reportError: () => this.fanOutEvent({ type: 'error', source: this.eventSource,
         data: { message: 'Async question answer delivery failed.', isTerminal: false } }),
     });
 
     // 注入 InteractionResolver 到底层 handle, 转发到 host 维护的 listener。
     // 没接 listener 时按 kind 给出安全默认: 都视作 deny(host 必须接 listener 才能交互)。
-    this.handle.setInteractionResolver((req, signal) => this.runHostInteraction(req, async () => {
-      if (!this.interactionListener) {
-        this.logger.warn('interaction request received but no listener attached, denying', { kind: req.kind, requestId: req.requestId });
-        if (req.kind === 'ask_user_question') {
-          return { kind: 'ask_user_question', answers: {} };
-        }
-        if (req.kind === 'plan_review') {
-          return { kind: 'plan_review', behavior: 'deny', reason: 'no_listener_attached', dismissed: true };
-        }
-        return { kind: req.kind, behavior: 'deny', reason: 'no_listener_attached' } as InteractionDecision;
+    this.handle.setInteractionResolver((req, signal) => {
+      if (req.kind === 'ask_user_question' && req.delivery === 'async' && this.interactionListener) {
+        // Native Codex emits messages, not pending RPCs. The Session owns their UI lifetime,
+        // just as it owns Claude/Pi questions; do not leave a second adapter continuation.
+        this.asyncUserQuestions.ask(req.questions, this.turnGeneration, req.requestId);
+        return Promise.resolve({ kind: 'ask_user_question' as const, answers: {}, dismissed: true });
       }
-      return await (signal ? this.interactionListener(req, signal) : this.interactionListener(req));
-    }));
+      return this.runHostInteraction(req, async () => {
+        if (!this.interactionListener) {
+          this.logger.warn('interaction request received but no listener attached, denying', { kind: req.kind, requestId: req.requestId });
+          if (req.kind === 'ask_user_question') {
+            return { kind: 'ask_user_question', answers: {}, dismissed: true };
+          }
+          if (req.kind === 'plan_review') {
+            return { kind: 'plan_review', behavior: 'deny', reason: 'no_listener_attached', dismissed: true };
+          }
+          return { kind: req.kind, behavior: 'deny', reason: 'no_listener_attached' } as InteractionDecision;
+        }
+        return await (signal ? this.interactionListener(req, signal) : this.interactionListener(req));
+      });
+    });
   }
 
   // ── 公开 API ─────────────────────────────────────────────────────────────
@@ -861,8 +938,35 @@ export class Session {
     return snapshot;
   }
 
+  private asyncQuestionAnswerDispatcher?: (text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null) => Promise<void>;
+
+  /**
+   * Hosts with a durable input queue own admission/persistence of question replies.
+   * `text` is the model's copy; `displayText` is what history and queues show.
+   */
+  setAsyncQuestionAnswerDispatcher(dispatch: (text: string, signal: AbortSignal, requestId: string, displayText: string, origin: SendOrigin | null) => Promise<void>): void {
+    this.asyncQuestionAnswerDispatcher = dispatch;
+  }
+
+  submitAsyncQuestionAnswer(requestId: string, decision: InteractionDecision): Promise<boolean> {
+    return this.asyncUserQuestions.submit(requestId, decision);
+  }
+
+  /** Called only after an ordinary user input has been accepted by the host. */
+  dismissAsyncQuestionsForUserInput(): void { this.asyncUserQuestions.expire('superseded'); }
+
+  manageAsyncUserQuestions(input: { action: 'list' } | { action: 'withdraw'; request_ids: string[]; reason: string }) {
+    if (this.getStatus() !== 'active' || this.terminationStarted) throw new Error('No active question session');
+    return input.action === 'list'
+      ? { questions: this.asyncUserQuestions.list() }
+      : { results: this.asyncUserQuestions.withdraw(input.request_ids, input.reason) };
+  }
+
   async send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult> {
-    return this.dispatchSend(message, opts, false);
+    const pending = this.asyncUserQuestions.snapshot();
+    const result = await this.dispatchSend(message, opts, false);
+    if (result.accepted && opts?.[SUPERSEDE_ASYNC_QUESTIONS] && !opts[ASYNC_QUESTION_ANSWER]) this.asyncUserQuestions.expire('superseded', pending);
+    return result;
   }
 
   /**
@@ -919,7 +1023,7 @@ export class Session {
         return { accepted: false, reason: 'cancelled-before-dispatch' };
       }
     }
-    let msg: UserMessage = typeof message === 'string'
+    const msg: UserMessage = typeof message === 'string'
       ? { type: 'user', content: message }
       : message;
     this.logger.debug('send', summarizeUserMessage(msg));
@@ -930,7 +1034,9 @@ export class Session {
     if (this.retirementRequested
       && (this.retirementContinuationGeneration !== this.turnGeneration
         || !allowRetirementContinuation)) {
-      throw new Error(`Session ${this.id} is closing`);
+      throw createSessionUnavailableError(
+        'SESSION_CLOSING', `Session ${this.id} is closing`,
+      );
     }
     if (this.terminalErrorDrainGeneration !== null) {
       throw this.createSessionRunningError();
@@ -944,9 +1050,8 @@ export class Session {
     if (this.isTurnRunning()) {
       throw this.createSessionRunningError();
     }
-    // 并发 send 守卫：已有一个 pre-dispatch reservation 在飞（视觉桥 await 阶段，
-    // handle 尚未 send → isTurnRunning 仍 false）时，拒绝新 send。否则并发 send 会覆盖
-    // this.sendReservation，让先进入视觉桥的 turn 白调外部视觉后端后才发现被取消。
+    // 并发 send 守卫：前置授权／准备期间 handle 尚未 send，isTurnRunning 仍可能为 false。
+    // 拒绝新 send，防止覆盖已有 reservation，让先进入准备的 turn 失去自己的取消边界。
     if (this.sendReservation !== null) {
       throw this.createSessionRunningError();
     }
@@ -975,7 +1080,7 @@ export class Session {
     this.sendReservation = reservation;
     this.unacceptedSendGeneration = reservedTurnGeneration;
     this.terminalObservedDuringReservation = null;
-    onTurnReserved?.(reservedTurnGeneration);
+    let releaseReservation: ((dispatched: boolean) => void) | void = undefined;
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
     // originInstalled:已越过 dispatch 边界、把本次 origin 装进 currentTurnOrigin。
     // turnDispatched:handle.send 成功、本次 send 真正成为运行中的 turn。
@@ -988,7 +1093,7 @@ export class Session {
     const turnLifecycleObserver = this.turnLifecycleObserver;
     let turnLifecyclePrepared = false;
     const finishCancelledBeforeDispatch = (): SessionSendResult | null => {
-      if (!reservation.cancelled && this.sendReservation === reservation) return null;
+      if (!reservation.cancelled && !this.terminationStarted && this.sendReservation === reservation) return null;
       if (this.sendReservation === reservation) this.sendReservation = null;
       if (this.unacceptedSendGeneration === reservedTurnGeneration) {
         this.unacceptedSendGeneration = null;
@@ -996,16 +1101,32 @@ export class Session {
       return { accepted: false, reason: 'cancelled-before-dispatch' };
     };
     try {
+      releaseReservation = turnLifecycleObserver?.onTurnReserved?.(reservedTurnGeneration);
+      onTurnReserved?.(reservedTurnGeneration);
       const cancelledBeforePreparation = finishCancelledBeforeDispatch();
       if (cancelledBeforePreparation !== null) return cancelledBeforePreparation;
       if (afterTurnReserved) await afterTurnReserved();
+      await this.beforeTurn?.(this);
       const cancelledAfterReservation = finishCancelledBeforeDispatch();
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
       this.handle.validateSendOptions?.(handleOpts);
       if (turnLifecycleObserver) {
-        await turnLifecycleObserver.beforeProviderStart(reservedTurnGeneration);
+        try {
+          await turnLifecycleObserver.beforeProviderStart(
+            reservedTurnGeneration,
+            reservation.abortController.signal,
+          );
+        } catch (error) {
+          // A cancelled readiness wait never reached provider dispatch. Release
+          // its reservation normally, while preserving genuine startup errors.
+          const cancelled = finishCancelledBeforeDispatch();
+          if (cancelled !== null) return cancelled;
+          throw error;
+        }
         turnLifecyclePrepared = true;
       }
+      const cancelledAfterPreparation = finishCancelledBeforeDispatch();
+      if (cancelledAfterPreparation !== null) return cancelledAfterPreparation;
       if (beforeProviderStart) await beforeProviderStart();
       const cancelledBeforeAcceptance = finishCancelledBeforeDispatch();
       if (cancelledBeforeAcceptance !== null) return cancelledBeforeAcceptance;
@@ -1013,27 +1134,7 @@ export class Session {
       this.ensureActive();
       const cancelledAfterAcceptance = finishCancelledBeforeDispatch();
       if (cancelledAfterAcceptance !== null) return cancelledAfterAcceptance;
-      // 层 B：用户贴图主动调视觉（视觉桥钩子）。此时 turn guard 已通过、reservation 已
-      // 建立——并发 send 已被 isTurnRunning 挡住，不会在 guard 前浪费视觉调用；取消时
-      // reservation.abortController.signal 可中止视觉请求。钩子失败/未生效 → 原样透传。
       const autoReviewSourceContent = handleOpts[AUTO_REVIEW_SOURCE_CONTENT] ?? msg.content;
-      if (this.visionBridge) {
-        // 传入 reservation abort signal：用户 Stop / 外部取消时中止视觉请求，避免浪费
-        // 外部视觉调用（多图最坏 图片数×timeout 才返回）。
-        msg = await this.bridgedVisionMessage(msg, reservation.abortController.signal);
-        // 视觉调用期间可能被外部取消，恢复后必须复查，避免越过取消边界发消息。
-        const cancelledAfterVision = finishCancelledBeforeDispatch();
-        if (cancelledAfterVision !== null) {
-          // 视觉桥对取消静默（不 warn 不 note），此处补一条低噪声 debug 让排障能区分
-          //「用户取消/拆离」与「配置没开/模型不命中」——取消类场景唯一留痕点。
-          this.logger.debug('vision bridge cancelled before dispatch', {
-            sessionId: this.id,
-            reason: 'cancelled-before-dispatch',
-            model: this.handle.model,
-          });
-          return cancelledAfterVision;
-        }
-      }
       if (resolveAutoReviewUserIntent) {
         const intent = await resolveAutoReviewUserIntent();
         if (intent !== undefined) handleOpts[AUTO_REVIEW_USER_INTENT] = intent;
@@ -1081,11 +1182,15 @@ export class Session {
         const loopIntent = appendAutoReviewUserIntent(previousLoopIntent, autoReviewSourceContent, handleOpts);
         try {
           this.toolLoopUserIntent = loopIntent;
-          await this.handle.send(msg, {
+          await this.handle.send(msg, bindSessionSendOwner({
             ...handleOpts,
             [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent,
             signal: reservation.abortController.signal,
-          });
+          }, reservedTurnGeneration, () => {
+            if (reservedTurnGeneration !== this.turnGeneration) return undefined;
+            return this.terminalEventObservedGeneration === reservedTurnGeneration
+              && this.unsolicitedTurnGeneration !== reservedTurnGeneration ? 'settled' : 'unsettled';
+          }));
         } catch (error) {
           if (this.toolLoopUserIntent === loopIntent) this.toolLoopUserIntent = previousLoopIntent;
           throw error;
@@ -1098,7 +1203,16 @@ export class Session {
           // work. This path is safe to reschedule and must not arm the
           // ambiguous-tail drain used for unknown dispatch failures.
           dispatchConfirmedUndispatched = true;
-          return { accepted: false, reason: 'provider-rejected-before-dispatch' };
+          // A cancelled adapter preflight is also a definite non-dispatch.
+          // Preserve Stop's reason so hosts do not report it as a send failure.
+          return {
+            accepted: false,
+            reason: reservation.cancelled ? 'cancelled-before-dispatch' : 'provider-rejected-before-dispatch',
+            ...(!reservation.cancelled && e.diagnostic ? { diagnostic: e.diagnostic } : {}),
+            ...(!reservation.cancelled && e.upstreamStatus !== undefined
+              ? { upstreamStatus: e.upstreamStatus }
+              : {}),
+          };
         }
         // Cancellation cannot downgrade an explicitly ambiguous provider result
         // into "cancelled before dispatch"; that would skip the mandatory
@@ -1215,6 +1329,14 @@ export class Session {
       } else {
         this.terminalObservedDuringReservation = null;
       }
+      try {
+        releaseReservation?.(turnDispatched);
+      } catch (error) {
+        this.logger.warn('turn reservation observer cleanup failed', {
+          turnGeneration: reservedTurnGeneration,
+          error: String(error),
+        });
+      }
       if (turnLifecyclePrepared && !turnDispatched) {
         try {
           await turnLifecycleObserver?.onUndispatched(reservedTurnGeneration);
@@ -1233,40 +1355,14 @@ export class Session {
     }
   }
 
-  /**
-   * 层 B：若配置了视觉桥，把消息里的图片转成文字描述（send 与 steer 共用）。
-   * 钩子失败/未生效 → 原样透传（零干扰）。signal 可中止视觉请求（steer 通常无 signal）。
-   */
-  private async bridgedVisionMessage(msg: UserMessage, signal?: AbortSignal): Promise<UserMessage> {
-    if (!this.visionBridge) return msg;
-    try {
-      const bridged = await this.visionBridge(msg, {
-        model: this.handle.model,
-        signal,
-        sessionId: this.id,
-      });
-      if (bridged.applied) return appendManagedImageReferences(msg, bridged.message);
-      if (bridged.note) {
-        // 无论 applied 与否，note（fallback 生效 / 视觉桥不可用）都上报，避免静默。
-        this.logger.info('vision bridge note', { sessionId: this.id, note: bridged.note });
-      }
-    } catch (err) {
-      // 防御性兜底：视觉桥抛错绝不阻塞本轮，按未启用处理（host 实现应自吞，这里兜底）。
-      this.logger.warn('vision bridge threw, falling back to passthrough', {
-        sessionId: this.id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-    return msg;
-  }
-
   async steer(
     message: UserMessage | string,
     opts?: SendOptions & Pick<SessionSendOptions, 'beforeProviderStart'>,
   ): Promise<void> {
-    let msg: UserMessage = typeof message === 'string'
+    const msg: UserMessage = typeof message === 'string'
       ? { type: 'user', content: message }
       : message;
+    const pendingQuestions = this.asyncUserQuestions.snapshot();
     this.logger.debug('steer', summarizeUserMessage(msg));
     this.ensureActive();
     if (!this.capabilities.sameTurnSteer.supported) {
@@ -1275,15 +1371,12 @@ export class Session {
     if (!this.handle.isTurnRunning?.()) {
       throw new Error(`Session ${this.id} has no active turn to steer`);
     }
-    // 记录发起时的 turn generation：异步视觉转换期间原 turn 可能结束、同 Session
+    // 记录发起时的 turn generation：异步准备期间原 turn 可能结束、同 Session
     // 又启动新 turn。单看 isTurnRunning 会因新 turn 而通过，把迟到 steer 投给错误
-    // 的 turn（跨 turn 串线）。记录发起时代号，转换后必须「同一 generation 且仍
+    // 的 turn（跨 turn 串线）。记录发起时代号，等待后必须「同一 generation 且仍
     // 在跑」才投递。
     const steerTurnGeneration = this.getTurnGeneration();
     const autoReviewSourceContent = opts?.[AUTO_REVIEW_SOURCE_CONTENT] ?? msg.content;
-    // 层 B：steer 追加图片同样走视觉桥（与 send 一致），否则纯文本模型收到的
-    // 原始 image block 会被后端忽略或拒绝（Greptile P1）。
-    msg = await this.bridgedVisionMessage(msg, opts?.signal);
     const { beforeProviderStart, ...handleOpts } = opts ?? {};
     // Host grants must survive all asynchronous preparation, including steer.
     // Keep the private authorization hook out of provider options.
@@ -1291,8 +1384,8 @@ export class Session {
       await beforeProviderStart();
       this.ensureActive();
     }
-    // 异步视觉转换期间 turn 可能已完成/被中止（视觉后端慢、用户已切任务等）：
-    // 转换结果此时已无人接收，必须先复查原 turn 生命周期再调用 handle.steer，
+    // 异步授权期间 turn 可能已完成/被中止：
+    // 必须先复查原 turn 生命周期再调用 handle.steer，
     // 否则底层以「No active turn to steer」拒绝或 Pi 把迟到消息交给已结束的 turn。
     if (this.getTurnGeneration() !== steerTurnGeneration || !this.handle.isTurnRunning?.()) {
       throw new Error(`Session ${this.id} has no active turn to steer`);
@@ -1306,6 +1399,7 @@ export class Session {
     try {
       this.toolLoopUserIntent = loopIntent;
       await this.handle.steer(msg, { ...handleOpts, [AUTO_REVIEW_SOURCE_CONTENT]: autoReviewSourceContent });
+      if (opts?.[SUPERSEDE_ASYNC_QUESTIONS] && !opts[ASYNC_QUESTION_ANSWER]) this.asyncUserQuestions.expire('superseded', pendingQuestions);
     } catch (error) {
       if (this.getTurnGeneration() === steerTurnGeneration && this.toolLoopUserIntent === loopIntent) {
         this.toolLoopUserIntent = previousLoopIntent;
@@ -1338,7 +1432,7 @@ export class Session {
   async abort(): Promise<void> {
     if (this.status === 'closed') return;
     if (this.status === 'error') return;
-    this.asyncUserQuestions.expire('session_aborted');
+    // Stop ends execution, not unanswered questions.
     // The provider's terminal must not wait for a host hold: the manual-abort
     // recovery grace is shorter than EVENT_STREAM_HOLD_MS.
     this.releaseEventStreamHold();
@@ -1394,7 +1488,7 @@ export class Session {
   }
 
   async requestGracefulStop(): Promise<SessionGracefulStopResult> {
-    this.asyncUserQuestions.expire('session_stopping');
+    // Stop ends execution, not unanswered questions.
     const reservation = this.sendReservation;
     if (reservation) return this.requestGracefulStopForReservation(reservation);
     const control = this.turnControlState;
@@ -1539,7 +1633,34 @@ export class Session {
   }
 
   /**
-   * 「任务已终态、wake turn 尚未启动或仍在跑」的 continuation claim 数。
+   * Whether closing this runtime keeps the conversation (see
+   * AgentSessionHandle.canResumeAfterClose). A plugin engine that does not say
+   * so counts as unable: reclamation must never strand a conversation.
+   */
+  canResumeAfterClose(): boolean {
+    return this.handle.canResumeAfterClose?.() ?? this.agentKind !== 'acp';
+  }
+
+  /**
+   * Provider work that outlives a turn but is not listed as a background task
+   * (see AgentSessionHandle.hasLiveBackgroundWork). Closed runtimes have none.
+   * A throwing probe counts as busy: reclamation must never guess "idle".
+   */
+  async hasLiveBackgroundWork(): Promise<boolean> {
+    if (this.status === 'closed' || this.status === 'error') return false;
+    const probe = this.handle.hasLiveBackgroundWork;
+    if (!probe) return false;
+    try {
+      return await probe.call(this.handle);
+    } catch (error) {
+      this.logger.warn('hasLiveBackgroundWork probe failed; treating runtime as busy', { error: String(error) });
+      return true;
+    }
+  }
+
+  /**
+   * Pending native follow-ups, including bounded background Bash completion
+   * retention. This read-only probe does not claim or extend a product turn.
    * 会话已关闭 / agent 不支持 → 0(此时不会再有 wake turn,0 即事实)。
    */
   countPendingWakeContinuations(): number {
@@ -1561,9 +1682,15 @@ export class Session {
 
   /** Subscribe to provider-owned continuation lifecycle transitions. */
   onTurnContinuationChange(
-    listener: (continuationId: number, state: TurnContinuationState) => void,
+    listener: (continuationId: number, state: TurnContinuationState, reason?: TurnContinuationCancellationReason) => void,
   ): () => void {
     return this.handle.onTurnContinuationChange?.(listener) ?? (() => undefined);
+  }
+
+  /** Read only the cause belonging to this exact retained continuation claim. */
+  getTurnContinuationCancellationReason(continuationId: number): TurnContinuationCancellationReason | undefined {
+    if (this.status === 'closed' || this.status === 'error') return undefined;
+    return this.handle.getTurnContinuationCancellationReason?.(continuationId);
   }
 
   /** True once teardown has started, including an unconfirmed failed close. */
@@ -1577,9 +1704,9 @@ export class Session {
   }
 
   /** Self-close: only claims the cause when no teardown has started yet. */
-  private closeFromRuntime(): Promise<void> {
+  private closeFromRuntime(crashMessage?: string): Promise<void> {
     if (!this.terminationStarted && this.status !== 'closed') this.runtimeInitiatedClose = true;
-    return this.close();
+    return this.beginClose({ reason: 'navigation' }, crashMessage);
   }
 
   /**
@@ -1588,6 +1715,10 @@ export class Session {
    * Account boundaries go through `detach({ reason: 'account-boundary' })`.
    */
   close(opts?: AgentSessionTeardownOptions): Promise<void> {
+    return this.beginClose(opts ?? { reason: 'navigation' });
+  }
+
+  private beginClose(teardown: AgentSessionTeardownOptions, crashMessage?: string): Promise<void> {
     if (this.closePromise) return this.closePromise;
     if (this.status === 'closed') return Promise.resolve();
 
@@ -1605,7 +1736,7 @@ export class Session {
       reject = onReject;
     });
     this.closePromise = closing;
-    void this.performClose(opts ?? { reason: 'navigation' }).then(resolve, reject);
+    void this.performClose(teardown, crashMessage).then(resolve, reject);
     return closing;
   }
 
@@ -1666,26 +1797,51 @@ export class Session {
 
   /**
    * Close only when no send reservation, agent turn, or host-initiated exclusive
-   * RPC operation (manual compact / rewind / model switch) is active. The check
+   * RPC operation (manual compact / rewind / model switch), tracked background
+   * task or wake continuation is active. Provider-only asynchronous probes must
+   * run in the caller before this final synchronous check. The check
    * and close reservation are synchronous, so a concurrent send either wins
    * first and keeps the session open, or observes closePromise and is rejected.
    */
   closeIfIdle(): Promise<boolean> {
-    if (this.status !== 'active' || this.closePromise || this.isTurnRunning() || this.hasUnsettledTurn()
-      || this.retirementContinuationGeneration === this.turnGeneration
-      || this.hasPendingHostOperation()) {
-      return Promise.resolve(false);
-    }
+    if (!this.isIdleForRuntimeRecycling()) return Promise.resolve(false);
     return this.close().then(() => true);
   }
 
-  private async performClose(teardown: AgentSessionTeardownOptions): Promise<void> {
+  /** Shared synchronous predicate for automatic idle and resource-drift teardown. */
+  private isIdleForRuntimeRecycling(): boolean {
+    if (this.status !== 'active' || this.closePromise || this.isTurnRunning() || this.hasUnsettledTurn()
+      || this.retirementContinuationGeneration === this.turnGeneration
+      || this.hasPendingHostOperation()) {
+      return false;
+    }
+    try {
+      if (this.listBackgroundTasks().length > 0 || this.countPendingWakeContinuations() > 0) {
+        return false;
+      }
+    } catch {
+      // A missing snapshot cannot establish that destructive teardown is safe.
+      return false;
+    }
+    return true;
+  }
+
+  private async performClose(teardown: AgentSessionTeardownOptions, crashMessage?: string): Promise<void> {
     let closeSucceeded = false;
     try {
       // close() fences late provider events before entering here. Settle the
       // owned product turn ourselves before listeners and its claim are lost.
       // Never retry: tools may already have performed external side effects.
-      this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE);
+      const interruptedCompaction = teardown.reason === 'navigation' && this.handle.isCompactingDeliveredReply?.();
+      if (crashMessage !== undefined) {
+        // A crash before the first send also belongs to this runtime. Publish
+        // once, under the close fence, before cancelling the send reservation.
+        if (this.terminalEventObservedGeneration !== this.turnGeneration) {
+          this.emitUnfinishedTurn(crashMessage, 'session_event_loop_crashed', interruptedCompaction);
+        }
+      } else {
+        this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE, 'session_closed_mid_turn', interruptedCompaction);
+      }
       this.clearTurnStallWatchdog();
       this.clearTerminalErrorDrain();
       this.cancelSendReservation(this.sendReservation);
@@ -1725,17 +1881,36 @@ export class Session {
     }
   }
 
-  private settleUnfinishedTurn(message: string): void {
+  private settleUnfinishedTurn(message: string, reason: string, interruptedCompaction = false): void {
     if (!this.hasUnsettledTurn()) return;
+    this.emitUnfinishedTurn(message, reason, interruptedCompaction);
+  }
+
+  private emitUnfinishedTurn(message: string, reason: string, interruptedCompaction = false): void {
     const usage = this.handle.getPendingTurnUsage?.();
-    if (this.abortRecoveryScheduledFor === this.turnGeneration) {
-      this.fanOutEvent({ type: 'done', data: { status: 'cancelled', ...(usage ? { usage } : {}) }, source: this.agentKind });
+    if (interruptedCompaction || this.abortRecoveryScheduledFor === this.turnGeneration) {
+      this.fanOutEvent({ type: 'done', data: { status: 'cancelled', ...(usage ? { usage } : {}) }, source: this.eventSource });
     } else {
       this.fanOutEvent({ type: 'error', data: {
-        message, isTerminal: true, reason: 'session_event_loop_crashed',
+        message, isTerminal: true, reason,
         ...(usage ? { usage } : {}),
-      }, source: this.agentKind });
+      }, source: this.eventSource, sessionTurnGeneration: this.turnGeneration });
     }
+  }
+
+  /**
+   * Fence an intentional app exit before the host kills process trees. This
+   * must not close/abort the transport: Windows still needs the live parent
+   * to discover and reap its descendants. detach() owns actual cleanup later.
+   */
+  prepareForHostShutdown(): void {
+    if (this.terminationStarted || this.status === 'closed') return;
+    this.terminationStarted = true;
+    this.turnControlState?.toolLoopMonitor?.dispose();
+    this.clearTurnStallWatchdog();
+    this.clearTerminalErrorDrain();
+    // No callbacks or AbortSignal here: an in-flight send can wire its signal
+    // directly to the SDK process. detach() cancels it after the tree sweep.
   }
 
   /**
@@ -1747,21 +1922,33 @@ export class Session {
   async detach(opts?: AgentSessionTeardownOptions): Promise<void> {
     const teardown: AgentSessionTeardownOptions = opts ?? { reason: 'account-boundary' };
     if (this.status === 'closed') return;
+    if (teardown.reason === 'app-quit') this.prepareForHostShutdown();
     this.terminationStarted = true;
     this.asyncUserQuestions.expire('session_closed');
     this.releaseEventStreamHold();
     // 拆除开始即作废进行中的工具循环复核,迟到结论不得再中断。
     this.turnControlState?.toolLoopMonitor?.dispose();
     // 与 performClose() 对齐：进入拆离立即 abort 未完成的 pre-dispatch reservation
-    // （vision bridge 等前置 hook 的 fetch），而不是等 handle.detach()/视觉通道超时——
-    // 否则 handle.detach() 慢/挂起时，in-flight 视觉请求会继续拖住退出链。
+    // （前置准备与授权等待），而不是等 handle.detach() 完成——
+    // 否则 handle.detach() 慢/挂起时，在途准备会继续拖住退出链。
     this.cancelSendReservation(this.sendReservation);
     let detachSucceeded = false;
     try {
+      // Emit only in the async teardown phase: terminal listeners may themselves
+      // close transports, so they must not run before the host's sync tree sweep.
+      // Claude and Pi are interrupted by this explicit host exit, not a model
+      // failure. Settle before Pi's close fallback can synthesize a crash, while
+      // retaining usage and leaving the other adapters' detach contracts alone.
+      if (teardown.reason === 'app-quit'
+        && (this.agentKind === 'claude-code' || this.agentKind === 'pi') && this.hasUnsettledTurn()) {
+        const usage = this.handle.getPendingTurnUsage?.();
+        this.fanOutEvent({ type: 'done', source: this.agentKind,
+          data: { status: 'cancelled', ...(usage ? { usage } : {}) } });
+      }
       if (this.handle.detach) {
         await this.handle.detach(teardown);
       } else {
-        if (this.handle.getPendingTurnUsage) this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE);
+        if (this.handle.getPendingTurnUsage) this.settleUnfinishedTurn(SESSION_CLOSED_MID_TURN_MESSAGE, 'session_closed_mid_turn');
         await this.handle.close(teardown);
       }
       detachSucceeded = true;
@@ -1795,6 +1982,10 @@ export class Session {
     return this.handle.getUsageSnapshot();
   }
 
+  retryFailedRuntimeCapabilityCapture(): void {
+    this.handle.retryFailedRuntimeCapabilityCapture?.();
+  }
+
   /** Return the current per-session Pi runtime capability snapshot, if exposed. */
   getRuntimeCapabilities(): PiRuntimeCapabilityManifest | undefined {
     return this.handle.getRuntimeCapabilities?.();
@@ -1809,6 +2000,11 @@ export class Session {
     listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
   ): () => void {
     return this.handle.onRuntimeCapabilitiesChange?.(listener) ?? (() => undefined);
+  }
+
+  /** Subscribe to per-session negotiated capability changes (plugin ACP engines). */
+  onCapabilitiesChange(listener: (capabilities: Capabilities) => void): () => void {
+    return this.handle.onCapabilitiesChange?.(listener) ?? (() => undefined);
   }
 
   async getContextUsage(): Promise<ContextUsageData> {
@@ -1826,6 +2022,12 @@ export class Session {
   async readMcpServerTools(serverName: string): Promise<AgentMcpServerToolsReport | null> {
     this.ensureActive();
     return await this.handle.readMcpServerTools?.(serverName) ?? null;
+  }
+
+  async callNativeToolCatalog(method: string, args: unknown[]): Promise<unknown> {
+    this.ensureActive();
+    if (!this.handle.callNativeToolCatalog) throw new Error('UNSUPPORTED_CAPABILITY');
+    return this.handle.callNativeToolCatalog(method, args);
   }
 
   /**
@@ -2180,8 +2382,11 @@ export class Session {
   }
 
   /** 手动压缩会话上下文(capability 见 Capabilities.manualCompact)。 */
-  async compactSession(instructions?: string): Promise<ManualCompactResult> {
+  async compactSession(instructions?: string, beforeDispatch?: () => Promise<void>): Promise<ManualCompactResult> {
     this.ensureActive();
+    if (this.agentKind === 'codex' && (this.sendReservation !== null || this.hostTurnLeases.size > 0)) {
+      throw new Error('Cannot compact while a Codex send is reserved');
+    }
     if (!this.capabilities.manualCompact?.supported) {
       throw new NotSupportedError(
         'manualCompact',
@@ -2191,7 +2396,17 @@ export class Session {
     if (!this.handle.compactSession) {
       throw new NotSupportedError('manualCompact', { supported: false, reason: 'not-implemented' });
     }
-    return this.handle.compactSession(instructions);
+    if (this.agentKind === 'codex') {
+      // Only a fully settled prior turn may yield to native compaction. Retire
+      // its Stop check without inventing a new user turn; a Stop on the compact
+      // itself must still get a fresh, bounded recovery check.
+      if (this.isTurnRunning() || this.hasUnsettledTurn()) {
+        throw this.createSessionRunningError();
+      }
+      this.abortRecoveryEpoch += 1;
+      this.abortRecoveryScheduledFor = null;
+    }
+    return this.handle.compactSession(instructions, beforeDispatch);
   }
 
   async getSessionTree(): Promise<SessionTreeSnapshot> {
@@ -2253,7 +2468,7 @@ export class Session {
    * 不写 DB —— 持久化由调用方 (main IPC 协调 local-db:sessions:update) 负责,
    * 跟 setModel/setEffort 双 IPC 协调先例一致。
    */
-  async setExtraDirs(dirs: string[], libraryRoot?: string | null): Promise<void> {
+  async setExtraDirs(dirs: string[], libraryRoot?: string | null, remote?: { hostId: string; directories: string[] }): Promise<void> {
     this.ensureActive();
     if (!this.capabilities.extraDirs.supported) {
       throw new NotSupportedError('extraDirs', this.capabilities.extraDirs);
@@ -2261,13 +2476,21 @@ export class Session {
     if (!this.handle.setExtraDirs) {
       throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setExtraDirs(dirs, libraryRoot);
+    await this.handle.setExtraDirs(dirs, libraryRoot, remote);
+  }
+
+  /**
+   * 附加只读目录变更后是否需要回收并重建运行时；仅对真正把 `extraDirs` 冻结在
+   * 建连握手期的适配器返回 true，避免无谓重启靠 prompt 注入热更新的会话。
+   */
+  requiresRuntimeRecycleForExtraDirs(): boolean {
+    return this.handle.requiresRuntimeRecycleForExtraDirs?.() === true;
   }
 
   /**
    * 运行时覆盖附加可读写目录。不写 DB；持久化由 host 与 setExtraDirs 相同地协调。
    */
-  async setWritableDirs(dirs: string[]): Promise<void> {
+  async setWritableDirs(dirs: string[], remote?: { hostId: string; directories: string[] }): Promise<void> {
     this.ensureActive();
     const capability = this.capabilities.writableDirs;
     if (!capability?.supported) {
@@ -2279,12 +2502,16 @@ export class Session {
     if (!this.handle.setWritableDirs) {
       throw new NotSupportedError('writableDirs', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setWritableDirs(dirs);
+    await this.handle.setWritableDirs(dirs, remote);
   }
 
   // ── Rewind (Stage 2 C2) ────────────────────────────────────────────────────
   // Claude 走 SDK checkpoint；Codex 走 thread/rollback 裁剪对话。
   // 业务层 (desktop agentRewind.ts) 通过这个委托对外暴露。
+
+  hasReclaimedSharedRun(): boolean {
+    return this.getStatus() === 'active' && this.handle.hasReclaimedSharedRun?.() === true;
+  }
 
   /**
    * 当前是否有 turn 在跑 (rewind preview/commit 业务前置守卫用)。
@@ -2298,6 +2525,22 @@ export class Session {
       this.permissionModeChangesInFlight > 0 ||
       this.isHandleTurnRunning()
     );
+  }
+
+  /**
+   * 项目资源漂移且满足回收空闲口径时返回 true(仅 pi 本地根任务实现,其余 agent
+   * 恒 false)。只判定不执行 close:close 必须由持有 Maker 的调用方走
+   * closeSessionIfCurrent(session, 'runtime-refresh'),让 session:closed 带上 Maker
+   * 认识的刷新原因 —— 直接 Session.close 绕过 Maker 的 closeReasons 登记,IM
+   * runner 会按 unexpected 清掉排队中的回合、丢失已接受的派发。空闲口径与
+   * closeIfIdle 一致:turn 运行中、结束未收口的 turn、换代续接、手动压缩 /
+   * rewind 等宿主排他操作、后台任务及待续报 continuation 存续时绝不回收。
+   * 回收后由既有 lazy bootstrap 在下次
+   * 发送时重扫项目资源、重算 argv。
+   */
+  hasRecyclableProjectResourceDrift(): boolean {
+    if (!this.isIdleForRuntimeRecycling()) return false;
+    return this.handle.hasProjectResourceDrift?.() === true;
   }
 
   getCurrentTurnId(): string | null {
@@ -2403,18 +2646,12 @@ export class Session {
     // Native async questions use the same card resolver, but never suspend turn
     // protection or register a waiting interaction with the lifecycle observer.
     if (request.kind === 'ask_user_question' && request.delivery === 'async') return resolve();
-    const isQuestion = request.kind === 'ask_user_question';
-    if (isQuestion) {
-      this.pendingUserQuestions += 1;
-      this.asyncUserQuestions.expire('superseded');
-    }
     this.pendingInteractions += 1;
     const runtime = this.observeInteractionStarted(request);
     this.armTurnStallWatchdog();
     try {
       return await resolve();
     } finally {
-      if (isQuestion) this.pendingUserQuestions -= 1;
       this.pendingInteractions = Math.max(0, this.pendingInteractions - 1);
       this.observeInteractionSettled(runtime);
       this.armTurnStallWatchdog();
@@ -2425,14 +2662,13 @@ export class Session {
     this.interactionListener = listener;
   }
 
-  /** Display an optional question and return immediately; answers steer only this execution. */
-  askUserQuestionAsync(questions: AskUserQuestionItem[]): string {
+  /** Display independent questions immediately; answers use the current or next turn. */
+  askUserQuestionAsync(questions: AskUserQuestionItem[]) {
     // Use the live Session identity, even if a stale MCP context claims another
     // harness. Codex's native adapter is its sole async question owner.
     if (this.agentKind === 'codex') throw new Error('Codex uses native async questions');
     this.ensureActive();
     if (!this.interactionListener) throw new Error('Question UI is unavailable');
-    if (this.pendingUserQuestions > 0) throw new Error('A blocking user question is already pending');
     if (!this.capabilities.sameTurnSteer.supported) {
       throw new NotSupportedError('sameTurnSteer', this.capabilities.sameTurnSteer);
     }
@@ -2448,13 +2684,21 @@ export class Session {
 
   private ensureActive(): void {
     if (this.status === 'closed') {
-      throw new Error(`Session ${this.id} is closed`);
+      throw createSessionUnavailableError(
+        'SESSION_CLOSED', `Session ${this.id} is closed`,
+      );
+    }
+    // 先认 error：上一次 close/detach 已经失败、teardown 也已经开始，此时「正在关闭」会
+    // 掩盖真正的事实（拆除放弃了，需要重建），宿主拿到的 code 也就失去了分类价值。
+    if (this.status === 'error') {
+      throw createSessionUnavailableError(
+        'SESSION_ERROR', `Session ${this.id} is in error state`,
+      );
     }
     if (this.closePromise || this.terminationStarted) {
-      throw new Error(`Session ${this.id} is closing`);
-    }
-    if (this.status === 'error') {
-      throw new Error(`Session ${this.id} is in error state`);
+      throw createSessionUnavailableError(
+        'SESSION_CLOSING', `Session ${this.id} is closing`,
+      );
     }
   }
 
@@ -2473,13 +2717,13 @@ export class Session {
   }
 
   private beginTurnControl(generation: number): void {
-    this.asyncUserQuestions.expire('superseded');
     this.turnControlState?.toolLoopMonitor?.dispose();
     this.turnControlState = {
       generation,
       // Claude owns per-sidechain guards before translation. Pi/Codex share
       // the same detector here, paired with this product turn's lifecycle.
-      toolLoopMonitor: this.agentKind === 'claude-code' ? null : new ToolLoopMonitor(new ToolLoopGuard({
+      // Plugin (ACP) engines own their agent loop; Cindy's tool-loop guard stays built-in only.
+      toolLoopMonitor: this.agentKind === 'claude-code' || this.agentKind === 'acp' ? null : new ToolLoopMonitor(new ToolLoopGuard({
         // These normalized events do not identify model-response batches.
         // Distinct malformed calls can belong to one parallel attempt, so do
         // not enable the retry-count rule without that evidence. Claude also
@@ -2491,7 +2735,8 @@ export class Session {
       }), {
         reviewer: this.toolLoopReviewer,
         context: () => ({
-          sessionId: this.id, agentKind: this.agentKind, model: this.handle.model,
+          // The monitor exists for built-in engines only (see the guard above).
+          sessionId: this.id, agentKind: this.agentKind as AgentKind, model: this.handle.model,
           userIntent: this.toolLoopUserIntent,
         }),
         onReviewedStop: (verdict) => this.interruptReviewedToolLoop(verdict, generation),
@@ -2500,6 +2745,7 @@ export class Session {
       pendingToolLoop: null,
       awaitingToolResultSummaries: new Set(),
       activeToolIds: new Set(),
+      activeToolLabels: new Map(),
       anonymousActiveTools: 0,
       pendingInteractionToolIds: new Map(),
       gracefulStopState: 'none',
@@ -2623,8 +2869,14 @@ export class Session {
       if (data.runtimeActivity === 'snapshot') {
         return;
       }
-      if (toolUseId) control.activeToolIds.add(toolUseId);
-      else control.anonymousActiveTools += 1;
+      if (toolUseId) {
+        control.activeToolIds.add(toolUseId);
+        const label = safeActiveToolLabel(this.agentKind, data);
+        if (label) control.activeToolLabels.set(toolUseId, label);
+        else control.activeToolLabels.delete(toolUseId);
+      } else {
+        control.anonymousActiveTools += 1;
+      }
       return;
     }
     if (event.type === 'tool_result_full' || event.type === 'tool_result') {
@@ -2634,7 +2886,10 @@ export class Session {
           ? data.toolUseIds.filter((id): id is string => typeof id === 'string')
           : []),
       ];
-      for (const id of ids) control.activeToolIds.delete(id);
+      for (const id of ids) {
+        control.activeToolIds.delete(id);
+        control.activeToolLabels.delete(id);
+      }
       if (ids.length === 0 && control.anonymousActiveTools > 0) {
         control.anonymousActiveTools -= 1;
       }
@@ -2702,7 +2957,13 @@ export class Session {
     isBackgroundEvent: boolean,
     isCurrentGeneration: boolean,
   ): boolean {
-    if (isBackgroundEvent || !isCurrentGeneration || !this.isNewTurnProgressEvent(event)) return false;
+    // Claude knows a top-level automatic turn started even when the first
+    // response is only an API-error envelope. Ordinary running/child statuses
+    // are not evidence: they can be leftover activity from the preceding turn.
+    const providerStart = event.source === 'claude-code' && event.type === 'status' &&
+      (event.data as { isRunning?: unknown; providerInitiatedTurn?: unknown } | null)?.isRunning === true &&
+      (event.data as { providerInitiatedTurn?: unknown } | null)?.providerInitiatedTurn === true;
+    if (isBackgroundEvent || !isCurrentGeneration || (!providerStart && !this.isNewTurnProgressEvent(event))) return false;
     const parentUuid = event.agentMeta?.parentUuid;
     if (typeof parentUuid === 'string' && parentUuid.length > 0) return false;
     const generation = this.turnGeneration;
@@ -2953,9 +3214,7 @@ export class Session {
     const hasPendingContinuation = continuationState !== null;
     const isTerminal =
       (event.type === 'done' && !hasPendingContinuation) || isTerminalAgentErrorEvent(event);
-    if (isTerminal && !isBackgroundEvent) {
-      this.asyncUserQuestions.expire(event.type === 'error' ? 'turn_failed' : 'turn_completed', resolvedGeneration);
-    }
+    // Async questions remain available after completion/failure, independently of this generation.
     // A dispatching send is not enough evidence that a terminal event belongs
     // to it: Codex can enqueue the previous turn's terminal error after flipping
     // its handle idle. Only runEventLoop's generation adoption may transfer
@@ -3185,7 +3444,9 @@ export class Session {
       return;
     }
     if (event.type !== 'tool_result_full' || typeof data.fullText !== 'string') return;
-    const verdict = control.toolLoopMonitor.onToolResult(data.toolUseId, data.fullText, data.isError === true);
+    const verdict = control.toolLoopMonitor.onToolResult(
+      data.toolUseId, data.outputOmitted === 'oversized' ? null : data.fullText, data.isError === true,
+    );
     if (verdict.kind !== 'hard') return;
     // Both translators enqueue full text before its summary. Let listeners
     // consume both projections before terminal cleanup clears their pairing.
@@ -3228,7 +3489,7 @@ export class Session {
         reason: 'tool_use_loop_detected',
         toolLoop: { kind: verdict.reason, count: verdict.count },
       },
-      source: this.agentKind,
+      source: this.eventSource,
     });
     // A listener can synchronously take over. Never interrupt its replacement.
     if (generation !== this.turnGeneration) return;
@@ -3386,12 +3647,36 @@ export class Session {
     if (this.hasRunningBackgroundTasks()) return;
     const now = Date.now();
     const msSinceLastEvent = this.lastEventAt > 0 ? now - this.lastEventAt : null;
+    const control =
+      this.turnControlState?.generation === this.turnGeneration
+        ? this.turnControlState
+        : null;
+    const activeToolCount = control
+      ? control.activeToolIds.size + control.anonymousActiveTools
+      : 0;
+    const activeToolIds = control
+      ? [...control.activeToolIds].slice(0, MAX_STALL_DIAGNOSTIC_TOOLS)
+      : [];
+    const activeTools = control
+      ? activeToolIds.map((id) => {
+          const label = control.activeToolLabels.get(id);
+          return label ? `${label}/${id}` : id;
+        })
+      : [];
     this.logger.warn('turn stall watchdog tripped — no product activity, interrupting turn', {
       turnStallMs: this.turnStallMs,
       lastEventType: this.lastEventType,
       msSinceLastEvent,
+      ...(activeToolCount > 0 ? { activeToolCount } : {}),
+      ...(activeTools.length > 0 ? { activeTools } : {}),
     });
     const minutes = Math.round(this.turnStallMs / 60_000);
+    const activeToolDetail = activeTools.length > 0
+      ? `: ${activeTools.join(', ')}${activeToolCount > activeTools.length ? `, +${activeToolCount - activeTools.length} more` : ''}`
+      : '';
+    const stallCause = activeToolCount > 0
+      ? `${activeToolCount} unfinished tool call${activeToolCount === 1 ? '' : 's'} still pending${activeToolDetail}`
+      : 'upstream, tools and the agent subprocess were all silent';
     this.fanOutEvent({
       type: 'error',
       data: {
@@ -3399,7 +3684,7 @@ export class Session {
         // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
         message:
           `This turn produced no activity at all for ${minutes} minutes ` +
-          '(upstream, tools and the agent subprocess were all silent); ' +
+          `(${stallCause}); ` +
           'it was interrupted automatically. You can send the next message to continue.',
         isTerminal: true,
         reason: this.handle.isPreparingUserTurn?.()
@@ -3408,8 +3693,10 @@ export class Session {
         turnStallMs: this.turnStallMs,
         lastEventType: this.lastEventType,
         msSinceLastEvent,
+        ...(activeToolCount > 0 ? { activeToolCount } : {}),
+        ...(activeToolIds.length > 0 ? { activeToolIds } : {}),
       },
-      source: this.agentKind,
+      source: this.eventSource,
     } as AgentEvent);
     // 复核定时器**先于** abort 排定,且不挂在 abort 的 promise 上。
     // 曾经写在 .finally() 里,但 abort 走的正是"已经哑火"的那条链路:agent 的
@@ -3440,7 +3727,7 @@ export class Session {
     // 复核于是关掉一条其实还响应得动的会话(第十八轮 P1)。与 armTurnStallSlice、codex 的
     // armUpstreamIdleSlice、claude-code 的 armUpstreamResponseIdleSlice、scheduler 的
     // absorbSuspendGap、排队派发的 QUEUED_DISPATCH_SUSPEND_GAP_MS 同源:壁钟差 ≠ 清醒时间。
-    this.armAbortRecoverySlice(generation, graceMs, graceMs, trigger);
+    this.armAbortRecoverySlice(generation, graceMs, graceMs, trigger, ++this.abortRecoveryEpoch);
   }
 
   /** 宽限的分片计时:片尾核对壁钟,发现被冻结过就把那一片作废重开(额度不扣)。 */
@@ -3449,10 +3736,12 @@ export class Session {
     remainingMs: number,
     graceMs: number,
     trigger: 'stall-watchdog' | 'manual-abort',
+    recoveryEpoch: number,
   ): void {
     const slice = Math.min(remainingMs, TURN_STALL_SLICE_MS);
     const startedAt = Date.now();
     const timer = setTimeout(() => {
+      if (recoveryEpoch !== this.abortRecoveryEpoch) return;
       const elapsed = Date.now() - startedAt;
       if (elapsed > slice + TURN_STALL_SUSPEND_GAP_MS) {
         this.logger.info('abort recovery skipped a suspended slice', {
@@ -3460,12 +3749,12 @@ export class Session {
           sliceMs: slice,
           elapsedMs: elapsed,
         });
-        this.armAbortRecoverySlice(generation, remainingMs, graceMs, trigger);
+        this.armAbortRecoverySlice(generation, remainingMs, graceMs, trigger, recoveryEpoch);
         return;
       }
       const left = remainingMs - Math.max(0, elapsed);
       if (left > 0) {
-        this.armAbortRecoverySlice(generation, left, graceMs, trigger);
+        this.armAbortRecoverySlice(generation, left, graceMs, trigger, recoveryEpoch);
         return;
       }
       // 把真正生效的宽限与触发来源带进复核:两条路径的宽限不同(手动 60s / 看门狗 10s),
@@ -3627,6 +3916,13 @@ export class Session {
           // belong to this send.
           observedGeneration = this.turnGeneration;
         }
+        // Adapter-owned transport terminals name the actual send, even when
+        // next() was waiting on an older turn. Provider fields cannot mint this.
+        const terminalOwner = readSessionSendTerminalOwner(event);
+        if (terminalOwner === this.turnGeneration) {
+          event.sessionTurnGeneration = terminalOwner;
+          observedGeneration = terminalOwner;
+        }
         if (this.terminationStarted) continue;
         // 宿主整机拆除已开始时,空闲会话收到的子进程死亡终态错误不属于任何轮次;
         // 照常派发会落一条伪造的「上轮失败」记录(#8831)。有在跑/未收口轮次时
@@ -3644,25 +3940,16 @@ export class Session {
         this.fanOutEvent(event, observedGeneration, awaitingGeneration, true);
       }
     } catch (e) {
-      this.logger.error('event loop crashed', { error: String(e) });
-      if (this.closePromise || this.status === 'closed') return;
-      // 先占住 closing gate，避免 terminal error listener 在死掉的 iterator 上重新 send。
-      const closing = this.closeFromRuntime();
-      if (this.terminalEventObservedGeneration !== this.turnGeneration) {
-        this.fanOutEvent({
-          type: 'error',
-          data: {
-            message: `Session event loop stopped unexpectedly: ${String(e)}`,
-            isTerminal: true,
-            reason: 'session_event_loop_crashed',
-          },
-          source: this.agentKind,
-        });
-      }
+      if (this.terminationStarted || this.status === 'closed') return;
+      const detail = redactSensitiveText(String(e));
+      this.logger.error('event loop crashed', {
+        error: detail,
+        ...(e instanceof Error && e.stack ? { stack: redactSensitiveText(e.stack) } : {}),
+      });
       try {
-        await closing;
+        await this.closeFromRuntime(`Session event loop stopped unexpectedly: ${detail}`);
       } catch (closeError) {
-        this.logger.warn('event-loop crash handle close failed', { error: String(closeError) });
+        this.logger.warn('event-loop crash handle close failed', { error: redactSensitiveText(String(closeError)) });
       }
       return;
     }
@@ -3687,7 +3974,7 @@ export class Session {
     this.runtimeInitiatedClose = true;
     this.terminationStarted = true;
     this.closePromise = Promise.resolve();
-    this.settleUnfinishedTurn('Session event loop stopped unexpectedly without a terminal event');
+    this.settleUnfinishedTurn('Session event loop stopped unexpectedly without a terminal event', 'session_event_loop_crashed');
     this.clearTurnStallWatchdog();
     this.cancelSendReservation(this.sendReservation);
     this.sendReservation = null;

@@ -3,7 +3,8 @@
 // build-ios.mjs —— iOS 纯构建(本机出签名 .ipa,不含任何上传 / 分发 / 发布)
 //
 // 流程(--execute):git 闸门 → expo prebuild → pod install → xcodebuild archive/export
-//       → .ipa → 从 .ipa 回读内嵌 runtimeVersion(EXUpdates.bundle/fingerprint,仅报告)
+//       → .ipa + 同名 .dSYMs.zip(崩溃日志符号化用,须与该包一起留存)
+//       → 从 .ipa 回读内嵌 runtimeVersion(EXUpdates.bundle/fingerprint,仅报告)
 //       → 产物留在导出目录并打印路径(--out 可另拷一份)。
 // dry-run 纯本地:校验配置 + 打印计划,git 闸门(含 origin/main 远端比对)只在
 // --execute 时执行,分支/离线环境也能直接看计划。
@@ -32,7 +33,7 @@
 //   --execute                  真正构建;缺省 dry-run 只打印计划。
 //   --desktop-version x.y.z    可选。配对的桌面产品线版本号(设置页展示用),
 //                              不传则不注入、设置页不显示该行。
-//   --out <dir>                可选。构建完把 .ipa 另拷到该目录。
+//   --out <dir>                可选。构建完把 .ipa 与 .dSYMs.zip 另拷到该目录。
 //   --skip-git-gate            跳过 --execute 的 main/clean/HEAD 校验(仅本地迭代用;
 //                              dry-run 本就不校验)。
 //
@@ -59,7 +60,7 @@ import {
   SELF_HOST_PUBLIC_ENV_KEYS,
   formatBakedEnvLines,
 } from './release-lib.mjs';
-import { buildExportOptionsPlist, resolveIosSigningEnv } from './lib/ios-local.mjs';
+import { archiveIosSymbols, buildExportOptionsPlist, resolveIosSigningEnv } from './lib/ios-local.mjs';
 import { clearBundlerCache } from './lib/bundler-cache.mjs';
 import { withUserGemPodOnPath } from './sim-pod-install.mjs';
 import { readEmbeddedRuntimeVersionFromIpa } from './lib/embedded-runtime.mjs';
@@ -215,7 +216,15 @@ function buildIpa(env, region) {
 
   const ipa = readdirSync(exportDir).find((f) => f.endsWith('.ipa'));
   if (!ipa) throw new Error(`export 未产出 .ipa:${exportDir}`);
-  return join(exportDir, ipa);
+  const ipaPath = join(exportDir, ipa);
+  // archive 建在临时目录里:符号必须随 .ipa 一起留下,否则这个版本的线上崩溃日志读不出函数名。
+  const symbolsPath = archiveIosSymbols({
+    archivePath,
+    ipaPath,
+    zip: (from, to) => run('ditto', ['-c', '-k', '--keepParent', from, to]),
+    fs: { existsSync, readdirSync },
+  });
+  return { ipaPath, symbolsPath };
 }
 
 async function main() {
@@ -294,8 +303,11 @@ async function main() {
   assertPublicEnv(env, { variant: 'production', requiredKeys: SELF_HOST_PUBLIC_ENV_KEYS });
 
   iosBuildFailureStage = IOS_BUILD_FAILURE_STAGE.toolchain;
-  const ipaPath = buildIpa(env, region);
+  const { ipaPath, symbolsPath } = buildIpa(env, region);
   log(`  ✓ ipa: ${ipaPath}`);
+  log(symbolsPath
+    ? `  ✓ symbols: ${symbolsPath}`
+    : '  warn: archive 未包含 dSYM;这个包的线上崩溃日志将无法还原成函数名');
 
   iosBuildFailureStage = IOS_BUILD_FAILURE_STAGE.artifactValidation;
   // 权威 runtimeVersion = 真正烤进 .ipa 的 EXUpdates.bundle/fingerprint(仅报告,供发布侧比对)。
@@ -303,20 +315,27 @@ async function main() {
   log(`  ✓ runtimeVersion(读自 .ipa 内嵌 fingerprint): ${runtimeVersion}`);
 
   let finalPath = ipaPath;
+  let finalSymbolsPath = symbolsPath;
   if (typeof args.out === 'string' && args.out) {
     iosBuildFailureStage = IOS_BUILD_FAILURE_STAGE.output;
     const outDir = resolve(String(args.out));
     if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
     finalPath = join(outDir, basename(ipaPath));
     copyFileSync(ipaPath, finalPath);
+    if (symbolsPath) {
+      finalSymbolsPath = join(outDir, basename(symbolsPath));
+      copyFileSync(symbolsPath, finalSymbolsPath);
+    }
   }
 
   console.log('');
   console.log('==================== iOS 构建完成 ====================');
   console.log(`  ipa            : ${finalPath}`);
+  console.log(`  symbols        : ${finalSymbolsPath ?? '(无:archive 未包含 dSYM)'}`);
   console.log(`  version        : ${version} (${buildNumber})`);
   console.log(`  runtimeVersion : ${runtimeVersion}`);
   console.log('  注意:本脚本只构建;签名为本机证书所签,分发/发布由发布方流程另行处理。');
+  console.log('  符号:.dSYMs.zip 请与该 .ipa 一起留存;没有它,Xcode Organizer 里这个版本的崩溃日志读不出函数名。');
   console.log('======================================================');
 }
 

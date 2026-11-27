@@ -189,7 +189,7 @@ export function TaskTagMenuSection({ session, onMore }: { session: Session; onMo
                   onBlur={() =>
                     setHighlightedId((current) => (current === tag.id ? null : current))
                   }
-                  className="group/tag flex h-7 w-6 shrink-0 items-center justify-center rounded-full focus-visible:outline disabled:opacity-40"
+                  className="group/tag flex h-7 w-6 shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-40"
                   onClick={async () => {
                     setBusy(true);
                     setError('');
@@ -238,7 +238,7 @@ export function TaskTagMenuSection({ session, onMore }: { session: Session; onMo
           })}
           <button
             type="button"
-            className="group/tag flex h-7 w-6 shrink-0 items-center justify-center rounded-full focus-visible:outline disabled:opacity-40"
+            className="group/tag flex h-7 w-6 shrink-0 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-40"
             aria-label={t('taskTags.more')}
             title={t('taskTags.more')}
             disabled={
@@ -515,7 +515,7 @@ export function TaskTagEditor({ session, onClose }: { session: Session; onClose:
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[200]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           onClick={(e) => e.stopPropagation()}
@@ -524,7 +524,7 @@ export function TaskTagEditor({ session, onClose }: { session: Session; onClose:
           onDragEnd={(e) => e.stopPropagation()}
           onDragOver={(e) => e.stopPropagation()}
           onDrop={(e) => e.stopPropagation()}
-          className={`modal-panel fixed left-1/2 top-1/2 z-[201] w-[min(380px,calc(100vw-32px))] max-h-[85dvh] -translate-x-1/2 -translate-y-1/2 p-4 text-[var(--text-primary)] ${formOpen ? 'overflow-auto' : 'flex flex-col overflow-hidden'}`}
+          className={`modal-panel fixed left-1/2 top-1/2 z-modal-raised w-[min(380px,calc(100vw-32px))] max-h-[85dvh] -translate-x-1/2 -translate-y-1/2 p-4 text-[var(--text-primary)] ${formOpen ? 'overflow-auto' : 'flex flex-col overflow-hidden'}`}
         >
           <div className="flex shrink-0 items-center gap-2">
             {formOpen && !deletion && (
@@ -537,7 +537,7 @@ export function TaskTagEditor({ session, onClose }: { session: Session; onClose:
                 <ArrowLeft size={16} />
               </button>
             )}
-            <Dialog.Title className="flex-1 text-base font-semibold">
+            <Dialog.Title className="flex-1 text-base font-medium">
               {t(
                 deletion
                   ? 'taskTags.delete'

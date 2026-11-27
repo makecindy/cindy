@@ -50,7 +50,10 @@ describe('reset preferences persistence', () => {
       restored: async () => { await waiter.resumeRestored(async () => redeemed); }, warn: vi.fn(),
     });
     await Promise.all([engine.check('openai'), engine.check('openai')]);
-    expect(consumeRpc).toHaveBeenCalledExactlyOnceWith({ creditId: 'one-credit', idempotencyKey: '00000000-0000-4000-8000-000000000001' });
+    expect(consumeRpc).toHaveBeenCalledExactlyOnceWith(
+      { creditId: 'one-credit', idempotencyKey: '00000000-0000-4000-8000-000000000001' },
+      { email: 'test@example.com', accountId: 'workspace' },
+    );
     expect(continueSession).toHaveBeenCalledOnce();
     expect(store.read('openai', account).lastUsedAt).toBe(now);
     expect((await service.read()).rateLimitResetCredits?.availableCount).toBe(0);
@@ -83,5 +86,24 @@ describe('reset preferences persistence', () => {
     await expect(store.write('openai', key, { minimumDays: -1 })).rejects.toThrow();
     await expect(store.write('openai', key, { lowQuota: false, expiring: false })).rejects.toThrow();
     expect(store.read('openai', key).settings.lowQuota).toBe(true);
+  });
+  it('remove drops one provider entirely, leaves siblings intact and disappears from providers()', async () => {
+    // #12390:被删除的订阅池账号会在 codex-reset-auto-use.json 里留下 enabled=true 的残留,
+    // checkEnabled 每 60 秒枚举一次并对它发起永远失败的探针;remove 是清理这些残留的入口。
+    const dir = mkdtempSync(path.join(tmpdir(), 'cindy-reset-remove-')); dirs.push(dir);
+    const filename = path.join(dir, 'settings.json');
+    const store = createCodexResetAutoUseStore(() => filename, () => 'owner');
+    const key = codexResetAccountKey('gone@example.com', 'workspace');
+    await Promise.all([store.write('openai-account:gone', key, { enabled: true }), store.write('openai', key, { enabled: true })]);
+    expect(store.providers().sort()).toEqual(['openai', 'openai-account:gone']);
+
+    await store.remove('openai-account:gone');
+
+    expect(store.providers()).toEqual(['openai']);
+    expect(store.read('openai-account:gone', key).customized).toBe(false);
+    expect(JSON.parse(readFileSync(filename, 'utf8'))).toEqual({ openai: expect.anything() });
+    // 重复 remove 是幂等的空操作。
+    await store.remove('openai-account:gone');
+    expect(store.providers()).toEqual(['openai']);
   });
 });

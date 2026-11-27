@@ -54,6 +54,7 @@ import {
 } from '@/features/right-sidebar/globalTabs';
 import { WindowControls } from '@/components/title-bar/WindowControls';
 import { ChromeIconButton } from '@/components/title-bar/ChromeIconButton';
+import { readPluginUiEntries, PluginUiSlotControls } from '@/cindy-brain/PluginUiContributions';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
 import { useLocale } from '@/hooks/useLocale';
@@ -73,7 +74,7 @@ const NEW_TAB_GRACE_MS = 5000;
 
 export function SidebarTabWindowLayout() {
   const { t } = useTranslation();
-  const { effectiveLocale, setLocale } = useLocale();
+  const { setDisplayLocale } = useLocale();
   ensureGhostPanelsRegistered();
   useGhostPanelsSync();
   useEffect(() => {
@@ -159,11 +160,9 @@ export function SidebarTabWindowLayout() {
 
   useEffect(() => {
     return (
-      api?.onLocaleChanged?.((locale) => {
-        if (locale !== effectiveLocale) setLocale(locale);
-      }) ?? undefined
+      api?.onLocaleChanged?.(setDisplayLocale) ?? undefined
     );
-  }, [api, effectiveLocale, setLocale]);
+  }, [api, setDisplayLocale]);
 
   // 显隐:隐藏时模糊焦点 + 重挂 chrome;显示时同样先模糊,避免继承旧焦点。
   useEffect(() => {
@@ -328,9 +327,12 @@ export function SidebarTabWindowLayout() {
   );
 
   const context = assignment?.context;
+  const pluginTitlebarEntries = readPluginUiEntries('window.titlebar');
   const topbarLeading = <div className={isMac ? 'w-[72px] shrink-0' : 'w-1 shrink-0'} />;
   const topbarTrailing = (
     <>
+      {pluginTitlebarEntries.length > 0 && <PluginUiSlotControls entries={pluginTitlebarEntries}
+        sessionId={sessionId} appearance="titlebar" />}
       {activeTabId && (
         <div
           className="flex h-full shrink-0 items-center gap-0.5"
@@ -377,7 +379,7 @@ export function SidebarTabWindowLayout() {
           />
         )}
         {(!windowVisible || !assignment || presentTabs.length === 0) && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--panel-bg)]">
+          <div className="absolute inset-0 z-raised flex items-center justify-center bg-[var(--panel-bg)]">
             <span className="text-13 text-[var(--text-tertiary)]">
               {assignment && contentReady && presentTabs.length === 0
                 ? t('rightSidebar.tabWindow.closed')

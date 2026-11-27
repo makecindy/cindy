@@ -1,3 +1,4 @@
+import { configureAppDataDir, configureUserDataDir } from '../../userDataPath';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
@@ -29,6 +30,8 @@ const originalAutoSyncConfigUrl = process.env.XDT_SKILLHUB_AUTO_SYNC_CONFIG_URL;
 const TEST_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-auto-sync-test-'));
 const TEST_HOME = path.join(TEST_ROOT, 'home');
 const TEST_USER_DATA = path.join(TEST_ROOT, 'userData');
+configureAppDataDir(TEST_USER_DATA);
+configureUserDataDir(TEST_USER_DATA);
 
 vi.mock('electron', () => ({
   app: {
@@ -56,7 +59,7 @@ vi.mock('../../clientEndpointsService', () => ({
   getClientEndpoint: vi.fn(() => 'https://skillhub.test.invalid'),
 }));
 
-vi.mock('../../serverApiClient', () => ({
+vi.mock('../../serverApiClient.desktop', () => ({
   serverApiFetch: vi.fn(),
 }));
 
@@ -73,6 +76,7 @@ vi.mock('../../maker-host/shared-global-skills.js', () => ({
   prepareSharedGlobalSkillLinks: vi.fn(async () => ({ warnings: [] })),
   prepareSharedProjectSkillLinks: vi.fn(async () => ({ warnings: [] })),
   projectWorkingDirFromSkillPath: vi.fn(() => null),
+  shouldProjectToClaudeSkills: vi.fn(async () => true),
 }));
 
 function installEntry(version: string, overrides: Partial<StoredInstall> = {}): StoredInstall {

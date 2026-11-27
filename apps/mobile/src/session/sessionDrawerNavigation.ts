@@ -1,8 +1,16 @@
+import type { useRouter } from 'expo-router';
+import { deviceDisplayName } from '@/device-link/deviceName';
+import type { RemoteSessionListItem } from './sessionList';
+import type { RemoteSession } from './types';
+
 export interface SessionDrawerRouteTarget {
+  taskListEntry?: 'sidebar';
+  sessionEntry?: 'taskList';
   deviceId: string;
   deviceName: string;
   sessionId: string;
   focusClientId?: string;
+  companionSettings?: 'capabilities';
   resourceCollectionId?: string;
   resourceKind?: string;
   resourceId?: string;
@@ -25,17 +33,66 @@ export interface SessionRouteParamsNavigation {
 export function switchDrawerSessionInPlace(
   navigation: SessionRouteParamsNavigation,
   target: SessionDrawerRouteTarget,
+  fromTaskList = true,
 ): void {
   navigation.replaceParams({
     deviceId: target.deviceId,
     deviceName: target.deviceName,
     sessionId: target.sessionId,
+    ...(fromTaskList ? { sessionEntry: 'taskList' as const } : {}),
+    ...(target.taskListEntry ? { taskListEntry: target.taskListEntry } : {}),
     ...(target.focusClientId ? { focusClientId: target.focusClientId } : {}),
     ...(target.resourceId ? {
       resourceCollectionId: target.resourceCollectionId,
       resourceKind: target.resourceKind,
       resourceId: target.resourceId,
       resourceHistorySessionId: target.resourceHistorySessionId,
+      ...(target.companionSettings ? { companionSettings: target.companionSettings } : {}),
     } : {}),
   });
+}
+
+/** All task-list presentations resolve canonical hosts and search focus equally.
+ * Lookup is injected so this policy does not own subscriptions or a store. */
+export function taskListSessionTarget(
+  item: RemoteSessionListItem,
+  findDevice: (sessionId: string) => string | null | undefined,
+): SessionDrawerRouteTarget | null {
+  const session = item.session as RemoteSession;
+  const deviceId = session.canonicalDeviceId ?? session.deviceLinkDeviceId ?? findDevice(session.id);
+  if (!deviceId) return null;
+  const focusClientId = 'searchFocusClientId' in item
+    ? (item as { searchFocusClientId?: string }).searchFocusClientId : undefined;
+  return {
+    deviceId,
+    deviceName: deviceDisplayName(deviceId, session.deviceLinkDeviceName),
+    sessionId: session.id,
+    ...(focusClientId ? { focusClientId } : {}),
+  };
+}
+
+/** A drill-down keeps its source task and hands a portrait right swipe to Back.
+ * List selection uses replaceParams instead, clearing this entry mode. */
+export function pushSessionDrillDown(
+  router: Pick<ReturnType<typeof useRouter>, 'push'>,
+  params: SessionDrawerRouteTarget & { focusRequestKey?: string; focusComposerRequestKey?: string },
+): void {
+  router.push({
+    pathname: '/sessions/[sessionId]',
+    params: { ...params, sessionEntry: 'drillDown' },
+  }, { dangerouslySingular: () => undefined });
+}
+
+/** The stack owns drill-down history, including routes pushed by embedded cards.
+ * An in-place list selection explicitly ends that drill-down on this screen. */
+export function sessionSwipeReturnsToSource(
+  state: { routes: readonly { key: string; name: string; params?: object }[] },
+  routeKey: string,
+): boolean {
+  const index = state.routes.findIndex(route => route.key === routeKey);
+  if (index <= 0) return false;
+  const params = state.routes[index].params as { sessionEntry?: string } | undefined;
+  if (params?.sessionEntry === 'taskList') return false;
+  const source = state.routes[index - 1].name;
+  return source !== 'index' && source !== 'devices/index' && source !== 'devices/[deviceId]';
 }

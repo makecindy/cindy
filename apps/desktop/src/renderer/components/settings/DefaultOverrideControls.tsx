@@ -1,14 +1,15 @@
-import { RotateCcw } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { Tip } from '@/components/ui/tooltip';
-import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
+import { RestoreDefaultButton } from '@/components/ui/reset-buttons';
 
 export function DefaultOverrideControls({
   isCustomized,
   disabled,
   alwaysVisible = false,
   showCustomizedBadge = isCustomized,
+  label,
   onReset,
 }: {
   isCustomized: boolean;
@@ -17,6 +18,8 @@ export function DefaultOverrideControls({
   alwaysVisible?: boolean;
   /** Draft-only settings can keep the reset action without claiming a saved override. */
   showCustomizedBadge?: boolean;
+  /** 同屏有多个还原入口时给出可区分的无障碍名。 */
+  label?: string;
   onReset: () => void;
 }) {
   const { t } = useTranslation();
@@ -27,26 +30,42 @@ export function DefaultOverrideControls({
   return (
     <div className="flex shrink-0 items-center gap-2">
       {isCustomized && showCustomizedBadge ? (
-        <span className="whitespace-nowrap rounded-full bg-[var(--surface-chip)] px-2 py-1 text-11 font-medium leading-none text-[var(--text-secondary)]">
+        <Badge>
           {t('settings.defaults.customizedBadge')}
-        </span>
+        </Badge>
       ) : null}
-      <Tip text={t('settings.defaults.restore')} side="top">
-        <button
-          type="button"
-          onClick={onReset}
-          disabled={resetDisabled}
-          aria-label={t('settings.defaults.restore')}
-          className={cn(
-            'flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg',
-            'text-[var(--settings-section-desc)] transition-colors',
-            'hover:bg-[var(--settings-input-bg)] hover:text-[var(--settings-section-title)]',
-            'disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent',
-          )}
-        >
-          <RotateCcw size={15} />
-        </button>
-      </Tip>
+      {/* Per-setting reset (CONTROLS decision 3): shared 28px quiet icon button. */}
+      <RestoreDefaultButton
+        data-settings-search-action="Restore this setting to its default value"
+        label={label}
+        onClick={onReset}
+        disabled={resetDisabled}
+      />
+    </div>
+  );
+}
+
+/** A saved override and how to clear it, for a single-control row that offers a reset. */
+export interface DefaultOverrideReset {
+  customized: boolean;
+  disabled?: boolean;
+  onReset(): void;
+}
+
+/**
+ * The row's control with DefaultOverrideControls in front of it. Without `reset` the control is
+ * returned unchanged, so callers that do not pass one render the control exactly as given.
+ */
+export function withDefaultOverride(control: ReactNode, reset?: DefaultOverrideReset) {
+  if (!reset) return control;
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <DefaultOverrideControls
+        isCustomized={reset.customized}
+        disabled={reset.disabled}
+        onReset={reset.onReset}
+      />
+      {control}
     </div>
   );
 }

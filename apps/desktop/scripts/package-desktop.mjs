@@ -60,6 +60,7 @@ import {
   writePackageVersion,
   runDbValidate,
   verifyPackagedDrizzle,
+  verifyPackagedSkillVersionRecords,
   runSmokeTest,
   fetchExistingManifestIfAvailable,
   findInstallerArtifact,
@@ -182,7 +183,16 @@ function cleanOutDir() {
   }
 }
 
-function runForgeMake({ platform, arch, region, version, versionless, noSign, webAuthnAppleTeamId }) {
+function runForgeMake({
+  platform,
+  arch,
+  region,
+  version,
+  versionless,
+  noSign,
+  webAuthnAppleTeamId,
+  deferMacSigning,
+}) {
   console.log('==> Building remote bundles...');
   execSync('node scripts/build-remote-bundles.mjs', { cwd: DESKTOP_ROOT, stdio: 'inherit' });
 
@@ -208,6 +218,7 @@ function runForgeMake({ platform, arch, region, version, versionless, noSign, we
     // 只给最终会做 Developer ID 签名的 macOS bundle 烘焙 Team ID。ad-hoc、
     // dev 与其它平台显式置空，避免继承 shell 里的陈旧值后误启 Touch ID。
     CINDY_WEBAUTHN_APPLE_TEAM_ID: webAuthnAppleTeamId ?? '',
+    CINDY_FORGE_DEFER_MAC_SIGNING: deferMacSigning ? '1' : '',
   };
   // Git Bash(agent 常用 shell)会导出 NoDefaultCurrentDirectoryInExePath=1,
   // 使 cmd.exe 不再搜索当前目录——node-pty rebuild 时 winpty.gyp 的
@@ -610,6 +621,8 @@ async function main() {
       versionless,
       noSign,
       webAuthnAppleTeamId: webAuthnProvisioningProfile ? macSigningIdentity?.teamId : undefined,
+      // A pre-signing smoke test still needs a launchable Forge bundle.
+      deferMacSigning: skipSmoke && Boolean(macSigningIdentity),
     });
 
     verifyPackagedSourceMetadata({
@@ -625,6 +638,7 @@ async function main() {
         ? path.join(DESKTOP_ROOT, 'out', `${appName}-darwin-${arch}`, `${appName}.app`, 'Contents', 'Resources', 'drizzle')
         : path.join(DESKTOP_ROOT, 'out', `${appName}-${platformKey}`, 'resources', 'drizzle');
     verifyPackagedDrizzle(drizzleOut);
+    verifyPackagedSkillVersionRecords(path.join(path.dirname(drizzleOut), 'system-skills'));
 
     // 读安装包里实际打进去的手册(与 drizzle 同在 Resources 下),写入 build-info。
     const packagedManual = path.join(path.dirname(drizzleOut), 'system-skills', ...PLUGIN_PAGE_MANUAL_SKILL_PATH.split('/'));

@@ -1,4 +1,10 @@
-export type BrowserBackendKind = 'external' | 'rsb-webview' | 'user-browser';
+export const BROWSER_BACKEND_KINDS = ['external', 'rsb-webview', 'user-browser'] as const;
+
+export type BrowserBackendKind = (typeof BROWSER_BACKEND_KINDS)[number];
+
+export function isBrowserBackendKind(value: unknown): value is BrowserBackendKind {
+  return typeof value === 'string' && (BROWSER_BACKEND_KINDS as readonly string[]).includes(value);
+}
 
 /** Optional profile stores; warning payloads never carry paths or native errors. */
 export const OPTIONAL_BROWSER_PROFILE_DATABASES = [
@@ -85,6 +91,8 @@ export type BrowserBackendHealthReason =
   | 'extension-disconnected'
   /** user-browser:没有已安装并启用的页面控制插件。 */
   | 'plugin-missing'
+  /** user-browser:尚未连接,且这台电脑上找不到 Chrome / Edge 等可装扩展的浏览器。 */
+  | 'browser-missing'
   | 'plugin-updating'
   | 'plugin-selection-required';
 

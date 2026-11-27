@@ -3,7 +3,8 @@
 // membership revocation while a settings mutation is in flight (transport tests do not cover React lifetime).
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from 'vitest';
+import * as groupChatContract from '@cindy/maker-shared/botGroupChat';
 import type { ChatMaskState } from '@cindy/maker-shared/botGroupChat';
 
 const h = vi.hoisted(() => ({ client: { mask: vi.fn(), maskMentions: vi.fn() }, online: true }));
@@ -20,12 +21,14 @@ import { useGroupPersonalMask } from '@/session/useGroupPersonalMask';
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined, result: ReturnType<typeof useGroupPersonalMask>, server: ChatMaskState;
 const remote = async () => undefined;
-function Probe({ enabled }: { enabled: boolean }) { result = useGroupPersonalMask('room', '', enabled, remote, 0); return null; }
-async function render(enabled = true) {
+function Probe({ enabled, change = 0 }: { enabled: boolean; change?: number }) { result = useGroupPersonalMask('room', '', enabled, remote, change); return null; }
+async function render(enabled = true, change = 0) {
   root ??= createRoot(document.createElement('div'));
-  await act(async () => { root!.render(createElement(Probe, { enabled })); });
+  await act(async () => { root!.render(createElement(Probe, { enabled, change })); });
 }
 beforeEach(() => {
+  const enabled = vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(true);
+  onTestFinished(() => enabled.mockRestore());
   vi.clearAllMocks(); h.online = true;
   server = { revision: 1, status: 'enabled', manualRunning: false, homeDeviceId: 'mac', self: { id: 'human', name: 'Alex', avatarUrl: null }, companions: [],
     settings: { companionId: 'bot', enabled: true, access: 'chat', trigger: 'always', start: '09:00', end: '18:00', timeZone: 'UTC', resumeMinutes: 15, collectTodos: true, digest: 'manual' } };
@@ -33,6 +36,19 @@ beforeEach(() => {
   h.client.maskMentions.mockResolvedValue({ mentions: [{ messageId: 'question', sequence: '1', authorName: 'Jamie', text: '@Alex please confirm' }], hasMore: false });
 });
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
+
+// Unit, group-open latency: opening the screen started the same read from two effects, so
+// the mask and its mentions were requested twice before anything had changed.
+it('reads the mask once on opening and again only when the group changes', async () => {
+  await render();
+  expect(h.client.mask).toHaveBeenCalledTimes(1);
+  expect(h.client.maskMentions).toHaveBeenCalledTimes(1);
+  await render(true, 0);
+  expect(h.client.mask).toHaveBeenCalledTimes(1);
+  await render(true, 1);
+  expect(h.client.mask).toHaveBeenCalledTimes(2);
+  expect(h.client.maskMentions).toHaveBeenCalledTimes(2);
+});
 
 // Unit: the production hook must keep permanent delegation on while typing,
 // while its existing explicit switch still persists off. Prior tests cover reads/retries only.
@@ -151,4 +167,16 @@ it('replaces a failed setting with a newer explicit intent without replaying the
   await act(async () => result.retry());
   expect(result.state?.settings.enabled).toBe(true);
   expect(h.client.mask.mock.calls.filter(call => call[1]?.type === 'save')).toHaveLength(2);
+});
+
+// Unit: a supported server with an existing binding still supplies the mention
+// inbox independently of personal reply settings on the paused release.
+it('loads and acknowledges mentions without fetching personal settings while paused', async () => {
+  vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(false);
+  await render();
+  expect(result.state).toBeNull();
+  expect(result.mentions.map(m => m.messageId)).toEqual(['question']);
+  await act(async () => result.markRead(['question']));
+  expect(h.client.maskMentions.mock.calls.some(call => call[2]?.includes('question'))).toBe(true);
+  expect(h.client.mask).not.toHaveBeenCalled();
 });

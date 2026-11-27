@@ -1,34 +1,44 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { refreshGhostLocalizationIfChanged } from '../ghostLocalizationRefresh';
-import type { InstalledGhost } from '../../../shared/ghost.js';
+import { GhostTaskEventIndex } from '../taskEventIndex.js';
+import { hasPluginHostToolGroupApproval } from '../taskCapability.js';
+import { ghostInstallApprovalToken, type InstalledGhost } from '../../../shared/ghost.js';
 import { createGhostProductionCallbacks } from './ghostProductionCallbacksFixture.js';
 
 const GHOSTS = ['plugin-a', 'plugin-b'];
 
 // Unit: exercise the production refresh routing. The localization helper alone
 // cannot catch a caller accidentally scheduling installation work on every push.
+// Roster changes also rebuild the task-event index; locale-only projection must not.
 const refreshCallbacks = createGhostProductionCallbacks<{
   refreshGhostLocalization(locale: string): void;
   broadcastGhostsChanged(ghosts: InstalledGhost[]): void;
   setGhostWorkdirDisabledAndNotify(dir: string, id: string, disabled: boolean): string[];
 }>({ functions: ['refreshGhostLocalization', 'broadcastGhostsChanged', 'setGhostWorkdirDisabledAndNotify'] });
 
-function routing() {
-  const ghosts = [{ manifest: { id: 'plugin-a' }, enabled: true }] as InstalledGhost[];
+function routing(activeComputer = true) {
+  const ghosts: InstalledGhost[] = [{ dir: '/fixture/plugin-a',
+    manifest: { schemaVersion: 3, id: 'plugin-a', name: 'Plugin A', version: '1.0.0', kind: 'chip', entry: 'main.js',
+      agent: { hostTools: ['computer'] } }, enabled: true, approval: { state: 'approved', revision: 'fixture' } }];
+  const taskEventIndex = new GhostTaskEventIndex();
   const installation = {
-    apps: vi.fn(), manifest: vi.fn(), unread: vi.fn(), browser: vi.fn(), skills: vi.fn(), index: vi.fn(),
+    apps: vi.fn(), manifest: vi.fn(), unread: vi.fn(), browser: vi.fn(), computer: vi.fn(), skills: vi.fn(), index: vi.fn(),
+    taskEvents: vi.spyOn(taskEventIndex, 'replace'),
   };
-  const push = vi.fn(), remote = vi.fn(), setupChanged = vi.fn(), contextChanged = vi.fn();
+  const push = vi.fn(), remote = vi.fn(), setupChanged = vi.fn(), contextChanged = vi.fn(), harnesses = vi.fn();
   const list = vi.fn(() => ghosts);
   const manager = { list, invalidateNotificationCandidates: installation.index };
   let disabled = false;
   const callbacks = refreshCallbacks({
     managerSingleton: manager, getGhostManager: () => manager,
+    taskEventIndex, getGhostOwnerPushStamp: () => ({ dataOwnerId: 'owner', ownerGeneration: 1 }),
     currentGhostAppContext: () => ({ context: { region: 'global' } }), getResolvedMainLocale: () => 'en',
     refreshGhostLocalizationIfChanged, sendToGhostLogic: contextChanged,
     refreshPluginApps: installation.apps, getGhostSetupManifestTracker: () => ({ note: installation.manifest }),
     sweepRevokedGhostUnread: installation.unread, getGhostBrowserExtensionSlot: () => ({ reconcile: installation.browser }),
+    hasPluginHostTools: () => activeComputer,
+    reconcilePluginHostTools: installation.computer, hasPluginHostToolGroupApproval, ghostInstallApprovalToken,
     scheduleGhostSkillReconcile: installation.skills,
     isGhostAvailableForActiveSession: () => true, projectGhostForRenderer: (ghost: InstalledGhost) => ghost,
     findGhostForInstanceId: () => ghosts[0], isGhostBoundaryPending: () => false,
@@ -36,8 +46,9 @@ function routing() {
     isGhostDisabledForWorkdir: () => disabled,
     setGhostDisabledForWorkdir: (_dir: string, id: string, value: boolean) => { disabled = value; return value ? [id] : []; },
     normalizeWorkdirKey: () => '/project', getGhostSetupChangeBus: () => ({ emit: setupChanged }),
+    reconcilePluginHarnesses: harnesses,
   });
-  return { callbacks, ghosts, installation, push, remote, setupChanged, contextChanged, list };
+  return { callbacks, ghosts, installation, push, remote, setupChanged, contextChanged, list, harnesses };
 }
 
 it('projects a locale change without installation effects, while real roster changes still reconcile', () => {
@@ -49,9 +60,24 @@ it('projects a locale change without installation effects, while real roster cha
   const { apps, ...installation } = r.installation;
   expect(apps).toHaveBeenCalledOnce();
   for (const effect of Object.values(installation)) expect(effect).not.toHaveBeenCalled();
+  // Task engine names are chosen by UI language, so a locale change re-projects the engine list.
+  expect(r.harnesses).toHaveBeenCalledOnce();
   r.callbacks.broadcastGhostsChanged(r.ghosts);
   expect(apps).toHaveBeenCalledTimes(2);
   for (const effect of Object.values(installation)) expect(effect).toHaveBeenCalledOnce();
+  expect(r.harnesses).toHaveBeenCalledTimes(2);
+  expect(installation.computer).toHaveBeenCalledWith(new Map([['plugin-a', 'approved:fixture']]));
+});
+
+// Unit performance regression: the production roster callback built a computer
+// approval map with no live consumer; existing cases always had one. Zero live
+// connections must skip the new reconciliation without skipping ordinary effects.
+it('skips computer approval reconciliation when no plugin has a live computer runtime', () => {
+  const r = routing(false);
+  r.callbacks.broadcastGhostsChanged(r.ghosts);
+  expect(r.installation.computer).not.toHaveBeenCalled();
+  expect(r.installation.apps).toHaveBeenCalledOnce();
+  expect(r.push).toHaveBeenCalledWith('ghosts:changed', { ghosts: r.ghosts });
 });
 
 it('publishes only the changed directory policy and retains setup and remote invalidation', () => {

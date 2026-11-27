@@ -1,0 +1,14 @@
+{
+  "name": "agent-net-spike",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "agent-net 第 0 阶段验证脚本。独立于 pnpm workspace，不进入产品构建。",
+  "dependencies": {
+    "@number0/iroh": "1.2.0",
+    "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "tsx": "4.21.0"
+  }
+}

@@ -1,3 +1,4 @@
+import { formatTaskTopicTitle } from '@cindy/maker-shared/session-title';
 import { captureImContext } from '../../../shared/imMessageSource';
 /**
  * main/im/feishu/adapter.ts
@@ -16,7 +17,7 @@ import { captureImContext } from '../../../shared/imMessageSource';
  *     群轮次挂「非只读即确认」策略 + 触发时按页回翻群历史(50/页, 最多 1 页,
  *     确定性预算选择), 图片/文件下载后进上下文, 统一防注入包裹
  *     (见 ./groupContext.ts)。
- *     话题会话标题 = [飞书·{群名}·{话题简介}] {threadId 后 6 位}。
+ *     话题任务显示「飞书 · 主题 · 群名」。
  *     (飞书有拉历史 API, 不需要 telegram 那样的本地群消息池)。
  */
 
@@ -24,7 +25,7 @@ import { resolveFeishuNotificationReply } from './notificationOrigin';
 import path from 'node:path';
 import fs from 'node:fs';
 import { app } from 'electron';
-import { decodeFeishuLaneUserId, type FeishuIM, type FeishuLane, type IMAttachment } from '@cindy/im';
+import { FEISHU_MERGE_FORWARD_PLACEHOLDER, decodeFeishuLaneUserId, type FeishuIM, type FeishuLane, type IMAttachment } from '@cindy/im';
 
 import { imChannelNoteDirectSourceFromEvent } from '../shared/channelNote';
 import { receivedHistoryScope } from '../shared/receivedImageHistory';
@@ -42,7 +43,13 @@ import {
   HISTORY_FILE_MAX,
 } from './groupContext';
 import { createFeishuGroupTurnPermissionPolicy } from './permissionPolicy';
-import { ui, REACTION_PROCESSING } from './uiText';
+import {
+  feishuGroupPermissionMode,
+  feishuGroupProjectDefaults,
+  feishuGroupRouteOverride,
+  feishuGroupWorkingDir,
+} from './groupOverrides';
+import { feishuText, ui, REACTION_PROCESSING } from './uiText';
 
 const log = createLogger('im:feishu-adapter');
 
@@ -83,8 +90,7 @@ async function notifyContextFetchFailure(
   const owner = feishuIm.getOwnerOpenId();
   if (!owner) return;
   contextFailNoticeAt.set(key, now);
-  const where = lane.threadId ? '话题' : '群';
-  const platform = isLark ? 'Lark' : '飞书';
+  const platform = isLark ? 'Lark' : feishuText('notice.platformFeishu');
   // 一键跳转当前 bot 应用的权限页; appId 拿不到(未连接)时回落平台控制台首页。
   const status = feishuIm.getStatus();
   const appId = status.kind === 'connected' ? status.appId : '';
@@ -92,12 +98,12 @@ async function notifyContextFetchFailure(
   const authLink = appId ? `${domain}/app/${appId}/auth` : domain;
   await feishuIm.sendMarkdownText(
     owner,
-    `⚠️ 拉取${where}聊天记录失败, 刚才在${where}里的 @ 只能基于消息本身回答, 看不到聊天上下文。\n` +
-      `开启方法: ${platform}开放平台 → 开发者后台 → 选择本应用 → 权限管理 → ` +
-      '搜索并开通 (im:message.group_msg) 与 (im:message.group_msg.include_bot:read)' +
-      ' → 创建版本并发布(自建应用需管理员审核)。\n' +
-      `错误详情: ${errMsg.slice(0, 200)}\n` +
-      `[点击前往](${authLink})`,
+    [
+      feishuText(lane.threadId ? 'notice.contextFetchFailedThread' : 'notice.contextFetchFailedGroup'),
+      feishuText('notice.contextFetchFailedHowTo', { platform }),
+      feishuText('notice.contextFetchFailedDetail', { error: errMsg.slice(0, 200) }),
+      feishuText('notice.contextFetchFailedLink', { link: authLink }),
+    ].join('\n'),
   );
 }
 
@@ -150,7 +156,8 @@ export function buildFeishuAdapter(
 ): ImChannelAdapter {
   const companion = Boolean(options.companionBotId);
   const isLark = () => feishuIm.getService() === 'lark';
-  const conversationPrefix = () => (isLark() ? '[Lark·DM] ' : '[飞书·DM] ');
+  const channelLabel = () => isLark() ? 'Lark' : '飞书';
+  const conversationPrefix = () => channelLabel() + ' · ';
   const groupPrefix = (threadId: string) =>
     isLark()
       ? threadId
@@ -163,9 +170,10 @@ export function buildFeishuAdapter(
     channel: 'feishu',
     messageSourceIm: () => feishuIm.getService(),
     resolveNotificationReply: (event) => resolveFeishuNotificationReply(feishuIm, event),
+    // getter: 发送时按主人当前界面语言取文案
     notificationReplyText: {
-      unavailable: '暂时无法继续这条通知对应的任务，请在 Cindy 中确认任务仍可用后重试。',
-      commands: '本话题用于继续通知对应的任务。停止请用 !stop；其他命令请在主聊天中操作。',
+      get unavailable() { return feishuText('notificationReply.unavailable'); },
+      get commands() { return feishuText('notificationReply.commands'); },
     },
     im: feishuIm,
     output: { kind: 'rich-card', im: feishuIm },
@@ -185,12 +193,11 @@ export function buildFeishuAdapter(
       sessionIdFor: (botAppId, userId) => `feishu_${botAppId}_${sessionSafeUserId(userId)}`,
       defaultTitle: (userId) => {
         const lane = decodeFeishuLaneUserId(userId);
-        if (!lane) return `${conversationPrefix()}${userId.slice(-6)}`;
+        if (!lane) return `[${channelLabel()}·DM] ${userId.slice(-6)}`;
         const anchor = lane.threadId || lane.chatId;
         return `${groupPrefix(lane.threadId)}${anchor.slice(-6)}`;
       },
-      // 首条消息(含每次 /new 后的首条)oneshot 起名的前缀 —— 与 hook Slack 的
-      // `[Slack·DM]` 同款视觉, 在「对话」分组里一眼认出渠道
+      // 个人机器人和官方机器人使用同一种渠道前缀。
       generatedTitlePrefix: conversationPrefix,
       // 飞书 bot 私聊会话进侧边栏「对话」分组; workingDir 是 app 托管的
       // im-working-dir, 不该以它聚成假项目组
@@ -214,47 +221,47 @@ export function buildFeishuAdapter(
        * 群那档比私聊那档**宽**时同样覆写 —— 这是用户在设置里对群的显式选择,
        * 「群里的事只看这一行」是产品裁决(不看用户是否手动改过该下拉框)。
        */
-      permissionModeFor: (userId) =>
-        decodeFeishuLaneUserId(userId) === null
-          ? null
-          : readImDefaultSettings('feishu').groupPermissionMode,
-      // 群/话题 lane 建行后异步拉群名把标题升级为 [飞书·群] {群名} /
-      // [飞书·话题] {群名}; 拉不到(无「获取群基本信息」权限)保持后缀回落。
-      // 只对新建行生效(sessionRepo 侧保证), 复活行保留自己的历史标题。
+      // 个人机器人还按群读「按群设置」(设置页「群聊」): 这个群单独设置的权限档优先, 其次是
+      // 新任务所在的绑定项目的权限档。伙伴连接的群任务归伙伴设置管, 不读这份。
+      permissionModeFor: (userId, projectPermissionMode) => {
+        const lane = decodeFeishuLaneUserId(userId);
+        if (lane === null) return null;
+        return companion
+          ? readImDefaultSettings('feishu').groupPermissionMode
+          : feishuGroupPermissionMode(feishuIm.getBotAppId(), lane.chatId, projectPermissionMode ?? null);
+      },
+      ...(companion
+        ? {}
+        : {
+            routeOverrideFor: (botAppId: string, userId: string) => feishuGroupRouteOverride(botAppId, userId),
+            laneWorkingDirFor: (botAppId: string, userId: string) => feishuGroupWorkingDir(botAppId, userId),
+            laneProjectDefaultsFor: (botAppId: string, userId: string, workingDir: string) =>
+              feishuGroupProjectDefaults(botAppId, userId, workingDir),
+          }),
+      // Main groups keep their native name. A thread's first words provide its subject.
       resolveSessionTitle: async (userId) => {
         const lane = decodeFeishuLaneUserId(userId);
-        if (!lane) return null;
+        if (!lane || lane.threadId) return null;
         const name = await resolveChatName(feishuIm, lane.chatId);
-        if (!name) return null;
-        return `${groupPrefix(lane.threadId)}${name}`;
+        return name ? formatTaskTopicTitle(name, channelLabel()) : null;
       },
-      // 群主流 lane 标题是稳定的群名, 不参与首条消息
-      // oneshot 起名; 话题 lane 需要 oneshot 出「话题简介」, 照常参与。
       skipOneshotTitleFor: (userId) => {
         const lane = decodeFeishuLaneUserId(userId);
         return lane !== null && lane.threadId === '';
       },
-      // 话题 lane 的 oneshot 标题拼装: [飞书·{群名}·{话题简介}] {threadId 后 6 位}
-      // — 群名拉不到时退化为 [飞书·话题·{简介}]。DM 返回 null, 回落默认
-      // generatedTitlePrefix 路径(DM → [飞书·DM] {简介})。
-      // 群主流 lane 拼固定名 [飞书·群] {群名|chatId 后 6 位}, 与 defaultTitle /
-      // resolveSessionTitle 同族 — 非 ctr 群主流会话不参与 oneshot
-      // (skipOneshotTitleFor), 只有 /ctr 新建的接管会话走到这里, 命名与
-      // 群会话族对齐(oneshot 文本用不上, 有意忽略)。
       composeGeneratedTitle: async (userId, _scopeKey, generated) => {
         const lane = decodeFeishuLaneUserId(userId);
         if (!lane) return null;
-        const label = isLark() ? 'Lark' : '飞书';
-        if (!lane.threadId) {
-          const name = await resolveChatName(feishuIm, lane.chatId);
-          return `[${label}·群] ${name ?? lane.chatId.slice(-6)}`;
-        }
+        const label = channelLabel();
         const name = await resolveChatName(feishuIm, lane.chatId);
-        const mid = name ? `${label}·${name}·${generated}` : `${label}·话题·${generated}`;
-        return `[${mid}] ${lane.threadId.slice(-6)}`;
+        return lane.threadId
+          ? formatTaskTopicTitle(generated, label, name ? { context: name } : undefined)
+          : formatTaskTopicTitle(name || lane.chatId.slice(-6), label);
       },
     },
     processingEmoji: REACTION_PROCESSING,
+    // /project: 把当前会话切到侧栏的某个项目里干活(bot 原生会话, 与个人 Telegram 同款)。
+    projectSwitching: true,
     groupHistoryAccessFor: (event) => {
       const lane = event.groupContextLane ?? decodeFeishuLaneUserId(event.senderId);
       const scope = receivedHistoryScope(
@@ -281,8 +288,8 @@ export function buildFeishuAdapter(
     },
     queuedEmoji: 'OneSecond',
     buildVendorOptions: (userId) => ({ feishuChatId: userId, source: 'feishu' }),
-    // 伙伴自有连接: TOFU 认定的主人私聊进主任务; 群 / 话题按 lane 一条专线; 对外开放
-    // 后的外部用户私聊(transport guests)按用户一条专线。
+    // 伙伴自有连接: TOFU 认定的主人私聊进主任务; 群 / 话题按 lane 一条专线。
+    // guest-dm 路由保留兼容旧专线；新陌生私信由 transport 在派发前拒绝。
     companionLane: (userId) => {
       const lane = decodeFeishuLaneUserId(userId);
       if (lane) return { kind: 'group', chatId: lane.chatId, threadId: lane.threadId };
@@ -405,7 +412,10 @@ export function buildFeishuAdapter(
           if (contextAttachments.length) safeReply.attachmentCount = contextAttachments.length;
           if (unavailable.length) safeReply.unavailableAttachments = unavailable;
         }
-        replyPrefix = buildFeishuReplyContextBlock(safeReply);
+        // A bare merged forward carries only a channel placeholder as its text: the user
+        // typed nothing, so the forwarded messages are what they are handing over.
+        const requestText = event.text === FEISHU_MERGE_FORWARD_PLACEHOLDER ? '' : event.text;
+        replyPrefix = buildFeishuReplyContextBlock(safeReply, requestText);
       }
       if (!lane) return replyPrefix ? {
         agentText: `${replyPrefix}${event.text}`,

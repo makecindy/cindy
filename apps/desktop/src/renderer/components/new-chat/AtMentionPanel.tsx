@@ -1,4 +1,5 @@
 import { pickFileIcon } from '@/components/ui/file-type-icon';
+import { SearchInput } from '@/components/ui/search-input';
 import { Button } from '@/components/ui/button';
 import { MENU_CURRENT_ROW_ATTR, MENU_ROW_ATTR, currentMarkedRow } from '@/components/ui/dropdown-menu-highlight';
 import {
@@ -54,7 +55,6 @@ import {
   Paperclip,
   Plug,
   RotateCw,
-  Search,
   Sparkles,
   Target,
   UsersRound,
@@ -68,6 +68,7 @@ import { GhostPluginIcon } from '@/features/plugin/GhostPluginIcon';
 import type { AtResourceItem } from '@/lib/atResourceService';
 import {
   composerSuggestionEntryKey,
+  isComposerDirectoryAction,
   isComposerSuggestionEntryDisabled,
   nextEnabledSuggestionIndex,
   type ComposerSuggestionAction,
@@ -91,9 +92,8 @@ function isPluginEntry(entry: ComposerSuggestionEntry): boolean {
   return entry.kind === 'resource' && isPluginItem(entry.item);
 }
 
-function isAddDirEntry(entry: ComposerSuggestionEntry): boolean {
-  return entry.kind === 'action'
-    && entry.action.id === 'add-extra-dir';
+function isDirectoryActionEntry(entry: ComposerSuggestionEntry): boolean {
+  return entry.kind === 'action' && isComposerDirectoryAction(entry.action.id);
 }
 
 export type AtPanelState =
@@ -135,13 +135,14 @@ interface AtMentionPanelProps {
   maxHeight?: number;
 }
 
-const ACTION_ICONS: Record<ComposerSuggestionAction['id'], typeof Paperclip> = {
+const ACTION_ICONS: Partial<Record<ComposerSuggestionAction['id'], typeof Paperclip>> = {
   'retry-plugins': RotateCw,
   'attach-files': Paperclip,
   'new-goal': Target,
   'plan-mode': ClipboardList,
   collaboration: UsersRound,
   'add-extra-dir': FolderPlus,
+  'project-settings': FolderPlus,
 };
 
 export function AtMentionPanel({
@@ -186,12 +187,14 @@ export function AtMentionPanel({
     if (!onSearchChange) return;
     searchRef.current?.focus();
   }, [onSearchChange]);
-  // 从「添加目录」二级页切回时，请「+」弹层按本面板重量尺寸(内容变高会被弹层高度钳住)。
-  // 首次打开时弹层尚未完成开场形变，会忽略这次请求。
+  // 内嵌形态的高度由外壳按内容重测。只在挂载时请求一次不够：搜索词、结果行、已引用目录
+  // 变化后内容变矮，外壳若仍停在打开时的高度会留下大块空白；变高时又会被高度钳住，
+  // ResizeObserver 看不到增长。首次打开时弹层尚未完成开场形变，会忽略这次请求。
+  const referencedDirCount = (referenceDirs?.dirs.length ?? 0) + (writableDirs?.dirs.length ?? 0);
   useLayoutEffect(() => {
     if (!embedded) return;
     rootRef.current?.dispatchEvent(new CustomEvent(MORPH_CONTENT_RESIZE_EVENT, { bubbles: true }));
-  }, [embedded]);
+  }, [embedded, searchValue, entries.length, referencedDirCount, state.kind]);
   const [panelScroll, setPanelScroll] = useState(0);
   const [tooltipMeasure, setTooltipMeasure] = useState<TooltipMeasure>({
     key: null,
@@ -201,22 +204,20 @@ export function AtMentionPanel({
 
   const isEmptyRootQuery = !query.trim();
   // Empty-query buckets (assembly order in composerSuggestion.ts guarantees
-  // add → plugins → add-extra-dir, so bucketing preserves entry indices).
+  // add → plugins → directory actions, so bucketing preserves entry indices).
   const indexed = entries.map((entry, index) => ({ entry, index }));
   const addEntries = isEmptyRootQuery
-    ? indexed.filter(({ entry }) => !isPluginEntry(entry) && !isAddDirEntry(entry))
+    ? indexed.filter(({ entry }) => !isPluginEntry(entry) && !isDirectoryActionEntry(entry))
     : [];
   const pluginEntries = isEmptyRootQuery ? indexed.filter(({ entry }) => isPluginEntry(entry)) : [];
-  const addDirEntry = isEmptyRootQuery
-    ? indexed.find(({ entry }) => entry.kind === 'action' && entry.action.id === 'add-extra-dir')
-    : undefined;
+  const directoryActions = isEmptyRootQuery ? indexed.filter(({ entry }) => isDirectoryActionEntry(entry)) : [];
   // Merge presentation only: removal keeps each persisted grant's original path.
   const directoryRows = [referenceDirs, writableDirs].flatMap((section) =>
     section ? section.dirs.map((path) => ({ path, onRemove: section.onRemove })) : [],
   );
   const addSectionVisible = isEmptyRootQuery && addEntries.length > 0;
   const pluginSectionVisible = isEmptyRootQuery && pluginEntries.length > 0;
-  const directoriesVisible = isEmptyRootQuery && (directoryRows.length > 0 || !!addDirEntry);
+  const directoriesVisible = isEmptyRootQuery && (directoryRows.length > 0 || directoryActions.length > 0);
 
   useEffect(() => {
     if (entries.length === 0) return;
@@ -308,7 +309,7 @@ export function AtMentionPanel({
   const renderSectionHeader = (label: string) => (
     <div
       className={cn(
-        'flex h-[24px] items-center px-[10px]',
+        'flex h-[24px] items-center px-2.5',
         'text-12 font-medium text-[var(--cmd-palette-item-meta)]',
       )}
     >
@@ -318,7 +319,7 @@ export function AtMentionPanel({
 
   const renderActionRow = (action: ComposerSuggestionAction, idx: number) => {
     const focused = idx === focusedIndex;
-    const Icon = ACTION_ICONS[action.id];
+    const Icon = ACTION_ICONS[action.id] ?? Plug;
     const isCheckbox = action.checked !== undefined;
     // Collaboration keeps its Thinking-Orange enabled state from the legacy
     // `+` menu (id-driven presentation; the data model stays lean).
@@ -350,7 +351,7 @@ export function AtMentionPanel({
         {...menuRowAttrs({ checked: action.checked === true, current: focused, disabled: action.disabled })}
         className={cn(
           COMPOSER_MENU_ROW,
-          'flex w-full items-center gap-2 px-3 py-2 text-left',
+          'flex w-full shrink-0 items-center gap-2 px-3 py-2 text-left',
           emphasized && 'text-[var(--warning-accent)]',
           action.disabled && 'cursor-not-allowed opacity-50',
         )}
@@ -449,8 +450,8 @@ export function AtMentionPanel({
         {...menuRowAttrs({ current: focused, disabled })}
         className={cn(
           COMPOSER_MENU_ROW,
-          'flex w-full items-center gap-2',
-          'h-[44px] px-[10px] text-left',
+          'flex w-full shrink-0 items-center gap-2',
+          'h-[44px] px-2.5 text-left',
           disabled && 'cursor-not-allowed opacity-45',
         )}
       >
@@ -544,9 +545,12 @@ export function AtMentionPanel({
         if (target?.closest(`input, textarea, [${MENU_ROW_ATTR}]`)) return;
         event.preventDefault();
       }}
+      {...(embedded ? { 'data-morph-scroll': 'inner' } : {})}
       className={cn(
         'pointer-events-auto',
-        embedded ? 'relative' : 'absolute left-0 bottom-full mb-2 z-50',
+        // 内嵌时外壳会把量到的确定高度写到本层 style.height 上，条目多时只滚下面这一层 (#9536)。
+        // 没有外壳时高度仍是 auto。data-morph-scroll 告诉外壳不要再出一条滚动条；切页后重新判定。
+        embedded ? 'relative flex min-h-0 max-h-full flex-1 flex-col' : 'absolute left-0 bottom-full mb-2 z-float',
       )}
     >
       <div
@@ -558,51 +562,41 @@ export function AtMentionPanel({
           // embedded: fill the Morph shell. A nested w-[480px] is 2px wider
           // than the border-box panel and paints a horizontal scrollbar thumb
           // for ~2s via the global .is-scrolling auto-hide.
-          embedded ? 'w-full min-w-0' : 'w-[480px]',
+          embedded ? 'flex min-h-0 w-full min-w-0 flex-1 flex-col' : 'w-[480px]',
+          // 内嵌形态自己就是唯一滚动区：横轴锁死，竖向跟着上面那个确定高度滚。
+          // 外壳看到 data-morph-scroll="inner" 后保持不滚，避免并排两条竖向滚动条 (#9536)。
+          // 不再用 h-full：父层只有 max-h-full 时百分比高度仍是 auto，列表会按内容撑出去。
           'overflow-x-hidden overflow-y-auto',
-          'p-[6px]',
+          'p-1.5',
           !embedded && [
-            'rounded-[12px] border',
+            'rounded-xl border',
             'bg-[var(--cmd-palette-bg)]',
             'border-[var(--cmd-palette-border)]',
           ],
         )}
         // Registered floating-layer shadow, as on the shared menus (DESIGN §4 / §6).
-        style={{ boxShadow: embedded ? undefined : 'var(--shadow-menu)', maxHeight }}
+        // 独立 @ 浮层自定 maxHeight；内嵌形态的高度由 MorphPopover 钳制后传下来。
+        style={{ boxShadow: embedded ? undefined : 'var(--shadow-menu)', maxHeight: embedded ? undefined : maxHeight }}
       >
         <MenuHighlightLayer />
         {hasSearchBox ? (
-          <div className="px-[4px] pb-[6px]">
-            <div className="relative">
-              <Search
-                size={12}
-                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--cmd-palette-item-meta)]"
-              />
-              <input
-                ref={searchRef}
-                data-composer-suggestion-search=""
-                type="text"
-                value={searchValue}
-                onChange={(event) => onSearchChange?.(event.target.value)}
-                onKeyDown={handleSearchKeyDown}
-                placeholder={hint}
-                aria-label={hint}
-                className={cn(
-                  'h-8 w-full rounded-full border border-[var(--cmd-palette-border)] bg-transparent',
-                  'pl-7 pr-2 text-13 text-[var(--cmd-palette-item-text)] outline-none',
-                  'placeholder:text-[var(--text-placeholder)]',
-                  // 聚焦描边走中性弱化 token（同 composer 输入框口径）。--focus-ring
-                  // 是强蓝且只用于键盘可达性环,拿来当输入框聚焦边框会突兀成蓝框
-                  // (DESIGN §2:Focus Blue「正常交互流里不出现」);文本输入框的
-                  // :focus-visible 恒成立,所以这里不能靠 focus-visible 区分鼠标/键盘。
-                  'focus:border-[var(--chat-input-border-focus)]',
-                )}
-              />
-            </div>
+          <div className="px-1 pb-1.5">
+            {/* panel 档聚焦只加深描边（--chat-input-border-focus），不出蓝框：文本框的
+                :focus-visible 恒成立，无法区分鼠标 / 键盘（DESIGN §2、§4 composer 输入）。 */}
+            <SearchInput
+              surface="panel"
+              inputRef={searchRef}
+              data-composer-suggestion-search=""
+              value={searchValue}
+              onChange={(value) => onSearchChange?.(value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder={hint}
+              aria-label={hint}
+            />
           </div>
         ) : null}
         {showLoadingSkeleton && (
-          <div className="space-y-[4px] p-[4px]">
+          <div className="space-y-1 p-1">
             {[0, 1, 2].map((i) => (
               <div
                 key={i}
@@ -612,11 +606,11 @@ export function AtMentionPanel({
           </div>
         )}
         {showErrorState && (
-          <div className="flex flex-col items-center justify-center py-[16px] gap-[10px]">
+          <div className="flex flex-col items-center justify-center py-4 gap-2.5">
             <div className="text-13 text-[var(--error-fg)]">
               {t('newChat.atMention.scanFailed')}
             </div>
-            <div className="text-12 text-[var(--cmd-palette-item-meta)] px-[12px] text-center">
+            <div className="text-12 text-[var(--cmd-palette-item-meta)] px-3 text-center">
               {state.kind === 'error' ? state.message : ''}
             </div>
             <Button
@@ -671,7 +665,7 @@ export function AtMentionPanel({
                           <div
                             key={p}
                             {...menuRowAttrs()}
-                            className={cn(COMPOSER_MENU_ROW, 'group flex h-[44px] items-center gap-2 px-[10px]')}
+                            className={cn(COMPOSER_MENU_ROW, 'group flex h-[44px] shrink-0 items-center gap-2 px-2.5')}
                           >
                             <FolderPlus
                               size={16}
@@ -707,7 +701,7 @@ export function AtMentionPanel({
                         ))}
                       </div>
                     )}
-                    {addDirEntry && renderEntryRow(addDirEntry)}
+                    {directoryActions.map(renderEntryRow)}
                   </>
                 )}
               </>
@@ -717,7 +711,7 @@ export function AtMentionPanel({
             {isEmptyRootQuery && !hasSearchBox && (
               <div
                 className={cn(
-                  'mt-2 border-t border-[var(--cmd-palette-border)] select-none px-[10px] py-[8px] text-12',
+                  'mt-2 border-t border-[var(--cmd-palette-border)] select-none px-2.5 py-2 text-12',
                   'text-[var(--cmd-palette-item-meta)]',
                 )}
               >
@@ -727,7 +721,7 @@ export function AtMentionPanel({
             {!isEmptyRootQuery && !hasSearchBox && state.kind === 'ready' && state.truncated && (
               <div
                 className={cn(
-                  'select-none px-[10px] py-[8px] text-12',
+                  'select-none px-2.5 py-2 text-12',
                   'text-[var(--cmd-palette-item-meta)]',
                 )}
               >
@@ -746,7 +740,7 @@ export function AtMentionPanel({
                 {...menuRowAttrs()}
                 className={cn(
                   COMPOSER_MENU_ROW,
-                  'flex w-full items-center gap-2 px-[10px] py-[8px] text-left',
+                  'flex w-full items-center gap-2 px-2.5 py-2 text-left',
                   'text-12 text-[var(--error-fg)]',
                 )}
               >
@@ -763,7 +757,7 @@ export function AtMentionPanel({
         <div
           ref={tooltipRef}
           className={cn(
-            'w-[280px] overflow-y-auto rounded-[12px] border p-[14px]',
+            'w-[280px] overflow-y-auto rounded-xl border p-3.5',
             'bg-[var(--cmd-palette-bg)]',
             'border-[var(--cmd-palette-border)]',
             'absolute left-[488px]',  // 480 panel + 8 gap
@@ -777,7 +771,7 @@ export function AtMentionPanel({
           <div className="text-14 font-medium text-[var(--cmd-palette-item-text)]">
             {focusedItem.name}
           </div>
-          <div className="mt-[8px] text-13 leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
+          <div className="mt-2 text-13 leading-[1.5] text-[var(--cmd-palette-tooltip-body)]">
             {focusedItem.description}
           </div>
         </div>

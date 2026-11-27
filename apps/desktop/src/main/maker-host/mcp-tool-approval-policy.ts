@@ -21,11 +21,13 @@
  * 风险分类不覆盖会话档位：Full Access 免操作审批，Auto 走统一审阅，Ask 才交用户确认。
  */
 
-import type {
-  McpToolApprovalContext,
-  McpToolApprovalPolicy,
-} from '@cindy/maker-core';
-import { ORCA_TASK_ACTION_TOOLS, TASK_ACTION_TOOLS } from '../maker-ipc/taskActionAuthorization.js';
+import type { McpToolApprovalContext, McpToolApprovalPolicy } from '@cindy/maker-core';
+import { STARTUP_GHOST_TOOL_PREFIX } from '../../shared/ghost.js';
+import {
+  isProjectAccessAction,
+  ORCA_TASK_ACTION_TOOLS,
+  TASK_ACTION_TOOLS,
+} from '../maker-ipc/taskActionAuthorization.js';
 
 
 /**
@@ -149,10 +151,35 @@ export type GhostToolApprovalResolver = (target: {
 }) => GhostToolApprovalFacts | null;
 
 let ghostToolApprovalResolver: GhostToolApprovalResolver | null = null;
+type StartupGhostToolApprovalResolver = (name: string) => (GhostToolApprovalFacts & {
+  ghostId: string; namespace: string | null; tool: string;
+}) | null;
+let startupGhostToolApprovalResolver: StartupGhostToolApprovalResolver | null = null;
 
 /** Main 启动时注册（cindy-brain `registerGhostIpc`）；未注册时插件调用一律按会话审批。 */
-export function setGhostToolApprovalResolver(resolver: GhostToolApprovalResolver | null): void {
+export function setGhostToolApprovalResolver(
+  resolver: GhostToolApprovalResolver | null,
+  startupResolver: StartupGhostToolApprovalResolver | null = null,
+): void {
   ghostToolApprovalResolver = resolver;
+  startupGhostToolApprovalResolver = startupResolver;
+}
+
+function startupToolArgs(params: Record<string, unknown> | undefined) {
+  return params && Object.keys(params).length === 1 ? readJsonObject(params.args) : undefined;
+}
+
+/** Give the outer Agent reviewer the real plugin action and its untouched arguments. */
+export function getDesktopMcpToolApprovalEvidence(context: McpToolApprovalContext): unknown {
+  if (context.serverName !== 'cindy' || !context.toolName?.startsWith(STARTUP_GHOST_TOOL_PREFIX)) return undefined;
+  const args = startupToolArgs(readJsonObject(context.toolParams));
+  if (!args) return undefined;
+  try {
+    const target = startupGhostToolApprovalResolver?.(context.toolName);
+    return target && { ghost_id: target.ghostId, namespace: target.namespace, tool: target.tool, args };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -162,8 +189,22 @@ export function setGhostToolApprovalResolver(resolver: GhostToolApprovalResolver
  */
 function ghostCallPolicy(context: McpToolApprovalContext): McpToolApprovalPolicy | null {
   if (context.serverName !== 'cindy') return null;
-  if (context.toolName !== 'ghost_call' && context.toolName !== undefined) return null;
   const params = readJsonObject(context.toolParams);
+  const startupEnvelope = startupToolArgs(params);
+  if (context.toolName?.startsWith(STARTUP_GHOST_TOOL_PREFIX)) {
+    if (!startupEnvelope) return 'prompt-each-time';
+    try {
+      const facts = startupGhostToolApprovalResolver?.(context.toolName);
+      if (!facts || facts.declared === 'each-call') return 'prompt-each-time';
+      return facts.declared === 'auto' ? 'auto-approve' : 'prompt';
+    } catch {
+      return 'prompt-each-time';
+    }
+  }
+  // Older Codex versions may omit the MCP name. The args-only startup
+  // envelope does not identify the target and cannot earn a remembered grant.
+  if (context.toolName === undefined && startupEnvelope) return 'prompt-each-time';
+  if (context.toolName !== 'ghost_call' && context.toolName !== undefined) return null;
   if (!params) return null;
   const ghostId = typeof params.ghost_id === 'string' ? params.ghost_id.trim() : '';
   const tool = typeof params.tool === 'string' ? params.tool.trim() : '';
@@ -227,6 +268,10 @@ export function getDesktopMcpToolApprovalPolicy(
   if (toolName && READ_ONLY_MCP_TOOLS.has(`${serverName}::${toolName}`)) {
     return 'auto-approve';
   }
+  // Discord multiplexes reads and external writes. A history grant must never become a server-wide send grant.
+  if (serverName === 'cindy_discord') {
+    return toolName === 'status' || toolName === 'list_tools' ? 'auto-approve' : 'prompt-each-time';
+  }
   // Recipes can write through an authenticated profile or be overridden by L2.
   // Route the exact invocation through the existing session flow, never trust
   // caller-supplied access metadata or reuse a server grant. Full Access/Auto/Ask
@@ -243,14 +288,20 @@ export function getDesktopMcpToolApprovalPolicy(
     const args = progressive ? readJsonObject(params?.args) : params;
     if ((name === 'browser' && args?.action === 'recipe')
       || (progressive && (!name || !args))) return 'prompt-each-time';
-    // Switching to the user's own browser hands the agent their signed-in Chrome/Edge tabs; a page could
-    // ask the agent to do it. The switch goes through the session's approval like a recipe; the user
-    // choosing My browser in Settings needs no tool call and so no approval.
-    if (name === 'browser' && args?.action === 'setBackend' && args.backend === 'user-browser')
-      return 'prompt-each-time';
+    // Switching browser backends mutates the global persisted setting across tasks (pulling the user
+    // out of My browser into external Chrome, or handing the agent their signed-in Chrome/Edge tabs).
+    // Route every direction of setBackend through the session's approval policy; choosing a backend
+    // in Settings does not go through MCP and needs no approval.
+    if (name === 'browser' && args?.action === 'setBackend') return 'prompt-each-time';
     // Uploading hands a local file to a website. Files are not filtered by name (2026-10-30), so each
     // upload goes through the task's approval: Ask confirms, Auto reviews, Full Access proceeds.
     if (name === 'browser' && args?.action === 'upload') return 'prompt-each-time';
+    // The tool refuses these inside a batch. Review such a call anyway, so the actions above can never
+    // ride past approval inside one if that refusal is ever loosened.
+    if (name === 'browser' && args?.action === 'batch' && (!Array.isArray(args.steps) || args.steps.some((step) => {
+      const action = (step as { action?: unknown } | null)?.action;
+      return typeof action !== 'string' || ['recipe', 'upload', 'setBackend', 'batch'].includes(action);
+    }))) return 'prompt-each-time';
   }
   if (serverName === 'cindy' && toolName === 'ghost_market_install') return 'prompt-each-time';
   // This bridge multiplexes independent imported connections and commands with
@@ -272,21 +323,38 @@ export function getDesktopMcpToolApprovalPolicy(
     const innerName = typeof params?.name === 'string' ? params.name.trim() : '';
     const args = progressive ? readJsonObject(params?.args) : params;
     // Codex can omit tool_name when same-server calls overlap. A direct tool's
-    // input may also have a `name` field (routine_save does), so only treat an
+    // input may also have a `name` field, so only treat an
     // exact name/args envelope as a progressive call without the outer name.
     if (!toolName && (!params || !innerName || !args ||
       Object.keys(params).some((key) => key !== 'name' && key !== 'args'))) {
       return 'prompt-each-time';
     }
     const action = progressive ? innerName : toolName;
+    if (isProjectAccessAction(action, args)) return 'prompt-each-time';
+    if (
+      action === 'file_request' &&
+      (!args || !['read', 'list', 'watch', 'changes', 'unwatch'].includes(String(args.op)))
+    )
+      return 'prompt-each-time';
+    if (
+      action &&
+      [
+        'terminal_start',
+        'terminal_write',
+        'terminal_resize',
+        'terminal_stop',
+        'terminal_forget',
+      ].includes(action)
+    )
+      return 'prompt-each-time';
     // Use the normal runtime permission flow once: Full Access bypasses approval,
     // Auto reviews the call, and Ask requests confirmation. Host guards retain scope checks.
-    if (action && (TASK_ACTION_TOOLS.has(action) || action === 'routine_delete')) return 'prompt-each-time';
+    // delete_session / rewind_session are unconditional task actions: no local-device,
+    // conversation-only or stopped-target shortcut can turn them into auto-approved reads.
+    if (action && TASK_ACTION_TOOLS.has(action)) return 'prompt-each-time';
     if (toolName === 'call_tool' && (!innerName || !args)) return 'prompt-each-time';
     // Installing or saving a host command uses the session's existing approval flow.
-    if (action === 'schedule_set_pre_run_hook' || (action === 'routine_save' && args?.preRunHook != null)) {
-      return 'prompt-each-time';
-    }
+    if (action === 'schedule_set_pre_run_hook') return 'prompt-each-time';
     // Creating a task worktree adds a branch and directory to the repository and binds them
     // to the task, like `git worktree add`; the task's permission mode decides.
     if (action === 'move_session' || action === 'publish_skill' || action === 'create_task_worktree') {
@@ -295,12 +363,9 @@ export function getDesktopMcpToolApprovalPolicy(
     // Moving a teammate hands its running to another computer: the task's permission mode decides.
     if (action === 'manage_session_prs' && args?.action !== 'list') return 'prompt-each-time';
     if (action === 'move_teammate_home') return 'prompt-each-time';
+    if (action === 'teammate_workspace_migration' && !['preview', 'status'].includes(String(args?.action))) return 'prompt-each-time';
     // 发给另一台电脑上的任务：作用范围越出本机，交给当前任务的权限档，不走可信 server 的静默放行。
     if (action === 'send_to_session' && targetsAnotherComputer(sessionIdDevice(args?.target_session_id))) {
-      return 'prompt-each-time';
-    }
-    // 伙伴跟进另一台电脑上的任务(只有总调度伙伴可以)同样是跨电脑写入,口径与 send_to_session 一致。
-    if (action === 'continue_workbench_task' && targetsAnotherComputer(sessionIdDevice(args?.task_id))) {
       return 'prompt-each-time';
     }
     if ((action === 'archive_sessions' || action === 'unarchive_sessions') &&
@@ -311,7 +376,7 @@ export function getDesktopMcpToolApprovalPolicy(
   }
   // 改动另一台电脑上的定时任务（可改写并触发那台电脑上的命令）同样交给权限档：Full Access
   // 免审批，Auto 走统一审阅，Ask 由用户确认。本机删除同样走普通审批，不再依赖额外自主确认。
-  if (serverName === 'cindy_scheduler' && (toolName === 'schedule_delete' || toolName === 'routine_delete' ||
+  if (serverName === 'cindy_scheduler' && (toolName === 'schedule_delete' ||
     toolName === 'schedule_webhook_release' || toolName === 'schedule_webhook_restore')) return 'prompt-each-time';
   if (serverName === 'cindy_scheduler' && (toolName === 'call_tool' || !toolName)) {
     const params = readJsonObject(toolParams);
@@ -321,7 +386,7 @@ export function getDesktopMcpToolApprovalPolicy(
     // a direct deletion's bare id must not inherit trusted-server approval.
     if (!toolName && (!params || !innerName || !args ||
       Object.keys(params).some((key) => key !== 'name' && key !== 'args'))) return 'prompt-each-time';
-    if (innerName === 'schedule_delete' || innerName === 'routine_delete' ||
+    if (innerName === 'schedule_delete' ||
       innerName === 'schedule_webhook_release' || innerName === 'schedule_webhook_restore') return 'prompt-each-time';
     if (SCHEDULER_CROSS_DEVICE_WRITE_TOOLS.has(innerName) && targetsAnotherComputer(args?.device)) {
       return 'prompt-each-time';

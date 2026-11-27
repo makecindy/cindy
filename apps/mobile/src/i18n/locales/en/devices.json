@@ -1,5 +1,29 @@
 {
+  "widgetGuideAction": "Add widget",
+  "widgetGuideIntro": "Widgets are small cards on your Home Screen. See your remaining quota and today’s token usage without opening Cindy.",
+  "widgetGuideExample": "A Cindy widget beside app icons on a phone’s Home Screen.",
+  "widgetGuidePicker": "Edit → Add Widget",
+  "widgetGuideIOS": "Touch and hold an empty area on the Home Screen, then tap {{picker}}.\n\nSearch for Cindy, choose Subscription quota or Daily usage, then tap Add Widget.",
+  "widgetGuideAndroid": "Touch and hold an empty area on your home screen, then tap Widgets.\n\nFind Cindy and drag Subscription quota or Daily usage onto your home screen.",
+  "widgetGuideHome": "Home Screen",
+  "widgetGuideLock": "Lock Screen",
+  "widgetGuideLockIOS": "Also on the Lock Screen: touch and hold it, then tap Customize.",
+  "widgetGuideDismiss": "Got it",
+  "usageOther": "Other",
+  "usageTitle": "Usage overview",
+  "usageOnlyDevice": "{{name}} only",
+  "usagePlans": "Plan allowances",
+  "usageBudget": "Remaining period budget",
+  "usageWaiting": "Plan allowances and today’s usage appear once your computer connects",
+  "usageUpdateDesktop": "Update Cindy on your computer to see usage",
+  "usageWaitingTitle": "Your usage will appear here",
+  "usageWaitingCopy": "Once your phone connects to your computer, plan allowances and daily usage for each account sync automatically, usually within a few seconds.",
+  "usageUpdateDesktopTitle": "Update Cindy on your computer",
+  "usageUpdateDesktopCopy": "Cindy on your computer is too old to send usage to your phone. It will appear here after you update.",
   "management": {
+    "addCloud": "Add cloud computer",
+    "preparingCloud": "Cloud computer · preparing",
+    "manageCloud": "Manage cloud computer",
     "title": "Device Management",
     "openDevice": "View details for {{name}}",
     "details": "Device details",
@@ -8,7 +32,7 @@
     "notFound": "This device is no longer in your account.",
     "deleteDevice": "Delete device",
     "deleteTitle": "Delete {{name}}?",
-    "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Sign in again on that device to rejoin.",
+    "deleteMessage": "Remove this device from your account and disconnect remote access. Its sessions and files are kept. Tap “Rejoin” on that device to bring it back.",
     "deleteFailed": "Could not delete the device.",
     "deleteOnline": "This server does not yet support removing online devices. Retry after the service is upgraded.",
     "deleteRejectedWhileOffline": "Couldn’t delete the device: the server still lists it as online, although it shows as offline here.",
@@ -56,7 +80,7 @@
   "presentation": {
     "deviceList": {
       "headerAvailable": "{{count}} controllable computers",
-      "headerUnavailable": "{{count}} computers currently unavailable",
+      "headerUnavailable": "Computers currently unavailable: {{count}}",
       "waitingForDesktop": "Waiting for a computer to come online",
       "filterAvailable": "Controllable devices",
       "filterEmpty": "No controllable devices",
@@ -135,7 +159,7 @@
           "search": "Search includes titles, project paths, models, automation names, and message previews.",
           "active": "Open a session to continue controlling it, or touch and hold to select multiple sessions.",
           "waiting": "Permissions, plan reviews, and questions that need confirmation on your phone appear here.",
-          "automation": "Automation sessions are grouped by task; expand a group to open an individual run.",
+          "automation": "Automation sessions are grouped by automation; expand a group to open an individual run.",
           "archived": "Touch and hold an archived session to unarchive or delete it in bulk.",
           "all": "Active, archived, and automation sessions are shown together for quick lookup."
         }
@@ -243,8 +267,8 @@
   },
   "list": {
     "projectActions": {
-      "newTask": "New task",
-      "allTasks": "All tasks",
+      "newTask": "New session",
+      "allTasks": "All sessions",
       "search": "Search"
     },
     "taskSuggestions": {
@@ -294,15 +318,15 @@
     "allConversations": "All Sessions",
     "syncFailed": "Sync failed",
     "requestFailed": "Request failed",
-    "loading": "Loading available devices",
+    "loading": "Loading available devices…",
     "untitled": "Untitled session",
     "connection": {
       "connecting": "Connecting",
       "disconnected": "Disconnected"
     },
     "error": {
-      "sessionDeviceNotFound": "Can't find the device this session belongs to. Sync again and retry.",
-      "taskDeviceNotFound": "Can't find the device this task belongs to. Sync again and retry.",
+      "sessionDeviceNotFound": "Can’t find the device this session belongs to. Sync again and retry.",
+      "taskDeviceNotFound": "Can’t find the device this task belongs to. Sync again and retry.",
       "noDevice": "No device available. Turn on remote control on the desktop, then sync again."
     },
     "alert": {
@@ -311,7 +335,7 @@
       "actionFailed": "Action failed",
       "renameFailed": "Rename failed",
       "deleteTitle": "Delete session?",
-      "deleteMessage": "This deletes \"{{title}}\" and can't be undone."
+      "deleteMessage": "This deletes “{{title}}” and can’t be undone."
     },
     "a11y": {
       "selectScope": "Select session scope",
@@ -328,6 +352,7 @@
       "renameDevice": "Rename {{label}}",
       "project": "Project {{title}}",
       "dialogue": "Chat",
+      "automation": "Automations",
       "openAutomationLatest": "Open the latest session of automation {{title}}",
       "automationTask": "Automation {{title}}",
       "openConversation": "Open session {{title}}",
@@ -341,7 +366,11 @@
       "close": "Close",
       "cancelRename": "Cancel rename",
       "createdBy": "Created by {{name}}",
-      "ownedBy": "Belongs to {{name}}"
+      "ownedBy": "Belongs to {{name}}",
+      "orcaRemoteLead": "Collaboration from {{device}}",
+      "createdByTask": "Opened by another task",
+      "createdByTaskNamed": "Opened by task “{{title}}”",
+      "unknownDevice": "another computer"
     },
     "accounts": {
       "title": "Switch account",
@@ -353,19 +382,23 @@
     },
     "menu": {
       "groupDialogue": "Chat",
+      "groupAutomation": "Automation",
       "dialogueFolder": "Chat",
+      "automationFolder": "Automations",
       "search": "Search",
       "settings": "Settings",
       "remoteSettings": "Remote connection settings",
       "displaySettings": "Display settings",
       "groupHeading": "Group",
-      "sortHeading": "Task sort",
+      "sortHeading": "Session sorting",
       "projectOrderHeading": "Project sorting",
       "projectOrderManualTip": "Touch and hold a project row, then drag to reorder. Tasks inside still follow the sort above.",
+      "pinnedOrderManualTip": "Touch and hold a pinned task, then drag to reorder.",
       "statusHeading": "Task status",
-      "showDeviceTasks": "Show tasks",
+      "showDeviceTasks": "Show sessions",
       "openDevice": "Open",
       "renameDevice": "Rename",
+      "groupDevice": "Device",
       "groupProject": "Project",
       "sortBy": {
         "priority": "Priority",
@@ -394,7 +427,8 @@
         "all": "All",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Plugin engine"
       },
       "filterLastActivityHeading": "Last activity",
       "filterLastActivity": {
@@ -407,11 +441,15 @@
       "showCollapsedTeammateAvatars": "Show avatars when collapsed",
       "displayHeading": "Display",
       "view": {
+        "card": "Cards",
         "text": "Text",
         "list": "List"
       },
-      "taskInfoHeading": "Task info",
+      "taskInfoHeading": "Session info",
       "taskInfo": {
+        "teammate": "Buddy avatar",
+        "project": "Project icon and name",
+        "harness": "Harness icon",
         "time": "Time",
         "pr": "PR status",
         "tokens": "Tokens",
@@ -420,10 +458,44 @@
       "summaryNone": "None",
       "summarySeparator": ", ",
       "filterEmptyCopy": "Adjust or reset Filters in Display settings.",
-      "filterTeammatesHeading": "Teammates",
+      "filterTeammatesHeading": "Buddies",
       "filterAnySource": "All",
+      "filterHideAutomations": "Hide automation tasks",
       "filterHideAllTeammates": "Hide all",
-      "filterSelectedTeammates": "{{count}} selected"
+      "filterSelectedTeammates": "{{count}} selected",
+      "inbox": {
+        "inbox": "Pending",
+        "working": "Working",
+        "snoozed": "Snoozed",
+        "archived": "Processed",
+        "snooze": "Snooze task",
+        "complete": "Done",
+        "wake": "Bring back now",
+        "restore": "Restore task",
+        "process": "Mark processed (archive)",
+        "empty": "Inbox is clear",
+        "snoozeFailed": "Could not save the snooze time. Check the connection and update the computer hosting this task.",
+        "hours": "In {{count}} hours",
+        "hours_one": "In {{count}} hour",
+        "hours_other": "In {{count}} hours",
+        "thisEvening": "This evening",
+        "tomorrow": "Tomorrow",
+        "nextWeek": "Next week",
+        "indefinite": "Indefinitely",
+        "custom": "Custom…",
+        "invalidTime": "Choose a future date and time within one year.",
+        "pendingSync": "Pending sync",
+        "pendingArchiveSync": "Will archive when computer is online",
+        "offlineCompleteRejectedDirty": "“{{title}}” returned to Pending: uncommitted changes in its worktree need confirmation before archiving.",
+        "offlineCompleteRejectedNewActivity": "“{{title}}” returned to Pending: new activity arrived on its computer while offline.",
+        "offlineCompleteRejectedRunning": "“{{title}}” returned to Pending: the task is currently running.",
+        "offlineCompleteRejectedAttached": "“{{title}}” returned to Pending: the task is currently attached or shared and could not be archived automatically.",
+        "offlineCompleteRejectedPreflight": "“{{title}}” returned to Pending: could not verify its worktree before archiving."
+      },
+      "taskListMode": {
+        "enterInbox": "Switch to inbox",
+        "leaveInbox": "Switch to task list"
+      }
     },
     "search": {
       "placeholder": "Search titles or content…",
@@ -442,7 +514,7 @@
         "sort": {
           "relevance": "Relevance",
           "activityDesc": "Recently active",
-          "activityAsc": "Oldest active"
+          "activityAsc": "Least recently active"
         },
         "status": {
           "active": "Active",
@@ -462,7 +534,8 @@
           "30d": "30d",
           "all": "All"
         }
-      }
+      },
+      "partial": "Results may be incomplete. Narrow the keywords or search a specific project."
     },
     "renameDevice": {
       "title": "Rename Device",
@@ -478,7 +551,7 @@
     },
     "revoked": {
       "title": "Access revoked",
-      "body": "\"{{deviceName}}\" revoked this device's remote access. Re-authorize this device in {{appName}} settings on that computer, then tap \"Retry Access.\"",
+      "body": "“{{deviceName}}” revoked this device’s remote access. Re-authorize this device in {{appName}} settings on that computer, then tap “Retry Access.”",
       "retry": "Retry Access"
     },
     "viewAllConversations": "View all {{count}} sessions",
@@ -541,11 +614,11 @@
       "clearA11y": "Clear session selection"
     },
     "bulk": {
-      "pinning": "Pinning",
-      "unpinning": "Unpinning",
-      "archiving": "Archiving",
-      "restoring": "Unarchiving",
-      "deleting": "Deleting",
+      "pinning": "Pinning…",
+      "unpinning": "Unpinning…",
+      "archiving": "Archiving…",
+      "restoring": "Unarchiving…",
+      "deleting": "Deleting…",
       "pinA11y": "Pin selected sessions",
       "unpinA11y": "Unpin selected sessions",
       "archiveA11y": "Archive selected sessions",
@@ -563,8 +636,8 @@
     "automationScope": {
       "eyebrow": "Automation",
       "title": "Automation",
-      "emptyCopy": "After the task runs, each run's session shows up here.",
-      "emptyTitle": "This task has no run history yet"
+      "emptyCopy": "After the automation runs, each run’s session shows up here.",
+      "emptyTitle": "This automation has no run history yet"
     },
     "projectScope": {
       "eyebrow": "Project",
@@ -602,7 +675,7 @@
       "showAllA11y": "Show all {{count}}",
       "showLess": "Show less"
     },
-    "noCreateHosts": "No compatible computer is available. Open Cindy on a computer and sign in with the same account to create a teammate.",
+    "noCreateHosts": "No compatible computer is available. Open Cindy on a computer and sign in with the same account to create a buddy.",
     "messageSent": "Message sent to background task",
     "sentTo": "Sent a message to {{name}}",
     "receivedFrom": "Message from {{name}}",
@@ -621,14 +694,12 @@
       "minutes": "{{n}} min",
       "hoursMinutes": "{{h}} h {{m}} min"
     },
-    "retrying": "Hasn't started yet — retrying…",
-    "stopTask": "Stop task",
     "actionFailed": "Unable to load or complete this action",
     "messages": "Messages",
     "readOnly": "Read only",
     "directEmpty": "There are no messages to view yet.",
-    "directLimitReached": "This teammate conversation reached its limit; both teammates returned to their main tasks",
-    "directUnavailable": "This teammate conversation is no longer available.",
+    "directLimitReached": "This buddy conversation reached its limit; both buddies returned to their main tasks",
+    "directUnavailable": "This buddy conversation is no longer available.",
     "unread": "New reply",
     "status": {
       "queued": "Getting started",
@@ -640,8 +711,8 @@
       "timed-out": "Timed out",
       "unknown": "Unknown status"
     },
-    "title": "Teammates",
-    "search": "Search Teammates",
+    "title": "Buddies",
+    "search": "Search Buddies",
     "startChat": "Start the conversation",
     "automation": {
       "unsavedTitle": "Discard Changes?",
@@ -649,7 +720,7 @@
       "discard": "Discard Changes"
     },
     "openProfile": "View {{name}}'s profile",
-    "switchCompanion": "Switch teammate",
+    "switchCompanion": "Switch buddy",
     "activity": {
       "thinking": "Thinking",
       "typing": "Typing",
@@ -685,14 +756,14 @@
       "avatar": "{{name}} is choosing a new portrait",
       "welcome": "Getting a first hello ready",
       "failed": "Preparation paused. Everything completed so far is saved. You can try again.",
-      "retryFailed": "Couldn’t retry just now. Please try again shortly.",
+      "retryFailed": "Couldn’t retry just now. Try again shortly.",
       "leave": "Step away",
       "avatarSkipped": "Using the default portrait for now. You can change it anytime."
     },
     "viewResult": "View Result",
     "noWrittenResult": "No written result.",
     "errorDetails": "Error details",
-    "createTeammate": "New teammate",
+    "createTeammate": "New buddy",
     "createMenu": "New",
     "awaiting": "Needs your OK",
     "taskResult": "Task result",
@@ -723,7 +794,7 @@
     "memorySearch": "Search memories",
     "memoryEmpty": "No memories yet",
     "memoryNoResults": "No matching memories",
-    "memoryDisabled": "Memory is off. Your teammate won’t read or save memories; saved ones can still be viewed and deleted.",
+    "memoryDisabled": "Memory is off. Your buddy won’t read or save memories; saved ones can still be viewed and deleted.",
     "memoryLoadFailed": "Memories couldn’t be loaded",
     "memoryToday": "Today",
     "memoryUpdated": "Updated {{time}}",
@@ -738,14 +809,16 @@
     "memorySaveFailed": "Not saved. Your edits are retained.",
     "memoryMissing": "This memory no longer exists.",
     "memoryDeleteFailed": "The memory couldn’t be deleted",
-    "create": "New Teammate",
+    "create": "New Buddy",
     "createFailed": "Creation is not confirmed yet. Retry to check.",
-    "title": "Teammate",
+    "createHostUnsupported": "This computer can't create a buddy right now. Update Cindy there, or create one on that computer.",
+    "createNeedsDetails": "Add a name and pick a portrait to create a buddy.",
+    "title": "Buddy",
     "profile": "Profile & Personality",
     "memory": "Memory",
     "skills": "Skills & Connections",
     "artifacts": "Artifacts",
-    "direct": "Teammate Messages",
+    "direct": "Buddy Messages",
     "settings": "Models & Permissions",
     "search": "Search Messages",
     "models": "Model Chain",
@@ -754,27 +827,22 @@
     "connections": "Referenced Skills & Connections",
     "save": "Save Changes",
     "offline": "Reconnect to {{deviceName}} to continue. Your edits are retained.",
-    "hostUpgrade": "Update Cindy on {{deviceName}} and retry, or edit this teammate’s settings there.",
+    "hostUpgrade": "Update Cindy on {{deviceName}} and retry, or edit this buddy’s settings there.",
     "readFailed": "Couldn’t confirm the latest state. Refresh before retrying; the action may already have completed. Your edits are retained.",
-    "deleteFailed": "The teammate was not deleted.",
-    "artifactsEmpty": "No artifacts yet. Ask your teammate to create something.",
+    "deleteFailed": "The buddy was not deleted.",
+    "artifactsEmpty": "No artifacts yet. Ask your buddy to create something.",
     "openSourceTask": "Open Source Session",
     "modelFollowsDefault": "Follow the default model chain",
-    "taskModel": "Task Model",
-    "taskInheritsPrimary": "Inherit Primary Model",
-    "modelOverride": "Using this teammate’s own model chain",
-    "modelsUnavailable": "No usable models. Check this teammate’s model settings on your computer, then refresh.",
+    "modelOverride": "Using this buddy’s own model chain",
+    "modelsUnavailable": "No usable models. Check this buddy’s model settings on your computer, then refresh.",
     "artifactsRecovery": "Open files from the message cards, or browse them on {{deviceName}}.",
-    "directRecovery": "Couldn’t load teammate messages. Update Cindy on {{deviceName}} and retry.",
-    "directEmpty": "No teammate messages yet.",
-    "skillsEmpty": "No personal skills yet. Ask your teammate to remember a way of working.",
+    "directRecovery": "Couldn’t load buddy messages. Update Cindy on {{deviceName}} and retry.",
+    "directEmpty": "No buddy messages yet.",
+    "skillsEmpty": "No personal skills yet. Ask your buddy to remember a way of working.",
     "connectionsEmpty": "No skills or connections selected.",
     "largeProfileRecovery": "This profile is too long to edit here. Edit the full profile on {{deviceName}}.",
     "addModel": "Add fallback model",
-    "removeModel": "Remove model",
-    "moveModelUp": "Move model up",
-    "backupModels": "Backup models ({{count}})",
-    "settingsTitle": "Teammate settings",
+    "settingsTitle": "Buddy settings",
     "name": "Name",
     "portraitNumber": "Portrait {{number}}",
     "uploadAvatar": "Upload Avatar",
@@ -783,7 +851,7 @@
     "home": "Main Computer",
     "chat": "Chat",
     "showReplyTarget": "Show which message a reply answers",
-    "showReplyTargetHint": "Above a teammate’s reply, show which of your messages it answers. Applies to all teammates. Older replies don’t show this.",
+    "showReplyTargetHint": "Above a buddy’s reply, show which of your messages it answers. Applies to all buddies. Older replies don’t show this.",
     "channels": "Messaging platforms",
     "channelsEmpty": "No messaging platforms connected",
     "channelTasksEmpty": "No tasks yet",
@@ -797,7 +865,7 @@
     }
   },
   "companionImport": {
-    "title": "Import a teammate",
+    "title": "Import a buddy",
     "entry": "Import an Agent",
     "description": "Choose what to bring from Hermes or OpenClaw.",
     "empty": "No installed Agent was found on this computer.",
@@ -812,7 +880,7 @@
     "takeoverNote": "Source tasks pause only after their data connections are verified. Unselected dependencies keep the source task running.",
     "submit": "Import",
     "back": "Back",
-    "open": "Open teammate",
+    "open": "Open buddy",
     "running": "Importing and checking connections…",
     "complete": "Import saved",
     "attention": "Some items need attention. See the details below.",
@@ -844,30 +912,29 @@
     "databaseDriver": "The database driver could not load. Update or repair Cindy, then retry.",
     "databaseUnavailable": "The source database could not be read. Original data is unchanged; retry after repair.",
     "fileTooLarge": "A file or this import exceeds the read limit. Content was not truncated.",
-    "memoryMetadata": "The memory summary or title exceeds storage requirements.",
+    "memoryMetadata": "The memory summary or title doesn’t meet storage requirements.",
     "memoryWrite": "Memory writing or integrity verification failed. You can retry.",
     "memoryChanged": "The saved memory was changed and has not been overwritten.",
     "attachmentUnsupported": "This attachment format is not supported yet. The original remains at the source.",
     "diskFull": "Disk space is insufficient. Free space, then retry.",
     "permissionDenied": "Permission to read or save this item is missing. Fix permissions, then retry.",
-    "setupDeferred": "Continue sign-in and verification in the teammate chat.",
+    "setupDeferred": "Continue sign-in and verification in the buddy chat.",
     "automationInvalid": "The automation definition could not be converted; it was not created.",
     "itemFailed": "This item is unfinished. Retry or view import details.",
-    "chatPartial": "Your teammate is created, but some content was not fully saved. The items below still need attention; other content and chat remain available.",
-    "imBotOwnerMissing": "No owner user ID was found. Finish connecting this bot on the teammate’s Messaging platforms page.",
+    "chatPartial": "Your buddy is created, but some content was not fully saved. The items below still need attention; other content and chat remain available.",
+    "imBotOwnerMissing": "No owner user ID was found. Finish connecting this bot on the buddy’s Messaging platforms page.",
     "imBotGatewayRunning": "The original gateway is still using this bot. Stop it, then connect the bot on Messaging platforms.",
-    "imBotInUse": "This bot is already connected on this computer, in Settings → IM bots or on another teammate.",
-    "imBotConnectFailed": "Couldn’t connect this bot. Try again on the teammate’s Messaging platforms page.",
-    "imBotSourceStopUnconfirmed": "The original bot hasn’t stopped yet, so it wasn’t handed to the teammate. You can connect it later on the teammate’s Messaging platforms page.",
+    "imBotInUse": "This bot is already connected on this computer, in Settings → IM bots or on another buddy.",
+    "imBotConnectFailed": "Couldn’t connect this bot. Try again on the buddy’s Messaging platforms page.",
+    "imBotSourceStopUnconfirmed": "The original bot hasn’t stopped yet, so it wasn’t handed to the buddy. You can connect it later on the buddy’s Messaging platforms page.",
     "imBotSourceChanged": "The original bot changed after the preview, so it wasn’t stopped. Reload the preview and import again.",
     "bots": "Messaging bots",
-    "botsNote": "After import, these bots stop in {{source}} and the teammate takes them over.",
+    "botsNote": "After import, these bots stop in {{source}} and the buddy takes them over.",
     "sourceDisabled": "Already off",
     "botOwner": "Owner ID {{id}}"
   },
   "glance": {
     "open": "{{name}} at a glance",
-    "dueUnseen": "A todo is due",
     "computers": "Computers",
     "runningHere": "Running here",
     "online": "Online",
@@ -875,37 +942,16 @@
     "current": "Current",
     "offlineCount_one": "{{count}} offline",
     "offlineCount_other": "{{count}} offline",
-    "todos": "Todos",
     "showMore": "Show more",
     "showLess": "Show less",
     "doneCount_one": "{{count}} done",
     "doneCount_other": "{{count}} done",
-    "delete": "Delete",
-    "deleted": "Deleted. It won't be added again.",
-    "undo": "Undo",
-    "undoFailed": "Couldn't undo. Try again.",
-    "deleteFailed": "Couldn't delete. Try again.",
-    "check": "Check for me",
     "checkMeta": "Look for new todos in connected mail and chats",
-    "checkPrompt": "Check my connected sources, like mail and messages, for anything new I need to handle, and add it to my todos.",
-    "dailyCheck": "Check every day",
-    "dailyCheckMeta": "Weekdays at 9:00, quiet when nothing is new",
     "recentTasks": "Recent tasks",
     "unread": "Unread result",
-    "stopDailyCheck": "Stop daily checking",
     "openFailed": "Couldn’t open this link",
-    "dailyCheckFailed": "Couldn't save. Try again.",
-    "loadFailed": "Couldn't load todos",
     "outputs": "Outputs",
-    "outputMeta": "{{time}} · {{task}}",
-    "source": {
-      "conversation": "You asked",
-      "mail": "From email",
-      "feishu": "From Feishu",
-      "github": "From GitHub",
-      "community": "From the community",
-      "task": "From a task"
-    }
+    "outputMeta": "{{time}} · {{task}}"
   },
   "cloudCompanion": {
     "homeOffline": "Main computer “{{device}}” is offline",
@@ -915,19 +961,23 @@
     "empty": "No conversation in the cloud yet.",
     "loadFailed": "Can’t load the cloud conversation right now.",
     "loadOlder": "Load earlier messages",
-    "noTargets": "No other computer is available. Open Cindy on another computer, sign in to the same account, and turn on “Allow same-account devices to control this computer”, then try again.",
+    "noTargets": "No other computer is available. Open Cindy on another computer, sign in to the same account, and turn on “Allow same-account devices to control this machine”, then try again.",
     "devicesFailed": "Can’t load your computers right now. Try again later.",
     "preparing": "Getting ready on “{{device}}”…",
-    "preparingHint": "That computer takes over the teammate from its cloud profile and opens it when ready.",
+    "preparingHint": "That computer takes over the buddy from its cloud profile and opens it when ready.",
     "timeout": "“{{device}}” isn’t ready yet. Make sure Cindy is open and online on that computer, then try again.",
     "conflict": "{{name}} has already moved to “{{device}}”.",
     "switchFailed": "Can’t change the main computer right now. Try again later.",
+    "skillTargetOutdated": "A Skill in {{name}} has a body larger than 64 KB, which the older Cindy on “{{device}}” cannot receive. Update Cindy on that computer before moving your buddy. Your buddy remains on the original computer",
+    "skillTargetOutdated_skill": "The older Cindy on “{{device}}” can’t receive the Skill “{{slug}}”. Its body is {{bodyBytes, number}} bytes, over the 64 KB limit. {{name}} is still running on the original computer. Update Cindy on the target computer and try again.",
     "unknownDevice": "another computer",
     "runsOn": "Runs on “{{device}}”",
     "homeTitle": "Main Computer",
     "moveTo": "Move to “{{device}}”",
     "moveTitle": "Run {{name}} on “{{device}}”?",
     "moveDescription": "From now on {{name}} runs on “{{device}}”, and the chat history comes along. Working directories, connections and local files stay on the computer they are on.",
+    "olderTarget": "Older Cindy",
+    "olderTargetNote": "“{{device}}” runs an older Cindy, so {{name}} works the older way there: the chat history still syncs, but project rules and automations don’t apply there.",
     "moveAction": "Move to “{{device}}”",
     "moving": "Moving {{name}} to “{{device}}”…",
     "busyTitle": "{{name}} is still replying",
@@ -996,5 +1046,8 @@
       "disk-full": "Couldn’t import: not enough disk space",
       "native-unloadable": "Couldn’t import: the original history can’t be loaded"
     }
+  },
+  "liveActivity": {
+    "waitingForUpdate": "Waiting for update"
   }
 }

@@ -528,40 +528,64 @@ export class PluginMarketLedger {
   }
 
   lookupInstallationForAuthorization(target: PluginMarketAuthorizationTarget): PluginMarketAuthorizationLookup {
-    const { main, custom, namespaced } = this.readFiles();
+    return this.installationLookup(this.readFiles())(target);
+  }
+
+  /** Display facts for one scan only. Authorization always reads current files. */
+  createListingLookup(): {
+    lookup: (target: PluginMarketAuthorizationTarget) => PluginMarketAuthorizationLookup;
+    isCurrent: () => boolean;
+  } {
+    const files = this.readFiles();
+    const captured = JSON.stringify(files);
+    return {
+      lookup: this.installationLookup(files),
+      // An async scan yields between plugins. Compare all parsed/raw facts before
+      // publishing so external edits, corruption and recovery also invalidate it.
+      isCurrent: () => {
+        try { return captured === JSON.stringify(this.readFiles()); }
+        catch { return false; }
+      },
+    };
+  }
+
+  private installationLookup({ main, custom, namespaced }: ReturnType<PluginMarketLedger['readFiles']>):
+    (target: PluginMarketAuthorizationTarget) => PluginMarketAuthorizationLookup {
     if (main.kind === 'invalid' || custom.kind === 'invalid' || namespaced.kind === 'invalid') {
-      return { kind: 'invalid' };
+      return () => ({ kind: 'invalid' });
     }
     const merged = this.mergeInstallations(main, custom, namespaced).installations;
-    const precise = hasDeliveryNamespace(target);
-    const record = precise
-      ? merged[pluginLedgerRecordKey(target)] ?? null
-      : this.recordForLookup(merged, target.ghostId);
-    if (record) {
-      if (precise && (record.ghostId !== target.ghostId ||
-          (hasDeliveryNamespace(record) && record.namespace !== target.namespace) ||
-          (target.namespace === null && record.scope === 'organization'))) {
-        return { kind: 'absent' };
-      }
-      return { kind: 'found', record };
-    }
-    const mentionsUnparsedTarget = (file: InstallationsFileRead): boolean => {
-      if (!precise) return rawMentionsGhost(file, target.ghostId);
-      const raw = file.raw?.installations;
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
-      return Object.entries(raw).some(([key, value]) => {
-        if (validRecord(value) && hasDeliveryNamespace(value) && value.namespace !== target.namespace) return false;
-        if (!value || typeof value !== 'object' || Array.isArray(value)) {
-          return key === pluginLedgerRecordKey(target);
+    return (target) => {
+      const precise = hasDeliveryNamespace(target);
+      const record = precise
+        ? merged[pluginLedgerRecordKey(target)] ?? null
+        : this.recordForLookup(merged, target.ghostId);
+      if (record) {
+        if (precise && (record.ghostId !== target.ghostId ||
+            (hasDeliveryNamespace(record) && record.namespace !== target.namespace) ||
+            (target.namespace === null && record.scope === 'organization'))) {
+          return { kind: 'absent' };
         }
-        const candidate = value as { ghostId?: unknown; namespace?: unknown };
-        return key === pluginLedgerRecordKey(target) ||
-          (candidate.ghostId === target.ghostId &&
-            (!hasDeliveryNamespace(candidate) || candidate.namespace === target.namespace));
-      });
+        return { kind: 'found', record };
+      }
+      const mentionsUnparsedTarget = (file: InstallationsFileRead): boolean => {
+        if (!precise) return rawMentionsGhost(file, target.ghostId);
+        const raw = file.raw?.installations;
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+        return Object.entries(raw).some(([key, value]) => {
+          if (validRecord(value) && hasDeliveryNamespace(value) && value.namespace !== target.namespace) return false;
+          if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            return key === pluginLedgerRecordKey(target);
+          }
+          const candidate = value as { ghostId?: unknown; namespace?: unknown };
+          return key === pluginLedgerRecordKey(target) ||
+            (candidate.ghostId === target.ghostId &&
+              (!hasDeliveryNamespace(candidate) || candidate.namespace === target.namespace));
+        });
+      };
+      return [main, custom, namespaced].some(mentionsUnparsedTarget)
+        ? { kind: 'invalid' } : { kind: 'absent' };
     };
-    return [main, custom, namespaced].some(mentionsUnparsedTarget)
-      ? { kind: 'invalid' } : { kind: 'absent' };
   }
 
   /**

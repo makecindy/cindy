@@ -7,7 +7,7 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 import { MakerDeb } from '@electron-forge/maker-deb';
 import { rebuild as electronRebuild } from '@electron/rebuild';
 import { MakerZIP } from '@electron-forge/maker-zip';
-import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives';
+import { PersonalNativeLaunchPlugin } from './forge-personal-launch';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import type { ForgeArch, ForgeConfig, ForgePlatform } from '@electron-forge/shared-types';
@@ -456,6 +456,8 @@ const isDev =
   process.env.NODE_ENV !== 'production' &&
   !process.argv.includes('make') &&
   !process.argv.includes('package');
+const usePrebuiltPersonalInterface = isDev && /^[a-f0-9]{64}$/.test(process.env.CINDY_PERSONAL_ASSET_DIGEST ?? '') &&
+  !!process.env.CINDY_PERSONAL_GENERATION && !!process.env.CINDY_PERSONAL_MONITOR_DIR;
 const isWin = process.platform === 'win32';
 
 /**
@@ -725,6 +727,77 @@ function applyMacPackagedDisplayName(buildPath: string, platform: string): void 
   }
 }
 
+function readMacExecutableEntitlements(exePath: string): Buffer | undefined {
+  const result = spawnSync('codesign', ['--display', '--entitlements', '-', '--xml', exePath], {
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  if (result.error) throw result.error;
+  if (result.status === 0) return result.stdout.length > 0 ? result.stdout : undefined;
+
+  const stderr = result.stderr.toString().trim();
+  if (result.status === 1 && stderr.endsWith(': code object is not signed at all')) return undefined;
+  throw new Error(
+    `[forge:postPackage] Failed to read macOS entitlements (${exePath}): ${stderr || result.signal || result.status}`,
+  );
+}
+
+/**
+ * Give each packaged macOS app its own deterministic Mach-O LC_UUID before
+ * signing. Prebuilt Electron shares one stock LC_UUID across apps of the same
+ * Electron release; macOS Local Network privacy (nehelper) tracks executables
+ * by LC_UUID as well as bundle ID, so colliding with stock Electron.app or
+ * another Electron app causes macOS to suppress the one-time permission prompt
+ * and omit Cindy from System Settings > Local Network (verified 2026-11-26).
+ */
+async function applyMacUniqueExecutableUuid(buildPath: string, platform: string): Promise<void> {
+  if (platform !== 'darwin') return;
+  // Release builds without a pre-signing smoke test let finishDarwin sign the
+  // nested code before sealing the outer app. Forge's intermediate app can be unsigned.
+  const shouldResign =
+    process.platform === 'darwin' && process.env.CINDY_FORGE_DEFER_MAC_SIGNING !== '1';
+  const { deriveMacAppMachoUuid, patchMachoUuid } = await import('../../scripts/macos-macho-uuid.mjs');
+  const electronVersion = (_require('electron/package.json') as { version: string }).version;
+  const apps = fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'));
+  for (const appDir of apps) {
+    const exePath = path.join(buildPath, appDir, 'Contents', 'MacOS', CINDY_EXE);
+    if (!fs.existsSync(exePath)) {
+      throw new Error(`[forge:postPackage] macOS executable missing at ${exePath}`);
+    }
+    // Patching LC_UUID invalidates the signature that carries the original entitlements.
+    const entitlements = shouldResign ? readMacExecutableEntitlements(exePath) : undefined;
+    const nextUuid = deriveMacAppMachoUuid(CINDY_APP_ID, electronVersion);
+    const { previous, uuid } = patchMachoUuid(exePath, nextUuid);
+    if (shouldResign) {
+      // Refresh the local ad-hoc signature so unsigned `forge package` outputs
+      // stay launchable on Apple silicon; external release signing seals it again.
+      const args = ['--force', '--sign', '-'];
+      const tempDir = entitlements
+        ? fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mac-entitlements-'))
+        : undefined;
+      try {
+        if (tempDir && entitlements) {
+          const entitlementsPath = path.join(tempDir, 'entitlements.plist');
+          fs.writeFileSync(entitlementsPath, entitlements, { mode: 0o600 });
+          args.push('--entitlements', entitlementsPath);
+        }
+        const resign = spawnSync('codesign', [...args, exePath]);
+        if (resign.error) throw resign.error;
+        if (resign.status !== 0) {
+          const detail = resign.stderr.toString().trim() || resign.signal || resign.status;
+          throw new Error(
+            `[forge:postPackage] ad-hoc codesign failed after LC_UUID patch (${exePath}): ${detail}`,
+          );
+        }
+      } finally {
+        if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+    console.log(
+      `[forge:postPackage] mac LC_UUID ${previous.join(',')} → ${uuid} (${appDir}/Contents/MacOS/${CINDY_EXE})`,
+    );
+  }
+}
+
 /**
  * macOS Live Activity (Agent Island in the system Dynamic Island). `build.mjs` skips
  * every step unless the macOS 27.3 SDK and Apple silicon are available, so older
@@ -746,6 +819,27 @@ function installMacAgentActivityExtension(buildPath: string, platform: string, a
   if (platform !== 'darwin' || process.platform !== 'darwin') return;
   for (const appDir of fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'))) {
     runAgentActivityBuild(['extension', path.join(buildPath, appDir), arch]);
+  }
+}
+
+/**
+ * macOS desktop widgets (subscription quota, daily usage). `build.mjs` skips every step
+ * without the macOS 14 SDK. The extension's entitlements (App Sandbox and its read-only
+ * data folder) are written per app id at install; release signing keeps them.
+ */
+function runDesktopWidgetsBuild(args: string[]): void {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, 'native/desktop-widgets/build.mjs'), ...args],
+    { stdio: 'inherit' },
+  );
+  if (result.error || result.status !== 0) throw new Error('macOS desktop widgets build failed');
+}
+
+function installMacDesktopWidgetsExtension(buildPath: string, platform: string, arch: string): void {
+  if (platform !== 'darwin' || process.platform !== 'darwin') return;
+  for (const appDir of fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'))) {
+    runDesktopWidgetsBuild(['extension', path.join(buildPath, appDir), arch]);
   }
 }
 
@@ -831,6 +925,8 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     'resources/remote-file-service',
     // 自建中转单文件:「部署到我的服务器」经 SSH 上传到用户服务器运行。
     'resources/device-link-relay',
+    // V2 transport core, loaded by the trusted Main host and shared across connections.
+    'resources/agent-net',
     // .cindy 发布者/审核 Ed25519 公钥信任表(私钥永不进客户端)。
     'resources/ghost-trust.json',
     // 远端 pi manager bundle(Node 单例 daemon,SSH remote 会话的进程持有器)。
@@ -1031,6 +1127,9 @@ function buildSwiftHelperForForgeArch(
 function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void {
   const destDir = path.join(__dirname, 'resources', 'tools', 'remote-desktop');
   fs.mkdirSync(destDir, { recursive: true });
+  if (platform === 'linux') {
+    fs.copyFileSync(path.join(__dirname, 'native', 'remote-desktop', 'linux-input-guard.py'), path.join(destDir, 'linux-input-guard.py'));
+  }
   if (process.platform === 'linux' && platform === 'linux') {
     if (arch !== process.arch)
       throw new Error('Linux desktop input requires a native architecture build');
@@ -1057,6 +1156,12 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
         path.join(temporary, 'cindy-linux-desktop-capture'),
         path.join(destDir, 'cindy-linux-desktop-capture'),
       );
+      // Optional GNOME (Mutter/PipeWire) capture: builders without its headers
+      // skip it, and must not ship an earlier checkout's binary instead.
+      const gnomeCapture = path.join(destDir, 'cindy-linux-gnome-capture');
+      fs.rmSync(gnomeCapture, { force: true });
+      if (fs.existsSync(path.join(temporary, 'cindy-linux-gnome-capture')))
+        fs.copyFileSync(path.join(temporary, 'cindy-linux-gnome-capture'), gnomeCapture);
       const clipboard = spawnSync(
         process.execPath,
         [
@@ -1144,7 +1249,11 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
         dest,
         arch,
         MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET,
-        [],
+        // Names Cindy in the system owner-verification prompt; identifier unchanged.
+        [
+          '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist',
+          '-Xlinker', path.join(__dirname, 'native', 'remote-desktop', 'macos-input-Info.plist'),
+        ],
         'remote desktop input',
       );
     } finally {
@@ -1334,6 +1443,46 @@ function buildWindowsTaskbarAddon(platform: ForgePlatform, arch: ForgeArch): voi
   } finally {
     fs.rmSync(build, { recursive: true, force: true });
   }
+}
+
+/** Rust targets of the Agent-Net native engine's Node module, by the platform and architecture being packaged. */
+const AGENT_NET_NATIVE_TARGETS: Record<string, string> = {
+  'win32-x64': 'x86_64-pc-windows-msvc',
+  'win32-arm64': 'aarch64-pc-windows-msvc',
+  'darwin-x64': 'x86_64-apple-darwin',
+  'darwin-arm64': 'aarch64-apple-darwin',
+  'linux-x64': 'x86_64-unknown-linux-gnu',
+  'linux-arm64': 'aarch64-unknown-linux-gnu',
+};
+
+/**
+ * The Agent-Net worker's native engine (packages/agent-net-native/node), built from source for the target being packaged and
+ * staged beside the worker bundle; the worker runs its transport on it, and on WASM without it (agentNetRuntime.ts
+ * `agentNetNative`). A module left from another target or older sources is removed first, so none is ever shipped stale.
+ * Windows packaging already needs Cargo (updater, taskbar), so there a failed build fails the package; elsewhere a machine
+ * without Rust packages without it, as ordinary builds do not depend on Rust (docs/agent-net-plan.md), unless
+ * CINDY_REQUIRE_AGENT_NET_NATIVE=1.
+ */
+function stageAgentNetNative(platform: ForgePlatform, arch: ForgeArch): void {
+  const dest = path.join(__dirname, 'resources', 'agent-net', 'cindy-agent-net.node');
+  fs.rmSync(dest, { force: true });
+  const required = platform === 'win32' || process.env.CINDY_REQUIRE_AGENT_NET_NATIVE === '1';
+  const target = AGENT_NET_NATIVE_TARGETS[`${platform}-${arch}`];
+  if (!target) {
+    if (required) throw new Error(`[forge] No Agent-Net native engine target for ${platform}-${arch}`);
+    console.warn(`[forge:prePackage] Agent-Net native engine: no target for ${platform}-${arch}; the worker uses WASM`);
+    return;
+  }
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, '..', '..', 'packages', 'agent-net-native', 'node', 'build.mjs'), '--target', target, '--out', dest],
+    { stdio: 'inherit', windowsHide: true },
+  );
+  if (!result.error && result.status === 0) return;
+  fs.rmSync(dest, { force: true });
+  const reason = result.error?.message ?? `exited ${result.status}`;
+  if (required) throw new Error(`[forge] Agent-Net native engine build failed (${target}): ${reason}`);
+  console.warn(`[forge:prePackage] Agent-Net native engine not built for ${target} (${reason}); the worker uses WASM`);
 }
 
 function buildWindowsAtomicRenameHelper(platform: ForgePlatform, arch: ForgeArch): void {
@@ -1747,13 +1896,20 @@ function buildMacMenubarHelper(platform: ForgePlatform, arch: ForgeArch): void {
     }
   }
   fs.mkdirSync(destDir, { recursive: true });
+  // A single-file AppKit tool still needs an application identity for defaults
+  // (including NSStatusItem.autosaveName). Embed it before the normal signing pass.
+  const infoPlistPath = `${dest}.Info.plist`;
+  const infoPlist = fs.readFileSync(path.join(srcDir, 'Info.plist'), 'utf8')
+    .replace('$(PRODUCT_BUNDLE_IDENTIFIER)', `${CINDY_APP_ID}.menubar`);
+  fs.writeFileSync(infoPlistPath, infoPlist, 'utf8');
   buildSwiftHelperForForgeArch(
     src,
     dest,
     arch,
     MACOS_MENUBAR_HELPER_DEPLOYMENT_TARGET,
     // The helper uses @main, which requires library parsing mode.
-    ['-O', '-parse-as-library'],
+    ['-O', '-parse-as-library',
+      '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', infoPlistPath],
     'menu bar helper',
   );
   for (const asset of assets) fs.copyFileSync(path.join(srcDir, asset), path.join(destDir, asset));
@@ -2059,6 +2215,17 @@ const config: ForgeConfig = {
   },
   rebuildConfig: {},
   hooks: {
+    generateAssets: async (_config, platform, arch) => {
+      if (process.platform !== 'win32' || platform !== 'win32') return;
+      const source = path.join(__dirname, 'native', 'file-preview');
+      const result = spawnSync(process.execPath, [
+        _require.resolve('node-gyp/bin/node-gyp.js'), 'rebuild', '--release', '--arch=' + arch,
+      ], { cwd: source, stdio: 'inherit' });
+      if (result.status !== 0) throw new Error('Windows Shell preview helper build failed');
+      const dest = path.join(__dirname, 'resources', 'tools', 'file-preview');
+      fs.mkdirSync(dest, { recursive: true });
+      fs.copyFileSync(path.join(source, 'build', 'Release', 'cindy-file-preview.exe'), path.join(dest, 'cindy-file-preview.exe'));
+    },
     // Builds cindy-updater.exe before electron-packager copies resources/ into
     // the package — guarantees the shipped updater matches HEAD.
     prePackage: async (_forgeConfig, platform, arch) => {
@@ -2087,6 +2254,7 @@ const config: ForgeConfig = {
       buildWindowsGamepadHelper(platform, arch);
       buildWindowsAtomicRenameHelper(platform, arch);
       buildWindowsTaskbarAddon(platform, arch);
+      stageAgentNetNative(platform, arch);
       if (platform === 'darwin') {
         const desktopBlurBuild = spawnSync(
           process.execPath,
@@ -2096,6 +2264,12 @@ const config: ForgeConfig = {
         );
         if (desktopBlurBuild.error || desktopBlurBuild.status !== 0)
           throw new Error('Native desktop blur build failed');
+        const loginItemBuild = spawnSync(process.execPath, [
+          path.join(__dirname, 'native/login-item/build.mjs'),
+          path.join(__dirname, 'resources/tools/login-item/cindy-login-item.node'), arch,
+        ], { stdio: 'inherit' });
+        if (loginItemBuild.error || loginItemBuild.status !== 0)
+          throw new Error('Native login item build failed');
         const trackpadBuild = spawnSync(
           process.execPath,
           [
@@ -2110,6 +2284,11 @@ const config: ForgeConfig = {
         runAgentActivityBuild([
           'addon',
           path.join(__dirname, 'resources/tools/agent-island/cindy-agent-activity.node'),
+          arch,
+        ]);
+        runDesktopWidgetsBuild([
+          'addon',
+          path.join(__dirname, 'resources/tools/desktop-widgets/cindy-desktop-widgets.node'),
           arch,
         ]);
       }
@@ -2138,7 +2317,9 @@ const config: ForgeConfig = {
           console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
           signPackagedExes(buildPath);
           applyMacPackagedDisplayName(buildPath, opts.platform);
+          await applyMacUniqueExecutableUuid(buildPath, opts.platform);
           installMacAgentActivityExtension(buildPath, opts.platform, opts.arch);
+          installMacDesktopWidgetsExtension(buildPath, opts.platform, opts.arch);
         }
       } finally {
         removeCindySourceMetadata();
@@ -2149,8 +2330,8 @@ const config: ForgeConfig = {
   plugins: [
     // chat-data-localization F1：自动 unpack 任何 *.node 原生模块（better-sqlite3）
     // 使其在 packaged 应用中可以被 require()——asar 会阻止原生模块的 dlopen 调用。
-    new AutoUnpackNativesPlugin({}),
-    new VitePlugin({
+    new PersonalNativeLaunchPlugin({}),
+    ...(usePrebuiltPersonalInterface ? [] : [new VitePlugin({
       // Dev keeps all watcher targets in one process. Build them serially at
       // startup so the initial graph does not multiply the same high baseline;
       // packaged builds retain Forge's normal concurrency.
@@ -2192,6 +2373,11 @@ const config: ForgeConfig = {
           entry: 'src/main/voice-input/speaker/speakerGateWorker.ts',
           config: 'vite.speaker-gate-worker.config.ts',
           // 声纹过滤的 ONNX 推理是同步 CPU 计算，隔离在线程中，避免阻塞 Electron main。
+          target: 'preload',
+        },
+        {
+          entry: 'src/main/im/imessage/archiveWorker.ts',
+          config: 'vite.node-worker.config.ts',
           target: 'preload',
         },
         {
@@ -2272,7 +2458,7 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
-          entry: 'src/main/cindy-brain/nodeRuntimeWorkerProcess.ts',
+          entry: 'src/main/cindy-brain/nodeRuntimeWorkerProcess.desktop.ts',
           config: 'vite.preload.config.ts',
           // 正式包关闭 RunAsNode fuse；随包插件改由 Electron utilityProcess
           // 承载。独立 CJS entry 与 main bundle 同目录，dev / packaged 同路径。
@@ -2329,6 +2515,16 @@ const config: ForgeConfig = {
           target: 'preload',
         },
         {
+          entry: 'src/preload/quotaTrayPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
+          entry: 'src/preload/cloudLoginWindowPreload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+        {
           entry: 'src/preload/remoteDesktopViewerPreload.ts',
           config: 'vite.preload.config.ts',
           target: 'preload',
@@ -2367,7 +2563,7 @@ const config: ForgeConfig = {
           config: 'vite.renderer.config.ts',
         },
       ],
-    }),
+    })]),
     // FusesPlugin conflicts with VitePlugin on `start` command — only load for package/make
     ...(isDev
       ? []

@@ -7,9 +7,10 @@ import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { AnimationVisibilityProvider } from '@/hooks/useLoopingAnimation';
 import { motionDuration } from '@/theme/tokens';
+import { GestureDetector } from '@/platform/gestureHandler';
 import { RemoteSessionStoreSubscriptionGate } from './remoteSessionStore';
 import { sessionPaneLayout } from './sessionPaneLayout';
-import { SessionPaneDivider } from './SessionPaneDivider';
+import { PaneEdgeInsetProvider, useSessionPaneDivider } from './SessionPaneDivider';
 
 const PaneLayoutContext = createContext<ReturnType<typeof sessionPaneLayout> | null>(null);
 type SidebarWidthPreference = { width: number | null; setWidth(width: number): void };
@@ -38,6 +39,12 @@ export function useResidentHomeList(embedded = false) {
   return { enabled: !!context && (embedded ? context.persistent : Platform.OS !== 'ios'), mounted: context?.mounted };
 }
 
+/** A native-docked Home already owns its whole list. Keep the list within that
+ * surface in both orientations instead of moving it to the legacy root host. */
+export function LocalHomeList({ children }: { children: ReactNode }) {
+  return <Context.Provider value={null}>{children}</Context.Provider>;
+}
+
 /** Preserve the resident-list owner when route content is re-hosted above this
  * provider. React context follows the render destination, so an explicit bridge
  * is required for Android root overlays that otherwise fall back to an inline
@@ -51,8 +58,8 @@ export function useResidentHomeListContextBridge(children: ReactNode) {
 }
 
 /** One task-list width for the side column and the floating quick-switch
- * drawer: resizing either one is the same choice. Each surface clamps it to
- * its own bounds and uses its own default until the user has dragged. */
+ * drawer: resizing either one is the same choice, with the same default and
+ * drag range. Only a constrained window or an actual hinge can override it. */
 export function useSessionSidebarWidthPreference(): SidebarWidthPreference {
   const context = useContext(SidebarWidthContext);
   const [width, setWidth] = useState<number | null>(null);
@@ -89,8 +96,16 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
   useLayoutEffect(() => {
     mounted.current = !!entry;
   }, [entry]);
+  // The root holds both panes, so the edge's drag band can let taps through to
+  // either side. Keep the detector mounted: toggling it would remount the app.
+  const divider = useSessionPaneDivider({
+    enabled: visible && !homeRoute, width: paneLayout.sidebarWidth, bounds: paneLayout.resizeBounds ?? null,
+    left: paneLayout.detail.x, top: geometry.insets.top, bottom: geometry.insets.bottom, onResize: setSidebarWidth,
+  });
   return <SidebarWidthContext.Provider value={widthPreference}>
     <PaneLayoutContext.Provider value={paneLayout}><Context.Provider value={context}>
+    <PaneEdgeInsetProvider value={divider.rowInset}>
+    <GestureDetector gesture={divider.gesture}>
     <View ref={host} collapsable={false} style={styles.root}>
       {children}
       {entry ? <Animated.View collapsable={false} pointerEvents={visible ? 'box-none' : 'none'}
@@ -107,12 +122,10 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
           <RemoteSessionStoreSubscriptionGate enabled={visible}>{entry.children}</RemoteSessionStoreSubscriptionGate>
         </AnimationVisibilityProvider>
       </Animated.View> : null}
-      {visible && !homeRoute && paneLayout.resizeBounds ? <SessionPaneDivider
-        width={paneLayout.sidebarWidth} bounds={paneLayout.resizeBounds}
-        left={paneLayout.detail.x} top={geometry.insets.top} bottom={geometry.insets.bottom}
-        onResize={setSidebarWidth}
-      /> : null}
+      {divider.edge}
     </View>
+    </GestureDetector>
+    </PaneEdgeInsetProvider>
   </Context.Provider></PaneLayoutContext.Provider>
   </SidebarWidthContext.Provider>;
 }

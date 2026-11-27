@@ -30,6 +30,7 @@
 import { useCallback, useMemo } from 'react';
 import { Bot, ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { getCollapsibleCollabWaitKey } from '@cindy/maker-shared';
 
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
@@ -42,8 +43,10 @@ import {
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 
 import { AgentActionRow } from './AgentActionRow';
+import type { PluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 
 export interface AgentActionsBlockProps {
+  pluginUi: PluginUiMessageCandidates;
   renderItemKey?: string;
   toolCalls: ChatMessage[];
   /** clientId of tool_use → string content of its tool_result. */
@@ -62,6 +65,7 @@ export interface AgentActionsBlockProps {
 }
 
 export function AgentActionsBlock({
+  pluginUi,
   renderItemKey,
   toolCalls,
   resultMap,
@@ -85,6 +89,31 @@ export function AgentActionsBlock({
     () => toolCalls.some((msg) => rowStatus(msg.clientId) === 'running'),
     [toolCalls, rowStatus],
   );
+  const collapsedRows = useMemo(() => {
+    const collapseKeyFor = (msg: ChatMessage): string | null =>
+      getCollapsibleCollabWaitKey(msg.toolName ?? '', msg.toolInput, resultMap.get(msg.clientId));
+    const rows: Array<{ message: ChatMessage; repeatCount?: number }> = [];
+    let index = 0;
+    while (index < toolCalls.length) {
+      const startKey = collapseKeyFor(toolCalls[index]);
+      if (!startKey) {
+        rows.push({ message: toolCalls[index] });
+        index += 1;
+        continue;
+      }
+      let end = index + 1;
+      while (end < toolCalls.length && collapseKeyFor(toolCalls[end]) === startKey) {
+        end += 1;
+      }
+      const count = end - index;
+      rows.push({
+        message: toolCalls[end - 1],
+        ...(count > 1 ? { repeatCount: count } : {}),
+      });
+      index = end;
+    }
+    return rows;
+  }, [toolCalls, resultMap]);
 
   // Stable per-block id for persistence. First tool's clientId uniquely
   // identifies this segment in the stream — survives streaming token churn.
@@ -116,7 +145,7 @@ export function AgentActionsBlock({
           type="button"
           onClick={onToggle}
           className={cn(
-            'flex w-full items-center gap-[6px] py-[2px]',
+            'flex w-full items-center gap-1.5 py-0.5',
             'select-none cursor-pointer',
             'hover:opacity-80 transition-opacity',
             'text-left',
@@ -152,17 +181,19 @@ export function AgentActionsBlock({
         <Collapse open={expanded}>
           <div
             className={cn(
-              'mt-1 pl-3 py-[2px]',
+              'mt-1 pl-3 py-0.5',
               'border-l-2 border-[var(--agent-actions-rail)]',
               'flex flex-col',
             )}
           >
-            {toolCalls.map((msg) => (
+            {collapsedRows.map(({ message: msg, repeatCount }) => (
               <AgentActionRow
+                pluginUi={pluginUi}
                 key={msg.clientId}
                 message={msg}
                 toolResult={resultMap.get(msg.clientId)}
                 status={rowStatus(msg.clientId)}
+                repeatCount={repeatCount}
               />
             ))}
           </div>

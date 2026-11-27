@@ -1,3 +1,5 @@
+import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
+import { setSessionRouteLockImplementation, withSessionRouteLock } from '../../localDb/sessionRouteLock';
 /**
  * dispatcher 单测: 注入假 runner / bindings / store, 覆盖协议语义的全部分支 ——
  * 幂等回放、别名白名单、binding 复用(同 key 同 session)、接管(sessionId 路径
@@ -8,7 +10,7 @@ import path from 'node:path';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Session,
   TurnDispatchRejectedError,
@@ -24,12 +26,14 @@ import {
   withChannelTurnSource,
 } from '../../maker-ipc/channelTurnSignal';
 import { bindRuntimeRecoveryNotice } from '../../im/shared/runtimeRecoveryNotice';
-import { setMainLocale } from '../../i18n';
+import { setMainLocale } from '../../i18n.desktop';
 
 import {
   HOOK_FEATURE_MESSAGE_OPS,
+  HOOK_FEATURE_IM_QUESTIONS,
   HOOK_FEATURE_SESSION_RESULT,
   HOOK_FEATURE_TELEGRAM_CARD_OPS,
+  HOOK_FEATURE_TELEGRAM_QUESTION_OPS,
   HOOK_FEATURE_TELEGRAM_COMMANDS,
   HOOK_FEATURE_TELEGRAM_FINAL_OPS,
   HOOK_FEATURE_TELEGRAM_PROGRESS_OPS,
@@ -138,7 +142,7 @@ function memoryTerminalLedger(): HookRequestLedger & { records: HookTerminalReco
  * 可控假 runner: run 挂起直到测试显式 resolve —— 用于验证排队;
  * sessions 表模拟 inspect。
  */
-function fakeRunner(opts?: { sessions?: Record<string, { workingDir: string; usable: boolean }> }) {
+function fakeRunner(opts?: { sessions?: Record<string, { workingDir: string; usable: boolean; companionOwned?: boolean }> }) {
   const sessions = opts?.sessions ?? {};
   const calls: HookRunRequest[] = [];
   const resolvers: Array<(o: HookRunOutcome) => void> = [];
@@ -231,9 +235,11 @@ function makeDispatcher(overrides?: {
   config?: HookConnectionConfig | null;
   prepareWorktree?: HookDispatcherDeps['prepareWorktree'];
   buildContextPrefix?: HookDispatcherDeps['buildContextPrefix'];
+  collectGroupHistoryImages?: HookDispatcherDeps['collectGroupHistoryImages'];
   dialogue?: HookDispatcherDeps['dialogue'];
   abortSession?: HookDispatcherDeps['abortSession'];
   archiveSessionRow?: HookDispatcherDeps['archiveSessionRow'];
+  restoreArchivedSession?: HookDispatcherDeps['restoreArchivedSession'];
   subscribeUiContinuation?: HookDispatcherDeps['subscribeUiContinuation'];
   subscribeUiSessionIntervention?: HookDispatcherDeps['subscribeUiSessionIntervention'];
   subscribeUiTurnDispatching?: HookDispatcherDeps['subscribeUiTurnDispatching'];
@@ -255,9 +261,11 @@ function makeDispatcher(overrides?: {
     runner,
     prepareWorktree: overrides?.prepareWorktree,
     buildContextPrefix: overrides?.buildContextPrefix,
+    collectGroupHistoryImages: overrides?.collectGroupHistoryImages,
     dialogue: overrides?.dialogue,
     abortSession: overrides?.abortSession,
     archiveSessionRow: overrides?.archiveSessionRow,
+    restoreArchivedSession: overrides?.restoreArchivedSession,
     subscribeUiContinuation: overrides?.subscribeUiContinuation,
     subscribeUiSessionIntervention: overrides?.subscribeUiSessionIntervention,
     subscribeUiTurnDispatching: overrides?.subscribeUiTurnDispatching,
@@ -268,6 +276,11 @@ function makeDispatcher(overrides?: {
   });
   return { d, bindings, fr };
 }
+
+
+// 这些用例断言中文控制文案：显式切到 zh-CN，结束后复位为 en。
+beforeEach(() => setMainLocale('zh-CN'));
+afterEach(() => { setMainLocale('en'); setSessionRouteLockImplementation(null); });
 
 describe('任务失败原因进主日志(issue #5912)', () => {
   it('runner 抛出路由不可用: 主日志记 requestId / 渠道 / 原因, turn.end 带同一 errorMessage', async () => {
@@ -307,6 +320,86 @@ describe('任务失败原因进主日志(issue #5912)', () => {
 
     expect(log.warn).toHaveBeenCalledWith('hook task req-other failed: im=none via=outcome reason=unclassified');
     expect(log.warn.mock.calls.flat().join('\n')).not.toContain('/Users/someone');
+    d.dispose();
+  });
+
+  // Hook main logs must classify known structured maker-core failure reasons (such as
+  // codex_reconnect_stalled and upstream-overload) instead of logging reason=unclassified,
+  // while still blocking arbitrary paths or unknown strings from leaking into logs (unit tier).
+  it.each([
+    {
+      requestId: 'req-stall',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'The model connection has been retrying for 120s without making progress; the turn was interrupted automatically.',
+        errorReason: 'codex_reconnect_stalled',
+      },
+      expectedReason: 'codex_reconnect_stalled',
+    },
+    {
+      requestId: 'req-overload-reason',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: '⚠️ 模型服务繁忙：上游暂时没有可用容量。',
+        errorReason: 'upstream-overload',
+      },
+      expectedReason: 'upstream-overload',
+    },
+    {
+      requestId: 'req-overload-upper',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'stream disconnected before completion',
+        errorReason: 'UPSTREAM_OVERLOADED',
+      },
+      expectedReason: 'upstream-overload',
+    },
+    {
+      requestId: 'req-overload-message-only',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'Selected model is at capacity. Please try a different model.',
+      },
+      expectedReason: 'upstream-overload',
+    },
+    {
+      requestId: 'req-stall-message-only',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'The model connection has been retrying for 120s without making progress; the turn was interrupted automatically.',
+      },
+      expectedReason: 'codex_reconnect_stalled',
+    },
+    {
+      requestId: 'req-unknown-reason',
+      outcome: {
+        status: 'error' as const,
+        finalText: '',
+        errorMessage: 'secret /Users/dash/private.txt',
+        errorReason: 'custom/unsafe/reason',
+      },
+      expectedReason: 'unclassified',
+    },
+  ])('classifies hook failure log reason for $requestId -> $expectedReason', async ({ requestId, outcome, expectedReason }) => {
+    const fr = fakeRunner();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const { d } = makeDispatcher({ runner: fr.runner, log });
+    const c = collector();
+    d.onConnected('conn-1', c.send);
+    await d.handleDispatch('conn-1', dispatch({ requestId, source: { im: 'feishu' } }), c.send);
+    await tick();
+    fr.finish(outcome);
+    await tick();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      `hook task ${requestId} failed: im=feishu via=outcome reason=${expectedReason}`,
+    );
+    expect(log.warn.mock.calls.flat().join('\n')).not.toContain('/Users/dash');
     d.dispose();
   });
 });
@@ -631,45 +724,16 @@ describe('isPathWithin', () => {
 });
 
 describe('buildHookSessionTitle', () => {
-  it('短消息原样进标题, 换行/连续空白压平成单空格', () => {
-    expect(buildHookSessionTitle('slack', '修一下登录页', 'C1:1.1')).toBe('[Slack] 修一下登录页');
-    expect(buildHookSessionTitle('slack', ' 修一下\n登录页  的样式 ', 'C1:1.1')).toBe(
-      '[Slack] 修一下 登录页 的样式',
-    );
+  it('uses the same channel, readable subject and optional context for every lane', () => {
+    expect(buildHookSessionTitle('Slack', ' 修一下\n登录页  的样式 ', 'Acme')).toBe('Slack · 修一下 登录页 的样式 · Acme');
+    expect(buildHookSessionTitle('Slack', '检查登录页')).toBe('Slack · 检查登录页');
+    expect(buildHookSessionTitle('Telegram', '继续发布', 'Release')).toBe('Telegram · 继续发布 · Release');
   });
 
-  it('超长消息截断到 24 字加省略号', () => {
-    const long = '一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十';
-    expect(buildHookSessionTitle('slack', long, 'C1:1.1')).toBe(`[Slack] ${long.slice(0, 24)}…`);
-  });
-
-  it('空消息(纯图片派发)回退渠道内标识', () => {
-    expect(buildHookSessionTitle('slack', '   \n ', 'C1:1.1')).toBe('[Slack] C1:1.1');
-  });
-
-  it('DM 会话(bareKey 带 dm: 前缀)标题前缀标 ·DM', () => {
-    expect(buildHookSessionTitle('slack', '帮我看看这个报错', 'dm:U1:g0')).toBe(
-      '[Slack·DM] 帮我看看这个报错',
-    );
-    // 空消息回退 bareKey 时 DM 标同样生效
-    expect(buildHookSessionTitle('slack', '', 'dm:U1:g0')).toBe('[Slack·DM] dm:U1:g0');
-  });
-
-  it('(multi-team)teamName 非空时并入方括号首段; 空/空白不加', () => {
-    expect(buildHookSessionTitle('slack', '修登录页', 'C1:1.1', 'acme')).toBe(
-      '[acme·Slack] 修登录页',
-    );
-    expect(buildHookSessionTitle('slack', '修登录页', 'dm:U1:g0', 'acme')).toBe(
-      '[acme·Slack·DM] 修登录页',
-    );
-    expect(buildHookSessionTitle('slack', '修登录页', 'C1:1.1', null)).toBe('[Slack] 修登录页');
-    expect(buildHookSessionTitle('slack', '修登录页', 'C1:1.1', '  ')).toBe('[Slack] 修登录页');
-  });
-
-  it('Telegram group/topic 名称进入来源标题', () => {
-    expect(
-      buildHookSessionTitle('telegram', '继续发布', 'topic:bot:-1:77:user:g1', 'Release topic'),
-    ).toBe('[Release topic·Telegram] 继续发布');
+  it('keeps readable context with an empty subject or a long message containing emoji', () => {
+    expect(buildHookSessionTitle('Slack', '', 'Acme')).toBe('Slack · Acme');
+    expect(buildHookSessionTitle('X', '  ')).toBe('X');
+    expect(buildHookSessionTitle('Slack', '🐧'.repeat(80), 'Acme')).toBe('Slack · ' + '🐧'.repeat(25) + ' · Acme');
   });
 });
 
@@ -764,7 +828,7 @@ describe('normalizeTaskSource', () => {
 
   // laneKind 的唯一消费者是群轮次的 turn lease(见 session-runner);派生判据必须
   // 在正常派发与续跑观察两条路径上一致, 否则续跑轮会丢掉那层独占。
-  it('laneKind 派生: telegram group/topic 与飞书话题 externalKey → group, DM 与 Slack → dm', async () => {
+  it('laneKind 派生: telegram group/topic、飞书话题与 Discord 频道 externalKey → group, DM 与 Slack → dm', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
@@ -777,6 +841,9 @@ describe('normalizeTaskSource', () => {
       // 官方飞书 / Lark: 群里一律在话题回复, 话题 lane 是多人可见的群轮次。
       'feishu:topic:cli_app:oc_chat:om_root:ou_user:g0',
       'feishu:dm:cli_app:ou_user:g0',
+      // 官方 Discord: 服务器频道 / 子区的回复多人可见, 与群轮次同样需要 turn lease。
+      'discord:ch:100000000000000001:300000000000000003:200000000000000002:g0',
+      'discord:dm:100000000000000001:200000000000000002:g0',
     ];
     for (const [i, externalKey] of keys.entries()) {
       d.handleDispatch('conn-1', dispatch({ requestId: `req-lane-${i}`, externalKey }), c.send);
@@ -784,7 +851,7 @@ describe('normalizeTaskSource', () => {
       fr.finish();
       await tick();
     }
-    expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm', 'group', 'dm']);
+    expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm', 'group', 'dm', 'group', 'dm']);
     expect(fr.calls[0]?.groupHistoryAccess).toEqual({
       access: 'lane',
       provider: 'telegram:9',
@@ -969,7 +1036,7 @@ describe('dispatcher 核心语义', () => {
       prompt: '干活',
       // 标题带 provider 名(externalKey 前缀), 不用 desktop 侧连接名;
       // 后半段用首条消息摘要(可读), 不再用"频道 ID:时间戳"
-      title: '[Team-slack] 干活',
+      title: 'Team-slack · 干活',
     });
 
     fr.finish({ finalText: '搞定了' });
@@ -1046,12 +1113,12 @@ describe('dispatcher 核心语义', () => {
     );
     await tick();
 
-    expect(fr.calls[0]).toMatchObject({ title: '[X] 你来解释下这个问题' });
+    expect(fr.calls[0]).toMatchObject({ title: 'X · 你来解释下这个问题' });
     // prompt 本身照旧整份交给 agent —— 上下文不能因为标题的取舍被砍掉
     expect(fr.calls[0]?.prompt).toContain('<thread_context>');
   });
 
-  it('source.userText 缺失或为空时回退 prompt(老 server / 纯 @ 无正文)', async () => {
+  it('纯 @ 没有正文时只显示渠道', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
@@ -1059,7 +1126,7 @@ describe('dispatcher 核心语义', () => {
     d.handleDispatch('conn-1', dispatch({ source: { im: 'x', userText: '   ' } }), c.send);
     await tick();
 
-    expect(fr.calls[0]).toMatchObject({ title: '[X] 干活' });
+    expect(fr.calls[0]).toMatchObject({ title: 'X' });
   });
 
   it('同 key 第二次 dispatch 复用同一 session(铁律)', async () => {
@@ -1232,7 +1299,7 @@ describe('dispatcher 核心语义', () => {
     const ends = c.ofType('turn.end').map((m) => m.payload);
     const queued = ends.find((e) => e.requestId === 'req-2')!;
     expect(queued.status).toBe('error');
-    expect(queued.errorMessage).toContain('已不在工作目录映射里');
+    expect(queued.errorMessage).toContain('已不属于任何项目');
     // 关键: 排队那条根本没进 runner
     expect(fr.calls).toHaveLength(1);
   });
@@ -1262,7 +1329,7 @@ describe('dispatcher 核心语义', () => {
     expect(fr.calls).toHaveLength(0);
     const end = c.last('turn.end')!.payload;
     expect(end.status).toBe('error');
-    expect(end.errorMessage).toContain('已不在工作目录映射里');
+    expect(end.errorMessage).toContain('已不属于任何项目');
   });
 
   it('排队期间连接被停用: 目录还在映射里也不执行', async () => {
@@ -1336,7 +1403,10 @@ describe('dispatcher 核心语义', () => {
     fr.finish();
   });
 
-  it('inspect 期间目录被加回映射: 按当前映射判定, 不误杀这条绑定', async () => {
+  // 2026-11-13 起复用要求任务就在这次点名的项目里(见下一条用例)。原先这里断言的是
+  // 「inspect 期间把任务所在目录加回清单 -> 照旧复用」: 那时只要求任务在清单内任一目录里。
+  // 现在即便它所在的目录此刻是清单里的另一个项目, 也不复用 —— 这次点名的是 xdmaker。
+  it('inspect 期间任务所在目录成了清单里的另一个项目: 仍按点名的项目新建, 不接回旧任务', async () => {
     const bindings = memoryBindings();
     const OUTSIDE = path.resolve('/repos/another-project');
     const sessions: Record<string, { workingDir: string; usable: boolean }> = {
@@ -1344,6 +1414,7 @@ describe('dispatcher 核心语义', () => {
     };
     const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR } };
     let releaseInspect!: () => void;
+    const calls: HookRunRequest[] = [];
     const runner: HookSessionRunner = {
       isBusy: () => false,
       inspect: async (id) => {
@@ -1352,7 +1423,10 @@ describe('dispatcher 核心语义', () => {
         });
         return sessions[id] ? { ...sessions[id] } : null;
       },
-      run: async () => ({ status: 'ok', finalText: 'done', errorMessage: null, durationMs: 1 }),
+      run: async (req) => {
+        calls.push(req);
+        return { status: 'ok', finalText: 'done', errorMessage: null, durationMs: 1 };
+      },
     };
     const { d } = makeDispatcher({ runner, bindings, config });
     const c = collector();
@@ -1360,13 +1434,93 @@ describe('dispatcher 核心语义', () => {
 
     d.handleDispatch('conn-1', dispatch(), c.send);
     await tick();
-    // inspect 还挂着时用户把这个目录加进了映射 —— 入口快照里没有它, 当前映射有
     config.workspaces = { xdmaker: WS_DIR, other: OUTSIDE };
     releaseInspect();
     await tick();
 
-    expect(c.last('task.ack')!.payload.sessionId).toBe('bound-session');
-    expect(bindings.get('conn-1', 'team-slack:C1:1.1')).toBe('bound-session');
+    const created = c.last('task.ack')!.payload.sessionId;
+    expect(created).not.toBe('bound-session');
+    expect(calls[0]).toMatchObject({ isNew: true, workingDir: WS_DIR, workspaceAlias: 'xdmaker' });
+    expect(bindings.get('conn-1', 'team-slack:C1:1.1')).toBe(created);
+  });
+
+  // 回归(2026-11-13): 在 IM 里把会话从项目 A 切到项目 B 后, 服务端带同一个 externalKey
+  // 派发(工作区改成 B), 旧任务还在 A 里、A 也还在清单内, 消息照旧进了 A 的旧任务 ——
+  // 而机器人刚回过「已切换到 B」。最小失败输入: 两个项目 + 同 key 两次派发、第二次点名 B。
+  it('IM 里切到另一个项目 -> 不复用旧项目里的任务, 在新项目新建', async () => {
+    const bindings = memoryBindings();
+    const OTHER = path.resolve('/repos/other-project');
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const config: HookConnectionConfig = { ...CONFIG, workspaces: { xdmaker: WS_DIR, other: OTHER } };
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, config });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const first = c.last('task.ack')!.payload.sessionId!;
+    sessions[first] = { workingDir: WS_DIR, usable: true };
+    fr.finish();
+    await tick();
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2', workspace: 'other' }), c.send);
+    await tick();
+    const second = c.last('task.ack')!.payload.sessionId!;
+    expect(second).not.toBe(first);
+    expect(fr.calls[1]).toMatchObject({ isNew: true, workingDir: OTHER, workspaceAlias: 'other' });
+    expect(bindings.get('conn-1', 'team-slack:C1:1.1')).toBe(second);
+    fr.finish();
+    await tick();
+
+    // 切回原项目同理: 绑定已经指向 B 里的任务, 不会凭「A 也在清单内」被接回去。
+    sessions[second] = { workingDir: OTHER, usable: true };
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-3' }), c.send);
+    await tick();
+    expect(fr.calls[2]).toMatchObject({ isNew: true, workingDir: WS_DIR, workspaceAlias: 'xdmaker' });
+    fr.finish();
+  });
+
+  // 项目改名后(侧栏改名 / 升级前手填的别名), 服务端仍按旧名称派发。清单把旧名称补在现用
+  // 名称之后(见 projectWorkspaces.lookupWorkspaces): 旧名称要能找到目录、复用同一个任务,
+  // 且偏好按现用名称读 —— 否则改个名字就丢了这个项目的模型与权限设置。
+  it('按改名前的旧名称派发 -> 找到同一个项目, 新任务与复用都报现用名称', async () => {
+    const bindings = memoryBindings();
+    const sessions: Record<string, { workingDir: string; usable: boolean }> = {};
+    const fr = fakeRunner({ sessions });
+    const config: HookConnectionConfig = { ...CONFIG, workspaces: { 主仓库: WS_DIR, xdmaker: WS_DIR } };
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, config });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch(), c.send);
+    await tick();
+    const first = c.last('task.ack')!.payload.sessionId!;
+    expect(fr.calls[0]).toMatchObject({ isNew: true, workingDir: WS_DIR, workspaceAlias: '主仓库' });
+    sessions[first] = { workingDir: WS_DIR, usable: true };
+    fr.finish();
+    await tick();
+
+    d.handleDispatch('conn-1', dispatch({ requestId: 'req-2', workspace: '主仓库' }), c.send);
+    await tick();
+    expect(fr.calls[1]).toMatchObject({ isNew: false, sessionId: first, workspaceAlias: '主仓库' });
+    fr.finish();
+  });
+
+  // PR #10291 review: 纯数字的旧名称在对象里恒排最前, 按目录反查名称不能靠键序。
+  it('旧名称是纯数字时: 仍能按它派发, 报出的是现用名称', async () => {
+    const fr = fakeRunner();
+    const config: HookConnectionConfig = {
+      ...CONFIG,
+      workspaces: { reports: WS_DIR, '2025': WS_DIR },
+      retiredWorkspaceNames: ['2025'],
+    };
+    const { d } = makeDispatcher({ runner: fr.runner, config });
+    const c = collector();
+
+    d.handleDispatch('conn-1', dispatch({ workspace: '2025' }), c.send);
+    await tick();
+    expect(c.last('task.ack')!.payload.result).toBe('accepted');
+    expect(fr.calls[0]).toMatchObject({ isNew: true, workingDir: WS_DIR, workspaceAlias: 'reports' });
+    fr.finish();
   });
 
   it('在工作目录映射内换目录 -> 无感跟随复用(边界内的移动不受影响)', async () => {
@@ -1494,7 +1648,79 @@ describe('dispatcher 核心语义', () => {
     fr2.finish();
   });
 
-  it('绑定的会话已归档/删除 -> 静默重建, 不向渠道追加说明', async () => {
+  it.each([null, 'previous'])('Done 后同一绑定接回原任务（指定任务 %s）', async (sessionId) => {
+    const bindings = memoryBindings();
+    const message = telegramDispatch({ sessionId });
+    bindings.set('conn-1', message.externalKey, 'previous');
+    const previous = { workingDir: WS_DIR, usable: false, resumableArchive: true };
+    const fr = fakeRunner({ sessions: { previous } });
+    const { d } = makeDispatcher({
+      runner: fr.runner, bindings,
+      restoreArchivedSession: async () => { previous.usable = true; },
+    });
+    const c = collector();
+    d.handleDispatch('conn-1', message, c.send);
+    await tick();
+    expect(c.last('task.ack')!.payload.sessionId).toBe('previous');
+    expect(fr.calls[0]).toMatchObject({ sessionId: 'previous', isNew: false });
+    fr.finish();
+    await tick();
+  });
+
+  it.each([
+    { sessionId: 'other-task', workingDir: WS_DIR },
+    { sessionId: null, workingDir: path.resolve('/outside-the-project') },
+  ])('未绑定或已移出项目的归档任务保持归档 ($sessionId)', async ({ sessionId, workingDir }) => {
+    const bindings = memoryBindings();
+    const message = telegramDispatch({ sessionId });
+    bindings.set('conn-1', message.externalKey, 'previous');
+    const archived = { workingDir, usable: false, resumableArchive: true };
+    const fr = fakeRunner({ sessions: { previous: archived, 'other-task': archived } });
+    const restoreArchivedSession = vi.fn(async () => { archived.usable = true; });
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, restoreArchivedSession });
+    const c = collector();
+    d.handleDispatch('conn-1', message, c.send);
+    await tick();
+    expect(restoreArchivedSession).not.toHaveBeenCalled();
+    expect(fr.calls[0]).toMatchObject({ isNew: true });
+    fr.finish();
+    await tick();
+  });
+
+  // Unit regression: Done owns the existing route lock while cleanup removes the directory.
+  // The next Telegram message must bind a fresh task, without reactivating the removed directory.
+  it('Done 回收与新消息同时到达时，在恢复锁内重新检查目录', async () => {
+    setSessionRouteLockImplementation(withSendToSessionLock);
+    const bindings = memoryBindings();
+    const message = telegramDispatch();
+    bindings.set('conn-1', message.externalKey, 'archiving');
+    const previous = { workingDir: WS_DIR, usable: false, resumableArchive: true };
+    const fr = fakeRunner({ sessions: { archiving: previous } });
+    const restoreArchivedSession = vi.fn(async () => { previous.usable = true; });
+    const { d } = makeDispatcher({ runner: fr.runner, bindings, restoreArchivedSession });
+    const c = collector();
+    let finishCleanup!: () => void;
+    let cleanupStarted!: () => void;
+    const started = new Promise<void>((resolve) => { cleanupStarted = resolve; });
+    const cleanup = withSessionRouteLock('archiving', async () => {
+      cleanupStarted();
+      await new Promise<void>((resolve) => { finishCleanup = resolve; });
+      previous.resumableArchive = false;
+    });
+    await started;
+    d.handleDispatch('conn-1', message, c.send);
+    await tick();
+    finishCleanup();
+    await cleanup;
+    await tick(30);
+    expect(restoreArchivedSession).not.toHaveBeenCalled();
+    expect(c.last('task.ack')!.payload.sessionId).not.toBe('archiving');
+    expect(fr.calls[0]).toMatchObject({ isNew: true });
+    fr.finish();
+    await tick();
+  });
+
+  it('绑定的会话已删除 -> 静默重建, 不向渠道追加说明', async () => {
     const bindings = memoryBindings();
     const fr = fakeRunner({ sessions: { 'gone-session': { workingDir: WS_DIR, usable: false } } });
     const { d } = makeDispatcher({ runner: fr.runner, bindings });
@@ -1695,6 +1921,20 @@ describe('dispatcher 核心语义', () => {
       result: 'rejected',
       reason: 'workspace_not_allowed',
     });
+  });
+
+  // PR #12405 (unit): a permitted directory may hold a teammate's private session.
+  // Exercise both routes through dispatch; the directory-only tests have no private session.
+  it.each([true, false])('rejects a private teammate session inside an allowed project (explicit=%s)', async explicit => {
+    const fr = fakeRunner({ sessions: { buddy: { workingDir: WS_DIR, usable: true, companionOwned: true } } });
+    const bindings = memoryBindings();
+    if (!explicit) bindings.set('conn-1', 'team-slack:C1:1.1', 'buddy');
+    const { d } = makeDispatcher({ runner: fr.runner, bindings });
+    const c = collector();
+    d.handleDispatch('conn-1', dispatch({ sessionId: explicit ? 'buddy' : null }), c.send);
+    await tick();
+    expect(c.last('task.ack')?.payload).toMatchObject({ result: 'rejected', reason: 'workspace_not_allowed' });
+    expect(fr.calls).toHaveLength(0);
   });
 
   it('接管白名单按 inspect 完成后的当前映射判定', async () => {
@@ -2525,6 +2765,48 @@ describe('dispatcher 核心语义', () => {
       status: 'ok',
       finalText: '磁盘失败也要继续',
     });
+  });
+
+  it('官方群上下文含近期图片时自动补齐 contextImages 与说明块', async () => {
+    const fr = fakeRunner();
+    const imgPath = '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/abcd1234.jpg';
+    const collectGroupHistoryImages = vi.fn(async () => ({
+      images: [
+        { absPath: imgPath, originalName: 'forwarded.jpg', mimeType: 'image/jpeg', author: 'Tom' },
+      ],
+      unavailable: [],
+    }));
+    const { d } = makeDispatcher({
+      runner: fr.runner,
+      buildContextPrefix: async () => ({
+        prefix: '<group_chat_context>\n[群里最近的消息]\n[Tom] 10:00 [图片消息 #50] 转发图\n</group_chat_context>\n\n',
+        messageCount: 1,
+        imageMessages: [{ messageId: '50', threadId: '', author: 'Tom', sentAt: Date.now() - 5_000 }],
+        triggerAuthor: 'Tom',
+        triggerSentAt: Date.now(),
+        commit: () => undefined,
+      }),
+      collectGroupHistoryImages,
+    });
+    const c = collector();
+
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ requestId: 'official-hist-img', externalKey: 'telegram:group:bot:-900:9:g0' }),
+      c.send,
+    );
+    await tick();
+
+    expect(collectGroupHistoryImages).toHaveBeenCalledTimes(1);
+    expect(fr.calls[0]?.contextImages).toEqual([
+      { absPath: imgPath, originalName: 'forwarded.jpg', mimeType: 'image/jpeg', author: 'Tom' },
+    ]);
+    expect(fr.calls[0]?.prompt).toContain('<group_chat_attachments>');
+    expect(fr.calls[0]?.prompt).toContain('forwarded.jpg（Tom）');
+    expect(fr.calls[0]?.contextSnapshot?.groupContext).toContain('forwarded.jpg（Tom）');
+    expect(fr.calls[0]?.contextSnapshot?.groupContext).not.toContain('group_chat_attachments');
+    fr.finish({ finalText: '看到了' });
+    await tick();
   });
 
   it('runner 失败 -> turn.end status=error 且 errorMessage 非空', async () => {
@@ -5162,6 +5444,26 @@ describe('官方 bot ack 表情(msg.op)', () => {
     expect(reactionEmojis(c.sent)).toEqual(['👀', expect.stringMatching(/^(🤔|🤓|✍)$/), '👀']);
   });
 
+  // 线上飞书每轮日志都有 `:ack` / `:processing-fallback` / `:final failed: UNSUPPORTED_PARAMETERS`:
+  // 飞书服务端也宣告 msg-op-v1(用于电脑排版的进度与终稿), 但表情由它自己打、不接桌面端的 react。
+  it('飞书任务不发表情操作 —— 只有官方 Telegram 服务端执行它们', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    d.setEmojiReactionsMode('minimal');
+
+    d.handleDispatch('conn-1', dispatch({
+      externalKey: 'feishu:dm:app:ou_user:g1',
+      source: { im: 'feishu', triggerMessageId: 'om_trigger' },
+    }), c.send);
+    await tick();
+
+    expect(c.last('task.ack')?.payload).toMatchObject({ result: 'accepted' });
+    expect(c.sent.filter((m) => m.type === 'msg.op'
+      && (m.payload as { action: { kind?: string } }).action.kind === 'react')).toEqual([]);
+  });
+
   it('排队中被取消 → 👀 换成终态, 不永远挂着「在做」', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
@@ -5432,6 +5734,47 @@ describe('官方 Telegram 进度消息由客户端渲染(telegram-progress-ops-v
   });
 });
 
+describe('official IM question capability', () => {
+  it.each(['slack', 'feishu', 'lark'])('%s keeps an async question answerable after turn.end', async im => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_IM_QUESTIONS]);
+    d.handleDispatch('conn-1', dispatch({ source: { im, userText: 'hello' } }), c.send);
+    await tick();
+    let settle!: (value: import('@cindy/maker-core').InteractionDecision) => void;
+    const answer = vi.fn();
+    await fr.calls[0].onQuestion!({ kind: 'ask_user_question', requestId: 'question', delivery: 'async',
+      questions: [{ question: 'Which format?', options: [{ label: 'PDF' }] }] },
+    { answer, settled: new Promise(resolve => { settle = resolve; }) });
+    fr.finish();
+    await tick(40);
+    const card = c.ofType('interaction.request')[0];
+    expect(card.payload.questionMode).toBe('async');
+    expect(c.sent.indexOf(card)).toBeLessThan(c.sent.findIndex(m => m.type === 'turn.end'));
+    d.handleInteractionDecision('conn-1', { requestId: card.payload.requestId,
+      interactionId: card.payload.interactionId, buttonId: card.payload.buttons[0].id });
+    await tick();
+    expect(answer).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: { 'Which format?': 'PDF' } });
+    settle(answer.mock.calls[0][0]);
+    await tick();
+    expect(c.ofType('interaction.cancel')[0]?.payload.interactionId).toBe(card.payload.interactionId);
+  });
+
+  it('keeps generic questions disabled for a server without the capability', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    d.onConnected('conn-1', c.send, []);
+    d.handleDispatch('conn-1', dispatch({ source: { im: 'slack' } }), c.send);
+    await tick();
+    expect(fr.calls[0].onQuestion).toBeUndefined();
+    fr.finish();
+    await tick();
+    expect(c.ofType('interaction.request')).toHaveLength(0);
+  });
+});
+
 describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', () => {
   type OpMessage = Extract<HookMessage, { type: 'msg.op' }>;
   const ALL_FEATURES = [
@@ -5471,6 +5814,69 @@ describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', 
     return { ...c, send };
   }
 
+  // Real dispatcher lifecycle: buttons remain routed after turn.end.
+  it('keeps question buttons usable after draining and turn.end', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = respondingCollector(d, () => ({}));
+    d.onConnected('conn-1', c.send, [...ALL_FEATURES, HOOK_FEATURE_TELEGRAM_QUESTION_OPS]);
+    d.handleDispatch('conn-1', telegramDispatch(), c.send);
+    await tick();
+    let settle!: (value: import('@cindy/maker-core').InteractionDecision) => void;
+    const answer = vi.fn();
+    const controls = { answer, settled: new Promise<import('@cindy/maker-core').InteractionDecision>(r => { settle = r; }) };
+    const request = { kind: 'ask_user_question' as const, requestId: 'question', delivery: 'async' as const,
+      questions: [{ question: 'Which format?', options: [{ label: 'PDF' }] }] };
+    const sent = fr.calls[0].onQuestion!(request, controls);
+    fr.finish({ finalText: 'Other work is done' });
+    await sent;
+    await tick(40);
+    const notice = ops(c.sent, 'turn-notice')[0];
+    expect(notice.payload).toMatchObject({ requestId: 'req-1',
+      scope: { externalKey: telegramDispatch().externalKey }, action: { kind: 'send', tier: 'html' } });
+    expect(c.sent.indexOf(notice)).toBeLessThan(c.sent.findIndex(m => m.type === 'turn.end'));
+    const buttonId = (notice.payload.action as { buttons: { token: string }[][] }).buttons[0][0].token;
+    d.handleInteractionDecision('conn-1', { requestId: 'req-1', interactionId: notice.payload.interactionId!, buttonId });
+    await tick();
+    expect(answer).toHaveBeenCalledWith({ kind: 'ask_user_question', answers: { 'Which format?': 'PDF' } });
+    settle(answer.mock.calls[0][0]);
+    await tick();
+    expect(ops(c.sent, 'turn-notice').at(-1)?.payload).toMatchObject({ interactionClosed: true, action: { kind: 'edit', buttons: [] } });
+    const count = ops(c.sent, 'turn-notice').length;
+    await fr.calls[0].onQuestion!(request, controls);
+    expect(ops(c.sent, 'turn-notice')).toHaveLength(count);
+  });
+
+  it('does not publish a queued async question after the account changes', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = respondingCollector(d, () => ({}));
+    d.onConnected('conn-1', c.send, [...ALL_FEATURES, HOOK_FEATURE_TELEGRAM_QUESTION_OPS]);
+    d.handleDispatch('conn-1', telegramDispatch(), c.send);
+    await tick();
+    const sent = fr.calls[0].onQuestion!({ kind: 'ask_user_question', requestId: 'question',
+      questions: [{ question: 'Private question' }] }, { answer: vi.fn(), settled: new Promise(() => {}) });
+    const rejected = expect(sent).rejects.toThrow('channel unavailable');
+    const drained = d.deactivateAccount();
+    fr.finish();
+    await drained;
+    await rejected;
+    expect(ops(c.sent, 'turn-notice')).toHaveLength(0);
+  });
+
+  it('does not enable asynchronous notice sends on a legacy server', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = respondingCollector(d, () => ({}));
+    d.onConnected('conn-1', c.send, ALL_FEATURES);
+    d.handleDispatch('conn-1', telegramDispatch(), c.send);
+    await tick();
+    expect(fr.calls[0].onQuestion).toBeUndefined();
+    fr.finish();
+    await tick(40);
+    expect(ops(c.sent, 'turn-notice')).toHaveLength(0);
+  });
+
   it('协商终稿: 先写持久出箱、再经 msg.op 发布, 最后 turn.end 带 clientFinal.complete', async () => {
     const ledger = memoryTerminalLedger();
     const fr = fakeRunner();
@@ -5501,6 +5907,50 @@ describe('官方 Telegram 终稿 / 交互卡 / 命令菜单由客户端发布', 
     const end = c.last('turn.end')!.payload;
     expect(end.clientFinal).toEqual({ complete: true });
     expect(ledger.get('conn-1', 'req-1')?.turnEnd?.clientFinal).toEqual({ complete: true });
+  });
+
+  // 规则: 官方飞书 / Lark 与官方 Telegram 走同一套协商与收口(im-turn-flow.md「官方飞书 / Lark」),
+  // 排版用个人飞书 bot 的卡片。入口: 真实 dispatcher 的 handleDispatch → turn.end; 此前飞书任务
+  // 不建载体, 这条分支没有覆盖。最小输入: 一轮带过程记录的成功任务; unit。
+  it.each([
+    ['协商了电脑排版', ['msg-op-v1', 'feishu-progress-ops-v1', 'feishu-final-ops-v1'], true],
+    ['服务端没有宣告电脑排版', [], false],
+  ] as const)('官方飞书: %s', async (_name, features, clientRenders) => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = respondingCollector(d, () => ({}));
+    d.onConnected('conn-1', c.send, [...features]);
+    d.handleDispatch(
+      'conn-1',
+      dispatch({ externalKey: 'feishu:dm:cli_app:ou_alice:g1', source: { im: 'feishu' } }),
+      c.send,
+    );
+    await tick();
+    fr.finish({
+      finalText: '**答案**',
+      process: { title: '过程记录 · 1 项 · 3s', lines: ['✓ 读取 a.ts'] },
+    });
+    await tick(40);
+
+    const end = c.last('turn.end')!.payload;
+    expect(end.finalText).toBe('**答案**');
+    expect(end).not.toHaveProperty('process');
+    if (!clientRenders) {
+      expect(ops(c.sent)).toHaveLength(0);
+      expect(end.clientFinal).toBeUndefined();
+      return;
+    }
+    const finals = ops(c.sent, 'turn-final');
+    expect(finals).toHaveLength(1);
+    expect(finals[0].payload).toMatchObject({ finalPart: 0, action: { kind: 'send' } });
+    const action = finals[0].payload.action;
+    const card = JSON.parse(action.kind === 'send' ? action.text : '{}') as {
+      body: { elements: Array<{ tag: string; content?: string }> };
+    };
+    expect(card.body.elements.map((element) => element.tag)).toEqual(['collapsible_panel', 'markdown']);
+    expect(card.body.elements[1].content).toBe('**答案**');
+    expect(c.sent.findIndex((m) => m.type === 'turn.end')).toBeGreaterThan(c.sent.indexOf(finals[0]));
+    expect(end.clientFinal).toEqual({ complete: true });
   });
 
   it('客户端终稿没有完整确认 → turn.end 带 clientFinal.complete=false(服务端照旧发布)', async () => {

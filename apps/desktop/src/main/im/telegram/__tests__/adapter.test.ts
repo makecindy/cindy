@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IMMessageEvent } from '@cindy/im';
 
+import { setMainLocale } from '../../../i18n.desktop';
 import { buildTelegramAdapter, TELEGRAM_TOOLS_HINT } from '../adapter';
 import { ui } from '../uiText';
 import { buildTelegramGroupContextPrefix } from '../groupWindow';
@@ -130,13 +131,28 @@ describe('Telegram group history access scope', () => {
   });
 
   it('explains an unsupported permission mode without exposing the internal error code', () => {
-    const message = ui.error.permissionModeUnsupported('bypassPermissions');
-    expect(message).toContain('其他群成员');
-    expect(message).toContain('机器人绑定的用户');
-    expect(message).toContain('尚未执行');
-    expect(message).toContain('自动审批');
-    expect(message).toContain('/permission');
-    expect(message).not.toContain('TURN_PERMISSION_POLICY_UNSUPPORTED');
+    setMainLocale('zh-CN');
+    try {
+      const message = ui.error.permissionModeUnsupported('bypassPermissions');
+      expect(message).toContain('其他群成员');
+      expect(message).toContain('机器人绑定的用户');
+      expect(message).toContain('尚未执行');
+      expect(message).toContain('自动审批');
+      expect(message).toContain('/permission');
+      expect(message).not.toContain('TURN_PERMISSION_POLICY_UNSUPPORTED');
+    } finally {
+      setMainLocale('en');
+    }
+  });
+
+  it('localizes the expired-card notice when it is read, not when the adapter is built', () => {
+    setMainLocale('zh-CN');
+    try {
+      expect(adapter.interactionExpiredNotice).toBe('卡片已过期');
+    } finally {
+      setMainLocale('en');
+    }
+    expect(adapter.interactionExpiredNotice).toBe('This card has expired');
   });
 
   it('keeps every group turn lane-only — owner-triggered included (injection hardening)', () => {
@@ -354,6 +370,49 @@ describe('Telegram group history media', () => {
     } as never);
     expect(collectGroupHistoryMedia).not.toHaveBeenCalled();
     expect(result?.contextAttachments).toBeUndefined();
+  });
+
+  it('collects up to 2 recent same-sender images for ambient turns without downloading non-images', async () => {
+    const collectGroupHistoryMedia = vi.fn(async () => ({
+      attachments: [
+        {
+          kind: 'image' as const,
+          absPath: '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/ab12.jpg',
+          originalName: 'forwarded.jpg',
+          mimeType: 'image/jpeg',
+          author: 'Tom',
+        },
+      ],
+      unavailable: [],
+    }));
+    const adapter = buildTelegramAdapter({ collectGroupHistoryMedia } as never, {} as never);
+    const result = await adapter.prepareAgentTurnText?.({
+      contextId: 'bot-1',
+      senderId: 'g/-100200',
+      messageId: TRIGGER_MESSAGE_ID,
+      chatId: '-100200',
+      text: '帮我看下这张图',
+      attachments: [],
+      unsupported: [],
+      ambient: true,
+      speaker: { id: '222', name: 'Tom', isOwner: false },
+    } as never);
+    expect(collectGroupHistoryMedia).toHaveBeenCalledWith('-100200', ['80'], undefined, {
+      provided: [],
+      imagesOnly: true,
+      sameSenderId: '222',
+      maxAgeMs: 120_000,
+      maxImages: 2,
+    });
+    expect(result?.contextAttachments).toEqual([
+      {
+        kind: 'image',
+        absPath: '/Users/alice/Library/Application Support/Cindy/cindy-media/blobs/ab12.jpg',
+        originalName: 'forwarded.jpg',
+        mimeType: 'image/jpeg',
+      },
+    ]);
+    expect(result?.agentText).toContain('forwarded.jpg（Tom）');
   });
 
   it('keeps the turn going when history media download throws', async () => {

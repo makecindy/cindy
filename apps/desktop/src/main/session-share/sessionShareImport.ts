@@ -23,7 +23,12 @@ import type { Readable } from 'node:stream';
 import JSZip from 'jszip';
 import { migrationNativeContext } from './migrationNativeContext';
 import { writeMigratedTranscript } from './migrationTranscriptWriter';
-import { isClaudeProjectKeyExact, sanitizeClaudeProjectKey } from '@cindy/maker-core';
+import {
+  acpHarnessKeyFromProviderId,
+  acpProviderIdForHarness,
+  isClaudeProjectKeyExact,
+  sanitizeClaudeProjectKey,
+} from '@cindy/maker-core';
 import { app } from 'electron';
 
 import type { DbClient } from '../localDb/client/DbClient.js';
@@ -51,16 +56,16 @@ import {
   getSessionDir,
   removeSession as removeSessionImages,
   resolveSafe as resolveImageUrl,
-} from '../imageCacheStore.js';
+} from '../imageCacheStore.desktop.js';
 import { resolveSafe as resolveVideoUrl } from '../videoCacheStore.js';
 import { resolveSafe as resolveModelUrl } from '../modelCacheStore.js';
 import {
   parseBlobUrl,
   mimeForExt,
   resolveHashRef as resolveBlobHashRef,
-} from '../cindy-media/blobStore.js';
+} from '../cindy-media/blobStore.desktop.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
-import type { MediaRefCompensationScope } from '../cindy-media/refCompensationJournal.js';
+import type { MediaRefCompensationScope } from '../cindy-media/refCompensationJournal.desktop.js';
 import {
   removeSessionRefs as removeSessionMediaRefs,
   removeSessionRefsIfDeleted,
@@ -68,11 +73,13 @@ import {
 } from '../cindy-media/ledger.js';
 import { withSessionRouteLocks } from '../localDb/sessionRouteLock.js';
 import { recordPrRefsForImportedMessages } from '../git-context/prRefsStore.js';
+import { buildHandoff, type HandoffSourceMessage } from '../maker-ipc/agentHandoff.js';
 
 import { openPayload } from './xdtshareCrypto.js';
 import {
   XdtshareError,
   validateManifest,
+  type XdtshareAgentKind,
   type XdtshareFidelity,
   type XdtshareManifest,
   type XdtshareOrcaWorkerManifest,
@@ -107,7 +114,9 @@ function sweepExpiredDrafts(): void {
 
 export interface SharePreview {
   title: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: XdtshareAgentKind;
+  /** 插件引擎来源引擎 id(仅 agentKind === 'acp' 时出现)。 */
+  providerId?: string | null;
   workspaceKind: 'project' | 'dialogue';
   originalWorkingDir: string | null;
   exportedAt: string;
@@ -117,6 +126,10 @@ export interface SharePreview {
   mediaCount: number;
   /** 协同包携带的 Worker 会话数;普通包为 0。 */
   orcaWorkerCount: number;
+  /** 协同包是否含插件引擎 Worker(供迁移保真度判定)。 */
+  hasAcpWorker?: boolean;
+  /** 协同包中插件引擎 Worker 各自声明的 providerId(供迁移目标端校验插件可用性)。 */
+  acpWorkerProviderIds?: Array<string | null>;
 }
 
 export type InspectResult =
@@ -128,9 +141,12 @@ function codedError(code: string, message: string): Error {
 }
 
 function toPreview(manifest: XdtshareManifest): SharePreview {
+  const acpWorkers = manifest.orca?.workers.filter((w) => w.agentKind === 'acp') ?? [];
+  const hasAcpWorker = acpWorkers.length > 0;
   return {
     title: manifest.title,
     agentKind: manifest.agentKind,
+    ...(manifest.agentKind === 'acp' ? { providerId: manifest.providerId ?? null } : {}),
     workspaceKind: manifest.workspaceKind,
     originalWorkingDir: manifest.originalWorkingDir,
     exportedAt: manifest.exportedAt,
@@ -139,6 +155,12 @@ function toPreview(manifest: XdtshareManifest): SharePreview {
     messageCount: manifest.counts.messages,
     mediaCount: manifest.counts.media,
     orcaWorkerCount: manifest.orca?.workers.length ?? 0,
+    ...(hasAcpWorker
+      ? {
+          hasAcpWorker: true,
+          acpWorkerProviderIds: acpWorkers.map((w) => w.providerId ?? null),
+        }
+      : {}),
   };
 }
 
@@ -174,7 +196,6 @@ async function loadZipAndManifest(
 
 /** 第一段:读文件、解头。明文直接出预览;加密只报 encrypted,等 unlock。 */
 export async function inspectShareFile(filePath: string, hostResources?: { resourceBudgetBytes: number }): Promise<InspectResult> {
-  sweepExpiredDrafts();
   const stat = await fsp.stat(filePath).catch(() => null);
   if (!stat?.isFile()) throw codedError('SHARE_FILE_INVALID', 'file not found');
   const readLimit = hostResources?.resourceBudgetBytes ?? SHARE_FILE_READ_LIMIT_BYTES;
@@ -182,6 +203,15 @@ export async function inspectShareFile(filePath: string, hostResources?: { resou
     throw codedError('SHARE_FILE_INVALID', hostResources ? 'MIGRATION_NO_MEMORY' : 'file too large');
   }
   const fileBytes = await fsp.readFile(filePath);
+  return inspectShareBytes(fileBytes, filePath, hostResources);
+}
+
+/** Host-approved handoff bytes enter the same parser without reopening their source path. */
+export async function inspectShareBytes(fileBytes: Buffer, filePath: string, hostResources?: { resourceBudgetBytes: number }): Promise<InspectResult> {
+  sweepExpiredDrafts();
+  const readLimit = hostResources?.resourceBudgetBytes ?? SHARE_FILE_READ_LIMIT_BYTES;
+  if (!Number.isSafeInteger(readLimit) || readLimit < 0 || fileBytes.byteLength > readLimit)
+    throw codedError('SHARE_FILE_INVALID', hostResources ? 'MIGRATION_NO_MEMORY' : 'file too large');
   const draftId = randomUUID();
 
   // 先探测头:加密文件不需要密码也能识别出「这是加密的 .xdtshare」。
@@ -283,7 +313,9 @@ export interface CommitShareImportRuntimeScope {
     sessionId: string;
     workingDir: string;
     workers?: Array<{ sourceSessionId: string; sessionId: string; workingDir: string }>;
-    agentPrefs?: Partial<Record<'cc' | 'codex' | 'pi', ShareImportDraftPrefs>>;
+    agentPrefs?: Partial<Record<XdtshareAgentKind, ShareImportDraftPrefs>>;
+    /** Canonical ACP plugin engine provider ids (`acp-plugin:<ghostId>:<harnessId>`) enabled on this computer. */
+    availableAcpProviders?: ReadonlySet<string>;
     /** Transcript ref path → delivered file, for transcripts the exporter kept out of the zip. */
     externalTranscripts?: ReadonlyMap<string, string>;
   };
@@ -409,6 +441,13 @@ export async function commitShareImport(
   }
 
   if (runtimeScope.migration) {
+    const availableAcpProviders = runtimeScope.migration.availableAcpProviders;
+    if (manifest.agentKind === 'acp') {
+      const requiredProvider = resolveCanonicalAcpProviderId(sessionSnapshot, manifest.providerId);
+      if (!requiredProvider || !availableAcpProviders?.has(requiredProvider)) {
+        throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TARGET_MODEL_UNAVAILABLE');
+      }
+    }
     const workers = runtimeScope.migration.workers ?? [];
     if (workers.length !== workerPlans.length || (runtimeScope.migration.workers !== undefined) !== !!manifest.orca)
       throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TEAM_CHANGED');
@@ -416,6 +455,12 @@ export async function commitShareImport(
     for (const plan of workerPlans) {
       if (!runtimeScope.migration.agentPrefs?.[plan.manifest.agentKind])
         throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TARGET_MODEL_UNAVAILABLE');
+      if (plan.manifest.agentKind === 'acp') {
+        const requiredProvider = resolveCanonicalAcpProviderId(plan.snapshot, plan.manifest.providerId);
+        if (!requiredProvider || !availableAcpProviders?.has(requiredProvider)) {
+          throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_TARGET_MODEL_UNAVAILABLE');
+        }
+      }
       const member = workers.find(
         (worker) => worker.sourceSessionId === plan.snapshot.migrationSourceId,
       );
@@ -481,12 +526,12 @@ export async function commitShareImport(
     ? migrationNativeContext(
         runtimeScope.migration.sessionId,
         [manifest, ...workerPlans.map((plan) => plan.manifest)]
-          .filter((member) => member.agentKind !== 'pi')
+          .filter((member) => member.agentKind !== 'pi' && member.agentKind !== 'acp')
           .flatMap((member) => member.transcripts.map((t) => t.sdkSessionId)),
       )
     : null;
   const bundledTranscripts = originalBundledTranscripts.map((transcript) =>
-    migratedContext && manifest.agentKind !== 'pi'
+    migratedContext && manifest.agentKind !== 'pi' && manifest.agentKind !== 'acp'
       ? { ...transcript, sdkSessionId: migratedContext.id(transcript.sdkSessionId) }
       : transcript,
   );
@@ -501,7 +546,7 @@ export async function commitShareImport(
       plan.manifest.transcripts,
       `orca.workers[${plan.manifest.index}].transcripts`,
     ).map((transcript) =>
-      migratedContext && plan.manifest.agentKind !== 'pi'
+      migratedContext && plan.manifest.agentKind !== 'pi' && plan.manifest.agentKind !== 'acp'
         ? { ...transcript, sdkSessionId: migratedContext.id(transcript.sdkSessionId) }
         : transcript,
     );
@@ -548,14 +593,16 @@ export async function commitShareImport(
     if (plan.manifest.agentKind === 'pi') registerPiTargets(plan.bundledTranscripts ?? []);
   }
   const resolveActiveSdkSessionId = (
-    agentKind: 'cc' | 'codex' | 'pi',
+    agentKind: XdtshareAgentKind,
     portableId: string | null,
   ): string | null =>
-    agentKind === 'pi'
-      ? portableId
-        ? (piTranscriptTargets.get(portableId) ?? null)
-        : null
-      : portableId ? migratedContext?.id(portableId) ?? portableId : null;
+    agentKind === 'acp'
+      ? null
+      : agentKind === 'pi'
+        ? portableId
+          ? (piTranscriptTargets.get(portableId) ?? null)
+          : null
+        : portableId ? migratedContext?.id(portableId) ?? portableId : null;
   const activeSdkSessionId = resolveActiveSdkSessionId(
     manifest.agentKind,
     portableActiveSdkSessionId,
@@ -779,7 +826,7 @@ export async function commitShareImport(
 
     // 会话级还原描述:lead + 全部 Worker 走同一套转录/rollout 落位流程。
     const restorePlans: Array<{
-      agentKind: 'cc' | 'codex' | 'pi';
+      agentKind: XdtshareAgentKind;
       prefix: string;
       title: string;
       bundled: BundledTranscript[];
@@ -958,7 +1005,7 @@ export async function commitShareImport(
     const rewriteRules = urlMap.size > 0 ? { urlMap } : {};
     const toDbMessages = (
       rows: BundleMessageRow[],
-      agentKind: 'cc' | 'codex' | 'pi',
+      agentKind: XdtshareAgentKind,
     ): SessionImportShareMessageRow[] =>
       rows.map((m) => ({
         id: randomUUID(),
@@ -970,25 +1017,58 @@ export async function commitShareImport(
         agentMeta:
           agentKind === 'pi'
             ? rewritePiAgentMetaForImport(m.agentMeta, piTranscriptTargets)
-            : migratedContext ? migratedContext.metadata(m.agentMeta) : m.agentMeta,
+            : agentKind === 'acp'
+              ? m.agentMeta
+              : migratedContext ? migratedContext.metadata(m.agentMeta) : m.agentMeta,
         agentKind: m.agentKind,
         createdAt: m.createdAt,
         rewindAt: m.rewindAt,
       }));
-    const dbMessages = toDbMessages(messages, manifest.agentKind);
+    const rawLeadDbMessages = toDbMessages(messages, manifest.agentKind);
     const draftPrefs = opts.draftPrefs ?? null;
-    // 只为真正拿不到草稿模型的会话解析默认(解析要读实时供应商目录)。
+    // 只为真正拿不到草稿模型的内置引擎会话解析默认(解析要读实时供应商目录);
+    // 插件引擎(acp)保留包内 providerId/model/effort,不回退内置供应商目录。
     const hasDraftModel = (prefs: ShareImportDraftPrefs | null | undefined, apply: boolean) =>
       apply && typeof prefs?.model === 'string' && prefs.model.length > 0;
     const fallbackRoutes = await resolveImportFallbackRoutes([
-      ...(hasDraftModel(draftPrefs, true) ? [] : [manifest.agentKind]),
+      ...(manifest.agentKind === 'acp' || hasDraftModel(draftPrefs, true) ? [] : [manifest.agentKind]),
       ...workerPlans
-        .filter((plan) => !hasDraftModel(
-          runtimeScope.migration?.agentPrefs?.[plan.manifest.agentKind] ?? draftPrefs,
-          !!runtimeScope.migration || plan.manifest.agentKind === manifest.agentKind,
-        ))
+        .filter((plan) =>
+          plan.manifest.agentKind !== 'acp' &&
+          !hasDraftModel(
+            runtimeScope.migration?.agentPrefs?.[plan.manifest.agentKind] ?? draftPrefs,
+            !!runtimeScope.migration || plan.manifest.agentKind === manifest.agentKind,
+          ),
+        )
         .map((plan) => plan.manifest.agentKind),
     ]);
+    const leadSessionRow = buildSessionRow({
+      newId,
+      agentKind: manifest.agentKind,
+      manifestProviderId: manifest.providerId ?? null,
+      normalizeMigratedAcpProvider: !!runtimeScope.migration,
+      title: manifest.title || 'Shared session',
+      workspaceKind: manifest.workspaceKind,
+      orcaRole: manifest.orca ? ('lead' as const) : null,
+      snapshot: sessionSnapshot,
+      draftPrefs,
+      applyDraftPrefs: true,
+      fallbackRoute: fallbackRoutes.get(manifest.agentKind) ?? null,
+      workingDir,
+      worktreePath,
+      activeSdkSessionId,
+      now,
+    });
+    const dbMessages =
+      manifest.agentKind === 'acp'
+        ? appendAcpHandoffMarker(rawLeadDbMessages, {
+            sessionId: newId,
+            model: leadSessionRow.model,
+            providerId: leadSessionRow.providerId,
+            clearedAt: leadSessionRow.clearedAt,
+            now,
+          })
+        : rawLeadDbMessages;
     const teamId = randomUUID();
     // 恶意/损坏包可能带多个 focused=true(源库有 partial unique 保证唯一);
     // 归一为只保留第一个,避免整包因索引冲突白白失败。
@@ -1006,6 +1086,53 @@ export async function commitShareImport(
           workers: workerPlans.map((plan) => {
             const focused = plan.manifest.focused && !focusedSeen;
             if (focused) focusedSeen = true;
+            const workerSessionRow = buildSessionRow({
+              newId: plan.newId,
+              agentKind: plan.manifest.agentKind,
+              manifestProviderId: plan.manifest.providerId ?? null,
+              normalizeMigratedAcpProvider: !!runtimeScope.migration,
+              title:
+                (typeof plan.snapshot.title === 'string' && plan.snapshot.title) ||
+                plan.manifest.title ||
+                'Worker',
+              workspaceKind:
+                runtimeScope.migration && typeof plan.snapshot.workspaceKind === 'string'
+                  ? plan.snapshot.workspaceKind
+                  : manifest.workspaceKind,
+              orcaRole: 'worker' as const,
+              snapshot: plan.snapshot,
+              draftPrefs:
+                runtimeScope.migration?.agentPrefs?.[plan.manifest.agentKind] ?? draftPrefs,
+              // 导入端草稿偏好按 vendor 存,跨 vendor 的 Worker 用新建任务默认模型。
+              applyDraftPrefs:
+                !!runtimeScope.migration || plan.manifest.agentKind === manifest.agentKind,
+              fallbackRoute: fallbackRoutes.get(plan.manifest.agentKind) ?? null,
+              // 普通分享沿用 auto；迁移不继承源机器的权限授权。
+              permissionModeOverride: runtimeScope.migration
+                ? plan.manifest.agentKind === 'cc'
+                  ? 'default'
+                  : 'ask'
+                : 'auto',
+              status:
+                runtimeScope.migration && plan.snapshot.status === 'archived'
+                  ? 'archived'
+                  : 'active',
+              workingDir: plan.workingDir ?? workingDir,
+              worktreePath,
+              activeSdkSessionId: plan.activeSdkSessionId,
+              now,
+            });
+            const rawWorkerMessages = toDbMessages(plan.messages, plan.manifest.agentKind);
+            const workerMessages =
+              plan.manifest.agentKind === 'acp'
+                ? appendAcpHandoffMarker(rawWorkerMessages, {
+                    sessionId: plan.newId,
+                    model: workerSessionRow.model,
+                    providerId: workerSessionRow.providerId,
+                    clearedAt: workerSessionRow.clearedAt,
+                    now,
+                  })
+                : rawWorkerMessages;
             return {
               record: {
                 id: randomUUID(),
@@ -1020,71 +1147,47 @@ export async function commitShareImport(
                 createdAt: now,
                 updatedAt: now,
               },
-              session: buildSessionRow({
-                newId: plan.newId,
-                agentKind: plan.manifest.agentKind,
-                title:
-                  (typeof plan.snapshot.title === 'string' && plan.snapshot.title) ||
-                  plan.manifest.title ||
-                  'Worker',
-                workspaceKind:
-                  runtimeScope.migration && typeof plan.snapshot.workspaceKind === 'string'
-                    ? plan.snapshot.workspaceKind
-                    : manifest.workspaceKind,
-                orcaRole: 'worker' as const,
-                snapshot: plan.snapshot,
-                draftPrefs:
-                  runtimeScope.migration?.agentPrefs?.[plan.manifest.agentKind] ?? draftPrefs,
-                // 导入端草稿偏好按 vendor 存,跨 vendor 的 Worker 用新建任务默认模型。
-                applyDraftPrefs:
-                  !!runtimeScope.migration || plan.manifest.agentKind === manifest.agentKind,
-                fallbackRoute: fallbackRoutes.get(plan.manifest.agentKind) ?? null,
-                // 普通分享沿用 auto；迁移不继承源机器的权限授权。
-                permissionModeOverride: runtimeScope.migration
-                  ? plan.manifest.agentKind === 'cc'
-                    ? 'default'
-                    : 'ask'
-                  : 'auto',
-                status:
-                  runtimeScope.migration && plan.snapshot.status === 'archived'
-                    ? 'archived'
-                    : 'active',
-                workingDir: plan.workingDir ?? workingDir,
-                worktreePath,
-                activeSdkSessionId: plan.activeSdkSessionId,
-                now,
-              }),
-              messages: toDbMessages(plan.messages, plan.manifest.agentKind),
+              session: workerSessionRow,
+              messages: workerMessages,
             };
           }),
         }
       : undefined;
+    const allMembers = [manifest, ...workerPlans.map((plan) => plan.manifest)];
+    const hasAcpMember = allMembers.some((member) => member.agentKind === 'acp');
+    const hasBuiltinMember = allMembers.some((member) => member.agentKind !== 'acp');
+    const expectedMigrationFidelity: XdtshareFidelity = !hasAcpMember
+      ? 'full'
+      : hasBuiltinMember
+        ? 'partial'
+        : 'db-only';
+    const hasMissingBuiltinTranscript = allMembers.some(
+      (member) =>
+        member.agentKind !== 'acp' &&
+        member.transcripts.some((transcript) => transcript.path === null),
+    );
     await withSessionRouteLocks(
       conflictExisting.map((session) => session.id),
       async () => {
         assertStillValid();
-        if (runtimeScope.migration && (manifest.exportFidelity !== 'full' || !transcriptsPlaceable || notes.includes('codexStateSkipped') ||
-          transcriptsWritten < new Set(restorePlans.flatMap((restore) =>
-            restore.bundled.map((transcript) => `${restore.agentKind}:${transcript.sdkSessionId}`))).size)) {
+        if (
+          runtimeScope.migration &&
+          (manifest.exportFidelity !== expectedMigrationFidelity ||
+            hasMissingBuiltinTranscript ||
+            !transcriptsPlaceable ||
+            notes.includes('codexStateSkipped') ||
+            transcriptsWritten <
+              new Set(
+                restorePlans.flatMap((restore) =>
+                  restore.bundled.map((transcript) => `${restore.agentKind}:${transcript.sdkSessionId}`),
+                ),
+              ).size)
+        ) {
           throw codedError('SHARE_IMPORT_FAILED', 'MIGRATION_INCOMPLETE_CONTEXT');
         }
         finalTxState.outcome = 'in-flight';
         await dbClient.tx('session.importShare', {
-          session: buildSessionRow({
-            newId,
-            agentKind: manifest.agentKind,
-            title: manifest.title || 'Shared session',
-            workspaceKind: manifest.workspaceKind,
-            orcaRole: manifest.orca ? ('lead' as const) : null,
-            snapshot: sessionSnapshot,
-            draftPrefs,
-            applyDraftPrefs: true,
-            fallbackRoute: fallbackRoutes.get(manifest.agentKind) ?? null,
-            workingDir,
-            worktreePath,
-            activeSdkSessionId,
-            now,
-          }),
+          session: leadSessionRow,
           messages: dbMessages,
           ...(conflictExisting.length > 0 ? { replaceSessions: conflictExisting } : {}),
           ...(orcaTxArgs ? { orca: orcaTxArgs } : {}),
@@ -1474,10 +1577,11 @@ type ImportFallbackRoute = { model: string; providerId: string } | null;
  * 不写死型号;解析不到则留空,由用户在任务里选。
  */
 async function resolveImportFallbackRoutes(
-  agentKinds: Iterable<'cc' | 'codex' | 'pi'>,
-): Promise<Map<'cc' | 'codex' | 'pi', ImportFallbackRoute>> {
-  const routes = new Map<'cc' | 'codex' | 'pi', ImportFallbackRoute>();
+  agentKinds: Iterable<XdtshareAgentKind>,
+): Promise<Map<XdtshareAgentKind, ImportFallbackRoute>> {
+  const routes = new Map<XdtshareAgentKind, ImportFallbackRoute>();
   for (const kind of new Set(agentKinds)) {
+    if (kind === 'acp') continue;
     routes.set(
       kind,
       await resolveNewTaskDefaultModelRoute(kind === 'cc' ? 'claude-code' : kind).catch(() => null),
@@ -1486,22 +1590,124 @@ async function resolveImportFallbackRoutes(
   return routes;
 }
 
+function isAcpProviderId(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith('acp-plugin:');
+}
+
+function canonicalAcpProviderId(value: unknown): string | null {
+  const key = typeof value === 'string' ? acpHarnessKeyFromProviderId(value) : null;
+  return key ? acpProviderIdForHarness(key) : null;
+}
+
+function resolveCanonicalAcpProviderId(
+  snapshot: Record<string, unknown>,
+  manifestProviderId: string | null | undefined,
+): string | null {
+  const raw =
+    typeof snapshot.providerId === 'string' && snapshot.providerId.length > 0
+      ? snapshot.providerId
+      : typeof manifestProviderId === 'string' && manifestProviderId.length > 0
+        ? manifestProviderId
+        : null;
+  return canonicalAcpProviderId(raw);
+}
+
+function parseStoredMessageContent(raw: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * 为导入的插件引擎(acp)会话追加一条隐藏的 context_rebuild 交接行:
+ * acp 无跨机原生转录(sdkSessionId 为 null),首轮续聊前通过既有
+ * findPendingAgentHandoff 通道将完整对话历史注入新原生会话。
+ */
+function appendAcpHandoffMarker(
+  dbMessages: SessionImportShareMessageRow[],
+  opts: {
+    sessionId: string;
+    model: string;
+    providerId: string | null;
+    clearedAt: number | null;
+    now: number;
+  },
+): SessionImportShareMessageRow[] {
+  const visibleRows = dbMessages.filter(
+    (m) =>
+      m.rewindAt === null &&
+      m.role !== 'error' &&
+      m.role !== 'context_rebuild' &&
+      m.role !== 'agent_switch',
+  );
+  if (visibleRows.length === 0) return dbMessages;
+  const handoffMessages: HandoffSourceMessage[] = visibleRows.map((m) => ({
+    clientId: m.clientId,
+    role: m.role,
+    content: parseStoredMessageContent(m.content),
+    createdAt: m.createdAt,
+    toolUseId: m.toolUseId,
+    agentMeta: m.agentMeta,
+  }));
+  const { handoff, handoffCoverage } = buildHandoff(handoffMessages, {
+    fromLabel: 'plugin',
+    toLabel: 'plugin',
+    sessionId: opts.sessionId,
+    reason: 'native-session-recovery',
+    targetContextWindow: null,
+  });
+  if (!handoff) return dbMessages;
+  const lastUser = [...visibleRows].reverse().find((m) => m.role === 'user');
+  const maxCreatedAt = dbMessages.reduce((max, m) => Math.max(max, m.createdAt), 0);
+  const markerCreatedAt = Math.max(opts.now, maxCreatedAt + 1, (opts.clearedAt ?? 0) + 1);
+  return [
+    ...dbMessages,
+    {
+      id: randomUUID(),
+      clientId: `context-rebuild:${randomUUID()}`,
+      role: 'context_rebuild',
+      content: JSON.stringify({
+        handoff,
+        handoffCoverage,
+        consumed: false,
+        reason: 'native-session-recovery',
+        sourceUserClientId: lastUser?.clientId ?? null,
+        sourceAgentKind: 'acp',
+        sourceModel: opts.model || null,
+        sourceProviderId: opts.providerId,
+      }),
+      toolUseId: null,
+      agentMeta: null,
+      agentKind: 'acp',
+      createdAt: markerCreatedAt,
+      rewindAt: markerCreatedAt,
+    },
+  ];
+}
+
 /**
  * 组装 tx session.importShare 的 session 行(lead 与协同 Worker 共用)。
  *
- * 字段来源分两类(导入语义 = 用本地草稿默认值新建会话,只有 agent 跟随分享包):
- * - 会话配置(model/effort/permissionMode/planMode/fastMode/providerId)→ 导入端
+ * 字段来源分两类(内置引擎导入语义 = 用本地草稿默认值新建会话,只有 agent 跟随分享包):
+ * - 内置引擎会话配置(model/effort/permissionMode/planMode/fastMode/providerId)→ 导入端
  *   draftPrefs(白名单校验,非法/缺省落兜底;模型兜底按新建任务口径解析),**不读** snapshot——导出方的
  *   模型/供应商在导入端不一定存在,照搬会产出本机不可用的脏 model(选择器显示
  *   不出、发消息才暴露)。draftPrefs 按包顶层 vendor 采集,跨 vendor 的 Worker
  *   经 applyDraftPrefs=false 落兜底;Worker 的 permissionMode 固定 auto
  *   (与 OrcaWorkerCreationService 同口径)。
+ * - 插件引擎(acp)配置→ 保留包内 snapshot/manifest 的 providerId、model、effort，
+ *   fastMode 固定 false、planModeEnabled 固定 false、sdkSessionId 固定 null，
+ *   不被内置引擎草稿覆写。
  * - 历史事实(token 统计 / contextTokens / clearedAt / 时间戳等)→ snapshot 照搬。
  *   contextWindow 也照搬:仅是展示缓存,renderer 按 session.model 重新计算。
  */
 function buildSessionRow(params: {
   newId: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: XdtshareAgentKind;
+  manifestProviderId?: string | null;
+  normalizeMigratedAcpProvider?: boolean;
   title: string;
   workspaceKind: string;
   orcaRole: 'lead' | 'worker' | null;
@@ -1532,31 +1738,64 @@ function buildSessionRow(params: {
   const str = (v: unknown, fallback: string): string => (typeof v === 'string' && v ? v : fallback);
   const num = (v: unknown, fallback: number): number =>
     typeof v === 'number' && Number.isFinite(v) ? v : fallback;
-  const effort = str(draftPrefs?.effort, 'high');
-  const permissionMode = params.permissionModeOverride ?? str(draftPrefs?.permissionMode, 'auto');
+  const isAcp = agentKind === 'acp';
+  const isAcpDraft = isAcp && isAcpProviderId(draftPrefs?.providerId);
+  const rawSnapshotProviderId =
+    typeof snapshot.providerId === 'string' && snapshot.providerId.length > 0
+      ? snapshot.providerId
+      : typeof params.manifestProviderId === 'string' && params.manifestProviderId.length > 0
+        ? params.manifestProviderId
+        : null;
+  const snapshotProviderId =
+    isAcp && params.normalizeMigratedAcpProvider
+      ? (canonicalAcpProviderId(rawSnapshotProviderId) ?? rawSnapshotProviderId)
+      : rawSnapshotProviderId;
+  const effort = isAcp
+    ? isAcpDraft
+      ? str(draftPrefs?.effort, str(snapshot.effort, 'high'))
+      : str(snapshot.effort, 'high')
+    : str(draftPrefs?.effort, 'high');
+  const permissionMode =
+    params.permissionModeOverride ??
+    (isAcp
+      ? PERMISSION_MODES.has(draftPrefs?.permissionMode ?? '')
+        ? draftPrefs!.permissionMode!
+        : 'ask'
+      : str(draftPrefs?.permissionMode, 'auto'));
+  const model = isAcp
+    ? isAcpDraft
+      ? str(draftPrefs?.model, str(snapshot.model, ''))
+      : str(snapshot.model, '')
+    : str(draftPrefs?.model, params.fallbackRoute?.model ?? '');
+  const providerId = isAcp
+    ? isAcpDraft
+      ? draftPrefs!.providerId!
+      : snapshotProviderId
+    : typeof draftPrefs?.providerId === 'string' && draftPrefs.providerId.length > 0
+      ? draftPrefs.providerId
+      : typeof draftPrefs?.model === 'string' && draftPrefs.model
+        ? null
+        : (params.fallbackRoute?.providerId ?? null);
   return {
     id: newId,
     title,
     workingDir,
     workspaceKind,
     worktreePath,
-    model: str(draftPrefs?.model, params.fallbackRoute?.model ?? ''),
+    model,
     effort: EFFORTS.has(effort) ? effort : 'high',
-    permissionMode: PERMISSION_MODES.has(permissionMode) ? permissionMode : 'auto',
-    providerId:
-      typeof draftPrefs?.providerId === 'string' && draftPrefs.providerId.length > 0
-        ? draftPrefs.providerId
-        : typeof draftPrefs?.model === 'string' && draftPrefs.model
-          ? null
-          : (params.fallbackRoute?.providerId ?? null),
+    permissionMode: PERMISSION_MODES.has(permissionMode) ? permissionMode : isAcp ? 'ask' : 'auto',
+    providerId,
     status: params.status ?? 'active',
-    sdkSessionId: activeSdkSessionId,
+    sdkSessionId: isAcp ? null : activeSdkSessionId,
     totalTokenUsage: num(snapshot.totalTokenUsage, 0),
     totalCostUsd: num(snapshot.totalCostUsd, 0),
     contextTokens: num(snapshot.contextTokens, 0),
     contextWindow: num(snapshot.contextWindow, 0),
-    fastMode: (draftPrefs?.fastMode === 'ultrafast' ? 'ultrafast' : draftPrefs?.fastMode === true),
-    planModeEnabled: draftPrefs?.planMode === true,
+    fastMode: isAcp
+      ? false
+      : (draftPrefs?.fastMode === 'ultrafast' ? 'ultrafast' : draftPrefs?.fastMode === true),
+    planModeEnabled: isAcp ? false : draftPrefs?.planMode === true,
     agentKind,
     orcaRole,
     source: 'shared',

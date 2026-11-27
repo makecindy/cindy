@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 const guarded = vi.hoisted(() => ({ fetch: vi.fn() }));
-vi.mock('../../maker-host/outbound-fetch.js', () => ({ guardedOutboundFetch: guarded.fetch }));
+vi.mock('../../maker-host/outbound-fetch.desktop.js', () => ({ guardedOutboundFetch: guarded.fetch }));
 import { PluginDownloadSlot } from '../downloadSlot';
 import { PluginDownloadCache } from '../downloadCache';
 import type { InstalledGhost } from '../../../shared/ghost';
@@ -20,7 +20,7 @@ it('rechecks replacement quota only after a real downloader cache miss and befor
   const download = createDownloader();
   let target = '';
   guarded.fetch.mockReset();
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: id => path.join(root, id), scope: () => 'owner', send() {},
     getGhost: () => ({ enabled: true, approval: {}, manifest: { node: {}, network: { hosts: ['github.com'] } } }) as unknown as InstalledGhost,
     download: async options => {
@@ -48,7 +48,7 @@ it('drains a destroyed page before a new page resumes the same download id', asy
   let oldPage = true, calls = 0, started!: () => void, release!: () => void;
   const ready = new Promise<void>(resolve => { started = resolve; });
   const cleanup = new Promise<void>(resolve => { release = resolve; });
-  const slot = new PluginDownloadSlot({root: id => path.join(root,id),scope:()=> 'owner',send(){},
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,root: id => path.join(root,id),scope:()=> 'owner',send(){},
     getGhost:()=>({enabled:true,approval:{},manifest:{node:{},network:{hosts:['github.com']}}}) as unknown as InstalledGhost,
     download:async o => {
       if (++calls === 1) {
@@ -74,7 +74,7 @@ it('drains a destroyed page before a new page resumes the same download id', asy
 it('admits 8 GiB archives and rejects an extra byte before invoking the downloader', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-size-')));
   const download = vi.fn(async () => { throw new Error('fixture stops before allocating bytes'); });
-  const slot = new PluginDownloadSlot({ root: id => path.join(root,id), scope: () => 'owner', send() {}, download,
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch, root: id => path.join(root,id), scope: () => 'owner', send() {}, download,
     getGhost: () => ({enabled:true,approval:{},manifest:{node:{},network:{hosts:['github.com']}}}) as unknown as InstalledGhost,
   });
   try {
@@ -83,13 +83,61 @@ it('admits 8 GiB archives and rejects an extra byte before invoking the download
     expect(download).toHaveBeenCalledOnce();
     expect(download.mock.calls[0]).toEqual([expect.objectContaining({expectedSize:8*1024**3,maxBytes:8*1024**3})]);
     await slot.handle('p',{...request,id:'too-large',bytes:request.bytes+1});
+    await slot.handle('p',{...request,id:'null-size',bytes:null});
     expect(download).toHaveBeenCalledOnce();
+    // An omitted size keeps the 8 GiB ceiling but leaves the exact size to the response.
+    const { bytes: _bytes, ...withoutSize } = request;
+    await slot.handle('p',{...withoutSize,id:'unknown'});
+    expect(download.mock.calls[1]).toEqual([expect.objectContaining({expectedSize:undefined,maxBytes:8*1024**3})]);
   } finally { await fs.rm(root,{recursive:true,force:true}); }
+});
+// 测试价值：生产入口 PluginDownloadSlot.handle + 真实下载器；插件不给 bytes 时（ElyOffice 签名清单只有
+// SHA-256，查大小要调用会被限流的 GitHub API），以响应头声明的大小预留缓存后才写盘，没有声明大小的响应在写盘前拒绝。
+// 现有用例都带 bytes，覆盖不到这条分支。最小失败输入：start 请求省略 bytes。tier：unit（内存 fake 网络 + 临时目录）。
+it('learns an omitted size from the response before writing and rejects a response without one', async () => {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-unknown-size-')));
+  const body = 'signed-artifact';
+  const sha256 = createHash('sha256').update(body).digest('hex');
+  const events: any[] = [];
+  const reserve = vi.spyOn(PluginDownloadCache.prototype, 'reserve');
+  // '/overflow' declares 3 bytes, then keeps streaming: only a pull-based body shows how far it was read.
+  let overflowPulls = 0;
+  const overflowing = () => new ReadableStream<Uint8Array>({
+    pull(c) { if (++overflowPulls > 100) c.close(); else c.enqueue(new Uint8Array([0x61])); },
+  });
+  guarded.fetch.mockReset().mockImplementation(async (url: string) => ({
+    response: url.endsWith('/sized')
+      ? new Response(body, { headers: { 'content-length': String(body.length) } })
+      : url.endsWith('/overflow')
+        ? new Response(overflowing(), { headers: { 'content-length': '3' } })
+        : new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(body)); c.close(); } })),
+  }));
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch, root: id => path.join(root, id), scope: () => 'owner',
+    send: (_, event) => events.push(event), download: createDownloader(),
+    getGhost: () => ({ enabled: true, approval: {}, manifest: { node: {}, network: { hosts: ['github.com'] } } }) as unknown as InstalledGhost,
+  });
+  try {
+    expect(await slot.handle('p', { kind: 'start', id: 'sized', url: 'https://github.com/sized', sha256 }))
+      .toMatchObject({ ok: true, bytes: body.length, sha256 });
+    expect(reserve.mock.calls.filter(call => call[3]).map(call => call[2])).toEqual([body.length]);
+    expect(events.filter(e => e.data.phase === 'downloading').at(-1).data)
+      .toMatchObject({ loaded: body.length, total: body.length, percent: 100 });
+    expect(await slot.handle('p', { kind: 'start', id: 'unsized', url: 'https://github.com/unsized', sha256 }))
+      .toMatchObject({ ok: false });
+    // A body longer than its declared size stops at that size instead of filling the 8 GiB ceiling.
+    expect(await slot.handle('p', { kind: 'start', id: 'overflow', url: 'https://github.com/overflow', sha256 }))
+      .toMatchObject({ ok: false });
+    expect(overflowPulls).toBeLessThan(10);
+    const files = (await fs.readdir(path.join(root, 'p'), { recursive: true })).map(f => path.basename(String(f)));
+    expect(files.filter(name => name.startsWith('artifact'))).toEqual(['artifact']);
+  } finally {
+    reserve.mockRestore(); await slot.stopAndWait(); await fs.rm(root, { recursive: true, force: true });
+  }
 });
 it('keeps display progress monotonic across restart retries and resets for a new request', async () => {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'download-progress-')));
   const events: any[] = [];
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: (id) => path.join(root, id),
     scope: () => 'owner',
     send: (_, event) => events.push(event),
@@ -148,7 +196,7 @@ it('a destroyed caller cannot enter Node after a delayed lease, even if the plug
       return { path: '/fixture/artifact', release };
     });
   let active = true;
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: () => '/fixture',
     scope: () => 'owner',
     send() {},
@@ -187,7 +235,7 @@ it('shutdown drains cancelled downloads and rejects new downloads and Node hando
   const drained = new Promise<void>((resolve) => {
     finish = resolve;
   });
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: (id) => path.join(root, id),
     scope: () => 'anonymous',
     send() {},
@@ -248,7 +296,7 @@ it('restricts redirects, rejects arbitrary paths and isolates owner delivery', a
     manifest: { node: {}, network: { hosts: ['github.com'] } },
   } as unknown as InstalledGhost;
   let calls = 0;
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: (id) => path.join(root, id),
     scope: () => scope,
     getGhost: () => ghost,
@@ -302,7 +350,7 @@ it('cancel drains the matching request before acknowledging an immediate same-id
   let finish!: () => void;
   const cleanup = new Promise<void>((r) => (finish = r));
   let calls = 0;
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: (id) => path.join(root, id),
     scope: () => 'a',
     getGhost: () => ghost,
@@ -365,7 +413,7 @@ it('hands opaque receipts only to the owning Node call and preserves legacy para
     approval: { revision: 'a' },
     manifest: { node: {}, network: { hosts: ['github.com'] } },
   } as unknown as InstalledGhost;
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: (id) => path.join(alias, id),
     scope: () => scope,
     getGhost: () => ghost,
@@ -458,7 +506,7 @@ it('sends plugin downloads through the SSRF guard without credentials and stops 
     check();
     return { response: new Response('ok'), release };
   });
-  const slot = new PluginDownloadSlot({
+  const slot = new PluginDownloadSlot({ guardedFetch: guarded.fetch,
     root: (id) => path.join(root, id),
     scope: () => 'a',
     getGhost: () => ghost,

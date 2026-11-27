@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { makerChatStore } from '@/lib/makerChatStore';
+import { sessionAlertEventId } from '@/hooks/useSessionRunningStatus';
 
 function applyStatus(
   sessionId: string,
@@ -39,6 +40,31 @@ function applyStatus(
 }
 
 describe('makerChatStore live generation at turn start', () => {
+  // Removal compatibility, unit tier: the real event reducer previously treated
+  // late legacy notices as recoverable errors and could restart an idle turn.
+  // Existing generation tests cover ordinary errors, not this old wire source.
+  it.each([false, true])('ignores a retired host notice while running=%s without swallowing a terminal error', (running) => {
+    const sessionId = `retired-notice-${running}`;
+    try {
+      applyStatus(sessionId, { isRunning: running });
+      const before = makerChatStore.getSnapshot(sessionId);
+      makerChatStore.__applyStreamEventForTest(sessionId, {
+        sessionId, type: 'error', source: 'vision-bridge' as never,
+        data: { message: 'legacy notice', isTerminal: false },
+      });
+      expect(makerChatStore.getSnapshot(sessionId)).toBe(before);
+      makerChatStore.__applyStreamEventForTest(sessionId, {
+        sessionId, type: 'error', source: 'vision-bridge' as never,
+        data: { message: 'real terminal failure', isTerminal: true },
+      });
+      expect(makerChatStore.getSnapshot(sessionId)).toMatchObject({
+        error: 'real terminal failure', agentStatus: { isRunning: false },
+      });
+    } finally {
+      makerChatStore.purgeSession(sessionId);
+    }
+  });
+
   it('keeps live fields when the first running status already carries them', () => {
     const sessionId = `live-gen-keep-${Math.random().toString(36).slice(2, 8)}`;
     try {
@@ -101,6 +127,94 @@ describe('makerChatStore live generation at turn start', () => {
       applyStatus(sessionId, { isRunning: true, status: 'Working' });
       expect(makerChatStore.getSnapshot(sessionId).agentStatus.tokenSpeed).toBeUndefined();
     } finally {
+      makerChatStore.purgeSession(sessionId);
+    }
+  });
+});
+
+describe('makerChatStore turn clock used by alert ids', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // #9317 review / unit: lastStartedAt is the start clock of the turn that is
+  // current. It used to survive the previous turn and get copied into the next
+  // one, so two turns that each failed produced the same alert id and main
+  // dropped the second toast. One turn keeps one clock; the next turn gets
+  // another. The clock stays after the turn stops, which is what a following
+  // error or needs-reply reads.
+  it('gives consecutive turns different clocks and keeps one clock inside a turn', () => {
+    const sessionId = `turn-clock-${Math.random().toString(36).slice(2, 8)}`;
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-11-01T00:00:00.000Z'));
+      applyStatus(sessionId, { isRunning: true, status: 'Working' });
+      applyStatus(sessionId, { isRunning: true, status: 'Still working' });
+      const first = makerChatStore.getSnapshot(sessionId).agentStatus.lastStartedAt;
+      makerChatStore.__applyStreamEventForTest(sessionId, {
+        sessionId, type: 'error', data: { message: 'first boom', isTerminal: true },
+      });
+      const afterFirstFailure = makerChatStore.getSnapshot(sessionId).agentStatus.lastStartedAt;
+
+      vi.setSystemTime(new Date('2026-11-01T00:05:00.000Z'));
+      applyStatus(sessionId, { isRunning: true, status: 'Working' });
+      const second = makerChatStore.getSnapshot(sessionId).agentStatus.lastStartedAt;
+      makerChatStore.__applyStreamEventForTest(sessionId, {
+        sessionId, type: 'error', data: { message: 'second boom', isTerminal: true },
+      });
+      const afterSecondFailure = makerChatStore.getSnapshot(sessionId).agentStatus.lastStartedAt;
+
+      expect(first).toBe(afterFirstFailure);
+      expect(second).toBe(afterSecondFailure);
+      expect(second).not.toBe(first);
+      expect(sessionAlertEventId('error', afterFirstFailure)).not.toBe(
+        sessionAlertEventId('error', afterSecondFailure),
+      );
+    } finally {
+      makerChatStore.purgeSession(sessionId);
+    }
+  });
+
+  // #9575 review: the previous turn already failed and was alerted. The next
+  // attempt never gets a running status frame, and its clock sample lands on
+  // that same millisecond. Reusing the stamp rebuilds the alert id main already
+  // saw, so the new failure must get its own clock.
+  it('alerts a new failure after the previous turn was already alerted, even without a running frame', () => {
+    const sessionId = `turn-clock-retry-${Math.random().toString(36).slice(2, 8)}`;
+    vi.useFakeTimers();
+    const now = vi.spyOn(Date, 'now');
+    try {
+      now.mockReturnValue(1_000);
+      applyStatus(sessionId, { isRunning: true, status: 'Working' });
+      makerChatStore.__applyStreamEventForTest(sessionId, {
+        sessionId, type: 'error', data: { message: 'first boom', isTerminal: true },
+      });
+      const alreadyAlerted = sessionAlertEventId(
+        'error',
+        makerChatStore.getSnapshot(sessionId).agentStatus.lastStartedAt,
+      );
+      expect(alreadyAlerted).toBe('turn:1000:error');
+
+      // Same millisecond as the turn that was already alerted. Keeping that
+      // stamp would rebuild `turn:1000:error` and main would drop the toast.
+      now.mockReturnValue(1_000);
+      makerChatStore.__applyStreamEventForTest(sessionId, {
+        sessionId, type: 'error', data: { message: 'still trying', isTerminal: false },
+      });
+      const midAttempt = makerChatStore.getSnapshot(sessionId).agentStatus;
+      expect(midAttempt.isRunning).toBe(true);
+      expect(midAttempt.startedAt).toBe(1_001);
+
+      now.mockReturnValue(1_400);
+      makerChatStore.__applyStreamEventForTest(sessionId, {
+        sessionId, type: 'error', data: { message: 'second boom', isTerminal: true },
+      });
+      const stopped = makerChatStore.getSnapshot(sessionId).agentStatus;
+      expect(stopped.startedAt).toBeNull();
+      expect(stopped.lastStartedAt).toBe(1_001);
+      expect(sessionAlertEventId('error', stopped.lastStartedAt)).not.toBe(alreadyAlerted);
+    } finally {
+      now.mockRestore();
       makerChatStore.purgeSession(sessionId);
     }
   });

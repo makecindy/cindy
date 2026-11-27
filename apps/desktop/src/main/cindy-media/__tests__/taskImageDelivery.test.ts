@@ -23,18 +23,21 @@ import {
   restoreTaskImageRows,
   taskImageRoots,
 } from '../taskImageDelivery';
-import { resolveSafe } from '../blobStore';
+import { resolveSafe } from '../blobStore.desktop';
 import * as ledger from '../ledger';
 import { commitMessageMediaRefs } from '../chatAttachments';
 import { createHash } from 'node:crypto';
+import { dataOwnerStorageKey } from '../../dataOwnerPath';
 import { ingestMedia } from '../ingest';
-import { reconcileMediaRefCompensationsForOwner } from '../refCompensationJournal';
+import { reconcileMediaRefCompensationsForOwner } from '../refCompensationJournal.desktop';
 import { materializeLocalMarkdownImages } from '../../im/shared/localMarkdownImages';
 import { collectOutboundAttachments } from '../../hook-control/outbound';
 import {
   materializeTaskImageMarkdown,
   rewriteTaskImageReferences,
   taskImageReferences,
+  isUnsafeLocalTaskImagePath,
+  localTaskImagePath,
 } from '../taskImageMarkdown';
 
 const state = vi.hoisted(() => ({
@@ -45,7 +48,7 @@ const state = vi.hoisted(() => ({
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
 vi.mock('../../appSessionState', () => ({
   activeOwnerScopeKey: () => (state.valid ? 'cloud:test-owner:1' : 'cloud:other-owner:2'),
-  dataOwnerStorageKey: (id: string) => (id === 'test-owner' ? 'a' : 'b').repeat(20),
+  dataOwnerStorageKey: (id: string) => dataOwnerStorageKey(id),
   getActiveAppSession: () => ({ dataOwnerId: state.valid ? 'test-owner' : 'other-owner' }),
   isAppSessionBoundaryPending: () => false,
 }));
@@ -446,7 +449,7 @@ describe('task image delivery', () => {
       const journalDir = path.join(
         state.root,
         'owners',
-        'a'.repeat(20),
+        dataOwnerStorageKey('test-owner'),
         'cindy-media',
         'ref-compensation-v1',
       );
@@ -459,7 +462,7 @@ describe('task image delivery', () => {
       expect(record.refIds).not.toContain((priorRefs[0] as { id: string }).id);
       expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 2 });
       for (const call of remove.mock.calls) expect(call[1]).toBe(client.drizzle);
-      await expect(fs.stat(path.join(state.root, 'owners', 'b'.repeat(20)))).rejects.toMatchObject({
+      await expect(fs.stat(path.join(state.root, 'owners', dataOwnerStorageKey('other-owner')))).rejects.toMatchObject({
         code: 'ENOENT',
       });
       remove.mockRestore();
@@ -514,12 +517,12 @@ describe('task image delivery', () => {
     expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
   });
 
-  it('delivers a local image whose path has bare spaces through both channel collectors', async () => {
-    // 2026-11-03 Telegram: `![…](…/Application Support/…png)` is not a CommonMark image,
-    // so the reply carried the raw path with no attachment and no incomplete notice.
+  it('delivers bare-space local images even when the filename parses as emphasis', async () => {
+    // Media storage rules, §多端与远程: both channel collectors must deliver
+    // these references. A plain filename misses the split across AST nodes.
     const folder = path.join(state.root, 'Application Support', 'generated images');
     await fs.mkdir(folder, { recursive: true });
-    const source = path.join(folder, 'design.png');
+    const source = path.join(folder, 'mockup _draft_.png');
     await fs.writeFile(source, PNG);
     const example = `\`![example](${source})\``;
     const text = `Design:\n\n![Credits mockup](${source})\n\n${example}`;
@@ -533,6 +536,30 @@ describe('task image delivery', () => {
     expect(hook.skipped).toBe(0);
     expect(hook.attachments).toHaveLength(1);
     expect(hook.text).toContain(example);
+  });
+
+  // #8951: existing hostless coverage used an encoded URL without a literal %.
+  // Read/import the same native file through chat and IM, not a mock importer
+  // (unit tier; existing in-memory DB and per-test temporary directory).
+  it.each(['xdt-image', 'xdt-file'])('delivers a raw-percent hostless %s image through chat and IM', async (scheme) => {
+    const source = path.join(work, 'shot (100%).png');
+    await fs.writeFile(source, PNG);
+    const url = pathToFileURL(source).href.replace(/^file:/, `${scheme}:`).replace(/%20/g, ' ').replace(/%25/g, '%');
+    const text = `![hostless](<${url}>)`;
+    const personal = await materializeLocalMarkdownImages({ text, workingDir: work, sessionId: 's' });
+    expect(personal.absPaths).toHaveLength(1);
+    expect(personal.text).toBe('hostless');
+    const [saved] = await restoreTaskImageRows(client, [insert(text)]);
+    expect(JSON.parse(saved.content)).toContain('cindy-media://');
+    await fs.rm(source);
+    const hook = await collectOutboundAttachments(JSON.parse(saved.content), [], {
+      resolveImageUrl: resolveSafe,
+      log: { warn: vi.fn() },
+    });
+    expect(hook.skipped).toBe(0);
+    expect(hook.attachments).toHaveLength(1);
+    expect(await fs.readFile(personal.absPaths[0])).toEqual(PNG);
+    expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
   });
 
   it('channel delivery accepts images outside the task directory; chat restore stays task-scoped', async () => {
@@ -763,6 +790,18 @@ describe('Markdown image contract', () => {
     const shared = `[download][p]\n${source}`;
     expect(rewriteTaskImageReferences(shared, replacements)).toContain('[p]: <cindy-media://blobs/test.png>');
     expect(rewriteTaskImageReferences(shared, replacements)).not.toContain('/tmp/a.png');
+  });
+
+  it('rejects network and device paths before failure diagnostics can stat them', () => {
+    for (const url of [
+      'xdt-image:////attacker/share/100%.png',
+      'xdt-image:///%5C%5Cattacker%5Cshare%5C100%25.png',
+      'xdt-image:///%3F%3F/C:/secret.png',
+    ]) {
+      const resolved = localTaskImagePath(url);
+      expect(resolved).toBeTruthy();
+      expect(isUnsafeLocalTaskImagePath(resolved!)).toBe(true);
+    }
   });
 
   it('recovers bare-space local destinations only from plain text, with original offsets', () => {

@@ -20,7 +20,7 @@ import {
 import { AppConnection } from '../connection.js';
 import { McpAppsHost, appServerRevision, type McpAppsHostDeps } from '../host.js';
 import { setMcpAppsHost, registerAppServer } from '../runtime.js';
-import { createAppServerProxy } from '../serverProxy.js';
+import { createAppServerProxy } from '../serverProxy.desktop.js';
 import { MCP_APPS_MAX_BYTES, MCP_APPS_MAX_CARD_BYTES } from '../protocol.js';
 import type { McpAppRecord } from '../../../shared/mcpApps.js';
 

@@ -10,9 +10,10 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 
 import { isProviderSharePeer, parseRemoteAgentPollResult, parseRemoteAgentStreamItem, providerShareGuestPeer, REMOTE_AGENT_MAX_RUNS_PER_CONTROLLER } from '@cindy/device-link';
-import type { AgentEvent, AgentSessionHandle } from '@cindy/maker-core';
+import { AgentStartupStoppedError, TurnDispatchRejectedError, TurnDispatchUnconfirmedError, TurnPermissionPolicyUnsupportedError, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProviderGroupGuestRelay } from '../../provider-group/guestRelay';
@@ -21,7 +22,9 @@ import type { ProviderGroupRouter } from '../../provider-group/router';
 import { decideProviderGroupFailure } from '../../provider-group/failurePolicy';
 
 import { RemoteAgentPoller } from '../controller/poller';
-import { RemoteAgentRemoteError, RemoteAgentRunClient } from '../controller/runClient';
+import { RemoteAgentRemoteError, RemoteAgentRunClient, type RemoteAgentRunHandlers } from '../controller/runClient';
+import { createRemoteAgentHandle, parseStartedInfo } from '../controller/proxyHandle';
+import { ExecutorWorkspace } from '../executor/workspace';
 import { LineSplitter } from '../eventLog';
 import { relayConnId, relayKeyFor, reshareKeyFor, type RelayRunFailure } from '../host/groupRelay';
 import { createGuestProviderRouteBinder, resolveGuestProviderId } from '../host/providerAccess';
@@ -64,21 +67,25 @@ function fakeAgentHost(name: string, started: Started[], options: {
   groupRelay?: RemoteAgentGroupRelayDeps;
   directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
   captureOwner?: () => unknown;
+  isOwnerCurrent?: (owner: unknown) => boolean;
   isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'];
   prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
   imageArtifacts?: Parameters<typeof createRemoteAgentHost>[0]['imageArtifacts'];
   /** 这台的 Agent 启动失败(启动前受邀者目录已经建好)。 */
   failStart?: boolean;
   beforeStart?: (input: HostedStartInput) => Promise<void>;
+  canSwitchLocalAccount?: (input: { providerId: string; hostSessionId: string; model: string }) => Promise<boolean>;
   /** 这台的 Agent 一启动就结束。 */
   endImmediately?: boolean;
   onSend?: (record: Started) => void | Promise<void>;
+    validateSendOptions?: AgentSessionHandle['validateSendOptions'];
   /** 转分享的同意(本机是分享者)。 */
   reshare?: Parameters<typeof createRemoteAgentHost>[0]['reshare'];
   resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
   modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
   bindGuestProviderRoute?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
+  log?: Parameters<typeof createRemoteAgentHost>[0]['log'];
 }) {
   return createRemoteAgentHost({
     ...(options.managedSkills ? { managedSkills: options.managedSkills } : {}),
@@ -115,7 +122,9 @@ function fakeAgentHost(name: string, started: Started[], options: {
         id: `sdk-${name}-${input.hostSessionId}`,
         agentKind: input.kind,
         model: input.options.model,
-        async send(message) {
+        validateSendOptions: options.validateSendOptions,
+        async send(message, opts) {
+          if (opts) options.validateSendOptions?.(opts);
           record.sends.push(message);
           await options.onSend?.(record);
         },
@@ -141,6 +150,7 @@ function fakeAgentHost(name: string, started: Started[], options: {
       return handle;
     },
     isControllerAuthorized: () => true,
+    ...(options.canSwitchLocalAccount ? { canSwitchLocalAccount: options.canSwitchLocalAccount } : {}),
     controllerTrust: options.trust,
     providerAccess: {
       resolve: options.resolveProvider ?? (async (_kind, _model, providerId) => providerId ?? 'shared-provider'),
@@ -154,8 +164,9 @@ function fakeAgentHost(name: string, started: Started[], options: {
     ...(options.groupRelay ? { groupRelay: options.groupRelay } : {}),
     ...(options.directGuestExecution ? { directGuestExecution: options.directGuestExecution } : {}),
     ...(options.reshare ? { reshare: options.reshare } : {}),
+    ...(options.log ? { log: options.log } : {}),
     captureOwner: options.captureOwner ?? (() => 'owner'),
-    isOwnerCurrent: () => true,
+    isOwnerCurrent: options.isOwnerCurrent ?? (() => true),
     runsRoot: path.join(root, name),
   });
 }
@@ -255,16 +266,22 @@ function setup(options: {
   switchWorthy?: (failure: RelayRunFailure) => boolean;
   /** mini 这台的 Agent 表现。 */
   mini?: { failStart?: boolean; endImmediately?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    validateSendOptions?: AgentSessionHandle['validateSendOptions'];
     isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
+    log?: Parameters<typeof createRemoteAgentHost>[0]['log'];
   memberBinder?: Parameters<typeof createRemoteAgentHost>[0]['bindGuestProviderRoute'];
   /** 组所在电脑本机的 Agent 表现(组选中本机这一台时)。 */
   owner?: { failStart?: boolean; onSend?: (record: Started) => void | Promise<void>;
+    beforeStart?: (input: HostedStartInput) => Promise<void>;
+    canSwitchLocalAccount?: (input: { providerId: string; hostSessionId: string; model: string }) => Promise<boolean>;
+    validateSendOptions?: AgentSessionHandle['validateSendOptions'];
     managedSkills?: Parameters<typeof createRemoteAgentHost>[0]['managedSkills'];
     resolveProvider?: NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>['resolve'];
     prepareImageEvent?: Parameters<typeof createRemoteAgentHost>[0]['prepareImageEvent'];
     modelAccess?: Partial<NonNullable<Parameters<typeof createRemoteAgentHost>[0]['providerAccess']>>;
     directGuestExecution?: Parameters<typeof createRemoteAgentHost>[0]['directGuestExecution'];
-    isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'] };
+    isAgentAvailable?: Parameters<typeof createRemoteAgentHost>[0]['isAgentAvailable'];
+    log?: Parameters<typeof createRemoteAgentHost>[0]['log'] };
   /** 截住组所在电脑发给组内电脑的请求(模拟回包丢失、应答慢)。 */
   intercept?: (agentDeviceId: string, request: Record<string, unknown>, forward: () => Promise<unknown>) => Promise<unknown>;
 } = {}) {
@@ -311,6 +328,7 @@ function setup(options: {
     trust: (controller) => (controller.startsWith('share-') || isProviderSharePeer(controller) ? 'guest' : 'owner'),
     purge: async () => undefined,
     groupRelay: relay,
+    ...(options.owner?.log ? { log: options.owner.log } : {}),
     ...options.owner,
   });
   return { owner, members, memberStarted, ownerStarted, relay };
@@ -330,7 +348,7 @@ function runId(): string {
   return `11111111-1111-4111-8111-${String(runSeq).padStart(12, '0')}`;
 }
 
-async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload: Record<string, unknown>) {
+async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload: Record<string, unknown>, observer?: Partial<RemoteAgentRunHandlers>) {
   const poller = new RemoteAgentPoller(async (args) => jsonRoundTrip(await env.owner.handle(guest, jsonRoundTrip(args[0]))));
   let counter = 0;
   /** 受邀者按顺序收到的事件与状态。 */
@@ -338,14 +356,17 @@ async function openAsGuest(env: ReturnType<typeof setup>, guest: string, payload
   const client = new RemoteAgentRunClient(runId(), poller, {
     onEvent: (event) => {
       stream.push({ t: 'event', event: event as AgentEvent });
+      observer?.onEvent?.(event);
     },
     onState: (state) => {
       stream.push({ t: 'state', state });
+      observer?.onState?.(state);
     },
     onRequest: async () => ({ type: 'callback', value: undefined }),
     onWs: () => undefined,
-    onClosed: (reason) => {
+    onClosed: (reason, error, idleReclaimed) => {
       closedReason = reason;
+      observer?.onClosed?.(reason, error, idleReclaimed);
     },
   }, () => `22222222-2222-4222-8222-${String(++counter + runSeq * 100).padStart(12, '0')}`);
   let closedReason: string | null = null;
@@ -366,6 +387,57 @@ function switchTokenIn(stream: Awaited<ReturnType<typeof openAsGuest>>['stream']
 }
 
 describe('provider group relay for shared users', () => {
+  // #9985 unit: G's real proxy must retain an unfinished M -> O -> G close.
+  // Existing relay tests only observed closed frames, not the consuming handle.
+  // An unfinished EOF also follows the existing group failure policy (§6.1).
+  // This fixture has no backup: check availability, retain the close, never replay.
+  it('delivers a member EOF to the unfinished guest turn even after an idle snapshot', async () => {
+    let interrupt = false;
+    const env = setup({
+      mini: { onSend: record => { record.running = true; } },
+      intercept: async (device, request, forward) => {
+        const result = await forward();
+        if (device !== 'mini' || request.op !== 'poll' || !interrupt) return result;
+        interrupt = false;
+        const data = Buffer.from(JSON.stringify({ t: 'state', state: { turnRunning: false } }) + '\n');
+        return { runs: (request.runs as Array<{ runId: string; cursor: number }>).map(run => ({
+          ...run, cursor: run.cursor + data.length, data: data.toString('base64'), done: true,
+        })) };
+      },
+    });
+    let controller: ReturnType<typeof createRemoteAgentHandle> | undefined;
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }), {
+      onEvent: event => controller?.onEvent(event),
+      onState: state => controller?.onState(state),
+      onClosed: (reason, error) => controller?.onClosed(reason, error?.message, guest.client.runId),
+    });
+    controller = createRemoteAgentHandle({
+      client: guest.client, started: parseStartedInfo(guest.started, 'claude-code'),
+      workspace: new ExecutorWorkspace({ workingDir: root }),
+      recordApproval() {}, newId: runId, dispose: async () => undefined,
+    });
+    try {
+      await controller.handle.send({ type: 'user', content: 'work once' });
+      interrupt = true;
+      env.memberStarted.mini[0].emit({ type: 'status', source: 'claude-code', data: { status: 'wake-poll' } });
+      const seen: AgentEvent[] = [];
+      for await (const event of controller.handle.events()) seen.push(event);
+      expect(seen.filter(event => event.type === 'error')).toEqual([expect.objectContaining({
+        data: expect.objectContaining({ reason: 'remote_agent_closed', remoteCloseReason: 'ended', remoteRunId: guest.client.runId }),
+      })]);
+      expect(guest.closedReason()).toBe('ended');
+      expect(env.memberStarted.mini[0].sends).toHaveLength(1);
+      expect(env.relay.plan).toHaveBeenCalledTimes(2);
+      expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
+      expect(env.relay.noteRunFailure.mock.calls[0][2]).toMatchObject({ reason: 'remote_agent_closed' });
+      expect(switchTokenIn(guest.stream)).toBeUndefined();
+    } finally {
+      await controller.handle.close({ reason: 'navigation' });
+      await env.owner.dispose();
+      await Promise.all(Object.values(env.members).map(member => member.dispose()));
+    }
+  });
+
   const signedOutProvider: ProviderView = {
     id: 'shared-provider', name: 'Shared', source: 'builtin', auth: { method: 'none' },
     connected: false, agents: ['claude-code'],
@@ -823,6 +895,15 @@ describe('provider group relay for shared users', () => {
 
     const none = setup({ plans: [{ kind: 'unavailable' }] });
     await expect(openAsGuest(none, GUEST_A, openPayload(SESSION))).rejects.toThrow(/REMOTE_AGENT_UNAVAILABLE/);
+
+    const unavailable = setup({ plans: [
+      { kind: 'unavailable', full: true },
+      { kind: 'unavailable', usageLimit: { resetAtMs: 1794978600000 } },
+    ] });
+    await expect(openAsGuest(unavailable, GUEST_A, openPayload(SESSION))).rejects.toThrow('[REMOTE_AGENT_GROUP_FULL]');
+    await expect(openAsGuest(unavailable, GUEST_B, openPayload(SESSION)))
+      .rejects.toThrow(/^\[REMOTE_AGENT_GROUP_USAGE_LIMIT\].*resets_at: 1794978600000$/);
+    expect(unavailable.ownerStarted).toHaveLength(0);
   });
 
   it('asks the computer to forget a removed shared user, and the computer clears only that user', async () => {
@@ -1081,6 +1162,406 @@ describe('provider group relay for shared users', () => {
       await host.abortAll();
       host.dispose();
     }
+  });
+
+  // Unit: real Host.handle(allocate) admission. Repeated identical allocation
+  // attempts used to fill the mutation budget behind a slow first attempt;
+  // revocation deduplication did not cover this path. No real model or timer.
+  it.each([false, true])('joins pending allocation retries without consuming other guests admission (failure=%s)', async failFirst => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const other = providerShareGuestPeer('share', 'member', 'other-guest');
+    const allocation = { deviceId: 'executor', generation: '11111111-1111-4111-8111-111111111111', leaseDurationMs: 60_000 };
+    let firstAttempt = true;
+    const allocate = vi.fn(async (controller: string) => {
+      if (controller === peer && firstAttempt) {
+        firstAttempt = false;
+        enter(); await gate;
+        if (failFirst) throw new Error('authorization unavailable');
+      }
+      return allocation;
+    });
+    const host = fakeAgentHost('allocate-queue', [], { trust: () => 'guest', directGuestExecution: {
+      ownerScope: () => 'owner', allocate, status() {}, release: async () => {},
+      switch: async () => ({}), usage() {}, delegate: async () => false, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => true,
+    } });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'codex', model: 'model' };
+    const head = Promise.allSettled([host.handle(peer, request)]);
+    let duplicates: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      duplicates = Promise.allSettled(Array.from({ length: 255 }, () => host.handle(peer, request)));
+      await expect(host.handle(other, request)).resolves.toEqual({ ...allocation, directStatusBatch: true });
+      release();
+      const results = [...await head, ...await duplicates];
+      expect(results.every(result => result.status === (failFirst ? 'rejected' : 'fulfilled'))).toBe(true);
+      if (!failFirst) expect(results.every(result => result.status === 'fulfilled'
+        && JSON.stringify(result.value) === JSON.stringify({ ...allocation, directStatusBatch: true }))).toBe(true);
+      expect(allocate).toHaveBeenCalledTimes(2);
+      // Only in-flight work joins. A failure or an expired successful lease
+      // cannot be kept as an authorization/result cache.
+      await expect(host.handle(peer, request)).resolves.toEqual({ ...allocation, directStatusBatch: true });
+      expect(allocate).toHaveBeenCalledTimes(3);
+    } finally { release(); await head; await duplicates; await host.dispose(); }
+  });
+
+  it('does not join an allocation across changed arguments, a revocation or an account change', async () => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const order: string[] = [];
+    let first = true;
+    let ownerScope = 'owner';
+    const host = fakeAgentHost('allocate-mutations', [], { trust: controller => controller === OWNER_DEVICE ? 'owner' : 'guest',
+      directGuestExecution: {
+        ownerScope: () => ownerScope,
+        allocate: async (_controller, request) => {
+          if (first) { first = false; enter(); await gate; }
+          order.push(`allocate:${request.model}`);
+          return null;
+        },
+        status() {}, release: async () => {}, switch: async () => ({}), usage() {}, forget: () => false,
+        delegate: async () => { order.push('revoke'); return false; },
+        sessionAllowed: () => true, sessionDelegated: () => true,
+      },
+    });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'codex', model: 'model' };
+    const head = host.handle(peer, request);
+    let waiting: Promise<unknown[]> | undefined;
+    try {
+      await entered;
+      waiting = Promise.all([
+        host.handle(peer, { ...request, model: 'other-model' }),
+        host.handle(peer, request),
+        host.handle(OWNER_DEVICE, { op: 'delegate', action: 'revoke', shareId: 'share', memberId: 'member',
+          guestDeviceId: 'guest', providerId: 'provider', model: 'model', sessionId: 'task',
+          generation: '11111111-1111-4111-8111-111111111111' }),
+        host.handle(peer, request),
+      ]);
+      release(); await head; await waiting;
+      expect(order).toEqual(['allocate:model', 'allocate:other-model', 'allocate:model', 'revoke', 'allocate:model']);
+      // A new owner scope must execute independently. Work queued under the
+      // old account must fail its original owner check rather than lend an ACK.
+      first = true;
+      const old = Promise.allSettled([host.handle(peer, request)]);
+      ownerScope = 'another-owner';
+      await expect(host.handle(peer, request)).resolves.toBeNull();
+      expect(await old).toEqual([expect.objectContaining({ status: 'rejected' })]);
+    } finally { release(); await head; await waiting; await host.dispose(); }
+  });
+
+  // Host.handle unit: a stable account key does not imply a current app-session
+  // generation. Existing account-change tests changed the key, hiding stale joins.
+  it.each(['allocate', 'revoke', 'forget'] as const)('does not join a queued %s from an older owner generation', async kind => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    let generation = 1;
+    const mutate = vi.fn();
+    const host = fakeAgentHost(`generation-${kind}`, [], {
+      trust: controller => controller === OWNER_DEVICE ? 'owner' : 'guest',
+      captureOwner: () => ({ generation }),
+      isOwnerCurrent: captured => (captured as { generation: number }).generation === generation,
+      directGuestExecution: {
+        ownerScope: () => 'same-account',
+        allocate: async (_controller, request) => {
+          if (request.model === 'blocked') { enter(); await gate; }
+          else mutate();
+          return null;
+        },
+        delegate: async () => { mutate(); return false; },
+        forget: () => { mutate(); return false; },
+        status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+        sessionAllowed: () => true, sessionDelegated: () => false,
+      },
+    });
+    const allocate = { op: 'allocate', sessionId: 'task', agentKind: 'claude-code', model: 'claude-opus' };
+    const request = kind === 'allocate' ? allocate : kind === 'revoke'
+      ? { op: 'delegate', action: 'revoke', shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+        sessionId: 'task', providerId: 'provider', model: 'claude-opus', generation: '11111111-1111-4111-8111-111111111111' }
+      : { op: 'forget', directGuest: { shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+        forgetId: '22222222-2222-4222-8222-222222222222', cleanupEpoch: 1 } };
+    const controller = kind === 'allocate' ? peer : OWNER_DEVICE;
+    const head = host.handle(peer, { ...allocate, model: 'blocked' });
+    let old: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    let current: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      old = Promise.allSettled([host.handle(controller, request)]);
+      generation += 1;
+      current = Promise.allSettled([host.handle(controller, request), host.handle(controller, request)]);
+      release(); await head;
+      expect(await old).toEqual([expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({
+        message: expect.stringContaining('direct guest account changed'),
+      }) })]);
+      expect((await current).map(result => result.status)).toEqual(['fulfilled', 'fulfilled']);
+      expect(mutate).toHaveBeenCalledTimes(1);
+      // After actual settlement the result is not an authorization cache.
+      await host.handle(controller, request);
+      expect(mutate).toHaveBeenCalledTimes(2);
+    } finally { release(); await head; await old; await current; await host.abortAll(); await host.dispose(); }
+  });
+
+  // A direct open must reserve its mutation boundary before its first await,
+  // including real uploaded-payload decoding. Earlier tests only interposed
+  // already-queued mutations and missed allocation -> preparing open -> retry.
+  it.each(['inline', 'uploaded', 'invalid-upload'] as const)('reserves a preparing %s open before another allocation', async mode => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const order: string[] = [];
+    let allocations = 0;
+    const host = fakeAgentHost(`allocate-open-${mode}`, [], { trust: () => 'guest', directGuestExecution: {
+      ownerScope: () => 'owner',
+      allocate: async () => {
+        const attempt = ++allocations;
+        if (attempt === 1) { enter(); await gate; }
+        order.push(`allocate:${attempt}`);
+        return null;
+      },
+      acceptDelegated: async () => { order.push('open'); },
+      status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+      delegate: async () => false, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => true,
+    } });
+    const uploadId = '33333333-3333-4333-8333-333333333333';
+    const input = openPayload('task');
+    const bytes = mode === 'invalid-upload' ? Buffer.from('invalid gzip') : gzipSync(Buffer.from(JSON.stringify(input)));
+    if (mode !== 'inline') await host.handle(peer, { op: 'upload', uploadId, index: 0, data: bytes.toString('base64') });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'claude-code', model: 'claude-opus' };
+    const head = host.handle(peer, request);
+    let opening: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    let next: Promise<unknown> | undefined;
+    try {
+      await entered;
+      opening = Promise.allSettled([host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: mode === 'inline' ? { json: input } : { uploadId, chunks: 1, bytes: bytes.length } })]);
+      next = host.handle(peer, request);
+      release(); await head; await next;
+      const [opened] = await opening;
+      expect(opened.status).toBe(mode === 'invalid-upload' ? 'rejected' : 'fulfilled');
+      expect(order).toEqual(mode === 'invalid-upload' ? ['allocate:1', 'allocate:2'] : ['allocate:1', 'open', 'allocate:2']);
+    } finally { release(); await head; await next; await opening; await host.abortAll(); await host.dispose(); }
+  });
+
+  it('keeps a decoded relay open out of the direct allocation critical section', async () => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const host = fakeAgentHost('allocate-relay-boundary', [], {
+      trust: () => 'guest',
+      resolveProvider: async () => { enter(); await gate; return 'shared-provider'; },
+      directGuestExecution: {
+        ownerScope: () => 'owner', allocate: async () => null, status() {}, release: async () => {},
+        switch: async () => ({}), usage() {}, delegate: async () => false, forget: () => false,
+        sessionAllowed: () => true, sessionDelegated: () => false,
+      },
+    });
+    const opening = host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+      payload: { json: openPayload('relay-task', { relay: relayKeyFor(GUEST_A) }) } });
+    try {
+      await entered;
+      await expect(host.handle(peer, { op: 'allocate', sessionId: 'direct-task', agentKind: 'claude-code', model: 'claude-opus' })).resolves.toBeNull();
+    } finally { release(); await opening; await host.abortAll(); await host.dispose(); }
+  });
+
+  // Host.handle unit: completed preparation failures must not remain charged
+  // behind a slow mutation. The single-invalid-open case only checked order
+  // after releasing the head, missing exhausted admission for another guest.
+  it.each(['gzip', 'json'] as const)('retires failed %s preparations while a prior mutation is still running', async mode => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const other = providerShareGuestPeer('share', 'member', 'other');
+    const host = fakeAgentHost(`failed-preparation-${mode}`, [], { trust: () => 'guest', directGuestExecution: {
+      ownerScope: () => 'owner',
+      allocate: async controller => { if (controller === peer) { enter(); await gate; } return null; },
+      status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+      delegate: async () => false, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => false,
+    } });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'claude-code', model: 'claude-opus' };
+    const head = host.handle(peer, request);
+    const uploadId = '33333333-3333-4333-8333-333333333333';
+    const bytes = mode === 'gzip' ? Buffer.from('invalid gzip') : gzipSync(Buffer.from('{'));
+    try {
+      await entered;
+      for (let i = 0; i < 255; i++) {
+        await host.handle(peer, { op: 'upload', uploadId, index: 0, data: bytes.toString('base64') });
+        await expect(host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+          payload: { uploadId, chunks: 1, bytes: bytes.length } })).rejects.toThrow();
+      }
+      await expect(host.handle(other, request)).resolves.toBeNull();
+    } finally { release(); await head; await host.abortAll(); await host.dispose(); }
+  });
+
+  // Host.handle unit: the relay bypass remains usable at capacity, but is still
+  // an allocation boundary. Previously only the non-full bypass was covered.
+  it('fences allocation receipts when a relay open bypasses the full direct queue', async () => {
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const peer = providerShareGuestPeer('share', 'member', 'guest');
+    const other = providerShareGuestPeer('share', 'member', 'other');
+    let first = true;
+    const allocate = vi.fn(async (controller: string) => {
+      if (first) { first = false; enter(); await gate; }
+      else if (controller === other) await gate;
+      return null;
+    });
+    const host = fakeAgentHost('full-relay-boundary', [], { trust: () => 'guest', directGuestExecution: {
+      ownerScope: () => 'owner', allocate, status() {}, release: async () => {}, switch: async () => ({}), usage() {},
+      delegate: async () => false, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => false,
+    } });
+    const request = { op: 'allocate', sessionId: 'task', agentKind: 'claude-code', model: 'claude-opus' };
+    const head = host.handle(peer, request);
+    let fillers: Promise<unknown[]> | undefined;
+    let later: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      // The distinct operations are real admitted work, not duplicate waiters.
+      fillers = Promise.all(Array.from({ length: 255 }, (_, i) => host.handle(other, { ...request, sessionId: `queued-${i}` })));
+      const uploadId = '33333333-3333-4333-8333-333333333333';
+      const bytes = Buffer.from('invalid gzip');
+      await host.handle(peer, { op: 'upload', uploadId, index: 0, data: bytes.toString('base64') });
+      // A refused reservation still owns observation of its late decode failure.
+      await expect(host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: { uploadId, chunks: 1, bytes: bytes.length } })).rejects.toThrow();
+      await host.handle(peer, { op: 'open', runId: runId(), agentKind: 'claude-code',
+        payload: { json: openPayload('relay-task', { relay: relayKeyFor(GUEST_A) }) } });
+      later = Promise.allSettled([host.handle(peer, request)]);
+      release(); await head; await fillers;
+      expect(await later).toEqual([expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({
+        message: expect.stringContaining('too many pending shared task operations'),
+      }) })]);
+      await expect(host.handle(peer, request)).resolves.toBeNull();
+      expect(allocate).toHaveBeenCalledTimes(257);
+    } finally { release(); await head; await fillers; await later; await host.abortAll(); await host.dispose(); }
+  });
+
+  it.each(['direct-release', 'direct-switch', 'standby-prepare'] as const)(
+    'does not borrow an allocation receipt across a service-serialized %s', async op => {
+      let enter!: () => void;
+      let release!: () => void;
+      const entered = new Promise<void>(resolve => { enter = resolve; });
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const peer = providerShareGuestPeer('share', 'member', 'guest');
+      let first = true;
+      const allocate = vi.fn(async () => { if (first) { first = false; enter(); await gate; } return null; });
+      const host = fakeAgentHost(`allocate-${op}`, [], { trust: () => 'guest', directGuestExecution: {
+        ownerScope: () => 'owner', allocate, status() {}, release: async () => {},
+        switch: async () => ({}), usage() {}, delegate: async () => false, forget: () => false,
+        sessionAllowed: () => true, sessionDelegated: () => false,
+      } });
+      const request = { op: 'allocate', sessionId: '22222222-2222-4222-8222-222222222222', agentKind: 'codex', model: 'model' };
+      const head = host.handle(peer, request);
+      let waiting: Promise<unknown[]> | undefined;
+      try {
+        await entered;
+        waiting = Promise.all([
+          host.handle(peer, { ...request, op, generation: '11111111-1111-4111-8111-111111111111' }),
+          host.handle(peer, request),
+        ]);
+        release(); await head; await waiting;
+        expect(allocate).toHaveBeenCalledTimes(op === 'standby-prepare' ? 3 : 2);
+      } finally { release(); await head; await waiting; await host.dispose(); }
+    });
+
+  // Unit, #12552: real Host.handle(delegate) queue admission. Existing forget
+  // deduplication missed repeated revokes while native cleanup was pending;
+  // 256 copies could consume the shared mutation budget and refuse another peer.
+  it.each([false, true])('coalesces pending revocation retries without consuming other peers admission (failure=%s)', async failFirst => {
+    let release!: () => void;
+    let enter!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let firstAttempt = true;
+    const delegate = vi.fn(async (_owner: string, request: { sessionId: string }) => {
+      if (request.sessionId === 'blocked' && firstAttempt) {
+        firstAttempt = false;
+        enter(); await gate;
+        if (failFirst) throw new Error('native cleanup failed');
+      }
+      return false;
+    });
+    const host = fakeAgentHost('revoke-queue', [], { trust: () => 'owner', directGuestExecution: {
+      ownerScope: () => 'owner', allocate: async () => null, status() {}, release: async () => {},
+      switch: async () => ({}), usage() {}, delegate, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => true,
+    } });
+    const revoke = { op: 'delegate', action: 'revoke', shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+      providerId: 'provider', model: 'model', sessionId: 'blocked', generation: '11111111-1111-4111-8111-111111111111' };
+    const first = host.handle(OWNER_DEVICE, revoke);
+    const firstResult = Promise.allSettled([first]);
+    let duplicates: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      duplicates = Promise.allSettled(Array.from({ length: 255 }, () => host.handle(OWNER_DEVICE, revoke)));
+      await expect(host.handle(OWNER_DEVICE, { ...revoke, guestDeviceId: 'other-guest', sessionId: 'other-task' })).resolves.toEqual({});
+      release();
+      const results = [...await firstResult, ...await duplicates];
+      expect(results.every(result => result.status === (failFirst ? 'rejected' : 'fulfilled'))).toBe(true);
+      expect(delegate).toHaveBeenCalledTimes(2);
+      // A failed close must remain retryable; dedupe lasts only while pending.
+      await expect(host.handle(OWNER_DEVICE, revoke)).resolves.toEqual({});
+      expect(delegate).toHaveBeenCalledTimes(3);
+    } finally { release(); await firstResult; await duplicates; await host.dispose(); }
+  });
+
+  it('keeps later revocations behind a grant and never shares another owners acknowledgment', async () => {
+    let release!: () => void;
+    let enter!: () => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const leases = new Set(['blocked']);
+    let first = true;
+    const host = fakeAgentHost('revoke-grant-queue', [], { trust: () => 'owner', directGuestExecution: {
+      ownerScope: () => 'owner', allocate: async () => null, status() {}, release: async () => {},
+      switch: async () => ({}), usage() {}, forget: () => false,
+      sessionAllowed: () => true, sessionDelegated: () => true,
+      delegate: async (owner, request) => {
+        if (owner !== OWNER_DEVICE) throw new Error('foreign owner');
+        if (first) { first = false; enter(); await gate; }
+        if (request.action === 'revoke') leases.delete(request.sessionId);
+        else leases.add(request.sessionId);
+        return false;
+      },
+    } });
+    const request = { op: 'delegate', action: 'revoke', shareId: 'share', memberId: 'member', guestDeviceId: 'guest',
+      providerId: 'provider', model: 'model', sessionId: 'blocked', generation: '11111111-1111-4111-8111-111111111111' };
+    const head = host.handle(OWNER_DEVICE, request);
+    let result: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await entered;
+      result = Promise.allSettled([
+        host.handle(OWNER_DEVICE, { ...request, action: 'grant' }),
+        host.handle(OWNER_DEVICE, request),
+        host.handle('other-owner', request),
+      ]);
+      release();
+      await head;
+      expect(await result).toEqual([
+        { status: 'fulfilled', value: {} }, { status: 'fulfilled', value: {} },
+        expect.objectContaining({ status: 'rejected', reason: expect.objectContaining({ message: 'foreign owner' }) }),
+      ]);
+      expect(leases.size).toBe(0);
+    } finally { release(); await head; await result; await host.dispose(); }
   });
 
   // Host.handle regression (unit): sequential forget coverage missed F1/F2
@@ -1674,16 +2155,52 @@ describe('provider group relay: starting, load and cleanup', () => {
 });
 
 describe('provider group "switch to another computer" for shared users', () => {
+  // Unit, direct-execution §7: an owner-verified account replacement may keep M
+  // once, with a fresh isolated native session. Empty exclusions are a valid
+  // token, not a missing token; it must still retire the old durable direct pin.
+  it('accepts an account-handoff token with no excluded machines once per round', async () => {
+    const switched = vi.fn(async () => true).mockResolvedValueOnce(false);
+    const env = setup({ owner: { directGuestExecution: { switched, ownerScope: () => 'owner',
+      sessionAllowed: () => true, sessionDelegated: () => false } as never } });
+    const guest = providerShareGuestPeer('share', 'member', 'laptop');
+    const excluded = new Set([MEMBER_MINI.memberKey]);
+    const token = env.owner.issueDirectGroupSwitchToken(guest, SESSION, excluded, true);
+    expect(token).toBeTruthy();
+    expect(env.owner.issueDirectGroupSwitchToken(guest, SESSION, excluded, true)).toBeNull();
+    const payload = (groupSwitchToken: string) => openPayload(SESSION, {
+      acceptsGroupSwitch: true, groupSwitchToken, requireGroupSwitchToken: true,
+    });
+    await expect(openAsGuest(env, guest, payload('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')))
+      .rejects.toThrow('standby task handoff has expired or is no longer authorized');
+    expect(switched).not.toHaveBeenCalled();
+    await expect(openAsGuest(env, guest, payload(token!))).rejects.toThrow('standby task handoff could not be confirmed');
+    expect(env.relay.plan).not.toHaveBeenCalled();
+    const opened = await openAsGuest(env, guest, payload(token!));
+    try {
+      expect(switched).toHaveBeenCalledWith(guest, SESSION, token);
+      expect(env.relay.plan).toHaveBeenCalledWith(expect.objectContaining({ exclude: new Set() }));
+      expect(env.memberStarted.mini[0].input.options.resumeSessionId).toBeUndefined();
+      const next = env.owner.issueDirectGroupSwitchToken(guest, SESSION, excluded);
+      expect(next).toBeTruthy();
+    } finally {
+      await opened.client.close('close', 'navigation');
+      for (const host of [env.owner, ...Object.values(env.members)]) { await host.abortAll(); host.dispose(); }
+    }
+  });
   // provider-groups.md §6.1, unit: exercise the real host, relay and run client.
   // Existing cases emitted a terminal event independently of send(), missing the
   // quota RPC rejection that could overtake the switch offer and lose recovery.
-  // Cover local/relayed execution and both native-event orders; one failure must
+  // Cover quota/auth, local/relayed execution and both native-event orders; one failure must
   // produce one offer/error before rejecting send, then one send on the new host.
-  it.each(['local', 'member'] as const)('settles quota replies through one switch offer on %s', async placement => {
+  it.each((['local', 'member'] as const).flatMap(placement => (['quota', 'auth'] as const).map(cause => ({ placement, cause }))))(
+    'settles $cause replies through one switch offer on $placement', async ({ placement, cause }) => {
+    const rejection = cause === 'quota' ? 'You have hit your usage limit' : '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The task subscription account requires login';
+    const terminal: AgentEvent = cause === 'quota' ? USAGE_LIMIT_ERROR
+      : { type: 'error', data: { message: rejection, sdkError: 'authentication_failed', errorStatus: 401, isTerminal: true } } as AgentEvent;
     for (const eventFirst of [true, false]) {
       const onSend = (record: Started) => {
-        if (eventFirst) record.emit(USAGE_LIMIT_ERROR);
-        throw new Error('You have hit your usage limit');
+        if (eventFirst) record.emit(terminal);
+        throw new Error(rejection);
       };
       const env = setup({
         plans: [
@@ -1697,16 +2214,17 @@ describe('provider group "switch to another computer" for shared users', () => {
       const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
       try {
         await expect(first.client.call('send', [{ type: 'user', content: 'finish the task' }, { throwOnStartFailure: true }]))
-          .rejects.toThrow('usage limit');
+          .rejects.toThrow(rejection);
         const token = switchTokenIn(first.stream);
         expect(token).toBeDefined();
         const errors = () => first.stream.filter(item => item.t === 'event' && item.event.type === 'error');
         expect(errors()).toHaveLength(1);
+        if (cause === 'auth') expect((errors()[0] as { event: AgentEvent }).event.data).not.toHaveProperty('usageLimit', true);
         expect(first.stream.findIndex(item => item.t === 'state' && item.state.providerGroupSwitch === token))
           .toBeLessThan(first.stream.findIndex(item => item.t === 'event' && item.event.type === 'error'));
 
         // A late or repeated SDK terminal must not offer another switch or resume.
-        record.emit(USAGE_LIMIT_ERROR);
+        record.emit(terminal);
         record.emit({ type: 'status', source: 'claude-code', data: { status: 'quota-tail-flushed' } });
         await waitFor(() => first.stream.some(item => item.t === 'event'
           && (item.event.data as { status?: string })?.status === 'quota-tail-flushed'));
@@ -1732,12 +2250,151 @@ describe('provider group "switch to another computer" for shared users', () => {
     }
   });
 
-  it('does not turn an uncertain send timeout into a quota event or switch offer', async () => {
-    const env = setup({ mini: { onSend: () => { throw new Error('request timed out'); } } });
+  it.each((['local', 'member'] as const).flatMap(placement =>
+    (['permission-policy', 'plain-preflight'] as const).flatMap(mode =>
+      (['eof', 'retry'] as const).flatMap(ending =>
+        [false, true].map(priorLive => ({ placement, mode, ending, priorLive }))))))(
+    'settles a native validation refusal before dispatch on $placement ($mode, $ending, prior=$priorLive)', async ({ placement, mode, ending, priorLive }) => {
+      let reject = !priorLive;
+      const refusal = mode === 'permission-policy'
+        ? new TurnPermissionPolicyUnsupportedError('claude-code', 'bypassPermissions')
+        : new Error('Host text-only turns require a local Claude runtime with execution hooks.');
+      const validateSendOptions = () => { if (reject) throw refusal; };
+      const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO }], owner: { validateSendOptions }, mini: { validateSendOptions },
+        switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+      const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      try {
+        if (priorLive) {
+          await guest.client.call('send', [{ content: 'prior live turn', attachments: [] }, {}]);
+          record.emit({ type: 'text', source: 'claude-code', data: { text: 'prior progress' } } as AgentEvent);
+          await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+          record.running = false;
+          reject = true;
+        }
+        const error = await guest.client.call('send', [{ content: 'invalid', attachments: [] }, {}]).catch(error => error);
+        expect(error).toMatchObject({ message: refusal.message });
+        expect(record.sends).toHaveLength(priorLive ? 1 : 0);
+        if (ending === 'retry') {
+          reject = false;
+          await guest.client.call('send', [{ content: 'valid retry', attachments: [] }, {}]);
+          record.emit({ type: 'done', source: 'claude-code', data: {} } as AgentEvent);
+          await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+        }
+        record.end();
+        await waitFor(() => guest.isClosed());
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(priorLive ? 1 : 0);
+        expect(switchTokenIn(guest.stream) !== undefined).toBe(priorLive);
+        expect(record.sends).toHaveLength((priorLive ? 1 : 0) + (ending === 'retry' ? 1 : 0));
+        expect(error).toMatchObject({ info: { code: 'TURN_DISPATCH_REJECTED' } });
+      } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+    });
+
+  it.each((['local', 'member'] as const).flatMap(placement =>
+    (['old-done', 'old-done-progress', 'stop', 'new-send'] as const).map(mode => ({ placement, mode }))))(
+    'uses the evolved old owner after a refused $placement send ($mode)', async ({ placement, mode }) => {
+      let entered!: () => void;
+      const enteredSend = new Promise<void>(resolve => { entered = resolve; });
+      let release!: () => void;
+      const released = new Promise<void>(resolve => { release = resolve; });
+      const onSend = async (record: Started) => {
+        if (record.sends.length === 2) {
+          entered();
+          await released;
+          throw new TurnDispatchRejectedError('not dispatched');
+        }
+      };
+      const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO }], owner: { onSend }, mini: { onSend },
+        switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+      const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      try {
+        await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+        record.emit({ type: 'text', source: 'claude-code', data: { text: 'first progress' } } as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+        const refused = guest.client.call('send', [{ content: 'refused', attachments: [] }, {}]).catch(error => error);
+        await enteredSend;
+        if (mode === 'old-done' || mode === 'old-done-progress') {
+          record.emit({ type: 'done', source: 'claude-code', data: {} } as AgentEvent);
+          await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+          if (mode === 'old-done-progress') {
+            record.emit({ type: 'text', source: 'claude-code', data: { text: 'automatic progress' } } as AgentEvent);
+            await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'
+              && (item.event.data as { text?: string }).text === 'automatic progress'));
+          }
+        } else {
+          await guest.client.call('abort', []);
+          if (mode === 'new-send') await guest.client.call('send', [{ content: 'new owner', attachments: [] }, {}]);
+        }
+        release();
+        expect(await refused).toBeInstanceOf(Error);
+        record.end();
+        await waitFor(() => guest.isClosed());
+        const unfinished = mode === 'old-done-progress' || mode === 'new-send';
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(unfinished ? 1 : 0);
+        expect(switchTokenIn(guest.stream) !== undefined).toBe(unfinished);
+        expect(record.sends).toHaveLength(mode === 'new-send' ? 3 : 2);
+        expect(env.memberStarted.studio).toHaveLength(0);
+      } finally { release(); await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+    });
+
+  it.each((['local', 'member'] as const).flatMap(placement =>
+    (['unconfirmed', 'timeout', 'terminal-before-reject', 'stop-before-reject', 'definite-rejected', 'preflight-rejected'] as const)
+      .map(mode => ({ placement, mode }))))(
+    'preserves dispatch uncertainty until a real ending on $placement ($mode)', async ({ placement, mode }) => {
+      let allowed = true;
+      let doneSeen = () => false;
+      let release!: () => void;
+      const released = new Promise<void>(resolve => { release = resolve; });
+      const onSend = async (record: Started) => {
+        if (mode === 'terminal-before-reject') {
+          record.emit({ type: 'done', source: 'codex', data: {} } as AgentEvent);
+          await waitFor(doneSeen);
+        }
+        if (mode === 'stop-before-reject') await released;
+        if (mode === 'definite-rejected') {
+          record.running = false;
+          throw new TurnDispatchRejectedError('not dispatched');
+        }
+        if (mode === 'unconfirmed') throw new TurnDispatchUnconfirmedError('acceptance unknown');
+        throw new Error('post-dispatch timeout');
+      };
+      const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO }], owner: { onSend, modelAccess: { isAllowed: () => allowed } }, mini: { onSend },
+        switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+      const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      doneSeen = () => guest.stream.some(item => item.t === 'event' && item.event.type === 'done');
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      try {
+        if (mode === 'preflight-rejected') allowed = false;
+        const sending = guest.client.call('send', [{ content: 'first', attachments: [] }, {}]).catch(error => error);
+        if (mode === 'stop-before-reject') {
+          await waitFor(() => record.sends.length === 1);
+          await guest.client.call('abort', []);
+          release();
+        }
+        expect(await sending).toBeInstanceOf(Error);
+        expect(switchTokenIn(guest.stream)).toBeUndefined();
+        expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+        record.end();
+        await waitFor(() => guest.isClosed());
+        const unfinished = mode === 'unconfirmed' || mode === 'timeout';
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(unfinished ? 1 : 0);
+        if (unfinished) expect(env.relay.noteRunFailure.mock.calls[0][2]).toMatchObject({ reason: 'remote_agent_closed' });
+        expect(switchTokenIn(guest.stream) !== undefined).toBe(unfinished);
+        expect(record.sends).toHaveLength(mode === 'preflight-rejected' ? 0 : 1);
+        expect(env.memberStarted.studio).toHaveLength(0);
+      } finally { release(); await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+    });
+
+  it.each(['request timed out', 'not authenticated'] as const)('does not turn an uncertain send rejection into an account event or switch offer: %s', async rejection => {
+    const env = setup({ mini: { onSend: () => { throw new Error(rejection); } } });
     const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
     try {
       await expect(first.client.call('send', [{ type: 'user', content: 'finish the task' }, {}]))
-        .rejects.toThrow('request timed out');
+        .rejects.toThrow(rejection);
       expect(switchTokenIn(first.stream)).toBeUndefined();
       expect(first.stream.some(item => item.t === 'event' && item.event.type === 'error')).toBe(false);
       expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
@@ -1920,6 +2577,42 @@ describe('provider group "switch to another computer" for shared users', () => {
     await reopened.client.close('close', 'navigation');
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：真实 Host → relay → guest 事件流；失败时日志能说明稳定错误码和凭证是否发出。
+  // - Bug／规则依据：任务 A 的远程换号诊断；现场只有 start-failed，无法判断是否收到换号凭证。
+  // - 现有覆盖缺口：相邻用例只断言事件顺序和凭证值，不检查结构化日志或敏感字段边界。
+  // - 最小失败输入：一台组内电脑产生一次 usage-limit 终态并有可用替代电脑。
+  // - tier：unit；单进程 fake transport 仍走生产 Host/relay 入口。
+  it('records a stable switch decision without token or account details', async () => {
+    const logs: Array<{ message: string; meta?: Record<string, unknown> }> = [];
+    const env = setup({
+      plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }],
+      owner: { log: {
+        debug: () => undefined,
+        info: (message, meta) => logs.push({ message, meta }),
+        warn: (message, meta) => logs.push({ message, meta }),
+      } },
+    });
+    const task = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      // Pi puts the upstream error text into sdkError; it must not reach the decision log.
+      env.memberStarted.mini[0].emit({ type: 'error', data: { message: 'You have hit your usage limit', isTerminal: true,
+        usageLimit: true, sdkError: 'upstream body quoting private-notes.md from the chat' } } as AgentEvent);
+      await waitFor(() => switchTokenIn(task.stream) !== undefined);
+      const decision = logs.find(item => item.message === 'remote agent group switch decision');
+      expect(decision?.meta).toMatchObject({ cause: 'usage-limit', outcome: 'issued', reason: 'replacement-available' });
+      const serialized = JSON.stringify(logs);
+      expect(serialized).not.toContain('usage limit');
+      expect(serialized).not.toContain('providerId');
+      expect(serialized).not.toContain('token');
+      expect(serialized).not.toContain('private-notes');
+    } finally {
+      await task.client.close('close', 'navigation');
+      await env.owner.dispose();
+      await Promise.all(Object.values(env.members).map(member => member.dispose()));
+    }
+  });
+
   it.each([
     { code: 'REMOTE_AGENT_UNAVAILABLE', autoSwitch: true, offersSwitch: true },
     { code: 'INVALID_PARAMS', autoSwitch: true, offersSwitch: false },
@@ -1957,6 +2650,125 @@ describe('provider group "switch to another computer" for shared users', () => {
     expect(env.relay.plan).toHaveBeenCalledTimes(offersSwitch ? 2 : 1);
     if (offersSwitch) {
       expect(env.relay.plan).toHaveBeenLastCalledWith(expect.objectContaining({ exclude: new Set([MEMBER_MINI.memberKey]) }));
+    }
+  });
+
+  // Unit regression: A was shared before B joined its pool. Resuming A's exhausted
+  // account must offer a context handoff within A, even without a computer group.
+  // Existing startup tests only offered another computer, missing a pool on O itself.
+  it.each(['available', 'no-spare', 'revoked', 'unconfirmed'] as const)('recovers an old shared task within its local account pool: %s', async mode => {
+    let exhausted = false;
+    let allowed = true;
+    const probe = vi.fn(async () => {
+      if (mode === 'revoked') allowed = false;
+      return mode !== 'no-spare';
+    });
+    const env = setup({ owner: {
+      canSwitchLocalAccount: probe,
+      modelAccess: { isAllowed: () => allowed },
+      beforeStart: async input => {
+        if (exhausted && input.options.resumeSessionId) {
+          const error = new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] quota exhausted');
+          throw mode === 'unconfirmed' ? error : new AgentStartupStoppedError(error);
+        }
+      },
+    } });
+    // No computer group: ordinary shared provider A now contains several accounts.
+    env.relay.plan.mockResolvedValue(null);
+    env.relay.noteStartFailure.mockReturnValue(false);
+    try {
+      const first = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      const nativeId = first.started.id as string;
+      await first.client.close('close', 'navigation');
+      exhausted = true;
+      const states: Record<string, unknown>[] = [];
+      await expect(openAsGuest(env, GUEST_A, openPayload(SESSION, {
+        acceptsGroupSwitch: true, options: { resumeSessionId: nativeId },
+      }), { onState: state => { states.push(state); } })).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+      const token = states.map(state => state.providerGroupSwitch).find(Boolean);
+      expect(!!token).toBe(mode === 'available');
+      if (mode === 'unconfirmed') expect(probe).not.toHaveBeenCalled();
+      else expect(probe).toHaveBeenCalledWith({ providerId: 'shared-provider',
+        hostSessionId: hostSessionIdFor(GUEST_A, SESSION), model: 'claude-opus' });
+      if (mode === 'available') {
+        const fresh = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true, groupSwitchToken: token }));
+        expect(env.ownerStarted.at(-1)!.input.options.resumeSessionId).toBeUndefined();
+        await fresh.client.close('close', 'navigation');
+        // Do not loop on the same account pool if the replacement also fails.
+        const again: Record<string, unknown>[] = [];
+        await expect(openAsGuest(env, GUEST_A, openPayload(SESSION, {
+          acceptsGroupSwitch: true, options: { resumeSessionId: nativeId },
+        }), { onState: state => { again.push(state); } })).rejects.toThrow('SUBSCRIPTION_ACCOUNT_LIMITED');
+        expect(again.some(state => state.providerGroupSwitch)).toBe(false);
+        expect(probe).toHaveBeenCalledTimes(1);
+      }
+    } finally {
+      await env.owner.dispose();
+      await Promise.all(Object.values(env.members).map(member => member.dispose()));
+    }
+  });
+
+  // Self-review regression: the new asynchronous local probe can outlive an abort
+  // or replacement send. Its late result must neither issue a token nor consume
+  // the replacement turn's one local handoff. Earlier cases only revoked access.
+  it.each(['abort', 'new-send', 'model-change'] as const)('discards a stale local-pool probe after %s', async action => {
+    let entered!: () => void;
+    const probing = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const pendingProbe = new Promise<void>(resolve => { release = resolve; });
+    const probe = vi.fn(async () => true).mockImplementationOnce(async () => {
+      entered();
+      await pendingProbe;
+      return true;
+    });
+    const env = setup({ owner: {
+      canSwitchLocalAccount: probe,
+      onSend: record => { if (record.sends.length === 1) throw new Error('You have hit your usage limit'); },
+    } });
+    env.relay.plan.mockResolvedValue(null);
+    env.relay.noteRunFailure.mockReturnValue(false);
+    const task = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    const obsolete = task.client.call('send', [{ content: 'old input', attachments: [] }, {}]).catch(error => error);
+    try {
+      await probing;
+      if (action === 'model-change') await task.client.call('setModel', ['another-model']);
+      else await task.client.call('abort', []);
+      if (action === 'new-send')
+        await task.client.call('send', [{ content: 'replacement input', attachments: [] }, { groupNewRound: true }]);
+      release();
+      await obsolete;
+      expect(switchTokenIn(task.stream)).toBeUndefined();
+      if (action === 'new-send') {
+        env.ownerStarted[0].emit({ type: 'text', source: 'claude-code', data: { text: 'replacement turn progress' } } as AgentEvent);
+        env.ownerStarted[0].emit(USAGE_LIMIT_ERROR);
+        await waitFor(() => task.stream.some(item => item.t === 'event' && item.event.type === 'error'));
+        expect(switchTokenIn(task.stream)).toBeTruthy();
+        expect(probe).toHaveBeenCalledTimes(2);
+      }
+    } finally {
+      release();
+      await task.client.close('close', 'navigation');
+      await env.owner.dispose();
+      await Promise.all(Object.values(env.members).map(member => member.dispose()));
+    }
+  });
+
+  it('offers the same local-pool handoff after a shared turn reaches its usage limit', async () => {
+    const env = setup({ owner: { canSwitchLocalAccount: async () => true } });
+    env.relay.plan.mockResolvedValue(null);
+    env.relay.noteRunFailure.mockReturnValue(false);
+    try {
+      const task = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      await task.client.call('send', [{ content: 'continue', attachments: [] }, {}]);
+      env.ownerStarted[0].emit(USAGE_LIMIT_ERROR);
+      await waitFor(() => task.stream.some(item => item.t === 'event' && item.event.type === 'error'));
+      expect(switchTokenIn(task.stream)).toBeTruthy();
+      // The other account is healthy: do not cool the entire local member.
+      expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+      await task.client.close('close', 'navigation');
+    } finally {
+      await env.owner.dispose();
+      await Promise.all(Object.values(env.members).map(member => member.dispose()));
     }
   });
 
@@ -2067,13 +2879,19 @@ describe('provider group "switch to another computer" for shared users', () => {
     await reopened.client.close('close', 'navigation');
   });
 
-  it('offers another computer when the agent on the group computer itself ends in the middle of a turn', async () => {
+  it.each([false, true])('offers another computer when the local group agent ends mid-turn (idle snapshot=%s)', async idle => {
     const env = setup({ plans: [{ kind: 'local' }, { kind: 'member', ...MEMBER_MINI }] });
     const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
     const record = env.ownerStarted[0];
     record.running = true;
     record.emit({ type: 'text', data: { text: 'working' } } as AgentEvent);
     await waitFor(() => guest.stream.some((item) => item.t === 'state' && item.state.turnRunning === true));
+    if (idle) {
+      const beforeIdle = guest.stream.length;
+      record.running = false;
+      record.emit({ type: 'status', data: {} } as AgentEvent);
+      await waitFor(() => guest.stream.slice(beforeIdle).some(item => item.t === 'state' && item.state.turnRunning === false));
+    }
     // 本机的 Agent 进程退出：事件流没有 done 就结束了。
     record.end();
     await waitFor(() => guest.isClosed());
@@ -2104,6 +2922,356 @@ describe('provider group "switch to another computer" for shared users', () => {
       expect.objectContaining({ reason: 'remote_agent_closed' }),
       'claude-opus',
     );
+  });
+
+  // A transport EOF is not a product terminal, even if its last snapshot is idle.
+  it.each([
+    { reason: 'ended', idle: false }, { reason: 'ended', idle: true },
+    { reason: 'closed', idle: true }, { reason: 'detached', idle: true },
+  ] as const)('offers recovery for an unfinished ended stream ($reason, idle snapshot=$idle)', async ({ reason, idle }) => {
+    let memberRunId = '';
+    const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }],
+      intercept: async (_device, request, forward) => {
+        if (request.op === 'open' && !memberRunId) memberRunId = request.runId as string;
+        return forward();
+      },
+    });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    const healthy = await openAsGuest(env, GUEST_B, openPayload('healthy-task'));
+    try {
+      await healthy.client.call('send', [{ content: 'healthy work', attachments: [] }, {}]);
+      await guest.client.call('send', [{ content: 'work', attachments: [] }, {}]);
+      const record = env.memberStarted.mini[0];
+      record.running = true;
+      record.emit({ type: 'text', data: { text: 'working' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'state' && item.state.turnRunning === true));
+      if (idle) {
+        const beforeIdle = guest.stream.length;
+        record.running = false;
+        record.emit({ type: 'status', data: {} } as AgentEvent);
+        await waitFor(() => guest.stream.slice(beforeIdle).some(item => item.t === 'state' && item.state.turnRunning === false));
+      }
+      if (reason === 'ended') record.end();
+      else await env.members.mini.handle(OWNER_DEVICE, { op: 'close', runId: memberRunId,
+        mode: reason === 'detached' ? 'detach' : 'close', reason: 'navigation' });
+      await waitFor(() => guest.isClosed());
+      expect(guest.closedReason()).toBe(reason);
+      expect(switchTokenIn(guest.stream)).toBeDefined();
+      expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
+      expect(env.relay.noteRunFailure).toHaveBeenCalledWith('shared-provider', MEMBER_MINI,
+        expect.objectContaining({ reason: 'remote_agent_closed' }), 'claude-opus');
+      expect(record.sends).toHaveLength(1);
+      expect(env.memberStarted.studio).toHaveLength(0);
+      expect(healthy.isClosed()).toBe(false);
+      await healthy.client.call('send', [{ content: 'still usable', attachments: [] }, {}]);
+      expect(env.memberStarted.mini[1].sends).toHaveLength(2);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it.each((['local', 'member'] as const).flatMap(placement =>
+    (['text-tail', 'tool-tail', 'new-send', 'automatic-turn'] as const).map(mode => ({ placement, mode }))))(
+    'preserves cancellation while draining $placement $mode', async ({ placement, mode }) => {
+      const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO }] });
+      const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      try {
+        await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+        const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+        await guest.client.call('abort', []);
+        const tail = mode === 'tool-tail'
+          ? { type: 'tool_use', source: 'claude-code', data: { id: 'late-tool', name: 'late-tool', input: {} } }
+          : { type: 'text', source: 'claude-code', data: { text: 'late cancellation tail' } };
+        record.emit(tail as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event'
+          && (item.event.data as { text?: string; id?: string })?.[mode === 'tool-tail' ? 'id' : 'text']
+            === (mode === 'tool-tail' ? 'late-tool' : 'late cancellation tail')));
+        if (mode === 'new-send') await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+        if (mode === 'automatic-turn') {
+          record.emit({ type: 'done', source: 'claude-code', data: { status: 'cancelled' } } as AgentEvent);
+          record.emit({ type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } } as AgentEvent);
+          await waitFor(() => guest.stream.some(item => item.t === 'event'
+            && (item.event.data as { providerInitiatedTurn?: boolean })?.providerInitiatedTurn));
+        }
+        record.end();
+        await waitFor(() => guest.isClosed());
+        const unfinished = mode === 'new-send' || mode === 'automatic-turn';
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(unfinished ? 1 : 0);
+        expect(switchTokenIn(guest.stream) !== undefined).toBe(unfinished);
+        expect(record.sends).toHaveLength(mode === 'new-send' ? 2 : 1);
+      } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+    });
+
+  it.each((['local', 'member'] as const).flatMap(placement =>
+    (['codex', 'claude-code'] as const).flatMap(source =>
+      (['eof', 'product-done', 'stop'] as const).map(ending => ({ placement, source, ending })))))(
+    'keeps a claimed SDK boundary nonterminal on $placement ($source, $ending)', async ({ placement, source, ending }) => {
+      const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO }], switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+      const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      try {
+        await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+        const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+        record.emit({ type: 'text', source, data: { text: 'foreground progress' } } as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+        if (ending === 'stop') await guest.client.call('abort', []);
+        record.emit({ type: 'status', source, turnContinuationId: 7, data: { isRunning: false } } as AgentEvent);
+        record.emit({ type: 'done', source, turnContinuationId: 7, data: {} } as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+        if (ending === 'product-done') {
+          record.emit({ type: 'done', source, data: {} } as AgentEvent);
+          await waitFor(() => guest.stream.filter(item => item.t === 'event' && item.event.type === 'done').length === 2);
+        }
+        record.end();
+        await waitFor(() => guest.isClosed());
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(ending === 'eof' ? 1 : 0);
+        if (ending === 'eof') expect(env.relay.noteRunFailure.mock.calls[0][2]).toMatchObject({ reason: 'remote_agent_closed' });
+        expect(switchTokenIn(guest.stream) !== undefined).toBe(ending === 'eof');
+        expect(record.sends).toHaveLength(1);
+      } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+    });
+
+  it.each(['local', 'member'] as const)('keeps a prior done from settling a new %s send', async placement => {
+    const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+      { kind: 'member', ...MEMBER_STUDIO }] });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      record.emit({ type: 'text', source: 'claude-code', data: { text: 'first progress' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+      await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+      record.emit({ type: 'done', source: 'claude-code', data: { reason: 'prior tail' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+      record.end();
+      await waitFor(() => guest.isClosed());
+      expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
+      expect(switchTokenIn(guest.stream)).toBeDefined();
+      expect(record.sends).toHaveLength(2);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it.each([
+    ['local', 'none'], ['local', 'before-send'], ['local', 'during-dispatch'],
+    ['member', 'none'], ['member', 'before-send'], ['member', 'during-dispatch'],
+  ] as const)(
+    'keeps a delayed prior error from hiding an interrupted new %s send (idle=%s)', async (placement, idlePhase) => {
+    let failureSeen = () => false;
+    const error = { type: 'error', source: 'claude-code', data: { isTerminal: true, message: 'prompt is too long' } } as AgentEvent;
+    const onSend = async (record: Started) => {
+      if (record.sends.length === 2 && idlePhase === 'during-dispatch') {
+        record.emit({ type: 'status', source: 'claude-code', data: { isRunning: false } } as AgentEvent);
+        record.emit(error);
+        // Both queued old events drain before the new send is accepted.
+        await waitFor(failureSeen);
+      }
+    };
+    const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+      { kind: 'member', ...MEMBER_STUDIO }], owner: { onSend }, mini: { onSend },
+      switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    failureSeen = () => guest.stream.some(item => item.t === 'event' && item.event.type === 'error');
+    try {
+      await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      record.emit({ type: 'text', source: 'claude-code', data: { text: 'first progress' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+      if (idlePhase === 'before-send') {
+        record.emit({ type: 'status', source: 'claude-code', data: { isRunning: false } } as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'status'));
+      }
+      await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+      if (idlePhase !== 'during-dispatch') record.emit(error);
+      await waitFor(failureSeen);
+      record.end();
+      await waitFor(() => guest.isClosed());
+      expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
+      expect(env.relay.noteRunFailure.mock.calls[0][2]).toMatchObject({ reason: 'remote_agent_closed' });
+      expect(switchTokenIn(guest.stream)).toBeDefined();
+      expect(record.sends).toHaveLength(2);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it.each(['local', 'member'] as const)('keeps a third %s send active across two delayed prior errors', async placement => {
+    let priorErrorsSeen = () => false;
+    const error = { type: 'error', source: 'codex', data: { isTerminal: true, message: 'prior failed' } } as AgentEvent;
+    const onSend = async (record: Started) => {
+      if (record.sends.length === 3) {
+        record.emit({ type: 'status', source: 'codex', data: { isRunning: false } } as AgentEvent);
+        record.emit(error);
+        await waitFor(priorErrorsSeen);
+      }
+    };
+    const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+      { kind: 'member', ...MEMBER_STUDIO }], owner: { onSend }, mini: { onSend },
+      switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    priorErrorsSeen = () => guest.stream.filter(item => item.t === 'event' && item.event.type === 'error').length === 2;
+    try {
+      await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      record.emit({ type: 'text', source: 'codex', data: { text: 'first progress' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+      await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+      record.emit(error);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'error'));
+      await guest.client.call('send', [{ content: 'third', attachments: [] }, {}]);
+      record.end();
+      await waitFor(() => guest.isClosed());
+      expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
+      expect(env.relay.noteRunFailure.mock.calls[0][2]).toMatchObject({ reason: 'remote_agent_closed' });
+      expect(switchTokenIn(guest.stream)).toBeDefined();
+      expect(record.sends).toHaveLength(3);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it.each(['local', 'member'] as const)('settles result-only done after a queued prior idle/error on %s', async placement => {
+    let failureSeen = () => false;
+    const onSend = async (record: Started) => {
+      if (record.sends.length === 2) {
+        record.emit({ type: 'status', source: 'codex', data: { isRunning: false } } as AgentEvent);
+        record.emit({ type: 'error', source: 'codex', data: { isTerminal: true, message: 'prior failed' } } as AgentEvent);
+        await waitFor(failureSeen);
+      }
+    };
+    const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+      { kind: 'member', ...MEMBER_STUDIO }], owner: { onSend }, mini: { onSend },
+      switchWorthy: failure => failure.reason === 'remote_agent_closed' });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    failureSeen = () => guest.stream.some(item => item.t === 'event' && item.event.type === 'error');
+    try {
+      await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      record.emit({ type: 'status', source: 'codex', data: { isRunning: true } } as AgentEvent);
+      record.emit({ type: 'text', source: 'codex', data: { text: 'first progress' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+      await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+      record.emit({ type: 'done', source: 'codex', data: {} } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+      record.end();
+      await waitFor(() => guest.isClosed());
+      expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+      expect(switchTokenIn(guest.stream)).toBeUndefined();
+      expect(record.sends).toHaveLength(2);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it.each(['local', 'member'] as const)('preserves a genuine new %s request error during dispatch and after idle', async placement => {
+    for (const phase of ['dispatch', 'dispatch-after-error', 'dispatch-after-stop-error', 'after-idle'] as const) {
+      let failureSeen = () => false;
+      const error = { type: 'error', source: 'claude-code', data: { isTerminal: true, message: 'current request failed' } } as AgentEvent;
+      const onSend = async (record: Started) => {
+        if (record.sends.length === 2 && phase !== 'after-idle') {
+          if (phase === 'dispatch-after-error' || phase === 'dispatch-after-stop-error') {
+            record.emit({ type: 'status', source: 'claude-code', data: { isRunning: false } } as AgentEvent);
+          }
+          record.emit(error);
+          await waitFor(failureSeen);
+        }
+      };
+      const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+        { kind: 'member', ...MEMBER_STUDIO }], owner: { onSend }, mini: { onSend }, switchWorthy: () => false });
+      const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+      failureSeen = () => guest.stream.some(item => item.t === 'event' && item.event.type === 'error'
+        && (item.event.data as { message?: string }).message === 'current request failed');
+      try {
+        await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+        const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+        record.emit({ type: 'text', source: 'claude-code', data: { text: 'first progress' } } as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+        if (phase === 'dispatch-after-error' || phase === 'dispatch-after-stop-error') {
+          if (phase === 'dispatch-after-stop-error') await guest.client.call('abort', []);
+          record.emit({ type: 'error', source: 'claude-code', data: { isTerminal: true, message: 'prior failed' } } as AgentEvent);
+          record.emit({ type: 'status', source: 'claude-code', data: { isRunning: false } } as AgentEvent);
+          await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'status'));
+        }
+        await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+        if (phase === 'after-idle') {
+          record.emit({ type: 'status', source: 'claude-code', data: { isRunning: false } } as AgentEvent);
+          await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'status'));
+          record.emit(error);
+        }
+        await waitFor(failureSeen);
+        record.end();
+        await waitFor(() => guest.isClosed());
+        expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(phase === 'dispatch-after-error' || phase === 'dispatch-after-stop-error' ? 2 : 1);
+        expect(env.relay.noteRunFailure.mock.calls.at(-1)![2]).toMatchObject({ message: 'current request failed' });
+        expect(switchTokenIn(guest.stream)).toBeUndefined();
+        expect(record.sends).toHaveLength(2);
+      } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+    }
+  });
+
+  it.each(['local', 'member'] as const)('accepts result-only completion after a terminal error on %s', async placement => {
+    const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+      { kind: 'member', ...MEMBER_STUDIO }], switchWorthy: failure => failure.usageLimit === true });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      record.emit({ type: 'error', source: 'claude-code', data: { isTerminal: true, message: 'prompt is too long' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'error'));
+      expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
+      expect(switchTokenIn(guest.stream)).toBeUndefined();
+      const nextTurnStart = guest.stream.length;
+      await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+      record.emit({ type: 'done', source: 'claude-code', data: {} } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+      record.end();
+      await waitFor(() => guest.isClosed());
+      expect(env.relay.noteRunFailure).toHaveBeenCalledOnce();
+      expect(switchTokenIn(guest.stream.slice(nextTurnStart))).toBeUndefined();
+      expect(record.sends).toHaveLength(2);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it.each(['local', 'member'] as const)('accepts running then zero-output completion after an unsettled %s turn', async placement => {
+    const env = setup({ plans: [placement === 'local' ? { kind: 'local' } : { kind: 'member', ...MEMBER_MINI },
+      { kind: 'member', ...MEMBER_STUDIO }] });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+      const record = placement === 'local' ? env.ownerStarted[0] : env.memberStarted.mini[0];
+      record.emit({ type: 'text', source: 'claude-code', data: { text: 'first progress' } } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'text'));
+      await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+      record.emit({ type: 'status', source: 'claude-code', data: { isRunning: true } } as AgentEvent);
+      record.emit({ type: 'done', source: 'claude-code', data: {} } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+      record.end();
+      await waitFor(() => guest.isClosed());
+      expect(env.relay.noteRunFailure).not.toHaveBeenCalled();
+      expect(switchTokenIn(guest.stream)).toBeUndefined();
+      expect(record.sends).toHaveLength(2);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
+  });
+
+  it.each(['done', 'abort', 'new-send', 'provider-start'])('uses product terminals rather than late busy snapshots after %s', async mode => {
+    const env = setup({ plans: [{ kind: 'member', ...MEMBER_MINI }, { kind: 'member', ...MEMBER_STUDIO }] });
+    const guest = await openAsGuest(env, GUEST_A, openPayload(SESSION, { acceptsGroupSwitch: true }));
+    try {
+      await guest.client.call('send', [{ content: 'first', attachments: [] }, {}]);
+      const record = env.memberStarted.mini[0];
+      if (mode === 'abort') await guest.client.call('abort', []);
+      else {
+        record.emit({ type: 'done', data: { status: 'completed' } } as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event' && item.event.type === 'done'));
+      }
+      record.running = true;
+      record.emit({ type: 'status', data: {} } as AgentEvent);
+      await waitFor(() => guest.stream.some(item => item.t === 'state' && item.state.turnRunning === true));
+      if (mode === 'new-send') await guest.client.call('send', [{ content: 'second', attachments: [] }, {}]);
+      if (mode === 'provider-start') {
+        record.emit({ type: 'status', source: 'claude-code', data: { isRunning: true, providerInitiatedTurn: true } } as AgentEvent);
+        await waitFor(() => guest.stream.some(item => item.t === 'event'
+          && (item.event.data as { providerInitiatedTurn?: boolean })?.providerInitiatedTurn));
+      }
+      record.end();
+      await waitFor(() => guest.isClosed());
+      const unfinished = mode === 'new-send' || mode === 'provider-start';
+      expect(env.relay.noteRunFailure).toHaveBeenCalledTimes(unfinished ? 1 : 0);
+      expect(switchTokenIn(guest.stream) !== undefined).toBe(unfinished);
+      expect(record.sends).toHaveLength(mode === 'new-send' ? 2 : 1);
+    } finally { await env.owner.dispose(); await env.members.mini.dispose(); await env.members.studio.dispose(); }
   });
 
   it('stops offering once every computer has been tried this round', async () => {

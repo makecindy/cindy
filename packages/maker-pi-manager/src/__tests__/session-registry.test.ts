@@ -904,13 +904,14 @@ describe('env-file', () => {
   // 轮 40-w2 MEDIUM:spawn 后 listen 失败 + SIGKILL 杀不死 → 必须抛
   // SESSION_KILL_SURVIVED(而非静默返回), 否则调用方 retry 会双 spawn。
   it('spawn failure with survivor → SESSION_KILL_SURVIVED, env-file cleaned', async () => {
-    // 只 fake setTimeout(4c 同款), 保留 setImmediate 供 flushMicrotasks 驱动
-    // 真实 fs I/O 到达 catch 段。
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const { registry, tmpDir } = await createRegistry();
 
       const child = makeSurviveChild();
+      // Real filesystem I/O precedes cleanup. Synchronize on the kill call
+      // itself before advancing the fake exit-confirmation timer.
+      const killed = new Promise<void>(resolve => child.kill.mockImplementationOnce(() => resolve()));
       mockSpawn.mockReturnValueOnce(child);
       const server = makeServer();
       server.listen.mockImplementation(() => {
@@ -919,15 +920,7 @@ describe('env-file', () => {
       mockCreateServer.mockReturnValueOnce(server);
 
       const ensurePromise = registry.ensure('fail-survive', 'cmd', { KEY: 'val' }, 'h1', false);
-      // spawnSession 前置有真实 fs I/O await(rm env-file + atomic writeFile tmp +
-      // rename + rm sock), 先把它们 flush 到 catch 段(waitForExit 的 setTimeout
-      // 注册)再 advance。spawn 失败 catch 是**直接 SIGKILL**(同步), 轮询条件
-      // 等 child.kill 被调即到达 catch。轮 42 CI 修复:上限 500 → 5000 —— 慢
-      // CI 上真实 fs 链(4 个 await)可能排得更久, 500 次 setImmediate 不够,
-      // 提前失败后 afterEach 删 tmpDir 会让迟到的 rename 变成 unhandled ENOENT。
-      for (let i = 0; i < 5000 && child.kill.mock.calls.length === 0; i += 1) {
-        await flushMicrotasks();
-      }
+      await killed;
       expect(child.kill).toHaveBeenCalledWith('SIGKILL');
       // KILL_CONFIRM_MS (5000):waitForExit times out → SESSION_KILL_SURVIVED
       vi.advanceTimersByTime(5000);

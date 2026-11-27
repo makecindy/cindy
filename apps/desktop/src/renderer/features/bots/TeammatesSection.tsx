@@ -1,11 +1,17 @@
+import { companionDragProps } from './companionDragProps';
+import { BotRosterLoadError } from './BotRosterLoadError';
 import { TeammateStatusDot, TeammateRowStatus, TeammateRunningPreview } from './TeammateStatusDot';
 import { aggregateTeammateStatus } from '@cindy/maker-shared/teammate-status';
 import { localTeammateStatus, remoteTeammateStatus, groupTeammateStatus } from './teammateRosterStatus';
 import { BotGenerationLabel } from './BotGenerationLabel';
 import { botRosterLabel } from '../../../shared/botCreation';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type KeyboardEvent, type MouseEvent } from 'react';
 import {
+  Check,
+  LayoutGrid,
+  LayoutList,
   AlertTriangle,
+  AppWindow,
   Archive,
   ArchiveRestore,
   ChevronDown,
@@ -23,19 +29,28 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import { Tip } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { SectionCollapse } from '@/features/cc-agent/sidebar/SectionCollapse';
 import { SIDEBAR_LIST_ROW_ACTIVE_CLASS, SIDEBAR_LIST_ROW_HEIGHT_CLASS } from '@/features/cc-agent/sidebar/listRowStyle';
-import { useCollapsibleShowAll } from '@/features/cc-agent/sidebar/hooks/useCollapsibleShowAll';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { BotGroupSummary } from '../../../shared/botGroupChat';
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  getSidebarNewWindowShortcutKey,
+  isSidebarNewWindowActivation,
+  openTargetInNewWindow,
+  preventMiddleClickAutoscroll,
+} from '@/lib/sidebarNewWindowActivation';
 import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import { useRemoteBots } from './useRemoteBots';
 import { useCompanionCloud } from './companionCloudStore';
@@ -44,7 +59,7 @@ import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDev
 import { remoteBotKey, isRemoteBotUnread } from './remoteBotRoster';
 import { BotConnectionStatus } from './BotConnectionStatus';
 import { CindyDeviceRow } from './CindyDeviceRow';
-import { cindyDeviceKey, cindyDeviceOptions, isCindyDeviceBot } from './cindyDeviceRoster';
+import { cindyDeviceKey, cindyDeviceOptions } from './cindyDeviceRoster';
 import { BotAvatar } from './BotAvatar';
 import { BotCreateMenu } from './BotCreateMenu';
 import { BotDeleteDialog } from './BotDeleteDialog';
@@ -61,13 +76,18 @@ import {
   formatBotListTimestamp,
 } from './botListDisplay';
 import { botDeviceLabel, partitionBotRoster } from './botRosterDisplay';
-import { readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from './teammatesSectionPrefs';
+import { botOpenRoute } from './botNavigation';
+import { readCollapsedTeammateAvatars, writeCollapsedTeammateAvatars, readTeammatesViewMode, writeTeammatesViewMode, type TeammatesViewMode, readTeammatesSectionCollapsed, writeTeammatesSectionCollapsed } from './teammatesSectionPrefs';
+import { toast } from '@/lib/toast';
 import {
+  BotModelSelectionRequiredError,
   canonicalBotSessionId,
   duplicateBotProfile,
   setBotHidden,
   setBotPinned,
   useBotProfiles,
+  useBotProfilesLoadState,
+  hasLoadedBotProfiles,
   useBotUnreadCounts,
   type BotProfile,
 } from './botStore';
@@ -84,33 +104,33 @@ const HEADER_HOVER_ACTION_CLASS = cn(
 const HEADER_ICON_BUTTON_CLASS =
   'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]';
 
-/** Only the collapsed strip is compact: unchanged 36px portrait, 40px target, 4px gap. */
+/** Icon mode is compact: unchanged 36px portrait, 40px target, 4px gap. */
 const AVATAR_SLOT_PX = 44;
 const CHAT_PREVIEW_LIMIT = 5;
 
 /**
- * 收起态只占一行:按内容宽度算出能放几个头像(含末尾「+N」),伙伴再多也不换行。
+ * 展开时的图标模式只占一行:按宽度计算头像容量(含末尾「+N」)。
  * 尚未测量(宽度 0,如首帧或测试环境)时不截断。
  */
-function useAvatarRowCapacity(ref: RefObject<HTMLDivElement | null>, active: boolean): number {
+function useAvatarRowCapacity(element: HTMLDivElement | null): number {
   const [width, setWidth] = useState(0);
-  // 头像行只在收起时挂载:每次收起后重新挂上观察。
+  // 跟随实际 DOM 挂载；空提醒、列表模式或空 roster 都会卸载头像行。
   useEffect(() => {
-    const element = active ? ref.current : null;
+    setWidth(0);
     if (!element || typeof ResizeObserver === 'undefined') return undefined;
     const observer = new ResizeObserver((entries) => {
       setWidth(Math.floor(entries[0]?.contentRect.width ?? 0));
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [ref, active]);
+  }, [element]);
   return width > 0 ? Math.max(1, Math.floor((width + 4) / AVATAR_SLOT_PX)) : Number.POSITIVE_INFINITY;
 }
 
 /**
  * 侧栏第一层的「伙伴」段(2026-10-13 定稿):固定在置顶段上方,与置顶、全部任务并存。
- * 点伙伴只切换主区域,左栏不再整栏切换。段名在「展开(行列表)」与「收起成一排头像」
- * 之间切换,默认展开,按账号记住。通知不在这里发 —— 唯一 owner 是任务侧栏。
+ * 点伙伴只切换主区域,左栏不再整栏切换。显示方式与收起状态独立，按账号记住。
+ * 收起默认仅保留未读或等待处理的聊天，可选择显示所有头像。通知由任务侧栏负责。
  */
 export function TeammatesSection() {
   const { t } = useTranslation();
@@ -130,16 +150,34 @@ export function TeammatesSection() {
   const deviceId = remoteRoute?.params.deviceId;
   const selectedGroupId = matchPath('/bots/groups/:groupId', pathname)?.params.groupId;
   const [collapsed, setCollapsed] = useState(() => readTeammatesSectionCollapsed(dataOwnerId));
-  const [showAllChats, setShowAllChats] = useCollapsibleShowAll(collapsed);
-  const avatarRowRef = useRef<HTMLDivElement>(null);
-  const avatarCapacity = useAvatarRowCapacity(avatarRowRef, collapsed);
+  const [keepSelectedChat, setKeepSelectedChat] = useState(true);
+  const [viewMode, setViewMode] = useState(() => readTeammatesViewMode(dataOwnerId));
+  const [showCollapsedAvatars, setShowCollapsedAvatars] = useState(() => readCollapsedTeammateAvatars(dataOwnerId));
+  const changeCollapsedAvatars = (enabled: boolean) => {
+    setShowCollapsedAvatars(enabled);
+    writeCollapsedTeammateAvatars(dataOwnerId, enabled);
+  };
+  const changeViewMode = (mode: TeammatesViewMode) => {
+    setViewMode(mode);
+    writeTeammatesViewMode(dataOwnerId, mode);
+  };
+  const [showAllChats, setShowAllChats] = useState(false);
+  const [avatarRowElement, setAvatarRowElement] = useState<HTMLDivElement | null>(null);
+  const avatarCapacity = useAvatarRowCapacity(avatarRowElement);
   useEffect(() => {
     setCollapsed(readTeammatesSectionCollapsed(dataOwnerId));
+    setViewMode(readTeammatesViewMode(dataOwnerId));
+    setShowCollapsedAvatars(readCollapsedTeammateAvatars(dataOwnerId));
     setShowAllChats(false);
   }, [dataOwnerId, setShowAllChats]);
   const toggleCollapsed = () => {
     const next = !collapsed;
     setCollapsed(next);
+    if (next) {
+      setShowAllChats(false);
+      // An explicit collapse overrides the temporary protection of a read chat.
+      setKeepSelectedChat(Boolean(selectedChat && needsAttention(selectedChat)));
+    }
     writeTeammatesSectionCollapsed(dataOwnerId, next);
   };
   const cloud = useCompanionCloud();
@@ -153,6 +191,8 @@ export function TeammatesSection() {
     ...remoteBots.map((bot) => ({ deviceId: bot.deviceId, name: bot.deviceName })),
   ];
   const allBots = useBotProfiles();
+  const profileLoadState = useBotProfilesLoadState();
+  const profilesLoaded = hasLoadedBotProfiles();
   // A demoted local copy runs on its main computer now; it is listed there, not here.
   const bots = useMemo(() => withoutShadowedBots(allBots, cloud), [allBots, cloud]);
   const { groups } = useBotGroupList();
@@ -164,6 +204,8 @@ export function TeammatesSection() {
   const [archiveBusy, setArchiveBusy] = useState(false);
   const archiveBusyRef = useRef(false);
   const [archiveError, setArchiveError] = useState('');
+  const [duplicatingBotId, setDuplicatingBotId] = useState<string | null>(null);
+  const duplicatingRef = useRef(false);
   const [now, setNow] = useState(() => Date.now());
   const [contextMenu, setContextMenu] = useState<{
     kind: 'bot' | 'group';
@@ -196,7 +238,7 @@ export function TeammatesSection() {
     let focusArchived = !!group.archived;
     const actionKey = 'bots.groupChat.server.settings.' + (group.archived ? 'unarchive' : 'archive');
     try {
-      const accepted = await confirm({ presentation: 'standard', title: t(actionKey),
+      const accepted = await confirm({ title: t(actionKey),
         description: t(actionKey + 'Hint'), confirmText: t(actionKey),
         cancelText: t('bots.cancel'), confirmVariant: 'destructive' });
       if (!accepted || !isDataOwnerGenerationCurrent(owner)) return;
@@ -218,6 +260,34 @@ export function TeammatesSection() {
       }
       archiveBusyRef.current = false;
       setArchiveBusy(false);
+    }
+  };
+
+  // Roster writes are not optimistic: a failure leaves the row unchanged, so say so.
+  // The cause is unknown here, so the message names the action without advising a retry.
+  const rosterAction = (action: Promise<unknown>, failedKey: 'bots.list.pinFailed' | 'bots.list.hideFailed') => {
+    const owner = getDataOwnerGeneration();
+    action.catch(() => {
+      if (isDataOwnerGenerationCurrent(owner)) toast.error(t(failedKey));
+    });
+  };
+
+  // Duplicating reads the avatar and waits for the new profile; one at a time keeps names unique.
+  const duplicateBot = async (bot: BotProfile) => {
+    if (duplicatingRef.current) return;
+    duplicatingRef.current = true;
+    setDuplicatingBotId(bot.id);
+    const owner = getDataOwnerGeneration();
+    try {
+      const copy = await duplicateBotProfile(bot.id);
+      if (isDataOwnerGenerationCurrent(owner)) navigate(`/bots/${copy.id}`);
+    } catch (error) {
+      if (!isDataOwnerGenerationCurrent(owner)) return;
+      toast.error(t(error instanceof BotModelSelectionRequiredError
+        ? 'bots.list.duplicateModelRequired' : 'bots.list.duplicateFailed'));
+    } finally {
+      duplicatingRef.current = false;
+      setDuplicatingBotId(null);
     }
   };
 
@@ -250,7 +320,7 @@ export function TeammatesSection() {
   const showCindy = hasMultipleCindys && Boolean(currentCindy);
   const visibleBots = [
     ...roster.visible.filter(bot => !hasMultipleCindys || !cindyOptions.some(option => option.bot === bot)),
-    ...remoteBots.filter(bot => !hasMultipleCindys || !isCindyDeviceBot(bot)),
+    ...remoteBots.filter(bot => !hasMultipleCindys || !cindyOptions.some(option => option.bot === bot)),
   ];
   // 已归档的群不在段内列出,经侧栏总搜索找回(TeammateSearchResults)。
   const visibleGroups = groups.filter(group => !group.archived);
@@ -300,7 +370,7 @@ export function TeammatesSection() {
       const rowIsVisible = visibleGroups.some(group => group.id === pending.groupId);
       if (row && rowIsVisible) {
         pendingArchiveFocusRef.current = null;
-        row.focus();
+        (row.matches('button') ? row : row.querySelector<HTMLButtonElement>('button'))?.focus();
         return;
       }
 
@@ -344,7 +414,32 @@ export function TeammatesSection() {
   if (selectedChat && !previewChats.includes(selectedChat)) {
     previewChats[CHAT_PREVIEW_LIMIT - 1] = selectedChat;
   }
-  const displayedChats = showAllChats ? visibleChats : previewChats;
+  const needsAttention = (entry: (typeof visibleChats)[number]) => {
+    const unread = entry.kind === 'group' ? isBotGroupUnread(entry.group)
+      : entry.kind === 'cindy' ? cindyOptions.some(option => option.unread)
+        : 'deviceId' in entry.bot ? isRemoteBotUnread(entry.bot) : (unreadByBotId[entry.bot.id] ?? 0) > 0;
+    const status = entry.kind === 'group' ? groupTeammateStatus(entry.group, bots, islandActivity, unread)
+      : entry.kind === 'cindy' ? cindyStatus : statusForBot(entry.bot);
+    return unread || status === 'awaiting' || status === 'error';
+  };
+  const selectedChatKey = selectedChat?.kind === 'group' ? `group:${selectedChat.group.id}`
+    : selectedChat?.kind === 'cindy' ? 'cindy-devices'
+      : selectedChat ? ('deviceId' in selectedChat.bot ? remoteBotKey(selectedChat.bot) : `local:${selectedChat.bot.id}`) : null;
+  const selectedNeedsAttention = Boolean(selectedChat && needsAttention(selectedChat));
+  // Switching chats or receiving new attention starts a new retention period.
+  // Manual collapse can end it without changing the currently open conversation.
+  useEffect(() => {
+    setKeepSelectedChat(true);
+  }, [selectedChatKey, dataOwnerId]);
+  useEffect(() => {
+    if (selectedNeedsAttention) setKeepSelectedChat(true);
+  }, [selectedNeedsAttention]);
+  const attentionChats = visibleChats.filter(entry =>
+    (keepSelectedChat && entry === selectedChat) || needsAttention(entry));
+  const displayedChats = collapsed ? attentionChats : showAllChats ? visibleChats : previewChats;
+  const collapsedAvatars = collapsed && showCollapsedAvatars;
+  const showIconStrip = viewMode === 'icons' || collapsedAvatars;
+  const iconChats = collapsed && !collapsedAvatars ? attentionChats : visibleChats;
 
   useEffect(() => {
     if (roster.visible.length + remoteBots.length + groups.length === 0) return;
@@ -398,20 +493,27 @@ export function TeammatesSection() {
     </DropdownMenu>
   );
 
+  const newWindowShortcut = t(getSidebarNewWindowShortcutKey());
+
   const renderBotContextMenu = (bot: BotProfile, selected: boolean) => renderContextMenu('bot', bot.id, <>
-        <DropdownMenuItem onSelect={() => void setBotPinned(bot.id, !bot.pinnedAt)}>
+        <DropdownMenuItem onSelect={() => rosterAction(setBotPinned(bot.id, !bot.pinnedAt), 'bots.list.pinFailed')}>
           <Pin size={14} className="mr-2" />
           {t(bot.pinnedAt ? 'bots.list.unpin' : 'bots.list.pin')}
         </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void openTargetInNewWindow(`/bots/${encodeURIComponent(bot.id)}`)}>
+          <AppWindow size={14} className="mr-2" />
+          {t('ccAgent.sidebar.sessionMenu.openInNewWindow')}
+          <DropdownMenuShortcut aria-hidden>{newWindowShortcut}</DropdownMenuShortcut>
+        </DropdownMenuItem>
         <DropdownMenuItem
           onSelect={() => {
-            void setBotHidden(bot.id, true).then(() => {
+            rosterAction(setBotHidden(bot.id, true).then(() => {
               if (!selected) return;
               const fallback = roster.visible.find(
                 (candidate) => candidate.id !== bot.id,
               );
               navigate(fallback ? `/bots/${fallback.id}` : '/bots');
-            });
+            }), 'bots.list.hideFailed');
           }}
         >
           <EyeOff size={14} className="mr-2" />
@@ -421,11 +523,8 @@ export function TeammatesSection() {
           <>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              onSelect={() => {
-                void duplicateBotProfile(bot.id).then((copy) =>
-                  navigate(`/bots/${copy.id}`),
-                );
-              }}
+              disabled={duplicatingBotId !== null}
+              onSelect={() => void duplicateBot(bot)}
             >
               <Copy size={14} className="mr-2" />
               {t('bots.list.duplicate')}
@@ -440,46 +539,67 @@ export function TeammatesSection() {
         </DropdownMenuItem>
   </>);
 
+  const groupMenuProps = (id: string) => ({
+    'aria-haspopup': 'menu' as const,
+    onContextMenu: (event: MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openContextMenu('group', id, event.currentTarget, event.clientX, event.clientY);
+    },
+    onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => {
+      if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
+      event.preventDefault();
+      const rect = event.currentTarget.getBoundingClientRect();
+      openContextMenu('group', id, event.currentTarget, rect.left + 10, rect.bottom);
+    },
+  });
+
+  const menuGroup = contextMenu?.kind === 'group' ? groups.find(item => item.id === contextMenu.id) : undefined;
   const renderGroupRow = (group: BotGroupSummary) => (
     <BotGroupSidebarRow key={'group:' + group.id} group={group} bots={bots}
       islandActivity={islandActivity} now={now} selected={group.id === selectedGroupId}
-      onOpenGroup={id => navigate('/bots/groups/' + encodeURIComponent(id))}
-      onContextMenu={event => {
-        event.preventDefault(); event.stopPropagation();
-        openContextMenu('group', group.id, event.currentTarget, event.clientX, event.clientY);
+      onOpenGroup={(id, event) => {
+        const route = '/bots/groups/' + encodeURIComponent(id);
+        if (event && isSidebarNewWindowActivation(event)) {
+          void openTargetInNewWindow(route);
+          return;
+        }
+        navigate(route);
       }}
-      onKeyDown={event => {
-        if (event.key !== 'ContextMenu' && !(event.key === 'F10' && event.shiftKey)) return;
-        event.preventDefault();
-        const rect = event.currentTarget.getBoundingClientRect();
-        openContextMenu('group', group.id, event.currentTarget, rect.left + 10, rect.bottom);
-      }}>
-      {renderContextMenu('group', group.id, <>
-        <DropdownMenuItem onSelect={() => navigate('/bots/groups/' + encodeURIComponent(group.id) + '?' + BOT_GROUP_SETTINGS_PARAM + '=1')}>
-          <Settings size={14} className="mr-2" />{t('bots.groupChat.settings.title')}
-        </DropdownMenuItem>
-        {group.serverBacked && !group.dissolvedAt && group.members.some(member => member.isOwned && (member.role === 'owner' || member.role === 'admin')) && <>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem disabled={archiveBusy} onSelect={() => void changeGroupArchive(group)}>
-            {group.archived ? <ArchiveRestore size={14} className="mr-2" /> : <Archive size={14} className="mr-2" />}
-            {t('bots.groupChat.server.settings.' + (group.archived ? 'unarchive' : 'archive'))}
-          </DropdownMenuItem>
-        </>}
-      </>)}
-    </BotGroupSidebarRow>
+      {...groupMenuProps(group.id)} />
   );
 
   const ToggleIcon = collapsed ? ChevronRight : ChevronDown;
   const toggleLabel = collapsed ? t('bots.list.sectionExpand') : t('bots.list.sectionCollapse');
-  const openChat = (entry: (typeof visibleChats)[number]) => {
-    if (entry.kind === 'group') navigate(`/bots/groups/${encodeURIComponent(entry.group.id)}`);
-    else if (entry.kind === 'cindy') { if (currentCindy) navigate(currentCindy.route); }
-    else if ('deviceId' in entry.bot) navigate(`/bots/remote/${encodeURIComponent(entry.bot.deviceId)}/${encodeURIComponent(entry.bot.id)}`);
-    else navigate(`/bots/${entry.bot.id}`);
+  const chatRoute = (entry: (typeof visibleChats)[number]) => {
+    if (entry.kind === 'group') return `/bots/groups/${encodeURIComponent(entry.group.id)}`;
+    if (entry.kind === 'cindy') return currentCindy?.route;
+    const bot = entry.bot;
+    return 'deviceId' in bot ? `/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}` : `/bots/${encodeURIComponent(bot.id)}`;
   };
 
   return (
     <div ref={sidebarRef} className="flex w-full flex-col gap-0.5" data-sidebar-section="teammates">
+      {renderContextMenu('group', menuGroup?.id ?? '', menuGroup && <>
+        <DropdownMenuItem onSelect={() => {
+          void window.electronAPI.maker.openSessionInNewWindow('/bots/groups/' + encodeURIComponent(menuGroup.id))
+            .catch(() => toast.error(t('ccAgent.common.openFailed')));
+        }}>
+          <AppWindow size={14} className="mr-2" />
+          {t('rightSidebar.tabs.contextMenu.openInWindow')}
+          <DropdownMenuShortcut aria-hidden>{newWindowShortcut}</DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => navigate('/bots/groups/' + encodeURIComponent(menuGroup.id) + '?' + BOT_GROUP_SETTINGS_PARAM + '=1')}>
+          <Settings size={14} className="mr-2" />{t('bots.groupChat.settings.title')}
+        </DropdownMenuItem>
+        {menuGroup.serverBacked && !menuGroup.dissolvedAt && menuGroup.members.some(member => member.isOwned && (member.role === 'owner' || member.role === 'admin')) && <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled={archiveBusy} onSelect={() => void changeGroupArchive(menuGroup)}>
+            {menuGroup.archived ? <ArchiveRestore size={14} className="mr-2" /> : <Archive size={14} className="mr-2" />}
+            {t('bots.groupChat.server.settings.' + (menuGroup.archived ? 'unarchive' : 'archive'))}
+          </DropdownMenuItem>
+        </>}
+      </>)}
       {/* 段头与置顶 / 全部任务段头同款:高 24,左 24 / 右 12;动作悬停浮现。 */}
       <div className="group/sidebar-header flex h-6 items-center justify-between pr-3 pl-6">
         <div className="flex min-w-0 items-center gap-1">
@@ -513,14 +633,37 @@ export function TeammatesSection() {
             </span>
           ) : null}
           <BotCreateMenu variant="header" />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Tip text={t('ccAgent.sidebar.viewStyle')} side="bottom">
+                <button type="button" aria-label={t('ccAgent.sidebar.viewStyle')} className={HEADER_ICON_BUTTON_CLASS}>
+                  {viewMode === 'icons' ? <LayoutGrid size={13} /> : <LayoutList size={13} />}
+                </button>
+              </Tip>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {(['icons', 'list'] as const).map(mode => (
+                <DropdownMenuItem key={mode} onSelect={() => changeViewMode(mode)}>
+                  {mode === 'icons' ? <LayoutGrid size={15} /> : <LayoutList size={15} />}
+                  <span>{t(mode === 'icons' ? 'bots.list.viewIcons' : 'ccAgent.sidebar.viewStyleListWide')}</span>
+                  {viewMode === mode && <Check size={15} className="ml-auto" />}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem checked={showCollapsedAvatars} onCheckedChange={changeCollapsedAvatars}>
+                {t('bots.list.showCollapsedTeammateAvatars')}
+              </DropdownMenuCheckboxItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
-      {collapsed ? (
-        // 收起：单行头像，只显示需要注意的状态；放不下的收进末尾「+N」（点开即展开整段）。
-        <div ref={avatarRowRef} className="flex flex-nowrap items-center gap-1 overflow-hidden py-1 pr-0 pl-[22px]">
+      {showIconStrip && iconChats.length > 0 ? (
+        // 默认收起时待处理头像全部可见；主动显示所有头像时沿用单行 +N。
+        // pl-[22px] = 列表容器 pl-3 + 行 px-2.5，与列表模式头像对齐（DESIGN.md §5 悬挂缩进）。
+        <div ref={setAvatarRowElement} className={cn('flex items-center gap-1 py-1 pr-0 pl-[22px]', collapsed && !collapsedAvatars ? 'flex-wrap' : 'flex-nowrap overflow-hidden')}>
           {(() => {
-            const entries = visibleChats.map((entry) => {
+            const entries = iconChats.map((entry) => {
               const key = entry.kind === 'group' ? `group:${entry.group.id}`
                 : entry.kind === 'cindy' ? 'cindy-devices'
                   : 'deviceId' in entry.bot ? remoteBotKey(entry.bot) : entry.bot.id;
@@ -541,7 +684,7 @@ export function TeammatesSection() {
                 ...(mentioned ? [t('bots.groupChat.server.thread.hintMentioned')] : [])].join(' · ');
               return { entry, key, selected, status, mentioned, label };
             });
-            const overflow = entries.length > avatarCapacity;
+            const overflow = (!collapsed || collapsedAvatars) && entries.length > avatarCapacity;
             let shown = overflow ? entries.slice(0, Math.max(0, avatarCapacity - 1)) : entries;
             // 正在看的聊天始终留在行内,占最后一个可见位。
             const selectedEntry = entries.find((item) => item.selected);
@@ -564,7 +707,27 @@ export function TeammatesSection() {
                   <Tip key={key} text={label} side="bottom">
                     <button
                       type="button"
-                      onClick={() => openChat(entry)}
+                      {...companionDragProps(chatRoute(entry), label)}
+                      {...(entry.kind === 'group' ? groupMenuProps(entry.group.id) : {})}
+                      data-bot-group-id={entry.kind === 'group' ? entry.group.id : undefined}
+                      onMouseDown={preventMiddleClickAutoscroll}
+                      onClick={(event) => {
+                        const route = chatRoute(entry);
+                        if (!route) return;
+                        if (isSidebarNewWindowActivation(event)) {
+                          event.preventDefault();
+                          void openTargetInNewWindow(route);
+                          return;
+                        }
+                        navigate(route);
+                      }}
+                      onAuxClick={(event) => {
+                        if (event.button !== 1) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        const route = chatRoute(entry);
+                        if (route) void openTargetInNewWindow(route);
+                      }}
                       aria-label={label}
                       aria-current={selected ? 'page' : undefined}
                       className="relative isolate flex h-10 w-10 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -584,7 +747,7 @@ export function TeammatesSection() {
                   <Tip text={moreLabel} side="bottom">
                     <button
                       type="button"
-                      onClick={() => { toggleCollapsed(); setShowAllChats(true); }}
+                      onClick={() => { if (collapsed) toggleCollapsed(); changeViewMode('list'); setShowAllChats(true); }}
                       aria-label={moreLabel}
                       className="group/overflow flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-11 font-medium tabular-nums text-[var(--sidebar-nav-text)] outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
@@ -601,16 +764,29 @@ export function TeammatesSection() {
         </div>
       ) : null}
 
-      <SectionCollapse collapsed={collapsed}>
-      <div className="flex flex-col pt-1 pr-0 pl-3">
+      {!profilesLoaded && profileLoadState === 'pending' ? (
+        <div role="status" className="flex items-center gap-2 px-3 py-3 text-12 text-[var(--text-secondary)]">
+          <Spinner size={14} />
+          {t('ccAgent.common.loading')}
+        </div>
+      ) : null}
 
-      {archiveError && <p role="alert" className="mb-2 px-2.5 text-12 text-[var(--error-fg)]">{archiveError}</p>}
+      {profileLoadState === 'error' ? (
+        <div className="pt-1 pr-0 pl-3"><BotRosterLoadError /></div>
+      ) : null}
+
+      {archiveError && <p role="alert" className="mb-2 pt-1 pr-2.5 pl-[22px] text-12 text-[var(--error-fg)]">{archiveError}</p>}
+
+      <SectionCollapse collapsed={showIconStrip || (collapsed && attentionChats.length === 0)}>
+      <div className="flex flex-col pt-1 pr-0 pl-3">
 
       <div>
         {roster.visible.length === 0 && roster.hidden.length === 0 && archivedBots.length === 0 && remoteBots.length === 0 && visibleGroups.length === 0 ? (
-          <div className="px-3 py-3">
-            <BotCreateMenu label={t('bots.add')} />
-          </div>
+          profilesLoaded && profileLoadState === 'ready' ? (
+            <div className="px-3 py-3">
+              <BotCreateMenu label={t('bots.add')} />
+            </div>
+          ) : null
         ) : (
           <div className="flex flex-col gap-0.5">
             {displayedChats.map(entry => {
@@ -647,7 +823,13 @@ export function TeammatesSection() {
                   timestamp={formatBotListTimestamp(local
                     ? botListTimestampAt({ lastMessageAt: local.lastMessageAt, working: Boolean(activity) }, now)
                     : 'activityAt' in bot ? bot.activityAt : 0, now, t)}
-                  onOpen={() => navigate(currentCindy.route)}
+                  onOpen={(event) => {
+                    if (event && isSidebarNewWindowActivation(event)) {
+                      void openTargetInNewWindow(currentCindy.route);
+                      return;
+                    }
+                    navigate(currentCindy.route);
+                  }}
                   onSelect={option => navigate(option.route)}
                   onContextMenu={local ? event => {
                     event.preventDefault(); event.stopPropagation();
@@ -671,7 +853,25 @@ export function TeammatesSection() {
                   && Boolean(bot.generation || bot.teammateActivity?.phase === 'running');
                 return (
                   <button key={remoteBotKey(bot)} type="button" aria-current={selected ? 'page' : undefined}
-                    onClick={() => navigate(`/bots/remote/${encodeURIComponent(bot.deviceId)}/${encodeURIComponent(bot.id)}`)}
+                    {...companionDragProps(chatRoute(entry), bot.name)}
+                    onMouseDown={preventMiddleClickAutoscroll}
+                    onClick={(event) => {
+                      const route = chatRoute(entry);
+                      if (!route) return;
+                      if (isSidebarNewWindowActivation(event)) {
+                        event.preventDefault();
+                        void openTargetInNewWindow(route);
+                        return;
+                      }
+                      navigate(route);
+                    }}
+                    onAuxClick={(event) => {
+                      if (event.button !== 1) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      const route = chatRoute(entry);
+                      if (route) void openTargetInNewWindow(route);
+                    }}
                     className={cn('relative flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring', SIDEBAR_LIST_ROW_HEIGHT_CLASS, selected ? SIDEBAR_LIST_ROW_ACTIVE_CLASS : 'text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover')}>
                     <span className="relative flex shrink-0"><BotAvatar bot={bot} size="row" /></span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -734,7 +934,24 @@ export function TeammatesSection() {
                       文字基线上把整行撑高。 */}
                   <button
                     type="button"
-                    onClick={() => navigate(`/bots/${bot.id}`)}
+                    {...companionDragProps(`/bots/${encodeURIComponent(bot.id)}`, bot.name)}
+                    onMouseDown={preventMiddleClickAutoscroll}
+                    onClick={(event) => {
+                      if (isSidebarNewWindowActivation(event)) {
+                        event.preventDefault();
+                        void openTargetInNewWindow(`/bots/${encodeURIComponent(bot.id)}`);
+                        return;
+                      }
+                      const { to, state } = botOpenRoute(bot);
+                      if (state) navigate(to, { state });
+                      else navigate(to);
+                    }}
+                    onAuxClick={(event) => {
+                      if (event.button !== 1) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void openTargetInNewWindow(`/bots/${encodeURIComponent(bot.id)}`);
+                    }}
                     aria-current={selected ? 'page' : undefined}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -788,14 +1005,18 @@ export function TeammatesSection() {
                     {/* Reserve the timestamp column so status changes do not shift the preview. */}
                     <span className="flex min-w-10 shrink-0 self-stretch flex-col items-end justify-between whitespace-nowrap py-0.5">
                       <span data-teammate-timestamp className={cn('min-h-4 text-11 tabular-nums', mutedClass)}>{timestamp}</span>
-                      <span aria-hidden className="flex min-h-4 items-center justify-end" />
+                      <span className="flex min-h-4 items-center justify-end">
+                        {duplicatingBotId === bot.id ? (
+                          <Spinner size={12} role="status" aria-label={t('bots.list.duplicating')} className={mutedClass} />
+                        ) : null}
+                      </span>
                     </span>
                   </button>
                   {renderBotContextMenu(bot, selected)}
                 </div>
               );
             })}
-            {visibleChats.length > CHAT_PREVIEW_LIMIT ? (
+            {!collapsed && visibleChats.length > CHAT_PREVIEW_LIMIT ? (
               <button
                 type="button"
                 aria-expanded={showAllChats}
@@ -809,7 +1030,7 @@ export function TeammatesSection() {
                 {showAllChats ? t('bots.list.showLess') : t('ccAgent.sidebar.showAllSessions', { count: visibleChats.length })}
               </button>
             ) : null}
-            {roster.showHiddenSection ? (
+            {!collapsed && roster.showHiddenSection ? (
               <div className="mt-3 border-t border-[var(--border-default)] pt-3">
                 <button
                   type="button"
@@ -828,7 +1049,23 @@ export function TeammatesSection() {
                       >
                         <button
                           type="button"
-                          onClick={() => navigate(`/bots/${bot.id}`)}
+                          {...companionDragProps(`/bots/${encodeURIComponent(bot.id)}`, bot.name)}
+                          onMouseDown={preventMiddleClickAutoscroll}
+                          onClick={(event) => {
+                            const route = `/bots/${encodeURIComponent(bot.id)}`;
+                            if (isSidebarNewWindowActivation(event)) {
+                              event.preventDefault();
+                              void openTargetInNewWindow(route);
+                              return;
+                            }
+                            navigate(route);
+                          }}
+                          onAuxClick={(event) => {
+                            if (event.button !== 1) return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void openTargetInNewWindow(`/bots/${encodeURIComponent(bot.id)}`);
+                          }}
                           className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left opacity-60"
                         >
                           <BotAvatar bot={bot} size="sm" />
@@ -838,26 +1075,30 @@ export function TeammatesSection() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => void setBotHidden(bot.id, false)}
+                          onClick={() => rosterAction(setBotHidden(bot.id, false), 'bots.list.hideFailed')}
                           className="mr-1 flex h-7 w-7 items-center justify-center rounded-lg hover:bg-[var(--surface-hover)]"
                           aria-label={t('bots.list.unhideNamed', { name: bot.name })}
                         >
                           <Eye size={14} />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteTarget(bot)}
-                          className="mr-1 flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-danger)] hover:bg-[var(--danger-bg-soft)]"
-                          aria-label={t('bots.lifecycle.deleteTitle')}
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        <Tip text={t('bots.lifecycle.deleteTitle')}>
+                          <Button
+                            variant="secondary"
+                            tone="danger"
+                            size="sm"
+                            onClick={() => setDeleteTarget(bot)}
+                            className="mr-1 w-7 px-0"
+                            aria-label={t('bots.lifecycle.deleteTitle')}
+                          >
+                            <Trash2 size={14} aria-hidden />
+                          </Button>
+                        </Tip>
                       </div>
                     ))
                   : null}
               </div>
             ) : null}
-            {archivedBots.length > 0 ? (
+            {!collapsed && archivedBots.length > 0 ? (
               <div className="mt-3 border-t border-[var(--border-default)] pt-3">
                 <div className="mb-1 flex items-center gap-2 px-2.5 text-10 font-medium text-[var(--sidebar-list-muted)]">
                   <AlertTriangle size={12} />
@@ -888,14 +1129,18 @@ export function TeammatesSection() {
                           {botRosterLabel(bot, bots)}
                         </span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setDeleteTarget(bot)}
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--text-danger)] opacity-0 hover:bg-[var(--danger-bg-soft)] group-hover:opacity-100 focus:opacity-100"
-                        aria-label={t('bots.lifecycle.deleteTitle')}
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                      <Tip text={t('bots.lifecycle.deleteTitle')}>
+                        <Button
+                          variant="secondary"
+                          tone="danger"
+                          size="sm"
+                          onClick={() => setDeleteTarget(bot)}
+                          className="w-7 px-0 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                          aria-label={t('bots.lifecycle.deleteTitle')}
+                        >
+                          <Trash2 size={14} aria-hidden />
+                        </Button>
+                      </Tip>
                     </div>
                   );
                 })}

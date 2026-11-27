@@ -9,10 +9,10 @@ import path from 'node:path';
 const uploadLocalFile = vi.hoisted(() => vi.fn());
 const uploadBuffer = vi.hoisted(() => vi.fn());
 const removeRemote = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock('../mediaTransfer', () => ({ uploadLocalFile, uploadBuffer, removeRemote, mimeOf: () => 'text/plain' }));
+vi.mock('../mediaTransfer.desktop', () => ({ uploadLocalFile, uploadBuffer, removeRemote, mimeOf: () => 'text/plain' }));
 
 const resolveSafe = vi.hoisted(() => vi.fn());
-vi.mock('../../imageCacheStore', () => ({ resolveSafe }));
+vi.mock('../../imageCacheStore.desktop', () => ({ resolveSafe }));
 
 vi.mock('../../logger', () => ({
   createLogger: () => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }),
@@ -83,7 +83,7 @@ describe('rewriteOutboundMedia — channel gating', () => {
     const controller = new AbortController();
     let current = true;
     uploadLocalFile.mockResolvedValueOnce({ key: 'first-object', size: 1, contentType: 'application/octet-stream', sha256: SHA256 });
-    uploadLocalFile.mockImplementationOnce(async () => { current = false; controller.abort(); throw new Error('cancelled'); });
+    uploadLocalFile.mockImplementationOnce(async () => { current = false; controller.abort(); throw new Error('UPLOAD_CANCELLED'); });
     await expect(withSourceFileAccessRecovery({ signal: controller.signal, selectFile: async () => null, assertCurrent: () => { if (!current) throw new Error('stale'); } },
       () => rewriteOutboundMedia('maker:send', ['session', { type: 'user', content: [{ type: 'file', path: '/first' }, { type: 'file', path: '/second' }] }]))).rejects.toThrow('stale');
     expect(removeRemote).toHaveBeenCalledExactlyOnceWith('first-object');

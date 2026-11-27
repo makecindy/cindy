@@ -19,6 +19,7 @@ const budgetState = vi.hoisted(() => ({ dir: '' }));
 vi.mock('../../appSessionState.js', async () => {
   const nodePath = await import('node:path');
   return {
+    getDataOwnerLifetime: () => 0,
     ownerScopedUserDataPath: (...parts: string[]): string => nodePath.join(budgetState.dir, ...parts),
     // 预算 store 的 owner 隔离读它；测试里固定成同一个 key 即可。
     activeOwnerScopeKey: (): string => 'test-owner',
@@ -169,6 +170,48 @@ describe('resolveConfiguredContextWindow on an unverified route', () => {
     expect(
       resolveConfiguredContextWindow(unverifiedCatalog, 'claude-code', 'xd', 'discovered-model', null),
     ).toBe(1_000_000);
+  });
+});
+
+describe('required verification on an unverified route', () => {
+  // 主人远程切模、交接都要核实目标窗口。上游不发布窗口的连接只能靠用户在模型详情里
+  // 手填的模型级上限（`model-context-limit-store`）作为人工事实：只认这条声明，任务预算
+  // 仍不算证据。认这条之前，这类连接永远切不了模
+  // （2026-11-25 实测 [PRECONDITION_FAILED] target-window-unverified）。
+  it('accepts the user-declared model limit as the target window', () => {
+    mockModelLimit = 262_144;
+    expect(resolveConfiguredContextWindow(
+      undeclaredCatalog, 'claude-code', 'xd', 'undeclared-model', null, 'required',
+    )).toBe(262_144);
+  });
+
+  it('returns the same window the runtime is created with', () => {
+    // 同源不变量：闸门核实的目标窗口必须就是建 env 用的窗口，否则重放按的值与运行时不同。
+    mockModelLimit = 262_144;
+    expect(resolveConfiguredContextWindow(
+      undeclaredCatalog, 'claude-code', 'xd', 'undeclared-model', 200_000, 'required',
+    )).toBe(resolveConfiguredContextWindow(
+      undeclaredCatalog, 'claude-code', 'xd', 'undeclared-model', 200_000,
+    ));
+  });
+
+  it('still refuses when only a task budget is configured', () => {
+    // 任务预算只是工作上限，不能当物理容量：没有模型级声明时闸门照旧关闭。
+    expect(resolveConfiguredContextWindow(
+      undeclaredCatalog, 'claude-code', 'xd', 'undeclared-model', 262_144, 'required',
+    )).toBeNull();
+  });
+
+  it('still refuses when the catalog has no row for the model', () => {
+    mockModelLimit = 262_144;
+    expect(resolveConfiguredContextWindow(
+      undeclaredCatalog, 'claude-code', 'xd', 'model-absent-from-catalog', null, 'required',
+    )).toBeNull();
+  });
+
+  it('keeps using the verified catalog window when there is one', () => {
+    expect(resolveConfiguredContextWindow(catalog, 'claude-code', 'xd', 'long-window-model', null, 'required'))
+      .toBe(200_000);
   });
 });
 
@@ -350,4 +393,23 @@ describe('applySessionContextWindowBudgetToCreateOpts', () => {
     await applySessionContextWindowBudgetToCreateOpts('sess-2', opts, catalog);
     expect('contextWindowBudget' in opts).toBe(false);
   });
+
+
+  it('目录没有该模型行时创建参数不收敛，闸门也没有可核实的窗口', async () => {
+    writeSessionContextWindowBudget('sess-absent', 262_144);
+    const opts = optsFor({ model: 'model-absent-from-catalog' });
+    await applySessionContextWindowBudgetToCreateOpts('sess-absent', opts, undeclaredCatalog);
+    expect('contextWindowBudget' in opts).toBe(false);
+    expect(resolveConfiguredContextWindow(undeclaredCatalog, 'claude-code', 'xd', 'model-absent-from-catalog'))
+      .toBeNull();
+  });
 });
+
+// Preserve the existing test owner/path contract after storage ports were extracted.
+vi.mock('../../ownerContext.js', () => ({
+  activeDataOwnerId: () => 'test-owner',
+  ownerGeneration: () => 1,
+  isOwnerBoundaryPending: () => false,
+  hasCommittedOwner: () => Boolean('test-owner'),
+  ownerScopedPath: (...parts: string[]) => path.join(budgetState.dir, ...parts),
+}));

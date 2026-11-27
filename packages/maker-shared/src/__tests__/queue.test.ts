@@ -304,7 +304,7 @@ describe('shared queue presentation model', () => {
     expect(normalRow.actions.edit.disabled).toBe(false);
   });
 
-  it('locks edit and steer (but keeps remove and reorder) for auto-sent rows', () => {
+  it('allows task messages to steer and reorder while keeping automatic prompts locked', () => {
     const projection = {
       steeringQueueClientIds: [],
       queueEditLocks: [],
@@ -318,8 +318,7 @@ describe('shared queue presentation model', () => {
       expect(isAutoSentQueueItem(item)).toBe(true);
       const row = buildQueueRowPresentation({ item, originalIndex: 0, projection, queueLength: 2 });
       expect(row.actions.edit.disabled).toBe(true);
-      expect(row.actions.steer.disabled).toBe(true);
-      expect(row.actions.edit.disabledReason).toBe('自动发送的消息不支持编辑或插话发送。');
+      expect(row.actions.steer.disabled).toBe(origin.kind !== 'session');
       expect(row.actions.remove.disabled).toBe(false);
       expect(row.actions.moveDown.disabled).toBe(false);
     }
@@ -332,6 +331,25 @@ describe('shared queue presentation model', () => {
     expect(isAutoSentQueueItem({ sourcePlugin: { name: 'no id' } })).toBe(false);
     expect(isAutoSentQueueItem({ origin: { kind: 'orca', senderLabel: 'Lead' } })).toBe(false);
     expect(isAutoSentQueueItem({})).toBe(false);
+  });
+
+  it('disables only steer when projection.steerUnsupported is true', () => {
+    const row = buildQueueRowPresentation({
+      item: { ...queued('q-1'), text: '普通消息' },
+      originalIndex: 0,
+      queueLength: 2,
+      projection: {
+        steeringQueueClientIds: [],
+        queueEditLocks: [],
+        queueInteractionLocks: [],
+        steerUnsupported: true,
+      },
+    });
+    expect(row.actions.steer.disabled).toBe(true);
+    expect(row.actions.steer.disabledReason).toContain('不支持插话');
+    expect(row.actions.edit.disabled).toBe(false);
+    expect(row.actions.moveDown.disabled).toBe(false);
+    expect(row.actions.remove.disabled).toBe(false);
   });
 });
 
@@ -347,6 +365,19 @@ describe('queueItemVisibleText', () => {
       persistedContent: 'heartbeat prompt',
       origin: { kind: 'scheduler', scheduleId: 's' },
     })).toBe('heartbeat prompt');
+  });
+
+  // Bug: a queued answer to a question showed the reply markup sent to the model.
+  it.each([
+    ['the readable copy saved by the Host', '> Install?\n\nYes'],
+    ['the envelope saved by a client', JSON.stringify({ text: '> Install?\n\nYes', images: [], files: [] })],
+    ['a copy saved in the model format', undefined],
+  ])('shows a question answer from %s', (_case, persistedContent) => {
+    expect(queueItemVisibleText({
+      clientId: 'question-reply:answered:q1:digest',
+      text: '<send_user_message_question_reply>\n[{"questionItemId":"q1","question":"Install?","answer":"Yes"}]\n</send_user_message_question_reply>',
+      ...(persistedContent ? { persistedContent } : {}),
+    })).toBe('> Install?\n\nYes');
   });
 
   it('keeps an intentionally empty persisted body instead of exposing agent instructions', () => {
