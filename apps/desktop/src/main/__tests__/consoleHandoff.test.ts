@@ -136,7 +136,7 @@ describe('resolveConsoleExternalUrl', () => {
 
     const resolved = await resolveConsoleExternalUrl(rawUrl, {
       trustedSender: true,
-      isOrgSessionActive: () => true,
+      getSessionMode: () => 'org',
       getAuthBaseUrl: () => AUTH_BASE,
       getConsolePublicOrigin,
       requestHandoff,
@@ -148,6 +148,28 @@ describe('resolveConsoleExternalUrl', () => {
       authBaseUrl: AUTH_BASE,
       targetPath: '/orgs/org-1/personal/cloud?region=tokyo#map',
       entry: 'console_prefix',
+      sessionMode: 'org',
+    });
+  });
+
+  it('upgrades a trusted personal account-session link using account mode', async () => {
+    const rawUrl = `${AUTH_BASE}/console/personal/cloud?region=tokyo`;
+    const handoffUrl = `${AUTH_BASE}/console/handoff#code=${VALID_CODE}`;
+    const requestHandoff = vi.fn().mockResolvedValue({ handoffUrl });
+
+    const resolved = await resolveConsoleExternalUrl(rawUrl, {
+      trustedSender: true,
+      getSessionMode: () => 'account',
+      getAuthBaseUrl: () => AUTH_BASE,
+      requestHandoff,
+    });
+
+    expect(resolved).toBe(handoffUrl);
+    expect(requestHandoff).toHaveBeenCalledWith({
+      authBaseUrl: AUTH_BASE,
+      targetPath: '/personal/cloud?region=tokyo',
+      entry: 'console_prefix',
+      sessionMode: 'account',
     });
   });
 
@@ -159,7 +181,7 @@ describe('resolveConsoleExternalUrl', () => {
 
     const resolved = await resolveConsoleExternalUrl(rawUrl, {
       trustedSender: true,
-      isOrgSessionActive: () => true,
+      getSessionMode: () => 'org',
       getAuthBaseUrl: () => AUTH_BASE,
       getConsolePublicOrigin,
       requestHandoff,
@@ -171,10 +193,11 @@ describe('resolveConsoleExternalUrl', () => {
       authBaseUrl: AUTH_BASE,
       targetPath: '/personal/cloud?region=sg',
       entry: 'standalone',
+      sessionMode: 'org',
     });
   });
 
-  it('skips handoff with zero network calls for untrusted senders, non-org/unauthenticated sessions, and third-party URLs', async () => {
+  it('skips handoff with zero network calls for untrusted senders, ineligible sessions, and third-party URLs', async () => {
     const requestHandoff = vi.fn();
     const getConsolePublicOrigin = vi.fn();
     const consoleUrl = `${AUTH_BASE}/console/personal/cloud`;
@@ -182,7 +205,7 @@ describe('resolveConsoleExternalUrl', () => {
     expect(
       await resolveConsoleExternalUrl(consoleUrl, {
         trustedSender: false,
-        isOrgSessionActive: () => true,
+        getSessionMode: () => 'org',
         getAuthBaseUrl: () => AUTH_BASE,
         getConsolePublicOrigin,
         requestHandoff,
@@ -192,7 +215,7 @@ describe('resolveConsoleExternalUrl', () => {
     expect(
       await resolveConsoleExternalUrl(consoleUrl, {
         trustedSender: true,
-        isOrgSessionActive: () => false,
+        getSessionMode: () => null,
         getAuthBaseUrl: () => AUTH_BASE,
         getConsolePublicOrigin,
         requestHandoff,
@@ -203,7 +226,7 @@ describe('resolveConsoleExternalUrl', () => {
     expect(
       await resolveConsoleExternalUrl(externalUrl, {
         trustedSender: true,
-        isOrgSessionActive: () => true,
+        getSessionMode: () => 'account',
         getAuthBaseUrl: () => AUTH_BASE,
         getConsolePublicOrigin,
         requestHandoff,
@@ -221,7 +244,7 @@ describe('resolveConsoleExternalUrl', () => {
     expect(
       await resolveConsoleExternalUrl(rawUrl, {
         trustedSender: true,
-        isOrgSessionActive: () => true,
+        getSessionMode: () => 'account',
         getAuthBaseUrl: () => AUTH_BASE,
         requestHandoff: vi.fn().mockRejectedValue(new Error('404 Not Found')),
         onFallback,
@@ -233,7 +256,7 @@ describe('resolveConsoleExternalUrl', () => {
     expect(
       await resolveConsoleExternalUrl(rawUrl, {
         trustedSender: true,
-        isOrgSessionActive: () => true,
+        getSessionMode: () => 'org',
         getAuthBaseUrl: () => AUTH_BASE,
         requestHandoff: vi.fn().mockResolvedValue({
           handoffUrl: `https://evil.example.test/console/handoff#code=${VALID_CODE}`,

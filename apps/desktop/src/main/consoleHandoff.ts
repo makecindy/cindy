@@ -4,10 +4,12 @@
  * 当可信的桌面端主界面外链打开当前登录区域对应的 Console 页面时，由主进程静默向
  * `POST /api/auth/console-handoff` 换取 60 秒一次性 `#code=...` 中转链接再交给系统浏览器：
  * - 绝不在 renderer 暴露 handoff code，也绝不把 access/refresh token 写入 URL；
- * - 仅对可信应用页面触发（`isTrustedAppRendererEvent`）且仅在当前为组织身份会话时生效；
+ * - 仅对可信应用页面触发（`isTrustedAppRendererEvent`）：
+ *   - 组织身份会话使用当前 org access token 换发同组织 resource-only 免登；
+ *   - 个人身份会话在本地持有 Passport 凭据时使用 account token 换发浏览器独立 account + resource 会话；
  * - 仅匹配当前活跃登录区域的 `authApiBaseUrl/console/*` 或该区域 `client-config` 声明的
  *   `consolePublicOrigin`，非本区/第三方链接零网络开销直接原样放行；
- * - 服务端超时、返回 404（旧服务端）、403（个人/协助会话）或异常链接时，一律静默回退原 URL。
+ * - 服务端超时、返回 404（旧服务端）、403 或异常链接时，一律静默回退原 URL。
  */
 import { net } from 'electron';
 import * as authManager from './authManager.js';
@@ -52,6 +54,7 @@ const UNIVERSAL_ORG_SECTIONS = new Set([
 ]);
 
 export type ConsoleHandoffEntry = 'console_prefix' | 'standalone';
+export type ConsoleHandoffSessionMode = 'org' | 'account';
 
 export interface MatchedConsoleTarget {
   targetPath: string;
@@ -60,13 +63,14 @@ export interface MatchedConsoleTarget {
 
 export interface ConsoleHandoffDeps {
   trustedSender: boolean;
-  isOrgSessionActive: () => boolean;
+  getSessionMode: () => ConsoleHandoffSessionMode | null;
   getAuthBaseUrl: () => string | null;
   getConsolePublicOrigin?: (authBaseUrl: string) => Promise<string | null>;
   requestHandoff: (input: {
     authBaseUrl: string;
     targetPath: string;
     entry: ConsoleHandoffEntry;
+    sessionMode: ConsoleHandoffSessionMode;
   }) => Promise<{ handoffUrl?: unknown } | null>;
   onFallback?: (reason: string) => void;
 }
@@ -223,7 +227,11 @@ export async function resolveConsoleExternalUrl(
   rawUrl: string,
   deps: ConsoleHandoffDeps,
 ): Promise<string> {
-  if (!deps.trustedSender || !deps.isOrgSessionActive()) {
+  if (!deps.trustedSender) {
+    return rawUrl;
+  }
+  const sessionMode = deps.getSessionMode();
+  if (!sessionMode) {
     return rawUrl;
   }
 
@@ -266,6 +274,7 @@ export async function resolveConsoleExternalUrl(
       authBaseUrl: authUrl.origin,
       targetPath: matched.targetPath,
       entry: matched.entry,
+      sessionMode,
     });
     const safeHandoffUrl = validateConsoleHandoffUrl(response?.handoffUrl, {
       authBaseUrl: authUrl.origin,
@@ -326,10 +335,15 @@ export async function resolveConsoleExternalUrlForDesktop(
 ): Promise<string> {
   return resolveConsoleExternalUrl(rawUrl, {
     trustedSender,
-    isOrgSessionActive: () => {
-      if (!authManager.getAccessToken()) return false;
+    getSessionMode: () => {
+      if (!authManager.getAccessToken()) return null;
       const state = authManager.getAuthState();
-      return state.isAuthenticated && state.user?.membershipKind === 'org';
+      if (!state.isAuthenticated) return null;
+      if (state.user?.membershipKind === 'org') return 'org';
+      if (state.user?.membershipKind === 'personal' && authManager.getContactChangeSession()) {
+        return 'account';
+      }
+      return null;
     },
     getAuthBaseUrl: () => {
       try {
@@ -339,8 +353,36 @@ export async function resolveConsoleExternalUrlForDesktop(
       }
     },
     getConsolePublicOrigin: fetchConsolePublicOrigin,
-    requestHandoff: async ({ authBaseUrl, targetPath, entry }) => {
+    requestHandoff: async ({ authBaseUrl, targetPath, entry, sessionMode }) => {
       const normalizedExpected = authBaseUrl.replace(/\/+$/, '');
+      if (sessionMode === 'account') {
+        const passportSession = authManager.getContactChangeSession();
+        if (!passportSession) return null;
+        const accountToken = await authManager.issuePassportAccountToken(
+          passportSession.realm,
+          passportSession.passportId,
+        );
+        if (!authManager.isContactChangeSessionCurrent(passportSession)) {
+          return null;
+        }
+        return serverApiFetch<{ handoffUrl?: string }>('/api/auth/console-handoff', {
+          baseUrl: () => getClientEndpointForRealm(passportSession.realm, 'authApiBaseUrl'),
+          beforeHop: (resolvedBaseUrl) => {
+            if (resolvedBaseUrl.replace(/\/+$/, '') !== normalizedExpected) {
+              throw new Error('Auth realm changed before console account handoff request');
+            }
+          },
+          authorization: `Bearer ${accountToken}`,
+          skipAutoRefresh: true,
+          skipSessionInvalidation: true,
+          method: 'POST',
+          body: { targetPath, entry },
+          timeoutMs: HANDOFF_REQUEST_TIMEOUT_MS,
+          redactErrorDetails: true,
+          logLabel: '/api/auth/console-handoff',
+          expectedErrors: [{ status: 401 }, { status: 403 }, { status: 404 }],
+        });
+      }
       return serverApiFetch<{ handoffUrl?: string }>('/api/auth/console-handoff', {
         baseUrl: () => getClientEndpointForRealm(authManager.getActiveAuthRealm(), 'authApiBaseUrl'),
         beforeHop: (resolvedBaseUrl) => {
