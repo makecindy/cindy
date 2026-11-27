@@ -40,7 +40,7 @@ const SENSITIVE_BASENAMES = new Set([
 const PRIVATE_KEY_BASENAME_RE = /^id_(?:rsa|dsa|ecdsa|ed25519)$/i;
 const SENSITIVE_EXTENSION_RE = /\.(?:pem|key|p12|pfx|jks|keystore|kdbx)$/i;
 const SENSITIVE_SUBTREE_RE =
-  /(^|\/)(?:owners\/[^/]+\/plugin-engine-accounts|\.gemini\/antigravity-cli|\.(?:claude|codex)-cindy-[^/]+)(?:\/|$)/i;
+  /(^|\/)(?:owners\/[^/]+\/plugin-engine-accounts|plugin-engine-accounts\/[^/]+\/[^/]+\/cindy-[a-f0-9]{12}-[^/]*|\.gemini\/antigravity-cli|\.(?:claude|codex)-cindy-[^/]+)(?:\/|$)/i;
 const SENSITIVE_PATH_RE =
   /(^|\/)(?:\.gem\/credentials|\.docker\/config\.json|\.config\/gcloud\/application_default_credentials\.json|\.config\/gh\/hosts\.ya?ml|\.pip\/pip\.(?:conf|ini)|\.config\/pip\/pip\.(?:conf|ini))$/i;
 

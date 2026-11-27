@@ -125,6 +125,8 @@ export const SENSITIVE_CREDENTIAL_GLOB_PATTERNS = [
   "**/antigravity-oauth-token",
   "**/owners/*/plugin-engine-accounts",
   "**/owners/*/plugin-engine-accounts/**",
+  "**/plugin-engine-accounts/*/*/cindy-*",
+  "**/plugin-engine-accounts/*/*/cindy-*/**",
   "**/.netrc",
   "**/.npmrc",
   "**/.pgpass",

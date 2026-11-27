@@ -62,11 +62,15 @@ export async function ensurePluginEngineAccountDir(dir: string): Promise<void> {
   const ownerRoot = pluginEngineAccountsOwnerRoot();
   if (ownerRoot) {
     const relative = path.relative(ownerRoot, dir);
-    if (relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))) {
+    const withinOwnerRoot =
+      relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+    if (withinOwnerRoot) {
       await hardenLocalCredentialDirectory(ownerRoot, { writeMarkers: true });
+      await hardenLocalCredentialDirectory(dir, { writeMarkers: false });
+      return;
     }
   }
-  await hardenLocalCredentialDirectory(dir, { writeMarkers: false });
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
 }
 
 /**

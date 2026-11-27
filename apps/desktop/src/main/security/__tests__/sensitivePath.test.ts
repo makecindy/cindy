@@ -18,6 +18,12 @@ describe('detectSensitivePath', () => {
     expect(
       detectSensitivePath('owners/abae59844621cadf5062/plugin-engine-accounts/_root__agy/agy/cindy-1/state'),
     ).toBe('sensitive-directory');
+    expect(
+      detectSensitivePath('plugin-engine-accounts/_root__agy/agy/cindy-0123456789ab-11111111-1111-4111-8111-111111111111/state'),
+    ).toBe('sensitive-directory');
+    expect(
+      detectSensitivePath('tmp/moved/plugin-engine-accounts/_root__agy/agy/cindy-0123456789ab-11111111-1111-4111-8111-111111111111'),
+    ).toBe('sensitive-directory');
     expect(detectSensitivePath('.gemini/antigravity-cli/antigravity-oauth-token')).toBe('sensitive-directory');
     expect(detectSensitivePath('antigravity-oauth-token')).toBe('sensitive-basename');
     expect(detectSensitivePath('.claude-cindy-0123456789ab-11111111-1111-4111-8111-111111111111/settings.json')).toBe(
@@ -30,6 +36,7 @@ describe('detectSensitivePath', () => {
 
   it('does not flag ordinary repository source paths for plugin-engine-accounts', () => {
     expect(detectSensitivePath('apps/desktop/src/main/plugin-engine-accounts/paths.ts')).toBeNull();
+    expect(detectSensitivePath('apps/desktop/src/main/plugin-engine-accounts/__tests__/runtime.test.ts')).toBeNull();
     expect(detectSensitivePath('.gemini/settings.json')).toBeNull();
   });
 });
