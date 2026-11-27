@@ -518,13 +518,14 @@ export default {
         assert.equal(await preview.locator('.session-status-breathing').evaluate(node => getComputedStyle(node).animationName), 'none');
       }
       await page.emulateMedia({ colorScheme: ui.theme, reducedMotion: 'no-preference' });
-      const groupAnimation = await page.locator('[data-testid="bot-group-running"] .session-status-breathing').evaluate(node => getComputedStyle(node).animationName);
-      assert.notEqual(groupAnimation, 'none');
-      const groupColor = await page.locator('[data-testid="bot-group-running"]').evaluate(node => getComputedStyle(node).color);
+      assert.equal(await page.locator('[data-testid="bot-group-running"]').count(), 0, 'executing group keeps showing latest message');
+      const firstAnimation = await previews.first().locator('.session-status-breathing').evaluate(node => getComputedStyle(node).animationName);
+      assert.notEqual(firstAnimation, 'none');
+      const firstColor = await previews.first().evaluate(node => getComputedStyle(node).color);
       for (const preview of await previews.all()) {
-        assert.equal(await preview.evaluate(node => getComputedStyle(node).color), groupColor);
+        assert.equal(await preview.evaluate(node => getComputedStyle(node).color), firstColor);
         const icon = preview.locator('.session-status-breathing');
-        assert.equal(await icon.evaluate(node => getComputedStyle(node).animationName), groupAnimation);
+        assert.equal(await icon.evaluate(node => getComputedStyle(node).animationName), firstAnimation);
         assert.equal(await icon.locator('svg').getAttribute('width'), '11');
       }
       assert.equal(await page.locator('[data-teammate-row-status] [data-teammate-status="running"]').count(), 0);
@@ -699,24 +700,14 @@ export default {
       const box = await badge.first().boundingBox();
       assert.ok(box && box.width === 14 && box.height === 14, 'mentions use the same compact status point');
       const colors = await badge.evaluateAll(nodes => nodes.map(node => node.firstElementChild.style.backgroundColor));
-      assert.deepEqual(colors, ['var(--warning-accent)', 'var(--bot-unread-bg)'], 'running stays orange, group attention is blue');
+      assert.deepEqual(colors, ['var(--bot-unread-bg)', 'var(--bot-unread-bg)'], 'executing group keeps blue mention point');
       assert.equal(await page.locator('button:visible:has([data-teammate-mention]) [data-teammate-status]:visible').count(), 2, 'one indicator per marked avatar');
       await ui.capture('collapsed-mention');
       return;
     }
     if (ui.case.startsWith('long-speakers-')) {
-      const running = page.getByTestId('bot-group-running');
-      const label = running.locator('[title]');
-      const badge = page.locator('[data-teammate-status="running"]');
-      const metrics = await label.evaluate(node => ({
-        width: node.clientWidth, fullWidth: node.scrollWidth,
-        right: node.getBoundingClientRect().right, overflow: getComputedStyle(node).overflow,
-        textOverflow: getComputedStyle(node).textOverflow,
-      }));
-      assert.ok(metrics.width > 0 && metrics.fullWidth > metrics.width, 'long names reach the text boundary');
-      assert.equal(metrics.overflow, 'hidden');
-      assert.equal(metrics.textOverflow, 'ellipsis');
-      assert.equal(await badge.count(), 0, 'expanded running has no duplicate orange point');
+      assert.equal(await page.getByTestId('bot-group-running').count(), 0, 'executing group keeps showing latest message');
+      assert.equal(await page.locator('[data-teammate-status="running"]').count(), 0, 'executing group has no running point');
       return;
     }
     if (ui.case === 'device-names') {

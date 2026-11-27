@@ -1275,7 +1275,8 @@ export class WechatIM extends BaseIM implements RichChannelIM {
         await this.#requireStore().releaseDispatch(task.bindingEpoch, task.id);
         await delay(IDLE_PUMP_DELAY_MS);
       } else {
-        await this.#commitPreDispatchFailure(task, dispatch.reason);
+        // 伙伴不可用时 runner 已拼好「伙伴现在接不了消息：原因」, 优先发它而不是通用的「请稍后重试」。
+        await this.#commitPreDispatchFailure(task, dispatch.reason, dispatch.notice);
       }
       return;
     }
@@ -1463,6 +1464,11 @@ export class WechatIM extends BaseIM implements RichChannelIM {
             await this.#commitSimpleReply(task, imText('imBot.text.wechat.reply.companionDmNew'));
             return;
           }
+          // 伙伴解析不出: 不新建微信自己的任务(另一个身份), 回「伙伴暂时不可用」。
+          if (typeof result === 'object') {
+            await this.#commitSimpleReply(task, result.unavailable);
+            return;
+          }
         }
         const accepted = await this.#requireStore().markAccepted(task.bindingEpoch, task.id);
         if (!accepted) throw new Error('WECHAT_ACCEPT_CAS_REJECTED');
@@ -1574,9 +1580,9 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     }
   }
 
-  async #commitPreDispatchFailure(task: WechatTask, reason: string): Promise<void> {
+  async #commitPreDispatchFailure(task: WechatTask, reason: string, notice?: string): Promise<void> {
     const companion = this.#turnRuntime?.runner.companionBotIdFor?.(this.#epoch?.credentials.ilinkBotId ?? '');
-    const text = wechatPreDispatchFailureText(reason, Boolean(companion));
+    const text = notice ?? wechatPreDispatchFailureText(reason, Boolean(companion));
     const chunks = chunkWechatText(text);
     await this.#requireStore().commitPreDispatchFailure({
       bindingEpoch: task.bindingEpoch,
@@ -1973,7 +1979,7 @@ function parseTaskPayload(raw: string): WechatTaskPayload {
 
 function prepareWechatTaskTurn(payload: WechatTaskPayload) {
   const replyPrefix = payload.replyContext
-    ? buildImReplyContextBlock({ author: '引用消息', text: payload.replyContext })
+    ? buildImReplyContextBlock({ author: '引用消息', text: payload.replyContext }, payload.text)
     : '';
   return {
     text: payload.text,

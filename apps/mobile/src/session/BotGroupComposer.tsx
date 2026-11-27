@@ -34,6 +34,7 @@ import {
   retainBotGroupTrackedMentions,
   type BotGroupTrackedMention,
 } from '@cindy/maker-shared/botGroupMentions';
+import { createBotGroupMemberSearch } from '@cindy/maker-shared/botGroupMemberSearch';
 import {
   chatGroupMentionRoster,
   isActiveBotGroupMember,
@@ -172,21 +173,23 @@ export function BotGroupComposer({
   const activeMembers = useMemo(() => members.filter(isActiveBotGroupMember), [members]);
   const mentionMembers = useMemo(() => chatGroupMentionRoster(members, conversationKind), [members, conversationKind]);
   const mentionCandidates = useMemo(() => mentionMembers.filter(isActiveBotGroupMember), [mentionMembers]);
+  const searchMembers = useMemo(() => createBotGroupMemberSearch(mentionCandidates), [mentionCandidates]);
   const allLabel = t('groupChat.mention.all');
   const allBotsLabel = t('groupChat.mention.allBots');
   const allBotLabels = [allBotsLabel, 'bots'];
   const query = focused ? findBotGroupMentionQuery(text, caret, mentionCandidates) : null;
+  const queryText = query?.query;
   const options = useMemo<MentionOption[]>(() => {
-    if (!query || mentionCandidates.length === 0) return [];
-    const everyone: MentionOption[] = filterBotGroupMentionCandidates(query.query, [{ name: allLabel }]).length > 0
+    if (queryText === undefined || mentionCandidates.length === 0) return [];
+    const everyone: MentionOption[] = filterBotGroupMentionCandidates(queryText, [{ name: allLabel }]).length > 0
       ? [{ kind: 'all', label: allLabel }]
       : [];
-    const people = filterBotGroupMentionCandidates(query.query, mentionCandidates)
+    const people = searchMembers(queryText)
       .map((member): MentionOption => ({ kind: 'member', label: member.name, member }));
-    const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(query.query, [{ name: allBotsLabel }]).length
+    const allBots: MentionOption[] = allowMentionAllBots && filterBotGroupMentionCandidates(queryText, [{ name: allBotsLabel }]).length
       ? [{ kind: 'allBots', label: allBotsLabel }] : [];
     return [...everyone, ...allBots, ...people];
-  }, [mentionCandidates, allLabel, allBotsLabel, allowMentionAllBots, query]);
+  }, [mentionCandidates.length, allLabel, allBotsLabel, allowMentionAllBots, queryText, searchMembers]);
   const pickerOpen = query !== null && options.length > 0;
 
   const trimmed = text.trim();

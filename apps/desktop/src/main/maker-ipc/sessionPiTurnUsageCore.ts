@@ -37,6 +37,7 @@ import {
 import { sumMoneyByCurrency, type RegionalMoney } from '../../shared/regionalMoney.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
+  recordProviderAccountActivity,
   triggerClaudeSubscriptionUsageRefresh,
   triggerCodexAccountUsageRefresh,
   triggerXaiSubscriptionUsageRefresh,
@@ -408,6 +409,9 @@ export function recordSessionPiTurnUsage(
           }
         }
 
+        if (!session.remoteHostId && sessionProvider && sessionProvider !== 'xd') {
+          recordProviderAccountActivity(sessionProvider);
+        }
         if (effectiveProvider && isOpenAiSubscriptionProviderId(effectiveProvider)) {
           triggerCodexAccountUsageRefresh(effectiveProvider);
         } else if (isClaudeSubscriptionProviderId(effectiveProvider)) {

@@ -2521,7 +2521,7 @@
       "skinLabel": "角色",
       "skinHint": "任務膠囊和動態島裡顯示的角色。",
       "soundLabel": "事件音效",
-      "soundHint": "設定事件音效時，只播放所選音效；未設定或關閉事件音效時，跟隨系統通知設定。",
+      "soundHint": "為每類提醒選擇 8-bit 音效，任務膠囊和動態島共用；點按的音效只在點任務膠囊時播放。",
       "soundAria": "切換任務膠囊音效",
       "soundSelectAria": "{{event}}的音效",
       "soundPreviewAria": "預覽{{event}}音效",
@@ -2576,7 +2576,7 @@
         "select": "點選操作"
       },
       "soundOptions": {
-        "none": "跟隨系統",
+        "none": "無",
         "startup-chime": "啟動音",
         "ring-chime": "圓環音",
         "item-found": "發現道具",
@@ -8857,6 +8857,8 @@
         "networkSecretOauthDetail": "登入和令牌由 Cindy 管理，可新增授權或選擇已連線的同服務帳號。請核對下方權限；使用已連線帳號時以其既有權限為準。",
         "networkConnections": "可連線你新增的 {{label}}",
         "networkConnectionsDetail": "位址在這個插件的設定介面裡新增；每次新增位址都需要你確認，你提供的憑證只注入對應位址。",
+        "networkConnectionsGlabCli": "可連線你新增的 {{label}}，並優先複用本機 glab 已登入的執行個體",
+        "networkConnectionsGlabCliDetail": "你在插件設定中新增的執行個體憑證優先；未單獨新增的執行個體，主機會按需讀取本機 glab 的登入權杖並僅注入該執行個體自身的 HTTPS 請求，插件程式碼無法讀取或儲存權杖。",
         "codeDetailNetwork": "在獨立沙箱中執行，無法存取你的檔案；網路僅限上方宣告的網域，由主機代發。",
         "codeDetailWithNode": "面板 UI 在獨立沙箱中執行；本機處理能力由上方宣告的 Node 執行環境提供。",
         "added": "新增",
@@ -8885,7 +8887,7 @@
         "nodeChildSpawnDetail": "只能啟動它自己包裡申報過的 JS 檔案（與主程式同樣的本機權限），不能執行任意命令；插件停用或退出時子處理程序一併關閉。",
         "skill": "為 AI 助手新增技能「{{name}}」",
         "skillDetail": "技能是一份指令檔案，AI 會把它當作自己的指令載入執行，擁有你的全部權限，對 Claude Code 與 Codex、所有專案都生效——不受本插件沙箱約束。插件啟用期間持續可用，停用或解除安裝即移除；僅對某個資料夾關閉本插件不會隱藏它。此處無法預覽技能全文——請只安裝你信任的插件。",
-        "routineEvents": "例行任務事件",
+        "routineEvents": "自動化事件",
         "mcpUi": "可在對話中顯示互動頁面",
         "mcpUiDomains": "頁面可連線網域：{{domains}}",
         "mcpAppOnly": "僅頁面可用",
@@ -8977,7 +8979,10 @@
             "user": "使用者",
             "assistant": "助手"
           }
-        }
+        },
+        "agentChecks": "可以檢查來源是否有新內容",
+        "agentChecksDetail": "與其他已獲授權的插件交換有變化、無變化或無法確認的狀態。各來源插件使用自己的已連接帳號，不分享訊息正文或憑證。檢查不呼叫模型。 也可檢查本機 Cindy 對話有無新增，不回傳對話內容。",
+        "agentChecksRequest": "確認增量檢查權限"
       },
       "connections": {
         "confirmTitle": "新增連線位址",
@@ -11891,6 +11896,7 @@
           "title": "@ 我的訊息",
           "me": "我",
           "markAll": "全部標為已讀",
+          "markReadFailed": "未能將提及標為已讀。",
           "empty": "沒有未讀的 @ 訊息",
           "thread": "話題",
           "main": "群聊",
@@ -12098,6 +12104,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}加入了群聊",
+        "memberJoinedList": "{{names}}加入了群聊",
+        "memberJoinedSummary": "{{names}} 及另外 {{others}} 人加入了群聊",
         "memberFailed": "{{name}}這次沒能回覆",
         "memberTimeout": "{{name}}太久沒有回覆，這次先跳過",
         "memberUnavailable": "{{name}}現在無法使用，這次沒有發言",
@@ -12278,6 +12286,8 @@
         "threadNew": "話題裡的新訊息",
         "replyingTo": "回覆「{{name}}」：{{text}}",
         "filesOutsideWorkingDir": "部分檔案不在工作目錄內，未附上。",
+        "modelFallback": "這台電腦上沒有選定的模型，這次改用 {{model}} 回覆。",
+        "modelFallbackUnnamed": "這台電腦上沒有選定的模型，這次改用本機可用的模型回覆。",
         "earlierOmitted": "（更早的訊息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {
@@ -12358,8 +12368,33 @@
           "unfollowTip": "取消關注後，只在有人提到你時提示",
           "listLabel": "這個群聊裡的話題",
           "listNews": "有新回覆",
-          "listOthers": "其他話題",
-          "newSeparator": "新回覆"
+          "newSeparator": "新回覆",
+          "openIndex": "話題",
+          "indexTitle": "話題",
+          "backToList": "返回話題列表",
+          "filterAria": "篩選話題",
+          "filterMine": "與我相關",
+          "filterAll": "全部",
+          "searchPlaceholder": "搜尋話題、回覆或成員",
+          "clearSearch": "清除搜尋",
+          "listRecent": "最近",
+          "indexParticipatedTag": "參與過",
+          "indexMentionedTag": "@過我",
+          "locateInGroup": "在群聊中定位",
+          "indexEmptyMine": "還沒有你參與或提到你的話題",
+          "indexEmptyAll": "這個群聊還沒有話題",
+          "indexEmptySearch": "沒有符合的話題",
+          "viewAllThreads": "查看全部話題",
+          "syncingHistory": "正在追溯更早話題…",
+          "rootKind": {
+            "task": "任務",
+            "image": "圖片",
+            "video": "影片",
+            "audio": "語音",
+            "file": "檔案",
+            "share": "轉發回覆",
+            "card": "卡片"
+          }
         },
         "replyPlaceholder": "回覆這則訊息，可用 @ 點名夥伴…",
         "sendReply": "傳送回覆",
@@ -13808,6 +13843,9 @@
           "allow": "允許",
           "deny": "拒絕",
           "approve": "批准"
+        },
+        "companion": {
+          "retryLater": "請稍後再試"
         }
       },
       "hook": {
@@ -17062,9 +17100,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "新增雲端主機",
-        "preparingCloud": "雲端主機 · 準備中",
-        "manageCloud": "管理雲端主機",
         "allMachines": "全部",
         "localMachine": "本機",
         "connecting": "連線中…",
@@ -17424,6 +17459,8 @@
         "moveToProjectRemoteUnsupported": "暫不支援移動遠端任務",
         "moveToProjectWorktreeBlocked": "此任務的工作目錄是 worktree，暫不支援移動到其他專案",
         "openInNewWindow": "在新視窗開啟",
+        "openInNewWindowShortcutMac": "⌘+點擊",
+        "openInNewWindowShortcutOther": "Ctrl+點擊",
         "exportShare": "匯出任務…",
         "exportHtml": "匯出為 HTML…",
         "exportHtmlSuccess": "對話已匯出為 HTML",
@@ -17555,6 +17592,13 @@
         "inbox": "收件匣",
         "enterInbox": "切換到收件匣模式",
         "leaveInbox": "切換到任務列表模式"
+      },
+      "filterHideTaskCreated": "隱藏由其他任務建立的任務",
+      "origin": {
+        "createdByTask": "由其他任務建立",
+        "createdByTaskNamed": "由任務「{{title}}」建立",
+        "createdByRemoteTask": "由 {{device}} 上的任務建立",
+        "createdByRemoteTaskNamed": "由 {{device}} 上的任務「{{title}}」建立"
       }
     },
     "rename": {
@@ -17575,7 +17619,9 @@
       "orcaRemoteLead": "來自 {{device}} 的協同",
       "orcaRemoteLeadReleased": "協同已結束 · 來自 {{device}}",
       "orcaRemoteLeadUnknownDevice": "另一臺電腦",
-      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任務、目錄和命令都在這臺電腦執行；你在這裡傳送的訊息不會回報給 Lead。"
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任務、目錄和命令都在這臺電腦執行；你在這裡傳送的訊息不會回報給 Lead。",
+      "createdByTask": "來自其他任務",
+      "createdByTaskNamed": "來自「{{title}}」"
     },
     "gitContext": {
       "detached": "分離 HEAD",
@@ -17779,8 +17825,8 @@
           }
         },
         "gitlab": {
-          "missing": "未偵測到 GitLab CLI（glab），無法顯示 MR 狀態。安裝 glab 並登入後即可顯示。",
-          "notLoggedIn": "本機 glab 尚未登入 {{host}}，無法顯示 MR 狀態。在終端執行 glab auth login 登入後即可顯示。",
+          "missing": "未偵測到 GitLab CLI（glab），GitLab 插件裡也沒有這個實例的連線，無法顯示 MR 狀態。安裝並登入 glab，或在 GitLab 插件裡新增該實例後即可顯示。",
+          "notLoggedIn": "本機 glab 尚未登入 {{host}}，GitLab 插件裡也沒有這個實例的連線，無法顯示 MR 狀態。在終端執行 glab auth login，或在 GitLab 插件裡新增該實例後即可顯示。",
           "unsupported": "此電腦暫不支援 GitLab MR 狀態",
           "openAria": "在瀏覽器開啟 MR !{{number}}",
           "summaryAria": "MR !{{number}} 摘要",
@@ -18006,6 +18052,13 @@
         "active": "篩選 {{count}}",
         "reset": "重置",
         "allProjects": "所有專案"
+      },
+      "match": {
+        "label": "關鍵詞匹配",
+        "any": "任一關鍵詞",
+        "all": "全部關鍵詞",
+        "help": "選擇「全部關鍵詞」後，用空格分開關鍵詞，要求同一則訊息全部包含。用 “精確短語” 比對連續文字。標題單獨比對。",
+        "partial": "結果可能不完整，請使用更具體的關鍵詞或限定專案。"
       }
     }
   },
@@ -18206,7 +18259,8 @@
         "pause": "暫停",
         "deleteAutomation": "刪除自動化"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "插件事件"
     },
     "detail": {
       "manualTrigger": "手動觸發",
@@ -18547,11 +18601,123 @@
         "cindyConnectionTitle": "GitHub · 透過 Cindy 連接",
         "manualConnectionTitle": "GitHub · 手動 Webhook",
         "githubAppHint": "請在執行此任務的電腦上連接 GitHub App，並授權這些倉庫，無需另設 Webhook 位址或金鑰。",
-        "githubAppPaused": "此任務已暫停，事件不會啟動它。"
+        "githubAppPaused": "此任務已暫停，事件不會啟動它。",
+        "plugin": {
+          "source": "插件事件",
+          "label": "選擇插件和事件",
+          "empty": "本機還沒有能提供事件的插件。安裝並啟用宣告了事件的插件後，可以在這裡選擇。",
+          "unavailable": "插件無法使用",
+          "remove": "移除",
+          "hint": "插件不會替你過濾任何事件，包括這個自動化自己發出的訊息；要不要處理，請在提示詞或前置檢查裡說明。電腦休眠、關機或插件停用期間的事件收不到。",
+          "offlineHint": "電腦休眠、關機或插件停用期間的事件收不到；不能漏掉事件時，請再加一個定時檢查。",
+          "required": "請至少選擇一個插件事件",
+          "state": {
+            "listening": "正在監聽",
+            "disconnected": "已中斷",
+            "error": "連線出錯",
+            "stopped": "未執行",
+            "unknown": "等待插件回報狀態"
+          },
+          "filterOnly": "只看",
+          "filterField": "欄位",
+          "filterOperator": "條件",
+          "filterValue": "值",
+          "filterRemove": "刪除條件",
+          "filterAdd": "新增「只看」條件",
+          "operators": {
+            "equals": "等於",
+            "contains": "包含",
+            "not-equals": "不等於"
+          }
+        },
+        "scopeLabel": "範圍",
+        "scope": {
+          "repository": "整個倉庫",
+          "repositoryHint": "倉庫有新事件時執行，例如新 PR、留言、CI 完成。",
+          "repositoryNeedsAccount": "需要登入 Cindy 帳號才能接收倉庫事件。",
+          "item": "指定 PR 或 Issue",
+          "itemHint": "只盯一條 PR 或 Issue：PR 在狀態確實變化時執行，Issue 在有新動態時執行。",
+          "project": "整個專案",
+          "projectHint": "專案有新事件時執行，例如新 MR、Issue、流水線完成。",
+          "gitlabItem": "指定 MR 或 Issue",
+          "gitlabItemHint": "只盯一個 MR 或 Issue：MR 在狀態確實變化時執行，Issue 在有變化時執行。"
+        },
+        "item": {
+          "label": "PR 或 Issue",
+          "placeholder": "42、#42、owner/repo#42 或連結",
+          "hint": "填編號、owner/repo#編號，或貼上 PR / Issue 連結，Cindy 會自動識別是哪一種。",
+          "resolving": "正在識別…",
+          "pr": "PR #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "已關閉",
+          "required": "請填寫要盯的 PR 或 Issue，並等它識別完成。",
+          "issueHint": "指定 Issue 透過 Cindy 連接的 GitHub App 接收事件，需要登入 Cindy 帳號。",
+          "errors": {
+            "invalid": "請填編號、#編號、owner/repo#編號，或 GitHub 上的 PR / Issue 連結。",
+            "no-repository": "只填編號時需要知道倉庫，請寫成 owner/repo#42，或貼上連結。",
+            "not-connected": "連接 GitHub 後才能識別是 PR 還是 Issue。",
+            "not-found": "這個倉庫裡沒有找到這個編號，或者你沒有存取權限。",
+            "unavailable": "暫時連不上 GitHub，請稍後再試。",
+            "needs-account": "這是一個 Issue。指定 Issue 需要登入 Cindy 帳號，並透過 Cindy 連接 GitHub。"
+          },
+          "issueChange": {
+            "any": "Issue 有新動態",
+            "comment": "有新留言",
+            "closed": "Issue 已關閉",
+            "reopened": "Issue 重新開啟"
+          },
+          "mr": "MR !{{number}}"
+        },
+        "gitlabSignedConnection": "簽名權杖（GitLab 19 以上）",
+        "gitlabSignedConnectionHint": "在 GitLab 專案的 Webhook 設定裡使用簽名權杖，安全性更高。",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "適用於較早版本的 GitLab：在 Webhook 設定裡填寫 Secret token。",
+        "gitlabPluginConnection": "透過 GitLab 插件",
+        "gitlabPluginConnectionHint": "用 GitLab 插件裡連好的帳號每分鐘檢查一次，不用在 GitLab 設定 Webhook，也不需要登入 Cindy 帳號。電腦休眠或關機期間的變化不會補發。",
+        "gitlabMrPollConnection": "定時讀取狀態",
+        "gitlabMrPollConnectionHint": "依「同時定時檢查」的時間讀取 MR 狀態（不執行任務），優先使用插件裡新增的帳號，其次使用本機 glab 登入。",
+        "gitlabSetupHint": "儲存後在任務詳情裡取得接收位址和金鑰，填到 GitLab 專案的「設定 › Webhooks」。",
+        "gitlabItem": {
+          "label": "MR 或 Issue",
+          "placeholder": "!12、#12、group/project!12 或連結",
+          "hint": "MR 寫 !編號，Issue 寫 #編號，也可以直接貼上連結。",
+          "required": "請填寫要盯的 MR 或 Issue。",
+          "mrHint": "GitLab 沒有推送通知，Cindy 會按「同時定時檢查」的時間讀取 MR 狀態（不執行任務），使用這台電腦的 glab 登入，或 GitLab 插件裡連好的帳號。",
+          "mrPluginHint": "GitLab 插件每分鐘檢查一次這個 MR，包括新提交、新評論、核准與管線結果。",
+          "issueHint": "透過 GitLab Webhook 接收這個 Issue 的變化。留言事件無法區分 MR 和 Issue，所以只回應 Issue 本身的新建、編輯、關閉和重新開啟。",
+          "issuePluginHint": "GitLab 插件每分鐘檢查一次這個 Issue，包括新留言。",
+          "errors": {
+            "invalid": "請按 !12（MR）、#12（Issue）或 group/project!12 的格式填寫，也可以貼上 GitLab 上的連結。",
+            "ambiguous": "GitLab 的 MR 和 Issue 編號是分開的，請寫 !12（MR）或 #12（Issue），或貼上連結。",
+            "needs-link": "指定 MR 需要知道 GitLab 執行個體，請貼上 MR 連結。",
+            "needs-account": "這是一個 Issue。指定 GitLab Issue 需要安裝 GitLab 插件，或登入 Cindy 帳號以接收 GitLab Webhook。"
+          },
+          "mrChange": {
+            "any": "MR 有新動態",
+            "merged": "MR 已合併",
+            "review": "審查有新動態",
+            "ci": "流水線狀態變化"
+          },
+          "issueChange": {
+            "any": "Issue 有變化",
+            "comment": "Issue 有新留言",
+            "closed": "Issue 已關閉",
+            "reopened": "Issue 重新開啟"
+          }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "專案",
+          "projectHint": "填 group/project 或專案連結。GitLab 插件連接了多個實例時，請貼上連結。",
+          "projectInvalid": "請填寫 group/project 或 https 開頭的專案連結。",
+          "eventsLabel": "事件",
+          "eventsHint": "都不勾表示回應這個專案的全部事件。",
+          "unavailable": "GitLab 插件未安裝或已停用，請在「插件」裡啟用後再儲存。"
+        }
       },
       "trigger": {
         "label": "觸發方式",
-        "timed": "定時"
+        "timed": "定時",
+        "event": "事件"
       },
       "runSettings": "執行設定"
     },
@@ -18842,7 +19008,8 @@
         "reconnectConfirm": "重新連線 Webhook？",
         "reconnectConfirmHint": "將占用一個名額並產生新的接收位址。請將新位址和金鑰更新至傳送方。",
         "reconnectFailed": "暫時無法重新連線，請檢查剩餘名額後再試。"
-      }
+      },
+      "pluginTitle": "插件事件觸發"
     }
   },
   "issueTracker": {
@@ -21122,7 +21289,7 @@
   "routines": {
     "hourly": "每小時",
     "everyMinutes": "每 {{count}} 分鐘",
-    "pluginCapability": "向例行任務提交已宣告的事件，只觸發你設定的例行任務",
+    "pluginCapability": "向自動化提交已宣告的事件，只觸發選了這個插件的自動化",
     "advancedSettings": "進階設定"
   },
   "cindyMakeDoctor": {
@@ -22804,6 +22971,30 @@
     "loginMayHaveExpired": "登入可能已到期",
     "loginExpiryUnknown": "登入到期時間未知",
     "loginExpiryDetail": "預計到期：{{date}}。這是 Claude 提供的估計時間，登入可能提早失效。",
+    "longLivedToken": {
+      "tag": "長期權杖",
+      "use": "改用長期權杖（約一年）",
+      "renew": "重新產生長期權杖",
+      "remove": "停用長期權杖",
+      "confirmTitle": "讓 {{name}} 改用長期權杖？",
+      "confirmDescription": "瀏覽器會開啟 Claude 的授權頁，請在那裡選擇同一個帳號。權杖有效期約一年，儲存在這台電腦上，一般登入到期後任務仍可繼續執行。",
+      "confirmAction": "前往瀏覽器授權",
+      "removeTitle": "停用 {{name}} 的長期權杖？",
+      "removeDescription": "權杖會從這台電腦刪除，帳號回到一般登入。權杖在 Anthropic 那邊仍然有效，直到到期。",
+      "removeAction": "停用",
+      "expiresInDays": "權杖約 {{days}} 天後到期",
+      "mayHaveExpired": "權杖可能已到期",
+      "active": "正在使用長期權杖",
+      "detailExpiry": "預計到期：{{date}}。",
+      "detailLoginActive": "一般登入仍然有效，帳號資訊和用量可以即時讀取。",
+      "detailLoginEnded": "一般登入已結束。用量在任務執行時更新；重新登入後可隨時重新整理。",
+      "detailPending": "尚未核對權杖是否屬於這個帳號，第一個任務執行時會核對。",
+      "detailSettingsOnly": "在這台電腦上，一般登入結束後，權杖無法用於替其他電腦執行的任務和隔離模式的夥伴。",
+      "mismatchStatus": "權杖屬於另一個帳號",
+      "needsLogin": "請先登入這個帳號，再產生長期權杖。",
+      "notPermitted": "你的組織不允許使用長期權杖。",
+      "unsupported": "這個帳號在這台電腦上無法使用長期權杖。"
+    },
     "loginAccountAria": "重新登入 {{name}}",
     "loginIdentityMismatchStatus": "登入帳號不符",
     "loginIdentityMismatch": "登入的帳號與所選帳號不一致。請重新登入，選擇列表中的這個帳號。",

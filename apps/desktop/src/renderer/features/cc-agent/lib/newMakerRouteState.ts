@@ -6,6 +6,10 @@ export interface NewMakerDialogueTargetRequest {
   deviceName: string | null;
   /** 通用新建只继承电脑；同机时保留草稿项目及用户选择。 */
   preserveWorkspaceIfSameDevice?: boolean;
+  /** 跨窗口打开通用新建时透传源窗口远程草稿目录（新窗口 sanitize 会清空它）。 */
+  workingDir?: string | null;
+  /** 跨窗口打开通用新建时透传源窗口远程草稿的显式「仅对话」选择。 */
+  explicitNoProject?: boolean;
 }
 
 export interface NewMakerFolderPickerRequest {
@@ -118,6 +122,19 @@ export function readNewMakerDialogueTargetRequest(
   if (deviceId !== null && (typeof deviceId !== 'string' || deviceId.length === 0)) return null;
   if (deviceName !== null && typeof deviceName !== 'string') return null;
   if (deviceId === null && deviceName !== null) return null;
+  const rawWorkingDir = record.workingDir;
+  if (rawWorkingDir !== undefined && rawWorkingDir !== null) {
+    if (deviceId === null || typeof rawWorkingDir !== 'string' || rawWorkingDir.trim().length === 0) {
+      return null;
+    }
+  }
+  const workingDir = typeof rawWorkingDir === 'string' ? rawWorkingDir : null;
+  if (record.explicitNoProject !== undefined && typeof record.explicitNoProject !== 'boolean') {
+    return null;
+  }
+  if (record.explicitNoProject === true && (deviceId === null || workingDir !== null)) {
+    return null;
+  }
   return {
     requestId: record.requestId,
     deviceId,
@@ -125,6 +142,8 @@ export function readNewMakerDialogueTargetRequest(
     ...(record.preserveWorkspaceIfSameDevice === true
       ? { preserveWorkspaceIfSameDevice: true }
       : {}),
+    ...(workingDir ? { workingDir } : {}),
+    ...(record.explicitNoProject === true ? { explicitNoProject: true } : {}),
   };
 }
 

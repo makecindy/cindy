@@ -2551,7 +2551,7 @@
       "skinLabel": "Figur",
       "skinHint": "Die Figur in Agent Notch und in der Dynamic Island.",
       "soundLabel": "Ereignistöne",
-      "soundHint": "Ist ein Ereigniston festgelegt, wird nur dieser abgespielt. Ohne Ereigniston oder bei deaktivierten Ereignistönen gelten die Systembenachrichtigungseinstellungen.",
+      "soundHint": "Wähle für jeden Hinweis einen 8-Bit-Sound, gemeinsam für Agent Notch und die Dynamic Island. Der Tipp-Sound ertönt nur beim Tippen auf Agent Notch.",
       "soundAria": "Töne für Agent Notch ein-/ausschalten",
       "soundSelectAria": "Ton für {{event}}",
       "soundPreviewAria": "Ton für {{event}} vorhören",
@@ -2606,7 +2606,7 @@
         "select": "Aktion beim Klicken"
       },
       "soundOptions": {
-        "none": "Systemeinstellung verwenden",
+        "none": "Keine",
         "startup-chime": "Startklang",
         "ring-chime": "Klingelton",
         "item-found": "Gegenstand gefunden",
@@ -8900,6 +8900,8 @@
         "networkSecretOauthDetail": "Cindy verwaltet Anmeldung und Tokens. Du kannst ein neues Konto autorisieren oder ein kompatibles verbundenes Konto wählen. Prüfe die Bereiche unten; verbundene Konten behalten ihre bestehenden Berechtigungen.",
         "networkConnections": "Kann Verbindungen zu {{label}}-Adressen herstellen, die du hinzufügst",
         "networkConnectionsDetail": "Adressen werden in den Einstellungen dieses Plugins hinzugefügt. Jede neue Adresse erfordert deine Bestätigung, und die von dir angegebenen Zugangsdaten werden nur für die zugehörige Adresse eingefügt.",
+        "networkConnectionsGlabCli": "Kann sich mit hinzugefügten {{label}}-Adressen verbinden und lokal per glab angemeldete Instanzen nutzen",
+        "networkConnectionsGlabCliDetail": "In den Plugin-Einstellungen hinzugefügte Zugangsdaten haben Vorrang; für andere Instanzen liest Cindy bei Bedarf das lokale glab-Token und fügt es nur in HTTPS-Anfragen an diese Instanz ein. Der Plugin-Code kann das Token weder lesen noch speichern.",
         "codeDetailNetwork": "Läuft in einer isolierten Sandbox ohne Zugriff auf deine Dateien. Der Netzwerkzugriff ist auf die oben aufgeführten Domains beschränkt und wird vom Host vermittelt.",
         "codeDetailWithNode": "Die Panel-Oberfläche läuft in einer isolierten Sandbox. Die lokale Verarbeitung erfolgt über die oben deklarierte Node-Laufzeit.",
         "added": "Neu",
@@ -8928,7 +8930,7 @@
         "nodeChildSpawnDetail": "Nur JS-Dateien, die innerhalb des eigenen Pakets deklariert sind, können gestartet werden (mit denselben lokalen Berechtigungen wie das Hauptprogramm). Beliebige Befehle können nicht ausgeführt werden. Unterprozesse werden gemeinsam beendet, wenn das Plugin deaktiviert wird oder endet.",
         "skill": "Fügt deinen KI-Assistenten den Skill „{{name}}“ hinzu",
         "skillDetail": "Ein Skill ist eine Anweisungsdatei, die die KI in Claude Code und Codex projektübergreifend lädt und wie eigene Anweisungen mit deinen vollen Berechtigungen befolgt – sie ist nicht auf die Sandbox dieses Plugins beschränkt. Der Skill bleibt verfügbar, solange das Plugin aktiviert ist, und wird beim Deaktivieren oder Deinstallieren entfernt. Wenn du das Plugin nur für einen einzelnen Ordner ausschaltest, wird der Skill nicht ausgeblendet. Der vollständige Skill-Text kann hier nicht als Vorschau angezeigt werden – installiere nur Plugins, denen du vertraust.",
-        "routineEvents": "Routineereignisse",
+        "routineEvents": "Automatisierungsereignisse",
         "mcpUi": "Interaktive Seiten in der Unterhaltung anzeigen",
         "mcpUiDomains": "Netzwerkdomains der Seiten: {{domains}}",
         "mcpAppOnly": "Nur Seite",
@@ -9020,7 +9022,10 @@
             "user": "Benutzer",
             "assistant": "Assistent"
           }
-        }
+        },
+        "agentChecks": "Kann Quellen auf neue Inhalte prüfen",
+        "agentChecksDetail": "Tauscht mit anderen genehmigten Plugins nur den Status geändert, unverändert oder unbekannt aus. Jedes Plugin verwendet seine eigenen verbundenen Konten. Nachrichteninhalte und Zugangsdaten werden nicht geteilt. Die Prüfung nutzt kein Modell. Prüft auch lokale Cindy-Unterhaltungen auf Änderungen, ohne Inhalte zurückzugeben.",
+        "agentChecksRequest": "Berechtigung zur Änderungsprüfung prüfen"
       },
       "connections": {
         "confirmTitle": "Verbindungsadresse hinzufügen",
@@ -11937,6 +11942,7 @@
           "title": "Erwähnungen von mir",
           "me": "Ich",
           "markAll": "Alle als gelesen markieren",
+          "markReadFailed": "Erwähnungen konnten nicht als gelesen markiert werden.",
           "empty": "Keine ungelesenen Erwähnungen",
           "thread": "Thread",
           "main": "Gruppenchat",
@@ -12144,6 +12150,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} ist der Gruppe beigetreten",
+        "memberJoinedList": "{{names}} sind der Gruppe beigetreten",
+        "memberJoinedSummary": "{{names}} und {{others}} weitere sind der Gruppe beigetreten",
         "memberFailed": "{{name}} konnte diesmal nicht antworten",
         "memberTimeout": "{{name}} hat zu lange für die Antwort gebraucht und wurde diesmal übersprungen",
         "memberUnavailable": "{{name}} ist nicht verfügbar und hat diesmal nicht gesprochen",
@@ -12324,6 +12332,8 @@
         "threadNew": "Neue Nachrichten im Thread",
         "replyingTo": "Antwort an „{{name}}“: {{text}}",
         "filesOutsideWorkingDir": "Dateien außerhalb des Arbeitsverzeichnisses wurden nicht angehängt.",
+        "modelFallback": "Das ausgewählte Modell ist auf diesem Computer nicht verfügbar, daher antwortet diesmal {{model}}.",
+        "modelFallbackUnnamed": "Das ausgewählte Modell ist auf diesem Computer nicht verfügbar, daher antwortet diesmal ein hier verfügbares Modell.",
         "earlierOmitted": "(Ältere Nachrichten ausgelassen)",
         "actingFor": "{{name}} · für {{person}}",
         "checkout": {
@@ -12404,8 +12414,33 @@
           "unfollowTip": "Nicht mehr folgen: Du wirst nur benachrichtigt, wenn dich jemand erwähnt",
           "listLabel": "Threads in diesem Gruppenchat",
           "listNews": "Neue Antworten",
-          "listOthers": "Andere Threads",
-          "newSeparator": "Neue Antworten"
+          "newSeparator": "Neue Antworten",
+          "openIndex": "Threads",
+          "indexTitle": "Threads",
+          "backToList": "Zurück zu Threads",
+          "filterAria": "Threads filtern",
+          "filterMine": "Für mich",
+          "filterAll": "Alle",
+          "searchPlaceholder": "Threads, Antworten oder Mitglieder suchen",
+          "clearSearch": "Suche löschen",
+          "listRecent": "Zuletzt",
+          "indexParticipatedTag": "Beteiligt",
+          "indexMentionedTag": "Erwähnt",
+          "locateInGroup": "Im Gruppenchat zeigen",
+          "indexEmptyMine": "Noch keine Threads mit deiner Beteiligung oder Erwähnung",
+          "indexEmptyAll": "Noch keine Threads in dieser Gruppe",
+          "indexEmptySearch": "Keine passenden Threads",
+          "viewAllThreads": "Alle Threads anzeigen",
+          "syncingHistory": "Ältere Threads werden geladen…",
+          "rootKind": {
+            "task": "Aufgabe",
+            "image": "Bild",
+            "video": "Video",
+            "audio": "Audio",
+            "file": "Datei",
+            "share": "Geteilte Antwort",
+            "card": "Karte"
+          }
         },
         "replyPlaceholder": "Antworte auf diese Nachricht; mit @ erwähnst du einen Freund…",
         "sendReply": "Antwort senden",
@@ -13862,6 +13897,9 @@
           "allow": "erlauben",
           "deny": "ablehnen",
           "approve": "genehmigen"
+        },
+        "companion": {
+          "retryLater": "bitte versuche es später noch einmal"
         }
       },
       "hook": {
@@ -17137,9 +17175,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Cloud-Computer hinzufügen",
-        "preparingCloud": "Cloud-Computer wird vorbereitet",
-        "manageCloud": "Cloud-Computer verwalten",
         "allMachines": "Alle",
         "localMachine": "Lokal",
         "connecting": "Verbindung wird hergestellt…",
@@ -17499,6 +17534,8 @@
         "moveToProjectRemoteUnsupported": "Das Verschieben von Remote-Sitzungen wird noch nicht unterstützt",
         "moveToProjectWorktreeBlocked": "Das Arbeitsverzeichnis dieser Aufgabe ist ein Worktree. Sie kann daher noch nicht in ein anderes Projekt verschoben werden.",
         "openInNewWindow": "In neuem Fenster öffnen",
+        "openInNewWindowShortcutMac": "⌘+Klick",
+        "openInNewWindowShortcutOther": "Strg+Klick",
         "exportShare": "Sitzung exportieren…",
         "exportHtml": "Als HTML exportieren…",
         "exportHtmlSuccess": "Sitzung als HTML exportiert",
@@ -17630,6 +17667,13 @@
         "inbox": "Posteingang",
         "enterInbox": "Zum Posteingangsmodus wechseln",
         "leaveInbox": "Zum Aufgabenlistenmodus wechseln"
+      },
+      "filterHideTaskCreated": "Von anderen Aufgaben erstellte Aufgaben ausblenden",
+      "origin": {
+        "createdByTask": "Von einer anderen Aufgabe geöffnet",
+        "createdByTaskNamed": "Von Aufgabe „{{title}}“ geöffnet",
+        "createdByRemoteTask": "Von einer Aufgabe auf {{device}} geöffnet",
+        "createdByRemoteTaskNamed": "Von „{{title}}“ auf {{device}} geöffnet"
       }
     },
     "rename": {
@@ -17650,7 +17694,9 @@
       "orcaRemoteLead": "Zusammenarbeit von {{device}}",
       "orcaRemoteLeadReleased": "Zusammenarbeit beendet · von {{device}}",
       "orcaRemoteLeadUnknownDevice": "einem anderen Computer",
-      "orcaRemoteLeadTip": "Ein Worker für „{{lead}}“ auf {{device}}. Seine Aufgabe, sein Ordner und seine Befehle werden auf diesem Computer ausgeführt. Nachrichten, die du hier sendest, werden nicht an den Lead weitergegeben."
+      "orcaRemoteLeadTip": "Ein Worker für „{{lead}}“ auf {{device}}. Seine Aufgabe, sein Ordner und seine Befehle werden auf diesem Computer ausgeführt. Nachrichten, die du hier sendest, werden nicht an den Lead weitergegeben.",
+      "createdByTask": "Aus anderer Aufgabe",
+      "createdByTaskNamed": "Aus „{{title}}“"
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -17854,8 +17900,8 @@
           }
         },
         "gitlab": {
-          "missing": "GitLab CLI (glab) wurde nicht gefunden. Installiere glab und melde dich an, um den MR-Status zu sehen.",
-          "notLoggedIn": "Das lokale glab ist nicht bei {{host}} angemeldet. Führe glab auth login im Terminal aus, um den MR-Status zu sehen.",
+          "missing": "GitLab CLI (glab) wurde nicht gefunden, und das GitLab-Plugin hat keine Verbindung zu dieser Instanz. Installiere glab und melde dich an oder füge die Instanz im GitLab-Plugin hinzu, um den MR-Status zu sehen.",
+          "notLoggedIn": "Das lokale glab ist nicht bei {{host}} angemeldet, und das GitLab-Plugin hat keine Verbindung dazu. Führe glab auth login im Terminal aus oder füge die Instanz im GitLab-Plugin hinzu, um den MR-Status zu sehen.",
           "unsupported": "Dieser Computer unterstützt den GitLab-MR-Status noch nicht",
           "openAria": "MR !{{number}} im Browser öffnen",
           "summaryAria": "Zusammenfassung von MR !{{number}}",
@@ -18081,6 +18127,13 @@
         "active": "{{count}} Filter",
         "reset": "Zurücksetzen",
         "allProjects": "Alle Projekte"
+      },
+      "match": {
+        "label": "Suchbegriffe",
+        "any": "Beliebiger Suchbegriff",
+        "all": "Alle Suchbegriffe",
+        "help": "Wähle alle Schlüsselwörter und trenne sie durch Leerzeichen, damit sie in derselben Nachricht vorkommen müssen. “Exakte Phrase” sucht zusammenhängenden Text. Titel werden separat geprüft.",
+        "partial": "Die Ergebnisse sind möglicherweise unvollständig. Verwenden Sie genauere Suchbegriffe oder wählen Sie ein Projekt."
       }
     }
   },
@@ -18281,7 +18334,8 @@
         "pause": "Pausieren",
         "deleteAutomation": "Automatisierung löschen"
       },
-      "tagWebhook": "Webhook"
+      "tagWebhook": "Webhook",
+      "tagPluginEvent": "Plugin-Ereignis"
     },
     "detail": {
       "manualTrigger": "Manueller Auslöser",
@@ -18622,11 +18676,123 @@
         "cindyConnectionTitle": "GitHub · Verbindung über Cindy",
         "manualConnectionTitle": "GitHub · Manueller Webhook",
         "githubAppHint": "Verbinde GitHub App auf dem Computer, der diese Aufgabe ausführt, und autorisiere diese Repositorys. Eine eigene Webhook-URL oder ein eigenes Secret ist nicht erforderlich.",
-        "githubAppPaused": "Diese Aufgabe ist pausiert. Ereignisse starten sie nicht."
+        "githubAppPaused": "Diese Aufgabe ist pausiert. Ereignisse starten sie nicht.",
+        "plugin": {
+          "source": "Plugin-Ereignisse",
+          "label": "Plugins und Ereignisse",
+          "empty": "Auf diesem Computer stellt noch kein Plugin Ereignisse bereit. Installiere und aktiviere ein Plugin, das Ereignisse deklariert, um es hier auszuwählen.",
+          "unavailable": "Plugin nicht verfügbar",
+          "remove": "Entfernen",
+          "hint": "Plugins filtern keine Ereignisse für dich, auch nicht Nachrichten, die diese Automatisierung selbst sendet. Lege im Prompt oder in einer Vorabprüfung fest, was bearbeitet werden soll. Solange der Computer schläft oder aus ist oder das Plugin deaktiviert ist, gehen Ereignisse verloren.",
+          "offlineHint": "Solange der Computer schläft oder aus ist oder das Plugin deaktiviert ist, gehen Ereignisse verloren. Wenn nichts verloren gehen darf, füge zusätzlich eine geplante Prüfung hinzu.",
+          "required": "Wähle mindestens ein Plugin-Ereignis aus",
+          "state": {
+            "listening": "Hört zu",
+            "disconnected": "Getrennt",
+            "error": "Verbindungsfehler",
+            "stopped": "Läuft nicht",
+            "unknown": "Warte auf Statusmeldung des Plugins"
+          },
+          "filterOnly": "Nur",
+          "filterField": "Feld",
+          "filterOperator": "Bedingung",
+          "filterValue": "Wert",
+          "filterRemove": "Bedingung entfernen",
+          "filterAdd": "„Nur“-Bedingung hinzufügen",
+          "operators": {
+            "equals": "ist",
+            "contains": "enthält",
+            "not-equals": "ist nicht"
+          }
+        },
+        "scopeLabel": "Umfang",
+        "scope": {
+          "repository": "Gesamtes Repository",
+          "repositoryHint": "Läuft bei neuen Repository-Ereignissen, z. B. neuen Pull Requests, Kommentaren oder abgeschlossener CI.",
+          "repositoryNeedsAccount": "Melde dich bei einem Cindy-Konto an, um Repository-Ereignisse zu empfangen.",
+          "item": "Bestimmter Pull Request oder bestimmtes Issue",
+          "itemHint": "Beobachtet einen Pull Request oder ein Issue: ein Pull Request löst aus, wenn sich sein Status tatsächlich ändert, ein Issue bei neuer Aktivität.",
+          "project": "Gesamtes Projekt",
+          "projectHint": "Läuft bei neuen Projektereignissen, z. B. neuen Merge Requests, Issues oder abgeschlossenen Pipelines.",
+          "gitlabItem": "Bestimmter Merge Request oder bestimmtes Issue",
+          "gitlabItemHint": "Beobachtet einen Merge Request oder ein Issue: ein Merge Request löst bei tatsächlicher Statusänderung aus, ein Issue bei Änderungen."
+        },
+        "item": {
+          "label": "Pull Request oder Issue",
+          "placeholder": "42, #42, owner/repo#42 oder Link",
+          "hint": "Gib eine Nummer, owner/repo#Nummer ein oder füge einen Link ein. Cindy erkennt, was es ist.",
+          "resolving": "Wird erkannt…",
+          "pr": "Pull Request #{{number}}",
+          "issue": "Issue #{{number}}",
+          "closed": "Geschlossen",
+          "required": "Gib den Pull Request oder das Issue ein und warte, bis es erkannt ist.",
+          "issueHint": "Ein bestimmtes Issue empfängt Ereignisse über die mit Cindy verbundene GitHub App; dafür ist ein Cindy-Konto nötig.",
+          "errors": {
+            "invalid": "Gib eine Nummer, #Nummer, owner/repo#Nummer oder einen GitHub-Link zu einem Pull Request oder Issue ein.",
+            "no-repository": "Für eine reine Nummer wird das Repository benötigt. Schreibe owner/repo#42 oder füge einen Link ein.",
+            "not-connected": "Verbinde GitHub, um zu erkennen, ob es ein Pull Request oder ein Issue ist.",
+            "not-found": "Diese Nummer wurde im Repository nicht gefunden oder du hast keinen Zugriff.",
+            "unavailable": "GitHub ist gerade nicht erreichbar. Versuche es später erneut.",
+            "needs-account": "Das ist ein Issue. Ein bestimmtes Issue erfordert ein Cindy-Konto und eine über Cindy verbundene GitHub App."
+          },
+          "issueChange": {
+            "any": "Issue-Aktivität",
+            "comment": "Neuer Kommentar",
+            "closed": "Issue geschlossen",
+            "reopened": "Issue wieder geöffnet"
+          },
+          "mr": "Merge Request !{{number}}"
+        },
+        "gitlabSignedConnection": "Signaturtoken (GitLab 19+)",
+        "gitlabSignedConnectionHint": "Verwende in den Webhook-Einstellungen des GitLab-Projekts ein Signaturtoken für mehr Sicherheit.",
+        "gitlabTokenConnection": "Secret token",
+        "gitlabTokenConnectionHint": "Für ältere GitLab-Versionen: Gib in den Webhook-Einstellungen ein Secret Token ein.",
+        "gitlabPluginConnection": "Über das GitLab-Plugin",
+        "gitlabPluginConnectionHint": "Prüft jede Minute mit dem im GitLab-Plugin verbundenen Konto. Kein GitLab-Webhook und kein Cindy-Konto nötig. Änderungen, während dieser Computer schläft oder aus ist, werden nicht nachgeliefert.",
+        "gitlabMrPollConnection": "Status zeitgesteuert prüfen",
+        "gitlabMrPollConnectionHint": "Liest den Merge-Request-Status gemäß „Zusätzlich nach Zeitplan prüfen“ (ohne die Aufgabe zu starten), bevorzugt mit dem Konto im GitLab-Plugin und sonst über das lokale glab.",
+        "gitlabSetupHint": "Kopiere nach dem Speichern Empfangsadresse und Schlüssel aus den Aufgabendetails in das GitLab-Projekt unter Einstellungen › Webhooks.",
+        "gitlabItem": {
+          "label": "Merge Request oder Issue",
+          "placeholder": "!12, #12, group/project!12 oder Link",
+          "hint": "Schreibe !Nummer für einen Merge Request, #Nummer für ein Issue oder füge einen Link ein.",
+          "required": "Gib den Merge Request oder das Issue ein.",
+          "mrHint": "GitLab sendet keine Push-Benachrichtigungen. Cindy liest den Status im Takt von „Zusätzlich zeitgesteuert prüfen“ (ohne die Aufgabe auszuführen) – mit glab auf diesem Computer oder dem im GitLab-Plugin verbundenen Konto.",
+          "mrPluginHint": "Das GitLab-Plugin prüft diesen Merge Request jede Minute, einschließlich neuer Commits, Kommentare, Freigaben und Pipeline-Ergebnisse.",
+          "issueHint": "Änderungen an diesem Issue kommen über einen GitLab-Webhook. Kommentarereignisse unterscheiden nicht zwischen Merge Requests und Issues, daher zählen nur Erstellen, Bearbeiten, Schließen und Wiederöffnen des Issues.",
+          "issuePluginHint": "Das GitLab-Plugin prüft dieses Issue jede Minute, auch auf neue Kommentare.",
+          "errors": {
+            "invalid": "Gib !Nummer, #Nummer, group/project!Nummer oder einen GitLab-Link ein.",
+            "ambiguous": "GitLab nummeriert Merge Requests und Issues getrennt. Schreibe !12 (Merge Request) oder #12 (Issue) oder füge einen Link ein.",
+            "needs-link": "Ein bestimmter Merge Request braucht seine GitLab-Instanz. Füge den Link ein.",
+            "needs-account": "Das ist ein Issue. Ein bestimmtes GitLab-Issue braucht das GitLab-Plugin oder ein Cindy-Konto, um GitLab-Webhooks zu empfangen."
+          },
+          "mrChange": {
+            "any": "Merge-Request-Aktivität",
+            "merged": "Gemergt",
+            "review": "Review-Aktivität",
+            "ci": "Pipeline-Status ändert sich"
+          },
+          "issueChange": {
+            "any": "Issue ändert sich",
+            "comment": "Neuer Issue-Kommentar",
+            "closed": "Issue geschlossen",
+            "reopened": "Issue wieder geöffnet"
+          }
+        },
+        "gitlabPlugin": {
+          "projectLabel": "Projekt",
+          "projectHint": "Gib group/project oder einen Projektlink ein. Füge einen Link ein, wenn das GitLab-Plugin mit mehreren Instanzen verbunden ist.",
+          "projectInvalid": "Gib group/project oder einen https-Projektlink ein.",
+          "eventsLabel": "Ereignisse",
+          "eventsHint": "Ohne Auswahl reagiert die Automation auf alle Ereignisse dieses Projekts.",
+          "unavailable": "Das GitLab-Plugin ist nicht installiert oder ausgeschaltet. Schalte es unter Plugins ein und speichere dann."
+        }
       },
       "trigger": {
         "label": "Auslöseart",
-        "timed": "Zeitgesteuert"
+        "timed": "Zeitgesteuert",
+        "event": "Ereignis"
       },
       "runSettings": "Ausführungseinstellungen"
     },
@@ -18917,7 +19083,8 @@
         "reconnectConfirm": "Webhook erneut verbinden?",
         "reconnectConfirmHint": "Dies belegt einen Platz und erstellt eine neue Empfangsadresse. Neue Adresse und neues Secret beim Absender eintragen.",
         "reconnectFailed": "Verbindung fehlgeschlagen. Verfügbare Plätze prüfen und erneut versuchen."
-      }
+      },
+      "pluginTitle": "Plugin-Ereignis-Auslöser"
     }
   },
   "issueTracker": {
@@ -21206,7 +21373,7 @@
   "routines": {
     "hourly": "Stündlich",
     "everyMinutes": "Alle {{count}} Minuten",
-    "pluginCapability": "Veröffentlicht deklarierte Ereignisse für deine Routinen. Nur von dir konfigurierte Routinen können ausgeführt werden.",
+    "pluginCapability": "Veröffentlicht deklarierte Ereignisse für Automatisierungen. Nur Automatisierungen, die dieses Plugin ausgewählt haben, können ausgeführt werden.",
     "advancedSettings": "Erweiterte Einstellungen"
   },
   "cindyMakeDoctor": {
@@ -22893,6 +23060,30 @@
     "loginMayHaveExpired": "Anmeldung möglicherweise abgelaufen",
     "loginExpiryUnknown": "Ablauf der Anmeldung unbekannt",
     "loginExpiryDetail": "Voraussichtlicher Ablauf: {{date}}. Dies ist eine Schätzung von Claude; die Anmeldung kann früher ablaufen.",
+    "longLivedToken": {
+      "tag": "Langzeit-Token",
+      "use": "Langzeit-Token verwenden (etwa ein Jahr)",
+      "renew": "Neues Langzeit-Token erstellen",
+      "remove": "Langzeit-Token nicht mehr verwenden",
+      "confirmTitle": "Langzeit-Token für {{name}} verwenden?",
+      "confirmDescription": "Ihr Browser öffnet die Autorisierungsseite von Claude. Wählen Sie dort dasselbe Konto. Das Token gilt etwa ein Jahr und wird auf diesem Computer gespeichert, sodass Aufgaben auch nach Ablauf der normalen Anmeldung weiterlaufen.",
+      "confirmAction": "Im Browser fortfahren",
+      "removeTitle": "Langzeit-Token für {{name}} nicht mehr verwenden?",
+      "removeDescription": "Das Token wird von diesem Computer gelöscht und das Konto verwendet wieder seine normale Anmeldung. Das Token selbst bleibt bei Anthropic bis zu seinem Ablauf gültig.",
+      "removeAction": "Nicht mehr verwenden",
+      "expiresInDays": "Token läuft in etwa {{days}} Tagen ab",
+      "mayHaveExpired": "Token möglicherweise abgelaufen",
+      "active": "Läuft mit einem Langzeit-Token",
+      "detailExpiry": "Voraussichtlicher Ablauf: {{date}}.",
+      "detailLoginActive": "Die normale Anmeldung ist noch aktiv, daher werden Konto und Nutzung live gelesen.",
+      "detailLoginEnded": "Die normale Anmeldung ist beendet. Die Nutzung wird aktualisiert, wenn Aufgaben laufen; melden Sie sich erneut an, um sie jederzeit zu aktualisieren.",
+      "detailPending": "Das Token wurde noch nicht mit diesem Konto abgeglichen. Das geschieht, wenn seine erste Aufgabe läuft.",
+      "detailSettingsOnly": "Auf diesem Computer kann das Token nach dem Ende der normalen Anmeldung nicht für Aufgaben verwendet werden, die für einen anderen Computer oder für isolierte Freunde laufen.",
+      "mismatchStatus": "Token gehört zu einem anderen Konto",
+      "needsLogin": "Melden Sie sich zuerst bei diesem Konto an und erstellen Sie dann das Langzeit-Token.",
+      "notPermitted": "Ihre Organisation erlaubt keine Langzeit-Token.",
+      "unsupported": "Dieses Konto kann auf diesem Computer kein Langzeit-Token verwenden."
+    },
     "loginAccountAria": "Erneut bei {{name}} anmelden",
     "loginIdentityMismatchStatus": "Angemeldetes Konto stimmt nicht überein",
     "loginIdentityMismatch": "Du hast dich mit einem anderen Konto angemeldet. Melde dich erneut mit dem Konto in dieser Zeile an.",

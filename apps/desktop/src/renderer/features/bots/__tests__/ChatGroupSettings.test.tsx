@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter, RouterProvider, createMemoryRouter, useLocation } from 'react-router-dom';
 import { transferableAbortController } from 'node:util';
@@ -137,6 +137,25 @@ function group(owned = false): BotGroupSummary {
     { actorId: 'bot', botId: 'bot', actorKind: 'bot', name: 'Partner', role: 'owner', isOwned: owned, guestAccess: 'chat', accessRevision: 1 },
   ] } as BotGroupSummary;
 }
+
+// Unit regression: searching the members tab used to miss phonetic matches. Exercise the
+// displayed order when literal names, homophones and an existing department match compete.
+it('ranks member names ahead of pinyin and directory details and restores the roster on clear', () => {
+  const data = group();
+  const names = ['俞', 'Mayu', 'Yuna', 'Yu', 'Yuri', 'Other'];
+  data.members = names.map((name, index) => ({
+    ...data.members[0]!, botId: name, actorId: name, isSelf: index === 0,
+    name, displayName: name, department: name === 'Other' ? 'Yunnan' : undefined,
+  }));
+  renderAt(data);
+  fireEvent.click(screen.getByRole('tab', { name: /bots\.groupChat\.settings\.members/ }));
+  const rows = within(screen.getByTestId('chat-group-members'));
+  const visibleNames = () => rows.getAllByText(text => names.includes(text)).map(node => node.textContent);
+  fireEvent.change(field('searchMembers'), { target: { value: 'YU' } });
+  expect(visibleNames()).toEqual(['Yu', 'Yuna', 'Yuri', 'Mayu', '俞', 'Other']);
+  fireEvent.change(field('searchMembers'), { target: { value: '' } });
+  expect(visibleNames()).toEqual(names);
+});
 
 // Unit: the real management page must expose the permission only to managers;
 // invitation-menu tests previously covered read-only canInvite, not changing it.

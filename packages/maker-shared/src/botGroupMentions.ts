@@ -290,15 +290,18 @@ export function retainBotGroupTrackedMentions(
 
 /** The `@query` being typed right before the caret, if any. */
 export function findBotGroupMentionQuery(
-  text: string, caret: number, candidates: readonly { name: string }[] = [],
+  text: string, caret: number,
+  candidates: readonly { name: string }[] = [],
 ): BotGroupMentionQuery | null {
   const before = text.slice(0, Math.max(0, Math.min(caret, text.length)));
-  const at = before.lastIndexOf('@');
+  const at = Math.max(before.lastIndexOf('@'), before.lastIndexOf('＠'));
   if (at < 0 || !isMentionStart(before, at)) return null;
   const query = before.slice(at + 1);
   if (query.length > MAX_MENTION_QUERY_CHARS || /\s/.test(query)) {
-    const prefix = query.toLocaleLowerCase();
-    if (/\s$/.test(query) || !candidates.some(member => member.name.toLocaleLowerCase().startsWith(prefix))) return null;
+    const prefix = query.normalize('NFKC').toLowerCase();
+    if (/\s$/.test(query) || !candidates.some(member =>
+      member.name.normalize('NFKC').trim().toLowerCase().startsWith(prefix),
+    )) return null;
   }
   return { start: at, query };
 }

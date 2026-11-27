@@ -1,4 +1,4 @@
-import { setSearchDraft } from '@/features/cc-agent/sidebar/conversationSearchDraft';
+import { setSearchDraft, setSearchMatchAll } from '@/features/cc-agent/sidebar/conversationSearchDraft';
 // @vitest-environment jsdom
 
 /**
@@ -35,6 +35,7 @@ vi.mock('@/lib/orcaSessionIdentity', () => ({
 
 beforeEach(() => {
   setSearchDraft('');
+  setSearchMatchAll(false);
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: { platform: 'linux' },
@@ -129,6 +130,50 @@ describe('useConversationSearch sort persistence', () => {
 });
 
 describe('useConversationSearch visibility scope', () => {
+  // Menu AND must preserve editable text and follow the shared draft across
+  // rail/inline remounts; otherwise switching sidebar layout changes results.
+  // Unit: observe requests through the production hook, including reset to OR.
+  it('shares menu AND without rewriting input and restores ordinary search on reset', async () => {
+    vi.useFakeTimers();
+    const { result, unmount } = renderHook(() => useConversationSearch({ enabled: true, navigate: vi.fn() as never, allKnownProjects: [] }));
+    const inline = renderSearch();
+    act(() => {
+      result.current.setQuery('目录太大 清理一下');
+      result.current.setMatchAll(true);
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(result.current.query).toBe('目录太大 清理一下');
+    expect(inline.result.current.matchAll).toBe(true);
+    expect(inline.result.current.query).toBe('目录太大 清理一下');
+    expect(searchConversations).toHaveBeenCalledTimes(1);
+    expect(searchConversations).toHaveBeenLastCalledWith(expect.objectContaining({ query: '+ 目录太大 清理一下', semanticMode: 'keyword' }), expect.anything());
+    unmount();
+    const reopened = renderSearch();
+    expect(reopened.result.current.matchAll).toBe(true);
+    act(() => reopened.result.current.resetFilters());
+    expect(inline.result.current.matchAll).toBe(false);
+    expect(inline.result.current.query).toBe('目录太大 清理一下');
+    expect(inline.result.current.activeFilterCount).toBe(0);
+    vi.mocked(searchConversations).mockClear();
+    const resumed = renderHook(() => useConversationSearch({ enabled: true, navigate: vi.fn() as never, allKnownProjects: [] }));
+    act(() => resumed.result.current.resume());
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(searchConversations).toHaveBeenCalledWith(expect.objectContaining({ query: '目录太大 清理一下', semanticMode: 'hybrid' }), expect.anything());
+  });
+  // Explicit syntax must not start a delayed semantic search that can widen
+  // results; reset must remove the conjunction from the shared query (unit).
+  it('runs only keyword search for explicit syntax and resets its all-keyword filter', async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useConversationSearch({ enabled: true, navigate: vi.fn() as never, allKnownProjects: [] }));
+    act(() => result.current.setQuery('+ "login error" cache'));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(searchConversations).toHaveBeenCalledTimes(1);
+    expect(searchConversations).toHaveBeenCalledWith(expect.objectContaining({ query: '+ "login error" cache', semanticMode: 'keyword' }), expect.anything());
+    expect(result.current.activeFilterCount).toBe(1);
+    act(() => result.current.resetFilters());
+    expect(result.current.query).toBe('"login error" cache');
+    expect(result.current.activeFilterCount).toBe(0);
+  });
   it('keeps global search unbounded while scoping an explicit local project by session ids', async () => {
     vi.useFakeTimers();
     const searchMock = vi.mocked(searchConversations);

@@ -366,7 +366,11 @@
       "close": "阖",
       "cancelRename": "罢易名",
       "createdBy": "{{name}} 所立",
-      "ownedBy": "属 {{name}}"
+      "ownedBy": "属 {{name}}",
+      "orcaRemoteLead": "自 {{device}} 之协同",
+      "createdByTask": "他差事所立",
+      "createdByTaskNamed": "差事「{{title}}」所立",
+      "unknownDevice": "远方之机"
     },
     "accounts": {
       "title": "易名籍",
@@ -422,7 +426,8 @@
         "all": "全",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "法器引擎"
       },
       "filterLastActivityHeading": "近动",
       "filterLastActivity": {
@@ -528,7 +533,8 @@
           "30d": "30 日",
           "all": "全"
         }
-      }
+      },
+      "partial": "所得或有未尽，请细其词或限其案。"
     },
     "renameDevice": {
       "title": "为器易名",

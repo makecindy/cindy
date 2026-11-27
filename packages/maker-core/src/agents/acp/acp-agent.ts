@@ -28,9 +28,12 @@ import type { ListAgentSkillsOptions, ListAgentSkillsResult } from '../../types/
 import { buildAcpCapabilities } from './capabilities.js';
 import {
   collectPluginEngineSkillNames,
+  defusePluginEngineSlashMentions,
   renderPluginEngineCapabilityBriefing,
   type PluginEngineBriefingSkill,
 } from './briefing.js';
+import { loadMemoryContext } from '../../memory/context.js';
+import { resolveMemoryScopeKey } from '../../memory/scope-resolver.js';
 import { expandPluginEngineSkillInvocation } from './skill-invocation.js';
 import type { AcpLineTransport } from './line-transport.js';
 import type { AcpMcpServer } from './protocol.js';
@@ -257,6 +260,10 @@ export class AcpAgent extends BaseAgent {
     // Mutable object shared by reference with the host MCP bridge so live
     // `setVendorOptions` calls (e.g. upgrading a live task to Orca Lead) take effect immediately.
     const liveVendorOptions: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
+    const memoryEnabled = (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled) === true;
+    const memoryScopeKey = memoryEnabled && !hosted
+      ? (opts.makerMemoryScopeKey ?? (await resolveMemoryScopeKey(opts.workingDir, opts.remoteHostId)))
+      : (opts.makerMemoryScopeKey ?? opts.workingDir);
     let extra: PiExtraSpawnConfig | null = null;
     // Hosted for another computer: Cindy tools are that computer's and arrive through the tunnel,
     // so this computer's own tool bridge (and its installed plugins, memory, sessions) stays out.
@@ -268,8 +275,8 @@ export class AcpAgent extends BaseAgent {
           ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
           ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
-          ...(opts.makerMemoryScopeKey ? { memoryScopeKey: opts.makerMemoryScopeKey } : {}),
-          memoryEnabled: opts.makerMemoryEnabled === true,
+          ...((memoryEnabled || opts.makerMemoryScopeKey) ? { memoryScopeKey } : {}),
+          memoryEnabled,
           ...(botMcpPolicy ? { botMcpPolicy } : {}),
           vendorOptions: liveVendorOptions,
           // The external agent's own sub-agents may call tools; Cindy cannot attest who called. A host
@@ -296,11 +303,34 @@ export class AcpAgent extends BaseAgent {
     const companionBriefing = opts.botRuntimeProfile ? [
       opts.botProfilePrompt ?? '',
       opts.botProfileContextPrompt ?? '',
-      opts.makerMemoryEnabled && opts.makerMemoryIndexSnapshot?.trim()
+      memoryEnabled && opts.makerMemoryIndexSnapshot?.trim()
         ? opts.makerMemoryIndexSnapshot
         : '',
       opts.botUserProfilePrompt ?? '',
     ].filter((part) => part.trim()).join('\n\n') : '';
+    // Ordinary local and remote-hosted ACP tasks load Cindy Maker Memory the same way built-in
+    // engines do (loadMemoryContext). Companion profiles already assemble their memory snapshot in
+    // companionBriefing; resumed sessions already carry the briefing in their native history.
+    const shouldLoadMemoryBriefing = memoryEnabled && !opts.botRuntimeProfile && !opts.resumeSessionId
+      && (opts.makerMemoryIndexSnapshot !== undefined
+        || opts.makerMemoryProjectDir !== undefined
+        || (Boolean(this.deps.makerMemory) && !hosted));
+    let memoryContext: { rules: string; index: string; projectDirectory?: string } | null = null;
+    if (shouldLoadMemoryBriefing) {
+      try {
+        memoryContext = await loadMemoryContext({
+          manager: this.deps.makerMemory,
+          scopeKey: memoryScopeKey,
+          hosted: !!hosted,
+          snapshot: opts.makerMemoryIndexSnapshot,
+          projectDirectory: opts.makerMemoryProjectDir,
+        });
+      } catch (error) {
+        logger.warn('acp: maker memory load failed at session start (skipping injection)', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     // The built-in engines learn the installed plugins and Skills from their system prompt and native
     // Skill loading; a plugin engine is told in the briefing instead (user decision 2026-11-24). An
     // isolated companion keeps its own frozen capability set and gets neither, as on the built-in
@@ -316,10 +346,20 @@ export class AcpAgent extends BaseAgent {
         skills: await this.readSessionSkills(opts.workingDir, logger),
       };
     const skillCommandNames = capabilities ? collectPluginEngineSkillNames(capabilities.skills) : [];
+    const renderMemoryBriefing = (acceptedMcpServers: readonly string[]): string => {
+      if (!memoryContext) return '';
+      const includeRules = Boolean(memoryContext.projectDirectory) || acceptedMcpServers.includes('cindy_memory');
+      const raw = [
+        includeRules ? memoryContext.rules.trim() : '',
+        memoryContext.index.trim(),
+      ].filter(Boolean).join('\n\n');
+      return raw ? defusePluginEngineSlashMentions(raw, skillCommandNames) : '';
+    };
     // The workspace note comes first: without it the agent has no way to know where the project is.
     const briefing = (acceptedMcpServers: readonly string[]): string => [
       hosted ? deviceHostedPluginEngineNote(hosted, opts.workingDir) : '',
       companionBriefing,
+      renderMemoryBriefing(acceptedMcpServers),
       capabilities ? renderPluginEngineCapabilityBriefing(capabilities, acceptedMcpServers) : '',
       opts.pluginEngineBriefing ?? '',
     ].filter((part) => part.trim()).join('\n\n');
@@ -361,6 +401,11 @@ export class AcpAgent extends BaseAgent {
           ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
           ...(opts.planMode ? { planMode: true } : {}),
           ...(!hosted && opts.extraDirs && opts.extraDirs.length > 0 ? { extraDirs: opts.extraDirs } : {}),
+          // Device-hosted tasks mutate files on the controller computer through cindy_exec,
+          // where RemoteExecutor captures pre-write snapshots on the real workspace.
+          ...(!hosted && opts.sessionId && this.deps.turnChangeCapture
+            ? { captureSessionId: opts.sessionId, turnChangeCapture: this.deps.turnChangeCapture }
+            : {}),
           briefing,
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),
