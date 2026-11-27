@@ -385,6 +385,13 @@ export function CreateWorkerPopover({
           setPluginEngine(null);
           setModelGroup(selection.id);
         },
+        // 本机的 Worker：合并整个供应商的路由像一个供应商列出来，选其中的模型后补记路由(另一台电脑的配置里没有这类路由)。
+        ...(workerHostDeviceId ? {} : {
+          onAttach: (selection) => {
+            setPluginEngine(null);
+            setModelGroup(selection.id);
+          },
+        }),
       }
     : undefined;
   const activeModels = useMemo(() => {

@@ -11,6 +11,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Textarea } from '@/components/ui/input';
+import { UnderlineTabs } from '@/components/ui/underline-tabs';
 import { useAuth } from '@/contexts/AuthContext';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import type { Session } from '@/lib/ccAgent.types';
@@ -404,8 +405,13 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
         {notice(t('sharedTask.joinNotice'))}<div className="flex justify-end pt-3"><Button type="submit" variant="cta" size="lg" loading={busy}>{t('sharedTask.join')}</Button></div>
       </form>);
   const tabKeys: Tab[] = embedded ? ['owned', 'joined'] : ['join', 'joined', 'owned'];
+  const tabLabel = (key: Tab) => t(key === 'join' ? 'sharedTask.joinTab' : key === 'joined' ? 'sharedTask.joinedTab' : 'sharedTask.tabOwned');
+  const tabCount = (key: Tab) => key === 'join' ? undefined : (key === 'owned' ? owned : joined)?.length;
   const hub = <>
-    <div role="tablist" aria-label={t('sharedTask.title')} className={`flex flex-wrap border-b border-[var(--border-default)] ${embedded ? 'mb-6 gap-7' : 'mb-5 gap-1 pb-4'}`}>
+    {/* 设置页里是页面级导航，用 UnderlineTabs；弹窗里仍是整行按钮。 */}
+    {embedded ? <UnderlineTabs aria-label={t('sharedTask.title')} className="mb-6" value={tab} onValueChange={switchTab} disabled={busy}
+      items={tabKeys.map(key => ({ value: key, label: tabLabel(key), count: tabCount(key), id: `shared-task-tab-${key}`, 'aria-controls': `shared-task-panel-${key}` }))} />
+    : <div role="tablist" aria-label={t('sharedTask.title')} className="mb-5 flex flex-wrap gap-1 border-b border-[var(--border-default)] pb-4">
       {tabKeys.map((key, index, keys) => {
         const props = {
           id: `shared-task-tab-${key}`, role: 'tab', 'aria-selected': tab === key,
@@ -417,14 +423,12 @@ export function SharedTaskDialog({ open, onOpenChange, session, returnFocus, ini
             switchTab(next); document.getElementById(`shared-task-tab-${next}`)?.focus();
           },
         };
-        const label = <>{t(key === 'join' ? 'sharedTask.joinTab' : key === 'joined' ? 'sharedTask.joinedTab' : 'sharedTask.tabOwned')}
-          {key !== 'join' && (key === 'owned' ? owned : joined) !== null && <span className="ml-2 text-11 text-[var(--text-secondary)]">{(key === 'owned' ? owned : joined)?.length}</span>}</>;
-        return embedded ? <button key={key} {...props} type="button"
-          className={`relative min-h-11 min-w-0 pb-3 text-13 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:opacity-50 ${tab === key ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'}`}>
-          {label}{tab === key && <span aria-hidden className="absolute -bottom-px inset-x-0 h-0.5 bg-[var(--text-primary)]" />}
-        </button> : <Button key={key} {...props} variant={tab === key ? 'primary' : 'secondary'} tone={tab === key ? 'default' : 'quiet'} size="lg" className="min-w-0 flex-1 px-2 text-13">{label}</Button>;
+        const count = tabCount(key);
+        const label = <>{tabLabel(key)}
+          {count !== undefined && <span className="ml-2 text-11 text-[var(--text-secondary)]">{count}</span>}</>;
+        return <Button key={key} {...props} variant={tab === key ? 'primary' : 'secondary'} tone={tab === key ? 'default' : 'quiet'} size="lg" className="min-w-0 flex-1 px-2 text-13">{label}</Button>;
       })}
-    </div>
+    </div>}
     {!embedded && <div hidden={tab !== 'join'} role="tabpanel" id="shared-task-panel-join" aria-labelledby="shared-task-tab-join">
       <p className="mb-5 text-13 text-[var(--text-secondary)]">{t('sharedTask.joinIntro')}</p>
       <OwnRelayCrossAccountNotice feature="sharedTask" className="-mt-3 mb-5" />

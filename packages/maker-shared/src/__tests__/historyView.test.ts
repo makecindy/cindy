@@ -44,8 +44,10 @@ describe('history reading projection', () => {
     const visibleIds = (items: ReturnType<typeof projectHistoryView>) => items
       .flatMap((item) => item.type === 'messages' ? item.messages : []).map((message) => message.id);
     expect(visibleIds(projectHistoryView(rows, false, true))).toContain('2');
-    const rewritten = rows.map((r) => r.id === '2' ? { ...r, content: body('xdt_card_ix') } : r);
-    expect(visibleIds(projectHistoryView(rewritten, false, true))).not.toContain('2');
+    // Reusing a row object across calls must still recheck its current body:
+    // per-projection reuse must not become an object-identity cache across reads.
+    rows[2].content = body('xdt_card_ix');
+    expect(visibleIds(projectHistoryView(rows, false, true))).not.toContain('2');
   });
   // Unit regression: two 16-character bodies that collide under a single 32-bit
   // FNV-1a (`<tool_use_error>` vs `xdt-file:///Al乇坋`) shared the same stamp here,
