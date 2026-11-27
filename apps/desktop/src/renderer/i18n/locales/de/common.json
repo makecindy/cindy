@@ -18532,7 +18532,11 @@
       "openWorkdirFailed": "Ordner konnte nicht geöffnet werden"
     },
     "runs": {
-      "boundPluginEngineRecovery": "Die Automatisierung wurde nicht ausgeführt. Eine Automatisierung, die mit einer Aufgabe auf einer Plug-in-Engine verknüpft ist, nutzt das Modell der Aufgabe und läuft auf diesem Computer. Wenn in der Automatisierung ein Modell gewählt ist, entferne es und führe sie erneut aus.",
+      "boundPluginEngineRecovery": "Die Automatisierung konnte nicht mit der Plug-in-Engine ausgeführt werden. Öffne die Fehlerdetails, um den Grund zu prüfen.",
+      "boundPluginEngineSshRecovery": "SSH-Aufgaben müssen ihre aktuelle Engine beibehalten. Verknüpfe die Automatisierung mit einer kompatiblen Aufgabe ohne SSH, um eine Plug-in-Engine zu verwenden.",
+      "boundPluginEngineSelectionLocationRecovery": "Die Automatisierung kann am gewählten Standort der Plug-in-Engine nicht ausgeführt werden. Wähle in den Modelleinstellungen der Automatisierung eine Engine auf einem unterstützten Computer.",
+      "boundPluginEngineTaskLocationRecovery": "Die Automatisierung kann am Standort der Plug-in-Engine der verknüpften Aufgabe nicht ausgeführt werden. Verschiebe die Engine der Aufgabe auf einen unterstützten Computer oder verknüpfe eine kompatible Aufgabe.",
+      "boundPluginEngineModelRecovery": "Die Modelleinstellungen der Automatisierung passen nicht zur Plug-in-Engine der verknüpften Aufgabe. Stelle die Automatisierung so ein, dass sie das Modell der Aufgabe verwendet.",
       "queueWaitTimeoutRecovery": "Die Wartezeit ist abgelaufen, bevor die Eingabe gesendet wurde. Sobald die Zielsitzung frei ist, wähle {{action}}, um sie auszuführen.",
       "status": {
         "running": "Wird ausgeführt",

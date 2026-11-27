@@ -18710,7 +18710,11 @@
       "openWorkdirFailed": "Falha ao abrir a pasta"
     },
     "runs": {
-      "boundPluginEngineRecovery": "A automatização não foi executada. Uma automatização associada a uma tarefa com motor de plugin usa o modelo da própria tarefa e é executada neste computador. Se a automatização escolher um modelo, remove-o e executa-a novamente.",
+      "boundPluginEngineRecovery": "A automatização não pôde ser executada com o motor de plugin. Abra os detalhes do erro para verificar o motivo.",
+      "boundPluginEngineSshRecovery": "As tarefas SSH têm de manter o motor atual. Para usar um motor de plugin, associe a automatização a uma tarefa compatível fora do SSH.",
+      "boundPluginEngineSelectionLocationRecovery": "A automatização não pode ser executada na localização do motor de plugin selecionado. Nas definições de modelo da automatização, escolha um motor num computador compatível.",
+      "boundPluginEngineTaskLocationRecovery": "A automatização não pode ser executada na localização do motor de plugin da tarefa associada. Mova o motor da tarefa para um computador compatível ou associe uma tarefa compatível.",
+      "boundPluginEngineModelRecovery": "As definições de modelo da automatização não são compatíveis com o motor de plugin da tarefa associada. Configure a automatização para usar o modelo da tarefa.",
       "queueWaitTimeoutRecovery": "O tempo de espera expirou antes de a mensagem ser enviada. Quando a sessão de destino estiver livre, escolhe {{action}} para a executar.",
       "status": {
         "running": "Em execução",

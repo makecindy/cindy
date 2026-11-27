@@ -18457,7 +18457,11 @@
       "openWorkdirFailed": "打开文件夹失败"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自动化未运行。绑定到插件引擎任务的自动化会沿用任务自己的模型，并在这台电脑上运行。如果自动化里指定了模型，请先去掉，再重新运行。",
+      "boundPluginEngineRecovery": "自动化未能使用插件引擎运行。展开错误详情查看原因。",
+      "boundPluginEngineSshRecovery": "SSH 任务必须沿用当前引擎。要使用插件引擎，请将自动化绑定到兼容的非 SSH 任务。",
+      "boundPluginEngineSelectionLocationRecovery": "所选插件引擎的位置不支持运行此自动化。请在自动化的模型设置中选择受支持电脑上的引擎。",
+      "boundPluginEngineTaskLocationRecovery": "绑定任务的插件引擎所在位置不支持运行此自动化。请将任务的引擎切换到受支持的电脑，或绑定兼容的任务。",
+      "boundPluginEngineModelRecovery": "自动化的模型设置与绑定任务的插件引擎不匹配。请将自动化设为沿用任务的模型。",
       "queueWaitTimeoutRecovery": "排队等待超时，提示词未发送。目标任务空闲后可点击「{{action}}」补跑。",
       "status": {
         "running": "运行中",

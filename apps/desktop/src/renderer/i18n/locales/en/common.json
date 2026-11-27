@@ -18532,7 +18532,11 @@
       "openWorkdirFailed": "Failed to open folder"
     },
     "runs": {
-      "boundPluginEngineRecovery": "This automation didn’t run. An automation linked to a plugin engine task uses the task’s own model and runs on this computer. If the automation chooses a model, remove it, then run it again.",
+      "boundPluginEngineRecovery": "The automation could not run with the plugin engine. Open the error details to check the reason.",
+      "boundPluginEngineSshRecovery": "SSH tasks must keep their current engine. To use a plugin engine, link the automation to a compatible task outside SSH.",
+      "boundPluginEngineSelectionLocationRecovery": "The selected plugin engine location cannot run this automation. In the automation’s model settings, choose an engine on a supported computer.",
+      "boundPluginEngineTaskLocationRecovery": "The linked task’s plugin engine location cannot run this automation. Move the task’s engine to a supported computer or link a compatible task.",
+      "boundPluginEngineModelRecovery": "The automation’s model settings do not match the linked task’s plugin engine. Set the automation to follow the task’s model.",
       "queueWaitTimeoutRecovery": "Queue wait expired before the prompt was sent. When the target session is idle, choose {{action}} to run it.",
       "status": {
         "running": "Running",

@@ -18457,7 +18457,11 @@
       "openWorkdirFailed": "启卷匣未成"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自动之务未行。系于法器引擎之务者，循其务之模型，行于此机。若自动之务另择模型，宜去之，复行之。",
+      "boundPluginEngineRecovery": "自运未能用法器引擎而行。展开错误详情，可察其故。",
+      "boundPluginEngineSshRecovery": "SSH 差事须循其原用引擎。欲用法器引擎，宜系自运于相容之非 SSH 差事。",
+      "boundPluginEngineSelectionLocationRecovery": "所选法器引擎之所在不可行此自运。宜于自运模型设定中择可用电脑之引擎。",
+      "boundPluginEngineTaskLocationRecovery": "所系差事之法器引擎所在不可行此自运。宜移其引擎至可用之电脑，或另系相容差事。",
+      "boundPluginEngineModelRecovery": "自运所设模型与所系差事之法器引擎不合。宜设自运循差事之模型。",
       "queueWaitTimeoutRecovery": "排候逾时，提示词未发。待所系任务闲，按「{{action}}」补行。",
       "status": {
         "running": "方行",

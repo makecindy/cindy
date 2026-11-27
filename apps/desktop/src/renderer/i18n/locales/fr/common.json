@@ -18710,7 +18710,11 @@
       "openWorkdirFailed": "Impossible d'ouvrir le dossier"
     },
     "runs": {
-      "boundPluginEngineRecovery": "L’automatisation ne s’est pas exécutée. Une automatisation associée à une tâche sur un moteur de plugin utilise le modèle de la tâche et s’exécute sur cet ordinateur. Si l’automatisation choisit un modèle, retirez-le, puis relancez-la.",
+      "boundPluginEngineRecovery": "L’automatisation n’a pas pu s’exécuter avec le moteur de plugin. Ouvrez les détails de l’erreur pour en connaître la cause.",
+      "boundPluginEngineSshRecovery": "Les tâches SSH doivent conserver leur moteur actuel. Pour utiliser un moteur de plugin, liez l’automatisation à une tâche compatible hors SSH.",
+      "boundPluginEngineSelectionLocationRecovery": "L’automatisation ne peut pas s’exécuter à l’emplacement du moteur de plugin sélectionné. Dans les réglages du modèle de l’automatisation, choisissez un moteur sur un ordinateur pris en charge.",
+      "boundPluginEngineTaskLocationRecovery": "L’automatisation ne peut pas s’exécuter à l’emplacement du moteur de plugin de la tâche liée. Déplacez le moteur de la tâche vers un ordinateur pris en charge ou liez une tâche compatible.",
+      "boundPluginEngineModelRecovery": "Les réglages du modèle de l’automatisation sont incompatibles avec le moteur de plugin de la tâche liée. Configurez l’automatisation pour qu’elle utilise le modèle de la tâche.",
       "queueWaitTimeoutRecovery": "L’attente a expiré avant l’envoi du message. Une fois la session cible libre, choisissez {{action}} pour l’exécuter.",
       "status": {
         "running": "En cours",
