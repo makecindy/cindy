@@ -6,6 +6,11 @@ export interface PeerPathMetrics {
   directRttMs: number | null;
   relayRttMs: number | null;
   preference: PathPreference;
+  /**
+   * How the peer's own datagrams reach the relay now, as it last said on the control stream (`{"relayVia":…}`, pathRouter.ts):
+   * the other leg of a relayed path. Null until it says (older peers never do).
+   */
+  peerRelayVia?: RelayRoute['via'] | null;
 }
 
 export interface RosterEntry { id: string; dial: unknown; }

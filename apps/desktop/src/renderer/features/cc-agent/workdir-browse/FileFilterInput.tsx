@@ -4,12 +4,11 @@
  * 常驻挂在 sidebar 文件树上方,空值显示文件树,有输入则由 caller 切换到
  * `FilterResultList`。
  *
- * 视觉:共享 SearchInput(32px 胶囊、14px 搜索图标),右侧 X 清除按钮(有内容时显示)。
+ * 视觉:共享 SearchInput(32px 胶囊、14px 搜索图标,有内容时右侧是它内置的清空按钮)。
  *
  * 抽到 workdir-browse/ 下,RSB plugin 和 doc 模式 sidebar 共用。
  */
 
-import { X as XIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { SearchInput } from '@/components/ui/search-input';
@@ -35,18 +34,6 @@ export function FileFilterInput({ value, onChange, placeholder }: FileFilterInpu
         onChange={onChange}
         placeholder={label}
         aria-label={label}
-        trailing={
-          value ? (
-            <button
-              type="button"
-              onClick={() => onChange('')}
-              aria-label={t('rightSidebar.fileBrowser.filterClear')}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 flex size-5 items-center justify-center rounded-full text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
-            >
-              <XIcon size={12} strokeWidth={2} />
-            </button>
-          ) : undefined
-        }
       />
     </div>
   );

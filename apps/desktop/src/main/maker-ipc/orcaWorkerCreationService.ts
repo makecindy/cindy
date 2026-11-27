@@ -8,6 +8,7 @@ import path from 'node:path';
 
 import { isCredentialModeSwitchBusyError } from '../maker-host/credentialSwitchError.js';
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
+import { isDisallowedPluginEngineDeviceId } from './pluginEngineSessionAdmission.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort, OrcaWorkerStatus } from './orcaTeamService.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 import type { ModelGroupSessionStart } from '../model-groups/sessionStart.js';
@@ -287,7 +288,7 @@ export type OrcaRemoteWorkerOpenResult =
       proxySessionId: string;
       proxySession: OrcaRemoteWorkerProxySessionSeed;
       remoteSessionId: string;
-      agent: AgentKind;
+      agent: EngineKind;
       model: string;
       workingDir: string;
       agentDeviceId?: string | null;
@@ -373,14 +374,18 @@ export interface OrcaWorkerCreationDeps {
     didInjectProjectContext: boolean;
   }>;
   /**
-   * 插件引擎 Worker 的准入，规则与在它上面新建任务相同：引擎此刻由本机提供且可用，返回该引擎下实际使用的
+   * 插件引擎 Worker 的准入，规则与在它上面新建任务相同：引擎此刻由本机或目标电脑/分享提供且可用，返回该引擎下实际使用的
    * 模型、思考深度('' = 引擎自己决定)与权限模式；不可用时抛错。缺省 = 不支持插件引擎 Worker。
    */
-  admitPluginEngineWorker?(target: { providerId: string | null; model: string; effort?: unknown; permissionMode?: string | null }): {
+  admitPluginEngineWorker?(target: {
+    providerId: string | null;
     model: string;
-    effort: string;
-    permissionMode: string;
-  };
+    effort?: unknown;
+    permissionMode?: string | null;
+    agentDeviceId?: string | null;
+  }):
+    | { model: string; effort: string; permissionMode: string }
+    | Promise<{ model: string; effort: string; permissionMode: string }>;
   addOrUpdateWorker(worker: OrcaWorkerRecordInput): Promise<void>;
   markOrcaRoleIfNeeded(sessionId: string, role: 'worker'): Promise<void>;
   closeWorkerSession(sessionId: string): Promise<void>;
@@ -409,7 +414,7 @@ export interface OrcaWorkerCreationDeps {
     leadSessionId: string;
     label: string;
     role: string;
-    agent: AgentKind;
+    agent: EngineKind;
     model?: string;
     modelGroup?: string;
     providerId?: string;
@@ -882,10 +887,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     onCreated?: (assertCreatedCurrent: () => Promise<void>) => void;
   }): Promise<OrcaWorkerCreationResult> {
     const { params, role, label, lead, settings, assertCurrent, onCreated } = input;
-    // 插件引擎只在本机运行(上游已拒绝)；这里只放内置引擎。
-    if (params.agent === 'acp') {
-      return { ok: false, errorCode: 'INVALID_PARAMS', message: 'plugin engines run on this computer only' };
-    }
     const deviceId = typeof params.executionDeviceId === 'string' ? params.executionDeviceId.trim() : '';
     if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(deviceId)) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: 'execution_device_id must be a device id' };
@@ -1150,11 +1151,12 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       || !deps.createWorkerWorktree || !deps.discardWorkerWorktree)) {
       return {ok: false, errorCode: 'INVALID_PARAMS', message: 'Worker worktree requires a local project'};
     }
-    if (params.modelGroup && (lead.remoteHostId || params.agent === 'acp' || !deps.modelGroupStart)) {
+    if (params.modelGroup && !deps.modelGroupStart) {
       return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Model groups are unavailable for this Worker location' };
     }
     const modelGroup = params.modelGroup && params.executionDeviceId === undefined ? await deps.modelGroupStart!.prepare(params.modelGroup, {
       keptModelName: params.model || lead.model,
+      ...(lead.remoteHostId ? { sshHostId: lead.remoteHostId } : {}),
     }) : null;
     const groupRoute = modelGroup?.route;
     if (groupRoute) {
@@ -1173,23 +1175,39 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     if (!workerLocation.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: workerLocation.message };
     }
+    if (params.executionDeviceId !== undefined) {
+      return createRemoteWorkerInTeam({
+        params,
+        role: role.value,
+        label: label.value,
+        lead,
+        settings,
+        assertCurrent,
+        onCreated,
+      });
+    }
     if (params.agent === 'acp') {
-      // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)：只在本机运行(Lead 不在 SSH、Worker 不换电脑、不在
-      // 另一台电脑执行)；引擎按本机此刻提供的准入，不走内置模型目录与来源路由。
-      if (lead.remoteHostId || params.executionDeviceId !== undefined || workerLocation.agentDeviceId) {
+      // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)：支持本机、另一台同账号电脑与分享来的插件引擎；
+      // SSH 远端主机不支持插件引擎。
+      if (lead.remoteHostId) {
         return { ok: false, errorCode: 'INVALID_PARAMS',
-          message: 'plugin engines run on this computer only; create the Worker locally (agent_device_id "local", no execution_device_id)' };
+          message: 'plugin engines are not supported for SSH Lead Workers' };
+      }
+      if (isDisallowedPluginEngineDeviceId(workerLocation.agentDeviceId)) {
+        return { ok: false, errorCode: 'INVALID_PARAMS',
+          message: 'this plugin engine location cannot be used for Workers' };
       }
       if (!deps.admitPluginEngineWorker) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'plugin engine Workers are not available here' };
       }
-      let admitted: ReturnType<NonNullable<typeof deps.admitPluginEngineWorker>>;
+      let admitted: Awaited<ReturnType<NonNullable<typeof deps.admitPluginEngineWorker>>>;
       try {
-        admitted = deps.admitPluginEngineWorker({
+        admitted = await deps.admitPluginEngineWorker({
           providerId: typeof params.providerId === 'string' ? params.providerId.trim() : null,
           model: params.model?.trim() || 'default',
           effort: params.effort,
           permissionMode: resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
+          ...(workerLocation.agentDeviceId ? { agentDeviceId: workerLocation.agentDeviceId } : {}),
         });
       } catch (err) {
         return { ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE', message: err instanceof Error ? err.message : String(err) };
@@ -1222,7 +1240,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       return finishWorkerCreation({
         workingDir: pluginWorkingDir,
         ...(pluginWorktreeSource ? { worktreeSource: pluginWorktreeSource, worktreeSourceSelection: pluginWorktreeSelection } : {}),
-        workerAgentDeviceId: null,
+        workerAgentDeviceId: workerLocation.agentDeviceId,
         resolved: {
           model: admitted.model,
           providerId: typeof params.providerId === 'string' ? params.providerId.trim() : null,
@@ -1230,17 +1248,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           fastMode: false,
         },
         permissionMode: admitted.permissionMode as OrcaWorkerPermissionMode,
-      });
-    }
-    if (params.executionDeviceId !== undefined) {
-      return createRemoteWorkerInTeam({
-        params,
-        role: role.value,
-        label: label.value,
-        lead,
-        settings,
-        assertCurrent,
-        onCreated,
       });
     }
     // 标准面板显式选定的来源(非空 string)直接生效,由下方精确 preflight 把关「已连接且

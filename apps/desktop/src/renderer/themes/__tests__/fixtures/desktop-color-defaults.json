@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 585,
+  "count": 586,
   "colors": [
     {
       "id": "surface",
@@ -2766,6 +2766,11 @@
       "id": "form-field-hint",
       "light": "var(--text-secondary-mid)",
       "dark": "var(--text-secondary-mid)"
+    },
+    {
+      "id": "search-input-bg",
+      "light": "var(--surface-elevated)",
+      "dark": "var(--surface-elevated)"
     },
     {
       "id": "slider-track",

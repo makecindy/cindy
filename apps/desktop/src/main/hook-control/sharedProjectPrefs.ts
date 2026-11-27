@@ -158,6 +158,7 @@ export function adoptChannelPrefs(channel: HookPrefsChannel): boolean {
         workspace,
         route?.providerId ?? null,
         route?.agentDeviceId ?? null,
+        route?.modelGroup ?? null,
       );
     }
     setSharedPrefOrigin(workspace, channel);

@@ -2320,14 +2320,20 @@ test('restart restores a paused durable queue and deduplicates accepted input', 
   t.after(() => { clearCurrentDbClient(); sqlite?.close(); rmSync(root, { recursive: true, force: true }); });
   reopen();
   const delivered = new Set();
+  const deliveries = [];
+  let failPersistedLookup = false;
   const persistence = {
     markStarted: markSessionTurnStartedDurable,
     markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
     persistQueueSnapshot: saveAgentInputQueueSnapshot,
     loadQueueSnapshot: loadAgentInputQueueSnapshot,
-    getPersistedClientIds: getPersistedInputClientIds,
+    getPersistedClientIds: (id, clientIds) => {
+      if (failPersistedLookup) throw new Error('persisted lookup unavailable');
+      return getPersistedInputClientIds(id, clientIds);
+    },
     persistMessage: async (id, row) => {
       if (row.role === 'user') {
+        deliveries.push(row.clientId);
         sqlite.prepare('INSERT OR IGNORE INTO messages(session_id,client_id) VALUES (?,?)').run(id, row.clientId);
         delivered.add(row.clientId);
       }
@@ -2339,6 +2345,11 @@ test('restart restores a paused durable queue and deduplicates accepted input', 
   const pendingContent = JSON.stringify({ text: 'pending', images: [], files: [], slashCommandRanges: [] });
   await first.queue.enqueue('durable', { clientId: 'b', text: 'pending', persistedContent: pendingContent,
     chatMessage: { content: 'pending' } });
+  // Repeating a coordinator-owned input is acknowledged ahead of SQLite IO.
+  failPersistedLookup = true;
+  const duplicatePending = await first.queue.enqueue('durable', { clientId: 'b', text: 'replayed input' });
+  assert.deepEqual(duplicatePending.pendingQueue.map(item => item.text), ['pending']);
+  failPersistedLookup = false;
   await first.queue.dispose();
   clearCurrentDbClient();
   sqlite.close();
@@ -2358,11 +2369,15 @@ test('restart restores a paused durable queue and deduplicates accepted input', 
     assert.equal(restored.pendingQueue[0].persistedContent, pendingContent);
     assert.equal(restored.queuePaused, true);
     assert.equal(restarted.maker.sessions.size, 0);
-    await restarted.queue.enqueue('durable', { clientId: 'a', text: 'already running' });
+    const duplicateCommitted = await restarted.queue.enqueue('durable', { clientId: 'a', text: 'replayed input' });
+    assert.deepEqual(duplicateCommitted.pendingQueue.map(item => item.clientId), ['b']);
     assert.equal(restarted.maker.sessions.size, 0);
     await restarted.queue.resume('durable');
     await waitFor(() => restarted.maker.getSession('durable')?.sent.length === 1);
     assert.deepEqual(restarted.maker.getSession('durable').sent, ['pending']);
+    assert.deepEqual(deliveries, ['a', 'b']);
+    assert.deepEqual(sqlite.prepare('SELECT client_id FROM messages ORDER BY rowid').all()
+      .map(row => row.client_id), ['a', 'b']);
   } finally { await restarted.queue.dispose(); }
 });
 

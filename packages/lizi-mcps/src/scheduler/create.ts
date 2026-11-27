@@ -24,6 +24,7 @@ import type { LiziMcpSessionContext, SchedulerMcpDeps } from '../types.js';
 import type { SchedulerToolRegistry } from '../cindy_schedulerToolRegistry.js';
 import type { CreateScheduleInput } from '@cindy/maker-scheduler';
 import { LOCAL_SCHEDULE_AGENT_DEVICE } from './listModels.js';
+import { attachMultiPrSessionWarning, attachRemoteMultiPrSessionWarning } from './_prSessionGuard.js';
 import { stabilizePreRunHookForCreate } from '@cindy/maker-scheduler';
 
 export function registerScheduleCreateTool(
@@ -248,7 +249,11 @@ export function registerScheduleCreateTool(
         if (input.intervalMs !== undefined) assertCronAndTimezoneValid(input.cronExpr, input.timezone);
         return runOnDevice(deps, device, async () => {
           throw new Error('invalid device: remote create must not use the local scheduler');
-        }, { op: 'create', args: [input] });
+        }, {
+          op: 'create',
+          args: [input],
+          map: (data) => attachRemoteMultiPrSessionWarning(deps, device!, data),
+        });
         } catch (err) {
           const classified = classifySchedulerError(err);
           return buildJsonResult({ ok: false, ...classified }, true);
@@ -317,7 +322,8 @@ export function registerScheduleCreateTool(
           const source = await deps.getSessionProject(caller);
           if (!source.remoteHostId && source.projectDir) input = { ...input, inheritedProjectDir: source.projectDir };
         }
-        return scheduler.create(input);
+        const created = await scheduler.create(input);
+        return attachMultiPrSessionWarning(scheduler, created);
       });
     },
   });

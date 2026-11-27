@@ -7,6 +7,7 @@ export * from './webhook-formats.js';
 export * from './plugin-events.js';
 export * from './github-item.js';
 export * from './pre-run-hook-update.js';
+export * from './precheck-transient.js';
 export * from './builtin-templates.js';
 export * from './engine/scheduler.js';
 export * from './engine/cron.js';
