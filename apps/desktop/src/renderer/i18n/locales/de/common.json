@@ -4302,6 +4302,7 @@
           "supported": "Unterstützt",
           "unsupported": "Nicht unterstützt",
           "undeclared": "Nicht angegeben",
+          "ultrafastDeclaredUnavailable": "Vom Anbieter angegeben · Für diese Codex-Verbindung nicht verfügbar",
           "pricing": "Preise",
           "pricingLabel": "Preise",
           "noPricing": "Keine Preisdaten für diese Route",

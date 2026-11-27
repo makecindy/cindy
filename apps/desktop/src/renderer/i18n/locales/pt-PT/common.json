@@ -4356,6 +4356,7 @@
           "supported": "Suportado",
           "unsupported": "Não suportado",
           "undeclared": "Não declarado",
+          "ultrafastDeclaredUnavailable": "Declarado pelo fornecedor · Indisponível nesta ligação do Codex",
           "pricing": "Preços",
           "pricingLabel": "Preços",
           "noPricing": "Sem dados de preços para esta via",
