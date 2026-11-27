@@ -8896,6 +8896,8 @@
         "nodeRuntime": "Puede ejecutar un programa Node incluido en esta computadora",
         "nodeMcp": "Puede ejecutar un stdio MCP incluido en esta computadora",
         "nodeRuntimeDetail": "Alto riesgo: tiene el mismo acceso local que tu cuenta de usuario, incluidos archivos, red e inicio de otros programas. Cindy no puede contenerlo en el entorno aislado del navegador.",
+        "nodeInheritEnv": "Heredar el entorno local",
+        "nodeInheritEnvDetail": "Alto riesgo: el programa Node del complemento y sus procesos secundarios reciben todas las variables de entorno disponibles para Cindy, incluida la configuración de proxy y certificados y cualquier clave de API o token que contengan.",
         "nodeSecret": "Puede proporcionar la credencial almacenada \"{{name}}\" al programa local Node",
         "nodeSecretDetail": "Cindy lo almacena cifrado y lo inyecta solo mientras se ejecutan los métodos Worker declarados a continuación. El programa Node recibe el texto sin cifrar y puede devolverlo, registrarlo, guardarlo o exponerlo de otro modo al código del complemento del navegador o a los parámetros de Agent. Instala únicamente complementos en los que confíes.",
         "nodeResident": "El programa Node puede seguir ejecutándose en segundo plano",

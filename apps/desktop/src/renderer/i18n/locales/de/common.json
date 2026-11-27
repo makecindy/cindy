@@ -8822,6 +8822,8 @@
         "nodeRuntime": "Kann ein mitgeliefertes Node-Programm auf diesem Computer ausführen",
         "nodeMcp": "Kann einen mitgelieferten stdio MCP auf diesem Computer ausführen",
         "nodeRuntimeDetail": "Hohes Risiko: Es hat dieselben lokalen Zugriffsrechte wie dein Benutzerkonto, einschließlich Dateien, Netzwerk und dem Starten anderer Programme. Cindy kann es nicht in der Browser-Sandbox einschränken.",
+        "nodeInheritEnv": "Lokale Umgebung übernehmen",
+        "nodeInheritEnvDetail": "Hohes Risiko: Das Node-Programm des Plugins und seine Kindprozesse erhalten alle Umgebungsvariablen von Cindy, einschließlich Proxy- und Zertifikatseinstellungen sowie darin enthaltener API-Schlüssel oder Tokens.",
         "nodeSecret": "Kann die gespeicherten Zugangsdaten „{{name}}“ dem lokalen Node-Programm bereitstellen",
         "nodeSecretDetail": "Cindy speichert sie verschlüsselt und stellt sie nur während der Ausführung der unten deklarierten Worker-Methoden bereit. Das Node-Programm erhält den Klartext und kann ihn zurückgeben, protokollieren, speichern oder anderweitig gegenüber browserseitigem Plugin-Code oder Agent-Parametern offenlegen. Installiere nur Plugins, denen du vertraust.",
         "nodeResident": "Das Node-Programm kann im Hintergrund weiterlaufen",

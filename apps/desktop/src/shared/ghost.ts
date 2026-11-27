@@ -366,6 +366,8 @@ export interface GhostNodeNeeds {
    * 权限本质不变:仍只能跑包内申报过的 JS,node 槽本就是用户级执行权。
    */
   childSpawn?: boolean;
+  /** 显式全量继承宿主环境；默认仅保留基础环境，安装与扩权更新时披露。 */
+  inheritEnv?: boolean;
   /**
    * 由主机 safeStorage 持久化、按声明的方法临时注入 Worker 的凭证。
    * 这是 Node 高风险能力的一部分，插件详情会逐条披露。
@@ -2609,6 +2611,14 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     });
   }
   if (manifest.node) {
+    if (manifest.node.inheritEnv === true) {
+      items.unshift({
+        key: 'node:inherit-env',
+        kind: 'node',
+        labelKey: 'nodeInheritEnv',
+        detailKey: 'nodeInheritEnvDetail',
+      });
+    }
     for (const binding of manifest.node.secretBindings ?? []) {
       const targetEntry = binding.entry ?? manifest.node.entry;
       const stableMethods = [...binding.methods].sort();
@@ -5529,6 +5539,9 @@ function validateGhostManifestInput(
     if (nodeRaw.childSpawn !== undefined && typeof nodeRaw.childSpawn !== 'boolean') {
       return { ok: false, reason: 'node.childSpawn 必须是布尔值' };
     }
+    if (nodeRaw.inheritEnv !== undefined && typeof nodeRaw.inheritEnv !== 'boolean') {
+      return { ok: false, reason: 'node.inheritEnv 必须是布尔值' };
+    }
     let nodeSecretBindings: GhostNodeSecretBinding[] | undefined;
     if (nodeRaw.secretBindings !== undefined) {
       if (
@@ -5680,7 +5693,7 @@ function validateGhostManifestInput(
       }
     }
     node = {
-      ...unknownDeclarationFields(nodeRaw, ['entry', 'protocol', 'lifecycle', 'idleTimeoutSeconds', 'entries', 'childSpawn', 'secretBindings']),
+      ...unknownDeclarationFields(nodeRaw, ['entry', 'protocol', 'lifecycle', 'idleTimeoutSeconds', 'entries', 'childSpawn', 'inheritEnv', 'secretBindings']),
       entry: nodeRaw.entry,
       protocol: nodeRaw.protocol as GhostNodeProtocol,
       ...(nodeRaw.lifecycle !== undefined
@@ -5691,6 +5704,7 @@ function validateGhostManifestInput(
         : {}),
       ...(nodeEntries !== undefined ? { entries: nodeEntries } : {}),
       ...(nodeRaw.childSpawn !== undefined ? { childSpawn: nodeRaw.childSpawn } : {}),
+      ...(nodeRaw.inheritEnv !== undefined ? { inheritEnv: nodeRaw.inheritEnv } : {}),
       ...(nodeSecretBindings !== undefined ? { secretBindings: nodeSecretBindings } : {}),
     };
   }

@@ -8896,6 +8896,8 @@
         "nodeRuntime": "Peut exécuter un programme Node fourni sur cet ordinateur",
         "nodeMcp": "Peut exécuter un MCP stdio fourni sur cet ordinateur",
         "nodeRuntimeDetail": "Risque élevé : il dispose des mêmes accès locaux que votre compte utilisateur, y compris les fichiers, le réseau et le lancement d'autres programmes. Cindy ne peut pas le confiner dans le bac à sable du navigateur.",
+        "nodeInheritEnv": "Hériter de l’environnement local",
+        "nodeInheritEnvDetail": "Risque élevé : le programme Node du plugin et ses processus enfants reçoivent toutes les variables d’environnement de Cindy, y compris les paramètres de proxy et de certificats ainsi que les clés API ou jetons qu’elles contiennent.",
         "nodeSecret": "Peut fournir l'identifiant enregistré « {{name}} » au programme Node local",
         "nodeSecretDetail": "Cindy le stocke chiffré et ne l'injecte que pendant l'exécution des méthodes Worker déclarées ci-dessous. Le programme Node reçoit la valeur en clair et peut la renvoyer, la journaliser, l'enregistrer ou l'exposer d'une autre manière au code du plugin côté navigateur ou aux paramètres de l'Agent. N'installez que des plugins de confiance.",
         "nodeResident": "Le programme Node peut continuer à s'exécuter en arrière-plan",
