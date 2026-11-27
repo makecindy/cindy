@@ -6,7 +6,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '@cindy/maker-core';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError, createConsoleLogger } from '@cindy/maker-core';
 
 import { adaptPluginNodeProcess, pluginNodeEnvironment } from '../nodeRuntimeProcessAdapter';
 import type { InstalledGhost } from '../../../shared/ghost';
@@ -14,6 +14,7 @@ import { withGhostResolvedLocale } from '../../../shared/ghost';
 import { handlePluginHostToolRequest, type PluginHostToolPorts } from '../hostToolSlot.js';
 import { authorizePluginHostToolCall } from '../../mcp-integrations/hostToolCaller.js';
 import { bindTaskActionInput } from '../../maker-ipc/taskActionAuthorization.js';
+import { createAcpProcessTransport } from '../../maker-host/acp-transport.js';
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
@@ -3387,15 +3388,37 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
     return { broker, spawned, warn };
   }
 
-  it('inherits the environment in a declared engine and redacts its Host log', async () => {
-    const ghost = harnessGhost(ghost => { ghost.manifest.node!.inheritEnv = true; });
+  // Unit: broker-only logging checks missed ACP's independent exit diagnostic.
+  // A split synthetic secret followed by exit must stay opaque in both Host logs;
+  // default diagnostics and ACP business output retain their existing behavior.
+  it.each([false, true])('applies inherited environment log protection through the ACP exit path: %s', async inheritEnv => {
+    const ghost = harnessGhost(ghost => { ghost.manifest.node!.inheritEnv = inheritEnv; });
     const { broker, spawned, warn } = setupHarness(ghost);
+    const acpWarn = vi.fn();
     try {
-      await broker.spawnHarness('node-ghost', 'dsh');
-      expect(spawned[0].inheritEnv).toBe(true);
-      spawned[0].proc.stderr.write('synthetic-environment-token');
-      expect(JSON.stringify(warn.mock.calls)).toContain('[REDACTED]');
-      expect(JSON.stringify(warn.mock.calls)).not.toContain('synthetic-environment-token');
+      const proc = await broker.spawnHarness('node-ghost', 'dsh');
+      const transport = createAcpProcessTransport(proc, { ...createConsoleLogger('acp-env-test'), warn: acpWarn });
+      const lines: string[] = [];
+      const closed = vi.fn();
+      transport.onLine(line => lines.push(line));
+      transport.onClose(closed);
+      expect(spawned[0].inheritEnv).toBe(inheritEnv);
+      spawned[0].proc.stdout.write('{"jsonrpc":"2.0","id":1,"result":"business-result"}\n');
+      spawned[0].proc.stderr.write('synthetic-environment-');
+      spawned[0].proc.stderr.write('token');
+      spawned[0].proc.emit('exit', 1, null);
+      expect(lines).toEqual(['{"jsonrpc":"2.0","id":1,"result":"business-result"}']);
+      expect(closed).toHaveBeenCalledWith({ reason: 'peer-exited', detail: 'exit 1' });
+      if (inheritEnv) {
+        const output = JSON.stringify([warn.mock.calls, acpWarn.mock.calls]);
+        expect(output).toContain('[REDACTED]');
+        expect(output).not.toContain('synthetic-environment-');
+        expect(output).not.toContain('token');
+      } else {
+        expect(acpWarn).toHaveBeenCalledWith('acp endpoint exited', {
+          detail: 'exit 1', stderrTail: 'synthetic-environment-token',
+        });
+      }
     } finally { broker.destroyAll(); }
   });
 

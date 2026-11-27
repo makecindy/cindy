@@ -104,6 +104,8 @@ export interface NodeWorkerProcess {
   stdin: NodeWorkerWritable;
   stdout: NodeWorkerReadable;
   stderr: NodeWorkerReadable;
+  /** 宿主日志消费者须隐藏原始 stderr；不改变字节流或业务中继。 */
+  redactStderr?: boolean;
   pid?: number;
   killed?: boolean;
   /** Confirm OS absence and emit the existing exit lifecycle once, when supported. */
@@ -1498,7 +1500,8 @@ export class GhostNodeRuntimeBroker {
     // error 不是退出证明:开始有界停止,记账保留到真实 exit。
     proc.on('error', () => this.stopHarnessProcess(entry, true));
     try {
-      this.logHarnessStderr(entry, ghost.manifest.node?.inheritEnv === true);
+      proc.redactStderr = ghost.manifest.node?.inheritEnv === true;
+      this.logHarnessStderr(entry);
       await new Promise<void>((resolve, fail) => {
         let settled = false;
         const settle = (outcome: () => void) => {
@@ -1559,7 +1562,7 @@ export class GhostNodeRuntimeBroker {
    * 引擎 stderr 进插件日志:每段最多 4096 字符;每个进程收到的 stderr 累计到上限后只记一条
    * 截断说明,之后不再写日志,不给日志灌洪。
    */
-  private logHarnessStderr(entry: HarnessProcEntry, inheritEnv = false): void {
+  private logHarnessStderr(entry: HarnessProcEntry): void {
     const decoder = new StringDecoder('utf8');
     let seen = 0;
     let truncated = false;
@@ -1568,7 +1571,7 @@ export class GhostNodeRuntimeBroker {
       const decoded = decoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
       const remaining = HARNESS_STDERR_LOG_CAP - seen;
       seen += decoded.length;
-      const text = (inheritEnv && decoded ? '[REDACTED]' : decoded.trim()).slice(0, Math.min(4_096, remaining));
+      const text = (entry.proc.redactStderr && decoded ? '[REDACTED]' : decoded.trim()).slice(0, Math.min(4_096, remaining));
       if (text) this.deps.log?.warn('ghost harness stderr', { ghostId: entry.ghostId, harnessId: entry.harnessId, text });
       if (seen >= HARNESS_STDERR_LOG_CAP) {
         truncated = true;
