@@ -115,6 +115,8 @@ describe('isAccountUsageLimitError', () => {
   it('accepts account limits and rejects overload or unrelated errors', () => {
     expect(isAccountUsageLimitError(LIMIT)).toBe(true);
     expect(isAccountUsageLimitError({ codexErrorInfo: 'usageLimitExceeded', message: 'x' })).toBe(true);
+    expect(isAccountUsageLimitError({ reason: 'acp-usage-limit', message: 'Individual quota reached.' })).toBe(true);
+    expect(isAccountUsageLimitError({ reason: 'acp-overloaded', message: 'The plugin engine service is temporarily busy.' })).toBe(false);
     expect(isAccountUsageLimitError({ errorStatus: 529, message: 'overloaded_error' })).toBe(false);
     expect(isAccountUsageLimitError({ sdkError: 'billing_error', message: 'credit balance too low' })).toBe(false);
     expect(isAccountUsageLimitError({ sdkError: 'billing_error', message: 'quota exceeded' })).toBe(false);

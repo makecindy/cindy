@@ -141,6 +141,36 @@ describe('ErrorMessageCard', () => {
     expect(screen.getByText(raw)).toBeTruthy();
   });
 
+  // Persisted plugin-engine account errors must stay localized instead of falling back to replyFailed.
+  it.each([
+    [
+      'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+      'acp-usage-limit',
+      'chat.errorBanner.usageLimitReached',
+    ],
+    [
+      'Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 2h13m2s.',
+      undefined,
+      'chat.errorBanner.usageLimitReached',
+    ],
+    [
+      'The plugin engine service is temporarily busy.',
+      'acp-overloaded',
+      'chat.errorBanner.overloadBusyNoRetry',
+    ],
+    [
+      'Please sign in again.',
+      'acp-auth-required',
+      'chat.subscriptionAccountError.loginRequired',
+    ],
+  ])('localizes persisted plugin-engine error (%s, reason=%s)', (raw, reason, expectedKey) => {
+    render(createElement(ErrorMessageCard, { message: raw, reason }));
+    expect(screen.getByText(expectedKey)).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.replyFailed')).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(raw)).toBeTruthy();
+  });
+
   it('localizes LiteLLM envelopes and still offers the original', () => {
     const raw =
       'OpenAI API error (400): {"message":"litellm.BadRequestError: XaiException - too long"}';

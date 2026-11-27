@@ -11,6 +11,7 @@
  *    pending 状态可从 DB 确定性重建(无额外状态列)。
  */
 
+import { replaceInlineBase64DataUrls } from '@cindy/maker-shared';
 import { projectPersistedAgentFacingUserText } from '@cindy/maker-shared/agent-input-projection';
 import {
   describeMessageSourceSender,
@@ -559,7 +560,11 @@ function toolResultText(content: unknown, serializeInput = false): string {
 }
 
 function withoutImageData(text: string): string {
-  return text.replace(/data:image\/[\w.+-]+;base64,[A-Za-z0-9+/=]+/g, '[image omitted]');
+  return replaceInlineBase64DataUrls(
+    text,
+    { headerPattern: /^image\/[\w.+-]+$/, payloadMode: 'loose' },
+    () => '[image omitted]',
+  );
 }
 
 /** Restore separately stored IM background without turning it into user instructions. */
