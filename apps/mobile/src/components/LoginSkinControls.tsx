@@ -1052,7 +1052,7 @@ export function LoginMethodRow({
   subtitle?: string;
   onPress: () => void;
   disabled?: boolean;
-  icon?: 'enterprise' | 'person';
+  icon?: 'enterprise' | 'person' | 'person-add' | 'scan' | 'switch' | 'back';
   testID?: string;
   accessibilityLabel?: string;
 }) {
@@ -1062,7 +1062,7 @@ export function LoginMethodRow({
     style={[StyleSheet.absoluteFill, disabled && styles.disabledText]}
   >
     <View style={icon === 'person' ? styles.methodRowPersonIcon : styles.methodRowLeftIcon}>
-      {icon === 'person' ? <PersonIcon /> : <EnterpriseIcon />}
+      {icon === 'person' ? <PersonIcon /> : icon === 'enterprise' ? <EnterpriseIcon /> : <MethodRowLineIcon kind={icon} />}
     </View>
     <View style={styles.methodRowTextBox}>
       <Text
@@ -1411,6 +1411,40 @@ function PersonIcon() {
         d="M9 10C11.76 10 14 7.76 14 5C14 2.24 11.76 0 9 0C6.24 0 4 2.24 4 5C4 7.76 6.24 10 9 10ZM9 2C10.65 2 12 3.35 12 5C12 6.65 10.65 8 9 8C7.35 8 6 6.65 6 5C6 3.35 7.35 2 9 2ZM1 20H17C17.55 20 18 19.55 18 19V18C18 14.14 14.86 11 11 11H7C3.14 11 0 14.14 0 18V19C0 19.55 0.45 20 1 20ZM7 13H11C13.76 13 16 15.24 16 18H2C2 15.24 4.24 13 7 13Z"
         fill={colors.login.controlText}
       />
+    </Svg>
+  );
+}
+
+/** 方式行左 icon:注册前确认 / 扫码登录 / 切换版本 / 不切换(24 box 线性图标)。 */
+function MethodRowLineIcon({ kind }: { kind: 'person-add' | 'scan' | 'switch' | 'back' }) {
+  const { colors } = useTheme();
+  const stroke = {
+    stroke: colors.login.controlText,
+    strokeWidth: 2,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+  };
+  return (
+    <Svg width="100%" height="100%" viewBox="0 0 24 24" fill="none" aria-hidden>
+      {kind === 'person-add' ? (
+        <>
+          <Circle cx="9" cy="8" r="4" {...stroke} />
+          <Path d="M2 21c0-3.9 3.1-7 7-7s7 3.1 7 7" {...stroke} />
+          <Path d="M19 8v6M16 11h6" {...stroke} />
+        </>
+      ) : kind === 'scan' ? (
+        <>
+          <Path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3" {...stroke} />
+          <Path d="M7 12h10" {...stroke} />
+        </>
+      ) : kind === 'switch' ? (
+        <>
+          <Path d="M4 8h14M14 4l4 4-4 4" {...stroke} />
+          <Path d="M20 16H6M10 12l-4 4 4 4" {...stroke} />
+        </>
+      ) : (
+        <Path d="M15 5l-7 7 7 7" {...stroke} />
+      )}
     </Svg>
   );
 }

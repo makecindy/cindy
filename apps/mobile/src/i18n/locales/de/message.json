@@ -8,6 +8,19 @@
       "selected": "Ausgewählt"
     }
   },
+  "voiceCall": {
+    "title": "Sprachanruf",
+    "saved": "Anruftranskript gespeichert",
+    "you": "Du",
+    "companion": "Freund",
+    "sendFailed": "Senden fehlgeschlagen. Dein Gesprochenes wurde beibehalten.",
+    "handoff": {
+      "sending": "Wird übergeben…",
+      "accepted": "An deinen Freund übergeben",
+      "failed": "Übergabe fehlgeschlagen. Dein Gesprochenes wurde beibehalten.",
+      "completed": "Ergebnis erhalten"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Von lokaler App „{{name}}“ gesendet",
     "sourceLocalAppId": "App-ID: {{id}}",

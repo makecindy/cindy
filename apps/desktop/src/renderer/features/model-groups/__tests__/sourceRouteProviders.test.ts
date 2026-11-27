@@ -10,11 +10,12 @@
  * - tier：unit，纯函数。
  * - 实测耗时：单独运行不到 1 秒（pnpm exec vitest run src/renderer/features/model-groups/__tests__/sourceRouteProviders.test.ts）。
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ProviderView } from '@cindy/model-providers';
 
 import { visiblePluginEngineChoices, type PluginEngineChoice } from '@/lib/pluginEngineSelection';
 import type { ModelGroupsConfig } from '../../../../shared/modelGroups';
+import { refreshModelGroups, saveModelGroups } from '../modelGroupsClient';
 import {
   implicitSourceRouteSelection,
   withSourceRoutePluginEngines,
@@ -172,5 +173,64 @@ describe('provider routes in the model picker', () => {
     );
     expect(bothDown.engines[0]?.availability.state).toBe('unavailable');
     expect(visiblePluginEngineChoices(bothDown.engines)).toEqual([]);
+  });
+});
+
+// 测试价值
+// - 生产入口与可观察结果：refreshModelGroups / saveModelGroups——在途 get 晚于一次保存返回时，不把缓存盖成旧快照。
+// - Bug 依据：2026-11-27 排查智能路由选「按权重」丢来源/路由时发现 refreshModelGroups 无代次保护，晚到的旧 get 会导致紧接着的 saveModelGroups 按旧快照覆盖磁盘。
+// - 现有覆盖缺口：modelGroupsClient.ts 此前无并发 refresh/save 竞态单测。
+// - 最小失败输入：保存期间挂起的旧读取返回后，主进程才有一条新发现的远程路由。下一次编辑必须同时保留已保存来源和新目录（PR #13547）。
+// - tier：unit（纯 Node + 假 electronAPI，无 jsdom 开销）。
+describe('modelGroupsClient refresh/save race', () => {
+  it('reloads newly discovered routes without overwriting saved edits after an overlapping refresh', async () => {
+    const initial: ModelGroupsConfig = {
+      routes: [{ id: 'r1', name: 'Route 1', strategy: 'expiring', candidates: [] }],
+    };
+    const agyCandidate = {
+      agentKind: 'acp' as const,
+      providerId: 'acp-plugin:_root__cindy-antigravity-acp:agy',
+      model: 'gemini-4-neon',
+      agentDeviceId: 'share:dash-agy',
+    };
+    let resolveStaleGet!: (value: ModelGroupsConfig) => void;
+    let persisted = initial;
+    const discoveredRoute = {
+      id: 'auto:antigravity',
+      name: 'Antigravity',
+      strategy: 'expiring' as const,
+      auto: true as const,
+      sources: [
+        { providerId: agyCandidate.providerId },
+        { providerId: agyCandidate.providerId, agentDeviceId: agyCandidate.agentDeviceId },
+      ],
+    };
+    const get = vi.fn(async (): Promise<ModelGroupsConfig> => ({ ...persisted, sourceRoutes: [discoveredRoute] }))
+      .mockResolvedValueOnce(initial)
+      .mockImplementationOnce(() => new Promise<ModelGroupsConfig>((resolve) => { resolveStaleGet = resolve; }));
+    const set = vi.fn(async (next: ModelGroupsConfig) => { persisted = next; return next; });
+    const prevWindow = (globalThis as { window?: unknown }).window;
+    Object.assign(globalThis, { window: { electronAPI: { modelGroups: { get, set } } } });
+    try {
+      await refreshModelGroups();
+      const staleRefresh = refreshModelGroups();
+      await saveModelGroups((latest) => ({
+        ...latest,
+        routes: latest.routes.map((route) => (route.id === 'r1' ? { ...route, candidates: [agyCandidate] } : route)),
+      }));
+      resolveStaleGet(initial);
+      await staleRefresh;
+      const afterStrategy = await saveModelGroups((latest) => ({
+        ...latest,
+        routes: latest.routes.map((route) => (route.id === 'r1' ? { ...route, strategy: 'weighted' } : route)),
+      }));
+      expect(afterStrategy.routes[0]?.strategy).toBe('weighted');
+      expect(afterStrategy.routes[0]?.candidates).toEqual([agyCandidate]);
+      expect(afterStrategy.sourceRoutes).toEqual([discoveredRoute]);
+      expect(get).toHaveBeenCalledTimes(3);
+    } finally {
+      if (prevWindow === undefined) delete (globalThis as { window?: unknown }).window;
+      else Object.assign(globalThis, { window: prevWindow });
+    }
   });
 });

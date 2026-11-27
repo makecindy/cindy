@@ -8,6 +8,19 @@
       "selected": "Sélectionné"
     }
   },
+  "voiceCall": {
+    "title": "Appel vocal",
+    "saved": "Enregistrement sauvegardé",
+    "you": "Vous",
+    "companion": "Ami",
+    "sendFailed": "Envoi impossible. Vos paroles ont été conservées.",
+    "handoff": {
+      "sending": "Transmission…",
+      "accepted": "Transmis à votre ami",
+      "failed": "Transmission impossible. Vos paroles ont été conservées.",
+      "completed": "Résultat reçu"
+    }
+  },
   "renderer": {
     "sourceLocalApp": "Envoyé par l'app locale « {{name}} »",
     "sourceLocalAppId": "ID de l'app : {{id}}",
