@@ -2214,6 +2214,286 @@ describe('AcpAgent (the acp engine)', () => {
   });
 });
 
+describe('AcpSession turnChangeCapture', () => {
+  it('awaits beforeKnownFileWrite before allowing permission-gated edit/move and skips rejected calls', async () => {
+    const order: string[] = [];
+    const beforeKnownFileWrite = vi.fn(async (params: { sessionId: string; provider: string; cwd: string; targetPath: string }) => {
+      order.push(`capture:${params.targetPath}`);
+    });
+    const recordKnownFilePreimage = vi.fn(async () => {});
+    const noteOpaqueWrite = vi.fn();
+
+    const agent = createFakeAgent();
+    const { session, ended } = await open(agent, {
+      captureSessionId: 'biz-session-1',
+      turnChangeCapture: { beforeKnownFileWrite, recordKnownFilePreimage, noteOpaqueWrite },
+    });
+    const decisions: InteractionDecision[] = [
+      { kind: 'permission', behavior: 'allow' },
+      { kind: 'permission', behavior: 'deny' },
+    ];
+    session.setInteractionResolver(async () => decisions.shift()!);
+
+    await session.send({ type: 'user', content: 'edit files' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // Allow edit with locations + rawInput old_path/new_path: capture must finish before allow_once reply.
+    const editReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-move',
+        title: 'Move file',
+        kind: 'move',
+        locations: [{ path: 'src/a.ts' }],
+        rawInput: { old_path: 'src/a.ts', new_path: 'src/b.ts' },
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    order.push(`reply:${(editReply.outcome as { optionId?: string }).optionId}`);
+    expect(editReply).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
+    expect(order).toEqual(['capture:src/a.ts', 'capture:src/b.ts', 'reply:yes']);
+    expect(beforeKnownFileWrite).toHaveBeenCalledWith({
+      sessionId: 'biz-session-1',
+      provider: 'acp',
+      cwd: '/work/project',
+      targetPath: 'src/a.ts',
+    });
+
+    // Reject delete: must NOT trigger capture or opaque marking.
+    const deleteReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-del',
+        title: 'Delete file',
+        kind: 'delete',
+        rawInput: { file_path: 'src/secret.ts' },
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    expect(deleteReply).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    expect(beforeKnownFileWrite).toHaveBeenCalledTimes(2);
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.close();
+    await ended;
+  });
+
+  it('records structured diff preimages under bypassPermissions and defers opaque marking until tool settles', async () => {
+    const beforeKnownFileWrite = vi.fn(async () => {});
+    const recordKnownFilePreimage = vi.fn(async () => {});
+    const noteOpaqueWrite = vi.fn();
+
+    const agent = createFakeAgent();
+    const { session, ended } = await open(agent, {
+      permissionMode: 'bypassPermissions',
+      captureSessionId: 'biz-session-2',
+      turnChangeCapture: { beforeKnownFileWrite, recordKnownFilePreimage, noteOpaqueWrite },
+    });
+
+    session.send({ type: 'user', content: 'apply edits' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // Edit starts without path or diff yet — must NOT prematurely poison turn as opaque.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-diff',
+      title: 'Edit',
+      kind: 'edit',
+      status: 'in_progress',
+    });
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    // Update delivers structured diffs (modify + create) — must record preimages and stay non-opaque.
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-diff',
+      status: 'completed',
+      content: [
+        { type: 'diff', path: 'src/app.ts', oldText: 'const a = 1;\n', newText: 'const a = 2;\n' },
+        { type: 'diff', path: 'src/new.ts', oldText: null, newText: 'export const x = 1;\n' },
+      ],
+    });
+    expect(recordKnownFilePreimage).toHaveBeenCalledWith({
+      sessionId: 'biz-session-2',
+      provider: 'acp',
+      cwd: '/work/project',
+      targetPath: 'src/app.ts',
+      beforeExists: true,
+      beforeText: 'const a = 1;\n',
+    });
+    expect(recordKnownFilePreimage).toHaveBeenCalledWith({
+      sessionId: 'biz-session-2',
+      provider: 'acp',
+      cwd: '/work/project',
+      targetPath: 'src/new.ts',
+      beforeExists: false,
+      beforeText: '',
+    });
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    // Edit that completes with neither paths nor structured diffs marks opaque.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-blind-edit',
+      title: 'Mystery Edit',
+      kind: 'edit',
+      status: 'completed',
+    });
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(1);
+    expect(noteOpaqueWrite).toHaveBeenLastCalledWith({
+      sessionId: 'biz-session-2',
+      provider: 'acp',
+      cwd: '/work/project',
+    });
+
+    // Under bypassPermissions, a path-only notification without structured diff must NOT treat
+    // an un-paused disk read as a reliable baseline and must mark opaque when settled.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-late-path',
+      title: 'Bypass Edit',
+      kind: 'edit',
+      status: 'in_progress',
+    });
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-late-path',
+      status: 'completed',
+      locations: [{ path: 'src/late.ts' }],
+    });
+    expect(beforeKnownFileWrite).not.toHaveBeenCalled();
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(2);
+
+    // Shell execute immediately marks opaque.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-exec',
+      title: 'Run shell',
+      kind: 'execute',
+      status: 'in_progress',
+    });
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(3);
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.close();
+    await ended;
+  });
+
+  // Review (#13294, Greptile P1): when tool_call arrives before session/request_permission,
+  // approval must await any in-flight capture (and capture paths not yet read) before replying
+  // allow_once; a pathless permission followed later by path-only updates must remain opaque.
+  it('awaits in-flight pre-notification captures before permission approval and keeps pathless-then-late-path writes opaque', async () => {
+    const order: string[] = [];
+    let releaseDiffCapture!: () => void;
+    const diffCaptured = new Promise<void>((resolve) => { releaseDiffCapture = resolve; });
+    const beforeKnownFileWrite = vi.fn(async (params: { targetPath: string }) => {
+      order.push(`before:${params.targetPath}`);
+    });
+    const recordKnownFilePreimage = vi.fn(async (params: { targetPath: string }) => {
+      order.push(`diff-start:${params.targetPath}`);
+      await diffCaptured;
+      order.push(`diff-done:${params.targetPath}`);
+    });
+    const noteOpaqueWrite = vi.fn();
+
+    const agent = createFakeAgent();
+    const { session, ended } = await open(agent, {
+      captureSessionId: 'biz-session-3',
+      turnChangeCapture: { beforeKnownFileWrite, recordKnownFilePreimage, noteOpaqueWrite },
+    });
+    session.setInteractionResolver(async () => ({ kind: 'permission', behavior: 'allow' }));
+
+    await session.send({ type: 'user', content: 'edit carefully' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+
+    // 1. Agent announces tool_call with a structured diff first, then immediately requests permission
+    // while recordKnownFilePreimage is still in flight. Approval must wait for it before allow_once.
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-race',
+      title: 'Edit raced',
+      kind: 'edit',
+      status: 'pending',
+      locations: [{ path: 'src/raced.ts' }],
+      content: [{ type: 'diff', path: 'src/raced.ts', oldText: 'v1\n', newText: 'v2\n' }],
+    });
+    let replied = false;
+    const permPromise = agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-race',
+        title: 'Edit raced',
+        kind: 'edit',
+        locations: [{ path: 'src/raced.ts' }],
+      },
+      options: PERMISSION_OPTIONS,
+    }).then((res) => {
+      replied = true;
+      order.push(`reply:${(res.outcome as { optionId?: string }).optionId}`);
+      return res;
+    });
+    await vi.waitFor(() => expect(order).toEqual(['diff-start:src/raced.ts']));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(replied).toBe(false);
+    releaseDiffCapture();
+    await permPromise;
+    expect(order).toEqual(['diff-start:src/raced.ts', 'diff-done:src/raced.ts', 'reply:yes']);
+    expect(beforeKnownFileWrite).not.toHaveBeenCalled();
+    expect(noteOpaqueWrite).not.toHaveBeenCalled();
+
+    // 2. Agent requests permission WITHOUT paths, receives allow_once, and only later reports
+    // a path in tool_call_update without a structured diff — must stay opaque and NOT read disk.
+    const pathlessReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-pathless',
+        title: 'Opaque Edit',
+        kind: 'edit',
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    expect(pathlessReply).toEqual({ outcome: { outcome: 'selected', optionId: 'yes' } });
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-pathless',
+      status: 'completed',
+      locations: [{ path: 'src/after-the-fact.ts' }],
+    });
+    expect(beforeKnownFileWrite).not.toHaveBeenCalled();
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(1);
+
+    // 3. Agent announces a pending edit with path BEFORE requesting permission; user denies.
+    // Must not read disk and must not mark opaque.
+    session.setInteractionResolver(async () => ({ kind: 'permission', behavior: 'deny' }));
+    agent.update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-denied-after-update',
+      title: 'Denied Edit',
+      kind: 'edit',
+      status: 'pending',
+      rawInput: { file_path: 'src/untouched.ts' },
+    });
+    const deniedReply = await agent.requestPermission({
+      toolCall: {
+        toolCallId: 'tc-denied-after-update',
+        title: 'Denied Edit',
+        kind: 'edit',
+        rawInput: { file_path: 'src/untouched.ts' },
+      },
+      options: PERMISSION_OPTIONS,
+    });
+    expect(deniedReply).toEqual({ outcome: { outcome: 'selected', optionId: 'no' } });
+    agent.update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-denied-after-update',
+      status: 'failed',
+    });
+    expect(beforeKnownFileWrite).not.toHaveBeenCalled();
+    expect(noteOpaqueWrite).toHaveBeenCalledTimes(1);
+
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await session.close();
+    await ended;
+  });
+});
+
 describe('AcpSession form elicitation, plans, additionalDirectories, planMode and context usage', () => {
   // Rule: ACP `elicitation/create` (form mode) maps into Cindy's `ask_user_question` interaction card,
   // collapsing companion `*_other` write-in fields into the single question's custom-answer slot.
@@ -2674,5 +2954,145 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     })).error).toMatchObject({ code: -32602 });
 
     await session.close();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：AcpAgent.startSession 在普通本地与设备托管 ACP 会话的首轮 briefing 中按 loadMemoryContext 契约注入 Maker Memory（含 /command 脱敏与 cindy_memory MCP 门控），恢复会话不重复注入。
+  // - Bug／规则依据：修复 ACP 普通任务忽略 makerMemory 导致用户持久化偏好（如 PR 跟进规则）在插件引擎上不生效的线上回归；对齐 built-in 引擎 loadMemoryContext 契约。
+  // - 现有覆盖缺口：此前 acp-session.test.ts 仅覆盖 botRuntimeProfile 伙伴会话的 makerMemoryIndexSnapshot，普通 ACP 会话与设备托管 ACP 会话完全无记忆注入覆盖。
+  // - 最小失败输入与 tier：unit，传入 makerMemoryEnabled: true + 内存 fake makerMemory 启动本地/托管/项目目录/恢复 ACP 会话并检查首轮 session/prompt。
+  it('injects Maker Memory rules and index into ordinary local, hosted, and project-dir ACP briefings once', async () => {
+    const getStore = vi.fn(async (_scopeKey: string) => ({
+      getIndex: async () => '# Memory Index\n- user_pr-follow-preferences.md: never merge /pr automatically',
+    }));
+    const getProjectMemoryDirectory = vi.fn(() => undefined as string | undefined);
+    const fakeMemory = { getStore, getProjectMemoryDirectory } as unknown as NonNullable<ConstructorParameters<typeof AcpAgent>[0]['makerMemory']>;
+
+    // 1. Local ACP task with accepted cindy_memory MCP gets both rules and defused index on first prompt only.
+    const localAgent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const localEngine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      makerMemory: fakeMemory,
+      endpoints: { connect: async () => localAgent.transport },
+      preparePiExtraSpawnConfig: async () => ({
+        mcpBridge: { token: 't', servers: [{ name: 'cindy_memory', url: 'http://127.0.0.1:9/mcp/cindy_memory' }] },
+      }),
+    });
+    const localSession = await localEngine.startSession({
+      workingDir: '/work/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      makerMemoryEnabled: true,
+    });
+    await localSession.send({ type: 'user', content: 'check PR status' });
+    await vi.waitFor(() => expect(localAgent.prompts).toHaveLength(1));
+    const [localBriefing, localUserMsg] = localAgent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(localBriefing!.text).toContain('# Maker Memory');
+    expect(localBriefing!.text).toContain('# Memory Index');
+    expect(localBriefing!.text).toContain('user_pr-follow-preferences.md: never merge pr automatically');
+    expect(localBriefing!.text).not.toContain('merge /pr');
+    expect(localUserMsg).toEqual({ type: 'text', text: 'check PR status' });
+    localAgent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await localSession.close();
+
+    // 2. When cindy_memory MCP is not accepted, rules referencing MCP tools are omitted while index still reaches the agent.
+    const noMcpAgent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: false } } });
+    const noMcpEngine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      makerMemory: fakeMemory,
+      endpoints: { connect: async () => noMcpAgent.transport },
+      preparePiExtraSpawnConfig: async () => ({
+        mcpBridge: { token: 't', servers: [{ name: 'cindy_memory', url: 'http://127.0.0.1:9/mcp/cindy_memory' }] },
+      }),
+    });
+    const noMcpSession = await noMcpEngine.startSession({
+      workingDir: '/work/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      makerMemoryEnabled: true,
+    });
+    await noMcpSession.send({ type: 'user', content: 'hello' });
+    await vi.waitFor(() => expect(noMcpAgent.prompts).toHaveLength(1));
+    const [noMcpBriefing] = noMcpAgent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(noMcpBriefing!.text).not.toContain('# Maker Memory');
+    expect(noMcpBriefing!.text).toContain('user_pr-follow-preferences.md');
+    noMcpAgent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await noMcpSession.close();
+
+    // 3. Device-hosted ACP task uses only the caller's snapshot and never touches local makerMemory store.
+    getStore.mockClear();
+    const hostedAgent = createFakeAgent({ agentCapabilities: { mcpCapabilities: { http: true } } });
+    const hostedEngine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      makerMemory: fakeMemory,
+      endpoints: { connect: async () => hostedAgent.transport },
+    });
+    const hostedSession = await hostedEngine.startSession({
+      workingDir: '/remote/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      makerMemoryEnabled: true,
+      makerMemoryIndexSnapshot: '# Memory Index\n- remote_pref.md: hosted preference',
+      deviceHosted: {
+        workingDir: '/remote/repo',
+        extraDirs: [],
+        writableDirs: [],
+        platform: 'darwin',
+        shell: 'zsh',
+        isGitRepo: true,
+        tunnelUrl: 'http://127.0.0.1:4711/',
+        tunnelToken: 'tok',
+        mcpServers: ['cindy_memory'],
+      },
+    });
+    expect(getStore).not.toHaveBeenCalled();
+    await hostedSession.send({ type: 'user', content: 'hi' });
+    await vi.waitFor(() => expect(hostedAgent.prompts).toHaveLength(1));
+    const [hostedBriefing] = hostedAgent.prompts[0]!.params.prompt as Array<{ type: string; text: string }>;
+    expect(hostedBriefing!.text).toContain('# Maker Memory');
+    expect(hostedBriefing!.text).toContain('hosted preference');
+    hostedAgent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await hostedSession.close();
+
+    // 4. Resumed ACP session does not re-read or re-inject memory briefing.
+    getStore.mockClear();
+    const resumedAgent = createFakeAgent({
+      agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { resume: {} } },
+      handlers: { 'session/resume': () => ({}) },
+    });
+    const resumedEngine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }), logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {},
+      binaryPath: '',
+      logger: silentLogger,
+      clientInfo: { name: 'cindy', version: 'test' },
+      makerMemory: fakeMemory,
+      endpoints: { connect: async () => resumedAgent.transport },
+    });
+    const resumedSession = await resumedEngine.startSession({
+      workingDir: '/work/repo',
+      model: '',
+      providerId: 'acp-plugin:agy:agy',
+      resumeSessionId: 'old-sess',
+      makerMemoryEnabled: true,
+    });
+    expect(getStore).not.toHaveBeenCalled();
+    await resumedSession.send({ type: 'user', content: 'continue' });
+    await vi.waitFor(() => expect(resumedAgent.prompts).toHaveLength(1));
+    expect(resumedAgent.prompts[0]!.params.prompt).toEqual([{ type: 'text', text: 'continue' }]);
+    resumedAgent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await resumedSession.close();
   });
 });

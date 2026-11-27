@@ -124,6 +124,67 @@ describe('cross-device send_to_session sender', () => {
     expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation({ ...expectedCreate, title: 'Changed' }) })).toBe(false);
   });
 
+  // 2026-11-27: plugin-engine remote creation negotiates ordinaryCreatePluginEngine before mutating,
+  // and remote jump/create accepts agentKind="acp" replies without degrading to DELIVERY_UNKNOWN.
+  it('negotiates plugin-engine creation capability and accepts acp handoff replies', async () => {
+    const create = {
+      permissionMode: 'ask' as const,
+      agentKind: 'acp' as const,
+      providerId: 'acp-plugin:antigravity:antigravity',
+      model: 'gemini-4-neon',
+      effort: 'xhigh' as const,
+    };
+    let supportsPlugin = false;
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+      const wire = args[0] as { action?: string; taskActionReceipt: string };
+      if (wire.action === 'task-action-capability') {
+        return {
+          ok: true,
+          result: {
+            taskActionVersion: 1,
+            ordinaryCreateVersion: 1,
+            ...(supportsPlugin ? { ordinaryCreatePluginEngine: 1 } : {}),
+          },
+        };
+      }
+      issued.push(wire.taskActionReceipt);
+      return {
+        ok: true,
+        result: {
+          ok: true,
+          agentKind: 'acp',
+          wakeKind: wire.action === 'create' ? 'created' : 'queued',
+          targetSessionId: 'new-acp-id',
+          model: 'gemini-4-neon',
+          providerId: create.providerId,
+          effort: 'xhigh',
+          fastMode: false,
+          workingDir: '/remote/project',
+          targetTitle: 'Neon task',
+          targetLastUserSendAt: null,
+        },
+      };
+    });
+    const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {} });
+    // Old peer without ordinaryCreatePluginEngine fails before sending any creation request.
+    expect(await send({ deviceId: 'mbp', sessionId: 'new-acp-id' }, {
+      message: 'Fix bug', sender: async () => ({ sessionId: 'me' }), create: async () => create,
+    })).toMatchObject({ ok: false, errorCode: 'REMOTE_UNSUPPORTED' });
+    expect(invoke).toHaveBeenCalledOnce();
+
+    supportsPlugin = true;
+    expect(await send({ deviceId: 'mbp', sessionId: 'new-acp-id' }, {
+      message: 'Fix bug', sender: async () => ({ sessionId: 'me' }), create: async () => create,
+    })).toMatchObject({
+      ok: true, wakeKind: 'created', agentKind: 'acp', providerId: create.providerId, model: 'gemini-4-neon', effort: 'xhigh',
+    });
+
+    // Jump to an existing remote acp task also succeeds cleanly.
+    expect(await send({ deviceId: 'mbp', sessionId: 'existing-acp' }, {
+      message: 'Follow up', sender: async () => ({ sessionId: 'me' }),
+    })).toMatchObject({ ok: true, wakeKind: 'queued', agentKind: 'acp' });
+  });
+
   // 2026-11-05: a newer receiver takes the agent's own text with a checked hand-off; an older one
   // still verifies the quoted envelope, so it keeps receiving exactly what it received before.
   // Unit: real capture and sender against both capability answers.

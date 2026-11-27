@@ -383,6 +383,50 @@ describe('send_to_session tool', () => {
     }));
   });
 
+  // 2026-11-27: standalone task creation must accept plugin engines (agent_kind="acp" + provider_id + model + effort)
+  // and echo the resolved acp route back to the caller.
+  it('create: 插件引擎配置(agent_kind=acp)通过 schema 完整透传并回显', async () => {
+    const { registry, sendToSession } = setup({
+      result: {
+        ok: true,
+        targetSessionId: 'tgt-acp',
+        agentKind: 'acp',
+        wakeKind: 'created',
+        targetTitle: 'Fix mobile QA ordering',
+        targetLastUserSendAt: null,
+        model: 'gemini-4-neon',
+        effort: 'xhigh',
+        fastMode: false,
+        providerId: 'acp-plugin:antigravity:antigravity',
+      },
+    });
+    const res = await registry.call('send_to_session', {
+      project_path: '/repo',
+      message: '修复手机端 Q/A 顺序',
+      agent_kind: 'acp',
+      provider_id: 'acp-plugin:antigravity:antigravity',
+      model: 'gemini-4-neon',
+      effort: 'xhigh',
+    });
+
+    expect(res.isError).toBeUndefined();
+    expect(sendToSession).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:antigravity:antigravity',
+      model: 'gemini-4-neon',
+      effort: 'xhigh',
+    }));
+    expect(parse(res)).toMatchObject({
+      ok: true,
+      target_session_id: 'tgt-acp',
+      agent_kind: 'acp',
+      provider_id: 'acp-plugin:antigravity:antigravity',
+      model: 'gemini-4-neon',
+      effort: 'xhigh',
+      fast_mode: false,
+    });
+  });
+
   it.each([
     { agent_kind: 'not-an-agent' },
     { effort: 'extreme' },
@@ -696,9 +740,18 @@ describe('send_to_session → 另一台电脑上的任务', () => {
     expect(parseQualifiedSessionId('mbp::a::b')).toEqual({ deviceId: 'mbp', sessionId: 'a::b' });
   });
 
-  it('工具说明写明跨电脑寻址与结果未知时的处理', () => {
-    const description = remoteSetup().registry.list('handoff')[0]!.description;
-    expect(description).toContain('deviceId::sessionId');
-    expect(description).toContain('DELIVERY_UNKNOWN');
+  it('工具说明写明跨电脑寻址与结果未知时的处理', async () => {
+    const s = remoteSetup();
+    const tool = s.registry.list('handoff')[0]!;
+    expect(tool.description).toContain('deviceId::sessionId');
+    expect(tool.description).toContain('DELIVERY_UNKNOWN');
+    // Unit contract: create mode stays user-visible and directs temporary internal
+    // reviews/sub-steps to native engine subagents instead of spawning standalone tasks.
+    expect(tool.description).toContain('subagent');
+    expect(tool.description).toContain('侧边栏可见');
+    const rejected = await s.registry.call('send_to_session', { message: 'hi', hidden: true });
+    expect(rejected.isError).toBe(true);
+    expect(parse(rejected)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(s.sendToSession).not.toHaveBeenCalled();
   });
 });

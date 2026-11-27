@@ -68,6 +68,7 @@ import { isSharedTaskPeer } from '@cindy/device-link';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { writeClipboardText } from '@/session/messageActions';
 import { normalizeExtraDirs } from '@/session/newSession';
+import { usePluginEngineFor } from '@/session/pluginEngines';
 import {
   nextCodexBucketStaleAtMs,
   resolveCodexBucketTable,
@@ -442,7 +443,12 @@ export function SessionMenuSheet({
     return base;
   }, [copiedKey, t]);
 
-  const header = buildSessionMenuHeader(session);
+  const pluginEngine = usePluginEngineFor(
+    session.deviceLinkDeviceId,
+    session.agentKind === 'acp' ? session.providerId : null,
+    session.agentKind === 'acp' ? session.agentDeviceId : null,
+  );
+  const header = buildSessionMenuHeader(session, pluginEngine?.name);
   const actions = buildSessionMenuActions({
     archived: session.status === 'archived',
     pinned: !!session.pinnedAt,

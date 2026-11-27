@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "1782ad85-8091-47b2-a7e0-34e193c2c052",
+  "id": "ce0e9b07-6edc-4e03-a1ac-84d63fe95de9",
   "prevId": "18b32762-8d1a-4730-a1b3-2c984846780b",
   "tables": {
     "account_usage_snapshots": {
@@ -2263,13 +2263,6 @@
           "notNull": true,
           "autoincrement": false,
           "default": false
-        },
-        "acp_missing_price": {
-          "name": "acp_missing_price",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
         },
         "input_tokens": {
           "name": "input_tokens",
@@ -6411,6 +6404,13 @@
         },
         "orca_remote_lead": {
           "name": "orca_remote_lead",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_by_session": {
+          "name": "created_by_session",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

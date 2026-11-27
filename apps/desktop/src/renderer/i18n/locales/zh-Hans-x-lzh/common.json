@@ -8965,7 +8965,10 @@
         "subscribeToolResult": "可处理所选任务的工具结果",
         "subscribeToolResultDetail": "可读取结果，按引擎能力补充上下文或改写结果；不会撤销已执行的操作。",
         "subscribeStartTask": "可为新差事择模型",
-        "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。此节唯于首条消息发出前行一次。"
+        "subscribeStartTaskDetail": "新任务择其所供之模型时，彼阅首条消息，于汝已连之模型中择一。此节唯于首条消息发出前行一次。",
+        "agentChecks": "可验诸源有无新增",
+        "agentChecksDetail": "与他已获许之法器互报有变、无变或未能验明。各源用其已连之账号，不传讯息正文或凭证，亦不调用模型。可验本机 Cindy 对谈有无新增，不返其文。",
+        "agentChecksRequest": "确认验新之权柄"
       },
       "connections": {
         "confirmTitle": "增连接地址",
@@ -11896,6 +11899,7 @@
           "title": "@ 我之讯",
           "me": "我",
           "markAll": "尽标已读",
+          "markReadFailed": "未能标所及为已读。",
           "empty": "无人 @ 君，耳根清净",
           "thread": "话题",
           "main": "群议",
@@ -12103,6 +12107,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}入群议",
+        "memberJoinedList": "{{names}}入群议",
+        "memberJoinedSummary": "{{names}}及余{{others}}人入群议",
         "memberFailed": "{{name}}此番未能回复",
         "memberTimeout": "{{name}}久未回复，此番暂略之",
         "memberUnavailable": "{{name}}今不可用，此番未发言",
@@ -12283,6 +12289,8 @@
         "threadNew": "话题新言",
         "replyingTo": "答「{{name}}」：{{text}}",
         "filesOutsideWorkingDir": "部分文件不在工作目录内，未附上。",
+        "modelFallback": "所择之模不在此机，今以 {{model}} 应之。",
+        "modelFallbackUnnamed": "所择之模不在此机，今以本机可用之模应之。",
         "earlierOmitted": "（更早之言略之）",
         "actingFor": "{{name}} · 代 {{person}}",
         "checkout": {
@@ -13813,6 +13821,9 @@
           "allow": "允许",
           "deny": "拒绝",
           "approve": "批准"
+        },
+        "companion": {
+          "retryLater": "请少顷再试"
         }
       },
       "hook": {
@@ -17067,9 +17078,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "增云机",
-        "preparingCloud": "云机备置中",
-        "manageCloud": "理云机",
         "allMachines": "诸机",
         "localMachine": "此机",
         "connecting": "方连…",
@@ -17560,6 +17568,13 @@
         "inbox": "收件箱",
         "enterInbox": "转至收件箱之式",
         "leaveInbox": "转至任务列之式"
+      },
+      "filterHideTaskCreated": "隐他差事所立之务",
+      "origin": {
+        "createdByTask": "他差事所立",
+        "createdByTaskNamed": "差事「{{title}}」所立",
+        "createdByRemoteTask": "{{device}} 上差事所立",
+        "createdByRemoteTaskNamed": "{{device}} 上差事「{{title}}」所立"
       }
     },
     "rename": {
@@ -17580,7 +17595,9 @@
       "orcaRemoteLead": "自 {{device}} 之协同",
       "orcaRemoteLeadReleased": "协同已终 · 自 {{device}}",
       "orcaRemoteLeadUnknownDevice": "他机",
-      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」之 Worker。差事、目录与命令皆于此机行之；君于此所遣之讯不回报 Lead。"
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」之 Worker。差事、目录与命令皆于此机行之；君于此所遣之讯不回报 Lead。",
+      "createdByTask": "出自他差事",
+      "createdByTaskNamed": "出自「{{title}}」"
     },
     "gitContext": {
       "detached": "分离 HEAD",
@@ -22930,6 +22947,30 @@
     "loginMayHaveExpired": "登入或已期满",
     "loginExpiryUnknown": "登入期限未详",
     "loginExpiryDetail": "约于 {{date}} 期满。此为 Claude 估期，亦或先失效。",
+    "longLivedToken": {
+      "tag": "长期令牌",
+      "use": "改用长期令牌（约一岁）",
+      "renew": "重制长期令牌",
+      "remove": "停用长期令牌",
+      "confirmTitle": "令 {{name}} 改用长期令牌乎？",
+      "confirmDescription": "浏览器将启 Claude 授权之页，请于彼择同一账号。令牌约一岁有效，存于此机；寻常登入期满之后，差事仍可续行。",
+      "confirmAction": "往浏览器授权",
+      "removeTitle": "停用 {{name}} 之长期令牌乎？",
+      "removeDescription": "令牌将自此机删去，账号复归寻常登入。令牌于 Anthropic 处仍有效，至期满乃止。",
+      "removeAction": "停用",
+      "expiresInDays": "令牌约 {{days}} 日后期满",
+      "mayHaveExpired": "令牌或已期满",
+      "active": "方用长期令牌",
+      "detailExpiry": "约于 {{date}} 期满。",
+      "detailLoginActive": "寻常登入尚存，账号与用量皆可即时读取。",
+      "detailLoginEnded": "寻常登入已终。用量随差事运行而更新；重登之后可随时刷新。",
+      "detailPending": "尚未核验令牌是否属此账号，首件差事运行时乃核。",
+      "detailSettingsOnly": "于此机，寻常登入既终，令牌不可用于代他机所行之差事及隔离之同伴。",
+      "mismatchStatus": "令牌属他账号",
+      "needsLogin": "请先登入此账号，再制长期令牌。",
+      "notPermitted": "贵组织不许用长期令牌。",
+      "unsupported": "此账号于此机不可用长期令牌。"
+    },
     "loginAccountAria": "重登 {{name}}",
     "loginIdentityMismatchStatus": "登入账号不符",
     "loginIdentityMismatch": "所登非所选账号。请重登，选此列所示账号。",

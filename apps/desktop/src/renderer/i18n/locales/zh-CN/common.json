@@ -8979,7 +8979,10 @@
             "user": "用户",
             "assistant": "助手"
           }
-        }
+        },
+        "agentChecks": "可以检查来源是否有新内容",
+        "agentChecksDetail": "与其他已获授权的插件交换有变化、无变化或无法确认的状态。各来源插件使用自己的已连接账号，不共享消息正文或凭证。检查不调用模型。 也可检查本机 Cindy 对话有无新增，不返回对话内容。",
+        "agentChecksRequest": "确认增量检查权限"
       },
       "connections": {
         "confirmTitle": "添加连接地址",
@@ -11896,6 +11899,7 @@
           "title": "@ 我的消息",
           "me": "我",
           "markAll": "全部标为已读",
+          "markReadFailed": "没能将提及标为已读。",
           "empty": "没有未读的 @ 消息",
           "thread": "话题",
           "main": "群聊",
@@ -12103,6 +12107,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}加入了群聊",
+        "memberJoinedList": "{{names}}加入了群聊",
+        "memberJoinedSummary": "{{names}} 及另外 {{others}} 人加入了群聊",
         "memberFailed": "{{name}}这次没能回复",
         "memberTimeout": "{{name}}太久没有回复，这次先跳过",
         "memberUnavailable": "{{name}}现在不可用，这次没有发言",
@@ -12283,6 +12289,8 @@
         "threadNew": "话题里的新消息",
         "replyingTo": "回复「{{name}}」：{{text}}",
         "filesOutsideWorkingDir": "部分文件不在工作目录内，未附上。",
+        "modelFallback": "这台电脑上没有选定的模型，这次改用 {{model}} 回答。",
+        "modelFallbackUnnamed": "这台电脑上没有选定的模型，这次改用本机可用的模型回答。",
         "earlierOmitted": "（更早的消息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {
@@ -13813,6 +13821,9 @@
           "allow": "允许",
           "deny": "拒绝",
           "approve": "批准"
+        },
+        "companion": {
+          "retryLater": "请稍后再试"
         }
       },
       "hook": {
@@ -17067,9 +17078,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "添加云主机",
-        "preparingCloud": "云主机 · 准备中",
-        "manageCloud": "管理云主机",
         "allMachines": "全部",
         "localMachine": "本机",
         "connecting": "连接中…",
@@ -17560,6 +17568,13 @@
         "inbox": "收件箱",
         "enterInbox": "切换到收件箱模式",
         "leaveInbox": "切换到任务列表模式"
+      },
+      "filterHideTaskCreated": "隐藏由其他任务创建的任务",
+      "origin": {
+        "createdByTask": "由其他任务创建",
+        "createdByTaskNamed": "由任务「{{title}}」创建",
+        "createdByRemoteTask": "由 {{device}} 上的任务创建",
+        "createdByRemoteTaskNamed": "由 {{device}} 上的任务「{{title}}」创建"
       }
     },
     "rename": {
@@ -17580,7 +17595,9 @@
       "orcaRemoteLead": "来自 {{device}} 的协同",
       "orcaRemoteLeadReleased": "协同已结束 · 来自 {{device}}",
       "orcaRemoteLeadUnknownDevice": "另一台电脑",
-      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任务、目录和命令都在这台电脑运行；你在这里发的消息不会回报给 Lead。"
+      "orcaRemoteLeadTip": "{{device}} 上「{{lead}}」的 Worker。任务、目录和命令都在这台电脑运行；你在这里发的消息不会回报给 Lead。",
+      "createdByTask": "来自其他任务",
+      "createdByTaskNamed": "来自「{{title}}」"
     },
     "gitContext": {
       "detached": "分离 HEAD",
@@ -22930,6 +22947,30 @@
     "loginMayHaveExpired": "登录可能已到期",
     "loginExpiryUnknown": "登录到期时间未知",
     "loginExpiryDetail": "预计到期：{{date}}。这是 Claude 提供的估计时间，登录可能提前失效。",
+    "longLivedToken": {
+      "tag": "长期令牌",
+      "use": "改用长期令牌（约一年）",
+      "renew": "重新生成长期令牌",
+      "remove": "停用长期令牌",
+      "confirmTitle": "让 {{name}} 改用长期令牌？",
+      "confirmDescription": "浏览器会打开 Claude 的授权页，请在那里选择同一个账号。令牌有效期约一年，保存在这台电脑上，普通登录到期后任务仍可继续运行。",
+      "confirmAction": "去浏览器授权",
+      "removeTitle": "停用 {{name}} 的长期令牌？",
+      "removeDescription": "令牌会从这台电脑删除，账号回到普通登录。令牌在 Anthropic 那边仍然有效，直到到期。",
+      "removeAction": "停用",
+      "expiresInDays": "令牌约 {{days}} 天后到期",
+      "mayHaveExpired": "令牌可能已到期",
+      "active": "正在使用长期令牌",
+      "detailExpiry": "预计到期：{{date}}。",
+      "detailLoginActive": "普通登录仍然有效，账号信息和用量可以实时读取。",
+      "detailLoginEnded": "普通登录已结束。用量在任务运行时更新；重新登录后可随时刷新。",
+      "detailPending": "还没有核对令牌是否属于这个账号，第一个任务运行时会核对。",
+      "detailSettingsOnly": "在这台电脑上，普通登录结束后，令牌不能用于替其他电脑运行的任务和隔离模式的伙伴。",
+      "mismatchStatus": "令牌属于另一个账号",
+      "needsLogin": "请先登录这个账号，再生成长期令牌。",
+      "notPermitted": "你的组织不允许使用长期令牌。",
+      "unsupported": "这个账号在这台电脑上不能使用长期令牌。"
+    },
     "loginAccountAria": "重新登录 {{name}}",
     "loginIdentityMismatchStatus": "登录账号不符",
     "loginIdentityMismatch": "登录的账号与所选账号不一致。请重新登录，选择列表中的这个账号。",

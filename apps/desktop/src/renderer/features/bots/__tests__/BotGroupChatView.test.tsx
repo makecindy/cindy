@@ -35,6 +35,7 @@ import type {
   BotGroupMessageView,
   BotGroupPlanView,
 } from '../../../../shared/botGroupChat';
+import { BOT_GROUP_MESSAGE_MAX_CHARS } from '../../../../shared/botGroupChat';
 
 vi.mock('@/components/chat/FileLightbox', () => ({
   FileLightbox: ({ filePath }: { filePath: string }) => <div data-testid="group-pdf-preview" data-path={filePath} />,
@@ -46,6 +47,8 @@ const mocks = vi.hoisted(() => ({
   // Keep translation identity stable so attachment effects do not reload on every render.
   t: (key: string, options?: Record<string, unknown>) =>
     key === 'bots.groupChat.assistant.actingFor' ? `${options?.name} · for ${options?.person}`
+      : key === 'bots.groupChat.notice.memberJoinedSummary' ? `${key}:${String(options?.names)}:${String(options?.others)}`
+      : key === 'bots.groupChat.notice.memberJoinedList' ? `${key}:${String(options?.names)}`
       : options && 'name' in options ? `${key}:${String(options.name)}`
       : key === 'bots.groupChat.memberCount' ? `${key}:${String(options?.count)}` : key,
   groupId: 'g1',
@@ -1781,6 +1784,40 @@ describe('BotGroupChatView', () => {
     expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
   });
 
+  it('collapses consecutive joined notices into one line and expands inline for 3+ members', async () => {
+    const joined = (id: string, sequence: number, authorName: string) => msg({
+      id, sequence, kind: 'notice', authorKind: 'system', authorName, authorBotId: null,
+      noticeCode: 'member-joined', content: 'Fallback text', createdAt: 1_700_000_000_000 + sequence * 1000,
+    });
+    mocks.getBotGroup.mockResolvedValue({
+      ok: true,
+      group: detail({
+        messages: [
+          joined('j1', 1, 'Alice'),
+          joined('j2', 2, 'Bob'),
+          msg({ id: 'm1', sequence: 3, kind: 'message', authorKind: 'user', authorName: 'Me', content: 'Welcome' }),
+          joined('j3', 4, 'Carol'),
+          joined('j4', 5, 'Dave'),
+          joined('j5', 6, 'Carol'),
+          joined('j6', 7, 'Eve'),
+        ],
+      }),
+    });
+    renderView();
+    const pair = await screen.findByText('bots.groupChat.notice.memberJoinedList:Alicebots.groupChat.memberSeparatorBob');
+    expect(pair.tagName).toBe('P');
+    const summaryButton = screen.getByTestId('bot-group-joined-summary');
+    expect(summaryButton.getAttribute('aria-expanded')).toBe('false');
+    expect(summaryButton.textContent).toBe('bots.groupChat.notice.memberJoinedSummary:Carolbots.groupChat.memberSeparatorDave:1');
+    fireEvent.click(summaryButton);
+    expect(summaryButton.getAttribute('aria-expanded')).toBe('true');
+    expect(summaryButton.textContent).toBe(
+      'bots.groupChat.notice.memberJoinedList:Carolbots.groupChat.memberSeparatorDavebots.groupChat.memberSeparatorEve',
+    );
+    fireEvent.click(summaryButton);
+    expect(summaryButton.getAttribute('aria-expanded')).toBe('false');
+  });
+
   it('renders user, teammate, notice and round-end rows with the header lockup', async () => {
     Object.defineProperty(window.electronAPI, 'platform', { configurable: true, value: 'darwin' });
     renderView();
@@ -1968,6 +2005,49 @@ describe('BotGroupChatView', () => {
     expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
   });
 
+  // A topic reply refused a long paste past its cap with no feedback (the field just stayed as
+  // it was); a short one is cut by the field's maxLength, which jsdom does not model, so only the
+  // notice is observable for it. Real topic entry. A paste that fits stays silent: it replaces a
+  // selection, and a Windows line break counts once as the field stores it. Unit tier, no waits.
+  it.each([
+    ['long', 'line\n'.repeat(23) + 'last'],
+    ['short', 'short text'],
+  ])('tells why a %s paste past the topic reply limit does not fit', async (_kind, pasted) => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({
+      serverBacked: true, messages: [msg({ id: 'u1', content: 'Topic root' })],
+    }) });
+    renderView();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.server.startTopic' }));
+    const input = await within(await screen.findByRole('complementary')).findByRole('textbox') as HTMLTextAreaElement;
+    const draft = 'x'.repeat(BOT_GROUP_MESSAGE_MAX_CHARS);
+    fireEvent.change(input, { target: { value: draft } });
+    input.setSelectionRange(0, 3);
+    fireEvent.paste(input, { clipboardData: { items: [], getData: () => 'a\r\nb' } });
+    expect(mocks.toastWarning).not.toHaveBeenCalled();
+    input.setSelectionRange(draft.length, draft.length);
+    fireEvent.paste(input, { clipboardData: { items: [], getData: () => pasted } });
+    expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.composer.tooLong');
+    expect(input.value).toBe(draft);
+    expect(document.querySelector('[data-pasted-text-chip]')).toBeNull();
+  });
+
+  it('tells why a paste past the topic reply limit does not fit once the reply holds a folded paste', async () => {
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({
+      serverBacked: true, messages: [msg({ id: 'u1', content: 'Topic root' })],
+    }) });
+    renderView();
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.groupChat.server.startTopic' }));
+    const panel = await screen.findByRole('complementary');
+    const folded = 'line\n'.repeat(23) + 'last';
+    fireEvent.paste(await within(panel).findByRole('textbox'), { clipboardData: { items: [], getData: () => folded } });
+    await waitFor(() => expect(panel.querySelector('[data-pasted-text-chip]')).not.toBeNull());
+    const editor = within(panel).getByRole('textbox');
+    const before = editor.textContent;
+    fireEvent.paste(editor, { clipboardData: { items: [], getData: () => 'x'.repeat(BOT_GROUP_MESSAGE_MAX_CHARS) } });
+    expect(mocks.toastWarning).toHaveBeenCalledWith('bots.groupChat.composer.tooLong');
+    expect(editor.textContent).toBe(before);
+  });
+
   it('keeps a newline after a folded paste until the configured send shortcut', async () => {
     localStorage.setItem(COMPOSER_SEND_SHORTCUT_STORAGE_KEY, 'modifier-enter');
     renderView();
@@ -2147,6 +2227,39 @@ describe('BotGroupChatView', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(input.value).toBe('查一下 @小满 ');
     expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
+  // Group chat §4.1, unit: the real group and topic inputs must show an active
+  // composition's @ci, leave Enter to the IME, and replace its committed text on click.
+  // The existing picker tests only exercise committed input.
+  it.each([false, true])('picks a member by name during IME composition (topic %s)', async inTopic => {
+    const members = [
+      { ...detail().members[0]!, name: 'Cindy' },
+      { ...detail().members[1]!, name: '小满' },
+    ];
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: inTopic, members }) });
+    renderView();
+    if (inTopic) {
+      fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    }
+    const scope = inTopic ? within(await screen.findByRole('complementary')) : screen;
+    const input = (await scope.findByRole('textbox')) as HTMLTextAreaElement;
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '请 @', selectionStart: 3 } });
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: '请 @ci', selectionStart: 5 } });
+    const option = await scope.findByRole('option', { name: 'Cindy' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(input.value).toBe('请 @ci');
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    expect(mocks.reply).not.toHaveBeenCalled();
+
+    fireEvent.click(option);
+    fireEvent.compositionEnd(input, { data: '词' });
+    fireEvent.change(input, { target: { value: '请 @词', selectionStart: 4 } });
+    await waitFor(() => expect(input.value).toBe('请 @Cindy '));
+    expect(document.activeElement).toBe(input);
+    expect(scope.queryByRole('listbox')).toBeNull();
   });
 
   it('keeps a selected target and its draft across roster removal and a rejected retry', async () => {

@@ -656,8 +656,8 @@ export type ControlResult<T extends object = object, E extends string = never> =
  */
 export type ControlWorkerAgent = 'claude-code' | 'codex' | 'pi';
 /**
- * Orca Worker 的执行引擎：内置引擎，或 'acp' = 本机插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)，
- * 配 provider_id = acp-plugin:<插件>:<引擎>。只用于创建 / 读取 Worker，普通任务仍只认内置引擎。
+ * 任务与 Orca Worker 的执行引擎：内置引擎，或 'acp' = 插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)，
+ * 配 provider_id = acp-plugin:<插件>:<引擎>。用于普通任务(send_to_session)与协同 Worker。
  */
 export type ControlWorkerEngine = ControlWorkerAgent | 'acp';
 
