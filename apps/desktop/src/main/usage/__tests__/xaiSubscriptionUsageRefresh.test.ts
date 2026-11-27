@@ -60,6 +60,23 @@ describe('createXaiSubscriptionUsageReader', () => {
     expect(recordSnapshot).toHaveBeenCalledWith(fresh);
   });
 
+  // #12353 / unit: a cached balance or an unidentified snapshot must not reopen scheduled generations.
+  it.each([
+    { identified: true, before: 0, after: 10, from: 'Free', to: 'Free', expected: 1 },
+    { identified: false, before: 0, after: 10, from: 'Free', to: 'Free', expected: 0 },
+    { identified: true, before: 10, after: 10, from: 'Free', to: 'Free', expected: 0 },
+    { identified: true, before: 0, after: 0, from: 'Free', to: 'SuperGrok', expected: 1 },
+  ])('uses a fresh subscription transition (identified=$identified, $before→$after, $from→$to)', async sample => {
+    const cached = { ...makeSnapshot(1), prepaidBalance: sample.before, planLabel: sample.from, accountFingerprint: 'account' };
+    const fresh = { ...makeSnapshot(2), prepaidBalance: sample.after, planLabel: sample.to, accountFingerprint: sample.identified ? 'account' : null };
+    const { deps } = makeDeps({ cached, fetchSnapshot: vi.fn().mockResolvedValue(fresh) });
+    const recover = vi.fn();
+    const reader = createXaiSubscriptionUsageReader({ ...deps, captureBillingRecovery: () => recover });
+    await reader.read();
+    await settle();
+    expect(recover).toHaveBeenCalledTimes(sample.expected);
+  });
+
   it('clears on logout and on explicit credential change before refetching', async () => {
     const { deps, clearSnapshot, fetchSnapshot } = makeDeps({
       cached: makeSnapshot(0),

@@ -40,6 +40,7 @@ import {
 import { modelGroupRouteFor } from './routeFor.js';
 
 export interface ModelGroupResolverDeps {
+  billingUnavailable?(providerId: string): boolean;
   config(): ModelGroupsConfig;
   /** 本机供应商目录的快照(不触发发现或登录)。 */
   views(): Promise<ProviderView[]>;
@@ -297,6 +298,12 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       ? (deps.pluginEngines?.() ?? [])
       : [];
     const locations = remote ? await remote.locations : null;
+    const heldProviders = new Set<string>();
+    if (context?.scheduled && !sshHostId && deps.billingUnavailable) {
+      const localProviders = new Set(route.candidates.filter(candidate =>
+        !candidate.off && !candidate.agentDeviceId && candidate.agentKind !== 'acp').map(candidate => candidate.providerId));
+      for (const id of localProviders) if (deps.billingUnavailable(id)) heldProviders.add(id);
+    }
     return Promise.all(route.candidates.map(async (candidate) => {
       const { agentDeviceId } = candidate;
       if (candidate.agentKind === 'acp') {
@@ -364,7 +371,7 @@ export function createModelGroupResolver(deps: ModelGroupResolverDeps) {
       const sshAllowed = !sshHostId
         ? true
         : !agentDeviceId && (!deps.sshFilter || await Promise.resolve(deps.sshFilter(sshHostId, candidate, view)).catch(() => false));
-      const available = sshAllowed && (agentDeviceId
+      const available = sshAllowed && (!!agentDeviceId || !heldProviders.has(candidate.providerId)) && (agentDeviceId
         // 与插件卡片里的远程模型同一判断：位置此刻能选，模型也在那里允许远程调用的目录里。
         ? !!locations && !!remoteViews && await isGhostCardModelRouteAvailable({ ...exact, agentDeviceId }, {
             localViews: async () => views,

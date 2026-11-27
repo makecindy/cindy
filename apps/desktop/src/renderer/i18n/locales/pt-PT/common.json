@@ -18443,6 +18443,7 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "billingWait": "A aguardar a reposição dos créditos ou da subscrição. Quando o acesso for reposto, envie uma mensagem através desta ligação para retomar as tarefas agendadas.",
     "prTrigger": {
       "fallback": "As verificações agendadas continuam sem notificações da GitHub App.",
       "label": "PR / MR",

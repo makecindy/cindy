@@ -59,6 +59,7 @@ export function isModelGroupRecoverySource(source: string | null | undefined): b
 }
 
 export interface ModelGroupRecoveryRequest {
+  scheduled?: boolean;
   visited: ReadonlySet<string>;
   accountUnavailable: boolean;
   hasImages?: boolean;
@@ -127,8 +128,8 @@ export async function computeModelGroupSwitchOffer(
       const sameLocation = (candidate.agentDeviceId || undefined) === currentLocation;
       const failed = key === currentKey || (accountUnavailable && sameLocation && candidate.providerId === current.providerId);
       if (failed) recovery?.recordUnavailable(candidate);
-      const sshBlocked = !!sshHostId && !!candidate.agentDeviceId;
-      return sshBlocked || failed || recovery?.visited.has(key)
+      const locationBlocked = (!!sshHostId || recovery?.scheduled === true) && !!candidate.agentDeviceId;
+      return locationBlocked || failed || recovery?.visited.has(key)
         ? { ...candidate, off: true }
         : candidate;
     }),
@@ -140,6 +141,7 @@ export async function computeModelGroupSwitchOffer(
   const facts = await deps.candidateFacts(
     eligible,
     wanted ? {
+      ...(recovery?.scheduled ? { scheduled: true } : {}),
       ...(wanted.effort ? { effort: wanted.effort } : {}),
       ...(wanted.fastMode ? { fastMode: wanted.fastMode } : {}),
     } : undefined,

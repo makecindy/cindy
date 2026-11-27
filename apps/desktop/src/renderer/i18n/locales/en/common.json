@@ -18268,6 +18268,7 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "billingWait": "Waiting for credits or subscription recovery. After restoring access, send a message using this connection to resume scheduled runs.",
     "prTrigger": {
       "fallback": "Scheduled checks will continue while GitHub App notifications are unavailable.",
       "label": "PR / MR",

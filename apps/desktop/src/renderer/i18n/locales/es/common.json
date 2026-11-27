@@ -18443,6 +18443,7 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "billingWait": "En espera de que se restablezca el saldo o la suscripción. Cuando recuperes el acceso, envía un mensaje con esta conexión para reanudar las tareas programadas.",
     "prTrigger": {
       "fallback": "Las comprobaciones programadas continúan sin notificaciones de GitHub App.",
       "label": "PR / MR",

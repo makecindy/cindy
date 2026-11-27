@@ -18193,6 +18193,7 @@
     "ultra": "窮極"
   },
   "scheduler": {
+    "billingWait": "待籌或訂閱恢復。恢復後，以此連線發訊成功，定時任務即復行。",
     "prTrigger": {
       "fallback": "GitHub App 消息未通，仍依時查驗。",
       "label": "PR / MR",

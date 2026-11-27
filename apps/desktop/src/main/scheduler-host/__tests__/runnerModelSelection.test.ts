@@ -95,6 +95,7 @@ vi.mock('../runners/_shared', () => ({
 }));
 
 import { MakerScheduleRunner } from '../runner.desktop';
+import * as billingHolds from '../billingHolds.js';
 import { resolveTeammateScheduleModel } from '../teammateScheduleModel';
 import { __testing as projectAutomation } from '../project-automation-loader';
 import { scheduleCreateToRow, schedulePatchToRow, scheduleToCamel } from '../../localDb/mapper';
@@ -262,6 +263,7 @@ function createRunnerHarness(
     sdkSessionId?: string;
   } | null = null,
   opts: {
+    resolveBillingFallback?: ConstructorParameters<typeof MakerScheduleRunner>[0]['resolveBillingFallback'];
     resolveInheritedModel?: ConstructorParameters<typeof MakerScheduleRunner>[0]['resolveInheritedModel'];
     bootstrapSession?: ConstructorParameters<typeof MakerScheduleRunner>[0]['bootstrapSession'];
     sessionAlive?: boolean;
@@ -313,6 +315,7 @@ function createRunnerHarness(
   const runner = new MakerScheduleRunner({
     maker,
     bootstrapSession: opts.bootstrapSession,
+    resolveBillingFallback: opts.resolveBillingFallback,
     resolveInheritedModel: opts.resolveInheritedModel,
     getDb: () => ({}) as never,
     notifier,
@@ -396,7 +399,7 @@ describe('MakerScheduleRunner model selection', () => {
       const opts = await fireToCompletion(harness, h, baseSchedule({
         agentKind: 'codex', modelAgentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily',
       })) as { model: string; modelGroupStart?: string };
-      expect(modelGroupStart.prepare).toHaveBeenCalledWith('daily', { keptModelName: 'gpt-saved', localOnly: false });
+      expect(modelGroupStart.prepare).toHaveBeenCalledWith('daily', { scheduled: true, keptModelName: 'gpt-saved', localOnly: false });
       expect(opts.model).toBe('gpt-picked');
       expect(opts.modelGroupStart).toBe('tok-1');
     });
@@ -442,6 +445,40 @@ describe('MakerScheduleRunner model selection', () => {
       const { modelGroupStart, selections } = await fireBound(true);
       expect(modelGroupStart.prepare).not.toHaveBeenCalled();
       expect(selections).not.toContainEqual(expect.objectContaining({ model: 'gpt-fallback' }));
+    });
+
+    // #12353 / unit: an existing mode task uses its persisted Pi connection. Its next
+    // fire must apply the configured replacement under the task lock before its single send.
+    it('dispatches a bound schedule once on the configured replacement for its held Pi connection', async () => {
+      const hold = vi.spyOn(billingHolds, 'scheduledBillingHold').mockImplementation(id =>
+        id === 'xai' ? { version: 'held', notified: false } : null);
+      try {
+        const h = createSessionHarness();
+        const backup = { agentKind: 'pi', model: 'backup-model', providerId: 'backup', effort: null, fastMode: false } as const;
+        Object.assign(h.session, { agentKind: 'pi', model: 'grok' });
+        mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', agentKind: 'pi', model: 'grok', providerId: 'xai' });
+        let provider = 'xai';
+        mocks.getSessionProvider.mockImplementation(() => provider);
+        const fallback = vi.fn(async () => backup);
+        const harness = createRunnerHarness(h, { agentKind: 'pi', model: 'grok', workDir: '/work' }, {
+          sessionAlive: true, modelGroupStart: picked(), resolveBillingFallback: fallback,
+          resolveModelSelection: async choice => choice,
+          acquirePendingAgentSwitch: async (_id, _signal, selection) => {
+            expect(selection).toMatchObject(backup);
+            provider = selection!.providerId!;
+            await h.session.setModel(selection!.model, { providerId: provider });
+            return { release: () => {}, selection: selection! };
+          },
+        });
+        await fireToCompletion(harness, h, baseSchedule({
+          agentKind: 'pi', modelGroup: 'daily', targetSessionId: h.session.id,
+        }));
+        expect(fallback).toHaveBeenCalledWith(h.session.id, 'grok', 'xai');
+        expect(h.send).toHaveBeenCalledTimes(1);
+        expect(provider).toBe('backup');
+      } finally {
+        hold.mockRestore();
+      }
     });
 
     it('runs the saved model on an existing task once the mode is deleted', async () => {

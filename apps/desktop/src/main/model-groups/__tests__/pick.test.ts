@@ -134,7 +134,8 @@ describe('createModelGroupResolver', () => {
     models: { codex: [{ id: 'gpt', name: 'GPT-5.6', mode: 'chat', efforts: ['low', 'high'], supportsImageInput }] },
   }) as unknown as ProviderView;
   const config: ModelGroupsConfig = { routes: [route('rotate')] };
-  const make = (groups: ModelGroupsConfig = config, now = NOW) => createModelGroupResolver({
+  const make = (groups: ModelGroupsConfig = config, now = NOW, billingUnavailable?: (id: string) => boolean) => createModelGroupResolver({
+    billingUnavailable,
     config: () => groups,
     views: async () => [view('a', 'ChatGPT Pro'), view('b', 'ChatGPT Plus', true)],
     agents: () => ['codex'],
@@ -142,6 +143,18 @@ describe('createModelGroupResolver', () => {
     quotaWindows: async () => new Map([['a', [week(26, 100)]], ['b', [week(39, 20)]]]),
     scope: () => 'owner',
     now: () => now,
+  });
+
+  // #12353 / unit: resolve a configured group when a billing hold outlives the failing task.
+  it('routes around a held connection only to selectable members of the configured group', async () => {
+    const group = route('order');
+    const resolver = make({ routes: [group] }, NOW, id => id === 'a');
+    const selection = { type: 'route', id: group.id } as const;
+    const request = { selection, context: { scheduled: true } };
+    expect(await resolver.resolve({ selection })).toMatchObject({ outcome: 'routed', route: { providerId: 'a' } });
+    expect(await resolver.resolve(request)).toMatchObject({ outcome: 'routed', route: { providerId: 'b' } });
+    group.candidates[1].off = true;
+    expect(await resolver.resolve(request)).toMatchObject({ outcome: 'unavailable' });
   });
 
   // 生产入口与可观察结果：createModelGroupResolver.resolve 对本地与远程 acp 插件引擎候选的可用性、努力档、看图与远程调用判定。

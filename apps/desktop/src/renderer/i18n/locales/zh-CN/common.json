@@ -18193,6 +18193,7 @@
     "ultra": "极致"
   },
   "scheduler": {
+    "billingWait": "正在等待点数或订阅恢复。恢复后，用此连接成功发送一条消息，即可继续运行定时任务。",
     "prTrigger": {
       "fallback": "未接通 GitHub App 通知，仍会按计划检查。",
       "label": "PR / MR",

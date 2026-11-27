@@ -1,3 +1,5 @@
+import { getPluginModelPickerAgents, isPluginModelPickerRouteAvailable } from '../cindy-brain/ghostModelPicker.js';
+import { captureManualPiBillingRecovery, scheduledBillingHold } from '../scheduler-host/billingHolds.js';
 import { assertSessionTreeOwner, navigateAndRehydrateSessionTree } from './sessionTreeNavigation.js';
 import { selectMakerBroadcastTargets } from './broadcastTargets.js';
 import { bindSessionUsageAccount } from '../usage/sessionUsageOwner.js';
@@ -4901,6 +4903,11 @@ let pendingAgentSwitchApplyHolder:
     scheduledInput?: boolean,
   ) => Promise<{ release: () => void; selection?: ScheduledModelSelection }>) | null = null;
 let cancelPendingAgentSwitchHolder: ((sessionId: string) => void) | null = null;
+type ScheduledBillingFallback = (sessionId: string, model: string, providerId: string) => Promise<ScheduledModelSelection | null>;
+let scheduledBillingFallback: ScheduledBillingFallback | undefined;
+export const resolveScheduledBillingFallback: ScheduledBillingFallback = async (...args) =>
+  await scheduledBillingFallback?.(...args) ?? null;
+
 let prepareScheduledModelPreferencesHolder: ((sessionId: string, override: boolean) => Promise<void>) | null = null;
 let scheduledSessionBootstrapHolder: ScheduledSessionBootstrap | null = null;
 let recordDispatchedModelHolder: ((sessionId: string, clientId: string) => void) | null = null;
@@ -6585,6 +6592,17 @@ const directApiTurnEvidence = new WeakMap<Session, {
   recover: NonNullable<ReturnType<typeof captureOpenAiGroupDirectRecovery>>;
 }>();
 
+const manualBillingRecovery = new WeakMap<Session, { generation: number; id: string; recover(event: AgentEvent): void }>();
+
+function captureManualPiDispatch(session: Session): void {
+  manualBillingRecovery.delete(session);
+  if (session.agentKind === 'pi' && !session.remoteHostId && !session.agentDeviceId) {
+    const id = getSessionProvider(session.id);
+    const recover = id && captureManualPiBillingRecovery(id);
+    if (id && recover) manualBillingRecovery.set(session, { generation: session.getTurnGeneration(), id, recover });
+  }
+}
+
 function captureDirectProviderDispatch(session: Session): void {
   directApiTurnEvidence.delete(session);
   if ((session.agentKind !== 'codex' && session.agentKind !== 'pi') || !session.model
@@ -6597,6 +6615,11 @@ function captureDirectProviderDispatch(session: Session): void {
 }
 
 function settleDirectProviderDispatch(session: Session, generation: number, event: AgentEvent): void {
+  const manual = manualBillingRecovery.get(session);
+  if (manual?.generation === generation) {
+    manualBillingRecovery.delete(session);
+    if (getSessionProvider(session.id) === manual.id) manual.recover(event);
+  }
   const direct = directApiTurnEvidence.get(session);
   if (direct?.generation !== generation) return;
   directApiTurnEvidence.delete(session);
@@ -18315,6 +18338,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sessionId: string,
     current: FallbackRouteProfile,
     controlSessionId = sessionId,
+    eligibleForSchedule?: (route: BotModelRoute) => boolean,
   ): Promise<{ isBot: boolean; candidate: FallbackRouteProfile | null; routeLocked?: boolean }> => {
     const [row] = await getDbClient()
       .drizzle.select({
@@ -18359,10 +18383,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       harness: currentHarness, model: current.model, providerId: current.providerId, agentDeviceId: current.agentDeviceId,
     };
     const usable = (candidate: BotModelRoute) =>
-      !controlSession?.remoteHostId || (candidate.harness !== 'acp' && candidate.harness === currentHarness);
+      (!controlSession?.remoteHostId || (candidate.harness !== 'acp' && candidate.harness === currentHarness)) &&
+      (!eligibleForSchedule || eligibleForSchedule(candidate));
+    const currentIndex = botModelRouteIndex(chain, currentRoute);
+    if (eligibleForSchedule && currentIndex < 0) return { isBot: true, candidate: null };
     const route = nextBotModelRoute(chain, currentRoute, control.visitedRoutes, usable);
     // No other usable route is configured at all: nothing can be exhausted.
-    const currentIndex = botModelRouteIndex(chain, currentRoute);
     const routeLocked = !chain.some((candidate, index) => index !== currentIndex && usable(candidate));
     return {
       isBot: true,
@@ -18436,6 +18462,32 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     return null;
   }
+
+  // A pinned schedule may use only a fallback configured for this target task.
+  // Return a temporary schedule selection; the normal route lock revalidates it.
+  scheduledBillingFallback = async (sessionId, model, providerId) => {
+    const row = await getSessionRowSnapshot(sessionId);
+    if (!row || row.remoteHostId || row.agentDeviceId || row.orcaRole || isSessionSharedTaskActive(sessionId) ||
+        await hasExplicitSessionTaskModel(sessionId)) return null;
+    const current = { agentKind: 'pi', model, providerId, agentDeviceId: null, effort: null, fastMode: false } as const;
+    const binding = await activeModelGroupBinding(sessionId, row);
+    if (binding) {
+      const offer = await readModelGroupRecoveryOffer(sessionId, { current, scheduled: true, accountUnavailable: true, visited: new Set(),
+        recordUnavailable: () => {}, ...('fromBotProfile' in binding ? { overrideSelection: binding.selection } : {}) });
+      if (!offer || offer.agentDeviceId) return null;
+      return { agentKind: dbToMakerEngineKind(offer.agentKind), model: offer.model, providerId: offer.providerId,
+        agentDeviceId: null, effort: (offer.effort as Effort | undefined) ?? null, fastMode: offer.fastMode ?? false };
+    }
+    const views = await getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
+    const agents = getPluginModelPickerAgents();
+    const bot = await readBotFallbackCandidate(sessionId, current, sessionId, route =>
+      !route.agentDeviceId && !!route.providerId && !scheduledBillingHold(route.providerId) &&
+      route.harness !== 'acp' && isPluginModelPickerRouteAvailable({
+        agentKind: route.harness === 'claude' ? 'cc' : route.harness,
+        model: route.model, providerId: route.providerId, effort: route.effort, fastMode: route.fastMode,
+      }, views, agents));
+    return bot.candidate;
+  };
 
   const runDesktopModelGroupBeforeSend = (
     sessionId: string,
@@ -19335,6 +19387,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     prewarmSession: prewarmSessionRuntime,
     hydrateActiveOrcaSession,
   } = createMakerSendTransaction({
+    onManualPiDispatch: sessionId => {
+      const session = sessionBindings.getSession(sessionId);
+      if (session) captureManualPiDispatch(session);
+    },
     onUserProviderDispatch: (sessionId) => {
       const session = sessionBindings.getSession(sessionId);
       if (session) captureDirectProviderDispatch(session);
@@ -19527,7 +19583,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       maker, getSessionProvider, captureDataOwnerBroadcastScope, isDataOwnerBroadcastScopeCurrent,
       enqueueDurableWrite, patchMessageAgentMeta, createDbMessage, log,
     })),
-    assertBeforeVendorDispatch: (sessionId, sendOpts) => {
+    assertBeforeVendorDispatch: (sessionId, sendOpts, scheduled) => {
+      if (scheduled) {
+        const session = maker.getSession(sessionId);
+        if (session?.agentKind === 'pi' && !session.agentDeviceId && !session.remoteHostId) {
+          const provider = getSessionProvider(sessionId);
+          if (provider && scheduledBillingHold(provider)) throw new Error(t('scheduler.billingWait'));
+        }
+      }
       assertTaskPromptCurrent(sessionId);
       const remote = isDeviceLinkInvoke();
       assertRemoteInputClearNotInFlight(sessionId, remote);

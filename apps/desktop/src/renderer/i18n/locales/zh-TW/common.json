@@ -18193,6 +18193,7 @@
     "ultra": "極致"
   },
   "scheduler": {
+    "billingWait": "正在等待點數或訂閱恢復。恢復後，使用此連線成功傳送一則訊息，即可繼續執行排程任務。",
     "prTrigger": {
       "fallback": "尚未接通 GitHub App 通知，仍會依排程檢查。",
       "label": "PR / MR",

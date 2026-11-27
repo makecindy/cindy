@@ -18193,6 +18193,7 @@
     "ultra": "극한"
   },
   "scheduler": {
+    "billingWait": "크레딧 또는 구독 복구를 기다리는 중입니다. 복구 후 이 연결로 메시지를 보내면 예약 작업이 재개됩니다.",
     "prTrigger": {
       "fallback": "GitHub App 알림을 받을 수 없어도 정기 확인은 계속됩니다.",
       "label": "PR / MR",

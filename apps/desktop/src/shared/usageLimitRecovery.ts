@@ -323,6 +323,19 @@ const BILLING_DEPLETION_PATTERN =
   /\b(?:insufficient_quota|billing_error|credit(?:s| balance)?\s+(?:depleted|exhausted|too low))\b/i;
 const GROK_BILLING_DEPLETION_PATTERN = /\byou have run out of credits or need a Grok subscription\b/i;
 
+export function isGrokBillingRejection(data: unknown): boolean {
+  const root = asRecord(data);
+  if (!root) return false;
+  const status = finiteNumber(root.errorStatus ?? root.status);
+  if (status !== null && status !== 403) return false;
+  const records = collectRecords(root);
+  const text = collectText(records);
+  if (status === null && /\bHTTP(?:\/\d(?:\.\d)?)?\s+(?!403\b)\d{3}\b/i.test(text)) return false;
+  const now = Date.now();
+  return GROK_BILLING_DEPLETION_PATTERN.test(text) &&
+    parseStructuredResetAt(records, now) === null && parseTextResetAt(text, now) === null;
+}
+
 /**
  * 余额 / 计费耗尽（要充值，不会到点恢复）。即使文案里也出现 quota / limit，也不是周期额度上限，
  * 所有「等额度重置」的判定都必须先排除它。

@@ -28,6 +28,7 @@ interface XaiSubscriptionUsageRefreshDeps {
   fetchSnapshot(
     args: XaiSubscriptionCredentialInfo,
   ): Promise<XaiSubscriptionUsageSnapshot | 'empty' | null>;
+  captureBillingRecovery?(): (() => void) | undefined;
   recordSnapshot(snapshot: XaiSubscriptionUsageSnapshot): Promise<void>;
   clearSnapshot(): Promise<void>;
   readCachedSnapshot(): Promise<XaiSubscriptionUsageSnapshot | null>;
@@ -149,6 +150,8 @@ export function createXaiSubscriptionUsageReader(
     attemptSeq: number,
   ): Promise<void> {
     try {
+      const recoverBilling = deps.captureBillingRecovery?.();
+      const previous = recoverBilling ? await deps.readCachedSnapshot().catch(() => null) : null;
       const result = await deps.fetchSnapshot(credentials);
       if (generation !== refreshGeneration) return;
       const stillCurrent = await readCredentialsSafe();
@@ -163,6 +166,15 @@ export function createXaiSubscriptionUsageReader(
       if (!result) {
         enterFailureBackoff();
         return;
+      }
+      // Require a change in the authority's billing response for the same subject.
+      // Unchanged positive balance, catalog visibility and cached quota alone cannot clear a rejection.
+      if (recoverBilling && result.accountFingerprint && previous?.accountFingerprint === result.accountFingerprint &&
+          previous.updatedAt != null && result.updatedAt != null && previous.updatedAt < result.updatedAt) {
+        const toppedUp = previous.prepaidBalance != null && previous.prepaidBalance <= 0 && (result.prepaidBalance ?? 0) > 0;
+        const subscribed = previous.planLabel?.trim().toLowerCase() === 'free' &&
+          /^supergrok(?: heavy)?$/i.test(result.planLabel?.trim() ?? '');
+        if (toppedUp || subscribed) recoverBilling();
       }
       await deps.recordSnapshot(result);
       markSuccessSettled();

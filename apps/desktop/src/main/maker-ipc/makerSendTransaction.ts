@@ -317,6 +317,7 @@ export interface MakerSendTransactionLog {
 
 export interface MakerSendTransactionDeps {
   onUserProviderDispatch?(sessionId: string): void;
+  onManualPiDispatch?(sessionId: string): void;
   /** Read launcher preferences at dispatch time, not at module initialization. */
   /** Null when the launcher has no interface-language preference. */
   getResolvedMainLocale(): SupportedLocale | null;
@@ -453,7 +454,7 @@ export interface MakerSendTransactionDeps {
   /** Capture product lifecycle state before async preparation; commit only at vendor dispatch. */
   prepareProductTurn?: (sessionId: string) => (() => void) | undefined;
   /** Synchronous final fence immediately before Session.send enters vendor code. */
-  assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown) => void;
+  assertBeforeVendorDispatch?: (sessionId: string, sendOpts: unknown, scheduled: boolean) => void;
   /** Launcher-owned durable startup fence. A failed write must prevent provider
    * startup so an uncertain turn cannot be replayed after a Host restart.
    * Desktop omits this port and retains its existing event-driven lifecycle. */
@@ -2305,16 +2306,19 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                 'REMOTE_OPTIMISTIC_INPUT_SUPERSEDED: input preparation was superseded',
               );
             }
-            deps.assertBeforeVendorDispatch?.(sessionId, finalFenceSendOpts);
+            deps.assertBeforeVendorDispatch?.(sessionId, finalFenceSendOpts, !!scheduledOrigin);
             recovery?.onDispatching();
             if (persistUserMessage?.clientId) {
               deps.onModelDispatched?.(sessionId, persistUserMessage.clientId);
             }
             activateTelegramQuestionReply(so[TELEGRAM_QUESTION_ORIGIN], sess);
             dispatchProductTurn?.();
-            if (!persistUserMessage?.autoResume && (mainOwnedSendContext?.origin.kind === 'desktop'
-              || (persistUserMessage?.clientId && !so.origin && !so.fromMobileClient))) {
-              deps.onUserProviderDispatch?.(sess.id);
+            const desktopUser = mainOwnedSendContext?.origin.kind === 'desktop' ||
+              (!!persistUserMessage?.clientId && !so.origin && !so.fromMobileClient);
+            if (!persistUserMessage?.autoResume && desktopUser) deps.onUserProviderDispatch?.(sess.id);
+            if (sess.agentKind === 'pi' && !scheduledOrigin && !persistUserMessage?.autoResume &&
+                (mainOwnedSendContext ? ['desktop', 'im'].includes(mainOwnedSendContext.origin.kind) : !!persistUserMessage?.clientId)) {
+              deps.onManualPiDispatch?.(sess.id);
             }
             if (userPromptPreviewSessionId) {
               deps.dispatchUserPromptPreview?.(

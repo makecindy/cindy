@@ -18268,6 +18268,7 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "billingWait": "Guthaben oder Abonnement noch nicht wieder verfügbar. Sende nach der Wiederherstellung über diese Verbindung eine Nachricht, damit geplante Aufgaben fortgesetzt werden.",
     "prTrigger": {
       "fallback": "Ohne GitHub-App-Benachrichtigungen wird weiterhin regelmäßig geprüft.",
       "label": "PR / MR",

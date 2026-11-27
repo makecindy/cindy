@@ -1,3 +1,4 @@
+import { t } from '../i18n.desktop.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-live.js';
 import { createMessage, rewindPersistedUserMessageAfterClear } from '../localDb/ipc/messages.js';
 import { getSessionRowSnapshot, getSessionFsSnapshot, touchUserSendInDb } from '../localDb/ipc/sessions.js';
@@ -13,6 +14,7 @@ export * from './runner.js';
 export class MakerScheduleRunner extends SharedScheduleRunner {
   constructor(deps: MakerScheduleRunnerDeps) {
     super(deps, {
+      billingWaitMessage: () => t('scheduler.billingWait'),
       shouldApplyExclusiveProviderRerouteLive: (...args) => shouldApplyExclusiveProviderRerouteLive(...args),
       createMessage: (...args) => createMessage(...args),
       rewindPersistedUserMessageAfterClear: (...args) => rewindPersistedUserMessageAfterClear(...args),

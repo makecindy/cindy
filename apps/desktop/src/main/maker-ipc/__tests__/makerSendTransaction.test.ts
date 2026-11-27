@@ -4098,6 +4098,18 @@ describe('mobile client prompt note', () => {
     expect(sent).toBe(`${buildMobileClientPromptNote()}\n\n/compact`);
   });
 
+  // #12353 / unit: a queued human message from the phone can prove Pi billing recovery.
+  // The scheduler and automatic continuations share this dispatch entry but cannot provide that evidence.
+  it('captures recovery evidence for a manually dispatched mobile Pi message', async () => {
+    const session = createSession({ agentKind: 'pi' });
+    const onManualPiDispatch = vi.fn();
+    const { deps } = createDeps({ getSession: () => session, onManualPiDispatch });
+    await createMakerSendTransaction(deps).sendToAgentAccepted(session.id, 'hello', undefined, {
+      fromMobileClient: true, persistUserMessage: { clientId: 'manual-mobile', content: 'hello' },
+    });
+    expect(onManualPiDispatch).toHaveBeenCalledExactlyOnceWith(session.id);
+  });
+
   it('applies the same command bypass to coordinator-drained mobile messages', async () => {
     const session = createSession({ agentKind: 'claude-code' });
     const { deps } = createDeps({

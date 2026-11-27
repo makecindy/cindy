@@ -3,6 +3,7 @@
  * 统一封装：本机/远程目录刷新与合成、resolver 解析器、故障恢复与横幅提议、任务中间发前持续托管评估、
  * 伙伴/定时任务选路，以及切账号时的状态释放。
  */
+import { scheduledBillingHold } from '../scheduler-host/billingHolds.js';
 import type { ProviderView } from '@cindy/model-providers';
 import type { ModelGroupAgentKind, ModelGroupResolveRequest, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
 import { pluginEngineKeyFromProviderId, type PluginEngineView } from '../../shared/pluginEngines.js';
@@ -153,6 +154,7 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
   });
 
   const resolver = createModelGroupResolver({
+    billingUnavailable: id => !!scheduledBillingHold(id),
     config: readModelGroupsConfigForSelected,
     recordDecision: recordModelGroupDecision,
     views: readLocalViews,

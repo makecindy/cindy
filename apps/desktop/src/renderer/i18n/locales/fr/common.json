@@ -18443,6 +18443,7 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "billingWait": "En attente du rétablissement du crédit ou de l’abonnement. Une fois l’accès rétabli, envoyez un message via cette connexion pour reprendre les tâches planifiées.",
     "prTrigger": {
       "fallback": "Les vérifications planifiées continuent sans les notifications GitHub App.",
       "label": "PR / MR",
