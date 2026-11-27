@@ -214,6 +214,7 @@ export default {
       });
       assert.deepEqual(style.overflow, style.lane, 'an overflow row keeps its inline typography');
       await ui.capture('overflow');
+      if (ui.data.headerIcons) await ui.capture('final');
       const fullTitle = await extra.locator('span.truncate').textContent();
       if (ui.data.headerIcons) {
         const icons = await page.locator(`[id=${JSON.stringify(await more.getAttribute('aria-controls'))}]`).evaluate(panel =>
@@ -289,6 +290,7 @@ export default {
       assert.equal(await page.locator('[contenteditable="true"]').innerText(), draft, 'feedback does not write the draft');
     }
     await ui.capture('controls');
+    if (ui.case === 'running-elapsed') await ui.capture('final');
     const ghosts = await page.evaluate(() => window.electronAPI.ghosts.listSync().ghosts);
     await page.evaluate(() => window.__uiPage.emit('ghosts', { ghosts: [] }));
     await header.waitFor({ state: 'detached' });
