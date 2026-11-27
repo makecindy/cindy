@@ -425,7 +425,8 @@
         "all": "Todas",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Motor de plugin"
       },
       "filterLastActivityHeading": "Última atividade",
       "filterLastActivity": {

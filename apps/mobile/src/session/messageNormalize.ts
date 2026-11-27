@@ -235,6 +235,8 @@ export interface NormalizedAttachment {
   path?: string;
   mimeType?: string;
   sha256?: string;
+  /** Optional stable cache key for images whose URI rotates (e.g. short-lived signed URLs). */
+  cacheKey?: string;
   previewable: boolean;
 }
 
@@ -243,6 +245,8 @@ export interface NormalizedToolMedia {
   url: string;
   mimeType?: string;
   title?: string;
+  /** Optional stable cache key for expo-image and intrinsic size cache across signed URL rotations. */
+  cacheKey?: string;
   previewable: boolean;
   actions?: NormalizedToolMediaActions;
 }
