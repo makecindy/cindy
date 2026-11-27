@@ -6,6 +6,8 @@ export interface NewTaskSelectionSheetProps {
   directoryInput?: ReactElement;
   /** Host capability loading for workspace choices; directory reads use loading. */
   workspaceLoading?: boolean;
+  /** Supplemental project choices are loading while existing choices stay usable. */
+  workspaceRefreshing?: boolean;
   busy: boolean;
   devices: readonly { deviceId: string; name?: string }[];
   selectedDeviceId: string;

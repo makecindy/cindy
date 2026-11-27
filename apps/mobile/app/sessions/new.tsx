@@ -1059,20 +1059,20 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const projectReadRef = useRef(projectRead);
   projectReadRef.current = projectRead;
   const [registeredProjects, setRegisteredProjects] = useState<{ read: typeof projectRead; rows: unknown }>();
+  const workspaceRefreshing = !!projectRead && registeredProjects?.read !== projectRead;
   useEffect(() => {
     if (!projectRead) return;
     let disposed = false;
     const isCurrent = () => !disposed && projectReadRef.current === projectRead
       && isMobileAuthOwnerCurrent(projectRead.owner);
+    const settle = (rows: unknown) => {
+      if (isCurrent()) setRegisteredProjects({ read: projectRead, rows });
+    };
     void invoke(projectRead.deviceId, 'local-db:recent-workdirs:list', [], {
       background: true,
       noResultCache: true,
       preSend: () => { if (!isCurrent()) throw new Error('PROJECT_PICKER_CLOSED'); },
-    }).then((rows) => {
-      if (isCurrent()) setRegisteredProjects({ read: projectRead, rows });
-    }).catch(() => {
-      // Older or offline hosts can still use the recent task-derived choices.
-    });
+    }).then(settle, () => settle(undefined));
     return () => { disposed = true; };
   }, [invoke, projectRead]);
   const workspacePickerOptions = useMemo(
@@ -6301,6 +6301,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         devices={deviceOptions}
         selectedDeviceId={selectedDeviceId}
         workspaces={workspacePickerOptions}
+        workspaceRefreshing={workspaceRefreshing}
         workspaceKind={draft.workspaceKind}
         workingDir={draft.workingDir}
         path={browsePath}

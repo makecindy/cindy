@@ -109,7 +109,9 @@ export function NewTaskSelectionSheet(p: NewTaskSelectionSheetProps) {
           ))
         ) : p.page === "workspace" ? (
           <>
-            {p.workspaceLoading ? <ActivityIndicator color={colors.textSecondary} /> : null}
+            {p.workspaceLoading || p.workspaceRefreshing ? (
+              <ActivityIndicator color={colors.textSecondary} testID="newSession.workspaceProgress" />
+            ) : null}
             {displayError ? <ErrorNotice message={displayError} /> : null}
             <NewTaskSelectionRow
               title={t("session.new.workspaceDialogue")}
