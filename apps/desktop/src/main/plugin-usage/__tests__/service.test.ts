@@ -223,7 +223,7 @@ it.each(['subject', 'all'] as const)('fences late SQLite receipts after detach a
   };
   const gates = { a: { written: deferred(), reply: deferred() }, b: { written: deferred(), reply: deferred() } };
   const tx = client.tx.bind(client);
-  client.tx = (async (name, args) => {
+  client.tx = (async (name: string, args: unknown) => {
     const result = await tx(name, args);
     const input = args as { action?: string; callId?: keyof typeof gates };
     if (name === 'pluginUsage.execute' && input.action === 'accept' && input.callId) {
