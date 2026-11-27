@@ -217,13 +217,8 @@ function harness(options: {
       // 的自由变量；harness 不绑它们时 new Function 沙箱直接 ReferenceError，整份测试在
       // shard 里红掉。工作区记忆不是本组用例的观察点（「remembers and restores」单独用
       // 真实现 + localStorage stub 覆盖），这里按「目标设备从未用过」的真实结果打桩，
-      // 不引入对 localStorage 的依赖。
-      dataOwnerId: bindings.dataOwnerId, draft: bindings.draft,
-      effectiveRemoteHostId: bindings.effectiveRemoteHostId,
-      effectiveWorkingDir: bindings.draft.workingDir,
-      rememberDeviceTaskWorkspace: bindings.rememberDeviceTaskWorkspace,
+      // 不引入对 localStorage 的依赖。其余设备切换绑定由上面的 ...bindings 提供。
       getLastDeviceTaskWorkspace: () => null,
-      resolveDeviceSwitchWorkspace: () => ({ workingDir: null, remoteHostId: null, explicitNoProject: true }),
       getDefaultNewTaskWorkingDir: () => null,
     })('target-device', 'Target'),
     current: () => current,
