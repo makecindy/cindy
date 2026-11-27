@@ -47,14 +47,13 @@ const GLYPH_INSET = { x: (MARK_SIZE - GLYPH_SIZE) / 2, y: (MARK_SIZE - GLYPH_SIZ
 const XD_INSET = { x: (MARK_SIZE - XD_WIDTH) / 2, y: (MARK_SIZE - XD_WIDTH * XD_ASPECT) / 2 };
 const MONOGRAM_INSET = { x: 0, y: 0 };
 
-/** 智能路由角标(Waypoints 几何，纯 react-native-svg Path，不引入 lucide-react-native)。 */
+/** 智能路由角标使用桌面 RouteSourceMark 的 Lucide Sparkle 路径。 */
 const ROUTED_BADGE_SIZE = 9;
 const ROUTED_BADGE_PATH =
-  'M9.5 4.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0'
-  + 'M2 12a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0'
-  + 'M17 12a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0'
-  + 'M9.5 19.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0'
-  + 'M10.2 6.3 6.3 10.2M7 12h10M13.8 17.7 17.7 13.8';
+  'M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962'
+  + 'L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0'
+  + 'L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964'
+  + 'L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z';
 
 /** routed → 叠智能路由角标；remote → 叠远程标记(右上角波纹 + 点)；两者互斥，图形本身大小与位置不变。 */
 function withRemote(
