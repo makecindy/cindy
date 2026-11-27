@@ -5589,6 +5589,27 @@
           "confirm": "Réinitialiser",
           "cancel": "Annuler"
         }
+      },
+      "tidy": {
+        "label": "Nettoyage mémoire et compétences",
+        "description": "Déduplique et compacte périodiquement en arrière-plan la mémoire et les compétences de vos compagnons. Ne s'exécute que s'il y a assez d'activité récente, ne coûte rien sans changement et ne laisse aucune tâche résiduelle.",
+        "cadenceLabel": "Fréquence de nettoyage",
+        "cadences": {
+          "weekly": "Hebdomadaire",
+          "biweekly": "Toutes les 2 semaines",
+          "monthly": "Mensuelle",
+          "off": "Désactivée (manuel)"
+        },
+        "runNow": "Nettoyer maintenant",
+        "running": "Nettoyage…",
+        "toast": {
+          "cadenceSaved": "Fréquence de nettoyage mise à jour",
+          "cadenceFailed": "Échec de la mise à jour de la fréquence",
+          "updated": "Nettoyage terminé ({{count}} mis à jour)",
+          "idle": "Aucun nettoyage nécessaire",
+          "skipped": "Aucun compagnon éligible au nettoyage",
+          "failed": "Échec du nettoyage de la mémoire"
+        }
       }
     },
     "subagentModels": {

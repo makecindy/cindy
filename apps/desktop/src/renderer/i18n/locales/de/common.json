@@ -5529,6 +5529,27 @@
           "confirm": "Zurücksetzen",
           "cancel": "Abbrechen"
         }
+      },
+      "tidy": {
+        "label": "Speicher- & Skill-Bereinigung",
+        "description": "Bereinigt und verdichtet die Erinnerungen und Skills deiner Buddys regelmäßig im Hintergrund. Läuft nur bei ausreichend neuer Aktivität, verursacht im Leerlauf keine Kosten und hinterlässt keine offenen Aufgaben.",
+        "cadenceLabel": "Bereinigungsintervall",
+        "cadences": {
+          "weekly": "Wöchentlich",
+          "biweekly": "Alle 2 Wochen",
+          "monthly": "Monatlich",
+          "off": "Aus (nur manuell)"
+        },
+        "runNow": "Jetzt bereinigen",
+        "running": "Wird bereinigt…",
+        "toast": {
+          "cadenceSaved": "Bereinigungsintervall aktualisiert",
+          "cadenceFailed": "Bereinigungsintervall konnte nicht aktualisiert werden",
+          "updated": "Bereinigung abgeschlossen ({{count}} aktualisiert)",
+          "idle": "Keine Bereinigung erforderlich",
+          "skipped": "Keine passenden Buddys zum Bereinigen",
+          "failed": "Speicherbereinigung fehlgeschlagen"
+        }
       }
     },
     "subagentModels": {

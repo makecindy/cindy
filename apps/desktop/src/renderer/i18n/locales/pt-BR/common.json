@@ -5589,6 +5589,27 @@
           "confirm": "Redefinir",
           "cancel": "Cancelar"
         }
+      },
+      "tidy": {
+        "label": "Organização de memória e Skills",
+        "description": "Remove duplicidades e compacta periodicamente em segundo plano as memórias e Skills dos Buddies. Só executa quando há atividade suficiente, não consome recursos sem mudanças e não deixa tarefas extras.",
+        "cadenceLabel": "Frequência de organização",
+        "cadences": {
+          "weekly": "Semanal",
+          "biweekly": "A cada 2 semanas",
+          "monthly": "Mensal",
+          "off": "Desativada (manual)"
+        },
+        "runNow": "Organizar agora",
+        "running": "Organizando…",
+        "toast": {
+          "cadenceSaved": "Frequência de organização atualizada",
+          "cadenceFailed": "Falha ao atualizar a frequência",
+          "updated": "Organização concluída ({{count}} atualizados)",
+          "idle": "Nada precisava ser organizado",
+          "skipped": "Nenhum buddy elegível para organização",
+          "failed": "Falha ao organizar a memória"
+        }
       }
     },
     "subagentModels": {

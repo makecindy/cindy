@@ -5529,6 +5529,27 @@
           "confirm": "Reset",
           "cancel": "Cancel"
         }
+      },
+      "tidy": {
+        "label": "Memory & skill tidying",
+        "description": "Periodically deduplicates and compacts buddies' memories and skills in the background. Runs only when there is enough new activity, costs nothing when idle, and leaves no lingering task.",
+        "cadenceLabel": "Tidying cadence",
+        "cadences": {
+          "weekly": "Weekly",
+          "biweekly": "Every 2 weeks",
+          "monthly": "Monthly",
+          "off": "Off (manual only)"
+        },
+        "runNow": "Tidy now",
+        "running": "Tidying…",
+        "toast": {
+          "cadenceSaved": "Tidying cadence updated",
+          "cadenceFailed": "Failed to update tidying cadence",
+          "updated": "Tidying finished ({{count}} updated)",
+          "idle": "Nothing needed tidying",
+          "skipped": "No eligible buddies to tidy",
+          "failed": "Memory tidying failed"
+        }
       }
     },
     "subagentModels": {

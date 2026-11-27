@@ -5486,6 +5486,27 @@
           "confirm": "清之",
           "cancel": "罢"
         }
+      },
+      "tidy": {
+        "label": "忆录与技艺理辑",
+        "description": "按期于幕后轻理诸伴之忆录与技艺（去复、削繁、参校全局技艺）。唯积有新事乃启，无变则不费毫厘，亦不留余务于侧栏。",
+        "cadenceLabel": "理辑之期",
+        "cadences": {
+          "weekly": "每七日",
+          "biweekly": "每半月",
+          "monthly": "每月",
+          "off": "止（唯手启）"
+        },
+        "runNow": "即刻理辑",
+        "running": "理辑中…",
+        "toast": {
+          "cadenceSaved": "理辑之期已更",
+          "cadenceFailed": "更易理辑之期未成",
+          "updated": "理辑已毕（整新 {{count}} 伴）",
+          "idle": "诸忆录技艺皆已清整，无须更易",
+          "skipped": "暂无待理之伴",
+          "failed": "理辑未成"
+        }
       }
     },
     "subagentModels": {

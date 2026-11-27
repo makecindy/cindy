@@ -5486,6 +5486,27 @@
           "confirm": "重置",
           "cancel": "取消"
         }
+      },
+      "tidy": {
+        "label": "記憶與技能整理",
+        "description": "定期於背景輕量整理各夥伴的記憶與技能（去重、精簡、對照全域技能）。僅在有足夠累積時才觸發，無變動不消耗額度，也不會在側欄留下多餘任務。",
+        "cadenceLabel": "整理頻率",
+        "cadences": {
+          "weekly": "每週",
+          "biweekly": "每兩週",
+          "monthly": "每月",
+          "off": "關閉（僅手動）"
+        },
+        "runNow": "立即整理",
+        "running": "整理中…",
+        "toast": {
+          "cadenceSaved": "整理頻率已更新",
+          "cadenceFailed": "更新整理頻率失敗",
+          "updated": "整理完成（已更新 {{count}} 位夥伴）",
+          "idle": "目前記憶與技能皆很整潔，無需更動",
+          "skipped": "暫無需要整理的夥伴",
+          "failed": "記憶整理失敗"
+        }
       }
     },
     "subagentModels": {
