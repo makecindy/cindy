@@ -63,6 +63,7 @@ import {
   findPluginEngine,
   requestPluginEnginesRefresh,
   useDevicesPluginEngines,
+  usePluginEngineIdentity,
   usePluginEngines,
   useRemotePluginEngines,
 } from '@/hooks/usePluginEngines';
@@ -3527,8 +3528,12 @@ function CCAgentSessionContent({
   const showOrcaLeadIdentityBar = ownsRoute && collabEnabled;
   const leadAgentKind = normalizeOrcaDisplayAgentKind(session?.agentKind);
   const leadVendor = orcaVendorForAgentKind(leadAgentKind);
+  const leadPluginIdentity = usePluginEngineIdentity(
+    leadAgentKind === 'acp' ? session?.providerId : null,
+    session?.agentDeviceId || remoteDeviceId || undefined,
+  );
   const leadPaneLabel = t('orca.split.leadLabel', {
-    agent: orcaAgentLabel(leadAgentKind),
+    agent: orcaAgentLabel(leadAgentKind, leadPluginIdentity.name),
   });
   const passiveOrcaWorkersRevealSessionRef = useRef<string | null>(null);
   const routeWorkerHint = useMemo(() => {
@@ -6811,6 +6816,7 @@ function CCAgentSessionContent({
                 vendor={leadVendor}
                 size={leadVendor === 'cc' ? 14 : 13}
                 className="text-current"
+                iconDataUrl={leadAgentKind === 'acp' ? leadPluginIdentity.iconDataUrl : undefined}
               />
               <span className="min-w-0 truncate">{leadPaneLabel}</span>
             </span>

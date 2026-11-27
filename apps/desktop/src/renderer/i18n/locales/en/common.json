@@ -17361,7 +17361,8 @@
         "all": "All",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Plugin engine"
       },
       "filterGroupBy": {
         "project": "Project",

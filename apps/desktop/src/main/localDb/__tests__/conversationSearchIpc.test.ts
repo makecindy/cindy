@@ -43,16 +43,16 @@ beforeEach(() => {
   });
 });
 
-describe('local-db:conversations:search — agentKind=pi', () => {
-  it('accepts filters.agentKind pi so remote Pi search is not rejected', async () => {
+describe('local-db:conversations:search — agentKind=pi & acp', () => {
+  it.each(['pi', 'acp'] as const)('accepts filters.agentKind %s so remote %s search is not rejected', async (agentKind) => {
     await handler()(null, {
       query: 'needle',
-      filters: { agentKind: 'pi' },
+      filters: { agentKind },
     });
 
     expect(h.searchConversations).toHaveBeenCalledWith(
       expect.objectContaining({
-        filters: expect.objectContaining({ agentKind: 'pi' }),
+        filters: expect.objectContaining({ agentKind }),
       }),
     );
   });

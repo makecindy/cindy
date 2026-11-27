@@ -309,6 +309,26 @@ describe('switching a task onto a plugin engine', () => {
     expect(deps.admitPluginEngineTarget).not.toHaveBeenCalled();
   });
 
+  it('allows a plugin task (source=plugin) to switch to and from a plugin engine', async () => {
+    const toAcp = makeDeps(makeRow({ source: 'plugin' }));
+    const stagedToAcp = await performSessionAgentSwitch(toAcp.deps, {
+      sessionId: 's1', targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, runtimeSource: 'agent',
+    });
+    expect(stagedToAcp).toMatchObject({ deferred: true, agentKind: 'acp' });
+    expect(toAcp.pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'acp', model: 'deepseek-v4', providerId: ENGINE, runtimeSource: 'agent',
+    });
+
+    const fromAcp = makeDeps(makeRow({ source: 'plugin', agentKind: 'acp', providerId: ENGINE, model: 'deepseek-v4' }));
+    const stagedToBuiltin = await performSessionAgentSwitch(fromAcp.deps, {
+      sessionId: 's1', targetAgentKind: 'codex', model: 'gpt-5.4', providerId: 'openai', runtimeSource: 'agent',
+    });
+    expect(stagedToBuiltin).toMatchObject({ deferred: true, agentKind: 'codex' });
+    expect(fromAcp.pendingSwitches.get('s1')).toMatchObject({
+      targetAgentKind: 'codex', model: 'gpt-5.4', providerId: 'openai', runtimeSource: 'agent',
+    });
+  });
+
   it('refuses an engine whose plugin was turned off, and blocks the send instead of staying on the old engine', async () => {
     let pluginEnabled = true;
     const { deps, pendingSwitches } = makeDeps(makeRow(), {
