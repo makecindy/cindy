@@ -2884,6 +2884,7 @@ describe('MakerScheduleRunner model selection', () => {
         sessionId: 'scheduler-session',
         deferred: true,
         deferRetryMs: 90_000,
+        deferReason: 'session-running',
       });
       expect(harness.closeSession).not.toHaveBeenCalled();
       expect(harness.createSession).not.toHaveBeenCalled();
@@ -2958,6 +2959,7 @@ describe('MakerScheduleRunner model selection', () => {
         sessionId: 'scheduler-session',
         deferred: true,
         deferRetryMs: 90_000,
+        deferReason: 'session-running',
       });
       expect(harness.closeSession).not.toHaveBeenCalled();
       expect(harness.createSession).not.toHaveBeenCalled();

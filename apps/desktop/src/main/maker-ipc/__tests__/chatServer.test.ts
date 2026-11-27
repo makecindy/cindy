@@ -1,5 +1,6 @@
+import * as groupChatContract from '@cindy/maker-shared/botGroupChat';
 import { createGroupAssistantTasks } from '../groupAssistantTask.js';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import { setTimeout as yieldToIo } from 'node:timers/promises';
@@ -455,6 +456,9 @@ describe('Chat Server result delivery and refresh', () => {
   });
 
   it('uses the personal mask grant without requiring bot membership or elevating a peer to owner', async () => {
+    // Keep the grant boundary covered for the feature's eventual return.
+    const enabled = vi.spyOn(groupChatContract, 'BOT_GROUP_PERSONAL_REPLIES_ENABLED', 'get').mockReturnValue(true);
+    onTestFinished(() => enabled.mockRestore());
     let downgraded = false;
     const peer = '30000000-0000-4000-8000-000000000002';
     fixture.handle.mockImplementation((route) => {
@@ -486,21 +490,17 @@ describe('Chat Server result delivery and refresh', () => {
     expect(fixture.handle.mock.calls.some(([route, , body]) => route === '/mask/executions/claim' && body?.accessPolicyVersion === 1)).toBe(true);
   });
 
-  // Regression: the read-only probe covers ordinary and member-joined queues only. Its empty
-  // answer must not stop the idle claim that is the only way AI reply work is discovered.
-  it('keeps claiming AI reply work when the server also offers read-only work discovery', async () => {
-    fixture.handle.mockImplementation((route, _method, body) => {
-      if (route === '/me') return { body: { actor: { id: selfId }, capabilities: { personalMask: 1, workAvailabilityVersion: 1 } } };
-      if (route === '/executions/availability') return { body: { items: body.botIds.map((id: string) => ({ botId: id, enabled: true, pending: false })) } };
-      if (route === '/mask/executions/claim') {
-        const next = claimed ? null : { ...execution, mask_owner_id: selfId, mask_kind: 'reply',
-          maskOwner: { id: selfId, name: 'Represented member', avatarUrl: null } };
-        claimed = true; return { body: { execution: next } };
-      }
-      return response(route);
-    });
+  // Unit: even a server with an enabled legacy configuration cannot make this
+  // release claim a reply/digest or change settings. Ordinary work still runs.
+  it('takes ordinary work without claiming or enabling personal replies', async () => {
+    fixture.handle.mockImplementation(route => route === '/me'
+      ? { body: { actor: { id: selfId }, capabilities: { personalMask: 1 } } }
+      : response(route));
     await start();
-    expect(fixture.handle.mock.calls.some(([route]) => route === '/executions/availability')).toBe(false);
+    expect((await service.chatServer!.status()).personalMask).not.toBe(true);
+    expect(await service.chatServer!.mask!({groupId: roomId, action: {type: 'digest'}}))
+      .toMatchObject({ok: false, errorCode: 'UNSUPPORTED_OPERATION'});
+    expect(fixture.handle.mock.calls.some(([route]) => route.includes('/mask'))).toBe(false);
   });
 
   // Regression: the paired reply is a content projection, not a full Message with author.kind.
@@ -2212,8 +2212,9 @@ describe('Chat Server result delivery and refresh', () => {
     expect(prompt.includes('Do not call another participant just to reply.')).toBe(!supported);
     expect(prompt.includes('An @name in your final reply wakes that teammate')).toBe(supported);
     const data = [...prompt.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)].map(match => JSON.parse(match[1])).find(block => block.participants);
-    expect(data.participants).toContainEqual({ name: 'Bot (Owner)', kind: 'bot', you: true, owner: 'Owner', description: 'Writes the code' });
-    expect(data.participants).toContainEqual({ name: 'Luna (Owner)', kind: 'bot', owner: 'Owner' });
+    expect(data.participants.columns).toEqual(['name', 'kind', 'owner', 'description', 'you']);
+    expect(data.participants.rows).toContainEqual(['Bot (Owner)', 'bot', 'Owner', 'Writes the code', true]);
+    expect(data.participants.rows).toContainEqual(['Luna (Owner)', 'bot', 'Owner']);
     expect(data.currentRequest.replyToMention).toBe(supported ? `@${requesterName} (Owner)` : undefined);
     await service.settleLaneTurn({ ...terminal, resultText: `${data.currentRequest.replyToMention ?? ''} review done. @Bot is done. @Cindy, anything to add?` });
     if (supported) expect(deliveries()[0][2].mentions).toEqual([requesterId, groupCindy]);
@@ -2672,6 +2673,9 @@ describe('Chat Server result delivery and refresh', () => {
         await service.settleLaneTurn({ ...terminal, sessionId: 'group-task-1', activeInputClientId: dispatched()[0]!.clientId, resultText: 'Hi' });
         const input = await sendQuoted();
         expect(input.attachments).toEqual([downloaded(1), downloaded(2)]);
+        const note = t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', 'lesson-1.docx');
+        expect(input.persistedContent).toContain(note);
+        expect(input.origin).toMatchObject({ displayText: input.persistedContent });
         expect(fixture.download.mock.calls).toEqual([[roomId, file(1).mediaId], [roomId, file(2).mediaId]]);
         expect(fixture.handle.mock.calls.filter(([route]) => route === `/conversations/${roomId}/messages/${message(1, peerId, '').id}`)).toHaveLength(1);
         expect(fixture.handle.mock.calls.some(([route]) => route === `/conversations/${roomId}/messages/${message(2, peerId, '').id}`)).toBe(false);
@@ -2767,21 +2771,31 @@ describe('Chat Server result delivery and refresh', () => {
       fixture.handle.mockImplementation((route, method, body) => route === '/me'
         ? { body: { actor: { id: selfId }, capabilities: { groupAssistant: 1, groupAssistantDevice: 1, groupTeammateMentions: 1 }, groupAssistantActorId: cindyId } }
         : original(route, method, body));
-      const words = 'Please review the teammates column';
-      const excerpt = '| name | teammates | | --- | --- | | A | B |';
-      const earlier = message(2, peerId, 'Use the draft');
-      const quote = buildBotGroupQuoteCard({ messageId: earlier.id, authorName: 'Ann', authorKind: 'user',
-        excerpt, attachmentCount: 0, attachmentName: null, sequence: 2 });
-      history.push(earlier, message(5, sender === 'user' ? selfId : teammateId, words, {
-        origin: sender === 'user' ? 'user' : 'bot', content: [{ type: 'text', text: words }, quote],
-      }));
-      queue.push(request(5));
-      await vi.advanceTimersByTimeAsync(12_000);
+      if (sender === 'user') {
+        const table = '| Item | Date |\n| --- | --- |\n| Review | Friday |';
+        history.push(message(1, peerId, table));
+        const quote = buildBotGroupQuoteCard({ messageId: history[0]!.id, authorName: 'Ann',
+          authorKind: 'user', excerpt: table.replaceAll('\n', ' '), sequence: 1, attachmentCount: 0, attachmentName: null });
+        history.push(message(5, selfId, '', { content: [quote, { type: 'text', text: '@Cindy When is the review?' }] }));
+        queue.push(request(5));
+        await vi.advanceTimersByTimeAsync(12_000);
+      }
+      else {
+        const original = message(1, peerId, '<Widget />');
+        history.push(original);
+        const quote = buildBotGroupQuoteCard({ messageId: original.id, authorName: 'Ann',
+          authorKind: 'user', excerpt: '<Widget />', sequence: 1, attachmentCount: 0, attachmentName: null });
+        history.push(message(5, teammateId, '', { origin: 'bot', content: [quote, { type: 'text', text: 'Please review the teammates column' }] }));
+        queue.push(request(5));
+        await vi.advanceTimersByTimeAsync(12_000);
+      }
       const [input] = dispatched();
-      const quoteLine = t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', excerpt);
-      const visible = `${words}\n\n${t('bots.groupChat.assistant.groupRecent')}\n${quoteLine}\nAnn：Use the draft`;
-      expect(input).toMatchObject({ persistedContent: visible, origin: { displayText: visible } });
-      expect(input!.message).toContain(visible);
+      expect(input!.message).toContain('Luna');
+      const expected = sender === 'user'
+        ? '@Cindy When is the review?\n\n' + t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', 'Item Date Review Friday')
+        : 'Please review the teammates column\n\n' + t('bots.groupChat.assistant.replyingTo').replace('{{name}}', 'Ann').replace('{{text}}', '<Widget />');
+      expect(input!.persistedContent).toBe(expected);
+      expect(input!.origin).toMatchObject({ displayText: expected });
       expect(input!.message).toContain('Answer whoever asked.');
       const context = [...input!.message.matchAll(/<untrusted-data>\n(.*?)\n<\/untrusted-data>/g)]
         .map(match => JSON.parse(match[1])).find(block => block.teammates);
@@ -2833,6 +2847,25 @@ describe('Chat Server result delivery and refresh', () => {
       expect(deliveries()[0][2].content[0]).toEqual({ type: 'text', text: 'Fixed in #12' });
       expect(fixture.requests.filter(r => r.url.includes('/executions/') && r.url.endsWith(request(5).id)).every(r => r.actor === cindyId)).toBe(true);
       expect(deps.abortLane).not.toHaveBeenCalled();
+    });
+
+    // 2026-11-26 incident: the selected engine was on another computer and the group only saw
+    // RUNTIME_ERROR. The task now opens on this computer's model; the reply that answers with it
+    // names the substitute once, ahead of the answer (bot-group-chat.md §9). Unit tier, faked host.
+    it('names the substitute model even when the task settles before dispatch returns', async () => {
+      deps.ensureGroupAssistantSession = vi.fn(async () => ({ ok: true as const, sessionId: 'group-task-1', created: true, modelFallback: { name: 'GPT Local' } }));
+      deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Room', state: 'idle' as const, model: 'GPT Local' }));
+      // #13163 review, unit: the earlier test only completed the turn after the
+      // status read. Settle an accepted input before dispatch even returns.
+      deps.dispatch = vi.fn(async input => {
+        await input.onAccepted();
+        expect(await service.settleLaneTurn({ ...terminal, sessionId: input.targetSessionId, activeInputClientId: input.clientId ?? null, resultText: 'Fixed in #12' })).toBe(true);
+        return { ok: true as const, targetSessionId: input.targetSessionId, wakeKind: 'queued' };
+      });
+      await ask(5, '@Cindy please fix it');
+      expect(deliveries()).toHaveLength(1);
+      expect(deliveries()[0][2].content[0]).toEqual({ type: 'text',
+        text: `${t('bots.groupChat.assistant.modelFallback').replaceAll('{{model}}', 'GPT Local')}\n\nFixed in #12` });
     });
 
     // #10163 review (Greptile): a teammate's reply that names Cindy keeps the human who started the chain
@@ -3116,6 +3149,7 @@ describe('Chat Server result delivery and refresh', () => {
       if (!result.ok) throw new Error(result.errorCode);
       expect(result.group.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
       expect(result.group.round.canStop).toBe(requester === selfId && status === 'running');
+      expect(result.group.teammateActivity?.phase).toBe('idle');
     });
 
     // The member list shows the group's Cindy as plain Cindy with Cindy's artwork, nobody's teammate;

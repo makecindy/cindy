@@ -734,4 +734,30 @@ describe('resolveImSessionDefaults', () => {
       effort: 'medium', // clamped using the chat copy's defaultEffort, not silently passed through
     });
   });
+
+  // 回归：IM 默认设置为插件引擎(acp)时，resolveImSessionDefaults 必须直通 acp 路由(含远程 agentDeviceId)，
+  // 不走内置供应商目录回退。最小失败输入与 tier：unit，saved default 为 acp。
+  it('resolves a saved plugin engine (acp) default directly without built-in catalog fallback', async () => {
+    mocks.readImDefaultSettings.mockReturnValue({
+      agentKind: 'acp',
+      agents: {
+        'claude-code': { providerId: null, model: 'claude-opus-4-8', effort: 'xhigh' },
+        codex: { providerId: null, model: 'codex/gpt-5.5', effort: 'high' },
+        acp: {
+          providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+          model: 'gemini-4-neon',
+          effort: 'high',
+          agentDeviceId: 'mini',
+        },
+      },
+    });
+
+    await expect(resolveImSessionDefaults(config)).resolves.toMatchObject({
+      agentKind: 'acp',
+      providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+      model: 'gemini-4-neon',
+      effort: 'high',
+      agentDeviceId: 'mini',
+    });
+  });
 });

@@ -9,7 +9,7 @@ import { withAvailabilityPolicyLock, rememberAvailabilityShare } from './provide
 import { consistentShareAvailabilityModels, type ShareAvailabilityModel as Model } from './providerShareAvailabilityModels.js';
 /** Offline-owner admission. This contains public identities and grants, never provider credentials. */
 import { createPeerTransferCooldown, parseProviderSharePeer, ProviderShareScopeChangedError, type ProviderShareOwned } from '@cindy/device-link';
-import { remoteInvocationModels, type AgentKind, type CatalogModel, type ProviderView } from '@cindy/model-providers';
+import { remoteInvocationModels, supportsSubscriptionFastPolicy, type AgentKind, type CatalogModel, type ProviderView } from '@cindy/model-providers';
 import { getDeviceId } from '../authManager.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { captureProviderManagementScope } from '../provider-group/managementScope.js';
@@ -83,6 +83,19 @@ async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<v
         }
         if (models.length) policy.executors.push({ deviceId: member.agentDeviceId, providerId: member.providerId, models, limit: member.limit });
       }
+      const fast = groupFastPolicyStore.outgoing()[share.providerId];
+      policy.fastRevision = fast?.revision ?? 0;
+      policy.allowFast = fast?.allowFast === true && group.allowFast !== false;
+      // Describe the same effective restriction sent to executors, including
+      // offline registrations. Keep the source catalogs intact so allowing Fast
+      // again cannot hide genuine per-executor capability differences.
+      if (supportsSubscriptionFastPolicy(source) && !policy.allowFast) {
+        policy.executors = policy.executors.map(executor => ({ ...executor,
+          models: executor.models.map(model => ({ ...model,
+            metadata: { ...model.metadata, supportsFastMode: false, supportsUltrafastMode: false },
+          })),
+        }));
+      }
       policy.executors = consistentShareAvailabilityModels(policy.executors);
       const ids = [...new Set(policy.executors.flatMap(row => row.models.map(model => model.id)))];
       policy.members = share.members.filter(member => member.status === 'active'
@@ -91,9 +104,6 @@ async function publishUnlocked(shares: readonly ProviderShareOwned[]): Promise<v
         memberId: member.memberId, joinedAt: Date.parse(member.joinedAt),
         models: ids.filter(id => offered.has(id) && remoteModelAccess.allowsDelegatedExecution(share.providerId, id, member.memberId)),
       }));
-      const fast = groupFastPolicyStore.outgoing()[share.providerId];
-      policy.fastRevision = fast?.revision ?? 0;
-      policy.allowFast = fast?.allowFast === true && group.allowFast !== false;
     }
     // CAS prevents a slow catalog read from overwriting a later published revocation.
     policy.revision = current.revision;

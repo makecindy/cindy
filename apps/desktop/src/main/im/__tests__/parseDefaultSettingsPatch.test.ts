@@ -96,4 +96,32 @@ describe('parseImDefaultSettingsPatch', () => {
     expect(Object.keys(parsed).sort()).toEqual(Object.keys(IM_DEFAULT_SETTINGS).sort());
     expect(parsed).toEqual(nonDefault);
   });
+
+  // 回归：IM 新对话默认模型支持插件引擎(acp)，覆盖本地/远程插件引擎保存、清空及非法 providerId/model 校验。
+  // 最小失败输入与 tier：unit，agents.acp 带合法 acp-plugin: providerId / 置空清除 / 传普通 providerId。
+  it('parses, clears, and validates plugin engine (acp) default routes', () => {
+    const pluginRoute = {
+      providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+      model: 'gemini-4-neon',
+      effort: 'high' as const,
+      agentDeviceId: 'mini',
+    };
+    expect(parseImDefaultSettingsPatch({ agentKind: 'acp', agents: { acp: pluginRoute } })).toEqual({
+      agentKind: 'acp',
+      agents: { acp: pluginRoute },
+    });
+    expect(
+      parseImDefaultSettingsPatch({ agents: { acp: { providerId: null, model: '', effort: '' } } }),
+    ).toEqual({
+      agents: { acp: { providerId: null, model: '', effort: '' } },
+    });
+    expect(() =>
+      parseImDefaultSettingsPatch({ agents: { acp: { providerId: 'openai', model: 'gpt-5', effort: '' } } }),
+    ).toThrow(/providerId/);
+    expect(() =>
+      parseImDefaultSettingsPatch({
+        agents: { acp: { providerId: 'acp-plugin:_ns__local__agy-acp:agy', model: '', effort: '' } },
+      }),
+    ).toThrow(/model/);
+  });
 });

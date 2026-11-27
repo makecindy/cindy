@@ -11,6 +11,7 @@ import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth
 import { recordSessionTurnSpend, recordSessionTurnTokens } from '../sessionSpendBroadcaster.js';
 import { piUsageToTokens, recordSchedulerTurnCost, recordTurnUsageOnMessage } from '../turnCostBroadcaster.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
+import { recordProviderAccountActivity } from '../maker-host/provider-account-usage.js';
 import { getGatewayModelPricingForModel } from '../usage/modelPricing.js';
 import { triggerClaudeSubscriptionUsageRefresh, triggerCodexAccountUsageRefresh, triggerXaiSubscriptionUsageRefresh } from './usage.js';
 import { rebroadcastTodaySpend, recordModelTurnUsage, recordTurnSpend } from '../usageBroadcaster.js';
@@ -25,6 +26,7 @@ bindTurnUsagePorts({
   recordSchedulerTurnCost: (...args) => recordSchedulerTurnCost(...args),
   recordTurnUsageOnMessage: (...args) => recordTurnUsageOnMessage(...args),
   triggerClaudeAccountUsageRefresh: (...args) => triggerClaudeAccountUsageRefresh(...args),
+  recordProviderAccountActivity: (...args) => recordProviderAccountActivity(...args),
   getGatewayModelPricingForModel: (...args) => getGatewayModelPricingForModel(...args),
   triggerClaudeSubscriptionUsageRefresh: (...args) => triggerClaudeSubscriptionUsageRefresh(...args),
   triggerCodexAccountUsageRefresh: (...args) => triggerCodexAccountUsageRefresh(...args),

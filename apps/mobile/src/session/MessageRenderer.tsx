@@ -63,6 +63,10 @@ import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
 import { createContext, Fragment, memo, useId, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type Dispatch, type ReactElement, type ReactNode, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 import { MessageLoadingImage, MessageImagePlaceholder } from './MessageLoadingImage';
+import {
+  ATTACHMENT_INTRINSIC_CACHE_MAX,
+  attachmentIntrinsicSizeCache,
+} from './attachmentIntrinsicSizeCache';
 import { InputHandoffRecordRow } from '@/inputHandoff/InputHandoffRecordRow';
 import {
   ArrowLeftRight,
@@ -7356,10 +7360,15 @@ export function AttachmentStrip({
           兜底命中时替换成 file:// 直接渲染(payload 同源替换,点开查看器同图)。 */}
       {imageAttachments.map((item, index) => (
         <MediaPreview
-          key={`${item.kind}:${item.uri ?? item.name}:${index}:${imageReloadKeys?.[index] ?? 0}`}
+          key={`${item.kind}:${item.cacheKey ?? item.uri ?? item.name}:${index}:${imageReloadKeys?.[index] ?? 0}`}
           label={item.name}
           layout={layout}
-          media={{ kind: 'image', url: item.uri ?? '', previewable: item.previewable }}
+          media={{
+            kind: 'image',
+            url: item.uri ?? '',
+            previewable: item.previewable,
+            ...(item.cacheKey ? { cacheKey: item.cacheKey } : {}),
+          }}
           localPreview={clientId ? getImagePreview?.(clientId, index, item.name, undefined, item.sha256, item.uri) : undefined}
           onOpen={onOpen ? () => onOpen(buildAttachmentPayload(applySentAttachmentThumbOverlay(item))) : undefined}
           onResolveRemoteMedia={onResolveRemoteMedia}
@@ -7508,13 +7517,10 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
 }
 
 /**
- * 附件图原图尺寸的模块级缓存(键 = 源 media.url,跨 presign 刷新稳定)。
+ * 附件图原图尺寸的模块级缓存(键 = media.cacheKey ?? 源 media.url,跨 presign 刷新稳定)。
  * FlatList 虚拟化反复 unmount/remount MediaPreview,组件态存不住尺寸;
  * 到达上限只逐出最旧记录；清空整表会让已打开的图片再次经历占位尺寸 → 实际尺寸。
  */
-const attachmentIntrinsicSizeCache = new Map<string, AttachmentImageIntrinsicSize>();
-const ATTACHMENT_INTRINSIC_CACHE_MAX = 500;
-
 function rememberAttachmentIntrinsicSize(size: AttachmentImageIntrinsicSize, ...uris: string[]) {
   for (const uri of uris) {
     attachmentIntrinsicSizeCache.delete(uri);
@@ -7616,12 +7622,15 @@ function MediaPreview({
   const autoResolve = !localUri && shouldAutoResolveMediaThumbnail(media, !!onResolveRemoteMedia);
   const [resolveState, setResolveState] = usePreviewState<MediaThumbnailResolveState>({ status: 'idle' });
   const resolvedSourceRef = useRef<string | null>(null);
+  const intrinsicSizeKey = media.cacheKey ?? media.url;
   // attachment 变体的原图尺寸。初值走模块级缓存:FlatList 虚拟化会反复
   // unmount/remount 本组件,不缓存的话每次划回都重新 getSize、重演一次
   // 占位帧 → 真图尺寸的切换(规则 7 的跳变)。
   const [intrinsicSize, setIntrinsicSize] = usePreviewState<AttachmentImageIntrinsicSize | null>(
-    () => attachmentIntrinsicSizeCache.get(localPreview?.uri ?? media.url)
-      ?? attachmentIntrinsicSizeCache.get(localCandidate ?? media.url) ?? null,
+    () => attachmentIntrinsicSizeCache.get(localPreview?.uri ?? intrinsicSizeKey)
+      ?? attachmentIntrinsicSizeCache.get(localCandidate ?? intrinsicSizeKey)
+      ?? (media.cacheKey ? attachmentIntrinsicSizeCache.get(media.url) : undefined)
+      ?? null,
   );
   // Image 加载失败(典型:presign 过期)只强制重取一次,防 onError↔重取死循环。
   const imageRetryUsedRef = useRef(false);
@@ -7693,9 +7702,9 @@ function MediaPreview({
     }) => {
     if (!thumbUri || measuredThumbUri.current === thumbUri || !(width > 0 && height > 0)) return;
     measuredThumbUri.current = thumbUri;
-    rememberAttachmentIntrinsicSize({ width, height }, media.url);
+    rememberAttachmentIntrinsicSize({ width, height }, intrinsicSizeKey);
     setIntrinsicSize({ width, height });
-  }, [media.url, setIntrinsicSize, thumbUri]);
+  }, [intrinsicSizeKey, setIntrinsicSize, thumbUri]);
 
   if (media.kind === 'audio') {
     const card = (
@@ -7764,8 +7773,8 @@ function MediaPreview({
           <MessageLoadingImage
             // 尺寸未知时先 contain 进最大框，解码后收敛到真实比例。
             contentFit="contain"
-            recyclingKey={thumbUri}
-            source={{ uri: thumbUri }}
+            recyclingKey={media.cacheKey ?? thumbUri}
+            source={media.cacheKey ? { uri: thumbUri, cacheKey: media.cacheKey } : { uri: thumbUri }}
             onLoad={handleImageLoad}
             onError={handleImageError}
             style={[styles.attachmentImage, displaySize]}
@@ -7795,8 +7804,8 @@ function MediaPreview({
         {uri ? (
           <MessageLoadingImage
             contentFit="cover"
-            recyclingKey={uri}
-            source={{ uri }}
+            recyclingKey={media.cacheKey ?? uri}
+            source={media.cacheKey ? { uri, cacheKey: media.cacheKey } : { uri }}
             onError={handleImageError}
             style={[styles.imagePreview, frameSize]}
           />

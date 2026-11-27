@@ -39,6 +39,7 @@ import {
   dispatchVoiceInputEvent,
 } from '@/voice-input/eventScope';
 import { useSpeakerFilterNotice } from '@/voice-input/useSpeakerFilterNotice';
+import type { RecordingSamplesRef } from '@/voice-input/ComposerRecordingBars';
 import type { WebMicAudioEngine } from '@/voice-input/WebMicAudioEngine';
 import { useTranslation } from 'react-i18next';
 
@@ -76,6 +77,7 @@ export function useAskUserDictation(
   lastError: string | null;
   /** The voiceprint filter just muted someone else's speech in this run. */
   speakerFiltered: boolean;
+  samplesRef: RecordingSamplesRef;
   start: () => boolean;
   stop: () => Promise<boolean>;
   cancel: () => Promise<void>;
@@ -105,6 +107,7 @@ export function useAskUserDictation(
   const startReadyRef = useRef<Promise<void>>(Promise.resolve());
   const mutedRef = useRef(false);
   const pendingMuteRef = useRef<Promise<void> | null>(null);
+  const samplesRef = useRef<RecordingSamplesRef['current']>(null);
   targetRef.current = target;
   optionsRef.current = options;
 
@@ -340,6 +343,7 @@ export function useAskUserDictation(
           cueGate.release();
           if (attemptRef.current === attempt && stateRef.current === 'listening') setCaptureReady(true);
         },
+        onSamples: (pcm) => samplesRef.current?.(pcm),
         appendAudioChunk: (chunk) => { api.appendAudio(chunk); },
         onInterrupted: (message) => { if (attemptRef.current === attempt) void fail(message); },
         onStateChange: () => undefined,
@@ -546,6 +550,7 @@ export function useAskUserDictation(
     liveText,
     lastError,
     speakerFiltered,
+    samplesRef,
     start,
     stop,
     cancel,
