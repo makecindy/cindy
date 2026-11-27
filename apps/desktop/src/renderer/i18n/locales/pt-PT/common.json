@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "Não é possível retomar no computador original",
-    "description": "Escolha outro computador ou fornecedor para continuar com uma passagem de contexto. As mensagens são mantidas, mas o estado completo da execução no computador original não é transferido.",
-    "choose": "Escolher outro computador",
+    "description": "Abra o seletor de modelos para mudar para outro computador, fornecedor ou modelo e continuar com uma passagem de contexto. As mensagens são mantidas, mas o estado completo da execução no computador original não é transferido.",
+    "choose": "Trocar modelo ou fornecedor",
     "cancel": "Ficar aqui",
     "stage": {
       "owner": "Falha ao contactar o computador que partilha.",

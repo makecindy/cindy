@@ -2960,7 +2960,7 @@ function CCAgentSessionContent({
     agentKind: session?.agentKind,
     active: viewVisible && ownsHardwareTaskActions && !readOnly && !botChatIdentity
       && !isStreaming && !agentStatus.isRunning && !errorIsRecoverable
-      && !syntheticContinuationPending && !usageLimitWait,
+      && !syntheticContinuationPending && !usageLimitWait && !activeReconnect,
   });
   // 模型组(model-groups.md §6.1)：经路线建的本机任务撞了配额，横幅多给一个「换到下一个来源继续」。
   // 只在撞配额的横幅挂着时问一次；点了走输入框里选择器同一条换模型路径，换成了再走横幅原有的重试。

@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "Impossible de reprendre sur l’ordinateur d’origine",
-    "description": "Choisissez un autre ordinateur ou fournisseur pour poursuivre avec un transfert de contexte. Vos messages restent, mais l’état d’exécution complet de l’ordinateur d’origine n’est pas transféré.",
-    "choose": "Choisir un autre ordinateur",
+    "description": "Ouvrez le sélecteur de modèles pour passer à un autre ordinateur, fournisseur ou modèle et poursuivre avec un transfert de contexte. Vos messages restent, mais l’état d’exécution complet de l’ordinateur d’origine n’est pas transféré.",
+    "choose": "Changer de modèle ou de fournisseur",
     "cancel": "Rester ici",
     "stage": {
       "owner": "Échec du contact avec l’ordinateur de partage.",

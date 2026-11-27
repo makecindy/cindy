@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "No se puede reanudar en la computadora original",
-    "description": "Elige otra computadora u otro proveedor para continuar con un traspaso de contexto. Tus mensajes se conservan, pero no se transfiere el estado de ejecución completo de la computadora original.",
-    "choose": "Elegir otra computadora",
+    "description": "Abre el selector de modelos para cambiar a otra computadora, proveedor o modelo y continuar con un traspaso de contexto. Tus mensajes se conservan, pero no se transfiere el estado de ejecución completo de la computadora original.",
+    "choose": "Cambiar modelo o proveedor",
     "cancel": "Permanecer aquí",
     "stage": {
       "owner": "Error al contactar con la computadora que comparte.",
