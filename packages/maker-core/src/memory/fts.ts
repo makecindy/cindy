@@ -148,6 +148,9 @@ export class MemoryFts {
     if (opts.type) {
       sql += ` AND type = ?`;
       params.push(opts.type);
+    } else if (opts.excludeTypes && opts.excludeTypes.length > 0) {
+      sql += ` AND type NOT IN (${opts.excludeTypes.map(() => '?').join(', ')})`;
+      params.push(...opts.excludeTypes);
     }
     sql += ` ORDER BY score LIMIT ?`;
     params.push(limit);
@@ -226,14 +229,23 @@ export class MemoryFts {
     if (opts.type) {
       sql += ` AND type = ?`;
       params.push(opts.type);
+    } else if (opts.excludeTypes && opts.excludeTypes.length > 0) {
+      sql += ` AND type NOT IN (${opts.excludeTypes.map(() => '?').join(', ')})`;
+      params.push(...opts.excludeTypes);
     }
     if (excludeMatch !== undefined) {
+      const subTypeClause = opts.type
+        ? 'AND type = ?'
+        : opts.excludeTypes && opts.excludeTypes.length > 0
+          ? `AND type NOT IN (${opts.excludeTypes.map(() => '?').join(', ')})`
+          : '';
       sql += ` AND filename NOT IN (
         SELECT filename FROM ${TABLE} WHERE ${TABLE} MATCH ? AND filename IS NOT NULL
-        ${opts.type ? 'AND type = ?' : ''}
+        ${subTypeClause}
       )`;
       params.push(excludeMatch);
       if (opts.type) params.push(opts.type);
+      else if (opts.excludeTypes && opts.excludeTypes.length > 0) params.push(...opts.excludeTypes);
     }
     // 候选池截断: 先覆盖词数, 再粗排分, 同分时正文短的优先 (密度高的更像精确命中)。
     sql +=

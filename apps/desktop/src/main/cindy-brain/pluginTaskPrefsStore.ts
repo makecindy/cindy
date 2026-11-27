@@ -71,6 +71,8 @@ export interface PluginTaskConfig {
    * 默认/errand 复用语义。只随完整模型组合保存,单独出现视为脏数据丢弃。
    */
   agentDeviceId?: string | null;
+  /** 可选智能路由 id；与上面的具体模型字段成对保存，旧插件或路由失效时回落具体模型。 */
+  modelGroup?: string;
   permissionMode?: GhostErrandPermissionMode;
   /** 绝对路径(用户亲选的项目目录);缺省 = 专属对话目录。 */
   workingDir?: string;
@@ -121,6 +123,9 @@ function normalizeConfig(raw: unknown): PluginTaskConfig {
   }
   if ((r.agentDeviceId === null || isPluginTaskAgentDeviceId(r.agentDeviceId)) && cfg.agentKind && cfg.model && cfg.providerId) {
     cfg.agentDeviceId = r.agentDeviceId;
+  }
+  if (typeof r.modelGroup === 'string' && r.modelGroup.trim().length > 0 && r.modelGroup.length <= 128) {
+    cfg.modelGroup = r.modelGroup.trim();
   }
   if (
     typeof r.permissionMode === 'string' &&
@@ -174,7 +179,7 @@ export function inspectGhostErrandPrefs(root: string) {
     if (isSettingsRecord(raw.errand)) for (const config of Object.values(raw.errand)) {
       if (!isSettingsRecord(config)) throw new Error('invalid errand preferences');
       const normalized = normalizeConfig(config);
-      for (const key of ['agentKind', 'model', 'effort', 'fastMode', 'providerId', 'permissionMode', 'workingDir']) {
+      for (const key of ['agentKind', 'model', 'effort', 'fastMode', 'providerId', 'modelGroup', 'permissionMode', 'workingDir']) {
         if (Object.hasOwn(config, key) && !Object.hasOwn(normalized, key)) throw new Error('invalid errand preference');
       }
     }
@@ -191,7 +196,7 @@ export function setPluginTaskConfigValidator(validator: (config: PluginTaskConfi
 export async function validatePluginTaskConfig(raw: unknown): Promise<void> {
   const config = normalizeConfig(raw);
   if (raw && typeof raw === 'object') {
-    for (const key of ['agentKind', 'model', 'providerId', 'agentDeviceId', 'effort', 'fastMode', 'permissionMode', 'workingDir'] as const) {
+    for (const key of ['agentKind', 'model', 'providerId', 'agentDeviceId', 'modelGroup', 'effort', 'fastMode', 'permissionMode', 'workingDir'] as const) {
       if ((raw as Record<string, unknown>)[key] !== undefined && config[key] === undefined) {
         throw new Error(`任务配置 ${key} 无效，请重新选择`);
       }

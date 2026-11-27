@@ -7,7 +7,7 @@
  * 成员可以是本机的供应商，也可以是其他电脑上的或别人分享来的。
  */
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ArrowDown, ArrowUp, Waypoints, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Sparkles, X } from 'lucide-react';
 import { useInRouterContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -413,7 +413,7 @@ export function SourceRouteRow({ route, config, options, onOpen }: {
     <SettingsRow
       media
       data-source-route={route.id}
-      lead={first ? <ProviderLead provider={first.provider} /> : <SettingsRowIcon><Waypoints size={16} aria-hidden /></SettingsRowIcon>}
+      lead={first ? <ProviderLead provider={first.provider} /> : <SettingsRowIcon><Sparkles size={16} aria-hidden /></SettingsRowIcon>}
       title={route.name}
       tag={route.hidden ? t('modelGroups.auto.hiddenTag') : route.auto ? t('modelGroups.sources.autoTag') : undefined}
       hint={[
@@ -595,7 +595,7 @@ export function SourceRouteDetail({ route, config, options, save, onBack, onSwit
                     lead={
                       <span className="flex items-center gap-3">
                         <span className="w-4 text-center text-12 tabular-nums leading-[1.33] text-[var(--text-tertiary)]">{index + 1}</span>
-                        {option ? <ProviderLead provider={option.provider} /> : <SettingsRowIcon><Waypoints size={16} aria-hidden /></SettingsRowIcon>}
+                        {option ? <ProviderLead provider={option.provider} /> : <SettingsRowIcon><Sparkles size={16} aria-hidden /></SettingsRowIcon>}
                       </span>
                     }
                     title={label}

@@ -96,7 +96,7 @@ describe('session-level origin persistence and privacy boundaries', () => {
     expect(parseSessionCreatedBy({ kind: 'session', sessionId: '' })).toBeNull();
   });
 
-  it('strips createdBySession and orcaRemoteLead from shared-task guest reads and pushes', () => {
+  it('strips createdBySession, orcaRemoteLead, and modelGroupBinding from shared-task guest reads and pushes', () => {
     const row = {
       id: 'shared-1',
       title: 'Shared task',
@@ -108,17 +108,26 @@ describe('session-level origin persistence and privacy boundaries', () => {
         leadTitle: 'Secret team',
         workerLabel: 'worker-a',
       },
+      modelGroupBinding: {
+        selection: { type: 'route', id: 'private-route' },
+        routeName: 'Private Pool',
+        autoSwitch: true,
+      },
     };
-    expect(redactSessionRowForSharedGuest(row)).toMatchObject({
+    const redactedRow = redactSessionRowForSharedGuest(row);
+    expect(redactedRow).toMatchObject({
       id: 'shared-1',
       createdBySession: null,
       orcaRemoteLead: null,
     });
+    expect(redactedRow).not.toHaveProperty('modelGroupBinding');
     expect(redactSharedGuestPush('local-db:sessions:created', { session: row })).toEqual({
       session: { id: 'shared-1', title: 'Shared task', createdBySession: null, orcaRemoteLead: null },
     });
-    expect(redactSharedGuestPush('local-db:sessions:patched', { sessionId: 'shared-1', patch: { createdBySession: row.createdBySession } }))
-      .toEqual({ sessionId: 'shared-1', patch: { createdBySession: null } });
+    expect(redactSharedGuestPush('local-db:sessions:patched', {
+      sessionId: 'shared-1',
+      patch: { createdBySession: row.createdBySession, modelGroupBinding: row.modelGroupBinding },
+    })).toEqual({ sessionId: 'shared-1', patch: { createdBySession: null } });
   });
 
   it('preserves valid orcaRemoteLead and createdBySession in offline mirror cache and drops invalid payloads', () => {

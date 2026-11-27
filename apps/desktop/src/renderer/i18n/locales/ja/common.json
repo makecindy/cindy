@@ -5486,6 +5486,27 @@
           "confirm": "リセット",
           "cancel": "キャンセル"
         }
+      },
+      "tidy": {
+        "label": "メモリとスキルの整理",
+        "description": "バディのメモリやスキルをバックグラウンドで定期的に重複整理・簡潔化します。十分な活動があるときだけ実行され、変更がなければコストはかからず、サイドバーに余分なタスクも残りません。",
+        "cadenceLabel": "整理の頻度",
+        "cadences": {
+          "weekly": "毎週",
+          "biweekly": "2週間ごと",
+          "monthly": "毎月",
+          "off": "オフ（手動のみ）"
+        },
+        "runNow": "今すぐ整理",
+        "running": "整理中…",
+        "toast": {
+          "cadenceSaved": "整理の頻度を更新しました",
+          "cadenceFailed": "整理の頻度の更新に失敗しました",
+          "updated": "整理が完了しました（{{count}}件を更新）",
+          "idle": "整理が必要な項目はありませんでした",
+          "skipped": "整理対象のバディがありません",
+          "failed": "メモリの整理に失敗しました"
+        }
       }
     },
     "subagentModels": {
@@ -8779,6 +8800,8 @@
         "nodeRuntime": "同梱された Node プログラムをこのコンピューターで実行できます",
         "nodeMcp": "同梱された stdio MCP をこのコンピューターで実行できます",
         "nodeRuntimeDetail": "高リスク:あなたのユーザーアカウントと同じ権限で、ローカルファイルの読み書き、ネットワークアクセス、他のプログラムの起動ができます。Cindy のブラウザーサンドボックスでは隔離できません。",
+        "nodeInheritEnv": "ローカル環境を継承",
+        "nodeInheritEnvDetail": "高リスク: プラグインの Node プログラムとその子プロセスは、Cindy のすべての環境変数を受け取ります。プロキシや証明書の設定に加え、環境変数に含まれる API キーやトークンなどの機密情報も渡されます。",
         "nodeSecret": "保存済みの認証情報「{{name}}」をローカル Node プログラムに渡せます",
         "nodeSecretDetail": "Cindy は暗号化して保管し、以下で宣言された Worker メソッドの実行時だけ一時的に注入します。Node プログラムは平文を受け取り、ブラウザー側のプラグインコードや Agent パラメーターへ返したり、ログやファイルに保存したりできるため、信頼できるプラグインだけをインストールしてください。",
         "nodeResident": "Node プログラムをバックグラウンドで常駐実行できます",
@@ -9876,6 +9899,49 @@
         "identity": "ディレクトリの確認が必要",
         "failed": "クリーンアップ未完了",
         "pending": "待機中"
+      },
+      "remote": {
+        "title": "クリーンアップ待ちのリモート worktree",
+        "description": "未完了のリモート worktree がある場合、クリーンアップが完了するかディレクトリを保持してブロック解除するまで、同じデバイスで新しい worktree を作成できません。",
+        "storageUnreadable": "リモート worktree のクリーンアップ記録を読み込めませんでした。ローカルストレージが回復するまで新規作成を一時停止しています。",
+        "sessionLabel": "タスク {{id}}",
+        "keepUnblock": "ディレクトリを保持して解除",
+        "confirmKeepTitle": "リモート worktree ディレクトリを保持してブロック解除しますか？",
+        "confirmKeepDescription": "ローカルのクリーンアップ記録を消去し、{{device}} で新しい worktree を作成できるようにします。リモートデバイス上のディレクトリは削除されません。",
+        "confirmKeepConfirm": "保持して解除",
+        "retrySuccess": "リモート worktree をクリーンアップしました。",
+        "keepSuccess": "クリーンアップ記録を消去しました。新しいリモート worktree を作成できます。",
+        "keepFailed": "クリーンアップ記録を消去できませんでした。更新してから再試行してください。",
+        "phase": {
+          "reserved": "作成未確認",
+          "precreated": "クリーンアップ待ち",
+          "session-create-started": "タスク作成未確認"
+        },
+        "failure": {
+          "offline": "デバイスに到達できないかタイムアウトしました",
+          "in-progress": "作成またはチェックアウト中",
+          "preserved": "リモートデバイスによって保持されました",
+          "mismatch": "クリーンアップキーが一致しません",
+          "unsupported": "リモート Cindy バージョン非対応",
+          "create-started": "タスク帰属の確認待ち",
+          "storage": "ローカル記録が利用できません",
+          "unknown": "クリーンアップを完了できませんでした"
+        },
+        "preserveReason": {
+          "claimed": "すでにタスクで使用されています",
+          "in-progress": "作成またはチェックアウト中",
+          "dirty": "未コミットの変更があります",
+          "keep-sentinel": "保持マーカー（.worktree-keep）があります",
+          "live-reference": "他のタスクまたはプロセスで使用中",
+          "branch-mismatch": "ブランチまたはディレクトリの状態が変化しました",
+          "include-files-changed": "ローカル設定ファイルが変更されました",
+          "ignored-files": "再生成できない無視ファイルを含みます",
+          "ephemeral": "管理プールディレクトリ",
+          "pending-transfer": "移行中",
+          "invalid-quarantine": "隔離状態が無効です",
+          "quarantine-failed": "ディレクトリの隔離に失敗しました",
+          "remove-failed": "ディレクトリの削除に失敗しました"
+        }
       }
     },
     "awayFromComputer": {
@@ -15348,6 +15414,7 @@
         "diverged": "ローカルとリモートのブランチに異なる更新があります。違いを解消してから切り替えてください",
         "missing": "選択したブランチは存在しません。一覧を更新してください。",
         "git": "操作を完了できませんでした。現在のブランチと保存した変更を確認してから再試行してください",
+        "timeout": "Git の状態確認がタイムアウトしました。大規模なリポジトリや未コミットの変更が多いと時間がかかります。変更を整理するか、worktree を使ってください。",
         "savedMissing": "保存した変更はもうありません",
         "undoUnavailable": "この切り替えはもう元に戻せません"
       },
@@ -17106,6 +17173,22 @@
       "piRemoteUnsupported": "Pi はローカルでのみ動作し、SSH リモートホストは利用できません。このホストを使うには Claude または Codex に切り替えてください。",
       "localWorktreeCleanupPending": "前回のローカル worktree セッションのクリーンアップが完了していません。完了後に再試行してください。",
       "remoteWorktreeCleanupPending": "前回のリモート worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。",
+      "remoteWorktreeCleanupOpenSettings": "worktree のクリーンアップ",
+      "remoteWorktreeCleanup": {
+        "inProgress": "前回のリモート worktree はまだ作成またはチェックアウト中です。しばらく待ってから再試行するか、「設定 → ストレージ」で確認してください。",
+        "preserved": "リモートデバイスが前回の worktree を保持しました（未コミットの変更や使用中の可能性があります）。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "preservedDirty": "前回のリモート worktree に未コミットの変更があるため、自動削除が拒否されました。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "preservedKeepSentinel": "前回のリモート worktree に保持マーカー（.worktree-keep）があるため、自動削除が拒否されました。「設定 → ストレージ」で管理してください。",
+        "preservedLiveReference": "前回のリモート worktree が他のタスクまたはプロセスで使用中のため、自動削除が拒否されました。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "preservedBranchMismatch": "前回のリモート worktree のブランチまたはディレクトリ状態を確認できませんでした。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "preservedIncludeFilesChanged": "前回のリモート worktree のローカル設定ファイルが変更されているため、自動削除が拒否されました。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "preservedIgnoredFiles": "前回のリモート worktree に再生成できない無視ファイルが含まれているため、自動削除が拒否されました。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "preservedRemoveFailed": "リモートデバイスで前回の worktree ディレクトリを削除できませんでした。権限や開いているファイルを確認するか、「設定 → ストレージ」でブロック解除してください。",
+        "mismatch": "リモートデバイスが worktree のクリーンアップキーを拒否しました。「設定 → ストレージ」で再試行またはブロック解除してください。",
+        "unsupported": "リモートデバイスの Cindy のバージョンが自動クリーンアップに対応していません。更新するか、「設定 → ストレージ」でブロック解除してください。",
+        "createStarted": "前回のリモートタスク作成の確認を受信できませんでした。デバイスを再接続して確認するか、「設定 → ストレージ」でブロック解除してください。",
+        "storage": "ローカルのリモート worktree クリーンアップ記録を読み書きできませんでした。「設定 → ストレージ」を確認してください。"
+      },
       "remoteProviderUpdating": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
       "remoteProviderUnsupported": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
       "remoteNativeOauthUnavailable": "リモートタスクでは Claude サブスクリプションを使用できません。ゲートウェイまたは API キーのモデルを選択してください",
@@ -19046,6 +19129,24 @@
         "reconnectFailed": "再接続できません。空き枠を確認して再試行してください。"
       },
       "pluginTitle": "プラグインイベントで実行"
+    },
+    "pause": {
+      "prBarTitle": "一時停止中の PR フォローアップ {{count}} 件",
+      "viewPaused": "表示",
+      "resumeAll": "すべて再開",
+      "cleanMerged": "マージ済みを整理",
+      "checking": "確認中…",
+      "resumeAllConfirmTitle": "一時停止中の PR フォローアップ {{count}} 件を再開しますか？",
+      "resumeAllConfirmDescription": "この表示にある一時停止中の PR 自動化をすべて再開し、次回の確認時刻を再計算します。",
+      "resumeAllConfirmAction": "すべて再開",
+      "resumeAllDone": "PR フォローアップ {{count}} 件を再開しました",
+      "resumeAllPartial": "PR フォローアップ {{resumed}} 件を再開しました（{{failed}} 件失敗）",
+      "noMergedFound": "一時停止中の PR 自動化にマージ済みまたはクローズ済みの PR はありません",
+      "cleanMergedConfirmTitle": "完了した PR 自動化 {{count}} 件を削除しますか？",
+      "cleanMergedConfirmDescription": "これらの一時停止中の自動化が追跡する PR はすでにマージ済みまたはクローズ済みです: {{names}}",
+      "cleanMergedConfirmAction": "削除",
+      "cleanMergedDone": "完了した PR 自動化 {{count}} 件を削除しました",
+      "checkFailed": "現在 PR の状態を確認できません"
     }
   },
   "issueTracker": {
@@ -23166,7 +23267,10 @@
       "chooseUnavailable": "「{{name}}」には今使えるソースがないため、選択しませんでした。",
       "mergedLabel_other": "{{name}} · ルート（ソース {{count}} 件）",
       "routeDecides": "このタスクで使うソースはルート「{{name}}」が決めます",
-      "quotaOf": "クォータ：{{name}}"
+      "quotaOf": "クォータ：{{name}}",
+      "managedBy": "「{{name}}」で継続管理中",
+      "detach": "管理を解除",
+      "detached": "スマートルーティングの管理を解除しました。現在のモデルを維持します。"
     },
     "why": {
       "expiringQuota": "残り {{left}}%、{{reset}} にリセットされるため先に使用",
@@ -23204,7 +23308,7 @@
       "newRoute": "ルートを作成",
       "newRouteName": "新しいルート",
       "routesEmpty": "ルートはまだありません。作成してソースをいくつか追加してください。",
-      "scopeNote": "スマートルーティングは、このコンピューターのタスクで使われます。新しいタスクは開始時にソースをひとつ決めます。進行中のタスクで選ぶと、その場で一度だけ切り替わり、その後は自動では変わりません。",
+      "scopeNote": "スマートルーティングはこのコンピューターや対応入口のタスクを継続的に管理します。開始時やタスク途中で選ぶと、各ターン送信前の可用性・クォータ確認、画像時のビジョン対応切替、キャッシュ保護、障害時の自動引き継ぎを行い、管理解除または個別モデル選択まで継続します。",
       "back": "スマートルーティングに戻る",
       "name": "名前",
       "nameHint": "モデル選択に表示される名前です。",
@@ -23336,6 +23440,11 @@
       "deviceDefaultReadOnly": "そのコンピューターを更新すると、ここでデフォルトモデルを変更できます。",
       "deviceUnavailable": "今はそのコンピューターのバディ設定を読み取れません。オンラインか確認してから開き直してください。",
       "deviceLoading": "そのコンピューターの設定を読み取っています…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "現在のソースが利用不可または上限のため、送信前に自動で切り替えました",
+      "imageInput": "画像が含まれているため、画像対応ソースへ自動で切り替えました",
+      "cacheExpired": "キャッシュ有効期限が切れたため、ルート戦略でソースを再選択しました"
     }
   },
   "projectSettings": {

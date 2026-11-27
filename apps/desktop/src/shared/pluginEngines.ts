@@ -249,24 +249,9 @@ export function isPluginEngineKind(kind: unknown): kind is typeof PLUGIN_ENGINE_
 
 /**
  * 任务来源是否允许在已有任务内切到 / 换出插件引擎。
- * 覆盖桌面普通任务、伙伴、官方 hook(x / feishu / telegram / discord-hook)与个人 IM 渠道；
- * review / learn / cindy-make / scheduler 等专有生命周期继续隔离。
+ * 与内置引擎同等开放所有非 review 来源（普通任务、伙伴、IM、官方 hook、侧边追问、定时任务、learn 等）；
+ * review 任务路由固定跟随源任务，保持关闭。
  */
-const PLUGIN_ENGINE_SWITCH_ALLOWED_SOURCES: ReadonlySet<string> = new Set([
-  'desktop',
-  'bot',
-  'x',
-  'feishu',
-  'telegram',
-  'discord',
-  'discord-hook',
-  'slack',
-  'wechat',
-  'dingtalk',
-  'wecom',
-  'imessage',
-]);
-
 export function isPluginEngineSwitchSourceAllowed(source: string | null | undefined): boolean {
-  return !source || PLUGIN_ENGINE_SWITCH_ALLOWED_SOURCES.has(source);
+  return source !== 'review';
 }
