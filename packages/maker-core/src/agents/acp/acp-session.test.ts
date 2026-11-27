@@ -327,6 +327,77 @@ describe('openAcpSession handshake', () => {
 });
 
 describe('AcpSession turns', () => {
+  // Tier 1: the provider emitted a stand-alone warning after an edit. The native turn must stay
+  // pending and continue once on that same session, without resending the original command.
+  // #13373: each native prompt reports its own spend. Missing usage on a continuation must preserve the first report.
+  it.each([
+    { name: 'both prompts report usage', resumedUsage: { inputTokens: 50, outputTokens: 6, cachedReadTokens: 8, cachedWriteTokens: 1 },
+      expected: { inputTokens: 60, outputTokens: 9, cacheReadTokens: 12, cacheCreationTokens: 3 } },
+    { name: 'only the first prompt reports usage', resumedUsage: undefined,
+      expected: { inputTokens: 10, outputTokens: 3, cacheReadTokens: 4, cacheCreationTokens: 2 } },
+  ])('holds a verification warning and settles usage once when $name', async ({ resumedUsage, expected }) => {
+    const agent = createFakeAgent({ handlers: { '_cindy/checkAccountVerification': () => ({ status: 'ready' }) } });
+    const owner = deferred<void>();
+    const { session, events } = await open(agent, { recoverVerification: async (probe) => {
+      await owner.promise;
+      return (await probe()).status === 'ready' ? 'ready' : 'unavailable';
+    } });
+    await session.send({ type: 'user', content: 'edit-once' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'tool_call', toolCallId: 'edit', title: 'Edit', kind: 'edit', status: 'completed' });
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Verification Required' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn',
+      usage: { inputTokens: 16, outputTokens: 3, cachedReadTokens: 4, cachedWriteTokens: 2, totalTokens: 19 },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(events.some(e => e.type === 'done')).toBe(false);
+    owner.resolve();
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
+    expect(agent.prompts[1]!.params.sessionId).toBe('sess-1');
+    expect(JSON.stringify(agent.prompts[1]!.params.prompt)).not.toContain('edit-once');
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Finished.' } });
+    agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn', usage: resumedUsage });
+    await vi.waitFor(() => expect(events.filter(e => e.type === 'done')).toHaveLength(1));
+    expect(events.at(-1)?.data).toMatchObject({ usage: expected });
+    await session.close();
+  });
+
+  // Tier 1, #13373: a user may stop while the QR is on screen, or verification may fail after a billed edit.
+  it.each(['stop', 'unavailable'] as const)('keeps the first usage report when verification ends with %s', async (action) => {
+    const agent = createFakeAgent();
+    const outcome = deferred<'ready' | 'unavailable'>();
+    const recoverVerification = vi.fn(() => outcome.promise);
+    const { session, events } = await open(agent, { recoverVerification });
+    await session.send({ type: 'user', content: 'edit-once' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Verification Required' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn', usage: { inputTokens: 20, outputTokens: 5 } });
+    await vi.waitFor(() => expect(recoverVerification).toHaveBeenCalledOnce());
+    if (action === 'stop') await session.abort();
+    outcome.resolve(action === 'stop' ? 'ready' : 'unavailable');
+    const terminalType = action === 'stop' ? 'done' : 'error';
+    await vi.waitFor(() => expect(events.at(-1)?.type).toBe(terminalType));
+    expect(events.at(-1)?.data).toMatchObject({
+      type: 'acp/prompt_end', usage: { inputTokens: 20, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      ...(action === 'stop' ? { stopReason: 'cancelled' } : { isTerminal: true, reason: 'acp-auth-required' }),
+    });
+    expect(agent.prompts).toHaveLength(1);
+    await session.close();
+  });
+
+  it('leaves a quota warning out of verification recovery', async () => {
+    const agent = createFakeAgent();
+    const recoverVerification = vi.fn();
+    const { session, events } = await open(agent, { recoverVerification });
+    await session.send({ type: 'user', content: 'hello' });
+    await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
+    agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '⚠ Individual quota reached.' } });
+    agent.prompts[0]!.settle.resolve({ stopReason: 'end_turn' });
+    await vi.waitFor(() => expect(events.some(e => e.type === 'done')).toBe(true));
+    expect(recoverVerification).not.toHaveBeenCalled();
+    await session.close();
+  });
+
   it('streams thinking, text segments and tool calls in the shapes the built-in engines use', async () => {
     const agent = createFakeAgent();
     const { session, events } = await open(agent);
@@ -967,18 +1038,43 @@ describe('AcpSession stop and failure', () => {
     await expect(session.send({ type: 'user', content: 'again' })).rejects.toThrow('closed');
   });
 
-  // 引擎账号：运行中的额度用完、服务繁忙带上 Cindy 失败判定认得的字段；不认识的 kind 照普通错误处理。
+  // 引擎账号：运行中的额度用完、服务繁忙带上 Cindy 失败判定认得的字段并保留上游原文；不认识的 kind 照普通错误处理。
   it.each([
-    { kind: 'usage-limit', resetsAt: 1_900_000_000_000, expected: { reason: 'acp-usage-limit', usageLimit: true, usageResetAt: 1_900_000_000_000 } },
-    { kind: 'overloaded', expected: { reason: 'acp-overloaded', errorStatus: 529 } },
-    { kind: 'auth-required', expected: { reason: 'acp-auth-required' } },
-    { kind: 'something-new', expected: { reason: 'acp-request-failed' } },
-  ])('reports a turn the agent classified as $kind with failure fields Cindy understands', async ({ kind, resetsAt, expected }) => {
+    {
+      kind: 'usage-limit',
+      resetsAt: 1_900_000_000_000,
+      message: 'Individual quota reached. Resets in 2h13m2s.',
+      expected: {
+        reason: 'acp-usage-limit',
+        message: 'Individual quota reached. Resets in 2h13m2s.',
+        usageLimit: true,
+        usageResetAt: 1_900_000_000_000,
+      },
+    },
+    {
+      kind: 'usage-limit',
+      resetsAt: 1_900_000_000_000,
+      message: '',
+      expected: {
+        reason: 'acp-usage-limit',
+        message: 'The plugin engine account has reached its usage limit.',
+        usageLimit: true,
+        usageResetAt: 1_900_000_000_000,
+      },
+    },
+    {
+      kind: 'overloaded',
+      message: 'upstream busy',
+      expected: { reason: 'acp-overloaded', message: 'upstream busy', errorStatus: 529 },
+    },
+    { kind: 'auth-required', message: 'upstream said no', expected: { reason: 'acp-auth-required' } },
+    { kind: 'something-new', message: 'upstream said no', expected: { reason: 'acp-request-failed' } },
+  ])('reports a turn the agent classified as $kind with failure fields Cindy understands', async ({ kind, resetsAt, message, expected }) => {
     const agent = createFakeAgent();
     const { session, events } = await open(agent);
     await session.send({ type: 'user', content: 'go' });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
-    agent.prompts[0]!.settle.reject(Object.assign(new Error('upstream said no'), { code: -32603, data: { _meta: { cindy: { kind, ...(resetsAt ? { resetsAt } : {}) } } } }));
+    agent.prompts[0]!.settle.reject(Object.assign(new Error(message), { code: -32603, data: { _meta: { cindy: { kind, ...(resetsAt ? { resetsAt } : {}) } } } }));
     await vi.waitFor(() => expect(events.at(-1)?.type).toBe('error'));
     expect(events.at(-1)?.data).toMatchObject({ isTerminal: true, ...expected });
   });
@@ -2750,6 +2846,7 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     const sessionNew = agent.sent.find((m) => m.method === 'session/new');
     expect((sessionNew?.params as AcpRecord).additionalDirectories).toEqual(['/extra/a', '/extra/b']);
     expect(session.capabilities.extraDirs.supported).toBe(true);
+    expect(session.requiresRuntimeRecycleForExtraDirs()).toBe(true);
     expect(session.capabilities.planMode?.supported).toBe(true);
     expect(session.getPlanMode()).toBe(false);
 
@@ -2759,6 +2856,14 @@ describe('AcpSession form elicitation, plans, additionalDirectories, planMode an
     expect(session.getPlanMode()).toBe(false);
 
     await session.setExtraDirs(['/extra/c']);
+
+    // An engine that does not negotiate native `additionalDirectories` never asks the host to recycle on extraDirs changes.
+    const noAdditionalDirsAgent = createFakeAgent({
+      agentCapabilities: { sessionCapabilities: { resume: {} } },
+    });
+    const { session: noAdditionalDirsSession } = await open(noAdditionalDirsAgent);
+    expect(noAdditionalDirsSession.requiresRuntimeRecycleForExtraDirs()).toBe(false);
+    await noAdditionalDirsSession.close();
 
     // An engine advertising additionalDirectories without session/resume or session/load rejects live dir changes.
     const nonResumable = createFakeAgent({
