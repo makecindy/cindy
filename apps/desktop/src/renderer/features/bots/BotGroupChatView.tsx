@@ -1,5 +1,5 @@
 import { canStopBotGroupSpeaker } from '@cindy/maker-shared/botGroupChat';
-import { interleaveBotGroupWork } from '@cindy/maker-shared/botGroupPresentation';
+import { hasActionableGroupThreads, interleaveBotGroupWork, type BotGroupThreadFilter } from '@cindy/maker-shared/botGroupPresentation';
 import { copyChatSelection } from '@/components/chat/chatSelectionClipboard';
 import { usePluginUiMessageCandidates } from '@/cindy-brain/PluginUiContributions';
 import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
@@ -31,7 +31,7 @@ import { cn } from '@/lib/utils';
  * 与普通任务的整区拖入一致；消息上的图片与文件复用普通聊天用户气泡的图片视图与附件 chip。
  */
 import { Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type DragEvent } from 'react';
-import { ArrowLeft, CircleAlert, RefreshCcw, Settings2 } from 'lucide-react';
+import { ArrowLeft, CircleAlert, MessagesSquare, RefreshCcw, Settings2 } from 'lucide-react';
 import { useBotGroupWorkTargets } from './useBotGroupWorkTargets';
 import { useRemoteDevices } from '@/features/device-link/remoteProjectsStore';
 import { useTranslation } from 'react-i18next';
@@ -95,6 +95,7 @@ import {
 import { ChatReactionReads } from './useChatReactions';
 import { messageReactionRevision } from './ChatServerControls';
 import { ChatGroupInviteMenu } from './ChatGroupInviteMenu';
+import { ChatThreadListPanel } from './ChatThreadListPanel';
 import { animateThreadPanel, ChatThreadPanel } from './ChatThreadPanel';
 import {
   BotGroupPlanFollowUpRow,
@@ -304,6 +305,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const [stopping, setStopping] = useState(false);
   const [planPending, setPlanPending] = useState<PlanPending | null>(null);
   const planPendingRef = useRef(false);
+  const threadListOpenRef = useRef(false);
   const loadRef = useRef<(additionalSources?: string[], changedIds?: string[]) => void>(() => {});
   const resetHistoryRef = useRef<() => void>(() => {});
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -440,8 +442,14 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           ? mergeBotGroupMessages(displayed.older, displayed.group.messages).map(message => message.id) : []), ...additionalSources])];
         // Older pages are not re-read, so their shares ask for the reply's current state.
         const shownShares = shown ? botGroupShownShares(displayed.older) : [];
-        const result = sourceMessageIds.length || shownShares.length
-          ? await api.getBotGroup(groupId, { ...(direct ? { conversationKind: 'direct' as const } : {}), sourceMessageIds, ...(shownShares.length ? { shownShares } : {}) })
+        const includeHistoricalThreads = !direct && threadListOpenRef.current;
+        const result = sourceMessageIds.length || shownShares.length || includeHistoricalThreads
+          ? await api.getBotGroup(groupId, {
+              ...(direct ? { conversationKind: 'direct' as const } : {}),
+              ...(includeHistoricalThreads ? { includeHistoricalThreads: true } : {}),
+              ...(sourceMessageIds.length ? { sourceMessageIds } : {}),
+              ...(shownShares.length ? { shownShares } : {}),
+            })
           : await api.getBotGroup(groupId, direct ? { conversationKind: 'direct' } : undefined);
         if (!isApplicable()) return;
         // A committed stream delta overtook this full read. Keep it on screen;
@@ -822,6 +830,11 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const [threadRootId, setThreadRootId] = useState<string | null>(null);
   const threadRootIdRef = useRef(threadRootId);
   threadRootIdRef.current = threadRootId;
+  const [threadListOpen, setThreadListOpen] = useState(false);
+  threadListOpenRef.current = threadListOpen;
+  const [threadListFilter, setThreadListFilter] = useState<BotGroupThreadFilter>('mine');
+  const [threadOpenedFromList, setThreadOpenedFromList] = useState(false);
+  const threadPanelKey = threadRootId ?? (threadListOpen ? '__list__' : null);
   /** A reply to bring into view when a main-chat share opens its thread. */
   const [threadFocus, setThreadFocus] = useState<{ messageId: string; nonce: number } | null>(null);
   const threadOpenerRef = useRef<HTMLElement | null>(null);
@@ -830,11 +843,11 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const threadCloseAnimationRef = useRef<Animation | null>(null);
   const threadOpenAnimationRef = useRef<Animation | null>(null);
   const cancelThreadOpening = useCallback(() => threadOpenAnimationRef.current?.cancel(), []);
-  const threadResize = useThreadPanelResize(threadLayoutRef, threadRootId, cancelThreadOpening);
+  const threadResize = useThreadPanelResize(threadLayoutRef, threadPanelKey, cancelThreadOpening);
   const threadWasOpenRef = useRef(false);
   useLayoutEffect(() => {
-    const opening = !!threadRootId && !threadWasOpenRef.current;
-    threadWasOpenRef.current = !!threadRootId;
+    const opening = !!threadPanelKey && !threadWasOpenRef.current;
+    threadWasOpenRef.current = !!threadPanelKey;
     if (!opening) return;
     const panel = threadLayoutRef.current?.querySelector('aside');
     const animation = panel && animateThreadPanel(panel, 'open');
@@ -842,7 +855,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     threadOpenAnimationRef.current = animation;
     void animation.finished.then(() => animation.cancel(), () => {});
     return () => animation.cancel();
-  }, [threadRootId, threadResize.width]);
+  }, [threadPanelKey, threadResize.width]);
   const closeThread = useCallback(() => {
     if (threadCloseAnimationRef.current) return;
     const panel = threadLayoutRef.current?.querySelector('aside');
@@ -850,19 +863,54 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     // The exit starts at the computed transform before releasing an unfinished entrance.
     threadOpenAnimationRef.current?.cancel();
     threadOpenerRef.current?.focus();
-    if (!panel || !animation) { setThreadRootId(null); return; }
+    if (!panel || !animation) {
+      setThreadRootId(null);
+      setThreadListOpen(false);
+      setThreadOpenedFromList(false);
+      return;
+    }
     panel.inert = true;
     threadCloseAnimationRef.current = animation;
     void animation.finished.then(() => {
       if (threadCloseAnimationRef.current !== animation) return;
       threadCloseAnimationRef.current = null;
       setThreadRootId(null);
+      setThreadListOpen(false);
+      setThreadOpenedFromList(false);
     }, () => {});
   }, []);
+  const openThreadList = useCallback((filter?: BotGroupThreadFilter) => {
+    if (threadCloseAnimationRef.current) {
+      threadCloseAnimationRef.current.cancel();
+      threadCloseAnimationRef.current = null;
+      const panel = threadLayoutRef.current?.querySelector('aside');
+      if (panel) panel.inert = false;
+    }
+    if (!threadRootIdRef.current && !threadListOpen) {
+      threadOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+    if (filter) setThreadListFilter(filter);
+    setThreadRootId(null);
+    setThreadOpenedFromList(false);
+    setThreadListOpen(true);
+  }, [threadListOpen]);
+  const toggleThreadList = useCallback(() => {
+    if (threadListOpen && !threadRootIdRef.current) closeThread();
+    else openThreadList();
+  }, [closeThread, openThreadList, threadListOpen]);
+  const backToThreadList = useCallback(() => {
+    setThreadRootId(null);
+    setThreadOpenedFromList(false);
+    setThreadListOpen(true);
+  }, []);
+  useEffect(() => {
+    if (!threadListOpen || !group?.serverBacked || direct) return;
+    loadRef.current();
+  }, [direct, group?.id, group?.serverBacked, threadListOpen]);
   useLayoutEffect(() => () => {
     threadCloseAnimationRef.current?.cancel();
     threadCloseAnimationRef.current = null;
-  }, [threadRootId]);
+  }, [threadPanelKey]);
   /** From a thread reply back to where it was shared in the main chat. */
   const revealMainMessage = useCallback((messageId: string) => {
     const target = findThreadMessageElement(contentRef.current, messageId);
@@ -873,18 +921,33 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
     return true;
   }, []);
   useEffect(() => {
-    if (!focused || !group?.serverBacked || !threadRootId) return;
+    if (!focused || !group?.serverBacked || !threadPanelKey) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
       if (event.target !== document.body && !threadLayoutRef.current?.contains(event.target as Node) && !threadHeaderRef.current?.contains(event.target as Node)) return;
       if (document.querySelector('[data-text-lightbox-overlay], [data-mermaid-lightbox-overlay]')) return;
-      if (shareSelectionStore.isActive(shareScope) || shareSelectionStore.isActive(`${shareScope}:thread:${threadRootId}`)) return;
+      if (shareSelectionStore.isActive(shareScope) || (threadRootId && shareSelectionStore.isActive(`${shareScope}:thread:${threadRootId}`))) return;
       event.stopPropagation();
-      closeThread();
+      if (threadRootId && threadOpenedFromList) backToThreadList();
+      else closeThread();
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
-  }, [focused, group?.serverBacked, threadRootId, closeThread, shareScope]);
+  }, [focused, group?.serverBacked, threadPanelKey, threadRootId, threadOpenedFromList, backToThreadList, closeThread, shareScope]);
+  useEffect(() => {
+    if (!focused || !group?.serverBacked || direct) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
+      const mod = /Mac/i.test(navigator.platform) ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+      if (!mod || !event.shiftKey || event.altKey || event.key.toLowerCase() !== 't') return;
+      if (document.querySelector('[role="dialog"], [data-text-lightbox-overlay], [data-mermaid-lightbox-overlay]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleThreadList();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [focused, group?.serverBacked, direct, toggleThreadList]);
 
   const settingsLabel = t('bots.groupChat.settings.open');
   const mainHeaderSpeakers = headerGroup?.round?.speakers.filter(speaker => speaker.threadRootId === null || (!speaker.sourceMessageId && !speaker.threadRootId));
@@ -895,6 +958,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
   const mentionHistory = useGroupMentionHistory(groupId);
   const readLocatedMention = useReadLocatedMention(groupId);
   const showInviteMenu = !!headerGroup?.serverBacked && !direct && !headerGroup.dissolvedAt && !headerGroup.archived;
+  const threadsLabel = t('bots.groupChat.server.thread.openIndex');
+  const hasUnreadThreads = hasActionableGroupThreads(group?.threads, threadRootId);
   const header = useMemo(() => {
     if (!headerGroup) return null;
     const shown = direct ? members.filter(member => !member.isSelf) : members;
@@ -926,11 +991,38 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
               : <span data-testid="bot-group-header-summary" className="min-w-0 truncate text-11 leading-4 tabular-nums text-[var(--text-tertiary)]">{summary}</span>}
           </span>
         </button>
-        <div className="ml-auto flex shrink-0 items-center">
+        <div className="ml-auto flex shrink-0 items-center gap-0.5">
           {/* One 邀请 entry for every member; what each can use inside follows the server. */}
           {showInviteMenu &&
             <ChatGroupInviteMenu key={headerGroup.id} group={{ id: headerGroup.id, members, canInvite: headerGroup.canInvite }}
               variant="icon" consumeAutoOpen={canAutoOpenInviteMenu ? consumeInviteMenuRequest : undefined} />}
+          {headerGroup.serverBacked && !direct && (
+            <Tip text={threadsLabel}>
+              <button
+                type="button"
+                data-testid="bot-group-threads-button"
+                onClick={toggleThreadList}
+                aria-label={threadsLabel}
+                aria-pressed={!!threadPanelKey}
+                className={cn(
+                  'relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors',
+                  threadPanelKey
+                    ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]'
+                    : 'text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]',
+                )}
+                style={WINDOW_NO_DRAG_STYLE}
+              >
+                <MessagesSquare size={15} aria-hidden />
+                {hasUnreadThreads && !threadListOpen ? (
+                  <span
+                    data-testid="bot-group-threads-unread-dot"
+                    aria-hidden
+                    className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--bot-unread-bg)]"
+                  />
+                ) : null}
+              </button>
+            </Tip>
+          )}
           {!direct && <Tip text={settingsLabel}>
             <button
               type="button"
@@ -945,7 +1037,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         </div>
       </div>
     );
-  }, [direct, headerGroup?.name, headerGroup?.external, headerGroup?.id, headerGroup?.canInvite, members, headerStatus, openSettings, separator, settingsLabel, t, showInviteMenu, canAutoOpenInviteMenu, consumeInviteMenuRequest]);
+  }, [direct, headerGroup?.name, headerGroup?.external, headerGroup?.id, headerGroup?.serverBacked, headerGroup?.canInvite, showInviteMenu, canAutoOpenInviteMenu, consumeInviteMenuRequest, members, headerStatus, openSettings, separator, settingsLabel, threadsLabel, toggleThreadList, threadPanelKey, hasUnreadThreads, threadListOpen, t]);
   useRegisterContentHeader(header);
 
   // Group-level stopping remains available even when all visible work belongs to topics.
@@ -1256,8 +1348,19 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         focusBotGroupComposer(panel);
       }
     }
+    setThreadListOpen(false);
+    setThreadOpenedFromList(false);
     setThreadRootId(messageId);
     setThreadFocus(focusMessageId ? { messageId: focusMessageId, nonce: ++threadFocusNonce.current } : null);
+  }, []);
+  const openThreadFromList = useCallback((messageId: string, focusMessageId?: string) => {
+    setThreadListOpen(false);
+    setThreadOpenedFromList(true);
+    setThreadRootId(messageId);
+    setThreadFocus(focusMessageId ? { messageId: focusMessageId, nonce: ++threadFocusNonce.current } : null);
+  }, []);
+  const locateThreadRoot = useCallback((rootId: string) => {
+    void actionsRef.current.locateQuoted({ messageId: rootId, sequence: null });
   }, []);
   const locateMention = useCallback((entry: GroupMaskMention) => {
     if (entry.threadRootId) onOpenThread(entry.threadRootId, entry.messageId);
@@ -1636,8 +1739,10 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
             // Floats over the bottom of the timeline, at the column's right edge (bot-group-chat.md §10).
             <div className="relative h-0 shrink-0">
               <div className="pointer-events-none relative mx-auto h-0 w-full max-w-[var(--cindy-message-width)] px-2">
-                <BotGroupThreadHint suppressed={messageNavigationVisible} key={group.id} threads={group.threads ?? []} members={group.members} openRootId={threadRootId}
-                  onOpen={rootId => onOpenThread(rootId)} mentions={mentionHistory?.unreadMentions} onLocateMention={locateMention}
+                <BotGroupThreadHint suppressed={messageNavigationVisible || (threadListOpen && !mentionHistory?.unreadMentions.length && !mentionHistory?.retryRead)} key={group.id} threads={group.threads ?? []} openRootId={threadRootId}
+                  onOpen={(rootId, focusMessageId) => onOpenThread(rootId, focusMessageId)}
+                  onOpenList={group.serverBacked && !direct ? openThreadList : undefined}
+                  mentions={mentionHistory?.unreadMentions} onLocateMention={locateMention}
                   onReadMentions={mentionHistory ? () => mentionHistory.markMentionsRead() : undefined}
                   onRetryMentionRead={mentionHistory?.retryRead} saving={mentionHistory?.saving} />
               </div>
@@ -1695,8 +1800,17 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
         />
       ) : null}
     </BotGroupChatMain>
-    {group.serverBacked && threadRootId && <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} speakers={allSpeakers.filter(speaker => speaker.threadRootId === threadRootId)} onStop={scope => void stopRound(scope)} stopping={stopping} quoteSources={quoteSources}
-      focus={threadFocus} sharedReplies={sharedReplies} onPostPending={beginPendingShare} onRevealShare={revealMainMessage} onClose={closeThread} resize={threadResize} />}
+    {group.serverBacked && !direct && threadRootId ? (
+      <ChatThreadPanel key={`${group.id}:${threadRootId}`} group={group} rootId={threadRootId} speakers={allSpeakers.filter(speaker => speaker.threadRootId === threadRootId)} onStop={scope => void stopRound(scope)} stopping={stopping} quoteSources={quoteSources}
+        focus={threadFocus} sharedReplies={sharedReplies} onPostPending={beginPendingShare} onRevealShare={revealMainMessage}
+        onBack={threadOpenedFromList ? backToThreadList : undefined} onClose={closeThread} resize={threadResize} />
+    ) : group.serverBacked && !direct && threadListOpen ? (
+      <ChatThreadListPanel key={`${group.id}:list`} groupId={group.id} threads={group.threads ?? []} members={members}
+        filter={threadListFilter} onFilterChange={setThreadListFilter}
+        syncing={group.threadsSyncing === true}
+        onOpenThread={openThreadFromList} onLocateRoot={locateThreadRoot}
+        onRefresh={() => loadRef.current()} onClose={closeThread} resize={threadResize} />
+    ) : null}
     </div>
   );
 }

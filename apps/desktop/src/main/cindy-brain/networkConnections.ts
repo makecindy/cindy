@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Agent } from 'node:http';
+import { isCanonicalBase64 } from '@cindy/maker-shared';
 import WebSocket from 'ws';
 import type { GhostNetworkEvent, GhostPipeNetworkResult } from '../../shared/ghost.js';
 
@@ -196,7 +197,7 @@ export class HostNetworkConnections {
         if (!entry.socket || entry.socket.readyState !== WebSocket.OPEN || entry.closed) return { ok: false, errorCode: 'NETWORK_CONNECTION_CLOSED', message: '连接已关闭或不支持发送' };
         if (typeof payload.data !== 'string' || Buffer.byteLength(payload.data) > CHUNK_BYTES) return invalid();
         if (payload.binary !== undefined && typeof payload.binary !== 'boolean') return invalid();
-        if (payload.binary === true && !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(payload.data)) return invalid();
+        if (payload.binary === true && !isCanonicalBase64(payload.data)) return invalid();
         if (entry.socket.bufferedAmount > BUFFER_BYTES) return { ok: false, errorCode: 'NETWORK_BUSY', message: '连接发送缓冲区正忙' };
         await new Promise<void>((resolve, reject) => entry.socket!.send(payload.binary === true ? Buffer.from(payload.data as string, 'base64') : payload.data as string,
           { binary: payload.binary === true }, error => error ? reject(error) : resolve()));

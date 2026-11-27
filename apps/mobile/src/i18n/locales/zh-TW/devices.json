@@ -366,7 +366,11 @@
       "close": "關閉",
       "cancelRename": "取消重新命名",
       "createdBy": "由 {{name}} 建立",
-      "ownedBy": "歸屬 {{name}}"
+      "ownedBy": "歸屬 {{name}}",
+      "orcaRemoteLead": "來自 {{device}} 的協同",
+      "createdByTask": "由其他任務建立",
+      "createdByTaskNamed": "由任務「{{title}}」建立",
+      "unknownDevice": "另一台電腦"
     },
     "accounts": {
       "title": "切換帳號",

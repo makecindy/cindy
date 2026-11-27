@@ -296,7 +296,7 @@ export default {
     const snoozeLabel = await ui.t('ccAgent.sidebar.inbox.snooze');
     const pinned = page.locator('[data-session-id="waiting"]');
     assert.equal(await pinned.getByRole('button', { name: archiveLabel, exact: true }).count(), 1);
-    assert.equal(await pinned.getByRole('button', { name: snoozeLabel, exact: true }).count(), 0);
+    assert.equal(await pinned.getByRole('button', { name: snoozeLabel, exact: true }).count(), 1);
     const moreLabel = await ui.t('ccAgent.sidebar.sessionMenu.moreActions');
     assert.equal(await ready.getByRole('button', { name: archiveLabel, exact: true }).count(), 1);
     assert.equal(await page.getByRole('button', { name: moreLabel, exact: true }).count(), 0);
@@ -387,5 +387,13 @@ export default {
       expectedCustom,
     );
     assert.equal(await dialog.count(), 0);
+    // A pinned task snoozes like any other; the write carries only the snooze, so it stays pinned.
+    const pinnedTask = page.locator('[data-session-id="waiting"]');
+    await pinnedTask.hover();
+    await pinnedTask.getByRole('button', { name: snoozeLabel, exact: true }).click();
+    await page.getByRole('menuitem', { name: await ui.t('ccAgent.sidebar.inbox.indefinite'), exact: true }).click();
+    await page.waitForFunction(() => document.documentElement.dataset.snoozedSession === 'waiting'
+      && document.documentElement.dataset.snoozedUntil === '9999-12-31T23:59:59.999Z'
+      && document.documentElement.dataset.patchKeys === 'snoozedUntil');
   },
 };

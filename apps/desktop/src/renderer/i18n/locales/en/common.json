@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Verify your Google account",
+    "note": "Scan the code or open the Google page. This task continues when Antigravity confirms access.",
+    "refresh": "Refresh verification code"
+  },
   "runtimePlugins": {
     "save": "Save",
     "promptUnsupported": "This Pi execution location does not support system prompt fragments.",
@@ -9022,7 +9027,10 @@
             "user": "User",
             "assistant": "Assistant"
           }
-        }
+        },
+        "agentChecks": "Can check whether sources have new content",
+        "agentChecksDetail": "Exchanges only changed, unchanged or unknown status with other approved plugins, using each source plugin’s own connected accounts. No message content or credentials are shared. Checks do not use a model. Also checks whether local Cindy conversations have changed, without returning their content.",
+        "agentChecksRequest": "Review change checking permission"
       },
       "connections": {
         "confirmTitle": "Add connection address",
@@ -12411,8 +12419,33 @@
           "unfollowTip": "Unfollow: you will only be told when someone mentions you",
           "listLabel": "Threads in this group chat",
           "listNews": "New replies",
-          "listOthers": "Other threads",
-          "newSeparator": "New replies"
+          "newSeparator": "New replies",
+          "openIndex": "Threads",
+          "indexTitle": "Threads",
+          "backToList": "Back to threads",
+          "filterAria": "Filter threads",
+          "filterMine": "For me",
+          "filterAll": "All",
+          "searchPlaceholder": "Search threads, replies, or members",
+          "clearSearch": "Clear search",
+          "listRecent": "Recent",
+          "indexParticipatedTag": "Participated",
+          "indexMentionedTag": "Mentioned",
+          "locateInGroup": "Show in group chat",
+          "indexEmptyMine": "No threads you participated in or were mentioned in yet",
+          "indexEmptyAll": "No threads in this group yet",
+          "indexEmptySearch": "No matching threads",
+          "viewAllThreads": "View all threads",
+          "syncingHistory": "Loading earlier threads…",
+          "rootKind": {
+            "task": "Task",
+            "image": "Image",
+            "video": "Video",
+            "audio": "Audio",
+            "file": "File",
+            "share": "Shared reply",
+            "card": "Card"
+          }
         },
         "replyPlaceholder": "Reply to this message; use @ to mention a companion…",
         "sendReply": "Send reply",
@@ -17149,9 +17182,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Add cloud computer",
-        "preparingCloud": "Cloud computer · preparing",
-        "manageCloud": "Manage cloud computer",
         "allMachines": "All",
         "localMachine": "Local",
         "connecting": "Connecting…",
@@ -17511,6 +17541,8 @@
         "moveToProjectRemoteUnsupported": "Moving remote sessions is not supported yet",
         "moveToProjectWorktreeBlocked": "This session’s working directory is a worktree, so it can’t be moved to another project yet",
         "openInNewWindow": "Open in new window",
+        "openInNewWindowShortcutMac": "⌘+click",
+        "openInNewWindowShortcutOther": "Ctrl+click",
         "exportShare": "Export session…",
         "exportHtml": "Export to HTML…",
         "exportHtmlSuccess": "Session exported to HTML",
@@ -17642,6 +17674,13 @@
         "inbox": "Inbox",
         "enterInbox": "Switch to Inbox mode",
         "leaveInbox": "Switch to task list mode"
+      },
+      "filterHideTaskCreated": "Hide tasks from other tasks",
+      "origin": {
+        "createdByTask": "Opened by another task",
+        "createdByTaskNamed": "Opened by task “{{title}}”",
+        "createdByRemoteTask": "Opened by a task on {{device}}",
+        "createdByRemoteTaskNamed": "Opened by “{{title}}” on {{device}}"
       }
     },
     "rename": {
@@ -17662,7 +17701,9 @@
       "orcaRemoteLead": "Collaboration from {{device}}",
       "orcaRemoteLeadReleased": "Collaboration ended · from {{device}}",
       "orcaRemoteLeadUnknownDevice": "another computer",
-      "orcaRemoteLeadTip": "A Worker for “{{lead}}” on {{device}}. Its task, folder and commands run on this computer. Messages you send here are not reported to the Lead."
+      "orcaRemoteLeadTip": "A Worker for “{{lead}}” on {{device}}. Its task, folder and commands run on this computer. Messages you send here are not reported to the Lead.",
+      "createdByTask": "From another task",
+      "createdByTaskNamed": "From “{{title}}”"
     },
     "gitContext": {
       "detached": "Detached HEAD",

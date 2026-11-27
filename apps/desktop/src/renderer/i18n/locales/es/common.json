@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Verifica tu cuenta de Google",
+    "note": "Escanea el código o abre la página de Google. La tarea continuará cuando Antigravity confirme el acceso.",
+    "refresh": "Actualizar código QR"
+  },
   "runtimePlugins": {
     "save": "Guardar",
     "promptUnsupported": "Esta ubicación de ejecución de Pi no admite fragmentos de instrucciones del sistema.",
@@ -9096,7 +9101,10 @@
             "user": "Usuario",
             "assistant": "Asistente"
           }
-        }
+        },
+        "agentChecks": "Puede comprobar si hay contenido nuevo",
+        "agentChecksDetail": "Solo intercambia estados de cambio, sin cambios o desconocido con otros complementos autorizados. Cada complemento usa sus propias cuentas conectadas, sin compartir mensajes ni credenciales. La comprobación no usa ningún modelo. También comprueba cambios en conversaciones locales de Cindy sin devolver su contenido.",
+        "agentChecksRequest": "Revisar permiso de comprobación"
       },
       "connections": {
         "confirmTitle": "Agregar dirección de conexión",
@@ -12505,12 +12513,37 @@
           "unfollowTip": "Dejar de seguir: solo recibirás avisos cuando alguien te mencione",
           "listLabel": "Hilos de este chat grupal",
           "listNews": "Nuevas respuestas",
-          "listOthers": "Otros hilos",
           "newSeparator": "Nuevas respuestas",
           "open_many": "Abrir hilo, {{count}} respuestas",
           "alsoSendFailed_many": "Las respuestas de {{count}} están en el hilo, pero no se pudieron enviar al chat principal.",
           "newReplies_many": "{{count}} nuevas respuestas",
-          "hintMany_many": "Nuevas respuestas en {{count}} hilos"
+          "hintMany_many": "Nuevas respuestas en {{count}} hilos",
+          "openIndex": "Hilos",
+          "indexTitle": "Hilos",
+          "backToList": "Volver a hilos",
+          "filterAria": "Filtrar hilos",
+          "filterMine": "Para mí",
+          "filterAll": "Todos",
+          "searchPlaceholder": "Buscar hilos, respuestas o miembros",
+          "clearSearch": "Borrar búsqueda",
+          "listRecent": "Recientes",
+          "indexParticipatedTag": "Participaste",
+          "indexMentionedTag": "Mencionado",
+          "locateInGroup": "Ver en el grupo",
+          "indexEmptyMine": "Aún no hay hilos en los que hayas participado o te hayan mencionado",
+          "indexEmptyAll": "Aún no hay hilos en este grupo",
+          "indexEmptySearch": "No hay hilos que coincidan",
+          "viewAllThreads": "Ver todos los hilos",
+          "syncingHistory": "Cargando hilos anteriores…",
+          "rootKind": {
+            "task": "Tarea",
+            "image": "Imagen",
+            "video": "Video",
+            "audio": "Audio",
+            "file": "Archivo",
+            "share": "Respuesta compartida",
+            "card": "Tarjeta"
+          }
         },
         "replyPlaceholder": "Responde a este mensaje; usa @ para mencionar a un amigo…",
         "sendReply": "Enviar respuesta",
@@ -17307,9 +17340,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Añadir equipo en la nube",
-        "preparingCloud": "Preparando el equipo en la nube",
-        "manageCloud": "Gestionar equipo en la nube",
         "allMachines": "Todo",
         "localMachine": "Local",
         "connecting": "Conectando…",
@@ -17676,6 +17706,8 @@
         "moveToProjectRemoteUnsupported": "Aún no se pueden mover sesiones remotas",
         "moveToProjectWorktreeBlocked": "El directorio de trabajo de esta tarea es un worktree, por lo que aún no se puede mover a otro proyecto",
         "openInNewWindow": "Abrir en una ventana nueva",
+        "openInNewWindowShortcutMac": "⌘+clic",
+        "openInNewWindowShortcutOther": "Ctrl+clic",
         "exportShare": "Exportar sesión…",
         "exportHtml": "Exportar a HTML…",
         "exportHtmlSuccess": "Sesión exportada a HTML",
@@ -17808,6 +17840,13 @@
         "inbox": "Bandeja de entrada",
         "enterInbox": "Cambiar al modo bandeja de entrada",
         "leaveInbox": "Cambiar al modo lista de tareas"
+      },
+      "filterHideTaskCreated": "Ocultar tareas creadas por otras tareas",
+      "origin": {
+        "createdByTask": "Abierta por otra tarea",
+        "createdByTaskNamed": "Abierta por la tarea «{{title}}»",
+        "createdByRemoteTask": "Abierta por una tarea en {{device}}",
+        "createdByRemoteTaskNamed": "Abierta por «{{title}}» en {{device}}"
       }
     },
     "rename": {
@@ -17828,7 +17867,9 @@
       "orcaRemoteLead": "Colaboración desde {{device}}",
       "orcaRemoteLeadReleased": "Colaboración finalizada · desde {{device}}",
       "orcaRemoteLeadUnknownDevice": "otra computadora",
-      "orcaRemoteLeadTip": "Un Worker de «{{lead}}» en {{device}}. Su tarea, carpeta y comandos se ejecutan en esta computadora. Los mensajes que envíes aquí no se comunican al Lead."
+      "orcaRemoteLeadTip": "Un Worker de «{{lead}}» en {{device}}. Su tarea, carpeta y comandos se ejecutan en esta computadora. Los mensajes que envíes aquí no se comunican al Lead.",
+      "createdByTask": "Desde otra tarea",
+      "createdByTaskNamed": "Desde «{{title}}»"
     },
     "gitContext": {
       "detached": "HEAD separado",
