@@ -257,6 +257,7 @@ const SESSION_FIELD_WHITELIST = [
   'pinnedAt',
   'snoozedUntil',
   'snoozedAt',
+  'archivedAt',
   'preview',
   'userSendAt',
   'lastActivityAt',

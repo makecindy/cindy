@@ -3,7 +3,10 @@ import { sessionProjectDirectory, sessionTaskProjectIconDirectory } from '@cindy
 import { SessionSnoozeAction, useSessionSnooze, type SnoozeAction } from './SessionSnoozeAction';
 import { SessionTaskMenu } from './SessionTaskMenu';
 import { isSharedTaskPeer } from '@cindy/device-link';
-import { getSessionListActivityAt } from '@cindy/maker-shared/session-activity';
+import {
+  getSessionArchivedActivityAt,
+  getSessionListActivityAt,
+} from '@cindy/maker-shared/session-activity';
 import { TaskTagMenuSection, TaskTagEditor, TaskTagDots } from '@/features/task-tags/TaskTags';
 import { Button } from '@/components/ui/button';
 /**
@@ -217,7 +220,9 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
   const rightStatusKind = resolveSidebarRightStatus(sessionActivity);
   const isPinned = session.pinnedAt != null;
   const isEmpty = isEmptyDraftSession(session);
-  const activityIso = getSessionListActivityAt(session);
+  const activityIso = inboxMode && session.status === 'archived'
+    ? getSessionArchivedActivityAt(session)
+    : getSessionListActivityAt(session);
   const remoteIconKind = session.deviceLinkDeviceId
     ? 'device-link'
     : session.remoteHostId

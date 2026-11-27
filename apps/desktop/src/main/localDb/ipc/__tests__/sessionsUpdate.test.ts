@@ -279,7 +279,7 @@ function createDb(): void {
       context_window_runtime INTEGER,
       fast_mode INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, archived_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
@@ -1103,7 +1103,7 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.sqlite!.prepare('SELECT status FROM sessions WHERE id = ?').get('codex-local')).toEqual({ status: 'active' });
     expect(h.routeLock).toHaveBeenCalledTimes(routeLockHeld ? 0 : 1);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', expect.objectContaining({
-      sessionId: 'codex-local', patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
+      sessionId: 'codex-local', patch: { status: 'active', archivedAt: null, snoozedUntil: null, snoozedAt: null },
     }));
   });
 
@@ -1495,7 +1495,7 @@ describe('local-db:sessions:update handler wiring', () => {
       'local-db:sessions:patched',
       expect.objectContaining({
         sessionId: 'cc-local',
-        patch: { status: 'deleted', snoozedUntil: null, snoozedAt: null },
+        patch: { status: 'deleted', archivedAt: null, snoozedUntil: null, snoozedAt: null },
       }),
     );
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
@@ -1676,18 +1676,19 @@ describe('local-db:sessions:update handler wiring', () => {
   });
 
   it('broadcasts local unarchive status patches to every window (#3175)', async () => {
-    h.sqlite!.prepare("UPDATE sessions SET status = 'archived' WHERE id = ?").run('codex-local');
+    h.sqlite!.prepare("UPDATE sessions SET status = 'archived', archived_at = 1700000000000 WHERE id = ?").run('codex-local');
 
     await invokeUpdate('codex-local', { status: 'active' });
     await vi.dynamicImportSettled();
 
     const persisted = h
-      .sqlite!.prepare('SELECT status FROM sessions WHERE id = ?')
-      .get('codex-local') as { status: string };
+      .sqlite!.prepare('SELECT status, archived_at AS archivedAt FROM sessions WHERE id = ?')
+      .get('codex-local') as { status: string; archivedAt: number | null };
     expect(persisted.status).toBe('active');
+    expect(persisted.archivedAt).toBeNull();
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'active', snoozedUntil: null, snoozedAt: null },
+      patch: { status: 'active', archivedAt: null, snoozedUntil: null, snoozedAt: null },
     });
     expect(h.compactSessionToolResultsBestEffort).not.toHaveBeenCalled();
   });
@@ -1699,13 +1700,21 @@ describe('local-db:sessions:update handler wiring', () => {
     await vi.dynamicImportSettled();
 
     const persisted = h
-      .sqlite!.prepare('SELECT status, pinned_at AS pinnedAt FROM sessions WHERE id = ?')
-      .get('codex-local') as { status: string; pinnedAt: number | null };
+      .sqlite!.prepare('SELECT status, pinned_at AS pinnedAt, archived_at AS archivedAt FROM sessions WHERE id = ?')
+      .get('codex-local') as { status: string; pinnedAt: number | null; archivedAt: number | null };
     expect(persisted.status).toBe('archived');
     expect(persisted.pinnedAt).toBeNull();
+    expect(persisted.archivedAt).toBeGreaterThan(0);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'archived', pinnedAt: null, summary: null, snoozedUntil: null, snoozedAt: null },
+      patch: {
+        status: 'archived',
+        archivedAt: new Date(persisted.archivedAt!).toISOString(),
+        pinnedAt: null,
+        summary: null,
+        snoozedUntil: null,
+        snoozedAt: null,
+      },
     });
     expect(h.compactSessionToolResultsBestEffort).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'codex-local' }),
@@ -1731,7 +1740,14 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.requestRecycle).toHaveBeenCalledTimes(2);
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'archived', pinnedAt: null, summary: null, snoozedUntil: null, snoozedAt: null },
+      patch: {
+        status: 'archived',
+        archivedAt: expect.any(String),
+        pinnedAt: null,
+        summary: null,
+        snoozedUntil: null,
+        snoozedAt: null,
+      },
     });
   });
 
@@ -1912,7 +1928,7 @@ describe('local-db:sessions:update handler wiring', () => {
 
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'codex-local',
-      patch: { status: 'deleted', snoozedUntil: null, snoozedAt: null },
+      patch: { status: 'deleted', archivedAt: null, snoozedUntil: null, snoozedAt: null },
     });
     // 不再出现携带请求值的回滚广播
     const statusPatches = h.tapWindowBroadcast.mock.calls

@@ -263,10 +263,10 @@ export function createPendingWriteTracker(): PendingWriteTracker {
 }
 
 /**
- * patch-meta 可写元数据及其宿主派生字段（snoozedAt 与截止时间成对同步）。
+ * patch-meta 可写元数据及其宿主派生字段（snoozedAt / archivedAt 随状态与延期成对同步）。
  * 消费方:writeGuardFields 的移行写(delete/archive)全字段取代。
  */
-export const SESSION_META_FIELDS = ['status', 'title', 'pinnedAt', 'snoozedUntil', 'snoozedAt'] as const;
+export const SESSION_META_FIELDS = ['status', 'title', 'pinnedAt', 'snoozedUntil', 'snoozedAt', 'archivedAt'] as const;
 
 /**
  * 写序登记字段:delete / archive 都是**移行**写——行从列表消失后,同会话 pending 的

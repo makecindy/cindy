@@ -268,7 +268,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
   session.taskTeammate = parseTaskTeammate(item.taskTeammate);
   if (orcaRole) session.orcaRole = orcaRole;
   if (typeof item.pinnedAt === 'string') session.pinnedAt = item.pinnedAt;
-  for (const field of ['snoozedUntil', 'snoozedAt'] as const) {
+  for (const field of ['snoozedUntil', 'snoozedAt', 'archivedAt'] as const) {
     session[field] = typeof item[field] === 'string' && Number.isFinite(Date.parse(item[field]))
       ? item[field] : null;
   }

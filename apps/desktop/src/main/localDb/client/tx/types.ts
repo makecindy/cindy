@@ -383,6 +383,8 @@ export interface SessionsSetTerminalStatusArgs {
   sideChatCloseParentId?: string;
   /** Internal automatic housekeeping only; never accepted as renderer metadata. */
   idleArchiveCutoff?: number;
+  /** Internal automatic housekeeping only: null leaves archived_at unset; a finite unix-ms number restores a prior value. */
+  archivedAt?: number | null;
   unusedOnly?: boolean;
 }
 
@@ -517,6 +519,7 @@ export interface SessionsSetStatusResultItem {
   workspaceKind: string | null;
   remoteHostId: string | null;
   source: string | null;
+  archivedAt: number | null;
   status: 'active' | 'archived';
 }
 

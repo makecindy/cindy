@@ -443,6 +443,7 @@ export interface RemotePendingStatusToken {
 
 interface PendingStatusEntry {
   token: RemotePendingStatusToken;
+  archivedAt: string | null;
   /**
    * 写库成功那一刻两个状态桶的 snapshot epoch;null = 写库仍在途。
    * 只有 epoch 大于栅栏的列表(写库确认之后才发出的 sessions:list)落地,才算权威确认。
@@ -480,8 +481,12 @@ function withPendingStatus(session: Session, deviceId: string): Session {
   const { status } = entry.token;
   // 归档一并 unpin(与被控端写库、本机 sessionsStore 乐观补丁同口径)。
   const unpin = status === 'archived' && session.pinnedAt != null;
-  if (session.status === status && !unpin) return session;
-  return { ...session, status, ...(unpin ? { pinnedAt: null } : {}) };
+  const nextArchivedAt = status === 'archived'
+    ? (session.status === 'archived' && session.archivedAt ? session.archivedAt : entry.archivedAt)
+    : null;
+  const archiveChanged = (session.archivedAt ?? null) !== nextArchivedAt;
+  if (session.status === status && !unpin && !archiveChanged) return session;
+  return { ...session, status, ...(unpin ? { pinnedAt: null } : {}), archivedAt: nextArchivedAt };
 }
 
 /**
@@ -1386,13 +1391,18 @@ const actions = {
     status: RemoteSessionStatus,
   ): RemotePendingStatusToken {
     const token: RemotePendingStatusToken = { deviceId, sessionId, status };
-    pendingStatuses.set(sessionId, { token, fence: null, toleratedMismatch: false });
+    pendingStatuses.set(sessionId, {
+      token,
+      archivedAt: status === 'archived' ? new Date().toISOString() : null,
+      fence: null,
+      toleratedMismatch: false,
+    });
     recompute();
     return token;
   },
 
   /**
-   * 写库成功:用被控端返回的行(status / pinnedAt / updatedAt)就地落进分片,不等
+   * 写库成功:用被控端返回的行(status / pinnedAt / archivedAt / updatedAt)就地落进分片,不等
    * `sessions:patched` 回流;叠加层留到写库后的新列表确认为止。凭据已被取代 / 设备
    * 已移除时 no-op —— 旧写库的结果不能盖过更新的一次迁移,权威值交给 push 回流。
    */
@@ -1411,6 +1421,13 @@ const actions = {
       patch.pinnedAt = persisted.pinnedAt ?? null;
     } else if (token.status === 'archived') {
       patch.pinnedAt = null;
+    }
+    if (persisted && Object.prototype.hasOwnProperty.call(persisted, 'archivedAt')) {
+      entry.archivedAt = persisted.archivedAt ?? null;
+      patch.archivedAt = entry.archivedAt;
+    } else {
+      entry.archivedAt = null;
+      patch.archivedAt = null;
     }
     if (typeof persisted?.updatedAt === 'string') patch.updatedAt = persisted.updatedAt;
     actions.applyPatch(token.deviceId, token.sessionId, patch);

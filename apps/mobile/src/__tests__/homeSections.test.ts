@@ -580,6 +580,32 @@ it('orders each inbox section by latest activity, whether or not a task is unrea
   expect(ids('inbox-archived')).toEqual(['new-read-done', 'old-unread-done']);
 });
 
+// 2026-11-27 user decision (task-inbox.md「分区与动作」): Done rows sort and display by archivedAt
+// (falling back to regular activity for legacy rows), while the regular list keeps lastActivityAt.
+it('sorts and displays inbox-archived rows by archivedAt with fallback for legacy rows', () => {
+  const archivedItem = (id: string, lastActivityAt: string, archivedAt: string | null) => ({
+    ...listItem(id, lastActivityAt),
+    session: { id, status: 'archived', lastActivityAt, archivedAt },
+  }) as unknown as RemoteSessionListItem;
+  const oldJustDone = archivedItem('old-just-done', '2026-11-20T00:00:00.000Z', '2026-11-27T10:00:00.000Z');
+  const recentEarlierDone = archivedItem('recent-earlier-done', '2026-11-27T09:00:00.000Z', '2026-11-27T09:30:00.000Z');
+  const legacyNoArchivedAt = archivedItem('legacy-done', '2026-11-27T09:45:00.000Z', null);
+  const home = presentation({ chats: [recentEarlierDone, oldJustDone, legacyNoArchivedAt] });
+  const empty = { runningSessionIds: new Set<string>(), waitingSessionIds: new Set<string>(), unreadSessionIds: new Set<string>() };
+  const archivedSection = buildInboxHomeSections(home, new Set(), empty, Date.parse('2026-11-27T11:00:00.000Z'))
+    .find(section => section.key === 'inbox-archived')!;
+  const rows = archivedSection.data.flatMap(row => row.kind === 'session' ? [[row.item.session.id, row.item.lastActivityAt]] : []);
+  expect(rows).toEqual([
+    ['old-just-done', '2026-11-27T10:00:00.000Z'],
+    ['legacy-done', '2026-11-27T09:45:00.000Z'],
+    ['recent-earlier-done', '2026-11-27T09:30:00.000Z'],
+  ]);
+  // Regular home list retains the original activity timestamp unchanged.
+  const regularRows = buildHomeSections(home, false, false)[0].data
+    .flatMap(row => row.kind === 'session' ? [[row.item.session.id, row.item.lastActivityAt]] : []);
+  expect(regularRows.find(([id]) => id === 'old-just-done')?.[1]).toBe('2026-11-20T00:00:00.000Z');
+});
+
 // 2026-11-18 user decision: teammates' routine results filled the phone's inbox. Teammate tasks
 // (by the teammate filter's test) are listed only while they need the user or run.
 it('leaves idle teammate conversations out of the inbox until they need the user or run', () => {

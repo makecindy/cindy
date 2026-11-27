@@ -11,9 +11,11 @@ import type { ScheduleRunner } from '@cindy/maker-scheduler';
 export interface QuietRunArchiveDeps {
   /** Status of the target before the round restores it; null when it cannot be read. */
   targetStatus(sessionId: string): Promise<string | null>;
+  /** Explicit archive timestamp captured before the round restores an archived target. */
+  targetArchivedAt?(sessionId: string): Promise<number | null>;
   isRunSilenced(runId: string): boolean;
   /** Archive again unless the user touched the task since `sinceMs` (rechecked under the route lock). */
-  archiveIfUntouched(sessionId: string, sinceMs: number): Promise<void>;
+  archiveIfUntouched(sessionId: string, sinceMs: number, archivedAt?: number | null): Promise<void>;
   warn(message: string, meta: Record<string, unknown>): void;
 }
 
@@ -24,6 +26,9 @@ export function withQuietRunArchive(runner: ScheduleRunner, deps: QuietRunArchiv
       const wasArchived = target
         ? (await deps.targetStatus(target).catch(() => null)) === 'archived'
         : false;
+      const priorArchivedAt = target && wasArchived && deps.targetArchivedAt
+        ? await deps.targetArchivedAt(target).catch(() => null)
+        : null;
       const result = await runner.fire(schedule, ctx);
       if (result.deferred || ctx.signal.aborted) return result;
       if (!result.skipped && !deps.isRunSilenced(ctx.runId)) return result;
@@ -34,7 +39,7 @@ export function withQuietRunArchive(runner: ScheduleRunner, deps: QuietRunArchiv
       const quietTask = target && wasArchived ? target : perRoundTask;
       if (!quietTask) return result;
       try {
-        await deps.archiveIfUntouched(quietTask, ctx.firedAt);
+        await deps.archiveIfUntouched(quietTask, ctx.firedAt, target && wasArchived ? priorArchivedAt : null);
       } catch (error) {
         deps.warn('[scheduler-host] re-archive after quiet run failed (non-fatal)', {
           scheduleId: schedule.id,

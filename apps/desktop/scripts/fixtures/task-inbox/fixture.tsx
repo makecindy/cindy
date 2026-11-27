@@ -118,7 +118,13 @@ function Specimen() {
         onAction={(id, action) =>
           setItems((previous) =>
             previous.map((s) =>
-              s.id === id ? { ...s, status: action === 'unarchive' ? 'active' : 'archived' } : s,
+              s.id === id
+                ? {
+                    ...s,
+                    status: action === 'unarchive' ? 'active' : 'archived',
+                    archivedAt: action === 'unarchive' ? null : new Date().toISOString(),
+                  }
+                : s,
             ),
           )
         }
