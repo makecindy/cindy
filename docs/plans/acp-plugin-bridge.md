@@ -460,7 +460,7 @@ Node Host（`apps/host`）。插件引擎任务的消息按 `agent_kind = 'acp'`
 - **内容**：新会话首条消息前的说明里加两段——已装插件花名册（与内置引擎同一份文本，`getGhostRosterPrompt`），
   以及 Skill 清单（名称、说明、`SKILL.md` 路径，Agent 需要时用自己的文件工具读）。Skill 范围与内置 Pi 相同
   （Cindy 内置与已批准插件的 Skill、Pi 的共享与项目目录，按用户的启用开关过滤；目录在隔离、限时的扫描进程里发现，不在 Main 上同步扫描，见 `maker-host/pluginEngineSkills.ts`），
-  与 Cindy 工具范围同一口径。恢复的会话已有，不重复。
+  与 Cindy 工具范围同一口径。单条说明上限放宽至 600 字符（避免 `pr` 等技能的 `Use when ...` 触发条件被截断），且 Cindy 托管与插件 Skill 排在普通目录扫描 Skill 之前，命中 120 条 / 24,000 字符上限时最后裁切。恢复的会话已有，不重复。
 - **只写真实可用的**：花名册只在 Agent 实际接收了插件网关（`cindy` MCP）时附上；对端不收 HTTP MCP 或工具桥不可用时
   只留 Skill 清单。花名册或 Skill 读取失败只少这一段，不挡任务启动。
 - **另一台电脑的任务与伙伴**：另一台电脑托管的任务与内置引擎一致，附任务所在电脑带来的花名册快照（`deviceHostedGhostRoster`，隧道提供 `cindy` 时），不读本机花名册；Skill 清单不附（没有跨电脑的来源）。隔离伙伴（按伙伴自己冻结的能力集）两样都不附；按普通任务装配的 V2 项目伙伴（`projectContext`）照常附上。恢复的会话不读取。

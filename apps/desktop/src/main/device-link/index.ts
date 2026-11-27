@@ -231,7 +231,7 @@ import { installAgentNetMediaRouting } from './agentNetMedia.js';
 import { bindAgentNetSharing, stopAgentNetSharing, agentNetSharingRoute, agentNetProviderShareRoutes } from './agentNetSharing.js';
 import { installAgentNetSharingPolicy } from './agentNetSharingPolicy.js';
 import { linkedProviderShareAdmission, setLinkedShareControlTransport } from './agentNetLinkedShares.js';
-import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, rejoinOfficialAgentNet, agentNetSelectionKey, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
+import { isAgentNetActive, agentNetAllowsLegacy, agentNetRequiresEncryption, createAgentNetOrLegacySocket, noteAgentNetIdentityRefused, noteOfficialAgentNetRemoved, rejoinOfficialAgentNet, agentNetSelectionKey, agentNetShouldUseLegacyPeer, agentNetShouldProbeLegacyPeer, agentNetPeerSnapshot, agentNetPeerRoutes,
   agentNetTransportAttestation, verifyAgentNetTransportAttestation, agentNetPrefersPrimary, useAgentNetSessions, agentNetSession,
   agentNetPeerRoute, agentNetRelayStalled, agentNetPeerConnectedAt, connectAgentNetSessionPeer, agentNetPeerState, agentNetNotifyCoverage, agentNetListedPhones, agentNetNetworkChanged, agentNetRelayConnected, onAgentNetRelayChange, onAgentNetPathChange, agentNetRelayRoute, setAgentNetDuplicateIdentityCooldown } from './agentNetRuntime.js';
 import { AgentNetSessionLinks, agentNetSessionLane, outboundOnSession, routeSessionPeers, type PeerLinks } from '@cindy/agent-net';
@@ -1446,6 +1446,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // Agent-Net 关着重建，由 Device Link 自己决定（还被删着的 Device Link 自己会再报「已移除」，重新登录过的照常连上）。
     // 「仅使用 Agent-Net」时没有 Device Link 可退，照旧停着。
     if (issue?.kind === 'device-removed' && primaryUsesEncryptedTransport && noteAgentNetIdentityRefused('relay closed 4410')) {
+      if (!activeSelfHostedRelay()) noteOfficialAgentNetRemoved();
       setTimeout(() => restartDeviceLinkForRelayChange(), 0);
     }
   });
@@ -2219,7 +2220,7 @@ function connectionIssueForRenderer(issue: ConnectionIssuePayload | null): Rende
  * 账号与中转按点击时的为准：每一跳请求发出前、每个等待点之后都核对，中途切号就整个停下（2026-11-23 review）。
  * 重连只恢复主连接，独立的共享任务与供应商连接继续运行。
  */
-export function rejoinThisDevice(): Promise<{ agentNet: AgentNetRejoinOutcome }> {
+export function rejoinThisDevice(options?: { agentNet?: boolean }): Promise<{ agentNet: AgentNetRejoinOutcome }> {
   const scope = activeOwnerScopeKey(), selection = agentNetSelectionKey(), agentNetWasActive = isAgentNetActive();
   const assertCurrent = () => {
     if (activeOwnerScopeKey() !== scope || isAppSessionBoundaryPending() || agentNetSelectionKey() !== selection
@@ -2228,7 +2229,7 @@ export function rejoinThisDevice(): Promise<{ agentNet: AgentNetRejoinOutcome }>
   return rejoinRemovedDevice({
     selfHostedRelaySelected: () => activeSelfHostedRelay() !== null,
     officialFetch: (path, opts) => serverApiFetch(path, { ...opts, baseUrl: () => { assertCurrent(); return officialDeviceLinkApiBase(); } }),
-    rejoinAgentNet: () => rejoinOfficialAgentNet(),
+    rejoinAgentNet: () => rejoinOfficialAgentNet({ force: options?.agentNet === true }),
     agentNetRequired: () => agentNetRequiresEncryption(),
     restartConnection: () => {
       if (!client || !arbiter?.isOwner() || !authManager.getAuthState().isAuthenticated) return;

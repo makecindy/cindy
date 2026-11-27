@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "验 Google 账户",
+    "note": "请扫码，或启 Google 页以验之。Antigravity 确认可用，则续前事。",
+    "refresh": "更新验证码"
+  },
   "runtimePlugins": {
     "save": "存之",
     "promptUnsupported": "此 Pi 所在之处不支持系统提示词片段。",
@@ -7146,6 +7151,7 @@
         },
         "onlyEncrypted": "唯用 Agent-Net",
         "onlyEncryptedHint": "启之则旧版设备及仍循旧路之分享不可用。常例为阖。",
+        "removedOff": "此机已自名籍中移除，Agent-Net 已自闭。复启即可重新加入。",
         "peerSwitch": {
           "row": {
             "toAgentNet": "方转 Agent-Net…",

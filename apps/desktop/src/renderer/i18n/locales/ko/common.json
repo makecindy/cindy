@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Google 계정 확인",
+    "note": "QR 코드를 스캔하거나 Google 페이지를 열어 계정을 확인하세요. Antigravity에서 액세스를 확인하면 작업이 재개됩니다.",
+    "refresh": "QR 코드 새로고침"
+  },
   "runtimePlugins": {
     "save": "저장",
     "promptUnsupported": "이 Pi 실행 위치는 시스템 지시 추가를 지원하지 않습니다.",
@@ -7146,6 +7151,7 @@
         },
         "onlyEncrypted": "Agent-Net만 사용",
         "onlyEncryptedHint": "켜면 이전 버전 기기와 이전 연결을 사용하는 공유를 사용할 수 없습니다. 기본값은 꺼짐입니다.",
+        "removedOff": "이 컴퓨터가 계정에서 제거되어 Agent-Net을 껐습니다. 다시 켜면 다시 참여합니다.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Agent-Net으로 전환 중…",

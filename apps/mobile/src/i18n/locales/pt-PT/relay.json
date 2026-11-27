@@ -5,7 +5,8 @@
     "hint": "Os dispositivos usam encriptação ponto a ponto. O modo apenas encriptado requer Agent-Net nos dois dispositivos.",
     "updateRequired": "Instale a versão mais recente da aplicação para usar o Agent-Net.",
     "notConfigured": "Este relay ainda não disponibiliza Agent-Net. Atualize-o ou adira a um relay V2.",
-    "failed": "Não foi possível alterar as definições do Agent-Net. Verifique a ligação ao relay e tente novamente."
+    "failed": "Não foi possível alterar as definições do Agent-Net. Verifique a ligação ao relay e tente novamente.",
+    "removedOff": "Este telemóvel foi removido da sua conta, por isso o Agent-Net foi desativado. Ative-o de novo para se reintegrar."
   },
   "settings": {
     "sectionTitle": "Serviço de relay",

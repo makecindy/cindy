@@ -1250,10 +1250,11 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   }, [runPeerRecovery]);
 
   // 「重新加入」 for this phone after it was removed on the official network (deviceRejoin.ts): one tap runs one attempt.
+  // Turning the Agent-Net switch on runs it too (`agentNet`), when the service says this phone's identity was revoked.
   useEffect(() => {
     if (!auth.isAuthenticated || !auth.deviceId) return;
     const deviceId = auth.deviceId, getAccessToken = auth.getAccessToken, apiFetch = auth.apiFetch;
-    return registerMobileDeviceRejoin(() => {
+    return registerMobileDeviceRejoin((options) => {
       const owner = getMobileAuthOwner();
       const assertCurrent = () => {
         if (!isMobileAuthOwnerCurrent(owner) || getActiveSelfHostedRelay()) throw new Error('DEVICE_REJOIN_SCOPE_CHANGED');
@@ -1265,7 +1266,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             timeoutMs: 15_000, cache: 'no-store', assertCurrent });
         },
         agentNetInvolved: async () => MobileAgentNetEngine.available() && !!getOfficialAgentNetApiBaseUrl()
-          && (getMobileAgentNetPreferences().enabled || await hasStoredMobileOfficialAgentNetIdentity()),
+          && (options?.agentNet === true || getMobileAgentNetPreferences().enabled || await hasStoredMobileOfficialAgentNetIdentity()),
         agentNetRequired: mobileAgentNetRequiresEncryption,
         rejoinAgentNet: async () => {
           assertCurrent();

@@ -5,6 +5,7 @@ import { useState, type ComponentProps, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import { type InstalledGhost } from '../../../../shared/ghost';
 import { PluginUiProvider } from '@/cindy-brain/PluginUiContributions';
+import { pluginUiInterestKey, type PluginUiInterest } from '../../../../shared/pluginUi';
 import type { ComposerSuggestionEntry } from '@/lib/composerSuggestion';
 import type { UnifiedCommand } from '@/lib/slashCommands';
 import { BUNDLED_CATALOG, buildUserProvider, type ProviderView } from '@cindy/model-providers';
@@ -218,6 +219,52 @@ it('confirms a thinking preference only after the real session write succeeds', 
   expect(h.thinkingValue).toBe(false);
   expect(getProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro')).toBe(false);
   await act(async () => { setProviderModelThinking('pi', 'mimo-thinking-test', 'mimo-v2.6-pro', true); });
+});
+
+// Unit: exercise eligibility at the actual ChatInput entry. The contribution
+// lifecycle tests alone cannot detect a new/remote task leaving a toolbar lane.
+it('shows opt-in composer actions only for established local drafts', async () => {
+  h.ghosts = [{ enabled: true, dir: '/fixture', approval: { state: 'approved', revision: 'one' },
+    manifest: { schemaVersion: 3, id: 'polish', name: 'Polish', kind: 'chip', entry: 'main.js', version: '1',
+      tools: [{ name: 'apply', description: 'Apply' }], mcpApps: {
+      ui: { resources: [{ uri: 'ui://polish', file: 'polish.html' }], tools: { apply: { visibility: ['app'] } } },
+      host: { views: [{ id: 'polish', title: 'Polish', resourceUri: 'ui://polish', scope: 'task' }],
+        contributions: [{ id: 'polish', title: 'AI Polish', position: 'composer.toolbar',
+          view: 'polish', presentation: 'popover', composerAction: 'inline', visible: true },
+        { id: 'actions', title: 'Never show template', position: 'composer.header', tool: 'apply', dynamicItems: true }] },
+    } } }];
+  h.providerCall.mockImplementation(async (...args) => {
+    const input = args[1] as { op: string; entries?: PluginUiInterest[] };
+    return { updates: input.op === 'native-interest' ? (input.entries ?? []).map(interest => ({
+      key: pluginUiInterestKey(interest), revision: 1, state: { visible: true, items: [{ id: 'one', title: 'Quick action' }] },
+    })) : [] };
+  });
+  const onSend = vi.fn();
+  const scene = (extra: Partial<ComponentProps<typeof ChatInput>>) => <PluginUiProvider>
+    <ChatInput {...props} sessionId="known-local-task" deviceLinkDeviceId={null} onSend={onSend} {...extra} />
+  </PluginUiProvider>;
+  const view = render(scene({}));
+  expect(screen.getByRole('button', { name: 'AI Polish' }).closest('[data-composer-left-controls]')).not.toBeNull();
+  await screen.findByRole('button', { name: 'Quick action' });
+  for (const excluded of [
+    { sessionId: undefined, draftKey: 'transient-draft' },
+    { draftKey: 'queued-edit' },
+    { deviceLinkDeviceId: undefined },
+    { deviceLinkDeviceId: 'another-computer' },
+    { deviceLinkDeviceId: sharedTaskHostPeer('shared', 'host') },
+    { remoteHostId: 'ssh' },
+    { agentDeviceId: 'another-agent-computer' },
+  ]) {
+    await act(async () => { view.rerender(scene(excluded)); });
+    expect(screen.queryByRole('button', { name: 'AI Polish' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Quick action' })).toBeNull();
+    expect(view.container.querySelector('[data-plugin-composer-header]')).toBeNull();
+    expect(view.container.querySelector('[data-plugin-composer-toolbar]')).toBeNull();
+    const last = h.providerCall.mock.calls.filter(args => (args[1] as { op: string }).op === 'native-interest').at(-1);
+    expect(last?.[1]).toEqual(expect.objectContaining({ entries: [] }));
+  }
+  expect(onSend).not.toHaveBeenCalled();
+  expect(h.providerCall).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ op: 'open-resource' }));
 });
 
 // New completion contract through the real editor/selection entry. The panel is

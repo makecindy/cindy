@@ -851,6 +851,7 @@ export function createHostAgentGraph(options: HostAgentGraphOptions) {
   // As the desktop (pi-host.ts, maker-host/index.ts): Pi packages from this profile's pi-package-home.
   const piPackages = createHostPiPackages({ userDataDir: options.userDataDir, piBinaryPath: options.piBinaryPath ?? null });
   const piNativeProviders = createHostPiNativeProviders({
+    getCatalog: () => modelContext.getRoutingCatalog(),
     userDataDir: options.userDataDir, piBinaryPath: options.piBinaryPath ?? null, endpoint: engineEndpoint,
     claudeProxy, providerConfig: config,
     ensureSharedGlobalSkills: () => options.sharedGlobalSkills?.ensureSharedGlobalSkills() ?? Promise.resolve(),

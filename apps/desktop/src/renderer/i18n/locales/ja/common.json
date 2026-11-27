@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Google アカウントの確認",
+    "note": "QR コードをスキャンするか、Google のページを開いて確認してください。Antigravity がアクセスを確認すると、タスクが再開します。",
+    "refresh": "QR コードを更新"
+  },
   "runtimePlugins": {
     "save": "保存",
     "promptUnsupported": "この Pi の実行場所ではシステム指示の追加に対応していません。",
@@ -7146,6 +7151,7 @@
         },
         "onlyEncrypted": "Agent-Net のみ使用",
         "onlyEncryptedHint": "有効にすると、旧バージョンの端末と旧接続を使用する共有は利用できなくなります。初期設定はオフです。",
+        "removedOff": "このパソコンはアカウントから削除されたため、Agent-Net をオフにしました。もう一度オンにすると再参加します。",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Agent-Net に切り替え中…",
