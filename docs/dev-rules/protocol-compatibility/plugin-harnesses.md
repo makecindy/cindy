@@ -426,12 +426,12 @@ Cindy 自己的系统提示词仍不交给插件引擎；「个性化 → 自定
   存量插件零迁移。对端收到却无法应用时按 ACP 要求以 `-32602` 拒绝建会话。
 - **取值**：`Maker.createSession` 对插件引擎一律只取发起时冻结的个性化正文（`hostStartupPreferences.userPrompt`），丢弃之后拼进
   `userPrompt` 的项目知识与协同角色说明（后者也会经 `prepareStartOptions` 拼入，包括目标模式恢复这类不经 bootstrap 的入口）；
-  没有冻结值的入口不发。隔离伙伴与只读 `/review` 不带（审查隔离只清 `userPrompt`，由 `AcpAgent` 按 `reviewMode` 排除）。引擎在另一台电脑上时，发起端按同一规则取值后经连接发出。
+  没有冻结值的入口不发。隔离伙伴与只读 `/review` 不带，由发起端 Maker 判定（伙伴档案与审查标记不过线，执行端无法排除；审查隔离只清 `userPrompt`，`AcpAgent` 也按 `reviewMode` 再排除一次）。引擎在另一台电脑上时，发起端按同一规则取值后经连接发出。
   替另一台电脑运行的任务（同账号远程供应商 `--cindy-remote-workspace` 与分享受邀者 `--cindy-guest-workspace`）用任务所在电脑经既有
   remote-agent 启动参数 `RemoteAgentWireStartOptions.userPrompt` 发来的正文，不新增 wire 字段，也从不换成执行端自己保存的个性化：
   托管启动走 `Maker.startHostedAgentSession`，不经过执行端的 `prepareStartOptions`。受邀者任务带的是受邀者的指令。
 - **新旧组合**：新执行端遇到旧发起端时，`userPrompt` 是旧发起端发给内置引擎的那份，可能在个性化正文后附有项目知识入口或协同角色说明，
-  与内置引擎从旧发起端收到的内容一致；双方都升级后只剩个性化正文。旧执行端不给托管任务发 `systemPrompt`，行为同前。中转与 relay 无改动。
+  与内置引擎从旧发起端收到的内容一致；旧发起端也可能为隔离伙伴带上主人的个性化。双方都升级后只剩个性化正文。旧执行端不给托管任务发 `systemPrompt`，行为同前。中转与 relay 无改动。
 - **插件侧**：受邀者的正文对分享者电脑是不受信的文字，插件不得让其触发读取本机文件（官方 Antigravity 插件在远程与分享模式下
   把它写进本次启动私有的 Agent 定义并转义 `@[label](path)` 引用，makecindy/cindy-official-plugins#427）。
 

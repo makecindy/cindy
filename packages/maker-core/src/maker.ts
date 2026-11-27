@@ -52,6 +52,7 @@ import {
   AgentStartupStoppedError,
   AgentStartupResourcesReleasedError,
   LOCAL_AGENT_CLIENT,
+  isolatedBotProfile,
 } from './agents/base-agent.js';
 import type {
   AgentSessionHandle,
@@ -919,8 +920,12 @@ export class Maker {
       // instructions from prepareStartOptions, also on starts that bypass bootstrap such as goal
       // restore). A plugin engine gets it as its ACP system prompt, so it receives only the
       // personal instructions frozen before any of that, and none when a start froze none.
+      // Isolated companions and read-only reviews get none, decided here: an engine on another
+      // computer sees only the remote-agent start options, which carry no companion profile.
       if (opts.agentKind === 'acp') {
-        startOpts.userPrompt = startOpts.hostStartupPreferences?.userPrompt;
+        startOpts.userPrompt = startOpts.reviewMode || isolatedBotProfile(startOpts.botRuntimeProfile)
+          ? undefined
+          : startOpts.hostStartupPreferences?.userPrompt;
       }
       if (startOpts.agentDeviceId) {
         if (startOpts.remoteHostId) {
