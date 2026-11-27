@@ -23,7 +23,7 @@
 | [cindy-updater 高风险模块](cindy-updater.md) | 修改客户端自动更新链路（`cindy-updater` 或 Electron 侧更新服务）之前；更新包经 统一下载器下载，改它的传输、重试或超时行为同样属于更新链路的改动（#10938） | 路径 |
 | [配置分层与 override 契约](configuration-and-overrides.md) | 新增或修改 Settings UI、配置文件、本地偏好存储、运行时 profile，或 agent／MCP／provider 相关开关之前 | 路径 |
 | [凭证与本地存储安全](credentials-and-local-storage.md) | 修改凭证或授权信息处理、文件落盘位置、用户持久数据、临时文件、 测试目录或运行时生成物之前 | 路径 |
-| [Desktop 数据库与 Migration 安全](database-and-migrations.md) | 修改 `apps/desktop/src/main/localDb/`、数据库 schema、Drizzle migration、 migration companion script 或运行期数据库访问之前 | 路径 |
+| [Desktop 数据库与 Migration 安全](database-and-migrations.md) | 修改 `apps/desktop/src/main/localDb/`、数据库 schema、Drizzle migration、 migration companion script 或运行期数据库访问之前（新增表／列／migration 前先核对「Schema 变更克制原则」） | 路径 |
 | [Desktop 开发、启动与验证](desktop-development.md) | 安装、启动、重启、调试或验证 `apps/desktop` 及其共享 packages 时， 或修改 Desktop 开发启动脚本与单页 UI 验证工具（`ui:check`）之前 | 路径 |
 | [Desktop 单测性能基准](desktop-unit-test-performance.md) | 调整 Desktop Vitest worker、测试分池或根级单测资源配额前 | 路径 |
 | [开发工作流：worktree、提 PR 与 Review](development-workflow.md) | 在 Cindy 内嵌的 worktree 会话里工作、准备提交或直推、做 code review， 或决定开发中得到的知识该写到哪里、新增规则文档、整理与迁移规则文档之前 | 路径 |

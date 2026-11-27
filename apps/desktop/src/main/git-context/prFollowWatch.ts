@@ -197,6 +197,17 @@ export class PrFollowWatch {
     if (this.signatures.size > MAX_TRACKED) this.signatures.delete(this.signatures.keys().next().value!);
     const changes = changesBetween(previous, signature, query.provider);
     if (!changes.length) {
+      // Seed reconciledUpdatedAt on the initial baseline read so later overflow sweeps
+      // do not emit redundant `reconcile` triggers for PRs whose updated_at never moved.
+      if (
+        previous === undefined &&
+        this.deps.autoRunAllowed() &&
+        result.ok &&
+        typeof result.metadata?.updated_at === 'string' &&
+        result.metadata.updated_at
+      ) {
+        this.markCommentReconciled(query, result.metadata.updated_at);
+      }
       this.retryPending();
       if (previous === undefined && result.ok && (result.status === 'merged' || (query.provider === 'gitlab' && result.status === 'closed'))) {
         const mergedAt = Date.parse(String((result.status === 'merged' ? result.metadata?.merged_at : result.metadata?.closed_at) ?? ''));

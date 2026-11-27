@@ -1,3 +1,4 @@
+import { ScheduledModelSelectionBusyError } from './modelSelectionBusyError.js';
 import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
 import { actualSourceIdForModel, connectedProvidersForAgent, effectiveSourceIdForModel, findCatalogModel, isModelSelectableForNewRoute, type ProviderView } from '@cindy/model-providers';
 import { isDisallowedPluginEngineDeviceId } from './pluginEngineSessionAdmission';
@@ -149,7 +150,7 @@ export async function writeScheduledModelBaselineIfProfileCurrent(
   return result.changes === 1;
 }
 
-export class ScheduledModelSelectionBusyError extends Error {}
+export { ScheduledModelSelectionBusyError };
 
 /** Settle a registered route under the caller's send lease before capturing its baseline.
  * Reuses the pending-switch path from PR #9680; unresolved state uses the runner's

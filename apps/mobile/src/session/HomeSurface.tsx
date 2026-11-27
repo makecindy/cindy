@@ -23,6 +23,10 @@ import { TaskTagDots } from '@/session/TaskTags';
 import { ResidentHomeList, useResidentHomeList } from './ResidentHomeList';
 import { HomeNewTaskButton } from './HomeNewTaskButton';
 import { SwipeableProjectHeader } from './SwipeableProjectHeader';
+import { SwipeableSectionHeader } from './SwipeableSectionHeader';
+import { createDragOrHoldOptionsController, REORDER_DRAG_HOLD_MS } from './dragOrHoldOptions';
+import { HomeSectionOptionsSheet, type HomeSectionOptionItem, type HomeSectionOptionsGroup } from './HomeSectionOptionsSheet';
+import { PinnedOptionsSheet } from './PinnedOptionsSheet';
 import { useRetainedHomeState, getHomeViewSession } from './homeViewSession';
 import { rememberRecentTask } from './recentTasks';
 import { homeListStyles, SESSION_ROW_LONG_PRESS_MS, SessionStatusMark, SessionStatusPulse } from '@/session/HomeListVisuals';
@@ -73,12 +77,15 @@ import {
   FolderOpen,
   FileText,
   Hammer,
+  List,
   Menu,
   Monitor,
   MessagesSquare,
   Lock,
   Pin,
   RefreshCw,
+  Search,
+  Settings,
   SquarePen,
   Timer,
   UsersRound,
@@ -269,8 +276,9 @@ import {
 } from '@cindy/maker-shared/project-order-sync';
 import {
   buildHomeSections,
-  orderedPinnedItems,
   movePinnedItem,
+  orderedPinnedItems,
+  reorderPinnedItemByDropIndex,
   homeRowsShareRenderData,
   homeRowBefore,
   isFolderHomeRow,
@@ -455,6 +463,20 @@ type ProjectDragSession = {
   hoverIndex: number;
   key: string;
   layouts: ProjectHeaderLayout[];
+  visibleKeys: string[];
+  originY: number;
+  rootY: number;
+  title: string;
+  width: number;
+  x: number;
+};
+
+type PinnedDragSession = {
+  height: number;
+  hoverIndex: number;
+  key: string;
+  layouts: ProjectHeaderLayout[];
+  visibleItems: readonly RemoteSessionListItem[];
   visibleKeys: string[];
   originY: number;
   rootY: number;
@@ -864,10 +886,38 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const visualProjectKeysRef = useRef<string[]>([]);
   const homeRootRef = useRef<ViewInstance>(null);
   const projectHeaderRefs = useRef(new Map<string, ViewInstance>());
+  const projectOptionOpenersRef = useRef(new Map<string, () => void>());
   const projectDragRef = useRef<ProjectDragSession | null>(null);
   const projectDragEpochRef = useRef(0);
+  const projectDragHoldControllerRef = useRef(createDragOrHoldOptionsController());
   const [projectDrag, setProjectDrag] = useState<ProjectDragSession | null>(null);
   const projectDragY = useSharedValue(0);
+  const pinnedRowRefs = useRef(new Map<string, ViewInstance>());
+  const pinnedDragRef = useRef<PinnedDragSession | null>(null);
+  const pinnedDragEpochRef = useRef(0);
+  const pinnedDragHoldControllerRef = useRef(createDragOrHoldOptionsController());
+  const [pinnedDrag, setPinnedDrag] = useState<PinnedDragSession | null>(null);
+  const pinnedDragY = useSharedValue(0);
+  useEffect(() => {
+    return () => {
+      projectDragHoldControllerRef.current.cancel();
+      pinnedDragHoldControllerRef.current.cancel();
+    };
+  }, []);
+  const [pinnedOptionsOpen, setPinnedOptionsOpen] = useState(false);
+  const [projectOptionsTarget, setProjectOptionsTarget] = useState<{
+    title: string;
+    onNewTask(): void;
+    onOpenProject(): void;
+    onSearchProject(): void;
+    onSettings?: () => void;
+  } | null>(null);
+  const pendingProjectOptionActionRef = useRef<(() => void) | null>(null);
+  const [deviceOptionsTarget, setDeviceOptionsTarget] = useState<{
+    deviceId: string;
+    title: string;
+  } | null>(null);
+  const pendingDeviceOptionActionRef = useRef<(() => void) | null>(null);
   const initialScrollOffset = useRef(viewSession.read<number>('scrollOffset', 0));
   const scrollRestored = useRef(initialScrollOffset.current === 0);
   const homeListRef = useRef<SectionList<HomeRow, HomeSection>>(null);
@@ -940,8 +990,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     restoredSelectionUnvalidatedRef.current = false;
     retryingDeviceIdsRef.current.clear();
     projectOrderFetchFenceRef.current = createProjectOrderFetchFence();
+    projectDragHoldControllerRef.current.cancel();
     projectDragEpochRef.current += 1;
     projectDragRef.current = null;
+    pinnedDragHoldControllerRef.current.cancel();
+    pinnedDragEpochRef.current += 1;
+    pinnedDragRef.current = null;
 
     setDevices([]);
     setHomeListCacheHydrated(false);
@@ -955,6 +1009,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     setRevokedTipDeviceId(null);
     setRetryingDeviceIds(new Set());
     setProjectDrag(null);
+    setPinnedDrag(null);
+    setPinnedOptionsOpen(false);
+    setProjectOptionsTarget(null);
+    setDeviceOptionsTarget(null);
   }, [accountGeneration]);
 
   const updateDeviceConnectionState = useCallback((deviceId: string, state: HomeDeviceConnectionState) => {
@@ -3199,9 +3257,25 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     title: string;
   }) => {
     swipeRegistry.closeOpenRow();
+    playHaptic('selection');
     const expectedAccountGeneration = accountGeneration;
     const epoch = projectDragEpochRef.current + 1;
     projectDragEpochRef.current = epoch;
+    const openOptions = projectOptionOpenersRef.current.get(input.key);
+    projectDragHoldControllerRef.current.start({
+      startY: input.absoluteY,
+      onCancelDrag: () => {
+        if (projectDragEpochRef.current !== epoch) return;
+        projectDragEpochRef.current += 1;
+        projectDragRef.current = null;
+        setProjectDrag(null);
+      },
+      onHoldOptions: openOptions ? () => {
+        if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+        playHaptic('selection');
+        openOptions();
+      } : undefined,
+    });
     const deviceSection = sections.find(section => section.key.startsWith('device:')
       && section.data.some(row => row.key === input.key));
     const keys = deviceSection
@@ -3264,6 +3338,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, [accountGeneration, projectDragY, sections, visibleProjectKeys, swipeRegistry]);
 
   const moveProjectDrag = useCallback((absoluteY: number) => {
+    projectDragHoldControllerRef.current.move(absoluteY);
     const session = projectDragRef.current;
     if (!session) return;
     // 跟手:幽灵行顶边 = 手指 Y - 半行高,避免跳到触点下方。
@@ -3279,12 +3354,13 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   }, [projectDragY]);
 
   const endProjectDrag = useCallback(() => {
+    const { moved } = projectDragHoldControllerRef.current.finish();
     const expectedAccountGeneration = accountGeneration;
     projectDragEpochRef.current += 1;
     const session = projectDragRef.current;
     projectDragRef.current = null;
     setProjectDrag(null);
-    if (!session) return;
+    if (!session || !moved) return;
     const scope = resolveProjectOrderWriteScope(selectedDeviceId ? [selectedDeviceId] : 'all', 'local');
     const ledger = projectOrderWriteLedger(
       scope,
@@ -3370,6 +3446,199 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     if (!next) return;
     persistViewer(next);
   }, [accountGeneration, home.projects, hostProjectOrders, invoke, manualProjectOrder, selectedDeviceId, visibleProjectKeys, resetDisplayOrder]);
+
+  const visiblePins = useMemo(
+    () => orderedPinnedItems(filteredHome.pinned, pinnedSort, pinnedOrder),
+    [filteredHome.pinned, pinnedSort, pinnedOrder],
+  );
+  const pinnedDragEnabled = pinnedSort === 'manual' && visiblePins.length > 1;
+  const openPinnedOptions = useCallback(() => {
+    swipeRegistry.closeOpenRow();
+    setPinnedOptionsOpen(true);
+  }, [swipeRegistry]);
+  const openProjectOptions = useCallback((target: {
+    title: string;
+    onNewTask(): void;
+    onOpenProject(): void;
+    onSearchProject(): void;
+    onSettings?: () => void;
+  }) => {
+    swipeRegistry.closeOpenRow();
+    setProjectOptionsTarget(target);
+  }, [swipeRegistry]);
+  const closeProjectOptions = useCallback(() => {
+    setProjectOptionsTarget(null);
+  }, []);
+  const handleProjectOptionsClosed = useCallback(() => {
+    const action = pendingProjectOptionActionRef.current;
+    pendingProjectOptionActionRef.current = null;
+    action?.();
+  }, []);
+  const runAfterProjectOptionsClose = useCallback((action: () => void) => {
+    pendingProjectOptionActionRef.current = action;
+    setProjectOptionsTarget(null);
+  }, []);
+  const openDeviceSectionOptions = useCallback((deviceId: string, title: string) => {
+    swipeRegistry.closeOpenRow();
+    setDeviceOptionsTarget({ deviceId, title });
+  }, [swipeRegistry]);
+  const closeDeviceSectionOptions = useCallback(() => {
+    setDeviceOptionsTarget(null);
+  }, []);
+  const handleDeviceOptionsClosed = useCallback(() => {
+    const action = pendingDeviceOptionActionRef.current;
+    pendingDeviceOptionActionRef.current = null;
+    action?.();
+  }, []);
+  const runAfterDeviceOptionsClose = useCallback((action: () => void) => {
+    pendingDeviceOptionActionRef.current = action;
+    setDeviceOptionsTarget(null);
+  }, []);
+  const handleChangeShowCollapsedTeammateAvatars = useCallback((value: boolean) => {
+    void setShowCollapsedTeammateAvatars(value);
+  }, [setShowCollapsedTeammateAvatars]);
+  const changePinnedView = useCallback((mode: HomePinnedView) => {
+    viewPrefsTouchedRef.current = true;
+    setPinnedView(mode);
+    void saveHomeViewPreferences({ pinnedView: mode });
+  }, [saveHomeViewPreferences, setPinnedView]);
+  const changePinnedSort = useCallback((sort: HomePinnedSort) => {
+    viewPrefsTouchedRef.current = true;
+    setPinnedSort(sort);
+    void saveHomeViewPreferences({ pinnedSort: sort });
+  }, [saveHomeViewPreferences, setPinnedSort]);
+
+  const beginPinnedDrag = useCallback((input: {
+    absoluteY: number;
+    key: string;
+    title: string;
+    onHoldOptions?: () => void;
+  }) => {
+    swipeRegistry.closeOpenRow();
+    playHaptic('selection');
+    const expectedAccountGeneration = accountGeneration;
+    const epoch = pinnedDragEpochRef.current + 1;
+    pinnedDragEpochRef.current = epoch;
+    pinnedDragHoldControllerRef.current.start({
+      startY: input.absoluteY,
+      onCancelDrag: () => {
+        if (pinnedDragEpochRef.current !== epoch) return;
+        pinnedDragEpochRef.current += 1;
+        pinnedDragRef.current = null;
+        setPinnedDrag(null);
+      },
+      onHoldOptions: input.onHoldOptions ? () => {
+        if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+        playHaptic('selection');
+        input.onHoldOptions?.();
+      } : undefined,
+    });
+    const keys = visiblePins.map((item) => item.session.id);
+    const layouts: ProjectHeaderLayout[] = [];
+    let pending = keys.length;
+    const finish = () => {
+      if (
+        homeAccountGenerationRef.current !== expectedAccountGeneration
+        || pinnedDragEpochRef.current !== epoch
+        || layouts.length === 0
+      ) return;
+      layouts.sort((a, b) => a.y - b.y);
+      const self = layouts.find((item) => item.key === input.key);
+      if (!self) return;
+      const session: PinnedDragSession = {
+        height: self.height,
+        hoverIndex: projectDropIndexFromY(layouts.filter((item) => item.key !== input.key), input.absoluteY),
+        key: input.key,
+        layouts,
+        visibleItems: visiblePins,
+        visibleKeys: keys,
+        originY: self.y,
+        rootY: 0,
+        title: input.title,
+        width: 0,
+        x: 0,
+      };
+      const row = pinnedRowRefs.current.get(input.key);
+      row?.measureInWindow((x, _y, width) => {
+        homeRootRef.current?.measureInWindow((_rootX, rootY) => {
+          if (
+            homeAccountGenerationRef.current !== expectedAccountGeneration
+            || pinnedDragEpochRef.current !== epoch
+          ) return;
+          session.x = x;
+          session.width = width;
+          session.rootY = rootY;
+          pinnedDragRef.current = session;
+          pinnedDragY.value = self.y - rootY;
+          setPinnedDrag(session);
+        });
+      });
+    };
+    if (pending === 0) return;
+    for (const key of keys) {
+      const node = pinnedRowRefs.current.get(key);
+      if (!node) {
+        pending -= 1;
+        if (pending === 0) finish();
+        continue;
+      }
+      node.measureInWindow((_x, y, _width, height) => {
+        layouts.push({ height, key, y });
+        pending -= 1;
+        if (pending === 0) finish();
+      });
+    }
+  }, [accountGeneration, pinnedDragY, swipeRegistry, visiblePins]);
+
+  const movePinnedDrag = useCallback((absoluteY: number) => {
+    pinnedDragHoldControllerRef.current.move(absoluteY);
+    const session = pinnedDragRef.current;
+    if (!session) return;
+    pinnedDragY.value = absoluteY - session.height / 2 - session.rootY;
+    const hoverIndex = projectDropIndexFromY(
+      session.layouts.filter((item) => item.key !== session.key),
+      absoluteY,
+    );
+    if (hoverIndex === session.hoverIndex) return;
+    const next = { ...session, hoverIndex };
+    pinnedDragRef.current = next;
+    setPinnedDrag(next);
+  }, [pinnedDragY]);
+
+  const endPinnedDrag = useCallback(() => {
+    const { moved } = pinnedDragHoldControllerRef.current.finish();
+    const expectedAccountGeneration = accountGeneration;
+    pinnedDragEpochRef.current += 1;
+    const session = pinnedDragRef.current;
+    pinnedDragRef.current = null;
+    setPinnedDrag(null);
+    if (!session || !moved || homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+    const mountedKeysByY = session.layouts.map((item) => item.key);
+    const dropIndex = resolveVirtualizedDropIndex(
+      session.visibleKeys,
+      mountedKeysByY,
+      session.key,
+      session.hoverIndex,
+    );
+    if (dropIndex === null) return;
+    const next = reorderPinnedItemByDropIndex(
+      pinnedOrder,
+      session.visibleItems,
+      session.key,
+      dropIndex,
+    );
+    if (!next) return;
+    viewPrefsTouchedRef.current = true;
+    setPinnedOrder(next);
+    void saveHomeViewPreferences({ pinnedOrder: { owner: preferenceOwner, keys: next } });
+  }, [accountGeneration, pinnedOrder, preferenceOwner, saveHomeViewPreferences, setPinnedOrder]);
+  const movePinnedTask = useCallback((id: string, direction: -1 | 1) => {
+    const next = movePinnedItem(pinnedOrder, visiblePins, id, direction);
+    if (!next) return;
+    viewPrefsTouchedRef.current = true;
+    setPinnedOrder(next);
+    void saveHomeViewPreferences({ pinnedOrder: { owner: preferenceOwner, keys: next } });
+  }, [pinnedOrder, preferenceOwner, saveHomeViewPreferences, setPinnedOrder, visiblePins]);
   useEffect(() => {
     if (!groupDialogue) setDialogueShowAll(false);
   }, [groupDialogue]);
@@ -3413,8 +3682,9 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
 
   // 置顶组与项目组一致:点表头收起/展开,共用同一条收起动画。
   const togglePinned = useCallback(() => {
+    if (swipeRegistry.closeOpenRow()) return;
     runDisclosure(() => setPinnedCollapsed((collapsed) => !collapsed));
-  }, [runDisclosure]);
+  }, [runDisclosure, swipeRegistry]);
 
   const openProjectSessions = useCallback((project: MobileHomeProjectGroup, search = false) => {
     if (!project.deviceId) return;
@@ -3462,16 +3732,26 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
       onOpenAutomationGroup={openAutomationGroup}
       onOpenProjectSessions={openProjectSessions}
       onNewProjectTask={openNewSession}
+      onShowProjectOptions={openProjectOptions}
       onOpenSession={openSession}
       onShowOptions={showSessionOptions}
       onToggleAutomationGroup={toggleAutomationGroup}
       onProjectDragEnd={displayedProjectOrder === 'custom' ? endProjectDrag : undefined}
       onProjectDragMove={displayedProjectOrder === 'custom' ? moveProjectDrag : undefined}
       onProjectDragStart={displayedProjectOrder === 'custom' ? beginProjectDrag : undefined}
+      onPinnedDragEnd={pinnedDragEnabled ? endPinnedDrag : undefined}
+      onPinnedDragMove={pinnedDragEnabled ? movePinnedDrag : undefined}
+      onPinnedDragStart={pinnedDragEnabled ? beginPinnedDrag : undefined}
+      canMovePinnedUp={pinnedDragEnabled && section.key === 'pinned' && index > 0}
+      canMovePinnedDown={pinnedDragEnabled && section.key === 'pinned' && index < section.data.length - 1}
+      onMovePinned={pinnedDragEnabled ? movePinnedTask : undefined}
       onShowAllDialogue={showAllDialogueSessions}
       onToggleProject={toggleProject}
+      pinnedDragging={pinnedDrag?.key === (item.kind === 'session' && item.source === 'pinned' ? item.item.session.id : '')}
+      pinnedRowRefs={pinnedRowRefs}
       projectDragging={projectDrag?.key === (item.kind === 'project' ? item.project.key : '')}
       projectHeaderRefs={projectHeaderRefs}
+      projectOptionOpenersRef={projectOptionOpenersRef}
       homeScrollY={homeScrollY}
       viewportHeight={screenHeight}
       onTogglePin={toggleSessionPinned}
@@ -3489,6 +3769,12 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     endProjectDrag,
     moveProjectDrag,
     projectDrag,
+    beginPinnedDrag,
+    endPinnedDrag,
+    movePinnedDrag,
+    movePinnedTask,
+    pinnedDrag,
+    pinnedDragEnabled,
     displayedProjectOrder,
     showAllDialogueSessions,
     visibleProjectKeys,
@@ -3496,6 +3782,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
     openAutomationGroup,
     openProjectSessions,
     openNewSession,
+    openProjectOptions,
     openSession,
     pinnedCollapsed,
     sections,
@@ -3624,45 +3911,6 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
   const handleDisplayActionRef = useRef(handleDisplayAction);
   handleDisplayActionRef.current = handleDisplayAction;
   const stableDisplayAction = useCallback((id: string) => handleDisplayActionRef.current(id), []);
-  const visiblePins = useMemo(() => orderedPinnedItems(filteredHome.pinned, pinnedSort, pinnedOrder),
-    [filteredHome.pinned, pinnedSort, pinnedOrder]);
-  const pinnedActions = useMemo<NativePullDownAction[]>(() => [
-    { id: 'pin.view', title: t('devices.list.menu.displayHeading'), subactions:
-      (['text', 'list', 'card'] as const).map(mode => ({ id: 'pin.view.' + mode,
-        title: t('devices.list.menu.view.' + mode), state: pinnedView === mode ? 'on' : 'off' })) },
-    { id: 'pin.sort', title: t('devices.list.menu.sortHeading'), subactions:
-      (['manual', 'activity'] as const).map(sort => ({ id: 'pin.sort.' + sort,
-        title: t(sort === 'manual' ? 'devices.list.menu.projectOrder.custom' : 'devices.list.menu.sortBy.recency'),
-        state: pinnedSort === sort ? 'on' : 'off' })) },
-    ...(pinnedSort === 'manual' && visiblePins.length > 1 ? (['up', 'down'] as const).map(direction => ({
-      id: 'pin.' + direction,
-      title: t(direction === 'up' ? 'message.queue.moveUp' : 'message.queue.moveDown'),
-      subactions: (direction === 'up' ? visiblePins.slice(1) : visiblePins.slice(0, -1)).map(item => ({
-        id: 'pin.' + direction + '.' + item.session.id,
-        title: item.title,
-      })),
-    })) : []),
-  ], [pinnedView, pinnedSort, visiblePins, t]);
-  const changePinnedDisplay = useCallback((action: string) => {
-    viewPrefsTouchedRef.current = true;
-    if (pinnedSort === 'manual' && (action.startsWith('pin.up.') || action.startsWith('pin.down.'))) {
-      const up = action.startsWith('pin.up.');
-      const id = action.slice(up ? 'pin.up.'.length : 'pin.down.'.length);
-      const next = movePinnedItem(pinnedOrder, visiblePins, id, up ? -1 : 1);
-      if (!next) return;
-      setPinnedOrder(next);
-      void saveHomeViewPreferences({ pinnedOrder: { owner: preferenceOwner, keys: next } });
-    } else if (action === 'pin.sort.manual' || action === 'pin.sort.activity') {
-      const sort = action === 'pin.sort.manual' ? 'manual' : 'activity';
-      setPinnedSort(sort);
-      void saveHomeViewPreferences({ pinnedSort: sort });
-    } else if (action.startsWith('pin.view.')) {
-      const mode = action.slice('pin.view.'.length);
-      if (mode !== 'text' && mode !== 'list' && mode !== 'card') return;
-      setPinnedView(mode);
-      void saveHomeViewPreferences({ pinnedView: mode });
-    }
-  }, [pinnedSort, pinnedOrder, visiblePins, preferenceOwner, saveHomeViewPreferences, setPinnedOrder, setPinnedSort, setPinnedView]);
   const rowDisplay = useMemo<HomeRowDisplay>(
     () => ({ taskInfoFields, viewMode, pinnedView }),
     [taskInfoFields, viewMode, pinnedView],
@@ -3702,20 +3950,31 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         }}
         sections={sections}
         ListHeaderComponent={<>
-        <HomeTeammatesSection showCollapsedAvatars={showCollapsedTeammateAvatars} context={teammatesSectionContext} active={active} refreshKey={teammatesRefreshKey}
+        <HomeTeammatesSection
+          showCollapsedAvatars={showCollapsedTeammateAvatars}
+          onChangeShowCollapsedAvatars={handleChangeShowCollapsedTeammateAvatars}
+          context={teammatesSectionContext}
+          active={active}
+          refreshKey={teammatesRefreshKey}
           push={guardedPush}
+          swipeRegistry={swipeRegistry}
           // Independent of the computer-connection guide: server group chats and cloud companions need no computer.
           visible={indexedSearch.activeFilterCount === 0 && displayedStatus !== 'archived'}
           query={searchQuery}
           // Shared group and project blocks draw their own full-width top line.
           showFooter={sharedRows.length === 0 && !isBlockHomeRow(sections[0]?.data[0])}
-          runDisclosure={runDisclosure} prepareDisclosure={prepareListDisclosure} />
+          runDisclosure={runDisclosure}
+          prepareDisclosure={prepareListDisclosure}
+        />
         {sharedRows.length > 0 ? <DisclosureItem clip style={styles.projectGroup} testID="home.sharedGroup">
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t('sharedTask.title')}
             accessibilityState={{ expanded: !sharedCollapsed }}
-            onPress={() => runDisclosure(() => setSharedCollapsed(value => !value))}
+            onPress={() => {
+              if (swipeRegistry.closeOpenRow()) return;
+              runDisclosure(() => setSharedCollapsed(value => !value));
+            }}
             onPressIn={prepareListDisclosure}
             style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}
             testID="home.sharedHeader"
@@ -3723,8 +3982,8 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
             {sharedCollapsed
               ? <ChevronRight color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
               : <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />}
-            <UsersRound color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
             <Text style={styles.projectTitle} numberOfLines={1}>{t('sharedTask.title')}</Text>
+            <Text style={styles.projectCount} numberOfLines={1}>{sharedRows.length}</Text>
           </Pressable>
           {sharedCollapsed ? null : <DisclosureItem exit>{sharedRows.map((row, index) => {
             if (row.item) {
@@ -3787,7 +4046,7 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
             tintColor={colors.textSecondary}
           />
         }
-        scrollEnabled={projectDrag === null}
+        scrollEnabled={projectDrag === null && pinnedDrag === null}
         stickySectionHeadersEnabled={false}
         contentContainerStyle={[
           styles.listContent,
@@ -3810,36 +4069,81 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         renderSectionHeader={({ section }) => {
           if (section.key.startsWith('device:')) {
             if (!section.title) return null;
+            const deviceId = section.key.slice('device:'.length);
+            const deviceTitle = section.title;
             const closed = collapsedProjectKeys.includes(section.key);
             const Chevron = closed ? ChevronRight : ChevronDown;
-            return <Pressable accessibilityRole="button" accessibilityState={{ expanded: !closed }}
-              onPress={() => toggleProject(section.key)} style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}>
-              <Chevron color={colors.textSecondary} size={iconSize.xl} />
-              <Text style={styles.projectTitle} numberOfLines={1}>{section.title}</Text>
-            </Pressable>;
+            const header = (
+              <Pressable
+                accessibilityActions={deviceId ? [{ name: 'options', label: t('session.row.moreOptions') }] : undefined}
+                onAccessibilityAction={deviceId ? (event) => {
+                  if (event.nativeEvent.actionName === 'options') openDeviceSectionOptions(deviceId, deviceTitle);
+                } : undefined}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: !closed }}
+                delayLongPress={SESSION_ROW_LONG_PRESS_MS}
+                onLongPress={deviceId ? () => openDeviceSectionOptions(deviceId, deviceTitle) : undefined}
+                onPress={() => toggleProject(section.key)}
+                onPressIn={prepareListDisclosure}
+                style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}
+                testID={deviceId ? `home.deviceHeader.${deviceId}` : undefined}
+              >
+                <Chevron color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+                <Text style={styles.projectTitle} numberOfLines={1}>{deviceTitle}</Text>
+              </Pressable>
+            );
+            if (!deviceId) return header;
+            return (
+              <SwipeableSectionHeader
+                rowKey={section.key}
+                registry={swipeRegistry}
+                onOptions={() => openDeviceSectionOptions(deviceId, deviceTitle)}
+                testID={`home.deviceHeader.swipe.${deviceId}`}
+                actionTestID={`home.deviceSettings.${deviceId}`}
+              >
+                {header}
+              </SwipeableSectionHeader>
+            );
           }
           if (section.key.startsWith('inbox-')) {
             const closed = inboxCollapsed.has(section.key);
             return <Pressable testID={`home.${section.key}`} accessibilityRole="button" accessibilityState={{ expanded: !closed }}
-              onPress={() => animateListChange(() => setInboxCollapsed(previous => {
-                const next = new Set(previous); if (next.has(section.key)) next.delete(section.key); else next.add(section.key); return next;
-              }))}
+              onPress={() => {
+                if (swipeRegistry.closeOpenRow()) return;
+                animateListChange(() => setInboxCollapsed(previous => {
+                  const next = new Set(previous); if (next.has(section.key)) next.delete(section.key); else next.add(section.key); return next;
+                }));
+              }}
               style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}>
-              {closed ? <ChevronRight color={colors.textSecondary} size={iconSize.xl} /> : <ChevronDown color={colors.textSecondary} size={iconSize.xl} />}
+              {closed
+                ? <ChevronRight color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+                : <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />}
               <Text style={styles.projectTitle}>{section.title}</Text>
               <Text style={styles.projectCount}>{section.count}</Text>
             </Pressable>;
           }
           if (section.key !== 'pinned' || !section.title) return null;
           return (
-            <View style={styles.pinnedHeaderRow}>
+            <SwipeableSectionHeader
+              rowKey="pinned:header"
+              registry={swipeRegistry}
+              onOptions={openPinnedOptions}
+              testID="home.pinnedHeader.swipe"
+              actionTestID="home.pinnedSettings"
+            >
               <Pressable
+                accessibilityActions={[{ name: 'options', label: t('session.row.moreOptions') }]}
+                onAccessibilityAction={(event) => {
+                  if (event.nativeEvent.actionName === 'options') openPinnedOptions();
+                }}
                 accessibilityLabel={t('devices.list.a11y.pinnedConversations', { count: filteredHome.pinned.length })}
                 accessibilityRole="button"
                 accessibilityState={{ expanded: !pinnedCollapsed }}
+                delayLongPress={SESSION_ROW_LONG_PRESS_MS}
+                onLongPress={openPinnedOptions}
                 onPress={togglePinned}
                 onPressIn={prepareListDisclosure}
-                style={({ pressed }) => [styles.projectRow, styles.pinnedHeaderLabel, pressed && styles.pressed]}
+                style={({ pressed }) => [styles.projectRow, pressed && styles.pressed]}
                 testID="home.pinnedHeader"
               >
                 {pinnedCollapsed ? (
@@ -3847,15 +4151,10 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
                 ) : (
                   <ChevronDown color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
                 )}
-                <Pin color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
                 <Text style={styles.projectTitle} numberOfLines={1}>{section.title}</Text>
                 <Text style={styles.projectCount} numberOfLines={1}>{filteredHome.pinned.length}</Text>
               </Pressable>
-              <HomeDisplayMenu actions={pinnedActions} onAction={changePinnedDisplay} testID="home.pinnedSettings"
-                accessibilityLabel={t('session.row.pinnedSection') + ' · ' + t('devices.list.menu.displayHeading')}>
-                <Ellipsis color={colors.textSecondary} size={iconSize.action} />
-              </HomeDisplayMenu>
-            </View>
+            </SwipeableSectionHeader>
           );
         }}
         renderSectionFooter={({ section }) => section.key === 'pinned' && sections.length > 1
@@ -3951,6 +4250,20 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
           width={projectDrag.width}
           x={projectDrag.x}
           y={projectDragY}
+        />
+      ) : null}
+
+      {pinnedDrag ? (
+        <PinnedDragOverlay
+          height={pinnedDrag.height}
+          insertY={(() => {
+            const line = projectDragInsertY(pinnedDrag);
+            return line === null ? null : line - pinnedDrag.rootY;
+          })()}
+          title={pinnedDrag.title}
+          width={pinnedDrag.width}
+          x={pinnedDrag.x}
+          y={pinnedDragY}
         />
       ) : null}
 
@@ -4263,6 +4576,112 @@ function HomeScreenContent({ active = true, width, newSessionInSystemBar = false
         topOffset={chromeHeight}
         visible={searchFilterOpen}
       />}</MountOnFirstOpen>
+      <MountOnFirstOpen open={pinnedOptionsOpen}>{() => <PinnedOptionsSheet
+        visible={pinnedOptionsOpen}
+        pinnedView={pinnedView}
+        pinnedSort={pinnedSort}
+        onChangeView={changePinnedView}
+        onChangeSort={changePinnedSort}
+        onClose={() => setPinnedOptionsOpen(false)}
+      />}</MountOnFirstOpen>
+      <MountOnFirstOpen open={projectOptionsTarget !== null}>{() => {
+        const target = projectOptionsTarget;
+        const sections: HomeSectionOptionsGroup[] = target ? [{
+          id: 'actions',
+          items: [
+            {
+              id: 'newTask',
+              title: t('devices.list.projectActions.newTask'),
+              sfSymbol: 'square.and.pencil',
+              icon: SquarePen,
+              testID: 'home.projectOptions.newTask',
+              onPress: () => runAfterProjectOptionsClose(target.onNewTask),
+            },
+            {
+              id: 'allTasks',
+              title: t('devices.list.projectActions.allTasks'),
+              sfSymbol: 'list.bullet',
+              icon: List,
+              testID: 'home.projectOptions.allTasks',
+              onPress: () => runAfterProjectOptionsClose(target.onOpenProject),
+            },
+            {
+              id: 'search',
+              title: t('devices.list.projectActions.search'),
+              sfSymbol: 'magnifyingglass',
+              icon: Search,
+              testID: 'home.projectOptions.search',
+              onPress: () => runAfterProjectOptionsClose(target.onSearchProject),
+            },
+            ...(target.onSettings ? [{
+              id: 'settings',
+              title: t('settings.projectInfo.title'),
+              sfSymbol: 'gearshape',
+              icon: Settings,
+              testID: 'home.projectOptions.settings',
+              onPress: () => runAfterProjectOptionsClose(target.onSettings!),
+            }] : []),
+          ],
+        }] : [];
+        return (
+          <HomeSectionOptionsSheet
+            visible={target !== null}
+            title={target?.title ?? ''}
+            sections={sections}
+            testID="home.projectOptionsSheet"
+            onClose={closeProjectOptions}
+            onClosed={handleProjectOptionsClosed}
+          />
+        );
+      }}</MountOnFirstOpen>
+      <MountOnFirstOpen open={deviceOptionsTarget !== null}>{() => {
+        const target = deviceOptionsTarget;
+        const deviceFilter = target
+          ? home.deviceFilters.find((item) => item.deviceId === target.deviceId) ?? null
+          : null;
+        const canCreateOnDevice = target
+          ? newSessionDeviceOptions.some((device) => device.deviceId === target.deviceId)
+          : false;
+        const items: HomeSectionOptionItem[] = target ? [
+          ...(canCreateOnDevice ? [{
+            id: 'newTask',
+            title: t('devices.list.projectActions.newTask'),
+            sfSymbol: 'square.and.pencil',
+            icon: SquarePen,
+            testID: 'home.deviceOptions.newTask',
+            onPress: () => runAfterDeviceOptionsClose(() => openNewSession(undefined, undefined, target.deviceId)),
+          }] : []),
+          ...(deviceFilter && canBrowseMobileHomeDevice(deviceFilter) ? [{
+            id: 'showTasks',
+            title: t('devices.list.menu.showDeviceTasks'),
+            sfSymbol: 'list.bullet',
+            icon: List,
+            testID: 'home.deviceOptions.showTasks',
+            onPress: () => runAfterDeviceOptionsClose(() => selectHomeScope(deviceFilter)),
+          }] : []),
+          {
+            id: 'remoteDesktop',
+            title: t('remoteDesktop.title'),
+            sfSymbol: 'desktopcomputer',
+            icon: Monitor,
+            testID: 'home.deviceOptions.remoteDesktop',
+            onPress: () => runAfterDeviceOptionsClose(() => guardedPush({
+              pathname: '/devices/desktop/[deviceId]',
+              params: { deviceId: target.deviceId, deviceName: target.title },
+            })),
+          },
+        ] : [];
+        return (
+          <HomeSectionOptionsSheet
+            visible={target !== null}
+            title={target?.title ?? ''}
+            sections={items.length > 0 ? [{ id: 'actions', items }] : []}
+            testID="home.deviceOptionsSheet"
+            onClose={closeDeviceSectionOptions}
+            onClosed={handleDeviceOptionsClosed}
+          />
+        );
+      }}</MountOnFirstOpen>
       <MountOnFirstOpen open={actionSheetSession !== null}>{() => <SessionOptionsPresenter
         inboxMode={sessionOptionsInboxMode(taskListMode === 'inbox', actionSheetContext)}
         session={actionSheetSession}
@@ -4497,12 +4916,50 @@ function sanitizeDeviceChipTestId(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]/g, '_');
 }
 
-function projectDragInsertY(drag: ProjectDragSession): number | null {
+function projectDragInsertY(drag: {
+  hoverIndex: number;
+  key: string;
+  layouts: ProjectHeaderLayout[];
+}): number | null {
   const sourceIndex = drag.layouts.findIndex((item) => item.key === drag.key);
   if (sourceIndex < 0 || drag.hoverIndex === sourceIndex) return null;
   const target = drag.layouts[drag.hoverIndex];
   if (!target) return null;
   return drag.hoverIndex > sourceIndex ? target.y + target.height : target.y;
+}
+
+function PinnedDragOverlay({
+  height,
+  insertY,
+  title,
+  width,
+  x,
+  y,
+}: {
+  height: number;
+  insertY: number | null;
+  title: string;
+  width: number;
+  x: number;
+  y: SharedValue<number>;
+}) {
+  const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
+  const ghostStyle = useAnimatedStyle(() => ({
+    height,
+    left: x,
+    top: y.value,
+    width,
+  }));
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill} testID="home.pinnedDragOverlay">
+      {insertY === null ? null : <View style={[styles.projectDragInsertLine, { top: insertY }]} />}
+      <Reanimated.View style={[styles.projectDragGhost, ghostStyle]}>
+        <Pin color={colors.textSecondary} size={iconSize.action} strokeWidth={iconStroke.thin} />
+        <Text numberOfLines={1} style={styles.projectTitle}>{title}</Text>
+      </Reanimated.View>
+    </View>
+  );
 }
 
 function ProjectDragOverlay({
@@ -4599,6 +5056,7 @@ function ProjectRow({
   dragging = false,
   expandedAutomationGroups,
   headerRefs,
+  optionOpenersRef,
   kind = 'project',
   machineIdentity,
   onDragEnd,
@@ -4608,6 +5066,7 @@ function ProjectRow({
   onOpenProject,
   onNewTask,
   onSearchProject,
+  onShowOptions,
   onOpenSession,
   onToggle,
   onToggleAutomationGroup,
@@ -4622,6 +5081,7 @@ function ProjectRow({
   dragging?: boolean;
   expandedAutomationGroups: readonly string[];
   headerRefs?: MutableRefObject<Map<string, ViewInstance>>;
+  optionOpenersRef?: MutableRefObject<Map<string, () => void>>;
   kind?: 'project' | 'dialogue' | 'cindy-make' | 'automation';
   machineIdentity?: HomeProjectMachineIdentity;
   onDragEnd?: () => void;
@@ -4631,6 +5091,13 @@ function ProjectRow({
   onOpenProject(): void;
   onNewTask(): void;
   onSearchProject(): void;
+  onShowOptions?: (target: {
+    title: string;
+    onNewTask(): void;
+    onOpenProject(): void;
+    onSearchProject(): void;
+    onSettings?: () => void;
+  }) => void;
   onOpenSession(item: RemoteSessionListItem): void;
   onToggle(): void;
   onToggleAutomationGroup(key: string): void;
@@ -4745,6 +5212,24 @@ function ProjectRow({
     : project.title;
   const reorderable = kind === 'project' && !!onDragStart && !!onDragMove && !!onDragEnd;
   const actionable = kind === 'project' && !!project.deviceId && !!project.workingDir && !!swipe;
+  const openOptions = useCallback(() => {
+    if (!actionable || !onShowOptions) return;
+    onShowOptions({
+      title: project.title,
+      onNewTask,
+      onOpenProject,
+      onSearchProject,
+      onSettings: hostKey && project.deviceId ? () => setSettingsOpen(true) : undefined,
+    });
+  }, [actionable, hostKey, onNewTask, onOpenProject, onSearchProject, onShowOptions, project.deviceId, project.title]);
+  useEffect(() => {
+    if (!optionOpenersRef || kind !== 'project' || !actionable || !onShowOptions) return;
+    const map = optionOpenersRef.current;
+    map.set(project.key, openOptions);
+    return () => {
+      if (map.get(project.key) === openOptions) map.delete(project.key);
+    };
+  }, [actionable, kind, onShowOptions, openOptions, optionOpenersRef, project.key]);
   const dragGesture = useMemo(() => {
     if (!onDragStart || !onDragMove || !onDragEnd || kind !== 'project') return null;
     const start = onDragStart;
@@ -4754,8 +5239,8 @@ function ProjectRow({
     // fields here so registering a drag never copies all project task data.
     const { key: projectKey, sessionCount } = project;
     return Gesture.Pan()
-      // Require a deliberate hold so pauses while scrolling do not start reordering.
-      .activateAfterLongPress(1000)
+      // Hold 550ms lifts the project for dragging; continuing to hold still without moving opens options.
+      .activateAfterLongPress(550)
       .activeOffsetY([-8, 8])
       .failOffsetX([-12, 12])
       .onStart((event) => {
@@ -4799,6 +5284,8 @@ function ProjectRow({
       } : undefined}
       accessibilityState={{ expanded: !collapsed }}
       accessibilityValue={collapsedStatusA11y ? { text: collapsedStatusA11y } : undefined}
+      delayLongPress={SESSION_ROW_LONG_PRESS_MS}
+      onLongPress={actionable && !reorderable && !dragging && onShowOptions ? openOptions : undefined}
       onLayout={(event) => {
         const height = event.nativeEvent.layout.height;
         if (Number.isFinite(height) && height > 0) projectHeaderHeight.value = height;
@@ -5008,10 +5495,17 @@ function HomeListRowInner({
   onOpenAutomationGroup,
   onOpenProjectSessions,
   onNewProjectTask,
+  onShowProjectOptions,
   onOpenSession,
   onProjectDragEnd,
   onProjectDragMove,
   onProjectDragStart,
+  onPinnedDragEnd,
+  onPinnedDragMove,
+  onPinnedDragStart,
+  canMovePinnedUp,
+  canMovePinnedDown,
+  onMovePinned,
   onShowAllDialogue,
   onShowOptions,
   onToggleAutomationGroup,
@@ -5019,8 +5513,11 @@ function HomeListRowInner({
   onTogglePin,
   prevIsBlock,
   projectCollapsed,
+  pinnedDragging,
+  pinnedRowRefs,
   projectDragging,
   projectHeaderRefs,
+  projectOptionOpenersRef,
   homeScrollY,
   viewportHeight,
   registry,
@@ -5039,10 +5536,23 @@ function HomeListRowInner({
   onOpenAutomationGroup(group: RemoteAutomationSessionGroup, options?: { allProjects?: boolean }): void;
   onOpenProjectSessions(project: MobileHomeProjectGroup, search?: boolean): void;
   onNewProjectTask(project: MobileHomeProjectGroup): void;
+  onShowProjectOptions(target: {
+    title: string;
+    onNewTask(): void;
+    onOpenProject(): void;
+    onSearchProject(): void;
+    onSettings?: () => void;
+  }): void;
   onOpenSession(item: RemoteSessionListItem): void;
   onProjectDragEnd?: () => void;
   onProjectDragMove?: (absoluteY: number) => void;
   onProjectDragStart?: (input: { absoluteY: number; count: number; key: string; title: string }) => void;
+  onPinnedDragEnd?: () => void;
+  onPinnedDragMove?: (absoluteY: number) => void;
+  onPinnedDragStart?: (input: { absoluteY: number; key: string; title: string; onHoldOptions?: () => void }) => void;
+  canMovePinnedUp?: boolean;
+  canMovePinnedDown?: boolean;
+  onMovePinned?: (id: string, direction: -1 | 1) => void;
   onShowAllDialogue(): void;
   onShowOptions(session: RemoteSession, context?: SessionOptionsContext): void;
   onToggleAutomationGroup(key: string): void;
@@ -5050,8 +5560,11 @@ function HomeListRowInner({
   onTogglePin(session: RemoteSession): void;
   prevIsBlock: boolean;
   projectCollapsed: boolean;
+  pinnedDragging: boolean;
+  pinnedRowRefs: MutableRefObject<Map<string, ViewInstance>>;
   projectDragging: boolean;
   projectHeaderRefs: MutableRefObject<Map<string, ViewInstance>>;
+  projectOptionOpenersRef: MutableRefObject<Map<string, () => void>>;
   homeScrollY?: SharedValue<number>;
   viewportHeight: number;
   registry: ReturnType<typeof createSwipeRowRegistry>;
@@ -5059,7 +5572,48 @@ function HomeListRowInner({
   swipe: SessionSwipeControls;
 }) {
   const { pinnedView, taskInfoFields } = useHomeRowDisplay();
+  const { t } = useTranslation();
   const showProjectLabel = taskInfoFields.includes('project');
+  const pinnedSessionItem = !isFolderHomeRow(item) && item.source === 'pinned' && !item.item.automationGroup
+    ? item.item
+    : null;
+  const pinnedSessionId = pinnedSessionItem?.session.id ?? null;
+  const handlePinnedDragStart = useCallback((absoluteY: number) => {
+    if (!pinnedSessionItem || !onPinnedDragStart) return;
+    onPinnedDragStart({
+      absoluteY,
+      key: pinnedSessionItem.session.id,
+      title: pinnedSessionItem.title,
+      onHoldOptions: () => {
+        swipe.registry.closeOpenRow();
+        swipe.onShowOptions(latestMobileSessionRow(pinnedSessionItem).session as RemoteSession, { pinnedSection: true });
+      },
+    });
+  }, [onPinnedDragStart, pinnedSessionItem, swipe]);
+  const pinnedDragGesture = useMemo(() => {
+    if (!pinnedSessionId || !onPinnedDragStart || !onPinnedDragMove || !onPinnedDragEnd) return null;
+    const move = onPinnedDragMove;
+    const finish = onPinnedDragEnd;
+    return Gesture.Pan()
+      // Match project drag-to-reorder: hold lifts for dragging; holding still opens task options.
+      .activateAfterLongPress(REORDER_DRAG_HOLD_MS)
+      .activeOffsetY([-8, 8])
+      .failOffsetX([-12, 12])
+      .onStart((event) => {
+        runOnJS(handlePinnedDragStart)(event.absoluteY);
+      })
+      .onUpdate((event) => {
+        runOnJS(move)(event.absoluteY);
+      })
+      .onFinalize(() => {
+        runOnJS(finish)();
+      });
+  }, [handlePinnedDragStart, onPinnedDragEnd, onPinnedDragMove, onPinnedDragStart, pinnedSessionId]);
+  const attachPinnedRowRef = useCallback((node: ViewInstance | null) => {
+    if (!pinnedSessionId) return;
+    if (node) pinnedRowRefs.current.set(pinnedSessionId, node);
+    else pinnedRowRefs.current.delete(pinnedSessionId);
+  }, [pinnedRowRefs, pinnedSessionId]);
   if (isFolderHomeRow(item)) {
     return (
       <ProjectRow
@@ -5067,6 +5621,7 @@ function HomeListRowInner({
         dragging={projectDragging}
         expandedAutomationGroups={expandedAutomationGroups}
         headerRefs={projectHeaderRefs}
+        optionOpenersRef={projectOptionOpenersRef}
         kind={item.kind}
         machineIdentity={machineIdentity}
         onDragEnd={item.kind === 'project' ? onProjectDragEnd : undefined}
@@ -5076,6 +5631,7 @@ function HomeListRowInner({
         onOpenProject={item.kind === 'dialogue' ? onShowAllDialogue : () => onOpenProjectSessions(item.project)}
         onNewTask={() => onNewProjectTask(item.project)}
         onSearchProject={() => onOpenProjectSessions(item.project, true)}
+        onShowOptions={onShowProjectOptions}
         onOpenSession={onOpenSession}
         onToggle={() => onToggleProject(item.project.key)}
         onToggleAutomationGroup={onToggleAutomationGroup}
@@ -5093,26 +5649,36 @@ function HomeListRowInner({
   }
   const row = (
     <HomeSessionRow
+      accessibilityHint={pinnedDragGesture ? t('devices.list.menu.pinnedOrderManualTip') : undefined}
       asBlock
+      canMoveDown={Boolean(pinnedDragGesture && canMovePinnedDown)}
+      canMoveUp={Boolean(pinnedDragGesture && canMovePinnedUp)}
+      disableLongPressOptions={Boolean(pinnedDragGesture)}
+      dragging={pinnedDragging}
       inboxMode={inboxMode}
       expandedAutomationGroups={expandedAutomationGroups}
       hideDivider={nextIsBlock || isLastPinnedRow}
       item={item.item}
+      onMoveDirection={pinnedDragGesture ? onMovePinned : undefined}
       onOpenAutomationGroup={onOpenAutomationGroup}
       onOpenSession={onOpenSession}
       onToggleAutomationGroup={onToggleAutomationGroup}
       pinnedView={item.source === 'pinned' ? pinnedView : undefined}
       projectLabel={showProjectLabel && !item.sourceLabel ? item.projectLabel : undefined}
+      rowRef={pinnedSessionId ? attachPinnedRowRef : undefined}
       sourceLabel={item.sourceLabel}
       suppressBlockTopBorder={prevIsBlock}
       swipe={swipe}
       testID={item.source === 'search' ? 'home.searchSessionRow' : homeSessionRowTestId(item.source)}
     />
   );
+  const draggableRow = pinnedDragGesture
+    ? <GestureDetector gesture={pinnedDragGesture}><View collapsable={false}>{row}</View></GestureDetector>
+    : row;
   // 普通会话行(含置顶区)在这里挂滑动操作;自动化组行不挂 —— 组行代表多次运行,
   // 「置顶/归档这一组」语义含混,但其展开的子行经 swipe 透传同样可滑。
   // 项目组子行 / 自动化子行的滑动在各自渲染路径内包裹;选择态不传 swipe。
-  if (item.item.automationGroup || !conversationSearchAllowsLocalWrites(item.item)) return row;
+  if (item.item.automationGroup || !conversationSearchAllowsLocalWrites(item.item)) return draggableRow;
   return (
     <SwipeableSessionRow
       inboxMode={inboxMode}
@@ -5127,7 +5693,7 @@ function HomeListRowInner({
       session={item.item.session as RemoteSession}
       testID={`${item.source === 'search' ? 'home.searchSessionRow' : homeSessionRowTestId(item.source)}.swipe`}
     >
-      {row}
+      {draggableRow}
     </SwipeableSessionRow>
   );
 }
@@ -5140,19 +5706,26 @@ function HomeListRowInner({
 export const HomeSessionRow = memo(HomeSessionRowInner, homeRowPropsEqual);
 
 function HomeSessionRowInner({
+  accessibilityHint,
   inboxMode = false,
   asBlock = false,
   automationChildTestID,
   automationChildrenTestID,
+  canMoveDown = false,
+  canMoveUp = false,
+  disableLongPressOptions = false,
+  dragging = false,
   expandedAutomationGroups,
   groupRowTestID,
   hideDivider = false,
   item,
   onLongPress,
+  onMoveDirection,
   onOpenAutomationGroup,
   onOpenSession,
   onPressSelection,
   onToggleAutomationGroup,
+  rowRef,
   selected = false,
   selectionMarkTestID,
   selectionMode = false,
@@ -5165,6 +5738,7 @@ function HomeSessionRowInner({
   testID,
   titleTestIDPrefix = 'home.sessionRowTitle',
 }: {
+  accessibilityHint?: string;
   /**
    * 自动化组行以「块」呈现:上下各一根全宽分割线,与项目组同款,把任务块和普通对话区分开。
    * 仅顶层列表传 true;项目内已有项目块包裹其运行记录。
@@ -5173,6 +5747,11 @@ function HomeSessionRowInner({
   inboxMode?: boolean;
   automationChildTestID?: string;
   automationChildrenTestID?: string;
+  canMoveDown?: boolean;
+  canMoveUp?: boolean;
+  /** 置顶任务处于长按拖动排序模式时,抑制 400ms 长按弹选项,避免抢占拖动手势。 */
+  disableLongPressOptions?: boolean;
+  dragging?: boolean;
   /** 已展开的自动化组 key 列表(页面级 state,列表虚拟化回收行组件也不丢展开态)。 */
   expandedAutomationGroups?: readonly string[];
   groupRowTestID?: string;
@@ -5183,12 +5762,14 @@ function HomeSessionRowInner({
   hideDivider?: boolean;
   item: RemoteSessionListItem;
   onLongPress?: () => void;
+  onMoveDirection?: (sessionId: string, direction: -1 | 1) => void;
   /** 组展开后子运行超过限量时,点「查看全部 N 次运行」进入该任务的专属列表页(与项目组一致)。 */
   onOpenAutomationGroup?: (group: RemoteAutomationSessionGroup) => void;
   onOpenSession(item: RemoteSessionListItem): void;
   onPressSelection?: () => void;
   /** 提供时,自动化组行点击 = 展开/收起(与设备详情页完整模式的组行约定一致);子行点开各自会话。 */
   onToggleAutomationGroup?: (key: string) => void;
+  rowRef?: (node: ViewInstance | null) => void;
   selected?: boolean;
   selectionMarkTestID?: string;
   selectionMode?: boolean;
@@ -5265,6 +5846,12 @@ function HomeSessionRowInner({
   // 零消息会话没有摘要。此时不要保留双行列表的空白第二行；定时任务与置顶
   // 标记仍占用右下状态槽，因此继续使用双行布局。共享身份位于标题左侧。
   const showPreviewLine = !textMode && (!!group || !!preview?.trim() || showSchedule || showPinned);
+  const canOpenOptions = !selectionMode && !group && !!swipe && conversationSearchAllowsLocalWrites(item);
+  const accessibilityActions = [
+    ...(canMoveUp && onMoveDirection ? [{ name: 'moveUp', label: t('message.queue.moveUp') }] : []),
+    ...(canMoveDown && onMoveDirection ? [{ name: 'moveDown', label: t('message.queue.moveDown') }] : []),
+    ...(disableLongPressOptions && canOpenOptions ? [{ name: 'options', label: t('session.row.moreOptions') }] : []),
+  ];
   // 组行点击语义对齐桌面版侧边栏:收起且有需关注内容(未读运行 / 待处理)时,点行直接打开
   // 该看的那条会话(共享层 primary:运行中 > 有未读 > 最新);想展开点行首箭头(独立热区)。
   // 无需关注内容或已展开时,点行仍是展开 / 收起。
@@ -5301,12 +5888,33 @@ function HomeSessionRowInner({
         : undefined}
     >
       <Pressable
+        ref={rowRef}
+        accessibilityActions={accessibilityActions.length > 0 ? accessibilityActions : undefined}
+        onAccessibilityAction={accessibilityActions.length > 0 ? (event) => {
+          switch (event.nativeEvent.actionName) {
+            case 'moveUp':
+              onMoveDirection?.(item.session.id, -1);
+              break;
+            case 'moveDown':
+              onMoveDirection?.(item.session.id, 1);
+              break;
+            case 'options':
+              if (swipe) {
+                swipe.registry.closeOpenRow();
+                const session = latestMobileSessionRow(item).session as RemoteSession;
+                if (pinnedView) swipe.onShowOptions(session, { pinnedSection: true });
+                else swipe.onShowOptions(session);
+              }
+              break;
+          }
+        } : undefined}
+        accessibilityHint={accessibilityHint}
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel}
         accessibilityState={group ? { expanded: groupExpanded, selected: selected || active } : { selected: selected || active }}
         delayLongPress={SESSION_ROW_LONG_PRESS_MS}
         onLongPress={
-          !selectionMode && !group && swipe && conversationSearchAllowsLocalWrites(item)
+          disableLongPressOptions ? undefined : canOpenOptions && swipe && conversationSearchAllowsLocalWrites(item)
             ? () => {
                 swipe.registry.closeOpenRow();
                 const session = latestMobileSessionRow(item).session as RemoteSession;
@@ -5314,14 +5922,15 @@ function HomeSessionRowInner({
                 else swipe.onShowOptions(session);
               }
             : onLongPress}
-        onPress={handlePress}
-        onPressIn={group && !groupRowOpensPrimary && !selectionMode ? () => prepareDisclosure(true) : undefined}
+        onPress={dragging ? undefined : handlePress}
+        onPressIn={dragging ? undefined : group && !groupRowOpensPrimary && !selectionMode ? () => prepareDisclosure(true) : undefined}
         style={({ pressed }) => [
           styles.sessionListRow,
           pinnedView === 'card' && styles.pinnedCard,
           active && { backgroundColor: wallpaper === 'none' ? colors.surfaceChip : wallpaperRaisedFill(colors.surfaceChip, mode) },
           !showPreviewLine && styles.sessionListRowSingleLine,
-          pressed && styles.pressed,
+          pressed && !dragging && styles.pressed,
+          dragging && styles.projectRowDragging,
         ]}
         testID={group ? (groupRowTestID ?? `${testID}.automationGroup`) : testID}
       >
@@ -6034,8 +6643,6 @@ const makeStyles = (colors: ThemeColors, listSurface: string = colors.surface) =
     paddingTop: 0,
   },
   // 置顶区收尾线:回 XD-Maker 原版 hairline(换肤卡片化曾置 0,通栏回退一并恢复)。
-  pinnedHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingRight: spacing.sm },
-  pinnedHeaderLabel: { flex: 1 },
   pinnedCardPreview: { height: 2 * lineHeight.subtitle },
   pinnedCard: {
     height: 'auto',

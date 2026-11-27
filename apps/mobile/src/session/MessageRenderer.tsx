@@ -18,6 +18,7 @@ import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
 import { richVisualStyle, splitRichAnswer, richAnswerText, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
 import { RichAnswer } from './RichAnswer';
 import { readFailedImageDelivery, readToolProcessMedia, readToolProcessText } from '@cindy/maker-shared/tool-process-media';
+import { formatCollabToolResultText } from '@cindy/maker-shared/tool-use-descriptor';
 import { PluginCardActions } from '@/plugins/PluginCardActions';
 import { McpAppCard } from './McpAppCard';
 import { RichContentContext } from './richContentContext';
@@ -4778,6 +4779,7 @@ function ToolActionRow({
   actions,
   contentLayout,
   onOpenInput,
+  repeatCount,
   row,
   rowKey,
   tool,
@@ -4785,6 +4787,7 @@ function ToolActionRow({
   actions: ToolDetailActions;
   contentLayout: MessageContentLayout;
   onOpenInput?: () => void;
+  repeatCount?: number;
   row: ToolRowPresentation;
   rowKey?: string;
   tool: NormalizedRemoteMessage;
@@ -4793,7 +4796,20 @@ function ToolActionRow({
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   // 明确交付媒体仍由 ToolMediaBlock 承载；原生过程媒体留在所属工具步骤内。
-  const hasDetails = !!(row.detail || tool.body || tool.diff || tool.secondaryBody || onOpenInput);
+  const isCollabTool = typeof tool.label === 'string' && tool.label.startsWith('collab:');
+  const visibleSecondaryBody = isCollabTool && typeof tool.secondaryBody === 'string'
+    ? (formatCollabToolResultText(readToolProcessText(tool.secondaryBody) ?? '', (state) => {
+      if (state === 'completed') return t('message.renderer.statusCompleted');
+      if (state === 'failed') return t('message.renderer.statusFailed');
+      if (state === 'running') return t('message.renderer.statusRunning');
+      return t('message.renderer.statusStopped');
+    }) ?? undefined)
+    : tool.secondaryBody;
+  const displayTool = isCollabTool
+    ? { ...tool, label: row.label || tool.label, secondaryBody: visibleSecondaryBody }
+    : tool;
+  const visibleBody = isCollabTool && tool.body === `${tool.label}()` ? '' : tool.body;
+  const hasDetails = !!(row.detail || visibleBody || tool.diff || visibleSecondaryBody || onOpenInput);
   const [expanded, toggleExpanded] = useFoldableExpandedState(`toolrow-${rowKey ?? tool.key}`, false);
   const showDetails = expanded && hasDetails;
   const chevronNode = hasDetails
@@ -4822,6 +4838,9 @@ function ToolActionRow({
       >
         <ToolRowStatusIcon hasError={row.hasError} status={row.status} />
         <Text style={[styles.toolName, styles.toolNameFlex]} numberOfLines={1}>{row.label}</Text>
+        {repeatCount && repeatCount > 1 ? (
+          <Text style={styles.toolInputActionText}>×{repeatCount}</Text>
+        ) : null}
         {chevronNode}
       </Pressable>
       {readToolProcessMedia(tool.secondaryBody).map((entry) => (
@@ -4836,8 +4855,8 @@ function ToolActionRow({
       ))}
       {showDetails ? (
         <View style={styles.toolRowDetails}>
-          {row.detail || tool.body ? (
-            <Text style={styles.toolRowDetailText}>{row.detail ?? tool.body}</Text>
+          {row.detail || visibleBody ? (
+            <Text style={styles.toolRowDetailText}>{row.detail ?? visibleBody}</Text>
           ) : null}
           {tool.toolInputProjection ? (
             <ProjectedToolInputButton
@@ -4860,8 +4879,8 @@ function ToolActionRow({
           {tool.diff ? (
             <DiffPreview diff={tool.diff} layout={contentLayout} onOpen={actions.onOpenPayload} />
           ) : null}
-          {tool.secondaryBody ? (
-            <ToolResultPreview layout={contentLayout} tool={tool} onOpen={actions.onOpenPayload} onRetryImageDelivery={actions.onRetryImageDelivery} />
+          {visibleSecondaryBody ? (
+            <ToolResultPreview layout={contentLayout} tool={displayTool} onOpen={actions.onOpenPayload} onRetryImageDelivery={actions.onRetryImageDelivery} />
           ) : null}
         </View>
       ) : null}
@@ -5208,14 +5227,41 @@ function AgentTaskCard({
     () => buildMessageHierarchyLayout({ screenWidth, summaryCount: 0 }),
     [screenWidth],
   );
+  const liveActivityLine = useMemo(() => {
+    if (model.status !== 'running') return undefined;
+    const recent = model.recentActivities;
+    if (recent && recent.length > 0) {
+      let current = recent[recent.length - 1];
+      for (let i = recent.length - 1; i >= 0; i -= 1) {
+        if (recent[i].status === 'running') {
+          current = recent[i];
+          break;
+        }
+      }
+      const parts = [current.toolName, current.detail, current.error].filter(Boolean);
+      return parts.length > 0 ? parts.join(' · ') : undefined;
+    }
+    if (model.lastToolName) {
+      return [model.lastToolName, model.lastToolSummary].filter(Boolean).join(' · ');
+    }
+    return undefined;
+  }, [model.lastToolName, model.lastToolSummary, model.recentActivities, model.status]);
   const hasDetails = !!(
-    model.description || model.summary || model.spawnedAgentName || model.lastToolName || model.outputFile
+    model.description
+    || model.summary
+    || model.spawnedAgentName
+    || model.recentActivities?.length
+    || model.lastToolName
+    || model.outputFile
   );
   return (
     <FoldablePanel
       blockId={item.key}
       title={title}
       subtitle={subtitle || undefined}
+      collapsedBody={liveActivityLine ? (
+        <Text numberOfLines={1} style={styles.toolInputActionText}>{liveActivityLine}</Text>
+      ) : undefined}
       chevronPosition="trailing"
       chevronSize={14}
       leadingIcon={<Bot color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />}
@@ -5238,8 +5284,24 @@ function AgentTaskCard({
           {model.summary ? (
             <Text style={styles.detailText}>{model.summary}</Text>
           ) : null}
-          {model.lastToolName ? (
-            <Text style={styles.detailText}>{t('message.renderer.recentTool', { name: model.lastToolName })}</Text>
+          {model.recentActivities?.length ? (
+            <View style={[styles.stackSmall, { gap: layout.stackSmallGap }]}>
+              <Text style={styles.toolInputActionText}>{t('message.renderer.recentActivity')}</Text>
+              {model.recentActivities.map((activity) => {
+                const label = [activity.toolName, activity.detail].filter(Boolean).join(' · ');
+                return (
+                  <Text key={activity.id} style={styles.detailText} numberOfLines={2}>
+                    {activity.error ? `${label} — ${activity.error}` : label}
+                  </Text>
+                );
+              })}
+            </View>
+          ) : model.lastToolName ? (
+            <Text style={styles.detailText}>
+              {t('message.renderer.recentTool', {
+                name: [model.lastToolName, model.lastToolSummary].filter(Boolean).join(' · '),
+              })}
+            </Text>
           ) : null}
           {model.outputFile ? (
             <Text style={styles.detailText}>{t('message.renderer.outputFile', { file: model.outputFile })}</Text>
@@ -5532,6 +5594,9 @@ const WorkLineRow = memo(function WorkLineRow({
         <>
           <ToolRowStatusIcon hasError={line.hasError === true} status={line.status} />
           <Text numberOfLines={1} style={[styles.toolName, styles.toolNameFlex]}>{label}</Text>
+          {line.repeatCount && line.repeatCount > 1 ? (
+            <Text style={styles.toolInputActionText}>×{line.repeatCount}</Text>
+          ) : null}
         </>
       ) : (
         <>
@@ -5582,6 +5647,7 @@ export const WorkToolActivityRow = memo(function WorkToolActivityRow({
       actions={actions}
       contentLayout={contentLayout}
       onOpenInput={onOpenInput}
+      repeatCount={activity.repeatCount}
       row={row}
       rowKey={activity.key}
       tool={tool}

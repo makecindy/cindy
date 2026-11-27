@@ -7263,6 +7263,7 @@
         },
         "onlyEncrypted": "Usar apenas Agent-Net",
         "onlyEncryptedHint": "Os dispositivos antigos e as partilhas que usam a ligação anterior ficarão indisponíveis. Desativado por predefinição.",
+        "removedOff": "Este computador foi removido da sua conta, por isso o Agent-Net foi desativado. Ative-o de novo para reingressar.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "A mudar para Agent-Net…",
@@ -8895,6 +8896,8 @@
         "nodeRuntime": "Pode executar neste computador um programa Node incluído no plugin",
         "nodeMcp": "Pode executar neste computador um MCP stdio incluído no plugin",
         "nodeRuntimeDetail": "Risco elevado: tem o mesmo acesso local que a sua conta de utilizador, incluindo ficheiros, rede e início de outros programas. Cindy não o pode conter na sandbox do navegador.",
+        "nodeInheritEnv": "Herdar o ambiente local",
+        "nodeInheritEnvDetail": "Risco elevado: o programa Node do plugin e os seus processos subordinados recebem todas as variáveis de ambiente disponíveis para a Cindy, incluindo definições de proxy e certificados e quaisquer chaves de API ou tokens nelas contidos.",
         "nodeSecret": "Pode fornecer a credencial guardada «{{name}}» ao programa Node local",
         "nodeSecretDetail": "Cindy guarda-a encriptada e injeta-a apenas durante a execução dos métodos de Worker declarados abaixo. O programa Node recebe o texto simples e pode devolvê-lo, registá-lo, guardá-lo ou expô-lo de outra forma ao código do plugin no navegador ou a parâmetros de Agent. Instale apenas plugins em que confia.",
         "nodeResident": "O programa Node pode permanecer em execução em segundo plano",
@@ -12324,6 +12327,8 @@
         "projectDirSaveFailed": "Não foi possível guardar a pasta do projeto. Certifique-se de que a pasta ainda existe e tente novamente.",
         "allowMemberInvites": "Permitir que todos convidem amigos",
         "allowMemberInvitesHint": "Quando ativado, todos os membros do grupo podem convidar amigos. Só o proprietário e os administradores podem alterar esta opção.",
+        "allowMemberMentionAll": "Permitir que todos os membros usem @todos",
+        "allowMemberMentionAllHint": "Quando ativado, todos os membros podem usar @todos; quando desativado, apenas o proprietário e os administradores. Só o proprietário e os administradores podem alterar esta opção.",
         "allowMentionAllBots": "Permitir @todos os amigos",
         "allowMentionAllBotsHint": "Só o proprietário do grupo pode alterar. Todos os amigos podem responder; cuidado em grupos grandes. Não afeta a IA que responde em seu nome."
       },
@@ -12355,6 +12360,7 @@
         "groupDissolved": "Este grupo foi dissolvido. Ainda pode ler o histórico disponível.",
         "lastOwner": "Transfira a propriedade ou dissolva este grupo antes de sair.",
         "allBotsMentionDisabled": "O proprietário do grupo ainda não ativou @Todos os amigos.",
+        "allHumansMentionForbidden": "Apenas o proprietário do grupo e os administradores podem usar @todos.",
         "turnAlreadyStarted": "Este amigo já começou e não pode ser ignorado"
       },
       "organizer": "Organizador",
@@ -12548,8 +12554,10 @@
         },
         "replyPlaceholder": "Responder a esta mensagem; use @ para mencionar um amigo…",
         "sendReply": "Enviar resposta",
+        "moreReactions": "Mais reações",
         "addReaction": "Adicionar reação",
         "reactionCount": "{{emoji}} · {{count}} reações",
+        "reactionTotal": "{{emoji}} · {{count}} reações",
         "reactionWho": "{{emoji}} · {{count}} reações: {{names}}",
         "reactorSelf": "Eu",
         "reactorFormer": "{{name}} (já não está no grupo)",
@@ -12673,6 +12681,7 @@
           "accessNone": "Apenas o proprietário",
           "accessChat": "Apenas a conversa de grupo",
           "accessTools": "Pode usar ferramentas e informações",
+          "memberPermissions": "Permissões dos membros",
           "replies": "Como respondem os amigos",
           "replyModeMentionedNote": "Os amigos ficam em silêncio, a menos que alguém os @mencione.",
           "assistant": "Cindy do grupo",
@@ -15815,7 +15824,8 @@
       "startedAt": "Iniciado às {{time}}",
       "recentOutput": "Saída recente · atualizada há {{time}}",
       "noOutputYet": "Ainda sem saída",
-      "toolUses_many": "{{count}} utilizações de ferramentas"
+      "toolUses_many": "{{count}} utilizações de ferramentas",
+      "recentActivity": "Atividade recente"
     },
     "planPill": {
       "step": "Passo {{current}} de {{total}}",
@@ -16360,7 +16370,36 @@
       },
       "status": {
         "running": "Em execução",
-        "done": "Concluído"
+        "done": "Concluído",
+        "failed": "Falhou"
+      },
+      "collab": {
+        "wait": "Aguardar pelo Subagent",
+        "waitCount_one": "Aguardar por {{count}} Subagent",
+        "waitCount_other": "Aguardar por {{count}} Subagents",
+        "waitCount_many": "Aguardar por {{count}} Subagents",
+        "sendInput": "Enviar instruções ao Subagent",
+        "sendInputCount_one": "Enviar instruções a {{count}} Subagent",
+        "sendInputCount_other": "Enviar instruções a {{count}} Subagents",
+        "sendInputCount_many": "Enviar instruções a {{count}} Subagents",
+        "resume": "Retomar Subagent",
+        "resumeCount_one": "Retomar {{count}} Subagent",
+        "resumeCount_other": "Retomar {{count}} Subagents",
+        "resumeCount_many": "Retomar {{count}} Subagents",
+        "close": "Fechar Subagent",
+        "closeCount_one": "Fechar {{count}} Subagent",
+        "closeCount_other": "Fechar {{count}} Subagents",
+        "closeCount_many": "Fechar {{count}} Subagents",
+        "spawn": "Iniciar Subagent",
+        "spawnCount_one": "Iniciar {{count}} Subagent",
+        "spawnCount_other": "Iniciar {{count}} Subagents",
+        "spawnCount_many": "Iniciar {{count}} Subagents",
+        "targets": "Destinos: {{targets}}",
+        "targetCount_one": "Destinos: {{count}} Subagent",
+        "targetCount_other": "Destinos: {{count}} Subagents",
+        "targetCount_many": "Destinos: {{count}} Subagents",
+        "prompt": "Instrução: {{prompt}}",
+        "model": "Modelo: {{model}}"
       }
     },
     "systemCard": {
@@ -19260,6 +19299,24 @@
         "reconnectFailed": "Não foi possível voltar a ligar. Verifique as vagas disponíveis antes de tentar novamente."
       },
       "pluginTitle": "Acionado por evento de plugin"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} acompanhamentos de PR em pausa",
+      "viewPaused": "Ver",
+      "resumeAll": "Retomar tudo",
+      "cleanMerged": "Limpar integrados",
+      "checking": "A verificar…",
+      "resumeAllConfirmTitle": "Retomar {{count}} acompanhamentos de PR em pausa?",
+      "resumeAllConfirmDescription": "Retoma todas as automatizações de PR em pausa nesta vista e recalcula a próxima verificação agendada.",
+      "resumeAllConfirmAction": "Retomar tudo",
+      "resumeAllDone": "{{count}} acompanhamentos de PR retomados",
+      "resumeAllPartial": "{{resumed}} acompanhamentos de PR retomados ({{failed}} falharam)",
+      "noMergedFound": "Nenhum PR integrado ou fechado encontrado entre as automatizações em pausa",
+      "cleanMergedConfirmTitle": "Eliminar {{count}} automatizações de PR concluídas?",
+      "cleanMergedConfirmDescription": "Estas automatizações em pausa acompanham PR já integrados ou fechados: {{names}}",
+      "cleanMergedConfirmAction": "Eliminar",
+      "cleanMergedDone": "{{count}} automatizações de PR concluídas eliminadas",
+      "checkFailed": "Não foi possível verificar o estado dos PR agora"
     }
   },
   "issueTracker": {
@@ -23443,7 +23500,10 @@
       "mergedLabel_one": "{{name}} · rota ({{count}} fonte)",
       "mergedLabel_other": "{{name}} · rota ({{count}} fontes)",
       "routeDecides": "A rota «{{name}}» decide que fonte esta tarefa usa",
-      "quotaOf": "Quota: {{name}}"
+      "quotaOf": "Quota: {{name}}",
+      "managedBy": "Gerido por «{{name}}»",
+      "detach": "Desassociar",
+      "detached": "Desassociado do roteamento inteligente. O modelo atual mantém-se."
     },
     "why": {
       "expiringQuota": "Restam {{left}}% da quota, que é reposta {{reset}}, por isso vai primeiro",
@@ -23481,7 +23541,7 @@
       "newRoute": "Nova rota",
       "newRouteName": "Nova rota",
       "routesEmpty": "Ainda não há rotas. Crie uma e adicione algumas fontes.",
-      "scopeNote": "O roteamento inteligente aplica-se às tarefas deste computador. Uma nova tarefa escolhe uma fonte ao começar. Escolher uma rota numa tarefa já em curso muda uma vez, de imediato; depois não muda sozinha.",
+      "scopeNote": "O roteamento inteligente gere continuamente as tarefas neste computador e nos pontos de entrada compatíveis. Depois de selecionado — ao iniciar ou a meio da tarefa — verifica a disponibilidade e a quota antes de cada turno, muda para uma fonte com visão quando há imagens, protege a cache ativa e assume o recurso em caso de falha até desassociar ou escolher um modelo específico.",
       "back": "Voltar ao roteamento inteligente",
       "name": "Nome",
       "nameHint": "Aparece no seletor de modelos.",
@@ -23617,6 +23677,11 @@
       "deviceDefaultReadOnly": "Atualize esse computador para alterar aqui o modelo predefinido dele.",
       "deviceUnavailable": "Não é possível ler agora as definições de parceiros desse computador. Verifique se está online e abra de novo.",
       "deviceLoading": "A ler as definições desse computador…"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "Fonte atual indisponível ou sem quota; alterada antes de enviar",
+      "imageInput": "A mensagem inclui imagens; alterado para uma fonte com visão",
+      "cacheExpired": "Janela de cache expirada; fonte reavaliada pela estratégia da rota"
     }
   },
   "projectSettings": {

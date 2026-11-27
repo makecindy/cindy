@@ -1239,6 +1239,8 @@ interface ElectronAPI {
   /** 当前 Desktop 构建是否具备 Beta 更新渠道。 */
   supportsBetaUpdateChannel?: boolean;
   windowBackdropMaterial: import('../shared/windowBackdrop').WindowsBackdropMaterial;
+  /** 硬件加速回退(软件渲染)模式标记：渲染进程据此关闭昂贵的 CSS backdrop-filter。 */
+  gpuFallback?: boolean;
   onWindowBackdropMaterialChanged?: (
     cb: (material: import('../shared/windowBackdrop').WindowsBackdropMaterial) => void,
   ) => () => void;
@@ -1396,15 +1398,17 @@ interface ElectronAPI {
   /** 模型组：路线与模式的配置，以及把选中的一项解析成现在能用的具体模型。 */
   modelGroups: {
     commit: (decisionId: string) => Promise<boolean>;
-    get: () => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
+    get: (options?: import('../shared/modelGroups').ModelGroupGetOptions) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     set: (config: import('../shared/modelGroups').ModelGroupsConfig) => Promise<import('../shared/modelGroups').ModelGroupsConfig>;
     resolve: (request: import('../shared/modelGroups').ModelGroupResolveRequest) => Promise<import('../shared/modelGroups').ModelGroupResolveResult>;
     decisions: () => Promise<import('../shared/modelGroupDecisions').ModelGroupDecision[]>;
     bindSession: (request: {
       sessionId: string;
       selection: import('../shared/modelGroups').ModelGroupSelection;
-      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model'>;
+      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
     }) => Promise<void>;
+    unbindSession: (request: { sessionId: string }) => Promise<{ ok: boolean; unbound: boolean }>;
+    getSessionBinding: (request: { sessionId: string }) => Promise<import('../shared/modelGroups').ModelGroupSessionBindingView | null>;
     switchOffer: (request: { sessionId: string }) => Promise<import('../shared/modelGroups').ModelGroupSwitchOffer | null>;
   },
 
@@ -4918,6 +4922,7 @@ interface ElectronAPI {
       teamId: string | null;
       workspace: string;
       providerId: string | null;
+      modelGroup?: string | null;
     }) => Promise<{
       entries: import('../shared/hookControlIpc').HookWorkspaceProviderSourceEntry[];
     }>;
@@ -4978,6 +4983,7 @@ interface ElectronAPI {
         repo: string;
         prNumber: number;
       }>,
+      options?: { refresh?: boolean },
     ) => Promise<import('@/lib/gitContext.types').PrStatusResult[]>;
     onChanged: (
       cb: (data: import('@/lib/gitContext.types').GitContextSnapshot) => void,
@@ -6806,7 +6812,7 @@ interface ElectronAPI {
     listActive: () => Promise<
       Array<{
         sessionId: string;
-        agentKind: 'claude-code' | 'codex' | 'pi';
+        agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
         workDir: string;
         capabilities: unknown;
         isTurnRunning: boolean;
