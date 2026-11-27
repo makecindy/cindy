@@ -1,8 +1,9 @@
 import {
   AGENT_NET_SESSION_V1, AGENT_NET_SESSION_V2, ChannelEvents, EARLY_BODY_EVENT_BYTES, MAX_EARLY_SESSION_BYTES,
   SESSION_BODY_HEADER_BYTES, SESSION_BODY_KIND,
-  SESSION_LANE_KINDS, SESSION_LANE_PRIORITY, type PeerChannel, type RosterEntry, type SessionBodyWriter, type SessionLaneName,
-  type SessionWire, type Transport, type TransportOptions, type RelayRoute, type PathPreference, type PeerPathMetrics,
+  SESSION_LANE_KINDS, SESSION_LANE_PRIORITY, classifyNatMapping, formatTransportDiagnosticsLog,
+  type PeerChannel, type PortMapController, type PortMappingEntry, type RosterEntry, type SessionBodyWriter, type SessionLaneName,
+  type SessionWire, type Transport, type TransportDiagnostics, type TransportOptions, type RelayRoute, type PathPreference, type PeerPathMetrics, type UdpRebindReason,
 } from './types.js';
 import { PathRouter } from './pathRouter.js';
 import { concatBytes, decodeUtf8, fromBase64Url, keyHex, toBase64Url, utf8 } from './portableBytes.js';
@@ -39,11 +40,18 @@ interface NativeState {
   probeRtts?: [Address | { link: number }, number][];
 }
 interface Poll {
-  packets: { link: number; data: Uint8Array }[]; connections: NativeState[]; mapped?: Address[]; relayUdp?: boolean;
+  packets: { link: number; data: Uint8Array }[]; connections: NativeState[]; mapped?: Address[];
+  /** Per-server STUN observations without deduplication (so NAT classification distinguishes cone vs single-server). */
+  stunObservations?: Address[];
+  relayUdp?: boolean;
   /** `relay-udp-health` builds: how relayed datagrams go and why (engine.rs `read`, udp_paths.rs `route`). */
   relayRoute?: RelayRoute | null;
   /** `relay-udp-health` builds: bytes sent and received on the engine's UDP socket so far. */
   udpTraffic?: [number, number] | null;
+  /** `udp-rebind` builds: the engine's current bound UDP port. */
+  udpPort?: number | null;
+  /** `udp-rebind` builds: monotonic generation + port + reason whenever the engine rebound its UDP socket. */
+  udpRebind?: { gen: number; port: number; reason: string } | null;
 }
 /** A poll as the engine reports it: bytes as base64 `data` (`poll`), or as the `len` of the next bytes after the header (`io`). */
 type WireBytes = { data?: string; len?: number };
@@ -91,6 +99,10 @@ function readPoll(wire: WirePoll, payload: Uint8Array | null): Poll {
   return { ...wire, packets, connections };
 }
 const SUSPENSION_REASONS = new Set(['data-silence', 'request-timeouts', 'unacked-sends']);
+const REBIND_REASONS: ReadonlySet<UdpRebindReason> = new Set(['network-changed', 'send-errors', 'udp-blackhole']);
+function readRebindReason(value: unknown): UdpRebindReason | null {
+  return typeof value === 'string' && REBIND_REASONS.has(value as UdpRebindReason) ? (value as UdpRebindReason) : null;
+}
 /** The engine's `relayRoute`, kept only in the shape the socket reports (types.ts `RelayRoute`). */
 function readRoute(value: unknown): RelayRoute | null {
   if (!value || typeof value !== 'object') return null;
@@ -230,6 +242,10 @@ export class NativeTransport implements Transport {
   private readonly features: Set<string>;
   private localAddresses: string[];
   private mapped: Address[] = [];
+  private stunObservations: Address[] | null = null;
+  private portMapped: PortMappingEntry | null = null;
+  private readonly portMapper: PortMapController | null = null;
+  private lastLoggedDiagnostics = '';
   private candidateList: Address[] = [];
   /** The relay UDP credentials last given to the engine (`undefined`: none given yet). */
   private relayCredentials: object | null | undefined = undefined;
@@ -252,6 +268,8 @@ export class NativeTransport implements Transport {
   private udpRefresh: ReturnType<typeof setInterval> | null = null;
   /** `relay-udp-health`: the route the engine last reported for relayed datagrams (`relayRoute`). */
   private route: RelayRoute | null = null;
+  /** `udp-rebind`: last rebind generation observed from `poll` so each rebind notifies discovery/logs once. */
+  private lastRebindGen = 0;
   private refreshingAddresses = false;
   private constructor(
     private readonly engine: NativeEnginePort,
@@ -273,6 +291,13 @@ export class NativeTransport implements Transport {
     this.relayUdpName = options.relayUdpServer;
     this.stunServers = (options.stunServers ?? []).slice(0, MAX_STUN_SERVERS);
     this.localAddresses = addresses;
+    if (enhanced && identity.udpPort && !options.publicCandidatesOnly && options.createPortMap) {
+      this.portMapper = options.createPortMap((mapping) => {
+        if (this.closed) return;
+        this.portMapped = mapping;
+        this.updateCandidates();
+      });
+    }
     this.candidateList = this.computeCandidates();
     options.relay?.uplink.onDatagram((deviceId, bytes) => {
       if (this.closed) return;
@@ -297,6 +322,7 @@ export class NativeTransport implements Transport {
       // that can already reach peers over the relay WebSocket or the LAN.
       if (options.resolveUdpServer) void transport.resolveUdpServers();
       else await transport.startStun(transport.stunServers);
+      if (identity.udpPort) transport.portMapper?.refresh(identity.udpPort);
       if (transport.waits) transport.drive(); else transport.schedule();
       return transport;
     } catch (error) { await engine.destroy().catch(() => undefined); throw error; }
@@ -329,15 +355,48 @@ export class NativeTransport implements Transport {
     const local = this.localAddresses.filter(allowed).map(address => ({ address, port }));
     if (!this.enhanced) return local.slice(0, MAX_CANDIDATES);
     const seen = new Set<string>();
-    return [...local, ...this.mapped.filter(candidate => allowed(candidate.address))]
+    const portMapped = this.portMapped && allowed(this.portMapped.address)
+      ? [{ address: this.portMapped.address, port: this.portMapped.port }]
+      : [];
+    return [...local, ...this.mapped.filter(candidate => allowed(candidate.address)), ...portMapped]
       .filter(candidate => { const key = `${candidate.address}:${candidate.port}`; if (seen.has(key)) return false; seen.add(key); return true; })
       .sort((a, b) => Number(isPrivate(a.address)) - Number(isPrivate(b.address))).slice(0, MAX_CANDIDATES);
   }
+  diagnostics(): TransportDiagnostics {
+    const observations = this.stunObservations ?? this.mapped;
+    const { natMapping, portPreserving } = classifyNatMapping(observations, this.identity.udpPort);
+    let localCandidates = 0;
+    let publicCandidates = 0;
+    for (const candidate of this.candidateList) {
+      if (isPrivate(candidate.address)) localCandidates += 1;
+      else publicCandidates += 1;
+    }
+    return {
+      natMapping,
+      portPreserving,
+      stunResponses: observations.length,
+      portMapped: this.portMapped?.protocol ?? null,
+      localCandidates,
+      publicCandidates,
+    };
+  }
+  private maybeLogDiagnostics(): void {
+    const hasStun = (this.stunObservations ?? this.mapped).length > 0;
+    if (!this.options.onLog || (!hasStun && !this.portMapped)) return;
+    const snapshot = this.diagnostics();
+    const line = formatTransportDiagnosticsLog(snapshot);
+    if (line === this.lastLoggedDiagnostics) return;
+    this.lastLoggedDiagnostics = line;
+    const level = snapshot.natMapping === 'symmetric' || snapshot.natMapping === 'multi-egress' ? 'warn' : 'info';
+    this.options.onLog(level, line);
+  }
   private updateCandidates(): void {
     const next = this.computeCandidates();
-    if (JSON.stringify(next) === JSON.stringify(this.candidateList)) return;
-    this.candidateList = next;
-    for (const channel of this.channels.values()) channel.announceCandidates();
+    if (JSON.stringify(next) !== JSON.stringify(this.candidateList)) {
+      this.candidateList = next;
+      for (const channel of this.channels.values()) channel.announceCandidates();
+    }
+    this.maybeLogDiagnostics();
   }
   async configureUdpServer(server: string, extraStunServers: readonly string[] = []): Promise<void> {
     if (this.closed || !this.enhanced) return;
@@ -502,9 +561,11 @@ export class NativeTransport implements Transport {
   networkChanged(): void {
     if (this.closed || !this.enhanced) return;
     void this.call({ op: 'migrate' }).catch(() => undefined);
+    for (const channel of this.channels.values()) channel.onLocalNetworkChanged();
     // Everything in flight goes again from the new address: poll for it now.
     this.wake();
     void this.refreshUdpServer();
+    if (this.identity.udpPort) this.portMapper?.refresh(this.identity.udpPort);
     if (!this.readAddresses || this.refreshingAddresses) return;
     this.refreshingAddresses = true;
     void this.readAddresses().then(addresses => {
@@ -748,11 +809,44 @@ export class NativeTransport implements Transport {
     if (traffic && Array.isArray(result.udpTraffic) && result.udpTraffic.every(value => Number.isSafeInteger(value) && value >= 0)) {
       Atomics.store(traffic, 0, BigInt(result.udpTraffic[0])); Atomics.store(traffic, 1, BigInt(result.udpTraffic[1]));
     }
-    if (Array.isArray(result.mapped)) {
-      const mapped = result.mapped.filter(value => value && typeof value.address === 'string' && value.address.length <= 128
-        && Number.isInteger(value.port) && value.port > 0 && value.port <= 65535).slice(0, MAX_STUN_SERVERS);
-      if (JSON.stringify(mapped) !== JSON.stringify(this.mapped)) { this.mapped = mapped; this.updateCandidates(); }
+    const rebind = result.udpRebind;
+    if (rebind && Number.isInteger(rebind.gen) && rebind.gen > this.lastRebindGen
+      && Number.isInteger(rebind.port) && rebind.port > 0 && rebind.port <= 65535) {
+      const reason = readRebindReason(rebind.reason);
+      if (reason) {
+        this.lastRebindGen = rebind.gen;
+        this.identity.udpPort = rebind.port;
+        this.dial.udp = { address: '0.0.0.0', port: rebind.port };
+        this.mapped = [];
+        this.updateCandidates();
+        for (const channel of this.channels.values()) channel.onLocalNetworkChanged();
+        this.options.onLocalPortChanged?.(rebind.port, reason);
+      }
+    } else if (typeof result.udpPort === 'number' && Number.isInteger(result.udpPort) && result.udpPort > 0 && result.udpPort <= 65535
+      && result.udpPort !== this.identity.udpPort) {
+      this.identity.udpPort = result.udpPort;
+      this.dial.udp = { address: '0.0.0.0', port: result.udpPort };
+      this.updateCandidates();
     }
+    const readAddresses = (raw: Address[]): Address[] => raw.filter(value => value && typeof value.address === 'string'
+      && value.address.length <= 128 && Number.isInteger(value.port) && value.port > 0 && value.port <= 65535).slice(0, MAX_STUN_SERVERS);
+    let diagnosticsChanged = false;
+    if (Array.isArray(result.stunObservations)) {
+      const observations = readAddresses(result.stunObservations);
+      if (JSON.stringify(observations) !== JSON.stringify(this.stunObservations)) {
+        this.stunObservations = observations;
+        diagnosticsChanged = true;
+      }
+    }
+    if (Array.isArray(result.mapped)) {
+      const mapped = readAddresses(result.mapped);
+      if (JSON.stringify(mapped) !== JSON.stringify(this.mapped)) {
+        this.mapped = mapped;
+        this.updateCandidates();
+        diagnosticsChanged = false;
+      }
+    }
+    if (diagnosticsChanged) this.maybeLogDiagnostics();
     const alive = new Set(result.connections.map(connection => connection.id));
     for (const id of this.remoteKeys.keys()) if (!alive.has(id)) this.remoteKeys.delete(id);
     for (const state of result.connections) {
@@ -807,6 +901,7 @@ export class NativeTransport implements Transport {
     this.closed = true;
     if (this.timer) clearTimeout(this.timer); this.timer = null;
     if (this.udpRefresh) clearInterval(this.udpRefresh); this.udpRefresh = null;
+    await this.portMapper?.close().catch(() => undefined);
     const ids = [...this.channels.keys(), ...this.waiting.keys()];
     for (const pending of this.waiting.values()) pending.reject(new Error('NATIVE_TRANSPORT_CLOSED'));
     this.waiting.clear();
@@ -901,6 +996,7 @@ class NativeChannel implements PeerChannel {
       measure: (address) => fire({ op: 'measure', address }),
       setPreferRelay: (prefer) => fire({ op: 'preferRelay', prefer }),
       writeControl: (line) => { this.control.push(utf8(line)); owner.wake(); },
+      localRelayVia: () => owner.relayRoute()?.via ?? null,
     }, NATIVE_REPROBE_MS) : null;
     this.router?.start();
   }
@@ -910,6 +1006,8 @@ class NativeChannel implements PeerChannel {
     this.control.stream = await this.owner.call<number>({ op: 'openStream', id: this.id, priority: 'interactive' });
     const bytes = concatBytes([Uint8Array.of(CONTROL), utf8(JSON.stringify({ candidates: this.owner.candidates() }) + '\n')]);
     await this.owner.call({ op: 'write', id: this.id, stream: this.control.stream, data: toBase64Url(bytes) });
+    // Only after the stream's first byte went out: queued control lines are written behind it.
+    this.router?.announceRelayVia();
   }
   /** This side's candidates changed (STUN answered, another network): tell the peer, as the Desktop re-announces. */
   announceCandidates(): void {
@@ -917,6 +1015,8 @@ class NativeChannel implements PeerChannel {
     this.control.push(utf8(JSON.stringify({ candidates: this.owner.candidates() }) + '\n'));
     this.owner.wake();
   }
+  /** Local network changed: drop stale direct RTT / auto-switch cooldown and re-probe direct if currently relayed. */
+  onLocalNetworkChanged(): void { this.router?.onLocalNetworkChanged(); }
   send(bytes: Uint8Array): void {
     if (this.events.closed) throw new Error('NATIVE_CONNECTION_CLOSED');
     this.owner.reserve(bytes.length);
@@ -1208,7 +1308,7 @@ class NativeChannel implements PeerChannel {
     }
   }
   private onControl(line: string): void {
-    let value: { candidates?: unknown; session?: unknown; pathPreference?: unknown; autoRelay?: unknown };
+    let value: { candidates?: unknown; session?: unknown; pathPreference?: unknown; autoRelay?: unknown; relayVia?: unknown };
     // Ignore malformed control lines, never business frames.
     try { value = JSON.parse(line); } catch { return; }
     if (this.owner.enhanced && Array.isArray(value?.session) && value.session.includes(AGENT_NET_SESSION_V1) && !this.sessionCapable) {
@@ -1226,6 +1326,7 @@ class NativeChannel implements PeerChannel {
       this.router?.setCandidates(this.candidates);
     }
     if (value) this.router?.onPeerPreference(value);
+    if (value && typeof value === 'object') this.router?.onPeerRelayVia(value);
   }
   /** Both paths' round trips as last measured and this side's preference (types.ts `PeerPathMetrics`). */
   pathMetrics(): PeerPathMetrics {

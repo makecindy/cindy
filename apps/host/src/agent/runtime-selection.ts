@@ -1,5 +1,6 @@
 import type { AgentKind, Effort, Maker, Session } from '@cindy/maker-core';
 import type { ProviderView } from '@cindy/model-providers';
+import { captureMessageDispatchRoute } from '@cindy/maker-shared/message-source';
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
@@ -91,6 +92,7 @@ import {
   clearOwnerScopedSessionRuntimeSelection,
   getSessionRuntimeControlSnapshot,
   recordUserSessionRuntimeMutation,
+  type SessionRuntimeProfile,
 } from '../../../desktop/src/main/maker-ipc/sessionRuntimeControl.ts';
 import { createSharedTaskSettingGuard } from '../../../desktop/src/main/maker-ipc/sharedTaskSetting.ts';
 import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendToSessionLock.ts';
@@ -117,7 +119,19 @@ import { RuntimePluginControlError } from '../../../desktop/src/main/cindy-brain
 import { closeRejectedRuntimeAndRestoreControlStores } from '../../../desktop/src/main/maker-ipc/runtimeSetModel.js';
 import { createSessionControlRuntimeWriter } from '../../../desktop/src/main/maker-ipc/sessionControlRuntimeWriter.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../../../desktop/src/main/maker-host/model-route-guard-catalog.js';
+import { admitPluginEngineSwitchTarget } from '../../../desktop/src/main/maker-ipc/pluginEngineSessionAdmission.js';
+import { listPluginEngineViews } from '../../../desktop/src/main/maker-ipc/pluginEnginesIpc.js';
+import { pluginEngineKeyFromProviderId } from '../../../desktop/src/shared/pluginEngines.js';
 import type { GhostModelRoute } from '../../../desktop/src/shared/ghost.js';
+import { makerToDbAgentKind } from '../../../desktop/src/shared/agentKindConversion.js';
+import type { ModelGroupSessionBindingView } from '../../../desktop/src/shared/modelGroups.js';
+import { runOutsideDeviceLinkInvokeContext } from '../../../desktop/src/main/device-link/invoke-context.js';
+import {
+  runModelGroupBeforeSend,
+  type RunModelGroupBeforeSendPorts,
+  type RunModelGroupBeforeSendSessionRow,
+} from '../../../desktop/src/main/model-groups/applyTurnRouting.js';
+import type { ModelGroupHandlersSessionTarget } from '../../../desktop/src/main/model-groups/handlersCore.js';
 import { explicitPorts } from './explicit-ports.ts';
 
 interface HostPendingSwitchOptions {
@@ -125,6 +139,8 @@ interface HostPendingSwitchOptions {
   scheduled?: boolean;
   clientId?: string;
   nextInputChars?: number;
+  hasImages?: boolean;
+  autoResume?: boolean;
   expectedPiModel?: string;
   assertPreparationCurrent?: () => void;
 }
@@ -176,6 +192,17 @@ export interface HostRuntimeSelectionDeps {
   /** A task's provider group binding and a group (the Host's provider group stores, main.ts). */
   readProviderGroupBinding: Parameters<typeof createSubscriptionFastPolicies>[0]['readProviderGroupBinding'];
   readProviderGroup: Parameters<typeof createSubscriptionFastPolicies>[0]['readProviderGroup'];
+  /** Smart Routing (model-groups) runtime ports for projection, fallback and pre-send evaluation. */
+  modelGroups?: {
+    projectBinding(
+      sessionId: string,
+      target: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null },
+    ): ModelGroupSessionBindingView | null;
+    readFallbackCandidate: NonNullable<Parameters<typeof createSessionRuntimeFallback<Session>>[0]['readModelGroupFallbackCandidate']>;
+    readBeforeSendSessionRow(sessionId: string): Promise<RunModelGroupBeforeSendSessionRow | null>;
+    evaluateTurnRouting: RunModelGroupBeforeSendPorts['evaluateTurnRouting'];
+    describeTurnSwitchCause: NonNullable<RunModelGroupBeforeSendPorts['describeCause']>;
+  };
   log: Logger;
 }
 
@@ -265,7 +292,16 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     pinExclusiveSessionProvider: (agent, model, providerId) =>
       pinExclusiveSessionProviderWithProviders(() => deps.listProviderViews(), agent, model, providerId),
   }));
-  const { broadcastSessionRuntimeProjection: publishProjection, projectScheduledPreferences } = createSessionRuntimeProjection(explicitPorts<Parameters<typeof createSessionRuntimeProjection>[0]>({ broadcastSessionPatched }));
+  const projectModelGroupBinding = deps.modelGroups
+    ? (
+        sessionId: string,
+        target: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null },
+      ) => deps.modelGroups!.projectBinding(sessionId, target)
+    : undefined;
+  const { broadcastSessionRuntimeProjection: publishProjection, projectScheduledPreferences } = createSessionRuntimeProjection(explicitPorts<Parameters<typeof createSessionRuntimeProjection>[0]>({
+    broadcastSessionPatched,
+    projectModelGroupBinding,
+  }));
   const broadcastSessionRuntimeProjection: typeof publishProjection = (id, baseline) => {
     settlement.observeControl(id);
     return publishProjection(id, baseline);
@@ -276,6 +312,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     projectScheduledPreferences,
     runtimePluginsSelected: id => !!readRuntimePluginSettings(id),
     pendingWorkerQuestion: undefined, // Worker execution is owned by the desktop.
+    projectModelGroupBinding,
   }));
   // The cleanup at a task's archive or delete (register.ts setSessionRuntimeCleanup), which
   // bindHostSessionRuntimeHooks installs: the task's runtime override and axes do not outlive it.
@@ -380,11 +417,15 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     assertAgentDeviceRouteUsable: undefined,
     describeAgentDevice: undefined,
     cancelPendingRemoteStart: undefined,
-    // Plugin engines are only assembled on the desktop. The switch handler rejects ACP without admission.
+    // Task switching onto a local plugin engine (docs/plans/acp-plugin-bridge.md), using the same
+    // live admission and engine display name as Desktop (register.ts).
     canSwitchCompletedAutomationSession: undefined,
-    admitPluginEngineTarget: undefined,
+    admitPluginEngineTarget: (target) => admitPluginEngineSwitchTarget(target, listPluginEngineViews()),
     admitRemotePluginEngineTarget: undefined,
-    describePluginEngine: undefined,
+    describePluginEngine: (providerId) => {
+      const key = pluginEngineKeyFromProviderId(providerId);
+      return key ? listPluginEngineViews().find((engine) => engine.key === key)?.name ?? null : null;
+    },
     resolveHandoffWindow: async ({ sessionId, agent, model, providerId, agentDeviceId }) => {
       if (agentDeviceId) return null;
       const budget = await deps.readStoredSessionContextWindowBudget(sessionId);
@@ -458,7 +499,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     pendingSwitches,
     selectSameAgentModel: createSelectSameAgentModel(explicitPorts<Parameters<typeof createSelectSameAgentModel>[0]>({ applySessionRuntimeSelection })),
     onPendingSwitchChanged: (sessionId, intent) => {
-      if (intent) recordUserSessionRuntimeMutation(sessionId);
+      if (intent && !intent.preparation) recordUserSessionRuntimeMutation(sessionId);
       broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
     },
     // The desktop also marks an IM task as detached from its channel default; the Host has no IM.
@@ -733,6 +774,8 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
   }));
   const updateSavedScheduledAxis = createUpdateSavedScheduledAxis(explicitPorts<Parameters<typeof createUpdateSavedScheduledAxis>[0]>({
     readUsableAgentDeviceProviders, updateScheduledPreference, getDesktopProviderService: providerService,
+    admitPluginEngineTarget: undefined,
+    admitRemotePluginEngineTarget: undefined,
   }));
   const recoverRemoteRuntimeAxisPersistence = createRecoverRemoteRuntimeAxisPersistence(explicitPorts<Parameters<typeof createRecoverRemoteRuntimeAxisPersistence>[0]>({
     maker: axisMaker, broadcastSessionRuntimeProjection, log: deps.log,
@@ -808,8 +851,7 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     readSessionRuntimeProfiles, canApplyAutomaticRuntimeSelection,
     // Teammate tasks are refused at Host admission: no task has a Teammate route to fall back along.
     readBotFallbackCandidate: async () => ({ isBot: false, candidate: null }),
-    // The Host does not bind model groups to its dispatched inputs.
-    readModelGroupFallbackCandidate: undefined,
+    readModelGroupFallbackCandidate: deps.modelGroups?.readFallbackCandidate,
     // Agents on another computer are refused at Host admission (send-preflight.ts): every task runs here.
     readSessionAgentDeviceId: async () => null,
     readSessionRuntimeFallbackSettings: () => fallbackSettings.read(),
@@ -893,6 +935,16 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     /** The intent of a task as clients see it (session_changed, the task snapshot). */
     projectIntent: (sessionId: string) =>
       projectPendingAgentSwitchIntent(pendingSwitches.get(sessionId)) ?? projectCredentialSwitch(sessionId),
+    /** Freeze the actual executor and pending target at the shared send's acceptance boundary. */
+    readDispatchRoute: (session: Pick<Session, 'id' | 'agentKind' | 'agentDeviceId'> & { readonly model?: string }) => {
+      const actual = { agentKind: session.agentKind, model: session.model ?? '',
+        providerId: getSessionProvider(session.id), agentDeviceId: session.agentDeviceId ?? null };
+      const intent = pendingSwitches.get(session.id);
+      return captureMessageDispatchRoute(actual, intent ? {
+        agentKind: intent.targetAgentKind, model: intent.model, providerId: intent.providerId ?? null,
+        agentDeviceId: intent.targetAgentDeviceId === undefined ? actual.agentDeviceId : intent.targetAgentDeviceId,
+      } : undefined, intent?.preparationError);
+    },
     /** The desktop's set-effort (an effort change of a task, live or staged into a pending pick). */
     setEffort: (sessionId: unknown, effort: unknown) => setSessionEffort(sessionId, effort),
     /** The desktop's set-fast-mode. */
@@ -966,6 +1018,77 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
       }
       if (!deps.inputQueue.isHeldForDesktop() && !options?.scheduled) await recoverRenamedSessionModelOnSend(sessionId);
       await contextWindowBudgetReconcile.replayPendingSessionContextWindowBudgetUnderLock(sessionId);
+      if (!intent && !options?.scheduled && !deps.inputQueue.isHeldForDesktop() && deps.modelGroups) {
+        const modelGroups = deps.modelGroups;
+        await runModelGroupBeforeSend(
+          {
+            readSession: (sid) => modelGroups.readBeforeSendSessionRow(sid),
+            evaluateTurnRouting: (sid, current, turn) => modelGroups.evaluateTurnRouting(sid, current, turn),
+            applySameEngineRoute: ({ sessionId: sid, model, providerId, effort, fastMode }) =>
+              applySessionRuntimeSelection(
+                sid,
+                model,
+                providerId,
+                { effort: (effort || null) as SessionRuntimeProfile['effort'], fastMode },
+                {
+                  source: 'fallback',
+                  sessionLockHeld: true,
+                  configStaged: true,
+                  persistRoute: true,
+                  preserveModelGroupBinding: true,
+                  effortExplicit: Boolean(effort),
+                  fastExplicit: Boolean(fastMode),
+                },
+              ),
+            performCrossSwitch: async ({ sessionId: sid, targetAgentKind, agentDeviceId, model, providerId, effort, fastMode, skipBootstrap }) => {
+              if (targetAgentKind === 'acp') return { switched: false };
+              return performSessionAgentSwitch(agentSwitchDeps, {
+                sessionId: sid,
+                targetAgentKind,
+                agentDeviceId,
+                model,
+                providerId,
+                effort,
+                fastMode,
+                applyNow: true,
+                skipBootstrap,
+                configStaged: true,
+                preserveModelGroupBinding: true,
+              });
+            },
+            writeSwitchNote: async (sid, note, clientId) => {
+              await deps.createDbMessage(sid, {
+                clientId,
+                role: 'assistant',
+                content: '',
+                agentMeta: { pluginModelRoute: note },
+              });
+            },
+            describeCause: (cause) => modelGroups.describeTurnSwitchCause(cause),
+            runAsOwner: (work) => runOutsideDeviceLinkInvokeContext(work),
+          },
+          sessionId,
+          {
+            hasImages: options?.hasImages,
+            autoResume: options?.autoResume,
+            scheduled: options?.scheduled,
+            signal: options?.signal,
+          },
+        );
+      }
+    },
+    readPendingTarget(sessionId: string): ModelGroupHandlersSessionTarget | null {
+      const intent = pendingSwitches.get(sessionId);
+      if (!intent || intent.targetAgentKind === 'acp') return null;
+      return {
+        agentKind: makerToDbAgentKind(intent.targetAgentKind),
+        providerId: intent.providerId ?? null,
+        model: intent.model,
+        agentDeviceId: intent.targetAgentDeviceId ?? null,
+      };
+    },
+    broadcastBindingProjection(sessionId: string): void {
+      void broadcastSessionRuntimeProjection(sessionId).catch(() => undefined);
     },
     /** The session settings write with the budget hook (persistSessionFieldsWith): /sessions/update's budget. */
     persistSessionFields,
@@ -1053,12 +1176,14 @@ export function bindHostSessionRuntimeHooks(selection: {
 export function hostRuntimeSelectionQueueHooks(
   getSelection: () => Pick<HostRuntimeSelection,
     'applyPendingAgentSwitch' | 'hasPendingCredentialSwitch' | 'onTurnSettled' | 'deferredTurnSettlements' | 'holdTurnSettlements' | 'disposeTurnSettlements' | 'persistAgentPlanModeChange'
-    | 'maybeApplySessionRuntimeFallback' | 'pendingSessionRuntimeFallbackRebuilds' | 'admitLocalRoute'>,
+    | 'maybeApplySessionRuntimeFallback' | 'pendingSessionRuntimeFallbackRebuilds' | 'admitLocalRoute' | 'readDispatchRoute'>,
   ports: { isSessionRestarting(sessionId: string): boolean; afterTurnSettled?(sessionId: string): void },
 ) {
   return {
     applyPendingAgentSwitch: (sessionId: string, options?: HostPendingSwitchOptions) =>
       getSelection().applyPendingAgentSwitch(sessionId, options),
+    readDispatchRoute: (...args: Parameters<HostRuntimeSelection['readDispatchRoute']>) =>
+      getSelection().readDispatchRoute(...args),
     hasPendingCredentialSwitch: createDeferredRestartQueueGate(explicitPorts<Parameters<typeof createDeferredRestartQueueGate>[0]>({
       hasPendingCredentialSwitchEntry: (sessionId: string) => getSelection().hasPendingCredentialSwitch(sessionId),
       isSessionRestarting: (sessionId: string) => ports.isSessionRestarting(sessionId),

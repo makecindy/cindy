@@ -860,6 +860,78 @@ it.each([true, false])('reports the relay route, request timeouts and UDP traffi
 });
 
 /** 测试价值
+ * - 生产入口与可观察结果：经中转时 NativeChannel 在控制流上告诉对方自己到中转走 UDP 还是 WebSocket（`{"relayVia":…}`），
+ *   变了再说一次；对方说的进 `pathMetrics().peerRelayVia`，远程连接拓扑据此在经中转的线上写对方那一段。
+ * - Bug／规则依据：2026-11-27 用户反馈经中转的设备线重复标注本机的传输方式。协议约定见 docs/dev-rules/protocol-compatibility/agent-net-udp-relay.md「告诉对方自己那一段」。
+ * - 现有覆盖缺口：控制流此前只有候选、会话宣告与选路偏好，没有这一项。
+ * - 最小失败输入：带 `path-routing` 的引擎替身、一条经中转的连接；本机中转 UDP 先通后断；对方先发旧节点也发的候选，
+ *   再发 `{"relayVia":"websocket"}`，再发一行不认识的值。
+ * - tier：unit，真实 NativeTransport/NativeChannel，引擎用替身，假计时器。
+ */
+it('tells the peer how this side reaches the relay, again when that changes, and keeps what the peer says about its own leg', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] });
+  const local = generateIdentity('native'), remote = generateIdentity('remote');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  const written = new Map<number, Buffer[]>();
+  let nextStream = 0, relayUp = true;
+  let inbound: { events: unknown[]; data: Array<{ stream: number; data: string }> } = { events: [], data: [] };
+  const peerLine = (line: unknown, first = false) => ({ stream: 71, data: Buffer.concat([
+    first ? Buffer.from([0x43]) : Buffer.alloc(0), Buffer.from(`${typeof line === 'string' ? line : JSON.stringify(line)}\n`)]).toString('base64url') });
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      let value: unknown = true;
+      if (command.op === 'identity') value = { deviceId: local.deviceId, transportKey: local.transportKey, udpPort: 40000,
+        features: ['path-routing', 'relay-udp-v2'] };
+      if (command.op === 'poll') {
+        value = { packets: [], relayUdp: relayUp, connections: [{ id: 5, established: true, dead: false, closedByPeer: false, unacked: false,
+          remoteKey: remote.transportKey, path: { link: 1 }, ...inbound, rttUs: 2000, sent: 0, received: 0, rotations: 0 }] };
+        inbound = { events: [], data: [] };
+      }
+      if (command.op === 'openStream') value = ++nextStream;
+      if (command.op === 'write') {
+        const bytes = Buffer.from(command.data as string, 'base64url');
+        written.set(command.stream as number, [...(written.get(command.stream as number) ?? []), bytes]);
+        value = bytes.length;
+      }
+      return value as T;
+    }, async destroy() {},
+  };
+  const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, send() {}, onDatagram() {}, close() {} });
+  const credentials = { session: Uint8Array.of(1), key: Uint8Array.of(2) };
+  const channels: PeerChannel[] = [];
+  const transport = await NativeTransport.create(engine, { admit: () => true, admittedPeers: () => [{ id: key, relayId: remote.deviceId }],
+    relayIdOf: () => remote.deviceId, onIncoming: (channel) => { channels.push(channel); },
+    relay: { deviceId: local.deviceId, uplink: uplink as never, udpCredentials: () => credentials as never }, relayUdpServer: 'relay.example.test:3478' },
+  undefined, true);
+  // What this side wrote on its control stream after the kind byte, one JSON value per line.
+  const sentRelayLegs = () => {
+    const control = [...written].find(([, chunks]) => chunks[0]?.[0] === 0x43)?.[1] ?? [];
+    return Buffer.concat(control).subarray(1).toString().split('\n').filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>).filter((line) => 'relayVia' in line);
+  };
+  try {
+    await vi.advanceTimersByTimeAsync(1_100);
+    const channel = channels[0]!;
+    expect(transport.relayRoute()?.via).toBe('udp');
+    expect(sentRelayLegs()).toEqual([{ relayVia: 'udp' }]);
+    expect(channel.pathMetrics!().peerRelayVia).toBeNull();
+
+    inbound = { events: [{ kind: 'open', stream: 71 }], data: [peerLine({ candidates: [] }, true), peerLine({ relayVia: 'websocket' })] };
+    await vi.advanceTimersByTimeAsync(20);
+    expect(channel.pathMetrics!().peerRelayVia).toBe('websocket');
+    inbound = { events: [], data: [peerLine({ relayVia: 'carrier-pigeon' })] };
+    await vi.advanceTimersByTimeAsync(20);
+    expect(channel.pathMetrics!().peerRelayVia).toBe('websocket');
+
+    // This side's relay UDP stopped carrying data: the next reprobe round says so, once.
+    relayUp = false;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(transport.relayRoute()?.via).toBe('websocket');
+    expect(sentRelayLegs()).toEqual([{ relayVia: 'udp' }, { relayVia: 'websocket' }]);
+  } finally { await transport.close(); vi.useRealTimers(); }
+});
+
+/** 测试价值
  * - 生产入口与可观察结果：NativeTransport 的连接在引擎收走排队字节时调 `onDrain`；PortableSocket 据此在整体积压回落到 128 KB
  *   以下时发 drain，电脑端 Main 的 Device Link 马上发下一大帧（worker.ts `reportBuffered`）。
  * - Bug 依据：2026-11-23 迁移前审计：原生连接只在自己的积压从 128 KB 以上落到以下时才调；几条连接各自不到 128 KB、加起来超过时，
@@ -943,4 +1015,91 @@ it('hands the engine the STUN and relay UDP addresses resolveUdpServer gives, wi
     expect(commands.filter(c => c.op === 'stun').at(-1)).toMatchObject({ servers: ['198.51.100.7:3478'] });
     expect(commands.filter(c => c.op === 'relayUdp').at(-1)).toMatchObject({ server: '198.51.100.7:3478' });
   } finally { await transport.close(); vi.useRealTimers(); }
+});
+
+/** 测试价值
+ * - 生产入口与可观察结果：电脑端原生引擎（`udp-rebind`）在换网/发送错误/UDP 黑洞后重绑了新的本地 UDP 端口，
+ *   `NativeTransport` 从 `poll` 的 `udpRebind` 读取新端口并同步 `dial.udp.port`、清空旧 STUN `mapped` 候选并向现有连接重报、
+ *   对同一代 `gen` 仅触发一次 `onLocalPortChanged(port, reason)`，随后新一轮 STUN 映射回到 `candidates()`。
+ * - Bug 依据：PR #12887 审计发现桌面默认改走 Rust 原生引擎（#12184）后，原生端不会重绑 UDP socket，`NativeTransport` 也未同步
+ *   `udpPort` / `onLocalPortChanged`，导致网络切换或休眠唤醒后继续对外宣告旧端口且无法回调发现层/日志。
+ * - 现有覆盖缺口：已有原生测试的 `udpPort` 全程不变，未覆盖 `poll` 返回 `udpRebind` 时的端口更新、去重和候选重报。
+ * - 最小失败输入：1 条已建立通道 + 旧 STUN 映射；引擎连续两轮 `poll` 上报同一 `udpRebind`（`gen: 1, port: 41001, reason: 'udp-blackhole'`），随后上报新映射。
+ * - tier：unit，真实 `NativeTransport`/`NativeChannel`，内存引擎桩 + 假计时器；约 15 毫秒。 */
+it('syncs dial port, re-announces candidates, and notifies onLocalPortChanged once per udpRebind generation', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const local = generateIdentity('native-rebind'), remote = generateIdentity('remote-rebind');
+  const key = Buffer.from(remote.transportKey, 'base64url').toString('hex');
+  let nextStream = 0;
+  let udpPort = 40000;
+  let mapped: Array<{ address: string; port: number }> = [{ address: '203.0.113.1', port: 40000 }];
+  let udpRebind: { gen: number; port: number; reason: string } | null = null;
+  const writes: string[] = [];
+  const engine: NativeEnginePort = {
+    async command<T>(command: Record<string, unknown>): Promise<T> {
+      if (command.op === 'identity') {
+        return { deviceId: local.deviceId, transportKey: local.transportKey, udpPort, features: ['stun', 'path-routing', 'udp-rebind'] } as T;
+      }
+      if (command.op === 'openStream') return (++nextStream) as T;
+      if (command.op === 'write') {
+        const bytes = Buffer.from(command.data as string, 'base64url');
+        writes.push(bytes.toString('utf8'));
+        return bytes.length as T;
+      }
+      if (command.op === 'poll') {
+        return {
+          packets: [],
+          mapped,
+          udpPort,
+          udpRebind,
+          connections: [{
+            id: 1, established: true, dead: false, closedByPeer: false, unacked: false,
+            remoteKey: remote.transportKey, path: { link: 1 }, events: [], data: [],
+            rttUs: 20_000, sent: 1, received: 1, rotations: 0,
+          }],
+        } as T;
+      }
+      return true as T;
+    },
+    async destroy() {},
+  };
+  const portChanges: Array<{ port: number; reason: string }> = [];
+  let transport: NativeTransport | undefined;
+  try {
+    transport = await NativeTransport.create(engine, {
+      admit: () => true,
+      admittedPeers: () => [{ id: key, relayId: remote.deviceId }],
+      relayIdOf: () => remote.deviceId,
+      onIncoming: () => undefined,
+      onLocalPortChanged: (port, reason) => { portChanges.push({ port, reason }); },
+    }, ['192.168.1.5'], true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(transport.dial.udp?.port).toBe(40000);
+    expect(transport.candidates()).toEqual([
+      { address: '203.0.113.1', port: 40000 },
+      { address: '192.168.1.5', port: 40000 },
+    ]);
+
+    // Engine rebounds UDP socket on silent blackhole; repeated polls with the same gen notify once.
+    udpPort = 41001;
+    mapped = [];
+    udpRebind = { gen: 1, port: 41001, reason: 'udp-blackhole' };
+    await vi.advanceTimersByTimeAsync(120);
+    expect(transport.dial.udp?.port).toBe(41001);
+    expect(transport.candidates()).toEqual([{ address: '192.168.1.5', port: 41001 }]);
+    expect(portChanges).toEqual([{ port: 41001, reason: 'udp-blackhole' }]);
+    expect(writes.some(w => w.includes('"192.168.1.5"') && w.includes('41001'))).toBe(true);
+
+    // Fresh STUN mapping arrives for the rebound port.
+    mapped = [{ address: '203.0.113.1', port: 51001 }];
+    await vi.advanceTimersByTimeAsync(120);
+    expect(transport.candidates()).toEqual([
+      { address: '203.0.113.1', port: 51001 },
+      { address: '192.168.1.5', port: 41001 },
+    ]);
+    expect(portChanges).toEqual([{ port: 41001, reason: 'udp-blackhole' }]);
+  } finally {
+    await transport?.close();
+    vi.useRealTimers();
+  }
 });

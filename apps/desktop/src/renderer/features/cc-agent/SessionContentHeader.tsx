@@ -72,6 +72,7 @@ import { isOrcaLeadSession, resolveSessionRoute } from '@/lib/orcaSessionIdentit
 import { revalidateWorkersProjection } from './hooks/workerProjectionStore';
 import { GitContextBadge } from './GitContextBadge';
 import { OrcaRemoteLeadBadge } from './OrcaRemoteLeadBadge';
+import { SessionOriginChip } from './SessionOriginChip';
 import { BotTaskOwnerChip } from '@/features/bots/BotTaskOwnerChip';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
@@ -472,7 +473,7 @@ export function SessionContentHeader({
         // 绑定了 active 自动化:后续运行会恢复原任务,需要确认。读本地缓存,排在 worktree 预检之前。
         const scheduleNames =
           (await loadActiveBoundScheduleNames([
-            { id: session.id, deviceLinkDeviceId: session.deviceLinkDeviceId },
+            { id: session.id, deviceLinkDeviceId: session.deviceLinkDeviceId, orcaRole: session.orcaRole },
           ])).get(session.id) ?? [];
         // **worktree 预检必须是最后一个前置条件**(codex review):原来这里用 Promise.all
         // 一起等,dirty 先返回 clean、接管查询还在飞的那段时间就是 clean 结论的失效窗口。
@@ -672,6 +673,8 @@ export function SessionContentHeader({
       {!isEditing && <OrcaRemoteLeadBadge session={session} />}
 
       {!isEditing && <BotTaskOwnerChip session={session} />}
+
+      {!isEditing && <SessionOriginChip session={session} />}
 
       {canShowTaskMenu && (
         // 菜单打开就把归档/删除的 dirty 预检发出去:用户从展开菜单到点条目至少

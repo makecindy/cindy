@@ -10,7 +10,8 @@
  * tier:unit(jsdom 组件)。实测耗时：<1s。
  */
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', async (importOriginal) => {
@@ -46,11 +47,18 @@ vi.mock('react-i18next', async (importOriginal) => {
 
 import type { ProviderShareReceived } from '@cindy/device-link';
 import type { Session } from '@/lib/ccAgent.types';
+import { resetSessionBackgroundActivityStoreForTests } from '@/lib/sessionBackgroundActivityStore';
+import { sessionsStore } from '@/lib/sessionsStore';
+import { __resetAgentIslandActivityForTests } from '@/state/agentIslandActivity';
+import type { AgentIslandSessionActivity } from '../../../../shared/agentIsland';
 import { buildProviderTopology } from '../providerTopologyModel';
-import { RemoteProviderTopology } from '../RemoteProviderTopology';
+import { RemoteProviderTopology, RemoteProviderTopologyPanel } from '../RemoteProviderTopology';
 
 afterEach(() => {
   cleanup();
+  resetSessionBackgroundActivityStoreForTests();
+  __resetAgentIslandActivityForTests();
+  sessionsStore.reset();
 });
 
 function makeSession(partial: Partial<Session> & { id: string }): Session {
@@ -82,7 +90,7 @@ function makeSession(partial: Partial<Session> & { id: string }): Session {
   } as Session;
 }
 
-function buildFixtureModel() {
+function buildFixtureModel({ mixed = false, shareUsesAgentNet = false } = {}) {
   const sessions: Session[] = [
     makeSession({ id: 'sess-1', title: '重构支付结算核心状态机', agentDeviceId: 'dev-mac', model: 'Claude Opus 4.6' }),
     makeSession({ id: 'sess-2', title: 'Orca 多 Worker 并发调度', agentDeviceId: 'dev-mac', model: 'Claude Sonnet 4.6' }),
@@ -122,7 +130,7 @@ function buildFixtureModel() {
 
   const peerLinks: DeviceLinkPeerLinksSnapshot = {
     links: [
-      { deviceId: 'dev-mac', open: true, path: 'direct', rttMs: 4, sentAgoMs: 500, receivedAgoMs: 200 },
+      { deviceId: 'dev-mac', encrypted: true, open: true, path: mixed ? 'relay' : 'direct', rttMs: 4, sentAgoMs: 500, receivedAgoMs: 200 },
     ],
     agentNetRoutes: [
       { deviceId: 'dev-mac', path: 'direct', rttMs: 4, directRttMs: 4, relayRttMs: 18, pathPreference: 'auto' },
@@ -131,14 +139,15 @@ function buildFixtureModel() {
       {
         shareId: 'sh-1',
         path: 'relay',
+        protocol: shareUsesAgentNet ? 'agent-net' : 'device-link',
         rttMs: 28,
         sentAgoMs: null,
         receivedAgoMs: null,
         relayKind: 'official',
         relayHost: null,
-        relayTransport: 'udp',
-        relayRttMs: 16,
-        region: 'cn-east',
+        relayTransport: shareUsesAgentNet ? 'udp' : 'websocket',
+        relayRttMs: shareUsesAgentNet ? 16 : null,
+        region: mixed ? undefined : 'cn-east',
       },
     ],
     relayRttMs: 16,
@@ -164,6 +173,31 @@ function buildFixtureModel() {
 }
 
 describe('RemoteProviderTopology', () => {
+  it('keeps both protocols visible on machine cards when the mixed relay branches are too short', () => {
+    const width = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 600 } as DOMRect);
+    try {
+      const model = buildFixtureModel({ mixed: true });
+      const { container } = render(<RemoteProviderTopology model={model} onOpenTask={vi.fn()} />);
+      const cards = [...container.querySelectorAll('.rcv2-prov-card')].map((card) => card.textContent);
+      expect(cards.some((card) => card?.includes('Mac Studio') && card.includes('Agent-Net'))).toBe(true);
+      expect(cards.some((card) => card?.includes('Device Link'))).toBe(true);
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it('shows end-to-end relay latency in the share card and keeps the hop latency on the relay', async () => {
+    const model = buildFixtureModel({ shareUsesAgentNet: true });
+    const { container } = render(<RemoteProviderTopology model={model} onOpenTask={vi.fn()} />);
+    expect(container.querySelector('.rcv2-prov-relay')?.textContent).toContain('16 ms');
+    const shareCard = container.querySelector('.rcv2-prov-host-badge')?.closest('button');
+    expect(shareCard).not.toBeNull();
+    fireEvent.click(shareCard!);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('28 ms')).toBeTruthy();
+    expect(within(dialog).queryByText('16 ms')).toBeNull();
+  });
+
   it('reuses .rcv2-tile + PlatformGlyph on own hosts and opens jumpable task list without redundant jump text', () => {
     const model = buildFixtureModel();
     const onOpenTask = vi.fn();
@@ -186,6 +220,18 @@ describe('RemoteProviderTopology', () => {
     const shareBadge = container.querySelector('.rcv2-prov-host-badge');
     expect(shareBadge).not.toBeNull();
     expect(shareBadge?.parentElement?.textContent?.trim()).toBe('C');
+
+    // 2026-11-26 用户要求：不点开卡片也能看出数据走 Agent-Net 还是 Device Link——
+    // 直连写在中间线路标签下面；经中转的写在中转站下面一次就够（中转只转发，前后两段是同一种协议），分支上不再重复。
+    const directPill = container.querySelector('.rcv2-prov-direct-pill');
+    expect(directPill?.textContent).toBe('直连 · UDP 4 ms');
+    expect(directPill?.nextElementSibling?.textContent).toBe('Agent-Net');
+    const relayNode = container.querySelector('.rcv2-prov-relay');
+    expect(relayNode?.textContent).toContain('WS');
+    expect(relayNode?.previousElementSibling?.textContent).toBe('Device Link');
+    const relayRtt = container.querySelector('.rcv2-prov-rtt-pill');
+    expect(relayRtt?.textContent).toBe('28 ms');
+    expect(container.querySelectorAll('.rcv2-prov-protocol-tag')).toHaveLength(2);
 
     // Click the Task Bundle card (>= 3 running tasks on Mac Studio) to expand task popover
     const bundleButton = screen.getByRole('button', { name: /3 个运行中/ });
@@ -212,6 +258,7 @@ describe('RemoteProviderTopology', () => {
     render(
       <RemoteProviderTopology
         model={model}
+        primaryRelayName="Cindy 中转"
         onOpenTask={onOpenTask}
         onPathPreferenceChange={onPathPreferenceChange}
       />,
@@ -226,6 +273,18 @@ describe('RemoteProviderTopology', () => {
     // Open Mac Studio machine popover, check auto-route rule info button, and switch path preference to relay
     const macCard = screen.getByRole('button', { name: /Mac Studio/ });
     fireEvent.click(macCard);
+    // 2026-11-26 用户要求：路径与延迟改成设备卡片的「线路选择」写法——直连、经「中转」中转各一行写最近测得的延迟，
+    // 传输协议单列在「连接方式」，不再有把两条延迟挤在一起的「延迟」行。
+    expect(screen.getByText('经「Cindy 中转」中转')).not.toBeNull();
+    expect(screen.getByText('4 ms')).not.toBeNull();
+    expect(screen.getByText('18 ms')).not.toBeNull();
+    expect(screen.getByText('最近测得')).not.toBeNull();
+    expect(screen.queryByText('延迟')).toBeNull();
+    expect(screen.getByText('连接方式')).not.toBeNull();
+    // 「连接方式」写出数据实际走的协议与底层传输（同账号机器经加密控制链路直连 → Agent-Net · UDP）。
+    const machineCard = within(screen.getByRole('dialog'));
+    expect(machineCard.getByText('Agent-Net')).not.toBeNull();
+    expect(machineCard.getByText('· UDP')).not.toBeNull();
     const infoBtn = screen.getByRole('button', { name: '自动选路规则' });
     fireEvent.click(infoBtn);
     expect(screen.getByText(/25–50 ms/)).not.toBeNull();
@@ -234,5 +293,141 @@ describe('RemoteProviderTopology', () => {
       fireEvent.click(relayOption);
     });
     expect(onPathPreferenceChange).toHaveBeenCalledWith('dev-mac', 'relay');
+  });
+
+  // 测试价值：
+  // - 生产入口与可观察结果：RemoteProviderTopologyPanel 挂载后展示正在使用远端插件引擎的任务与机器卡片；
+  // - Bug 依据：侧栏显示转圈（插件引擎回合后后台活动或 Agent Island 实时运行态）而 makerChatStore.getRunningSnapshot()
+  //   无条目时，面板此前漏掉这两类信号，误显示「当前无运行中的远程供应商任务」；
+  // - 覆盖缺口：此前仅测纯展示组件 RemoteProviderTopology，未覆盖 RemoteProviderTopologyPanel 的运行态汇总；
+  // - 最小失败输入：2 条指向远端 Mac Studio 的 acp 任务，1 条仅在 background activity 集合、1 条仅在 Agent Island 活动快照。
+  it('shows remote plugin-engine tasks active via background activity or Agent Island even when makerChatStore snapshot is empty', async () => {
+    let pushBgActivity: ((payload: { sessionId: string; active: boolean }) => void) | null = null;
+    let pushIslandActivity: ((list: AgentIslandSessionActivity[]) => void) | null = null;
+
+    const acpSessionBg = makeSession({
+      id: 'acp-bg-1',
+      title: '远端插件引擎后台活动任务',
+      agentKind: 'acp' as Session['agentKind'],
+      providerId: 'acp-plugin:sample-acp:engine',
+      agentDeviceId: 'dev-remote-mac',
+      model: 'gemini-4-neon',
+    });
+    const acpSessionIsland = makeSession({
+      id: 'acp-island-2',
+      title: '远端插件引擎实时运行任务',
+      agentKind: 'acp' as Session['agentKind'],
+      providerId: 'acp-plugin:sample-acp:engine',
+      agentDeviceId: 'dev-remote-mac',
+      model: 'gemini-4-neon',
+    });
+
+    const prevElectronApi = (window as unknown as { electronAPI?: unknown }).electronAPI;
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      localDb: {
+        sessions: {
+          list: vi.fn().mockResolvedValue([acpSessionBg, acpSessionIsland]),
+        },
+      },
+      maker: {
+        onSessionBackgroundActivityChanged: vi.fn((cb: (payload: { sessionId: string; active: boolean }) => void) => {
+          pushBgActivity = cb;
+          return () => {};
+        }),
+        listSessionBackgroundActivity: vi.fn().mockResolvedValue({ sessionIds: ['acp-bg-1'] }),
+        onSessionBackgroundWorkChanged: vi.fn(() => () => {}),
+        listSessionBackgroundWork: vi.fn().mockResolvedValue({ sessionIds: [] }),
+      },
+      agentIsland: {
+        onSessionActivity: vi.fn((cb: (list: AgentIslandSessionActivity[]) => void) => {
+          pushIslandActivity = cb;
+          return () => {};
+        }),
+      },
+    };
+
+    try {
+      const devices: DeviceLinkDeviceView[] = [
+        {
+          deviceId: 'dev-self',
+          name: 'Windows PC',
+          platform: 'win32',
+          appVersion: '1.0.0',
+          lastSeenAt: null,
+          online: true,
+          busy: false,
+          remoteControlEnabled: true,
+          controlEnabled: true,
+          isSelf: true,
+        },
+        {
+          deviceId: 'dev-remote-mac',
+          name: 'Mac Studio',
+          platform: 'darwin',
+          appVersion: '1.0.0',
+          lastSeenAt: null,
+          online: true,
+          busy: true,
+          remoteControlEnabled: true,
+          controlEnabled: true,
+          isSelf: false,
+        },
+      ];
+      const peerLinks: DeviceLinkPeerLinksSnapshot = {
+        links: [
+          { deviceId: 'dev-remote-mac', encrypted: true, open: true, path: 'direct', rttMs: 5, sentAgoMs: 100, receivedAgoMs: 100 },
+        ],
+        agentNetRoutes: [
+          { deviceId: 'dev-remote-mac', path: 'direct', rttMs: 5, directRttMs: 5, relayRttMs: 20, pathPreference: 'auto' },
+        ],
+        providerShareRoutes: [],
+        relayRttMs: 20,
+        relayProtocol: 'agent-net',
+        relayTransport: 'udp',
+      };
+
+      render(
+        <MemoryRouter>
+          <RemoteProviderTopologyPanel
+            devices={devices}
+            peerLinks={peerLinks}
+            primaryRelayName="Cindy 中转"
+            primarySelfHosted={false}
+            unresponsiveIds={new Set()}
+            tabControl={null}
+            statusRight={null}
+          />
+        </MemoryRouter>,
+      );
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+        pushBgActivity?.({ sessionId: 'acp-bg-1', active: true });
+        pushIslandActivity?.([
+          {
+            sessionId: 'acp-island-2',
+            phase: 'running',
+            currentTurnActive: true,
+            compactDetail: 'Working',
+            startedAtMs: Date.now() - 1000,
+            lastActivityAtMs: Date.now(),
+            currentActionSummary: 'Working',
+            attention: false,
+            workflow: null,
+            turnGeneration: 1,
+            gracefulStopState: 'none',
+            source: 'live',
+          },
+        ]);
+      });
+
+      expect(screen.getByText('远端插件引擎后台活动任务')).not.toBeNull();
+      expect(screen.getByText('远端插件引擎实时运行任务')).not.toBeNull();
+      expect(screen.getByText('Mac Studio')).not.toBeNull();
+      expect(screen.queryByText(/当前没有运行中的远程供应商任务/)).toBeNull();
+    } finally {
+      (window as unknown as { electronAPI?: unknown }).electronAPI = prevElectronApi;
+    }
   });
 });

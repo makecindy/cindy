@@ -1,3 +1,4 @@
+import { installDeletedTaskVectorCleanup } from '../deletedTaskVectors.js';
 import { PROJECT_ARCHIVE_GUARD_SQL } from '../projectArchiveGuard.js';
 import { deleteDeletedSessionViewStates, saveMcpAppViewState, viewStateCardSql, assertViewStateCard } from '../worker/opHandlers/mcpAppViewState.js';
 import { fastModeToStorage } from '@cindy/maker-shared';
@@ -34,6 +35,7 @@ import { isSqliteCorruption, createCorruptDbUnavailableError } from './sqliteCor
 import { isBackgroundDbRpc } from './rpcAdmission.js';
 
 const WORKER_CODE = `
+const installDeletedTaskVectorCleanup = ${installDeletedTaskVectorCleanup.toString()};
 const isSqliteCorruption = ${isSqliteCorruption.toString()};
 const createCorruptDbUnavailableError = ${createCorruptDbUnavailableError.toString()};
 let corruptionError = null;
@@ -345,6 +347,7 @@ function createDatabase(opts) {
         dbPath,
         ...vec,
       });
+      if (vec.loaded) installDeletedTaskVectorCleanup(nextDb);
       parentPort.postMessage({ event: 'vec-status', payload: vec });
       assertNoPendingMigrations(nextDb, dbPath, opts.drizzleDir);
       const drift = detectSchemaDrift(nextDb, opts.drizzleDir);
@@ -1220,10 +1223,10 @@ function sessionsSetStatus(readyDb, args) {
     throw Object.assign(new Error('invalid status: ' + status), { code: 'INVALID_ARGS' });
   }
   const selectSession = readyDb.prepare(
-    'SELECT status, source, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1',
+    'SELECT status, source, archived_at AS archivedAt, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = readyDb.prepare(
-    'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
+    'UPDATE sessions SET status = ?, snoozed_until = NULL, snoozed_at = NULL, archived_at = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source, archived_at AS archivedAt',
   );
   return readyDb.transaction(() => {
     const applied = [];
@@ -1254,7 +1257,12 @@ function sessionsSetStatus(readyDb, args) {
       if (existing.source === 'bot' && (status === 'archived' || existing.status === 'archived')) {
         readyDb.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
       }
-      const updated = updateSession.get(status, now, sessionId);
+      const nextArchivedAt = status === 'active'
+        ? null
+        : existing.status === 'archived'
+          ? (existing.archivedAt ?? null)
+          : now;
+      const updated = updateSession.get(status, nextArchivedAt, now, sessionId);
       if (closeSharedTasks && status === 'archived') {
         readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
       }
@@ -1266,6 +1274,7 @@ function sessionsSetStatus(readyDb, args) {
         workspaceKind: updated.workspaceKind,
         remoteHostId: updated.remoteHostId,
         source: updated.source,
+        archivedAt: updated.archivedAt ?? null,
         status,
       });
     }
@@ -1281,6 +1290,11 @@ function sessionsSetTerminalStatus(readyDb, args) {
   if (status !== 'archived' && status !== 'deleted') {
     throw Object.assign(new Error('invalid terminal status: ' + status), { code: 'INVALID_ARGS' });
   }
+  const hasExplicitArchivedAt = Object.prototype.hasOwnProperty.call(payload, 'archivedAt');
+  if (hasExplicitArchivedAt && (status !== 'archived'
+    || (payload.archivedAt !== null && (typeof payload.archivedAt !== 'number' || !Number.isFinite(payload.archivedAt))))) {
+    throw Object.assign(new Error('invalid archivedAt'), { code: 'INVALID_ARGS' });
+  }
   return readyDb.transaction(() => {
     const guard = payload.projectGuard;
     if (guard && !readyDb.prepare(PROJECT_ARCHIVE_GUARD_SQL).get(
@@ -1295,7 +1309,7 @@ function sessionsSetTerminalStatus(readyDb, args) {
       || !readyDb.prepare("SELECT id FROM sessions WHERE id = ? AND status = 'active' AND user_send_at IS NULL AND active_turn_started_at IS NULL AND pinned_at IS NULL AND NOT EXISTS (SELECT 1 FROM messages WHERE session_id = sessions.id)").get(sessionId))) {
       throw Object.assign(new Error('Task is no longer unused'), { code: 'PRECONDITION_FAILED' });
     }
-    const existing = readyDb.prepare('SELECT id, status, source, side_chat_promoted AS sideChatPromoted, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
+    const existing = readyDb.prepare('SELECT id, status, source, archived_at AS archivedAt, side_chat_promoted AS sideChatPromoted, side_chat_close_pending AS sideChatClosePending FROM sessions WHERE id = ? LIMIT 1').get(sessionId);
     if (!existing) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     if (existing.status === 'deleted') throw Object.assign(new Error('Deleted session cannot change status: ' + sessionId), { code: 'PRECONDITION_FAILED' });
     const closeParentId = payload.sideChatCloseParentId;
@@ -1317,16 +1331,25 @@ function sessionsSetTerminalStatus(readyDb, args) {
       readyDb.prepare("UPDATE bot_session_links SET archived_at = COALESCE(archived_at, ?) WHERE session_id = ? AND role = 'group'").run(now, sessionId);
     }
     readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, sessionId);
+    const nextArchivedAt = status === 'deleted'
+      ? null
+      : payload.idleArchiveCutoff !== undefined
+        ? (existing.archivedAt ?? null)
+        : hasExplicitArchivedAt
+          ? payload.archivedAt
+          : existing.status === 'archived'
+            ? (existing.archivedAt ?? null)
+            : now;
     const updated = readyDb.prepare(
-      'UPDATE sessions SET status = ?, side_chat_close_pending = CASE WHEN ? THEN 1 ELSE side_chat_close_pending END, snoozed_until = NULL, snoozed_at = NULL, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
-    ).get(status, closeParentId === undefined ? 0 : 1, payload.idleArchiveCutoff ?? null, now, sessionId);
+      'UPDATE sessions SET status = ?, side_chat_close_pending = CASE WHEN ? THEN 1 ELSE side_chat_close_pending END, snoozed_until = NULL, snoozed_at = NULL, archived_at = ?, updated_at = CASE WHEN ? IS NOT NULL THEN updated_at ELSE ? END WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source, archived_at AS archivedAt',
+    ).get(status, closeParentId === undefined ? 0 : 1, nextArchivedAt, payload.idleArchiveCutoff ?? null, now, sessionId);
     if (!updated) throw Object.assign(new Error('Session not found: ' + sessionId), { code: 'NOT_FOUND' });
     const deletedSideChats = status === 'deleted' && (existing.source !== 'side-chat' || existing.sideChatPromoted)
-      ? readyDb.prepare("UPDATE sessions SET status = 'deleted', updated_at = ? " +
+      ? readyDb.prepare("UPDATE sessions SET status = 'deleted', archived_at = NULL, updated_at = ? " +
           "WHERE parent_session_id = ? AND source = 'side-chat' AND side_chat_promoted = 0 AND status <> 'deleted' " +
           'AND NOT ' + COMMITTED_SIDE_CHAT_WORKER_SQL + ' ' +
           'RETURNING id AS sessionId, title, working_dir AS workingDir, workspace_kind AS workspaceKind, ' +
-          'remote_host_id AS remoteHostId, source').all(now, sessionId)
+          'remote_host_id AS remoteHostId, source, archived_at AS archivedAt').all(now, sessionId)
       : [];
     if (status === 'deleted') {
       deleteDeletedSessionViewStates(readyDb, [sessionId, ...deletedSideChats.map(child => child.sessionId)]);
@@ -1334,7 +1357,7 @@ function sessionsSetTerminalStatus(readyDb, args) {
     for (const child of deletedSideChats) {
       readyDb.prepare(CLOSE_SHARED_TASKS_FOR_SESSION_SQL).run(now, child.sessionId);
     }
-    return { ...updated, sessionId: updated.id, status, deletedSideChats };
+    return { ...updated, sessionId: updated.id, archivedAt: updated.archivedAt ?? null, status, deletedSideChats };
   })();
 }
 
@@ -1623,12 +1646,14 @@ function orcaUpsertWorker(readyDb, args) {
       const remote = asRecord(payload.remoteExecution, 'remoteExecution');
       if (remote.proxySession !== undefined) {
         const proxy = asRecord(remote.proxySession, 'remoteExecution.proxySession');
-        readyDb.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?)").run(
+        readyDb.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at, provider_id, agent_device_id) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?, ?, ?)").run(
           sessionId, expectString(proxy.title, 'proxySession.title'),
           expectString(proxy.model, 'proxySession.model'),
           proxy.effort == null ? 'high' : expectString(proxy.effort, 'proxySession.effort'),
           expectString(proxy.permissionMode, 'proxySession.permissionMode'), fastModeToStorage(proxy.fastMode),
           expectString(proxy.agentKind, 'proxySession.agentKind'), now, now,
+          proxy.providerId == null ? null : expectString(proxy.providerId, 'proxySession.providerId'),
+          proxy.agentDeviceId == null ? null : expectString(proxy.agentDeviceId, 'proxySession.agentDeviceId'),
         );
       }
     }

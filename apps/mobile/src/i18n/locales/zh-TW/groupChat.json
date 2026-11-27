@@ -9,6 +9,7 @@
     "stopAllHint": "包括其他人發起的",
     "step": "第 {{step}}/{{total}} 步"
   },
+  "newMessagesBoundary": "NEW",
   "title": "群聊",
   "memberSeparator": "、",
   "memberCount_one": "{{count}} 位成員",
@@ -97,6 +98,8 @@
   },
   "notice": {
     "memberJoined": "{{name}}加入了群聊",
+    "memberJoinedList": "{{names}}加入了群聊",
+    "memberJoinedSummary": "{{names}} 及另外 {{others}} 人加入了群聊",
     "memberFailed": "{{name}}這次沒能回覆",
     "memberTimeout": "{{name}}太久沒有回覆，這次先跳過",
     "memberUnavailable": "{{name}}現在無法使用，這次沒有發言",
@@ -175,7 +178,9 @@
       "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
       "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
       "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
-      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連接你的 Cindy 後才能讓 Cindy 替你工作（你的電腦上現在沒有在線的 Cindy）。"
+      "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連接你的 Cindy 後才能讓 Cindy 替你工作（你的電腦上現在沒有在線的 Cindy）。",
+      "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，請先選擇本群組的執行電腦，選好後會繼續這項請求。",
+      "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 在本群組選擇的執行電腦已離線。"
     }
   },
   "plan": {
@@ -311,6 +316,8 @@
     },
     "allowMemberInvites": "允許所有成員邀請朋友",
     "allowMemberInvitesHint": "開啟後，已加入的所有成員都可邀請朋友。僅群主和管理員可變更。",
+    "allowMemberMentionAll": "允許所有成員 @所有人",
+    "allowMemberMentionAllHint": "開啟後，所有成員都可 @所有人；關閉時僅群主和管理員可用。僅群主和管理員可變更。",
     "allowMentionAllBots": "允許 @所有夥伴",
     "allowMentionAllBotsHint": "僅群主可更改。夥伴可能都會回覆，大群請謹慎開啟。此開關不影響 AI 代答。"
   },
@@ -339,6 +346,7 @@
     "groupDissolved": "群聊已解散，仍可查看有權存取的歷史訊息。",
     "lastOwner": "請先轉讓群主或解散群聊，再退出。",
     "allBotsMentionDisabled": "群主尚未開啟 @所有夥伴。",
+    "allHumansMentionForbidden": "僅群主和管理員可以 @所有人。",
     "turnAlreadyStarted": "這位夥伴已開始執行，不能略過",
     "stopOwnershipUnknown": "部分工作未能停止：無法確認由誰發起",
     "nothingToStop": "目前沒有可停止的工作"
@@ -428,7 +436,36 @@
     "select": "選擇訊息",
     "sidebarOwn": "你貼回了一則話題回覆",
     "sidebarOther": "{{name}} 貼回了一則話題回覆",
-    "shareFailed_many": "有 {{count}} 則回覆已發到話題，但沒能同時發到群聊。"
+    "shareFailed_many": "有 {{count}} 則回覆已發到話題，但沒能同時發到群聊。",
+    "openIndex": "話題",
+    "indexTitle": "話題",
+    "filterAria": "篩選話題",
+    "filterMine": "與我相關",
+    "filterAll": "全部",
+    "searchPlaceholder": "搜尋話題、回覆或成員",
+    "clearSearch": "清除搜尋",
+    "listRecent": "最近",
+    "indexParticipatedTag": "參與過",
+    "indexMentionedTag": "@過我",
+    "indexEmptyMine": "還沒有你參與或提到你的話題",
+    "indexEmptyAll": "這個群聊還沒有話題",
+    "indexEmptySearch": "沒有符合的話題",
+    "viewAllThreads": "查看全部話題",
+    "emptyReply": "沒有文字內容",
+    "listNews": "有新回覆",
+    "hintOne": "話題有新回覆",
+    "hintMany_one": "{{count}} 個話題有新回覆",
+    "hintMany_other": "{{count}} 個話題有新回覆",
+    "syncingHistory": "正在追溯更早話題…",
+    "rootKind": {
+      "task": "任務",
+      "image": "圖片",
+      "video": "影片",
+      "audio": "語音",
+      "file": "檔案",
+      "share": "轉發回覆",
+      "card": "卡片"
+    }
   },
   "mask": {
     "toolAccess": "工具權限",
@@ -503,6 +540,8 @@
     }
   },
   "groupSettings": {
+    "assistantComputer": "執行電腦",
+    "chooseComputer": "選擇電腦",
     "tabSettings": "群組設定",
     "youAreOwner": "你是群主",
     "youAreAdmin": "你是管理員",
@@ -543,7 +582,10 @@
     "accessNone": "僅主人可用",
     "accessChat": "僅群內交流",
     "accessTools": "可用工具與資料",
+    "memberPermissions": "成員權限",
     "replies": "夥伴怎麼接話",
+    "assistant": "群裡的 Cindy",
+    "assistantHint": "誰 @ 它，就在誰自己的電腦上做。",
     "replyModeMentionedNote": "不 @ 人時，夥伴不會接話。",
     "work": "分工",
     "organizerHint": "安排誰做哪一步；預設是第一位夥伴。",
@@ -647,5 +689,10 @@
     "externalFormatError": "請從原訊息重新開啟完整連結。"
   },
   "waitingForOwner": "等待主人確認",
-  "externalBadge": "外部"
+  "externalBadge": "外部",
+  "reaction": {
+    "add": "新增表情回應",
+    "count": "{{emoji}} · {{count}} 人回應",
+    "failed": "表情回應未能更新，請重試。"
+  }
 }

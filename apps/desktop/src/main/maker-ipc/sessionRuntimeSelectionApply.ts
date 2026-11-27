@@ -66,6 +66,7 @@ import type { IpcErrorCode } from '../../shared/ipc-errors.js';
 import type { Logger } from '../logger.js';
 import type { createColdPiRehydrationForWindowVerification } from './coldPiRehydration.js';
 import type { createBotModelRouteReconciler } from './botModelRouteReconciler.js';
+import { unbindModelGroupSession } from '../model-groups/sessionBindings.js';
 import type { ScheduledModelSelection } from './scheduledModelSelection.js';
 
 /** Moved from register.ts (registerMakerIpc). */
@@ -102,6 +103,10 @@ export type InternalRuntimeSelectionOptions = {
   routeExplicit?: boolean;
   /** A send-time ID rename must persist even without a user picker transaction. */
   persistRenamedSessionModel?: boolean;
+  /** 智能路由预检/故障恢复切源时要求强制落库，确保 DB、effective 与绑定三者一致。 */
+  persistRoute?: boolean;
+  /** 本次用户切换属于智能路由选路发起，保留/随后覆盖绑定而不主动解绑。 */
+  preserveModelGroupBinding?: boolean;
 };
 /** The type of register.ts `applySessionRuntimeSelection` (moved from its declaration). */
 export type ApplySessionRuntimeSelection = (
@@ -415,6 +420,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           throwIpcError('INVALID_PARAMS', 'Fast is unavailable for plugin engines');
         }
         // Keep the same owner, write authorization and send lock across the ACP round trip.
+        if (internalOptions.beforeMutation) await internalOptions.beforeMutation();
         assertRuntimeOwnerCurrent();
         assertSharedTaskCurrent.admit();
         const target = engineElsewhere
@@ -434,6 +440,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           assertSharedTaskCurrent.admit();
         }
         await persistSessionFields(sessionId, { model: target.model, effort: effort ?? '' }, { allowEmptyEffort: true });
+        if (internalOptions.source === 'user' && internalOptions.configStaged !== true) {
+          await updateScheduledPreference(sessionId, null);
+        }
         assertRuntimeOwnerCurrent();
         const generation = internalOptions.source === 'fallback'
           ? acceptSessionRuntimeMutation({
@@ -1686,6 +1695,7 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           (modelWindowRebuilt ||
             (runtimeAgentKind === 'pi' && (runtimeRouteChanged || piConfigurationRefresh)) ||
             internalOptions.persistRenamedSessionModel === true ||
+            internalOptions.persistRoute === true ||
             (internalOptions.source === 'user' && (isDeviceLinkInvoke() || atomicSelection)))
         ) {
           // device-link 的通用持久化原本发生在 handler 返回、session 锁释放之后；
@@ -1788,6 +1798,10 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
           if (!internalOptions.configStaged) {
             await updateScheduledPreference(sessionId, null);
             await reconcileBotModelRoute.acceptTaskChoice(sessionId).catch(() => {});
+            // 用户手动选择具体模型时解除智能路由托管(即使重选当前模型也显式退出托管)。
+            if (!internalOptions.preserveModelGroupBinding) {
+              unbindModelGroupSession(sessionId);
+            }
           }
           generation = recordUserSessionRuntimeMutation(sessionId);
         } else if (internalOptions.applyingPendingGeneration !== undefined) {

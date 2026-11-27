@@ -12,7 +12,7 @@
  */
 import { eq } from 'drizzle-orm';
 import type { Maker } from '@cindy/maker-core';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
@@ -88,7 +88,7 @@ export function createSessionContextWindowBudgetReconcile(ports: SessionContextW
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .limit(1);
-    if (!row?.model) return;
+    if (!row?.model || isPluginEngineKind(row.agentKind)) return;
     const agent = dbToMakerAgentKind(row.agentKind);
     const providerId = getSessionProvider(sessionId) ?? row.providerId;
     const catalog = getActiveCatalog();

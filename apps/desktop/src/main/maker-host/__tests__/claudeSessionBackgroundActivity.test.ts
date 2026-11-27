@@ -159,8 +159,12 @@ describe('claude-session-background-activity', () => {
   // 回合结束时一律熄灭。从没有回合外工作的插件不得触发。
   describe('插件引擎回合外工作', () => {
     let island: Array<[string, boolean, boolean]>;
-    const toolUse = (id: string, turnScope?: 'background'): AgentEvent =>
-      ({ type: 'tool_use', data: { toolUseId: id }, ...(turnScope ? { turnScope } : {}) });
+    const toolUse = (id: string, turnScope?: 'background', input?: unknown): AgentEvent =>
+      ({
+        type: 'tool_use',
+        data: { toolUseId: id, toolName: 'run_command', ...(input === undefined ? {} : { input }) },
+        ...(turnScope ? { turnScope } : {}),
+      });
     const toolResult = (id: string, turnScope?: 'background'): AgentEvent =>
       ({ type: 'tool_result', data: { toolUseIds: [id] }, ...(turnScope ? { turnScope } : {}) });
 
@@ -221,6 +225,95 @@ describe('claude-session-background-activity', () => {
       vi.advanceTimersByTime(1_100);
       expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
       expect(island.at(-1)).toEqual([sid, false, false]);
+    });
+
+    // #13004 / #13017:Antigravity 的 run_command 带 `IsDaemon: true` 起本地 dev server 时，
+    // 服务活着就永远不报 completed，命令本身也不会自己结束。它与 Claude Code 的
+    // `backgroundCommandKind=service` 同类：不能当成「Agent 还在跑，所以任务在运行中」。
+    // 最小失败输入：回合结束时仍挂着一条 IsDaemon 的服务调用 —— 旧实现让它点亮 31 分钟，
+    // 且每轮结束都重新计时。会自己结束的后台工作(构建、测试、等 CI)照旧点亮。
+    it('常驻服务不点亮:IsDaemon 标记与长驻命令都按服务算,真实后台工作仍点亮', () => {
+      const sid = 'agy-daemon';
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(
+        sid,
+        toolUse('dev', undefined, { CommandLine: 'unset HTTPS_PROXY && pnpm dev', IsDaemon: true }),
+      );
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+      expect(island).toEqual([]);
+
+      // 没带常驻标记,但命令本身是长驻开发服务(与 CC 后台命令分类同一判据)。
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, toolUse('vite', undefined, { command: 'vite --host 0.0.0.0' }));
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+
+      // 对照:同一个 Agent 里会自己结束的后台工作照旧点亮。
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, toolUse('checks', undefined, { command: 'pnpm test:unit:related' }));
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+    });
+
+    // ACP 真实形态先发空入参的 tool_call，再用 tool_call_update 补齐入参：
+    // 同一 toolUseId 会发两条 tool_use(第二条带 acpInputPatch)。第一条已经把 id 记进
+    // engineOpenTools，补上常驻标记时只跳过新增是不够的，必须把那条 id 撤掉。
+    it('先缺参后补上常驻标记时撤掉已记录的调用', () => {
+      const sid = 'agy-late-daemon';
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, toolUse('dev'));
+      observePluginEngineEvent(sid, {
+        type: 'tool_use',
+        data: {
+          toolUseId: 'dev',
+          toolName: 'run_command',
+          input: { CommandLine: 'pnpm dev', IsDaemon: true },
+          acpInputPatch: true,
+        },
+      });
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+      expect(island).toEqual([]);
+    });
+
+    // #13001: ACP `plan` / `plan_update` 翻译成带 `runtimeActivity: 'snapshot'` 的合成
+    // `update_plan` tool_use，永远没有配对的 tool_result（与 maker-core 的 observeTurnControl
+    // / observeToolLoop 同口径）。
+    // 现有覆盖缺口：相邻用例只覆盖普通工具与常驻服务，没有覆盖展示用快照型 tool_use。
+    // 最小失败输入：回合内发一条 `runtimeActivity: 'snapshot'` 的 `update_plan` 后结束回合。
+    // tier: unit（纯内存状态机 + fake timers）。
+    it('展示用快照(runtimeActivity: snapshot)不计入未完成调用，不误亮后台工作', () => {
+      const sid = 'agy-plan-snapshot';
+      noteClaudeSessionTurnState(sid, true);
+      observePluginEngineEvent(sid, {
+        type: 'tool_use',
+        data: {
+          toolUseId: 'plan:acp-1-plan-1',
+          toolName: 'update_plan',
+          runtimeActivity: 'snapshot',
+          input: { plan: [{ step: 'Check logs', status: 'completed' }] },
+        },
+      });
+      noteClaudeSessionTurnState(sid, false);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
+      expect(broadcasts).toEqual([]);
+      expect(island).toEqual([]);
+
+      // 回合外发出的计划快照只按 30s 静默窗点亮，不会因为留在 engineOpenTools 而撑满 31 分钟。
+      observePluginEngineEvent(sid, {
+        type: 'tool_use',
+        turnScope: 'background',
+        data: {
+          toolUseId: 'plan:acp-1-plan-2',
+          toolName: 'update_plan',
+          runtimeActivity: 'snapshot',
+          input: { plan: [{ step: 'Push branch', status: 'in_progress' }] },
+        },
+      });
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(true);
+      vi.advanceTimersByTime(ACTIVITY_WINDOW_MS + 100);
+      expect(getClaudeSessionBackgroundActivity(sid)).toBe(false);
     });
 
     it('回合外输出点亮、新回合让位;只剩等待中的调用时最多亮到上限', () => {

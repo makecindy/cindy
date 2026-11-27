@@ -19,7 +19,11 @@ import {
 import { cn } from '@/lib/utils';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { describeTelegramStatusFailure, useTelegramBot } from '@/hooks/useTelegramBot';
-import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
+import {
+  formatImDefaultRouteSummary,
+  ImChannelSettingsCard,
+  useImChannelSettingsSummary,
+} from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { TelegramRemoteDevices } from './TelegramRemoteDevices';
 import {
@@ -201,11 +205,7 @@ export function TelegramBotSectionView({
       id={`${idPrefix}${imBotSettings.telegram.targetId}`}
       title={t(imBotSettings.telegram.titleKey)}
       description={t('settings.telegramBot.description')}
-      routeSummary={
-        routeSummary
-          ? `${t(`settings.imBot.defaults.agents.${routeSummary.agentKind}`)} · ${routeSummary.model}`
-          : null
-      }
+      routeSummary={formatImDefaultRouteSummary(routeSummary, t)}
       expanded={expanded}
       onToggle={onToggle}
       status={

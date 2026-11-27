@@ -11,6 +11,8 @@
  *   4. 不传 homeDeviceId 的本机任务照旧用本机目录。
  */
 import type { ModelSelectorContentBaseProps } from '../components/new-chat/ModelSelector';
+import type { Effort } from '@/lib/userPreferences.types';
+import type { ModelGroupsConfig } from '../../shared/modelGroups';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -30,6 +32,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.unified.railAll': '全部',
         'newChat.modelSelector.unified.railRemoteProvider': `${options?.provider ?? ''} · ${options?.device ?? ''}`,
         'effortLevels.low': '低',
+        'effortLevels.medium': '中',
         'effortLevels.high': '高',
       };
       return table[key] ?? options?.defaultValue ?? key;
@@ -124,7 +127,8 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
   evictDeviceProviders: vi.fn(),
-  prefetchDeviceProviders: vi.fn(async () => {}),
+  prefetchDeviceProviders: vi.fn(async (deviceId: string) =>
+    catalogs.offline.has(deviceId) ? null : { providers: catalogs.byDevice[deviceId] ?? [] }),
   useDeviceProviders: (deviceId?: string) =>
     deviceId && catalogs.offline.has(deviceId)
       ? { providers: [], loading: false, error: 'DEVICE_LINK_UNREACHABLE', unsupported: false }
@@ -169,6 +173,8 @@ vi.mock('@/hooks/useModelRouteDevices', () => ({
 
 import { ModelSelector, ModelSelectorContent } from '@/components/new-chat/ModelSelector';
 import { ModelRouteSelectorContent } from '@/components/new-chat/ModelRouteSelector';
+import { prefetchDeviceCapabilities } from '@/hooks/useAgentCapabilities';
+import { prefetchDeviceProviders } from '@/hooks/useDeviceProviders';
 import {
   agentDeviceModelMemoryAccessors,
   __resetForTest as resetDeviceMemory,
@@ -590,5 +596,133 @@ describe('本机草稿:浏览其他电脑的目录后选中不写本机「最近
     expect(listRecentModels().map((item) => `${item.providerId}:${item.modelId}`)).toEqual([
       'a-local:a-model',
     ]);
+  });
+});
+
+// Unit: closing the two-stage loading gap for controlled-host shared models and remote sources.
+describe('远程/共享模型目录预热', () => {
+  beforeEach(() => {
+    vi.mocked(prefetchDeviceProviders).mockClear();
+    vi.mocked(prefetchDeviceCapabilities).mockClear();
+  });
+
+  it('远控被控电脑的闭合选择器自动预热共享模型的 providers 与 capabilities', async () => {
+    const routedShare = 'model-catalog:' + JSON.stringify(['device-b', 'share:b-only']);
+    catalogs.byDevice[routedShare] = catalogs.byDevice['share:abc'];
+    try {
+      render(
+        <ModelSelector
+          modelId="b-model"
+          effort="high"
+          currentProviderId="b-main"
+          vendorKey="cc"
+          deviceId="device-b"
+          onModelChange={vi.fn()}
+          onEffortChange={vi.fn()}
+          remoteAgent={{
+            devices: [{ deviceId: 'share:b-only', name: 'Shared on B' }],
+            selectedDeviceId: null,
+            homeDeviceId: 'device-b',
+            catalogHostDeviceId: 'device-b',
+            onRelocate: vi.fn(async () => true),
+          }}
+        />,
+      );
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(prefetchDeviceProviders).toHaveBeenCalledWith(routedShare);
+      expect(prefetchDeviceCapabilities).toHaveBeenCalledWith(routedShare);
+    } finally {
+      delete catalogs.byDevice[routedShare];
+    }
+  });
+
+  it('本机闭合选择器不在挂载时扇出预热，悬停触发器时才预热远程/共享来源', async () => {
+    render(
+      <ModelSelector
+        modelId="a-model"
+        effort="high"
+        currentProviderId="a-local"
+        vendorKey="cc"
+        onModelChange={vi.fn()}
+        onEffortChange={vi.fn()}
+        remoteAgent={{
+          devices: [{ deviceId: 'share:abc', name: 'Local Share' }],
+          selectedDeviceId: null,
+          onRelocate: vi.fn(async () => true),
+        }}
+      />,
+    );
+    await act(async () => { await Promise.resolve(); });
+    expect(prefetchDeviceProviders).not.toHaveBeenCalled();
+
+    const trigger = screen.getByRole('button');
+    await act(async () => {
+      fireEvent.pointerEnter(trigger);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(prefetchDeviceProviders).toHaveBeenCalledWith('share:abc');
+    expect(prefetchDeviceCapabilities).toHaveBeenCalledWith('share:abc');
+  });
+
+  it('面板展开后为左栏已有模型的远程来源预取 capabilities', async () => {
+    renderControlledTaskPanel({
+      devices: [{ deviceId: 'device-c', name: 'Studio' }],
+      selectedDeviceId: null,
+    });
+    await act(async () => { await Promise.resolve(); });
+    expect(prefetchDeviceCapabilities).toHaveBeenCalledWith('device-c');
+  });
+});
+
+// 2026-11-27 用户录屏：新任务选着合并供应商路由下的模型、草稿记的成员是分享来的(Agent 随之在那个分享上)时，
+// 配置浮层的推理强度滑杆显示推荐档而不是草稿实际的档位；拖动松手后草稿的档位改了，滑杆却弹回推荐档。
+// 生产入口：真实 ModelSelectorContent 的合并条目选中行 → 配置浮层滑杆 → 草稿的 onEffortChange。
+// 已有覆盖只有不进 CI 的单页场景，且只看选中行、不看滑杆。最小失败输入：成员都在分享上、草稿档位不是推荐档。tier：unit/jsdom。
+describe('合并供应商路由的成员在分享上：选中行按草稿实际的推理强度显示', () => {
+  const shares = ['share:route-1', 'share:route-2'];
+  const memberCatalog = () => [{
+    id: 'r-brand', name: 'R Brand', source: 'user', agents: ['claude-code'], auth: { method: 'api-key' },
+    routing: { 'claude-code': {} }, connected: true, remoteInvocationEnabled: true,
+    models: { 'claude-code': [{
+      id: 'r-opus', name: 'R Opus', contextWindow: 200000, efforts: ['low', 'medium', 'high'], defaultEffort: 'medium',
+    }] },
+  }];
+  const routeConfig: ModelGroupsConfig = {
+    sourceRoutes: [{ id: 'auto:r-brand', name: 'R Brand', strategy: 'expiring', auto: true,
+      sources: shares.map((agentDeviceId) => ({ providerId: 'r-brand', agentDeviceId })) }],
+    routes: [{ id: 'src:r-opus', name: 'R Opus', strategy: 'expiring', parent: { id: 'auto:r-brand', name: 'R Brand' },
+      candidates: shares.map((agentDeviceId) => ({ agentKind: 'cc' as const, providerId: 'r-brand', model: 'r-opus', agentDeviceId })) }],
+  };
+  beforeEach(() => { for (const id of shares) catalogs.byDevice[id] = memberCatalog(); });
+  afterEach(() => { for (const id of shares) delete catalogs.byDevice[id]; });
+
+  it('打开浮层显示草稿的档位，改档后停在新档并交给草稿', async () => {
+    const onEffortChange = vi.fn();
+    function Draft() {
+      const [effort, setEffort] = React.useState<Effort>('high');
+      return (
+        <ModelSelectorContent
+          modelId="r-opus" effort={effort} currentProviderId="r-brand" vendorKey="cc" actualRoute={false}
+          onModelChange={vi.fn()}
+          onEffortChange={(next: Effort) => { onEffortChange(next); setEffort(next); }}
+          onUnifiedSelect={vi.fn(async () => true)}
+          remoteAgent={{ devices: shares.map((deviceId, index) => ({ deviceId, name: `R · ${index + 1}` })), selectedDeviceId: shares[0] }}
+          modelGroups={{ config: routeConfig, active: { type: 'route', id: 'src:r-opus' }, onSelect: vi.fn(), onAttach: vi.fn() }}
+        />
+      );
+    }
+    render(<Draft />);
+    const row = within(list()).getByText('R Opus').closest('[data-unified-anchor]') as HTMLElement;
+    expect(row.getAttribute('aria-selected')).toBe('true');
+    await act(async () => { fireEvent.click(within(row).getByRole('button', { name: '自定义' })); });
+    const slider = () => screen.getByRole('slider', { hidden: true });
+    expect(slider().getAttribute('aria-valuetext')).toBe('高');
+    await act(async () => { fireEvent.keyDown(slider(), { key: 'Home' }); });
+    expect(onEffortChange).toHaveBeenCalledWith('low');
+    expect(slider().getAttribute('aria-valuetext')).toBe('低');
   });
 });

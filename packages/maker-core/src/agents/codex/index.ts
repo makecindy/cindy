@@ -187,6 +187,7 @@ import {
 } from './version-gates.js';
 import {
   emptyUserInputResponse,
+  rejectedUserInputResponse,
   normalizeRequestUserInputQuestions,
   normalizeDynamicAskUserQuestions,
   questionsToAskUserItems,
@@ -266,7 +267,7 @@ import { hasCurrentTeammateInstructions, rememberDeliveredTeammateInstructions, 
 import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } from './history-recovery.js';
 import { CodexForkError, type CodexForkStage } from './fork-error.js';
 import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
-import { parseReconnectAttemptMessage } from '../shared/network-error.js';
+import { parseReconnectAttemptMessage, type ReconnectAttempt } from '../shared/network-error.js';
 import {
   extractNonSecretErrorSignals,
   isProviderSafetyRefusalError,
@@ -790,6 +791,8 @@ const ASK_USER_DYNAMIC_TOOL_CANONICAL_NAME =
   `${ASK_USER_DYNAMIC_TOOL_NAMESPACE}__${ASK_USER_DYNAMIC_TOOL_NAME}`;
 const CODEX_SUBAGENT_ASK_USER_QUESTION_DENIAL_MESSAGE =
   'User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.';
+const CODEX_SUBAGENT_NATIVE_USER_INPUT_DENIAL_MESSAGE =
+  `[System — not a user answer] ${CODEX_SUBAGENT_ASK_USER_QUESTION_DENIAL_MESSAGE}`;
 const DISABLE_ASK_USER_DYNAMIC_TOOL_FALLBACK = process.env.XDT_CODEX_DISABLE_ASK_USER_DYNAMIC_TOOL === '1';
 // xAI rejects Codex namespace dynamic tools in its Responses `tools[]` schema.
 const CODEX_DYNAMIC_TOOL_UNSUPPORTED_PROVIDER_IDS = new Set(['xai']);
@@ -6374,6 +6377,9 @@ assertRouteCurrent();
           },
           ...(update.agentPath ? { title: update.agentPath } : {}),
           ...(update.model !== undefined ? { model: update.model } : {}),
+          ...(update.lastToolName ? { lastToolName: update.lastToolName } : {}),
+          ...(update.lastToolSummary ? { lastToolSummary: update.lastToolSummary } : {}),
+          ...(update.recentActivities ? { recentActivities: update.recentActivities } : {}),
           usage: {
             ...(update.totalTokens > 0 ? { totalTokens: update.totalTokens } : {}),
             ...(update.toolUses > 0 ? { toolUses: update.toolUses } : {}),
@@ -6963,9 +6969,9 @@ assertRouteCurrent();
         'features.goals': false,
         ...taskShellEnvConfig,
         ...commandRustLogConfig,
-        // Keep companion memory in its own Home. Native delegation uses the
-        // same feature settings and permissions as an ordinary task.
-        ...(isolatedBotProfile(opts.botRuntimeProfile) ? {
+        // Keep companion memory (both V1 and V2 project teammates) in its own Cindy memory
+        // folder rather than Codex's native <CODEX_HOME>/memories/ store.
+        ...(opts.botRuntimeProfile || opts.makerMemorySwitchOwned ? {
           'memories.generate_memories': false,
           'memories.use_memories': false,
         } : {}),
@@ -9209,6 +9215,7 @@ assertRouteCurrent();
     let reconnectStallTurnId: string | null = null;
     let reconnectStallTurnGeneration = 0;
     let reconnectStallErrorStatus: number | undefined;
+    let reconnectStallAttempt: ReconnectAttempt | null = null;
     let reconnectStallCapacitySignal: CodexUpstreamCapacitySignal | null = null;
     let upstreamCapacityIgnoredThrough = 0;
     let reconnectStallCapacityNoticeEmitted = false;
@@ -9259,6 +9266,7 @@ assertRouteCurrent();
       reconnectStallTurnId = null;
       reconnectStallTurnGeneration = 0;
       reconnectStallErrorStatus = undefined;
+      reconnectStallAttempt = null;
       reconnectStallCapacitySignal = null;
       reconnectStallCapacityNoticeEmitted = false;
       reconnectStallTimeoutBudgetMs = CODEX_RECONNECT_STALL_TIMEOUT_MS;
@@ -9495,13 +9503,14 @@ assertRouteCurrent();
           });
           return;
         }
+        const attemptDetail = reconnectStallAttempt
+          ? ` Last reconnect attempt: ${reconnectStallAttempt.attempt}/${reconnectStallAttempt.maxAttempts}.`
+          : '';
         const stalledMessage =
           `The model connection has been retrying for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
-          'without making progress; the turn was interrupted automatically. ' +
-          (pendingToolItemIds.size > 0
-            ? 'There were unconfirmed tool results when the connection stalled. '
-            : '') +
-          'You can send the next message to continue.';
+          `without making progress. The turn was interrupted automatically.${attemptDetail} ` +
+          `Pending tool calls at interruption: ${pendingToolItemIds.size}.` +
+          (pendingToolItemIds.size > 0 ? ' There were unconfirmed tool results when the connection stalled.' : '');
         const emitStalled = (reason: string, message: string): void => {
           if (
             !isReconnectStallCurrent() ||
@@ -9660,13 +9669,12 @@ assertRouteCurrent();
         codexErrorInfo?: unknown;
       } | null | undefined;
       const message = typeof data?.message === 'string' ? data.message : null;
-      const isReconnectNotice =
+      const reconnectAttempt =
         event.type === 'error' &&
         data?.isTerminal !== true &&
         data?.willRetry !== false &&
-        message !== null &&
-        parseReconnectAttemptMessage(message) !== null;
-      if (isReconnectNotice) {
+        message !== null ? parseReconnectAttemptMessage(message) : null;
+      if (reconnectAttempt) {
         const isCapacityNotice =
           data?.reason === UPSTREAM_OVERLOAD_REASON || data?.codexErrorInfo === 'serverOverloaded';
         if (isCapacityNotice && !reconnectStallCapacitySignal) {
@@ -9684,8 +9692,11 @@ assertRouteCurrent();
         );
         // The queue probe sees only accepted root-turn events. Keep the latest
         // known gateway status within this retry episode; progress clears it.
-        if (reconnectStallTurnId && (data?.errorStatus === 502 || data?.errorStatus === 503 || data?.errorStatus === 504)) {
-          reconnectStallErrorStatus = data.errorStatus;
+        if (reconnectStallTurnId) {
+          reconnectStallAttempt = reconnectAttempt;
+          if (data?.errorStatus === 502 || data?.errorStatus === 503 || data?.errorStatus === 504) {
+            reconnectStallErrorStatus = data.errorStatus;
+          }
         }
         return;
       }
@@ -9750,11 +9761,14 @@ assertRouteCurrent();
         // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
         // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
         reason: timeoutReason,
+        ...(timeoutReason === 'codex_reconnect_stalled' ? {
+          ...(reconnectStallAttempt && {
+            reconnectAttempt: reconnectStallAttempt.attempt,
+            reconnectMaxAttempts: reconnectStallAttempt.maxAttempts,
+          }),
+          pendingToolCount: pendingToolItemIds.size,
+        } : {}),
         ...(opts?.errorStatus !== undefined ? { errorStatus: opts.errorStatus } : {}),
-        // Snapshot before interrupt cleanup clears the set. A missing completion
-        // leaves the outcome unknown even if the tool already took effect.
-        ...(timeoutReason === 'codex_reconnect_stalled' && pendingToolItemIds.size > 0
-          ? { pendingToolCount: pendingToolItemIds.size } : {}),
         ...(opts?.codexErrorInfo ? { codexErrorInfo: opts.codexErrorInfo } : {}),
         message: opts?.message ??
           (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
@@ -10886,7 +10900,7 @@ assertRouteCurrent();
           turnId: params.turnId,
           itemId: params.itemId,
         });
-        return { answers: {} };
+        return rejectedUserInputResponse(questions, CODEX_SUBAGENT_NATIVE_USER_INPUT_DENIAL_MESSAGE);
       }
       const hasToolGenerationBoundary =
         activeToolContext?.type === 'mcpToolCall'
@@ -13077,6 +13091,9 @@ assertRouteCurrent();
         sessionHostForceRetired = true;
         subscriptionInvalidatedByTransport = false;
         resetCodexGenerationTiming(translatorRt);
+        // Either branch below ends the stream. Session then auto-closes without
+        // calling handle.close(), so retire the local bridge instance here.
+        if (!opts.remoteHostId && !hosted && !opts[LOCAL_AGENT_CLIENT]) closeCodexMcpInstance();
 
         const hadPendingWork =
           isTurnInFlight
@@ -13531,6 +13548,8 @@ assertRouteCurrent();
           log,
           onCompactBoundary: handleCompactBoundary,
           onItemBoundary: () => pushItemStatus(translatedItem),
+          resolveCollabTargets: (_tool, receiverThreadIds) =>
+            subagentLiveCards.resolveCollabTargets(receiverThreadIds),
         });
         // 重放帧后发:translator 刚推的 running 帧不得把已重放出的终态盖回去。
         if (replayedSubagentUpdate) emitSubagentCardUpdate(replayedSubagentUpdate);
@@ -13576,6 +13595,8 @@ assertRouteCurrent();
           rt: translatorRt,
           log,
           onCompactBoundary: handleCompactBoundary,
+          resolveCollabTargets: (_tool, receiverThreadIds) =>
+            subagentLiveCards.resolveCollabTargets(receiverThreadIds),
         });
         if (translatedItem.type === 'agentMessage' || translatedItem.type === 'reasoning') maybePushUsageRefresh();
         if (replayedSubagentUpdateOnUpdated) {
@@ -13661,6 +13682,8 @@ assertRouteCurrent();
           approvalDenialReason,
           compactTrigger: manualCompact?.turnId === params.turnId ? 'manual' : 'auto',
           onCompactBoundary: handleCompactBoundary,
+          resolveCollabTargets: (_tool, receiverThreadIds) =>
+            subagentLiveCards.resolveCollabTargets(receiverThreadIds),
         });
         // A late V1 spawn completion is the spawn tool closing, not necessarily
         // the child closing. Reassert a running compact state, or an explicit
@@ -15348,6 +15371,7 @@ assertRouteCurrent();
           : null;
         const reconnectGenerationAtStop = reconnectStallTurnGeneration;
         const reconnectErrorStatusAtStop = reconnectStallErrorStatus;
+        const reconnectAttemptAtStop = reconnectStallAttempt;
         const reconnectCapacitySignalAtStop = reconnectStallCapacitySignal;
         const reconnectTimeoutBudgetAtStop = reconnectStallTimeoutBudgetMs;
         let watchdogActivityVersionAtStop = 0;
@@ -15380,7 +15404,10 @@ assertRouteCurrent();
               reconnectCapacitySignalAtStop,
               reconnectTimeoutBudgetAtStop,
             );
-            if (reconnectStallTurnId === turnId) reconnectStallErrorStatus = reconnectErrorStatusAtStop;
+            if (reconnectStallTurnId === turnId) {
+              reconnectStallErrorStatus = reconnectErrorStatusAtStop;
+              reconnectStallAttempt = reconnectAttemptAtStop;
+            }
           }
         };
         turnInterruptOrigins.set(turnId, { source: 'user-stop' });

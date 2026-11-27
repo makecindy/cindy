@@ -549,5 +549,14 @@
   },
   "navigation": {
     "unavailable": "Impossible d’ouvrir les paramètres de l’ordinateur cible. Vérifiez qu’il est en ligne et autorise le contrôle à distance ; mettez Cindy à jour si nécessaire."
+  },
+  "qrLogin": {
+    "scanTitle": "Scanner pour se connecter",
+    "hintLogin": "Scannez le code affiché par Cindy sur votre ordinateur",
+    "hintLoginDetail": "Sur l'ordinateur : icône téléphone à côté de l'avatar → Contrôler Cindy à distance",
+    "cameraNeeded": "Cindy a besoin de l'appareil photo pour scanner",
+    "grantCamera": "Autoriser l'appareil photo",
+    "openSettings": "Ouvrir les Réglages",
+    "wrongCode": "Ce n'est pas un code de connexion Cindy"
   }
 }

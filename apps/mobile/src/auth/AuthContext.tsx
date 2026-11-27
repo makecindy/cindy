@@ -30,6 +30,7 @@ import {
   soleLoginMethod,
   ssoOrgDiscoveryToMethods,
   serializeAuthSessionRecord,
+  SIGNUP_CONFIRMATION_CAPABILITY,
   type AuthFlowState,
   type AuthRegion,
   type AuthSessionRecord,
@@ -40,6 +41,7 @@ import {
   type CaptchaConfig,
   type LoginOutcome,
   type ProviderConfig,
+  type QrLoginPayload,
   type SocialProvider,
   type SsoOrgDiscovery,
   type VerificationKind,
@@ -128,10 +130,12 @@ import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearRemoteResourceCache } from '@/device-link/remoteResourceCache';
 import { isSelfHostedRelayBaseUrl, getSelfHostedRelayRouteGeneration } from '@/device-link/selfHostedRelayRouting';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
+import { clearAllMobileOfflineInboxIntents } from '@/session/offlineInboxIntents';
 import { clearHomeSessionPrCache } from '@/session/homeSessionPrStore';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, invalidateMobileAuthOwnerForSwitch, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { updateCredentialAccessToken } from '@/remote-desktop/credentialIdentity';
 import { clearMobileChatHistoryStore } from '@/chat/chatHistoryStore';
+import { clearChatServerMediaCache } from '@/chat/chatServerMediaCache';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
@@ -278,7 +282,13 @@ export type MobileLoginAction =
   | { type: 'request-sso-verification-code' }
   | { type: 'verify-sso-verification'; code: string }
   | { type: 'request-binding-code'; contact: string }
-  | { type: 'verify-binding'; contact: string; code: string };
+  | { type: 'verify-binding'; contact: string; code: string }
+  /** 「还没有 Cindy 账号」里确认创建；注册票据只在本进程内存。 */
+  | { type: 'confirm-signup' }
+  /** 扫到已登录电脑「远程控制 Cindy」里的二维码：认领后等待电脑允许。 */
+  | { type: 'qr-claim'; payload: QrLoginPayload }
+  /** 电脑装的是另一个版本：用户同意切换后到该版本认领。 */
+  | { type: 'confirm-qr-region-switch' };
 
 interface PendingOAuth {
   codeVerifier: string;
@@ -435,6 +445,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const pendingLoginTicketRef = useRef<string | null>(null);
   const pendingBindTicketRef = useRef<string | null>(null);
   const pendingSsoVerificationTicketRef = useRef<string | null>(null);
+  // 「创建新账号」确认票据与扫码认领状态：只在内存，随登录流一起清空。
+  const pendingSignupTicketRef = useRef<string | null>(null);
+  const pendingQrClaimRef = useRef<{
+    payload: QrLoginPayload;
+    pollSecret: string | null;
+    expiresAt: number;
+  } | null>(null);
   const activeAuthRealmRef = useRef<AuthRegion>(BUILD_AUTH_REGION);
   const pendingAuthRealmRef = useRef<AuthRegion | null>(null);
   const handledLoginEmailRef = useRef<string | null>(null);
@@ -912,10 +929,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearHistoryDisk(),
       clearRemoteResourceCache().catch(() => undefined),
       clearCachedHomeListSnapshot().catch(() => undefined),
+      clearAllMobileOfflineInboxIntents().catch(() => undefined),
       clearHomeSessionPrCache().catch(() => undefined),
     ]);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
+    clearChatServerMediaCache({ clearNativeImageCache: true });
   }, []);
 
   const clearAuthError = useCallback(() => setAuthError(null), []);
@@ -1036,6 +1055,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         pendingLoginTicketRef.current = outcome.loginTicket;
         pendingBindTicketRef.current = null;
         pendingSsoVerificationTicketRef.current = null;
+        pendingSignupTicketRef.current = null;
+        pendingQrClaimRef.current = null;
         updateLoginState(
           reduceAuthFlow(loginStateRef.current, { type: 'outcome', outcome }),
         );
@@ -1046,6 +1067,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         pendingBindTicketRef.current = outcome.bindTicket;
         pendingLoginTicketRef.current = null;
         pendingSsoVerificationTicketRef.current = null;
+        pendingSignupTicketRef.current = null;
+        pendingQrClaimRef.current = null;
+        updateLoginState(
+          reduceAuthFlow(loginStateRef.current, { type: 'outcome', outcome }),
+        );
+        return;
+      }
+      if (outcome.status === 'signup_required') {
+        pendingAccountDeletionRestoredRef.current = false;
+        pendingSignupTicketRef.current = outcome.signupTicket;
+        pendingLoginTicketRef.current = null;
+        pendingBindTicketRef.current = null;
         updateLoginState(
           reduceAuthFlow(loginStateRef.current, { type: 'outcome', outcome }),
         );
@@ -1172,6 +1205,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 handledLoginEmailRef.current = null;
                 pendingBindTicketRef.current = null;
                 pendingSsoVerificationTicketRef.current = null;
+                pendingSignupTicketRef.current = null;
+                pendingQrClaimRef.current = null;
                 pendingAuthRealmRef.current = null;
                 setToken(outcome.accessToken);
                 applyUser(
@@ -1969,6 +2004,122 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.remove();
   }, [completeOAuthCallback]);
 
+  /**
+   * 认领已登录电脑的二维码：pollSecret 原像只留在本进程，服务端只见摘要。
+   * 认领成功后由下方的轮询等待电脑允许；兑现在电脑账号所在区域提交（pendingAuthRealm）。
+   */
+  const claimQrHandoff = useCallback(
+    async (did: string, region: AuthRegion, expectedLoginFlowEpoch: number): Promise<void> => {
+      const claim = pendingQrClaimRef.current;
+      if (!claim || claim.payload.kind !== 'handoff') {
+        throw new AuthApiError('INVALID_QR_LOGIN', 401, 'No QR claim pending');
+      }
+      const { codeVerifier: pollSecret, codeChallenge: pollSecretHash } = await createPkcePair();
+      const claimed = await authClientFor(did, region).claimQrHandoff({
+        handoffId: claim.payload.id,
+        scanToken: claim.payload.scanToken,
+        pollSecretHash,
+        deviceName: phoneDeviceLabel(),
+        platform: Platform.OS,
+      });
+      assertLoginFlowCurrent(expectedLoginFlowEpoch);
+      const expiresAt = Date.parse(claimed.expiresAt);
+      pendingQrClaimRef.current = {
+        payload: claim.payload,
+        pollSecret,
+        expiresAt: Number.isFinite(expiresAt) ? expiresAt : Date.now() + QR_LOGIN_TTL_FALLBACK_MS,
+      };
+      pendingAuthRealmRef.current = region;
+      updateLoginState(reduceAuthFlow(loginStateRef.current, {
+        type: 'qr-waiting',
+        expiresAt: claimed.expiresAt,
+      }));
+    },
+    [assertLoginFlowCurrent, updateLoginState],
+  );
+
+  // 等待电脑允许：每 2 秒轮询一次，到期、被拒绝、离开该步骤即停（单次最多约 60 次请求）。
+  const qrWaitingStep = loginState?.step === 'qr-waiting';
+  useEffect(() => {
+    if (!qrWaitingStep) return;
+    const claim = pendingQrClaimRef.current;
+    const did = deviceIdRef.current;
+    if (!claim?.pollSecret || !did) return;
+    const expectedLoginFlowEpoch = loginFlowEpochRef.current;
+    const region = claim.payload.region;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const fail = (code: string) => {
+      pendingQrClaimRef.current = null;
+      pendingAuthRealmRef.current = null;
+      setAuthError(code);
+      updateLoginState(
+        loginProvidersRef.current
+          ? reduceAuthFlow(null, { type: 'providers-loaded', providers: loginProvidersRef.current })
+          : null,
+      );
+    };
+    const tick = async () => {
+      if (cancelled || loginFlowEpochRef.current !== expectedLoginFlowEpoch) return;
+      if (Date.now() >= claim.expiresAt) {
+        fail('QR_LOGIN_EXPIRED');
+        return;
+      }
+      let nextDelay = QR_LOGIN_POLL_INTERVAL_MS;
+      try {
+        const result = await authClientFor(did, region).pollQrHandoff(claim.payload.id, claim.pollSecret!);
+        if (cancelled || loginFlowEpochRef.current !== expectedLoginFlowEpoch) return;
+        if (result.status === 'approved') {
+          pendingQrClaimRef.current = null;
+          setIsBusy(true);
+          try {
+            // 扫码已经选定电脑上的那个账号：不再按邮箱查企业登录方式、不再让用户另选身份。
+            await acceptOutcome(result.outcome, did, expectedLoginFlowEpoch, {
+              skipOrganizationDiscovery: true,
+            });
+          } catch (error) {
+            // 登录结果只会返回一次：保存失败时结束等待并提示，由用户重新扫码，不再继续轮询。
+            if (loginFlowEpochRef.current === expectedLoginFlowEpoch) fail(authErrorCode(error));
+          } finally {
+            if (loginFlowEpochRef.current === expectedLoginFlowEpoch) setIsBusy(false);
+          }
+          return;
+        }
+        if (result.status === 'denied') {
+          fail('QR_LOGIN_DENIED');
+          return;
+        }
+        if (result.status === 'expired') {
+          fail('QR_LOGIN_EXPIRED');
+          return;
+        }
+      } catch (error) {
+        if (cancelled || loginFlowEpochRef.current !== expectedLoginFlowEpoch) return;
+        const code = authErrorCode(error);
+        if (code === 'INVALID_QR_LOGIN') {
+          fail(code);
+          return;
+        }
+        // 服务端要求稍后再试（429 / 503 带 Retry-After）：等到指定时刻再问；要等到码过期之后才行，
+        // 就直接结束等待。其余网络抖动保持 2 秒一次，到期后自然停。
+        const retryAt = error instanceof AuthApiError ? error.retryAt : undefined;
+        if (retryAt !== undefined) {
+          if (retryAt >= claim.expiresAt) {
+            fail(code);
+            return;
+          }
+          nextDelay = Math.max(QR_LOGIN_POLL_INTERVAL_MS, retryAt - Date.now());
+        }
+      }
+      timer = setTimeout(() => void tick(), nextDelay);
+    };
+    timer = setTimeout(() => void tick(), QR_LOGIN_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [qrWaitingStep, acceptOutcome, updateLoginState]);
+
   const dispatchLoginAction = useCallback(
     (action: MobileLoginAction): Promise<boolean> => {
       const terminating = terminalLogoutInFlightRef.current;
@@ -2195,6 +2346,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             pendingLoginTicketRef.current = null;
             pendingBindTicketRef.current = null;
             pendingSsoVerificationTicketRef.current = null;
+            pendingSignupTicketRef.current = null;
+            pendingQrClaimRef.current = null;
             pendingAuthRealmRef.current = null;
             if (!additionalLoginRef.current) resetMobileSessionRealm();
             pendingAccountDeletionRestoredRef.current = false;
@@ -2234,6 +2387,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               pendingLoginTicketRef.current = null;
               pendingBindTicketRef.current = null;
               pendingSsoVerificationTicketRef.current = null;
+              pendingSignupTicketRef.current = null;
+              pendingQrClaimRef.current = null;
               pendingAccountDeletionRestoredRef.current = false;
               pendingAuthRealmRef.current = confirmation.targetRegion;
             }
@@ -2434,6 +2589,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             );
             return true;
           }
+          if (action.type === 'confirm-signup') {
+            const signupTicket = pendingSignupTicketRef.current;
+            if (!signupTicket || loginStateRef.current?.step !== 'signup-confirmation') {
+              throw new AuthApiError('INVALID_SIGNUP_TICKET', 401, 'Missing signup ticket');
+            }
+            // 个人登录与注册确认始终在构建区域完成（与 verify-code 同口径）。
+            const outcome = await authClientFor(did, BUILD_AUTH_REGION).signup(signupTicket);
+            assertLoginFlowCurrent(expectedLoginFlowEpoch);
+            pendingSignupTicketRef.current = null;
+            await acceptOutcome(outcome, did, expectedLoginFlowEpoch);
+            return true;
+          }
+          if (action.type === 'qr-claim') {
+            if (action.payload.kind !== 'handoff') {
+              throw new AuthApiError('QR_LOGIN_WRONG_CODE', 400, 'Not a computer sign-in code');
+            }
+            pendingQrClaimRef.current = { payload: action.payload, pollSecret: null, expiresAt: 0 };
+            if (action.payload.region !== BUILD_AUTH_REGION) {
+              // 电脑装的是另一个版本：先问用户是否切换，不提前向对方区域发任何请求。
+              updateLoginState(reduceAuthFlow(loginStateRef.current, {
+                type: 'qr-region-switch-required',
+                targetRegion: action.payload.region,
+              }));
+              return true;
+            }
+            await claimQrHandoff(did, BUILD_AUTH_REGION, expectedLoginFlowEpoch);
+            return true;
+          }
+          if (action.type === 'confirm-qr-region-switch') {
+            const claim = pendingQrClaimRef.current;
+            if (!claim || loginStateRef.current?.step !== 'qr-region-switch') {
+              throw new AuthApiError('INVALID_QR_LOGIN', 401, 'No QR region switch pending');
+            }
+            try {
+              await loadMobileEndpointsForRealm(claim.payload.region);
+            } catch {
+              throw new AuthApiError('QR_REGION_UNAVAILABLE', 503, 'Unable to load the target region');
+            }
+            assertLoginFlowCurrent(expectedLoginFlowEpoch);
+            await claimQrHandoff(did, claim.payload.region, expectedLoginFlowEpoch);
+            return true;
+          }
           if (action.type === 'native-social') {
             const credential = await acquireNativeSocialCredential(
               action.provider,
@@ -2593,6 +2790,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             pendingLoginTicketRef.current = null;
             pendingBindTicketRef.current = null;
             pendingSsoVerificationTicketRef.current = null;
+            pendingSignupTicketRef.current = null;
+            pendingQrClaimRef.current = null;
             pendingAuthRealmRef.current = null;
             pendingAccountDeletionRestoredRef.current = false;
             setAccountDeletionRestored(false);
@@ -2614,6 +2813,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [
       acceptOutcome,
       assertLoginFlowCurrent,
+      claimQrHandoff,
       persistPendingOAuth,
       completeOAuthCallback,
       lookupOrganizationRealm,
@@ -2966,6 +3166,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pendingLoginTicketRef.current = null;
     pendingBindTicketRef.current = null;
     pendingSsoVerificationTicketRef.current = null;
+    pendingSignupTicketRef.current = null;
+    pendingQrClaimRef.current = null;
     pendingAuthRealmRef.current = null;
     pendingAccountDeletionRestoredRef.current = false;
     additionalLoginRef.current = false;
@@ -3017,6 +3219,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pendingLoginTicketRef.current = null;
     pendingBindTicketRef.current = null;
     pendingSsoVerificationTicketRef.current = null;
+    pendingSignupTicketRef.current = null;
+    pendingQrClaimRef.current = null;
     pendingAuthRealmRef.current = null;
     activeAuthRealmRef.current = BUILD_AUTH_REGION;
     resetMobileSessionRealm();
@@ -3039,9 +3243,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 首页设备+会话快照与消息缓存一样属于账号数据,登出必须清掉。
     await clearRemoteResourceCache().catch(() => undefined);
     await clearCachedHomeListSnapshot().catch(() => undefined);
+    await clearAllMobileOfflineInboxIntents().catch(() => undefined);
     await clearHomeSessionPrCache().catch(() => undefined);
     resetComposerPaletteCache();
     resetAgentCapabilitiesCache();
+    clearChatServerMediaCache({ clearNativeImageCache: true });
     await clearCanaryChannel().catch(() => undefined);
     // 使用统计的同意记录也随登出清除。手机端没有游客模式:登出后 NavigationGate 会
     // 把所有路由重定向到 /login,设置页里的统计开关从此不可达。保留同意会让用户处在
@@ -3531,6 +3737,17 @@ export function useAuth(): AuthContextValue {
   return context;
 }
 
+/** 扫码登录轮询间隔与本地兜底有效期（服务端 2 分钟过期）。 */
+const QR_LOGIN_POLL_INTERVAL_MS = 2_000;
+const QR_LOGIN_TTL_FALLBACK_MS = 2 * 60_000;
+
+/** 展示给电脑「允许手机登录」确认框的设备名：只用机型类别，不读取用户自定义的设备名。 */
+function phoneDeviceLabel(): string {
+  if (Platform.OS === 'ios') return Platform.isPad ? 'iPad' : 'iPhone';
+  if (Platform.OS === 'android') return 'Android';
+  return Platform.OS;
+}
+
 function authClientFor(
   deviceId: string,
   region: AuthRegion = BUILD_AUTH_REGION,
@@ -3551,6 +3768,8 @@ function authClientFor(
     deviceId,
     clientType: 'mobile',
     locale: getAuthLocale(),
+    // 手机登录页能处理「创建新账号」确认；未声明的调用方保持首登即注册。
+    capabilities: [SIGNUP_CONFIRMATION_CAPABILITY],
     fetch: scenarioFetch ?? (async (input, init) => fetch(input, init)),
     onRequestError: (path, status, error) => {
       mobileDebugLog('warn', 'auth', 'request failed', { path, region, status }, error);

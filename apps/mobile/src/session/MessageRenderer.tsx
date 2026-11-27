@@ -18,6 +18,7 @@ import { youtubeVideo } from '@cindy/maker-shared/rich-answer';
 import { richVisualStyle, splitRichAnswer, richAnswerText, richMediaSource, richMarkdown, richString, type RichNode } from '@cindy/maker-shared/rich-answer';
 import { RichAnswer } from './RichAnswer';
 import { readFailedImageDelivery, readToolProcessMedia, readToolProcessText } from '@cindy/maker-shared/tool-process-media';
+import { formatCollabToolResultText } from '@cindy/maker-shared/tool-use-descriptor';
 import { PluginCardActions } from '@/plugins/PluginCardActions';
 import { McpAppCard } from './McpAppCard';
 import { RichContentContext } from './richContentContext';
@@ -63,6 +64,10 @@ import { errorText, resolvedUrlKind } from '@/debug/fileDiagnostics';
 import { createContext, Fragment, memo, useId, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type Dispatch, type ReactElement, type ReactNode, type SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
 import { MessageLoadingImage, MessageImagePlaceholder } from './MessageLoadingImage';
+import {
+  ATTACHMENT_INTRINSIC_CACHE_MAX,
+  attachmentIntrinsicSizeCache,
+} from './attachmentIntrinsicSizeCache';
 import { InputHandoffRecordRow } from '@/inputHandoff/InputHandoffRecordRow';
 import {
   ArrowLeftRight,
@@ -292,6 +297,9 @@ import {
 } from '@/session/remoteSessionStore';
 import {
   parseSourceSessionTarget,
+  readMessageDispatchRoute,
+  messageDispatchRouteMismatch,
+  messageDispatchRouteLabel,
   shouldShowSourceDevice,
   type MessageSourceDevice,
   type MessageSourcePlugin,
@@ -331,6 +339,7 @@ import {
   type MobileWorkGroupItem,
 } from '@/session/messageRenderModel';
 import {
+  OutboxHistoryConfirmationRow,
   PendingSendBubble,
   type PendingSendBubbleActions,
 } from '@/session/PendingSendBubble';
@@ -4349,6 +4358,7 @@ function MessageBubble({
     </View>
   );
 
+  const dispatchRoute = item.message.kind === 'user' ? readMessageDispatchRoute(item.message.source.agentMeta) : undefined;
   const messageNode = (
     <View
       ref={shareableMessage ? handleShareableMessageViewChange : undefined}
@@ -4406,6 +4416,18 @@ function MessageBubble({
         />
       ) : null}
       {attachmentStripNode}
+      {dispatchRoute && messageDispatchRouteMismatch(dispatchRoute) && dispatchRoute.selected ? (
+        <ErrorNotice message={t('session.screen.modelSwitchPreparation.usingPrevious', {
+          actual: messageDispatchRouteLabel(dispatchRoute, t('models.pluginEngines.genericName')),
+          target: messageDispatchRouteLabel(dispatchRoute.selected, t('models.pluginEngines.genericName')),
+        })}>
+          {dispatchRoute.switchError ? <AgentErrorDetails message={dispatchRoute.switchError} /> : null}
+        </ErrorNotice>
+      ) : dispatchRoute ? (
+        <Text style={styles.failedSamplingAttemptText} testID="message.dispatchRoute">
+          {messageDispatchRouteLabel(dispatchRoute, t('models.pluginEngines.genericName'))}
+        </Text>
+      ) : null}
       {item.message.failedSamplingAttempt ? (
         <Text style={styles.failedSamplingAttemptText}>
           {t('message.renderer.failedSamplingAttempt')}
@@ -4454,7 +4476,10 @@ function MessageBubble({
           </Text>
         </View>
       ) : null}
-      {hasActions && actions.companion ? (
+      {item.historyConfirmation && actions.pendingSend ? (
+        <OutboxHistoryConfirmationRow clientId={clientId} requested={item.historyConfirmation === 'requested'}
+          onConfirm={actions.pendingSend.onRetryOutbox} />
+      ) : hasActions && actions.companion ? (
         <CompanionMessageActions user={isUser} copied={copyState === 'copied'} copying={copyState === 'copying'} disabled={disabled}
         onCopy={canCopy ? copyMessage : undefined}
         actions={[
@@ -4774,6 +4799,7 @@ function ToolActionRow({
   actions,
   contentLayout,
   onOpenInput,
+  repeatCount,
   row,
   rowKey,
   tool,
@@ -4781,6 +4807,7 @@ function ToolActionRow({
   actions: ToolDetailActions;
   contentLayout: MessageContentLayout;
   onOpenInput?: () => void;
+  repeatCount?: number;
   row: ToolRowPresentation;
   rowKey?: string;
   tool: NormalizedRemoteMessage;
@@ -4789,7 +4816,20 @@ function ToolActionRow({
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   // 明确交付媒体仍由 ToolMediaBlock 承载；原生过程媒体留在所属工具步骤内。
-  const hasDetails = !!(row.detail || tool.body || tool.diff || tool.secondaryBody || onOpenInput);
+  const isCollabTool = typeof tool.label === 'string' && tool.label.startsWith('collab:');
+  const visibleSecondaryBody = isCollabTool && typeof tool.secondaryBody === 'string'
+    ? (formatCollabToolResultText(readToolProcessText(tool.secondaryBody) ?? '', (state) => {
+      if (state === 'completed') return t('message.renderer.statusCompleted');
+      if (state === 'failed') return t('message.renderer.statusFailed');
+      if (state === 'running') return t('message.renderer.statusRunning');
+      return t('message.renderer.statusStopped');
+    }) ?? undefined)
+    : tool.secondaryBody;
+  const displayTool = isCollabTool
+    ? { ...tool, label: row.label || tool.label, secondaryBody: visibleSecondaryBody }
+    : tool;
+  const visibleBody = isCollabTool && tool.body === `${tool.label}()` ? '' : tool.body;
+  const hasDetails = !!(row.detail || visibleBody || tool.diff || visibleSecondaryBody || onOpenInput);
   const [expanded, toggleExpanded] = useFoldableExpandedState(`toolrow-${rowKey ?? tool.key}`, false);
   const showDetails = expanded && hasDetails;
   const chevronNode = hasDetails
@@ -4818,6 +4858,9 @@ function ToolActionRow({
       >
         <ToolRowStatusIcon hasError={row.hasError} status={row.status} />
         <Text style={[styles.toolName, styles.toolNameFlex]} numberOfLines={1}>{row.label}</Text>
+        {repeatCount && repeatCount > 1 ? (
+          <Text style={styles.toolInputActionText}>×{repeatCount}</Text>
+        ) : null}
         {chevronNode}
       </Pressable>
       {readToolProcessMedia(tool.secondaryBody).map((entry) => (
@@ -4832,8 +4875,8 @@ function ToolActionRow({
       ))}
       {showDetails ? (
         <View style={styles.toolRowDetails}>
-          {row.detail || tool.body ? (
-            <Text style={styles.toolRowDetailText}>{row.detail ?? tool.body}</Text>
+          {row.detail || visibleBody ? (
+            <Text style={styles.toolRowDetailText}>{row.detail ?? visibleBody}</Text>
           ) : null}
           {tool.toolInputProjection ? (
             <ProjectedToolInputButton
@@ -4856,8 +4899,8 @@ function ToolActionRow({
           {tool.diff ? (
             <DiffPreview diff={tool.diff} layout={contentLayout} onOpen={actions.onOpenPayload} />
           ) : null}
-          {tool.secondaryBody ? (
-            <ToolResultPreview layout={contentLayout} tool={tool} onOpen={actions.onOpenPayload} onRetryImageDelivery={actions.onRetryImageDelivery} />
+          {visibleSecondaryBody ? (
+            <ToolResultPreview layout={contentLayout} tool={displayTool} onOpen={actions.onOpenPayload} onRetryImageDelivery={actions.onRetryImageDelivery} />
           ) : null}
         </View>
       ) : null}
@@ -5204,14 +5247,41 @@ function AgentTaskCard({
     () => buildMessageHierarchyLayout({ screenWidth, summaryCount: 0 }),
     [screenWidth],
   );
+  const liveActivityLine = useMemo(() => {
+    if (model.status !== 'running') return undefined;
+    const recent = model.recentActivities;
+    if (recent && recent.length > 0) {
+      let current = recent[recent.length - 1];
+      for (let i = recent.length - 1; i >= 0; i -= 1) {
+        if (recent[i].status === 'running') {
+          current = recent[i];
+          break;
+        }
+      }
+      const parts = [current.toolName, current.detail, current.error].filter(Boolean);
+      return parts.length > 0 ? parts.join(' · ') : undefined;
+    }
+    if (model.lastToolName) {
+      return [model.lastToolName, model.lastToolSummary].filter(Boolean).join(' · ');
+    }
+    return undefined;
+  }, [model.lastToolName, model.lastToolSummary, model.recentActivities, model.status]);
   const hasDetails = !!(
-    model.description || model.summary || model.spawnedAgentName || model.lastToolName || model.outputFile
+    model.description
+    || model.summary
+    || model.spawnedAgentName
+    || model.recentActivities?.length
+    || model.lastToolName
+    || model.outputFile
   );
   return (
     <FoldablePanel
       blockId={item.key}
       title={title}
       subtitle={subtitle || undefined}
+      collapsedBody={liveActivityLine ? (
+        <Text numberOfLines={1} style={styles.toolInputActionText}>{liveActivityLine}</Text>
+      ) : undefined}
       chevronPosition="trailing"
       chevronSize={14}
       leadingIcon={<Bot color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />}
@@ -5234,8 +5304,24 @@ function AgentTaskCard({
           {model.summary ? (
             <Text style={styles.detailText}>{model.summary}</Text>
           ) : null}
-          {model.lastToolName ? (
-            <Text style={styles.detailText}>{t('message.renderer.recentTool', { name: model.lastToolName })}</Text>
+          {model.recentActivities?.length ? (
+            <View style={[styles.stackSmall, { gap: layout.stackSmallGap }]}>
+              <Text style={styles.toolInputActionText}>{t('message.renderer.recentActivity')}</Text>
+              {model.recentActivities.map((activity) => {
+                const label = [activity.toolName, activity.detail].filter(Boolean).join(' · ');
+                return (
+                  <Text key={activity.id} style={styles.detailText} numberOfLines={2}>
+                    {activity.error ? `${label} — ${activity.error}` : label}
+                  </Text>
+                );
+              })}
+            </View>
+          ) : model.lastToolName ? (
+            <Text style={styles.detailText}>
+              {t('message.renderer.recentTool', {
+                name: [model.lastToolName, model.lastToolSummary].filter(Boolean).join(' · '),
+              })}
+            </Text>
           ) : null}
           {model.outputFile ? (
             <Text style={styles.detailText}>{t('message.renderer.outputFile', { file: model.outputFile })}</Text>
@@ -5528,6 +5614,9 @@ const WorkLineRow = memo(function WorkLineRow({
         <>
           <ToolRowStatusIcon hasError={line.hasError === true} status={line.status} />
           <Text numberOfLines={1} style={[styles.toolName, styles.toolNameFlex]}>{label}</Text>
+          {line.repeatCount && line.repeatCount > 1 ? (
+            <Text style={styles.toolInputActionText}>×{line.repeatCount}</Text>
+          ) : null}
         </>
       ) : (
         <>
@@ -5578,6 +5667,7 @@ export const WorkToolActivityRow = memo(function WorkToolActivityRow({
       actions={actions}
       contentLayout={contentLayout}
       onOpenInput={onOpenInput}
+      repeatCount={activity.repeatCount}
       row={row}
       rowKey={activity.key}
       tool={tool}
@@ -6113,7 +6203,9 @@ function MobileAutoResumeActionRow({
   const { t } = useTranslation();
   const [expanded, setExpanded] = useRecyclingState(false);
   const presentation = getMobileAutoResumePresentation(data, inFlight);
-  const { canExpand, hasProgress, info, state, summary } = presentation;
+  const { canExpand, hasProgress, info, state } = presentation;
+  const reconnectStalled = data?.reason === 'codex_reconnect_stalled' && !info.groupSwitchPending;
+  const summary = reconnectStalled ? t('session.tail.codexReconnectStalled') : presentation.summary;
 
   if (state === 'separator') {
     const label = t('message.systemCard.autoResume.separator');
@@ -6148,7 +6240,7 @@ function MobileAutoResumeActionRow({
     ? t('message.systemCard.autoResume.usageReset')
     : state === 'live'
     ? hasProgress
-      ? t('message.systemCard.autoResume.pendingWithProgress', {
+      ? t(reconnectStalled ? 'message.systemCard.autoResume.continuingWithProgress' : 'message.systemCard.autoResume.pendingWithProgress', {
           attempt: info.attempt,
           total: info.maxAttempts,
         })
@@ -6711,6 +6803,19 @@ function MarkdownBodyBase({
           {showCodeCopyButton ? (
               <MarkdownBlockCopyButton text={block.text} />
             ) : null}
+        </View>
+      );
+    }
+    if (block.type === 'carousel') {
+      return (
+        <View key={block.key} style={styles.markdownCodeFrame}>
+          <View style={styles.markdownBody}>
+            {block.slides.flatMap((slide, slideIndex) =>
+              slide.map((child) =>
+                renderSingleBlock({ ...child, key: `${block.key}:${slideIndex}:${child.key}` }),
+              ),
+            )}
+          </View>
         </View>
       );
     }
@@ -7354,10 +7459,15 @@ export function AttachmentStrip({
           兜底命中时替换成 file:// 直接渲染(payload 同源替换,点开查看器同图)。 */}
       {imageAttachments.map((item, index) => (
         <MediaPreview
-          key={`${item.kind}:${item.uri ?? item.name}:${index}:${imageReloadKeys?.[index] ?? 0}`}
+          key={`${item.kind}:${item.cacheKey ?? item.uri ?? item.name}:${index}:${imageReloadKeys?.[index] ?? 0}`}
           label={item.name}
           layout={layout}
-          media={{ kind: 'image', url: item.uri ?? '', previewable: item.previewable }}
+          media={{
+            kind: 'image',
+            url: item.uri ?? '',
+            previewable: item.previewable,
+            ...(item.cacheKey ? { cacheKey: item.cacheKey } : {}),
+          }}
           localPreview={clientId ? getImagePreview?.(clientId, index, item.name, undefined, item.sha256, item.uri) : undefined}
           onOpen={onOpen ? () => onOpen(buildAttachmentPayload(applySentAttachmentThumbOverlay(item))) : undefined}
           onResolveRemoteMedia={onResolveRemoteMedia}
@@ -7506,13 +7616,10 @@ function PluginResultCard({ callId, sessionId, excludedUrls, actions }: {
 }
 
 /**
- * 附件图原图尺寸的模块级缓存(键 = 源 media.url,跨 presign 刷新稳定)。
+ * 附件图原图尺寸的模块级缓存(键 = media.cacheKey ?? 源 media.url,跨 presign 刷新稳定)。
  * FlatList 虚拟化反复 unmount/remount MediaPreview,组件态存不住尺寸;
  * 到达上限只逐出最旧记录；清空整表会让已打开的图片再次经历占位尺寸 → 实际尺寸。
  */
-const attachmentIntrinsicSizeCache = new Map<string, AttachmentImageIntrinsicSize>();
-const ATTACHMENT_INTRINSIC_CACHE_MAX = 500;
-
 function rememberAttachmentIntrinsicSize(size: AttachmentImageIntrinsicSize, ...uris: string[]) {
   for (const uri of uris) {
     attachmentIntrinsicSizeCache.delete(uri);
@@ -7614,12 +7721,15 @@ function MediaPreview({
   const autoResolve = !localUri && shouldAutoResolveMediaThumbnail(media, !!onResolveRemoteMedia);
   const [resolveState, setResolveState] = usePreviewState<MediaThumbnailResolveState>({ status: 'idle' });
   const resolvedSourceRef = useRef<string | null>(null);
+  const intrinsicSizeKey = media.cacheKey ?? media.url;
   // attachment 变体的原图尺寸。初值走模块级缓存:FlatList 虚拟化会反复
   // unmount/remount 本组件,不缓存的话每次划回都重新 getSize、重演一次
   // 占位帧 → 真图尺寸的切换(规则 7 的跳变)。
   const [intrinsicSize, setIntrinsicSize] = usePreviewState<AttachmentImageIntrinsicSize | null>(
-    () => attachmentIntrinsicSizeCache.get(localPreview?.uri ?? media.url)
-      ?? attachmentIntrinsicSizeCache.get(localCandidate ?? media.url) ?? null,
+    () => attachmentIntrinsicSizeCache.get(localPreview?.uri ?? intrinsicSizeKey)
+      ?? attachmentIntrinsicSizeCache.get(localCandidate ?? intrinsicSizeKey)
+      ?? (media.cacheKey ? attachmentIntrinsicSizeCache.get(media.url) : undefined)
+      ?? null,
   );
   // Image 加载失败(典型:presign 过期)只强制重取一次,防 onError↔重取死循环。
   const imageRetryUsedRef = useRef(false);
@@ -7691,9 +7801,9 @@ function MediaPreview({
     }) => {
     if (!thumbUri || measuredThumbUri.current === thumbUri || !(width > 0 && height > 0)) return;
     measuredThumbUri.current = thumbUri;
-    rememberAttachmentIntrinsicSize({ width, height }, media.url);
+    rememberAttachmentIntrinsicSize({ width, height }, intrinsicSizeKey);
     setIntrinsicSize({ width, height });
-  }, [media.url, setIntrinsicSize, thumbUri]);
+  }, [intrinsicSizeKey, setIntrinsicSize, thumbUri]);
 
   if (media.kind === 'audio') {
     const card = (
@@ -7762,8 +7872,8 @@ function MediaPreview({
           <MessageLoadingImage
             // 尺寸未知时先 contain 进最大框，解码后收敛到真实比例。
             contentFit="contain"
-            recyclingKey={thumbUri}
-            source={{ uri: thumbUri }}
+            recyclingKey={media.cacheKey ?? thumbUri}
+            source={media.cacheKey ? { uri: thumbUri, cacheKey: media.cacheKey } : { uri: thumbUri }}
             onLoad={handleImageLoad}
             onError={handleImageError}
             style={[styles.attachmentImage, displaySize]}
@@ -7793,8 +7903,8 @@ function MediaPreview({
         {uri ? (
           <MessageLoadingImage
             contentFit="cover"
-            recyclingKey={uri}
-            source={{ uri }}
+            recyclingKey={media.cacheKey ?? uri}
+            source={media.cacheKey ? { uri, cacheKey: media.cacheKey } : { uri }}
             onError={handleImageError}
             style={[styles.imagePreview, frameSize]}
           />

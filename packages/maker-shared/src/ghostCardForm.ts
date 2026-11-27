@@ -118,6 +118,7 @@ export interface MailCardData {
   continueLabel?: string;
   deleteLabel?: string;
   addQuoteLabel?: string;
+  cancelLabel?: string;
   supersededBy?: string;
   pendingSend?: { deadline: number; label: string; cancelLabel: string; sendNowLabel: string };
 }
@@ -146,6 +147,8 @@ export function parseMailCard(value: unknown): MailCardData | null {
   if (pending !== undefined && (!pending || p.state !== 'sending' ||
       !Number.isSafeInteger(pending.deadline) || pending.deadline <= 0 ||
       [pending.label, pending.cancelLabel, pending.sendNowLabel].some(v => typeof v !== 'string' || !v || v.length > 128))) return null;
+  if (p.cancelLabel !== undefined && (p.state !== 'sending' || pending !== undefined ||
+      typeof p.cancelLabel !== 'string' || !p.cancelLabel || p.cancelLabel.length > 128)) return null;
   return { accountId: p.accountId as string, draftId: p.draftId as string, key: p.key as string,
     from: p.from as string, fields, attachments: p.attachments as string[], state: p.state as MailCardData['state'],
     ...(baseValues ? { baseValues } : {}),
@@ -154,6 +157,7 @@ export function parseMailCard(value: unknown): MailCardData | null {
     ...(p.continueLabel ? { continueLabel: p.continueLabel as string } : {}),
     ...(p.addQuoteLabel ? { addQuoteLabel: p.addQuoteLabel as string } : {}),
     ...(p.deleteLabel ? { deleteLabel: p.deleteLabel as string } : {}),
+    ...(p.cancelLabel ? { cancelLabel: p.cancelLabel as string } : {}),
     ...(pending ? { pendingSend: { deadline: pending.deadline, label: pending.label, cancelLabel: pending.cancelLabel, sendNowLabel: pending.sendNowLabel } } : {}),
     ...(p.supersededBy ? { supersededBy: p.supersededBy as string } : {}) };
 }
@@ -228,13 +232,17 @@ export function releaseGhostCardFormDelivery(scope: string, key: string): void {
 }
 export function pendingGhostCardFormDelivery(
   scope: string,
+  excludeKey?: string,
 ): Promise<boolean> | undefined {
   const entries = deliveries.get(scope);
   if (!entries?.size) return undefined;
-  const snapshot = [...entries.values()];
+  const snapshot = excludeKey
+    ? [...entries].filter(([key]) => key !== excludeKey).map(([, delivery]) => delivery)
+    : [...entries.values()];
+  if (!snapshot.length) return undefined;
   return Promise.all(snapshot).then(async (results) => {
     if (results.some((ok) => !ok)) return false;
-    return (await pendingGhostCardFormDelivery(scope)) ?? true;
+    return (await pendingGhostCardFormDelivery(scope, excludeKey)) ?? true;
   });
 }
 export function parseGhostCardForm(

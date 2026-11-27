@@ -92,8 +92,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "供方组 · {{count}} 机",
-    "groupBadge_other": "供方组 · {{count}} 机",
+    "groupBadge_one": "机组 · {{count}} 机",
+    "groupBadge_other": "机组 · {{count}} 机",
     "harness": "Harness",
     "restoreRecommended": "复所荐",
     "saveFailed": "存之未成，请再试。",
@@ -149,9 +149,17 @@
     "picker": {
       "switched": "「{{name}}」已将此差事易为 {{model}}",
       "switchUnavailable": "「{{name}}」今无可供此差事之源，模型未易。",
-      "chooseUnavailable": "「{{name}}」今无可用之源，未取之。"
+      "chooseUnavailable": "「{{name}}」今无可用之源，未取之。",
+      "managedBy": "今由「{{name}}」常管",
+      "detach": "解管",
+      "detached": "已解智能路由常管，仍用今之模型"
     },
-    "anotherDevice": "他机"
+    "anotherDevice": "他机",
+    "sourceRouteTitle_one": "{{name}} · 智能路由（{{count}} 源）",
+    "sourceRouteTitle_other": "{{name}} · 智能路由（{{count}} 源）",
+    "switchOffer": {
+      "button": "易为 {{model}} 并续行"
+    }
   },
   "pluginEngines": {
     "genericName": "法器引擎",

@@ -1,7 +1,8 @@
 /** Native placement data only; complex pages continue to use the MCP Apps SDK. */
 export interface PluginUiTarget { sessionId?: string | null; clientId?: string }
 export interface PluginUiInterest extends PluginUiTarget { instanceId: string; id: string }
-export interface PluginUiControlState { title?: string; value?: string; disabled?: boolean; visible?: boolean }
+export interface PluginUiControlItem { id: string; title: string; icon?: string; disabled?: boolean; visible?: boolean }
+export interface PluginUiControlState { title?: string; value?: string; disabled?: boolean; visible?: boolean; items?: PluginUiControlItem[] }
 export interface PluginUiStateChange { key: string; revision: number; state: PluginUiControlState }
 export interface PluginUiAttachmentResult {
   handled: boolean;

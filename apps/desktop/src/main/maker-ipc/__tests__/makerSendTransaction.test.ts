@@ -34,6 +34,7 @@ import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE, projectPersistedAgentFacingUserTex
 import { formatQuotesForSend, stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue';
 import { parseOrcaRemoteLead } from '../../../shared/orcaRemoteWorker';
+import { captureMessageDispatchRoute, messageDispatchRouteMismatch, readMessageDispatchRoute } from '@cindy/maker-shared/message-source';
 import { describe, expect, it, vi } from 'vitest';
 import { GitSnapshotCoordinator } from '../../git-snapshot/gitSnapshotCoordinator';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewUserIntent, type AutoReviewHistoryMessage } from '../autoReviewUserIntent.js';
@@ -1771,6 +1772,53 @@ describe('maker SEND transaction', () => {
     expect(persisted?.agentMeta).not.toHaveProperty('autoResume');
   });
 
+  // Production send + pending switch, unit: repeated preparation failure must
+  // continue on the old runtime and persist a warning on EACH dispatched input.
+  // Old queue tests covered blocking collaboration, not ordinary paid fallback.
+  it('persists the actual old source and failed target on each fallback, independent of later picks', async () => {
+    const pending = createPendingAgentSwitchRegistry();
+    const intent = { targetAgentKind: 'codex' as const, model: 'gpt-5.5', providerId: 'openai' };
+    pending.set('session-1', intent);
+    const session = createSession({ agentKind: 'pi', model: 'gpt-5.5' });
+    const switchDeps: MakerSessionAgentSwitchHandlerDeps = {
+      pendingSwitches: pending,
+      getLiveSession: () => session,
+      getSessionRow: async () => ({ id: session.id, agentKind: 'pi', model: 'gpt-5.5', providerId: 'xd',
+        status: 'active', remoteHostId: null, orcaRole: null, sdkSessionId: 'old-pi' }),
+      assertModelRouteUsable: async () => { throw new Error('[DEVICE_LINK_TIMEOUT] OpenAI preparation timed out'); },
+      closeSession: vi.fn(), listMessagesForHandoff: async () => [], applyAgentSwitchToDb: vi.fn(),
+      setSessionProvider: vi.fn(), insertBoundaryMessage: async () => 'boundary',
+      applyResumeFallbackAtomically: vi.fn(), setPendingHandoff: vi.fn(), bootstrapSwitchedSession: vi.fn(),
+      withCloseSuppressed: (_id, run) => run(), log: { info: vi.fn(), warn: vi.fn() },
+    };
+    const { deps } = createDeps({
+      applyPendingAgentSwitch: (id, options) => applyPendingAgentSwitchIfIdle(switchDeps, id, options),
+      readDispatchRoute: current => {
+        const target = pending.get(current.id);
+        return captureMessageDispatchRoute({ agentKind: current.agentKind, model: current.model!, providerId: 'xd', agentDeviceId: null },
+          target ? { agentKind: target.targetAgentKind, model: target.model, providerId: target.providerId ?? null, agentDeviceId: null } : undefined,
+          target?.preparationError);
+      },
+    }, session);
+    const transaction = createMakerSendTransaction(deps);
+    for (const clientId of ['first', 'second']) {
+      await expect(transaction.sendToAgentAccepted(session.id, 'Continue', undefined,
+        { persistUserMessage: { clientId, content: 'Continue' } })).resolves.toMatchObject({ accepted: true });
+    }
+    pending.set(session.id, { targetAgentKind: 'pi', model: 'later', providerId: 'different' });
+    const rows = vi.mocked(deps.createDbMessage).mock.calls;
+    expect(rows).toHaveLength(2);
+    for (const [, row] of rows) {
+      const route = readMessageDispatchRoute(row.agentMeta);
+      expect(route).toMatchObject({ agentKind: 'pi', providerId: 'xd', model: 'gpt-5.5',
+        selected: { agentKind: 'codex', providerId: 'openai', model: 'gpt-5.5' },
+        switchError: expect.stringContaining('OpenAI preparation timed out') });
+      expect(messageDispatchRouteMismatch(route!)).toBe(true);
+    }
+    expect(session.send).toHaveBeenCalledTimes(2);
+    expect(switchDeps.closeSession).not.toHaveBeenCalled();
+  });
+
   it('awaits the direct-send baseline hook before vendor dispatch', async () => {
     const events: string[] = [];
     const controller = new AbortController();
@@ -2996,6 +3044,139 @@ describe('maker SEND transaction', () => {
     expect(failedSession.send).not.toHaveBeenCalled();
     expect(deps.bootstrapSession).toHaveBeenCalledWith({ ...createOpts, preserveStartupStoppedError: true });
     expect(recoveredSession.send).toHaveBeenCalled();
+  });
+
+  // 回归测试：回合结束后异步回收（closeAfterCurrentTurn / idle release）期间，
+  // 旧 Session 仍留在 Maker.activeSessions 中直到 handle.close() 完成。
+  // 此前只对 status==='error' 走重建，导致排队出队消息直接调 closingSession.send() 报 SESSION_CLOSING。
+  // 最小失败输入：getSession 返回 hasStartedClosing()=true（或 status='closed'）且带 createOpts。tier: unit。
+  it.each([
+    { label: 'closing session', patch: { hasStartedClosing: vi.fn(() => true) } },
+    { label: 'already closed session', patch: { getStatus: vi.fn(() => 'closed' as const) } },
+  ])('rebuilds a $label through lazy bootstrap inside close suppression before dispatch', async ({ patch }) => {
+    const closingSession = createSession({
+      ...patch,
+      send: vi.fn(async () => {
+        throw Object.assign(new Error('Session session-1 is closing'), { code: 'SESSION_CLOSING' });
+      }),
+    });
+    const replacementSession = createSession({ id: 'session-1', workDir: 'C:\\repo' });
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'acp',
+      workingDir: 'C:\\repo',
+      model: 'gemini-4-neon',
+    };
+    let suppressedDuringBootstrap = false;
+    let suppressed = false;
+    const { deps } = createDeps({
+      getSession: vi.fn(() => closingSession),
+      withRehydrateCloseSuppressed: vi.fn(async (_sid, fn) => {
+        suppressed = true;
+        try {
+          return await fn();
+        } finally {
+          suppressed = false;
+        }
+      }),
+      bootstrapSession: vi.fn(async () => {
+        suppressedDuringBootstrap = suppressed;
+        return {
+          session: replacementSession,
+          didInjectOrcaInstructions: false,
+          didInjectProjectContext: false,
+        };
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'follow up', createOpts)).resolves.toMatchObject({
+      accepted: true,
+      outcome: { kind: 'session-dispatch', dispatched: true },
+    });
+
+    expect(closingSession.send).not.toHaveBeenCalled();
+    expect(suppressedDuringBootstrap).toBe(true);
+    expect(suppressed).toBe(false);
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(replacementSession.send).toHaveBeenCalledOnce();
+  });
+
+  // 回归测试：send 事务准备阶段的异步 await 期间旧会话进入 closing，导致 sess.send() 在落库前抛 SESSION_CLOSING。
+  // 最小失败输入：getSession 初次返回 active 会话，在 send() 抛出 code='SESSION_CLOSING' 且会话已进入 closing。tier: unit。
+  it('rebuilds once and dispatches when an active session begins closing mid-preparation before persistence', async () => {
+    let closing = false;
+    const retiringSession = createSession({
+      hasStartedClosing: vi.fn(() => closing),
+      send: vi.fn(async () => {
+        closing = true;
+        throw Object.assign(new Error('Session session-1 is closing'), { code: 'SESSION_CLOSING' });
+      }),
+    });
+    const replacementSession = createSession({ id: 'session-1', workDir: 'C:\\repo' });
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'acp',
+      workingDir: 'C:\\repo',
+      model: 'gemini-4-neon',
+    };
+    let current: MakerSendTransactionSession | undefined = retiringSession;
+    let suppressed = false;
+    let suppressedDuringBootstrap = false;
+    const { deps } = createDeps({
+      getSession: vi.fn(() => current),
+      withRehydrateCloseSuppressed: vi.fn(async (_sid, fn) => {
+        suppressed = true;
+        try {
+          return await fn();
+        } finally {
+          suppressed = false;
+        }
+      }),
+      bootstrapSession: vi.fn(async () => {
+        suppressedDuringBootstrap = suppressed;
+        current = replacementSession;
+        return {
+          session: replacementSession,
+          didInjectOrcaInstructions: false,
+          didInjectProjectContext: false,
+        };
+      }),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'queued next', createOpts)).resolves.toMatchObject({
+      accepted: true,
+      outcome: { kind: 'session-dispatch', dispatched: true },
+    });
+
+    expect(retiringSession.send).toHaveBeenCalledOnce();
+    expect(suppressedDuringBootstrap).toBe(true);
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(replacementSession.send).toHaveBeenCalledOnce();
+  });
+
+  // 负例：旧会话尚未进入 teardown（如仍在等 Host silent-stop 续接的退休态），抛 SESSION_CLOSING 时不能死循环重建。tier: unit。
+  it('does not retry rebuild when SESSION_CLOSING comes from a session that has not started closing', async () => {
+    const stillSettling = createSession({
+      hasStartedClosing: vi.fn(() => false),
+      send: vi.fn(async () => {
+        throw Object.assign(new Error('Session session-1 is closing'), { code: 'SESSION_CLOSING' });
+      }),
+    });
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'acp',
+      workingDir: 'C:\\repo',
+      model: 'gemini-4-neon',
+    };
+    const { deps } = createDeps({
+      getSession: vi.fn(() => stillSettling),
+    });
+
+    await expect(
+      createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'queued next', createOpts),
+    ).rejects.toMatchObject({ code: 'SESSION_CLOSING' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
   });
 
   it('lazy-create adopts the DB working_dir when the caller-provided one is stale', async () => {
@@ -5126,6 +5307,7 @@ describe('session-agent-switch handoff injection', () => {
         log: { warn: vi.fn() },
         // 同一段适配器里还有预算重放（只在有未完成意图时跑）；本用例只关心切换守卫。
         replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => undefined),
+        runDesktopModelGroupBeforeSend: vi.fn(async () => ({ switched: false })),
       };
       const compiled = ts.transpileModule(`return ({${adapter}}).applyPendingAgentSwitch;`,
         { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -5493,8 +5675,11 @@ describe('repeatable environment notes are sent only when they change', () => {
 });
 
 describe('Agent prewarm', () => {
-  it('rebuilds a retained failed Pi runtime before preparing a Skill', async () => {
-    const live = createSession({ agentKind: 'pi', getStatus: () => 'error' });
+  it.each([
+    { label: 'retained failed', patch: { getStatus: () => 'error' as const } },
+    { label: 'closing', patch: { hasStartedClosing: () => true } },
+  ])('rebuilds a $label Pi runtime before preparing a Skill', async ({ patch }) => {
+    const live = createSession({ agentKind: 'pi', ...patch });
     const { deps } = createDeps({
       getSession: () => live,
       readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'pi', workingDir: '/repo', model: 'saved' }),

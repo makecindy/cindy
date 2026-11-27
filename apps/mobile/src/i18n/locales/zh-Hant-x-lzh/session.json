@@ -398,7 +398,13 @@
     "forkConfirmTitle": "自此另開一差事？",
     "forkConfirmDescription": "將據此處言談之上下文，另立一獨立新差事。原差事不改，此後兩處之訊互不相擾。",
     "forkConfirm": "另開差事",
-    "forkCancel": "罷"
+    "forkCancel": "罷",
+    "modelSwitchPreparation": {
+      "pending": "下則訊息",
+      "preparing": "正備…",
+      "failed": "切換未成",
+      "usingPrevious": "此則用 {{actual}}，{{target}} 尚未備"
+    }
   },
   "shareImage": {
     "title": "分享言談",
@@ -649,6 +655,9 @@
     "ignore": "略之",
     "executionResultUnavailable": "未能取得行之結果，已停自動接續。可請助手察既有之結果。",
     "unexecutedToolMarkup": "模型以文字述工具之呼叫，未能核其執行結果，此輪未竟。",
+    "codexReconnectStalled": "模型斷連，兩分鐘未復。",
+    "reconnectAutoResumeDisabled": "自動續行未啟。",
+    "reconnectAutoResumeExhausted": "自動續行已達重試之限。",
     "silentStopExhausted": "察得空答，自動續行已暫止。",
     "outputLimit": "模型已達輸出之限，此答或有不全。可遣新訊以續；若屢至此限，宜降思之深淺，或先壓縮言談錄。",
     "outputLimitReasoning": "思考已耗本次輸出預算之大半，此答或有不全。宜降思之深淺，或先壓縮言談錄，而後續之。",
@@ -695,7 +704,7 @@
     "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "未傳送訊息，Cindy 未能及時確認安全記錄",
     "HARNESS_SWITCH_NOT_READY": "Harness 尚未切換畢。請察謬誤詳情，待 Harness 就緒後再試。",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "此模型可用之名籍已達耗用上限。可改用他模型，或待限額重置後再續。",
-    "REMOTE_AGENT_GROUP_UNAVAILABLE": "供方組中諸機今皆不能行此差事：或皆離線、已暫停分配、方冷卻，或無此模型。可於機上此供方之「遠端與分享」頁察組內諸機。",
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "機組中諸機今皆不能行此差事：或皆離線、已暫停分配、方冷卻，或無此模型。可於機上此供方之「遠端與分享」頁察組內諸機。",
     "REMOTE_DAEMON_CLOSED": "遠端連線中斷，或方更新。此輪已畢，請重遣。",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "遠端差事不能存取本地之卷或圖附件。請徑貼其內容。",
     "AUTO_REVIEW_UNAVAILABLE_QUOTA": "自動審模型之額度已盡。請於運行 Agent 之電腦查用量或計費，或於設定自訂輔助模型。需審之操作，仍待君確認。",
@@ -861,7 +870,8 @@
       "WORKER_CREATION_IN_PROGRESS": "另一同名 Worker 方立，請稍後再試。",
       "WORKER_NOT_FOUND": "此 Worker 已不存，列表已重整。",
       "ORCA_CREATE_UNCONFIRMED": "立 Worker 逾時，暫不能確認成否。請先察 Worker 列表，確無新立之 Worker，再試。",
-      "ORCA_ACTION_UNCONFIRMED": "操作逾時，暫不能確認結果。列表已重整，請以今所示之狀為準。"
+      "ORCA_ACTION_UNCONFIRMED": "操作逾時，暫不能確認結果。列表已重整，請以今所示之狀為準。",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "此機版本不支援於法器引擎差事啟協同。"
     }
   },
   "resetAutoUse": {

@@ -31,7 +31,7 @@ interface ReviewRow {
   permissionMode: string;
   planModeEnabled: number;
   status: string;
-  agentKind: 'cc' | 'codex' | 'pi';
+  agentKind: 'cc' | 'codex' | 'pi' | 'acp';
   providerId: string | null;
   model: string;
   effort: string;
@@ -98,7 +98,7 @@ export function createPluginTargetReviewLoader(deps: TargetReviewDeps) {
         !receipt.delegation.task.trim() || receipt.delegation.task.length > 8000 || receipt.delegation.task.includes('\0') ||
         meta?.sourcePlugin?.pluginId !== row.pluginId || meta.sharedTaskAuthor ||
         meta.delivery !== 'turn' || meta.autoReviewUserText?.kind !== 'delegated-continuation' ||
-        meta.autoReviewUserText?.request || !row.workingDir || !['cc', 'codex', 'pi'].includes(row.agentKind))
+        meta.autoReviewUserText?.request || !row.workingDir || !['cc', 'codex', 'pi', 'acp'].includes(row.agentKind))
       throw new Error('Delegated task authorization is no longer valid');
     const route = { agentKind: row.agentKind, providerId: row.providerId ?? '', model: row.model,
       effort: row.effort, fastMode: fastModeFromStorage(row.fastMode) };

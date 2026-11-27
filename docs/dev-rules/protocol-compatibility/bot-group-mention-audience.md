@@ -11,3 +11,8 @@ Chat Server `/me` 新增可选能力 `groupMentionAudiences: 1`，群快照新�
 只有已声明支持的新电脑/服务端才提供伙伴入口。原样重试已提交待发消息，不重算目标或更换操作标识。
 先部署数据库增量迁移和服务端，再发布客户端。旧客户端此前已展开的 actor 列表无法可靠区分广播与逐个点名，
 因此修复旧客户端行为须升级客户端。批量开关不授权工具，不改变个人代答配置。
+
+Chat Server `/me` 另增可选能力 `groupMemberMentionAll: 1`，群快照新增 `allow_member_mention_all`（默认 `false`）。
+群主和管理员均可 PATCH `allowMemberMentionAll`（仅 `kind=group`）；关闭时普通成员发送 `mentionAudience: humans|everyone`
+由服务端返回 `403 ALL_HUMANS_MENTION_FORBIDDEN`，客户端 `@` 候选隐藏「所有人」并在手动输入时提示仅群主和管理员可用。
+旧服务端不返回该能力时客户端保留默认放行，不展示开关；旧客户端忽略新字段，受服务端硬拦保护。

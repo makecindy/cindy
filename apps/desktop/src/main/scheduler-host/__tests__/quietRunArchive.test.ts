@@ -17,11 +17,17 @@ const schedule = { id: 's1', targetSessionId: 'task' } as unknown as Schedule;
 const ctx = (patch: Partial<FireContext> = {}) =>
   ({ runId: 'r1', firedAt: 1000, signal: new AbortController().signal, ...patch }) as unknown as FireContext;
 
-function setup(status: string | null, result: FireResult, silenced = false) {
+function setup(
+  status: string | null,
+  result: FireResult,
+  silenced = false,
+  archivedAt: number | null = null,
+) {
   const archiveIfUntouched = vi.fn(async () => {});
   const warn = vi.fn();
   const wrapped = withQuietRunArchive({ fire: vi.fn(async () => result) }, {
     targetStatus: async () => status,
+    targetArchivedAt: async () => archivedAt,
     isRunSilenced: () => silenced,
     archiveIfUntouched,
     warn,
@@ -30,13 +36,13 @@ function setup(status: string | null, result: FireResult, silenced = false) {
 }
 
 it('returns an archived target to archived only after a skipped or silenced round', async () => {
-  const skipped = setup('archived', { sessionId: '', skipped: true });
+  const skipped = setup('archived', { sessionId: '', skipped: true }, false, 500);
   expect(await skipped.wrapped.fire(schedule, ctx())).toEqual({ sessionId: '', skipped: true });
-  expect(skipped.archiveIfUntouched).toHaveBeenCalledWith('task', 1000);
+  expect(skipped.archiveIfUntouched).toHaveBeenCalledWith('task', 1000, 500);
 
   const silenced = setup('archived', { sessionId: 'task' }, true);
   await silenced.wrapped.fire(schedule, ctx());
-  expect(silenced.archiveIfUntouched).toHaveBeenCalledWith('task', 1000);
+  expect(silenced.archiveIfUntouched).toHaveBeenCalledWith('task', 1000, null);
 
   for (const [status, result, quiet, runCtx] of [
     ['archived', { sessionId: 'task' }, false, ctx()], // notified the user
@@ -60,10 +66,22 @@ it('keeps the round result when re-archiving fails, and lets runner failures pro
 
   const archiveIfUntouched = vi.fn();
   const failing = withQuietRunArchive({ fire: async () => { throw new Error('agent failed'); } }, {
-    targetStatus: async () => 'archived', isRunSilenced: () => true, archiveIfUntouched, warn: vi.fn(),
+    targetStatus: async () => 'archived', isRunSilenced: () => true, isRunQuietFailure: () => false, archiveIfUntouched, warn: vi.fn(),
   });
   await expect(failing.fire(schedule, ctx())).rejects.toThrow('agent failed');
   expect(archiveIfUntouched).not.toHaveBeenCalled();
+
+  const quietArchive = vi.fn(async () => {});
+  const quietFailing = withQuietRunArchive({ fire: async () => { throw new Error('pre-run hook failed: rate limit'); } }, {
+    targetStatus: async () => 'archived',
+    targetArchivedAt: async () => 500,
+    isRunSilenced: () => false,
+    isRunQuietFailure: () => true,
+    archiveIfUntouched: quietArchive,
+    warn: vi.fn(),
+  });
+  await expect(quietFailing.fire(schedule, ctx())).rejects.toThrow('pre-run hook failed: rate limit');
+  expect(quietArchive).toHaveBeenCalledWith('task', 1000, 500);
 });
 
 // Bug 2026-11-18: each silent round of a per-round automation left an open task in the inbox.
@@ -71,7 +89,7 @@ it('archives the task a quiet round of an unbound automation created, but keeps 
   const unbound = { id: 's2' } as unknown as Schedule;
   const silent = setup(null, { sessionId: 'run-task' }, true);
   await silent.wrapped.fire(unbound, ctx());
-  expect(silent.archiveIfUntouched).toHaveBeenCalledWith('run-task', 1000);
+  expect(silent.archiveIfUntouched).toHaveBeenCalledWith('run-task', 1000, null);
 
   const notified = setup(null, { sessionId: 'run-task' }, false);
   await notified.wrapped.fire(unbound, ctx());

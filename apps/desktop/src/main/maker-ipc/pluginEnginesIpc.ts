@@ -15,7 +15,12 @@ import {
   readPluginHarnessUsage,
   type PluginHarness,
 } from '../cindy-brain/pluginHarnesses.js';
-import { getCachedPluginHarnessModels, onPluginHarnessModelsChanged } from '../maker-host/acp-host.js';
+import {
+  getCachedPluginHarnessModels,
+  getReportedPluginEngineModelDetails,
+  onPluginHarnessModelsChanged,
+  onReportedPluginEngineModelDetailsChanged,
+} from '../maker-host/pluginEngineModelCache.js';
 import {
   PLUGIN_ENGINE_DEFAULT_MODEL,
   PLUGIN_ENGINE_NAME_MAX,
@@ -61,11 +66,13 @@ export function pluginEngineModelsOf(harness: PluginHarness): PluginEngineView['
 
 /** The engine without what only its own computer's settings page shows. */
 function withoutSettingsDetails(view: PluginEngineView): PluginEngineView {
-  if (view.declaredName === undefined && view.disabledModels === undefined && view.modelEfforts === undefined) return view;
+  if (view.declaredName === undefined && view.disabledModels === undefined && view.modelEfforts === undefined
+    && view.reportedModelDetails === undefined) return view;
   const offered = { ...view };
   delete offered.declaredName;
   delete offered.disabledModels;
   delete offered.modelEfforts;
+  delete offered.reportedModelDetails;
   return offered;
 }
 
@@ -210,6 +217,13 @@ function separateProviderViews(harness: PluginHarness): PluginEngineView[] {
 
 export function listPluginEngineViews(): PluginEngineView[] {
   return getPluginHarnessRegistry().list().flatMap((harness) => [toView(harness), ...separateProviderViews(harness)]);
+}
+
+/** The live ACP details stay out of shared catalogues and quota refresh triggers. */
+function withReportedModelDetails(view: PluginEngineView): PluginEngineView {
+  if (view.availability.state === 'unavailable') return view;
+  const reportedModelDetails = getReportedPluginEngineModelDetails(view.providerId);
+  return reportedModelDetails.length ? { ...view, reportedModelDetails } : view;
 }
 
 const PREFS_FIELDS = new Set(['key', 'name', 'hidden', 'suspended', 'models', 'modelEffort', 'ownerStamp']);
@@ -368,7 +382,7 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
   opts.handle(PLUGIN_ENGINES_INVOKE.LIST, (event) => {
     if (remote()) return remotePluginEngineViews(listPluginEngineViews());
     opts.assertTrusted(event);
-    return listPluginEngineViews();
+    return listPluginEngineViews().map(withReportedModelDetails);
   });
   // Picker opened: ask engine plugins to republish their models (cooldown per plugin in the registry).
   opts.handle(PLUGIN_ENGINES_INVOKE.REFRESH, (event, targetGhostId) => {
@@ -450,15 +464,24 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
       throwIpcError('INTERNAL', 'Plugin engine settings could not be saved');
     }
     publish();
-    return harness ? listPluginEngineViews().find((view) => view.key === key) ?? null : null;
+    const updated = harness ? listPluginEngineViews().find((view) => view.key === key) : undefined;
+    return updated ? withReportedModelDetails(updated) : null;
   });
+  let lastWindowPayload = '';
+  const publishToWindows = (engines: PluginEngineView[]): void => {
+    const views = engines.map(withReportedModelDetails);
+    const payload = JSON.stringify(views);
+    if (payload === lastWindowPayload) return;
+    lastWindowPayload = payload;
+    opts.broadcast(PLUGIN_ENGINES_PUSH.CHANGED, views);
+  };
   let lastPayload = '';
   const publish = (): void => {
     const engines = listPluginEngineViews();
     const payload = JSON.stringify(engines);
     if (payload === lastPayload) return;
     lastPayload = payload;
-    opts.broadcast(PLUGIN_ENGINES_PUSH.CHANGED, engines);
+    publishToWindows(engines);
     for (const listener of [...viewListeners]) {
       try {
         listener();
@@ -469,6 +492,7 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
   };
   const offRegistry = getPluginHarnessRegistry().onChange(publish);
   const offModels = onPluginHarnessModelsChanged(publish);
+  const offDetails = onReportedPluginEngineModelDetailsChanged(() => publishToWindows(listPluginEngineViews()));
   const offRemoteUse = remoteUseAccess?.onChange(publish);
   const offSettings = settingsAccess?.onChange(publish);
   const offAccountProviders = accountProvidersAccess?.onChange(publish);
@@ -479,6 +503,7 @@ export function registerPluginEnginesIpc(opts: RegisterPluginEnginesIpcOpts): ()
     activeIpcPublishers = Math.max(0, activeIpcPublishers - 1);
     offRegistry();
     offModels();
+    offDetails();
     offRemoteUse?.();
     offSettings?.();
     offAccountProviders?.();

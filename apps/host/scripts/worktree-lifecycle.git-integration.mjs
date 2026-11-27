@@ -93,7 +93,7 @@ test('Host Worktree lifecycle creates, claims and discards a precreated Worktree
   const preserved = await lifecycle.cancelPrecreatedWorktree(sessionId, { path: worktreePath }, {
     canRemove: async () => false,
   });
-  assert.deepEqual(preserved, { status: 'preserved' });
+  assert.deepEqual(preserved, { status: 'preserved', reason: 'claimed' });
   assert.ok(fs.existsSync(worktreePath));
 
   await db.drizzle.delete(sessions).where(eq(sessions.id, sessionId));

@@ -30,7 +30,7 @@ const resetsAt = Date.now() / 1000 + 3600;
 const view: SubscriptionPoolView = {
   providerId: 'anthropic',
   configured: true,
-  strategy: 'least',
+  strategy: 'expiring',
   accounts: [
     { id: 'default', paused: false, limit: 4, weight: 1, directory: '/home/.claude', status: 'ready', running: 0, identity: 'first@example.test',
       plan: 'max', planTier: 'max_20x', usage: { claude: { source: 'oauth-endpoint', updatedAt: Date.now(),
@@ -198,7 +198,7 @@ describe('SubscriptionAccountsSection usage', () => {
       apiKey: { connectionId, checks: [{ agent: 'pi' as const }] },
     });
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
-      providerId, configured: true, strategy: 'least',
+      providerId, configured: true, strategy: 'expiring',
       accounts: [apiAccount('key-target', providerId), apiAccount('key-member', 'other-key-fixture')],
     });
     render(<SubscriptionAccountsSection providerId={providerId} kind="openai" />);
@@ -260,6 +260,66 @@ describe('SubscriptionAccountsSection usage', () => {
     await screen.findByText('Expires in about 30 days');
     expect(command).toHaveBeenCalledWith({ action: 'login', providerId: 'anthropic', accountId: 'cindy-owner-second', loginKey: expect.any(String) });
     expect(within(rows[0]).getByText('Expires in about 18 days')).toBeTruthy();
+  });
+  // Unit, 2026-11-24 Claude long-lived token (subscription-account-pools.md「Claude 长期令牌」):
+  // a row on a token must report the token, stop nagging about the ordinary sign-in it no longer
+  // depends on, and send its own commands. The expiry cases above only know the ordinary sign-in.
+  // Minimal failing input: an account view with `longLivedToken`.
+  it('reports the token instead of the ordinary sign-in, and creates or stops it from the account menu', async () => {
+    const soon = new Date(Date.now() + 3 * 86_400_000).toISOString();
+    let current: SubscriptionPoolView = { ...view, accounts: [
+      { ...view.accounts[0], loginExpiresAt: soon },
+      { ...view.accounts[1], loginExpiresAt: soon, longLivedToken: {
+        expiresAt: new Date(Date.now() + 300 * 86_400_000).toISOString(), storedLogin: true, verification: 'pending',
+      } },
+    ] };
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async request => {
+      if (request.action === 'token-login') current = { ...current, accounts: current.accounts.map(account =>
+        account.id === request.accountId ? { ...account, longLivedToken: { storedLogin: true, verification: 'pending' as const } } : account) };
+      if (request.action === 'token-remove') current = { ...current, accounts: current.accounts.map(account =>
+        account.id === request.accountId ? { ...account, longLivedToken: undefined } : account) };
+      return current;
+    });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const rows = () => screen.getAllByTestId('subscription-account');
+    await screen.findAllByTestId('subscription-account');
+    const openMenu = (row: HTMLElement) => fireEvent.pointerDown(
+      within(row).getByRole('button', { name: 'providerGroup.member.moreAria' }), { button: 0, ctrlKey: false, pointerType: 'mouse' });
+
+    expect(within(rows()[1]).getByText('subscriptionAccounts.longLivedToken.tag')).toBeTruthy();
+    expect(within(rows()[1]).getByTestId('subscription-account-token-expiry').textContent)
+      .toBe('subscriptionAccounts.longLivedToken.expiresInDays');
+    // Both ordinary sign-ins end in three days; only the row without a token still asks to renew.
+    expect(within(rows()[1]).queryByRole('button', { name: 'Sign in again to second@example.test' })).toBeNull();
+    expect(within(rows()[0]).getByRole('button', { name: 'Sign in again to first@example.test' })).toBeTruthy();
+
+    openMenu(rows()[0]);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.longLivedToken.use' }));
+    await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'token-login', providerId: 'anthropic', accountId: 'default', loginKey: expect.any(String),
+    }));
+    await waitFor(() => expect(within(rows()[0]).getByText('subscriptionAccounts.longLivedToken.active')).toBeTruthy());
+
+    openMenu(rows()[1]);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.longLivedToken.remove' }));
+    await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'token-remove', providerId: 'anthropic', accountId: 'cindy-owner-second',
+    }));
+    await waitFor(() => expect(within(rows()[1]).queryByText('subscriptionAccounts.longLivedToken.tag')).toBeNull());
+  });
+  it('says so when a token belongs to another account, without offering a sign-in that would not fix it', async () => {
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, accounts: [view.accounts[0], {
+      ...view.accounts[1], status: 'signed-out', usage: undefined, authIssue: 'claude-token-account-mismatch',
+      longLivedToken: { storedLogin: true, verification: 'mismatch' },
+    }] });
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const row = (await screen.findAllByTestId('subscription-account'))[1];
+    expect(within(row).getByText('subscriptionAccounts.longLivedToken.mismatchStatus')).toBeTruthy();
+    expect(within(row).queryByRole('button', { name: 'Sign in again to second@example.test' })).toBeNull();
+    fireEvent.pointerDown(within(row).getByRole('button', { name: 'providerGroup.member.moreAria' }),
+      { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    expect(await screen.findByRole('menuitem', { name: 'subscriptionAccounts.longLivedToken.renew' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'subscriptionAccounts.longLivedToken.remove' })).toBeTruthy();
   });
   it('keeps a past estimate connected, disables renewal while busy, and tolerates older hosts', async () => {
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
@@ -339,7 +399,8 @@ describe('SubscriptionAccountsSection usage', () => {
     await screen.findByRole('alert');
     expect(screen.getByText('This computer')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'commonUi.retry' }));
-    await screen.findByText('first@example.test');
+    // 读到之后账号区收成一行：名字在那一行和收起的账号列表里各有一处。
+    await screen.findAllByText('first@example.test');
     expect(screen.queryByRole('alert')).toBeNull();
     expect(command.mock.calls.every(([request]) => request.action === 'read')).toBe(true);
     expect(screen.getAllByTestId('subscription-account')).toHaveLength(2);
@@ -428,21 +489,23 @@ describe('SubscriptionAccountsSection usage', () => {
     render(<SubscriptionAccountsSection providerId="anthropic" />);
     expect(await screen.findAllByTestId('subscription-account')).toHaveLength(accounts.length);
   });
-  it('shows the strategy only when there are accounts to choose between', async () => {
+  // 2026-11-24：几个账号是一条自动路由，选法只在「智能路由」里改；账号区只说明现状。
+  it('states the strategy only when there are accounts to choose between, without a second control', async () => {
     vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({
       ...view,
-      strategy: 'weight',
+      strategy: 'weighted',
       accounts: [view.accounts[0]],
     });
     const { unmount } = render(<SubscriptionAccountsSection providerId="anthropic" />);
     expect(await screen.findAllByTestId('subscription-account')).toHaveLength(1);
-    expect(screen.queryByRole('radiogroup')).toBeNull();
+    expect(screen.queryByTestId('route-strategy-note')).toBeNull();
     expect(screen.queryByLabelText('providerGroup.member.weightAria')).toBeNull();
     expect(screen.getByLabelText('providerGroup.member.limitAria')).toBeTruthy();
     unmount();
-    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, strategy: 'weight' });
+    vi.mocked(window.electronAPI.subscriptionAccounts.command).mockResolvedValue({ ...view, strategy: 'weighted' });
     render(<SubscriptionAccountsSection providerId="anthropic" />);
-    expect(await screen.findByRole('radiogroup', { name: 'subscriptionAccounts.strategy' })).toBeTruthy();
+    expect((await screen.findByTestId('route-strategy-note')).textContent).toContain('modelGroups.auto.assignedBy');
+    expect(screen.queryByRole('radiogroup')).toBeNull();
     expect(screen.getAllByLabelText('providerGroup.member.weightAria')).toHaveLength(2);
     // 2026-11-11: an unset (legacy default 4) limit reads as unlimited; a chosen limit shows its number.
     const [first, second] = screen.getAllByTestId('subscription-account');
@@ -476,7 +539,7 @@ describe('SubscriptionAccountsSection for plugin engines', () => {
   const pluginView = (methods: NonNullable<SubscriptionPoolView['pluginEngine']>['methods']): SubscriptionPoolView => ({
     providerId,
     configured: true,
-    strategy: 'least',
+    strategy: 'expiring',
     pluginEngine: { engineKey: 'zcode-plugin:zcode', methods },
     accounts: [{
       id: 'default', paused: false, limit: 4, weight: 1, directory: '', status: 'ready', running: 0,
@@ -492,7 +555,7 @@ describe('SubscriptionAccountsSection for plugin engines', () => {
     const row = await screen.findByTestId('subscription-account');
     expect(within(row).getByText('me@z.ai')).toBeTruthy();
     expect(within(row).getByText('GLM Coding Pro')).toBeTruthy();
-    expect(within(row).getByText('GLM · 5h')).toBeTruthy();
+    expect(within(row).getByText('GLM · quotaCard.fiveHourLabel')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'subscriptionAccounts.add' }));
     await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({
       action: 'add', providerId, methodId: 'zai',

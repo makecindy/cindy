@@ -3,8 +3,13 @@ import { useSyncExternalStore } from 'react';
 import { getActiveSelfHostedRelay, isAgentNetOnlyRoute } from './selfHostedRelayRouting';
 
 const KEY = 'cindy.mobile.agent-net.preferences.v1';
-interface Preferences { ready: boolean; enabled: boolean; onlyEncrypted: boolean; generation: number; }
-let current: Preferences = { ready: false, enabled: false, onlyEncrypted: false, generation: 0 };
+/**
+ * `removed`: the switch was turned off because the official service said this phone was removed from the account
+ * (agentNetRuntime.ts, 2026-11-26: a removed device turns Agent-Net off, and turning it on again rejoins). Shown under the
+ * switch until the person changes it; stored only while true, so older app versions read the same record.
+ */
+interface Preferences { ready: boolean; enabled: boolean; onlyEncrypted: boolean; removed: boolean; generation: number; }
+let current: Preferences = { ready: false, enabled: false, onlyEncrypted: false, removed: false, generation: 0 };
 let loading: Promise<void> | null = null, writing: Promise<void> = Promise.resolve();
 const listeners = new Set<() => void>();
 function publish(value: Omit<Preferences, 'generation'>) {
@@ -25,24 +30,28 @@ export function waitForMobileAgentNetPreferences(): Promise<void> {
   if (!loading) loading = (async () => {
     const raw = await AsyncStorage.getItem(KEY);
     const value: unknown = raw ? JSON.parse(raw) : { version: 1, enabled: false, onlyEncrypted: false };
-    const entry = value as { version?: unknown; enabled?: unknown; onlyEncrypted?: unknown } | null;
+    const entry = value as { version?: unknown; enabled?: unknown; onlyEncrypted?: unknown; removed?: unknown } | null;
     if (!entry || entry.version !== 1 || typeof entry.enabled !== 'boolean' || typeof entry.onlyEncrypted !== 'boolean') {
       throw new Error('AGENT_NET_PREFERENCES_UNREADABLE');
     }
-    publish({ ready: true, enabled: entry.enabled, onlyEncrypted: entry.onlyEncrypted });
+    publish({ ready: true, enabled: entry.enabled, onlyEncrypted: entry.onlyEncrypted, removed: entry.removed === true && !entry.enabled });
   })().finally(() => { loading = null; });
   return loading;
 }
-export function setMobileAgentNetPreferences(patch: Partial<Pick<Preferences, 'enabled' | 'onlyEncrypted'>>): Promise<void> {
+/** A change by the person clears `removed`; only the removal itself (agentNetRuntime.ts) sets it, with the switch off. */
+export function setMobileAgentNetPreferences(patch: Partial<Pick<Preferences, 'enabled' | 'onlyEncrypted' | 'removed'>>): Promise<void> {
   const work = writing.then(async () => {
     await waitForMobileAgentNetPreferences();
     const previous = current;
-    const next = { ready: true, enabled: patch.enabled ?? previous.enabled, onlyEncrypted: patch.onlyEncrypted ?? previous.onlyEncrypted };
+    const enabled = patch.enabled ?? previous.enabled;
+    const next = { ready: true, enabled, onlyEncrypted: patch.onlyEncrypted ?? previous.onlyEncrypted, removed: patch.removed === true && !enabled };
     // Apply the privacy fence synchronously before the persistence await.
     publish(next);
-    try { await AsyncStorage.setItem(KEY, JSON.stringify({ version: 1, enabled: next.enabled, onlyEncrypted: next.onlyEncrypted })); }
-    catch (error) {
-      publish({ ready: previous.ready, enabled: previous.enabled, onlyEncrypted: previous.onlyEncrypted });
+    try {
+      await AsyncStorage.setItem(KEY, JSON.stringify({ version: 1, enabled: next.enabled, onlyEncrypted: next.onlyEncrypted,
+        ...(next.removed ? { removed: true } : {}) }));
+    } catch (error) {
+      publish({ ready: previous.ready, enabled: previous.enabled, onlyEncrypted: previous.onlyEncrypted, removed: previous.removed });
       throw error;
     }
   });

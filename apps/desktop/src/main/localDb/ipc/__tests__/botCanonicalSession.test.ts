@@ -335,7 +335,7 @@ function createDb(filename = ':memory:'): void {
       fast_mode INTEGER NOT NULL DEFAULT 0,
       plan_mode_enabled INTEGER NOT NULL DEFAULT 0,
       cleared_at INTEGER,
-      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
+      pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, archived_at INTEGER,
       hidden_at INTEGER,
       notifications_muted INTEGER NOT NULL DEFAULT 0,
       summary TEXT,
@@ -352,6 +352,7 @@ function createDb(filename = ':memory:'): void {
       remote_host_id TEXT,
       agent_device_id TEXT,
       orca_remote_lead TEXT,
+      created_by_session TEXT,
       source TEXT NOT NULL DEFAULT 'desktop',
       side_chat_promoted INTEGER NOT NULL DEFAULT 0,
       side_chat_close_pending INTEGER NOT NULL DEFAULT 0,
@@ -960,11 +961,11 @@ describe('Bot canonical Session lifecycle', () => {
       const route: BotModelRoute = { harness: 'pi', providerId: state === 'implicit' ? null : 'xd', model: 'z-ai/glm-5.3-flash', effort: 'high', fastMode: false };
       if (state === 'disconnected') h.providers[0]!.connected = false;
       if (state === 'deleted') h.providers = [];
-      // A stale backup must not prevent saving a usable primary.
+      // A stale backup from an older peer must not prevent saving a usable primary; 2026-11-26 single-model decision: only the first route is kept.
       const modelChainOverride = [route, { ...route, model: 'stale-backup' }];
       const saving = invoke('local-db:bots:update', { id: 'desktop-settings', capabilities: { modelChainOverride } });
       if (state === 'available' || state === 'implicit') {
-        await expect(saving).resolves.toMatchObject({ capabilities: { modelChainOverride } });
+        await expect(saving).resolves.toMatchObject({ capabilities: { modelChainOverride: [route] } });
       } else {
         await expect(saving).rejects.toThrow('Model route unavailable');
         expect(h.sqlite!.prepare("SELECT * FROM bot_profile_versions WHERE bot_id = 'desktop-settings'").all()).toEqual(before);
@@ -6103,9 +6104,9 @@ describe('Teammate model selection shares profile persistence and route reconcil
       expect(await service.updateProfile({ callerSessionId: sessionId, expectedVersion: 1,
         modelChain: [{ id: choice!.id, effort: 'high', fastMode: false }, { id, effort: 'low' }] })).toMatchObject({ ok: true, effective: 'next-turn' });
       const after = await invoke('local-db:bots:get', 'bot-1');
+      // 2026-11-26 伙伴只用一个模型：旧版发来的备用项照样校验，但只存第一条。
       expect(await modelSettings.readEffectiveBotModelChain(after.capabilities)).toEqual([
         { harness: 'acp', providerId: 'acp-plugin:agy:agy', model: 'gemini-3-pro', effort: 'high', fastMode: false },
-        { harness: 'pi', providerId: 'xd', model: 'enabled-alternate-model', effort: 'low', fastMode: false },
       ]);
       expect(getSelectedNewMakerRoute(h.ownerScopeKey)).toEqual(appDefault);
       // Fast is not offered for plugin engines.
