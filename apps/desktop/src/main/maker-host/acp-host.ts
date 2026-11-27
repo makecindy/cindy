@@ -151,6 +151,9 @@ export function buildAcpAgent(opts: BuildAcpAgentOpts): AcpAgent {
         key.split(':', 1)[0],
       ),
     },
+    verificationForTask: (key, sessionId) => key === '_root__cindy-antigravity-acp:agy'
+      ? async (probe, signal) => (await import('./antigravityVerification.desktop.js')).verifyAntigravityAccount(sessionId, probe, signal)
+      : undefined,
     onSessionCapabilities: rememberCapabilities,
     observeModelDetails: observePluginEngineModelDetails,
   });

@@ -30,10 +30,11 @@
 
 - `GET /api/agent-net/info` 的 `features` 增加 `linked-provider-shares-v1`。客户端只在看到它时才发登记请求。
 - `POST /api/agent-net/sharing/provider-shares/linked`，body `{ shareId }`：要求本网络已认证设备（`x-agent-net-authorization`）
-  且与账号身份同一账号；幂等。已是服务自己的 V2 分享（或已有资源绑定）的 ID 回 `409 PROVIDER_SHARE_LINK_CONFLICT`；
-  别的网络或账号已登记回 `409`；每个网络最多 256 个，超出回 `429 LINKED_SHARE_LIMIT`。
-- `POST /api/agent-net/sharing/provider-shares/linked/<shareId>/remove`，body `{}`：同样只认本网络本账号；删除后
-  `changed` 立即关掉这个分享所有受邀者的会话。
+  且与账号身份同一账号；按 `(networkId, shareId)` 隔离并幂等。已是服务自己的 V2 分享（或已有资源绑定）的 ID 回
+  `409 PROVIDER_SHARE_LINK_CONFLICT`；同网络内已被别的账号登记回 `409`；不同网络之间互不阻塞，知道分享 ID 的访客
+  在自己网络抢先登记不会阻止真实分享者迁移；每个网络最多 256 个，超出回 `429 LINKED_SHARE_LIMIT`。
+- `POST /api/agent-net/sharing/provider-shares/linked/<shareId>/remove`，body `{}`：同样只认本网络本账号；删除或切主机后
+  `changed`（含多副本 `sharingNetworks` 跨副本同步）立即关掉这个分享所有受邀者的会话。
 - `POST /api/agent-net/sharing/transport`：资源是已登记的旧分享时，不查成员库，按账号身份与申请者持钥证明生成
   `scope: { memberId, guestSubject: <账号>, memberVersion: <登记代次> }` 的申请交给分享者电脑；同一分享同时**等待签名**
   （当前登记的主机与代次下、还没拿到签名）的不同受邀者最多 64 个（受邀者按「设备 + 账号」区分：设备号只在账号内唯一，
