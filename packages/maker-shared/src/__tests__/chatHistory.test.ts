@@ -267,6 +267,55 @@ describe('durable chat history', () => {
     expect(await cache.snapshot('room')).toMatchObject({ reads: [{ read_seq: '10' }] });
   });
 
+  // Unit, #13325: in-order pushes exercise shifted cursors but miss a late row inside saved coverage.
+  it('retains late messages in exact and stitched history pages across restart', async () => {
+    const f = fixture();
+    const cache = f.open();
+    const latest = new URLSearchParams('limit=3');
+    f.api.mockResolvedValueOnce({ room: { id: 'room' }, messages: [], cursor: '10' })
+      .mockResolvedValueOnce(['20', '18', '16'].map(id => f.message(id)));
+    await cache.page('room', latest);
+    for (const [index, id] of ['22', '24', '19', '26'].entries()) {
+      await cache.receive('room', { cursor: String(11 + index), changes: [
+        { type: 'message.created', data: { message: f.message(id) } },
+      ] }, String(10 + index));
+    }
+    const reopened = f.open();
+    f.api.mockReset().mockResolvedValueOnce({ cursor: '14', changes: [] });
+    const read = async (query: string) => (await reopened.page('room', new URLSearchParams(query))).map(m => m.id);
+    expect(await read('limit=3')).toEqual(['26', '24', '22']);
+    expect(await read('limit=3&before=22')).toEqual(['20', '19', '18']);
+    expect(await read('limit=3&before=21')).toEqual(['20', '19', '18']);
+    expect(f.api).toHaveBeenCalledTimes(1); // Only the restart cursor check.
+  });
+
+  it('inserts late replies only into matching bounded windows', async () => {
+    const f = fixture();
+    const cache = f.open();
+    await cache.snapshot('room');
+    const windows = [
+      ['before=20', []],
+      ['before=20&threadRootId=other', []],
+      ['before=19&all=true', []],
+      ['before=20&all=true&after=19', []],
+      ['before=20&threadRootId=topic', ['19']],
+      ['before=20&all=true', ['19']],
+    ] as const;
+    for (const [key] of windows) {
+      f.api.mockResolvedValueOnce([]);
+      await cache.page('room', new URLSearchParams(key));
+    }
+    f.api.mockClear();
+    for (const cursor of ['11', '12']) {
+      await cache.receive('room', { cursor, changes: [{ type: 'message.created',
+        data: { message: { ...f.message('19'), threadRootId: 'topic' } } }] }, String(Number(cursor) - 1));
+    }
+    for (const [key, expected] of windows) {
+      expect((await cache.page('room', new URLSearchParams(key))).map(m => m.id)).toEqual(expected);
+    }
+    expect(f.api).not.toHaveBeenCalled();
+  });
+
   it('stitches known ranges when a new message shifts all older pagination boundaries', async () => {
     const f = fixture(); const cache = f.open();
     let newest = 6;

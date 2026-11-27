@@ -591,7 +591,7 @@ export type SchedulerEvent =
    * ephemeral runningById)需要据此清掉"运行中"态,否则 chip 会卡在 running 直到下一次
    * 真 run 完成。携带 runId 让消费方精确匹配它当初因 'fired' 记下的那一条。
    */
-  | { type: 'deferred'; scheduleId: string; runId: string }
+  | { type: 'deferred'; scheduleId: string; runId: string; deferReason?: string; consecutiveDeferrals?: number }
   /**
    * 本次 fire 被前置检查脚本（preRunHook exit 2）拦截跳过：未启动 agent、零 token。
    * 与 'deferred' 的区别：run 记录**保留**（status='skipped'，生而已读），照常按

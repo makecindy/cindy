@@ -1,6 +1,7 @@
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { agentKindForSession, leadingSlashInvocation, slashCommandDisplayLabel } from './composerPalette';
 import { lookupMobileSkillInvocation } from './newSession';
+import { isPluginEngineSessionKind } from './pluginEngines';
 import { parseOutputLimitDetails } from '@cindy/maker-shared';
 import { readChatReplyQuote, type ChatReplyQuote } from '@cindy/maker-shared/chat-reply-quote';
 import {
@@ -70,6 +71,7 @@ export function buildQueueRowPresentation(
 export const EMPTY_INPUT_PROJECTION: InputProjection = Object.freeze({
   sessionId: '',
   pendingQueue: [],
+  steerUnsupported: false,
   steeringQueueClientIds: [],
   queuePaused: false,
   queueExpanded: false,
@@ -98,6 +100,7 @@ export function normalizeInputProjection(value: unknown, fallbackSessionId = '')
   return {
     sessionId: readString(record?.sessionId) ?? fallbackSessionId,
     pendingQueue,
+    steerUnsupported: record?.steerUnsupported === true,
     steeringQueueClientIds: readStringArray(record?.steeringQueueClientIds),
     queuePaused: record?.queuePaused === true,
     queueExpanded: record?.queueExpanded === true,
@@ -154,13 +157,21 @@ export async function buildQueuedMessageForEngine(
     return buildQueuedTextMessage(...args);
   }
   const shortName = slashCommandDisplayLabel('/' + token.name).slice(1);
-  const kind = session.agentSwitchIntent?.targetAgentKind ?? agentKindForSession(session);
+  const targetIsPluginEngine = !!session.pluginEngineSwitchIntent
+    || (isPluginEngineSessionKind(session.agentKind) && !session.agentSwitchIntent);
+  const kind = targetIsPluginEngine
+    ? ('acp' as const)
+    : (session.agentSwitchIntent?.targetAgentKind ?? agentKindForSession(session));
   const sourceKind = token.name.startsWith('skill:') ? 'pi' : 'claude-code';
   if (shortName === token.name || kind === sourceKind) return buildQueuedTextMessage(...args);
-  const intent = session.agentSwitchIntent;
-  const agentDeviceId = intent?.agentDeviceId === undefined ? session.agentDeviceId : intent.agentDeviceId;
+  const intentAgentDeviceId = targetIsPluginEngine
+    ? session.pluginEngineSwitchIntent?.agentDeviceId
+    : session.agentSwitchIntent?.agentDeviceId;
+  const agentDeviceId = intentAgentDeviceId === undefined ? session.agentDeviceId : intentAgentDeviceId;
   const name = agentDeviceId || session.remoteHostId ? shortName
-    : await lookupMobileSkillInvocation(maker, kind, session.workingDir ?? '', shortName);
+    : kind === 'acp'
+      ? await lookupMobileSkillInvocation(maker, kind, session.workingDir ?? '', shortName).catch(() => shortName)
+      : await lookupMobileSkillInvocation(maker, kind, session.workingDir ?? '', shortName);
   const delta = name.length - token.name.length;
   const boundary = token.end;
   function rebase<T extends { start: number; end: number }>(range: T): T {

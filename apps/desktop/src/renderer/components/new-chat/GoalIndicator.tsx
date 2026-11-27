@@ -24,6 +24,9 @@ import { goalApiFor } from '@/lib/makerTransport';
 import { GOAL_OVERLOAD_LAST_REASON, isGoalCapacityBackoff } from '@/utils/overloadError';
 import { GoalAdvancedLimits, type GoalLimitValues } from './GoalAdvancedLimits';
 import { ListComposerTextarea } from './ListComposerTextarea';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { useFieldVoiceInput } from '@/voice-input/useFieldVoiceInput';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
 
 interface GoalIndicatorProps {
   sessionId: string | null | undefined;
@@ -68,6 +71,7 @@ function GoalEditor({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [stoppingVoice, setStoppingVoice] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [objective, setObjective] = useState(goal.objective);
   const [limits, setLimits] = useState<GoalLimitValues>({
@@ -76,6 +80,16 @@ function GoalEditor({
     noProgressLimit: goal.noProgressLimit,
   });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const submittingRef = useRef(false);
+
+  const voice = useFieldVoiceInput({
+    draftKey: `edit-goal:${sessionId}:${open}`,
+    inputRef: textareaRef,
+    value: objective,
+    onChange: (next) => setObjective(next),
+    active: open,
+    disabled: saving,
+  });
 
   useEffect(() => {
     if (!open) {
@@ -86,16 +100,41 @@ function GoalEditor({
         noProgressLimit: goal.noProgressLimit,
       });
       setError(null);
+      setStoppingVoice(false);
+      submittingRef.current = false;
     }
   }, [goal.budgetTokens, goal.maxTurns, goal.noProgressLimit, goal.objective, open]);
 
-  const trimmedObjective = objective.trim();
+  const trimmedObjective = voice.displayText.trim();
   const isValid = trimmedObjective.length > 0;
+  const busy = saving || stoppingVoice;
   // 与 chip 的 isAttentionStatus 一致:blocked / budgetLimited / usageLimited 都算"需关注"。
   const attention = isAttentionStatus(goal.status);
 
   const save = async () => {
+    if (busy || submittingRef.current) return;
     if (!isValid) {
+      setError(t('goal.editGoal.invalid'));
+      return;
+    }
+    submittingRef.current = true;
+    let nextObjective = objective;
+    if (voice.isBusy) {
+      setStoppingVoice(true);
+      try {
+        const stoppedObjective = await voice.stop();
+        if (stoppedObjective === null) {
+          submittingRef.current = false;
+          return;
+        }
+        nextObjective = stoppedObjective;
+      } finally {
+        setStoppingVoice(false);
+      }
+    }
+    const finalTrimmed = nextObjective.trim();
+    if (!finalTrimmed) {
+      submittingRef.current = false;
       setError(t('goal.editGoal.invalid'));
       return;
     }
@@ -103,7 +142,7 @@ function GoalEditor({
     setError(null);
     try {
       await goalApiFor(sessionId).updateGoal(sessionId, {
-        objective: trimmedObjective,
+        objective: finalTrimmed,
         maxTurns: limits.maxTurns,
         budgetTokens: limits.budgetTokens,
         noProgressLimit: limits.noProgressLimit,
@@ -112,12 +151,19 @@ function GoalEditor({
     } catch (err) {
       setError(err instanceof Error ? err.message : t('goal.editGoal.failed'));
     } finally {
+      submittingRef.current = false;
       setSaving(false);
     }
   };
 
   return (
-    <AlertDialog.Root open={open} onOpenChange={setOpen}>
+    <AlertDialog.Root
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && busy) return;
+        setOpen(next);
+      }}
+    >
       <AlertDialog.Trigger asChild>
         <button
           type="button"
@@ -138,6 +184,9 @@ function GoalEditor({
             event.preventDefault();
             textareaRef.current?.focus();
           }}
+          onEscapeKeyDown={(event) => {
+            if (busy || voice.isBusy) event.preventDefault();
+          }}
         >
           <AlertDialog.Title
             className="text-15 font-medium"
@@ -153,26 +202,35 @@ function GoalEditor({
             >
               {t('goal.editGoal.objectiveLabel')}
             </label>
-            <ListComposerTextarea
-              id="goal-objective"
-              ref={textareaRef}
-              value={objective}
-              placeholder={t('goal.editGoal.objectivePlaceholder')}
-              onChange={(event) => setObjective(event.target.value)}
-              onKeyDown={(event) => {
-                // 跟聊天输入框一致:Enter 保存,Shift+Enter 换行;IME 组字中的 Enter 不触发。
-                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  void save();
-                }
-              }}
-              className="min-h-[112px] w-full resize-none rounded-lg border p-2.5 text-13 leading-5 outline-none placeholder:text-[var(--text-placeholder)]"
+            <div
+              className="flex flex-col rounded-xl border"
               style={{
                 backgroundColor: 'var(--settings-input-bg)',
                 borderColor: 'var(--settings-input-border)',
-                color: 'var(--settings-input-text)',
               }}
-            />
+            >
+              <ListComposerTextarea
+                id="goal-objective"
+                ref={textareaRef}
+                value={voice.displayText}
+                readOnly={voice.isBusy}
+                placeholder={t('goal.editGoal.objectivePlaceholder')}
+                onChange={(event) => setObjective(event.target.value)}
+                onKeyDown={(event) => {
+                  // 跟聊天输入框一致:Enter 保存,Shift+Enter 换行;IME 组字中的 Enter 不触发。
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    void save();
+                  }
+                }}
+                className="min-h-[96px] w-full resize-none bg-transparent px-2.5 pt-2.5 pb-1 text-13 leading-5 outline-none placeholder:text-[var(--text-placeholder)]"
+                style={{ color: 'var(--settings-input-text)' }}
+              />
+              <div className="flex items-center justify-end px-2 pb-2 pt-1">
+                <VoiceInputButton {...voice.buttonProps} testId="edit-goal-voice" tipSide="top" />
+              </div>
+            </div>
+            <FieldVoiceInputNotice error={voice.lastError} speakerFiltered={voice.speakerFiltered} />
           </div>
           <GoalAdvancedLimits value={limits} onChange={setLimits} />
           {error && (
@@ -182,7 +240,7 @@ function GoalEditor({
           )}
           <div className="flex justify-end gap-2">
             <AlertDialog.Cancel asChild>
-              <Button variant="secondary" size="md" compact type="button" disabled={saving}>
+              <Button variant="secondary" size="md" compact type="button" disabled={busy}>
                 {t('goal.editGoal.cancel')}
               </Button>
             </AlertDialog.Cancel>
@@ -190,9 +248,9 @@ function GoalEditor({
               variant="cta"
               size="md"
               compact
-              loading={saving}
+              loading={busy}
               type="button"
-              disabled={saving || !isValid}
+              disabled={busy || !isValid}
               onClick={() => {
                 void save();
               }}

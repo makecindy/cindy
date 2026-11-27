@@ -3,6 +3,7 @@ import { getHostBrowserBackendStore } from '../browser-backend-settings-store.de
 import { nativeWorkspaceProviderSettings } from './additionalWorkspaceProviders.js';
 import { commitHostBrowserBackendKind } from '../mcp-integrations/browser.desktop.js';
 import type { OverrideSettingsCommitOptions } from '../maker-host/override-settings-file.js';
+import { isBrowserBackendKind } from '../../shared/browserBackend.js';
 import type { SettingsEditableValue } from '../../shared/settingsEditableCatalog.js';
 import { HostSettingsError } from './operations.js';
 import { BUILTIN_THEME_FAMILIES } from '../../shared/themeFamilies.js';
@@ -46,7 +47,7 @@ export const nativeSettingsOperations = {
     assertCurrent();
     try {
       const kind = change.clear.includes('kind') ? 'external' : change.set.kind;
-      if (kind !== 'external' && kind !== 'rsb-webview') throw new HostSettingsError('INVALID_PARAMS');
+      if (!isBrowserBackendKind(kind)) throw new HostSettingsError('INVALID_PARAMS');
       await commitHostBrowserBackendKind(kind, async () => {
         receipt = await store.commitAtomic(change as never, { ...options, assertCurrent });
       });

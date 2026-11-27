@@ -284,13 +284,14 @@ describe('bot group remote resources', () => {
     expect(JSON.stringify(listed)).not.toContain('/Users/me/site');
   });
 
-  it('previews the same plan states as the desktop sidebar', () => {
+  it('previews paused plan states like the desktop sidebar and keeps the latest message while executing', () => {
     const running = summary({
       openPlan: { id: 'p1', status: 'running', currentStep: 1, stepCount: 3, currentBotName: '阿布', currentStepStatus: 'running' },
     });
-    expect(botGroupRemotePreview(running)).toMatchObject({ translations: { 'zh-CN': '分工 2/3 · 阿布正在做' } });
-    expect(botGroupRemoteItem(summary({ speakingBotIds: ['abu'] })).display.generation).toEqual({ phase: 'processing', startedAt: null });
-    expect(botGroupRemotePreview(summary({ planningBotId: 'mimi' }))).toMatchObject({ translations: { 'zh-CN': '咪咪正在安排…' } });
+    expect(botGroupRemotePreview(running)).toMatchObject({ translations: { 'zh-CN': '阿布：写好了' } });
+    expect(botGroupRemoteItem(summary({ speakingBotIds: ['abu'] })).display.generation).toBeUndefined();
+    expect(botGroupRemoteItem(summary({ speakingBotIds: ['abu'] })).display.teammateActivity?.phase).not.toBe('running');
+    expect(botGroupRemotePreview(summary({ planningBotId: 'mimi' }))).toMatchObject({ translations: { 'zh-CN': '阿布：写好了' } });
     const waiting = summary({
       openPlan: { id: 'p1', status: 'waiting', currentStep: 0, stepCount: 3, currentBotName: '咪咪', currentStepStatus: 'failed' },
     });
@@ -298,6 +299,44 @@ describe('bot group remote resources', () => {
     expect(botGroupRemoteItem({ ...waiting, teammateActivity: { phase: 'error' } }).revision).not.toEqual(botGroupRemoteItem(waiting).revision);
     expect(botGroupRemotePreview(waiting)).toMatchObject({ translations: { 'zh-CN': '咪咪没做完' } });
     expect(botGroupRemotePreview(summary())).toMatchObject({ translations: { 'zh-CN': '阿布：写好了' } });
+  });
+
+  // Unit: server-backed groups proxied to mobile must not emit `generation` or running plan
+  // previews when only another user's Cindy or companion is active.
+  it('omits remote running state for own and peer executions in a server group', () => {
+    const members = [
+      { botId: 'cindy', actorKind: 'bot' as const, assistant: true, isOwned: false, name: 'Cindy', avatar: '', avatarColor: 'violet', status: 'active' as const },
+      { botId: 'mimi', actorKind: 'bot' as const, isOwned: true, name: '咪咪', avatar: '', avatarColor: 'blue', status: 'active' as const },
+    ];
+    const peerOnly = summary({
+      serverBacked: true,
+      members,
+      speakingBotIds: ['cindy'],
+      teammateActivity: { phase: 'idle' },
+      openPlan: { id: 'p1', status: 'running', currentStep: 0, stepCount: 2, currentBotName: 'Cindy', currentStepStatus: 'running' },
+      round: { status: 'running', canContinue: false, othersActive: true, speakers: [
+        { botId: 'cindy', executionId: 'e1', isSelfRequested: false, executionStatus: 'running', sessionId: null, activity: 'step' },
+      ] },
+    });
+    const peerItem = botGroupRemoteItem(peerOnly);
+    expect(peerItem.display.generation).toBeUndefined();
+    expect(peerItem.display.teammateActivity).toEqual({ phase: 'idle' });
+    expect(peerItem.display.preview).toMatchObject({ translations: { 'zh-CN': '阿布：写好了' } });
+
+    const ownActive = summary({
+      serverBacked: true,
+      members,
+      speakingBotIds: ['cindy', 'mimi'],
+      teammateActivity: { phase: 'running' },
+      round: { status: 'running', canContinue: false, othersActive: true, speakers: [
+        { botId: 'cindy', executionId: 'e1', isSelfRequested: false, executionStatus: 'running', sessionId: null, activity: 'reply' },
+        { botId: 'mimi', executionId: 'e2', isSelfRequested: false, executionStatus: 'running', sessionId: 'lane-mimi', activity: 'reply' },
+      ] },
+    });
+    const ownItem = botGroupRemoteItem(ownActive);
+    expect(ownItem.display.generation).toBeUndefined();
+    expect(ownItem.display.teammateActivity).toEqual({ phase: 'completed' });
+    expect(ownItem.display.preview).toEqual(peerItem.display.preview);
   });
 
   it('localizes join previews for every phone language without an author prefix', () => {
