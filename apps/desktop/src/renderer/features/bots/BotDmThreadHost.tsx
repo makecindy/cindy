@@ -22,6 +22,9 @@ import { BOT_DM_THREAD_PARAM } from './botDmThreadRoute';
 
 const TITLE_LIMIT = 60;
 
+/** The reader's preferred topic-panel width, remembered per companion on this computer. */
+const DM_THREAD_PANEL_WIDTH_STORAGE_KEY = 'cindy.bots.dmThreadPanelWidth.v1';
+
 function topicTitle(text: string | undefined): string {
   const line = text?.replace(/\s+/g, ' ').trim() ?? '';
   return line.length > TITLE_LIMIT ? `${line.slice(0, TITLE_LIMIT - 1)}…` : line;
@@ -51,7 +54,9 @@ export function BotDmThreadHost({ enabled, bot, rootSessionId, mentions, childre
   // Same drag handle and arrow-key sizing as group topics. A private topic opens without a
   // width animation, so there is nothing to cancel when the reader starts dragging.
   const threadLayoutRef = useRef<HTMLDivElement>(null);
-  const threadResize = useThreadPanelResize(threadLayoutRef, open?.rootClientId ?? null, NO_THREAD_OPEN_ANIMATION);
+  const threadResize = useThreadPanelResize(threadLayoutRef, open?.rootClientId ?? null, NO_THREAD_OPEN_ANIMATION, {
+    storageKey: `${DM_THREAD_PANEL_WIDTH_STORAGE_KEY}.${bot.id}`,
+  });
   const attempt = useRef(0);
   const ensure = useCallback((rootClientId: string) => {
     const request = ++attempt.current;
