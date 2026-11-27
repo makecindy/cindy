@@ -14,6 +14,8 @@ export interface QuietRunArchiveDeps {
   /** Explicit archive timestamp captured before the round restores an archived target. */
   targetArchivedAt?(sessionId: string): Promise<number | null>;
   isRunSilenced(runId: string): boolean;
+  /** True only for transient precheck failures kept quiet within their grace window. */
+  isRunQuietFailure?(runId: string): boolean;
   /** Archive again unless the user touched the task since `sinceMs` (rechecked under the route lock). */
   archiveIfUntouched(sessionId: string, sinceMs: number, archivedAt?: number | null): Promise<void>;
   warn(message: string, meta: Record<string, unknown>): void;
@@ -29,7 +31,23 @@ export function withQuietRunArchive(runner: ScheduleRunner, deps: QuietRunArchiv
       const priorArchivedAt = target && wasArchived && deps.targetArchivedAt
         ? await deps.targetArchivedAt(target).catch(() => null)
         : null;
-      const result = await runner.fire(schedule, ctx);
+      let result;
+      try {
+        result = await runner.fire(schedule, ctx);
+      } catch (error) {
+        if (!ctx.signal.aborted && target && wasArchived && deps.isRunQuietFailure?.(ctx.runId)) {
+          try {
+            await deps.archiveIfUntouched(target, ctx.firedAt, priorArchivedAt);
+          } catch (archiveError) {
+            deps.warn('[scheduler-host] re-archive after quiet precheck failure failed (non-fatal)', {
+              scheduleId: schedule.id,
+              runId: ctx.runId,
+              error: archiveError instanceof Error ? archiveError.message : String(archiveError),
+            });
+          }
+        }
+        throw error;
+      }
       if (result.deferred || ctx.signal.aborted) return result;
       if (!result.skipped && !deps.isRunSilenced(ctx.runId)) return result;
       // Per-round task: created by this round of an unbound, non-persistent automation.

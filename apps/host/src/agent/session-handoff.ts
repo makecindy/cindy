@@ -4,7 +4,8 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { OrcaRemoteWorkerModelsRequest } from '@cindy/device-link';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../../../desktop/src/main/appSessionState.js';
 import { getDbClient, getCurrentDbClientSnapshot } from '../../../desktop/src/main/localDb/client/current.js';
-import { sessions } from '../../../desktop/src/main/localDb/schema.js';
+import { botProfiles, botSessionLinks, sessions } from '../../../desktop/src/main/localDb/schema.js';
+import { isBotVisibleRemotely } from '../../../desktop/src/main/localDb/ipc/botRemoteVisibility.js';
 import { openSession } from '../../../desktop/src/main/localDb/sessionOpening.js';
 import { listProjects, resolveSessionProject } from '../../../desktop/src/main/mcp-integrations/projectManagementCore.js';
 import { getSelectedNewMakerRoute } from '../../../desktop/src/main/maker-host/newMakerDefaultsCache.js';
@@ -18,6 +19,8 @@ import { withSendToSessionLock } from '../../../desktop/src/main/maker-ipc/sendT
 import { withSessionPermissionChange } from '../../../desktop/src/main/maker-ipc/sessionPermissionChange.js';
 import { getForSession, listAll } from '../../../desktop/src/main/worktree/WorktreeManager.js';
 import { resolveFreshSourceBranch } from '../../../desktop/src/main/worktree/freshBase.js';
+import { isTaskActionRevoked } from '../../../desktop/src/main/maker-ipc/taskActionAuthorization.js';
+import { uiText } from '../../../desktop/src/main/uiText.js';
 import { throwIpcError } from '../../../desktop/src/main/utils/ipcValidate.js';
 import { isIpcError } from '../../../desktop/src/shared/ipc-errors.js';
 import { getHostNewMakerDefaultsByVendor } from './remote-draft-preferences.js';
@@ -55,38 +58,69 @@ export function createHostSessionHandoff(ports: {
     const assertOwner = captureOwner(true);
     if (!clientId || !guard)
       return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task action authorization is required.' };
-    assertOwner();
-    await withSessionPermissionChange(id, async () => undefined);
-    return withSendToSessionLock(id, async () => {
+    let queueAcceptanceStarted = false;
+    try {
       assertOwner();
-      const [row] = await getDbClient().drizzle.select().from(sessions).where(eq(sessions.id, id)).limit(1);
-      assertOwner();
-      if (!row || row.source === 'bot' || row.hiddenAt != null)
-        return { ok: false, errorCode: 'NOT_FOUND', message: 'Session does not exist' };
-      if (row.status === 'archived' || row.status === 'deleted')
-        return { ok: false, errorCode: row.status === 'archived' ? 'ARCHIVED' : 'DELETED', message: 'Session is no longer active' };
-      const agentKind = row.agentKind === 'cc' ? 'claude-code' : row.agentKind;
-      if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi')
-        return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'The target engine is not supported on this Host' };
-      try {
-        assertHostTaskExecutionSupported(row);
-        ports.assertProviderExecutionSupported(id, row.providerId);
-      } catch (error) {
-        if (!isIpcError(error) && !(error instanceof Error && error.message.startsWith('[UNSUPPORTED_CAPABILITY]'))) throw error;
-        return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: (error as Error).message };
-      }
-      const queued = await ports.input.enqueue(id, { clientId, text: message }, {
-        ...params,
-        taskActionDeliveryGuard: Object.assign(async () => {
-          assertOwner();
-          await guard();
-          assertOwner();
-        }, { onSettled: guard.onSettled }),
+      await withSessionPermissionChange(id, async () => undefined);
+      return await withSendToSessionLock(id, async () => {
+        assertOwner();
+        const [target] = await getDbClient().drizzle.select({
+          row: sessions,
+          buddyStatus: botProfiles.status,
+          buddyHiddenAt: botProfiles.hiddenAt,
+          buddyRole: botSessionLinks.role,
+        }).from(sessions)
+          .leftJoin(botSessionLinks, eq(botSessionLinks.sessionId, sessions.id))
+          .leftJoin(botProfiles, eq(botProfiles.id, botSessionLinks.botId))
+          .where(eq(sessions.id, id)).limit(1);
+        assertOwner();
+        const notFound = { ok: false as const, errorCode: 'NOT_FOUND', message: 'Session does not exist' };
+        if (!target || target.row.hiddenAt != null) return notFound;
+        const { row, buddyStatus, buddyHiddenAt, buddyRole } = target;
+        if (row.source === 'bot' || buddyRole != null) {
+          if (buddyRole === 'group' || !buddyStatus ||
+              !isBotVisibleRemotely({ status: buddyStatus, hiddenAt: buddyHiddenAt })) return notFound;
+          return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY',
+            message: uiText('bots.groupChat.errors.lifecycleUnavailable', 'The current server or computer does not support this action yet.') };
+        }
+        if (row.status === 'archived' || row.status === 'deleted')
+          return { ok: false, errorCode: row.status === 'archived' ? 'ARCHIVED' : 'DELETED', message: 'Session is no longer active' };
+        const agentKind = row.agentKind === 'cc' ? 'claude-code' : row.agentKind;
+        if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi')
+          return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'The target engine is not supported on this Host' };
+        try {
+          assertHostTaskExecutionSupported(row);
+          ports.assertProviderExecutionSupported(id, row.providerId);
+        } catch (error) {
+          if (!isIpcError(error) && !(error instanceof Error && error.message.startsWith('[UNSUPPORTED_CAPABILITY]'))) throw error;
+          return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: (error as Error).message };
+        }
+        const queued = await ports.input.enqueue(id, { clientId, text: message }, {
+          ...params,
+          taskActionDeliveryGuard: Object.assign(async () => {
+            assertOwner();
+            await guard();
+            assertOwner();
+          }, { onSettled: guard.onSettled }),
+          onQueueAcceptanceStarted: () => { queueAcceptanceStarted = true; },
+        });
+        if (queued?.ok === false) return queued;
+        return { ok: true, agentKind, wakeKind: 'queued', targetTitle: row.title,
+          targetLastUserSendAt: row.userSendAt == null ? null : new Date(row.userSendAt).toISOString() };
       });
-      if (queued?.ok === false) return queued;
-      return { ok: true, agentKind, wakeKind: 'queued', targetTitle: row.title,
-        targetLastUserSendAt: row.userSendAt == null ? null : new Date(row.userSendAt).toISOString() };
-    });
+    } catch (error) {
+      // Once the queue may contain this input, even the same error code can
+      // mean a failed acknowledgement rather than a refusal to deliver.
+      if (queueAcceptanceStarted) throw error;
+      if (isTaskActionRevoked(error))
+        return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task action authorization expired; no message was sent.' };
+      if ((isIpcError(error) && error.code === 'PRECONDITION_FAILED') ||
+          (error instanceof Error && error.message === 'input cancelled before acceptance')) {
+        return { ok: false, errorCode: 'HOST_NOT_READY',
+          message: uiText('ipcError.PRECONDITION_FAILED', 'This action isn’t available in the current state.') };
+      }
+      throw error;
+    }
   }
 
   const create = createRemoteSessionOpener({
@@ -154,6 +188,9 @@ export function createHostSessionHandoff(ports: {
       const views = await ports.readProviders();
       assertOwner();
       const available = ports.agents();
+      if (request.agent === 'acp') {
+        return { agentDeviceId: null, pluginEngines: [] };
+      }
       const agents = request.agent ? [request.agent] : available;
       return { agentDeviceId: null, ...Object.fromEntries(agents.map(agent => [
         agent === 'claude-code' ? 'claude_code' : agent,

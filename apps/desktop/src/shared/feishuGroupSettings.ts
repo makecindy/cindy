@@ -29,6 +29,8 @@ export interface FeishuGroupRoute {
   agentDeviceId: string | null;
   /** 插件引擎(acp)允许 '' 表示引擎默认思考强度。 */
   effort: ImDefaultEffort | '';
+  /** 可选智能路由 id；命中时建任务按该路由选源并持续托管，失效时回落到上面的具体模型。 */
+  modelGroup?: string | null;
 }
 
 /** 渲染端可见的一个群的设置。 */
@@ -140,7 +142,8 @@ export function parseFeishuGroupRoute(value: unknown): FeishuGroupRoute | null {
   if (!model || model.length > MAX_ID_LENGTH) return null;
   const providerId = optionalId(raw.providerId ?? null);
   const agentDeviceId = optionalId(raw.agentDeviceId ?? null);
-  if (providerId === undefined || agentDeviceId === undefined) return null;
+  const modelGroup = optionalId(raw.modelGroup ?? null);
+  if (providerId === undefined || agentDeviceId === undefined || modelGroup === undefined) return null;
   if (raw.agentKind === 'acp' && !pluginEngineKeyFromProviderId(providerId)) return null;
   return {
     agentKind: raw.agentKind,
@@ -148,6 +151,7 @@ export function parseFeishuGroupRoute(value: unknown): FeishuGroupRoute | null {
     providerId,
     agentDeviceId,
     effort: raw.effort as ImDefaultEffort | '',
+    ...(raw.agentKind !== 'acp' && modelGroup ? { modelGroup } : {}),
   };
 }
 

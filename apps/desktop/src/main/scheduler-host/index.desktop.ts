@@ -191,6 +191,7 @@ const desktop = createSchedulerHost<StartSchedulerDeps>({
       targetStatus: readScheduledTargetStatus,
       targetArchivedAt: readScheduledTargetArchivedAt,
       isRunSilenced: (runId): boolean => getSchedulerIfInitialized()?.isRunSilenced(runId) ?? false,
+      isRunQuietFailure: (runId): boolean => getSchedulerIfInitialized()?.isRunQuietFailure(runId) ?? false,
       archiveIfUntouched: archiveQuietScheduledTarget,
       warn: (message, meta) => quietRunLog.warn(message, meta),
     },

@@ -20,6 +20,10 @@ import { readDeviceLinkInvokeSourceDevice, readDeviceLinkModelSelectionOrigin } 
 import { getOfficialAgentNetPeerBase, parseAgentNetUdpPort } from '../../desktop/src/main/device-link/agentNetStunDiscovery.ts';
 import { createHostDeviceLink, HOST_DISPATCH_PORTS_WHILE_HELD } from './device-link.ts';
 import { createHostSessionHandoff } from './agent/session-handoff.ts';
+import { createInputQueue } from './agent/input-queue.mjs';
+import { createIpcError } from '../../desktop/src/shared/ipc-errors.ts';
+import { bindHostUiText } from './ui-text.ts';
+import { configureUiText } from '../../desktop/src/main/uiText.ts';
 import { setSessionOpeningModelAdmission } from '../../desktop/src/main/localDb/sessionOpening.ts';
 import { readChatHistoryMessages } from '../../desktop/src/main/mcp-integrations/remoteChatHistory.ts';
 import { createRemoteSessionHandoff } from '../../desktop/src/main/mcp-integrations/sessionHandoffRemote.ts';
@@ -190,6 +194,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     return { ok: true, meta: { sessionId: request.sessionId, path: path.join(profile, 'created-worktree') } };
   } };
   const handoffQueue = [];
+  let enqueueHandoff = async (id, item, handoff) => {
+    await handoff.taskActionDeliveryGuard();
+    handoffQueue.push({ id, item, handoff });
+  };
+  let holdAfterHandoffCreation;
   const handoffProviders = [{
     id: 'fixture-provider', name: 'Fixture provider', connected: true, source: 'user', agents: ['claude-code'],
     routing: { 'claude-code': { authStrategy: 'api-key' } },
@@ -207,15 +216,15 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
     sessionHandoff: isSelfDeviceId => createHostSessionHandoff({
       input: {
         profileHoldReason: () => held, profileHoldGeneration: () => 0,
-        enqueue: async (id, item, handoff) => {
-          await handoff.taskActionDeliveryGuard();
-          handoffQueue.push({ id, item, handoff });
-        },
+        enqueue: (...args) => enqueueHandoff(...args),
       },
       worktree: worktreeLifecycle, isSelfDeviceId, readProviders: async () => handoffProviders,
       agents: () => ['claude-code'], hasCindyAiApiKey: () => false,
       assertProviderExecutionSupported() {},
-      broadcastCreated: sessionId => hub.publish({ type: 'session_changed', action: 'create', sessionId }),
+      broadcastCreated: sessionId => {
+        if (sessionId === holdAfterHandoffCreation) held = projectHold;
+        hub.publish({ type: 'session_changed', action: 'create', sessionId });
+      },
     }),
     invoke: service, subscribe: hub.subscribe,
     send: async (sessionId, message, createOpts, sendOpts) => ({ accepted: true, sessionId, message, createOpts, sendOpts }),
@@ -655,8 +664,10 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
    * create, jump, revoked receipt and catalogs each have a different observable result.
    * Tier: integration, using the existing loopback relay and synthetic owner DB.
    */
-  await t.test('desktop handoff negotiates catalogs, creates and queues with a live reverse receipt', async () => {
+  await t.test('desktop handoff negotiates catalogs, creates and queues with a live reverse receipt', async t => {
     const desktop = clients[2];
+    const releases = [];
+    const denyNextValidation = new Set();
     const off = desktop.onFrame(frame => {
       if (frame.kind === 'link-open') desktop.sendLinkAccept(frame.src, frame.id, {
         appVersion: 'test', allowlistHash: 'test', capabilities: [DEVICE_LINK_CAPABILITY_BACKGROUND_LINK_V1],
@@ -664,7 +675,11 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       if (frame.kind !== 'invoke' || frame.payload.channel !== DL_SESSION_HANDOFF_CHANNEL) return;
       const [input] = frame.payload.args;
       assert.equal(input.action, 'validate-task-action');
-      void validateRemoteTaskActionReceipt(frame.src, input).then(valid => {
+      const validation = !input.release && denyNextValidation.delete(input.targetSessionId)
+        ? Promise.resolve(false)
+        : validateRemoteTaskActionReceipt(frame.src, input);
+      void validation.then(valid => {
+        if (input.release) releases.push({ target: input.targetSessionId, valid, held: Boolean(held) });
         desktop.sendInvokeResult(frame.src, frame.id, {
           ok: true, result: { valid, ...(input.release ? { released: valid } : {}) },
         });
@@ -776,6 +791,118 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
       await assert.rejects(handoffQueue[1].handoff.taskActionDeliveryGuard(), /TASK_ACTION_AUTHORIZATION_EXPIRED/);
       assert.equal((await handoff([lastWrite])).result?.errorCode, 'UNSUPPORTED_CAPABILITY');
       assert.equal(handoffQueue.length, 2);
+
+      // Integration: the existing desktop sender/loopback fixture covered ordinary
+      // targets. A visible companion must reject without appearing to be missing.
+      await t.test('a visible buddy target reports unsupported without enqueueing', async () => {
+        const targets = [
+          { id: 'visible-buddy', source: 'bot', hiddenAt: null },
+          { id: 'legacy-buddy', source: 'desktop', hiddenAt: null },
+          { id: 'hidden-buddy', source: 'bot', hiddenAt: 1 },
+        ];
+        await db.drizzle.insert(sessions).values(targets.map(target => ({
+          ...target, title: 'Fixture buddy', status: 'active', agentKind: 'cc', createdAt: 1, updatedAt: 1,
+        }))).run();
+        await db.drizzle.insert(botProfiles).values({
+          id: 'fixture-buddy', displayName: 'Fixture buddy', status: 'active', createdAt: 1, updatedAt: 1,
+        }).run();
+        await db.drizzle.insert(botSessionLinks).values(targets.map(target => ({
+          id: `link-${target.id}`, botId: 'fixture-buddy', sessionId: target.id, role: 'delegation', createdAt: 1,
+        }))).run();
+        bindHostUiText(() => ['zh-CN']);
+        try {
+          for (const sessionId of ['visible-buddy', 'legacy-buddy']) {
+            const result = await send({ deviceId: 'host', sessionId }, { sender, message: 'A buddy delegation' });
+            assert.deepEqual(result, {
+              ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: '当前服务器或电脑暂不支持此操作。',
+            }, sessionId);
+          }
+          for (const sessionId of ['hidden-buddy', 'no-such-buddy']) {
+            const result = await send({ deviceId: 'host', sessionId }, { sender, message: 'A buddy delegation' });
+            assert.equal(result.errorCode, 'NOT_FOUND');
+          }
+          assert.equal(handoffQueue.length, 2);
+        } finally {
+          configureUiText((_key, fallback) => fallback);
+        }
+      });
+
+      // Integration: ordinary creation already works over this loopback. The
+      // smallest missing case is a real profile hold between SQLite creation
+      // and the first enqueue. Check the sender result and both ends of release.
+      await t.test('a hold after creation refuses the first message and releases the receipt', async () => {
+        const sessionId = randomUUID();
+        holdAfterHandoffCreation = sessionId;
+        try {
+          const result = await send({ deviceId: 'host', sessionId }, {
+            sender, message: 'Refused after creation',
+            create: async () => ({ permissionMode: 'ask', projectDir: null }),
+          });
+          assert.equal(result.errorCode, 'CREATED_NOT_DELIVERED', JSON.stringify(result));
+          assert.deepEqual(releases.filter(entry => entry.target === sessionId), [
+            { target: sessionId, valid: true, held: true },
+          ]);
+        } finally {
+          held = null;
+          holdAfterHandoffCreation = undefined;
+        }
+
+        const createdRows = await db.drizzle.select().from(sessions).where(eq(sessions.id, sessionId));
+        assert.equal(createdRows.length, 1);
+        assert.equal(handoffQueue.some(entry => entry.id === sessionId), false);
+        const history = await readHistory(sessionId);
+        assert.equal(history.ok, true, JSON.stringify(history));
+        assert.deepEqual(history.page.items, []);
+        // A retained receiver claim would return DELIVERY_UNKNOWN before it
+        // revalidates this already-released receipt with the sender.
+        assert.equal((await handoff([lastWrite])).result?.errorCode, 'UNSUPPORTED_CAPABILITY');
+      });
+
+      // This also uses the actual Node queue. The hold case does not reach it;
+      // inject one failing boundary at a time after the task row exists.
+      await t.test('settles pre-acceptance rejections but retains receipts after uncertain queue writes', async () => {
+        let failure;
+        let stopping;
+        const originalEnqueue = enqueueHandoff;
+        const input = createInputQueue({
+          hub,
+          getMaker: () => ({ getSession: () => undefined }),
+          getOwner: getCurrentDbClientSnapshot,
+          readSession: async sessionId => {
+            const [row] = await db.drizzle.select().from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+            if (failure === 'precondition') throw createIpcError('PRECONDITION_FAILED', 'Before admission');
+            if (failure === 'cancelled') stopping = input.stop(sessionId);
+            if (failure === 'expired') denyNextValidation.add(sessionId);
+            return row;
+          },
+          persistQueueSnapshot: async () => {
+            if (failure === 'after acceptance') throw createIpcError('PRECONDITION_FAILED', 'Queue write was not confirmed');
+          },
+        });
+        enqueueHandoff = input.enqueue;
+        try {
+          for (const boundary of ['precondition', 'cancelled', 'expired', 'after acceptance']) {
+            const sessionId = randomUUID();
+            failure = boundary;
+            const result = await send({ deviceId: 'host', sessionId }, {
+              sender, message: 'First message at the queue boundary',
+              create: async () => ({ permissionMode: 'ask', projectDir: null }),
+            });
+            await stopping;
+            const uncertain = boundary === 'after acceptance';
+            assert.equal(result.errorCode, uncertain ? 'DELIVERY_UNKNOWN' : 'CREATED_NOT_DELIVERED', boundary);
+            assert.deepEqual(releases.filter(entry => entry.target === sessionId),
+              uncertain ? [] : [{ target: sessionId, valid: true, held: false }], boundary);
+            assert.equal(input.projection(sessionId).pendingQueue.length, uncertain ? 1 : 0, boundary);
+            assert.equal((await handoff([lastWrite])).result?.errorCode,
+              uncertain ? 'DELIVERY_UNKNOWN' : 'UNSUPPORTED_CAPABILITY', boundary);
+          }
+        } finally {
+          failure = undefined;
+          enqueueHandoff = originalEnqueue;
+          await input.dispose();
+        }
+      });
     } finally { off(); }
   });
   await host.revoke('ios');
@@ -918,7 +1045,7 @@ test('Host device-link refuses provider-share guests and the platform features i
   // Clients cache only CHANNEL_NOT_ALLOWED as unsupported. Extend the existing loopback fixture
   // with one request per affected capability, including the goal write that must not reach a handler.
   for (const channel of [
-    'model-groups:get', 'maker:subscription-accounts', 'maker:goal:get-status', 'maker:goal:set',
+    'maker:subscription-accounts', 'maker:goal:get-status', 'maker:goal:set',
     'maker:model-context-limit:get', 'maker:api-key:present',
   ]) {
     const reply = await desktop.invoke('host', { channel, args: [] });
@@ -936,7 +1063,7 @@ test('Host device-link refuses provider-share guests and the platform features i
   assert.match(remoteDesktop.error.message, /^\[NOT_SUPPORTED\] requestRemoteDesktop /);
 
   for (const channel of [REMOTE_AGENT_CHANNEL, MACHINE_STATUS_CHANNEL, DL_HISTORY_MESSAGES_CHANNEL,
-    'local-db:sessions:list', 'host:execute-arbitrary']) {
+    'local-db:sessions:list', 'model-groups:get', 'model-groups:resolve', 'host:execute-arbitrary']) {
     const reply = await guest.invoke(hostKey, { channel, args: [] });
     assert.equal(reply.ok, false, `${channel}: ${JSON.stringify(reply)}`);
     assert.equal(reply.error.code, 'ACCESS_REVOKED', `${channel}: ${JSON.stringify(reply)}`);
@@ -1207,6 +1334,84 @@ test('cindy-host remote rejoin reports why it could not rejoin, and asks the off
   assert.deepEqual(await rejoin(), { result: 'rejoined', agentNet: 'skipped' });
   assert.deepEqual(requests.map(([route, opts]) => [route, opts.method, opts.body]),
     [['/api/device-link/rejoin', 'POST', {}], ['/api/device-link/rejoin', 'POST', {}]]);
+});
+
+// Test value (engineering-conventions §3.2)
+// - Production entry and observable result: `cindy-host remote agent-net-on` (createHostDeviceLink `setAgentNetEnabled`, with the
+//   real shared agentNetNode): whether it asks the official service, rejoins first, and turns Agent-Net on; the `rejoin` result.
+// - Rule: 2026-11-26, a device removed from the account must be able to come back by turning Agent-Net on on that device
+//   (signing in again restores only Device Link; agent-net-device-removal.md).
+// - Coverage gap: the rejoin test above covers `cindy-host remote rejoin` only; turning the switch on never looked at revocation.
+// - Minimal failing input: an enrolled Host whose `/directory` answers 401 DEVICE_REVOKED, or missing from the account's Device Link
+//   device list, turned on again; offline; never enrolled.
+// - Tier: unit, fake official services in process (real certificates), the Device Link client stays stopped.
+test('cindy-host remote agent-net-on rejoins a Host removed from the account before turning Agent-Net on', async t => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'host-agent-net-on-'));
+  configureHostOwner({ userDataDir: profile, ownerId: 'agent-net-on-owner' });
+  // On, so that the first rejoin below enrolls the identity this Host had before it was removed.
+  fs.writeFileSync(path.join(profile, 'device-link-settings.json'), '{"agentNetEnabled":true,"remoteControlEnabled":false}');
+  const { root, bootstrap } = createPrivateNetwork('Test Host network', generateIdentity('root-agent-net-on'));
+  const secrets = new Map(), rejoins = [], enrollments = [];
+  let directory = async () => new Response(JSON.stringify({ rootPublicKey: bootstrap.rootPublicKey, devices: [] }), { status: 200 });
+  let directoryReads = 0, listed = null;
+  const host = createHostDeviceLink({
+    profileDir: profile, worktree: createHostWorktreeLifecycle(profile), version: 'test', getWsUrl: () => 'ws://127.0.0.1:9',
+    getToken: async () => null, canRegister: () => true, profileHold: () => null,
+    invoke: async () => ({ status: 200, body: {} }), subscribe: () => () => {},
+    createRuntimeSession: async () => ({}), closeRuntimeSession: async () => {}, disableShareAvailability: async () => {},
+    agentNet: {
+      base: () => 'https://test-agent-net.invalid', subject: () => 'agent-net-on-owner', deviceId: () => 'host', deviceName: () => 'Test Host',
+      readSecret: async key => secrets.get(key) ?? null,
+      writeSecret: async (key, value) => { secrets.set(key, value); },
+      enroll: async (_base, body) => {
+        enrollments.push(body.rejoin === true ? 'rejoin' : 'enroll');
+        return { rootPublicKey: bootstrap.rootPublicKey,
+          certificate: issueCertificate(root, { networkId: 'account:test', subject: 'agent-net-on-owner', identity: body, role: 'member' }) };
+      },
+      fetch: async url => { if (String(url).endsWith('/directory')) directoryReads++; return directory(); },
+      createWebSocket: async () => { throw new Error('No real Agent-Net relay in this test'); },
+      workerFile: () => null, coreModule: async () => { throw new Error('No Agent-Net core in this test'); }, log: { info() {}, warn() {} },
+      deviceLinkDeviceIds: async () => listed,
+    },
+    officialDeviceLinkFetch: async route => { rejoins.push(route); return { deviceId: 'host', rejoined: true }; },
+  });
+  t.after(async () => {
+    await host.stop();
+    commitVolatileAppSession('signed-out', null, true);
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+  const turnOn = async () => { await host.setAgentNetEnabled(false); const result = await host.setAgentNetEnabled(true); return result.rejoin; };
+
+  // Never enrolled on this account's service: nothing to ask.
+  await host.setAgentNetEnabled(false);
+  secrets.clear();
+  assert.equal(await turnOn(), undefined);
+  assert.equal(directoryReads, 0);
+  assert.equal((await host.rejoin()).rejoin.agentNet, 'rejoined'); // Enrolls the identity this Host had.
+  rejoins.length = 0; enrollments.length = 0;
+
+  // Removed from the account: its certificate is revoked. Turning Agent-Net on brings it back first, then turns it on.
+  directory = async () => new Response(JSON.stringify({ error: { code: 'DEVICE_REVOKED' } }), { status: 401 });
+  assert.deepEqual(await turnOn(), { result: 'rejoined', agentNet: 'rejoined' });
+  assert.deepEqual([rejoins, enrollments], [['/api/device-link/rejoin'], ['rejoin']]);
+  assert.equal(host.state().agentNet.enabled, true);
+
+  // Signed in again after a removal: not on the account's device list (every computer refuses it on Agent-Net), even with no
+  // stored Agent-Net secret yet: turning Agent-Net on still forces Agent-Net rejoin (never 'skipped').
+  directory = async () => new Response(JSON.stringify({ rootPublicKey: bootstrap.rootPublicKey, devices: [] }), { status: 200 });
+  rejoins.length = 0; enrollments.length = 0; listed = ['desktop']; secrets.clear();
+  assert.deepEqual(await turnOn(), { result: 'rejoined', agentNet: 'rejoined' });
+  assert.deepEqual([rejoins, enrollments], [['/api/device-link/rejoin'], ['rejoin']]);
+  listed = ['desktop', 'host'];
+
+  // Offline, or not removed: turned on as before, without asking anyone to rejoin.
+  for (const answer of [async () => { throw new TypeError('fetch failed'); },
+    async () => new Response(JSON.stringify({ rootPublicKey: bootstrap.rootPublicKey, devices: [] }), { status: 200 })]) {
+    directory = answer;
+    assert.equal(await turnOn(), undefined);
+    assert.equal(host.state().agentNet.enabled, true);
+  }
+  assert.deepEqual([rejoins, enrollments], [['/api/device-link/rejoin'], ['rejoin']]);
 });
 
 // Test value (engineering-conventions §3.2)

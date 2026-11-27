@@ -146,6 +146,21 @@ function emitRemoved(sessionId: string): void {
   for (const fn of removedSubs) fn(sessionId);
 }
 
+type RemoteSessionPatchListener = (
+  deviceId: string,
+  sessionId: string,
+  patch: Partial<Session>,
+) => void;
+/**
+ * 远端会话 patch 订阅（含不在当前有界分片窗口内的任务）。与 `sessionsStore.subscribePatches`
+ * 对称，供搜索结果等旁路视图即时同步窗口外远端任务的归档/恢复/重命名/置顶/删除状态。
+ */
+const patchSubs = new Set<RemoteSessionPatchListener>();
+
+function emitPatched(deviceId: string, sessionId: string, patch: Partial<Session>): void {
+  for (const fn of patchSubs) fn(deviceId, sessionId, patch);
+}
+
 /**
  * snapshot epoch(per-device):防「旧 snapshot 覆盖新 snapshot」。listing tier 发起一次
  * 全量拉取前 `nextSnapshotEpoch(deviceId)`,await 回来后只有 `isLatestSnapshotEpoch` 仍成立
@@ -1109,6 +1124,7 @@ const actions = {
       }
       emitRemoved(sessionId);
     }
+    emitPatched(deviceId, sessionId, patch as Partial<Session>);
     // 状态迁移叠加层:删除一律让位。active / archived 推送不带 updatedAt,可能是写库前
     // 迟到的旧推送,不动叠加层,交给写库后的列表按内容确认(见 pendingStatuses)。
     if (deleted && pendingStatuses.get(sessionId)?.token.deviceId === deviceId) {
@@ -1681,6 +1697,13 @@ export function subscribeRemoteSessionRemoval(fn: (sessionId: string) => void): 
   };
 }
 
+export function subscribeRemoteSessionPatches(fn: RemoteSessionPatchListener): () => void {
+  patchSubs.add(fn);
+  return () => {
+    patchSubs.delete(fn);
+  };
+}
+
 /** listing tier 挂载时注册「重拉某设备」的实现;卸载时传 null 清。 */
 export function setRemoteReseedImpl(
   fn: ((deviceId: string, status: RemoteSessionStatus) => void) | null,
@@ -1781,6 +1804,7 @@ export const remoteProjectsStore = {
   subscribe,
   subscribeRename,
   subscribeRemoved: subscribeRemoteSessionRemoval,
+  subscribePatches: subscribeRemoteSessionPatches,
 };
 
 /** 便捷导出:传输层只关心 origin 判定。 */

@@ -196,6 +196,7 @@ export function BotGroupComposer({
   disabled = false,
   planState = null,
   divisionSteps = false,
+  allowMentionAll = true,
   allowMentionAllBots = false,
   attachments: attachmentState = NO_ATTACHMENTS,
   attachmentScope = '',
@@ -225,6 +226,7 @@ export function BotGroupComposer({
   planState?: BotGroupComposerPlanState | null;
   /** Server groups: a 分工 that writes out who does what starts as written; otherwise the organizer arranges it (§7.0). */
   divisionSteps?: boolean;
+  allowMentionAll?: boolean;
   allowMentionAllBots?: boolean;
   attachments?: BotGroupComposerAttachments;
   /** Scope for writing annotated images before send (see botGroupAttachmentScope). */
@@ -315,6 +317,7 @@ export function BotGroupComposer({
     conversationKind,
     textareaRef,
     allLabels: thread ? threadAllLabels : undefined,
+    allowMentionAll,
     allowMentionAllBots,
   });
   const attachmentsRef = useRef(attachmentState.attachments);
