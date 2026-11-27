@@ -36,7 +36,8 @@ vi.mock('@/device-link/agentNetNative', () => ({ MobileAgentNetEngine: class {
 
 import { joinMobileAgentNetNetwork } from '@/device-link/agentNetPairing';
 import { mobileRelayAuthCrypto } from '@/device-link/relayAuthCrypto';
-import { getMobileAgentNetPreferences, mobileAgentNetAllowsLegacy, mobileAgentNetRequiresEncryption, waitForMobileAgentNetPreferences } from '@/device-link/agentNetPreferences';
+import { getMobileAgentNetPreferences, mobileAgentNetAllowsLegacy, mobileAgentNetRequiresEncryption, setMobileAgentNetPreferences,
+  waitForMobileAgentNetPreferences } from '@/device-link/agentNetPreferences';
 import { setActiveSelfHostedRelay, __testing as routing } from '@/device-link/selfHostedRelayRouting';
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -117,4 +118,19 @@ it('never allows the unencrypted V1 connection on a V2-only route, whatever the 
     signing: null, agentNetOnly: true, shared: { ownerName: 'Alice' } });
   expect(mobileAgentNetRequiresEncryption()).toBe(true);
   expect(mobileAgentNetAllowsLegacy()).toBe(false);
+});
+
+// 2026-11-26「被删后默认关掉，再打开就重新加入」（agentNetRuntime.ts）：「被移除」只随关掉一起存，设置里据此提示；人一改开关就清掉。
+// 真实偏好存储（AsyncStorage 内存替身）；缺口：新字段。最小输入：关掉并记下被移除，再由人打开。只在为真时写进记录，旧版读到同一份。tier:unit。
+it('keeps the removed note with the switch off until the person changes it, stored only while true', async () => {
+  await waitForMobileAgentNetPreferences();
+  const stored = () => JSON.parse(fake.storage.get('cindy.mobile.agent-net.preferences.v1')!);
+  await setMobileAgentNetPreferences({ enabled: true });
+  await setMobileAgentNetPreferences({ enabled: false, removed: true });
+  expect(getMobileAgentNetPreferences()).toMatchObject({ enabled: false, removed: true });
+  expect(stored()).toEqual({ version: 1, enabled: false, onlyEncrypted: false, removed: true });
+  await setMobileAgentNetPreferences({ enabled: true });
+  expect(getMobileAgentNetPreferences()).toMatchObject({ enabled: true, removed: false });
+  expect(stored()).toEqual({ version: 1, enabled: true, onlyEncrypted: false });
+  await setMobileAgentNetPreferences({ enabled: false });
 });
