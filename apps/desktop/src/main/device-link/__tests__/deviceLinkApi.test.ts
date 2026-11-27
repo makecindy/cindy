@@ -46,7 +46,7 @@ vi.mock('../agentNetRuntime.js', () => ({ agentNetClientForRelay: () => ({
   rootPublicKey: 'A'.repeat(43), directory: mocks.v2Directory, request: mocks.v2Request,
 }), currentAgentNetClient: () => mocks.v2Active ? { certificate: { deviceId: 'pc' }, directory: mocks.v2Directory, request: mocks.v2Request } : null,
 agentNetRequiresEncryption: () => mocks.onlyEncrypted, agentNetSelectionKey: () => mocks.selection,
-useDeviceLinkDeviceList: () => {}, agentNetNoteDeviceLinkDevices: () => {}, agentNetDeviceAccepted: () => true,
+useDeviceLinkDeviceList: () => {}, agentNetStartDeviceLinkRead: () => Date.now(), agentNetNoteDeviceLinkDevices: () => {}, agentNetDeviceAccepted: () => true,
 agentNetNoteDeviceRemoved: mocks.noteRemoved }));
 vi.mock('../../appSessionState.js', () => ({ activeOwnerScopeKey: () => mocks.scope, isAppSessionBoundaryPending: () => false }));
 

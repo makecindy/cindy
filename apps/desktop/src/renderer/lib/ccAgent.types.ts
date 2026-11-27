@@ -238,6 +238,7 @@ export interface CcMeta {
    * readMessageSourceDevice（宽容解析）。
    */
   sourceDevice?: MessageSourceDevice;
+  dispatchRoute?: import('@cindy/maker-shared/message-source').MessageDispatchRoute;
   /** 插件任务派发的消息（readMessageSourcePlugin 读取）。 */
   sourcePlugin?: MessageSourcePlugin;
   /** Group source of an explicitly sent private assistant message. */
@@ -441,6 +442,8 @@ export interface Session {
   /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
   imAttached?: boolean;
   snoozedAt?: string | null;
+  /** Host time when the task was explicitly archived (ISO 8601). Missing on older hosts and legacy/idle-archived rows. */
+  archivedAt?: string | null;
   /**
    * 用户最近一次"按下发送"的时刻（ISO 8601，null = 从未发过）。
    * Sidebar 排序唯一时间轴：null ⟺ 草稿（归未分类），非 null 即按倒序上浮。

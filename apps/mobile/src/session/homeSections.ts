@@ -1,4 +1,5 @@
 import { isTeammateOwnInboxTask, taskInboxSection, taskInboxSignalsFromRank, taskSnoozeUntil, teammateInboxSection, type TaskInboxState } from '@cindy/maker-shared/live-task-priority';
+import { getSessionArchivedActivityAt } from '@cindy/maker-shared/session-activity';
 import { getMobileOfflineInboxIntent } from './offlineInboxIntents';
 import { orcaLeadSessionKey } from '@cindy/maker-shared/orca-team';
 import type { TeammateStatus } from '@cindy/maker-shared/teammate-status';
@@ -730,7 +731,13 @@ export function buildInboxHomeSections(
             : group === 'archived' && offlineIntent?.kind === 'complete'
               ? i18n.t('devices.list.menu.inbox.pendingArchiveSync')
               : row.sourceLabel;
-        groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item,
+        const displayActivityAt = group === 'archived'
+          ? (getSessionArchivedActivityAt(task) ?? item.lastActivityAt)
+          : item.lastActivityAt;
+        const rowItem = displayActivityAt !== item.lastActivityAt
+          ? { ...item, lastActivityAt: displayActivityAt }
+          : item;
+        groups.get(group)!.push({ ...row, key: `inbox:${task.deviceLinkDeviceId ?? ''}:${task.id}`, item: rowItem,
           sourceLabel });
       }
     }

@@ -26,8 +26,11 @@ import {
 } from './pi-package-file-boundary.js';
 
 const MAX_FILES = 256;
-const MAX_FILE_BYTES = 512 * 1024;
-const MAX_TOTAL_BYTES = 2 * 1024 * 1024;
+// Bundled Pi extensions (for example context-mode 2.2.3) ship a single ~2.3 MB
+// index.js. Parsing that file takes ~350 ms, so keep the bounded analysis useful
+// instead of reporting every such package as unknown.
+const MAX_FILE_BYTES = 4 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 const MAX_ANALYSIS_MS = 2_000;
 const LOCAL_MODULE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'] as const;
 const PI_RUNTIME_PACKAGES = [

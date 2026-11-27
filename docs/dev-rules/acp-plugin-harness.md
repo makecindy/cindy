@@ -96,6 +96,8 @@ maker-core（packages/maker-core/src/agents/acp/：protocol / connection / capab
 ## 5. Briefing、斜杠指令与协议扩展不变量
 
 1. **首轮 Briefing 与防斜杠误触发（#12683）**：
+   - 用户自定义提示词只经 ACP 标准 `systemPrompt` 协商交出（本机与托管任务的取值见
+     [协议记录](protocol-compatibility/plugin-harnesses.md) 的「用户自定义提示词」一节）。
    - 插件引擎不接入 Cindy 的 system prompt（保持内置引擎前缀与缓存稳定），仅在新会话首条用户消息前按固定顺序附：`远程工作区说明 → 伙伴说明 → 已装插件花名册（仅 cindy MCP 实际挂载时）→ Skill 清单（内置 Pi 范围，隔离进程扫描）→ 协同角色说明`。
    - 宿主拼入的非用户文本必须清洗独立 `/命令` 的前导 `/`（不动路径、URL 与用户原话），防止 `agy acp` 等对端自动激活非预期工作流；用户原话本身以 `/` 开头时，首轮说明顺延至下一条普通消息。
    - 桌面 `/` 菜单读取插件引擎 Skill 清单必须按 `agentKind: 'acp'` 走 `AcpAgent.listAgentSkills`，不得借用内置 Pi 的清单。

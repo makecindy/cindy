@@ -207,11 +207,13 @@ function NavigationGate() {
     const inAuthGroup = segments[0] === '(auth)';
     // 供应商分享链接的提示页只说明「请在电脑上打开」,不读账号数据,未登录也直接显示。
     // 加入中转页未登录时只提示先登录(不发任何请求),同样直接显示。
+    // 扫码页是登录流程的一步(未登录时扫已登录电脑的二维码),同样放行。
     if (
       !auth.isAuthenticated &&
       !inAuthGroup &&
       segments[0] !== 'provider-share' &&
-      segments[0] !== 'relay-join'
+      segments[0] !== 'relay-join' &&
+      segments[0] !== 'qr-scan'
     ) {
       router.replace('/login');
       return;

@@ -162,6 +162,8 @@ export interface OpenAcpSessionOptions {
   requiredMcpServers?: readonly string[];
   /** ACP session id persisted for this task; resumes instead of creating a session. */
   resumeSessionId?: string;
+  /** Personal instructions to append to a supporting agent’s system prompt. */
+  personalSystemPrompt?: string;
   model?: string;
   /** An explicit companion model must be accepted by this engine before it can receive a message. */
   requireSelectedModel?: boolean;
@@ -185,7 +187,7 @@ export interface OpenAcpSessionOptions {
   readFile?: (path: string) => Promise<Uint8Array>;
   /**
    * Host text sent ahead of the first message of a newly created agent session (for example
-   * collaboration role instructions; plugin engines get no Cindy system prompt). A resumed or
+   * collaboration role instructions). A resumed or
    * loaded session already has it in its own history, so it is not repeated. A function receives
    * the names of the MCP servers the agent accepted, so the text only names tools it really has.
    */
@@ -374,6 +376,11 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       ? [...new Set((opts.extraDirs ?? []).map((dir) => dir.trim()).filter(Boolean))]
       : [];
     const additionalDirsField = additionalDirs.length > 0 ? { additionalDirectories: additionalDirs } : {};
+    const sessionParams: AcpRecord = { cwd: opts.cwd, mcpServers: accepted, ...additionalDirsField };
+    if (init.agentCapabilities.sessionCapabilities.systemPrompt && opts.personalSystemPrompt) {
+      sessionParams.systemPrompt = { mode: 'append', content: [{ type: 'text', text: opts.personalSystemPrompt }] };
+    }
+
     let sessionId: string;
     let outcome: AcpResumeOutcome;
     let result: AcpRecord;
@@ -386,7 +393,7 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       try {
         result = await connection.request(
           method,
-          { sessionId: opts.resumeSessionId, cwd: opts.cwd, mcpServers: accepted, ...additionalDirsField },
+          { ...sessionParams, sessionId: opts.resumeSessionId },
           { onResult: onSessionOpened },
         );
       } catch (error) {
@@ -401,7 +408,7 @@ export async function openAcpSession(opts: OpenAcpSessionOptions): Promise<AcpSe
       try {
         result = await connection.request(
           'session/new',
-          { cwd: opts.cwd, mcpServers: accepted, ...additionalDirsField },
+          sessionParams,
           { onResult: onSessionOpened },
         );
       } catch (error) {
