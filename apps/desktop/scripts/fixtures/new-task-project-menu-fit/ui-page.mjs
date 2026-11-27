@@ -84,5 +84,17 @@ export default {
     });
     await ui.capture('scrolled-to-last-project');
     assert.ok(visible, 'Wheeling over project rows must bring the last project fully into view');
+    assert.ok(await section.evaluate((el) => el.scrollTop > 0), 'Reaching the last project must have scrolled the section');
+
+    // The mirror case: wheel up with the pointer still on project rows. The list
+    // scrolls back to its first project, then the section returns to the heading.
+    for (let i = 0; i < 40; i += 1) {
+      await page.mouse.wheel(0, -120);
+      await page.waitForTimeout(30);
+    }
+    assert.ok(await overRow(), 'The pointer must still be on a project row after wheeling up');
+    assert.equal(await list.evaluate((el) => el.scrollTop), 0, 'Wheeling up must bring the list back to its first project');
+    assert.equal(await section.evaluate((el) => el.scrollTop), 0, 'Wheeling up must bring the section back to the heading');
+    await ui.capture('scrolled-back-to-heading');
   },
 };
