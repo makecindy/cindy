@@ -22,10 +22,12 @@ export interface TaskDigestSessionFacts {
   shared?: boolean;
   clearedAt?: number | null;
   startedAtMs?: number | null;
+  endedAtMs?: number | null;
 }
 
 export interface TaskDigestActivity {
   phase: string;
+  source?: string;
   interactionKind?: string | null;
   startedAtMs?: number | null;
   lastActivityAtMs?: number | null;
@@ -352,6 +354,7 @@ export function sessionFactsFromRow(row: unknown): TaskDigestSessionFacts | null
     status: text(record.status) ?? 'active',
     ...(Number.isFinite(clearedAt) ? { clearedAt } : {}),
     ...(typeof record.activeTurnStartedAt === 'number' && Number.isFinite(record.activeTurnStartedAt) ? { startedAtMs: record.activeTurnStartedAt } : {}),
+    ...(typeof record.lastTurnEndedAt === 'number' && Number.isFinite(record.lastTurnEndedAt) ? { endedAtMs: record.lastTurnEndedAt } : {}),
     ...(text(record.source) === 'shared' ? { shared: true } : {}),
     route: harness && model
       ? {
