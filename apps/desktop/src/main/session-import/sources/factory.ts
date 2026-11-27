@@ -46,7 +46,7 @@ async function head(file: string): Promise<{ id: string; title: string; cwd: str
     firstAt = firstAt || toMs(obj.timestamp);
     if (!firstUser) {
       const user = lineMessages(obj, lineNo).find((m) => m.role === 'user' && typeof m.content === 'string' && m.content.trim());
-      if (user) firstUser = user.content as string;
+      if (user) firstUser = makeTitle(user.content as string, '');
     }
     if (firstUser && id) break;
   }
@@ -66,7 +66,7 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
         const h = await head(f.file);
         const id = h.id || path.basename(f.file, '.jsonl');
         if (seen.has(id)) continue;
-        const title = makeTitle(h.title || h.firstUser, '');
+        const title = makeTitle(h.title, '') || h.firstUser;
         if (!title) continue;
         seen.add(id);
         const projectDir = path.basename(path.dirname(f.file));

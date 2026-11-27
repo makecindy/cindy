@@ -67,7 +67,7 @@ function lineMessages(obj: Record<string, unknown>, lineNo: number): NormalizedM
   return [];
 }
 
-async function head(file: string): Promise<{ title: string; cwd: string; firstAt: number; firstUser: string; id: string }> {
+async function head(file: string): Promise<{ title: string; cwd: string; firstAt: number; id: string }> {
   let customTitle = '';
   let topic = '';
   let aiTitle = '';
@@ -90,10 +90,10 @@ async function head(file: string): Promise<{ title: string; cwd: string; firstAt
     firstAt = firstAt || toMs(obj.timestamp);
     if (!firstUser) {
       const user = lineMessages(obj, lineNo).find((m) => m.role === 'user' && typeof m.content === 'string' && m.content.trim());
-      if (user) firstUser = user.content as string;
+      if (user) firstUser = makeTitle(user.content as string, '');
     }
   }
-  return { title: firstNonEmpty(customTitle, topic, aiTitle), cwd, firstAt, firstUser, id };
+  return { title: makeTitle(customTitle, '') || makeTitle(topic, '') || makeTitle(aiTitle, '') || firstUser, cwd, firstAt, id };
 }
 
 async function list(ctx: ScanContext): Promise<SourceListResult> {
@@ -115,7 +115,7 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
         const h = await head(f.file);
         const id = h.id || path.basename(f.file, '.jsonl');
         if (seen.has(id)) continue;
-        const title = makeTitle(h.title, '') || makeTitle(h.firstUser, '');
+        const title = h.title;
         if (!title) continue;
         seen.add(id);
         sessions.push({

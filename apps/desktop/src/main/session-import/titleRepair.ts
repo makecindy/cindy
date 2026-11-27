@@ -13,9 +13,11 @@
 
 import type Database from 'better-sqlite3';
 
+import { createLogger } from '../logger.js';
 import { isTimestampTitle, makeTitle } from './sources/common.js';
 
 const USER_MESSAGES_TO_TRY = 3;
+const log = createLogger('localDb/importedTitleRepair');
 
 interface CandidateRow {
   id: string;
@@ -77,4 +79,15 @@ export function repairImportedSessionTitles(db: Database.Database): number {
     }
     return changed;
   })();
+}
+
+/** 两种开库入口都在 schema 就绪后调用。标题修复失败不阻止打开任务。 */
+export function repairImportedSessionTitlesAtStartup(db: Database.Database): void {
+  try {
+    const repaired = repairImportedSessionTitles(db);
+    if (repaired > 0) log.info(JSON.stringify({ event: 'importedTitleRepair', repaired }));
+  } catch (err) {
+    const code = (err as { code?: unknown } | null)?.code;
+    log.warn(JSON.stringify({ event: 'importedTitleRepairFailed', code: typeof code === 'string' ? code : 'UNKNOWN' }));
+  }
 }

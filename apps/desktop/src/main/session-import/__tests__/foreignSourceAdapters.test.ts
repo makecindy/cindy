@@ -194,7 +194,8 @@ describe('foreign source adapters', () => {
   it('Qwen Code follows the active branch so rewound turns are dropped', async () => {
     const base = { sessionId: 'q', cwd: project(), version: '1' };
     await put(`.qwen/projects/-work-my-app/chats/${'1'.repeat(8)}-0000-0000-0000-000000000000.jsonl`, [
-      { ...base, uuid: 'u1', parentUuid: null, timestamp: '2026-10-30T10:00:00Z', type: 'user', message: { role: 'user', parts: [{ text: 'hello' }] } },
+      { ...base, uuid: 'injected', parentUuid: null, timestamp: '2026-10-30T09:59:59Z', type: 'user', message: { role: 'user', parts: [{ text: '<system-reminder data-role="user-context">Injected context</system-reminder>' }] } },
+      { ...base, uuid: 'u1', parentUuid: 'injected', timestamp: '2026-10-30T10:00:00Z', type: 'user', message: { role: 'user', parts: [{ text: 'hello' }] } },
       { ...base, uuid: 'a1', parentUuid: 'u1', timestamp: '2026-10-30T10:00:01Z', type: 'assistant', message: { role: 'model', parts: [{ text: 'thinking…', thought: true }, { functionCall: { id: 'c1', name: 'ls', args: {} } }] } },
       { ...base, uuid: 't1', parentUuid: 'a1', timestamp: '2026-10-30T10:00:02Z', type: 'tool_result', message: { role: 'user', parts: [{ functionResponse: { id: 'c1', name: 'ls', response: { output: 'a b' } } }] } },
       { ...base, uuid: 'u2', parentUuid: 't1', timestamp: '2026-10-30T10:01:00Z', type: 'user', message: { role: 'user', parts: [{ text: 'rewound question' }] } },
@@ -206,6 +207,7 @@ describe('foreign source adapters', () => {
     await put('.qwen/projects/-work-my-app/subagents/q/agent-1.jsonl', [{ uuid: 'z' }]);
     const { listed, messages } = await readAll(qwenAdapter);
     expect(listed.internalCount).toBe(1);
+    expect(listed.sessions.map((s) => s.title)).toEqual(['hello']);
     expect(listed.sessions[0]!.cwd).toBe(project());
     expect(brief(Object.values(messages)[0]!)).toEqual([
       'user:hello',

@@ -52,7 +52,7 @@ import { reconcileStrandedOrcaLeads } from './orcaStrandedLeadReconcile';
 import { initializeCodexHistoryPromptState } from './codexHistoryPromptInit';
 import { dialogueWorkspaceRoots } from './dialogueWorkspace';
 import { repairManagedDialogueWorkspaceSessions } from './managedDialogueWorkspaceRepair';
-import { repairImportedSessionTitles } from '../session-import/titleRepair';
+import { repairImportedSessionTitlesAtStartup } from '../session-import/titleRepair';
 import * as schema from './schema';
 import { loadSqliteVec, resetSqliteVecState } from './sqliteVecLoader';
 import {
@@ -494,17 +494,7 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
     );
   }
 
-  // 较早导入的任务把注入的上下文当成了标题（例如 `<system-reminder data-role=…`），按已导入的
-  // 第一条用户消息改回来；用户改过名的、非导入的任务不动。见 session-import/titleRepair.ts。
-  try {
-    const repaired = repairImportedSessionTitles(db);
-    if (repaired > 0) {
-      log.info(JSON.stringify({ event: 'localDb.ensureReady.importedTitleRepair', userId, dbPath: filePath, repaired }));
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    log.warn(JSON.stringify({ event: 'localDb.ensureReady.importedTitleRepairFailed', userId, dbPath: filePath, message }));
-  }
+  repairImportedSessionTitlesAtStartup(db);
 
   try {
     initializeCodexHistoryPromptState(db);
