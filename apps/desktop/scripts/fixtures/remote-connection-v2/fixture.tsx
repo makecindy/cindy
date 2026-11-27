@@ -117,13 +117,15 @@ function scenario(name: string): { devices: Device[]; links: Link[]; relayRttMs:
       relayRttMs: 21,
     };
   }
-  if (name === 'relay-below') {
+  if (name === 'relay-below' || name === 'relay-below-long-name') {
     // 七台直连拆成两组，左边直连在上、两台经中转在下，中转点远在这台电脑下方，
     // 这台电脑到中转站那段线很陡;中转往返只有个位数。
-    const devices: Device[] = [SELF];
+    const devices: Device[] = [name === 'relay-below-long-name'
+      ? { ...SELF, name: 'Conference Room Editing Workstation', selfName: 'Conference Room Editing Workstation' }
+      : SELF];
     const links: Link[] = [];
     const direct = [
-      ['design', 'Design Mac', 'darwin', 1], ['office', 'Office Mac', 'darwin', 5], ['studio', 'Studio Mac', 'darwin', 1],
+      ['design', 'Design Mac', 'darwin', 1], ['office', 'Office Mac', 'darwin', 5], ['workshop', 'Workshop Mac', 'darwin', 1],
       ['laptop', 'Spare MacBook', 'darwin', 260], ['work-pc', 'Work PC', 'win32', 9], ['vm', 'Linux VM', 'linux', 354],
     ] as const;
     for (const [id, name, platform, rtt] of direct) {

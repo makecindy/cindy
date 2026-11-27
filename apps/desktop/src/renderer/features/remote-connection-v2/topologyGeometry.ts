@@ -231,7 +231,7 @@ export interface PathSample {
   angle: number;
 }
 
-function cubicAt(s: LineShape, t: number): Point {
+export function cubicAt(s: LineShape, t: number): Point {
   const u = 1 - t;
   const a = u * u * u;
   const b = 3 * u * u * t;

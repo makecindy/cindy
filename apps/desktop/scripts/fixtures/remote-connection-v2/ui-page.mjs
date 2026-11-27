@@ -34,6 +34,11 @@ export default {
       storage: V2_ON,
       viewport: { width: 1400, height: 1000 },
     },
+    'relay-below-long-name': {
+      about: 'A long computer name beside the steep relay line leaves the transport label by the relay point, away from the name',
+      storage: V2_ON,
+      viewport: { width: 1400, height: 1000 },
+    },
     'self-device-link': {
       about: 'Agent-Net switch on, but this computer runs on Device Link this time: Device Link under its name, in its card and on every peer',
       storage: V2_ON,
@@ -237,7 +242,9 @@ export default {
     const agentNet = await ui.t('settings.remoteControl.v2.protocol.agentNet');
     const deviceLink = await ui.t('settings.remoteControl.v2.protocol.deviceLink');
     const selfProtocol = ui.case === 'self-device-link' ? deviceLink : agentNet;
-    const hub = page.getByRole('button', { name: `Studio Mac · ${selfProtocol}`, exact: true });
+    const hasLongName = ui.case === 'relay-below-long-name';
+    const selfName = hasLongName ? 'Conference Room Editing Workstation' : 'Studio Mac';
+    const hub = page.getByRole('button', { name: `${selfName} · ${selfProtocol}`, exact: true });
     await hub.waitFor();
     const topology = page.locator('div.select-none').filter({ has: hub });
     // 2026-11-18 用户反馈:中转站的字写在圆点下面、朝中间排开,和这台电脑的名字、连接方式挤成一团。
@@ -245,7 +252,8 @@ export default {
     // 同日用户要求：中转站写出协议，以及经中转的数据走 UDP 还是 WS(Agent-Net 两种都可能,Device Link 只有 WS),
     // 往返是那条路的。三行：名字 / 协议 /「UDP · 25 ms」;读屏名字是「名字 · 协议 · 走法 · 往返」。
     const relayName = await ui.t('settings.remoteControl.v2.relay.official');
-    const relayRttValue = ui.case === 'many' ? 22 : ui.case === 'relay-below' ? 9 : 25;
+    const relayBelow = ui.case === 'relay-below' || hasLongName;
+    const relayRttValue = ui.case === 'many' ? 22 : relayBelow ? 9 : 25;
     const relayRtt = await ui.t('settings.remoteControl.v2.ms', { value: relayRttValue });
     const relayTransport = await ui.t(ui.case === 'self-device-link' || ui.case === 'fleet' || ui.case === 'narrow-fleet'
       ? 'settings.remoteControl.v2.relayTransport.websocket' : 'settings.remoteControl.v2.relayTransport.udp');
@@ -269,12 +277,13 @@ export default {
       // 2026-11-27 用户要求：这台电脑到中转那一段的走法写在这台电脑到中转站的线上，中转点上方只剩名字和协议;
       // 最窄的设置页那段线放不下，仍是中转点上方第三行。
       const relayPath = `${relayTransport} · ${relayRtt}`;
-      const pathOnTrunk = ui.case !== 'narrow-relay' && ui.case !== 'narrow-fleet';
+      const pathOnTrunk = ui.case !== 'narrow-relay' && ui.case !== 'narrow-fleet' && !hasLongName;
       const labels = [];
       for (const el of await page.getByText(relayName, { exact: true }).all()) {
         const label = el.locator('..');
         const box = await label.boundingBox();
         if (box && Math.abs(box.x + box.width / 2 - dotX) < 80 && Math.abs(box.y + box.height / 2 - dotBox.y) < 80) {
+          if (hasLongName) assert.equal(await label.getByText(relayPath, { exact: true }).count(), 1, 'the trunk label must clear the long computer name');
           labels.push({ box, label, lines: [
             await el.boundingBox(),
             await label.getByText(selfProtocol, { exact: true }).boundingBox(),
@@ -321,7 +330,7 @@ export default {
       // 细环按圆算:字的每一行离圆心最近的点都要在环外。
       const ringY = hubBox.y + hubBox.height / 2;
       const inRing = (a) => Math.hypot(Math.min(Math.max(hubX, a.x), a.x + a.width) - hubX, Math.min(Math.max(ringY, a.y), a.y + a.height) - ringY) < 36;
-      const blockers = [['name', await below('Studio Mac')], ['protocol', await below(selfProtocol)], ['relay point', dotBox]];
+      const blockers = [['name', await below(selfName)], ['protocol', await below(selfProtocol)], ['relay point', dotBox]];
       for (const line of lines) {
         assert.ok(!inRing(line), 'relay label overlaps the ring');
         for (const [what, box] of blockers) assert.ok(!overlaps(line, box), `relay label overlaps ${what}`);
@@ -343,7 +352,7 @@ export default {
         assert.ok(await trunk.evaluate((el) => [el, ...el.children].every((part) => part.scrollWidth <= part.clientWidth)), 'relay path on the line is truncated');
       }
       // 只有中转站整个落在这台电脑的字下面时(split-direct),字才写到圆点下面。
-      if (ui.case === 'split-direct' || ui.case === 'relay-below') assert.ok(relayLabel.y >= dotBox.y + dotBox.height, 'relay label under the relay point');
+      if (ui.case === 'split-direct' || relayBelow) assert.ok(relayLabel.y >= dotBox.y + dotBox.height, 'relay label under the relay point');
       else assert.ok(relayLabel.y + relayLabel.height <= dotBox.y, 'relay label above the relay point');
     }
     const hubCardStatus = `${await ui.t('settings.devices.linkStatus.online')} · ${relayTransport} · ${await ui.t('settings.remoteControl.v2.ms', { value: 25 })}`;
