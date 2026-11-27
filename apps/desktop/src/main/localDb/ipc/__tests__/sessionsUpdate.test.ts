@@ -2922,4 +2922,68 @@ describe('task snooze persistence', () => {
     await expect(invokePatchMeta('codex-local', { snoozedUntil })).rejects.toThrow();
     expect(h.sqlite!.prepare('SELECT snoozed_until AS until FROM sessions WHERE id = ?').get('codex-local')).toEqual({ until: null });
   });
+
+  // 2026-11-27 回归：ACP 任务切入智能路由或从路由切到 ACP 后，broadcastSessionRuntimeProjection
+  // 与 createSessionRuntimeProjector 此前对 agent_kind='acp' 早退，导致持续托管提示不出现/不消失。
+  it('broadcasts and projects modelGroupBinding updates for ACP sessions without inventing built-in runtime fields', async () => {
+    const sessionId = 'acp-managed';
+    h.sqlite!.prepare(
+      `INSERT INTO sessions (id, title, status, agent_kind, model, provider_id, created_at, updated_at)
+       VALUES (?, 'ACP task', 'active', 'acp', 'default', 'acp-plugin:echo:echo', 1, 1)`,
+    ).run(sessionId);
+    const activeBinding = {
+      selection: { type: 'route' as const, id: 'r-openai' },
+      routeName: 'OpenAI 合并',
+      autoSwitch: true,
+      pendingSwitch: true as const,
+    };
+    let currentBinding: typeof activeBinding | null = activeBinding;
+    const projectModelGroupBinding = vi.fn(
+      (_id: string, _target: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null }) =>
+        currentBinding,
+    );
+    const projection = createSessionRuntimeProjection({
+      broadcastSessionPatched,
+      projectModelGroupBinding,
+    });
+    const projector = createSessionRuntimeProjector({
+      projectScheduledPreferences: projection.projectScheduledPreferences,
+      runtimePluginsSelected: () => false,
+      projectModelGroupBinding: (id, target) => projectModelGroupBinding(id, target) ?? undefined,
+    });
+    setSessionRuntimeProjector(projector);
+    try {
+      await projection.broadcastSessionRuntimeProjection(sessionId);
+      expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', {
+        sessionId,
+        patch: { modelGroupBinding: activeBinding },
+      });
+      const row = await sessionQueries.selectSessionWithCount(getDbClient().drizzle, sessionId);
+      const mapped = sessionToCamel(row!);
+      expect(mapped.agentKind).toBe('acp');
+      expect(mapped.runtimeEffective).toBeUndefined();
+      expect(mapped.modelGroupBinding).toEqual(activeBinding);
+
+      // 解除托管或从路由切到 ACP 后必须显式广播 modelGroupBinding: null 清除界面提示。
+      currentBinding = null;
+      await projection.broadcastSessionRuntimeProjection(sessionId);
+      expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', {
+        sessionId,
+        patch: { modelGroupBinding: null },
+      });
+    } finally {
+      setSessionRuntimeProjector(null);
+    }
+  });
+
+  // 2026-11-27 回归：globalMemoryTidyRuntime 曾向 broadcastSessionPatched 传数字 updatedAt，
+  // 落进 renderer 后触发 useCCSessionsAllStatuses 的 b.updatedAt.localeCompare 崩溃。
+  it('normalizes numeric updatedAt timestamps to ISO strings in broadcastSessionPatched', () => {
+    const ts = 1_786_500_050_000;
+    broadcastSessionPatched('cc-local', { status: 'archived', updatedAt: ts });
+    expect(h.tapWindowBroadcast).toHaveBeenLastCalledWith('local-db:sessions:patched', {
+      sessionId: 'cc-local',
+      patch: { status: 'archived', updatedAt: new Date(ts).toISOString() },
+    });
+  });
 });

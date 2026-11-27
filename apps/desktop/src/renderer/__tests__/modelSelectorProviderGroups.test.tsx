@@ -1176,4 +1176,102 @@ describe('ModelSelector composer pill 引擎小标', () => {
     expect(trigger.querySelector('[data-composer-engine-mark]')).toBeNull();
     expect(trigger.textContent).toContain('Codex');
   });
+
+  // 2026-11-27 回归：草稿指向被合并进供应商路由的分享/远端成员、但 draft.modelGroup 为空时，
+  // 按钮与选择器必须与发送期的 implicitSourceRouteSelection 一致，不能先提示「Agent 在分享上运行」
+  // 发出后又被智能路由切到本地来源；用户隐藏该路由后恢复按原分享来源展示。
+  it('shows routeDecides on trigger when draft holds a shared member of an active source route without explicit active group', () => {
+    const shareDeviceId = 'share:yan-1';
+    const makeConfig = (hidden = false) => ({
+      sourceRoutes: [{
+        id: 'auto:openai',
+        name: 'OpenAI-local',
+        strategy: 'expiring' as const,
+        auto: true as const,
+        ...(hidden ? { hidden: true as const } : {}),
+        sources: [{ providerId: 'openai-local' }, { providerId: 'openai', agentDeviceId: shareDeviceId }],
+      }],
+      routes: [{
+        id: 'src:gpt-6.1-sol',
+        name: 'GPT-6.1-Sol',
+        strategy: 'expiring' as const,
+        parent: { id: 'auto:openai', name: 'OpenAI-local' },
+        ...(hidden ? { hidden: true as const } : {}),
+        candidates: [
+          { agentKind: 'codex' as const, providerId: 'openai-local', model: 'gpt-6.1-sol' },
+          { agentKind: 'codex' as const, providerId: 'openai', model: 'gpt-6.1-sol', agentDeviceId: shareDeviceId },
+        ],
+      }],
+    });
+    const sharedDraftProps = {
+      modelId: 'gpt-6.1-sol',
+      currentProviderId: 'openai',
+      agentDevice: { deviceId: shareDeviceId, name: '来自 yan 的分享' },
+      remoteAgent: {
+        devices: [{ deviceId: shareDeviceId, name: '来自 yan 的分享', online: true }],
+        selectedDeviceId: shareDeviceId,
+        onSelectLocal: vi.fn(),
+        onSelectDevice: vi.fn(),
+      },
+    };
+    const first = renderSelector({
+      ...sharedDraftProps,
+      vendorKey: 'codex',
+      modelGroups: { config: makeConfig(false), active: null, onSelect: vi.fn(), onAttach: vi.fn() },
+    });
+    expect(triggerOf().getAttribute('title')).toContain('modelGroups.picker.routeDecides');
+    expect(triggerOf().getAttribute('title')).not.toContain('来自 yan 的分享');
+    first.unmount();
+
+    renderSelector({
+      ...sharedDraftProps,
+      vendorKey: 'codex',
+      modelGroups: { config: makeConfig(true), active: null, onSelect: vi.fn(), onAttach: vi.fn() },
+    });
+    expect(triggerOf().getAttribute('title')).toContain('newChat.modelSelector.trigger.agentDevice');
+    expect(triggerOf().getAttribute('title')).not.toContain('modelGroups.picker.routeDecides');
+  });
+
+  // 2026-11-27 回归：草稿处于未隐藏的供应商路由下时，即使当前记着的单个成员被标记 sourceDisconnected，
+  // 发送时仍由路由切到其他可用成员，按钮不应误报整条「已断开」错误态。
+  it('suppresses false disconnected badge on trigger when draft is covered by an active source route', () => {
+    const config = {
+      sourceRoutes: [{
+        id: 'auto:openai',
+        name: 'OpenAI',
+        strategy: 'expiring' as const,
+        auto: true as const,
+        sources: [{ providerId: 'openai' }, { providerId: 'byok-1' }],
+      }],
+      routes: [{
+        id: 'src:gpt-6',
+        name: 'GPT-6',
+        strategy: 'expiring' as const,
+        parent: { id: 'auto:openai', name: 'OpenAI' },
+        candidates: [
+          { agentKind: 'codex' as const, providerId: 'openai', model: 'gpt-6' },
+          { agentKind: 'codex' as const, providerId: 'byok-1', model: 'gpt-6' },
+        ],
+      }],
+    };
+    const active = renderSelector({
+      modelId: 'gpt-6',
+      currentProviderId: 'openai',
+      vendorKey: 'codex',
+      sourceDisconnected: true,
+      modelGroups: { config, active: { type: 'route', id: 'src:gpt-6' }, onSelect: vi.fn(), onAttach: vi.fn() },
+    });
+    expect(triggerOf().getAttribute('title')).not.toContain('已断开');
+    expect(triggerOf().getAttribute('title')).toContain('modelGroups.picker.routeDecides');
+    active.unmount();
+
+    renderSelector({
+      modelId: 'gpt-6',
+      currentProviderId: 'openai',
+      vendorKey: 'codex',
+      sourceDisconnected: true,
+      modelGroups: { config: { ...config, sourceRoutes: [{ ...config.sourceRoutes[0], hidden: true }], routes: [{ ...config.routes[0], hidden: true }] }, active: null, onSelect: vi.fn(), onAttach: vi.fn() },
+    });
+    expect(screen.getByRole('button').getAttribute('title')).toContain('已断开');
+  });
 });

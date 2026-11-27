@@ -266,35 +266,62 @@ export function peekModelGroupSessionBinding(sessionId: string): ModelGroupSessi
   return syncCache.state.bindings.get(sessionId) ?? null;
 }
 
+export interface ModelGroupSessionTarget {
+  agentKind?: string | null;
+  providerId?: string | null;
+  model?: string | null;
+  agentDeviceId?: string | null;
+}
+
+function targetMatchesPickedKey(pickedKey: string, target?: ModelGroupSessionTarget | null): boolean {
+  if (!target || !target.providerId || !target.model) return false;
+  const kind = target.agentKind === 'claude-code' ? 'cc' : target.agentKind;
+  if (kind !== 'cc' && kind !== 'codex' && kind !== 'pi' && kind !== 'acp') return false;
+  return modelGroupCandidateKey({
+    agentKind: kind as ModelGroupAgentKind,
+    providerId: target.providerId,
+    model: target.model,
+    agentDeviceId: target.agentDeviceId || undefined,
+  }) === pickedKey;
+}
+
+/** 当前任务的智能路由绑定是否正是为了切到这个目标（用于发前落地 pending intent 时保留绑定）。 */
+export function modelGroupBindingMatchesTarget(
+  sessionId: string,
+  target?: ModelGroupSessionTarget | null,
+): boolean {
+  const entry = peekModelGroupSessionBinding(sessionId);
+  return !!entry && targetMatchesPickedKey(entry.pickedKey, target);
+}
+
 export function projectModelGroupSessionBinding(params: {
   binding: ModelGroupSessionBinding | null;
   config: ModelGroupsConfig;
-  current?: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null } | null;
-  pending?: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null } | null;
+  current?: ModelGroupSessionTarget | null;
+  pending?: ModelGroupSessionTarget | null;
 }): ModelGroupSessionBindingView | null {
   const { binding: entry, config, current, pending } = params;
   if (!entry) return null;
   const route = findModelGroupRoute(config, entry.selection);
   if (!route) return null;
-  const matches = (target?: { agentKind?: string | null; providerId?: string | null; model?: string | null; agentDeviceId?: string | null } | null) => {
-    if (!target || !target.providerId || !target.model) return false;
-    const kind = target.agentKind === 'claude-code' ? 'cc' : target.agentKind;
-    if (kind !== 'cc' && kind !== 'codex' && kind !== 'pi' && kind !== 'acp') return false;
-    return modelGroupCandidateKey({
-      agentKind: kind as ModelGroupAgentKind,
-      providerId: target.providerId,
-      model: target.model,
-      agentDeviceId: target.agentDeviceId || undefined,
-    }) === entry.pickedKey;
-  };
-  const matchedCurrent = matches(current);
-  const matchedPending = !matchedCurrent && matches(pending);
-  if (!matchedCurrent && !matchedPending) return null;
+  const matchedCurrent = targetMatchesPickedKey(entry.pickedKey, current);
+  // 已登记下一轮切换意图时，以待切目标为准：手动改切到非路由成员(含 ACP)立即退出托管展示，
+  // 而从 ACP/其他引擎切入路由成员则在发前即显示持续托管(带 pendingSwitch)。
+  if (pending) {
+    if (!targetMatchesPickedKey(entry.pickedKey, pending)) return null;
+    return {
+      selection: entry.selection,
+      routeName: route.parent?.name ?? route.name,
+      ...(route.parent ? { parentId: route.parent.id, parentName: route.parent.name, isSourceRoute: true as const } : {}),
+      autoSwitch: modelGroupAutoSwitchOn(route),
+      ...(!matchedCurrent ? { pendingSwitch: true as const } : {}),
+    };
+  }
+  if (!matchedCurrent) return null;
   return {
     selection: entry.selection,
     routeName: route.parent?.name ?? route.name,
     ...(route.parent ? { parentId: route.parent.id, parentName: route.parent.name, isSourceRoute: true as const } : {}),
     autoSwitch: modelGroupAutoSwitchOn(route),
-    ...(matchedPending ? { pendingSwitch: true as const } : {}),
   };
 }

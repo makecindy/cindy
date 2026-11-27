@@ -350,7 +350,7 @@ async function archiveSessionInDb(sessionId: string): Promise<boolean> {
     .where(and(eq(sessions.id, sessionId), eq(sessions.status, 'active')))
     .run()) as { changes?: number } | undefined;
   if ((result?.changes ?? 0) > 0) {
-    broadcastSessionPatched(sessionId, { status: 'archived', updatedAt: now });
+    broadcastSessionPatched(sessionId, { status: 'archived', updatedAt: new Date(now).toISOString() });
     return true;
   }
   return false;

@@ -11851,9 +11851,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   const agentSwitchPending = createPendingAgentSwitchRegistry();
   readPendingModelGroupTarget = (sessionId) => {
     const intent = agentSwitchPending.get(sessionId);
-    if (!intent || intent.targetAgentKind === 'acp') return null;
+    if (!intent) return null;
     return {
-      agentKind: makerToDbAgentKind(intent.targetAgentKind),
+      agentKind: intent.targetAgentKind === 'acp' ? 'acp' : makerToDbAgentKind(intent.targetAgentKind),
       providerId: intent.providerId ?? null,
       model: intent.model,
       agentDeviceId: intent.targetAgentDeviceId ?? null,
@@ -11888,6 +11888,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       agentSwitchIntent: null,
       agentSwitchIntentCanceled: true,
     });
+    if (peekModelGroupSessionBinding(sessionId)) {
+      void broadcastSessionRuntimeProjection(sessionId).catch(() => {});
+    }
   };
 
   // session-agent-switch:lazy-create 前以 DB 行为真源校正 createOpts。切换后
@@ -11990,6 +11993,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onPendingSwitchChanged: (sessionId, intent) => {
       if (intent) recordUserSessionRuntimeMutation(sessionId);
       broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
+      if (peekModelGroupSessionBinding(sessionId)) {
+        void broadcastSessionRuntimeProjection(sessionId).catch(() => {});
+      }
     },
     // 用户选择落地 → 给 IM 任务打「脱离跟随」标记(同值重选也永久脱离, PR #5155)。
     onUserRouteSelectionLanded: async (sessionId) => {

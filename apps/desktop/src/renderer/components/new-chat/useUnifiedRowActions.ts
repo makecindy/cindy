@@ -117,6 +117,14 @@ export interface UnifiedRowActionsOptions {
    * 默认关:统一面板被对话之外的入口共用,那些选择是配置动作;只有对话侧两个入口开启。
    */
   recordRecentUsage?: boolean;
+  /**
+   * 把面板内的虚拟供应商身份(如合并供应商路由 `sroute:`)映射回要落盘到收藏 / 最近的真实成员身份。
+   * 返回 null 或未提供时保持原身份。
+   */
+  resolveStoredIdentity?: (
+    providerId: string,
+    modelId: string,
+  ) => { providerId: string; modelId: string } | null;
   sessionEngineFilter?:
     | {
         currentAgent: AgentKind;
@@ -449,9 +457,11 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
     const ownerAtSelect = getRecentModelsOwner();
     const commit = (applied: void | boolean): void | boolean => {
       if (applied !== false && getRecentModelsOwner() === ownerAtSelect) {
+        const rawModelId = entry.enginePreferenceId ?? entry.modelId;
+        const stored = options.resolveStoredIdentity?.(entry.providerId, rawModelId);
         recordRecentModel({
-          providerId: entry.providerId,
-          modelId: entry.enginePreferenceId ?? entry.modelId,
+          providerId: stored?.providerId ?? entry.providerId,
+          modelId: stored?.modelId ?? rawModelId,
           agent: config.engine,
           ...(config.effort ? { effort: config.effort } : {}),
           // 三态：`'ultrafast'` 必须原样存，写成 `true` 会让「最近」里再应用变成普通 Fast。
@@ -1184,9 +1194,11 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
 
   const addFavorite: UnifiedRowActions['addFavorite'] = (anchor, config) => {
     if (interactionDisabled) return;
+    const rawModelId = config.storedModelId ?? anchor.modelId;
+    const stored = options.resolveStoredIdentity?.(anchor.providerId, rawModelId);
     const result = favorites.add({
-      providerId: anchor.providerId,
-      modelId: config.storedModelId ?? anchor.modelId,
+      providerId: stored?.providerId ?? anchor.providerId,
+      modelId: stored?.modelId ?? rawModelId,
       agent: config.engine,
       ...(config.effort ? { effort: config.effort } : {}),
       ...(config.fast ? { fast: config.fast } : {}),

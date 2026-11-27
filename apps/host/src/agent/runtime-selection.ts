@@ -128,6 +128,7 @@ import {
   type RunModelGroupBeforeSendSessionRow,
 } from '../../../desktop/src/main/model-groups/applyTurnRouting.js';
 import type { ModelGroupHandlersSessionTarget } from '../../../desktop/src/main/model-groups/handlersCore.js';
+import { peekModelGroupSessionBinding } from '../../../desktop/src/main/model-groups/sessionBindings.js';
 import { explicitPorts } from './explicit-ports.ts';
 
 interface HostPendingSwitchOptions {
@@ -493,6 +494,9 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     onPendingSwitchChanged: (sessionId, intent) => {
       if (intent) recordUserSessionRuntimeMutation(sessionId);
       broadcastSessionPatched(sessionId, { agentSwitchIntent: intent });
+      if (peekModelGroupSessionBinding(sessionId)) {
+        void broadcastSessionRuntimeProjection(sessionId).catch(() => {});
+      }
     },
     // The desktop also marks an IM task as detached from its channel default; the Host has no IM.
     onUserRouteSelectionLanded: async sessionId => { await updateScheduledPreference(sessionId, null); },
@@ -1061,9 +1065,9 @@ export function createHostRuntimeSelection(deps: HostRuntimeSelectionDeps) {
     },
     readPendingTarget(sessionId: string): ModelGroupHandlersSessionTarget | null {
       const intent = pendingSwitches.get(sessionId);
-      if (!intent || intent.targetAgentKind === 'acp') return null;
+      if (!intent) return null;
       return {
-        agentKind: makerToDbAgentKind(intent.targetAgentKind),
+        agentKind: intent.targetAgentKind === 'acp' ? 'acp' : makerToDbAgentKind(intent.targetAgentKind),
         providerId: intent.providerId ?? null,
         model: intent.model,
         agentDeviceId: intent.targetAgentDeviceId ?? null,

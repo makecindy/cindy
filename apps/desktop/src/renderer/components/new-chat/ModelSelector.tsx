@@ -87,6 +87,7 @@ import { matchPluginModels, PluginModelIcon, PluginModelsSection, type PluginMod
 import { useFavoritePluginModelCount } from '@/features/cc-agent/pluginModelFavorites';
 import { MODEL_GROUPS_DEFAULTS } from '../../../shared/modelGroups';
 import {
+  implicitSourceRouteSelection,
   isSourceRouteProviderId,
   withSourceRoutePluginEngines,
   withSourceRouteProviders,
@@ -1495,8 +1496,19 @@ function ModelSelectorContentView({
   const remoteAgentDeviceId = remoteAgent?.selectedDeviceId ?? null;
   // 插件引擎在独立的来源格。浏览从任务所在电脑的目录开始，换内置模型时照常按实际运行位置判断是否要换电脑。
   // 选着供应商路由下的模型时同理：合并后的条目列在任务所在电脑的目录里，从那里开始，不跳到某个成员所在的电脑。
-  const activeSourceRouteAtOpen = (!!modelGroupsProp?.onAttach || !!modelGroupsProp?.onPickMerged) && !!modelGroupsProp.active
-    && modelGroupsProp.config.routes.some((route) => route.id === modelGroupsProp.active?.id && !!route.parent && !route.hidden);
+  // 即使调用方只传入了成员模型而未显式带 active(旧草稿/最近/收藏)，只要命中未隐藏的供应商路由也从宿主目录打开，
+  // 避免 remoteBrowse 停在左栏已被合并隐藏的远程供应商上，点「全部」后出现供应商突然消失的跳变。
+  const effectiveModelGroupsActive = useMemo(() => {
+    if (modelGroupsProp?.active) return modelGroupsProp.active;
+    if (!modelGroupsProp?.onAttach || providersOverride || sshCodex) return null;
+    return implicitSourceRouteSelection(modelGroupsProp.config, {
+      providerId: currentProviderIdProp,
+      model: modelId,
+      agentDeviceId: remoteAgentDeviceId,
+    });
+  }, [modelGroupsProp, providersOverride, sshCodex, currentProviderIdProp, modelId, remoteAgentDeviceId]);
+  const activeSourceRouteAtOpen = (!!modelGroupsProp?.onAttach || !!modelGroupsProp?.onPickMerged) && !!effectiveModelGroupsActive
+    && modelGroupsProp.config.routes.some((route) => route.id === effectiveModelGroupsActive.id && !!route.parent && !route.hidden);
   // 面板里「当前选择」显示在哪份目录里。选着合并条目下的模型时是任务所在电脑的目录(合并后的那一格)：草稿里记的那个
   // 成员可以在别的电脑上或是分享来的，按它算的话，面板会认为当前选择不在眼前这份目录里——不显示选中的行。
   // 只管显示；引擎集合、档位记忆这些仍按草稿实际的运行位置(remoteAgentDeviceId)。
@@ -1658,7 +1670,7 @@ function ModelSelectorContentView({
   const sourceRouteCatalogHostId = remoteAgent?.catalogHostDeviceId ?? homeDeviceId;
   // 成员可以在其他电脑上或是分享来的：读那些位置的目录(与下面列那台模型用的是同一份缓存，不多发请求)。
   const sourceRouteRemoteIds = useMemo(() => [...new Set((homeSourceRouteConfig?.sourceRoutes ?? []).filter((route) => !route.hidden)
-    .flatMap((route) => route.sources.flatMap((source) => (source.agentDeviceId ? [source.agentDeviceId] : []))))], [homeSourceRouteConfig]);
+    .flatMap((route) => route.sources.flatMap((source) => (!source.off && source.agentDeviceId ? [source.agentDeviceId] : []))))], [homeSourceRouteConfig]);
   const sourceRouteRemoteCatalogKeys = useMemo(
     () => sourceRouteRemoteIds.map((id) => modelCatalogKey(id, sourceRouteCatalogHostId) ?? id),
     [sourceRouteRemoteIds, sourceRouteCatalogHostId],
@@ -1668,9 +1680,15 @@ function ModelSelectorContentView({
     const catalog = sourceRouteRemoteCatalogs.get(sourceRouteRemoteCatalogKeys[index]);
     return catalog ? [[id, remoteAgentProviders(catalog.providers)] as const] : [];
   })), [sourceRouteRemoteIds, sourceRouteRemoteCatalogKeys, sourceRouteRemoteCatalogs]);
+  const keepCurrentMember = !modelGroupsProp?.onAttach && !activeSourceRouteAtOpen;
   const sourceRouteCurrent = useMemo(
-    () => ({ providerId: currentProviderIdProp, modelId, agentDeviceId: remoteAgentDeviceId }),
-    [currentProviderIdProp, modelId, remoteAgentDeviceId],
+    () => ({
+      providerId: currentProviderIdProp,
+      modelId,
+      agentDeviceId: remoteAgentDeviceId,
+      keepMember: keepCurrentMember,
+    }),
+    [currentProviderIdProp, modelId, remoteAgentDeviceId, keepCurrentMember],
   );
   // 合并后的条目在面板里的名字：写明是路由、合并了几个来源。
   const sourceRouteLabel = useCallback(
@@ -1687,17 +1705,20 @@ function ModelSelectorContentView({
   );
   const providers = sourceRoutes.providers;
   // 草稿里记的是一个真实成员的模型；它属于某条供应商路由时，面板里选中的是合并后的那个条目。
-  const currentProviderId = sourceRoutes.shownAs(currentProviderIdProp, modelGroupsProp?.active?.id, remoteAgentDeviceId) ?? currentProviderIdProp;
-  const activeSourceRoute = !!modelGroupsProp?.active
-    && (sourceRoutes.shownAs(null, modelGroupsProp.active.id) !== null
-      || sourceRoutePluginEngines.shownAs(null, modelGroupsProp.active.id) !== null);
+  const currentProviderId = sourceRoutes.shownAs(currentProviderIdProp, effectiveModelGroupsActive?.id, remoteAgentDeviceId) ?? currentProviderIdProp;
+  const shownModelId = (isSourceRouteProviderId(currentProviderId)
+    ? sourceRoutes.shownModelId(currentProviderIdProp, modelId, effectiveModelGroupsActive?.id, remoteAgentDeviceId)
+    : null) ?? modelId;
+  const activeSourceRoute = !!effectiveModelGroupsActive
+    && (sourceRoutes.shownAs(null, effectiveModelGroupsActive.id) !== null
+      || sourceRoutePluginEngines.shownAs(null, effectiveModelGroupsActive.id) !== null);
   const attachSourceRoute = modelGroupsProp?.onAttach;
   const pickMerged = modelGroupsProp?.onPickMerged;
   const effectivePluginEngines = useMemo<PluginEnginesPickerProps | undefined>(() => {
     if (!pluginEngines) return undefined;
     const mapSelection = (sel: PluginEnginesPickerProps['active']): PluginEnginesPickerProps['active'] => {
       if (!sel) return null;
-      const shown = sourceRoutePluginEngines.shownAs(sel.providerId, modelGroupsProp?.active?.id, sel.deviceId);
+      const shown = sourceRoutePluginEngines.shownAs(sel.providerId, effectiveModelGroupsActive?.id, sel.deviceId);
       if (!shown) return sel;
       return { ...sel, providerId: shown, deviceId: undefined };
     };
@@ -1710,8 +1731,7 @@ function ModelSelectorContentView({
         const hit = sourceRoutePluginEngines.hit(selection.providerId, selection.modelId);
         if (!hit) return pluginEngines.onSelect(selection);
         if (pickMerged) {
-          pickMerged({ type: 'route', id: hit.route.id }, selection.effort ? { effort: selection.effort } : {});
-          return true;
+          return pickMerged({ type: 'route', id: hit.route.id }, selection.effort ? { effort: selection.effort } : {});
         }
         const applied = pluginEngines.onSelect({
           ...selection,
@@ -1724,17 +1744,41 @@ function ModelSelectorContentView({
         return applied;
       },
     };
-  }, [pluginEngines, sourceRoutePluginEngines, modelGroupsProp?.active?.id, pickMerged, attachSourceRoute]);
+  }, [pluginEngines, sourceRoutePluginEngines, effectiveModelGroupsActive?.id, pickMerged, attachSourceRoute]);
+  const resolveStoredProviderAlias = useCallback(
+    (providerId: string, storedModelId: string) => {
+      if (!sourceRoutesListed) return null;
+      const shown = sourceRoutes.shownAs(providerId, null, null);
+      if (!shown) return null;
+      return {
+        providerId: shown,
+        modelId: sourceRoutes.shownModelId(providerId, storedModelId, null, null) ?? storedModelId,
+      };
+    },
+    [sourceRoutesListed, sourceRoutes],
+  );
+  const resolveStoredIdentity = useCallback(
+    (providerId: string, storedModelId: string) => {
+      if (!isSourceRouteProviderId(providerId)) return null;
+      const hit = sourceRoutes.hit(providerId, storedModelId);
+      if (!hit) return null;
+      // 优先落本机真实成员身份，避免虚拟 sroute: 泄漏到跨设备收藏 / 最近记录里并在取消合并后失效。
+      const localCandidate = !hit.candidate.agentDeviceId
+        ? hit.candidate
+        : hit.route.candidates.find((candidate) => !candidate.off && !candidate.agentDeviceId && candidate.agentKind !== 'acp');
+      return localCandidate ? { providerId: localCandidate.providerId, modelId: localCandidate.model } : null;
+    },
+    [sourceRoutes],
+  );
   const onUnifiedSelect = useMemo<typeof onUnifiedSelectProp>(() => onUnifiedSelectProp && ((selection) => {
     const hit = sourceRoutes.hit(selection.providerId, selection.modelId);
     if (!hit) return onUnifiedSelectProp(selection);
     // 进行中的任务：由路由在任务所在的位置挑成员，不先换到这一行背后的某个成员。
     if (pickMerged) {
-      pickMerged({ type: 'route', id: hit.route.id }, {
+      return pickMerged({ type: 'route', id: hit.route.id }, {
         ...(selection.effort ? { effort: selection.effort } : {}),
         ...(selection.fast ? { fastMode: selection.fast === 'ultrafast' ? 'ultrafast' : true } : {}),
       });
-      return true;
     }
     // 草稿照常记下一个真实成员的模型(显示名、思考深度、Fast 都按它来)，再记下由哪条路由决定这次用哪个成员。
     // 那个成员在另一台电脑上或是分享来的：连同运行位置一起交给草稿，与在那台的格子里选这个模型相同。
@@ -2089,7 +2133,7 @@ function ModelSelectorContentView({
         ? remoteProviderGroups.groups.has(remoteProviderEntryKey(taskDeviceId, providerId))
         : !!localProviderGroups[providerId],
       others,
-      current: currentProviderId ? { deviceId: selectionCatalogDeviceId, providerId: currentProviderId } : null,
+      current: currentProviderIdProp ? { deviceId: remoteAgentDeviceId, providerId: currentProviderIdProp } : null,
       honorRunLocation: true,
     });
     for (const id of folds.hiddenBase) hiddenLocal.add(id);
@@ -2109,7 +2153,7 @@ function ModelSelectorContentView({
     return { hiddenRemote, hiddenLocal, unavailableReasons };
   }, [remoteAgent, deviceId, remoteProviders.providers, remoteAgentDevices, homeDeviceId, homeDeviceProviders.providers,
     localProviders.providers, localProviderGroups, remoteDeviceCatalogs,
-    remoteAgentDeviceId, currentProviderId, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups, t]);
+    remoteAgentDeviceId, currentProviderIdProp, remoteDisable, remoteProviderGroups.hidden, remoteProviderGroups.groups, t]);
   // 有其他电脑可选时，宿主那一段的侧栏另从这份列表建：供应商路由同样作为一个普通供应商列在里面。
   // 放在 remoteAgentGroups 之前，供后者过滤已被合并进供应商路由的远程/共享成员。
   const homeBaseProviders = homeDeviceId ? homeDeviceProviders.providers : localProviders.providers;
@@ -2130,7 +2174,7 @@ function ModelSelectorContentView({
         ? remoteAgentProviders(catalog.providers).filter(
           (provider) => !remoteProviderGroups.hidden.has(remoteProviderEntryKey(device.deviceId, provider.id))
             && (!remoteDisable.isDisabled(device.deviceId, provider.id)
-              || (remoteAgentDeviceId === device.deviceId && currentProviderId === provider.id)),
+              || (remoteAgentDeviceId === device.deviceId && currentProviderIdProp === provider.id)),
         )
         : [];
       // A known share must remain browsable while its first catalog is loading or
@@ -2160,7 +2204,7 @@ function ModelSelectorContentView({
           // 已经并进某条供应商路由的成员不再单列一格。
           !homeSourceRoutes.hidesRemote(device.deviceId, providerId) &&
           ((!hiddenThere.has(providerId) && !remoteDisable.isHidden(device.deviceId, providerId)) ||
-            (remoteAgentDeviceId === device.deviceId && currentProviderId === providerId)),
+            (remoteAgentDeviceId === device.deviceId && currentProviderIdProp === providerId)),
       );
       if (entries.length > 0) return [{ deviceId: device.deviceId, providers: shared, providerIds, entries }];
       // A received share whose provider is listed but has no usable models right now (its owner
@@ -2172,13 +2216,14 @@ function ModelSelectorContentView({
       if (isProviderShareAgentDeviceId(device.deviceId) && shared.length > 0) {
         const listed = shared.map((provider) => provider.id).filter((providerId) =>
           !runLocationFold.hiddenRemote.has(remoteProviderEntryKey(device.deviceId, providerId))
+          && !homeSourceRoutes.hidesRemote(device.deviceId, providerId)
           && ((!hiddenThere.has(providerId) && !remoteDisable.isHidden(device.deviceId, providerId))
-            || (remoteAgentDeviceId === device.deviceId && currentProviderId === providerId)));
+            || (remoteAgentDeviceId === device.deviceId && currentProviderIdProp === providerId)));
         if (listed.length > 0) return [{ deviceId: device.deviceId, providers: shared, providerIds: listed, entries: [] }];
       }
       return [];
     });
-  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold, remoteDisable, remoteAgentDeviceId, currentProviderId,
+  }, [remoteAgentDevices, remoteDeviceCatalogs, remoteProviderGroups, runLocationFold, remoteDisable, remoteAgentDeviceId, currentProviderIdProp,
     receivedShares, homeSourceRoutes]);
   // 面板展开后，凡是左栏已经拿到可选模型的远程/共享来源，立刻在后台预取其 capabilities，
   // 避免用户点击该来源图标时再经历第二段「加载远程模型…」转圈。
@@ -2503,9 +2548,9 @@ function ModelSelectorContentView({
   const activeSourceId = useMemo(
     () =>
       currentAgentKind
-        ? resolveCurrentSourceId(providers, currentProviderId, modelId, currentAgentKind)
+        ? resolveCurrentSourceId(providers, currentProviderId, shownModelId, currentAgentKind)
         : null,
-    [providers, currentProviderId, modelId, currentAgentKind, resolveCurrentSourceId],
+    [providers, currentProviderId, shownModelId, currentAgentKind, resolveCurrentSourceId],
   );
   const currentModelProvider = useMemo(
     () =>
@@ -2514,7 +2559,7 @@ function ModelSelectorContentView({
   );
   const currentCatalogModel =
     currentModelProvider && currentAgentKind
-      ? getModel(currentModelProvider, modelId, currentAgentKind)
+      ? getModel(currentModelProvider, shownModelId, currentAgentKind)
       : undefined;
   const isCurrentModelHidden =
     !browsing &&
@@ -3870,7 +3915,7 @@ function ModelSelectorContentView({
     const withAgentDevice = remoteAgent ? { agentDevice: remoteBrowseDevice } : {};
     // 浏览的不是草稿当前落点的目录时,没有任何一行是「正在用的那一行」;归组的任务在组那一项里显示为正在用的。
     const panelSelection = browsingSelectionCatalog
-      ? { providerId: activeSourceId, modelId }
+      ? { providerId: activeSourceId, modelId: shownModelId }
       : browsingBoundGroupEntry
         ? { providerId: boundEntry!.providerId, modelId }
         : { providerId: null, modelId: '' };
@@ -3996,6 +4041,29 @@ function ModelSelectorContentView({
               ),
           }
         : sessionEngineFilter;
+    const runPickMerged = (
+      routeId: string,
+      effortValue: string | undefined,
+      fastValue: boolean | 'ultrafast' | undefined,
+      dismiss: boolean,
+    ): boolean | Promise<boolean> => {
+      const result = pickMerged!({ type: 'route', id: routeId }, {
+        ...(effortValue ? { effort: effortValue } : {}),
+        ...(fastValue ? { fastMode: fastValue === 'ultrafast' ? 'ultrafast' : true } : {}),
+      });
+      const finish = (applied: void | boolean): boolean => {
+        const ok = applied !== false;
+        if (ok && dismiss) {
+          closeOptionsPanel();
+          onDismiss?.();
+        }
+        return ok;
+      };
+      if (result && typeof result === 'object' && 'then' in result) {
+        return Promise.resolve(result).then(finish, () => false);
+      }
+      return finish(result);
+    };
     const panelSessionEngineFilter =
       baseSessionEngineFilter && pickMerged
         ? {
@@ -4003,24 +4071,14 @@ function ModelSelectorContentView({
             onCrossEngineSelect: (args: Parameters<NonNullable<typeof baseSessionEngineFilter>['onCrossEngineSelect']>[0]) => {
               const hit = sourceRoutes.hit(args.providerId, args.modelId);
               if (hit) {
-                pickMerged({ type: 'route', id: hit.route.id }, {
-                  ...(args.effort ? { effort: args.effort } : {}),
-                  ...(args.fast ? { fastMode: args.fast === 'ultrafast' ? 'ultrafast' : true } : {}),
-                });
-                closeOptionsPanel();
-                onDismiss?.();
-                return true;
+                return runPickMerged(hit.route.id, args.effort || undefined, args.fast, true);
               }
               return baseSessionEngineFilter.onCrossEngineSelect(args);
             },
             onCrossEngineConfigure: (args: Parameters<NonNullable<typeof baseSessionEngineFilter>['onCrossEngineSelect']>[0]) => {
               const hit = sourceRoutes.hit(args.providerId, args.modelId);
               if (hit) {
-                pickMerged({ type: 'route', id: hit.route.id }, {
-                  ...(args.effort ? { effort: args.effort } : {}),
-                  ...(args.fast ? { fastMode: args.fast === 'ultrafast' ? 'ultrafast' : true } : {}),
-                });
-                return true;
+                return runPickMerged(hit.route.id, args.effort || undefined, args.fast, false);
               }
               return baseSessionEngineFilter.onCrossEngineConfigure?.(args) ?? false;
             },
@@ -4165,7 +4223,9 @@ function ModelSelectorContentView({
             deviceId={deviceId}
             providerUsage={providerUsageScope}
             providerGroupUsage={providerGroupUsage}
-            routeUsageMember={sourceRoutes.usageMember}
+            routeUsageMember={remoteAgent ? homeSourceRoutes.usageMember : sourceRoutes.usageMember}
+            resolveStoredProviderAlias={resolveStoredProviderAlias}
+            resolveStoredIdentity={resolveStoredIdentity}
             providers={providers}
             // 等价来源从来源栏与模型分组收起；收藏和最近仍按完整目录解析。
             {...((!remoteAgent || !deviceId || (homeDeviceId && !remoteBrowse)) && runLocationFold.hiddenLocal.size > 0
@@ -4190,8 +4250,8 @@ function ModelSelectorContentView({
             panelWidthFluid={fluidWidth}
             readableRows={readableRows}
             // 选中插件模型或草稿智能路由(非供应商路由、非进行中任务托管)时，普通模型行不再同时显示选中底色。
-            selected={pluginModels?.active || (modelGroups?.active && !activeSourceRoute && !modelGroups.managedMeta) || pluginEngines?.active ? NO_MODEL_SELECTION : panelSelection}
-            selectedFavoriteUid={browsingSelectionCatalog && !pluginModels?.active && !(modelGroups?.active && !activeSourceRoute && !modelGroups.managedMeta) && !pluginEngines?.active
+            selected={pluginModels?.active || (effectiveModelGroupsActive && !activeSourceRoute && !modelGroups?.managedMeta) || pluginEngines?.active ? NO_MODEL_SELECTION : panelSelection}
+            selectedFavoriteUid={browsingSelectionCatalog && !pluginModels?.active && !(effectiveModelGroupsActive && !activeSourceRoute && !modelGroups?.managedMeta) && !pluginEngines?.active
               ? selectedFavoriteUid : null}
             liveAgentKind={
               unifiedSelectionPolicy === 'official' || !browsingLiveCatalog ? null : currentAgentKind
@@ -4321,13 +4381,7 @@ function ModelSelectorContentView({
               if (pickMerged) {
                 const hit = sourceRoutes.hit(providerId, id);
                 if (hit) {
-                  pickMerged({ type: 'route', id: hit.route.id }, {
-                    ...(rowEffortValue ? { effort: rowEffortValue } : {}),
-                    ...(rowConfig.fast ? { fastMode: rowConfig.fast === 'ultrafast' ? 'ultrafast' : true } : {}),
-                  });
-                  closeOptionsPanel();
-                  onDismiss?.();
-                  return true;
+                  return runPickMerged(hit.route.id, rowEffortValue, rowConfig.fast, true);
                 }
               }
               if (relocate) {
@@ -4372,11 +4426,7 @@ function ModelSelectorContentView({
               if (pickMerged) {
                 const hit = sourceRoutes.hit(providerId, id);
                 if (hit) {
-                  pickMerged({ type: 'route', id: hit.route.id }, {
-                    ...(nextEffort ? { effort: nextEffort } : {}),
-                    ...(rowConfig.fast ? { fastMode: rowConfig.fast === 'ultrafast' ? 'ultrafast' : true } : {}),
-                  });
-                  return true;
+                  return runPickMerged(hit.route.id, nextEffort, rowConfig.fast, false);
                 }
               }
               if (relocate) {
@@ -5193,8 +5243,22 @@ export function ModelSelector({
       ? modelSupportsFastMode(triggerActiveProvider, modelId, currentAgentKind)
       : !!currentModel?.supportsFastMode;
   const triggerFastOn = triggerFastSupported ? fastMode ?? false : false;
+  // 选着合并条目下的模型、或进行中的任务正由智能路由持续托管时，画路由角标并在 tooltip 标明所属路由。
+  const effectiveTriggerModelGroup = modelGroups?.active ?? (
+    modelGroups?.onAttach && !providersOverride && !sshCodex
+      ? implicitSourceRouteSelection(modelGroups.config, {
+          providerId: currentProviderId ?? activeSourceId,
+          model: modelId,
+          agentDeviceId: remoteAgent?.selectedDeviceId ?? agentDevice?.deviceId ?? null,
+        })
+      : null
+  );
+  const activeSourceRouteName = modelGroups?.onAttach && effectiveTriggerModelGroup
+    ? modelGroups.config.routes.find((route) => route.id === effectiveTriggerModelGroup.id && !route.hidden)?.parent?.name ?? null
+    : null;
   // 已建任务的断开态保留模型身份；菜单同时提供重新连接与改选其他来源。
-  const showSourceDisconnected = !noSource && sourceDisconnected && !!currentProviderId;
+  // 草稿处于未隐藏的供应商路由下时，单个成员断开由路由在发送时改走其他可用成员，不误报整条断连。
+  const showSourceDisconnected = !noSource && sourceDisconnected && !!currentProviderId && (actualRoute || !activeSourceRouteName);
   // A connected provider lacking this model is unavailable, not signed out.
   const selectedSourceUnavailable = showSourceDisconnected && disconnectedProvider?.connected === true &&
     !!currentAgentKind && chatEligibleSourcesForModel([disconnectedProvider], modelId, currentAgentKind, { includeDisabled: true }).length === 0;
@@ -5256,10 +5320,6 @@ export function ModelSelector({
       })
     : null;
   // Agent 在另一台电脑运行:图标上的信号波纹之外,悬停 / 读屏也要说出是哪台。
-  // 选着合并条目下的模型、或进行中的任务正由智能路由持续托管时，画路由角标并在 tooltip 标明所属路由。
-  const activeSourceRouteName = modelGroups?.onAttach && modelGroups.active
-    ? modelGroups.config.routes.find((route) => route.id === modelGroups.active?.id && !route.hidden)?.parent?.name ?? null
-    : null;
   const activeManagedRouteName = modelGroups?.managedMeta?.routeName ?? null;
   const activeRouteBadgeName = activeSourceRouteName ?? activeManagedRouteName;
   const agentDeviceLabel = activeManagedRouteName

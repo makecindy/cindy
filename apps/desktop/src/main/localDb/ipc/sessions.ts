@@ -545,10 +545,16 @@ export function setSessionSnoozePatchedListener(next: ((sessionId: string) => vo
 
 export function broadcastSessionPatched(
   sessionId: string,
-  patch: Record<string, unknown>,
+  rawPatch: Record<string, unknown>,
   ownerScope?: OwnerScope,
 ): void {
   if (ownerScope !== undefined && !isOwnerScopeCurrent(ownerScope)) return;
+  // Session.updatedAt 对外契约始终是 ISO-8601 字符串；若有内部调用误传 Unix ms 数字，
+  // 在广播入口统一转成 ISO，避免 renderer / device-link 侧把数字合进 Session.updatedAt。
+  const patch =
+    typeof rawPatch.updatedAt === 'number' && Number.isFinite(rawPatch.updatedAt)
+      ? { ...rawPatch, updatedAt: new Date(rawPatch.updatedAt).toISOString() }
+      : rawPatch;
   if (patch.status === 'deleted' || 'sdkSessionId' in patch || 'clearedAt' in patch || 'agentDeviceId' in patch) {
     scheduleNativeHistoryBackupCleanup(sessionId, patch.status === 'deleted');
   }

@@ -234,6 +234,12 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
   };
 }
 
+function sessionUpdatedAtSortKey(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return new Date(value).toISOString();
+  return '';
+}
+
 /**
  * A bounded `all` query lets recent archived history displace active tasks. Keep
  * each status's existing allowance and let sessionsStore own updates / migration.
@@ -244,5 +250,7 @@ export function useCCSessionsAllStatuses(): Session[] {
   const archived = useCCSessions({ includeArchived: 'archived' });
   return useMemo(() => [...new Map(
     [...archived.sessions, ...active.sessions].map(session => [session.id, session]),
-  ).values()].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [active.sessions, archived.sessions]);
+  ).values()].sort((a, b) =>
+    sessionUpdatedAtSortKey(b.updatedAt).localeCompare(sessionUpdatedAtSortKey(a.updatedAt)),
+  ), [active.sessions, archived.sessions]);
 }

@@ -58,7 +58,7 @@ import {
   type DbAgentKind,
   type HandoffSourceMessage,
 } from './agentHandoff.js';
-import { unbindModelGroupSession } from '../model-groups/sessionBindings.js';
+import { modelGroupBindingMatchesTarget, unbindModelGroupSession } from '../model-groups/sessionBindings.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { shouldApplyExclusiveProviderRerouteLive } from '../maker-host/model-route-guard-catalog.js';
 import {
@@ -505,6 +505,8 @@ export interface PendingAgentSwitchIntent {
   localAutomationSwitch?: true;
   /** Set by the host at selection time. Never projected or accepted from IPC. */
   deviceLinkModelSelectionOrigin?: 'owner' | 'scoped';
+  /** Internal only: preserve the task's smart-routing binding when landing this pending intent. */
+  preserveModelGroupBinding?: boolean;
   /** 'acp' = 插件引擎，providerId 必为 acp-plugin:<插件>:<引擎>。 */
   targetAgentKind: EngineKind;
   model: string;
@@ -1151,6 +1153,7 @@ export async function performSessionAgentSwitch(
         ...(confirmedContextWindow !== undefined ? { confirmedContextWindow } : {}),
         ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
         ...(params.configStaged === true ? { configStaged: true } : {}),
+        ...(params.preserveModelGroupBinding === true ? { preserveModelGroupBinding: true } : {}),
       }, params.applyNow === true, params.assertSelectionCurrent, params.beforeMutation);
       // 组选回当前位置并且模型应用真正成功(非 deferred/superseded)时才持久化新绑定；
       // 没落地的调用不应该殊到已纳入组(chatgpt-codex-connector P2, PR #5792 review)。
@@ -1236,6 +1239,9 @@ export async function performSessionAgentSwitch(
       ...((agentDeviceChanges || (!builtinTarget && targetAgentDeviceId !== null)) ? { targetAgentDeviceId } : {}),
     };
     deps.pendingSwitches.set(sessionId, intent);
+    if (!params.configStaged && !params.providerGroupRelocation && !params.scheduledModelSwitch && !params.preserveModelGroupBinding) {
+      unbindModelGroupSession(sessionId);
+    }
     deps.onPendingSwitchChanged?.(sessionId, projectPendingAgentSwitchIntent(intent));
     deps.log.info('agent-switch: intent registered (applies on next send)', {
       sessionId,
@@ -1835,6 +1841,14 @@ export function applyPendingAgentSwitchIfIdle(
     if (!intent) return;
     const live = deps.getLiveSession(sessionId);
     if (live?.isTurnRunning()) return;
+    // 发前落地的意图如果正是智能路由选定并绑定的目标(如从 ACP / 其他引擎切入路由)，
+    // 落地时必须保留绑定，否则第一条消息刚发就把刚建好的持续托管解绑了。
+    const preserveModelGroupBinding = modelGroupBindingMatchesTarget(sessionId, {
+      agentKind: intent.targetAgentKind === 'acp' ? 'acp' : makerToDbAgentKind(intent.targetAgentKind),
+      providerId: intent.providerId ?? null,
+      model: intent.model,
+      agentDeviceId: intent.targetAgentDeviceId ?? null,
+    });
     try {
       if (intent.sameAgentSelection) {
         if (!deps.selectSameAgentModel) throw new Error('model selection apply is unavailable');
@@ -1848,8 +1862,11 @@ export function applyPendingAgentSwitchIfIdle(
         // host registry. Apply only that choice under host authority; retain the
         // captured send fence through preflight and admit before mutation. Keep
         // this admission separate from the guest invoke's settings transaction.
+        const applyIntent = preserveModelGroupBinding
+          ? { ...intent, preserveModelGroupBinding: true }
+          : intent;
         const applySelection = () => deps.selectSameAgentModel!(
-          sessionId, intent, true, undefined, undefined, access, opts?.nextInputChars,
+          sessionId, applyIntent, true, undefined, undefined, access, opts?.nextInputChars,
         );
         const result = await (sharedTask ? runOutsideDeviceLinkInvokeContext(applySelection) : applySelection());
         if (result.deferred && deps.projectDeferredCredentialSwitchIntent?.(sessionId)) {
@@ -1912,6 +1929,7 @@ export function applyPendingAgentSwitchIfIdle(
         // Goal / IM / scheduler 三条直发路径没有该 lazy-create 事务,必须先把新引擎
         // bootstrap 好再拿 live session 发送,否则会继续持有已关闭的旧 session。
         skipBootstrap: opts?.bootstrapAfterSwitch !== true,
+        ...(preserveModelGroupBinding ? { preserveModelGroupBinding: true } : {}),
         applyNow: true,
         signal: opts?.signal,
       });

@@ -384,3 +384,51 @@ it.each(['foo', 'chatgpt/foo'])('stores an exact gateway shortcut but selects wi
     hook.unmount();
   } finally { recent.setRecentModelsOwner(previousOwner); }
 });
+
+// 2026-11-27 回归：在合并供应商路由(sroute:)行上收藏或选中时，经 resolveStoredIdentity 落盘为真实本机成员，
+// 不把虚拟 sroute: 前缀泄漏到跨设备收藏或最近使用里。
+it('persists resolved real member identity instead of virtual sroute: prefix on favorite and recent', async () => {
+  const recent = await import('../state/recentModels');
+  const previousOwner = recent.getRecentModelsOwner();
+  recent.setRecentModelsOwner('sroute-storage-regression');
+  try {
+    const mergedEntry: UnifiedModelEntry = {
+      ...entry,
+      providerId: 'sroute:auto:openai',
+      modelId: 'gpt-6-luna',
+      candidates: ['codex'],
+      recommended: 'codex',
+      nativeAgent: 'codex',
+      capabilities: {
+        codex: {
+          ...config.capability!,
+          agent: 'codex',
+          wireModelId: 'gpt-6-luna',
+          efforts: ['medium', 'high'],
+          supportsFastMode: false,
+          contextWindow: 200000,
+          contextWindowVerified: false,
+        },
+      },
+    };
+    const mergedAnchor: UnifiedAnchor = { kind: 'model', providerId: 'sroute:auto:openai', modelId: 'gpt-6-luna' };
+    const mergedConfig: UnifiedRowConfig = { ...config, agent: 'codex', engine: 'codex', wireModelId: 'gpt-6-luna', effort: 'high' };
+    const add = vi.fn();
+    const onSelect = vi.fn(() => true);
+    const hook = renderActions({
+      recordRecentUsage: true,
+      onSelect,
+      resolveStoredIdentity: (providerId, modelId) =>
+        providerId === 'sroute:auto:openai' ? { providerId: 'openai', modelId } : null,
+      favoriteStore: { get: vi.fn(), add, update: vi.fn(), remove: vi.fn() },
+    });
+    act(() => { hook.result.current.addFavorite(mergedAnchor, mergedConfig); });
+    expect(add).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'openai', modelId: 'gpt-6-luna' }));
+    act(() => { hook.result.current.selectRow(mergedAnchor, mergedConfig, undefined, mergedEntry); });
+    expect(recent.listRecentModels().some((item) => item.providerId === 'openai' && item.modelId === 'gpt-6-luna')).toBe(true);
+    expect(recent.listRecentModels().some((item) => item.providerId.startsWith('sroute:'))).toBe(false);
+    hook.unmount();
+  } finally {
+    recent.setRecentModelsOwner(previousOwner);
+  }
+});

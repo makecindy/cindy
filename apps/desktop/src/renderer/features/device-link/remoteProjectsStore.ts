@@ -1090,7 +1090,19 @@ const actions = {
     }));
     recompute();
   },
-  applyPatch(deviceId: string, sessionId: string, patch: Record<string, unknown>): void {
+  applyPatch(deviceId: string, sessionId: string, rawPatch: Record<string, unknown>): void {
+    // 兼容旧版被控端可能广播数字型 updatedAt：统一转成 ISO 字符串，非法值不覆盖已有字段。
+    const patch = (() => {
+      if (!Object.prototype.hasOwnProperty.call(rawPatch, 'updatedAt')) return rawPatch;
+      if (typeof rawPatch.updatedAt === 'string') return rawPatch;
+      const next = { ...rawPatch };
+      if (typeof rawPatch.updatedAt === 'number' && Number.isFinite(rawPatch.updatedAt)) {
+        next.updatedAt = new Date(rawPatch.updatedAt).toISOString();
+      } else {
+        delete next.updatedAt;
+      }
+      return next;
+    })();
     // Even an unknown row can be deleted/archived while its first GET is in flight.
     // Usage, reply timestamps and list presentation cannot change its route
     // or lifecycle. These activity-only pushes are

@@ -36,6 +36,11 @@ export interface SourceRouteProviders {
    * agentDeviceId = 那个成员所在的位置(另一台电脑或分享)，本机省略。
    */
   shownAs(providerId: string | null | undefined, activeRouteId?: string | null, agentDeviceId?: string | null): string | null;
+  /**
+   * 成员的实际 wire modelId(如 `byok-codex/gpt-6-luna`)在合并条目里对应的代表 modelId(如 `gpt-6-luna`)；
+   * 不属于任何合并条目或成员未并入时返回 null。
+   */
+  shownModelId(providerId: string | null | undefined, modelId: string, activeRouteId?: string | null, agentDeviceId?: string | null): string | null;
   /** 别的位置上的这个供应商已经并进某个合并后的条目：面板里不再单列它那一格。 */
   hidesRemote(agentDeviceId: string, providerId: string): boolean;
   /**
@@ -51,8 +56,12 @@ const memberKey = (agentDeviceId: string | null | undefined, providerId: string)
 export function withSourceRouteProviders(
   providers: ProviderView[],
   config: ModelGroupsConfig | null | undefined,
-  /** 草稿当前记着的模型：它直接指着某个成员、而合并后的条目里没有这个写法的模型时，那个成员照旧单列，不让当前选择消失。 */
-  current?: { providerId?: string | null; modelId: string; agentDeviceId?: string | null },
+  /**
+   * 草稿/任务当前记着的模型：
+   * - 直接指着某个成员、而合并后的条目里没有这个模型时，那个成员照旧单列，不让当前选择消失；
+   * - `keepMember: true` 用于已解除托管 / 未绑定智能路由的进行中任务：保留当前运行的具体成员单列，不强行并回 `sroute:`。
+   */
+  current?: { providerId?: string | null; modelId: string; agentDeviceId?: string | null; keepMember?: boolean },
   /** 其他电脑与分享来的位置上的供应商(成员可以在那里)；没读到的位置不在里面，那里的成员这次不算。 */
   remote?: ReadonlyMap<string, readonly ProviderView[]>,
   /**
@@ -62,23 +71,36 @@ export function withSourceRouteProviders(
   label?: (name: string, members: number) => string,
 ): SourceRouteProviders {
   const routes = (config?.sourceRoutes ?? []).filter((route) => !route.hidden);
-  const none: SourceRouteProviders = { providers, hit: () => null, shownAs: () => null, hidesRemote: () => false, usageMember: () => null };
+  const none: SourceRouteProviders = {
+    providers,
+    hit: () => null,
+    shownAs: () => null,
+    shownModelId: () => null,
+    hidesRemote: () => false,
+    usageMember: () => null,
+  };
   if (!config || routes.length === 0) return none;
   const viewsAt = (agentDeviceId: string | undefined) => (agentDeviceId ? remote?.get(agentDeviceId) ?? [] : providers);
   const hits = new Map<string, SourceRouteHit>();
   const memberOf = new Map<string, string>();
   const byRoute = new Map<string, string>();
+  const routeRepModel = new Map<string, string>();
+  const candidateRepModel = new Map<string, { routeProviderId: string; modelId: string }>();
   const virtual: { entry: ProviderView }[] = [];
   const usageMembers = new Map<string, { provider: ProviderView; agentDeviceId: string | null }>();
   for (const route of routes) {
-    const members = route.sources.flatMap((source) => viewsAt(source.agentDeviceId)
-      .filter((provider) => provider.id === source.providerId)
-      .map((provider) => ({ provider, agentDeviceId: source.agentDeviceId })));
+    // 已被用户取消参与路由的成员(source.off)不再并入合并条目，恢复在选择器里独立显示与选用。
+    const members = route.sources
+      .filter((source) => !source.off)
+      .flatMap((source) => viewsAt(source.agentDeviceId)
+        .filter((provider) => provider.id === source.providerId)
+        .map((provider) => ({ provider, agentDeviceId: source.agentDeviceId })));
     const id = `${SOURCE_ROUTE_PROVIDER_PREFIX}${route.id}`;
     const models: Partial<Record<AgentKind, CatalogModel[]>> = {};
     for (const child of config.routes) {
       if (child.parent?.id !== route.id || child.hidden) continue;
       // 草稿里记的那个真实成员：第一个没停用、目录读得到的来源。
+      let representative: CatalogModel | null = null;
       for (const candidate of child.candidates) {
         if (candidate.off || candidate.agentKind === 'acp') continue;
         const agent = agentOf(candidate.agentKind);
@@ -88,14 +110,24 @@ export function withSourceRouteProviders(
         (models[agent] ??= []).push({ ...model, name: child.name });
         hits.set(`${id}\u0000${model.id}`, { route: child, candidate });
         byRoute.set(child.id, id);
+        routeRepModel.set(child.id, model.id);
+        representative = model;
         break;
+      }
+      if (representative) {
+        for (const candidate of child.candidates) {
+          if (candidate.off || candidate.agentKind === 'acp') continue;
+          const key = `${memberKey(candidate.agentDeviceId, candidate.providerId)}\u0000${candidate.model}`;
+          if (!candidateRepModel.has(key)) {
+            candidateRepModel.set(key, { routeProviderId: id, modelId: representative.id });
+          }
+        }
       }
     }
     const agents = Object.keys(models) as AgentKind[];
     if (members.length === 0 || agents.length === 0) continue;
     const base = members[0].provider;
-    const lead = members.find((member) => !route.sources.find((source) => source.providerId === member.provider.id
-      && (source.agentDeviceId ?? null) === (member.agentDeviceId ?? null))?.off);
+    const lead = members[0];
     if (lead) usageMembers.set(id, { provider: lead.provider, agentDeviceId: lead.agentDeviceId ?? null });
     // 以第一个成员为底：品牌、接入方式、图标都沿用它；模型与各引擎的路由信息取全部成员的。
     virtual.push({
@@ -114,7 +146,12 @@ export function withSourceRouteProviders(
     });
     for (const member of members) {
       const isCurrent = member.provider.id === current?.providerId && (member.agentDeviceId ?? null) === (current.agentDeviceId ?? null);
-      if (isCurrent && !hits.has(`${id}\u0000${current!.modelId}`)) continue;
+      if (isCurrent) {
+        if (current?.keepMember) continue;
+        const currentCovered = hits.has(`${id}\u0000${current!.modelId}`)
+          || candidateRepModel.get(`${memberKey(member.agentDeviceId, member.provider.id)}\u0000${current!.modelId}`)?.routeProviderId === id;
+        if (!currentCovered) continue;
+      }
       memberOf.set(memberKey(member.agentDeviceId, member.provider.id), id);
     }
   }
@@ -128,6 +165,13 @@ export function withSourceRouteProviders(
     hit: (providerId, modelId) => (providerId ? hits.get(`${providerId}\u0000${modelId}`) ?? null : null),
     shownAs: (providerId, activeRouteId, agentDeviceId) =>
       (activeRouteId && byRoute.get(activeRouteId)) || (providerId ? memberOf.get(memberKey(agentDeviceId, providerId)) ?? null : null),
+    shownModelId: (providerId, modelId, activeRouteId, agentDeviceId) => {
+      if (activeRouteId && routeRepModel.has(activeRouteId)) return routeRepModel.get(activeRouteId) ?? null;
+      if (!providerId) return null;
+      const mapped = candidateRepModel.get(`${memberKey(agentDeviceId, providerId)}\u0000${modelId}`);
+      if (!mapped) return null;
+      return memberOf.get(memberKey(agentDeviceId, providerId)) === mapped.routeProviderId ? mapped.modelId : null;
+    },
     hidesRemote: (agentDeviceId, providerId) => memberOf.has(memberKey(agentDeviceId, providerId)),
     usageMember: (providerId) => usageMembers.get(providerId) ?? null,
   };
@@ -158,9 +202,12 @@ export function withSourceRoutePluginEngines(
   const virtual: PluginEngineChoice[] = [];
   for (const route of routes) {
     // 混有内置供应商与插件引擎的手动路由由 withSourceRouteProviders 承载，不重复拼第二格。
-    if (route.sources.some((source) => !pluginEngineKeyFromProviderId(source.providerId))) continue;
-    const members = route.sources.flatMap((source) => engines.filter((engine) =>
-      engine.providerId === source.providerId && (engine.deviceId ?? null) === (source.agentDeviceId ?? null)));
+    if (route.sources.some((source) => !source.off && !pluginEngineKeyFromProviderId(source.providerId))) continue;
+    // 已被用户取消参与路由的成员(source.off)不再并入合并条目，恢复独立显示与选用。
+    const members = route.sources
+      .filter((source) => !source.off)
+      .flatMap((source) => engines.filter((engine) =>
+        engine.providerId === source.providerId && (engine.deviceId ?? null) === (source.agentDeviceId ?? null)));
     if (members.length === 0) continue;
     const id = `${SOURCE_ROUTE_PROVIDER_PREFIX}${route.id}`;
     const isMemberUsable = (engine: PluginEngineChoice) => isPluginEngineSelectable(engine) && !engine.suspended;
@@ -253,7 +300,8 @@ export function implicitSourceRouteSelection(
 ): ModelGroupSelection | null {
   if (!current.providerId) return null;
   const route = config.routes.find((item) => item.parent && !item.hidden && item.candidates.some((candidate) =>
-    (candidate.agentDeviceId ?? null) === (current.agentDeviceId ?? null)
+    !candidate.off
+    && (candidate.agentDeviceId ?? null) === (current.agentDeviceId ?? null)
     && candidate.providerId === current.providerId && candidate.model === current.model));
   return route ? { type: 'route', id: route.id } : null;
 }

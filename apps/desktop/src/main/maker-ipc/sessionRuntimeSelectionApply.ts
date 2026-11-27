@@ -441,6 +441,9 @@ export function createHandleSetModel(bindPorts: () => SessionRuntimeSelectionPor
         await persistSessionFields(sessionId, { model: target.model, effort: effort ?? '' }, { allowEmptyEffort: true });
         if (internalOptions.source === 'user' && internalOptions.configStaged !== true) {
           await updateScheduledPreference(sessionId, null);
+          if (!internalOptions.preserveModelGroupBinding) {
+            unbindModelGroupSession(sessionId);
+          }
         }
         assertRuntimeOwnerCurrent();
         const generation = internalOptions.source === 'fallback'

@@ -143,3 +143,32 @@ it('lists local and shared ACP plugin engines in WholeProviderAddRow and emits t
   h.sharedPluginDevices = [];
   h.remotePluginCatalogues = new Map();
 });
+
+// 2026-11-27 回归：供应商路由被隐藏(hidden)或本机成员被取消参与(source.off)后，
+// 该本机供应商的账号/电脑分配行应恢复在「分配」栏显示，不能继续被当成合并成员隐藏。
+it('restores local allocation row when source route is hidden or member is turned off', () => {
+  h.groups = { openai: {
+    strategy: 'expiring', autoSwitch: true,
+    members: [{ key: 'local', kind: 'local', agentDeviceId: null, providerId: 'openai', weight: 1, limit: 4, paused: false }],
+    localAccountIds: ['key-1'],
+  } };
+  const merged = render(<ProviderAllocationRows config={{
+    routes: [],
+    sourceRoutes: [{ id: 'auto:openai', name: 'OpenAI', strategy: 'expiring', sources: [{ providerId: 'openai' }] }],
+  } as never} />);
+  expect(document.querySelector('[data-auto-route="computers:openai"]')).toBeNull();
+  merged.unmount();
+
+  const turnedOff = render(<ProviderAllocationRows config={{
+    routes: [],
+    sourceRoutes: [{ id: 'auto:openai', name: 'OpenAI', strategy: 'expiring', sources: [{ providerId: 'openai', off: true }] }],
+  } as never} />);
+  expect(document.querySelector('[data-auto-route="computers:openai"]')).toBeTruthy();
+  turnedOff.unmount();
+
+  render(<ProviderAllocationRows config={{
+    routes: [],
+    sourceRoutes: [{ id: 'auto:openai', name: 'OpenAI', strategy: 'expiring', hidden: true, sources: [{ providerId: 'openai' }] }],
+  } as never} />);
+  expect(document.querySelector('[data-auto-route="computers:openai"]')).toBeTruthy();
+});

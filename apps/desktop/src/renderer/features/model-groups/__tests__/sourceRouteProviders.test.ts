@@ -173,4 +173,97 @@ describe('provider routes in the model picker', () => {
     expect(bothDown.engines[0]?.availability.state).toBe('unavailable');
     expect(visiblePluginEngineChoices(bothDown.engines)).toEqual([]);
   });
+
+  // 2026-11-27 回归：用户在供应商路由里把某个来源取消勾选(source.off=true)后，
+  // 该来源必须恢复在选择器里独立显示且不再经 shownAs / hidesRemote / implicitSourceRouteSelection 跳回智能路由。
+  it('restores a turned-off source as an independent provider and does not route it back into the source route', () => {
+    const shareDeviceId = 'share:yan-1';
+    const remoteMap = new Map([[shareDeviceId, [provider('openai', ['gpt-6-luna'])]]]);
+    const pausedConfig: ModelGroupsConfig = {
+      sourceRoutes: [{
+        id: 'auto:openai',
+        name: 'OpenAI',
+        strategy: 'expiring',
+        auto: true,
+        sources: [
+          { providerId: 'openai' },
+          { providerId: 'byok-1', off: true },
+          { providerId: 'openai', agentDeviceId: shareDeviceId, off: true },
+        ],
+      }],
+      routes: [{
+        id: 'src:luna',
+        name: 'GPT-6-LUNA',
+        strategy: 'expiring',
+        parent: { id: 'auto:openai', name: 'OpenAI' },
+        candidates: [
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6-luna' },
+          { agentKind: 'codex', providerId: 'byok-1', model: 'byok/gpt-6-luna', off: true },
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6-luna', agentDeviceId: shareDeviceId, off: true },
+        ],
+      }],
+    };
+    const listed = withSourceRouteProviders(PROVIDERS, pausedConfig, undefined, remoteMap, (name, count) => `${name} (${count})`);
+    // 取消参与的本机 byok-1 与分享 openai 均独立保留，合并条目只计入仍启用的 1 个来源。
+    expect(listed.providers.map((item) => item.id)).toEqual(['sroute:auto:openai', 'xd', 'byok-1']);
+    expect(listed.providers[0]?.name).toBe('OpenAI (1)');
+    expect(listed.shownAs('byok-1')).toBeNull();
+    expect(listed.shownAs('openai', null, shareDeviceId)).toBeNull();
+    expect(listed.hidesRemote(shareDeviceId, 'openai')).toBe(false);
+    // 仍启用的 openai 照常映射并走隐式路由；已取消参与的成员不再跳回智能路由。
+    expect(listed.shownAs('openai')).toBe('sroute:auto:openai');
+    expect(implicitSourceRouteSelection(pausedConfig, { providerId: 'openai', model: 'gpt-6-luna' })).toEqual({ type: 'route', id: 'src:luna' });
+    expect(implicitSourceRouteSelection(pausedConfig, { providerId: 'byok-1', model: 'byok/gpt-6-luna' })).toBeNull();
+    expect(implicitSourceRouteSelection(pausedConfig, { providerId: 'openai', model: 'gpt-6-luna', agentDeviceId: shareDeviceId })).toBeNull();
+  });
+
+  // 2026-11-27 回归：
+  // 1) 已解除托管 / 未绑定智能路由的进行中任务(keepMember: true)运行在某个合并成员上时，必须保留该具体成员单列，
+  //    不能隐藏它或强行映射回 sroute:，否则远程/分享来源点「全部」后会消失；
+  // 2) 托管中的任务落在带不同 wire 前缀的成员(byok-1 的 byok/gpt-6-luna)上时，合并条目应映射回代表模型 id(gpt-6-luna)
+  //    并不把 byok-1 漏回左侧栏。
+  it('keeps detached concrete members visible and maps cross-prefix managed member wire ids', () => {
+    const shareDeviceId = 'share:yan-1';
+    const remoteMap = new Map<string, readonly ProviderView[]>([[shareDeviceId, [provider('openai', ['gpt-6-luna'])]]]);
+    const sharedConfig: ModelGroupsConfig = {
+      sourceRoutes: [{
+        id: 'auto:openai',
+        name: 'OpenAI',
+        strategy: 'expiring',
+        auto: true,
+        sources: [{ providerId: 'openai' }, { providerId: 'byok-1' }, { providerId: 'openai', agentDeviceId: shareDeviceId }],
+      }],
+      routes: [{
+        id: 'src:luna',
+        name: 'GPT-6-LUNA',
+        strategy: 'expiring',
+        parent: { id: 'auto:openai', name: 'OpenAI' },
+        candidates: [
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6-luna' },
+          { agentKind: 'codex', providerId: 'byok-1', model: 'byok/gpt-6-luna' },
+          { agentKind: 'codex', providerId: 'openai', model: 'gpt-6-luna', agentDeviceId: shareDeviceId },
+        ],
+      }],
+    };
+    // 已解除托管运行在远端分享上：该分享保持可见、不隐藏，也不误映射成 sroute:auto:openai。
+    const detachedRemote = withSourceRouteProviders(
+      PROVIDERS,
+      sharedConfig,
+      { providerId: 'openai', modelId: 'gpt-6-luna', agentDeviceId: shareDeviceId, keepMember: true },
+      remoteMap,
+    );
+    expect(detachedRemote.hidesRemote(shareDeviceId, 'openai')).toBe(false);
+    expect(detachedRemote.shownAs('openai', null, shareDeviceId)).toBeNull();
+    // 仍在托管中且运行在带前缀的 byok-1 上：byok-1 不漏出，代表模型映射回 gpt-6-luna。
+    const managedPrefixed = withSourceRouteProviders(
+      PROVIDERS,
+      sharedConfig,
+      { providerId: 'byok-1', modelId: 'byok/gpt-6-luna', keepMember: false },
+      remoteMap,
+    );
+    expect(managedPrefixed.providers.map((item) => item.id)).toEqual(['sroute:auto:openai', 'xd']);
+    expect(managedPrefixed.shownAs('byok-1', 'src:luna')).toBe('sroute:auto:openai');
+    expect(managedPrefixed.shownModelId('byok-1', 'byok/gpt-6-luna', 'src:luna')).toBe('gpt-6-luna');
+    expect(managedPrefixed.shownModelId('byok-1', 'byok/gpt-6-luna', null)).toBe('gpt-6-luna');
+  });
 });

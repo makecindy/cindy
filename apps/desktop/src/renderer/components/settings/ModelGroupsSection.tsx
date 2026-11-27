@@ -128,7 +128,8 @@ export function ModelGroupsSection({ scrollRef, focusProvider }: {
   const focusAt = focusProvider?.at;
   useEffect(() => {
     if (!focusProvider) return;
-    const owner = (config.sourceRoutes ?? []).find((item) => item.sources.some((source) => !source.agentDeviceId && source.providerId === focusProvider.providerId));
+    const owner = (config.sourceRoutes ?? []).find((item) =>
+      !item.hidden && item.sources.some((source) => !source.off && !source.agentDeviceId && source.providerId === focusProvider.providerId));
     setView(owner ? { kind: 'source', id: owner.id } : { kind: 'list' });
     const selector = `[data-auto-route="accounts:${CSS.escape(focusProvider.providerId)}"],[data-auto-route="computers:${CSS.escape(focusProvider.providerId)}"]`;
     let tries = 0;

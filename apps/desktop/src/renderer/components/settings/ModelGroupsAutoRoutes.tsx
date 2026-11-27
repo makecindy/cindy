@@ -441,7 +441,10 @@ export function useSourceOptions(): SourceOption[] {
 export function ProviderAllocationRows({ config }: { config: ModelGroupsConfig }) {
   const { providers } = useProviders();
   const groups = useLocalProviderGroups();
-  const members = new Set((config.sourceRoutes ?? []).flatMap((route) => route.sources.filter((source) => !source.agentDeviceId).map((source) => source.providerId)));
+  // 已隐藏的供应商路由或被取消参与(source.off)的成员恢复独立显示，其账号/电脑分配行一并恢复。
+  const members = new Set((config.sourceRoutes ?? [])
+    .filter((route) => !route.hidden)
+    .flatMap((route) => route.sources.filter((source) => !source.off && !source.agentDeviceId).map((source) => source.providerId)));
   return (
     <>
       {providers.filter(usableProvider).flatMap((provider) => {
@@ -462,7 +465,10 @@ export function SourceRouteRow({ route, config, options, onOpen }: {
   route: ModelGroupSourceRoute; config: ModelGroupsConfig; options: readonly SourceOption[]; onOpen(): void;
 }) {
   const { t } = useTranslation();
-  const first = route.sources.map((source) => options.find((option) => option.key === optionKey(source))).find(Boolean);
+  const activeSources = route.sources.filter((source) => !source.off);
+  const first = (activeSources.length > 0 ? activeSources : route.sources)
+    .map((source) => options.find((option) => option.key === optionKey(source)))
+    .find(Boolean);
   const models = config.routes.filter((item) => item.parent?.id === route.id).length;
   return (
     <SettingsRow
@@ -472,7 +478,7 @@ export function SourceRouteRow({ route, config, options, onOpen }: {
       title={route.name}
       tag={route.hidden ? t('modelGroups.auto.hiddenTag') : route.auto ? t('modelGroups.sources.autoTag') : undefined}
       hint={[
-        t('modelGroups.sources.providers', { count: route.sources.length }),
+        t('modelGroups.sources.providers', { count: activeSources.length }),
         t('modelGroups.sources.models', { count: models }),
         t(`modelGroups.strategy.${route.strategy}.title`),
       ].join(' · ')}
