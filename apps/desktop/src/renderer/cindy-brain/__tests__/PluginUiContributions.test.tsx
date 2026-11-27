@@ -312,7 +312,9 @@ it('binds inline collection values to separate click lifetimes', async () => {
 
 // Unit: consecutive declared queue actions must reach the real draft receiver
 // in order. A failed action advances, and a replace action invalidates pending work.
-it('serializes declared actions without dropping distinct clicks and clears them on replacement', async () => {
+// #13396: typing while a dynamic action runs must preserve its pending queue
+// and native-state subscription; the static-only fixture did not cover this rerender.
+it.each([false, true])('serializes declared actions (dynamic: %s) across typing and replacement', async dynamic => {
   setDataOwnerGeneration('owner', 1);
   const sessionId = 'queued-actions';
   const editor = new Editor({ extensions: [Document, Paragraph, Text], content: '<p>Original</p>' });
@@ -324,8 +326,13 @@ it('serializes declared actions without dropping distinct clicks and clears them
     manifest: { schemaVersion: 3, id: 'actions', name: 'Actions', kind: 'chip', entry: 'main.js', version: '1', tools: [],
       mcpApps: { ui: { resources: [{ uri: 'ui://action', file: 'action.html' }], tools: {} }, host: {
         views: [{ id: 'action', title: 'Action', resourceUri: 'ui://action', scope: 'task' }],
-        contributions: ['One', 'Two', 'Three', 'Replace'].map(title => ({ id: title.toLowerCase(), title, position: 'composer.header',
-          view: 'action', composerAction: 'inline', visible: true, concurrency: title === 'Replace' ? 'replace' : 'queue' })),
+        contributions: [
+          ...(dynamic ? [{ id: 'queued', title: 'Queued actions', position: 'composer.header' as const,
+            view: 'action', composerAction: 'inline' as const, dynamicItems: true, concurrency: 'queue' as const }]
+            : ['One', 'Two', 'Three'].map(title => ({ id: title.toLowerCase(), title, position: 'composer.header' as const,
+              view: 'action', composerAction: 'inline' as const, visible: true, concurrency: 'queue' as const }))),
+          { id: 'replace', title: 'Replace', position: 'composer.header', view: 'action', composerAction: 'inline', visible: true },
+        ],
       } } } }];
   const scene = (task = sessionId) => <PluginUiProvider host={<PluginUiHost />}>
     <PluginUiComposerActionScope sessionId={task} editor={editor} disabled={false}>
@@ -338,6 +345,10 @@ it('serializes declared actions without dropping distinct clicks and clears them
     composerAction: { ...binding, openId: binding.id, instanceId: 'actions' }, ...input,
   }));
   try {
+    await waitFor(() => expect(host.consumers('actions')).toHaveLength(dynamic ? 2 : 4));
+    if (dynamic) await act(async () => { host.publish('actions', 'queued', { sessionId }, () => ({ visible: true,
+      items: ['One', 'Two', 'Three'].map(title => ({ id: title.toLowerCase(), title })),
+    })); });
     fireEvent.click(screen.getByRole('button', { name: 'One' }));
     await waitFor(() => expect(page.bindings).toHaveLength(1));
     const one = page.bindings[0];
@@ -347,16 +358,23 @@ it('serializes declared actions without dropping distinct clicks and clears them
     fireEvent.click(screen.getByRole('button', { name: 'Three' }));
     expect(page.bindings).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Two' }).getAttribute('aria-busy')).toBe('true');
+    const subscriptions = invoke.mock.calls.filter(([, input]) => input.op === 'native-interest').length;
+    await act(async () => { editor.commands.insertContent('Editing '); view.rerender(scene()); });
+    expect(screen.getByRole('button', { name: 'One' }).getAttribute('aria-busy')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Two' }).getAttribute('aria-busy')).toBe('true');
+    expect(invoke.mock.calls.filter(([, input]) => input.op === 'native-interest')).toHaveLength(subscriptions);
     await talk(one, { kind: 'draft', mode: 'append', text: 'First' });
     expect(editor.getText()).toContain('First');
     await talk(one, { kind: 'composer-action-finish', status: 'success' });
     await waitFor(() => expect(page.bindings).toHaveLength(2));
-    expect(page.bindings[1].contributionId).toBe('two');
+    expect(page.bindings[1].contributionId).toBe(dynamic ? 'queued' : 'two');
+    expect(page.inputs[1]).toEqual(dynamic ? { value: 'two' } : {});
     const two = page.bindings[1];
     await talk(two, { kind: 'composer-action-start' });
     await talk(two, { kind: 'composer-action-finish', status: 'error', message: 'Failed' });
     await waitFor(() => expect(page.bindings).toHaveLength(3));
-    expect(page.bindings[2].contributionId).toBe('three');
+    expect(page.bindings[2].contributionId).toBe(dynamic ? 'queued' : 'three');
+    expect(page.inputs[2]).toEqual(dynamic ? { value: 'three' } : {});
     const three = page.bindings[2];
     await talk(three, { kind: 'composer-action-start' });
     fireEvent.click(screen.getByRole('button', { name: 'One' }));
@@ -371,7 +389,8 @@ it('serializes declared actions without dropping distinct clicks and clears them
     fireEvent.click(screen.getByRole('button', { name: 'One' }));
     fireEvent.click(screen.getByRole('button', { name: 'Two' }));
     view.rerender(scene('other-task'));
-    expect(screen.getByRole('button', { name: 'Two' }).getAttribute('aria-busy')).toBe('false');
+    if (dynamic) expect(screen.queryByRole('button', { name: 'Two' })).toBeNull();
+    else expect(screen.getByRole('button', { name: 'Two' }).getAttribute('aria-busy')).toBe('false');
     expect(page.bindings).toHaveLength(5);
   } finally { view.unmount(); release(); editor.destroy(); }
 });

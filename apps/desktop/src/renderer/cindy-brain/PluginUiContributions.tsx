@@ -199,11 +199,12 @@ interface Target {
 function useEntries(position: GhostHostUiPosition, target: Target): readonly PluginUiEntry[] {
   const directory = useContext(DirectoryContext);
   const entries = directory.get(position);
-  if (!entries || target.disabled || target.sessionId && getStickySessionDeviceId(target.sessionId)) return NO_ENTRIES;
-  return entries.filter(({ contribution: { match } }) =>
-    (!match?.roles || !!target.role && match.roles.includes(target.role)) &&
-    (!match?.tools || !!target.tool && match.tools.includes(target.tool)) &&
-    (!match?.plugins || !!target.plugin && match.plugins.includes(target.plugin)));
+  const disabled = !!target.disabled || !!target.sessionId && !!getStickySessionDeviceId(target.sessionId);
+  const { role, tool, plugin } = target;
+  return useMemo(() => !entries || disabled ? NO_ENTRIES : entries.filter(({ contribution: { match } }) =>
+    (!match?.roles || !!role && match.roles.includes(role)) &&
+    (!match?.tools || !!tool && match.tools.includes(tool)) &&
+    (!match?.plugins || !!plugin && match.plugins.includes(plugin))), [entries, disabled, role, tool, plugin]);
 }
 
 export const usePluginUiMessageMenuEntries = (target: Target) => useEntries('message.menu', target);
