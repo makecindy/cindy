@@ -21603,7 +21603,15 @@ describe('CodexAgent MCP thread context hooks', () => {
       }],
     }, { requestId: 'req-native-descendant' });
 
-    expect(result).toEqual({ answers: {} });
+    expect(result).toEqual({
+      answers: {
+        direction: {
+          answers: [
+            '[System — not a user answer] User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.',
+          ],
+        },
+      },
+    });
     expect(resolveInteraction).not.toHaveBeenCalled();
     await handle.close();
   });
@@ -29372,7 +29380,13 @@ describe('CodexAgent turn lifecycle', () => {
       requestId: 'child-input-request',
     });
     await expect(childInputPromise).resolves.toEqual({
-      answers: {},
+      answers: {
+        continue: {
+          answers: [
+            '[System — not a user answer] User questions are only available to the root agent. Report the question to the parent agent, which can decide whether to ask the user.',
+          ],
+        },
+      },
     });
     await expect(handlers.dynamicToolCall({
       ...child,

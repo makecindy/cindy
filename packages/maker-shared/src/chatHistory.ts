@@ -230,24 +230,30 @@ export function createChatHistory(input: {
           }
         }
         if (change.type === 'message.created') {
+          const seq = BigInt(message.seq);
           for (const key of Object.keys(state.pages)) {
             const query = new URLSearchParams(key);
-            if (query.has('before')) continue;
+            const before = query.get('before');
+            if (before !== null && seq >= BigInt(before)) continue;
             if (query.get('all') !== 'true' && (query.get('threadRootId') ?? null) !== (message.threadRootId ?? null)) continue;
             const ids = state.pages[key]!;
+            const after = query.get('after');
+            if (after !== null && seq <= BigInt(after)) continue;
             // Preserve the old window as bounded coverage: new arrivals shift pagination
             // boundaries, but must not make every older page download again.
             const first = ids[0] && state.messages[ids[0]];
-            if (first) {
+            if (before === null && first && seq > BigInt(first.seq)) {
               query.set('before', String(BigInt(first.seq) + 1n)); state.pages[query.toString()] = ids;
               if (state.stalePages?.includes(key)) stale(state, query.toString());
             }
             if (query.has('after')) { delete state.pages[key]; continue; }
-            // The authorized change body is enough to maintain the latest page.
-            // Keep the old bounded range for pagination without re-downloading the head.
+            // Exact hits and stitched reads both depend on each window retaining its top rows.
+            const limit = Number(query.get('limit') ?? 100);
+            const last = ids.at(-1);
+            if (last && ids.length >= limit && seq <= BigInt(state.messages[last]!.seq)) continue;
             state.pages[key] = [...new Set([message.id, ...ids])]
               .sort((a, b) => BigInt(state.messages[a]!.seq) > BigInt(state.messages[b]!.seq) ? -1 : 1)
-              .slice(0, Number(query.get('limit') ?? 100));
+              .slice(0, limit);
           }
         }
       } else if (!['execution.changed', 'plan.changed'].includes(change.type)) state.metadataDirty = true;

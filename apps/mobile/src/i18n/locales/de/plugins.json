@@ -108,6 +108,7 @@
   "selectFolder": "Diesen Ordner auswählen",
   "automationDraft": "Neue Automatisierung",
   "automationDraftHint": "Bestätige Inhalt, Zeitplan und Modell und speichere dann, um diese Automatisierung zu erstellen.",
+  "automationCheck": "{{name}} vor dem Modelleinsatz prüfen lassen",
   "automationName": "Name",
   "automationPrompt": "Was soll erledigt werden?",
   "automationInterval": "Intervall (Minuten)",

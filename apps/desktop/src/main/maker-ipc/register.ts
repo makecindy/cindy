@@ -197,7 +197,7 @@ import { advanceRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice
 import { removeBotImConnectionsForBot } from '../im/shared/botImConnectionRuntime.js';
 import { configureBotImLaneRuntime } from '../im/shared/botImLaneRuntime.js';
 import { markImSessionManualRouteOverride } from '../im/shared/manualRouteOverride.js';
-import { configureAppDefaultModelSelection, inspectAppDefaultModel } from './appDefaultModelControl.js';
+import { configureAppDefaultModelSelection, inspectAppDefaultModel, teammatePluginEngineModelChoices } from './appDefaultModelControl.js';
 import { configureCloudMemoryManagement, configureCloudMcpCredentials } from '../host-settings/managementData.js';
 import { cloudMcpCredentialStore } from '../secrets/providerSecretStore.js';
 import { cloudManagementProviderRegistry, isCloudManagementInvocation, cloudManagementExecution, registerPrivateCloudManagementCall } from '../host-settings/managementCalls.js';
@@ -896,6 +896,7 @@ import {
   getWorkerRolesMirror,
   getSelectedNewMakerRoute,
   getGroupAssistantPluginSelection,
+  GroupCindyRemoteEngineError,
   getWorkerPermissionModeFromCreationPrefs,
   type ProviderModelMemorySnapshot,
   syncNewMakerDraftCache,
@@ -1286,6 +1287,11 @@ import {
   serializeOrcaRemoteLead,
   type OrcaRemoteLead,
 } from '../../shared/orcaRemoteWorker.js';
+import {
+  buildSessionCreatedBy,
+  serializeSessionCreatedBy,
+  type SessionCreatedBy,
+} from '../../shared/sessionOrigin.js';
 import {
   applyPendingAgentSwitchIfIdle,
   createPendingAgentSwitchRegistry,
@@ -1731,7 +1737,7 @@ import {
   writeGhostErrandSessionId,
 } from '../cindy-brain/pluginTaskPrefsStore.js';
 import { isGhostPickedDir } from '../cindy-brain/pickGrantsStore.js';
-import { createSessionExecutionResolver, resolveSessionExecutionSelection } from './sessionExecutionSelection.js';
+import { createSessionExecutionResolver, resolveSessionExecutionSelection, SessionModelUnavailableError } from './sessionExecutionSelection.js';
 import { createGhostAgentTurnRunner, createLocalGhostSessionAdmission } from './ghostAgentTurnRunner.js';
 import { createGhostErrandRunner } from './ghostErrandRunner.js';
 import {
@@ -12639,11 +12645,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ...opts,
           onAccepted: async (signal) => {
             await opts.onAccepted?.(signal);
-            // Turn change capture relies on built-in engine hooks; plugin engines have none.
-            if (hasBuiltinAgentKind(session)) {
-              await beginTurnChangeSetAtDispatch(session, anchorClientId);
-              turnChangeSetStarted = true;
-            }
+            await beginTurnChangeSetAtDispatch(session, anchorClientId);
+            turnChangeSetStarted = true;
             if (gitSnapshotCoordinator) {
               await gitSnapshotCoordinator.onTurnStart(session.id, signal);
               baselineStarted = true;
@@ -12919,6 +12922,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 来源任务的 Agent 在另一台电脑运行：新任务继承同一台电脑(它的模型与来源都在那台)；
       // 显式 agentDeviceId 覆盖继承值。
       let inheritedAgentDeviceId: string | undefined;
+      let createdBySession: SessionCreatedBy | undefined;
       try {
         const db = getDbClient().drizzle;
         let inherited: SendToSessionCreateDefaults;
@@ -12961,6 +12965,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             .from(sessions)
             .where(eq(sessions.id, dispatcherSessionId))
             .limit(1);
+          if (!sourcePlugin) {
+            const originInfo = queuedOrigin?.kind === 'session' ? queuedOrigin : undefined;
+            createdBySession = buildSessionCreatedBy({
+              sessionId: dispatcherSessionId,
+              title: row?.title ?? originInfo?.senderSessionTitle,
+              botId: originInfo?.senderBotId,
+              botName: originInfo?.senderBotName,
+            }) ?? undefined;
+          }
           const sourceAgentDeviceId = meta.agentDeviceId && !meta.remoteHostId ? meta.agentDeviceId : null;
           const inheritedBase: SendToSessionCreateDefaults = {
             agentKind: meta.agentKind,
@@ -13087,7 +13100,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             model: inherited.model, providerId: inherited.providerId, effort: inherited.effort,
             fastMode: (inherited.fastMode ?? false), permissionMode: createOpts.permissionMode,
             workspaceKind: inherited.workspaceKind, projectDir: inherited.projectDir, workingDir: createOpts.workingDir,
-            ...(inheritedAgentDeviceId ? { agentDeviceId: inheritedAgentDeviceId } : {}) },
+            ...(inheritedAgentDeviceId ? { agentDeviceId: inheritedAgentDeviceId } : {}),
+            ...(createdBySession ? { createdBySession } : {}) },
         }, async (row, assertCurrent) => {
           const created = await bootstrapSession({ ...createOpts, id: row.id, model: row.model,
             providerId: row.providerId, effort: (row.effort || undefined) as CreateOpts['effort'],
@@ -13096,17 +13110,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           createdPreviewSessionId = created.session.id;
           return created;
         });
-        // worktree 场景补写 sessions.worktree_path 反范式快照:createWorktree 时
-        // session 行还不存在,worktreeStore.set 的 DB 同步落空(仅 warn),这里 session
-        // 行已建,补一次。失败非致命——徽标以 worktreeStore 为准。
-        if (handoffWorktree) {
+        // bootstrapSession 经 OwnerSessionStorage.create 建行（只落 SessionMeta 字段），
+        // 在 broadcastSessionCreated 之前补写 worktree_path 与 created_by_session 反范式快照，
+        // 避免首帧列表缺来源标记。失败非致命，不阻断首条消息投递。
+        if (handoffWorktree || createdBySession) {
           try {
             await db
               .update(sessions)
-              .set({ worktreePath: handoffWorktree.meta.path })
+              .set({
+                ...(handoffWorktree ? { worktreePath: handoffWorktree.meta.path } : {}),
+                ...(createdBySession ? { createdBySession: serializeSessionCreatedBy(createdBySession) } : {}),
+              })
               .where(eq(sessions.id, session.id));
           } catch (err) {
-            log.warn('sendToSession create: sync worktree_path to DB failed (non-fatal)', {
+            log.warn('sendToSession create: sync session metadata snapshot to DB failed (non-fatal)', {
               sessionId: session.id,
               error: err instanceof Error ? err.message : String(err),
             });
@@ -14151,17 +14168,55 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (row?.status === 'active' && stored === projectDir) return { ok: true as const, sessionId, created: false };
         }
         const ownerScope = activeOwnerScopeKey();
-        const pluginSelection = getGroupAssistantPluginSelection(ownerScope);
-        const route = getSelectedNewMakerRoute(ownerScope);
+        // The executing computer decides (bot-group-chat.md §9): a new-task engine on another
+        // computer is answered with one of this computer's models, never by moving the request.
+        let pluginSelection: ReturnType<typeof getGroupAssistantPluginSelection>;
+        let remoteEngine = false;
+        try { pluginSelection = getGroupAssistantPluginSelection(ownerScope); }
+        catch (error) { if (!(error instanceof GroupCindyRemoteEngineError)) throw error; remoteEngine = true; }
+        const route = remoteEngine ? undefined : getSelectedNewMakerRoute(ownerScope);
         const agentKind = route ? (route.harness === 'claude' ? 'claude-code' : route.harness) : undefined;
-        const { row } = await (async () => {
-          if (pluginSelection) {
-            const { model, effort, permissionMode } = admitPluginEngineSwitchTarget(pluginSelection, listPluginEngineViews());
-            return openSession({ assertCurrent: assertOwner, body: { title, projectDir,
-              workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined, agentKind: 'acp', providerId: pluginSelection.providerId,
-              model, effort, permissionMode } });
+        let modelFallback: { name?: string } | undefined;
+        // One of this computer's available models. None at all is a public "model unavailable", not a runtime error.
+        const openAvailableModel = async (from: string) => {
+          const { available } = await inspectAppDefaultModel();
+          assertOwner();
+          const pick = available[0]?.route;
+          if (!pick) {
+            // Reuse the local picker policy, including hidden/disabled models and engine defaults.
+            const engines = listPluginEngineViews();
+            const plugin = teammatePluginEngineModelChoices(engines)[0];
+            if (!plugin) throw new SessionModelUnavailableError('MODEL_UNAVAILABLE');
+            const { providerId } = plugin.route;
+            const { model, effort, permissionMode } = admitPluginEngineSwitchTarget({ providerId, model: plugin.route.model }, engines);
+            log.warn('group-cindy: selected engine unusable here, answering with an available model', { from, to: model });
+            // An engine-selected default is not a specific model, and provider aliases can contain account names.
+            modelFallback = model === PLUGIN_ENGINE_DEFAULT_MODEL ? {} : { name: plugin.displayName ?? model };
+            return openSession({ assertCurrent: assertOwner, body: {
+              title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
+              agentKind: 'acp', providerId, model, effort, permissionMode,
+            } });
           }
+          const pickAgentKind = pick.harness === 'claude' ? 'cc' : pick.harness;
+          // 权限按回退到的引擎读取，避免把原引擎的高权限带给另一种引擎（否则会落库成全权限并被群任务直接沿用）。
+          const pickEngineKind = pickAgentKind === 'cc' ? 'claude-code' : pickAgentKind;
+          log.warn('group-cindy: selected engine unusable here, answering with an available model', { from, to: pick.model });
+          modelFallback = { name: pick.model };
+          return openSession({ assertCurrent: assertOwner, body: {
+            title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
+            agentKind: pickAgentKind, model: pick.model, providerId: pick.providerId, effort: pick.effort || '', fastMode: pick.fastMode,
+            permissionMode: permissionModeOrAsk(getRemoteNewMakerDefaults(pickEngineKind).permissionMode),
+          } });
+        };
+        const { row } = await (async () => {
+          if (remoteEngine || (!pluginSelection && route?.agentDeviceId)) return openAvailableModel('remote-engine');
           try {
+            if (pluginSelection) {
+              const { model, effort, permissionMode } = admitPluginEngineSwitchTarget(pluginSelection, listPluginEngineViews());
+              return await openSession({ assertCurrent: assertOwner, body: { title, projectDir,
+                workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined, agentKind: 'acp', providerId: pluginSelection.providerId,
+                model, effort, permissionMode } });
+            }
             return await openSession({ assertCurrent: assertOwner, body: {
               title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
               ...(route && agentKind ? { agentKind: agentKind === 'claude-code' ? 'cc' as const : agentKind, model: route.model,
@@ -14169,35 +14224,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               permissionMode: permissionModeOrAsk(agentKind ? getRemoteNewMakerDefaults(agentKind).permissionMode : undefined),
             } });
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            // 群Cindy 的"新建任务默认模型"可能来自旧账号/旧草稿，对本账号不可用；回退一次让宿主编排可用模型。
-            // 只认真正的"模型不可用"，不要把 Fast/effort 校验失败的通用"重新选择模型"提示也当成回退信号。
-            if (!route || !/not available for/.test(message)) throw error;
-            const { available } = await inspectAppDefaultModel();
-            const pick = available[0]?.route;
-            if (!pick) throw error;
-            const pickAgentKind = pick.harness === 'claude' ? 'cc' : pick.harness;
-            // 权限按回退到的引擎读取，避免把原引擎的高权限带给另一种引擎（否则会落库成全权限并被群任务直接沿用）。
-            const pickEngineKind = pickAgentKind === 'cc' ? 'claude-code' : pickAgentKind;
-            log.warn('group-cindy: routed model unavailable for this account, retrying with an available model', { from: route.model, to: pick.model });
-            return await openSession({ assertCurrent: assertOwner, body: {
-              title, projectDir, workspaceKind: projectDir ? 'project' : 'dialogue', workingDir: projectDir ?? undefined,
-              agentKind: pickAgentKind, model: pick.model, providerId: pick.providerId, effort: pick.effort || '', fastMode: pick.fastMode,
-              permissionMode: permissionModeOrAsk(getRemoteNewMakerDefaults(pickEngineKind).permissionMode),
-            } });
+            // Only admission failures known to occur before creating a task are safe to fall back from.
+            if (!(error instanceof SessionModelUnavailableError)) throw error;
+            return openAvailableModel(pluginSelection?.model ?? route?.model ?? 'no-selection');
           }
         })();
         // Before its first turn starts, so the task starts with the 群协作 Skill.
         markGroupCindyTask(row.id);
         broadcastSessionCreated(row.id);
-        return { ok: true as const, sessionId: row.id, created: true };
+        return { ok: true as const, sessionId: row.id, created: true, ...(modelFallback ? { modelFallback } : {}) };
       } catch (error) {
         log.warn('group-cindy: openSession failed', {
           sessionId, title, projectDir,
           name: error instanceof Error ? error.name : typeof error,
           message: error instanceof Error ? error.message : String(error),
         });
-        return { ok: false as const, errorCode: 'LANE_UNAVAILABLE', message: error instanceof Error ? error.message : String(error) };
+        const message = error instanceof Error ? error.message : String(error);
+        return { ok: false as const, errorCode: error instanceof SessionModelUnavailableError ? 'MODEL_UNAVAILABLE' : 'LANE_UNAVAILABLE', message };
       }
     },
     isGroupInputLive: (sessionId, clientId) => agentInputCoordinatorHolder?.isInputLive(sessionId, clientId) ?? false,
@@ -16382,7 +16425,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!liveSession) {
         throw new Error('Target session became unavailable before direct turn dispatch.');
       }
-      if (hasBuiltinAgentKind(liveSession)) await beginTurnChangeSetAtDispatch(liveSession, clientId);
+      await beginTurnChangeSetAtDispatch(liveSession, clientId);
     },
     abortDirectTurnChangeSet: clearPendingTurnChangeSets,
     resolveWorkerSenderLabel: async (workerId, fallback) => {
@@ -21059,7 +21102,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (item.botTaskCoordination) await assertBotTaskCoordination(sessionId, item.botTaskCoordination);
       autoResumeBookkeeping.markReplacementDispatching(sessionId, item.clientId);
       const liveSession = maker.getSession(sessionId);
-      if (liveSession && hasBuiltinAgentKind(liveSession)) {
+      if (liveSession) {
         await beginTurnChangeSetAtDispatch(liveSession, item.clientId);
       }
       // hook 续跑回流的**权威归属点**: 在 vendor dispatch 之前(本回调被 await), 所以

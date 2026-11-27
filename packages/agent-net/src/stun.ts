@@ -14,6 +14,7 @@ import type { ClientRequest } from 'node:http';
 import { get as httpsGet } from 'node:https';
 import { isIPv4 } from 'node:net';
 import type { Address } from '@cindy/agent-net-core/node';
+export { classifyNatMapping, formatTransportDiagnosticsLog } from './types.js';
 
 const BINDING_REQUEST = 0x0001;
 const BINDING_SUCCESS = 0x0101;

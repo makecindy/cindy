@@ -1551,8 +1551,9 @@ describe('Shared create project picker', () => {
     expect(head).toContain('try {');
     // finally 释放,覆盖所有 throw / 早退。
     expect(handler.slice(0, handler.indexOf('\n    },'))).toContain('markSendInFlight(false);');
-    // 弹窗侧:saving 期间不许 Esc 关掉(别让 UI 假装取消了)。
-    expect(newGoalDialogSource).toContain('if (saving) event.preventDefault();');
+    // 弹窗侧:saving / 停止听写 / 听写中都不许 Esc 关掉(别让 UI 假装取消了)。
+    expect(newGoalDialogSource).toContain('const busy = saving || stoppingVoice;');
+    expect(newGoalDialogSource).toContain('if (busy || voice.isBusy) event.preventDefault();');
   });
 
   /**
@@ -1569,7 +1570,7 @@ describe('Shared create project picker', () => {
       newGoalDialogSource.indexOf('const save = async () => {'),
     );
     const saveBody = save.slice(0, save.indexOf('\n  };'));
-    expect(saveBody).toContain('await onCreate(trimmed, limits);');
+    expect(saveBody).toContain('await onCreate(finalTrimmed, limits);');
     expect(saveBody).toContain('onCreated?.();');
     expect(saveBody).toContain('onOpenChange(false);');
     expect(saveBody).toContain('} catch (err) {');
