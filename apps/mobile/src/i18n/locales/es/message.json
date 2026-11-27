@@ -250,6 +250,7 @@
     "edit": "Editar",
     "steer": "Intervenir",
     "steerQueued": "Aún no entregado. Tu mensaje todavía está en cola.",
+    "steerUnsupportedNotice": "Este motor no admite incorporar mensajes. Los mensajes en cola se enviarán cuando termine el turno actual.",
     "moveUp": "Mover antes",
     "moveDown": "Mover después",
     "cancelSend": "Cancelar envío",

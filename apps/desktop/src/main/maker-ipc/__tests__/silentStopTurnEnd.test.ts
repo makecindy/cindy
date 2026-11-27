@@ -31,7 +31,7 @@ function harness(mode: 'accepted' | 'rejected' | 'throw' = 'accepted') {
     return { accepted: true };
   });
   const session = { id: 's', getTurnGeneration: () => 1, sendHostTurnContinuation: send } as unknown as Session;
-  const settle = vi.fn(async () => gate.settle('s', 'lease'));
+  const settle = vi.fn<SilentStopTurnEndPorts['settleSilentStopDone']>(async (_sessionId, _outcome, leaseId) => gate.settle('s', leaseId));
   const ports: SilentStopTurnEndPorts = {
     silentStopTurnLeaseGate: gate,
     agentInputCoordinatorHolder: coordinator,
@@ -47,10 +47,10 @@ function harness(mode: 'accepted' | 'rejected' | 'throw' = 'accepted') {
     log,
   };
   return {
-    guard, send, broadcast, createDbMessage, settle, coordinator, discardActivity, log,
+    guard, send, broadcast, createDbMessage, settle, coordinator, discardActivity, log, gate,
     tick: () => { now += 60_000; },
     decide: () => guard.onSilentStop('s', now),
-    run: () => handleSilentStopTurnEndWithPorts(session, now, 'lease', undefined, ports),
+    run: (leaseId: string = 'lease') => handleSilentStopTurnEndWithPorts(session, now, leaseId, undefined, ports),
   };
 }
 
@@ -128,5 +128,36 @@ describe('silent-stop termination diagnostics', () => {
     expect(h.broadcast).toHaveBeenCalledWith(expect.objectContaining({ silentStopFailureCause: 'budget' }));
     expect(h.settle).toHaveBeenCalledOnce();
     expect(h.send).not.toHaveBeenCalled();
+  });
+
+  // #12759: 熔断后迟到汇报仍在陆续到达,守卫每次都返回 session-breaker exhausted,
+  // 但熔断状态没变、横幅没有新信息,只应提示一次。
+  it('suppresses the repeat breaker banner after the first one', async () => {
+    const h = harness();
+    // 与上面 session-breaker 用例同一节奏:每轮先充值再开 turn → resume;
+    // 第 6 次 resume 后,下一轮的 guard 决策就是 session-breaker exhausted。
+    for (let i = 0; i < 6; i++) {
+      h.tick();
+      h.guard.noteUserSend('s');
+      h.guard.noteTurnStarted('s');
+      expect(h.decide().action).toBe('resume');
+    }
+    // 第一次 exhausted(决策计时器真正跑):横幅照弹。
+    h.guard.noteTurnStarted('s');
+    await h.run();
+    expect(h.broadcast).toHaveBeenCalledOnce();
+    // 第二次(熔断状态没变,又一条迟到 silent-stop):不弹横幅,仍 settle。
+    // turnStarted 清 pending,tick 让两次决策间隔足够长；
+    // 第一次 run 的 settle 已把 'lease' 标记为 settled,schedule 需换 id 重新挂。
+    h.guard.noteTurnStarted('s');
+    h.tick();
+    h.gate.schedule('s', {}, 'lease2');
+    await h.run('lease2');
+    expect(h.broadcast).toHaveBeenCalledOnce();
+    expect(h.settle).toHaveBeenLastCalledWith('s', 'exhausted', 'lease2', expect.anything(), 1);
+    expect(h.log.debug).toHaveBeenCalledWith(
+      'silent-stop breaker already surfaced — suppressing repeat banner',
+      expect.objectContaining({ sessionId: 's' }),
+    );
   });
 });
