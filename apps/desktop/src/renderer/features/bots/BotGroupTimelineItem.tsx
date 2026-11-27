@@ -332,6 +332,8 @@ export interface BotGroupTimelineItemProps {
   showActions?: boolean;
   /** Server group id: reactions and the toolbar's reaction picker. */
   reactionGroupId?: string;
+  /** Server conversation id for attachment retry (covers both groups and direct chats). */
+  attachmentGroupId?: string;
   /** The group's server lists who has read a message (`supportsMessageReaders`). */
   readersEnabled?: boolean;
   /** The message's reaction version (`messageReactionRevision`): who reacted is re-read when it moves. */
@@ -538,10 +540,11 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
       align={self && (message.threadShare || (!hasText && !hasAttachments)) ? 'right' : 'left'}
     />
   ) : null;
-  const retryAttachment = props.reactionGroupId
+  const attachmentGroupId = props.attachmentGroupId ?? props.reactionGroupId;
+  const retryAttachment = attachmentGroupId
     ? (attachment: BotGroupAttachment) => {
         void window.electronAPI?.maker?.chatServer?.manage?.({
-          groupId: props.reactionGroupId!,
+          groupId: attachmentGroupId,
           action: { type: 'retryAttachment', mediaId: attachment.id, name: attachment.name },
         });
       }

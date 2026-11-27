@@ -377,8 +377,8 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         && floor > shown.reduce((max, reply) => Math.max(max, reply.sequence), Number.NEGATIVE_INFINITY) + 1;
       if (!reset && !anchored(repliesRef.current)) return;
       if (!stalePage) {
-        settlePage(result.replies);
-        if (result.messageUpdates) settlePage(result.messageUpdates);
+        settlePage(nextReplies);
+        if (nextMessageUpdates) settlePage(nextMessageUpdates);
       }
       const addedSources = new Set(stalePage
         ? nextReplies.filter(reply => !repliesRef.current.some(shown => shown.id === reply.id)).map(reply => reply.id) : []);
@@ -441,7 +441,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         }
       }
     } catch { if (current()) setError(t(key('requestFailed'))); }
-  }, [group.id, rootId, t, clearHistory, reactionReads]);
+  }, [group.id, rootId, t, clearHistory, reactionReads, applyBufferedAttachments]);
   const readRef = useRef(read);
   readRef.current = read;
   /** One refresh in flight; pushes meanwhile collapse into one follow-up read. */

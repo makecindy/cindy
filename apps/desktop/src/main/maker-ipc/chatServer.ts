@@ -4599,6 +4599,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const target = action.type === 'read' && action.conversationKind === 'direct'
         ? (await directSnapshot(requested)).room.id : await resolveGroup(requested);
       if (action.type === 'retryAttachment') {
+        if (personalList.hidden(target)) throw new Error('CONVERSATION_NOT_FOUND');
         const next = ensureAttachmentDownload(target, action.mediaId, action.name ?? '', true);
         emitAttachments(target, new Map([[next.id, next]]));
         return {};

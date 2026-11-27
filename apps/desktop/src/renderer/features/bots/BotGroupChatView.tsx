@@ -489,8 +489,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
           const nextGroup = applyBufferedAttachmentsToGroup(result.group, readAttachmentSeq);
           if (nextGroup.metadataRetryAt) retryRead(owner, additionalSources, changedIds, nextGroup.metadataRetryAt);
           readOwner.current = owner;
-          settleReactions(result.group.messages);
-          if (result.group.messageUpdates) settleReactions(result.group.messageUpdates);
+          settleReactions(nextGroup.messages);
+          if (nextGroup.messageUpdates) settleReactions(nextGroup.messageUpdates);
           const shown = stateRef.current;
           setState((previous) => {
             if (previous.kind !== 'ready') {
@@ -1182,8 +1182,8 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
       if (element && prepends) prependAnchorRef.current = { height: element.scrollHeight, top: element.scrollTop };
       const newerRefresh = current.kind === 'ready' && current.group !== base.group;
       if (!newerRefresh) {
-        settlePage(result.group.messages);
-        if (result.group.messageUpdates) settlePage(result.group.messageUpdates);
+        settlePage(nextGroup.messages);
+        if (nextGroup.messageUpdates) settlePage(nextGroup.messageUpdates);
       }
       setState((previous) => {
         if (previous.kind !== 'ready' || !stillLoaded(previous)) return previous;
@@ -1749,6 +1749,7 @@ function BotGroupChatContent({ groupId, direct }: { groupId: string; direct: boo
                   shareScope={shareScope}
                   sharing={sharing}
                   reactionGroupId={group.serverBacked && !direct ? group.id : undefined}
+                  attachmentGroupId={group.serverBacked ? group.id : undefined}
                   readersEnabled={group.serverBacked && !direct && group.supportsMessageReaders === true}
                   reactionReads={reactionReads}
                   reactionRevision={messageReactionRevision(group, message.id)}
