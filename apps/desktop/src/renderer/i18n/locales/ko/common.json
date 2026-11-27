@@ -12103,6 +12103,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} 님이 그룹에 참여했습니다",
+        "memberJoinedList": "{{names}} 님이 그룹에 참여했습니다",
+        "memberJoinedSummary": "{{names}} 외 {{others}}명이 그룹에 참여했습니다",
         "memberFailed": "{{name}} 님이 이번에는 답하지 못했습니다",
         "memberTimeout": "{{name}} 님의 답이 너무 늦어 이번에는 건너뛰었습니다",
         "memberUnavailable": "{{name}} 님을 지금 사용할 수 없어 이번에는 발언하지 않았습니다",
@@ -12283,6 +12285,8 @@
         "threadNew": "스레드의 새 메시지",
         "replyingTo": "\"{{name}}\" 님에게 답장: {{text}}",
         "filesOutsideWorkingDir": "작업 디렉터리 밖의 파일은 첨부되지 않았습니다.",
+        "modelFallback": "선택한 모델이 이 컴퓨터에 없어 이번에는 {{model}}(으)로 답합니다.",
+        "modelFallbackUnnamed": "선택한 모델이 이 컴퓨터에 없어 이번에는 이 컴퓨터에서 쓸 수 있는 모델로 답합니다.",
         "earlierOmitted": "(이전 메시지는 생략)",
         "actingFor": "{{name}} · {{person}} 대신",
         "checkout": {
@@ -17070,9 +17074,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "클라우드 컴퓨터 추가",
-        "preparingCloud": "클라우드 컴퓨터 준비 중",
-        "manageCloud": "클라우드 컴퓨터 관리",
         "allMachines": "전체",
         "localMachine": "이 기기",
         "connecting": "연결 중…",

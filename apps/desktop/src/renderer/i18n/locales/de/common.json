@@ -12149,6 +12149,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} ist der Gruppe beigetreten",
+        "memberJoinedList": "{{names}} sind der Gruppe beigetreten",
+        "memberJoinedSummary": "{{names}} und {{others}} weitere sind der Gruppe beigetreten",
         "memberFailed": "{{name}} konnte diesmal nicht antworten",
         "memberTimeout": "{{name}} hat zu lange für die Antwort gebraucht und wurde diesmal übersprungen",
         "memberUnavailable": "{{name}} ist nicht verfügbar und hat diesmal nicht gesprochen",
@@ -12329,6 +12331,8 @@
         "threadNew": "Neue Nachrichten im Thread",
         "replyingTo": "Antwort an „{{name}}“: {{text}}",
         "filesOutsideWorkingDir": "Dateien außerhalb des Arbeitsverzeichnisses wurden nicht angehängt.",
+        "modelFallback": "Das ausgewählte Modell ist auf diesem Computer nicht verfügbar, daher antwortet diesmal {{model}}.",
+        "modelFallbackUnnamed": "Das ausgewählte Modell ist auf diesem Computer nicht verfügbar, daher antwortet diesmal ein hier verfügbares Modell.",
         "earlierOmitted": "(Ältere Nachrichten ausgelassen)",
         "actingFor": "{{name}} · für {{person}}",
         "checkout": {
@@ -17145,9 +17149,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Cloud-Computer hinzufügen",
-        "preparingCloud": "Cloud-Computer wird vorbereitet",
-        "manageCloud": "Cloud-Computer verwalten",
         "allMachines": "Alle",
         "localMachine": "Lokal",
         "connecting": "Verbindung wird hergestellt…",

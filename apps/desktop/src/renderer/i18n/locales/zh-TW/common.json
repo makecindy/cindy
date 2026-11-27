@@ -12103,6 +12103,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}加入了群聊",
+        "memberJoinedList": "{{names}}加入了群聊",
+        "memberJoinedSummary": "{{names}} 及另外 {{others}} 人加入了群聊",
         "memberFailed": "{{name}}這次沒能回覆",
         "memberTimeout": "{{name}}太久沒有回覆，這次先跳過",
         "memberUnavailable": "{{name}}現在無法使用，這次沒有發言",
@@ -12283,6 +12285,8 @@
         "threadNew": "話題裡的新訊息",
         "replyingTo": "回覆「{{name}}」：{{text}}",
         "filesOutsideWorkingDir": "部分檔案不在工作目錄內，未附上。",
+        "modelFallback": "這台電腦上沒有選定的模型，這次改用 {{model}} 回覆。",
+        "modelFallbackUnnamed": "這台電腦上沒有選定的模型，這次改用本機可用的模型回覆。",
         "earlierOmitted": "（更早的訊息略去）",
         "actingFor": "{{name}} · 替 {{person}}",
         "checkout": {
@@ -17070,9 +17074,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "新增雲端主機",
-        "preparingCloud": "雲端主機 · 準備中",
-        "manageCloud": "管理雲端主機",
         "allMachines": "全部",
         "localMachine": "本機",
         "connecting": "連線中…",
