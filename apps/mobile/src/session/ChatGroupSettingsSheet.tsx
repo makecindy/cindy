@@ -11,7 +11,7 @@
 import { useEffect, useRef, useMemo, useState, type ReactNode } from 'react';
 import { createBotGroupMemberSearch } from '@cindy/maker-shared/botGroupMemberSearch';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
-import { Check, Ellipsis, Plus, Reply, SlidersHorizontal, UserPlus } from 'lucide-react-native';
+import { AtSign, Check, Ellipsis, Plus, Reply, SlidersHorizontal, UserPlus } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { resolveRemoteText } from '@cindy/device-link';
 import { BOT_GROUP_NAME_MAX_CHARS, type BotGroupMemberView, type BotGroupRemoteActionId, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
@@ -68,11 +68,12 @@ export interface ChatGroupSettingsSheetProps {
   management?: ReturnType<typeof useBotGroupSettingsManagement>;
   mask?: GroupPersonalMask;
   onMask?(): void;
+  onMentionHistory?(): void;
   onClose(): void;
   onClosed?(): void;
 }
 
-export function ChatGroupSettingsSheet({ visible, group, host, identityFor, online, act, management, mask, onMask, onClose, onClosed }: ChatGroupSettingsSheetProps) {
+export function ChatGroupSettingsSheet({ visible, group, host, identityFor, online, act, management, mask, onMask, onMentionHistory, onClose, onClosed }: ChatGroupSettingsSheetProps) {
   const { t, i18n } = useTranslation();
   const k: Translate = (name, values) => t(`groupChat.groupSettings.${name}`, values);
   const { colors } = useTheme();
@@ -297,7 +298,7 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
           {archived && !dissolved ? <Notice>{k('archived')}</Notice> : null}
           {soleOwner && !archived && !dissolved ? <Notice>{k('soleOwnerHint')}</Notice> : null}
           <About k={k} group={group} canEdit={writable} canFill={direct} onEdit={openEdit} />
-          {!dissolved && me?.actorId && (direct || maskRow || group.assistantComputers) ? <SettingsGroup title={k('me')} footer={maskRow ? k('maskHint') : null} testID="botGroup.settings.me">
+          {!dissolved && me?.actorId && (direct || maskRow || onMentionHistory || group.assistantComputers) ? <SettingsGroup title={k('me')} footer={maskRow ? k('maskHint') : null} testID="botGroup.settings.me">
             {direct ? <ActionInfoRow key="profile" lead={avatar(identityOf(me))} label={k('myProfile')} value={me.name} accessibilityLabel={k('myProfile')}
               onPress={() => { setNickname(me.nickname ?? ''); setPage({ kind: 'profile' }); }} testID="botGroup.settings.profile" /> : null}
             {group.assistantComputers ? <BotGroupMenu testID="botGroup.settings.assistantComputer" title={k('assistantComputer')} accessibilityLabel={k('assistantComputer')}
@@ -307,13 +308,15 @@ export function ChatGroupSettingsSheet({ visible, group, host, identityFor, onli
               {open => <ActionInfoRow label={k('assistantComputer')} accessibilityLabel={k('assistantComputer')}
                 value={group.assistantComputers?.find(device => device.id === group.assistantDeviceId)?.name ?? k('chooseComputer')} onPress={open} />}
             </BotGroupMenu> : null}
+            {onMentionHistory ? <ActionInfoRow testID="botGroup.settings.mentions" lead={<RowIcon><AtSign size={iconSize.md} color={colors.textSecondary} /></RowIcon>}
+              label={t('groupChat.mask.catchup.title')} accessibilityLabel={t('groupChat.mask.catchup.title')} onPress={onMentionHistory} /> : null}
             {maskRow ? <ActionInfoRow key="mask" testID="botGroup.settings.mask"
               lead={maskCompanion ? <GroupMaskAvatar self={mask!.state!.self} companion={maskCompanion} deviceId={host.deviceId} />
                 : <RowIcon><Reply size={iconSize.md} color={colors.textSecondary} /></RowIcon>}
               label={t('groupChat.mask.title')} value={t(`groupChat.mask.status.${mask!.state!.status}`)} accessibilityLabel={t('groupChat.mask.title')} onPress={onMask} /> : null}
           </SettingsGroup> : null}
           {!dissolved && me?.actorId && group.supportsNotificationSettings && group.notificationMode ? <GroupNotificationSettings key={scope}
-            title={direct || maskRow || group.assistantComputers ? undefined : k('me')} mode={group.notificationMode} inherited={group.notificationModeInherited}
+            title={direct || maskRow || onMentionHistory || group.assistantComputers ? undefined : k('me')} mode={group.notificationMode} inherited={group.notificationModeInherited}
             disabled={!visible || !online || archived || busy || (direct && !management.ready)}
             save={mode => management ? management.act('notifications', { mode }) : act('notifications', { mode })} /> : null}
           {(direct || group.supportsOwnBotRemoval === true) && !dissolved && !archived && ownBots.length ? <SettingsGroup title={k('myTeammates')} footer={k('myTeammatesCaption')} testID="botGroup.settings.myTeammates">

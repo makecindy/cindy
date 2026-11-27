@@ -185,7 +185,7 @@ vi.mock('react-i18next', async (importOriginal) => {
 vi.mock('expo-crypto', () => ({ randomUUID: () => `uuid-${++h.uuid}` }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
   ['Copy', 'Share', 'ArrowUpRight', 'CornerDownRight', 'Circle', 'CircleDot', 'GitPullRequest', 'Bell', 'BellRing', 'ChevronLeft', 'MessagesSquare', 'Search', 'Settings2', 'Plus', 'Square', 'Users', 'X', 'Check', 'CircleAlert', 'CircleCheck', 'CircleDashed', 'FileText', 'Sparkles', 'Folder', 'Camera', 'Image',
-    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'Reply', 'SlidersHorizontal', 'UserPlus', 'SmilePlus']
+    'Minus', 'ChevronUp', 'CircleMinus', 'Layers', 'ListChecks', 'ListTodo', 'Ellipsis', 'ChevronRight', 'ChevronDown', 'AtSign', 'Reply', 'SlidersHorizontal', 'UserPlus', 'SmilePlus']
     .map((name) => [name, () => null]),
 ));
 vi.mock('@/theme', async () => {
@@ -2127,6 +2127,22 @@ describe('group settings', () => {
     await click('botGroup.settingsButton');
     expect(byId('botGroup.settings')).not.toBeNull();
   }
+
+  // Unit regression: the unread shortcut disappears after acknowledgement. A member with
+  // zero unread messages can still reopen the original from the group settings on a linked phone.
+  it('opens acknowledged mentions from group settings when the unread hint is absent', async () => {
+    const data = group({ serverBacked: true, supportsPersonalMask: true, supportsPersonalMentionHistory: true });
+    data.members[0] = { ...data.members[0], actorId: 'reader', actorKind: 'human', isSelf: true };
+    h.chat.act.mockImplementation(async (_action: string, input?: { history?: boolean }) => ({
+      result: { hasMore: false, mentions: input?.history ? [
+        { messageId: 'seen', sequence: '5', authorName: 'Nana', text: 'Previously acknowledged' },
+      ] : [] },
+    }));
+    await openSettings(data);
+    expect(byId('botGroup.mentions')).toBeNull();
+    await click('botGroup.settings.mentions');
+    expect(node.textContent).toContain('Previously acknowledged');
+  });
 
   // Unit regression: the settings sheet used to search only literal text. Find the
   // current member by a middle syllable or initials and restore everyone after clearing.

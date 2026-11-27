@@ -30,7 +30,7 @@ const root = message('question', 'nana', '@Alex 社区开始迁移的时间定�
   replyCount: 2, threadPreview: { replies: threadReplies.map(m => ({ ...m, text: m.content })) },
 });
 let group = {
-  id: groupId, name: 'Cindy 讨论', topic: '', description: '', revision: 1, serverBacked: true, singleSpeaker: true,
+  id: groupId, name: 'Cindy 讨论', topic: '', description: '', revision: 1, serverBacked: true, supportsPersonalMentionHistory: ctx.case === 'mention-history', singleSpeaker: true,
   replyMode: 'mentioned', speakingMode: 'auto', members: [person('self', 'Alex', true), person('nana', 'Nana'), person('lin', 'Lin'),
     { botId: 'shared', actorId: 'shared', actorKind: 'bot', name: '公共助手', avatar: 'cindy://avatar/preset/cindy', avatarColor: 'gray', isOwned: false, role: 'member', status: 'active' }],
   organizerBotId: 'shared', projectDir: null, autoContinue: false, createdAt: baseTime, updatedAt: baseTime,
@@ -85,6 +85,10 @@ void mountPage({
         group = { ...group, ...input }; changed(); return { ok: true };
       },
       chatServer: {
+        ...(ctx.case === 'mention-history' ? {
+          mentions: async ({ history }: { history?: boolean }) => ({ ok: true, hasMore: false,
+            mentions: history ? [{ messageId: root.id, sequence: '2', text: root.content, authorName: root.authorName }] : [] }),
+        } : {}),
         ...(ctx.case !== 'mention-read-error' ? {} : {
           mask: forbid('chatServer.mask'),
           mentions: async ({ readIds }: { readIds?: string[] }) => {

@@ -8,11 +8,23 @@ export default {
   real: 'BotGroupChatView, BotGroupComposer, ChatThreadPanel, BotGroupSettingsDrawer, ChatGroupSettings, GroupMaskControls and GroupMaskSettings',
   notCovered: 'Audio capture, native voice shortcuts, server identity, real agent replies, persistence, private digest delivery and cross-device presence. All events are isolated fixture data.',
   stubs: { 'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => "";' },
-  cases: Object.fromEntries(['default', 'thread', 'paused', 'scheduled', 'manual', 'off', 'offline', 'unbound', 'error', 'loading', 'mention-read-error'].map(name => [name, { about: `Personal stand-in: ${name}`, data: { selfAvatar } }])),
+  cases: Object.fromEntries(['default', 'thread', 'paused', 'scheduled', 'manual', 'off', 'offline', 'unbound', 'error', 'loading', 'mention-read-error', 'mention-history'].map(name => [name, { about: `Personal stand-in: ${name}`, data: { selfAvatar } }])),
   async ready(page) { await page.getByTestId('group-attention-hint').waitFor(); },
   async check(page, ui) {
     assert.equal(await page.getByTestId('group-mask-status').count(), 0);
     const inbox = page.getByTestId('group-attention-hint');
+    if (ui.case === 'mention-history') {
+      await inbox.click();
+      await page.getByRole('button', { name: await ui.t('bots.groupChat.mask.catchup.markAll'), exact: true }).click();
+      await page.keyboard.press('Escape');
+      const title = await ui.t('bots.groupChat.mask.catchup.title');
+      await page.getByRole('button', { name: title, exact: true }).click();
+      const original = page.locator('[role=dialog] [data-mention-message=question]');
+      await original.waitFor();
+      await ui.capture('read-mention-history');
+      await original.click();
+      return;
+    }
     if (ui.case === 'mention-read-error') {
       await inbox.click();
       await page.getByRole('button', { name: await ui.t('bots.groupChat.mask.catchup.markAll'), exact: true }).click();

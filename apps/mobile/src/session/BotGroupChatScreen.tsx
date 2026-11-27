@@ -233,8 +233,8 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
   const openGroupSettings = useCallback(() => setSettings(true), []);
   const [threadsOpen, setThreadsOpen] = useState(false);
   const [threadListFilter, setThreadListFilter] = useState<BotGroupThreadFilter>('mine');
-  const [maskSettings, setMaskSettings] = useState(false), [catchup, setCatchup] = useState(false);
-  const openMaskAfterSettings = useRef(false), locateAfterCatchup = useRef<ChatMaskMention | null>(null);
+  const [maskSettings, setMaskSettings] = useState(false), [catchup, setCatchup] = useState<'unread' | 'history' | null>(null);
+  const afterSettings = useRef<'mask' | 'history' | null>(null), locateAfterCatchup = useRef<ChatMaskMention | null>(null);
   const openThreadAfterIndex = useRef<{ rootId: string; messageId?: string } | null>(null);
   const [readTarget, setReadTarget] = useState(messageId ?? '');
   const [replyTo, setReplyTo] = useState<BotGroupQuoteView | null>(null);
@@ -998,7 +998,7 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
             scrollRef.current?.scrollToEnd({ animated: true });
           }} /> : null}
         {mask.mentions.length > 0 ? <MainWindowActionButton density="compact" style={styles.newMessagesButton} action={{
-          label: `@ · ${mask.mentions.length}`, accessibilityLabel: t('groupChat.mask.catchup.title'), testID: 'botGroup.mentions', onPress: () => setCatchup(true),
+          label: `@ · ${mask.mentions.length}`, accessibilityLabel: t('groupChat.mask.catchup.title'), testID: 'botGroup.mentions', onPress: () => setCatchup('unread'),
         }} /> : actionableThreads.length > 0 ? <MainWindowActionButton density="compact" style={styles.newMessagesButton} action={{
           label: actionableThreads.some(thread => thread.unread.mentioned)
             ? `@ · ${actionableThreads.length}`
@@ -1085,10 +1085,16 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
     </>}
     {/* Settings apply to the whole group, including requests in other topics. */}
     {group && !direct ? <BotGroupSettingsSheet readOnly={chat.server} visible={settings} group={chat.state.kind === 'ready' ? chat.state.group : group} host={host} identityFor={identityFor} online={chat.online}
-      mask={replyControls ?? undefined} onMask={replyControls ? () => { openMaskAfterSettings.current = true; setSettings(false); } : undefined}
+      mask={replyControls ?? undefined} onMask={replyControls ? () => { afterSettings.current = 'mask'; setSettings(false); } : undefined}
+      onMentionHistory={group.supportsPersonalMentionHistory ? () => { afterSettings.current = 'history'; setSettings(false); } : undefined}
       act={actFromSettings} onClose={() => setSettings(false)}
       onRefresh={chat.reload}
-      onClosed={() => { if (openMaskAfterSettings.current) { openMaskAfterSettings.current = false; setMaskSettings(true); } if (leaveAfterSettings.current) { leaveAfterSettings.current = false; leave(); } }}
+      onClosed={() => {
+        if (afterSettings.current === 'mask') setMaskSettings(true);
+        if (afterSettings.current === 'history') setCatchup('history');
+        afterSettings.current = null;
+        if (leaveAfterSettings.current) { leaveAfterSettings.current = false; leave(); }
+      }}
       onDeleted={onGroupDeleted} /> : null}
     {canBrowseThreads ? (
       <BotGroupThreadListSheet
@@ -1111,8 +1117,8 @@ function BotGroupChatContent({ deviceId, deviceName, groupId, messageId, notific
       />
     ) : null}
     <GroupMaskSettingsSheet visible={maskSettings && !!replyControls} mask={mask} onClose={() => setMaskSettings(false)} />
-    <GroupMaskCatchupSheet visible={catchup} mask={mask} onClose={() => setCatchup(false)}
-      onLocate={mention => { locateAfterCatchup.current = mention; setCatchup(false); }} onClosed={() => {
+    <GroupMaskCatchupSheet key={viewportOwner} history={catchup === 'history'} visible={catchup !== null} mask={mask} onClose={() => setCatchup(null)}
+      onLocate={mention => { locateAfterCatchup.current = mention; setCatchup(null); }} onClosed={() => {
         const mention = locateAfterCatchup.current; locateAfterCatchup.current = null;
         if (!mention) return;
         if ((mention.threadRootId ?? '') === (threadRootId ?? '')) locateMessage(mention.messageId);

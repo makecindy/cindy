@@ -435,6 +435,7 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     supportsScopedStop: record.supportsScopedStop === true,
     supportsMentionAudiences: record.supportsMentionAudiences === true,
     allowMentionAllBots: record.allowMentionAllBots === true,
+    supportsPersonalMentionHistory: record.supportsPersonalMentionHistory === true,
     supportsMemberMentionAll: record.supportsMemberMentionAll === true,
     allowMemberMentionAll: record.allowMemberMentionAll === true,
     supportsMemberInvites: record.supportsMemberInvites === true,

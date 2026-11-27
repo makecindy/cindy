@@ -5,18 +5,19 @@ const human = { id: 'mask-human', name: 'Alex', avatarUrl: '🙂' };
 const companion = { id: 'mask-companion', name: 'Cindy', avatarUrl: 'cindy://avatar/preset/cindy' };
 let state: ChatMaskState = { toolAccessSupported: true, revision: 1, status: 'enabled', manualRunning: false,
   self: human, companions: [companion], settings: { companionId: companion.id, enabled: true, access: 'chat', trigger: 'always', start: '09:00', end: '18:00', timeZone: 'Asia/Shanghai', resumeMinutes: 15, collectTodos: true, digest: 'manual' } };
-let mentions: ChatMaskMention[] = [
+const history: ChatMaskMention[] = [
   { messageId: 'mask-question', sequence: '1', authorName: 'Jamie', text: '@Alex 明天下午 3 点之前能确认交付时间吗？', reply: { companion, text: '已记下需要确认的时间，等 Alex 回来决定。' } },
   { messageId: 'mask-question-2', sequence: '3', authorName: 'Taylor', text: '@Alex 客户询问批量导入是否支持表格附件，麻烦确认一下。' },
 ];
+let mentions = [...history];
 export function groupMaskVisualFixture(channel: string, raw: unknown): unknown {
-  const request = raw as { ref?: { id?: string }; resourceRef?: { id?: string }; actionId?: string; input?: { action?: ChatMaskAction; readIds?: string[] } };
+  const request = raw as { ref?: { id?: string }; resourceRef?: { id?: string }; actionId?: string; input?: { action?: ChatMaskAction; readIds?: string[]; history?: boolean } };
   if ((request?.ref?.id ?? request?.resourceRef?.id) !== 'mask-qa') return undefined;
   if (channel === 'maker:remote-resources:get') return {
     ref: { collectionId: BOT_GROUP_REMOTE_COLLECTION_ID, kind: BOT_GROUP_REMOTE_RESOURCE_KIND, id: 'mask-qa' }, revision: String(state.revision),
     display: { title: 'Mask QA · Synthetic data' }, actions: [], links: [],
     blocks: [{ id: 'chat', primitive: BOT_GROUP_CHAT_PRIMITIVE, fallbackMarkdown: mentions.map(m => m.text).join('\n'), data: {
-      id: 'mask-qa', name: 'Mask QA · Synthetic data', serverBacked: true, supportsPersonalMask: true, selfActorId: human.id,
+      id: 'mask-qa', name: 'Mask QA · Synthetic data', serverBacked: true, supportsPersonalMask: true, supportsPersonalMentionHistory: true, selfActorId: human.id,
       members: [{ botId: human.id, actorId: human.id, actorKind: 'human', name: human.name, avatar: '🙂', isSelf: true, role: 'member', status: 'active' },
         { botId: 'peer', actorKind: 'human', name: 'Jamie', avatar: '👩', isSelf: false, status: 'active' }],
       messages: [
@@ -29,7 +30,7 @@ export function groupMaskVisualFixture(channel: string, raw: unknown): unknown {
   if (channel !== 'maker:remote-resources:invoke') return undefined;
   if (request.actionId === 'mask-mentions') {
     if (request.input?.readIds) mentions = mentions.filter(m => !request.input!.readIds!.includes(m.messageId));
-    return { result: { mentions, hasMore: false }, effects: [] };
+    return { result: { mentions: request.input?.history ? history : mentions, hasMore: false }, effects: [] };
   }
   if (request.actionId === 'mask') {
     const action = request.input?.action;

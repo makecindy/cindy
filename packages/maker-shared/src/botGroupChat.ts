@@ -686,6 +686,7 @@ export function chatGroupNotificationPreference(
 }
 
 export interface BotGroupSummary {
+  supportsPersonalMentionHistory?: boolean;
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
   /** Manager-controlled friend invitations; absent on old servers/hosts. */
@@ -1222,7 +1223,7 @@ export type ChatGroupAction =
   | { type: 'archive'; archived: boolean; expectedRevision: number };
 export interface ChatServerApi {
   mask?(input: { groupId: string; action?: ChatMaskAction; operationId?: string }): Promise<ChatServerResult<{ state: ChatMaskState }>>;
-  mentions?(input: { groupId: string; before?: string; readIds?: string[]; operationId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean }>>;
+  mentions?(input: { groupId: string; history?: boolean; before?: string; readIds?: string[]; operationId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean }>>;
   manage(input: { groupId: string; action: ChatGroupAction }): Promise<ChatServerResult<{ listState?: { conversationId: string; hidden: boolean; revision: number } }>>;
   /** Owned companions across devices. `botId` is the stable external id, not a local-install guarantee. */
   ownedBots(): Promise<ChatServerResult<{ bots: Array<{ actorId: string; botId?: string; name: string; avatar?: string | null; homeDeviceId?: string | null }> }>>;

@@ -185,7 +185,7 @@ export interface ChatSendInput {
 }
 export interface ChatSendBody {
   independentReplies?: boolean;
-  operationId: string; content: ChatMessage['content']; mentions: string[]; mentionAudience?: 'humans' | 'bots' | 'everyone'; threadRootId?: string;
+  operationId: string; content: ChatMessage['content']; namedMentions?: string[]; mentions: string[]; mentionAudience?: 'humans' | 'bots' | 'everyone'; threadRootId?: string;
 }
 
 export function chatId(value: string): string {
@@ -640,7 +640,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
         && !mayStopWork(members, selfId, execution.bot_id, execution.requester_id)) }, supportsAttachments: true };
 }
 
-type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupNotificationSettings?: number } };
+type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMentionHistory?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupNotificationSettings?: number } };
 /** What every screen of one signed-in account may share: who it is on the Chat Server and the
  * read in flight for it. `request` must be fenced to the account, never to one screen, so a
  * screen that closes cannot fail the read another screen is waiting on. */
@@ -774,6 +774,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   let singleSpeaker = false;
   let independentReplies = false;
   let personalMask = false;
+  let supportsPersonalMentionHistory = false;
   let supportsMemberAvatar = false;
   let supportsNotificationSettings = false;
   let supportsMentionAudiences = false;
@@ -784,6 +785,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
     supportsListRemoval = capabilities?.conversationListStateVersion === 1;
     independentReplies = capabilities?.independentReplies === 1;
     singleSpeaker = capabilities?.groupSingleSpeaker === 1;
+    supportsPersonalMentionHistory = capabilities?.personalMentionHistory === 1;
     personalMask = capabilities?.personalMask === 1;
     supportsMemberAvatar = capabilities?.groupMemberAvatar === 1;
     supportsNotificationSettings = capabilities?.groupNotificationSettings === 1;
@@ -877,12 +879,14 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       return request<ChatMaskState>(`/conversations/${chatId(roomId)}/mask`, action ? 'POST' : 'GET',
         action ? { ...action, operationId } : undefined);
     },
-    async maskMentions(roomId: string, before?: string, readIds?: string[], operationId?: string) {
+    async maskMentions(roomId: string, before?: string, readIds?: string[], operationId?: string, history = false) {
       await identity();
+      if (history && !supportsPersonalMentionHistory) throw new Error('UNSUPPORTED_OPERATION');
+      const scope = supportsPersonalMentionHistory ? `&scope=${history ? 'personal-history' : 'personal-unread'}` : '';
       if (!personalMask) return { mentions: [] as ChatMaskMention[], hasMore: false };
       const path = `/conversations/${chatId(roomId)}/mentions`;
       if (readIds?.length) await request(`${path}/read`, 'POST', { operationId, messageIds: readIds.map(chatId) });
-      const page = await request<{ messages: Array<ChatMessage & { reply?: { content: ChatMessage['content']; maskAttribution: NonNullable<ChatMessage['maskAttribution']> } }> ; hasMore: boolean }>(`${path}?limit=100${before ? `&before=${chatCursor(before)}` : ''}`);
+      const page = await request<{ messages: Array<ChatMessage & { reply?: { content: ChatMessage['content']; maskAttribution: NonNullable<ChatMessage['maskAttribution']> } }> ; hasMore: boolean }>(`${path}?limit=100${scope}${before ? `&before=${chatCursor(before)}` : ''}`);
       const threadMessages = page.messages.filter(message => !message.deleted && message.threadRootId
         && message.mentionAudience !== 'everyone' && message.mentionAudience !== 'humans');
       return { hasMore: page.hasMore, threadMessages, mentions: page.messages.map((message): ChatMaskMention => ({
@@ -892,7 +896,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           text: message.reply.content.map(block => block.text ?? block.fallback ?? block.caption ?? '').join('\n') } } : {}),
       })) };
     },
-    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberMentionAll, supportsMemberInvites, supportsNotificationSettings, supportsScopedStop: singleSpeaker }),
+    lifecycleCapabilities: () => ({ supportsPersonalMentionHistory, supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberMentionAll, supportsMemberInvites, supportsNotificationSettings, supportsScopedStop: singleSpeaker }),
     async groupSettings(roomId: string) {
       const [snapshot, self] = await Promise.all([
         request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`), identity(),
@@ -1699,6 +1703,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       try {
         if (input.mentions.all && !mentions.size && !supportsMentionAudiences && self) mentions.add(self);
         const body: ChatSendBody = { operationId: input.clientId,
+          ...(supportsPersonalMentionHistory && input.mentions.all && input.mentions.botIds.length ? { namedMentions: input.mentions.botIds.map(chatId) } : {}),
           ...(independentReplies && input.conversationKind !== 'direct' ? { independentReplies: true } : {}),
           ...(supportsMentionAudiences && input.conversationKind !== 'direct' && botGroupMentionAudience(input.mentions) ? { mentionAudience: botGroupMentionAudience(input.mentions) } : {}),
           content, mentions: [...mentions], ...(input.threadRootId ? { threadRootId: chatId(input.threadRootId) } : {}) };

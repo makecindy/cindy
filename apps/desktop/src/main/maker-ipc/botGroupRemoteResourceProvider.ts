@@ -540,7 +540,7 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           // the mask owner separate from the group's administrator.
           const receipt = actionId === 'mask'
             ? await current.chatServer.mask({ groupId, action: input.action as ChatMaskAction | undefined, operationId: input.operationId as string | undefined })
-            : await current.chatServer.mentions({ groupId, before: input.before as string | undefined,
+            : await current.chatServer.mentions({ groupId, ...(input.history === true ? { history: true } : {}), before: input.before as string | undefined,
               readIds: input.readIds as string[] | undefined, operationId: input.operationId as string | undefined });
           if (!receipt.ok) throw new RemoteResourceRegistryError('INVALID_PARAMS', receipt.errorCode);
           ownerService();

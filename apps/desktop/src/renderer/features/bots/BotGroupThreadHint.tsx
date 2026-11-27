@@ -35,7 +35,7 @@ function UnreadDot() {
   return <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--bot-unread-bg)]" />;
 }
 
-function MentionRow({ entry, onLocate }: { entry: GroupMaskMention; onLocate: () => void }) {
+export function MentionRow({ entry, onLocate, unread = true }: { entry: GroupMaskMention; onLocate: () => void; unread?: boolean }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const replyId = useId();
@@ -43,7 +43,7 @@ function MentionRow({ entry, onLocate }: { entry: GroupMaskMention; onLocate: ()
     <div className="border-b border-[var(--border-default)] px-2 py-2 last:border-b-0">
       <div className="flex min-h-8 items-center gap-2 text-12">
         <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-          <UnreadDot />
+          {unread && <UnreadDot />}
           <span className="break-words font-medium text-[var(--text-primary)]">{entry.authorName}</span>
           <span className="text-[var(--text-tertiary)]">{t(`bots.groupChat.mask.catchup.${entry.threadRootId ? 'thread' : 'main'}`)}</span>
         </span>
