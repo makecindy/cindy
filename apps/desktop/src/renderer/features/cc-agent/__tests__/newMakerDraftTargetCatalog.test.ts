@@ -164,10 +164,12 @@ function harness(options: {
   });
   const patchDraft = vi.fn();
   const setRemoteDraftState = vi.fn();
+  const recordRecentDeviceUsage = vi.fn();
   const dlSeedKeyRef = { current: null as string | null };
   const bindings = {
     // These are target-machine POSIX paths, not local filesystem paths.
     draft: { vendor: 'pi', workingDir: options.initialWorkingDir ?? '/remote/project' },
+    recordRecentDeviceUsage,
     effectiveDeviceLinkDeviceId: 'sourceDeviceId' in options
       ? options.sourceDeviceId ?? undefined : options.sameDevice ? 'target-device' : 'old-device',
     effectiveRemoteHostId: null,
@@ -206,9 +208,11 @@ function harness(options: {
   const applyDraftTarget = callback<(request: unknown) => void>('applyDraftTarget', bindings);
   const add = callback<(target: RemoteProjectTarget) => Promise<void>>('handleRemoteProjectAdded', { ...bindings, applyDraftTarget });
   return {
-    invoke, patchDraft, setRemoteDraftState, defaults, dlSeedKeyRef,
+    invoke, patchDraft, setRemoteDraftState, recordRecentDeviceUsage, defaults, dlSeedKeyRef,
+    evictDeviceCapabilities: bindings.evictDeviceCapabilities,
+    evictDeviceProviders: bindings.evictDeviceProviders,
     changeDevice: () => callback<(id: string, name: string) => void>('handleDeviceChange', {
-      applyDraftTarget, effectiveDeviceLinkDeviceId: bindings.effectiveDeviceLinkDeviceId,
+      ...bindings, applyDraftTarget,
       sendInFlightRef: { current: false }, directoryRecoveryRef: { current: null },
       // PR #13024 把「按设备记忆上次项目」加进了 handleDeviceChange，下面这些成了回调体
       // 的自由变量；harness 不绑它们时 new Function 沙箱直接 ReferenceError，整份测试在
@@ -229,6 +233,12 @@ function harness(options: {
 }
 
 describe('remote project draft catalog ownership', () => {
+  it('only evicts the target host direct cache so its routed shared-model catalogs stay warm', async () => {
+    const h = harness({ previous: selection('low') });
+    await h.add();
+    expect(h.evictDeviceCapabilities).toHaveBeenCalledWith('target-device', { directOnly: true });
+    expect(h.evictDeviceProviders).toHaveBeenCalledWith('target-device', { directOnly: true });
+  });
   // PR #12916: exercise the device picker and real store together. A local
   // plugin selection must never be carried into the controlled computer's draft.
   it('drops the local agy Worker when the device picker switches to a controlled computer', () => {
@@ -255,6 +265,7 @@ describe('remote project draft catalog ownership', () => {
     expect(h.current()).toEqual(selection('medium'));
     expect(h.dlSeedKeyRef.current).toBe('target-device:pi');
     expect(h.patchDraft).toHaveBeenCalledWith(expect.objectContaining({ deviceLinkDeviceId: 'target-device' }));
+    expect(h.recordRecentDeviceUsage).toHaveBeenCalledWith('owner-test', 'target-device');
   });
 
   it.each([false, true])('clears effort when the target source explicitly has no efforts (same device: %s)', async (sameDevice) => {
@@ -310,6 +321,7 @@ describe('remote project draft catalog ownership', () => {
         sendInFlightRef: { current: false },
         directoryRecoveryRef: { current: null },
         dataOwnerId: 'owner-switch',
+        recordRecentDeviceUsage: vi.fn(),
         draft: state,
         effectiveDeviceLinkDeviceId: state.deviceLinkDeviceId ?? undefined,
         effectiveRemoteHostId: state.remoteHostId,
