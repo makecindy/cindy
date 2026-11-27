@@ -424,6 +424,7 @@ describe('db worker tx handlers', () => {
       await client.exec('ALTER TABLE sessions ADD COLUMN hidden_at INTEGER');
       await client.exec('ALTER TABLE sessions ADD COLUMN worktree_path TEXT');
       await client.exec('ALTER TABLE sessions ADD COLUMN orca_remote_lead TEXT');
+      await client.exec('ALTER TABLE sessions ADD COLUMN created_by_session TEXT');
       await client.exec('CREATE TABLE schedules (target_session_id TEXT, status TEXT)');
       await client.exec('CREATE TABLE session_goals (session_id TEXT, status TEXT)');
       await client.exec('CREATE TABLE agent_input_queue_snapshots (session_id TEXT, payload TEXT)');

@@ -22,6 +22,11 @@ import {
   serializeOrcaRemoteLead,
   type OrcaRemoteLead,
 } from '../../shared/orcaRemoteWorker.js';
+import {
+  parseSessionCreatedBy,
+  serializeSessionCreatedBy,
+  type SessionCreatedBy,
+} from '../../shared/sessionOrigin.js';
 
 import type {
   sessions,
@@ -324,6 +329,7 @@ export function sessionToCamel(row: SessionRowWithCount): Session {
     remoteHostId: row.remoteHostId ?? null,
     agentDeviceId: row.agentDeviceId ?? null,
     orcaRemoteLead: parseOrcaRemoteLead(row.orcaRemoteLead ?? null),
+    createdBySession: parseSessionCreatedBy(row.createdBySession ?? null),
     // interrupted-turn-resume:「疑似中断」判定的两个时间戳(unix ms 原样透出,
     // renderer 打开会话时比较 startedAt > endedAt,见 sessionActiveTurn.ts)。
     activeTurnStartedAt: row.activeTurnStartedAt ?? null,
@@ -457,6 +463,8 @@ export function sessionCreateToRow(
         agentDeviceId?: string | null;
         /** 仅运行设备上的协同远端 Worker 入口写入(见 shared/orcaRemoteWorker.ts)。 */
         orcaRemoteLead?: OrcaRemoteLead | null;
+        /** 仅 send_to_session（create 模式）入口写入（见 shared/sessionOrigin.ts）。 */
+        createdBySession?: SessionCreatedBy | null;
         /**
          * per-session 来源(供应商)显式选择,落盘 sessions.provider_id(与 update 同列)。
          * null/undefined = 不显式选,跟随该 agent 的原生默认路由(no-break)。草稿态首次
@@ -505,6 +513,7 @@ export function sessionCreateToRow(
     // Agent 运行在另一台电脑时与 SSH 远端互斥：两者同时给出时以 SSH 远端为准、不记录设备。
     agentDeviceId: normalizeRemoteHostId(body?.remoteHostId) ? null : normalizeRemoteHostId(body?.agentDeviceId),
     orcaRemoteLead: body?.orcaRemoteLead ? serializeOrcaRemoteLead(body.orcaRemoteLead) : null,
+    createdBySession: body?.createdBySession ? serializeSessionCreatedBy(body.createdBySession) : null,
     // 显式来源:trim 后非空才入库,其余(undefined / null / 空串 / 纯空白)一律落 null,
     // 与 session-provider-store 的 null 语义对齐(null → 回落默认路由,字节级不变)。
     providerId:

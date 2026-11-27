@@ -123,7 +123,7 @@ async function runMigrationStatement(target: DbClient, statement: string): Promi
 }
 
 function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
-  if (fileName === '0164_old_zeigeist.sql') {
+  if (fileName === '0165_whole_nemesis.sql') {
     ensureColumnSync(db, 'sessions', 'archived_at', 'integer');
     return;
   }
@@ -159,6 +159,7 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
     ensureColumnSync(db, 'orca_workers', 'last_bridged_message_id', 'text');
     ensureColumnSync(db, 'orca_workers', 'remote_released_at', 'integer');
     ensureColumnSync(db, 'sessions', 'orca_remote_lead', 'text');
+    ensureColumnSync(db, 'sessions', 'created_by_session', 'text');
     return;
   }
   if (fileName === '0097_fresh_stryfe.sql') {
@@ -257,7 +258,7 @@ function applyMigrationScriptSync(db: Sqlite, fileName: string): void {
 }
 
 async function applyMigrationScript(target: DbClient, fileName: string): Promise<void> {
-  if (fileName === '0164_old_zeigeist.sql') {
+  if (fileName === '0165_whole_nemesis.sql') {
     await ensureColumn(target, 'sessions', 'archived_at', 'integer');
     return;
   }
@@ -293,6 +294,7 @@ async function applyMigrationScript(target: DbClient, fileName: string): Promise
     await ensureColumn(target, 'orca_workers', 'last_bridged_message_id', 'text');
     await ensureColumn(target, 'orca_workers', 'remote_released_at', 'integer');
     await ensureColumn(target, 'sessions', 'orca_remote_lead', 'text');
+    await ensureColumn(target, 'sessions', 'created_by_session', 'text');
     return;
   }
   if (fileName === '0097_fresh_stryfe.sql') {

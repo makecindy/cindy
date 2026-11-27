@@ -8,6 +8,7 @@ import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 import type { ReviewRunMeta } from '../../shared/reviewRun';
 import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker';
+import type { SessionCreatedBy } from '../../shared/sessionOrigin';
 import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
 import type {
   MessageSourceDevice,
@@ -511,6 +512,11 @@ export interface Session {
    * null/undefined = 普通任务；旧版本 payload 没有该字段。
    */
   orcaRemoteLead?: OrcaRemoteLead | null;
+  /**
+   * 由另一个任务通过 send_to_session（create 模式）新建时的来源任务元数据。
+   * 独立于 parentSessionId（仅用于 fork / 侧边追问）。null/undefined = 非任务新建或旧版 payload。
+   */
+  createdBySession?: SessionCreatedBy | null;
   /**
    * device-link 跨设备远程控制:本 session 实际归属的**被控设备 deviceId**。
    * 仅存在于控制端**内存**里(由 remoteProjectsStore 注入),**永不落本地 DB**——

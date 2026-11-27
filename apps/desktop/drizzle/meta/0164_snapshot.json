@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4d86c3b3-092f-42a7-8eff-2525a845afda",
+  "id": "ce0e9b07-6edc-4e03-a1ac-84d63fe95de9",
   "prevId": "18b32762-8d1a-4730-a1b3-2c984846780b",
   "tables": {
     "account_usage_snapshots": {
@@ -6212,13 +6212,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "archived_at": {
-          "name": "archived_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "hidden_at": {
           "name": "hidden_at",
           "type": "integer",
@@ -6411,6 +6404,13 @@
         },
         "orca_remote_lead": {
           "name": "orca_remote_lead",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_by_session": {
+          "name": "created_by_session",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

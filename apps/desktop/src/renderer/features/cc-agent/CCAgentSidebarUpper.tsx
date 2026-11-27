@@ -1642,10 +1642,10 @@ function ExpandedView({
   );
 
   const taskCreatorIndex = useTaskCreatorIndex();
-  const { hideAutomations, creators, lastActivity } = filter;
+  const { hideAutomations, hideTaskCreated, creators, lastActivity } = filter;
   const filterTaskSessions = useCallback(
-    (source: Session[]) => filterSidebarTasks(source, { hideAutomations, creators, lastActivity }, taskCreatorIndex),
-    [hideAutomations, creators, lastActivity, taskCreatorIndex],
+    (source: Session[]) => filterSidebarTasks(source, { hideAutomations, hideTaskCreated, creators, lastActivity }, taskCreatorIndex),
+    [hideAutomations, hideTaskCreated, creators, lastActivity, taskCreatorIndex],
   );
   const activityFilteredSessions = useMemo(
     () => filterTaskSessions(sidebarSessions), [filterTaskSessions, sidebarSessions],
@@ -3287,7 +3287,7 @@ function ExpandedView({
       // For a pinned task or an active automation, Done settles this round without archiving.
       if (action === 'complete') {
         const keepActive = session?.pinnedAt || await loadActiveBoundScheduleNames([
-          { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId },
+          { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId, orcaRole: session?.orcaRole },
         ]).then(names => !!names.get(sessionId)?.length, () => false);
         if (keepActive) {
           if (await blockedByAttachment()) return;
@@ -3314,7 +3314,7 @@ function ExpandedView({
             const scheduleNames = action === 'complete'
               ? []
               : (await loadActiveBoundScheduleNames([
-                  { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId },
+                  { id: sessionId, deviceLinkDeviceId: session?.deviceLinkDeviceId, orcaRole: session?.orcaRole },
                 ])).get(sessionId) ?? [];
             // **worktree 预检必须是最后一个前置条件**(codex review):它之后再 await
             // 任何东西(比如原来排在后面的接管查询),都会给「clean 结论」留一段失效

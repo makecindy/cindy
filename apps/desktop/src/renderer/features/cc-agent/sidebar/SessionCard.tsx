@@ -82,6 +82,7 @@ import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { SessionRenameInput } from '../SessionRenameInput';
 import { SidebarTitleMarquee, type SessionItemProps } from './SessionItem';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
+import { SessionOriginMark } from './SessionOriginMark';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
 import { useOfflineInboxIntent } from '@/features/device-link/offlineInboxIntentsStore';
 import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
@@ -847,6 +848,11 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
                   {/* 任务标签常显、紧跟标题，不属于任务信息复选。 */}
                   <TaskTagDots tags={session.tags} />
                   {showTeammate && <BotFollowMark followers={followers} />}
+                  <SessionOriginMark
+                    session={session}
+                    isActive={isActive}
+                    suppressTaskOrigin={showTeammate && followers.length > 0 && Boolean(session.createdBySession?.botId)}
+                  />
                   {remoteIconKind && (
                     <RemoteProjectIcon
                       kind={remoteIconKind}
@@ -1152,6 +1158,12 @@ export const SessionCard = withSidebarNavigation<SessionCardProps>(function Sess
               size={11}
             />
             {renderAutomationMeta(11)}
+            <SessionOriginMark
+              session={session}
+              isActive={isActive}
+              size={11}
+              suppressTaskOrigin={showTeammate && followers.length > 0 && Boolean(session.createdBySession?.botId)}
+            />
             {remoteIconKind && (
               <RemoteProjectIcon
                 kind={remoteIconKind}
