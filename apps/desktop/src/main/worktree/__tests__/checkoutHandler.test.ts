@@ -6,11 +6,15 @@
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createCheckoutHandler } from '../checkoutHandler';
+import { GitExecError } from '../gitExec';
 const mocks = vi.hoisted(() => ({
   status: vi.fn(),
   switch: vi.fn(),
   undo: vi.fn(),
   restore: vi.fn(),
+}));
+vi.mock('../../logger', () => ({
+  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }),
 }));
 vi.mock('../checkout', () => ({ createCheckoutService: () => mocks }));
 const operationId = '8a7768e7-e652-4458-9c15-96af310bc9cb';
@@ -89,6 +93,33 @@ it('keeps outcomes and undo receipts scoped to the original account and controll
         operationId: '7a7768e7-e652-4458-9c15-96af310bc9cb',
       },
     ),
-  ).rejects.toThrow();
+  ).rejects.toThrow('checkout:changed');
   expect(mocks.undo).not.toHaveBeenCalled();
+});
+it('distinguishes timed-out git commands from generic git failures', async () => {
+  const run = handler();
+  mocks.status.mockRejectedValueOnce(
+    new GitExecError({
+      args: ['status', '--porcelain=v1'],
+      exitCode: null,
+      stdout: '',
+      stderr: '',
+      timedOut: true,
+    }),
+  );
+  await expect(
+    run({}, { baseRepo: path.resolve('checkout-fixture'), action: 'status' }),
+  ).rejects.toThrow('[INTERNAL] checkout:timeout');
+
+  mocks.status.mockRejectedValueOnce(
+    new GitExecError({
+      args: ['status', '--porcelain=v1'],
+      exitCode: 128,
+      stdout: '',
+      stderr: 'fatal: not a git repository',
+    }),
+  );
+  await expect(
+    run({}, { baseRepo: path.resolve('checkout-fixture'), action: 'status' }),
+  ).rejects.toThrow('[INTERNAL] checkout:git');
 });

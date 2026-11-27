@@ -15600,6 +15600,7 @@
         "diverged": "As branches local e remota têm alterações diferentes. Resolva as diferenças antes de mudar de branch.",
         "missing": "A branch selecionada não existe mais. Atualize a lista.",
         "git": "Não foi possível concluir. Confira o branch atual e as alterações salvas antes de tentar novamente",
+        "timeout": "Tempo esgotado ao verificar o status do Git. Repositórios grandes ou muitas alterações não confirmadas podem demorar demais; organize as alterações ou use worktree.",
         "savedMissing": "Estas alterações salvas não estão mais disponíveis",
         "undoUnavailable": "Esta troca de branch não pode mais ser desfeita"
       },

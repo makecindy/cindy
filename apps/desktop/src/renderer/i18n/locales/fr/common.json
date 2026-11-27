@@ -15600,6 +15600,7 @@
         "diverged": "Les branches locale et distante ont des modifications différentes. Résolvez ces différences avant de changer de branche.",
         "missing": "La branche choisie n’existe plus. Actualisez la liste.",
         "git": "Impossible de terminer. Vérifiez la branche actuelle et les modifications enregistrées avant de réessayer",
+        "timeout": "Délai dépassé lors de la vérification de l’état Git. Les dépôts volumineux ou les nombreuses modifications non validées peuvent prendre trop de temps ; organisez-les ou utilisez worktree.",
         "savedMissing": "Ces modifications enregistrées ne sont plus disponibles",
         "undoUnavailable": "Ce changement de branche ne peut plus être annulé"
       },

@@ -15600,6 +15600,7 @@
         "diverged": "Os ramos local e remoto têm alterações diferentes. Resolva as diferenças antes de mudar de ramo.",
         "missing": "O ramo selecionado já não existe. Atualize a lista.",
         "git": "Não foi possível concluir. Verifique o ramo atual e as alterações guardadas antes de tentar novamente",
+        "timeout": "Tempo esgotado ao verificar o estado do Git. Repositórios grandes ou muitas alterações por confirmar podem demorar demasiado; organize as alterações ou use worktree.",
         "savedMissing": "Estas alterações guardadas já não estão disponíveis",
         "undoUnavailable": "Já não é possível anular esta mudança de ramo"
       },
