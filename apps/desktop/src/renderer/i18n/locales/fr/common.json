@@ -17544,6 +17544,8 @@
       "organizeSidebar": "Paramètres de la barre latérale",
       "filterAllText": "tous",
       "filterSelectedProjects": "{{count}} sélectionnés",
+      "filterSelectedHarnesses": "{{count}} sélectionnés",
+      "filterVendorPluginHeading": "Depuis des plugins",
       "filterStatus": {
         "active": "Actives",
         "archived": "Archivées",
@@ -17562,6 +17564,11 @@
         "device": "Appareil",
         "dialogue": "Conversation",
         "automation": "Automatisation"
+      },
+      "filterGroupByHint": {
+        "device": "Niveau extérieur",
+        "dialogue": "Sessions sans projet",
+        "automation": "Exécutions d’automatisations"
       },
       "filterGroupByDeviceManualTip": "Le regroupement par appareil n'est pas disponible en tri manuel",
       "deviceGroup": {
@@ -17593,6 +17600,11 @@
       "filterSortByTip": {
         "priority": "D'abord celles qui attendent votre action, puis les non lues, puis celles en cours d'exécution, puis par date"
       },
+      "filterSortByHint": {
+        "priority": "D’abord celles qui vous attendent",
+        "activity": "Dernière activité d’abord",
+        "created": "Créées récemment d’abord"
+      },
       "filterStatusHeading": "Statut",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "Dernière activité",
@@ -17607,9 +17619,17 @@
       "filterProjectOrderTip": {
         "custom": "Faites glisser les lignes de projet avec la souris pour les réorganiser. Les sessions qu'ils contiennent suivent toujours le tri ci-dessus."
       },
+      "filterProjectOrderHint": {
+        "custom": "Faites glisser les lignes"
+      },
       "filterCreatorsHeading": "Amis",
       "filterCreatorsAny": "Tous",
-      "filterHideAutomations": "Masquer les tâches automatisées",
+      "hideHeading": "Masquer",
+      "hideOptions": {
+        "automations": "Tâches automatisées",
+        "taskCreated": "Tâches créées par d’autres tâches",
+        "teammates": "Tâches des amis"
+      },
       "filterCreatorsNone": "Tout masquer",
       "filterSelectedCreators": "{{count}} sélectionnés",
       "filterProjectsHeading": "Projets",
@@ -17632,6 +17652,10 @@
         "openWorktree": "Ouvrir le dossier du worktree",
         "tokens": "Jetons",
         "cost": "Coût"
+      },
+      "taskInfoSection": {
+        "identity": "Repères de session",
+        "meta": "Détails à droite · dans l’ordre de sélection"
       },
       "taskInfoTip": {
         "tokens": "Total des jetons",
@@ -17997,9 +18021,9 @@
         "tasks": "Liste des tâches",
         "inbox": "Boîte de réception",
         "enterInbox": "Passer en mode boîte de réception",
-        "leaveInbox": "Passer en mode liste des tâches"
+        "leaveInbox": "Passer en mode liste des tâches",
+        "inboxTips": "Conseils pour la boîte de réception"
       },
-      "filterHideTaskCreated": "Masquer les tâches créées par d’autres tâches",
       "origin": {
         "createdByTask": "Ouverte par une autre tâche",
         "createdByTaskNamed": "Ouverte par la tâche « {{title}} »",

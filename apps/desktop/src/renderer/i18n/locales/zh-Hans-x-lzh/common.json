@@ -17304,6 +17304,8 @@
       "organizeSidebar": "侧栏显示规制",
       "filterAllText": "全",
       "filterSelectedProjects": "已择 {{count}} 案",
+      "filterSelectedHarnesses": "已择 {{count}} 项",
+      "filterVendorPluginHeading": "出自法器",
       "filterStatus": {
         "active": "活跃",
         "archived": "已封存",
@@ -17322,6 +17324,11 @@
         "device": "机",
         "dialogue": "言谈",
         "automation": "自运"
+      },
+      "filterGroupByHint": {
+        "device": "最外之层",
+        "dialogue": "无案之差事",
+        "automation": "自运所行之差事"
       },
       "filterGroupByDeviceManualTip": "手动排序时，暂不能依设备分组",
       "deviceGroup": {
@@ -17353,6 +17360,11 @@
       "filterSortByTip": {
         "priority": "待君处置者居首，次未读、方行者，余依时序"
       },
+      "filterSortByHint": {
+        "priority": "待君者先",
+        "activity": "新动者先",
+        "created": "新立者先"
+      },
       "filterStatusHeading": "状",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "近活跃",
@@ -17367,9 +17379,17 @@
       "filterProjectOrderTip": {
         "custom": "以鼠标拖案列以调其序，组内差事仍依上之排序"
       },
+      "filterProjectOrderHint": {
+        "custom": "拖案列"
+      },
       "filterCreatorsHeading": "同伴",
       "filterCreatorsAny": "全",
-      "filterHideAutomations": "隐自动之务",
+      "hideHeading": "隐",
+      "hideOptions": {
+        "automations": "自动之务",
+        "taskCreated": "他差事所立之务",
+        "teammates": "同伴之务"
+      },
       "filterCreatorsNone": "皆不示",
       "filterSelectedCreators": "已择 {{count}} 位",
       "filterProjectsHeading": "案",
@@ -17392,6 +17412,10 @@
         "openWorktree": "启 worktree 卷匣",
         "tokens": "Token",
         "cost": "所费"
+      },
+      "taskInfoSection": {
+        "identity": "差事之识",
+        "meta": "右侧之讯 · 依勾选之序"
       },
       "taskInfoTip": {
         "tokens": "累计 Token",
@@ -17747,9 +17771,9 @@
         "tasks": "任务列表",
         "inbox": "收件箱",
         "enterInbox": "转至收件箱之式",
-        "leaveInbox": "转至任务列之式"
+        "leaveInbox": "转至任务列之式",
+        "inboxTips": "收件箱用法"
       },
-      "filterHideTaskCreated": "隐他差事所立之务",
       "origin": {
         "createdByTask": "他差事所立",
         "createdByTaskNamed": "差事「{{title}}」所立",

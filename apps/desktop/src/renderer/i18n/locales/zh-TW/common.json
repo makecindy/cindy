@@ -17304,6 +17304,8 @@
       "organizeSidebar": "側邊欄顯示設定",
       "filterAllText": "全部",
       "filterSelectedProjects": "已選 {{count}} 個",
+      "filterSelectedHarnesses": "已選 {{count}} 個",
+      "filterVendorPluginHeading": "來自插件",
       "filterStatus": {
         "active": "活躍",
         "archived": "已歸檔",
@@ -17322,6 +17324,11 @@
         "device": "裝置",
         "dialogue": "對話",
         "automation": "自動化"
+      },
+      "filterGroupByHint": {
+        "device": "最外層",
+        "dialogue": "沒有專案的任務",
+        "automation": "自動化執行的任務"
       },
       "filterGroupByDeviceManualTip": "手動排序時按裝置分組暫不可用",
       "deviceGroup": {
@@ -17353,6 +17360,11 @@
       "filterSortByTip": {
         "priority": "等你處理的排在最前，然後是未讀、執行中，其餘按時間"
       },
+      "filterSortByHint": {
+        "priority": "等你處理的在前",
+        "activity": "剛動過的在前",
+        "created": "新建的在前"
+      },
       "filterStatusHeading": "狀態",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最近活躍",
@@ -17367,9 +17379,17 @@
       "filterProjectOrderTip": {
         "custom": "用滑鼠拖曳專案列調整順序，組內任務仍按上面的排序"
       },
+      "filterProjectOrderHint": {
+        "custom": "拖曳專案列"
+      },
       "filterCreatorsHeading": "夥伴",
       "filterCreatorsAny": "全部",
-      "filterHideAutomations": "隱藏自動化任務",
+      "hideHeading": "隱藏",
+      "hideOptions": {
+        "automations": "自動化任務",
+        "taskCreated": "由其他任務建立的任務",
+        "teammates": "夥伴的任務"
+      },
       "filterCreatorsNone": "都不顯示",
       "filterSelectedCreators": "已選 {{count}} 位",
       "filterProjectsHeading": "專案",
@@ -17392,6 +17412,10 @@
         "openWorktree": "開啟 worktree 資料夾",
         "tokens": "Token",
         "cost": "費用"
+      },
+      "taskInfoSection": {
+        "identity": "任務標識",
+        "meta": "右側資訊 · 按勾選順序顯示"
       },
       "taskInfoTip": {
         "tokens": "累計 Token",
@@ -17747,9 +17771,9 @@
         "tasks": "任務列表",
         "inbox": "收件匣",
         "enterInbox": "切換到收件匣模式",
-        "leaveInbox": "切換到任務列表模式"
+        "leaveInbox": "切換到任務列表模式",
+        "inboxTips": "收件匣使用技巧"
       },
-      "filterHideTaskCreated": "隱藏由其他任務建立的任務",
       "origin": {
         "createdByTask": "由其他任務建立",
         "createdByTaskNamed": "由任務「{{title}}」建立",

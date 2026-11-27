@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { mountPage, subscription } from '../../ui-page/harness';
+import { ctx, mountPage, subscription } from '../../ui-page/harness';
 import { SidebarFilterPopover } from '../../../src/renderer/features/cc-agent/sidebar/SidebarFilterPopover';
 import { persistCreators } from '../../../src/renderer/features/cc-agent/hooks/helpers/sidebarFilterCore';
 import { useTaskInfoFields } from '../../../src/renderer/features/cc-agent/hooks/useTaskInfoFields';
@@ -21,6 +21,8 @@ const tasks = [
   { id: 'local', title: 'Dash · Local task' },
   { id: 'remote', title: 'Lizi · Remote task', status: 'archived', deviceLinkDeviceId: 'laptop' },
 ].map(row => ({ status: 'active', source: 'desktop', ...row }) as Session);
+// A harness a plugin provides; its name comes from the plugin list of this computer.
+const PLUGIN_HARNESSES = [{ key: 'acp-plugin:demo-plugin:orbit', providerId: 'acp-plugin:demo-plugin:orbit' }];
 function TaskRow({ task }: { task: Session }) {
   const { fields } = useTaskInfoFields();
   const followers = useSessionFollowers(task);
@@ -36,7 +38,8 @@ function Fixture() {
   const index = useTaskCreatorIndex();
   const [open, setOpen] = useState(true);
   return <div className="p-4 text-14 text-foreground">
-    <SidebarFilterPopover filter={filter} allKnownProjects={[]} open={open} onOpenChange={setOpen} />
+    <SidebarFilterPopover filter={filter} allKnownProjects={[]} open={open} onOpenChange={setOpen}
+      {...(ctx.case === 'layout' ? { hasRemoteDevices: true, pluginHarnesses: PLUGIN_HARNESSES } : null)} />
     <div className="mt-64" data-testid="tasks">
       {tasks.filter(task => matchesTaskCreators(task, filter.creators, index)).map(task => <TaskRow key={task.id} task={task} />)}
     </div>
@@ -57,7 +60,11 @@ mountPage({
         claimLegacyRendererOwner: () => ({ ...snapshot, claimed: true, canInitialize: true, pinnedLegacyConsumed: true }),
         onPinnedOrderChanged: subscription('pinned'),
       },
-      maker: { onBotWorkbenchChanged: subscription('workbench') },
+      maker: {
+        onBotWorkbenchChanged: subscription('workbench'),
+        listPluginEngines: async () => [{ key: 'demo-plugin:orbit', providerId: 'acp-plugin:demo-plugin:orbit', name: 'Orbit', models: [] }],
+        onPluginEnginesChanged: subscription('plugin-engines'),
+      },
       localDb: { bots: { workbench: { followScopes: async () => [
         { botId: 'cindy-default', delegatedSessionIds: ['cindy-local'] },
         { botId: 'dash', sessionIds: ['local', 'owner'], delegatedSessionIds: ['local'] },
