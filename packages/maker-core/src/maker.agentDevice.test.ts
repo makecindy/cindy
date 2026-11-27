@@ -225,8 +225,18 @@ describe('Maker: agent on another computer', () => {
     for (const listener of capListeners) listener(rawAcpCaps);
     expect(observed).toEqual([false]);
 
+    // Partial capabilities objects (e.g. older peer wire frames or minimal
+    // stubs without rewind/extraDirs) must not throw when inspected.
+    const partialAcp = { ...handle('remote-partial'), agentKind: 'acp' as const, negotiatedCapabilities: {} as Capabilities } as unknown as AgentSessionHandle;
+    const partialMaker = new Maker({ agents: {}, storage: storage(), logger, startDeviceAgentSession: async () => partialAcp });
+    const partialSession = await partialMaker.createSession({
+      id: 'task-remote-partial-caps', agentKind: 'acp', workingDir: '/repo', model: 'm', providerId: 'acp-plugin:p:h', agentDeviceId: 'dev-b',
+    });
+    expect(partialSession.capabilities).toEqual({});
+
     await maker.shutdown();
     await acpMaker.shutdown();
+    await partialMaker.shutdown();
   });
 
   it('keeps the agent capabilities untouched for local tasks', async () => {

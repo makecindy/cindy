@@ -520,7 +520,7 @@ function createSendReservation(generation: number): SendReservation {
 function capabilitiesForRemoteHandle(base: Capabilities, handle: AgentSessionHandle): Capabilities {
   const overrides: Partial<Capabilities> = {};
   let changed = false;
-  if (base.rewind.supported && typeof handle.commitRewindFiles !== 'function') {
+  if (base?.rewind?.supported && typeof handle.commitRewindFiles !== 'function') {
     overrides.rewind = {
       supported: false,
       reason: 'platform-limited',
@@ -528,7 +528,7 @@ function capabilitiesForRemoteHandle(base: Capabilities, handle: AgentSessionHan
     };
     changed = true;
   }
-  if (base.extraDirs.supported && typeof handle.setExtraDirs !== 'function') {
+  if (base?.extraDirs?.supported && typeof handle.setExtraDirs !== 'function') {
     overrides.extraDirs = {
       supported: false,
       reason: 'platform-limited',
@@ -536,7 +536,7 @@ function capabilitiesForRemoteHandle(base: Capabilities, handle: AgentSessionHan
     };
     changed = true;
   }
-  if (base.writableDirs?.supported && typeof handle.setWritableDirs !== 'function') {
+  if (base?.writableDirs?.supported && typeof handle.setWritableDirs !== 'function') {
     overrides.writableDirs = {
       supported: false,
       reason: 'platform-limited',
@@ -544,7 +544,7 @@ function capabilitiesForRemoteHandle(base: Capabilities, handle: AgentSessionHan
     };
     changed = true;
   }
-  if (base.manualCompact?.supported && typeof handle.compactSession !== 'function') {
+  if (base?.manualCompact?.supported && typeof handle.compactSession !== 'function') {
     overrides.manualCompact = {
       supported: false,
       reason: 'platform-limited',

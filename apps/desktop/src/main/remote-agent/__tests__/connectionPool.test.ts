@@ -1814,7 +1814,7 @@ describe('remote connection pool with a real host', () => {
       expect(scenario.calls.filter((call) => call.method === 'setWritableDirs')).toHaveLength(1);
 
       // Idle release again, then peer downgrades (loses setWritableDirs):
-      // reapply must NOT fail reconnect by calling setWritableDirs on the older peer.
+      // capability flips back to false so beforeTurn skips setWritableDirs.
       expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
       peerSupportsWritableDirs = false;
       expect(await session.send('turn-4')).toMatchObject({ accepted: true });
@@ -1824,6 +1824,60 @@ describe('remote connection pool with a real host', () => {
     } finally {
       await session.close();
       await hostWithUpgrade.dispose();
+      host = prevHost;
+    }
+  });
+
+  // PR #13354 review (unit): when the initial connection advertised
+  // setWritableDirs (firstStarted.methods contains it), updating writableDirs
+  // and reconnecting to a downgraded peer lacking setWritableDirs must use the
+  // reconnected peer's methods in reapply() instead of calling setWritableDirs
+  // on the older peer and failing reconnect.
+  it('skips setWritableDirs in reapply when initial peer supported it but reconnected peer does not', async () => {
+    limits = { perDevice: 16, total: 64 };
+    const pool = newPool();
+    let peerSupportsWritableDirs = true;
+    const hostWithDowngrade = createRemoteAgentHost({
+      readLimits: () => limits,
+      isAgentAvailable: () => true,
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+      startHosted: async (input) => {
+        const inner = fakeAgent(input);
+        return {
+          ...inner,
+          ...(peerSupportsWritableDirs
+            ? {
+                async setWritableDirs(dirs: string[]) {
+                  scenario.calls.push({ method: 'setWritableDirs', args: [dirs] });
+                },
+              }
+            : {}),
+        };
+      },
+    });
+    const prevHost = host;
+    host = hostWithDowngrade;
+    const extraWritable = path.join(root, 'writable-downgrade');
+    fs.mkdirSync(extraWritable, { recursive: true });
+    try {
+      const a = await start(pool);
+      const events = watch(a);
+      await ask(a, events, 'first');
+      // Mutate writableDirs while connected so writableDirs !== openedDirs.writableDirs.
+      await a.setWritableDirs!([extraWritable]);
+      expect(scenario.calls.filter((call) => call.method === 'setWritableDirs')).toHaveLength(1);
+
+      // Idle release, then reconnect to a downgraded peer without setWritableDirs.
+      expect(await pool.releaseForRetry(member('other', 0, false))).toBe(true);
+      peerSupportsWritableDirs = false;
+      expect(await ask(a, events, 'after-downgrade')).toBe('ok:after-downgrade');
+      expect(a.setWritableDirs).toBeUndefined();
+      expect(scenario.calls.filter((call) => call.method === 'setWritableDirs')).toHaveLength(1);
+    } finally {
+      await hostWithDowngrade.dispose();
       host = prevHost;
     }
   });
