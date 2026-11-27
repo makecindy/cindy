@@ -16,18 +16,28 @@
  * Nothing here calls the plugin: the list is the main process's last known state. Opening a picker
  * only asks main to have the engine plugins republish their models (with a per-plugin cooldown).
  */
+import {
+  buildPluginEngineUsagePresentation,
+  matchPluginEngineQuotaGroup,
+  splitPluginUsageWindowLabel,
+  type PluginEngineUsagePresentation,
+} from '@cindy/maker-shared/plugin-engine-usage';
 import { quotaLevelFromRemaining } from '@cindy/maker-shared/quota-level';
 import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
-import { SlidersHorizontal } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { SlidersHorizontal, Star } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { EffortSlider } from '@/components/ui/effort-slider';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { Tip } from '@/components/ui/tooltip';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
-import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
+import { usePluginEngineUsage } from '@/hooks/usePluginEngineUsage';
 import { requestPluginEnginesRefresh } from '@/hooks/usePluginEngines';
+import { formatCompactTimeUntilReset } from '@/lib/compactQuotaCountdown';
+import { toast } from '@/lib/toast';
+import { LOCAL_MODEL_FAVORITE_STORE } from '@/state/agentDeviceFavorites';
+import { useProviderShareFavoriteKeysByDevice } from '@/state/providerShareFavorites';
+import { useRemoteModelFavorites } from '@/state/useRemoteModelFavorites';
 import { QUOTA_TEXT_COLOR_CLASSES } from '../status/QuotaBar';
 import { pluginEngineUsageBalances } from '../status/pluginEngineUsageAccount';
 import { formatQuotaResetDuration } from '../status/usageCardModel';
@@ -49,9 +59,16 @@ import {
   type PluginEngineModelRow,
   type PluginEngineSelection,
 } from '@/lib/pluginEngineSelection';
+import {
+  pluginEngineFavoriteConfig,
+  pluginEngineFavoriteProviderId,
+  pluginEngineModelFlashKey,
+  type ResolvedPluginEngineFavorite,
+} from '@/lib/pluginEngineFavorites';
 import { cn } from '@/lib/utils';
 
 import type { PluginEngineEffort } from '../../../shared/pluginEngines';
+import { anchorKey, type UnifiedAnchor } from './unifiedModelSelection';
 import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 
 /**
@@ -62,6 +79,8 @@ export interface PluginEnginesPickerProps {
   engines: readonly PluginEngineChoice[];
   /** Current engine choice (already resolved against the list); null = a built-in model is used. */
   active: PluginEngineSelection | null;
+  /** The task's current engine and effort, even when the picker highlights a pending switch. */
+  running?: PluginEngineSelection | null;
   /** Existing tasks wait for the host to accept the choice. False leaves the panel open. */
   onSelect(selection: PluginEngineSelection): void | boolean | Promise<boolean>;
   /** Device Link picker reloads its own computer's list when opened. */
@@ -161,6 +180,22 @@ export function matchPluginEngineRows(
   );
 }
 
+/** Favorites actions injected by UnifiedModelPanel (or PluginEngineSessionPanel). */
+export interface PluginEngineFavoritesController {
+  canFavorite(engine: PluginEngineChoice): boolean;
+  addFavorite(
+    engine: PluginEngineChoice,
+    modelId: string,
+    effort: PluginEngineEffort | null,
+    flashKey: string,
+  ): void;
+  removeFavorite(uid: string): void;
+  updateFavoriteEffort(resolved: ResolvedPluginEngineFavorite, effort: PluginEngineEffort): void;
+  justFavoritedKey: string | null;
+  configurationEnabled: boolean;
+  interactionDisabled: boolean;
+}
+
 interface EngineBlockProps {
   engine: PluginEngineChoice;
   rows: readonly PluginEngineModelRow[];
@@ -170,110 +205,133 @@ interface EngineBlockProps {
   effortOf(row: PluginEngineModelRow): PluginEngineEffort | null;
   /** Picks the row's model with this level; the picker stays open. */
   onChooseEffort(modelId: string, effort: PluginEngineEffort): void;
+  /** Task host computer when controlling a remote device; null/undefined = this computer. */
+  hostDeviceId?: string | null;
+  favorites?: PluginEngineFavoritesController;
+  panelElement?: HTMLElement | null;
+  overlayClassName?: string;
 }
 
-function pluginGroupQuotaTimeKey(
-  usage: GhostHarnessUsage,
-  now: number,
-  t: ReturnType<typeof useTranslation>['t'],
-): string {
-  return (usage.windows ?? [])
-    .filter((row) => !row.resetsAt || row.resetsAt > now)
-    .map((row) => [
-      row.label,
-      Math.round(row.remainingPercent),
-      row.resetsAt ? formatQuotaResetDuration(row.resetsAt / 1000, now, t) : null,
-    ])
-    .map((parts) => parts.join(':'))
-    .join('|');
-}
-
-/** Compact quota/balance readout on a plugin engine group header; reuses the 1-minute shared reader. */
-function PluginEngineGroupQuota({ engine }: { engine: PluginEngineChoice }) {
+/** Inline quota/balance readout on the plugin engine group heading, matching ModelPoolQuotaSummary. */
+function PluginEngineGroupQuota({
+  engine,
+  presentation,
+  usage,
+  now,
+}: {
+  engine: PluginEngineChoice;
+  presentation: PluginEngineUsagePresentation;
+  usage: GhostHarnessUsage;
+  now: number;
+}) {
   const { t, i18n } = useTranslation();
-  const targetKey = `${engine.deviceId ?? ''}:${engine.key}`;
-  const [reading, setReading] = useState<{ targetKey: string; usage: GhostHarnessUsage } | null>(null);
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const owner = getDataOwnerGeneration();
-    let active = true;
-    void readPluginEngineUsage(owner, engine.deviceId ?? null, engine.key).result.then((usage) => {
-      if (!active || !isDataOwnerGenerationCurrent(owner)) return;
-      setReading(usage ? { targetKey, usage } : null);
-      setNow(Date.now());
-    });
-    return () => { active = false; };
-  }, [engine.key, engine.deviceId, targetKey]);
-  const activeUsage = reading?.targetKey === targetKey ? reading.usage : null;
-  const hasTimedWindow = !!activeUsage?.windows?.some(
-    (row) => typeof row.resetsAt === 'number' && row.resetsAt > now,
-  );
-  const clockSnapshot = useRef({ usage: activeUsage, now, t });
-  clockSnapshot.current = { usage: activeUsage, now, t };
-  useEffect(() => {
-    if (!hasTimedWindow) return;
-    const syncClock = () => {
-      if (typeof document !== 'undefined' && document.hidden) return;
-      const { usage: currentUsage, now: prevNow, t: translate } = clockSnapshot.current;
-      if (!currentUsage) return;
-      const nextNow = Date.now();
-      if (
-        pluginGroupQuotaTimeKey(currentUsage, prevNow, translate) !==
-        pluginGroupQuotaTimeKey(currentUsage, nextNow, translate)
-      ) {
-        setNow(nextNow);
-      }
-    };
-    const timer = window.setInterval(syncClock, 1000);
-    const onVisibility = () => {
-      if (!document.hidden) syncClock();
-    };
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', onVisibility);
-    }
-    return () => {
-      window.clearInterval(timer);
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', onVisibility);
-      }
-    };
-  }, [hasTimedWindow]);
-  if (!activeUsage) return null;
-  const usage = activeUsage;
-  const current = (usage.windows ?? []).filter((row) => !row.resetsAt || row.resetsAt > now);
+  const [open, setOpen] = useState(false);
   const balances = pluginEngineUsageBalances(usage, i18n.language, t);
-  const first = current.reduce<(typeof current)[number] | undefined>((lowest, row) =>
-    !lowest || row.remainingPercent < lowest.remainingPercent ? row : lowest, undefined);
-  if (!first && !balances.length) return null;
-  const reset = first?.resetsAt ? formatQuotaResetDuration(first.resetsAt / 1000, now, t) : null;
-  const value = first ? `${Math.round(first.remainingPercent)}%` : balances[0]!;
-  const firstBalance = (usage.balances ?? []).find((row) => Number.isFinite(Number(row.amount)));
-  const level = first
-    ? quotaLevelFromRemaining(first.remainingPercent)
-    : firstBalance && Number(firstBalance.amount) <= 0 ? 'crit' : 'normal';
+  if (presentation.groups.length === 0 && balances.length === 0) return null;
+
   const details = (
-    <div className="space-y-1">
-      {current.map((row, index) => {
-        const rowReset = row.resetsAt ? formatQuotaResetDuration(row.resetsAt / 1000, now, t) : null;
-        return (
-          <div key={index}>
-            {[row.label, t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }), rowReset].filter(Boolean).join(' · ')}
-          </div>
-        );
-      })}
+    <div className="space-y-2">
+      {presentation.groups.map((group) => (
+        <div key={group.id} className="space-y-0.5">
+          {presentation.isMultiGroup && group.rawName && (
+            <div className="font-medium">{group.rawName}</div>
+          )}
+          {group.windows.map((row, index) => {
+            const rowReset = row.resetsAt
+              ? formatQuotaResetDuration(row.resetsAt / 1000, now, t)
+              : null;
+            const label = presentation.isMultiGroup && group.rawName
+              ? splitPluginUsageWindowLabel(row.label).period
+              : row.label;
+            const rowLevel = quotaLevelFromRemaining(row.remainingPercent);
+            return (
+              <div key={index} className={QUOTA_TEXT_COLOR_CLASSES[rowLevel]}>
+                {[
+                  label,
+                  t('quotaCard.remainingPercent', { percent: Math.round(row.remainingPercent) }),
+                  rowReset,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </div>
+            );
+          })}
+        </div>
+      ))}
       {balances.map((line, index) => <div key={`b:${index}`}>{line}</div>)}
     </div>
   );
+
+  if (presentation.isMultiGroup && presentation.groups.length > 0) {
+    const items = presentation.groups.map((group) => {
+      const label = group.shortLabel ?? group.primary.label;
+      const value = `${group.remainingPercent}%`;
+      const reset = group.primary.resetsAt
+        ? formatQuotaResetDuration(group.primary.resetsAt / 1000, now, t)
+        : null;
+      return {
+        id: group.id,
+        label,
+        value,
+        level: group.level,
+        aria: [label, value, reset].filter(Boolean).join(' · '),
+      };
+    });
+    return (
+      <Tip
+        text={details}
+        side="bottom"
+        controlledOpen={open || undefined}
+        onOpenChange={setOpen}
+        contentClassName="max-w-[320px] break-words"
+      >
+        <button
+          type="button"
+          data-plugin-engine-quota={engine.providerId}
+          aria-expanded={open}
+          aria-label={items.map((item) => item.aria).join(' · ')}
+          onClick={() => setOpen((value) => !value)}
+          className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-x-1.5 gap-y-0.5 text-12 font-normal tabular-nums text-[var(--text-secondary)]"
+        >
+          {items.map((item, index) => (
+            <Fragment key={item.id}>
+              {index > 0 && <span aria-hidden className="text-[var(--text-tertiary)]">·</span>}
+              <span data-plugin-engine-quota-group={item.id} className="inline-flex items-center gap-1 whitespace-nowrap">
+                <span className="text-[var(--text-tertiary)]">{item.label}</span>
+                <span className={QUOTA_TEXT_COLOR_CLASSES[item.level]}>{item.value}</span>
+              </span>
+            </Fragment>
+          ))}
+        </button>
+      </Tip>
+    );
+  }
+
+  const group = presentation.groups[0];
+  const reset = group?.primary.resetsAt
+    ? formatQuotaResetDuration(group.primary.resetsAt / 1000, now, t)
+    : null;
+  const value = group ? `${group.remainingPercent}%` : balances[0]!;
+  const level = group ? group.level : presentation.level;
   return (
-    <Tip text={details} side="bottom" contentClassName="max-w-[320px] break-words">
-      <span
+    <Tip
+      text={details}
+      side="bottom"
+      controlledOpen={open || undefined}
+      onOpenChange={setOpen}
+      contentClassName="max-w-[320px] break-words"
+    >
+      <button
+        type="button"
         data-plugin-engine-quota={engine.providerId}
-        aria-label={[first?.label, value, reset].filter(Boolean).join(' · ')}
+        aria-expanded={open}
+        aria-label={[group?.primary.label, value, reset].filter(Boolean).join(' · ')}
+        onClick={() => setOpen((current) => !current)}
         className="ml-auto flex shrink-0 items-center gap-1 text-12 font-normal tabular-nums text-[var(--text-secondary)]"
       >
         <span className={QUOTA_TEXT_COLOR_CLASSES[level]}>{value}</span>
         {reset && <span className="text-[var(--text-tertiary)]">· {reset}</span>}
-      </span>
+      </button>
     </Tip>
   );
 }
@@ -283,7 +341,18 @@ function PluginEngineGroupQuota({ engine }: { engine: PluginEngineChoice }) {
  * (same shared menu group label as 「Anthropic」 etc.), its availability hint when it cannot run,
  * then one row per model with the engine's mark, the model name and a second line.
  */
-function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChooseEffort }: EngineBlockProps) {
+function EngineBlock({
+  engine,
+  rows,
+  activeModelId,
+  onChoose,
+  effortOf,
+  onChooseEffort,
+  hostDeviceId = null,
+  favorites,
+  panelElement = null,
+  overlayClassName,
+}: EngineBlockProps) {
   const { t } = useTranslation();
   const labelOf = usePluginEngineModelLabel();
   const effortLabel = usePluginEngineEffortLabel();
@@ -296,9 +365,18 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
     setFlyout((current) => (toggle && current?.rowId === rowId ? null : { rowId, anchor }));
   const flyoutRow = flyout ? rows.find((row) => row.id === flyout.rowId) : undefined;
   const selectable = isPluginEngineSelectable(engine);
+  const canFavoriteEngine = selectable && !!favorites?.canFavorite(engine);
+  const configurationEnabled = favorites?.configurationEnabled ?? true;
+  const interactionDisabled = favorites?.interactionDisabled ?? false;
   const hint = selectable
     ? undefined
     : engine.availability.message?.trim() || t('newChat.pluginEngines.unavailable');
+  const { usage, now } = usePluginEngineUsage({
+    engineKey: engine.key,
+    deviceId: engine.deviceId ?? hostDeviceId,
+    enabled: selectable && engine.reportsUsage === true,
+  });
+  const usagePresentation = usage ? buildPluginEngineUsagePresentation(usage, now) : null;
   return (
     <div
       role="group"
@@ -307,9 +385,16 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
       {...(engine.deviceId ? { 'data-plugin-engine-device': engine.deviceId } : {})}
     >
       {/* Shared menu group label (DESIGN §4 Menu text): 12px / 500 meta, like the provider headings. */}
-      <div className="flex items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta,var(--text-tertiary))]">
+      <div className="flex flex-wrap items-center gap-1.5 px-2.5 pb-1 pt-2 text-12 font-medium leading-[1.33] text-[var(--cmd-palette-item-meta,var(--text-tertiary))]">
         <span title={engineLabel} className="truncate">{engineLabel}</span>
-        {selectable && engine.reportsUsage && <PluginEngineGroupQuota engine={engine} />}
+        {usage && usagePresentation && (
+          <PluginEngineGroupQuota
+            engine={engine}
+            presentation={usagePresentation}
+            usage={usage}
+            now={now}
+          />
+        )}
       </div>
       {hint && (
         <div
@@ -328,16 +413,54 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
         const description = row.isDefault
           ? t('newChat.pluginEngines.defaultModelHint')
           : row.description || engineLabel;
+        const matchedGroup = !row.isDefault
+          ? matchPluginEngineQuotaGroup(usagePresentation, { id: row.id, name: row.name })
+          : null;
+        const rowQuota = matchedGroup
+          ? {
+              groupId: matchedGroup.id,
+              countdown: matchedGroup.primary.resetsAt
+                ? formatCompactTimeUntilReset(
+                    matchedGroup.primary.resetsAt / 1000,
+                    now,
+                    t,
+                    matchedGroup.primary.windowMinutes ?? null,
+                  )
+                : null,
+              percentage: `${matchedGroup.remainingPercent}%`,
+              level: matchedGroup.level,
+              title: matchedGroup.windows
+                .map((windowRow) =>
+                  [
+                    windowRow.label,
+                    t('quotaCard.remainingPercent', { percent: Math.round(windowRow.remainingPercent) }),
+                    windowRow.resetsAt
+                      ? formatCompactTimeUntilReset(
+                          windowRow.resetsAt / 1000,
+                          now,
+                          t,
+                          windowRow.windowMinutes ?? null,
+                        )
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · '),
+                )
+                .join(' · '),
+            }
+          : null;
         const choose = () => {
-          if (!selectable) return;
+          if (!selectable || interactionDisabled) return;
           onChoose(row.id);
         };
         const rowEffort = selectable ? effortOf(row) : null;
         // Like a built-in row: the slider only exists when the model really offers ≥2 levels.
-        const adjustable = selectable && row.efforts.length > 1;
+        const adjustable = selectable && configurationEnabled && row.efforts.length > 1;
         const open = flyout?.rowId === row.id;
+        const flashKey = pluginEngineModelFlashKey(engine, row.id);
+        const flashed = favorites?.justFavoritedKey === flashKey;
         const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-          if (event.target !== event.currentTarget) return;
+          if (event.target !== event.currentTarget || interactionDisabled) return;
           if (event.key === 'ArrowLeft' && adjustable) {
             event.preventDefault();
             openFlyout(row.id, event.currentTarget);
@@ -354,16 +477,16 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
             key={row.id}
             role="option"
             aria-selected={selected}
-            aria-disabled={selectable ? undefined : true}
+            aria-disabled={selectable && !interactionDisabled ? undefined : true}
             aria-keyshortcuts={adjustable ? 'ArrowLeft' : undefined}
-            tabIndex={selectable ? 0 : -1}
+            tabIndex={selectable && !interactionDisabled ? 0 : -1}
             title={selectable ? undefined : hint}
             data-plugin-engine-model={`${engine.providerId}#${row.id}`}
-            {...menuRowAttrs({ checked: selected, disabled: !selectable })}
+            {...menuRowAttrs({ checked: selected, disabled: !selectable || interactionDisabled })}
             {...(open ? { 'data-state': 'open' } : {})}
             onClick={choose}
             onContextMenu={(event) => {
-              if (!adjustable) return;
+              if (!adjustable || interactionDisabled) return;
               event.preventDefault();
               openFlyout(row.id, event.currentTarget);
             }}
@@ -372,7 +495,7 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
               COMPOSER_MENU_ROW,
               // Same box as UnifiedModelRow: px-3 py-2, 4px between consecutive rows.
               '[&+[data-plugin-engine-model]]:mt-1 group/row flex w-full flex-col px-3 py-2',
-              selectable ? 'cursor-pointer' : 'cursor-not-allowed opacity-50',
+              selectable && !interactionDisabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-50',
               selected && 'bg-sidebar-item-hover data-[menu-active]:bg-transparent',
             )}
           >
@@ -382,12 +505,34 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
                 <PluginEngineIcon size={15} iconDataUrl={engine.iconDataUrl} />
               </span>
               <span title={label} className="min-w-0 truncate font-medium leading-5">{label}</span>
+              {canFavoriteEngine && favorites && (
+                <button
+                  type="button"
+                  disabled={interactionDisabled}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    favorites.addFavorite(engine, row.id, rowEffort, flashKey);
+                  }}
+                  onKeyDown={(event) => event.stopPropagation()}
+                  title={t('newChat.modelSelector.unified.addFavorite')}
+                  aria-label={t('newChat.modelSelector.unified.addFavorite')}
+                  className={cn(
+                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-opacity',
+                    flashed
+                      ? 'text-[var(--favorite-star)] opacity-100'
+                      : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--favorite-star)]',
+                  )}
+                >
+                  <Star size={14} fill={flashed ? 'currentColor' : 'none'} />
+                </button>
+              )}
               {adjustable && (
                 <button
                   type="button"
                   data-row-customize
                   aria-expanded={open}
                   aria-haspopup="dialog"
+                  disabled={interactionDisabled}
                   onClick={(event) => {
                     event.stopPropagation();
                     const anchor = event.currentTarget.closest('[data-plugin-engine-model]');
@@ -405,7 +550,7 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
                   <SlidersHorizontal size={14} />
                 </button>
               )}
-              {rowEffort && (
+              {configurationEnabled && rowEffort && (
                 // Same place and tone as a built-in row's level (UnifiedModelRow data-unified-triple).
                 <span data-model-row-meta className="ml-auto flex shrink-0 items-center gap-2">
                   <span
@@ -418,31 +563,74 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
                 </span>
               )}
             </div>
-            <span
-              title={description}
-              className="min-w-0 max-w-[36ch] truncate pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
-            >
-              {description}
-            </span>
+            {rowQuota ? (
+              <div
+                title={[description, rowQuota.title].filter(Boolean).join(' · ')}
+                className="flex w-0 min-w-full items-center gap-1 whitespace-nowrap pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
+              >
+                <span className="min-w-0 truncate">{description}</span>
+                <span aria-hidden className="shrink-0">·</span>
+                <span
+                  data-plugin-model-quota={rowQuota.groupId}
+                  className="min-w-0 max-w-[70%] truncate tabular-nums"
+                >
+                  {rowQuota.countdown && <>{rowQuota.countdown}{' '}</>}
+                  <span className={QUOTA_TEXT_COLOR_CLASSES[rowQuota.level]}>
+                    {rowQuota.percentage}
+                  </span>
+                </span>
+              </div>
+            ) : (
+              <span
+                title={description}
+                className="min-w-0 max-w-[36ch] truncate pl-[26px] pt-px text-12 font-normal leading-[1.4] text-[var(--text-secondary)]"
+              >
+                {description}
+              </span>
+            )}
           </div>
         );
       })}
       {flyout && flyoutRow && (
         <UnifiedFlyoutHost
           anchorEl={flyout.anchor}
-          panelElement={null}
+          panelElement={panelElement}
           flyoutRef={flyoutRef}
           repositionKey={rows}
+          {...(overlayClassName !== undefined ? { className: overlayClassName } : {})}
           onDismiss={() => setFlyout(null)}
         >
-          <PluginEngineModelConfig
-            engine={engine}
-            row={flyoutRow}
-            label={labelOf(flyoutRow)}
-            effort={effortOf(flyoutRow)}
-            effortLabel={effortLabel}
-            onChange={(effort) => onChooseEffort(flyoutRow.id, effort)}
-          />
+          {(() => {
+            const currentEffort = effortOf(flyoutRow);
+            const customized =
+              currentEffort !== null &&
+              flyoutRow.defaultEffort != null &&
+              currentEffort !== flyoutRow.defaultEffort;
+            const flashKey = pluginEngineModelFlashKey(engine, flyoutRow.id);
+            return (
+              <PluginEngineModelConfig
+                engine={engine}
+                row={flyoutRow}
+                label={labelOf(flyoutRow)}
+                effort={currentEffort}
+                effortLabel={effortLabel}
+                state={customized ? 'customized' : 'recommended'}
+                canFavorite={canFavoriteEngine}
+                justFavorited={favorites?.justFavoritedKey === flashKey}
+                disabled={interactionDisabled}
+                onChange={(effort) => onChooseEffort(flyoutRow.id, effort)}
+                {...(canFavoriteEngine && favorites
+                  ? {
+                      onAddFavorite: () =>
+                        favorites.addFavorite(engine, flyoutRow.id, currentEffort, flashKey),
+                    }
+                  : {})}
+                {...(customized && flyoutRow.defaultEffort
+                  ? { onResetToRecommended: () => onChooseEffort(flyoutRow.id, flyoutRow.defaultEffort!) }
+                  : {})}
+              />
+            );
+          })()}
         </UnifiedFlyoutHost>
       )}
     </div>
@@ -450,16 +638,23 @@ function EngineBlock({ engine, rows, activeModelId, onChoose, effortOf, onChoose
 }
 
 /**
- * Configuration flyout of a plugin engine model: title, the engine as its source, and the level
- * slider — the reasoning part of ModelConfigFlyout (engines have no Fast, price or favorites).
+ * Configuration flyout of a plugin engine model: title (+ favorite star), the engine as its source,
+ * level slider and status footer — matching ModelConfigFlyout (engines have no Fast or price).
  */
-function PluginEngineModelConfig({
+export function PluginEngineModelConfig({
   engine,
   row,
   label,
   effort,
   effortLabel,
   onChange,
+  state = 'recommended',
+  canFavorite = false,
+  justFavorited = false,
+  disabled = false,
+  onAddFavorite,
+  onRemoveFavorite,
+  onResetToRecommended,
 }: {
   engine: PluginEngineChoice;
   row: PluginEngineModelRow;
@@ -467,26 +662,272 @@ function PluginEngineModelConfig({
   effort: PluginEngineEffort | null;
   effortLabel: (effort: PluginEngineEffort) => string;
   onChange(effort: PluginEngineEffort): void;
+  state?: 'recommended' | 'customized' | 'favorite';
+  canFavorite?: boolean;
+  justFavorited?: boolean;
+  disabled?: boolean;
+  onAddFavorite?: () => void;
+  onRemoveFavorite?: () => void;
+  onResetToRecommended?: () => void;
 }) {
   const { t } = useTranslation();
   const engineLabel = usePluginEngineChoiceLabel()(engine);
+  const starred = state === 'favorite' || justFavorited;
+  const showStar = state === 'favorite' ? !!onRemoveFavorite : canFavorite && !!onAddFavorite;
+  const showFooter = state === 'favorite' || canFavorite || !!onResetToRecommended;
   return (
     <div role="group" aria-label={`${label} ${t('newChat.modelSelector.options')}`} data-plugin-engine-config className="flex flex-col">
-      <span title={label} className="line-clamp-2 min-w-0 text-14 font-semibold leading-[1.35] text-[var(--model-item-text)]">
-        {label}
-      </span>
+      <div className="flex items-start gap-2">
+        <span title={label} className="line-clamp-2 min-w-0 flex-1 text-14 font-semibold leading-[1.35] text-[var(--model-item-text)]">
+          {label}
+        </span>
+        {showStar && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => (state === 'favorite' ? onRemoveFavorite?.() : onAddFavorite?.())}
+            title={
+              state === 'favorite'
+                ? t('newChat.modelSelector.unified.removeFavorite')
+                : t('newChat.modelSelector.unified.addFavorite')
+            }
+            aria-label={
+              state === 'favorite'
+                ? t('newChat.modelSelector.unified.removeFavorite')
+                : t('newChat.modelSelector.unified.addFavorite')
+            }
+            className={cn(
+              'mt-[1px] flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-colors',
+              starred
+                ? 'text-[var(--favorite-star)]'
+                : 'text-[var(--text-tertiary)] hover:text-[var(--favorite-star)]',
+              disabled && 'cursor-not-allowed opacity-50',
+            )}
+          >
+            <Star size={14} fill={starred ? 'currentColor' : 'none'} />
+          </button>
+        )}
+      </div>
       <div className="truncate border-b border-[var(--model-dropdown-border)] pb-2.5 pt-1 text-12 text-[var(--text-tertiary)]">
         {engineLabel}
       </div>
-      <div className="flex items-center gap-2 pt-3.5">
-        <EffortSlider
-          stops={row.efforts}
-          value={effort}
-          recommended={row.defaultEffort ?? null}
-          labelOf={(level) => effortLabel(level as PluginEngineEffort)}
-          onChange={(next) => onChange(next as PluginEngineEffort)}
-        />
+      {row.efforts.length > 1 && (
+        <div className="flex items-center gap-2 pt-3.5">
+          <EffortSlider
+            stops={row.efforts}
+            value={effort}
+            recommended={row.defaultEffort ?? null}
+            labelOf={(level) => effortLabel(level as PluginEngineEffort)}
+            onChange={(next) => onChange(next as PluginEngineEffort)}
+            disabled={disabled}
+          />
+        </div>
+      )}
+      {showFooter && (
+        <div className="mt-2 flex min-h-[22px] items-center justify-between border-t border-[var(--model-dropdown-border)] pt-2 text-11">
+          <span
+            className={
+              state === 'recommended' ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-secondary)]'
+            }
+          >
+            {state === 'favorite'
+              ? t('newChat.modelSelector.unified.favoriteConfig')
+              : state === 'customized'
+                ? t('newChat.modelSelector.unified.customized')
+                : t('newChat.modelSelector.unified.recommendedConfig')}
+          </span>
+          {state === 'favorite' && onRemoveFavorite ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={onRemoveFavorite}
+              className="shrink-0 text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t('newChat.modelSelector.unified.removeFavorite')}
+            </button>
+          ) : state === 'customized' && onResetToRecommended ? (
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={onResetToRecommended}
+              className="shrink-0 text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {t('newChat.modelSelector.unified.reset')}
+            </button>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Favorite row for a plugin engine model inside UnifiedModelPanel's 「收藏」 section. */
+export function PluginEngineFavoriteRow({
+  resolved,
+  anchor,
+  active,
+  configurationEnabled = true,
+  interactionDisabled = false,
+  readable = false,
+  measurementOnly = false,
+  tabIndex = 0,
+  position,
+  onSelect,
+  onRemove,
+  onReveal,
+  onRevealForKeyboard,
+}: {
+  resolved: ResolvedPluginEngineFavorite;
+  anchor: UnifiedAnchor;
+  active: boolean;
+  configurationEnabled?: boolean;
+  interactionDisabled?: boolean;
+  readable?: boolean;
+  measurementOnly?: boolean;
+  tabIndex?: number | undefined;
+  position?: { index: number; total: number } | undefined;
+  onSelect(): void;
+  onRemove?: () => void;
+  onReveal(anchor: UnifiedAnchor, element: HTMLElement, toggle?: boolean): void;
+  onRevealForKeyboard(anchor: UnifiedAnchor, element: HTMLElement): void;
+}) {
+  const { t } = useTranslation();
+  const labelOf = usePluginEngineModelLabel();
+  const effortLabel = usePluginEngineEffortLabel();
+  const engineLabel = usePluginEngineChoiceLabel()(resolved.engine);
+  const label = labelOf(resolved.row);
+  const adjustable = configurationEnabled && resolved.row.efforts.length > 1;
+  const rootProps = measurementOnly
+    ? {}
+    : {
+        role: 'option' as const,
+        'aria-selected': false,
+        'aria-disabled': interactionDisabled ? true : undefined,
+        'aria-keyshortcuts': adjustable ? 'ArrowLeft' : undefined,
+        tabIndex: interactionDisabled ? -1 : tabIndex,
+        'aria-posinset': position?.index,
+        'aria-setsize': position?.total,
+        ...menuRowAttrs({ disabled: interactionDisabled }),
+        'data-state': active ? 'open' : undefined,
+        'data-unified-anchor': anchorKey(anchor),
+        'data-plugin-engine-favorite': resolved.favorite.uid,
+        'data-plugin-engine-model': `${resolved.engine.providerId}#${resolved.row.id}`,
+        onClick: () => {
+          if (!interactionDisabled) onSelect();
+        },
+        onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => {
+          if (interactionDisabled || !adjustable) return;
+          event.preventDefault();
+          onReveal(anchor, event.currentTarget);
+        },
+        onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => {
+          if (event.target !== event.currentTarget || interactionDisabled) return;
+          if (event.key === 'ArrowLeft' && adjustable) {
+            event.preventDefault();
+            onRevealForKeyboard(anchor, event.currentTarget);
+            return;
+          }
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          onSelect();
+        },
+      };
+  return (
+    <div
+      {...rootProps}
+      className={cn(
+        COMPOSER_MENU_ROW,
+        '[&+[data-unified-anchor]]:mt-1 group/row flex w-full cursor-pointer flex-col px-3 py-2',
+        readable && 'min-w-0',
+        interactionDisabled && 'cursor-not-allowed opacity-50',
+      )}
+    >
+      <div className={cn('flex gap-2', readable ? 'min-w-0 items-start' : 'items-center')}>
+        <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center">
+          {!measurementOnly && (
+            <PluginEngineIcon size={15} iconDataUrl={resolved.engine.iconDataUrl} />
+          )}
+        </span>
+        <span
+          title={label}
+          className={cn(
+            'min-w-0 font-medium leading-5',
+            readable ? 'flex-1 [overflow-wrap:anywhere]' : 'truncate',
+          )}
+        >
+          {label}
+        </span>
+        {onRemove && (
+          measurementOnly ? (
+            <span className="h-5 w-5 shrink-0" />
+          ) : (
+            <button
+              type="button"
+              tabIndex={tabIndex}
+              disabled={interactionDisabled}
+              onClick={(event) => {
+                event.stopPropagation();
+                onRemove();
+              }}
+              onKeyDown={(event) => event.stopPropagation()}
+              title={t('newChat.modelSelector.unified.removeFavorite')}
+              aria-label={t('newChat.modelSelector.unified.removeFavorite')}
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg text-[var(--favorite-star)] opacity-100 transition-opacity"
+            >
+              <Star size={14} fill="currentColor" />
+            </button>
+          )
+        )}
+        {adjustable && (
+          measurementOnly ? (
+            <span className="h-5 w-5 shrink-0" />
+          ) : (
+            <button
+              type="button"
+              tabIndex={tabIndex}
+              data-row-customize
+              aria-expanded={active}
+              aria-haspopup="dialog"
+              disabled={interactionDisabled}
+              onClick={(event) => {
+                event.stopPropagation();
+                const row = event.currentTarget.closest('[data-unified-anchor]');
+                if (row instanceof HTMLElement) onReveal(anchor, row, true);
+              }}
+              title={t('newChat.modelSelector.unified.customize')}
+              aria-label={t('newChat.modelSelector.unified.customize')}
+              className={cn(
+                'flex h-5 w-5 shrink-0 items-center justify-center rounded-lg transition-opacity',
+                active
+                  ? 'text-[var(--text-secondary)] opacity-100'
+                  : 'text-[var(--text-tertiary)] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-[var(--text-secondary)]',
+              )}
+            >
+              <SlidersHorizontal size={14} />
+            </button>
+          )
+        )}
+        {configurationEnabled && resolved.effort && (
+          <span data-model-row-meta className={cn('flex shrink-0 items-center gap-2', !readable && 'ml-auto')}>
+            <span
+              data-plugin-engine-effort={resolved.effort}
+              title={effortLabel(resolved.effort)}
+              className="max-w-[118px] shrink-0 truncate text-12 font-normal text-[var(--text-tertiary)]"
+            >
+              {effortLabel(resolved.effort)}
+            </span>
+          </span>
+        )}
       </div>
+      <span
+        title={engineLabel}
+        className={cn(
+          'min-w-0 max-w-[36ch] truncate text-12 font-normal leading-[1.4] text-[var(--text-secondary)]',
+          !readable && 'pl-[26px] pt-px',
+        )}
+      >
+        {engineLabel}
+      </span>
     </div>
   );
 }
@@ -496,10 +937,18 @@ export function PluginEnginesSection({
   picker,
   query,
   onPicked,
+  hostDeviceId = null,
+  favorites,
+  panelElement,
+  overlayClassName,
 }: {
   picker: PluginEnginesPickerProps;
   query: string;
   onPicked(): void;
+  hostDeviceId?: string | null;
+  favorites?: PluginEngineFavoritesController;
+  panelElement?: HTMLElement | null;
+  overlayClassName?: string;
 }) {
   const { t } = useTranslation();
   const sectionRef = useRef<HTMLDivElement>(null);
@@ -522,10 +971,15 @@ export function PluginEnginesSection({
   const blocks = picker.engines
     .map((engine) => {
       const activeModelId = activePluginEngineModelId(picker.active, engine);
+      const running = isSamePluginEngineChoice(picker.running, engine) ? picker.running : null;
+      const effort = running ? running.effort : activeModelId !== null ? picker.active?.effort : undefined;
+      const purpose = running ? 'session' as const : 'new-task' as const;
       return {
         engine,
         activeModelId,
-        rows: engineMatches(engine, pluginEngineModelRows(engine, activeModelId), needle, defaultLabel),
+        purpose,
+        effort,
+        rows: engineMatches(engine, pluginEngineModelRows(engine, activeModelId, purpose), needle, defaultLabel),
       };
     })
     .filter((block) => block.rows.length > 0);
@@ -535,7 +989,7 @@ export function PluginEnginesSection({
     // Each engine carries its own group label (like a provider), so the section has no visible
     // heading of its own; the 「插件引擎」 name stays for assistive technology and the rail tab.
     <div ref={sectionRef} role="group" aria-label={label} data-plugin-engines-section>
-      {blocks.map(({ engine, rows, activeModelId }) => (
+      {blocks.map(({ engine, rows, activeModelId, purpose, effort }) => (
         <EngineBlock
           key={pluginEngineChoiceKey(engine)}
           engine={engine}
@@ -546,10 +1000,14 @@ export function PluginEnginesSection({
           }, true); }}
           // A row shows the level it would run with: the chosen one where it is offered, else its own.
           effortOf={(row) => resolvePluginEngineEffort(
-            engine, row.id, isSamePluginEngineChoice(picker.active, engine) ? picker.active?.effort : undefined)}
+            engine, row.id, effort, purpose)}
           onChooseEffort={(modelId, effort) => { void choose({
             providerId: engine.providerId, modelId, effort, ...(engine.deviceId ? { deviceId: engine.deviceId } : {}),
           }, false); }}
+          hostDeviceId={hostDeviceId}
+          {...(favorites ? { favorites } : {})}
+          panelElement={panelElement ?? null}
+          {...(overlayClassName !== undefined ? { overlayClassName } : {})}
         />
       ))}
     </div>
@@ -564,10 +1022,14 @@ export function PluginEnginesSection({
 export function PluginEngineSessionPanel({
   picker,
   disabled,
+  deviceId,
+  selectionPolicy = 'personalized',
   onPicked,
 }: {
   picker: PluginEngineSessionPickerProps;
   disabled?: boolean;
+  deviceId?: string;
+  selectionPolicy?: 'personalized' | 'official';
   onPicked(): void;
 }) {
   const { t } = useTranslation();
@@ -575,6 +1037,14 @@ export function PluginEngineSessionPanel({
   const listRef = useMenuPanel<HTMLDivElement>(undefined, { lockWidth: false });
   // A level change shows at once and stays until the task reports it (or the change fails).
   const [pending, setPending] = useState<{ modelId: string; effort: PluginEngineEffort } | null>(null);
+  const [justFavoritedKey, setJustFavoritedKey] = useState<string | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remoteFavorites = useRemoteModelFavorites(deviceId);
+  const shareFavoriteKeys = useProviderShareFavoriteKeysByDevice(undefined, !!deviceId);
+  const favoriteStore = deviceId ? remoteFavorites.store : LOCAL_MODEL_FAVORITE_STORE;
+  useEffect(() => () => {
+    if (flashTimerRef.current !== null) clearTimeout(flashTimerRef.current);
+  }, []);
   useEffect(() => setPending(null), [picker.modelId, picker.effort]);
   const listLabel = t('newChat.modelSelector.modelListAria');
   // Opening the task's model menu refreshes the engine's models like a provider's (cooldown in main).
@@ -593,6 +1063,35 @@ export function PluginEngineSessionPanel({
     );
   }
   const engine = picker.engine;
+  const encodeOpts = { shareFavoriteKeys, wireLimit: !!deviceId };
+  const favoritesController: PluginEngineFavoritesController | undefined =
+    selectionPolicy === 'personalized'
+      ? {
+          canFavorite: (target) => pluginEngineFavoriteProviderId(target, encodeOpts) !== null,
+          addFavorite: (target, modelId, effort, flashKey) => {
+            const config = pluginEngineFavoriteConfig(target, modelId, effort, encodeOpts);
+            if (!config) return;
+            void Promise.resolve(favoriteStore.add(config)).then(
+              () => {
+                setJustFavoritedKey(flashKey);
+                if (flashTimerRef.current !== null) clearTimeout(flashTimerRef.current);
+                flashTimerRef.current = setTimeout(() => {
+                  flashTimerRef.current = null;
+                  setJustFavoritedKey(null);
+                }, 700);
+              },
+              () => {
+                toast.error(t('newChat.modelSelector.unified.favoritesSaveFailed'));
+              },
+            );
+          },
+          removeFavorite: () => {},
+          updateFavoriteEffort: () => {},
+          justFavoritedKey,
+          configurationEnabled: true,
+          interactionDisabled: !!disabled,
+        }
+      : undefined;
   return (
     <div
       ref={listRef}
@@ -606,7 +1105,7 @@ export function PluginEngineSessionPanel({
       <MenuHighlightLayer />
       <EngineBlock
         engine={engine}
-        rows={pluginEngineModelRows(engine, pending?.modelId ?? picker.modelId)}
+        rows={pluginEngineModelRows(engine, pending?.modelId ?? picker.modelId, 'session')}
         activeModelId={pending?.modelId ?? picker.modelId}
         onChoose={(modelId) => {
           if (modelId === picker.modelId) {
@@ -614,18 +1113,20 @@ export function PluginEngineSessionPanel({
             return;
           }
           // Another model keeps the task's level where it offers it, else runs with its own default.
-          const effort = resolvePluginEngineEffort(engine, modelId, picker.effort) ?? undefined;
+          const effort = resolvePluginEngineEffort(engine, modelId, picker.effort, 'session') ?? undefined;
           void Promise.resolve(effort ? picker.onSelectModel(modelId, effort) : picker.onSelectModel(modelId)).then((applied) => {
             if (applied !== false) onPicked();
           });
         }}
-        effortOf={(row) => resolvePluginEngineEffort(engine, row.id, pending?.effort ?? picker.effort)}
+        effortOf={(row) => resolvePluginEngineEffort(engine, row.id, pending?.effort ?? picker.effort, 'session')}
         onChooseEffort={(modelId, effort) => {
           setPending({ modelId, effort });
           void Promise.resolve(picker.onSelectModel(modelId, effort)).then((applied) => {
             if (applied === false) setPending(null);
           }, () => setPending(null));
         }}
+        hostDeviceId={deviceId ?? null}
+        {...(favoritesController ? { favorites: favoritesController } : {})}
       />
     </div>
   );

@@ -17,11 +17,13 @@
  *     少一次换行。只有一台对端时不收(名字短,信息更重要)。
  */
 
+import { useMemo } from 'react';
 import { Check, ChevronDown, Laptop } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { sortDevicesByOnlineAndRecency } from '@/features/device-link/deviceSort';
 import type { SelectableDevice } from '@/hooks/useControllableDevices';
 
 /** null = 本机。 */
@@ -30,6 +32,8 @@ export type DeviceSwitcherValue = string | null;
 interface Props {
   /** 可选的对端设备(含离线)。空数组 = 不渲染整个 pill。 */
   devices: readonly SelectableDevice[];
+  /** 各对端设备最近使用时间(unix ms);用于在线优先之后按最近使用倒序排布。 */
+  lastUsedAtByDeviceId?: Readonly<Record<string, number>>;
   /** 当前选中的设备;null = 本机。 */
   value: DeviceSwitcherValue;
   onChange: (deviceId: DeviceSwitcherValue, deviceName: string | null) => void;
@@ -59,6 +63,7 @@ export function resolveDeviceLabel(
 
 export function DeviceSwitcherPill({
   devices,
+  lastUsedAtByDeviceId,
   value,
   onChange,
   open,
@@ -67,6 +72,10 @@ export function DeviceSwitcherPill({
   disabled = false,
 }: Props) {
   const { t } = useTranslation();
+  const sortedDevices = useMemo(
+    () => sortDevicesByOnlineAndRecency(devices, lastUsedAtByDeviceId),
+    [devices, lastUsedAtByDeviceId],
+  );
 
   // 没有任何对端设备 → 这个维度不存在,不占位、不渲染。
   if (devices.length === 0) return null;
@@ -132,7 +141,11 @@ export function DeviceSwitcherPill({
         side="bottom"
         align="end"
         sideOffset={6}
+        // 与旁边的项目菜单一致:离窗口边缘留 8px,整份菜单不超过可用高度;
+        // 矮窗口里先压缩设备列表,仍放不下时整份菜单滚动,不会有设备落到窗口外。
+        collisionPadding={8}
         className={cn(
+          'flex max-h-[var(--radix-popover-content-available-height)] flex-col overflow-y-auto overscroll-contain',
           // 宽度**由内容决定 + 设上限**(2026-07-29 用户裁决),而不是写死一个值:
           // DESIGN.md §4 要求 panel 宽度绑 trigger,那条是为「宽度稳定的单行输入框式 Select」
           // 写的;这里的 trigger 是 80–200px 的 pill、宽度还随当前设备名浮动,直接绑上去会让
@@ -159,10 +172,16 @@ export function DeviceSwitcherPill({
           onSelect={() => select(null, null)}
         />
 
-        <div className="mx-2 my-1 h-px bg-[var(--folder-picker-border)]" />
+        <div className="mx-2 my-1 h-px shrink-0 bg-[var(--folder-picker-border)]" />
 
-        <div className="pending-queue-scroll -mr-2 max-h-[216px] overflow-x-hidden overflow-y-auto overscroll-contain pr-2">
-          {devices.map((device) => (
+        <div
+          className={cn(
+            'pending-queue-scroll -mr-2 max-h-[216px] overflow-x-hidden overflow-y-auto overscroll-contain pr-2',
+            // 放不下时列表先让出高度,但至少留约 1 行半,看得出还能滚动。
+            sortedDevices.length > 1 && 'min-h-[66px]',
+          )}
+        >
+          {sortedDevices.map((device) => (
             <DeviceRow
               key={device.deviceId}
               icon={

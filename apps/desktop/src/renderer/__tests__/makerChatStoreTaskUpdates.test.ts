@@ -88,21 +88,23 @@ import type { SessionChatState } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
 import { setDataOwnerGeneration, __testing as dataOwnerGenerationTesting } from '@/contexts/dataOwnerGeneration';
 import { parseUserContent } from '@/lib/imageRef';
+import { resolveUserDisplayText } from '@/components/chat/userMessageDisplayText';
 import { buildPluginMessage } from '../../shared/pluginMessage';
 
 describe('makerChatStore IM source projection', () => {
-  it.each(['imSource', 'hookSource'] as const)('projects %s into the common Desktop card', (field) => {
+  it.each(['imSource', 'hookSource'] as const)('projects %s from saved history and displays Feishu text', (field) => {
+    const content = '<p>第一段 &amp; 备注</p><p>第二段</p>';
     const source = {
-      im: 'telegram', userText: 'question', contentFormat: 'user-text' as const,
+      im: 'feishu', userText: content, contentFormat: 'user-text' as const,
       contextSnapshot: { groupContext: 'background', groupMessageCount: 1 },
     };
     const [mapped] = makerChatStore.__mapServerMessagesForTest([{
       id: 'im-row', clientId: 'im-client', sessionId: 's1', role: 'user',
-      content: 'question', agentMeta: { [field]: source },
-      toolUseId: null,
+      content, agentMeta: { [field]: source }, toolUseId: null,
       createdAt: '2026-09-12T00:00:00.000Z',
     } satisfies Message]);
-    expect(mapped).toMatchObject({ role: 'user', content: 'question', hookSource: source });
+    expect(mapped).toMatchObject({ role: 'user', content, hookSource: source });
+    expect(resolveUserDisplayText(mapped)).toBe('第一段 & 备注\n\n第二段');
   });
 
   // unit: message-source.md「插件转发的 IM 消息」(2026-11-16). Production projection entry: a Host-stamped

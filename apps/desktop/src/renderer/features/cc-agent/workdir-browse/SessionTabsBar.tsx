@@ -308,7 +308,7 @@ export function SessionTabsBar({
                   onClick={(e) => e.stopPropagation()}
                   onDoubleClick={(e) => e.stopPropagation()}
                   className={cn(
-                    'max-w-[160px] h-5 px-1 rounded',
+                    'max-w-[160px] h-5 px-1 rounded-full',
                     'text-12 font-medium text-foreground',
                     'bg-transparent outline-none',
                     'border-[1.5px] border-[var(--focus-ring)]',
@@ -323,7 +323,7 @@ export function SessionTabsBar({
                   onClick={(e) => handleClose(e, sessionId)}
                   aria-label={t('ccAgent.workdirBrowse.sessionTabs.closeSession', { title })}
                   className={cn(
-                    'ml-1 inline-flex size-4 shrink-0 items-center justify-center rounded',
+                    'ml-1 inline-flex size-4 shrink-0 items-center justify-center rounded-full',
                     'text-[var(--cmd-palette-item-meta)]',
                     'opacity-0 transition-opacity duration-150',
                     'group-hover/tab:opacity-100 focus-visible:opacity-100',
@@ -363,7 +363,7 @@ export function SessionTabsBar({
               type="button"
               aria-label={t('ccAgent.workdirBrowse.sessionTabs.newSession')}
               className={cn(
-                'flex size-6 items-center justify-center rounded-md',
+                'flex size-6 items-center justify-center rounded-lg',
                 'text-[var(--settings-section-desc)]',
                 'hover:bg-[var(--chat-input-chip-bg)] hover:text-foreground',
                 'data-[state=open]:bg-[var(--chat-input-chip-bg)] data-[state=open]:text-foreground',

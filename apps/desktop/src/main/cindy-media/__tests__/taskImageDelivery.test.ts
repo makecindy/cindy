@@ -517,12 +517,12 @@ describe('task image delivery', () => {
     expect(raw.prepare('SELECT count(*) AS n FROM media_refs').get()).toEqual({ n: 1 });
   });
 
-  it('delivers a local image whose path has bare spaces through both channel collectors', async () => {
-    // 2026-11-03 Telegram: `![…](…/Application Support/…png)` is not a CommonMark image,
-    // so the reply carried the raw path with no attachment and no incomplete notice.
+  it('delivers bare-space local images even when the filename parses as emphasis', async () => {
+    // Media storage rules, §多端与远程: both channel collectors must deliver
+    // these references. A plain filename misses the split across AST nodes.
     const folder = path.join(state.root, 'Application Support', 'generated images');
     await fs.mkdir(folder, { recursive: true });
-    const source = path.join(folder, 'design.png');
+    const source = path.join(folder, 'mockup _draft_.png');
     await fs.writeFile(source, PNG);
     const example = `\`![example](${source})\``;
     const text = `Design:\n\n![Credits mockup](${source})\n\n${example}`;

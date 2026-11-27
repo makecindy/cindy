@@ -520,6 +520,25 @@ describe('shared Home drawer host', () => {
     expect(firstCommit).toEqual([true]);
     expect(native.mounts).toBe(1);
   });
+  // Unit, #11621: on platforms without interactive stack pop, a cancelled or
+  // short link-return swipe must leave both the task and the drawer in place.
+  it('pops a linked task only on a committed swipe without moving the drawer', async () => {
+    const onSwipeBack = vi.fn(), onOpen = vi.fn();
+    function Probe() {
+      useSessionListDrawerOpenGesture({ motion: useSessionListDrawerMotion(), enabled: true,
+        width: 320, onSwipeBack, onOpen, onCancel: vi.fn(), onSettle: vi.fn() });
+      return null;
+    }
+    await act(async () => root.render(<Probe />));
+    const swipe = native.pans.open!;
+    swipe.start?.({ translationX: 20 });
+    swipe.end!({ translationX: 30, velocityX: 0 }, true);
+    swipe.end!({ translationX: 220, velocityX: 0 }, false);
+    expect(onSwipeBack).not.toHaveBeenCalled();
+    swipe.end!({ translationX: 220, velocityX: 0 }, true);
+    expect(onSwipeBack).toHaveBeenCalledOnce();
+    expect(onOpen).not.toHaveBeenCalled();
+  });
   it.each(['running', 'finished'])('does not replay a fast pull when React opens after its native animation is %s', async (phase) => {
     native.reduceMotion = false;
     let motion: ReturnType<typeof useSessionListDrawerMotion>;

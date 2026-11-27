@@ -1,4 +1,5 @@
 import type { PluginModelPickerOptions, PluginModelPickerResult } from './pluginModelPicker';
+import type { GhostPipeSessionStateRequest, GhostPipeSessionStateResult } from './ghost';
 import { PLUGIN_UI_STATE_BATCH_LIMIT, type PluginUiControlState, type PluginUiInterest, type PluginUiTarget } from './pluginUi';
 type HostMessageListener = (payload: unknown) => void;
 /** Transport only. The execution-side dispatcher checks every request. */
@@ -55,6 +56,10 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
     finally { uiSending = false; if (uiUpdates.size) scheduleUiUpdates(); }
   }
   const api = {
+  checks: {
+    list: (): Promise<unknown> => ports.send({ type: 'change-checks-request', action: 'list' }),
+    probe: (checks: unknown[]): Promise<unknown> => ports.send({ type: 'change-checks-request', action: 'probe', checks }),
+  },
   ping: async (): Promise<{ ok: true; id: string }> => {
     const revision = consumerRevision;
     const result = await ports.ping();
@@ -177,6 +182,8 @@ export function createGhostPageBridge(ports: { ping: () => Promise<{ ok: true; i
   // 在任务右侧栏打开 / 聚焦本插件的任务页(taskView);缺省落台前任务,回执带回落点任务。
   taskView: (req: Record<string, unknown> = {}): Promise<unknown> =>
     ports.send({ ...req, type: 'task-view-request' }),
+  sessionStates: (req: Omit<GhostPipeSessionStateRequest, 'type'>): Promise<GhostPipeSessionStateResult> =>
+    ports.send({ ...req, type: 'session-state-request' } satisfies GhostPipeSessionStateRequest),
   workspace: (req: Record<string, unknown>): Promise<unknown> =>
     ports.send({ ...req, type: 'workspace-request' }),
   confirm: (req: Record<string, unknown>): Promise<unknown> =>

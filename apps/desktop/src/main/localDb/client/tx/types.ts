@@ -149,6 +149,8 @@ export interface SessionTreeRehydrateArgs {
 }
 
 export interface ForkSessionArgs {
+  /** Reject edits to the ordered history selected before the native fork awaited. */
+  sourceMessagesDigest?: string;
   sourceSessionId: string;
   /** /clear 之前的行不属于当前可见/原生上下文，fork 时不得重新带回。 */
   sourceClearedAt?: number | null;
@@ -260,6 +262,7 @@ export interface OrcaRemoteWorkerProxySessionSeed {
   effort: string | null;
   permissionMode: string;
   fastMode: boolean | 'ultrafast';
+  providerId?: string | null;
   agentDeviceId?: string | null;
 }
 

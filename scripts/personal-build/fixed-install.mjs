@@ -10,13 +10,13 @@ const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const exists = file => { try { fs.lstatSync(file); return true; } catch(e) { if(e.code === 'ENOENT') return false; throw e; } };
 const check = (ok, reason) => { if (!ok) throw Error(reason); };
 // OS indexing is repairable metadata, never a reason to strand an installed app.
-function registerInstallation(receipt, backup, app, registry) {
+function registerInstallation(receipt, backup, app, registry, {refreshExtensions = false} = {}) {
   const next = {...receipt};
   delete next.registrationPending;
   if (!registry) return next;
   const errors=[];
   if (backup) { try { registry.unregister(backup); } catch(error) { errors.push(error.message); } }
-  try { registry.register(app); } catch(error) { errors.push(error.message); }
+  try { registry.register(app, {refreshExtensions}); } catch(error) { errors.push(error.message); }
   if(errors.length) next.registrationPending={app,backup,errors,at:Date.now()};
   return next;
 }
@@ -73,7 +73,7 @@ function finishTransition(app, file, {isRunning, verifySignature, rename, backup
   verifyApp(t.stage,t.next,verifySignature);
   rename(t.stage,app);
   verifyApp(app,t.next,verifySignature);
-  durableWrite(app+'.personal-install.json',registerInstallation(t.next,t.previous?t.backup:null,app,registry));
+  durableWrite(app+'.personal-install.json',registerInstallation(t.next,t.previous?t.backup:null,app,registry,{refreshExtensions:true}));
   fs.unlinkSync(file);
 }
 export function installFixedRuntime(runtime, app, {isRunning, verifySignature, rename = fs.renameSync, registry}) {

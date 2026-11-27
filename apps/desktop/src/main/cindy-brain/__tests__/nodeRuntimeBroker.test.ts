@@ -6,14 +6,15 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { AgentStartupCleanupPendingError, AgentStartupStoppedError } from '@cindy/maker-core';
+import { AgentStartupCleanupPendingError, AgentStartupStoppedError, createConsoleLogger } from '@cindy/maker-core';
 
-import { adaptPluginNodeProcess } from '../nodeRuntimeProcessAdapter';
+import { adaptPluginNodeProcess, pluginNodeEnvironment } from '../nodeRuntimeProcessAdapter';
 import type { InstalledGhost } from '../../../shared/ghost';
 import { withGhostResolvedLocale } from '../../../shared/ghost';
 import { handlePluginHostToolRequest, type PluginHostToolPorts } from '../hostToolSlot.js';
 import { authorizePluginHostToolCall } from '../../mcp-integrations/hostToolCaller.js';
 import { bindTaskActionInput } from '../../maker-ipc/taskActionAuthorization.js';
+import { createAcpProcessTransport } from '../../maker-host/acp-transport.js';
 import { AgentInputCoordinator, type AgentInputCoordinatorDeps } from '../../maker-ipc/agent-input-coordinator.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 import {
@@ -422,6 +423,36 @@ afterEach(() => {
 });
 
 describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
+  // Unit: opt-in must forward arbitrary values, not a second environment allowlist.
+  it('inherits the full environment only when explicitly enabled and keeps plugin identity', () => {
+    const inherited = { PATH: '/probe/bin', NODE_OPTIONS: '--require probe.cjs',
+      HTTPS_PROXY: 'http://probe:synthetic-pass@127.0.0.1:8080', NODE_USE_ENV_PROXY: '1',
+      NODE_EXTRA_CA_CERTS: '/probe/ca.pem', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/probe/bus',
+      PATHEXT: '.EXE;.CMD', CUSTOM_API_KEY: 'synthetic-env-key',
+      CINDY_GHOST_ID: 'parent', PLUGIN_ARBITRARY_VALUE: 'unchanged' };
+    const filtered = { PATH: inherited.PATH, CINDY_GHOST_ID: 'demo' };
+    expect(pluginNodeEnvironment('demo', inherited)).toEqual(filtered);
+    expect(pluginNodeEnvironment('demo', inherited, false)).toEqual(filtered);
+    expect(pluginNodeEnvironment('demo', inherited, true)).toEqual({ ...inherited, CINDY_GHOST_ID: 'demo' });
+    expect(inherited.CINDY_GHOST_ID).toBe('parent');
+  });
+
+  it.each([{ childArgs: undefined }, { childArgs: ['probe-child'] }])('passes the complete environment to the utility process: %j', ({ childArgs }) => {
+    vi.stubEnv('NODE_OPTIONS', '--require synthetic-preload.cjs');
+    vi.stubEnv('HTTPS_PROXY', 'http://probe:synthetic-pass@127.0.0.1:8080');
+    vi.stubEnv('NO_PROXY', 'original-bypass.test');
+    vi.stubEnv('CUSTOM_PLUGIN_ENV', 'synthetic-custom-value');
+    const child = new FakeUtilityProcess();
+    const fork = vi.fn((_module: unknown, _args: unknown, _options: unknown) => child);
+    const worker = createUtilityNodeWorkerProcess('/plugins/demo/worker.cjs', '/plugins/demo', 'demo', fork as never, childArgs, true);
+    try {
+      const env = (fork.mock.calls[0][2] as { env: NodeJS.ProcessEnv }).env;
+      expect(env).toMatchObject({ NODE_OPTIONS: '--require synthetic-preload.cjs',
+        HTTPS_PROXY: 'http://probe:synthetic-pass@127.0.0.1:8080', NO_PROXY: 'original-bypass.test',
+        CUSTOM_PLUGIN_ENV: 'synthetic-custom-value', CINDY_GHOST_ID: 'demo' });
+    } finally { worker.kill(); }
+  });
+
   // #10189, unit: exercise the real adapter with OS outcomes injected. Native-event
   // tests did not cover lost exits, unknown identity or kill requests without exit.
   it.each(['EPERM', 'EACCES', 'unknown', 'alive'])('retains quota on %s until a real exit', code => {
@@ -513,6 +544,46 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
         worker?.kill();
       }
     });
+  });
+
+  // #11953: exercise the environment actually handed to the Desktop fork.
+  it.each([
+    ['http://127.0.0.1:18080', undefined, undefined, true],
+    ['http://127.0.0.1:18080', 'corp.test,localhost', undefined, true],
+    ['http://127.0.0.1:18080', undefined, 'upper.test', true],
+    ['http://127.0.0.1:18080', 'corp.test', 'upper.test', true],
+    ['http://localhost:99999', undefined, undefined, false],
+    [undefined, undefined, undefined, false],
+  ] as const)('passes safe CLI proxy routes through the Desktop fork (%s, %s, %s)', (endpoint, lower, upper, allowed) => {
+    // A plain object also exercises distinct POSIX aliases on a Windows runner.
+    const environment = process.env;
+    process.env = {
+      ...environment, HTTP_PROXY: undefined, NO_PROXY: upper,
+      http_proxy: endpoint, no_proxy: lower,
+      https_proxy: 'http://demo:synthetic@localhost:8080',
+      HTTPS_PROXY: 'http://localhost:18081',
+    };
+    const fork = vi.fn((_entry: string, _args: string[], _options: { env: NodeJS.ProcessEnv }) => new FakeUtilityProcess());
+    const worker = createUtilityNodeWorkerProcess('demo.cjs', os.tmpdir(), 'demo', fork as never);
+    try {
+      const env = fork.mock.calls[0][2].env;
+      expect(env.http_proxy ?? env.HTTP_PROXY).toBe(allowed ? endpoint : undefined);
+      for (const [value, inherited] of [[env.no_proxy, lower ?? upper], [env.NO_PROXY, upper ?? lower]]) {
+        if (allowed) {
+          const entries = value?.split(',');
+          expect(entries).toEqual(expect.arrayContaining(['localhost', '127.0.0.1', '::1']));
+          for (const item of inherited?.split(',') ?? []) expect(entries).toContain(item);
+          expect(entries?.length).toBe(new Set(entries).size);
+        } else {
+          expect(value).toBeUndefined();
+        }
+      }
+      expect(env.https_proxy).toBeUndefined();
+      expect(env.HTTPS_PROXY).toBeUndefined();
+    } finally {
+      worker.kill();
+      process.env = environment;
+    }
   });
 
   it('不依赖 RunAsNode，过滤宿主秘密，并只用 parentPort 推送 stdin', () => {
@@ -639,6 +710,21 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
 });
 
 describe('nodeRuntimeBroker · 进程生命周期', () => {
+  it.each([undefined, false, true])('uses the installed inheritance declaration for every worker entry: %s', async inheritEnv => {
+    const ghost = fakeGhost();
+    ghost.manifest.node = { ...ghost.manifest.node!, entries: ['node/extra.cjs'], inheritEnv };
+    const spawnProcess = vi.fn((_entry: string, _cwd: string, _id: string, _inheritEnv?: boolean) => {
+      const child = new FakeNodeProcess(message => child.send({ jsonrpc: '2.0', id: message.id, result: 'unchanged' }));
+      return child as unknown as NodeWorkerProcess;
+    });
+    const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost, spawnProcess });
+    try {
+      expect(await broker.handleRequest('node-ghost', rpcRequest())).toMatchObject({ ok: true, result: 'unchanged' });
+      expect(await broker.handleRequest('node-ghost', { ...rpcRequest(), entry: 'node/extra.cjs' })).toMatchObject({ ok: true });
+      expect(spawnProcess.mock.calls.map(call => call[3])).toEqual([inheritEnv === true, inheritEnv === true]);
+    } finally { broker.destroyAll(); }
+  });
+
   it('第一次请求才启动，同一插件后续请求复用同一个进程', async () => {
     const ghost = fakeGhost();
     const children: FakeNodeProcess[] = [];
@@ -1802,6 +1888,31 @@ describe('nodeRuntimeBroker · 启动瞬时失败重试(2026-07-24)', () => {
 });
 
 describe('nodeRuntimeBroker · 意外死亡诊断(2026-07-26)', () => {
+  // Unit: a program with the full environment may print any credential, even in
+  // split chunks. Reuse the existing credential-bearing worker log policy.
+  it('redacts inherited environment output without changing business responses', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.node!.inheritEnv = true;
+    const child = new FakeNodeProcess(message => child.send({ jsonrpc: '2.0', id: message.id, result: 'business-result' }));
+    const warn = vi.fn();
+    const pushes: unknown[] = [];
+    const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      sendToGhost: (_id, push) => pushes.push(push), log: { info: vi.fn(), warn } });
+    try {
+      expect(await broker.handleRequest('node-ghost', rpcRequest())).toMatchObject({ ok: true, result: 'business-result' });
+      child.stderr.write('http://probe:synthetic-');
+      child.stderr.write('password@proxy.invalid\n');
+      child.emit('exit', 1, null);
+      child.stderr.end();
+      await vi.waitFor(() => expect(pushes).toEqual(expect.arrayContaining([expect.objectContaining({ state: 'crashed' })])));
+      const output = JSON.stringify([warn.mock.calls, pushes]);
+      expect(output).toContain('[REDACTED]');
+      expect(output).not.toContain('synthetic-');
+      expect(output).not.toContain('password@');
+    } finally { broker.destroyAll(); }
+  });
+
   it('就绪后崩溃:在途请求与 crashed 状态都带临死前的 stderr 诊断行,且不泄露绝对路径', async () => {
     const ghost = fakeGhost();
     const child = new FakeNodeProcess(); // 不回 response,保持在途
@@ -2724,15 +2835,15 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
         queueMicrotask(() => worker.send({ jsonrpc: '2.0', id: message.id, result: null }));
       }
     });
-    const spawned: Array<{ entryPath: string; args: string[]; child: FakeRawChild }> = [];
+    const spawned: Array<{ entryPath: string; args: string[]; child: FakeRawChild; inheritEnv?: boolean }> = [];
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
       hostToolRequest,
       networkRequest,
       spawnProcess: () => worker as unknown as NodeWorkerProcess,
-      spawnChildProcess: (entryPath, _cwd, _ghostId, args) => {
+      spawnChildProcess: (entryPath, _cwd, _ghostId, args, inheritEnv) => {
         const child = spawnChild?.() ?? new FakeRawChild();
-        spawned.push({ entryPath, args, child });
+        spawned.push({ entryPath, args, child, inheritEnv });
         if (autoSpawnChild) queueMicrotask(() => child.emit('spawn'));
         return child as unknown as NodeWorkerProcess;
       },
@@ -2740,6 +2851,17 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     await broker.handleRequest('node-ghost', rpcRequest()); // 拉起 worker
     return { broker, worker, spawned };
   }
+
+  it.each([false, true])('uses the same inheritance declaration for a managed child: %s', async inheritEnv => {
+    const ghost = childSpawnGhost();
+    ghost.manifest.node!.inheritEnv = inheritEnv;
+    const { broker, worker, spawned } = await bootWorker(ghost);
+    try {
+      worker.emitControl({ type: 'spawn-child', reqId: 'env-child', entry: 'node/maker.cjs' });
+      await vi.waitFor(() => expect(worker.lastOf('spawn-child-result')).toMatchObject({ reqId: 'env-child', ok: true }));
+      expect(spawned[0].inheritEnv).toBe(inheritEnv);
+    } finally { broker.destroyAll(); }
+  });
 
   // §1.2/§3: the private worker port binds the real install and uses the UI gateway;
   // a plugin can call independently of an Agent RPC, and a changed installation cancels the result.
@@ -3250,14 +3372,14 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
   }
 
   function setupHarness(ghost: InstalledGhost, autoSpawn = true) {
-    const spawned: Array<{ entryPath: string; cwd: string; args: string[]; proc: FakeHarnessProcess }> = [];
+    const spawned: Array<{ entryPath: string; cwd: string; args: string[]; proc: FakeHarnessProcess; inheritEnv?: boolean }> = [];
     const warn = vi.fn();
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
       spawnProcess: () => { throw new Error('worker must not start'); },
-      spawnChildProcess: (entryPath, cwd, _ghostId, args) => {
+      spawnChildProcess: (entryPath, cwd, _ghostId, args, inheritEnv) => {
         const proc = new FakeHarnessProcess();
-        spawned.push({ entryPath, cwd, args, proc });
+        spawned.push({ entryPath, cwd, args, proc, inheritEnv });
         if (autoSpawn) queueMicrotask(() => proc.emit('spawn'));
         return proc as unknown as NodeWorkerProcess;
       },
@@ -3265,6 +3387,40 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
     });
     return { broker, spawned, warn };
   }
+
+  // Unit: broker-only logging checks missed ACP's independent exit diagnostic.
+  // A split synthetic secret followed by exit must stay opaque in both Host logs;
+  // default diagnostics and ACP business output retain their existing behavior.
+  it.each([false, true])('applies inherited environment log protection through the ACP exit path: %s', async inheritEnv => {
+    const ghost = harnessGhost(ghost => { ghost.manifest.node!.inheritEnv = inheritEnv; });
+    const { broker, spawned, warn } = setupHarness(ghost);
+    const acpWarn = vi.fn();
+    try {
+      const proc = await broker.spawnHarness('node-ghost', 'dsh');
+      const transport = createAcpProcessTransport(proc, { ...createConsoleLogger('acp-env-test'), warn: acpWarn });
+      const lines: string[] = [];
+      const closed = vi.fn();
+      transport.onLine(line => lines.push(line));
+      transport.onClose(closed);
+      expect(spawned[0].inheritEnv).toBe(inheritEnv);
+      spawned[0].proc.stdout.write('{"jsonrpc":"2.0","id":1,"result":"business-result"}\n');
+      spawned[0].proc.stderr.write('synthetic-environment-');
+      spawned[0].proc.stderr.write('token');
+      spawned[0].proc.emit('exit', 1, null);
+      expect(lines).toEqual(['{"jsonrpc":"2.0","id":1,"result":"business-result"}']);
+      expect(closed).toHaveBeenCalledWith({ reason: 'peer-exited', detail: 'exit 1' });
+      if (inheritEnv) {
+        const output = JSON.stringify([warn.mock.calls, acpWarn.mock.calls]);
+        expect(output).toContain('[REDACTED]');
+        expect(output).not.toContain('synthetic-environment-');
+        expect(output).not.toContain('token');
+      } else {
+        expect(acpWarn).toHaveBeenCalledWith('acp endpoint exited', {
+          detail: 'exit 1', stderrTail: 'synthetic-environment-token',
+        });
+      }
+    } finally { broker.destroyAll(); }
+  });
 
   it('starts the declared entry in raw stdio mode without childSpawn and logs bounded stderr', async () => {
     const ghost = harnessGhost();
@@ -3320,6 +3476,20 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
     try {
       await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toBeInstanceOf(AgentStartupStoppedError);
       expect(spawned).toHaveLength(0);
+    } finally { broker.destroyAll(); }
+  });
+
+  // #12224 / #12595: task engines are host-initiated per user task (unlike plugin childSpawn),
+  // so spawning a 9th+ engine process for the same plugin must succeed and remain tracked until exit.
+  it('allows spawning more than 8 task engine processes for a plugin and tracks exits', async () => {
+    const { broker, spawned } = setupHarness(harnessGhost());
+    try {
+      for (let i = 0; i < 9; i++) await broker.spawnHarness('node-ghost', 'dsh');
+      expect(spawned).toHaveLength(9);
+      expect(broker.harnessProcessCount('node-ghost')).toBe(9);
+
+      spawned[0].proc.emit('exit', 0);
+      await vi.waitFor(() => expect(broker.harnessProcessCount('node-ghost')).toBe(8));
     } finally { broker.destroyAll(); }
   });
 

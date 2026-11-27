@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import {
   createProjectAliasMirror,
+  type CachedProjectAliases,
   type HostProjectAliasesSnapshot,
   type ProjectAliasesByDevice,
 } from '@cindy/maker-shared/project-alias-sync';
@@ -12,6 +13,7 @@ import {
 const mirror = createProjectAliasMirror();
 let account: { ownerId: string | null; generation: number } = { ownerId: null, generation: -1 };
 const ownerStamps = new Map<string, SyncedProjectOrderOwnerStamp>();
+const removedDevices = new Set<string>();
 const knownDevices = new Set<string>();
 const deviceGenerations = new Map<string, number>();
 
@@ -20,6 +22,7 @@ export function setRemoteProjectAliasesAccount(ownerId: string | null, generatio
   if (account.ownerId === ownerId && account.generation === generation) return;
   account = { ownerId, generation };
   ownerStamps.clear();
+  removedDevices.clear();
   knownDevices.clear();
   deviceGenerations.clear();
   mirror.clear();
@@ -96,9 +99,18 @@ export function suspendRemoteProjectAliasesForReleasedTopics(deviceId: string, t
 
 export function removeRemoteProjectAliases(deviceId: string): void {
   ownerStamps.delete(deviceId);
+  removedDevices.add(deviceId);
   knownDevices.delete(deviceId);
   deviceGenerations.set(deviceId, (deviceGenerations.get(deviceId) ?? 0) + 1);
   mirror.remove(deviceId);
+}
+
+export function hydrateRemoteProjectAliases(ownerId: string, deviceId: string, cached: CachedProjectAliases): void {
+  if (account.ownerId === ownerId && !removedDevices.has(deviceId)) mirror.hydrate(deviceId, cached);
+}
+
+export function projectAliasesForCache(ownerId: string, deviceId: string) {
+  return account.ownerId === ownerId ? mirror.getSnapshot().get(deviceId) : undefined;
 }
 
 export const remoteProjectAliasesSnapshot = mirror.getSnapshot;

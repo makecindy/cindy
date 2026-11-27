@@ -58,6 +58,7 @@ import { readFileSync } from 'node:fs';
 import ts from 'typescript';
 import { createWorkingDirectoryRecovery } from '../workingDirectoryRecovery';
 import { createPreflightHarness, filesystemError } from './helpers/workingDirectoryPreflightHarness';
+import { createSharedReconnectFixture } from './helpers/sharedReconnectFixture';
 import { buildCindyMakeTaskNote } from '../../cindy-make/taskNote';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop';
 import { buildMobileClientPromptNote } from '../mobileClientPromptNote';
@@ -429,8 +430,7 @@ function createSession(overrides: Partial<MakerSendTransactionSession> = {}): Ma
   };
 }
 
-function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
-  const session = createSession();
+function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}, session = createSession()) {
   const deps: MakerSendTransactionDeps = {
     getResolvedMainLocale: () => getResolvedMainLocale(),
     getMainClassicalStyle: () => getMainClassicalStyle(),
@@ -831,6 +831,82 @@ describe('maker SEND transaction', () => {
     expect(deps.log.warn).toHaveBeenCalledWith('send: remote agent switch credential abandoned', {
       sessionId: session.id, reason: 'close-not-closed',
     });
+  });
+
+  // Unit, PR #12422: the send transaction must carry its own recovery identity
+  // through the real durable writer. A mocked writer missed the loss of the
+  // credential after one manual row and one confirmed stopped remote open.
+  it('persists once and dispatches once through the replacement after a shared reconnect offer', async () => {
+    const { write, createDbMessage, service, guestSwitch } = createSharedReconnectFixture();
+    const { deps, session } = createDeps(
+      { createDbMessage: vi.fn(write) }, createSession({ agentDeviceId: 'share:fixture' }),
+    );
+    const replacement = createSession({ instanceId: 'replacement', agentDeviceId: session.agentDeviceId });
+    const recovery = service.trackGuestStartRecovery(session.id);
+    const inputSignal = new AbortController().signal;
+    const denied = new AgentStartupStoppedError(new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset'));
+    const offer = vi.fn(() => guestSwitch.offer(session.id, 'replacement-credential'));
+    const takeOffer = vi.fn((error: unknown) => error === denied ? offer : undefined);
+    const close = vi.fn(async () => {
+      vi.mocked(deps.getSession).mockReturnValue(undefined);
+      return true;
+    });
+    deps.captureSharedReconnectRecovery = () => ({
+      ...recovery, captureOffer: send => send(), takeOffer, close,
+    });
+
+    // Supply the stopped-open result at the Session port, before provider dispatch.
+    vi.mocked(session.send).mockImplementation(async (_message, options) => {
+      await options?.onAccepted?.();
+      throw denied;
+    });
+    const consumedAtOpen: Array<string | undefined> = [];
+    vi.mocked(deps.bootstrapSession).mockImplementation(async (_opts, assertCurrent, opening) => {
+      assertCurrent?.();
+      opening?.offer();
+      expect(service.claimGuestStartSwitch(session.id)).toBe(true);
+      consumedAtOpen.push(guestSwitch.takeForOpen(session.id));
+      guestSwitch.release(session.id);
+      vi.mocked(deps.getSession).mockReturnValue(replacement);
+      return { session: replacement, didInjectOrcaInstructions: false, didInjectProjectContext: false };
+    });
+    const assertBeforeVendorDispatch = vi.fn();
+    deps.assertBeforeVendorDispatch = assertBeforeVendorDispatch;
+    const message = 'continue after reconnect';
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted(
+      session.id, message, { id: session.id, agentKind: 'codex', workingDir: session.workDir, model: 'gpt-5.4' },
+      { persistUserMessage: { clientId: 'reconnect-input', content: message },
+        reconnectRecovery: { signal: inputSignal, isCurrent: () => true } },
+    )).resolves.toMatchObject({ accepted: true });
+
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0]?.[2]?.ownReconnectRecoverySignal).toBe(recovery.signal);
+    expect(createDbMessage).toHaveBeenCalledExactlyOnceWith(
+      session.id, expect.objectContaining({ clientId: 'reconnect-input', role: 'user', content: message }),
+      { broadcastOwnerScope: null },
+    );
+    expect(takeOffer).toHaveBeenCalledExactlyOnceWith(denied);
+    expect(createDbMessage).toHaveBeenCalledBefore(takeOffer);
+    expect(close).toHaveBeenCalledBefore(offer);
+    expect(consumedAtOpen).toEqual(['replacement-credential']);
+    expect(session.send).toHaveBeenCalledOnce();
+    expect(replacement.send).toHaveBeenCalledExactlyOnceWith(message, expect.any(Object));
+    expect(assertBeforeVendorDispatch).toHaveBeenCalledOnce();
+  });
+
+  it('sends an ordinary durable write without a reconnect identity', async () => {
+    const { deps, session } = createDeps();
+    const capture = vi.fn();
+    deps.captureSharedReconnectRecovery = capture;
+    const shouldBroadcast = () => true;
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted(session.id, 'ordinary', undefined, {
+      persistUserMessage: { clientId: 'ordinary-input', content: 'ordinary', shouldBroadcast },
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.createDbMessage).toHaveBeenCalledExactlyOnceWith(
+      session.id, expect.objectContaining({ clientId: 'ordinary-input' }), { shouldBroadcast },
+    );
+    expect(capture).not.toHaveBeenCalled();
   });
 
   // #10559: a quota-looking message alone cannot authorize transparent replay.
@@ -2920,6 +2996,139 @@ describe('maker SEND transaction', () => {
     expect(failedSession.send).not.toHaveBeenCalled();
     expect(deps.bootstrapSession).toHaveBeenCalledWith({ ...createOpts, preserveStartupStoppedError: true });
     expect(recoveredSession.send).toHaveBeenCalled();
+  });
+
+  // 回归测试：回合结束后异步回收（closeAfterCurrentTurn / idle release）期间，
+  // 旧 Session 仍留在 Maker.activeSessions 中直到 handle.close() 完成。
+  // 此前只对 status==='error' 走重建，导致排队出队消息直接调 closingSession.send() 报 SESSION_CLOSING。
+  // 最小失败输入：getSession 返回 hasStartedClosing()=true（或 status='closed'）且带 createOpts。tier: unit。
+  it.each([
+    { label: 'closing session', patch: { hasStartedClosing: vi.fn(() => true) } },
+    { label: 'already closed session', patch: { getStatus: vi.fn(() => 'closed' as const) } },
+  ])('rebuilds a $label through lazy bootstrap inside close suppression before dispatch', async ({ patch }) => {
+    const closingSession = createSession({
+      ...patch,
+      send: vi.fn(async () => {
+        throw Object.assign(new Error('Session session-1 is closing'), { code: 'SESSION_CLOSING' });
+      }),
+    });
+    const replacementSession = createSession({ id: 'session-1', workDir: 'C:\\repo' });
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'acp',
+      workingDir: 'C:\\repo',
+      model: 'gemini-4-neon',
+    };
+    let suppressedDuringBootstrap = false;
+    let suppressed = false;
+    const { deps } = createDeps({
+      getSession: vi.fn(() => closingSession),
+      withRehydrateCloseSuppressed: vi.fn(async (_sid, fn) => {
+        suppressed = true;
+        try {
+          return await fn();
+        } finally {
+          suppressed = false;
+        }
+      }),
+      bootstrapSession: vi.fn(async () => {
+        suppressedDuringBootstrap = suppressed;
+        return {
+          session: replacementSession,
+          didInjectOrcaInstructions: false,
+          didInjectProjectContext: false,
+        };
+      }),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'follow up', createOpts)).resolves.toMatchObject({
+      accepted: true,
+      outcome: { kind: 'session-dispatch', dispatched: true },
+    });
+
+    expect(closingSession.send).not.toHaveBeenCalled();
+    expect(suppressedDuringBootstrap).toBe(true);
+    expect(suppressed).toBe(false);
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(replacementSession.send).toHaveBeenCalledOnce();
+  });
+
+  // 回归测试：send 事务准备阶段的异步 await 期间旧会话进入 closing，导致 sess.send() 在落库前抛 SESSION_CLOSING。
+  // 最小失败输入：getSession 初次返回 active 会话，在 send() 抛出 code='SESSION_CLOSING' 且会话已进入 closing。tier: unit。
+  it('rebuilds once and dispatches when an active session begins closing mid-preparation before persistence', async () => {
+    let closing = false;
+    const retiringSession = createSession({
+      hasStartedClosing: vi.fn(() => closing),
+      send: vi.fn(async () => {
+        closing = true;
+        throw Object.assign(new Error('Session session-1 is closing'), { code: 'SESSION_CLOSING' });
+      }),
+    });
+    const replacementSession = createSession({ id: 'session-1', workDir: 'C:\\repo' });
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'acp',
+      workingDir: 'C:\\repo',
+      model: 'gemini-4-neon',
+    };
+    let current: MakerSendTransactionSession | undefined = retiringSession;
+    let suppressed = false;
+    let suppressedDuringBootstrap = false;
+    const { deps } = createDeps({
+      getSession: vi.fn(() => current),
+      withRehydrateCloseSuppressed: vi.fn(async (_sid, fn) => {
+        suppressed = true;
+        try {
+          return await fn();
+        } finally {
+          suppressed = false;
+        }
+      }),
+      bootstrapSession: vi.fn(async () => {
+        suppressedDuringBootstrap = suppressed;
+        current = replacementSession;
+        return {
+          session: replacementSession,
+          didInjectOrcaInstructions: false,
+          didInjectProjectContext: false,
+        };
+      }),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'queued next', createOpts)).resolves.toMatchObject({
+      accepted: true,
+      outcome: { kind: 'session-dispatch', dispatched: true },
+    });
+
+    expect(retiringSession.send).toHaveBeenCalledOnce();
+    expect(suppressedDuringBootstrap).toBe(true);
+    expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    expect(replacementSession.send).toHaveBeenCalledOnce();
+  });
+
+  // 负例：旧会话尚未进入 teardown（如仍在等 Host silent-stop 续接的退休态），抛 SESSION_CLOSING 时不能死循环重建。tier: unit。
+  it('does not retry rebuild when SESSION_CLOSING comes from a session that has not started closing', async () => {
+    const stillSettling = createSession({
+      hasStartedClosing: vi.fn(() => false),
+      send: vi.fn(async () => {
+        throw Object.assign(new Error('Session session-1 is closing'), { code: 'SESSION_CLOSING' });
+      }),
+    });
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'acp',
+      workingDir: 'C:\\repo',
+      model: 'gemini-4-neon',
+    };
+    const { deps } = createDeps({
+      getSession: vi.fn(() => stillSettling),
+    });
+
+    await expect(
+      createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'queued next', createOpts),
+    ).rejects.toMatchObject({ code: 'SESSION_CLOSING' });
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
   });
 
   it('lazy-create adopts the DB working_dir when the caller-provided one is stale', async () => {
@@ -5050,6 +5259,7 @@ describe('session-agent-switch handoff injection', () => {
         log: { warn: vi.fn() },
         // 同一段适配器里还有预算重放（只在有未完成意图时跑）；本用例只关心切换守卫。
         replayPendingSessionContextWindowBudgetUnderLock: vi.fn(async () => undefined),
+        runDesktopModelGroupBeforeSend: vi.fn(async () => ({ switched: false })),
       };
       const compiled = ts.transpileModule(`return ({${adapter}}).applyPendingAgentSwitch;`,
         { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -5387,11 +5597,41 @@ describe('repeatable environment notes are sent only when they change', () => {
     await transaction.sendToAgentAccepted('session-1', 'b');
     expect(sentAt(session, 1)).toBe('b');
   });
+
+  it('keeps ACP leading slash commands clean and defuses slash mentions in host wire notes without altering user text', async () => {
+    let handoff: string | null = 'Earlier turn mentioned /learn and /compact.\n\n== End of handoff note; the user\'s new message follows ==';
+    const consumePendingHandoff = vi.fn(() => { handoff = null; });
+    const session = createSession({ agentKind: 'acp' });
+    const { transaction } = setup({
+      getSession: vi.fn(() => session),
+      peekPendingHandoff: vi.fn(async () => handoff),
+      consumePendingHandoff,
+    });
+    // Leading `/plan` on mobile: no client note or handoff prepended, handoff stays pending.
+    await transaction.sendToAgentAccepted('session-1', '/plan 检查登录流程', undefined, { sourceDevice: phone });
+    expect(sentAt(session, 0)).toBe('/plan 检查登录流程');
+    expect(consumePendingHandoff).not.toHaveBeenCalled();
+
+    // Next normal message: client note + handoff are prepended with `/learn` and `/compact` defused,
+    // while `/learn` inside the user's own message stays intact.
+    await transaction.sendToAgentAccepted('session-1', '顺便查一下为什么 /learn 会被触发', undefined, {
+      sourceDevice: phone,
+      persistUserMessage: { clientId: 'm-acp-1', content: '顺便查一下为什么 /learn 会被触发' },
+    });
+    const dispatched = sentAt(session, 1);
+    expect(dispatched).toContain('[客户端说明]');
+    expect(dispatched).toContain('Earlier turn mentioned learn and compact.');
+    expect(dispatched).toMatch(/顺便查一下为什么 \/learn 会被触发$/);
+    expect(consumePendingHandoff).toHaveBeenCalledOnce();
+  });
 });
 
 describe('Agent prewarm', () => {
-  it('rebuilds a retained failed Pi runtime before preparing a Skill', async () => {
-    const live = createSession({ agentKind: 'pi', getStatus: () => 'error' });
+  it.each([
+    { label: 'retained failed', patch: { getStatus: () => 'error' as const } },
+    { label: 'closing', patch: { hasStartedClosing: () => true } },
+  ])('rebuilds a $label Pi runtime before preparing a Skill', async ({ patch }) => {
+    const live = createSession({ agentKind: 'pi', ...patch });
     const { deps } = createDeps({
       getSession: () => live,
       readWorkingDirectoryRecoveryCreateOpts: async () => ({ agentKind: 'pi', workingDir: '/repo', model: 'saved' }),

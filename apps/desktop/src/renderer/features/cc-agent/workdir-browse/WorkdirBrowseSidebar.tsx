@@ -454,6 +454,7 @@ export function WorkdirBrowseSidebar({
         description: t('ccAgent.workdirBrowse.deleteFile.description', { name: entry.name }),
         confirmText: t('ccAgent.workdirBrowse.deleteFile.confirm'),
         cancelText: t('ccAgent.workdirBrowse.deleteFile.cancel'),
+        confirmVariant: 'destructive',
       });
       if (!ok) return;
       const res = await fileBrowserApiFor(deviceId).deleteEntry({

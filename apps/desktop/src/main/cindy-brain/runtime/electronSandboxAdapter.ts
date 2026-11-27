@@ -332,6 +332,16 @@ export function setGhostHarnessesHandler(handler: GhostSecretsProtocolHandler): 
   ghostHarnessesHandler = handler;
 }
 
+let ghostEngineSettingsHandler: GhostSecretsProtocolHandler | null = null;
+
+/**
+ * /harnesses/open-settings：页面请宿主打开本插件引擎的供应商设置页(index.ts 注入)。只挂在本机
+ * cindy-ghost:// 页面上；手机与远程设置页走的转发入口不认这条路径，那里没有本机设置窗口可开。
+ */
+export function setGhostEngineSettingsHandler(handler: GhostSecretsProtocolHandler): void {
+  ghostEngineSettingsHandler = handler;
+}
+
 export function setGhostSecretsHandler(handler: GhostSecretsProtocolHandler): void {
   ghostSecretsHandler = handler;
 }
@@ -546,6 +556,7 @@ function registerGhostProtocol(
     get ghostMediaModelsProvider() { return ghostMediaModelsProvider; },
     get ghostModelsHandler() { return ghostModelsHandler; },
     get ghostHarnessesHandler() { return ghostHarnessesHandler; },
+    get ghostEngineSettingsHandler() { return ghostEngineSettingsHandler; },
     get ghostSecretsHandler() { return ghostSecretsHandler; },
     get ghostOauthHandler() { return ghostOauthHandler; },
     get ghostConnectionsHandler() { return ghostConnectionsHandler; },

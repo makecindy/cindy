@@ -100,6 +100,24 @@ describe('payloadSummary', () => {
       command: 'pnpm --filter mobile test -- --runInBand --very-long-argument',
     })).toBe('Bash(pnpm --filter mobile test -- --runInBand --very-long-argu...)');
     expect(formatPayloadToolUseSummary('UnknownTool', { value: 'x' })).toBe('UnknownTool()');
+    expect(
+      formatPayloadToolUseSummary('collab:wait', {
+        senderThreadId: '019d8f44-1111-7222-8333-444444444444',
+        receiverThreadIds: [],
+      }),
+    ).toBe('');
+    expect(
+      formatPayloadToolUseSummary('collab:wait', {
+        targets: ['scout', 'reviewer'],
+        targetCount: 2,
+      }),
+    ).toBe('scout, reviewer');
+    expect(
+      formatPayloadToolUseSummary('collab:sendInput', {
+        targets: ['scout'],
+        prompt: 'Verify the build',
+      }),
+    ).toBe('Verify the build');
 
     expect(buildPayloadToolDiff('Edit', {
       file_path: '/repo/app.ts',

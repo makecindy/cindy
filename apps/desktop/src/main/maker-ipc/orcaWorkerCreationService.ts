@@ -8,8 +8,10 @@ import path from 'node:path';
 
 import { isCredentialModeSwitchBusyError } from '../maker-host/credentialSwitchError.js';
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
+import { isDisallowedPluginEngineDeviceId } from './pluginEngineSessionAdmission.js';
 import type { DispatchWorkerTaskResult, OrcaWorkerEffort, OrcaWorkerStatus } from './orcaTeamService.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
+import type { ModelGroupSessionStart } from '../model-groups/sessionStart.js';
 import type { OrcaRemoteWorkerProxySessionSeed } from '../localDb/client/tx/types.js';
 import {
   resolveOrcaWorkerPermissionMode,
@@ -237,7 +239,7 @@ export interface OrcaWorkerCreateParams {
   role: string;
   /**
    * 'acp' = 本机插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)：providerId 必为 acp-plugin:<插件>:<引擎>，
-   * 只在本机运行，不用 worktree，不走内置模型目录与来源路由。
+   * 只在本机运行，不走内置模型目录与来源路由；可用 worktree。
    */
   agent: EngineKind;
   label: string;
@@ -252,6 +254,8 @@ export interface OrcaWorkerCreateParams {
    */
   providerId?: string | null;
   initialTask?: string;
+  /** Model group on the task host. The concrete model is retained as a fallback. */
+  modelGroup?: string;
   /** 可选, 随 initial_task 发给 worker 的本机图片绝对路径; 仅本机 worker。 */
   initialTaskImages?: string[];
   /**
@@ -284,7 +288,7 @@ export type OrcaRemoteWorkerOpenResult =
       proxySessionId: string;
       proxySession: OrcaRemoteWorkerProxySessionSeed;
       remoteSessionId: string;
-      agent: AgentKind;
+      agent: EngineKind;
       model: string;
       workingDir: string;
       agentDeviceId?: string | null;
@@ -313,6 +317,7 @@ export interface OrcaWorkerCreationDeps {
   readCollaborationSettings(): { workerSoftLimit: number; workerHardLimit: number };
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
   getWorkerDefaults(agent: AgentKind): OrcaWorkerDefaultsSnapshot;
+  modelGroupStart?: Pick<ModelGroupSessionStart, 'prepare'>;
   getCreationSelection?(): WorkerCreationSelection | null;
   getWorkerPermissionMode(): OrcaWorkerPermissionMode;
   /** Validate existence and target project policy before reserving or bootstrapping. */
@@ -369,14 +374,18 @@ export interface OrcaWorkerCreationDeps {
     didInjectProjectContext: boolean;
   }>;
   /**
-   * 插件引擎 Worker 的准入，规则与在它上面新建任务相同：引擎此刻由本机提供且可用，返回该引擎下实际使用的
+   * 插件引擎 Worker 的准入，规则与在它上面新建任务相同：引擎此刻由本机或目标电脑/分享提供且可用，返回该引擎下实际使用的
    * 模型、思考深度('' = 引擎自己决定)与权限模式；不可用时抛错。缺省 = 不支持插件引擎 Worker。
    */
-  admitPluginEngineWorker?(target: { providerId: string | null; model: string; effort?: unknown; permissionMode?: string | null }): {
+  admitPluginEngineWorker?(target: {
+    providerId: string | null;
     model: string;
-    effort: string;
-    permissionMode: string;
-  };
+    effort?: unknown;
+    permissionMode?: string | null;
+    agentDeviceId?: string | null;
+  }):
+    | { model: string; effort: string; permissionMode: string }
+    | Promise<{ model: string; effort: string; permissionMode: string }>;
   addOrUpdateWorker(worker: OrcaWorkerRecordInput): Promise<void>;
   markOrcaRoleIfNeeded(sessionId: string, role: 'worker'): Promise<void>;
   closeWorkerSession(sessionId: string): Promise<void>;
@@ -405,8 +414,9 @@ export interface OrcaWorkerCreationDeps {
     leadSessionId: string;
     label: string;
     role: string;
-    agent: AgentKind;
+    agent: EngineKind;
     model?: string;
+    modelGroup?: string;
     providerId?: string;
     agentDeviceId?: string | null;
     effort?: string;
@@ -645,6 +655,7 @@ function resolveWorkerConfig(params: {
   availableModels: OrcaWorkerModelCapabilities[];
   model: string;
   providerId: string | null;
+  useModelDefaultEffort?: boolean;
 }): ResolveWorkerConfigResult {
   const { input, lead, defaults, availableModels, model, providerId } = params;
   const modelCapabilities = availableModels.find((candidate) => candidate.id === model);
@@ -656,7 +667,7 @@ function resolveWorkerConfig(params: {
   }
   const normalizedEffort = normalizeResolvedEffort({
     model: modelCapabilities,
-    effort: input.effort ?? defaults.effort ?? lead.effort,
+    effort: input.effort ?? (params.useModelDefaultEffort ? undefined : defaults.effort ?? lead.effort),
     explicit: input.effort !== undefined,
   });
   return {
@@ -876,10 +887,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
     onCreated?: (assertCreatedCurrent: () => Promise<void>) => void;
   }): Promise<OrcaWorkerCreationResult> {
     const { params, role, label, lead, settings, assertCurrent, onCreated } = input;
-    // 插件引擎只在本机运行(上游已拒绝)；这里只放内置引擎。
-    if (params.agent === 'acp') {
-      return { ok: false, errorCode: 'INVALID_PARAMS', message: 'plugin engines run on this computer only' };
-    }
     const deviceId = typeof params.executionDeviceId === 'string' ? params.executionDeviceId.trim() : '';
     if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(deviceId)) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: 'execution_device_id must be a device id' };
@@ -973,6 +980,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           label,
           role,
           agent: params.agent,
+          ...(params.modelGroup ? { modelGroup: params.modelGroup } : {}),
           ...(params.model !== undefined ? { model: params.model } : {}),
           ...(explicitSourceId ? { providerId: explicitSourceId } : {}),
           ...(params.agentDeviceId !== undefined ? { agentDeviceId: params.agentDeviceId } : {}),
@@ -1143,30 +1151,63 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       || !deps.createWorkerWorktree || !deps.discardWorkerWorktree)) {
       return {ok: false, errorCode: 'INVALID_PARAMS', message: 'Worker worktree requires a local project'};
     }
+    if (params.modelGroup && !deps.modelGroupStart) {
+      return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Model groups are unavailable for this Worker location' };
+    }
+    const modelGroup = params.modelGroup && params.executionDeviceId === undefined ? await deps.modelGroupStart!.prepare(params.modelGroup, {
+      keptModelName: params.model || lead.model,
+      ...(lead.remoteHostId ? { sshHostId: lead.remoteHostId } : {}),
+    }) : null;
+    const groupRoute = modelGroup?.route;
+    if (groupRoute) {
+      params = {
+        ...params,
+        agent: groupRoute.agentKind === 'cc' ? 'claude-code' : groupRoute.agentKind,
+        providerId: groupRoute.providerId,
+        model: groupRoute.model,
+        effort: groupRoute.effort as OrcaWorkerEffort | undefined,
+        fast: false,
+        agentDeviceId: groupRoute.agentDeviceId,
+      };
+      rememberedRouting = undefined;
+    }
     const workerLocation = resolveWorkerAgentDeviceId(params, lead, deps.isSelfDeviceId);
     if (!workerLocation.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: workerLocation.message };
     }
+    if (params.executionDeviceId !== undefined) {
+      return createRemoteWorkerInTeam({
+        params,
+        role: role.value,
+        label: label.value,
+        lead,
+        settings,
+        assertCurrent,
+        onCreated,
+      });
+    }
     if (params.agent === 'acp') {
-      // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)：只在本机运行(Lead 不在 SSH、Worker 不换电脑、不在
-      // 另一台电脑执行)，不用 worktree；引擎按本机此刻提供的准入，不走内置模型目录与来源路由。
-      if (lead.remoteHostId || params.executionDeviceId !== undefined || workerLocation.agentDeviceId) {
+      // 插件引擎 Worker(docs/plans/acp-plugin-bridge.md)：支持本机、另一台同账号电脑与分享来的插件引擎；
+      // SSH 远端主机不支持插件引擎。
+      if (lead.remoteHostId) {
         return { ok: false, errorCode: 'INVALID_PARAMS',
-          message: 'plugin engines run on this computer only; create the Worker locally (agent_device_id "local", no execution_device_id)' };
+          message: 'plugin engines are not supported for SSH Lead Workers' };
       }
-      if (params.worktree !== undefined) {
-        return { ok: false, errorCode: 'INVALID_PARAMS', message: 'plugin engine Workers cannot use a worktree' };
+      if (isDisallowedPluginEngineDeviceId(workerLocation.agentDeviceId)) {
+        return { ok: false, errorCode: 'INVALID_PARAMS',
+          message: 'this plugin engine location cannot be used for Workers' };
       }
       if (!deps.admitPluginEngineWorker) {
         return { ok: false, errorCode: 'UNSUPPORTED_CAPABILITY', message: 'plugin engine Workers are not available here' };
       }
-      let admitted: ReturnType<NonNullable<typeof deps.admitPluginEngineWorker>>;
+      let admitted: Awaited<ReturnType<NonNullable<typeof deps.admitPluginEngineWorker>>>;
       try {
-        admitted = deps.admitPluginEngineWorker({
+        admitted = await deps.admitPluginEngineWorker({
           providerId: typeof params.providerId === 'string' ? params.providerId.trim() : null,
           model: params.model?.trim() || 'default',
           effort: params.effort,
           permissionMode: resolveOrcaWorkerPermissionMode(params.workerPermissionMode),
+          ...(workerLocation.agentDeviceId ? { agentDeviceId: workerLocation.agentDeviceId } : {}),
         });
       } catch (err) {
         return { ok: false, errorCode: 'PROVIDER_ROUTE_UNAVAILABLE', message: err instanceof Error ? err.message : String(err) };
@@ -1183,9 +1224,23 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           return { ok: false, errorCode: 'INVALID_PARAMS', message: 'working_dir is unavailable or collaboration is disabled for that directory; no Worker was started' };
         }
       }
+      // worktree 与内置 Worker 同一套(Lead 在本机项目里时由 finishWorkerCreation 检出)。
+      let pluginWorktreeSource: string | undefined;
+      let pluginWorktreeSelection: WorkerWorktreeSourceSelection | undefined;
+      if (params.worktree) {
+        try {
+          const source = await deps.resolveWorkerWorktreeSource!(pluginWorkingDir, params.worktree.sourceBranch, lead.workingDir);
+          pluginWorktreeSelection = typeof source === 'string'
+            ? { sourceBranch: source, source: params.worktree.sourceBranch ? 'explicit' : 'current' } : source;
+          pluginWorktreeSource = pluginWorktreeSelection.sourceBranch;
+        } catch (error) {
+          return { ok: false, errorCode: 'INVALID_PARAMS', message: error instanceof Error ? error.message : 'Worker worktree target is unavailable' };
+        }
+      }
       return finishWorkerCreation({
         workingDir: pluginWorkingDir,
-        workerAgentDeviceId: null,
+        ...(pluginWorktreeSource ? { worktreeSource: pluginWorktreeSource, worktreeSourceSelection: pluginWorktreeSelection } : {}),
+        workerAgentDeviceId: workerLocation.agentDeviceId,
         resolved: {
           model: admitted.model,
           providerId: typeof params.providerId === 'string' ? params.providerId.trim() : null,
@@ -1193,17 +1248,6 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           fastMode: false,
         },
         permissionMode: admitted.permissionMode as OrcaWorkerPermissionMode,
-      });
-    }
-    if (params.executionDeviceId !== undefined) {
-      return createRemoteWorkerInTeam({
-        params,
-        role: role.value,
-        label: label.value,
-        lead,
-        settings,
-        assertCurrent,
-        onCreated,
       });
     }
     // 标准面板显式选定的来源(非空 string)直接生效,由下方精确 preflight 把关「已连接且
@@ -1215,7 +1259,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
         : null;
     // Lead 归在供应商组里：跟 Lead 的 Worker 跟那个组(组按策略给它选电脑、出问题时换电脑，与普通任务选组那一项
     // 一样)。组那一项不提供这个模型或读不到时照旧跟 Lead 所在那台。
-    let groupFollow = rememberedRouting ? null : leadProviderGroupFollowCandidate(params, lead, workerLocation.agentDeviceId, requestedSourceId);
+    let groupFollow = rememberedRouting || groupRoute ? null : leadProviderGroupFollowCandidate(params, lead, workerLocation.agentDeviceId, requestedSourceId);
     let groupFollowRouting: OrcaWorkerProviderRoutingContext | undefined;
     if (groupFollow) {
       try {
@@ -1426,6 +1470,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       availableModels,
       model: modelResolution.model,
       providerId: inheritedProviderId,
+      useModelDefaultEffort: !!groupRoute,
     });
     if (!resolvedConfig.ok) {
       return { ok: false, errorCode: 'INVALID_PARAMS', message: resolvedConfig.message };
@@ -1499,7 +1544,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
           defaultEffort: routeEffortMeta.defaultEffort,
           effortsUnknown: routeEffortMeta.effortsUnknown,
         },
-        effort: params.effort ?? defaults.effort ?? lead.effort,
+        effort: params.effort ?? (groupRoute ? undefined : defaults.effort ?? lead.effort),
         explicit: params.effort !== undefined,
       });
       if (!renormalized.ok) {
@@ -1709,6 +1754,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
 
         const workerOpts = deps.buildCreateOptsWithStderr({
           id: workerSessionId,
+          ...(modelGroup ? { modelGroupStart: modelGroup.token } : {}),
           agentKind: params.agent,
           // 未指定目录时保留 Lead 的 workspace 语义（包括 dialogue 托管目录）。
           // 显式选择目录才使用 project，并在 bootstrap 前完成校验。

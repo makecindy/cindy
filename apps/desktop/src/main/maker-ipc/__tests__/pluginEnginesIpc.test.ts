@@ -34,6 +34,7 @@ vi.mock('../../maker-host/logger-adapter.js', () => ({
   desktopMakerLogger: { child: () => ({ info: () => {}, warn: () => {}, error: () => {} }) },
 }));
 vi.mock('../../ownerContext.js', () => ({
+  configureOwnerContext: () => {},
   ownerScopedPath: (name: string) => path.join(tmpDir, host.owner, name),
 }));
 vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
@@ -41,10 +42,15 @@ vi.mock('../../cindy-brain/pluginHarnesses.js', () => ({
   requestPluginHarnessRefresh: () => {},
   readPluginHarnessUsage: () => null,
 }));
-vi.mock('../../maker-host/acp-host.js', () => ({
-  getCachedPluginHarnessModels: () => [],
-  onPluginHarnessModelsChanged: () => () => {},
-}));
+vi.mock('../../maker-host/acp-host.js', async () => {
+  const cache = await import('../../maker-host/pluginEngineModelCache.js');
+  return {
+    getCachedPluginHarnessModels: () => [],
+    getReportedPluginEngineModelDetails: cache.getReportedPluginEngineModelDetails,
+    onPluginHarnessModelsChanged: cache.onPluginHarnessModelsChanged,
+    onReportedPluginEngineModelDetailsChanged: cache.onReportedPluginEngineModelDetailsChanged,
+  };
+});
 const remoteAccess = vi.hoisted(() => ({ allowed: new Set<string>() }));
 vi.mock('../../maker-host/remote-provider-access-store.js', () => ({
   isRemoteProviderInvocationAllowed: (providerId: string) => remoteAccess.allowed.has(providerId),
@@ -75,7 +81,8 @@ import {
   pluginEngineRemoteUse,
   setPluginEngineRemoteUse,
 } from '../../maker-host/pluginEngineRemoteUse.js';
-import { pluginEngineDescriptors, pluginEngineSettingsOf, registerPluginEnginesIpc } from '../pluginEnginesIpc.js';
+import { observePluginEngineModelDetails } from '../../maker-host/pluginEngineModelCache.js';
+import { onPluginEnginesChanged, pluginEngineDescriptors, pluginEngineSettingsOf, registerPluginEnginesIpc } from '../pluginEnginesIpc.js';
 
 const KEY = '_ns__local__dsh-acp:dsh';
 const dsh = (extra: Partial<PluginHarness> = {}): PluginHarness => ({
@@ -137,6 +144,24 @@ afterEach(() => {
 afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
 describe('plugin engines with the settings from Settings → Model providers', () => {
+  // The existing cross-device picker must never receive local settings observations.
+  it('publishes model details locally and removes them when the ACP endpoint ends', () => {
+    const ipc = register();
+    const catalogueChanged = vi.fn();
+    disposers.push(onPluginEnginesChanged(catalogueChanged));
+    const report = observePluginEngineModelDetails(`acp-plugin:${KEY}`);
+    expect(ipc.list()[0]?.reportedModelDetails).toBeUndefined();
+    const data = { modelId: 'deepseek-v4', imageInput: false, contextWindow: 64000 };
+    report(data);
+    expect(ipc.pushes.at(-1)?.[0]?.reportedModelDetails).toEqual([data]);
+    expect(ipc.list()[0]?.reportedModelDetails).toEqual([data]);
+    expect(ipc.listFromAnotherDevice()[0]?.reportedModelDetails).toBeUndefined();
+    report(undefined);
+    expect(ipc.list()[0]?.reportedModelDetails).toBeUndefined();
+    expect(ipc.pushes.at(-1)?.[0]?.reportedModelDetails).toBeUndefined();
+    expect(catalogueChanged).not.toHaveBeenCalled();
+  });
+
   it('lists an engine exactly as its plugin declares it until the user changes something', () => {
     const ipc = register();
     const unchanged: PluginEngineView = {
@@ -158,6 +183,26 @@ describe('plugin engines with the settings from Settings → Model providers', (
     expect(JSON.stringify(ipc.list())).toBe(JSON.stringify([unchanged]));
     expect(JSON.stringify(ipc.listFromAnotherDevice())).toBe(JSON.stringify([unchanged]));
     expect(fs.existsSync(ipc.prefsFile())).toBe(false);
+  });
+
+  // Unit: real settings IPC and owner-scoped file, with the plugin publishing two levels.
+  it('persists and restores a per-model reasoning default and refuses invalid or stale choices', async () => {
+    const ipc = register();
+    const ownerStamp = { dataOwnerId: host.owner, ownerGeneration: 1 };
+    const patch = { key: KEY, ownerStamp, modelEffort: { id: 'deepseek-v4', effort: 'low' } };
+    await expect(ipc.set({ ...patch, modelEffort: { ...patch.modelEffort, effort: 'max' } })).rejects.toThrow('INVALID_PARAMS');
+    await expect(ipc.set({ ...patch, ownerStamp: { ...ownerStamp, ownerGeneration: 0 } })).rejects.toThrow('PERMISSION_DENIED');
+    await ipc.set(patch);
+    expect(ipc.list()[0]).toMatchObject({ modelEfforts: { 'deepseek-v4': 'low' }, models: [{ defaultEffort: 'low', declaredDefaultEffort: 'high' }, { id: 'deepseek-lite' }] });
+    expect(JSON.parse(fs.readFileSync(ipc.prefsFile(), 'utf8')).engines[KEY]).toEqual({ modelEfforts: { 'deepseek-v4': 'low' } });
+    const remote = ipc.listFromAnotherDevice()[0];
+    expect(remote).not.toHaveProperty('modelEfforts');
+    expect(remote?.models[0]).toMatchObject({ defaultEffort: 'low', declaredDefaultEffort: 'high' });
+    const other = await ipc.set({ ...patch, modelEffort: { id: 'deepseek-v4', effort: null } });
+    expect(other).not.toHaveProperty('modelEfforts');
+    expect(other?.models[0]?.defaultEffort).toBe('high');
+    expect(other?.models[0]).not.toHaveProperty('declaredDefaultEffort');
+    expect(readPluginEnginePrefs(KEY)).toEqual({});
   });
 
   it('shows the user’s name, hides, turns off models and suspends for every reader of this computer’s list', async () => {

@@ -33,6 +33,7 @@ vi.mock('../botProjectMode.js', () => ({
   prepareBotProjectWorkspace: async () => ({ workingDir: path.join(h.root, 'bots', 'import_ada', 'workspace'), skippedSkillLinks: [] }),
   ensureBotProjectAutomations: vi.fn(async () => true),
   moveTeammateMemoryIntoProject: h.moveMemory,
+  ensureTeammateProjectIgnored: async () => 'ready',
   ensureTeammateTemplate: async () => false,
   ensureWorkspaceRepository: h.repository,
   nameBotProject: async () => {},
@@ -53,6 +54,13 @@ vi.mock('../botRoutineAutomations.js', () => ({
 }));
 vi.mock('../../bot-import/runtime.js', () => ({
   companionEnvironmentStore: { read: async () => ({ automations: h.bindings }) },
+}));
+vi.mock('../globalMemoryTidyRuntime.js', () => ({
+  runLegacyTeammateMemoryReviewCleanup: vi.fn(async () => ({
+    skipped: true, schedulesRemoved: 0, sessionsArchived: 0, checkFilesRemoved: 0, recentWorkdirsRemoved: 0, preservedCustom: 0,
+  })),
+  startGlobalMemoryTidy: vi.fn(),
+  stopGlobalMemoryTidy: vi.fn(),
 }));
 
 import { carryLegacyTodos, migrateTeammateToV2, migrateTeammatesToV2 } from '../botV2Migration.js';

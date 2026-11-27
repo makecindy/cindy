@@ -10,10 +10,12 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 import { isProviderSharePeer } from '@cindy/device-link';
-import { registerGuestProviderRoute, guestProviderModelAllowed } from '../../maker-host/guest-provider-route-store.js';
+import { registerGuestProviderRoute, guestProviderModelAllowed, guestProviderRouteForToken } from '../../maker-host/guest-provider-route-store.js';
 import { providerWeeklyQuotaSource } from '../../../shared/providerQuotaSource.js';
 import type { GuestRequestUsage } from '../../maker-host/guest-provider-route-store.js';
 import { isMemberBudgetPaused } from '../../../shared/providerShareBudget.js';
+import { getSessionSubscriptionAccount, readPoolExecutionRoute } from '../../subscription-accounts/session.js';
+import { sharedCodexTurnValue } from './sharedCodexTurnValue.js';
 import type { RemoteAgentHostDeps } from './runHost.js';
 
 /** Shared users and same-account group relays both need a guest-isolated proxy binding. */
@@ -95,6 +97,16 @@ export function createGuestProviderRouteBinder(deps: {
       deps.recordRequestUsage!(controller, providerId, kind, { ...sample, model });
     } : undefined);
     return {
+      ...(kind === 'codex' && provider && providerWeeklyQuotaSource(provider) === 'codex' ? {
+        estimateTurn: (event) => {
+          if (!isCurrent() || !providerAllowed() || !guestProviderRouteForToken(binding.token) || readPoolExecutionRoute(hostSessionId)) return;
+          // The native subscription lease alone authorizes translation from the shared
+          // pool's ID to the engine's built-in route. An API-key pool member has no such lease.
+          const account = getSessionSubscriptionAccount(hostSessionId);
+          const engineProviderId = account?.sharedProviderId === providerId ? 'openai' : providerId;
+          return sharedCodexTurnValue(providerId, engineProviderId, event);
+        },
+      } : {}),
       receiptMetering: !!receiptMetering,
       routeToken: binding.token,
       modelIds,

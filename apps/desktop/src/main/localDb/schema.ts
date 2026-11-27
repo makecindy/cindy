@@ -20,6 +20,7 @@ import {
   customType,
 } from 'drizzle-orm/sqlite-core';
 
+import type { MrRunObservation } from '@cindy/maker-scheduler';
 import type { SessionSource } from '../../shared/sessionSource.js';
 
 /** Rebuildable Chat Server projection inside the owner's database; namespace includes server and reader. */
@@ -330,6 +331,12 @@ export const sessions = sqliteTable(
      * 任务、目录与命令都在本机；Lead 与团队在那台。NULL = 普通任务。
      */
     orcaRemoteLead: text('orca_remote_lead'),
+    /**
+     * 由其他任务通过 send_to_session（create 模式）新建时的来源任务元数据
+     * (JSON，见 shared/sessionOrigin.ts)。独立于 parent_session_id（仅用于 fork / 侧边追问）。
+     * NULL = 非任务新建（用户直接新建、自动化、导入或旧版数据）。
+     */
+    createdBySession: text('created_by_session'),
     /**
      * interrupted-turn-resume: 最近一次 turn 的启动时刻(unix ms)。与
      * lastTurnEndedAt 配对做「疑似中断」纯读判定(startedAt > endedAt),两个
@@ -1665,7 +1672,8 @@ export const sessionGoals = sqliteTable(
     /** usageLimited 时记录的限额重置时刻(unix ms);到点自动续跑。其它状态为 null。 */
     usageResetAt: integer('usage_reset_at'),
     lastReason: text('last_reason'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    /** 'acp' = 插件引擎任务的目标(2026-11-25；列无 CHECK 约束，只放宽 TS 枚举，无需迁移)。 */
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'acp'] }).notNull(),
     startedAt: integer('started_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -1769,6 +1777,7 @@ export const scheduleRuns = sqliteTable(
     preRunHookResult: text('pre_run_hook_result'),
     /** 本轮触发来源；NULL = 定时或手动。 */
     triggerSource: text('trigger_source'),
+    mrObservation: text('mr_observation', { mode: 'json' }).$type<MrRunObservation>(),
     readAt: integer('read_at'),
     /**
      * In-flight 心跳时间戳（毫秒）——跨实例的"仍有活实例在跑"租约信号。
@@ -1779,6 +1788,9 @@ export const scheduleRuns = sqliteTable(
   },
   (t) => ({
     idxBySchedule: index('idx_schedule_runs_schedule').on(t.scheduleId, t.firedAt),
+    idxMrObservation: index('idx_schedule_runs_mr_observation')
+      .on(t.scheduleId, t.status, t.firedAt, t.id)
+      .where(sql`${t.mrObservation} IS NOT NULL`),
     idxRunningSchedule: index('idx_schedule_runs_running_schedule')
       .on(t.scheduleId)
       .where(sql`${t.status} = 'running'`),
@@ -1865,6 +1877,12 @@ export const embeddingJobs = sqliteTable(
     idxSourceId: index('idx_embedding_jobs_source_id').on(t.source, t.sourceId),
   }),
 );
+
+// Row IDs only. Writers without sqlite-vec can unlink chat content immediately;
+// the next vector-capable connection finishes deleting the physical index rows.
+export const deletedChatVectorRows = sqliteTable('deleted_chat_vector_rows', {
+  rowid: integer('rowid').primaryKey(),
+});
 
 /**
  * embedding-host (Phase 1.1): vec 虚表元信息登记。
@@ -2578,7 +2596,8 @@ export const pluginTaskRequests = sqliteTable('plugin_task_requests', {
   id: text('id').primaryKey(),
   pluginId: text('plugin_id').notNull(),
   // imPermission: a looser IM-project permission the user allowed in Cindy (TypeScript-only enum).
-  operation: text('operation', { enum: ['create', 'send', 'target', 'imPermission'] }).notNull(),
+  // followUp: a task a plugin run's turn opened, whose word back becomes a follow-up run (targetId = that task).
+  operation: text('operation', { enum: ['create', 'send', 'target', 'imPermission', 'followUp'] }).notNull(),
   targetId: text('target_id').notNull(),
   requestKey: text('request_key').notNull(),
   fingerprint: text('fingerprint').notNull(),

@@ -6,7 +6,7 @@ import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cos
  *   - **构造接收 `getDb: () => DrizzleDb`**，沿用 maker-host / sessions IPC 的 lazy
  *     模式（参见 `localDb/index.ts:35` getDrizzle）。这样 storage 实例可在
  *     localDb 还没 ensureReady 时就 new 出来，调用方法时才解引用 DB。
- *   - **只 import 来自 `@cindy/maker-scheduler` 的 type/interface**（type-only），
+ *   - **只 import 来自 `@cindy/maker-scheduler` 的 type/interface 或纯 helper 子路径**，
  *     **绝不** import 引擎类（Scheduler / nextRun）。Phase 2 hardrule。
  *   - **storage 不生成 run id**：Plan 明示 id 由 Scheduler 引擎传入 `insertRun(run)`。
  *   - **`update(id, patch)` 找不到 row 时返回 `null`，不 throw**：与 Phase 1 接口
@@ -20,7 +20,17 @@ import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import type { broadcastSessionPatched as BroadcastSessionPatched } from '../localDb/ipc/sessions.js';
 
-import type { Schedule, ScheduleRun, ScheduleStorage, ListFilter } from '@cindy/maker-scheduler';
+import type {
+  Schedule,
+  ScheduleRun,
+  ScheduleStorage,
+  ListFilter,
+  TransientPrecheckOutageState,
+} from '@cindy/maker-scheduler';
+import {
+  isTransientPrecheckHookFailure,
+  TRANSIENT_PRECHECK_ESCALATION_MS,
+} from '@cindy/maker-scheduler/precheck-transient';
 
 import * as schema from '../localDb/schema';
 import {
@@ -77,6 +87,25 @@ function missingPluginField(raw: string | null): { missingPlugin?: ScheduleMissi
   }
 }
 
+/** SQL counterpart of isTransientPrecheckHookFailure, shared by outage tracking. */
+function transientPrecheckFailureSql(alias: 'failed' | 'schedule_runs') {
+  const row = sql.raw(alias);
+  return sql<boolean>`(
+    CASE WHEN json_valid(${row}.pre_run_hook_result)
+      AND json_extract(${row}.pre_run_hook_result, '$.decision') = 'block'
+      AND COALESCE(json_extract(${row}.pre_run_hook_result, '$.status'), '') != 'aborted'
+      AND COALESCE(json_extract(${row}.pre_run_hook_result, '$.aborted'), 0) != 1
+      AND json_type(${row}.pre_run_hook_result, '$.missingPlugin') IS NULL
+    THEN CASE
+      WHEN json_type(${row}.pre_run_hook_result, '$.prCheckDiagnosis') = 'object'
+        AND json_extract(${row}.pre_run_hook_result, '$.prCheckDiagnosis.kind') IN ('dns', 'timeout', 'auth', 'rate-limit', 'unknown')
+      THEN json_extract(${row}.pre_run_hook_result, '$.prCheckDiagnosis.kind') IN ('dns', 'timeout', 'rate-limit')
+      ELSE lower(COALESCE(json_extract(${row}.pre_run_hook_result, '$.stderr'), '')) LIKE '%rate limit%'
+    END
+    ELSE 0 END
+  )`;
+}
+
 /** A success only recovers failures belonging to the same automation. */
 function failureRecoveredSql(alias: 'failed' | 'schedule_runs') {
   const row = sql.raw(alias);
@@ -109,7 +138,9 @@ export interface ScheduleSidebarIndexRun {
   readAt?: number;
   firedAt?: number;
   finishedAt?: number;
+  canSwitchPluginEngine?: true;
   failureKind?: 'precheck' | 'rate-limit' | 'execution';
+  preRunBlocked?: true;
   errorMsg?: string;
   failureRecovered?: boolean;
   missingPlugin?: ScheduleMissingPlugin;
@@ -390,6 +421,20 @@ function publicScheduleRunWhere() {
   return sql`${scheduleRuns.scheduleId} NOT IN (SELECT id FROM schedules WHERE source = 'bot')`;
 }
 
+/** A finished run can change its own route only when no persistent or routine automation reuses this task. */
+function canSwitchRunPluginEngine() {
+  return sql<boolean>`(
+    ${scheduleRuns.sessionId} IS NOT NULL
+    AND ${scheduleRuns.finishedAt} IS NOT NULL
+    AND ${scheduleRuns.status} IN ('success', 'failed', 'aborted')
+    AND NOT EXISTS (
+      SELECT 1 FROM schedules AS bound
+      WHERE bound.target_session_id = ${scheduleRuns.sessionId}
+        AND (bound.persistent_session = 1 OR COALESCE(bound.source, 'user') = 'bot')
+    )
+  )`.mapWith(Boolean);
+}
+
 export class DrizzleScheduleStorage implements ScheduleStorage {
   constructor(
     private readonly getDb: () => SchedulerDrizzleDb,
@@ -430,6 +475,13 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         nextFireSum: sql<number>`coalesce(sum(${schedules.nextFireAt}), 0)`.mapWith(Number),
         nextFireN: sql<number>`coalesce(sum(case when ${schedules.nextFireAt} is not null then 1 else 0 end), 0)`.mapWith(Number),
         activeN: sql<number>`coalesce(sum(case when ${schedules.status} = 'active' then 1 else 0 end), 0)`.mapWith(Number),
+        // A different instance can repoint or toggle persistent/routine ownership without changing those totals.
+        boundTasks: sql<string>`(SELECT json_group_array(bound.target_session_id) FROM (
+          SELECT DISTINCT target_session_id FROM schedules
+          WHERE target_session_id IS NOT NULL
+            AND (persistent_session = 1 OR COALESCE(source, 'user') = 'bot')
+          ORDER BY target_session_id
+        ) AS bound)`,
       })
       .from(schedules);
     return [
@@ -443,6 +495,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       scheduleStats?.nextFireSum ?? 0,
       scheduleStats?.nextFireN ?? 0,
       scheduleStats?.activeN ?? 0,
+      scheduleStats?.boundTasks ?? '[]',
     ].join(':');
   }
 
@@ -471,7 +524,8 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
 
   async insert(s: Schedule): Promise<Schedule> {
     const db = this.getDb();
-    await db.insert(schedules).values(scheduleCreateToRow(s));
+    const row = scheduleCreateToRow(s);
+    await db.insert(schedules).values(row);
     // 返回 round-tripped 版本（确保 timezone/booleans/默认值都按 DB 实际形态回流）
     const inserted = await this.get(s.id);
     if (!inserted) {
@@ -600,7 +654,10 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     // 必须进入这个时间轴 —— 否则用户看到的会话时间在 run 结束后停在 fire 触发那刻,
     // 与"刚跑完一轮"直觉相悖(schedules.lastFinishedAt / schedule_runs.finishedAt
     // 同一时刻写入,这里挑 run 侧作为唯一联动点,避免 schedule 侧再重复一次)。
-    if (patch.finishedAt !== undefined && row?.sessionId) {
+    // 例外:静默的瞬时前置检查失败（status='failed' 且生而已读）不推进任务时间，
+    // 避免限流／网络抖动把任务顶到列表前面。
+    const skipSessionTouch = patch.status === 'failed' && patch.readAt !== undefined;
+    if (patch.finishedAt !== undefined && row?.sessionId && !skipSessionTouch) {
       await db
         .update(sessions)
         // 用 MAX 防止倒退：若另一路径（用户发送/clear）在 run 结束前已推进了
@@ -668,6 +725,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
           AND CAST(${storedId} AS INTEGER) BETWEEN 1 AND ${Number.MAX_SAFE_INTEGER}
         ))`;
     }
+    // 瞬时前置检查故障按 24h 窗口升级兜底提醒：窗口内重复通知照常去重，满 24h 后
+    // 不让上一次升级记录吞掉新一轮兜底外发通知；非瞬时故障仍保持恢复前全量去重。
+    const transientPrecheck = isTransientPrecheckHookFailure(run.preRunHookResult);
+    const matchWindow = transientPrecheck
+      ? sql`AND ${scheduleRuns.firedAt} > ${run.firedAt - TRANSIENT_PRECHECK_ESCALATION_MS}`
+      : sql``;
     const rows = await this.getDb().select({ id: scheduleRuns.id }).from(scheduleRuns).where(sql`
       ${scheduleRuns.scheduleId} = ${run.scheduleId}
       AND ${scheduleRuns.id} != ${run.id}
@@ -675,10 +738,46 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       AND (${errorMatch})
       AND COALESCE(CASE WHEN json_valid(${scheduleRuns.preRunHookResult})
         THEN json_extract(${scheduleRuns.preRunHookResult}, '$.stderr') END, '') = ${run.preRunHookResult?.stderr ?? ''}
+      AND COALESCE(CASE WHEN json_valid(${scheduleRuns.preRunHookResult})
+        THEN json_extract(${scheduleRuns.preRunHookResult}, '$.transientQuiet') END, 0) != 1
       AND ${scheduleRuns.firedAt} <= ${run.firedAt}
+      ${matchWindow}
       AND NOT ${failureRecoveredSql('schedule_runs')}
     `).limit(1);
     return rows.length > 0;
+  }
+
+  /** Inspect unrecovered transient precheck failures so the scheduler can keep brief outages quiet and escalate after 24 hours. */
+  async getTransientPrecheckOutageState(
+    scheduleId: string,
+    excludeRunId: string,
+  ): Promise<TransientPrecheckOutageState> {
+    const [row] = await this.getDb()
+      .select({
+        firstUnrecoveredFiredAt: sql<number | null>`MIN(${scheduleRuns.firedAt})`,
+        lastEscalatedFiredAt: sql<number | null>`MAX(CASE WHEN COALESCE(json_extract(${scheduleRuns.preRunHookResult}, '$.transientQuiet'), 0) != 1 THEN ${scheduleRuns.firedAt} END)`,
+      })
+      .from(scheduleRuns)
+      .where(sql`
+        ${scheduleRuns.scheduleId} = ${scheduleId}
+        AND ${scheduleRuns.id} != ${excludeRunId}
+        AND ${scheduleRuns.status} IN ('failed', 'interrupted')
+        AND ${transientPrecheckFailureSql('schedule_runs')}
+        AND NOT ${failureRecoveredSql('schedule_runs')}
+      `);
+    return {
+      firstUnrecoveredFiredAt: typeof row?.firstUnrecoveredFiredAt === 'number' ? row.firstUnrecoveredFiredAt : null,
+      lastEscalatedFiredAt: typeof row?.lastEscalatedFiredAt === 'number' ? row.lastEscalatedFiredAt : null,
+    };
+  }
+
+  async lastSuccessfulMrObservation(scheduleId: string) {
+    const [row] = await this.getDb().select({ observation: scheduleRuns.mrObservation })
+      .from(scheduleRuns).where(and(
+        eq(scheduleRuns.scheduleId, scheduleId), eq(scheduleRuns.status, 'success'),
+        eq(scheduleRuns.triggerSource, 'pr-status'), isNotNull(scheduleRuns.mrObservation),
+      )).orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id)).limit(1);
+    return row?.observation ?? null;
   }
 
   async hasSuccessfulPrRunSince(scheduleId: string, since: number): Promise<boolean> {
@@ -842,9 +941,13 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       readAt: scheduleRuns.readAt,
       firedAt: scheduleRuns.firedAt,
       finishedAt: scheduleRuns.finishedAt,
+      canSwitchPluginEngine: canSwitchRunPluginEngine(),
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: failureKindSql('schedule_runs'),
       errorMsg: scheduleRuns.errorMsg,
+      preRunBlocked: sql<number | null>`CASE WHEN json_valid(schedule_runs.pre_run_hook_result)
+        THEN json_extract(schedule_runs.pre_run_hook_result, '$.decision') = 'block'
+          AND json_extract(schedule_runs.pre_run_hook_result, '$.status') IN ('failed', 'timed_out') END`,
       prCheckDiagnosis: sql<string | null>`CASE WHEN json_valid(schedule_runs.pre_run_hook_result)
         THEN CASE WHEN json_type(schedule_runs.pre_run_hook_result, '$.prCheckDiagnosis') = 'object'
         THEN json_extract(schedule_runs.pre_run_hook_result, '$.prCheckDiagnosis') END END`,
@@ -925,10 +1028,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       status: row.status,
       readAt: row.readAt ?? undefined,
       firedAt: row.firedAt ?? undefined,
+      ...(row.canSwitchPluginEngine && row.sessionId ? { canSwitchPluginEngine: true as const } : {}),
       ...(row.status === 'failed' || row.status === 'interrupted' ? {
         finishedAt: row.finishedAt ?? undefined,
         failureRecovered: Boolean(row.failureRecovered),
         failureKind: row.failureKind,
+        ...(row.status === 'failed' && row.preRunBlocked === 1 ? { preRunBlocked: true as const } : {}),
         errorMsg: row.errorMsg ?? undefined,
         prCheckDiagnosis: row.prCheckDiagnosis ? readPrCheckDiagnosis(JSON.parse(row.prCheckDiagnosis)) : undefined,
         ...missingPluginField(row.missingPlugin),
@@ -990,6 +1095,17 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     }
     return runs;
     });
+  }
+
+  async canSwitchCompletedAutomationSession(sessionId: string): Promise<boolean> {
+    const [run] = await this.getDb()
+      .select({ eligible: canSwitchRunPluginEngine() })
+      .from(scheduleSessionLatestRuns)
+      .innerJoin(scheduleRuns, eq(scheduleSessionLatestRuns.runId, scheduleRuns.id))
+      .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
+      .where(and(eq(scheduleSessionLatestRuns.sessionId, sessionId), publicScheduleRunWhere()))
+      .limit(1);
+    return run?.eligible === true;
   }
 
   /**

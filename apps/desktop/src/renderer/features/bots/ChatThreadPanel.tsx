@@ -13,7 +13,7 @@ import { useProcessDisclosureScroll } from './useProcessDisclosureScroll';
  * 服务器的回复到了原地替换；失败撤掉、文字放回，原因写在输入框上方。
  */
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Bell, BellRing, Check, CornerDownRight, MessageSquareShare } from 'lucide-react';
+import { ArrowLeft, Bell, BellRing, CornerDownRight, MessageSquareShare } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -29,10 +29,10 @@ import type { BotGroupDetail, BotGroupExecutionFailureView, BotGroupMessageView,
 import { resolveBotGroupQuote } from '../../../shared/botGroupChat';
 import { botGroupAttachmentPreview, botGroupThreadDraftKey, refreshPendingBotGroupAttachments } from './botGroupAttachments';
 import { refreshBotGroups } from './botGroupStore';
-import { mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
+import { canMentionAllInBotGroup, mergeBotGroupMessages, projectBotGroupExecutionFailures } from './botGroupPresentation';
 import { BotGroupComposer, type BotGroupOutgoingMessage, type BotGroupSendOutcome } from './BotGroupComposer';
 import { focusBotGroupComposer } from './botGroupTextInput';
-import { BotGroupTimelineItem } from './BotGroupTimelineItem';
+import { BotGroupTimelineItem, BotGroupUnreadDivider } from './BotGroupTimelineItem';
 import { BOT_GROUP_BOT_BROADCAST_LABELS } from './BotGroupMentionCard';
 import {
   botGroupMemberDisplayName,
@@ -45,10 +45,13 @@ import {
   type BotGroupPendingSend,
   type BotGroupTimelineMessage,
 } from './BotGroupTimelineModel';
-import { chatErrorKey, messageReactionRevision } from './ChatServerControls';
+import { ChatReactionReads } from './useChatReactions';
+import { chatErrorKey } from './chatError';
+import { messageReactionRevision } from './ChatServerControls';
 import { ThreadPanel, ThreadPanelRoot } from './ThreadPanel';
 import type { ThreadPanelResize } from './useThreadPanelResize';
 import { ThreadMessageWindow } from './ThreadMessageWindow';
+import { Checkbox } from '@/components/ui/checkbox';
 const key = (name: string) => `bots.groupChat.server.${name}`;
 const api = () => window.electronAPI.maker.chatServer;
 /** Unconfirmed rich replies keep their operation id across panel remounts, isolated by account. */
@@ -189,7 +192,7 @@ export function animateThreadPanel(panel: HTMLElement, direction: 'open' | 'clos
  * `quoteSources` are the main timeline's verified messages (older pages included), so a
  * 话题 root's quote reads the same as it does in the timeline; without them, the latest page.
  */
-export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping = false, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onClose, resize }: {
+export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping = false, quoteSources = group.messages, focus, sharedReplies, onPostPending, onRevealShare, onBack, onClose, resize }: {
   speakers?: BotGroupLiveSpeaker[];
   onStop?: (scope?: 'all') => void;
   stopping?: boolean;
@@ -200,6 +203,8 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   onPostPending?: (source: BotGroupMessageView) => (messageId: string | null) => void;
   /** Scroll the main chat to a share; false when it is not loaded there. */
   onRevealShare?: (messageId: string) => boolean;
+  /** Return to the in-group 话题 index inside the same right-side panel. */
+  onBack?: () => void;
   onClose: () => void;
   resize?: ThreadPanelResize;
 }) {
@@ -251,6 +256,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const repliesRef = useRef(replies);
   repliesRef.current = replies;
   const aliveRef = useRef(true);
+  const [reactionReads] = useState(() => new ChatReactionReads());
   const inFlightRef = useRef(false);
   const queuedRef = useRef(false);
   const queuedSourcesRef = useRef(new Set<string>());
@@ -314,6 +320,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         && document.visibilityState === 'visible' && document.hasFocus();
       const save = followSave(followKey);
       const followWrites = save.writes;
+      const settlePage = reactionReads.beginRead();
       const result = await api().thread({ groupId: group.id, rootId, before,
         sourceMessageIds: [...new Set([...shown.map(message => message.id), ...extraSources])], markRead });
       if (!current()) return;
@@ -339,7 +346,10 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         readBeforeRef.current = result.readBefore;
         setReadBefore(result.readBefore);
       }
-      if (!stalePage) setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
+      if (!stalePage) {
+        settlePage([result.root]);
+        setRoot(previous => (previous && JSON.stringify(previous) === JSON.stringify(result.root) ? previous : result.root));
+      }
       setError('');
       setHasRead(true);
       const floor = result.replies.reduce((min, reply) => Math.min(min, reply.sequence), Number.POSITIVE_INFINITY);
@@ -348,6 +358,10 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       const gap = !before && result.hasMore && result.replies.length > 0 && shown.length > 0
         && floor > shown.reduce((max, reply) => Math.max(max, reply.sequence), Number.NEGATIVE_INFINITY) + 1;
       if (!reset && !anchored(repliesRef.current)) return;
+      if (!stalePage) {
+        settlePage(result.replies);
+        if (result.messageUpdates) settlePage(result.messageUpdates);
+      }
       const addedSources = new Set(stalePage
         ? result.replies.filter(reply => !repliesRef.current.some(shown => shown.id === reply.id)).map(reply => reply.id) : []);
       if (!stalePage) setExecutionFailures(result.executionFailures ?? []);
@@ -383,6 +397,8 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       // A refresh reads only the latest page: replies on opened older pages keep the attachments they
       // arrived with, so re-read the pages whose attachments were not here yet.
       if (!before && !gap && !reset && result.replies.length > 0) {
+        const settleAttachments = reactionReads.beginRead();
+        const received = new Set<BotGroupMessageView>();
         const refreshed = await refreshPendingBotGroupAttachments(shown, floor, async page => {
           const earlier = await api().thread({ groupId: group.id, rootId, before: page });
           if (!current()) return null;
@@ -395,15 +411,17 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
           if (earlier.historyRevision && earlier.historyRevision !== revisionRef.current) {
             clearHistory(); revisionRef.current = earlier.historyRevision; refreshRef.current(); return null;
           }
+          for (const message of earlier.replies) received.add(message);
           return earlier.replies;
         });
         if (refreshed && current()) {
+          settleAttachments(refreshed.filter(message => message.sequence < floor && received.has(message)));
           const fresh = new Map(refreshed.map(message => [message.sequence, message]));
           setReplies(previous => previous.map(message => message.sequence < floor ? fresh.get(message.sequence) ?? message : message));
         }
       }
     } catch { if (current()) setError(t(key('requestFailed'))); }
-  }, [group.id, rootId, t, clearHistory]);
+  }, [group.id, rootId, t, clearHistory, reactionReads]);
   const readRef = useRef(read);
   readRef.current = read;
   /** One refresh in flight; pushes meanwhile collapse into one follow-up read. */
@@ -644,7 +662,8 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const renderRow = (message: BotGroupTimelineMessage, continued: boolean) => {
     const member = message.authorBotId ? memberById.get(message.authorBotId) : undefined;
     const authorName = (member && !member.assistant && message.authorKind !== 'system' ? botGroupMemberDisplayName(member) : '') || message.authorName || member?.name || '';
-    const owned = message.authorKind === 'user' && message.isSelf === false ? botGroupOwnedBotNames(member, members).join(separator) : '';
+    const isOtherHuman = message.authorKind === 'user' && message.isSelf === false;
+    const owned = isOtherHuman ? botGroupOwnedBotNames(member, members).join(separator) : '';
     const shared = message.id !== root?.id && !message.pending ? sharedState(message.id) : null;
     const onReveal = shared?.shareId ? () => revealShare(shared.shareId!) : undefined;
     const postAction = readOnly || message.pending || message.id === root?.id || message.deleted || message.kind !== 'message' ? undefined
@@ -652,12 +671,16 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       : { key: 'post-to-main', label: t(key('thread.postToMain')), disabled: posting.has(message.id), icon: <MessageSquareShare size={14} strokeWidth={2} className="shrink-0" />, onSelect: () => void postToMain(message.id, false) };
     return (
       <BotGroupTimelineItem
+        showDeviceChoice={!!group.assistantComputers && !group.assistantDeviceId}
         pluginUi={pluginUi}
         message={message}
         continued={continued}
         authorName={authorName}
         avatar={{ name: authorName, avatar: member?.avatar ?? null, avatarUrl: member?.avatarUrl, avatarColor: member?.avatarColor ?? null }}
         ownerOf={owned || undefined}
+        department={isOtherHuman ? member?.department ?? undefined : undefined}
+        departmentPath={isOtherHuman ? member?.departmentPath ?? undefined : undefined}
+        external={isOtherHuman && member?.external === true ? true : undefined}
         members={members}
         mentionLabels={mentionLabels}
         locale={locale}
@@ -667,6 +690,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
         onRichSend={text => sendRichAnswer(text, message.id)}
         reactionGroupId={group.id}
         readersEnabled={group.supportsMessageReaders === true}
+        reactionReads={reactionReads}
         reactionRevision={messageReactionRevision(group, message.id)}
         // A 话题 root may itself be a 引用回复; its original lives in the main timeline.
         quoteDisplay={message.quote ? resolveBotGroupQuote(message.quote, quoteSources) : undefined}
@@ -696,7 +720,17 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const executionSpeakers = liveEntries.flatMap(entry => entry.kind === 'work' && entry.value.activity !== 'planning' ? [entry.value] : []);
   const canStopMine = executionSpeakers.some(speaker => canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId })) && group.round.canStop !== false;
   const stopSpeaker = [...executionSpeakers].reverse().find(speaker => group && canStopBotGroupSpeaker(group, { ...speaker, botId: speaker.member.botId }));
-  return <ThreadPanel inlineActions={false} panelRef={panelRef} resize={resize} onClose={onClose} actions={<>
+  return <ThreadPanel inlineActions={false} panelRef={panelRef} resize={resize} onClose={onClose}
+    leading={onBack ? (
+      <Tip text={t(key('thread.backToList'))}>
+        <Button variant="secondary" tone="quiet" size="md"
+          className="-ml-2 w-8 rounded-none px-0 [&::before]:rounded-full"
+          aria-label={t(key('thread.backToList'))} onClick={onBack}>
+          <ArrowLeft size={16} aria-hidden />
+        </Button>
+      </Tip>
+    ) : undefined}
+    actions={<>
             {following !== undefined ? (
               <Tip text={t(key(following ? 'thread.unfollowTip' : 'thread.followTip'))}>
                 <Button variant="secondary" tone="quiet" size="sm" aria-pressed={following} data-thread-follow=""
@@ -745,10 +779,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
               const message = entry.value;
               return <Fragment key={adoptedKeysRef.current.get(message.id) ?? message.id}>
                 {message.id === firstNewId ? (
-                  <div data-testid="bot-group-thread-new-replies" className="mt-3 flex select-none items-center gap-3 text-12 font-medium text-[var(--text-primary)]">
-                    <span className="flex shrink-0 items-center gap-1.5"><span aria-hidden className="size-1.5 rounded-full bg-[var(--bot-unread-bg)]" />{t(key('thread.newSeparator'))}</span>
-                    <span aria-hidden className="h-px flex-1 bg-[var(--border-default)]" />
-                  </div>
+                  <BotGroupUnreadDivider thread />
                 ) : null}
                 {renderRow(message, liveEntries[index - 1]?.kind !== 'work' && firstNewId !== message.id && (layout.get(message.id)?.continued ?? false))}
               </Fragment>;
@@ -767,7 +798,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
             <Button variant="secondary" size="sm" compact disabled={readOnly} loading={[...unposted].some(id => posting.has(id))} onClick={() => void retryUnposted()}>
               {t(key('thread.retryPost'))}</Button>
           </div>}
-            <BotGroupComposer allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
+            <BotGroupComposer allowMentionAll={canMentionAllInBotGroup(group)} allowMentionAllBots={group.supportsMentionAudiences === true && group.allowMentionAllBots === true}
               mode="thread"
               groupId={group.id}
               draftKey={attachmentScope}
@@ -777,15 +808,12 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
               running={false}
               disabled={readOnly}
               footerStart={sending => (
-                <button type="button" role="checkbox" aria-checked={alsoSend} disabled={sending || readOnly}
-                  onClick={() => setAlsoSend(value => !value)}
-                  className="-ml-1.5 inline-flex min-h-7 min-w-0 select-none items-center gap-2 rounded-full px-1.5 text-13 text-[var(--text-secondary)] outline-none transition-colors duration-[var(--motion-fast)] enabled:hover:bg-[var(--surface-hover)] enabled:hover:text-[var(--text-primary)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:opacity-50">
-                  <span aria-hidden className={cn('flex h-4 w-4 shrink-0 items-center justify-center rounded-full transition-colors duration-[var(--motion-fast)]',
-                    alsoSend ? 'bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]' : 'border border-[var(--border-default)]')}>
-                    {alsoSend ? <Check size={10} strokeWidth={3} /> : null}
-                  </span>
+                // Applied with the next reply: shared Checkbox in a label row (DESIGN.md §4, B-10).
+                <label className={cn('inline-flex min-h-7 min-w-0 select-none items-center gap-2 text-13 text-[var(--text-secondary)] transition-colors duration-[var(--motion-fast)]',
+                  sending || readOnly ? 'opacity-50' : 'cursor-pointer hover:text-[var(--text-primary)]')}>
+                  <Checkbox checked={alsoSend} disabled={sending || readOnly} onChange={event => setAlsoSend(event.currentTarget.checked)} />
                   <span className="min-w-0 truncate" title={t(key('thread.alsoSend'))}>{t(key('thread.alsoSend'))}</span>
-                </button>
+                </label>
               )}
               sendReply={sendReply}
               onSendStart={onSendStart}

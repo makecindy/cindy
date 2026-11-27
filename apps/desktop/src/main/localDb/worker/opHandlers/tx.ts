@@ -18,6 +18,7 @@ import { dbToMakerAgentKind } from '../../../../shared/agentKindConversion.js';
 import { parseScheduledModelBaseline } from '../../../../shared/scheduledModelBaseline.js';
 import { normalizeBotName } from '../../../../shared/botCreation.js';
 import { inferBotTemplatePresetId } from '../../../../shared/botTemplatePreset.js';
+import { isSyntheticUserMessageContent } from '../../../../shared/interruptedTurn.js';
 // inproc 回滚口：仅在 XDT_DB_INPROC=true 时使用。
 // 默认热路径走 file worker（dbWorker.ts + dispatcher），这里要和同名 tx handler 保持一致。
 
@@ -1135,11 +1136,33 @@ function botsPersistSessionPermission(
   }
   const profilePermission = mode === 'bypassPermissions' ? 'trusted' : mode === 'auto' ? 'auto' : mode === 'ask' ? 'ask' : null;
   return db.transaction(() => {
-    const session = db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId);
+    const columns = db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>;
+    const hasBaselineCol = columns.some((col) => col.name === 'scheduled_model_baseline');
+    const hasAgentKindCol = columns.some((col) => col.name === 'agent_kind');
+    const session = hasBaselineCol
+      ? db.prepare(`SELECT id, ${hasAgentKindCol ? 'agent_kind AS agentKind, ' : ''}scheduled_model_baseline AS scheduledModelBaseline FROM sessions WHERE id = ?`)
+        .get(sessionId) as { id: string; agentKind?: string | null; scheduledModelBaseline: string | null } | undefined
+      : db.prepare('SELECT id FROM sessions WHERE id = ?').get(sessionId) as { id: string } | undefined;
     if (!session) return { updated: false };
+    const savedBaseline = 'scheduledModelBaseline' in session
+      ? parseScheduledModelBaseline(session.scheduledModelBaseline)
+      : null;
+    const nextBaseline = savedBaseline && !savedBaseline.pendingBotProfileVersion
+      ? JSON.stringify({ ...savedBaseline, permissionMode: mode })
+      : null;
+    const crossPluginTemp = !!nextBaseline && !!savedBaseline
+      && ((('agentKind' in session ? session.agentKind : null) === 'acp') !== (savedBaseline.agentKind === 'acp'));
     if (!profilePermission) {
-      db.prepare('UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?')
-        .run(mode, Date.now(), sessionId);
+      if (crossPluginTemp) {
+        db.prepare('UPDATE sessions SET scheduled_model_baseline = ?, updated_at = ? WHERE id = ?')
+          .run(nextBaseline, Date.now(), sessionId);
+      } else if (nextBaseline) {
+        db.prepare('UPDATE sessions SET permission_mode = ?, scheduled_model_baseline = ?, updated_at = ? WHERE id = ?')
+          .run(mode, nextBaseline, Date.now(), sessionId);
+      } else {
+        db.prepare('UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?')
+          .run(mode, Date.now(), sessionId);
+      }
       return { updated: true };
     }
     const link = db.prepare(`SELECT bot_id AS botId FROM bot_session_links
@@ -1177,6 +1200,16 @@ function botsPersistSessionPermission(
         (SELECT session_id FROM bot_session_links WHERE bot_id = ?
           AND role IN ('canonical', 'group', 'channel', 'thread', 'routine') AND archived_at IS NULL)`)
         .run(mode, Date.now(), link.botId);
+      if (nextBaseline) {
+        db.prepare('UPDATE sessions SET scheduled_model_baseline = ? WHERE id = ?')
+          .run(nextBaseline, sessionId);
+      }
+    } else if (crossPluginTemp) {
+      db.prepare('UPDATE sessions SET scheduled_model_baseline = ?, updated_at = ? WHERE id = ?')
+        .run(nextBaseline, Date.now(), sessionId);
+    } else if (nextBaseline) {
+      db.prepare('UPDATE sessions SET permission_mode = ?, scheduled_model_baseline = ?, updated_at = ? WHERE id = ?')
+        .run(mode, nextBaseline, Date.now(), sessionId);
     } else {
       db.prepare('UPDATE sessions SET permission_mode = ?, updated_at = ? WHERE id = ?')
         .run(mode, Date.now(), sessionId);
@@ -1644,13 +1677,16 @@ function messageInsert(db: Database.Database, args: unknown): { changes: number 
   const transaction = db.transaction(() => {
     let changes = 0;
     // The preflight read in Main can race with a user send. Keep the opening
-    // admission in this transaction, including a script fallback's next insert.
-    if (payload.requireNoUserMessage === true
-      && (!payload.publication || payload.publication === 'publish')
-      && db.prepare("SELECT 1 FROM messages WHERE session_id = ? AND role = 'user' LIMIT 1").get(sessionId)) {
-      throw Object.assign(new Error('User already spoke before the opening was stored'), {
-        code: 'MESSAGE_USER_ALREADY_SPOKE',
-      });
+    // admission in this transaction, ignoring hidden legacy synthetic trigger rows.
+    if (payload.requireNoUserMessage === true && (!payload.publication || payload.publication === 'publish')) {
+      const userRows = db
+        .prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user'")
+        .all(sessionId) as Array<{ content: string }>;
+      if (userRows.some(row => !isSyntheticUserMessageContent(row.content))) {
+        throw Object.assign(new Error('User already spoke before the opening was stored'), {
+          code: 'MESSAGE_USER_ALREADY_SPOKE',
+        });
+      }
     }
     // Connection-local stages never enter history, counts or persistent FTS.
     // SQLite discards them automatically when this worker exits.
@@ -2980,6 +3016,10 @@ function forkSession(db: Database.Database, args: unknown): { messageCount: numb
         `newMessageIds length mismatch: expected ${sourceMessages.length}, got ${newMessageIds.length}`,
       );
     }
+    if (payload.sourceMessagesDigest != null && computeForkSourceMessagesDigest(sourceMessages)
+      !== expectString(payload.sourceMessagesDigest, 'sourceMessagesDigest')) {
+      throw invalidArgs('Source history changed while preparing fork');
+    }
     const childCreatedAt = expectNumber(newSession.createdAt, 'newSession.createdAt');
     // Keep inherited history strictly before the side-chat visibility boundary,
     // without moving the child into the future or changing source timestamps.
@@ -3539,12 +3579,13 @@ function orcaUpsertWorker(db: Database.Database, args: unknown): void {
       const remote = asRecord(payload.remoteExecution, 'remoteExecution');
       if (remote.proxySession !== undefined) {
         const proxy = asRecord(remote.proxySession, 'remoteExecution.proxySession');
-        db.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at, agent_device_id) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?, ?)").run(
+        db.prepare("INSERT INTO sessions (id, title, working_dir, workspace_kind, model, effort, permission_mode, fast_mode, status, agent_kind, orca_role, source, created_at, updated_at, provider_id, agent_device_id) VALUES (?, ?, NULL, 'project', ?, ?, ?, ?, 'active', ?, 'worker', 'desktop', ?, ?, ?, ?)").run(
           sessionId, expectString(proxy.title, 'proxySession.title'),
           expectString(proxy.model, 'proxySession.model'),
           proxy.effort == null ? 'high' : expectString(proxy.effort, 'proxySession.effort'),
           expectString(proxy.permissionMode, 'proxySession.permissionMode'), fastModeToStorage(proxy.fastMode),
           expectString(proxy.agentKind, 'proxySession.agentKind'), now, now,
+          proxy.providerId == null ? null : expectString(proxy.providerId, 'proxySession.providerId'),
           proxy.agentDeviceId == null ? null : expectString(proxy.agentDeviceId, 'proxySession.agentDeviceId'),
         );
       }

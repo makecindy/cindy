@@ -13,6 +13,7 @@ import { MCP_APP_MESSAGE_GUARD } from '../../../desktop/src/main/mcp-apps/messag
 import { randomUUID } from 'node:crypto';
 import { createSchedulerQueueBridge } from '../../../desktop/src/main/maker-ipc/schedulerQueueBridge.ts';
 import { createQueuedAcceptedCallbacks } from '../../../desktop/src/main/maker-ipc/queuedAcceptedCallbacks.ts';
+import { bindTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionAuthorization.ts';
 import { readTaskActionInput } from '../../../desktop/src/main/maker-ipc/taskActionInput.ts';
 import { QueuedAttachmentOwnershipRegistry } from '../../../desktop/src/main/maker-ipc/queuedAttachmentOwnership.ts';
 import { createLogger } from '../../../desktop/src/main/logger.ts';
@@ -53,7 +54,7 @@ const errorText = error => error instanceof Error ? error.message : String(error
 
 /** Only composition fields cross the browser trust boundary. Host receipts,
  * scheduler origins, hook bypasses and remote-device identity never do. */
-function composeInput(item, stored) {
+function composeInput(item, stored, handoff) {
   if (!item || typeof item.clientId !== 'string' || !item.clientId.trim()) throw new Error('clientId is required');
   const text = typeof item.text === 'string' ? item.text : item.content;
   if (typeof text !== 'string' || !text.trim()) throw new Error('message text is required');
@@ -81,6 +82,17 @@ function composeInput(item, stored) {
       if (!Array.isArray(item[key])) throw new Error(`invalid ${key}`);
       result[key] = item[key];
     }
+  }
+  if (handoff) {
+    // Only the in-process handoff adapter supplies this argument.
+    result.autoReviewUserText = handoff.autoReviewUserText;
+    result.origin = handoff.origin;
+    result.sourcePlugin = handoff.sourcePlugin;
+    result.createOpts = {
+      ...storedSessionOptions(stored),
+      planMode: handoff.inheritTargetPlanMode === true && Boolean(stored.planModeEnabled),
+    };
+    return result;
   }
   // Only the in-process App service can mint this symbol. Wire JSON cannot
   // promote page text into user intent or recreate a grant after a crash.
@@ -235,6 +247,7 @@ export function createInputQueue(deps) {
     // auto-resume and the context recovery settle a held one when they give up.
     const productTurn = createHostProductTurn({ getBoundSession: id => executor.boundSession(id),
       touchActivity: deps.touchSessionActivity, log });
+    const modelGroupInputs = new WeakMap();
     // The desktop's auto-resume (auto-resume.ts), one per owner runtime with its coordinator.
     const autoResume = createHostAutoResume({
       productTurn: () => productTurn,
@@ -243,9 +256,13 @@ export function createInputQueue(deps) {
       history: id => executor.autoResumeHistory(id),
       getSession: id => deps.getMaker()?.getSession(id),
       createDbMessage: (id, input, options) => deps.persistMessage?.(id, input, options),
-      onTakeoverReleased: id => releaseResumeOrigin(id),
+      onTakeoverReleased: (id, reason) => releaseResumeOrigin(id, reason),
+      onSuppressedErrorSurfaced: (id, detail) => {
+        if (isCurrent()) deps.hub?.publish({ type: 'auto_resume_error_surfaced', sessionId: id, detail });
+      },
       maybeApplySessionRuntimeFallback: deps.maybeApplySessionRuntimeFallback,
       pendingSessionRuntimeFallbackRebuilds: deps.pendingSessionRuntimeFallbackRebuilds,
+      readModelGroupInputMode: deps.readModelGroupAutoSwitchMode ? (createOpts => modelGroupInputs.get(createOpts)) : undefined,
       isProfileHeld: () => profileHold !== null,
       log,
     });
@@ -255,14 +272,17 @@ export function createInputQueue(deps) {
     const resumeOrigins = new Map();
     // A resume that gives up writes the held error row (once) or drops the takeover: the input it
     // continued stopped there, so its stream gets the interrupted receipt once that row is stored.
-    function releaseResumeOrigin(id) {
+    function releaseResumeOrigin(id, reason) {
       const origin = resumeOrigins.get(id);
       if (origin === undefined) return;
       resumeOrigins.delete(id);
       const history = executor.autoResumeHistory(id);
       void history.drain().then(() => {
         if (history.hasFailedWrites() || !isCurrent()) return;
-        deps.hub?.publish({ type: 'input_receipt', sessionId: id, inputClientId: origin, clientId: origin, status: 'interrupted' });
+        deps.hub?.publish({
+          type: 'input_receipt', sessionId: id, inputClientId: origin, clientId: origin, status: 'interrupted',
+          ...(reason === 'error-surfaced' ? { autoResumeErrorSurfaced: true } : {}),
+        });
       });
     }
     const executor = createTurnExecutor({ ...deps, storedSessionOptions,
@@ -327,6 +347,10 @@ export function createInputQueue(deps) {
       noteAborting: (id, aborting) => { stateFor(id).aborting = aborting; },
       publish, persist, flushed, afterSnapshot, attachmentOwnership, acceptedCallbacks,
       schedulePreparations, scheduleDiscardWatchers, autoResume, rollover: () => rollover,
+      markModelGroupInput: (createOpts, mode) => {
+        if (mode) modelGroupInputs.set(createOpts, mode);
+        else modelGroupInputs.delete(createOpts);
+      },
     }));
     // The desktop's idle-runtime release (idle-release.ts), one set of watchers per owner runtime.
     const idleRelease = deps.readClaudeIdleMinutes ? createHostIdleRelease({
@@ -420,6 +444,9 @@ export function createInputQueue(deps) {
       await state.aborting;
       await state.commands.catch(() => {});
       await flushed(id);
+      if (!coordinator.hasPendingQueuedWork(id) && isCurrent()) {
+        deps.hub?.publish({ type: 'queue_emptied', sessionId: id });
+      }
       return project(coordinator.getProjection(id));
     }
     if (deps.createContextRecoveryRollover) {
@@ -472,6 +499,8 @@ export function createInputQueue(deps) {
         getLastUserActionAt: id => states.get(id)?.lastUserActionAt ?? null,
       }),
       isTurnRunning: executor.isRunning,
+      drainHistories: () => executor.drainHistories(),
+      isTurnRecovering: executor.isRecovering,
       /** Closes a task's idle runtime with the executor letting go of it first (turn-executor.mjs). */
       closeRuntime: id => { assertCurrent(); return executor.closeRuntime(id); },
       /** This runtime's context recovery rollover (null when recovery is not assembled). */
@@ -553,26 +582,49 @@ export function createInputQueue(deps) {
         assertCurrent();
         return known?.has(clientId) ? 'recorded' : 'unknown';
       }),
-      enqueue(id, item) {
+      // The optional third argument is supplied only by the in-process handoff adapter.
+      // HTTP/IPC input still goes through composeInput's untrusted-field filter.
+      enqueue(id, item, handoff) {
         const admission = stateFor(id).admission;
         return command(id, async state => {
           if (coordinator.hasKnownClientId(id, item?.clientId)) {
+            handoff?.onQueueAcceptanceStarted?.();
             await flushed(id);
             return api.projection(id);
           }
           const known = await deps.getPersistedClientIds?.(id, [item?.clientId]);
-          if (known?.has(item?.clientId)) return api.projection(id);
+          if (known?.has(item?.clientId)) {
+            handoff?.onQueueAcceptanceStarted?.();
+            return api.projection(id);
+          }
           refuseWhileHeld();
-          const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
+          const stored = handoff ? await deps.readSession(id, { forHandoff: true }) : await deps.readSession(id);
+          if (handoff && !stored) {
+            assertCurrent();
+            return { ok: false, errorCode: 'NOT_FOUND', message: 'Session does not exist' };
+          }
+          const queued = composeInput(item, stored, handoff);
+          if (handoff) bindTaskActionInput(id, queued, handoff.taskActionDeliveryGuard);
+          const prepared = await prepareAttachments(id, queued, admission);
+          if (handoff) {
+            await handoff.taskActionDeliveryGuard();
+            assertCurrent();
+            refuseWhileHeld();
+            if (state.admission !== admission) throw new Error('input cancelled before acceptance');
+          }
+          const commitAutoTitle = deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
           let accepted = false;
           try {
             state.lastUserActionAt = Date.now();
             coordinator.setExecutionPaused(id, true);
+            // The coordinator may mutate the queue before reporting a failure.
+            handoff?.onQueueAcceptanceStarted?.();
             coordinator.enqueue(id, prepared.item);
             accepted = true;
             if (prepared.ownerId) attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId);
             await flushed(id);
             await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
+            commitAutoTitle?.();
             if (!state.persistenceError) unpause(id);
             return api.projection(id);
           } finally {
@@ -639,6 +691,7 @@ export function createInputQueue(deps) {
         return command(id, async (state, admission) => {
           refuseWhileHeld();
           const prepared = await prepareAttachments(id, composeInput(item, await deps.readSession(id)), admission);
+          const commitAutoTitle = deps.prepareDeviceLinkAutoTitle?.(id, prepared.item);
           const previous = prepared.ownerId
             ? attachmentOwnership.activateCurrentOwner(id, item.clientId, prepared.ownerId) : null;
           let accepted = false;
@@ -647,6 +700,7 @@ export function createInputQueue(deps) {
             if (accepted) {
               await flushed(id);
               await attachmentOwnership.markDurable(id, item.clientId, prepared.ownerId ?? undefined);
+              commitAutoTitle?.();
             }
             return accepted;
           } finally {
@@ -657,7 +711,13 @@ export function createInputQueue(deps) {
           }
         });
       },
-      remove: (id, clientId) => mutate(id, () => coordinator.remove(id, clientId)),
+      remove: (id, clientId) => mutate(id, () => {
+        const res = coordinator.remove(id, clientId);
+        if (!coordinator.hasPendingQueuedWork(id) && isCurrent()) {
+          deps.hub?.publish({ type: 'queue_emptied', sessionId: id });
+        }
+        return res;
+      }),
       updateText: (id, clientId, text) => mutate(id, () => coordinator.updateText(id, clientId, text)),
       updateContent(id, clientId, item) {
         return command(id, async (state, admission) => {
@@ -697,6 +757,9 @@ export function createInputQueue(deps) {
       clearSession: id => stop(id, { keepQueue: false }),
       /** The running turn's accepted input, as the desktop's Auto-review context reads it. */
       acceptedInputProvenance: id => coordinator.getAcceptedInputProvenance(id),
+      whenTurnErrorPersisted: (id, persistId) => executor.whenTurnErrorPersisted?.(id, persistId) ?? Promise.resolve(),
+      getHistoryToolName: (id, toolUseId) => executor.getHistoryToolName?.(id, toolUseId) ?? '',
+      hasPendingQueuedWork: id => coordinator.hasPendingQueuedWork(id),
       async disposeSession(id) {
         stateFor(id).closed = true;
         await stop(id);

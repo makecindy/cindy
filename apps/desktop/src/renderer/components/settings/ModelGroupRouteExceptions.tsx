@@ -154,7 +154,7 @@ export function ModelGroupRouteExceptions({
                   value={String(draft.from)}
                   options={hourOptions}
                   size="compact"
-                  className="w-[104px]"
+                  width="xs"
                   onValueChange={(value) => setDraft({ ...draft, from: Number(value) })}
                 />
               </span>
@@ -166,7 +166,7 @@ export function ModelGroupRouteExceptions({
                   value={String(draft.to)}
                   options={hourOptions}
                   size="compact"
-                  className="w-[104px]"
+                  width="xs"
                   onValueChange={(value) => setDraft({ ...draft, to: Number(value) })}
                 />
               </span>
@@ -179,7 +179,7 @@ export function ModelGroupRouteExceptions({
                   options={others.map((item) => ({ value: item.id, label: item.name }))}
                   size="compact"
                   truncateOptions
-                  className="w-[180px]"
+                  width="sm"
                   onValueChange={(routeId) => setDraft({ ...draft, routeId })}
                 />
               </span>
