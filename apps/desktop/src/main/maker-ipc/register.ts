@@ -2813,6 +2813,7 @@ type SendToSessionInternalResult =
         | 'DELETED'
         | 'BUSY'
         | 'AGENT_NOT_READY'
+        | 'HOST_NOT_READY'
         | 'UNSUPPORTED_CAPABILITY'
         | 'BUDGET_MODEL_REQUIRES_API_MODE'
         | 'PROVIDER_ROUTE_UNAVAILABLE'
@@ -4469,6 +4470,7 @@ import {
   withSessionRestartLock,
   waitForSendToSessionLock,
   assertSessionNotRestarting,
+  SessionRestartInProgressError,
 } from './sendToSessionLock.js';
 import { createMakerSteerTransaction, summarizeIpcUserMessage } from './makerSteerTransaction.js';
 export { acquireSendToSessionLock, hasSendToSessionLock, withSendToSessionLock };
@@ -4619,10 +4621,10 @@ export function applyDirectoryGrants(
         ? maker.closeSessionIfCurrent(sess, 'runtime-refresh', { afterCurrentTurn: true })
         : maker.closeSession(sessionId)),
     });
-    if (result.changed && axis === 'extraDirs' && sess?.agentKind === 'acp') {
+    if (result.changed && axis === 'extraDirs' && sess?.requiresRuntimeRecycleForExtraDirs?.()) {
       // ACP only accepts `additionalDirectories` on session/new, session/resume, and session/load.
-      // Recycle the live runtime (immediately when idle, or after the current turn) so the next
-      // turn resumes with the newly persisted directories.
+      // Recycle the live runtime (immediately when idle, or after the current turn) only when the
+      // session actually binds native `additionalDirectories` at session open.
       await withRehydrateCloseSuppressed(sessionId, () =>
         maker.closeSessionIfCurrent(
           sess,
@@ -6199,8 +6201,10 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
     const provenance = agentInputCoordinatorHolder?.getAcceptedInputProvenance(session.id);
     const groupInputId = inputId && provenance?.clientId === inputId && provenance.autoResume
       ? provenance.retrySourceClientId ?? inputId : inputId;
+    const isRuntimeRefresh = context.closeReason === 'runtime-refresh';
     void settleClosedBotGroupTurn(botGroupChatServiceHolder, session.id, groupInputId,
       context.preserveAutoResumeIntent || rehydrateCloseSuppression.isSuppressed(session.id) ||
+      isRuntimeRefresh ||
       hasPendingProviderGroupContinuation(session.id)).catch(() =>
       log.warn('Bot group closed lane settlement failed', { sessionId: session.id }));
     runSessionCloseCleanup(context.preserveAutoResumeIntent, {
@@ -6219,18 +6223,20 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
         autoResumeBookkeeping.teardown(session.id);
         usageLimitAutoResume.noteSessionClosed(session.id);
       },
-      // Read at the coordinator boundary, as before: only a close/rebuild window
-      // preserves the signal currently driving that rebuild, not the old queue.
-      shouldPreserveInputBoundary: () => rehydrateCloseSuppression.isSuppressed(session.id),
+      // Read at the coordinator boundary, as before: a close/rebuild window or a
+      // deferred runtime-refresh close preserves the signal driving the next turn,
+      // not the old queue.
+      shouldPreserveInputBoundary: () => rehydrateCloseSuppression.isSuppressed(session.id) || isRuntimeRefresh,
       closeInputCoordinator: (boundaryOptions) => {
         const options = {
           ...boundaryOptions,
-          // Requested / rebuild closes own their follow-up; a self-close has no
-          // done event, so queued user input would otherwise wait forever.
+          // Requested / explicit closes own their follow-up; a self-close has no
+          // done event, and a deferred runtime-refresh close can finish before
+          // turn-done's microtask drain runs, so wake queued user input for both.
           // 'unexpected' only means no Maker reason was recorded: direct product
           // closes (IM /new, archive sync) also land there, so require the
           // runtime's own self-close signal before resurrecting the queue.
-          wakeQueuedInput: context.closeReason === 'unexpected' && session.wasClosedByRuntime(),
+          wakeQueuedInput: (context.closeReason === 'unexpected' && session.wasClosedByRuntime()) || isRuntimeRefresh,
         };
         agentInputCoordinatorHolder?.onSessionClosed(session.id, options);
       },
@@ -13228,7 +13234,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     }
 
-    assertSessionNotRestarting(targetSessionId);
+    // Only the restart fence before dispatch can prove this handoff did not send.
+    const refuseBeforeSend = (error: unknown): SendToSessionInternalResult => {
+      if (!params.taskActionDeliveryGuard || !(error instanceof SessionRestartInProgressError)) throw error;
+      return { ok: false, errorCode: 'HOST_NOT_READY', message: error.message };
+    };
+    try {
+      assertSessionNotRestarting(targetSessionId);
+    } catch (error) {
+      return refuseBeforeSend(error);
+    }
     const prev = sendToSessionLocks.get(targetSessionId);
     const waitPrev = waitForSendToSessionLock(targetSessionId, prev);
     // lockStage 只为 sendToSessionLock 的泄漏告警服务:标出临界区内当前挂在哪个
@@ -13707,7 +13722,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: err instanceof Error ? err.message : String(err),
         };
       }
-    });
+    }, refuseBeforeSend);
 
     // 锁条目改由 trackSendToSessionLockRun 安装:run 挂死超过 5min 时条目强制 bail,
     // 后续 outbox 重试 / guardian dispatch / worker idle-close 不再被僵尸条目糊死;

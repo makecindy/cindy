@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Validez votre compte Google",
+    "note": "Scannez le code ou ouvrez la page Google. La tâche reprendra dès qu’Antigravity aura confirmé l’accès.",
+    "refresh": "Actualiser le code QR"
+  },
   "runtimePlugins": {
     "save": "Enregistrer",
     "promptUnsupported": "Cet emplacement d’exécution de Pi ne prend pas en charge les fragments d’instructions système.",
@@ -7258,6 +7263,7 @@
         },
         "onlyEncrypted": "Utiliser uniquement Agent-Net",
         "onlyEncryptedHint": "Les anciens appareils et les partages utilisant encore l’ancienne connexion seront indisponibles. Désactivé par défaut.",
+        "removedOff": "Cet ordinateur a été retiré de votre compte, Agent-Net a donc été désactivé. Réactivez-le pour le réintégrer.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Passage à Agent-Net…",
@@ -12318,6 +12324,8 @@
         "projectDirSaveFailed": "Impossible d'enregistrer le dossier du projet. Vérifiez que le dossier existe toujours, puis réessayez.",
         "allowMemberInvites": "Tous les membres peuvent inviter des amis",
         "allowMemberInvitesHint": "Si activé, tous les membres du groupe peuvent inviter des amis. Seuls le propriétaire et les administrateurs peuvent modifier ce réglage.",
+        "allowMemberMentionAll": "Autoriser tous les membres à utiliser @tous",
+        "allowMemberMentionAllHint": "Si activé, tous les membres peuvent utiliser @tous ; sinon, seuls le propriétaire et les administrateurs le peuvent. Seuls le propriétaire et les administrateurs peuvent modifier ce réglage.",
         "allowMentionAllBots": "Autoriser @tous les amis",
         "allowMentionAllBotsHint": "Seul le propriétaire du groupe peut le modifier. Tous les amis peuvent répondre : prudence en grand groupe. Sans effet sur l’IA qui répond pour vous."
       },
@@ -12349,6 +12357,7 @@
         "groupDissolved": "Ce groupe a été dissous. Vous pouvez toujours lire l'historique disponible.",
         "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter.",
         "allBotsMentionDisabled": "Le propriétaire du groupe n’a pas encore activé @Tous les amis.",
+        "allHumansMentionForbidden": "Seuls le propriétaire du groupe et les administrateurs peuvent utiliser @tous.",
         "turnAlreadyStarted": "Cet ami a déjà commencé et ne peut plus être ignoré"
       },
       "organizer": "Organisateur",
@@ -12508,17 +12517,44 @@
           "unfollowTip": "Ne plus suivre : vous ne serez averti que si quelqu'un vous mentionne",
           "listLabel": "Fils de cette conversation de groupe",
           "listNews": "Nouvelles réponses",
-          "listOthers": "Autres fils",
           "newSeparator": "Nouvelles réponses",
           "open_many": "Ouvrir le fil, {{count}} réponses",
           "alsoSendFailed_many": "{{count}} réponses figurent dans le fil, mais elles n'ont pas pu être envoyées dans la conversation principale.",
           "newReplies_many": "{{count}} nouvelles réponses",
-          "hintMany_many": "Nouvelles réponses dans {{count}} fils"
+          "hintMany_many": "Nouvelles réponses dans {{count}} fils",
+          "openIndex": "Fils",
+          "indexTitle": "Fils",
+          "backToList": "Retour aux fils",
+          "filterAria": "Filtrer les fils",
+          "filterMine": "Pour moi",
+          "filterAll": "Tous",
+          "searchPlaceholder": "Rechercher des fils, réponses ou membres",
+          "clearSearch": "Effacer la recherche",
+          "listRecent": "Récents",
+          "indexParticipatedTag": "Participé",
+          "indexMentionedTag": "Mentionné",
+          "locateInGroup": "Afficher dans le groupe",
+          "indexEmptyMine": "Aucun fil auquel vous avez participé ou où vous avez été mentionné",
+          "indexEmptyAll": "Aucun fil dans ce groupe pour le moment",
+          "indexEmptySearch": "Aucun fil correspondant",
+          "viewAllThreads": "Voir tous les fils",
+          "syncingHistory": "Chargement des fils précédents…",
+          "rootKind": {
+            "task": "Tâche",
+            "image": "Image",
+            "video": "Vidéo",
+            "audio": "Audio",
+            "file": "Fichier",
+            "share": "Réponse partagée",
+            "card": "Carte"
+          }
         },
         "replyPlaceholder": "Répondre à ce message ; utilisez @ pour mentionner un ami…",
         "sendReply": "Envoyer la réponse",
+        "moreReactions": "Plus de réactions",
         "addReaction": "Ajouter une réaction",
         "reactionCount": "{{emoji}} · {{count}} réactions",
+        "reactionTotal": "{{emoji}} · {{count}} réactions",
         "reactionWho": "{{emoji}} · {{count}} réactions : {{names}}",
         "reactorSelf": "Vous",
         "reactorFormer": "{{name}} (ne fait plus partie du groupe)",
@@ -12642,6 +12678,7 @@
           "accessNone": "Propriétaire uniquement",
           "accessChat": "Conversation de groupe uniquement",
           "accessTools": "Peut utiliser les outils et les informations",
+          "memberPermissions": "Autorisations des membres",
           "replies": "Mode de réponse des amis",
           "replyModeMentionedNote": "Les amis restent silencieux, sauf si quelqu’un les @mentionne.",
           "assistant": "Cindy du groupe",
@@ -17674,6 +17711,8 @@
         "moveToProjectRemoteUnsupported": "Le déplacement des sessions distantes n'est pas encore pris en charge",
         "moveToProjectWorktreeBlocked": "Le répertoire de travail de cette session est un worktree : elle ne peut pas encore être déplacée vers un autre projet",
         "openInNewWindow": "Ouvrir dans une nouvelle fenêtre",
+        "openInNewWindowShortcutMac": "⌘+clic",
+        "openInNewWindowShortcutOther": "Ctrl+clic",
         "exportShare": "Exporter la session…",
         "exportHtml": "Exporter en HTML…",
         "exportHtmlSuccess": "Session exportée en HTML",
