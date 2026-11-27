@@ -128,6 +128,9 @@ export interface PluginModelRouteNote {
  * 只接受 SDK 自己分配的 uuid，所以这是 fork 的唯一主键。
  */
 export interface CcMeta {
+  /** Save-only content must never enter automatic chat-history embedding.
+   * Persisted with the message so queued jobs also respect it after restart. */
+  excludeFromEmbedding?: boolean;
   /** This input yielded to already queued messages after a context overflow. */
   inputNotice?: 'oversized-input-skipped';
   /** 新任务「让插件选」的结果(宿主写入，非模型回复)。 */

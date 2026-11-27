@@ -75,6 +75,7 @@ describe('send a provider share link to myself', () => {
     });
     expect(createMessage).toHaveBeenCalledExactlyOnceWith('private-task', {
       clientId: 'provider-share-link', role: 'user', content: link,
+      agentMeta: { excludeFromEmbedding: true },
     });
     expect(close).toHaveBeenCalledTimes(1);
     // The host fake exposes no Agent/send/enqueue API: persistence alone must work.

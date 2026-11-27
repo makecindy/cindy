@@ -146,6 +146,7 @@ export function ProviderShareLinkDialog({
         clientId: 'provider-share-link',
         role: 'user',
         content: state.link,
+        agentMeta: { excludeFromEmbedding: true },
       });
       if (!current()) return;
       setSent(true);
