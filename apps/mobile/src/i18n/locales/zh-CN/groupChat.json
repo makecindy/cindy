@@ -315,6 +315,8 @@
     },
     "allowMemberInvites": "允许所有成员邀请朋友",
     "allowMemberInvitesHint": "开启后，已加入的所有成员都可邀请朋友。仅群主和管理员可更改。",
+    "allowMemberMentionAll": "允许所有成员 @所有人",
+    "allowMemberMentionAllHint": "开启后，所有成员都可 @所有人；关闭时仅群主和管理员可用。仅群主和管理员可更改。",
     "allowMentionAllBots": "允许 @所有伙伴",
     "allowMentionAllBotsHint": "仅群主可更改。伙伴可能都会回复，大群请谨慎开启。此开关不影响 AI 代答。"
   },
@@ -343,6 +345,7 @@
     "groupDissolved": "群聊已解散，仍可查看有权访问的历史消息。",
     "lastOwner": "请先转让群主或解散群聊，再退出。",
     "allBotsMentionDisabled": "群主尚未开启 @所有伙伴。",
+    "allHumansMentionForbidden": "仅群主和管理员可以 @所有人。",
     "turnAlreadyStarted": "这位伙伴已开始执行，不能跳过",
     "stopOwnershipUnknown": "部分工作未能停止：无法确认由谁发起",
     "nothingToStop": "当前没有可停止的工作"
@@ -578,6 +581,7 @@
     "accessNone": "仅主人可用",
     "accessChat": "仅群内交流",
     "accessTools": "可用工具与资料",
+    "memberPermissions": "成员权限",
     "replies": "伙伴怎么接话",
     "assistant": "群里的 Cindy",
     "assistantHint": "谁 @ 它，就在谁自己的电脑上做。",

@@ -1368,4 +1368,212 @@ describe('automatic browser startup', () => {
       expect((await call).ok).toBe(false); expect(fake.jobs).toHaveLength(0);
     } finally { vi.useRealTimers(); }
   });
+
+  // Regression (P0-1): when the MV3 service worker sleeps >35s, ensureConnected previously skipped
+  // reconnect grace and immediately launched a duplicate Chrome process.
+  // Production entry: UserBrowserBackend.call({ action: 'tabs' }); unit tier with fake timers.
+  it('waits during reconnect grace for a previously-connected extension without re-launching Chrome', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients: string[] = [];
+      const fake = fakeControl({ clients, version: '0.4.68' });
+      const baseStatus = await fake.control.bridge.status();
+      if (!baseStatus.ok) throw new Error('fixture status failed');
+      fake.control.bridge.status = vi.fn(async () => ({
+        ...baseStatus,
+        hadConnectedClient: true,
+        clients: clients.map((id) => ({
+          id,
+          browser: 'chrome' as const,
+          version: '0.4.68',
+          protocolVersion: '0.4.13',
+          connected: true,
+          trusted: true,
+          identitySupported: true,
+          nativeBindingRequired: false,
+          origin: 'chrome-extension://fixture',
+          extensionId: 'fixture',
+        })),
+      }));
+      const startBrowser = vi.fn(async () => {});
+      const b = new UserBrowserBackend({
+        getPageControl: () => fake.control,
+        startBrowser,
+        reconnectWaitMs: 4000,
+        logger: { info: vi.fn(), warn: vi.fn() },
+      });
+      const pending = b.call({ action: 'tabs' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(startBrowser).not.toHaveBeenCalled();
+      clients.push('client-aaaaaaaa');
+      await vi.advanceTimersByTimeAsync(500);
+      expect((await pending).ok).toBe(true);
+      expect(startBrowser).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Regression (P0-1): when the user's browser process is already running, do NOT spawn another
+  // instance even if the extension stays disconnected past the reconnect grace window.
+  it('never launches a duplicate browser when the user browser is already running', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeControl({ clients: [] });
+      const startBrowser = vi.fn(async () => {});
+      const isBrowserRunning = vi.fn(async () => true);
+      const b = new UserBrowserBackend({
+        getPageControl: () => fake.control,
+        startBrowser,
+        isBrowserRunning,
+        reconnectWaitMs: 1000,
+        startupWaitMs: 1000,
+        logger: { info: vi.fn(), warn: vi.fn() },
+      });
+      const first = b.call({ action: 'open', url: 'https://example.test/' });
+      await vi.advanceTimersByTimeAsync(1500);
+      const firstResult = await first;
+      expect(firstResult.ok).toBe(false);
+      expect(firstResult.message).toContain('已在运行');
+      expect(startBrowser).not.toHaveBeenCalled();
+
+      const second = b.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(1500);
+      const secondResult = await second;
+      expect(secondResult.ok).toBe(false);
+      expect(secondResult.message).toContain('已在运行');
+      expect(startBrowser).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Regression (P0-1): after a timed-out startup attempt, subsequent retries inside the cooldown
+  // window must not repeatedly spawn Chrome even if process detection reports false.
+  it('enforces a cooldown after a timed-out launch and resets once an extension connects', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients: string[] = [];
+      const fake = fakeControl({ clients, version: '0.4.68' });
+      const startBrowser = vi.fn(async () => {});
+      const b = new UserBrowserBackend({
+        getPageControl: () => fake.control,
+        startBrowser,
+        isBrowserRunning: async () => false,
+        startupWaitMs: 1000,
+        launchCooldownMs: 30_000,
+        logger: { info: vi.fn(), warn: vi.fn() },
+      });
+      const first = b.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((await first).ok).toBe(false);
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+
+      const second = await b.call({ action: 'start' });
+      expect(second.ok).toBe(false);
+      expect(second.message).toContain('避免反复重试启动');
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+
+      // Once cooldown expires, launching is permitted again.
+      await vi.advanceTimersByTimeAsync(30_000);
+      const third = b.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((await third).ok).toBe(false);
+      expect(startBrowser).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  // Regression (P0-1): dispose() must clear all session/client/recipe tracking maps
+  // (`targets`, `sessionTabs`, `clientBoots`, `everReady`, `recipePumps`) and prevent
+  // concurrent in-flight calls from repopulating them after disposal.
+  it('clears targets, sessionTabs, clientBoots, everReady, and recipePumps on dispose()', async () => {
+    const fake = fakeControl({ version: '0.4.68' });
+    const origConnected = fake.control.bridge.connectedClients.bind(fake.control.bridge);
+    fake.control.bridge.connectedClients = () =>
+      origConnected().map((c) => ({ ...c, boot: 'boot-dispose-1' }));
+    fake.responses.set('cdp', () => ({ ok: true }));
+
+    const b = backend(fake.control);
+    const internals = b as unknown as {
+      targets: Map<string, unknown>;
+      sessionTabs: Map<string, unknown>;
+      clientBoots: Map<string, unknown>;
+      everReady: Set<string>;
+      recipePumps: Map<string, unknown>;
+    };
+
+    // Populate targets, clientBoots, everReady, sessionTabs, and recipePumps via real call() paths.
+    expect((await call(b, { action: 'tabs' })).ok).toBe(true);
+    expect(
+      (await call(b, { action: 'snapshot', targetId: 't1', __mcpSessionId: 's-dispose' } as unknown as Parameters<typeof call>[1])).ok,
+    ).toBe(true);
+    const begun = await call(b, {
+      action: 'recipeCommand',
+      targetId: 't1',
+      __mcpSessionId: 's-dispose',
+      recipeCommand: { method: 'Cindy.begin' },
+    } as unknown as Parameters<typeof call>[1]);
+    expect(begun.ok).toBe(true);
+
+    expect(internals.targets.size).toBeGreaterThan(0);
+    expect(internals.sessionTabs.size).toBeGreaterThan(0);
+    expect(internals.clientBoots.size).toBeGreaterThan(0);
+    expect(internals.everReady.size).toBeGreaterThan(0);
+    expect(internals.recipePumps.size).toBeGreaterThan(0);
+
+    await b.dispose();
+
+    expect(internals.targets.size).toBe(0);
+    expect(internals.sessionTabs.size).toBe(0);
+    expect(internals.clientBoots.size).toBe(0);
+    expect(internals.everReady.size).toBe(0);
+    expect(internals.recipePumps.size).toBe(0);
+
+    // clearSessionMarks after dispose must not issue stale unmark calls.
+    const jobsBeforeClear = fake.jobs.length;
+    await b.clearSessionMarks('s-dispose');
+    expect(fake.jobs.slice(jobsBeforeClear)).toEqual([]);
+
+    // Post-dispose call fails cleanly with BROWSER_RUNTIME_UNAVAILABLE.
+    expect(await call(b, { action: 'tabs' })).toMatchObject({
+      ok: false,
+      errorCode: 'BROWSER_RUNTIME_UNAVAILABLE',
+    });
+  });
+
+  it('does not repopulate recipePumps or sessionTabs when an in-flight Cindy.begin settles after dispose()', async () => {
+    const fake = fakeControl({ version: '0.4.68' });
+    let resolveBegin!: (value: { ok: boolean; [key: string]: unknown }) => void;
+    const origAct = fake.control.bridge.act.bind(fake.control.bridge);
+    fake.control.bridge.act = vi.fn(async (action: unknown, payloadInput?: unknown) => {
+      const payload = (payloadInput ?? {}) as Record<string, unknown>;
+      if (action === 'cdp' && payload.op === 'begin') {
+        fake.jobs.push([String(action), payload]);
+        return await new Promise<{ ok: boolean; [key: string]: unknown }>((resolve) => {
+          resolveBegin = resolve;
+        });
+      }
+      return origAct(action, payloadInput);
+    });
+    fake.responses.set('cdp', () => ({ ok: true }));
+
+    const b = backend(fake.control);
+    const internals = b as unknown as {
+      sessionTabs: Map<string, unknown>;
+      recipePumps: Map<string, unknown>;
+    };
+    await call(b, { action: 'tabs' });
+    const pendingBegin = call(b, {
+      action: 'recipeCommand',
+      targetId: 't1',
+      __mcpSessionId: 's-race',
+      recipeCommand: { method: 'Cindy.begin' },
+    } as unknown as Parameters<typeof call>[1]);
+    await vi.waitFor(() => expect(resolveBegin).toBeDefined());
+
+    await b.dispose();
+    resolveBegin({ ok: true });
+    const res = await pendingBegin;
+
+    expect(res).toMatchObject({ ok: false, errorCode: 'BROWSER_RUNTIME_UNAVAILABLE' });
+    expect(internals.recipePumps.size).toBe(0);
+    expect(internals.sessionTabs.size).toBe(0);
+    expect(fake.jobs.some(([action, payload]) => action === 'cdp' && payload.op === 'end')).toBe(true);
+  });
 });

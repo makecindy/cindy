@@ -9,7 +9,7 @@ import { themeService } from '@/themes/theme-service';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useProviderShareWeeklyQuota } from '@/features/provider-share/useProviderShareWeeklyQuota';
 import { usePluginEngineUsage } from '@/hooks/usePluginEngineUsage';
-import { History, LayoutGrid, Share2, Star, Waypoints } from 'lucide-react';
+import { History, LayoutGrid, Share2, Sparkles, Star } from 'lucide-react';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { useTranslation } from 'react-i18next';
 import { ModelPickerAccountBoundary, useModelPickerAccount } from './ModelPickerAccount';
@@ -269,10 +269,10 @@ export function UnifiedModelRail({
               ) : item.kind === 'model-groups' && item.deviceId ? (
                 // 另一台电脑的模式：与远程供应商格同一个信号波纹。
                 <RemoteSourceMark markSize={16}>
-                  <Waypoints size={16} />
+                  <Sparkles size={16} />
                 </RemoteSourceMark>
               ) : item.kind === 'model-groups' ? (
-                <Waypoints size={16} />
+                <Sparkles size={16} />
               ) : item.kind === 'plugin-engine' && item.deviceId ? (
                 // 另一台电脑上的引擎：与远程供应商格同一个信号波纹。
                 <RemoteSourceMark markSize={16}>
@@ -287,7 +287,7 @@ export function UnifiedModelRail({
                 />
               ) : item.kind === 'provider' && item.providerId === OWN_ROUTES_PROVIDER_ID ? (
                 // 自己排的路由合在一格(辅助模型)：与「智能路由」格同一个图形，不叠合并供应商的角标。
-                <Waypoints size={16} />
+                <Sparkles size={16} />
               ) : item.kind === 'provider' && isSourceRouteProviderId(item.providerId) ? (
                 // 合并了整个供应商的路由：品牌图形 + 路由角标，不与普通供应商混淆。
                 <RouteSourceMark markSize={16}>

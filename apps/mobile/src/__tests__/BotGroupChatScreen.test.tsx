@@ -1775,6 +1775,25 @@ describe('group composer', () => {
     expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({ mentions: { all: false, botIds: ['abu'] } }));
   });
 
+  it('keeps @everyone available to a regular member in a direct server conversation', async () => {
+    h.chat.server = true;
+    h.translate = key => key === 'groupChat.mention.all' ? '所有人' : key;
+    const data = group({ openPlan: null, serverBacked: true, conversationKind: 'direct',
+      supportsMemberMentionAll: true, allowMemberMentionAll: false });
+    data.members = [
+      { ...data.members[0]!, actorKind: 'human', role: 'member', isSelf: true },
+      { ...data.members[1]!, actorKind: 'human', role: 'member', isSelf: false },
+    ];
+    await render(data, 'ready', undefined, '');
+    await type('@');
+    expect(byId('botGroup.mention.all')).not.toBeNull();
+    await type('@所有人 hello');
+    await click('botGroup.composer.send');
+    expect(h.chat.act).toHaveBeenLastCalledWith('send', expect.objectContaining({
+      mentions: { all: true, botIds: [] },
+    }));
+  });
+
   it.each([false, true])('offers and resolves the current human only in groups (direct: %s)', async direct => {
     h.chat.server = true;
     const data = group({ openPlan: null, ...(direct ? { conversationKind: 'direct' as const } : {}) });

@@ -38,7 +38,11 @@ import {
   pinnedOwnAccount,
   resolveSubscriptionPoolProvider as resolveSubscriptionPoolProviderRef,
 } from './placement.js';
-import { bindPoolExecutionRoute, getSessionSubscriptionAccountRoute, poolFailuresAfterOutput, registerSessionSubscriptionAccount } from './session.js';
+import {
+  bindNativePoolSessionExecution, bindPoolExecutionRoute,
+  isPoolSessionExecutionCurrent, poolFailuresAfterOutput, readPoolSessionExecution,
+  readSessionSubscriptionAccountBinding, registerSessionSubscriptionAccount,
+} from './session.js';
 import { captureOpenAiGroupApiResponse, settleOpenAiGroupAccountHealth } from '../provider-group/localOpenAiAccounts.js';
 import { PROVIDER_GROUP_FAILURE_COOLDOWN_MS } from '../provider-group/cooling.js';
 import { classifyTurnOverload } from '../goal-host/usageLimit.js';
@@ -547,10 +551,24 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
                 return startLegacy();
               }
               const routed = engineOptions(options, lease, target.kind, target.kind === 'codex' && !options.deviceHosted);
-              if (routed[NATIVE_SUBSCRIPTION_ACCOUNT]) {
-                unregister = registerSessionSubscriptionAccount(options.sessionId, routed[NATIVE_SUBSCRIPTION_ACCOUNT], {
-                  accountId: lease.accountId, deviceHosted: !!options.deviceHosted,
-                });
+              const account = routed[NATIVE_SUBSCRIPTION_ACCOUNT];
+              if (account) {
+                const providerId = options.providerId?.trim();
+                const unregisterAccount = registerSessionSubscriptionAccount(
+                  options.sessionId, account, lease.accountId, !!options.deviceHosted,
+                );
+                unregister = unregisterAccount;
+                // Created and legacy pool owners can also select a native member that runs
+                // on a different engine route. Record what actually started, not the pool kind.
+                if (target.kind === 'codex' && providerId && routed.providerId && routed.providerId !== providerId) {
+                  const unbindExecution = bindNativePoolSessionExecution(options.sessionId, {
+                    providerId,
+                    connectionId: routed.providerId,
+                    assertCurrent: lease.assertDispatchable,
+                    account,
+                  });
+                  unregister = () => { unbindExecution(); unregisterAccount(); };
+                }
               } else if (lease.apiConnectionId) unregister = bindPoolExecutionRoute(options.sessionId, {
                 providerId: options.providerId?.trim() || poolProvider,
                 connectionId: lease.apiConnectionId,
@@ -567,6 +585,7 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
               startOptions = lease.apiConnectionId && options.model
                 ? { ...routed, model: apiKeyEngineModel(options.model, target.kind) } : routed;
             } catch (error) {
+              unregister();
               lease?.release();
               if (lastFailure !== undefined) throw lastFailure;
               // No underlying runtime has been started; Maker may release its worktree lease.
@@ -623,25 +642,38 @@ export function withSubscriptionAccounts<T extends BaseAgent>(agent: T, auth?: S
         };
       if (property === 'requiresCodexThreadHostTransfer')
         return async (options: Parameters<BaseAgent['requiresCodexThreadHostTransfer']>[0]) => {
+          const execution = options.remoteHostId ? undefined : readPoolSessionExecution(options.sessionId);
+          if (execution) {
+            const matchesTarget = () => isPoolSessionExecutionCurrent(
+              options.sessionId, execution, options.providerId?.trim(), options.model,
+            );
+            if (!matchesTarget()) return target.requiresCodexThreadHostTransfer(options);
+            const result = await target.requiresCodexThreadHostTransfer({
+              ...options,
+              providerId: execution.connectionId,
+              ...('account' in execution ? { [NATIVE_SUBSCRIPTION_ACCOUNT]: execution.account } : {}),
+            });
+            // A paused/moved account or replaced runtime cannot suppress a real writer transfer.
+            return matchesTarget() ? result : target.requiresCodexThreadHostTransfer(options);
+          }
           // The live session's host carries the subscription account it runs on. When the target
           // route stays on that account, compare against that same host instead of mistaking it for
           // another writer of the thread (which closed and relinked unchanged sessions).
           // A running account that was since removed or disconnected cannot be the target's writer;
           // check the target as before instead of failing a switch to another working source.
+          let binding: ReturnType<typeof readSessionSubscriptionAccountBinding>;
+          try { binding = readSessionSubscriptionAccountBinding(options.sessionId); } catch { binding = undefined; }
           const ref = resolveSubscriptionPoolProviderRef(options.providerId?.trim());
-          let running: ReturnType<typeof getSessionSubscriptionAccountRoute>;
-          try {
-            running = ref ? getSessionSubscriptionAccountRoute(options.sessionId, ref.kind) : undefined;
-          } catch { /* An unavailable running account cannot be the target writer. */ }
-          // A provider can host more than its own account.
-          if (!ref || !running || (running.accountId !== ref.ownAccount
-            && accountProviderId(ref.kind, running.accountId) !== ref.providerId))
+          // A provider can hold several accounts; its first (`ownAccount`) is only one of them. The
+          // route stays on the running account when that account belongs to the target provider.
+          if (!binding || !ref || (binding.poolAccountId !== ref.ownAccount
+            && accountProviderId(ref.kind, binding.poolAccountId) !== ref.providerId))
             return target.requiresCodexThreadHostTransfer(options);
           return target.requiresCodexThreadHostTransfer({
             ...options,
-            providerId: running.deviceHosted
-              ? options.providerId : engineProviderId(options.providerId, running.accountId, target.kind === 'codex'),
-            [NATIVE_SUBSCRIPTION_ACCOUNT]: running.account,
+            providerId: binding.deviceHosted
+              ? options.providerId : engineProviderId(options.providerId, binding.poolAccountId, target.kind === 'codex'),
+            [NATIVE_SUBSCRIPTION_ACCOUNT]: binding.account,
           });
         };
       if (property === 'forkSdkSession')

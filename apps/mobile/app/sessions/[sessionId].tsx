@@ -314,7 +314,9 @@ import {
   applyHostModelGroupResult,
   resolveHostModelGroup,
   useHostModelGroupPickerOptions,
-  useHostModelGroups,
+  useHostModelGroupsPayload,
+  useHostModelGroupSwitchOffer,
+  type HostModelGroupSwitchOffer,
 } from '@/session/hostModelGroups';
 import { MobileModelIconMark } from '@/session/MobileProviderMark';
 import { getModel, type ProviderView } from '@cindy/model-providers/registry';
@@ -2812,7 +2814,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     && !sessionSettingsLocked
     && !remoteRealtimeControlsUnavailable;
   const canConfigureSessionModel = canUseRemoteSessionControls
-    && !sessionManagedByHost
     && !isSharedTaskPeer(deviceId);
   // 共享模型自造的那两条禁发理由是中文直出,而它会经 composer 与队列行的
   // accessibility hint 读给用户 —— 按 locale 翻译后再用,否则读屏在 en / ja / ko
@@ -3752,7 +3753,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   useEffect(() => {
     if (!sessionManagedByHost) return;
     setSettingsOpen(false);
-    setModelSheetOpen(false);
     if (contextSheetView !== 'main') {
       setContextSheetView('main');
       setContextSheetOpen(false);
@@ -7881,7 +7881,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             testID="session.planModeChip"
           />
         ) : null}
-        {!sessionManagedByHost && composerRuntimeSummary ? (
+        {composerRuntimeSummary ? (
           <ComposerRuntimePill
             disabled={controlBusy || !canConfigureSessionModel}
             accessibilityLabel={composerRuntimeAccessibilityLabel}
@@ -7902,7 +7902,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
             ) : composerPillSourceId ? (
               // 正常态显示真正生效来源；断开态显示 DB 中的真实来源并使用状态色，
               // 不静默换成 activeSourceId 的默认回退 Logo。
-              // Agent(下一条消息起)在另一台电脑运行:与桌面 trigger 同一个远程标记。
+              // 智能路由持续托管时叠路由角标；否则 Agent(下一条消息起)在另一台电脑运行叠远程标记。
               <MobileModelIconMark
                 color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
                 icon={composerCatalogModel?.icon}
@@ -7912,6 +7912,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                 logoKind={composerPillSourceProvider?.logoKind}
                 customIcon={composerPillSourceProvider?.customIcon}
                 remote={Boolean(nextAgentDeviceId)}
+                routed={Boolean(activeSessionModelGroupBinding)}
               />
             ) : null}
             onPress={toggleComposerModelPicker}
@@ -9713,20 +9714,35 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     pluginEngineSwitchEligible, pluginEngineSwitchIntent, pluginEngineTask, pluginEngineTargetId,
     pluginEngineTargetIsRemote, refreshSessionPluginEngines, selectComposerPluginEngine]);
 
-  // 模型组(model-groups.md §6.3)：列出被控电脑的模式；选一个，就请那台按它的规则、只在任务此刻所在的位置里
-  // 挑一个来源，再走选模型的同一条路径换过去(跨引擎、换位置按既有意图登记)。不留选中态，之后不会自己再换。
-  // 分享来的任务、SSH、伙伴等非 Desktop 任务不提供；那台是旧版本时整段不出现。
+  // 模型组与供应商合并路由(model-groups.md §6.3)：普通/伙伴/SSH/目标/Orca/IM 等所有归属被控电脑的任务均可在
+  // 任务中间随时切入智能路由并持续托管(发前预检、配额失败自动降级、带图切视觉、缓存过期重选，支持跨位置无缝交接)。
+  // 分享来的他人任务不提供；旧电脑读不到模式时整段不出现。
   const sessionModelGroupsEligible = !!currentSession && !!deviceId && !isSharedTaskPeer(deviceId)
-    && !currentSession.remoteHostId && (!pluginEngineTask || sessionAgentSwitchSupported)
-    && (currentSession.source == null || currentSession.source === 'desktop')
+    && (!pluginEngineTask || sessionAgentSwitchSupported)
     && currentSession.status !== 'archived';
-  const sessionHostModelGroups = useHostModelGroups(deviceId, maker, sessionModelGroupsEligible && modelSheetOpen);
-  const switchSessionByModelGroup = useCallback(async (id: string): Promise<boolean> => {
+  const activeSessionModelGroupBinding = sessionModelGroupsEligible
+    ? (currentSession?.modelGroupBinding ?? null)
+    : null;
+  const sessionHostModelGroupsPayload = useHostModelGroupsPayload(deviceId, maker, sessionModelGroupsEligible && modelSheetOpen);
+  const sessionHostModelGroups = sessionHostModelGroupsPayload?.groups ?? null;
+  const switchSessionByModelGroup = useCallback(async (
+    id: string,
+    overrides?: { effort?: string; fast?: boolean | 'ultrafast' },
+  ): Promise<boolean> => {
     if (!currentSession || !canUseRemoteSessionControls || controlBusy) return false;
     const group = sessionHostModelGroups?.find((item) => item.id === id);
     const deviceAtStart = deviceId;
-    // 已挂着「下一条消息换到另一台电脑」时按那台挑：换模型会沿用它，两边必须是同一台(与电脑端一致)。
-    const result = await resolveHostModelGroup(maker, id, undefined, { agentDeviceId: nextAgentDeviceId ?? null });
+    const sshHostId = currentSession.remoteHostId || undefined;
+    // SSH 任务限定在主机可用来源；支持跨位置交接的普通任务不锁死旧位置，允许路由在本机/分享/其他电脑间挑选。
+    const location = sshHostId
+      ? { agentDeviceId: null, sshHostId }
+      : (!agentLocationMovable ? { agentDeviceId: nextAgentDeviceId ?? null } : undefined);
+    const result = await resolveHostModelGroup(
+      maker,
+      id,
+      overrides ? { effort: overrides.effort || undefined, fastMode: overrides.fast } : undefined,
+      location,
+    );
     if (deviceIdRef.current !== deviceAtStart) return false;
     if (!result || result.outcome !== 'routed') {
       showTransientNotice(t('models.modelGroups.picker.switchUnavailable', { name: result?.groupName || group?.name || '' }));
@@ -9738,21 +9754,93 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         agent: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
         modelId: route.model,
         providerId: route.providerId,
-        effort: route.effort ?? '',
-        fast: false,
+        effort: route.effort ?? overrides?.effort ?? '',
+        fast: route.fastMode ?? overrides?.fast ?? false,
       },
       route.agentDeviceId ? { deviceId: route.agentDeviceId } : undefined,
     );
     if (!applied) return false;
-    // 记下是经哪个模式换的：那台之后撞配额时据此提议同一模式里的下一个来源。
-    applyHostModelGroupResult(maker, sessionId, id, result, null);
+    // 记下是经哪个路由换的，有界等待绑定落盘，使下一轮发送起立即进入持续托管。
+    await applyHostModelGroupResult(maker, sessionId, id, result, null);
     showTransientNotice(t('models.modelGroups.picker.switched', { name: result.groupName, model: `${result.modelName} · ${result.sourceName}` }));
     return true;
   }, [currentSession, canUseRemoteSessionControls, controlBusy, sessionHostModelGroups, deviceId, maker, nextAgentDeviceId,
-    selectUnifiedComposerModel, sessionId, showTransientNotice, t]);
+    agentLocationMovable, selectUnifiedComposerModel, sessionId, showTransientNotice, t]);
+  const detachSessionModelGroup = useCallback(async (): Promise<boolean> => {
+    if (!sessionId || !deviceId || !canUseRemoteSessionControls || controlBusy) return false;
+    const res = await maker.unbindModelGroupSession(sessionId);
+    if (res.unbound) {
+      remoteSessionStore.applySessionPatch(deviceId, sessionId, { modelGroupBinding: null });
+      showTransientNotice(t('models.modelGroups.picker.detached'));
+      return true;
+    }
+    return false;
+  }, [sessionId, deviceId, canUseRemoteSessionControls, controlBusy, maker, showTransientNotice, t]);
+  const composerModelGroupExtra = useMemo(() => ({
+    managedMeta: activeSessionModelGroupBinding
+      ? {
+          routeName: activeSessionModelGroupBinding.parentName ?? activeSessionModelGroupBinding.routeName,
+          isSourceRoute: activeSessionModelGroupBinding.isSourceRoute,
+        }
+      : null,
+    onDetach: activeSessionModelGroupBinding ? detachSessionModelGroup : undefined,
+    sourceRoutesPayload: sessionHostModelGroupsPayload,
+    activeRouteId: activeSessionModelGroupBinding?.selection.id ?? null,
+    onPickMerged: (routeId: string, config: MobileModelConfiguration) =>
+      switchSessionByModelGroup(routeId, { effort: config.effort, fast: config.fast }),
+  }), [activeSessionModelGroupBinding, detachSessionModelGroup, sessionHostModelGroupsPayload, switchSessionByModelGroup]);
   const composerModelGroupOptions = useHostModelGroupPickerOptions(
-    sessionModelGroupsEligible ? sessionHostModelGroups : null, null, switchSessionByModelGroup, t,
+    sessionModelGroupsEligible ? sessionHostModelGroups : null,
+    activeSessionModelGroupBinding?.isSourceRoute ? null : (activeSessionModelGroupBinding?.selection.id ?? null),
+    (id) => switchSessionByModelGroup(id),
+    t,
+    composerModelGroupExtra,
   );
+  const errorBannerShowing = Boolean(inputProjection.error) || tailBannerState?.kind === 'error-tail';
+  const sessionModelGroupSwitchOffer = useHostModelGroupSwitchOffer(
+    sessionId,
+    sessionModelGroupsEligible && canConfigureSessionModel && errorBannerShowing,
+    maker,
+    `${inputProjection.error ?? ''}:${tailBannerState?.kind === 'error-tail' ? tailBannerState.clientId : ''}:${currentSession?.model ?? ''}:${currentSession?.providerId ?? ''}:${currentSession?.agentDeviceId ?? ''}`,
+  );
+  const applyModelGroupSwitchOffer = useCallback(async (offer: HostModelGroupSwitchOffer, source: 'queue' | 'tail') => {
+    if (!currentSession || !canConfigureSessionModel || controlBusy) return;
+    const applied = await selectUnifiedComposerModel(
+      {
+        agent: offer.agentKind === 'cc' ? 'claude-code' : offer.agentKind,
+        modelId: offer.model,
+        providerId: offer.providerId,
+        effort: offer.effort ?? '',
+        fast: offer.fastMode ?? false,
+      },
+      offer.agentDeviceId ? { deviceId: offer.agentDeviceId } : undefined,
+    );
+    if (!applied) return;
+    await maker.bindModelGroupSession({
+      sessionId,
+      selection: offer.selection,
+      route: {
+        agentKind: offer.agentKind,
+        providerId: offer.providerId,
+        model: offer.model,
+        ...(offer.agentDeviceId ? { agentDeviceId: offer.agentDeviceId } : {}),
+      },
+    }).catch(() => undefined);
+    if (source === 'tail') {
+      await continueTailBanner();
+    } else if (inputProjection.errorRetryText) {
+      retryQueueError();
+    } else if (canContinueError) {
+      continueQueueError();
+    }
+  }, [currentSession, canConfigureSessionModel, controlBusy, selectUnifiedComposerModel, maker, sessionId,
+    continueTailBanner, inputProjection.errorRetryText, retryQueueError, canContinueError, continueQueueError]);
+  const formatSwitchOfferLabel = useCallback((offer: HostModelGroupSwitchOffer) => (
+    t('models.modelGroups.switchOffer.button', {
+      model: `${offer.modelName} · ${offer.sourceName}`,
+      defaultValue: `Switch to ${offer.modelName} · ${offer.sourceName}`,
+    })
+  ), [t]);
 
   const selectComposerFlatModel = useCallback((option: MobileModelOption) => {
     setModelSheetOpen(false);
@@ -11566,6 +11654,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                         {tailBannerState ? (
                           <SessionTailBanner
                             busy={tailBannerBusy || historyRecoveryBusy}
+                            modelGroupSwitchOffer={
+                              tailBannerState.kind === 'error-tail' && sessionModelGroupSwitchOffer
+                                ? {
+                                    label: formatSwitchOfferLabel(sessionModelGroupSwitchOffer),
+                                    onPress: () => void applyModelGroupSwitchOffer(sessionModelGroupSwitchOffer, 'tail'),
+                                  }
+                                : null
+                            }
                             onRecoverHistory={canRecoverHistory ? () => void recoverReadableHistory() : undefined}
                             onContinue={() => void continueTailBanner()}
                             onDismiss={dismissTailBanner}
@@ -11592,6 +11688,14 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
                         <InlineQueueSection
                           busy={queueBusy || historyRecoveryBusy}
                           isRunning={remoteSessionRunning || isSessionStreaming}
+                          modelGroupSwitchOffer={
+                            inputProjection.error && sessionModelGroupSwitchOffer
+                              ? {
+                                  label: formatSwitchOfferLabel(sessionModelGroupSwitchOffer),
+                                  onPress: () => void applyModelGroupSwitchOffer(sessionModelGroupSwitchOffer, 'queue'),
+                                }
+                              : null
+                          }
                           onRecoverHistory={canRecoverHistory ? () => void recoverReadableHistory() : undefined}
                           sessionSource={currentSession?.source}
                           onClearError={clearQueueError}
