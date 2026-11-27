@@ -22,7 +22,7 @@ import {
 import type { HandoffDriver } from './macDriver.js';
 import { markSecretEntered } from './secretTaint.js';
 import { TerminalPromptSession, type TerminalProgram, type TerminalPromptStep } from './terminalPrompt.js';
-import { ImageQrHandoffSession } from './imageQr.js';
+import { type PictureQr, ImageQrHandoffSession } from './imageQr.js';
 import { qrContent } from './qrCode.js';
 
 /**
@@ -334,7 +334,7 @@ export class InputHandoffService {
     }
     if (found && 'error' in found) {
       return found.error === 'not_image'
-        ? { ok: false, errorCode: 'NOT_AN_IMAGE', message: 'That file is not a picture Cindy can read (use PNG or JPEG).' }
+        ? { ok: false, errorCode: 'NOT_AN_IMAGE', message: 'That file is not a picture Cindy can read (use PNG, JPEG or WebP).' }
         : { ok: false, errorCode: 'QR_UNREADABLE', message: 'Cindy could not read that picture right now. Tell the owner what is needed instead.' };
     }
     const qr = found ? qrContent(found.text) : null;
@@ -386,6 +386,23 @@ export class InputHandoffService {
       return run;
     });
     return started.ok ? { ...started, abandon: () => run?.abandon() } : started;
+  }
+
+  /** The live engine owns this handoff. Only its provider check may resume the pending turn. */
+  startAccountVerification(request: { sessionId: string; purpose: string; note: string; picture: PictureQr;
+    checkAccount(): void; finished(result: HandoffResult): void }) {
+    const refused = this.admit(request.sessionId);
+    if (refused) return null;
+    let card!: ImageQrHandoffSession;
+    this.launch(request.sessionId, true, (requestId, entry) => {
+      card = new ImageQrHandoffSession({
+        ...request, requestId, remoteInput: this.deps.remoteInputAvailable(), timeoutMs: timeoutMs(undefined),
+        publish: snapshot => this.publish(entry, snapshot),
+        finish: result => { this.finish(entry, result); request.finished(result); },
+      });
+      return card;
+    });
+    return card;
   }
 
   /** A Main-owned secret input, delivered only to its waiting host operation, never the model. */

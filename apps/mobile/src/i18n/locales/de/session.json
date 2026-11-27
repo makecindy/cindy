@@ -80,6 +80,7 @@
     "modelCatalogUnconfirmed": "Die Modellliste konnte nicht bestätigt werden. Das ausgewählte Modell wurde beibehalten. Aktualisiere die Modellliste und versuche es erneut.",
     "actionScheduled": "Die Berechtigung für diese Aktion ist abgelaufen. Der nächste Lauf ist weiterhin geplant.",
     "actionExpired": "Die Sitzungsberechtigung für diese Aktion ist abgelaufen. Prüfe den letzten Lauf der Automatisierung.",
+    "modelRebuildRetry": "Die Anweisung wurde nicht gesendet. Öffne die Automatisierung auf deinem Computer und wähle „Jetzt ausführen“, um es erneut zu versuchen.",
     "actionRecovered": "Die Berechtigung für diese Aktion ist abgelaufen. Dieselbe Automatisierung wurde später erfolgreich ausgeführt.",
     "text": "Ein automatischer Durchlauf ist fehlgeschlagen.",
     "prCheck_dns": "{{device}} konnte {{host}} nicht auflösen. Prüfe bei anhaltenden Problemen Netzwerk und DNS auf diesem Gerät. Fehlversuche in Folge: {{failures}}. Planmäßige Prüfungen sind ab {{retry}} wieder möglich.",
@@ -648,6 +649,9 @@
     "ignore": "Ignorieren",
     "executionResultUnavailable": "Das Ausführungsergebnis konnte nicht abgerufen werden. Die automatische Fortsetzung wurde gestoppt. Bitte den Assistenten, das vorhandene Ausführungsergebnis zu prüfen.",
     "unexecutedToolMarkup": "Das Modell hat einen Werkzeugaufruf als Text ausgegeben. Die Ausführung konnte nicht bestätigt werden, daher wurde dieser Durchgang nicht abgeschlossen.",
+    "codexReconnectStalled": "Die Modellverbindung konnte innerhalb von 2 Minuten nicht wiederhergestellt werden.",
+    "reconnectAutoResumeDisabled": "Die automatische Fortsetzung ist deaktiviert.",
+    "reconnectAutoResumeExhausted": "Die maximale Anzahl automatischer Fortsetzungsversuche ist erreicht.",
     "silentStopExhausted": "Eine leere Antwort wurde erkannt. Die automatische Fortsetzung ist pausiert.",
     "outputLimit": "Das Modell hat sein Ausgabelimit erreicht. Diese Antwort ist möglicherweise unvollständig. Sende eine neue Nachricht, um fortzufahren. Wenn dies wiederholt auftritt, reduziere die Denkintensität oder komprimiere zuerst den Gesprächsverlauf.",
     "outputLimitReasoning": "Das Denken hat den Großteil des Ausgabebudgets dieser Anfrage verbraucht. Die Antwort ist möglicherweise unvollständig. Reduziere die Denkintensität oder komprimiere den Gesprächsverlauf, bevor du fortfährst.",
@@ -694,7 +698,7 @@
     "SNAPSHOT_DISPATCH_INTENT_TIMEOUT": "Nachricht nicht gesendet. Cindy konnte den Sicherheitseintrag nicht rechtzeitig bestätigen.",
     "HARNESS_SWITCH_NOT_READY": "Der Harness-Wechsel ist noch nicht bereit. Prüfe die Fehlerdetails und versuche es erneut, sobald der Harness bereit ist.",
     "REMOTE_AGENT_GROUP_USAGE_LIMIT": "Die verfügbaren Konten für dieses Modell haben ihr Nutzungslimit erreicht. Wechsle das Modell oder fahre fort, wenn das Kontingent zurückgesetzt wird.",
-    "REMOTE_AGENT_GROUP_UNAVAILABLE": "Derzeit kann kein Computer in der Anbietergruppe diese Aufgabe ausführen. Sie sind möglicherweise offline, pausiert, in einer Abkühlphase oder haben dieses Modell nicht. Prüfe die Gruppe auf der Seite „Remote & Freigabe“ dieses Anbieters auf dem Computer.",
+    "REMOTE_AGENT_GROUP_UNAVAILABLE": "Derzeit kann kein Computer in der Computergruppe diese Aufgabe ausführen. Sie sind möglicherweise offline, pausiert, in einer Abkühlphase oder haben dieses Modell nicht. Prüfe die Gruppe auf der Seite „Remote & Freigabe“ dieses Anbieters auf dem Computer.",
     "REMOTE_DAEMON_CLOSED": "Die Remote-Verbindung wurde unterbrochen, möglicherweise während eines Updates. Diese Runde wurde beendet. Sende die Nachricht erneut.",
     "REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED": "Lokale Datei-/Bildanhänge sind in Remote-Sitzungen nicht zugänglich. Füge stattdessen den Inhalt direkt ein.",
     "AUTO_REVIEW_UNAVAILABLE_QUOTA": "Das Kontingent eines Modells für die automatische Prüfung ist aufgebraucht. Prüfe Nutzung oder Abrechnung oder passe die Hilfsmodelle in den Einstellungen des Computers an, auf dem der Agent läuft. Prüfpflichtige Aktionen erfordern weiterhin deine Bestätigung.",
@@ -731,7 +735,7 @@
     "REMOTE_WORKDIR_UNAVAILABLE": "Das Remote-Arbeitsverzeichnis ist nicht verfügbar. Prüfe, ob der Ordner auf diesem Computer noch existiert, und versuch es erneut.",
     "REMOTE_OPTIMISTIC_SESSION_STATE_UNAVAILABLE": "Der Computer kann noch nicht bestätigen, ob diese Nachricht gesendet wurde. Warte kurz und versuch es erneut. Sende dieselbe Nachricht nicht zweimal.",
     "REMOTE_AGENT_UNAVAILABLE": "Die Kommunikation mit dem Computer, auf dem der Agent läuft, ist fehlgeschlagen. Prüfe die Fehlerdetails.",
-    "REMOTE_AGENT_TIMEOUT": "Zeitüberschreitung beim Warten auf den Computer, auf dem der Agent läuft. Das Ergebnis ist unklar. Prüfe die Aufgabe, bevor du es erneut versuchst.",
+    "REMOTE_AGENT_TIMEOUT": "Der Computer, auf dem der Agent läuft, hat noch nicht geantwortet. Prüfe den Stand der Aufgabe. Wenn sie noch läuft oder bereits abgeschlossen ist, brauchst du sie nicht erneut zu starten.",
     "REMOTE_AGENT_LINK_BUSY": "Die Kommunikation mit dem Computer, auf dem der Agent läuft, ist ausgelastet. Warte einen Moment, bevor du es erneut versuchst.",
     "REMOTE_AGENT_UNRESPONSIVE": "Der Computer, auf dem der Agent läuft, hat wiederholt nicht geantwortet. Aufrufe wurden deshalb vorübergehend pausiert. Warte einen Moment, bevor du es erneut versuchst.",
     "REMOTE_AGENT_OFFLINE": "Der Computer, auf dem der Agent läuft, ist offline. Versuche es erneut, sobald er wieder verbunden ist.",
@@ -860,7 +864,8 @@
       "WORKER_CREATION_IN_PROGRESS": "Ein Worker mit demselben Namen wird gerade erstellt. Versuche es in Kürze erneut.",
       "WORKER_NOT_FOUND": "Dieser Worker existiert nicht mehr. Die Liste wurde aktualisiert.",
       "ORCA_CREATE_UNCONFIRMED": "Beim Erstellen des Workers wurde das Zeitlimit überschritten. Die Erstellung konnte nicht bestätigt werden. Prüfe zuerst die Worker-Liste und versuche es nur erneut, wenn kein neuer Worker erscheint.",
-      "ORCA_ACTION_UNCONFIRMED": "Das Zeitlimit der Anfrage wurde überschritten. Das Ergebnis ist daher noch nicht bestätigt. Die Liste wurde aktualisiert; orientiere dich an ihrem aktuellen Stand."
+      "ORCA_ACTION_UNCONFIRMED": "Das Zeitlimit der Anfrage wurde überschritten. Das Ergebnis ist daher noch nicht bestätigt. Die Liste wurde aktualisiert; orientiere dich an ihrem aktuellen Stand.",
+      "PLUGIN_ENGINE_CANNOT_LEAD": "Die Version auf diesem Computer unterstützt das Starten der Zusammenarbeit für eine Aufgabe mit Plugin-Engine nicht."
     }
   },
   "resetAutoUse": {

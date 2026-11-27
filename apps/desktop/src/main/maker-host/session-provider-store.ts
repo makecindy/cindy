@@ -65,6 +65,18 @@ export function hasHostedSessionModelAccess(sessionId: string | null | undefined
   return !!sessionId && !!hostedBindings.get(sessionId)?.allowsModel;
 }
 
+/** A runtime minted under one hosted grant may not inherit a later binding for the same task. */
+export function captureHostedSessionModelAccess(sessionId: string) {
+  const binding = hostedBindings.get(sessionId);
+  if (!binding?.allowsModel) return undefined;
+  const isCurrent = () => hostedBindings.get(sessionId) === binding;
+  return {
+    isCurrent,
+    allowsModel: (providerId: string, model: string) => isCurrent()
+      && hostedSessionModelAllowed(sessionId, providerId, model) && isCurrent(),
+  };
+}
+
 /** Model is the exact catalog identity, resolved from the request's actual provider and wire model. */
 export function hostedSessionModelAllowed(sessionId: string, providerId: string, model: string): boolean {
   try { return hostedBindings.get(sessionId)?.allowsModel?.(providerId, model) ?? true; }

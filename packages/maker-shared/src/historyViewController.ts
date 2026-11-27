@@ -40,7 +40,38 @@ export interface HistoryViewTransport<T extends HistoryMessageSource> {
   expanded(refs: readonly HistoryWorkReference[]): Promise<void>;
   /** Local diagnostics only: counts and lifecycle, never message bodies. */
   diagnostic?(event: HistoryViewDiagnostic): void;
+  /** A mounted surface kept releasing and re-retaining a range; ids and counts only. */
+  expansionLoop?(event: HistoryViewExpansionLoop): void;
 }
+
+/**
+ * A render feedback loop: retaining a range changed the display so its surface
+ * unmounted (releasing it), which changed the display back and remounted it.
+ * The controller keeps the range retained to break the loop; this records why.
+ */
+export interface HistoryViewExpansionLoop {
+  key: string;
+  /** All keys the looping surface retained together. */
+  retainedWith: readonly string[];
+  releases: number;
+  itemCount: number;
+  expandedCount: number;
+  range?: {
+    preview: boolean;
+    isStreaming: boolean;
+    revision: string;
+    firstMessageId: string;
+    lastMessageId: string;
+    messageCount: number;
+    hasLines: boolean;
+    /** For a preview key: the enclosing range's state. */
+    fullExpanded?: boolean;
+  };
+  detail?: { revision: string; loading: boolean; complete: boolean; failed: boolean; messageCount: number };
+}
+
+/** Releases of one range within one synchronous update before the guard keeps it retained. */
+const EXPANSION_LOOP_RELEASES = 3;
 
 export interface HistoryViewDiagnostic {
   source: 'cache' | 'latest' | 'older' | 'details' | 'fallback' | 'reset' | 'failed';
@@ -113,6 +144,11 @@ export class HistoryViewController<T extends HistoryMessageSource> {
   private cacheGeneration = 0;
   private detailRuns = new Map<string, { promise: Promise<void> }>();
   private expandedHolds = new Map<string, number>();
+  // Release counts within the current synchronous update (cleared on the next task), and
+  // ranges kept retained after a loop. See `guardReleaseLoop`.
+  private loopReleases = new Map<string, number>();
+  private loopReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+  private loopPinned = new Set<string>();
   private active = true;
   private networkAvailable = true;
   private pagePromise: Promise<void> | null = null;
@@ -193,6 +229,38 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     const cached = await read().catch(() => null);
     if (!cached || this.state.ready || isHistoryViewUnavailable(this.state.error) || generation !== this.cacheGeneration) return;
     this.publish({ ...cached, loading: this.state.loading, error: this.state.error, stale: true }, 'cache');
+  }
+
+  /**
+   * Update a detached retained view with a newer prefetched snapshot in place so
+   * reopening does not drop back to an empty controller and wait for disk IO.
+   */
+  applyPrefetchedSnapshot(snapshot: HistoryViewSnapshot<T>): void {
+    if (this.active || !snapshot.ready || isHistoryViewUnavailable(this.state.error)) return;
+    this.cacheGeneration++;
+    const previous = new Map(this.state.items.map((item) => [item.key, item]));
+    const items = snapshot.items.map((item) => {
+      const cached = previous.get(item.key);
+      return cached && JSON.stringify(cached) === JSON.stringify(item) ? cached : item;
+    });
+    const stableItems = items.length === this.state.items.length
+      && items.every((item, index) => item === this.state.items[index]) ? this.state.items : items;
+    const presentKeys = new Set(historyWorkSummaries(stableItems).map((summary) => summary.key));
+    for (const key of this.detailRuns.keys()) {
+      if (!presentKeys.has(key)) this.detailRuns.delete(key);
+    }
+    this.publish({
+      items: stableItems,
+      details: snapshot.details,
+      expanded: snapshot.expanded,
+      nextCursor: snapshot.nextCursor,
+      hasMore: snapshot.hasMore,
+      ready: true,
+      loading: false,
+      error: null,
+      stale: true,
+      readReceipt: snapshot.readReceipt,
+    }, 'cache');
   }
 
   refresh(older = false, fresh = false): Promise<void> {
@@ -288,8 +356,18 @@ export class HistoryViewController<T extends HistoryMessageSource> {
       for (const key of this.detailRuns.keys()) {
         if (!presentKeys.has(key)) this.detailRuns.delete(key);
       }
-      this.publish({ items: stableItems, ready: true, loading: false,
-        details: this.trimCollapsedDetails(this.state.expanded, stableItems),
+      // A range kept retained by the loop guard is released once it leaves the page
+      // (a finished run drops its preview), unless a surface holds it again.
+      let expanded = this.state.expanded;
+      for (const key of this.loopPinned) {
+        if (presentKeys.has(key)) continue;
+        this.loopPinned.delete(key);
+        if (this.expandedHolds.has(key) || !expanded.has(key)) continue;
+        if (expanded === this.state.expanded) expanded = new Set(expanded);
+        (expanded as Set<string>).delete(key);
+      }
+      this.publish({ items: stableItems, ready: true, loading: false, expanded,
+        details: this.trimCollapsedDetails(expanded, stableItems),
         ...(older ? {} : { stale: false, readReceipt }),
         hasMore: retained.hasMore, nextCursor: retained.nextCursor }, older ? 'older' : 'latest');
       if (!older) this.latestReadOkStartedAtMs = readStartedAt;
@@ -338,6 +416,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     for (const key of collapsed) {
       next.delete(key);
       this.detailRuns.delete(key);
+      this.loopPinned.delete(key);
     }
     // Apply the warm-cache budget to the final collapsed set, after cancelling
     // all of its pending reads so they cannot pin a body or publish a late reply.
@@ -395,8 +474,62 @@ export class HistoryViewController<T extends HistoryMessageSource> {
         this.expandedHolds.delete(key);
         collapsed.push(key);
       }
-      this.collapseDetails(collapsed);
+      this.collapseDetails(this.guardReleaseLoop(collapsed, keys));
     };
+  }
+
+  /**
+   * Break a retain/release feedback loop before React aborts the page (#185).
+   * A surface that releases the same range repeatedly within one synchronous
+   * update is oscillating with its own display. Keep that range retained, which
+   * is a fixed point: further retains are no-ops and publish nothing. It is
+   * collapsed by a user toggle, a later normal release, or once it leaves the page.
+   */
+  private guardReleaseLoop(keys: readonly string[], retainedWith: readonly string[]): string[] {
+    if (!keys.length) return [];
+    this.loopReleaseTimer ??= setTimeout(() => {
+      this.loopReleaseTimer = null;
+      this.loopReleases.clear();
+    }, 0);
+    const released: string[] = [];
+    for (const key of keys) {
+      const releases = (this.loopReleases.get(key) ?? 0) + 1;
+      this.loopReleases.set(key, releases);
+      if (releases <= EXPANSION_LOOP_RELEASES) {
+        this.loopPinned.delete(key);
+        released.push(key);
+        continue;
+      }
+      if (this.loopPinned.has(key)) continue;
+      this.loopPinned.add(key);
+      this.reportExpansionLoop(key, retainedWith, releases);
+    }
+    return released;
+  }
+
+  private reportExpansionLoop(key: string, retainedWith: readonly string[], releases: number): void {
+    if (!this.transport.expansionLoop) return;
+    try {
+      const summaries = historyWorkSummaries(this.state.items);
+      // Summaries list previews too; a preview key is identified by its enclosing range.
+      const owner = summaries.find((summary) => summary.preview?.key === key);
+      const summary = owner?.preview ?? summaries.find((summary) => summary.key === key);
+      const detail = this.state.details.get(key);
+      this.transport.expansionLoop({
+        key, retainedWith: [...retainedWith], releases,
+        itemCount: this.state.items.length, expandedCount: this.state.expanded.size,
+        ...(summary ? { range: {
+          preview: !!owner, isStreaming: summary.isStreaming, revision: summary.revision,
+          firstMessageId: summary.firstMessageId, lastMessageId: summary.lastMessageId,
+          messageCount: summary.messageCount, hasLines: !!summary.lines,
+          ...(owner ? { fullExpanded: this.state.expanded.has(owner.key) } : {}),
+        } } : {}),
+        ...(detail ? { detail: {
+          revision: detail.revision, loading: detail.loading, complete: detail.complete,
+          failed: detail.error != null, messageCount: detail.messages.length,
+        } } : {}),
+      });
+    } catch { /* Diagnostics must not interrupt the guard. */ }
   }
 
   private sendIntent(): void {
@@ -549,6 +682,7 @@ export class HistoryViewController<T extends HistoryMessageSource> {
     this.generation++;
     this.cacheGeneration++;
     this.detailRuns.clear();
+    this.loopPinned.clear();
     this.publish({ items: [], details: new Map(), expanded: new Set(), ready: false,
       nextCursor: null, hasMore: false, loading: false, error: null, stale: false, readReceipt: undefined }, 'reset');
     this.sendIntent();

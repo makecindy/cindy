@@ -727,6 +727,74 @@ function applyMacPackagedDisplayName(buildPath: string, platform: string): void 
   }
 }
 
+function readMacExecutableEntitlements(exePath: string): Buffer | undefined {
+  const result = spawnSync('codesign', ['--display', '--entitlements', '-', '--xml', exePath], {
+    env: { ...process.env, LC_ALL: 'C' },
+  });
+  if (result.error) throw result.error;
+  if (result.status === 0) return result.stdout.length > 0 ? result.stdout : undefined;
+
+  const stderr = result.stderr.toString().trim();
+  if (result.status === 1 && stderr.endsWith(': code object is not signed at all')) return undefined;
+  throw new Error(
+    `[forge:postPackage] Failed to read macOS entitlements (${exePath}): ${stderr || result.signal || result.status}`,
+  );
+}
+
+/**
+ * Give each packaged macOS app its own deterministic Mach-O LC_UUID before
+ * signing. Prebuilt Electron shares one stock LC_UUID across apps of the same
+ * Electron release; macOS Local Network privacy (nehelper) tracks executables
+ * by LC_UUID as well as bundle ID, so colliding with stock Electron.app or
+ * another Electron app causes macOS to suppress the one-time permission prompt
+ * and omit Cindy from System Settings > Local Network (verified 2026-11-26).
+ */
+async function applyMacUniqueExecutableUuid(buildPath: string, platform: string): Promise<void> {
+  if (platform !== 'darwin') return;
+  const { deriveMacAppMachoUuid, patchMachoUuid } = await import('../../scripts/macos-macho-uuid.mjs');
+  const electronVersion = (_require('electron/package.json') as { version: string }).version;
+  const apps = fs.readdirSync(buildPath).filter((n) => n.endsWith('.app'));
+  for (const appDir of apps) {
+    const exePath = path.join(buildPath, appDir, 'Contents', 'MacOS', CINDY_EXE);
+    if (!fs.existsSync(exePath)) {
+      throw new Error(`[forge:postPackage] macOS executable missing at ${exePath}`);
+    }
+    // Patching LC_UUID invalidates the signature that carries the original entitlements.
+    const entitlements =
+      process.platform === 'darwin' ? readMacExecutableEntitlements(exePath) : undefined;
+    const nextUuid = deriveMacAppMachoUuid(CINDY_APP_ID, electronVersion);
+    const { previous, uuid } = patchMachoUuid(exePath, nextUuid);
+    if (process.platform === 'darwin') {
+      // Refresh the local ad-hoc signature so unsigned `forge package` outputs
+      // stay launchable on Apple silicon; external release signing seals it again.
+      const args = ['--force', '--sign', '-'];
+      const tempDir = entitlements
+        ? fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-mac-entitlements-'))
+        : undefined;
+      try {
+        if (tempDir && entitlements) {
+          const entitlementsPath = path.join(tempDir, 'entitlements.plist');
+          fs.writeFileSync(entitlementsPath, entitlements, { mode: 0o600 });
+          args.push('--entitlements', entitlementsPath);
+        }
+        const resign = spawnSync('codesign', [...args, exePath]);
+        if (resign.error) throw resign.error;
+        if (resign.status !== 0) {
+          const detail = resign.stderr.toString().trim() || resign.signal || resign.status;
+          throw new Error(
+            `[forge:postPackage] ad-hoc codesign failed after LC_UUID patch (${exePath}): ${detail}`,
+          );
+        }
+      } finally {
+        if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+    console.log(
+      `[forge:postPackage] mac LC_UUID ${previous.join(',')} → ${uuid} (${appDir}/Contents/MacOS/${CINDY_EXE})`,
+    );
+  }
+}
+
 /**
  * macOS Live Activity (Agent Island in the system Dynamic Island). `build.mjs` skips
  * every step unless the macOS 27.3 SDK and Apple silicon are available, so older
@@ -1085,6 +1153,12 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
         path.join(temporary, 'cindy-linux-desktop-capture'),
         path.join(destDir, 'cindy-linux-desktop-capture'),
       );
+      // Optional GNOME (Mutter/PipeWire) capture: builders without its headers
+      // skip it, and must not ship an earlier checkout's binary instead.
+      const gnomeCapture = path.join(destDir, 'cindy-linux-gnome-capture');
+      fs.rmSync(gnomeCapture, { force: true });
+      if (fs.existsSync(path.join(temporary, 'cindy-linux-gnome-capture')))
+        fs.copyFileSync(path.join(temporary, 'cindy-linux-gnome-capture'), gnomeCapture);
       const clipboard = spawnSync(
         process.execPath,
         [
@@ -1366,6 +1440,46 @@ function buildWindowsTaskbarAddon(platform: ForgePlatform, arch: ForgeArch): voi
   } finally {
     fs.rmSync(build, { recursive: true, force: true });
   }
+}
+
+/** Rust targets of the Agent-Net native engine's Node module, by the platform and architecture being packaged. */
+const AGENT_NET_NATIVE_TARGETS: Record<string, string> = {
+  'win32-x64': 'x86_64-pc-windows-msvc',
+  'win32-arm64': 'aarch64-pc-windows-msvc',
+  'darwin-x64': 'x86_64-apple-darwin',
+  'darwin-arm64': 'aarch64-apple-darwin',
+  'linux-x64': 'x86_64-unknown-linux-gnu',
+  'linux-arm64': 'aarch64-unknown-linux-gnu',
+};
+
+/**
+ * The Agent-Net worker's native engine (packages/agent-net-native/node), built from source for the target being packaged and
+ * staged beside the worker bundle; the worker runs its transport on it, and on WASM without it (agentNetRuntime.ts
+ * `agentNetNative`). A module left from another target or older sources is removed first, so none is ever shipped stale.
+ * Windows packaging already needs Cargo (updater, taskbar), so there a failed build fails the package; elsewhere a machine
+ * without Rust packages without it, as ordinary builds do not depend on Rust (docs/agent-net-plan.md), unless
+ * CINDY_REQUIRE_AGENT_NET_NATIVE=1.
+ */
+function stageAgentNetNative(platform: ForgePlatform, arch: ForgeArch): void {
+  const dest = path.join(__dirname, 'resources', 'agent-net', 'cindy-agent-net.node');
+  fs.rmSync(dest, { force: true });
+  const required = platform === 'win32' || process.env.CINDY_REQUIRE_AGENT_NET_NATIVE === '1';
+  const target = AGENT_NET_NATIVE_TARGETS[`${platform}-${arch}`];
+  if (!target) {
+    if (required) throw new Error(`[forge] No Agent-Net native engine target for ${platform}-${arch}`);
+    console.warn(`[forge:prePackage] Agent-Net native engine: no target for ${platform}-${arch}; the worker uses WASM`);
+    return;
+  }
+  const result = spawnSync(
+    process.execPath,
+    [path.join(__dirname, '..', '..', 'packages', 'agent-net-native', 'node', 'build.mjs'), '--target', target, '--out', dest],
+    { stdio: 'inherit', windowsHide: true },
+  );
+  if (!result.error && result.status === 0) return;
+  fs.rmSync(dest, { force: true });
+  const reason = result.error?.message ?? `exited ${result.status}`;
+  if (required) throw new Error(`[forge] Agent-Net native engine build failed (${target}): ${reason}`);
+  console.warn(`[forge:prePackage] Agent-Net native engine not built for ${target} (${reason}); the worker uses WASM`);
 }
 
 function buildWindowsAtomicRenameHelper(platform: ForgePlatform, arch: ForgeArch): void {
@@ -2137,6 +2251,7 @@ const config: ForgeConfig = {
       buildWindowsGamepadHelper(platform, arch);
       buildWindowsAtomicRenameHelper(platform, arch);
       buildWindowsTaskbarAddon(platform, arch);
+      stageAgentNetNative(platform, arch);
       if (platform === 'darwin') {
         const desktopBlurBuild = spawnSync(
           process.execPath,
@@ -2199,6 +2314,7 @@ const config: ForgeConfig = {
           console.log(`[forge:postPackage] staged ${noticeName} + restricted component disclosure`);
           signPackagedExes(buildPath);
           applyMacPackagedDisplayName(buildPath, opts.platform);
+          await applyMacUniqueExecutableUuid(buildPath, opts.platform);
           installMacAgentActivityExtension(buildPath, opts.platform, opts.arch);
           installMacDesktopWidgetsExtension(buildPath, opts.platform, opts.arch);
         }

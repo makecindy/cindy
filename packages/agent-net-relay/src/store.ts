@@ -68,7 +68,8 @@ export class Store implements RelayStore {
       }
       state = parsed;
       for (const saved of [state.sharing, state.privateSharing]) if (saved && (saved.version !== 1 || ['tasks', 'invitations', 'shares', 'links', 'requests', 'credentials', 'bindings']
-        .some(key => !Array.isArray((saved as unknown as Record<string, unknown>)[key])))) throw new Error('INVALID_AGENT_NET_SHARING_STATE');
+        .some(key => !Array.isArray((saved as unknown as Record<string, unknown>)[key]))
+        || saved.linkedShares !== undefined && !Array.isArray(saved.linkedShares))) throw new Error('INVALID_AGENT_NET_SHARING_STATE');
       if (state.delegationRequests && !Array.isArray(state.delegationRequests)) throw new Error('INVALID_AGENT_NET_DELEGATION_REQUESTS');
       const map = (value: unknown) => value === undefined || (!!value && typeof value === 'object' && !Array.isArray(value));
       if ((state.primaryNetworkId !== undefined && typeof state.primaryNetworkId !== 'string')

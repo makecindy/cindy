@@ -85,6 +85,9 @@ import type { Effort } from '@/lib/userPreferences.types';
 import { extractIpcError } from '@/utils/ipcError';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Tip } from '@/components/ui/tooltip';
+import { FieldVoiceInputNotice } from '@/voice-input/FieldVoiceInputNotice';
+import { useFieldVoiceInput } from '@/voice-input/useFieldVoiceInput';
+import { VoiceInputButton } from '@/voice-input/VoiceInputButton';
 import {
   DEFAULT_ORCA_WORKER_PERMISSION_MODE,
   ORCA_WORKER_PERMISSION_MODES,
@@ -264,7 +267,10 @@ export function CreateWorkerPopover({
   const [prefs, setPrefs] = useState<WorkerCreationPrefs>(DEFAULT_WORKER_CREATION_PREFS);
   const [prefsRestored, setPrefsRestored] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submittingVoice, setSubmittingVoice] = useState(false);
   const submittingRef = useRef(false);
+  const roleInputRef = useRef<HTMLInputElement>(null);
+  const taskInputRef = useRef<HTMLTextAreaElement>(null);
   const [executionDevices, setExecutionDevices] = useState<ExecutionDeviceOption[]>([]);
   const [executionDeviceId, setExecutionDeviceId] = useState<string | null>(null);
   const [executionAgentDevices, setExecutionAgentDevices] = useState<{
@@ -292,7 +298,7 @@ export function CreateWorkerPopover({
   const localProjectEnabled =
     !!leadSessionId && !leadDeviceId && !sshRemote && !executionDeviceId && !isSidebarWindow();
   const project = useWorkerProjectSelection(open, leadSessionId, localProjectEnabled);
-  // 选中的插件引擎；null = 用内置模型。引擎只在本机启动，也不用 worktree。被停用、卸载或报告
+  // 选中的插件引擎；null = 用内置模型。引擎只在本机启动，worktree 与内置 Worker 相同。被停用、卸载或报告
   // 不可用时按没选处理，回到下面的内置模型。
   const [pluginEngine, setPluginEngine] = useState<PluginEngineSelection | null>(null);
   useEffect(() => { if (!open) setPluginEngine(null); }, [open]);
@@ -303,7 +309,6 @@ export function CreateWorkerPopover({
     () => (pluginEnginesAllowed ? resolveActivePluginEngine(pluginEngineList, pluginEngine) : null),
     [pluginEnginesAllowed, pluginEngineList, pluginEngine],
   );
-  const pluginEngineWorktree = !!activePluginEngine && !!project.fields.worktree;
   const pluginEnginePicker = useMemo(
     () => pluginEnginesAllowed && pluginEngineList.length
       ? {
@@ -386,6 +391,13 @@ export function CreateWorkerPopover({
           setPluginEngine(null);
           setModelGroup(selection.id);
         },
+        // 本机的 Worker：合并整个供应商的路由像一个供应商列出来，选其中的模型后补记路由(另一台电脑的配置里没有这类路由)。
+        ...(workerHostDeviceId ? {} : {
+          onAttach: (selection) => {
+            setPluginEngine(null);
+            setModelGroup(selection.id);
+          },
+        }),
       }
     : undefined;
   const activeModels = useMemo(() => {
@@ -1094,9 +1106,9 @@ export function CreateWorkerPopover({
     activeRole.length <= 32 &&
     !remoteDirInvalid &&
     (!requireWorkerPermissionModeSupport || !remoteWorkerPermissionModeUnsupported) &&
-    // 插件引擎不读内置模型目录与来源：只需不选 worktree。
+    // 插件引擎不读内置模型目录与来源。
     (activePluginEngine
-      ? !pluginEngineWorktree
+      ? true
       : modelGroup
         ? modelGroupsAllowed
         : !remoteModelListBlocked && !agentLocationUnsendable && !rememberedSourceUnavailable && !!currentModel);
@@ -1110,9 +1122,37 @@ export function CreateWorkerPopover({
     [],
   );
 
+  const taskVoice = useFieldVoiceInput({
+    draftKey: `${open ? 'open' : 'closed'}:${selectedRole ?? 'custom'}`,
+    inputRef: taskInputRef,
+    value: initialTask,
+    onChange: (next) => {
+      interactedRef.current = true;
+      setInitialTask(next);
+    },
+    disabled: isSubmitting,
+    active: open,
+  });
+  const taskVoiceRef = useRef(taskVoice);
+  taskVoiceRef.current = taskVoice;
+
   const handleCreate = useCallback(async () => {
     if (!canCreate || submittingRef.current) return;
     submittingRef.current = true;
+    let submittedTask = initialTask;
+    if (taskVoiceRef.current.isBusy) {
+      setSubmittingVoice(true);
+      try {
+        const stoppedTask = await taskVoiceRef.current.stop();
+        if (stoppedTask === null) {
+          submittingRef.current = false;
+          return;
+        }
+        submittedTask = stoppedTask;
+      } finally {
+        setSubmittingVoice(false);
+      }
+    }
     setIsSubmitting(true);
     if (activePluginEngine) {
       // 插件引擎 Worker：在这台电脑运行，不用内置模型目录、来源与 Fast；内置模型的记忆不改。
@@ -1124,7 +1164,7 @@ export function CreateWorkerPopover({
           model: activePluginEngine.modelId,
           ...(activePluginEngine.effort ? { effort: activePluginEngine.effort } : {}),
           providerId: activePluginEngine.engine.providerId,
-          initialTask,
+          initialTask: submittedTask,
           ...(supportsWorkerPermissionModeSelection
             ? { workerPermissionMode: selectedWorkerPermissionMode }
             : {}),
@@ -1168,7 +1208,7 @@ export function CreateWorkerPopover({
     // 自定义角色同时留在预设里，下次打开回到它。
     const starterTaskKey = workerStarterTaskKey(activeRole);
     const rememberedTask =
-      starterTaskKey && initialTask === t(starterTaskKey) ? undefined : initialTask;
+      starterTaskKey && submittedTask === t(starterTaskKey) ? undefined : submittedTask;
     const rememberedPermission = supportsWorkerPermissionModeSelection
       ? selectedWorkerPermissionMode
       : undefined;
@@ -1246,7 +1286,7 @@ export function CreateWorkerPopover({
         effort: submitEffort,
         fast: currentModelSupportsFast ? fast : undefined,
         providerId: submitProviderId,
-        initialTask,
+        initialTask: submittedTask,
         ...(supportsWorkerPermissionModeSelection
           ? { workerPermissionMode: selectedWorkerPermissionMode }
           : {}),
@@ -1300,8 +1340,6 @@ export function CreateWorkerPopover({
     remoteRoles,
   ]);
 
-  const roleInputRef = useRef<HTMLInputElement>(null);
-  const taskInputRef = useRef<HTMLTextAreaElement>(null);
   const openerRef = useRef<HTMLElement | null>(null);
   const templateLabelId = useId();
   const moreSettingsId = useId();
@@ -1331,7 +1369,9 @@ export function CreateWorkerPopover({
     .filter((part): part is string => !!part)
     .join(' · ');
   const handleClose = useCallback(() => {
-    if (!submittingRef.current) onClose();
+    if (submittingRef.current) return;
+    if (taskVoiceRef.current.isBusy) void taskVoiceRef.current.cancel();
+    onClose();
   }, [onClose]);
 
   return (
@@ -1364,7 +1404,7 @@ export function CreateWorkerPopover({
           if (openerRef.current?.isConnected) openerRef.current.focus({ preventScroll: true });
         }}
         onEscapeKeyDown={(event) => {
-          if (submittingRef.current || event.isComposing || event.keyCode === 229) event.preventDefault();
+          if (submittingRef.current || taskVoiceRef.current.isBusy || event.isComposing || event.keyCode === 229) event.preventDefault();
         }}
         style={WINDOW_NO_DRAG_STYLE}
       >
@@ -1382,7 +1422,7 @@ export function CreateWorkerPopover({
           <button
             type="button"
             aria-label={t('orca.createWorker.closeAria')}
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
             disabled={isSubmitting}
             onClick={handleClose}
           >
@@ -1488,10 +1528,11 @@ export function CreateWorkerPopover({
             aria-label={t('orca.createWorker.initialTaskLabel')}
             className="block h-[96px] w-full resize-none bg-transparent px-3.5 pb-1 pt-3 text-13 leading-snug text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)] outline-none"
             placeholder={t('orca.createWorker.initialTaskPlaceholder')}
-            value={initialTask}
+            value={taskVoice.displayText}
+            readOnly={taskVoice.isBusy || submittingVoice}
             onChange={(e) => setInitialTask(e.target.value)}
           />
-          {/* 底部一行与输入框同序:权限在左,模型在右。 */}
+          {/* 底部一行与输入框同序:权限在左,模型和语音在右。 */}
           <div className="flex min-w-0 items-center gap-1 px-1.5 pb-1.5">
             {remoteWorkerPermissionModeUnsupported ? null : (
               <div data-testid="worker-permission-mode" className="flex min-w-0 shrink-0 items-center">
@@ -1515,7 +1556,7 @@ export function CreateWorkerPopover({
                 />
               </div>
             )}
-            <div className="ml-auto flex min-w-0 items-center justify-end gap-1">
+            <div className="ml-auto flex min-w-0 items-center justify-end gap-1.5">
               {deviceId && remoteProviders.unsupported && currentModelSupportsFast && (
                 <FastModeToggle enabled={!!fast} onToggle={() => setFast((v) => !v)} />
               )}
@@ -1601,14 +1642,20 @@ export function CreateWorkerPopover({
                   !(agent === 'codex' || agent === 'pi') ? undefined : updateFast
                 }
               />
+              <VoiceInputButton
+                {...taskVoice.buttonProps}
+                disabled={isSubmitting || submittingVoice}
+                testId="collab-task-voice"
+              />
             </div>
           </div>
         </div>
-        {pluginEngineWorktree ? (
-          <p className="-mt-2 mb-4 text-12 leading-snug text-[var(--error-fg)]" role="status">
-            {t('orca.createWorker.pluginEngineNoWorktree')}
-          </p>
-        ) : activePluginEngine || modelGroup ? null : noAvailableLocalModels ? (
+        <FieldVoiceInputNotice
+          error={taskVoice.lastError}
+          speakerFiltered={taskVoice.speakerFiltered}
+          className="-mt-2 mb-4"
+        />
+        {activePluginEngine || modelGroup ? null : noAvailableLocalModels ? (
           <p className="-mt-2 mb-4 text-12 leading-snug text-[var(--error-fg)]" role="status">
             {t('orca.createWorker.noAvailableModels', {
               agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',
@@ -1687,11 +1734,11 @@ export function CreateWorkerPopover({
           variant="cta"
           palette="confirmation"
           size="lg"
-          loading={isSubmitting}
+          loading={isSubmitting || submittingVoice}
           type="button"
           className="w-full"
-          disabled={!canCreate}
-          aria-busy={isSubmitting}
+          disabled={!canCreate || submittingVoice}
+          aria-busy={isSubmitting || submittingVoice}
           onClick={handleCreate}
         >
           {resolvedSubmitLabel}
