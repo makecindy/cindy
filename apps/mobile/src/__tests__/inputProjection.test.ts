@@ -800,3 +800,60 @@ describe('normalizeInputProjection usageLimitWait', () => {
       .toBeNull();
   });
 });
+
+describe('plugin engine steerUnsupported and acp skill queue handling', () => {
+  it('preserves steerUnsupported in projection and disables the queue row steer action', () => {
+    const queued = buildQueuedTextMessage(session({ agentKind: 'acp', providerId: 'acp-plugin:dsh:dsh' }), 'follow up', new Date(), 'q-acp');
+    const projection = normalizeInputProjection({
+      sessionId: 's-acp',
+      pendingQueue: [queued],
+      steerUnsupported: true,
+    });
+    expect(projection.steerUnsupported).toBe(true);
+    expect(normalizeInputProjection({ sessionId: 's-legacy' }).steerUnsupported).toBe(false);
+
+    const row = buildQueueRowPresentation({
+      item: queued,
+      originalIndex: 0,
+      projection,
+      queueLength: 1,
+    });
+    expect(row.actions.steer.disabled).toBe(true);
+    expect(row.actions.steer.disabledReason).toBe(i18n.t('message.queue.steerUnsupportedNotice'));
+  });
+
+  it('resolves acp skills on local plugin engines and degrades gracefully on older hosts or remote engines', async () => {
+    const acpSession = session({ agentKind: 'acp', providerId: 'acp-plugin:dsh:dsh' });
+    const maker = {
+      listAgentSkills: vi.fn().mockResolvedValue({
+        success: true,
+        skills: [{ kind: 'agent-skill', name: 'review', runtimeCommandName: 'review' }],
+      }),
+    };
+    const queued = await buildQueuedMessageForEngine(maker, acpSession, '/skill:review check', undefined, 'q-skill', {
+      slashCommandRanges: [{ start: 0, end: 13 }],
+    });
+    expect(maker.listAgentSkills).toHaveBeenCalledWith('acp', { workingDir: '/repo' });
+    expect(queued.text).toBe('/review check');
+
+    const oldHostMaker = {
+      listAgentSkills: vi.fn().mockRejectedValue(new Error('[INVALID_PARAMS] unsupported agentKind')),
+    };
+    const degraded = await buildQueuedMessageForEngine(oldHostMaker, acpSession, '/skill:review check', undefined, 'q-old', {
+      slashCommandRanges: [{ start: 0, end: 13 }],
+    });
+    expect(degraded.text).toBe('/review check');
+
+    const remoteMaker = { listAgentSkills: vi.fn() };
+    const remoteQueued = await buildQueuedMessageForEngine(
+      remoteMaker,
+      session({ agentKind: 'acp', providerId: 'acp-plugin:dsh:dsh', agentDeviceId: 'studio' }),
+      '/skill:review check',
+      undefined,
+      'q-remote',
+      { slashCommandRanges: [{ start: 0, end: 13 }] },
+    );
+    expect(remoteMaker.listAgentSkills).not.toHaveBeenCalled();
+    expect(remoteQueued.text).toBe('/review check');
+  });
+});
