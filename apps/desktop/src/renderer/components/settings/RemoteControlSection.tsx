@@ -10,7 +10,7 @@ import { remoteControlSettings } from './RemoteControlSection.settings-search';
  * 实例运维(CloudDeviceDirectory),且云实例卡与本机卡一起常驻,「我的设备」收起时
  * 也可见;其余账号的页面与请求不变。
  * 「我的设备」也是设备管理(用户裁决 2026-11-25):有云主机入口的组织成员在本机卡下面多一行「云主机」
- * (CloudComputerRow,与侧栏菜单同一份入口),添加、查看进度和管理都去网页;开好的云主机就是列表里的设备。
+ * (CloudComputerRow),添加、查看进度和管理都去网页;开好的云主机就是列表里的设备。
  * (Slack 连接子块已迁至「IM 机器人」页 Cindy 栏, 见 ImBotSection.tsx + HookConnectionsSection.tsx)
  *
  * 「Agent-Net (Beta)」开关(useRemoteConnectionV2,默认关，由主进程保存并切换这台电脑的传输):

@@ -2849,6 +2849,25 @@ describe('Chat Server result delivery and refresh', () => {
       expect(deps.abortLane).not.toHaveBeenCalled();
     });
 
+    // 2026-11-26 incident: the selected engine was on another computer and the group only saw
+    // RUNTIME_ERROR. The task now opens on this computer's model; the reply that answers with it
+    // names the substitute once, ahead of the answer (bot-group-chat.md §9). Unit tier, faked host.
+    it('names the substitute model even when the task settles before dispatch returns', async () => {
+      deps.ensureGroupAssistantSession = vi.fn(async () => ({ ok: true as const, sessionId: 'group-task-1', created: true, modelFallback: { name: 'GPT Local' } }));
+      deps.readGroupTaskStatus = vi.fn(async () => ({ title: 'Room', state: 'idle' as const, model: 'GPT Local' }));
+      // #13163 review, unit: the earlier test only completed the turn after the
+      // status read. Settle an accepted input before dispatch even returns.
+      deps.dispatch = vi.fn(async input => {
+        await input.onAccepted();
+        expect(await service.settleLaneTurn({ ...terminal, sessionId: input.targetSessionId, activeInputClientId: input.clientId ?? null, resultText: 'Fixed in #12' })).toBe(true);
+        return { ok: true as const, targetSessionId: input.targetSessionId, wakeKind: 'queued' };
+      });
+      await ask(5, '@Cindy please fix it');
+      expect(deliveries()).toHaveLength(1);
+      expect(deliveries()[0][2].content[0]).toEqual({ type: 'text',
+        text: `${t('bots.groupChat.assistant.modelFallback').replaceAll('{{model}}', 'GPT Local')}\n\nFixed in #12` });
+    });
+
     // #10163 review (Greptile): a teammate's reply that names Cindy keeps the human who started the chain
     // as requester, but its words are the teammate's. Only the owner's own message carries the owner's
     // verified words; this one is labeled as the teammate and carries no owner stamp.
@@ -3130,8 +3149,7 @@ describe('Chat Server result delivery and refresh', () => {
       if (!result.ok) throw new Error(result.errorCode);
       expect(result.group.round.speakers.map(s => s.executionStatus)).toEqual([status, 'running']);
       expect(result.group.round.canStop).toBe(requester === selfId && status === 'running');
-      // Only this account's own working agent (here self-requested Cindy) drives the roster running indicator.
-      expect(result.group.teammateActivity?.phase).toBe(requester === selfId ? 'running' : 'idle');
+      expect(result.group.teammateActivity?.phase).toBe('idle');
     });
 
     // The member list shows the group's Cindy as plain Cindy with Cindy's artwork, nobody's teammate;

@@ -12101,6 +12101,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}さんがグループに参加しました",
+        "memberJoinedList": "{{names}}がグループに参加しました",
+        "memberJoinedSummary": "{{names}}ほか{{others}}人がグループに参加しました",
         "memberFailed": "{{name}} は今回返信できませんでした",
         "memberTimeout": "{{name}} の返信に時間がかかりすぎたため、今回はスキップしました",
         "memberUnavailable": "{{name}} は現在利用できないため、今回は発言しませんでした",
@@ -12281,6 +12283,8 @@
         "threadNew": "スレッドの新しいメッセージ",
         "replyingTo": "「{{name}}」への返信：{{text}}",
         "filesOutsideWorkingDir": "作業ディレクトリ外のファイルは添付されていません。",
+        "modelFallback": "選択したモデルはこのコンピューターにないため、今回は {{model}} で回答します。",
+        "modelFallbackUnnamed": "選択したモデルはこのコンピューターにないため、今回はこのコンピューターで使えるモデルで回答します。",
         "earlierOmitted": "（それ以前のメッセージは省略）",
         "actingFor": "{{name}} · {{person}} の代わり",
         "checkout": {
@@ -17093,9 +17097,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "クラウドマシンを追加",
-        "preparingCloud": "クラウドマシンを準備中",
-        "manageCloud": "クラウドマシンを管理",
         "allMachines": "すべて",
         "localMachine": "このデバイス",
         "connecting": "接続中…",

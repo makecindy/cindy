@@ -12101,6 +12101,8 @@
       },
       "notice": {
         "memberJoined": "{{name}}入群議",
+        "memberJoinedList": "{{names}}入群議",
+        "memberJoinedSummary": "{{names}}及餘{{others}}人入群議",
         "memberFailed": "{{name}}此番未能回覆",
         "memberTimeout": "{{name}}久未回覆，此番暫略之",
         "memberUnavailable": "{{name}}今不可用，此番未發言",
@@ -12281,6 +12283,8 @@
         "threadNew": "話題新言",
         "replyingTo": "答「{{name}}」：{{text}}",
         "filesOutsideWorkingDir": "部分檔案不在工作目錄內，未附上。",
+        "modelFallback": "所擇之模不在此機，今以 {{model}} 應之。",
+        "modelFallbackUnnamed": "所擇之模不在此機，今以本機可用之模應之。",
         "earlierOmitted": "（更早之言略之）",
         "actingFor": "{{name}} · 代 {{person}}",
         "checkout": {
@@ -17093,9 +17097,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "增雲機",
-        "preparingCloud": "雲機備置中",
-        "manageCloud": "理雲機",
         "allMachines": "諸機",
         "localMachine": "此機",
         "connecting": "方連…",

@@ -97,6 +97,8 @@
   },
   "notice": {
     "memberJoined": "{{name}}加入了群聊",
+    "memberJoinedList": "{{names}}加入了群聊",
+    "memberJoinedSummary": "{{names}} 及另外 {{others}} 人加入了群聊",
     "memberFailed": "{{name}}這次沒能回覆",
     "memberTimeout": "{{name}}太久沒有回覆，這次先跳過",
     "memberUnavailable": "{{name}}現在無法使用，這次沒有發言",

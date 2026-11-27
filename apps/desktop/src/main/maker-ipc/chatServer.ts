@@ -165,6 +165,8 @@ interface Running {
   laneLookup?: Promise<void>;
   replyQuote?: { messageId: string; members: Member[]; multiple: boolean };
   attachmentAfter?: string;
+  /** The group's Cindy answered with this computer's model instead of the selected one: said once, before the reply. */
+  modelNotice?: string;
   textProgress?: { scope: string; after: string; seen: Map<string, string> };
   settlement?: { terminal: BotGroupLaneTerminal; cancelled?: boolean; payload?: Record<string, unknown>; autoQuote?: ReturnType<typeof buildBotGroupQuoteCard>; reply?: { sourceText: string; text: string; attachments: ChatUploadAttachment[] }; fileReply?: Awaited<ReturnType<typeof prepareChatReplyFiles>>; retryAt: number; keepLease?: boolean; refused?: boolean };
   delivery?: Promise<void>;
@@ -2507,9 +2509,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       assistantComputers.unshift({ id: selfDeviceId, name: hostname() || selfDeviceId });
     return { ...(!direct && boundAssistantDevice && assistantComputers ? { assistantComputers, assistantDeviceId: s.room.assistant_device_id ?? null } : {}), conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? chatGroupNotificationPreference(s.room, mainRead) : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, ...(!direct && s.room.org_name ? { orgName: s.room.org_name } : {}), ...(!direct && s.room.external === true ? { external: true } : {}), replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       teammateActivity: teammateChatActivity({ executions, plans: serverPlans, planning: !!deciding,
-        archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0,
-        isOwnWork: ({ botId, requesterId, maskOwnerId }) =>
-          maskOwnerId ? maskOwnerId === selfId : !!botId && mayStopWork(s.members, botId, requesterId) }),
+        archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0 }),
       members: s.members.filter(m => m.state === 'joined').map(m => {
         // The group's own Cindy: plain 「Cindy」 with Cindy's artwork, nobody's companion.
         if (isAssistant(m)) return { botId: m.id, actorId: m.id, actorKind: 'bot' as const, assistant: true, isSelf: false, role: m.role,
@@ -3192,6 +3192,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 // Keep the notice inside the existing text budget, including on
                 // retries. It describes omitted references, not a failed turn.
                 if (pending.fileReply.omittedFiles) contentText = `${t('bots.groupChat.assistant.filesOutsideWorkingDir')}\n\n${contentText}`;
+                if (run.modelNotice) contentText = `${run.modelNotice}\n\n${contentText}`;
                 produced.push(...mergeChatReplyAttachments(pending.reply.attachments, pending.fileReply.attachments));
                 if (produced.length > BOT_GROUP_ATTACHMENTS_MAX) throw new Error('ATTACHMENT_UNAVAILABLE');
               }
@@ -3507,6 +3508,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       // Only the owner's own message speaks for the owner; a teammate that named Cindy in its reply is labeled as itself.
       const ownWords = source.origin === 'user' && source.author?.kind === 'human' && source.authorId === selfId && !source.maskAttribution;
       const speaker = s.members.find(m => m.id === source.authorId);
+      // A fast turn can settle before dispatch returns. The opener already knows the fallback,
+      // so its notice must be ready without waiting on the executor's task-status lookup.
+      if (task.modelFallback) {
+        const { name } = task.modelFallback;
+        run.modelNotice = name
+          ? t('bots.groupChat.assistant.modelFallback').replaceAll('{{model}}', () => name)
+          : t('bots.groupChat.assistant.modelFallbackUnnamed');
+      }
       const dispatched = await deps.dispatch({ groupAssistantTask: true, targetSessionId: sessionId, clientId: run.clientId, message, persistedContent: visible,
         // The requester's own words are the request this turn speaks for; the group's messages are background.
         ...(ownWords ? { autoReviewUserText: { kind: 'agent-request' as const, request: { sessionId, clientId: run.clientId, plainBody: true, delegatedText: words } } } : {}),

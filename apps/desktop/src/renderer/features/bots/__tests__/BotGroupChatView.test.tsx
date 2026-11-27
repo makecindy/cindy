@@ -48,6 +48,8 @@ const mocks = vi.hoisted(() => ({
   // Keep translation identity stable so attachment effects do not reload on every render.
   t: (key: string, options?: Record<string, unknown>) =>
     key === 'bots.groupChat.assistant.actingFor' ? `${options?.name} · for ${options?.person}`
+      : key === 'bots.groupChat.notice.memberJoinedSummary' ? `${key}:${String(options?.names)}:${String(options?.others)}`
+      : key === 'bots.groupChat.notice.memberJoinedList' ? `${key}:${String(options?.names)}`
       : options && 'name' in options ? `${key}:${String(options.name)}`
       : key === 'bots.groupChat.memberCount' ? `${key}:${String(options?.count)}` : key,
   groupId: 'g1',
@@ -1801,6 +1803,40 @@ describe('BotGroupChatView', () => {
     expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
   });
 
+  it('collapses consecutive joined notices into one line and expands inline for 3+ members', async () => {
+    const joined = (id: string, sequence: number, authorName: string) => msg({
+      id, sequence, kind: 'notice', authorKind: 'system', authorName, authorBotId: null,
+      noticeCode: 'member-joined', content: 'Fallback text', createdAt: 1_700_000_000_000 + sequence * 1000,
+    });
+    mocks.getBotGroup.mockResolvedValue({
+      ok: true,
+      group: detail({
+        messages: [
+          joined('j1', 1, 'Alice'),
+          joined('j2', 2, 'Bob'),
+          msg({ id: 'm1', sequence: 3, kind: 'message', authorKind: 'user', authorName: 'Me', content: 'Welcome' }),
+          joined('j3', 4, 'Carol'),
+          joined('j4', 5, 'Dave'),
+          joined('j5', 6, 'Carol'),
+          joined('j6', 7, 'Eve'),
+        ],
+      }),
+    });
+    renderView();
+    const pair = await screen.findByText('bots.groupChat.notice.memberJoinedList:Alicebots.groupChat.memberSeparatorBob');
+    expect(pair.tagName).toBe('P');
+    const summaryButton = screen.getByTestId('bot-group-joined-summary');
+    expect(summaryButton.getAttribute('aria-expanded')).toBe('false');
+    expect(summaryButton.textContent).toBe('bots.groupChat.notice.memberJoinedSummary:Carolbots.groupChat.memberSeparatorDave:1');
+    fireEvent.click(summaryButton);
+    expect(summaryButton.getAttribute('aria-expanded')).toBe('true');
+    expect(summaryButton.textContent).toBe(
+      'bots.groupChat.notice.memberJoinedList:Carolbots.groupChat.memberSeparatorDavebots.groupChat.memberSeparatorEve',
+    );
+    fireEvent.click(summaryButton);
+    expect(summaryButton.getAttribute('aria-expanded')).toBe('false');
+  });
+
   it('renders user, teammate, notice and round-end rows with the header lockup', async () => {
     Object.defineProperty(window.electronAPI, 'platform', { configurable: true, value: 'darwin' });
     renderView();
@@ -2210,6 +2246,39 @@ describe('BotGroupChatView', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(input.value).toBe('查一下 @小满 ');
     expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+  });
+
+  // Group chat §4.1, unit: the real group and topic inputs must show an active
+  // composition's @ci, leave Enter to the IME, and replace its committed text on click.
+  // The existing picker tests only exercise committed input.
+  it.each([false, true])('picks a member by name during IME composition (topic %s)', async inTopic => {
+    const members = [
+      { ...detail().members[0]!, name: 'Cindy' },
+      { ...detail().members[1]!, name: '小满' },
+    ];
+    mocks.getBotGroup.mockResolvedValue({ ok: true, group: detail({ serverBacked: inTopic, members }) });
+    renderView();
+    if (inTopic) {
+      fireEvent.click((await screen.findAllByRole('button', { name: 'bots.groupChat.server.startTopic' }))[0]!);
+    }
+    const scope = inTopic ? within(await screen.findByRole('complementary')) : screen;
+    const input = (await scope.findByRole('textbox')) as HTMLTextAreaElement;
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: '请 @', selectionStart: 3 } });
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: '请 @ci', selectionStart: 5 } });
+    const option = await scope.findByRole('option', { name: 'Cindy' });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(input.value).toBe('请 @ci');
+    expect(mocks.sendBotGroupMessage).not.toHaveBeenCalled();
+    expect(mocks.reply).not.toHaveBeenCalled();
+
+    fireEvent.click(option);
+    fireEvent.compositionEnd(input, { data: '词' });
+    fireEvent.change(input, { target: { value: '请 @词', selectionStart: 4 } });
+    await waitFor(() => expect(input.value).toBe('请 @Cindy '));
+    expect(document.activeElement).toBe(input);
+    expect(scope.queryByRole('listbox')).toBeNull();
   });
 
   it('keeps a selected target and its draft across roster removal and a rejected retry', async () => {
