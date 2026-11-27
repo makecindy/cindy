@@ -32,6 +32,7 @@ import {
   stripEncryptedContentFromBody,
 } from './transform.js';
 import { createXaiModelInputRecoveryRule } from './xai-model-input.js';
+import { missingReasoningItemRecoveryRule } from './missing-reasoning-recovery.js';
 import { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
 import { closeTestConnections, fetchOverTestConnections as fetch, listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createThreadStripController } from './thread-strip-controller.js';
@@ -121,6 +122,126 @@ async function post(url: string, body: unknown): Promise<{ status: number; text:
   });
   return { status: res.status, text: await res.text() };
 }
+
+// #9928 / integration: an upstream 404 names one unsaved reasoning item in a
+// stateless replay. Legacy 400/422 rule tests do not cover this status or its buffer limit.
+describe('stateless Responses reasoning recovery', () => {
+  const stale = { type: 'reasoning', id: 'rs_deepseek', encrypted_content: null };
+  const retained = [
+    { type: 'reasoning', id: 'rs_other', encrypted_content: null },
+    { type: 'reasoning', id: 'rs_deepseek', encrypted_content: 'sealed' },
+    { type: 'function_call_output', call_id: 'call_1', output: 'done' },
+    { role: 'user', content: 'continue' },
+  ];
+  const missing = JSON.stringify({
+    error: { message: "Item with id 'rs_deepseek' not found. Items are not persisted when `store` is set to false." },
+  });
+
+  it('retries gzip 404 once, removing only the named reasoning item', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(404, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+        res.end(gzipSync(missing));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"output":[]}');
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [missingReasoningItemRecoveryRule],
+    });
+
+    const reference = { type: 'item_reference', id: stale.id };
+    const request = { model: 'gpt-6.2-sol', store: false, input: [stale, reference, ...retained] };
+    expect(await post(proxy.url, request)).toEqual({ status: 200, text: '{"output":[]}' });
+    expect(upstream.bodies.map((body) => JSON.parse(body))).toEqual([request, { ...request, input: retained }]);
+  });
+
+  // Live #9928 repro: the gateway produced both a summary-only item and a
+  // sealed item from the foreign provider in the same history.
+  it('recovers the named encrypted reasoning rejection after the missing-item retry', async () => {
+    const foreignSealed = { type: 'reasoning', id: 'rs_foreign_sealed', encrypted_content: 'foreign' };
+    const invalid = JSON.stringify({ error: {
+      code: 'invalid_encrypted_content',
+      message: 'The encrypted content for item rs_foreign_sealed could not be verified. Reason: Encrypted content could not be decrypted or parsed.',
+    } });
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      res.writeHead(idx === 0 ? 404 : idx === 1 ? 400 : 200, { 'content-type': 'application/json' });
+      res.end([missing, invalid, '{"output":[]}'][idx] ?? invalid);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url, transformRequest: [], recoveryRules: [missingReasoningItemRecoveryRule],
+    });
+    const request = { store: false, input: [stale, foreignSealed, ...retained] };
+    expect(await post(proxy.url, request)).toEqual({ status: 200, text: '{"output":[]}' });
+    expect(upstream.bodies.map((body) => JSON.parse(body).input))
+      .toEqual([request.input, [foreignSealed, ...retained], retained]);
+  });
+
+  it('passes through a chunked 404 above the inspection cap without dropping bytes or retrying', async () => {
+    const tail = 'x'.repeat(128 * 1024);
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.write(missing);
+      res.end(tail);
+    });
+    upstreamClose = upstream.close;
+    const observed: Buffer[] = [];
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [missingReasoningItemRecoveryRule],
+      responseObserver: () => ({ onData: (chunk) => observed.push(chunk) }),
+    });
+
+    expect(await post(proxy.url, { store: false, input: [stale] }))
+      .toEqual({ status: 404, text: missing + tail });
+    expect(Buffer.concat(observed).toString()).toBe(missing + tail);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it('passes through a gzip 404 whose decoded body exceeds the inspection cap', async () => {
+    const original = missing + ' '.repeat(128 * 1024);
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(404, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+      res.end(gzipSync(original));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [missingReasoningItemRecoveryRule],
+    });
+
+    expect(await post(proxy.url, { store: false, input: [stale] }))
+      .toEqual({ status: 404, text: original });
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it.each([
+    { store: true, firstError: missing, requestCount: 1 },
+    { store: false, firstError: '{"error":"route not found"}', requestCount: 1 },
+    { store: false, firstError: missing, requestCount: 2 },
+  ])('preserves $firstError with store=$store after the available retry budget', async ({ store, firstError, requestCount }) => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(firstError);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [missingReasoningItemRecoveryRule],
+    });
+
+    expect(await post(proxy.url, { store, input: [stale] })).toEqual({ status: 404, text: firstError });
+    expect(upstream.bodies).toHaveLength(requestCount);
+  });
+});
 
 describe('anthropic-compat-proxy loopback port guard', () => {
   it('tracks Fetch standard bad ports used by HTTP clients', () => {

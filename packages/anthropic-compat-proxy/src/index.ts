@@ -14,6 +14,7 @@
  */
 
 export { createAnthropicCompatProxy } from './server.js';
+export { missingReasoningItemRecoveryRule } from './missing-reasoning-recovery.js';
 export { recoverInlineAttachments, recoverOversizedMessage } from './oversized-attachments.js';
 export type { OversizedBody, RecoveredAttachment, AttachmentKeeper } from './oversized-attachments.js';
 export type { OversizedRequestRecovery } from './types.js';

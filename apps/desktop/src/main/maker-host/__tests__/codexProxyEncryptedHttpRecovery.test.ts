@@ -382,3 +382,81 @@ describe('Codex Responses search dialect (Issue 8170)', () => {
     }
   });
 });
+
+// #9928 / integration: real host and loopback proxy. The encrypted-error cases
+// above don't cover a WS 400 without an ID followed by an HTTP missing-ID 404.
+it('recovers a DeepSeek reasoning replay after the OpenAI WebSocket rejects input item IDs', async () => {
+  const error = {
+    type: 'error', status: 400,
+    error: {
+      code: 'unsupported_parameter', param: 'input',
+      message: 'This request does not support user-supplied input item IDs.',
+    },
+  };
+  const stale = { type: 'reasoning', id: 'rs_deepseek', encrypted_content: null, summary: [] };
+  const sealed = { type: 'reasoning', id: 'rs_deepseek_sealed', encrypted_content: 'opaque-foreign', summary: [] };
+  const message = { type: 'message', role: 'user', content: [{ type: 'input_text', text: '继续' }] };
+  const replay = { model: 'gpt-6.2-sol', store: false, input: [stale, sealed, message] };
+  const forwarded: unknown[] = [];
+  const upstream = createServer(async (req, res) => {
+    const { input } = JSON.parse(await readBody(req)) as { input: Array<{ id?: string }> };
+    forwarded.push(input);
+    const hasStale = input.some((item) => item.id === stale.id);
+    const hasSealed = input.some((item) => item.id === sealed.id);
+    res.writeHead(hasStale ? 404 : hasSealed ? 400 : 200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(hasStale ? {
+      error: { message: "Item with id 'rs_deepseek' not found. Items are not persisted when `store` is set to false." },
+    } : hasSealed ? {
+      error: {
+        code: 'invalid_encrypted_content',
+        message: 'The encrypted content for item rs_deepseek_sealed could not be verified. Reason: Encrypted content could not be decrypted or parsed.',
+      },
+    } : { output: [] }));
+  });
+  const wsUpstream = new WebSocketServer({ noServer: true });
+  upstream.on('upgrade', (req, socket, head) => wsUpstream.handleUpgrade(req, socket, head, (ws) => {
+    ws.once('message', () => ws.send(JSON.stringify(error)));
+  }));
+  await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  proxyUpstream.url = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+  const clients: WebSocket[] = [];
+  try {
+    setCodexProxyAuthInjection('oauth-bearer');
+    await ensureCodexProxyReady();
+    registerComposed('session-resume', 'thread-resume', 'PRODUCT_PROMPT');
+    const connect = () => {
+      const url = getCodexProxyEndpoint()!.replace(/^http/, 'ws') + '/v1/responses';
+      const client = new WebSocket(url, { headers: { 'thread-id': 'thread-resume' } });
+      clients.push(client);
+      return client;
+    };
+    const socket = connect();
+    await once(socket, 'open');
+    const rejection = once(socket, 'message');
+    socket.send(JSON.stringify(replay));
+    const [frame] = await rejection;
+    expect(JSON.parse(frame.toString())).toEqual(error);
+    const closed = once(socket, 'close');
+    expect(armCodexHttpRecovery({
+      sessionId: 'session-resume', threadId: 'thread-resume', message: 'Bad request',
+      additionalDetails: frame.toString(),
+    })).toBe('responses_input_item_ids_unsupported');
+    await closed;
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const retry = connect();
+      retry.once('open', () => reject(new Error('expected HTTP fallback')));
+      retry.once('unexpected-response', (_req, res) => { res.resume(); resolve(res.statusCode); });
+      retry.once('error', reject);
+    });
+    expect(status).toBe(426);
+    expect((await postReplay(replay, 'thread-resume')).status).toBe(200);
+    expect(forwarded).toEqual([[stale, sealed, message], [sealed, message], [message]]);
+  } finally {
+    for (const client of clients) client.terminate();
+    unregister('session-resume');
+    await disposeCodexProxy();
+    wsUpstream.close();
+    upstream.closeAllConnections();
+    await new Promise<void>((resolve) => upstream.close(() => resolve()));
+  }
+});

@@ -135,6 +135,7 @@ const DEBUG_REQUEST_DUMP_MAX_BYTES = 64 * 1024;
 // 错误响应 (status >= 400) body 的 dump 上限。错误响应通常只是一个 JSON error 对象
 // (~几百字节),给 16KB 已经非常宽裕,超出按相同截断策略尾部追加 "... (truncated, total N bytes)"。
 const ERROR_RESPONSE_DUMP_MAX_BYTES = 16 * 1024;
+const RECOVERY_ERROR_BODY_LIMIT_BYTES = 64 * 1024;
 /**
  * 流式响应的终态事件:Responses `response.completed|failed|incomplete`、Anthropic
  * `message_stop`、Chat Completions `data: [DONE]`。见 forward() 里 client close 的收口。
@@ -910,15 +911,15 @@ function dumpBody(buf: Buffer, maxBytes: number): string {
  * 任何失败(未知编码 / 截断的压缩流 / 非法数据)都返回**原始 buffer 引用**, 调用方据此
  * 判断"是否成功解压"(decoded !== buf 即成功), 失败时日志退回原样, 不抛错、不影响主流程。
  */
-function decodeBodyForLog(buf: Buffer, contentEncoding: string | undefined): Buffer {
+function decodeBodyForLog(buf: Buffer, contentEncoding: string | undefined, maxOutputLength?: number): Buffer {
   if (!contentEncoding || buf.length === 0) return buf;
   const enc = contentEncoding.toLowerCase().trim();
   try {
-    if (enc === 'gzip' || enc === 'x-gzip') return gunzipSync(buf);
-    if (enc === 'br') return brotliDecompressSync(buf);
+    if (enc === 'gzip' || enc === 'x-gzip') return gunzipSync(buf, { maxOutputLength });
+    if (enc === 'br') return brotliDecompressSync(buf, { maxOutputLength });
     if (enc === 'deflate') {
       // deflate 有两种封装: zlib 头(inflateSync)和裸 deflate(inflateRawSync), 依次尝试。
-      try { return inflateSync(buf); } catch { return inflateRawSync(buf); }
+      try { return inflateSync(buf, { maxOutputLength }); } catch { return inflateRawSync(buf, { maxOutputLength }); }
     }
   } catch {
     // 截断的压缩流 / 非法数据 → 回退原始字节(日志里仍是乱码但不崩)
@@ -1166,7 +1167,7 @@ function forward(
     upstreamReq.destroy(new Error('client aborted before response completed'));
   });
 
-  upstreamReq.on('response', (upstreamRes) => {
+  const handleUpstreamResponse = (upstreamRes: IncomingMessage, skipRecovery = false): void => {
     // 请求已经因客户端断开或另一条 upstream error 路径收口时,不要再向同一个
     // ServerResponse 写 header/pipe;恢复上游读取以释放 socket。
     if (clientAborted || upstreamFailureHandled || clientRes.destroyed || upstreamResponseTerminal === 'client-aborted') {
@@ -1182,15 +1183,16 @@ function forward(
     }
     const status = upstreamRes.statusCode ?? 502;
 
-    // ── 上游 400/422 的透明重试 ──────────────────────────────────────────────
-    // 只对启用恢复规则的客户端错误(400/422)缓冲判定:
-    // 先把(很小的) 错误体完整缓冲下来, 在 'end' 找第一条 match 命中且 strip 出东西的规则,
-    // 剥字段重发最多一次, 对客户端透明；重试后只分类不可恢复的错误，不再重发。
-    // xAI 对不可反序列化 / 解不开的 encrypted_content 可能回 422 invalid-argument, 不能只认 400。
-    // 2xx 流式响应 / 其它 4xx5xx / 无适用规则走下面原有的 writeHead + pipe, 零额外延迟。
-    const activeRules = (status === 400 || status === 422)
-      ? recoveryRules.filter((r) => r.enabled() && (canRetry || r.unrecoverableCode))
-      : [];
+    const candidateRules = skipRecovery ? [] : recoveryRules.filter((rule) =>
+      (rule.statusCodes?.includes(status) ?? (status === 400 || status === 422)) &&
+      rule.enabled() && (canRetry || rule.unrecoverableCode),
+    );
+    const boundedErrorBody = status === 404 || recoveryRules.some(
+      (rule) => rule.boundedErrorBody && rule.statusCodes?.includes(status),
+    );
+    const recoveryBodyLimit = boundedErrorBody ? RECOVERY_ERROR_BODY_LIMIT_BYTES : Infinity;
+    const contentLength = Number(upstreamRes.headers['content-length']);
+    const activeRules = contentLength > recoveryBodyLimit ? [] : candidateRules;
     const recover413 = status === 413 && canRetry && recoverUpstreamOversized;
     const recoverSize400 = status === 400 && canRetry && recoverRequestSize;
     if (recover413) {
@@ -1251,6 +1253,7 @@ function forward(
     }
     if (activeRules.length > 0 || recover413 || recoverSize400) {
       const chunks: Buffer[] = [];
+      let bufferedBytes = 0;
       const failBufferedResponse = (
         reason: 'error' | 'aborted' | 'close',
         rawError?: unknown,
@@ -1270,33 +1273,54 @@ function forward(
             forwardLifecycle.onFailure?.(failure, status),
           );
         }
-        logger.error?.('upstream response stream error (during 400 buffering)', {
+        logger.error?.('upstream response stream error during recovery buffering', {
           reqId,
           err: String(err),
           reason,
           status,
-          bytes: chunks.reduce((sum, chunk) => sum + chunk.length, 0),
+          bytes: bufferedBytes,
         });
-        // 400/422 buffering never creates a responseObserver sink; only the
+        // Recovery buffering never creates a responseObserver sink; only the
         // streaming path below owns observer start/data/end/error callbacks.
         finishClientAfterUpstreamFailure(err);
       };
       failActiveResponse = (err) => failBufferedResponse('error', err);
 
-      upstreamRes.on('data', (chunk: Buffer) => {
+      const onData = (chunk: Buffer) => {
         if (upstreamResponseTerminal !== null) return;
+        if (bufferedBytes + chunk.length > recoveryBodyLimit) {
+          upstreamRes.pause();
+          upstreamRes.off('data', onData);
+          upstreamRes.off('end', onEnd);
+          upstreamRes.off('error', onError);
+          upstreamRes.off('aborted', onAborted);
+          upstreamRes.off('close', onClose);
+          // Replay the bounded prefix through the ordinary response path, which owns
+          // backpressure, observers and terminal events for the unchanged response.
+          upstreamRes.unshift(chunk);
+          for (const prefix of chunks.reverse()) upstreamRes.unshift(prefix);
+          chunks.length = 0;
+          handleUpstreamResponse(upstreamRes, true);
+          return;
+        }
+        bufferedBytes += chunk.length;
         chunks.push(chunk);
-      });
-      upstreamRes.on('end', async () => {
+      };
+      const onEnd = async () => {
         if (upstreamResponseTerminal !== null) return;
         upstreamResponseTerminal = 'end';
         if (clientAborted || clientRes.destroyed || upstreamFailureHandled) return;
-        const errBody = Buffer.concat(chunks);
+        const errBody = Buffer.concat(chunks, bufferedBytes);
         // 先按 content-encoding 解压一次 —— 规则 matches / errorType / body dump 都吃解压后的字节。
         // node:http 不自动解压; 上游若 gzip/br 压缩, 直接对压缩字节跑 regex 会漏判, 透明重试就不触发。
         // (回客户端仍是原始 errBody + content-encoding 头透传, 客户端自己解压, 见下方 clientRes.end)
-        const decodedErrBody = decodeBodyForLog(errBody, String(upstreamRes.headers['content-encoding'] ?? ''));
-        const decodedText = decodedErrBody.toString('utf8');
+        const encoding = String(upstreamRes.headers['content-encoding'] ?? '').trim().toLowerCase();
+        const decodedErrBody = decodeBodyForLog(
+          errBody, encoding, boundedErrorBody ? recoveryBodyLimit : undefined,
+        );
+        const unreadableRecoveryBody = boundedErrorBody && encoding !== '' && encoding !== 'identity' &&
+          decodedErrBody === errBody;
+        const decodedText = unreadableRecoveryBody ? '' : decodedErrBody.toString('utf8');
         if (status === 400 && recoverRequestSize && canRetry) {
           const sizeError = classifyRequestSizeError(decodedText);
           if (sizeError.kind !== 'other' && sizeError.kind !== 'unsupported-image' && sizeError.kind !== 'context-too-long') {
@@ -1331,11 +1355,11 @@ function forward(
         for (const [matchedIndex, rule] of activeRules.entries()) {
           if (!canRetry) break;
           if (!rule.matches(decodedText)) continue;
-          const stripped = rule.strip(body);
+          const stripped = rule.strip(body, decodedText);
           if (!stripped) continue;
           let retryBody = stripped;
           const appliedRules: RecoveryRule[] = [rule];
-          // 透明重试只有一次。若同一历史里同时存在多类已知坏 payload,在这一次 retry
+          // 普通规则共享一次透明重试。若同一历史里同时存在多类已知坏 payload,在这一次 retry
           // 前把其它安全 strip 也顺手应用掉,避免第一类 400 恢复后立刻撞第二类 400。
           // applyOnUnmatchedRetry === false 的规则只在自己 matches 时跑,不能叠到
           // 别人的 400 上(xAI ModelInput 清洗会改写 OpenAI collab 历史)。
@@ -1376,9 +1400,9 @@ function forward(
               retryBody,
               clientRes,
               logger,
-              recoveryRules,
+              rule.followUpRule ? [rule.followUpRule] : recoveryRules,
               reqId,
-              false,
+              rule.followUpRule !== undefined,
               overrideTarget,
               headerOverride,
               headerDelete,
@@ -1461,7 +1485,7 @@ function forward(
             sink?.onData?.(errBody);
             sink?.onEnd?.();
           } catch (err) {
-            logger.warn?.('responseObserver threw on buffered 400', { reqId, err: String(err) });
+            logger.warn?.('responseObserver threw on buffered recovery response', { reqId, err: String(err) });
           }
         }
         const errorType = extractErrorType(decodedErrBody, String(upstreamRes.headers['content-type'] ?? ''));
@@ -1495,15 +1519,18 @@ function forward(
           clientRes.writeHead(status, upstreamRes.statusMessage, respHeaders);
         }
         clientRes.end(errBody);
-      });
-      upstreamRes.on('error', (err) => failBufferedResponse('error', err));
-      // IncomingMessage 在连接被对端提前掐断时可能只发 `aborted`,不一定随后发
-      // `error`;两条事件都接入同一个幂等收口。
-      upstreamRes.on('aborted', () => failBufferedResponse('aborted'));
-      upstreamRes.on('close', () => {
+      };
+      const onError = (err: Error) => failBufferedResponse('error', err);
+      const onAborted = () => failBufferedResponse('aborted');
+      const onClose = () => {
         if (upstreamResponseTerminal !== null || upstreamRes.complete) return;
         failBufferedResponse('close');
-      });
+      };
+      upstreamRes.on('data', onData);
+      upstreamRes.on('end', onEnd);
+      upstreamRes.on('error', onError);
+      upstreamRes.on('aborted', onAborted);
+      upstreamRes.on('close', onClose);
       return;
     }
 
@@ -1974,7 +2001,11 @@ function forward(
         const merged = Buffer.concat(errBuf);
         // 先按 content-encoding 解压(失败 / 截断会返回 merged 原引用), errorType 与 body dump 共用。
         // 注意: errBuf 最多收 16KB 压缩字节, 截断的 gzip/br 解不开 → decoded === merged → 走原始字节分支。
-        const decoded = decodeBodyForLog(merged, String(upstreamRes.headers['content-encoding'] ?? ''));
+        const decoded = decodeBodyForLog(
+          merged,
+          String(upstreamRes.headers['content-encoding'] ?? ''),
+          boundedErrorBody ? recoveryBodyLimit : undefined,
+        );
         const errorType = extractErrorType(decoded, String(upstreamRes.headers['content-type'] ?? ''));
         if (errorType) baseCtx.errorType = errorType;
         if (logger.isDebugEnabled?.()) {
@@ -2005,7 +2036,8 @@ function forward(
       failStreamingResponse('close');
     });
 
-  });
+  };
+  upstreamReq.on('response', handleUpstreamResponse);
 
   let requestTimedOut = false;
   upstreamReq.on('error', (err) => {

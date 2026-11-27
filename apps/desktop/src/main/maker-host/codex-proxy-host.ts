@@ -57,6 +57,7 @@ import {
   recoverOversizedMessage,
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
+  missingReasoningItemRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
   createResponsesToolAudioRecoveryRule,
   stripResponsesToolAudioFromBody,
@@ -695,6 +696,7 @@ const xaiModelInputRecoveryRule = createXaiModelInputRecoveryRule({
 const vllmResponsesCompatibilityRule = createVllmResponsesCompatibilityRule();
 const CODEX_BODY_RECOVERY_RULES = [
   encryptedContentRecoveryRule,
+  missingReasoningItemRecoveryRule,
   imageGenerationIdRecoveryRule,
   responsesItemIdPrefixRecoveryRule,
   responsesItemIdLengthRecoveryRule,
@@ -740,7 +742,13 @@ function isRepairableToolItemIdError(errorText: string): boolean {
   const rule = CODEX_BODY_RECOVERY_RULES.find(
     (candidate) => candidate.enabled() && candidate.matches(errorText),
   );
-  const reason = rule?.id ?? (isRepairableToolItemIdError(errorText) ? 'tool_item_id' : null);
+  // The OAuth WS upstream may reject item IDs without naming a specific ID. Use the
+  // existing per-thread HTTP fallback; only a precise HTTP error can authorize stripping.
+  const reason = rule?.id ?? (
+    /this request does not support user-supplied input item IDs\./i.test(errorText)
+      ? 'responses_input_item_ids_unsupported'
+      : isRepairableToolItemIdError(errorText) ? 'tool_item_id' : null
+  );
   if (!reason) return null;
 
   const sessionId = args.sessionId.trim();
