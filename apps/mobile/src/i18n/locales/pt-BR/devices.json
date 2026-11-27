@@ -32,7 +32,7 @@
     "notFound": "Este dispositivo não está mais na sua conta.",
     "deleteDevice": "Excluir dispositivo",
     "deleteTitle": "Excluir {{name}}?",
-    "deleteMessage": "Este dispositivo será removido da sua conta e o acesso remoto será desconectado. As sessões e os arquivos dele serão mantidos. Entre novamente nesse dispositivo para adicioná-lo de novo.",
+    "deleteMessage": "Este dispositivo será removido da sua conta e o acesso remoto será desconectado. As sessões e os arquivos dele serão mantidos. Toque em “Reintegrar” nesse dispositivo para recuperá-lo.",
     "deleteFailed": "Não foi possível excluir o dispositivo.",
     "deleteOnline": "Este servidor ainda não permite remover dispositivos online. Tente novamente após a atualização do serviço.",
     "deleteRejectedWhileOffline": "Não foi possível excluir o dispositivo: o servidor ainda o lista como online, embora apareça como offline aqui.",
@@ -369,7 +369,11 @@
       "close": "Fechar",
       "cancelRename": "Cancelar renomeação",
       "createdBy": "Criado por {{name}}",
-      "ownedBy": "Pertence a {{name}}"
+      "ownedBy": "Pertence a {{name}}",
+      "orcaRemoteLead": "Colaboração de {{device}}",
+      "createdByTask": "Aberta por outra tarefa",
+      "createdByTaskNamed": "Aberta pela tarefa “{{title}}”",
+      "unknownDevice": "outro computador"
     },
     "accounts": {
       "title": "Trocar de conta",
@@ -392,6 +396,7 @@
       "sortHeading": "Ordenação de tarefas",
       "projectOrderHeading": "Ordenação de projetos",
       "projectOrderManualTip": "Toque e segure uma linha de projeto e arraste para reordenar. As tarefas dentro dele continuam seguindo a ordenação acima.",
+      "pinnedOrderManualTip": "Toque e segure uma tarefa fixada e arraste para reordenar.",
       "statusHeading": "Status da tarefa",
       "showDeviceTasks": "Mostrar tarefas",
       "openDevice": "Abrir",
@@ -425,7 +430,8 @@
         "all": "Todas",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Mecanismo de plugin"
       },
       "filterLastActivityHeading": "Última atividade",
       "filterLastActivity": {
@@ -481,7 +487,14 @@
         "nextWeek": "Na próxima semana",
         "indefinite": "Indefinidamente",
         "custom": "Personalizar…",
-        "invalidTime": "Escolha uma data e hora futuras dentro de um ano."
+        "invalidTime": "Escolha uma data e hora futuras dentro de um ano.",
+        "pendingSync": "Sincronização pendente",
+        "pendingArchiveSync": "Será arquivada quando o computador ficar online",
+        "offlineCompleteRejectedDirty": "“{{title}}” voltou para Pendentes: há alterações não confirmadas no Worktree que exigem confirmação antes de arquivar.",
+        "offlineCompleteRejectedNewActivity": "“{{title}}” voltou para Pendentes: houve nova atividade no computador enquanto estava offline.",
+        "offlineCompleteRejectedRunning": "“{{title}}” voltou para Pendentes: a tarefa está em execução.",
+        "offlineCompleteRejectedAttached": "“{{title}}” voltou para Pendentes: a tarefa está vinculada ou compartilhada e não foi arquivada automaticamente.",
+        "offlineCompleteRejectedPreflight": "“{{title}}” voltou para Pendentes: não foi possível verificar o Worktree antes de arquivar."
       },
       "taskListMode": {
         "enterInbox": "Caixa de entrada",
@@ -525,7 +538,8 @@
           "30d": "30d",
           "all": "Todas"
         }
-      }
+      },
+      "partial": "Os resultados podem estar incompletos. Use palavras mais específicas ou limite a busca a um projeto."
     },
     "renameDevice": {
       "title": "Renomear dispositivo",
@@ -836,9 +850,6 @@
     "connectionsEmpty": "Nenhuma Skill ou conexão selecionada.",
     "largeProfileRecovery": "Este perfil é longo demais para editar aqui. Edite o perfil completo em {{deviceName}}.",
     "addModel": "Adicionar modelo alternativo",
-    "removeModel": "Remover modelo",
-    "moveModelUp": "Mover modelo para cima",
-    "backupModels": "Modelos de reserva ({{count}})",
     "settingsTitle": "Configurações do amigo",
     "name": "Nome",
     "portraitNumber": "Retrato {{number}}",
@@ -967,6 +978,8 @@
     "timeout": "“{{device}}” ainda não está pronto. Verifique se o Cindy está aberto e online nesse computador e tente novamente.",
     "conflict": "{{name}} já foi transferido para “{{device}}”.",
     "switchFailed": "Não é possível alterar o computador principal agora. Tente novamente mais tarde.",
+    "skillTargetOutdated": "Uma Skill de {{name}} tem um corpo de texto maior que 64 KB que a versão antiga do Cindy em “{{device}}” não consegue receber. Atualize o Cindy nesse computador antes de mover seu amigo. O amigo permanece no computador original",
+    "skillTargetOutdated_skill": "A versão antiga do Cindy em “{{device}}” não consegue receber a Skill “{{slug}}”. O texto tem {{bodyBytes, number}} bytes e excede o limite de 64 KB. {{name}} continua no computador original. Atualize o Cindy no computador de destino e tente novamente.",
     "unknownDevice": "outro computador",
     "runsOn": "Executado em “{{device}}”",
     "homeTitle": "Computador principal",

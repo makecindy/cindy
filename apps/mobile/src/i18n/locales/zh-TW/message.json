@@ -133,6 +133,7 @@
     "retryRemoteMediaFetch": "重試取回遠端媒體",
     "retryFetch": "重試取回",
     "openMedia": "開啟媒體",
+    "playAudio": "播放音訊",
     "readCurrentRemoteFile": "讀取當前遠端檔案",
     "retryFilePreview": "重試檔案預覽",
     "readCurrentFile": "讀取當前檔案",
@@ -184,7 +185,8 @@
     "groupSent": "從群聊傳送",
     "sourceGroupId": "群聊 ID：{{id}}",
     "selectText": "選取文字",
-    "you": "你"
+    "you": "你",
+    "recentActivity": "最近活動"
   },
   "actions": {
     "attachmentsPrefix": "附件：{{names}}",
@@ -195,6 +197,9 @@
     "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
+    "saveImage": "儲存原圖",
+    "imageSaved": "圖片已儲存",
+    "saveFailed": "圖片儲存失敗，請再試一次",
     "originalUnavailable": "原圖暫時無法載入",
     "retryOriginal": "重試原圖",
     "loadingOriginal": "正在載入原圖…",
@@ -246,6 +251,7 @@
     "edit": "編輯",
     "steer": "插話",
     "steerQueued": "尚未送達，訊息仍保留在佇列中。",
+    "steerUnsupportedNotice": "目前引擎不支援插話，排隊中的訊息會在目前回合結束後送出。",
     "moveUp": "提前一位",
     "moveDown": "延後一位",
     "cancelSend": "取消傳送",
@@ -263,6 +269,8 @@
     "imagesNotUploaded_other": "{{count}} 張圖片沒傳上去",
     "waitingForNamedComputer": "連上{{name}}後自動傳送",
     "reconnectComputer": "立即重連",
+    "pendingDelivery": "待送達",
+    "pendingDeliveryHint": "訊息已儲存在手機上，正在等待電腦確認。",
     "waitingForComputer": "等電腦連上後傳送",
     "waitingForNetwork": "等網路恢復後傳送",
     "queued": "排隊中",
@@ -295,12 +303,13 @@
     "goalResumed": "用量已恢復，繼續目標",
     "goalCapacityRetry": "模型服務繁忙，正在重試目標",
     "autoResume": {
-      "separator": "連線中斷，已自動繼續",
+      "separator": "回覆為空，已自動繼續",
       "succeeded": "已重新連線",
       "failed": "重新連線未成功",
       "neutral": "重新連線",
       "usageReset": "用量已恢復，已自動繼續",
       "pending": "重新連線中…",
+      "continuingWithProgress": "正在自動繼續（{{attempt}}/{{total}}）…",
       "pendingWithProgress": "重新連線中 {{attempt}}/{{total}}…",
       "groupSwitchPending": "正在換一台電腦繼續…",
       "details": "本次重試 {{attempt}}/{{total}} · 本任務累計重連 {{count}} 次",
@@ -460,6 +469,15 @@
     }
   },
   "attachmentPreview": {
+    "audioBackTen": "倒退 10 秒",
+    "audioForwardTen": "快轉 10 秒",
+    "audioMute": "靜音",
+    "audioUnmute": "取消靜音",
+    "audioSpeed": "播放速度",
+    "audioOutput": "音訊輸出",
+    "fetchAudio": "從電腦取得",
+    "pauseAudio": "暫停音訊",
+    "audioProgress": "播放進度",
     "more": "更多操作",
     "retry": "重試",
     "image": "圖片",

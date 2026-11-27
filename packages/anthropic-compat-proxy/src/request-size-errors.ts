@@ -18,7 +18,8 @@ export function classifyRequestSizeError(input: string): RequestSizeError {
   if (/unsupported image format|image format is not supported|invalid image format/.test(text)) return { kind: 'unsupported-image-format' };
   if (/model does not support image|does not support images|only supports text modality|image modality is not supported/.test(text)) return { kind: 'unsupported-image' };
   if (/context (?:length|window)|prompt is too long|input is too long/.test(text)) return { kind: 'context-too-long' };
-  const count = text.match(/(?:maximum number of images|exceeded maximum number of images|too many images)[^\d]{0,64}(\d{1,16})/);
+  const count = text.match(/\bimage count \d{1,16} exceeds limit (\d{1,16}) per request\b/)
+    ?? text.match(/(?:maximum number of images|exceeded maximum number of images|too many images)[^\d]{0,64}(\d{1,16})/);
   const max = text.match(/(?:max(?:imum)? size is|request exceeds?[^\d]{0,64}maximum allowed size|request size)[^\d]{0,64}(\d{1,16}(?:[.,]\d{1,16})?)\s{0,16}(kb|mb|bytes?)/);
   if (count) return { kind: 'image-count', limitCount: Number(count[1]), ...(max ? { limitBytes: bytes(max[1], max[2]) } : {}) };
   const single = text.match(/image[^\d]{0,64}(?:exceeds?|maximum|limit)[^\d]{0,64}(\d{1,16}(?:[.,]\d{1,16})?)\s{0,16}(kb|mb|bytes?)/);

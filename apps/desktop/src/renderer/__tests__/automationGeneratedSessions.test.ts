@@ -103,6 +103,7 @@ describe('automation-generated sessions', () => {
   it('keeps scheduler sessions in the desktop-visible source contract', () => {
     // 所有会生成本地会话的 IM 渠道均进入 desktop sidebar。
     // (feishu 2026-07-16 起以「对话」分组回归, 见 sessionSource.ts 注释)。
+    // 官方 Discord 的任务用 discord-hook(与个人 Discord bot 的 discord 分开), 同样可见。
     // Bot-owned Session 仍是真实 Cindy 任务，但只由 Bots 面板投影；普通任务列表
     // 不再重复展示同一批主对话、渠道与 worker。
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toEqual([
@@ -113,6 +114,7 @@ describe('automation-generated sessions', () => {
       'telegram',
       'x',
       'discord',
+      'discord-hook',
       'wechat',
       'dingtalk',
       'wecom',
@@ -1034,7 +1036,7 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('scheduleFocusPath(group.scheduleId)');
     // 组头点击:展开打开最新一条;收起且整组是红时打开贡献红点的那条。
     expect(source).toContain('resolveCollapsedGroupHeaderSessionId({');
-    expect(source).toContain('onSessionClick(targetId)');
+    expect(source).toContain('onSessionClick(targetId, modifiers)');
     expect(source).toContain('getAutomationGroupLatestSession(group)');
     expect(source).toContain('visibleSessionIds: visibleSessions.map((session) => session.id)');
     // 自动任务只是展示分组，展开后的每条运行仍须保留普通会话行的移动菜单与搜索高亮。

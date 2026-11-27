@@ -11,6 +11,7 @@ const capabilityMockState = vi.hoisted(() => ({
   providersLoading: false,
   loadingAgent: null as string | null,
   errorAgent: null as string | null,
+  pluginEngines: [] as Array<Record<string, unknown>>,
   piTurnPermissionPolicy: null as {
     supported: { supported: true };
     unsupportedPermissionModes: string[];
@@ -74,15 +75,48 @@ vi.mock('@/hooks/useModelRouteDevices', () => ({
   }),
 }));
 
+vi.mock('@/hooks/useDeviceProviders', () => ({
+  useDeviceProviders: () => ({ providers: [], loading: false }),
+}));
+
+vi.mock('../useSettingsPluginEngines', () => ({
+  useSettingsPluginEngines: () => ({
+    engines: capabilityMockState.pluginEngines,
+    readCatalogue: vi.fn(),
+    hasSources: capabilityMockState.pluginEngines.length > 0,
+  }),
+}));
+
 vi.mock('@/components/new-chat/ModelSelector', () => ({
-  ModelSelector: ({ onUnifiedSelect, fastModeConfigurable, remoteAgent }: {
+  ModelSelector: ({ onUnifiedSelect, fastModeConfigurable, remoteAgent, deviceId, agentDevice, pluginEngines }: {
     onUnifiedSelect: (selection: object) => void; fastModeConfigurable: boolean;
     remoteAgent?: { devices: readonly { deviceId: string }[] };
+    deviceId?: string;
+    agentDevice?: { deviceId: string; name: string | null } | null;
+    pluginEngines?: {
+      onSelect: (selection: { providerId: string; modelId: string; effort?: string; deviceId?: string | null }) => void;
+    };
   }) => <>
     <span data-testid="route-devices">{remoteAgent?.devices.map(device => device.deviceId).join(',')}</span>
+    <span data-testid="trigger-catalog">{`${deviceId ?? 'local'}|${agentDevice?.name ?? ''}`}</span>
     <button data-testid="select-codex" data-fast-configurable={String(fastModeConfigurable)}
       onClick={() => onUnifiedSelect({ engine: 'codex', modelId: 'gpt-5.5', providerId: 'xd', effort: 'low', fast: false })}>Select Codex</button>
     <button data-testid="select-shared" onClick={() => onUnifiedSelect({ engine: 'codex', modelId: 'owner-model', providerId: 'owner-provider', effort: 'high', agentDevice: { deviceId: 'share:owner', name: 'Owner' } })}>Select shared</button>
+    {pluginEngines && (
+      <button
+        data-testid="select-plugin-engine"
+        onClick={() =>
+          pluginEngines.onSelect({
+            providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+            modelId: 'gemini-4-neon',
+            effort: 'high',
+            deviceId: 'studio',
+          })
+        }
+      >
+        Select plugin engine
+      </button>
+    )}
   </>,
 }));
 
@@ -169,6 +203,22 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
   it('lists same-account computers and received shares through the common route candidates', async () => {
     render(<ImDefaultSettingsSection channel="telegram" />);
     expect((await screen.findByTestId('route-devices')).textContent).toBe('studio,share:s1');
+  });
+
+  // 生产入口: 真实 ImDefaultSettingsSection 读回已存路由后交给模型字段的目录位置。
+  // Bug: 飞书「新对话配置」选了分享 / 另一台电脑的模型, 字段只按本机目录解析,
+  // 显示「模型信息暂不可用」(ModelSelector 的 deviceId 契约: 非空 = 按那台的目录解析)。
+  // 缺口: 相邻用例只验证保存与候选电脑, 不看已存的远程路由如何回显。
+  // 最小失败输入: codex 默认带 agentDeviceId=share:s1。tier: unit(jsdom)。
+  it.each([
+    ['a stored remote route resolves on its own catalog', 'share:s1', 'share:s1|From Magi'],
+    ['a local route stays on the local catalog', null, 'local|'],
+  ])('field label: %s', async (_name, agentDeviceId, expected) => {
+    const stored = defaults('codex');
+    stored.agents.codex = { providerId: 'owner-provider', model: 'gpt-6.2-sol', effort: 'high', agentDeviceId };
+    window.electronAPI.maker.imDefaultSettingsGet = vi.fn(async () => stored);
+    render(<ImDefaultSettingsSection channel="feishu" />);
+    expect((await screen.findByTestId('trigger-catalog')).textContent).toBe(expected);
   });
 
   it('saves a shared model and its location together without local catalog membership', async () => {
@@ -356,5 +406,90 @@ describe('ImDefaultSettingsSection Pi channel warning', () => {
     expect(
       wechat.queryByText('settings.imBot.defaults.groupPermissionLabel'),
     ).toBeNull();
+  });
+
+  // 回归：IM 新对话默认设置页支持选择本机/远程插件引擎(acp)、恢复自动选择时清除 acp 槽位，
+  // 并在无条件 turnPolicy 渠道(wechat)显示不支持提示。最小失败输入与 tier：unit (jsdom)。
+  it('saves a plugin engine default, clears it on useAutomatic, and warns on wechat', async () => {
+    capabilityMockState.pluginEngines = [
+      {
+        key: '_ns__local__agy-acp:agy',
+        providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+        pluginId: '_ns__local__agy-acp',
+        engineId: 'agy',
+        name: 'Antigravity',
+        models: [{ id: 'gemini-4-neon', displayName: 'Gemini 4 Neon', efforts: ['high'], defaultEffort: 'high' }],
+        permissionModes: [{ id: 'default', label: 'Default' }],
+        availability: { state: 'ready' as const },
+      },
+    ];
+    try {
+      const save = vi.fn(async (patch: Partial<ImDefaultSettingsState>) => ({
+        ...defaults('claude-code'),
+        ...patch,
+        agents: { ...defaults('claude-code').agents, ...patch.agents },
+      }));
+      window.electronAPI = {
+        maker: {
+          imDefaultSettingsGet: vi.fn(async () => defaults('claude-code')),
+          imDefaultSettingsSet: save,
+        },
+      } as unknown as typeof window.electronAPI;
+      render(<ImDefaultSettingsSection channel="feishu" />);
+
+      fireEvent.click(await screen.findByTestId('select-plugin-engine'));
+      await waitFor(() =>
+        expect(save).toHaveBeenCalledWith(
+          {
+            agentKind: 'acp',
+            agents: {
+              acp: {
+                providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+                model: 'gemini-4-neon',
+                effort: 'high',
+                agentDeviceId: 'studio',
+              },
+            },
+          },
+          'feishu',
+        ),
+      );
+
+      fireEvent.click(await screen.findByText('settings.imBot.defaults.useAutomatic'));
+      await waitFor(() =>
+        expect(save).toHaveBeenLastCalledWith(
+          {
+            agentKind: IM_DEFAULT_SETTINGS.agentKind,
+            agents: {
+              ...IM_DEFAULT_SETTINGS.agents,
+              acp: { providerId: null, model: '', effort: '' },
+            },
+          },
+          'feishu',
+        ),
+      );
+      cleanup();
+
+      window.electronAPI = {
+        maker: {
+          imDefaultSettingsGet: vi.fn(async () => ({
+            ...defaults('acp'),
+            agents: {
+              ...defaults('acp').agents,
+              acp: {
+                providerId: 'acp-plugin:_ns__local__agy-acp:agy',
+                model: 'gemini-4-neon',
+                effort: 'high',
+              },
+            },
+          })),
+        },
+      } as unknown as typeof window.electronAPI;
+      render(<ImDefaultSettingsSection channel="wechat" />);
+      const status = await screen.findByRole('status');
+      expect(status.textContent).toContain('settings.imBot.defaults.agentUnsupportedOnChannelHint');
+    } finally {
+      capabilityMockState.pluginEngines = [];
+    }
   });
 });

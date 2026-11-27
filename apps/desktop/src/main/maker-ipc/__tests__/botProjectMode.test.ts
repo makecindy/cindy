@@ -37,7 +37,7 @@ vi.mock('../../localDb/ipc/projectAliases.js', () => ({
 vi.mock('../../localDb/ipc/recentWorkdirs.js', () => ({ normalizeRecentWorkdirPath: (p: string) => p, upsertRecentWorkdir: async () => false }));
 vi.mock('../../worktree/WorktreeManager.js', () => ({ detectCwd: async () => ({ gitInstalled: false }) }));
 
-import { BOT_PROJECT_MEMORY_REVIEW_ID, createBotDefaultProjectSchedule, ensureBotProjectAutomations, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
+import { BOT_PROJECT_LOCAL_GITIGNORE, BOT_PROJECT_MEMORY_GITIGNORE, BOT_PROJECT_MEMORY_REVIEW_ID, createBotDefaultProjectSchedule, ensureBotProjectAutomations, ensureTeammateProjectIgnored, moveTeammateMemoryIntoProject, nameBotProject, prepareBotProjectWorkspace } from '../botProjectMode.js';
 import { legacyTeammateProjectMemoryDir, teammateProjectMemoryDir, teammateWorkspaceDir } from '../botProjectMemory.js';
 import { importBotSkillFiles } from '../botSkillStore.js';
 import { OWN_RULES_HEADING, importedStandardSkill } from '../botProjectTemplate.js';
@@ -130,6 +130,7 @@ describe('ensureBotProjectAutomations', () => {
     try {
       db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
         CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT DEFAULT '');
+        CREATE TABLE schedules(id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
         INSERT INTO bot_session_links VALUES ('bot-1','chat'), ('other','other-chat');`);
       const firedAt = Date.now();
       const insert = db.prepare('INSERT INTO messages(session_id,role,rewind_at,created_at,agent_meta) VALUES (?, ?, ?, ?, ?)');
@@ -240,6 +241,7 @@ describe('ensureBotProjectAutomations', () => {
     db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
       CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
       CREATE TABLE schedule_runs(id TEXT PRIMARY KEY, status TEXT NOT NULL, finished_at INTEGER, session_id TEXT);
+      CREATE TABLE schedules(id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
       CREATE TABLE sessions(id TEXT PRIMARY KEY, working_dir TEXT, project_dir TEXT);`);
     const finish = db.prepare('INSERT INTO schedule_runs(id, status, finished_at) VALUES (?, ?, ?)');
     const day = 86_400_000;
@@ -377,6 +379,110 @@ describe('ensureBotProjectAutomations', () => {
     expect(loader.upsertSchedule).toHaveBeenCalledOnce();
   });
 
+  // Real data 2026-11-21: one computer's teammates skipped 6 nights in a row; one had 58 owner
+  // messages a month and could never reach 20 in a day (#12007). Unit, real generated check +
+  // SQLite with the production schedules / schedule_runs columns it reads; the start is the
+  // review state's confirmed reviewedAt (#12080).
+  it('counts human messages since the last confirmed review, not only the last day', async () => {
+    loader.loadProjectSchedules.mockResolvedValueOnce(null);
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
+      CREATE TABLE schedules(id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
+      CREATE TABLE schedule_runs(id TEXT PRIMARY KEY, status TEXT NOT NULL, finished_at INTEGER, session_id TEXT);
+      CREATE TABLE sessions(id TEXT PRIMARY KEY, working_dir TEXT, project_dir TEXT);
+      INSERT INTO bot_session_links VALUES ('bot-1','chat');`);
+    const day = 86_400_000;
+    const firedAt = Date.now();
+    const created = firedAt - 30 * day;
+    db.prepare('INSERT INTO schedules VALUES (?, ?)').run('review', created);
+    const message = db.prepare("INSERT INTO messages VALUES ('chat', 'user', NULL, ?, NULL, 'Human request')");
+    const finish = db.prepare('INSERT INTO schedule_runs(id, status, finished_at) VALUES (?, ?, ?)');
+    const state = path.join(root, '.memory-review-state-v1.json');
+    const check = (at: number, runId: string, log?: string[]) =>
+      runMemoryCheck(workingDir, at, { scheduleId: 'review', runId, log });
+    try {
+      message.run(created - day); // Before this automation existed here.
+      for (let daysAgo = 2; daysAgo <= 20; daysAgo++) message.run(firedAt - daysAgo * day);
+      expect(await check(firedAt, 'r1')).toBe(2); // Never reviewed: 19 since setup.
+      message.run(firedAt - 5 * day);
+      const first: string[] = [];
+      expect(await check(firedAt, 'r2', first)).toBe(0); // 20 accumulated, none in the last day.
+      expect(first.join('\n')).toContain(`Review conversations since ${new Date(created).toISOString()}.`);
+      // #12080's skip is kept: 20 accumulated, but the previous review is still running.
+      finish.run('r2', 'running', null);
+      const running: string[] = [];
+      expect(await check(firedAt + day / 2, 'r2b', running)).toBe(2);
+      expect(running.join('\n')).toContain('still running');
+      db.prepare("UPDATE schedule_runs SET status = 'failed', finished_at = ? WHERE id = 'r2'").run(firedAt + 60_000);
+      expect(await check(firedAt + day, 'r3')).toBe(0); // A failed review does not reset the count.
+      finish.run('r3', 'success', firedAt + day + 60_000);
+      for (let i = 0; i < 9; i++) message.run(firedAt + day + 3_600_000);
+      const skipped: string[] = [];
+      expect(await check(firedAt + 2 * day, 'r4', skipped)).toBe(2); // 9 since that review.
+      expect(skipped.join('\n')).toContain(`since ${new Date(firedAt + day).toISOString()}`);
+      for (let i = 0; i < 11; i++) message.run(firedAt + 2 * day + 3_600_000);
+      expect(await check(firedAt + 3 * day, 'r5')).toBe(0); // Skipped nights kept counting.
+      // Clock moved back below the recorded review: count since setup, not an empty window.
+      await fs.writeFile(state, JSON.stringify({ reviewedAt: firedAt + 10 * day, since: 0 }));
+      expect(await check(firedAt + 3 * day, 'r6')).toBe(0);
+      // A test run has no local record of the automation: the last day only.
+      await fs.writeFile(state, JSON.stringify({ reviewedAt: 0, since: 0 }));
+      expect(await runMemoryCheck(workingDir, firedAt + 3 * day, { scheduleId: 'test', runId: 'test' })).toBe(2);
+    } finally { db.close(); }
+  });
+
+  // Installed check (ed9421bc, #12080) + its untouched last-day prompt upgrade together; an
+  // owner's edited prompt or check is kept (#12007). Unit, real installed body + SQLite.
+  it('upgrades the installed last-day message check and its untouched prompt, keeping owner edits', async () => {
+    loader.loadProjectSchedules.mockResolvedValueOnce(null);
+    await ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir });
+    const fresh = loader.upsertSchedule.mock.calls[0]![1];
+    const lastDay = { ...fresh, cronExpr: '0 5 * * *',
+      prompt: fresh.prompt.replace('since the last completed review', 'from the last day') };
+    const checkFile = path.join(root, '.memory-review-check-v1.cjs');
+    const old = await fs.readFile(new URL('./fixtures/memory-review-ed9421bc.cjs.txt', import.meta.url), 'utf8');
+    const installed = `const source = ${JSON.stringify({ databasePath: database.path, botId: 'bot-1',
+      workspace: workingDir, syntheticPrefix: '[UI_ACTION_TRIGGER]' })};\n${old.slice(old.indexOf('\n') + 1)}`;
+    const db = new DatabaseSync(database.path);
+    db.exec(`CREATE TABLE bot_session_links(bot_id TEXT, session_id TEXT);
+      CREATE TABLE messages(session_id TEXT, role TEXT, rewind_at INTEGER, created_at INTEGER, agent_meta TEXT, content TEXT);
+      CREATE TABLE schedules(id TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
+      INSERT INTO bot_session_links VALUES ('bot-1','chat');`);
+    const firedAt = Date.now();
+    db.prepare('INSERT INTO schedules VALUES (?, ?)').run('review', firedAt - 30 * 86_400_000);
+    const message = db.prepare("INSERT INTO messages VALUES ('chat', 'user', NULL, ?, NULL, 'Human request')");
+    for (let i = 0; i < 20; i++) message.run(firedAt - (i + 2) * 86_400_000);
+    db.close();
+    // Never reviewed: each check below starts without a review state.
+    const run = async () => {
+      await fs.rm(path.join(root, '.memory-review-state-v1.json'), { force: true });
+      return runMemoryCheck(workingDir, firedAt, { scheduleId: 'review' });
+    };
+    await fs.writeFile(checkFile, installed);
+    expect(await run()).toBe(2); // Actual predecessor behavior.
+    loader.loadProjectSchedules.mockResolvedValueOnce([lastDay]);
+    await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(true);
+    expect(await run()).toBe(0);
+    expect(loader.upsertSchedule).toHaveBeenLastCalledWith(workingDir, expect.objectContaining({
+      cronExpr: '0 5 * * *', prompt: fresh.prompt, preRunHook: lastDay.preRunHook,
+    }), { keepUnreadable: true });
+    // Owner-edited prompt (scope at either end): the check still upgrades, the prompt stays.
+    for (const prompt of [`${lastDay.prompt} Also tidy notes.`, lastDay.prompt.replace('Review Mimi', 'Review only work-related parts of Mimi')]) {
+      await fs.writeFile(checkFile, installed);
+      loader.loadProjectSchedules.mockResolvedValueOnce([{ ...lastDay, prompt }]);
+      await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(false);
+      expect(await run()).toBe(0);
+    }
+    // Owner-edited check: neither the check nor the prompt changes.
+    await fs.writeFile(checkFile, `${installed}\n// Owner customization\n`);
+    loader.loadProjectSchedules.mockResolvedValueOnce([lastDay]);
+    await expect(ensureBotProjectAutomations({ botId: 'bot-1', displayName: 'Mimi', workingDir })).resolves.toBe(false);
+    expect(await run()).toBe(2);
+    expect(loader.upsertSchedule).toHaveBeenCalledTimes(2);
+  });
+
   it('upgrades the supplied review while retaining choices, custom checks and removal', async () => {
     const old = { id: BOT_PROJECT_MEMORY_REVIEW_ID, cronExpr: '0 4 * * *', model: 'chosen',
       prompt: "Look back at Old Name's conversations from the last day (teammate id bot-1) and keep what is worth remembering in this project's memory and skills. If nothing new is worth keeping, finish quietly." };
@@ -461,6 +567,8 @@ describe('moveTeammateMemoryIntoProject', () => {
     await put(outside, 'project_launch.md', 'only outside');
     await put(outside, 'MEMORY.md', 'old index');
     await put(inside, 'user_tea.md', 'newer');
+    // As both upgrade entries do: the local .gitignore entries come first, else the version is deferred.
+    await expect(ensureTeammateProjectIgnored({ workspace })).resolves.toBe('ready');
 
     await expect(moveTeammateMemoryIntoProject({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBe(1);
     expect(await fs.readFile(path.join(inside, 'user_tea.md'), 'utf8')).toBe('newer');
@@ -483,6 +591,94 @@ describe('moveTeammateMemoryIntoProject', () => {
     await expect(moveTeammateMemoryIntoProject({ botId: 'bot_mia', ownerRoot: root, workspace })).resolves.toBeNull();
     await expect(fs.stat(path.join(inside, 'project_launch.md'))).rejects.toThrow();
     expect(snapshot).toHaveBeenCalledOnce();
+  });
+});
+
+/*
+ * 测试价值
+ * - 生产入口与可观察结果：ensureTeammateProjectIgnored（启动时 botV2Migration 对已升级伙伴、首次升级时
+ *   prepareBotProjectWorkspace 调用）执行后 `.gitignore` 的内容、已提交文件与回执。Git 如何解读这些条目
+ *   （模板例外的顺序、已跟踪文件照旧跟踪）在 botProjectMode.git-integration.test.ts 用真 Git 核对。
+ * - 规则依据：cindy-bots-runtime.md §4「项目的 .gitignore（2026-11-21）」：存量项目只追加缺的条目一次，
+ *   不改用户的行，不删磁盘文件；凭证文件、虚拟环境、worktree 不进版本。
+ * - 现有覆盖缺口：此前只有记忆条目会补，凭证与虚拟环境条目没有补齐路径；首次升级也要在记版本前补上。
+ * - 最小失败输入：旧默认清单 + 用户自己的一行（CRLF），补齐后用户删掉一条再跑；首次升级时已有旧 `.gitignore`。
+ * - tier：unit（临时目录真实文件 I/O，无 Git）。
+ */
+describe('ensureTeammateProjectIgnored', () => {
+  let root = '';
+  afterEach(async () => { if (root) await fs.rm(root, { recursive: true, force: true }); });
+
+  // The list spells out the memory store's receipt so the snapshot kernel needs no maker-core.
+  it('keeps the memory store receipt versioned under the name maker-core writes', () => {
+    expect(BOT_PROJECT_MEMORY_GITIGNORE).toContain(`!.cindy/memory/${MEMORY_STORAGE_MIGRATION_RECEIPT}`);
+  });
+
+  it('appends the ordered block below the owner\'s lines, once', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-'));
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(workspace, { recursive: true });
+    const before = 'node_modules/\r\n.env\r\n# mine\r\n!keep.log';
+    await fs.writeFile(path.join(workspace, '.gitignore'), before);
+    await fs.writeFile(path.join(workspace, '.env'), 'COMMITTED=1');
+
+    await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', workspace })).resolves.toBe('ready');
+    const text = await fs.readFile(path.join(workspace, '.gitignore'), 'utf8');
+    // The whole ordered block goes below the owner's lines, even the `.env` it already had.
+    expect(text).toBe(`${before}\r\n\r\n${[
+      '# Cindy: keep credentials, environments, worktrees and memory caches out of versions',
+      ...BOT_PROJECT_LOCAL_GITIGNORE, ...BOT_PROJECT_MEMORY_GITIGNORE,
+    ].join('\r\n')}\r\n`);
+    await expect(fs.readFile(path.join(workspace, '.env'), 'utf8')).resolves.toBe('COMMITTED=1');
+
+    // Once: an entry the owner removes afterwards is not put back.
+    await fs.writeFile(path.join(workspace, '.gitignore'), text.replace('token.json\r\n', ''));
+    await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', workspace })).resolves.toBe('ready');
+    expect(await fs.readFile(path.join(workspace, '.gitignore'), 'utf8')).not.toContain('token.json');
+  });
+
+  // Codex review 2026-11-24: a `.gitignore` that is a folder (or a link, which Git does not follow)
+  // was left alone but counted as ready, so versions went ahead without the rules.
+  // Codex review 2026-11-24 (09:13): the startup upgrade and a task's savepoint can complete the same
+  // project at once. Each rewrote the file in place, so one could read the other's truncated file and
+  // write back only the block, dropping the owner's rules. Minimal input: two calls before either ends.
+  it('completes a project once when two callers ask at the same time', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-race-'));
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(workspace, { recursive: true });
+    const file = path.join(workspace, '.gitignore');
+    await fs.writeFile(file, 'auth.json\n');
+    const write = vi.spyOn(fs, 'writeFile');
+    try {
+      await expect(Promise.all([ensureTeammateProjectIgnored({ workspace }), ensureTeammateProjectIgnored({ workspace })]))
+        .resolves.toEqual(['ready', 'ready']);
+      // The owner's file is only appended to, never rewritten (exclusive-create attempts aside).
+      expect(write.mock.calls.filter(([target, , options]) => target === file && (options as { flag?: string } | undefined)?.flag !== 'wx')).toEqual([]);
+    } finally { write.mockRestore(); }
+    const text = await fs.readFile(file, 'utf8');
+    expect(text.startsWith('auth.json\n')).toBe(true);
+    expect(text.split('\n').filter(line => line === 'token.json')).toHaveLength(1);
+  });
+
+  it('reports a .gitignore it cannot write as failed, leaving it alone and writing no receipt', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-dir-'));
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(path.join(workspace, '.gitignore'), { recursive: true });
+    await expect(ensureTeammateProjectIgnored({ botId: 'bot_mia', workspace })).resolves.toBe('failed');
+    expect((await fs.stat(path.join(workspace, '.gitignore'))).isDirectory()).toBe(true);
+    await expect(fs.readdir(path.join(workspace, '.gitignore'))).resolves.toEqual([]);
+    await expect(fs.lstat(path.join(path.dirname(workspace), 'project-gitignore.json'))).rejects.toThrow();
+  });
+
+  it('completes an existing project\'s .gitignore during the first upgrade', async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), 'teammate-gitignore-upgrade-'));
+    const workspace = teammateWorkspaceDir(root, 'bot_mia');
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.writeFile(path.join(workspace, '.gitignore'), 'data/\n');
+    await prepareBotProjectWorkspace({ botId: 'bot_mia', displayName: 'Mia', ownerRoot: root });
+    const text = await fs.readFile(path.join(workspace, '.gitignore'), 'utf8');
+    expect(text.startsWith('data/\n')).toBe(true);
+    expect(text).toContain('\n.venv/\n');
   });
 });
 

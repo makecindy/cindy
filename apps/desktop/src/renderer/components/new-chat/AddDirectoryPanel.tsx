@@ -15,10 +15,11 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronLeft, Folder as FolderIcon, FolderPlus, Search } from 'lucide-react';
+import { ChevronLeft, Folder as FolderIcon, FolderPlus } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { ErrorNotice } from '@/components/ui/error-notice';
+import { SearchInput } from '@/components/ui/search-input';
 import { MORPH_CONTENT_RESIZE_EVENT } from '@/components/ui/morph-popover';
 import { Tip } from '@/components/ui/tooltip';
 import { MENU_CURRENT_ROW_ATTR, currentMarkedRow } from '@/components/ui/dropdown-menu-highlight';
@@ -223,29 +224,17 @@ export function AddDirectoryPanel({
         )}
         {showSearch && (
           <div className="px-1 pb-1.5">
-            <div className="relative">
-              <Search
-                size={12}
-                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--cmd-palette-item-meta)]"
-              />
-              <input
-                ref={searchRef}
-                type="text"
-                value={query}
-                onChange={(event) => {
-                  setQuery(event.target.value);
-                  setFocusedIndex(0);
-                }}
-                placeholder={t('extraDirs.searchRecent')}
-                aria-label={t('extraDirs.searchRecent')}
-                className={cn(
-                  'h-8 w-full rounded-full border border-[var(--cmd-palette-border)] bg-transparent',
-                  'pl-7 pr-2 text-13 text-[var(--cmd-palette-item-text)] outline-none',
-                  'placeholder:text-[var(--text-placeholder)]',
-                  'focus:border-[var(--chat-input-border-focus)]',
-                )}
-              />
-            </div>
+            <SearchInput
+              surface="panel"
+              inputRef={searchRef}
+              value={query}
+              onChange={(value) => {
+                setQuery(value);
+                setFocusedIndex(0);
+              }}
+              placeholder={t('extraDirs.searchRecent')}
+              aria-label={t('extraDirs.searchRecent')}
+            />
           </div>
         )}
         <div

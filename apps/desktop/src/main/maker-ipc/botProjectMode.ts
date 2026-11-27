@@ -33,11 +33,11 @@ import { botProfileDir, botProfileMemoryDir, ensureBotWorkspaceDir } from './bot
 import {
   hasTeammateUpgraded,
   TEAMMATE_MEMORY_MOVE_RECEIPT_FILE,
-  TEAMMATE_PROJECT_MEMORY_SEGMENTS,
   legacyTeammateProjectMemoryDir,
   teammateProjectMemoryDir,
   unlinkedTeammateProjectMemoryDir,
 } from './botProjectMemory.js';
+import { BOT_PROJECT_GITIGNORE, ensureTeammateProjectIgnored, isTeammateProjectIgnoreReady } from './botProjectGitignore.js';
 import { setBotProjectSkillsDir } from './botSkillStore.js';
 import { TEAMMATE_TEMPLATE_VERSION, applyTeammateTemplate, type ReadPreviousTemplate } from './botProjectTemplate.js';
 import { ensureMemoryReviewHook, MEMORY_REVIEW_HOOK_COMMAND, LEGACY_MEMORY_REVIEW_HOOK_COMMAND } from './botProjectMemoryReview.js';
@@ -222,43 +222,7 @@ async function copySkillFolders(sourceDir: string, workspace: string): Promise<{
   return { copied, skippedLinks, targetDir };
 }
 
-/**
- * The memory records are the teammate's own work and are versioned; what the memory store derives
- * beside them (the rebuilt MEMORY.md index, search database, folder metadata, temp files) is not.
- * The store's copy receipt is versioned too: a `git clean` must not make it copy the old records
- * again over later deletions.
- */
-const MEMORY_DIR = TEAMMATE_PROJECT_MEMORY_SEGMENTS.join('/');
-export const BOT_PROJECT_MEMORY_GITIGNORE = [
-  `${MEMORY_DIR}/*`,
-  `!${MEMORY_DIR}/*.md`,
-  `!${MEMORY_DIR}/${MEMORY_STORAGE_MIGRATION_RECEIPT}`,
-  `${MEMORY_DIR}/MEMORY.md`,
-];
-
-const BOT_PROJECT_GITIGNORE = [
-  'node_modules/', 'tmp/', '.DS_Store', '*.log',
-  '*.zip', '*.tar', '*.tar.gz', '*.tgz', '*.dmg', '*.iso',
-  '*.db', '*.sqlite', '*.sqlite3', '*-wal', '*-shm', 'pg_wal/',
-  ...BOT_PROJECT_MEMORY_GITIGNORE,
-  '',
-].join('\n');
-
-/** Adds the memory entries to a project's `.gitignore` that lacks them; true when it changed. */
-async function ensureMemoryIgnored(workspace: string): Promise<boolean> {
-  const file = path.join(workspace, '.gitignore');
-  const current = await fs.readFile(file, 'utf8').catch((error: NodeJS.ErrnoException) => {
-    if (error.code === 'ENOENT') return null;
-    throw error;
-  });
-  if (current === null) return writeIfMissing(file, BOT_PROJECT_GITIGNORE);
-  const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
-  const missing = BOT_PROJECT_MEMORY_GITIGNORE.filter((line) => !lines.has(line));
-  if (!missing.length) return false;
-  const separator = current === '' || current.endsWith('\n') ? '' : '\n';
-  await fs.writeFile(file, `${current}${separator}${missing.join('\n')}\n`, 'utf8');
-  return true;
-}
+export { BOT_PROJECT_LOCAL_GITIGNORE, BOT_PROJECT_MEMORY_GITIGNORE, ensureTeammateProjectIgnored } from './botProjectGitignore.js';
 
 async function isOwnRepository(workspace: string): Promise<boolean> {
   return fs.lstat(path.join(workspace, '.git')).then(() => true, () => false);
@@ -266,6 +230,11 @@ async function isOwnRepository(workspace: string): Promise<boolean> {
 
 async function snapshotTeammateProject(botId: string, workspace: string, label: string): Promise<void> {
   if (!await isOwnRepository(workspace)) return;
+  // The change stays in the project and goes into the first version after the entries are in place.
+  if (!await isTeammateProjectIgnoreReady(workspace).catch(() => false)) {
+    log.info('teammate project version deferred until its .gitignore is completed', { botId, label });
+    return;
+  }
   try {
     await createSnapshotDetailed(workspace, { label, meta: { sessionId: 'bot-project', kind: 'manual' } });
   } catch (error) {
@@ -278,8 +247,10 @@ async function snapshotTeammateProject(botId: string, workspace: string, label: 
  * Once per teammate: its project's memory was kept outside the project, like any project's
  * (`<owner>/maker-memory/<scope>`); now it lives in the project. Copies those records in — a record
  * the project already has wins — leaves the old folder untouched as a fallback, tells the memory
- * store the copy is done (so it never copies again over later deletions), makes sure the derived
- * files stay out of Git and keeps a version. Returns the records copied; null when already done.
+ * store the copy is done (so it never copies again over later deletions) and keeps a version. Its
+ * derived files are kept out of Git by {@link ensureTeammateProjectIgnored}, which both callers run
+ * first; while that is not done the copy still happens and the version waits (snapshotTeammateProject).
+ * Returns the records copied; null when already done.
  */
 export async function moveTeammateMemoryIntoProject(input: {
   botId: string;
@@ -293,8 +264,7 @@ export async function moveTeammateMemoryIntoProject(input: {
   await fs.mkdir(target, { recursive: true });
   await writeIfMissing(path.join(target, MEMORY_STORAGE_MIGRATION_RECEIPT),
     `${JSON.stringify({ schemaVersion: 1, migratedAt: new Date().toISOString() })}\n`);
-  const ignoreChanged = await ensureMemoryIgnored(input.workspace);
-  if (copied > 0 || ignoreChanged) await snapshotTeammateProject(input.botId, input.workspace, 'Move teammate memory into the project');
+  if (copied > 0) await snapshotTeammateProject(input.botId, input.workspace, 'Move teammate memory into the project');
   await fs.writeFile(receipt, `${JSON.stringify({ version: 1, movedAt: new Date().toISOString(), copied }, null, 2)}\n`, 'utf8');
   if (copied > 0) log.info('teammate memory moved into its project', { botId: input.botId, copied });
   return copied;
@@ -401,6 +371,8 @@ async function initializeWorkspaceRepository(workspace: string): Promise<'initia
   const state = await inspectWorkspaceRepository(workspace);
   if (state === 'unavailable') return state;
   if (state === 'ready') return 'already-git';
+  // The first version takes every file in the folder: only once the local entries keep credentials out.
+  if (await ensureTeammateProjectIgnored({ workspace }) === 'failed') throw new Error('Buddy project .gitignore could not be completed');
   // A long-lived teammate folder collects archives, databases and logs; versions are for its
   // own work, so those stay out of the history from the first snapshot on.
   if (state === 'missing') {
@@ -435,6 +407,14 @@ function broadcastProjectRegistered(workingDir: string): void {
 /** The project's own nightly review: an ordinary project automation, not a host job. */
 export const BOT_PROJECT_MEMORY_REVIEW_ID = 'teammate-memory-review';
 
+const MEMORY_REVIEW_INSTRUCTIONS = `. Keep only durable, useful knowledge in this project's memory and reusable, proven procedures in its skills. Search existing files first: update a related record or skill instead of adding a duplicate. Review related existing material for duplication, contradictions, obsolete status and unnecessary detail; keep concise facts and actionable steps, not conversation logs or one-off task progress. Preserve the owner's rules and intent. Before merging or removing content, verify the evidence and keep a recoverable copy or a targeted Git commit; leave uncertain items intact. Read .cindy/memory/README.md before memory maintenance. Skills live in .agents/skills; keep SKILL.md focused and move detailed examples to on-demand references when useful. Do not invent a skill just because a review ran. If no meaningful improvement is justified, finish quietly.`;
+/** Exactly the supplied prompt from before its check counted since the last review. Any edit,
+ * including the review's scope or a name from before a rename, keeps the owner's text. */
+function isLastDayReviewPrompt(prompt: string | undefined, input: { botId: string; displayName: string }): boolean {
+  const name = input.displayName.trim() || input.botId;
+  return prompt === `Review ${name}'s conversations from the last day (teammate id ${input.botId})${MEMORY_REVIEW_INSTRUCTIONS}`;
+}
+
 /** Default Bot tasks inherit at creation; their definitions never contain a model snapshot. */
 export type BotDefaultProjectSchedule = Omit<ProjectScheduleConfig,
   'followTeammateModel' | 'model' | 'agentKind' | 'modelAgentKind' | 'modelAgentDeviceId'
@@ -461,7 +441,7 @@ export function botProjectMemoryReview(input: {
   return {
     id: BOT_PROJECT_MEMORY_REVIEW_ID,
     name: input.title.replace('{{name}}', name),
-    prompt: `Review ${name}'s conversations from the last day (teammate id ${input.botId}). Keep only durable, useful knowledge in this project's memory and reusable, proven procedures in its skills. Search existing files first: update a related record or skill instead of adding a duplicate. Review related existing material for duplication, contradictions, obsolete status and unnecessary detail; keep concise facts and actionable steps, not conversation logs or one-off task progress. Preserve the owner's rules and intent. Before merging or removing content, verify the evidence and keep a recoverable copy or a targeted Git commit; leave uncertain items intact. Read .cindy/memory/README.md before memory maintenance. Skills live in .agents/skills; keep SKILL.md focused and move detailed examples to on-demand references when useful. Do not invent a skill just because a review ran. If no meaningful improvement is justified, finish quietly.`,
+    prompt: `Review ${name}'s conversations since the last completed review (teammate id ${input.botId})${MEMORY_REVIEW_INSTRUCTIONS}`,
     cronExpr: '30 3 * * *',
     timezone: input.timezone,
     recurring: true,
@@ -494,8 +474,10 @@ export async function ensureBotProjectAutomations(input: {
   const userId = getCurrentDbClientUserId();
   if (!userId) throw new Error('Memory review requires the active account database');
   const databasePath = getDbPathForUser(userId);
-  const preRunHook = await ensureMemoryReviewHook({ ...input, databasePath, previousCommand: current?.preRunHook?.command });
-  if (suppliedHook || (legacyHook && preRunHook.command === current?.preRunHook?.command)) return false;
+  const { bundledCheck, ...preRunHook } = await ensureMemoryReviewHook({ ...input, databasePath, previousCommand: current?.preRunHook?.command });
+  // The supplied check now counts since the last review; its untouched last-day prompt follows.
+  const upgradePrompt = bundledCheck && isLastDayReviewPrompt(current?.prompt, input);
+  if ((suppliedHook || (legacyHook && preRunHook.command === current?.preRunHook?.command)) && !upgradePrompt) return false;
   // An existing file that cannot be read whole is kept: the upgrade fails and retries next start.
   const defaults = botProjectMemoryReview({
     ...input,
@@ -504,7 +486,7 @@ export async function ensureBotProjectAutomations(input: {
   });
   await loader.upsertSchedule(input.workingDir, {
     ...createBotDefaultProjectSchedule(defaults, current),
-    prompt: legacyHook ? current!.prompt : defaults.prompt,
+    prompt: legacyHook && !upgradePrompt ? current!.prompt : defaults.prompt,
     preRunHook: { ...preRunHook, ...current?.preRunHook, command: preRunHook.command },
   }, { keepUnreadable: true });
   return true;
@@ -534,6 +516,9 @@ export async function prepareBotProjectWorkspace(input: {
   legacyUserDataDir?: string;
 }): Promise<BotProjectPreparation> {
   const workspace = await ensureBotWorkspaceDir(input.ownerRoot, input.botId, input.legacyUserDataDir);
+  // An existing project's `.gitignore` gets the local entries before anything below records a version.
+  // When it cannot, the teammate is still prepared; its versions (and a first commit) wait for the next start.
+  const ignore = await ensureTeammateProjectIgnored({ botId: input.botId, workspace });
   // Memory and Skills become the project's own, before the first V2 turn reads them. A project
   // memory kept outside the folder (earlier versions) comes first: it is newer than the V1 copy.
   const moved = await moveTeammateMemoryIntoProject({ botId: input.botId, ownerRoot: input.ownerRoot, workspace });
@@ -553,7 +538,7 @@ export async function prepareBotProjectWorkspace(input: {
   setBotProjectSkillsDir(input.ownerRoot, input.botId, true);
   let repository: BotProjectPreparation['repository'];
   try {
-    repository = await ensureWorkspaceRepository(workspace);
+    repository = ignore === 'ready' ? await ensureWorkspaceRepository(workspace) : 'failed';
     if (repository === 'already-git' && v1Copied > 0) {
       await snapshotTeammateProject(input.botId, workspace, 'Copy teammate memories into the project');
     }

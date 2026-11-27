@@ -30,15 +30,42 @@ vi.mock('@/features/device-link/remoteProjectsStore', () => ({
 }));
 
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
-import { getLastCreatedTaskWorkspace, rememberCreatedTaskWorkspace } from '@/state/lastCreatedTaskWorkspace';
+import {
+  getLastCreatedTaskWorkspace,
+  getLastDeviceTaskWorkspace,
+  rememberCreatedTaskWorkspace,
+  rememberDeviceTaskWorkspace,
+  resolveDeviceSwitchWorkspace,
+} from '@/state/lastCreatedTaskWorkspace';
+import {
+  getRecentDeviceUsage,
+  mergeDeviceRecencyMaps,
+  recordRecentDeviceUsage,
+} from '@/state/recentDeviceUsage';
+import { applyPluginEngineDraftRoute, patchDraft } from '@/state/newMakerDraft';
 import { __resetStickySessionOriginForTest } from '@/features/device-link/stickySessionOrigin';
 import { makeGenericNewMakerRouteState } from '@/features/cc-agent/lib/genericNewMakerRouteState';
+import {
+  makeNewTaskSecondaryWindowRouteState,
+  NEW_TASK_LOCAL_BOOT_DEVICE,
+  NEW_TASK_SECONDARY_WINDOW_TARGET,
+  parseNewTaskSecondaryWindowTarget,
+  resolveNewTaskSecondaryWindowDeviceId,
+  resolveNewTaskSecondaryWindowLaunch,
+} from '@/features/cc-agent/lib/newTaskSecondaryWindow';
 import {
   consumeNewMakerDialogueTargetRequest,
   readNewMakerDialogueTargetRequest,
 } from '@/features/cc-agent/lib/newMakerRouteState';
 
 beforeEach(() => {
+  patchDraft({
+    deviceLinkDeviceId: null,
+    deviceLinkDeviceName: null,
+    workingDir: null,
+    explicitNoProject: false,
+    remoteHostId: null,
+  });
   localStorage.clear();
   setDataOwnerGeneration('owner-a');
   origins.clear();
@@ -76,6 +103,161 @@ describe('last successful new task takes precedence over the viewed task', () =>
     rememberCreatedTaskWorkspace('owner-a', remote);
     localStorage.setItem(localStorage.key(0)!, JSON.stringify({ workingDir: '/wrong-computer' }));
     expect(getLastCreatedTaskWorkspace('owner-a')).toBeNull();
+  });
+});
+
+describe('per-device workspace memory when switching computers in new task', () => {
+  it('remembers each computer’s last selected project independently and collapses managed worktrees', () => {
+    rememberDeviceTaskWorkspace('owner-a', null, {
+      remoteHostId: null,
+      workingDir: '/local/cindy/.cindy-worktrees/task-1',
+    });
+    rememberDeviceTaskWorkspace('owner-a', 'studio-a', {
+      remoteHostId: null,
+      workingDir: '/studio/app/',
+    });
+    rememberDeviceTaskWorkspace('owner-a', 'win-b', {
+      remoteHostId: null,
+      workingDir: 'C:\\Work\\Game\\',
+    });
+
+    expect(resolveDeviceSwitchWorkspace('owner-a', null)).toEqual({
+      workingDir: '/local/cindy',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+    expect(resolveDeviceSwitchWorkspace('owner-a', 'studio-a')).toEqual({
+      workingDir: '/studio/app',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+    expect(resolveDeviceSwitchWorkspace('owner-a', 'win-b')).toEqual({
+      workingDir: 'C:/Work/Game',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+    // Another account never sees owner-a's paths.
+    expect(resolveDeviceSwitchWorkspace('owner-b', 'studio-a')).toEqual({
+      workingDir: null,
+      remoteHostId: null,
+      explicitNoProject: true,
+    });
+  });
+
+  it('remembers explicit dialogue on one computer without overwriting another computer’s project', () => {
+    rememberDeviceTaskWorkspace('owner-a', 'studio-a', { remoteHostId: null, workingDir: '/studio/app' });
+    rememberDeviceTaskWorkspace('owner-a', null, { remoteHostId: null, workingDir: null });
+
+    // Local explicit dialogue overrides the local default directory fallback.
+    expect(resolveDeviceSwitchWorkspace('owner-a', null, '/local/default')).toEqual({
+      workingDir: null,
+      remoteHostId: null,
+      explicitNoProject: true,
+    });
+    expect(resolveDeviceSwitchWorkspace('owner-a', 'studio-a')).toEqual({
+      workingDir: '/studio/app',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+  });
+
+  it('falls back to the local default directory or legacy lastCreatedTaskWorkspace when a computer has no per-device entry', () => {
+    expect(resolveDeviceSwitchWorkspace('owner-a', null, '/local/default')).toEqual({
+      workingDir: '/local/default',
+      remoteHostId: null,
+      explicitNoProject: false,
+    });
+    expect(resolveDeviceSwitchWorkspace('owner-a', 'studio-new', '/local/default')).toEqual({
+      workingDir: null,
+      remoteHostId: null,
+      explicitNoProject: true,
+    });
+
+    // Legacy single-entry record (pre-upgrade) still restores when switching to that computer.
+    localStorage.setItem(
+      'cindy:lastCreatedTaskWorkspace:v1:owner-a',
+      JSON.stringify({
+        deviceId: 'studio-legacy',
+        deviceName: 'Legacy Studio',
+        remoteHostId: null,
+        workingDir: '/legacy/repo',
+      }),
+    );
+    expect(getLastDeviceTaskWorkspace('owner-a', 'studio-legacy')).toEqual({
+      remoteHostId: null,
+      workingDir: '/legacy/repo',
+    });
+  });
+
+  it('preserves SSH remoteHostId only for local computer entries and ignores damaged per-device records', () => {
+    rememberDeviceTaskWorkspace('owner-a', null, { remoteHostId: 'ssh-dev', workingDir: '/srv/app' });
+    rememberDeviceTaskWorkspace('owner-a', 'studio-a', { remoteHostId: 'ssh-dev', workingDir: '/studio/app' });
+    expect(getLastDeviceTaskWorkspace('owner-a', null)).toEqual({
+      remoteHostId: 'ssh-dev',
+      workingDir: '/srv/app',
+    });
+    expect(getLastDeviceTaskWorkspace('owner-a', 'studio-a')).toEqual({
+      remoteHostId: null,
+      workingDir: '/studio/app',
+    });
+
+    localStorage.setItem(
+      'cindy:lastDeviceTaskWorkspace:v1:owner-a',
+      JSON.stringify({
+        local: { remoteHostId: 'ssh-without-dir', workingDir: null },
+        'device:studio-a': { remoteHostId: 'illegal-ssh', workingDir: '/studio/app' },
+      }),
+    );
+    expect(getLastDeviceTaskWorkspace('owner-a', null)).toBeNull();
+    expect(getLastDeviceTaskWorkspace('owner-a', 'studio-a')).toBeNull();
+  });
+});
+
+describe('recentDeviceUsage', () => {
+  it('isolates recorded timestamps per owner, stays monotonic, and ignores invalid inputs', () => {
+    recordRecentDeviceUsage('owner-a', 'mac-mini', 1000);
+    recordRecentDeviceUsage('owner-a', 'mac-mini', 500);
+    recordRecentDeviceUsage('owner-a', 'studio', 2000);
+    recordRecentDeviceUsage('owner-b', 'other-pc', 3000);
+    recordRecentDeviceUsage(null, 'ignored', 4000);
+    recordRecentDeviceUsage('owner-a', '   ', 4000);
+    recordRecentDeviceUsage('owner-a', 'bad-ts', 0);
+
+    expect(getRecentDeviceUsage('owner-a')).toEqual({
+      'mac-mini': 1000,
+      studio: 2000,
+    });
+    expect(getRecentDeviceUsage('owner-b')).toEqual({ 'other-pc': 3000 });
+    expect(getRecentDeviceUsage(null)).toEqual({});
+  });
+
+  it('caps stored devices to the 64 most recent entries and falls back on malformed JSON', () => {
+    for (let i = 1; i <= 70; i += 1) {
+      recordRecentDeviceUsage('owner-a', `dev-${i}`, i * 100);
+    }
+    const stored = getRecentDeviceUsage('owner-a');
+    expect(Object.keys(stored)).toHaveLength(64);
+    expect(stored['dev-1']).toBeUndefined();
+    expect(stored['dev-6']).toBeUndefined();
+    expect(stored['dev-7']).toBe(700);
+    expect(stored['dev-70']).toBe(7000);
+
+    localStorage.setItem('cindy:recentDeviceUsage:v1:owner-a', '{broken');
+    expect(getRecentDeviceUsage('owner-a')).toEqual({});
+  });
+
+  it('merges explicit usage and remote session activity by taking the latest timestamp per device', () => {
+    expect(
+      mergeDeviceRecencyMaps(
+        { 'mac-mini': 1000, studio: 5000 },
+        { 'mac-mini': 4000, 'cloud-box': 2000, invalid: -1 },
+        null,
+      ),
+    ).toEqual({
+      'mac-mini': 4000,
+      studio: 5000,
+      'cloud-box': 2000,
+    });
   });
 });
 
@@ -225,5 +407,178 @@ describe('without a previous creation, new task inherits the current task comput
     const state = makeGenericNewMakerRouteState('/cc-agent/task-a');
     expect(consumeNewMakerDialogueTargetRequest(state)).toEqual({ workspacePrompt: 'generic' });
     expect(readNewMakerDialogueTargetRequest(state)).not.toBeNull();
+  });
+
+  // Regression (#12247 review): after preselecting a local plugin engine from the quota panel,
+  // the immediately following generic new-task navigation must land on this computer instead of
+  // restoring a previous remote/SSH workspace.
+  it('routes to the local computer once after preselecting a local plugin engine', () => {
+    rememberCreatedTaskWorkspace('owner-a', {
+      deviceId: 'computer-a',
+      deviceName: 'Computer A',
+      remoteHostId: null,
+      workingDir: '/remote/project',
+    });
+    expect(applyPluginEngineDraftRoute({ providerId: 'acp-plugin:dsh:dsh', modelId: 'default' })).toBe(true);
+    const first = makeGenericNewMakerRouteState('/cc-agent/task-a');
+    expect(first.restoreLastCreatedWorkspace).toBeUndefined();
+    expect(readNewMakerDialogueTargetRequest(first)).toMatchObject({
+      deviceId: null,
+      deviceName: null,
+      preserveWorkspaceIfSameDevice: true,
+    });
+    // One-shot: subsequent ordinary generic navigation still recalls the remembered workspace.
+    expect(makeGenericNewMakerRouteState('/cc-agent/task-a')).toEqual({
+      workspacePrompt: 'generic',
+      restoreLastCreatedWorkspace: true,
+    });
+  });
+
+  // 测试价值:
+  // - 生产入口与可观察结果: resolveNewTaskSecondaryWindowDeviceId；验证在新窗口打开通用新建页时，
+  //   向副窗传递的 bootDevice 与同窗新建一致（远程任务传设备 ID、本机任务或插件引擎预选传 'local'、有上次工作区或无关路由不传）。
+  // - Bug／规则依据: 左侧导航「新建」支持在新窗口打开，源窗口路由上的设备归属不能在打开副窗时丢失。
+  // - 现有覆盖缺口: 此前仅覆盖同窗 makeGenericNewMakerRouteState，未覆盖跨窗 bootDevice 推导。
+  // - 最小失败输入: 无上次创建记录时在远程任务、本机任务和无关页面打开新窗口，以及有上次记录时触发本地插件引擎一次性路由。
+  // - tier: unit（jsdom）。
+  it('derives the secondary-window bootDevice hint consistently with generic new-task routing', () => {
+    origins.set('remote-task', 'computer-a');
+    localSessionIds.add('local-task');
+
+    expect(resolveNewTaskSecondaryWindowDeviceId('/cc-agent/remote-task')).toBe('computer-a');
+    expect(resolveNewTaskSecondaryWindowDeviceId('/cc-agent/local-task')).toBe(NEW_TASK_LOCAL_BOOT_DEVICE);
+    expect(resolveNewTaskSecondaryWindowDeviceId('/settings')).toBeUndefined();
+
+    rememberCreatedTaskWorkspace('owner-a', {
+      deviceId: 'computer-a',
+      deviceName: 'Computer A',
+      remoteHostId: null,
+      workingDir: '/remote/project',
+    });
+    expect(resolveNewTaskSecondaryWindowDeviceId('/cc-agent/remote-task')).toBeUndefined();
+
+    expect(applyPluginEngineDraftRoute({ providerId: 'acp-plugin:dsh:dsh', modelId: 'default' })).toBe(true);
+    expect(resolveNewTaskSecondaryWindowDeviceId('/cc-agent/remote-task')).toBe(NEW_TASK_LOCAL_BOOT_DEVICE);
+    expect(resolveNewTaskSecondaryWindowDeviceId('/cc-agent/remote-task')).toBeUndefined();
+  });
+
+  // 测试价值:
+  // - 生产入口与可观察结果: resolveNewTaskSecondaryWindowLaunch / parseNewTaskSecondaryWindowTarget /
+  //   makeNewTaskSecondaryWindowRouteState；验证尚无创建记录时，源窗口在 /cc-agent/new、/settings 或
+  //   同机远程任务页上已选的远程电脑、远程目录与显式仅对话会跨窗口保留，且切到其他电脑或存在上次创建记录时不泄漏。
+  // - Bug／规则依据: PR #13368 review (P1) — newMakerDraft.sanitize 在新窗口冷启动时会清空 deviceLinkDeviceId
+  //   和远程 workingDir，若不显式透传远程草稿目标，新窗口会静默回退到本机或丢失同机远程项目。
+  // - 现有覆盖缺口: 此前仅验证有任务归属时的 bootDevice，未覆盖源窗口远程草稿在保留态、同机远程任务与切回本机时的跨窗行为。
+  // - 最小失败输入: 无 lastCreatedTaskWorkspace 时在 /cc-agent/new 选中 computer-a 与 /remote/app 后新窗口打开。
+  // - tier: unit（jsdom）。
+  it('preserves transient remote draft target and workspace across secondary windows without cross-device leakage', () => {
+    patchDraft({
+      deviceLinkDeviceId: 'computer-a',
+      deviceLinkDeviceName: 'Computer A',
+      workingDir: '/remote/app',
+      explicitNoProject: false,
+    });
+
+    for (const route of ['/cc-agent/new', '/settings']) {
+      const launch = resolveNewTaskSecondaryWindowLaunch(route);
+      expect(launch.bootDeviceId).toBe('computer-a');
+      const parsed = parseNewTaskSecondaryWindowTarget(launch.bootSession);
+      expect(parsed).toEqual({
+        workingDir: '/remote/app',
+        deviceName: 'Computer A',
+      });
+      const routeState = makeNewTaskSecondaryWindowRouteState(launch.bootDeviceId ?? null, parsed ?? undefined);
+      expect(routeState.workspacePrompt).toBe('generic');
+      expect(readNewMakerDialogueTargetRequest(routeState)).toMatchObject({
+        deviceId: 'computer-a',
+        deviceName: 'Computer A',
+        preserveWorkspaceIfSameDevice: true,
+        workingDir: '/remote/app',
+      });
+    }
+
+    // Same-device remote task inherits both the computer and the active remote project.
+    origins.set('remote-a-task', 'computer-a');
+    const sameDeviceLaunch = resolveNewTaskSecondaryWindowLaunch('/cc-agent/remote-a-task');
+    expect(sameDeviceLaunch.bootDeviceId).toBe('computer-a');
+    expect(parseNewTaskSecondaryWindowTarget(sameDeviceLaunch.bootSession)).toEqual({
+      workingDir: '/remote/app',
+      deviceName: 'Computer A',
+    });
+
+    // Different remote task must not inherit computer-a's workingDir onto computer-b.
+    origins.set('remote-b-task', 'computer-b');
+    const otherDeviceLaunch = resolveNewTaskSecondaryWindowLaunch('/cc-agent/remote-b-task');
+    expect(otherDeviceLaunch).toEqual({
+      bootSession: NEW_TASK_SECONDARY_WINDOW_TARGET,
+      bootDeviceId: 'computer-b',
+    });
+
+    // Remote explicit dialogue on /cc-agent/new preserves explicitNoProject across windows.
+    patchDraft({
+      deviceLinkDeviceId: 'computer-a',
+      deviceLinkDeviceName: 'Computer A',
+      workingDir: null,
+      explicitNoProject: true,
+    });
+    const remoteDialogueLaunch = resolveNewTaskSecondaryWindowLaunch('/cc-agent/new');
+    expect(remoteDialogueLaunch.bootDeviceId).toBe('computer-a');
+    const remoteDialogueHint = parseNewTaskSecondaryWindowTarget(remoteDialogueLaunch.bootSession);
+    expect(remoteDialogueHint).toEqual({
+      explicitNoProject: true,
+      deviceName: 'Computer A',
+    });
+    expect(
+      readNewMakerDialogueTargetRequest(
+        makeNewTaskSecondaryWindowRouteState(remoteDialogueLaunch.bootDeviceId ?? null, remoteDialogueHint ?? undefined),
+      ),
+    ).toMatchObject({
+      deviceId: 'computer-a',
+      deviceName: 'Computer A',
+      preserveWorkspaceIfSameDevice: true,
+      explicitNoProject: true,
+    });
+
+    // Moving from a remote draft to a local task must not let sanitized remote explicitNoProject suppress local defaults.
+    localSessionIds.add('local-task');
+    const toLocalLaunch = resolveNewTaskSecondaryWindowLaunch('/cc-agent/local-task');
+    expect(toLocalLaunch.bootDeviceId).toBe(NEW_TASK_LOCAL_BOOT_DEVICE);
+    const toLocalHint = parseNewTaskSecondaryWindowTarget(toLocalLaunch.bootSession);
+    expect(toLocalHint).toEqual({ resetWorkspace: true });
+    const toLocalRequest = readNewMakerDialogueTargetRequest(
+      makeNewTaskSecondaryWindowRouteState(toLocalLaunch.bootDeviceId ?? null, toLocalHint ?? undefined),
+    );
+    expect(toLocalRequest).toMatchObject({ deviceId: null, deviceName: null });
+    expect(toLocalRequest?.preserveWorkspaceIfSameDevice).toBeUndefined();
+
+    // Recorded lastCreatedTaskWorkspace still takes precedence over an in-memory remote draft.
+    rememberCreatedTaskWorkspace('owner-a', {
+      deviceId: null,
+      deviceName: null,
+      remoteHostId: null,
+      workingDir: '/local/last',
+    });
+    expect(resolveNewTaskSecondaryWindowLaunch('/cc-agent/new')).toEqual({
+      bootSession: NEW_TASK_SECONDARY_WINDOW_TARGET,
+      bootDeviceId: undefined,
+    });
+
+    // Guard against prefix spoofing and applying remote hints onto local boot targets.
+    expect(parseNewTaskSecondaryWindowTarget('/cc-agent/new/other')).toBeNull();
+    expect(parseNewTaskSecondaryWindowTarget('/cc-agent/new-session')).toBeNull();
+    expect(
+      readNewMakerDialogueTargetRequest(
+        makeNewTaskSecondaryWindowRouteState(NEW_TASK_LOCAL_BOOT_DEVICE, {
+          workingDir: '/remote/app',
+          explicitNoProject: true,
+        }),
+      ),
+    ).toEqual(
+      expect.objectContaining({
+        deviceId: null,
+        deviceName: null,
+        preserveWorkspaceIfSameDevice: true,
+      }),
+    );
   });
 });

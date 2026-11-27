@@ -7,25 +7,29 @@
  *
  * 与普通供应商一致的部分：重命名(只在这台电脑上的显示名)、在模型选择器中隐藏、停用、逐模型开关、
  * 「允许被远程调用」与分享入口、账号用量。不同的部分照实呈现：登录和连接由插件自己管理(详情给
- * 「打开插件」，没有删除，卸载在插件页)；模型由引擎自己上报，打开详情时请插件重新上报一次(主进程
+ * 「打开插件」，更多菜单可卸载提供它的插件)；模型由引擎自己上报，打开详情时请插件重新上报一次(主进程
  * 按插件冷却)；不参与拖动排序、供应商组和引擎切换。
  */
-import { Eye, EyeOff, MoreHorizontal, Pencil, Power, RotateCcw } from 'lucide-react';
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { Eye, EyeOff, MoreHorizontal, Pencil, Power, RotateCcw, SlidersHorizontal, Trash2 } from 'lucide-react';
+import { useEffect, useId, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import type { GhostHarnessUsage } from '@cindy/plugin-protocol';
+import { isAntigravityPluginId } from '@cindy/maker-shared/branding';
 
+import { readInstalledGhostsSnapshot } from '@/cindy-brain/useInstalledGhosts';
+import { useUninstallPlugin } from '@/features/plugin/lib/useUninstallPlugin';
+import { findInstalledGhostByInstanceId } from '../../../shared/pluginIdentity';
 import { PluginEngineIcon } from '@/components/icons/PluginEngineIcon';
 import { QuotaHoverCard } from '@/components/status/QuotaHoverCard';
 import { pluginEngineUsageAccount } from '@/components/status/pluginEngineUsageAccount';
 import { Button } from '@/components/ui/button';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Switch } from '@/components/ui/switch';
 import { Tip } from '@/components/ui/tooltip';
-import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, subscribeDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { usePluginEngineRemoteUseSwitch } from '@/features/plugin/PluginEngineRemoteUse';
 import { ProviderShareEntryButton } from '@/features/provider-share/ProviderShareEntryButton';
 import { readPluginEngineUsage } from '@/hooks/pluginEngineUsage';
@@ -40,7 +44,9 @@ import {
   type PluginEngineView,
 } from '../../../shared/pluginEngines';
 import { providersSettings } from './ProvidersSection.settings-search';
+import { PluginModelAdvancedDialog } from './PluginModelAdvancedDialog';
 import { SettingsTextInput } from './SettingsTextInput';
+import { SubscriptionAccountsSection } from './SubscriptionAccountsSection';
 
 const AVATAR_STYLE = {
   backgroundColor: 'var(--settings-integration-avatar-bg)',
@@ -132,7 +138,7 @@ export function PluginTag({ size }: { size: 'row' | 'detail' }) {
 }
 
 function engineReady(engine: PluginEngineView): boolean {
-  return engine.availability.state !== 'unavailable';
+  return engine.availability.state === 'available';
 }
 
 /** 左栏里由插件提供的供应商：与本机供应商同一行式，接在它们下面，不参与拖动排序。 */
@@ -245,6 +251,7 @@ function RemoteAccessRow({
                 type="button"
                 data-settings-search-action="Open the remote control settings"
                 onClick={() => navigate('/settings?tab=remote-control')}
+                // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
                 className="rounded-sm text-[var(--text-secondary)] underline underline-offset-2 transition-colors hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
               >
                 {t('providerShare.entry.openRemoteControl')}
@@ -315,21 +322,28 @@ export function PluginEngineUsage({ deviceId, engineKey }: { deviceId: string | 
 }
 
 function ModelRow({
-  engine,
   model,
   enabled,
+  busy,
+  advanced,
+  triggerId,
+  onOpenAdvanced,
+  onToggle,
 }: {
-  engine: PluginEngineView;
   model: PluginEngineModel;
   enabled: boolean;
+  busy: boolean;
+  advanced: boolean;
+  triggerId: string;
+  onOpenAdvanced: () => void;
+  onToggle: (enabled: boolean) => void;
 }) {
   const { t } = useTranslation();
-  const [busy, setBusy] = useState(false);
   const name = model.displayName || model.id;
   return (
     <li
       data-plugin-engine-model={model.id}
-      className="flex items-center gap-3 rounded-lg px-3 py-2 text-13"
+      className="group flex items-center gap-3 rounded-lg px-3 py-2 text-13 hover:bg-[var(--surface-hover)]"
       style={{ color: enabled ? 'var(--text-primary)' : 'var(--text-tertiary)' }}
     >
       <span className="min-w-0 flex-1">
@@ -340,18 +354,24 @@ function ModelRow({
           </span>
         )}
       </span>
+      <Tip text={t('settings.providers.models.advanced.open')}>
+        <button type="button" id={triggerId}
+          data-settings-search-action="Open advanced settings for this plugin model"
+          aria-label={t('settings.providers.models.advanced.openAria', { name })}
+          className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)]',
+            'opacity-0 transition-opacity hover:bg-[var(--surface-hover)] focus-visible:opacity-100 group-hover:opacity-100',
+            advanced && 'opacity-100')}
+          onClick={onOpenAdvanced}
+        >
+          <SlidersHorizontal size={14} aria-hidden />
+        </button>
+      </Tip>
       <Switch
         data-setting-id={providersSettings.pluginProviders.id}
         checked={enabled}
         disabled={busy}
         aria-label={t('settings.providers.plugin.modelSwitchAria', { model: name })}
-        onCheckedChange={(next) => {
-          setBusy(true);
-          void writePluginEnginePrefs(
-            { key: engine.key, models: { ids: [model.id], disabled: !next } },
-            t('settings.providers.models.accessWriteFailed'),
-          ).finally(() => setBusy(false));
-        }}
+        onCheckedChange={onToggle}
       />
     </li>
   );
@@ -362,6 +382,43 @@ function EngineModels({ engine }: { engine: PluginEngineView }) {
   const { t } = useTranslation();
   const off = engine.disabledModels ?? [];
   const total = engine.models.length + off.length;
+  const triggerPrefix = useId();
+  const owner = useSyncExternalStore(subscribeDataOwnerGeneration, getDataOwnerGeneration);
+  const [opened, setOpened] = useState<{ owner: typeof owner; key: string; modelId: string }>();
+  const [pending, setPending] = useState<{ owner: typeof owner; ids: string[] }>();
+  const pendingIds = pending?.owner === owner ? pending.ids : [];
+  const activeId = opened?.owner === owner && opened.key === engine.key ? opened.modelId : undefined;
+  const enabledModel = engine.models.find(model => model.id === activeId);
+  const currentModel = enabledModel ?? off.find(model => model.id === activeId);
+  const ownerStamp = { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation };
+  const triggerIdFor = (modelId: string) => [triggerPrefix, engine.key, modelId].join('-');
+
+  function setModelEnabled(id: string, next: boolean) {
+    if (!isDataOwnerGenerationCurrent(owner)) return;
+    setPending(prior => ({ owner, ids: [...(prior?.owner === owner ? prior.ids : []), id] }));
+    void writePluginEnginePrefs(
+      { key: engine.key, models: { ids: [id], disabled: !next }, ownerStamp },
+      t('settings.providers.models.accessWriteFailed'),
+    ).finally(() => {
+      setPending(prior => prior?.owner === owner ? { owner, ids: prior.ids.filter(modelId => modelId !== id) } : prior);
+    });
+  }
+
+  function renderRow(model: PluginEngineModel, enabled: boolean) {
+    return (
+      <ModelRow
+        key={JSON.stringify([engine.key, model.id])}
+        model={model}
+        enabled={enabled}
+        busy={pendingIds.includes(model.id)}
+        advanced={activeId === model.id}
+        triggerId={triggerIdFor(model.id)}
+        onOpenAdvanced={() => setOpened({ owner, key: engine.key, modelId: model.id })}
+        onToggle={next => setModelEnabled(model.id, next)}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col border-t" style={DIVIDER_STYLE}>
       <div className="flex shrink-0 items-baseline gap-2 px-5 pb-2 pt-3">
@@ -381,9 +438,7 @@ function EngineModels({ engine }: { engine: PluginEngineView }) {
       ) : (
         <>
           <ul data-testid="plugin-engine-models" className="px-2 pb-3">
-            {engine.models.map((model) => (
-              <ModelRow key={model.id} engine={engine} model={model} enabled />
-            ))}
+            {engine.models.map(model => renderRow(model, true))}
           </ul>
           {off.length > 0 && (
             <div role="group" aria-label={t('settings.providers.models.disabledGroup')}>
@@ -391,13 +446,37 @@ function EngineModels({ engine }: { engine: PluginEngineView }) {
                 {t('settings.providers.models.disabledGroup')}
               </span>
               <ul data-testid="plugin-engine-models-off" className="px-2 pb-3">
-                {off.map((model) => (
-                  <ModelRow key={model.id} engine={engine} model={model} enabled={false} />
-                ))}
+                {off.map(model => renderRow(model, false))}
               </ul>
             </div>
           )}
         </>
+      )}
+      {currentModel && (
+        <PluginModelAdvancedDialog
+          key={currentModel.id}
+          model={currentModel}
+          reported={engine.reportedModelDetails?.find(details => details.modelId === currentModel.id)}
+          antigravity={isAntigravityPluginId(engine.ghostId)}
+          providerName={engine.name}
+          customized={Object.hasOwn(engine.modelEfforts ?? {}, currentModel.id)}
+          enabled={Boolean(enabledModel)}
+          visibilityBusy={pendingIds.includes(currentModel.id)}
+          onToggle={next => setModelEnabled(currentModel.id, next)}
+          onSave={effort => {
+            if (!isDataOwnerGenerationCurrent(owner)) return Promise.resolve(false);
+            return writePluginEnginePrefs({
+              key: engine.key,
+              modelEffort: { id: currentModel.id, effort },
+              ownerStamp,
+            }, t('settings.providers.models.accessWriteFailed'));
+          }}
+          onClose={() => setOpened(undefined)}
+          onCloseAutoFocus={event => {
+            event.preventDefault();
+            if (isDataOwnerGenerationCurrent(owner)) document.getElementById(triggerIdFor(currentModel.id))?.focus();
+          }}
+        />
       )}
     </div>
   );
@@ -421,8 +500,18 @@ export function PluginEngineProviderDetail({
   const rename = usePluginEngineRename();
   const visibilityError = t('settings.providers.models.visibilityWriteFailed');
   const accessError = t('settings.providers.models.accessWriteFailed');
+  const uninstallPlugin = useUninstallPlugin();
+  const uninstallProviderPlugin = () => {
+    const ghost = findInstalledGhostByInstanceId(readInstalledGhostsSnapshot(), engine.ghostId);
+    if (!ghost) {
+      toast.error(t('settings.ghosts.market.errors.stateChanged'));
+      return;
+    }
+    const marketId = ghost.publishingSource?.kind === 'public-market' ? ghost.publishingSource.pluginId : undefined;
+    void uninstallPlugin(ghost, ghost.manifest.name, marketId);
+  };
   const openPlugin = () => navigate(`/settings?tab=ghosts&ghost=${encodeURIComponent(engine.ghostId)}`);
-  const unavailable = !engine.suspended && !engineReady(engine);
+  const unavailable = !engine.suspended && engine.availability.state === 'unavailable';
   // 与模型选择器同一时机：打开时请插件重新上报模型(主进程按插件冷却)，新列表随推送到达。
   useEffect(() => {
     requestPluginEnginesRefresh(engine.ghostId);
@@ -433,7 +522,7 @@ export function PluginEngineProviderDetail({
       ? 'newChat.pluginEngines.unavailable'
       : engine.hidden
         ? 'settings.providers.pill.hidden'
-        : 'settings.providers.remote.statusReady';
+        : engineReady(engine) ? 'settings.providers.remote.statusReady' : 'settings.providers.wizard.engineState.unknown';
   return (
     <div data-testid="plugin-engine-provider-detail" className="flex min-h-0 flex-1 flex-col">
       <div className="shrink-0 px-5 py-4">
@@ -517,6 +606,11 @@ export function PluginEngineProviderDetail({
                   <Power size={18} className="mr-2.5" />
                   {t(engine.suspended ? 'settings.providers.menu.enableProvider' : 'settings.providers.menu.disableProvider')}
                 </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="danger" onSelect={uninstallProviderPlugin}>
+                  <Trash2 size={18} className="mr-2.5" />
+                  {t('settings.ghosts.detail.dangerTitle')}
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -585,7 +679,12 @@ export function PluginEngineProviderDetail({
             onManageShare={onManageShare}
           />
         )}
-        {!engine.suspended && engine.reportsUsage && (
+        {/* Accounts (2026-11-23): the same account section as built-in providers, each account with its
+            own usage; an engine without account support keeps its single usage card. */}
+        {!engine.suspended && engine.accounts && (
+          <SubscriptionAccountsSection key={`accounts:${engine.providerId}`} providerId={engine.providerId} providerName={engine.name} />
+        )}
+        {!engine.suspended && !engine.accounts && engine.reportsUsage && (
           <PluginEngineUsage key={`usage:${engine.key}`} deviceId={null} engineKey={engine.key} />
         )}
         {!engine.suspended && <EngineModels engine={engine} />}

@@ -307,6 +307,54 @@ interface ReferencePriceOptions {
   variant?: 'standard' | 'priority' | 'batch' | 'fast';
 }
 
+export function modelCostQuote(
+  providerId: string,
+  model: CatalogModel,
+): ModelPriceQuote | undefined {
+  const cost = model.cost;
+  if (cost?.input === undefined || cost.output === undefined) return undefined;
+  if (![cost.input, cost.output].every(value => Number.isFinite(value) && value >= 0)) return undefined;
+  const tiers = (cost.tiers ?? [])
+    .filter(tier => Number.isFinite(tier.inputTokensAbove) && tier.inputTokensAbove >= 0)
+    .sort((a, b) => a.inputTokensAbove - b.inputTokensAbove);
+  const inputTokenPriceBands = tiers.length > 0
+    ? [
+        {
+          minInputTokens: 0,
+          maxInputTokens: tiers[0]!.inputTokensAbove + 1,
+          inputPerMtok: cost.input,
+          outputPerMtok: cost.output,
+          ...(cost.cacheRead !== undefined ? { cacheReadPerMtok: cost.cacheRead } : {}),
+          ...(cost.cacheWrite !== undefined ? { cacheCreatePerMtok: cost.cacheWrite } : {}),
+        },
+        ...tiers.map((tier, index) => ({
+          minInputTokens: tier.inputTokensAbove + 1,
+          ...(tiers[index + 1] ? { maxInputTokens: tiers[index + 1]!.inputTokensAbove + 1 } : {}),
+          inputPerMtok: tier.input ?? cost.input,
+          outputPerMtok: tier.output ?? cost.output,
+          ...(tier.cacheRead !== undefined || cost.cacheRead !== undefined
+            ? { cacheReadPerMtok: tier.cacheRead ?? cost.cacheRead }
+            : {}),
+          ...(tier.cacheWrite !== undefined || cost.cacheWrite !== undefined
+            ? { cacheCreatePerMtok: tier.cacheWrite ?? cost.cacheWrite }
+            : {}),
+        })),
+      ]
+    : undefined;
+  return {
+    providerId,
+    modelId: model.id,
+    currency: 'USD',
+    source: 'provider-reference',
+    approximate: true,
+    inputPerMtok: cost.input,
+    outputPerMtok: cost.output,
+    ...(cost.cacheRead !== undefined ? { cacheReadPerMtok: cost.cacheRead } : {}),
+    ...(cost.cacheWrite !== undefined ? { cacheCreatePerMtok: cost.cacheWrite } : {}),
+    ...(inputTokenPriceBands ? { inputTokenPriceBands } : {}),
+  };
+}
+
 export function providerReferencePriceQuote(
   providerId: string,
   modelId: string,

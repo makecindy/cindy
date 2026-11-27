@@ -44,6 +44,13 @@ export function isPluginEngineEffort(value: unknown): value is PluginEngineEffor
   return typeof value === 'string' && (PLUGIN_ENGINE_EFFORTS as readonly string[]).includes(value);
 }
 
+/** Live facts for the local settings page only. */
+export interface PluginEngineReportedModelDetails {
+  modelId: string;
+  imageInput?: boolean;
+  contextWindow?: number;
+}
+
 export interface PluginEngineModel {
   id: string;
   displayName: string;
@@ -51,8 +58,10 @@ export interface PluginEngineModel {
   group?: string;
   /** Levels the engine offers for this model, low → high; absent = no selectable level. */
   efforts?: PluginEngineEffort[];
-  /** The engine's own level when none is chosen (one of `efforts`). */
+  /** Default for a new task, including the provider's saved override (one of `efforts`). */
   defaultEffort?: PluginEngineEffort;
+  /** With an override, the original plugin default. Null means the plugin declared no level. */
+  declaredDefaultEffort?: PluginEngineEffort | null;
 }
 
 /**
@@ -64,6 +73,14 @@ export type PluginEnginePermissionModeId = (typeof PLUGIN_ENGINE_PERMISSION_MODE
 
 export function isPluginEnginePermissionModeId(value: unknown): value is PluginEnginePermissionModeId {
   return typeof value === 'string' && (PLUGIN_ENGINE_PERMISSION_MODE_IDS as readonly string[]).includes(value);
+}
+
+export interface NewTaskPluginEngineSelection {
+  providerId: string;
+  deviceId?: string;
+  modelId: string;
+  permissionMode?: PluginEnginePermissionModeId;
+  effort?: PluginEngineEffort;
 }
 
 export interface PluginEnginePermissionMode {
@@ -127,6 +144,19 @@ export interface PluginEngineView {
   declaredName?: string;
   /** The models the user turned off, as the engine lists them. Not sent to phones or other computers. */
   disabledModels?: PluginEngineModel[];
+  reportedModelDetails?: PluginEngineReportedModelDetails[];
+  /** Explicit per-model reasoning defaults, for settings on this computer. */
+  modelEfforts?: Readonly<Partial<Record<string, PluginEngineEffort>>>;
+  /**
+   * 2026-11-23 (subscription-account-pools.md 插件引擎的账号): the plugin reports this engine's
+   * account; with sign-in methods, Cindy can add accounts to it. Absent on older hosts and plugins.
+   */
+  accounts?: { methods: Array<{ id: string; label: string; kind: 'browser' | 'secret'; secretLabel?: string }> };
+  /**
+   * A provider the user took accounts out of this engine into: `key` is `<engine key>~<suffix>`
+   * and this names the engine it runs. Absent for the engine itself.
+   */
+  accountProviderOf?: string;
 }
 
 /** One change to an engine's settings; only the fields present are changed. */
@@ -141,6 +171,8 @@ export interface PluginEnginePrefsInput {
   suspended?: boolean;
   /** Turns these models of the engine off or on again. */
   models?: { ids: string[]; disabled: boolean };
+  /** A null effort restores the plugin's default for this model. */
+  modelEffort?: { id: string; effort: PluginEngineEffort | null };
 }
 
 /** Longest display name the user can give an engine (a plugin's declared name has the same bound). */
@@ -213,4 +245,28 @@ export function pluginEngineKeyFromProviderId(providerId: string | null | undefi
 
 export function isPluginEngineKind(kind: unknown): kind is typeof PLUGIN_ENGINE_AGENT_KIND {
   return kind === PLUGIN_ENGINE_AGENT_KIND;
+}
+
+/**
+ * 任务来源是否允许在已有任务内切到 / 换出插件引擎。
+ * 覆盖桌面普通任务、伙伴、官方 hook(x / feishu / telegram / discord-hook)与个人 IM 渠道；
+ * review / learn / cindy-make / scheduler 等专有生命周期继续隔离。
+ */
+const PLUGIN_ENGINE_SWITCH_ALLOWED_SOURCES: ReadonlySet<string> = new Set([
+  'desktop',
+  'bot',
+  'x',
+  'feishu',
+  'telegram',
+  'discord',
+  'discord-hook',
+  'slack',
+  'wechat',
+  'dingtalk',
+  'wecom',
+  'imessage',
+]);
+
+export function isPluginEngineSwitchSourceAllowed(source: string | null | undefined): boolean {
+  return !source || PLUGIN_ENGINE_SWITCH_ALLOWED_SOURCES.has(source);
 }

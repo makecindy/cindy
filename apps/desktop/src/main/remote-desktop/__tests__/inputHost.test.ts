@@ -59,6 +59,62 @@ function childProcess() {
   };
 }
 describe('native input lifecycle', () => {
+  // Unit regression for #11506: start() must not send Windows input-desktop errors
+  // to the Mac permission hint. Existing tests only handshook with ready.
+  it.each([
+    ['win32', 'error input_desktop 5\n', 'DESKTOP_INPUT_UNAVAILABLE'],
+    ['darwin', 'permission\n', 'DESKTOP_ACCESSIBILITY_REQUIRED'],
+    ['win32', 'ready\n', null],
+    ['darwin', 'ready\n', null],
+  ] as const)('classifies %s helper startup %j', async (platform, line, error) => {
+    const c = childProcess();
+    const host = new DesktopInputHost(vi.fn(), {
+      platform,
+      resolveBinary: async () => '/test/helper',
+      spawn: () => {
+        void Promise.resolve().then(() => c.child.stdout.emit('data', Buffer.from(line)));
+        return c.typed;
+      },
+    });
+    try {
+      if (error) {
+        await expect(host.start('1')).rejects.toThrow(error);
+        expect(c.child.stdin.end).toHaveBeenCalledWith('[{"kind":"release"}]\n');
+      } else await expect(host.start('1')).resolves.toBeUndefined();
+    } finally {
+      host.stop();
+      c.exit();
+      await host.release();
+    }
+    await expect(withAgentDesktopInput(async () => {})).resolves.toBeUndefined();
+  });
+
+  it.each(['error', 'exit', 'timeout'] as const)(
+    'reports unavailable when Windows helper startup ends with %s',
+    async (outcome) => {
+      vi.useFakeTimers();
+      const c = childProcess();
+      const host = new DesktopInputHost(vi.fn(), {
+        platform: 'win32',
+        resolveBinary: async () => '/test/helper',
+        spawn: () => c.typed,
+      });
+      try {
+        const rejected = expect(host.start('1')).rejects.toThrow('DESKTOP_INPUT_UNAVAILABLE');
+        await flush();
+        if (outcome === 'error') c.child.emit('error', new Error('spawn failed'));
+        else if (outcome === 'exit') c.exit();
+        else vi.advanceTimersByTime(8000);
+        await rejected;
+      } finally {
+        host.stop();
+        c.exit();
+        await host.release();
+      }
+      await expect(withAgentDesktopInput(async () => {})).resolves.toBeUndefined();
+    },
+  );
+
   it('retains Windows ownership until queued text and native release are acknowledged', async () => {
     vi.useFakeTimers();
     Object.defineProperty(process, 'platform', { value: 'win32' });
@@ -531,6 +587,39 @@ it('keeps Linux whole-desktop coordinates normalized and releases input before r
   }
 });
 
+it('cloud X11 waits for agent input and holds ownership until native cleanup completes', async () => {
+  vi.useFakeTimers();
+  vi.stubEnv('WAYLAND_DISPLAY', '');
+  let finishAgent!: () => void, finishInput!: () => void, finishStop!: () => void;
+  const connection = {
+    input: vi.fn(), settled: () => new Promise<void>(resolve => { finishInput = resolve; }),
+    stop: () => new Promise<void>(resolve => { finishStop = resolve; }),
+  };
+  const host = new DesktopInputHost(vi.fn(), {
+    platform: 'linux', openLinuxInput: async () => connection as never,
+    resolveBinary: async () => { throw new Error('X11 must not resolve the Wayland helper'); },
+    spawn: () => { throw new Error('X11 must not spawn the Wayland helper'); },
+  });
+  try {
+    await host.start('1');
+    const agent = withAgentDesktopInput(() => new Promise<void>(resolve => { finishAgent = resolve; }));
+    await flush();
+    host.input([{ kind: 'text', text: 'fixture' }]);
+    await flush();
+    expect(connection.input).not.toHaveBeenCalled();
+    finishAgent(); await agent; await flush();
+    expect(connection.input).toHaveBeenCalledExactlyOnceWith([{ kind: 'text', text: 'fixture' }]);
+    await expect(withAgentDesktopInput(async () => {})).rejects.toThrow('input is active');
+    host.stop(); await flush();
+    finishInput(); await flush();
+    await expect(withAgentDesktopInput(async () => {})).rejects.toThrow('input is active');
+    finishStop(); await flush();
+    await expect(withAgentDesktopInput(async () => {})).resolves.toBeUndefined();
+  } finally {
+    finishAgent?.(); finishInput?.(); host.stop(); finishStop?.(); await flush(); vi.unstubAllEnvs();
+  }
+});
+
 describe('代输入 window input', () => {
   it('starts the helper confined to one window and passes fractions through untouched', async () => {
     const c = childProcess();
@@ -607,6 +696,38 @@ it('starts an X11 helper with monitor geometry and releases held keys on teardow
     expect(c.child.stdin.end).toHaveBeenCalledWith('[{"kind":"release"}]\n');
     c.exit();
     await releasing;
+  } finally {
+    host.stop();
+    c.exit();
+  }
+});
+
+// GNOME Wayland (Ubuntu default): Mutter maps normalized points onto the selected
+// monitor's stream, so the helper must receive the connector and unmapped points.
+// A malformed connector must never reach the helper's arguments.
+it('starts the GNOME helper for one connector and forwards normalized points', async () => {
+  vi.useFakeTimers();
+  vi.stubEnv('XDG_SESSION_TYPE', 'wayland');
+  vi.stubEnv('WAYLAND_DISPLAY', 'wayland-0');
+  const c = childProcess();
+  const spawn = vi.fn(() => {
+    queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+    return c.typed;
+  });
+  const host = new DesktopInputHost(vi.fn(), {
+    platform: 'linux',
+    resolveBinary: async () => '/test/input',
+    spawn,
+  });
+  try {
+    await expect(host.start('gnome:../DP-1')).rejects.toThrow('DESKTOP_DISPLAY_MISSING');
+    expect(spawn).not.toHaveBeenCalled();
+    await host.start('gnome:DP-1');
+    expect(spawn).toHaveBeenCalledWith('/test/input', ['--gnome', 'DP-1']);
+    const events = [{ kind: 'move' as const, x: 0.25, y: 0.75 }];
+    host.input(events);
+    await flush();
+    expect(c.child.stdin.write.mock.calls[0][0]).toBe(JSON.stringify(events) + '\n');
   } finally {
     host.stop();
     c.exit();

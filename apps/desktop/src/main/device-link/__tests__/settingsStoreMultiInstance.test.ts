@@ -47,6 +47,31 @@ afterAll(() => {
 });
 
 describe('settings-store 多实例 mtime 失效', () => {
+  // Unit, real shared settings: the share hot path may defer external revocation for one
+  // minute, without a stat per call. Local writes and uncached readers remain immediate.
+  it('bounds opted-in shared-control checks and observes local disable immediately', async () => {
+    let at = 1_000_000;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => at);
+    try {
+      externalWrite({ remoteControlEnabled: true }, 11_000);
+      expect(readDeviceLinkSettings(true).remoteControlEnabled).toBe(true);
+      const stat = vi.spyOn(fs, 'statSync');
+      try {
+        for (let i = 0; i < 60; i++) expect(readDeviceLinkSettings(false, 60_000).remoteControlEnabled).toBe(true);
+        expect(stat).not.toHaveBeenCalled();
+        externalWrite({ remoteControlEnabled: false }, 12_000);
+        at += 59_999;
+        expect(readDeviceLinkSettings(false, 60_000).remoteControlEnabled).toBe(true);
+        at++;
+        expect(readDeviceLinkSettings(false, 60_000).remoteControlEnabled).toBe(false);
+        externalWrite({ remoteControlEnabled: true }, 13_000);
+        expect(readDeviceLinkSettings().remoteControlEnabled).toBe(true);
+        await writeDeviceLinkSetting('remoteControlEnabled', false);
+        expect(readDeviceLinkSettings(false, 60_000).remoteControlEnabled).toBe(false);
+      } finally { stat.mockRestore(); }
+    } finally { clock.mockRestore(); }
+  });
+
   it('无文件时返回默认值', () => {
     // agent-net 产品规则：新安装不自动启用实验连接或限制旧版连接。
     expect(readDeviceLinkSettings()).toMatchObject({

@@ -1,5 +1,9 @@
 # 个人版迁移放行表
 
+> 2026-11-25 起暂停更新：现有用户的原地迁移挪到阶段 5（见
+> [分阶段路线](headless-runtime-plan.md#分阶段路线2026-11-25-起)），本表作为那时的素材保留，
+> 不是当前的门禁。
+
 2026-11-12 起，随 M1 每个检查点更新（分支 `cindy/host-m1`，检查点标签 `m1-cp*`）。
 个人版切到 Host 之前，「个人版应保留的能力」必须逐项有结论；本表记录每项的现状与证据。
 开放迁移由交接任务决定，本表只提供依据。
@@ -157,7 +161,7 @@
 | 代理的进程内登记在 owner 变更时 | 路由登记随 app 生命周期常驻 | 代理运行时关闭时，按它服务过的任务 id 清掉路由登记与后台活动；Pi 会话 token 用同一撤销函数 | Host 比桌面严：Host 跨 owner 长期运行，M2 还会把读路由登记的通道开出去 |
 | Pi 思考开关记忆（M2 之前） | 读渲染层镜像 | 镜像为空 | 用模型默认值 |
 | 用量记录（2e 之前） | 记录 | 不记录 | Host 期间的用量丢失；Host 侧 e2e 的「三张用量表行数」核对不适用 |
-| 删除任务 | 界面删除把任务标为 `status='deleted'`（软删除），启动后的对账据此删掉它的保存点引用；桌面不在删除时立即删引用（`sessions.ts:689-693`，不可逆） | Host 的 `deleteSession`（`/api/sessions/delete`）调 `OwnerSessionStorage.delete` 物理删行；对账不认行缺失，保存点引用留在用户仓库 | 已定：随 M2 的删除通道改为与桌面相同的软删除与同一组清理；届时硬删除要么改成同一语义，要么只留给不面向用户的用途并写明调用方，并核实硬删除是否会让删除状态同步不到云端与其他设备。**迁移前必须完成** |
+| 删除任务 | 界面删除把任务标为 `status='deleted'`，并在同一事务清掉本机聊天正文、预览和搜索关联。启动后的对账据此删掉它的保存点引用；桌面不在删除时立即删引用（`sessions.ts:689-693`，不可逆） | Host 的 `deleteSession`（`/api/sessions/delete`）调 `OwnerSessionStorage.delete` 物理删行；对账不认行缺失，保存点引用留在用户仓库 | 已定：随 M2 的删除通道改为与桌面相同的软删除与同一组清理；届时硬删除要么改成同一语义，要么只留给不面向用户的用途并写明调用方，并核实硬删除是否会让删除状态同步不到云端与其他设备。**迁移前必须完成** |
 | Host 的事件出口（已对齐，m1-cp18e） | 事件进渲染层与设备互联之前做 `redactEventForRenderer`，审批请求的工具输入做 `redactToolInputForUntrustedBoundary` | 相同：两段原样搬到不带 Electron 的叶子模块（`rendererEventRedaction.ts`、`toolInputRedaction.ts`），Host 的事件中枢与审批请求都经它们（事件流及其回放、`/api/chat`、设备互联与待处理快照都从这里读）；落库那一路本来就经同一份持久化代码 | 无差（`input-queue.test.mjs`、`interactions.test.mjs`、`device-link.test.mjs`）。设备互联对插件设置类待处理请求的远端投影（`projectPendingInteractionsForRemote`）Host 没有，归插件基座 |
 | Claude 一次性请求的凭据（已对齐，m1-cp18e） | 连着 Claude Code 登录时，一次性请求固定用网关 key 直连网关（`getOneShotAuth`） | 相同（m1-cp18e）。之前 Host 没有这个方法，实测（本机模拟上游、假登录）一次性请求经回环代理到网关、带网关 key，没有走到订阅 | 无差 |
 | 回合结束时的 Git 基线（m1-rc4） | 按事件结算（`sessionEventDelivery.ts`）：done 做回合结束保存点，终止性 error 撤回基线；停止的一轮由引擎随后发来的 done 结算 | 同一张序列表逐条相同（`gitBaselineSettlementSequences.ts`，桌面事件管线与 Host 回合执行各自核对）：成功、报错、报错后接 done、续接、停止时引擎发 done、未派发。每一轮的保存点与撤回各最多一次，只认这一轮这个实例的事件。停止由 Host 收尾时（引擎已空闲、还没有终态），Host 自己做一次回合结束保存点并结束这一轮的结算，之后同一轮迟到的 done、error 不再结算 | 两格 Host 有保存点、桌面没有：停止后引擎什么都不发（会这样的路径只有候选，未逐条核实）；停止由 Host 先收尾、引擎随后报 error 再 done（Codex 的中断带错误时），桌面先撤回再记一条缺口 |

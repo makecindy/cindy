@@ -69,7 +69,7 @@ export function MainListScopeHeader({
                   disabled={fold.disabled}
                   aria-label={fold.label}
                   className={cn(
-                    'flex h-7 w-7 items-center justify-center rounded-md',
+                    'flex h-7 w-7 items-center justify-center rounded-lg',
                     'text-[var(--sidebar-list-muted)]',
                     'transition-colors hover:text-[var(--sidebar-nav-text)]',
                     'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent',

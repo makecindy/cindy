@@ -550,6 +550,26 @@ describe('resolveRemoteModelListStatus', () => {
     ).toBe('error');
   });
 
+  // Gap (2026-11-23 field report): one timeout reading the task computer's catalog made the pill
+  // show the red load-failure mark until the picker was opened, although the last catalog was still
+  // within its trust budget. Minimal input: a temporary error with and without a retained snapshot.
+  it('does not report a temporary failure while a bounded snapshot is still on screen', () => {
+    const base = { deviceId: 'dev-mini', agentKind: 'codex' as const, cc: ready, pi: ready };
+    const timeout = '[DEVICE_LINK_TIMEOUT] remote did not answer';
+    expect(resolveRemoteModelListStatus({ ...base, codex: { capabilities: {}, error: timeout },
+      providers: { error: timeout, providers: [{ id: 'openai' }] } })).toBe('ready');
+    // Nothing on screen yet: the failure is real for this view.
+    expect(resolveRemoteModelListStatus({ ...base, codex: ready,
+      providers: { error: timeout, providers: [] } })).toBe('error');
+    expect(resolveRemoteModelListStatus({ ...base, codex: { capabilities: null, error: timeout },
+      providers: { error: null, providers: [{ id: 'openai' }] } })).toBe('error');
+    // Expired budgets and refusals are not temporary even with a snapshot.
+    expect(resolveRemoteModelListStatus({ ...base, codex: ready, providers: {
+      error: '[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired', providers: [{ id: 'openai' }] } })).toBe('error');
+    expect(resolveRemoteModelListStatus({ ...base, codex: ready, providers: {
+      error: '[DEVICE_LINK_ACCESS_REVOKED] revoked', providers: [{ id: 'openai' }] } })).toBe('error');
+  });
+
   it('only treats an unsupported provider channel as a compatible flat-list fallback', () => {
     expect(
       resolveRemoteModelListStatus({
@@ -3175,10 +3195,9 @@ describe('ModelSelector trigger variants', () => {
       name: 'newChat.modelSelector.search.placeholderAll',
     });
     expect(searchInput.hasAttribute('disabled')).toBe(true);
+    // Shared SearchInput disabled state (DESIGN.md §4 input/text: 60% opacity, not-allowed cursor).
     expect(searchInput.className).toContain('cursor-not-allowed');
-    expect(searchInput.className).toContain('text-[var(--text-disabled)]');
-    expect(searchInput.className).toContain('placeholder:text-[var(--text-disabled)]');
-    expect(searchInput.parentElement?.className).toContain('bg-[var(--surface-elevated-soft)]');
+    expect(searchInput.className).toContain('opacity-60');
 
     fireEvent.click(opusRow);
     fireEvent.pointerEnter(opusRow);

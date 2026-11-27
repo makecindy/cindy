@@ -16,6 +16,7 @@ export default {
     'src/renderer/features/bots/BotRosterView': 'export const BotRosterView = () => null;',
   },
   cases: {
+    computer: { about: 'A member chooses the computer for their own group Cindy', data: { role: 'member', assistant: 'on', computers: true } },
     'member-invites': { about: 'Owner manages friend invitations; members can still invite their own teammates', data: { role: 'owner', memberInvites: true } },
     default: { about: 'Owner: 群管理 with 解散, member menus, invite menu with both items', data: { role: 'owner' } },
     dismissal: { about: 'Scrim and × close, nested layers stay isolated, Escape backs out of subpages, reopening clears route state', data: { role: 'owner' } },
@@ -36,6 +37,13 @@ export default {
     const dialog = page.getByRole('dialog');
     const invite = page.getByTestId('chat-group-invite');
     const manage = await row(page, await t('manage'));
+    if (ui.case === 'computer') {
+      const picker = dialog.getByRole('combobox', { name: await t('assistantComputer') });
+      await picker.click();
+      await page.getByRole('option', { name: 'Windows', exact: true }).waitFor();
+      await ui.capture('choose-computer');
+      return;
+    }
     if (ui.case === 'member-invites') {
       await manage.click();
       const toggle = dialog.getByRole('switch', { name: await ui.t('bots.groupChat.settings.allowMemberInvites') });

@@ -14,6 +14,7 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 
+import { dbToMakerEngineKind } from '../../../shared/agentKindConversion.js';
 import type { ImDefaultSettingsChannel } from '../../../shared/imDefaultSettings.js';
 import { getDbClient } from '../../localDb/client/current';
 import { sessions } from '../../localDb/schema';
@@ -44,7 +45,7 @@ import {
   type ImDefaultRouteRecord,
 } from './channelDefaultRoute';
 import { resetSessionToDefaults, toCoreAgentKind, type ImSessionRow } from './sessionRepo';
-import type { ImOrchestratorConfig } from './types';
+import type { ImLaneProjectDefaults, ImLaneRouteOverride, ImOrchestratorConfig } from './types';
 
 const log = createLogger('im:default-route');
 
@@ -85,6 +86,10 @@ export interface SessionRouteRow {
   fastMode?: boolean | 'ultrafast' | null;
   imDefaultRoute: string | null;
   feishuBotAppId: string | null;
+  /** 飞书任务的路由键(私聊 open_id 或群 lane `g/{chatId}[/{threadId}]`)。 */
+  feishuOpenId?: string | null;
+  /** 任务当前的工作目录; 只有仍在路由键绑定的项目里时才跟随那个项目的设置。 */
+  workingDir?: string | null;
   imBotContextId: string | null;
 }
 
@@ -103,6 +108,8 @@ async function readSessionRouteRow(sessionId: string): Promise<SessionRouteRow |
       fastMode: sessions.fastMode,
       imDefaultRoute: sessions.imDefaultRoute,
       feishuBotAppId: sessions.feishuBotAppId,
+      feishuOpenId: sessions.feishuOpenId,
+      workingDir: sessions.workingDir,
       imBotContextId: sessions.imBotContextId,
     })
     .from(sessions)
@@ -127,7 +134,7 @@ function isChannelOwnedRow(
 
 function currentRouteOf(row: SessionRouteRow): ImDefaultRoute {
   return {
-    agentKind: toCoreAgentKind(row.agentKind),
+    agentKind: dbToMakerEngineKind(row.agentKind),
     model: row.model ?? '',
     providerId: row.providerId?.trim() || null,
     ...(row.agentDeviceId ? { agentDeviceId: row.agentDeviceId } : {}),
@@ -143,7 +150,7 @@ function currentRouteOf(row: SessionRouteRow): ImDefaultRoute {
  */
 function providerNormalizer(providers: ProviderView[]) {
   return (route: ImDefaultRoute): string | null => {
-    if (route.agentDeviceId) return route.providerId;
+    if (route.agentDeviceId || route.agentKind === 'acp') return route.providerId;
     const agent = route.agentKind as AgentKind;
     return (
       movedCindyAutoSourceId(providers, {
@@ -183,13 +190,46 @@ export function createImChannelDefaultRouteSync(deps: {
   source: ImDefaultSettingsChannel;
   config: ImOrchestratorConfig;
   isRouteUsable: RouteAuthCheck;
+  /** 渠道按路由键覆写的模型路由(ImSessionNamespace.routeOverrideFor); 缺省 = 只看渠道设置。 */
+  routeOverrideFor?: (botContextId: string, userId: string) => ImLaneRouteOverride | null;
+  /** 路由键绑定项目的设置(ImSessionNamespace.laneProjectDefaultsFor); 缺省 = 只看渠道设置。 */
+  laneProjectDefaultsFor?: (botContextId: string, userId: string, workingDir: string) => ImLaneProjectDefaults | null;
 }): ImChannelDefaultRouteSync {
   const { source, config } = deps;
+  // 只有飞书行带得出路由键; 其他渠道没有实现这两个钩子。
+  const laneOf = (row: SessionRouteRow): { botContextId: string; userId: string } | null => {
+    const botContextId = source === 'feishu' ? row.feishuBotAppId : null;
+    const userId = source === 'feishu' ? row.feishuOpenId ?? null : null;
+    return botContextId && userId ? { botContextId, userId } : null;
+  };
+  // 这条任务此刻跟随什么: 路由键固定的路由 > 任务所在的绑定项目 > 渠道「新对话配置」。
+  const followOf = (row: SessionRouteRow):
+    | { kind: 'channel'; override: ImLaneRouteOverride | null }
+    | { kind: 'project'; project: ImLaneProjectDefaults } => {
+    const lane = laneOf(row);
+    if (!lane) return { kind: 'channel', override: null };
+    const override = deps.routeOverrideFor?.(lane.botContextId, lane.userId) ?? null;
+    if (override) return { kind: 'channel', override };
+    const project = row.workingDir
+      ? deps.laneProjectDefaultsFor?.(lane.botContextId, lane.userId, row.workingDir) ?? null
+      : null;
+    return project ? { kind: 'project', project } : { kind: 'channel', override: null };
+  };
   return createDefaultRouteFollower({
     label: source,
     ownsRow: (row) => isChannelOwnedRow(row, source),
-    fingerprint: () => readImDefaultSettingsFingerprint(source),
-    resolveTarget: (providers) => resolveImSessionDefaults(config, providers, source),
+    fingerprint: (row) => {
+      const follow = followOf(row);
+      return follow.kind === 'project'
+        ? follow.project.fingerprint
+        : readImDefaultSettingsFingerprint(source, follow.override);
+    },
+    resolveTarget: (providers, row) => {
+      const follow = followOf(row);
+      return follow.kind === 'project'
+        ? follow.project.resolve(providers)
+        : resolveImSessionDefaults(config, providers, source, follow.override);
+    },
     isRouteUsable: deps.isRouteUsable,
   });
 }
@@ -198,8 +238,9 @@ export function createImChannelDefaultRouteSync(deps: {
 export function createDefaultRouteFollower(deps: {
   label: string;
   ownsRow(row: SessionRouteRow): boolean;
-  fingerprint(): string;
-  resolveTarget(providers: ProviderView[]): Promise<ImDefaultRoute & { fingerprint: string }>;
+  /** 这条任务此刻应跟随的设置指纹; `row` 供按路由键覆写的渠道使用。 */
+  fingerprint(row: SessionRouteRow): string;
+  resolveTarget(providers: ProviderView[], row: SessionRouteRow): Promise<ImDefaultRoute & { fingerprint: string }>;
   isRouteUsable: RouteAuthCheck;
 }): ImChannelDefaultRouteSync {
   const source = deps.label;
@@ -210,12 +251,12 @@ export function createDefaultRouteFollower(deps: {
     const record = parseImDefaultRouteRecord(row.imDefaultRoute);
     // 用户单独改过路由(墓碑): 永不跟随, 不必解析新默认。
     if (record?.manual) return null;
-    if (!imDefaultRouteMayNeedSync(record, deps.fingerprint())) return null;
+    if (!imDefaultRouteMayNeedSync(record, deps.fingerprint(row))) return null;
     const providers = await listProviders();
     // 目录拿不到就无法可靠比对来源, 本条消息先按原路由走 —— 但若记录仍认领着在世
     // 的系统意图, 调用方必须暂缓通用意图应用(PR #5155 review P2)。
     if (!providers) return 'defer-unknown';
-    const defaults = await deps.resolveTarget(providers);
+    const defaults = await deps.resolveTarget(providers, row);
     // Automatic settings are stable while their catalog-resolved route may change.
     // Skip writes when re-resolution confirms the last adopted route is still current.
     if (defaults.fingerprint === record.fp && !record.pendingRoute) return null;
@@ -286,6 +327,7 @@ export function createDefaultRouteFollower(deps: {
         // Fast 不属于渠道默认: 保留任务自己的开关, 不拿新任务的固定默认覆盖。
         { ...e.target, agentDeviceId: e.target.agentDeviceId ?? null, fastMode: e.currentFastMode },
         e.current.agentKind,
+        e.current.providerId,
       );
     } catch (err) {
       await writeRecord(sessionId, serializeImDefaultRouteRecord(e.record));
@@ -560,6 +602,7 @@ export async function backfillLegacyImDefaultRoutes(
   const normalize = providerNormalizer(providers);
   let count = 0;
   for (const row of legacyRows) {
+    if (row.agentKind === 'acp') continue;
     const current = currentRouteOf(row);
     // 匹配只认整条路由相等: 隐式默认的历史钉住与用户手动钉住无法区分(断开的来源
     // 证明不了出身), 无法区分时保守不认领(PR #5155 review P2 后续裁决)。

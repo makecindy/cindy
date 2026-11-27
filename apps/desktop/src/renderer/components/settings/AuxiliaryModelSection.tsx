@@ -1,3 +1,4 @@
+import { AuxiliaryErrorDetail, auxiliaryErrorSummary } from './AuxiliaryErrorDetail';
 import { personalizationDetailsSettings } from './PersonalizationDetails.settings-search';
 import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 /** Settings → Personalization: one ordered chain for short auxiliary text. */
@@ -5,21 +6,31 @@ import { useAppSettingsRevision } from '@/hooks/useAppSettingsRevision';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Select } from '@/components/ui/select';
+import { ErrorNotice } from '@/components/ui/error-notice';
+import { Button } from '@/components/ui/button';
 import { SETTINGS_HINT, SettingsBlock, SettingsCard, SettingsRow, SettingsSection } from '@/components/ui/settings-rows';
 
 import { OneshotModelPinPicker } from '@/cindy-brain/OneshotModelPinPicker';
 import { useAuth } from '@/contexts/AuthContext';
 import { useProviders } from '@/hooks/useProviders';
 import { createLogger } from '@/lib/logger';
+import { localizedModelName } from '@/lib/modelDisplayNames';
 import { providerDisplayName } from '@/lib/providerDisplayName';
-import { toast } from '@/lib/toast';
+import { Spinner } from '@/components/ui/spinner';
+import { CircleCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { isModelEnabled, useModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import {
   AUTO_AUXILIARY_MODEL_CHAIN,
   AUTO_AUXILIARY_MODEL_CHAIN_I18N_KEYS,
 } from '../../../shared/auxiliaryModelChain';
-import type { AuxiliaryModelSettingsState } from '../../../shared/auxiliaryModelSettings';
+import type {
+  AuxiliaryModelOption,
+  AuxiliaryModelSettingsState,
+  AuxiliaryModelSettingsTestResult,
+} from '../../../shared/auxiliaryModelSettings';
+import { useAuxiliaryRouteHealth } from '@/hooks/useAuxiliaryRouteHealth';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 import { AuxiliaryModelHealthNotice } from './AuxiliaryModelHealthNotice';
 import { useAuxiliaryModelHealth } from '@/hooks/useAuxiliaryModelHealth';
@@ -28,6 +39,9 @@ const log = createLogger('AuxiliaryModelSection');
 
 const SLOT_I18N = ['preferred', 'fallback1', 'fallback2'] as const;
 type AuxiliaryModelMode = 'automatic' | 'custom';
+type AuxiliaryTestFailure = Extract<AuxiliaryModelSettingsTestResult, { ok: false }>;
+/** Saved, failed, failed its test, or dropped because the account changed meanwhile. */
+type AuxiliarySaveOutcome = boolean | AuxiliaryTestFailure | 'stale';
 
 export function AuxiliaryModelSection() {
   const settingsRevision = useAppSettingsRevision('auxiliary-models');
@@ -39,6 +53,7 @@ export function AuxiliaryModelSection() {
   const [settings, setSettings] = useState<AuxiliaryModelSettingsState | null>(null);
   const [pending, setPending] = useState(false);
   const [drafting, setDrafting] = useState(false);
+  const routeHealth = useAuxiliaryRouteHealth();
   const pendingRef = useRef(false);
   const modelVisibilityVersion = useModelVisibilityVersion();
   const health = useAuxiliaryModelHealth();
@@ -48,7 +63,9 @@ export function AuxiliaryModelSection() {
     void window.electronAPI.maker
       .auxiliaryModelSettingsGet()
       .then((next) => {
-        if (!disposed) setSettings(next);
+        if (!disposed) {
+          setSettings(next);
+        }
       })
       .catch((error) => {
         log.warn('auxiliaryModelSettingsGet failed', error);
@@ -59,27 +76,27 @@ export function AuxiliaryModelSection() {
   }, [settingsRevision]);
 
   const persistModels = useCallback(
-    async (models: string[]): Promise<boolean> => {
-      if (pendingRef.current) return false;
+    async (models: string[]): Promise<AuxiliarySaveOutcome> => {
+      if (pendingRef.current) return 'stale';
       pendingRef.current = true;
       setPending(true);
+      const owner = getDataOwnerGeneration();
       try {
         const next = await window.electronAPI.maker.auxiliaryModelSettingsSet({ models });
+        if (!isDataOwnerGenerationCurrent(owner)) return 'stale';
+        if ('ok' in next) return next;
         setSettings(next);
-        if (models.length === 0) setDrafting(false);
         return true;
-      } catch (error) {
-        log.warn('auxiliaryModelSettingsSet failed', error);
-        toast.error(
-          error instanceof Error ? error.message : t('settings.auxiliaryModels.saveFailed'),
-        );
+      } catch {
+        if (!isDataOwnerGenerationCurrent(owner)) return 'stale';
+        log.warn('auxiliaryModelSettingsSet failed');
         return false;
       } finally {
         pendingRef.current = false;
         setPending(false);
       }
     },
-    [t],
+    [],
   );
 
   const options = useMemo(() => {
@@ -108,26 +125,114 @@ export function AuxiliaryModelSection() {
 
   if (!settings) return null;
 
-  const models = Array.isArray(settings.models) ? settings.models : [];
+  return (
+    <AuxiliaryModelSectionView
+      models={settings.models}
+      options={options}
+      pending={pending}
+      signInHint={authMode !== 'cloud'}
+      drafting={drafting}
+      setDrafting={setDrafting}
+      persistModels={persistModels}
+      health={health}
+      routeHealth={routeHealth}
+    />
+  );
+}
+
+export interface AuxiliaryModelSectionViewProps {
+  /** Persisted custom chain; empty = follow the automatic chain. */
+  models: readonly string[];
+  /** Slot catalog with availability already resolved by the owner (local: model visibility prefs). */
+  options: readonly AuxiliaryModelOption[];
+  pending: boolean;
+  /** No Cindy AI routes (local / signed-out): show the sign-in hint and do not seed them into a draft. */
+  signInHint: boolean;
+  /** First-time Custom is a draft only, cleared by a successful save. */
+  drafting: boolean;
+  setDrafting: (drafting: boolean) => void;
+  persistModels: (models: string[]) => Promise<AuxiliarySaveOutcome>;
+  /** Cloud settings: a group that could not be read says so here, in place of the heading's action. */
+  headingStatus?: React.ReactNode;
+  /** Recent auxiliary failures of this computer; absent for another computer's settings. */
+  health?: ReturnType<typeof useAuxiliaryModelHealth>;
+  routeHealth?: ReturnType<typeof useAuxiliaryRouteHealth>;
+}
+
+/** Shared native view. Local and cloud controllers provide the same state/actions. */
+export function AuxiliaryModelSectionView({
+  models: savedModels,
+  options,
+  pending,
+  signInHint,
+  drafting,
+  setDrafting,
+  persistModels,
+  headingStatus,
+  health,
+  routeHealth: healthSnapshots = [],
+}: AuxiliaryModelSectionViewProps) {
+  const { t } = useTranslation();
+  const [draftModels, setDraftModels] = useState<readonly string[] | null>(null);
+  const [saveState, setSaveState] = useState<'idle' | 'testing' | 'success' | 'failed' | 'restoring' | 'restored' | 'restoreFailed'>('idle');
+  const [failedTest, setFailedTest] = useState<AuxiliaryTestFailure | null>(null);
+  const savingRef = useRef(false);
+  const save = async (next: readonly string[]): Promise<void> => {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaveState(next.length ? 'testing' : 'restoring');
+    setFailedTest(null);
+    try {
+      const outcome = await persistModels([...next]);
+      if (outcome === 'stale') setSaveState('idle');
+      else if (outcome === true) {
+        setDraftModels(null);
+        setSaveState(next.length ? 'success' : 'restored');
+        setDrafting(false);
+      } else if (outcome === false) setSaveState(next.length ? 'failed' : 'restoreFailed');
+      else {
+        setFailedTest(outcome);
+        setSaveState('failed');
+      }
+    } finally {
+      savingRef.current = false;
+    }
+  };
+  // 智能路由的几项：合并整个供应商的写成「Anthropic · 路由（2 个来源）」，与选模型面板同一写法；自己排的归在「智能路由」下。
+  const pickerOptions = useMemo(() => options.map((option) => (option.route
+    ? { ...option, group: option.route.kind === 'merged'
+      ? t('modelGroups.picker.mergedLabel', { name: option.route.name, count: option.route.members })
+      : t('modelGroups.title'),
+    ...(option.route.name ? {} : { modelName: t('settings.auxiliaryModels.missingRoute') }) }
+    : option)), [options, t]);
+  const models = Array.isArray(savedModels) ? savedModels : [];
   const customized = models.length > 0;
   const showCustom = customized || drafting;
   // Keep the default/override split intact: first-time Custom is only a draft.
   // Local and signed-out sessions cannot use Cindy AI routes, so do not seed
   // those unavailable catalog pins into a draft that the user cannot select.
   const automaticDraftModels =
-    authMode === 'cloud'
+    !signInHint
       ? AUTO_AUXILIARY_MODEL_CHAIN.filter((ref) =>
           options.some((option) => option.id === ref && option.available),
         )
       : [];
-  const activeModels = customized ? models : drafting ? automaticDraftModels : [];
+  const activeModels = showCustom
+    ? (draftModels ?? (customized ? models : automaticDraftModels))
+    : [];
   const automaticChain = AUTO_AUXILIARY_MODEL_CHAIN_I18N_KEYS.map((key) =>
     t(`settings.auxiliaryModels.chain.${key}`),
   ).join(' → ');
   const mode: AuxiliaryModelMode = showCustom ? 'custom' : 'automatic';
 
+  const discardFeedback = () => {
+    setSaveState('idle');
+    setFailedTest(null);
+  };
   const selectMode = (nextMode: AuxiliaryModelMode): void => {
+    discardFeedback();
     if (nextMode === 'custom') {
+      setDraftModels(customized ? models : automaticDraftModels);
       setDrafting(true);
       return;
     }
@@ -135,13 +240,14 @@ export function AuxiliaryModelSection() {
       setDrafting(false);
       return;
     }
-    void persistModels([]);
+    void save([]);
   };
 
   const applySlot = (index: number, pin: string | null): void | boolean | Promise<boolean> => {
     if (index === 0 && !pin) {
+      discardFeedback();
       if (customized) {
-        return persistModels([]);
+        setDraftModels([]);
       } else {
         setDrafting(false);
       }
@@ -160,19 +266,37 @@ export function AuxiliaryModelSection() {
     for (const entry of slots) {
       if (entry && !unique.includes(entry)) unique.push(entry);
     }
-    return persistModels(unique);
+    setDrafting(true);
+    setDraftModels(unique);
+    discardFeedback();
+    return true;
   };
+
+  const needsRetest = healthSnapshots.some(row => row.status === 'isolated' && row.auxiliaryRef && activeModels.includes(row.auxiliaryRef));
+  const hasDraftChanges = JSON.stringify(draftModels ?? models) !== JSON.stringify(models);
+
+  const failed = saveState === 'failed' || saveState === 'restoreFailed';
+  const failedSlot = failedTest && SLOT_I18N[activeModels.indexOf(failedTest.model)];
+  const failedModel = failedTest && localizedModelName(
+    pickerOptions.find(option => option.id === failedTest.model)?.modelName ?? failedTest.model, t,
+  );
+  const providerMessage = failedTest?.upstreamMessage;
+  const foldDetails = providerMessage && (providerMessage.length > 200 || providerMessage.split('\n').length > 3);
+  const saved = saveState === 'success' || saveState === 'restored';
+  const statusKey = saveState === 'restoring' ? 'restoring' : saveState === 'testing' ? 'saving'
+    : saveState === 'restored' ? 'restored' : saved ? 'saveSuccess' : 'draft';
 
   return (
     <SettingsSection
       title={t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
       description={t(personalizationDetailsSettings.auxiliaryModelsTitle.descriptionKey)}
+      action={headingStatus}
     >
       <SettingsCard>
-        <SettingsRow
+        <SettingsRow wrap
           title={t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
           trailing={
-            <div className="flex min-w-0 max-w-full items-center justify-end gap-2">
+            <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end gap-2">
               {showCustom ? (
                 <DefaultOverrideControls
                   isCustomized={customized || drafting}
@@ -180,12 +304,27 @@ export function AuxiliaryModelSection() {
                   disabled={pending}
                   onReset={() => {
                     if (!customized) {
+                      discardFeedback();
                       setDrafting(false);
                       return;
                     }
-                    void persistModels([]);
+                    void save([]);
                   }}
                 />
+              ) : null}
+              {showCustom ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  type="button"
+                  data-settings-search-action="Test and save the selected auxiliary models"
+                  disabled={pending || (!hasDraftChanges && !needsRetest && saveState !== 'failed')}
+                  onClick={() => void save(activeModels)}
+                >
+                  {pending
+                    ? t(`settings.auxiliaryModels.${statusKey}`)
+                    : t(saveState === 'failed' ? 'settings.auxiliaryModels.retryAction' : 'settings.auxiliaryModels.save')}
+                </Button>
               ) : null}
               <Select data-setting-id={personalizationDetailsSettings.auxiliaryModelsTitle.id}
                 label={t(personalizationDetailsSettings.auxiliaryModelsTitle.titleKey)}
@@ -207,6 +346,32 @@ export function AuxiliaryModelSection() {
           }
         />
 
+        {failed ? (
+          <ErrorNotice role="alert" data-auxiliary-save-feedback="failed"
+            className="mx-4 mb-3 border-[var(--error-border)] bg-[var(--error-bg)]"
+            message={<strong className="text-14 font-semibold">{t(failedTest
+              ? customized ? 'settings.auxiliaryModels.failedKeep' : 'settings.auxiliaryModels.failedAuto'
+              : saveState === 'restoreFailed' ? 'settings.defaults.restoreFailed' : 'settings.auxiliaryModels.saveFailed')}</strong>}
+            description={failedTest && <>
+              <span className="block font-medium text-[var(--text-primary)] [overflow-wrap:anywhere]">{failedSlot
+                ? t('settings.auxiliaryModels.failedSlot', { slot: t(`settings.auxiliaryModels.${failedSlot}.label`), model: failedModel })
+                : t('settings.auxiliaryModels.testFailed', { model: failedModel })}</span>
+              <span className="block">{auxiliaryErrorSummary(failedTest, t)}</span>
+              {!foldDetails && <AuxiliaryErrorDetail message={providerMessage} />}
+            </>}
+            details={foldDetails ? providerMessage : undefined}
+          />
+        ) : (pending || saved || (showCustom && hasDraftChanges)) && (
+          <div role="status" data-auxiliary-save-feedback={saveState}
+            className={cn('mx-4 mb-3 flex min-w-0 items-start gap-2 text-13 text-[var(--text-primary)]',
+              pending && 'rounded-xl border border-[var(--border-default)] bg-[var(--surface-secondary)] p-3')}>
+            {pending ? <Spinner size={18} className="mt-0.5" /> : saved && <CircleCheck aria-hidden="true" size={16} className="shrink-0 text-[var(--status-success)]" />}
+            <div>
+              <span className={pending ? 'font-semibold' : undefined}>{t(`settings.auxiliaryModels.${statusKey}`)}</span>
+              {saveState === 'testing' && <p className="mt-1 text-12 text-[var(--text-secondary)]">{t('settings.auxiliaryModels.testingHint')}</p>}
+            </div>
+          </div>
+        )}
         {health?.status === 'unavailable' ? (
           <SettingsBlock>
             <AuxiliaryModelHealthNotice
@@ -224,7 +389,7 @@ export function AuxiliaryModelSection() {
               const selectedByOtherSlot = new Set(
                 activeModels.filter((entry, slotIndex) => slotIndex !== index && entry),
               );
-              const slotOptions = options.filter(
+              const slotOptions = pickerOptions.filter(
                 (option) => option.id === pin || !selectedByOtherSlot.has(option.id),
               );
               return (
@@ -233,7 +398,7 @@ export function AuxiliaryModelSection() {
                   title={t(definition.titleKey)}
                   hint={t(`settings.auxiliaryModels.${slotKey}.description`)}
                   trailing={
-                    <div className="w-[min(100%,320px)] shrink-0">
+                    <div className="w-[min(55%,320px)] min-w-0">
                       {/* One-shot pins already carry the exact provider + agent route. The
                           provider-first picker exposes every routable supplier without
                           surfacing Harness or a thinking-depth control. */}
@@ -260,7 +425,7 @@ export function AuxiliaryModelSection() {
             })}
 
             <p className={cn('px-4 pb-4', SETTINGS_HINT)}>
-              {authMode !== 'cloud' ? (
+              {signInHint ? (
                 <span className="mb-1 block text-[var(--text-tertiary)]">
                   {t('settings.auxiliaryModels.signInHint')}
                 </span>
@@ -273,11 +438,27 @@ export function AuxiliaryModelSection() {
             <p className="text-12 leading-[1.5] text-[var(--text-tertiary)]">
               {automaticChain}
             </p>
-            {authMode !== 'cloud' ? (
+            {signInHint ? (
               <p className="mt-1 text-12 leading-[1.5] text-[var(--text-tertiary)]">
                 {t('settings.auxiliaryModels.signInHint')}
               </p>
             ) : null}
+          </SettingsBlock>
+        )}
+        {healthSnapshots.length > 0 && (
+          <SettingsBlock>
+            {healthSnapshots.map((health) => (
+              <p key={health.auxiliaryRef ?? JSON.stringify([health.providerId, health.model])} className="text-12 leading-[1.5] text-[var(--text-tertiary)]" role="status">
+                {t('settings.auxiliaryModels.healthRecent', {
+                  model: options.find(option => option.id === health.auxiliaryRef)?.modelName ?? health.model,
+                  rate: health.attemptCount ? Math.round((1 - health.failureRate) * 100) : '—',
+                  status: health.status === 'isolated' ? t('settings.auxiliaryModels.healthPaused') : health.status === 'recovered' ? t('settings.auxiliaryModels.healthRecovered', { model: health.model }) : t('settings.auxiliaryModels.healthMonitoring'),
+                })}
+                <span className="block">{t('settings.auxiliaryModels.lastError')}</span>
+                <span className="block">{auxiliaryErrorSummary(health, t)}</span>
+                <AuxiliaryErrorDetail message={health.upstreamMessage} />
+              </p>
+            ))}
           </SettingsBlock>
         )}
       </SettingsCard>
