@@ -799,6 +799,7 @@ import {
   setMirrorCacheReadGate,
 } from './device-link/ipc';
 import { getMirrorCache, MirrorCachePurgeError } from './device-link/mirrorCacheStore';
+import { getOfflineInboxIntentStore } from './device-link/offlineInboxIntentStore';
 import { drainPurgeQueue, enqueuePurge } from './device-link/mirrorCachePurgeQueue';
 import { assertCaptureHealthy, dispatchLocalInvoke } from './device-link/invoke-registry';
 import { registerSettingsNavigationIpc } from './settingsNavigationIpc';
@@ -2516,6 +2517,11 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
           },
         );
       }
+    }
+    try {
+      await getOfflineInboxIntentStore().clearAll();
+    } catch (err) {
+      authBoundaryPurgeLog.warn(`clear offline inbox intents on ${reason} failed:`, err);
     }
     // Cindy relay owns long-lived transports plus account-scoped task/binding
     // state. Drain ingress before discarding the owner-scoped store; otherwise a

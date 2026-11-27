@@ -635,11 +635,13 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
   const sharingHost: SharingHost = {
     storage: store.sharingStorage(), now,
     requests: () => store.delegationRequests(),
-    async saveRequest(request) {
+    async saveRequest(request, admit, bySubject) {
       await store.transaction(state => {
         const current = own(state.networks, request.networkId) ?? fail(401, 'NETWORK_UNKNOWN');
         const requests = (state.delegationRequests ?? []).filter(r => r.expiresAt > now()
-          && !(r.networkId === request.networkId && r.kind === request.kind && r.resourceId === request.resourceId && r.guestDeviceId === request.guestDeviceId));
+          && !(r.networkId === request.networkId && r.kind === request.kind && r.resourceId === request.resourceId && r.guestDeviceId === request.guestDeviceId
+            && (!bySubject || r.scope.guestSubject === request.scope.guestSubject)));
+        if (admit && !admit(requests)) return fail(429, 'TOO_MANY_REQUESTS');
         if (requests.filter(r => r.networkId === request.networkId).length >= 4096) return fail(429, 'DELEGATION_REQUEST_LIMIT');
         if (requests.some(r => r.networkId === request.networkId && r.hostDeviceId === request.hostDeviceId
           && r.guestTransportKey === request.guestTransportKey)) return fail(409, 'RESOURCE_TRANSPORT_KEY_REUSED');
@@ -692,7 +694,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
       for (const networkId of networkIds) announce(networkId);
     },
   };
-  const accountSharing = options.sharing && createAgentNetSharing(options.sharing, sharingHost);
+  const accountSharing = options.sharing && createAgentNetSharing({ ...options.sharing, linkedProviderShares: true }, sharingHost);
   const privateSharing = mode === 'self-hosted' && store instanceof Store ? createPrivateSharing(sharingHost, store.sharingStorage('privateSharing')) : undefined;
   const sharing = !privateSharing ? accountSharing : {
     authorized: (d: Delegation) => privateSharing.ownsResource(d.kind, d.resourceId) ? !!d.scope && privateSharing.authorized(d) : accountSharing?.authorized(d) ?? true,
@@ -724,7 +726,7 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
     }
     if (url.pathname === API + '/info' && method === 'GET') return writeJson(res, 200, {
       protocolVersion: AGENT_NET_VERSION, mode, udpPort: advertisedUdpPort,
-      ...(options.stunHost !== undefined && advertisedUdpPort !== null ? { stunHost: options.stunHost } : {}), features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', ...(storage.direct ? ['media-direct-v1'] : []), 'notification-keys-v2', ...(privateSharing ? ['private-sharing-v1'] : []), ...(options.sharing ? ['sharing-authority-v2'] : []), ...(options.notify ? ['notify-v2'] : []),
+      ...(options.stunHost !== undefined && advertisedUdpPort !== null ? { stunHost: options.stunHost } : {}), features: ['encrypted-datagrams-v2', 'owner-pairing-v2', 'directory-v2', 'delegation-v2', 'scoped-device-link-v2', 'media-v2', ...(storage.direct ? ['media-direct-v1'] : []), 'notification-keys-v2', ...(privateSharing ? ['private-sharing-v1'] : []), ...(options.sharing ? ['sharing-authority-v2', 'linked-provider-shares-v1'] : []), ...(options.notify ? ['notify-v2'] : []),
         ...(mode === 'self-hosted' && store.primaryNetworkId() !== undefined ? ['tenants-v1'] : []),
         ...(advertisedUdpPort !== null ? [UDP_RELAY_FEATURE, UDP_RELAY_PROBE_FEATURE] : [])],
     });
@@ -968,6 +970,8 @@ export async function startAgentNetRelay(options: RelayOptions): Promise<RelayHa
         // Re-admitting a tenant must not restore its old shares or invitations.
         for (const book of [state.sharing, state.privateSharing]) {
           if (!book) continue;
+          // Its linked Device Link shares too, or they could never be linked from the account's next network.
+          if (book.linkedShares?.some(linked => linked.networkId === target)) book.linkedShares = book.linkedShares.filter(linked => linked.networkId !== target);
           const bindings = book.bindings.filter(binding => binding.networkId === target);
           if (!bindings.length) continue;
           const tasks = new Set(bindings.filter(binding => binding.kind === 'shared-task').map(binding => binding.resourceId));

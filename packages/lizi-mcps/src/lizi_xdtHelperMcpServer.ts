@@ -114,7 +114,7 @@ import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_sessio
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps, PinSessionsDeps, SnoozeSessionsDeps } from './xdt-helper/archive_sessions.js';
 import { registerSessionImportTools, type SessionImportCallbacks } from './xdt-helper/session_import.js';
-import { projectMembershipNote, type SendToRemoteSessionCallback, type SendToSessionCallback } from './xdt-helper/send_to_session.js';
+import { projectMembershipNote, type SendToRemoteSessionCallback, type SendToSessionCallback, type SendToSessionDeps } from './xdt-helper/send_to_session.js';
 import type {
   AuthorizeSkillLearningCallback,
   StartSkillLearningCallback,
@@ -540,6 +540,7 @@ export interface XdtHelperMcpDeps {
   listAvailableModels?: ListAvailableModelsDeps['listAvailableModels'];
   /** 另一台电脑上的既有任务(send_to_session 的 deviceId::sessionId 目标)。 */
   sendToRemoteSession?: SendToRemoteSessionCallback;
+  sendToSharedTask?: SendToSessionDeps['sendToSharedTask'];
   /** Cindy-managed Learn flow; registered in the skills category when supplied by the host. */
   skillLearning?: StartSkillLearningCallback;
   /** Search catalogs and publish the current user's Skills through the host's SkillHub service. */
@@ -845,6 +846,7 @@ export function createXdtHelperMcpServer(
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       sendToSession: deps.sendToSession,
       ...(deps.sendToRemoteSession ? { sendToRemoteSession: deps.sendToRemoteSession } : {}),
+      ...(deps.sendToSharedTask ? { sendToSharedTask: deps.sendToSharedTask } : {}),
     });
   }
   if (deps.skillLearning && deps.authorizeSkillLearning) {
@@ -909,7 +911,7 @@ export function createXdtHelperMcpServer(
       callbacks: deps.botProfiles,
     });
   }
-  const sendToSessionScope = sessionDeliveryScope(!!deps.sendToRemoteSession);
+  const sendToSessionScope = sessionDeliveryScope(!!deps.sendToRemoteSession, !!deps.sendToSharedTask);
   const sendToSession = registry.get('send_to_session');
   registerListToolsEntry(server, registry, allowedSurface, sessionCtx, sendToSessionScope);
   const call = registerCallToolEntry(server, registry, {
