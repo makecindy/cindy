@@ -70,6 +70,8 @@ vi.mock('react-i18next', () => ({
         'todaySpend.codex.limitWindow': '限额',
         'todaySpend.codex.daysWindow': '{{days}}天',
         'todaySpend.codex.windowSegment': '{{label}} 剩余 {{remaining}}',
+        'todaySpend.creditLabel': '{{used}} / {{total}}',
+        'todaySpend.tooltip.creditUsed': '账号已用 {{used}} · 总额 {{total}}',
         'todaySpend.sessionCostLabel': '本任务 {{cost}}',
         'todaySpend.tooltip.sessionUsed': '本任务已用 {{cost}}',
         'todaySpend.codex.sessionValueLabel': '本任务价值 {{cost}}',
@@ -379,6 +381,20 @@ describe('TodaySpendChip credit snapshot time', () => {
     act(() => screen.getByRole('button', { name: '用量明细' }).focus());
     return screen.getByTestId('quota-hover-card');
   }
+
+  // #13698: production chip and card must retain billing precision for a fractional personal balance (unit/jsdom).
+  it('shows personal credit amounts with billing precision and preserves remaining percent', () => {
+    mocks.creditSnapshot = {
+      ...creditSnapshot(new Date().toISOString()),
+      available: '2.48',
+      plan: { remaining: '2.48', used: '0.52', total: '3.00' },
+    };
+    render(gatewayChip());
+    expect(screen.getByRole('button', { name: '用量明细' }).textContent).toContain('$0.52 / $3.00');
+    const card = openUsageCard();
+    expect(card.textContent).toContain('账号已用 $0.52 · 总额 $3.00');
+    expect(within(card).getByRole('progressbar').getAttribute('aria-valuenow')).toBe('83');
+  });
 
   // Unit regression: the rendered chip and card must distinguish a disabled
   // enterprise daily limit from a failed daily read; omitted flags retain legacy behavior.

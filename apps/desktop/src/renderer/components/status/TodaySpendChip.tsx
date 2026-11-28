@@ -1,3 +1,4 @@
+import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money';
 import { isKimiCodingProviderView, kimiUsageWindowMinutes } from '../../../shared/kimiCodingUsage';
 import { isOpenCodeGoProviderView, opencodeGoUsageWindowMinutes } from '../../../shared/opencodeGoUsage';
 import { useCodexRateLimitReset } from '@/hooks/useCodexRateLimitReset';
@@ -208,6 +209,7 @@ function computeMetricSlots(
   creditTotals: CreditTotals | null,
   sessionLabel: string | null,
   t: TFunction,
+  locale: string,
 ): Record<MetricKey, MetricSlot> {
   const slots: Record<MetricKey, MetricSlot> = {
     daily: {
@@ -241,12 +243,12 @@ function computeMetricSlots(
   // 账本历史缺失的池按余额兜底(见 resolveCreditTotals), 保证「总额 − 已用」恒等于
   // 设置页那个可用余额, chip 上永远是两个数、不退化成单值。
   //
-  // 币种走 gatewayMoney 的默认值(DEFAULT_USAGE_CURRENCY = 按发行区域)。这三池是
+  // 币种和精度复用账单页的格式。这三池是
   // Cindy 自己的计费账本, 与账单页 BILLING_CURRENCY 同一笔钱、必须同口径 —— 不能
   // 改用 Gateway 目录下发的币种, 否则同一笔余额在两个界面显示成不同货币。
   if (creditTotals) {
-    const used = formatCompactMoney(gatewayMoney(creditTotals.used));
-    const total = formatCompactMoney(gatewayMoney(creditTotals.total));
+    const used = formatBillingAmount(String(creditTotals.used), BILLING_CURRENCY, locale);
+    const total = formatBillingAmount(String(creditTotals.total), BILLING_CURRENCY, locale);
     slots.credit = {
       label: t('todaySpend.creditLabel', { used, total }),
       tooltipLabel: t('todaySpend.tooltip.creditUsed', { used, total }),
@@ -1922,7 +1924,7 @@ export function TodaySpendChip({
       }
     }
   } else {
-    const slots = computeMetricSlots(claudeQuota, creditTotals, sessionSegment, t);
+    const slots = computeMetricSlots(claudeQuota, creditTotals, sessionSegment, t, formatterLocale);
     const chipSegments: React.ReactNode[] = getGatewayChipSegments(slots);
     const codexApiHasTokenFallback =
       isCodexApi && !slots.session.available && hasPositiveSessionTokens(sessionTokens);
