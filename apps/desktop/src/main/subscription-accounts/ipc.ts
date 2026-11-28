@@ -7,14 +7,21 @@ import { getDeviceLinkInvokeContext, type DeviceLinkInvokeContext } from '../dev
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   SUBSCRIPTION_ACCOUNTS_CHANNEL,
+  isPluginEngineProviderIdShape,
   isSubscriptionPoolProviderIdShape,
   isSubscriptionProvider,
 } from '../../shared/subscriptionAccounts.js';
+import { PLUGIN_ENGINE_DEFAULT_MODEL } from '../../shared/pluginEngines.js';
 import {
   parseSubscriptionAccountCommand,
   parseSubscriptionSessionAccountQuery,
 } from './commands.js';
-import { onPluginEngineAccountsChanged } from '../plugin-engine-accounts/runtime.js';
+import {
+  onPluginEngineAccountsChanged,
+  readPluginEngineSessionAccount,
+} from '../plugin-engine-accounts/runtime.js';
+import { isPluginEngineModelTurnedOff, isPluginEngineOfferedRemotely } from '../maker-host/pluginEngineRemoteUse.js';
+import { remoteModelAccess } from '../device-link/remoteModelAccess.js';
 export { parseSubscriptionAccountCommand } from './commands.js';
 import { executeSubscriptionAccountCommand } from './service.js';
 import {
@@ -100,8 +107,24 @@ export function registerSubscriptionAccountsIpc(): void {
     if (!context) assertTrustedAppRendererEvent(event);
     const session = parseSubscriptionSessionAccountQuery(raw);
     if (session) {
+      if (isPluginEngineProviderIdShape(session.providerId)) {
+        if (context && !isOwnComputerContext(context))
+          throwIpcError('PERMISSION_DENIED', 'Account management requires the owner');
+        try {
+          return await readPluginEngineSessionAccount(session.providerId, session, {
+            remote: !!context,
+            ownComputer: isOwnComputerContext(context),
+            isRemoteOffered: (providerId, model) =>
+              !isPluginEngineModelTurnedOff(providerId, model)
+              && isPluginEngineOfferedRemotely(providerId)
+              && remoteModelAccess.allows(providerId, model ?? PLUGIN_ENGINE_DEFAULT_MODEL),
+          });
+        } catch {
+          throwIpcError('SUBSCRIPTION_ACCOUNT_FAILED', 'Could not read the task account');
+        }
+      }
       try {
-        return await readSubscriptionSessionAccount(session.providerId, session, {
+        return await readSubscriptionSessionAccount(session.providerId as 'anthropic' | 'openai', session, {
           remote: !!context, ownComputer: isOwnComputerContext(context),
         });
       } catch {

@@ -43,7 +43,7 @@ import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate.js';
 import { collectPresentBotRemoteResourceSources } from './botRemoteResourceAbsence.js';
-import { isIpcError } from '../../../shared/ipc-errors.js';
+import { isIpcError, missingBotModelError } from '../../../shared/ipc-errors.js';
 import { isBotVisibleRemotely } from './botRemoteVisibility.js';
 import { readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch } from './botRemoteSessionAccess.js';
 import { setRemoteBotSessionLookup } from '../../device-link/remoteBotSessionBoundary.js';
@@ -2773,7 +2773,7 @@ export function registerBotIpc(onCreatedTopic?: (id: string, subject: string, in
     const primaryRoute = await readEffectiveBotPrimaryRoute(config);
     const missingModel = !primaryRoute;
     if (missingModel && !hostOptions?.allowMissingModel) {
-      throwIpcError('PRECONDITION_FAILED', '请先连接模型供应商或选择伙伴模型');
+      throw missingBotModelError();
     }
     const workspace = await privateBotWorkspace(botId, readBotProjectMode(config), { ownerUserDataPath: () => owner.userDataDir });
     const { value: result } = await openSession({ id: sessionId, now, source: 'bot', assertCurrent: owner.assertCurrent,

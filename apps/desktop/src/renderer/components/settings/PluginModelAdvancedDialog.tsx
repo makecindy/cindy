@@ -76,8 +76,6 @@ export function PluginModelAdvancedDialog({
                       display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', borderRadius: 'var(--radius-xl)',
                     } : undefined}
                     optionClassName={offered.length > 4 ? '!min-w-0 px-1' : undefined}
-                    height={32}
-                    optionHeight={24}
                     aria-label={t('settings.providers.models.advanced.defaultEffort')}
                     options={offered.map(effort => ({ value: effort, label: t(`effortLevels.${effort}`) }))}
                     value={value}

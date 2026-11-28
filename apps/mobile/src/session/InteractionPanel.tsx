@@ -1525,8 +1525,25 @@ function AskUserQuestionForm({
       {validationError ? <Text accessibilityRole="alert" style={styles.voiceNotice} testID="interaction.ask.validationError">{validationError}</Text> : null}
 
       {/* Shown for both layouts: the option-less card has a microphone too. */}
-      {voice.error ? <Text testID="interaction.ask.voiceError">{voice.error}</Text>
-        : voice.speakerFiltered ? <Text style={styles.voiceNotice} testID="interaction.ask.voiceNotice">{t('composer.voice.speakerFiltered')}</Text>
+      {voice.error ? (
+        <View style={styles.voiceErrorRow}>
+          <Text style={styles.voiceErrorText} testID="interaction.ask.voiceError">{voice.error}</Text>
+          {voice.canRetry && !voice.busy ? (
+            <Pressable
+              accessibilityLabel={t('composer.voice.retryRecognition')}
+              accessibilityRole="button"
+              hitSlop={8}
+              onPress={voice.retry}
+              style={({ pressed }) => [styles.voiceRetryButton, pressed && styles.voiceRetryButtonPressed]}
+              testID="interaction.ask.voiceRetryButton"
+            >
+              <Text numberOfLines={1} style={styles.voiceRetryButtonText}>
+                {t('composer.voice.retryRecognition')}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : voice.speakerFiltered ? <Text style={styles.voiceNotice} testID="interaction.ask.voiceNotice">{t('composer.voice.speakerFiltered')}</Text>
         : null}
 
       <InteractionActions touchLayout={touchLayout}>
@@ -2345,6 +2362,37 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   voiceNotice: {
     color: colors.textSecondary,
     fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+  },
+  voiceErrorRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  voiceErrorText: {
+    color: colors.textSecondary,
+    flex: 1,
+    fontSize: typeScale.footnote,
+    lineHeight: lineHeight.caption,
+  },
+  voiceRetryButton: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceChip,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexShrink: 0,
+    justifyContent: 'center',
+    minHeight: 28,
+    paddingHorizontal: spacing.sm,
+  },
+  voiceRetryButtonPressed: {
+    opacity: 0.7,
+  },
+  voiceRetryButtonText: {
+    color: colors.textPrimary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
     lineHeight: lineHeight.caption,
   },
   taskCollapseText: {

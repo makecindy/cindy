@@ -144,7 +144,13 @@
       "exceptionImage": "消息里有图片，只在能看图的来源里选",
       "exceptionImageFallback": "消息里有图片，但没有能看图的来源，照常选",
       "exceptionHours": "这个时段改走「{{name}}」",
-      "separator": "；"
+      "separator": "；",
+      "usageHabit": "根据你平时的用量优先选它",
+      "usageHabitQuota": "根据你平时的用量优先选它（还剩 {{left}}% 配额）",
+      "autoBalance": "其他来源配额偏紧或已有任务，优先用它分担",
+      "autoBalanceQuota": "综合余量与负载优先选它（还剩 {{left}}% 配额）",
+      "lessBusy": "其他来源正在运行任务，先用空闲的它",
+      "paygFallback": "订阅与共享暂不可用，改用按量付费来源兜底"
     },
     "picker": {
       "switched": "「{{name}}」把这个任务换成了 {{model}}",

@@ -487,6 +487,7 @@ interface MessageStreamProps {
    *  the caller). Local-only capabilities that read this machine's file system
    *  with the session working dir wait for null. */
   ownerDeviceId?: string | null;
+  errorProviderDirectory?: readonly { id: string; name?: string | null; auth?: { native?: string } }[];
   /** Task origin. Personal WeChat must not be told to switch to Full access. */
   sessionSource?: string | null;
   canConfigureAutoReview?: boolean;
@@ -867,7 +868,7 @@ export function collectGhostCallsByUserTurn(
     if (
       owner &&
       (m.role === 'tool_use' || m.role === 'assistant') &&
-      isGhostCallToolName(m.toolName) &&
+      isGhostCallToolName(m.mcpToolName ?? m.toolName) &&
       m.toolInput &&
       typeof (m.toolInput as Record<string, unknown>).ghost_id === 'string'
     ) {
@@ -2367,9 +2368,10 @@ export function buildRenderItems(
       // 最早未认领活卡启发式锚(codex);settle 后 xdt_card_id 自校正。
       let suppressMediaForCard = false;
       let hideRowForCard = false;
+      const cardToolName = msg.mcpToolName ?? toolName;
       const maybeQueueGhostCard = (result: string | undefined): void => {
-        const namedPluginTool = isGhostStartupToolCallName(toolName);
-        if (!ghostCards || (!isGhostCallToolName(toolName) && !namedPluginTool)) return;
+        const namedPluginTool = isGhostStartupToolCallName(cardToolName);
+        if (!ghostCards || (!isGhostCallToolName(cardToolName) && !namedPluginTool)) return;
         const inp = (msg.toolInput ?? null) as Record<string, unknown> | null;
         const ghostIdFromInput = typeof inp?.ghost_id === 'string' ? inp.ghost_id : '';
         const candidateGhostId = ghostCardInstanceId(ghostIdFromInput, inp?.namespace);
@@ -2418,7 +2420,7 @@ export function buildRenderItems(
                   !settledCardIds.has(lc.callId) &&
                   lc.toolUseId === null &&
                   (lc.startupToolName
-                    ? toolName === `mcp__cindy__${lc.startupToolName}` || toolName === `mcp:cindy:${lc.startupToolName}`
+                    ? cardToolName === `mcp__cindy__${lc.startupToolName}` || cardToolName === `mcp:cindy:${lc.startupToolName}`
                     : !namedPluginTool && ((lc.logicalGhostId ?? lc.ghostId) === candidateGhostId ||
                       (lc.logicalGhostId === undefined && inp?.namespace === undefined &&
                         lc.ghostId === candidateGhostId))),
@@ -2453,7 +2455,7 @@ export function buildRenderItems(
           media = media.filter((item) => !inlineMediaUrls.has(item.url));
         }
         if (media.length === 0) return;
-        if (isGhostCallToolName(toolName)) {
+        if (isGhostCallToolName(cardToolName)) {
           const anchor = extractAnchorCardId(result);
           const inp = (msg.toolInput ?? null) as Record<string, unknown> | null;
           const ghostIdFromInput = typeof inp?.ghost_id === 'string' ? inp.ghost_id : '';
@@ -3099,6 +3101,7 @@ function renderWorkGroupChild(
     sessionTitle?: string | null;
     agentKind?: 'cc' | 'codex' | 'pi';
     remoteHostId?: string | null;
+    errorProviderDirectory?: readonly { id: string; name?: string | null; auth?: { native?: string } }[];
     sessionSource?: string | null;
     canConfigureAutoReview?: boolean;
     onDiagnoseError?: (error: ErrorDiagnosisSource) => void;
@@ -3151,6 +3154,7 @@ function renderWorkGroupChild(
         sessionTitle={props.sessionTitle}
         agentKind={props.agentKind}
         remoteHostId={props.remoteHostId}
+        errorProviderDirectory={props.errorProviderDirectory}
         sessionSource={props.sessionSource}
         canConfigureAutoReview={props.canConfigureAutoReview}
         onDiagnoseError={props.onDiagnoseError}
@@ -3285,6 +3289,7 @@ export function MessageStream({
   agentKind,
   remoteHostId,
   ownerDeviceId,
+  errorProviderDirectory,
   sessionSource,
   canConfigureAutoReview,
   onDiagnoseError,
@@ -6761,6 +6766,7 @@ export function MessageStream({
       sessionTitle,
       agentKind,
       remoteHostId,
+      errorProviderDirectory,
       sessionSource,
       canConfigureAutoReview,
       onDiagnoseError,
@@ -6784,6 +6790,7 @@ export function MessageStream({
       sessionTitle,
       agentKind,
       remoteHostId,
+      errorProviderDirectory,
       sessionSource,
       canConfigureAutoReview,
       onDiagnoseError,
@@ -7217,6 +7224,7 @@ export function MessageStream({
                         sessionTitle={sessionTitle}
                         agentKind={agentKind}
                         remoteHostId={remoteHostId}
+                        errorProviderDirectory={errorProviderDirectory}
                         sessionRunning={isSessionStreaming}
                         assistantForkBlocked={shouldBlockAssistantFork(
                           isSessionStreaming,
@@ -7417,6 +7425,7 @@ const MessageItem = memo(function MessageItem({
   sessionTitle,
   agentKind,
   remoteHostId,
+  errorProviderDirectory,
   sessionRunning,
   assistantForkBlocked,
   assistantIsTurnFinal,
@@ -7446,6 +7455,7 @@ const MessageItem = memo(function MessageItem({
   /** Owning session's remote SSH host id; forwarded to User/AssistantMessage
    *  to gate Fork/Rewind (unsupported on remote cc daemon sessions). */
   remoteHostId?: string | null;
+  errorProviderDirectory?: readonly { id: string; name?: string | null; auth?: { native?: string } }[];
   /** Forwarded to User/AssistantMessage so they can read this agent's
    *  capabilities (gates Fork/Rewind icon visibility). */
   agentKind?: 'cc' | 'codex' | 'pi';
@@ -7679,6 +7689,7 @@ const MessageItem = memo(function MessageItem({
           message={message.content}
           reason={message.errorReason}
           providerId={message.errorProviderId}
+          providers={errorProviderDirectory}
           reconnectHandoff={message.reconnectHandoff}
           toolLoop={message.toolLoop}
           outputLimit={message.outputLimit}

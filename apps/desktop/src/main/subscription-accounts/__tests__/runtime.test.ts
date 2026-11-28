@@ -346,6 +346,7 @@ import {
   hasConnectedSubscriptionPool,
   hasCreatedOpenAiImageAuth,
   lastConfirmedSubscriptionModelsAt,
+  listSubscriptionPoolSources,
   subscriptionProviderAccountKeys,
   observeSubscriptionAccountUsage,
   pooledCodexResetTarget,
@@ -2358,6 +2359,28 @@ describe('owner-only subscription identity', () => {
     expect(JSON.stringify(keys)).not.toContain('secret-token');
     h.pools.openai.accounts[1].paused = true;
     expect(subscriptionProviderAccountKeys('openai')).toBeUndefined();
+  });
+
+  // Unit regression: on cold start before readSubscriptionPool caches auth, a bound default slot
+  // without persisted lastConfirmedIdentity was filtered out as "unused", leaving length 1 so
+  // Smart Routing skipped warming and failed to flatten the two accounts.
+  it('keeps bound default slot on cold start and drops it only after cache confirms signed-out', async () => {
+    h.pools.openai = { strategy: 'expiring', accounts: [account('default'), account('second')] };
+    h.owner += ':cold-sources';
+    const cold = listSubscriptionPoolSources('openai');
+    expect(cold?.map(a => a.id)).toEqual(['default', 'second']);
+
+    h.read.mockImplementation(async (_provider: string, directory: string) => (
+      directory.endsWith('/second')
+        ? { authenticated: true, identity: 'second@example.test' }
+        : { authenticated: false }
+    ));
+    h.tokens.mockResolvedValue({ chatgptAccountId: 'ws-second', canDispatch: () => true });
+    await readSubscriptionPool('openai');
+    const warmed = listSubscriptionPoolSources('openai');
+    expect(warmed?.map(a => ({ id: a.id, label: a.label }))).toEqual([
+      { id: 'second', label: 'second@example.test' },
+    ]);
   });
 });
 
@@ -5728,6 +5751,28 @@ describe('native account assignment on the executing computer', () => {
     h.bindings.set('task:stay', { providerId: 'anthropic', accountId: 'default' });
     await agent.startSession({ providerId: 'anthropic', sessionId: 'stay', model } as StartSessionOptions);
     expect((start.mock.calls[1] as unknown as [StartSessionOptions])[0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir).toBe('anthropic/default');
+  });
+  // PR #13634 review (unit): a task Smart Routing put on one account source must start on that account.
+  // The pool used to replace a blocked binding with another account, which the route may have turned off,
+  // so the task ran on a source the preview and the route switch said it would not use. Minimal input: the
+  // routed account is blocked and another account could take the task.
+  it('never moves a Smart Routing account source to another pool account at start', async () => {
+    h.pools.anthropic!.accounts = [{ ...account('default'), limit: 4 }, { ...account('second'), limit: 4 }];
+    const model = 'claude-sonnet';
+    const failed = await acquireSubscriptionAccount('anthropic', model, []);
+    await failed!.bind(['task:routed']);
+    failed!.observeFailure({ sdkError: 'rate_limit' }, model, 'run');
+    failed!.release();
+    const start = vi.fn(async () => ({ id: 'native-new', events: async function* () {}, send: vi.fn(), close: vi.fn() }) as unknown as AgentSessionHandle);
+    const routedAccount = vi.fn(async (sessionId: string, providerId: string) =>
+      sessionId === 'routed' && providerId === 'anthropic' ? 'default' : undefined);
+    const agent = withSubscriptionAccounts({ kind: 'claude-code', startSession: start } as unknown as BaseAgent,
+      { getState: vi.fn(), routedAccount } as never);
+    await agent.startSession({ providerId: 'anthropic', sessionId: 'routed', model } as StartSessionOptions).catch(() => undefined);
+    expect(routedAccount).toHaveBeenCalledWith('routed', 'anthropic');
+    expect(start.mock.calls.map(call => (call as unknown as [StartSessionOptions])[0][NATIVE_SUBSCRIPTION_ACCOUNT]?.configDir))
+      .not.toContain('anthropic/second');
+    expect(h.bindings.get('task:routed')).toMatchObject({ accountId: 'default' });
   });
   // 2026-11-12 incident (unit): a same-account remote task stayed on its exhausted account although
   // its computer had another one; pre-send and immediate continuation only handled local tasks.

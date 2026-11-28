@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createElement, useEffect } from 'react';
+import { act, createElement, useEffect, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
@@ -53,6 +53,7 @@ import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGenerati
 import { clearHistoryDisk } from '@/session/remoteHistoryDiskCache';
 import { cacheChatMessages, flushChatMessageCache, peekChatMessages, readChatMessages } from '@/chat/chatMessageCache';
 import { isRemoteResourceUnread, clearRemoteResourceCache, readCachedChatRoster } from '@/device-link/remoteResourceCache';
+import { useBotGroupSettingsManagement } from '@/session/useBotGroupSettingsManagement';
 const id = '00000000-0000-4000-8000-000000000001';
 const self = '00000000-0000-4000-8000-000000000002';
 const room = { id, name: 'Discussion', kind: 'group', state: 'joined', revision: 1, archived: false,
@@ -65,7 +66,7 @@ let showChat = false;
 let threadRootId: string | undefined;
 const timelineChanges = vi.fn();
 function Probe() { roster = useBotGroupRoster(h.targets, !showChat); chat = useBotGroupChat(host, showChat ? id : '', threadRootId); useEffect(() => { timelineChanges(); }, [chat.state]); return null; }
-async function render(Component = Probe) { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Component))); }
+async function render(Component: () => ReactElement | null = Probe) { root ??= createRoot(document.createElement('div')); await act(async () => root!.render(createElement(Component))); }
 async function send(input: Record<string, unknown>) {
   await chat.act('send', input);
   const runner = createChatOutboxDelivery({ store: mobileDurableOutbox,
@@ -332,6 +333,92 @@ it('saves a refreshed page once after it is drawn, and at once when the outbox d
     expect(await leaving).toBe(true);
     expect(saved('left-screen')).toBe(true);
   } finally { vi.useRealTimers(); }
+});
+
+// Review on #13593 (unit, direct entry): settings that cannot be read fall back to the chat page's group.
+// That fallback first carried no 「群里的 Cindy」 value at all, then an older one: the chat page read the room
+// at revision 1 (on), the settings at revision 2 (off), and offline the switch went back to on. The account
+// keeps the newest value it has read by revision, in memory; writing still needs this opening's settings read.
+it('shows the newest group Cindy value read online when direct settings reopen offline', async () => {
+  const admin = { id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'admin', avatar: null };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  let offline = false;
+  let server = { ...room, revision: 1, assistant: true };
+  h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
+    if (offline) throw new Error('NETWORK_ERROR');
+    if (path === '/v1/me') return { actor: { id: self, kind: 'human' }, capabilities: { groupAssistant: 1 }, groupAssistantActorId: '00000000-0000-4000-8000-000000000020' };
+    if (path.endsWith('/members')) return [admin];
+    if (path.endsWith('/snapshot')) return { room: server, members: [admin], messages: [], cursor: '1' };
+    return original(path, options);
+  });
+  let open = false;
+  let settings!: ReturnType<typeof useBotGroupSettingsManagement>;
+  function Sheet({ group }: { group: Parameters<typeof useBotGroupSettingsManagement>[0] }) { settings = useBotGroupSettingsManagement(group, open); return null; }
+  function Screen() { chat = useBotGroupChat(host, id); return chat.state.kind === 'ready' ? createElement(Sheet, { group: chat.state.group }) : null; }
+  await render(Screen);
+  await vi.waitFor(() => expect(chat.state).toMatchObject({ kind: 'ready', group: { revision: 1, assistantEnabled: true } }));
+  // Someone turns it off; only the settings read sees it, the chat page has had no reason to read again.
+  server = { ...server, revision: 2, assistant: false };
+  open = true; await render(Screen);
+  await vi.waitFor(() => expect(settings?.ready).toBe(true));
+  expect(settings).toMatchObject({ editable: true, group: { revision: 2, assistantEnabled: false } });
+  expect(chat.state).toMatchObject({ group: { revision: 1, assistantEnabled: true } });
+  open = false; await render(Screen);
+  offline = true; open = true; await render(Screen);
+  await vi.waitFor(() => expect(settings.reason).toBe('unavailable'));
+  expect(settings).toMatchObject({ group: undefined, editable: false, shown: { supportsGroupAssistant: true, assistantEnabled: false } });
+  await act(async () => { await expect(settings.act('set-assistant', { assistant: true })).rejects.toThrow('PERMISSION_DENIED'); });
+  expect(h.auth.apiFetch.mock.calls.some(([, options]) => options.method === 'PATCH')).toBe(false);
+});
+
+// Review on #13593 (unit, direct entry): a group opened from the phone's saved copy has no server capabilities
+// until the chat page's own refresh lands. Settings read online (revision 2, off) and reopened offline then hid
+// the row, because the fallback asked the chat page's copy whether the server has the switch. The known value
+// is looked up by account, own actor and group alone.
+it('shows the group Cindy value read by settings when the chat page is still a saved copy without capabilities', async () => {
+  const admin = { id: self, kind: 'human', state: 'joined', name: 'Me', ownerActorId: self, ownerName: '', role: 'admin', avatar: null };
+  const original = h.auth.apiFetch.getMockImplementation()!;
+  const me = { actor: { id: self, kind: 'human' }, capabilities: { groupAssistant: 1 }, groupAssistantActorId: '00000000-0000-4000-8000-000000000020' };
+  let offline = false;
+  let server = { ...room, revision: 1, assistant: true };
+  let identity: Promise<unknown> | undefined;
+  let stall = false;
+  h.auth.apiFetch.mockImplementation(async (path: string, options: any) => {
+    if (offline) throw new Error('NETWORK_ERROR');
+    if (path === '/v1/me') return identity ?? me;
+    if (path.endsWith('/snapshot')) return { room: server, members: [admin], messages: [], cursor: '1' };
+    // The chat page's own refresh does not finish yet; only the settings read (snapshot and /me) gets through.
+    if (stall) return new Promise(() => {});
+    if (path.endsWith('/members')) return [admin];
+    return original(path, options);
+  });
+  let open = false;
+  let settings!: ReturnType<typeof useBotGroupSettingsManagement>;
+  function Sheet({ group }: { group: Parameters<typeof useBotGroupSettingsManagement>[0] }) { settings = useBotGroupSettingsManagement(group, open); return null; }
+  function Screen() { chat = useBotGroupChat(host, id); return chat.state.kind === 'ready' ? createElement(Sheet, { group: chat.state.group }) : null; }
+  // A first visit saves the group to disk; signing in again starts a new account session with nothing in memory.
+  await render(Screen);
+  await vi.waitFor(() => expect(chat.state).toMatchObject({ kind: 'ready', group: { revision: 1, assistantEnabled: true } }));
+  await act(async () => { root!.unmount(); root = undefined; });
+  setMobileAuthOwner(null); peekChatMessages(id); setMobileAuthOwner('owner');
+  server = { ...server, revision: 2, assistant: false };
+  let identified!: (value: unknown) => void;
+  identity = new Promise(resolve => { identified = resolve; });
+  stall = true;
+  await render(Screen);
+  await vi.waitFor(() => expect(chat.state).toMatchObject({ kind: 'ready', group: { revision: 1 } }));
+  expect(chat.state.kind === 'ready' && chat.state.group.supportsGroupAssistant).not.toBe(true);
+  await act(async () => { identified(me); identity = undefined; });
+  open = true; await render(Screen);
+  await vi.waitFor(() => expect(settings?.ready).toBe(true));
+  expect(settings).toMatchObject({ editable: true, group: { revision: 2, assistantEnabled: false } });
+  expect(chat.state.kind === 'ready' && chat.state.group.supportsGroupAssistant).not.toBe(true);
+  open = false; await render(Screen);
+  offline = true; open = true; await render(Screen);
+  await vi.waitFor(() => expect(settings.reason).toBe('unavailable'));
+  expect(settings).toMatchObject({ group: undefined, editable: false, shown: { supportsGroupAssistant: true, assistantEnabled: false } });
+  await act(async () => { await expect(settings.act('set-assistant', { assistant: true })).rejects.toThrow('PERMISSION_DENIED'); });
+  expect(h.auth.apiFetch.mock.calls.some(([, options]) => options.method === 'PATCH')).toBe(false);
 });
 
 // Integration tier: real hook, real disk store, controlled native IO / HTTP.

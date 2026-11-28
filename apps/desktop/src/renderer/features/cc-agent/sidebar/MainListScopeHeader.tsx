@@ -50,13 +50,13 @@ export function MainListScopeHeader({
   } | null;
 }): ReactNode {
   const { mode } = useTaskListMode();
-  // 收件箱里有筛选或隐藏生效时按钮常驻并带点；查看已归档任务不再提醒(2026-11-28 用户决定)。
+  // 收件箱里有筛选或隐藏生效时按钮常驻，方便恢复列表；显示设置不再带提醒点。
   const showReminder = mode === 'inbox' && sidebarContentFilterCount(filter) > 0;
   const [displaySettingsOpen, setDisplaySettingsOpen] = useState(false);
   return (
     <div className="group/sidebar-header flex h-6 items-center justify-between pr-0 pl-6">
       <div className="flex min-w-0 items-center gap-1">
-        <MachineSwitcherMenu onOpenDisplaySettings={() => setDisplaySettingsOpen(true)} />
+        <MachineSwitcherMenu />
       </div>
       <div className="flex items-center gap-0.5 -mt-px">
         <div className="flex items-center gap-0.5 -mt-px">
@@ -80,7 +80,7 @@ export function MainListScopeHeader({
               </Tip>
             </div>
           ) : null}
-          {/* 收件箱有筛选生效时设置按钮常驻(带点),否则跟随段头 hover 出现。 */}
+          {/* 收件箱有筛选生效时设置按钮常驻，否则跟随段头 hover 出现。 */}
           <div className={showReminder ? undefined : HEADER_HOVER_ACTION_CLASS}>
             <SidebarFilterPopover
               filter={filter}

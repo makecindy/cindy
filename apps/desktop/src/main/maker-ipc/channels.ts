@@ -436,9 +436,13 @@ export const MAKER_INVOKE = {
   IM_DEFAULT_SETTINGS_GET: 'maker:im-default-settings:get',
   IM_DEFAULT_SETTINGS_SET: 'maker:im-default-settings:set',
   IM_DEFAULT_SETTINGS_RESET: 'maker:im-default-settings:reset',
-  /** 个人飞书 / Lark 机器人的按群设置（项目、模型、权限）。仅本机设置页，不进远程白名单。 */
-  FEISHU_GROUP_SETTINGS_LIST: 'maker:feishu-group-settings:list',
-  FEISHU_GROUP_SETTINGS_SET: 'maker:feishu-group-settings:set',
+  /**
+   * 个人 IM 机器人的「群聊」总表（按群的项目、模型、权限、群成员也能提问）。仅本机设置页，
+   * 不进远程白名单。
+   */
+  IM_CHAT_SETTINGS_LIST: 'maker:im-chat-settings:list',
+  IM_CHAT_SETTINGS_SET: 'maker:im-chat-settings:set',
+  IM_CHAT_SETTINGS_RESUME_MEMBERS: 'maker:im-chat-settings:resume-members',
   /** Claude / Codex 子代理模型覆盖；null 表示沿用 agent 原生逻辑。 */
   SUBAGENT_MODEL_SETTINGS_GET: 'maker:subagent-model-settings:get',
   SUBAGENT_MODEL_SETTINGS_SET: 'maker:subagent-model-settings:set',

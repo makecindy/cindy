@@ -805,3 +805,60 @@ it('resolves SSH native Codex candidates from the SSH host catalog without local
   const missing = await resolver.resolve({ selection: { type: 'route', id: 'r-ssh' }, sshHostId: 'ssh-empty' });
   expect(missing).toMatchObject({ outcome: 'unavailable' });
 });
+
+// 2026-11-28 用户裁决：拆平后的单账号候选直接按各自独立配额窗口解析，不走 innerQuota 二次包裹，
+// 预览 trace 逐个展示账号名与余量，并把选中的 accountId 带回 route。
+// 失效后果：试一下出来被包裹的 auto 或两个账号读成同一份配额。
+// 最小输入：一条带 parent 的展开路由，包含本机 openai 的 default 与 second 两个账号及一个 BYOK 来源。
+it('resolves flattened per-account candidates with individual quotas without invoking innerQuota', async () => {
+  const innerQuota = vi.fn(async () => ({ limited: true, urgency: null, fiveHourTight: false, headroom: 0 }));
+  const view = (id: string, name: string) => ({
+    id, name, source: 'builtin', connected: true, agents: ['codex'], routing: { codex: { enabled: true } },
+    models: { codex: [{ id: 'gpt-6.2', name: 'GPT-6.2', mode: 'chat', efforts: ['high'] }] },
+  }) as unknown as ProviderView;
+  const route: ModelGroupRoute = {
+    id: 'src:test-flat',
+    name: 'GPT-6.2',
+    strategy: 'expiring',
+    parent: { id: 'auto:openai', name: 'OpenAI' },
+    candidates: [
+      { agentKind: 'codex', providerId: 'openai', accountId: 'default', model: 'gpt-6.2' },
+      { agentKind: 'codex', providerId: 'openai', accountId: 'second', model: 'gpt-6.2' },
+      { agentKind: 'codex', providerId: 'byok-1', model: 'gpt-6.2' },
+    ],
+  };
+  const resolver = createModelGroupResolver({
+    config: () => ({ routes: [route] }),
+    views: async () => [view('openai', 'OpenAI'), view('byok-1', 'OpenAI-Codex')],
+    agents: () => ['codex'],
+    harnessInstalled: async () => true,
+    localAccount: (_providerId, accountId) => (
+      accountId === 'default'
+        ? { available: true, label: 'first@example.com' }
+        : accountId === 'second'
+          ? { available: true, label: 'second@example.com' }
+          : null
+    ),
+    quotaWindows: async () => new Map([
+      // default 已满额，second 还剩 80%：应直接选中 second，不调用 innerQuota。
+      [modelGroupQuotaKey(undefined, 'openai', 'default'), [{ usedPercent: 100, resetAtMs: NOW + HOUR, windowMs: 5 * HOUR }]],
+      [modelGroupQuotaKey(undefined, 'openai', 'second'), [{ usedPercent: 20, resetAtMs: NOW + 2 * HOUR, windowMs: 5 * HOUR }]],
+    ]),
+    innerQuota,
+    scope: () => 'owner',
+    now: () => NOW,
+  });
+
+  const result = await resolver.resolve({ selection: { type: 'route', id: 'src:test-flat' }, dryRun: true });
+  expect(innerQuota).not.toHaveBeenCalled();
+  expect(result).toMatchObject({
+    outcome: 'routed',
+    route: { agentKind: 'codex', providerId: 'openai', accountId: 'second', model: 'gpt-6.2' },
+    sourceName: 'OpenAI · second@example.com',
+  });
+  expect(result.trace.map((entry) => [entry.accountId ?? null, entry.sourceName, entry.state, entry.why])).toEqual([
+    ['default', 'OpenAI · first@example.com', 'skipped', 'limited'],
+    ['second', 'OpenAI · second@example.com', 'picked', 'expiring'],
+    [null, 'OpenAI-Codex', 'standby', 'standby'],
+  ]);
+});
