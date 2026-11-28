@@ -189,7 +189,9 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
         file: uiText('ccAgent.autoTitle.file', 'File'),
       });
       if (!seed) return noop;
-      const agentKind = queued.createOpts?.agentKind ?? 'claude-code';
+      const rawAgentKind = queued.createOpts?.agentKind;
+      const agentKind: AgentKind | null =
+        rawAgentKind === 'acp' ? null : (rawAgentKind ?? 'claude-code');
       return () => {
         if (!canWrite()) return;
         const startGen = holdGeneration();
@@ -205,8 +207,9 @@ export function createHostAutoTitle(deps: HostAutoTitleDeps) {
       if (!sessionId || !text.trim() || !canWrite()) return { applied: false, done: false };
       if (deps.hasEnabledUserMessageHookGhost()) return { applied: false, done: false };
       const startGen = holdGeneration();
-      const agentKind: AgentKind =
-        input.agentKind === 'codex' || input.agentKind === 'pi' ? input.agentKind : 'claude-code';
+      const agentKind: AgentKind | null = input.agentKind === 'acp'
+        ? null
+        : input.agentKind === 'codex' || input.agentKind === 'pi' ? input.agentKind : 'claude-code';
       return core.runSessionAutoTitle(
         {
           sessionId,

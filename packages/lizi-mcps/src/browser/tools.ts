@@ -679,7 +679,7 @@ async function screenshotToolResult(
  * network reads, uploads, dialogs or trusted input); the hint tells the model
  * to involve the user rather than switch targets on its own.
  */
-const BACKEND_SWITCH_HINT = '当前浏览器后端不支持此操作。需要时请明确告知用户并建议改用 Cindy 专用浏览器(setBackend external),不要自行切换。';
+const BACKEND_SWITCH_HINT = '当前浏览器后端不支持此操作。请明确告知用户，由用户决定是否在设置中改用 Cindy 专用浏览器；不要自行切换，也不要在 shell 中自行启动 Playwright 或 Chrome 绕过当前浏览器。';
 function unsupportedByBackend(args: Record<string, unknown>, deps: BrowserMcpDeps): string | undefined {
   const caps = deps.backendCapabilities?.();
   if (!caps) return undefined;
@@ -800,7 +800,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
     category: 'browser',
     description:
       '浏览器自动化统一入口。通过 action 选择 status/start/tabs/navigate/snapshot/screenshot/act 等操作; ' +
-      'status 返回实际浏览器模式; setBackend 切换并保存全局浏览器模式(内置 rsb-webview / 外置 external / 用户自己的浏览器 user-browser,即「我的浏览器」)。' +
+      'status 返回实际浏览器模式; setBackend 仅在用户明确要求时切换并保存全局浏览器模式(内置 rsb-webview / 外置 external / 用户自己的浏览器 user-browser,即「我的浏览器」),会进入任务审批,不要因报错或断连自行切换,也不要在 shell 中自行启动 Playwright/Chrome。' +
       '只要页面上的文字时用 read:{action:"read",url} 或 pages:[…] 打开、等内容出现、返回可见文字后关闭;{action:"read",targetId} 读已打开的页面。' +
       '优先使用 snapshot 返回的 ref 执行 click/type/press,不要猜测 CSS selector。' +
       'act/open/navigate/upload 可带 afterSnapshot:{}，一次返回动作结果和精简快照；可用 selector 限定区域。' +
@@ -829,7 +829,7 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
       backend: z
         .enum(['external', 'rsb-webview', 'user-browser'])
         .optional()
-        .describe('仅 action=setBackend: 切换全局自动化目标并保存设置; 会影响其他任务,两种模式的登录态与标签页不互通'),
+        .describe('仅 action=setBackend 且用户明确要求切换时使用: 会进入审批并修改全局持久化设置,影响其他任务; 不要自行切换'),
       proxyServer: z.string().optional().describe(
         'action=start 时使用的代理 URL（如 http://host:port）。**不支持带用户名/密码的认证代理**，带 userinfo 会被直接拒绝',
       ),

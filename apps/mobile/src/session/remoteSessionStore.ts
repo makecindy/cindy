@@ -1864,6 +1864,7 @@ function preserveSessionRuntimeFields(
     'taskTeammate',
     'agentSwitchIntent',
     'pluginEngineSwitchIntent',
+    'modelGroupBinding',
     'runtimeGeneration',
     'runtimeBaseline',
     'runtimeEffective',

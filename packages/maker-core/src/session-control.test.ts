@@ -1390,3 +1390,66 @@ it('releases a throwing reservation observer so the next Session send can start'
     expect(release).toHaveBeenCalledWith(true);
   } finally { await session.close(); }
 });
+
+// 测试价值
+// - 生产入口与可观察结果：Session.send() 统一调用 beforeTurn(session, signal)；验证其在
+//   beforeProviderStart/onAccepted/handle.send 之前执行，非取消错误阻断发送（含 IM 直发路径），
+//   且等待期间被 signal 取消时返回 cancelled-before-dispatch 并释放 reservation。
+// - 规则依据：本机 ACP 延迟 worktree 全量检出必须守住所有 Session.send 公共入口，防止 IM 等直发绕过。
+// - 现有覆盖缺口：此前无用例验证 beforeTurn 接收 reservation abort signal 并在失败/取消时阻断派发。
+// - 最小失败输入：beforeTurn 抛检出失败错误，或在等待期间外部 signal abort。
+// - tier：unit（进程内 Session + fake handle）。
+it('gates Session.send on beforeTurn with abort signal across all callers', async () => {
+  const stub = createHandle();
+  const handleSend = vi.spyOn(stub.handle, 'send');
+  const order: string[] = [];
+  let failOnce = true;
+  let releaseWait: (() => void) | null = null;
+  const session = new Session({
+    id: 'session-before-turn-gate',
+    agentKind: 'acp',
+    workDir: '/repo',
+    handle: stub.handle,
+    capabilities: {} as never,
+    logger: createLogger() as never,
+    turnStallMs: 0,
+    beforeTurn: async (_s, signal) => {
+      order.push('beforeTurn');
+      if (failOnce) {
+        failOnce = false;
+        throw new Error('worktree checkout failed');
+      }
+      if (signal) {
+        await new Promise<void>((resolve, reject) => {
+          releaseWait = resolve;
+          signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      }
+    },
+  });
+  try {
+    const onAccepted = vi.fn();
+    await expect(session.send('im-direct-1', { onAccepted })).rejects.toThrow('worktree checkout failed');
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(handleSend).not.toHaveBeenCalled();
+
+    const ac = new AbortController();
+    const cancelled = session.send('im-direct-2', { signal: ac.signal, onAccepted });
+    await Promise.resolve();
+    ac.abort();
+    await expect(cancelled).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(handleSend).not.toHaveBeenCalled();
+
+    const okPromise = session.send('im-direct-3', {
+      onAccepted: () => { order.push('onAccepted'); },
+    });
+    await Promise.resolve();
+    releaseWait!();
+    await expect(okPromise).resolves.toEqual({ accepted: true });
+    expect(order).toEqual(['beforeTurn', 'beforeTurn', 'beforeTurn', 'onAccepted']);
+    expect(handleSend).toHaveBeenCalledTimes(1);
+  } finally {
+    await session.close();
+  }
+});

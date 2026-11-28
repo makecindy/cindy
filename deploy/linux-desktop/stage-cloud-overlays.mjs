@@ -10,6 +10,7 @@ import { transformMaintenanceSource, cloudMaintenancePlugin, targets as maintena
 import { transformCloudIdentitySource, targets as identityTargets } from './runtime-identity/overlay.mjs';
 import { transformCloudUpdateSource, targets as updateTargets } from './runtime-updates/overlay.mjs';
 import { cloudAppVersion } from './build-version.mjs';
+import { assertImportOrderKept } from './overlay-imports.mjs';
 
 const root = path.resolve(process.argv[2] || '/workspace/source'), recipe = path.resolve(process.argv[3] || '/workspace/recipe'), records = [];
 // Written by build-image.py: the exported source has no Git metadata.
@@ -45,6 +46,8 @@ for (const [overlay, targets, transform] of transforms) {
     if (!after) throw Error(`overlay ${overlay} missing for ${relative}`);
     for (const [id, target] of virtuals) after = after.replaceAll(`'${id}'`, JSON.stringify(target));
     if (after.includes("'virtual:cindy-cloud")) throw Error(`unresolved virtual import in ${relative}`);
+    // Upstream modules must load in the same order as in the desktop build.
+    assertImportOrderKept(before, after, relative);
     fs.writeFileSync(file, after);
     records.push({ overlay, file: relative, beforeSha256: sha(before), afterSha256: sha(after) });
   }

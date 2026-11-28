@@ -1197,6 +1197,10 @@ function projectInvokeResultForTunnel(
       manual: row.manual,
       recurring: row.recurring,
       intervalMs: row.intervalMs,
+      // 保留来源，让控制端归档确认区分可删的用户自动化与不可删的仓库/项目自动化。
+      ...(row.source === 'user' || row.source === 'project' || row.source === 'bot'
+        ? { source: row.source }
+        : {}),
       // 保留运行模式与旧控制端兼容；当前归档提醒包含持续会话，运行时恢复原普通任务。
       ...(row.persistentSession === true ? { persistentSession: true } : {}),
     }));
@@ -5785,6 +5789,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     const message = err instanceof Error ? err.message : String(err);
     if (isDbWorkerOverloadedError(message) && (!handlerCompleted || isCompletedInvokeRetryableReadChannel(payload.channel))) {
       return { ok: false, error: { code: 'BACKPRESSURE', message } };
+    }
+    if (payload.channel === 'local-db:messages:around-client-id' && err instanceof DeviceLinkError && err.code === 'NOT_FOUND') {
+      return { ok: false, error: { code: err.code, message } };
     }
     return { ok: false, error: { code: 'IPC_ERROR', message } };
   }
