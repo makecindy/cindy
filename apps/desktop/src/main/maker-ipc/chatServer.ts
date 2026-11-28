@@ -1847,7 +1847,12 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   function shownMessages<T extends Message>(messages: T[], members: readonly Member[], assistantDeviceId?: string | null): T[] {
     return messages.filter(m => {
       const notice = assistantNoticeOf(m, members);
-      return !notice || !isBotGroupAssistantNoticeHidden({ ...notice, reason: groupAssistantNoticeReason(notice, assistantDeviceId) }, selfId);
+      if (!notice) return true;
+      if (!isBotGroupAssistantNoticeHidden({ ...notice, reason: groupAssistantNoticeReason(notice, assistantDeviceId) }, selfId)) return true;
+      // A notice the server marked unbound is always the requester's card. A reason inferred from
+      // the room is only hidden when this client can actually offer the choice: a server that does
+      // not advertise the capability keeps its own notice instead of going silent.
+      return notice.reason === undefined && !boundAssistantDevice;
     });
   }
   function shownSnapshot<T extends Snapshot>(s: T): T {
@@ -2372,7 +2377,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     });
     if (!messages.length) return;
     const threadVersion = threads.version(roomId);
-    const views = await messageViews(roomId, messages, snapshot.members);
+    const assistantDeviceId = snapshot.room.assistant_device_id ?? null;
+    const views = await messageViews(roomId, shownMessages(messages, snapshot.members, assistantDeviceId), snapshot.members, snapshot.members, assistantDeviceId);
     // The check belongs to the message as it is pushed, not to a later full read of the room.
     markReadByOthers(views, readPositions(roomId, snapshot, messages));
     await decorateThreads(roomId, views, messages, [...known, ...snapshot.messages], snapshot.members, false);
@@ -2460,10 +2466,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const page = await pageRead;
       const executionFailures = await failureSnapshot(i.groupId, members, [...(i.sourceMessageIds ?? []), root.id, ...page.map(m => m.id)]);
       const projection = await cache?.projection<Message>(i.groupId, i.sourceMessageIds ?? []);
-      const rootViews = await messageViews(i.groupId, [root], members);
+      const rootViews = await messageViews(i.groupId, [root], members, members, s.room.assistant_device_id ?? null);
       await decorateThreads(i.groupId, rootViews, [root], page, members, false);
-      const replies = await messageViews(i.groupId, shownMessages([...page].reverse(), members), members);
-      const messageUpdates = projection ? await messageViews(i.groupId, shownMessages(projection.messages.filter(m => m.threadRootId === i.rootId), members), members) : undefined;
+      const replies = await messageViews(i.groupId, shownMessages([...page].reverse(), members, s.room.assistant_device_id ?? null), members, members, s.room.assistant_device_id ?? null);
+      const messageUpdates = projection ? await messageViews(i.groupId, shownMessages(projection.messages.filter(m => m.threadRootId === i.rootId), members, s.room.assistant_device_id ?? null), members, members, s.room.assistant_device_id ?? null) : undefined;
       const positions = readPositions(i.groupId, s, [root, ...page, ...(projection?.messages ?? [])]);
       for (const views of [rootViews, replies, messageUpdates ?? []]) markReadByOthers(views, positions);
       const retry = () => {

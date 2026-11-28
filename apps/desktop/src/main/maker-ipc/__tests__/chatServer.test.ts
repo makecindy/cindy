@@ -3217,7 +3217,7 @@ describe('Chat Server result delivery and refresh', () => {
     // - 实测耗时：本文件 vitest run 9.8s（589 条）。
     it('offers this computer when the server omits the list and the notice has no reason', async () => {
       const source = message(70, selfId, 'Sort out the weekly report');
-      const notice = message(71, cindyId, '', { origin: 'bot', content: [{ type: 'card', namespace: 'cindy.group-assistant',
+      const notice = message(71, cindyId, '', { origin: 'bot', threadRootId: source.id, content: [{ type: 'card', namespace: 'cindy.group-assistant',
         schemaRevision: 1, fallback: 'notice', data: { type: 'executor_unavailable', requesterId: selfId, sourceMessageId: source.id } }] });
       const previous = fixture.handle.getMockImplementation()!;
       fixture.handle.mockImplementation((route, method, body) => {
@@ -3225,6 +3225,8 @@ describe('Chat Server result delivery and refresh', () => {
           capabilities: { groupAssistant: 1, groupAssistantDevice: 1 }, groupAssistantActorId: cindyId } };
         if (route.endsWith('/snapshot')) return { body: { room: room(roomId), members, messages: [source, notice], cursor: '1' } };
         if (route === `/conversations/${roomId}/messages?limit=100`) return { body: [source, notice] };
+        if (route.startsWith(`/conversations/${roomId}/messages?threadRootId=`)) return { body: [notice] };
+        if (route === `/conversations/${roomId}/messages/${source.id}`) return { body: source };
         if (route === `/conversations/${roomId}/executions`) return { body: [{ ...request(70), status: 'needs_input' }] };
         if (route === `/conversations/${roomId}/assistant-device` && method === 'POST') return { body: { deviceId: body.deviceId } };
         return previous(route, method, body);
@@ -3235,6 +3237,10 @@ describe('Chat Server result delivery and refresh', () => {
       expect(result.group.messages.map(m => m.id)).toEqual([source.id]);
       expect(result.group.assistantComputers).toEqual([{ id: 'studio-device', name: expect.any(String) }]);
       expect(result.group.assistantDeviceWaits).toEqual([{ executionId: request(70).id, sourceMessageId: source.id, requestText: expect.any(String) }]);
+      // The topic path hides the same notice instead of reporting an outage there.
+      const thread = await service.chatServer!.thread({ groupId: roomId, rootId: source.id });
+      if (!thread.ok) throw new Error(thread.errorCode);
+      expect(thread.replies).toEqual([]);
       expect(await service.chatServer!.manage({ groupId: roomId, action: { type: 'assistantDevice', deviceId: 'studio-device' } })).toMatchObject({ ok: true });
       expect(fixture.handle.mock.calls.some(([route, method]) => route === `/conversations/${roomId}/assistant-device` && method === 'POST')).toBe(true);
     });
