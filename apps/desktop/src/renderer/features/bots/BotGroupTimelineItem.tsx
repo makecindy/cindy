@@ -326,7 +326,6 @@ export function BotGroupUnreadDivider({ thread = false }: { thread?: boolean }) 
 // ---- The row ---------------------------------------------------------------------------
 
 export interface BotGroupTimelineItemProps {
-  showDeviceChoice?: boolean;
   pluginUi: import('@/cindy-brain/PluginUiContributions').PluginUiMessageCandidates;
   message: BotGroupTimelineMessage;
   /** Same author as the row above within five minutes: no avatar or name. */
@@ -515,7 +514,7 @@ function BotGroupTimelineItemImpl(props: BotGroupTimelineItemProps) {
   if (message.kind === 'notice' || message.authorKind === 'system') {
     const name = message.authorName.trim() || authorName;
     if (isBotGroupCapabilityNoticeCode(message.capabilityNoticeCode)) return <Row {...rowProps} block="system">
-      <BotGroupCapabilityNotice name={name} code={message.capabilityNoticeCode} chooseDevice={props.showDeviceChoice && message.canChooseAssistantDevice} />
+      <BotGroupCapabilityNotice name={name} code={message.capabilityNoticeCode} />
     </Row>;
     if (isBotGroupRuntimeFailureCode(message.runtimeFailureCode)) {
       return (

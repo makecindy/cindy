@@ -39,6 +39,8 @@ export interface BotGroupLoadedTimeline {
   older: BotGroupMessageView[];
   olderPlans: BotGroupPlanView[];
   olderHasMore: boolean;
+  /** Boundary of the deepest loaded page, including a page of hidden notices. Null means exhausted. */
+  olderBeforeSequence?: number | null;
   /** Latest complete page's upper bound, retained while isolated deltas are displayed. */
   latestPageCeiling?: number;
 }
@@ -108,14 +110,14 @@ export function mergeBotGroupLatestPage(
     return { group: next, older: [], olderPlans: [], olderHasMore: next.hasMoreBefore };
   }
   const page = next.messages;
-  const floor = page.reduce((min, message) => Math.min(min, message.sequence), Number.POSITIVE_INFINITY);
-  const ceiling = previous.latestPageCeiling
+  const floor = next.pageOldestSequence ?? page.reduce((min, message) => Math.min(min, message.sequence), Infinity);
+  const ceiling = previous.latestPageCeiling ?? previous.group.pageNewestSequence
     ?? previous.group.messages.reduce((max, message) => Math.max(max, message.sequence), Number.NEGATIVE_INFINITY);
   // More than a page arrived at once (e.g. while the window was in the background): the new page
   // neither overlaps nor directly adjoins the one on screen. Keeping the old rows
   // would hide that gap for good, so start over from the new page, as on first load; 「查看更早」
   // then reads on from right below it.
-  if (next.hasMoreBefore && page.length > 0 && previous.group.messages.length > 0 && floor > ceiling + 1) {
+  if (next.hasMoreBefore && Number.isFinite(floor) && Number.isFinite(ceiling) && floor > ceiling + 1) {
     return {
       group: { ...next, messages: stabilizeById(previous.group.messages, page, previous.older),
         plans: stabilizeById(previous.group.plans, next.plans, previous.olderPlans) },
@@ -136,7 +138,9 @@ export function mergeBotGroupLatestPage(
     ? stabilizeById(refreshedOlder, mergeBotGroupMessages(refreshedOlder, pushedOut.map(message => updates.get(message.id) ?? message)))
     : refreshedOlder, next.threads);
   // The first rows moving down take over what the old latest page said about earlier history.
-  const olderHasMore = pushedOut.length > 0 && previous.older.length === 0 ? previous.group.hasMoreBefore : previous.olderHasMore;
+  const usePreviousPage = pushedOut.length > 0 && previous.older.length === 0 && previous.olderBeforeSequence === undefined;
+  const olderHasMore = usePreviousPage ? previous.group.hasMoreBefore : previous.olderHasMore;
+  const olderBeforeSequence = usePreviousPage ? previous.group.pageOldestSequence : previous.olderBeforeSequence;
   const messages = stabilizeById(previous.group.messages, page, previous.older);
   const plans = stabilizeById(previous.group.plans, next.plans, previous.olderPlans);
   // Plans the pushed-out messages point at stay with them.
@@ -156,6 +160,7 @@ export function mergeBotGroupLatestPage(
     older,
     olderPlans,
     olderHasMore,
+    olderBeforeSequence,
   };
 }
 

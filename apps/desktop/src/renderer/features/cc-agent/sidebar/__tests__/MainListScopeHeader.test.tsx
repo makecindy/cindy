@@ -18,7 +18,7 @@ vi.mock('../SidebarFilterPopover', () => ({
 afterEach(cleanup);
 
 // 段头操作默认只在 hover/focus 时出现(用 opacity-0 + pointer-events-none 隐藏)。
-// 设置按钮只在带提醒点时常驻:收件箱里有筛选或隐藏生效。查看「已归档」不再提醒、也不再常驻
+// 设置按钮在收件箱里有筛选或隐藏生效时常驻，但不带提醒点。查看「已归档」不再常驻
 // (2026-11-28 用户决定,取代 2026-10-20 的归档提醒);折叠按钮不受影响。
 function hiddenUntilHover(element: HTMLElement): boolean {
   return element.closest('.opacity-0') !== null;

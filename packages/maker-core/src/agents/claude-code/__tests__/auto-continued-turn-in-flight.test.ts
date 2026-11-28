@@ -35,6 +35,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 }));
 
 import { ClaudeCodeAgent } from '../index.js';
+import { sanitizeClaudeProjectKey } from '../claude-projects-fs.js';
 import { Session } from '../../../session.js';
 
 const tempDirs: string[] = [];
@@ -113,6 +114,9 @@ function createControlledStream() {
       ended = true;
       pump();
     },
+    isIdle(): boolean {
+      return items.length === 0 && waiter !== null;
+    },
     [Symbol.asyncIterator]() {
       return {
         next: () =>
@@ -143,10 +147,19 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
-async function startSessionWithStream(throughSession = false) {
+async function startSessionWithStream(
+  throughSession = false,
+  opts?: { resumeSessionId?: string },
+) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
+  if (opts?.resumeSessionId) {
+    const normalized = await fs.realpath(workingDir);
+    const projectDir = path.join(configDir, 'projects', sanitizeClaudeProjectKey(normalized));
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(path.join(projectDir, `${opts.resumeSessionId}.jsonl`), '{"type":"summary"}\n', 'utf8');
+  }
 
   const stream = createControlledStream();
   const fakeQuery = createFakeQuery(stream);
@@ -168,6 +181,7 @@ async function startSessionWithStream(throughSession = false) {
     model: 'claude-opus-4-6',
     workingDir,
     permissionMode: 'acceptEdits',
+    ...(opts?.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
   });
 
   const events: AgentEvent[] = [];
@@ -183,6 +197,22 @@ async function startSessionWithStream(throughSession = false) {
   })();
 
   return { agent, handle, stream, fakeQuery, events, collected, session };
+}
+
+function emptyZeroTurnStartupResult(sessionId = 'sdk-resumed'): Record<string, unknown> {
+  return {
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    num_turns: 0,
+    stop_reason: null,
+    duration_ms: 30,
+    duration_api_ms: 0,
+    result: '',
+    total_cost_usd: 0,
+    usage: { input_tokens: 0, output_tokens: 0 },
+    session_id: sessionId,
+  };
 }
 
 function successResult(): Record<string, unknown> {
@@ -323,6 +353,122 @@ describe('ClaudeCodeAgent auto-continued turn in-flight tracking', () => {
     } finally {
       if (originalIdleTimeout === undefined) delete process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS;
       else process.env.XDT_CC_SSE_IDLE_TIMEOUT_MS = originalIdleTimeout;
+    }
+  });
+
+  // Regression: Claude Code CLI on `--resume` can emit a zero-turn empty startup result
+  // before processing the incoming user message (both before handle.send and immediately
+  // after handle.send). Suppressing it prevents spurious done events from prematurely
+  // closing an idle/awaiting-hooks reservation or an active resumed turn.
+  it('suppresses an unsolicited empty zero-turn startup result before handle.send on a resumed session', async () => {
+    const { session, handle, stream, events } = await startSessionWithStream(true, {
+      resumeSessionId: 'sdk-resumed-pre',
+    });
+    let releaseAccepted!: () => void;
+    const acceptedGate = new Promise<void>((resolve) => {
+      releaseAccepted = resolve;
+    });
+    const origin = {
+      kind: 'scheduler' as const,
+      scheduleId: 'sched-1',
+      scheduleName: 'scheduled-review',
+      runId: 'run-1',
+    };
+    try {
+      const sending = session!.send('scheduled review', {
+        origin,
+        onAccepted: () => acceptedGate,
+      });
+      await waitFor(() => session!.getTurnGeneration() === 1, 'session reserved turn 1');
+
+      stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-resumed-pre' });
+      stream.emit(emptyZeroTurnStartupResult('sdk-resumed-pre'));
+      await waitFor(() => stream.isIdle(), 'startup result consumed');
+
+      expect(handle.isTurnRunning?.()).toBe(false);
+      expect(events.some((e) => e.type === 'done')).toBe(false);
+      expect(
+        events.some((e) => e.type === 'status' && (e.data as { isRunning?: unknown }).isRunning === false),
+      ).toBe(false);
+
+      releaseAccepted();
+      await expect(sending).resolves.toEqual({ accepted: true });
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      stream.emit(assistantText('real scheduled output'));
+      stream.emit(successResult());
+      await waitFor(() => events.some((e) => e.type === 'done'), 'real turn done');
+
+      const dones = events.filter((e) => e.type === 'done');
+      expect(dones).toHaveLength(1);
+      expect(dones[0]?.sessionTurnGeneration).toBe(1);
+      expect(dones[0]?.turnOrigin).toEqual(origin);
+      expect(handle.isTurnRunning?.()).toBe(false);
+    } finally {
+      stream.end();
+      await session!.close();
+    }
+  });
+
+  it('suppresses a one-shot empty zero-turn startup result after handle.send until the real resumed turn completes', async () => {
+    const { handle, stream, events } = await startSessionWithStream(false, {
+      resumeSessionId: 'sdk-resumed-post',
+    });
+    try {
+      await handle.send({ type: 'user', content: 'run scheduled review' });
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      // Spurious startup flush arrives after send, before any real model activity.
+      stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-resumed-post' });
+      stream.emit(emptyZeroTurnStartupResult('sdk-resumed-post'));
+      await waitFor(() => stream.isIdle(), 'resumed startup flush consumed');
+
+      expect(handle.isTurnRunning?.()).toBe(true);
+      expect(events.some((e) => e.type === 'done')).toBe(false);
+
+      // Real turn starts right afterwards and completes normally.
+      stream.emit({ type: 'system', subtype: 'init', session_id: 'sdk-resumed-post' });
+      stream.emit(assistantText('review complete'));
+      stream.emit(successResult());
+      await waitFor(() => events.some((e) => e.type === 'done'), 'real resumed turn done');
+
+      expect(events.filter((e) => e.type === 'done')).toHaveLength(1);
+      expect(events.some((e) => e.type === 'text' && (e.data as { text?: string }).text === 'review complete')).toBe(true);
+      expect(handle.isTurnRunning?.()).toBe(false);
+    } finally {
+      stream.end();
+      await handle.close().catch(() => undefined);
+    }
+  });
+
+  it('does not suppress a legitimate zero-turn slash command or error result on a resumed session', async () => {
+    const { handle, stream, events } = await startSessionWithStream(false, {
+      resumeSessionId: 'sdk-resumed-slash',
+    });
+    try {
+      await handle.send({ type: 'user', content: '/compact' });
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      stream.emit(emptyZeroTurnStartupResult('sdk-resumed-slash'));
+      await waitFor(() => events.some((e) => e.type === 'done'), 'slash command done');
+      expect(handle.isTurnRunning?.()).toBe(false);
+
+      events.length = 0;
+      await handle.send({ type: 'user', content: 'next normal turn' });
+      stream.emit({
+        ...emptyZeroTurnStartupResult('sdk-resumed-slash'),
+        is_error: true,
+        subtype: 'error_during_execution',
+        result: 'upstream rejected',
+      });
+      await waitFor(
+        () => events.some((e) => e.type === 'error' && (e.data as { isTerminal?: boolean }).isTerminal),
+        'error result surfaces terminal error',
+      );
+      expect(handle.isTurnRunning?.()).toBe(false);
+    } finally {
+      stream.end();
+      await handle.close().catch(() => undefined);
     }
   });
 });
