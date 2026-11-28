@@ -9,7 +9,8 @@ import {
   type SendOutcomeLogContext,
 } from '../maker-host/send-outcome.js';
 
-export type CollabHostSendOutcome = HostSendOutcome & {
+export type CollabHostSendOutcome = Omit<HostSendOutcome, 'code'> & {
+  code: HostSendOutcome['code'] | 'DELIVERY_UNKNOWN';
   source: string;
   context: string;
 };

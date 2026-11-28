@@ -9761,4 +9761,74 @@ describe('transient precheck failures stay quiet for 24h and escalate after', ()
 
     await h.scheduler.stop();
   });
+
+  // 依据：长时占用目标会话导致绑定自动化连续顺延时，运行期快照需暴露阻塞状态而非仅退避日志；
+  // 既有测试只断言 deferred 事件与退避间隔，未覆盖 runtimeSnapshot.deferredSchedules 与清理时机；
+  // 最小失败输入：连续顺延的绑定调度后暂停/成功执行，预期快照反映连续顺延并在恢复或暂停后清空。tier: unit。
+  it('surfaces consecutive deferrals in runtimeSnapshot and clears them on run or pause', async () => {
+    let shouldDefer = true;
+    const h = makeHarness({
+      runnerImpl: async () =>
+        shouldDefer
+          ? { sessionId: '', deferred: true, deferRetryMs: 60_000, deferReason: 'session-running' }
+          : { sessionId: 'sess-busy' },
+    });
+    const runtimeSnapshots: ReturnType<typeof h.scheduler.getRuntimeSnapshot>[] = [];
+    h.scheduler.on('runtime-state', (ev) => {
+      runtimeSnapshots.push(ev.snapshot);
+    });
+    const sch = await h.scheduler.create({
+      ...baseInput,
+      name: 'Follow PR #122',
+      targetSessionId: 'sess-busy',
+    });
+
+    const t0 = Date.UTC(2026, 10, 28, 1, 0, 0);
+    h.clock.setTo(t0);
+    await h.scheduler.runNow(sch.id);
+    expect(h.scheduler.getRuntimeSnapshot().deferredSchedules).toEqual([
+      {
+        scheduleId: sch.id,
+        scheduleName: 'Follow PR #122',
+        targetSessionId: 'sess-busy',
+        count: 1,
+        firstAt: t0,
+        lastReason: 'session-running',
+      },
+    ]);
+    expect(runtimeSnapshots.at(-1)?.deferredSchedules).toHaveLength(1);
+
+    h.clock.setTo(t0 + 90_000);
+    await h.scheduler.runNow(sch.id);
+    expect(h.scheduler.getRuntimeSnapshot().deferredSchedules).toEqual([
+      {
+        scheduleId: sch.id,
+        scheduleName: 'Follow PR #122',
+        targetSessionId: 'sess-busy',
+        count: 2,
+        firstAt: t0,
+        lastReason: 'session-running',
+      },
+    ]);
+
+    // 暂停后立即从快照移除并广播 runtime-state，界面不残留过期顺延提示。
+    const beforePause = runtimeSnapshots.length;
+    await h.scheduler.pause(sch.id);
+    expect(h.scheduler.getRuntimeSnapshot().deferredSchedules).toEqual([]);
+    expect(runtimeSnapshots.length).toBeGreaterThan(beforePause);
+    expect(runtimeSnapshots.at(-1)?.deferredSchedules).toEqual([]);
+
+    // 恢复并再次顺延后，一次成功执行应清空顺延状态。
+    await h.scheduler.resume(sch.id);
+    h.clock.setTo(t0 + 180_000);
+    await h.scheduler.runNow(sch.id);
+    expect(h.scheduler.getRuntimeSnapshot().deferredSchedules?.[0]?.count).toBe(1);
+
+    shouldDefer = false;
+    h.clock.setTo(t0 + 240_000);
+    await h.scheduler.runNow(sch.id);
+    expect(h.scheduler.getRuntimeSnapshot().deferredSchedules).toEqual([]);
+
+    await h.scheduler.stop();
+  });
 });

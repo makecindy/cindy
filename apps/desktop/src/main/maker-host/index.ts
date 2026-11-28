@@ -39,6 +39,7 @@ import { createMediaDownloadContext } from '../cindy-media/mediaDownloadApproval
 import { setPluginModelPickerAgentProvider, setPluginRouteAgentStatusProvider } from '../cindy-brain/ghostModelPicker.js';
 import { isCodexAccountProvider, setCodexAccountRetirement } from './codex-account-auth.desktop.js';
 import { withSubscriptionAccounts } from '../subscription-accounts/agent.js';
+import { readModelGroupRoutedAccount } from '../model-groups/sessionBindings.js';
 import { prepareLegacyOpenAiPool } from '../subscription-accounts/openAiPoolMerge.js';
 import { onSubscriptionPoolCodexModelsChanged, onSubscriptionPoolClaudeModelsChanged } from '../subscription-accounts/runtime.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '@cindy/maker-core';
@@ -290,6 +291,7 @@ import {
 import { ensureCurrentAccountProviderReadiness } from './account-provider-readiness-ensure.js';
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderReadiness.js';
 import { listBotImConnectionsForBot } from '../im/shared/botImConnectionStore.js';
+import { listPersonalChannelsForCompanion } from '../im/shared/personalChannelStore.js';
 import {
   getRejectedCodexDownshiftModel,
   getObservedCodexUpstreamCapacity,
@@ -2076,12 +2078,16 @@ export function getMaker(): Maker {
     // 装配第二步: 把 agents 引用挂回 manager (manager.enable() 时遍历 setMemory(false))。
     // 保留同一份可变 map，供可选 Pi runtime 在 Maker 构造后动态注册。
     const makerAgents: ConstructorParameters<typeof Maker>[0]['agents'] = {
-      'claude-code': withSubscriptionAccounts(claudeAgent, desktopClaudeAuthAdapter),
+      'claude-code': withSubscriptionAccounts(claudeAgent, {
+        getState: desktopClaudeAuthAdapter.getState.bind(desktopClaudeAuthAdapter),
+        routedAccount: readModelGroupRoutedAccount,
+      }),
       codex: withSubscriptionAccounts(codexAgent, {
         getState: desktopCodexAuthAdapter.getState.bind(desktopCodexAuthAdapter),
         resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
         resolveDefaultProvider: model => model ? resolveConnectedDefaultProviderIdForModel(model, 'codex') : null,
         preparePool: prepareLegacyOpenAiPool,
+        routedAccount: readModelGroupRoutedAccount,
       }),
     };
     attachAgentsToMakerMemory(makerMemoryManager, makerAgents);
@@ -2484,6 +2490,7 @@ export function getMaker(): Maker {
     const piAgent = buildPiAgentForDesktop();
     if (piAgent) makerAgents.pi = withSubscriptionAccounts(piAgent, {
       getState: desktopPiAuthAdapter.getState, preparePool: prepareLegacyOpenAiPool,
+      routedAccount: readModelGroupRoutedAccount,
     });
 
     const buildBotRuntimeDeps = (skillLinksChanged = false): BotProfileRuntimeDeps => ({
@@ -2504,8 +2511,13 @@ export function getMaker(): Maker {
         agentKind: companionToolAgentKind(input.agentKind),
       }),
       // 伙伴绑了哪些平台的机器人(不含凭证): 主任务据此挂渠道原生 API 工具(见 hydrate 内注释)。
-      listBotImChannels: ({ botId }) =>
-        [...new Set(listBotImConnectionsForBot(botId).map((connection) => connection.channel))],
+      // 同时覆盖伙伴自有连接(bot-im-connections)与设置里通过「谁来回复」交给这位伙伴的个人机器人。
+      listBotImChannels: ({ botId }) => [
+        ...new Set([
+          ...listBotImConnectionsForBot(botId).map((connection) => connection.channel),
+          ...listPersonalChannelsForCompanion(botId),
+        ]),
+      ],
       listToolsets: async ({ botId, agentKind, workingDir, remoteHostId }) => {
         const registry = getPluginRegistry();
         return Promise.all(
@@ -2971,6 +2983,7 @@ export function getMaker(): Maker {
       if (!next) return false;
       const registered = _maker.registerAgent('pi', withSubscriptionAccounts(next, {
         getState: desktopPiAuthAdapter.getState, preparePool: prepareLegacyOpenAiPool,
+        routedAccount: readModelGroupRoutedAccount,
       }));
       if (!registered) {
         void next.dispose().catch((error) => {

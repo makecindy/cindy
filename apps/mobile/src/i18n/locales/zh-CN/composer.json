@@ -107,7 +107,8 @@
     "recognitionStalled": "语音识别没有继续返回结果，请重试。",
     "transcriptKept": "{{message}}（识别出的文字已经保留，可以直接编辑）",
     "micPermission": "麦克风权限未开启，请在系统设置里允许 {{appName}} 使用麦克风。",
-    "realtimeAudioUnavailable": "当前安装包不支持实时语音输入，请安装包含原生录音模块的测试版。"
+    "realtimeAudioUnavailable": "当前安装包不支持实时语音输入，请安装包含原生录音模块的测试版。",
+    "retryRecognition": "重新识别"
   },
   "incomingShare": {
     "title": "发送到 Cindy",

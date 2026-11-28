@@ -1444,6 +1444,59 @@ describe('automatic browser startup', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  // Regression: macOS 0-window Dock Chrome (`running: true, hasWindow: false`) has its Profile
+  // unloaded by DestroyProfileOnBrowserClose. ensureConnected must wake it instead of skipping
+  // launch and reporting "扩展休眠", while still respecting launchCooldownMs on failure.
+  it('wakes a macOS 0-window browser immediately and enforces cooldown if waking fails to connect', async () => {
+    vi.useFakeTimers();
+    try {
+      const clients: string[] = [];
+      const fake = fakeControl({ clients, version: '0.4.73' });
+      fake.responses.set('open', (payload) => ({ ok: true, tabId: 9, url: payload.url }));
+      const startBrowser = vi.fn(async () => {
+        setTimeout(() => clients.push('client-aaaaaaaa'), 300);
+      });
+      const inspectBrowserState = vi.fn(async () => ({ running: true, hasWindow: false }));
+      const b = new UserBrowserBackend({
+        getPageControl: () => fake.control,
+        startBrowser,
+        inspectBrowserState,
+        reconnectWaitMs: 8_000,
+        startupWaitMs: 2_000,
+        launchCooldownMs: 30_000,
+        logger: { info: vi.fn(), warn: vi.fn() },
+      });
+
+      const woken = b.call({ action: 'open', url: 'https://example.test/' });
+      // Wakes immediately without burning the 8s reconnect grace window.
+      await vi.advanceTimersByTimeAsync(500);
+      expect((await woken).ok).toBe(true);
+      expect(startBrowser).toHaveBeenCalledTimes(1);
+
+      // When waking does not produce a connected extension (e.g. extension disabled), cooldown applies.
+      const disconnected = fakeControl({ clients: [], version: '0.4.73' });
+      const stuckStart = vi.fn(async () => {});
+      const b2 = new UserBrowserBackend({
+        getPageControl: () => disconnected.control,
+        startBrowser: stuckStart,
+        inspectBrowserState: async () => ({ running: true, hasWindow: false }),
+        reconnectWaitMs: 8_000,
+        startupWaitMs: 1_000,
+        launchCooldownMs: 30_000,
+        logger: { info: vi.fn(), warn: vi.fn() },
+      });
+      const firstFail = b2.call({ action: 'start' });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect((await firstFail).ok).toBe(false);
+      expect(stuckStart).toHaveBeenCalledTimes(1);
+
+      const cooled = await b2.call({ action: 'start' });
+      expect(cooled.ok).toBe(false);
+      expect(cooled.message).toContain('避免反复重试启动');
+      expect(stuckStart).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
   // Regression (P0-1): after a timed-out startup attempt, subsequent retries inside the cooldown
   // window must not repeatedly spawn Chrome even if process detection reports false.
   it('enforces a cooldown after a timed-out launch and resets once an extension connects', async () => {

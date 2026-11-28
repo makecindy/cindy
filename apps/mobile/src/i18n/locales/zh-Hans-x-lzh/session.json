@@ -670,7 +670,20 @@
     "toolUseLoopDetectedRotationWithCount": "模型持续轮转调用数工具，Cindy 察此轮已有 {{count}} 次调用，遂止此轮。可遣新讯以续。",
     "codexThreadLost": "Codex 鉴权模式已易，此差事不能再续，请新开差事。",
     "remoteCompactEncryptedContent": "整理上下文未成：模型不能读历史中之加密内容。自动接续未竟，可再试以复。",
-    "encryptedContentInvalid": "因易供方致加密不可用，此差事仅能于原供方下使用；请归电脑端处置（可用「自此另开差事」弃协议加密内容，于新差事中续之）。"
+    "encryptedContentInvalid": "因易供方致加密不可用，此差事仅能于原供方下使用；请归电脑端处置（可用「自此另开差事」弃协议加密内容，于新差事中续之）。",
+    "providerSafetyRefusal": "模型供方之安策阻此覆。欲续，请修所请再发",
+    "providerSafetyRefusalWithProvider": "{{provider}} 之安策阻此覆。欲续，请修所请再发",
+    "overloadBusy": "模型供方暂繁，无余力可承。可少顷再试，或更他型。",
+    "overloadBusyWithProvider": "{{provider}} 暂繁，无余力可承。可少顷再试，或更他型。",
+    "streamInterrupted": "模型供方传覆中断，请少顷再试。",
+    "streamInterruptedWithProvider": "{{provider}} 传覆中断，请少顷再试。",
+    "upstreamStatusError": "模型供方返异（HTTP {{status}}），此覆未竟。",
+    "upstreamStatusErrorWithProvider": "{{provider}} 返异（HTTP {{status}}），此覆未竟。",
+    "modelAccessDenied": "今所用模型供方账号无权用此型。请更他型，或向供方核权",
+    "modelAccessDeniedWithProvider": "今所用 {{provider}} 账号无权用此型。请更他型，或核其权限",
+    "providerQuotaExhausted": "模型供方账中限额或余资不足，请察供方账户",
+    "providerQuotaExhaustedWithProvider": "{{provider}} 账中限额或余资不足，请察账户",
+    "usageLimitReachedWithProvider": "{{provider}} 账号已届用量上限"
   },
   "row": {
     "markRead": "已阅",
