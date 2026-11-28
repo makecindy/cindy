@@ -1429,6 +1429,18 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     return this.botDisplayName || this.botUsername || 'bot';
   }
 
+  /** 群的准入状态(批准 = 群成员也能召唤); 没有记录或没绑主人返回 null。 */
+  groupApprovalOf(chatId: string): 'pending' | 'approved' | 'denied' | null {
+    if (!this.ownerUserId || !this.botId) return null;
+    return this.groupAdmission().statusOf(chatId);
+  }
+
+  /** 设置页「群聊」的「群成员也能提问」: 勾上 = 批准, 取消 = 拒绝。返回是否已保存。 */
+  setGroupApproval(chatId: string, approved: boolean, title?: string | null): boolean {
+    if (!this.ownerUserId || !this.botId) return false;
+    return this.groupAdmission().setApproval(chatId, approved, title);
+  }
+
   /** 当前 bot 的 contextId(数字 id 字符串; 未连接为 '') — 群窗口按 bot 命名空间查询用。 */
   get botContextId(): string {
     return this.botId ? String(this.botId) : '';

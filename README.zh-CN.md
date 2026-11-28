@@ -205,6 +205,8 @@ agent；进入后应用内的账号状态显示为「未登录」。依赖服务
 
 ## 贡献
 
+在[贡献墙](CONTRIBUTORS.md)上可以看到哪些改动来自社区的问题反馈和建议。
+
 改动通过 pull request 合入 `main`。请先阅读
 [`CONTRIBUTING.md`](CONTRIBUTING.md)，再按
 [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) 提交。

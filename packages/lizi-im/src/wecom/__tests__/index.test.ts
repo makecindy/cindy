@@ -174,6 +174,31 @@ describe("WecomIM routing and ownership", () => {
     expect(received.map((event) => event.text)).toEqual(["hello"]);
   });
 
+  // 2026-11-24 主人裁决「群成员也能提问」: 个人 bot 只在宿主允许的群里放行其他成员, 带真实的
+  // 非主人标记(此前一律标成主人); 私聊仍只认主人。最小失败输入: 允许的群、不允许的群、陌生私聊各一条。
+  it("admits other members only in host-allowed groups and marks them as non-owners", async () => {
+    const { host, secrets } = createHost();
+    secrets.set("wecom-owner-user-id", "owner");
+    const client = new FakeClient();
+    const allowed = vi.fn((chatId: string) => chatId === "chat-open");
+    const im = new WecomIM(host, { clientFactory: () => client as never, admitMember: allowed });
+    const received: IMMessageEvent[] = [];
+    im.onMessage((event) => received.push(event));
+
+    await im.init();
+    client.emit("message.text", message({ id: "g1", sender: "member", text: "open", chatId: "chat-open" }));
+    client.emit("message.text", message({ id: "g2", sender: "member", text: "closed", chatId: "chat-closed" }));
+    client.emit("message.text", message({ id: "d1", sender: "member", text: "dm" }));
+    client.emit("message.text", message({ id: "g3", sender: "owner", text: "mine", chatId: "chat-closed" }));
+    await flush();
+
+    expect(received.map((event) => [event.text, event.speaker?.isOwner])).toEqual([
+      ["open", false],
+      ["mine", true],
+    ]);
+    await im.dispose();
+  });
+
   it("routes owner group messages through an encoded lane and active fallback uses chatid", async () => {
     const { host, secrets } = createHost();
     secrets.set("wecom-owner-user-id", "owner");

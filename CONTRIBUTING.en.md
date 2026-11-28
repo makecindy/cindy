@@ -24,6 +24,26 @@ is outside the scope of this repository.
   installed through SkillHub or manually. Do not put credentials in Git
   configuration or repository files.
 
+## Crediting feedback
+
+People who report bugs or suggest features on GitHub Issues, X, or Discord can confirm their preferred public credit in the original conversation. A nickname is enough for the wall. For Git co-authorship, supply a name and public commit email (a GitHub noreply address works). Omit the record for anonymous or unconfirmed credits.
+
+In the implementation PR (a draft is fine), add `.github/feedback-credits/<this PR number>.json` with the confirmed public information. Optional `replyTo` requests a release reply in the agreed public thread. Use a Cindy issue, X post, or public Discord message permalink. Omit it for private conversations.
+
+```json
+{
+  "change": "Restore messages when the phone returns to the foreground",
+  "contributors": ["Reader", "River <river@example.invalid>"],
+  "replyTo": "https://github.com/makecindy/cindy/issues/123"
+}
+```
+
+Stage the record alongside the implementation and run `node scripts/feedback-credits.mjs commit "fix: restore mobile messages"`. It commits the staged changes, adds the co-author trailers and signs off as the committer. Other Git tools can supply the same trailers. The PR check verifies new credits. Preserve the commit body when merging.
+
+Publishing a GitHub Release (including a beta) refreshes the [wall and website JSON](CONTRIBUTORS.md) and delivers requested replies. The workflow also reconciles daily. Entries use the first published tag containing the record. A later PR can correct a name or remove a record from the wall. Git retains its original history.
+
+GitHub replies use the Actions token. X replies require a write-capable user token in the `FEEDBACK_X_USER_TOKEN` Actions secret. Discord replies require `FEEDBACK_DISCORD_TOKEN` with permission to read history and send to the channel. Publication precedes delivery. If a send has an uncertain outcome, check the thread and edit that PR’s receipt in `community-credits:deliveries.json`: set it to `{"status":"sent","id":"message ID"}` if delivered, or remove it after confirming no reply was sent, then run Feedback credits again.
+
 ## Getting the code and installing dependencies
 
 Follow [Development environment and dependency setup](docs/dev-rules/environment-setup.md)

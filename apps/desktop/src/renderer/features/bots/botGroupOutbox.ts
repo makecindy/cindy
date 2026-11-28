@@ -280,13 +280,14 @@ export function startBotGroupOutbox(): () => void {
           // A restart may happen after many newer messages. Reconcile receipts outside
           // the newest page without moving or discarding the displayed timeline.
           while (result.ok && result.group.hasMoreBefore && group.entries.some(entry => entry.status === 'sent')) {
-            const before = Math.min(...result.group.messages.map(message => message.sequence));
+            const before = result.group.pageOldestSequence ?? Math.min(...result.group.messages.map(message => message.sequence));
             if (!Number.isFinite(before)) break;
             result = await botGroupApi()!.getBotGroup(groupId, { ...options, beforeSequence: before });
             if (!current()) return;
             if (!result.ok) break;
             noteBotGroupTimeline(groupId, result.group.messages, token);
-            if (!result.group.messages.some(message => message.sequence < before)) break;
+            const oldest = result.group.pageOldestSequence ?? Math.min(...result.group.messages.map(message => message.sequence));
+            if (oldest >= before) break;
           }
         }
         else if (result.errorCode === 'NOT_FOUND' || result.errorCode === 'PERMISSION_DENIED') discardBotGroupOutbox(groupId);

@@ -1509,6 +1509,121 @@ function noteSignInEvidence(state: OwnerRuntime, provider: SubscriptionProvider,
   }
 }
 
+export interface LocalSubscriptionAccountSource {
+  id: string;
+  label: string;
+  accountKey?: string;
+  paused: boolean;
+  usable: boolean;
+  supportedModelIds?: ReadonlySet<string>;
+  apiConnectionId?: string;
+}
+
+/**
+ * Synchronous, side-effect-free projection of a local subscription pool's individual accounts
+ * (plus any OpenAI API key members merged into it) for Smart Routing flat source expansion.
+ */
+export function listSubscriptionPoolSources(providerId: string): LocalSubscriptionAccountSource[] | null {
+  const found = poolFor(providerId);
+  if (!found || found.off) return null;
+  const state = currentRuntime();
+  const nativeRaw = providerAccounts(found.kind, found.pool.accounts, found.ref.providerId);
+  const nativeItems = nativeRaw
+    .filter((account) => {
+      if (account.id !== 'default') return true;
+      if (!defaultAccountBound(found.kind) && !account.lastConfirmedIdentity) return false;
+      const cached = state.cache.get(keyOf(found.kind, account.id));
+      const unusedDefault = cached !== undefined
+        && !account.lastConfirmedIdentity
+        && !cached.auth.authenticated
+        && !cached.auth.identity
+        && !cached.unavailable;
+      return !unusedDefault;
+    })
+    .map((account) => {
+      const cached = state.cache.get(keyOf(found.kind, account.id));
+      const disconnected = disconnectedFor(found.pool, found.kind, account.id);
+      const accountKey = cached?.auth.authenticated && !cached.unavailable && cached.accountKey ? cached.accountKey : undefined;
+      const label = cached?.auth.identity?.trim() || account.lastConfirmedIdentity?.trim() || '';
+      const codexCatalog = found.kind === 'openai' && !readLegacyCodexProviderId(account.id)
+        ? state.codexModels.get(account.id)
+        : undefined;
+      const supportedModelIds = codexCatalog && cached?.auth.authenticated
+        && sameCodexModelAccount(codexCatalog, cached)
+        && codexCatalog.failedAt === undefined
+        ? new Set(codexCatalog.models.map((entry) => entry.id))
+        : undefined;
+      return {
+        id: account.id,
+        label,
+        ...(accountKey ? { accountKey } : {}),
+        paused: account.paused,
+        usable: !account.paused && !disconnected && (!cached || (cached.auth.authenticated && !cached.unavailable)),
+        ...(supportedModelIds ? { supportedModelIds } : {}),
+      };
+    });
+  const groupedNative = accountProfileGroups(state, found.kind, nativeItems, (item) => item.accountKey).map((group) => {
+    if (group.length === 1) return group[0];
+    const primary = group.find((item) => item.usable) ?? group[0];
+    return {
+      ...primary,
+      paused: group.every((item) => item.paused),
+      usable: group.some((item) => item.usable),
+    };
+  });
+  const apiItems: LocalSubscriptionAccountSource[] = found.kind === 'openai'
+    ? apiKeyPoolMembers(found.ref.providerId).map((member) => {
+        const connection = getActiveCatalog().providers.find((row) => row.id === member.connectionId);
+        const checks = connection ? openAiGroupAccountResult(connection).checks ?? [] : [];
+        return {
+          id: member.id,
+          label: connection?.name ?? member.connectionId,
+          paused: member.paused,
+          usable: !member.paused && (checks.length === 0 || checks.some((check) => !check.blocked)),
+          apiConnectionId: member.connectionId,
+        };
+      })
+    : [];
+  const all = apiItems.length > 0
+    ? poolDispatchOrder(found.ref.providerId, [...groupedNative, ...apiItems])
+    : groupedNative;
+  return all;
+}
+
+/** The account this task is bound to in a provider's pool (its saved `task:` binding), if any. */
+export function readSessionBoundSubscriptionAccount(sessionId: string, providerId: string): string | undefined {
+  const ref = resolveSubscriptionPoolProvider(providerId);
+  return ref ? readAccountBinding(`task:${sessionId}`, ref.kind)?.accountId : undefined;
+}
+
+/**
+ * Pins a task to a specific account chosen by Smart Routing before dispatch so the local
+ * subscription pool executes directly on that account without running a second auto-picker.
+ * A task already bound to another account keeps it: its native history lives in that account's
+ * home. Only an agent switch that has just retired the native session passes `replace`.
+ */
+export async function bindSessionSubscriptionAccount(
+  sessionId: string,
+  providerId: string,
+  accountId: string,
+  options: { replace?: boolean } = {},
+): Promise<boolean> {
+  const ref = resolveSubscriptionPoolProvider(providerId);
+  if (!ref) return false;
+  const bound = readAccountBinding(`task:${sessionId}`, ref.kind);
+  if (bound && bound.accountId !== accountId && !options.replace) return false;
+  if (bound?.accountId === accountId && (bound.via ?? ref.kind) === ref.providerId) return true;
+  const pool = readPool(ref.kind);
+  const nativeMatch = pool
+    ? providerAccounts(ref.kind, pool.accounts, ref.providerId).some((account) => account.id === accountId)
+    : false;
+  const apiMatch = ref.kind === 'openai'
+    && apiKeyPoolMembers(ref.providerId).some((member) => member.id === accountId);
+  if (!nativeMatch && !apiMatch) return false;
+  await writeAccountBindings([`task:${sessionId}`], ref.kind, accountId, ref.providerId);
+  return true;
+}
+
 /** Complete cached identity set of this provider, for presentation on the owner's devices.
  * Unknown, paused, signed-out and historical-only accounts never imply equivalence.
  */

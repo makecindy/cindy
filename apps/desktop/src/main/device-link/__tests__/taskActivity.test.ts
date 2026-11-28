@@ -3,7 +3,8 @@
  * while an upload is in flight (fake timers, no real waits). */
 import { afterEach, expect, it, vi } from 'vitest';
 import type { AgentIslandSessionSnapshot } from '../../../shared/agentIsland.js';
-import { createTaskActivityPublisher, projectHostTaskActivity } from '../taskActivity';
+import type { SessionInboxFacts } from '../../localDb/sessionInboxFacts.js';
+import { createTaskActivityPublisher, keepInboxCountedTasks, projectHostTaskActivity } from '../taskActivity';
 
 afterEach(() => vi.useRealTimers());
 const row = (sessionId: string, phase: AgentIslandSessionSnapshot['phase'], attention = false) =>
@@ -47,6 +48,31 @@ it('adds the waiting companion only to the device-link snapshot', () => {
   expect(projectHostTaskActivity([large], { includeCompanion: true }).selected?.companion).toEqual({
     hue: 'teal', glyph: 'L', glyphIsInitial: true,
   });
+});
+// Unit (2026-11-28 product rule): the phone counts only what the shared inbox lists, so every
+// counted task can be found and cleared there. Entry: keepInboxCountedTasks, the filter in front
+// of both the upload and the device-link snapshot. Gap: snoozed tasks and teammates' own results
+// were counted although the inbox leaves them out. Each row is one inbox branch.
+it.each<[string, AgentIslandSessionSnapshot['phase'], boolean, Partial<SessionInboxFacts> | null, boolean]>([
+  ['facts not loaded yet', 'completed', true, null, true],
+  ['ordinary unread result', 'completed', true, {}, true],
+  ['snoozed unread result', 'completed', true, { snoozedUntil: '2026-01-02T00:00:00.000Z', snoozedAt: '2026-01-01T00:00:00.000Z' }, false],
+  ['snoozed but woken by a later send', 'completed', true, { snoozedUntil: '2026-01-02T00:00:00.000Z', snoozedAt: '2026-01-01T00:00:00.000Z', userSendAt: '2026-01-01T06:00:00.000Z' }, true],
+  ['snooze already over', 'completed', true, { snoozedUntil: '2026-01-01T06:00:00.000Z', snoozedAt: '2026-01-01T00:00:00.000Z' }, true],
+  ['teammate own task, result only', 'completed', true, { kind: 'teammate-task' }, false],
+  ['teammate own task, error', 'error', true, { kind: 'teammate-task' }, true],
+  ['teammate own task, waiting', 'needs-interaction', true, { kind: 'teammate-task' }, true],
+  ['teammate own task, running', 'running', false, { kind: 'teammate-task' }, true],
+  ['archived', 'completed', true, { status: 'archived' }, false],
+  // 2026-11-28: a teammate main conversation lives only in the teammate section, which shows its
+  // state and has no snooze; an old client's leftover snooze must not hide a visible unread.
+  ['teammate main conversation, unread', 'completed', true, { kind: 'canonical' }, true],
+  ['teammate main conversation, read', 'completed', false, { kind: 'canonical' }, false],
+  ['teammate main conversation, snoozed by an old client', 'completed', true, { kind: 'canonical', snoozedUntil: '2026-01-02T00:00:00.000Z', snoozedAt: '2026-01-01T00:00:00.000Z' }, true],
+])('phone share keeps inbox tasks only: %s', (_name, phase, attention, facts, counted) => {
+  const now = Date.parse('2026-01-01T12:00:00.000Z');
+  const full = facts && ({ status: 'active', kind: 'task', ...facts } as SessionInboxFacts);
+  expect(keepInboxCountedTasks([row('t', phase, attention)], () => full, now)).toHaveLength(counted ? 1 : 0);
 });
 it('coalesces bursts, uploads the latest state and aborts the previous connection', async () => {
   vi.useFakeTimers();

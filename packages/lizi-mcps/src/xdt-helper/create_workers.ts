@@ -47,7 +47,7 @@ const DESCRIPTION = [
   '用户一次要求创建多个 Worker 时必须使用本工具，不要并行或连续多次调用 create_worker。',
   '本工具按 workers 顺序创建并返回真实逐项终态；首次命中 WORKER_LIMIT_HARD_EXCEEDED 后立即停止，剩余项标记 skipped，不再调用 host。',
   '结果包含 request_count / attempted_count / success_count / failure_count / skipped_count / not_created_count、hard limit 快照、确定生成的 user_report，以及每个 label 对应的 worker/session 或失败原因。success/failure/skipped 是互斥分区。',
-  '每个 initial_task 的正文要自包含：目标、背景、边界与交付要求写进正文，文件只作补充并给绝对路径。逐项结果的 file_access 说明该 Worker 能看到什么（lead_working_directory / own_worktree / explicit_directory / other_computer），initial_task_state 说明首条任务的真实状态（delivered 已送达 / queued 已排队 / not_delivered 未送到 / none 未附任务）；创建成功不等于任务已完成。',
+  '每个 initial_task 的正文要自包含：目标、背景、边界与交付要求写进正文，文件只作补充并给绝对路径。逐项结果的 file_access 说明该 Worker 能看到什么（lead_working_directory / own_worktree / explicit_directory / other_computer），initial_task_state 说明首条任务的真实状态（delivered 已送达 / queued 已排队 / unknown 送达未确认，请勿重派 / not_delivered 未送到 / none 未附任务）；创建成功不等于任务已完成。',
   'label 只需与团队里现有的 Worker 不同；已归档 Worker 的名字可以直接重新使用。Worker 只是出错时不必归档重建：它原样保留，可直接 send_to_worker 继续。',
   '工具返回后必须向用户逐字转告 user_report 并补充逐项结果；达到 hard limit 时同时转告 suggestions 中的调整设置、复用 Worker 或分批执行方案。',
   '每个 Worker 的 working_dir：可选，Worker 所在主机上已存在的绝对目录。省略时继承 Lead 任务记录的工作目录（启动时的目录），不会跟随之后 cd 进入的 worktree。希望共用你当前的 worktree（含 git worktree add 自建的）时，请显式传其绝对路径；需要独立的新 worktree 时用 new_worktree。显式 working_dir / new_worktree 按会话权限审批。指定 execution_device_id 时目录属于那台电脑，省略由那台分配；校验失败不回退。',
@@ -113,6 +113,7 @@ function describeInitialTasks(states: readonly InitialTaskState[]): string {
   const parts = [
     [count('delivered'), '已送达'],
     [count('queued'), '已排队、尚未开始'],
+    [count('unknown'), '送达未确认，请勿重复派发'],
     [count('not_delivered'), '未送达'],
     [count('none'), '未附任务'],
   ].flatMap(([total, text]) => (total ? [`${total} 个${text}`] : []));

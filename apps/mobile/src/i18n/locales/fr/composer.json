@@ -107,7 +107,8 @@
     "recognitionStalled": "La reconnaissance vocale ne renvoie plus de résultats. Réessayez.",
     "transcriptKept": "{{message}} Le texte reconnu jusqu'ici a été conservé : vous pouvez le modifier directement.",
     "micPermission": "L'accès au micro est désactivé. Autorisez {{appName}} à utiliser le micro dans les réglages du système.",
-    "realtimeAudioUnavailable": "Cette version ne prend pas en charge la saisie vocale en temps réel. Installez une version de test incluant le module d'enregistrement natif."
+    "realtimeAudioUnavailable": "Cette version ne prend pas en charge la saisie vocale en temps réel. Installez une version de test incluant le module d'enregistrement natif.",
+    "retryRecognition": "Réessayer la reconnaissance"
   },
   "incomingShare": {
     "title": "Envoyer à Cindy",

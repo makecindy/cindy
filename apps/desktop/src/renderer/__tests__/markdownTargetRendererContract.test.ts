@@ -12,6 +12,11 @@ const localPathResolver = readFileSync(
   'utf8',
 ).replace(/\r\n?/g, '\n');
 
+const githubLinkChip = readFileSync(
+  resolve(__dirname, '..', 'components', 'chat', 'GithubLinkChip.tsx'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
+
 const textLightbox = readFileSync(
   resolve(__dirname, '..', 'components', 'chat', 'TextLightbox.tsx'),
   'utf8',
@@ -136,8 +141,12 @@ describe('Markdown target rendering contract', () => {
     expect(markdownRenderer).toContain('[overflow-wrap:anywhere]');
     expect(markdownRenderer).toContain('const MARKDOWN_LINK_CLASS');
     // 2 处:anchor 链接 + MarkdownTargetLink;xdt-maker://session/ 分支已升级为
-    // SessionLinkChip(自带 chip 样式),不再计入。
-    expect(markdownRenderer.match(/className=\{MARKDOWN_LINK_CLASS\}/g) ?? []).toHaveLength(2);
+    // SessionLinkChip(自带 chip 样式),不再计入。MarkdownTargetLink 的裸 GitHub 链接改用
+    // 行内 chip 类,chip 自身限宽并截断,同样不会撑宽消息列。
+    expect(markdownRenderer.match(/className=\{MARKDOWN_LINK_CLASS\}/g) ?? []).toHaveLength(1);
+    expect(markdownRenderer).toContain('className={chip ? GITHUB_LINK_CHIP_CLASS : MARKDOWN_LINK_CLASS}');
+    expect(githubLinkChip).toMatch(/GITHUB_LINK_CHIP_CLASS = \[[\s\S]*max-w-\[min\(480px,100%\)\]/);
+    expect(githubLinkChip).toContain('min-w-0 truncate');
   });
 
   it('passes parsed line numbers into TextLightbox and TextLightbox scrolls on open', () => {

@@ -57,6 +57,7 @@ import {
   recoverOversizedMessage,
   createActiveStripTransform,
   createEncryptedContentRecoveryRule,
+  createMissingReasoningItemRecoveryRule,
   createResponsesReasoningContentRecoveryRule,
   createResponsesToolAudioRecoveryRule,
   stripResponsesToolAudioFromBody,
@@ -458,6 +459,24 @@ function subscribeCodexUpstreamCapacity(
   };
 }
 
+const CODEX_USAGE_WS_INSPECT_MAX_BYTES = 4 * 1024 * 1024;
+
+function observeInboundWebSocketUsage(
+  headers: Readonly<Record<string, string>>,
+  fallbackThreadId: string,
+  message: Buffer,
+): void {
+  if (message.length === 0 || message.length > CODEX_USAGE_WS_INSPECT_MAX_BYTES) return;
+  if (!message.includes('"usage"')) return;
+  if (guardianParentThreadIdFromHeaders(headers)) return;
+  const sessionId = sessionIdFromHeaders(headers);
+  if (!sessionId) return;
+  const parsed = parseJsonObject(message.toString('utf8'));
+  if (!parsed) return;
+  const threadId = fallbackThreadId || selectedThreadIdFromHeaders(headers) || undefined;
+  captureUsagePricing(sessionId, undefined, threadId)(parsed);
+}
+
 function observeInboundWebSocketCapacity(threadId: string, message: Buffer): void {
   if (!threadId || message.length === 0 || message.length > CODEX_CAPACITY_WS_INSPECT_MAX_BYTES) return;
   if (
@@ -657,8 +676,9 @@ let dumpSeq = 0;
 
 const CODEX_RESPONSE_OBSERVER_MAX_BYTES = 2 * 1024 * 1024;
 
+const isSilentEncryptedRetryEnabled = () => readSilentEncryptedRetrySettings().enabled;
 const encryptedContentRecoveryRule = createEncryptedContentRecoveryRule({
-  enabled: () => readSilentEncryptedRetrySettings().enabled,
+  enabled: isSilentEncryptedRetryEnabled,
   onRetry: (threadId, model) => encryptedStripController.markActive(threadId, model),
 });
 const imageGenerationIdRecoveryRule = createImageGenerationIdRecoveryRule({
@@ -695,6 +715,7 @@ const xaiModelInputRecoveryRule = createXaiModelInputRecoveryRule({
 const vllmResponsesCompatibilityRule = createVllmResponsesCompatibilityRule();
 const CODEX_BODY_RECOVERY_RULES = [
   encryptedContentRecoveryRule,
+  createMissingReasoningItemRecoveryRule(isSilentEncryptedRetryEnabled),
   imageGenerationIdRecoveryRule,
   responsesItemIdPrefixRecoveryRule,
   responsesItemIdLengthRecoveryRule,
@@ -740,7 +761,13 @@ function isRepairableToolItemIdError(errorText: string): boolean {
   const rule = CODEX_BODY_RECOVERY_RULES.find(
     (candidate) => candidate.enabled() && candidate.matches(errorText),
   );
-  const reason = rule?.id ?? (isRepairableToolItemIdError(errorText) ? 'tool_item_id' : null);
+  // The OAuth WS upstream may reject item IDs without naming a specific ID. Use the
+  // existing per-thread HTTP fallback; only a precise HTTP error can authorize stripping.
+  const reason = rule?.id ?? (
+    /this request does not support user-supplied input item IDs\./i.test(errorText)
+      ? 'responses_input_item_ids_unsupported'
+      : isRepairableToolItemIdError(errorText) ? 'tool_item_id' : null
+  );
   if (!reason) return null;
 
   const sessionId = args.sessionId.trim();
@@ -3814,7 +3841,7 @@ function createTransformRequestChain(
     createArmedHttpRecoveryStripTransform(),
     createActiveStripTransform({
       controller: encryptedStripController,
-      enabled: () => readSilentEncryptedRetrySettings().enabled,
+      enabled: isSilentEncryptedRetryEnabled,
       strip: stripEncryptedContentFromBody,
     }),
     createActiveStripTransform({
@@ -4202,6 +4229,7 @@ async function createCodexProxyHandle(
         },
         (message) => {
           observeInboundWebSocketCapacity(wsThreadId, message);
+          observeInboundWebSocketUsage(ctx.headers, wsThreadId, message);
         },
       );
     },
@@ -4243,12 +4271,33 @@ async function createCodexProxyHandle(
         let model = '';
         try { const body = JSON.parse(ctx.requestBody.toString('utf8')); if (typeof body.model === 'string') model = body.model; } catch { return null; }
         const record = captureGuestRequestUsage(guestSessionId, model);
-        return record ? createUsagePricingObserver(ctx.responseHeaders['content-type'] ?? '', record) : null;
+        return record
+          ? createUsagePricingObserver(
+              ctx.responseHeaders['content-type'] ?? '',
+              record,
+              ctx.responseHeaders['content-encoding'] ?? '',
+            )
+          : null;
       },
       ctx => {
-        const record = pricing.get(ctx.reqId);
-        return record && ctx.status >= 200 && ctx.status < 300
-          ? createUsagePricingObserver(ctx.responseHeaders['content-type'] ?? '', record) : null;
+        if (ctx.status < 200 || ctx.status >= 300) return null;
+        let record = pricing.get(ctx.reqId);
+        if (!record && ctx.method === 'POST') {
+          const reqPath = ctx.url.split('?', 1)[0]?.replace(/\/+$/, '') ?? '';
+          if (reqPath.endsWith('/responses') && !guardianParentThreadIdFromHeaders(ctx.requestHeaders)) {
+            const sessionId = sessionIdFromHeaders(ctx.requestHeaders);
+            if (sessionId) {
+              record = captureUsagePricing(sessionId, undefined, selectedThreadIdFromObserver(ctx) || undefined);
+            }
+          }
+        }
+        return record
+          ? createUsagePricingObserver(
+              ctx.responseHeaders['content-type'] ?? '',
+              record,
+              ctx.responseHeaders['content-encoding'] ?? '',
+            )
+          : null;
       },
       createResponsesCallIdLimitObserver((threadId, model, upstreamBase) =>
         responsesCallIdLengthStripController.markActive(threadId, model, upstreamBase)),

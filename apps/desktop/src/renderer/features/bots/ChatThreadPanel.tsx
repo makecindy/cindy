@@ -73,7 +73,7 @@ const threadAccessLost = (code: string) => ['NOT_FOUND', 'PERMISSION_DENIED', 'F
 
 interface ThreadWindow {
   revision: string; root: BotGroupMessageView; replies: BotGroupMessageView[];
-  executionFailures: BotGroupExecutionFailureView[]; hasMore: boolean;
+  executionFailures: BotGroupExecutionFailureView[]; hasMore: boolean; pageBefore?: number;
 }
 // Disposable warm views only. Durable messages and coverage remain in main's room projection.
 const threadWindows = new Map<string, ThreadWindow>();
@@ -241,7 +241,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
   const [root, setRoot] = useState<BotGroupMessageView | null>(initial?.root ?? null);
   const [executionFailures, setExecutionFailures] = useState<BotGroupExecutionFailureView[]>(initial?.executionFailures ?? []);
   const [replies, setReplies] = useState<BotGroupMessageView[]>(initial?.replies ?? []);
-  const [hasMore, setHasMore] = useState(initial?.hasMore ?? false);
+  const [{ hasMore, pageBefore }, setPaging] = useState({ hasMore: initial?.hasMore ?? false, pageBefore: initial?.pageBefore });
   const [error, setError] = useState('');
   // Off by default: a reply stays in the thread unless the user asks for both.
   const [alsoSend, setAlsoSend] = useState(false);
@@ -275,6 +275,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
 
   /** Lowest sequence of the last latest-page read; replies below it live only on opened older pages. */
   const latestFloorRef = useRef(Number.POSITIVE_INFINITY);
+  const latestCeilingRef = useRef(Number.NEGATIVE_INFINITY);
   /** Where the reader had read up to when the panel opened; fixed for the panel's life. */
   const [readBefore, setReadBefore] = useState<number | null>(null);
   const readBeforeRef = useRef<number | null>(null);
@@ -287,9 +288,9 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
     const cache = windows();
     cache.delete(windowKey);
     cache.set(windowKey, { revision: revisionRef.current, root, replies: replies.slice(-500), executionFailures,
-      hasMore: hasMore || replies.length > 500 });
+      hasMore: hasMore || replies.length > 500, pageBefore: replies.length > 500 ? replies.at(-500)?.sequence : pageBefore });
     if (cache.size > 20) cache.delete(cache.keys().next().value!);
-  }, [windowKey, root, replies, executionFailures, hasMore]);
+  }, [windowKey, root, replies, executionFailures, hasMore, pageBefore]);
 
   const clearHistory = useCallback((wholeRoom = true) => {
     historyEpochRef.current++;
@@ -300,9 +301,10 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
     for (const key of windows().keys())
       if (key === windowKey || (wholeRoom && key.startsWith(`${group.id}:`))) windows().delete(key);
     repliesRef.current = [];
-    setReplies([]); setRoot(null); setExecutionFailures([]); setHasMore(false);
+    setReplies([]); setRoot(null); setExecutionFailures([]); setPaging({ hasMore: false, pageBefore: undefined });
     readBeforeRef.current = null; setReadBefore(null); setFollowing(undefined);
     latestFloorRef.current = Number.POSITIVE_INFINITY;
+    latestCeilingRef.current = Number.NEGATIVE_INFINITY;
   }, [group.id, windowKey]);
 
   /**
@@ -370,11 +372,12 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       }
       setError('');
       setHasRead(true);
-      const floor = nextReplies.reduce((min, reply) => Math.min(min, reply.sequence), Number.POSITIVE_INFINITY);
+      const floor = result.pageOldestSequence ?? nextReplies.reduce((min, reply) => Math.min(min, reply.sequence), Infinity);
       // A latest page that neither overlaps nor directly adjoins the shown replies may leave a gap:
       // start over from it, as on first load, so 「查看更早」 reads on from right below it.
-      const gap = !before && result.hasMore && nextReplies.length > 0 && shown.length > 0
-        && floor > shown.reduce((max, reply) => Math.max(max, reply.sequence), Number.NEGATIVE_INFINITY) + 1;
+      const previousCeiling = shown.reduce((max, reply) => Math.max(max, reply.sequence), latestCeilingRef.current);
+      const gap = !before && result.hasMore && Number.isFinite(floor)
+        && Number.isFinite(previousCeiling) && floor > previousCeiling + 1;
       if (!reset && !anchored(repliesRef.current)) return;
       if (!stalePage) {
         settlePage(nextReplies);
@@ -395,8 +398,24 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
           : mergeBotGroupMessages(nextReplies, nextMessageUpdates ?? []);
         return stabilizeById(previous, mergeBotGroupMessages(previous, incoming));
       });
-      if (!before) latestFloorRef.current = floor;
-      if (!rereadOnly && (before || shown.length === 0 || gap || reset)) setHasMore(result.hasMore);
+      if (!rereadOnly) {
+        const previousLatestFloor = latestFloorRef.current;
+        setPaging(previous => {
+          // A late overlapping read must not rewind the loaded history.
+          if (before && previous.pageBefore !== undefined && previous.pageBefore < before) return previous;
+          if (!before && !gap && !reset) {
+            if (floor > (previous.pageBefore ?? previousLatestFloor)) return previous;
+          }
+          const nextBefore = Number.isFinite(floor) ? floor : undefined;
+          const hasMore = result.hasMore && (!before || (nextBefore !== undefined && nextBefore < before));
+          return { hasMore, pageBefore: nextBefore };
+        });
+      }
+      if (!before) {
+        latestFloorRef.current = floor;
+        latestCeilingRef.current = result.pageNewestSequence
+          ?? nextReplies.reduce((max, reply) => Math.max(max, reply.sequence), -Infinity);
+      }
       if (addedSources.size) {
         for (const id of addedSources) queuedSourcesRef.current.add(id);
         refreshRef.current();
@@ -587,8 +606,8 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
     }
     // A push refresh may overtake this page; then its replies trigger the next attempt, and
     // only a page that was merged counts against the limit.
-    void readRef.current(replies[0]?.sequence, false, () => { search.pages += 1; });
-  }, [focus, replies, hasMore, root, error, hasRead, t]);
+    void readRef.current(pageBefore ?? replies[0]?.sequence, false, () => { search.pages += 1; });
+  }, [focus, replies, hasMore, pageBefore, root, error, hasRead, t]);
   const onLocated = useCallback((messageId: string, target: HTMLElement) => {
     stickToBottomRef.current = false;
     flashThreadTarget(target);
@@ -709,7 +728,6 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
       : { key: 'post-to-main', label: t(key('thread.postToMain')), disabled: posting.has(message.id), icon: <MessageSquareShare size={14} strokeWidth={2} className="shrink-0" />, onSelect: () => void postToMain(message.id, false) };
     return (
       <BotGroupTimelineItem
-        showDeviceChoice={!!group.assistantComputers && !group.assistantDeviceId}
         pluginUi={pluginUi}
         message={message}
         continued={continued}
@@ -802,7 +820,7 @@ export function ChatThreadPanel({ group, rootId, speakers = [], onStop, stopping
                 if (itemIndex === 0) return <ThreadPanelRoot replyCount={replyCount} testId="bot-group-thread-replies">
                   {rootRows.map(message => <Fragment key={message.id}>{renderRow(message, false)}</Fragment>)}
                 </ThreadPanelRoot>;
-                if (hasMore && itemIndex === 1) return <div className="mt-2"><Button variant="secondary" size="sm" onClick={() => void read(replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button></div>;
+                if (hasMore && itemIndex === 1) return <div className="mt-2"><Button variant="secondary" size="sm" onClick={() => void read(pageBefore ?? replies[0]?.sequence)}>{t('bots.groupChat.timeline.loadEarlier')}</Button></div>;
                 const index = itemIndex - 1 - Number(hasMore);
                 const entry = liveEntries[index]!;
               if (entry.kind === 'work') {

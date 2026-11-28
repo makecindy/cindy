@@ -17,6 +17,7 @@ import {
   chatGroupHumanDisplayName,
   chatGroupMemberName,
   chatGroupMembership,
+  groupAssistantComputerOptions,
   chatGroupOwnerName,
   botGroupNewMessageCount,
   findFirstUnreadBotGroupMessageId,
@@ -37,6 +38,16 @@ import {
 import { buildBotGroupQuoteCard } from '../botGroupQuote.js';
 import { buildBotGroupLiveTaskCard } from '../botGroupTask.js';
 import { chatGroupTalkRouteKey, groupLaneOfRouteKey, isChatOnlyGroupLane, BOT_GROUP_RUNTIME_FAILURE_CODES, readBotGroupExecutionFailure, type BotGroupErrorCode, type BotGroupExecutionFailureView, type BotGroupMemberView, type BotGroupMessageView, type BotGroupNoticeCode, type BotGroupOpenPlanSummary, type BotGroupPlanStepStatus, type BotGroupPlanView, type BotGroupSummary, type BotGroupThreadSummary } from '../botGroupChat.js';
+
+// Unit: the settings selector used to display ID-only legacy rows verbatim. Resolve only
+// the eligible IDs and keep unnamed choices distinguishable even when the snapshot reorders.
+it('labels eligible group computers from the directory without changing their routing IDs', () => {
+  const computers = ['c', 'a', 'b'].map(id => ({ id, name: id }));
+  const directory = [{ deviceId: 'b', name: 'Studio' }, { deviceId: 'other', name: 'Laptop' }];
+  const expected = [{ id: 'c', name: 'Computer (2)' }, { id: 'a', name: 'Computer (1)' }, { id: 'b', name: 'Studio' }];
+  expect(groupAssistantComputerOptions(computers, directory, 'Computer')).toEqual(expected);
+  expect(groupAssistantComputerOptions(computers.reverse(), directory, 'Computer')).toEqual(expected.reverse());
+});
 
 describe('group list activity', () => {
   it('keeps creation as a floor without treating settings edits as activity', () => {
