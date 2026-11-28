@@ -1,3 +1,4 @@
+import { withConnectionDefaultHeaders } from '@cindy/model-providers';
 import type { AgentKind, CustomProviderConfig } from '@cindy/model-providers';
 import { UNRECOVERABLE_PROVIDER_CREDENTIAL } from '../secrets/providerCredentialState.js';
 
@@ -152,7 +153,9 @@ async function listCustomProvidersWithSecureHeaders(): Promise<CustomProviderCon
         throw err;
       }
     }
-    result.push(hydrateCustomProviderHeaders(persisted));
+    // 缺省连接级标头在**解密之后**补：rowToConfig 保持纯读，否则上面的 legacy 明文迁移
+    // 会把合成出来的默认值当成用户明文头写进 safeStorage，覆盖用户已加密的那份(#11326)。
+    result.push(withConnectionDefaultHeaders(hydrateCustomProviderHeaders(persisted)));
   }
   return result;
 }

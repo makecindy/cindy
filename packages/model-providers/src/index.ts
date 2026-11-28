@@ -301,6 +301,9 @@ export {
 } from "./visionCapability.js";
 export type { VisionCapability } from "./visionCapability.js";
 
+export { copilotConnectionHeaders, copilotConnectionHeadersFor } from "./piProviderPresets.js";
+export { connectionDefaultHeaders, withConnectionDefaultHeaders } from "./user-provider.js";
+
 export {
   parseLocalModelCatalog,
   localModelDescription,

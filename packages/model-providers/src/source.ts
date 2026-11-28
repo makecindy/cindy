@@ -320,7 +320,24 @@ function backfillPresetMetadata(
       changed = true;
       return { ...model, contextWindow: bundledContextWindow };
     });
-    runtimes[agent] = runtimeChanged ? { ...runtime, models } : runtime;
+    // 连接级常量（例如 github-copilot 的 IDE 身份头）随客户端代码走：远端旧目录没有这个字段时
+    // 从 bundled 补，否则老远端预设会把新版客户端补上的默认头整段遮掉，向导里的预保存探测
+    // 请求又会缺 IDE 身份被拒(#11326)。
+    const bundledHeaders = bundledRuntime.headers;
+    // 只在远端 runtime 仍指向 bundled 声明的端点时继承连接级常量：远端把该预设改到自建网关
+    // 后，它不该再自称官方客户端（向导的预保存请求会用这份头）。
+    const sameEndpoint = (() => {
+      try { return new URL(runtime.baseUrl).origin === new URL(bundledRuntime.baseUrl).origin; }
+      catch { return false; }
+    })();
+    const inheritHeaders = runtime.headers === undefined && bundledHeaders !== undefined && sameEndpoint;
+    if (inheritHeaders) {
+      runtimeChanged = true;
+      changed = true;
+    }
+    runtimes[agent] = runtimeChanged
+      ? { ...runtime, models, ...(inheritHeaders ? { headers: bundledHeaders } : {}) }
+      : runtime;
   }
   // Pi runtime 是 2026-08 后新增的预设能力槽。旧远端目录没有表达“显式禁用 Pi”的
   // 字段，缺席只代表旧 schema；对随包已核实的官方预设回填整段，避免远端 LKG 把
