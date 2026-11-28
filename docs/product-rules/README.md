@@ -22,8 +22,11 @@
 | 邮件卡的收件人与编辑、发送确认、深浅色、已读标记与头像权限 | [邮件卡](mail-card.md) |
 | 目标运行、补充消息、停止与手机 `/goal` | [目标模式](goal-mode.md) |
 | 自动任务与目标任务的生命线：归档后恢复、归档前确认、失败后手动继续 | [归档与自动化](archive-pauses-automations.md) |
+| 自动化被 Webhook、GitHub App 事件叫醒：接收地址、发送方、合并与可靠性 | [Webhook 触发](schedule-webhook-trigger.md) |
+| 插件提供的事件（消息、邮件等）叫醒自动化，不需要账号或地址 | [插件事件触发](plugin-event-triggers.md) |
 | 用量上限、重置时刻与自动继续 | [用量上限](usage-limit-auto-continue.md) |
 | 任务模型、来源、推理强度与 Fast | [运行时控制](session-runtime-control.md) |
+| 插件执行引擎（ACP）、插件路由模型与插件任务选模的边界与能力台账 | [插件引擎与插件模型](plugin-engines-and-models.md) |
 | 共享任务、跨账号访客与成员权限 | [共享任务](shared-task-mode.md) |
 | 伙伴身份、生命周期、fallback、伙伴项目、Skill / MCP 与开任务 | [伙伴运行时](cindy-bots-runtime.md) |
 | 伙伴的工作方式属于伙伴：专属工具盘点、通用化方向与待裁决条款 | [伙伴专属能力台账](teammate-capability-ledger.md) |
@@ -40,6 +43,7 @@
 | 供应商组、选电脑策略、转发与用量 | [供应商组](provider-groups.md) |
 | 远程供应商在本机执行命令与文件操作时的权限确认、两台电脑的分工 | [远程执行的权限确认](remote-execution-permissions.md) |
 | 模型组：把已有来源合成路线与模式、新任务选来源 | [模型组](model-groups.md) |
+| 自动选择怎么分层：智能路由、电脑组、订阅账号与故障接替谁先谁后 | [自动选择总览](auto-selection-overview.md) |
 | 同一供应商内的 Claude / Codex 多订阅账号、目录与分配；单独供应商与合并／拿出 | [供应商内的订阅账号](subscription-account-pools.md) |
 | 媒体模型资料与发布兼容 | [V4 全类型规范](../model-registry-v4-media.md) |
 | 文档成果、四格式与插件增强 | [文档工坊](document-workshop-quality.md) |

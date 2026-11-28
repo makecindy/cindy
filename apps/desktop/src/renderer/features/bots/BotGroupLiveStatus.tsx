@@ -227,12 +227,11 @@ function BotGroupSingleProgressStrip({
               <Button
                 type="button"
                 variant="secondary"
-                tone="quiet"
+                tone="danger"
                 size="sm"
                 compact
                 loading={buttonPending}
                 onClick={() => onStop?.()}
-                className="text-[var(--text-danger)]"
                 title={t('bots.groupChat.progress.stop')}
               >
                 {t('bots.groupChat.progress.stop')}

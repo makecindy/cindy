@@ -50,7 +50,16 @@ export interface TopologyLayout {
   rows: Map<string, Point>;
   /** 每组:中转站位置(只有 relay 组有)、组名位置 */
   groups: Array<{ id: string; side: 1 | -1; caption: Point; relay: Point | null; mid: number }>;
+  /** 「这台电脑 → 中转站」那段线够长，本机到中转的走法与往返写在线上(见 TRUNK_LABEL_*);否则写在中转点上方。 */
+  trunkLabel: boolean;
 }
+
+/** 线上标签两头各露出的线。 */
+const TRUNK_LABEL_LINE = 8;
+/** 为给这段线腾地方，中转点往外挪时，扇出的线最多让出的宽度(其余由设备列一起往外挪)。 */
+const TRUNK_LABEL_FAN_GIVE = 15;
+/** 设备列往外挪以后，名字那一列至少还要留这么宽(约一个 13 个字符的设备名)。 */
+const TRUNK_LABEL_NAME_MIN = 100;
 
 /** 按可用宽度缩放:设计稿按 920 宽定的距离,窄一些就按比例收,最窄收到六成。 */
 export function metricsFor(w: number, dense: boolean): TopologyMetrics {
@@ -69,8 +78,31 @@ export function metricsFor(w: number, dense: boolean): TopologyMetrics {
   };
 }
 
-export function layoutTopology(groups: readonly TopologyGroup[], w: number, dense: boolean): TopologyLayout {
+/**
+ * `trunkLabelW`:要写在「这台电脑 → 中转站」那段线上的标签宽度(按固定样例量，延迟变了布局不跳)。原来那段线只有
+ * 四五十像素，放不下「UDP · 199 ms」(2026-11-27 用户要求：本机那一段写在本机到中转的线上，对方那一段写在通往对方的线上)。
+ * 放得下就把中转点往外挪到够长，设备列跟着往外挪(扇出的线让出 `fanGive`,至多 TRUNK_LABEL_FAN_GIVE;调用方按设备线上
+ * 标签还剩的空间给，免得它们因此折行);挪了以后名字那一列不够宽就不挪，`trunkLabel` 为 false,标签照旧写在中转点上方。
+ */
+export function layoutTopology(
+  groups: readonly TopologyGroup[],
+  w: number,
+  dense: boolean,
+  opts: { trunkLabelW?: number; fanGive?: number } = {},
+): TopologyLayout {
   const m = metricsFor(w, dense);
+  let trunkLabel = false;
+  if (opts.trunkLabelW && opts.trunkLabelW > 0 && groups.some((g) => g.key === 'relay')) {
+    const need = m.ring + TRUNK_LABEL_LINE * 2 + opts.trunkLabelW + m.relayR + 3;
+    const relayPush = Math.max(0, Math.ceil(need - m.relay));
+    const fanGive = Math.max(0, Math.min(TRUNK_LABEL_FAN_GIVE, Math.floor(opts.fanGive ?? TRUNK_LABEL_FAN_GIVE)));
+    const tilePush = Math.max(0, relayPush - fanGive);
+    if (w / 2 - (m.tile + tilePush + m.half + 12) - 8 >= TRUNK_LABEL_NAME_MIN) {
+      m.relay += relayPush;
+      m.tile += tilePush;
+      trunkLabel = true;
+    }
+  }
   const cx = w / 2;
   const sideHeight = (side: 1 | -1): number => {
     const list = groups.filter((g) => g.side === side);
@@ -100,7 +132,7 @@ export function layoutTopology(groups: readonly TopologyGroup[], w: number, dens
       y += m.gap;
     }
   }
-  return { w, h, cx, m, hub: { x: cx, y: h / 2 }, rows, groups: out };
+  return { w, h, cx, m, hub: { x: cx, y: h / 2 }, rows, groups: out, trunkLabel };
 }
 
 /** 一条线的形状:a 出发,三次曲线 (c1, c2) 到 k,再直线到 b(没有直段时 b 为 null)。 */
@@ -199,7 +231,7 @@ export interface PathSample {
   angle: number;
 }
 
-function cubicAt(s: LineShape, t: number): Point {
+export function cubicAt(s: LineShape, t: number): Point {
   const u = 1 - t;
   const a = u * u * u;
   const b = 3 * u * u * t;

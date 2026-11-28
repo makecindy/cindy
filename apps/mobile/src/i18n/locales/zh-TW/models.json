@@ -62,6 +62,7 @@
   "unified": {
     "remoteCopyUnavailableOn": "「{{device}}」上的 {{provider}} 目前無法使用。",
     "remoteCopyUnavailableOnTaskComputer": "任務所在電腦上的 {{provider}} 目前無法使用。",
+    "accountCount_one": "{{count}} 個帳號",
     "accountCount_other": "{{count}} 個帳號",
     "accountFallback": "帳號 {{index}}",
     "favoriteConfiguration": "收藏此設定",
@@ -91,8 +92,8 @@
     "remoteProvider": "{{provider}} · {{device}}",
     "remoteProviderGroup": "{{provider}} · {{device}} · {{group}}",
     "providerGroup": "{{provider}} · {{group}}",
-    "groupBadge_one": "供應商組 · {{count}} 台電腦",
-    "groupBadge_other": "供應商組 · {{count}} 台電腦",
+    "groupBadge_one": "電腦組 · {{count}} 台電腦",
+    "groupBadge_other": "電腦組 · {{count}} 台電腦",
     "harness": "Harness",
     "restoreRecommended": "恢復推薦",
     "saveFailed": "無法儲存，請重試。",
@@ -113,6 +114,7 @@
   },
   "modelGroups": {
     "title": "模型組",
+    "sourceCount_one": "{{count}} 個來源",
     "sourceCount_other": "{{count}} 個來源",
     "strategy": {
       "expiring": "快作廢的先用",
@@ -147,15 +149,22 @@
     "picker": {
       "switched": "「{{name}}」把這個任務換成了 {{model}}",
       "switchUnavailable": "「{{name}}」裡現在沒有能給這個任務用的來源，模型沒換。",
-      "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。"
+      "chooseUnavailable": "「{{name}}」裡現在沒有能用的來源，沒有選它。",
+      "managedBy": "目前由「{{name}}」持續託管",
+      "detach": "解除託管",
+      "detached": "已解除智慧路由託管，保留目前模型"
     },
-    "anotherDevice": "另一台電腦"
+    "anotherDevice": "另一台電腦",
+    "sourceRouteTitle_one": "{{name}} · 智慧路由（{{count}} 個來源）",
+    "sourceRouteTitle_other": "{{name}} · 智慧路由（{{count}} 個來源）",
+    "switchOffer": {
+      "button": "切換至 {{model}} 並繼續"
+    }
   },
   "pluginEngines": {
     "genericName": "插件引擎",
     "defaultModel": "預設模型",
     "unavailable": "{{engine}} 暫時無法使用",
-    "unavailableWithHint": "{{engine}} 暫時無法使用：{{hint}}",
-    "worktreeUnsupported": "插件引擎暫不支援在 worktree 中新建任務，請取消勾選 worktree 後再傳送"
+    "unavailableWithHint": "{{engine}} 暫時無法使用：{{hint}}"
   }
 }

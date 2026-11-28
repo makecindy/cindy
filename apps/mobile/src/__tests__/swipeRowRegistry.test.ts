@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { i18n } from '@/i18n';
 import {
   buildSessionActionMenu,
+  sessionOptionsInboxMode,
   statusToggleAction,
   swipeActionPatch,
 } from '@/session/swipeRowRegistry';
@@ -25,6 +26,20 @@ describe('buildSessionActionMenu', () => {
       .toEqual(['rename', 'pin', 'archive', 'delete']);
     expect(buildSessionActionMenu('2026-01-01T00:00:00.000Z', 'archived').map((item) => item.action))
       .toEqual(['rename', 'unpin', 'restore', 'delete']);
+  });
+
+  it('offers snooze on pinned inbox tasks without changing the pin item', () => {
+    const snooze = { snoozedUntil: null, snoozedAt: null, userSendAt: null };
+    expect(buildSessionActionMenu('2026-01-01T00:00:00.000Z', 'active', snooze).map((item) => item.action))
+      .toEqual(['rename', 'unpin', 'snooze', 'archive', 'delete']);
+  });
+});
+
+describe('sessionOptionsInboxMode', () => {
+  it('drops inbox actions only for the pinned section; shared and search rows keep the list mode', () => {
+    expect(sessionOptionsInboxMode(true, { pinnedSection: true })).toBe(false);
+    expect(sessionOptionsInboxMode(true)).toBe(true);
+    expect(sessionOptionsInboxMode(false)).toBe(false);
   });
 });
 

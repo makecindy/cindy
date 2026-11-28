@@ -1,8 +1,10 @@
 import type { VoiceCallRecord } from '@cindy/maker-core';
+export { readVoiceCallRecord } from '@cindy/maker-shared/voice-call-record';
 export type { VoiceCallRecord } from '@cindy/maker-core';
 import type { AudioTrace, ConversationInputEvent } from '@cindy/voice-input-core';
 import type { AgentKind } from '@cindy/model-providers';
 import type { AgentRequestReceipt } from './forwardedRequest.js';
+import type { RealtimeVoiceSelection, RealtimeVoiceModel, RealtimeVoiceEvent, RealtimePlaybackPosition } from './realtimeVoice.js';
 
 /** Display-only recognition of the existing host-generated dispatch id and
  * protected source receipt. Never use this marker as permission or acceptance.
@@ -22,24 +24,6 @@ export function isVoiceCallTaskMessage(
   const suffix = `:${source.clientId}`;
   return clientId.startsWith(prefix) && clientId.endsWith(suffix)
     && clientId.length > prefix.length + suffix.length;
-}
-
-/** Persisted metadata can come from an older or incomplete history projection. */
-export function readVoiceCallRecord(value: unknown): VoiceCallRecord | null {
-  if (!value || typeof value !== 'object') return null;
-  const record = value as Partial<VoiceCallRecord>;
-  if (record.version !== 1 || typeof record.callId !== 'string'
-    || !Number.isFinite(record.startedAt)
-    || (record.endedAt !== undefined && !Number.isFinite(record.endedAt))
-    || !Array.isArray(record.turns) || record.turns.length > 2_000
-    || !Array.isArray(record.handoffs) || record.handoffs.length > 2_000) return null;
-  if (!record.turns.every(turn => turn && typeof turn.id === 'string'
-    && (turn.role === 'user' || turn.role === 'assistant') && typeof turn.text === 'string'
-    && Number.isFinite(turn.createdAt) && typeof turn.complete === 'boolean')) return null;
-  if (!record.handoffs.every(task => task && typeof task.id === 'string'
-    && typeof task.inputId === 'string' && typeof task.text === 'string'
-    && ['sending', 'accepted', 'failed', 'completed'].includes(task.state))) return null;
-  return record as VoiceCallRecord;
 }
 
 /** Presentation frame of the one live call, published by the main window's call host. */
@@ -126,6 +110,7 @@ export type SpeechModelSelection = {
   protocol?: SpeechProtocol;
 };
 export type VoiceConversationSelection = SpeechModelSelection & {
+  mode?: 'speech';
   voice: string;
   /** Explicit per-companion synthesis speed. Absent keeps the provider default (1×). */
   speed?: number;
@@ -139,7 +124,8 @@ export type SpeechVoiceCatalog = {
   /** Public references and verified entries remain usable after a partial private lookup. */
   customVoicesUnavailable?: boolean;
 };
-export type SpeechPreviewStart = VoiceConversationSelection & {
+export type VoicePreviewSelection = VoiceConversationSelection | RealtimeVoiceSelection;
+export type SpeechPreviewStart = VoicePreviewSelection & {
   previewId: string;
   botId: string;
   sessionId: string;
@@ -166,6 +152,9 @@ export type VoiceConversationPreference = {
   customized: boolean;
   /** Absent on older local bridges; the current default is enabled. */
   sentencePlayback?: boolean;
+  realtimeSelection?: RealtimeVoiceSelection | null;
+  /** Inactive choice for the settings picker only. */
+  previousRealtimeSelection?: RealtimeVoiceSelection;
 };
 /** Local-only synthesis result. PCM remains pull-driven; encoded segments are
  * received during bounded prefetch and decoded by the sandboxed audio player. */
@@ -187,17 +176,24 @@ export type VoiceConversationEvent = {
   inputGeneration?: number;
   event:
     | ConversationInputEvent
+    | RealtimeVoiceEvent
     | { type: 'ended' }
     | { type: 'call-record'; record: VoiceCallRecord }
     /** "Recognize my voice" muted speech judged to be someone else. */
     | { type: 'speaker-filtered' };
 };
-export type VoiceConversationStart = VoiceConversationSelection & {
+export type VoiceCallSelection = VoiceConversationSelection | RealtimeVoiceSelection;
+export type VoiceConversationStart = VoiceCallSelection & {
   callId: string;
   botId: string;
   sessionId: string;
 };
 export interface VoiceConversationApi {
+  realtimeCustomVoices?(route: Pick<RealtimeVoiceSelection, 'providerId' | 'agent' | 'modelId'>, requestId: string): Promise<SpeechVoiceCatalog>;
+  cancelRealtimeCustomVoices?(requestId: string): Promise<void>;
+  realtimeModels?(): Promise<RealtimeVoiceModel[]>;
+  setRealtimePreference?(botId: string, selection: RealtimeVoiceSelection | null): Promise<VoiceConversationPreference>;
+  setRealtimeQuestion?(callId: string, pending: boolean): Promise<void>;
   models(): Promise<VoiceConversationModel[]>;
   voices(selection: SpeechModelSelection): Promise<SpeechVoiceCatalog>;
   preview(input: SpeechPreviewStart): Promise<SpeechAudioResult>;
@@ -238,7 +234,7 @@ export interface VoiceConversationApi {
     streaming?: boolean;
   }): Promise<SpeechStartResult>;
   readSpeech(callId: string, requestId: string): Promise<{ pcm: ArrayBuffer; done: boolean }>;
-  interrupt(callId: string): Promise<void>;
+  interrupt(callId: string, position?: RealtimePlaybackPosition, throughResponse?: number): Promise<void>;
   onEvent(callback: (event: VoiceConversationEvent) => void): () => void;
   /** Reads the live call and subscribes this window to its later updates. */
   callStatus(): Promise<VoiceCallStatus | null>;

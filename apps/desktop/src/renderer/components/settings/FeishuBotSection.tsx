@@ -8,13 +8,30 @@ import { cn } from '@/lib/utils';
 import { useFeishuBot, type FeishuBotService, type FeishuBotStatus } from '@/hooks/useFeishuBot';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Button } from '@/components/ui/button';
+import { SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
 import { Spinner } from '@/components/ui/spinner';
 import { ImConnectionError, ImReconnectButton } from './ImConnectionRecovery';
 import { savedCredentialsNoteKey, shouldShowSavedCredentialsCard } from './feishuBotPresentation';
-import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
+import {
+  formatImDefaultRouteSummary,
+  ImChannelSettingsCard,
+  useImChannelSettingsSummary,
+} from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { FeishuBotNotificationSection } from './FeishuBotNotificationSection';
-import { FeishuGroupSettingsSection } from './FeishuGroupSettingsSection';
+import {
+  ImBotBlockCard,
+  ImBotPersonalWay,
+  ImBotSetupRow,
+  ImBotStatusText,
+  ImBotSubPage,
+  ImCompanionBotsSection,
+  useImBotNav,
+  type ImBotStatusTone,
+} from './ImBotPageParts';
+import { ImChatSettingsCard } from './ImChatSettingsSection';
+import { ImChannelProjectRows } from './ImChannelProjectRows';
+import { ImReplyTargetField, useImReplyTarget } from './ImReplyTargetField';
 
 const APP_LAUNCHER_URL: Record<FeishuBotService, string> = {
   feishu: 'https://open.feishu.cn/page/launcher?from=backend_oneclick',
@@ -67,6 +84,65 @@ export function FeishuBotSection({
   preferredService?: FeishuBotService | null;
   searchActivation?: number;
 }) {
+  const controller = useFeishuBot();
+  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('feishu');
+  return (
+    <FeishuBotSectionView
+      expanded={expanded}
+      onToggle={onToggle}
+      preferredService={preferredService}
+      searchActivation={searchActivation}
+      controller={controller}
+      routeSummary={routeSummary}
+      defaultSettings={
+        <ImDefaultSettingsSection channel="feishu" embedded onSummaryChange={setRouteSummary} />
+      }
+      notificationSettings={
+        <>
+          <ImChatSettingsCard channel="feishu" />
+          <div className="h-px w-full bg-[var(--border-default)]" />
+          <FeishuBotNotificationSection />
+        </>
+      }
+    />
+  );
+}
+
+export function FeishuBotSectionView({
+  controller,
+  services = FEISHU_SERVICES,
+  canSubmit = true,
+  idPrefix = '',
+  canDisconnect = true,
+  canReconnect = true,
+  routeSummary,
+  defaultSettings,
+  connectionDetails,
+  notificationSettings,
+  expanded,
+  onToggle,
+  preferredService,
+  searchActivation,
+}: {
+  services?: readonly FeishuBotService[];
+  canSubmit?: boolean;
+  idPrefix?: string;
+  canDisconnect?: boolean;
+  canReconnect?: boolean;
+  controller: Omit<
+    ReturnType<typeof useFeishuBot>,
+    'lifecycleAnnouncement' | 'setLifecycleAnnouncement' | 'saveSuccess'
+  >;
+  routeSummary: import('./ImDefaultSettingsSection').ImDefaultSettingsSummary | null;
+  defaultSettings: React.ReactNode;
+  connectionDetails?: React.ReactNode;
+  notificationSettings?: React.ReactNode;
+
+  expanded: boolean;
+  onToggle: () => void;
+  preferredService?: FeishuBotService | null;
+  searchActivation?: number;
+}) {
   const {
     service,
     setService,
@@ -86,10 +162,9 @@ export function FeishuBotSection({
     save,
     reconnect,
     clear,
-  } = useFeishuBot();
+  } = controller;
 
   const [showSecret, setShowSecret] = useState(false);
-  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('feishu');
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
 
@@ -99,7 +174,12 @@ export function FeishuBotSection({
 
   const showSavedCredentialsCard = shouldShowSavedCredentialsCard(hasSavedCreds);
   const displayStatus = isReconnecting ? 'testing' : status;
-  const canSave = appId.trim().length > 0 && appSecret.trim().length > 0 && !isSaving;
+  const canSave =
+    canSubmit &&
+    services.includes(service) &&
+    appId.trim().length > 0 &&
+    appSecret.trim().length > 0 &&
+    !isSaving;
 
   const handleClearClick = useCallback(async () => {
     const confirmed = await confirm({
@@ -118,14 +198,10 @@ export function FeishuBotSection({
 
   return (
     <ImChannelSettingsCard
-      id={imBotSettings.feishu.targetId}
+      id={`${idPrefix}${imBotSettings.feishu.targetId}`}
       title={t(imBotSettings.feishu.titleKey)}
       description={t('settings.feishuBot.description')}
-      routeSummary={
-        routeSummary
-          ? `${t(`settings.imBot.defaults.agents.${routeSummary.agentKind}`)} · ${routeSummary.model}`
-          : null
-      }
+      routeSummary={formatImDefaultRouteSummary(routeSummary, t)}
       expanded={expanded}
       onToggle={onToggle}
       status={
@@ -153,6 +229,9 @@ export function FeishuBotSection({
     >
       {showSavedCredentialsCard ? (
         <SavedCredentialsCard
+          canDisconnect={canDisconnect}
+          canReconnect={canReconnect}
+          connectionDetails={connectionDetails}
           appId={appId}
           service={service}
           ownerOpenId={ownerOpenId}
@@ -165,6 +244,7 @@ export function FeishuBotSection({
         />
       ) : (
         <ManualConfig
+          services={services}
           service={service}
           setService={setService}
           appId={appId}
@@ -182,13 +262,11 @@ export function FeishuBotSection({
         />
       )}
       <div className="h-px w-full bg-[var(--border-default)]" />
-      <ImDefaultSettingsSection channel="feishu" embedded onSummaryChange={setRouteSummary} />
+      {defaultSettings}
       {hasSavedCreds && (
         <>
           <div className="h-px w-full bg-[var(--border-default)]" />
-          <FeishuGroupSettingsSection />
-          <div className="h-px w-full bg-[var(--border-default)]" />
-          <FeishuBotNotificationSection />
+          {notificationSettings}
         </>
       )}
     </ImChannelSettingsCard>
@@ -196,6 +274,9 @@ export function FeishuBotSection({
 }
 
 function SavedCredentialsCard(props: {
+  canDisconnect: boolean;
+  canReconnect: boolean;
+  connectionDetails?: React.ReactNode;
   appId: string;
   service: FeishuBotService;
   ownerOpenId: string | null;
@@ -218,7 +299,7 @@ function SavedCredentialsCard(props: {
       size="sm"
       loading={props.isReconnecting}
       onReconnect={props.onReconnect}
-      disabled={props.isClearing || props.status === 'testing'}
+      disabled={!props.canReconnect || props.isClearing || props.status === 'testing'}
       aria-label={t('settings.feishuBot.connected.reconnect', { service: serviceName })}
     >
       <RefreshCw size={14} />
@@ -280,26 +361,28 @@ function SavedCredentialsCard(props: {
           </div>
         </div>
       )}
-      <div className="grid gap-2 text-12 text-[var(--settings-section-desc)]">
-        <div className="flex justify-between gap-4">
-          <span>{t('settings.feishuBot.connected.serviceLabel')}</span>
-          <span className="font-medium text-[var(--settings-section-title)]">{serviceName}</span>
+      {props.connectionDetails ?? (
+        <div className="grid gap-2 text-12 text-[var(--settings-section-desc)]">
+          <div className="flex justify-between gap-4">
+            <span>{t('settings.feishuBot.connected.serviceLabel')}</span>
+            <span className="font-medium text-[var(--settings-section-title)]">{serviceName}</span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span>{t('settings.feishuBot.connected.appIdLabel')}</span>
+            <span className="font-medium text-[var(--settings-section-title)]">
+              {maskTail(props.appId)}
+            </span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span>{t('settings.feishuBot.connected.ownerLabel')}</span>
+            <span className="font-medium text-[var(--settings-section-title)]">
+              {props.ownerOpenId
+                ? maskTail(props.ownerOpenId)
+                : t('settings.feishuBot.connected.ownerWaiting')}
+            </span>
+          </div>
         </div>
-        <div className="flex justify-between gap-4">
-          <span>{t('settings.feishuBot.connected.appIdLabel')}</span>
-          <span className="font-medium text-[var(--settings-section-title)]">
-            {maskTail(props.appId)}
-          </span>
-        </div>
-        <div className="flex justify-between gap-4">
-          <span>{t('settings.feishuBot.connected.ownerLabel')}</span>
-          <span className="font-medium text-[var(--settings-section-title)]">
-            {props.ownerOpenId
-              ? maskTail(props.ownerOpenId)
-              : t('settings.feishuBot.connected.ownerWaiting')}
-          </span>
-        </div>
-      </div>
+      )}
       <div className="flex flex-wrap items-center gap-2 pt-1">
         {!hasError && reconnectButton}
         <Button data-settings-search-action="Clear the failed bot connection"
@@ -308,7 +391,7 @@ function SavedCredentialsCard(props: {
           loading={props.isClearing}
           type="button"
           onClick={props.onClear}
-          disabled={props.isClearing || props.isReconnecting}
+          disabled={!props.canDisconnect || props.isClearing || props.isReconnecting}
         >
           <Trash2 size={13} />
           {t('settings.feishuBot.connected.clear')}
@@ -319,6 +402,7 @@ function SavedCredentialsCard(props: {
 }
 
 function ManualConfig(props: {
+  services: readonly FeishuBotService[];
   service: FeishuBotService;
   setService: (service: FeishuBotService) => void;
   appId: string;
@@ -348,13 +432,12 @@ function ManualConfig(props: {
           aria-label={t('settings.feishuBot.serviceAria')}
           value={props.service}
           onValueChange={props.setService}
-          options={FEISHU_SERVICES.map((service) => ({
+          options={props.services.map((service) => ({
             value: service,
             label: t(`settings.feishuBot.services.${service}`),
           }))}
           fullWidth
-          height={44}
-          optionHeight={34}
+          density="lg"
         />
       </fieldset>
 
@@ -366,6 +449,7 @@ function ManualConfig(props: {
       </label>
       <input data-setting-id={imBotSettings.feishu.id}
         type="text"
+        aria-label={t('settings.feishuBot.appIdLabel')}
         value={props.appId}
         onChange={(e) => props.setAppId(e.target.value)}
         placeholder={t('settings.feishuBot.appIdPlaceholder')}
@@ -389,6 +473,7 @@ function ManualConfig(props: {
       <div className="relative">
         <input data-setting-id={imBotSettings.feishu.id}
           type={props.showSecret ? 'text' : 'password'}
+          aria-label={t('settings.feishuBot.appSecretLabel')}
           value={props.appSecret}
           onChange={(e) => props.setAppSecret(e.target.value)}
           placeholder={t('settings.feishuBot.appSecretPlaceholder')}
@@ -458,5 +543,198 @@ function ManualConfig(props: {
         {t('settings.feishuBot.bind')}
       </Button>
     </div>
+  );
+}
+
+const statusTone: Record<FeishuBotStatus, ImBotStatusTone> = {
+  idle: 'off',
+  testing: 'progress',
+  connected: 'connected',
+  reconnecting: 'progress',
+  conflict: 'attention',
+  error: 'error',
+};
+
+export function useFeishuListStatus(): { configured: boolean; tone: ImBotStatusTone; labelKey: string } {
+  const { status, hasSavedCreds, isReconnecting } = useFeishuBot();
+  const display = isReconnecting ? 'testing' : status;
+  return { configured: hasSavedCreds, tone: statusTone[display], labelKey: statusKey[display] };
+}
+
+/** 设置 → IM 机器人 → 飞书 / Lark 里「你自己的机器人」, 以及它的更深一层页面。 */
+export function FeishuBotSettings({
+  preferredService,
+  searchActivation,
+}: {
+  preferredService?: FeishuBotService | null;
+  searchActivation?: number;
+}) {
+  const {
+    service,
+    setService,
+    appId,
+    setAppId,
+    appSecret,
+    setAppSecret,
+    status,
+    errorMessage,
+    hasSavedCreds,
+    hasLoadedState,
+    ownerOpenId,
+    validationError,
+    isSaving,
+    isClearing,
+    isReconnecting,
+    save,
+    reconnect,
+    clear,
+  } = useFeishuBot();
+
+  const [showSecret, setShowSecret] = useState(false);
+  const nav = useImBotNav();
+  const replyTarget = useImReplyTarget('feishu');
+  const toCompanion = replyTarget.supported && !!replyTarget.companionBotId;
+  const { confirm } = useConfirmDialog();
+  const { t } = useTranslation();
+  const name = t('settings.imBot.apps.feishu');
+
+  useEffect(() => {
+    if (hasLoadedState && !hasSavedCreds && preferredService) setService(preferredService);
+  }, [hasLoadedState, hasSavedCreds, preferredService, searchActivation, setService]);
+
+  // 在填写页绑好之后回到飞书子页。
+  useEffect(() => {
+    if (hasSavedCreds && nav.page === 'setup') nav.back();
+  }, [hasSavedCreds, nav]);
+
+  const displayStatus = isReconnecting ? 'testing' : status;
+  const canSave = appId.trim().length > 0 && appSecret.trim().length > 0 && !isSaving;
+
+  const handleClearClick = useCallback(async () => {
+    const confirmed = await confirm({
+      title: t('settings.feishuBot.clearConfirm.title'),
+      description: t('settings.feishuBot.clearConfirm.description'),
+      confirmText: t('settings.feishuBot.clearConfirm.confirm'),
+      cancelText: t('settings.feishuBot.clearConfirm.cancel'),
+    });
+    if (!confirmed) return;
+    await clear();
+  }, [confirm, clear, t]);
+
+  const openLauncher = useCallback(() => {
+    window.electronAPI.openExternal?.(APP_LAUNCHER_URL[service]);
+  }, [service]);
+
+  const manualConfig = (
+    <ManualConfig
+      services={FEISHU_SERVICES}
+      service={service}
+      setService={setService}
+      appId={appId}
+      setAppId={setAppId}
+      appSecret={appSecret}
+      setAppSecret={setAppSecret}
+      showSecret={showSecret}
+      setShowSecret={setShowSecret}
+      validationError={validationError}
+      errorMessage={errorMessage}
+      isSaving={isSaving}
+      canSave={canSave}
+      onSave={save}
+      onOpenLauncher={openLauncher}
+    />
+  );
+
+  switch (nav.page) {
+    case 'model':
+      return (
+        <ImBotSubPage title={t('settings.imBot.rows.model')} description={name}>
+          <ImBotBlockCard><ImDefaultSettingsSection channel="feishu" embedded /></ImBotBlockCard>
+        </ImBotSubPage>
+      );
+    case 'notifications':
+      return (
+        <ImBotSubPage title={t('settings.imBot.rows.notifications')} description={name}>
+          <FeishuBotNotificationSection />
+        </ImBotSubPage>
+      );
+    case 'setup':
+      return (
+        <ImBotSubPage title={t('settings.imBot.ways.personalSetupTitle')} description={t('settings.feishuBot.description')}>
+          <ImBotBlockCard>{manualConfig}</ImBotBlockCard>
+        </ImBotSubPage>
+      );
+  }
+
+  if (!shouldShowSavedCredentialsCard(hasSavedCreds)) {
+    return (
+      <>
+        <ImBotPersonalWay id={imBotSettings.feishu.targetId} configured={false}>
+          {nav.multiWay
+            ? <ImBotSetupRow settingId={imBotSettings.feishu.id} hint={t('settings.imBot.ways.personalSetupHint.feishu')} />
+            : <ImBotBlockCard>{manualConfig}</ImBotBlockCard>}
+        </ImBotPersonalWay>
+        <ImCompanionBotsSection channel="feishu" />
+      </>
+    );
+  }
+
+  const serviceName = t(`settings.feishuBot.services.${service}`);
+  const hasError = !isReconnecting && (displayStatus === 'error' || displayStatus === 'conflict');
+  return (
+    <>
+      <ImBotPersonalWay id={imBotSettings.feishu.targetId}>
+        <SettingsCard>
+          <ImReplyTargetField target={replyTarget} setting="feishu" />
+          {toCompanion ? null : <ImChannelProjectRows channel="feishu" appName={t('settings.imBot.apps.feishu')} settingId={imBotSettings.feishu.id} />}
+        </SettingsCard>
+        {/* 设置搜索「飞书群聊」落在这张卡上(锚点 id 沿用, 深链不失效)。 */}
+        {toCompanion ? null : (
+          <div id={imBotSettings.feishuGroups.targetId} className="scroll-mt-4">
+            <ImChatSettingsCard channel="feishu" />
+          </div>
+        )}
+        <SettingsCard>
+          <SettingsRow title={t('settings.imBot.rows.notifications')} chevron onClick={() => nav.open('notifications')} />
+        </SettingsCard>
+        <SettingsCard data-feishu-connection-card="">
+          <SettingsRow
+            wrap
+            title={`${serviceName} · ${maskTail(appId)}`}
+            hint={<ImBotStatusText tone={statusTone[displayStatus]}>
+              {[t(statusKey[displayStatus]), ownerOpenId
+                ? t('settings.imBot.rows.ownerId', { id: maskTail(ownerOpenId) })
+                : t('settings.feishuBot.connected.ownerWaiting')].join(' · ')}
+            </ImBotStatusText>}
+            trailing={
+              <ImReconnectButton
+                variant="secondary"
+                size="sm"
+                loading={isReconnecting}
+                onReconnect={reconnect}
+                disabled={isClearing || displayStatus === 'testing'}
+                aria-label={t('settings.feishuBot.connected.reconnect', { service: serviceName })}
+              >
+                <RefreshCw size={14} />
+                {t('settings.feishuBot.saved.reconnect')}
+              </ImReconnectButton>
+            }
+          />
+          {hasError ? (
+            <SettingsBlock>
+              <ImConnectionError
+                role="status"
+                message={t('settings.feishuBot.saved.errorHeading', { service: serviceName })}
+                description={t(savedCredentialsNoteKey(displayStatus, errorMessage))}
+                details={errorMessage ?? undefined}
+              />
+            </SettingsBlock>
+          ) : null}
+          <SettingsRow data-settings-search-action="Clear the failed bot connection" danger title={t('settings.imBot.rows.unbind')}
+            disabled={isClearing || isReconnecting} onClick={() => void handleClearClick()} />
+        </SettingsCard>
+      </ImBotPersonalWay>
+      <ImCompanionBotsSection channel="feishu" />
+    </>
   );
 }

@@ -1,3 +1,4 @@
+import type { ReconnectHandoff } from '../../../shared/agentInputQueue';
 /**
  * 「会话尾部停在错误行」的可操作提示条(输入框上方,与 live ErrorBanner 同位置)
  * ---------------------------------------------------------------------------
@@ -117,6 +118,8 @@ export function ErrorTailErrorBanner({
   forkStripEncryptedRunning,
   onDiagnose,
   errorReason,
+  errorCreatedAt,
+  reconnectHandoff,
   toolLoop,
   outputLimit,
   onSilentStopContinue,
@@ -131,7 +134,7 @@ export function ErrorTailErrorBanner({
   onContinue: () => Promise<void> | void;
   onDismiss: () => void;
   dismissOnEscape?: boolean;
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'acp';
   agentDeviceId?: string | null;
   remoteHostId?: string;
   deviceLinkDeviceId?: string | null;
@@ -147,6 +150,9 @@ export function ErrorTailErrorBanner({
   forkStripEncryptedRunning?: boolean;
   onDiagnose?: (error: ErrorDiagnosisSource) => void;
   errorReason?: string | null;
+  /** 持久化错误行的创建时间（ISO 8601 或 unix ms），用于锚定原文里的相对重置倒计时，避免重开会话后恢复时间不断后移。 */
+  errorCreatedAt?: string | number | null;
+  reconnectHandoff?: ReconnectHandoff;
   toolLoop?: ToolLoopErrorDetails;
   outputLimit?: OutputLimitDetails;
   onSilentStopContinue?: () => void;
@@ -154,16 +160,29 @@ export function ErrorTailErrorBanner({
   className?: string;
   style?: React.CSSProperties;
 }) {
-  const usageLimitRecovery = useMemo(
-    () => extractUsageLimitRecoveryHint({ message: errorText }),
-    [errorText],
-  );
+  const usageLimitRecovery = useMemo(() => {
+    const parsedCreatedAt =
+      typeof errorCreatedAt === 'number'
+        ? errorCreatedAt
+        : typeof errorCreatedAt === 'string'
+          ? Date.parse(errorCreatedAt)
+          : Number.NaN;
+    const anchorMs = Number.isFinite(parsedCreatedAt) && parsedCreatedAt > 0 ? parsedCreatedAt : Date.now();
+    return extractUsageLimitRecoveryHint(
+      {
+        message: errorText,
+        ...(errorReason ? { reason: errorReason } : {}),
+      },
+      anchorMs,
+    );
+  }, [errorText, errorReason, errorCreatedAt]);
 
   return (
     <ErrorBanner
       onChooseComputer={onChooseComputer}
       error={errorText}
       errorReason={errorReason}
+      reconnectHandoff={reconnectHandoff}
       toolLoop={toolLoop}
       outputLimit={outputLimit}
       retryText={ERROR_TAIL_RETRY_TOKEN}

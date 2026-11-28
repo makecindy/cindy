@@ -45,6 +45,7 @@ import {
   notifySetupMigrationStateChanged,
   useSetupMigrationDialog,
 } from './setupMigrationStore';
+import { Checkbox } from '@/components/ui/checkbox';
 
 type Phase = 'source' | 'reading' | 'review' | 'permissions' | 'running' | 'done';
 type ItemPhase = 'pending' | 'running' | SetupMigrationResult['outcome'];
@@ -83,19 +84,13 @@ function SelectionCheckbox({
   onChange: (checked: boolean) => void;
   ariaLabel?: string;
 }) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = indeterminate;
-  }, [indeterminate]);
   return (
-    <input
-      ref={ref}
-      type="checkbox"
+    <Checkbox
       checked={checked}
+      indeterminate={indeterminate}
       disabled={disabled}
       aria-label={ariaLabel}
       onChange={(event) => onChange(event.target.checked)}
-      className="size-3.5 shrink-0 cursor-pointer accent-[var(--confirm-btn-primary-bg)] disabled:cursor-default"
     />
   );
 }

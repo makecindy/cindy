@@ -259,3 +259,47 @@ it('preserves nested list rows and source-line locations in the file reader', ()
   expect(html).toContain('<div data-src-line="2"><div class="list-row" style="margin-left:2em">');
   expect(html).toContain('<span class="list-marker">2.</span>');
 });
+
+describe('buildSelectableMarkdownHtml carousel & interactive images', () => {
+  // Value: Markdown document preview on Mobile renders ````carousel blocks and
+  // progressive image slots with tap-to-open bridge, while preserving strict
+  // imageSources allowlists and default non-interactive HTML contracts.
+  it('renders carousel blocks with slide switcher and interactive image slots when interactiveImages is enabled', () => {
+    const md = [
+      '````carousel',
+      '![Dark](/tmp/01-dark.png)',
+      '<!-- slide -->',
+      '![Light](/tmp/01-light.png)',
+      '````',
+      '',
+      '![Web](https://example.com/pic.png)',
+    ].join('\n');
+
+    const html = buildSelectableMarkdownHtml(md, { interactiveImages: true });
+    expect(html).toContain('data-xdt-carousel="1"');
+    expect(html).toContain('data-xdt-slide="0"');
+    expect(html).toContain('data-xdt-slide="1"');
+    expect(html).toContain('1 / 2');
+    expect(html).toContain('data-xdt-img-index="0"');
+    expect(html).toContain('data-xdt-img-index="1"');
+    expect(html).toContain('data-xdt-img-index="2"');
+    expect(html).toContain('window.__cindyUpdateMarkdownImage');
+    expect(html).toContain("markdown-image:open:");
+    expect(html).toContain("status==='deferred'");
+    expect(html).toContain('xdt-md-img-deferred');
+    // Only truly unresolvable slots (`xdt-md-img-error`) block click-to-open;
+    // deferred slots remain tappable to open full-res ImageLightbox on demand.
+    expect(html).toContain("host.classList.contains('xdt-md-img-error')");
+    expect(html).not.toContain("host.classList.contains('xdt-md-img-deferred')");
+  });
+
+  it('keeps explicit empty imageSources allowlist sealed even if interactiveImages is set', () => {
+    const html = buildSelectableMarkdownHtml('![secret](https://evil.test/x.png)', {
+      imageSources: new Map(),
+      interactiveImages: true,
+    });
+    expect(html).not.toContain('https://evil.test/x.png');
+    expect(html).not.toContain('__cindyUpdateMarkdownImage');
+    expect(html).toContain('<span class="xdt-image-chip">secret</span>');
+  });
+});

@@ -32,6 +32,26 @@ const session = {
 const catalog: Pick<Catalog, 'providers'> = { providers: [provider('openai')] };
 
 describe('session context read projection', () => {
+  // Unit regression: wire IDs accepted by selection must retain their route's
+  // capacity; aliases must not change exact-match priority or borrow capacity.
+  it('shares exact-first alias matching with window bounds and rejects ambiguous routes', () => {
+    const route = provider('local');
+    route.routing['claude-code'] = {
+      upstream: 'https://example.invalid',
+      authStrategy: 'oauth-passthrough',
+      modelIdRewrite: { stripPrefix: 'gateway/' },
+    };
+    const routes = { providers: [route] };
+    const wire = `gateway/${model.id}`;
+    expect(resolveVerifiedContextWindow(routes, 'claude-code', 'local', wire)).toBe(272_000);
+    expect(resolveRouteContextWindowBounds(routes, 'claude-code', 'local', wire)?.maxWindow).toBe(272_000);
+    route.models['claude-code']!.push({ ...model, id: wire, contextWindow: 64_000 });
+    expect(resolveVerifiedContextWindow(routes, 'claude-code', 'local', wire)).toBe(64_000);
+    route.models['claude-code']!.push({ ...model, id: wire });
+    expect(resolveVerifiedContextWindow(routes, 'claude-code', 'local', wire)).toBeNull();
+    expect(resolveVerifiedContextWindow({ providers: [provider('a'), provider('b')] },
+      'claude-code', null, model.id)).toBeNull();
+  });
   it.each(['claude-code', 'codex', 'pi'] as const)('keeps %s history protection bounded when the budget exceeds capacity', (agent) => {
     const routes = { providers: [provider('local', { ...model, contextWindow: 128_000 })] };
     const target = resolveVerifiedContextWindow(routes, agent, 'local', model.id, 1_000_000);

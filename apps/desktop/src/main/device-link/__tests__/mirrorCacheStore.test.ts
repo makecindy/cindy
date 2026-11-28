@@ -759,6 +759,19 @@ describe('deviceId / sessionId 归一化', () => {
 });
 
 describe('session list', () => {
+  // Unit regression: legacy rows have only workingDir to match a cached project alias.
+  it('preserves a long legacy alias key across disk writes', async () => {
+    const workingDir = '/repo/' + 'long-directory/'.repeat(20) + 'app';
+    const alias = { projectKey: `local:${workingDir}`, alias: 'My project' };
+    await cache().writeSessionList([{ deviceId: 'mac', deviceName: 'Mac',
+      projectAliases: { platform: 'darwin', aliases: [alias] },
+      sessions: [{ id: 's1', status: 'active', workingDir }],
+    }]);
+    const [device] = await cache().readSessionList();
+    expect(device.sessions[0].workingDir).toBe(workingDir);
+    expect(device.projectAliases?.aliases).toEqual([alias]);
+  });
+
   // #7972: cold-start/offline list projection must retain project identity, not cwd.
   // Unit round trip with a new cache instance; remote POSIX paths, including old payloads.
   it.each([{ projectDir: `/projects/${'long-project/'.repeat(24)}` }, { projectDir: null }, {}])(
@@ -789,6 +802,7 @@ describe('session list', () => {
             title: 'T',
             snoozedUntil: '2026-11-12T09:00:00.000Z',
             snoozedAt: '2026-11-12T08:00:00.000Z',
+            archivedAt: '2026-11-12T10:00:00.000Z',
             createdAt: '2026-01-01T00:00:00.000Z',
             lastActivityAt: '2026-01-02T00:00:00.000Z',
             deviceLinkConnectionStatus: 'connected',
@@ -799,7 +813,11 @@ describe('session list', () => {
     const devices = await c.readSessionList();
     expect(devices).toHaveLength(1);
     expect(devices[0].sessions[0].lastActivityAt).toBe('2026-01-02T00:00:00.000Z');
-    expect(devices[0].sessions[0]).toMatchObject({ snoozedUntil: '2026-11-12T09:00:00.000Z', snoozedAt: '2026-11-12T08:00:00.000Z' });
+    expect(devices[0].sessions[0]).toMatchObject({
+      snoozedUntil: '2026-11-12T09:00:00.000Z',
+      snoozedAt: '2026-11-12T08:00:00.000Z',
+      archivedAt: '2026-11-12T10:00:00.000Z',
+    });
     expect(devices[0].sessions[0]).not.toHaveProperty('deviceLinkConnectionStatus');
   });
 

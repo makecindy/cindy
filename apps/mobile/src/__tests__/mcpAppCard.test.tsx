@@ -168,7 +168,7 @@ vi.mock('react-native', () => ({
   StyleSheet: { create: (value: unknown) => value, hairlineWidth: 1 },
   Platform: { get OS() { return state.platform; } },
   AppState: {
-    currentState: 'active',
+    get currentState() { return state.foreground; },
     addEventListener: (_name: string, listener: (state: string) => void) => {
       state.appStateListeners.add(listener);
       return { remove: () => state.appStateListeners.delete(listener) };
@@ -244,6 +244,10 @@ let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 let ownerTestCounter = 0;
 const render = (children: React.ReactNode) => root.render(<McpAppViewsProvider>{children}</McpAppViewsProvider>);
+const changeAppState = (value: string) => {
+  state.foreground = value;
+  for (const listener of state.appStateListeners) listener(value);
+};
 beforeEach(() => {
   vi.useFakeTimers();
   authOwnerTesting.reset();
@@ -254,6 +258,7 @@ beforeEach(() => {
   state.mounts = 0;
   state.webviews = [];
   state.surfaceAvailable = true;
+  state.foreground = 'active';
   state.appStateListeners.clear();
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   state.invoke.mockReset();
@@ -661,16 +666,41 @@ it('does not reuse a previous account height', async () => {
   expect(state.props.style.height).toBe(320);
 });
 
+// #12457 unit/jsdom: the existing background test only covers real shutdown.
+// A transient iOS inactive event must leave the card slot and its live document in place.
+it('retains the live iOS card and its draft through a transient inactive state', async () => {
+  state.platform = 'ios';
+  const close = vi.fn(async () => {});
+  state.prepare.mockResolvedValue({ ...nativeDocument, close });
+  await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" />));
+  const webview = container.querySelector('[data-testid="mcp-webview"]')!;
+  const slot = container.querySelector('[data-slot]');
+  expect(slot).not.toBeNull();
+  const draft = document.createElement('input');
+  webview.append(draft);
+  draft.value = 'unsaved draft';
+
+  await act(async () => changeAppState('inactive'));
+  expect(container.querySelector('[data-slot]')).toBe(slot);
+  await act(async () => changeAppState('active'));
+  expect(container.querySelector('[data-testid="mcp-webview"] input')).toBe(draft);
+  expect(draft.value).toBe('unsaved draft');
+  expect(close).not.toHaveBeenCalled();
+  const ops = state.invoke.mock.calls.map(([, , [, input]]) => input.op);
+  expect(ops.filter((op) => op === 'open' || op === 'teardown')).toEqual(['open']);
+});
+
 it('reopens a fresh View after background shutdown without replaying App tools', async () => {
   const close = vi.fn(async () => {});
   state.prepare.mockResolvedValue({ ...nativeDocument, close });
   await act(async () => render(<McpAppCard deviceId="device" sessionId="task" clientId="card" title="App" />));
-  const background = (value: string) => { for (const listener of state.appStateListeners) listener(value); };
   const original = container.querySelector('[data-host]')?.getAttribute('data-host');
-  await act(async () => background('background'));
+  await act(async () => changeAppState('background'));
   expect(container.querySelector('[data-slot]')).toBeNull();
   expect(close).toHaveBeenCalledOnce();
-  await act(async () => background('active'));
+  await act(async () => changeAppState('inactive'));
+  expect(container.querySelector('[data-slot]')).toBeNull();
+  await act(async () => changeAppState('active'));
   expect(container.querySelector('[data-host]')?.getAttribute('data-host')).not.toBe(original);
   const ops = state.invoke.mock.calls.map(([, , [, input]]) => input.op);
   expect(ops.filter((op) => op === 'open')).toHaveLength(2);

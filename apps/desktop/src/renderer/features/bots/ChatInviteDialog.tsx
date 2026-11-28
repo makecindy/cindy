@@ -1,9 +1,10 @@
+import { BOT_GROUP_PERSONAL_REPLIES_ENABLED } from '@cindy/maker-shared/botGroupChat';
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { useTranslation } from 'react-i18next';
 import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
@@ -116,7 +117,7 @@ export function ChatInviteDialog({ groupId, initialLink = '', malformedLink = fa
         }
         // Already a member: the invitation's only remaining purpose is to open the group.
         if (result.joined) { onJoined?.(result.groupId); onClose(); return; }
-        const status = await api().status().catch(() => undefined);
+        const status = BOT_GROUP_PERSONAL_REPLIES_ENABLED ? await api().status().catch(() => undefined) : undefined;
         if (!current()) return;
         setMaskSupported(status?.personalMask === true);
         setPreview(result); setNow(Date.now());
@@ -181,8 +182,10 @@ export function ChatInviteDialog({ groupId, initialLink = '', malformedLink = fa
         {!fromLink && (!groupId || link) && <Input aria-label={t(key('inviteLink'))} value={link} readOnly={!!groupId} disabled={busy || revoked}
           size={groupId ? 'md' : 'lg'} inputClassName={groupId ? 'text-12 text-[var(--text-secondary)]' : undefined}
           placeholder={t(key('pasteLink'))} onChange={value => { setLink(value); setPreview(null); setError(''); operation.current = crypto.randomUUID(); }} />}
-        {!groupId && preview && maskSupported && <label className="flex min-h-10 items-center justify-between gap-4 text-13">
-          <span>{t('bots.groupChat.mask.joinSetup')}</span><Switch checked={configureMask} disabled={busy} onCheckedChange={setConfigureMask} aria-label={t('bots.groupChat.mask.joinSetup')} />
+        {!groupId && preview && maskSupported && <label className="flex min-h-10 cursor-pointer items-center gap-2 text-13">
+          {/* Applied only when the user clicks Join: Checkbox, not Switch (DESIGN.md §4). */}
+          <Checkbox checked={configureMask} disabled={busy} onChange={event => setConfigureMask(event.currentTarget.checked)} />
+          <span>{t('bots.groupChat.mask.joinSetup')}</span>
         </label>}
         {fromLink && !preview && !error && <p role="status" className="text-13 leading-normal text-[var(--text-secondary)]">{t(key('loadingInvite'))}</p>}
         {preview && <div className="space-y-1 rounded-lg bg-[var(--surface-elevated)] p-3">

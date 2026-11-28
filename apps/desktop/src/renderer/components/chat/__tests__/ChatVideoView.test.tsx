@@ -297,6 +297,30 @@ it('releases the video source when the preview closes', () => {
   expect(video.getAttribute('src')).toBeNull();
   expect(load).toHaveBeenCalledOnce();
 });
+
+// Tier 1, #12416: Chromium can autoplay a detached media element as soon as it
+// receives a source. An abandoned React render never runs effects or cleanups.
+// Mount one preview and observe the source assignment at the DOM boundary.
+it.each(['video', 'audio'] as const)('loads preview %s only after the element is mounted', (kind) => {
+  const sourceAssignments: boolean[] = [];
+  const setAttribute = Element.prototype.setAttribute;
+  vi.spyOn(HTMLMediaElement.prototype, 'setAttribute').mockImplementation(function (
+    this: HTMLMediaElement,
+    name: string,
+    value: string,
+  ) {
+    if (name === 'src') sourceAssignments.push(this.isConnected);
+    setAttribute.call(this, name, value);
+  });
+  const view = render(<VideoLightbox {...props} kind={kind} onClose={vi.fn()} />, {
+    wrapper: Tooltip.Provider,
+  });
+
+  expect(sourceAssignments).toEqual([true]);
+  expect(document.querySelector(kind)?.getAttribute('src')).toBe(props.src);
+  view.unmount();
+});
+
 // Same defect, second exit path: a collection preview swaps or closes by
 // unmounting this component, which never runs its own close handler. Tier 1,
 // minimum input: one mounted preview, then unmount.

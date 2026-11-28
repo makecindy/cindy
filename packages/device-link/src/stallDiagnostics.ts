@@ -3,6 +3,7 @@ import type { InvokePayload } from './protocol.js';
 import type { RemoteActionInvokeRequest } from './remoteResources.js';
 import { parseSharedTaskPeer } from './sharedTaskPeer.js';
 import { parseProviderSharePeer } from './providerSharePeer.js';
+import { REMOTE_AGENT_CHANNEL } from './remoteAgent.js';
 
 // Scoped sharing has a separate authorization list; this label is for logs only.
 export const PROVIDER_SHARE_INSIGHTS_DIAGNOSTIC_CHANNEL = 'provider-share:insights:v1';
@@ -36,6 +37,25 @@ export function diagnosticRef(id: string | undefined): string {
 }
 
 export function diagnosticOperation(payload: InvokePayload): string {
+  if (payload.channel === REMOTE_AGENT_CHANNEL) {
+    const input = payload.args?.[0];
+    if (!input || typeof input !== 'object') return 'other-remote-agent';
+    const { op, method } = input as { op?: unknown; method?: unknown };
+    // Diagnostic vocabulary only, never permission or retry classification.
+    // Do not decode compressed payloads or retain caller-defined names/content.
+    switch (op) {
+      case 'caps': case 'open': case 'poll': case 'upload': case 'reply': case 'push': case 'close':
+      case 'allocate': case 'direct-locate': case 'direct-switch': case 'direct-release':
+        return op;
+      case 'call':
+        switch (method) {
+          case 'send': case 'steer': case 'abort': case 'requestGracefulStop': case 'setModel':
+            return `call:${method}`;
+          default: return 'call:other';
+        }
+      default: return 'other-remote-agent';
+    }
+  }
   if (payload.channel !== 'maker:remote-resources:invoke') return diagnosticChannel(payload.channel);
   const input = payload.args?.[0];
   if (!input || typeof input !== 'object') return 'unknown';

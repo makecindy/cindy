@@ -68,6 +68,7 @@ Use for the UI surfaces and interactions the plugin actually exposes; mobile pag
 - [插件轻提示与未读角标 notify / badge（§4.9）](references/plugin-notifications.md)
 - [插件目录选择 pick（§4.14）](references/plugin-directory-picker.md)
 - [插件面板预览 preview（§4.15）](references/plugin-panel-preview.md)
+- [插件接管打开的文件类型 fileOpener（§4.25）](references/plugin-file-opener.md)
 - [插件随包浏览器扩展 browserExtension（§4.24）](references/plugin-browser-extension.md)
 - [插件确认弹窗 confirm（§4.18）](references/plugin-confirm-dialog.md)
 - [插件表单弹窗 form（§4.19）](references/plugin-form-dialog.md)
@@ -77,7 +78,7 @@ Use for the UI surfaces and interactions the plugin actually exposes; mobile pag
 
 Use when the plugin listens for events, screens automation runs or interacts with Agent tasks.
 
-- [插件提交例行任务事件 routineEvents（兼容保留，已不再触发）](references/plugin-routine-events.md)
+- [插件事件 routineEvents：叫醒用户选定的自动化（收到消息、新邮件等）](references/plugin-routine-events.md)
 - [插件事件订阅 subscribe（§4.6）](references/plugin-event-subscriptions.md)
 - [插件实时旁听工具执行过程](references/plugin-tool-observation.md)
 - [插件处理 Agent 回复的消息钩子（§4.6.1）](references/plugin-message-hooks.md)

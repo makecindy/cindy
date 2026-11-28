@@ -57,6 +57,8 @@ function setup(mode: 'cloud' | 'local' | 'signed-out', passive = false) {
   const deps = {
     authRefreshOverride: null,
     stableOwnerPostCommitCoordinator: coordinator,
+    // Not a managed instance, so initialize keeps the ordinary path.
+    getInstanceConfig: () => null,
     isPassiveSharedUserDataInstance: () => passive,
     getActiveAppSession: () => state,
     isOwnerChangeShellPending: () => !stable,
@@ -183,7 +185,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
     } finally { hostTools.setHostToolProviders([], original); }
   });
 
-  // Unit, #12177: resident activation can precede the DB/model startup hook.
+  // Unit, #12177 / #12376: resident activation can precede the DB/model startup hook.
   // The same-owner cases above never start with a discarded signed-out Maker.
   // One installed, approved discovery plugin must succeed on its first call.
   it('registers the new owner’s Host tools before post-login resident activation', async () => {
@@ -283,6 +285,38 @@ describe('authentication does not wait for optional plugin provisioning', () => 
       hostTools.setHostToolProviders([], signedOut);
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // The optional early registration must neither construct a signed-out or
+  // unconfigured Maker nor prevent the existing provisioning fallback on failure.
+  // Unit tier, production stable-owner callback; one throwing constructor is enough.
+  it.each([
+    { configured: false, ownerId: 'owner', attempts: 0 },
+    { configured: true, ownerId: null, attempts: 0 },
+    { configured: true, ownerId: 'owner', attempts: 1 },
+  ])('keeps owner provisioning available when early registration cannot run: %j', async scenario => {
+    let task!: StableOwnerPostCommitTask;
+    const construct = vi.fn(() => { throw new Error('synthetic initialization failure'); });
+    const provision = vi.fn(async () => 'deferred');
+    const warn = vi.fn();
+    const deps = {
+      authManager: { setStableOwnerPostCommitTask: (callback: StableOwnerPostCommitTask) => { task = callback; } },
+      isAppSessionBoundaryPending: () => false,
+      activeOwnerScopeKey: () => 'stable-scope',
+      getActiveAppSession: () => ({ dataOwnerId: scenario.ownerId }),
+      getMakerIfReady: () => null,
+      makerProviderRefreshConfigured: scenario.configured,
+      getMakerCore: construct,
+      ownerBackgroundLog: { warn },
+      scheduleNativeHistoryBackupCleanup: () => {},
+      builtinPostCommitStep: { run: provision },
+    };
+    new Function(...Object.keys(deps), stableTaskCode)(...Object.values(deps));
+    await expect(task({ reason: 'owner-commit', scopeKey: 'stable-scope', dataOwnerId: scenario.ownerId }))
+      .resolves.toBe('deferred');
+    expect(provision).toHaveBeenCalledOnce();
+    expect(construct).toHaveBeenCalledTimes(scenario.attempts);
+    expect(warn).toHaveBeenCalledTimes(scenario.attempts);
   });
 
   it.each([false, true])('settles the startup boundary push even with notify=false (teardown fails: %s)', async (fails) => {

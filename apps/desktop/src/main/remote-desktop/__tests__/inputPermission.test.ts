@@ -1,7 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readDesktopInputPermission, requestDesktopInputPermission, resolveDesktopInputBinary } from '../inputHost';
+import { readDesktopInputAccess, readDesktopInputPermission, requestDesktopInputPermission, resolveDesktopInputBinary } from '../inputHost';
 import { readLinuxDesktopInputSupport } from '../linuxInput';
 
 const mocks = vi.hoisted(() => ({
@@ -104,12 +104,25 @@ describe('desktop input permission detection', () => {
     expect(await readDesktopInputPermission()).toBe('unknown');
   });
 
+  // macOS 27.3 beta 2 (26C5047e): with control allowed for chosen apps only, the
+  // helper answers `chosen-apps`. It stays not-ready (macOS drops system-wide input);
+  // only local settings learn why. A helper older than --scope answers as before.
+  it.each([
+    ['chosen-apps\n', { status: 'missing', chosenAppsOnly: true }],
+    ['permission\n', { status: 'missing' }],
+    ['ready\n', { status: 'granted' }],
+  ])('reads remote input helper answer %j as %j', async (stdout, expected) => {
+    mocks.exec.mockResolvedValue({ stdout });
+    expect(await readDesktopInputAccess('postEvents')).toEqual(expected);
+    expect(await readDesktopInputPermission('postEvents')).toBe(expected.status);
+  });
+
   // Remote keyboard/mouse control needs event posting. Other users of the same
   // helper (window inspection and the away guard) request only their AX access.
   it('checks event posting passively for remote control and requests it only on explicit action', async () => {
     mocks.exec.mockResolvedValue({ stdout: 'permission\n' });
     expect(await readDesktopInputPermission('postEvents')).toBe('missing');
-    expect(mocks.exec.mock.calls[0][1]).toEqual(['--check', '--post-events']);
+    expect(mocks.exec.mock.calls[0][1]).toEqual(['--check', '--post-events', '--scope']);
     const signal = new AbortController().signal;
     expect(await requestDesktopInputPermission(() => true, signal, 'postEvents')).toBe(false);
     expect(mocks.exec.mock.calls[1][1]).toEqual(['--request-permission', '--post-events']);

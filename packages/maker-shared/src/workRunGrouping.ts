@@ -1,5 +1,38 @@
 import { HISTORY_GAP_SPLIT_MS } from "./historyGap.js";
 
+interface LegacyContextCard {
+  clientId: string;
+  systemCardType?: string;
+  systemCardData?: Readonly<Record<string, unknown>>;
+}
+
+/** Fold a single loaded companion work group and keep its covered navigation IDs. */
+export function collapseLegacyIdleGapCards<T extends object>(
+  items: readonly T[],
+  readCard: (item: T) => LegacyContextCard | undefined,
+): (T & { collapsedClientIds?: readonly string[] })[] {
+  const visible: (T & { collapsedClientIds?: readonly string[] })[] = [];
+  let previous: LegacyContextCard | undefined;
+  let collapsedClientIds: string[] | undefined;
+  for (const item of items) {
+    const card = readCard(item);
+    const current = card?.systemCardType === 'context-rebuild' && card.systemCardData?.reason === 'idle-gap'
+      ? card : undefined;
+    if (previous && current
+      && previous.systemCardData?.handoff === current.systemCardData?.handoff
+      && previous.systemCardData?.handoffCoverage === current.systemCardData?.handoffCoverage) {
+      collapsedClientIds ??= [];
+      collapsedClientIds.push(previous.clientId);
+      visible[visible.length - 1] = { ...item, collapsedClientIds };
+    } else {
+      visible.push(item);
+      collapsedClientIds = undefined;
+    }
+    previous = current;
+  }
+  return visible;
+}
+
 /** Platform projections own item shapes, card visibility, timestamps and stable keys. */
 export interface WorkRunGroupingAdapter<TItem, TChild extends TItem> {
   isUserBoundary(item: TItem): boolean;

@@ -72,7 +72,12 @@ import {
 import { resolveScriptCapabilityStatuses } from '../scheduler-host/script-capability-status.js';
 import { getGhostManager } from '../cindy-brain/index.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
-import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import {
+  captureDataOwnerBroadcastScope,
+  isDataOwnerBroadcastScopeCurrent,
+  tapWindowBroadcast,
+  type DataOwnerBroadcastScope,
+} from '../device-link/broadcast-tap.js';
 import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { getScheduleWebhookHost, scheduleWebhookReceiver } from '../scheduler-host/webhook/runtime.js';
 import type { ScheduleWebhookHost } from '../scheduler-host/webhook/index.js';
@@ -109,8 +114,69 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
+/**
+ * 旧版远端桌面 / 旧版手机在周期任务 skipped 时不读 skipped 事件上的排期时间戳,只认 changed 刷新列表下次时间。
+ * 在源端按 scheduleId 做有界合并(10s 静默 / 30s 封顶),只向 device-link tap 发一条合并后的 changed,
+ * 不广播给本机 BrowserWindow、也不触发本机 ScheduleWebhookHost / 用量对账;若期间已有真实 changed 或切账号则取消。
+ */
+const REMOTE_SKIPPED_CHANGED_QUIET_MS = 10_000;
+const REMOTE_SKIPPED_CHANGED_MAX_WAIT_MS = 30_000;
+const pendingRemoteSkippedChanged = new Map<
+  string,
+  {
+    firstAt: number;
+    lastRunId: string;
+    ownerScope: DataOwnerBroadcastScope;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
+
+function cancelRemoteSkippedChanged(scheduleId: string): void {
+  const existing = pendingRemoteSkippedChanged.get(scheduleId);
+  if (!existing) return;
+  clearTimeout(existing.timer);
+  pendingRemoteSkippedChanged.delete(scheduleId);
+}
+
+export function clearCoalescedRemoteSkippedChanges(): void {
+  for (const { timer } of pendingRemoteSkippedChanged.values()) clearTimeout(timer);
+  pendingRemoteSkippedChanged.clear();
+}
+
+function scheduleCoalescedRemoteSkippedChanged(scheduleId: string, runId: string): void {
+  if (!scheduleId || !runId) return;
+  const now = Date.now();
+  const ownerScope = captureDataOwnerBroadcastScope();
+  const existing = pendingRemoteSkippedChanged.get(scheduleId);
+  if (existing) clearTimeout(existing.timer);
+  const firstAt = existing?.firstAt ?? now;
+  const delay = Math.min(
+    REMOTE_SKIPPED_CHANGED_QUIET_MS,
+    Math.max(0, firstAt + REMOTE_SKIPPED_CHANGED_MAX_WAIT_MS - now),
+  );
+  const timer = setTimeout(() => {
+    pendingRemoteSkippedChanged.delete(scheduleId);
+    if (!isDataOwnerBroadcastScopeCurrent(ownerScope)) return;
+    tapWindowBroadcast(
+      MAKER_PUSH.SCHEDULE_EVENT,
+      { type: 'changed', scheduleId, skippedRunId: runId },
+      ownerScope.ownerStamp,
+    );
+  }, delay);
+  timer.unref?.();
+  pendingRemoteSkippedChanged.set(scheduleId, { firstAt, lastRunId: runId, ownerScope, timer });
+}
+
 function broadcastSchedulerEvent(event: SchedulerEvent): void {
+  if (event.type === 'changed') {
+    cancelRemoteSkippedChanged(event.scheduleId);
+  } else if (event.type === 'ready') {
+    clearCoalescedRemoteSkippedChanges();
+  }
   broadcast(MAKER_PUSH.SCHEDULE_EVENT, event);
+  if (event.type === 'skipped') {
+    scheduleCoalescedRemoteSkippedChanged(event.scheduleId, event.runId);
+  }
   try {
     getAgentIslandService()?.handleScheduleEvent(event);
   } catch (err) {
@@ -174,6 +240,7 @@ export function setSchedulerReady(scheduler: Scheduler, storage: DrizzleSchedule
  */
 export function resetSchedulerReady(): void {
   _current = null;
+  clearCoalescedRemoteSkippedChanges();
 }
 
 function awaitReady(): Promise<SchedulerDeps> {
@@ -189,6 +256,7 @@ function awaitReady(): Promise<SchedulerDeps> {
 export function __resetReadinessForTest(): void {
   _current = null;
   _pending = [];
+  clearCoalescedRemoteSkippedChanges();
 }
 
 export async function awaitReadyWithTimeout(): Promise<SchedulerDeps> {

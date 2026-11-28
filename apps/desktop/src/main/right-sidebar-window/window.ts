@@ -28,6 +28,7 @@ import { installSelectionContextMenu } from '../selection-context-menu.js';
 import { applyAppearanceToWindow } from '../appearance-settings-ipc.js';
 import { markRsbWindowWebContentsId } from './registry.js';
 import { installWindowHiddenBroadcast } from '../windowHiddenBroadcast.js';
+import { installMacFullscreenDesyncRecovery } from '../macFullscreenRecovery.js';
 
 const log = createLogger('right-sidebar-window');
 
@@ -112,6 +113,11 @@ export function createSidebarHostWindow(options: SidebarHostWindowOptions): Brow
   });
   win.on('leave-full-screen', () => {
     if (!win.isDestroyed()) win.webContents.send('fullscreen-change', false);
+  });
+  installMacFullscreenDesyncRecovery(win, {
+    windowLabel: options.logLabel,
+    trafficLightPosition: { x: 12, y: 16 },
+    minSize: { width: options.minWidth, height: options.minHeight },
   });
   markRsbWindowWebContentsId(win.webContents.id);
   markAppContentWindow(win);

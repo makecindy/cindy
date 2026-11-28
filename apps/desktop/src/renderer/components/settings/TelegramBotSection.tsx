@@ -1,7 +1,7 @@
 import { imBotSettings } from './ImBotSection.settings-search';
 import { Button } from '@/components/ui/button';
 import { ImConnectionError, ImSavedConnectionRecovery } from './ImConnectionRecovery';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AlertTriangle,
@@ -18,8 +18,14 @@ import {
 
 import { cn } from '@/lib/utils';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { SettingsBlock, SettingsCard, SettingsRow } from '@/components/ui/settings-rows';
+import { Switch } from '@/components/ui/switch';
 import { describeTelegramStatusFailure, useTelegramBot } from '@/hooks/useTelegramBot';
-import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
+import {
+  formatImDefaultRouteSummary,
+  ImChannelSettingsCard,
+  useImChannelSettingsSummary,
+} from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { TelegramRemoteDevices } from './TelegramRemoteDevices';
 import {
@@ -27,6 +33,20 @@ import {
   TelegramGroupActivationSettings,
   TelegramPersonaSettings,
 } from './TelegramBehaviorSettings';
+import {
+  ImBotBlockCard,
+  ImBotPersonalWay,
+  ImBotSetupGuide,
+  ImBotSetupRow,
+  ImBotStatusText,
+  ImBotSubPage,
+  ImCompanionBotsSection,
+  useImBotNav,
+  type ImBotStatusTone,
+} from './ImBotPageParts';
+import { ImChatSettingsCard } from './ImChatSettingsSection';
+import { ImChannelProjectRows } from './ImChannelProjectRows';
+import { ImReplyTargetField, useImReplyTarget } from './ImReplyTargetField';
 
 const TELEGRAM_BOTFATHER_URL = 'https://t.me/BotFather';
 
@@ -80,6 +100,57 @@ export function TelegramBotSection({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const controller = useTelegramBot();
+  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('telegram');
+  return (
+    <TelegramBotSectionView
+      expanded={expanded}
+      onToggle={onToggle}
+      controller={controller}
+      routeSummary={routeSummary}
+      defaultSettings={
+        <ImDefaultSettingsSection channel="telegram" embedded onSummaryChange={setRouteSummary} />
+      }
+      telegramSettings={
+        <>
+          <TelegramPersonaSettings />
+          <div className="h-px w-full bg-[var(--border-default)]" />
+          <TelegramBehaviorSettings />
+          <div className="h-px w-full bg-[var(--border-default)]" />
+          <TelegramGroupActivationSettings />
+        </>
+      }
+      renderRemoteDevices={(appId) => <TelegramRemoteDevices selfAppId={appId} />}
+    />
+  );
+}
+
+export function TelegramBotSectionView({
+  controller,
+  idPrefix = '',
+  canDisconnect = true,
+  routeSummary,
+  defaultSettings,
+  connectionDetails,
+  telegramSettings,
+  renderRemoteDevices,
+  canToggleOnline = true,
+  expanded,
+  onToggle,
+}: {
+  idPrefix?: string;
+  canDisconnect?: boolean;
+  controller: ReturnType<typeof useTelegramBot>;
+  routeSummary: import('./ImDefaultSettingsSection').ImDefaultSettingsSummary | null;
+  defaultSettings: React.ReactNode;
+  connectionDetails?: React.ReactNode;
+  telegramSettings?: React.ReactNode;
+  renderRemoteDevices?(appId: string): React.ReactNode;
+  canToggleOnline?: boolean;
+
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const {
     token,
     setToken,
@@ -88,6 +159,7 @@ export function TelegramBotSection({
     status,
     botUsername,
     validationError,
+    saveTimedOut,
     isSaving,
     isDisconnecting,
     isTogglingOnline,
@@ -95,11 +167,10 @@ export function TelegramBotSection({
     connect,
     disconnect,
     setOnline,
-  } = useTelegramBot();
+  } = controller;
 
   const [showToken, setShowToken] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
-  const [routeSummary, setRouteSummary] = useImChannelSettingsSummary('telegram');
   const { confirm } = useConfirmDialog();
   const { t } = useTranslation();
 
@@ -141,18 +212,16 @@ export function TelegramBotSection({
   }, []);
 
   // 非 idle = 主进程已有保存的凭证(连接中/冲突/失败也算),表单区给小垃圾桶解绑入口。
-  const hasSavedCreds = status.kind !== 'idle';
+  // 新绑定刚超时: 凭证已回滚, 表单里只是用户刚填的内容 —— 不显示解绑与「重新连接」,
+  // 重试就是用原输入再点一次「连接」。
+  const hasSavedCreds = status.kind !== 'idle' && !saveTimedOut;
 
   return (
     <ImChannelSettingsCard
-      id={imBotSettings.telegram.targetId}
+      id={`${idPrefix}${imBotSettings.telegram.targetId}`}
       title={t(imBotSettings.telegram.titleKey)}
       description={t('settings.telegramBot.description')}
-      routeSummary={
-        routeSummary
-          ? `${t(`settings.imBot.defaults.agents.${routeSummary.agentKind}`)} · ${routeSummary.model}`
-          : null
-      }
+      routeSummary={formatImDefaultRouteSummary(routeSummary, t)}
       expanded={expanded}
       onToggle={onToggle}
       status={
@@ -178,24 +247,23 @@ export function TelegramBotSection({
         </span>
       }
     >
-      <ImDefaultSettingsSection channel="telegram" embedded onSummaryChange={setRouteSummary} />
+      {defaultSettings}
       <div className="h-px w-full bg-[var(--border-default)]" />
-      <TelegramPersonaSettings />
-      <div className="h-px w-full bg-[var(--border-default)]" />
-      <TelegramBehaviorSettings />
-      <div className="h-px w-full bg-[var(--border-default)]" />
-      <TelegramGroupActivationSettings />
+      {telegramSettings}
       <div className="h-px w-full bg-[var(--border-default)]" />
       {hasBinding(status) ? (
         <ConnectedCard
+          canDisconnect={canDisconnect}
+          connectionDetails={connectionDetails}
           status={status}
           botLabel={botUsername ? `@${botUsername}` : status.appId}
           ownerUserId={ownerUserId}
           isDisconnecting={isDisconnecting}
           isTogglingOnline={isTogglingOnline}
+          canToggleOnline={canToggleOnline}
           onDisconnect={() => void handleDisconnectClick()}
           onToggleOnline={() => void setOnline(status.kind === 'offline')}
-          remoteDevices={<TelegramRemoteDevices selfAppId={status.appId} />}
+          remoteDevices={renderRemoteDevices?.(status.appId)}
         />
       ) : (
         <div className="flex flex-col gap-3">
@@ -208,6 +276,7 @@ export function TelegramBotSection({
           <div className="relative">
             <input data-setting-id={imBotSettings.telegram.id}
               type={showToken ? 'text' : 'password'}
+              aria-label={t('settings.telegramBot.tokenLabel')}
               value={token}
               onChange={(e) => setToken(e.target.value)}
               placeholder={t('settings.telegramBot.tokenPlaceholder')}
@@ -243,6 +312,7 @@ export function TelegramBotSection({
           </label>
           <input data-setting-id={imBotSettings.telegram.id}
             type="text"
+            aria-label={t('settings.telegramBot.ownerUserIdLabel')}
             value={ownerUserId}
             onChange={(e) => setOwnerUserId(e.target.value)}
             placeholder={t('settings.telegramBot.ownerUserIdPlaceholder')}
@@ -263,6 +333,10 @@ export function TelegramBotSection({
               {validationError ? (
                 <p className="text-12 text-[var(--settings-error-text)]" role="alert">
                   {validationError}
+                </p>
+              ) : saveTimedOut ? (
+                <p className="text-12 text-[var(--settings-error-text)]" role="alert">
+                  {t('settings.telegramBot.connectTimedOut')}
                 </p>
               ) : status.kind === 'error' ? (
                 <ImConnectionError
@@ -362,11 +436,14 @@ export function TelegramBotSection({
 
 /** 已绑定状态卡(已连接 / 已下线 / 被占用三档共用) —— 结构对齐 DiscordBotSection。 */
 function ConnectedCard(props: {
+  canDisconnect: boolean;
+  connectionDetails?: React.ReactNode;
   status: TelegramBoundStatus;
   botLabel: string;
   ownerUserId: string;
   isDisconnecting: boolean;
   isTogglingOnline: boolean;
+  canToggleOnline?: boolean;
   onDisconnect: () => void;
   onToggleOnline: () => void;
   /** 「我的其他设备」区块;无其他设备时组件自身渲染 null。 */
@@ -421,18 +498,20 @@ function ConnectedCard(props: {
           </div>
         </div>
       </div>
-      <div className="grid gap-2 text-12 text-[var(--settings-section-desc)]">
-        <div className="flex justify-between gap-4">
-          <span>{t('settings.telegramBot.connected.botLabel')}</span>
-          <span className="font-medium text-[var(--settings-section-title)]">{props.botLabel}</span>
+      {props.connectionDetails ?? (
+        <div className="grid gap-2 text-12 text-[var(--settings-section-desc)]">
+          <div className="flex justify-between gap-4">
+            <span>{t('settings.telegramBot.connected.botLabel')}</span>
+            <span className="font-medium text-[var(--settings-section-title)]">{props.botLabel}</span>
+          </div>
+          <div className="flex justify-between gap-4">
+            <span>{t('settings.telegramBot.connected.ownerLabel')}</span>
+            <span className="font-medium text-[var(--settings-section-title)]">
+              {props.ownerUserId || '—'}
+            </span>
+          </div>
         </div>
-        <div className="flex justify-between gap-4">
-          <span>{t('settings.telegramBot.connected.ownerLabel')}</span>
-          <span className="font-medium text-[var(--settings-section-title)]">
-            {props.ownerUserId || '—'}
-          </span>
-        </div>
-      </div>
+      )}
       <div className="flex gap-2 pt-1">
         {/* 下线/上线: 可逆且零数据损失, 不加二次确认(解绑才需要确认)。 */}
         <Button data-setting-id={imBotSettings.telegram.id}
@@ -441,7 +520,7 @@ function ConnectedCard(props: {
           loading={props.isTogglingOnline}
           type="button"
           onClick={props.onToggleOnline}
-          disabled={busy}
+          disabled={busy || props.canToggleOnline === false}
           className="flex-1"
         >
           {props.isTogglingOnline ? (
@@ -467,7 +546,7 @@ function ConnectedCard(props: {
           loading={props.isDisconnecting}
           type="button"
           onClick={props.onDisconnect}
-          disabled={busy}
+          disabled={!props.canDisconnect || busy}
           className="flex-1"
         >
           <Trash2 size={13} />
@@ -475,6 +554,274 @@ function ConnectedCard(props: {
         </Button>
       </div>
       {props.remoteDevices}
+    </div>
+  );
+}
+
+const statusTone: Record<TelegramBotTransportStatus['kind'], ImBotStatusTone> = {
+  idle: 'off',
+  connecting: 'progress',
+  connected: 'connected',
+  conflict: 'attention',
+  // 主动下线是用户自己选的正常状态, 不是故障 —— 中性灰。
+  offline: 'off',
+  error: 'error',
+};
+
+/** 主页列表那一行要的状态(与子页同一份 hook, 只读)。 */
+export function useTelegramListStatus(): { configured: boolean; tone: ImBotStatusTone; labelKey: string } {
+  const { status, saveTimedOut } = useTelegramBot();
+  return {
+    configured: status.kind !== 'idle' && !saveTimedOut,
+    tone: statusTone[status.kind],
+    labelKey: statusKey[status.kind],
+  };
+}
+
+/** 设置 → IM 机器人 → Telegram 里「你自己的机器人」, 以及它的更深一层页面。 */
+export function TelegramBotSettings() {
+  const bot = useTelegramBot();
+  const { status, botUsername, ownerUserId, isDisconnecting, isTogglingOnline, disconnect, setOnline } = bot;
+  const nav = useImBotNav();
+  const replyTarget = useImReplyTarget('telegram');
+  const toCompanion = replyTarget.supported && !!replyTarget.companionBotId;
+  const { confirm } = useConfirmDialog();
+  const { t } = useTranslation();
+  const name = t('settings.imBot.apps.telegram');
+
+  const handleDisconnectClick = useCallback(async () => {
+    const confirmed = await confirm({
+      title: t('settings.telegramBot.disconnectConfirm.title'),
+      description: t('settings.telegramBot.disconnectConfirm.description'),
+      confirmText: t('settings.telegramBot.disconnectConfirm.confirm'),
+      cancelText: t('settings.telegramBot.disconnectConfirm.cancel'),
+    });
+    if (!confirmed) return;
+    await disconnect();
+  }, [confirm, disconnect, t]);
+
+  const bound = hasBinding(status);
+  // 在填写页连上之后回到 Telegram 子页, 看到刚连好的机器人。
+  useEffect(() => {
+    if (bound && nav.page === 'setup') nav.back();
+  }, [bound, nav]);
+
+  switch (nav.page) {
+    case 'model':
+      return (
+        <ImBotSubPage title={t('settings.imBot.rows.model')} description={name}>
+          <ImBotBlockCard><ImDefaultSettingsSection channel="telegram" embedded /></ImBotBlockCard>
+        </ImBotSubPage>
+      );
+    case 'persona':
+      return (
+        <ImBotSubPage title={t('settings.imBot.rows.persona')} description={name}>
+          <ImBotBlockCard><TelegramPersonaSettings hideTitle /></ImBotBlockCard>
+        </ImBotSubPage>
+      );
+    case 'behavior':
+      return (
+        <ImBotSubPage title={t('settings.imBot.rows.behavior')} description={name}>
+          <ImBotBlockCard><TelegramBehaviorSettings hideTitle /></ImBotBlockCard>
+        </ImBotSubPage>
+      );
+    case 'groups':
+      return (
+        <ImBotSubPage title={t('settings.imBot.rows.groupReply')} description={name}>
+          <ImBotBlockCard><TelegramGroupActivationSettings hideTitle /></ImBotBlockCard>
+        </ImBotSubPage>
+      );
+    case 'setup':
+      return (
+        <ImBotSubPage title={t('settings.imBot.ways.personalSetupTitle')} description={t('settings.telegramBot.description')}>
+          <ImBotBlockCard><TelegramSetupForm bot={bot} onDisconnect={handleDisconnectClick} /></ImBotBlockCard>
+        </ImBotSubPage>
+      );
+  }
+
+  if (!bound) {
+    return (
+      <>
+        <ImBotPersonalWay id={imBotSettings.telegram.targetId} configured={false}>
+          {nav.multiWay ? (
+            <ImBotSetupRow settingId={imBotSettings.telegram.id} hint={t('settings.imBot.ways.personalSetupHint.telegram')}
+              status={status.kind === 'idle' ? undefined
+                : <ImBotStatusText tone={statusTone[status.kind]}>{t(statusKey[status.kind])}</ImBotStatusText>} />
+          ) : (
+            <ImBotBlockCard><TelegramSetupForm bot={bot} onDisconnect={handleDisconnectClick} /></ImBotBlockCard>
+          )}
+        </ImBotPersonalWay>
+        <ImCompanionBotsSection channel="telegram" />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <ImBotPersonalWay id={imBotSettings.telegram.targetId}>
+        <SettingsCard>
+          <ImReplyTargetField target={replyTarget} setting="telegram" />
+          {toCompanion ? null : <ImChannelProjectRows channel="telegram" appName={t('settings.imBot.apps.telegram')} settingId={imBotSettings.telegram.id} />}
+        </SettingsCard>
+        <SettingsCard>
+          <SettingsRow
+            title={t('settings.imBot.rows.groupReply')}
+            hint={t('settings.imBot.rows.groupReplyHint')}
+            chevron
+            onClick={() => nav.open('groups')}
+          />
+        </SettingsCard>
+        {toCompanion ? null : <ImChatSettingsCard channel="telegram" />}
+        {/* 交给伙伴后身份与分寸来自伙伴, 名字性格、表情引用这两项收起, 选回普通任务原样回来。 */}
+        {toCompanion ? null : (
+          <SettingsCard>
+            <SettingsRow title={t('settings.imBot.rows.persona')} chevron onClick={() => nav.open('persona')} />
+            <SettingsRow title={t('settings.imBot.rows.behavior')} chevron onClick={() => nav.open('behavior')} />
+          </SettingsCard>
+        )}
+        <SettingsCard>
+          <SettingsRow
+            title={botUsername ? `@${botUsername}` : status.appId}
+            hint={<ImBotStatusText tone={statusTone[status.kind]}>
+              {[t(statusKey[status.kind]), ownerUserId ? t('settings.imBot.rows.ownerId', { id: ownerUserId }) : null].filter(Boolean).join(' · ')}
+            </ImBotStatusText>}
+          />
+          {/* 下线/上线: 可逆且零数据损失, 不加二次确认(解绑才需要确认)。 */}
+          <SettingsRow
+            title={t('settings.imBot.rows.receiveHere')}
+            hint={t(status.kind === 'conflict' ? 'settings.telegramBot.connected.noteConflict' : 'settings.imBot.rows.receiveHereHint')}
+            trailing={<Switch data-setting-id={imBotSettings.telegram.id}
+              checked={status.kind !== 'offline'}
+              disabled={isTogglingOnline || isDisconnecting}
+              onCheckedChange={(next) => void setOnline(next)}
+              aria-label={t('settings.imBot.rows.receiveHere')} />}
+          />
+          <TelegramRemoteDevicesBlock appId={status.appId} />
+          <SettingsRow data-settings-search-action="Disconnect this bot account" danger title={t('settings.imBot.rows.unbind')}
+            disabled={isDisconnecting} onClick={() => void handleDisconnectClick()} />
+        </SettingsCard>
+      </ImBotPersonalWay>
+      <ImCompanionBotsSection channel="telegram" />
+    </>
+  );
+}
+
+/** 「我的其他设备」: 没有其他设备时组件自身渲染 null, 不留空块。 */
+function TelegramRemoteDevicesBlock({ appId }: { appId: string }) {
+  return (
+    <SettingsBlock className="empty:hidden">
+      <TelegramRemoteDevices selfAppId={appId} />
+    </SettingsBlock>
+  );
+}
+
+/** 填 Bot Token 与自己的用户 ID 的表单 + 创建步骤(未配好或连接失败时)。 */
+function TelegramSetupForm({ bot, onDisconnect }: { bot: ReturnType<typeof useTelegramBot>; onDisconnect: () => Promise<void> }) {
+  const { token, setToken, ownerUserId, setOwnerUserId, status, validationError, saveTimedOut, isSaving,
+    isDisconnecting, isTogglingOnline, canConnect, connect, setOnline } = bot;
+  const [showToken, setShowToken] = useState(false);
+  const { t } = useTranslation();
+  const guideSteps = useMemo(
+    () => [1, 2, 3, 4].map((step) => ({
+      title: t(`settings.telegramBot.guide.step${step}.title`),
+      body: t(`settings.telegramBot.guide.step${step}.body`),
+    })),
+    [t],
+  );
+  // 非 idle = 主进程已有保存的凭证(连接中/冲突/失败也算), 给小垃圾桶解绑入口。
+  // 新绑定刚超时: 凭证已回滚, 表单里只是刚填的内容 —— 不显示解绑与「重新连接」。
+  const hasSavedCreds = status.kind !== 'idle' && !saveTimedOut;
+  const inputClass = cn(
+    'h-[42px] w-full rounded-full pl-3.5',
+    'bg-[var(--settings-input-bg)] border border-[var(--settings-input-border)]',
+    'text-13 text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
+    'outline-none transition-colors focus:border-[var(--settings-input-border-focus)]',
+  );
+
+  return (
+    <div className="flex flex-col gap-3">
+      <label className="text-12 font-medium text-[var(--settings-section-desc)]">{t('settings.telegramBot.tokenLabel')}</label>
+      <div className="relative">
+        <input data-setting-id={imBotSettings.telegram.id}
+          type={showToken ? 'text' : 'password'}
+          aria-label={t('settings.telegramBot.tokenLabel')}
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder={t('settings.telegramBot.tokenPlaceholder')}
+          spellCheck={false}
+          autoComplete="off"
+          className={cn(inputClass, 'pr-10')}
+          style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+        />
+        <button data-setting-id={imBotSettings.telegram.id}
+          type="button"
+          onClick={() => setShowToken(!showToken)}
+          className="absolute right-[14px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
+          aria-label={showToken ? t('settings.telegramBot.hideToken') : t('settings.telegramBot.showToken')}
+        >
+          {showToken ? <Eye size={18} /> : <EyeOff size={18} />}
+        </button>
+      </div>
+
+      <label className="text-12 font-medium text-[var(--settings-section-desc)]">{t('settings.telegramBot.ownerUserIdLabel')}</label>
+      <input data-setting-id={imBotSettings.telegram.id}
+        type="text"
+        aria-label={t('settings.telegramBot.ownerUserIdLabel')}
+        value={ownerUserId}
+        onChange={(e) => setOwnerUserId(e.target.value)}
+        placeholder={t('settings.telegramBot.ownerUserIdPlaceholder')}
+        spellCheck={false}
+        autoComplete="off"
+        inputMode="numeric"
+        className={cn(inputClass, 'pr-3.5')}
+        style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
+      />
+
+      <div className="flex min-h-[18px] items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          {validationError ? (
+            <p className="text-12 text-[var(--settings-error-text)]" role="alert">{validationError}</p>
+          ) : saveTimedOut ? (
+            <p className="text-12 text-[var(--settings-error-text)]" role="alert">{t('settings.telegramBot.connectTimedOut')}</p>
+          ) : status.kind === 'error' ? (
+            <ImConnectionError message={describeTelegramStatusFailure(status, t)} details={status.reason} />
+          ) : (
+            <p className="text-12 text-[var(--settings-source-meta)]">{t('settings.telegramBot.formHint')}</p>
+          )}
+        </div>
+        {hasSavedCreds && (
+          <button data-setting-id={imBotSettings.telegram.id}
+            type="button"
+            onClick={() => void onDisconnect()}
+            disabled={isDisconnecting}
+            aria-label={t('settings.telegramBot.disconnectAria')}
+            className={cn(
+              'mr-1 flex shrink-0 items-center justify-center bg-transparent p-0',
+              'text-[var(--settings-trash-icon)] transition-colors hover:text-[var(--settings-trash-icon-hover)]',
+              isDisconnecting && 'cursor-not-allowed opacity-40',
+            )}
+          >
+            <Trash2 size={18} />
+          </button>
+        )}
+      </div>
+
+      {hasSavedCreds && ownerUserId && (
+        <ImSavedConnectionRecovery loading={isTogglingOnline} disabled={isSaving || isDisconnecting} onReconnect={() => setOnline(true)} />
+      )}
+
+      <Button data-setting-id={imBotSettings.telegram.id} variant="cta" size="lg" loading={isSaving} type="button"
+        onClick={() => void connect()} disabled={!canConnect} className="w-full">
+        {t('settings.telegramBot.connect')}
+      </Button>
+
+      <ImBotSetupGuide
+        settingId={imBotSettings.telegram.id}
+        title={t('settings.telegramBot.guide.title')}
+        steps={guideSteps}
+        linkLabel={t('settings.telegramBot.guide.openBotFather')}
+        onOpenLink={() => window.electronAPI.openExternal?.(TELEGRAM_BOTFATHER_URL)}
+      />
     </div>
   );
 }

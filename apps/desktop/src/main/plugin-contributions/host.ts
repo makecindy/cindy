@@ -518,7 +518,7 @@ export async function listMyPlugins(input: {
   });
   return {
     queriedAt: result.queriedAt,
-    plugins: result.plugins.map((item) => pluginView(item)),
+    plugins: result.plugins.map((item) => ({ ...pluginView(item), description: item.description })),
     nextCursor: result.nextCursor,
   };
 }

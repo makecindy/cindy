@@ -1,3 +1,4 @@
+export const BACKGROUND_STOP_GRACE_MS = 2_500;
 export const BACKGROUND_TRANSITION_TIMEOUT_MS = 4_000;
 
 export interface BackgroundConnectionDiagnostic {

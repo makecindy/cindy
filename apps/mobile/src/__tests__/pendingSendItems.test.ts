@@ -154,6 +154,25 @@ describe('reply before user echo', () => {
     ]);
   });
 
+  // Unit: a cached echo can be visible even when the legacy proof page missed.
+  // Annotate it in place and keep the later message; no duplicate or skip control.
+  it('keeps a visible user row in place while its delivery still needs confirmation', () => {
+    const initial = buildMobileMessageRenderItems([
+      row('sent', 'user', 0), row('reply', 'assistant', 1),
+    ], { isSessionStreaming: true });
+    const pending = build({
+      queue: [queued('sent')],
+      outbox: [outboxItem('sent', { historyConfirmation: 'unconfirmed' }), outboxItem('next')],
+      hiddenClientIds: new Set(['sent']),
+    });
+    expect(pending[0]).toMatchObject({ type: 'pending_send', key: 'message-sent',
+      historyConfirmation: 'unconfirmed', canCancel: false, actions: null });
+    const visible = mergePendingSendItems(initial, pending, NO_IDS);
+    expect(visible.map((entry) => entry.key)).toEqual(['message-sent', 'message-reply', 'message-next']);
+    expect(visible[0]).toEqual({ ...initial[0], historyConfirmation: 'unconfirmed' });
+    expect(visible[1]).toBe(initial[1]);
+  });
+
   it('invalidates the streaming prefix when a local user introduces a new turn boundary', () => {
     const old = [row('old-user', 'user', 0), { ...row('old-thinking', 'thinking', 1), content: { text: 'Old thought' } }];
     const previous = buildMobileStreamingRenderWindow({

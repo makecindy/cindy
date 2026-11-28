@@ -163,7 +163,7 @@ vi.mock('../providerShareHost.js', () => ({
   },
 }));
 const guest = vi.hoisted(() => ({ revision: 0, share: null as unknown }));
-vi.mock('../providerShareGuest.js', () => ({ startProviderShareGuest: vi.fn(), stopProviderShareGuest: vi.fn(), findReceivedShare: () => guest.share, providerShareAccessEpoch: () => guest.revision,
+vi.mock('../providerShareGuest.js', () => ({ startProviderShareGuest: vi.fn(), stopProviderShareGuest: vi.fn(), findReceivedShare: () => guest.share, providerShareAccessEpoch: () => guest.revision, providerShareReceivedChangeSequence: () => 7,
   getReceivedShares: () => received.shares, isReceivedSharesReady: () => received.ready }));
 vi.mock('../providerShareGuestPrefs.js', () => ({ configureProviderShareGuestPrefs: vi.fn(), invalidateProviderShareGuestPrefsCache: vi.fn() }));
 vi.mock('../providerShareGuestPrefsIpc.js', () => ({ setProviderShareCredentialConsentFromIpc: vi.fn() }));
@@ -171,6 +171,7 @@ vi.mock('../providerShareGuestPrefsIpc.js', () => ({ setProviderShareCredentialC
 import {
   openProviderShareJoin,
   executeProviderShareManagementCommand,
+  executeProviderShareGuestCommand,
   parseProviderShareCommand,
   registerProviderShareIpc,
   startProviderShareRuntime,
@@ -598,8 +599,9 @@ it.each(['catalog', 'received', 'stop'] as const)('forwards %s invalidation to r
   if (trigger === 'catalog') events.catalogChanged!('share:b-only');
   else if (trigger === 'received') events.changed([], true);
   else stopProviderShareRuntime();
-  expect(local).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {});
-  expect(remote).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {},
+  const payload = trigger === 'received' ? { receivedChangeSequence: 7 } : {};
+  expect(local).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, payload);
+  expect(remote).toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, payload,
     { dataOwnerId: 'owner-a', ownerGeneration: 1 });
 });
 
@@ -614,8 +616,8 @@ it('refreshes local windows but does not push a catalog change for an unchanged 
   const events = vi.mocked(startProviderShareGuest).mock.lastCall![0];
   events.changed([], false);
   expect(local).toHaveBeenCalledWith(PROVIDER_SHARE_IPC.RECEIVED_CHANGED, []);
-  expect(local).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {});
-  expect(remote).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, {}, expect.anything());
+  expect(local).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, expect.anything());
+  expect(remote).not.toHaveBeenCalledWith(CONTROLLED_MODEL_CATALOG_CHANGED, expect.anything(), expect.anything());
 });
 
 /* Unit integration: the real received-catalogs producer must distinguish an explicit
@@ -1455,6 +1457,32 @@ describe('remote model access management', () => {
 
 /* 分享可见性：生产管理/IPC入口补足远程设置与受邀者在途撤权、旧端返回差异。tier: unit。 */
 describe('share visibility management and guest query', () => {
+  // Unit: the real guest command used to label congestion and unknown service
+  // failures as revoked permission. No retry or cached authorization is added.
+  it.each([
+    ['BACKPRESSURE', 'DEVICE_LINK_BUSY'], ['PEER_RESET', 'DEVICE_LINK_NOT_CONNECTED'],
+    ['INTERNAL', 'DEVICE_LINK_UNAVAILABLE'],
+    ['ACCESS_REVOKED', 'PERMISSION_DENIED'], ['REMOTE_DISABLED', 'PERMISSION_DENIED'],
+    ['INVOKE_TIMEOUT', 'DEVICE_LINK_TIMEOUT'], ['DEVICE_OFFLINE', 'DEVICE_LINK_DEVICE_OFFLINE'],
+    ['CHANNEL_NOT_ALLOWED', 'UNSUPPORTED_CAPABILITY'],
+  ] as const)('keeps guest insights failure %s distinct as %s', async (code, expected) => {
+    guest.share = { shareId: 's', memberId: 'm', status: 'active' };
+    const invoke = vi.fn(async () => ({ ok: false, error: { code, message: 'private upstream details' } }) as const);
+    stopProviderShareRuntime(); startProviderShareRuntime(vi.fn(), { invoke });
+    await expect(executeProviderShareGuestCommand({ action: 'insights', shareId: 's', includeUsage: false }))
+      .rejects.toMatchObject({ code: expected, message: expect.not.stringContaining('private upstream details') });
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('projects a local responsiveness failure without inventing a wire error code', async () => {
+    guest.share = { shareId: 's', memberId: 'm', status: 'active' };
+    const invoke = vi.fn(async () => { throw Object.assign(new Error('private upstream details'), { code: 'DEVICE_UNRESPONSIVE' }); });
+    stopProviderShareRuntime(); startProviderShareRuntime(vi.fn(), { invoke });
+    await expect(executeProviderShareGuestCommand({ action: 'insights', shareId: 's', includeUsage: false }))
+      .rejects.toMatchObject({ code: 'DEVICE_LINK_DEVICE_UNRESPONSIVE', message: expect.not.stringContaining('private upstream details') });
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
   it('saves only the requested switch via the same-account management entry', async () => {
     visibility.set.mockImplementation(async (_id, patch, assertCurrent) => { assertCurrent(); return { quota: false, usage: true, ...patch }; });
     const result = await executeProviderShareManagementCommand(parseProviderShareCommand({ action: 'set-visibility', providerId: 'anthropic', visibility: { quota: true } }) as ProviderShareManagementCommand);

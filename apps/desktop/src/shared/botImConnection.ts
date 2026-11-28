@@ -19,6 +19,28 @@ export function isBotImGroupChatId(value: unknown): value is string {
 export type BotImFeishuService = 'feishu' | 'lark';
 
 /**
+ * 设置 → IM 机器人 里每个平台那份个人 bot 的「谁来回复」: null = Cindy 按该渠道的 Agent / 模型开任务,
+ * 否则交给这位伙伴(凭证留在原处, 只改落点; 与个人微信的伙伴绑定同一模型)。
+ */
+export const PERSONAL_REPLY_TARGET_CHANNELS = ['telegram', 'feishu', 'wecom', 'dingtalk', 'discord'] as const;
+export type PersonalReplyTargetChannel = (typeof PERSONAL_REPLY_TARGET_CHANNELS)[number];
+
+export interface PersonalReplyTargetState {
+  channel: PersonalReplyTargetChannel;
+  companionBotId: string | null;
+}
+
+/** 设置 → IM 机器人 → 某平台(个人机器人)的项目与「谁来回复」。微信的伙伴归属另走 wechatBot。 */
+export interface PersonalChannelState {
+  channel: PersonalReplyTargetChannel | 'wechat';
+  /** 新任务放进的侧栏项目目录; null = 机器人自己的对话目录。 */
+  projectDir: string | null;
+  companionBotId: string | null;
+  /** 可选的侧栏本机项目(名字与「项目与模型」一致)。 */
+  projects: Array<{ dir: string; name: string }>;
+}
+
+/**
  * 伙伴主任务(主人私聊落点)的 vendorOptions 标记: 这个伙伴绑定了哪些平台的机器人。
  *
  * 群 / 话题 / 外部用户专线带 `telegramChatId` / `feishuChatId`, 渠道原生 API 工具
@@ -257,6 +279,12 @@ export interface BotImConnectionLanesPayload {
 }
 
 export const BOT_IM_CONNECTION_CHANGED_EVENT = 'botImConnection:changed';
+
+/**
+ * 添加连接失败的 `CONNECT_FAILED: <原因>` 里, 「只是建连握手超时」用的稳定原因。
+ * 页面据此提示「连接超时, 请重试」并保留刚填的内容; 其它原因仍是诊断原文。
+ */
+export const BOT_IM_CONNECT_TIMEOUT_REASON = 'timeout';
 
 /** Local-only settings: passwords are write-only and an empty value retains the saved password. */
 export type BotIMessageConfig = Omit<Extract<BotImConnectionAddInput, { channel: 'imessage' }>, 'botId' | 'channel' | 'password'>;

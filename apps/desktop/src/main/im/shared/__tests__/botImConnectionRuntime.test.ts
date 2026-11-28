@@ -113,9 +113,11 @@ import { blueBubblesStateStorage } from '../../imessage/storage';
 import { __testing as laneTesting } from '../botImLaneRuntime';
 import { withBotProfileLocks } from '../../../maker-ipc/botProfileLock';
 import { readWechatChannelSettings, writeWechatCompanionBinding, writeWechatWorkingDir } from '../../wechat/channelSettings';
+import { readPersonalChannelChoice, writePersonalChannelChoice } from '../personalChannelStore';
 import {
   adoptPersonalBot,
   configureBotImPersonalAdoption,
+  switchPersonalBotReplyTarget,
   __testing as adoptionTesting,
   type PersonalBotTransport,
 } from '../botImPersonalAdoption';
@@ -142,6 +144,12 @@ function fakeTelegram(prefix: string, opts: { connect: boolean }) {
     getConfigState: () => ({ status, ownerUserId: h.secrets.get(`${prefix}telegram-owner-user-id`) ?? null, botUsername: 'mia_bot' }),
     setConfig: vi.fn(async (payload: { token: string; ownerUserId: string }) => {
       await h.beforeTelegramSetConfig?.();
+      if (telegramSaveTimesOutOnce) {
+        // 传输层握手超时: 凭证已回滚, 只把「是超时」报上来。
+        telegramSaveTimesOutOnce = false;
+        set({ kind: 'error', reason: 'handshake timed out', code: 'network' } as typeof status);
+        return { status, ownerUserId: null, botUsername: null, saveErrorStatus: status, saveTimedOut: true };
+      }
       h.secrets.set(`${prefix}telegram-bot-token`, payload.token);
       h.secrets.set(`${prefix}telegram-owner-user-id`, payload.ownerUserId);
       if (!opts.connect) {
@@ -311,6 +319,7 @@ const createdOther: Array<{
 }> = [];
 let connectOutcome = true;
 let telegramConflictAfterConnect = false;
+let telegramSaveTimesOutOnce = false;
 
 describe('bot im connection runtime', () => {
   // Electron IPC 安全规则 §5：新增归档入口不能绕过 sender/payload 校验；旧测试只覆盖连接生命周期。
@@ -393,6 +402,7 @@ describe('bot im connection runtime', () => {
     createdOther.length = 0;
     connectOutcome = true;
     telegramConflictAfterConnect = false;
+    telegramSaveTimesOutOnce = false;
     adoptionTesting.reset();
     h.drainWechat.mockClear();
     configureBotImConnectionRuntime({
@@ -465,6 +475,41 @@ describe('bot im connection runtime', () => {
     expect(getBotFeishuTransport('unrelated-bot')).toBeNull();
     await stopBotImConnections();
     expect(getBotFeishuTransport('bot-mia')).toBeNull();
+  });
+
+  // Startup used to await each connection in turn, so one unreachable transport
+  // delayed every later connection. Minimal failing input: the first record's init never settles.
+  it('starts every recorded connection without waiting for a stalled one', async () => {
+    await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'feishu' }, { now: () => 1 });
+    await addBotImConnectionRecord({ botId: 'bot-mia', channel: 'feishu' }, { now: () => 2 });
+    const stalledId = listBotImConnections()[0]!.id;
+    let releaseStalled!: () => void;
+    const connected = new Set<string>();
+    configureBotImConnectionRuntime({
+      removeWechatCompanionBinding: h.drainWechat,
+      create: (record) => ({
+        kind: 'feishu',
+        im: {
+          init: () => record.id === stalledId
+            ? new Promise<void>((resolve) => { releaseStalled = resolve; })
+            : (connected.add(record.id), Promise.resolve()),
+          dispose: async () => undefined,
+          onStatusChange: () => () => undefined,
+          getStatus: () => ({ kind: connected.has(record.id) ? 'connected' : 'connecting' }),
+          getOwnerOpenId: () => 'ou_owner',
+        } as never,
+        orchestrator: fakeOrchestrator() as never,
+      }),
+      settingsIdentity: () => ({ telegramToken: null, feishuAppId: null, wecomBotId: null, dingtalkAppKey: null, discordToken: null }),
+      listKnownGroups: async () => [],
+    });
+    const starting = startBotImConnections();
+    await vi.waitFor(() => expect(getBotFeishuTransport('bot-mia')).not.toBeNull());
+    expect(connected.size).toBe(1);
+    releaseStalled();
+    await starting;
+    expect(__testing.instances.size).toBe(2);
+    await stopBotImConnections();
   });
 
   it('lists known groups with their per-connection activation and toggles it live', async () => {
@@ -749,6 +794,21 @@ describe('bot im connection runtime', () => {
     expect(created[0]!.im.dispose).toHaveBeenCalled();
     expect(created[0]!.orchestrator.unregister).toHaveBeenCalled();
     expect(__testing.instances.size).toBe(0);
+  });
+
+  // Maintainer review on #11994: a timed-out handshake is reported with the stable `timeout`
+  // reason the add dialog keys on, leaves no record or key behind, and the very same input
+  // then connects without re-entering anything.
+  it('reports a timed-out add as `timeout` and lets the identical input connect next time', async () => {
+    const input = { botId: 'bot-mia', channel: 'telegram' as const, token: '1:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '4242' };
+    telegramSaveTimesOutOnce = true;
+    await expect(addBotImConnection(input)).rejects.toThrow(/CONNECT_FAILED: timeout$/);
+    expect(listBotImConnections()).toEqual([]);
+    expect([...h.secrets.keys()]).toEqual([]);
+
+    const added = await addBotImConnection(input);
+    expect(added.connection.status).toEqual({ kind: 'connected', appId: '777' });
+    expect(listBotImConnections()).toHaveLength(1);
   });
 
   it('refuses an inactive teammate and a token already used by the settings-page bot', async () => {
@@ -1100,6 +1160,102 @@ describe('bot im connection runtime', () => {
       const result = await adoptPersonalBot({ botId: 'bot-mia', channel: 'wecom' });
       expect(h.secrets.get(`${secretKeyPrefixFor(result.connection.id)}wecom-owner-user-id`)).toBe('zhangsan');
       expect([...h.secrets.keys()].filter((key) => key.startsWith('wecom-'))).toEqual([]);
+    });
+
+    it('allows direct WeChat companion reassignment from Settings while preserving companion-page conflict guard', async () => {
+      const apply = vi.fn(async (commit: () => void) => { commit(); });
+      h.botStatus = 'active';
+      writeWechatCompanionBinding('bot-mia');
+      await expect(setWechatCompanionBinding('bot-other', apply)).rejects.toThrow('WECHAT_COMPANION_IN_USE');
+      await setWechatCompanionBinding('bot-other', apply, { allowReassign: true });
+      expect(readWechatChannelSettings().companionBotId).toBe('bot-other');
+    });
+
+    it('clears stale personal channel project/companion state after adopting a personal bot', async () => {
+      personalTransports();
+      h.secrets.set('wecom-bot-id', 'wb-2');
+      h.secrets.set('wecom-bot-secret', 's3cret');
+      writePersonalChannelChoice('wecom', { projectDir: h.root, companionBotId: 'bot-mia' });
+      await adoptPersonalBot({ botId: 'bot-mia', channel: 'wecom' });
+      expect(readPersonalChannelChoice('wecom')).toEqual({ projectDir: null, companionBotId: null });
+    });
+
+    it('resolves handed-over personal Feishu transport for the assigned companion and enforces owner match', () => {
+      const personalFeishu = {
+        getStatus: () => ({ kind: 'connected' }),
+        getOwnerOpenId: () => 'ou_owner_1',
+      } as unknown as import('@cindy/im').FeishuIM;
+      configureBotImConnectionRuntime({
+        removeWechatCompanionBinding: async (update) => { update(); },
+        create: () => { throw new Error('unused'); },
+        settingsIdentity: () => ({
+          telegramToken: null, feishuAppId: null, wecomBotId: null, dingtalkAppKey: null, discordToken: null,
+        }),
+        listKnownGroups: async () => [],
+        personalFeishuIm: () => personalFeishu,
+      });
+      writePersonalChannelChoice('feishu', { companionBotId: 'bot-mia' });
+      expect(getBotFeishuTransport('bot-mia')).toBe(personalFeishu);
+      expect(getBotFeishuTransport('bot-mia', 'ou_owner_1')).toBe(personalFeishu);
+      expect(getBotFeishuTransport('bot-mia', 'ou_other')).toBeNull();
+      expect(getBotFeishuTransport('bot-other')).toBeNull();
+    });
+
+    // Reconnecting after a suspended stop must never write or restart against the next account.
+    it('cancels a personal reply-target switch when the account changes during stop', async () => {
+      const start = vi.fn(async () => undefined);
+      configureBotImPersonalAdoption({
+        isReady: () => true,
+        telegramGroupActivation: () => undefined,
+        personal: {
+          feishu: {
+            identity: () => 'cli_1',
+            stop: async () => { h.ownerKey = 'owner-b'; },
+            start,
+            clear: vi.fn(async () => undefined),
+          },
+        },
+      });
+      h.secrets.set('feishu_bot_app_id', 'cli_1');
+      h.secrets.set('feishu_bot_app_secret', 'sec_1');
+      const apply = vi.fn();
+
+      await expect(switchPersonalBotReplyTarget('feishu', apply)).rejects.toThrow(/OWNER_SCOPE_CHANGED/);
+      expect(apply).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+    });
+
+    it('blocks reply-target switching while a personal bot has active or queued work unless allowWhileBusy is set', async () => {
+      let busy = true;
+      const stop = vi.fn(async () => undefined);
+      const start = vi.fn(async () => undefined);
+      configureBotImPersonalAdoption({
+        isReady: () => true,
+        telegramGroupActivation: () => undefined,
+        personal: {
+          feishu: { identity: () => 'cli_1', isBusy: () => busy, stop, start, clear: vi.fn(async () => undefined) },
+        },
+      });
+      h.secrets.set('feishu_bot_app_id', 'cli_1');
+      h.secrets.set('feishu_bot_app_secret', 'sec_1');
+      const apply = vi.fn();
+
+      await expect(switchPersonalBotReplyTarget('feishu', apply)).rejects.toThrow(/PERSONAL_BOT_BUSY/);
+      expect(stop).not.toHaveBeenCalled();
+      expect(apply).not.toHaveBeenCalled();
+
+      // Deletion cleanup can force-clear even while busy.
+      await switchPersonalBotReplyTarget('feishu', apply, { allowWhileBusy: true });
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(apply).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledTimes(1);
+
+      // Idle channel switches normally.
+      busy = false;
+      await switchPersonalBotReplyTarget('feishu', apply);
+      expect(stop).toHaveBeenCalledTimes(2);
+      expect(apply).toHaveBeenCalledTimes(2);
+      expect(start).toHaveBeenCalledTimes(2);
     });
   });
 });
