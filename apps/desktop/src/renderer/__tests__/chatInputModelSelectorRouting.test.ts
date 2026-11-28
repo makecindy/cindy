@@ -64,6 +64,23 @@ describe('ChatInput model source switching wiring', () => {
     );
   });
 
+  it('confirms staged selections with the window main verifies at send', () => {
+    const start = chatInputSource.indexOf('const confirmModelSwitchContextGuard = useCallback(');
+    const end = chatInputSource.indexOf('// session-agent-switch', start);
+    const guard = chatInputSource.slice(start, end);
+    // 目录窗口不含模型级上限与任务预算；暂存确认必须先用 main 的实际窗口。
+    expect(guard).toContain('.getSessionContextWindowBounds(sessionId, {');
+    expect(guard).toContain(')?.effectiveWindow ?? undefined');
+    // 远程 Agent（agentDeviceId / SSH）按执行端窗口校验，不能用本机 main 的窗口覆盖。
+    expect(guard).toContain(
+      'const agentRunsLocally = !remoteDeviceId && !effectiveAgentDeviceId && !remoteHostId;',
+    );
+    expect(guard).toContain('agentRunsLocally && targetAgentKind');
+    expect(guard.indexOf('stagedEffectiveWindow ??')).toBeLessThan(
+      guard.indexOf('resolveProviderModelContextWindow({'),
+    );
+  });
+
   it('guards model-only duplicate ids with the provider preserved by the final route', () => {
     const modelStart = chatInputSource.indexOf('const performModelChange = useCallback(');
     const providerStart = chatInputSource.indexOf('const performProviderChange = useCallback(');
