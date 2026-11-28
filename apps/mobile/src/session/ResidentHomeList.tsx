@@ -79,10 +79,13 @@ export function ResidentHomeListProvider({ children }: { children: ReactNode }) 
   const segments = useSegments() as string[];
   const homeRoute = segments.length === 0 || segments[0] === 'index'
     || (segments[0] === 'devices' && (segments.length === 1 || segments[1] === 'index'));
-  // iOS Home keeps its list in its own route; Android draws it here on the home too.
+  // Android draws Home's list here. iOS keeps it in its own route, except in a
+  // persistent (wide/split) layout, where Home is hosted as the side column and
+  // publishes its list to this host. That home route must stay visible too,
+  // otherwise the published list would render at opacity 0 in a wide window.
   const rootHome = Platform.OS !== 'ios';
   const visible = (rootHome && homeRoute)
-    || (persistent && isPaneDetailRoute(segments));
+    || (persistent && (homeRoute || isPaneDetailRoute(segments)));
   const host = useRef<ViewInstance>(null);
   const mounted = useRef(false);
   const [entry, setEntry] = useState<Entry | null>(null);
