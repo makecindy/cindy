@@ -587,6 +587,44 @@ describe('resolveRemoteModelListStatus', () => {
 });
 
 describe('ModelSelector trigger variants', () => {
+  // Unit regression for #9453: the existing trigger tests do not opt into the local shortcut. A connected
+  // multi-effort model must render both controls, then hide the shortcut under route management.
+  it('only splits out the effort menu for an unmanaged task', () => {
+    const props = {
+      remoteAgent: undefined,
+      modelId: 'claude-opus-4-8',
+      currentProviderId: 'anthropic',
+      effort: 'high' as const,
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc' as const,
+      actualRoute: true,
+      useMorphPopover: true,
+      showEffortShortcut: true,
+    };
+    const effortButton = { name: /newChat.modelSelector.effortLabel/ };
+    const modelButton = { name: /Current: Opus 4\.8/ };
+    const { rerender } = render(React.createElement(ModelSelector, props));
+    expect(screen.getByRole('button', modelButton)).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('button', effortButton), { key: 'Enter' });
+    const menu = screen.getByRole('menu', effortButton);
+    expect(within(menu).getByRole('menuitemradio', { checked: true })).toBeTruthy();
+    fireEvent.keyDown(menu, { key: 'Escape' });
+
+    const selection = { type: 'route' as const, id: 'managed' };
+    rerender(React.createElement(ModelSelector, {
+      ...props,
+      modelGroups: {
+        config: { routes: [] },
+        active: selection,
+        managedMeta: { selection, routeName: 'Managed route', autoSwitch: false },
+        onSelect: vi.fn(),
+      },
+    }));
+    expect(screen.getByRole('button', modelButton)).toBeTruthy();
+    expect(screen.queryByRole('button', effortButton)).toBeNull();
+  });
+
   it('keeps required model status tags as the fluid picker narrows', () => {
     expect(modelTagDensityForWidth(null)).toBe('full');
     // 320px pane 还要扣掉图标、effort、勾选和左右 padding；英文 Subscription

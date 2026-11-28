@@ -2,7 +2,7 @@
 
 > 状态:权威设计规范。新增 / 修改任何 UI 前先读本文。
 > 定位:这是根规范 `docs/design-rules/DESIGN.md` 的**轻量移动版**——共享 Cindy 品牌与业务语义,但不照搬桌面的 ColorRegistry 重型架构。手机端用一套 light/dark 双色板 + 收敛阶梯 + RN 主题 hook。
-> 色值由移动端**独立决定**(2026-09-26 起为「象牙白」色板,见 `DESIGN.md §15.13`):语义与桌面一一对应,具体色阶、对比度与暖度不与桌面同步。
+> 色值由移动端**独立决定**(「象牙白」色板,见本文 §2):语义与桌面一一对应,具体色阶、对比度与暖度不与桌面同步。不要把桌面的色值搬进移动端,也不要把移动端的值同步回桌面。
 
 ---
 
@@ -31,14 +31,25 @@
 
 源:`src/theme/tokens.ts`(`lightColors` / `darkColors` / `palettes`)。
 
-浅色为象牙白(页面、卡片、描边带一点暖,正文中性),深色为纯中性近黑(2026-09-26 用户定稿)。下表是常用的底色 / 文字 / 描边;完整清单以 `tokens.ts` 为准,移动端专用层见 `DESIGN.md §15.13`。
+浅色为象牙白:页面比桌面更亮,暖度 B = R−3(桌面为 R−5),页面、卡片、描边带一点暖,正文中性。深色为纯中性近黑,不带暖。下表是常用的底色 / 文字 / 描边和移动端专用层;完整清单以 `tokens.ts` 为准。提案记录与前后对比在 Design Lab 的 `colors` 研究(iPhone / Android)。
 
 | token | light | dark | 用途 |
 |---|---|---|---|
 | `surface` | `#F9F9F6` | `#121212` | 页面背景 |
 | `surfaceElevated` | `#FFFFFC` | `#1E1E1E` | 抬一层:Card / 弹窗 / 输入框 |
 | `surfaceListRow` | `#FFFFFC` | `#1E1E1E` | 列表行 |
+| `surfaceListExpanded` | `#EAEAE6` | `#121212` | 展开的列表块 |
+| `activeGlyph` | `#DF0C27` | `#A61629` | 列表行首的活动标记 |
+| `chatCodeSurface` | `#F1F1EC`(沉下去) | `#1A1A1A` | 对话 / 任务里的代码卡 |
+| `chatCodeBorder` | `#CCCCC8` | `#383838` | 代码卡描边 |
 | `surfaceTranslucent` | rgba(249,249,246,.78) | rgba(18,18,18,.78) | 吸顶栏半透明 |
+| `edgeBlurShade` | `transparent` | rgba(0,0,0,.18) | 输入框单层边缘模糊上的压暗,空页面仍是 `surface` |
+| `edgeBlurShadeLayered` | `transparent` | rgba(0,0,0,.08) | 顶栏三层模糊每层上的同一压暗 |
+| `sheetSurface` | rgba(249,249,246,.96) | rgba(28,28,28,.96) | 底部面板根层 |
+| `sheetActionSurface` | `#FFFFFC` | `#262626` | 底部面板操作组 / 操作行 |
+| `sheetActionBorder` | `#CCCCC8` | `#383838` | 底部面板操作组 / 操作行描边 |
+| `sheetGrabber` | `#C2C2BE` | `#5C5C5C` | 底部面板与输入框的拖动条 |
+| `inputCaret` | `#417CDD` | `#417CDD` | 所有输入框的光标 |
 | `surfaceChip` | `#EAEAE6` | `#2A2A2A` | chip / pill / 选中行填充 |
 | `border` | `#CCCCC8` | `#383838` | 1px 分隔线 / 边框 |
 | `borderTranslucent` | rgba(204,204,200,.62) | rgba(56,56,56,.62) | 半透明边框 |
@@ -64,11 +75,12 @@
 
 **规则:**
 - **语义不变色**(`statusReady` / `statusAccent` / `betaChannelBadgeBackground` / `betaChannelBadgeForeground` / `botUnread`)跨 light / dark 一致——它们是状态语义,不随主题漂移。Beta 红色只用于设置页当前版本旁的渠道徽标,不得扩展为装饰色、错误色或 CTA。
-- **浅色卡片主要靠描边分层**:页面提亮到 `#F9F9F6` 后,近白卡片相对页面只剩 1.05 的色差(桌面 1.12)。新增浮起面(卡片 / 列表行 / 浮层 / 输入容器)**必须带 1px `border`**,不要只靠 `surfaceElevated` 的填充色差;需要“沉下去”的块(选中底、展开块、代码卡)用比页面更暗的档。
-- **文字三档由深到浅**:正文 → 二级 → 三级,在所在底色上都 ≥ 4.5:1(`themeTokens.test.ts` 守护)。占位字单独用 `textPlaceholder`,比三级更淡但 ≥ 3:1,只给输入框占位字用。新增文字不要拿 `textTertiary` 当“更弱的二级”以外的用途,也不要为了“更淡”自行调低透明度。
-- **CTA 在 dark 反相为近白**:`cta` 近白底 + `ctaText` 深字。注意别让近白 pill 看起来像 disabled——新增主操作 / 选中态后在 dark 下目检。
-- **显示模式由用户设置**:设置 → 外观 → 显示模式(跟随系统 / 浅色 / 深色,默认跟随系统)。组件只读 `useTheme()`,不要自己调 `useColorScheme()`。
+- **浅色卡片主要靠描边分层**:页面提亮到 `#F9F9F6` 后,近白卡片相对页面只剩 1.05 的色差(桌面和 iOS 分组背景都是 1.12)。新增浮起面(卡片 / 列表行 / 浮层 / 输入容器)**必须带 1px `border`**,不要只靠 `surfaceElevated` 的填充色差;需要“沉下去”的块(选中底、展开块、代码卡)用比页面更暗的档。
+- **文字三档由深到浅**:正文 → 二级 → 三级,在所在底色上(页面、卡片、chip、代码卡、底部面板操作组)都 ≥ 4.5:1,由 `themeTokens.test.ts` 和冻结快照 `theme-colors-snapshot.json` 守护。中性文字一共五档:正文、二级、三级、占位、反相(`ctaText`)。占位字单独用 `textPlaceholder`,比三级更淡但 ≥ 3:1,只给输入框占位字用。新增文字不要拿 `textTertiary` 当“更弱的二级”以外的用途,也不要为了“更淡”自行调低透明度。
+- **CTA 在 dark 反相为近白**:`cta` 近白底 + `ctaText` 深字(对比度 light 19.17:1、dark 16.00:1)。`textPrimary` / `cta` 填充上的文字一律用 `ctaText`,不要用 `surface`;底部面板操作文字用 `textPrimary`(旧的 `sheetActionText` 别名已删除);共享任务的危险按钮文字用 `#FFFFFF` / `#121212`。注意别让近白 pill 看起来像 disabled——新增主操作 / 选中态后在 dark 下目检。
+- **显示模式由用户设置**:设置 → 外观 → 显示模式(跟随系统 / 浅色 / 深色,默认跟随系统)。只有明确选了浅色或深色才会保存;所选模式同时作用于原生系统界面;首次启动的浅色登录关口(`DESIGN.md` §16.5)在登录阶段仍然生效。组件只读 `useTheme()`,不要自己调 `useColorScheme()`。
 - **Home 对话列表用 base token**:列表背景 / 分隔 / 文字使用 `surface` / `border` / `text*`,菜单选中用 `surfaceChip`,不另起暗色调色板;菜单 / FAB 只用 1px `border` 分层、零阴影,保持桌面「单一 flat Surface + 1px Board」哲学。
+- 登录皮肤(`DESIGN.md` §16)、品牌开屏、四个状态色、任务标签和语法高亮不属于这套色阶,各自保留登记的值;登录皮肤暂时保留自己的灰阶。
 - 不要在组件里硬编码 hex / rgba;找不到合适 token 时跟维护者确认是否新增,而不是写死。
 
 ---

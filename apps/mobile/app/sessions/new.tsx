@@ -127,6 +127,7 @@ import {
   MessageCircle,
   Mic,
   Plus,
+  RotateCcw,
   Settings,
   Sparkles,
   Target,
@@ -406,6 +407,10 @@ import {
 import { createMobileSpeakerGate, warmMobileSpeakerFilter } from '@/session/mobileSpeakerFilter';
 import { useMobileFailedVoiceRetry } from '@/session/useMobileFailedVoiceRetry';
 import { useSpeakerFilterNotice } from '@/session/useSpeakerFilterNotice';
+import {
+  applyMobileVoiceRefinementUndoToDraft,
+  useMobileVoiceRefinementUndo,
+} from '@/session/useMobileVoiceRefinementUndo';
 import {
   createMobileVoiceDictionaryLearningTracker,
   type MobileVoiceDictionaryLearningTracker,
@@ -1127,6 +1132,15 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     show: showVoiceSpeakerFiltered,
     clear: clearVoiceSpeakerFiltered,
   } = useSpeakerFilterNotice();
+  const {
+    candidate: voiceRefinementUndoCandidate,
+    offer: offerVoiceRefinementUndo,
+    dismiss: dismissVoiceRefinementUndo,
+    inspectDraft: inspectVoiceRefinementUndoDraft,
+  } = useMobileVoiceRefinementUndo();
+  useEffect(() => {
+    inspectVoiceRefinementUndoDraft(draft.firstMessage);
+  }, [draft.firstMessage, inspectVoiceRefinementUndoDraft]);
   // 「语音结束保持展开」hold:语音真实收尾(busy → done/error)时布防,草稿仍有
   // 内容即生效、一行文字也不收(composerVoiceHoldActive);下拉收起 / 失焦 / 草稿清空解除。
   const [composerVoiceHoldArmed, setComposerVoiceHoldArmed] = useState(false);
@@ -1790,7 +1804,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   // 状态行只承载错误信息与声纹过滤提示(错误优先);「正在听 / 转写中」不再占一行,对齐桌面版——
   // 录音状态由输入框内的语音按钮形态(Mic / 红点计时胶囊 / spinner)表达。
   const voiceStatusText = voiceError ?? (voiceSpeakerFiltered ? t('composer.voice.speakerFiltered') : null);
-  const voiceStatusVisible = voiceUiAvailable && Boolean(voiceStatusText);
+  const voiceRefinementUndoVisible = voiceUiAvailable && !voiceStatusText && Boolean(voiceRefinementUndoCandidate);
+  const voiceStatusVisible = voiceUiAvailable && (Boolean(voiceStatusText) || voiceRefinementUndoVisible);
   const composerVoicePlacement = voiceUiAvailable
     ? resolveMobileComposerVoiceButtonPlacement({
       // 行尾有创建按钮时让位;附件-only(无文字)同样命中(composerShowCreateButton 含附件判定)。
@@ -3372,6 +3387,24 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     setFirstMessageDraft,
   };
 
+  const undoVoiceRefinement = useCallback(() => {
+    if (!voiceRefinementUndoCandidate) return;
+    const result = applyMobileVoiceRefinementUndoToDraft(firstMessageRef.current, voiceRefinementUndoCandidate);
+    dismissVoiceRefinementUndo();
+    if (!result) return;
+    voiceDictionaryLearningTrackerRef.current?.noteRefinementUndone({
+      draft: result.nextDraft,
+      start: result.nextStart,
+      end: result.nextEnd,
+      rawTranscriptText: voiceRefinementUndoCandidate.rawTranscriptText,
+    });
+    const nextSelection = { start: result.nextEnd, end: result.nextEnd };
+    firstMessageSelectionRef.current = nextSelection;
+    setFirstMessageSelection(nextSelection);
+    setFirstMessageDraft(result.nextDraft);
+    voiceRefinementUndoCandidate.revertHistoryToRaw?.();
+  }, [dismissVoiceRefinementUndo, setFirstMessageDraft, voiceRefinementUndoCandidate]);
+
   const startVoiceRecording = useCallback(async () => {
     const requestedAt = Date.now();
     if (
@@ -3386,6 +3419,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     failedVoiceRetry.clear();
     setVoiceError(null);
     clearVoiceSpeakerFiltered();
+    dismissVoiceRefinementUndo();
     let permissionRequestSeq: number | null = null;
     let permissionRequestAbortController: AbortController | null = null;
     let startupSeq: number | null = null;
@@ -3511,6 +3545,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         refinerTargetProvider: (providerId: string, options?: { refreshAccessToken?: boolean }) =>
           voiceContext.createRefinerTarget(providerId, options),
         refineRequestBudget: () => voiceContext.refineRequestBudget(),
+        maxSessionMs: () => voiceContext.maxSessionMs(),
         warmRefiner: (input: { system: string; user: unknown; promptCacheKey: string;
         }) =>
           voiceContext.warmRefiner(input),
@@ -3557,6 +3592,14 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               uiLanguage,
             ),
           });
+          offerVoiceRefinementUndo({
+            draft: input.draft,
+            rawTranscriptText: input.rawTranscriptText,
+            refinedText: input.refinedText,
+            start: input.start,
+            end: input.end,
+            revertHistoryToRaw: input.revertHistoryToRaw,
+          });
         },
       });
       createdController = controller;
@@ -3602,7 +3645,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       setVoiceState('error');
       setVoiceError(formatRemoteError(err));
     }
-  }, [clearVoiceSpeakerFiltered, failedVoiceRetry, openLink, selectedDeviceId, setFirstMessageDraft, showVoiceSpeakerFiltered, voiceIsProcessing, voiceState]);
+  }, [clearVoiceSpeakerFiltered, failedVoiceRetry, dismissVoiceRefinementUndo, offerVoiceRefinementUndo, openLink, selectedDeviceId, setFirstMessageDraft, showVoiceSpeakerFiltered, voiceIsProcessing, voiceState]);
 
   const finishVoiceRecording = useCallback(async (): Promise<string | null> => {
     return finishNewSessionVoiceRecording({ voiceStopInFlightRef, voiceControllerSessionRef, voiceRecordingActiveRef, voiceState, voiceStartupSeqRef, voiceStartupInFlightRef, firstMessageSelectionRef, firstMessageInputRef, setVoiceState, setVoiceError, requestAnimationFrame, formatRemoteError });
@@ -6248,19 +6291,38 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
               <SlowSendNotice startedAt={creating ? createStartedAt : null} phase={createPhase} />
               {voiceStatusVisible ? (
                 <View style={styles.voiceStatusRow}>
-                  <Text style={styles.voiceStatusText} testID="newSession.voiceStatus">
-                    {voiceStatusText}
-                  </Text>
-                  {canOpenVoiceSettings ? (
+                  {voiceStatusText ? (
+                    <>
+                      <Text style={styles.voiceStatusText} testID="newSession.voiceStatus">
+                        {voiceStatusText}
+                      </Text>
+                      {canOpenVoiceSettings ? (
+                        <Pressable
+                          accessibilityLabel={t('session.common.openMicPermission')}
+                          accessibilityRole="button"
+                          hitSlop={10}
+                          onPress={openVoiceSettings}
+                          style={({ pressed }) => [styles.voiceStatusButton, pressed && styles.pressed]}
+                          testID="newSession.voiceSettingsButton"
+                        >
+                          <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                        </Pressable>
+                      ) : null}
+                    </>
+                  ) : voiceRefinementUndoVisible ? (
                     <Pressable
-                      accessibilityLabel={t('session.common.openMicPermission')}
+                      accessibilityLabel={t('composer.voice.undoRefinement')}
                       accessibilityRole="button"
                       hitSlop={10}
-                      onPress={openVoiceSettings}
-                      style={({ pressed }) => [styles.voiceStatusButton, pressed && styles.pressed]}
-                      testID="newSession.voiceSettingsButton"
+                      onPress={undoVoiceRefinement}
+                      style={({ pressed }) => [
+                        styles.voiceUndoRefinementPill,
+                        pressed && styles.voiceUndoRefinementPillPressed,
+                      ]}
+                      testID="newSession.voiceUndoRefinementButton"
                     >
-                      <Settings color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                      <RotateCcw color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.regular} />
+                      <Text style={styles.voiceUndoRefinementText}>{t('composer.voice.undoRefinement')}</Text>
                     </Pressable>
                   ) : failedVoiceRetry.canRetry && voiceError && !voiceIsBusy && !voiceStartPending ? (
                     <Pressable
@@ -7554,6 +7616,27 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   voiceRetryButtonText: {
     color: colors.textPrimary,
     fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+  },
+  voiceUndoRefinementPill: {
+    alignItems: 'center',
+    backgroundColor: colors.surfaceChip,
+    borderColor: colors.border,
+    borderRadius: radius.pill,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: spacing.xs,
+    minHeight: 28,
+    paddingHorizontal: spacing.sm,
+  },
+  voiceUndoRefinementPillPressed: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.borderStrong,
+  },
+  voiceUndoRefinementText: {
+    color: colors.textSecondary,
+    fontSize: typeScale.footnote,
     fontWeight: fontWeight.medium,
     lineHeight: lineHeight.caption,
   },

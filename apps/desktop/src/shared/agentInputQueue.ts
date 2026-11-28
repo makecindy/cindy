@@ -12,7 +12,7 @@ import { coordinationModelPrefix, type BotTaskCoordination } from './botTaskCoor
  */
 
 import type { OutputLimitDetails } from '@cindy/maker-shared';
-import { isSharedTaskPeer } from '@cindy/device-link';
+import { isSharedTaskPeer, type InputDeliveryProjection } from '@cindy/device-link';
 
 import { stripChatQuoteMarkerLines } from '@cindy/maker-shared/chat-quotes';
 import type { SharedTaskAuthor } from '@cindy/maker-shared';
@@ -545,7 +545,7 @@ export function normalizeAgentInputClearBoundaryMs(value: unknown): number | nul
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
 }
 
-export interface AgentInputProjection {
+export interface AgentInputProjection extends InputDeliveryProjection {
   sessionId: string;
   /** Recent explicit withdrawals. Older hosts omit this field. */
   withdrawnQueueClientIds?: string[];

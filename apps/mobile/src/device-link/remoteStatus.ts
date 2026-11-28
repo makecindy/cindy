@@ -1,3 +1,4 @@
+import { remoteInputRefusal } from '@cindy/device-link';
 import {
   formatRemoteError as formatRemoteErrorShared,
   isDeviceUnresponsiveRemoteError,
@@ -178,6 +179,16 @@ export function humanizeRemoteError(error: unknown): string {
   const localized = localizedStableRemoteError(formatted);
   if (localized) return localized;
   return i18n.t('deviceLink.remoteError.unclassified');
+}
+
+/**
+ * Refusals emitted before input acceptance. Keep transport failures and
+ * post-handler authorization failures in receipt reconciliation.
+ */
+export function describeOutboxEnqueueRefusal(error: unknown): string | undefined {
+  const reason = remoteInputRefusal(formatRemoteErrorShared(error));
+  if (reason === 'other') return humanizeRemoteError(error);
+  return reason ? i18n.t(`session.outbox.${reason}`) : undefined;
 }
 
 /**
