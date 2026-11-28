@@ -2907,6 +2907,13 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
     nodeRuntimeBrokerSingleton = new GhostNodeRuntimeBroker({
       getGhost: findGhostForInstanceId,
       startBlockedReason: libraryRestartRequiredReason,
+      // 更新/卸载等因旧进程迟迟不退而失败：旧版本仍在原位，进程真正退出后回到它该在的状态。
+      onStopSettledLate: (instanceId) => {
+        const ghost = findGhostForInstanceId(instanceId);
+        if (!ghost) return;
+        log.info('plugin processes exited after a timed-out stop; restoring presence', { instanceId });
+        spawnIfResident(ghost);
+      },
       getCallSignal: (ghostId, callId) =>
         getGhostPipeDispatcher().getPendingCallSignal(ghostId, callId),
       getCallSessionId: (ghostId, callId) =>
