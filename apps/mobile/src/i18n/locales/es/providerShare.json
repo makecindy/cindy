@@ -14,5 +14,119 @@
     "copy": "Copiar enlace compartido",
     "copied": "Enlace para compartir copiado",
     "copyFailed": "No se pudo copiar el enlace para compartir. Inténtalo de nuevo en un momento."
+  },
+  "manage": {
+    "loadFailed": "No se pudieron cargar los detalles para compartir. Inténtalo de nuevo en un momento.",
+    "notReady": "Compartir no está disponible en este momento. Asegúrate de haber iniciado sesión y estar en línea; lo volverá a intentar automáticamente.",
+    "needsUpdate": "Actualiza Cindy en la computadora del proveedor para administrar este recurso compartido desde tu teléfono.",
+    "offline": "Ahora no se puede conectar con la computadora del proveedor. Se volverá a intentar cuando se restablezca la conexión.",
+    "list": {
+      "title": "Proveedores que comparto",
+      "separator": ", ",
+      "membersCount_one": "Compartido con {{count}} persona",
+      "membersCount_many": "Compartido con {{count}} personas",
+      "membersCount_other": "Compartido con {{count}} personas",
+      "pendingCount_one": "{{count}} solicitud de uso compartido en espera",
+      "pendingCount_many": "Solicitudes compartidas {{count}} en espera",
+      "pendingCount_other": "{{count}} solicitudes de uso compartido en espera",
+      "shareOther": "Compartir otro proveedor",
+      "emptyTitle": "No hay computadoras para administrar",
+      "emptyCopy": "Mantén Cindy en línea en una computadora que permita el control remoto y aquí podrás consultar la cuota, crear enlaces para compartir y atender solicitudes.",
+      "unreachable": "Sin conexión o sin control remoto permitido: {{devices}}. Aparecerán aquí cuando se pueda conectar con ellas.",
+      "needsUpdate": "Actualiza Cindy en {{devices}} para administrar el uso compartido desde tu teléfono.",
+      "failed": "No se pudieron cargar los detalles para compartir de {{devices}}. Desliza hacia abajo para volver a intentarlo.",
+      "note": "Los recursos compartidos se guardan en la computadora del proveedor, que debe estar en línea mientras los administras."
+    },
+    "pick": {
+      "title": "Elige un proveedor para compartir",
+      "empty": "No hay proveedores para compartir en esta computadora",
+      "footer": "Solo se muestran los proveedores conectados que tienen activado “Permitir uso remoto”. Ese interruptor está en Configuración → Proveedores en esa computadora."
+    },
+    "link": {
+      "title": "Enlace para compartir",
+      "create": "Crear enlace para compartir",
+      "regenerate": "Crear nuevo enlace",
+      "generating": "Creando enlace…",
+      "copy": "Copiar enlace",
+      "copied": "Copiado",
+      "copyFailed": "No se pudo copiar el enlace. Selecciónalo y cópialo manualmente.",
+      "send": "Enviar enlace",
+      "oneTime": "Funciona una vez",
+      "expiresIn": "Caduca en {{time}}",
+      "expired": "Caducado",
+      "waiting": "Esperando su solicitud…",
+      "checking": "Comprobando este proveedor…",
+      "footer": "El enlace funciona una sola vez y caduca 5 minutos después de crearlo. Tras enviarlo, quédate en esta página: cuando llegue la solicitud, compara el código de emparejamiento de arriba antes de aprobar.",
+      "gateInvocation": "“Permitir uso remoto” está desactivado para este proveedor, por lo que los recursos compartidos existentes se pausan y no se pueden crear nuevos enlaces.",
+      "gateMissing": "No se encuentra este proveedor en esa computadora. Es posible que se haya eliminado.",
+      "failed": "No se pudo crear el enlace para compartir. Inténtalo de nuevo en un momento.",
+      "needsUpdate": "Para crear enlaces desde tu teléfono, hay que actualizar Cindy en la computadora del proveedor o el servicio de uso compartido."
+    },
+    "pending": {
+      "title": "Pendiente",
+      "heading": "{{name}} solicitó acceso a {{provider}}",
+      "requestedAt": "Solicitado {{time}}",
+      "pairingLabel": "Código de emparejamiento",
+      "pairingAria": "Código de emparejamiento {{digits}}",
+      "pairingHint": "Antes de aprobar, puedes preguntarle por el canal por el que le enviaste el enlace: “¿Qué código de emparejamiento ves?”. Aprueba si coincide.",
+      "callout": "Una vez aprobado, {{name}} puede usar los modelos de {{provider}} en sus propias sesiones. El Agent se ejecuta en la computadora que aloja este proveedor y el uso cuenta para tu {{provider}}. Puedes pausar o quitar el acceso en cualquier momento en “{{provider}} · Remoto y compartido”.",
+      "calloutGroup": "Una vez aprobado, {{name}} puede usar los modelos de {{provider}} en sus propias sesiones. El grupo de proveedores elige la computadora que ejecuta el Agent y el uso cuenta para tu {{provider}}. Puedes pausar o quitar el acceso en cualquier momento en “{{provider}} · Remoto y compartido”.",
+      "calloutClaudeEmail": "Mientras {{name}} lo usa, el Agent puede ver la dirección de correo electrónico con la que inicias sesión en Claude.",
+      "calloutUnknown": "Si no reconoces a esta persona, rechaza la solicitud; el enlace deja de funcionar una vez rechazada.",
+      "approve": "Aprobar uso compartido",
+      "reject": "Rechazar solicitud",
+      "approved": "{{provider}} compartido con {{name}}",
+      "rejected": "Solicitud rechazada de {{name}}; el enlace ya no funciona",
+      "gone": "Esta solicitud ya se atendió en otro lugar, se retiró o caducó.",
+      "uncertain": "Esa computadora no respondió, así que es posible que la solicitud ya se haya atendido. Revisa la lista actualizada.",
+      "failed": "No se pudo completar la acción. Inténtalo de nuevo en un momento.",
+      "checking": "Comprobando los datos del proveedor. Podrás aprobar cuando termine."
+    },
+    "computers": {
+      "title": "Computadoras y cuota",
+      "footer": "La cuota corresponde a las cuentas con sesión iniciada en cada computadora y se actualiza aproximadamente cada minuto. Las computadoras compartidas por otras personas no muestran su cuota aquí.",
+      "runningCount_one": "{{count}} tarea en ejecución",
+      "runningCount_many": "Tareas {{count}} en ejecución",
+      "runningCount_other": "{{count}} tareas en ejecución",
+      "shareComputer": "La computadora de {{name}}",
+      "shareComputerUnknown": "Computadora compartida",
+      "status": {
+        "idle": "Inactivo",
+        "full": "Completo",
+        "paused": "Asignación en pausa",
+        "cooling": "Enfriándose",
+        "quotaExhausted": "Cuota agotada",
+        "offline": "Sin conexión",
+        "unavailable": {
+          "provider-off": "\"Permitir uso remoto\" está desactivado para este proveedor en esa computadora",
+          "disconnected": "Proveedor no conectado o desactivado",
+          "share-paused": "Uso compartido en pausa",
+          "share-removed": "Uso compartido eliminado"
+        }
+      },
+      "quota": {
+        "loading": "Leyendo cuota…",
+        "unavailable": "No se puede leer la cuota de esta computadora en este momento",
+        "none": "Este proveedor no tiene información de cuota",
+        "offline": "Esta computadora está desconectada, por lo que no se puede leer su cuota",
+        "needsUpdate": "Actualiza Cindy en esta computadora para ver su cuota",
+        "unsupported": "No se puede leer la cuota de este proveedor",
+        "unlimited": "No hay límite personal establecido",
+        "session": "Período actual",
+        "week": "Semanal",
+        "scoped": "Período separado",
+        "account": "Cuenta {{number}}"
+      }
+    },
+    "members": {
+      "title": "Personas con las que compartes",
+      "statusActive": "Activo",
+      "statusRunning_one": "Activo · {{count}} sesión en ejecución",
+      "statusRunning_many": "Activo · Sesiones {{count}} en ejecución",
+      "statusRunning_other": "Activo · {{count}} sesiones en ejecución",
+      "statusPaused": "En pausa",
+      "empty": "Aún no lo has compartido con nadie. Crea un enlace para compartir y envíalo; cuando soliciten acceso y lo apruebes, aparecerán aquí.",
+      "footer": "Para pausar o eliminar un recurso compartido, o cambiar el grupo de proveedores, usa Configuración → Proveedores en una computadora."
+    }
   }
 }

@@ -14,5 +14,115 @@
     "copy": "Freigabelink kopieren",
     "copied": "Freigabelink kopiert",
     "copyFailed": "Der Freigabelink konnte nicht kopiert werden. Versuche es gleich noch einmal."
+  },
+  "manage": {
+    "loadFailed": "Die Freigabedetails konnten nicht geladen werden. Versuche es gleich erneut.",
+    "notReady": "Die Freigabe ist derzeit nicht verfügbar. Stelle sicher, dass du angemeldet und online bist. Es wird automatisch erneut versucht.",
+    "needsUpdate": "Aktualisiere Cindy auf dem Computer des Anbieters, um diese Freigabe von deinem Smartphone aus zu verwalten.",
+    "offline": "Der Computer des Anbieters ist gerade nicht erreichbar. Sobald die Verbindung wieder steht, wird es erneut versucht.",
+    "list": {
+      "title": "Von mir geteilte Anbieter",
+      "separator": ", ",
+      "membersCount_one": "Mit {{count}} Person geteilt",
+      "membersCount_other": "Mit {{count}} Personen geteilt",
+      "pendingCount_one": "{{count}} Freigabeanfrage ausstehend",
+      "pendingCount_other": "{{count}} Freigabeanfragen ausstehend",
+      "shareOther": "Weiteren Anbieter teilen",
+      "emptyTitle": "Keine Computer zum Verwalten",
+      "emptyCopy": "Lass Cindy auf einem Computer online, der Fernsteuerung erlaubt. Dann kannst du hier das Kontingent prüfen, Freigabelinks erstellen und Anfragen bearbeiten.",
+      "unreachable": "Offline oder Fernsteuerung nicht erlaubt: {{devices}}. Sie erscheinen hier, sobald sie erreichbar sind.",
+      "needsUpdate": "Aktualisiere Cindy auf {{devices}}, um Freigaben von deinem Smartphone aus zu verwalten.",
+      "failed": "Die Freigabedetails von {{devices}} konnten nicht geladen werden. Zum erneuten Versuch nach unten ziehen.",
+      "note": "Freigaben werden auf dem Computer des Anbieters gespeichert. Er muss online sein, während du sie verwaltest."
+    },
+    "pick": {
+      "title": "Anbieter zum Teilen auswählen",
+      "empty": "Auf diesem Computer gibt es keine Anbieter zum Teilen",
+      "footer": "Es werden nur verbundene Anbieter angezeigt, bei denen „Remote-Nutzung erlauben“ aktiviert ist. Den Schalter findest du auf diesem Computer unter Einstellungen → Anbieter."
+    },
+    "link": {
+      "title": "Freigabelink",
+      "create": "Freigabelink erstellen",
+      "regenerate": "Neuen Link erstellen",
+      "generating": "Link wird erstellt…",
+      "copy": "Link kopieren",
+      "copied": "Kopiert",
+      "copyFailed": "Der Link konnte nicht kopiert werden. Markiere ihn und kopiere ihn manuell.",
+      "send": "Link senden",
+      "oneTime": "Einmal verwendbar",
+      "expiresIn": "Läuft in {{time}} ab",
+      "expired": "Abgelaufen",
+      "waiting": "Warten auf die Anfrage…",
+      "checking": "Dieser Anbieter wird geprüft…",
+      "footer": "Der Link funktioniert einmal und läuft 5 Minuten nach dem Erstellen ab. Bleib nach dem Senden auf dieser Seite: Wenn die Anfrage eintrifft, vergleiche den Kopplungscode oben, bevor du sie genehmigst.",
+      "gateInvocation": "„Remote-Nutzung erlauben“ ist für diesen Anbieter deaktiviert. Daher sind bestehende Freigaben pausiert und du kannst keine neuen Links erstellen.",
+      "gateMissing": "Dieser Anbieter wurde auf diesem Computer nicht gefunden. Möglicherweise wurde er entfernt.",
+      "failed": "Der Freigabelink konnte nicht erstellt werden. Versuche es gleich erneut.",
+      "needsUpdate": "Um Links von deinem Smartphone aus zu erstellen, muss Cindy auf dem Computer des Anbieters oder der Freigabedienst aktualisiert werden."
+    },
+    "pending": {
+      "title": "Ausstehend",
+      "heading": "{{name}} hat Zugriff auf {{provider}} angefragt",
+      "requestedAt": "Angefragt {{time}}",
+      "pairingLabel": "Kopplungscode",
+      "pairingAria": "Kopplungscode {{digits}}",
+      "pairingHint": "Bevor du zustimmst, kannst du über den Kanal, über den du den Link gesendet hast, nachfragen: „Welchen Kopplungscode siehst du?“ Stimme zu, wenn er übereinstimmt.",
+      "callout": "Nach deiner Zustimmung kann {{name}} Modelle von {{provider}} in eigenen Sitzungen nutzen. Der Agent läuft auf dem Computer, der diesen Anbieter bereitstellt, und die Nutzung wird auf dein Kontingent bei {{provider}} angerechnet. Du kannst den Zugriff jederzeit unter „{{provider}} · Remote & Freigabe“ pausieren oder entfernen.",
+      "calloutGroup": "Nach deiner Zustimmung kann {{name}} Modelle von {{provider}} in eigenen Sitzungen nutzen. Die Anbietergruppe wählt den Computer aus, auf dem der Agent läuft, und die Nutzung wird auf dein Kontingent bei {{provider}} angerechnet. Du kannst den Zugriff jederzeit unter „{{provider}} · Remote & Freigabe“ pausieren oder entfernen.",
+      "calloutClaudeEmail": "Während {{name}} die Freigabe nutzt, kann der Agent die E-Mail-Adresse sehen, mit der du dich bei Claude anmeldest.",
+      "calloutUnknown": "Wenn du diese Person nicht kennst, lehne ab. Nach der Ablehnung funktioniert der Link nicht mehr.",
+      "approve": "Freigabe genehmigen",
+      "reject": "Anfrage ablehnen",
+      "approved": "{{provider}} für {{name}} freigegeben",
+      "rejected": "Anfrage von {{name}} abgelehnt; der Link funktioniert nicht mehr",
+      "gone": "Diese Anfrage wurde bereits an anderer Stelle bearbeitet, zurückgezogen oder ist abgelaufen.",
+      "uncertain": "Dieser Computer hat nicht geantwortet. Die Anfrage wurde möglicherweise bereits bearbeitet. Prüfe die aktualisierte Liste.",
+      "failed": "Die Aktion wurde nicht abgeschlossen. Versuche es gleich erneut.",
+      "checking": "Die Angaben zum Anbieter werden geprüft. Danach kannst du die Anfrage genehmigen."
+    },
+    "computers": {
+      "title": "Computer und Kontingent",
+      "footer": "Das Kontingent stammt von den Konten, die auf dem jeweiligen Computer angemeldet sind, und wird etwa einmal pro Minute aktualisiert. Von anderen geteilte Computer zeigen hier kein Kontingent an.",
+      "runningCount_one": "{{count}} Aufgabe läuft",
+      "runningCount_other": "{{count}} Aufgaben laufen",
+      "shareComputer": "Computer von {{name}}",
+      "shareComputerUnknown": "Geteilter Computer",
+      "status": {
+        "idle": "Inaktiv",
+        "full": "Ausgelastet",
+        "paused": "Zuweisungen pausiert",
+        "cooling": "In Abkühlphase",
+        "quotaExhausted": "Kontingent aufgebraucht",
+        "offline": "Offline",
+        "unavailable": {
+          "provider-off": "„Remote-Nutzung erlauben“ ist für diesen Anbieter auf dem anderen Computer deaktiviert",
+          "disconnected": "Anbieter nicht verbunden oder deaktiviert",
+          "share-paused": "Freigabe pausiert",
+          "share-removed": "Freigabe entfernt"
+        }
+      },
+      "quota": {
+        "loading": "Kontingent wird gelesen…",
+        "unavailable": "Das Kontingent dieses Computers kann gerade nicht gelesen werden",
+        "none": "Für diesen Anbieter liegen keine Kontingentinformationen vor",
+        "offline": "Dieser Computer ist offline, daher kann sein Kontingent nicht gelesen werden",
+        "needsUpdate": "Aktualisiere Cindy auf diesem Computer, um sein Kontingent zu sehen",
+        "unsupported": "Für diesen Anbieter kann das Kontingent nicht gelesen werden",
+        "unlimited": "Kein persönliches Limit festgelegt",
+        "session": "Aktueller Zeitraum",
+        "week": "Wöchentlich",
+        "scoped": "Separater Zeitraum",
+        "account": "Konto {{number}}"
+      }
+    },
+    "members": {
+      "title": "Personen, mit denen du teilst",
+      "statusActive": "Aktiv",
+      "statusRunning_one": "Aktiv · {{count}} Sitzung läuft",
+      "statusRunning_other": "Aktiv · {{count}} Sitzungen laufen",
+      "statusPaused": "Pausiert",
+      "empty": "Du hast noch mit niemandem geteilt. Erstelle einen Freigabelink und versende ihn. Sobald jemand Zugriff anfragt und du zustimmst, erscheint die Person hier.",
+      "footer": "Um eine Freigabe zu pausieren oder zu entfernen oder die Anbietergruppe zu ändern, nutze Einstellungen → Anbieter auf einem Computer."
+    }
   }
 }

@@ -41,6 +41,7 @@ import { prCardVisualFixture } from '@/debug/prCardVisualFixture';
 import { mailDraftCardFixture, mailVisualFixture, VISUAL_MAIL_DRAFT_CALL_ID, VISUAL_MAIL_DRAFT_SESSION_ID } from '@/debug/mailVisualFixture';
 import { teammateVisualFixture, teammateVisualReplyAt, VISUAL_TEAMMATE_SESSION_ID, VISUAL_TEAMMATE_THREAD_ROOT_ID, visualTeammateThreads } from '@/debug/teammateVisualFixture';
 import { markdownPreviewFixture } from '@/debug/markdownPreviewFixture';
+import { providerShareVisualInvoke, providerShareVisualProviders } from '@/debug/providerShareVisualFixture';
 import type { InputProjection, PendingInteraction, QueuedRemoteMessage, RemoteMessage, RemoteSession } from '@/session/types';
 
 export const VISUAL_MOCK_DEVICE_ID = 'cindy-visual-mock-mac';
@@ -328,6 +329,11 @@ async function visualMockInvoke<T = unknown>(
   args: unknown[] = [],
   options?: DeviceLinkInvokeOptions,
 ): Promise<T> {
+  // 「我分享的供应商」演示(另加开关才启用)：只接分享管理与组视图，其余 provider-group 请求照旧。
+  if (channel === 'provider-group:remote') {
+    const reply = providerShareVisualInvoke(_deviceId, args[0]);
+    if (reply !== undefined) return reply as T;
+  }
   if (channel === DEVICE_LINK_USAGE_WIDGET_SNAPSHOT_CHANNEL && _deviceId === VISUAL_MOCK_DEVICE_ID) {
     const now = new Date();
     const readings = [
@@ -662,7 +668,7 @@ async function visualMockInvoke<T = unknown>(
     case 'maker:get-capabilities':
       return visualMockCapabilities() as T;
     case 'maker:provider:list':
-      return { providers: [] } as T;
+      return { providers: providerShareVisualProviders() } as T;
     case 'maker:api-key:present':
       return { present: true } as T;
     case 'maker:usage:model-pricing':

@@ -14,5 +14,119 @@
     "copy": "Copiar link de compartilhamento",
     "copied": "Link de compartilhamento copiado",
     "copyFailed": "Não foi possível copiar o link de compartilhamento. Tente novamente em instantes."
+  },
+  "manage": {
+    "loadFailed": "Não foi possível carregar os detalhes do compartilhamento. Tente novamente em instantes.",
+    "notReady": "O compartilhamento não está disponível no momento. Verifique se você entrou e está online; uma nova tentativa será feita automaticamente.",
+    "needsUpdate": "Atualize o Cindy no computador do provedor para gerenciar este compartilhamento pelo celular.",
+    "offline": "Não foi possível conectar ao computador do provedor agora. Haverá uma nova tentativa quando a conexão voltar.",
+    "list": {
+      "title": "Provedores que compartilho",
+      "separator": ", ",
+      "membersCount_one": "Compartilhado com {{count}} pessoa",
+      "membersCount_many": "Compartilhado com {{count}} pessoas",
+      "membersCount_other": "Compartilhado com {{count}} pessoas",
+      "pendingCount_one": "{{count}} solicitação de compartilhamento pendente",
+      "pendingCount_many": "{{count}} solicitações de compartilhamento pendentes",
+      "pendingCount_other": "{{count}} solicitações de compartilhamento pendentes",
+      "shareOther": "Compartilhar outro provedor",
+      "emptyTitle": "Nenhum computador para gerenciar",
+      "emptyCopy": "Mantenha o Cindy online em um computador que permita controle remoto para consultar a cota, criar links de compartilhamento e tratar solicitações aqui.",
+      "unreachable": "Offline ou sem controle remoto permitido: {{devices}}. Eles aparecerão aqui quando for possível conectar.",
+      "needsUpdate": "Atualize o Cindy em {{devices}} para gerenciar o compartilhamento pelo celular.",
+      "failed": "Não foi possível carregar os detalhes do compartilhamento de {{devices}}. Puxe para baixo para tentar novamente.",
+      "note": "Os compartilhamentos ficam salvos no computador do provedor, que precisa estar online enquanto você os gerencia."
+    },
+    "pick": {
+      "title": "Escolher um provedor para compartilhar",
+      "empty": "Não há provedores para compartilhar neste computador",
+      "footer": "Só são listados os provedores conectados com “Permitir uso remoto” ativado. Essa opção fica em Configurações → Provedores nesse computador."
+    },
+    "link": {
+      "title": "Link de compartilhamento",
+      "create": "Criar link de compartilhamento",
+      "regenerate": "Criar novo link",
+      "generating": "Criando link…",
+      "copy": "Copiar link",
+      "copied": "Copiado",
+      "copyFailed": "Não foi possível copiar o link. Selecione-o e copie manualmente.",
+      "send": "Enviar link",
+      "oneTime": "Funciona uma vez",
+      "expiresIn": "Expira em {{time}}",
+      "expired": "Expirado",
+      "waiting": "Aguardando a solicitação…",
+      "checking": "Verificando este provedor…",
+      "footer": "O link funciona uma única vez e expira 5 minutos após ser criado. Depois de enviá-lo, continue nesta página: quando a solicitação chegar, compare o código de pareamento acima antes de aprovar.",
+      "gateInvocation": "“Permitir uso remoto” está desativado para este provedor, então os compartilhamentos existentes estão pausados e você não pode criar novos links.",
+      "gateMissing": "Não foi possível encontrar este provedor nesse computador. Ele pode ter sido removido.",
+      "failed": "Não foi possível criar o link de compartilhamento. Tente novamente em instantes.",
+      "needsUpdate": "Para criar links pelo celular, é preciso atualizar o Cindy no computador do provedor ou o serviço de compartilhamento."
+    },
+    "pending": {
+      "title": "Pendente",
+      "heading": "{{name}} solicitou acesso a {{provider}}",
+      "requestedAt": "Solicitado {{time}}",
+      "pairingLabel": "Código de pareamento",
+      "pairingAria": "Código de pareamento {{digits}}",
+      "pairingHint": "Antes de aprovar, você pode perguntar pelo canal em que enviou o link: “Qual código de pareamento aparece para você?” Aprove se o código for igual.",
+      "callout": "Após a aprovação, {{name}} poderá usar os modelos de {{provider}} nas próprias sessões. O Agent é executado no computador que hospeda este provedor e o uso é contabilizado no seu {{provider}}. Você pode pausar ou remover o acesso a qualquer momento em “{{provider}} · Acesso remoto e compartilhamento”.",
+      "calloutGroup": "Após a aprovação, {{name}} poderá usar os modelos de {{provider}} nas próprias sessões. O grupo de provedores escolhe o computador que executa o Agent, e o uso é contabilizado no seu {{provider}}. Você pode pausar ou remover o acesso a qualquer momento em “{{provider}} · Acesso remoto e compartilhamento”.",
+      "calloutClaudeEmail": "Enquanto {{name}} usa o provedor, o Agent pode ver o endereço de e-mail que você usa para entrar no Claude.",
+      "calloutUnknown": "Se você não reconhece esta pessoa, recuse; o link para de funcionar após a recusa.",
+      "approve": "Aprovar compartilhamento",
+      "reject": "Recusar solicitação",
+      "approved": "{{provider}} compartilhado com {{name}}",
+      "rejected": "Solicitação de {{name}} recusada; o link não funciona mais",
+      "gone": "Esta solicitação já foi tratada em outro lugar, foi retirada ou expirou.",
+      "uncertain": "Esse computador não respondeu, então a solicitação pode já ter sido tratada. Confira a lista atualizada.",
+      "failed": "Não foi possível concluir a ação. Tente novamente em instantes.",
+      "checking": "Verificando os dados do provedor. Você poderá aprovar quando a verificação terminar."
+    },
+    "computers": {
+      "title": "Computadores e cota",
+      "footer": "A cota vem das contas conectadas em cada computador e é atualizada cerca de uma vez por minuto. Computadores compartilhados por outras pessoas não mostram a cota aqui.",
+      "runningCount_one": "{{count}} tarefa em execução",
+      "runningCount_many": "{{count}} tarefas em execução",
+      "runningCount_other": "{{count}} tarefas em execução",
+      "shareComputer": "Computador de {{name}}",
+      "shareComputerUnknown": "Computador compartilhado",
+      "status": {
+        "idle": "Ocioso",
+        "full": "Lotado",
+        "paused": "Atribuições pausadas",
+        "cooling": "Em espera",
+        "quotaExhausted": "Cota esgotada",
+        "offline": "Offline",
+        "unavailable": {
+          "provider-off": "“Permitir uso remoto” está desativado para este provedor nesse computador",
+          "disconnected": "Provedor não conectado ou desativado",
+          "share-paused": "Compartilhamento pausado",
+          "share-removed": "Compartilhamento removido"
+        }
+      },
+      "quota": {
+        "loading": "Consultando cota…",
+        "unavailable": "Não é possível consultar a cota deste computador agora",
+        "none": "Este provedor não tem informações de cota",
+        "offline": "Este computador está offline, então não é possível consultar sua cota",
+        "needsUpdate": "Atualize o Cindy neste computador para ver a cota",
+        "unsupported": "Não é possível consultar a cota deste provedor",
+        "unlimited": "Nenhum limite pessoal definido",
+        "session": "Período atual",
+        "week": "Semanal",
+        "scoped": "Período separado",
+        "account": "Conta {{number}}"
+      }
+    },
+    "members": {
+      "title": "Pessoas com quem você compartilha",
+      "statusActive": "Ativo",
+      "statusRunning_one": "Ativo · {{count}} sessão em execução",
+      "statusRunning_many": "Ativo · {{count}} sessões em execução",
+      "statusRunning_other": "Ativo · {{count}} sessões em execução",
+      "statusPaused": "Em pausa",
+      "empty": "Você ainda não compartilhou com ninguém. Crie um link de compartilhamento e envie-o; quando solicitarem acesso e você aprovar, aparecerão aqui.",
+      "footer": "Para pausar ou remover um compartilhamento, ou alterar o grupo de provedores, use Configurações → Provedores em um computador."
+    }
   }
 }

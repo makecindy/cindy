@@ -14,5 +14,115 @@
     "copy": "Copy Share Link",
     "copied": "Share link copied",
     "copyFailed": "Couldn’t copy the share link. Try again in a moment."
+  },
+  "manage": {
+    "loadFailed": "Couldn’t load sharing details. Try again in a moment.",
+    "notReady": "Sharing isn’t available right now. Make sure you’re signed in and online; it will retry automatically.",
+    "needsUpdate": "Update Cindy on the provider’s computer to manage this share from your phone.",
+    "offline": "Can’t reach the provider’s computer right now. It will retry once the connection is back.",
+    "list": {
+      "title": "Providers I Share",
+      "separator": ", ",
+      "membersCount_one": "Shared with {{count}} person",
+      "membersCount_other": "Shared with {{count}} people",
+      "pendingCount_one": "{{count}} share request waiting",
+      "pendingCount_other": "{{count}} share requests waiting",
+      "shareOther": "Share Another Provider",
+      "emptyTitle": "No Computers to Manage",
+      "emptyCopy": "Keep Cindy online on a computer that allows remote control, and you can check quota, create share links, and handle requests here.",
+      "unreachable": "Offline or remote control not allowed: {{devices}}. Computers appear here once they can be reached.",
+      "needsUpdate": "Update Cindy on {{devices}} to manage sharing from your phone.",
+      "failed": "Couldn’t load sharing details from {{devices}}. Pull down to try again.",
+      "note": "Shares are stored on the provider’s computer, which needs to be online while you manage them."
+    },
+    "pick": {
+      "title": "Choose a Provider to Share",
+      "empty": "No Providers to Share on This Computer",
+      "footer": "Only connected providers with “Allow remote use” turned on are listed. That switch is in Settings → Providers on that computer."
+    },
+    "link": {
+      "title": "Share link",
+      "create": "Create Share Link",
+      "regenerate": "Create New Link",
+      "generating": "Creating link…",
+      "copy": "Copy Link",
+      "copied": "Copied",
+      "copyFailed": "Couldn’t copy the link. Select it and copy it manually.",
+      "send": "Send Link",
+      "oneTime": "Works once",
+      "expiresIn": "Expires in {{time}}",
+      "expired": "Expired",
+      "waiting": "Waiting for their request…",
+      "checking": "Checking this provider…",
+      "footer": "The link works once and expires 5 minutes after it’s created. After you send it, stay on this page: when their request arrives, compare the pairing code above before you approve.",
+      "gateInvocation": "“Allow remote use” is off for this provider, so existing shares are paused and you can’t create new links.",
+      "gateMissing": "This provider can’t be found on that computer. It may have been removed.",
+      "failed": "Couldn’t create the share link. Try again in a moment.",
+      "needsUpdate": "Creating links from your phone needs an update to Cindy on the provider’s computer or to the sharing service."
+    },
+    "pending": {
+      "title": "Pending",
+      "heading": "{{name}} Requested Access to {{provider}}",
+      "requestedAt": "Requested {{time}}",
+      "pairingLabel": "Pairing code",
+      "pairingAria": "Pairing code {{digits}}",
+      "pairingHint": "Before approving, you can ask them over the channel you sent the link through: “What pairing code do you see?” Approve if it matches.",
+      "callout": "Once approved, {{name}} can use {{provider}} models in their own sessions. The Agent runs on the computer hosting this provider and usage counts toward your {{provider}}. You can pause or remove access anytime in “{{provider}} · Remote & Sharing”.",
+      "calloutGroup": "Once approved, {{name}} can use {{provider}} models in their own sessions. The provider group picks the computer that runs the Agent, and usage counts toward your {{provider}}. You can pause or remove access anytime in “{{provider}} · Remote & Sharing”.",
+      "calloutClaudeEmail": "While {{name}} uses it, the Agent can see the email address you sign in to Claude with.",
+      "calloutUnknown": "If you don’t recognize this person, decline; the link stops working once declined.",
+      "approve": "Approve Sharing",
+      "reject": "Decline Request",
+      "approved": "Shared {{provider}} with {{name}}",
+      "rejected": "Declined {{name}}’s request; the link no longer works",
+      "gone": "This request was already handled elsewhere, withdrawn, or expired.",
+      "uncertain": "That computer didn’t respond, so the request may already be handled. Check the refreshed list.",
+      "failed": "That didn’t go through. Try again in a moment.",
+      "checking": "Checking the provider’s details. You can approve once that’s done."
+    },
+    "computers": {
+      "title": "Computers and Quota",
+      "footer": "Quota comes from the accounts signed in on each computer and updates about once a minute. Computers shared by others don’t show quota here.",
+      "runningCount_one": "{{count}} task running",
+      "runningCount_other": "{{count}} tasks running",
+      "shareComputer": "{{name}}'s computer",
+      "shareComputerUnknown": "Shared computer",
+      "status": {
+        "idle": "Idle",
+        "full": "Full",
+        "paused": "Assignments paused",
+        "cooling": "Cooling down",
+        "quotaExhausted": "Quota exhausted",
+        "offline": "Offline",
+        "unavailable": {
+          "provider-off": "“Allow remote use” is off for this provider on that computer",
+          "disconnected": "Provider not connected or turned off",
+          "share-paused": "Share paused",
+          "share-removed": "Share removed"
+        }
+      },
+      "quota": {
+        "loading": "Reading quota…",
+        "unavailable": "Can’t read this computer’s quota right now",
+        "none": "This provider has no quota information",
+        "offline": "This computer is offline, so its quota can’t be read",
+        "needsUpdate": "Update Cindy on this computer to see its quota",
+        "unsupported": "Quota can’t be read for this provider",
+        "unlimited": "No personal limit set",
+        "session": "Current Period",
+        "week": "Weekly",
+        "scoped": "Separate Period",
+        "account": "Account {{number}}"
+      }
+    },
+    "members": {
+      "title": "People You Share With",
+      "statusActive": "Active",
+      "statusRunning_one": "Active · {{count}} session running",
+      "statusRunning_other": "Active · {{count}} sessions running",
+      "statusPaused": "Paused",
+      "empty": "You haven’t shared with anyone yet. Create a share link and send it; once they request access and you approve, they’ll appear here.",
+      "footer": "To pause or remove a share, or change the provider group, use Settings → Providers on a computer."
+    }
   }
 }

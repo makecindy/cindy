@@ -7,14 +7,15 @@ import { fontWeight, lineHeight, radius, typeScale } from '@/theme/tokens';
  * 账号头像(设置页头部、左侧抽屉、账号切换列表共用)。
  * - 有图:圆形裁切;
  * - 无图:取名称首字母(大写),同一套字重 600 + textPrimary,只随尺寸换字号档;
- * - 尺寸两档:`large`(56,设置页账号头部)与 `regular`(44,抽屉 / 列表行)。
+ * - 尺寸三档:`large`(56,设置页账号头部)、`regular`(44,抽屉 / 列表行)与 `small`(32,设置行行首)。
  * 浮起面按规范带 1px 描边,不靠 surfaceElevated 的色差分层。
  */
-export type MobileUserAvatarSize = 'large' | 'regular';
+export type MobileUserAvatarSize = 'large' | 'regular' | 'small';
 
 const AVATAR_DIMENSION: Record<MobileUserAvatarSize, number> = {
   large: 56,
   regular: 44,
+  small: 32,
 };
 
 function mobileUserAvatarInitial(name: string | null | undefined): string {
@@ -45,7 +46,7 @@ export function MobileUserAvatar({
       {imageUrl ? (
         <Image source={{ uri: imageUrl }} style={{ height: dimension, width: dimension }} />
       ) : (
-        <Text style={size === 'large' ? styles.initialLarge : styles.initialRegular}>
+        <Text style={size === 'large' ? styles.initialLarge : size === 'small' ? styles.initialSmall : styles.initialRegular}>
           {mobileUserAvatarInitial(name)}
         </Text>
       )}
@@ -76,5 +77,11 @@ const makeStyles = (colors: ThemeColors) =>
       fontSize: typeScale.subtitle,
       fontWeight: fontWeight.semibold,
       lineHeight: lineHeight.subtitle,
+    },
+    initialSmall: {
+      color: colors.textPrimary,
+      fontSize: typeScale.bodySmall,
+      fontWeight: fontWeight.semibold,
+      lineHeight: lineHeight.bodySmall,
     },
   });

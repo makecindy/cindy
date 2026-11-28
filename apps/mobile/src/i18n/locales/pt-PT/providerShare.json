@@ -14,5 +14,119 @@
     "copy": "Copiar ligação de partilha",
     "copied": "Ligação de partilha copiada",
     "copyFailed": "Não foi possível copiar a ligação de partilha. Tente novamente dentro de momentos."
+  },
+  "manage": {
+    "loadFailed": "Não foi possível carregar os detalhes da partilha. Tente novamente dentro de momentos.",
+    "notReady": "A partilha não está disponível de momento. Certifique-se de que tem sessão iniciada e está online; será efetuada uma nova tentativa automaticamente.",
+    "needsUpdate": "Atualize o Cindy no computador do fornecedor para gerir esta partilha a partir do telemóvel.",
+    "offline": "De momento, não é possível contactar o computador do fornecedor. Haverá nova tentativa assim que a ligação for restabelecida.",
+    "list": {
+      "title": "Fornecedores que partilho",
+      "separator": ", ",
+      "membersCount_one": "Partilhado com {{count}} pessoa",
+      "membersCount_many": "Partilhado com {{count}} pessoas",
+      "membersCount_other": "Partilhado com {{count}} pessoas",
+      "pendingCount_one": "{{count}} pedido de partilha pendente",
+      "pendingCount_many": "{{count}} pedidos de partilha pendentes",
+      "pendingCount_other": "{{count}} pedidos de partilha pendentes",
+      "shareOther": "Partilhar outro fornecedor",
+      "emptyTitle": "Sem computadores para gerir",
+      "emptyCopy": "Mantenha o Cindy online num computador que permita controlo remoto para consultar a quota, criar ligações de partilha e tratar pedidos aqui.",
+      "unreachable": "Offline ou sem controlo remoto permitido: {{devices}}. Aparecerão aqui quando estiverem contactáveis.",
+      "needsUpdate": "Atualize o Cindy em {{devices}} para gerir a partilha a partir do telemóvel.",
+      "failed": "Não foi possível carregar os detalhes da partilha de {{devices}}. Puxe para baixo para tentar novamente.",
+      "note": "As partilhas ficam guardadas no computador do fornecedor, que tem de estar online enquanto as gere."
+    },
+    "pick": {
+      "title": "Escolher um fornecedor para partilhar",
+      "empty": "Não há fornecedores para partilhar neste computador",
+      "footer": "Só são listados os fornecedores ligados com «Permitir utilização remota» ativado. Essa opção está em Definições → Fornecedores nesse computador."
+    },
+    "link": {
+      "title": "Ligação de partilha",
+      "create": "Criar ligação de partilha",
+      "regenerate": "Criar nova ligação",
+      "generating": "A criar ligação…",
+      "copy": "Copiar ligação",
+      "copied": "Copiado",
+      "copyFailed": "Não foi possível copiar a ligação. Selecione-a e copie-a manualmente.",
+      "send": "Enviar ligação",
+      "oneTime": "Utilização única",
+      "expiresIn": "Expira dentro de {{time}}",
+      "expired": "Expirada",
+      "waiting": "A aguardar o pedido…",
+      "checking": "A verificar este fornecedor…",
+      "footer": "A ligação funciona uma única vez e expira 5 minutos depois de ser criada. Depois de a enviar, mantenha-se nesta página: quando o pedido chegar, compare o código de emparelhamento acima antes de aprovar.",
+      "gateInvocation": "A opção «Permitir utilização remota» está desativada para este fornecedor, pelo que as partilhas existentes estão em pausa e não pode criar novas ligações.",
+      "gateMissing": "Não foi possível encontrar este fornecedor nesse computador. Pode ter sido removido.",
+      "failed": "Não foi possível criar a ligação de partilha. Tente novamente dentro de momentos.",
+      "needsUpdate": "Para criar ligações a partir do telemóvel, é necessário atualizar o Cindy no computador do fornecedor ou o serviço de partilha."
+    },
+    "pending": {
+      "title": "Pendente",
+      "heading": "{{name}} pediu acesso a {{provider}}",
+      "requestedAt": "Pedido em {{time}}",
+      "pairingLabel": "Código de emparelhamento",
+      "pairingAria": "Código de emparelhamento {{digits}}",
+      "pairingHint": "Antes de aprovar, pode perguntar através do canal pelo qual enviou a ligação: «Que código de emparelhamento aparece?» Aprove se corresponder.",
+      "callout": "Após a aprovação, {{name}} poderá utilizar os modelos de {{provider}} nas suas próprias sessões. O Agent é executado no computador que aloja este fornecedor e a utilização é contabilizada no seu {{provider}}. Pode colocar o acesso em pausa ou removê-lo a qualquer momento em «{{provider}} · Acesso remoto e partilha».",
+      "calloutGroup": "Após a aprovação, {{name}} poderá utilizar os modelos de {{provider}} nas suas próprias sessões. O grupo de fornecedores escolhe o computador que executa o Agent e a utilização é contabilizada no seu {{provider}}. Pode colocar o acesso em pausa ou removê-lo a qualquer momento em «{{provider}} · Acesso remoto e partilha».",
+      "calloutClaudeEmail": "Enquanto {{name}} o utiliza, o Agent pode ver o endereço de e-mail que utiliza para iniciar sessão no Claude.",
+      "calloutUnknown": "Se não reconhecer esta pessoa, recuse; a ligação deixa de funcionar assim que o pedido for recusado.",
+      "approve": "Aprovar partilha",
+      "reject": "Recusar pedido",
+      "approved": "{{provider}} partilhado com {{name}}",
+      "rejected": "Pedido de {{name}} recusado; a ligação deixou de funcionar",
+      "gone": "Este pedido já foi tratado noutro local, foi retirado ou expirou.",
+      "uncertain": "Esse computador não respondeu, pelo que o pedido pode já ter sido tratado. Consulte a lista atualizada.",
+      "failed": "Não foi possível concluir a ação. Tente novamente dentro de momentos.",
+      "checking": "A verificar os dados do fornecedor. Poderá aprovar quando a verificação terminar."
+    },
+    "computers": {
+      "title": "Computadores e quota",
+      "footer": "A quota provém das contas com sessão iniciada em cada computador e é atualizada cerca de uma vez por minuto. Os computadores partilhados por outras pessoas não mostram a quota aqui.",
+      "runningCount_one": "{{count}} tarefa em execução",
+      "runningCount_many": "{{count}} tarefas em execução",
+      "runningCount_other": "{{count}} tarefas em execução",
+      "shareComputer": "Computador de {{name}}",
+      "shareComputerUnknown": "Computador partilhado",
+      "status": {
+        "idle": "Inativo",
+        "full": "Cheio",
+        "paused": "Atribuições em pausa",
+        "cooling": "Em espera",
+        "quotaExhausted": "Quota esgotada",
+        "offline": "Offline",
+        "unavailable": {
+          "provider-off": "«Permitir utilização remota» está desativado para este fornecedor nesse computador",
+          "disconnected": "Fornecedor não ligado ou desativado",
+          "share-paused": "Partilha em pausa",
+          "share-removed": "Partilha removida"
+        }
+      },
+      "quota": {
+        "loading": "A ler a quota…",
+        "unavailable": "Não é possível ler a quota deste computador de momento",
+        "none": "Este fornecedor não tem informações de quota",
+        "offline": "Este computador está offline, pelo que não é possível ler a sua quota",
+        "needsUpdate": "Atualize o Cindy neste computador para ver a quota",
+        "unsupported": "Não é possível ler a quota deste fornecedor",
+        "unlimited": "Sem limite pessoal definido",
+        "session": "Período atual",
+        "week": "Semanal",
+        "scoped": "Período separado",
+        "account": "Conta {{number}}"
+      }
+    },
+    "members": {
+      "title": "Pessoas com quem partilha",
+      "statusActive": "Ativo",
+      "statusRunning_one": "Ativo · {{count}} sessão em execução",
+      "statusRunning_many": "Ativo · {{count}} sessões em execução",
+      "statusRunning_other": "Ativo · {{count}} sessões em execução",
+      "statusPaused": "Em pausa",
+      "empty": "Ainda não partilhou com ninguém. Crie uma ligação de partilha e envie-a; quando pedirem acesso e aprovar, aparecerão aqui.",
+      "footer": "Para pausar ou remover uma partilha, ou alterar o grupo de fornecedores, utilize Definições → Fornecedores num computador."
+    }
   }
 }

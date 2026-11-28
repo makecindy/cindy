@@ -14,5 +14,119 @@
     "copy": "Copier le lien",
     "copied": "Lien de partage copié",
     "copyFailed": "Impossible de copier le lien de partage. Réessayez dans un instant."
+  },
+  "manage": {
+    "loadFailed": "Impossible de charger les détails du partage. Réessayez dans un instant.",
+    "notReady": "Le partage n'est pas disponible pour le moment. Vérifiez que vous êtes connecté et en ligne ; une nouvelle tentative aura lieu automatiquement.",
+    "needsUpdate": "Mettez à jour Cindy sur l'ordinateur du fournisseur pour gérer ce partage depuis votre téléphone.",
+    "offline": "Impossible de joindre l'ordinateur du fournisseur pour le moment. Une nouvelle tentative aura lieu dès que la connexion sera rétablie.",
+    "list": {
+      "title": "Fournisseurs que je partage",
+      "separator": ", ",
+      "membersCount_one": "Partagé avec {{count}} personne",
+      "membersCount_many": "Partagé avec {{count}} personnes",
+      "membersCount_other": "Partagé avec {{count}} personnes",
+      "pendingCount_one": "{{count}} demande de partage en attente",
+      "pendingCount_many": "{{count}} demandes de partage en attente",
+      "pendingCount_other": "{{count}} demandes de partage en attente",
+      "shareOther": "Partager un autre fournisseur",
+      "emptyTitle": "Aucun ordinateur à gérer",
+      "emptyCopy": "Gardez Cindy en ligne sur un ordinateur qui autorise le contrôle à distance : vous pourrez alors consulter le quota, créer des liens de partage et traiter les demandes ici.",
+      "unreachable": "Hors ligne ou contrôle à distance non autorisé : {{devices}}. Ils apparaîtront ici dès qu'ils seront joignables.",
+      "needsUpdate": "Mettez à jour Cindy sur {{devices}} pour gérer le partage depuis votre téléphone.",
+      "failed": "Impossible de charger les détails du partage de {{devices}}. Tirez vers le bas pour réessayer.",
+      "note": "Les partages sont enregistrés sur l'ordinateur du fournisseur, qui doit être en ligne pendant que vous les gérez."
+    },
+    "pick": {
+      "title": "Choisir un fournisseur à partager",
+      "empty": "Aucun fournisseur à partager sur cet ordinateur",
+      "footer": "Seuls les fournisseurs connectés pour lesquels « Autoriser l'utilisation à distance » est activé sont listés. Ce réglage se trouve dans Paramètres → Fournisseurs sur cet ordinateur."
+    },
+    "link": {
+      "title": "Lien de partage",
+      "create": "Créer un lien de partage",
+      "regenerate": "Créer un nouveau lien",
+      "generating": "Création du lien…",
+      "copy": "Copier le lien",
+      "copied": "Copié",
+      "copyFailed": "Impossible de copier le lien. Sélectionnez-le et copiez-le manuellement.",
+      "send": "Envoyer le lien",
+      "oneTime": "Utilisable une seule fois",
+      "expiresIn": "Expire dans {{time}}",
+      "expired": "Expiré",
+      "waiting": "En attente de la demande…",
+      "checking": "Vérification de ce fournisseur…",
+      "footer": "Le lien ne fonctionne qu'une fois et expire 5 minutes après sa création. Après l'avoir envoyé, restez sur cette page : quand la demande arrive, comparez le code d'appairage ci-dessus avant d'approuver.",
+      "gateInvocation": "« Autoriser l'utilisation à distance » est désactivé pour ce fournisseur : les partages existants sont donc en pause et vous ne pouvez pas créer de nouveaux liens.",
+      "gateMissing": "Ce fournisseur est introuvable sur cet ordinateur. Il a peut-être été supprimé.",
+      "failed": "Impossible de créer le lien de partage. Réessayez dans un instant.",
+      "needsUpdate": "Pour créer des liens depuis votre téléphone, il faut mettre à jour Cindy sur l'ordinateur du fournisseur ou le service de partage."
+    },
+    "pending": {
+      "title": "En attente",
+      "heading": "{{name}} a demandé l'accès à {{provider}}",
+      "requestedAt": "Demandé {{time}}",
+      "pairingLabel": "Code d'appairage",
+      "pairingAria": "Code d'appairage {{digits}}",
+      "pairingHint": "Avant d'approuver, vous pouvez lui demander via le canal par lequel vous avez envoyé le lien : « Quel code d'appairage voyez-vous ? » Approuvez s'il correspond.",
+      "callout": "Une fois la demande approuvée, {{name}} pourra utiliser les modèles {{provider}} dans ses propres sessions. L'Agent s'exécute sur l'ordinateur qui héberge ce fournisseur et la consommation est imputée à votre {{provider}}. Vous pouvez suspendre ou retirer l'accès à tout moment dans « {{provider}} · Accès distant et partage ».",
+      "calloutGroup": "Une fois la demande approuvée, {{name}} pourra utiliser les modèles {{provider}} dans ses propres sessions. Le groupe de fournisseurs choisit l'ordinateur qui exécute l'Agent, et la consommation est imputée à votre {{provider}}. Vous pouvez suspendre ou retirer l'accès à tout moment dans « {{provider}} · Accès distant et partage ».",
+      "calloutClaudeEmail": "Pendant que {{name}} l'utilise, l'Agent peut voir l'adresse e-mail avec laquelle vous vous connectez à Claude.",
+      "calloutUnknown": "Si vous ne connaissez pas cette personne, refusez ; le lien cesse de fonctionner une fois la demande refusée.",
+      "approve": "Approuver le partage",
+      "reject": "Refuser la demande",
+      "approved": "{{provider}} partagé avec {{name}}",
+      "rejected": "Demande de {{name}} refusée ; le lien ne fonctionne plus",
+      "gone": "Cette demande a déjà été traitée ailleurs, retirée ou a expiré.",
+      "uncertain": "Cet ordinateur n'a pas répondu : la demande a peut-être déjà été traitée. Vérifiez la liste actualisée.",
+      "failed": "L'action n'a pas abouti. Réessayez dans un instant.",
+      "checking": "Vérification des informations du fournisseur. Vous pourrez approuver une fois la vérification terminée."
+    },
+    "computers": {
+      "title": "Ordinateurs et quota",
+      "footer": "Le quota provient des comptes connectés sur chaque ordinateur et est actualisé environ une fois par minute. Les ordinateurs partagés par d'autres personnes n'affichent pas leur quota ici.",
+      "runningCount_one": "{{count}} tâche en cours d'exécution",
+      "runningCount_many": "{{count}} tâches en cours d'exécution",
+      "runningCount_other": "{{count}} tâches en cours d'exécution",
+      "shareComputer": "Ordinateur de {{name}}",
+      "shareComputerUnknown": "Ordinateur partagé",
+      "status": {
+        "idle": "Inactif",
+        "full": "Complet",
+        "paused": "Attributions en pause",
+        "cooling": "En refroidissement",
+        "quotaExhausted": "Quota épuisé",
+        "offline": "Hors ligne",
+        "unavailable": {
+          "provider-off": "« Autoriser l'utilisation à distance » est désactivé pour ce fournisseur sur cet ordinateur",
+          "disconnected": "Fournisseur non connecté ou désactivé",
+          "share-paused": "Partage en pause",
+          "share-removed": "Partage retiré"
+        }
+      },
+      "quota": {
+        "loading": "Lecture du quota…",
+        "unavailable": "Impossible de lire le quota de cet ordinateur pour le moment",
+        "none": "Ce fournisseur ne dispose d'aucune information de quota",
+        "offline": "Cet ordinateur est hors ligne, son quota ne peut donc pas être lu",
+        "needsUpdate": "Mettez à jour Cindy sur cet ordinateur pour voir son quota",
+        "unsupported": "La lecture du quota n'est pas prise en charge pour ce fournisseur",
+        "unlimited": "Aucune limite personnelle définie",
+        "session": "Période en cours",
+        "week": "Hebdomadaire",
+        "scoped": "Période distincte",
+        "account": "Compte {{number}}"
+      }
+    },
+    "members": {
+      "title": "Personnes avec qui vous partagez",
+      "statusActive": "Actif",
+      "statusRunning_one": "Actif · {{count}} session en cours d'exécution",
+      "statusRunning_many": "Actif · {{count}} sessions en cours d'exécution",
+      "statusRunning_other": "Actif · {{count}} sessions en cours d'exécution",
+      "statusPaused": "En pause",
+      "empty": "Vous n'avez encore partagé avec personne. Créez un lien de partage et envoyez-le ; une fois que la personne aura demandé l'accès et que vous l'aurez approuvé, elle apparaîtra ici.",
+      "footer": "Pour suspendre ou supprimer un partage, ou modifier le groupe de fournisseurs, utilisez Paramètres → Fournisseurs sur un ordinateur."
+    }
   }
 }
