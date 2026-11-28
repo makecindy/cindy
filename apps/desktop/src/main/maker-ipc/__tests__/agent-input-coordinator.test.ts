@@ -18,6 +18,7 @@ import { createInputEnqueueHarness, createInputRetryHarness, createInputStopHarn
 import { runSessionExecutionAction } from '../sessionExecutionActions.js';
 import { createSharedPermission } from '../sharedPermission.js';
 import type { InteractionDecision } from '@cindy/maker-core';
+import { ACP_IMAGE_PROMPT_TOO_LARGE, TurnDispatchRejectedError } from '@cindy/maker-core';
 import { toDesktopSessionDispatchOutcome } from '../../maker-host/send-outcome.js';
 import { getMainClassicalStyle, getResolvedMainLocale } from '../../i18n.desktop.js';
 import { mcpAppModelContext } from '../../mcp-apps/runtime.js';
@@ -9290,13 +9291,14 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(afterDone.pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
   });
 
-  it('restores a capability-rejected steer to the queue head for retry after switching models', async () => {
+  it.each(['pi', 'acp'] as const)('restores a rejected %s image steer to the queue head for retry', async agentKind => {
     const h = createHarness();
-    h.setAgentKind('pi');
+    h.setAgentKind(agentKind);
     const sid = 'steer-pi-image-capability-retry';
     const first = makeItem('q-1', 'first');
     const second = makeItem('q-2', 'describe the screenshot');
     h.steerToAgent.mockRejectedValueOnce(
+      agentKind === 'acp' ? new TurnDispatchRejectedError('oversized', { diagnostic: 'acp-image-prompt-too-large' }) :
       Object.assign(new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'), {
         code: 'PI_IMAGE_INPUT_UNSUPPORTED',
       }),
@@ -9311,7 +9313,8 @@ describe('AgentInputCoordinator steer transaction', () => {
     await flush();
 
     let projection = latestProjection(h.projections);
-    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
+    expect(projection.error).toBe(agentKind === 'pi' ? '[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'
+      : `provider-rejected-before-dispatch: ${ACP_IMAGE_PROMPT_TOO_LARGE}`);
     expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
     expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-2' });
     expect(projection.errorRetryText).toBe('describe the screenshot');

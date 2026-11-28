@@ -1,5 +1,7 @@
 import type { SessionSendResult } from './session.js';
 
+export const ACP_IMAGE_PROMPT_TOO_LARGE = '[ACP_IMAGE_PROMPT_TOO_LARGE] Your message was not sent. Send fewer images at once or reduce their size and try again.';
+
 export type SessionDispatchOutcome =
   | { dispatched: true }
   | {
@@ -19,7 +21,7 @@ export function toSessionDispatchOutcome(
       dispatched: false,
       reason: result.reason,
       context,
-      message: '[ACP_IMAGE_PROMPT_TOO_LARGE] Your message was not sent. Send fewer images at once or reduce their size and try again.',
+      message: ACP_IMAGE_PROMPT_TOO_LARGE,
     };
   }
   if (result.reason === 'provider-rejected-before-dispatch' && result.diagnostic === 'pi-retry-history-frame-too-large') {

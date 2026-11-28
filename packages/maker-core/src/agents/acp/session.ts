@@ -1383,10 +1383,6 @@ export class AcpSession {
       }
     }
     if (!next) return;
-    // Output produced between turns (autonomous agent work) is closed off as background.
-    this.emit(this.translator.flushPending());
-    this.clearBackgroundSegmentClose();
-    this.clearOpenToolCap();
     const turn: ActiveTurn = {
       token: ++this.turnSeq,
       usageModel: this.model,
@@ -1440,6 +1436,10 @@ export class AcpSession {
       }
       next.admission.resolve();
     }
+    // Only an admitted turn supersedes ongoing background work.
+    this.emit(this.translator.flushPending());
+    this.clearBackgroundSegmentClose();
+    this.clearOpenToolCap();
     this.turn = turn;
     this.resetTurnChangeCaptureState();
     this.backgroundPermission = null;
