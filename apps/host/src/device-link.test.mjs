@@ -905,7 +905,9 @@ test('headless dispatcher serves multiple clients and enforces owner and per-dev
         assert.equal(support.result.ordinaryCreateBaseRef, 1);
         const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-host-base-')));
         const git = (...args) => execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args], {
-          cwd: repo, stdio: 'ignore', env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' },
+          cwd: repo, stdio: 'ignore', env: { ...process.env,
+            GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : os.devNull,
+            GIT_CONFIG_NOSYSTEM: '1' },
         });
         fs.mkdirSync(path.join(profile, 'created-worktree'), { recursive: true });
         try {
