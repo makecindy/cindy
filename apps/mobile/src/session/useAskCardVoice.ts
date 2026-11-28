@@ -56,6 +56,7 @@ export function useAskCardVoice(input: {
   const failedRef = useRef(false);
   const mountedRef = useRef(true);
   const startAbortRef = useRef<AbortController | null>(null);
+  const replayAbortRef = useRef<AbortController | null>(null);
   const inputRef = useRef(input);
   inputRef.current = input;
   const authRef = useRef(auth);
@@ -99,6 +100,8 @@ export function useAskCardVoice(input: {
       mountedRef.current = false;
       startingRef.current = false;
       startAbortRef.current?.abort();
+      replayAbortRef.current?.abort();
+      replayAbortRef.current = null;
       runReadyRef.current?.resolve(null);
       startAbortRef.current = null;
       const run = runRef.current;
@@ -106,6 +109,13 @@ export function useAskCardVoice(input: {
       void run?.cancel().catch(() => undefined);
     };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      replayAbortRef.current?.abort();
+      replayAbortRef.current = null;
+    };
+  }, [input.deviceId]);
 
   const toggle = useCallback(() => {
     // A session that is still closing must finish first; starting a new one
@@ -222,6 +232,8 @@ export function useAskCardVoice(input: {
       return;
     }
     retryingRef.current = true;
+    const replayAbort = new AbortController();
+    replayAbortRef.current = replayAbort;
     setRetrying(true);
     setError(null);
     clearSpeakerFiltered();
@@ -232,25 +244,27 @@ export function useAskCardVoice(input: {
         await replayAskCardDictation({
           deviceId,
           audio: retained,
+          signal: replayAbort.signal,
           getAccessToken: () => currentAuth.getAccessToken(),
           refreshAccessToken: () => currentAuth.refreshAccessToken(),
           apiFetch: currentAuth.apiFetch,
           getText: () => inputRef.current.getText(),
-          setText: (value, nextSelection) => { if (mountedRef.current) inputRef.current.setText(value, nextSelection); },
+          setText: (value, nextSelection) => { if (mountedRef.current && !replayAbort.signal.aborted) inputRef.current.setText(value, nextSelection); },
           getSelection: () => selection,
           onError: (message) => {
-            if (mountedRef.current) setError(message);
+            if (mountedRef.current && !replayAbort.signal.aborted) setError(message);
           },
         });
-        if (mountedRef.current) {
+        if (mountedRef.current && !replayAbort.signal.aborted) {
           failedRetry.clear();
           setError(null);
         }
       } catch (err) {
-        if (mountedRef.current) {
+        if (mountedRef.current && !replayAbort.signal.aborted) {
           setError(err instanceof Error ? err.message : String(err));
         }
       } finally {
+        if (replayAbortRef.current === replayAbort) replayAbortRef.current = null;
         retryingRef.current = false;
         if (mountedRef.current) setRetrying(false);
       }

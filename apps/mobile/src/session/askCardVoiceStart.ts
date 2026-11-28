@@ -145,6 +145,7 @@ export async function startAskCardDictation(input: {
 export async function replayAskCardDictation(input: {
   deviceId: string;
   audio: RetainedFailedVoiceAudio;
+  signal?: AbortSignal;
   getAccessToken: () => Promise<string | null>;
   refreshAccessToken: () => Promise<string | null>;
   apiFetch: AskCardAuth['apiFetch'];
@@ -163,6 +164,7 @@ export async function replayAskCardDictation(input: {
   );
   await replayMobileVoiceAudio({
     audio: input.audio,
+    signal: input.signal,
     credential,
     requestedAt: Date.now(),
     connectionProvider: (providerId) => voiceContext.createAsrConnection(providerId),

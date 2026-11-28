@@ -1582,6 +1582,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const failedVoiceRetry = useMobileFailedVoiceRetry(`${deviceId ?? ''}:${sessionId}`);
   const voiceRetryRunSeqRef = useRef(0);
+  const voiceRetryAbortRef = useRef<AbortController | null>(null);
   const {
     visible: voiceSpeakerFiltered,
     show: showVoiceSpeakerFiltered,
@@ -6119,6 +6120,9 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   }, [clearVoiceSpeakerFiltered, deviceId, failedVoiceRetry, openLink, prewarmAgentOnTyping, renderItems, showVoiceSpeakerFiltered, t, voiceIsProcessing, voiceState, writeVoiceDraft]);
 
   const cancelVoiceForAppBackground = useCallback(() => {
+    voiceRetryRunSeqRef.current += 1;
+    voiceRetryAbortRef.current?.abort();
+    voiceRetryAbortRef.current = null;
     const controller = voiceControllerSessionRef.current;
     const ownsActiveRun = shouldCancelMobileVoiceForBackground({
       startupInFlight: voiceStartupInFlightRef.current,
@@ -6132,7 +6136,6 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       return;
     }
 
-    voiceRetryRunSeqRef.current += 1;
     failedVoiceRetry.clear();
     voiceStartupSeqRef.current += 1;
     voiceControllerSessionRef.current = null;
@@ -6186,6 +6189,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       voicePermissionRequestInFlightRef.current = false;
       voiceStartupSeqRef.current += 1;
       voiceRetryRunSeqRef.current += 1;
+      voiceRetryAbortRef.current?.abort();
+      voiceRetryAbortRef.current = null;
       voiceStartupInFlightRef.current = false;
       voiceStopInFlightRef.current = false;
       voiceRecordingActiveRef.current = false;
@@ -6273,6 +6278,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
     const retained = failedVoiceRetry.peek();
     if (!retained) return;
     const retryRunSeq = ++voiceRetryRunSeqRef.current;
+    const retryAbort = new AbortController();
+    voiceRetryAbortRef.current = retryAbort;
     voiceStopInFlightRef.current = true;
     const caretPlacementSeq = ++voiceCaretPlacementSeqRef.current;
     setVoiceCaretPlacementPending(true);
@@ -6300,6 +6307,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         ?? { start: initialDraft.length, end: initialDraft.length };
       const latestDraft = await replayMobileVoiceAudio({
         audio: retained,
+        signal: retryAbort.signal,
         credential,
         requestedAt: Date.now(),
         connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),
@@ -6359,6 +6367,7 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         setVoiceError(formatRemoteError(err));
       }
     } finally {
+      if (voiceRetryAbortRef.current === retryAbort) voiceRetryAbortRef.current = null;
       voiceStopInFlightRef.current = false;
     }
   }, [auth, clearVoiceSpeakerFiltered, deviceId, failedVoiceRetry, renderItems, setVoiceState, voiceIsProcessing, voiceState, writeVoiceDraft]);

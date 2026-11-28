@@ -8,6 +8,7 @@ import type { StoredMobileVoiceCredential } from '@/session/mobileVoiceCredentia
 import { createMobileAsrProvider } from '@/session/mobileRealtimeAsrProvider';
 import { prewarmMobileRealtimeAudio } from '@/session/mobileRealtimeAudio';
 import { readCachedMobileVoiceDictionary } from '@/session/mobileVoiceDictionaryCache';
+import { getMobileVoiceInputHistoryForHost } from '@/session/mobileVoiceHistoryStore';
 import { isMobileVoiceRateLimited } from '@/session/mobileVoiceInput';
 import {
   CINDY_MANAGED_REFINER_PROVIDER,
@@ -129,8 +130,14 @@ async function buildPrewarm(
       credential.settings?.language,
       CINDY_MANAGED_REFINER_PROVIDER,
     );
+    const recentHistory = await getMobileVoiceInputHistoryForHost(
+      deviceId,
+      credential.settings?.voiceInputHistory,
+    ).catch(() => undefined);
     const rawHints = buildAsrRecognitionHints({
       dictionaryEntries: readCachedMobileVoiceDictionary(deviceId),
+      recentHistory,
+      recentHistoryOrder: 'newest-first',
     });
     const provider = createMobileAsrProvider(credential, {
       connectionProvider: (providerId) => voiceContext.createAsrConnection(providerId),

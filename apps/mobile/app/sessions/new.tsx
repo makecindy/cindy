@@ -1114,6 +1114,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const failedVoiceRetry = useMobileFailedVoiceRetry(selectedDeviceId ?? undefined);
   const voiceRetryRunSeqRef = useRef(0);
+  const voiceRetryAbortRef = useRef<AbortController | null>(null);
   const {
     visible: voiceSpeakerFiltered,
     show: showVoiceSpeakerFiltered,
@@ -2014,6 +2015,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
 
   const cancelVoiceForDeviceSwitch = useCallback(() => {
     voiceRetryRunSeqRef.current += 1;
+    voiceRetryAbortRef.current?.abort();
+    voiceRetryAbortRef.current = null;
     failedVoiceRetry.clear();
     voicePermissionRequestSeqRef.current += 1;
     voicePermissionRequestAbortRef.current?.abort();
@@ -2038,6 +2041,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       // Android permission sheets can report `background`, but permission
       // resolution has not claimed audio resources and must survive that event.
       if (nextState !== 'background') return;
+      voiceRetryRunSeqRef.current += 1;
+      voiceRetryAbortRef.current?.abort();
+      voiceRetryAbortRef.current = null;
       if (shouldCancelMobileVoiceForBackground({
         startupInFlight: voiceStartupInFlightRef.current,
         recordingActive: voiceRecordingActiveRef.current,
@@ -3637,6 +3643,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     const retained = failedVoiceRetry.peek();
     if (!retained) return;
     const retryRunSeq = ++voiceRetryRunSeqRef.current;
+    const retryAbort = new AbortController();
+    voiceRetryAbortRef.current = retryAbort;
     voiceStopInFlightRef.current = true;
     setVoiceError(null);
     clearVoiceSpeakerFiltered();
@@ -3664,6 +3672,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       voicePendingSelectionEchoesRef.current = [];
       await replayMobileVoiceAudio({
         audio: retained,
+        signal: retryAbort.signal,
         credential,
         requestedAt: Date.now(),
         connectionProvider: (providerId: string) => voiceContext.createAsrConnection(providerId),
@@ -3723,6 +3732,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
         setVoiceError(formatRemoteError(err));
       }
     } finally {
+      if (voiceRetryAbortRef.current === retryAbort) voiceRetryAbortRef.current = null;
       voiceStopInFlightRef.current = false;
     }
   }, [auth, clearVoiceSpeakerFiltered, failedVoiceRetry, selectedDeviceId, setVoiceState, voiceIsProcessing, voiceState]);
@@ -3809,6 +3819,9 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
       voicePermissionRequestAbortRef.current = null;
       voicePermissionRequestInFlightRef.current = false;
       voiceStartupSeqRef.current += 1;
+      voiceRetryRunSeqRef.current += 1;
+      voiceRetryAbortRef.current?.abort();
+      voiceRetryAbortRef.current = null;
       voiceStartupInFlightRef.current = false;
       voiceStopInFlightRef.current = false;
       voiceRecordingActiveRef.current = false;

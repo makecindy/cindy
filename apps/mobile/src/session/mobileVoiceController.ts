@@ -445,6 +445,24 @@ export function createMobileVoiceControllerSession(
     return buildEditableRange(result.insertion, segmentIds, false);
   };
 
+  const selectedAudioGate = options.audioGate instanceof Promise
+    ? new MobilePendingAudioGate(options.audioGate, (error) => {
+      void handleAudioFailure(error instanceof Error ? error : new Error(String(error)));
+    })
+    : options.audioGate;
+  // Retain exactly the samples forwarded to ASR. The speaker gate may replace
+  // another person's speech with silence, which must never reappear on retry.
+  const recordingGate: AudioGate | undefined = selectedAudioGate && {
+    begin(emit) {
+      selectedAudioGate.begin((chunk, trace) => {
+        failedAudioAccumulator.append(chunk);
+        emit(chunk, trace);
+      });
+    },
+    push: (chunk, trace) => selectedAudioGate.push(chunk, trace),
+    finish: () => selectedAudioGate.finish(),
+    abort: () => selectedAudioGate.abort(),
+  };
   const controller = new VoiceInputController({
     asr,
     refiner,
@@ -456,11 +474,7 @@ export function createMobileVoiceControllerSession(
     // A reconnect allocates another managed session and can hit the account
     // limit; report that instead of the generic "stopped receiving" failure.
     recoveryErrorMessage: mobileVoiceRateLimitMessage,
-    audioGate: options.audioGate instanceof Promise
-      ? new MobilePendingAudioGate(options.audioGate, (error) => {
-        void handleAudioFailure(error instanceof Error ? error : new Error(String(error)));
-      })
-      : options.audioGate,
+    audioGate: recordingGate,
     logger: new VoiceTimelineLogger((event) => {
       recordTimeline(event);
       options.onTimelineEvent?.(event);
@@ -591,7 +605,7 @@ export function createMobileVoiceControllerSession(
             // later flush post-stop speech/noise.
             if (captureTornDown() && !(runPhase === 'stopping' && chunk.drained)) return false;
             audioLevels.append(chunk.pcm16, chunk.trace.sampleRate ?? options.credential.asr.pcmSampleRate ?? 16_000);
-            failedAudioAccumulator.append(chunk.pcm16);
+            if (!recordingGate) failedAudioAccumulator.append(chunk.pcm16);
             if (!soundDetected && hasPcmSound(chunk.pcm16)) soundDetected = true;
             if (runPhase === 'running') markCaptureLive(chunk.trace, chunk.timestampSource);
             controller.appendAudio(chunk.pcm16, chunk.trace);
@@ -954,6 +968,7 @@ export type MobileVoiceReplayOptions = Omit<
   'startAudio' | 'audioGate' | 'onRetainedFailedAudio' | 'onReadyForStartCue' | 'onReadyForEndCue'
 > & {
   audio: RetainedFailedVoiceAudio;
+  signal?: AbortSignal;
 };
 
 /**
@@ -965,6 +980,7 @@ export type MobileVoiceReplayOptions = Omit<
 export async function replayMobileVoiceAudio(
   options: MobileVoiceReplayOptions,
 ): Promise<string> {
+  if (options.signal?.aborted) throw new Error('Voice replay cancelled');
   const chunks = sliceRetainedAudioForReplay(options.audio);
   const startAudio: StartRealtimeAudio = async ({ onChunk }) => {
     const baseAt = Date.now();
@@ -990,12 +1006,25 @@ export async function replayMobileVoiceAudio(
       options.onStateChanged?.(next === 'listening' ? 'submitting' : next);
     },
   });
+  let rejectAborted!: (error: Error) => void;
+  const aborted = new Promise<never>((_, reject) => { rejectAborted = reject; });
+  const cancelReplay = () => {
+    void session.cancel().catch(() => undefined);
+    rejectAborted(new Error('Voice replay cancelled'));
+  };
+  options.signal?.addEventListener('abort', cancelReplay, { once: true });
   options.onStateChanged?.('submitting');
   try {
-    await session.start();
-    return await session.stop();
+    if (options.signal?.aborted) throw new Error('Voice replay cancelled');
+    await Promise.race([session.start(), aborted]);
+    if (options.signal?.aborted) throw new Error('Voice replay cancelled');
+    const draft = await Promise.race([session.stop(), aborted]);
+    if (options.signal?.aborted) throw new Error('Voice replay cancelled');
+    return draft;
   } catch (error) {
     await session.cancel().catch(() => undefined);
     throw error;
+  } finally {
+    options.signal?.removeEventListener('abort', cancelReplay);
   }
 }
