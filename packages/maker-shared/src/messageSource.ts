@@ -23,6 +23,8 @@ export interface MessageRoute {
   model: string;
   providerId: string | null;
   agentDeviceId: string | null;
+  /** Optional display name snapshot for plugin engines (`agentKind === 'acp'`). */
+  engineName?: string;
 }
 
 export interface MessageDispatchRoute extends MessageRoute {
@@ -36,11 +38,17 @@ export function readMessageDispatchRoute(meta: unknown): MessageDispatchRoute | 
     || typeof raw.model !== 'string' || !raw.model || raw.model.length > 1024
     || (raw.providerId !== null && typeof raw.providerId !== 'string')
     || (raw.agentDeviceId !== null && typeof raw.agentDeviceId !== 'string')) return undefined;
+  const engineName = sanitizeSourceName(raw.engineName);
   const selected = raw.selected ? readMessageDispatchRoute({ dispatchRoute: { ...asRecord(raw.selected), selected: undefined } }) : undefined;
-  return { agentKind: raw.agentKind as MessageRoute['agentKind'], model: raw.model,
-    providerId: raw.providerId as string | null, agentDeviceId: raw.agentDeviceId as string | null,
+  return {
+    agentKind: raw.agentKind as MessageRoute['agentKind'],
+    model: raw.model,
+    providerId: raw.providerId as string | null,
+    agentDeviceId: raw.agentDeviceId as string | null,
+    ...(engineName ? { engineName } : {}),
     ...(selected ? { selected } : {}),
-    ...(typeof raw.switchError === 'string' ? { switchError: raw.switchError.slice(0, 4000) } : {}) };
+    ...(typeof raw.switchError === 'string' ? { switchError: raw.switchError.slice(0, 4000) } : {}),
+  };
 }
 
 export function messageDispatchRouteMismatch(route: MessageDispatchRoute): boolean {
@@ -49,16 +57,44 @@ export function messageDispatchRouteMismatch(route: MessageDispatchRoute): boole
     || route.providerId !== target.providerId || route.agentDeviceId !== target.agentDeviceId);
 }
 
-/** Final in-memory comparison at dispatch; no catalog reads, probes or retries. */
-export function captureMessageDispatchRoute(actual: MessageRoute, selected?: MessageRoute, switchError?: string): MessageDispatchRoute {
-  const snapshot = { ...actual, ...(selected ? { selected: { ...selected } } : {}) };
-  return messageDispatchRouteMismatch(snapshot)
-    ? { ...snapshot, ...(switchError ? { switchError } : {}) } : { ...actual };
+function normalizeMessageRoute(route: MessageRoute): MessageRoute {
+  const engineName = sanitizeSourceName(route.engineName);
+  return {
+    agentKind: route.agentKind,
+    model: route.model,
+    providerId: route.providerId,
+    agentDeviceId: route.agentDeviceId,
+    ...(engineName ? { engineName } : {}),
+  };
 }
 
-export function messageDispatchRouteLabel(route: MessageRoute, pluginEngineName = 'ACP'): string {
-  const agent = route.agentKind === 'claude-code' ? 'Claude Code' : route.agentKind === 'codex' ? 'Codex'
-    : route.agentKind === 'pi' ? 'Pi' : pluginEngineName;
+/** Final in-memory comparison at dispatch; returns a snapshot only when actual differs from selected. */
+export function captureMessageDispatchRoute(
+  actual: MessageRoute,
+  selected?: MessageRoute,
+  switchError?: string,
+): MessageDispatchRoute | undefined {
+  if (!selected) return undefined;
+  const snapshot: MessageDispatchRoute = {
+    ...normalizeMessageRoute(actual),
+    selected: normalizeMessageRoute(selected),
+  };
+  return messageDispatchRouteMismatch(snapshot)
+    ? { ...snapshot, ...(switchError ? { switchError } : {}) }
+    : undefined;
+}
+
+export function messageDispatchRouteLabel(
+  route: MessageRoute,
+  pluginEngineName = 'ACP',
+  defaultPluginModelName?: string,
+): string {
+  if (route.agentKind === 'acp') {
+    const engine = sanitizeSourceName(route.engineName) || pluginEngineName;
+    const model = route.model === 'default' && defaultPluginModelName ? defaultPluginModelName : route.model;
+    return [engine, model].filter(Boolean).join(' · ');
+  }
+  const agent = route.agentKind === 'claude-code' ? 'Claude Code' : route.agentKind === 'codex' ? 'Codex' : 'Pi';
   return [agent, route.providerId, route.model].filter(Boolean).join(' · ');
 }
 
