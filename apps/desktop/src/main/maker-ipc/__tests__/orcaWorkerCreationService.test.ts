@@ -3709,8 +3709,32 @@ describe('local Worker worktree ownership', () => {
     await expect(result).resolves.toMatchObject({ok: false});
     expect(removed).toEqual([WORKER_SESSION_ID]);
     expect(deps.releaseWorkerCreationReservation).toHaveBeenCalledWith('worker-1');
-    if (phase === 'create' || phase === 'ownership' || phase === 'lease') expect(deps.bootstrapSession).not.toHaveBeenCalled();
-    if (phase === 'renewal') expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+    if (phase === 'create' || phase === 'ownership' || phase === 'lease') {
+      expect(deps.bootstrapSession).not.toHaveBeenCalled();
+      expect(deps.closeWorkerSession).not.toHaveBeenCalled();
+    }
+    if (phase === 'renewal') {
+      expect(deps.bootstrapSession).toHaveBeenCalledOnce();
+      expect(deps.closeWorkerSession).toHaveBeenCalledExactlyOnceWith(WORKER_SESSION_ID);
+    }
+  });
+  // The session started before the lease expired must be closed before its worktree goes away: a slow
+  // close holds the discard back, so the agent never loses its directory while it is still shutting down.
+  it('waits for the started session to close before discarding the worktree when the lease expires after bootstrap', async () => {
+    let finishClose!: () => void;
+    const closing = new Promise<void>(resolve => {finishClose = resolve;});
+    const {deps, service} = createDeps({
+      createWorkerWorktree: vi.fn(async () => '/repo/.cindy-worktrees/worker'),
+      discardWorkerWorktree: vi.fn(async () => {}),
+      renewWorkerCreationReservation: vi.fn(async () => false).mockResolvedValueOnce(true),
+      closeWorkerSession: vi.fn(async () => {await closing;}),
+    });
+    const result = service.createWorker(request);
+    await vi.waitFor(() => expect(deps.closeWorkerSession).toHaveBeenCalledExactlyOnceWith(WORKER_SESSION_ID));
+    expect(deps.discardWorkerWorktree).not.toHaveBeenCalled();
+    finishClose();
+    await expect(result).resolves.toMatchObject({ok: false});
+    expect(deps.discardWorkerWorktree).toHaveBeenCalledExactlyOnceWith(WORKER_SESSION_ID);
   });
   it('never claims or discards an inherited checkout, even when bootstrap fails', async () => {
     const {deps, service} = createDeps({
