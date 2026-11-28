@@ -1,4 +1,9 @@
-import type { ModelGroupTraceQuota } from '../../shared/modelGroups.js';
+/**
+ * 智能路由运行时的桌面装配(architecture-invariants §2 & §5)：
+ * 所有依赖顶层静态导入，所有端口调用期转发；纯 Node 核心逻辑在 runtimeCore.ts。
+ */
+import type { ProviderView } from '@cindy/model-providers';
+import type { ModelGroupAgentKind, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
 import { activeOwnerScopeKey } from '../appSessionState.js';
 import { getPluginModelPickerAgents, isPluginRouteHarnessInstalled } from '../cindy-brain/ghostModelPicker.js';
 import { remoteBackgroundInvoke } from '../device-link/index.js';
@@ -7,37 +12,34 @@ import { getGoalController } from '../goal-host/index.js';
 import { getSessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { isRemoteProviderInvocationAllowed } from '../maker-host/remote-provider-access-store.js';
+import * as pluginEnginesIpc from '../maker-ipc/pluginEnginesIpc.js';
 import { readWorkerAgentLocations } from '../maker-ipc/workerAgentLocations.js';
+import { getProviderGroupRouter } from '../provider-group/runtime.js';
+import { fiveHourTightFor } from '../provider-group/scheduler.js';
+import { readProviderGroup } from '../provider-group/store.js';
 import { getQuotaOverviewService } from '../quota-overview/service.js';
+import { readDeviceProviderCatalog, readRemotePluginEngines } from '../remote-agent/controller/deviceCatalog.js';
+import { readSubscriptionPoolScheduling } from '../subscription-accounts/runtime.js';
 import { getGatewayModelPricing } from '../usage/modelPricing.js';
 import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
-import { readDeviceProviderCatalog } from '../remote-agent/controller/deviceCatalog.js';
-import { recordModelGroupDecision } from './decisionLog.js';
-import { createModelGroupResolver, modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
-import { readModelGroupSessionBinding } from './sessionBindings.js';
-import { readModelGroupsConfig } from './store.js';
-import { computeModelGroupSwitchOffer } from './switchOffer.js';
-
+import type { ModelGroupInnerQuota } from './pick.js';
+import { modelGroupQuotaKey, MODEL_GROUP_REMOTE_WAIT_MS } from './resolver.js';
+import { createModelGroupRuntime } from './runtimeCore.js';
 
 /** 选路时让额度总览保持采集这么久；面板没开时它平时不采集。 */
 const QUOTA_LEASE_MS = 5 * 60_000;
-/** 等一份新额度最多这么久，等不到就用已有的；不让新任务卡在读额度上。读别处的位置与目录用同一个上限。 */
+/** 等一份新额度最多这么久，等不到就用已有的；不让新任务卡在读额度上。 */
 const QUOTA_WAIT_MS = MODEL_GROUP_REMOTE_WAIT_MS;
+const INNER_GROUP_TTL_MS = 60_000;
+const innerGroups = new Map<string, { at: number; value: Promise<ModelGroupInnerQuota | null> }>();
 
-/**
- * 额度总览里的订阅窗口：本机的按供应商连接 ID；别的电脑上的按那台的设备 id + 那台的连接 ID(modelGroupQuotaKey)，
- * 只给同一台电脑上的来源用。那台此刻读不到、只剩上次读数的(lastSeenAtMs)不算；与本机是同一个账号、
- * 总览里只列了本机那份的，别的电脑上的来源按读不到额度处理。分享来的来源按运行位置 `share:<id>` 取那个分享
- * 开放给本账号的额度(分享者没开「允许查看剩余额度」或读不到时总览里没有它，按读不到处理)。
- */
-async function quotaWindows() {
+async function quotaWindows(options?: { cached?: boolean }) {
   const overview = getQuotaOverviewService();
   overview.lease(QUOTA_LEASE_MS);
-  const build = await overview.fresh(QUOTA_WAIT_MS);
+  const build = await overview.fresh(options?.cached ? 0 : QUOTA_WAIT_MS);
   const byProvider = new Map<string, (ModelGroupTraceQuota & { scopedTo?: string | null })[]>();
   for (const source of build?.input.sources ?? []) {
     if (source.kind !== 'subscription' || (source.device && source.lastSeenAtMs != null)) continue;
-    // 分享来源在总览里的 id 就是它的运行位置 `share:<shareId>`。
     const location = source.shared ? source.id : source.device?.id;
     byProvider.set(modelGroupQuotaKey(location, source.providerId), source.windows.map((window) => ({
       usedPercent: window.usedPercent,
@@ -49,58 +51,95 @@ async function quotaWindows() {
   return byProvider;
 }
 
-export const resolver = createModelGroupResolver({
-  config: readModelGroupsConfig,
-  recordDecision: recordModelGroupDecision,
-  views: () => getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true }),
-  // 另一台电脑借这台跑 Agent 时只用开了「允许被远程调用」的连接(与设置里那个开关同一份)。
-  remoteInvocable: isRemoteProviderInvocationAllowed,
-  agents: getPluginModelPickerAgents,
-  // 别的电脑上的引擎问那台的 maker:agent:status，与插件选路同一判断。
+function innerQuota(source: { providerId: string; model: string; agentKind: ModelGroupAgentKind }): Promise<ModelGroupInnerQuota | null> {
+  if (source.agentKind === 'acp') return Promise.resolve(null);
+  const agent = source.agentKind === 'cc' ? 'claude-code' as const : source.agentKind;
+  const config = readProviderGroup(source.providerId);
+  if (config) {
+    return (async (): Promise<ModelGroupInnerQuota | null> => {
+      const router = getProviderGroupRouter();
+      const progress = router.pickProgress?.(source.providerId);
+      const prefix = [activeOwnerScopeKey(), source.providerId, source.model, agent].join('\u0000');
+      const key = `${prefix}\u0000${progress?.lastPicked ?? ''}\u0000${progress?.roundPicks ?? 0}\u0000${JSON.stringify([...(progress?.weightCounters ?? [])])}`;
+      const cached = innerGroups.get(key);
+      if (cached && Date.now() - cached.at < INNER_GROUP_TTL_MS) return cached.value;
+      const value = router.pick({ providerId: source.providerId, agentKind: agent, model: source.model, localTask: true, preview: true })
+        .then((picked): ModelGroupInnerQuota | null => {
+          if (picked.kind === 'none') return null;
+          if (picked.kind === 'unavailable') return { limited: !picked.full, urgency: null, fiveHourTight: false, headroom: null };
+          const facts = picked.facts;
+          if (!facts) return null;
+          return { limited: false, urgency: facts.urgency ?? null, fiveHourTight: fiveHourTightFor(facts), headroom: facts.headroom ?? null };
+        })
+        .catch(() => null);
+      innerGroups.set(key, { at: Date.now(), value });
+      for (const [entry, item] of innerGroups) {
+        if (Date.now() - item.at >= INNER_GROUP_TTL_MS || (entry !== key && entry.startsWith(`${prefix}\u0000`))) innerGroups.delete(entry);
+      }
+      return value;
+    })();
+  }
+  const view = desktopModelGroupRuntime.localProviderView(source.providerId);
+  if ((view?.subscriptionAccountKeys?.length ?? 0) < 2) return Promise.resolve(null);
+  return readSubscriptionPoolScheduling(source.providerId, source.model, { agent }).then((summary) => summary && {
+    limited: summary.accounts === 0 && !summary.full,
+    urgency: summary.urgency,
+    fiveHourTight: summary.fiveHourTight,
+    headroom: summary.headroom ?? null,
+  }, () => null);
+}
+
+let sshCodexProvidersReader: ((hostId: string) => Promise<ProviderView[]>) | null = null;
+
+/** 由 bootstrap-electron 注入 SSH Codex 供应商查询，避免 desktopResolver 反向静态依赖 maker-host/index.ts。 */
+export function registerDesktopSshCodexProvidersReader(
+  reader: ((hostId: string) => Promise<ProviderView[]>) | null,
+): void {
+  sshCodexProvidersReader = reader;
+}
+
+let pluginEnginesSubscribed = false;
+function ensurePluginEnginesSubscription(): void {
+  if (pluginEnginesSubscribed) return;
+  pluginEnginesSubscribed = true;
+  pluginEnginesIpc.onPluginEnginesChanged?.(() => {
+    desktopModelGroupRuntime.refreshLocalPluginEngines();
+  });
+}
+
+export const desktopModelGroupRuntime = createModelGroupRuntime({
+  scope: () => activeOwnerScopeKey(),
+  localViews: () => {
+    ensurePluginEnginesSubscription();
+    return getDesktopProviderService({ allowSideEffects: false }).listProviders({ allowSideEffects: false, snapshotOnly: true });
+  },
+  pluginEngines: () => pluginEnginesIpc.listPluginEngineViews(),
+  localAgents: () => getPluginModelPickerAgents(),
   harnessInstalled: (agent, agentDeviceId) => isPluginRouteHarnessInstalled(agent, agentDeviceId, async (deviceId, name) => {
     const result = await remoteBackgroundInvoke(deviceId, 'maker:agent:status', [name]);
     if (!result.ok) throw new Error(result.error?.message ?? 'Remote agent status unavailable');
     return result.result as { binaryReady?: boolean } | null | undefined;
   }),
-  quotaWindows,
-  // 其他电脑与分享来的来源：与插件卡片里的远程模型同一份位置名单与同一条目录读取。
-  locations: readWorkerAgentLocations,
-  // 带上 stale：读不到时底层会给上次的目录，选路不能把它当成那台现在能用。
+  quotaWindows: (options) => quotaWindows(options),
+  innerQuota: (source) => innerQuota(source),
+  remoteInvocable: (providerId) => isRemoteProviderInvocationAllowed(providerId),
+  locations: () => readWorkerAgentLocations({ favoriteSources: true }),
   remoteViews: (agentDeviceId) => readDeviceProviderCatalog(remoteBackgroundInvoke, agentDeviceId),
-  scope: activeOwnerScopeKey,
-  now: Date.now,
+  remotePluginEngines: (agentDeviceId) => readRemotePluginEngines(agentDeviceId),
   pricing: async () => ({ gateway: await getGatewayModelPricing(), reference: getReferenceModelPricing() }),
-});
-
-const switchOfferDeps = {
-  readBinding: readModelGroupSessionBinding,
-  readSession: getSessionRowSnapshot,
-  isShared: isSessionSharedTaskActive,
-  // 目标还没就绪时说不清这个任务有没有目标：按有处理，不提议。
+  listSshCodexProviders: (hostId) => sshCodexProvidersReader ? sshCodexProvidersReader(hostId) : Promise.resolve([]),
+  readSession: (sessionId) => getSessionRowSnapshot(sessionId),
+  isShared: (sessionId) => isSessionSharedTaskActive(sessionId),
   hasGoal: async (sessionId: string) => {
     const goals = getGoalController();
-    return !goals || (await goals.getStatus(sessionId).catch(() => null)) !== null;
+    return !!goals && (await goals.getStatus(sessionId).catch(() => null)) !== null;
   },
-  config: readModelGroupsConfig,
-  candidateFacts: resolver.candidateFacts,
-  now: Date.now,
-};
+  now: () => Date.now(),
+});
 
-export function readModelGroupRecoveryOffer(sessionId: string, recovery?: NonNullable<Parameters<typeof computeModelGroupSwitchOffer>[2]>) {
-  return computeModelGroupSwitchOffer(switchOfferDeps, sessionId, recovery);
-}
-
-/**
- * 伙伴与定时任务按组的规则挑一个来源(model-groups.md §6.2)：与新任务同一个解析，不限运行位置。
- * 组已删除或此刻都用不了时为 null，调用方沿用存下的具体模型。dryRun 只看会选谁；否则 `commit`
- * 要在这个来源真的用上之后再调(推进「轮流」、记进「最近的选择」)。
- */
-export async function pickModelGroupRoute(groupId: string, options: { dryRun: boolean }) {
-  const result = await resolver.resolve({ selection: { type: 'route', id: groupId }, dryRun: options.dryRun });
-  if (result.outcome !== 'routed') return null;
-  const { decisionId } = result;
-  return {
-    route: result.route,
-    commit: () => { if (decisionId) resolver.commit(decisionId); },
-  };
-}
+export const resolver = desktopModelGroupRuntime.resolver;
+export const localProviderView = desktopModelGroupRuntime.localProviderView;
+export const refreshAutoModelGroupRoutes = desktopModelGroupRuntime.refreshAutoModelGroupRoutes;
+export const readModelGroupRecoveryOffer = desktopModelGroupRuntime.readModelGroupRecoveryOffer;
+export const evaluateDesktopModelGroupBeforeSend = desktopModelGroupRuntime.evaluateTurnRouting;
+export const pickModelGroupRoute = desktopModelGroupRuntime.pickModelGroupRoute;

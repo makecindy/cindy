@@ -46,7 +46,7 @@ export function linkTransportLabel(transport: LinkTransport | null | undefined, 
 }
 
 /**
- * 某台设备链接的底层传输协议:Agent-Net 直连是 UDP、经中转跟随本机中转走法(UDP / WS);
+ * 某台设备那一段的底层传输协议:Agent-Net 直连是 UDP、经中转是它自己到中转那段(它说了才有);
  * Device Link 直连是 WebRTC、经中转是 WS。buildTopology 已填好 node.transport;单测直接构造节点时按字段推导。
  */
 export function peerTransport(node: Pick<TopologyNode, 'status' | 'path' | 'encrypted' | 'transport'>): LinkTransport | null {

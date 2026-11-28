@@ -324,7 +324,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
             title={t('chat.mermaid.zoom')}
             className={cn(
               'inline-flex h-7 w-7 items-center justify-center',
-              'rounded-md border border-[var(--msg-code-block-border)]',
+              'rounded-lg border border-[var(--msg-code-block-border)]',
               'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
               'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
             )}
@@ -343,7 +343,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
             title={t('chat.mermaid.annotate')}
             className={cn(
               'inline-flex h-7 w-7 items-center justify-center',
-              'rounded-md border border-[var(--msg-code-block-border)]',
+              'rounded-lg border border-[var(--msg-code-block-border)]',
               'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
               'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
             )}
@@ -362,7 +362,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
             title={showSourceView ? t('chat.mermaid.viewDiagram') : t('chat.mermaid.viewSource')}
             className={cn(
               'inline-flex h-7 w-7 items-center justify-center',
-              'rounded-md border border-[var(--msg-code-block-border)]',
+              'rounded-lg border border-[var(--msg-code-block-border)]',
               'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
               'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
             )}
@@ -383,7 +383,7 @@ export const MarkdownMermaidBlock = memo(function MarkdownMermaidBlock({
           title={copied || copiedImage ? t('chat.mermaid.copied') : t('chat.mermaid.copy')}
           className={cn(
             'inline-flex h-7 w-7 items-center justify-center',
-            'rounded-md border border-[var(--msg-code-block-border)]',
+            'rounded-lg border border-[var(--msg-code-block-border)]',
             'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
             'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
           )}

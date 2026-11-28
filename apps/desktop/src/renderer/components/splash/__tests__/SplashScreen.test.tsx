@@ -685,4 +685,51 @@ describe('SplashScreen wave4 统一面板', () => {
       'splash.databaseCleanup.finalizingHint',
     );
   });
+
+  it('shows startup buddy workspace migration progress and keeps splash mounted until finished', async () => {
+    let listener:
+      | ((
+          next: import('../../../../shared/workspaceMigration').WorkspaceMigrationStartupProgress | null,
+        ) => void)
+      | null = null;
+    const progress: import('../../../../shared/workspaceMigration').WorkspaceMigrationStartupProgress =
+      {
+        requestId: 'move-1',
+        phase: 'copying',
+        progress: 48,
+        copiedBytes: 24 * 1024 * 1024,
+        totalBytes: 50 * 1024 * 1024,
+        currentIndex: 1,
+        totalCount: 1,
+        startedAt: Date.now() - 2_000,
+        updatedAt: Date.now(),
+      };
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      platform: 'win32',
+      localDb: {
+        bots: {
+          workspaceMigration: {
+            getStartupProgress: vi.fn(async () => progress),
+            onStartupProgress: vi.fn((cb) => {
+              listener = cb;
+              return vi.fn();
+            }),
+          },
+        },
+      },
+    };
+    mocks.coverHeld = false;
+    const view = renderSplash('splash_done');
+
+    expect(await screen.findByText('splash.workspaceMigration.title')).toBeTruthy();
+    expect(screen.getByText('splash.workspaceMigration.phase.copying · 48%')).toBeTruthy();
+    expect(screen.getByTestId('workspace-migration-progress-fill').style.width).toBe('48%');
+    expect(screen.getByTestId('workspace-migration-bytes').textContent).toBe('24.0 MB / 50.0 MB');
+    expect(screen.queryByTestId('window-controls')).toBeNull();
+
+    act(() => {
+      listener?.(null);
+    });
+    await waitFor(() => expect(view.container.firstElementChild).toBeNull());
+  });
 });

@@ -7,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { i18n } from '@/i18n';
-import { effortLabelFromRuntime } from '@/session/modelPickerRows';
+import { composerModelLabel, effortLabelFromRuntime } from '@/session/modelPickerRows';
 
 // Execute the real memo initializer and summary helpers. The old literal check
 // could not observe a mounted summary retaining stale labels after locale changes.
@@ -25,7 +25,7 @@ function summaryMemo(file: string, name: string, helper: string) {
   const code = ts.transpileModule(helpers.join('\n') + '\nreturn ' + initializer + ';', {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  return new Function('useMemo', 'i18nInstance', 'effortLabelFromRuntime', 'composerDisplaySession', 'composerDisplayRuntimeOptions', 'draft', 'runtimeOptions', code);
+  return new Function('composerModelLabel', 'useMemo', 'i18nInstance', 'effortLabelFromRuntime', 'composerDisplaySession', 'composerDisplayRuntimeOptions', 'draft', 'runtimeOptions', 'catalogModelName', code).bind(null, composerModelLabel);
 }
 
 const sessionSummary = summaryMemo('app/sessions/[sessionId].tsx', 'composerRuntimeSummary', 'buildComposerRuntimeSummary');
@@ -46,6 +46,21 @@ afterEach(async () => {
 });
 
 describe('composer summaries refresh with app language', () => {
+  it.each([['mounted task', sessionSummary], ['new task draft', draftSummary]] as const)(
+    '%s hides the route before the catalog arrives and adopts the selected source name without sending', async (_surface, summary) => {
+      const model = 'byok-openai-codex/gpt-6.1-sol';
+      const task = { model, effort: '', permissionMode: 'default' };
+      const runtime = { currentModel: { label: model }, effortOptions: [], permissionOptions: [] };
+      function Summary({ name }: { name?: string }) {
+        const value = summary(useMemo, i18n, effortLabelFromRuntime, task, runtime, task, runtime, name);
+        return createElement('output', null, value.modelSummary);
+      }
+      await act(async () => root.render(createElement(Summary)));
+      expect(host.textContent).toBe('gpt-6.1-sol');
+      await act(async () => root.render(createElement(Summary, { name: 'GPT-6.1 Sol' })));
+      expect(host.textContent).toBe('GPT-6.1 Sol');
+    },
+  );
   it.each([['mounted task', sessionSummary], ['new task draft', draftSummary]] as const)(
     '%s recomputes labels without changing its task or runtime snapshot', async (_surface, summary) => {
       const task = { model: 'Luna', effort: 'xhigh', permissionMode: 'default' };

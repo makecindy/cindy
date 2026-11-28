@@ -56,6 +56,7 @@ vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
     resume = vi.fn(async () => {});
     context = vi.fn(async () => {});
     prepareNativeClose = vi.fn();
+    receive = vi.fn();
     displayMode = vi.fn(async (displayMode: string) => {
       this.message({ method: 'ui/notifications/host-context-changed', params: { displayMode } });
     });
@@ -70,6 +71,7 @@ vi.mock('@cindy/maker-shared/mcp-app-controller', async importOriginal => ({
   },
 }));
 import { McpAppCard } from '../McpAppCard';
+import { desktopMcpAppHeights } from '@/lib/mcpAppMeasuredHeights';
 import { clearDraft, getDraft } from '@/lib/composerDraftStore';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
@@ -116,6 +118,35 @@ it('subscribes only for a live View and coalesces context without reopening it',
     changed(); await Promise.resolve();
     expect(controller.context).toHaveBeenCalledOnce();
   } finally { if (container.hasChildNodes()) await act(async () => root.unmount()); container.remove(); }
+});
+
+// Unit: the real card owns one isolated frame per native click. Its second
+// handshake must release the frame rather than rerunning a one-shot action.
+it('releases an inline composer action on a second handshake and keeps the editor unobscured', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const unavailable = vi.fn();
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<div aria-hidden="true" inert><McpAppCard title="Plugin" chrome="panel"
+      sessionId="composer-task" clientId="plugin:action" onUnavailable={unavailable}
+      source={{ instanceId: 'plugin', viewId: 'action', composerAction: { id: 'click', contributionId: 'action' } }} /></div>));
+    const controller = state.controllers[0];
+    expect(controller.open).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('iframe')?.closest('[inert]')).not.toBeNull();
+    await act(async () => controller.message({ method: 'ui/notifications/sandbox-handshake-started' }));
+    await act(async () => controller.message({ method: 'ui/notifications/host-context-changed', params: { displayMode: 'fullscreen' } }));
+    expect(container.querySelector('[aria-modal="true"]')).toBeNull();
+    await act(async () => controller.message({ method: 'ui/notifications/sandbox-handshake-started' }));
+    expect(unavailable).toHaveBeenCalledTimes(1);
+    expect(controller.close).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('iframe')).toBeNull();
+    expect(state.controllers).toHaveLength(1);
+  } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
 // 测试价值
@@ -588,8 +619,10 @@ it('restores a page of historical cards at the settled message width before writ
   }
 });
 
-it('keeps the remembered height through pre-result sizes and remembers the ready height', async () => {
-  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(400);
+// Unit: the old fallback collapsed the restored frame to a spinner at 650ms.
+// The page can also report the spinner again while loading its initial state.
+it.each([false, true])('keeps a tall restored card through a slow initial render (repeated report: %s)', async repeated => {
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(914);
   vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
   vi.stubGlobal('matchMedia', () => ({ matches: false }));
@@ -602,24 +635,85 @@ it('keeps the remembered height through pre-result sizes and remembers the ready
     const first = state.controllers[0];
     await act(async () => first.message({ method: 'ui/notifications/initialized' }));
     await act(async () => first.message({ method: 'ui/notifications/sandbox-result-delivered' }));
-    await act(async () => first.message({ method: 'ui/notifications/size-changed', params: { height: 331 } }));
-    expect(container.querySelector('iframe')?.parentElement?.style.height).toBe('331px');
+    await act(async () => first.message({ method: 'ui/notifications/size-changed', params: { height: 1015 } }));
+    expect(container.querySelector('iframe')?.parentElement?.style.height).toBe('1015px');
     await act(async () => root.render(null));
     state.intersections.clear();
     await act(async () => root.render(<McpAppCard sessionId="height-reconnect-task" clientId="height-reconnect-card" title="App" />));
     await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
     const second = state.controllers[1];
     const frameRoot = container.querySelector('iframe')!.parentElement!;
-    expect(frameRoot.style.height).toBe('331px');
+    expect(frameRoot.style.height).toBe('1015px');
     await act(async () => second.message({ method: 'ui/notifications/initialized' }));
-    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 320 } }));
-    expect(frameRoot.style.height).toBe('331px');
+    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 55 } }));
+    expect(frameRoot.style.height).toBe('1015px');
     await act(async () => second.message({ method: 'ui/notifications/sandbox-result-delivered' }));
     await act(() => vi.advanceTimersByTimeAsync(150));
-    expect(frameRoot.style.height).toBe('331px');
-    await act(() => vi.advanceTimersByTimeAsync(210));
-    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 331 } }));
-    expect(frameRoot.style.height).toBe('331px');
+    expect(frameRoot.style.height).toBe('1015px');
+    if (repeated) await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 55 } }));
+    await act(() => vi.advanceTimersByTimeAsync(1_400));
+    expect(frameRoot.style.height).toBe('1015px');
+    expect(desktopMcpAppHeights.get(JSON.stringify([null, 'height-reconnect-task', 'height-reconnect-card']), 914)).toBe(1015);
+    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 1015 } }));
+    expect(frameRoot.style.height).toBe('1015px');
+    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 280 } }));
+    expect(frameRoot.style.height).toBe('280px');
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+// Unit: original confirmation page reported 2px before its initial tool-result;
+// at 3.8s the layout appeared, after the old 2s fallback had persisted 80px.
+it.each(['unchanged', 'short', 'silent', 'unmount', 'hung'])('waits for a slow initial tool then settles the %s page', async outcome => {
+  let width = 912;
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width);
+  vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+  vi.stubGlobal('matchMedia', () => ({ matches: false }));
+  vi.stubGlobal('IntersectionObserver', class { constructor(private callback: (entries: Array<{ isIntersecting: boolean }>) => void) {} observe(element: Element) { state.intersections.set(element, this.callback); } disconnect() {} });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  const container = document.createElement('div'); document.body.appendChild(container); const root = createRoot(container);
+  const key = JSON.stringify([null, 'slow-task', outcome]);
+  desktopMcpAppHeights.remember(key, 914, 1041);
+  try {
+    await act(async () => root.render(<McpAppCard sessionId="slow-task" clientId={outcome} title="App" />));
+    await act(async () => [...state.intersections.values()][0]([{ isIntersecting: true }]));
+    const page = state.controllers[0], frame = container.querySelector('iframe')!, mount = frame.parentElement!;
+    const size = (height: number) => page.message({ method: 'ui/notifications/size-changed', params: { height } });
+    const activity = (active: boolean, origin = 'cindy-mcp-app://view-1') => window.dispatchEvent(new MessageEvent('message', {
+      source: frame.contentWindow, origin,
+      data: { jsonrpc: '2.0', method: 'ui/notifications/sandbox-initial-tool-active', params: { active } },
+    }));
+    width = 914;
+    await act(async () => {
+      page.message({ method: 'ui/notifications/initialized' });
+      size(2);
+      page.message({ method: 'ui/notifications/sandbox-result-delivered' });
+      activity(true);
+      activity(false, 'cindy-mcp-app://view-1-view');
+    });
+    await act(() => vi.advanceTimersByTimeAsync(2_100));
+    if (outcome === 'short') await act(async () => size(55));
+    await act(() => vi.advanceTimersByTimeAsync(1_700));
+    expect(mount.style.height).toBe('1041px');
+    expect(desktopMcpAppHeights.get(key, width)).toBe(1041);
+    if (outcome === 'unmount') {
+      await act(async () => root.render(null));
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(desktopMcpAppHeights.get(key, width)).toBe(1041);
+      return;
+    }
+    if (outcome === 'hung') {
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(mount.style.height).toBe('80px');
+      return;
+    }
+    await act(async () => activity(false));
+    expect(mount.style.height).toBe('1041px');
+    const expected = outcome === 'unchanged' ? 1041 : outcome === 'short' ? 195 : 80;
+    if (outcome !== 'silent') await act(async () => size(expected));
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(mount.style.height).toBe(expected + 'px');
+    expect(desktopMcpAppHeights.get(key, width)).toBe(expected);
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
@@ -650,7 +744,7 @@ it('applies a pending height after reveal when no post-result size arrives', asy
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
-it('applies a real post-result height immediately and replaces the remembered value', async () => {
+it('accepts a shorter initial page by a fixed deadline and restores it on reopening', async () => {
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(400);
   vi.useFakeTimers(); vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
@@ -675,7 +769,14 @@ it('applies a real post-result height immediately and replaces the remembered va
     expect(frameRoot.style.height).toBe('331px');
     await act(async () => second.message({ method: 'ui/notifications/sandbox-result-delivered' }));
     await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 280 } }));
+    expect(frameRoot.style.height).toBe('331px');
+    await act(() => vi.advanceTimersByTimeAsync(1_900));
+    await act(async () => second.message({ method: 'ui/notifications/size-changed', params: { height: 280 } }));
+    await act(() => vi.advanceTimersByTimeAsync(100));
     expect(frameRoot.style.height).toBe('280px');
+    await act(async () => root.render(null));
+    await act(async () => root.render(<McpAppCard sessionId="height-post-result-task" clientId="height-post-result-card" title="App" />));
+    expect(container.querySelector('[style*="height: 280px"]')).not.toBeNull();
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 

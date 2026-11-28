@@ -1,5 +1,5 @@
 import { parseScheduledModelBaseline } from '../../shared/scheduledModelBaseline';
-import { ScheduledModelSelectionBusyError } from './scheduledModelSelection';
+import { BotRouteWaitingForIdleError, ScheduledModelSelectionBusyError } from './modelSelectionBusyError.js';
 import { getSessionRuntimeControlSnapshot } from './sessionRuntimeControl';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import type { EngineKind } from '@cindy/maker-core';
@@ -96,13 +96,17 @@ export function createBotModelRouteApplier(deps: {
       && current.providerId === route.providerId
       && (current.agentDeviceId ?? null) === (route.agentDeviceId ?? null)
       && !deps.isIdle(sessionId)) {
-      throw new ScheduledModelSelectionBusyError('Saved companion route is still pending');
+      throw new BotRouteWaitingForIdleError(() => deps.isIdle(sessionId));
     }
     const resolved = await deps.stage(sessionId, route, current) ?? route;
-    if (deps.isIdle(sessionId)) await deps.applyPendingSwitch(sessionId);
+    const attemptedAtIdle = deps.isIdle(sessionId);
+    if (attemptedAtIdle) await deps.applyPendingSwitch(sessionId);
     // Same-Harness choices wait in runtime control, not the Harness registry.
     // Staging alone must not retire the durable recovery marker.
     if (deps.hasPendingSwitch(sessionId) || getSessionRuntimeControlSnapshot(sessionId).pending) {
+      if (!attemptedAtIdle || !deps.isIdle(sessionId)) {
+        throw new BotRouteWaitingForIdleError(() => deps.isIdle(sessionId));
+      }
       throw new ScheduledModelSelectionBusyError('Saved companion route is still pending');
     }
     if (!options?.preserveScheduledBaseline) await deps.onApplied(sessionId);

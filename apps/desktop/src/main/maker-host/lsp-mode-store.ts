@@ -22,6 +22,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { desktopMakerLogger } from './logger-adapter.js';
+import { createOverrideSettingsFile } from './override-settings-file.js';
+import { inspectSettingsFile, isSettingBoolean, validateOptionalSettingsFields } from './settings-inspection.js';
 
 const log = desktopMakerLogger.child('lsp-mode-store');
 
@@ -78,3 +80,19 @@ export function writeLspModeEnabled(enabled: boolean): void {
   cached = next;
   log.info('lsp mode setting written', { enabled });
 }
+
+// ── Cloud settings (cloud instances only) ──────────────────────────────────
+/** 旧文件会物化完整值，文件中有字段并不能证明用户显式自定义。 */
+export function inspectLspModeSettings() {
+  return inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize, savedSource: 'unknown',
+    validate: (raw) => validateOptionalSettingsFields(raw, { enabled: isSettingBoolean }),
+  });
+}
+/** Revision-checked cloud commits on the same file; the native cache follows them. */
+const cloudStore = createOverrideSettingsFile<LspModeSettings>({
+  filePath: settingsFilePath, defaults: DEFAULTS, normalize, log, label: 'lsp-mode',
+  preserveUnreadableFile: true,
+  validateOverrides: raw => validateOptionalSettingsFields(raw, { enabled: isSettingBoolean }),
+});
+cloudStore.onChanged(() => { cached = null; });
+export function getLspSettingsStore() { return cloudStore; }

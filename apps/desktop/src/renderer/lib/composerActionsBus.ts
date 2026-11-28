@@ -34,10 +34,9 @@ export function subscribeSessionLinkInsert(
  * A request to prefill plain prompt text into a composer. The composer only
  * inserts and focuses; the user still decides whether to send.
  */
-export interface InsertPromptDetail {
-  targetSessionId: string;
-  text: string;
-}
+export type InsertPromptDetail =
+  | { targetSessionId: string; text: string }
+  | { targetSessionId: string; pluginInstanceId: string };
 
 type PromptInsertHandler = (detail: InsertPromptDetail) => boolean;
 

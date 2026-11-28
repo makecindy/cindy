@@ -10,6 +10,8 @@
  * must not promise that the new task will use that particular account.
  */
 
+import { isAntigravityProviderId } from '@cindy/maker-shared/branding';
+import { ANTIGRAVITY_LOGO } from './logos.js';
 import {
   QUOTA_CRIT_REMAINING_PERCENT,
   QUOTA_WARN_REMAINING_PERCENT,
@@ -39,7 +41,7 @@ import {
 } from '../../shared/menubarQuota.js';
 import { addRegionalMoney, type RegionalMoney } from '../../shared/regionalMoney.js';
 
-export type MenubarHarness = 'claude-code' | 'codex' | 'pi';
+export type MenubarHarness = 'claude-code' | 'codex' | 'pi' | 'acp';
 export type MenubarFamily = 'claude' | 'codex' | 'grok' | 'kimi' | 'opencode-go' | 'zhipu' | 'plugin' | 'shared';
 
 export interface MenubarWindowInput {
@@ -161,6 +163,7 @@ export interface MenubarTaskInput {
   sessionId: string;
   title: string;
   harness: MenubarHarness;
+  logoSvg?: string;
   model: string;
   tokensToday: number;
   valueToday: number;
@@ -1193,7 +1196,7 @@ class Builder {
           sessionId: task.sessionId,
           title: this.input.settings.privacy ? this.t('tasks.private', { harness: this.harnessName(task.harness) }) : task.title,
           harness: task.harness,
-          logoSvg: this.input.harnessLogos[task.harness],
+          logoSvg: task.logoSvg ?? (isAntigravityProviderId(task.providerId) ? ANTIGRAVITY_LOGO : this.input.harnessLogos[task.harness]),
           value: task.valueToday,
           tokens: task.tokensToday,
           running: task.running,
@@ -1206,6 +1209,7 @@ class Builder {
   }
 
   private harnessName(harness: MenubarHarness): string {
+    if (harness === 'acp') return 'ACP';
     return this.t(`harness.${harness}`);
   }
 

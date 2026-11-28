@@ -43,6 +43,7 @@ function makeQueue(kind: string) {
   ];
   if (kind === 'empty' || kind === 'delivered') return [];
   if (kind === 'single') return q.slice(0, 1);
+  if (kind === 'remote-account') return [{ ...q[0], waitingForRemoteAccount: true }];
   if (kind === 'many')
     return Array.from({ length: 6 }, (_, i) =>
       entry(

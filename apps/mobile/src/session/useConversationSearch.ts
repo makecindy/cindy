@@ -51,6 +51,7 @@ export function useConversationSearch({
   query: string;
   setQuery: (value: string) => void;
   status: ConversationSearchStatus;
+  poolCapped: boolean;
   results: ConversationSearchListItem[];
   sortBy: ConversationSearchSortBy;
   setSortBy: (value: ConversationSearchSortBy) => void;
@@ -71,6 +72,7 @@ export function useConversationSearch({
   const [query, setQuery] = useRetainedHomeState(retainedState, 'search.query', '');
   const [status, setStatus] = useState<ConversationSearchStatus>('idle');
   const [results, setResults] = useState<ConversationSearchListItem[]>([]);
+  const [poolCapped, setPoolCapped] = useState(false);
   const [sortBy, setSortBy] = useRetainedHomeState<ConversationSearchSortBy>(retainedState, 'search.sortBy', 'relevance');
   const [statusFilter, setStatusFilter] = useRetainedHomeState<ConversationSearchStatusFilter>(retainedState, 'search.statusFilter', 'all');
   const [agentFilter, setAgentFilter] = useRetainedHomeState<ConversationSearchAgentFilter>(retainedState, 'search.agentFilter', 'all');
@@ -132,6 +134,7 @@ export function useConversationSearch({
   // an empty local projection can briefly claim there are no matching tasks.
   useLayoutEffect(() => {
     const trimmed = query.trim();
+    setPoolCapped(false);
     if (!enabled || !trimmed) {
       requestSeq.current += 1;
       setStatus('idle');
@@ -145,6 +148,7 @@ export function useConversationSearch({
     const isCurrent = () => seq === requestSeq.current;
     const publishResults = (page: ConversationSearchResponse) => {
       if (!isCurrent()) return;
+      setPoolCapped(page.poolCapped);
       const now = Date.now();
       const cachedByKey = new Map(
         remoteSessionStore.getSessions().map((session) => [
@@ -213,6 +217,7 @@ export function useConversationSearch({
     query,
     setQuery,
     status,
+    poolCapped,
     results,
     sortBy,
     setSortBy,

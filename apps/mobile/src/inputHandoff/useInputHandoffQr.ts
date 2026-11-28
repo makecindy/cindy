@@ -110,7 +110,7 @@ export function useInputHandoffQr({
   const tap = (x: number, y: number) => {
     const reply = pending.current;
     // An agent's screenshot is not a window: there is nothing on screen to tap.
-    if (!reply || state !== "shown" || snapshot.agentPicture) return;
+    if (!reply || state !== "shown" || snapshot.agentPicture || snapshot.accountVerification) return;
     pending.current = null;
     setState("sending");
     const clamp = (n: number) => Math.min(1, Math.max(0, n));

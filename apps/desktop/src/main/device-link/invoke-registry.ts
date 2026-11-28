@@ -40,6 +40,10 @@ const SENTINEL_CHANNELS: readonly string[] = [
   'maker:create-session',
   'maker:send',
   'local-db:sessions:list',
+  'maker:remote-resources:list',
+  'local-db:history:query',
+  'maker:schedule:list',
+  'maker:schedule:list-sidebar-index-runs',
 ];
 
 /**

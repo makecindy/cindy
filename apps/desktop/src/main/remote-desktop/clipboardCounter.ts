@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { linuxClipboardVersion } from './linuxClipboard';
+import { stopGnomeClipboard } from './linuxGnomeClipboard';
 
 type Pending = {
   resolve(value: string): void;
@@ -26,6 +27,7 @@ export class ClipboardCounter {
   ) {}
 
   stop(): void {
+    if (process.platform === 'linux') stopGnomeClipboard();
     if (this.session) this.retire(this.session);
   }
   private retire(session: Session): void {

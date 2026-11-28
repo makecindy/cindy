@@ -35,6 +35,8 @@ export interface IMHost {
     readResult?(name: string): IMSecretReadResult;
     /** Remove (no-op if missing). */
     remove(name: string): void;
+    /** Remove and confirm absence; false if any stored copy could not be removed. */
+    removeConfirmed?(name: string): boolean;
     /** Whether encryption is currently usable (e.g. Linux without keychain). */
     isAvailable(): boolean;
   };

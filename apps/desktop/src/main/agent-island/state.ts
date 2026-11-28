@@ -17,7 +17,7 @@ import { DEFAULT_TOOL_ROW_WORDING, type ToolRowWording } from '@cindy/maker-shar
 import { isTurnContinuationBoundaryEvent } from '@cindy/maker-shared/turn-continuation';
 import { sessionProjectDirectory } from '@cindy/maker-shared/worktree-paths';
 
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
+import { dbToMakerEngineKind } from '../../shared/agentKindConversion';
 import { LIVE_TASK_PRIORITY, liveTaskPriorityRank } from '../../shared/liveTaskPriority';
 import { stripTrailingPathSeparators } from '../../shared/pathText';
 
@@ -1320,7 +1320,7 @@ function applyDeviceSessionMeta(
     ? companion.groupName ?? null
     : projectNameForSession(input);
   const projectName = [project, input.deviceName].filter(Boolean).join(' · ') || null;
-  const agentKind = dbToMakerAgentKind(input.agentKind);
+  const agentKind = dbToMakerEngineKind(input.agentKind);
   const changed = session.title !== input.title
     || session.sourceCompletionToken !== input.completionToken
     || session.companion !== companion
@@ -1710,6 +1710,21 @@ export function buildAgentIslandTaskOverview(
   companionChats: readonly AgentIslandCompanionChatProjection[] = [],
 ): AgentIslandSessionSnapshot[] {
   return visibleOverviewSessions(state, now, companionChats).map(toSnapshot);
+}
+
+/**
+ * 本机在灵动岛计数里的那一份，供手机灵动岛按电脑累加：与本机岛面同口径（免打扰、
+ * Orca Worker、过了岛面 TTL 的旧未读都不算），只是去掉其它设备的镜像和群聊，
+ * 那些由各自的电脑或手机自己的群聊入口上报，避免重复计数。
+ */
+export function buildLocalAgentIslandTaskOverview(
+  state: AgentIslandState,
+  now: number,
+  companionChats: readonly AgentIslandCompanionChatProjection[] = [],
+): AgentIslandSessionSnapshot[] {
+  return visibleOverviewSessions(state, now, companionChats)
+    .filter((session) => session.sourceDeviceId === null && !session.groupChat)
+    .map(toSnapshot);
 }
 
 function visibleOverviewSessions(

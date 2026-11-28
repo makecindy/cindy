@@ -117,6 +117,18 @@ function invokeFromDeviceLink(
   return runDeviceLinkInvokeContext({ controllerDeviceId: 'controller-1', channel }, invokeHandler);
 }
 
+function mockTitleSessionRows(rows: Array<{ agentKind: string; status?: string }>): void {
+  vi.mocked(getDbClient).mockReturnValue({
+    drizzle: {
+      select: () => ({
+        from: () => ({
+          where: () => ({ limit: async () => rows }),
+        }),
+      }),
+    },
+  } as unknown as ReturnType<typeof getDbClient>);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.handlers.clear();
@@ -128,17 +140,7 @@ beforeEach(() => {
   h.generateTitleResult.mockResolvedValue({ status: 'ok', title: '任务标题' });
   h.drainPersistQueue.mockReset();
   h.drainPersistQueue.mockResolvedValue(undefined);
-  vi.mocked(getDbClient).mockReturnValue({
-    drizzle: {
-      select: () => ({
-        from: () => ({
-          where: () => ({
-            limit: async () => [{ agentKind: 'codex' }],
-          }),
-        }),
-      }),
-    },
-  } as unknown as ReturnType<typeof getDbClient>);
+  mockTitleSessionRows([{ agentKind: 'codex' }]);
   registerMakerTitleIpc();
 });
 
@@ -291,20 +293,25 @@ describe('maker title IPC — 本机 / device-link 来源边界', () => {
     expect(h.drainPersistQueue).toHaveBeenCalledOnce();
   });
 
-  it('软删除任务按 NOT_FOUND 处理且不调用标题模型', async () => {
-    vi.mocked(getDbClient).mockReturnValue({
-      drizzle: {
-        select: () => ({
-          from: () => ({
-            where: () => ({
-              limit: async () => [{ agentKind: 'codex', status: 'deleted' }],
-            }),
-          }),
-        }),
-      },
-    } as unknown as ReturnType<typeof getDbClient>);
+  // Unit, #12820: an active ACP row reaches the production regenerate IPC and uses
+  // only the auxiliary model. The earlier boundary test rejected ACP before model selection.
+  it('活动 ACP 任务只用辅助模型重新起名', async () => {
+    mockTitleSessionRows([{ agentKind: 'acp', status: 'active' }]);
 
-    await expect(invokeRegenerate('deleted')).rejects.toThrow(/\[NOT_FOUND\]/);
+    await expect(invokeRegenerate('s1')).resolves.toEqual({ title: '任务标题' });
+    expect(h.generateTitleResult).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ sessionId: 's1', agentKind: null }),
+      expect.anything(),
+    );
+  });
+
+  it.each([
+    { label: '缺失', rows: [] },
+    { label: '软删除 ACP', rows: [{ agentKind: 'acp', status: 'deleted' }] },
+  ])('$label 任务返回 NOT_FOUND 且不调用标题模型', async ({ rows }) => {
+    mockTitleSessionRows(rows);
+
+    await expect(invokeRegenerate('s1')).rejects.toThrow('[NOT_FOUND]');
     expect(h.generateTitleResult).not.toHaveBeenCalled();
   });
 

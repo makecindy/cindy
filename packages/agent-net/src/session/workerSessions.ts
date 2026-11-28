@@ -17,6 +17,7 @@ type Call =
   | { op: 'close'; reason: string }
   | { op: 'presence'; payload: unknown }
   | { op: 'request'; channel: string; args: unknown[]; timeoutMs?: number; lane: SessionLane; extra?: Record<string, unknown>; id?: string; unordered?: boolean }
+  | { op: 'cancelRequest'; id: string }
   | { op: 'respond'; id: string; result: SessionResult }
   | { op: 'push'; channel: string; payload: unknown }
   | { op: 'dispose'; code: string };
@@ -90,6 +91,7 @@ export function serveWorkerSessions(socket: SessionHost, send: (message: unknown
         onRequest: (request) => toMain(peer, { event: 'request', request }),
         onPush: (channel, payload) => toMain(peer, { event: 'push', channel, payload }),
         onPresence: (payload) => toMain(peer, { event: 'presence', payload }),
+        onDrain: () => taken(peer, 0),
         onBroken: (code) => {
           for (const [seq, ack] of acks) if (ack.peer === peer) { acks.delete(seq); ack.resolve(); }
           send({ type: 'session-broken', peer, code });
@@ -117,6 +119,7 @@ export function serveWorkerSessions(socket: SessionHost, send: (message: unknown
         case 'request': void session.request(call.channel, call.args, { timeoutMs: call.timeoutMs, lane: call.lane, extra: call.extra, id: call.id, unordered: call.unordered,
           onSettled: (result) => reply({ result }) });
           break;
+        case 'cancelRequest': session.cancelRequest(call.id); break;
         case 'accept': session.accept(call.id, call.payload); break;
         case 'reject': session.reject(call.id, call.code, call.message); break;
         case 'close': session.close(call.reason); break;
@@ -270,6 +273,10 @@ class WorkerSession implements SessionHandle {
     return new Promise((resolve) => this.send({ op: 'request', channel, args, timeoutMs: options.timeoutMs, lane, extra: options.extra, ...(options.id ? { id: options.id } : {}), ...(options.unordered ? { unordered: true } : {}) }, args,
       (reply) => resolve(reply.result as SessionResult)));
   }
+  cancelRequest(id: string): void {
+    if (!this.reason) this.send({ op: 'cancelRequest', id }, id);
+  }
+
   respond(id: string, result: SessionResult): void { this.send({ op: 'respond', id, result }, result); }
   push(channel: string, payload: unknown): void { this.send({ op: 'push', channel, payload }, payload); }
   dispose(code: string): void {
@@ -290,7 +297,12 @@ class WorkerSession implements SessionHandle {
     }
   }
   /** @internal */
-  taken(bytes: number, remote: number): void { this.posted = Math.max(0, this.posted - bytes); this.remote = remote; }
+  taken(bytes: number, remote: number): void {
+    const before = this.bufferedAmount;
+    this.posted = Math.max(0, this.posted - bytes);
+    this.remote = remote;
+    if (this.bufferedAmount < before) this.handlers.onDrain?.();
+  }
   /** @internal */
   broken(code: string): void {
     if (this.reason) return;

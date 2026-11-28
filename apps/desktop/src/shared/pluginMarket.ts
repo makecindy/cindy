@@ -1,6 +1,7 @@
 import type { DownloadProgress } from './downloadProgress';
 import type { GhostManifest, InstalledGhost } from './ghost';
 import type { GhostReadmeContent, PluginCatalogCounts, PluginDownloadStatistics, PluginIconMetadata, PluginUsageStatistics } from '@cindy/plugin-protocol';
+import { hasUserVisibleText } from './visibleText.js';
 
 export type PluginMarketScope = 'public' | 'organization' | 'personal';
 export type PluginMarketInstallState =
@@ -16,6 +17,8 @@ export type PluginMarketItemSource = 'server' | 'git-market' | 'local-market';
 export interface PluginMarketItem {
   usageStatistics?: PluginUsageStatistics;
   downloadStatistics?: PluginDownloadStatistics;
+  /** Display value for the effective order of a server catalog page. */
+  sortValue?: number | string;
   pluginId: string;
   ghostId: string;
   /** Host-verified namespace. Missing is legacy wire; null is root. */
@@ -32,6 +35,8 @@ export interface PluginMarketItem {
   defaultInstall: boolean;
   releaseId: string;
   version: string;
+  /** Published package size from the server release. Custom markets omit this. */
+  sizeBytes?: number;
   publishedAt: string;
   icon: PluginIconMetadata | null;
   /**
@@ -67,7 +72,76 @@ export interface PluginMarketSnapshot {
   organizationAccessError?: string | null;
 }
 
+export const DEFAULT_PLUGIN_MARKET_SORT = 'default';
+export interface PluginMarketMetric {
+  kind: 'count' | 'date';
+  label: string;
+}
+export interface PluginMarketSortOption {
+  key: string;
+  label: string;
+  metric?: PluginMarketMetric;
+}
+export interface PluginMarketSortFields {
+  sort?: string;
+  sorts?: PluginMarketSortOption[];
+}
+
+export function isPluginMarketSort(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z][a-z0-9_]{0,31}$/.test(value);
+}
+
+function marketSortLabel(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const label = value.trim();
+  if (label.length > 48 || [...label].length > 24 ||
+    !hasUserVisibleText(label) || /[\p{Cc}\u2028\u2029]/u.test(label)) return undefined;
+  return label;
+}
+
+function marketSortMetric(value: unknown): PluginMarketMetric | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const { kind, label: rawLabel } = value as Record<string, unknown>;
+  if (kind !== 'count' && kind !== 'date') return undefined;
+  const label = marketSortLabel(rawLabel);
+  return label ? { kind, label } : undefined;
+}
+
+const ISO_SORT_TIME = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+
+export function parsePluginMarketSortValue(value: unknown, kind: PluginMarketMetric['kind']): PluginMarketItem['sortValue'] {
+  if (kind === 'count') return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  if (kind !== 'date' || typeof value !== 'string' || value.length > 64 ||
+    !ISO_SORT_TIME.test(value) || !Number.isFinite(Date.parse(value))) return undefined;
+  // Reject calendar overflows such as February 30, which Date.parse can normalize.
+  const day = value.slice(0, 10);
+  const utc = new Date(day);
+  return Number.isFinite(utc.getTime()) && utc.toISOString().slice(0, 10) === day ? value : undefined;
+}
+
+/** Optional catalog metadata must never prevent a usable catalog from loading. */
+export function parsePluginMarketSortFields(data: unknown): PluginMarketSortFields {
+  if (!data || typeof data !== 'object') return {};
+  const { sort, sorts } = data as { sort?: unknown; sorts?: unknown };
+  if (!isPluginMarketSort(sort) || sort === DEFAULT_PLUGIN_MARKET_SORT) return {};
+  // The effective key still binds cursors when options are missing or malformed.
+  if (!Array.isArray(sorts) || sorts.length < 1 || sorts.length > 20) return { sort };
+  const options: PluginMarketSortOption[] = [];
+  const keys = new Set<string>();
+  for (const option of sorts) {
+    if (!option || typeof option !== 'object' || !isPluginMarketSort(option.key) ||
+      option.key === DEFAULT_PLUGIN_MARKET_SORT || keys.has(option.key)) return { sort };
+    const label = marketSortLabel(option.label);
+    if (!label) return { sort };
+    const metric = marketSortMetric(option.metric);
+    keys.add(option.key);
+    options.push({ key: option.key, label, ...(metric ? { metric } : {}) });
+  }
+  return keys.has(sort) ? { sort, sorts: options } : { sort };
+}
+
 export interface PluginMarketQuery {
+  sort?: string;
   query?: string;
   scope?: 'all' | PluginMarketScope | 'custom';
   cursor?: string | null;
@@ -79,7 +153,7 @@ export interface PluginMarketQuery {
 export interface PluginMarketCounts extends PluginCatalogCounts {
   custom: number;
 }
-export interface PluginMarketPage extends PluginMarketSnapshot {
+export interface PluginMarketPage extends PluginMarketSnapshot, PluginMarketSortFields {
   customSourceCounts?: Array<{ name: string; count: number }>;
   nextCursor: string | null;
   /** Complete query counts on the first page; subsequent pages reuse them. */
@@ -102,9 +176,17 @@ export interface OfficialModelPluginPage {
   nextCursor: string | null;
 }
 
+export interface PluginMarketUpdate {
+  version: string;
+  publishedAt: string;
+  releaseNotes: string;
+}
+
 /** 详情携带安装前展示给用户的 manifest；官方来自 release，自定义来自本地发现。 */
 export interface PluginMarketDetail extends PluginMarketItem {
   manifest: GhostManifest;
+  /** 新到旧。缺省表示未请求，空数组表示没有可展示的市场记录。 */
+  updates?: PluginMarketUpdate[];
   /**
    * 详细介绍，只在详情页请求时提供：官方市场的图片是服务端签发的短期地址，自定义市场
    * 的图片是 data URL。`null` 表示没有介绍；字段缺省表示调用方没有请求。

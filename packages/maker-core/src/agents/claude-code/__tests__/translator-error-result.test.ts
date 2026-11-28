@@ -914,4 +914,71 @@ describe('Claude Code translator is_error result guard', () => {
     expect(events.some((e) => e.type === 'error')).toBe(false);
     expect(events.some((e) => e.type === 'done')).toBe(true);
   });
+
+  // 测试价值：依据线上真实 Claude 安全拒绝原例 `This request was flagged for possible cybersecurity risk.` 的补充审阅要求；
+  // 此前仅测 stop_reason='refusal'，漏测 Claude is_error 入口（assistant envelope + result 终态）对该原例的分类与本地插件引用反例；
+  // 生产入口 translateSdkMessage；最小失败输入为该原例的裸文本、API Error JSON 包装及插件引用反例；tier: unit。
+  it.each([
+    ['bare upstream text', 'This request was flagged for possible cybersecurity risk.'],
+    [
+      'API Error JSON envelope',
+      'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"This request was flagged for possible cybersecurity risk."}}',
+    ],
+  ] as const)('classifies Claude upstream cybersecurity refusal (%s) as provider-safety-refusal while keeping Done/done accounting', async (_mode, upstreamMessage) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'anthropic');
+    translateSdkMessage(
+      {
+        type: 'assistant',
+        error: 'invalid_request',
+        message: { content: [{ type: 'text', text: upstreamMessage }] },
+      },
+      queue,
+      ctx,
+    );
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: true,
+        result: upstreamMessage,
+        total_cost_usd: 0.02,
+        usage: { input_tokens: 150, output_tokens: 0 },
+      },
+      queue,
+      ctx,
+    );
+    const events = await drain(queue);
+    const errors = events.filter((e) => e.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.data).toMatchObject({
+      isTerminal: true,
+      reason: 'provider-safety-refusal',
+      sdkError: 'invalid_request',
+      message: upstreamMessage,
+    });
+    expect(errors[0]?.data).not.toHaveProperty('usageLimit');
+    expect(events.some((e) => e.type === 'text')).toBe(false);
+    expect(events.some((e) => e.type === 'done')).toBe(true);
+  });
+
+  it('does not classify a local plugin error quoting the cybersecurity phrase as provider-safety-refusal', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'anthropic');
+    const localPluginFailure =
+      'Local plugin hook failed while scanning log: "This request was flagged for possible cybersecurity risk."';
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: true,
+        result: localPluginFailure,
+        usage: { input_tokens: 10, output_tokens: 0 },
+      },
+      queue,
+      ctx,
+    );
+    const events = await drain(queue);
+    const errorData = events.find((e) => e.type === 'error')?.data as Record<string, unknown>;
+    expect(errorData).toMatchObject({ message: localPluginFailure, isTerminal: true });
+    expect(errorData.reason).toBeUndefined();
+  });
 });

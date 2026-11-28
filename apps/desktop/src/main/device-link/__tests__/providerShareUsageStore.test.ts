@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createProviderShareUsageStore, providerShareUsageRangeStart } from '../providerShareUsageStore';
+import { createProviderShareUsageStore, flushProviderShareUsageStore, installProviderShareUsageStore, providerShareUsageRangeStart } from '../providerShareUsageStore';
 
 const sample = (model: string, input: number, output: number, turns = 1) => ({
   model, turns, inputTokens: input, outputTokens: output, cacheReadTokens: 0, cacheCreateTokens: 0, sdkCostUsd: 0,
@@ -344,8 +344,10 @@ describe('provider share usage store', () => {
     rename.mockRejectedValueOnce(new Error('replacement denied'));
     // Another queued write must never serialize the failed commit's tentative location.
     const failed = expect(store.commitDirectReceiptRoute(renewed)).rejects.toThrow('replacement denied');
+    const receipt = store.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId,
+      { ...route, usageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', samples: [sample('gpt', 1, 0)] });
     const revoked = store.markDirectReceiptRouteRevoked(route);
-    await Promise.all([failed, revoked]);
+    await Promise.all([failed, receipt, revoked]);
     expect(store.findDirectTaskLocation(route)).toMatchObject({ generation: route.generation, model: 'gpt' });
     expect(createProviderShareUsageStore(file, { now: () => now }).findDirectTaskLocation(route))
       .toMatchObject({ generation: route.generation, model: 'gpt' });
@@ -515,7 +517,112 @@ describe('provider share usage store', () => {
   });
 
   // Regression: O may restart, switch M, or let a lease expire while M retries a completed turn's receipt.
-  // This exercises the production ledger entry, its durable acknowledgement, and authenticated M binding (unit tier).
+  // These unit tests exercise memory receipt acceptance, checkpoint/reload and authenticated M binding.
+  // The metadata incident exposed a full write per ACK; older tests did not distinguish acceptance
+  // from checkpointing. Minimal inputs: two receipts, a replay and a failed concurrent transaction.
+  it('keeps a concurrent receipt when a standby usage transaction rolls back', async () => {
+    const file = path.join(dir, 'rollback-usage.json');
+    const now = new Date(2026, 9, 27, 12).getTime();
+    const route = directRoute(now);
+    const store = createProviderShareUsageStore(file, { now: () => now });
+    await store.registerDirectReceiptRoute(route); await store.commitDirectReceiptRoute(route);
+    let entered!: () => void; let release!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    vi.spyOn(fsp, 'rename').mockImplementationOnce(async () => { entered(); await hold; throw new Error('standby denied'); });
+    const imported = expect(store.importStandbyTotal(route.shareId, { ...route, id: '1'.repeat(64), sequence: 1,
+      day: '2026-10-27', memberId: route.memberId, kind: route.agentKind, providerId: route.providerId,
+      model: 'gpt', totals: sample('gpt', 100, 0), memberKey: 'local' })).rejects.toThrow('standby denied');
+    await ready;
+    const received = store.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId,
+      { ...route, usageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', samples: [sample('gpt', 7, 3)] });
+    release();
+    await imported; expect(await received).toBe(true);
+    await store.flush();
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(saved.rows[0]?.inputTokens).toBe(7);
+    expect(saved.standbyTotals).toEqual([]);
+  });
+
+  it('accepts receipts in memory and checkpoints once per minute without extending the deadline', async () => {
+    vi.useFakeTimers();
+    const file = path.join(dir, 'usage.json');
+    const now = Date.now();
+    const route = directRoute(now);
+    const store = createProviderShareUsageStore(file, { now: () => now });
+    await store.registerDirectReceiptRoute(route);
+    await store.commitDirectReceiptRoute(route);
+    const receipt = { ...route, usageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', samples: [sample('gpt', 7, 3)] };
+    const record = (value = receipt) => store.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId, value);
+    const rename = vi.spyOn(fsp, 'rename');
+    try {
+      expect(await Promise.all([record(), record({ ...receipt, usageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' }), record()]))
+        .toEqual([true, true, false]);
+      expect(rename).not.toHaveBeenCalled();
+      expect(store.query(new Set([route.shareId]), 'all')[0]?.models[0]?.inputTokens).toBe(14);
+      expect(JSON.parse(fs.readFileSync(file, 'utf8')).rows).toEqual([]);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(await record({ ...receipt, usageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })).toBe(true);
+      expect(rename).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await store.flush();
+      expect(rename).toHaveBeenCalledTimes(1);
+      const restarted = createProviderShareUsageStore(file, { now: () => now });
+      expect(await restarted.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId, receipt)).toBe(false);
+      expect(restarted.query(new Set([route.shareId]), 'all')[0]?.models[0]?.inputTokens).toBe(21);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await store.flush();
+      expect(rename).toHaveBeenCalledTimes(1); // No dirty state, no idle checkpoint.
+    } finally { vi.clearAllTimers(); vi.useRealTimers(); }
+  });
+
+  // Unit: the shared entry awaited by Desktop quit. One accepted
+  // receipt held at rename proves shutdown cannot finish before the real checkpoint.
+  it('awaits the shared shutdown checkpoint and propagates failure without losing accepted usage', async () => {
+    await flushProviderShareUsageStore(); // Partial startup need not have installed a ledger.
+    const store = installProviderShareUsageStore(dir);
+    const file = path.join(dir, 'remote-agent', 'provider-share-usage.json');
+    const route = directRoute(Date.now());
+    await store.registerDirectReceiptRoute(route); await store.commitDirectReceiptRoute(route);
+    const receipt = { ...route, usageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', samples: [sample('gpt', 7, 3)] };
+    const record = (value = receipt) => store.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId, value);
+    expect(await record()).toBe(true);
+    let entered!: () => void; let release!: () => void;
+    const ready = new Promise<void>(resolve => { entered = resolve; });
+    const hold = new Promise<void>(resolve => { release = resolve; });
+    const realRename = fsp.rename.bind(fsp);
+    vi.spyOn(fsp, 'rename').mockImplementationOnce(async (...args) => { entered(); await hold; return realRename(...args); });
+    let finished = false;
+    const pending = flushProviderShareUsageStore().then(() => { finished = true; });
+    try { await ready; expect(finished).toBe(false); }
+    finally { release(); await pending; }
+    expect(createProviderShareUsageStore(file).query(new Set([route.shareId]), 'all')[0]?.models[0]?.inputTokens).toBe(7);
+    await record({ ...receipt, usageId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' });
+    vi.mocked(fsp.rename).mockRejectedValueOnce(new Error('quit checkpoint denied'));
+    await expect(flushProviderShareUsageStore()).rejects.toThrow('quit checkpoint denied');
+    expect(store.query(new Set([route.shareId]), 'all')[0]?.models[0]?.inputTokens).toBe(14);
+    await flushProviderShareUsageStore();
+  });
+
+  // Unit: memory ACK is explicitly not a disk promise. A failed checkpoint must retain
+  // both counters and retry IDs; previous immediate-ACK tests did not cover this contract.
+  it('retains acknowledged counters after checkpoint failure and retries without recounting', async () => {
+    const file = path.join(dir, 'usage.json');
+    const route = directRoute(Date.now());
+    const store = createProviderShareUsageStore(file);
+    await store.registerDirectReceiptRoute(route); await store.commitDirectReceiptRoute(route);
+    const receipt = { ...route, usageId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', samples: [sample('gpt', 7, 3)] };
+    const record = () => store.recordDirectReceipt(route.ownerScope, route.ownerDeviceId, route.executorDeviceId, receipt);
+    const rename = vi.spyOn(fsp, 'rename').mockRejectedValueOnce(new Error('checkpoint denied'));
+    expect(await record()).toBe(true);
+    await expect(store.flush()).rejects.toThrow('checkpoint denied');
+    expect(await record()).toBe(false);
+    expect(store.query(new Set([route.shareId]), 'all')[0]?.models[0]?.inputTokens).toBe(7);
+    await store.flush();
+    expect(rename).toHaveBeenCalledTimes(2);
+    expect(createProviderShareUsageStore(file).query(new Set([route.shareId]), 'all')[0]?.models[0]?.inputTokens).toBe(7);
+  });
+
   it('accepts historical direct receipts after restart or route switch, but only from their assigned executor', async () => {
     const file = path.join(dir, 'usage.json');
     let now = new Date(2026, 9, 27, 12).getTime();
@@ -568,6 +675,7 @@ describe('provider share usage store', () => {
     const renewed = { ...receipt, generation: '33333333-3333-4333-8333-333333333333',
       usageId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', samples: [sample('gpt', 2, 1)] };
     expect(await restarted.recordDirectReceipt('global:owner-1', 'owner-pc', 'member-pc-1', renewed)).toBe(true);
+    await restarted.flush(); // Memory acceptance becomes restart-safe at the explicit checkpoint.
     const afterAck = createProviderShareUsageStore(file, { now: () => now });
     expect(await afterAck.recordDirectReceipt('global:owner-1', 'owner-pc', 'member-pc-1', receipt)).toBe(false);
     expect(afterAck.query(new Set(['share-1']), 'all')[0]?.models.map((row) => [row.memberKey, row.inputTokens]))

@@ -39,8 +39,6 @@ export function useMessageReadAloud(options: {
 
   const loadSelection = useCallback(async () => {
     const [models, preference] = await Promise.all([api.models(), api.preference(options.botId!)]);
-    // A message action must use an already chosen route, never silently pick the first model.
-    if (!preference.selection) return undefined;
     const { selection, protocol } = resolveVoiceConfiguration(models, preference.selection);
     return protocol && selection ? selection : undefined;
   }, [api, options.botId]);

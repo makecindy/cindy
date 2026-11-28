@@ -7,6 +7,7 @@ import { restoreCloudAvatar } from '../avatarRestore.js';
 import { readTranscriptPage } from '../room.js';
 import { startCompanionCloud, type CompanionCloudHost, type CompanionCloudRuntime, type CompanionRuntimeActor } from '../runtime.js';
 import type { CompanionApi } from '../types.js';
+import { createWorkRequestGate, WorkRequestDeferred } from '../../maker-ipc/chatWorkPolling.js';
 import { fakeApi, fakeLocal, memoryState, rejection, type ApiHandler } from './fakes.js';
 
 const ROOM = '10000000-0000-4000-8000-000000000001';
@@ -22,6 +23,8 @@ let runtime: CompanionCloudRuntime | undefined;
 afterEach(() => { runtime?.dispose(); runtime = undefined; });
 
 function setup(options: { home: string | null; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[]; backgroundIdentityApi?: CompanionApi;
+  backgroundMirror?: Parameters<typeof startCompanionCloud>[0]['backgroundMirror'];
+  rowsAfter?: CompanionCloudHost['rowsAfter']; latestRows?: CompanionCloudHost['latestRows'];
   readActors?: () => Promise<CompanionRuntimeActor[]>; identityDeferred?: (error: unknown) => boolean;
   installationId?: string; probe?: (deviceId: string) => Promise<boolean>; values?: Array<{ key: string; value: unknown }>;
   readValues?: CompanionCloudHost['readValues']; syncProfile?: (botId: string) => Promise<void>;
@@ -50,7 +53,7 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
     retireLocalCopy: options.retireLocalCopy,
     homes: createCompanionHomeRegistry(), openState: () => state,
     readValues: options.readValues ?? (async () => options.values ?? [{ key: 'companion.profile.v1', value: { name: 'Mia' } }]),
-    canonicalSession: options.canonicalSession ?? (async () => 'session-1'), rowsAfter: async () => [], latestRows: async () => [],
+    canonicalSession: options.canonicalSession ?? (async () => 'session-1'), rowsAfter: options.rowsAfter ?? (async () => []), latestRows: options.latestRows ?? (async () => []),
     deliverToCanonical: async () => ({ ok: true }),
     materializer: local.host, listDevices: async () => options.devices ?? [],
     ...(options.installationId ? { installationId: () => options.installationId! } : {}),
@@ -62,12 +65,50 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   };
   runtime = startCompanionCloud({ api, ...(options.backgroundIdentityApi ? { backgroundIdentity: {
     api: options.backgroundIdentityApi, isDeferred: options.identityDeferred ?? (() => false) } } : {}),
-    store: options.store, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: options.current ?? (() => true),
+    backgroundMirror: options.backgroundMirror, store: options.store, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: options.current ?? (() => true),
     bots: () => actors.filter(a => a.homeDeviceId === 'desk' && !state.isDemoted(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
     actors: () => actors, refresh, refreshForeground: options.refreshForeground, publish, onShadowChanged, log, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
     ...(options.paused ? { paused: options.paused } : {}) });
   return { runtime, actors, calls, local, state, files, refresh, publish, onShadowChanged, host, log };
 }
+
+it('retries the same pending mirror batch after the account cooldown without advancing the cursor early', async () => {
+  vi.useFakeTimers();
+  try {
+    const row = { id: 'local-1', clientId: 'input-1', role: 'user', content: 'pending', agentMeta: null, createdAt: 1234 };
+    const gate = createWorkRequestGate(error => error as { status?: number; retryAt?: number });
+    const posted: unknown[] = [];
+    const api: CompanionApi = async <T>(route: string, _method?: string, body?: unknown): Promise<T> => {
+      gate.check();
+      if (!route.endsWith('/import')) throw new Error('Unexpected mirror route');
+      posted.push(body);
+      if (posted.length === 1) {
+        const error = { status: 429, code: 'RATE_LIMITED', retryAt: Date.now() + 120000 };
+        gate.observe(error);
+        throw error;
+      }
+      return {} as T;
+    };
+    const t = setup({ home: 'desk', backgroundMirror: { api, check: gate.check },
+      backgroundIdentityApi: fakeApi(() => []).api, identityDeferred: error => error instanceof WorkRequestDeferred,
+      latestRows: async () => [row], rowsAfter: async (_sid, cursor) => cursor.createdAt < row.createdAt ? [row] : [] });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.roomId = ROOM; });
+    t.runtime.kickMirror('bot_mia');
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(posted).toHaveLength(1);
+    expect(t.state.bot('bot_mia')?.mirror?.createdAt).toBe(0);
+    t.runtime.kickMirror('bot_mia');
+    await vi.advanceTimersByTimeAsync(119999);
+    expect(posted).toHaveLength(1);
+    expect(t.state.bot('bot_mia')?.mirror?.createdAt).toBe(0);
+    await vi.advanceTimersByTimeAsync(15001);
+    expect(posted).toEqual([posted[0], posted[0]]);
+    expect(t.state.bot('bot_mia')?.mirror?.createdAt).toBe(row.createdAt);
+  } finally {
+    runtime?.dispose();
+    vi.useRealTimers();
+  }
+});
 
 describe('private report recovery', () => {
   it('retries a failed local import into the canonical chat without duplicating the report or marking read', async () => {
@@ -475,7 +516,7 @@ describe('take over', () => {
     t.local.host.findConflictingCindy = vi.fn(async () => 'local-cindy');
     expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-cindy', conflictingDeviceId: 'desk' });
     expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
-      action: 'takeOver', botId: 'bot_mia', code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'local-cindy',
+      action: 'takeOver', botId: 'bot_mia', code: 'LOCAL_CINDY_CONFLICT', stage: 'profile-check', conflictingBotId: 'local-cindy',
     });
     expect(t.calls.every(call => call.method === 'GET')).toBe(true);
     expect(t.actors[0]!.homeDeviceId).toBe('laptop');
@@ -727,19 +768,77 @@ describe('take over', () => {
       if (route === '/preferences' && method === 'GET') return [];
       return {};
     } });
-    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'PROFILE_SNAPSHOT_MISSING' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
     expect(t.local.host.createProfile).not.toHaveBeenCalled();
     expect(t.log.warn).toHaveBeenCalledWith('Companion home change failed', {
-      action: 'takeOver', botId: 'bot_mia', code: 'PROFILE_SNAPSHOT_MISSING',
+      action: 'takeOver', botId: 'bot_mia', code: 'PROFILE_SNAPSHOT_MISSING', stage: 'profile-check',
     });
   });
 
-  it('does not copy an arbitrary failure message into explicit home-change logs', async () => {
-    const t = setup({ home: 'laptop', handler: () => { throw new Error('private response /some/account/file'); } });
+  // 2026-11-25 reinstall & cross-device missing-snapshot recovery: same-device reinstall recovers
+  // directly (while preserving local Cindy singleton conflict protection); another computer recovers
+  // once confirmed with allowMissingProfile.
+  it('recovers a same-device reinstall without a cloud profile snapshot and allows confirmed cross-device recovery', async () => {
+    const sameDevice = setup({ home: 'desk', installationId: 'fresh-install', handler: (route, method) => {
+      if (route === '/preferences') return method === 'GET'
+        ? [{ key: 'companion.install.v1', value: { installationId: 'wiped-install', deviceId: 'desk' }, revision: 1 }]
+        : { revision: 2 };
+      if (route === '/conversations') return { id: ROOM };
+      if (route.includes('/messages?')) return [];
+      return {};
+    } });
+    sameDevice.actors[0] = { id: 'actor-1', kind: 'bot', externalId: 'cindy-default', name: 'Cindy', avatar: null, homeDeviceId: 'desk' };
+    sameDevice.local.host.findConflictingCindy = vi.fn(async () => 'other-cindy');
+    expect(await sameDevice.runtime.takeOver('cindy-default')).toEqual({
+      ok: false, code: 'LOCAL_CINDY_CONFLICT', conflictingBotId: 'other-cindy', conflictingDeviceId: 'desk',
+    });
+    sameDevice.local.host.findConflictingCindy = vi.fn(async () => null);
+    expect(await sameDevice.runtime.takeOver('cindy-default')).toEqual({ ok: true });
+    expect(sameDevice.state.isDemoted('cindy-default')).toBe(false);
+    expect(sameDevice.local.host.createProfile).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'cindy-default', name: 'Cindy', templateId: 'cindy', fallbackOnTransient: true,
+    }), expect.anything());
+
+    const crossDevice = setup({ home: 'laptop', handler: (route, method) => {
+      if (route === '/preferences' && method === 'GET') return [];
+      if (route === '/conversations') return { id: ROOM };
+      if (route.includes('/messages?')) return [];
+      return {};
+    } });
+    expect(await crossDevice.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'PROFILE_SNAPSHOT_MISSING' });
+    expect(crossDevice.calls.some(call => call.method === 'PATCH')).toBe(false);
+    expect(await crossDevice.runtime.takeOver('bot_mia', { allowMissingProfile: true })).toEqual({ ok: true });
+    expect(crossDevice.actors[0]!.homeDeviceId).toBe('desk');
+    expect(crossDevice.state.isDemoted('bot_mia')).toBe(false);
+  });
+
+  // #12507, unit: the explicit takeOver action previously logged the same receipt for
+  // these three first failures. Inject the same opaque error at each real boundary.
+  it.each(['profile-check', 'install-claim', 'local-restore'] as const)('logs the first take-over failure at %s without including the error message', async stage => {
+    const failure = new Error('private response /some/account/file');
+    const t = setup({ home: 'desk', installationId: 'this-install', handler: (route, method) => {
+      if (route === '/preferences') {
+        if (stage === 'profile-check' || (stage === 'install-claim' && method === 'POST')) throw failure;
+        return method === 'GET' ? [
+          { key: 'companion.profile.v1', value: MIA, revision: 1 },
+          { key: 'companion.install.v1', value: { installationId: 'old-install', deviceId: 'desk' }, revision: 1 },
+        ] : { revision: 2 };
+      }
+      if (route === '/conversations') return { id: ROOM };
+      if (route.includes('/messages?')) return [];
+      return {};
+    } });
+    t.local.setProfile({ status: 'active', displayName: 'Mia', description: '' });
+    t.state.update('bot_mia', 'actor-1', entry => { entry.demoted = true; entry.pendingRebuild = true; });
+    vi.mocked(t.local.host.rebuildContext).mockRejectedValueOnce(failure);
+
     expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(t.state.isDemoted('bot_mia')).toBe(true);
+    expect(t.calls.some(call => call.method === 'PATCH')).toBe(stage !== 'profile-check');
+    expect(t.local.host.rebuildContext).toHaveBeenCalledTimes(stage === 'local-restore' ? 1 : 0);
     expect(t.log.warn).toHaveBeenCalledExactlyOnceWith('Companion home change failed', {
-      action: 'takeOver', botId: 'bot_mia', code: 'FAILED',
+      action: 'takeOver', botId: 'bot_mia', code: 'FAILED', stage,
     });
   });
 
@@ -748,7 +847,7 @@ describe('take over', () => {
       if (route === '/preferences' && method === 'GET') return [{ key: 'companion.profile.v1', value: { name: 'Mia' }, revision: 1 }];
       return {};
     } });
-    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'FAILED' });
+    expect(await t.runtime.takeOver('bot_mia')).toEqual({ ok: false, code: 'PROFILE_SNAPSHOT_MISSING' });
     expect(t.calls.some(call => call.method === 'PATCH')).toBe(false);
   });
 

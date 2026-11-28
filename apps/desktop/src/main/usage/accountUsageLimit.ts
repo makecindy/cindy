@@ -23,7 +23,9 @@ import {
   type UsageWindow,
 } from '../../shared/accountUsageLimit.js';
 export { claudeAccountUsageLimit, type AccountUsageLimit } from '../../shared/accountUsageLimit.js';
+import type { ClaudeSubscriptionUsageSnapshot } from '../../shared/claudeSubscriptionUsage.js';
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
+import type { ProviderGroupCodexUsageSnapshot } from '../provider-group/usage.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import {
   readClaudeSubscriptionUsageSnapshot,
@@ -98,7 +100,32 @@ export function subscriptionFamilyOf(
     if (id === providerId) return family as NativeSubscriptionAuth;
   }
   const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
-  return provider?.auth.native ?? null;
+  if (provider?.auth.native) return provider.auth.native;
+  // Providers Cindy creates for subscription accounts (`anthropic-sub-*` / `openai-sub-*`)
+  // carry `subscriptionPool` instead of `auth.native`.
+  if (provider?.subscriptionPool === 'anthropic') return 'claude';
+  if (provider?.subscriptionPool === 'openai') return 'codex';
+  return null;
+}
+
+/** Convert a subscription account pool usage snapshot into an AccountUsageLimit. */
+export function subscriptionPoolAccountUsageLimit(
+  family: 'claude' | 'codex',
+  usage: {
+    claudeUsage?: ClaudeSubscriptionUsageSnapshot | null;
+    codexUsage?: ProviderGroupCodexUsageSnapshot | null;
+  } | null,
+  session: { agentKind: string; modelId?: string | null },
+  nowMs = Date.now(),
+): AccountUsageLimit | null {
+  if (!usage) return null;
+  if (family === 'claude') return claudeAccountUsageLimit(usage.claudeUsage ?? null, session.modelId, nowMs);
+  if (!usage.codexUsage) return null;
+  return codexAccountUsageLimit(
+    { ...usage.codexUsage, nativeAccountPool: true } as unknown as CodexAccountUsagePayload,
+    session,
+    nowMs,
+  );
 }
 
 /**

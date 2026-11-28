@@ -30,7 +30,23 @@ import {
   type OverrideSettingsState,
 } from './maker-host/override-settings-file.js';
 
+import { inspectSettingsFile, isSettingBoolean, validateOptionalSettingsFields } from './maker-host/settings-inspection.js';
+
 const log = desktopMakerLogger.child('update-channel-settings');
+
+/** 只取保存的偏好，不检查 manifest、canary 或通道运行时可用性。 */
+export function inspectUpdateChannelSettings() {
+  const result = inspectSettingsFile({ filePath: settingsFilePath, defaults: DEFAULTS, normalize,
+    validate: (raw) => validateOptionalSettingsFields(raw, {
+      enableBeta: isSettingBoolean, orgDefaultEnableBeta: isSettingBoolean,
+    }),
+  });
+  if (result.status !== 'ready') return result;
+  const customizedKeys = result.sources.enableBeta === 'override' ? ['enableBeta'] : [];
+  const enableBeta = resolveEffectiveEnableBeta({ value: result.value, defaults: DEFAULTS,
+    isCustomized: customizedKeys.length > 0, customizedKeys });
+  return { ...result, value: { ...result.value, enableBeta } };
+}
 
 export interface UpdateChannelSettings {
   enableBeta: boolean;

@@ -29,6 +29,50 @@ describe('isExplicitFailedToolResult', () => {
 });
 
 describe('collectGeneratedFiles', () => {
+  // Tier 1: the paired successful pack is the evidence for a generated plugin package;
+  // an identically named tool from another server or a publish hint is not.
+  it('carries the local Forge package into the turn and ignores publish tickets', () => {
+    const path = '/work/quiet/quiet-1.0.0.cindy';
+    const packed = (toolName: string, result: object) => collectGeneratedFiles([
+      { ...toolUse(toolName, { dir: '/work/quiet' }), toolUseId: 'pack' },
+      { role: 'tool_result', toolUseId: 'pack', content: JSON.stringify(result) },
+    ], WORKDIR);
+    expect(packed('mcp__cindy__ghost_forge_pack', { ok: true, cindyPath: path }))
+      .toEqual([{ name: 'quiet-1.0.0.cindy', path, source: 'tool', artifactConfirmed: true, packageToolUseId: 'pack' }]);
+    expect(packed('mcp__cindy__ghost_forge_pack', { ok: true, cindyPath: path, publishToken: 'ticket' })).toEqual([]);
+    expect(packed('mcp__other__ghost_forge_pack', { ok: true, cindyPath: path })).toEqual([]);
+    expect(packed('mcp__cindy__ghost_forge_pack', { ok: false, cindyPath: path })).toEqual([]);
+  });
+
+  it('accepts a Forge result inside the Windows share used by the task', () => {
+    const cwd = '\\\\files\\projects\\quiet';
+    const packed = (path: string, workingDir = cwd) => collectGeneratedFiles([
+      { ...toolUse('ghost_forge_pack', { dir: cwd }), toolUseId: 'pack' },
+      { role: 'tool_result', toolUseId: 'pack', content: JSON.stringify({ ok: true, cindyPath: path }) },
+    ], workingDir);
+    const path = cwd + '\\dist\\quiet.cindy';
+    expect(packed(path)).toEqual([
+      { path, name: 'quiet.cindy', source: 'tool', artifactConfirmed: true, packageToolUseId: 'pack' },
+    ]);
+    expect(packed('\\\\files\\other\\quiet.cindy')).toEqual([]);
+    expect(packed('\\\\other\\projects\\quiet\\quiet.cindy')).toEqual([]);
+    expect(packed('//files/projects/quiet/dist/quiet.cindy', '/')).toEqual([]);
+    expect(packed('quiet.cindy')).toEqual([]);
+  });
+
+  it('tracks the latest successful pack when Forge overwrites the same path', () => {
+    const path = '/work/quiet/plugin.cindy';
+    const result = (toolUseId: string, ok: boolean) => [
+      { ...toolUse('ghost_forge_pack', { dir: '/work/quiet' }), toolUseId },
+      { role: 'tool_result', toolUseId, content: JSON.stringify({ ok, cindyPath: path }) },
+    ];
+    const files = collectGeneratedFiles([
+      ...result('first', true), ...result('second', true), ...result('third', false),
+    ], WORKDIR);
+    expect(files).toHaveLength(1);
+    expect(files[0].packageToolUseId).toBe('second');
+  });
+
   it('turns a top-level cindy docs tool result into artifact metadata', () => {
     const files = collectGeneratedFiles(
       [

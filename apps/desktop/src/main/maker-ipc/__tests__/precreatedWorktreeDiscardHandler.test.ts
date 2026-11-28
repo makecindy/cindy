@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { parsePrecreatedWorktreePreserveReasonFromMessage } from '../../../shared/remotePrecreatedWorktreeLedger';
 import {
   registerPrecreatedWorktreeDiscardHandler,
   WORKTREE_DISCARD_PRECREATED_CHANNEL,
@@ -237,5 +238,59 @@ describe('worktree:discard-precreated IPC handler', () => {
         path: '/repo/.cindy-worktrees/one',
       }),
     ).resolves.toEqual({ discarded: true });
+  });
+
+  /*
+   * Test value (engineering-conventions §3.2)
+   * - Production entry: registerPrecreatedWorktreeDiscardHandler (worktree:discard-precreated / cancel-precreated).
+   * - Bug/rule basis: remote discard refusals previously emitted an unstructured PRECONDITION_FAILED message and
+   *   omitted reclaimOrphanedRuntimeLeases on discard, causing controllers to show a misleading offline toast.
+   * - Existing coverage gap: prior handler tests only asserted code === PRECONDITION_FAILED without checking the
+   *   structured preserve-reason wire marker, lock-contention mapping, or orphan-lease reclamation flag.
+   * - Minimal failing input: preserved({ reason: 'dirty' }), cross-process lock busy error, and recoveryKey discard.
+   */
+  it('encodes structured preserve reasons into PRECONDITION_FAILED, maps lock contention to in-progress, and reclaims orphaned leases', async () => {
+    const harness = new IpcHarness();
+    const discardByRecoveryKey = vi.fn(async () => ({
+      status: 'preserved' as const,
+      reason: 'dirty' as const,
+    }));
+    const deps = createDeps({ discardByRecoveryKey });
+    registerPrecreatedWorktreeDiscardHandler(harness, deps);
+
+    const dirtyErr = await harness
+      .invoke(WORKTREE_DISCARD_PRECREATED_CHANNEL, {
+        sessionId: 'session-1',
+        recoveryKey: 'recovery-key-123456',
+      })
+      .catch((err: unknown) => err) as Error & { code?: string };
+
+    expect(dirtyErr.code).toBe('PRECONDITION_FAILED');
+    expect(parsePrecreatedWorktreePreserveReasonFromMessage(dirtyErr.message)).toBe('dirty');
+    expect(discardByRecoveryKey).toHaveBeenCalledWith(
+      'session-1',
+      'recovery-key-123456',
+      expect.objectContaining({ reclaimOrphanedRuntimeLeases: true }),
+    );
+
+    const busyHarness = new IpcHarness();
+    registerPrecreatedWorktreeDiscardHandler(
+      busyHarness,
+      createDeps({
+        withSessionLock: vi.fn(async () => {
+          throw new Error('Worktree creation or cancellation is still in progress');
+        }),
+      }),
+    );
+
+    const busyErr = await busyHarness
+      .invoke(WORKTREE_DISCARD_PRECREATED_CHANNEL, {
+        sessionId: 'session-1',
+        recoveryKey: 'recovery-key-123456',
+      })
+      .catch((err: unknown) => err) as Error & { code?: string };
+
+    expect(busyErr.code).toBe('PRECONDITION_FAILED');
+    expect(parsePrecreatedWorktreePreserveReasonFromMessage(busyErr.message)).toBe('in-progress');
   });
 });

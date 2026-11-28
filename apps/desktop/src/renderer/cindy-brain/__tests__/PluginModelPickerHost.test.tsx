@@ -11,6 +11,7 @@ import type { PluginModelPickerPresentation } from '../../../shared/pluginModelP
 import zh from '../../i18n/locales/zh-CN/common.json';
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: vi.fn() },
   useTranslation: () => ({
     t: (key: string, options?: { name?: string }) => {
       const value = key
@@ -27,21 +28,48 @@ vi.mock('@/components/new-chat/ModelRouteSelector', () => ({
       typeof import('@/components/new-chat/ModelSelector').ModelSelectorContent
     >,
   ) => (
-    <button
-      onClick={() =>
-        props.onUnifiedSelect?.({
-          agentDevice: selectedLocation ? { deviceId: selectedLocation, name: 'Shared' } : null,
-          providerId: 'chosen-provider',
-          modelId: 'chosen-model',
-          engine: 'codex',
-          effort: 'high',
-          fast: 'ultrafast',
-          favoriteUid: null,
-        })
-      }
-    >
-      Choose model
-    </button>
+    <>
+      <button
+        onClick={() =>
+          props.onUnifiedSelect?.({
+            agentDevice: selectedLocation ? { deviceId: selectedLocation, name: 'Shared' } : null,
+            providerId: 'chosen-provider',
+            modelId: 'chosen-model',
+            engine: 'codex',
+            effort: 'high',
+            fast: 'ultrafast',
+            favoriteUid: null,
+          })
+        }
+      >
+        Choose model
+      </button>
+      <button
+        onClick={() =>
+          props.pluginEngines?.onSelect({
+            providerId: 'acp-plugin:antigravity:agy',
+            modelId: 'gemini-4-neon',
+            effort: 'high',
+            ...(selectedLocation ? { deviceId: selectedLocation } : {}),
+          })
+        }
+      >
+        Choose plugin engine
+      </button>
+      <button
+        onClick={() =>
+          props.pluginEngines?.onSelectEffort?.({
+            providerId: 'acp-plugin:antigravity:agy',
+            modelId: 'gemini-4-neon',
+            effort: 'max',
+            ...(selectedLocation ? { deviceId: selectedLocation } : {}),
+          })
+        }
+      >
+        Adjust plugin engine effort
+      </button>
+      <button onClick={() => props.onDismiss?.()}>Dismiss popover</button>
+    </>
   ),
 }));
 let selectedLocation: string | undefined;
@@ -225,4 +253,59 @@ it('cancels when the originating plugin page is gone instead of opening on a dif
   act(() => push({ ...request, pageAnchor: { guestId: 99, rect: { x: 20, y: 30, width: 160, height: 32 } } }));
   await waitFor(() => expect(resolve).toHaveBeenCalledWith('request', null));
   expect(screen.queryByText('Choose model')).toBeNull();
+});
+
+it('returns a confirmed plugin engine (acp) selection with effort and run location', async () => {
+  selectedLocation = 'mac-mini';
+  render(<PluginModelPickerHost />);
+  act(() => push({
+    ...request,
+    allowRemote: true,
+    initial: {
+      agentKind: 'acp',
+      providerId: 'acp-plugin:antigravity:agy',
+      model: 'gemini-4-neon',
+      effort: 'low',
+      fastMode: false,
+    },
+    pageAnchor: {
+      guestId: 42, rect: { x: 20, y: 30, width: 160, height: 32 },
+    },
+  }));
+  fireEvent.click(screen.getByText('Choose plugin engine'));
+  await waitFor(() => expect(resolve).toHaveBeenCalledWith('request', {
+    agentDeviceId: 'mac-mini',
+    providerId: 'acp-plugin:antigravity:agy',
+    model: 'gemini-4-neon',
+    agentKind: 'acp',
+    effort: 'high',
+    fastMode: false,
+  }));
+});
+
+it('keeps ACP effort adjustments in popover draft until dismiss and cancels on Escape', async () => {
+  render(<PluginModelPickerHost />);
+  act(() => push({
+    ...request,
+    initial: {
+      agentKind: 'acp',
+      providerId: 'acp-plugin:antigravity:agy',
+      model: 'gemini-4-neon',
+      effort: 'low',
+      fastMode: false,
+    },
+    pageAnchor: {
+      guestId: 42, rect: { x: 20, y: 30, width: 160, height: 32 },
+    },
+  }));
+  fireEvent.click(screen.getByText('Adjust plugin engine effort'));
+  expect(resolve).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByText('Dismiss popover'));
+  await waitFor(() => expect(resolve).toHaveBeenCalledExactlyOnceWith('request', {
+    providerId: 'acp-plugin:antigravity:agy',
+    model: 'gemini-4-neon',
+    agentKind: 'acp',
+    effort: 'max',
+    fastMode: false,
+  }));
 });

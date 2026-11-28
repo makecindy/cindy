@@ -22,6 +22,11 @@ Chrome 仍是 `my-browser`）。Native Messaging 的注册文件布局（`<App S
 只保存配对，旧版本存下的名单读到即忽略。事件 `browser-extension-policy-request` 沿用原名，现在只
 在没有配对缓存时用来索要配对。
 
+插件请求 `status` 时，若 `nativeBinding` 为 `unavailable` 且宿主已取得登记失败码，
+响应附带可选的 `nativeBindingReason`。例如，`NATIVE_HOST_IN_USE` 表示同名登记已被占用，
+`INSTALL_FAILED` 表示一般安装失败。登记恢复后省略该字段。旧宿主也可能省略它，
+插件应保留原有的通用提示。
+
 Native Messaging 临时注册失败由宿主按 5 秒、15 秒、30 秒、1 分钟、2 分钟、5 分钟退避，
 之后保持每 5 分钟重试，不依赖打开插件面板或点击刷新。注册冲突、路径安全校验失败及
 确认插件自带程序缺失时停止自动重试；通用 `ENOENT`、`EPERM` 等错误不直接判为永久失败。

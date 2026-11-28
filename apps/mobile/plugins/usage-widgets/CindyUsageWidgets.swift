@@ -164,7 +164,7 @@ struct UsageAccessoryView: View {
     let icon: (WidgetSource) -> Image = { source in
       // Inline templates include top optical padding: WidgetKit ignores Text baseline
       // modifiers on image attachments, so align artwork inside the asset canvas.
-      source.logo.map { Image("inline-logo-\($0)").renderingMode(.template) }
+      source.displayLogo.map { Image("inline-logo-\($0)").renderingMode(.template) }
         ?? Image(systemName: "person.crop.circle")
     }
     // Images embedded in a single Text survive the system's inline widget rendering.
@@ -188,7 +188,7 @@ struct UsageAccessoryView: View {
       Text(label)
     } icon: {
       // Inline accepts a single Image, not the composed LogoMark view.
-      if let logo = source.logo {
+      if let logo = source.displayLogo {
         Image("logo-\(logo)").renderingMode(.template)
       } else {
         Image(systemName: "person.crop.circle")

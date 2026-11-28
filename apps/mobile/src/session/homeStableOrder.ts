@@ -92,7 +92,7 @@ export function useStableHomeSections(input: {
   return useMemo(() => {
     if (!input.collapsedGroups?.length) return sections;
     const collapsed = new Set(input.collapsedGroups);
-    return sections.map(section => isDeviceSection(section) && collapsed.has(section.key)
+    return sections.map(section => isDeviceSection(section) && section.title !== null && collapsed.has(section.key)
       ? { ...section, data: [] } : section);
   }, [sections, input.collapsedGroups]);
 }
