@@ -92,17 +92,31 @@ Telegram、Discord、钉钉和官方 hook 共用调度器，Telegram 长轮询�
   名字跟随侧栏、含没有任务的项目、不含已移除的）；`/ctr` 另带不在任何项目里的对话任务目录。
   `/project` 在个人 Telegram 与个人飞书可用；用它切进项目的会话，启动时的托管目录归一与分组补写
   （`im/index.ts`、`feishu/legacySessionBackfill.ts`）都不得把它改回去。
-- **个人飞书机器人的按群设置**（2026-11-23）：设置页「飞书 / Lark 机器人 → 群聊」可给机器人所在的群单独
-  选项目、模型（含推理强度、来源、执行位置）与权限，存在 `owners/<账号>/feishu-group-settings.json`
-  （`im/feishu/groupSettingsStore.ts`），群主线与话题共用，伙伴连接不读。新任务（含群里 `/new`）的取值
+- **个人机器人的「群聊」总表**（2026-11-23 飞书；2026-11-24 主人裁决推广到 Telegram、Discord、钉钉、企业微信）：
+  设置子页「群聊」（Discord「频道」）可给机器人所在的群单独选项目、模型（含推理强度、来源、执行位置）与权限，
+  以及「群成员也能提问」。存在 `owners/<账号>/<渠道>-chat-settings.json`（飞书沿用 `feishu-group-settings.json`，
+  同一形状不搬文件；`im/shared/chatSettingsStore.ts`），群主线与话题共用，伙伴连接与交给伙伴回复时不读。
+  编排器用 `withImChatOverrides`（`im/shared/chatOverrides.ts`）统一接上按群的项目与模型，群 lane → 群 ID 见
+  `chatLanes.ts`；名单来源（飞书 / Discord 接口、Telegram / 钉钉 / 企业微信的群消息窗口、本机任务记录）在
+  `chatSourcesWiring.ts` 按平台登记。新任务（含群里 `/new`）的取值
   顺序（用户裁决）：模型——群单独设的 > 群绑定项目在上面「项目与模型」里的那一行（与插件同一个解析
   `resolveSharedImProjectConfig`）> 渠道「新对话配置」，只有没绑项目的群才用「新对话配置」；权限——
   群单独设的 > 绑定项目那一行（没填按完全访问，同插件）> 渠道「群聊新建任务权限档」。群工作目录只在新建与
   `/new` 时生效。选「对话」后，`/new` 会将该群任务移回托管对话目录；「跟随默认」也只在任务确实位于绑定项目目录时才按那一行切换，
-  还在对话目录里的旧任务仍跟随渠道。项目名表与解析经端口取用（`im/feishu/groupOverrides.ts`，由
+  还在对话目录里的旧任务仍跟随渠道。没单独选项目的群跟随机器人自己的「项目」。飞书之外的平台没有「群聊新建
+  任务权限档」，没设的群跟随机器人自己的权限档。项目名表与解析经端口取用（`im/shared/imProjectPorts.ts`，由
   `groupProjectPortsWiring.ts` 在 bootstrap 接上），不直接引用 hook-control，避免循环依赖。设置页把群
   改成完全访问、换项目或恢复继承会让群里新任务的权限变宽时先确认；在个人飞书里用 `/model` 只改当前任务，不写回
   「项目与模型」。
+- **个人机器人的平台项目与回复对象**（2026-11-24）：设置子页给每个个人渠道（Telegram、飞书、企业微信、钉钉、Discord、
+  微信）存一个项目与一个回复对象（`owners/<账号>/` 下的原子 JSON，`im/shared/personalChannelStore.ts`）。
+  编排器只在 Cindy 自己回复时（`companionBotId` 不是固定字符串）用 `withPersonalChannelProject` 包一层命名空间：
+  新任务目录与默认配置的顺序是 lane 自己的覆盖 > lane 项目（飞书群）> 平台项目 > 渠道「新对话配置」，
+  `channelDefaultRouteSync.followOf` 按同一顺序判断跟随哪一份。平台项目经 `im/shared/imProjectPorts.ts`
+  取「项目与模型」那一行（权限未填按完全访问，同插件），项目已从侧栏移除时回到渠道默认。
+  回复对象换成伙伴时，适配器的 `isCompanion()` 实时返回真，lane 钩子全部让位给伙伴；切换由
+  `switchPersonalBotReplyTarget` 先停传输、写归属、再起来，避免同一条消息落到两边。
+  官方机器人的回复对象记在 hook-control 账号状态，派发时按主人轮次进隐藏专线 `im:<provider>:official:<sha256>`。
 
 ## 1. 入口账本
 
@@ -418,9 +432,22 @@ Dispatcher 只接受宿主解析的专线 ID 和精确工作目录，忽略入�
   的条目保留，再次开启仍是零选择，只有完全没有记录的服务器才是首次开启。`normalizeDiscordChannelAccess`（lane.ts）统一规范化，
   不信任 UI；旧版本只认 `channels`，读到新配置只会少开、不会多开。thread 随父频道准入、独立上下文。设置页读取到的白名单版本
   不是 2（`accessVersion`，更旧的电脑）时整段拒绝编辑并提示升级。配置读是实时的：撤销 / 关闭后进行中的下载丢弃、出站拒绝、旧卡片失效。
-- **个人 bot 成员准入暂不开放**：传输层支持 `allowMembers`（有测试），个人 bot 的桌面 store 读写一律丢弃它。原因：个人 bot 没有对非主人
-  轮次的硬性读 / 检索 / MCP 边界（Auto 审阅对 guest 的口径是「可做范围内读取」，`forceConfirmToolCall` 只管破坏性与不透明写）。
-  开放成员需要伙伴 chat-only lane（`isChatOnlyGroupLane`）那类真正的工具 / 目录 / 记忆边界。
+- **个人 bot 成员准入**（2026-11-24 主人裁决「照微信插件原样开」，取代此前的「暂不开放」）：白名单文件仍丢弃
+  `allowMembers`；成员是否能召唤改由「群聊」总表按频道决定，传输层经 `admitMember` 现读（白名单开着的频道里才放行）。
+  已知取舍：个人 bot 对非主人轮次仍没有硬性的读 / 检索 / MCP 边界（Auto 审阅对 guest 的口径是「可做范围内读取」，
+  `forceConfirmToolCall` 只管破坏性与不透明写），群成员可能让它读到频道所在项目里的文件；主人知情后选择不另加读取
+  边界。护栏见下一条。
+- **「群成员也能提问」的护栏**（各平台个人 bot 同一份，`im/shared/guestGate.ts`）：只在 Cindy 自己回复时生效；
+  传输层放行（飞书 `guests` 函数、企业微信 / Discord `admitMember`；Telegram 已批准的群与钉钉群本来就放行）后，
+  `messageHandler` 先过门：没勾的群不回答；主人不在群里说话时成员连续问满 10 次（第 10 次仍回答）就暂停并在群里
+  说一次，主人在群里 @ 机器人或在设置里点「恢复」清零（暂停写在设置里，重启不丢）。`turnRunner` 的
+  `personalGuests`：成员轮次的渠道策略不因完全访问被跳过（最高临时 Auto），没挂策略的成员轮次拒绝，不进主人 `/ctr`
+  接管的桌面任务，每个任务最多排队 5 条成员提问。命令门只认主人；企业微信的文字确认只认主人。渠道说明对群里非主人
+  写「不是主人」。Telegram 的「群成员也能提问」就是传输层的群准入（主人邀请自动批准、别人拉的群在私聊卡里批准；
+  设置页勾选 = 批准、取消 = 拒绝，`TelegramIM.setGroupApproval`），不另存一份，免得批准后成员仍被挡住（2026-11-24
+  用户实测）。钉钉升级前就回答群成员：第一次见到机器人时把它在本机用过的群记为勾选（`seeded`），之后新群默认不勾；
+  飞书 / Discord / 企业微信默认不勾。准入记录、批准卡令牌与邀请人都存在各自那份 Cindy 里：两份 Cindy 同时接收
+  同一个机器人时，各自只收到一部分更新，会出现「无法确认原邀请人」、重复的批准卡、点了提示「已失效」。
 - **隔离**：每个 lane 独立托管目录 `discord-{appId}-g-{guild}-{channel}[-{thread}]`（`ensureWorkingDir(botContextId, userId?)`），
   与私聊目录并列；目录隔离不等于文件权限隔离。群历史检索只给本 lane（`access: 'lane'`），不跨 lane / 私聊。
   `adapter.blocksLocalTaskAccess` 让 `/ctr /exctr /session /project` 及 `control:*` / `project:*` 卡片在 lane 里不执行。

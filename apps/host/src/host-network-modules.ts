@@ -25,7 +25,7 @@ export type HostNetworkRoute = 'resolver' | 'injected' | 'loopback' | 'no-connec
 
 export const HOST_NETWORK_MODULES: Readonly<Record<string, { uses: readonly string[]; route: HostNetworkRoute; reason: string }>> = {
   'apps/desktop/scripts/mcp-apps-mock.mjs': { uses: ['imports http', 'network API calls ×1'], route: 'loopback', reason: 'A mock MCP app server on loopback for an acceptance script' },
-  'apps/desktop/src/main/browser-extension/bridge.ts': { uses: ['imports http', 'network API calls ×1'], route: 'loopback', reason: 'The browser extension bridge listens on loopback for the local extension' },
+  'apps/desktop/src/main/browser-extension/bridge.ts': { uses: ['imports http', 'imports ws', 'network API calls ×2'], route: 'loopback', reason: 'The browser extension bridge listens on loopback (HTTP + WebSocket) for the local extension' },
   'apps/desktop/src/main/browser-extension/native-binding.ts': { uses: ['imports net', 'network API calls ×1'], route: 'loopback', reason: 'Connects to 127.0.0.1 only (the native messaging binding)' },
   'apps/desktop/src/main/cindy-brain/ghostOauthFlow.ts': { uses: ['imports http', 'network API calls ×1'], route: 'loopback', reason: 'The plugin OAuth redirect listener on loopback; its token requests use the injected fetch (plugins/authorization.ts passes hostOutbound)' },
   'apps/desktop/src/main/cindy-brain/networkConnections.ts': { uses: ['imports ws', 'network API calls ×1', 'new WebSocket ×1'], route: 'injected', reason: 'Plugin WebSockets take the injected agent: plugins/runtime.ts passes hostOutbound.createOutboundHttpAgent' },

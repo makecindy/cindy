@@ -49,7 +49,7 @@ import {
 import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
 import { readCdpBrowserCommandLine, terminateManagedChromePortOwner } from './browser-backend/proxy-auth.js';
 import {
-  isUserBrowserRunning,
+  inspectUserBrowserProcesses,
   openExtensionStoreInUserBrowser,
   startUserBrowser,
 } from './browser-backend/open-extension-store.js';
@@ -351,7 +351,10 @@ function createUserBrowserBackend(): UserBrowserBackend {
   return (currentUserBrowserBackend = new UserBrowserBackend({
     getPageControl: () => userBrowserPageControlProvider(),
     startBrowser: () => startUserBrowser({ resolveBrowser: () => resolveSourceBrowserFromOs() }),
-    isBrowserRunning: () => isUserBrowserRunning({ resolveBrowser: () => resolveSourceBrowserFromOs() }),
+    inspectBrowserState: async () => {
+      const state = await inspectUserBrowserProcesses({ resolveBrowser: () => resolveSourceBrowserFromOs() });
+      return { running: state.normalRunning, hasWindow: state.hasWindow };
+    },
     getUnavailableReason: () => userBrowserUnavailableReason?.() ?? 'plugin-missing',
     // Same upload roots as the sidebar browser: the session's own folders plus its artifacts.
     resolveUploadRoots: async (sessionId) => [

@@ -13,6 +13,10 @@
  * - Minimal inputs: hover GitHub PR / GitLab MR links in MarkdownRenderer and UserMessageUrlLink,
  *   click/right-click an open hover link, hover between two links, and hover in a remote session.
  * - Tier: renderer unit (jsdom, fake timers, mocked IPC), <3s in isolation.
+ * - Inline GitHub chip (readableBareLinks, group / task / companion replies): a bare PR URL
+ *   becomes `title #n` once its status is read through this computer; authored labels stay;
+ *   a task on another computer never reads status from the chip (no relay traffic on scroll).
+ *   Minimal input: one bare PR URL plus one labelled link, local and remote session.
  */
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -218,6 +222,46 @@ describe('PrLinkHoverPopover in chat messages', () => {
     hover(dialog, 'out');
     advance(300);
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('renders bare GitHub links as inline chips with the PR title, keeping authored labels', async () => {
+    mocks.getPrStatuses.mockResolvedValue([
+      {
+        ok: true, provider: 'github', host: 'github.com', owner: 'octo', repo: 'repo', prNumber: 42,
+        status: 'merged', title: 'Add chat PR hover popover', htmlUrl: 'https://github.com/octo/repo/pull/42',
+        branch: 'feat/pr-hover', unresolvedCount: 0, conflicts: false,
+      },
+    ]);
+    const content = 'Done: https://github.com/octo/repo/pull/42 and https://github.com/octo/repo/issues/7, see [notes](https://github.com/octo/repo/pull/42).';
+    const { unmount } = render(
+      <PrRefsProvider>
+        <MarkdownRenderer workingDir="/tmp" currentSessionId="session-1" readableBareLinks content={content} />
+      </PrRefsProvider>,
+    );
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(mocks.getPrStatuses).toHaveBeenCalledWith([{ owner: 'octo', repo: 'repo', prNumber: 42 }]);
+    const pr = document.querySelector('[data-github-link-chip="pull"]')!;
+    expect(pr.getAttribute('data-pr-status')).toBe('merged');
+    expect(pr.textContent).toContain('Add chat PR hover popover#42');
+    expect(pr.closest('a')?.getAttribute('href')).toBe('https://github.com/octo/repo/pull/42');
+    expect(document.querySelector('[data-github-link-chip="issue"]')?.textContent).toContain('octo/repo#7');
+    expect(screen.getByRole('link', { name: 'notes' })).toBeTruthy();
+    unmount();
+
+    // A task on another computer: the chip only shows what the task's PR list already has.
+    mocks.getPrStatuses.mockClear();
+    mocks.session = { id: 'session-1', deviceLinkDeviceId: 'remote-dev' };
+    render(
+      <PrRefsProvider>
+        <MarkdownRenderer workingDir="/tmp" currentSessionId="session-1" readableBareLinks content={content} />
+      </PrRefsProvider>,
+    );
+    await flushMicrotasks();
+    expect(mocks.getPrStatuses).not.toHaveBeenCalled();
+    expect(mocks.deviceInvoke).not.toHaveBeenCalledWith('remote-dev', 'git-context:pr-status', expect.anything());
+    expect(document.querySelector('[data-github-link-chip="pull"]')?.textContent).toContain('octo/repo#42');
   });
 
   it('shows GitLab MR summary popover on UserMessageUrlLink hover and dismisses on click or right-click', async () => {

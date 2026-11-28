@@ -4968,70 +4968,7 @@
         "hint": "Envoie un message privé via le bot Feishu ou Lark associé ; uniquement lorsque la fenêtre n'est pas au premier plan.",
         "disabledHint": "Configurez d'abord le bot et envoyez-lui un message privé une fois pour finaliser la liaison."
       },
-      "bind": "Lier",
-      "groups": {
-        "title": "Conversations de groupe",
-        "description": "Attribuez à un groupe où se trouve le bot son propre projet, modèle et autorisations.",
-        "rules": "Ce que vous ne définissez pas : un groupe lié à un projet suit ce projet dans Projets et modèles ; un groupe sans projet suit la Configuration des nouvelles conversations et le Mode d’autorisation des nouvelles tâches de groupe ci-dessus. La conversation principale d’un groupe et ses sujets partagent un même réglage.",
-        "expand": "Développer",
-        "collapse": "Réduire",
-        "groupCount_one": "{{count}} groupe",
-        "groupCount_other": "{{count}} groupes",
-        "groupCount_many": "{{count}} groupes",
-        "customCount_one": "{{count}} avec ses propres réglages",
-        "customCount_other": "{{count}} avec leurs propres réglages",
-        "customCount_many": "{{count}} avec leurs propres réglages",
-        "refresh": "Actualiser",
-        "loading": "Chargement des groupes…",
-        "loadFailed": "Impossible de charger les groupes. Réessayez dans un instant avec Actualiser.",
-        "saveFailed": "Impossible d’enregistrer les réglages du groupe",
-        "notConnected": "Les groupes s’affichent une fois le bot connecté. Seuls les groupes ayant leurs propres réglages sont listés ci-dessous.",
-        "empty": "Le bot n’est encore dans aucun groupe. Ajoutez-le à un groupe, puis revenez ici.",
-        "listPermission": "Impossible de lire les groupes du bot. Sur Feishu Open Platform, accordez à cette application l’autorisation de lire les informations des groupes. Les groupes où le bot a déjà servi sont listés ci-dessous.",
-        "listUnavailable": "Impossible de lire les groupes du bot pour le moment. Les groupes où le bot a déjà servi sont listés ci-dessous.",
-        "unnamed": "Groupe sans nom ({{id}})",
-        "summaryModel": "Modèle propre",
-        "summaryPermission": "Autorisations propres",
-        "expandAria": "Réglages de {{name}}",
-        "searchLabel": "Rechercher des groupes",
-        "searchPlaceholder": "Rechercher par nom de groupe",
-        "customHeading": "Réglages propres",
-        "followHeading": "Suivent les réglages du canal",
-        "showMore": "Afficher {{count}} de plus",
-        "showLess": "Afficher moins",
-        "noMatch": "Aucun groupe ne correspond à « {{query}} »",
-        "project": {
-          "label": "Projet",
-          "follow": "Conversation",
-          "missing": "{{name}} (retiré de la barre latérale)",
-          "hint": "S’applique quand le bot est mentionné pour la première fois dans le groupe, qu’un sujet commence ou que quelqu’un envoie /new. Les tâches en cours ne sont pas déplacées. Avec un projet, le modèle et les autorisations suivent ce projet dans Projets et modèles ; avec Conversation, les tâches restent dans le dossier de conversations du bot et suivent la Configuration des nouvelles conversations ci-dessus. Seuls les projets de la barre latérale de cet ordinateur peuvent être choisis."
-        },
-        "model": {
-          "label": "Modèle et effort de raisonnement",
-          "hintFollow": "Suit la Configuration des nouvelles conversations. Changer ici le modèle ou l’effort de raisonnement ne concerne que ce groupe.",
-          "hintFollowProject": "Suit le projet « {{project}} » dans Projets et modèles. Changer ici le modèle ou l’effort de raisonnement ne concerne que ce groupe.",
-          "hintProjectUnavailable": "Le modèle défini pour « {{project}} » dans Projets et modèles n’est pas disponible pour le moment. Choisissez-en un autre là-bas, ou un pour ce groupe ici.",
-          "hintFixed": "Ce groupe a son propre modèle. Les tâches de ce groupe dont le modèle n’a pas été modifié basculent à leur prochain message ; les nouvelles tâches utilisent ce modèle."
-        },
-        "permission": {
-          "label": "Autorisations",
-          "hintFollow": "Suit le Mode d’autorisation des nouvelles tâches de groupe. Ne concerne que les tâches créées dans ce groupe à partir de maintenant ; changez une tâche existante avec /permission dans le groupe.",
-          "hintFollowProject": "Suit les autorisations de « {{project}} » dans Projets et modèles. Ne concerne que les tâches créées dans ce groupe à partir de maintenant ; changez une tâche existante avec /permission dans le groupe.",
-          "hintFixed": "Ce groupe a son propre mode d’autorisation. Ne concerne que les tâches créées dans ce groupe à partir de maintenant ; changez une tâche existante avec /permission dans le groupe."
-        },
-        "fullAccessConfirm": {
-          "title": "Utiliser l’accès complet dans {{name}} ?",
-          "description": "Les nouvelles tâches de ce groupe s’exécuteront sans confirmation à chaque étape, quel que soit l’auteur de la mention du bot. Les messages du groupe sont contrôlés par ses membres : ne le faites que si vous faites confiance à tous.",
-          "confirm": "Utiliser l’accès complet",
-          "cancel": "Annuler"
-        },
-        "widerConfirm": {
-          "title": "Élargir les autorisations de {{name}} ?",
-          "description": "Les nouvelles tâches de ce groupe passeront de « {{current}} » à « {{next}} », quel que soit l’auteur de la mention du bot. Les messages du groupe sont contrôlés par ses membres : ne le faites que si vous faites confiance à tous.",
-          "confirm": "Modifier quand même",
-          "cancel": "Annuler"
-        }
-      }
+      "bind": "Lier"
     },
     "wechatBot": {
       "title": "WeChat personnel",
@@ -7603,7 +7540,7 @@
     "tina": {
       "chat": {
         "title": "Conversation",
-        "description": "Conversations simples sans dépôt ; sélectionnez « chat » depuis Slack, Telegram, X ou Feishu / Lark, une session par fil de conversation."
+        "description": "Conversations simples sans dossier de projet. Utilisé lorsqu’une app de messagerie ne cible aucun projet précis."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7734,7 +7671,8 @@
       "groups": {
         "cindy": "Officiel",
         "personal": "Personnel",
-        "plugins": "Plugins"
+        "plugins": "Plugins",
+        "shared": "Partagé"
       },
       "tips": {
         "cindy": "Fourni et maintenu par Cindy. Inutile de créer un bot ou de fournir des identifiants : suivez les étapes de connexion pour commencer.",
@@ -7775,6 +7713,194 @@
       "plugins": {
         "rowHint": "La connexion, l'association et les réglages de chaque conversation se trouvent sur la page du plugin.",
         "open": "Ouvrir le plugin"
+      },
+      "replyTarget": {
+        "label": "Qui répond",
+        "cindy": "Tâches ordinaires",
+        "cindyHint": "Traité comme tâche ordinaire dans la barre latérale avec le projet et le modèle ci-dessous. Ou confiez-le à un compagnon.",
+        "companionHint": "Les messages directs vont dans votre discussion avec {{name}}, et chaque groupe est suivi séparément par {{name}}. Modèle, droits et mémoire suivent {{name}}.",
+        "openCompanion": "Réglages de {{name}}",
+        "summary": "{{name}} répond",
+        "missingCompanion": "Ami indisponible",
+        "busy": "Ce bot a encore des messages en attente ou une tâche en cours. Changez une fois qu’ils sont terminés.",
+        "updateFailed": "Impossible de changer. Vérifiez que l’ami est toujours disponible, puis réessayez.",
+        "companionSettingsHint": "Modèle, autorisations et mémoire"
+      },
+      "nav": {
+        "back": "Retour",
+        "backTo": "Retour à {{page}}"
+      },
+      "pageDescription": "Écrivez à Cindy ou à vos amis depuis des messageries comme WeChat, Feishu et Telegram.",
+      "list": {
+        "connected": "Connectées",
+        "available": "Autres applications",
+        "choose": "Choisissez une messagerie",
+        "cindyReplies": "Tâches ordinaires",
+        "official": "Bot officiel : {{status}}",
+        "projects": "Projets et modèles",
+        "projectsHint": "Modèle et autorisations de chaque projet quand une app de messagerie ou un plugin y lance une tâche",
+        "hint": {
+          "both": "Bot officiel ou bot que vous créez",
+          "slack": "Utilise le bot officiel Cindy. Connectez-vous à Slack, c’est tout",
+          "x": "Utilise le compte officiel Cindy. Autorisez-le pour qu’il vous réponde sur X",
+          "wechat": "Connectez votre WeChat personnel avec un code QR",
+          "personal": "Utilisez un bot que vous créez"
+        },
+        "companionDedicated": "Propre au compagnon : {{names}}"
+      },
+      "apps": {
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "x": "X",
+        "wechat": "WeChat",
+        "feishu": "Feishu / Lark",
+        "wecom": "WeCom",
+        "dingtalk": "DingTalk"
+      },
+      "ways": {
+        "official": "Bot officiel Cindy",
+        "personal": "Votre propre bot",
+        "personalHint": "Un bot que vous créez sur la plateforme, avec le nom et l’avatar de votre choix.",
+        "personalSetupTitle": "Utiliser votre propre bot",
+        "setUp": "Configurer",
+        "personalSetupHint": {
+          "telegram": "Créez un bot avec BotFather, puis saisissez son jeton et votre ID utilisateur.",
+          "discord": "Créez un bot dans le Discord Developer Portal, puis saisissez son jeton.",
+          "feishu": "Créez une application sur la plateforme Feishu ou Lark, puis saisissez son App ID et son App Secret."
+        },
+        "officialHint": "Aucune application à créer — connecté directement à votre compte Cindy."
+      },
+      "rows": {
+        "model": "Modèle",
+        "groupReply": "Quand répondre dans les groupes",
+        "persona": "Nom et personnalité",
+        "behavior": "Réactions et citations",
+        "receiveHere": "Recevoir les messages sur cet ordinateur",
+        "receiveHereHint": "Désactivez pour mettre le bot hors ligne ici. Les identifiants restent enregistrés, vous pouvez le réactiver à tout moment.",
+        "unbind": "Dissocier ce bot",
+        "ownerId": "Mon ID utilisateur {{id}}",
+        "discordChannels": "Salons du serveur",
+        "discordChannelsHint": "Dans quels salons du serveur le bot peut travailler",
+        "notifications": "Notifications",
+        "on": "Activé",
+        "off": "Désactivé",
+        "project": "Projet",
+        "projectDialogue": "Conversation (sans projet)",
+        "projectMissing": "Projet absent de la barre latérale",
+        "projectHint": "Les nouvelles tâches vont dans ce projet et utilisent son modèle et ses autorisations de Projets et modèles.",
+        "projectDialogueHint": "Les nouvelles tâches vont dans le dossier de conversation du bot et utilisent le modèle ci-dessous.",
+        "officialProjectHint": "Les nouvelles tâches vont dans ce projet et utilisent son modèle et ses autorisations dans Projets et modèles. Commun à tous les bots officiels Cindy.",
+        "officialProjectDialogueHint": "Les nouvelles tâches restent dans le dossier de conversations et utilisent la ligne Conversation dans Projets et modèles. Commun à tous les bots officiels Cindy.",
+        "projectFullAccessTitle": "Utiliser les autorisations de {{name}} ?",
+        "projectFullAccessDescription": "{{name}} a un accès complet dans Projets et modèles : les nouvelles tâches de {{app}} s’exécuteront sans confirmation à chaque étape. Vous pouvez d’abord le passer en Auto ou Ask dans Projets et modèles.",
+        "projectFullAccessConfirm": "Utiliser quand même",
+        "projectFullAccessCancel": "Annuler",
+        "projectUpdateFailed": "Impossible de changer de projet. Vérifiez qu’il est toujours dans la barre latérale, puis réessayez.",
+        "chats": "Conversations de groupe",
+        "channels": "Canaux",
+        "projectModel": "Modèle et autorisations",
+        "projectModelHint": "Géré dans Projets et modèles",
+        "projectModelFollow": "Suit « {{name}} »",
+        "groupReplyHint": "Choisissez si le bot répond en groupe uniquement lorsqu’il est mentionné ou à tous les messages"
+      },
+      "chats": {
+        "title": "Conversations de groupe",
+        "description": "Donnez à un groupe où se trouve le bot son propre projet, modèle et autorisations, et choisissez si les autres membres peuvent poser des questions.",
+        "rules": "Ce que vous ne définissez pas : un groupe lié à un projet suit ce projet dans Projets et modèles ; un groupe sans projet suit le projet du bot ou, s’il n’en a pas, ses réglages de modèle. La conversation principale d’un groupe et ses sujets partagent un même réglage.",
+        "expand": "Développer",
+        "collapse": "Réduire",
+        "groupCount_one": "{{count}} groupe",
+        "groupCount_other": "{{count}} groupes",
+        "groupCount_many": "{{count}} groupes",
+        "customCount_one": "{{count}} avec ses propres réglages",
+        "customCount_other": "{{count}} avec leurs propres réglages",
+        "customCount_many": "{{count}} avec leurs propres réglages",
+        "refresh": "Actualiser",
+        "loading": "Chargement des groupes…",
+        "loadFailed": "Impossible de charger les groupes. Réessayez dans un instant avec Actualiser.",
+        "saveFailed": "Impossible d’enregistrer les réglages du groupe",
+        "notConnected": "Les groupes s’affichent une fois le bot connecté. Seuls les groupes ayant leurs propres réglages sont listés ci-dessous.",
+        "empty": "Le bot n’est encore dans aucun groupe. Ajoutez-le à un groupe, puis revenez ici.",
+        "listPermission": "Impossible de lire les groupes du bot. Sur Feishu Open Platform, accordez à cette application l’autorisation de lire les informations des groupes. Les groupes où le bot a déjà servi sont listés ci-dessous.",
+        "listUnavailable": "Impossible de lire les groupes du bot pour le moment. Les groupes où le bot a déjà servi sont listés ci-dessous.",
+        "unnamed": "Groupe sans nom ({{id}})",
+        "summaryModel": "Modèle propre",
+        "summaryPermission": "Autorisations propres",
+        "expandAria": "Réglages de {{name}}",
+        "searchLabel": "Rechercher des groupes",
+        "searchPlaceholder": "Rechercher par nom de groupe",
+        "customHeading": "Réglages propres",
+        "followHeading": "Suivent les réglages du canal",
+        "showMore": "Afficher {{count}} de plus",
+        "showLess": "Afficher moins",
+        "noMatch": "Aucun groupe ne correspond à « {{query}} »",
+        "project": {
+          "label": "Projet",
+          "follow": "Suivre le bot",
+          "missing": "{{name}} (retiré de la barre latérale)",
+          "hint": "S’applique quand le bot est mentionné pour la première fois dans le groupe, qu’un sujet commence ou que quelqu’un envoie /new. Les tâches en cours ne sont pas déplacées. Avec un projet, le modèle et les autorisations suivent ce projet dans Projets et modèles ; avec Suivre le bot, le groupe utilise le projet du bot ou, s’il n’en a pas, son dossier de conversations et ses réglages de modèle. Seuls les projets de la barre latérale de cet ordinateur peuvent être choisis.",
+          "followWith": "Suivre le bot ({{project}})"
+        },
+        "model": {
+          "label": "Modèle et effort de raisonnement",
+          "hintFollow": "Suit la Configuration des nouvelles conversations. Changer ici le modèle ou l’effort de raisonnement ne concerne que ce groupe.",
+          "hintFollowProject": "Suit le projet « {{project}} » dans Projets et modèles. Changer ici le modèle ou l’effort de raisonnement ne concerne que ce groupe.",
+          "hintProjectUnavailable": "Le modèle défini pour « {{project}} » dans Projets et modèles n’est pas disponible pour le moment. Choisissez-en un autre là-bas, ou un pour ce groupe ici.",
+          "hintFixed": "Ce groupe a son propre modèle. Les tâches de ce groupe dont le modèle n’a pas été modifié basculent à leur prochain message ; les nouvelles tâches utilisent ce modèle.",
+          "reset": "Revenir au modèle par défaut"
+        },
+        "permission": {
+          "label": "Autorisations",
+          "hintFollow": "Suit le Mode d’autorisation des nouvelles tâches de groupe. Ne concerne que les tâches créées dans ce groupe à partir de maintenant ; changez une tâche existante avec /permission dans le groupe.",
+          "hintFollowProject": "Suit les autorisations de « {{project}} » dans Projets et modèles. Ne concerne que les tâches créées dans ce groupe à partir de maintenant ; changez une tâche existante avec /permission dans le groupe.",
+          "hintFixed": "Ce groupe a son propre mode d’autorisation. Ne concerne que les tâches créées dans ce groupe à partir de maintenant ; changez une tâche existante avec /permission dans le groupe.",
+          "hintFollowBot": "Suit les autorisations propres du bot. Ne concerne que les tâches créées désormais dans ce groupe ; changez une tâche existante avec /permission dans le groupe.",
+          "followWith": "Suivre · {{mode}}"
+        },
+        "fullAccessConfirm": {
+          "title": "Utiliser l’accès complet dans {{name}} ?",
+          "description": "Les nouvelles tâches de ce groupe s’exécuteront sans confirmation à chaque étape, quel que soit l’auteur de la mention du bot. Les messages du groupe sont contrôlés par ses membres : ne le faites que si vous faites confiance à tous.",
+          "confirm": "Utiliser l’accès complet",
+          "cancel": "Annuler"
+        },
+        "widerConfirm": {
+          "title": "Élargir les autorisations de {{name}} ?",
+          "description": "Les nouvelles tâches de ce groupe passeront de « {{current}} » à « {{next}} », quel que soit l’auteur de la mention du bot. Les messages du groupe sont contrôlés par ses membres : ne le faites que si vous faites confiance à tous.",
+          "confirm": "Modifier quand même",
+          "cancel": "Annuler"
+        },
+        "descriptionChannels": "Donnez à un canal où travaille le bot son propre projet, modèle et autorisations, et choisissez si les autres membres peuvent poser des questions.",
+        "kindGroup": "Groupe",
+        "kindChannel": "Canal",
+        "channelCount_one": "{{count}} canal",
+        "channelCount_other": "{{count}} canaux",
+        "membersCount_one": "{{count}} ouvert aux membres",
+        "membersCount_other": "{{count}} ouverts aux membres",
+        "unnamedChannel": "Canal sans nom ({{id}})",
+        "searchPlaceholderChannels": "Rechercher par nom de canal",
+        "emptyLocal": "Aucun groupe enregistré pour l’instant. Mentionnez le bot une fois dans un groupe pour qu’il apparaisse ici.",
+        "emptyChannels": "Aucun canal ouvert pour l’instant. Activez d’abord dans Canaux du serveur ceux où travaille le bot.",
+        "members": {
+          "label": "Les membres peuvent aussi poser des questions",
+          "hint": "Si activé, les autres membres qui mentionnent le bot reçoivent aussi une réponse, avec le projet et le modèle de ce groupe. Leurs questions s’exécutent au plus en révision automatique : les actions demandent toujours votre accord ; vos propres questions utilisent les autorisations du groupe.",
+          "guard": "Si vous n’écrivez pas dans le groupe, les membres sont mis en pause après {{limit}} questions d’affilée, jusqu’à ce que vous y mentionniez le bot ou cliquiez sur Reprendre. Les commandes ne marchent que pour vous.",
+          "paused": "En pause pour les membres : ils ont posé {{limit}} questions d’affilée pendant votre absence.",
+          "resume": "Reprendre",
+          "chip": "Membres autorisés",
+          "pausedChip": "Membres en pause",
+          "resumeFailed": "Impossible de reprendre. Réessayez plus tard."
+        },
+        "statusCustom": "Réglages propres",
+        "shownHint": "{{shown}} sur {{total}} affichés. Tapez un nom pour filtrer.",
+        "fieldsNote": "Les changements de projet, de modèle et d’autorisations s’appliquent à la prochaine tâche créée dans ce groupe ; les tâches en cours ne sont pas déplacées.",
+        "channelCount_many": "{{count}} canaux",
+        "membersCount_many": "{{count}} ouverts aux membres"
+      },
+      "companionBots": {
+        "title": "Bots dédiés aux compagnons",
+        "description": "Configurés individuellement dans les paramètres du compagnon. Les configurations existantes continuent de fonctionner après mise à jour.",
+        "manage": "Gérer"
       }
     },
     "shortcuts": {
@@ -12966,7 +13092,19 @@
         "lastOwner": "Transférez la propriété ou dissolvez ce groupe avant de le quitter."
       },
       "memberCount_many": "{{count}} membres",
-      "externalBadge": "Externe"
+      "externalBadge": "Externe",
+      "links": {
+        "kind": {
+          "pull": "Pull request",
+          "issue": "Issue",
+          "discussion": "Discussion",
+          "commit": "Commit",
+          "file": "Fichier",
+          "folder": "Dossier",
+          "release": "Version",
+          "repo": "Dépôt"
+        }
+      }
     },
     "joined": {
       "today": "Arrivé aujourd'hui",
@@ -13241,6 +13379,7 @@
       "arrivalPermissions": "{{name}} utilise désormais les autorisations par défaut de cet ordinateur.",
       "arrivalModel": "Le modèle enregistré de {{name}} n'est pas disponible sur cet ordinateur ; il utilise donc le modèle par défaut de cet ordinateur.",
       "arrivalModelSetup": "{{name}} est arrivé sur cet ordinateur mais n’a pas encore de modèle utilisable. Connectez un fournisseur de modèles ou réglez le modèle par défaut des compagnons dans Fournisseurs → Routage intelligent.",
+      "modelSetupHint": "Aucun modèle de compagnon n’est disponible sur cet ordinateur. Choisissez le modèle par défaut des compagnons dans Fournisseurs → Routage intelligent. Cindy réessaiera automatiquement.",
       "arrivalPartialContent": "{{name}} fonctionne désormais sur cet ordinateur, mais certains éléments synchronisés n’ont pas pu être restaurés. Leurs copies dans le cloud restent intactes.",
       "missingProfileTitle": "Continuer avec {{name}} et un profil par défaut ?",
       "missingProfileDescription": "L’ordinateur principal d’origine n’a pas encore envoyé le profil de {{name}}. Si cet ordinateur a été réinstallé ou ne peut pas être récupéré, vous pouvez continuer ici avec un profil par défaut tout en conservant les conversations et contenus déjà synchronisés.",
@@ -13515,7 +13654,11 @@
         "unbound": "Laissez {{name}} traiter vos questions adressées au bot officiel @askmycindy.",
         "managed": "Un ami traite les questions X. Modifiez l'attribution dans les paramètres de plateforme de messagerie de cet ami.",
         "riskBody": "Les questions X utilisent la mémoire partagée, les outils et l'espace de travail de l’ami, et les réponses sont publiques. N'utilisez pas X pour des informations privées. Le fil X n'utilise pas directement votre historique de conversation privé."
-      }
+      },
+      "handedOver": "{{apps}} : dans les Réglages, {{name}} répond ici.",
+      "handedOverSeparator": ", ",
+      "manageInSettings": "Gérer dans les Réglages",
+      "handedOverHint": "Les bots ajoutés ci-dessous appartiennent uniquement à {{name}} et restent distincts de ceux des Paramètres."
     },
     "voiceMode": {
       "realtime": {
@@ -14227,7 +14370,8 @@
         },
         "companion": {
           "retryLater": "veuillez réessayer plus tard"
-        }
+        },
+        "membersPaused": "Je mets en pause les questions des membres jusqu’au retour du propriétaire 🙈"
       },
       "hook": {
         "interaction": {
@@ -15892,7 +16036,9 @@
     "connectionInterrupted": "La connexion vocale a été interrompue. Vérifiez votre réseau et réessayez.",
     "recognitionStalled": "La reconnaissance vocale ne renvoie plus de résultats. Réessayez.",
     "transcriptKept": "{{message}} Le texte reconnu jusqu'ici a été conservé : vous pouvez le modifier directement.",
-    "transcriptKeptOverlay": "{{message}} Le texte reconnu jusqu'ici a été conservé : copiez-le pour continuer."
+    "transcriptKeptOverlay": "{{message}} Le texte reconnu jusqu'ici a été conservé : copiez-le pour continuer.",
+    "retryRecognition": "Réessayer la reconnaissance",
+    "recordAgain": "Réenregistrer"
   },
   "chatgptAuthRecovery": {
     "title": "La connexion ChatGPT n'est plus valide",
@@ -16141,7 +16287,7 @@
       "requestFormatError": "L'application a envoyé une requête non valide : cette réponse n'a donc pas pu aboutir.",
       "piRetryHistoryTooLarge": "Message non envoyé. En lisant l’historique nécessaire au nouvel essai, Pi a rencontré une trame dépassant la limite locale de 16 MiB. Vous pouvez continuer dans une nouvelle tâche.",
       "piRetryHistoryUnavailable": "Message non envoyé. Pi n’a pas pu lire l’historique nécessaire à l’envoi. Vous pouvez réessayer ou continuer dans une nouvelle tâche.",
-      "upstreamStatusError": "Le service en amont a renvoyé {{status}} ; la réponse n’a pas pu aboutir.",
+      "upstreamStatusError": "Le service du fournisseur de modèles a renvoyé une erreur (HTTP {{status}}). La réponse n’a pas pu aboutir.",
       "messageNotSent": "Message non envoyé.",
       "replyFailed": "Impossible de terminer la réponse",
       "queuedSendRecovery": "Ton message n’a pas été envoyé. Sélectionne « Réessayer » pour le renvoyer tel quel. Si tu envoies un nouveau message, il remplacera le précédent.",
@@ -16199,12 +16345,12 @@
       "networkUnreachableNoRetry": "Erreur réseau : le service est temporairement injoignable.",
       "networkAutoRetrying": "Erreur réseau : nouvelle tentative automatique…",
       "networkReconnecting": "Connexion interrompue : reconnexion ({{attempt}}/{{maxAttempts}})…",
-      "overloadRetrying": "Le service du modèle est occupé : nouvelle tentative automatique ({{attempt}}/{{maxAttempts}})…",
+      "overloadRetrying": "Le fournisseur de modèles est temporairement saturé. Nouvelle tentative automatique ({{attempt}}/{{maxAttempts}})…",
       "rateLimitRetrying": "Débit de requêtes limité : nouvelle tentative automatique ({{attempt}}/{{maxAttempts}})…",
-      "overloadBusy": "Le service du modèle est occupé : le service en amont n'a pas de capacité disponible pour le moment. Cliquez sur « Réessayer » ou passez à un autre modèle.",
-      "overloadBusyNoRetry": "Le service du modèle est occupé : le service en amont n'a pas de capacité disponible pour le moment. Réessayez plus tard ou passez à un autre modèle.",
-      "streamInterrupted": "Le flux du modèle a été interrompu. Il s'agit généralement d'un problème temporaire en amont : cliquez sur Réessayer.",
-      "streamInterruptedNoRetry": "Le flux du modèle a été interrompu. Il s'agit généralement d'un problème temporaire en amont. Réessayez dans un instant.",
+      "overloadBusy": "Le fournisseur de modèles est temporairement saturé et sans capacité disponible. Cliquez sur « Réessayer » ou changez de modèle.",
+      "overloadBusyNoRetry": "Le fournisseur de modèles est temporairement saturé et sans capacité disponible. Réessayez plus tard ou changez de modèle.",
+      "streamInterrupted": "Le flux de réponse du fournisseur de modèles a été interrompu en cours de route. Cliquez sur « Réessayer ».",
+      "streamInterruptedNoRetry": "Le flux de réponse du fournisseur de modèles a été interrompu en cours de route. Réessayez plus tard.",
       "networkShowRaw": "Détails de l'erreur",
       "networkHideRaw": "Masquer les détails",
       "diagnose": "Diagnostiquer",
@@ -16213,7 +16359,7 @@
       "diagnosePromptWithoutSession": "Diagnostique cette erreur, s'il te plaît : trouve la cause et indique-moi comment la corriger.\n\nErreur : {{message}}\nDétails :\n{{details}}\n\nSi tu constates qu'il s'agit d'un problème lié à Cindy elle-même, dis-le-moi afin que je puisse décider de signaler ou non une issue à l'équipe Cindy.",
       "gatewayProxyTokenInvalid": "Les identifiants Cindy AI ne sont plus valides. Cliquez sur Réessayer. Si le problème se reproduit, déconnectez-vous puis reconnectez-vous",
       "gatewayProxyTokenInvalidNoRetry": "Les identifiants Cindy AI ne sont plus valides. Si le problème se reproduit, déconnectez-vous puis reconnectez-vous",
-      "modelAccessDenied": "Le compte en amont ne peut pas accéder à ce modèle. Sélectionnez un autre modèle ou vérifiez l'accès auprès du fournisseur",
+      "modelAccessDenied": "Votre compte actuel chez le fournisseur de modèles n’a pas accès à ce modèle. Changez de modèle ou vérifiez les droits d’accès.",
       "providerSafetyRefusal": "La politique de sécurité du fournisseur du modèle a bloqué cette réponse. Modifiez votre demande avant de la renvoyer",
       "silentStopContinue": "Continuer",
       "silentStopContinueTitle": "Continuer la tâche en cours",
@@ -16223,7 +16369,20 @@
       "remoteCompactEncryptedContent": "La compaction du contexte a échoué, car le modèle n'a pas pu lire l'historique chiffré. La reprise automatique n'a pas abouti. Réessayez pour tenter une récupération.",
       "contextOverflow": "Ce message dépasse à lui seul la fenêtre de contexte du modèle : Cindy ne peut donc pas le poursuivre dans une nouvelle session Agent. Raccourcissez la saisie ou retirez une pièce jointe volumineuse, puis réessayez.",
       "attachmentAccessDeniedTitle": "Cindy ne peut pas lire la pièce jointe source ; le message n'a pas été envoyé.",
-      "attachmentAccessDeniedRecovery": "Enregistrez une copie dans Téléchargements ou dans un autre dossier accessible, retirez la pièce jointe d'origine et ajoutez la copie à l'aide du bouton de pièce jointe avant de renvoyer."
+      "attachmentAccessDeniedRecovery": "Enregistrez une copie dans Téléchargements ou dans un autre dossier accessible, retirez la pièce jointe d'origine et ajoutez la copie à l'aide du bouton de pièce jointe avant de renvoyer.",
+      "providerSafetyRefusalWithProvider": "La politique de sécurité de {{provider}} a bloqué cette réponse. Modifiez votre demande puis réessayez.",
+      "overloadRetryingWithProvider": "{{provider}} est temporairement saturé. Nouvelle tentative automatique ({{attempt}}/{{maxAttempts}})…",
+      "overloadBusyWithProvider": "{{provider}} est temporairement saturé et sans capacité disponible. Cliquez sur « Réessayer » ou changez de modèle.",
+      "overloadBusyNoRetryWithProvider": "{{provider}} est temporairement saturé et sans capacité disponible. Réessayez plus tard ou changez de modèle.",
+      "streamInterruptedWithProvider": "Le flux de réponse de {{provider}} a été interrompu en cours de route. Cliquez sur « Réessayer ».",
+      "streamInterruptedNoRetryWithProvider": "Le flux de réponse de {{provider}} a été interrompu en cours de route. Réessayez plus tard.",
+      "upstreamStatusErrorWithProvider": "Le service {{provider}} a renvoyé une erreur (HTTP {{status}}). La réponse n’a pas pu aboutir.",
+      "modelAccessDeniedWithProvider": "Votre compte {{provider}} n’a pas accès à ce modèle. Changez de modèle ou vérifiez vos droits d’accès.",
+      "providerQuotaExhaustedWithProvider": "Votre compte {{provider}} n’a plus assez de quota ou de solde. Vérifiez l’état de votre compte.",
+      "usageLimitReachedWithProvider": "Votre compte {{provider}} a atteint sa limite d’utilisation",
+      "usageLimitReachedWithResetWithProvider": "Votre compte {{provider}} a atteint sa limite d’utilisation. Réinitialisation prévue le {{resetAt}}.",
+      "usageLimitReachedNoResetWithProvider": "Votre compte {{provider}} a atteint sa limite d’utilisation. Attendez la réinitialisation ou changez de modèle.",
+      "invalidEncryptedContentWithProvider": "{{provider}} ne peut pas lire une partie de l’historique chiffré. Revenez au fournisseur d’origine ou continuez dans une nouvelle tâche."
     },
     "backgroundActivity": {
       "status": "Sous-tâches en arrière-plan en cours d'exécution, consommation du modèle toujours en cours…",
@@ -17208,7 +17367,20 @@
       "viewGhostCard": "Voir la carte du plugin"
     },
     "modelMismatch": {
-      "notice": "La réponse de ce tour provient de {{actual}} au lieu du modèle sélectionné {{selected}} (rétrogradation temporaire par le fournisseur)"
+      "notice": "Le fournisseur de modèles a répondu à ce tour avec {{actual}} au lieu de {{selected}}",
+      "noticeWithProvider": "{{provider}} a répondu à ce tour avec {{actual}} au lieu de {{selected}}",
+      "infoLink": "Pourquoi ?",
+      "infoTitle": "Pourquoi un autre modèle a répondu",
+      "infoSummary": "Cindy a envoyé ce tour à {{selected}} comme vous l’avez choisi, mais le fournisseur de modèles a renvoyé la réponse avec {{actual}}.",
+      "infoSummaryWithProvider": "Cindy a envoyé ce tour à {{selected}} comme vous l’avez choisi, mais {{provider}} a renvoyé la réponse avec {{actual}}.",
+      "infoCausesTitle": "Causes fréquentes",
+      "infoCausePolicy": "Repli lié à une politique de sécurité ou de contenu (certains modèles basculent automatiquement vers un modèle antérieur au lieu de refuser).",
+      "infoCauseLoad": "Redirection temporaire par le fournisseur de modèles en période de forte charge.",
+      "infoCauseGateway": "Règles de correspondance ou de routage sur une passerelle tierce ou personnalisée.",
+      "infoActionsTitle": "Que faire",
+      "infoActionContinue": "Aucun changement de paramètres nécessaire : cela n’affecte que ce tour, les messages suivants continueront de demander {{selected}}.",
+      "infoActionRetry": "Si cette réponse ne convient pas, reformulez votre message et renvoyez-le, ou passez à un autre modèle disponible.",
+      "infoActionCheckProvider": "Si cela se répète sur plusieurs tours, vérifiez le quota de votre fournisseur de modèles ou les règles de routage de votre passerelle."
     },
     "ghostNotify": {
       "secretSaved": "Identifiant « {{name}} » enregistré",
@@ -17325,6 +17497,88 @@
       "signingIn": "La connexion au compte avec abonnement utilisé par cette tâche est en cours. Réessayez une fois la connexion terminée.",
       "unavailable": "Le compte avec abonnement affecté à cette tâche ne peut pas être utilisé pour cette demande. Vérifiez le compte dans les paramètres du fournisseur de modèles sur l’ordinateur d’exécution, ou choisissez une autre source de modèles.",
       "legacy": "Le compte avec abonnement affecté à cette tâche est indisponible. Vérifiez sa connexion et son utilisation sur l’ordinateur d’exécution, ou choisissez une autre source de modèles. Le compte n’est pas changé automatiquement."
+    },
+    "errorExplain": {
+      "providerSafetyRefusal": {
+        "title": "Pourquoi cette réponse a été bloquée",
+        "summary": "Cindy a transmis votre demande telle quelle, mais la politique de sécurité et de contenu du fournisseur de modèles a bloqué la sortie. Il ne s’agit ni d’une modération de Cindy ni d’un blocage par une extension locale.",
+        "summaryWithProvider": "Cindy a transmis votre demande telle quelle, mais la politique de sécurité et de contenu de {{provider}} a bloqué la sortie. Il ne s’agit ni d’une modération de Cindy ni d’un blocage par une extension locale.",
+        "cause1": "Votre message, une pièce jointe ou le contexte précédent a déclenché les règles de sécurité du fournisseur.",
+        "cause2": "Un filtre de sécurité a interrompu la réponse du modèle en cours de génération.",
+        "action1": "Réessayer à l’identique entraîne généralement le même blocage ; reformulez ou retirez le passage concerné avant de renvoyer.",
+        "action2": "Si le contexte antérieur est en cause, démarrez une nouvelle tâche ou changez de modèle."
+      },
+      "overload": {
+        "title": "Pourquoi le service est saturé",
+        "summary": "Le fournisseur de modèles manque temporairement de capacité de calcul (pic de charge ou erreur HTTP 529). Cela n’est lié ni à Cindy ni à votre réseau local.",
+        "summaryWithProvider": "{{provider}} manque temporairement de capacité de calcul (pic de charge ou erreur HTTP 529). Cela n’est lié ni à Cindy ni à votre réseau local.",
+        "cause1": "Une forte demande aux heures de pointe a saturé la capacité disponible pour ce modèle.",
+        "cause2": "Une maintenance temporaire ou une limitation de capacité est active côté fournisseur.",
+        "action1": "Inutile de redémarrer Cindy ou de modifier votre réseau : patientez un instant puis cliquez sur « Réessayer ».",
+        "action2": "Pour continuer sans attendre, passez temporairement à un autre modèle ou une autre source du groupe."
+      },
+      "streamInterrupted": {
+        "title": "Pourquoi la sortie a été interrompue",
+        "summary": "Le fournisseur de modèles a interrompu la connexion de streaming avant la fin de la réponse. Cindy n’a pas planté et les étapes terminées comme l’historique sont intacts.",
+        "summaryWithProvider": "{{provider}} a interrompu la connexion de streaming avant la fin de la réponse. Cindy n’a pas planté et les étapes terminées comme l’historique sont intacts.",
+        "cause1": "Une erreur serveur temporaire du fournisseur a coupé la génération en cours de route.",
+        "cause2": "Une passerelle relais tierce ou personnalisée a expiré pendant une réponse longue.",
+        "action1": "Cliquez sur « Réessayer » ou envoyez « continue » pour reprendre la suite.",
+        "action2": "Si cela se répète sur plusieurs tours, essayez un autre modèle ou vérifiez le délai d’expiration de votre passerelle."
+      },
+      "upstreamStatus": {
+        "title": "Pourquoi une erreur de service est renvoyée",
+        "summary": "Cindy a bien envoyé votre demande, mais le fournisseur de modèles a renvoyé une erreur interne HTTP {{status}} sans détail. L’anomalie vient du service externe, pas de Cindy.",
+        "summaryWithProvider": "Cindy a bien envoyé votre demande, mais {{provider}} a renvoyé une erreur interne HTTP {{status}} sans détail. L’anomalie vient du service externe, pas de Cindy.",
+        "cause1": "Le serveur du fournisseur de modèles rencontre une défaillance interne temporaire.",
+        "cause2": "Une passerelle tierce ou auto-hébergée a échoué à relayer la requête ou renvoyé un code 5xx personnalisé.",
+        "action1": "Cliquez sur « Réessayer » un peu plus tard ; les incidents passagers se résorbent vite.",
+        "action2": "Si vous utilisez une passerelle tierce ou personnalisée, consultez son état et ses journaux, ou changez de fournisseur."
+      },
+      "modelAccessDenied": {
+        "title": "Pourquoi l’accès à ce modèle est refusé",
+        "summary": "Le fournisseur de modèles a refusé l’accès de ce compte au modèle choisi. Cindy ne peut pas contourner les autorisations côté fournisseur.",
+        "summaryWithProvider": "{{provider}} a refusé l’accès de ce compte au modèle choisi. Cindy ne peut pas contourner les autorisations de {{provider}}.",
+        "cause1": "Votre offre d’abonnement actuelle ou votre clé API n’inclut pas l’accès à ce modèle.",
+        "cause2": "Un administrateur d’organisation limite la liste des modèles autorisés, ou votre région n’est pas encore prise en charge.",
+        "action1": "Sélectionnez un autre modèle autorisé sur votre compte pour poursuivre la tâche.",
+        "action2": "Vérifiez vos droits dans la console du fournisseur ; après une mise à niveau récente, reconnectez le compte puis réessayez."
+      },
+      "providerQuotaExceeded": {
+        "title": "Pourquoi le quota ou le solde est épuisé",
+        "summary": "Le compte externe du fournisseur de modèles connecté n’a plus de solde ou de quota disponible et a refusé la requête. Cela est indépendant de votre compte Cindy.",
+        "summaryWithProvider": "Votre compte {{provider}} connecté n’a plus de solde ou de quota disponible et {{provider}} a refusé la requête. Cela est indépendant de votre compte Cindy.",
+        "cause1": "Le crédit prépayé du compte fournisseur est épuisé ou aucun moyen de paiement valide n’est associé.",
+        "cause2": "Le plafond de dépenses de cette clé API ou le quota de l’organisation est atteint.",
+        "action1": "Rechargez le solde ou augmentez le plafond sur la page de facturation du fournisseur, puis cliquez sur « Réessayer ».",
+        "action2": "Vous pouvez aussi choisir un autre fournisseur disposant de quota dans le sélecteur de modèles."
+      },
+      "usageLimit": {
+        "title": "Pourquoi la limite d’utilisation est atteinte",
+        "summary": "Le compte connecté a atteint la fenêtre d’utilisation périodique fixée par le fournisseur de modèles et ne peut pas traiter de nouvelle requête pour l’instant. Cette limite n’est pas imposée par Cindy.",
+        "summaryWithProvider": "Votre compte {{provider}} connecté a atteint la fenêtre d’utilisation périodique fixée par {{provider}} et ne peut pas traiter de nouvelle requête pour l’instant. Cette limite n’est pas imposée par Cindy.",
+        "cause1": "L’abonnement a consommé tout son quota sur la fenêtre en cours (par exemple 5 heures ou hebdomadaire).",
+        "cause2": "Plusieurs tâches ou appareils utilisant le même compte partagent la même fenêtre de quota.",
+        "action1": "Attendez la réinitialisation de la fenêtre puis réessayez ; si la reprise automatique est active, la tâche reprendra seule.",
+        "action2": "Pour continuer tout de suite, passez à un autre modèle, un autre compte abonné ou un fournisseur API."
+      },
+      "encryptedContent": {
+        "title": "Pourquoi une partie de l’historique est illisible",
+        "summary": "Certains modèles stockent un état de raisonnement chiffré dans l’historique, déchiffrable uniquement par le fournisseur et le compte d’origine. Après un changement de fournisseur/compte ou un compactage distant, le fournisseur actuel peut ne pas lire ces anciens blocs.",
+        "summaryWithProvider": "Certains modèles stockent un état de raisonnement chiffré dans l’historique, déchiffrable uniquement par le fournisseur et le compte d’origine. Après un changement de fournisseur/compte ou un compactage distant, {{provider}} peut ne pas lire ces anciens blocs.",
+        "cause1": "Vous avez changé de fournisseur ou de compte en cours de tâche et le nouveau ne peut pas déchiffrer les blocs précédents.",
+        "cause2": "Le compactage distant ou un autre point de terminaison ne correspond pas à la clé d’origine.",
+        "action1": "Revenez au fournisseur ou au compte d’origine pour poursuivre directement cette tâche.",
+        "action2": "Ou choisissez « Continuer dans une nouvelle tâche » : Cindy conserve l’historique lisible et retire les blocs chiffrés illisibles sans toucher à la tâche d’origine."
+      },
+      "failedSamplingAttempt": {
+        "title": "Pourquoi une réponse incomplète s’affiche",
+        "summary": "Le modèle a échoué ou été interrompu avant la fin de cette réponse et n’en a généré que le début. Cindy conserve ce fragment visible à titre de référence afin que ces éléments ne disparaissent pas.",
+        "cause1": "Une erreur fournisseur, une coupure réseau ou un blocage de sécurité a interrompu le flux.",
+        "cause2": "Le tour a rencontré une erreur ou a été arrêté avant de pouvoir se terminer.",
+        "action1": "Consultez la carte d’erreur ci-dessous pour connaître la cause exacte et voir s’il faut réessayer.",
+        "action2": "Cliquez sur « Réessayer » ou envoyez un nouveau message pour poursuivre en vous appuyant sur ce qui est déjà affiché."
+      }
     }
   },
   "ccAgent": {

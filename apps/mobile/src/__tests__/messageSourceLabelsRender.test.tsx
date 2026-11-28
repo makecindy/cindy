@@ -56,6 +56,7 @@ vi.mock('@/plugins/PluginModelPicker', () => ({ PluginModelPicker: () => null })
 
 // Screen reader toggle and the system action menu availability, for the companion menu case.
 const a11y = vi.hoisted(() => ({ screenReader: null as null | ((enabled: boolean) => void), systemMenu: false }));
+const openExternalUrl = vi.hoisted(() => vi.fn(async (_url: string) => undefined));
 import { MessageListVisibilityContext, type MessageListVisibility } from '@/session/messageListVisibility';
 const viewportHarness = vi.hoisted(() => ({
   list: null as any,
@@ -155,7 +156,7 @@ vi.mock("react-native", async () => {
       },
     },
     Alert: {},
-    Linking: {},
+    Linking: { openURL: openExternalUrl },
     StatusBar: {},
     Dimensions: {
       get: () => viewportHarness.window,
@@ -377,6 +378,7 @@ vi.mock("@/session/messageActions", async (original) => ({
 
 import { i18n } from "@/i18n";
 import { AttachmentStrip, COMPANION_AVATAR_SIZE, MessagePayloadModal, MessageRenderer } from "@/session/MessageRenderer";
+import { BotGroupMarkdownText } from '@/session/BotGroupMessageText';
 import { buildMediaPayload } from "@/session/messagePayload";
 import { buildMessageContentLayout } from "@/session/messageContentLayout";
 import { copyMessageText, writeClipboardText } from "@/session/messageActions";
@@ -1053,6 +1055,31 @@ describe("companion text selection and actions", () => {
   });
 });
 
+it('uses group link labels around and inside real rich answers, including image selection', () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  openExternalUrl.mockClear();
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  const repo = 'https://github.com/makecindy/cindy';
+  const rich = '```cindy-ui\n' + JSON.stringify({ version: 1, seq: 1, op: 'create', id: 'm', kind: 'markdown',
+    props: { text: `${repo}/issues/2 [说明](${repo}/issues/4)` } }) + '\n```';
+  const content = [`${repo}/pull/1`, rich, `${repo}/pull/3`].join('\n\n');
+  try {
+    for (const interactive of [true, false]) {
+      act(() => root.render(<BotGroupMarkdownText content={content} authorKind="bot" richContent interactive={interactive} />));
+      for (const label of ['makecindy/cindy#1', 'makecindy/cindy#2', 'makecindy/cindy#3', '说明']) {
+        expect(host.textContent).toContain(label);
+      }
+      expect(host.textContent).not.toContain(repo);
+      const link = [...host.querySelectorAll<HTMLElement>('div')].filter(el => el.textContent === 'makecindy/cindy#2').at(-1)!;
+      act(() => link.click());
+      expect(openExternalUrl).toHaveBeenCalledExactlyOnceWith(`${repo}/issues/2`);
+    }
+    act(() => root.render(<BotGroupMarkdownText content={content} authorKind="bot" />));
+    expect(host.textContent).toContain(`${repo}/pull/1`);
+  } finally { act(() => root.unmount()); }
+});
+
 describe("message body selection actions", () => {
   // User requirement: own messages and Agent replies expose the same range actions.
   // Existing coverage checks assistant tables and companion whole-message replies,
@@ -1469,5 +1496,54 @@ it('opens public audio in the attachment player without a computer resolver', as
     await expect(preview?.resolve(new AbortController().signal)).resolves.toEqual({ url, mimeType: 'audio/wav' });
   } finally {
     act(() => root.unmount());
+  }
+});
+
+// PR #13360 follow-up / unit: normal user messages (including historical rows carrying a
+// non-mismatch dispatchRoute) must not show a route label above the bubble on Mobile; only
+// mismatched fallback sends show ErrorNotice, with a readable plugin engine name and no raw
+// `acp-plugin:...` id.
+it('hides non-mismatch dispatchRoute and shows readable plugin names only on fallback mismatch', () => {
+  const normal = mount([
+    msg('normal-route', '普通消息', {
+      dispatchRoute: {
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        providerId: 'acp-plugin:_root__cindy-antigravity-acp:agy',
+        agentDeviceId: null,
+      },
+    }),
+  ]);
+  try {
+    expect(normal.host.querySelector('[data-testid="message.dispatchRoute"]')).toBeNull();
+    expect(normal.host.textContent).not.toContain('acp-plugin:');
+    expect(normal.host.textContent).not.toContain('插件引擎');
+  } finally {
+    normal.unmount();
+  }
+
+  const fallback = mount([
+    msg('fallback-route', '回退消息', {
+      dispatchRoute: {
+        agentKind: 'acp',
+        model: 'gemini-4-neon',
+        providerId: 'acp-plugin:_root__cindy-antigravity-acp:agy',
+        agentDeviceId: null,
+        engineName: 'Antigravity',
+        selected: {
+          agentKind: 'codex',
+          model: 'gpt-6-astra',
+          providerId: 'openai',
+          agentDeviceId: null,
+        },
+        switchError: '[DEVICE_LINK_TIMEOUT] Target preparation timed out',
+      },
+    }),
+  ]);
+  try {
+    expect(fallback.host.textContent).toContain('本次使用 Antigravity · gemini-4-neon，Codex · openai · gpt-6-astra 尚未就绪');
+    expect(fallback.host.textContent).not.toContain('acp-plugin:');
+  } finally {
+    fallback.unmount();
   }
 });

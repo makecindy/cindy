@@ -484,6 +484,27 @@ describe('wrapTeamDeps', () => {
     } finally { workers.stop(); }
   });
 
+  // #13619, unit: losing both ACK and lookup must keep the original delivery tracked.
+  it('preserves the remote input when its first-task receipt cannot be confirmed', async () => {
+    const { workers, remoteInvoke } = setup({ handle: (_device, channel) =>
+      channel === 'maker:input:enqueue' ? fail('INVOKE_TIMEOUT', 'lost acknowledgement') : undefined });
+    store.listActiveRemoteWorkers.mockResolvedValueOnce([restoredRow] as never);
+    const rollback = vi.fn();
+    try {
+      await workers.start();
+      const result = await workers.wrapTeamDeps(baseDeps()).dispatchWorkerMessage({
+        targetSessionId: 'proxy-1', message: 'work', workerId: 'w-1',
+        dispatchMeta: { source: 'orca', context: 'create_worker/proxy-1/initial_task' },
+        onAcceptedRollback: rollback,
+      });
+      expect(result).toMatchObject({ ok: false, dispatchOutcome: { code: 'DELIVERY_UNKNOWN' } });
+      expect(result).not.toHaveProperty('clientId');
+      expect(rollback).not.toHaveBeenCalled();
+      expect(workers.runtime.hasPendingReport('proxy-1')).toBe(true);
+      expect(remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:input:enqueue')).toHaveLength(1);
+    } finally { workers.stop(); }
+  });
+
   it('rejects image attachments for cross-device workers instead of silently dropping them', async () => {
     // 图片是 Lead 本机文件, 运行设备上的 Agent 读不到; 必须显式拒错, 不能只发文本返回 ok。
     const { workers, remoteInvoke } = setup();
@@ -662,6 +683,23 @@ describe('wrapTeamDeps', () => {
     return { ...ctx, service, deps, getWorker: () => worker };
   }
 
+  // #13619, unit: the creation dispatch must keep the accepted receipt when the Agent lookup fails.
+  it('returns an accepted first task without inferring its Agent from the session', async () => {
+    const h = await trackedTeam({ handle: (_device, channel, args) => {
+      if (channel === 'maker:input:enqueue') return fail('INVOKE_TIMEOUT', 'lost ACK');
+      if (channel === 'maker:input:get-projection') {
+        const { deliveryClientIds } = args[1] as { deliveryClientIds: string[] };
+        return ok({ deliveryReceipts: deliveryClientIds.map(clientId => ({ clientId, state: 'accepted' })) });
+      }
+      if (channel === 'local-db:messages:around-client-id') return fail('INVOKE_TIMEOUT', 'history unavailable');
+    } });
+    try {
+      const result = await h.service.dispatchWorkerTask({ targetSessionId: 'proxy-1', message: 'work',
+        dispatchMeta: { source: 'orca', context: 'create_worker/proxy-1/initial_task' } });
+      expect(result).toMatchObject({ dispatched: false, queued: true, queuedMessageId: expect.any(String) });
+      expect(h.remoteInvoke.mock.calls.filter(([, channel]) => channel === 'maker:input:enqueue')).toHaveLength(1);
+    } finally { h.workers.stop(); }
+  });
   // #13619 (unit): a durable user row may exist while the engine's pre-dispatch hooks still run.
   it.each(['queued', 'persisted', 'different-turn', 'started'] as const)(
     'reports a newly created remote Worker task at the %s boundary', async boundary => {

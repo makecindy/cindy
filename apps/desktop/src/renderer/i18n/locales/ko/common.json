@@ -4869,68 +4869,7 @@
         "hint": "연동된 Feishu 또는 Lark 봇을 통해 DM을 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
         "disabledHint": "먼저 봇을 설정한 뒤 봇에게 DM을 한 번 보내 연동을 완료하세요."
       },
-      "bind": "연동",
-      "groups": {
-        "title": "그룹 채팅",
-        "description": "봇이 들어 있는 그룹마다 프로젝트, 모델, 권한을 따로 지정합니다.",
-        "rules": "따로 지정하지 않은 항목은 프로젝트를 정한 그룹이면 프로젝트 및 모델의 그 프로젝트를, 정하지 않은 그룹이면 위의 새 대화 설정과 그룹에서 새 작업을 만들 때의 권한 모드를 따릅니다. 그룹의 메인 채팅과 스레드는 같은 그룹 설정을 함께 씁니다.",
-        "expand": "펼치기",
-        "collapse": "접기",
-        "groupCount_one": "그룹 {{count}}개",
-        "groupCount_other": "그룹 {{count}}개",
-        "customCount_one": "{{count}}개 따로 설정함",
-        "customCount_other": "{{count}}개 따로 설정함",
-        "refresh": "새로 고침",
-        "loading": "그룹을 불러오는 중…",
-        "loadFailed": "그룹을 불러오지 못했습니다. 잠시 후 새로 고침으로 다시 시도하세요.",
-        "saveFailed": "그룹 설정을 저장하지 못했습니다",
-        "notConnected": "봇이 연결되면 그룹이 표시됩니다. 아래에는 따로 설정한 그룹만 표시됩니다.",
-        "empty": "봇이 아직 어떤 그룹에도 들어 있지 않습니다. 그룹에 추가한 뒤 여기서 설정하세요.",
-        "listPermission": "봇이 들어 있는 그룹을 읽을 수 없습니다. Feishu Open Platform에서 이 앱에 그룹 정보 읽기 권한을 부여하세요. 아래에는 봇을 사용한 적이 있는 그룹을 표시합니다.",
-        "listUnavailable": "지금은 봇이 들어 있는 그룹을 읽을 수 없습니다. 아래에는 봇을 사용한 적이 있는 그룹을 표시합니다.",
-        "unnamed": "이름 없는 그룹({{id}})",
-        "summaryModel": "모델 따로 설정",
-        "summaryPermission": "권한 따로 설정",
-        "expandAria": "{{name}} 설정",
-        "searchLabel": "그룹 검색",
-        "searchPlaceholder": "그룹 이름으로 검색",
-        "customHeading": "따로 설정함",
-        "followHeading": "채널 설정을 따름",
-        "showMore": "{{count}}개 더 보기",
-        "showLess": "접기",
-        "noMatch": "'{{query}}'이(가) 포함된 그룹이 없습니다",
-        "project": {
-          "label": "프로젝트",
-          "follow": "대화",
-          "missing": "{{name}}(사이드바에서 제거됨)",
-          "hint": "그룹에서 봇을 처음 @할 때, 새 스레드를 시작할 때 또는 /new를 보낼 때 적용됩니다. 진행 중인 작업은 옮겨지지 않습니다. 프로젝트를 고르면 모델과 권한이 프로젝트 및 모델의 그 프로젝트를 따르고, '대화'를 고르면 작업이 봇의 대화 폴더에 남아 위의 새 대화 설정을 따릅니다. 이 컴퓨터 사이드바의 프로젝트만 선택할 수 있습니다."
-        },
-        "model": {
-          "label": "모델과 추론 강도",
-          "hintFollow": "새 대화 설정을 따릅니다. 여기서 모델이나 추론 강도를 바꾸면 이 그룹에만 적용됩니다.",
-          "hintFollowProject": "프로젝트 및 모델의 프로젝트 '{{project}}'을(를) 따릅니다. 여기서 모델이나 추론 강도를 바꾸면 이 그룹에만 적용됩니다.",
-          "hintProjectUnavailable": "프로젝트 및 모델에서 '{{project}}'에 설정한 모델을 지금 사용할 수 없습니다. 그곳에서 다시 고르거나 여기서 이 그룹에 쓸 모델을 고르세요.",
-          "hintFixed": "이 그룹에 모델을 따로 설정했습니다. 모델을 따로 바꾸지 않은 작업은 다음 메시지부터 바뀌고, 새 작업은 이 모델을 사용합니다."
-        },
-        "permission": {
-          "label": "권한",
-          "hintFollow": "지금은 그룹에서 새 작업을 만들 때의 권한 모드를 따릅니다. 이후 이 그룹에서 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 전환합니다.",
-          "hintFollowProject": "지금은 프로젝트 및 모델의 '{{project}}' 권한을 따릅니다. 이후 이 그룹에서 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 전환합니다.",
-          "hintFixed": "이 그룹에 권한을 따로 설정했습니다. 이후 이 그룹에서 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 전환합니다."
-        },
-        "fullAccessConfirm": {
-          "title": "{{name}}에서 전체 액세스로 실행할까요?",
-          "description": "이 그룹에서 새로 만드는 작업은 누가 봇을 @하든 단계별 확인 없이 바로 실행됩니다. 그룹 메시지는 멤버가 작성하므로 모든 멤버를 신뢰할 때만 선택하세요.",
-          "confirm": "전체 액세스로 변경",
-          "cancel": "취소"
-        },
-        "widerConfirm": {
-          "title": "{{name}}의 권한을 넓힐까요?",
-          "description": "이 그룹에서 새로 만드는 작업은 누가 봇을 @하든 '{{current}}'에서 '{{next}}'(으)로 바뀝니다. 그룹 메시지는 멤버가 작성하므로 모든 멤버를 신뢰할 때만 바꾸세요.",
-          "confirm": "그래도 변경",
-          "cancel": "취소"
-        }
-      }
+      "bind": "연동"
     },
     "wechatBot": {
       "title": "개인 WeChat",
@@ -7491,7 +7430,7 @@
     "tina": {
       "chat": {
         "title": "대화",
-        "description": "저장소에 연결되지 않은 대화입니다. Slack, Telegram, X 또는 Feishu / Lark에서 \"chat\"을 선택하면 대화 lane마다 세션을 사용할 수 있습니다."
+        "description": "특정 프로젝트 폴더와 연결되지 않은 일반 대화입니다. 채팅 앱에서 프로젝트를 지정하지 않았을 때 사용됩니다."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7622,7 +7561,8 @@
       "groups": {
         "cindy": "공식",
         "personal": "개인",
-        "plugins": "플러그인"
+        "plugins": "플러그인",
+        "shared": "공통 설정"
       },
       "tips": {
         "cindy": "Cindy가 제공하고 관리합니다. 봇을 직접 만들거나 인증 정보를 준비할 필요 없이 안내에 따라 연결하면 바로 사용할 수 있습니다.",
@@ -7663,6 +7603,190 @@
       "plugins": {
         "rowHint": "로그인, 연결, 채팅별 설정은 플러그인 페이지에 있습니다.",
         "open": "플러그인 열기"
+      },
+      "replyTarget": {
+        "label": "답장할 대상",
+        "cindy": "일반 작업",
+        "cindyHint": "사이드바 작업 목록에서 아래 프로젝트와 모델로 처리합니다. 버디에게 맡겨 기억과 설정을 쓸 수도 있습니다.",
+        "companionHint": "DM은 {{name}}과의 대화로 들어가고 그룹은 {{name}}이 각각 처리합니다. 모델, 권한, 기억은 {{name}}을 따릅니다.",
+        "openCompanion": "{{name}} 설정",
+        "summary": "답장: {{name}}",
+        "missingCompanion": "사용할 수 없는 동반자",
+        "busy": "이 봇에 대기 중인 메시지나 실행 중인 작업이 있습니다. 끝난 뒤 전환하세요.",
+        "updateFailed": "전환하지 못했습니다. 동반자를 사용할 수 있는지 확인한 뒤 다시 시도하세요.",
+        "companionSettingsHint": "모델, 권한, 기억"
+      },
+      "nav": {
+        "back": "뒤로",
+        "backTo": "{{page}}(으)로 돌아가기"
+      },
+      "pageDescription": "WeChat, Feishu, Telegram 같은 채팅 앱에서 Cindy나 동반자에게 메시지를 보냅니다.",
+      "list": {
+        "connected": "연결됨",
+        "available": "더 연결할 수 있는 앱",
+        "choose": "채팅 앱 선택",
+        "cindyReplies": "일반 작업",
+        "official": "공식 봇: {{status}}",
+        "projects": "프로젝트와 모델",
+        "projectsHint": "채팅 앱이나 플러그인이 프로젝트에서 작업을 시작할 때 쓰는 프로젝트별 모델과 권한",
+        "hint": {
+          "both": "공식 봇 또는 직접 만든 봇",
+          "slack": "Cindy 공식 봇을 사용합니다. Slack에 로그인하면 됩니다",
+          "x": "Cindy 공식 계정을 사용합니다. 승인하면 X에서 답장합니다",
+          "wechat": "QR 코드로 개인 WeChat 연결",
+          "personal": "직접 만든 봇을 사용합니다"
+        },
+        "companionDedicated": "버디 전용: {{names}}"
+      },
+      "apps": {
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "x": "X",
+        "wechat": "WeChat",
+        "feishu": "Feishu / Lark",
+        "wecom": "WeCom",
+        "dingtalk": "DingTalk"
+      },
+      "ways": {
+        "official": "Cindy 공식 봇",
+        "personal": "내 봇",
+        "personalHint": "플랫폼에서 직접 만든 봇입니다. 이름과 프로필 사진은 원하는 대로 정할 수 있습니다.",
+        "personalSetupTitle": "내 봇 사용",
+        "setUp": "설정",
+        "personalSetupHint": {
+          "telegram": "BotFather에서 봇을 만든 뒤 토큰과 내 사용자 ID를 입력합니다.",
+          "discord": "Discord 개발자 포털에서 봇을 만든 뒤 토큰을 입력합니다.",
+          "feishu": "Feishu 또는 Lark 오픈 플랫폼에서 앱을 만든 뒤 App ID와 App Secret을 입력합니다."
+        },
+        "officialHint": "별도 앱 생성 없이 Cindy 계정에 바로 연결됩니다."
+      },
+      "rows": {
+        "model": "모델",
+        "groupReply": "그룹에서 답장하는 시점",
+        "persona": "이름과 성격",
+        "behavior": "반응과 인용",
+        "receiveHere": "이 컴퓨터에서 메시지 받기",
+        "receiveHereHint": "끄면 이 컴퓨터에서 봇이 오프라인이 됩니다. 인증 정보는 남아 있어 언제든 다시 켤 수 있습니다.",
+        "unbind": "이 봇 연결 해제",
+        "ownerId": "내 사용자 ID {{id}}",
+        "discordChannels": "서버 채널",
+        "discordChannelsHint": "봇이 일할 수 있는 서버 채널",
+        "notifications": "알림",
+        "on": "켜짐",
+        "off": "꺼짐",
+        "project": "프로젝트",
+        "projectDialogue": "대화(프로젝트 없음)",
+        "projectMissing": "사이드바에 없는 프로젝트",
+        "projectHint": "새 작업은 이 프로젝트에 들어가며, 「프로젝트와 모델」의 모델과 권한을 따릅니다.",
+        "projectDialogueHint": "새 작업은 봇 자체의 대화 폴더에 들어가며 아래 모델을 사용합니다.",
+        "officialProjectHint": "새 작업은 이 프로젝트에 들어가고 프로젝트와 모델에 있는 모델과 권한을 씁니다. 모든 Cindy 공식 봇이 함께 씁니다.",
+        "officialProjectDialogueHint": "새 작업은 대화 폴더에 남고 프로젝트와 모델의 '대화' 행 설정을 씁니다. 모든 Cindy 공식 봇이 함께 씁니다.",
+        "projectFullAccessTitle": "{{name}} 권한을 사용할까요?",
+        "projectFullAccessDescription": "{{name}}은(는) 「프로젝트와 모델」에서 전체 액세스입니다. 이후 {{app}}에서 만드는 작업은 단계마다 확인하지 않고 바로 실행됩니다. 먼저 「프로젝트와 모델」에서 Auto나 Ask로 바꿀 수 있습니다.",
+        "projectFullAccessConfirm": "그래도 사용",
+        "projectFullAccessCancel": "취소",
+        "projectUpdateFailed": "프로젝트를 바꾸지 못했습니다. 사이드바에 있는지 확인한 뒤 다시 시도하세요.",
+        "chats": "그룹 채팅",
+        "channels": "채널",
+        "projectModel": "모델 및 권한",
+        "projectModelHint": "프로젝트와 모델에서 통합 관리",
+        "projectModelFollow": "“{{name}}” 따름",
+        "groupReplyHint": "그룹에서 멘션될 때만 답할지 모든 메시지에 답할지 설정합니다"
+      },
+      "chats": {
+        "title": "그룹 채팅",
+        "description": "봇이 있는 그룹마다 프로젝트, 모델, 권한과 다른 멤버의 질문 허용 여부를 따로 정합니다.",
+        "rules": "따로 지정하지 않은 항목은 프로젝트를 정한 그룹이면 프로젝트 및 모델의 그 프로젝트를, 정하지 않은 그룹이면 봇의 프로젝트를 따릅니다. 봇에도 프로젝트가 없으면 봇의 모델 설정을 따릅니다. 그룹의 메인 채팅과 스레드는 같은 그룹 설정을 함께 씁니다.",
+        "expand": "펼치기",
+        "collapse": "접기",
+        "groupCount_one": "그룹 {{count}}개",
+        "groupCount_other": "그룹 {{count}}개",
+        "customCount_one": "{{count}}개 따로 설정함",
+        "customCount_other": "{{count}}개 따로 설정함",
+        "refresh": "새로 고침",
+        "loading": "그룹을 불러오는 중…",
+        "loadFailed": "그룹을 불러오지 못했습니다. 잠시 후 새로 고침으로 다시 시도하세요.",
+        "saveFailed": "그룹 설정을 저장하지 못했습니다",
+        "notConnected": "봇이 연결되면 그룹이 표시됩니다. 아래에는 따로 설정한 그룹만 표시됩니다.",
+        "empty": "봇이 아직 어떤 그룹에도 들어 있지 않습니다. 그룹에 추가한 뒤 여기서 설정하세요.",
+        "listPermission": "봇이 들어 있는 그룹을 읽을 수 없습니다. Feishu Open Platform에서 이 앱에 그룹 정보 읽기 권한을 부여하세요. 아래에는 봇을 사용한 적이 있는 그룹을 표시합니다.",
+        "listUnavailable": "지금은 봇이 들어 있는 그룹을 읽을 수 없습니다. 아래에는 봇을 사용한 적이 있는 그룹을 표시합니다.",
+        "unnamed": "이름 없는 그룹({{id}})",
+        "summaryModel": "모델 따로 설정",
+        "summaryPermission": "권한 따로 설정",
+        "expandAria": "{{name}} 설정",
+        "searchLabel": "그룹 검색",
+        "searchPlaceholder": "그룹 이름으로 검색",
+        "customHeading": "따로 설정함",
+        "followHeading": "채널 설정을 따름",
+        "showMore": "{{count}}개 더 보기",
+        "showLess": "접기",
+        "noMatch": "'{{query}}'이(가) 포함된 그룹이 없습니다",
+        "project": {
+          "label": "프로젝트",
+          "follow": "봇 설정 따르기",
+          "missing": "{{name}}(사이드바에서 제거됨)",
+          "hint": "그룹에서 봇을 처음 @할 때, 새 스레드를 시작할 때 또는 /new를 보낼 때 적용됩니다. 진행 중인 작업은 옮겨지지 않습니다. 프로젝트를 고르면 모델과 권한이 프로젝트 및 모델의 그 프로젝트를 따르고, '봇 설정 따르기'를 고르면 봇의 프로젝트를 따릅니다. 봇에 프로젝트가 없으면 봇의 대화 폴더와 모델 설정을 씁니다. 이 컴퓨터 사이드바의 프로젝트만 선택할 수 있습니다.",
+          "followWith": "봇 설정 따르기({{project}})"
+        },
+        "model": {
+          "label": "모델과 추론 강도",
+          "hintFollow": "새 대화 설정을 따릅니다. 여기서 모델이나 추론 강도를 바꾸면 이 그룹에만 적용됩니다.",
+          "hintFollowProject": "프로젝트 및 모델의 프로젝트 '{{project}}'을(를) 따릅니다. 여기서 모델이나 추론 강도를 바꾸면 이 그룹에만 적용됩니다.",
+          "hintProjectUnavailable": "프로젝트 및 모델에서 '{{project}}'에 설정한 모델을 지금 사용할 수 없습니다. 그곳에서 다시 고르거나 여기서 이 그룹에 쓸 모델을 고르세요.",
+          "hintFixed": "이 그룹에 모델을 따로 설정했습니다. 모델을 따로 바꾸지 않은 작업은 다음 메시지부터 바뀌고, 새 작업은 이 모델을 사용합니다.",
+          "reset": "모델을 기본값으로 되돌리기"
+        },
+        "permission": {
+          "label": "권한",
+          "hintFollow": "지금은 그룹에서 새 작업을 만들 때의 권한 모드를 따릅니다. 이후 이 그룹에서 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 전환합니다.",
+          "hintFollowProject": "지금은 프로젝트 및 모델의 '{{project}}' 권한을 따릅니다. 이후 이 그룹에서 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 전환합니다.",
+          "hintFixed": "이 그룹에 권한을 따로 설정했습니다. 이후 이 그룹에서 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 전환합니다.",
+          "hintFollowBot": "지금은 봇 자체 권한을 따릅니다. 앞으로 이 그룹에서 만드는 작업에만 적용되며, 기존 작업은 그룹에서 /permission으로 바꿉니다.",
+          "followWith": "따르기 · {{mode}}"
+        },
+        "fullAccessConfirm": {
+          "title": "{{name}}에서 전체 액세스로 실행할까요?",
+          "description": "이 그룹에서 새로 만드는 작업은 누가 봇을 @하든 단계별 확인 없이 바로 실행됩니다. 그룹 메시지는 멤버가 작성하므로 모든 멤버를 신뢰할 때만 선택하세요.",
+          "confirm": "전체 액세스로 변경",
+          "cancel": "취소"
+        },
+        "widerConfirm": {
+          "title": "{{name}}의 권한을 넓힐까요?",
+          "description": "이 그룹에서 새로 만드는 작업은 누가 봇을 @하든 '{{current}}'에서 '{{next}}'(으)로 바뀝니다. 그룹 메시지는 멤버가 작성하므로 모든 멤버를 신뢰할 때만 바꾸세요.",
+          "confirm": "그래도 변경",
+          "cancel": "취소"
+        },
+        "descriptionChannels": "봇이 일하는 채널마다 프로젝트, 모델, 권한과 다른 멤버의 질문 허용 여부를 따로 정합니다.",
+        "kindGroup": "그룹",
+        "kindChannel": "채널",
+        "channelCount_one": "채널 {{count}}개",
+        "channelCount_other": "채널 {{count}}개",
+        "membersCount_one": "{{count}}개에서 멤버도 질문 가능",
+        "membersCount_other": "{{count}}개에서 멤버도 질문 가능",
+        "unnamedChannel": "이름 없는 채널({{id}})",
+        "searchPlaceholderChannels": "채널 이름으로 검색",
+        "emptyLocal": "아직 기록된 그룹이 없습니다. 그룹에서 봇을 한 번 @하면 여기에 표시됩니다.",
+        "emptyChannels": "아직 열린 채널이 없습니다. 먼저 서버 채널에서 봇이 일할 채널을 켜세요.",
+        "members": {
+          "label": "멤버도 질문 가능",
+          "hint": "켜면 다른 멤버가 봇을 @해도 답하며, 이 그룹의 프로젝트와 모델을 씁니다. 멤버의 질문은 최대 자동 검토로 실행되므로 작업에는 여전히 내 확인이 필요합니다. 내 질문은 이 그룹 권한을 따릅니다.",
+          "guard": "내가 그룹에서 말하지 않는 동안 멤버가 연속 {{limit}}번 질문하면 일시 중지되고, 그룹에서 봇을 @하거나 '다시 시작'을 누르면 풀립니다. 명령은 나만 쓸 수 있습니다.",
+          "paused": "멤버 답변 일시 중지: 내가 없는 동안 연속 {{limit}}번 질문했습니다.",
+          "resume": "다시 시작",
+          "chip": "멤버도 질문 가능",
+          "pausedChip": "멤버 일시 중지",
+          "resumeFailed": "다시 시작하지 못했습니다. 나중에 다시 시도하세요."
+        },
+        "statusCustom": "개별 설정",
+        "shownHint": "{{total}}개 중 {{shown}}개 표시. 이름을 입력해 거를 수 있습니다.",
+        "fieldsNote": "프로젝트, 모델, 권한 변경은 이 그룹에서 다음 새 작업을 시작할 때 적용되며 진행 중인 작업은 옮겨지지 않습니다."
+      },
+      "companionBots": {
+        "title": "버디 전용 봇",
+        "description": "버디 설정에서 개별 연결된 봇입니다. 업그레이드 후에도 그대로 작동합니다.",
+        "manage": "관리"
       }
     },
     "shortcuts": {
@@ -12817,7 +12941,19 @@
         "failed": "작업을 완료하지 못했습니다. 다시 시도하세요.",
         "lastOwner": "나가기 전에 소유권을 이전하거나 그룹을 해산하세요."
       },
-      "externalBadge": "외부"
+      "externalBadge": "외부",
+      "links": {
+        "kind": {
+          "pull": "풀 리퀘스트",
+          "issue": "이슈",
+          "discussion": "토론",
+          "commit": "커밋",
+          "file": "파일",
+          "folder": "폴더",
+          "release": "릴리스",
+          "repo": "저장소"
+        }
+      }
     },
     "joined": {
       "today": "오늘 합류",
@@ -13092,6 +13228,7 @@
       "arrivalPermissions": "{{name}}은(는) 이 컴퓨터의 기본 권한으로 실행됩니다.",
       "arrivalModel": "{{name}}에 저장된 모델을 이 컴퓨터에서 사용할 수 없어 이 컴퓨터의 기본 모델을 사용합니다.",
       "arrivalModelSetup": "{{name}}이(가) 이 컴퓨터로 왔지만 아직 사용할 수 있는 모델이 없습니다. 모델 제공자를 연결하거나 「제공자 → 스마트 라우팅」에서 버디 기본 모델을 설정하세요.",
+      "modelSetupHint": "이 컴퓨터에 사용할 수 있는 버디 모델이 없습니다. 제공자 → 스마트 라우팅에서 버디 기본 모델을 설정하세요. Cindy가 자동으로 다시 시도합니다.",
       "arrivalPartialContent": "{{name}}이(가) 이제 이 컴퓨터에서 실행되지만 일부 동기화된 항목은 복원하지 못했습니다. 클라우드의 원본은 그대로 유지됩니다.",
       "missingProfileTitle": "기본 프로필로 {{name}}을(를) 계속할까요?",
       "missingProfileDescription": "기존 주 컴퓨터에서 {{name}}의 프로필이 아직 업로드되지 않았습니다. 기존 컴퓨터를 재설치했거나 복구할 수 없다면 여기서 기본 프로필로 계속할 수 있으며, 클라우드에 동기화된 대화와 내용은 그대로 유지됩니다.",
@@ -13364,7 +13501,11 @@
         "unbound": "공식 @askmycindy에 보낸 질문을 {{name}}에게 맡길 수 있습니다.",
         "managed": "동반자가 X 질문을 담당합니다. 해당 동반자의 메시지 플랫폼 설정에서 연결을 변경할 수 있습니다.",
         "riskBody": "X 질문에는 동반자의 공유 기억, 도구와 작업 폴더가 사용되며 답글은 공개됩니다. 개인 정보를 다루는 용도로 사용하지 마세요. X 대화는 비공개 채팅 기록을 직접 사용하지 않습니다."
-      }
+      },
+      "handedOver": "{{apps}}: 설정에서 {{name}}에게 답장을 맡겼습니다.",
+      "handedOverSeparator": ", ",
+      "manageInSettings": "설정에서 관리",
+      "handedOverHint": "아래에 추가하는 봇은 {{name}} 전용이며 설정의 봇과 별도로 동작합니다."
     },
     "voiceMode": {
       "realtime": {
@@ -14058,7 +14199,8 @@
         },
         "companion": {
           "retryLater": "잠시 후 다시 시도해 주세요"
-        }
+        },
+        "membersPaused": "주인이 돌아올 때까지 멤버 질문은 잠시 쉬어요 🙈"
       },
       "hook": {
         "interaction": {
@@ -15705,7 +15847,9 @@
     "connectionInterrupted": "음성 연결이 중단되었습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
     "recognitionStalled": "음성 인식 결과가 더 이상 오지 않습니다. 다시 시도하세요.",
     "transcriptKept": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 바로 이어서 편집할 수 있습니다.",
-    "transcriptKeptOverlay": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 복사해서 이어가세요."
+    "transcriptKeptOverlay": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 복사해서 이어가세요.",
+    "retryRecognition": "다시 인식",
+    "recordAgain": "다시 녹음"
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT 로그인이 더 이상 유효하지 않습니다",
@@ -15975,7 +16119,7 @@
       "requestFormatError": "앱이 보낸 요청 형식에 문제가 있어 답변을 완료하지 못했습니다.",
       "piRetryHistoryTooLarge": "메시지를 보내지 못했습니다. Pi가 재시도에 필요한 기록을 읽는 동안 데이터 프레임이 로컬 한도인 16 MiB를 초과했습니다. 새 작업에서 계속할 수 있습니다.",
       "piRetryHistoryUnavailable": "메시지를 보내지 못했습니다. Pi가 전송에 필요한 기록을 읽지 못했습니다. 다시 시도하거나 새 작업에서 계속할 수 있습니다.",
-      "upstreamStatusError": "상위 서비스가 {{status}}를 반환하여 이 답변이 완료되지 않았습니다.",
+      "upstreamStatusError": "모델 프로바이더 서비스가 오류(HTTP {{status}})를 반환했습니다. 이번 응답이 완료되지 않았습니다.",
       "messageNotSent": "메시지를 보내지 못했습니다.",
       "replyFailed": "답변을 완료하지 못했습니다",
       "queuedSendRecovery": "이전 메시지가 전송되지 않았습니다. ‘다시 시도’를 누르면 그대로 보낼 수 있습니다. 새 메시지를 보내면 이전 메시지를 대체합니다.",
@@ -16033,12 +16177,12 @@
       "networkUnreachableNoRetry": "네트워크 오류: 서비스에 일시적으로 연결할 수 없습니다.",
       "networkAutoRetrying": "네트워크 오류: 자동으로 다시 시도하는 중…",
       "networkReconnecting": "연결이 끊어졌습니다. 다시 연결하는 중({{attempt}}/{{maxAttempts}})…",
-      "overloadRetrying": "모델 서비스가 혼잡합니다. 자동으로 다시 시도하는 중({{attempt}}/{{maxAttempts}})…",
+      "overloadRetrying": "모델 프로바이더가 일시적으로 혼잡합니다. 자동 재시도 중({{attempt}}/{{maxAttempts}})…",
       "rateLimitRetrying": "요청이 속도 제한에 걸렸습니다. 자동으로 다시 시도하는 중({{attempt}}/{{maxAttempts}})…",
-      "overloadBusy": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. ‘다시 시도’를 누르거나 다른 모델로 바꿔 보세요.",
-      "overloadBusyNoRetry": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. 잠시 후 다시 시도하거나 다른 모델로 바꿔 보세요.",
-      "streamInterrupted": "모델 출력이 중간에 중단되었습니다. 보통은 일시적인 상위 서비스 장애입니다. ‘다시 시도’를 눌러 주세요.",
-      "streamInterruptedNoRetry": "모델 출력이 중간에 중단되었습니다. 보통은 일시적인 상위 서비스 장애입니다. 잠시 후 다시 시도해 주세요.",
+      "overloadBusy": "모델 프로바이더가 일시적으로 혼잡해 가용 용량이 없습니다. 「다시 시도」를 누르거나 다른 모델로 전환하세요.",
+      "overloadBusyNoRetry": "모델 프로바이더가 일시적으로 혼잡해 가용 용량이 없습니다. 잠시 후 다시 시도하거나 다른 모델로 전환하세요.",
+      "streamInterrupted": "모델 프로바이더의 응답 스트림이 도중에 중단되었습니다. 「다시 시도」를 누르세요.",
+      "streamInterruptedNoRetry": "모델 프로바이더의 응답 스트림이 도중에 중단되었습니다. 잠시 후 다시 시도해 주세요.",
       "networkShowRaw": "오류 상세 정보",
       "networkHideRaw": "상세 정보 접기",
       "diagnose": "진단",
@@ -16047,7 +16191,7 @@
       "diagnosePromptWithoutSession": "이 오류를 진단해서 원인과 해결 방법을 알려 주세요.\n\n오류 메시지: {{message}}\n오류 상세:\n{{details}}\n\nCindy 자체의 문제로 확인되면 알려 주세요. Cindy 팀에 issue를 제출할지는 제가 선택할게요.",
       "gatewayProxyTokenInvalid": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 다시 시도를 클릭하세요. 반복되면 로그아웃 후 다시 로그인하세요",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI 자격 증명이 더 이상 유효하지 않습니다. 반복되면 로그아웃 후 다시 로그인하세요",
-      "modelAccessDenied": "연결된 서비스 계정에 이 모델의 접근 권한이 없습니다. 다른 모델로 전환하거나 제공자에게 모델 접근 권한을 확인하세요",
+      "modelAccessDenied": "현재 모델 프로바이더 계정에 이 모델에 대한 접근 권한이 없습니다. 모델을 전환하거나 접근 권한을 확인하세요.",
       "providerSafetyRefusal": "모델 제공자의 안전 정책에 의해 이번 응답이 차단되었습니다. 계속하려면 요청 내용을 수정한 뒤 다시 보내세요",
       "silentStopContinue": "계속",
       "silentStopContinueTitle": "현재 작업 계속",
@@ -16057,7 +16201,20 @@
       "remoteCompactEncryptedContent": "모델이 기록의 암호화된 내용을 읽지 못해 컨텍스트 압축에 실패했습니다. 자동으로 이어가지 못했습니다. 다시 시도하여 복구할 수 있습니다.",
       "contextOverflow": "이 메시지 자체가 모델 컨텍스트 한도를 초과해서, 같은 세션에서 새 Agent 세션으로 자동 이어갈 수 없습니다. 입력을 줄이거나 큰 첨부파일을 제거한 뒤 다시 시도하세요.",
       "attachmentAccessDeniedTitle": "Cindy가 원본 첨부 파일을 읽을 수 없어 메시지가 전송되지 않았습니다.",
-      "attachmentAccessDeniedRecovery": "다운로드 등 접근 가능한 폴더에 사본을 저장하고, 원본 첨부 파일을 제거한 뒤 첨부 버튼으로 사본을 추가하여 다시 전송하세요."
+      "attachmentAccessDeniedRecovery": "다운로드 등 접근 가능한 폴더에 사본을 저장하고, 원본 첨부 파일을 제거한 뒤 첨부 버튼으로 사본을 추가하여 다시 전송하세요.",
+      "providerSafetyRefusalWithProvider": "{{provider}}의 안전 정책으로 이번 응답이 차단되었습니다. 요청 내용을 조정한 뒤 다시 보내세요.",
+      "overloadRetryingWithProvider": "{{provider}}가 일시적으로 혼잡합니다. 자동 재시도 중({{attempt}}/{{maxAttempts}})…",
+      "overloadBusyWithProvider": "{{provider}}가 일시적으로 혼잡해 가용 용량이 없습니다. 「다시 시도」를 누르거나 다른 모델로 전환하세요.",
+      "overloadBusyNoRetryWithProvider": "{{provider}}가 일시적으로 혼잡해 가용 용량이 없습니다. 잠시 후 다시 시도하거나 다른 모델로 전환하세요.",
+      "streamInterruptedWithProvider": "{{provider}}의 응답 스트림이 도중에 중단되었습니다. 「다시 시도」를 누르세요.",
+      "streamInterruptedNoRetryWithProvider": "{{provider}}의 응답 스트림이 도중에 중단되었습니다. 잠시 후 다시 시도해 주세요.",
+      "upstreamStatusErrorWithProvider": "{{provider}} 서비스가 오류(HTTP {{status}})를 반환했습니다. 이번 응답이 완료되지 않았습니다.",
+      "modelAccessDeniedWithProvider": "현재 {{provider}} 계정에 이 모델에 대한 접근 권한이 없습니다. 모델을 전환하거나 접근 권한을 확인하세요.",
+      "providerQuotaExhaustedWithProvider": "{{provider}} 계정의 할당량 또는 잔액이 부족합니다. 계정 상태를 확인하세요.",
+      "usageLimitReachedWithProvider": "{{provider}} 계정이 사용 한도에 도달했습니다",
+      "usageLimitReachedWithResetWithProvider": "{{provider}} 계정이 사용 한도에 도달했습니다. {{resetAt}}경 초기화될 예정입니다.",
+      "usageLimitReachedNoResetWithProvider": "{{provider}} 계정이 사용 한도에 도달했습니다. 한도가 초기화될 때까지 기다리거나 다른 모델로 전환하세요.",
+      "invalidEncryptedContentWithProvider": "{{provider}}에서 이전 대화의 암호화된 일부 기록을 읽을 수 없습니다. 원래 프로바이더로 돌아가거나 새 작업에서 계속하세요."
     },
     "backgroundActivity": {
       "status": "백그라운드 하위 작업 실행 중, 모델 사용량을 소비하고 있습니다…",
@@ -17010,7 +17167,20 @@
       "viewGhostCard": "플러그인 카드 보기"
     },
     "modelMismatch": {
-      "notice": "이번 턴은 선택한 {{selected}} 대신 {{actual}} 모델이 응답했습니다(제공자 측 임시 다운그레이드)"
+      "notice": "모델 제공자가 이번 턴을 {{selected}} 대신 {{actual}}(으)로 응답했습니다",
+      "noticeWithProvider": "{{provider}}에서 이번 턴을 {{selected}} 대신 {{actual}}(으)로 응답했습니다",
+      "infoLink": "이유 보기",
+      "infoTitle": "다른 모델이 응답한 이유",
+      "infoSummary": "Cindy는 선택한 {{selected}}(으)로 이번 턴 요청을 보냈지만, 모델 제공자가 실제로는 {{actual}}(으)로 응답을 반환했습니다.",
+      "infoSummaryWithProvider": "Cindy는 선택한 {{selected}}(으)로 이번 턴 요청을 보냈지만, {{provider}}에서 실제로는 {{actual}}(으)로 응답을 반환했습니다.",
+      "infoCausesTitle": "주요 원인",
+      "infoCausePolicy": "안전 또는 콘텐츠 정책 폴백(일부 모델은 응답을 거부하는 대신 이전 모델로 자동 전환하여 답변합니다).",
+      "infoCauseLoad": "트래픽이 몰리는 시간대에 모델 제공자가 임시로 대체 모델로 라우팅한 경우.",
+      "infoCauseGateway": "서드파티 또는 자체 모델 게이트웨이에서 모델 이름을 다른 모델로 매핑한 경우.",
+      "infoActionsTitle": "해결 방법",
+      "infoActionContinue": "설정을 바꿀 필요는 없습니다. 이번 턴에만 해당하며, 이후 메시지는 계속 {{selected}}(으)로 요청됩니다.",
+      "infoActionRetry": "이번 답변이 기대에 미치지 못하면 질문을 다듬어 다시 보내거나 다른 사용 가능한 모델로 전환해 보세요.",
+      "infoActionCheckProvider": "여러 턴에 걸쳐 계속 발생하면 모델 제공자의 할당량 상태나 게이트웨이 라우팅 설정을 확인하세요."
     },
     "ghostNotify": {
       "secretSaved": "자격 증명 \"{{name}}\"이(가) 저장되었습니다",
@@ -17089,6 +17259,88 @@
       "signingIn": "이 작업에서 사용하는 구독 계정에 로그인 중입니다. 로그인이 완료된 후 다시 시도하세요.",
       "unavailable": "이 작업에 지정된 구독 계정을 이번 요청에 사용할 수 없습니다. 작업을 실행하는 컴퓨터의 모델 제공자 설정에서 계정을 확인하거나 다른 모델 연결을 선택하세요.",
       "legacy": "이 작업에 지정된 구독 계정을 사용할 수 없습니다. 작업을 실행하는 컴퓨터에서 계정의 로그인 및 사용 상태를 확인하거나 다른 모델 연결을 선택하세요. 계정은 자동으로 변경되지 않습니다."
+    },
+    "errorExplain": {
+      "providerSafetyRefusal": {
+        "title": "응답이 차단된 이유",
+        "summary": "Cindy는 요청을 그대로 전송했지만 모델 프로바이더에 내장된 안전·콘텐츠 정책이 이번 출력을 차단했습니다. Cindy의 검열이나 로컬 플러그인 차단이 아닙니다.",
+        "summaryWithProvider": "Cindy는 요청을 그대로 전송했지만 {{provider}}에 내장된 안전·콘텐츠 정책이 이번 출력을 차단했습니다. Cindy의 검열이나 로컬 플러그인 차단이 아닙니다.",
+        "cause1": "요청 내용, 첨부 파일 또는 이전 대화 맥락이 프로바이더의 안전 심사 규칙에 걸렸습니다.",
+        "cause2": "모델이 생성 도중 출력 안전 필터에 걸려 응답이 중단되었습니다.",
+        "action1": "같은 내용으로 다시 시도하면 다시 차단될 수 있으므로 표현을 조정하거나 문제 부분을 제외하고 다시 보내세요.",
+        "action2": "이전 맥락 때문이라면 새 작업을 시작하거나 다른 모델로 전환해 보세요."
+      },
+      "overload": {
+        "title": "서비스 혼잡이 표시되는 이유",
+        "summary": "모델 프로바이더의 연산 자원이 일시적으로 부족합니다(피크 시간 과부하 또는 HTTP 529 등). Cindy나 로컬 네트워크와는 무관합니다.",
+        "summaryWithProvider": "{{provider}}의 연산 자원이 일시적으로 부족합니다(피크 시간 과부하 또는 HTTP 529 등). Cindy나 로컬 네트워크와는 무관합니다.",
+        "cause1": "피크 시간대 요청 급증으로 해당 모델의 가용 용량이 일시적으로 가득 찼습니다.",
+        "cause2": "프로바이더 측의 임시 점검 또는 용량 제한이 적용되고 있습니다.",
+        "action1": "Cindy를 재시작하거나 네트워크 설정을 바꿀 필요 없이 잠시 후 「다시 시도」를 누르세요.",
+        "action2": "바로 이어가려면 일시적으로 다른 모델이나 모델 그룹의 다른 소스로 전환하세요."
+      },
+      "streamInterrupted": {
+        "title": "출력이 도중에 중단된 이유",
+        "summary": "모델 프로바이더가 스트리밍 응답을 보내던 중 연결이 예기치 않게 끊어졌습니다. Cindy가 충돌한 것은 아니며 완료된 단계와 대화 기록은 모두 보존되었습니다.",
+        "summaryWithProvider": "{{provider}}가 스트리밍 응답을 보내던 중 연결이 예기치 않게 끊어졌습니다. Cindy가 충돌한 것은 아니며 완료된 단계와 대화 기록은 모두 보존되었습니다.",
+        "cause1": "모델 프로바이더 서버에서 생성 도중 일시적 오류나 연결 종료가 발생했습니다.",
+        "cause2": "서드파티 또는 자체 중계 게이트웨이가 긴 응답 전송 중 시간 초과로 끊어졌습니다.",
+        "action1": "「다시 시도」를 누르거나 「계속」이라고 보내 이어서 완료하도록 하세요.",
+        "action2": "여러 턴에 걸쳐 반복된다면 다른 모델로 바꾸거나 사용자 지정 게이트웨이의 타임아웃 설정을 확인하세요."
+      },
+      "upstreamStatus": {
+        "title": "서비스 오류가 반환된 이유",
+        "summary": "Cindy가 요청을 정상적으로 보냈지만 모델 프로바이더 서비스가 상세 본문 없는 HTTP {{status}} 내부 오류를 반환했습니다. Cindy 장애가 아닌 외부 서비스 이상입니다.",
+        "summaryWithProvider": "Cindy가 요청을 정상적으로 보냈지만 {{provider}} 서비스가 상세 본문 없는 HTTP {{status}} 내부 오류를 반환했습니다. Cindy 장애가 아닌 외부 서비스 이상입니다.",
+        "cause1": "모델 프로바이더 백엔드에서 일시적인 내부 오류가 발생했습니다.",
+        "cause2": "서드파티 또는 자체 모델 게이트웨이가 요청 전달에 실패했거나 사용자 지정 5xx 코드를 반환했습니다.",
+        "action1": "잠시 후 「다시 시도」를 누르세요. 일시적인 장애는 곧 복구되는 경우가 많습니다.",
+        "action2": "서드파티·자체 게이트웨이를 사용 중이라면 게이트웨이 상태와 로그를 확인하거나 다른 프로바이더로 전환하세요."
+      },
+      "modelAccessDenied": {
+        "title": "이 모델에 접근할 수 없는 이유",
+        "summary": "모델 프로바이더가 현재 계정의 이 모델 접근 요청을 거부했습니다. Cindy는 프로바이더 측 모델 권한 제어를 우회할 수 없습니다.",
+        "summaryWithProvider": "{{provider}}가 현재 계정의 이 모델 접근 요청을 거부했습니다. Cindy는 {{provider}} 측 모델 권한 제어를 우회할 수 없습니다.",
+        "cause1": "현재 구독 요금제 등급 또는 API 키에 이 모델 사용 권한이 포함되어 있지 않습니다.",
+        "cause2": "조직 관리자가 허용 모델 목록을 제한했거나 현재 지역에서 지원되지 않는 모델입니다.",
+        "action1": "현재 계정에서 사용할 수 있는 다른 모델로 전환해 작업을 이어가세요.",
+        "action2": "프로바이더 콘솔이나 요금제 페이지에서 권한을 확인하고, 방금 업그레이드했다면 계정을 다시 연결해 보세요."
+      },
+      "providerQuotaExceeded": {
+        "title": "할당량 또는 잔액 부족이 표시되는 이유",
+        "summary": "연결된 외부 모델 프로바이더 계정의 잔액 또는 할당량이 소진되어 프로바이더가 요청을 거부했습니다. Cindy 계정과는 별개입니다.",
+        "summaryWithProvider": "연결된 {{provider}} 계정의 잔액 또는 할당량이 소진되어 {{provider}}가 요청을 거부했습니다. Cindy 계정과는 별개입니다.",
+        "cause1": "해당 프로바이더 계정의 선불 크레딧이 소진되었거나 유효한 결제 수단이 등록되지 않았습니다.",
+        "cause2": "API 키의 사용 한도 또는 조직 할당량 한도에 도달했습니다.",
+        "action1": "해당 프로바이더 결제 페이지에서 충전하거나 한도를 높인 뒤 「다시 시도」를 누르세요.",
+        "action2": "모델 선택기에서 사용 가능한 할당량이 있는 다른 프로바이더로 전환해 계속할 수도 있습니다."
+      },
+      "usageLimit": {
+        "title": "사용 한도에 도달한 이유",
+        "summary": "연결된 모델 계정이 모델 프로바이더가 설정한 주기적 사용량 창 한도에 도달해 일시적으로 새 요청을 처리할 수 없습니다. Cindy가 부과한 제한이 아닙니다.",
+        "summaryWithProvider": "연결된 {{provider}} 계정이 {{provider}}가 설정한 주기적 사용량 창 한도에 도달해 일시적으로 새 요청을 처리할 수 없습니다. Cindy가 부과한 제한이 아닙니다.",
+        "cause1": "구독 계정의 현재 시간 창(예: 5시간 또는 주간 주기) 사용량을 모두 소진했습니다.",
+        "cause2": "같은 계정을 여러 작업이나 기기에서 동시에 사용하면 동일한 주기 할당량 창을 공유합니다.",
+        "action1": "할당량 창이 초기화된 뒤 다시 시도하세요. 자동 계속이 켜져 있으면 초기화 후 자동으로 이어집니다.",
+        "action2": "바로 이어가려면 다른 모델, 다른 구독 계정 또는 API 프로바이더로 임시 전환하세요."
+      },
+      "encryptedContent": {
+        "title": "일부 기록을 읽을 수 없는 이유",
+        "summary": "일부 모델은 내부 추론 상태를 대화 기록에 암호화해 저장하며 원래 프로바이더와 계정만 복호화할 수 있습니다. 프로바이더·계정을 바꾸거나 원격 컨텍스트 정리 시 이전 암호화 구간을 읽지 못할 수 있습니다.",
+        "summaryWithProvider": "일부 모델은 내부 추론 상태를 대화 기록에 암호화해 저장하며 원래 프로바이더와 계정만 복호화할 수 있습니다. 프로바이더·계정을 바꾸거나 원격 컨텍스트 정리 시 {{provider}}가 이전 암호화 구간을 읽지 못할 수 있습니다.",
+        "cause1": "도중에 다른 모델 프로바이더나 계정으로 전환해 이전 암호화 추론 내용을 복호화할 수 없습니다.",
+        "cause2": "원격 컨텍스트 정리나 다른 엔드포인트 라우팅으로 암호 상태가 일치하지 않습니다.",
+        "action1": "원래 사용하던 모델 프로바이더 또는 계정으로 되돌리면 이 작업을 그대로 이어갈 수 있습니다.",
+        "action2": "또는 「새 작업에서 계속」을 누르면 읽을 수 있는 대화 기록은 유지하고 복호화 불가 구간만 제거하며 기존 작업은 그대로 보존됩니다."
+      },
+      "failedSamplingAttempt": {
+        "title": "완료되지 않은 답변이 표시되는 이유",
+        "summary": "모델이 이 답변을 생성하던 중 실패하거나 중단되어 앞부분만 출력되었습니다. 이미 나온 내용이 사라지지 않도록 Cindy가 참고용으로 남겨 두었습니다.",
+        "cause1": "스트리밍 도중 프로바이더 오류, 연결 끊김 또는 안전 정책 차단이 발생했습니다.",
+        "cause2": "응답이 완전히 마무리되기 전에 오류가 나거나 중단되었습니다.",
+        "action1": "아래 오류 카드에서 구체적인 중단 원인과 재시도 필요 여부를 확인하세요.",
+        "action2": "다시 시도하거나 새 메시지를 보내 이어갈 수 있으며, 표시된 내용도 참고할 수 있습니다."
+      }
     }
   },
   "ccAgent": {
