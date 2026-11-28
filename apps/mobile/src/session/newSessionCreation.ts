@@ -77,9 +77,18 @@ import type {
 
 export type NewSessionCreationStatus = 'running' | 'create-failed' | 'enqueue-failed';
 
+export interface NewSessionCreationFirstMessageHandoff {
+  session?: RemoteSession | null;
+  connectionEpoch?: number;
+}
+
 export interface NewSessionCreationTransport {
   maker: MobileMakerTransport;
-  handoffFirstMessage?: (item: QueuedRemoteMessage) => Promise<void>;
+  handoffFirstMessage?: (
+    item: QueuedRemoteMessage,
+    handoff?: NewSessionCreationFirstMessageHandoff,
+  ) => Promise<void>;
+  getConnectionEpoch?: (deviceId: string) => number;
   openLink: (deviceId: string) => Promise<unknown>;
   subscribe: (owner: string, deviceId: string, topics: string[]) => Promise<void>;
   /** 手机控制端在首条消息越过 device-link 前读取各引用来源的可信历史快照。 */
@@ -1430,10 +1439,16 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
     // 排队 createOpts 用合成行兜底(project 会话字段本就齐全)。
     phase('sending');
     let freshSession: RemoteSession | null = null;
+    let handoffConnectionEpoch: number | undefined;
     try {
       assertTaskOwnerCurrent(task);
+      const epochBeforeRead = params.transport.getConnectionEpoch?.(params.deviceId);
       freshSession = await maker.getSession(sessionId);
       assertTaskOwnerCurrent(task);
+      const epochAfterRead = params.transport.getConnectionEpoch?.(params.deviceId);
+      if (epochBeforeRead !== undefined && epochBeforeRead === epochAfterRead) {
+        handoffConnectionEpoch = epochAfterRead;
+      }
       // 权威行落地时**保留** pendingLocalCreation 禁发标:enqueue 还没发生,此刻
       // 解禁的话,getSession → (setPlanMode) → enqueue 的弱网窗口(可达一两个往返)
       // 里用户抢发的第二条消息 sendAtMs 会早于首条,被控端按 sendAtMs 排序会把它
@@ -1447,9 +1462,11 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
     } catch (error) {
       if (isStaleNewSessionOwnerError(error)) throw error;
       freshSession = null;
+      handoffConnectionEpoch = undefined;
     }
     timer.lap('read');
 
+    let handoffSession: RemoteSession | null = freshSession;
     // 重跑管线(enqueue 失败后重试)时团队可能已建成:权威行已是 Lead 就不再开启。
     if (params.orcaEnable && freshSession?.orcaRole !== 'lead') {
       assertTaskOwnerCurrent(task);
@@ -1457,6 +1474,7 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
         await enableOrcaTeam(maker, sessionId, params.orcaEnable);
         assertTaskOwnerCurrent(task);
         remoteSessionStore.applySessionPatch(params.deviceId, sessionId, { orcaRole: 'lead' });
+        if (handoffSession) handoffSession = { ...handoffSession, orcaRole: 'lead' };
       } catch (error) {
         if (isStaleNewSessionOwnerError(error)) throw error;
         rememberOrcaStartFailure(sessionId, describeOrcaError(error, null));
@@ -1518,7 +1536,14 @@ async function runPipelineSteps(task: InternalTask, timer: NewSessionCreationTim
     ), task.firstMessageSessionRefs);
     if (params.transport.handoffFirstMessage) {
       try {
-        await params.transport.handoffFirstMessage(queuedDraft);
+        if (handoffSession && handoffConnectionEpoch !== undefined) {
+          await params.transport.handoffFirstMessage(queuedDraft, {
+            session: handoffSession,
+            connectionEpoch: handoffConnectionEpoch,
+          });
+        } else {
+          await params.transport.handoffFirstMessage(queuedDraft);
+        }
         timer.lap('handoff');
         assertTaskOwnerCurrent(task);
         remoteSessionStore.applySessionPatch(params.deviceId, sessionId, { pendingLocalCreation: false });
