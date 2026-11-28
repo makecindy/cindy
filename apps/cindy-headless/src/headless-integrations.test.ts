@@ -1,12 +1,25 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { inspectPiProjectWorkspaceResources, piProjectResourcesEvidence, piProjectSkillDenials, resolvePiProjectTrust, resolveTurns, validateTurnInput } from './headless-integrations.js';
 
 const execFileAsync = promisify(execFile);
+
+let repo: string;
+
+beforeAll(async () => {
+  repo = await mkdtemp(path.join(os.tmpdir(), 'headless-pi-project-'));
+  await execFileAsync('git', ['init', repo]);
+  await mkdir(path.join(repo, '.agents', 'skills', 'shared'), { recursive: true });
+  await writeFile(path.join(repo, '.agents', 'skills', 'shared', 'skill.md'), '# Shared');
+});
+
+afterAll(async () => {
+  if (repo) await rm(repo, { recursive: true, force: true });
+});
 
 describe('headless capability inputs', () => {
   it('keeps string turns compatible and accepts structured attachments', () => {
@@ -30,13 +43,10 @@ describe('headless capability inputs', () => {
   });
 
   it('builds a scoped Pi approval snapshot for current and ancestor project skills', async () => {
-    const repo = await mkdtemp(path.join(os.tmpdir(), 'headless-pi-skills-'));
-    const workspace = path.join(repo, 'packages', 'app');
+    // Keep this workspace separate: trust discovery also includes hidden Skills.
+    const workspace = path.join(repo, 'packages', 'trust-app');
     await mkdir(path.join(workspace, '.pi', 'skills', 'local'), { recursive: true });
-    await mkdir(path.join(repo, '.agents', 'skills', 'shared'), { recursive: true });
     await writeFile(path.join(workspace, '.pi', 'skills', 'local', 'SKILL.md'), '# Local');
-    await writeFile(path.join(repo, '.agents', 'skills', 'shared', 'SKILL.md'), '# Shared');
-    await execFileAsync('git', ['init', repo]);
     const snapshot = await resolvePiProjectTrust(workspace, { enabled: true, roots: ['.pi/skills', '.agents/skills'] });
     expect(snapshot?.approval).toMatchObject({ status: 'approved', scope: 'working-dir' });
     expect(snapshot?.discovered.skills).toHaveLength(2);
@@ -47,16 +57,13 @@ describe('headless capability inputs', () => {
 
 describe('pi project workspace resources', () => {
   it('mirrors upstream in-place collection and denies unapproved Skills', async () => {
-    const repo = await mkdtemp(path.join(os.tmpdir(), 'headless-pi-resources-'));
     const workspace = path.join(repo, 'packages', 'app');
     await mkdir(path.join(workspace, '.pi', 'skills', 'local'), { recursive: true });
     await mkdir(path.join(workspace, '.pi', 'skills', '.hidden'), { recursive: true });
     await mkdir(path.join(workspace, '.pi', 'skills', 'nomarker'), { recursive: true });
-    await mkdir(path.join(repo, '.agents', 'skills', 'shared'), { recursive: true });
     await writeFile(path.join(workspace, '.pi', 'skills', 'local', 'SKILL.md'), '# Local');
     await writeFile(path.join(workspace, '.pi', 'skills', '.hidden', 'SKILL.md'), '# Hidden');
     await writeFile(path.join(workspace, '.pi', 'skills', 'nomarker', 'readme.md'), '# None');
-    await writeFile(path.join(repo, '.agents', 'skills', 'shared', 'skill.md'), '# Shared');
     await mkdir(path.join(workspace, '.pi', 'prompts'), { recursive: true });
     await writeFile(path.join(workspace, '.pi', 'prompts', 'review.md'), '# Review');
     await writeFile(path.join(workspace, '.pi', 'prompts', 'notes.txt'), 'ignored');
@@ -65,7 +72,6 @@ describe('pi project workspace resources', () => {
     await writeFile(path.join(workspace, '.pi', 'extensions', 'single.ts'), 'export {};');
     await writeFile(path.join(workspace, '.pi', 'extensions', 'pack', 'index.ts'), 'export {};');
     await writeFile(path.join(workspace, '.pi', 'extensions', 'pack', 'helper.ts'), 'export {};');
-    await execFileAsync('git', ['init', repo]);
     const resources = await inspectPiProjectWorkspaceResources(workspace);
     const relative = (target: string) => path.relative(resources.canonicalRepoRoot, target).replaceAll('\\', '/');
     expect(resources.canonicalRepoRoot).toBe(await realpath(repo));
