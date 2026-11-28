@@ -1914,6 +1914,11 @@ interface ElectronAPI {
       sourceLanguage?: string;
       refinementEnabled?: boolean;
     }) => Promise<{ ok: true }>;
+    prewarmOnPress?: (payload?: {
+      sourceLanguage?: string;
+      refinementEnabled?: boolean;
+    }) => Promise<{ ok: true }>;
+    discardPressPrewarm?: () => Promise<{ ok: true }>;
     getBenchmarkFixtureAudio: () => Promise<
       { ok: true; path: string; wav: ArrayBuffer } | { ok: false }
     >;

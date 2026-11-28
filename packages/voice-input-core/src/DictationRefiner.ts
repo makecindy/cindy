@@ -1,5 +1,7 @@
 import type { DictationRefinementContext, RefinementResult } from './types';
 import { sanitizeActiveAppContext } from './activeAppContext';
+import { buildFuzzyUserDictionaryMatches } from './dictionaryFuzzyMatch';
+import { joinRefinedSegments } from './pauseRefinement';
 import { takeRefinementContextHead, takeRefinementContextTail, truncateRefinementReply } from './refinementContext';
 
 export type TextModelClient = {
@@ -161,6 +163,7 @@ export class DictationRefiner {
     text: string;
     runId: string;
     segmentIds: string[];
+    precedingRefinedText?: string;
     onPartial?: (text: string) => void;
   }): Promise<RefinementResult> {
     const startedAt = performance.now();
@@ -169,7 +172,7 @@ export class DictationRefiner {
       return reject(input.segmentIds, basedOnText, 'empty_input', startedAt);
     }
 
-    const contextWithMatches = this.getContext(basedOnText);
+    const contextWithMatches = this.getContext(basedOnText, input.precedingRefinedText);
     const { replyToMessage, userDictionaryMatches, ...context } = contextWithMatches;
     const userPayload = {
       promptVersion: this.promptVersion,
@@ -225,13 +228,23 @@ export class DictationRefiner {
     };
   }
 
-  private getContext(dictationText: string): Omit<DictationRefinementContext, 'dictionaryAliasHints'> {
+  private getContext(
+    dictationText: string,
+    precedingRefinedText?: string,
+  ): Omit<DictationRefinementContext, 'dictionaryAliasHints'> {
     const base = this.contextProvider?.() ?? {};
     const voiceInputHistory = normalizeVoiceInputHistory(
       base.voiceInputHistory,
       this.historyProvider?.(),
     );
     const activeApp = sanitizeActiveAppContext(base.activeApp);
+    const userDictionary = normalizeBoundedOptionalMultilineText(
+      base.userDictionary,
+      MAX_USER_DICTIONARY_CHARS,
+    );
+    const rawSelectionBefore = precedingRefinedText?.trim()
+      ? joinRefinedSegments(base.selectionBefore ?? '', precedingRefinedText.trim())
+      : (base.selectionBefore ?? '');
     // The object key order is part of the prompt-cache strategy. Put stable
     // user settings before the single voice-history block, and keep volatile
     // cursor / per-request fields later so repeated refinements can reuse a
@@ -244,14 +257,14 @@ export class DictationRefiner {
         base.userRefinementInstructions,
         MAX_USER_REFINEMENT_INSTRUCTIONS_CHARS,
       ),
-      userDictionary: normalizeBoundedOptionalMultilineText(base.userDictionary, MAX_USER_DICTIONARY_CHARS),
+      userDictionary,
       voiceInputHistory,
-      selectionBefore: takeRefinementContextTail(base.selectionBefore ?? '', MAX_SELECTION_CONTEXT_CHARS) || undefined,
+      selectionBefore: takeRefinementContextTail(rawSelectionBefore, MAX_SELECTION_CONTEXT_CHARS) || undefined,
       selectedText: takeRefinementContextHead(base.selectedText ?? '', MAX_SELECTION_CONTEXT_CHARS) || undefined,
       selectionAfter: takeRefinementContextHead(base.selectionAfter ?? '', MAX_SELECTION_CONTEXT_CHARS) || undefined,
       ...(activeApp ? { activeApp } : {}),
       replyToMessage: truncateRefinementReply(base.replyToMessage ?? '', MAX_REPLY_TO_MESSAGE_CHARS) || undefined,
-      userDictionaryMatches: buildUserDictionaryMatches(dictationText, base.dictionaryAliasHints),
+      userDictionaryMatches: buildUserDictionaryMatches(dictationText, base.dictionaryAliasHints, userDictionary),
     };
   }
 }
@@ -320,76 +333,14 @@ function normalizeOptionalMultilineText(text: unknown): string | undefined {
 function buildUserDictionaryMatches(
   dictationText: string,
   hints: DictationRefinementContext['dictionaryAliasHints'],
+  userDictionary?: string,
 ): string | undefined {
-  const normalizedDictation = normalizeMatchText(dictationText);
-  if (!normalizedDictation || !Array.isArray(hints)) return undefined;
-
-  const lines: string[] = [];
-  const seenTerms = new Set<string>();
-  const seenPairs = new Set<string>();
-  // Alias matching runs on the user-visible stop -> refine path. Keep a hard
-  // package-level cap even though the desktop host already sends a bounded,
-  // priority-sorted index, so standalone hosts cannot accidentally add visible
-  // latency with a very large dictionary.
-  const normalizedHints = hints
-    .slice(0, MAX_USER_DICTIONARY_HINTS_SCANNED)
-    .map((hint) => {
-      const term = normalizeText(typeof hint?.term === 'string' ? hint.term : '');
-      if (!term) return null;
-      const aliases = Array.isArray(hint.aliases)
-        ? hint.aliases
-          .slice(0, MAX_USER_DICTIONARY_ALIASES_SCANNED)
-          .map((alias) => ({
-            text: normalizeText(typeof alias?.text === 'string' ? alias.text : ''),
-            matchText: normalizeMatchText(typeof alias?.text === 'string' ? alias.text : ''),
-            count: normalizePositiveInteger(alias?.count),
-          }))
-          .filter((alias) => alias.text && alias.matchText && !sameMatchText(alias.text, term))
-          .sort((a, b) => b.count - a.count || b.text.length - a.text.length)
-        : [];
-      if (aliases.length === 0) return null;
-      return {
-        term,
-        frequency: normalizePositiveInteger(hint.frequency),
-        aliases,
-      };
-    })
-    .filter((hint): hint is {
-      term: string;
-      frequency: number;
-      aliases: Array<{ text: string; matchText: string; count: number }>;
-    } => Boolean(hint))
-    .sort((a, b) => b.frequency - a.frequency || b.aliases[0].count - a.aliases[0].count);
-
-  for (const hint of normalizedHints) {
-    if (lines.length >= MAX_USER_DICTIONARY_MATCHES) break;
-    const termKey = normalizeMatchText(hint.term);
-    if (seenTerms.has(termKey)) continue;
-    const matchedAlias = hint.aliases.find((alias) => normalizedDictation.includes(alias.matchText));
-    if (!matchedAlias) continue;
-    const pairKey = `${matchedAlias.matchText}=>${termKey}`;
-    if (seenPairs.has(pairKey)) continue;
-    seenTerms.add(termKey);
-    seenPairs.add(pairKey);
-    lines.push(`- “${matchedAlias.text}” 可能是 “${hint.term}”`);
-  }
-
-  const block = lines.join('\n');
-  return block.length > MAX_USER_DICTIONARY_MATCHES_CHARS
-    ? block.slice(0, MAX_USER_DICTIONARY_MATCHES_CHARS).trim()
-    : block || undefined;
-}
-
-function normalizePositiveInteger(value: unknown): number {
-  return Math.max(1, Math.floor(typeof value === 'number' && Number.isFinite(value) ? value : 1));
-}
-
-function normalizeMatchText(value: string): string {
-  return normalizeText(value).toLocaleLowerCase();
-}
-
-function sameMatchText(left: string, right: string): boolean {
-  return normalizeMatchText(left) === normalizeMatchText(right);
+  return buildFuzzyUserDictionaryMatches(dictationText, hints, userDictionary, {
+    maxHintsScanned: MAX_USER_DICTIONARY_HINTS_SCANNED,
+    maxAliasesScanned: MAX_USER_DICTIONARY_ALIASES_SCANNED,
+    maxMatches: MAX_USER_DICTIONARY_MATCHES,
+    maxChars: MAX_USER_DICTIONARY_MATCHES_CHARS,
+  });
 }
 
 function normalizeVoiceInputHistory(

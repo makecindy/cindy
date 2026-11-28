@@ -1966,11 +1966,11 @@ function handleGlobalVoiceInputShortcut(phase?: Extract<GlobalVoiceInputShortcut
 
   if (sendShortcutToActiveInlineVoiceInput(phase)) return;
 
-  // Warm the provider auth path the moment the shortcut is detected. The
-  // overlay/renderer takes ~100ms to ask for `voice-input:start`; doing the
-  // disk read + token parse now overlaps that window so the WebSocket dial
-  // finds the token already hot in memory.
-  void prewarmVoiceInputProvider();
+  // Warm the provider auth & managed press-triggered ASR path the moment the
+  // shortcut is detected. The overlay/renderer takes ~100-250ms to claim the
+  // trigger and invoke `voice-input:start`; overlapping session allocation +
+  // WS dial with that window cuts TTFT without keeping any idle connection.
+  void prewarmVoiceInputProvider({ pressTriggered: true });
 
   const focusedWindow = BrowserWindow.getFocusedWindow();
   if (focusedWindow) {

@@ -9,6 +9,7 @@ export * from './VoiceInputController';
 export * from './VoiceTimelineLogger';
 export * from './DictationRefiner';
 export * from './DictationRewriter';
+export * from './dictionaryFuzzyMatch';
 export * from './DictationExternalEditInspector';
 export * from './DictationDictionaryAdvisor';
 export * from './dictionaryLearningPolicy';
@@ -19,7 +20,18 @@ export * from './activeAppContext';
 export * from './asrHints';
 export * from './failedAudioBuffer';
 export * from './pcmActivity';
-export { LEGACY_MANAGED_REFINE_REQUEST_LIMIT, resolveManagedRefineRequestLimit } from './pauseRefinement';
+export {
+  DEFAULT_MAX_REFINE_CHUNK_CHARS,
+  LEGACY_MANAGED_REFINE_REQUEST_LIMIT,
+  endsWithSentenceBoundary,
+  extractRecentRefinedContext,
+  joinRefinedSegments,
+  resolveManagedRefineRequestLimit,
+  sliceUnrefinedDelta,
+  splitLongDeltaForRefinement,
+  stripAccidentalPrecedingOverlap,
+  stripLeadingJoinPunctuation,
+} from './pauseRefinement';
 
 export * from './VoiceConversationInput';
 export * from './conversationActivity';
