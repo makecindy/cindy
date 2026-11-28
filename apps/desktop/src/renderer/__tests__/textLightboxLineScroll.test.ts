@@ -10,7 +10,7 @@
  * and exercised here directly:
  *   - pickSourceLineAnchor: which `[data-source-line]` block to jump to.
  *
- * text/code 的 `path:line` 由 PlaintextEditor.scrollToLine 承担。
+ * The real code editor viewport is covered by the explicit-file-links UI fixture.
  *
  * Lives in its own file (not textLightbox.test.ts) so the line-scroll feature's
  * tests stay scoped to this MR and don't entangle with that file's existing

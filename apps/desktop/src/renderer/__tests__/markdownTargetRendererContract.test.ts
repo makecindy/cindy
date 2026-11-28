@@ -146,7 +146,7 @@ describe('Markdown target rendering contract', () => {
     expect(textLightbox).toContain('data-source-line');
     // Markdown anchor selection lives in a pure helper (unit-tested in
     // textLightboxLineScroll.test.ts); the effect wires it to DOM rect based scrolling.
-    expect(textLightbox).toContain('pickSourceLineAnchor(entries, line)');
+    expect(textLightbox).toContain('pickSourceLineAnchor(entries, initialLine)');
     expect(textLightbox).toContain(
       'scroller.scrollTop = targetRect.top - scrollerRect.top + scroller.scrollTop',
     );

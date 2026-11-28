@@ -9,14 +9,17 @@ import { i18n } from '@/i18n';
 import { TextLightbox } from '../TextLightbox';
 import { AttachmentCollectionContext } from '../AttachmentCollection';
 
-const state = vi.hoisted(() => ({ line: vi.fn(), parse: vi.fn() }));
+const state = vi.hoisted(() => ({ parse: vi.fn() }));
 vi.mock('mermaid', () => ({ default: { initialize: vi.fn(), parse: state.parse } }));
 vi.mock('@/components/markdown/PlaintextEditor', async () => {
   const { forwardRef, useImperativeHandle } = await import('react');
   return {
-    PlaintextEditor: forwardRef(({ initialValue }: { initialValue: string }, ref) => {
-      useImperativeHandle(ref, () => ({ scrollToLine: state.line, search: { clear: vi.fn() } }));
-      return <pre>{initialValue}</pre>;
+    PlaintextEditor: forwardRef((
+      { initialValue, initialReferenceLine }: { initialValue: string; initialReferenceLine?: number },
+      ref,
+    ) => {
+      useImperativeHandle(ref, () => ({ search: { clear: vi.fn() } }));
+      return <pre data-testid="source-preview" data-reference-line={initialReferenceLine}>{initialValue}</pre>;
     }),
   };
 });
@@ -105,11 +108,12 @@ it('opens the referenced line in a collection and returns focus even after switc
   await act(async () => {
     await vi.advanceTimersByTimeAsync(20);
   });
-  expect(state.line).toHaveBeenCalledWith(3);
+  expect(screen.getByTestId('source-preview').getAttribute('data-reference-line')).toBe('3');
   fireEvent.click(screen.getByRole('button', { name: i18n.t('attachmentPreview.next') }));
   await act(async () => {
     await vi.runOnlyPendingTimersAsync();
   });
+  expect(screen.getByTestId('source-preview').hasAttribute('data-reference-line')).toBe(false);
   fireEvent.click(screen.getByRole('button', { name: i18n.t('chat.lightbox.close') }));
   await act(async () => {
     await vi.advanceTimersByTimeAsync(250);
