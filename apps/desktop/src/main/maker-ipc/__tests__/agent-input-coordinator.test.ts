@@ -15015,8 +15015,10 @@ describe('AgentInputCoordinator replaceQueuedMessage(Orca lead 排队消息修�
 // Only bootstrap/native execution and route application are injected. Existing
 // turn-error tests never enter the cold, unpersisted queue-head failure boundary.
 describe('Bot subscription startup admission', () => {
-  function startupHarness(bot = true, opaque = false, rehydrate = false, quota = false) {
+  function startupHarness(bot = true, opaque = false, rehydrate = false, quota = false,
+    routed?: { failure: string }) {
     const scheduledQuotaInputs = new WeakSet<object>();
+    const modelGroupOpts = new WeakSet<object>();
     const h = createHarness({ isScheduledQuotaInput: item => scheduledQuotaInputs.has(item.createOpts) });
     const attemptCurrent = vi.spyOn(h.coordinator, 'isAutoResumeAttemptCurrent');
     const sid = 'startup-admission';
@@ -15035,7 +15037,7 @@ describe('Bot subscription startup admission', () => {
         return { accepted: true as const };
       }),
     };
-    const failure = new Error('[SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset\nresetAtMs=9000000');
+    const failure = new Error(routed?.failure ?? '[SUBSCRIPTION_ACCOUNT_LIMITED] waiting for reset\nresetAtMs=9000000');
     const bootstrap = vi.fn(async () => {
       if (!backup) throw opaque ? failure : new AgentStartupStoppedError(failure);
       return { session, didInjectOrcaInstructions: false, didInjectProjectContext: false };
@@ -15083,6 +15085,9 @@ describe('Bot subscription startup admission', () => {
         autoRetryLastError: (id, token) => h.coordinator.autoRetryLastError(id, token),
       }, interruptedTurnAutoResumeGuard: guard, autoResumeBookkeeping: book,
       botFallbackInputs, scheduledQuotaInputs, saveTurnStartedAtForDeferred: vi.fn(), beginSchedulerAutoResume: vi.fn(),
+      modelGroupInputs: {
+        get: opts => modelGroupOpts.has(opts) ? 'enabled' : undefined, isInterruptedTurnAutoResumeEnabled: () => true,
+      },
       getStableSessionForTurnBoundary: () => null,
       pendingContinuationOnlyAutoResumeRebuilds: new Map<Session, number>(),
       maybeApplySessionRuntimeFallback: fallback, pendingSessionRuntimeFallbackRebuilds: new Set<Session>(),
@@ -15096,6 +15101,7 @@ describe('Bot subscription startup admission', () => {
       agentKind: 'claude-code', model: 'claude-opus-5-5', workingDir: '/repo', planMode: true,
     } });
     if (bot) botFallbackInputs.add(item.createOpts);
+    if (routed) modelGroupOpts.add(item.createOpts);
     if (quota) {
       item.origin = { kind: 'scheduler', scheduleId: 'daily', scheduleName: 'Daily', runId: 'daily-run' };
       scheduledQuotaInputs.add(item.createOpts);
@@ -15177,6 +15183,36 @@ describe('Bot subscription startup admission', () => {
       expect(h.sendToAgent.mock.calls[1][3].persistUserMessage).toMatchObject({ clientId: 'original' });
       expect(h.sendToAgent.mock.calls[1][2]).toMatchObject({ planMode: true });
       expect(h.sendToAgent.mock.calls[1][1]).toMatchObject({ content: 'original task' });
+      expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: null, pendingQueue: [] });
+    } finally { vi.useRealTimers(); }
+  });
+
+  // model-groups.md §4.4, unit (2026-11-29 user report): a routed task whose source was refused at startup because
+  // its subscription account must sign in again stayed on the error and never switched. The startup failure reached
+  // the route as the host code LAZY_CREATE_FAILED / REHYDRATE_FAILED, which the route took for a local failure.
+  // Real transaction + coordinator + hooks + guard; only bootstrap and route application are injected.
+  it.each([false, true])('switches a routed task to the next source when its account must sign in again at startup (rehydrate=%s)', async rehydrate => {
+    vi.useFakeTimers();
+    try {
+      const h = startupHarness(false, true, rehydrate, false,
+        { failure: '[SUBSCRIPTION_ACCOUNT_LOGIN_REQUIRED] The plugin engine account requires login' });
+      h.coordinator.enqueue(h.sid, h.item);
+      await flush();
+      await h.sendToAgent.mock.results[0].value;
+      await flush();
+      await expect(h.sendToAgent.mock.results[0].value).resolves.toMatchObject({
+        code: rehydrate ? 'REHYDRATE_FAILED' : 'LAZY_CREATE_FAILED',
+      });
+      expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: null, autoResumePending: { attempt: 1 } });
+      expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
+      // A source problem switches at once, without the auto-resume backoff.
+      await vi.advanceTimersByTimeAsync(0);
+      await flush();
+      expect(h.fallback).toHaveBeenCalledWith(h.sid, 1, expect.any(Number), true, expect.any(Function),
+        expect.objectContaining({ retrySameSource: false, accountUnavailable: true }));
+      expect(h.session.send).toHaveBeenCalledOnce();
+      expect(h.sendToAgent.mock.calls[1][3].persistUserMessage).toMatchObject({ clientId: 'original' });
+      expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
       expect(h.coordinator.getProjection(h.sid)).toMatchObject({ error: null, pendingQueue: [] });
     } finally { vi.useRealTimers(); }
   });
