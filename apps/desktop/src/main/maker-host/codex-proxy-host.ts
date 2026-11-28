@@ -2348,7 +2348,11 @@ async function omitUnreadableToolJpegs(body: Record<string, unknown>, candidates
   for (const { index, partIndex, data } of candidates) {
     try {
       // stats() consumes the pixel stream; metadata() only reads the header.
-      await sharp(Buffer.from(data, 'base64'), { failOn: 'warning' }).stats();
+      const bytes = Buffer.from(data, 'base64');
+      if (bytes.toString('base64') !== data || bytes[0] !== 0xff || bytes[1] !== 0xd8) {
+        throw new Error('Invalid JPEG data URL');
+      }
+      await sharp(bytes, { failOn: 'warning' }).stats();
     } catch {
       const item = input[index] as Record<string, unknown> & { output: unknown[] };
       const output = [...item.output];

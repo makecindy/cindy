@@ -23,7 +23,7 @@ import {
   authorizeSharedTaskHistory, authorizeSharedTaskExecutor, releaseSharedTaskAuthorization,
 } from '../remote-agent/controller/providerShareTaskLocation.js';
 import { getDbClient } from '../localDb/client/current';
-import { isDbTransportOutcomeUnknown } from '../localDb/client/DbTransport.js';
+import { DB_TRANSPORT_NOT_SENT, isDbTransportOutcomeUnknown } from '../localDb/client/DbTransport.js';
 import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
 import { computeForkSourceMessagesDigest } from '../localDb/forkRecoverySnapshot.js';
@@ -1390,6 +1390,10 @@ export async function forkSessionAtMessage(
         break;
       } catch (err) {
         if (!isDbTransportOutcomeUnknown(err)) {
+          if (attempt === 0 && err instanceof Error && 'code' in err && err.code === DB_TRANSPORT_NOT_SENT) {
+            await assertTaskActionCurrent();
+            continue;
+          }
           if (inheritedBudget !== null) pruneSessionContextWindowBudget(newSessionId);
           throw err;
         }
@@ -1408,6 +1412,11 @@ export async function forkSessionAtMessage(
     }
   } catch (err) {
     log.warn('fork: local persistence failed to confirm child', { sourceSessionId, newSessionId, newSdkSessionId });
+    if (newSdkSessionId && err instanceof Error) {
+      const recovery = new Error(`${err.message} (fork session: ${newSessionId}, native session: ${newSdkSessionId})`, { cause: err });
+      if ('code' in err) Object.assign(recovery, { code: err.code });
+      throw recovery;
+    }
     throw err;
   }
 

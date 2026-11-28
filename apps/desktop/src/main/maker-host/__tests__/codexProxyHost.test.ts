@@ -7292,14 +7292,16 @@ describe('codex proxy host', () => {
       const sharp = (await import('sharp')).default;
       const jpeg = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).jpeg().toBuffer();
       const valid = { type: 'input_image', image_url: 'data:image/jpeg;base64,' + jpeg.toString('base64') };
-      const unreadable = { type: 'input_image', image_url: 'data:image/jpeg;base64,AA==' };
+      const unreadable = { type: 'input_image', image_url: 'data:image/jpeg;base64,/9g=' };
       const text = { type: 'input_text', text: 'tool text' };
-      const mixed = { ...output, output: [valid, unreadable, text] };
+      const invalidEncoding = { ...valid, image_url: valid.image_url + '!' };
+      const mixed = { ...output, output: [valid, unreadable, text, invalidEncoding] };
       const next = { type: 'message', role: 'user', content: 'continue' };
       current = { model, input: [call, mixed, next] };
       for (const transform of transforms) current = await transform(current, ctx) ?? current;
       expect(current).toHaveProperty('input', [call, { ...mixed, output: [valid,
-        { type: 'input_text', text: expect.stringContaining('could not be decoded') }, text] }, next]);
+        { type: 'input_text', text: expect.stringContaining('could not be decoded') }, text,
+        { type: 'input_text', text: expect.stringContaining('could not be decoded') }] }, next]);
       expect(mixed.output[1]).toBe(unreadable);
     } finally {
       host.unregister('session-deepseek-replay');
