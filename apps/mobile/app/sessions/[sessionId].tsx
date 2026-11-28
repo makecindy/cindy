@@ -8045,6 +8045,8 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
         disabledStyle={voiceProcessingIndicator.stopping && !sending ? null : undefined}
         delayLongPress={320}
         hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+        // Android retains the original touch target across the recording pill transition.
+        pointerEvents={Platform.OS === 'android' ? 'box-only' : undefined}
         onPressIn={handleVoiceButtonPressIn}
         onLongPress={() => {
           voiceLongPressActiveRef.current = true;
@@ -14153,6 +14155,7 @@ interface RouteActionButtonProps {
   pressInFallback?: boolean;
   /** responder 被系统/滚动终止时的回调(正常松手不触发);语音按钮用它撤销按下即录。 */
   onTouchCancel?: PressableProps['onTouchCancel'];
+  pointerEvents?: PressableProps['pointerEvents'];
   pressedStyle?: StyleProp<ViewStyle>;
   style?: StyleProp<ViewStyle>;
   testID?: string;
@@ -14176,6 +14179,7 @@ const RouteActionButton = forwardRef<ViewInstance, RouteActionButtonProps>(funct
   onPressOut,
   onResponderMove,
   onTouchCancel,
+  pointerEvents,
   pressInFallback = false,
   pressedStyle,
   style,
@@ -14229,6 +14233,7 @@ const RouteActionButton = forwardRef<ViewInstance, RouteActionButtonProps>(funct
       onPressOut={interactionDisabled ? undefined : onPressOut}
       onResponderMove={interactionDisabled ? undefined : onResponderMove}
       onTouchCancel={interactionDisabled ? undefined : onTouchCancel}
+      pointerEvents={pointerEvents}
       style={({ pressed }) => [
         style,
         pressed && resolvedPressedStyle,
