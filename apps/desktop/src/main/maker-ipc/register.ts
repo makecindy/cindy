@@ -22664,7 +22664,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         sendTrace?.finish('known');
         return inputCoordinator.getProjection(sid);
       }
-      const materialized = await materializeQueuedOssAttachmentsDeferred(sid, parsed);
+      const materialized = await materializeQueuedOssAttachmentsDeferred(sid, parsed, {
+        reportMissingSource: !deviceLinkInvoke,
+      });
       const attachmentOwnerId = registerQueuedAttachmentOwnership(
         sid,
         parsed.clientId,

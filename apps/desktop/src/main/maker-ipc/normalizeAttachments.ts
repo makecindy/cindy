@@ -29,7 +29,7 @@ import { extractChatFolder } from '../file-browser/chat-folder-transfer.js';
 import { createLogger } from '../logger.js';
 import { LEGACY_ATTACH_OSS_SCHEME, type AttachmentIntegrity, type AttachmentOssRef } from '../../shared/attachmentOssRef.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-import { isDangerousAttachmentName } from '../../shared/attachmentSafety.js';
+import { isDangerousAttachmentName, safeAttachmentDisplayName } from '../../shared/attachmentSafety.js';
 import { readReviewRunOwner, type ReviewRunOwner } from '../../shared/reviewRun.js';
 import {
   reviewRunOwnerStatus,
@@ -676,6 +676,7 @@ async function materializeQueuedOssAttachmentsInternal(
   sessionId: string,
   item: unknown,
   replay?: typeof ACCEPTED_ATTACHMENT_REPLAY,
+  reportMissingSource = false,
 ): Promise<{
   item: unknown;
   cleanupAfterAcceptance?: () => void;
@@ -699,6 +700,9 @@ async function materializeQueuedOssAttachmentsInternal(
       if (!source || (typeof source === 'string' && source.startsWith('clipboard://'))) {
         if (!file.base64) {
           log.warn('queued attachment has no usable source');
+          if (reportMissingSource) {
+            throwIpcError('ATTACHMENT_SOURCE_UNAVAILABLE', safeAttachmentDisplayName(file.name) ?? '');
+          }
           rejectAttachmentTransfer();
         }
         continue;
@@ -715,6 +719,10 @@ async function materializeQueuedOssAttachmentsInternal(
         // Preflight keeps a cleaned image in place. Final normalization owns omission and logging.
         await isAttachmentReadable(cached?.absPath ?? source, replay, cachedImage);
       } catch (error) {
+        if (reportMissingSource && !file.base64 && (error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+          log.warn('queued attachment source no longer exists');
+          throwIpcError('ATTACHMENT_SOURCE_UNAVAILABLE', safeAttachmentDisplayName(file.name) ?? '');
+        }
         log.warn('queued attachment path unavailable', { error: String(error) });
         rejectAttachmentTransfer(error);
       }
@@ -978,6 +986,7 @@ async function materializeQueuedOssAttachmentsInternal(
 async function materializeQueuedOssAttachmentsDeferred(
   sessionId: string,
   item: unknown,
+  options?: { reportMissingSource?: boolean },
 ): Promise<{
   item: unknown;
   cleanupAfterAcceptance?: () => void;
@@ -985,7 +994,7 @@ async function materializeQueuedOssAttachmentsDeferred(
   cleanupLocalMaterialization?: () => Promise<void>;
   materializedParts?: MaterializedAttachmentPart[];
 }> {
-  return materializeQueuedOssAttachmentsInternal(sessionId, item);
+  return materializeQueuedOssAttachmentsInternal(sessionId, item, undefined, options?.reportMissingSource);
 }
 
 /**
