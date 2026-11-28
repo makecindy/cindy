@@ -271,6 +271,7 @@ import {
 } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, readAutoReviewUserText, restoreAutoReviewSteerIntent, restoreAutoReviewUserIntent } from './autoReviewUserIntent.js';
 import { redactEventForRenderer } from './rendererEventRedaction.js';
+import { getPluginEngineHandoffWindow } from '../maker-host/pluginEngineModelCache.js';
 import { listPluginEngineViews, pluginEngineDescriptors, pluginEngineModelsOf, pluginEngineSettingsOf, registerPluginEnginesIpc } from './pluginEnginesIpc.js';
 import { pluginEngineRemoteUse, setPluginEngineRemoteUse } from '../maker-host/pluginEngineRemoteUse.js';
 import { onPluginEnginePrefsChanged, readPluginEnginePrefs, updatePluginEnginePrefs } from '../maker-host/plugin-engine-prefs-store.js';
@@ -378,7 +379,7 @@ import {
 } from '../appSessionState.js';
 import { touchRecentWorkdir } from '../localDb/ipc/recentWorkdirs.js';
 import { createRemoteSessionOpener, createRemoteSessionExecutionResolver } from './remoteSessionCreation.js';
-import { projectForNewTask, registeredTaskProject, listVisibleRegisteredProjectPaths } from '../mcp-integrations/projectManagementCore.js';
+import { projectForNewTask, registeredTaskProject, validateGroupProjectDir, listVisibleRegisteredProjectPaths } from '../mcp-integrations/projectManagementCore.js';
 import { teammateWorkspaceDir } from './botProjectMemory.js';
 import { resolveSessionProject, listProjects } from '../mcp-integrations/projectManagement.js';
 import { isRetainableProjectSession } from '../../shared/sessionSource.js';
@@ -9387,8 +9388,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
    * 不归组管时原样返回 null。
    */
   async function applyProviderGroupAssignment(o: CreateOpts): Promise<ProviderGroupStartContext | null> {
-    // Plugin engines run on this computer with their own models; provider groups do not apply.
-    if (!providerGroupService || !o.id || o.remoteHostId || o.agentKind === 'acp') return null;
+    // Plugin engines do not belong to built-in provider groups. Clear any stale binding
+    // (for example, left over from an earlier version before switch-time cleanup) before
+    // starting so remote opens and status views never treat the task as group-assigned.
+    if (o.agentKind === 'acp') {
+      if (o.id && !o.remoteHostId && readProviderGroupBinding(o.id)) {
+        await writeProviderGroupBinding(o.id, null).catch((error) => {
+          log.warn('provider group: failed to clear stale binding before plugin engine start', {
+            sessionId: o.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+      return null;
+    }
+    if (!providerGroupService || !o.id || o.remoteHostId) return null;
     if (typeof o.model !== 'string' || !o.model) return null;
     // 本机没有建组、任务不指向同账号另一台电脑(那台可能建了组)、也没有归组时不读数据库，
     // 启动路径与没有这个功能时完全一致。
@@ -11107,6 +11121,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       },
       broadcastSessionCreated,
     }),
+    captureOwner: () => {
+      const owner = getCurrentDbClientSnapshot();
+      return () => { if (getCurrentDbClientSnapshot() !== owner) throwIpcError('PRECONDITION_FAILED', 'Worker account changed'); };
+    },
+    liveAgentDeviceId: sessionId => maker.getSession(sessionId)?.agentDeviceId,
+    closeRuntime: async (sessionId) => {
+      const session = maker.getSession(sessionId);
+      resetAutomaticRecoveryForExplicitStop(sessionId);
+      const results = await Promise.allSettled([
+        pauseGoalBeforeExplicitStop(sessionId),
+        withRehydrateCloseSuppressed(sessionId, async () => {
+          if (session) await maker.closeSessionIfCurrent(session);
+        }),
+      ]);
+      for (const result of results) {
+        if (result.status === 'rejected') throw result.reason;
+      }
+    },
     writeRemoteLead: writeOrcaRemoteLead,
     withSessionLock: withSendToSessionLock,
     now: Date.now,
@@ -11962,6 +11994,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readOwnerGeneration: () => getActiveAppSession().generation,
     resolveHandoffWindow: ({ sessionId, agent, model, providerId, agentDeviceId }) =>
       resolveDesktopHandoffWindow(sessionId, { agentKind: agent, model, providerId, agentDeviceId }),
+    resolveLocalPluginHandoffWindow: (providerId, modelId) => getPluginEngineHandoffWindow(providerId, modelId),
     listCompanionSessionIds: async (sessionId) => {
       const row = await readContextRecoverySession(sessionId);
       if (row?.botRole !== 'canonical') return undefined;
@@ -11976,6 +12009,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 换到供应商组那一项时由组选一台能用的电脑(provider-groups.md §6)。
     resolveProviderGroupTarget: (sessionId, target) =>
       providerGroupService ? providerGroupService.resolveSwitchTarget(sessionId, target) : Promise.resolve(null),
+    clearProviderGroupBinding: async (sessionId) => {
+      if (readProviderGroupBinding(sessionId)) {
+        await writeProviderGroupBinding(sessionId, null);
+      }
+    },
     withSessionLock: withSendToSessionLock,
     canSwitchCompletedAutomationSession: async (sessionId, returningToBuiltin) => {
       if (!returningToBuiltin) {
@@ -14355,16 +14393,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     hasPendingInteraction: (sessionId) => hasPendingAgentInteractionForSession(sessionId),
     decidePlan: createBotGroupPlanDecider((prompt, opts) => requestUtilityText(maker, prompt, { ...opts, source: 'group-planning' })),
     workDir: botGroupWorkDir,
-    validateProjectDir: async (dir) => {
-      try {
-        const checked = await registeredTaskProject(dir);
-        return checked
-          ? { ok: true as const, dir: checked }
-          : { ok: false as const, message: '这个文件夹不能用作项目文件夹' };
-      } catch {
-        return { ok: false as const, message: '项目文件夹不存在' };
-      }
-    },
+    validateProjectDir: validateGroupProjectDir,
     // The group's Cindy (bot-group-chat.md §9): one ordinary visible task per group, opened
     // like a new task of this user's (new-task model and permission).
     ensureGroupAssistantSession: async ({ sessionId, title, projectDir }) => {
@@ -22499,7 +22528,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return {
       ...inputCoordinator.getProjection(sid),
       inputDeliveryVersion: 1,
-      ...(deliveryReceipts ? { deliveryReceipts } : {}),
+      ...(deliveryClientIds ? { deliveryReceipts, dispatchedInput: inputCoordinator.getDispatchedInput(sid, deliveryClientIds) } : {}),
     };
   });
 

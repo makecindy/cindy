@@ -5208,7 +5208,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (i.organizerBotId) await register('foreground');
       const s = await groupSnapshot(i.groupId);
       let projectDir = i.projectDir;
-      if (projectDir) { const checked = await deps.validateProjectDir?.(projectDir); if (!checked?.ok) throw new Error('INVALID_DIRECTORY'); projectDir = checked.dir; }
+      if (projectDir) {
+        const checked = await deps.validateProjectDir?.(projectDir);
+        if (!checked?.ok) {
+          if (checked?.errorCode === 'PROJECT_NOT_REGISTERED')
+            return { ok: false as const, errorCode: 'PROJECT_NOT_REGISTERED' as const, message: checked.message };
+          throw new Error('INVALID_DIRECTORY');
+        }
+        projectDir = checked.dir;
+      }
       const organizerId = i.organizerBotId ? actors.find(a => a.externalId === i.organizerBotId)?.id ?? id.parse(i.organizerBotId) : i.organizerBotId;
       if (i.allowMemberInvites !== undefined && !supportsMemberInvites) throw new Error('CHAT_UNAVAILABLE');
       if (i.allowMemberMentionAll !== undefined && !supportsMemberMentionAll) throw new Error('CHAT_UNAVAILABLE');

@@ -414,9 +414,11 @@ vi.mock('@/session/useBotGroupRemoteMedia', () => {
 });
 vi.mock('@/session/useHostTeammates', () => ({ useHostTeammates: (_host: unknown, _enabled: boolean, query = '') => { h.teammateQuery = query; return h.teammates; } }));
 vi.mock('@/session/useBotGroupChat', () => ({ useBotGroupChat: (...args: unknown[]) => { h.hookCalls(...args); return h.chat; } }));
-vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useBotGroupSettingsManagement: () => h.management ?? ({
-  group: undefined, editable: false, loading: false, reason: 'unavailable', act: vi.fn(), refresh: vi.fn(),
-}), useCloudGroupCandidates: () => ({ ...h.teammates, rows: h.cloudRows ?? h.teammates.rows.map(row => ({ id: row.item.ref.id, name: row.item.display.title, avatar: null })) }) }));
+vi.mock('@/session/useBotGroupSettingsManagement', () => ({ useBotGroupSettingsManagement: (source: unknown) => {
+  // `shown` is the group the sheet displays: the settings read, or the chat page's group without one.
+  const management = h.management ?? { group: undefined, editable: false, loading: false, reason: 'unavailable', act: vi.fn(), refresh: vi.fn() };
+  return { shown: management.group ?? source, ...management };
+}, useCloudGroupCandidates: () => ({ ...h.teammates, rows: h.cloudRows ?? h.teammates.rows.map(row => ({ id: row.item.ref.id, name: row.item.display.title, avatar: null })) }) }));
 
 vi.mock('@/hooks/useReduceMotion', () => ({ useReduceMotionEnabled: () => true }));
 vi.mock('@/session/listDisclosureTransition', () => ({ DisclosureItem: ({ children, testID }: any) => el('div', { 'data-testid': testID }, children) }));
@@ -2847,6 +2849,28 @@ describe('group settings', () => {
     await click('botGroup.settings.assistant');
     if (supported) expect(h.chat.act).toHaveBeenCalledWith('set-assistant', { assistant: false, expectedRevision: 5 });
     else expect(h.chat.act).not.toHaveBeenCalled();
+  });
+
+  // #13127 (unit): a phone talking to the chat service itself had no 「群里的 Cindy」 row at all.
+  // Review on #13593: the write carries the revision on screen, so a newer unseen one goes through conflict
+  // handling; when the settings cannot be read (`failed`), the chat page's known value stays, read-only.
+  it.each(['writable', 'read-only', 'failed'] as const)('switches the group Cindy directly only while the settings are writable (%s)', async mode => {
+    const data = group({ serverBacked: true, supportsSettingsManagement: true, revision: 5, supportsGroupAssistant: true, assistantEnabled: true });
+    data.members[0] = { ...data.members[0], actorId: 'human', actorKind: 'human', isSelf: true, isOwned: true, role: 'admin' };
+    h.chat.server = true;
+    const manage = vi.fn(async () => ({ effects: [] }));
+    const editable = mode === 'writable';
+    h.management = mode === 'failed' ? { editable: false, ready: false, loading: false, reason: 'unavailable', act: manage, refresh: vi.fn() }
+      : { group: data, editable, ready: true, loading: false, reason: editable ? null : 'permission', act: manage, refresh: vi.fn() };
+    await openSettings(data);
+    await click('botGroup.settings.manage');
+    const toggle = byId('botGroup.settings.assistant');
+    expect(toggle?.getAttribute('aria-checked')).toBe('true');
+    expect(toggle?.disabled).toBe(!editable);
+    await click('botGroup.settings.assistant');
+    if (editable) expect(manage).toHaveBeenCalledWith('set-assistant', { assistant: false, expectedRevision: 5 });
+    else expect(manage).not.toHaveBeenCalled();
+    expect(h.chat.act).not.toHaveBeenCalled();
   });
 
   // The computer ignores topic and description; renaming there must not send an empty 群简介 over the real one.

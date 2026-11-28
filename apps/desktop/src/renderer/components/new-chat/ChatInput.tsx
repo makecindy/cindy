@@ -235,6 +235,7 @@ import { pluginSuggestionComposerText } from '@/features/cc-agent/pluginHomeSugg
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useRemoteComposerGhosts } from '@/cindy-brain/useRemoteComposerGhosts';
 import { projectGhostComposerEntries, type GhostCommandSource } from '../../../shared/ghostComposer';
+import { MAX_SESSION_REFERENCES, reconcileSessionRefsForText } from '../../../shared/agentInputQueue';
 import {
   attachGhostMediaToSession,
   getGhostMediaHandoverFromDataTransfer,
@@ -5766,6 +5767,11 @@ export function ChatInput({
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
     () => {},
   );
+  const taskReferencesFit = useCallback((text: string) => {
+    if (reconcileSessionRefsForText(text, undefined).length <= MAX_SESSION_REFERENCES) return true;
+    toast.error(t('newChat.chatInput.tooManyTaskReferences', { max: MAX_SESSION_REFERENCES }));
+    return false;
+  }, [t]);
   const dispatchSend = useCallback(
     async (deliveryMode: MessageDeliveryMode = 'queue') => {
       if (!editor) return;
@@ -6210,6 +6216,7 @@ export function ChatInput({
           slashCommandRanges = rebaseInlineRangesAfterSlashCommandRewrite(slashCommandRanges, routedText, rewritten);
           routedText = rewritten;
         }
+        if (!taskReferencesFit(routedText)) return;
         let recentUsageMarked = false;
         const markRecentPluginUsage = () => {
           if (!usedGhost || recentUsageMarked || sourceRemoteGhosts) return;
@@ -6671,6 +6678,7 @@ export function ChatInput({
       navigate,
       planModeEntry,
       captureSendFocusForRestore,
+      taskReferencesFit,
       slashCommandsReady,
       mergedCommands,
     ],
@@ -6704,6 +6712,7 @@ export function ChatInput({
     const content = serializeEditorContent(editor);
     const completedAttachments = [...latestAttachmentsRef.current];
     if (content.text.trim().length === 0 && completedAttachments.length === 0) return;
+    if (!taskReferencesFit(content.text)) return;
 
     setSendDispatchInFlight(true);
     try {
@@ -6727,6 +6736,7 @@ export function ChatInput({
     sendDispatchInFlight,
     waitForFolders,
     folderTransfers.hasPending,
+    taskReferencesFit,
     t,
     voiceBusyOnCurrentComposer,
   ]);
