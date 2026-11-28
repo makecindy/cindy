@@ -20,8 +20,9 @@ export interface ReservedShortcutInput {
 /**
  * macOS 上不可占用的保留组合: 系统编辑惯例键 (⌘A/C/V/X/Z、⇧⌘Z、⌘,) +
  * 应用菜单原生 role 的 accelerator (⌘Q 退出、⌘H 隐藏、⌥⌘H 隐藏其他、
- * ⌘M 最小化、⌘W 关窗、⌘0/⌘=/⌘- 与 ⇧⌘= 缩放、⌃⌘F 全屏)。后者由系统在
+ * ⌘M 最小化、⌘W 关窗、⌘0 重置缩放、⌃⌘F 全屏)。后者由系统在
  * renderer 收到按键前分发, 绑定给应用快捷键会形同虚设甚至直接退出应用。
+ * ⌘=/⌘- 缩放改由 renderer 分发, 以便编辑器聚焦时局部调整字号。
  */
 export function isMacReservedShortcut(input: ReservedShortcutInput): boolean {
   const onlyCommand = input.meta && !input.ctrl && !input.alt && !input.shift;
@@ -41,13 +42,10 @@ export function isMacReservedShortcut(input: ReservedShortcutInput): boolean {
       'KeyM',
       'KeyW',
       'Digit0',
-      'Equal',
-      'Minus',
     ]).has(input.code);
   }
   if (commandShift) {
-    // ⇧⌘Z 重做; ⇧⌘= 即 ⌘+ (菜单 zoomIn role 的实际按键)
-    return input.code === 'KeyZ' || input.code === 'Equal';
+    return input.code === 'KeyZ';
   }
   if (commandAlt) {
     return input.code === 'KeyH'; // hideOthers
