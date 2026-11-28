@@ -1,3 +1,4 @@
+import path from 'node:path';
 /**
  * model-disable-store —— 「模型 / 供应商停用」override 的持久化(main 侧唯一真源)。
  *
@@ -28,6 +29,7 @@ import {
 import { desktopMakerLogger } from './logger-adapter.js';
 import { createOverrideSettingsFile, portableOverrideSettings } from './override-settings-file.js';
 import { ownerScopedPath as ownerScopedUserDataPath } from '../ownerContext.js';
+import { inspectSettingsJson, isSettingsRecord } from './inspect-settings-json.js';
 
 const log = desktopMakerLogger.child('model-disable-store');
 
@@ -108,6 +110,23 @@ const store = createOverrideSettingsFile<ModelAccessPrefs>({
   label: 'model-disable',
 });
 
+/** Inspection never invokes provider discovery, credentials or legacy repair. */
+export function inspectModelDisableOverrides(ownerRoot: string) {
+  return inspectSettingsJson(path.join(ownerRoot, 'model-disable-prefs.json'), (raw) => {
+    for (const key of ['disabledModels', 'disabledProviders']) {
+      const section = raw[key];
+      if (section === undefined) continue;
+      if (!isSettingsRecord(section) || Object.keys(section).length > MAX_ENTRIES_PER_SECTION ||
+        Object.entries(section).some(([id, value]) => !id || value !== true)) throw new Error('invalid disable overrides');
+    }
+    const value = normalize(raw);
+    for (const key of ['disabledModels', 'disabledProviders'] as const) {
+      if (isSettingsRecord(raw[key]) && Object.keys(raw[key]).length !== Object.keys(value[key]).length) throw new Error('unrepresentable disable key');
+    }
+    return value;
+  });
+}
+
 /** 当前停用 override 快照(注入 provider-service → buildRegistry)。 */
 export function readModelDisableOverrides(): ModelDisableOverrides {
   // 隐藏配置层级的文件也是正式契约:mtime 守卫让「直接手改文件」在下一次读取生效。
@@ -118,7 +137,11 @@ export function readModelDisableOverrides(): ModelDisableOverrides {
 /** Taking an account out must not re-enable models. Persist the complete override copy before
  * publishing its provider; unlike a best-effort batch toggle, a capacity failure aborts the move.
  */
-export function copyProviderDisableOverrides(sourceId: string, targetId: string): void {
+export function copyProviderDisableOverrides(
+  sourceId: string,
+  targetId: string,
+  remappedModel?: { source: string; target: string },
+): void {
   if (!sourceId || !targetId || sourceId === targetId) return;
   store.invalidateIfChanged();
   const current = store.read();
@@ -126,7 +149,10 @@ export function copyProviderDisableOverrides(sourceId: string, targetId: string)
   const disabledProviders = { ...current.disabledProviders };
   const prefix = `${sourceId}:`;
   for (const key of Object.keys(current.disabledModels)) {
-    if (key.startsWith(prefix)) disabledModels[modelDisableKey(targetId, key.slice(prefix.length))] = true;
+    if (!key.startsWith(prefix)) continue;
+    const modelId = key.slice(prefix.length);
+    const targetModelId = modelId === remappedModel?.source ? remappedModel.target : modelId;
+    disabledModels[modelDisableKey(targetId, targetModelId)] = true;
   }
   if (current.disabledProviders[sourceId]) disabledProviders[targetId] = true;
   // The split-out account inherits the picker choice too, or a hidden connection reappears.
@@ -332,3 +358,5 @@ export function clearProviderDisableOverrides(providerId: string): void {
 
 /** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
 export const modelDisablePortableSettings = portableOverrideSettings(store);
+/** Internal adapter; the native readers and this editor share persistence. */
+export function getHostModelAccessStore() { return store; }

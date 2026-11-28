@@ -310,15 +310,16 @@ describe('ssh_exec', () => {
     expect(payload).toMatchObject({ ok: true, exitCode: 127, stderr: 'not found\n' });
   });
 
-  it('wraps cwd with safe single-quote escaping', async () => {
+  it('quotes cwd and sends the shell closing delimiter after a trailing comment', async () => {
     const { pool, execCalls } = makeFakePool([snapshot({ id: 'web-1' })]);
     const { deps } = makeDeps(pool);
     await callParsed(makeRegistry(deps), 'ssh_exec', {
       host: 'web-1',
-      command: 'ls -la',
+      command: 'pwd # print working directory',
       cwd: `/srv/it's dir`,
     });
-    expect(execCalls[0].cmd).toBe(`cd '/srv/it'\\''s dir' && (ls -la)`);
+    // This is the command sent to the remote shell, where # consumes the rest of its line.
+    expect(execCalls[0].cmd).toBe(`cd '/srv/it'\\''s dir' && (pwd # print working directory\n)`);
   });
 
   it('truncates oversized stdout head+tail and sets stdoutTruncated', async () => {

@@ -561,6 +561,64 @@ describe('prepareCodexBrowserCompanion', () => {
     });
   });
 
+  // 测试价值：依据 macOS 未装 ChatGPT.app 时重复 WARN 1550 次的日志风暴事故；现有用例仅测签名失败或无配置，
+  // 未覆盖 ~/.codex/config.toml 残留已卸载 ChatGPT.app 路径时先跑 codesign 误判为 provider_untrusted 的缺口；
+  // 失效后果是每次启动都派生 codesign 并把「未安装」当安全不可信刷屏 WARN；生产入口 prepareCodexBrowserCompanion；
+  // 最小失败输入为指向不存在 ChatGPT.app 的 node_repl 配置；tier: unit。
+  it('classifies a missing ChatGPT.app bundle as provider_not_installed without running codesign', async () => {
+    const { appBundle, codexHome, homeDir } = await setup();
+    await fs.rm(appBundle, { recursive: true, force: true });
+    const verifyMacBundle = vi.fn(async () => true);
+
+    const companion = await prepareCodexBrowserCompanion({
+      codexHome,
+      homeDir,
+      platform: 'darwin',
+      arch: 'arm64',
+      verifyMacBundle,
+    });
+
+    expect(companion).toMatchObject({
+      status: 'unavailable',
+      reason: 'provider_not_installed',
+    });
+    expect(verifyMacBundle).not.toHaveBeenCalled();
+    expect(resolveCodexBrowserCompanionSpawnConfig(companion)).toEqual({
+      codexBrowserUseAvailable: false,
+      extraArgs: [],
+    });
+  });
+
+  it('keeps non-ENOENT bundle access errors out of provider_not_installed so diagnostics continue', async () => {
+    const { appBundle, codexHome, homeDir } = await setup();
+    const accessSpy = vi.spyOn(fs, 'access').mockImplementationOnce(async () => {
+      throw Object.assign(new Error(`EACCES: permission denied, access '${appBundle}'`), {
+        code: 'EACCES',
+      });
+    });
+    const verifyMacBundle = vi.fn(async () => false);
+    try {
+      const companion = await prepareCodexBrowserCompanion({
+        codexHome,
+        homeDir,
+        platform: 'darwin',
+        arch: 'arm64',
+        verifyMacBundle,
+      });
+
+      expect(verifyMacBundle).toHaveBeenCalledWith(appBundle);
+      expect(companion).toMatchObject({
+        status: 'unavailable',
+        reason: 'provider_untrusted',
+      });
+      if (companion.status === 'unavailable') {
+        expect(companion.detail).toContain('EACCES');
+      }
+    } finally {
+      accessSpy.mockRestore();
+    }
+  });
+
   it.skipIf(process.platform === 'win32')('probes Chrome through the clean node_repl transport at session time', async () => {
     const fakeNodeRepl = [
       `#!${process.execPath}`,

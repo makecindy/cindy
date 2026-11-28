@@ -1,5 +1,29 @@
 /** Data-only, additive MCP Apps contract shared by Desktop and Mobile. */
 export const MCP_APPS_INVOKE = 'maker:mcp-apps:v1';
+/** Local renderer-only event for a page resource added to the task composer. */
+export const MCP_APP_COMPOSER_ATTACHMENT_EVENT = 'maker:mcp-apps:composer-attachment';
+export type McpAppComposerAttachment = {
+  sessionId: string;
+  viewId: string;
+  requestId: string;
+  resourceKey: string;
+  kind: 'contains';
+} | {
+  sessionId: string;
+  viewId: string;
+  attachment: {
+    id: string;
+    mcpAppResourceKey: string;
+    url?: string;
+    originalName?: string;
+    name: string;
+    path: string;
+    ext: string;
+    size: number;
+    category: 'image' | 'pdf' | 'text';
+    mimeType: string;
+  };
+}
 export const MCP_APP_CARD = 'mcp-app';
 export const MCP_APP_LINK_GRANT_MS = 30_000;
 /** Public Host-owned display provenance; never a permission or publisher identity. */
@@ -95,7 +119,10 @@ export interface McpAppDocument {
   /** Optional hash reference, only in response to advertised SDK bytes. */
   sdkRef?: string;
   /** Executor-owned SDK bytes for this View; absent on older hosts. Never persisted in cards. */
-  sdk?: { source: string; addons?: { 'cindy/view-state'?: { source: string; reactSource: string } } };
+  sdk?: { source: string; addons?: {
+    'cindy/view-state'?: { source: string; reactSource: string };
+    'cindy/composer-attachment'?: { source: string };
+  } };
   viewId: string;
   transport?: undefined;
   html: string;
@@ -113,6 +140,7 @@ export interface McpAppDocument {
 export const HOST_APP_SDK_PATH = '/__cindy/sdk/ext-apps/app.js';
 export const CINDY_VIEW_STATE_SDK_PATH = '/__cindy/sdk/cindy/view-state.js';
 export const CINDY_VIEW_STATE_REACT_SDK_PATH = '/__cindy/sdk/cindy/view-state-react.js';
+export const CINDY_COMPOSER_ATTACHMENT_SDK_PATH = '/__cindy/sdk/cindy/composer-attachment.js';
 /** Desktop UI metadata only; credential-backed App content stays in Main. */
 export interface McpAppSandboxView {
   viewId: string;

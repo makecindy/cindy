@@ -62,12 +62,14 @@ export function useRunningTokenRateHistory(input: {
       Math.max(0, timestamp + RATE_SAMPLE_FRESH_MS - Date.now()));
     return () => clearTimeout(timer);
   }, [history.latestSampleAt, history.latestRate]);
-  const visibleHistory = history.latestSampleAt === undefined ||
-    Math.max(now, Date.now()) - history.latestSampleAt >= RATE_SAMPLE_FRESH_MS
-    ? { ...history, latestRate: null } : history;
-  return startedAt === null || history.startedAt === startedAt
-    ? visibleHistory
+  // The panel keeps the turn's last measured reading for as long as the turn is shown;
+  // only the status bar treats a reading as live, and only for a minute after it was taken.
+  const current = startedAt === null || history.startedAt === startedAt
+    ? history
     : { ...history, startedAt, baseline: null, latestRate: null };
+  const latestRateFresh = current.latestRate !== null && history.latestSampleAt !== undefined &&
+    Math.max(now, Date.now()) - history.latestSampleAt < RATE_SAMPLE_FRESH_MS;
+  return { ...current, latestRateFresh };
 }
 
 export function RunningTokenRatePopover({

@@ -20,7 +20,8 @@ import type {
   StartSessionOptions,
   UserMessage,
 } from '@cindy/maker-core';
-import { AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Session } from '@cindy/maker-core';
+import { AcpAgent, type AcpLineTransport, AgentStartupStoppedError, LOCAL_AGENT_CLIENT, MAIN_OWNED_SEND_CONTEXT, Maker, Session,
+  type CreateSessionOptions, type SessionMeta } from '@cindy/maker-core';
 import { createServer } from 'node:http';
 import { isProviderSharePeer, providerShareHostPeer } from '@cindy/device-link';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,13 +38,22 @@ import { createNativeHistoryTransfer, NATIVE_HISTORY_CHECKPOINT } from '../nativ
 import { hostedAttachmentPreservation } from '../../maker-host/attachmentPreservation';
 import { hostedStartOptions } from '../host/service';
 import { createProviderGroupService, type ProviderGroupServiceDeps } from '../../provider-group/service';
-import { ProviderGroupUsageLimitError } from '../../provider-group/failurePolicy';
+import { decideProviderGroupFailure, providerGroupFailureSignals, ProviderGroupUsageLimitError,
+  PROVIDER_GROUP_SUPERSEDED_ERROR } from '../../provider-group/failurePolicy';
 import { createProviderGroupGuestSwitch } from '../../provider-group/guestSwitch';
-import { relocateForFreshStart } from '../../maker-ipc/sessionAgentSwitchHandler';
+import { createPendingAgentSwitchRegistry, registerMakerSessionAgentSwitchHandler, relocateForFreshStart,
+  type MakerSessionAgentSwitchHandlerDeps } from '../../maker-ipc/sessionAgentSwitchHandler';
+import { withSendToSessionLock } from '../../maker-ipc/sendToSessionLock';
+import { AgentInputCoordinator } from '../../maker-ipc/agent-input-coordinator';
+import { IpcHarness } from '../../maker-ipc/__tests__/helpers/ipcHarness';
+import { MAKER_INVOKE } from '../../maker-ipc/channels';
+import { applyLeadVendorOptions, createAcpLeadBriefingHandoff } from '../../maker-ipc/orcaSessionStartOptions';
 import { createGroupFastPolicyStore } from '../../provider-group/fastPolicyStore';
+import { sharedTurnReceipt } from '../sharedTurnValue.js';
 import { PROVIDER_SHARE_CREDENTIAL_SESSION_APPROVAL } from '../../../shared/providerShareCredentialConsent';
 import { DEFAULT_REMOTE_AGENT_LIMITS, type RemoteAgentLimits } from '../../../shared/remoteAgentLimits';
 import { installDesktopInteractionHandler } from '../../maker-ipc/interactionRouter';
+import { sharedTaskRecoveryError } from '../../../shared/sharedTaskRecovery.js';
 import { authorizeSharedTaskExecutor, authorizeSharedTaskHistory, liveSharedTaskTarget,
   forgetSharedTaskAuthorization } from '../controller/providerShareTaskLocation';
 vi.mock('../../clientEndpointsService.js', () => ({ getClientEndpoint: () => 'https://continuity.test.invalid' }));
@@ -73,6 +83,7 @@ vi.mock('../../device-link/index.js', () => ({
   remoteBackgroundInvoke: (...args: unknown[]) => historyInvoke(...args),
   openRemoteLink: (...args: unknown[]) => historyOpenLink(...args),
   getRemoteLinkCloseEpoch: (peer: string) => historyCloseEpoch(peer),
+  isPeerDeliveringBusinessTraffic: vi.fn(() => false),
   onRemoteLinkClosed: (peer: string, listener: () => void) => {
     const notify = (closedPeer: string) => { if (closedPeer === peer) listener(); };
     historyCloseListeners.add(notify);
@@ -1679,6 +1690,34 @@ describe('remote agent round trip', () => {
     } finally { await host.dispose(); }
   });
 
+  // 跨电脑执行时 MCP 桥由本机准备：V2 伙伴的 MCP 白名单只作快照(目录读不出时为空)，不能把普通任务的 MCP 过滤掉；
+  // 隔离运行的伙伴仍按白名单。
+  it('prepares the ordinary MCP bridge for V2 teammates on another computer', async () => {
+    const host = createHost();
+    const invoke = makeDeps(host).invoke;
+    const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    try {
+      for (const [name, botRuntimeProfile, filtered] of [
+        ['v2-project', teammateProfile(true), false],
+        ['isolated-teammate', teammateProfile(false), true],
+      ] as const) {
+        const prepareMcpBridge = vi.fn(async () => null);
+        const start = createDeviceAgentStarter({
+          remoteInvoke: async (_deviceId, _channel, args) => ({ ok: true, result: await invoke(args) }),
+          rgPath: () => RG, mcpProviders: () => [], prepareMcpBridge, makerMemory: () => undefined,
+          captureKnownFileBefore: async () => {}, noteOpaqueTurnChange: () => {}, logger: log,
+        });
+        const handle = await start({ agentKind: 'claude-code', deviceId: 'agent-computer', options: {
+          sessionId: `mcp-${name}`, workingDir: project, model: 'm', botRuntimeProfile,
+        } });
+        expect(prepareMcpBridge, name).toHaveBeenCalledTimes(1);
+        const ctx = (prepareMcpBridge.mock.calls[0] as unknown[])[2] as { botMcpPolicy?: unknown };
+        expect(ctx.botMcpPolicy, name).toEqual(filtered ? botRuntimeProfile.mcpPolicy : undefined);
+        await handle.close({ reason: 'navigation' });
+      }
+    } finally { await host.dispose(); }
+  });
+
   // 内置与插件带的 Skill 以任务所在电脑为准：本机停用的不带；对方的 Claude Code 把带来的挂成插件(保持 cindy:pr)，
   // 不在项目 Skill 里再出现一次。
   it('mounts this computer\'s enabled managed skills as plugins on the agent computer', async () => {
@@ -1884,6 +1923,192 @@ describe('a plugin engine of another computer', () => {
     host.dispose();
   });
 
+  it('propagates runtime capability updates (e.g. steering revocation) to the controller handle', async () => {
+    const listeners = new Set<(capabilities: NonNullable<AgentSessionHandle['negotiatedCapabilities']>) => void>();
+    let currentCapabilities = {
+      ...ENGINE_CAPABILITIES,
+      sameTurnSteer: { supported: true },
+    } as unknown as NonNullable<AgentSessionHandle['negotiatedCapabilities']>;
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input),
+      pluginEngines: {
+        isOffered: (providerId: string) => providerId === ENGINE,
+        start: async (input) => ({
+          ...fakeHostedAgent({ ...input, kind: 'pi' }),
+          agentKind: 'acp' as const,
+          get negotiatedCapabilities() {
+            return currentCapabilities;
+          },
+          onCapabilitiesChange(listener) {
+            listeners.add(listener);
+            return () => { listeners.delete(listener); };
+          },
+        }),
+      },
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const handle = await start(host);
+    expect(handle.negotiatedCapabilities?.sameTurnSteer.supported).toBe(true);
+    const observed: boolean[] = [];
+    const unsubscribe = handle.onCapabilitiesChange?.((caps) => observed.push(caps.sameTurnSteer.supported));
+
+    currentCapabilities = {
+      ...ENGINE_CAPABILITIES,
+      sameTurnSteer: { supported: false, reason: 'sdk-missing' },
+    } as unknown as NonNullable<AgentSessionHandle['negotiatedCapabilities']>;
+    for (const listener of listeners) listener(currentCapabilities);
+
+    await vi.waitFor(() => {
+      expect(handle.negotiatedCapabilities?.sameTurnSteer.supported).toBe(false);
+    });
+    expect(observed).toEqual([false]);
+    unsubscribe?.();
+
+    await handle.close({ reason: 'navigation' });
+    expect(listeners.size).toBe(0);
+    host.dispose();
+  });
+
+  // 回归测试：远端 ACP 引擎的 requiresRuntimeRecycleForExtraDirs 必须从宿主透传到控制端句柄，
+  // 以便控制端 applyDirectoryGrants 在协商原生 additionalDirectories 时照常回收重建，否则跳过无谓重启。
+  // 最小失败输入：宿主机返回 requiresRuntimeRecycleForExtraDirs=true / false 的 ACP 句柄并调用 setExtraDirs。tier: integration。
+  it.each([
+    { label: 'native additionalDirectories negotiated', recycle: true },
+    { label: 'no native additionalDirectories', recycle: false },
+  ])('propagates requiresRuntimeRecycleForExtraDirs ($label) across remote ACP host and controller', async ({ recycle }) => {
+    const hostExtraDirs: string[][] = [];
+    const host = createRemoteAgentHost({
+      isAgentAvailable: () => true,
+      startHosted: async (input) => fakeHostedAgent(input),
+      pluginEngines: {
+        isOffered: (providerId) => providerId === ENGINE,
+        start: async (input) => ({
+          ...fakeHostedAgent({ ...input, kind: 'pi' }),
+          agentKind: 'acp' as const,
+          negotiatedCapabilities: {
+            ...ENGINE_CAPABILITIES,
+            extraDirs: recycle ? { supported: true } : { supported: false, reason: 'not-implemented' },
+          } as unknown as AgentSessionHandle['negotiatedCapabilities'],
+          setExtraDirs: async (dirs) => {
+            hostExtraDirs.push([...dirs]);
+          },
+          requiresRuntimeRecycleForExtraDirs: () => recycle,
+        }),
+      },
+      isControllerAuthorized: () => true,
+      captureOwner: () => 'owner',
+      isOwnerCurrent: () => true,
+      runsRoot: hostRoot,
+    });
+    const handle = await start(host);
+    expect(handle.requiresRuntimeRecycleForExtraDirs?.()).toBe(recycle);
+    const refDir = path.join(root, 'ref-dir');
+    fs.mkdirSync(refDir, { recursive: true });
+    await handle.setExtraDirs?.([refDir], null);
+    expect(hostExtraDirs).toHaveLength(1);
+
+    await handle.close({ reason: 'navigation' });
+    host.dispose();
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：createDeviceAgentStarter ↔ createRemoteAgentHost 真实往返；此前归属供应商组的任务
+  //   切到远程插件引擎时，即使残留组绑定或换机凭证，也不应带 groupAssigned / groupSwitch 打开插件引擎，
+  //   避免被远端 runHost 以 [REMOTE_AGENT_UNSUPPORTED] 拒绝；同 starter 开内置引擎仍照常携带。
+  // - Bug／规则依据：2026-11-28 实机反馈（供应商组任务切到远程 Antigravity 报 LAZY_CREATE_FAILED:
+  //   [REMOTE_AGENT_UNSUPPORTED] plugin engines only run ordinary tasks of your own computers or direct shares）；
+  //   docs/dev-rules/acp-plugin-harness.md。
+  // - 现有覆盖缺口：本文件其余插件引擎用例直接调 startRemoteAgentSession，未经过 createDeviceAgentStarter
+  //   的 isGroupAssigned / groupSwitch 装配。
+  // - 最小失败输入：isGroupAssigned=()=>true 且带 groupSwitch 凭证时，通过 createDeviceAgentStarter 打开 'acp'。
+  // - tier：unit（进程内 fake Agent，与本 describe 其余往返用例同一隔离方式）。
+  it('omits stale provider-group assignment and switch flags when opening a remote plugin engine, while keeping them for built-in engines', async () => {
+    const { host, started } = createPluginEngineHost();
+    const openPayloads: Array<{ agentKind?: string; groupAssigned?: boolean; acceptsGroupSwitch?: boolean; groupSwitchToken?: string }> = [];
+    const starter = createDeviceAgentStarter({
+      remoteInvoke: async (_deviceId, _channel, args) => {
+        const req = JSON.parse(JSON.stringify(args[0])) as {
+          op?: string;
+          agentKind?: string;
+          payload?: { json?: { groupAssigned?: boolean; acceptsGroupSwitch?: boolean; groupSwitchToken?: string } };
+        };
+        if (req.op === 'open') {
+          openPayloads.push({
+            agentKind: req.agentKind,
+            groupAssigned: req.payload?.json?.groupAssigned,
+            acceptsGroupSwitch: req.payload?.json?.acceptsGroupSwitch,
+            groupSwitchToken: req.payload?.json?.groupSwitchToken,
+          });
+        }
+        try {
+          const result = await host.handle(CONTROLLER, req);
+          return { ok: true, result: JSON.parse(JSON.stringify(result ?? null)) };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return { ok: false, error: { code: 'IPC_ERROR', message } };
+        }
+      },
+      rgPath: () => RG,
+      codexPath: () => 'fixture-never-spawned',
+      mcpProviders: () => [],
+      prepareMcpBridge: async () => ({
+        mcpBridge: { servers: [] },
+        disposeSessionCtx: async () => {},
+        closeSessionInstance: () => {},
+      }) as never,
+      makerMemory: () => undefined,
+      captureKnownFileBefore: async () => undefined,
+      noteOpaqueTurnChange() {},
+      isGroupAssigned: () => true,
+      groupSwitch: { takeForOpen: () => 'stale-group-switch-token', offer: vi.fn() },
+      logger: historyLogger,
+    });
+
+    const acpHandle = await starter({
+      agentKind: 'acp',
+      deviceId: 'studio-mac',
+      options: {
+        sessionId: 'stale-group-plugin-task',
+        workingDir: project,
+        model: 'default',
+        providerId: ENGINE,
+        permissionMode: 'default',
+      },
+    });
+    expect(acpHandle.agentKind).toBe('acp');
+    expect(started).toHaveLength(1);
+    expect(openPayloads[0]).toEqual({
+      agentKind: 'acp',
+      groupAssigned: undefined,
+      acceptsGroupSwitch: undefined,
+      groupSwitchToken: undefined,
+    });
+    await acpHandle.close({ reason: 'navigation' });
+
+    const builtinHandle = await starter({
+      agentKind: 'pi',
+      deviceId: 'studio-mac',
+      options: {
+        sessionId: 'still-group-builtin-task',
+        workingDir: project,
+        model: 'm',
+        permissionMode: 'default',
+      },
+    });
+    expect(openPayloads[1]).toEqual({
+      agentKind: 'pi',
+      groupAssigned: true,
+      acceptsGroupSwitch: true,
+      groupSwitchToken: 'stale-group-switch-token',
+    });
+    await builtinHandle.close({ reason: 'navigation' });
+    host.dispose();
+  });
+
   it.each([
     ['the engine is not opened for remote use', { offered: () => false }, /REMOTE_AGENT_PROVIDER_NOT_ALLOWED/],
     ['the other computer cannot run plugin engines for others', { supported: false }, /REMOTE_AGENT_PEER_TOO_OLD/],
@@ -2027,6 +2252,49 @@ describe('a plugin engine of another computer', () => {
     await handle.close({ reason: 'navigation' });
     host.dispose();
   });
+
+  // 测试价值
+  // - 生产入口与可观察结果：startRemoteAgentSession('acp') 传 ensureWorktreeReady；验证远程 ACP 的
+  //   open/session/new 与 send(session/prompt) 不被未完成的后台 checkout 阻塞，直到远端执行首次工作树读取才等待。
+  // - 规则依据：远程 ACP 延迟 worktree 全量检出到首次 cindy_exec/executor 工具调用前。
+  // - 现有覆盖缺口：上述往返用例未验证 ensureWorktreeReady 在 open/send 与首次工具访问之间的时序。
+  // - 最小失败输入：ensureWorktreeReady 在 open/send 期间保持 pending，只有远端发起工作树读取后才 resolve。
+  // - tier：unit（进程内 fake ACP host + 真实 startRemoteAgentSession 往返）。
+  it('starts remote ACP without waiting for background checkout and gates only the first worktree tool call', async () => {
+    let releaseCheckout!: () => void;
+    let gateEntered!: () => void;
+    const checkoutReady = new Promise<void>((resolve) => { releaseCheckout = resolve; });
+    const enteredGate = new Promise<void>((resolve) => { gateEntered = resolve; });
+    const ensureWorktreeReady = vi.fn(async () => {
+      gateEntered();
+      await checkoutReady;
+    });
+    const { host } = createPluginEngineHost();
+    const handle = await startRemoteAgentSession('acp', {
+      sessionId: 'plugin-deferred-wt', workingDir: project, model: 'default', providerId: ENGINE, permissionMode: 'default',
+    }, { ...makeDeps(host), ensureWorktreeReady });
+    // Session open (session/new) completed while checkout is still running.
+    expect(ensureWorktreeReady).not.toHaveBeenCalled();
+
+    handle.setInteractionResolver(async (): Promise<InteractionDecision> => ({ kind: 'permission', behavior: 'allow' }));
+    const texts: string[] = [];
+    const reader = (async () => {
+      for await (const event of handle.events()) {
+        if (event.type === 'text') texts.push((event.data as { text: string }).text);
+        if (event.type === 'done') break;
+      }
+    })();
+    const sending = handle.send({ type: 'user', content: [{ type: 'text', text: 'hi' }] }, { messageUuid: 'deferred-1' });
+    await enteredGate;
+    expect(ensureWorktreeReady).toHaveBeenCalledWith('plugin-deferred-wt', expect.any(AbortSignal));
+    releaseCheckout();
+    await sending;
+    await reader;
+    expect(texts[0]).toBe('read:from-controller');
+
+    await handle.close({ reason: 'navigation' });
+    host.dispose();
+  });
 });
 
 // Unit: provider-sharing direct-execution lease boundary (runtime review F1/F2).
@@ -2046,6 +2314,7 @@ describe('shared startup lease budget', () => {
     const target = providerShareHostPeer('startup-budget', 'executor-m');
     const generation = '11111111-1111-4111-8111-111111111111';
     const calls: Array<{ device: string; op: string; method?: string; model?: string; callId?: string; sessionId?: string; generation?: string; runId?: string }> = [];
+    const wireCalls: Array<{ method?: string; args: unknown }> = [];
     const runs = new Map<string, Run>();
     const sessions = new Map<string, string>();
     const disposed: string[] = [];
@@ -2053,19 +2322,21 @@ describe('shared startup lease budget', () => {
     const pendingClose = deferred();
     const prepare = deferred();
     const allocation = deferred();
+    const capsReply = deferred();
     let allocations = 0;
     const renewals = new Map<string, number>();
     const guestSwitch = createProviderGroupGuestSwitch(() => Date.now());
-    const state = { device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
+    const state = { pluginEngine: false, device: 'executor-m' as unknown, duration: 2000 as unknown, delayCaps: 0, ready: false, holdSend: false, holdModel: false,
       startFailure: '', startFailureName: 'AgentStartupStoppedError', startedId: undefined as string | undefined, localFailure: '',
       startupEnd: undefined as { reason: string; idleReclaimed?: true } | undefined,
       switchAvailable: true, pauseSwitch: false, legacySwitch: false, closeLinkOnFailure: false,
-      blockClose: false, failClose: false, maxRuns: 10, idleReclaimMinutes: undefined as number | undefined,
+      blockClose: false, failClose: false, blockCleanup: false, failCleanup: false, blockAgentCaps: false,
+      maxRuns: 10, idleReclaimMinutes: undefined as number | undefined,
       blockPrepare: false, preparing: false, blockAllocation: false, ownerOffline: false, ownerPaused: false, loseGrantOnOpen: false,
       directStatusBatch: false, agentNetStandby: false, authorityOffline: false, localFirst: false, loseOpenAck: false, rejectHandoff: false };
     const emit = (run: Run, value: unknown) => run.onData(Buffer.from(JSON.stringify(value) + '\n'), false);
     const started = (run: Run) => {
-      const item = { t: 'started', handle: { id: state.startedId ?? 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: ['setModel'], state: {} } };
+      const item = { t: 'started', handle: { id: state.startedId ?? 'sdk-' + run.runId, model: 'm', shadowDir: '', methods: state.pluginEngine ? ['setModel', 'setVendorOptions'] : ['setModel'], state: {} } };
       const end = state.startupEnd;
       if (end && end.reason !== 'missing') {
         run.onData(Buffer.from(`${JSON.stringify(item)}\n${JSON.stringify({ t: 'closed', ...end })}\n`), true);
@@ -2111,10 +2382,14 @@ describe('shared startup lease budget', () => {
       if (request.op === 'standby-prepare') return { ok: true, result: { deviceId: 'executor-m', generation, standby: true, leaseDurationMs: 120_000 } };
       if (request.op === 'standby-admit') return { ok: true, result: { generation: request.admissionId, leaseDurationMs: 360_000 } };
       if (request.op === 'caps') {
+        if (state.blockAgentCaps && state.preparing && device === target) {
+          await capsReply.promise;
+          throw Object.assign(new Error('fixture no invoke-result'), { code: 'INVOKE_TIMEOUT' });
+        }
         if (state.delayCaps) { const ms = state.delayCaps; state.delayCaps = 0; await vi.advanceTimersByTimeAsync(ms); }
         return { ok: true, result: { version: 1, maxRuns: state.maxRuns, idleReclaimMinutes: state.idleReclaimMinutes, uploadChunkBytes: 65536, maxPayloadBytes: 1000000,
-          virtualWorkspace: true, directGuestExecution: true, ...(state.agentNetStandby ? { directGuestStandby: true } : {}),
-          agents: [{ kind: 'codex', available: true }] } };
+          virtualWorkspace: true, directGuestExecution: true, ...(state.pluginEngine ? { pluginEngines: true, localApplication: true } : {}), ...(state.agentNetStandby ? { directGuestStandby: true } : {}),
+          agents: [{ kind: 'codex', available: true }, ...(state.pluginEngine ? [{ kind: 'acp', available: true, providerId: 'acp-plugin:fixture:engine' }] : [])] } };
       }
       if (request.op === 'open') {
         if (state.rejectHandoff && request.payload?.json?.requireGroupSwitchToken) return { ok: false,
@@ -2135,6 +2410,7 @@ describe('shared startup lease budget', () => {
         if (run) emit(run, { t: 'closed', reason: 'closed' });
       }
       if (request.op === 'call') {
+        wireCalls.push({ method: request.method, args: request.payload?.json });
         const run = runs.get(request.runId!);
         if (run && !(state.holdSend && request.method === 'send') && !(state.holdModel && request.method === 'setModel')) {
           emit(run, { t: 'result', callId: request.callId, ok: true, value: null });
@@ -2147,10 +2423,15 @@ describe('shared startup lease budget', () => {
       rgPath: () => RG, codexPath: () => 'fixture-never-spawned', mcpProviders: () => [],
       prepareMcpBridge: async (_providers, _logger, ctx) => {
         if (state.localFailure) throw new Error(state.localFailure);
+        const blockCleanup = state.blockCleanup, failCleanup = state.failCleanup;
         state.preparing = true;
         if (state.blockPrepare) await prepare.promise;
         return { mcpBridge: { servers: [{ name: 'fixture', url: 'http://fixture.invalid/' }] },
-          disposeSessionCtx: () => { disposed.push(ctx.sessionId!); },
+          disposeSessionCtx: async () => {
+            disposed.push(ctx.sessionId!);
+            if (blockCleanup) await pendingClose.promise;
+            if (failCleanup) throw new Error('fixture local cleanup failed');
+          },
           closeSessionInstance: () => { mcpSessions.delete(ctx.sessionId!); },
         } as never;
       },
@@ -2162,8 +2443,8 @@ describe('shared startup lease budget', () => {
     historyOpenLink.mockResolvedValue(undefined);
     historyCloseEpoch.mockReturnValue(0);
     historyCrossRegion.mockReturnValue(false);
-    return { owner, target, generation, state, calls, runs, disposed, mcpSessionCount: (sessionId = 'historical') => Number(mcpSessions.has(sessionId)),
-      pendingClose, prepare, allocation, emit, started, guestSwitch, renewals,
+    return { owner, target, generation, state, calls, wireCalls, runs, disposed, mcpSessionCount: (sessionId = 'historical') => Number(mcpSessions.has(sessionId)),
+      pendingClose, prepare, allocation, capsReply, emit, started, guestSwitch, renewals, start,
       open: (sessionId = 'pending', deviceId = owner, model = 'm', resumeSessionId?: string) => start({ agentKind: 'codex', deviceId,
         options: { sessionId, workingDir: project, model, ...(resumeSessionId ? { resumeSessionId } : {}) } }) };
   }
@@ -2575,6 +2856,119 @@ describe('shared startup lease budget', () => {
     },
   );
 
+  // Unit, direct-execution §7: when restoring a historical direct task fails
+  // before open (e.g. original M offline or authorization stage fails after
+  // lease expiry), G asks O for an in-group switch token and hands off context
+  // silently instead of looping on the broken executor.
+  it.each(['authorization-unknown', 'capability-offline', 'owner-offline', 'allocation-denied', 'no-spare', 'revoked', 'cancelled', 'takeover'] as const)(
+    'switches a historical direct task in-group after pre-open restore failure: %s', async mode => {
+      const f = fixture(); f.state.duration = 60_000;
+      const restoreError = mode === 'authorization-unknown'
+        ? sharedTaskRecoveryError('authorization', 'unknown')
+        : mode === 'capability-offline'
+          ? sharedTaskRecoveryError('capability', 'offline', { code: 'DEVICE_OFFLINE' })
+          : mode === 'owner-offline'
+            ? sharedTaskRecoveryError('owner', 'offline', { code: 'DEVICE_OFFLINE' })
+            : mode === 'allocation-denied'
+              ? sharedTaskRecoveryError('allocation', 'denied')
+              : sharedTaskRecoveryError('authorization', 'unknown');
+      historyInvoke.mockImplementation(async (device: string, _channel: string, args: unknown[]) => {
+        const req = args[0] as { op: string };
+        if (req.op === 'direct-locate') {
+          if (mode === 'owner-offline') throw Object.assign(new Error('owner offline'), { code: 'DEVICE_OFFLINE' });
+          return { ok: true, result: { deviceId: 'executor-m', agentKind: 'codex' } };
+        }
+        if (req.op === 'allocate') throw restoreError;
+        return { ok: true, result: {} };
+      });
+      const row = { agentKind: 'codex', model: 'm', providerId: 'openai', agentDeviceId: f.owner,
+        sdkSessionId: 'native-only-on-m' as string | null, remoteHostId: null, status: 'active', workingDir: project };
+      const service = createProviderGroupService({
+        guestSwitch: f.guestSwitch, directGuestSession: liveDirectGuestSession,
+        readSessionRow: async () => row, readBinding: () => null, now: () => Date.now(), log: historyLogger,
+        router: { resetTurn() {} },
+      } as unknown as ProviderGroupServiceDeps);
+      await expect(f.open('historical-restore', f.owner, 'm', row.sdkSessionId!)).rejects.toThrow(restoreError.message);
+      const eligible = !['owner-offline', 'allocation-denied'].includes(mode);
+      expect(liveDirectGuestSession('historical-restore') !== null).toBe(eligible);
+      f.state.switchAvailable = mode !== 'no-spare';
+      f.state.pauseSwitch = ['revoked', 'cancelled', 'takeover'].includes(mode);
+      const pending = service.prepareGuestStartSwitch('historical-restore');
+      await flush();
+      if (mode === 'revoked') guestPermission.epoch++;
+      if (mode === 'cancelled') cancelPendingRemoteStart('historical-restore');
+      if (mode === 'takeover') service.noteUserAction('historical-restore');
+      f.allocation.resolve();
+      const recovery = await pending;
+      const canRecover = ['authorization-unknown', 'capability-offline'].includes(mode);
+      expect(!!recovery).toBe(canRecover);
+      if (eligible) {
+        expect(f.calls.filter(call => call.op === 'direct-switch')).toEqual([
+          expect.objectContaining({ device: f.owner, sessionId: 'historical-restore' }),
+        ]);
+      } else {
+        expect(f.calls.some(call => call.op === 'direct-switch')).toBe(false);
+      }
+      if (recovery) {
+        expect(recovery.isCurrent()).toBe(true);
+        let handoff = '';
+        await relocateForFreshStart({
+          getSessionRow: async () => ({ ...row }) as never,
+          listMessagesForHandoff: async () => [{ role: 'user', content: 'preserve cleanup context', createdAt: 1 }],
+          applyAgentSwitchToDb: async (_id, patch) => { Object.assign(row, patch); },
+          setSessionProvider() {}, insertBoundaryMessage: vi.fn(async () => 'boundary'),
+          setPendingHandoff: (_id, text) => { handoff = text; },
+          applyResumeFallbackAtomically: async () => {}, log: historyLogger,
+        }, { sessionId: 'historical-restore', agentDeviceId: f.owner, providerId: 'openai', sharedRelocation: true,
+          assertCurrent: () => { if (!recovery.isCurrent()) throw new Error('recovery superseded'); } });
+        expect(row.sdkSessionId).toBeNull();
+        expect(handoff).toContain('preserve cleanup context');
+        recovery.dispose();
+        f.state.ready = true;
+        const handle = await f.open('historical-restore');
+        expect(f.calls.filter(call => call.op === 'open').at(-1)).toMatchObject({
+          device: f.owner,
+          payload: { json: { groupSwitchToken: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', options: { model: 'm' } } },
+        });
+        await handle.close();
+      } else {
+        expect(f.guestSwitch.takeForOpen('historical-restore')).toBeUndefined();
+      }
+      expect(liveDirectGuestSession('historical-restore')).toBeNull();
+    },
+  );
+
+  // Unit, direct-execution §7: switching away from a cached M1 grant must clear
+  // the process-local retained authorization so a later reopen cannot send M2's
+  // native history back to old M1.
+  it('clears a retained historical grant when a switched open hands off through O', async () => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 30 * 60_000;
+    const first = await f.open('retained-switch');
+    await first.close({ reason: 'navigation' });
+    historyInvoke.mockRejectedValueOnce(Object.assign(new Error('offline'), { code: 'DEVICE_OFFLINE' }));
+    const row = { agentKind: 'codex', model: 'm', providerId: 'openai', agentDeviceId: f.owner,
+      sdkSessionId: 'native-only-on-m' as string | null, remoteHostId: null, status: 'active', workingDir: project };
+    const service = createProviderGroupService({
+      guestSwitch: f.guestSwitch, directGuestSession: liveDirectGuestSession,
+      readSessionRow: async () => row, readBinding: () => null, now: () => Date.now(), log: historyLogger,
+      router: { resetTurn() {} },
+    } as unknown as ProviderGroupServiceDeps);
+    await expect(f.open('retained-switch', f.owner, 'm', row.sdkSessionId!))
+      .rejects.toThrow('[SHARED_TASK_RECOVERY_offline] [SHARED_TASK_STAGE_capability]');
+    f.state.switchAvailable = true;
+    const recovery = await service.prepareGuestStartSwitch('retained-switch');
+    expect(recovery).not.toBeNull();
+    recovery!.dispose();
+    const switched = await f.open('retained-switch');
+    await switched.close({ reason: 'navigation' });
+    // After switching away from M1, O's direct-locate returns null (relayed task);
+    // reopening must NOT reuse M1's old in-memory retained grant.
+    historyInvoke.mockResolvedValueOnce({ ok: true, result: null });
+    const reopened = await f.open('retained-switch', f.owner, 'm', 'native-on-m2');
+    expect(f.calls.filter(call => call.op === 'open').at(-1)?.device).toBe(f.owner);
+    await reopened.close();
+  });
+
   it('does not turn a local preparation error into executor failure evidence', async () => {
     const f = fixture();
     f.state.localFailure = 'The task subscription account requires login or quota reset';
@@ -2781,6 +3175,151 @@ describe('shared startup lease budget', () => {
     await outcome.handle.close({ reason: 'navigation' });
   });
 
+  // #11644 / unit: prior cancellation cases called the terminal hook directly.
+  // An authorized picker must release historical startup's real send lock, both
+  // in executor backoff and with an RPC in flight. Late success must not open or
+  // send the old native history; a sibling and the next startup stay usable.
+  it.each([
+    { target: null, stage: 'backoff' }, { target: 'another-computer', stage: 'backoff' },
+    { target: null, stage: 'in-flight' }, { target: 'another-computer', stage: 'in-flight' },
+    { target: null, stage: 'caps' }, { target: 'another-computer', stage: 'caps' },
+    { target: null, stage: 'agent-caps-timeout' }, { target: 'another-computer', stage: 'agent-caps-timeout' },
+  ])('stages a manual move to $target during historical executor $stage', async ({ target, stage }) => {
+    const f = fixture(); f.state.ready = true; f.state.duration = 120_000;
+    const sibling = await f.open('sibling', 'ordinary-device');
+    f.state.preparing = false;
+    f.state.blockAgentCaps = stage === 'agent-caps-timeout';
+    const late = stage === 'agent-caps-timeout' ? f.capsReply : deferred();
+    const invoke = historyInvoke.getMockImplementation()!;
+    if (stage === 'caps') historyInvoke.mockImplementation(async (...args) => {
+      const response = invoke(...args);
+      if (args[0] === f.target && (args[2] as { op: string }[])[0]?.op === 'caps') await late.promise;
+      return response;
+    });
+    historyOpenLink.mockImplementation(async peer => {
+      if (peer !== f.target || stage === 'caps' || stage === 'agent-caps-timeout') return;
+      if (stage === 'in-flight') return late.promise;
+      throw Object.assign(new Error('executor restarting'), { code: 'DEVICE_UNRESPONSIVE' });
+    });
+    const pending = createPendingAgentSwitchRegistry();
+    const deps: MakerSessionAgentSwitchHandlerDeps = {
+      cancelPendingRemoteStart, pendingSwitches: pending, withSessionLock: withSendToSessionLock,
+      getSessionRow: async () => ({ id: 'historical', agentKind: 'codex', model: 'm', providerId: null,
+        status: 'active', remoteHostId: null, orcaRole: null, sdkSessionId: 'native-only-on-m', agentDeviceId: f.owner }),
+      getLiveSession: () => null,
+      closeSession: vi.fn(async () => {}), listMessagesForHandoff: async () => [],
+      applyAgentSwitchToDb: vi.fn(async () => {}), setSessionProvider: () => {},
+      insertBoundaryMessage: async () => 'unused', applyResumeFallbackAtomically: async () => {},
+      setPendingHandoff: () => {}, bootstrapSwitchedSession: async () => {},
+      withCloseSuppressed: (_id, run) => run(), log: historyLogger,
+    };
+    const opening = withSendToSessionLock('historical', () =>
+      f.open('historical', f.owner, 'm', 'native-only-on-m')).catch(error => error);
+    let selecting: Promise<unknown> | undefined;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(historyOpenLink).toHaveBeenCalledWith(f.target);
+      if (stage === 'agent-caps-timeout') {
+        expect(f.calls.filter(call => call.device === f.target && call.op === 'caps')).toHaveLength(2);
+      }
+      const ipc = new IpcHarness();
+      registerMakerSessionAgentSwitchHandler(ipc, deps, () => {});
+      let staged = false;
+      selecting = ipc.invoke(MAKER_INVOKE.SWITCH_SESSION_AGENT, 'historical', 'codex', 'm', null,
+        undefined, undefined, { agentDeviceId: target }).then(result => { staged = true; return result; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(staged).toBe(true);
+      const failure = await opening;
+      expect(decideProviderGroupFailure(providerGroupFailureSignals(failure), 'start'))
+        .toEqual({ action: 'stay', why: 'user' });
+      expect(pending.get('historical')).toMatchObject({ targetAgentDeviceId: target });
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(deps.applyAgentSwitchToDb).not.toHaveBeenCalled();
+      const probes = historyOpenLink.mock.calls.length;
+      const capsCalls = f.calls.filter(call => call.op === 'caps').length;
+      late.resolve();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(historyOpenLink).toHaveBeenCalledTimes(probes);
+      expect(f.calls.filter(call => call.op === 'caps')).toHaveLength(capsCalls);
+      expect(f.calls.filter(call => call.op === 'open')).toEqual([expect.objectContaining({ device: 'ordinary-device' })]);
+      expect(f.calls.some(call => call.op === 'call')).toBe(false);
+      await sibling.setModel!('still-live');
+      const next = await f.open('historical', 'ordinary-device');
+      await next.close();
+    } finally {
+      cancelPendingRemoteStart('historical'); late.resolve();
+      await opening; await selecting;
+      await sibling.close();
+    }
+  });
+
+  // #12566 reviews / unit: real Maker -> device starter cancellation must notify
+  // the captured startup lease after cleanup, not the replacement's lease. Prior
+  // picker tests bypassed Maker and could not observe a leaked worktree heartbeat.
+  // Gates cover pre-runtime probe/MCP, unfinished/failed local disposal, and
+  // cancellation during a prepared handle's early renewal (#12566 review).
+  it.each(['executor', 'MCP', 'cleanup', 'failed-cleanup', 'renewal', 'renewal-failed-cleanup'] as const)(
+    'retires only the cancelled startup lease after %s cleanup', async stage => {
+      const renewal = stage === 'renewal' || stage === 'renewal-failed-cleanup';
+      const failedCleanup = stage === 'failed-cleanup' || stage === 'renewal-failed-cleanup';
+      const f = fixture(); f.state.duration = renewal ? undefined : 120_000;
+      f.state.blockPrepare = !renewal && stage !== 'executor';
+      f.state.blockCleanup = stage === 'cleanup' || stage === 'failed-cleanup';
+      f.state.failCleanup = failedCleanup;
+      const probe = deferred();
+      if (stage === 'executor') historyOpenLink.mockImplementation(peer => peer === f.target ? probe.promise : Promise.resolve());
+      const leased = new Set<CreateSessionOptions>();
+      const rows = new Map<string, SessionMeta>();
+      const maker = new Maker({ agents: { codex: { kind: 'codex', capabilities: { rewind: { supported: false } },
+        dispose: async () => {} } as never }, logger: historyLogger, startDeviceAgentSession: f.start,
+        storage: {
+          create: async meta => { const row = { ...meta, createdAt: Date.now(), updatedAt: Date.now() }; rows.set(row.id, row); return row; },
+          get: async id => rows.get(id) ?? null, list: async () => [...rows.values()],
+          update: async (id, patch) => { const row = { ...rows.get(id)!, ...patch }; rows.set(id, row); return row; },
+          compareAndClearSdkSessionId: async () => false, delete: async id => { rows.delete(id); },
+        }, lifecycleHooks: {
+          prepareStartOptions: (_id, options) => { leased.add(options); },
+          onStartFailed: ({ options, runtimeMayBeAlive }) => { if (!runtimeMayBeAlive) leased.delete(options); },
+          onStartCleanupSucceeded: (_id, options) => { leased.delete(options); },
+          onClose: (_id, options) => { leased.delete(options); },
+        } });
+      const old = maker.createSession({ id: 'historical', agentKind: 'codex', workingDir: project, model: 'm',
+        agentDeviceId: f.owner, ...(renewal ? {} : { resumeSessionId: 'native-only-on-m' }) }).catch(error => error);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(leased.size).toBe(1);
+        if (renewal) {
+          await vi.waitFor(() => expect(f.runs.size).toBe(1), { interval: 1 });
+          await vi.advanceTimersByTimeAsync(20 * 60_000 + 1);
+          f.state.blockAllocation = true;
+          f.started([...f.runs.values()][0]!); await flush();
+          expect(f.calls.filter(call => call.op === 'allocate')).toHaveLength(2);
+        }
+        cancelPendingRemoteStart('historical', new Error(PROVIDER_GROUP_SUPERSEDED_ERROR));
+        expect(String(await old)).toContain(PROVIDER_GROUP_SUPERSEDED_ERROR);
+        f.state.blockPrepare = false; f.state.ready = true;
+        f.state.blockCleanup = false; f.state.failCleanup = false; f.state.blockAllocation = false;
+        await maker.createSession({ id: 'historical', agentKind: 'codex', workingDir: project, model: 'm', agentDeviceId: 'ordinary-device' });
+        const replacement = [...leased].at(-1)!;
+        expect(leased.size).toBe(2);
+        if (renewal) expect(f.disposed).toEqual(['historical']);
+        probe.resolve(); f.prepare.resolve(); f.allocation.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        if (stage === 'cleanup' || stage === 'failed-cleanup') expect(leased.size).toBe(2);
+        f.pendingClose.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(leased.size).toBe(failedCleanup ? 2 : 1);
+        expect(leased.has(replacement)).toBe(true);
+        expect(f.calls.some(call => call.op === 'call' && call.method === 'send')).toBe(false);
+      } finally {
+        cancelPendingRemoteStart('historical');
+        probe.resolve(); f.prepare.resolve(); f.pendingClose.resolve(); f.allocation.resolve();
+        f.state.blockClose = false; f.state.failClose = false;
+        await old; await maker.shutdown();
+      }
+    },
+  );
+
   it.each(['cancel', 'permission', 'link-generation', 'lease-expiry'] as const)('stops a delayed executor recovery after %s', async boundary => {
     const f = fixture(); f.state.ready = true; f.state.duration = 120_000;
     if (boundary === 'lease-expiry') f.state.duration = 2_000;
@@ -2861,7 +3400,40 @@ describe('shared startup lease budget', () => {
     await resumed.close();
   });
 
-  it('reconnects after a queued done and idle reclaim arrive in one poll', async () => {
+  // #6777, unit: the same JSON terminal goes through the real starter, poll decoder
+  // and projection. A received share with a current grant is required to bind its amount.
+  it.each(['shared', 'ordinary', 'old sender', 'access changed'])('admits an executor estimate from a live run (%s)', async mode => {
+    const f = fixture();
+    f.state.ready = true;
+    const device = mode === 'ordinary' ? 'ordinary-peer' : f.owner;
+    const handle = await f.open('historical', device);
+    const epoch = guestPermission.epoch;
+    try {
+      await handle.send({ type: 'user', content: 'hello' });
+      if (mode === 'access changed') guestPermission.epoch++;
+      const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {
+        usage: { promptTokens: 10 }, ...(mode !== 'old sender' && { sharedTurnValue: { amount: 0.12, currency: 'CNY' } }),
+      } } });
+      for await (const event of handle.events()) {
+        if (event.type !== 'done') continue;
+        expect(sharedTurnReceipt(event, 'historical', device)?.money).toEqual(mode === 'shared'
+          ? { amount: 0.12, currency: 'CNY', kind: 'value-estimate', approximate: true } : undefined);
+        return;
+      }
+      throw new Error('Missing Codex terminal');
+    } finally {
+      guestPermission.epoch = epoch;
+      await handle.close();
+    }
+  });
+
+  // Unit: real starter -> runClient -> proxy -> Session. The provider's reclaim
+  // sweep reads live activity and cancels its state timer without a final idle
+  // snapshot. Existing coverage started from {}, hiding a stale busy snapshot.
+  // Minimal input: busy snapshot -> done -> confirmed idle reclaim. Cover both
+  // terminal-consumption orders; Session must admit exactly one new send.
+  it.each([false, true])('reconnects after idle reclaim with a stale busy snapshot (done drained=%s)', async drained => {
     const f = fixture(); f.state.ready = true;
     const handle = await f.open('historical');
     const session = new Session({ id: 'historical', agentKind: 'codex', workDir: project,
@@ -2869,17 +3441,94 @@ describe('shared startup lease budget', () => {
     try {
       expect(await session.send('first')).toMatchObject({ accepted: true });
       const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'state', state: { turnRunning: true, preparing: true } });
+      if (drained) {
+        f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+        await flush();
+      }
       run.onData(Buffer.from([
-        JSON.stringify({ t: 'event', event: { type: 'done', source: 'codex', data: {} } }),
+        ...(!drained ? [JSON.stringify({ t: 'event', event: { type: 'done', source: 'codex', data: {} } })] : []),
         JSON.stringify({ t: 'closed', reason: 'closed', idleReclaimed: true }), '',
       ].join('\n')), false);
       await flush();
       expect(session.getObservedCurrentTurnTerminal()).toMatchObject({ kind: 'done', generation: 1 });
+      expect(session.isTurnRunning()).toBe(false);
       expect(f.disposed).toEqual([]);
       expect(await session.send('second')).toMatchObject({ accepted: true });
       expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
       expect(f.disposed).toEqual([]);
     } finally { await session.close(); }
+  });
+
+  // Unit: real input coordinator + shared starter + Session. Prior tests sent
+  // directly to the handle and could not see queued inputs trapped behind its
+  // stale busy state. Two session-origin inputs cover FIFO and one dispatch per
+  // clientId; Stop must still require the existing explicit resume entrance.
+  it.each([false, true])('drains session messages after idle reclaim without releasing Stop (stopped=%s)', async stopped => {
+    const f = fixture(); f.state.ready = true;
+    const handle = await f.open('historical');
+    const session = new Session({ id: 'historical', agentKind: 'codex', workDir: project,
+      handle, capabilities: {} as never, logger: historyLogger as never, turnStallMs: 0 });
+    const accepted = vi.fn();
+    const coordinator = new AgentInputCoordinator({
+      sendToAgent: async (_id, message, _create, options) => {
+        options.persistUserMessage?.onPersisting?.();
+        await options.persistUserMessage?.onPersisted?.();
+        const content = typeof message === 'string' ? message : message.content;
+        if (typeof content !== 'string') throw new Error('Expected text fixture input');
+        await session.send(content, options);
+        return { kind: 'session-dispatch', source: 'fixture', dispatched: true };
+      },
+      steerToAgent: async () => {}, abortSession: () => session.abort(),
+      isTurnRunning: () => session.isTurnRunning(),
+      hasPendingInteraction: () => false, getAgentKind: () => 'codex',
+      getSdkSessionId: async () => handle.id,
+      createUserMessage: async () => ({} as never), touchUserSend: async () => {},
+      onDispatchedUserTurn: accepted, emitProjection: () => {},
+    });
+    session.onEvent(event => {
+      if (event.type === 'done') coordinator.onTurnEvent(session.id, 'done');
+    });
+    try {
+      await session.send('first');
+      const run = [...f.runs.values()].at(-1)!;
+      f.emit(run, { t: 'state', state: { turnRunning: true, preparing: true } });
+      const inputs = ['reply-1', 'reply-2'].map(clientId => ({
+        clientId, text: clientId, persistedContent: clientId,
+        model: 'm', effort: 'medium', permissionMode: 'default', workingDir: project,
+        chatMessage: { clientId, role: 'user' as const, content: clientId, isStreaming: false, createdAt: new Date().toISOString() },
+        createOpts: { agentKind: 'codex' as const, workingDir: project, model: 'm' },
+        origin: { kind: 'session' as const, senderSessionId: 'sender', displayText: clientId },
+      }));
+      for (const item of inputs) coordinator.enqueue(session.id, item);
+      if (stopped) coordinator.stop(session.id, { keepQueue: true, pauseQueue: true });
+      f.emit(run, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await flush();
+      f.emit(run, { t: 'closed', reason: 'ended', idleReclaimed: true });
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+      expect(coordinator.getProjection(session.id).error).toBeNull();
+      if (stopped) {
+        expect(accepted).not.toHaveBeenCalled();
+        expect(coordinator.getProjection(session.id)).toMatchObject({ queuePaused: true, pendingQueue: inputs });
+        coordinator.resume(session.id);
+        await flush();
+      }
+      await vi.waitFor(() => expect(accepted.mock.calls.map(([, item]) => item.clientId)).toEqual(['reply-1']));
+      const resumedRun = [...f.runs.values()].at(-1)!;
+      f.emit(resumedRun, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await flush();
+      await vi.waitFor(() => expect(accepted.mock.calls.map(([, item]) => item)).toMatchObject(inputs));
+      f.emit(resumedRun, { t: 'event', event: { type: 'done', source: 'codex', data: {} } });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(coordinator.getProjection(session.id).pendingQueue).toEqual([]);
+      expect(accepted).toHaveBeenCalledTimes(2);
+      expect(f.calls.filter(call => call.method === 'send')).toHaveLength(3);
+      expect(f.calls.filter(call => call.op === 'open')).toHaveLength(2);
+    } finally {
+      coordinator.onSessionClosed(session.id);
+      await session.close();
+    }
   });
 
   // 测试价值
@@ -2907,6 +3556,72 @@ describe('shared startup lease budget', () => {
         await flush();
       }
     } finally { await handle.close(); }
+  });
+
+  // Integration: the real same-account proxy replays the cached briefing alongside
+  // revocation, whether promotion came before or after reclaim. In both cases the
+  // team is revoked before reconnect; an active team's replay is outside this test.
+  it.each([true, false])('keeps the replayed briefing out of the prompt after team revocation (promotion before reclaim=%s)', async beforeReclaim => {
+    const f = fixture();
+    Object.assign(f.state, { ready: true, pluginEngine: true });
+    const providerId = 'acp-plugin:fixture:engine';
+    const handle = await f.start({ agentKind: 'acp', deviceId: 'executor-m', options: {
+      sessionId: 'role-replay', workingDir: project, providerId, model: 'm',
+    } });
+    let target: AgentSessionHandle | undefined;
+    try {
+      const first = [...f.runs.values()].at(-1)!;
+      const reclaim = async () => {
+        f.emit(first, { t: 'closed', reason: 'ended', idleReclaimed: true });
+        await flush();
+      };
+      const handoff = createAcpLeadBriefingHandoff({ currentOwner: () => 'owner',
+        readActiveTeamId: async () => 'team', readRole: async () => 'lead' });
+      if (!beforeReclaim) await reclaim();
+      await applyLeadVendorOptions(handoff, { leadSessionId: 'role-replay', teamId: 'team', newTeam: true }, {
+        agentKind: 'acp', agentDeviceId: 'executor-m', workDir: project, setVendorOptions: handle.setVendorOptions!,
+      }, () => { throw new Error('remote promotion must not request local hydration'); });
+      expect(handoff.hasPending('role-replay')).toBe(false);
+      if (beforeReclaim) await reclaim();
+      await handle.setVendorOptions!({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null });
+      await handle.send({ type: 'user', content: 'continue without the team' });
+      expect([...f.runs.values()].at(-1)!.runId).not.toBe(first.runId);
+      const patches = f.wireCalls.filter(call => call.method === 'setVendorOptions').map(call => (call.args as Record<string, unknown>[])[0]!);
+      expect(patches).toHaveLength(beforeReclaim ? 2 : 1);
+      const replay = patches.at(-1)!;
+      expect(replay).toEqual({ orcaRole: null, orcaWorkflowId: null, orcaLeadSessionId: null, pluginEngineRoleBriefing: expect.any(String) });
+      if (beforeReclaim) expect(patches[0]).toEqual({ orcaRole: 'lead', orcaWorkflowId: 'team', orcaLeadSessionId: 'role-replay', pluginEngineRoleBriefing: replay.pluginEngineRoleBriefing });
+      const sends = f.wireCalls.filter(call => call.method === 'send');
+      expect(sends).toHaveLength(1);
+      const message = (sends[0]!.args as UserMessage[])[0]!;
+      expect(message.content).toBe('continue without the team');
+
+      const prompts: unknown[] = [];
+      const engine = new AcpAgent({
+        auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }),
+          logout: async () => {}, getAuthEnv: async () => ({}) },
+        runtimeConfig: {}, binaryPath: '', logger: historyLogger, clientInfo: { name: 'test', version: '1' },
+        endpoints: { connect: async () => {
+          let onLine: ((line: string) => void) | undefined;
+          const transport: AcpLineTransport = {
+            write(line) {
+              const { id, method, params } = JSON.parse(line);
+              const result = method === 'initialize' ? { protocolVersion: 1, agentCapabilities: {} }
+                : method === 'session/new' ? { sessionId: 'legacy-replay' } : { stopReason: 'end_turn' };
+              if (method === 'session/prompt') prompts.push(params.prompt);
+              queueMicrotask(() => onLine?.(JSON.stringify({ jsonrpc: '2.0', id, result })));
+            },
+            onLine(listener) { onLine = listener; return () => { onLine = undefined; }; },
+            onClose: () => () => {}, close: async () => {},
+          };
+          return transport;
+        } },
+      });
+      target = await engine.startSession({ workingDir: project, model: '', providerId });
+      await target.setVendorOptions!(replay);
+      await target.send(message);
+      expect(prompts).toEqual([[{ type: 'text', text: 'continue without the team' }]]);
+    } finally { await target?.close(); await handle.close(); }
   });
 
   // MCP heap regression: exercise the controller's real pool via a one-slot

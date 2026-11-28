@@ -26,6 +26,8 @@ export interface ModelGroupDecision {
   model?: string;
   /** 选中的来源在另一台电脑或是分享来的：它的运行位置。本机省略。 */
   agentDeviceId?: string;
+  /** 本机多账号订阅池里选中的具体账号槽位 id；不区分账号时省略。 */
+  accountId?: string;
   modelName?: string;
   sourceName?: string;
   effort?: string;

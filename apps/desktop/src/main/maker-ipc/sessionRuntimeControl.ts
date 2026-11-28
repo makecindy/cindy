@@ -1,7 +1,7 @@
-import { modelRouteLocationKey } from '@cindy/maker-shared/model-route';
 import type { AgentKind, Effort, EngineKind } from '@cindy/maker-core';
 import type { Session as RendererSession } from '../../renderer/lib/ccAgent.types';
 import { makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import { modelGroupCandidateKey } from '../../shared/modelGroups.js';
 import { clearAllSessionProviders } from '../maker-host/session-provider-store.js';
 import { clearAllSessionRuntimeAxes } from '../maker-host/session-effort-store.js';
 import {
@@ -24,7 +24,11 @@ export interface SessionRuntimeProfile {
 }
 
 /** Plugin routes persist on the session row; only built-in engines use a temporary runtime override. */
-export type FallbackRouteProfile = SessionRuntimeProfile | (Omit<SessionRuntimeProfile, 'agentKind'> & { agentKind: 'acp' });
+export type FallbackRouteProfile = (SessionRuntimeProfile | (Omit<SessionRuntimeProfile, 'agentKind'> & { agentKind: 'acp' })) & {
+  /** Internal recovery-source identity, not part of the projected runtime profile. */
+  accountId?: string;
+};
+type FallbackRouteIdentity = Pick<FallbackRouteProfile, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId' | 'accountId'>;
 
 export interface PendingSessionRuntimeMutation {
   generation: number;
@@ -45,12 +49,19 @@ export interface SessionRuntimeControlSnapshot {
   visitedRoutes: string[];
 }
 
+function runtimeOverrideForDevice(profile: SessionRuntimeProfile | null, agentDeviceId?: string | null) {
+  return profile && (profile.agentDeviceId ?? null) === (agentDeviceId ?? null) ? profile : null;
+}
+
+function runtimeOverrideForStart(sessionId: string, agentKind: EngineKind, agentDeviceId?: string | null) {
+  const profile = runtimeOverrideForDevice(getSessionRuntimeControlSnapshot(sessionId).effectiveOverride, agentDeviceId);
+  return profile?.agentKind === agentKind ? profile : null;
+}
+
 /** Startup-only projection; persisted preferences and native-history identity stay on the row. */
 export function getSessionRuntimeStartOverride(sessionId: string, agentKind: EngineKind, agentDeviceId?: string | null) {
-  if (agentKind === 'acp') return {};
-  const profile = getSessionRuntimeControlSnapshot(sessionId).effectiveOverride;
-  if (!profile || profile.agentKind !== agentKind
-    || (profile.agentDeviceId ?? null) !== (agentDeviceId ?? null)) return {};
+  const profile = runtimeOverrideForStart(sessionId, agentKind, agentDeviceId);
+  if (!profile) return {};
   return { model: profile.model, providerId: profile.providerId,
     effort: profile.effort ?? undefined, fastMode: profile.fastMode };
 }
@@ -59,9 +70,11 @@ export function getSessionRuntimeStartOverride(sessionId: string, agentKind: Eng
 export function projectSessionRuntimeControl(
   sessionId: string,
   baseline: SessionRuntimeProfile,
+  agentDeviceId = baseline.agentDeviceId,
 ): Partial<RendererSession> {
   const control = getSessionRuntimeControlSnapshot(sessionId);
-  const effective = control.effectiveOverride ?? baseline;
+  // A route-change push can run while an override from the previous computer still exists.
+  const effective = runtimeOverrideForDevice(control.effectiveOverride, agentDeviceId) ?? baseline;
   return {
     agentKind: makerToDbAgentKind(effective.agentKind),
     model: effective.model,
@@ -111,10 +124,8 @@ interface SessionRuntimeControlState {
 const states = new Map<string, SessionRuntimeControlState>();
 let ownerEpoch = 0;
 
-function routeKey(
-  profile: Pick<SessionRuntimeProfile, 'providerId' | 'model' | 'agentDeviceId'> & { agentKind: EngineKind },
-): string {
-  return `${profile.agentKind}\u0000${profile.providerId ?? ''}\u0000${profile.model}${modelRouteLocationKey(profile.agentDeviceId)}`;
+function routeKey(profile: FallbackRouteIdentity): string {
+  return modelGroupCandidateKey({ ...profile, providerId: profile.providerId ?? '' });
 }
 
 function stateFor(sessionId: string): SessionRuntimeControlState {
@@ -348,12 +359,17 @@ export function acceptSessionRuntimeMutation(params: {
   const acceptedThinking =
     params.thinking ??
     (params.deferred && samePendingTarget ? previousPending?.thinking : undefined);
-  const accepted: PendingSessionRuntimeMutation | null = params.profile.agentKind === 'acp' ? null : {
-    generation: state.generation,
-    source: params.source,
-    profile: params.profile,
-    ...(acceptedThinking !== undefined ? { thinking: acceptedThinking } : {}),
-  };
+  let accepted: PendingSessionRuntimeMutation | null = null;
+  const candidate: FallbackRouteProfile = params.profile;
+  if (candidate.agentKind !== 'acp') {
+    const { accountId: _accountId, ...profile } = candidate;
+    accepted = {
+      generation: state.generation,
+      source: params.source,
+      profile,
+      ...(acceptedThinking !== undefined ? { thinking: acceptedThinking } : {}),
+    };
+  }
   state.pending = params.deferred ? accepted : null;
   state.pendingRouteExplicit = true;
   if (!params.deferred) state.effectiveOverride = accepted?.profile ?? null;
@@ -368,10 +384,19 @@ export function acceptSessionRuntimeMutation(params: {
   return state.generation;
 }
 
+/**
+ * 一条新消息(用户发的，或自动化、目标、协同发来的；自动续跑那一条不算)开始了新的一轮：「这一轮已经试过失败的」
+ * 清空，之前失败过、现在可能已恢复的来源(例如额度已重置)重新可以接替。不清跳数：它还决定任务是否在接替来源上。
+ * 原来只在用户换模型时清空，跑得久的任务每个来源都失败过一次以后就再也不会自动换(2026-11-26 排查)。
+ */
+export function startSessionRuntimeFallbackTurn(sessionId: string): void {
+  states.get(sessionId)?.visitedRoutes.clear();
+}
+
 export function recordFailedSessionRuntimeFallbackCandidate(
   sessionId: string,
   expectedGeneration: number,
-  profile: Pick<SessionRuntimeProfile, 'providerId' | 'model' | 'agentDeviceId'> & { agentKind: EngineKind },
+  profile: FallbackRouteIdentity,
 ): boolean {
   const state = stateFor(sessionId);
   if (state.generation !== expectedGeneration) return false;
@@ -431,13 +456,12 @@ export function getPendingSessionRuntimeMutation(
  * started runtime keeps the saved provider baseline and takes its effort and Fast axes from it.
  */
 export function applySessionRuntimeOverrideForStart(
-  o: { id?: string; agentKind: EngineKind; model?: string; providerId?: string | null; effort?: Effort; fastMode?: boolean | 'ultrafast' },
+  o: { id?: string; agentKind: EngineKind; agentDeviceId?: string | null; model?: string; providerId?: string | null; effort?: Effort; fastMode?: boolean | 'ultrafast' },
   groupDecidesSource: boolean,
 ): SessionRuntimeProfile | null {
-  if (o.agentKind === 'acp') return null;
   const runtimeOverride =
-    typeof o.id === 'string' ? getSessionRuntimeControlSnapshot(o.id).effectiveOverride : null;
-  if (runtimeOverride && runtimeOverride.agentKind === o.agentKind) {
+    typeof o.id === 'string' ? runtimeOverrideForStart(o.id, o.agentKind, o.agentDeviceId) : null;
+  if (runtimeOverride) {
     o.model = runtimeOverride.model;
     if (!groupDecidesSource) o.providerId = runtimeOverride.providerId;
     o.effort = runtimeOverride.effort ?? undefined;

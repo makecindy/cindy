@@ -13,6 +13,7 @@ import {
   type PluginUsageEventInput,
   type PluginUsageAck,
   parsePluginCatalogPage,
+  pluginCatalogPublisherGroup,
   parsePluginReadPage,
   parsePluginRecommendations,
   parsePluginResolveRequest,
@@ -24,6 +25,10 @@ import {
   type VisiblePluginSummary,
 } from '@cindy/plugin-protocol';
 
+import {
+  parsePluginMarketSortFields, parsePluginMarketSortValue, type PluginMarketItem, type PluginMarketSortFields,
+  type PluginMarketUpdate,
+} from '../../shared/pluginMarket.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
 import { serverApiFetch, type ApiFetchOptions } from '../serverApiClient.desktop.js';
@@ -85,7 +90,8 @@ type Fetcher = <T>(
   options: Omit<ApiFetchOptions, 'baseUrl'>,
 ) => Promise<T>;
 
-type PluginCatalogRead = PluginCatalogPage & {
+type PluginCatalogRead = Omit<PluginCatalogPage, 'plugins'> & PluginMarketSortFields & {
+  plugins: Array<VisiblePluginSummary & Pick<PluginMarketItem, 'sortValue'>>;
   /** Main-only, request-scoped query results for legacy installed-count deduction. */
   legacyQueryPlugins?: VisiblePluginSummary[];
 };
@@ -99,7 +105,7 @@ const defaultFetcher: Fetcher = (apiPath, options) =>
     // 详情,logLabel 用不含 ID 的路由模板代替真实 path(2026-08-06 review)。
     redactErrorDetails: true,
     logLabel: '/api/plugins',
-    allowedRedactedErrorCodes: PLUGIN_MARKET_PASSTHROUGH_ERROR_CODES,
+    allowedRedactedErrorCodes: options.allowedRedactedErrorCodes ?? PLUGIN_MARKET_PASSTHROUGH_ERROR_CODES,
   });
 
 /** plugin-server 普通客户端 API；每个响应都经过共享 v2 parser fail-closed。 */
@@ -174,7 +180,7 @@ export class PluginMarketApi {
   }
 
   async catalog(options: { scope?: PluginScope | 'all'; query?: string; limit?: number;
-    cursor?: string | null; counts?: boolean } = {}): Promise<PluginCatalogRead> {
+    cursor?: string | null; counts?: boolean; sort?: string } = {}): Promise<PluginCatalogRead> {
     if (options.cursor?.startsWith(LEGACY_CURSOR_PREFIX) || this.isKnownLegacyServer()) return this.legacyCatalog(options);
     try {
       return await this.readCatalogPage(options);
@@ -185,12 +191,30 @@ export class PluginMarketApi {
   }
 
   private async readCatalogPage(options: { scope?: PluginScope | 'all'; query?: string; limit?: number;
-    cursor?: string | null; counts?: boolean }) {
+    cursor?: string | null; counts?: boolean; sort?: string }): Promise<PluginCatalogRead> {
     const search = new URLSearchParams({ scope: options.scope ?? 'all', limit: String(options.limit ?? 12),
       counts: String(options.counts !== false) });
     if (options.query?.trim()) search.set('query', options.query.trim());
     if (options.cursor) search.set('cursor', options.cursor);
-    return parsePluginCatalogPage(await this.fetcher<unknown>(`/api/plugins/catalog?${search}`, this.requestOptions()), pluginObjectUrlOptions());
+    if (options.sort) search.set('sort', options.sort);
+    const response = await this.fetcher<unknown>(`/api/plugins/catalog?${search}`, {
+      ...this.requestOptions(),
+      ...(options.sort && options.cursor ? {
+        allowedRedactedErrorCodes: [...PLUGIN_MARKET_PASSTHROUGH_ERROR_CODES, 'INVALID_PARAMS'],
+      } : {}),
+    });
+    const page = parsePluginCatalogPage(response, pluginObjectUrlOptions());
+    if (!options.sort) return page;
+    const sortFields = parsePluginMarketSortFields(response);
+    const metric = sortFields.sorts?.find(option => option.key === sortFields.sort)?.metric;
+    if (!metric) return { ...page, ...sortFields };
+    // The protocol parser validates each row in order and drops unknown fields.
+    const { plugins: rawPlugins } = response as { plugins: Array<{ sortValue?: unknown }> };
+    const plugins = page.plugins.map((plugin, index) => {
+      const sortValue = parsePluginMarketSortValue(rawPlugins[index]?.sortValue, metric.kind);
+      return sortValue === undefined ? plugin : { ...plugin, sortValue };
+    });
+    return { ...page, ...sortFields, plugins };
   }
 
   /** 旧服务端：读整份目录后在本地分页，游标是本地偏移量。 */
@@ -208,12 +232,12 @@ export class PluginMarketApi {
     const visible = scope === 'all' ? catalog.plugins : catalog.plugins.filter(plugin => plugin.scope === scope);
     const plugins = visible.slice(offset, offset + limit);
     const next = offset + plugins.length;
-    const counts = options.counts === false ? null : {
-      all: catalog.plugins.length,
-      public: catalog.plugins.filter(plugin => plugin.scope === 'public').length,
-      organization: catalog.plugins.filter(plugin => plugin.scope === 'organization').length,
-      personal: catalog.plugins.filter(plugin => plugin.scope === 'personal').length,
-    };
+    const counts = options.counts === false ? null : { all: catalog.plugins.length, public: 0, organization: 0, personal: 0, official: 0, community: 0 };
+    if (counts) for (const plugin of catalog.plugins) {
+      counts[plugin.scope]++;
+      const group = pluginCatalogPublisherGroup(plugin.scope, plugin.publisherKind);
+      if (group) counts[group]++;
+    }
     return {
       schemaVersion: 2,
       plugins,
@@ -390,18 +414,19 @@ export class PluginMarketApi {
   /** `readmeLocale` 让服务端按该语言选详细介绍；旧服务端忽略这个参数。 */
   async detail(
     pluginId: string,
-    options?: { readmeLocale?: string },
-  ): Promise<GetPluginResponse['plugin']> {
-    const query = options?.readmeLocale
-      ? `?readmeLocale=${encodeURIComponent(options.readmeLocale)}`
-      : '';
-    return parseGetPluginResponse(
-      await this.fetcher<unknown>(
-        `/api/plugins/${encodeURIComponent(pluginId)}${query}`,
-        this.requestOptions(),
-      ),
-      pluginObjectUrlOptions(),
-    ).plugin;
+    options?: { readmeLocale?: string; includeUpdates?: boolean },
+  ): Promise<GetPluginResponse['plugin'] & { updates?: PluginMarketUpdate[] }> {
+    const search = new URLSearchParams();
+    if (options?.readmeLocale) search.set('readmeLocale', options.readmeLocale);
+    if (options?.includeUpdates) search.set('includeUpdates', 'true');
+    const response = await this.fetcher<unknown>(
+      `/api/plugins/${encodeURIComponent(pluginId)}${search.size ? `?${search}` : ''}`,
+      this.requestOptions(),
+    );
+    const { plugin } = parseGetPluginResponse(response, pluginObjectUrlOptions());
+    if (!options?.includeUpdates) return plugin;
+    const { updates } = response as { updates?: unknown };
+    return { ...plugin, updates: parsePluginUpdates(updates) };
   }
 
   async download(
@@ -441,4 +466,16 @@ export class PluginMarketApi {
     context.assertCurrent();
     return parsePluginUsageAck(response, events.map(event => event.eventId));
   }
+}
+
+function parsePluginUpdates(value: unknown): PluginMarketUpdate[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 10).flatMap((entry): PluginMarketUpdate[] => {
+    if (!entry || typeof entry !== 'object') return [];
+    const { version, publishedAt, releaseNotes } = entry as Record<string, unknown>;
+    if (typeof version !== 'string' || version.length > 64 || !version.trim() || [...version.trim()].length > 32 ||
+      typeof publishedAt !== 'string' || publishedAt.length > 64 || !Number.isFinite(Date.parse(publishedAt)) ||
+      typeof releaseNotes !== 'string' || releaseNotes.length > 16_384 || !releaseNotes.trim()) return [];
+    return [{ version: version.trim(), publishedAt, releaseNotes: releaseNotes.trim() }];
+  });
 }

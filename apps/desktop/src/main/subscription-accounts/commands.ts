@@ -1,21 +1,38 @@
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
+  isAccountProviderIdShape,
+  isPluginEngineProviderIdShape,
   isSubscriptionPoolProviderIdShape,
   isSubscriptionProvider,
+  type PluginEngineSessionAccountQuery,
   type SubscriptionAccountCommand,
   type SubscriptionSessionAccountQuery,
 } from '../../shared/subscriptionAccounts.js';
-import { PROVIDER_GROUP_STRATEGIES } from '../../shared/providerGroup.js';
+import { knownRouteStrategy } from '../../shared/routeStrategy.js';
 import { accountIdValid } from './store.js';
+import { GHOST_HARNESS_ACCOUNT_SECRET_MAX } from '@cindy/plugin-protocol';
+
+/** A plugin engine sign-in choice; secrets only for plugin engines (the caller restricts origins). */
+function pluginLoginFields(value: Record<string, unknown>, providerId: string): { methodId?: string; secret?: string } {
+  const { methodId, secret } = value;
+  if (methodId === undefined && secret === undefined) return {};
+  if (!isPluginEngineProviderIdShape(providerId)) throwIpcError('INVALID_PARAMS', 'Invalid account command');
+  if (methodId !== undefined && (typeof methodId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(methodId)))
+    throwIpcError('INVALID_PARAMS', 'Invalid sign-in method');
+  if (secret !== undefined && (typeof secret !== 'string' || !secret.trim() || secret.length > GHOST_HARNESS_ACCOUNT_SECRET_MAX))
+    throwIpcError('INVALID_PARAMS', 'Invalid secret');
+  return { ...(typeof methodId === 'string' ? { methodId } : {}), ...(typeof secret === 'string' ? { secret } : {}) };
+}
 
 /** null when `raw` is not a session read; it never reaches the management command executor. */
 export function parseSubscriptionSessionAccountQuery(
   raw: unknown,
-): SubscriptionSessionAccountQuery | null {
+): SubscriptionSessionAccountQuery | PluginEngineSessionAccountQuery | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const value = raw as Record<string, unknown>;
   if (value.action !== 'session') return null;
-  if (!isSubscriptionProvider(value.providerId))
+  const pluginEngine = isPluginEngineProviderIdShape(value.providerId);
+  if (!isSubscriptionProvider(value.providerId) && !pluginEngine)
     throwIpcError('INVALID_PARAMS', 'Invalid subscription provider');
   const id = (key: 'sessionId' | 'nativeSessionId') => {
     const item = value[key];
@@ -28,6 +45,23 @@ export function parseSubscriptionSessionAccountQuery(
   const nativeSessionId = id('nativeSessionId');
   const legacyProviderId = value.legacyProviderId;
   const routeProviderId = value.routeProviderId;
+  const model = value.model;
+  if (model !== undefined && model !== null
+    && (typeof model !== 'string' || !model.trim() || model.length > 512))
+    throwIpcError('INVALID_PARAMS', 'Invalid subscription model');
+  if (pluginEngine) {
+    if (legacyProviderId !== undefined || routeProviderId !== undefined)
+      throwIpcError('INVALID_PARAMS', 'Invalid subscription route');
+    if (!sessionId && !nativeSessionId)
+      throwIpcError('INVALID_PARAMS', 'Invalid subscription session');
+    return {
+      action: 'session',
+      providerId: value.providerId as string,
+      ...(sessionId ? { sessionId } : {}),
+      ...(nativeSessionId ? { nativeSessionId } : {}),
+      ...(typeof model === 'string' ? { model } : {}),
+    };
+  }
   if (routeProviderId !== undefined && (!isSubscriptionPoolProviderIdShape(routeProviderId) || legacyProviderId !== undefined))
     throwIpcError('INVALID_PARAMS', 'Invalid subscription route');
   if (legacyProviderId !== undefined
@@ -36,13 +70,9 @@ export function parseSubscriptionSessionAccountQuery(
     throwIpcError('INVALID_PARAMS', 'Invalid legacy subscription provider');
   if (!sessionId && !nativeSessionId && !legacyProviderId && !routeProviderId)
     throwIpcError('INVALID_PARAMS', 'Invalid subscription session');
-  const model = value.model;
-  if (model !== undefined && model !== null
-    && (typeof model !== 'string' || !model.trim() || model.length > 512))
-    throwIpcError('INVALID_PARAMS', 'Invalid subscription model');
   return {
     action: 'session',
-    providerId: value.providerId,
+    providerId: value.providerId as 'anthropic' | 'openai',
     ...(sessionId ? { sessionId } : {}),
     ...(nativeSessionId ? { nativeSessionId } : {}),
     ...(typeof model === 'string' ? { model } : {}),
@@ -59,7 +89,7 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
   // Other commands may name any provider that owns accounts (2026-11-13); the executing host
   // resolves it against its own records and rejects unknown ones.
   const builtinOnly = value.action === 'preview' || value.action === 'connect' || value.action === 'create';
-  if (builtinOnly ? !isSubscriptionProvider(value.providerId) : !isSubscriptionPoolProviderIdShape(value.providerId))
+  if (builtinOnly ? !isSubscriptionProvider(value.providerId) : !isAccountProviderIdShape(value.providerId))
     throwIpcError('INVALID_PARAMS', 'Invalid subscription provider');
   const providerId = value.providerId as string;
   const loginKey = value.loginKey;
@@ -81,23 +111,35 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
     return { action: 'connect', providerId, loginKey, target: value.target };
   if (value.action === 'create' && isSubscriptionProvider(providerId) && validLoginKey)
     return { action: 'create', providerId, loginKey };
-  if (value.action === 'place' && accountIdValid(accountId) && accountId !== 'default'
-    && (value.target === null || isSubscriptionPoolProviderIdShape(value.target)))
+  // Plugin engines may move their original login too: it is an ordinary account there.
+  if (value.action === 'place' && accountIdValid(accountId)
+    && (accountId !== 'default' || isPluginEngineProviderIdShape(providerId))
+    && (value.target === null || isAccountProviderIdShape(value.target)))
     return { action: 'place', providerId, accountId, target: value.target };
-  if (value.action === 'merge' && isSubscriptionPoolProviderIdShape(value.target) && value.target !== providerId)
+  if (value.action === 'merge' && isAccountProviderIdShape(value.target) && value.target !== providerId)
     return { action: 'merge', providerId, target: value.target };
   if (value.action === 'remove-provider' && !isSubscriptionProvider(providerId))
     return { action: 'remove-provider', providerId };
-  if ((value.action === 'add' || value.action === 'cancel') && validLoginKey)
-    return { action: value.action, providerId, loginKey };
+  if (value.action === 'add' && validLoginKey)
+    return { action: 'add', providerId, loginKey, ...pluginLoginFields(value, providerId) };
+  if (value.action === 'cancel' && validLoginKey)
+    return { action: 'cancel', providerId, loginKey };
   if (value.action === 'login' && accountIdValid(accountId) && validLoginKey)
-    return { action: 'login', providerId, accountId, loginKey };
+    return { action: 'login', providerId, accountId, loginKey, ...pluginLoginFields(value, providerId) };
+  if (value.action === 'token-login' && accountIdValid(accountId) && validLoginKey)
+    return { action: 'token-login', providerId, accountId, loginKey };
+  if (value.action === 'token-remove' && accountIdValid(accountId))
+    return { action: 'token-remove', providerId, accountId };
   if (value.action === 'remove' && accountIdValid(accountId))
     return { action: 'remove', providerId, accountId };
+  if (value.action === 'reorder' && Array.isArray(value.accountIds) && value.accountIds.length > 1
+    && value.accountIds.length <= 512 && value.accountIds.every(accountIdValid)
+    && new Set(value.accountIds).size === value.accountIds.length)
+    return { action: 'reorder', providerId, accountIds: value.accountIds };
   if (value.action === 'configure') {
     if (
       value.strategy !== undefined &&
-      !PROVIDER_GROUP_STRATEGIES.includes(value.strategy as never)
+      !knownRouteStrategy(value.strategy)
     )
       throwIpcError('INVALID_PARAMS', 'Invalid strategy');
     if (accountId !== undefined && !accountIdValid(accountId))
@@ -127,7 +169,8 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
       action: 'configure',
       providerId,
       accountId,
-      strategy: value.strategy,
+      // Old controllers and scripts still send the four former names.
+      ...(value.strategy !== undefined ? { strategy: knownRouteStrategy(value.strategy)! } : {}),
       paused: value.paused,
       limit: value.limit,
       weight: value.weight,

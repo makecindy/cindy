@@ -55,6 +55,11 @@ export interface MakerSessionCreateOpts extends CreateSessionOptions {
    * 已解析的来源,保证 Worker 与其模型选择使用同一条凭证路由。
    */
   providerId?: string | null;
+  /**
+   * 入口按模式选好来源时的凭据(model-groups/sessionStart.ts prepare)：bootstrapSession 把它挂到这个任务上，
+   * 第一轮派发时提交选路、记下任务经哪个模式建的并写说明。不传 = 没经模式。只在 main 内部传。
+   */
+  modelGroupStart?: string;
   [key: string]: unknown;
 }
 
@@ -161,8 +166,11 @@ export function readCreateSessionOpts(
       throwIpcError('INVALID_PARAMS', 'invalid plugin engine target device');
     }
   }
+  // 模型组凭据只由 main 内部的入口交给 bootstrapSession，界面与其他设备传来的一律不认。
+  const callerOpts: Record<string, unknown> = { ...body };
+  delete callerOpts.modelGroupStart;
   return {
-    ...body,
+    ...callerOpts,
     id,
     agentKind,
     workspaceKind,

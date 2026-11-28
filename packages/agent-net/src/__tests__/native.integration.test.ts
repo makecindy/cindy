@@ -196,6 +196,8 @@ it.skipIf(!library)('derives the Node identity and exchanges Noise-protected UDP
   outgoing.write(Buffer.alloc(total, 9));
   outgoing.finish();
   await until(async () => { await pollNative(); return (outgoing.progress()?.ackedBytes ?? 0) > 100_000; });
+  // Relay recovery reads this connection-wide receipt from the shipped WASM, including body streams.
+  expect(connection.stats()!.acknowledgedBytes).toBeGreaterThan(100_000);
   expect(outgoing.progress()!.stalledUs).toBeLessThan(2_000_000);
   expect(connection.sendProgress()!.queued[5]).toBeGreaterThan(0);
   await until(async () => outgoing.handedOver);

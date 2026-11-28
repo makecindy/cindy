@@ -247,11 +247,26 @@ export function isSystemPermissionDenialReason(reason: unknown): boolean {
   return SYSTEM_PERMISSION_DENIAL_PREFIXES.some((prefix) => reason.startsWith(prefix));
 }
 
+/** A confirmation nobody answered before its time limit: a system outcome, not a user rejection. */
+export function isPermissionConfirmationTimeoutReason(reason: unknown): reason is string {
+  return isSystemPermissionDenialReason(reason)
+    && (reason === 'timeout' || (reason as string).endsWith('_timeout'));
+}
+
+/**
+ * Model-facing guidance after a confirmation timed out. Without it the model reads the denial as the
+ * owner saying no (Codex's native text is "user rejected"), or keeps re-requesting the same approval.
+ */
+export const PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE = 'No one confirmed it before the confirmation timed out; the user did not reject it. Do not retry the same call automatically. Use an approach that does not need confirmation, or tell the user this step needs their confirmation.';
+
 /** Denial provenance for tool results and Codex's same-turn host feedback. */
 export function formatPermissionDenial(source: 'auto' | 'user' | 'system', reason?: string): string {
   const label = source === 'auto' ? 'Cindy Auto-review denied this tool call'
     : source === 'user' ? 'User denied this tool call via Cindy'
       : 'Cindy could not approve this tool call';
+  if (source === 'system' && isPermissionConfirmationTimeoutReason(reason?.trim())) {
+    return `${label} (${reason!.trim().slice(0, 240)}). ${PERMISSION_CONFIRMATION_TIMEOUT_GUIDANCE}`;
+  }
   const detail = reason?.trim().slice(0, 240);
   return detail ? `${label}: ${detail}` : `${label}.`;
 }

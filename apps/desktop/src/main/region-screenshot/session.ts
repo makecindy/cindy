@@ -46,6 +46,7 @@ const MAX_COLOR_TEXT = 64;
 
 export interface DisplayCapture {
   display: Display;
+  previewProfile?: Uint8Array<ArrayBuffer>;
   /** 定格原图，浮层显示与最终导出的唯一来源。 */
   image: NativeImage;
 }
@@ -248,6 +249,7 @@ export class RegionScreenshotSession {
       locale,
       translationPreference: readScreenshotTranslationPreference(),
       viewport,
+      previewProfile: capture.previewProfile,
       scaleFactor: display.scaleFactor,
       frame: {
         width: size.width,

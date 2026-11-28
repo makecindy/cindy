@@ -1,5 +1,6 @@
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
 import { clearConversationDisk, historyDiskAuthority, readConversationDisk, writeConversationDisk } from '@/session/remoteHistoryDiskCache';
+import { forgetChatServerMediaRoom } from './chatServerMediaCache';
 import type { ChatActor, ChatPage } from './chatServerClient';
 
 export interface CachedChatPage { version: 1; page: ChatPage; self: string; actors: ChatActor[] }
@@ -77,6 +78,7 @@ export async function cacheChatMessages(roomId: string, value: CachedChatPage, a
 /** Membership loss clears every opened thread too, and invalidates delayed hydration. */
 export async function forgetChatMessages(roomId: string): Promise<void> {
   own();
+  forgetChatServerMediaRoom(roomId);
   const keys = new Set([...memory.keys(), ...revisions.keys(), keyFor(roomId)]);
   for (const key of keys) {
     if (JSON.parse(key)[0] !== roomId) continue;

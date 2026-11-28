@@ -862,7 +862,7 @@ export interface BindStatePayload {
  * capability — an old peer that does not know the new id never negotiates it,
  * and its parse rejects stray frames without dropping the connection.
  */
-export const HOOK_PROVIDERS = ['slack', 'telegram', 'x', 'feishu'] as const;
+export const HOOK_PROVIDERS = ['slack', 'telegram', 'x', 'feishu', 'discord'] as const;
 export type HookProvider = (typeof HOOK_PROVIDERS)[number];
 
 /**
@@ -1456,6 +1456,12 @@ export const HOOK_FEATURE_PROVIDER_X = 'provider:x';
 
 /** Server capability announcing that its provider registry enables Feishu / Lark. */
 export const HOOK_FEATURE_PROVIDER_FEISHU = 'provider:feishu';
+
+/**
+ * Server capability announcing the official Discord bot. Hosted by
+ * telegram-hook-server on its own WebSocket path; old peers never negotiate it.
+ */
+export const HOOK_FEATURE_PROVIDER_DISCORD = 'provider:discord';
 
 /**
  * server 支持 hello.lifecycleAnnouncement 与 lifecycle.preference,可由

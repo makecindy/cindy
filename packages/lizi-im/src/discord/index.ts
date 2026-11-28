@@ -35,7 +35,7 @@ import {
 import type { DiscordChannelAccessConfig, DiscordChannelAccessStore, DiscordLane } from './lane.js';
 import { listBotGuilds } from './guildDirectory.js';
 import type { DirectoryClientLike, DiscordGuildInfo } from './guildDirectory.js';
-import { chunkDiscordText } from './chunk.js';
+import { chunkDiscordFinalText, chunkDiscordText } from './chunk.js';
 import { decodeMessageId, encodeMessageId } from './codec.js';
 import { markdownToDiscord } from './markdown.js';
 import { createDmResolver, sendChunked } from './outbound.js';
@@ -117,6 +117,11 @@ export interface DiscordIMOptions {
   channelAccess?: DiscordChannelAccessStore;
   /** 非主人点审批 / 提问卡片时的私密提示。 */
   ownerOnlyCardNotice?: string | (() => string);
+  /**
+   * 个人 bot 的「群成员也能提问」（宿主按频道现读）：白名单里的频道再经它放行成员。白名单自己的
+   * allowMembers（伙伴连接）照旧生效；缺省 = 只认白名单。
+   */
+  admitMember?: (lane: DiscordLane) => boolean;
 }
 
 interface FetchedMessage {
@@ -280,7 +285,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       ownerId,
       boundLane,
       ...(this.opts.finalTextStorage ? { authorizationStamp: (lane: string) => this.opts.finalTextStorage!().authorizationStamp(lane) } : {}),
-      laneEnabled: lane => isDiscordLaneAdmitted(this.readChannelAccess(), lane, requesterIsOwner),
+      laneEnabled: lane => this.laneAdmits(lane, requesterIsOwner),
       assertCurrent: () => {
         assertAccess();
         if (this.disposing || this.ownerUserId !== ownerId || (this.botContextId || this.deliveryBotId) !== appId || generation !== this.deliveryBindingGeneration ||
@@ -513,6 +518,18 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     return listBotGuilds(this.gateway.client as unknown as DirectoryClientLike | null);
   }
 
+  /** 这条 lane 现在是否允许该身份使用：白名单判定，非主人再看宿主的「群成员也能提问」。 */
+  private laneAdmits(lane: DiscordLane, isOwner: boolean): boolean {
+    const access = this.readChannelAccess();
+    if (isDiscordLaneAdmitted(access, lane, isOwner)) return true;
+    if (isOwner || !isDiscordLaneEnabled(access, lane)) return false;
+    try {
+      return this.opts.admitMember?.(lane) === true;
+    } catch {
+      return false;
+    }
+  }
+
   /** 当前服务器频道白名单；未配置 / 读失败按「全部不开放」处理（fail-closed）。 */
   private readChannelAccess(): DiscordChannelAccessConfig {
     try {
@@ -655,7 +672,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
           const message = await this.fetchMessage(messageId, { cleanup: true });
           await message.delete();
         },
-        chunk: chunkDiscordText,
+        chunk: chunkDiscordFinalText,
         resolveImageUrl: this.opts.resolveImageUrl,
         uploadImages: async (messageId, absPaths) => {
           await this.uploadImages(messageId, absPaths, assertCurrent);
@@ -1135,7 +1152,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
     const lane = discordLaneOfChannel(m.guildId, m.channelId ?? m.channel?.id ?? '', m.channel);
     if (!lane) return;
     const isOwner = m.author.id === ownerUserId;
-    if (!isDiscordLaneAdmitted(this.readChannelAccess(), lane, isOwner)) return;
+    if (!this.laneAdmits(lane, isOwner)) return;
     if (!isBotMentioned(m, botUserId)) return;
 
     const acceptedContext = this.acceptedContext(ownerUserId);
@@ -1197,7 +1214,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       this.finalTextAnchors.set(`${event.senderId}:${event.messageId}`, { assertCurrent: () => {
         store.assertCurrent();
         if (this.disposing || generation !== this.deliveryBindingGeneration || identity !== `${this.deliveryBotId}:${this.ownerUserId}` ||
-            authorization !== store.authorizationStamp(event.senderId) || (lane && !isDiscordLaneAdmitted(this.readChannelAccess(), lane, requesterIsOwner))) {
+            authorization !== store.authorizationStamp(event.senderId) || (lane && !this.laneAdmits(lane, requesterIsOwner))) {
           throw new DiscordOperationError('DISCORD_REPLY_ANCHOR_CHANGED');
         }
       }, restoreCredentialStamp: (previous, current) => {
@@ -1288,7 +1305,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       // 附件下载可达数秒：配置换代、白名单被撤销或成员准入被收回，都丢弃这条并回滚暂存。
       if (
         !this.isAcceptedContextCurrent(acceptedContext) ||
-        !isDiscordLaneAdmitted(this.readChannelAccess(), lane, isOwner)
+        !this.laneAdmits(lane, isOwner)
       ) {
         for (const discard of stagedDiscards) await discard().catch(() => undefined);
         return;
@@ -1319,7 +1336,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
       // 频道已被移出白名单：旧卡不再生效，不能借历史卡片继续驱动该频道的任务。
       const lane = decodeDiscordLaneUserId(event.senderId);
       if (!lane || !isDiscordLaneEnabled(this.readChannelAccess(), lane)
-        || (isQuestion && !isDiscordLaneAdmitted(this.readChannelAccess(), lane, i.user.id === this.ownerUserId))) {
+        || (isQuestion && !this.laneAdmits(lane, i.user.id === this.ownerUserId))) {
         await this.notifyExpiredInteraction(i);
         return;
       }

@@ -546,6 +546,32 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     }
   });
 
+  it('keeps teammate-owned skills beside in-place project skills on project-context lanes', async () => {
+    // Regression: a V2 group lane outside the teammate workspace loaded project skills in place
+    // and dropped the teammate's own skills (PR #12128 review).
+    mkdirSync(path.join(cwd, '.pi', 'skills', 'alpha'), { recursive: true });
+    writeFileSync(path.join(cwd, '.pi', 'skills', 'alpha', 'SKILL.md'), '---\nname: alpha\n---\n');
+    const ownRoot = mkdtempSync(path.join(tmpdir(), 'pi-own-skill-'));
+    const ownSkill = path.join(ownRoot, 'weekly-report');
+    mkdirSync(ownSkill, { recursive: true });
+    writeFileSync(path.join(ownSkill, 'SKILL.md'), '---\nname: weekly-report\n---\n');
+    const handle = await new PiAgent(buildDeps()).startSession({ ...opts(), botRuntimeProfile: {
+      botId: 'bot', profileVersion: 1, projectContext: true,
+      skillPolicy: { mode: 'allowlist', configured: [], catalog: [], ownSkills: [{ name: 'weekly-report', path: ownSkill }] },
+      mcpPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+      toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+    } });
+    try {
+      const skills = repeatedArgValues(knobs.spawnedArgs[0]!, '--skill');
+      expect(skills).toEqual(expect.arrayContaining([ownSkill, path.join(cwd, '.pi', 'skills', 'alpha')]));
+      expect(skills.filter((skill) => skill === path.join(cwd, '.pi', 'skills', 'alpha'))).toHaveLength(1);
+      expect(knobs.spawnedArgs[0]).not.toContain('--no-skills');
+    } finally {
+      await handle.close();
+      rmSync(ownRoot, { recursive: true, force: true });
+    }
+  });
+
   it('never reports project resource drift for bot profiles', async () => {
     const agent = new PiAgent(buildDeps());
     const handle = await agent.startSession({ ...opts(), sessionId: 'bot-no-drift', botRuntimeProfile: {

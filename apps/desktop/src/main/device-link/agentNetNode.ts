@@ -16,6 +16,12 @@ import { acceptTransportStatement } from './agentNetTransportStatement.js';
 import { agentNetStunServer } from '@cindy/agent-net-protocol';
 import { AgentNetMembership } from '@cindy/agent-net';
 import { readAgentNetDirectoryCache, writeAgentNetDirectoryCache } from './agentNetDirectoryCache.js';
+import {
+  getCachedPeerOfficialStunServer,
+  getOfficialAgentNetPeerBase,
+  mergeStunServers,
+  readPeerOfficialStunServer,
+} from './agentNetStunDiscovery.js';
 
 /** One record in the launcher's credential store: the seed, and once enrolled the certificate and private keys. */
 interface StoredIdentity {
@@ -54,6 +60,8 @@ export interface AgentNetNodePorts {
    * 直连的设备照常可用（和 Desktop 一样）。
    */
   directoryCacheFile?(): string | null;
+  /** Optional fixed local UDP listening port (`1..65535`) for Agent-Net direct transport; undefined/0 uses an ephemeral port. */
+  bindPort?(): number | undefined;
   log: { info(message: string): void; warn(message: string): void };
 }
 
@@ -73,6 +81,7 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
   let client: AgentNetClient | null = null;
   let sessionConfig: SessionConfig | null = null;
   let enrolling: Promise<AgentNetClient> | null = null;
+  let rejoining: Promise<AgentNetClient> | null = null;
   /**
    * This device's own enrolled identity, kept while Agent-Net is off: like the Desktop, a device that has joined the network
    * signs every legacy link with its current mode, so peers that know it accept the relay link once it says it is off.
@@ -129,21 +138,35 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
       fetch: ports.fetch, createWebSocket: (url, options) => ports.createWebSocket(url, options) as never });
   };
 
-  /** This device's member client on the official network: the stored one, renewed a day before expiry, or a new enrollment. */
-  function ensureClient(): Promise<AgentNetClient> {
-    if (enrolling) return enrolling;
+  /**
+   * This device's member client on the official network: the stored one, renewed a day before expiry, or a new enrollment.
+   * `rejoin` (「重新加入」, deviceRejoin.ts, as the Desktop's agentNetOfficial.ts): this device was removed from the account and
+   * its stored certificate was revoked with it even if it has not expired, so it enrolls again whatever the expiry and asks the
+   * service to lift the removal (`rejoin: true`); a failure never hands back the revoked certificate.
+   */
+  function ensureClient(options: { rejoin?: boolean } = {}): Promise<AgentNetClient> {
+    const rejoin = options.rejoin === true;
+    const inFlight = rejoining ?? (!rejoin ? enrolling : null);
+    if (inFlight) return inFlight;
+    const pendingRenewal = rejoin ? enrolling : null;
     const work = (async () => {
       assertCurrent();
       const base = ports.base(), subject = ports.subject();
       if (!base || !subject) throw new Error('AGENT_NET_UNAVAILABLE');
       const slot = slotFor(base, subject);
+      if (pendingRenewal) {
+        await pendingRenewal.catch(() => undefined);
+        assertCurrent();
+        if (ports.base() !== base || ports.subject() !== subject) throw new Error('AGENT_NET_OWNER_CHANGED');
+      }
       let stored = await read(slot); assertCurrent();
       if (!stored) { stored = { version: 1, seed: randomBytes(32).toString('base64url') }; await ports.writeSecret(slot, JSON.stringify(stored)); }
-      const ready = toClient(base, slot, stored);
+      const ready = rejoin ? null : toClient(base, slot, stored);
       if (ready && ready.certificate.expiresAt - Date.now() > RENEWAL_MARGIN_MS) return ready;
       const keys = identity(slot, stored);
+      const request = createEnrollmentRequest(keys, ports.deviceName().trim().slice(0, 64) || 'Cindy Host');
       let response: unknown;
-      try { response = await ports.enroll(base, createEnrollmentRequest(keys, ports.deviceName().trim().slice(0, 64) || 'Cindy Host')); }
+      try { response = await ports.enroll(base, rejoin ? { ...request, rejoin: true } : request); }
       catch (error) { assertCurrent(); if (ready) return ready; throw error; }
       assertCurrent();
       const enrolled = acceptEnrollment(keys, response, subject, stored.agentNet?.rootPublicKey);
@@ -153,9 +176,12 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
       await ports.writeSecret(slot, JSON.stringify(next)); assertCurrent();
       return toClient(base, slot, next)!;
     })();
-    enrolling = work;
+    if (rejoin) rejoining = work; else enrolling = work;
     void work.then((api) => { if (ports.current()) member = api; }, () => undefined);
-    void work.finally(() => { if (enrolling === work) enrolling = null; }).catch(() => undefined);
+    void work.finally(() => {
+      if (enrolling === work) enrolling = null;
+      if (rejoining === work) rejoining = null;
+    }).catch(() => undefined);
     return work;
   }
 
@@ -232,6 +258,8 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
     const liveMembers = () => { const now = currentMembership(); return now && membershipKey === openedKey && ports.current() ? now : null; };
     const listing = members && !members.hasDeviceList()
       ? Promise.race([members.prime(), new Promise<void>((resolve) => { (setTimeout(resolve, 3000) as { unref?: () => void }).unref?.(); })]) : null;
+    const peerOfficialBase = getOfficialAgentNetPeerBase(api.base);
+    const peerStunLookup = peerOfficialBase ? readPeerOfficialStunServer(peerOfficialBase, ports.fetch) : null;
     const module = await ports.coreModule(); assertLatest();
     const cacheFile = ports.directoryCacheFile?.() ?? null;
     const cache = cacheFile ? await readAgentNetDirectoryCache(cacheFile, assertLatest) : { devices: [], expiresAt: 0 };
@@ -240,22 +268,30 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
       cache.devices.push({ certificate: api.certificate, name: '', online: false, remoteControlEnabled: false, capabilities: [] });
     }
     members?.noteDirectory(cache.devices.filter((view) => view?.certificate?.deviceId).map((view) => ({ deviceId: view.certificate.deviceId, online: false })));
-    const stunServers: string[] = [];
+    let primaryStun: string | null = null;
+    let primaryMode: unknown;
     let relayUdpServer: string | undefined;
     let answered = false;
     try {
       const response = await ports.fetch(api.base + '/api/agent-net/info', { signal: AbortSignal.timeout(5000) });
-      const server = response.ok ? agentNetStunServer(api.base, await response.json()) : null;
+      const info: unknown = response.ok ? await response.json() : null;
+      const server = response.ok ? agentNetStunServer(api.base, info) : null;
       answered = response.ok;
-      if (server) { stunServers.push(server); relayUdpServer = server; lastUdpServer.set(api.base, server); }
+      if (answered && info && typeof info === 'object') primaryMode = (info as { mode?: unknown }).mode;
+      if (server) { primaryStun = server; relayUdpServer = server; lastUdpServer.set(api.base, server); }
       else if (answered) lastUdpServer.delete(api.base);
     } catch { /* An older relay publishes neither; the node stays on its WebSocket. */ }
     assertLatest();
     // As the Desktop (agentNetRuntime.ts): when /info cannot be read the last UDP server of this service is kept.
     const remembered = answered ? undefined : lastUdpServer.get(api.base);
-    if (remembered) { stunServers.push(remembered); relayUdpServer = remembered; }
+    if (remembered) { primaryStun = remembered; relayUdpServer = remembered; }
     if (listing) { await listing; assertLatest(); }
+    const allowPeerStun = peerOfficialBase !== null && primaryMode !== 'self-hosted';
+    const initialPeerStun = allowPeerStun ? getCachedPeerOfficialStunServer(peerOfficialBase) : null;
+    const stunServers = mergeStunServers(primaryStun, initialPeerStun);
+    const bindPort = ports.bindPort?.();
     const opened = await AgentNetWorkerSocket.open({ workerFile, client: api, assertCurrent, module, userId, stunServers, relayUdpServer,
+      ...(bindPort !== undefined ? { bindPort } : {}),
       cachedDirectory: cache.devices, directoryExpiresAt: cache.expiresAt,
       ...(members ? { peerRule: members.rule() } : {}),
       onDirectory(directory) {
@@ -265,6 +301,16 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
       log: ports.log, onPathChanged(deviceId, route) { if (route) connectedAt.set(deviceId, performance.now()); else connectedAt.delete(deviceId); } });
     try { assertLatest(); } catch (error) { opened.close(); throw error; }
     const previous = socket; socket = opened; client = api; previous?.close();
+    if (allowPeerStun && peerStunLookup?.pending) {
+      void peerStunLookup.pending.then((peerStun) => {
+        if (socket !== opened) return;
+        try { assertLatest(); } catch { return; }
+        const updated = mergeStunServers(primaryStun, peerStun);
+        if (updated.length !== stunServers.length || updated.some((server, index) => server !== stunServers[index])) {
+          opened.setStunServers?.(updated);
+        }
+      });
+    }
     const live = liveMembers();
     if (live) opened.restrictPeers?.(live.rule());
     if (sessionConfig) opened.useSessions?.(sessionConfig);
@@ -289,7 +335,49 @@ export function createAgentNetNode(ports: AgentNetNodePorts) {
   return {
     active,
     /** This device's member client (enrolled or renewed as needed); `openSocket` uses the same one. */
-    member: ensureClient,
+    member: (): Promise<AgentNetClient> => ensureClient(),
+    /**
+     * 「重新加入」 (deviceRejoin.ts): asks the official service to take this removed device back, enrolling again whatever its
+     * certificate's expiry, then forgets the refusal so the next connection uses Agent-Net again. 'skipped' when there is nothing
+     * to lift: Agent-Net is off and this device never enrolled on this account's service.
+     */
+    async rejoin(options?: { force?: boolean }): Promise<'rejoined' | 'skipped'> {
+      const base = ports.base(), subject = ports.subject();
+      if (!base || !subject || !ports.deviceId()) { membership?.reset(); return 'skipped'; }
+      if (options?.force !== true && !ports.enabled() && !(await read(slotFor(base, subject)))?.agentNet) {
+        membership?.reset();
+        return 'skipped';
+      }
+      await ensureClient({ rejoin: true });
+      refusedFor = null;
+      membership?.reset();
+      return 'rejoined';
+    },
+    /**
+     * Whether the official services say this device was removed from the account, asked when its own switch is turned on (Host
+     * `agent-net-on`, 2026-11-26: a removed device must be able to come back): the account's Device Link device list does not
+     * have it (signed in again after a removal, every computer of the account refuses it on Agent-Net), or the Agent-Net service
+     * says its identity was revoked (one `/directory` read, only once it enrolled there). False for every other answer, offline
+     * included; each answer is waited for at most 3 s so the switch is not held for a client's 10 s timeout.
+     */
+    async removedFromAccount(): Promise<boolean> {
+      const base = ports.base(), subject = ports.subject(), self = ports.deviceId();
+      if (!base || !subject || !self) return false;
+      const listed = await Promise.race([(ports.deviceLinkDeviceIds?.() ?? Promise.resolve(null)).catch(() => null),
+        new Promise<null>((resolve) => { setTimeout(() => resolve(null), 3_000).unref?.(); })]);
+      if (listed && !listed.includes(self)) return true;
+      if (!(await read(slotFor(base, subject)))?.agentNet) return false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          (async () => {
+            try { await (await ensureClient()).directory(AbortSignal.timeout(3_000)); return false; }
+            catch (error) { return (error as { code?: unknown } | null)?.code === 'DEVICE_REVOKED'; }
+          })(),
+          new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), 3_000); (timer as { unref?: () => void }).unref?.(); }),
+        ]);
+      } finally { if (timer) clearTimeout(timer); }
+    },
     openSocket,
     useSessions(config: SessionConfig) { sessionConfig = config; socket?.useSessions?.(config); },
     session(peer: string): SessionHandle | null { return socket?.session?.(peer) ?? null; },

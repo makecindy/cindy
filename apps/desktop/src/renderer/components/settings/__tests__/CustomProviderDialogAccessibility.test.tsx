@@ -7,6 +7,7 @@ import { BUNDLED_CATALOG, buildUserProvider, unifiedModelEntries, type CustomPro
 import { customProviderModelConfigFromCatalogModel } from '@/lib/customProviders';
 
 import { ProviderConnectionDialog } from '../ProviderConnectionDialog';
+import { fetchProviderModels as fetchModelsThroughMain } from '../../../../main/maker-host/provider-model-fetch';
 
 const customProviderMocks = vi.hoisted(() => ({
   readCustomProviderKey: vi.fn(),
@@ -54,6 +55,22 @@ beforeEach(() => {
 });
 
 afterEach(cleanup);
+
+it('refreshes only the selected Token Rhythm runtime using that runtime stored key', async () => {
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'tokenrhythm')!;
+  const initial: CustomProviderConfig = { id: 'tokenrhythm-saved-test', name: 'Token Rhythm', runtimes: structuredClone(preset.runtimes) };
+  customProviderMocks.readCustomProviderKey.mockImplementation(async (_id, agent) => `fake-${agent}-key`);
+  const transport = vi.fn<typeof fetch>(async () => new Response('{"data":[{"id":"future-account-model"}]}'));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(input => fetchModelsThroughMain(input, transport));
+  render(<ProviderConnectionDialog initial={initial} onClose={vi.fn()} onSaved={vi.fn()} />);
+  await waitForInitialDialogFocus();
+  fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+  await screen.findByRole('dialog', { name: 'settings.providers.custom.fetch.pickerTitle' });
+  expect(transport).toHaveBeenCalledOnce();
+  expect(window.electronAPI.maker.fetchProviderModels).toHaveBeenCalledWith(expect.objectContaining({ agent: 'codex', apiKey: 'fake-codex-key', savedProviderId: initial.id }));
+  expect(new Headers(transport.mock.calls[0][1]?.headers).get('authorization')).toBe('Bearer fake-codex-key');
+});
 
 // Model selection is now explicit; auth/metadata tests below still exercise their
 // original contract after choosing the fixture's models through the real picker.
@@ -2986,13 +3003,16 @@ describe('Magpie source metadata through the connection form', () => {
     expect(entries.map(entry => entry.capabilities[agent]!.wireModelId)).toEqual(discovered.map(model => model.id));
   });
 
-  it('clears a disappeared source on successful refresh while retaining opaque identity and unlisted manual rows', async () => {
+  it('clears a disappeared source and stale discoveredCost on successful refresh while retaining opaque identity and unlisted manual rows', async () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
     window.electronAPI.maker.fetchProviderModels = vi.fn().mockResolvedValue({ ok: true, models: [
       { id: 'foo', name: 'foo', discoverySnapshotId: 'snapshot-no-source' },
     ] });
     const initial: CustomProviderConfig = { id: 'magpie-form', name: 'Magpie', auth: { method: 'none' }, runtimes: {
-      codex: { baseUrl: 'http://127.0.0.1:1234/v1', models: [discovered[1], { ...discovered[0], name: 'Manual override' }] },
+      codex: { baseUrl: 'http://127.0.0.1:1234/v1', models: [
+        { ...discovered[1], discoveredCost: { input: 2, output: 8 } },
+        { ...discovered[0], name: 'Manual override', discoveredCost: { input: 1, output: 4 } },
+      ] },
     } };
     render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
@@ -3004,7 +3024,10 @@ describe('Magpie source metadata through the connection form', () => {
     const models = customProviderMocks.updateCustomProvider.mock.calls[0][0].runtimes.codex.models;
     expect(models.find((model: { id: string }) => model.id === 'foo')).toMatchObject({ opaqueModelId: true, discoverySnapshotId: 'snapshot-no-source' });
     expect(models.find((model: { id: string }) => model.id === 'foo').discoveredSource).toBeUndefined();
-    expect(models.find((model: { id: string }) => model.id === 'chatgpt/foo')).toMatchObject({ ...discovered[0], name: 'Manual override' });
+    expect(models.find((model: { id: string }) => model.id === 'foo').discoveredCost).toBeUndefined();
+    expect(models.find((model: { id: string }) => model.id === 'chatgpt/foo')).toMatchObject({
+      ...discovered[0], name: 'Manual override', discoveredCost: { input: 1, output: 4 },
+    });
   });
 });
 

@@ -3,6 +3,7 @@ import ts from 'typescript';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { InteractionDecision, InteractionRequest, InteractionResolver } from '@cindy/maker-core';
 import { createSharedPermission, type SharedPermission } from '../maker-ipc/sharedPermission';
+import { schedulePendingInteractionTimeout } from '../maker-ipc/interactionTimeout';
 import { beginInteractionRoute, installDesktopInteractionHandler, type InteractionHandler, type InteractionSession } from '../maker-ipc/interactionRouter';
 import { assertSharedTaskInteractionResolveCurrent, assertSharedTaskInvoke, setSharedTaskInteractionReader, type SharedTaskPeerCapture } from '../device-link/sharedTaskDispatch.js';
 
@@ -54,6 +55,7 @@ function harness() {
     isExecutionPaused: (id: string) => held.has(id),
     setExecutionPaused: (id: string, value: boolean) => { if (value) held.add(id); else held.delete(id); },
     onInteractionResolved: vi.fn(),
+    onBotCapabilityRefreshReady: vi.fn(),
   };
   const listeners = new Map<string, InteractionResolver>();
   const entries = new Map();
@@ -71,7 +73,7 @@ function harness() {
     isKnownOrcaWorkerSession: (id: string) => id === 'worker',
     broadcastSessionPatched: vi.fn(),
     agentInputCoordinatorHolder: coordinator, inputCoordinator: coordinator,
-    PERMISSION_INTERACTION_TIMEOUT_MS: 10 * MINUTE,
+    schedulePendingInteractionTimeout,
     installDesktopInteractionHandler,
     shouldNotifyAgentIslandForSession: () => false,
     flushAssistantBlock: vi.fn(), onInteractionMessage: vi.fn(),

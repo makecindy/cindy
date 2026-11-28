@@ -1649,7 +1649,7 @@ describe('session runtime control wiring', () => {
     expect(gate).toBeGreaterThan(-1);
     expect(setModel).toContain("modelSwitchPlan.outcome === 'reject'");
     expect(setModel.replace(/\s+/g, ' ')).toContain(
-      "isRemote: !!runtimeStatus.remoteHostId || modelSelectionOrigin === 'scoped' || (!internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke())",
+      "isRemote: !!runtimeStatus.remoteHostId || modelSelectionOrigin === 'scoped' || (!ownerWindowRebuild && !internalOptions.applyingUserSelectionOnSend && isDeviceLinkInvoke())",
     );
     expect(remotePressureRejection).toBeGreaterThan(gate);
     expect(remotePressureRejection).toBeLessThan(apply);
@@ -1678,6 +1678,24 @@ describe('session runtime control wiring', () => {
     expect(setModel).toContain('internalOptions.previousPiRoute.providerId');
     expect(setModel).toContain('setSessionProvider(sessionId, internalOptions.previousPiRoute.providerId)');
     expect(setModel).toContain('coldPiRouteWithoutLiveWindowCheck = true');
+  });
+
+  it('names the failing check when the remote owner window gate refuses a selection', () => {
+    const setModel = setModelSource();
+    const gate = setModel.indexOf('describeModelWindowGateFailure({');
+    const refusal = setModel.indexOf('model window gate refused the runtime selection');
+
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(setModel.indexOf('await applyRuntimeSetModelChange({'));
+    expect(refusal).toBeGreaterThan(gate);
+    // Guard-tier wiring contract: the gate lives in a closure too large to invoke in isolation.
+    // If the refusal stops going through describeModelWindowGateFailure, remote owners are back to
+    // an unactionable "could not be verified" with nothing in the log. Fixed prefixes: existing
+    // copy and log matching depend on them.
+    expect(setModel).toContain("'Pi final context window could not be verified'");
+    expect(setModel).toContain("'target context window or current usage could not be verified'");
+    expect(setModel).toContain('(${windowGateFailure.category}: ${windowGateFailure.detail}); runtime selection was not changed`');
+    expect(setModel).not.toMatch(/could not be verified; runtime selection was not changed'/);
   });
 
   it('switches and verifies Pi before deciding whether the actual window needs rebuild', () => {
@@ -1946,6 +1964,11 @@ function recoveryFixture() {
     log: { info: vi.fn(), warn: vi.fn(() => { order.push('warn'); }) },
     isHeadlessGhostSetupTurn: () => false, bindingStore: { findByTarget: () => null },
     needsSubscriptionAccountHandoff: vi.fn(), remoteBackgroundInvoke: vi.fn(),
+    // These ordering tests do not select an account. Keep the projection ports
+    // injected so source extraction cannot cold-load the subscription runtime
+    // inside a timed test; account handoff is exercised by runtime.test.ts.
+    dbToMakerEngineKind: (x: unknown) => x,
+    applySessionRuntimeOverrideForStart: vi.fn(), readProviderGroupBinding: vi.fn(),
     readCodexThreadStorageReadOnly: vi.fn(async () => ({ rolloutPath: '/fixture/history' })),
     classifyCodexHistoryOversized: vi.fn(async () => 'healthy'),
     DEFAULT_MODEL_COMPACTION_PCT: 80, getActiveCatalog: vi.fn(), dbToMakerAgentKind: (x: unknown) => x,

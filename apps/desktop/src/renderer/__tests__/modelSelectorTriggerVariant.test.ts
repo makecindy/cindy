@@ -44,6 +44,8 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.trigger.placeholder': '选择模型',
         'newChat.modelSelector.trigger.loading': '正在读取模型…',
+        'newChat.modelSelector.preparation.preparing': '准备中…',
+        'newChat.modelSelector.preparation.failed': '切换失败',
         'newChat.modelSelector.trigger.unresolved': '模型信息暂不可用',
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
         'newChat.modelSelector.trigger.agent.codex': 'Codex',
@@ -550,6 +552,26 @@ describe('resolveRemoteModelListStatus', () => {
     ).toBe('error');
   });
 
+  // Gap (2026-11-23 field report): one timeout reading the task computer's catalog made the pill
+  // show the red load-failure mark until the picker was opened, although the last catalog was still
+  // within its trust budget. Minimal input: a temporary error with and without a retained snapshot.
+  it('does not report a temporary failure while a bounded snapshot is still on screen', () => {
+    const base = { deviceId: 'dev-mini', agentKind: 'codex' as const, cc: ready, pi: ready };
+    const timeout = '[DEVICE_LINK_TIMEOUT] remote did not answer';
+    expect(resolveRemoteModelListStatus({ ...base, codex: { capabilities: {}, error: timeout },
+      providers: { error: timeout, providers: [{ id: 'openai' }] } })).toBe('ready');
+    // Nothing on screen yet: the failure is real for this view.
+    expect(resolveRemoteModelListStatus({ ...base, codex: ready,
+      providers: { error: timeout, providers: [] } })).toBe('error');
+    expect(resolveRemoteModelListStatus({ ...base, codex: { capabilities: null, error: timeout },
+      providers: { error: null, providers: [{ id: 'openai' }] } })).toBe('error');
+    // Expired budgets and refusals are not temporary even with a snapshot.
+    expect(resolveRemoteModelListStatus({ ...base, codex: ready, providers: {
+      error: '[MODEL_VISIBILITY_NOT_READY] Provider directory snapshot expired', providers: [{ id: 'openai' }] } })).toBe('error');
+    expect(resolveRemoteModelListStatus({ ...base, codex: ready, providers: {
+      error: '[DEVICE_LINK_ACCESS_REVOKED] revoked', providers: [{ id: 'openai' }] } })).toBe('error');
+  });
+
   it('only treats an unsupported provider channel as a compatible flat-list fallback', () => {
     expect(
       resolveRemoteModelListStatus({
@@ -565,6 +587,44 @@ describe('resolveRemoteModelListStatus', () => {
 });
 
 describe('ModelSelector trigger variants', () => {
+  // Unit regression for #9453: the existing trigger tests do not opt into the local shortcut. A connected
+  // multi-effort model must render both controls, then hide the shortcut under route management.
+  it('only splits out the effort menu for an unmanaged task', () => {
+    const props = {
+      remoteAgent: undefined,
+      modelId: 'claude-opus-4-8',
+      currentProviderId: 'anthropic',
+      effort: 'high' as const,
+      onModelChange: vi.fn(),
+      onEffortChange: vi.fn(),
+      vendorKey: 'cc' as const,
+      actualRoute: true,
+      useMorphPopover: true,
+      showEffortShortcut: true,
+    };
+    const effortButton = { name: /newChat.modelSelector.effortLabel/ };
+    const modelButton = { name: /Current: Opus 4\.8/ };
+    const { rerender } = render(React.createElement(ModelSelector, props));
+    expect(screen.getByRole('button', modelButton)).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole('button', effortButton), { key: 'Enter' });
+    const menu = screen.getByRole('menu', effortButton);
+    expect(within(menu).getByRole('menuitemradio', { checked: true })).toBeTruthy();
+    fireEvent.keyDown(menu, { key: 'Escape' });
+
+    const selection = { type: 'route' as const, id: 'managed' };
+    rerender(React.createElement(ModelSelector, {
+      ...props,
+      modelGroups: {
+        config: { routes: [] },
+        active: selection,
+        managedMeta: { selection, routeName: 'Managed route', autoSwitch: false },
+        onSelect: vi.fn(),
+      },
+    }));
+    expect(screen.getByRole('button', modelButton)).toBeTruthy();
+    expect(screen.queryByRole('button', effortButton)).toBeNull();
+  });
+
   it('keeps required model status tags as the fluid picker narrows', () => {
     expect(modelTagDensityForWidth(null)).toBe('full');
     // 320px pane 还要扣掉图标、effort、勾选和左右 padding；英文 Subscription
@@ -1404,6 +1464,12 @@ describe('ModelSelector trigger variants', () => {
       expect(trigger.querySelector('[data-model-selection-pending]')).not.toBeNull();
       expect(Boolean(trigger.querySelector('[data-composer-engine-mark="codex"]'))).toBe(!ultra);
       expect(trigger.querySelector('.lucide-zap')).toBeNull();
+      // The real selector must distinguish failed/preparing targets from an
+      // applied route; current/next context remains available in both states.
+      view.rerender(React.createElement(ModelSelector, { ...props, selectionPreparation: 'preparing' }));
+      expect(screen.getByRole('status').textContent).toBe('准备中…');
+      view.rerender(React.createElement(ModelSelector, { ...props, selectionPreparation: 'failed' }));
+      expect(screen.getByRole('status').textContent).toBe('切换失败');
       view.rerender(React.createElement(ModelSelector, { ...props, agentIdentity: resolveModelSelectorAgentIdentity('codex', null) }));
       expect(screen.getByRole('button').title).not.toContain('Next message:');
       expect(screen.getByRole('button').querySelector('[data-model-selection-pending]')).toBeNull();
@@ -3175,10 +3241,9 @@ describe('ModelSelector trigger variants', () => {
       name: 'newChat.modelSelector.search.placeholderAll',
     });
     expect(searchInput.hasAttribute('disabled')).toBe(true);
+    // Shared SearchInput disabled state (DESIGN.md §4 input/text: 60% opacity, not-allowed cursor).
     expect(searchInput.className).toContain('cursor-not-allowed');
-    expect(searchInput.className).toContain('text-[var(--text-disabled)]');
-    expect(searchInput.className).toContain('placeholder:text-[var(--text-disabled)]');
-    expect(searchInput.parentElement?.className).toContain('bg-[var(--surface-elevated-soft)]');
+    expect(searchInput.className).toContain('opacity-60');
 
     fireEvent.click(opusRow);
     fireEvent.pointerEnter(opusRow);

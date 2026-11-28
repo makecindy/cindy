@@ -43,16 +43,16 @@ describe('safe storage Codex restart invariants', () => {
 
   it('gates generic store, read, and remove through the Renderer key allowlist', () => {
     const src = source();
-    for (const [channel, nextChannel] of [
-      ["'safe-storage-store'", "'safe-storage-read'"],
-      ["'safe-storage-read'", "'safe-storage-remove'"],
-      ["'safe-storage-remove'", '// ── Auth IPC handlers'],
+    for (const [channel, nextChannel, operation] of [
+      ["'safe-storage-store'", "'safe-storage-read'", 'store'],
+      ["'safe-storage-read'", "'safe-storage-remove'", 'read'],
+      ["'safe-storage-remove'", '// ── Auth IPC handlers', 'remove'],
     ] as const) {
       const start = src.indexOf(channel);
       const end = src.indexOf(nextChannel, start + channel.length);
       expect(start).toBeGreaterThan(-1);
       expect(end).toBeGreaterThan(start);
-      expect(src.slice(start, end)).toContain('isValidRendererKey(key)');
+      expect(src.slice(start, end)).toContain(`isValidRendererKey(key, '${operation}')`);
     }
   });
 

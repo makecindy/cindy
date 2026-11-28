@@ -51,11 +51,15 @@ describe('guest usage meter', () => {
     expect(meter.observe(done(result), 'root').every(row => row.inputTokens === 0 && row.outputTokens === 0)).toBe(true);
   });
 
-  it('reads Codex and Pi per-turn usage against the current model', () => {
+  // The acp row is the contract with maker-core's acp `done.data.usage` (2026-11-23: plugin engine
+  // usage pages showed turns but no tokens). It fails if either side renames a field.
+  it('reads Codex, Pi and plugin engine (acp) per-turn usage against the current model', () => {
     expect(createGuestUsageMeter('codex').observe(done({ usage: { promptTokens: 9, completionTokens: 4, cachedTokens: 3, cacheCreationTokens: 1 } }), 'gpt-5.5'))
       .toEqual([{ model: 'gpt-5.5', turns: 1, inputTokens: 9, outputTokens: 4, cacheReadTokens: 3, cacheCreateTokens: 1, sdkCostUsd: 0 }]);
     expect(createGuestUsageMeter('pi').observe(done({ usage: { inputTokens: 7, outputTokens: 2, cacheReadTokens: 1 } }), 'grok'))
       .toEqual([{ model: 'grok', turns: 1, inputTokens: 7, outputTokens: 2, cacheReadTokens: 1, cacheCreateTokens: 0, sdkCostUsd: 0 }]);
+    expect(createGuestUsageMeter('acp').observe(done({ usage: { inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreationTokens: 2 } }), 'gemini'))
+      .toEqual([{ model: 'gemini', turns: 1, inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreateTokens: 2, sdkCostUsd: 0 }]);
   });
 
   // Unit regression: the first resumed SDK total establishes a baseline. Live

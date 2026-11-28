@@ -7,6 +7,8 @@ import { executeMobileGoalCommand, parseMobileDesktopCommand } from '@/session/d
 import { humanizeRemoteError } from '@/device-link/remoteStatus';
 import { evictDeviceProviders, fetchDeviceProviders, retainedProviderModelKey, type RetainedProviderCatalog } from '@/device-link/deviceProvidersCache';
 import { blockedSessionModelAtSend } from '@/session/sessionModelAtSend';
+import { isPendingPlainText } from '@/session/outboxBackgroundSend';
+import { buildOutboxItem } from '@/session/sessionOutbox';
 import { incomingShareSlotOrder } from '@/session/mobileLocalAttachmentUpload';
 import { composerDocumentProjectedText, emptyComposerDocument, normalizeComposerDocument, reconcileComposerProjectedText, serializeComposerDocument, textComposerDocument } from '@/session/composerDocument';
 import { captureNewSessionOwner } from '@/session/newSessionForm';
@@ -16,6 +18,7 @@ import { deviceDisplayName } from '@/device-link/deviceName';
 import {
   applyHostModelGroupResult, applyHostModelGroupRoute, buildHostModelGroupRouteNote, resolveHostModelGroup,
 } from '@/session/hostModelGroups';
+import { implicitMobileSourceRouteSelection } from '@/session/sourceRouteProviders';
 
 // Execute the actual page callbacks, excluding unrelated native/network UI.
 function callback(path: string, name: string) {
@@ -67,7 +70,7 @@ function newHarness(text = '/goal target', overrides: (bindings: Record<string, 
     getMobileAuthOwner, isMobileAuthOwnerCurrent, captureNewSessionOwner,
     agentAuthVerdict: 'ready', applyRemoteAgentPick: (value: unknown) => value,
     // Built-in drafts only: no plugin engine picked.
-    pluginEnginePick: null, pluginEngineWorktreeUnsupported: false, applyPluginEnginePick: (value: unknown) => value,
+    pluginEnginePick: null, applyPluginEnginePick: (value: unknown) => value,
     createNewSessionId: () => 'new-goal-task', saveNewSessionPreferences: noop,
     getDeviceProvidersGen: () => 1, reconcileNewSessionSubmitDraft, targetAgentHasFast: () => false,
     withTransientRemoteRetry: (fn: () => Promise<unknown>) => fn(), openLink: noop, subscribe: vi.fn(async () => {}),
@@ -79,7 +82,11 @@ function newHarness(text = '/goal target', overrides: (bindings: Record<string, 
     setAttachments: noop, setMediaAssetAttachments: noop, setAttachmentPreviews: noop, composerAnnotationsRef: { current: null },
     patchDraft: vi.fn(), router: { replace: vi.fn() }, humanizeRemoteError,
     // Model groups (model-groups.md §6.3): none selected unless a test picks one.
-    activeHostModelGroup: null as { id: string; name: string } | null, basePillModelSummary: 'test-model',
+    activeHostModelGroup: null as { id: string; name: string } | null,
+    activeAttachedSourceRouteId: null as string | null,
+    hostModelGroupsPayload: null,
+    implicitMobileSourceRouteSelection,
+    basePillModelSummary: 'test-model',
     resolveHostModelGroup, applyHostModelGroupRoute, applyHostModelGroupResult, buildHostModelGroupRouteNote,
     remoteAgentCatalogs: [], i18nInstance: { language: 'en' },
     confirmAgentUnauthenticated: vi.fn(async () => ({ unauthenticated: false, fresh: null })),
@@ -125,11 +132,14 @@ function existingHarness(args = 'target') {
     dismissPromptRecommendation: noop, hydrateComposerMessageReferenceBodies: async (doc: unknown) => doc,
     resolvePastedSessionLinkLabel: noop, requestMessageListFollowLatest: noop, noteLocalSend: noop, hasPastePlaceholders: () => false,
     beginOutboxAttachmentHandoff: async () => ({ prepare: async () => [], release: noop }),
-    attachmentPreviews: {}, incomingShareSlotOrder, buildOutboxItem: (input: unknown) => input, createOutboxClientId: () => 'ordinary-message',
+    attachmentPreviews: {}, incomingShareSlotOrder, buildOutboxItem, createOutboxClientId: () => 'ordinary-message',
+    status: 'online', holdBackgroundConnection: () => noop, beginBackgroundWork: noop,
+    isPendingPlainText, beginOutboxBackgroundSend: vi.fn(() => noop), mobileDebugLog: noop,
     mobileDurableOutbox: { add: vi.fn(async (_record: unknown) => {}) }, rememberSentAttachmentPreviews: noop,
     releaseUploadedSources: noop, setMediaAssetAttachments: noop, setAttachmentPreviews: noop,
     composerAnnotationsRef: { current: null }, setAttachments: noop, setAttachmentError: noop,
     voiceDictionaryLearningTrackerRef: { current: null }, formatRemoteError: String,
+    pendingReplyScope: 'test-reply-scope',
     getPendingCompanionReplyQuote: () => null, clearSentCompanionReplyQuote: noop,
   };
   bindings.setSending = vi.fn((value: boolean) => { bindings.sending = value; });
@@ -313,6 +323,7 @@ describe('existing task /goal send boundary', () => {
     if (scenario === 'attachments') h.bindings.attachmentsRef.current = [{}];
     if (scenario === 'busy') h.bindings.goalBusy = true;
     await h.run();
+    expect(h.bindings.beginOutboxBackgroundSend).not.toHaveBeenCalled();
     expect(h.bindings.sendInFlightRef.current).toBe(false);
     expect(h.bindings.sending).toBe(false);
     expect(h.release).toHaveBeenCalledOnce();
@@ -322,6 +333,7 @@ describe('existing task /goal send boundary', () => {
     h.bindings.setError.mockClear();
     await h.run();
     expect(h.bindings.setError).toHaveBeenCalledExactlyOnceWith(null);
+    expect(h.bindings.beginOutboxBackgroundSend).toHaveBeenCalledOnce();
     expect(h.bindings.mobileDurableOutbox.add).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       item: expect.objectContaining({ sessionId: 'existing-task', text: 'ordinary follow-up' }),
     }));

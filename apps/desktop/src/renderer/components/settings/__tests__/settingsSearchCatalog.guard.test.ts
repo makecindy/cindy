@@ -48,7 +48,8 @@ describe('settings search anchor contract', () => {
             definitions.set(local, namespace[exported] as Record<string, SettingsSearchEntry>);
         }
       }
-      for (const match of text.matchAll(/\b(?:id|titleId)=\{(\w+)\.(\w+)\.targetId\}/g)) {
+      // Local and cloud IM pages share each channel card; the cloud page prefixes its anchors.
+      for (const match of text.matchAll(/\b(?:id|titleId)=\{(?:`\$\{idPrefix\}\$\{)?(\w+)\.(\w+)\.targetId\}(?:`\})?/g)) {
         const definition = definitions.get(match[1])?.[match[2]];
         if (definition) definitionTargets.add(definition.targetId);
       }
@@ -79,11 +80,16 @@ describe('settings search anchor contract', () => {
       if (target === 'personal-im-wechat') continue;
       if (target) {
         const dynamicProviderAnchor =
-          /^cindy-im-(slack|telegram|x|feishu)$/.test(target) &&
+          /^cindy-im-(slack|telegram|x|feishu|discord)$/.test(target) &&
           source.includes('id={`cindy-im-${provider}`}');
+        // The shared IM group section builds its anchor from the group for both pages.
+        const dynamicGroupAnchor =
+          /^im-bot-group-(cindy|personal|plugins)$/.test(target) &&
+          source.includes('id={`${idPrefix}im-bot-group-${group}`}');
         expect(
           source.includes('id="' + target + '"') ||
             dynamicProviderAnchor ||
+            dynamicGroupAnchor ||
             definitionTargets.has(target),
           target,
         ).toBe(true);

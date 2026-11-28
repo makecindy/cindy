@@ -1,27 +1,13 @@
-/**
- * hooks converter:
- *   .claude/hooks/ + .claude/settings.json (hooks段)  ↔  .codex/hooks/ + .codex/hooks.json
- *
- * 工作内容（双向）：
- *  1. 复制脚本目录：源 hooks/ 下文件全部 copy 到目标 hooks/，目标已存在的同名文件跳过
- *  2. 重写脚本路径：源端 settings 里 command 字符串的 ".claude/hooks/" → 目标端的 ".codex/hooks/"
- *  3. 事件名：Codex 与 Claude Code 都用 camelCase（PreToolUse/PostToolUse/UserPromptSubmit/
- *     Stop/SessionStart），共有事件直接同名透传；两端独有事件（Claude 的 Notification/
- *     SubagentStop/PreCompact、Codex 的 PermissionRequest）也原样透传，由目标端忽略未识别项。
- *     见 https://developers.openai.com/codex/hooks
- *  4. 写入目标"索引"：
- *      - to-codex: 写到 .codex/hooks.json
- *      - to-claude: merge 进 .claude/settings.json 的 hooks 字段（不覆盖现有）
- *    Codex 原生 config.toml 的 hooks 双向只读参与覆盖判断；仅缺失内容追加进目标 JSON。
- *
- * 安全保证：
- *  - 已有同名事件整体跳过，不合并 matcher / handler；原生 TOML 只读参与事件去重
- *  - 脚本目录里同名文件 → 跳过
- *  - 任何子项（脚本 / 索引 entry）失败 → 该项失败但不阻塞其他
+/** Codex-bound hooks use the same compatibility plan for detection and writing.
+ * The reverse import retains its event-level merge and no-overwrite script copies.
  */
-
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import { planCodexHooks } from '../codexHookPlan.js';
+import { replaceFile } from '../../utils/replaceFile.js';
+import { readBoundedFileNoFollow } from '../../utils/readBoundedFile.js';
 
 import type { MigrationItem, MigrationStepStatus } from '../types.js';
 import {
@@ -74,71 +60,67 @@ async function copyHookScripts(srcDir: string, dstDir: string): Promise<{ copied
   return { copied, skipped };
 }
 
-/** to-codex: 读 settings.json hooks 段 + 复制脚本 → 写 .codex/hooks.json */
-async function convertToCodex(item: MigrationItem): Promise<ConvertOutcome> {
-  const claudeSettingsPath = path.join(path.dirname(item.source), 'settings.json');
-  const claudeHooksDir = item.source; // <wd>/.claude/hooks/
-  const codexHooksJson = item.target; // <wd>/.codex/hooks.json
-  const codexHooksDir = path.join(path.dirname(codexHooksJson), 'hooks');
-
-  // 先解析 settings.json 抽 hooks 段
-  let sourceSettings: Record<string, unknown> | null = null;
+/** A sibling hard link publishes complete bytes and fails if the user already owns the name. */
+async function publishNewFile(staged: string, file: string): Promise<boolean> {
   try {
-    const parsed = await readHookJson(claudeSettingsPath);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      sourceSettings = parsed as Record<string, unknown>;
+    try {
+      await fs.link(staged, file);
+    } catch (error) {
+      if (!['ENOTSUP', 'EPERM', 'ENOSYS'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      await fs.copyFile(staged, file, fs.constants.COPYFILE_EXCL);
     }
-  } catch (err) {
-    return { status: 'failed', detail: `settings.json 解析失败: ${err instanceof Error ? err.message : String(err)}` };
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw error;
   }
-  const claudeHooks = isPlainObject(sourceSettings?.hooks) ? sourceSettings.hooks : {};
-  const sourceEvents = unwrapNestedClaudeHooks(claudeHooks);
-  const tomlEvents = await readCodexTomlHooks(path.dirname(codexHooksJson));
+}
 
-  // 已有 codex hooks.json → merge；否则新建
-  let existing: Record<string, unknown> = {};
-  const hadExisting = await exists(codexHooksJson);
-  if (hadExisting) {
-    const parsed = await readHookJson(codexHooksJson);
-    if (isPlainObject(parsed)) existing = parsed;
+async function convertToCodex(item: MigrationItem): Promise<ConvertOutcome> {
+  const wd = path.dirname(path.dirname(path.resolve(item.source)));
+  const target = path.join(wd, '.codex', 'hooks.json');
+  if (target !== path.resolve(item.target) || path.join(wd, '.claude', 'hooks') !== path.resolve(item.source)) {
+    return { status: 'failed', detail: '项目脚本路径不匹配' };
   }
-  // Codex 规范：事件放在顶层 "hooks" 对象内；旧的平铺文件就地升级为包装结构
-  const codexEvents = extractCodexEvents(existing);
-  // 旧平铺文件（有事件但无顶层 hooks 包装）即使没有新增也要写回升级
-  const upgraded = hadExisting && !isPlainObject(existing.hooks) && Object.keys(codexEvents).length > 0;
-  const codexRoot: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(existing)) {
-    if (k === 'hooks' || k in codexEvents) continue;
-    codexRoot[k] = v;
-  }
+  const plan = await planCodexHooks(wd);
+  if (!plan || (item.id !== 'hooks:0' && item.id !== plan.id)) return { status: 'skipped' };
 
-  // 配置解析成功后才复制脚本，语法错误不能留下部分写入
-  let scriptResult = { copied: 0, skipped: 0 };
-  try {
-    scriptResult = await copyHookScripts(claudeHooksDir, codexHooksDir);
-  } catch (err) {
-    return { status: 'failed', detail: `脚本复制失败: ${err instanceof Error ? err.message : String(err)}` };
+  for (const script of plan.scripts.values()) {
+    if (!script.missing) continue;
+    const dir = path.join(wd, '.codex', 'hooks');
+    await fs.mkdir(dir, { recursive: true });
+    const file = path.join(dir, script.name);
+    const staged = path.join(dir, randomUUID() + '.tmp');
+    try {
+      await fs.writeFile(staged, script.bytes, { flag: 'wx', mode: script.mode });
+      if (!await publishNewFile(staged, file)) {
+        const copy = await readBoundedFileNoFollow(file, script.bytes.length, { nonBlocking: true });
+        if (!copy?.equals(script.bytes)) return { status: 'skipped' };
+      }
+    } finally {
+      await fs.rm(staged, { force: true });
+    }
   }
-
-  const additions = missingHookEvents(sourceEvents, [codexEvents, tomlEvents], 'to-codex');
-  const added = Object.keys(additions).length;
-  const skipped = Object.keys(sourceEvents).length - added;
-  if (added === 0 && scriptResult.copied === 0 && !upgraded) {
-    return { status: 'skipped', detail: '所有 hook 已存在' };
+  if (!isDeepStrictEqual(plan.previous, plan.next)) {
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const staged = target + '.' + randomUUID() + '.tmp';
+    try {
+      await fs.writeFile(staged, JSON.stringify(plan.next, null, 2) + '\n', {
+        flag: 'wx', mode: plan.targetMode === undefined ? 0o600 : plan.targetMode & 0o777,
+      });
+      if (plan.targetMode === undefined) {
+        if (!await publishNewFile(staged, target)) return { status: 'skipped' };
+      } else {
+        if (!(await fs.lstat(target)).isFile() || !isDeepStrictEqual(plan.previous, await readHookJson(target))) {
+          return { status: 'skipped' };
+        }
+        await replaceFile(staged, target);
+      }
+    } finally {
+      await fs.rm(staged, { force: true });
+    }
   }
-
-  if (added > 0 || upgraded) {
-    await fs.mkdir(path.dirname(codexHooksJson), { recursive: true });
-    codexRoot.hooks = appendHookEvents(codexEvents, additions);
-    await fs.writeFile(codexHooksJson, JSON.stringify(codexRoot, null, 2), 'utf8');
-  }
-
-  const parts: string[] = [];
-  if (scriptResult.copied > 0) parts.push(`脚本 ${scriptResult.copied}`);
-  if (added > 0) parts.push(`索引 ${added}`);
-  if (skipped > 0) parts.push(`跳过 ${skipped}`);
-  if (upgraded) parts.push('升级为 hooks 包装结构');
-  return { status: 'success', detail: parts.join(', ') };
+  return { status: 'success' };
 }
 
 /** to-claude: 读 Codex JSON / TOML hooks + 复制脚本 → merge 进 settings.json hooks 段 */

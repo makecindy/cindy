@@ -11,18 +11,21 @@ import { createCheckoutHandler } from './checkoutHandler';
 import type { CheckoutActivity } from './checkout';
 import { readOriginDefaultBranch } from './branchSync';
 import { createBranchSyncHandlers } from './branchSyncHandlers';
+import { readWorkspaceClutterSummary } from './workspaceClutter';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer';
 import { getDeviceLinkInvokeContext, isDeviceLinkInvoke } from '../device-link/invoke-context';
 import { isDesktopPlatform } from '../device-link/controllerPlatform';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current';
 
 import { ipcMain as ipcMainType, type IpcMain, shell } from 'electron';
+// Bind the Desktop platform ports before any Worktree operation runs.
+import './WorktreeManagerPorts.desktop.js';
 import * as WorktreeManager from './WorktreeManager';
 import * as worktreeStore from './worktreeStore';
 import { getWorktreeRestoreStatus, restoreWorktreeForSession } from './restore';
 import { generateModelWorktreeName } from './modelName';
 import { createLogger } from '../logger';
-import { throwIpcError } from '../utils/ipcValidate';
+import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate';
 
 const log = createLogger('worktree');
 
@@ -37,12 +40,18 @@ import type {
 export * as WorktreeManager from './WorktreeManager';
 export * as WorktreePool from './WorktreePool';
 export * as worktreeStore from './worktreeStore';
-export { resolveFreshSourceBranch, type FreshSourceResolution } from './freshBase';
+export {
+  resolveExplicitSourceRef,
+  resolveFreshSourceBranch,
+  type ExplicitSourceResolution,
+  type FreshSourceResolution,
+} from './freshBase';
 export {
   recycleWorktreeForRemovedSession,
   reconcileWorktreesForDeletedSessions,
 } from './sessionRemovalRecycle';
 export { reconcilePendingSafeDirectoryCleanups } from './WorktreeManager';
+export { configureWorktreeStoreDbSync } from './worktreeStoreCore.js';
 export {
   getWorktreeRestoreStatus,
   getManagedWorktreeReadinessForSession,
@@ -95,6 +104,15 @@ export function registerWorktreeIpc(
   });
   ipcMain.handle('worktree:branch-sync-status', branchSync.status);
   ipcMain.handle('worktree:sync-branch', branchSync.sync);
+  ipcMain.handle('worktree:workspace-clutter-summary', (event, input: unknown) => {
+    if (!isDeviceLinkInvoke()) assertTrustedAppRendererEvent(event);
+    const body = requireObject(input);
+    const baseRepo = requireString(body.baseRepo, 'baseRepo');
+    if (!path.isAbsolute(baseRepo) || baseRepo.length > 32768 || baseRepo.includes('\0')) {
+      throwIpcError('INVALID_PARAMS', 'Invalid repository path');
+    }
+    return readWorkspaceClutterSummary(baseRepo);
+  });
 
   ipcMain.handle('worktree:create', (_e, req: CreateWorktreeReq) => {
     const context = getDeviceLinkInvokeContext();

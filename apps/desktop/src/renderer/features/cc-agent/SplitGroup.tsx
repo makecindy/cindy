@@ -1,3 +1,4 @@
+import { isComposerAttachmentDrag } from '@/lib/composerDrop';
 import { companionChatTarget, isCompanionChatTarget } from '../bots/companionChatTarget';
 /**
  * SplitGroup — `chat-main` 内部的同窗多任务递归分栏。
@@ -1038,7 +1039,7 @@ function SplitDropTarget({
   const [dropSide, setDropSide] = useState<DropSide | null>(null);
 
   const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
-    if (!hasSplitGroupSessionType(event.dataTransfer.types)) return;
+    if (isComposerAttachmentDrag(event.dataTransfer) || !hasSplitGroupSessionType(event.dataTransfer.types)) return;
     if (isSplitGroupComposerDropTarget(event.target)) {
       setDropSide(null);
       return;
@@ -1061,7 +1062,7 @@ function SplitDropTarget({
 
   const handleDrop = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
-      if (!hasSplitGroupSessionType(event.dataTransfer.types)) return;
+      if (isComposerAttachmentDrag(event.dataTransfer) || !hasSplitGroupSessionType(event.dataTransfer.types)) return;
       if (isSplitGroupComposerDropTarget(event.target)) {
         setDropSide(null);
         return;

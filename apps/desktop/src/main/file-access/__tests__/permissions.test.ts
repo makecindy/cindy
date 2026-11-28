@@ -4,17 +4,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   openExternal: vi.fn<(...args: unknown[]) => Promise<void>>(() => Promise.resolve()),
-  readdir: vi.fn<(...args: unknown[]) => Promise<string[]>>(() => Promise.resolve([])),
+  opendir: vi.fn(),
+  read: vi.fn(),
+  close: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
   shell: { openExternal: mocks.openExternal },
 }));
 
-// 只替换 readdir,其余 fs/promises 能力保持真实,避免影响同模块图下的其他代码。
+// 只替换 opendir,其余 fs/promises 能力保持真实,避免影响同模块图下的其他代码。
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:fs/promises')>()),
-  readdir: mocks.readdir,
+  opendir: mocks.opendir,
 }));
 
 import {
@@ -37,8 +39,9 @@ function fsError(code: string): NodeJS.ErrnoException {
 beforeEach(() => {
   mocks.openExternal.mockReset();
   mocks.openExternal.mockResolvedValue(undefined);
-  mocks.readdir.mockReset();
-  mocks.readdir.mockResolvedValue([]);
+  mocks.read.mockReset().mockResolvedValue(null);
+  mocks.close.mockReset().mockResolvedValue(undefined);
+  mocks.opendir.mockReset().mockResolvedValue({ read: mocks.read, close: mocks.close });
   resetEpermGuidanceForTest();
 });
 
@@ -133,22 +136,25 @@ describe('protected folder permission guidance', () => {
 
   it('reports granted when the main process can read the folder', async () => {
     await expect(probeProtectedFolderAccess('Documents', 'darwin')).resolves.toBe('granted');
-    expect(mocks.readdir).toHaveBeenCalledWith(path.join(homedir(), 'Documents'));
+    expect(mocks.opendir).toHaveBeenCalledWith(path.join(homedir(), 'Documents'), { bufferSize: 1 });
+    expect(mocks.read).toHaveBeenCalledOnce();
+    expect(mocks.close).toHaveBeenCalledOnce();
   });
 
   it.each(['EPERM', 'EACCES'])('reports denied when macOS rejects the read: %s', async (code) => {
-    mocks.readdir.mockRejectedValue(fsError(code));
+    mocks.read.mockRejectedValue(fsError(code));
     await expect(probeProtectedFolderAccess('Desktop', 'darwin')).resolves.toBe('denied');
+    expect(mocks.close).toHaveBeenCalledOnce();
   });
 
   it('reports unknown for failures unrelated to TCC', async () => {
-    mocks.readdir.mockRejectedValue(fsError('ENOENT'));
+    mocks.read.mockRejectedValue(fsError('ENOENT'));
     await expect(probeProtectedFolderAccess('Downloads', 'darwin')).resolves.toBe('unknown');
   });
 
   it('does not probe on other platforms', async () => {
     await expect(probeProtectedFolderAccess('Desktop', 'linux')).resolves.toBe('granted');
-    expect(mocks.readdir).not.toHaveBeenCalled();
+    expect(mocks.opendir).not.toHaveBeenCalled();
   });
 
   it('serializes probes process-wide and only consumes the slot once guidance is shown', () => {
@@ -175,7 +181,7 @@ describe('protected folder permission guidance', () => {
   it('opens the matching macOS privacy pane only on macOS', async () => {
     await openFolderPrivacySettings('Desktop', 'darwin');
     expect(mocks.openExternal).toHaveBeenCalledWith(
-      'x-apple.systempreferences:com.apple.preference.security?Privacy_DesktopFolder',
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders',
     );
 
     mocks.openExternal.mockClear();

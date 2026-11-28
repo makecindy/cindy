@@ -34,9 +34,11 @@ const imageLightboxSource = readFileSync(
 );
 
 describe('Toast z-index — sits above all overlays (symptom #1)', () => {
-  it('ToastContainer class uses the toast layer, above lightboxes, dialogs and menus', () => {
+  // Includes modal-blocking: a toast never blocks interaction, so it stays above the session-expired
+  // prompt instead of being hidden behind its scrim (DESIGN.md §6, 2026-11-22).
+  it('ToastContainer class uses the toast layer, above lightboxes, dialogs, menus and blocking prompts', () => {
     expect(toastContainerSource).toMatch(/className="[^"]*\bz-toast\b(?!-)[^"]*"/);
-    for (const below of ['fullscreen', 'modal', 'modal-raised', 'modal-nested', 'dropdown', 'tooltip', 'modal-popover-nested'] as const) {
+    for (const below of ['fullscreen', 'modal', 'modal-raised', 'modal-nested', 'dropdown', 'tooltip', 'modal-popover-nested', 'modal-blocking'] as const) {
       expect(Z_INDEX_LAYERS.toast).toBeGreaterThan(Z_INDEX_LAYERS[below]);
     }
   });

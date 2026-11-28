@@ -7,6 +7,8 @@ import {
   readLegacyManagedPlugins,
   hasPluginCatalogPaging,
   parsePluginManagementMarketPage,
+  parsePluginManagementDetail,
+  parsePluginManagementRecommendations,
 } from '../remotePluginManagementClient';
 
 const snapshot = {
@@ -26,10 +28,26 @@ describe('paged Host reads', () => {
     expect(await hasPluginCatalogPaging('target')).toBe(true);
     expect(invoke.mock.calls.every(call => JSON.stringify(call).includes('capabilities'))).toBe(true);
   });
+  // Unit: retained optional response metadata must not change any of the desktop peer readers.
+  it.each([{}, { sizeBytes: 1200 }])('accepts market responses with optional package size %o', (metadata) => {
+    const item = { pluginId: 'market/weather', ghostId: 'weather', releaseId: 'release', name: 'Weather',
+      version: '1.0.0', scope: 'public', publisherKind: 'official', ...metadata };
+    const market = { ...snapshot.market, items: [item] };
+    const detail = { ...item, manifest: { schemaVersion: 3, minCindyVersion: '0.1.61',
+      id: 'weather', name: 'Weather', version: '1.0.0', kind: 'chip', entry: 'main.js' } };
+    expect(parsePluginManagementSnapshot({ ...snapshot, market }).market.items).toEqual([item]);
+    expect(parsePluginManagementMarketPage({ ...market, nextCursor: null, counts: null }).items).toEqual([item]);
+    expect(parsePluginManagementRecommendations([item])).toEqual([item]);
+    expect(parsePluginManagementDetail(detail)).toEqual(detail);
+  });
   it('rejects invalid source counts while preserving bounded custom grouping metadata', () => {
     const page = { ...snapshot.market, nextCursor: null, counts: { all: 1, public: 0, organization: 0, personal: 0, custom: 1 },
       customSourceNames: ['team'], customSourceCounts: [{ name: 'team', count: 1 }] };
     expect(parsePluginManagementMarketPage(page).customSourceCounts).toEqual(page.customSourceCounts);
+    const counts = { ...page.counts, official: 0, community: 0 };
+    expect(parsePluginManagementMarketPage({ ...page, counts }).counts).toEqual(counts);
+    for (const change of [{ official: 1 }, { community: -1 }, { official: '0' }])
+      expect(() => parsePluginManagementMarketPage({ ...page, counts: { ...counts, ...change } })).toThrow('INVALID_RESPONSE');
     expect(() => parsePluginManagementMarketPage({ ...page, customSourceCounts: [{ name: 'other', count: 1 }] })).toThrow('INVALID_RESPONSE');
     expect(() => parsePluginManagementMarketPage({ ...page, counts: { ...page.counts, all: 12 } })).toThrow('INVALID_RESPONSE');
   });

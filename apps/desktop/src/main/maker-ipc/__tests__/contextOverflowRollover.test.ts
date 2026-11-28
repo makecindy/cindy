@@ -672,6 +672,24 @@ describe('createContextOverflowRollover', () => {
     expect(deps.setPendingHandoff).not.toHaveBeenCalled();
   });
 
+  // Unit: account recovery sends the accepted input again. Its handoff must
+  // omit that exact row once while the persisted context survives a stopped retry.
+  it('keeps full saved context but omits the exact input from its account retry handoff', async () => {
+    const deps = makeDeps([
+      { clientId: 'first', role: 'user', content: 'phrase-in-prior-turn', createdAt: 1 },
+      { clientId: 'reply', role: 'assistant', content: 'prior-answer', createdAt: 2 },
+      { clientId: 'retry', role: 'user', content: 'exact-interrupted-input', createdAt: 3 },
+    ]);
+    const onHandoff = vi.fn();
+    await createContextOverflowRollover(deps).prepareNativeSessionRecovery('s1', 'retain-route', vi.fn(),
+      undefined, { userClientId: 'retry', onHandoff });
+    expect(onHandoff).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('exact-interrupted-input'), expect.stringContaining('prior-answer'));
+    expect(onHandoff.mock.calls[0]![1]).not.toContain('exact-interrupted-input');
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1',
+      expect.stringContaining('exact-interrupted-input'), expect.anything(), expect.any(AbortSignal));
+  });
+
   it('can restart a Bot before a native handle was ever created', async () => {
     const deps = makeDeps([]);
     deps.getSessionRow.mockResolvedValue({ ...await deps.getSessionRow(), source: 'bot', sdkSessionId: null, contextTokens: 0 });
@@ -744,6 +762,26 @@ describe('createContextOverflowRollover', () => {
       expect(deps.commitRebuild).not.toHaveBeenCalled();
       expect(deps.setPendingHandoff).not.toHaveBeenCalled();
     });
+
+  // Review of #12242: a plugin engine task's runtime is not a built-in live session, so an account
+  // handoff left it open and the next send still ran on the old account. Minimal input: no built-in
+  // live session, an idle (then a busy) runtime seen only by the any-engine lookup.
+  it('retires a plugin engine runtime before committing an account handoff, and never a busy one', async () => {
+    const deps = makeDeps([msg('user', 'keep this context', 'u1')]);
+    deps.getLiveSession.mockReturnValue(undefined);
+    const idle = { isTurnRunning: () => false, listBackgroundTasks: () => [] };
+    await createContextOverflowRollover({ ...deps, getRuntimeSession: () => idle })
+      .prepareNativeSessionRecovery('s1', 'retain-route', vi.fn());
+    expect(deps.closeSession).toHaveBeenCalledExactlyOnceWith('s1');
+    expect(deps.closeSession.mock.invocationCallOrder[0]!).toBeLessThan(deps.commitRebuild.mock.invocationCallOrder[0]!);
+
+    const busy = makeDeps([msg('user', 'keep this context', 'u1')]);
+    busy.getLiveSession.mockReturnValue(undefined);
+    await expect(createContextOverflowRollover({ ...busy, getRuntimeSession: () => ({ isTurnRunning: () => true }) })
+      .prepareNativeSessionRecovery('s1', 'retain-route', vi.fn())).rejects.toThrow('running');
+    expect(busy.closeSession).not.toHaveBeenCalled();
+    expect(busy.commitRebuild).not.toHaveBeenCalled();
+  });
 
   it('does not commit an account handoff after the user stops recovery', async () => {
     const deps = makeDeps([msg('user', 'keep this context', 'u1')]);
@@ -1052,6 +1090,25 @@ describe('createContextOverflowRollover', () => {
     expect(deps.replayUserMessage).not.toHaveBeenCalled();
   });
 
+  // Quota fallback regression (unit): unknown old capacity is not a reason to
+  // block a known overfull target; preserve history through the real handoff.
+  it.each([10_000, 300_000])('continues a Claude switch with unknown old window and %s tokens', async contextTokens => {
+    const deps = makeDeps([msg('user', 'Keep the migration plan and continue', 'u1')]);
+    deps.getSessionRow.mockResolvedValue({ ...(await deps.getSessionRow()),
+      agentKind: 'cc', contextWindow: 0, contextTokens, model: 'uncatalogued-model' });
+    deps.getLiveSession.mockReturnValue(undefined);
+    const rollover = createContextOverflowRollover(deps);
+    await expect(rollover.prepareModelWindowSwitch('s1', {
+      contextWindow: 200_000, recheckTargetPressure: true, confirmedTargetPressure: true,
+    })).resolves.toBe(contextTokens > 200_000 ? 'rebuilt' : 'not-needed');
+    if (contextTokens > 200_000) {
+      expect(deps.commitRebuild).toHaveBeenCalledWith('s1',
+        expect.stringContaining('Keep the migration plan and continue'),
+        expect.objectContaining({ reason: 'model-window-switch' }));
+    } else expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.replayUserMessage).not.toHaveBeenCalled();
+  });
+
   it('fails closed for a pressured cold SSH session without closing or rebuilding it', async () => {
     const deps = makeDeps([msg('user', '继续', 'u1')]);
     deps.getSessionRow.mockResolvedValue({
@@ -1339,6 +1396,83 @@ describe('createContextOverflowRollover', () => {
     await expect(rollover.tryRecover('s1', { reason: 'context-overflow', message: 'prompt too long' })).resolves.toBe(true);
     expect(deps.commitRebuild).toHaveBeenCalledOnce();
     expect(engine).toHaveBeenCalledExactlyOnceWith({ type: 'user', content: [{ type: 'text', text: 'retained text' }] });
+  });
+
+  // Unit, docs/plans/acp-plugin-bridge.md (overflow continuation on plugin engines): getLiveSession hides a
+  // plugin engine runtime, so recovery committed a rebuild beside the still-open overflowing session (marked
+  // as Claude Code) and the replay was refused, leaving a handoff queued into the old session. Minimal input:
+  // a plugin engine task whose turn overflowed, its runtime visible only to the any-engine lookup.
+  const PLUGIN_PROVIDER = 'acp-plugin:dsh-acp:dsh';
+  function pluginEngineOverflow() {
+    const deps = makeDeps([msg('user', 'retained text', 'accepted')], 'acp');
+    deps.getSessionRow.mockResolvedValue({ ...deps.getSessionRow.getMockImplementation()!(), agentKind: 'acp',
+      providerId: PLUGIN_PROVIDER, model: 'deepseek-v4-pro', contextWindow: 0 } as never);
+    deps.getLiveSession.mockReturnValue(undefined);
+    const engine = vi.fn();
+    const { replayPorts } = recoveryReplayPorts(engine);
+    const buildCreateOptsWithStderr = vi.fn((opts: Record<string, unknown>) => ({ ...opts, extraDirs: [], writableDirs: [] }));
+    const ports = {
+      ...replayPorts,
+      getDbClient: () => ({ drizzle: { select: () => ({ from: () => ({ where: () => ({
+        limit: async () => [{ workingDir: '/fixture', agentKind: 'acp', providerId: PLUGIN_PROVIDER, model: 'deepseek-v4-pro', fastMode: false }],
+      }) }) }) } }),
+      buildCreateOptsWithStderr,
+    };
+    const replayUserMessage: ContextOverflowRolloverDeps['replayUserMessage'] = (...args) =>
+      replayContextRecoveryWithPorts(ports as unknown as ReplayContextRecoveryPorts, ...args);
+    return { deps, engine, buildCreateOptsWithStderr, replayUserMessage };
+  }
+
+  it('continues an overflowed plugin engine task in a fresh session on the same engine', async () => {
+    const { deps, engine, buildCreateOptsWithStderr, replayUserMessage } = pluginEngineOverflow();
+    const runtime = { isTurnRunning: () => false, listBackgroundTasks: () => [] };
+    const rollover = createContextOverflowRollover({ ...deps, replayUserMessage, getRuntimeSession: () => runtime });
+    expect(rollover.claim('s1')).toBe('claimed');
+
+    await expect(rollover.tryRecover('s1', { reason: 'acp-request-failed', message: 'prompt is too long' })).resolves.toBe(true);
+
+    expect(deps.closeSession).toHaveBeenCalledExactlyOnceWith('s1');
+    expect(deps.closeSession.mock.invocationCallOrder[0]!).toBeLessThan(deps.commitRebuild.mock.invocationCallOrder[0]!);
+    expect(deps.commitRebuild).toHaveBeenCalledWith('s1', expect.any(String), expect.objectContaining({
+      reason: 'context-overflow', sourceAgentKind: 'acp', sourceProviderId: PLUGIN_PROVIDER,
+    }), expect.any(AbortSignal));
+    expect(buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'acp', providerId: PLUGIN_PROVIDER, model: 'deepseek-v4-pro', fastMode: false,
+    }));
+    expect(engine).toHaveBeenCalledOnce();
+  });
+
+  // Unit: an IM message identified by the persisted imSource belongs to its channel on overflow.
+  it('prepares a fresh plugin session for the IM owner to retry', async () => {
+    const { deps, engine, replayUserMessage } = pluginEngineOverflow();
+    deps.listMessages.mockResolvedValue([{
+      ...msg('user', 'from IM', 'accepted'),
+      agentMeta: { imSource: { im: 'feishu' } },
+    }]);
+    const runtime = { isTurnRunning: () => false, listBackgroundTasks: () => [] };
+    const rollover = createContextOverflowRollover({ ...deps, replayUserMessage, getRuntimeSession: () => runtime });
+    rollover.claim('s1');
+
+    await expect(rollover.tryRecover('s1', { reason: 'acp-request-failed', message: 'prompt is too long' })).resolves.toBe(true);
+
+    expect(deps.commitRebuild).toHaveBeenCalledOnce();
+    expect(engine).not.toHaveBeenCalled();
+  });
+
+  // Same rule: a busy runtime, or a host without the any-engine lookup, rebuilds nothing.
+  it.each([
+    ['a busy plugin engine runtime', { getRuntimeSession: () => ({ isTurnRunning: () => true }) }],
+    ['no any-engine runtime lookup', {}],
+  ])('leaves a plugin engine task untouched with %s', async (_case, extra) => {
+    const { deps, engine, replayUserMessage } = pluginEngineOverflow();
+    const rollover = createContextOverflowRollover({ ...deps, replayUserMessage, ...extra });
+    rollover.claim('s1');
+    await expect(rollover.tryRecover('s1', { reason: 'acp-request-failed', message: 'prompt is too long' })).resolves.toBe(false);
+    await expect(rollover.prepareUnhealthySession('s1')).resolves.toBe(false);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.commitRebuild).not.toHaveBeenCalled();
+    expect(deps.setPendingHandoff).not.toHaveBeenCalled();
+    expect(engine).not.toHaveBeenCalled();
   });
 
   it('keeps coordinator recovery when replay is rejected', async () => {

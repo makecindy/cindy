@@ -7,5 +7,14 @@ export type { PersistSessionStreamEventDeps, SessionStreamResult } from './sessi
 
 export function persistSessionStreamEvent(deps: PersistSessionStreamEventDeps,
   session: Session, prepared: PreparedSessionEvent) {
-  return persistSessionStreamEventCore({ ...deps, persistence, broadcastSubagentRunsChanged }, session, prepared);
+  // The session entry builds its dependencies with Object.create(...), so log and the Orca
+  // service live on the prototype. Spreading deps here copies own properties only and would
+  // drop them: the failure callback then throws on an undefined logger and hides the original
+  // database error, and worker text is no longer captured.
+  return persistSessionStreamEventCore({
+    log: deps.log,
+    orcaTeamServiceForEvents: deps.orcaTeamServiceForEvents,
+    persistence,
+    broadcastSubagentRunsChanged,
+  }, session, prepared);
 }

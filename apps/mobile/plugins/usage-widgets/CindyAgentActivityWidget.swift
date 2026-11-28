@@ -30,32 +30,94 @@ private extension CindyAgentActivityAttributes.ContentState {
   }
 }
 
+/// Dark tints of the companion hue families; mirrors the desktop Live Activity's
+/// `companionHueColor` and `agentIslandCompanionHueColor` in the macOS island helper.
+private func companionHueColor(_ hue: String) -> Color {
+  let rgb: (Double, Double, Double)
+  switch hue {
+  case "red": rgb = (0x4a, 0x2e, 0x2a)
+  case "orange": rgb = (0x4a, 0x35, 0x27)
+  case "amber": rgb = (0x47, 0x3a, 0x22)
+  case "green": rgb = (0x26, 0x40, 0x2a)
+  case "teal": rgb = (0x21, 0x40, 0x3e)
+  case "blue": rgb = (0x26, 0x34, 0x49)
+  case "pink": rgb = (0x45, 0x2b, 0x39)
+  case "graphite": rgb = (0x3c, 0x3c, 0x3a)
+  default: rgb = (0x32, 0x2b, 0x48)
+  }
+  return Color(red: rgb.0 / 255, green: rgb.1 / 255, blue: rgb.2 / 255)
+}
+
+/// Companion avatar as the Mac island draws it: artwork, or its emoji / initial on the hue.
+private struct CompanionAvatarView: View {
+  let companion: CindyAgentActivityAttributes.Companion
+  let size: CGFloat
+
+  var body: some View {
+    ZStack {
+      Circle().fill(companionHueColor(companion.hue))
+      if let artwork {
+        artwork.resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+      } else if companion.glyphIsInitial {
+        Text(companion.glyph)
+          .font(.system(size: size * 0.5, weight: .medium))
+          .foregroundStyle(Color.white.opacity(0.92))
+      } else {
+        Text(companion.glyph).font(.system(size: size * 0.58))
+      }
+    }
+    .frame(width: size, height: size)
+    .clipShape(Circle())
+  }
+
+  private var artwork: Image? {
+    companion.imageJpeg
+      .flatMap { Data(base64Encoded: $0) }
+      .flatMap { UIImage(data: $0) }
+      .map { Image(uiImage: $0) }
+  }
+}
+
+/// Who the activity is about: the companion once its task needs the user or has
+/// replied (same rule as macOS), otherwise Cindy in the pose for the status.
 private struct AgentActivityMascot: View {
   let state: CindyAgentActivityAttributes.ContentState
   let size: CGFloat
-  var stale = false
   var showBadge = false
 
   var body: some View {
-    Image("agent-island-\(state.pose)")
-      .resizable().interpolation(.high).scaledToFit()
+    identity
       .frame(width: size, height: size)
       .overlay(alignment: .bottomTrailing) {
-        if stale {
-          Image(systemName: "clock")
-            .font(.system(size: max(9, size * 0.35)))
-        } else if showBadge {
+        // An avatar has no pose, so it always carries the status dot.
+        if showBadge || showsCompanion {
           Circle().fill(state.tint)
             .frame(width: max(5, size * 0.3), height: max(5, size * 0.3))
             .overlay(Circle().stroke(.black, lineWidth: max(1, size * 0.06)))
         }
       }
-      .accessibilityLabel(stale ? Text("activity.waitingForUpdate") : Text(state.detail))
+      .accessibilityLabel(Text(state.detail))
+  }
+
+  @Environment(\.redactionReasons) private var redactionReasons
+
+  /// The avatar identifies the companion, so it follows the lock-screen privacy
+  /// setting like the privacy-sensitive title: when the system redacts, show Cindy.
+  private var showsCompanion: Bool {
+    state.companion != nil && state.status != "running" && !redactionReasons.contains(.privacy)
+  }
+
+  @ViewBuilder private var identity: some View {
+    if let companion = state.companion, showsCompanion {
+      CompanionAvatarView(companion: companion, size: size)
+    } else {
+      Image("agent-island-\(state.pose)")
+        .resizable().interpolation(.high).scaledToFit()
+    }
   }
 }
 
 /// Same counts as the desktop Live Activity: waiting + unread results · running.
-/// Only for content that is still confirmed; expired content shows no numbers.
 private struct AgentActivityCounts: View {
   let state: CindyAgentActivityAttributes.ContentState
   let size: CGFloat
@@ -109,25 +171,10 @@ private struct AgentActivityAttentionBreakdown: View {
   }
 }
 
-/// All that expired content shows. The task title, status and counts it carried
-/// can no longer be confirmed, so none of them stay on screen.
-private struct AgentActivityFreshness: View {
-  let state: CindyAgentActivityAttributes.ContentState
-  var font: Font = .caption
-
-  var body: some View {
-    HStack(spacing: 4) {
-      if let confirmedAt = state.confirmedAt, confirmedAt.isFinite, confirmedAt > 0 {
-        Text("activity.lastUpdated")
-        Text(Date(timeIntervalSince1970: confirmedAt), style: .time)
-      } else {
-        Text("activity.waitingForUpdate")
-      }
-    }
-    .font(font)
-    .lineLimit(1)
-  }
-}
+// No view here reads `context.isStale`: the stale date is an internal deadline,
+// never a state the user sees. The service ends the activity when it passes,
+// and the app does when it is next opened and still cannot confirm the content.
+// Until then the activity keeps showing the last content it received.
 
 /// Lock Screen and banner presentation of the aggregate task.
 private struct AgentActivityBanner: View {
@@ -135,19 +182,14 @@ private struct AgentActivityBanner: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      AgentActivityMascot(state: context.state, size: 38, stale: context.isStale, showBadge: true)
-      if context.isStale {
-        AgentActivityFreshness(state: context.state, font: .subheadline).foregroundStyle(WidgetPalette.ink2)
-        Spacer(minLength: 0)
-      } else {
-        VStack(alignment: .leading, spacing: 4) {
-          Text(context.state.title).font(.headline).lineLimit(1).privacySensitive()
-          Text(context.state.detail)
-            .font(.subheadline).foregroundStyle(context.state.tint).lineLimit(2)
-        }
-        Spacer(minLength: 0)
-        AgentActivityCounts(state: context.state, size: 18)
+      AgentActivityMascot(state: context.state, size: 38, showBadge: true)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(context.state.title).font(.headline).lineLimit(1).privacySensitive()
+        Text(context.state.detail)
+          .font(.subheadline).foregroundStyle(context.state.tint).lineLimit(2)
       }
+      Spacer(minLength: 0)
+      AgentActivityCounts(state: context.state, size: 18)
     }
     .padding(16)
     .activityBackgroundTint(WidgetPalette.background)
@@ -157,27 +199,21 @@ private struct AgentActivityBanner: View {
 }
 
 /// The small family: Apple Watch's Smart Stack, and wherever else the system
-/// asks for it. Two lines only; a stale activity shows just when it was last
-/// confirmed. The system supplies the background there, so text uses system
-/// styles rather than the phone palette.
+/// asks for it. Two lines only. The system supplies the background there, so
+/// text uses system styles rather than the phone palette.
 @available(iOS 18.0, *)
 private struct AgentActivityGlance: View {
   let context: ActivityViewContext<CindyAgentActivityAttributes>
 
   var body: some View {
     HStack(spacing: 8) {
-      AgentActivityMascot(state: context.state, size: 30, stale: context.isStale, showBadge: true)
-      if context.isStale {
-        AgentActivityFreshness(state: context.state).foregroundStyle(.secondary)
-        Spacer(minLength: 0)
-      } else {
-        VStack(alignment: .leading, spacing: 2) {
-          Text(context.state.title).font(.headline).lineLimit(1).privacySensitive()
-          Text(context.state.detail).font(.subheadline).foregroundStyle(context.state.tint).lineLimit(1)
-        }
-        Spacer(minLength: 0)
-        AgentActivityCounts(state: context.state, size: 16)
+      AgentActivityMascot(state: context.state, size: 30, showBadge: true)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(context.state.title).font(.headline).lineLimit(1).privacySensitive()
+        Text(context.state.detail).font(.subheadline).foregroundStyle(context.state.tint).lineLimit(1)
       }
+      Spacer(minLength: 0)
+      AgentActivityCounts(state: context.state, size: 16)
     }
     .foregroundStyle(.primary)
   }
@@ -198,30 +234,25 @@ private struct AgentActivityFamilyContent: View {
 
 @MainActor
 private enum AgentActivityPresentation {
-  // Use the installed app's scheme (including CN/beta variants), not the task
-  // URL from the latest push, for the stale Lock Screen fallback.
+  // Fallback for a payload whose task URL does not parse: the installed app's
+  // own scheme (including CN/beta variants).
   private static var homeURL: URL? {
     guard let scheme = Bundle.main.object(forInfoDictionaryKey: "CindyURLScheme") as? String else { return nil }
     return URL(string: "\(scheme):///")
   }
 
   private static func taskURL(_ context: ActivityViewContext<CindyAgentActivityAttributes>) -> URL? {
-    context.isStale ? homeURL : (URL(string: context.state.url) ?? homeURL)
+    URL(string: context.state.url) ?? homeURL
   }
 
   private static func expandedTask(_ context: ActivityViewContext<CindyAgentActivityAttributes>) -> some View {
     VStack(alignment: .leading, spacing: 4) {
-      if context.isStale {
-        AgentActivityFreshness(state: context.state, font: .subheadline)
-          .foregroundStyle(AgentActivityPalette.islandSecondary)
-      } else {
-        Text(context.state.title).font(.headline).foregroundStyle(AgentActivityPalette.islandText)
-          .lineLimit(1).privacySensitive()
-        Text(context.state.detail)
-          .font(.subheadline).foregroundStyle(context.state.tint).lineLimit(2)
-        if context.state.noticeCount > 0 {
-          AgentActivityAttentionBreakdown(state: context.state)
-        }
+      Text(context.state.title).font(.headline).foregroundStyle(AgentActivityPalette.islandText)
+        .lineLimit(1).privacySensitive()
+      Text(context.state.detail)
+        .font(.subheadline).foregroundStyle(context.state.tint).lineLimit(2)
+      if context.state.noticeCount > 0 {
+        AgentActivityAttentionBreakdown(state: context.state)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -244,31 +275,27 @@ private enum AgentActivityPresentation {
     } dynamicIsland: { context in
       DynamicIsland {
         DynamicIslandExpandedRegion(.leading) {
-          AgentActivityMascot(state: context.state, size: 36, stale: context.isStale, showBadge: true)
+          AgentActivityMascot(state: context.state, size: 36, showBadge: true)
             .padding(.leading, 4)
         }
         DynamicIslandExpandedRegion(.trailing) {
-          if !context.isStale {
-            AgentActivityCounts(state: context.state, size: 20, showLabels: true)
-              .multilineTextAlignment(.center)
-              .fixedSize(horizontal: false, vertical: true)
-              .frame(maxWidth: 160)
-              .padding(.trailing, 4)
-          }
+          AgentActivityCounts(state: context.state, size: 20, showLabels: true)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: 160)
+            .padding(.trailing, 4)
         }
         DynamicIslandExpandedRegion(.bottom) {
           expandedTask(context)
         }
       } compactLeading: {
-        AgentActivityMascot(state: context.state, size: 27, stale: context.isStale)
+        AgentActivityMascot(state: context.state, size: 27)
       } compactTrailing: {
-        if !context.isStale {
-          AgentActivityCounts(state: context.state, size: 13)
-        }
+        AgentActivityCounts(state: context.state, size: 13)
       } minimal: {
-        AgentActivityMascot(state: context.state, size: 27, stale: context.isStale, showBadge: true)
+        AgentActivityMascot(state: context.state, size: 27, showBadge: true)
       }
-      .keylineTint(context.isStale ? AgentActivityPalette.islandSecondary : context.state.tint)
+      .keylineTint(context.state.tint)
       // No URL or Link: let iOS foreground the app without changing its route.
     }
   }

@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { validateGhostManifest, type InstalledGhost } from '../../../shared/ghost.js';
@@ -6,6 +8,7 @@ import {
   configurePluginHarnessRegistry,
   createPluginHarnessRegistry,
   PLUGIN_HARNESS_REFRESH_COOLDOWN_MS,
+  PLUGIN_USAGE_WORKER_FAILURE,
   requestPluginHarnessRefresh,
   resetPluginHarnessRefreshForTests,
   type PluginHarnessRegistryDeps,
@@ -40,7 +43,20 @@ function ghost(overrides: Partial<InstalledGhost> = {}, harnesses: unknown[] = [
   };
 }
 
-function setup(ghosts: InstalledGhost[], published: Record<string, unknown> = {}, locale = 'en') {
+const NO_USAGE_CACHE_TIMING = {
+  activeThrottleMs: 0,
+  idleThrottleMs: 0,
+  resetMinIntervalMs: 0,
+  failureBackoffInitialMs: 0,
+  failureBackoffMaxMs: 0,
+} as const;
+
+function setup(
+  ghosts: InstalledGhost[],
+  published: Record<string, unknown> = {},
+  locale = 'en',
+  extraDeps: Partial<PluginHarnessRegistryDeps> = {},
+) {
   const process = {} as NodeWorkerProcess;
   let list = ghosts;
   let stored = published;
@@ -51,6 +67,7 @@ function setup(ghosts: InstalledGhost[], published: Record<string, unknown> = {}
     readAvailability: () => stored,
     uiLocale: () => uiLocale,
     spawn: vi.fn(async () => process),
+    ...extraDeps,
   };
   const registry = createPluginHarnessRegistry(deps);
   return {
@@ -65,7 +82,7 @@ describe('plugin harness registry', () => {
   // Account data belongs only to the approved engine. A worker can return extra private fields,
   // or outlive revocation while its provider request is in flight. Exercise the production read.
   it('reads only opted-in engines and drops private or late account data', async () => {
-    const { registry, deps, publish, setGhosts } = setup([ghost()]);
+    const { registry, deps, publish, setGhosts } = setup([ghost()], {}, 'en', { usageTiming: NO_USAGE_CACHE_TIMING });
     const key = 'dsh-plugin:dsh';
     const row = { currency: 'CNY', amount: '0.00' };
     const read = vi.fn(async () => ({ updatedAt: 1234, balances: [{ ...row, account: 'private' }] }));
@@ -83,6 +100,237 @@ describe('plugin harness registry', () => {
       return { updatedAt: 1234, balances: [row] };
     };
     expect(await registry.readUsage(key)).toBeNull();
+  });
+
+  it('reports retryable worker failures only to remote readers of a still-approved engine', async () => {
+    const { registry, deps, publish, setGhosts } = setup([ghost()], {}, 'en', { usageTiming: NO_USAGE_CACHE_TIMING });
+    publish({ harnesses: [{ id: 'dsh', available: true, reportsUsage: true }] });
+    const key = 'dsh-plugin:dsh';
+    const remote = { reportWorkerFailure: true };
+    deps.readUsage = async () => null;
+    expect(await registry.readUsage(key, undefined, remote)).toBeNull();
+    deps.readUsage = async () => PLUGIN_USAGE_WORKER_FAILURE;
+    expect(await registry.readUsage(key)).toBeNull();
+    await expect(registry.readUsage(key, undefined, remote)).rejects.toThrow('Plugin usage worker unavailable');
+    deps.readUsage = async () => {
+      setGhosts([ghost({ approvedHarnesses: [] })]);
+      return PLUGIN_USAGE_WORKER_FAILURE;
+    };
+    expect(await registry.readUsage(key, undefined, remote)).toBeNull();
+  });
+
+  // Host-level adaptive usage caching: protects plugin CLI/API workers across all surfaces
+  // (menubar, widget, composer chip, remote device-link) with 60m idle / 5m active / 5m reset
+  // recheck, in-flight dedup, failure backoff, owner isolation, and immediate revocation eviction.
+  it('caches and adaptively throttles plugin usage across idle, active, reset, force, and login transitions', async () => {
+    let now = 1_000_000;
+    let ownerScope = 'owner-a:1';
+    const resetAt = now + 15 * 60_000;
+    const usage = (remainingPercent: number) => ({
+      updatedAt: now,
+      windows: [{ label: '5h', remainingPercent, resetsAt: resetAt }],
+    });
+    const read = vi.fn(async () => usage(80));
+    const callAccount = vi.fn(async () => ({ ok: true }));
+    const { registry, publish, setGhosts } = setup(
+      [ghost()],
+      { harnesses: [{ id: 'dsh', available: true, reportsUsage: true, accounts: { methods: [{ id: 'api-key', label: 'Key', kind: 'secret' }] } }] },
+      'en',
+      { now: () => now, ownerScopeKey: () => ownerScope, readUsage: read, callAccount },
+    );
+    const key = 'dsh-plugin:dsh';
+
+    // Concurrent calls share one in-flight worker request.
+    let release!: (value: ReturnType<typeof usage>) => void;
+    const initial = usage(80);
+    read.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const [p1, p2] = [registry.readUsage(key), registry.readUsage(key)];
+    release(initial);
+    expect(await Promise.all([p1, p2])).toEqual([initial, initial]);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // Idle reads within 60m (before resetAt) reuse cached snapshot.
+    now += 10 * 60_000;
+    expect(await registry.readUsage(key)).toEqual(initial);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // Crossing resetAt (+15m, age >= 5m) rechecks once even while idle.
+    now += 5 * 60_000;
+    const afterReset = usage(100);
+    read.mockResolvedValueOnce(afterReset);
+    expect(await registry.readUsage(key)).toEqual(afterReset);
+    expect(read).toHaveBeenCalledTimes(2);
+
+    // After crossing reset, idle reads stay cached for 60m.
+    now += 59 * 60_000;
+    expect(await registry.readUsage(key)).toEqual(afterReset);
+    expect(read).toHaveBeenCalledTimes(2);
+
+    // Real task activity switches to the 5m active tier (already >= 5m since last refresh).
+    registry.recordActivity(key);
+    const afterActivity1 = usage(70);
+    read.mockResolvedValueOnce(afterActivity1);
+    expect(await registry.readUsage(key)).toEqual(afterActivity1);
+    expect(read).toHaveBeenCalledTimes(3);
+
+    // Further activity within 5m stays throttled until 5m elapses.
+    now += 4 * 60_000;
+    registry.recordActivity(key);
+    expect(await registry.readUsage(key)).toEqual(afterActivity1);
+    expect(read).toHaveBeenCalledTimes(3);
+    now += 60_000;
+    const afterActivity2 = usage(60);
+    read.mockResolvedValueOnce(afterActivity2);
+    expect(await registry.readUsage(key)).toEqual(afterActivity2);
+    expect(read).toHaveBeenCalledTimes(4);
+
+    // Manual force respects the 15s cooldown, then bypasses adaptive TTL.
+    now += 10_000;
+    expect(await registry.readUsage(key, undefined, { force: true })).toEqual(afterActivity2);
+    expect(read).toHaveBeenCalledTimes(4);
+    now += 5_000;
+    const afterForce = usage(55);
+    read.mockResolvedValueOnce(afterForce);
+    expect(await registry.readUsage(key, undefined, { force: true })).toEqual(afterForce);
+    expect(read).toHaveBeenCalledTimes(5);
+
+    // Login invalidates cached usage immediately.
+    await registry.loginAccount(key, undefined, 'api-key', 'sk-new');
+    const afterLogin = usage(95);
+    read.mockResolvedValueOnce(afterLogin);
+    expect(await registry.readUsage(key)).toEqual(afterLogin);
+    expect(read).toHaveBeenCalledTimes(6);
+
+    // Owner switch isolates and clears cache.
+    ownerScope = 'owner-b:2';
+    const afterOwner = usage(42);
+    read.mockResolvedValueOnce(afterOwner);
+    expect(await registry.readUsage(key)).toEqual(afterOwner);
+    expect(read).toHaveBeenCalledTimes(7);
+
+    // Revocation immediately stops returning cached account data.
+    setGhosts([ghost({ approvedHarnesses: [] })]);
+    expect(await registry.readUsage(key)).toBeNull();
+    publish({ harnesses: [{ id: 'dsh', available: true, reportsUsage: true }] });
+    setGhosts([ghost()]);
+    // Re-enabling starts fresh (cache was evicted on revocation).
+    const afterReenable = usage(88);
+    read.mockResolvedValueOnce(afterReenable);
+    expect(await registry.readUsage(key)).toEqual(afterReenable);
+    expect(read).toHaveBeenCalledTimes(8);
+  });
+
+  it('backs off exponentially on plugin usage worker failures and preserves last known snapshot locally', async () => {
+    let now = 1_000_000;
+    const good = { updatedAt: now, balances: [{ currency: 'USD', amount: '12.00' }] };
+    const read = vi.fn()
+      .mockResolvedValueOnce(good)
+      .mockResolvedValueOnce(PLUGIN_USAGE_WORKER_FAILURE)
+      .mockResolvedValueOnce(PLUGIN_USAGE_WORKER_FAILURE)
+      .mockResolvedValueOnce({ updatedAt: now + 99, balances: [{ currency: 'USD', amount: '11.00' }] });
+    const { registry } = setup(
+      [ghost()],
+      { harnesses: [{ id: 'dsh', available: true, reportsUsage: true }] },
+      'en',
+      { now: () => now, readUsage: read },
+    );
+    const key = 'dsh-plugin:dsh';
+
+    expect(await registry.readUsage(key)).toEqual(good);
+    // Advance past 60m idle TTL -> worker failure keeps last good snapshot locally and backs off 5m.
+    now += 60 * 60_000;
+    expect(await registry.readUsage(key)).toEqual(good);
+    expect(read).toHaveBeenCalledTimes(2);
+
+    // Inside 5m backoff: remote caller still learns worker failed without hitting worker again.
+    now += 4 * 60_000;
+    await expect(registry.readUsage(key, undefined, { reportWorkerFailure: true }))
+      .rejects.toThrow('Plugin usage worker unavailable');
+    expect(await registry.readUsage(key)).toEqual(good);
+    expect(read).toHaveBeenCalledTimes(2);
+
+    // At +5m: retries once, fails -> doubles backoff to 10m.
+    now += 60_000;
+    expect(await registry.readUsage(key)).toEqual(good);
+    expect(read).toHaveBeenCalledTimes(3);
+    now += 9 * 60_000;
+    expect(await registry.readUsage(key)).toEqual(good);
+    expect(read).toHaveBeenCalledTimes(3);
+
+    // At +10m: succeeds and clears backoff.
+    now += 60_000;
+    expect(await registry.readUsage(key)).toMatchObject({ balances: [{ amount: '11.00' }] });
+    expect(read).toHaveBeenCalledTimes(4);
+
+    // Manual force failure 1m after a fresh success still retries as soon as 5m backoff expires
+    // (does not wait out the remaining 60m idle TTL from the earlier success).
+    now += 60_000;
+    read.mockResolvedValueOnce(PLUGIN_USAGE_WORKER_FAILURE);
+    expect(await registry.readUsage(key, undefined, { force: true })).toMatchObject({ balances: [{ amount: '11.00' }] });
+    expect(read).toHaveBeenCalledTimes(5);
+    now += 4 * 60_000;
+    expect(await registry.readUsage(key)).toMatchObject({ balances: [{ amount: '11.00' }] });
+    expect(read).toHaveBeenCalledTimes(5);
+    now += 60_000;
+    read.mockResolvedValueOnce({ updatedAt: now, balances: [{ currency: 'USD', amount: '10.00' }] });
+    expect(await registry.readUsage(key)).toMatchObject({ balances: [{ amount: '10.00' }] });
+    expect(read).toHaveBeenCalledTimes(6);
+  });
+
+  it('invalidates in-flight usage probes on loginAccount so post-login reads never reuse or cache pre-login data', async () => {
+    let now = 1_000_000;
+    let releaseOld!: (value: unknown) => void;
+    const oldUsage = { updatedAt: now, balances: [{ currency: 'USD', amount: '1.00' }] };
+    const newUsage = { updatedAt: now + 5_000, balances: [{ currency: 'USD', amount: '99.00' }] };
+    const read = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => { releaseOld = resolve; }))
+      .mockResolvedValueOnce(newUsage);
+    const callAccount = vi.fn(async () => ({ ok: true }));
+    const { registry } = setup(
+      [ghost()],
+      { harnesses: [{ id: 'dsh', available: true, reportsUsage: true, accounts: { methods: [{ id: 'api-key', label: 'Key', kind: 'secret' }] } }] },
+      'en',
+      { now: () => now, readUsage: read, callAccount },
+    );
+    const key = 'dsh-plugin:dsh';
+
+    const preLoginRead = registry.readUsage(key);
+    await registry.loginAccount(key, undefined, 'api-key', 'sk-new-account');
+
+    // Post-login read must start a fresh worker call instead of joining the pre-login flight.
+    expect(await registry.readUsage(key)).toEqual(newUsage);
+    expect(read).toHaveBeenCalledTimes(2);
+
+    // Late pre-login probe settling afterward must not overwrite the new cache or return stale quota.
+    releaseOld(oldUsage);
+    expect(await preLoginRead).toBeNull();
+    expect(await registry.readUsage(key)).toEqual(newUsage);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  // 引擎账号(subscription-account-pools.md 插件引擎的账号)：账号目录只给声明了登录方式的引擎，且只能是 Cindy
+  // 为这个引擎建的目录；Key 只交给要求 Key 的方式。最小失败输入：没声明账号的引擎带账号目录启动；目录在根之外。
+  it('starts an engine on an account directory only when its plugin keeps accounts apart', async () => {
+    const root = path.resolve('/data/owners/u/plugin-engine-accounts/dsh-plugin/dsh');
+    const account = path.join(root, 'cindy-0123456789ab-00000000-0000-4000-8000-00000000000a');
+    const r = setup([ghost()], { harnesses: [{ id: 'dsh', available: true }] });
+    r.deps.accountRoot = () => root;
+    const call = vi.fn(async (_ghost: string, method: string) => method === 'accountLogin' ? { ok: true } : { state: 'signed-in', identity: { email: 'a@example.com' }, token: 'x' });
+    r.deps.callAccount = call;
+    await expect(r.registry.spawn('dsh-plugin:dsh', { accountDir: account })).rejects.toThrow('cannot run on this account');
+    expect(await r.registry.readAccountStatus('dsh-plugin:dsh')).toBeNull();
+
+    r.publish({ harnesses: [{ id: 'dsh', available: true, accounts: { methods: [{ id: 'api-key', label: 'API Key', kind: 'secret' }] } }] });
+    r.registry.reconcile();
+    await expect(r.registry.spawn('dsh-plugin:dsh', { accountDir: path.join(root, '..', 'other') })).rejects.toThrow('cannot run on this account');
+    await expect(r.registry.spawn('dsh-plugin:dsh', { accountDir: account })).resolves.toBe(r.process);
+    expect(r.deps.spawn).toHaveBeenLastCalledWith('dsh-plugin', 'dsh', { accountDir: account });
+    // Only display fields of the status leave the worker.
+    expect(await r.registry.readAccountStatus('dsh-plugin:dsh', account)).toEqual({ state: 'signed-in', identity: { email: 'a@example.com' } });
+    expect(await r.registry.loginAccount('dsh-plugin:dsh', account, 'api-key')).toEqual({ ok: false, error: 'invalid-secret' });
+    expect(await r.registry.loginAccount('dsh-plugin:dsh', account, 'api-key', 'sk-1')).toEqual({ ok: true });
+    expect(call).toHaveBeenLastCalledWith('dsh-plugin', 'accountLogin',
+      { harnessId: 'dsh', accountDir: account, methodId: 'api-key', secret: 'sk-1' }, expect.objectContaining({ maxTotalMs: expect.any(Number) }));
   });
 
   it('lists only enabled, approved, declared, receipt-approved engines with a known protocol', () => {

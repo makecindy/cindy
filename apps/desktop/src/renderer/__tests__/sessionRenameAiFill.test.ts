@@ -96,9 +96,9 @@ describe('SessionRenameInput AI rename fills edit state', () => {
     fireEvent.pointerDown(button);
     expect(input.classList.contains('ring-2')).toBe(false);
 
-    // Magic 保留原有的小圆角几何，只补键盘 focus-visible 反馈。
-    expect(button.classList.contains('rounded')).toBe(true);
-    expect(button.classList.contains('rounded-full')).toBe(false);
+    // Magic 在胶囊输入框端头用正圆，与外轮廓同心（DESIGN.md §5），并补键盘 focus-visible 反馈。
+    expect(button.classList.contains('rounded-full')).toBe(true);
+    expect(button.classList.contains('rounded')).toBe(false);
     expect(button.classList.contains('focus-visible:ring-2')).toBe(true);
     expect(button.classList.contains('focus-visible:ring-[var(--focus-ring-soft)]')).toBe(true);
   });

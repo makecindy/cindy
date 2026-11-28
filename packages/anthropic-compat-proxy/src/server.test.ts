@@ -25,12 +25,14 @@ import {
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
   createToolReferenceRecoveryRule,
+  createNativeMcpHistoryRecoveryRule,
   createVllmResponsesCompatibilityRule,
   dedupeDuplicateToolUseIds,
   repairToolExchangeAdjacency,
   stripEncryptedContentFromBody,
 } from './transform.js';
 import { createXaiModelInputRecoveryRule } from './xai-model-input.js';
+import { createMissingReasoningItemRecoveryRule } from './missing-reasoning-recovery.js';
 import { createAnthropicEffortCompatibilityRule } from './anthropic-effort-compatibility.js';
 import { closeTestConnections, fetchOverTestConnections as fetch, listenOnAvailableLoopbackPort } from './test-loopback-server.js';
 import { createThreadStripController } from './thread-strip-controller.js';
@@ -120,6 +122,127 @@ async function post(url: string, body: unknown): Promise<{ status: number; text:
   });
   return { status: res.status, text: await res.text() };
 }
+
+// #9928 / integration: an upstream 404 names one unsaved reasoning item in a
+// stateless replay. Legacy 400/422 rule tests do not cover this status or its buffer limit.
+describe('stateless Responses reasoning recovery', () => {
+  const missingReasoningItemRecoveryRule = createMissingReasoningItemRecoveryRule(() => true);
+  const stale = { type: 'reasoning', id: 'rs_deepseek', encrypted_content: null };
+  const retained = [
+    { type: 'reasoning', id: 'rs_other', encrypted_content: null },
+    { type: 'reasoning', id: 'rs_deepseek', encrypted_content: 'sealed' },
+    { type: 'function_call_output', call_id: 'call_1', output: 'done' },
+    { role: 'user', content: 'continue' },
+  ];
+  const missing = JSON.stringify({
+    error: { message: "Item with id 'rs_deepseek' not found. Items are not persisted when `store` is set to false." },
+  });
+
+  it('retries gzip 404 once, removing only the named reasoning item', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(404, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+        res.end(gzipSync(missing));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{"output":[]}');
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [missingReasoningItemRecoveryRule],
+    });
+
+    const reference = { type: 'item_reference', id: stale.id };
+    const request = { model: 'gpt-6.2-sol', store: false, input: [stale, reference, ...retained] };
+    expect(await post(proxy.url, request)).toEqual({ status: 200, text: '{"output":[]}' });
+    expect(upstream.bodies.map((body) => JSON.parse(body))).toEqual([request, { ...request, input: retained }]);
+  });
+
+  // Live #9928 repro: the gateway produced both a summary-only item and a
+  // sealed item from the foreign provider in the same history.
+  it('recovers the named encrypted reasoning rejection after the missing-item retry', async () => {
+    const foreignSealed = { type: 'reasoning', id: 'rs_foreign_sealed', encrypted_content: 'foreign' };
+    const invalid = JSON.stringify({ error: {
+      code: 'invalid_encrypted_content',
+      message: 'The encrypted content for item rs_foreign_sealed could not be verified. Reason: Encrypted content could not be decrypted or parsed.',
+    } });
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      res.writeHead(idx === 0 ? 404 : idx === 1 ? 400 : 200, { 'content-type': 'application/json' });
+      res.end([missing, invalid, '{"output":[]}'][idx] ?? invalid);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url, transformRequest: [], recoveryRules: [missingReasoningItemRecoveryRule],
+    });
+    const request = { store: false, input: [stale, foreignSealed, ...retained] };
+    expect(await post(proxy.url, request)).toEqual({ status: 200, text: '{"output":[]}' });
+    expect(upstream.bodies.map((body) => JSON.parse(body).input))
+      .toEqual([request.input, [foreignSealed, ...retained], retained]);
+  });
+
+  it('passes through a chunked 404 above the inspection cap without dropping bytes or retrying', async () => {
+    const tail = 'x'.repeat(128 * 1024);
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.write(missing);
+      res.end(tail);
+    });
+    upstreamClose = upstream.close;
+    const observed: Buffer[] = [];
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [missingReasoningItemRecoveryRule],
+      responseObserver: () => ({ onData: (chunk) => observed.push(chunk) }),
+    });
+
+    expect(await post(proxy.url, { store: false, input: [stale] }))
+      .toEqual({ status: 404, text: missing + tail });
+    expect(Buffer.concat(observed).toString()).toBe(missing + tail);
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it('passes through a gzip 404 whose decoded body exceeds the inspection cap', async () => {
+    const original = missing + ' '.repeat(128 * 1024);
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(404, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+      res.end(gzipSync(original));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [missingReasoningItemRecoveryRule],
+    });
+
+    expect(await post(proxy.url, { store: false, input: [stale] }))
+      .toEqual({ status: 404, text: original });
+    expect(upstream.bodies).toHaveLength(1);
+  });
+
+  it.each([
+    { store: true, firstError: missing, requestCount: 1 },
+    { store: false, firstError: '{"error":"route not found"}', requestCount: 1 },
+    { store: false, firstError: missing, requestCount: 2 },
+  ])('preserves $firstError with store=$store after the available retry budget', async ({ store, firstError, requestCount }) => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(firstError);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [missingReasoningItemRecoveryRule],
+    });
+
+    expect(await post(proxy.url, { store, input: [stale] })).toEqual({ status: 404, text: firstError });
+    expect(upstream.bodies).toHaveLength(requestCount);
+  });
+});
 
 describe('anthropic-compat-proxy loopback port guard', () => {
   it('tracks Fetch standard bad ports used by HTTP clients', () => {
@@ -1078,6 +1201,65 @@ describe('unsupported native tool references (#8593)', () => {
   });
 });
 
+describe('native MCP history recovery', () => {
+  const nativeUse = {
+    type: 'mcp_tool_use', id: 'mcp-1', name: 'lookup', server_name: 'example', input: { query: 'color' },
+  };
+  const nativeResult = {
+    type: 'mcp_tool_result', tool_use_id: 'mcp-1', is_error: false,
+    content: [{ type: 'text', text: 'color: blue' }],
+  };
+  const ordinaryUse = { type: 'tool_use', id: 'tool-1', name: 'echo', input: {} };
+  const ordinaryResult = { type: 'tool_result', tool_use_id: 'tool-1', content: 'echoed' };
+  const request = {
+    model: 'MiniMax-test', max_tokens: 128,
+    tools: [{ name: 'echo', input_schema: { type: 'object' } }],
+    messages: [
+      { role: 'user', content: 'Look up the color' },
+      { role: 'assistant', content: [{ type: 'text', text: 'Looking it up' }, nativeUse, nativeResult, ordinaryUse] },
+      { role: 'user', content: [ordinaryResult, { type: 'text', text: 'Continue' }] },
+    ],
+  };
+  const rejection = "invalid params, messages.1.content.1: unsupported content type 'mcp_tool_use' (2013)";
+
+  it.each([
+    ['recovered', 200, 2],
+    ['accepted', 200, 1],
+    ['unrelated rejection', 400, 1],
+    ['still rejected after retry', 400, 2],
+  ] as const)('%s keeps the original exchange and bounds the retry', async (scenario, expectedStatus, count) => {
+    const upstream = await startFakeUpstream((index, _raw, res) => {
+      const accepted = scenario === 'accepted' || (scenario === 'recovered' && index > 0);
+      res.writeHead(accepted ? 200 : 400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(accepted ? { content: [{ type: 'text', text: 'blue' }] } : {
+        error: { message: scenario === 'unrelated rejection' ? 'invalid API key' : rejection },
+      }));
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [repairToolExchangeAdjacency, dedupeDuplicateToolUseIds],
+      recoveryRules: [createToolReferenceRecoveryRule(), createNativeMcpHistoryRecoveryRule()],
+    });
+
+    const response = await post(proxy.url, request);
+
+    expect(response.status).toBe(expectedStatus);
+    expect(upstream.bodies).toHaveLength(count);
+    expect(JSON.parse(upstream.bodies[0]!)).toEqual(request);
+    if (count === 2) {
+      const retried = JSON.parse(upstream.bodies[1]!);
+      const content = retried.messages[1].content;
+      expect(content[0]).toEqual(request.messages[1]!.content[0]);
+      expect(content[1]).toEqual({ type: 'text', text: 'Historical MCP call: ' + JSON.stringify(nativeUse) });
+      expect(content[2]).toEqual({ type: 'text', text: 'Historical MCP result: ' + JSON.stringify(nativeResult) });
+      expect(content[3]).toEqual(ordinaryUse);
+      expect(retried.messages[2]).toEqual(request.messages[2]);
+      expect(retried.tools).toEqual(request.tools);
+    }
+  });
+});
+
 describe('Anthropic context management rejection (#7041)', () => {
   const request = {
     model: 'claude-opus-test', max_tokens: 128,
@@ -1809,6 +1991,109 @@ async function postWithAuth(url: string, body: unknown, authorization: string): 
   });
   return { status: res.status, text: await res.text() };
 }
+
+async function postMessages(url: string): Promise<{ status: number; text: string }> {
+  const res = await fetch(`${url}/v1/messages?beta=true`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'thread-id': 'thread-a' },
+    body: JSON.stringify({ model: 'claude-test', messages: [{ role: 'user', content: 'hi' }] }),
+  });
+  return { status: res.status, text: await res.text() };
+}
+
+// 测试价值(unit,真实回环 HTTP):生产入口 createAnthropicCompatProxy 的转发路径拼接。
+// #12233 抓包实证:自定义供应商的 Messages 地址常存成 …/v1(Pi/Codex 通道需要带 /v1),
+// Claude Code CLI 自己又补 /v1/messages,转发层把上游 basePath 与有效请求路径直接相加,
+// 拼出 /v1/v1/messages,上游空 404 被误报为「模型不存在」;连接探测
+// (joinAnthropicMessagesUrl)已去重,所以「测试连接」通过而会话失败。Bug 依据:#12233;
+// 现有覆盖缺口:转发用例的 upstream 一律不带路径前缀,从未覆盖 basePath 与入站 /v1 的
+// 重叠。最小失败输入:upstream base 以 /v1 结尾 + 入站 POST /v1/messages?beta=true →
+// 修复前上游实收 /v1/v1/messages?beta=true。tier:unit(真实回环服务器,不 mock 网络层)。
+describe('anthropic-compat-proxy upstream base /v1 overlap (#12233)', () => {
+  it('forwards /v1/messages to a /v1-suffixed base without duplicating the prefix, keeping ?beta=true', async () => {
+    // 模拟上游仅在 /v1/messages 返回有效回复,其它路径空 404(对齐 issue 抓包)。
+    const seen: string[] = [];
+    const server = createServer((req, res) => {
+      seen.push(req.url ?? '');
+      if (req.url === '/v1/messages?beta=true') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
+    });
+    const port = await listenOnAvailableLoopbackPort(server);
+    upstreamClose = () => new Promise<void>((r) => server.close(() => r()));
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: `http://127.0.0.1:${port}/v1`,
+      transformRequest: [],
+    });
+
+    const result = await postMessages(proxy.url);
+    expect(result.status).toBe(200);
+    expect(seen).toEqual(['/v1/messages?beta=true']);
+  });
+
+  it('removes only the overlapping segment for a gateway-prefixed base (/proxy/v1 → /proxy/v1/messages)', async () => {
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: `${upstream.url}/proxy/v1`,
+      transformRequest: [],
+    });
+
+    const result = await postMessages(proxy.url);
+    expect(result.status).toBe(200);
+    expect(upstream.paths).toEqual(['/proxy/v1/messages?beta=true']);
+  });
+
+  it('honors an explicit requestPath override through the same single join rule', async () => {
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: `${upstream.url}/proxy/v1`,
+      transformRequest: [],
+      routingTransform: () => ({ pathOverride: '/v1/messages?beta=true' }),
+    });
+
+    // 入站路径刻意与 pathOverride 不同（否则转发层忽略 override 时本用例也会过，
+    // 「显式 requestPath 优先」这条规则就没有回归保护——greptile P2 指出）。
+    const res = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'thread-id': 'thread-a' },
+      body: JSON.stringify({ model: 'claude-test', input: 'hi' }),
+    });
+    expect(res.status).toBe(200);
+    expect(upstream.paths).toEqual(['/proxy/v1/messages?beta=true']);
+  });
+
+  it('keeps bases without a trailing /v1 untouched (no over-stripping)', async () => {
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+
+    proxy = await createAnthropicCompatProxy({
+      upstream: `${upstream.url}/api`,
+      transformRequest: [],
+    });
+
+    const result = await postMessages(proxy.url);
+    expect(result.status).toBe(200);
+    expect(upstream.paths).toEqual(['/api/v1/messages?beta=true']);
+  });
+});
 
 describe('anthropic-compat-proxy routingTransform', () => {
   it('routes an explicit upstream override without resolving an unavailable default upstream', async () => {

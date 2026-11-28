@@ -90,24 +90,25 @@ export function resolveDesktopDevRegion(argv, env = process.env) {
   return region;
 }
 
-/** 从传给 Electron Forge 的 argv 中移除已由 dev wrapper 消费的区域参数。 */
+/** 从传给 Electron Forge 的 argv 中移除已由 dev wrapper 消费的区域和清单参数。 */
 export function stripDesktopDevRegionArgs(argv) {
   const result = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--region") {
+    if (arg === "--region" || arg === "--endpoints-file") {
       index += 1;
       continue;
     }
-    if (arg.startsWith("--region=")) continue;
+    if (arg.startsWith("--region=") || arg.startsWith("--endpoints-file=")) continue;
     result.push(arg);
   }
   return result;
 }
 
 /**
- * 计算 desktop dev 启动配置。remote dev 始终读取同区域仓内清单，
+ * 计算 desktop dev 启动配置。remote dev 默认读取同区域仓内清单，
  * 不把父进程继承的端点文件当成用户覆盖；local 模式保留本地服务文件。
+ * --endpoints-file 显式指定私有联调清单；不接受隐式继承的文件覆盖。
  * --endpoints-cdn / XDT_ENDPOINTS_CDN=1 时不注入默认文件，让主进程走区域化 CDN。
  */
 export function resolveDesktopDevStartupConfig({
@@ -118,12 +119,23 @@ export function resolveDesktopDevStartupConfig({
   const region = resolveDesktopDevRegion(argv, env);
   const endpointsCdn =
     argv.includes("--endpoints-cdn") || env.XDT_ENDPOINTS_CDN === "1";
-  const endpointManifestFile =
+  let explicitFile;
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg !== "--endpoints-file" && !arg.startsWith("--endpoints-file=")) continue;
+    const value = arg === "--endpoints-file" ? argv[++index] : arg.slice("--endpoints-file=".length);
+    if (!value?.trim() || value.startsWith("--")) throw new Error("--endpoints-file requires a file path");
+    if (explicitFile !== undefined) throw new Error("--endpoints-file may only be specified once");
+    explicitFile = value;
+  }
+  if (explicitFile && mode !== "remote") throw new Error("--endpoints-file only supports remote dev");
+  if (explicitFile && endpointsCdn) throw new Error("--endpoints-file cannot be combined with CDN endpoints");
+  const endpointManifestFile = explicitFile ?? (
     mode === "remote"
       ? endpointsCdn
         ? undefined
         : `config/${{ cn: "endpoint.json", global: "endpoint.global.json", dev: "endpoint.dev.json" }[region]}`
-      : env.XDT_ENDPOINT_MANIFEST_FILE?.trim() || undefined;
+      : env.XDT_ENDPOINT_MANIFEST_FILE?.trim() || undefined);
   return { region, endpointsCdn, endpointManifestFile };
 }
 

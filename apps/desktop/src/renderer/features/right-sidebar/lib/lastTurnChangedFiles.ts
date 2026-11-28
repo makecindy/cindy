@@ -106,12 +106,37 @@ export function collectLastTurnPaths(
     }
   }
   for (let i = start; i < messages.length; i += 1) {
-    for (const filePath of extractToolFilePaths(messages[i])) {
-      const rel = toolPathToWorkdirRelative(filePath, workdir, platform);
-      if (rel) paths.add(rel);
-    }
+    for (const rel of editedPathsOfToolCall(messages[i], workdir, platform)) paths.add(rel);
   }
   return paths;
+}
+
+/**
+ * 一条工具调用消息触碰的文件(工作目录相对路径)。
+ *
+ * 不是编辑工具 / 路径不在 workdir 内 → 空数组。
+ */
+export function editedPathsOfToolCall(
+  message: ChatMessage,
+  workdir: string | null,
+  platform = defaultPlatform(),
+): string[] {
+  if (!workdir) return [];
+  const paths: string[] = [];
+  for (const filePath of extractToolFilePaths(message)) {
+    const rel = toolPathToWorkdirRelative(filePath, workdir, platform);
+    if (rel) paths.push(rel);
+  }
+  return paths;
+}
+
+/** 两个工作目录相对路径是否指向同一个文件(按平台做大小写归一)。 */
+export function isSameWorkdirPath(
+  a: string,
+  b: string,
+  platform = defaultPlatform(),
+): boolean {
+  return normalizeForCompare(a, platform) === normalizeForCompare(b, platform);
 }
 
 export function wasFileChangedInLastTurn(

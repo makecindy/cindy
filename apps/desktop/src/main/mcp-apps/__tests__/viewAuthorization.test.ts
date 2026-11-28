@@ -138,7 +138,20 @@ const requests = [
   ['prompts/list', {}, 'listPrompts', { prompts: [{ name: marker }] }],
 ] as const;
 
-async function fixture(caller = 'renderer:1', plugin = false, html = '<p>Form</p>', options: { uninitialized?: boolean; pendingTool?: boolean; sendMessage?: McpAppsHostDeps['sendMessage']; attachments?: boolean } = {}) {
+async function fixture(caller = 'renderer:1', plugin = false, html = '<p>Form</p>', options: {
+  uninitialized?: boolean;
+  pendingTool?: boolean;
+  sendMessage?: McpAppsHostDeps['sendMessage'];
+  attachments?: boolean;
+  composer?: boolean;
+  composerDrag?: boolean;
+  composerCaller?: McpAppsHostDeps['composerCaller'];
+  hasComposerAttachment?: McpAppsHostDeps['hasComposerAttachment'];
+  sendComposerAttachment?: McpAppsHostDeps['sendComposerAttachment'];
+  pluginFileSize?: number;
+  pluginFileMimeType?: string;
+  pluginFileBody?: BodyInit;
+} = {}) {
   let owner = {};
   let enabled = true;
   let visible = true;
@@ -211,7 +224,18 @@ async function fixture(caller = 'renderer:1', plugin = false, html = '<p>Form</p
     writeCard: async () => {},
     authorizeTool,
     sendMessage: options.sendMessage ?? (async () => {}),
-    ...(options.attachments ? { pluginFiles: { describe: async () => ({ mimeType: 'text/plain', size: 1 }), read: async () => new Response('x') } } : {}),
+    ...(options.attachments || options.composer ? {
+      pluginFiles: {
+        describe: async () => ({ mimeType: options.pluginFileMimeType ?? 'text/plain', size: options.pluginFileSize ?? 1 }),
+        read: async () => new Response(options.pluginFileBody ?? 'x', {
+          headers: options.pluginFileSize === undefined ? undefined : { 'content-length': String(options.pluginFileSize) },
+        }),
+      },
+    } : {}),
+    composerDrag: options.composerDrag ? () => true : undefined,
+    composerCaller: options.composerCaller,
+    hasComposerAttachment: options.hasComposerAttachment,
+    ...(options.sendComposerAttachment ? { sendComposerAttachment: options.sendComposerAttachment } : {}),
     connection: () => connection,
   });
   hosts.push(host);
@@ -267,6 +291,435 @@ async function fixture(caller = 'renderer:1', plugin = false, html = '<p>Form</p
 }
 
 describe('MCP App upstream result authorization', () => {
+  // Tier: unit through the production Host/AppBridge entry. The smallest
+  // observable contract is initialize plus one composer request. It covers the
+  // local-only capability boundary and the duplicate receipt guard without
+  // reaching the renderer or a second device.
+  it('advertises composer attachments only to a local App View', async () => {
+    const sendComposerAttachment = vi.fn(async () => {});
+    const local = await fixture('renderer:1', true, '<p>Composer</p>', {
+      composer: true,
+      sendComposerAttachment,
+    });
+    const localInit = (await local.poll(0)).find(event => event.message && 'id' in event.message && event.message.id === 1)?.message;
+    expect(localInit && 'result' in localInit ? (localInit.result as { hostCapabilities?: { experimental?: Record<string, unknown> } }).hostCapabilities?.experimental?.['cindy/composer-attachment'] : undefined)
+      .toEqual({ version: 1, maxBytes: 64 * 1024 * 1024 });
+
+    const custom = await fixture('renderer:custom', false, '<p>Composer</p>', {
+      composer: true,
+      attachments: true,
+      sendComposerAttachment,
+    });
+    custom.methods.readResource.mockResolvedValue({ contents: [{ uri: 'library:fixture.txt', mimeType: 'text/plain', text: 'x' }] });
+    const customInit = (await custom.poll(0)).find(event => event.message && 'id' in event.message && event.message.id === 1)?.message;
+    expect(customInit && 'result' in customInit ? (customInit.result as { hostCapabilities?: { experimental?: Record<string, unknown> } }).hostCapabilities?.experimental?.['cindy/composer-attachment'] : undefined)
+      .toEqual({ version: 1, maxBytes: 64 * 1024 * 1024 });
+    await custom.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:fixture.txt', name: 'custom.txt', requestId: 'custom-1' } });
+    await vi.waitFor(() => expect(custom.outgoing).toContainEqual(expect.objectContaining({ id: 2, result: {} })));
+
+    const remote = await fixture('device:phone', true, '<p>Composer</p>', {
+      composer: true,
+      sendComposerAttachment,
+    });
+    const remoteInit = (await remote.poll(0)).find(event => event.message && 'id' in event.message && event.message.id === 1)?.message;
+    expect(remoteInit && 'result' in remoteInit ? (remoteInit.result as { hostCapabilities?: { experimental?: Record<string, unknown> } }).hostCapabilities?.experimental?.['cindy/composer-attachment'] : undefined)
+      .toBeUndefined();
+  });
+
+  // Unit through the production Host entry. A detached sidebar renderer has no
+  // composer, so an advertised button would stage a file nobody can see.
+  // Minimal failing input: a local View opened by a renderer outside a task window.
+  it('withholds composer attachments from a window without a task composer', async () => {
+    const sendComposerAttachment = vi.fn(async () => {});
+    const sidebar = await fixture('renderer:sidebar', true, '<p>Composer</p>', {
+      attachments: true,
+      composerDrag: true,
+      composerCaller: caller => caller !== 'renderer:sidebar',
+      sendComposerAttachment,
+    });
+    const init = (await sidebar.poll(0)).find(event => event.message && 'id' in event.message && event.message.id === 1)?.message;
+    expect(init && 'result' in init ? (init.result as { hostCapabilities?: { experimental?: Record<string, unknown> } }).hostCapabilities?.experimental?.['cindy/composer-attachment'] : undefined)
+      .toBeUndefined();
+    await sidebar.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:fixture.txt', name: 'fixture.txt', requestId: 'sidebar-1' } });
+    await vi.waitFor(() => expect(sidebar.outgoing).toContainEqual(expect.objectContaining({ id: 2, error: expect.anything() })));
+    expect(sendComposerAttachment).not.toHaveBeenCalled();
+  });
+
+  // Unit through the production AppBridge tools/call entry, for both result
+  // branches. Each returned resource_link stays addable until the View closes,
+  // so a page returning fresh links grew Main memory without bound.
+  // Minimal failing input: 257 distinct links; the oldest must be dropped.
+  it.each([false, true])('keeps only the newest resource grants per View (plugin: %s)', async plugin => {
+    const sendComposerAttachment = vi.fn(async () => {});
+    const f = await fixture('renderer:1', plugin, '<p>Composer</p>', { composer: true, sendComposerAttachment });
+    const uri = (index: number) => `report://${index}.txt`;
+    f.methods.callTool.mockResolvedValueOnce({
+      content: Array.from({ length: 257 }, (_, index) => ({ type: 'resource_link', uri: uri(index), name: `r${index}` })),
+    });
+    await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool.name, arguments: {} } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 2, result: expect.anything() })));
+    f.methods.readResource.mockResolvedValue({ contents: [{ uri: uri(256), mimeType: 'text/plain', text: 'x' }] });
+    await f.dispatch({ jsonrpc: '2.0', id: 3, method: 'cindy/composer-attachment/add', params: { uri: uri(0), name: 'old.txt' } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({
+      id: 3, error: expect.objectContaining({ message: expect.stringContaining('MCP_APP_FILE_NOT_AUTHORIZED') }),
+    })));
+    await f.dispatch({ jsonrpc: '2.0', id: 4, method: 'cindy/composer-attachment/add', params: { uri: uri(256), name: 'new.txt' } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 4, result: {} })));
+  });
+
+  // Unit through the production composer request. Pages may add without a
+  // gesture and the per-minute rate refills, so one open card could stage files
+  // indefinitely. Minimal failing input: a 33rd distinct add after the rate window.
+  // Gap: the 512 MiB byte ceiling shares this check but is not exercised here,
+  // because reaching it needs eight 64 MiB reads.
+  it('stops a View after its lifetime attachment allowance', async () => {
+    const sendComposerAttachment = vi.fn(async () => {});
+    const f = await fixture('renderer:1', false, '<p>Composer</p>', { composer: true, sendComposerAttachment });
+    const uri = (index: number) => `report://${index}.txt`;
+    f.methods.callTool.mockResolvedValueOnce({
+      content: Array.from({ length: 33 }, (_, index) => ({ type: 'resource_link', uri: uri(index), name: `r${index}` })),
+    });
+    await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool.name, arguments: {} } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 2, result: expect.anything() })));
+    f.methods.readResource.mockImplementation(async ({ uri: read }: { uri: string }) => ({ contents: [{ uri: read, mimeType: 'text/plain', text: 'x' }] }));
+    let now = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    for (let index = 0; index < 33; index++) {
+      now += 61_000;
+      const id = 10 + index;
+      await f.dispatch({ jsonrpc: '2.0', id, method: 'cindy/composer-attachment/add', params: { uri: uri(index), name: `r${index}.txt` } });
+      await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id })));
+    }
+    expect(sendComposerAttachment).toHaveBeenCalledTimes(32);
+    expect(f.outgoing).toContainEqual(expect.objectContaining({
+      id: 42, error: expect.objectContaining({ message: expect.stringContaining('MCP_APP_COMPOSER_ATTACHMENT_LIMIT') }),
+    }));
+  });
+
+  // Unit through the production AppBridge tools/call entry. External MCP cards
+  // return results on their own branch; a resource shown only in such a result
+  // was rejected as MCP_APP_FILE_NOT_AUTHORIZED. Minimal failing input: one
+  // resource_link returned by callServerTool, then added to the composer.
+  it('accepts a resource returned by an external card tool call', async () => {
+    const sendComposerAttachment = vi.fn(async () => {});
+    const f = await fixture('renderer:1', false, '<p>Composer</p>', { composer: true, sendComposerAttachment });
+    const uri = 'report://latest.txt';
+    f.methods.callTool.mockResolvedValueOnce({ content: [{ type: 'resource_link', uri, name: 'latest' }] });
+    await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: tool.name, arguments: {} } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 2, result: expect.anything() })));
+    f.methods.readResource.mockResolvedValueOnce({ contents: [{ uri, mimeType: 'text/plain', text: 'x' }] });
+    await f.dispatch({ jsonrpc: '2.0', id: 3, method: 'cindy/composer-attachment/add', params: { uri, name: 'latest.txt' } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 3, result: {} })));
+    expect(sendComposerAttachment).toHaveBeenCalledWith(expect.objectContaining({ name: 'latest.txt', size: 1 }));
+  });
+
+  it('reads a card-granted resource and ignores a duplicate receipt', async () => {
+    const sendComposerAttachment = vi.fn(async () => {});
+    const f = await fixture('renderer:1', true, '<p>Composer</p>', {
+      attachments: true,
+      sendComposerAttachment,
+    });
+    await f.dispatch({
+      jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:fixture.txt', name: 'fixture.txt', requestId: 'receipt-1' },
+    });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 2, result: {} })));
+    expect(sendComposerAttachment).toHaveBeenCalledOnce();
+    expect(sendComposerAttachment).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'fixture.txt', mimeType: 'text/plain', size: 1, bytes: expect.any(Uint8Array),
+    }));
+
+    await f.dispatch({
+      jsonrpc: '2.0', id: 3, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:fixture.txt', name: 'fixture.txt', requestId: 'receipt-1' },
+    });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 3, result: {} })));
+    expect(sendComposerAttachment).toHaveBeenCalledOnce();
+
+    await f.dispatch({
+      jsonrpc: '2.0', id: 4, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:not-in-this-card.txt', name: 'other.txt', requestId: 'receipt-2' },
+    });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 4, error: expect.anything() })));
+    expect(sendComposerAttachment).toHaveBeenCalledOnce();
+  });
+
+  it('rejects web, local-file and App-page URIs before reading the plugin', async () => {
+    const sendComposerAttachment = vi.fn(async () => {});
+    const f = await fixture('renderer:1', true, '<p>Composer</p>', {
+      attachments: true,
+      sendComposerAttachment,
+    });
+    for (const [id, uri] of [
+      [2, 'https://example.invalid/file.txt'],
+      [3, 'file:///tmp/file.txt'],
+      [4, 'ui://other/page'],
+    ] as const) {
+      await f.dispatch({ jsonrpc: '2.0', id, method: 'cindy/composer-attachment/add',
+        params: { uri, name: 'file.txt', requestId: `bad-${id}` } });
+      await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id, error: expect.anything() })));
+    }
+    expect(sendComposerAttachment).not.toHaveBeenCalled();
+  });
+
+  // Unit: the button tests cannot catch a drag ticket escaping its original View
+  // or being redeemed twice. Exercise AppBridge issuance and the local drop entry.
+  it('redeems a drag ticket once in its task and window and shares button deduplication', async () => {
+    let present = false;
+    const send = vi.fn(async () => { present = true; });
+    const f = await fixture('renderer:1', true, undefined, { composerDrag: true, attachments: true,
+      sendComposerAttachment: send, hasComposerAttachment: async () => present });
+    const params = { uri: 'library:fixture.txt', name: 'fixture.txt' };
+    await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/drag-ticket', params });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({
+      id: 2, result: { ticket: expect.stringMatching(/^[a-f0-9]{32,}$/) },
+    })), { interval: 1 });
+    const reply = f.outgoing.find(m => 'id' in m && m.id === 2);
+    const ticket = (reply && 'result' in reply ? reply.result.ticket : '') as string;
+    const redeem = () => f.host.redeemComposerAttachmentDrag('renderer:1', 'task', ticket);
+    expect(send).not.toHaveBeenCalled();
+    const results = await Promise.allSettled([redeem(), redeem()]);
+    expect(results.map(r => r.status)).toEqual(['fulfilled', 'rejected']);
+    await f.dispatch({ jsonrpc: '2.0', id: 3, method: 'cindy/composer-attachment/add', params });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 3, result: {} })), { interval: 1 });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['expired', 'wrong-window', 'wrong-task', 'suspend-resume', 'reinitialize', 'close', 'revoked', 'read-quota'] as const)(
+    'rejects a drag ticket after %s', async reason => {
+      const send = vi.fn(async () => {});
+      const f = await fixture('renderer:1', true, undefined, { composerDrag: true, attachments: true, sendComposerAttachment: send });
+      const params = { uri: 'library:fixture.txt', name: 'fixture.txt' };
+      const now = vi.spyOn(performance, 'now').mockReturnValue(100);
+      await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/drag-ticket', params });
+      await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({
+        id: 2, result: { ticket: expect.any(String) },
+      })), { interval: 1 });
+      const reply = f.outgoing.find(m => 'id' in m && m.id === 2);
+      const ticket = (reply && 'result' in reply ? reply.result.ticket : '') as string;
+      if (reason === 'expired') now.mockReturnValue(30_100);
+      if (reason === 'wrong-window' || reason === 'wrong-task')
+        await expect(f.host.redeemComposerAttachmentDrag(reason === 'wrong-window' ? 'renderer:2' : 'renderer:1',
+          reason === 'wrong-task' ? 'other' : 'task', ticket)).rejects.toThrow();
+      if (reason === 'suspend-resume') {
+        await f.host.setSuspended('renderer:1', 'task', f.viewId, true);
+        await f.host.setSuspended('renderer:1', 'task', f.viewId, false);
+      }
+      if (reason === 'reinitialize') await f.dispatch({ jsonrpc: '2.0', id: 3, method: 'ui/initialize',
+        params: { protocolVersion: '2026-01-26', appInfo: { name: 'next', version: '1' }, appCapabilities: {} } });
+      if (reason === 'reinitialize' || reason === 'suspend-resume')
+        expect((await f.poll(0)).map(event => event.message)).toContainEqual(expect.objectContaining({
+          method: 'cindy/composer-attachment/tickets-invalidated',
+        }));
+      if (reason === 'close') await f.host.releaseCaller('renderer:1');
+      if (reason === 'revoked') f.revoke('server');
+      if (reason === 'read-quota') {
+        for (let id = 3; id < 13; id++) {
+          await f.dispatch({ jsonrpc: '2.0', id, method: 'cindy/composer-attachment/add', params });
+          await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id, result: {} })), { interval: 1 });
+        }
+      }
+      await expect(f.host.redeemComposerAttachmentDrag('renderer:1', 'task', ticket)).rejects.toThrow();
+      expect(send).toHaveBeenCalledTimes(reason === 'read-quota' ? 10 : 0);
+    });
+
+  it('issues only previously granted resources within a separate drag preparation budget', async () => {
+    const send = vi.fn(async () => {});
+    const f = await fixture('renderer:1', true, undefined, { composerDrag: true, attachments: true, sendComposerAttachment: send });
+    const params = { uri: 'library:fixture.txt', name: 'fixture.txt' };
+    for (let id = 2; id <= 62; id++) {
+      const uri = id === 2 ? 'library:other-card' : params.uri;
+      await f.dispatch({ jsonrpc: '2.0', id, method: 'cindy/composer-attachment/drag-ticket', params: { ...params, uri } });
+      const result = id === 2 || id === 62 ? { error: expect.anything() } : { result: { ticket: expect.any(String) } };
+      await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id, ...result })), { interval: 1 });
+    }
+    expect(send).not.toHaveBeenCalled();
+    await f.dispatch({ jsonrpc: '2.0', id: 63, method: 'cindy/composer-attachment/add', params });
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1), { interval: 1 });
+  });
+
+  it('allows only one in-flight composer read per View', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const sendComposerAttachment = vi.fn(async () => pending);
+    const f = await fixture('renderer:1', true, '<p>Composer</p>', {
+      attachments: true,
+      sendComposerAttachment,
+    });
+    const first = f.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:fixture.txt', name: 'first.txt', requestId: 'first' } });
+    await vi.waitFor(() => expect(sendComposerAttachment).toHaveBeenCalledOnce());
+    await f.dispatch({ jsonrpc: '2.0', id: 3, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:fixture.txt', name: 'second.txt', requestId: 'second' } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 3, error: expect.anything() })));
+    release();
+    await first;
+    expect(sendComposerAttachment).toHaveBeenCalledOnce();
+  });
+
+  it('accepts text, PDF and image content through the Host resource reader', async () => {
+    const cases = [
+      { mimeType: 'text/plain', contents: { uri: 'library:fixture.txt', mimeType: 'text/plain', text: 'hello' } },
+      { mimeType: 'application/pdf', contents: { uri: 'library:fixture.txt', mimeType: 'application/pdf', blob: Buffer.from('%PDF-1.7').toString('base64') } },
+      { mimeType: 'image/jpeg', contents: { uri: 'library:fixture.txt', mimeType: 'image/jpg', blob: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64') } },
+      { mimeType: 'image/png', contents: { uri: 'library:fixture.txt', mimeType: 'image/png', blob: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64') } },
+    ] as const;
+    for (const [index, item] of cases.entries()) {
+      const sendComposerAttachment = vi.fn(async () => {});
+      const f = await fixture(`renderer:${index + 10}`, false, '<p>Composer</p>', {
+        attachments: true,
+        sendComposerAttachment,
+      });
+      f.methods.readResource.mockResolvedValue({ contents: [item.contents] });
+      await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/add',
+        params: { uri: 'library:fixture.txt', name: `fixture-${index}`, requestId: `type-${index}` } });
+      await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 2, result: {} })));
+      expect(sendComposerAttachment).toHaveBeenCalledOnce();
+      expect(sendComposerAttachment).toHaveBeenCalledWith(expect.objectContaining({ mimeType: item.mimeType }));
+    }
+  });
+
+  it('rejects mismatched content and a resource over 64 MiB before staging', async () => {
+    const mismatched = vi.fn(async () => {});
+    const f = await fixture('renderer:20', false, '<p>Composer</p>', {
+      attachments: true,
+      sendComposerAttachment: mismatched,
+    });
+    f.methods.readResource.mockResolvedValue({ contents: [{ uri: 'library:fixture.txt', mimeType: 'image/png', text: 'not an image' }] });
+    await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:fixture.txt', name: 'bad.png', requestId: 'bad-content' } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 2, error: expect.anything() })));
+    expect(mismatched).not.toHaveBeenCalled();
+
+    const tooLarge = vi.fn(async () => {});
+    // A rejected file body must be cancelled: an unread file stream keeps its handle open.
+    const cancelled = vi.fn();
+    const large = await fixture('renderer:21', true, '<p>Composer</p>', {
+      attachments: true,
+      sendComposerAttachment: tooLarge,
+      pluginFileSize: 64 * 1024 * 1024 + 1,
+      pluginFileMimeType: 'text/plain',
+      pluginFileBody: new ReadableStream({ pull: () => {}, cancel: cancelled }),
+    });
+    await large.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:fixture.txt', name: 'large.txt', requestId: 'too-large' } });
+    await vi.waitFor(() => expect(large.outgoing).toContainEqual(expect.objectContaining({ id: 2, error: expect.anything() })));
+    expect(tooLarge).not.toHaveBeenCalled();
+    expect(cancelled).toHaveBeenCalledOnce();
+  });
+
+  // Unit, via the AppBridge composer request. Content-Length tests cover the plugin file
+  // reader only. An inline MCP response can exceed the byte limit by one while its
+  // UTF-16 length or padded Base64 length still looks like an accepted attachment.
+  const limit = 64 * 1024 * 1024;
+  it.each([
+    { label: 'UTF-8 at the limit', size: limit, resource: () => ({ text: '界'.repeat(Math.floor(limit / 3)) + 'a' }) },
+    { label: 'UTF-8 one byte over', size: limit + 1, resource: () => ({ text: '界'.repeat(Math.floor(limit / 3)) + 'aa' }) },
+    { label: '96 MiB UTF-8', size: 96 * 1024 * 1024, resource: () => ({ text: '界'.repeat(32 * 1024 * 1024) }) },
+    { label: 'Base64 at the limit', size: limit, resource: () => ({ blob: 'YWFh'.repeat(Math.floor(limit / 3)) + 'YQ==' }) },
+    { label: 'Base64 one byte over', size: limit + 1, resource: () => ({ blob: 'YWFh'.repeat(Math.floor(limit / 3)) + 'YWE=' }) },
+  ])('checks composer attachment bytes before conversion: $label', async ({ size, resource }) => {
+    const uri = 'library:fixture.txt';
+    const sendComposerAttachment = vi.fn<NonNullable<McpAppsHostDeps['sendComposerAttachment']>>(async () => {});
+    const f = await fixture('renderer:1', false, '<p>Composer</p>', { attachments: true, sendComposerAttachment });
+    const content = resource();
+    f.methods.readResource.mockResolvedValueOnce({ contents: [{ uri, mimeType: 'text/plain', ...content }] });
+    const encode = vi.spyOn(TextEncoder.prototype, 'encode');
+    const decode = vi.spyOn(Buffer, 'from');
+    await f.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/add', params: { uri, name: 'file.txt' } });
+    if (size === limit) {
+      await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 2, result: {} })));
+      expect(sendComposerAttachment.mock.calls.map(([file]) => file.size)).toEqual([size]);
+    } else {
+      await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({
+        id: 2, error: expect.objectContaining({ message: expect.stringContaining('MCP_APP_COMPOSER_ATTACHMENT_TOO_LARGE') }),
+      })));
+      expect(sendComposerAttachment).not.toHaveBeenCalled();
+      if ('text' in content) expect(encode.mock.calls.some(([value]) => value === content.text)).toBe(false);
+      if ('blob' in content) expect(decode.mock.calls.some(([value]) => value === content.blob)).toBe(false);
+    }
+  });
+
+  // Unit: fresh SDK request ids for the same card resource used to stage a
+  // second file and exhaust the quota. Removal makes the resource addable again.
+  it('skips resources already in the tray before reading or charging the View', async () => {
+    const tray = new Set<string>();
+    const sendComposerAttachment = vi.fn(async ({ resourceKey }: { resourceKey: string }) => { tray.add(resourceKey); });
+    const f = await fixture('renderer:1', false, '<p>Composer</p>', {
+      attachments: true, sendComposerAttachment,
+      hasComposerAttachment: async ({ resourceKey }) => tray.has(resourceKey),
+    });
+    f.methods.readResource.mockResolvedValue({ contents: [{ uri: 'library:fixture.txt', mimeType: 'text/plain', text: 'x' }] });
+    for (let id = 2; id <= 14; id++) {
+      if (id === 14) tray.clear();
+      await f.dispatch({ jsonrpc: '2.0', id, method: 'cindy/composer-attachment/add',
+        params: { uri: 'library:fixture.txt', name: `notes-${id}.txt`, requestId: String(id) } });
+      await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id, result: {} })));
+      expect(sendComposerAttachment).toHaveBeenCalledTimes(id === 14 ? 2 : 1);
+    }
+    tray.clear();
+    // A redelivery of a duplicate's successful request must not undo removal.
+    await f.dispatch({ jsonrpc: '2.0', id: 15, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:fixture.txt', name: 'notes.txt', requestId: '13' } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 15, result: {} })));
+    expect(tray.size).toBe(0);
+    expect(f.methods.readResource).toHaveBeenCalledTimes(2);
+  });
+
+  it('limits a View to ten successful additions per minute', async () => {
+    const sendComposerAttachment = vi.fn(async () => {});
+    const f = await fixture('renderer:22', false, '<p>Composer</p>', {
+      attachments: true,
+      sendComposerAttachment,
+    });
+    f.methods.readResource.mockResolvedValue({ contents: [{ uri: 'library:fixture.txt', mimeType: 'text/plain', text: 'x' }] });
+    for (let id = 2; id <= 11; id++) {
+      await f.dispatch({ jsonrpc: '2.0', id, method: 'cindy/composer-attachment/add',
+        params: { uri: 'library:fixture.txt', name: `file-${id}.txt`, requestId: `rate-${id}` } });
+      await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id, result: {} })));
+    }
+    await f.dispatch({ jsonrpc: '2.0', id: 12, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:fixture.txt', name: 'file-12.txt', requestId: 'rate-12' } });
+    await vi.waitFor(() => expect(f.outgoing).toContainEqual(expect.objectContaining({ id: 12, error: expect.anything() })));
+    expect(sendComposerAttachment).toHaveBeenCalledTimes(10);
+  });
+
+  it('drops a pending resource read when the card is revoked or its View is released', async () => {
+    const pending = deferred<unknown>();
+    const revokedSend = vi.fn(async () => {});
+    const revoked = await fixture('renderer:23', false, '<p>Composer</p>', {
+      attachments: true,
+      sendComposerAttachment: revokedSend,
+    });
+    revoked.methods.readResource.mockReturnValueOnce(pending.promise as never);
+    const revokedRequest = revoked.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:fixture.txt', name: 'revoked.txt', requestId: 'revoked' } });
+    await vi.waitFor(() => expect(revoked.methods.readResource).toHaveBeenCalledOnce());
+    revoked.revoke('card');
+    pending.resolve({ contents: [{ uri: 'library:fixture.txt', mimeType: 'text/plain', text: 'late' }] });
+    await revokedRequest;
+    await vi.waitFor(() => expect(revoked.outgoing).toContainEqual(expect.objectContaining({ id: 2, error: expect.anything() })));
+    expect(revokedSend).not.toHaveBeenCalled();
+
+    const releasedPending = deferred<unknown>();
+    const releasedSend = vi.fn(async () => {});
+    const released = await fixture('renderer:24', false, '<p>Composer</p>', {
+      attachments: true,
+      sendComposerAttachment: releasedSend,
+    });
+    released.methods.readResource.mockReturnValueOnce(releasedPending.promise as never);
+    const releasedRequest = released.dispatch({ jsonrpc: '2.0', id: 2, method: 'cindy/composer-attachment/add',
+      params: { uri: 'library:fixture.txt', name: 'released.txt', requestId: 'released' } });
+    await vi.waitFor(() => expect(released.methods.readResource).toHaveBeenCalledOnce());
+    await released.host.releaseCaller('renderer:24');
+    releasedPending.resolve({ contents: [{ uri: 'library:fixture.txt', mimeType: 'text/plain', text: 'late' }] });
+    await releasedRequest;
+    expect(released.outgoing).not.toContainEqual(expect.objectContaining({ id: 2, result: expect.anything() }));
+    expect(releasedSend).not.toHaveBeenCalled();
+  });
+
   async function returnedLink(f: Awaited<ReturnType<typeof fixture>>) {
     const initial = await f.poll(0);
     await f.dispatch({

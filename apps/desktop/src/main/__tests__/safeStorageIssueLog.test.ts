@@ -37,4 +37,21 @@ describe('buildSafeStorageIssueMeta', () => {
     err.code = { weird: true };
     expect(buildSafeStorageIssueMeta('token', err)).toEqual({ key: 'token', error: 'Error' });
   });
+
+  it('可选 stage/probeOk 仅透传脱敏枚举与布尔，仍不泄露 err.message', () => {
+    const err = new Error('decrypt failed for /Users/secret/path cipher=ABCD1234');
+    const meta = buildSafeStorageIssueMeta('cindy_auth_accounts_v1', err, {
+      stage: 'decrypt-mismatch',
+      probeOk: true,
+    });
+    expect(meta).toEqual({
+      key: 'cindy_auth_accounts_v1',
+      error: 'Error',
+      stage: 'decrypt-mismatch',
+      probeOk: true,
+    });
+    const serialized = JSON.stringify(meta);
+    expect(serialized).not.toContain('/Users/secret/path');
+    expect(serialized).not.toContain('ABCD1234');
+  });
 });

@@ -124,6 +124,123 @@ describe('cross-device send_to_session sender', () => {
     expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation({ ...expectedCreate, title: 'Changed' }) })).toBe(false);
   });
 
+  // 2026-11-27: plugin-engine remote creation negotiates ordinaryCreatePluginEngine before mutating,
+  // and remote jump/create accepts agentKind="acp" replies without degrading to DELIVERY_UNKNOWN.
+  it('negotiates plugin-engine creation capability and accepts acp handoff replies', async () => {
+    const create = {
+      permissionMode: 'ask' as const,
+      agentKind: 'acp' as const,
+      providerId: 'acp-plugin:antigravity:antigravity',
+      model: 'gemini-4-neon',
+      effort: 'xhigh' as const,
+    };
+    let supportsPlugin = false;
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+      const wire = args[0] as { action?: string; taskActionReceipt: string };
+      if (wire.action === 'task-action-capability') {
+        return {
+          ok: true,
+          result: {
+            taskActionVersion: 1,
+            ordinaryCreateVersion: 1,
+            ...(supportsPlugin ? { ordinaryCreatePluginEngine: 1 } : {}),
+          },
+        };
+      }
+      issued.push(wire.taskActionReceipt);
+      return {
+        ok: true,
+        result: {
+          ok: true,
+          agentKind: 'acp',
+          wakeKind: wire.action === 'create' ? 'created' : 'queued',
+          targetSessionId: 'new-acp-id',
+          model: 'gemini-4-neon',
+          providerId: create.providerId,
+          effort: 'xhigh',
+          fastMode: false,
+          workingDir: '/remote/project',
+          targetTitle: 'Neon task',
+          targetLastUserSendAt: null,
+        },
+      };
+    });
+    const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {} });
+    // Old peer without ordinaryCreatePluginEngine fails before sending any creation request.
+    expect(await send({ deviceId: 'mbp', sessionId: 'new-acp-id' }, {
+      message: 'Fix bug', sender: async () => ({ sessionId: 'me' }), create: async () => create,
+    })).toMatchObject({ ok: false, errorCode: 'REMOTE_UNSUPPORTED' });
+    expect(invoke).toHaveBeenCalledOnce();
+
+    supportsPlugin = true;
+    expect(await send({ deviceId: 'mbp', sessionId: 'new-acp-id' }, {
+      message: 'Fix bug', sender: async () => ({ sessionId: 'me' }), create: async () => create,
+    })).toMatchObject({
+      ok: true, wakeKind: 'created', agentKind: 'acp', providerId: create.providerId, model: 'gemini-4-neon', effort: 'xhigh',
+    });
+
+    // Jump to an existing remote acp task also succeeds cleanly.
+    expect(await send({ deviceId: 'mbp', sessionId: 'existing-acp' }, {
+      message: 'Follow up', sender: async () => ({ sessionId: 'me' }),
+    })).toMatchObject({ ok: true, wakeKind: 'queued', agentKind: 'acp' });
+  });
+
+  // Unit/protocol (2026-11-28): `create.baseRef` is a new key in a strict schema. A destination
+  // without `ordinaryCreateBaseRef` must be refused before anything is sent, never left to cut
+  // the worktree from its default branch. The receipt carries the base and provider computer
+  // that took effect; a destination that reports no provider stays unknown instead of "local".
+  // No earlier case sends a base or reads these fields. Minimal input: one create per capability.
+  it.each([
+    ['older destination', false],
+    ['current destination', true],
+  ] as const)('sends a worktree base only to a destination that understands it (%s)', async (_case, supported) => {
+    const create = { permissionMode: 'ask' as const, useWorktree: true, baseRef: 'origin/release/2.x' };
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+      const wire = args[0] as { action?: string; taskActionReceipt: string; create?: unknown };
+      if (wire.action === 'task-action-capability') return { ok: true, result: {
+        taskActionVersion: 1, ordinaryCreateVersion: 1, ordinaryCreateAutoTitle: 1,
+        ...(supported ? { ordinaryCreateBaseRef: 1 } : {}),
+      } };
+      issued.push(wire.taskActionReceipt);
+      expect(wire.create).toEqual(create);
+      return { ok: true, result: { ...accepted, wakeKind: 'created', targetSessionId: 'new-id', model: 'selected',
+        workingDir: '/remote/repo/.cindy-worktrees/task', worktreePath: '/remote/repo/.cindy-worktrees/task',
+        worktreeBaseRef: 'refs/remotes/origin/release/2.x', worktreeBaseStaleReason: 'fetch-failed', agentDeviceId: null } };
+    });
+    const send = createRemoteSessionHandoff({ invoke, captureAccess: () => () => {} });
+    const result = await send({ deviceId: 'mbp', sessionId: 'new-id' }, {
+      message: 'Fix login', sender: async () => ({ sessionId: 'me' }), create: async () => create,
+    });
+    if (!supported) {
+      expect(result).toMatchObject({ ok: false, errorCode: 'REMOTE_UNSUPPORTED' });
+      expect(invoke).toHaveBeenCalledOnce();
+      return;
+    }
+    expect(result).toMatchObject({ ok: true, wakeKind: 'created', worktreeBaseRef: 'refs/remotes/origin/release/2.x',
+      worktreeBaseStaleReason: 'fetch-failed', agentDeviceId: null });
+    // The base is part of the operation the destination rechecks against this computer.
+    const receipt = { receiptId: issued.at(-1)!, sessionId: 'me', targetSessionId: 'new-id', message: 'Fix login' };
+    expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation(create) })).toBe(true);
+    expect(await validateRemoteTaskActionReceipt('mbp', { ...receipt, operation: creationOperation({ ...create, baseRef: 'main' }) })).toBe(false);
+  });
+
+  it('leaves the provider computer unknown when an older destination does not report it', async () => {
+    const invoke = vi.fn(async (_device: string, _channel: string, args: unknown[]): Promise<InvokeResultPayload> => {
+      const wire = args[0] as { action?: string; taskActionReceipt: string };
+      if (wire.action === 'task-action-capability') return { ok: true, result: {
+        taskActionVersion: 1, ordinaryCreateVersion: 1, ordinaryCreateAutoTitle: 1 } };
+      issued.push(wire.taskActionReceipt);
+      return { ok: true, result: { ...accepted, wakeKind: 'created', targetSessionId: 'new-id', model: 'selected',
+        workingDir: '/remote/project' } };
+    });
+    const result = await createRemoteSessionHandoff({ invoke, captureAccess: () => () => {} })(
+      { deviceId: 'mbp', sessionId: 'new-id' },
+      { message: 'Fix login', sender: async () => ({ sessionId: 'me' }), create: async () => ({ permissionMode: 'ask' as const }) });
+    expect(result).toMatchObject({ ok: true, wakeKind: 'created' });
+    expect(result).not.toHaveProperty('agentDeviceId');
+    expect(result).not.toHaveProperty('worktreeBaseRef');
+  });
+
   // 2026-11-05: a newer receiver takes the agent's own text with a checked hand-off; an older one
   // still verifies the quoted envelope, so it keeps receiving exactly what it received before.
   // Unit: real capture and sender against both capability answers.

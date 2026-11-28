@@ -48,11 +48,33 @@ vi.mock('@/lib/toast', () => ({
   toast: { warning: vi.fn(), error: vi.fn() },
 }));
 
+import { toast } from '@/lib/toast';
+
 import { useDeleteMessage } from '../useDeleteMessage';
 
 describe('useDeleteMessage invoke fallback', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  // Unit: the response can start after the confirmation opens. Exercise the hook
+  // with an Electron-wrapped refusal; the earlier success tests only cover committed deletes.
+  it.each([
+    ['SESSION_RUNNING', 'ipcError.SESSION_RUNNING'],
+    ['NOT_FOUND', 'chat.messageActionBar.deleteFailed'],
+  ])('shows the appropriate feedback after a %s refusal', async (code, key) => {
+    mocks.deleteMessageFor.mockRejectedValueOnce(new Error(
+      `Error invoking remote method 'maker:message:delete': Error: [${code}] request refused`,
+    ));
+    const { result } = renderHook(() => useDeleteMessage({
+      sessionId: 's1',
+      messageClientId: 'final',
+    }));
+
+    await act(async () => result.current());
+
+    expect(toast.error).toHaveBeenCalledWith(key);
+    expect(mocks.removeMessagesByClientIds).not.toHaveBeenCalled();
   });
 
   it('mirrors every committed id returned by a new host', async () => {

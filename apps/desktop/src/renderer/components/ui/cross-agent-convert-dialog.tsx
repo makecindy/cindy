@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
  * CrossAgentConvertDialog — 跨 Agent 工作区互转弹窗（步骤列表样式）。
  *
  * 视觉规格 1:1 复刻 ConfirmDialog（共享 --confirm-* CSS 变量），但有 3 态状态机：
- *   - 'asking'  ：列出待迁移项 + 两按钮 [不要 / 转换]
+ *   - 'asking'  ：列出可添加的项目设置，用户可添加或直接开始任务
  *   - 'running' ：列表里逐项展示 pending/running/success/skipped/failed；按钮锁死、ESC 失效
  *   - 'closed'  ：父组件控制
  *
@@ -46,7 +46,7 @@ export function CrossAgentConvertDialog({
   const phaseText = {
     title: t(`commonUi.crossAgentConvert.${phaseKey}.title`, { sourceAgent, targetAgent }),
     description: t(`commonUi.crossAgentConvert.${phaseKey}.description`, { sourceAgent, targetAgent }),
-    primary: t(`commonUi.crossAgentConvert.${phaseKey}.primary`),
+    primary: t(`commonUi.crossAgentConvert.${phaseKey}.primary`, { targetAgent }),
     cancel: t(`commonUi.crossAgentConvert.${phaseKey}.cancel`),
   };
 
@@ -83,7 +83,7 @@ export function CrossAgentConvertDialog({
           </AlertDialog.Description>
 
           {/* 步骤列表 */}
-          <ul className="mt-4 space-y-1.5">
+          <ul className="mt-4 max-h-[40vh] space-y-1.5 overflow-y-auto">
             {items.map((item) => {
               const s = stepMap[item.id]?.status ?? 'pending';
               const detail = stepMap[item.id]?.detail;
@@ -91,12 +91,23 @@ export function CrossAgentConvertDialog({
                 <li
                   key={item.id}
                   className={cn(
-                    'flex items-center gap-2 rounded-md px-2 py-1.5 text-13',
+                    'flex items-center gap-2 rounded-lg px-2 py-1.5 text-13',
                     'text-[var(--confirm-title)]',
                   )}
                 >
                   <StepIcon status={s} />
-                  <span className="flex-1 truncate">{item.label}</span>
+                  <span className="min-w-0 flex-1 break-words">
+                    {t(`commonUi.crossAgentConvert.items.${item.kind}`, { defaultValue: item.label })}
+                    {item.subItems?.length ? (
+                      item.kind === 'hooks'
+                        ? (
+                          <span className="block text-12 text-[var(--confirm-desc)]">
+                            {item.subItems.map(entry => entry.name).join(t('commonUi.listSeparator'))}
+                          </span>
+                        )
+                        : ` (${item.subItems.length})`
+                    ) : null}
+                  </span>
                   {detail && (
                     <span className="text-12 text-[var(--confirm-desc)]">{detail}</span>
                   )}
@@ -105,7 +116,7 @@ export function CrossAgentConvertDialog({
             })}
           </ul>
 
-          <div className="mt-6 flex justify-end gap-2.5">
+          <div className="mt-6 flex flex-wrap justify-end gap-2.5">
             <Button
               variant="secondary"
               palette="confirmation"

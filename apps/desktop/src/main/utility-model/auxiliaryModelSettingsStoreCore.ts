@@ -33,6 +33,9 @@ import {
   portableOverrideSettings,
   type OverrideSettingsState,
 } from '../maker-host/override-settings-file.js';
+import { validateAdditionalSettingsOverrides } from '../../shared/settingsEditableCatalog.js';
+import { inspectSettingsJson } from '../maker-host/inspect-settings-json.js';
+import { validateOptionalSettingsFields, type SettingsFileInspection } from '../maker-host/settings-inspection.js';
 
 /** The Desktop-only reads, resolved by each launcher. */
 export interface AuxiliaryModelSettingsStorePorts {
@@ -411,6 +414,8 @@ const store = createOverrideSettingsFile<AuxiliaryModelSettings>({
   filePath: settingsFilePath,
   defaults: AUXILIARY_MODEL_SETTINGS_DEFAULTS,
   normalize,
+  // Cloud settings reads only; ordinary writes are unchanged.
+  validateOverrides: raw => validateAdditionalSettingsOverrides('auxiliaryModel', raw),
   log,
   label: 'auxiliary model',
   scopeKey: activeOwnerScopeKey,
@@ -464,22 +469,20 @@ function isAuxiliaryModelCustomized(): boolean {
 /** Owner-scoped atomic write; empty `models` removes the override file. */
 async function writeAuxiliaryModelSettingsPatch(
   patch: AuxiliaryModelSettingsPatch,
+  beforeWrite?: () => void,
 ): Promise<void> {
-  if (patch.models?.length === 0) {
-    await store.updateAtomic(() => {
-      // A reset can race with the first legacy migration. Seal the legacy
-      // voice import while holding the same lock so it cannot resurrect the
-      // chain after this empty patch removes the new override.
+  await store.updateAtomic(() => {
+    beforeWrite?.();
+    if (patch.models?.length === 0) {
+      // Seal a pending legacy migration under the same lock as the reset.
       const legacyVoice =
         hasLegacyVoiceMigrationMarker() ||
         legacyVoiceOverrideRefs(readJsonObject(ownerVoiceModelsPath())).length > 0 ||
         legacyVoiceOverrideRefs(readClaimedUnscopedVoiceModels()).length > 0;
       if (legacyVoice) markLegacyVoiceMigrationComplete();
-      return patch;
-    });
-  } else {
-    await store.writePatchAtomic(patch);
-  }
+    }
+    return patch;
+  });
   log.info('auxiliary model settings written', {
     customizedKeys: store.readState().customizedKeys,
     models: store.read().models.length,
@@ -512,5 +515,64 @@ const __testing = {
 /** New-computer setup: values the user changed here (docs/product-rules/new-device-setup-migration.md). */
 const auxiliaryModelPortableSettings = portableOverrideSettings(store);
 
-return { migrateLegacyAuxiliaryModelSettings, readAuxiliaryModelSettings, readAuxiliaryModelSettingsState, isAuxiliaryModelCustomized, writeAuxiliaryModelSettingsPatch, resetAuxiliaryModelSettings, __testing, auxiliaryModelPortableSettings };
+/** 只观察保存事实：不自动迁移，不加载环境 override、动态目录或凭据。 */
+function inspectAuxiliaryModelSettings(options: {
+  ownerRoot: string;
+  userDataPath: string;
+  ownerId: string;
+  isLegacyOwnerNamespaceClaimedByOtherOwner(ownerId: string, userDataPath: string): boolean;
+}): SettingsFileInspection<AuxiliaryModelSettings> {
+  const current = inspectSettingsJson(path.join(options.ownerRoot, 'auxiliary-model-settings.json'), (raw) => {
+    const ref = (value: unknown) => typeof value === 'string' && normalizeAuxiliaryModelRef(value) !== null;
+    validateOptionalSettingsFields(raw, {
+      models: (value) => Array.isArray(value) && value.every(ref),
+      sessionTitleModel: (value) => value === null || value === '' || ref(value),
+      promptRecommendationModel: (value) => value === null || value === '' || ref(value),
+    });
+    return normalize(raw);
+  }, 4 * 1024);
+  if (current.status !== 'ready') return current;
+  if (Object.hasOwn(current.raw, 'models')) {
+    return { status: 'ready', value: current.value, sources: { models: 'override' } };
+  }
+  if (Object.hasOwn(current.raw, 'sessionTitleModel') || Object.hasOwn(current.raw, 'promptRecommendationModel')) {
+    return { status: 'ready', value: current.value,
+      sources: { models: current.value.models.length > 0 ? 'override' : 'unknown' } };
+  }
+  const marker = inspectSettingsJson(path.join(options.ownerRoot, AUXILIARY_MODEL_MIGRATION_FILE), (raw) => {
+    validateOptionalSettingsFields(raw, { legacyVoiceMigrationCompleted: (value) => typeof value === 'boolean' });
+    return raw;
+  }, 4 * 1024);
+  if (marker.status !== 'ready') return marker;
+  if (marker.raw.legacyVoiceMigrationCompleted !== true) {
+    const inspectVoice = (file: string) => inspectSettingsJson(file, (raw) => {
+      const string = (value: unknown) => value === null || typeof value === 'string';
+      const list = (value: unknown) => value === null || (Array.isArray(value) && value.every((item) => typeof item === 'string'));
+      validateOptionalSettingsFields(raw, {
+        utilityModelProvider: string, utilityModel: string, refinerProvider: string, refinerModel: string,
+        utilityModelProviderChain: list, refinerProviderChain: list,
+      });
+      return raw;
+    });
+    const ownerVoice = inspectVoice(path.join(options.ownerRoot, VOICE_INPUT_MODELS_FILE));
+    if (ownerVoice.status !== 'ready') return ownerVoice;
+    if (hasLegacyVoiceFileOverride(ownerVoice.raw)) return { status: 'migrationPending' };
+    // 只观察旧数据的现有归属；不得调用会探测独占状态的迁移判据。
+    if (!options.isLegacyOwnerNamespaceClaimedByOtherOwner(options.ownerId, options.userDataPath)) {
+      const unscoped = inspectVoice(path.join(options.userDataPath, VOICE_INPUT_MODELS_FILE));
+      if (unscoped.status !== 'ready') return unscoped;
+      if (hasLegacyVoiceFileOverride(unscoped.raw)) {
+        // 即使已归属当前 owner，旧语音链仍须完成显式领域迁移才能成为新设置正本。
+        // 未归属或属于其他 owner 的值不能冒充当前 owner 的设置。
+        return { status: 'migrationPending' };
+      }
+    }
+  }
+  return { status: 'ready', value: current.value, sources: { models: 'default' } };
+}
+
+/** Internal Host settings adapter; uses the native persistence and revision lock. */
+function getAuxiliaryModelSettingsStore() { return store; }
+
+return { migrateLegacyAuxiliaryModelSettings, readAuxiliaryModelSettings, readAuxiliaryModelSettingsState, isAuxiliaryModelCustomized, writeAuxiliaryModelSettingsPatch, resetAuxiliaryModelSettings, __testing, auxiliaryModelPortableSettings, inspectAuxiliaryModelSettings, getAuxiliaryModelSettingsStore };
 }

@@ -7,7 +7,11 @@ import type { AgentKind } from '@/hooks/useAgentCapabilities';
  * 远程草稿的模型、权限按被控端在**当前引擎**下记住的值播种；引擎却是控制端草稿共用的
  * vendor。控制端从没设过引擎(例如新装的电脑默认 Pi)时，远程草稿就会拿到被控端 Pi 那格
  * 的旧选择，和被控端自己新建任务时看到的完全不同。所以进入远程目标、拿到被控端的
- * selectedAgentKind 后切到同一引擎；回到本机时，用户期间没手动换过引擎就切回原来的。
+ * selectedAgentKind 后切到同一引擎。
+ *
+ * 引擎和模型一样按电脑记：对着另一台电脑做的选择(包括手动换引擎、在那台目录里选模型)
+ * 写回那台电脑自己的新建默认值，不改本机的。回到本机时一律切回进入远程目标前本机的引擎，
+ * 本机落盘与偏好镜像在此期间也始终保留本机原值；换到另一台远程电脑时按那台的选择重新跟随。
  *
  * 状态放模块级而不是组件 ref：发送后草稿页会卸载，回到本机往往发生在下一次挂载。
  * 远程目标本身不跨重启持久化，这份记录也不需要。
@@ -55,14 +59,8 @@ export function nextRemoteDraftEngine(args: {
   if (!deviceId) {
     const leaving = entry;
     entry = null;
-    if (
-      leaving?.followedVendor && !leaving.manuallySelected &&
-      currentVendor === leaving.followedVendor &&
-      leaving.localVendor !== currentVendor
-    ) {
-      return leaving.localVendor;
-    }
-    return null;
+    // 期间的引擎选择属于那台电脑(已写回那台的新建默认值)，本机恢复自己的引擎。
+    return leaving && leaving.localVendor !== currentVendor ? leaving.localVendor : null;
   }
 
   if (!entry || entry.deviceId !== deviceId) {
@@ -71,7 +69,8 @@ export function nextRemoteDraftEngine(args: {
     entry = {
       ownerId,
       deviceId,
-      localVendor: previous && !previous.manuallySelected ? previous.localVendor : currentVendor,
+      // 远程 A → 远程 B：本机引擎仍是最初离开本机时的那个，不被 A 上的选择改写。
+      localVendor: previous ? previous.localVendor : currentVendor,
       vendorAtEntry: currentVendor,
       followedVendor: stillFollowed ? previous!.followedVendor : null,
       manuallySelected: false,
@@ -98,17 +97,23 @@ export function markRemoteDraftEngineManuallySelected(): void {
   if (entry) entry.manuallySelected = true;
 }
 
-/** 自动跟随仅影响当前窗口；本机偏好镜像和落盘始终使用原来的引擎。 */
+/** 对着远程电脑时的引擎只影响当前窗口；本机偏好镜像和落盘始终使用本机原来的引擎。 */
 export function persistedDraftVendor(ownerId: string | null, current: MakerVendor): MakerVendor {
-  return entry?.ownerId === ownerId && entry.followedVendor && !entry.manuallySelected
-    ? entry.localVendor : current;
+  return entry?.ownerId === ownerId ? entry.localVendor : current;
 }
 
-/** A controller changed this computer's default while this window may be following another one. */
-export function vendorAfterRemotePreferenceWrite(ownerId: string | null, selected: MakerVendor): MakerVendor {
-  if (entry?.ownerId === ownerId && entry.followedVendor && !entry.manuallySelected) {
+/**
+ * 有控制端改了本机的新建默认引擎，而当前窗口可能正对着另一台电脑：只更新回到本机时要
+ * 还原的引擎，当前窗口保持那台电脑的引擎。
+ */
+export function vendorAfterRemotePreferenceWrite(
+  ownerId: string | null,
+  selected: MakerVendor,
+  current: MakerVendor,
+): MakerVendor {
+  if (entry?.ownerId === ownerId) {
     entry.localVendor = selected;
-    return entry.followedVendor;
+    return current;
   }
   return selected;
 }

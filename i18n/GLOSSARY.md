@@ -294,8 +294,8 @@
 - **Agent session** — Agent / 引擎的**运行时**会话（SDK Query 的生命周期），不是 session 条目说的那个产品条目。中文必须叫「Agent 会话」而不是「任务」——两者的区别是用户会不会因此做一个多余的动作：记忆、MCP、内置工具、LSP、权限开关这类设置都在「下一个 Agent 会话」生效，而同一条任务里 /clear、rewind、重启都会开新的 Agent 会话，说「新建任务才生效」会让用户白开一条任务、还割裂上下文。forbidden 规则只覆盖英文源字面写了 agent session 的 key（精确、无误报）；英文只写 session 的那批（`The Codex session state` / `Session is inactive` / `in-flight sessions`）**机器判不出来**——英语本身不区分这两个意思，同一句里两个所指并存也是合法的（`The historical agent session ... so a new session can't be started`：前半指运行时、后半指条目，已登记 exempt）。所以这批只能靠人读英文源判断，判据与全部踩坑记录见 docs/product-rules/task-and-conversation-naming.md §6.0.2。session 条目的 exempt 里另有三类同样叫 session 的东西：登录/绑定校验会话、SSH 远程与传输会话、操作系统桌面会话，以及 mobile 的语音连接会话——它们各自稳定、极少改动，故未单独立条目。
   - 豁免范围：`desktop:chat.userMessage.forkErrors.unsupportedHistory`
 - **Author** — 中文用「作者」（现状 9:4）。典型的同模块自相矛盾：issueTracker 同一个页面里，assignee.labelAuthor 写「提交者」、list.filterAuthor 写「提出者」、visibility.onlyAuthorCanChange 写「作者」——同一个字段三种叫法。条件禁用避免误伤 Committer / Reporter 等其它英文词的正确译法。
-- **Automation** — scheduler 的模块名、单条实例与能力名统一用「自动化」；不再把「自动任务」「自动化任务」登记为用户可见译法，避免与产品条目 Session（同样叫「任务」）在『删除自动化和任务』等文案里相撞。Computer Use 是另一个概念，用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此 zh-CN 只保留「自动操作」这一语境豁免。术语门禁只扫描 locale，不扫描源码注释；历史注释与测试 fixture 的旧称按 docs/product-rules/task-and-conversation-naming.md §6.0.5 逐条判断，不借术语改名机械扩大代码改动。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）豁免通讯录授权提示的两个 key:那里指的是 macOS 系统设置里的面板名,日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。
-  - 豁免范围：`desktop:settings.contacts.import.permissionDenied`、`desktop:settings.contacts.ipcError.PERMISSION_DENIED`
+- **Automation** — scheduler 的模块名、单条实例与能力名统一用「自动化」；不再把「自动任务」「自动化任务」登记为用户可见译法，避免与产品条目 Session（同样叫「任务」）在『删除自动化和任务』等文案里相撞。Computer Use 是另一个概念，用「自动操作电脑 / 浏览器」，改成「自动化电脑」反而不通。因此 zh-CN 只保留「自动操作」这一语境豁免。术语门禁只扫描 locale，不扫描源码注释；历史注释与测试 fixture 的旧称按 docs/product-rules/task-and-conversation-naming.md §6.0.5 逐条判断，不借术语改名机械扩大代码改动。（2026-07 修正：ja 原声明 オートメーション 仅 37/121，主流是 自動化；ko 的 자동화 75/121 本就正确。）通讯录和 iMessage 的授权提示引用了 macOS 系统设置面板名，日文官方标签是「オートメーション」而非产品术语「自動化」——照产品术语改会让用户按提示在系统设置里找不到对应项,授权恢复路径直接断掉。zh-CN 的「自动化」与 ko 的「자동화」恰好就是各自的 macOS 官方标签,不受影响。
+  - 豁免范围：`desktop:settings.contacts.import.permissionDenied`、`desktop:settings.contacts.ipcError.PERMISSION_DENIED`、`desktop:bots.channels.add.imessage.automationDenied`
 - **Balance** — 账户余额用「余额」。原先被并入「额度」（可用额度 / 额度更新于 / 剩余额度），与 Credits、Quota 混同。Balance 是「账上还剩多少」，Credits 是「可购买消耗的计数单位」，Quota 是「周期内上限」——三者是不同层面的量，中文必须分开。
 - **Discover Buddies** — 预制伙伴目录与邀请入口；使用 Buddy 对应的本地化产品术语。
 - **Chat** — Chat 专指任务内人与 AI 交流的过程与内容（对话区 / 对话正文 / 对话记录 / 继续对话），中文「对话」。指那个可打开可删除的条目时用 Session（中文「任务」）——此前 Chat 与 Session 混用同一个中文词的问题已随 2026-07-31 的改名解决：英文侧指容器的 Chat 已改为 Session。「聊天」一律禁用。ja / ko 保留各自既有译法。
@@ -466,6 +466,10 @@ Cindy Make 中与个人版对应的来源应用。用户明确要求 Dev 和正�
 
 Cindy Make 生成的本机定制应用成品。可与原版切换并沿用同一份日常数据，与使用独立数据的隔离测试版区分。
 
+### Cloud Cindy
+
+指账号下运行在云上的那台 Cindy（领取、休眠、唤醒、更新，在「远程连接 → 我的设备」里管理）。它和「云端伙伴」「云端对话」不是一回事：后两者指伙伴的跨设备身份和对话存储。界面上不再用「云实例」「云端实例」。中文与 Cindy 之间留一个空格，后面紧跟汉字时也加空格，例如「云端 Cindy 上」。其他语言的译法待定。
+
 ### Main computer
 
 云端伙伴运行的那台电脑（docs/product-rules/cloud-companions.md §3）：伙伴的 Agent、工作目录与连接只在这台电脑上，其他电脑与手机是查看和发消息的入口。手机与桌面同一叫法，伙伴设置行名、离线横幅与侧栏状态共用。英文行名用 Title Case（Main Computer），句中小写 main computer，故 checkCase 为 false。不要写成「主设备」「宿主机」或 home device（代码字段 homeDeviceId 不是界面用语）。先登记为 proposed，待桌面与手机实机走查后再定。
@@ -552,7 +556,7 @@ Irreversible group termination, distinct from archive, leave and personal list r
 
 ### Engine
 
-伙伴设置里「跑在哪个 Agent 上」那个选择(Claude / Codex / Pi)。代码里叫 harness,但那是实现名词,普通用户看不懂;2026-08-21 实机截图里中文界面直接显示英文 Harness。这里先提「引擎」待裁决 —— 它不精确(Pi 严格说是多协议接入层),但对用户能表达「换一个跑法」。定不下来的话另一个候选是直接列三个名字不给类目名。
+任务或伙伴设置里「跑在哪个 Agent 上」的选择（内置 Claude Code / Codex / Pi，以及通过插件提供的 ACP 插件引擎）。代码里叫 harness，但那是实现名词，普通用户看不懂；面向用户以「引擎」表达运行承载层，由插件提供的具体称「插件引擎」（见 plugin-engine）。
 
 ### Face ID verification
 
@@ -616,7 +620,7 @@ A teammate replies on behalf of a group member. Chinese name approved as AI 代�
 
 ### Harness
 
-用于任务筛选、搜索筛选，以及用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。
+用于任务筛选、搜索筛选，以及用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi、ACP（插件执行引擎）的公开全名，不使用 cc/cx/pi 等内部缩写。
 
 ### Hunyuan
 
@@ -728,7 +732,7 @@ issue #882：模型管理/新对话选择器的分类标签，对应 Gateway mod
 
 ### Model Group
 
-用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一个个「模式」（几个来源加一种选法，可选推理强度，英文 Mode；2026-11-11 原「模式」并入当时叫「路线」的这一项，2026-11-13 用户决定统一叫「模式」，不再用「路线」）；这个词在模型组语境下这样用，不约束协同模式、计划模式等其它「模式」。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为新任务选来源。
+用户把模型供应商里已连接的几个来源合成的可选项（docs/product-rules/model-groups.md），也是设置页与模型选择器那一格的名字。里面是一个个「模式」（几个来源加一种选法，可选推理强度，英文 Mode；2026-11-11 原「模式」并入当时叫「路线」的这一项，2026-11-13 用户决定统一叫「模式」，不再用「路线」）；这个词在模型组语境下这样用，不约束协同模式、计划模式等其它「模式」。与「供应商组」不同：供应商组为一个供应商选电脑，模型组为用到它的任务选来源（新任务、进行中的任务、定时任务等能挑模型的地方，见 model-groups.md §6.3）。
 
 ### Model ID
 
@@ -814,6 +818,10 @@ WebAuthn 可发现凭证的用户可见名称，采用 Apple、Google 与 Micros
 
 插件公开来源下的社区发布者身份标识，与官方并列；用户于 2026-11-09 确认设计。社区作者继续不公开署名；不表示个人私有市场或运行时信任。
 
+### Plugin engine
+
+通过插件（manifest v3 harnesses / ACP 协议）接入 Cindy 的任务执行引擎（如 Antigravity、DeepSeek Harness），在「设置 → 模型供应商」与模型选择器中作为一类独立供应商与执行引擎呈现（docs/product-rules/plugin-engines-and-models.md）。不要与「插件路由模型」（仅本机新任务草稿里发首条消息前路由真实模型的 models.types: ['route']）混为一谈。
+
 ### Main view
 
 Plugin 声明的应用级完整页面能力；区别于会话内 Panel。V1 由 Cindy 侧边栏入口打开，manifest/代码标识固定为 main-view。
@@ -862,9 +870,9 @@ Cindy 用来代替锁屏的遮罩：盖住本机屏幕，有人碰电脑就转�
 
 OS 进程语境(资源用量面板、浏览器 guest 进程、终端)。注意与 Thread→任务(消息流语境)区分:资源用量面板刻意不展示 OS 线程数,避免「线程」撞上 Thread 的既定裁决;若未来要展示,需为 OS thread 立同形异义条目再谈。
 
-### Provider Group
+### Computer Group
 
-某台电脑上某个供应商的一组运行位置：本机、我的其他电脑、通过分享链接加入的电脑（docs/product-rules/provider-groups.md）。这个供应商的使用都按组策略选一台组内电脑运行 Agent。中文用「供应商组」，不单用「分组」，避免与模型列表和设置页的模型分组混淆；组里的电脑称「组内电脑」。
+某台电脑上某个供应商的一组运行位置：本机、我的其他电脑、通过分享链接加入的电脑（docs/product-rules/provider-groups.md）。这个供应商的使用都按组的选法选一台组内电脑运行 Agent。2026-11-26 起面向用户叫「电脑组」（原「供应商组」，代码与协议字段 providerGroup 不变）：与「智能路由」（挑来源）、「订阅账号」（挑账号）一起，三个名字各说各挑什么。不单用「分组」，避免与模型列表和设置页的模型分组混淆；组里的电脑称「组内电脑」。
 
 ### Provider Sharing
 

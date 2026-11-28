@@ -495,6 +495,38 @@ describe('BotChannelsPage', () => {
     expect(screen.getByRole('dialog')).toBeTruthy();
   });
 
+  // Maintainer review on #11994: a handshake that only timed out says "connection timed out,
+  // try again", keeps what was typed, and the next click retries the same input to connected.
+  it('keeps a timed-out Telegram bot in the form and connects on the next try without re-entering it', async () => {
+    const api = installApi({ connections: [] });
+    api.add.mockRejectedValueOnce(
+      new Error("Error invoking remote method 'botImConnection:add': Error: [PRECONDITION_FAILED] CONNECT_FAILED: timeout"),
+    );
+    render(<BotChannelsPage bot={mia} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.add.button' }));
+    const dialog = await screen.findByRole('dialog');
+    const tokenInput = within(dialog).getByLabelText('bots.channels.add.telegram.tokenLabel') as HTMLInputElement;
+    const ownerInput = within(dialog).getByLabelText('bots.channels.add.telegram.ownerLabel') as HTMLInputElement;
+    fireEvent.change(tokenInput, { target: { value: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ' } });
+    fireEvent.change(ownerInput, { target: { value: '4242' } });
+    const submit = within(dialog).getByRole('button', { name: 'bots.channels.add.confirm' });
+    fireEvent.click(submit);
+
+    expect(await within(dialog).findByRole('alert')).toHaveProperty(
+      'textContent',
+      'bots.channels.add.errors.connectTimedOut',
+    );
+    expect(tokenInput.value).toBe('123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ');
+    expect(ownerInput.value).toBe('4242');
+
+    fireEvent.click(submit);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    const input = { botId: 'bot-1', channel: 'telegram', token: '123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ', ownerUserId: '4242' };
+    expect(api.add.mock.calls).toEqual([[input], [input]]);
+    expect(within(await screen.findByRole('list')).getAllByRole('listitem')).toHaveLength(1);
+  });
+
   // Feature: users can create an application before entering credentials. Exercise
   // the real form, external-link bridge and service payload; no live Feishu account.
   it('opens the matching creation platform, toggles setup help and connects Lark with the entered credentials', async () => {
@@ -712,6 +744,39 @@ describe('BotChannelsPage for a teammate on another computer', () => {
     renderRemote(remoteApi(), { x });
     expect(await screen.findByText(/bots\.remoteSettings\.finishOnHost:.*Studio/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'bots.channels.officialX.bind' })).toBeNull();
+  });
+
+  // Same rule as this computer's X card: once a teammate handles X questions, the risk names the
+  // teammate's memory and directories; before that, X tasks use the default project of the X connection.
+  it.each([
+    [null, 'settings.remoteControl.hook.x.guide.riskWorkdirBody'],
+    ['bot-1', 'bots.channels.officialX.riskBody'],
+  ])('explains how X questions work and that replies are public, naming the computer that runs them (assigned to %s)', async (companionBotId, riskKey) => {
+    const x = {
+      get: vi.fn(async () => ({ available: true, enabled: true, connected: true, companionBotId })),
+      setCompanion: vi.fn(),
+    };
+    renderRemote(remoteApi(), { x });
+    const card = await screen.findByRole('region', { name: 'settings.tina.prefs.providerX' });
+    expect(within(card).getByText('settings.remoteControl.hook.x.guide.riskPublicBody')).toBeTruthy();
+    expect(within(card).getByText(riskKey)).toBeTruthy();
+    expect(within(card).getByText('settings.remoteControl.hook.x.guide.withdrawBody')).toBeTruthy();
+    // The questions run on the teammate's computer, so the usage line names it instead of "this device".
+    expect(within(card).getByText(/settings\.remoteControl\.hook\.x\.guide\.usageBodyOnDevice:.*Studio/)).toBeTruthy();
+    expect(within(card).queryByText('settings.remoteControl.hook.x.guide.usageBody')).toBeNull();
+  });
+
+  it('keeps the other computer’s X assignment when the confirmation is cancelled', async () => {
+    const x = {
+      get: vi.fn(async () => ({ available: true, enabled: true, connected: true, companionBotId: null as string | null })),
+      setCompanion: vi.fn(),
+    };
+    mocks.confirm.mockResolvedValueOnce(false);
+    renderRemote(remoteApi(), { x });
+    fireEvent.click(await screen.findByRole('button', { name: 'bots.channels.officialX.bind' }));
+    await waitFor(() => expect(mocks.confirm).toHaveBeenCalled());
+    expect(x.setCompanion).not.toHaveBeenCalled();
+    expect((screen.getByRole('button', { name: 'bots.channels.officialX.bind' }) as HTMLButtonElement).disabled).toBe(false);
   });
 });
 

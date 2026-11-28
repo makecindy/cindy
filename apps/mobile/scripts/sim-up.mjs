@@ -51,6 +51,7 @@ import {
   gitSourceIdentity,
   inspectMetroListeners,
   readMetroOwner,
+  reapOrphanMetros,
   terminateMetro,
 } from "./sim-metro.mjs";
 
@@ -420,6 +421,7 @@ try {
 const { region, deviceName, takeover, simulatorUdid, explicitPort } = parsed;
 
 try {
+  await reapOrphanMetros();
   ensureMobileLocalRegionConfig({ mobileDir });
   const buildEnv = withLocalMobileRegionConfig(
     mobileClientBundleEnv({ authRegion: region }),

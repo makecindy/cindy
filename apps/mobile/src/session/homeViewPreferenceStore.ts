@@ -4,6 +4,9 @@ import type { HomeListSortBy, HomeStatusFilter } from './homeListPriority';
 import type { HomeProjectOrder } from './homeProjectOrder';
 import {
   DEFAULT_HOME_TASK_INFO_FIELDS,
+  HOME_IDENTITY_FIELDS,
+  type HomePinnedView,
+  type HomePinnedSort,
   DEFAULT_HOME_FILTERS,
   normalizeLastActivityFilter,
   normalizeProjectFilter,
@@ -27,6 +30,10 @@ export interface HomeViewPreferences {
   groupByProject: boolean;
   /** 缺省关:老首页是项目 folder + 对话按时间混排,不是桌面现在的「对话归组」。 */
   groupDialogue: boolean;
+  groupDevice: boolean;
+  pinnedView: HomePinnedView;
+  pinnedSort: HomePinnedSort;
+  pinnedOrder: string[];
   /** 缺省关,与手机端「对话」同一默认:自动化运行的任务收进「自动化」目录。 */
   groupAutomation: boolean;
   sortBy: HomeListSortBy;
@@ -57,6 +64,10 @@ export interface HomeViewPreferences {
 export interface HomeViewPreferencePatch {
   groupByProject?: boolean;
   groupDialogue?: boolean;
+  groupDevice?: boolean;
+  pinnedView?: HomePinnedView;
+  pinnedSort?: HomePinnedSort;
+  pinnedOrder?: { owner: string; keys: string[] };
   groupAutomation?: boolean;
   sortBy?: HomeListSortBy;
   statusFilter?: HomeStatusFilter;
@@ -115,6 +126,12 @@ async function writeHomeViewPreferences(patch: HomeViewPreferencePatch, filterMo
   const assign = (field: string, value: unknown) => {
     if (value !== undefined) record[field] = value;
   };
+  assign('groupDevice', patch.groupDevice);
+  assign('pinnedView', patch.pinnedView);
+  assign('pinnedSort', patch.pinnedSort);
+  if (patch.pinnedOrder) {
+    record.pinnedOrders = { ...readRecord(record.pinnedOrders), [patch.pinnedOrder.owner]: patch.pinnedOrder.keys };
+  }
   assign('groupByProject', patch.groupByProject);
   assign('groupDialogue', patch.groupDialogue);
   assign('groupAutomation', patch.groupAutomation);
@@ -125,7 +142,10 @@ async function writeHomeViewPreferences(patch: HomeViewPreferencePatch, filterMo
   assign('taskListMode', patch.taskListMode);
   const filters = filterMode === 'inbox' ? { ...readRecord(record.inboxFilters) } : record;
   if (patch.viewMode !== undefined) filters.viewMode = patch.viewMode;
-  if (patch.taskInfoFields !== undefined) filters.taskInfoFields = [...patch.taskInfoFields];
+  if (patch.taskInfoFields !== undefined) {
+    filters.taskInfoFields = [...patch.taskInfoFields];
+    filters.taskInfoVersion = 2;
+  }
   for (const field of ['projectFilter', 'teammateFilter'] as const) {
     const filter = patch[field];
     if (!filter) continue;
@@ -179,6 +199,10 @@ export async function clearHomeViewPreferences(): Promise<void> {
 function emptyPreferences(): HomeViewPreferences {
   return {
     groupByProject: true,
+    groupDevice: true,
+    pinnedView: 'list',
+    pinnedSort: 'manual',
+    pinnedOrder: [],
     groupDialogue: false,
     groupAutomation: false,
     selectedDevice: null,
@@ -207,6 +231,12 @@ function readFilters(record: Record<string, unknown>, owner: string): HomeFilter
   };
 }
 
+function readTaskInfo(record: Record<string, unknown>): HomeTaskInfoField[] {
+  const fields = normalizeTaskInfoFields(record.taskInfoFields);
+  if (record.taskInfoVersion === 2 || !Array.isArray(record.taskInfoFields)) return fields;
+  return [...new Set([...fields, ...HOME_IDENTITY_FIELDS])];
+}
+
 function normalizeStoredPreferences(value: unknown, owner: string): HomeViewPreferences {
   const record = readRecord(value);
   if (!record) return emptyPreferences();
@@ -217,6 +247,10 @@ function normalizeStoredPreferences(value: unknown, owner: string): HomeViewPref
     groupByProject: typeof record.groupByProject === 'boolean'
       ? record.groupByProject
       : true,
+    groupDevice: record.groupDevice !== false,
+    pinnedView: record.pinnedView === 'card' ? 'card' : normalizeViewMode(record.pinnedView),
+    pinnedSort: record.pinnedSort === 'activity' ? 'activity' : 'manual',
+    pinnedOrder: readStringList(readRecord(record.pinnedOrders)?.[owner]),
     groupDialogue: record.groupDialogue === true,
     groupAutomation: record.groupAutomation === true,
     selectedDevice: deviceId
@@ -234,11 +268,11 @@ function normalizeStoredPreferences(value: unknown, owner: string): HomeViewPref
     ...(inbox ? { inboxFilters: {
       ...readFilters(inbox, owner),
       viewMode: normalizeViewMode(inbox.viewMode),
-      taskInfoFields: normalizeTaskInfoFields(inbox.taskInfoFields),
+      taskInfoFields: readTaskInfo(inbox),
     } } : {}),
     taskListMode: record.taskListMode === 'inbox' ? 'inbox' : 'tasks',
     viewMode: normalizeViewMode(record.viewMode),
-    taskInfoFields: normalizeTaskInfoFields(record.taskInfoFields),
+    taskInfoFields: readTaskInfo(record),
   };
 }
 

@@ -32,6 +32,7 @@ export function sameMobileWorkToolActivity(
     && previous.message.normalized === next.message.normalized
     && previous.status === next.status
     && previous.toolResult === next.toolResult
+    && previous.repeatCount === next.repeatCount
     && previous.intentOverride?.action === next.intentOverride?.action
     && previous.intentOverride?.target === next.intentOverride?.target
     && previous.intentOverride?.path === next.intentOverride?.path

@@ -103,6 +103,8 @@ export async function create(body?: {
   title?: string;
   workingDir?: string;
   workspaceKind?: WorkspaceKind;
+  /** Ordinary local plugin-engine task: provision the requested worktree before creating the task. */
+  localPluginWorktree?: { name: string; sourceBranch: string };
   model?: string;
   effort?: string;
   permissionMode?: string;

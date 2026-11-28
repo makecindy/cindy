@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { buildAgentTaskCardModel, isAgentTaskToolName } from '../agentTask.js';
 import {
   buildMessageToolResultPairing,
   messageContentToPreview,
@@ -26,6 +27,21 @@ function message(patch: Partial<FixtureMessage> & Pick<FixtureMessage, 'id' | 'r
 }
 
 describe('message normalize shared model', () => {
+  // #11339, unit: live and native-history consumers share this projection.
+  // Old coverage only handled MCP wrappers; a namespaced spawn lost its card.
+  it.each(['subagent', 'cindy_subagent'])('preserves the existing Pi task card for %s history', toolName => {
+    const input = { agent: 'scout', task: 'inspect', async: true };
+    const raw = message({ id: 'spawn', role: 'tool_use', toolUseId: 'child-call', content: { toolName, input } });
+    const tool = parseMessageToolUse(raw);
+    expect(tool).toEqual({ toolUseId: 'child-call', toolName: 'subagent', input });
+    expect(parseMessageToolUse({ ...raw, content: tool })).toEqual(tool);
+    expect(raw.content).toEqual({ toolName, input });
+    expect(isAgentTaskToolName(tool.toolName)).toBe(true);
+    expect(buildAgentTaskCardModel({ toolName: tool.toolName, toolInput: tool.input,
+      update: { provider: 'pi', taskId: 'child-call', status: 'running' },
+      result: 'Cindy subagent launched. The agent is working in the background.' }))
+      .toMatchObject({ provider: 'pi', status: 'running' });
+  });
   it('unwraps Pi MCP calls without changing their identity or nested arguments', () => {
     const input = { ghost_id: 'demo', tool: 'show', args: { value: 1 } };
     const raw = message({ id: 'pi', role: 'tool_use', toolUseId: 'call-pi', content: {

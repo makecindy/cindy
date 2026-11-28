@@ -43,6 +43,7 @@ export function TaskListFilterPopover({ value, onChange }: Props) {
           aria-label={t('scheduler.list.filterAria', { status: labelOf(value) })}
           className={cn(
             // 11px 与原 "Sorted by last run" 字号一致；hover 时点亮文字色提示可点击
+            // 无框文字按钮：圆角只塑形键盘焦点环（DESIGN.md §5 登记）
             'inline-flex items-center gap-1 rounded-md text-11 font-medium leading-none',
             'text-[var(--cmd-palette-item-meta)] transition-colors hover:text-[var(--msg-assistant-text)]',
           )}

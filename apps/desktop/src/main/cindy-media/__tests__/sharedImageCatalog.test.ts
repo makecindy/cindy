@@ -43,4 +43,22 @@ describe('shared OpenAI media catalog', () => {
     }]);
     expect(mocks.catalog).toHaveBeenCalledWith(mocks.invoke, 'share:s1', { live: true });
   });
+
+  it('excludes local-only image routes from independent subscription shares', async () => {
+    const providerId = 'openai-sub-12345678';
+    const share = { ...mocks.share, providerId } as ProviderShareReceived;
+    configureSharedImageAccess({ captureOwner: () => () => true, getReceivedShares: () => [share], findReceivedShare: () => share, invoke: mocks.invoke });
+    const openai = BUILTIN_PROVIDERS.find(provider => provider.id === 'openai')!;
+    const id = `${providerId}/gpt-image-2`;
+    mocks.catalog.mockResolvedValue({
+      views: [{ ...openai, id: providerId, subscriptionPool: 'openai', connected: true,
+        availableMediaModelIds: [id], imageModels: [{ id, name: 'GPT Image Gen' }] }],
+      stale: false,
+    });
+    mocks.invoke.mockResolvedValueOnce({ ok: true, result: {
+      version: 1, maxRuns: 8, uploadChunkBytes: 512, maxPayloadBytes: 1024,
+      sharedImageGeneration: true, sharedBuiltinOpenAiImage: true,
+    } });
+    expect(await listSharedImageModels('share:s1')).toEqual([]);
+  });
 });

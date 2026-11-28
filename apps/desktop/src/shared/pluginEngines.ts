@@ -44,6 +44,13 @@ export function isPluginEngineEffort(value: unknown): value is PluginEngineEffor
   return typeof value === 'string' && (PLUGIN_ENGINE_EFFORTS as readonly string[]).includes(value);
 }
 
+/** Live facts for the local settings page only. */
+export interface PluginEngineReportedModelDetails {
+  modelId: string;
+  imageInput?: boolean;
+  contextWindow?: number;
+}
+
 export interface PluginEngineModel {
   id: string;
   displayName: string;
@@ -51,8 +58,10 @@ export interface PluginEngineModel {
   group?: string;
   /** Levels the engine offers for this model, low → high; absent = no selectable level. */
   efforts?: PluginEngineEffort[];
-  /** The engine's own level when none is chosen (one of `efforts`). */
+  /** Default for a new task, including the provider's saved override (one of `efforts`). */
   defaultEffort?: PluginEngineEffort;
+  /** With an override, the original plugin default. Null means the plugin declared no level. */
+  declaredDefaultEffort?: PluginEngineEffort | null;
 }
 
 /**
@@ -64,6 +73,14 @@ export type PluginEnginePermissionModeId = (typeof PLUGIN_ENGINE_PERMISSION_MODE
 
 export function isPluginEnginePermissionModeId(value: unknown): value is PluginEnginePermissionModeId {
   return typeof value === 'string' && (PLUGIN_ENGINE_PERMISSION_MODE_IDS as readonly string[]).includes(value);
+}
+
+export interface NewTaskPluginEngineSelection {
+  providerId: string;
+  deviceId?: string;
+  modelId: string;
+  permissionMode?: PluginEnginePermissionModeId;
+  effort?: PluginEngineEffort;
 }
 
 export interface PluginEnginePermissionMode {
@@ -127,6 +144,19 @@ export interface PluginEngineView {
   declaredName?: string;
   /** The models the user turned off, as the engine lists them. Not sent to phones or other computers. */
   disabledModels?: PluginEngineModel[];
+  reportedModelDetails?: PluginEngineReportedModelDetails[];
+  /** Explicit per-model reasoning defaults, for settings on this computer. */
+  modelEfforts?: Readonly<Partial<Record<string, PluginEngineEffort>>>;
+  /**
+   * 2026-11-23 (subscription-account-pools.md 插件引擎的账号): the plugin reports this engine's
+   * account; with sign-in methods, Cindy can add accounts to it. Absent on older hosts and plugins.
+   */
+  accounts?: { methods: Array<{ id: string; label: string; kind: 'browser' | 'secret'; secretLabel?: string }> };
+  /**
+   * A provider the user took accounts out of this engine into: `key` is `<engine key>~<suffix>`
+   * and this names the engine it runs. Absent for the engine itself.
+   */
+  accountProviderOf?: string;
 }
 
 /** One change to an engine's settings; only the fields present are changed. */
@@ -141,6 +171,8 @@ export interface PluginEnginePrefsInput {
   suspended?: boolean;
   /** Turns these models of the engine off or on again. */
   models?: { ids: string[]; disabled: boolean };
+  /** A null effort restores the plugin's default for this model. */
+  modelEffort?: { id: string; effort: PluginEngineEffort | null };
 }
 
 /** Longest display name the user can give an engine (a plugin's declared name has the same bound). */
@@ -199,6 +231,17 @@ export function parseOfferedPluginEngines(raw: unknown): PluginEngineView[] {
   });
 }
 
+/**
+ * 「设置 → 模型供应商」里直接选中某个插件引擎的一次性参数 `pluginEngine=<引擎 key>`。
+ * ProvidersSection 等引擎列表到了再消费并从 URL 摘除(与 `receivedShare` 同一做法)。
+ */
+export const PLUGIN_ENGINE_SETTINGS_PARAM = 'pluginEngine';
+
+export function pluginEngineSettingsPath(key: string): string {
+  const params = new URLSearchParams({ tab: 'providers', [PLUGIN_ENGINE_SETTINGS_PARAM]: key });
+  return `/settings?${params.toString()}`;
+}
+
 export function pluginEngineProviderId(key: string): string {
   return `${PLUGIN_ENGINE_PROVIDER_PREFIX}${key}`;
 }
@@ -213,4 +256,13 @@ export function pluginEngineKeyFromProviderId(providerId: string | null | undefi
 
 export function isPluginEngineKind(kind: unknown): kind is typeof PLUGIN_ENGINE_AGENT_KIND {
   return kind === PLUGIN_ENGINE_AGENT_KIND;
+}
+
+/**
+ * 任务来源是否允许在已有任务内切到 / 换出插件引擎。
+ * 与内置引擎同等开放所有非 review 来源（普通任务、伙伴、IM、官方 hook、侧边追问、定时任务、learn 等）；
+ * review 任务路由固定跟随源任务，保持关闭。
+ */
+export function isPluginEngineSwitchSourceAllowed(source: string | null | undefined): boolean {
+  return source !== 'review';
 }

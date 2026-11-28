@@ -34,6 +34,7 @@ function renderMath(markdown: string): string {
     createElement(ReactMarkdown, {
       remarkPlugins: [remarkGfm, remarkMath, remarkStrictInlineMath],
       rehypePlugins: [[rehypeKatex, { strict: 'ignore', errorColor: 'inherit' }]],
+      urlTransform: (url) => (url.startsWith('cindy://') ? url : url),
       children: normalizeDisplayMathFences(normalizeMathDelimiters(markdown)),
     }),
   );
@@ -207,6 +208,77 @@ $$`);
     const started = Date.now();
     normalizeDisplayMathFences(adversarial);
     expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  // 截图同形回归: 表格与有序列表中的转义方括号链接(`[\[Schedule\] ...](cindy://...)`)
+  // 曾触发 `\[...\]` → display math 截断表格与列表, 进而使 5~8 项合并为同一段落,
+  // 再触发 remark-math + 事后降级吞掉 `$11,629.25` 与 `NZ$5M` 之间的行内代码和链接。
+  it('截图同形回归: 含转义方括号链接的表格/有序列表与货币混排不炸版、不吞格式', () => {
+    const md = [
+      '| 类别 | 数量 | 说明与代表项 |',
+      '| --- | ---: | --- |',
+      '| 过期的历史定时任务单次执行记录 | 10 | 10 月中下旬的 `torchlight2` 旧巡检/汇总记录，如 [\\[Schedule\\] torchlight2 PR 审查与合并](cindy://session/b379a11d?device=d1)、[\\[Schedule\\] torchlight2 每日汇总](cindy://session/a7f9e8c6?device=d1) 等 |',
+      '',
+      '1. [NAS管理](cindy://session/s1)（11-20）— 运维记录。',
+      '2. [\\[飞书·Cindy·CRT鸣谢添加感谢zkyo创意\\] 805a77](cindy://session/s2)（10-21）— 待确认。',
+      '3. [新西兰公司年报缴纳指南](cindy://session/s3)（10-11）— 核对 GST（$11,629.25）入账，付款码更新为 `GST31032027`。',
+      '4. [码头泊位有效期查询](cindy://session/s4)（09-28）— 催交 NZ$5M 第三方责任险保单凭证。',
+    ].join('\n');
+
+    const html = renderMath(md);
+    expect(html).not.toContain('class="katex"');
+    expect(html).not.toContain('katex-display');
+    expect(html).not.toContain('katex-error');
+    expect(html).toContain('<table>');
+    expect(html).toContain('<code>torchlight2</code>');
+    expect(html).toContain(
+      '<a href="cindy://session/b379a11d?device=d1">[Schedule] torchlight2 PR 审查与合并</a>',
+    );
+    expect(html).toContain(
+      '<a href="cindy://session/a7f9e8c6?device=d1">[Schedule] torchlight2 每日汇总</a>',
+    );
+    expect(html).toContain(
+      '<a href="cindy://session/s2">[飞书·Cindy·CRT鸣谢添加感谢zkyo创意] 805a77</a>',
+    );
+    expect(html).toContain('<code>GST31032027</code>');
+    expect(html).toContain('<a href="cindy://session/s4">码头泊位有效期查询</a>');
+    expect((html.match(/<li>/g) ?? []).length).toBe(4);
+  });
+
+  // 独立根因回归: 词法层严格单 `$` 规则确保同段两个货币 `$` 不吞掉中间的行内代码、
+  // 链接、加粗, 也不抢走同行后方真实 `$x+1$` 公式的开定界符。
+  it('同段货币 $ 之间保留行内代码、链接与加粗, 且不影响同行后续真实公式', () => {
+    const withCodeAndLink = renderMath(
+      '核对 GST（$11,629.25）入账，并将付款码更新为 `GST31032027`。\n查看 [码头泊位](https://example.com/berth) 的 **NZ$5M** 保单。',
+    );
+    expect(withCodeAndLink).not.toContain('class="katex"');
+    expect(withCodeAndLink).toContain('<code>GST31032027</code>');
+    expect(withCodeAndLink).toContain('<a href="https://example.com/berth">码头泊位</a>');
+    expect(withCodeAndLink).toContain('<strong>NZ$5M</strong>');
+
+    const sameLineNoBacktick = renderMath(
+      '需支付 $100 查看 **[账单详情](https://example.com/bill)** 的 NZ$5M 凭证。',
+    );
+    expect(sameLineNoBacktick).not.toContain('class="katex"');
+    expect(sameLineNoBacktick).toContain(
+      '<strong><a href="https://example.com/bill">账单详情</a></strong>',
+    );
+
+    const currencyThenMath = renderMath('花了 $5 买了 $x+1$ 个苹果。');
+    expect(currencyThenMath).toContain('$5');
+    expect(currencyThenMath).toContain('class="katex"');
+    expect(currencyThenMath).not.toContain('katex-error');
+  });
+
+  it('大量松散单 $ 与不等长 $ 序列在词法层保持线性完成', () => {
+    const ladder = Array.from({ length: 200 }, (_, i) => '$'.repeat((i % 5) + 1) + 'a ').join('');
+    const repeated = '$5 '.repeat(20000);
+    const started = Date.now();
+    const html1 = renderMath(ladder);
+    const html2 = renderMath(repeated);
+    expect(Date.now() - started).toBeLessThan(1500);
+    expect(html1).not.toContain('class="katex"');
+    expect(html2).not.toContain('class="katex"');
   });
 });
 

@@ -318,7 +318,7 @@ export function HomeUsageDashboard(): React.JSX.Element {
           )}
         </span>
         {!collapsed && history?.currencies && history.currencies.length > 1 && (
-          <SegmentedControl aria-label={t('usageDashboard.title')} value={layoutHistory.totals.today.currency}
+          <SegmentedControl aria-label={t('menubar.ui.usageCurrency')} value={layoutHistory.totals.today.currency}
             options={history.currencies.map(value => ({ value, label: value }))} onValueChange={setCurrency} />
         )}
         {collapsed &&

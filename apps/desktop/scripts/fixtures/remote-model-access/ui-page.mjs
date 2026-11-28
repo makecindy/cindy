@@ -18,6 +18,7 @@ export default {
     'budget-save-failure': { about: 'Retains a percentage change on save failure' },
     'budget-unsupported': { about: 'Provider group cannot add a percentage policy' },
     default: { about: 'Provider-wide model selection' },
+    'fixed-range': { about: 'A model added after saving a fixed range is still unselected, and the provider sees why' },
     member: { about: 'Per-person model selection within the provider ceiling' },
     'merged-pool': { about: 'A connection merged into an account pool shows the pool range read-only and says where to change it' },
   },
@@ -25,12 +26,25 @@ export default {
     await page.getByRole('button', { name: /.+/ }).first().waitFor();
   },
   async check(page, ui) {
+    if (ui.case === 'fixed-range') {
+      const section = page.getByTestId('remote-model-access');
+      await section.getByText(await ui.t('providerShare.modelAccess.selected', { count: 1 }), { exact: true }).waitFor();
+      await section.getByText(await ui.t('providerShare.modelAccess.selectionExcludesModels'), { exact: true }).waitFor();
+      await ui.capture('fixed-range');
+      await section.getByRole('button', { name: await ui.t('providerShare.modelAccess.choose'), exact: true }).click();
+      const newModel = page.getByRole('checkbox', { name: 'Claude Opus', exact: true });
+      await newModel.waitFor();
+      assert.equal(await newModel.isChecked(), false);
+      return;
+    }
     if (ui.case === 'merged-pool') {
       const section = page.getByTestId('remote-model-access');
       await section.getByText(await ui.t('providerShare.modelAccess.followsPool', { pool: 'OpenAI' }), { exact: true }).waitFor();
       const choose = section.getByRole('button', { name: await ui.t('providerShare.modelAccess.choose'), exact: true });
       await choose.waitFor();
+      await section.getByText(await ui.t('providerShare.modelAccess.selected', { count: 1 }), { exact: true }).waitFor();
       assert.equal(await choose.isDisabled(), true, 'the pool range is changed on the pool');
+      assert.equal(await section.getByText(await ui.t('providerShare.modelAccess.selectionExcludesModels'), { exact: true }).count(), 0);
       await ui.capture('merged');
       return;
     }

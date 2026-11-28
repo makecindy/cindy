@@ -1,7 +1,7 @@
 import { parse, type DefaultTreeAdapterTypes } from 'parse5';
 
 const moduleName = '@modelcontextprotocol/ext-apps';
-const addonNames = ['@cindy/ext-apps', '@cindy/ext-apps/react'] as const;
+const addonNames = ['@cindy/ext-apps', '@cindy/ext-apps/react', '@cindy/ext-apps/composer-attachment'] as const;
 const htmlNamespace = 'http://www.w3.org/1999/xhtml';
 function environmentPlan(html: string) {
   // A byte-order mark is an encoding marker, not text before the doctype.
@@ -84,7 +84,7 @@ const runtime = `<script data-cindy-runtime>
 
 /** Prepare the App environment outside the chat contract's startup dependency graph. */
 export function withHostAppSdk(
-  html: string, sdkUrl: string, addons?: { coreUrl: string; reactUrl: string }, headEndMarker?: string,
+  html: string, sdkUrl: string, addons?: { coreUrl: string; reactUrl: string; composerUrl?: string }, headEndMarker?: string,
 ): string {
   if (!new URL(sdkUrl).hostname) throw new Error('MCP_APP_SDK_URL_REQUIRED');
   const { insertion, authoredMap, authored, headEnd } = environmentPlan(html);
@@ -94,6 +94,7 @@ export function withHostAppSdk(
   if (!authored.has(moduleName)) imports[moduleName] = sdkUrl;
   if (addons && !authored.has(addonNames[0])) imports[addonNames[0]] = addons.coreUrl;
   if (addons && !authored.has(addonNames[1])) imports[addonNames[1]] = addons.reactUrl;
+  if (addons?.composerUrl && !authored.has(addonNames[2])) imports[addonNames[2]] = addons.composerUrl;
   if (Object.keys(imports).length) {
     if (authoredMap) {
       const value = { ...authoredMap.value, imports: {

@@ -1,5 +1,32 @@
 import { extractIpcError } from '@/utils/ipcError';
 import type { BotProfile } from './botStore';
+import { canonicalBotSession } from './botSessionOwners';
+
+/**
+ * Route state for a sidebar open that skipped `/bots/:botId`. If the session
+ * gate's fresh read disagrees with the roster, it hands back to that page so the
+ * main-chat validation and repair still run.
+ */
+export const BOT_DIRECT_ENTRY_STATE = { botDirectEntry: true } as const;
+
+export function isBotDirectEntryState(state: unknown): boolean {
+  return !!state && typeof state === 'object' && (state as { botDirectEntry?: unknown }).botDirectEntry === true;
+}
+
+/**
+ * Where a sidebar click on a local companion goes. The roster only projects
+ * links whose Session row still exists, with that row's status, so an active
+ * profile with an active main chat opens the chat directly. Anything else
+ * (missing, deleted or archived main chat, inactive profile, pending invitation)
+ * keeps the `/bots/:botId` hand-off, which validates and repairs.
+ */
+export function botOpenRoute(bot: BotProfile): { to: string; state?: typeof BOT_DIRECT_ENTRY_STATE } {
+  const botRoute = `/bots/${encodeURIComponent(bot.id)}`;
+  const main = canonicalBotSession(bot);
+  const invitationPending = !!bot.invitation && bot.invitation.stage !== 'ready' && !bot.canonicalSessionId;
+  if (bot.status !== 'active' || invitationPending || !main || main.status !== 'active') return { to: botRoute };
+  return { to: `${botRoute}/session/${encodeURIComponent(main.id)}`, state: BOT_DIRECT_ENTRY_STATE };
+}
 
 /** Navigation is by stable profile ID, never by the display name or portrait. */
 export function botEntryTarget(bots: readonly BotProfile[], lastBotId?: string): BotProfile | null {

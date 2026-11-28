@@ -8,7 +8,10 @@ import { readClaudeApiKey } from './turnUsagePorts.js';
 import { recordSessionTurnSpend } from './turnUsagePorts.js';
 import { recordSchedulerTurnCost, recordTurnUsageOnMessage } from './turnUsagePorts.js';
 import { recordModelMismatchOnMessage } from './turnUsagePorts.js';
-import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
+import {
+  detectClaudeModelMismatch,
+  resolveModelMismatchProviderName,
+} from '../../shared/modelMismatch.js';
 import { triggerClaudeAccountUsageRefresh } from './turnUsagePorts.js';
 import {
   getGatewayModelPricingForModel,
@@ -47,6 +50,7 @@ import {
 } from '../../shared/regionalMoney.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
+  recordProviderAccountActivity,
   triggerClaudeSubscriptionUsageRefresh,
   triggerCodexAccountUsageRefresh,
   triggerXaiSubscriptionUsageRefresh,
@@ -89,7 +93,7 @@ export function recordSessionClaudeTurnUsage(
   // (今日 / session / per-message / 按模型) 同源同值。
   // 守卫: index.ts:388 stream_end fallback / codex done 不带 total_cost_usd, typeof 检查会跳过。
   if (event.type === 'done' && event.source === 'claude-code') {
-    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id, undefined, 'claude-code');
+    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id, undefined, 'claude-code', session.model);
     deps.turnUsageContextBySession.delete(session.id);
     const modelPromise =
       deps.turnModelPromiseBySession.get(session.id) ?? deps.readSessionModelForUsage(session.id);
@@ -197,15 +201,78 @@ export function recordSessionClaudeTurnUsage(
             .join('; '),
       );
     }
+    let cachedClaudeRouteMeta:
+      | {
+          sessionProviderForBilling: string | null;
+          observedClaudeRoute: ReturnType<typeof readClaudeSessionRoute>;
+          explicitProviderBillingRoute: ReturnType<typeof billingRouteForExplicitProvider>;
+          isClaudeSubscriptionSession: boolean;
+          billingRoute: BillingRoute;
+        }
+      | undefined;
+    const resolveClaudeRouteMeta = () => {
+      if (cachedClaudeRouteMeta) return cachedClaudeRouteMeta;
+      const sessionProviderForBilling = turnContext.providerId ?? null;
+      const observedClaudeRoute =
+        sessionProviderForBilling == null ? readClaudeSessionRoute(session.id) : null;
+      const explicitProviderBillingRoute = billingRouteForExplicitProvider(
+        sessionProviderForBilling,
+        turnContext.accessKind,
+      );
+      const isClaudeSubscriptionSession =
+        !session.remoteHostId &&
+        (turnContext.subscriptionKind === 'claude' ||
+          (sessionProviderForBilling == null &&
+            (observedClaudeRoute != null
+              ? observedClaudeRoute === 'subscription'
+              : !readClaudeApiKey())));
+      const billingRoute: BillingRoute = session.remoteHostId
+        ? 'unknown'
+        : isClaudeSubscriptionSession
+          ? 'subscription'
+          : (explicitProviderBillingRoute ??
+            (observedClaudeRoute === 'gateway' ? 'xd-gateway' : 'unknown'));
+      cachedClaudeRouteMeta = {
+        sessionProviderForBilling,
+        observedClaudeRoute,
+        explicitProviderBillingRoute,
+        isClaudeSubscriptionSession,
+        billingRoute,
+      };
+      return cachedClaudeRouteMeta;
+    };
     if (turnAssistantPersistId && modelUsageDeltas && modelUsageDeltas.length > 0) {
       const mismatchClientId = turnAssistantPersistId;
       const actualEntries = modelUsageDeltas.map((d) => ({
         model: d.model,
         outputTokens: d.outputTokensDelta,
       }));
-      void modelPromise
+      // 优先取 turn start 捕获的运行时生效模型(turnContext.selectedModel 来自 session.model),
+      // 避免 Cindy 自身 runtime override(自动模型降级 / Orca 切模型)不改写 sessions.model
+      // 时把本机主动切换误判成模型供应商降级。运行时未记录时再回退 DB modelPromise。
+      const effectiveSelectedModel =
+        turnContext.selectedModel && turnContext.selectedModel !== 'unknown'
+          ? turnContext.selectedModel
+          : undefined;
+      const { observedClaudeRoute, billingRoute } = resolveClaudeRouteMeta();
+      const mismatchProviderName = resolveModelMismatchProviderName({
+        providerId: turnContext.providerId,
+        providerName: turnContext.providerName,
+        subscriptionKind: turnContext.subscriptionKind,
+        observedClaudeRoute,
+        officialAnthropicApi: turnContext.officialAnthropicApi,
+        billingRoute,
+      });
+      const selectedModelPromise = effectiveSelectedModel
+        ? Promise.resolve(effectiveSelectedModel)
+        : modelPromise;
+      void selectedModelPromise
         .then((selectedModel) => {
-          const mismatch = detectClaudeModelMismatch(selectedModel, actualEntries);
+          const mismatch = detectClaudeModelMismatch(
+            selectedModel,
+            actualEntries,
+            mismatchProviderName,
+          );
           if (mismatch) {
             return recordModelMismatchOnMessage({
               sessionId: session.id,
@@ -227,30 +294,28 @@ export function recordSessionClaudeTurnUsage(
       const recordedAt = Date.now();
       const deltas = modelUsageDeltas ?? [];
       void (async () => {
-        const sessionProviderForBilling = turnContext.providerId;
-        const observedClaudeRoute =
-          sessionProviderForBilling == null ? readClaudeSessionRoute(session.id) : null;
-        const explicitProviderBillingRoute = billingRouteForExplicitProvider(
+        const {
           sessionProviderForBilling,
-          turnContext.accessKind,
-        );
-        const isClaudeSubscriptionSession =
-          !session.remoteHostId &&
-          (turnContext.subscriptionKind === 'claude' ||
-            (sessionProviderForBilling == null &&
-              (observedClaudeRoute != null
-                ? observedClaudeRoute === 'subscription'
-                : !readClaudeApiKey())));
-        const billingRoute: BillingRoute = session.remoteHostId
-          ? 'unknown'
-          : isClaudeSubscriptionSession
-            ? 'subscription'
-            : (explicitProviderBillingRoute ??
-              (observedClaudeRoute === 'gateway' ? 'xd-gateway' : 'unknown'));
+          observedClaudeRoute,
+          explicitProviderBillingRoute,
+          billingRoute,
+        } = resolveClaudeRouteMeta();
         const pricing =
           billingRoute === 'xd-gateway'
             ? await getGatewayModelPricingForModel().catch(() => null)
             : getReferenceModelPricing();
+        const resolvedTurnModel = normalizeModelIdForPricing(
+          await modelPromise.catch(() => 'unknown'),
+        );
+        const selectedModel =
+          resolvedTurnModel !== 'unknown'
+            ? resolvedTurnModel
+            : normalizeModelIdForPricing(turnContext.selectedModel);
+        const claudeOpaqueModelIds = turnContext.opaqueModelIdsByAgent?.['claude-code'];
+        const isSelectedOpaque = Boolean(
+          claudeOpaqueModelIds?.length &&
+            (selectedModel === 'unknown' || claudeOpaqueModelIds.includes(selectedModel)),
+        );
         const { turnMoney, actualByCurrency, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(
           deltas,
           pricing,
@@ -259,6 +324,15 @@ export function recordSessionClaudeTurnUsage(
             billingRoute,
             region: CURRENT_CINDY_REGION,
             accessKind: turnContext.accessKind,
+            ...(selectedModel !== 'unknown' ? { selectedModel } : {}),
+            ...(isSelectedOpaque ? { opaqueModelId: true } : {}),
+            opaqueModelIds: claudeOpaqueModelIds,
+            ...(turnContext.officialAnthropicApi !== undefined
+              ? { officialAnthropicApi: turnContext.officialAnthropicApi }
+              : {}),
+            ...(turnContext.officialAnthropicModels !== undefined
+              ? { officialAnthropicModels: turnContext.officialAnthropicModels }
+              : {}),
           },
           claudeUsageSegments,
           claudeUsageSegmentsComplete,
@@ -477,6 +551,16 @@ export function recordSessionClaudeTurnUsage(
           await recordUsageOnly();
           return;
         }
+        const claudeOpaqueModelIds = turnContext.opaqueModelIdsByAgent?.['claude-code'];
+        const normalizedFallbackModel = normalizeModelIdForPricing(resolvedModel);
+        if (
+          claudeOpaqueModelIds?.length &&
+          (normalizedFallbackModel === 'unknown' ||
+            claudeOpaqueModelIds.includes(normalizedFallbackModel))
+        ) {
+          await recordUsageOnly();
+          return;
+        }
         const money = usdMoney(rawDelta);
         recordTurnSpend(money);
         recordSessionTurnSpend(session.id, money);
@@ -495,6 +579,9 @@ export function recordSessionClaudeTurnUsage(
     // 故意放在 cumulative 块外面: spend 走 turn delta, 配额走 HTTP API, 两件事独立;
     // 但仍在 done && claude-code 的 if 内, 不要每个事件都打一次。
     void triggerClaudeAccountUsageRefresh();
+    if (!session.remoteHostId && turnContext.providerId && turnContext.providerId !== 'xd') {
+      recordProviderAccountActivity(turnContext.providerId);
+    }
     // chatgpt/ 订阅轮: 额外触发 ChatGPT wham 额度刷新(与 codex 同一 ChatGPT 账户),让底部
     // chip 的订阅额度实时更新 —— bridge 轮不产生 codex account_usage 事件,须主动触发。
     void modelPromise

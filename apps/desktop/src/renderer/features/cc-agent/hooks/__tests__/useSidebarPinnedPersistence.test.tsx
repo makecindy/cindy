@@ -131,22 +131,25 @@ it('restores separate sidebar filters across mode switches, resets and remounts'
   act(() => {
     view.result.current.toggleProject('/ordinary');
     view.result.current.toggleCreator('teammate-a');
-    view.result.current.setVendor('pi');
+    view.result.current.setVendor(['pi']);
     view.result.current.setLastActivity('30d');
     view.result.current.setHideAutomations(true);
   });
-  const ordinary = { projects: ['local:/ordinary'], creators: ['teammate-a'], vendor: 'pi', lastActivity: '30d', hideAutomations: true };
+  const ordinary = { projects: ['local:/ordinary'], creators: ['teammate-a'], vendor: ['pi'], lastActivity: '30d', hideAutomations: true };
   const unrestricted = { projects: 'all', creators: 'all', vendor: 'all', lastActivity: 'all', hideAutomations: false };
+  // 「重置筛选」只清「只看哪些」；「隐藏」是菜单里独立的一行，重置不动它(2026-11-28)。
+  // 隐藏伙伴的任务（creators 'none'）也归「隐藏」，同样保留。
+  const resetButStillHiding = { ...unrestricted, hideAutomations: true };
   act(() => mode.result.current.setMode('inbox'));
   expect(view.result.current).toMatchObject(unrestricted);
   act(() => {
     view.result.current.toggleProject('/triage');
     view.result.current.setCreatorsNone();
-    view.result.current.setVendor('codex');
+    view.result.current.setVendor(['codex']);
     view.result.current.setLastActivity('7d');
     view.result.current.setHideAutomations(true);
   });
-  const inbox = { projects: ['local:/triage'], creators: 'none', vendor: 'codex', lastActivity: '7d', hideAutomations: true };
+  const inbox = { projects: ['local:/triage'], creators: 'none', vendor: ['codex'], lastActivity: '7d', hideAutomations: true };
   view.unmount();
   const reopened = renderFilter();
   expect(reopened.result.current).toMatchObject(inbox);
@@ -156,9 +159,9 @@ it('restores separate sidebar filters across mode switches, resets and remounts'
   act(() => mode.result.current.setMode('inbox'));
   expect(reopened.result.current).toMatchObject(inbox);
   act(() => reopened.result.current.resetContentFilters());
-  expect(reopened.result.current).toMatchObject(unrestricted);
+  expect(reopened.result.current).toMatchObject({ ...resetButStillHiding, creators: 'none' });
   act(() => mode.result.current.setMode('tasks'));
-  expect(reopened.result.current).toMatchObject(unrestricted);
+  expect(reopened.result.current).toMatchObject(resetButStillHiding);
 });
 
 // Production entry: sidebar GC + useSidebarFilter; stale project filters fall back

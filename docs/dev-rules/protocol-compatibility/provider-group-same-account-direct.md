@@ -70,3 +70,9 @@
 - 实现：`apps/desktop/src/main/provider-group/`(`remoteHandler.ts`、`remoteClient.ts`、`externalLoad.ts`、`leaseReporter.ts`、
   `service.ts` 的组来源)；回归见同目录 `__tests__/remoteGroup.test.ts`、`remoteHandler.test.ts`、`leaseReporter.test.ts`，
   `device-link/__tests__/providerShareDispatch.test.ts`(受邀者拒绝与不泄露组摘要)。
+
+同账号远程供应商详情的 `view` 可带 `display: "roster"`。新组主只回组配置并标记
+`rosterOnly: true`，旧组主忽略字段，查看端直接显示原整组结果。收到标记才按
+`display: { memberKey, details? }` 读取单行。组主在当前组内查键，仅回相应成员，
+基础读取跳过额度和访客能力，`details: true` 补全。每行沿用原权限核对、查看端直连检查和
+有效期。未指定 display 的选路、管理与发送前检查仍读完整视图；中继透传，无服务端变化。

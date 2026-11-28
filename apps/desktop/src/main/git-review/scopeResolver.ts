@@ -7,14 +7,17 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 import { eq } from 'drizzle-orm';
 
 import { resolveSessionGitDirLive } from '../git-context/sessionDirResolver.js';
+import { getDeviceLinkInvokeContext } from '../device-link/invoke-context.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import * as worktreeStore from '../worktree/worktreeStore.js';
+import { probeSvnWorkingCopy } from './svnReader.js';
 import { GitRunError, runGit } from './gitRunner.js';
 import type { ReviewScope } from './types.js';
 
@@ -78,11 +81,11 @@ export function defaultScopeResolverDeps(): ScopeResolverDeps {
   };
 }
 
-function disabledScope(
+function makeReviewScope(
   sessionId: string,
   patch: Partial<ReviewScope> & {
-    disabledReason: NonNullable<ReviewScope['disabledReason']>;
-    disabledMessage: string;
+    disabledReason: ReviewScope['disabledReason'];
+    disabledMessage: string | null;
   },
 ): ReviewScope {
   return {
@@ -162,20 +165,25 @@ async function readRemoteHeadState(
 export async function resolveReviewScope(
   sessionId: string,
   deps: ScopeResolverDeps = defaultScopeResolverDeps(),
+  supportedVcs: 'git' | 'git-and-svn' = 'git',
 ): Promise<ReviewScope> {
   const row = await deps.getSessionRow(sessionId);
   if (!row) {
-    return disabledScope(sessionId, {
+    return makeReviewScope(sessionId, {
       disabledReason: 'no-session',
       disabledMessage: 'Session not found',
       resolutionChain: [{ source: 'session', path: null, ok: false, reason: 'not-found' }],
     });
   }
 
+  const sharedTask = getDeviceLinkInvokeContext()?.sharedTask;
+  if (sharedTask && (sharedTask.author.sessionId !== sessionId || !row.workingDir)) {
+    throw new Error('[PERMISSION_DENIED] Shared review workspace unavailable');
+  }
   if (row.remoteHostId) {
     const resolutionChain = [{ source: 'remote', path: row.workingDir, ok: Boolean(row.workingDir) }];
     if (!row.workingDir) {
-      return disabledScope(sessionId, {
+      return makeReviewScope(sessionId, {
         worktreePath: row.worktreePath,
         disabledReason: 'no-workdir',
         disabledMessage: 'This SSH session has no remote workdir',
@@ -183,7 +191,7 @@ export async function resolveReviewScope(
       });
     }
     if (!path.posix.isAbsolute(row.workingDir)) {
-      return disabledScope(sessionId, {
+      return makeReviewScope(sessionId, {
         workingDir: row.workingDir,
         worktreePath: row.worktreePath,
         source: 'remote',
@@ -196,7 +204,7 @@ export async function resolveReviewScope(
     const probe = await readRepoRoot(workdir, deps.git, true);
     if (!probe.repoRoot) {
       const unavailable = probe.disabledReason === 'git-unavailable';
-      return disabledScope(sessionId, {
+      return makeReviewScope(sessionId, {
         workdir,
         workingDir: row.workingDir,
         worktreePath: row.worktreePath,
@@ -207,6 +215,9 @@ export async function resolveReviewScope(
           : 'No git repository found in the SSH workspace',
         resolutionChain: [{ ...resolutionChain[0], ok: false, reason: unavailable ? 'git-unavailable' : 'non-git' }],
       });
+    }
+    if (sharedTask && !containsWorkspace(path.posix, probe.repoRoot, workdir)) {
+      throw new Error('[PERMISSION_DENIED] Shared review workspace unavailable');
     }
     const head = await readRemoteHeadState(probe.repoRoot, deps.git);
     return {
@@ -231,6 +242,26 @@ export async function resolveReviewScope(
   const fallbackWorktreePath = managedWorktreePath ?? row.worktreePath;
   const selected = selectedReviewWorkspace.getStore();
   const pinnedDir = selected?.sessionId === sessionId ? selected.workingDir : null;
+  // Select the registered local working copy before consulting Git telemetry.
+  // Shared reads stay anchored to the host's registered directory.
+  const svnDir = sharedTask ? row.workingDir : pinnedDir ?? row.workingDir;
+  const svn = svnDir && await probeSvnWorkingCopy(svnDir);
+  if (svn && svnDir) {
+    const enabled = svn === 'available' && supportedVcs === 'git-and-svn';
+    return makeReviewScope(sessionId, {
+      vcs: 'svn',
+      workingDir: row.workingDir,
+      workdir: svnDir,
+      worktreePath: fallbackWorktreePath,
+      repoRoot: enabled ? svnDir : null,
+      source: 'workingDir',
+      disabledReason: enabled ? null : svn === 'svn-unavailable' ? svn : 'non-git',
+      disabledMessage: enabled ? null : svn === 'svn-unavailable'
+        ? 'Install the Subversion command-line client to review this working copy.'
+        : 'Git operations are unavailable for SVN working copies',
+      resolutionChain: [{ source: 'workingDir', path: svnDir, ok: enabled }],
+    });
+  }
   const pinnedHead = pinnedDir ? await readRemoteHeadState(pinnedDir, deps.git) : null;
   const resolved = pinnedDir && pinnedHead
     ? {
@@ -246,7 +277,7 @@ export async function resolveReviewScope(
   // A remote row is handled above through the request-scoped SSH Git backend.
   // A remote result here would lack the authoritative host id, so fail closed.
   if (resolved.source === 'remote') {
-    return disabledScope(sessionId, {
+    return makeReviewScope(sessionId, {
       workingDir: row.workingDir,
       worktreePath: fallbackWorktreePath,
       disabledReason: 'remote-session',
@@ -268,7 +299,7 @@ export async function resolveReviewScope(
   ];
 
   if (!resolved.workdir) {
-    return disabledScope(sessionId, {
+    return makeReviewScope(sessionId, {
       workingDir: row.workingDir,
       worktreePath: fallbackWorktreePath,
       disabledReason: row.workingDir || fallbackWorktreePath ? 'non-git' : 'no-workdir',
@@ -279,7 +310,7 @@ export async function resolveReviewScope(
 
   const probe = await readRepoRoot(resolved.workdir, deps.git);
   if (!probe.repoRoot) {
-    return disabledScope(sessionId, {
+    return makeReviewScope(sessionId, {
       workdir: path.resolve(resolved.workdir),
       workingDir: row.workingDir,
       worktreePath: fallbackWorktreePath,
@@ -293,6 +324,20 @@ export async function resolveReviewScope(
   }
 
   const repoRoot = probe.repoRoot;
+  if (sharedTask) {
+    // Only a live task-bound worktree can replace the registered working directory.
+    // A telemetry candidate still needs to pass the independent repository check below.
+    const anchor = resolved.source === 'worktree' ? resolved.workdir : row.workingDir!;
+    const anchorRoot = path.resolve(anchor) === path.resolve(resolved.workdir)
+      ? repoRoot : (await readRepoRoot(anchor, deps.git)).repoRoot;
+    const physicalRoot = await realpath(repoRoot).catch(() => null);
+    const physicalAnchor = await realpath(anchor).catch(() => null);
+    const physicalAnchorRoot = anchorRoot === repoRoot ? physicalRoot : anchorRoot && await realpath(anchorRoot).catch(() => null);
+    if (!physicalRoot || !physicalAnchor || !physicalAnchorRoot ||
+        path.relative(physicalAnchorRoot, physicalRoot) !== '' || !containsWorkspace(path, physicalRoot, physicalAnchor)) {
+      throw new Error('[PERMISSION_DENIED] Shared review workspace unavailable');
+    }
+  }
   const headOid = await readHeadOid(repoRoot, deps.git);
   const isDetached = resolved.head?.kind === 'detached';
   return {
@@ -311,4 +356,9 @@ export async function resolveReviewScope(
     disabledMessage: null,
     resolutionChain,
   };
+}
+
+function containsWorkspace(paths: typeof path.posix, root: string, workdir: string): boolean {
+  const relative = paths.relative(root, workdir);
+  return !paths.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + paths.sep);
 }

@@ -25,7 +25,7 @@ import {
 const log = createLogger('VoiceSpeakerEnrollmentDialog');
 const CLIP_INDEXES = Array.from({ length: VOICE_SPEAKER_ENROLLMENT_CLIP_COUNT }, (_, index) => index);
 
-type EnrollErrorKey = Extract<VoiceSpeakerEnrollResult, { ok: false }>['reason'] | 'microphone' | 'noAudio';
+type EnrollErrorKey = Extract<VoiceSpeakerEnrollResult, { ok: false }>['reason'] | 'microphone' | 'device-unavailable' | 'noAudio';
 
 type EnrollError = { key: EnrollErrorKey; clipIndex?: number };
 
@@ -114,7 +114,7 @@ export function VoiceSpeakerEnrollmentDialog({
       const permission = await requestRendererMicrophonePermission();
       if (controller.signal.aborted) return;
       if (!permission.ok) {
-        setError({ key: 'microphone' });
+        setError({ key: permission.status === 'device-unavailable' ? 'device-unavailable' : 'microphone' });
         return;
       }
       const clip = await recordSpeakerEnrollmentClip({
@@ -178,7 +178,9 @@ export function VoiceSpeakerEnrollmentDialog({
 
   const allRecorded = clips.every((clip) => clip !== null);
   const errorText = error
-    ? t(`settings.voiceInput.speakerFilter.enroll.errors.${error.key}`, {
+    ? error.key === 'device-unavailable'
+      ? t('settings.voiceInput.microphone.errors.deviceUnavailable')
+      : t(`settings.voiceInput.speakerFilter.enroll.errors.${error.key}`, {
         index: (error.clipIndex ?? 0) + 1,
       })
     : null;

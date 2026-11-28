@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { FeishuConflictDialog } from './FeishuConflictDialog';
+import { useLegalTermsGateBlocking } from '@/components/auth/legalTermsGateState';
 
 const OPEN_PLATFORM_URLS = {
   feishu: 'https://open.feishu.cn/app?lang=zh-CN',
@@ -18,6 +19,8 @@ const OPEN_PLATFORM_URLS = {
 } as const;
 
 export function FeishuConflictDialogHost() {
+  // 协议更新确认挡着时只记下冲突、不弹窗,确认后再显示(见 legalTermsGateState)。
+  const legalTermsGateBlocking = useLegalTermsGateBlocking();
   const [open, setOpen] = useState(false);
   const [appId, setAppId] = useState<string | null>(null);
   const [service, setService] = useState<'feishu' | 'lark'>('feishu');
@@ -46,7 +49,7 @@ export function FeishuConflictDialogHost() {
 
   return (
     <FeishuConflictDialog
-      open={open}
+      open={open && !legalTermsGateBlocking}
       appId={appId}
       service={service}
       onDismiss={handleDismiss}

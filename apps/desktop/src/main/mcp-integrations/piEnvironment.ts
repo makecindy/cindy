@@ -356,7 +356,15 @@ async function getPiExtraSpawnConfig(
     disposeLease();
     throw error;
   }
+  let receiptRecorder: {
+    take: NonNullable<PiExtraSpawnConfig['takeMcpToolResult']>;
+    clear: () => void;
+    dispose: () => void;
+  } | undefined;
   try {
+    if (sessionCtx?.recordMcpToolResults === true && bridge.enableMcpToolResultRecording) {
+      receiptRecorder = bridge.enableMcpToolResultRecording(sessionId, sessionCtx.sessionInstanceId);
+    }
     const servers = capabilityGated([
       ...serverNames.map((name) => ({
         name,
@@ -379,22 +387,35 @@ async function getPiExtraSpawnConfig(
       // 同理(expectedToken 比较),成对清理。
       disposeSessionCtx: () => {
         try {
-          bridge.unregisterSessionCtx(sessionId, liziCtx);
+          receiptRecorder?.dispose();
         } finally {
           try {
-            bridge.unregisterSessionToken(sessionId, sessionToken, tokenGeneration);
+            bridge.unregisterSessionCtx(sessionId, liziCtx);
           } finally {
-            disposeLease();
+            try {
+              bridge.unregisterSessionToken(sessionId, sessionToken, tokenGeneration);
+            } finally {
+              disposeLease();
+            }
           }
         }
       },
       ...(sessionCtx?.sessionInstanceId
-        ? { closeSessionInstance: () => bridge.closeSessionInstance(sessionCtx.sessionInstanceId!) }
+        ? {
+            // Per-run cleanup (e.g. remote-agent idle reclaim/slot yield) clears stale receipts
+            // and closes old transports, but keeps recording registered for reconnect on the same mcp.
+            closeSessionInstance: () => {
+              receiptRecorder?.clear();
+              bridge.closeSessionInstance(sessionCtx.sessionInstanceId!);
+            },
+          }
         : {}),
+      ...(receiptRecorder ? { takeMcpToolResult: receiptRecorder.take } : {}),
     };
   } catch (err) {
     // 注册后构造失败必须回滚,否则调用方拿不到 dispose,ctx 永久残留(该 id 的
     // `?session=` 路由一直有效)。
+    receiptRecorder?.dispose();
     bridge.unregisterSessionCtx(sessionId, liziCtx);
     bridge.unregisterSessionToken(sessionId, sessionToken, tokenGeneration);
     disposeLease();
@@ -551,7 +572,7 @@ async function doStart(
     },
   };
 
-  const serverFactories: Record<string, () => McpServer> = Object.create(null);
+  const serverFactories: Parameters<typeof startCodexHttpBridge>[0]['serverFactories'] = Object.create(null);
   const serverDisplayNames: Record<string, string> = Object.create(null);
   const pluginIdByServerName: Record<string, string> = Object.create(null);
   const remoteServers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers'] = [];
@@ -665,8 +686,10 @@ async function doStart(
     const toClaudeSdkConfig = provider.toClaudeSdkConfig;
     if (!toClaudeSdkConfig) continue;
 
-    const createServer = (): McpServer => {
-      const cfg = toClaudeSdkConfig.call(provider, ctx) as { type?: string; instance?: unknown } | null;
+    const createServer = (startup?: LiziMcpSessionContext): McpServer => {
+      const cfg = toClaudeSdkConfig.call(provider, startup
+        ? { ...ctx, ...startup, agentKind: ctx.agentKind, getSessionContext: ctx.getSessionContext }
+        : ctx) as { type?: string; instance?: unknown } | null;
       if (cfg?.type !== 'sdk' || !cfg.instance) {
         throw new Error(`provider ${provider.name} did not return an SDK McpServer instance`);
       }
@@ -683,7 +706,8 @@ async function doStart(
       });
       continue;
     }
-    serverFactories[provider.name] = () => {
+    serverFactories[provider.name] = (startup) => {
+      if (startup) return createServer(startup);
       if (firstInstance) {
         const instance = firstInstance;
         firstInstance = null;

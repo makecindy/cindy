@@ -1,4 +1,5 @@
 import { bindHostProfileServices } from './profile-services.ts';
+import { createFakeMaker } from '../test-support/input-queue-maker.mjs';
 import { profileReleaseFixture } from '../test-support/profile-release-fixture.mjs';
 import { runDeviceLinkInvokeContext } from '../../../desktop/src/main/device-link/invoke-context.ts';
 import { test, after } from 'node:test';
@@ -28,6 +29,7 @@ import { AUTH_SESSION_KEY } from '../../../desktop/src/main/authCredentialKeys.t
 
 import { createHostHistoryReader, readMessagesList } from './history.ts';
 import { createInputQueue, holdTaskForProfile, PROFILE_HOLD_LOCK } from './input-queue.mjs';
+import { attachMainOwnedInputBoundary } from '../../../desktop/src/main/maker-ipc/mobileClientPromptNote.ts';
 import { USAGE_LIMIT_RESET_AUTO_RESUME_REASON } from '../../../desktop/src/shared/agentInputQueue.ts';
 import { AgentInputCoordinator } from '../../../desktop/src/main/maker-ipc/agent-input-coordinator.ts';
 import { createTurnExecutor } from './turn-executor.mjs';
@@ -35,6 +37,7 @@ import { CredentialModeSwitchBusyError } from '../../../desktop/src/main/maker-h
 import { SILENT_STOP_DECISION_DELAY_MS } from '../../../desktop/src/main/maker-ipc/silentStopAutoResume.ts';
 import { SILENT_STOP_AUTO_RESUME_SETTINGS_FILE } from '../../../desktop/src/main/maker-host/silentStopAutoResumeSettingsCore.ts';
 import { lockSessionRoute } from './session-route-lock.mjs';
+import { setSessionRouteLockImplementation } from '../../../desktop/src/main/localDb/sessionRouteLock.ts';
 import { CONTEXT_OVERFLOW_REASON } from '../../../../packages/maker-core/src/agents/shared/context-overflow-error.ts';
 import { RECOVERY_SHUTDOWN_WAIT_MS, contextRecoveryKind, createHostContextRecovery } from './context-recovery.ts';
 import { createHostCodexThreadStorage } from './codex-thread-storage.ts';
@@ -42,6 +45,7 @@ import { createHostContextRecoveryWiring } from './context-recovery-wiring.ts';
 import { CODEX_HISTORY_OVERSIZED_REASON, CODEX_LIVE_TAIL_OVERSIZED_BYTES } from '@cindy/maker-core';
 import { createHostContextRecoveryRollover } from './context-recovery-assembly.ts';
 import { createHostAgentHandoffPending } from './handoff-pending.ts';
+import { createHostSessionHandoff } from './session-handoff.ts';
 import { markCodexPlanInterrupted, writeCodexPlanUpdate } from '../../../desktop/src/main/localDb/codexPlanState.ts';
 import { buildPlanReconcileNote } from '../../../desktop/src/main/maker-ipc/planReconcile.ts';
 import { buildGoalInactiveNote } from '../../../desktop/src/main/goal-host/inactiveNote.ts';
@@ -137,7 +141,8 @@ const unitDatabase = await (async () => {
     const layout = hostRuntimeLayout();
     configureAppDataDir(path.join(unitProfile, 'app-data'));
     const opened = await openOwnerDatabase({ userDataDir: unitProfile, ownerId: 'input-queue-unit',
-      isPackaged: false, drizzleDir: layout.drizzleDir, sqliteVecExtPath: layout.sqliteVecPath });
+      isPackaged: false, drizzleDir: layout.drizzleDir,
+      sqliteVecExtPath: process.env.CINDY_HOST_SQLITE_VEC_PATH?.trim() || layout.sqliteVecPath });
     return createDbClientForHandle({ db: opened.db, drizzle: opened.drizzle, dispose: async () => opened.db.close() });
   } finally {
     if (sharedProfile !== undefined) process.env.XDT_OFFICIAL_SHARED_PROFILE = sharedProfile;
@@ -152,96 +157,6 @@ function ensureUnitOwner() {
   if (!getCurrentDbClientSnapshot()) setCurrentDbClient(unitDatabase, 'input-queue-unit');
 }
 ensureUnitOwner();
-
-function createFakeMaker() {
-  const sessions = new Map();
-  // Told of every message a runtime of this fake receives (the enqueue helper waits on it).
-  const sendListeners = new Set();
-  return {
-    sessions,
-    onSent(listener) { sendListeners.add(listener); return () => sendListeners.delete(listener); },
-    getSession(id) {
-      return sessions.get(id) ?? null;
-    },
-    async getSessionMeta(id) {
-      return { id, agentKind: 'claude-code', model: 'stored-model', workDir: '/tmp' };
-    },
-    // As Maker (maker.ts listActiveSessions): the live runtimes; the shared agent switch reads it.
-    listActiveSessions() { return [...sessions.values()]; },
-    async closeSession(id) { sessions.delete(id); },
-    async closeSessionIfCurrent(session) {
-      if (sessions.get(session.id) === session) sessions.delete(session.id);
-    },
-    async createSession(opts) {
-      const listeners = new Set();
-      const session = {
-        id: opts.id,
-        instanceId: `runtime-${opts.id}-${Math.random()}`,
-        agentKind: opts.agentKind,
-        capabilities: { sameTurnSteer: { supported: true } },
-        workDir: opts.workingDir,
-        remoteHostId: opts.remoteHostId ?? null,
-        running: false,
-        generation: 0,
-        get stablePermissionModeState() { return { mode: session.options.permissionMode ?? 'ask', generation: 0 }; },
-        get stablePlanModeState() { return { enabled: session.options.planMode ?? false, generation: 0 }; },
-        isTurnRunning() { return session.running; },
-        getTurnGeneration() { return session.generation; },
-        options: opts,
-        get model() { return session.options.model; },
-        sent: [],
-        sendOptions: [],
-        steerOptions: [],
-        steerMessages: [],
-        aborted: 0,
-        async setModel(model, settings) { Object.assign(session.options, { model }, settings); },
-        async setEffort(effort) { session.options.effort = effort; },
-        async setPermissionMode(permissionMode) { session.options.permissionMode = permissionMode; },
-        async setFastMode(fastMode) { session.options.fastMode = fastMode; },
-        async setPlanMode(planMode) { session.options.planMode = planMode; },
-        onEvent(listener) {
-          listeners.add(listener);
-          return () => listeners.delete(listener);
-        },
-        emit(event) {
-          if (event.type === 'done' || event.type === 'error') session.running = false;
-          for (const listener of [...listeners]) listener(event);
-        },
-        async send(text, opts = {}) {
-          opts.onTurnReserved?.(++session.generation);
-          await opts.beforeProviderStart?.();
-          await opts.onAccepted?.(opts.signal);
-          await opts.resolveAutoReviewUserIntent?.();
-          opts.onDispatching?.();
-          session.running = true;
-          session.sent.push(typeof text === 'string' ? text : text.content);
-          session.sendOptions.push(opts);
-          for (const listener of [...sendListeners]) listener(session.id);
-          return { accepted: true };
-        },
-        async abort() {
-          session.aborted += 1;
-          session.running = false;
-          session.continuationClaim = null;
-        },
-        // As the maker-core Session (session.ts): the Host's claim on a generation for a silent-stop
-        // continuation (released by its settle or a stop), and the continuation's send.
-        continuationClaim: null,
-        claimHostTurnContinuation(generation) { if (generation === session.generation) session.continuationClaim = generation; },
-        settleHostTurnContinuation(generation) { if (session.continuationClaim === generation) session.continuationClaim = null; },
-        sendHostTurnContinuation(text, opts) { return session.send(text, opts); },
-        async steer(text, options = {}) {
-          await options.beforeProviderStart?.();
-          session.steerMessages.push(text);
-          session.steerOptions.push(options);
-          session.sent.push(`steer:${typeof text === 'string' ? text : text.content}`);
-        },
-      };
-      sessions.set(opts.id, session);
-      return session;
-    },
-  };
-}
 
 function createHarness(overrides = {}) {
   ensureUnitOwner();
@@ -708,6 +623,80 @@ test('a queued App message loses authority before dispatch when its view is revo
   await h.queue.dispose();
 });
 
+// Test value (engineering-conventions §3.2): the guarded in-process handoff
+// enters the same durable queue as any task input. Existing App cases do not
+// cover cross-computer receipts. A busy task with a receipt revoked after
+// enqueue must settle that receipt without a user history row or an Agent turn.
+// Tier: unit, synthetic engine and in-memory persistence.
+test('a remote task handoff expires while queued and is discarded before execution', async t => {
+  const h = createHarness();
+  t.after(() => h.queue.dispose());
+  await enqueue(h, 'handoff-task', { clientId: 'first', text: 'keep running' });
+  let revoked = false;
+  let settled = false;
+  const guard = Object.assign(async () => {
+    if (revoked) throw new Error('TASK_ACTION_AUTHORIZATION_EXPIRED');
+  }, { onSettled: async () => { settled = true; } });
+  const clientId = 'remote-task-action:revoked-while-queued';
+  await h.queue.enqueue('handoff-task', { clientId, text: 'delegated follow-up' }, {
+    validateTarget: async () => ({ ok: true }),
+    taskActionDeliveryGuard: guard,
+    origin: { kind: 'session', senderSessionId: 'other-computer::source-task', displayText: 'delegated follow-up' },
+    autoReviewUserText: { kind: 'agent-request', request: { userText: null } },
+  });
+  assert.equal(h.queue.projection('handoff-task').pendingQueue[0]?.clientId, clientId);
+  revoked = true;
+  const session = h.maker.getSession('handoff-task');
+  session.emit({ type: 'done' });
+  await waitFor(() => settled);
+  assert.equal(h.queue.projection('handoff-task').pendingQueue.length, 0);
+  assert.equal(session.sent.length, 1);
+  assert.equal(h.persisted.some(row => row.clientId === clientId), false);
+});
+
+// Unit regression: the production handoff enqueue can race with a task disappearing
+// after the adapter looks it up. A missing row means definite refusal before any write.
+test('a remote task handoff returns NOT_FOUND if its target disappears before enqueue', async t => {
+  const h = createHarness({ readSession: async () => null });
+  t.after(() => h.queue.dispose());
+  const rejected = await h.queue.enqueue('missing-task', {
+    clientId: 'remote-task-action:missing-before-enqueue',
+    text: 'delegated follow-up',
+  }, { validateTarget: async () => ({ ok: true }),
+    taskActionDeliveryGuard: async () => assert.fail('Missing target must not be admitted') });
+  assert.deepEqual(rejected, { ok: false, errorCode: 'NOT_FOUND', message: 'Session does not exist' });
+  assert.equal(h.queue.projection('missing-task').pendingQueue.length, 0);
+  assert.deepEqual(h.persisted, []);
+});
+
+// Unit, synthetic engine and in-memory persistence: with Plan armed on a task,
+// guarded handoff enqueue must pass that intent to the engine only for a plugin
+// delegation. The existing queue tests cover input from the local composer.
+test('remote task handoff inherits the target Plan intent only for plugin delegation', async t => {
+  const h = createHarness({ readSession: async id => ({
+    id, status: 'active', agentKind: 'claude-code', model: 'stored-model',
+    workingDir: '/tmp', providerId: 'xd', permissionMode: 'ask', planModeEnabled: true,
+  }) });
+  t.after(() => h.queue.dispose());
+  for (const plugin of [false, true]) {
+    const id = plugin ? 'plugin-handoff' : 'ordinary-handoff';
+    const text = 'delegated message';
+    await enqueueUntilSent(h, id, { clientId: `remote-task-action:${id}`, text }, 1, {
+      validateTarget: async () => ({ ok: true }),
+      taskActionDeliveryGuard: async () => {},
+      ...(plugin ? {
+        inheritTargetPlanMode: true,
+        sourcePlugin: { pluginId: 'other-computer::plugin' },
+        autoReviewUserText: text,
+      } : {
+        origin: { kind: 'session', senderSessionId: 'other-computer::source-task', displayText: text },
+        autoReviewUserText: { kind: 'agent-request', request: { userText: null } },
+      }),
+    });
+    assert.equal(h.maker.getSession(id).sendOptions.at(-1).planMode, plugin);
+  }
+});
+
 test('valid App messages keep source metadata and escape native commands', async () => {
   const owner = {};
   const h = createHarness({ getOwner: () => owner, loadClearBoundary: async () => null });
@@ -751,7 +740,7 @@ async function enqueue(h, id, item) {
   return enqueueUntilSent(h, id, item, 1);
 }
 /** enqueue, then wait (as above) until the task's runtime has received `count` messages in all. */
-async function enqueueUntilSent(h, id, item, count) {
+async function enqueueUntilSent(h, id, item, count, handoff) {
   const reached = () => (h.maker.getSession(id)?.sent.length ?? 0) >= count;
   const settledWithout = projection => Boolean(projection?.error)
     || (projection?.recovery?.clientId ?? projection?.recovery?.item?.clientId) === item?.clientId;
@@ -772,7 +761,7 @@ async function enqueueUntilSent(h, id, item, count) {
   // Awaited only while the send is still on its way; a rejection before that is reported below instead.
   started.catch(() => {});
   try {
-    await h.queue.enqueue(id, item);
+    await h.queue.enqueue(id, item, handoff);
     if (!reached()) {
       if (settledWithout(h.queue.projection(id))) throw new Error(`the input ${item?.clientId} settled without reaching the engine: ${JSON.stringify(h.queue.projection(id))}`);
       await started;
@@ -782,6 +771,29 @@ async function enqueueUntilSent(h, id, item, count) {
   }
   return h.queue.projection(id);
 }
+
+// Direct maker:send uses the same clear-generation fence as the desktop IPC boundary.
+// A stale optimistic draft must not become a new user turn after /clear.
+test('direct maker:send rejects a stale clear boundary and stamps the current input fence', async () => {
+  const h = createHarness({ loadQueueSnapshot: async () => [], loadClearBoundary: async () => 100 });
+  try {
+    await assert.rejects(
+      h.queue.assertRemoteInputControlBoundary('direct-send', { expectedClearBoundaryMs: null }),
+      /REMOTE_OPTIMISTIC_INPUT_CLEARED/,
+    );
+    assert.equal(h.maker.getSession('direct-send'), null);
+
+    const stamp = await h.queue.assertRemoteInputControlBoundary('direct-send', { expectedClearBoundaryMs: 100 });
+    const sendOpts = attachMainOwnedInputBoundary({ expectedClearBoundaryMs: 100 }, stamp);
+    await h.queue.send('direct-send', 'fresh input', {}, sendOpts);
+    const session = h.maker.getSession('direct-send');
+    assert.deepEqual(session.sent, ['fresh input']);
+    assert.equal(stamp.expectedClearBoundaryMs, 100);
+    assert.equal(typeof stamp.expectedInputGeneration, 'number');
+    assert.equal(session.sendOptions[0].signal, sendOpts.signal);
+    assert.equal(session.sendOptions[0].signal.aborted, false);
+  } finally { await h.queue.dispose(); }
+});
 
 // A Host restart drops the in-memory Maker session, not the SDK conversation.
 // The queue must hand the stored SDK identity to the real agent startup API.
@@ -2225,14 +2237,20 @@ test('restart restores a paused durable queue and deduplicates accepted input', 
   t.after(() => { clearCurrentDbClient(); sqlite?.close(); rmSync(root, { recursive: true, force: true }); });
   reopen();
   const delivered = new Set();
+  const deliveries = [];
+  let failPersistedLookup = false;
   const persistence = {
     markStarted: markSessionTurnStartedDurable,
     markEnded: async (id, at) => { markSessionTurnEnded(id, at); await drainSessionActiveTurnWrites(id); },
     persistQueueSnapshot: saveAgentInputQueueSnapshot,
     loadQueueSnapshot: loadAgentInputQueueSnapshot,
-    getPersistedClientIds: getPersistedInputClientIds,
+    getPersistedClientIds: (id, clientIds) => {
+      if (failPersistedLookup) throw new Error('persisted lookup unavailable');
+      return getPersistedInputClientIds(id, clientIds);
+    },
     persistMessage: async (id, row) => {
       if (row.role === 'user') {
+        deliveries.push(row.clientId);
         sqlite.prepare('INSERT OR IGNORE INTO messages(session_id,client_id) VALUES (?,?)').run(id, row.clientId);
         delivered.add(row.clientId);
       }
@@ -2244,6 +2262,11 @@ test('restart restores a paused durable queue and deduplicates accepted input', 
   const pendingContent = JSON.stringify({ text: 'pending', images: [], files: [], slashCommandRanges: [] });
   await first.queue.enqueue('durable', { clientId: 'b', text: 'pending', persistedContent: pendingContent,
     chatMessage: { content: 'pending' } });
+  // Repeating a coordinator-owned input is acknowledged ahead of SQLite IO.
+  failPersistedLookup = true;
+  const duplicatePending = await first.queue.enqueue('durable', { clientId: 'b', text: 'replayed input' });
+  assert.deepEqual(duplicatePending.pendingQueue.map(item => item.text), ['pending']);
+  failPersistedLookup = false;
   await first.queue.dispose();
   clearCurrentDbClient();
   sqlite.close();
@@ -2263,11 +2286,15 @@ test('restart restores a paused durable queue and deduplicates accepted input', 
     assert.equal(restored.pendingQueue[0].persistedContent, pendingContent);
     assert.equal(restored.queuePaused, true);
     assert.equal(restarted.maker.sessions.size, 0);
-    await restarted.queue.enqueue('durable', { clientId: 'a', text: 'already running' });
+    const duplicateCommitted = await restarted.queue.enqueue('durable', { clientId: 'a', text: 'replayed input' });
+    assert.deepEqual(duplicateCommitted.pendingQueue.map(item => item.clientId), ['b']);
     assert.equal(restarted.maker.sessions.size, 0);
     await restarted.queue.resume('durable');
     await waitFor(() => restarted.maker.getSession('durable')?.sent.length === 1);
     assert.deepEqual(restarted.maker.getSession('durable').sent, ['pending']);
+    assert.deepEqual(deliveries, ['a', 'b']);
+    assert.deepEqual(sqlite.prepare('SELECT client_id FROM messages ORDER BY rowid').all()
+      .map(row => row.client_id), ['a', 'b']);
   } finally { await restarted.queue.dispose(); }
 });
 
@@ -2879,7 +2906,7 @@ test('the Auto-review context treats a running plugin-target input as unavailabl
 });
 
 // The task send lock (table B of the context recovery plan): a send holds it until accepted, the
-// entries that change a task's runtime or route take it, queue commands and stop never do.
+// entries that change a task's runtime or route take it. Stop interrupts lock waiters.
 function holdSendLock(sessionId) {
   let release, acquired;
   const ready = new Promise(resolve => { acquired = resolve; });
@@ -2960,6 +2987,221 @@ test('queue commands finish while another holder has the task send lock; the que
   assert.equal(h.maker.sessions.get('lock-commands')?.sent.length ?? 0, 0, 'the send waits for the lock');
   await lock.release();
   await waitFor(() => h.maker.sessions.get('lock-commands')?.sent.length === 1);
+});
+
+// Unit: a restored enqueue must give up the route lock before its drain starts.
+// An archived row and one input exercise the actual queue and executor; the
+// fixture keeps the route callback open through the first drain microtasks.
+test('ordinary archived enqueue gives up the route lock before dispatch', async t => {
+  const id = 'archive-route-lock';
+  let routeHeld = false;
+  let status = 'archived';
+  const observed = [];
+  const h = createHarness({
+    readSession: async (sessionId, options) => {
+      if (sessionId === id && !options?.forUserInput) observed.push(routeHeld);
+      return { id: sessionId, status, agentKind: 'claude-code', model: 'm',
+        workingDir: os.tmpdir(), providerId: 'xd' };
+    },
+    restoreArchivedSessionForSend: async () => { status = 'active'; },
+  });
+  setSessionRouteLockImplementation((sessionId, run) => withSendToSessionLock(sessionId, async () => {
+    routeHeld = true;
+    try {
+      const result = await run();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(observed, [], 'the drain must not inherit a still-held route lock');
+      return result;
+    } finally {
+      routeHeld = false;
+    }
+  }));
+  t.after(() => { setSessionRouteLockImplementation(null); return h.queue.dispose(); });
+  await h.queue.enqueue(id, { clientId: 'archived-1', text: 'continue' }, undefined, {});
+  await waitFor(() => h.maker.getSession(id)?.sent.length === 1);
+  assert.ok(observed.length > 0 && observed.every(held => !held));
+  assert.equal(status, 'active');
+});
+
+// An archived enqueue and a direct send share command -> route-lock order. In
+// the old order the lock holder queued the archived command behind a direct
+// send, while that send waited for the lock: neither could finish.
+test('archived enqueue and direct send cannot wait on each other', { timeout: 10_000 }, async t => {
+  const id = 'archive-direct-interleave';
+  let status = 'archived';
+  let direct;
+  const h = createHarness({
+    readSession: async sessionId => ({ id: sessionId, status, agentKind: 'claude-code',
+      model: 'm', workingDir: os.tmpdir(), providerId: 'xd' }),
+    restoreArchivedSessionForSend: async () => { status = 'active'; },
+  });
+  setSessionRouteLockImplementation((sessionId, run) => withSendToSessionLock(sessionId, async () => {
+    direct = h.queue.send(sessionId, 'direct follow-up', {});
+    direct.catch(() => {});
+    await new Promise(resolve => setImmediate(resolve));
+    return run();
+  }));
+  t.after(() => { setSessionRouteLockImplementation(null); return h.queue.dispose(); });
+  await h.queue.enqueue(id, { clientId: 'archived-1', text: 'continue' }, undefined, {});
+  await direct;
+  assert.equal(status, 'active');
+  assert.ok(h.maker.getSession(id)?.sent.includes('direct follow-up'));
+});
+
+// Unit, PR #13672: the production handoff adapter must let an earlier runtime
+// command finish before validating and queueing a message. Existing archive
+// and direct-send cases don't enter this adapter. Park the runtime command at
+// queue hydration, just before it needs the route lock.
+for (const { name, agentKind, prepare } of [
+  { name: 'plugin page restore', agentKind: 'claude-code',
+    prepare: (queue, id) => queue.restoreSession(id, async () => {}) },
+  { name: 'Pi prewarm', agentKind: 'pi',
+    prepare: (queue, id) => queue.preparePiSkillRuntime(id, os.tmpdir()) },
+]) {
+  test(`handoff delivers once behind an earlier ${name} command`, { timeout: 10_000 }, async t => {
+    const id = `handoff-after-${agentKind}`;
+    const clientId = `remote-task-action:${id}`;
+    const hydrating = Promise.withResolvers();
+    const continueHydration = Promise.withResolvers();
+    const cleanupWaiters = new AbortController();
+    const order = [];
+    const stored = { id, title: 'Handoff target', status: 'active', source: 'desktop',
+      agentKind, model: 'stored-model', workingDir: os.tmpdir(), providerId: 'xd' };
+    const h = createHarness({
+      readSession: async () => stored,
+      loadQueueSnapshot: async () => {
+        hydrating.resolve();
+        await continueHydration.promise;
+        return [];
+      },
+    });
+    await unitDatabase.exec('INSERT INTO sessions(id,title,source,status,agent_kind,working_dir,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',
+      [id, stored.title, stored.source, stored.status, agentKind, stored.workingDir, 1, 1]);
+    setSessionRouteLockImplementation((sessionId, run, stage, signal) => withSendToSessionLock(
+      sessionId, run, stage, AbortSignal.any(signal ? [signal, cleanupWaiters.signal] : [cleanupWaiters.signal]),
+    ));
+    t.after(async () => {
+      setSessionRouteLockImplementation(null);
+      await h.queue.dispose();
+      await unitDatabase.exec('DELETE FROM sessions WHERE id = ?', [id]);
+    });
+    const handoff = createHostSessionHandoff({
+      input: h.queue, worktree: {}, agents: () => [agentKind], readProviders: async () => [],
+      isSelfDeviceId: () => true, hasCindyAiApiKey: () => false, broadcastCreated() {},
+      assertProviderExecutionSupported() { order.push('target validated'); },
+    });
+    const preparation = prepare(h.queue, id).then(() => { order.push('runtime prepared'); });
+    preparation.catch(() => {});
+    await hydrating.promise;
+    const delivery = handoff.send({
+      targetSessionId: id, clientId, message: 'delegated follow-up', autoReviewUserText: 'delegated follow-up',
+      resumeWithStoredPermissionMode: true, taskActionDeliveryGuard: async () => {},
+    });
+    delivery.catch(() => {});
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(order, [], 'handoff must leave the route lock available to the earlier command');
+      continueHydration.resolve();
+      const [result] = await Promise.all([delivery, preparation]);
+      assert.deepEqual(order, ['runtime prepared', 'target validated']);
+      assert.deepEqual(result, { ok: true, agentKind, wakeKind: 'queued',
+        targetTitle: stored.title, targetLastUserSendAt: null });
+      await waitFor(() => h.maker.getSession(id)?.sent.length === 1);
+      assert.deepEqual(h.persisted.filter(row => row.clientId === clientId).map(row => row.clientId), [clientId]);
+    } finally {
+      cleanupWaiters.abort();
+      continueHydration.resolve();
+      await Promise.allSettled([delivery, preparation]);
+    }
+  });
+}
+
+// Unit, PR #13672: delete and provisional discard hold the route lock while
+// calling disposeSession. Put a production command into its lock wait before
+// calling Stop. First-phase enqueue and Stop after restore don't cover this cycle.
+for (const { name, run, archived, handoff, pi } of [
+  { name: 'archived enqueue', archived: true,
+    run: (queue, id) => queue.enqueue(id, { clientId: 'archived-1', text: 'continue' }, undefined, {}) },
+  { name: 'handoff enqueue', handoff: true,
+    run: (queue, id) => queue.enqueue(id, { clientId: 'handoff-1', text: 'delegated follow-up' }, {
+      validateTarget: async () => assert.fail('A stopped waiter cannot validate or accept the input'),
+    }) },
+  { name: 'direct send', run: (queue, id) => queue.send(id, 'continue', {}) },
+  { name: 'plugin page restore', run: (queue, id) => queue.restoreSession(id, async () => {}) },
+  { name: 'Pi prewarm', pi: true, run: (queue, id) => queue.preparePiSkillRuntime(id, os.tmpdir()) },
+]) {
+  test(`delete cancels a waiting ${name} without the route lock watchdog`, { timeout: 10_000 }, async t => {
+    const id = 'delete-waiting-command';
+    const deleteHasLock = Promise.withResolvers();
+    const allowStop = Promise.withResolvers();
+    const releaseOnFailure = Promise.withResolvers();
+    let disposal;
+    let deleted = false;
+    let restorations = 0;
+    const h = createHarness({
+      readSession: async sessionId => ({ id: sessionId, status: archived ? 'archived' : 'active',
+        agentKind: pi ? 'pi' : 'claude-code', model: 'm', workingDir: os.tmpdir(), providerId: 'xd' }),
+      restoreArchivedSessionForSend: async () => { restorations += 1; },
+    });
+    setSessionRouteLockImplementation(withSendToSessionLock);
+    t.after(() => { setSessionRouteLockImplementation(null); return h.queue.dispose(); });
+    const deleting = lockSessionRoute(async sessionId => {
+      deleteHasLock.resolve();
+      await allowStop.promise;
+      disposal = h.queue.disposeSession(sessionId).then(() => { deleted = true; });
+      // Let a failing implementation unwind only after the assertions.
+      await Promise.race([disposal, releaseOnFailure.promise]);
+    })(id);
+    await deleteHasLock.promise;
+    const holder = sendToSessionLocks.get(id);
+    const commandSettled = Promise.allSettled([run(h.queue, id)]);
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      assert.ok(holder && sendToSessionLocks.get(id) !== holder, 'the command is waiting behind deletion');
+      allowStop.resolve();
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(deleted, true, 'deletion must finish with its own route lock still held');
+      const [result] = await commandSettled;
+      assert.equal(result.status, 'rejected');
+      if (archived || handoff) {
+        assert.equal(result.reason.code, 'PRECONDITION_FAILED');
+        assert.match(result.reason.message, /superseded/);
+      } else assert.equal(result.reason.name, 'AbortError');
+      assert.equal(restorations, 0);
+      assert.deepEqual(h.queue.projection(id).pendingQueue, []);
+      assert.deepEqual(h.persisted, []);
+      assert.equal(h.maker.getSession(id), null);
+    } finally {
+      allowStop.resolve();
+      releaseOnFailure.resolve();
+      await Promise.allSettled([commandSettled, deleting]);
+      await disposal?.catch(() => {});
+    }
+  });
+}
+
+// Unit: Stop after restoration commits but before admission recheck cannot
+// enqueue the input. The independent task status transition is already durable.
+test('a stopped archived send keeps the completed restore without accepting input', async t => {
+  let status = 'archived';
+  let stopping;
+  const h = createHarness({
+    readSession: async id => ({ id, status, agentKind: 'claude-code', model: 'm',
+      workingDir: os.tmpdir(), providerId: 'xd' }),
+    restoreArchivedSessionForSend: async id => {
+      status = 'active';
+      stopping = h.queue.stop(id);
+    },
+  });
+  t.after(() => h.queue.dispose());
+  const id = 'archive-stopped';
+  const input = { clientId: 'archived-1', text: 'continue' };
+  await assert.rejects(h.queue.enqueue(id, input, undefined, {}), /superseded/);
+  await stopping;
+  assert.equal(status, 'active');
+  assert.deepEqual(h.queue.projection(id).pendingQueue, []);
+  assert.equal(h.persisted.length, 0);
+  assert.equal(h.maker.getSession(id), null);
 });
 
 test('stopping a task takes effect while another holder has its send lock', { timeout: 10_000 }, async t => {
@@ -3456,15 +3698,18 @@ async function modelChangeRuntime(t, { agent = 'claude-code', queue = {}, log = 
 }
 
 // #11352, DB tier. The phone's trusted selection origin must survive until the next
-// send or Pi prewarm. An unverified window may neither move the row nor dispatch.
+// send or Pi prewarm. Claude metadata gaps must still dispatch without losing
+// native history; known target pressure must hand off even without the old window.
 test('owner dispatch rebuilds Claude and hot Pi on the host-verified window and keeps an unverifiable Pi route', async t => {
-  for (const [agent, target, finalWindow, rebuild] of [
+  for (const [agent, target, finalWindow, rebuild, missingOldWindow] of [
     ['claude-code', 'small', undefined, true],
     ['pi', 'big-alternate', 100_000, true],
     ['pi', 'small', 0, false],
     ['claude-code', 'display-only', undefined, false],
+    ['claude-code', 'display-only', undefined, false, true],
+    ['claude-code', 'small', undefined, true, true],
   ]) {
-    await t.test(`${agent} to ${target} (native window ${finalWindow})`, async t => {
+    await t.test(`${agent} to ${target} (native window ${finalWindow}, old metadata missing ${!!missingOldWindow})`, async t => {
       const r = await modelChangeRuntime(t, { agent });
       const id = 'owner-window';
       const handoffs = [];
@@ -3478,6 +3723,10 @@ test('owner dispatch rebuilds Claude and hot Pi on the host-verified window and 
       const initial = await r.runTurn(id, 'owner-initial', { contextTokens: 95_000, contextWindow: 200_000 });
       let liveWindow = 200_000;
       initial.getUsageSnapshot = () => ({ contextTokens: 95_000, contextWindow: liveWindow });
+      if (missingOldWindow) {
+        const old = r.views.current[0].models[agent].find(model => model.id === 'big');
+        old.contextWindowVerified = false;
+      }
       if (agent === 'pi') {
         initial.previewModelSwitch = async () => ({ action: 'hot', windowVerified: false });
         const setModel = initial.setModel.bind(initial);
@@ -3505,6 +3754,13 @@ test('owner dispatch rebuilds Claude and hot Pi on the host-verified window and 
         assert.ok(r.h.maker.getSession(id).sent[0].includes(handoff));
         assert.ok(handoff.length > 16_000, 'use the verified window instead of the unknown-window text limit');
         assert.ok(estimateHandoffTokens(handoff) <= 20_000, 'leave room for the next input');
+      } else if (agent === 'claude-code') {
+        assert.equal(saved.model, target);
+        assert.equal(saved.sdk_session_id, 'native-owner-initial');
+        assert.deepEqual(r.rebuilds(id), []);
+        assert.deepEqual(handoffs, []);
+        assert.ok(!r.h.queue.projection(id).error);
+        assert.ok(r.h.maker.getSession(id).sent.some(text => typeof text === 'string' && text.endsWith(next)));
       } else {
         assert.equal(saved.model, 'big');
         assert.equal(saved.sdk_session_id, 'native-owner-initial');
@@ -3701,6 +3957,34 @@ const sameEngineLandingFailure = async (r, id) => {
   assert.equal(r.h.maker.sessions.get(id)?.sent.length ?? 0, 0, 'nothing reached a runtime');
   return projection;
 };
+
+// #12771, DB tier: a picked Pi model disappears before the queued send. A valid
+// replacement on another connection must unblock that same input exactly once.
+test('Pi reselects a withdrawn model before retrying the queued input', async t => {
+  const r = await modelChangeRuntime(t, { agent: 'pi' });
+  const id = 'pi-reselect';
+  await r.createTask(id);
+  await r.runTurn(id, 'initial');
+  const target = { ...switchViews('pi')[0], id: 'prov-b', models: { pi: [switchModel('small')] } };
+  r.views.current = [{ ...switchViews('pi')[0], models: { pi: [switchModel('big')] } }, target];
+  await r.selection.setModel(id, 'small', 'prov-b');
+  assert.deepEqual([r.selection.projectIntent(id).providerId, r.selection.projectIntent(id).model], ['prov-b', 'small']);
+  target.models.pi = [switchModel('big-alternate')];
+  await r.h.queue.enqueue(id, { clientId: 'next', text: 'next' });
+  await waitFor(() => r.h.queue.projection(id).error);
+  assert.match(r.h.queue.projection(id).error, /MODEL_SELECTION_UNAVAILABLE/);
+  assert.deepEqual(r.h.queue.projection(id).recovery, { kind: 'queue-head', clientId: 'next' });
+  assert.equal(r.userRows(id).length, 1);
+  const live = r.h.maker.getSession(id);
+  live.getUsageSnapshot = () => ({ contextTokens: 0, contextWindow: SWITCH_WINDOWS[live.model] });
+  live.previewModelSwitch = async () => ({ action: 'hot', windowVerified: true, targetContextWindow: 300_000 });
+  await r.selection.setModel(id, 'big-alternate', 'prov-b');
+  await r.h.queue.retryLastError(id);
+  await waitFor(() => r.userRows(id).length === 2 || r.h.queue.projection(id).error);
+  assert.equal(r.h.queue.projection(id).error ?? null, null);
+  assert.deepEqual([r.row(id).provider_id, r.row(id).model], ['prov-b', 'big-alternate']);
+  assert.equal(r.h.maker.getSession(id).sent.length, 2);
+});
 
 test('model change at send: a same-engine landing failure keeps the input at the queue head and the pick pending; switching back and retrying sends it', { timeout: 30_000 }, async t => {
   const r = await modelChangeRuntime(t);
@@ -3972,18 +4256,100 @@ test('model change at send: the context rollover resumes a released Pi task to r
     'the released runtime is resumed to read its window');
 });
 
-// Production entry: the Host's switchAgent handler leaves the task and its pending choice unchanged.
-// Basis: #11629, Host has no ACP runtime. The desktop's tests only reject with the admission port bound.
-// Minimal input (unit): a local Claude task and a valid plugin engine route, using the real Host handler.
-test('switching to a plugin engine is unsupported on the Host', async t => {
+// Production entry: Host switchAgent admits local plugin engines using the live harness registry
+// and switches tasks to and from `acp`, rejecting unavailable/missing plugin engines cleanly.
+// Minimal input (unit): a local Claude task with the shared plugin harness registry configured.
+test('switching to and from a plugin engine follows live plugin engine admission on the Host', async t => {
+  const { configurePluginHarnessRegistry, reconcilePluginHarnesses } = await import('../../../desktop/src/main/cindy-brain/pluginHarnesses.ts');
+  const { validateGhostManifest } = await import('../../../desktop/src/shared/ghost.ts');
+  const { installedGhostStoragePart } = await import('../../../desktop/src/shared/pluginIdentity.ts');
   const r = await modelChangeRuntime(t);
   await r.createTask('switch-to-acp');
+  let listedGhosts = [];
+  let availability = {};
+  configurePluginHarnessRegistry({
+    listGhosts: () => listedGhosts,
+    isAvailable: () => true,
+    readAvailability: (id) => availability[id] ?? {},
+    uiLocale: () => 'en',
+    spawn: async () => { throw new Error('unused in switch admission test'); },
+  });
+  reconcilePluginHarnesses([]);
+  t.after(() => {
+    listedGhosts = [];
+    availability = {};
+    reconcilePluginHarnesses([]);
+  });
+
+  // Publish an approved, enabled harness descriptor first so we share the canonical providerId.
+  const parsed = validateGhostManifest({
+    schemaVersion: 3, minCindyVersion: '0.1.61', id: 'dsh-acp', name: 'DeepSeek ACP', version: '1.0.0', entry: 'main.js',
+    node: { entry: 'worker.js', protocol: 'json-rpc-stdio', entries: ['acp.js'] },
+    harnesses: [{ id: 'dsh', name: 'DeepSeek Harness', protocol: 'acp', entry: 'acp.js' }],
+  });
+  if (!parsed.ok) throw new Error(parsed.reason);
+  const ghost = {
+    manifest: parsed.manifest,
+    dir: path.join(os.tmpdir(), 'fixture-dsh-acp'),
+    enabled: true,
+    approval: { state: 'approved', revision: '00000000-0000-4000-8000-000000000001' },
+    approvedHarnesses: ['dsh'],
+    approvedNode: true,
+  };
+  const ghostKey = installedGhostStoragePart(ghost);
+  const acpProviderId = `acp-plugin:${ghostKey}:dsh`;
+
+  // Unlisted engine is refused and leaves the task untouched.
   await assert.rejects(r.selection.switchAgent({
     sessionId: 'switch-to-acp', targetAgentKind: 'acp', model: 'deepseek-v4',
-    providerId: 'acp-plugin:_ns__local__dsh-acp:dsh',
-  }), { code: 'UNSUPPORTED_CAPABILITY', message: '[UNSUPPORTED_CAPABILITY] plugin engines are not available here' });
+    providerId: acpProviderId,
+  }), /停用或卸载/);
   assert.equal(r.row('switch-to-acp').agent_kind, 'cc');
   assert.equal(r.selection.projectIntent('switch-to-acp') ?? null, null);
+
+  // Publish the approved, enabled harness and verify switching to ACP and back to Claude.
+  listedGhosts = [ghost];
+  availability = {
+    [ghostKey]: {
+      harnesses: [{
+        id: 'dsh', available: true, version: '0.3.0',
+        models: [{ id: 'deepseek-v4', name: 'DeepSeek V4', efforts: ['low', 'high'], defaultEffort: 'high' }],
+      }],
+    },
+  };
+  reconcilePluginHarnesses(listedGhosts);
+
+  const pickedAcp = await r.selection.switchAgent({
+    sessionId: 'switch-to-acp', targetAgentKind: 'acp', model: 'deepseek-v4',
+    providerId: acpProviderId, effort: 'low',
+  });
+  assert.equal(pickedAcp.deferred, true, 'switch to ACP stages a pending intent until next send');
+  assert.equal(r.selection.projectIntent('switch-to-acp')?.targetAgentKind, 'acp');
+  assert.equal(r.selection.projectIntent('switch-to-acp')?.providerId, acpProviderId);
+
+  // Next send lands the switch onto `acp`.
+  await r.h.queue.enqueue('switch-to-acp', { clientId: 'acp-1', text: 'hello acp' });
+  await waitFor(() => r.h.maker.sessions.get('switch-to-acp')?.sent.length === 1);
+  const acpSession = r.h.maker.sessions.get('switch-to-acp');
+  assert.equal(acpSession.agentKind, 'acp');
+  assert.equal(acpSession.options.providerId, acpProviderId);
+  assert.equal(acpSession.options.model, 'deepseek-v4');
+  assert.equal(r.row('switch-to-acp').agent_kind, 'acp');
+  acpSession.emit({ type: 'done', data: {}, sessionTurnGeneration: acpSession.generation, sessionInstanceId: acpSession.instanceId });
+  await waitFor(() => !r.h.queue.projection('switch-to-acp').active);
+
+  // Switch back from `acp` to built-in `claude-code`.
+  const pickedClaude = await r.selection.switchAgent({
+    sessionId: 'switch-to-acp', targetAgentKind: 'claude-code', model: 'big', providerId: 'prov-a',
+  });
+  assert.equal(pickedClaude.deferred, true);
+  await r.h.queue.enqueue('switch-to-acp', { clientId: 'cc-back-1', text: 'back to claude' });
+  await waitFor(() => {
+    const next = r.h.maker.sessions.get('switch-to-acp');
+    return next && next !== acpSession && next.sent.length === 1;
+  });
+  assert.equal(r.h.maker.sessions.get('switch-to-acp').agentKind, 'claude-code');
+  assert.equal(r.row('switch-to-acp').agent_kind, 'cc');
 });
 
 // Rule (sessionAgentSwitchHandler.ts applyPendingAgentSwitchIfIdle: a user's engine pick that fails
@@ -3994,7 +4360,8 @@ test('switching to a plugin engine is unsupported on the Host', async t => {
 test('model change at send: an engine pick that cannot land lets the send go on, and lands on a later send', { timeout: 30_000 }, async t => {
   const r = await modelChangeRuntime(t);
   await r.createTask('cross');
-  const picked = await r.selection.switchAgent({ sessionId: 'cross', targetAgentKind: 'codex', model: 'gpt-x', providerId: 'prov-a' });
+  r.views.current = [...r.views.current, { ...switchViews('codex')[0], id: 'prov-b', models: { codex: [switchModel('gpt-x')] } }];
+  const picked = await r.selection.switchAgent({ sessionId: 'cross', targetAgentKind: 'codex', model: 'gpt-x', providerId: 'prov-b' });
   assert.equal(picked.deferred, true, 'an engine pick waits for the send');
   const views = r.views.current;
   // The picked route is unusable when the send lands the pick: its copy is disabled. The task's current
@@ -4009,6 +4376,19 @@ test('model change at send: an engine pick that cannot land lets the send go on,
   assert.equal(r.row('cross').agent_kind, 'cc');
   assert.equal(r.h.queue.projection('cross').error ?? null, null, 'no error for the send');
   assert.equal(r.selection.projectIntent('cross')?.targetAgentKind, 'codex', 'the pick stays for the next send');
+  // PR #13360, DB tier: the existing send-time fixture reaches the real Host
+  // assembly. Previously it proved fallback delivery, but not what history tells
+  // either client about that delivery. One failed pick followed by success is
+  // enough to expose missing assembly and attribution rewritten by later picks.
+  const routes = () => r.db.db.prepare("SELECT agent_meta FROM messages WHERE session_id = ? AND role = 'user' ORDER BY rowid")
+    .all('cross').map(row => JSON.parse(row.agent_meta ?? '{}').dispatchRoute);
+  const firstRoute = routes()[0];
+  assert.deepEqual(firstRoute && { ...firstRoute, switchError: undefined }, {
+    agentKind: 'claude-code', model: 'big', providerId: 'prov-a', agentDeviceId: null,
+    selected: { agentKind: 'codex', model: 'gpt-x', providerId: 'prov-b', agentDeviceId: null },
+    switchError: undefined,
+  });
+  assert.ok(firstRoute.switchError, 'the failed preparation reason stays with this input');
   first.emit({ type: 'done', data: {}, sessionTurnGeneration: first.generation, sessionInstanceId: first.instanceId });
   await waitFor(() => !r.h.queue.projection('cross').active);
   r.views.current = views;
@@ -4017,9 +4397,12 @@ test('model change at send: an engine pick that cannot land lets the send go on,
   const next = r.h.maker.sessions.get('cross');
   assert.equal(next.agentKind, 'codex', 'the next send lands the engine pick');
   assert.equal(next.options.model, 'gpt-x');
+  assert.equal(next.options.providerId, 'prov-b');
   assert.equal(r.row('cross').agent_kind, 'codex');
   assert.equal(r.selection.projectIntent('cross') ?? null, null);
   assert.equal(r.userRows('cross').length, 2);
+  assert.deepEqual(routes()[0], firstRoute, 'later successful selection does not change the first input');
+  assert.equal(routes()[1], undefined, 'a normal send without fallback does not attach dispatchRoute');
 });
 
 // The runtime start admission (register.ts bootstrapSession's admitLocalRoute, shared as
@@ -4114,11 +4497,12 @@ test('route admission: a plugin page restore is refused on a disabled copy, or s
 // starts nothing; a create on a disabled native default writes the row with the enabled copy.
 // The Device Link create entry's ports as main.ts binds them: the runtime selection's admission and the
 // send path's provider group refusal over the given group store; the row and the runtime are recorded.
-const deviceLinkCreate = (r, groups = {}) => {
+const deviceLinkCreate = (r, groups = {}, stored = {}) => {
   const rows = [];
   const started = [];
   const ports = {
     serverDeps: { createSession: async input => { rows.push(input); await createTaskOn('created', input.providerId ?? null); return { id: 'created' }; } },
+    readStoredSession: async id => stored[id] ?? null,
     getAgentGraph: () => ({ maker: { createSession: async opts => { started.push(opts); return r.h.maker.createSession(opts); } } }),
     assertProviderExecutionSupported: createHostProviderExecutionCheck({
       hostProviderBindings: { readProviderGroupBinding: () => null },
@@ -4133,6 +4517,15 @@ const deviceLinkCreate = (r, groups = {}) => {
 test('route admission: a Device Link create is refused before its row, or created on the rerouted copy', { timeout: 30_000 }, async t => {
   const r = await modelChangeRuntime(t);
   const { ports, rows, started, input } = deviceLinkCreate(r);
+  // Real Device Link create entry, unit fixture: with no installed Agent
+  // graph the phone receives the existing precondition envelope, before
+  // model admission or any task row. The other cases have a running graph.
+  await assert.rejects(createHostRuntimeSession({ ...ports, getAgentGraph: () => null }, input('prov-a')), {
+    code: 'PRECONDITION_FAILED',
+    message: /^\[PRECONDITION_FAILED\] binary_not_ready: No Agent engine is available/,
+  });
+  assert.deepEqual(rows, []);
+  assert.deepEqual(started, []);
   r.views.current = withDisabledCopy(r.views.current, 'claude-code', 'prov-a', 'big');
   await assert.rejects(createHostRuntimeSession(ports, input('prov-a')), /\[INVALID_PARAMS\] provider "prov-a" is disabled for model "big"/);
   assert.equal(rows.length, 0, 'no task row');
@@ -4142,6 +4535,40 @@ test('route admission: a Device Link create is refused before its row, or create
   assert.equal(rows[0].providerId, 'prov-a', 'the row is created with the enabled copy');
   assert.equal(r.row('created').provider_id, 'prov-a');
   assert.equal(started[0].providerId, 'prov-a');
+});
+
+/*
+ * Test value (engineering-conventions §3.2)
+ * - Production entry and observable result: createHostRuntimeSession, the Device Link
+ *   maker:create-session entry; a repeated create with the same id starts the runtime again
+ *   and writes no second task row.
+ * - Bug/rule basis: the mobile creation pipeline retries with the same id when the reply is
+ *   lost; the Host inserted again and answered "UNIQUE constraint failed: sessions.id".
+ * - Existing coverage gap: creation was covered for admission and provider groups, never for
+ *   an id whose row already exists.
+ * - Minimal failing input: one stored active row with the requested id and directory; an
+ *   unpatched Host calls createSession for it. The same id in another directory is refused.
+ *   The row carries sdkSessionId: a start without resumeSessionId (Greptile P1 on #12125) opens
+ *   a new native conversation and the task loses its history.
+ * - Tier: unit; fixture ports only.
+ */
+test('Device Link create: a retried id reuses its stored task row instead of inserting again', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  await createTaskOn('retried', 'prov-a');
+  const dir = process.cwd();
+  // The row as a first create and one turn left it: its runtime was released, its native session remains.
+  const row = { status: 'active', workingDir: dir, agentKind: 'cc', model: 'big', providerId: 'prov-a', sdkSessionId: 'native-retried' };
+  const { ports, rows, started, input } = deviceLinkCreate(r, {}, { retried: row });
+  const created = await createHostRuntimeSession(ports, { ...input('prov-a'), id: 'retried' });
+  assert.equal(created.sessionId, 'retried');
+  assert.equal(rows.length, 0, 'no second task row');
+  assert.equal(started.length, 1, 'the runtime is started for the stored row');
+  assert.equal(started[0].resumeSessionId, 'native-retried', 'it resumes the stored native conversation');
+  const other = deviceLinkCreate(r, {}, { retried: { status: 'active', workingDir: '/another/project' } });
+  await assert.rejects(createHostRuntimeSession(other.ports, { ...input('prov-a'), id: 'retried' }),
+    /\[PRECONDITION_FAILED\] This task id already belongs to a different task/);
+  assert.equal(other.rows.length, 0);
+  assert.equal(other.started.length, 0);
 });
 
 // Rule (send-preflight.ts createHostProviderExecutionCheck: the Host has no provider group assignment, so
@@ -4155,6 +4582,30 @@ test('Device Link create: a provider group task is refused with no task row and 
     { message: '[UNSUPPORTED_CAPABILITY] Host does not yet support provider groups' });
   assert.equal(rows.length, 0, 'no task row');
   assert.equal(started.length, 0, 'no runtime');
+});
+
+// Unit through Device Link create with owner-scoped pool fixtures: the desktop's
+// canonical mixed group can lack an outer group row. Starting it on Host would
+// otherwise silently choose a different credential from the bound Key.
+test('Device Link create refuses an OpenAI account pool and a detached Key history before start', { timeout: 30_000 }, async t => {
+  const r = await modelChangeRuntime(t);
+  const key = 'fork-host-fixture-key';
+  const group = 'fork-host-fixture-group';
+  const { apiKeyMemberForConnection, saveApiKeyPoolMembers, restoreStandaloneApiKeyMember } =
+    await import('../../../desktop/src/main/subscription-accounts/apiKeyMembers.ts');
+  const { writeAccountBindings } = await import('../../../desktop/src/main/subscription-accounts/store.ts');
+  const { ports, rows, started, input } = deviceLinkCreate(r);
+  await saveApiKeyPoolMembers(group, [{ connectionId: key }], () => {});
+  await assert.rejects(createHostRuntimeSession(ports, input(group)), /UNSUPPORTED_CAPABILITY/);
+  const member = apiKeyMemberForConnection(key);
+  await restoreStandaloneApiKeyMember(member, () => {});
+  await writeAccountBindings(['native:detached-pool-history'], 'openai', member.id, group);
+  const detached = deviceLinkCreate(r, {}, { 'detached-old': { status: 'active', workingDir: process.cwd(),
+    agentKind: 'cc', model: 'big', providerId: group, sdkSessionId: 'detached-pool-history' } });
+  await assert.rejects(createHostRuntimeSession(detached.ports, { ...input('prov-a'), id: 'detached-old' }),
+    /UNSUPPORTED_CAPABILITY/);
+  assert.deepEqual([rows.length, started.length, detached.rows.length, detached.started.length], [0, 0, 0, 0]);
+  assert.doesNotThrow(() => ports.assertProviderExecutionSupported('fresh-direct', key));
 });
 
 // Rule (sessionAgentSwitchHandler.ts: a switch back to an engine whose native session is parked starts
@@ -5275,7 +5726,7 @@ test('idle release: watchers scan once started and stop when the owner runtime i
   h.queue.startIdleRelease();
   t.mock.timers.tick(60_000);
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(scans, 2, 'the Claude and Codex watchers scan each minute');
+  assert.equal(scans, 3, 'the Claude, Codex and ACP watchers scan each minute');
   await h.queue.dispose();
   scans = 0;
   t.mock.timers.tick(120_000);
@@ -5733,11 +6184,11 @@ async function resumeHarness(t, overrides = {}) {
   // As Maker stamps every event of a turn with the attempt token its send carried (maker-core
   // session.ts; the resume's send carries it): the guard clears a resume's pending attempt on its
   // first stamped event, so an unstamped fixture would never resume twice.
-  const interrupt = async () => {
+  const interrupt = async (failure = INTERRUPTION) => {
     const token = session.sendOptions.at(-1)?.turnAttemptToken;
     const stamp = typeof token === 'number' ? { turnAttemptToken: token } : {};
     session.emit({ type: 'text', data: { text: 'half done', isFinal: true }, ...stamp });
-    session.emit({ type: 'error', data: INTERRUPTION, ...stamp });
+    session.emit({ type: 'error', data: { ...failure }, ...stamp });
     await settle();
   };
   // Until the engine has received `count` messages: a message reaches it only after its send's
@@ -5771,7 +6222,7 @@ test('auto-resume exit 1: the resumed turn answers the input and ends its stream
 test('auto-resume exit 2: interruptions until the budget is spent end the stream on the last error, written once', async t => {
   const r = await resumeHarness(t);
   for (let sent = 2; sent < 20; sent += 1) {
-    await r.interrupt();
+    await r.interrupt({ reason: 'codex_reconnect_stalled', message: 'Model reconnect timed out.', isTerminal: true });
     if (r.response.writableEnded) break;
     await r.backoff(sent);
   }
@@ -5780,7 +6231,9 @@ test('auto-resume exit 2: interruptions until the budget is spent end the stream
   assert.ok(r.session.sent.length > 2, `resumed ${r.session.sent.length - 1} time(s)`);
   const last = r.streamed().filter(e => e.type === 'error').at(-1);
   assert.equal(last.autoResumePending, undefined);
+  assert.equal(last.data.reconnectHandoff, 'exhausted');
   assert.equal(r.errorRows().length, 1);
+  assert.equal(r.errorRows()[0].content.reconnectHandoff, 'exhausted');
   t.mock.timers.reset();
   await r.h.queue.dispose();
 });
@@ -8516,6 +8969,93 @@ test('list activity: a dispatched or steered input moves the task\'s activity ti
 });
 
 /*
+ * Silenced scheduler runs do not advance list activity (Desktop & Host parity).
+ * - Production entry and observable result: Host coordinator + turn-executor over a real profile DB;
+ *   last_activity_at stays unchanged for a silenced scheduler turn, and advances on notified or failed turns.
+ * - Rule: task-inbox.md (silent background runs must not bump the task to the top of the inbox/list).
+ * - Coverage gap: onDispatchedUserTurn and turn-executor only excluded goal turns, not silenced scheduler turns.
+ * - Minimal failing input: a silenced scheduler run (status running -> not running -> done) bumps last_activity_at.
+ * - Tier: unit (node:test, real profile database, Host coordinator + executor).
+ */
+test('list activity: a silenced scheduler turn leaves last_activity_at unchanged while notified and failed turns advance it', { timeout: 30_000 }, async t => {
+  const { setSilencedRunProbe } = await import('../../../desktop/src/main/scheduler-host/silent-output.ts');
+  const silencedRuns = new Set(['run-silent']);
+  setSilencedRunProbe(runId => silencedRuns.has(runId));
+  t.after(() => setSilencedRunProbe(null));
+
+  const db = await recoveryDatabase(t);
+  const { createHostSessionActivity } = await import('./session-activity.ts');
+  const write = createHostSessionActivity({ getOwner: getCurrentDbClientSnapshot, publish: () => {} });
+  const { h } = assembledRuntime(t, db, { touchSessionActivity: write });
+  const activity = id => db.db.prepare('SELECT last_activity_at FROM sessions WHERE id = ?').get(id).last_activity_at;
+  await db.createTask('silent-sch');
+  db.db.prepare('UPDATE sessions SET last_activity_at = 1000, updated_at = 1000 WHERE id = ?').run('silent-sch');
+
+  const sq = h.queue.schedulerQueue();
+  const silentOrigin = { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-silent' };
+  await sq.enqueuePrompt({
+    sessionId: 'silent-sch',
+    text: 'check',
+    persistedContent: 'check',
+    origin: silentOrigin,
+    onAccepted: () => {},
+  });
+  await waitFor(() => h.maker.sessions.get('silent-sch')?.sent.length === 1);
+  const session = h.maker.sessions.get('silent-sch');
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: silentOrigin });
+  session.emit({ type: 'status', data: { isRunning: false }, turnOrigin: silentOrigin });
+  session.emit({ type: 'done', data: { result: 'ok' }, turnOrigin: silentOrigin });
+  await waitFor(() => !h.queue.isTurnRunning('silent-sch'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(activity('silent-sch'), 1000, 'pre-silenced scheduler turn must not advance last_activity_at');
+
+  // Mid-turn schedule_silence_current_run (not silenced at dispatch) must also keep last_activity_at unchanged.
+  const midSilentOrigin = { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-mid-silent' };
+  await sq.enqueuePrompt({
+    sessionId: 'silent-sch',
+    text: 'check-mid',
+    persistedContent: 'check-mid',
+    origin: midSilentOrigin,
+    onAccepted: () => {},
+  });
+  await waitFor(() => session.sent.length === 2);
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: midSilentOrigin });
+  silencedRuns.add('run-mid-silent');
+  session.emit({ type: 'status', data: { isRunning: false }, turnOrigin: midSilentOrigin });
+  session.emit({ type: 'done', data: { result: 'quiet' }, turnOrigin: midSilentOrigin });
+  await waitFor(() => !h.queue.isTurnRunning('silent-sch'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(activity('silent-sch'), 1000, 'mid-turn silenced scheduler turn must not advance last_activity_at');
+
+  const notifyOrigin = { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: 'PR #1', runId: 'run-notify' };
+  await sq.enqueuePrompt({
+    sessionId: 'silent-sch',
+    text: 'alert',
+    persistedContent: 'alert',
+    origin: notifyOrigin,
+    onAccepted: () => {},
+  });
+  await waitFor(() => session.sent.length === 3);
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: notifyOrigin });
+  session.emit({ type: 'done', data: { result: 'needs user' }, turnOrigin: notifyOrigin });
+  await waitFor(() => !h.queue.isTurnRunning('silent-sch'));
+  await waitFor(() => activity('silent-sch') > 1000);
+
+  db.db.prepare('UPDATE sessions SET last_activity_at = 2000, updated_at = 2000 WHERE id = ?').run('silent-sch');
+  await sq.enqueuePrompt({
+    sessionId: 'silent-sch',
+    text: 'fail',
+    persistedContent: 'fail',
+    origin: silentOrigin,
+    onAccepted: () => {},
+  });
+  await waitFor(() => session.sent.length === 4);
+  session.emit({ type: 'status', data: { isRunning: true }, turnOrigin: silentOrigin });
+  session.emit({ type: 'error', data: { message: 'boom', isTerminal: true }, turnOrigin: silentOrigin });
+  await waitFor(() => activity('silent-sch') > 2000);
+});
+
+/*
  * List preview after a done (release table 甲 13, the preview half).
  * - Production entry and observable result: the Host executor's turn end over a real profile database; the
  *   session_changed event with the task's list preview.
@@ -9133,6 +9673,49 @@ async function silentStopHarness(t, { disabled = false, failBanner = false, queu
     turnEnds: () => turnEndWrites(spy.calls).map(call => call.atMs) };
   return r;
 }
+
+// #12759, unit: the real Host queue, terminal pipeline and silent-stop handler must
+// carry the breaker across separate inputs, suppress repeated errors, and re-arm only
+// after a completed visible reply. The old single-done test cannot catch this.
+for (const source of ['claude', 'codex']) test(`silent stop: repeated breaker ends once and a completed ${source} reply re-arms recovery`, async t => {
+  const r = await silentStopHarness(t);
+  let sends = 1;
+  const send = async clientId => {
+    await r.h.queue.enqueue('s', { clientId, text: 'next' });
+    await r.sent(++sends);
+  };
+  const stop = async () => {
+    t.mock.timers.tick(6_000);
+    await r.turn('');
+    await r.decide();
+  };
+  const settled = () => settleUntil(() => !r.h.queue.projection('s').turnInProgress, 'the turn ends');
+  // Three user inputs, each with two continuations, reach the session limit.
+  for (let input = 0; input < 3; input++) {
+    if (input > 0) await send(`input-${input}`);
+    for (let continuation = 0; continuation < 2; continuation++) {
+      await stop();
+      await r.sent(++sends);
+    }
+    await stop();
+    await settled();
+  }
+  const breakerRows = () => r.rows('error').filter(row => row.content.silentStopFailureCause === 'session-breaker');
+  assert.equal(breakerRows().length, 1);
+  await send('still-broken');
+  await stop();
+  await settled();
+  assert.equal(breakerRows().length, 1, 'another turn does not persist a duplicate error');
+  await send('productive');
+  // #12834 review: Codex done must also clear the breaker; previously this
+  // event reached an out-of-scope history variable and silently skipped finish.
+  await r.turn('done', { type: 'done', source, data: { raw: { status: 'completed' }, result: 'done' } });
+  await settled();
+  await send('new-request');
+  await stop();
+  await r.sent(++sends);
+  assert.equal(r.session.sent.at(-1), '继续', 'the completed reply re-enabled automatic recovery');
+});
 
 test('silent stop: the turn continues on a new generation with a hidden 继续; the stream and the activity time follow it to its end', async t => {
   const r = await silentStopHarness(t);

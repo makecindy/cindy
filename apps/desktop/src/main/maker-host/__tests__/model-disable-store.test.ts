@@ -96,14 +96,19 @@ describe('旧媒体 modelId 停用项迁移', () => {
 // PR #10405, unit: taking an account out must keep the source model switches. This checks the
 // production store's actual persisted values, which account-selection mocks cannot cover.
 it('copies model access overrides before publishing a separate subscription provider', () => {
-  setModelsDisabled('source', ['gpt-6', 'chatgpt/gpt-6'], true);
-  setProviderDisabled('source', true);
-  copyProviderDisableOverrides('source', 'openai-sub-12345678');
+  const target = 'openai-sub-12345678';
+  setModelsDisabled('openai', ['gpt-6', 'openai/gpt-image-2'], true);
+  setProviderDisabled('openai', true);
+  copyProviderDisableOverrides('openai', target, {
+    source: 'openai/gpt-image-2', target: `${target}/gpt-image-2`,
+  });
   expect(readPrefsFile()).toMatchObject({ disabledModels: {
-    'source:gpt-6': true, 'openai-sub-12345678:gpt-6': true, 'openai-sub-12345678:chatgpt/gpt-6': true,
-  }, disabledProviders: { 'openai-sub-12345678': true } });
-  clearProviderDisableOverrides('source');
-  clearProviderDisableOverrides('openai-sub-12345678');
+    'openai:gpt-6': true, 'openai:openai/gpt-image-2': true,
+    [`${target}:gpt-6`]: true, [`${target}:${target}/gpt-image-2`]: true,
+  }, disabledProviders: { [target]: true } });
+  expect(readPrefsFile().disabledModels[`${target}:openai/gpt-image-2`]).toBeUndefined();
+  clearProviderDisableOverrides('openai');
+  clearProviderDisableOverrides(target);
 });
 
 // 依据:隐藏只收起选择器里的陈列,停用才是准入;两者写在同一文件里,最容易出的错是

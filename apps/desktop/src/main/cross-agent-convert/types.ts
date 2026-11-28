@@ -20,7 +20,7 @@ export type AgentKind = 'claude-code' | 'codex';
 
 /** 一个迁移项 = 检测器认为"可做"的一个工作单元。 */
 export interface MigrationItem {
-  /** 在一次迁移会话内稳定的 id（"<kind>:<n>"）。renderer 用它关联进度事件。 */
+  /** renderer 用这个稳定标识关联用户看到的设置和转换进度。 */
   id: string;
   kind: MigrationItemKind;
   direction: MigrationDirection;

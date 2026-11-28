@@ -9,17 +9,17 @@ import { withRehydrateCloseSuppressed } from '../../../desktop/src/main/maker-ho
  * /sessions/update runs (session-update.ts).
  */
 
-/** The desktop's worktree registry (worktree/worktreeStore.ts): electron-store `worktrees` in the profile root. */
+/** The shared worktree registry (worktree/worktreeStore.ts): `worktrees.json` in the profile root. */
 const WORKTREE_REGISTRY_FILE = 'worktrees.json';
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
- * A task's live worktree binding, read from the desktop's registry; the Host only reads it (it creates
- * no worktrees). The file is `{ "worktrees": { "<sessionId>": { "path": … } } }`, plain JSON written
- * atomically (electron-store over conf). The desktop answers `worktreeStore.get(id)?.path ?? null`
- * (bootstrap-electron.ts) and reads the file on every call, as this does.
+ * A task's live worktree binding, read from the shared registry. Remote creation writes through
+ * the same Node-safe store and file shape: `{ "worktrees": { "<sessionId>": { "path": … } } }`.
+ * The desktop answers `worktreeStore.get(id)?.path ?? null` (bootstrap-electron.ts) and reads the
+ * file on every call, as this does.
  * - No file: no binding (the desktop's store starts from `{ worktrees: {} }`).
  * - A file the desktop cannot read (unreadable, not JSON, not the registry's shape) fails the move: the
  *   desktop's store throws there too, and "no binding" would let a worktree task move out of it.

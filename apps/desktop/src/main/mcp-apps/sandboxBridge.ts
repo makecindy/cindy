@@ -1,13 +1,21 @@
 /** This document owns the App transport. The top Renderer only observes UI state. */
-export function mcpAppDirectSandboxDocument(resourceUrl: string, bridgeUrl: string): string {
+export function mcpAppDirectSandboxDocument(resourceUrl: string, bridgeUrl: string, scheme: 'light' | 'dark' = 'light'): string {
   const encode = (value: string) => JSON.stringify(value).replace(/</g, '\\u003c');
-  return `<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}</style></head><body><script>
+  return `<!doctype html><html><head><meta charset="utf-8"><style>:root{color-scheme:${scheme === 'dark' ? 'dark' : 'light'}}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}</style></head><body><script>
 const frame=document.createElement('iframe');
 frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-forms');
 frame.setAttribute('allow',"camera 'none'; microphone 'none'; geolocation 'none'; clipboard-write 'none'");
 frame.style.cssText='border:0;width:100%;height:100%;display:block';
 let after=0,stopped=false,generation=0,initialized=false,initializationTimer,handshakeDelivery;
 const localNotice=method=>window.parent.postMessage({jsonrpc:'2.0',method},'*');
+// At most one tool that overlaps the initial result or starts immediately after it.
+// No request details leave the wrapper. A POST receipt is not the RPC response.
+let initialToolId,firstToolStartUntil,initialToolActive=false;
+const toolActivity=active=>{
+ if(initialToolActive===active)return;
+ initialToolActive=active;
+ window.parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/sandbox-initial-tool-active',params:{active}},'*');
+};
 const state=(message,fromHost=false)=>{
  // App notifications cannot assert Host-owned context such as display mode.
  if(['ui/notifications/initialized','ui/notifications/size-changed','ui/notifications/sandbox-escape'].includes(message.method)||(fromHost&&message.method==='ui/notifications/host-context-changed'))
@@ -27,11 +35,16 @@ async function invoke(input){
  return response.json();
 }
 window.addEventListener('message',event=>{
- if(stopped||event.source!==frame.contentWindow)return;
  const message=event.data;
+ if(event.source===window.parent){
+  if(message?.type==='cindy:sandbox-color-scheme' && Object.keys(message).length===2 &&
+     (message.scheme==='light'||message.scheme==='dark'))document.documentElement.style.colorScheme=message.scheme;
+  return;
+ }
+ if(stopped||event.source!==frame.contentWindow)return;
  if(!message||message.jsonrpc!=='2.0'||typeof message.method==='string'&&message.method.startsWith('ui/notifications/sandbox-'))return;
  if(message.method==='ui/initialize'&&initialized){
-  generation++;initialized=false;
+  generation++;initialized=false;initialToolId=undefined;firstToolStartUntil=undefined;toolActivity(false);
   const current=generation;
   clearTimeout(initializationTimer);
   initializationTimer=setTimeout(()=>{if(generation===current&&!initialized)fail();},45000);
@@ -41,7 +54,16 @@ window.addEventListener('message',event=>{
  state(message);
  const current=generation;
  const handshake=message.method==='ui/initialize'||message.method==='ui/notifications/initialized';
- const send=async()=>{if(stopped||!handshake&&generation!==current)return;await invoke({op:'message',message});};
+ const send=async()=>{
+  if(stopped||!handshake&&generation!==current)return;
+  if(initialized&&message.method==='tools/call'&&initialToolId===undefined&&
+     (Number.isSafeInteger(message.id)||typeof message.id==='string'&&message.id.length<=128)&&
+     (firstToolStartUntil===undefined||performance.now()<firstToolStartUntil)){
+   initialToolId=message.id;
+   if(firstToolStartUntil!==undefined)toolActivity(true);
+  }
+  await invoke({op:'message',message});
+ };
  // Await handshake receipts, not long-running tool calls, before the next document.
  const delivery=handshakeDelivery?handshakeDelivery.then(send):send();
  if(handshake){
@@ -67,9 +89,20 @@ async function poll(){
     if(event.generation!==undefined&&event.generation!==generation)continue;
     await invoke({op:'link-result',linkId:event.openLink.id,success});
   }else{
-   if(['ui/notifications/tool-result','ui/notifications/tool-cancelled'].includes(event.message?.method))
+   const reply=event.message;
+   if(['ui/notifications/tool-result','ui/notifications/tool-cancelled'].includes(reply?.method)){
     localNotice('ui/notifications/sandbox-result-delivered');
-   state(event.message,true);frame.contentWindow.postMessage(event.message,'*');
+    if(event.generation===generation&&firstToolStartUntil===undefined){
+     firstToolStartUntil=performance.now()+500;
+     if(initialToolId!==undefined)toolActivity(true);
+    }
+   }
+   state(reply,true);frame.contentWindow.postMessage(reply,'*');
+   if(initialToolId!==undefined&&event.generation===generation&&reply?.method===undefined&&
+      reply?.id===initialToolId&&('result' in reply||'error' in reply)){
+    initialToolId=undefined;
+    if(initialToolActive){firstToolStartUntil=0;toolActivity(false);}
+   }
   }
   }
   if(!events.length&&!stopped)await new Promise(resolve=>setTimeout(resolve,250));

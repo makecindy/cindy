@@ -4,12 +4,14 @@
  * trusting a folder (no import prompt, runs skipped) needs it to be a real teammate project here.
  */
 import path from 'node:path';
+import { and, eq } from 'drizzle-orm';
+import type { BotModelRoute } from '../../shared/botModelChain.js';
 
 import { teammateFolderOfProjectPath } from '@cindy/maker-shared/teammate-project';
 
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 import { getDbClient } from '../localDb/client/current.js';
-import { botProfiles } from '../localDb/schema.js';
+import { botProfiles, botProfileVersions } from '../localDb/schema.js';
 import { teammateWorkspaceDir } from '../maker-ipc/botProjectMemory.js';
 
 /** `stopped`: the teammate is paused, archived or being deleted; `deleted`: it no longer exists. */
@@ -31,4 +33,23 @@ export async function ownTeammateProjectState(workingDir: string | null | undefi
   if (row) return row.status === 'active' || row.status === 'error' ? 'active' : 'stopped';
   // Still in this account's teammates folder, but its teammate is gone.
   return sameDir(path.dirname(path.dirname(workingDir)), path.join(root, 'bots')) ? 'deleted' : null;
+}
+
+/** Read the current profile, never a schedule's creation-time model snapshot. */
+export async function ownTeammateProjectPrimaryModel(workingDir: string,
+  readModelChain: (config: Record<string, unknown>) => Promise<BotModelRoute[]>) {
+  const root = ownerScopedUserDataPath();
+  const db = getDbClient().drizzle;
+  const rows = await db.select().from(botProfiles);
+  const profile = rows.find(row => sameDir(teammateWorkspaceDir(root, row.id), workingDir));
+  if (!profile || (profile.status !== 'active' && profile.status !== 'error'))
+    throw new Error('schedule route unavailable: buddy is not active on this account');
+  const [version] = await db.select().from(botProfileVersions).where(and(
+    eq(botProfileVersions.botId, profile.id), eq(botProfileVersions.version, profile.currentVersion),
+  )).limit(1);
+  if (!version) throw new Error('schedule route unavailable: buddy profile is missing');
+  const chain = await readModelChain(JSON.parse(version.capabilitiesJson));
+  const route = chain[0];
+  if (!route) throw new Error('schedule route unavailable: buddy has no primary model');
+  return route;
 }

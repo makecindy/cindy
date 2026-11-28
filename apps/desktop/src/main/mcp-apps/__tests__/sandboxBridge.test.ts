@@ -16,12 +16,30 @@ function fixture() {
   const fetch = vi.fn<(url: string, input: { body: string }) => Promise<{ ok: boolean; json(): Promise<unknown> }>>(() => new Promise((resolve) => pending.push(resolve)));
   const window = { parent, addEventListener: (name: string, callback: (event: unknown) => void) =>
     handlers.set(name, callback) };
-  const document = { createElement: () => frame, body: { appendChild: vi.fn() } };
+  const style = { colorScheme: 'light' };
+  const document = { documentElement: { style }, createElement: () => frame, body: { appendChild: vi.fn() } };
   const html = mcpAppDirectSandboxDocument('cindy-mcp-app://view-view/resource', 'cindy-mcp-app://view/bridge');
   const script = html.slice(html.indexOf('<script>') + 8, html.indexOf('</script>'));
-  new Script(script).runInNewContext({ window, document, fetch, setTimeout, clearTimeout });
-  return { handlers, parent, frame, fetch, pending };
+  new Script(script).runInNewContext({ window, document, fetch, setTimeout, clearTimeout, performance });
+  return { handlers, parent, frame, fetch, pending, style };
 }
+
+// PR #12124, unit: an uninitialized App still needs live wrapper theming.
+// Exercise the emitted message handler; ordinary RPC relay tests cannot observe wrapper CSS.
+it('changes only the wrapper scheme on an exact theme message from its parent', () => {
+  const f = fixture();
+  const receive = f.handlers.get('message')!;
+  const theme = { type: 'cindy:sandbox-color-scheme', scheme: 'dark' };
+  for (const data of [{ ...theme, scheme: 'light dark' }, { ...theme, extra: true }, { scheme: 'dark' }])
+    receive({ source: f.parent, data });
+  receive({ source: f.frame.contentWindow, data: theme });
+  expect(f.style.colorScheme).toBe('light');
+  receive({ source: f.parent, data: theme });
+  expect(f.style.colorScheme).toBe('dark');
+  expect(f.frame.contentWindow.postMessage).not.toHaveBeenCalled();
+  expect(f.fetch).toHaveBeenCalledOnce(); // Only the initial poll.
+});
+
 it('ignores forged App requests and Host responses from the Renderer, relaying only the inner window', () => {
   const f = fixture();
   // G5: only add form events; top-navigation and popups remain sandboxed.
@@ -105,6 +123,72 @@ it('emits host-owned handshake and result markers, while rejecting page-forged m
   for (let index = 0; index < 8; index++) await Promise.resolve();
   expect(f.parent.postMessage).toHaveBeenCalledExactlyOnceWith(
     { jsonrpc: '2.0', method: 'ui/notifications/sandbox-result-delivered' }, '*');
+});
+
+// Unit: the restored frame needs the first render's tool lifetime, not the
+// POST acknowledgement. The guest can neither finish the wait nor see other RPCs.
+it.each(['result', 'error'])('tracks one startup tool through its matching Host %s', async outcome => {
+  const f = fixture();
+  const receive = (data: unknown) => f.handlers.get('message')!({ source: f.frame.contentWindow, data });
+  const method = 'ui/notifications/sandbox-initial-tool-active';
+  const activity = () => f.parent.postMessage.mock.calls.map(([m]) => m)
+    .filter(m => m.method === method);
+  const call = { jsonrpc: '2.0', method: 'tools/call', id: 37, params: { name: 'private' } };
+  receive({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
+  f.pending[1](Response.json({}));
+  await vi.advanceTimersByTimeAsync(0);
+  if (outcome === 'error') receive(call);
+  f.pending[0](Response.json([{ seq: 1, generation: 0, message: { jsonrpc: '2.0', method: 'ui/notifications/tool-result' } }]));
+  await vi.advanceTimersByTimeAsync(0);
+  if (outcome === 'result') receive(call);
+  expect(activity()).toEqual([{ jsonrpc: '2.0', method, params: { active: true } }]);
+  const ops = f.fetch.mock.calls.map(([, input]) => JSON.parse(input.body));
+  f.pending[ops.findIndex(op => op.message?.id === 37)](Response.json({}));
+  receive({ jsonrpc: '2.0', method, params: { active: false } });
+  receive({ jsonrpc: '2.0', id: 37, result: {} });
+  const poll = ops.findIndex(op => op.op === 'poll' && op.after === 1);
+  f.pending[poll](Response.json([{ seq: 2, generation: 1, message: { jsonrpc: '2.0', id: 37, result: {} } },
+    { seq: 3, generation: 0, message: { jsonrpc: '2.0', id: 99, result: {} } }]));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(activity()).toHaveLength(1);
+  const nextPoll = f.fetch.mock.calls.findIndex(([, i]) => JSON.parse(i.body).after === 3);
+  f.pending[nextPoll](Response.json([{ seq: 4, generation: 0, message: { jsonrpc: '2.0', id: 37, [outcome]: {} } }]));
+  await vi.advanceTimersByTimeAsync(0);
+  receive({ ...call, id: 38 });
+  expect(activity()).toEqual([true, false].map(active => ({ jsonrpc: '2.0', method, params: { active } })));
+});
+
+// Replacement ends the previous wait; an unrelated call after the next
+// document's first-render window must not start another one.
+it('clears initial tool activity on reinitialize and ignores later user tools', async () => {
+  const f = fixture();
+  const receive = (method: string, id?: number) => f.handlers.get('message')!({
+    source: f.frame.contentWindow, data: { jsonrpc: '2.0', method, id },
+  });
+  const pollResult = (after: number, generation: number) => {
+    const i = f.fetch.mock.calls.findIndex(([, input]) => JSON.parse(input.body).after === after);
+    f.pending[i](Response.json([{ seq: after + 1, generation, message: {
+      jsonrpc: '2.0', method: 'ui/notifications/tool-result',
+    } }]));
+  };
+  receive('ui/notifications/initialized');
+  f.pending[1](Response.json({}));
+  await vi.advanceTimersByTimeAsync(0);
+  pollResult(0, 0);
+  await vi.advanceTimersByTimeAsync(0);
+  receive('tools/call', 37);
+  receive('ui/initialize', 38);
+  f.pending.at(-1)!(Response.json({}));
+  await vi.advanceTimersByTimeAsync(0);
+  receive('ui/notifications/initialized');
+  f.pending.at(-1)!(Response.json({}));
+  await vi.advanceTimersByTimeAsync(0);
+  pollResult(1, 1);
+  await vi.advanceTimersByTimeAsync(501);
+  receive('tools/call', 37);
+  expect(f.parent.postMessage.mock.calls.map(([m]) => m)
+    .filter(m => m.method === 'ui/notifications/sandbox-initial-tool-active').map(m => m.params.active))
+    .toEqual([true, false]);
 });
 
 // Greptile 4427568732: a poll already on the wire can arrive after initialize.

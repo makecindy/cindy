@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
  * ControlledBanner —— 被控端可见性指示。
  *
  * 同账号设备持有任务订阅时，在输入框上方或全局兜底位置显示连接提示；
- * 订阅数量不是桌面键鼠控制者数量，实际桌面控制由 RemoteDesktopHost 显示。
+ * 订阅数量不是桌面键鼠控制者数量，实际桌面控制由桌面上的被控浮窗（main/remote-desktop/controlledOverlay.ts）显示。
  * 「动态状态点 + <设备名> 已连接到 Cindy + 撤销访问权限」。主聊天页展开时与计划胶囊
  * 组成一组共同居中;点胶囊内的叉后,只把呼吸灯放到 RunningStatusBar 右侧 token 统计
  * 之前。其它页面全局挂载(MainLayout),与 FeishuConflictDialogHost 同级。状态订阅来自

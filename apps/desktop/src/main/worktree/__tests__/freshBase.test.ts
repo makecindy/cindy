@@ -28,7 +28,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { resolveFreshSourceBranch, refreshSelectedDefaultSource } from '../freshBase';
+import { resolveExplicitSourceRef, resolveFreshSourceBranch, refreshSelectedDefaultSource } from '../freshBase';
 
 const REPO = '/repo';
 
@@ -295,4 +295,36 @@ it('keeps the selected origin default after a fetch timeout, without probing ups
   expect(call('fetch')?.opts?.timeoutMs).toBeLessThanOrEqual(2000);
   expect(call('ls-remote')).toBeUndefined();
   expect(call('remote get-url upstream')).toBeUndefined();
+});
+
+// 显式基线(base_ref)点名远端分支时的联网边界。依据:跨电脑新建任务经 maker:session:handoff
+// 等回执,通道超时 65 秒;这一步 fetch 没有上限就会把创建拖成结果未知。解析分支、识别远端
+// 报错等真实 Git 语义在 worktreeDetectCwd.git-integration.test.ts,这里只有 mock 才测得到预算。
+// 最小输入:一个已配置的 origin 与一次 fetch。
+describe('resolveExplicitSourceRef', () => {
+  const impl = (args: readonly string[]) => {
+    const key = args.join(' ');
+    if (key === 'remote') return 'origin\nupstream';
+    if (key.startsWith('for-each-ref')) return '';
+    if (key === 'check-ref-format refs/heads/release/2.x') return '';
+    if (key === 'fetch --quiet origin +refs/heads/release/2.x:refs/remotes/origin/release/2.x') return '';
+    return undefined;
+  };
+
+  it('fetch 带真超时且不超过总预算、禁用终端提问', async () => {
+    mocks.impl = impl;
+    expect(await resolveExplicitSourceRef(REPO, 'origin/release/2.x', 15_000))
+      .toEqual({ sourceBranch: 'refs/remotes/origin/release/2.x', fetched: true });
+    const fetch = call('fetch') as { opts?: GitExecOpts } | undefined;
+    expect(fetch?.opts?.timeoutMs).toBeGreaterThan(0);
+    expect(fetch?.opts?.timeoutMs).toBeLessThanOrEqual(15_000 - 3_000);
+    expect(fetch?.opts?.extraEnv?.GIT_TERMINAL_PROMPT).toBe('0');
+  });
+
+  it('总预算 ≤0 → 不联网,沿用本地副本并回报没能刷新', async () => {
+    mocks.impl = impl;
+    expect(await resolveExplicitSourceRef(REPO, 'origin/release/2.x', 0))
+      .toEqual({ sourceBranch: 'refs/remotes/origin/release/2.x', fetched: false, reason: 'fetch-failed' });
+    expect(call('fetch')).toBeUndefined();
+  });
 });

@@ -1,3 +1,4 @@
+import { isQwenRealtimeModel } from '../../shared/realtimeVoice.js';
 import { alibabaSystemVoices } from '../../shared/alibabaSpeechVoices.js';
 import { isCosyVoiceHttpModel, isQwenAudioHttpModel } from '../../shared/speechProtocols.js';
 import { normalizeSpeechVoiceId, type SpeechVoiceCatalog } from '../../shared/voiceConversation.js';
@@ -15,9 +16,11 @@ export async function loadDashscopeVoices(
   baseUrl: string,
   request: (url: URL, body: unknown) => Promise<RecordValue>,
   assertCurrent: () => void,
+  protocol: 'dashscope-tts' | 'qwen-audio-realtime',
 ): Promise<SpeechVoiceCatalog> {
-  const system = alibabaSystemVoices(modelId, 'dashscope-tts', baseUrl);
-  if (!isCosyVoiceHttpModel(modelId) && !isQwenAudioHttpModel(modelId))
+  const realtime = protocol === 'qwen-audio-realtime';
+  const system = realtime ? [] : alibabaSystemVoices(modelId, protocol, baseUrl);
+  if (realtime ? !isQwenRealtimeModel(modelId) : !isCosyVoiceHttpModel(modelId) && !isQwenAudioHttpModel(modelId))
     return { voices: [], source: 'manual' };
   const voices = new Map(system.map((voice) => [voice.id, voice]));
   const seen = new Set<string>();

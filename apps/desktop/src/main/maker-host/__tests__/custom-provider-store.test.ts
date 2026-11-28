@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 /**
  * custom-provider-store —— 校验纯函数 + localDb CRUD（per-runtime，in-memory db 注入）+ 账号隔离。
  */
@@ -22,7 +25,7 @@ import {
   validateCustomProviderConfig,
 } from '../custom-provider-store.js';
 import { buildUserProvider, mergeDiscoveredRuntimeModels, parseModelsListResponse,
-  type CustomProviderConfig } from '@cindy/model-providers';
+  BUNDLED_CATALOG, type CustomProviderConfig } from '@cindy/model-providers';
 import { mapCodexAppServerModelsToCatalog } from '../codex-model-discovery.js';
 
 const CREATE_SQL = `
@@ -52,9 +55,9 @@ const valid: CustomProviderConfig = {
 let raw: Database.Database | null = null;
 let client: DbClient | null = null;
 
-function mountDb(): void {
-  const dbHandle = new Database(':memory:');
-  dbHandle.exec(CREATE_SQL);
+function mountDb(filename = ':memory:', initialize = true): void {
+  const dbHandle = new Database(filename);
+  if (initialize) dbHandle.exec(CREATE_SQL);
   raw = dbHandle;
   client = {
     query: async <T = unknown>(sql: string, params: unknown[] = []) =>
@@ -80,6 +83,37 @@ afterEach(() => {
 });
 
 describe('custom provider updates through the runtime database proxy', () => {
+  it('restores Token Rhythm configuration and explicit model overrides after closing and reopening SQLite', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'cindy-tokenrhythm-'));
+    const file = join(directory, 'fixture.db');
+    try {
+      mountDb(file);
+      const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'tokenrhythm')!;
+      const config: CustomProviderConfig = { id: 'tokenrhythm-fixture', name: 'Fake Key / Simulated Data', runtimes:
+        Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, {
+          ...runtime, catalogPresetId: preset.id, models: [
+            { id: 'account-model', name: 'User name', contextWindow: 8192, maxOutputTokens: 512, defaultEnabled: false },
+            { id: 'manual-model', name: 'Manual model' },
+          ],
+        }])) };
+      await createCustomProvider(config);
+      clearCurrentDbClient(client!);
+      raw!.close(); raw = null; client = null;
+      mountDb(file, false);
+      const restored = (await getCustomProvider(config.id))!;
+      expect(restored).toMatchObject(config);
+      const provider = buildUserProvider(restored, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry });
+      for (const agent of provider.agents) {
+        expect(provider.models[agent]![0]).toMatchObject({ id: 'account-model', contextWindow: 8192, maxOutput: 512, defaultEnabled: false });
+        expect(provider.models[agent]![1].id).toBe('manual-model');
+      }
+    } finally {
+      if (client) clearCurrentDbClient(client);
+      raw?.close(); raw = null; client = null;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   // Regression: account model/list -> storage normalization -> reload used to drop
   // Ultrafast. Exercise real CRUD/CAS and catalog projection, including revocation.
   it('persists native account speed discovery without granting another account or engine access', async () => {

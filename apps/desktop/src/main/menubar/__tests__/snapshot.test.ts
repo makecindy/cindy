@@ -529,3 +529,74 @@ it.each(['ready', 'no-windows', 'label-only'])('hides sharer identity across the
   // Projection must not overwrite the received name or lose it when privacy is turned off.
   expect(buildMenubarView(input([source]))).toEqual(visible);
 });
+
+// Unit: plugin engines may report custom percentage windows, currency balances, or both;
+// all forms must project cleanly into the menu bar panel, management rows, low-quota check,
+// and the shared mobile/desktop widget snapshot. Minimal failing input: balance-only plugin
+// falls through to fill=null and disappears from tubes/widgets.
+describe('plugin engine menubar and widget projection', () => {
+  it('renders custom window labels and balance facts for a plugin engine with windows + balance', () => {
+    const source: MenubarSubscriptionInput = {
+      kind: 'subscription',
+      id: 'acp-plugin:dsh:dsh',
+      providerId: 'acp-plugin:dsh:dsh',
+      family: 'plugin',
+      logoSvg: familyLogo('plugin'),
+      brand: 'DeepSeek Harness',
+      account: null,
+      plan: null,
+      windows: [
+        { kind: 'custom', label: 'Pro quota', usedPercent: 25, resetsAtMs: NOW + 2 * DAY, windowMinutes: 0 },
+        { kind: 'custom', label: 'Fast lane', usedPercent: 60, resetsAtMs: NOW + 3 * HOUR, windowMinutes: 0 },
+      ],
+      balances: [{ currency: 'CNY', amount: 42.5 }],
+      credits: null,
+      creditsUnlimited: false,
+      prepaidUsd: null,
+      updatedAtMs: NOW - 60_000,
+    };
+    const view = buildMenubarView(input([source]));
+    expect(view.sources[0]).toMatchObject({ id: source.id, name: 'DeepSeek Harness', value: '40', valueUnit: '%', fill: 0.4 });
+    expect(view.details[source.id]).toMatchObject({
+      title: 'DeepSeek Harness',
+      bigValue: '40',
+      bigUnit: '%',
+      action: { kind: 'new-task', providerId: source.providerId },
+    });
+    expect(view.details[source.id].legend.map((item) => item.label)).toEqual(['Pro quota 75%', 'Fast lane 40%']);
+    expect(view.details[source.id].facts).toContainEqual(expect.objectContaining({ value: '¥42.50' }));
+    const widget = buildUsageWidgetSnapshot(view, NOW, () => null);
+    expect(widget?.sources[0]).toMatchObject({ id: source.id, kind: 'subscription', name: 'DeepSeek Harness', monogram: 'D', value: '40', unit: '%', fill: 0.4 });
+  });
+
+  it('renders a balance-only plugin engine as a filled tube and keeps it in widgets and low-quota checks', () => {
+    const positive: MenubarSubscriptionInput = {
+      kind: 'subscription',
+      id: 'acp-plugin:gem:cli',
+      providerId: 'acp-plugin:gem:cli',
+      family: 'plugin',
+      logoSvg: familyLogo('plugin'),
+      brand: 'Gemini CLI',
+      account: null,
+      plan: null,
+      windows: [],
+      balances: [{ currency: 'USD', amount: 12.5 }],
+      credits: null,
+      creditsUnlimited: false,
+      prepaidUsd: null,
+      updatedAtMs: NOW - 60_000,
+    };
+    const view = buildMenubarView(input([positive]));
+    expect(view.sources[0]).toMatchObject({ id: positive.id, name: 'Gemini CLI', value: '$12.50', valueUnit: null, fill: 1, level: 'normal' });
+    expect(view.details[positive.id]).toMatchObject({ bigValue: '$12.50', bigUnit: null, rings: [{ fraction: 1, color: 'ink' }] });
+    expect(view.manage[0]).toMatchObject({ id: positive.id, value: '$12.50' });
+    expect(isLowOnEverything(input([positive]))).toBe(false);
+    const widget = buildUsageWidgetSnapshot(view, NOW, () => null);
+    expect(widget?.sources[0]).toMatchObject({ id: positive.id, kind: 'subscription', value: '$12.50', unit: null, fill: 1 });
+
+    const depleted: MenubarSubscriptionInput = { ...positive, balances: [{ currency: 'USD', amount: 0 }] };
+    const depletedView = buildMenubarView(input([depleted]));
+    expect(depletedView.sources[0]).toMatchObject({ value: '$0.00', fill: 0, level: 'error' });
+    expect(isLowOnEverything(input([depleted]))).toBe(true);
+  });
+});

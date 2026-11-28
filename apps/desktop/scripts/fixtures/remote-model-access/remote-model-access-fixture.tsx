@@ -4,6 +4,7 @@ import type { RemoteModelSelection } from '../../../src/shared/remoteModelAccess
 
 void mountPage({
   host: (ctx) => {
+    const fixedRange = ctx.case === 'fixed-range';
     const aliasCase = ctx.case.startsWith('alias-');
     const budgetCase = ctx.case.startsWith('budget');
     const claude = ctx.case === 'budget-claude';
@@ -16,7 +17,8 @@ void mountPage({
       ...(ctx.case === 'budget-new-model' ? [{ id: 'catalog-new-model-42', name: 'New model 42' }] : []),
     ];
     let budget = budgetCase ? { recommendedModel: recommended, rules: [{ id: 'premium', models: [limited], maxPercent: 30 }], basis: 'member-input-output-7d' as const, enabled: false } : null;
-    let models: RemoteModelSelection = ctx.case === 'alias-partial' ? ['gpt-6.1-sol'] : ctx.case === 'member' ? ['small'] : null;
+    const hasFixedSelection = fixedRange || ctx.case === 'member' || ctx.case === 'merged-pool';
+    let models: RemoteModelSelection = ctx.case === 'alias-partial' ? ['gpt-6.1-sol'] : hasFixedSelection ? ['small'] : null;
     return {
       providerShare: {
         onOwnedChanged: subscription('ownedShares'),
@@ -42,7 +44,7 @@ void mountPage({
               { id: 'chatgpt/gpt-6-astra', name: 'GPT-6-Astra' },
             ] : budgetCase ? catalog : [
               { id: 'small', name: 'Claude Haiku' },
-              { id: 'medium', name: 'Claude Sonnet' },
+              ...(!fixedRange ? [{ id: 'medium', name: 'Claude Sonnet' }] : []),
               { id: 'large', name: 'Claude Opus' },
             ],
           };

@@ -100,3 +100,20 @@ it('cannot invent an identity when initial enrollment is offline', async () => {
   await expect(ensureMobileAgentNetIdentity(options)).rejects.toMatchObject({ status: 0 });
   expect([...state.vault.values()].every(raw => !JSON.parse(raw).certificate)).toBe(true);
 });
+
+// 2026-11-23 removed-phone rejoin: removal revokes a certificate that is still unexpired, so the routine path never enrolls
+// again. 「重新加入」 must enroll at once with `rejoin: true`, store the new certificate, and never fall back to the revoked one.
+it('rejoins at once with an unexpired revoked certificate and never falls back to it', async () => {
+  issuedAt = Date.now() - 60_000;
+  const first = await ensureMobileAgentNetIdentity(options), revoked = first.api.certificate;
+  vi.mocked(fetch).mockClear();
+  expect(await ensureMobileAgentNetIdentity(options)).toBe(first);
+  expect(fetch).not.toHaveBeenCalled();
+  failure = new TypeError('Network request failed');
+  await expect(ensureMobileAgentNetIdentity({ ...options, rejoin: true })).rejects.toMatchObject({ status: 0 });
+  failure = null; issuedAt = Date.now();
+  const rejoined = await ensureMobileAgentNetIdentity({ ...options, rejoin: true });
+  expect(JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)![1]!.body))).toMatchObject({ deviceId: 'phone', rejoin: true });
+  expect(rejoined.api.certificate.issuedAt).toBeGreaterThan(revoked.issuedAt);
+  expect(JSON.parse([...state.vault.values()][0]).certificate).toEqual(rejoined.api.certificate);
+});

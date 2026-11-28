@@ -494,6 +494,11 @@ export function getSessionFor(sessionId: string): Promise<Session> {
   // to the wrong maker instance.
   const deviceId = getStickySessionDeviceId(sessionId);
   if (!deviceId) return sessionService.get(sessionId);
+  return getSessionOnDevice(sessionId, deviceId);
+}
+
+/** Read a navigation hint without changing the transport of any other caller. */
+export function getSessionOnDevice(sessionId: string, deviceId: string): Promise<Session> {
   return invokeRemote(deviceId, 'local-db:sessions:get', [sessionId]) as Promise<Session>;
 }
 
@@ -869,12 +874,13 @@ export function aroundMessagesByClientIdForDevice(
   sessionId: string,
   clientId: string,
   opts?: { radius?: number },
+  requireStructuredHistoryMiss = false,
 ): Promise<Message[]> {
-  return invokeRemote(deviceId, 'local-db:messages:around-client-id', [
-    sessionId,
-    clientId,
-    opts,
-  ]) as Promise<Message[]>;
+  const args = [sessionId, clientId, opts];
+  const channel = 'local-db:messages:around-client-id';
+  return (requireStructuredHistoryMiss
+    ? window.electronAPI.deviceLink.invoke(deviceId, channel, args, { requireStructuredHistoryMiss: true })
+    : invokeRemote(deviceId, channel, args)) as Promise<Message[]>;
 }
 
 // ─── /goal:device-link 远程路由 ────────────────────────────────────────────────

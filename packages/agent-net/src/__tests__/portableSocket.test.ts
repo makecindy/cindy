@@ -196,7 +196,7 @@ it.each(['initial failure', 'fresh directory', 'channel close'])('redials an onl
   const certificate = issueCertificate(root, { networkId: bootstrap.networkId, subject: bootstrap.ownerCertificate.subject, identity: remote, role: 'member' });
   const device: DeviceView = { certificate, name: 'Remote', online: true, remoteControlEnabled: true, capabilities: [] };
   const uplink = Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [device], delegations: [],
-    send() {}, presence() {}, onDatagram() {}, close() {} });
+    probeRelay: vi.fn(), send() {}, presence() {}, onDatagram() {}, close() {} });
   const remoteId = Buffer.from(remote.transportKey, 'base64url').toString('hex');
   const drops: Array<() => void> = [];
   const connect = vi.fn(async (): Promise<PeerChannel> => ({ remoteId, send() {}, onData() {}, onClose(callback) { drops.push(callback); },
@@ -213,6 +213,7 @@ it.each(['initial failure', 'fresh directory', 'channel close'])('redials an onl
     socket.send(JSON.stringify({ v: PROTOCOL_VERSION, kind: 'hello', payload: { deviceName: 'Local', platform: 'test', appVersion: '1', remoteControlEnabled: true, busy: false } }));
     await vi.advanceTimersByTimeAsync(0);
     expect(connect).toHaveBeenCalledOnce();
+    expect(uplink.probeRelay).toHaveBeenCalledTimes(failure === 'channel close' ? 0 : 1);
     if (failure === 'channel close') drops[0]();
     expect(socket.pathTo('b-remote')).toBeNull();
     if (failure === 'fresh directory') uplink.emit('directory');
@@ -821,6 +822,107 @@ it('reconnects the relay at once when the network changes during its backoff', a
 });
 
 /** 测试价值
+ * - 生产入口与可观察结果：`AgentNetSocket` 的中转重连。① 中转连接一连上就断（本机拒收它发来的一帧、中转马上关掉）时，重连间隔
+ *   照常翻倍（0.5、1、2 秒……），撑过 10 秒的连接断了才从 0.5 秒重来；② `restartRelay`（Desktop Main 的兜底）把还当作中转连接的
+ *   死连接关掉并重连，正在进行却一直没结果的连接尝试也不再挡着。对端连接不受影响。
+ * - Bug 依据：2026-11-25 一台 Mac 的中转连接被本机关掉后这一层没收到关闭、再没重连，4.5 小时后重启才恢复。修好以后同样的情况会
+ *   重连；原来每次连上都把间隔重置成 0.5 秒，若中转每次连上都发来同样一帧，就会每半秒连一次。
+ * - 现有覆盖缺口：「reconnects the relay at once …」只覆盖连接尝试失败时的退避，没有连上又马上断的；此前没有从外部让中转重连的入口。
+ * - 最小失败输入：三条连上即断的连接，再一条撑过 10 秒的；一条从不报关闭的连接与一次永不返回的连接尝试。
+ * - tier：unit，真实路由与证书，内存中转，假计时器。 */
+it('backs off a relay connection that keeps ending as it opens, and restarts a relay connection on request', async () => {
+  const local = generateIdentity('local');
+  const { bootstrap } = createPrivateNetwork('Relay restart', local);
+  const makeUplink = () => Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [], delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close: vi.fn() });
+  const uplinks = Array.from({ length: 6 }, makeUplink);
+  const connect = vi.fn();
+  for (const uplink of uplinks) connect.mockResolvedValueOnce(uplink);
+  connect.mockImplementationOnce(() => new Promise(() => {})).mockResolvedValue(makeUplink());
+  vi.useFakeTimers();
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local, connect },
+    userId: bootstrap.ownerCertificate.subject,
+    bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, close: async () => undefined,
+      connect: async () => { throw new Error('No peer dial needed'); } }) },
+  });
+  try {
+    // Ended as soon as each opened: 0.5 s, then 1 s, then 2 s.
+    for (const [index, delay] of [500, 1000, 2000].entries()) {
+      uplinks[index].emit('close', 1006, 'INVALID_CONTROL');
+      await vi.advanceTimersByTimeAsync(delay - 1);
+      expect(connect).toHaveBeenCalledTimes(index + 1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(connect).toHaveBeenCalledTimes(index + 2);
+    }
+    // One that lasted starts over at 0.5 s.
+    await vi.advanceTimersByTimeAsync(10_000);
+    uplinks[3].emit('close', 1006);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(connect).toHaveBeenCalledTimes(5);
+    expect(socket.relayConnected()).toBe(true);
+    // A relay connection whose close never arrives: the socket still counts it until told to restart.
+    await vi.advanceTimersByTimeAsync(10_000);
+    socket.restartRelay();
+    expect(uplinks[4].close).toHaveBeenCalledOnce();
+    expect(socket.relayConnected()).toBe(false);
+    // After the current backoff (1 s here, doubled when the 0.5 s reconnect was scheduled), as any other reconnect.
+    await vi.advanceTimersByTimeAsync(999);
+    expect(connect).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(connect).toHaveBeenCalledTimes(6);
+    // An attempt that never settles no longer holds the next one back.
+    await vi.advanceTimersByTimeAsync(10_000);
+    uplinks[5].emit('close', 1006);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(connect).toHaveBeenCalledTimes(7);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(connect).toHaveBeenCalledTimes(7);
+    socket.restartRelay();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connect).toHaveBeenCalledTimes(8);
+    expect(socket.relayConnected()).toBe(true);
+  } finally { vi.useRealTimers(); socket.close(); }
+});
+
+/** 生产入口：AgentNetSocket 收到中转 4409。仅使用 Agent-Net 时外层 socket 不关闭，
+ * 宿主仍须收到事件；仅在确认身份冲突后延长中转重连，换网不提前重连。
+ * 最小输入：同一设备身份接管前后各一次。tier：unit，内存中转、假时钟。 */
+it('reports relay replacement and backs off only after the host confirms the identity conflict', async () => {
+  const local = generateIdentity('local');
+  const { bootstrap } = createPrivateNetwork('Duplicate identity', local);
+  const makeUplink = () => Object.assign(new EventEmitter(), { kind: 'agent-net' as const, devices: [], delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close() {} });
+  const first = makeUplink(), second = makeUplink(), third = makeUplink();
+  const connect = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second).mockResolvedValueOnce(third);
+  const onRelayReplaced = vi.fn();
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local, connect },
+    userId: bootstrap.ownerCertificate.subject, onRelayReplaced,
+    bindings: { verifyCertificate, createTransport: async () => ({ id: 'local', dial: {}, close: async () => undefined,
+      connect: async () => { throw new Error('No peer dial needed'); } }) },
+  });
+  const closed = vi.fn();
+  socket.on('close', closed);
+  vi.useFakeTimers();
+  try {
+    first.emit('close', 4409);
+    expect(onRelayReplaced).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(connect).toHaveBeenCalledTimes(2);
+    socket.setDuplicateIdentityCooldown(true);
+    second.emit('close', 4409);
+    socket.networkChanged();
+    expect(onRelayReplaced).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(3_499);
+    expect(connect).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_501);
+    expect(connect).toHaveBeenCalledTimes(3);
+    expect(closed).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); socket.close(); }
+});
+
+/** 测试价值
  * - 生产入口与可观察结果：手机物理换网时的 `replaceRelayConnection`（DeviceLinkContext → notifyMobileAgentNetNetworkChanged）。
  *   旧的中转连接被关掉、马上连新的，传输层被告知换网（中转回来后再告知一次）；和对端的加密连接不关、照常可用。
  *   中转本来就断着、正有一次连接在进行时不另起一次。
@@ -967,6 +1069,68 @@ it('dials remembered UDP candidates before the relay finishes, suppresses false 
     rejectFailDial(new Error('NATIVE_CONNECT_TIMEOUT'));
     await vi.waitFor(() => expect(offlineEvents).toEqual(['d-offline', 'e-fail']));
   } finally {
+    socket.close();
+  }
+});
+
+/**
+ * 测试价值
+ * - 生产入口与可观察结果：`AgentNetSocket.openWithBindings` 经中转 1006 意外断开重连后通知 `transport.networkChanged()`，
+ *   并在 `onLocalPortChanged(newPort, reason)` 回调时同步更新 `discovery.updatePort`、`transport.dial.udp.port` 与 `onUdpRebound`。
+ * - Bug／规则依据：macOS 透明代理启停常触发中转 WS 1006 意外断线；此前重连后未触发 `networkChanged()`，且 UDP 换端口后
+ *   局域网/Bonjour 发现仍广播旧端口。
+ * - 现有覆盖缺口：已有测试未覆盖无显式 `networkChanged()` 时 1006 重连后的回调，也未覆盖 `onLocalPortChanged` → `discovery.updatePort`。
+ * - 最小失败输入：1) 首条中转连接以无原因 1006 断开并重连；2) 传输层回调 `onLocalPortChanged(54321, 'udp-blackhole')`。
+ * - tier：unit，内存中转与发现替身，假计时器。
+ */
+it('notifies transport on unexpected 1006 relay reconnect and syncs discovery port after UDP rebind', async () => {
+  const local = generateIdentity('local');
+  const { bootstrap } = createPrivateNetwork('Relay 1006 and rebind', local);
+  const makeUplink = () => Object.assign(new EventEmitter(), {
+    kind: 'agent-net' as const, devices: [], delegations: [],
+    send() {}, presence() {}, onDatagram() {}, close() {},
+  });
+  const first = makeUplink(), second = makeUplink(), third = makeUplink();
+  const connect = vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second).mockResolvedValueOnce(third);
+  const networkChanged = vi.fn();
+  const updatePort = vi.fn();
+  const onUdpRebound = vi.fn();
+  let emitPortChanged: TransportOptions['onLocalPortChanged'];
+  const dial = { udp: { address: '0.0.0.0', port: 41000 } };
+  vi.useFakeTimers();
+  const socket = await AgentNetSocket.openWithBindings({
+    client: { base: 'https://relay.example.test', rootPublicKey: bootstrap.rootPublicKey, certificate: bootstrap.ownerCertificate, identity: local, connect },
+    userId: bootstrap.ownerCertificate.subject,
+    onUdpRebound,
+    bindings: {
+      verifyCertificate,
+      createTransport: async (opts) => {
+        emitPortChanged = opts.onLocalPortChanged;
+        return { id: 'local', dial, networkChanged, close: async () => undefined, connect: async () => { throw new Error('unused'); } };
+      },
+      createDiscovery: () => ({ start() {}, updatePort, close() {} }),
+    },
+  });
+  try {
+    // Unexpected 1006 without local reason triggers networkChanged once relay reconnects.
+    first.emit('close', 1006);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(networkChanged).toHaveBeenCalledTimes(1);
+
+    // Local-reason close (e.g. INVALID_CONTROL) does not spuriously trigger networkChanged.
+    second.emit('close', 1006, 'INVALID_CONTROL');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connect).toHaveBeenCalledTimes(3);
+    expect(networkChanged).toHaveBeenCalledTimes(1);
+
+    // UDP port change updates dial, discovery beacons, and rebound callback.
+    emitPortChanged!(54321, 'udp-blackhole');
+    expect(dial.udp.port).toBe(54321);
+    expect(updatePort).toHaveBeenCalledWith(54321);
+    expect(onUdpRebound).toHaveBeenCalledWith('udp-blackhole');
+  } finally {
+    vi.useRealTimers();
     socket.close();
   }
 });
