@@ -528,7 +528,9 @@ export function createHandoffProvisioningService(ports: HandoffProvisioningPorts
       }
       entry.status = 'provisioning';
       const stillCurrent = () =>
-        ports.isOwnerTokenCurrent(ownerToken) && readOwnedEntry(sessionId) === entry;
+        ports.isOwnerTokenCurrent(ownerToken) &&
+        readOwnedEntry(sessionId) === entry &&
+        entry.status === 'provisioning';
       let lifecycle: Awaited<ReturnType<HandoffProvisioningPorts['readSessionLifecycle']>>;
       try {
         lifecycle = await ports.readSessionLifecycle(sessionId);
