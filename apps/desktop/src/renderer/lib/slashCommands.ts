@@ -58,6 +58,29 @@ export const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [
   100, 250, 500, 1_000, 2_000, 4_000, 8_000, 10_000, 10_000, 10_000, 10_000,
 ] as const;
 
+/** While an ACP `/` palette is open, refresh its session-specific command roster at this cadence. */
+export const ACP_SLASH_COMMAND_REFRESH_INTERVAL_MS = 5_000;
+
+/** Start one sequential refresh loop; the returned disposer prevents new reads after the palette closes. */
+export function refreshSlashCommandRosterWhileOpen(refresh: () => void | Promise<void>): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const run = () => {
+    if (stopped) return;
+    void Promise.resolve()
+      .then(() => stopped ? undefined : refresh())
+      .catch(() => undefined)
+      .finally(() => {
+        if (!stopped) timer = setTimeout(run, ACP_SLASH_COMMAND_REFRESH_INTERVAL_MS);
+      });
+  };
+  run();
+  return () => {
+    stopped = true;
+    if (timer !== undefined) clearTimeout(timer);
+  };
+}
+
 export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
   return command.kind === 'agent-skill'
     && (
@@ -475,6 +498,14 @@ export async function loadAllCommands(
      */
     skipAgentCommands?: boolean;
     /**
+     * Read the plugin engine's own `/…` list instead: the one it broadcast to **this session**
+     * (ACP `available_commands_update`, with descriptions; replaced whenever the engine
+     * re-broadcasts, so an empty broadcast empties the list). Plugin engines have no built-in
+     * Harness identity, so their command list is the engine's own, not a static whitelist.
+     * Needs `sessionId`; without a running session there is no list to ask for.
+     */
+    engineCommandKind?: 'acp';
+    /**
      * List the Skills the plugin engine on the listing computer expands (`maker:list-agent-skills` as
      * `acp`, maker-core `acp/skill-invocation.ts`), listed and sent by their human name. Computers
      * without that support return no Skills, as their engines would not expand them.
@@ -503,10 +534,16 @@ export async function loadAllCommands(
   const desktopP: Promise<CmdRes> = api.listDesktopCommands(
     deviceId ? { deviceId } : undefined,
   ).catch(() => ({ success: false }));
-  const builtinP: Promise<CmdRes> = opts?.skipAgentCommands ? Promise.resolve({ success: true, commands: [] }) : (
+  // 插件引擎的命令清单来自它自己的会话（ACP `available_commands_update`），与内置引擎的
+  // agent 级静态白名单是两路；没有在跑的会话就没有可问的清单，按无命令处理。
+  const commandAgentKind: AgentKind | 'acp' = opts?.engineCommandKind === 'acp' && opts?.sessionId
+    ? 'acp'
+    : agentKind;
+  const skipCommands = opts?.skipAgentCommands === true && commandAgentKind !== 'acp';
+  const builtinP: Promise<CmdRes> = skipCommands ? Promise.resolve({ success: true, commands: [] }) : (
     deviceId
       ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:list-agent-commands', [
-          agentKind,
+          commandAgentKind,
           ...(
             opts?.sessionId || opts?.allowManagedPiPackagePreview !== undefined
               ? [{
@@ -518,7 +555,7 @@ export async function loadAllCommands(
               : []
           ),
         ]) as Promise<CmdRes>)
-      : api.listAgentCommands(agentKind, {
+      : api.listAgentCommands(commandAgentKind, {
           ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
           ...(opts?.allowManagedPiPackagePreview !== undefined
             ? { allowManagedPiPackagePreview: opts.allowManagedPiPackagePreview }

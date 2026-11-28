@@ -856,6 +856,65 @@ describe('exec-server relay gate', () => {
   });
 });
 
+describe('remote ACP command state', () => {
+  // Regression for #11963: the proxy's AgentSessionHandle must expose both the
+  // initial host snapshot and later state updates; old hosts still mean no commands.
+  it('projects the remote engine roster from the initial and updated state', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const startedNames = ['start'];
+    const updatedNames = ['deploy'];
+    const create = (state: Record<string, unknown>) => createRemoteAgentHandle({
+      client: {} as RemoteAgentRunClient,
+      started: { id: 'acp-1', agentKind: 'acp', model: 'm', shadowDir: '', methods: [], state },
+      workspace,
+      mapEvent: mapClaudeHostedEvent,
+      recordApproval: () => {},
+      newId: () => 'request-id',
+      dispose: async () => {},
+    });
+    const controller = create({ pluginEngineCommandNames: startedNames });
+    expect(controller.handle.getPluginEngineCommandNames?.()).toEqual(startedNames);
+    controller.onState({ pluginEngineCommandNames: updatedNames });
+    expect(controller.handle.getPluginEngineCommandNames?.()).toEqual(updatedNames);
+    expect(create({}).handle.getPluginEngineCommandNames?.()).toEqual([]);
+  });
+
+  // The `/` panel reads the description-bearing list: entries without a usable
+  // name are dropped (not fatal to the whole list), a broadcast replaces the
+  // whole list, old hosts (no field) mean no commands, and non-ACP sessions
+  // expose no such getter at all.
+  it('projects the remote engine command list from the initial and updated state', () => {
+    const workspace = new ExecutorWorkspace({ workingDir: root });
+    const create = (state: Record<string, unknown>, agentKind: 'acp' | 'claude-code' = 'acp') => createRemoteAgentHandle({
+      client: {} as RemoteAgentRunClient,
+      started: { id: 'acp-1', agentKind, model: 'm', shadowDir: '', methods: [], state },
+      workspace,
+      mapEvent: mapClaudeHostedEvent,
+      recordApproval: () => {},
+      newId: () => 'request-id',
+      dispose: async () => {},
+    });
+    const controller = create({
+      pluginEngineCommands: [
+        { name: 'deploy', description: 'Ship the current branch' },
+        { description: 'no name' },
+        null,
+        'deploy',
+      ],
+    });
+    expect(controller.handle.getSessionCommands?.()).toEqual([
+      { kind: 'agent-builtin', name: 'deploy', description: 'Ship the current branch' },
+    ]);
+    // 引擎重播整份清单时整份替换 —— 空清单即清空，面板据此移除条目。
+    controller.onState({ pluginEngineCommands: [] });
+    expect(controller.handle.getSessionCommands?.()).toEqual([]);
+    // 旧运行端不发这一项：空清单，而不是报错。
+    expect(create({}).handle.getSessionCommands?.()).toEqual([]);
+    // 非 ACP 会话本来就没有会话级命令清单。
+    expect(create({}, 'claude-code').handle.getSessionCommands).toBeUndefined();
+  });
+});
+
 describe('wire payloads', () => {
   it('accepts imported files with relative paths and personal files in the new Skill and rule folders', () => {
     const payload = decodeOpenPayload({

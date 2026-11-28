@@ -43,6 +43,23 @@ Desktop 与 Node Host 的共同发送事务仅在本次实际路由与待切换�
 未收到信号时，原消息最多额外定时检查一次。每次派发仍须通过完整账号检查；
 已取消的消息和可能已送达但未确认的发送不走这条重试路径。不改变中继协议。
 
+ACP 会话命令状态（2026-11-22）：`t: 'state'` 可选追加 `pluginEngineCommandNames`，只在运行端句柄提供每会话
+命令名单（`getPluginEngineCommandNames`，当前为 ACP `available_commands_update` 广播的名字清单）时发送。它复用
+既有 `maker:remote-agent:v1` NDJSON 状态行，不新增 `op`、方法、能力协商、IPC allowlist 或 relay 解析。新控制端
+从 `started.state` 与后续状态行读取同一字段，由代理句柄的 `getPluginEngineCommandNames` 透出，供发送／steer 守卫
+（`defusePluginEngineWireEnvelope`）识别引擎自有命令；新控制端连旧运行端时字段缺省即空名单，旧控制端把未知
+状态键作为不透明状态忽略。host 仍仅在现有状态快照变化时发送（当前最长间隔 2 秒）；供应商组和自建中转透明
+转发原状态行，无需同步改动。回归覆盖 host 快照与 proxy 的初始／增量状态。
+
+ACP 会话命令面板清单（2026-11-26）：`t: 'state'` 可选追加 `pluginEngineCommands`，与上一段的名单同源 —— 同一份
+`available_commands_update` 广播、经代理句柄的 `getSessionCommands` 透出，但带描述且**整份替换**（引擎重播空清单
+即清空，控制端据此移除条目），供控制端 `/` 面板读取。形态为 `{ name, description }[]`；条数上限 128、单条描述
+截断到 280 字符（运行端 `projectSessionCommands` 投影时裁剪，超限部分不发送），name 不可用的条目在运行端丢弃。
+控制端只认「非空字符串 name」的条目，其余丢弃不让整份清单失效。仍不新增 `op`、方法、能力协商或 relay 解析：
+旧控制端把未知状态键忽略；新控制端连旧运行端时字段缺省即空清单；旧运行端照发 `pluginEngineCommandNames`，
+发送／steer 守卫不受影响。回归覆盖 host 快照（有 getter 才有该键、条数与描述长度上限）与 proxy 的初始／增量
+状态、缺字段降级（`hostLifecycle.test.ts`、`plumbing.test.ts`）。
+
 ## 托管请求的附件预算与保存（2026-11-17）
 
 `open.acceptsAttachmentPreservation?: true` 表示任务所在电脑能接收被请求预算移出的附件。

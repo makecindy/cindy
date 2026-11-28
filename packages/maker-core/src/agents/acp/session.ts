@@ -26,6 +26,7 @@ import { NotSupportedError, type Capabilities } from '../../types/capabilities.j
 import type { Effort, PermissionMode, UserContentBlock, UserMessage } from '../../types/common.js';
 import type { ContextUsageData } from '../../types/context-usage.js';
 import type { AgentEvent, InteractionRequest, InteractionResolver, UsageSnapshot } from '../../types/events.js';
+import type { AgentBuiltinCommand } from '../../types/palette.js';
 import { createAsyncQueue } from '../shared/async-queue.js';
 import { libraryNativeReadContext } from '../shared/library-native-read.js';
 import {
@@ -70,6 +71,7 @@ import {
   type AcpCindyError,
   asRecord,
   normalizeAvailableCommandNames,
+  normalizeAvailableCommands,
   normalizeConfigOptions,
   normalizeInitializeResult,
   normalizePermissionOptions,
@@ -693,6 +695,14 @@ export class AcpSession {
   private readRoleBriefing: OpenAcpSessionOptions['readRoleBriefing'];
   /** Slash-command names advertised by Skills or `available_commands_update`. */
   private readonly commandNames = new Set<string>();
+  /**
+   * The engine's last `available_commands_update` (name + description), replaced
+   * wholesale: the engine re-broadcasts the whole list after it adds or removes
+   * commands, and an empty list clears it. `commandNames` above only grows
+   * because the send/steer guard must keep accepting what was advertised once;
+   * the composer shows what the engine advertises *now*.
+   */
+  private availableCommands: AgentBuiltinCommand[] = [];
   private sendChain: Promise<void> = Promise.resolve();
   private stopGeneration = 0;
   private readonly interactionControllers = new Set<AbortController>();
@@ -807,6 +817,15 @@ export class AcpSession {
   /** Names the ACP endpoint advertised after session creation. */
   getPluginEngineCommandNames(): readonly string[] {
     return [...this.commandNames];
+  }
+
+  /**
+   * AgentSessionHandle: the `/…` list this session's engine advertised through
+   * `available_commands_update`, with descriptions. Empty until the engine
+   * broadcasts one and empty again after it broadcasts an empty list.
+   */
+  getSessionCommands(): AgentBuiltinCommand[] {
+    return this.availableCommands;
   }
 
   get capabilities(): Capabilities {
@@ -1316,6 +1335,8 @@ export class AcpSession {
         for (const name of normalizeAvailableCommandNames(update.availableCommands)) {
           this.commandNames.add(name.toLowerCase());
         }
+        // The composer list is the engine's latest word: replaced, not appended.
+        this.availableCommands = normalizeAvailableCommands(update.availableCommands);
         return;
       default:
         if (STATE_UPDATES.has(update.sessionUpdate)) return;

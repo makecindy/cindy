@@ -64,6 +64,7 @@ import {
   isTurnWatchdogLivenessEvent,
 } from './types/events.js';
 import type { ContextUsageData } from './types/context-usage.js';
+import type { AgentBuiltinCommand } from './types/palette.js';
 import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
 import type {
   AgentMcpServerToolsReport,
@@ -578,6 +579,14 @@ export class Session {
   /** ACP-only command names used when sanitizing host-added wire notes. */
   getPluginEngineCommandNames(): readonly string[] {
     return this.handle.getPluginEngineCommandNames?.() ?? [];
+  }
+
+  /**
+   * ACP-only: the engine's latest advertised `/…` list (name + description),
+   * for the composer. Empty for engines that advertise none.
+   */
+  getEngineCommands(): AgentBuiltinCommand[] {
+    return this.handle.getSessionCommands?.() ?? [];
   }
   /** 见 SessionOptions.remoteHostId。 */
   readonly remoteHostId: string | null;

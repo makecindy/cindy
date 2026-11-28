@@ -1814,6 +1814,15 @@ export class Maker {
   }
 
   /**
+   * Live session 里引擎自己广播的 `/…` 命令（插件 ACP 引擎的
+   * `available_commands_update`，带描述，整份替换）。会话没在跑、或引擎没
+   * 广播过，就是空数组。
+   */
+  getSessionCommands(sessionId: string): AgentBuiltinCommand[] {
+    return this.activeSessions.get(sessionId)?.getEngineCommands() ?? [];
+  }
+
+  /**
    * Agent 用户/项目目录扫出的 skill (palette 'agent-skill' 类目) —— 异步, 有 IO。
    * `acp`：插件引擎任务的 `/` 菜单，与引擎展开 `/<skill>` 同一份清单（AcpAgent.listAgentSkills）。
    */

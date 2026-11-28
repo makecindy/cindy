@@ -1941,7 +1941,7 @@ function CCAgentSessionContent({
     // 会把被控端 skill/builtin 影子掉的 /clear、/help 等误判成 desktop 命令、在控制端执行。
     // 本机会话 remoteDeviceId=undefined → 行为不变。desktop 命令始终本地(见 loadAllCommands)。
     if (awaitingCreation) return;
-    // 插件引擎任务认 Cindy 的桌面命令与引擎能展开的技能；其余 `/…` 原样交给引擎(与输入框的命令列表同源)。
+    // 插件引擎任务认 Cindy 的桌面命令、引擎能展开的技能与引擎自己广播的 `/…`；其余 `/…` 原样交给引擎(与输入框的命令列表同源)。
     const pluginEngineCommands = isPluginEngineKind(session?.agentKind);
     loadAllCommands(
       agentKind,
@@ -1949,7 +1949,14 @@ function CCAgentSessionContent({
       {
         contextReady: !!session,
         skipAgentSkills: isRemoteSession || (pluginEngineCommands && !!session?.agentDeviceId),
-        ...(pluginEngineCommands ? { skipAgentCommands: true, pluginEngineSkills: true } : {}),
+        ...(pluginEngineCommands
+          ? {
+              skipAgentCommands: true,
+              pluginEngineSkills: true,
+              // 有在跑的会话时改列引擎自己广播的 `/…`（ACP available_commands_update）。
+              ...(session?.id ? { engineCommandKind: 'acp' as const } : {}),
+            }
+          : {}),
         sessionId: session?.id,
       },
       remoteDeviceId,
@@ -3440,7 +3447,14 @@ function CCAgentSessionContent({
         session?.workingDir,
         {
           skipAgentSkills: isRemoteSession || (pluginEngineCommands && !!session?.agentDeviceId),
-          ...(pluginEngineCommands ? { skipAgentCommands: true, pluginEngineSkills: true } : {}),
+          ...(pluginEngineCommands
+            ? {
+                skipAgentCommands: true,
+                pluginEngineSkills: true,
+                // 有在跑的会话时改列引擎自己广播的 `/…`（ACP available_commands_update）。
+                ...(session?.id ? { engineCommandKind: 'acp' as const } : {}),
+              }
+            : {}),
           sessionId: session?.id,
         },
         remoteDeviceId,

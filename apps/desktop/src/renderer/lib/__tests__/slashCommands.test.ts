@@ -105,6 +105,64 @@ describe('plugin engine Skills', () => {
   });
 });
 
+// #11963 / #12138: a plugin engine's own `/…` are the ones it broadcast to the running session
+// (ACP `available_commands_update`), with descriptions. 覆盖缺口：此前插件引擎任务直接跳过命令清单这一路，
+// 引擎广播的命令在 `/` 面板里一个都看不到。
+// 最小失败输入：插件引擎会话，引擎广播了一条带描述的命令（unit）。
+describe('plugin engine commands', () => {
+  const review = { kind: 'agent-builtin' as const, name: 'review', description: 'Review the current change' };
+
+  it("lists the commands the engine broadcast to the session, with their descriptions", async () => {
+    stubCommandLists({ success: true, skills: [] });
+    vi.mocked(window.electronAPI.maker.listAgentCommands).mockResolvedValue({ success: true, commands: [review] });
+
+    const commands = await loadAllCommands('claude-code', '/repo', {
+      skipAgentCommands: true, pluginEngineSkills: true, engineCommandKind: 'acp', sessionId: 'acp-task',
+    });
+
+    expect(vi.mocked(window.electronAPI.maker.listAgentCommands)).toHaveBeenCalledWith('acp', { sessionId: 'acp-task' });
+    expect(commands).toContainEqual(review);
+  });
+
+  it('lists no engine command after the engine re-broadcasts an empty list', async () => {
+    stubCommandLists({ success: true, skills: [] });
+    vi.mocked(window.electronAPI.maker.listAgentCommands).mockResolvedValue({ success: true, commands: [review] });
+    const opts = { skipAgentCommands: true, pluginEngineSkills: true, engineCommandKind: 'acp' as const, sessionId: 'acp-task' };
+    expect(await loadAllCommands('claude-code', '/repo', opts)).toContainEqual(review);
+
+    // The next read of the same open palette sees the engine's latest broadcast.
+    vi.mocked(window.electronAPI.maker.listAgentCommands).mockResolvedValue({ success: true, commands: [] });
+    const afterClear = await loadAllCommands('claude-code', '/repo', { ...opts, forceReload: true });
+    expect(afterClear.some((command) => command.kind === 'agent-builtin')).toBe(false);
+  });
+
+  it('reads the engine list from the task computer for a Device Link session', async () => {
+    stubCommandLists({ success: true, skills: [] });
+    const invoke = vi.fn(async (_device: string, channel: string) => (channel === 'maker:list-agent-commands'
+      ? { success: true, commands: [review] }
+      : { success: true, skills: [] }));
+    Object.assign(window.electronAPI, { deviceLink: { invoke } });
+
+    const commands = await loadAllCommands('claude-code', '/project', {
+      skipAgentCommands: true, pluginEngineSkills: true, engineCommandKind: 'acp', sessionId: 'acp-task',
+    }, 'task-computer');
+
+    expect(invoke).toHaveBeenCalledWith('task-computer', 'maker:list-agent-commands', ['acp', { sessionId: 'acp-task' }]);
+    expect(commands).toContainEqual(review);
+  });
+
+  it('does not ask for engine commands while the task has no session yet', async () => {
+    stubCommandLists({ success: true, skills: [] });
+
+    const commands = await loadAllCommands('claude-code', '/repo', {
+      skipAgentCommands: true, pluginEngineSkills: true, engineCommandKind: 'acp',
+    });
+
+    expect(vi.mocked(window.electronAPI.maker.listAgentCommands)).not.toHaveBeenCalled();
+    expect(commands.some((command) => command.kind === 'agent-builtin')).toBe(false);
+  });
+});
+
 // Unit: the creator's click-time name is not its final invocation identity.
 // Resolve through the production IPC catalog after engine/task-computer changes.
 describe('routed built-in draft dispatch', () => {
