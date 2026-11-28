@@ -1149,7 +1149,7 @@
     "permissionMissing": "未許可",
     "openPermissionSettings": "権限を許可",
     "recheckPermissions": "再確認",
-    "permissionActionFailed": "権限ガイドを開けませんでした。コンピューターのリモート操作設定で再試行してください。",
+    "permissionActionFailed": "権限ガイドを開けませんでした。コンピューターの「設定 → リモート接続」で再試行してください。",
     "permissionCheckFailed": "権限を確認できません。コンピューターがオンラインか確認して再試行してください。",
     "openGuideOnComputer": "コンピューターでガイドを開く",
     "permissionGuideOpened": "コンピューターに権限ガイドを表示しました。そちらで続けてください。",
@@ -3154,7 +3154,8 @@
           "gatewayKey": "AI ゲートウェイが選択したリアルタイム ASR ルートに対応している必要があります",
           "codexLogin": "Codex ログインを使用",
           "elevenlabsKey": "ElevenLabs キーを使用（環境変数）",
-          "codexRealtimeUnsupported": "利用不可：Codex ログインは OpenAI API Realtime の認証情報ではありません"
+          "codexRealtimeUnsupported": "利用不可：Codex ログインは OpenAI API Realtime の認証情報ではありません",
+          "localOffline": "このデバイスでオフライン実行（アカウント・API キー不要）"
         },
         "credentialError": {
           "gatewayMissing": "利用可能な AI ゲートウェイキーが見つからないため、このモデルは使用できません。",
@@ -3162,10 +3163,24 @@
           "elevenlabsMissing": "ElevenLabs キー（環境変数）が未設定のため、このモデルは使用できません。",
           "customAsrConfigMissing": "音声入力を開始する前に、リアルタイム ASR サービスの設定をすべて入力して保存してください。",
           "customAsrKeyMissing": "カスタムリアルタイム ASR サービスの API キーを入力して保存してください。",
-          "codexRealtimeUnsupported": "Codex ログインはリアルタイム音声認識には使用できません。対応する ASR サービスを選択してください。"
+          "codexRealtimeUnsupported": "Codex ログインはリアルタイム音声認識には使用できません。対応する ASR サービスを選択してください。",
+          "localAsrModelMissing": "オフライン音声入力を開始する前に、ローカルの sherpa-onnx ASR モデルフォルダを選択してください。",
+          "localAsrUnsupported": "このコンピューターのアーキテクチャではローカルオフライン音声認識はサポートされていません。"
         },
         "manageProviders": "モデルプロバイダーを開く",
-        "reset": "既定に戻す"
+        "reset": "既定に戻す",
+        "localAsr": {
+          "optionLabel": "ローカルオフライン認識（sherpa-onnx）",
+          "optionDescription": "端末内 ONNX 認識。アカウントや API キーなしで完全オフライン動作",
+          "notice": "ローカルの sherpa-onnx オフラインモデルフォルダ（tokens.txt と .onnx を含む SenseVoice / Paraformer / Whisper / Transducer）を選択してください。音声はこのコンピューターから送信されません。",
+          "modelDirLabel": "ローカルモデルフォルダ",
+          "readyStatus": "準備完了 · {{kind}}（{{folder}}）",
+          "unsupportedStatus": "このプラットフォームでは非対応です",
+          "notConfiguredStatus": "モデルフォルダが未選択です",
+          "clearFolder": "クリア",
+          "chooseFolder": "モデルフォルダを選択",
+          "invalidFolder": "選択したフォルダにサポート対象の sherpa-onnx モデル（tokens.txt および .onnx ファイル）が見つかりません。"
+        }
       },
       "historyToggle": {
         "show": "履歴を表示",
@@ -3313,7 +3328,9 @@
           "filters": {
             "all": "すべて",
             "automatic": "自動追加",
-            "manual": "手動追加"
+            "manual": "手動追加",
+            "candidates": "候補",
+            "suppressed": "除外済み"
           },
           "sources": {
             "automatic": "自動",
@@ -3326,6 +3343,28 @@
             "automaticAddedMultiple": "辞書に自動追加しました：{{term}} ほか {{count}} 件",
             "delete": "削除",
             "deleteAriaLabel": "自動追加された語を削除：{{term}}"
+          },
+          "export": {
+            "csv": "CSV 書き出し",
+            "json": "JSON 書き出し",
+            "successCsv": "辞書を CSV で書き出しました",
+            "successJson": "辞書を JSON で書き出しました"
+          },
+          "candidates": {
+            "hint": "手動修正から検出され、まだ自動追加されていない候補語です。今すぐ辞書へ昇格するか削除できます。",
+            "evidenceCount": "検出 {{count}} 回",
+            "promote": "辞書に追加",
+            "promoteTooltip": "この候補をすぐに辞書へ追加します",
+            "promotedToast": "「{{term}}」を辞書に追加しました",
+            "empty": "候補語はまだありません。"
+          },
+          "suppressed": {
+            "hint": "削除された自動学習語は再追加されないよう除外されています。学習対象へ戻すか、辞書へ再追加できます。",
+            "restore": "学習を許可",
+            "addToDictionary": "辞書に戻す",
+            "restoredToast": "「{{term}}」の自動学習を再許可しました",
+            "addedToast": "「{{term}}」を辞書に戻しました",
+            "empty": "除外済みの用語はありません。"
           }
         }
       },
@@ -3370,7 +3409,15 @@
         "toast": {
           "copied": "コピーしました",
           "copyFailed": "コピーに失敗しました"
-        }
+        },
+        "searchAriaLabel": "音声履歴を検索",
+        "searchPlaceholder": "文字起こしや生の認識結果を検索…",
+        "showRawComparison": "生テキストと比較",
+        "hideRawComparison": "比較を閉じる",
+        "rawLabel": "元の認識",
+        "refinedLabel": "整形後",
+        "loadMore": "さらに表示（残り {{count}} 件）",
+        "noSearchResults": "一致する音声履歴はありません。"
       },
       "speakerFilter": {
         "label": "自分の声を認識",
@@ -4260,6 +4307,7 @@
           "supported": "対応",
           "unsupported": "非対応",
           "undeclared": "宣言なし",
+          "ultrafastDeclaredUnavailable": "プロバイダーは対応を宣言済み。この Codex 接続では利用不可",
           "pricing": "料金",
           "pricingLabel": "料金",
           "noPricing": "このルートの料金データがありません",
@@ -4864,68 +4912,7 @@
         "hint": "連携済みの Feishu または Lark ボットを通じて DM を送信します。ウィンドウが非アクティブなときのみ送信されます。",
         "disabledHint": "先に Bot を設定し、DM を 1 回送信して連携を完了してください。"
       },
-      "bind": "連携",
-      "groups": {
-        "title": "グループチャット",
-        "description": "ボットが参加しているグループごとに、プロジェクト・モデル・権限を個別に指定できます。",
-        "rules": "指定しない項目は、プロジェクトを設定したグループなら「プロジェクトとモデル」のそのプロジェクトに、設定していないグループなら上の「新規会話設定」と「グループで新規タスクを作成するときの権限モード」に従います。グループのメインとトピックは同じグループの設定を共有します。",
-        "expand": "展開",
-        "collapse": "折りたたむ",
-        "groupCount_one": "{{count}} 件のグループ",
-        "groupCount_other": "{{count}} 件のグループ",
-        "customCount_one": "{{count}} 件を個別に設定",
-        "customCount_other": "{{count}} 件を個別に設定",
-        "refresh": "再読み込み",
-        "loading": "グループを読み込んでいます…",
-        "loadFailed": "グループを読み込めませんでした。少し待ってから「再読み込み」でやり直してください。",
-        "saveFailed": "グループ設定を保存できませんでした",
-        "notConnected": "ボットが接続されるとグループが表示されます。下には個別に設定したグループだけを表示しています。",
-        "empty": "ボットはまだどのグループにも参加していません。グループに追加してから、ここで設定してください。",
-        "listPermission": "ボットが参加しているグループを読み取れません。Feishu Open Platform でこのアプリにグループ情報の取得権限を付与してください。下にはボットを使ったことのあるグループを表示しています。",
-        "listUnavailable": "今はボットが参加しているグループを読み取れません。下にはボットを使ったことのあるグループを表示しています。",
-        "unnamed": "名前のないグループ（{{id}}）",
-        "summaryModel": "モデルを個別に設定",
-        "summaryPermission": "権限を個別に設定",
-        "expandAria": "「{{name}}」の設定",
-        "searchLabel": "グループを検索",
-        "searchPlaceholder": "グループ名で検索",
-        "customHeading": "個別に設定",
-        "followHeading": "チャネル設定に従う",
-        "showMore": "さらに {{count}} 件表示",
-        "showLess": "折りたたむ",
-        "noMatch": "「{{query}}」を含むグループはありません",
-        "project": {
-          "label": "プロジェクト",
-          "follow": "会話",
-          "missing": "{{name}}（サイドバーにありません）",
-          "hint": "グループで初めてボットを @ したとき、新しいトピックを始めたとき、または /new を送ったときに反映されます。進行中のタスクは移動しません。プロジェクトを選ぶとモデルと権限は「プロジェクトとモデル」のそのプロジェクトに従い、「会話」を選ぶとタスクはボットの会話フォルダに置かれ、上の「新規会話設定」に従います。選べるのはサイドバーにあるこのコンピュータのプロジェクトだけです。"
-        },
-        "model": {
-          "label": "モデルと推論強度",
-          "hintFollow": "「新規会話設定」に従っています。ここでモデルや推論強度を変えると、このグループだけに反映されます。",
-          "hintFollowProject": "「プロジェクトとモデル」のプロジェクト「{{project}}」に従っています。ここでモデルや推論強度を変えると、このグループだけに反映されます。",
-          "hintProjectUnavailable": "「プロジェクトとモデル」で「{{project}}」に設定されたモデルは現在使えません。そちらで選び直すか、ここでこのグループ用に選んでください。",
-          "hintFixed": "このグループにはモデルを個別に設定しています。モデルを個別に変えていないタスクは次のメッセージで切り替わり、新しいタスクはこのモデルを使います。"
-        },
-        "permission": {
-          "label": "権限",
-          "hintFollow": "現在は「グループで新規タスクを作成するときの権限モード」に従っています。今後このグループで作成するタスクにだけ反映され、既存のタスクはグループで /permission を使って切り替えます。",
-          "hintFollowProject": "現在は「プロジェクトとモデル」の「{{project}}」の権限に従っています。今後このグループで作成するタスクにだけ反映され、既存のタスクはグループで /permission を使って切り替えます。",
-          "hintFixed": "このグループには個別の権限を設定しています。今後このグループで作成するタスクにだけ反映され、既存のタスクはグループで /permission を使って切り替えます。"
-        },
-        "fullAccessConfirm": {
-          "title": "「{{name}}」をフルアクセスで実行しますか？",
-          "description": "このグループで今後作成されるタスクは、誰がボットを @ しても手順ごとの確認なしで実行されます。グループのメッセージはメンバーが書き込めるため、全員を信頼できる場合だけ選んでください。",
-          "confirm": "フルアクセスにする",
-          "cancel": "キャンセル"
-        },
-        "widerConfirm": {
-          "title": "「{{name}}」の権限を広げますか？",
-          "description": "このグループで今後作成されるタスクは、誰がボットを @ しても「{{current}}」から「{{next}}」に変わります。グループのメッセージはメンバーが書き込めるため、全員を信頼できる場合だけ変更してください。",
-          "confirm": "このまま変更",
-          "cancel": "キャンセル"
-        }
-      }
+      "bind": "連携"
     },
     "wechatBot": {
       "title": "個人 WeChat",
@@ -7394,7 +7381,7 @@
     "tina": {
       "chat": {
         "title": "会話",
-        "description": "リポジトリに紐づかない会話です。Slack・Telegram・X・Feishu / Lark で「chat」を選ぶと利用でき、会話 lane ごとに 1 つのセッションが対応します。"
+        "description": "プロジェクトフォルダに紐づかない通常の会話です。チャットアプリでプロジェクトを指定しない場合に使われます。"
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7525,7 +7512,8 @@
       "groups": {
         "cindy": "公式",
         "personal": "個人",
-        "plugins": "プラグイン"
+        "plugins": "プラグイン",
+        "shared": "共通設定"
       },
       "tips": {
         "cindy": "Cindy が提供・管理します。自分でボットを作成したり認証情報を用意したりする必要はなく、案内に沿って接続するだけで利用できます。",
@@ -7566,6 +7554,190 @@
       "plugins": {
         "rowHint": "ログイン、連携、チャットごとの設定はプラグインのページにあります。",
         "open": "プラグインを開く"
+      },
+      "replyTarget": {
+        "label": "返信する相手",
+        "cindy": "通常のタスク",
+        "cindyHint": "サイドバーのタスクとして下のプロジェクトとモデルで処理します。バディに任せて記憶や設定を使うこともできます。",
+        "companionHint": "DM は {{name}} との会話に入り、グループは {{name}} が個別に処理します。モデル・権限・記憶は {{name}} に従います。",
+        "openCompanion": "{{name}} の設定",
+        "summary": "{{name}} が返信",
+        "missingCompanion": "利用できない仲間",
+        "busy": "このボットには待機中のメッセージか実行中のタスクがあります。終わってから切り替えてください。",
+        "updateFailed": "切り替えられませんでした。仲間が利用可能か確認して、もう一度お試しください。",
+        "companionSettingsHint": "モデル、権限、記憶"
+      },
+      "nav": {
+        "back": "戻る",
+        "backTo": "{{page}} に戻る"
+      },
+      "pageDescription": "WeChat、Feishu、Telegram などのチャットアプリから Cindy や仲間にメッセージを送れます。",
+      "list": {
+        "connected": "接続済み",
+        "available": "ほかに接続できるアプリ",
+        "choose": "チャットアプリを選ぶ",
+        "cindyReplies": "通常のタスク",
+        "official": "公式ボット：{{status}}",
+        "projects": "プロジェクトとモデル",
+        "projectsHint": "チャットアプリやプラグインがプロジェクトでタスクを始めるときの、プロジェクトごとのモデルと権限",
+        "hint": {
+          "both": "公式ボット、または自分で作ったボット",
+          "slack": "Cindy 公式ボットを使います。Slack にサインインするだけ",
+          "x": "Cindy 公式アカウントを使います。承認すると X で返信します",
+          "wechat": "QR コードで個人の WeChat を接続",
+          "personal": "自分で作ったボットを使います"
+        },
+        "companionDedicated": "バディ専用: {{names}}"
+      },
+      "apps": {
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "x": "X",
+        "wechat": "WeChat",
+        "feishu": "Feishu / Lark",
+        "wecom": "WeCom",
+        "dingtalk": "DingTalk"
+      },
+      "ways": {
+        "official": "Cindy 公式ボット",
+        "personal": "自分のボット",
+        "personalHint": "プラットフォームで自分で作ったボット。名前とアイコンは自由に決められます。",
+        "personalSetupTitle": "自分のボットを使う",
+        "setUp": "設定",
+        "personalSetupHint": {
+          "telegram": "BotFather でボットを作り、トークンと自分のユーザー ID を入力します。",
+          "discord": "Discord Developer Portal でボットを作り、トークンを入力します。",
+          "feishu": "Feishu または Lark のオープンプラットフォームでアプリを作り、App ID と App Secret を入力します。"
+        },
+        "officialHint": "アプリ作成は不要で、Cindy アカウントに直接連携できます。"
+      },
+      "rows": {
+        "model": "モデル",
+        "groupReply": "グループで返信するタイミング",
+        "persona": "名前と性格",
+        "behavior": "リアクションと引用",
+        "receiveHere": "このパソコンでメッセージを受け取る",
+        "receiveHereHint": "オフにするとこのパソコンでボットがオフラインになります。認証情報は残るので、いつでもオンに戻せます。",
+        "unbind": "このボットの連携を解除",
+        "ownerId": "自分のユーザー ID {{id}}",
+        "discordChannels": "サーバーのチャンネル",
+        "discordChannelsHint": "ボットが動けるサーバーのチャンネル",
+        "notifications": "通知",
+        "on": "オン",
+        "off": "オフ",
+        "project": "プロジェクト",
+        "projectDialogue": "会話（プロジェクトなし）",
+        "projectMissing": "サイドバーにないプロジェクト",
+        "projectHint": "新しいタスクはこのプロジェクトに入り、「プロジェクトとモデル」の設定（モデルと権限）に従います。",
+        "projectDialogueHint": "新しいタスクはボット自身の会話フォルダに入り、下のモデルを使います。",
+        "officialProjectHint": "新しいタスクはこのプロジェクトに入り、「プロジェクトとモデル」のモデルと権限を使います。Cindy 公式ボットすべてで共通です。",
+        "officialProjectDialogueHint": "新しいタスクは会話フォルダに置かれ、「プロジェクトとモデル」の「会話」の行の設定を使います。Cindy 公式ボットすべてで共通です。",
+        "projectFullAccessTitle": "「{{name}}」の権限を使いますか？",
+        "projectFullAccessDescription": "「{{name}}」は「プロジェクトとモデル」でフルアクセスです。今後 {{app}} で作られるタスクは、ステップごとの確認なしで実行されます。先に「プロジェクトとモデル」で Auto か Ask に変更できます。",
+        "projectFullAccessConfirm": "このまま使う",
+        "projectFullAccessCancel": "キャンセル",
+        "projectUpdateFailed": "プロジェクトを切り替えられませんでした。サイドバーにあるか確認して、もう一度お試しください。",
+        "chats": "グループチャット",
+        "channels": "チャンネル",
+        "projectModel": "モデルと権限",
+        "projectModelHint": "「プロジェクトとモデル」でまとめて管理",
+        "projectModelFollow": "「{{name}}」に従う",
+        "groupReplyHint": "グループでメンション時のみ返信するか、すべてに返信するかを設定します"
+      },
+      "chats": {
+        "title": "グループチャット",
+        "description": "ボットが参加しているグループごとに、プロジェクト・モデル・権限と、ほかのメンバーが質問できるかを個別に指定できます。",
+        "rules": "指定しない項目は、プロジェクトを設定したグループなら「プロジェクトとモデル」のそのプロジェクトに、設定していないグループならボットの「プロジェクト」に従います。ボットにもプロジェクトがなければ、ボットのモデル設定に従います。グループのメインとトピックは同じグループの設定を共有します。",
+        "expand": "展開",
+        "collapse": "折りたたむ",
+        "groupCount_one": "{{count}} 件のグループ",
+        "groupCount_other": "{{count}} 件のグループ",
+        "customCount_one": "{{count}} 件を個別に設定",
+        "customCount_other": "{{count}} 件を個別に設定",
+        "refresh": "再読み込み",
+        "loading": "グループを読み込んでいます…",
+        "loadFailed": "グループを読み込めませんでした。少し待ってから「再読み込み」でやり直してください。",
+        "saveFailed": "グループ設定を保存できませんでした",
+        "notConnected": "ボットが接続されるとグループが表示されます。下には個別に設定したグループだけを表示しています。",
+        "empty": "ボットはまだどのグループにも参加していません。グループに追加してから、ここで設定してください。",
+        "listPermission": "ボットが参加しているグループを読み取れません。Feishu Open Platform でこのアプリにグループ情報の取得権限を付与してください。下にはボットを使ったことのあるグループを表示しています。",
+        "listUnavailable": "今はボットが参加しているグループを読み取れません。下にはボットを使ったことのあるグループを表示しています。",
+        "unnamed": "名前のないグループ（{{id}}）",
+        "summaryModel": "モデルを個別に設定",
+        "summaryPermission": "権限を個別に設定",
+        "expandAria": "「{{name}}」の設定",
+        "searchLabel": "グループを検索",
+        "searchPlaceholder": "グループ名で検索",
+        "customHeading": "個別に設定",
+        "followHeading": "チャネル設定に従う",
+        "showMore": "さらに {{count}} 件表示",
+        "showLess": "折りたたむ",
+        "noMatch": "「{{query}}」を含むグループはありません",
+        "project": {
+          "label": "プロジェクト",
+          "follow": "ボットに従う",
+          "missing": "{{name}}（サイドバーにありません）",
+          "hint": "グループで初めてボットを @ したとき、新しいトピックを始めたとき、または /new を送ったときに反映されます。進行中のタスクは移動しません。プロジェクトを選ぶとモデルと権限は「プロジェクトとモデル」のそのプロジェクトに従い、「ボットに従う」を選ぶとボットの「プロジェクト」に従います。ボットにプロジェクトがなければ、ボットの会話フォルダとモデル設定を使います。選べるのはサイドバーにあるこのコンピュータのプロジェクトだけです。",
+          "followWith": "ボットに従う（{{project}}）"
+        },
+        "model": {
+          "label": "モデルと推論強度",
+          "hintFollow": "「新規会話設定」に従っています。ここでモデルや推論強度を変えると、このグループだけに反映されます。",
+          "hintFollowProject": "「プロジェクトとモデル」のプロジェクト「{{project}}」に従っています。ここでモデルや推論強度を変えると、このグループだけに反映されます。",
+          "hintProjectUnavailable": "「プロジェクトとモデル」で「{{project}}」に設定されたモデルは現在使えません。そちらで選び直すか、ここでこのグループ用に選んでください。",
+          "hintFixed": "このグループにはモデルを個別に設定しています。モデルを個別に変えていないタスクは次のメッセージで切り替わり、新しいタスクはこのモデルを使います。",
+          "reset": "モデルを既定に戻す"
+        },
+        "permission": {
+          "label": "権限",
+          "hintFollow": "現在は「グループで新規タスクを作成するときの権限モード」に従っています。今後このグループで作成するタスクにだけ反映され、既存のタスクはグループで /permission を使って切り替えます。",
+          "hintFollowProject": "現在は「プロジェクトとモデル」の「{{project}}」の権限に従っています。今後このグループで作成するタスクにだけ反映され、既存のタスクはグループで /permission を使って切り替えます。",
+          "hintFixed": "このグループには個別の権限を設定しています。今後このグループで作成するタスクにだけ反映され、既存のタスクはグループで /permission を使って切り替えます。",
+          "hintFollowBot": "現在はボット自身の権限に従っています。今後このグループで作成するタスクにだけ反映され、既存のタスクはグループで /permission を使って切り替えます。",
+          "followWith": "従う · {{mode}}"
+        },
+        "fullAccessConfirm": {
+          "title": "「{{name}}」をフルアクセスで実行しますか？",
+          "description": "このグループで今後作成されるタスクは、誰がボットを @ しても手順ごとの確認なしで実行されます。グループのメッセージはメンバーが書き込めるため、全員を信頼できる場合だけ選んでください。",
+          "confirm": "フルアクセスにする",
+          "cancel": "キャンセル"
+        },
+        "widerConfirm": {
+          "title": "「{{name}}」の権限を広げますか？",
+          "description": "このグループで今後作成されるタスクは、誰がボットを @ しても「{{current}}」から「{{next}}」に変わります。グループのメッセージはメンバーが書き込めるため、全員を信頼できる場合だけ変更してください。",
+          "confirm": "このまま変更",
+          "cancel": "キャンセル"
+        },
+        "descriptionChannels": "ボットが働くチャンネルごとに、プロジェクト・モデル・権限と、ほかのメンバーが質問できるかを個別に指定できます。",
+        "kindGroup": "グループ",
+        "kindChannel": "チャンネル",
+        "channelCount_one": "{{count}} 件のチャンネル",
+        "channelCount_other": "{{count}} 件のチャンネル",
+        "membersCount_one": "{{count}} 件でメンバーも質問可",
+        "membersCount_other": "{{count}} 件でメンバーも質問可",
+        "unnamedChannel": "名前のないチャンネル（{{id}}）",
+        "searchPlaceholderChannels": "チャンネル名で検索",
+        "emptyLocal": "まだ記録されたグループがありません。グループでボットを一度 @ すると、ここに表示されます。",
+        "emptyChannels": "まだ開いているチャンネルがありません。先に「サーバーのチャンネル」でボットが働くチャンネルをオンにしてください。",
+        "members": {
+          "label": "メンバーも質問できる",
+          "hint": "オンにすると、ほかのメンバーがボットを @ しても回答し、このグループのプロジェクトとモデルを使います。メンバーの質問は最大でも「自動レビュー」で実行され、操作には引き続きあなたの確認が必要です。あなた自身の質問はこのグループの権限に従います。",
+          "guard": "あなたがグループで発言していない間にメンバーが {{limit}} 回続けて質問すると一時停止し、あなたがグループでボットを @ するか「再開」を押すまで止まります。コマンドはあなただけが使えます。",
+          "paused": "メンバーへの回答を一時停止中：あなたが不在の間に {{limit}} 回続けて質問がありました。",
+          "resume": "再開",
+          "chip": "メンバーも質問可",
+          "pausedChip": "メンバー一時停止",
+          "resumeFailed": "再開できませんでした。後でもう一度お試しください。"
+        },
+        "statusCustom": "個別に設定",
+        "shownHint": "{{total}} 件中 {{shown}} 件を表示。名前を入力して絞り込めます。",
+        "fieldsNote": "プロジェクト・モデル・権限の変更は、このグループで次に新しいタスクを始めたときに反映され、進行中のタスクは移動しません。"
+      },
+      "companionBots": {
+        "title": "バディ専用ボット",
+        "description": "バディ設定で個別に構成されたボットです。アップデート後もそのまま動作します。",
+        "manage": "管理"
       }
     },
     "shortcuts": {
@@ -10874,12 +11046,14 @@
       "fileCount_other": "{{count}} ファイル",
       "emptyTitle": "変更はまだありません",
       "emptyDesc": "このセッションではまだファイルが編集されていません。Agent による変更がここに表示されます。",
+      "emptyDescSvn": "バージョン管理下のファイルは SVN の BASE リビジョンと一致しています。",
+      "svnSelectFile": "ファイルを選んで差分を表示します。",
       "emptyDescGit": "現在の git worktree には staged / unstaged の変更がありません。",
       "filterEmptyTitle": "このフィルターに変更はありません",
-      "filterEmptyDesc": "現在のフィルターまたは設定で表示できる git 変更はありません。",
+      "filterEmptyDesc": "現在のフィルターまたは設定で表示できる 変更はありません。",
       "noSessionTitle": "セッションがありません",
       "noSessionDesc": "ローカルセッションを選択すると git worktree の変更を確認できます。",
-      "loadingTitle": "git 変更を読み込み中",
+      "loadingTitle": "変更を読み込み中",
       "loadingDesc": "読み込みが完了するまで前回の内容を保持します。",
       "errorTitle": "変更の読み込みに失敗しました",
       "refresh": "更新",
@@ -11079,7 +11253,16 @@
         "leaseExpired": "確認後にリモートが再度変更されたため、プッシュを中止しました。更新してから再度確認してください。",
         "noRemote": "このリポジトリには git remote が設定されていないため、プッシュできません。",
         "failedTitle": "プッシュに失敗しました",
-        "successToast": "プッシュしました"
+        "successToast": "プッシュしました",
+        "divergedTitle": "リモートブランチに新しいコミットがあります",
+        "syncCleanDesc_other": "リモート {{remoteRef}} にローカル未反映のコミットが {{count}} 件ありますが、事前チェックでは競合なしです。履歴の上書きを避けるため、同期してからプッシュすることを推奨します。",
+        "divergedConflictDesc_other": "リモート {{remoteRef}} に {{count}} 件の新しいコミットがあり、{{files}} で競合します。Agent に同期と競合解消を任せるか、強制プッシュを選択できます。",
+        "divergedDirtyDesc_other": "リモート {{remoteRef}} に {{count}} 件の新しいコミットがあり、未コミットの変更も残っています。Agent に同期とプッシュを任せるか、強制プッシュを選択できます。",
+        "divergedGeneralDesc_other": "リモート {{remoteRef}} に {{count}} 件の新しいコミットがあります。Agent に安全な統合を任せるか、強制プッシュを選択できます。",
+        "syncAndPushConfirm": "同期してプッシュ",
+        "askAgentSyncConfirm": "Agent で同期・競合解消",
+        "syncedAndPushedToast": "リモートと同期してプッシュしました",
+        "agentPromptFilled": "同期・競合解消の指示を入力欄にセットしました。Enter で Agent に実行させられます"
       },
       "changeStatus": {
         "renamed": "リネーム",
@@ -11144,6 +11327,10 @@
         "non-git": {
           "title": "git リポジトリではありません",
           "desc": "現在の作業ディレクトリに利用可能な git リポジトリがありません。"
+        },
+        "svn-unavailable": {
+          "title": "SVN が見つかりません",
+          "desc": "作業コピーの差分を表示するには、Subversion のコマンドラインクライアントをインストールしてください。"
         },
         "git-unavailable": {
           "title": "git を利用できません",
@@ -12086,6 +12273,17 @@
       "memberCount_other": "メンバー {{count}} 人",
       "nameLabel": "グループ名",
       "waitingConfirm": "{{name}} があなたの確認を待っています",
+      "assistantDevice": {
+        "title": "グループの Cindy がコンピュータの選択を待っています",
+        "onlyYou": "あなただけに表示",
+        "request": "「{{request}}」はコンピュータを選ぶと始まります。",
+        "requestUnknown": "コンピュータを選ぶと、この依頼が始まります。",
+        "requests_one": "{{count}} 件の依頼が待機中です。コンピュータを選ぶと始まります。",
+        "requests_other": "{{count}} 件の依頼が待機中です。コンピュータを選ぶと始まります。",
+        "remember": "このグループでの今後の依頼も同じコンピュータを使います。グループの設定で変更できます。",
+        "cancel": "依頼を取り消す",
+        "continue": "続行"
+      },
       "loadFailedTitle": "このグループチャットを読み込めません",
       "loadFailedDescription": "Cindy は現在このグループチャットを読み込めません。再試行するか、仲間のページに戻ってください。",
       "unavailableTitle": "このグループチャットは利用できません",
@@ -12228,6 +12426,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
           "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "ダウンロードの失敗により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+          "ATTACHMENTS_LIMIT_REACHED": "添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "ダウンロードの失敗と添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}} さん、Cindy に代わりに作業してもらうには、あなたの Cindy を接続してください（現在オンラインの Cindy がありません）。",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}さん、このグループで使うコンピュータを選ぶと、この依頼を続行できます。",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}}さんがこのグループで選んだコンピュータはオフラインです。"
@@ -12270,6 +12471,7 @@
         "projectDirClear": "クリア",
         "projectDirNote": "このコンピュータにある既存のプロジェクトを選べます。未選択の場合はリポジトリに対応するプロジェクト、次に担当する仲間のプロジェクトを使います。Git での分担には専用のワークツリーを使います。",
         "autoContinueSaveFailed": "ステップの引き継ぎを保存できませんでした。もう一度お試しください。",
+        "projectDirNotRegistered": "先にこのフォルダを Cindy のプロジェクトとして追加してから、もう一度選んでください。",
         "projectDirSaveFailed": "プロジェクトフォルダを保存できませんでした。フォルダがまだあるか確認してから、もう一度お試しください",
         "allowMemberInvites": "全メンバーによる友達の招待を許可",
         "allowMemberInvitesHint": "オンにすると、参加済みの全メンバーが友達を招待できます。変更できるのはグループオーナーと管理者のみです。",
@@ -12705,7 +12907,19 @@
         "failed": "操作を完了できませんでした。もう一度お試しください。",
         "lastOwner": "退出する前にオーナーを譲渡するか、グループを解散してください。"
       },
-      "externalBadge": "外部"
+      "externalBadge": "外部",
+      "links": {
+        "kind": {
+          "pull": "プルリクエスト",
+          "issue": "Issue",
+          "discussion": "ディスカッション",
+          "commit": "コミット",
+          "file": "ファイル",
+          "folder": "フォルダ",
+          "release": "リリース",
+          "repo": "リポジトリ"
+        }
+      }
     },
     "joined": {
       "today": "今日加入",
@@ -12980,6 +13194,7 @@
       "arrivalPermissions": "{{name}} はこのパソコンの既定の権限で動作します。",
       "arrivalModel": "{{name}} の保存済みモデルはこのパソコンでは使えないため、このパソコンの既定モデルを使います。",
       "arrivalModelSetup": "{{name}} はこのコンピューターに来ましたが、まだ使えるモデルがありません。モデルプロバイダーを接続するか、「プロバイダー → スマートルーティング」でバディのデフォルトモデルを設定してください。",
+      "modelSetupHint": "このコンピューターには利用できるバディモデルがありません。「プロバイダー → スマートルーティング」でバディの既定モデルを設定してください。Cindy が自動的に再試行します。",
       "arrivalPartialContent": "{{name}} はこのパソコンで動作するようになりましたが、一部の同期データは復元できませんでした。クラウド上の元データはそのまま残っています。",
       "missingProfileTitle": "初期プロフィールで {{name}} を続けますか？",
       "missingProfileDescription": "元のメインコンピューターから {{name}} のプロフィールがまだアップロードされていません。元のパソコンを再インストールした場合や復旧できない場合は、初期プロフィールでこのパソコンから続けられます。クラウドに同期済みの会話や内容はそのまま残ります。",
@@ -13252,7 +13467,11 @@
         "unbound": "公式 @askmycindy への質問を {{name}} に任せられます。",
         "managed": "X の質問は仲間が担当しています。その仲間のメッセージプラットフォーム設定で変更できます。",
         "riskBody": "X の質問には仲間の共有メモリ、ツール、作業フォルダーを使用し、返信は公開されます。個人情報を扱う用途には使用しないでください。プライベートチャットの履歴は直接使用しません。"
-      }
+      },
+      "handedOver": "{{apps}} は設定で {{name}} が返信するようになっています。",
+      "handedOverSeparator": "、",
+      "manageInSettings": "設定で管理",
+      "handedOverHint": "以下で追加するボットは {{name}} 専用で、設定画面のボットとは別管理になります。"
     },
     "voiceMode": {
       "realtime": {
@@ -13946,7 +14165,8 @@
         },
         "companion": {
           "retryLater": "しばらくしてからもう一度お試しください"
-        }
+        },
+        "membersPaused": "オーナーが戻るまで、メンバーからの質問はいったんお休みします 🙈"
       },
       "hook": {
         "interaction": {
@@ -15083,6 +15303,24 @@
       "removeFromList": "リストから削除",
       "missingDir": "フォルダが見つかりません"
     },
+    "remoteOutbox": {
+      "notSent": "未送信",
+      "retry": "再試行",
+      "delete": "削除",
+      "deliveryUnconfirmed": "送信結果は未確認です",
+      "recheckDelivery": "再確認",
+      "waitingForPrevious": "前のメッセージを待機中",
+      "taskInactive": "このタスクは現在メッセージを受信できません。",
+      "inputNotSupported": "このコンピューターでは、このタスクにこの種類のメッセージを送信できません。",
+      "taskClearedBeforeSend": "タスクはクリア済みか、クリア中です。メッセージはこの端末に保存されています。",
+      "invalidInput": "内容が無効なため、コンピューターはメッセージを受け付けませんでした。",
+      "profileInUseByDesktop": "このデータは単独で起動している Cindy デスクトップアプリが使用中です。アプリを終了してから、もう一度送信してください。",
+      "other": "この操作は完了しませんでした。しばらくしてからもう一度お試しください。",
+      "deleteConfirmTitle": "このメッセージを削除しますか？",
+      "deleteConfirmBody": "このメッセージは送信されていません。削除すると元に戻せません。",
+      "deleteUnconfirmedBody": "コンピューターがこのメッセージをすでに受信している可能性があります。削除すると、この端末の送信待ちメッセージだけが消えます。受信済みの場合は、会話履歴に引き続き表示されます。",
+      "cancel": "キャンセル"
+    },
     "pendingQueue": {
       "waitingForDevice": "未送信 · もう一方のコンピュータが再接続したら送信します",
       "stopping": "停止処理中",
@@ -15202,7 +15440,11 @@
           "description": "マイクへのアクセスを許可してから、もう一度音声入力をクリックしてください。",
           "confirm": "権限を許可",
           "cancel": "キャンセル"
-        }
+        },
+        "rewriteSelected": "音声で書き換え",
+        "rewriteSelectedTooltip": "選択中のテキストを書き換える指示を音声で伝えます（失敗時は元のテキストを保持）",
+        "rewriteSelectedAria": "選択テキストを音声で書き換え",
+        "rewriteFailed": "音声による書き換えを完了できませんでした。選択中のテキストはそのまま保持されています。"
       },
       "remoteSwitchFailed": "リモート設定の変更に失敗しました(未適用)",
       "switchFailed": "設定の変更に失敗しました(未適用)",
@@ -15239,6 +15481,7 @@
       },
       "credentialSwitchDeferred": "モデルプロバイダーを切り替えました。現在のタスク終了後に有効になります。",
       "effortRuntimeDirty": "推論強度を更新しています。少し待ってからもう一度送信してください。",
+      "tooManyTaskReferences": "メッセージに含められるタスク参照は {{max}} 件までです。超過分のリンクを削除してください。",
       "steerNotSent": "送信されていません。現在は割り込みできません。下書きは保持されています。",
       "credentialSwitchApplied": "モデルプロバイダーの切り替えが有効になりました。",
       "credentialSwitchFailed": "モデルプロバイダーの切り替えに失敗しました。モデルを選び直してください。",
@@ -15400,7 +15643,23 @@
         "missing": "リモートブランチは存在しません。",
         "busy": "リポジトリは使用中です。後で再試行してください",
         "changed": "チェックアウト中のブランチが変更されました。再試行してください。"
-      }
+      },
+      "rebased_other": "リモートの {{count}} 件のコミットへリベース同期しました",
+      "divergedCanRebase": "ローカルは {{ahead}} 件先行、{{behind}} 件遅れていますが競合はありません。クリックして {{remote}}/{{remoteBranch}} へリベース同期します",
+      "divergedConflictHint": "{{remote}}/{{remoteBranch}} と分岐し競合があります（{{files}}）。クリックして確認または Agent に依頼できます",
+      "divergedOpenDetails": "ブランチの分岐詳細を確認し Agent に競合解消を依頼",
+      "divergedRebaseNotice": "{{remote}} と分岐中（{{ahead}} 件先行・{{behind}} 件遅れ）、事前チェックでは競合なし",
+      "divergedConflictNoticeFiles": "{{remote}} と分岐し競合があります（{{files}}）",
+      "divergedDirtyNotice_other": "{{remote}} と分岐中で、未コミットの変更が {{count}} 件あります",
+      "divergedConflictNotice": "{{remote}} と分岐しており、競合の可能性があります",
+      "rebaseNow": "今すぐ同期",
+      "askAgentResolve": "Agent で競合解消",
+      "agentPromptFilled": "同期・競合解消の指示を入力欄にセットしました。確認して送信してください",
+      "agentPromptDivergedCounts": "現在 {{ahead}} 件先行・{{behind}} 件遅れ",
+      "agentPromptConflictFiles": "事前チェックの競合ファイル: {{files}}",
+      "agentPromptDirty_other": "作業ツリーに未コミットの変更が {{count}} 件あります",
+      "agentPromptSyncOnly": "ローカルブランチ {{branch}} を {{remoteRef}} と安全に同期してください。{{details}}\nまず git status と履歴を確認し、rebase または merge でリモート更新を取り込み、ローカルの意図を保ったまま競合を解消してください。git reset --hard や未コミット変更の破棄は行わず、完了後に結果を要約して関連チェックを実行してください。",
+      "agentPromptSyncAndPush": "ローカルブランチ {{branch}} を {{remoteRef}} と安全に同期し、プッシュまで完了してください。{{details}}\nまず git status と履歴を確認し、rebase または merge でリモート更新を取り込み、ローカルの意図を保ったまま競合を解消してください。git reset --hard や未コミット変更の破棄は行わず、チェック通過後にプッシュしてください。"
     },
     "pluginUi": {
       "title": "プラグイン「{{name}}」に操作可能なページが追加されました。利用するには確認が必要です。",
@@ -15503,6 +15762,106 @@
       "engineMissing": "このエンジンを提供するプラグインは無効化されたか、アンインストールされています。",
       "worktreeUnsupported": "プラグインエンジンはまだ worktree でタスクを開始できません。worktree をオフにしてから送信してください",
       "modelChangeFailed": "モデルを切り替えられませんでした"
+    },
+    "workspaceCapsule": {
+      "popoverTitle": "タスク作業領域",
+      "checkUpdates": "更新を確認",
+      "checkingUpdates": "確認中…",
+      "checkUpdatesAria": "リモートブランチの最新状態を確認",
+      "openGuideAria": "ブランチと worktree のかんたん図解を見る",
+      "back": "戻る",
+      "worktreeTitle": "隔離コピーで実行",
+      "worktreeOnDesc": "作業用コピーを別途作成し、現在のフォルダのファイルを保護します",
+      "worktreeOffDesc": "現在のプロジェクトフォルダを直接編集します（ブランチ切替が即反映）",
+      "worktreeCompareToggle": "オンとオフの違いは？",
+      "compareDirectTitle": "オフ・直接編集",
+      "compareIsolatedTitle": "オン・隔離コピー",
+      "badgeCurrent": "現在",
+      "badgeOff": "オフ",
+      "badgeRecommended": "推奨",
+      "compareMainDir": "メイン",
+      "compareDirectWrite": "直接書込",
+      "compareDirectNote": "単発作業には手軽ですが、並行タスク同士が競合します",
+      "compareUntouched": "変更なし",
+      "compareTaskCopy": "作業コピー",
+      "compareIsolatedRun": "独立実行",
+      "remoteLatestReady": "クラウド最新版を選択済み（同期不要）",
+      "syncedStatus": "リモート最新と同期済み",
+      "aheadOnlyStatus": "ローカルが {{count}} 件先行（取得不要）",
+      "behindTitle": "リモートに {{count}} 件の新しい更新",
+      "behindDesc": "AI トークン消費なし・上書きなしで安全に反映できます",
+      "syncNow": "ローカルに同期",
+      "divergedCleanTitle": "ローカルとリモートの双方に新しい変更",
+      "divergedCleanDesc": "事前検証で競合なし — AI トークン消費なしで安全に同期できます",
+      "divergedConflictTitle": "ローカルとリモートで同じ箇所を変更",
+      "divergedConflictDesc": "{{count}} 件のファイルが重複 — Agent に任せて変更を失わず安全に統合できます",
+      "divergedDirtyTitle": "未コミットのローカル変更が {{count}} 件あります",
+      "divergedDirtyDesc": "編集中のファイルを保護するため、Agent に安全な同期を任せられます",
+      "divergedGenericDesc": "履歴が分岐しています — Agent に任せて変更を守りながら統合できます",
+      "techDetails": "技術詳細",
+      "filesAndDetails": "対象ファイルと詳細",
+      "techRefsLabel": "ローカル / リモート",
+      "techCommitsLabel": "コミット差",
+      "techWorkingTreeLabel": "作業ツリー",
+      "techFfSafety": "厳格な fast-forward（git merge --ff-only）を使用し、予期せぬ変更時は自動中断します。",
+      "techRebaseSafety": "読み取り専用 merge-tree で競合ゼロを確認済み。異常時は git rebase を自動中止します。",
+      "techAgentSafety": "Agent へ安全な制約を自動付与：git reset --hard を禁止し、未コミット変更をすべて保護します。",
+      "tooltipBehind": "リモートに {{count}} 件の更新があります — クリックして同期",
+      "tooltipConflict": "ローカルとリモートの変更が重複しています — クリックして確認",
+      "branchSwitchReadOnly": "現在は {{branch}} です。上の隔離コピーをオンにすると開始ブランチを選べます",
+      "remoteGroupHint": "チームの最新マージ版",
+      "localGroupHint": "この PC のブランチ",
+      "remoteOptionSub": "最新のマージ済みコードから新しく開始",
+      "footerGuideCta": "ブランチと worktree の 30 秒ガイド",
+      "kbdSwitchHint": "↑↓ 移動",
+      "guideTitle": "ブランチと worktree ガイド",
+      "guideBranchTitle": "1.「ブランチ」とは？",
+      "guideBranchDesc": "プロジェクトの並行ドラフトです。本流コードに影響を与えずに新機能や実験を進められます。",
+      "guideGraphMain": "main (本流)",
+      "guideGraphTask": "作業ドラフト",
+      "guideWorktreeTitle": "2.「隔離コピー (worktree)」とは？",
+      "guideWorktreeDesc": "タスク専用の独立フォルダを作成します。複数の Agent や自分の編集を同時に進めても上書きされません。",
+      "guideChoiceTitle": "3. クラウド最新とローカルの選び方",
+      "guideRemoteLabel": "クラウド最新：",
+      "guideRemoteDesc": "最新のマージ済みコードから新しいタスクを始める場合におすすめです。",
+      "guideLocalLabel": "ローカルブランチ：",
+      "guideLocalDesc": "まだプッシュしていない手元の作業を続けたい場合に選びます。",
+      "guideProHint": "Git に詳しい方は「技術詳細」から ref やコマンドをいつでも確認できます。"
+    },
+    "workspaceCleanup": {
+      "entrySuggestTitle": "AI でローカルブランチと worktree を整理",
+      "entryUrgentTitle": "ブランチと worktree の整理をおすすめします",
+      "entrySub": "履歴ブランチ {{cindyBranches}} 件・未使用コピー {{idleWorktrees}} 件が蓄積",
+      "entrySubWithFailed": "履歴ブランチ {{cindyBranches}} 件・未使用 {{idleWorktrees}} 件・回収保留 {{failed}} 件",
+      "entryCountBadge": "{{branches}} ブランチ・{{worktrees}} 未使用",
+      "capsuleRedDotTooltip": "ローカルに {{branches}} ブランチ・{{worktrees}} 未使用コピーが蓄積 — クリックして AI で安全に整理",
+      "paneTitle": "AI でブランチと worktree を整理",
+      "safeBannerTitle": "まず読み取り専用で棚卸し（確認前に削除しません）",
+      "safeBannerDesc": "AI が「安全に削除可 / 要確認 / 保護対象」に分けて報告し、承認後にのみ整理します。",
+      "statBranchesLabel": "ローカルブランチ",
+      "statWorktreesLabel": "隔離コピー (worktree)",
+      "statCount": "{{count}} 件",
+      "statCindyBranches": "cindy/* 履歴 {{count}} 件を含む",
+      "statActiveProtected": "アクティブ {{count}} 件（自動保護）",
+      "statIdleOnly": "未使用 {{count}} 件を確認可能",
+      "statIdleAndFailed": "未使用 {{idle}} 件・保留 {{failed}} 件",
+      "scopesTitle": "重点チェック項目（複数選択可）",
+      "scopeMerged": "マージ済み旧ブランチ",
+      "scopeWorktrees": "未使用 worktree コピー",
+      "scopeUnpushed": "未プッシュ変更を確認",
+      "mainRepoNote": "メインフォルダで実行（余分な worktree を新規作成しません）。PR マージ確認は GitHub プラグインを優先します。",
+      "startAuditAction": "入力欄にセットして AI 棚卸しを開始",
+      "snooze7Days": "今はしない・赤ドットを 7 日間非表示",
+      "snoozedToast": "赤ドット通知を 7 日間オフにしました（メニューからいつでも整理できます）",
+      "agentPromptFilled": "読み取り専用の棚卸し指示を入力欄にセットしました（自動削除はしません）。Enter で開始できます。",
+      "promptIntro": "まず【読み取り専用】でこのリポジトリのローカルブランチと git worktree を棚卸ししてください（第 1 段階では削除・reset・checkout・fetch/prune・全ブランチ diff/cherry を実行しないでください）：",
+      "promptFocusMerged": "マージ済みのローカルおよび cindy/* ブランチ（Squash Merge を含む：GitHub プラグインの GraphQL バッチ照会を優先し、同名一致ではなくローカル HEAD SHA がマージ済み PR の headRefOid と一致または祖先であることを必ず検証）",
+      "promptFocusWorktrees": "未使用の worktree（整理候補のみ軽量に容量見積もりし、メインリポジトリへの再帰 du は禁止。macOS APFS の node_modules 共有ブロックと実ビルド成果物を区別）",
+      "promptFocusUnpushed": "未プッシュコミット・未コミット変更・git stash が残っている確認対象",
+      "promptStepFocus": "1. 重点確認：{{focus}}。",
+      "promptStepProtect": "2. 三重チェックで自動保護：(a) 未アーカイブの Cindy タスク（作成直後でクリーン・ahead=0 のタスクを含む、終了済み旧 Worker と区別）(b) 稼働中プロセス占有ディレクトリ（lsof 等）と .worktree-keep (c) OPEN/DRAFT PR 紐付けまたは未コミット・未マージ変更のある対象。",
+      "promptStepOutput": "3. 「安全に削除可 / 要確認 / 保護対象」の 3 区分で分かりやすく報告し、件数が多い場合はプレフィックスやディレクトリ別に集約して容量上位を示し、番号付きの確認案を提示して返答を待ってください。",
+      "promptProtectedList": "4. 未アーカイブのアクティブタスクで使用中の worktree が {{count}} 件検出されています。必ず「保護対象」に含めてください：{{paths}}。"
     }
   },
   "onboarding": {
@@ -15592,7 +15951,9 @@
     "connectionInterrupted": "音声接続が中断されました。ネットワークを確認してからやり直してください。",
     "recognitionStalled": "音声認識の結果が返ってこなくなりました。もう一度お試しください。",
     "transcriptKept": "{{message}}（ここまで認識したテキストは保持しており、そのまま編集できます）",
-    "transcriptKeptOverlay": "{{message}}（ここまで認識したテキストは保持しており、コピーして続けられます）"
+    "transcriptKeptOverlay": "{{message}}（ここまで認識したテキストは保持しており、コピーして続けられます）",
+    "retryRecognition": "再認識",
+    "recordAgain": "録音し直す"
   },
   "chatgptAuthRecovery": {
     "title": "ChatGPT のログインが無効になりました",
@@ -15862,7 +16223,7 @@
       "requestFormatError": "アプリが送信したリクエストの形式に問題があり、返信を完了できませんでした。",
       "piRetryHistoryTooLarge": "メッセージは送信されませんでした。Pi が再試行に必要な履歴を読み込む際に、データフレームがローカルの上限（16 MiB）を超えました。新しいタスクで続けられます。",
       "piRetryHistoryUnavailable": "メッセージは送信されませんでした。Pi が送信に必要な履歴を読み込めませんでした。再試行するか、新しいタスクで続けてください。",
-      "upstreamStatusError": "上流が {{status}} を返したため、この返信は完了しませんでした。",
+      "upstreamStatusError": "モデルプロバイダーのサービスがエラー（HTTP {{status}}）を返しました。今回の返信は完了しませんでした。",
       "messageNotSent": "メッセージは送信されませんでした。",
       "replyFailed": "返信を完了できませんでした",
       "queuedSendRecovery": "直前のメッセージは送信されていません。「再試行」でそのまま送信できます。新しいメッセージを送ると、直前のメッセージは置き換わります。",
@@ -15920,12 +16281,12 @@
       "networkUnreachableNoRetry": "ネットワークエラー:サービスに一時的に接続できません。",
       "networkAutoRetrying": "ネットワークエラー:自動的に再試行しています…",
       "networkReconnecting": "接続が中断されました。再接続中（{{attempt}}/{{maxAttempts}}）…",
-      "overloadRetrying": "モデルサービスが混雑しています。自動的に再試行しています（{{attempt}}/{{maxAttempts}}）…",
+      "overloadRetrying": "モデルプロバイダーが一時的に混雑しています。自動再試行中（{{attempt}}/{{maxAttempts}}）…",
       "rateLimitRetrying": "リクエストがレート制限されました。自動的に再試行しています（{{attempt}}/{{maxAttempts}}）…",
-      "overloadBusy": "モデルサービスが混雑しています。上流に空き容量がありません。「再試行」を押すか、別のモデルに切り替えてください。",
-      "overloadBusyNoRetry": "モデルサービスが混雑しています。上流に空き容量がありません。しばらくしてから再試行するか、別のモデルに切り替えてください。",
-      "streamInterrupted": "モデル出力が途中で中断されました。一時的な上流障害であることが多いので、「再試行」を押してください。",
-      "streamInterruptedNoRetry": "モデル出力が途中で中断されました。一時的な上流障害であることが多いので、しばらくしてから再試行してください。",
+      "overloadBusy": "モデルプロバイダーが一時的に混雑しており、空き容量がありません。「再試行」を押すか、別のモデルに切り替えてください。",
+      "overloadBusyNoRetry": "モデルプロバイダーが一時的に混雑しており、空き容量がありません。しばらくしてから再試行するか、別のモデルに切り替えてください。",
+      "streamInterrupted": "モデルプロバイダーからの応答ストリームが途中で中断されました。「再試行」を押してください。",
+      "streamInterruptedNoRetry": "モデルプロバイダーからの応答ストリームが途中で中断されました。しばらくしてからもう一度お試しください。",
       "networkShowRaw": "エラーの詳細",
       "networkHideRaw": "詳細を閉じる",
       "diagnose": "診断",
@@ -15934,7 +16295,7 @@
       "diagnosePromptWithoutSession": "このエラーを診断して、原因と解決方法を教えてください。\n\nエラー表示：{{message}}\nエラー詳細：\n{{details}}\n\nCindy 自体の問題だと分かった場合は教えてください。Cindy チームに issue を提出するかどうかは私が選びます。",
       "gatewayProxyTokenInvalid": "Cindy AI の認証情報が無効になりました。「再試行」をクリックしてください。繰り返す場合はサインアウトしてから再ログインしてください",
       "gatewayProxyTokenInvalidNoRetry": "Cindy AI の認証情報が無効になりました。繰り返す場合はサインアウトしてから再ログインしてください",
-      "modelAccessDenied": "接続先のアカウントにはこのモデルへのアクセス権限がありません。別のモデルに切り替えるか、プロバイダーにアクセス権限を確認してください",
+      "modelAccessDenied": "現在のモデルプロバイダーアカウントはこのモデルへのアクセス権がありません。モデルを切り替えるか、プロバイダーの権限を確認してください。",
       "providerSafetyRefusal": "モデルプロバイダーの安全ポリシーにより、この応答はブロックされました。続行する場合は依頼内容を調整してから再送信してください",
       "silentStopContinue": "続行",
       "silentStopContinueTitle": "現在のタスクを続行",
@@ -15944,7 +16305,20 @@
       "remoteCompactEncryptedContent": "履歴内の暗号化された内容をモデルが読み取れず、コンテキストの圧縮に失敗しました。自動継続は完了していません。再試行して復旧を試せます。",
       "contextOverflow": "このメッセージ自体がモデルのコンテキスト上限を超えているため、新しい Agent セッションへ自動的に引き継いで続行できません。入力を短くするか大きな添付ファイルを外してから再試行してください。",
       "attachmentAccessDeniedTitle": "Cindy が元の添付ファイルを読み取れないため、メッセージは送信されていません。",
-      "attachmentAccessDeniedRecovery": "「ダウンロード」などアクセス可能なフォルダーにコピーを保存し、元の添付ファイルを削除してから、添付ボタンでコピーを追加し、再送信してください。"
+      "attachmentAccessDeniedRecovery": "「ダウンロード」などアクセス可能なフォルダーにコピーを保存し、元の添付ファイルを削除してから、添付ボタンでコピーを追加し、再送信してください。",
+      "providerSafetyRefusalWithProvider": "{{provider}} の安全ポリシーによりこの返信がブロックされました。リクエスト内容を調整して再送信してください。",
+      "overloadRetryingWithProvider": "{{provider}} が一時的に混雑しています。自動再試行中（{{attempt}}/{{maxAttempts}}）…",
+      "overloadBusyWithProvider": "{{provider}} が一時的に混雑しており、空き容量がありません。「再試行」を押すか、別のモデルに切り替えてください。",
+      "overloadBusyNoRetryWithProvider": "{{provider}} が一時的に混雑しており、空き容量がありません。しばらくしてから再試行するか、別のモデルに切り替えてください。",
+      "streamInterruptedWithProvider": "{{provider}} からの応答ストリームが途中で中断されました。「再試行」を押してください。",
+      "streamInterruptedNoRetryWithProvider": "{{provider}} からの応答ストリームが途中で中断されました。しばらくしてからもう一度お試しください。",
+      "upstreamStatusErrorWithProvider": "{{provider}} のサービスがエラー（HTTP {{status}}）を返しました。今回の返信は完了しませんでした。",
+      "modelAccessDeniedWithProvider": "現在の {{provider}} アカウントはこのモデルへのアクセス権がありません。モデルを切り替えるか、アクセス権を確認してください。",
+      "providerQuotaExhaustedWithProvider": "{{provider}} アカウントのクォータまたは残高が不足しています。アカウント状態を確認してください。",
+      "usageLimitReachedWithProvider": "{{provider}} アカウントの利用上限に達しました",
+      "usageLimitReachedWithResetWithProvider": "{{provider}} アカウントの利用上限に達しました。{{resetAt}} 頃にリセット予定です。",
+      "usageLimitReachedNoResetWithProvider": "{{provider}} アカウントの利用上限に達しました。上限のリセットを待つか、別のモデルに切り替えて再試行してください。",
+      "invalidEncryptedContentWithProvider": "{{provider}} は過去の暗号化履歴の一部を読み取れません。元のプロバイダーに戻すか、新しいタスクで続行してください。"
     },
     "backgroundActivity": {
       "status": "バックグラウンドのサブタスクが実行中、モデル使用量を消費しています…",
@@ -16897,7 +17271,20 @@
       "viewGhostCard": "プラグインカードを表示"
     },
     "modelMismatch": {
-      "notice": "このターンは選択中の {{selected}} ではなく {{actual}} が応答しました(プロバイダー側で一時的にダウングレード)"
+      "notice": "モデルプロバイダーにより、このターンは {{selected}} ではなく {{actual}} が応答しました",
+      "noticeWithProvider": "{{provider}} により、このターンは {{selected}} ではなく {{actual}} が応答しました",
+      "infoLink": "理由を見る",
+      "infoTitle": "選択と異なるモデルが応答した理由",
+      "infoSummary": "Cindy は選択された {{selected}} にこのターンのリクエストを送信しましたが、モデルプロバイダー側で {{actual}} が応答を返しました。",
+      "infoSummaryWithProvider": "Cindy は選択された {{selected}} にこのターンのリクエストを送信しましたが、{{provider}} 側で {{actual}} が応答を返しました。",
+      "infoCausesTitle": "主な原因",
+      "infoCausePolicy": "安全性またはコンテンツポリシーによるフォールバック（一部の最新モデルは応答拒否の代わりに旧世代モデルへ自動切替します）。",
+      "infoCauseLoad": "ピーク時の高負荷に伴う、モデルプロバイダー側の一時的な迂回ルーティング。",
+      "infoCauseGateway": "サードパーティ製または独自ゲートウェイによるモデル名のマッピング・ルーティング設定。",
+      "infoActionsTitle": "対処方法",
+      "infoActionContinue": "設定の変更は不要です。影響はこのターンのみで、以降のメッセージも引き続き {{selected}} へ送信されます。",
+      "infoActionRetry": "応答が期待と異なる場合は、質問を言い換えて再送信するか、別の利用可能なモデルへ一時的に切り替えてください。",
+      "infoActionCheckProvider": "複数のターンで続く場合は、モデルプロバイダーのクォータ状況やゲートウェイのマッピング設定を確認してください。"
     },
     "ghostNotify": {
       "secretSaved": "認証情報「{{name}}」を保存しました",
@@ -16976,6 +17363,88 @@
       "signingIn": "このタスクで使用しているサブスクリプションアカウントにログイン中です。完了後に再試行してください。",
       "unavailable": "このタスクに割り当てられたサブスクリプションアカウントは、このリクエストに使用できません。実行先のコンピューターでモデルプロバイダーのアカウント設定を確認するか、別のモデル接続先を選んでください。",
       "legacy": "このタスクに割り当てられたサブスクリプションアカウントを利用できません。実行先のコンピューターでログイン状態と使用量を確認するか、別のモデル接続先を選んでください。アカウントは自動では切り替わりません。"
+    },
+    "errorExplain": {
+      "providerSafetyRefusal": {
+        "title": "返信がブロックされた理由",
+        "summary": "Cindy はリクエストをそのまま送信しましたが、モデルプロバイダー内蔵の安全・コンテンツポリシーにより出力がブロックされました。Cindy の検閲やローカルプラグインによる制限ではありません。",
+        "summaryWithProvider": "Cindy はリクエストをそのまま送信しましたが、{{provider}} 内蔵の安全・コンテンツポリシーにより出力がブロックされました。Cindy の検閲やローカルプラグインによる制限ではありません。",
+        "cause1": "プロンプト、添付ファイル、またはこれまでの文脈がプロバイダーの安全審査に該当しました。",
+        "cause2": "生成途中で出力安全フィルターが働き、応答が中断されました。",
+        "action1": "同じ内容のまま再試行しても再度ブロックされることが多いため、表現を見直すか該当部分を除いて再送信してください。",
+        "action2": "過去の文脈が原因の場合は、新しいタスクを作成するか別のモデルに切り替えてください。"
+      },
+      "overload": {
+        "title": "サービス混雑が表示される理由",
+        "summary": "モデルプロバイダー側の計算リソースが一時的に逼迫しています（ピーク時の過負荷や HTTP 529 など）。Cindy 本体やローカルネットワークの問題ではありません。",
+        "summaryWithProvider": "{{provider}} 側の計算リソースが一時的に逼迫しています（ピーク時の過負荷や HTTP 529 など）。Cindy 本体やローカルネットワークの問題ではありません。",
+        "cause1": "ピーク時間帯のアクセス集中により、このモデルの処理容量が一時的に満杯になっています。",
+        "cause2": "プロバイダー側の一時的なメンテナンスや容量制限が行われています。",
+        "action1": "Cindy の再起動やネットワーク設定の変更は不要です。少し待ってから「再試行」を押してください。",
+        "action2": "すぐに続けたい場合は、一時的に別のモデルまたはモデルグループ内の別ソースへ切り替えてください。"
+      },
+      "streamInterrupted": {
+        "title": "出力が途中で中断された理由",
+        "summary": "モデルプロバイダーからのストリーミング応答中に接続が予期せず切断されました。Cindy はクラッシュしておらず、完了済みの手順と会話履歴は保持されています。",
+        "summaryWithProvider": "{{provider}} からのストリーミング応答中に接続が予期せず切断されました。Cindy はクラッシュしておらず、完了済みの手順と会話履歴は保持されています。",
+        "cause1": "モデルプロバイダーのサーバー側で生成途中に一時的な障害や切断が発生しました。",
+        "cause2": "サードパーティ製や自前の中継ゲートウェイが長い応答の途中でタイムアウトしました。",
+        "action1": "「再試行」を押すか、「続けて」と送信して続きを生成させてください。",
+        "action2": "何度も繰り返す場合は、別のモデルを試すかカスタムゲートウェイのタイムアウト設定を確認してください。"
+      },
+      "upstreamStatus": {
+        "title": "サービスエラーが返された理由",
+        "summary": "Cindy はリクエストを正常に送信しましたが、モデルプロバイダーが詳細本文なしの HTTP {{status}} 内部エラーを返しました。Cindy の不具合ではなく外部サービス側の異常です。",
+        "summaryWithProvider": "Cindy はリクエストを正常に送信しましたが、{{provider}} が詳細本文なしの HTTP {{status}} 内部エラーを返しました。Cindy の不具合ではなく外部サービス側の異常です。",
+        "cause1": "モデルプロバイダーのサーバー側で一時的な内部障害が発生しています。",
+        "cause2": "サードパーティ製または自前のゲートウェイで転送に失敗したか、独自の 5xx ステータスを返しました。",
+        "action1": "少し時間をおいて「再試行」を押してください。一時的な障害はすぐに回復することがあります。",
+        "action2": "独自ゲートウェイを利用している場合はステータスやログを確認するか、別のモデルプロバイダーへ切り替えてください。"
+      },
+      "modelAccessDenied": {
+        "title": "このモデルにアクセスできない理由",
+        "summary": "モデルプロバイダーが現在のアカウントによるこのモデルへのアクセスを拒否しました。Cindy からプロバイダー側の権限制御を回避することはできません。",
+        "summaryWithProvider": "{{provider}} が現在のアカウントによるこのモデルへのアクセスを拒否しました。Cindy から {{provider}} 側の権限制御を回避することはできません。",
+        "cause1": "現在のサブスクリプションプランや API キーにこのモデルの利用権限が含まれていません。",
+        "cause2": "組織管理者により利用可能なモデルが制限されているか、お住まいの地域で未提供です。",
+        "action1": "現在のアカウントで利用できる別のモデルに切り替えてタスクを続行してください。",
+        "action2": "プロバイダーの管理画面やプラン設定で権限を確認してください。アップグレード直後の場合は再接続してからお試しください。"
+      },
+      "providerQuotaExceeded": {
+        "title": "クォータ・残高不足が表示される理由",
+        "summary": "接続中の外部モデルプロバイダーアカウントの残高またはクォータが不足しており、プロバイダーがリクエストを拒否しました。Cindy アカウントとは別管理です。",
+        "summaryWithProvider": "接続中の {{provider}} アカウントの残高またはクォータが不足しており、{{provider}} がリクエストを拒否しました。Cindy アカウントとは別管理です。",
+        "cause1": "プロバイダーアカウントのプリペイド残高を使い切ったか、有効な支払い方法が未設定です。",
+        "cause2": "API キーの利用上限または組織のクォータ上限に達しました。",
+        "action1": "該当プロバイダーの請求ページでチャージまたは上限引き上げを行った後、「再試行」を押してください。",
+        "action2": "モデルセレクターから利用可能な別のモデルプロバイダーへ切り替えて続けることもできます。"
+      },
+      "usageLimit": {
+        "title": "利用上限に達した理由",
+        "summary": "接続中のモデルアカウントがモデルプロバイダーの定めた期間利用上限に達したため、一時的に新しいリクエストを受け付けられません。Cindy による制限ではありません。",
+        "summaryWithProvider": "接続中の {{provider}} アカウントが {{provider}} の定めた期間利用上限に達したため、一時的に新しいリクエストを受け付けられません。Cindy による制限ではありません。",
+        "cause1": "サブスクリプションの現在ウィンドウ（5時間枠や週間枠など）の上限を使い切りました。",
+        "cause2": "同じアカウントを複数のタスクや端末で同時利用すると、同じ期間枠を共有します。",
+        "action1": "リセット時刻まで待ってから再試行してください。自動再開が有効な場合はリセット後に自動で続行します。",
+        "action2": "すぐ続けたい場合は、別のモデル・別のサブスクリプションアカウント・API プロバイダーへ切り替えてください。"
+      },
+      "encryptedContent": {
+        "title": "一部の履歴を読み取れない理由",
+        "summary": "一部のモデルは内部推論状態を暗号化して履歴に保存し、元のプロバイダー・アカウントのみが復号できます。切り替えやリモート圧縮後に現在のプロバイダーが復号できない場合があります。",
+        "summaryWithProvider": "一部のモデルは内部推論状態を暗号化して履歴に保存し、元のプロバイダー・アカウントのみが復号できます。切り替えやリモート圧縮後に {{provider}} が復号できない場合があります。",
+        "cause1": "途中で別のモデルプロバイダーやアカウントに切り替えたため、以前の暗号化推論を復号できません。",
+        "cause2": "リモートのコンテキスト圧縮や別エンドポイント経由で暗号鍵が一致しませんでした。",
+        "action1": "元のモデルプロバイダーまたはアカウントに戻すと、このタスクをそのまま続行できます。",
+        "action2": "または「新しいタスクで続ける」を押すと、読める会話履歴を保ったまま復号不能な部分だけ除いて引き継げます（元のタスクは残ります）。"
+      },
+      "failedSamplingAttempt": {
+        "title": "未完了の返信が表示される理由",
+        "summary": "この返信の生成途中でエラーまたは中断が発生し、前半部分のみ出力されました。すでに得られた手がかりが失われないよう、Cindy は生成済みの部分を参考表示しています。",
+        "cause1": "ストリーミング中にプロバイダーエラー、接続断、または安全ポリシーによる中断が発生しました。",
+        "cause2": "返信が最後まで完了する前にエラーまたは停止が起きました。",
+        "action1": "下部のエラーカードで具体的な中断理由を確認し、再試行が必要か判断してください。",
+        "action2": "そのまま再試行するか次のメッセージを送信して続けられます。表示中の内容も参考にできます。"
+      }
     }
   },
   "ccAgent": {
@@ -17764,7 +18233,41 @@
         "offlineCompleteRejectedNewActivity": "「{{title}}」を保留中に戻しました：オフライン中にこのタスクに新しい動きがありました。",
         "offlineCompleteRejectedRunning": "「{{title}}」を保留中に戻しました：タスクは現在実行中です。",
         "offlineCompleteRejectedAttached": "「{{title}}」を保留中に戻しました：接続中または共有中のため自動アーカイブできませんでした。",
-        "offlineCompleteRejectedPreflight": "「{{title}}」を保留中に戻しました：アーカイブ前に worktree の状態を確認できませんでした。"
+        "offlineCompleteRejectedPreflight": "「{{title}}」を保留中に戻しました：アーカイブ前に worktree の状態を確認できませんでした。",
+        "health": {
+          "regionLabel": "環境ヘルス通知",
+          "dismiss": "この通知を閉じる",
+          "summaryTitle_other": "{{count}} 件の環境問題を確認してください",
+          "providerAuthSingleTitle": "{{name}} の認証が期限切れです",
+          "providerAuthSingleDesc": "再接続するとこのプロバイダーのモデルを再開できます。",
+          "providerAuthMultiTitle_other": "{{count}} 件のモデルプロバイダーで再接続が必要です",
+          "providerAuthMultiDesc": "対象: {{names}}。再接続すると再開できます。",
+          "githubMissingTitle": "GitHub 未接続",
+          "githubNotLoggedInTitle": "GitHub の接続が期限切れです",
+          "gitlabMissingTitle": "GitLab 未接続",
+          "gitlabNotLoggedInTitle": "GitLab の接続が期限切れです",
+          "prAffectedDesc_other": "{{count}} 件の PR ステータス更新に影響しています。",
+          "auxiliaryTitle": "補助モデルチェーンが低下しています",
+          "auxiliarySingleDesc": "{{model}} が利用できず、タイトル生成や要約が低下する可能性があります。",
+          "auxiliaryMultiDesc_other": "{{count}} 件の補助モデル経路で障害が発生しています。",
+          "auxiliaryUnavailableDesc": "利用可能な補助モデルがなく、タイトル生成や要約が一時停止しています。",
+          "automationSingleTitle": "自動化「{{name}}」が停止しています",
+          "automationMissingPluginDesc": "必要なプラグイン「{{plugin}}」が未インストールまたは無効です。",
+          "automationPrecheckDesc": "事前チェックでブロックされ、直近の実行が止まりました。",
+          "automationFailedDesc": "直近の実行が失敗しました。設定とログを確認してください。",
+          "automationMultiTitle_other": "{{count}} 件の自動化で異常が発生しています",
+          "automationMultiDesc": "対象: {{names}}。",
+          "actions": {
+            "reconnect": "再接続",
+            "openProviders": "プロバイダー設定を開く",
+            "configureGitlab": "GitLab を設定",
+            "openSettings": "設定を開く",
+            "inspectAutomation": "確認して修正",
+            "viewAutomations": "自動化を見る",
+            "connectGithub": "GitHub を接続",
+            "openGithubPlugin": "GitHub プラグインを開く"
+          }
+        }
       },
       "taskListMode": {
         "heading": "タスクモード",
@@ -18427,6 +18930,7 @@
       "subtitlePaused": "一時停止中",
       "subtitleWaitingForResources": "実行スロット待ち（{{inFlight}}/{{max}}）",
       "subtitleQueuedForSession": "セッションが空くのを待機中",
+      "subtitleDeferredForSession": "{{reason}} · {{count}} 回延期",
       "subtitleManual": "手動",
       "subtitleOnce": "1回",
       "tagOnce": "1回",
@@ -18445,6 +18949,7 @@
     },
     "detail": {
       "manualTrigger": "手動トリガー",
+      "deferredBanner": "{{reason}} · {{since}} から {{count}} 回延期",
       "recentRuns": "最近の実行 · {{count}}",
       "noRunsHeading": "実行履歴はまだありません",
       "noRunsHint": "「今すぐ実行」をクリックするか、次のスケジュール実行をお待ちください。",
@@ -18457,7 +18962,11 @@
       "openWorkdirFailed": "フォルダを開けませんでした"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自動化は実行されませんでした。プラグインエンジンのタスクに紐づけた自動化は、タスク自身のモデルを使い、このコンピュータで実行されます。自動化でモデルを指定している場合は外してから、もう一度実行してください。",
+      "boundPluginEngineRecovery": "プラグインエンジンで自動化を実行できませんでした。エラーの詳細を開いて原因を確認してください。",
+      "boundPluginEngineSshRecovery": "SSH タスクでは現在のエンジンを使う必要があります。プラグインエンジンを使うには、対応する非 SSH タスクに自動化を紐づけてください。",
+      "boundPluginEngineSelectionLocationRecovery": "選択したプラグインエンジンの実行場所では、この自動化を実行できません。自動化のモデル設定で、対応するコンピューター上のエンジンを選んでください。",
+      "boundPluginEngineTaskLocationRecovery": "紐づけたタスクのプラグインエンジンの実行場所では、この自動化を実行できません。タスクのエンジンを対応するコンピューターに移すか、対応するタスクに紐づけてください。",
+      "boundPluginEngineModelRecovery": "自動化のモデル設定が、紐づけたタスクのプラグインエンジンに対応していません。自動化でタスクのモデルを使うように設定してください。",
       "queueWaitTimeoutRecovery": "待機時間を超えたため、プロンプトは送信されませんでした。対象のセッションが空いたら「{{action}}」で実行できます。",
       "status": {
         "running": "実行中",
@@ -19209,6 +19718,12 @@
       "cleanMergedConfirmAction": "削除",
       "cleanMergedDone": "完了した PR 自動化 {{count}} 件を削除しました",
       "checkFailed": "現在 PR の状態を確認できません"
+    },
+    "deferral": {
+      "busy": "対象タスクが空くのを待機中",
+      "usage": "利用上限の回復待ち",
+      "permission": "権限状態の確認待ち",
+      "other": "実行を延期中"
     }
   },
   "issueTracker": {
@@ -20417,6 +20932,8 @@
     },
     "errors": {
       "piStartupCloudFile": "クラウド上にのみある指示ファイルが Pi の起動を遅らせている可能性があります：{{path}}。Finder でこのファイルをダウンロードし、ローカルで利用できることを確認してから再試行してください。タイムアウトには別の原因がある可能性もあります。",
+      "remoteEngineMissing": "リモートのコンピューターに利用できるエンジンがありません。そのコンピューターにエンジンをインストールし、Cindy を再起動してから再試行してください。",
+      "remoteCapabilityUnavailable": "現在のサーバーまたはコンピューターは、この操作にまだ対応していません。",
       "hostProfileInUseByDesktop": "このデータは単独で起動している Cindy デスクトップアプリが使用中です。アプリを終了してから、もう一度送信してください。",
       "hostProfileInUseByDesktopAtStart": "このデータは単独で起動している Cindy デスクトップアプリが使用中のため、Cindy バックグラウンドサービスは起動しませんでした。そのアプリを終了し、Cindy バックグラウンドサービスを再起動してから、この Cindy ウィンドウを開き直してください。",
       "hostProfileInUseByDesktopRetry": "このデータは単独で起動している Cindy デスクトップアプリが使用中のため、今は変更できません。アプリを終了してから、もう一度お試しください。",
@@ -22557,6 +23074,9 @@
     "send": "メッセージを送信",
     "sending": "送信中…",
     "sent": "送信済み",
+    "sendTooManyArguments": "このメッセージでは一度に {{limit}} 個を超える項目を処理しています。アシスタントに項目を小分けにするよう依頼してください。",
+    "sendValueUnavailable": "このメッセージに必要な値を取得できません。アシスタントにフォームの項目を確認するよう依頼してください。",
+    "sendTextUnavailable": "送信するメッセージを作成できませんでした。",
     "sendFailed": "メッセージを送信できませんでした。入力内容は保持されています。",
     "playVideo": "動画を再生",
     "openVideoSource": "元の動画を開く",
@@ -23116,10 +23636,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "この接続にはグループの新しいタスクが割り当てられなくなります。実行中のタスクはこの接続に残ります。",
-    "mergeDescription": "{{target}} で新しく作成したタスクは両方のプロバイダーを利用できます。ログイン、キー、既存のタスクは元のままです。連携する前に Cindy が {{apiKey}} の API キーをテストします。",
+    "mergeDescription": "{{target}} で新しく作成したタスクは利用可能なメンバーに割り当てられます。ログイン、キー、既存のタスクは元のままです。Cindy が {{apiKey}} の API キーをテストします。残高不足や請求上限に達していても追加できますが、再び利用可能になるまでタスクは自動で割り当てられません。",
     "modelUnavailable": "この接続ではテスト用に選んだモデルを使用できません。再テストすると別の候補を試せます。",
     "noTestModel": "テストに使える設定済みモデルがありません。OpenAI プロジェクトで使用できるモデルを確認し、この接続のモデル一覧を再取得または更新してください。",
-    "billingPaused": "残高不足または請求上限のため、グループの割り当てを停止中。",
+    "billingPaused": "残高不足または請求上限のため、自動割り当てを停止中。",
     "title": "アカウントグループ",
     "testPassed": "テスト成功",
     "refresh": "利用枠を更新"
@@ -23360,7 +23880,15 @@
       "exceptionImage": "メッセージに画像があるため、画像を扱えるソースの中から選択",
       "exceptionImageFallback": "メッセージに画像がありますが、画像を扱えるソースがないため通常どおり選択",
       "exceptionHours": "この時間帯は「{{name}}」を使用",
-      "separator": "、"
+      "separator": "、",
+      "usageHabit": "普段の利用傾向から優先して選択",
+      "usageHabitQuota": "普段の利用傾向から優先して選択（残り {{left}}%）",
+      "autoBalance": "他のソースの余裕が少ないため負荷分散で選択",
+      "autoBalanceQuota": "クォータの余裕と負荷を考慮して優先（残り {{left}}%）",
+      "lessBusy": "他のソースが実行中のため空いているこちらを先に使用",
+      "paygFallback": "サブスクリプションや共有ソースが使えないため従量課金へフォールバック",
+      "paygReserve": "従量課金ソース（他のソースが使えないときの予備）",
+      "standbyQuotaNeutral": "残り {{left}}%、{{reset}} にリセット予定（今回は見送り）"
     },
     "settings": {
       "autoSwitch": {

@@ -20,6 +20,10 @@ vi.mock('../store.js', () => ({ readProviderGroup: vi.fn(), writeProviderGroup: 
 vi.mock('../bindings.desktop.js', () => ({ pruneProviderGroupBindings: vi.fn() }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({ getDesktopProviderService: vi.fn() }));
 vi.mock('../../subscription-accounts/runtime.js', () => ({ refreshSubscriptionPool: vi.fn() }));
+vi.mock('../../subscription-accounts/apiKeyMembers.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../subscription-accounts/apiKeyMembers.js')>()),
+  apiKeyPoolMembers: () => [], apiKeyMemberForConnection: () => undefined,
+}));
 vi.mock('../../appSessionState.js', () => ({
   activeOwnerScopeKey: vi.fn(() => 'owner-a'),
   isAppSessionBoundaryPending: vi.fn(() => false),
@@ -59,6 +63,8 @@ import { broadcast } from '../../device-link/index';
 import { createProviderGroupDirectory } from '../directory';
 import { connectTestMaintenanceGate, disconnectTestMaintenanceGate } from '../../instance-runtime/__tests__/maintenanceGateFixture';
 import type { ProviderView } from '@cindy/model-providers';
+import type { OpenAiGroupProbeResult } from '../../../shared/openAiAccountGroup';
+import { beginProviderRouteMutation } from '../../maker-host/provider-route.js';
 
 const LOCAL = { key: 'local', kind: 'local' as const, agentDeviceId: null, providerId: 'anthropic', limit: 4, weight: 1, paused: false };
 const MINI = {
@@ -151,6 +157,85 @@ it('admits distinct OpenAI connections from either anchor and probes only API ke
     } })).toThrow();
   }
   expect(probe.mock.calls).toEqual([['work-key'], ['work-key'], ['lab-key']]);
+});
+
+// Unit: actual account-merge handler, both the former flat group writer and the
+// canonical membership writer. A billing refusal describes health, not ownership;
+// ordinary probe failures still reject and a stale observation must not attach a key.
+function billingMergeFixture(canonical: boolean, keyIsSource: boolean) {
+  const model = { id: 'gpt-4.1-mini', name: 'mini', contextWindow: 100_000, efforts: [], defaultEffort: null };
+  const key = { id: 'billing-key', name: 'Key', source: 'user', auth: { method: 'apiKey' }, agents: ['codex'],
+    connected: true, models: { codex: [model] }, routing: { codex: {
+      upstream: 'https://api.openai.com/v1', authStrategy: 'api-key-header', wireProtocol: 'openai-responses',
+    } } } as ProviderView;
+  const subscription = { id: 'other-subscription', name: 'Subscription', source: 'builtin', auth: { method: 'oauth' },
+    subscriptionPool: 'openai', connected: true, models: {}, routing: {} } as ProviderView;
+  let records = [key, subscription];
+  const d = deps([]);
+  d.listLocalAccounts = vi.fn(async () => records);
+  d.listGroups = () => ({});
+  const write = vi.fn(async (_source: string, _target: string, assertCurrent: () => void) => { assertCurrent(); });
+  if (canonical) d.mergeLocalAccounts = write;
+  const probe = vi.fn<NonNullable<ProviderGroupCommandDeps['probeAccount']>>();
+  d.probeAccount = probe;
+  const source = keyIsSource ? key.id : subscription.id;
+  const target = keyIsSource ? subscription.id : key.id;
+  return { d, probe, write, key, subscription, source, target, setRecords: (next: ProviderView[]) => { records = next; },
+    merge: () => executeProviderGroupCommand(d, { action: 'account-merge', providerId: source, targetProviderId: target }) };
+}
+const decline: OpenAiGroupProbeResult = { ok: false, code: 'QUOTA_EXCEEDED', billingCode: 'credit_balance_exhausted' };
+
+it.each([
+  [false, false], [false, true], [true, false], [true, true],
+] as const)('merges a billing-held key with real failed probe retained (canonical=%s, keyIsSource=%s)', async (canonical, keyIsSource) => {
+  const f = billingMergeFixture(canonical, keyIsSource);
+  f.probe.mockResolvedValue(decline);
+  await expect(f.merge()).resolves.toEqual({ ok: true, probe: decline });
+  expect(f.probe).toHaveBeenCalledExactlyOnceWith(f.key.id);
+  if (canonical) expect(f.write).toHaveBeenCalledExactlyOnceWith(f.source, f.target, expect.any(Function));
+  else expect(f.d.writeGroup).toHaveBeenCalledExactlyOnceWith(f.target, expect.objectContaining({ localAccountIds: [f.source] }), null);
+  expect(f.d.changed).toHaveBeenCalledExactlyOnceWith(f.target);
+  expect(decline.ok).toBe(false);
+});
+
+it.each(['AUTH_INVALID', 'RATE_LIMITED', 'MODEL_NOT_FOUND', 'QUOTA_EXCEEDED', 'UNKNOWN'] as const)('does not merge on a nonbilling %s probe failure', async code => {
+  const f = billingMergeFixture(true, true);
+  const result = { ok: false, code };
+  f.probe.mockResolvedValue(result);
+  await expect(f.merge()).resolves.toEqual(result);
+  expect(f.write).not.toHaveBeenCalled();
+  expect(f.d.changed).not.toHaveBeenCalled();
+});
+
+it('rejects a billing probe when its credential revision changes before commit', async () => {
+  const f = billingMergeFixture(true, true);
+  f.probe.mockImplementation(async () => {
+    const finish = beginProviderRouteMutation(f.key.id);
+    finish.commit(); finish();
+    return decline;
+  });
+  await expect(f.merge()).rejects.toThrow('PRECONDITION_FAILED');
+  expect(f.write).not.toHaveBeenCalled();
+  expect(f.d.changed).not.toHaveBeenCalled();
+});
+
+it('rejects a billing probe when the target became an alias while testing', async () => {
+  const f = billingMergeFixture(true, false);
+  f.probe.mockImplementation(async () => {
+    f.setRecords([f.subscription, { ...f.key, subscriptionPoolAlias: true, subscriptionPoolTarget: 'another-provider' }]);
+    return decline;
+  });
+  await expect(f.merge()).rejects.toThrow('PRECONDITION_FAILED');
+  expect(f.write).not.toHaveBeenCalled();
+  expect(f.d.changed).not.toHaveBeenCalled();
+});
+
+it('does not report a successful billing merge when the legacy writer did not save', async () => {
+  const f = billingMergeFixture(false, true);
+  f.probe.mockResolvedValue(decline);
+  f.d.writeGroup.mockResolvedValue(null);
+  await expect(f.merge()).rejects.toThrow('PROVIDER_GROUP_CHANGED');
+  expect(f.d.changed).not.toHaveBeenCalled();
 });
 
 afterEach(() => vi.mocked(isAppSessionBoundaryPending).mockReturnValue(false));

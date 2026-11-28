@@ -6,7 +6,7 @@ import type { RemoteActionInvokeResponse } from '@cindy/device-link';
 import type { BotGroupAttachment, BotGroupRemoteActionId } from '@cindy/maker-shared/botGroupChat';
 import { useAuth } from '@/auth/AuthContext';
 import { mobileDebugEnabled, mobileDebugLog } from '@/debug/mobileDebugLog';
-import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox } from '@/session/mobileDurableOutbox';
 import { enqueueChatMessage, enqueueChatShare, settleChatOutbox } from './chatOutbox';
 import { BUILD_AUTH_REGION, getActiveMobileSessionRealm, getMobileEndpointForRealm, loadMobileEndpointsForRealm } from '@/config/env';
@@ -14,7 +14,7 @@ import { createChatInviteShares } from './chatInviteShare';
 import { cacheChatRoster, forgetRemoteResource, hideCachedChatRooms, markRemoteResourceRead, peekCachedChatRoster, readCachedChatRoster } from '@/device-link/remoteResourceCache';
 import { useRemoteSyncCoordinator } from '@/device-link/remoteSyncTask';
 import type { BotGroupChatState } from '@/session/useBotGroupChat';
-import { chatAccessLost, chatCursor, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRateLimitDeadline, chatRetryWaitMs, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ThreadBackfill, type ChatPage, type ChatRequest, type ChatSnapshot } from './chatServerClient';
+import { chatAccessLost, chatCursor, chatGroupAssistantChanged, chatGroupView, chatThreadMetadata, chatHttpsUrl, chatRateLimitDeadline, chatRetryWaitMs, chatRoomRow, chatReadAt, chatReadSequence, chatLastReplyAt, chatLastReplySequence, createChatServerClient, type ChatAccountIdentity, type ChatActor, type ChatMessage, type ThreadBackfill, type ChatPage, type ChatRequest, type ChatSnapshot, type ResolveChatServerMedia } from './chatServerClient';
 import type { TeammateActivity } from '@cindy/maker-shared/teammate-status';
 import { subscribeChatServer, type ChatChangesFrame } from './chatServerSubscription';
 import { createChatHistory, type ChatHistory } from '@cindy/maker-shared/chat-history';
@@ -58,6 +58,11 @@ interface ChatAccountSession {
   rateLimitRemainingMs(): number;
 }
 let accountSession: ChatAccountSession | undefined;
+// The newest 「群里的 Cindy」 values belong to one signed-in account; a switch or sign-out drops them.
+subscribeMobileAuthOwner(() => {
+  const identity = accountSession?.identity;
+  if (identity?.groupAssistant?.size) { identity.groupAssistant.clear(); chatGroupAssistantChanged(identity); }
+});
 function chatAccountSession(owner: string, auth: ChatAuth): ChatAccountSession {
   const realm = getActiveMobileSessionRealm();
   const authOwner = getMobileAuthOwner();
@@ -476,9 +481,12 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     }
     return saved;
   })();
-  const [state, setState] = useJsonSnapshotState<{ identity: string; value: BotGroupChatState; online: boolean; verified: boolean; loadingOlder: boolean }>(() => ({ identity,
-    value: cached ? { kind: 'ready', group: chatGroupView(cached.page, cached.self, cached.actors, 'group') } : { kind: 'loading' },
-    online: true, verified: false, loadingOlder: false }));
+  const [state, setState] = useJsonSnapshotState<{ identity: string; value: BotGroupChatState; online: boolean; verified: boolean; loadingOlder: boolean }>(() => {
+    // Not built through `view`, but the account's copy may be newer than anything read here: record its 群里的 Cindy value.
+    if (cached) api.client.groupAssistant(cached.page.snapshot.room, cached.self);
+    return { identity, value: cached ? { kind: 'ready', group: chatGroupView(cached.page, cached.self, cached.actors, 'group') } : { kind: 'loading' },
+      online: true, verified: false, loadingOlder: false };
+  });
   const page = useRef<{ identity: string; page: ChatPage; self: string; actors: ChatActor[] } | null>(cached ? { identity, ...cached } : null);
   const accessGeneration = useRef(0);
   const deferredMetadataVersion = useRef(0);
@@ -532,7 +540,8 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
     // Enrich only the displayed index. The timeline and its on-disk copy keep their original window.
     const shown = history ? { ...next, cachedMessages: [...history.messages, ...(next.cachedMessages ?? [])],
       threadRoots: { ...history.roots, ...next.threadRoots } } : next;
-    return { ...chatGroupView(shown, self, actors, 'group'), ...api.client.lifecycleCapabilities() };
+    // Settings fall back to this view when their own read fails, so it carries the switch value too.
+    return { ...chatGroupView(shown, self, actors, 'group'), ...api.client.lifecycleCapabilities(), ...api.client.groupAssistant(shown.snapshot.room, self) };
   }, [api, currentIndex]);
   const hydrate = useCallback(async (previous: NonNullable<typeof page.current>) => {
     const enriched = await api.client.hydrateThreads(groupId, previous.page);
@@ -974,6 +983,18 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       }
       return { effects: [] };
     }
+    if (action === 'assistantDevice' || action === 'cancelAssistantDeviceWait') {
+      // The requester's own card: choose the computer, or end the requests waiting for one.
+      if (!enabled || !focused || !valid()) throw new Error('OWNER_CHANGED');
+      const value = action === 'assistantDevice' ? input?.deviceId : input?.executionId;
+      if (typeof value !== 'string' || !value) throw new Error('INVALID_PARAMS');
+      const operationId = (await import('expo-crypto')).randomUUID();
+      try {
+        if (action === 'assistantDevice') await api.client.manageGroup(groupId, undefined, { type: 'assistantDevice', deviceId: value }, operationId);
+        else await api.client.cancelAssistantDeviceWait(groupId, value, operationId);
+      } finally { if (valid()) reload(); }
+      return { effects: [] };
+    }
     if (action !== 'send' || !input || input.division) throw new Error('UNSUPPORTED_CHAT_ACTION');
     const latest = page.current;
     if (!latest || latest.identity !== identity) throw new Error('CHAT_READ_FAILED');
@@ -1014,10 +1035,10 @@ export function useChatServerGroup(groupId: string, enabled: boolean, threadRoot
       throw error;
     }
   }, [enabled, valid, identity, api, groupId, loseAccess, t]);
-  const media = useCallback(async (mediaId: string, signal?: AbortSignal): Promise<BotGroupAttachment> => {
+  const media = useCallback<ResolveChatServerMedia>(async (mediaId, signal, options) => {
     const generation = accessGeneration.current;
     try {
-      const attachment = await api.client.media(groupId, mediaId, signal);
+      const attachment = await api.client.media(groupId, mediaId, signal, options);
       if (!valid() || generation !== accessGeneration.current) throw new Error('OWNER_CHANGED');
       return attachment;
     } catch (error) {

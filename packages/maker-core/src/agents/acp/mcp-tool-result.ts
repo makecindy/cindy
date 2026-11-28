@@ -65,6 +65,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
  * - `mcp__<server>__<tool>` (Cindy / Claude / normalized Antigravity MCP format)
  * - `mcp:<server>:<tool>`
  * - `mcp_<sanitizedServer>_<tool>` when `serverNames` is provided (un-normalized ACP agents)
+ * - `<sanitizedServer>___<tool>` when `serverNames` is provided
  */
 export function parseAcpMcpToolName(
   rawName: string,
@@ -112,6 +113,15 @@ export function parseAcpMcpToolName(
       if (rawName.startsWith(prefix) && rawName.length > prefix.length) {
         return { serverName: server, toolName: rawName.slice(prefix.length) };
       }
+    }
+  }
+
+  // Match only a mounted server. Long names truncated with a hash cannot be
+  // recovered from the wire name and are intentionally not supported here.
+  for (const server of sortedServers) {
+    const prefix = `${server.replace(/[^A-Za-z0-9_-]/g, '_')}___`;
+    if (rawName.startsWith(prefix) && rawName.length > prefix.length) {
+      return { serverName: server, toolName: rawName.slice(prefix.length) };
     }
   }
 

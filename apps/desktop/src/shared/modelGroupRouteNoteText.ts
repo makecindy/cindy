@@ -38,6 +38,7 @@ export function modelGroupWhyText(
   entry: Pick<ModelGroupTraceEntry, 'why' | 'quota' | 'limitedUntilMs'>,
   t: ModelGroupTranslate,
   locale: string,
+  picked?: Pick<ModelGroupTraceEntry, 'why' | 'quota'> | null,
 ): string {
   const left = entry.quota ? Math.max(0, Math.round(100 - entry.quota.usedPercent)) : null;
   const reset = entry.quota?.resetAtMs ? formatReset(entry.quota.resetAtMs, locale) : null;
@@ -46,13 +47,34 @@ export function modelGroupWhyText(
       ? t('modelGroups.why.expiringQuota', { left, reset })
       : t('modelGroups.why.expiring');
   }
+  if (entry.why === 'usageHabit') {
+    return left !== null
+      ? t('modelGroups.why.usageHabitQuota', { left })
+      : t('modelGroups.why.usageHabit');
+  }
+  if (entry.why === 'autoBalance') {
+    return left !== null
+      ? t('modelGroups.why.autoBalanceQuota', { left })
+      : t('modelGroups.why.autoBalance');
+  }
   if (entry.why === 'limited' || entry.why === 'soonest') {
     return entry.limitedUntilMs
       ? t(`modelGroups.why.${entry.why}Until`, { reset: formatReset(entry.limitedUntilMs, locale) })
       : t(`modelGroups.why.${entry.why}`);
   }
   if (entry.why === 'headroom' && left !== null) return t('modelGroups.why.headroomQuota', { left });
-  if (entry.why === 'standby' && left !== null && reset) return t('modelGroups.why.standbyQuota', { left, reset });
+  if (entry.why === 'standby' && left !== null && reset) {
+    // 只有当胜出项按快过期配额胜出、且本项重置时间确实更晚时才说「才重置，先留着」；
+    // 否则（如胜出项按平时用量/分担胜出，或本项其实更早重置）用中性文案，避免语义矛盾。
+    const resetsLaterThanPicked = !picked
+      || (picked.why === 'expiring'
+        && typeof picked.quota?.resetAtMs === 'number'
+        && typeof entry.quota?.resetAtMs === 'number'
+        && entry.quota.resetAtMs > picked.quota.resetAtMs);
+    return resetsLaterThanPicked
+      ? t('modelGroups.why.standbyQuota', { left, reset })
+      : t('modelGroups.why.standbyQuotaNeutral', { left, reset });
+  }
   return t(`modelGroups.why.${entry.why}`);
 }
 

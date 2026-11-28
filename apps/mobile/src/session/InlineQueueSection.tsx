@@ -11,6 +11,8 @@
  * 问题,留在 footer 最自然。
  */
 import { AgentErrorDetails } from './AgentErrorDetails';
+import { resolveMobileErrorExplain } from './chatErrorExplain';
+import { NoticeExplainButton } from './NoticeExplainSheet';
 import { ErrorNotice, ErrorNoticeAction } from '@/components/ErrorNotice';
 import { ReadableHistoryRecovery } from './ReadableHistoryRecovery';
 import { useTranslation } from 'react-i18next';
@@ -47,6 +49,8 @@ export interface InlineQueueSectionProps {
   projection: InputProjection;
   isRunning?: boolean;
   sessionSource?: string | null;
+  providerId?: string | null;
+  providerName?: string | null;
   busy?: boolean;
   readOnlyReason?: string | null;
   onResume(): void;
@@ -67,6 +71,8 @@ export function InlineQueueSection({
   projection,
   isRunning,
   sessionSource,
+  providerId,
+  providerName,
   busy,
   readOnlyReason,
   onResume,
@@ -109,12 +115,25 @@ export function InlineQueueSection({
     projection.error ?? '',
     projection.outputLimit,
     projection.reconnectHandoff,
+    { providerId, providerName },
   );
   const projectionErrorKey = projection.error
     ? inputProjectionErrorI18nKey(projection.error)
     : null;
   const usageLimitResumeAt = projection.error && projection.usageLimitWait
     ? formatUsageLimitResumeAt(projection.usageLimitWait.resumeAt, i18n.resolvedLanguage || i18n.language)
+    : null;
+  const errorExplain = projection.error
+    ? resolveMobileErrorExplain(
+        {
+          message: projection.error,
+          reason: projection.errorReason,
+          providerId,
+          providerName,
+          hasUsageLimitWait: Boolean(usageLimitResumeAt),
+        },
+        t,
+      )
     : null;
   // The computer already confirmed an account usage limit and armed the automatic
   // continuation, so name the cause even when the upstream text is not recognizable.
@@ -146,7 +165,10 @@ export function InlineQueueSection({
           dismissBusy={busy}
           dismissHint={errorDisabledReason ?? undefined}
         >
-          <AgentErrorDetails message={projection.error} onDiagnose={onDiagnose
+          <AgentErrorDetails
+            message={projection.error}
+            explainButton={errorExplain ? <NoticeExplainButton content={errorExplain} /> : undefined}
+            onDiagnose={onDiagnose
             ? () => onDiagnose({
               message: projectionError ?? '',
               details: projection.error ?? '',

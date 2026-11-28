@@ -29,6 +29,7 @@ import {
   copyDictionaryMap,
   createDictionaryMap,
   hasDictionaryKey,
+  isTermSuppressed,
   listLiveIncarnations,
   readCounterTotal,
   withDictionaryKey,
@@ -84,7 +85,7 @@ export function recordLearningEvent(
   // 后者看起来无害(物化阶段本来就会被抑制压住),但每次学习都会改状态 → 触发
   // 写盘与同步广播,而且计数一直涨,是纯粹的浪费。用户手动把词加回来之后
   // (存在 manual 存活化身)才恢复正常学习。
-  if (hasDictionaryKey(state.suppressed, key) && !live.some((item) => item.source === 'manual')) {
+  if (isTermSuppressed(state, key) && !live.some((item) => item.source === 'manual')) {
     return { state, clock, changed: false };
   }
 
@@ -177,23 +178,34 @@ export interface SeedTermInput {
 export function promoteTermToEntry(
   state: VoiceDictionarySyncState,
   clock: HlcClock,
-  input: { termKey: string; nowMs: number },
+  input: { termKey: string; nowMs: number; markManual?: boolean },
 ): MutationResult {
-  const record = state.records[input.termKey];
-  if (!record) return { state, clock, changed: false };
+  const key = dictionaryTermKey(input.termKey);
+  const record = key ? state.records[key] : undefined;
+  if (!key || !record) return { state, clock, changed: false };
   const live = listLiveIncarnations(record);
-  if (live.length === 0 || live.every((item) => item.stage === 'entry')) {
+  const needsPromotion = live.some(
+    (item) => item.stage !== 'entry' || (input.markManual === true && item.source !== 'manual'),
+  );
+  if (live.length === 0 || !needsPromotion) {
     return { state, clock, changed: false };
   }
 
   const ticked = tickHlc(clock, input.nowMs);
   const incarnations = copyDictionaryMap(record.incarnations);
   for (const incarnation of live) {
-    if (incarnation.stage === 'entry') continue;
-    incarnations[incarnation.tag] = { ...incarnation, stage: 'entry', updatedAt: input.nowMs };
+    const nextStage = 'entry';
+    const nextSource = input.markManual === true ? 'manual' : incarnation.source;
+    if (incarnation.stage === nextStage && incarnation.source === nextSource) continue;
+    incarnations[incarnation.tag] = {
+      ...incarnation,
+      stage: nextStage,
+      source: nextSource,
+      updatedAt: Math.max(incarnation.updatedAt, input.nowMs),
+    };
   }
   return {
-    state: putRecord(state, input.termKey, { ...record, incarnations }, ticked.clock),
+    state: putRecord(state, key, { ...record, incarnations }, ticked.clock),
     clock: ticked.clock,
     changed: true,
   };
@@ -209,7 +221,7 @@ export function promoteEligibleDictionaryCandidates(
   let nextClock = clock;
   for (const [key, record] of Object.entries(state.records)) {
     const live = listLiveIncarnations(record);
-    if (hasDictionaryKey(state.suppressed, key) || live.some((item) => item.stage === 'entry')) continue;
+    if (isTermSuppressed(state, key) || live.some((item) => item.stage === 'entry')) continue;
     const count = live.reduce((sum, item) => sum + readCounterTotal(item.counters), 0);
     if (count < DICTIONARY_CANDIDATE_PROMOTION_COUNT) continue;
     const promoted = promoteTermToEntry(next, nextClock, {
@@ -243,7 +255,7 @@ export function seedTerm(
   if (existing && input.allowTombstonedRevival === false) {
     return { state, clock, changed: false };
   }
-  if (input.source === 'automatic' && hasDictionaryKey(state.suppressed, key)) {
+  if (input.source === 'automatic' && isTermSuppressed(state, key)) {
     return { state, clock, changed: false };
   }
 
@@ -394,21 +406,69 @@ export function deleteTerms(
     for (const incarnation of live) tombstones[incarnation.tag] = ticked.stamp;
 
     const isAutomatic = !live.some((item) => item.source === 'manual');
-    nextState = putRecord(nextState, key, { ...record, tombstones });
-    if (input.suppressAutomatic !== false && isAutomatic && !hasDictionaryKey(nextState.suppressed, key)) {
+    nextState = putRecord(nextState, key, { ...record, tombstones }, ticked.clock);
+    if (input.suppressAutomatic !== false && isAutomatic && !isTermSuppressed(nextState, key)) {
+      const hadLegacySuppression = hasDictionaryKey(nextState.suppressed, key);
+      const existingEvent = nextState.suppressionEvents && hasDictionaryKey(nextState.suppressionEvents, key)
+        ? nextState.suppressionEvents[key]
+        : undefined;
       nextState = {
         ...nextState,
-        suppressed: withDictionaryKey(nextState.suppressed, key, {
-          // 抑制列表展示的文本与词条列表用同一套 LWW 规则,避免两处显示不一致。
-          text: pickDisplayText(live),
-          stamp: ticked.stamp,
-        }),
+        suppressed: hadLegacySuppression
+          ? nextState.suppressed
+          : withDictionaryKey(nextState.suppressed, key, {
+              // 抑制列表展示的文本与词条列表用同一套 LWW 规则,避免两处显示不一致。
+              text: pickDisplayText(live),
+              stamp: ticked.stamp,
+            }),
+        ...(hadLegacySuppression
+          ? {
+              suppressionEvents: withDictionaryKey(nextState.suppressionEvents, key, {
+                ...existingEvent,
+                suppressedAt: ticked.stamp,
+              }),
+            }
+          : {}),
       };
     }
     changed = true;
   }
 
   return { state: nextState, clock: nextClock, changed };
+}
+
+/**
+ * 解除对某个自动词条的抑制，使其可以再次被自动学习收录。
+ *
+ * 保留 `suppressed` 里的初始记录（兼容旧客户端 G-Set 合并），通过 `suppressionEvents`
+ * 的 `unsuppressedAt` HLC 覆盖之；若后续再次删除该自动词条，`deleteTerms` 会写入更大的
+ * `suppressedAt` 完成新一轮抑制。
+ */
+export function unsuppressTerm(
+  state: VoiceDictionarySyncState,
+  clock: HlcClock,
+  input: { termKey: string; nowMs: number },
+): MutationResult {
+  const key = dictionaryTermKey(input.termKey);
+  if (!key || !isTermSuppressed(state, key)) {
+    return { state, clock, changed: false };
+  }
+  const ticked = tickHlc(clock, input.nowMs);
+  const existingEvent = state.suppressionEvents && hasDictionaryKey(state.suppressionEvents, key)
+    ? state.suppressionEvents[key]
+    : undefined;
+  return {
+    state: {
+      ...state,
+      suppressionEvents: withDictionaryKey(state.suppressionEvents, key, {
+        ...existingEvent,
+        unsuppressedAt: ticked.stamp,
+      }),
+      mutationVector: withDictionaryKey(state.mutationVector, ticked.clock.nodeId, formatHlc(ticked.clock)),
+    },
+    clock: ticked.clock,
+    changed: true,
+  };
 }
 
 export interface RenameTermInput {

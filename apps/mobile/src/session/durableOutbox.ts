@@ -60,7 +60,7 @@ export interface DurableOutboxRecord {
   historyConfirmed?: boolean;
   /** A legacy peer could not confirm this send. Only a read may release it. */
   historyConfirmation?: OutboxHistoryConfirmation;
-  /** Failed awaits a Retry tap; queued may retry once; sending is an uncertain retry. */
+  /** Failed awaits a Retry tap; queued must verify absence before one retry; sending is an uncertain retry. */
   retryAfterConfirmedMiss?: true;
   error?: string;
   cancelRequested?: boolean;
@@ -74,6 +74,10 @@ export interface DurableOutboxRecord {
   failedUploadSlot?: number;
   creation?: {
     draft: NewSessionDraft;
+    /** Explicit first-send intent, saved after the form accepted this plain dialogue. */
+    needsHostCreation?: true;
+    /** Host task creation was confirmed by outbox recovery before the first input was prepared. */
+    hostCreated?: true;
     originalWorkingDir?: string;
     cancelled?: true;
     /** Creation was handed back to the editor; restore its entry after restart. */
@@ -103,8 +107,21 @@ export function isDurableOutboxSettled(record: DurableOutboxRecord): boolean {
 export function isDurableCreationDraft(record: DurableOutboxRecord): boolean {
   return record.suspended === true && record.state === 'failed'
     && !!(record.creation?.editReady || record.creation?.cancelled)
+    && !record.creation?.hostCreated
     && !record.prepared && !record.template && !record.enqueueStarted && record.sendAtMs === undefined
     && !record.cancelRequested && !isDurableOutboxSettled(record);
+}
+
+/** True while a creation record still owns an unconfirmed host task, including after a failed create attempt. */
+export function hasUncreatedHostSession(record: DurableOutboxRecord): boolean {
+  return !!record.creation && !record.creation.hostCreated
+    && !record.prepared && !record.template
+    && !isDurableOutboxSettled(record);
+}
+
+/** True while a submitted dialogue creation record still has no confirmed host task (queued or failed). */
+export function isPendingHostDialogueCreation(record: DurableOutboxRecord): boolean {
+  return record.creation?.needsHostCreation === true && hasUncreatedHostSession(record);
 }
 
 /**
@@ -122,6 +139,17 @@ export function isDurableOutboxHandedOff(record: Pick<DurableOutboxRecord, 'stat
 export function isDurableOutboxUnsent(record: DurableOutboxRecord): boolean {
   return record.enqueueStarted === false || (record.enqueueStarted === undefined
     && !record.prepared && record.sendAtMs === undefined);
+}
+
+export function needsHostCreation(record: DurableOutboxRecord): boolean {
+  const creation = record.creation;
+  return creation?.needsHostCreation === true && !creation.hostCreated && creation.draft?.workspaceKind === 'dialogue'
+    && !creation.draft.pluginEngine && !creation.draft.agentDeviceId && !creation.originalWorkingDir
+    && !record.chat && !record.resourceRef && !record.uploads.length && !record.item.attachmentSlots.length
+    && record.state === 'queued'
+    && !record.suspended && !record.creation!.cancelled && !record.creation!.editReady
+    && !record.cancelRequested && !record.template && !record.prepared
+    && !isDurableOutboxSettled(record) && isDurableOutboxUnsent(record);
 }
 
 export const DURABLE_OUTBOX_PREFIX = "cindy.mobile.outbox.v1.";
@@ -291,6 +319,14 @@ export function createDurableOutbox(storage: OutboxStorage, reconcileDraft?: (
         deviceId: record.deviceId,
       }, false, expectedRecords) as Promise<DurableOutboxRecord>,
     remove: (record: DurableOutboxRecord) => mutate(record, null),
+    async discardUnconfirmed(record: DurableOutboxRecord): Promise<void> {
+      if (record.historyConfirmation !== 'unconfirmed') return;
+      // Release the local FIFO without cancelling the remote write or cleaning
+      // uploads that a received message may already reference.
+      await store.update(record, { state: 'host-owned', cleanupOutcome: 'accepted',
+        historyConfirmation: undefined, retryAfterConfirmedMiss: undefined,
+        cancelRequested: undefined, error: undefined });
+    },
     editCreationDraft: (record: DurableOutboxRecord, edit: (current: DurableOutboxRecord) => DurableOutboxRecord | null) =>
       mutate(record, edit),
     ready: (): Promise<void> => store.activate(accountId),

@@ -14,6 +14,8 @@ export interface OrcaRemoteLead {
   workerLabel: string;
   /** 派活电脑通知结束协同的时刻(unix ms)；缺省 = 协同仍在进行。 */
   releasedAt?: number;
+  /** Set with releasedAt only after the host closes the Worker runtime. */
+  runtimeClosed?: true;
 }
 
 /** Host-only handoff identity; receipt reconciliation never replays an unknown send. */
@@ -65,6 +67,7 @@ export function parseOrcaRemoteLead(raw: unknown): OrcaRemoteLead | null {
     leadSessionId,
     leadTitle: text(record.leadTitle) ?? '',
     workerLabel,
+    ...(releasedAt !== undefined && record.runtimeClosed === true ? { runtimeClosed: true as const } : {}),
     ...(releasedAt !== undefined ? { releasedAt } : {}),
   };
 }

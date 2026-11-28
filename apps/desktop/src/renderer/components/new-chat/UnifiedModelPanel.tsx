@@ -491,10 +491,23 @@ export function UnifiedModelPanel(props: UnifiedModelPanelProps) {
       count + Object.values(provider.models).reduce((sum, models) => sum + models.length, 0), 0);
     const remoteRows = props.remoteSources?.groups.reduce((count, group) => count + group.entries.length, 0) ?? 0;
     if (localRows + remoteRows >= 80) {
-      return <div ref={panelRoot} role="status" style={{ height: props.listMaxHeight ?? 428 }} className="flex min-h-0 shrink items-center justify-center gap-1.5 px-3 text-13 text-[var(--text-tertiary)]">
-        <Spinner size={14} />
-        {t('newChat.modelSelector.trigger.loading')}
-      </div>;
+      // In a toolbar morph the real rows are not available for intrinsic
+      // measurement yet. Reserve the compact pane’s capped width in its
+      // first measurement so stickyWidth holds it when the rows arrive.
+      return (
+        <div
+          ref={panelRoot}
+          role="status"
+          style={{ height: props.listMaxHeight ?? 428 }}
+          className={cn(
+            'flex min-h-0 shrink items-center justify-center gap-1.5 px-3 text-13 text-[var(--text-tertiary)]',
+            '[[data-morph-side]_&]:w-[min(460px,calc(100vw-48px))] [[data-morph-side]_&]:max-w-full',
+          )}
+        >
+          <Spinner size={14} />
+          {t('newChat.modelSelector.trigger.loading')}
+        </div>
+      );
     }
   }
   return <UnifiedModelPanelContent {...props} panelRoot={panelRoot} />;

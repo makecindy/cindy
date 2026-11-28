@@ -11,6 +11,8 @@ import * as activeCatalogForHostParity from '../active-catalog.js';
 import { calibrateDraftModel } from '../../../shared/draftModelCalibration.js';
 import { resolveAutomaticImSettings } from '../../../shared/imAutomaticModel.js';
 import { IM_DEFAULT_SETTINGS } from '../../../shared/imDefaultSettings.js';
+import { apiKeyMemberForConnection, restoreStandaloneApiKeyMember, saveApiKeyPoolMembers } from '../../subscription-accounts/apiKeyMembers.js';
+import { mergeOpenAiPoolConnections } from '../../subscription-accounts/openAiPoolMerge.js';
 import { accountProviderId, readCreatedSubscriptionProviders } from '../../subscription-accounts/placement.js';
 import { remoteAccessProviderId } from '../mergedProviderPool.js';
 import { createHostProviderConfig } from '../../../../../host/src/agent/provider-config.js';
@@ -1201,6 +1203,73 @@ describe('provider catalog realm reload', () => {
       setActiveCatalog(previous);
     }
   });
+  // Unit: the real Desktop provider-list projection must distinguish retained historical
+  // membership from current group ownership. Merge/split/remerge the same connection in a temp profile.
+  it('projects an extracted API key like a new standalone connection without discarding its membership identity', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-api-standalone-'));
+    const previousOwner = h.owner;
+    const previousPool = h.pool;
+    const previous = getActiveCatalog();
+    h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
+    h.pool = { strategy: 'expiring', accounts: [{ id: 'default', paused: false, limit: 4, weight: 1 }] };
+    const id = 'key-fixture';
+    const key = buildUserProvider({ id, name: 'OpenAI key', runtimes: { codex: {
+      baseUrl: 'https://api.openai.com/v1', models: [{ id: 'gpt-fixture', name: 'Fixture' }],
+    } } });
+    const service = getDesktopProviderService({ allowSideEffects: false });
+    const read = async () => (await service.listProviders({ catalog: { ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, key] }, snapshotOnly: true })).find(view => view.id === id)!;
+    try {
+      const fresh = await read();
+      expect(fresh.subscriptionAccountPool).toBeUndefined();
+      await saveApiKeyPoolMembers('openai', [{ connectionId: id }], () => {});
+      const merged = apiKeyMemberForConnection(id)!;
+      expect(await read()).toMatchObject({ subscriptionPoolAlias: true, subscriptionPoolTarget: 'openai' });
+      await restoreStandaloneApiKeyMember(merged, () => {});
+      const extracted = await read();
+      expect(extracted.subscriptionPoolAlias).toBeUndefined();
+      expect(extracted.subscriptionAccountPool).toBe(fresh.subscriptionAccountPool);
+      expect(apiKeyMemberForConnection(id)).toMatchObject({ id: merged.id, providerId: id });
+      await saveApiKeyPoolMembers('openai', [{ connectionId: id }], () => {}, undefined, undefined, undefined, true);
+      expect(await read()).toMatchObject({ subscriptionPoolAlias: true, subscriptionPoolTarget: 'openai' });
+      await restoreStandaloneApiKeyMember(apiKeyMemberForConnection(id)!, () => {});
+      await saveApiKeyPoolMembers(id, [{ connectionId: 'second-key' }], () => {});
+      expect((await read()).subscriptionAccountPool).toBe('openai');
+    } finally {
+      h.pool = previousPool; h.profileRoot = null; h.owner = previousOwner; h.actualPlacement = false;
+      setActiveCatalog(previous); await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Unit: a destination may become a merged native alias after the probe, before
+  // the account-management lock is acquired. Exercise the real canonical writer
+  // with a temporary owner and prove that it cannot place a Key behind the alias.
+  it('refuses a stale merged native destination at the canonical membership writer', async () => {
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cindy-merge-destination-'));
+    const previousOwner = h.owner;
+    const previousPool = h.pool;
+    const previous = getActiveCatalog();
+    h.profileRoot = root; h.owner = randomUUID(); h.actualPlacement = true;
+    h.pool = { strategy: 'expiring', accounts: ['default', 'imported'].map(id => ({ id, paused: false, limit: 4, weight: 1 })),
+      legacyCodexAccounts: { 'legacy-target': 'imported' } };
+    const key = buildUserProvider({ id: 'key-fixture', name: 'OpenAI key', runtimes: { codex: {
+      baseUrl: 'https://api.openai.com/v1', models: [{ id: 'gpt-fixture', name: 'Fixture' }],
+    } } });
+    const legacy = buildUserProvider({ id: 'legacy-target', name: 'Old OpenAI',
+      auth: { method: 'oauth', native: 'codex' }, runtimes: { codex: {
+        baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-fixture', name: 'Fixture' }],
+      } } });
+    try {
+      setActiveCatalog({ ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, key, legacy] });
+      await expect(mergeOpenAiPoolConnections(key.id, legacy.id, () => {})).rejects.toThrow('Providers cannot be merged');
+      expect(apiKeyMemberForConnection(key.id)).toBeUndefined();
+      await mergeOpenAiPoolConnections(key.id, 'openai', () => {});
+      expect(apiKeyMemberForConnection(key.id)?.providerId).toBe('openai');
+    } finally {
+      h.pool = previousPool; h.profileRoot = null; h.owner = previousOwner; h.actualPlacement = false;
+      setActiveCatalog(previous); await fsp.rm(root, { recursive: true, force: true });
+    }
+  });
+
   // Unit: real provider-list wiring must retain channel readiness after hiding a
   // standalone model, otherwise the user's OFF switch becomes impossible to re-enable.
   it.each(['evaluation', 'rerank'] as const)('keeps hidden %s models manageable but excludes them from calls', async mode => {

@@ -32,6 +32,7 @@ type NativeAudioErrorEvent = {
 
 type NativeRealtimeAudioModule = {
   start(options?: { sampleRate?: number; bufferSize?: number; captureId?: string }): Promise<{
+    backend?: 'ios-native' | 'android-native';
     inputPortTypes: string[];
     inputSampleRate: number;
     inputChannels: number;
@@ -112,7 +113,7 @@ const EXPO_AUDIO_STREAM_WATCHDOG_INTERVAL_MS = 1_000;
 
 let nativeBinding: RealtimeAudioNativeBinding | null | undefined;
 let expoAudioNativeModule: ExpoAudioNativeModule | null | undefined;
-// The custom Apple module owns one native engine. A replacement must wait for
+// The custom native module owns one capture engine per platform. A replacement must wait for
 // the previous caller's complete start/stop lifecycle, including late cleanup.
 let customNativeCaptureReleased: Promise<void> = Promise.resolve();
 let nextCaptureId = 0;
@@ -124,9 +125,8 @@ export function isMobileRealtimeAudioAvailable(): boolean {
 }
 
 /**
- * Android uses expo-audio's native PCM AudioStream when the custom Apple module
- * is absent. Keep the entry hidden in builds that predate that native class or
- * otherwise failed to link it, instead of sending users into a known failure.
+ * Older Android builds use expo-audio's native PCM AudioStream when the custom
+ * module is absent. Keep the entry hidden if neither backend is linked.
  */
 export function shouldShowMobileVoiceUi(
   platform: string,
@@ -206,7 +206,7 @@ async function startCustomNativeRealtimeAudio(
       captureId,
     });
     logMobileVoice('debug', 'capture input', {
-      backend: 'ios-native',
+      backend: input?.backend ?? 'ios-native',
       // Older installed native modules return void; capture remains compatible.
       inputPortTypes: input?.inputPortTypes ?? ['unknown'],
       inputSampleRate: input?.inputSampleRate,
@@ -370,10 +370,10 @@ async function startExpoAudioRealtimeAudio(
 
 /**
  * Best-effort microphone warm-up, wired to touch-down (pressIn) of the mic
- * button. The custom iOS module can activate AVAudioSession ahead of start;
- * Android's Expo AudioStream has no prepare phase, so Android safely no-ops
- * here while its ASR connection still prewarms in parallel. Never throws and
- * never blocks the caller — a real failure will surface from start.
+ * button. Both iOS and Android native XdtMobileRealtimeAudio modules warm their
+ * audio stack ahead of start; older Android binaries falling back to Expo
+ * AudioStream have no prepare phase and safely no-op here while ASR connects in
+ * parallel. Never throws and never blocks the caller.
  */
 export function prewarmMobileRealtimeAudio(): void {
   if (isE2eMockRealtimeAudioEnabled()) return;

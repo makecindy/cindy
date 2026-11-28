@@ -19,7 +19,7 @@ import { isScopedPeer, isSharedTaskPeer } from '@cindy/device-link';
 import { isProviderShareAgentDeviceId } from '../../../shared/providerShare';
 import { useNavigate } from 'react-router-dom';
 import { buildLocalSkillPathRoute } from '@/features/skillhub/lib/localRoutes';
-import { Folder, MessageSquarePlus, TriangleAlert, X } from 'lucide-react';
+import { Folder, MessageSquarePlus, Sparkles, TriangleAlert, X } from 'lucide-react';
 import { useStableTranslation as useTranslation } from '@/hooks/useStableTranslation';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { CINDY_MAKE_ENABLED } from '@cindy/maker-shared/cindy-make-feature';
@@ -235,6 +235,7 @@ import { pluginSuggestionComposerText } from '@/features/cc-agent/pluginHomeSugg
 import { useInstalledGhosts } from '@/cindy-brain/useInstalledGhosts';
 import { useRemoteComposerGhosts } from '@/cindy-brain/useRemoteComposerGhosts';
 import { projectGhostComposerEntries, type GhostCommandSource } from '../../../shared/ghostComposer';
+import { MAX_SESSION_REFERENCES, reconcileSessionRefsForText } from '../../../shared/agentInputQueue';
 import {
   attachGhostMediaToSession,
   getGhostMediaHandoverFromDataTransfer,
@@ -355,6 +356,7 @@ import { SendDeliveryTip } from './SendDeliveryTip';
 import { usePromptRecommendationPreference } from '@/hooks/usePromptRecommendationPreference';
 import { usePromptRecommendationPrediction } from '@/hooks/usePromptRecommendationPrediction';
 import { predictPromptUntilDisabled } from '@/lib/predictPromptUntilDisabled';
+import { promptRecommendationAgentKind } from '@/lib/promptRecommendationAgentKind';
 import {
   dismissPromptRecommendation,
   usePromptRecommendation,
@@ -958,6 +960,7 @@ interface ChatInputProps {
   pluginModels?: PluginModelsPickerProps;
   /** 新任务的模型组(只有新任务草稿传)。 */
   modelGroups?: ModelGroupsPickerProps;
+  readModelGroupDevices?(): void;
   /**
    * 插件提供的执行引擎(docs/plans/acp-plugin-bridge.md)。只有本机新任务草稿在至少有一个引擎时传。
    * 选中引擎时：模型 pill 显示引擎与模型，权限只给引擎的两档，计划模式等内置引擎专属入口不出现，
@@ -1321,6 +1324,7 @@ export function ChatInput({
   onUnifiedDraftSelect,
   pluginModels,
   modelGroups,
+  readModelGroupDevices,
   pluginEngines,
   pluginEngineSession,
   selectedFavoriteUid = null,
@@ -1538,6 +1542,7 @@ export function ChatInput({
 
   // ── ESC / history ref bridges for Tiptap handleKeyDown ────────────
   // Tiptap editorProps can't read React state, so we use refs.
+  const voiceInputHandleUndoKeyDownRef = useRef<((event: KeyboardEvent) => boolean) | null>(null);
   const onStopRef = useRef(onStop);
   onStopRef.current = onStop;
   const handleStop = useCallback(() => {
@@ -2823,6 +2828,12 @@ export function ChatInput({
           return true;
         }
 
+        // 语音听写润色后按 Cmd/Ctrl+Z 独立撤销回原始 ASR 文本（预润色上屏路径）。
+        if (voiceInputHandleUndoKeyDownRef.current?.(event)) {
+          event.preventDefault();
+          return true;
+        }
+
         // Delegate panel navigation keys (↑ ↓ Enter Esc Tab) when a
         // palette is open. We can't read React state from here directly,
         // but we expose a ref-based escape hatch via `panelBridgeRef`.
@@ -3596,12 +3607,46 @@ export function ChatInput({
       voiceConversationButtonRef.current?.focus();
     wasVoiceConversationActive.current = voiceConversationActive;
   }, [voiceConversationActive, onStartVoiceConversation]);
+  const [hasSelectedTextForVoiceRewrite, setHasSelectedTextForVoiceRewrite] = useState(false);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) {
+      setHasSelectedTextForVoiceRewrite(false);
+      return;
+    }
+    const updateSelectionFlag = () => {
+      if (editor.isDestroyed) {
+        setHasSelectedTextForVoiceRewrite(false);
+        return;
+      }
+      const { from, to, empty } = editor.state.selection;
+      const hasText = !empty && editor.state.doc.textBetween(from, to, '\n').trim().length > 0;
+      setHasSelectedTextForVoiceRewrite(hasText);
+    };
+    updateSelectionFlag();
+    editor.on('selectionUpdate', updateSelectionFlag);
+    editor.on('transaction', updateSelectionFlag);
+    return () => {
+      editor.off('selectionUpdate', updateSelectionFlag);
+      editor.off('transaction', updateSelectionFlag);
+    };
+  }, [editor]);
+
   const handleVoiceInputStart = useCallback((): boolean => {
     // 同步 claim 录音后立刻返回是否占用；授权确认（beforeStart）与启动提示音
     // 由 useVoiceInput 的后台启动流程继续处理。
     onComposerTypingRef.current?.();
     return voiceInput.start({
       startedAt: performance.now(),
+      beforeStart: onBeforeVoiceInputStart,
+      onStartFeedback: voiceInputSettings.playInteractionSound ? playVoiceInputStartCue : undefined,
+    });
+  }, [onBeforeVoiceInputStart, voiceInput.start, voiceInputSettings.playInteractionSound]);
+
+  const handleVoiceRewriteStart = useCallback((): boolean => {
+    onComposerTypingRef.current?.();
+    return voiceInput.start({
+      startedAt: performance.now(),
+      mode: 'rewrite',
       beforeStart: onBeforeVoiceInputStart,
       onStartFeedback: voiceInputSettings.playInteractionSound ? playVoiceInputStartCue : undefined,
     });
@@ -3634,9 +3679,12 @@ export function ChatInput({
   );
 
   const voiceShortcutRef = useRef(voiceInputSettings.shortcut);
+  const voiceInputSettingsRef = useRef(voiceInputSettings);
+  voiceInputSettingsRef.current = voiceInputSettings;
   const voiceInputStateRef = useRef(voiceInput.state);
   const voiceInputGetStateRef = useRef(voiceInput.getState);
   const voiceInputPrepareRef = useRef(voiceInput.prepare);
+  voiceInputHandleUndoKeyDownRef.current = voiceInput.handleUndoKeyDown;
   const voiceInputStopRef = useRef(handleVoiceInputStopWithRefinement);
   voiceInputBusyRef.current = voiceInput.isBusy;
   voiceDraftTextRef.current = voiceInput.draftText;
@@ -3685,6 +3733,7 @@ export function ChatInput({
     voiceInputStateRef.current = voiceInput.state;
     voiceInputGetStateRef.current = voiceInput.getState;
     voiceInputPrepareRef.current = voiceInput.prepare;
+    voiceInputHandleUndoKeyDownRef.current = voiceInput.handleUndoKeyDown;
     voiceInputStopRef.current = handleVoiceInputStopWithRefinement;
     voiceInputCancelRef.current = voiceInput.cancel;
     handleVoiceInputStartRef.current = handleVoiceInputStart;
@@ -3699,6 +3748,7 @@ export function ChatInput({
     handleVoiceInputStopWithRefinement,
     voiceInput.cancel,
     voiceInput.getState,
+    voiceInput.handleUndoKeyDown,
     voiceInput.prepare,
     voiceInput.state,
   ]);
@@ -3966,6 +4016,15 @@ export function ChatInput({
     const gesture = createComposerLongPressVoiceGesture({
       getState: () => voiceInputGetStateRef.current(),
       prepare: () => voiceInputPrepareRef.current?.(),
+      onHoldWarmup: () => {
+        const bridge = window.electronAPI?.voiceInput;
+        if (!bridge?.prewarmOnPress) return;
+        const { language, refinementEnabled } = voiceInputSettingsRef.current;
+        void bridge.prewarmOnPress({ sourceLanguage: language, refinementEnabled }).catch(() => undefined);
+        return () => {
+          void bridge.discardPressPrewarm?.().catch(() => undefined);
+        };
+      },
       start: () => handleVoiceInputStartRef.current(),
       stop: () => voiceInputStopRef.current(),
       onHoldStart: () => {
@@ -5766,6 +5825,11 @@ export function ChatInput({
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
     () => {},
   );
+  const taskReferencesFit = useCallback((text: string) => {
+    if (reconcileSessionRefsForText(text, undefined).length <= MAX_SESSION_REFERENCES) return true;
+    toast.error(t('newChat.chatInput.tooManyTaskReferences', { max: MAX_SESSION_REFERENCES }));
+    return false;
+  }, [t]);
   const dispatchSend = useCallback(
     async (deliveryMode: MessageDeliveryMode = 'queue') => {
       if (!editor) return;
@@ -6210,6 +6274,7 @@ export function ChatInput({
           slashCommandRanges = rebaseInlineRangesAfterSlashCommandRewrite(slashCommandRanges, routedText, rewritten);
           routedText = rewritten;
         }
+        if (!taskReferencesFit(routedText)) return;
         let recentUsageMarked = false;
         const markRecentPluginUsage = () => {
           if (!usedGhost || recentUsageMarked || sourceRemoteGhosts) return;
@@ -6671,6 +6736,7 @@ export function ChatInput({
       navigate,
       planModeEntry,
       captureSendFocusForRestore,
+      taskReferencesFit,
       slashCommandsReady,
       mergedCommands,
     ],
@@ -6704,6 +6770,7 @@ export function ChatInput({
     const content = serializeEditorContent(editor);
     const completedAttachments = [...latestAttachmentsRef.current];
     if (content.text.trim().length === 0 && completedAttachments.length === 0) return;
+    if (!taskReferencesFit(content.text)) return;
 
     setSendDispatchInFlight(true);
     try {
@@ -6727,6 +6794,7 @@ export function ChatInput({
     sendDispatchInFlight,
     waitForFolders,
     folderTransfers.hasPending,
+    taskReferencesFit,
     t,
     voiceBusyOnCurrentComposer,
   ]);
@@ -8589,7 +8657,6 @@ export function ChatInput({
             await enqueueEffortChange(effortChangeCoordinatorRef.current, sessionId, newEffort, {
               persist: (targetSessionId, effort) =>
                 window.electronAPI.maker.setEffort(targetSessionId, effort),
-              applyRuntime: async () => {}, // Main has already committed the runtime and its fields.
               onCommitted: (targetSessionId, effort) => {
                 if (activeModel)
                   syncSessionDraftModelPrefs(activeModel, { effort, fast: fastMode });
@@ -9346,20 +9413,28 @@ export function ChatInput({
     mutationLocked: composerMutationLocked || showStopButton,
   };
   const recommendationComposerReady = isComposerReadyForPromptRecommendation(recommendationComposerState);
+  // 预测用的「已确认会话引擎」：插件引擎(ACP)任务没有内置 Harness 身份(runtimeAgentKind 为
+  // null)，但会话已确认为 ACP 时 pluginEngineSession 在。启用条件、回调入口与 IPC 参数
+  // 共用这一个值；两者都没有 = 会话信息未就绪，等待，不拿模型选择器默认值补成 claude-code
+  // (#13694：错标的请求会被主进程按 DB 的 dbAgentKind 拒绝)。
+  const predictionAgentKind = promptRecommendationAgentKind({
+    isPluginEngineSession: !!pluginEngineSession,
+    runtimeAgentKind,
+  });
   usePromptRecommendationPrediction({
     sessionId,
     recommendation,
     canPredict:
       recommendationComposerReady && !!editor && !editor.isDestroyed &&
-      deviceLinkDeviceId !== undefined && runtimeAgentKind != null &&
+      deviceLinkDeviceId !== undefined && predictionAgentKind != null &&
       hasPredictionMessages && !remoteHostId,
     predict: async (revision, isCurrent) => {
-      if (!sessionId || runtimeAgentKind == null) return null;
+      if (!sessionId || predictionAgentKind == null) return null;
       // 素材仍由 Main 从 DB 读取；远程任务经 sticky 路由交给被控电脑。
       const result = await predictPromptUntilDisabled(makerApiForSticky(sessionId), {
         sessionId,
         // 插件引擎任务按 'acp' 请求：推荐只用辅助模型链，主进程据此核对任务没有换引擎。
-        agentKind: pluginEngineSession ? 'acp' : runtimeAgentKind,
+        agentKind: predictionAgentKind,
         messages: (messages ?? []).slice(-20).map(({ role, content }) => ({ role, content })),
         workingDir: workingDirRef.current ?? undefined,
         turnGen: turnGenRef.current,
@@ -9597,7 +9672,12 @@ export function ChatInput({
       {(voiceInput.lastError || showSpeakerFilteredNotice || rejections.length > 0) && (
         <div className="pointer-events-none absolute bottom-full left-0 right-0 z-page-float mb-2 flex flex-col items-center gap-1 px-3">
           {voiceInput.lastError ? (
-            <VoiceInputStatusNotice message={voiceInput.lastError} />
+            <VoiceInputStatusNotice
+              message={voiceInput.lastError}
+              actionLabel={voiceInput.canRetryRecognition ? t('voiceInputOverlay.retryRecognition') : undefined}
+              onAction={voiceInput.canRetryRecognition ? () => { voiceInput.retryRecognition(); } : undefined}
+              actionDisabled={voiceInput.isBusy}
+            />
           ) : showSpeakerFilteredNotice ? (
             <VoiceInputStatusNotice tone="info" message={t('voiceInputOverlay.speakerFiltered')} />
           ) : null}
@@ -10237,6 +10317,10 @@ export function ChatInput({
                     effort={activeEffort}
                     onModelChange={handleModelChange}
                     onEffortChange={handleEffortChange}
+                    showEffortShortcut={
+                      !!sessionId && deviceLinkDeviceId === null && !catalogDeviceId && !remoteHostId &&
+                      !noConnectedSource && !agentSwitchIntent
+                    }
                     fastMode={composerSelection.display.fastMode}
                     currentSelection={sessionId && runtimeAgentKind ? composerSelection.current : undefined}
                     onFastModeChange={handleFastModeChange}
@@ -10345,6 +10429,7 @@ export function ChatInput({
                     }
                     {...(!sessionId && unifiedPanelActive && pluginModels ? { pluginModels } : {})}
                     {...(unifiedPanelActive && modelGroups ? { modelGroups } : {})}
+                    readModelGroupDevices={unifiedPanelActive ? readModelGroupDevices : undefined}
                     // 已建普通任务也能换到 / 换出任务所属电脑的插件引擎。
                     {...(unifiedPanelActive && pluginEngines && (!sessionId || sessionAgentSwitchSupported)
                       ? { pluginEngines } : {})}
@@ -10484,6 +10569,34 @@ export function ChatInput({
                       </button>
                     </Tip>
                   )}
+                  {!queueEditActive &&
+                    hasSelectedTextForVoiceRewrite &&
+                    !voiceInput.isBusy &&
+                    !composerEditorLocked &&
+                    editor && (
+                      <Tip text={t('newChat.chatInput.voiceInput.rewriteSelectedTooltip')} side="top">
+                        <button
+                          type="button"
+                          onMouseDown={(event) => {
+                            // Keep the user's editor text selection intact when clicking rewrite.
+                            event.preventDefault();
+                          }}
+                          onClick={() => {
+                            handleVoiceRewriteStart();
+                          }}
+                          className={cn(
+                            'flex h-[30px] shrink-0 items-center gap-1 rounded-full px-2.5 text-12 font-medium',
+                            'border border-[var(--border-default)] bg-[var(--composer-pill-bg)] text-[var(--composer-pill-icon)]',
+                            'transition-colors hover:bg-[var(--model-trigger-hover)] focus-visible:outline-none',
+                            'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+                          )}
+                          aria-label={t('newChat.chatInput.voiceInput.rewriteSelectedAria')}
+                        >
+                          <Sparkles size={13} strokeWidth={2} aria-hidden />
+                          <span>{t('newChat.chatInput.voiceInput.rewriteSelected')}</span>
+                        </button>
+                      </Tip>
+                    )}
                   {!queueEditActive && (
                     <VoiceInputButton
                       samplesRef={recordingSamplesRef}

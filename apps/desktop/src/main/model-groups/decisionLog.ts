@@ -27,7 +27,8 @@ const FIELD_MAX = 256;
 const WHY_KNOWN: Record<ModelGroupTraceWhy, true> = {
   expiring: true, order: true, rotate: true, cheapest: true, cheapestFree: true, only: true, soonest: true,
   drain: true, drainNext: true, headroom: true, weighted: true,
-  standby: true, off: true, unavailable: true, limited: true, tight: true, noVision: true,
+  usageHabit: true, autoBalance: true, lessBusy: true, paygFallback: true,
+  standby: true, paygReserve: true, off: true, unavailable: true, limited: true, tight: true, noVision: true,
 };
 const WHY = Object.keys(WHY_KNOWN) as ModelGroupTraceWhy[];
 
@@ -71,7 +72,7 @@ function decision(value: unknown): ModelGroupDecision | null {
     const kind = agentKind(raw.agentKind);
     const why = WHY.find((item) => item === raw.why);
     if (kind) entry.agentKind = kind;
-    for (const key of ['providerId', 'model', 'agentDeviceId', 'modelName', 'sourceName'] as const) {
+    for (const key of ['providerId', 'model', 'agentDeviceId', 'accountId', 'modelName', 'sourceName'] as const) {
       const field = text(raw[key]);
       if (field) entry[key] = field;
     }
@@ -129,6 +130,7 @@ export function recordModelGroupDecision(
         providerId: result.route.providerId,
         model: result.route.model,
         agentDeviceId: result.route.agentDeviceId,
+        accountId: result.route.accountId,
         modelName: result.modelName,
         sourceName: result.sourceName,
         effort: result.route.effort,

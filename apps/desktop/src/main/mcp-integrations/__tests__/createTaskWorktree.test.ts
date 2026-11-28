@@ -17,6 +17,7 @@ vi.mock('drizzle-orm', () => ({ eq: () => ({}) }));
 vi.mock('../../localDb/ipc/sessions.js', () => ({ broadcastWorktreeChanged: h.broadcast, recycleSessionWorktreeForStatusChange: h.recycle }));
 vi.mock('../../maker-ipc/handoffWorktree.js', () => ({ prepareTaskWorktree: h.prepare }));
 vi.mock('../../worktree/index.js', () => ({
+  resolveExplicitSourceRef: vi.fn(),
   resolveFreshSourceBranch: vi.fn(),
   WorktreeManager: {
     getForSession: vi.fn(), listAll: vi.fn(), detectCwd: vi.fn(), suggestName: vi.fn(), listBranches: vi.fn(), revParseCommit: vi.fn(),
