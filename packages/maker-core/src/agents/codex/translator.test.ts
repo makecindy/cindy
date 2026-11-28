@@ -2257,6 +2257,114 @@ describe('translateItemNotification collabAgentToolCall', () => {
       expect(events[0].data).toMatchObject({ toolUseId: `${tool}-1`, toolName: `collab:${tool}` });
     },
   );
+
+  it('resolves active subagent names for empty-receiver V2 collab:wait and substitutes names in agentsStates', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    // Spawn two V2 subagents via subAgentActivity(started)
+    translateItemNotification('started', {
+      threadId: 'root-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'subAgentActivity',
+        id: 'spawn-1',
+        kind: 'started',
+        agentThreadId: '019d8f44-1111-7222-8333-444444444444',
+        agentPath: '/root/scout',
+      },
+    }, q, ctx);
+    translateItemNotification('started', {
+      threadId: 'root-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'subAgentActivity',
+        id: 'spawn-2',
+        kind: 'started',
+        agentThreadId: '019d8f44-2222-7222-8333-444444444444',
+        agentPath: '/root/reviewer',
+      },
+    }, q, ctx);
+
+    // V2 wait_agent arrives with empty receiverThreadIds and empty agentsStates
+    translateItemNotification('started', {
+      threadId: 'root-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'wait-1',
+        tool: 'wait',
+        status: 'inProgress',
+        senderThreadId: 'root-1',
+        receiverThreadIds: [],
+        agentsStates: {},
+      },
+    }, q, ctx);
+    translateItemNotification('completed', {
+      threadId: 'root-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'wait-1',
+        tool: 'wait',
+        status: 'completed',
+        senderThreadId: 'root-1',
+        receiverThreadIds: [],
+        agentsStates: {},
+      },
+    }, q, ctx);
+
+    // sendInput targeting a known thread resolves name and substitutes it in agentsStates
+    translateItemNotification('completed', {
+      threadId: 'root-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'collabAgentToolCall',
+        id: 'send-1',
+        tool: 'sendInput',
+        status: 'completed',
+        senderThreadId: 'root-1',
+        receiverThreadIds: ['019d8f44-1111-7222-8333-444444444444'],
+        prompt: 'Check edge cases',
+        agentsStates: {
+          '019d8f44-1111-7222-8333-444444444444': { status: 'done' },
+        },
+      },
+    }, q, ctx);
+
+    const events = await collect(q);
+    const waitToolUse = events.find(
+      (event) => event.type === 'tool_use' && (event.data as { toolUseId?: string }).toolUseId === 'wait-1',
+    );
+    expect(waitToolUse?.data).toMatchObject({
+      toolName: 'collab:wait',
+      input: {
+        targets: ['scout', 'reviewer'],
+        targetCount: 2,
+      },
+    });
+    const waitResultFull = events.find(
+      (event) => event.type === 'tool_result_full' && (event.data as { toolUseId?: string }).toolUseId === 'wait-1',
+    );
+    expect(waitResultFull?.data).toMatchObject({ fullText: '', isError: false });
+
+    const sendToolUse = events.find(
+      (event) => event.type === 'tool_use' && (event.data as { toolUseId?: string }).toolUseId === 'send-1',
+    );
+    expect(sendToolUse?.data).toMatchObject({
+      toolName: 'collab:sendInput',
+      input: {
+        targets: ['scout'],
+        targetCount: 1,
+        prompt: 'Check edge cases',
+      },
+    });
+    const sendResultFull = events.find(
+      (event) => event.type === 'tool_result_full' && (event.data as { toolUseId?: string }).toolUseId === 'send-1',
+    );
+    expect(sendResultFull?.data).toMatchObject({ fullText: 'scout: done', isError: false });
+  });
 });
 
 describe('translateItemNotification subAgentActivity', () => {

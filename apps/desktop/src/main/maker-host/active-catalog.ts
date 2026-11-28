@@ -208,6 +208,7 @@ export interface XdGatewayModelInfo {
   currency?: 'USD' | 'CNY';
   id: string;
   availability?: 'available' | 'requires_payment';
+  silentSwitch?: boolean;
   /** Gateway 原生 mode(issue #882,权威分类字段;缺省时下游按 id 正则兜底)。 */
   mode?: string;
   /** AIGateway 折扣比例(0..1),折后价 = 原价 × (1 - costDiscount)。 */
@@ -241,6 +242,13 @@ export interface XdGatewayModelInfo {
   modalities?: { input: string[]; output: string[] };
   /** per-tab 能力覆盖。 */
   perAgent?: Partial<Record<AgentKind, XdGatewayAgentOverride>>;
+}
+
+export function isXdGatewaySilentSwitchTarget(model: XdGatewayModelInfo, agent: AgentKind): boolean {
+  const runtime = model.perAgent?.[agent];
+  return model.silentSwitch === true && model.availability === 'available' && model.defaultEnabled !== false &&
+    model.agents?.length === 1 && model.agents[0] === agent &&
+    Boolean(runtime?.wireProtocol) && runtime?.defaultEnabled !== false;
 }
 
 /**
@@ -1610,6 +1618,9 @@ function computeMerged(codexModels: readonly CatalogModel[] = discoveredCodex, c
         const merged: CatalogModel = {
           ...gatewayDisplayPricing(gm),
           id: gm.id,
+          ...(xdGatewayModelsAuthoritative && isXdGatewaySilentSwitchTarget(gm, agent)
+            ? { silentSwitch: true }
+            : {}),
           discoveredMetadata: { ...pickModelMetadata(gm), ...pickModelMetadata(ov) },
           ...(nativeApi !== undefined ? { nativeApi } : {}),
           ...(gm.availability ? { availability: gm.availability } : {}),

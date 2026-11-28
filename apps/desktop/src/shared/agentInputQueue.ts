@@ -168,10 +168,11 @@ export interface AgentInputChatMessage {
 }
 
 export interface AgentInputCreateOpts {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'acp';
   workingDir: string;
   model: string;
   providerId?: string | null;
+  agentDeviceId?: string;
   orcaRole?: 'lead' | 'worker' | null;
   effort?: string;
   fastMode?: boolean | 'ultrafast';
@@ -644,9 +645,12 @@ export function getAgentInputAttachmentBlockType(
 export function recoveryRequiresImageInput(item: AgentInputQueuedMessage): boolean {
   const isImage = (file: AgentInputSerializedFile) =>
     getAgentInputAttachmentBlockType(file.category, file.ext) === 'image';
+  // Node Host also queues images separately from serialized files.
+  const { images } = item as AgentInputQueuedMessage & { images?: unknown };
   return item[HOST_ONLY_RECOVERY_REQUIRES_IMAGES] === true
     || item.files?.some(isImage) === true
-    || item.contextFiles?.some(isImage) === true;
+    || item.contextFiles?.some(isImage) === true
+    || (Array.isArray(images) && images.length > 0);
 }
 
 export function queuedMessageRetryToken(queued: AgentInputQueuedMessage): string {
@@ -900,6 +904,9 @@ export function updateQueuedMessageContent(
   else delete merged.sessionRefs;
   return merged;
 }
+
+/** Maximum structured task references accepted for a single input. */
+export const MAX_SESSION_REFERENCES = 8;
 
 const SESSION_REF_LINK_RE =
   /(?:cindy|xdt-maker):\/\/session\/([A-Za-z0-9%~_-]+)(?:\?([A-Za-z0-9%&=~._-]*))?/g;

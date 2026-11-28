@@ -75,6 +75,7 @@ vi.mock('../pre-run-hook', async (importOriginal) => ({
 
 vi.mock('../../maker-host/session-provider-store.js', () => ({
   getSessionProvider: mocks.getSessionProvider,
+  hasSessionProvider: () => mocks.getSessionProvider() !== null,
   setSessionProvider: mocks.setSessionProvider,
   hydrateSessionProvider: mocks.hydrateSessionProvider,
 }));
@@ -137,6 +138,7 @@ import { AutoResumeBookkeeping } from '../../maker-ipc/autoResumeBookkeeping.js'
 import { computeScheduleRunCostDeltas } from '../runCostLedger.js';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../../shared/interruptedTurn.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
+import { bindPoolExecutionRoute } from '../../subscription-accounts/session.js';
 import type { ProviderGroupTurnErrorHooks } from '../../provider-group/service.js';
 import { isUnattendedTurn } from '../../mcp-integrations/unattendedTurn';
 import { noteUnattendedPlanReviewDeclined } from '../../mcp-integrations/unattendedTurn';
@@ -1594,12 +1596,17 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     h.emit({ type: 'done', data: {} });
     expect(await followTask).toMatchObject({ sessionId: SESSION_ID });
 
-    // 2. Persistent schedule targeting an ACP task stays refused before enqueue.
-    await expect(runner.fire(
+    // 2. Persistent schedule targeting an ACP task runs on the same plugin engine via queue.
+    const persistentTask = runner.fire(
       heartbeatSchedule({ persistentSession: true, model: undefined, modelAgentKind: undefined }),
       createFireContext(),
-    )).rejects.toThrow('cannot use a persistent session');
-    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'failed' });
+    );
+    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(2));
+    await queue.accept();
+    await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
+    h.emit({ type: 'done', data: {} });
+    expect(await persistentTask).toMatchObject({ sessionId: SESSION_ID });
+    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'success' });
 
     // 3. Explicit built-in override on source='scheduler' ACP task switches and dispatches.
     const overrideQueue = createQueueHarness({ busy: false });
@@ -1948,6 +1955,53 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await expect(retry).resolves.toMatchObject({ sessionId: SESSION_ID });
     expect(latestNotifiedRun(notifier).status).toBe('success');
   });
+
+  // Reproduce a local Codex thread relink between enqueue and lazy startup.
+  // The queue prepares before the send transaction recreates the missing handle.
+  it.each(['same route', 'changed saved provider', 'changed replacement model', 'SSH replacement'] as const)(
+    'dispatches the queued Codex turn after a relink only on its selected route: %s', async (scenario) => {
+      const selection = { agentKind: 'codex' as const, model: 'selected-model',
+        providerId: 'selected-source', effort: null, fastMode: false };
+      const original = createSessionHarness(async () => ({ accepted: true }));
+      Object.assign(original.session, selection);
+      mocks.getSessionProvider.mockReturnValue(selection.providerId);
+      const queue = createQueueHarness({ busy: false });
+      const { runner, maker, replaceLiveSession } = createRunnerHarness(original.session, queue.deps, {
+        metaModel: selection.model,
+        acquirePendingAgentSwitch: async () => ({ release: vi.fn(), selection }),
+      });
+      const result = runner.fire(heartbeatSchedule({ ...selection, effort: undefined, modelAgentKind: 'codex' }),
+        createFireContext()).catch((error: unknown) => error);
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+      const request = enqueueLast(queue);
+      vi.mocked(maker.getSession).mockReturnValue(undefined);
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', ...selection,
+        providerId: scenario === 'changed saved provider' ? 'other-source' : selection.providerId });
+      if (scenario === 'changed saved provider') {
+        await queue.accept();
+        expect(String(await result)).toContain('provider');
+        return;
+      }
+      await request.onPreparing?.();
+      const replacement = createSessionHarness(async () => ({ accepted: true }));
+      Object.assign(replacement.session, selection, {
+        model: scenario === 'changed replacement model' ? 'other-model' : selection.model,
+        remoteHostId: scenario === 'SSH replacement' ? 'other-host' : null,
+      });
+      replaceLiveSession(replacement.session);
+      vi.mocked(maker.getSession).mockReturnValue(replacement.session);
+      const accept = request.onAccepted({ permissionMode: 'ask', planMode: false });
+      if (scenario !== 'same route') {
+        await expect(accept).rejects.toBeInstanceOf(AcceptedCallbackDispatchCancelled);
+        expect(String(await result)).toContain(scenario === 'SSH replacement' ? '(device)' : '(model)');
+        return;
+      }
+      await accept;
+      replacement.emit({ type: 'done', data: {}, source: 'codex' });
+      expect(await result).toMatchObject({ sessionId: SESSION_ID });
+      expect(queue.enqueueCalls).toHaveLength(1);
+    },
+  );
 
   // Review regression (integration): the previous matrix only kept the same live
   // location. An identical provider/model on another device must never receive
@@ -3800,6 +3854,97 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.send).not.toHaveBeenCalled();
   });
 
+  // Unit: run a real busy heartbeat through the queue bridge, coordinator and
+  // accepted callback before the vendor boundary. Former mixed-pool sessions
+  // compared their logical OpenAI provider against the API thread's identity.
+  // The same fix must not authorize a revoked reservation or a changed route.
+  it.each(['valid', 'revoked', 'changed-group', 'independent-source'] as const)(
+    'dispatches a mixed-pool heartbeat exactly once only on a valid reservation (%s)', async mode => {
+      vi.useFakeTimers();
+      const model = 'gpt-6';
+      const providerId = 'openai';
+      mocks.getSessionRowSnapshot.mockResolvedValue({ status: 'active', userSendAt: null, providerId });
+      mocks.getSessionProvider.mockReturnValue(providerId);
+      const h = createSessionHarness(async () => ({ accepted: true }));
+      Object.assign(h.session, { agentKind: 'codex', model, codexProxyActive: true,
+        codexThreadModelProviderId: 'cindy_gateway' });
+      let valid = true;
+      const unbind = bindPoolExecutionRoute(SESSION_ID, {
+        providerId, connectionId: 'openai-api',
+        assertCurrent: () => { if (!valid) throw new Error('pool reservation unavailable'); },
+        captureTurnRejection: () => undefined,
+      });
+      let busy = true;
+      const preparation = new Map<string, SchedulerQueuedPreparation>();
+      const discarded = new Map<string, SchedulerQueuedPromptObserver>();
+      const accepted = createQueuedAcceptedCallbacks();
+      const coordinator = new AgentInputCoordinator({
+        sendToAgent: async (id, _text, _opts, sendOpts) => {
+          const clientId = sendOpts.persistUserMessage!.clientId;
+          try {
+            await runSchedulerQueuedPreparation(clientId, preparation, () => discarded.delete(clientId));
+            await sendOpts.persistUserMessage!.onPersisted?.();
+            await h.send({ type: 'user', content: 'scheduled heartbeat' });
+            const result = { kind: 'session-dispatch', source: 'test', dispatched: true } as const;
+            await accepted.settle(id, sendOpts, result);
+            return result;
+          } catch (error) { await accepted.rollback(id, clientId); throw error; }
+        },
+        onAcceptedQueuedMessage: async (id, item) => { await accepted.run(id, item); },
+        onDiscardedQueuedMessage: (_id, item) => { accepted.discard(item.clientId); discarded.get(item.clientId)?.onDiscarded(); },
+        onPersistedSendRejected: (id, error, item, recovering) => bridge.onPersistedSendRejected(id, error, item, recovering),
+        steerToAgent: async () => {}, abortSession: async () => {},
+        isTurnRunning: () => busy, hasPendingInteraction: () => false,
+        getAgentKind: () => 'codex', getSdkSessionId: async () => 'sdk-1', emitProjection: () => {},
+      });
+      const bridge = createSchedulerQueueBridge({
+        coordinator, isSessionBusy: () => busy, getSessionMeta: async () => ({ id: SESSION_ID }),
+        getSessionRowSnapshot: mocks.getSessionRowSnapshot, createId: () => 'mixed-pool-heartbeat',
+        preparations: preparation, discardWatchers: discarded, discardAcceptedCallback: accepted.discard,
+        enqueue: async req => {
+          const createOpts = { agentKind: 'codex' as const, model, workingDir: '.',
+            permissionMode: 'ask' as const, planMode: false, userPrompt: '',
+            makerMemoryEnabled: true, displayReasoning: 'summarized' as const };
+          accepted.register(req.clientId, () => req.onAccepted(createOpts), req.onAcceptedRollback);
+          coordinator.enqueue(req.targetSessionId, {
+            clientId: req.clientId, text: req.message, persistedContent: req.persistedContent,
+            origin: req.origin, createOpts, model, workingDir: '.', effort: '', permissionMode: 'ask',
+            chatMessage: { clientId: req.clientId, role: 'user', content: req.persistedContent, createdAt: new Date().toISOString() },
+          });
+        },
+      });
+      const { runner, maker } = createRunnerHarness(h.session, bridge, { metaModel: model });
+      const ctx = createFireContext();
+      const schedule = heartbeatSchedule({ agentKind: 'codex', model, providerId });
+      const fire = runner.fire(schedule, ctx);
+      const settled = fire.then(result => ({ result, error: undefined }), error => ({ result: undefined, error }));
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(bridge.hasQueuedPrompt(SESSION_ID, schedule.id)).toBe(true);
+        expect(h.send).not.toHaveBeenCalled();
+        if (mode === 'revoked') valid = false;
+        if (mode === 'changed-group') mocks.getSessionProvider.mockReturnValue('another-pool');
+        if (mode === 'independent-source') schedule.providerId = 'xd';
+        busy = false;
+        coordinator.wakeSession(SESSION_ID, 'busy-turn-finished');
+        await vi.advanceTimersByTimeAsync(0);
+        if (mode === 'valid') {
+          expect(h.send).toHaveBeenCalledOnce();
+          h.emit({ type: 'done', data: {}, source: 'codex' });
+          expect((await settled).result).toMatchObject({ sessionId: SESSION_ID });
+        } else {
+          expect(h.send).not.toHaveBeenCalled();
+          expect((await settled).error).toBeInstanceOf(Error);
+        }
+        expect(maker.closeSession).not.toHaveBeenCalled();
+        expect(maker.createSession).not.toHaveBeenCalled();
+      } finally {
+        ctx.abortController.abort(); coordinator.clearSession(SESSION_ID); unbind();
+        await vi.advanceTimersByTimeAsync(0); await settled; vi.useRealTimers();
+      }
+    },
+  );
+
   it('排队 Cindy Codex 在独立 Subagent 不兼容时接受正确的本地压缩身份', async () => {
     mocks.getSessionRowSnapshot.mockResolvedValue({
       status: 'active',
@@ -5273,6 +5418,28 @@ describe('queued heartbeat for a Bot Session task (persisted Auto)', () => {
     expect(ctx.onTurnActive).not.toHaveBeenCalled();
     expect(f.notifier.notify).not.toHaveBeenCalled();
     expect(harness.listenerCount()).toBe(0);
+  });
+
+  // 测试价值
+  // - 生产入口与可观察结果：MakerScheduleRunner.fire 在绑定会话已存在同 schedule 的排队消息时，直接顺延并带上 deferReason='already-queued'，不再重复启动 preRunHook 子进程。
+  // - Bug／规则依据：修复绑定任务排队期间每 90 秒重复跑 preRunHook（如 PR gate 轮询 GitHub API）随后立即 already-queued 顺延的无效空转。
+  // - 现有覆盖缺口：既有 already-queued 用例未声明 preRunHook，无法拦截 preRunHook 先于排队去重执行的顺序回归。
+  // - 最小失败输入与 tier：unit，hasQueued=true + preRunHook 的普通绑定定时任务调用 runner.fire，断言 deferred=true、deferReason='already-queued' 且 executePreRunHook 0 次调用。
+  it('skips preRunHook and defers with already-queued when the schedule already has a queued prompt', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, hasQueued: true });
+    const f = createRunnerHarness(harness.session, queue.deps);
+    const result = await f.runner.fire(
+      heartbeatSchedule({ preRunHook: { command: 'node pr-heartbeat-gate.mjs' } }),
+      createFireContext(),
+    );
+    expect(result).toMatchObject({
+      sessionId: SESSION_ID,
+      deferred: true,
+      deferReason: 'already-queued',
+    });
+    expect(mocks.executePreRunHook).not.toHaveBeenCalled();
+    expect(queue.enqueueCalls).toHaveLength(0);
   });
 
   function runtimeMode(runtime: RealSession) {

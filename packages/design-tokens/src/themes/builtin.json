@@ -315,11 +315,13 @@
       },
       "perm-allow-kbd-bg": {
         "$type": "color",
-        "$value": "{reference.themes.atom-one-light.palette-CHIP_BG}"
+        "$value": "{reference.themes.atom-one-light.value-perm-allow-kbd-bg}",
+        "$description": "kbd bg：叠黑 30%，键帽比按钮更深，白字才看得清（主人 2026-11-27 裁决：原页面级 chip 色在彩色允许按钮上字底几乎同亮）"
       },
       "perm-allow-kbd-border": {
         "$type": "color",
-        "$value": "{reference.themes.atom-one-light.palette-BORDER_BG}"
+        "$value": "{reference.themes.atom-one-light.value-perm-allow-kbd-border}",
+        "$description": "边框：叠黑 42%，同上"
       },
       "perm-code-bg": {
         "$type": "color",
@@ -2556,11 +2558,13 @@
       },
       "perm-allow-kbd-bg": {
         "$type": "color",
-        "$value": "{reference.themes.eclipse.palette-CHIP_NAVY}"
+        "$value": "{reference.themes.eclipse.value-perm-allow-kbd-bg}",
+        "$description": "kbd bg：叠黑 8%，随按钮深字叠一层黑（同 cindy-dark 写法）（主人 2026-11-27 裁决：原页面级 chip 色在彩色允许按钮上字底几乎同亮）"
       },
       "perm-allow-kbd-border": {
         "$type": "color",
-        "$value": "{reference.themes.eclipse.palette-BOARD_NAVY}"
+        "$value": "{reference.themes.eclipse.value-perm-allow-kbd-border}",
+        "$description": "边框：叠黑 20%，同上"
       },
       "perm-code-bg": {
         "$type": "color",
@@ -3428,11 +3432,13 @@
       },
       "perm-allow-kbd-bg": {
         "$type": "color",
-        "$value": "{reference.themes.material-ocean-hc.palette-CHIP_BG}"
+        "$value": "{reference.themes.material-ocean-hc.value-perm-allow-kbd-bg}",
+        "$description": "kbd bg：叠黑 8%，随按钮深字叠一层黑（同 cindy-dark 写法）（主人 2026-11-27 裁决：原页面级 chip 色在彩色允许按钮上字底几乎同亮）"
       },
       "perm-allow-kbd-border": {
         "$type": "color",
-        "$value": "{reference.themes.material-ocean-hc.palette-BORDER_BG}"
+        "$value": "{reference.themes.material-ocean-hc.value-perm-allow-kbd-border}",
+        "$description": "边框：叠黑 20%，同上"
       },
       "perm-code-bg": {
         "$type": "color",
@@ -3862,11 +3868,13 @@
       },
       "perm-allow-kbd-bg": {
         "$type": "color",
-        "$value": "{reference.themes.monokai-pro.palette-CHIP_BG}"
+        "$value": "{reference.themes.monokai-pro.value-perm-allow-kbd-bg}",
+        "$description": "kbd bg：叠黑 8%，随按钮深字叠一层黑（同 cindy-dark 写法）（主人 2026-11-27 裁决：原页面级 chip 色在彩色允许按钮上字底几乎同亮）"
       },
       "perm-allow-kbd-border": {
         "$type": "color",
-        "$value": "{reference.themes.monokai-pro.palette-BORDER_BG}"
+        "$value": "{reference.themes.monokai-pro.value-perm-allow-kbd-border}",
+        "$description": "边框：叠黑 20%，同上"
       },
       "perm-code-bg": {
         "$type": "color",
@@ -4296,11 +4304,13 @@
       },
       "perm-allow-kbd-bg": {
         "$type": "color",
-        "$value": "{reference.themes.one-dark-pro.palette-CHIP_BG}"
+        "$value": "{reference.themes.one-dark-pro.value-perm-allow-kbd-bg}",
+        "$description": "kbd bg：叠白 30%，键帽比按钮更浅，深字才看得清（主人 2026-11-27 裁决：原页面级 chip 色在彩色允许按钮上字底几乎同亮）"
       },
       "perm-allow-kbd-border": {
         "$type": "color",
-        "$value": "{reference.themes.one-dark-pro.palette-BORDER_BG}"
+        "$value": "{reference.themes.one-dark-pro.value-perm-allow-kbd-border}",
+        "$description": "边框：叠白 42%，同上"
       },
       "perm-code-bg": {
         "$type": "color",
@@ -4744,11 +4754,13 @@
       },
       "perm-allow-kbd-bg": {
         "$type": "color",
-        "$value": "{reference.themes.solarized-light.palette-CHIP_BG}"
+        "$value": "{reference.themes.solarized-light.value-perm-allow-kbd-bg}",
+        "$description": "kbd bg：叠黑 40%，键帽比按钮更深，白字才看得清（主人 2026-11-27 裁决：原页面级 chip 色在彩色允许按钮上字底几乎同亮）"
       },
       "perm-allow-kbd-border": {
         "$type": "color",
-        "$value": "{reference.themes.solarized-light.palette-BORDER_BG}"
+        "$value": "{reference.themes.solarized-light.value-perm-allow-kbd-border}",
+        "$description": "边框：叠黑 52%，同上"
       },
       "perm-code-bg": {
         "$type": "color",

@@ -1,26 +1,63 @@
 import { app, type BrowserWindow } from 'electron';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { isHardwareAccelerationDisabled } from './gpuRenderingPolicy';
 import { createLogger } from './logger';
 import type { VibrancyConfig } from './vibrancyConfig';
+
+export interface MacWindowFullscreenInspection {
+  styleMaskFullScreen: boolean;
+  onActiveSpace: boolean;
+  visible: boolean;
+  spaceTypes: number[] | null;
+  cgBounds: { x: number; y: number; width: number; height: number } | null;
+  cgOnScreen: boolean | null;
+}
 
 interface NativeDesktopBlur {
   apply(handle: Buffer, radius: number): boolean;
   setSidebar(handle: Buffer, width: number, dark: boolean): boolean;
+  inspectFullscreen?(handle: Buffer): MacWindowFullscreenInspection | null;
 }
 const log = createLogger('macosDesktopBlur');
 const requireNative = createRequire(__filename);
-let native: NativeDesktopBlur | null | undefined;
-function load(): NativeDesktopBlur | null {
-  if (native !== undefined) return native;
+let rawNative: NativeDesktopBlur | null | undefined;
+function loadRawAddon(): NativeDesktopBlur | null {
+  if (rawNative !== undefined) return rawNative;
   try {
     const base = app.isPackaged ? process.resourcesPath : path.join(app.getAppPath(), 'resources');
-    native = requireNative(path.join(base, 'tools/desktop-blur/cindy-desktop-blur.node')) as NativeDesktopBlur;
+    rawNative = requireNative(path.join(base, 'tools/desktop-blur/cindy-desktop-blur.node')) as NativeDesktopBlur;
   } catch {
     log.warn('Native desktop blur unavailable; retaining system material');
-    native = null;
+    rawNative = null;
   }
-  return native;
+  return rawNative;
+}
+function load(): NativeDesktopBlur | null {
+  if (isHardwareAccelerationDisabled() || process.env.XDT_DISABLE_DESKTOP_BLUR === '1') {
+    return null;
+  }
+  return loadRawAddon();
+}
+
+/**
+ * Inspects a live macOS BrowserWindow's native AppKit fullscreen flag alongside
+ * WindowServer space/bounds state. Bypasses the blur/GPU gates because this
+ * read-only check does not touch backdrop rendering.
+ */
+export function inspectMacWindowFullscreen(
+  win: BrowserWindow,
+  getNative: () => NativeDesktopBlur | null = loadRawAddon,
+  platform: NodeJS.Platform = process.platform,
+): MacWindowFullscreenInspection | null {
+  if (platform !== 'darwin' || win.isDestroyed()) return null;
+  try {
+    const inspect = getNative()?.inspectFullscreen;
+    if (typeof inspect !== 'function') return null;
+    return inspect(win.getNativeWindowHandle()) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 const activeWindows = new WeakSet<BrowserWindow>();

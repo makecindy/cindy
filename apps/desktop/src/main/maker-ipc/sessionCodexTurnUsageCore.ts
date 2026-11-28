@@ -30,7 +30,7 @@ import {
 import { isExclusiveXaiModelId } from '../../shared/subscriptionModels.js';
 import { isCodexGatewayWireModel } from '@cindy/model-providers';
 import { sumMoneyByCurrency, type RegionalMoney } from '../../shared/regionalMoney.js';
-import { triggerClaudeSubscriptionUsageRefresh, triggerXaiSubscriptionUsageRefresh } from './turnUsagePorts.js';
+import { recordProviderAccountActivity, triggerClaudeSubscriptionUsageRefresh, triggerXaiSubscriptionUsageRefresh } from './turnUsagePorts.js';
 import { isClaudeSubscriptionProviderId } from '../maker-host/subscription-account-kind.js';
 import {
   rebroadcastCodexTodayUsage,
@@ -344,6 +344,9 @@ export function recordSessionCodexTurnUsage(
     // 走 Cindy AI gateway/API 口径的 codex turn，done 后通过 Model Access 刷新账号配额
     // (与 cc 同口径, chip 显示 daily/monthly/key cost)。命中:会话显式选了 XD 网关、无 OAuth
     // token 的 env-key fallback、或 codex/ 预算模型。普通 oauth 订阅没有 $ 配额,不刷。
+    if (!isRemoteCodexSession && sessionProvider && sessionProvider !== 'xd') {
+      recordProviderAccountActivity(sessionProvider);
+    }
     void modelPromise
       .then((model) => {
         if (isRemoteCodexSession) return;

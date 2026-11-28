@@ -428,12 +428,16 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
     ...(text(record.orgName, MAX_NAME) ? { orgName: text(record.orgName, MAX_NAME)! } : {}),
     ...(record.external === true ? { external: true } : {}),
     serverBacked: record.serverBacked === true,
+    ...(typeof record.readSequence === 'string' && /^\d{1,30}$/.test(record.readSequence) ? { readSequence: record.readSequence } : {}),
     singleSpeaker: record.singleSpeaker === true,
     independentReplies: record.independentReplies === true,
     canStopAll: false, supportsOwnedStop: record.supportsOwnedStop === true,
     supportsScopedStop: record.supportsScopedStop === true,
     supportsMentionAudiences: record.supportsMentionAudiences === true,
     allowMentionAllBots: record.allowMentionAllBots === true,
+    supportsPersonalMentionHistory: record.supportsPersonalMentionHistory === true,
+    supportsMemberMentionAll: record.supportsMemberMentionAll === true,
+    allowMemberMentionAll: record.allowMemberMentionAll === true,
     supportsMemberInvites: record.supportsMemberInvites === true,
     allowMemberInvites: record.allowMemberInvites === true,
     supportsDivision: record.supportsDivision === true,
@@ -449,6 +453,12 @@ export function parseBotGroupChatData(value: unknown): BotGroupRemoteChatData | 
         const id = text(device?.id, 200), name = text(device?.name, 200);
         return id && name ? [{ id, name }] : [];
       }),
+      // A newer computer names this account's own requests waiting for a computer; older ones omit it.
+      ...(Array.isArray(record.assistantDeviceWaits) ? { assistantDeviceWaits: record.assistantDeviceWaits.slice(0, 20).flatMap(raw => {
+        const wait = recordOf(raw);
+        const executionId = text(wait?.executionId, 200), sourceMessageId = text(wait?.sourceMessageId, 200);
+        return executionId && sourceMessageId ? [{ executionId, sourceMessageId, requestText: text(wait?.requestText, 500) ?? '' }] : [];
+      }) } : {}),
     } : {}),
     supportsNotificationSettings: record.supportsNotificationSettings === true,
     ...(record.notificationMode === 'all' || record.notificationMode === 'mentions' || record.notificationMode === 'none'
@@ -515,7 +525,7 @@ const ERROR_CODES: readonly BotGroupErrorCode[] = [
   'LAST_OWNER',
   'MEMBER_LIMIT',
   'MEMBER_UNAVAILABLE',
-  'MENTION_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED',
+  'MENTION_UNAVAILABLE', 'ALL_BOTS_MENTION_DISABLED', 'ALL_HUMANS_MENTION_FORBIDDEN',
   'PLAN_OPEN',
   'PLAN_CLOSED',
   'TURN_ALREADY_STARTED',

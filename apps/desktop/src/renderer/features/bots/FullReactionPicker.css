@@ -1,0 +1,41 @@
+.chat-full-reaction-picker {
+  margin-top: 5px;
+  --epr-font-family: inherit;
+  --epr-header-padding: 4px;
+  --epr-horizontal-padding: 3px;
+  --epr-emoji-size: 21px;
+  --epr-emoji-padding: 5px;
+  --epr-search-input-height: 30px;
+  --epr-category-navigation-button-size: 23px;
+  --epr-category-label-height: 25px;
+  border: 0;
+  border-top: 1px solid var(--border-default);
+  --epr-picker-border-radius: 0;
+  --epr-picker-border-color: transparent;
+  --epr-bg-color: var(--surface-elevated);
+  --epr-text-color: var(--text-primary);
+  --epr-highlight-color: var(--text-primary);
+  --epr-hover-bg-color: var(--surface-hover);
+  --epr-focus-bg-color: var(--surface-hover);
+  --epr-search-input-bg-color: var(--surface-hover);
+  --epr-search-input-text-color: var(--text-primary);
+  --epr-search-input-placeholder-color: var(--text-tertiary);
+  --epr-category-icon-active-color: var(--text-primary);
+  --epr-category-icon-inactive-color: var(--text-tertiary);
+  --epr-category-label-bg-color: var(--surface-elevated);
+  --epr-category-label-text-color: var(--text-secondary);
+}
+
+[data-platform='darwin'] .chat-full-reaction-picker {
+  --epr-emoji-font-family: "Apple Color Emoji", sans-serif;
+}
+
+.chat-full-reaction-picker [data-epr-part='emoji'] {
+  color: rgb(from var(--text-primary) r g b / 1);
+}
+
+
+.chat-full-reaction-picker [data-epr-part='search-input'],
+.chat-full-reaction-picker [data-epr-part='category-label'] {
+  font-size: var(--font-size-12, 12px);
+}

@@ -10,6 +10,7 @@ import type { PluginCatalogFilter } from './pluginMarketPresentation';
 function emptyCatalogMemory() {
   return {
     query: '', catalogTab: 'installed' as 'installed' | 'market', originFilter: 'all' as PluginCatalogFilter,
+    searchScope: 'all' as PluginCatalogFilter,
     installedLimit: 10, marketTotal: null as number | null,
     browser: { current: emptyPluginBrowserCache() },
     marketIcons: new Map() as MarketIconCache,
@@ -56,6 +57,7 @@ export function usePluginCatalogMemory(ownerKey: string, target: string): Catalo
     memory.query = '';
     memory.catalogTab = 'installed';
     memory.originFilter = 'all';
+    memory.searchScope = 'all';
     memory.installedLimit = 10;
     memory.scroll = { offset: 0, anchor: null };
     // Keep page contents and measurements, but never scroll a fresh visit to
@@ -69,7 +71,7 @@ export function usePluginCatalogMemory(ownerKey: string, target: string): Catalo
   return memory;
 }
 
-export function usePluginCatalogState<K extends 'query' | 'catalogTab' | 'originFilter' | 'installedLimit' | 'marketTotal' | 'todayPool' | 'consumedToday' | 'todayLoaded' | 'recommendationBatch' | 'snapshot' | 'remoteSnapshot' | 'catalogPaging' | 'catalogRevision'>(
+export function usePluginCatalogState<K extends 'query' | 'catalogTab' | 'originFilter' | 'searchScope' | 'installedLimit' | 'marketTotal' | 'todayPool' | 'consumedToday' | 'todayLoaded' | 'recommendationBatch' | 'snapshot' | 'remoteSnapshot' | 'catalogPaging' | 'catalogRevision'>(
   memory: CatalogMemory, key: K,
 ): [CatalogMemory[K], Dispatch<SetStateAction<CatalogMemory[K]>>] {
   const [state, setState] = useState({ memory, value: memory[key] });

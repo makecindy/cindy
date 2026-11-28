@@ -239,12 +239,20 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
     permissionMode: typeof item.permissionMode === 'string' ? item.permissionMode : '',
     fastMode: (item.fastMode === 'ultrafast' ? 'ultrafast' : item.fastMode === true),
     status,
-    agentKind: item.agentKind === 'codex' || item.agentKind === 'pi' ? item.agentKind : 'cc',
+    agentKind: item.agentKind === 'codex' || item.agentKind === 'pi' || item.agentKind === 'acp' ? item.agentKind : 'cc',
     userSendAt: typeof item.userSendAt === 'string' ? item.userSendAt : null,
     lastActivityAt: typeof item.lastActivityAt === 'string' ? item.lastActivityAt : null,
     createdAt,
     updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : createdAt,
   };
+  if (session.agentKind === 'acp') {
+    if (typeof item.providerId === 'string' && item.providerId.trim()) {
+      session.providerId = truncateText(item.providerId.trim());
+    }
+    if (typeof item.agentDeviceId === 'string' && item.agentDeviceId.trim()) {
+      session.agentDeviceId = truncateText(item.agentDeviceId.trim());
+    }
+  }
   // Project identity must round-trip exactly; truncating a path changes the project key.
   if (typeof item.projectDir === 'string' || item.projectDir === null) session.projectDir = item.projectDir;
   // Without projectDir the full workingDir identifies the project for cold alias lookup.
@@ -268,7 +276,7 @@ function coerceCachedSession(item: unknown): RemoteSession | null {
   session.taskTeammate = parseTaskTeammate(item.taskTeammate);
   if (orcaRole) session.orcaRole = orcaRole;
   if (typeof item.pinnedAt === 'string') session.pinnedAt = item.pinnedAt;
-  for (const field of ['snoozedUntil', 'snoozedAt'] as const) {
+  for (const field of ['snoozedUntil', 'snoozedAt', 'archivedAt'] as const) {
     session[field] = typeof item[field] === 'string' && Number.isFinite(Date.parse(item[field]))
       ? item[field] : null;
   }

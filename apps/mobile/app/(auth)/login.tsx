@@ -2,7 +2,7 @@ import type { ViewInstance } from 'react-native';
 import { SystemNavigationBack, useSystemNavigationBack } from '@/platform/chrome/SystemNavigationBack';
 import { useAdaptiveWindow } from '@/platform/AdaptiveWindowContext';
 import { resolveLoginGroupPlacement } from '@/auth/loginGroupPlacement';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { X } from 'lucide-react-native';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { hasNativeLoginButtons, LoginNativeButton } from '@/components/LoginNativeButton';
@@ -28,6 +28,7 @@ import {
 } from '@/auth/cnPhone';
 import { AuthApiError, isValidEmail } from '@cindy/auth-client';
 import { authErrorText, getAuthLocale, loginText } from '@/auth/loginMessages';
+import { isQrScanSupported } from '@/auth/qrScanSupport';
 import { canResumePendingConsent, makeConsentStamp, type ConsentStamp } from '@/auth/consentGate';
 import { acceptPrivacyConsent } from '@/analytics/analyticsConsentStore';
 import { initMobileTapdb } from '@/analytics/mobileTapdb';
@@ -110,6 +111,14 @@ export interface LoginScreenProps {
 
 const NO_SOCIAL_PROVIDERS: readonly SocialProvider[] = [];
 
+/** 注册前确认里的三方名称:品牌名原样,微信按语言;未知渠道显示原值。 */
+function socialProviderName(channel: string): string {
+  if (channel === 'apple') return 'Apple';
+  if (channel === 'google') return 'Google';
+  if (channel === 'wechat') return loginText('providerWechat');
+  return channel;
+}
+
 export function LoginScreen({
   additionalAccount = false,
   onClose,
@@ -118,6 +127,7 @@ export function LoginScreen({
   // 手动语言 override 恢复/切换时本屏跟着重渲(P2-a:不依赖 auth 重渲兜底)。
   const { t } = useTranslation();
   const auth = useAuth();
+  const router = useRouter();
   const remoteSessionStoreVersion = useRemoteSessionStoreVersion();
   const hasRunningTasks = useMemo(
     () =>
@@ -906,10 +916,11 @@ export function LoginScreen({
           resendLabel={loginText('resendCode')}
           testID="login.resendButton"
         />
+        {/* 账号不存在时验证后进入「还没有 Cindy 账号」确认,不再直接登录,所以用「继续」(与桌面一致)。 */}
         <LoginPrimaryButton
           busy={auth.isBusy}
           disabled={disabled || verificationCode.length !== 6}
-          label={loginText('signIn')}
+          label={loginText('continue')}
           onPress={verify}
           testID="login.verifyButton"
         />
@@ -1124,6 +1135,115 @@ export function LoginScreen({
     );
   };
 
+  /**
+   * 注册前确认:验证通过但账号不存在。行一创建新账号;行二扫已登录电脑的二维码登录
+   * (老原生包没有相机模块时不显示)。返回 = 整体重置,用其他方式登录。
+   */
+  const renderSignupConfirmation = () => {
+    const state = auth.loginState;
+    if (state?.step !== 'signup-confirmation') return null;
+    const social = state.channel !== 'email' && state.channel !== 'phone';
+    const provider = social ? socialProviderName(state.channel) : '';
+    const subtitle = social
+      ? loginText('signupSubtitleSocial').replace('{provider}', provider)
+      : loginText('signupSubtitle').replace('{target}', state.targetMasked ?? '');
+    const createDesc =
+      state.channel === 'email'
+        ? loginText('signupCreateDescEmail')
+        : state.channel === 'phone'
+          ? loginText('signupCreateDescPhone')
+          : loginText('signupCreateDescSocial').replace('{provider}', provider);
+    return (
+      <LoginPanel testID="login.panel.signupConfirmation">
+        {backNode}
+        <LoginTitleBlock title={loginText('signupTitle')} subtitle={subtitle} />
+        <LoginMethodRow
+          disabled={disabled}
+          icon="person-add"
+          onPress={() => void auth.dispatchLoginAction({ type: 'confirm-signup' })}
+          subtitle={createDesc}
+          testID="login.signupCreate"
+          title={loginText('signupCreate')}
+          top={LOGIN_METHOD_ROW.firstRowTopDefault}
+        />
+        {isQrScanSupported() ? (
+          <LoginMethodRow
+            disabled={disabled}
+            icon="scan"
+            onPress={() => {
+              auth.clearAuthError();
+              router.push('/qr-scan');
+            }}
+            subtitle={loginText('signupScanDesc')}
+            testID="login.signupScan"
+            title={loginText('signupScan')}
+            top={LOGIN_METHOD_ROW.firstRowTopDefault + LOGIN_METHOD_ROW.rowStep}
+          />
+        ) : null}
+        {errorNode}
+      </LoginPanel>
+    );
+  };
+
+  /** 扫码认领后等电脑点「允许」:状态机按 2 秒轮询,过期 / 被拒回到首屏并提示。 */
+  const renderQrWaiting = () => {
+    const state = auth.loginState;
+    if (state?.step !== 'qr-waiting') return null;
+    return (
+      <LoginPanel testID="login.panel.qrWaiting">
+        <LoginTitleBlock
+          title={loginText('qrWaitingTitle')}
+          subtitle={loginText('qrWaitingSubtitle')}
+        />
+        <LoginLoadingRing
+          label={loginText('working')}
+          y={LOGIN_LOADING_RING.yBrowser}
+        />
+        <LoginPrimaryButton
+          label={loginText('cancel')}
+          onPress={reset}
+          testID="login.qrWaitingCancel"
+        />
+        {errorNode}
+      </LoginPanel>
+    );
+  };
+
+  /** 电脑装的是另一个版本:先问是否切换,同意后才向那个版本发请求。 */
+  const renderQrRegionSwitch = () => {
+    const state = auth.loginState;
+    if (state?.step !== 'qr-region-switch') return null;
+    const edition = loginText(state.targetRegion === 'cn' ? 'editionCn' : 'editionGlobal');
+    return (
+      <LoginPanel testID="login.panel.qrRegionSwitch">
+        {backNode}
+        <LoginTitleBlock
+          title={loginText('qrRegionTitle').replace('{edition}', edition)}
+          subtitle={loginText('qrRegionSubtitle').replace('{edition}', edition)}
+        />
+        <LoginMethodRow
+          disabled={disabled}
+          icon="switch"
+          onPress={() => void auth.dispatchLoginAction({ type: 'confirm-qr-region-switch' })}
+          subtitle={loginText('qrRegionSwitchDesc')}
+          testID="login.qrRegionSwitch"
+          title={loginText('qrRegionSwitch')}
+          top={LOGIN_METHOD_ROW.firstRowTopDefault}
+        />
+        <LoginMethodRow
+          disabled={disabled}
+          icon="back"
+          onPress={reset}
+          subtitle={loginText('qrRegionStayDesc')}
+          testID="login.qrRegionStay"
+          title={loginText('qrRegionStay')}
+          top={LOGIN_METHOD_ROW.firstRowTopDefault + LOGIN_METHOD_ROW.rowStep}
+        />
+        {errorNode}
+      </LoginPanel>
+    );
+  };
+
   /** browser-redirect:panel + 64 loading 环(figma §5.2 y=158)+ 取消。 */
   const renderBrowserRedirect = () => {
     const state = auth.loginState;
@@ -1234,6 +1354,9 @@ export function LoginScreen({
           renderAccountSelection() ??
           renderSsoVerification() ??
           renderBinding() ??
+          renderSignupConfirmation() ??
+          renderQrWaiting() ??
+          renderQrRegionSwitch() ??
           renderBrowserRedirect() ??
           renderErrorStep() ??
           renderPreparing() ??
