@@ -203,8 +203,8 @@ it('uses accepted plugin task text for Auto review and preserves it through queu
   // Context may decorate the model message; the reviewed task instruction is the plugin's text.
   expect(pluginDispatch).toContain('autoReviewUserText: text, forceQueue: true');
   const queues = [...dispatch.matchAll(/await enqueueSendToSessionMessage\(\{([\s\S]*?)\}\);/g)];
-  // Verified create handoffs add a fifth durable entry; all must retain provenance.
-  expect(queues).toHaveLength(5);
+  // Worktree provisioning adds two durable queue paths; all must retain provenance.
+  expect(queues).toHaveLength(7);
   for (const call of queues) {
     expect(call[1]).toContain('autoReviewUserText: params.autoReviewUserText');
     // 插件来源随每个入队回退分支传递(含 queued-before-dispatch 竞态),排队项不丢插件身份。
@@ -240,6 +240,7 @@ it('queues attachment-only internal sends while rejecting empty and context-only
     waitForSendToSessionLock: async () => {}, scheduledModelScope: { restore: async () => {} },
     getSessionRowSnapshot: async () => ({ status: 'active', title: 'task', userSendAt: null }),
     inputCoordinator: { ensureQueueRestored: async () => {} },
+    handoffProvisioningHolder: null,
     enqueueSendToSessionMessage: enqueue,
     trackSendToSessionLockRun: (_id: string, run: Promise<unknown>) => run,
   };

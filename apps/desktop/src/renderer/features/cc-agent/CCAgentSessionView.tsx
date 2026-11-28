@@ -7492,7 +7492,7 @@ function CCAgentSessionContent({
                               e.stopPropagation();
                               void window.electronAPI?.worktreeRetryProvisioning?.(sessionId);
                             }}
-                            className="shrink-0 rounded-md px-1.5 py-0.5 text-11 font-medium text-[var(--error-fg)] transition-colors hover:bg-foreground/10"
+                            className="shrink-0 rounded-full px-1.5 py-0.5 text-11 font-medium text-[var(--error-fg)] transition-colors hover:bg-foreground/10"
                           >
                             {t('commonUi.retry', '重试')}
                           </button>
