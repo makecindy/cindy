@@ -15,19 +15,18 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import { describe, expect, it } from 'vitest';
+import type { PluggableList } from 'unified';
 
 import { classifyMarkdownLinkTarget } from '@/lib/markdownTarget';
-import remarkLocalPathLinks from '../components/chat/remarkLocalPathLinks';
-import remarkPreserveRawLocalDestinations, {
-  RAW_LOCAL_LINK_HREF_PROP,
-} from '../components/chat/remarkPreserveRawLocalDestinations';
+import { REMARK_PLUGINS, REMARK_PLUGINS_PRIVILEGED } from '../components/chat/MarkdownRenderer';
+import { RAW_LOCAL_LINK_HREF_PROP } from '../components/chat/remarkPreserveRawLocalDestinations';
 
 interface CapturedLink {
   raw?: string;
   href?: string;
 }
 
-function renderLink(markdown: string): CapturedLink {
+function renderLinkWithPlugins(markdown: string, plugins: PluggableList): CapturedLink {
   const captured: CapturedLink = {};
   renderToStaticMarkup(
     createElement(ReactMarkdown, {
@@ -39,9 +38,7 @@ function renderLink(markdown: string): CapturedLink {
           return null;
         },
       },
-      // 与 MarkdownRenderer 的约束一致:preserve 插件必须排在
-      // remarkLocalPathLinks 之后,正文裸路径切出的 link 才拿得到原始值。
-      remarkPlugins: [remarkLocalPathLinks, remarkPreserveRawLocalDestinations],
+      remarkPlugins: plugins,
       urlTransform: defaultUrlTransform,
       children: markdown,
     }),
@@ -49,7 +46,15 @@ function renderLink(markdown: string): CapturedLink {
   return captured;
 }
 
-describe('Markdown local link path encoding', () => {
+// #10982: the former source guard pinned preservation to the final array slot.
+// Exercise authored/bare Windows paths through the actual chains instead: a
+// misplaced preservation plugin loses their raw destination after serialization.
+// Unit tier; existing #1629 cases retain their inputs and observable assertions.
+describe.each([
+  ['unprivileged', REMARK_PLUGINS],
+  ['privileged', REMARK_PLUGINS_PRIVILEGED],
+])('Markdown local link path encoding (%s)', (_name, plugins) => {
+  const renderLink = (markdown: string) => renderLinkWithPlugins(markdown, plugins);
   it('preserves a Windows backslash absolute link that urlTransform strips to ""', () => {
     const path = 'C:\\Users\\test\\AppData\\Roaming\\Cindy\\dialogues\\random_coordinates.png';
     const { raw, href } = renderLink(`[查看图片 random_coordinates.png](${path})`);
