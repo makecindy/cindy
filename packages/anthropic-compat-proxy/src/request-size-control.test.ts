@@ -1,6 +1,6 @@
 import { win32 } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { controlRequestSize, requestSizeBudgetAfterRejection, type InlineImagePreprocessor } from './request-size-control.js';
+import { controlRequestSize, hasRequestMediaMarkers, requestSizeBudgetAfterRejection, type InlineImagePreprocessor } from './request-size-control.js';
 import { classifyRequestSizeError } from './request-size-errors.js';
 
 /**
@@ -14,6 +14,15 @@ import { classifyRequestSizeError } from './request-size-errors.js';
 
 const imageData = (value: number, bytes = 400) => Buffer.alloc(bytes, value).toString('base64');
 const preserve = async (_bytes: Buffer, _mime: string, index: number) => `/tmp/recovered-${index}.png`;
+
+// #12504: the quick hint accepts ECMAScript whitespace and respects Buffer view boundaries.
+it('recognizes a media marker only inside the supplied request bytes', () => {
+  const body = Buffer.from('前缀"type"\u3000:\u00a0"input_file"尾');
+  const marker = body.subarray(Buffer.byteLength('前缀'), -Buffer.byteLength('尾'));
+  expect(hasRequestMediaMarkers(marker)).toBe(true);
+  expect(hasRequestMediaMarkers(marker.subarray(1))).toBe(false);
+  expect(hasRequestMediaMarkers(marker.subarray(0, -1))).toBe(false);
+});
 
 // PR #10663: file/document occurrences must not enter image-only preprocessing,
 // count caps or single-image caps. Unit tier; 51 PDFs plus one small PNG fit the
