@@ -60,7 +60,7 @@ export async function suspendChatOutbox(store: DurableOutboxStore, roomId: strin
 /** One account runner; uses the existing durable ledger, never the computer/session transport. */
 export function createChatOutboxDelivery(deps: {
   store: DurableOutboxStore; client: ReturnType<typeof createChatServerClient>;
-  current(): boolean; canRun(): boolean; accessLost(roomId: string): Promise<void>;
+  current(): boolean; accessLost(roomId: string): Promise<void>;
 }) {
   let running: Promise<void> | undefined;
   const { store, client } = deps;
@@ -69,7 +69,7 @@ export function createChatOutboxDelivery(deps: {
   const run = async () => {
     const blocked = new Set<string>();
     for (let row of store.getSnapshot()) {
-      if (!deps.canRun() || !deps.current()) return;
+      if (!deps.current()) return;
       if (!row.chat || !current(row)) continue;
       const room = row.chat.roomId;
       // A cross-device duplicate is already sent; retain its posted marker without polling for an unknown ID.
@@ -81,7 +81,7 @@ export function createChatOutboxDelivery(deps: {
       if (row.chat.messageId && row.chat.shareToMain && (row.suspended || ['failed', 'unavailable'].includes(row.chat.shareToMain.state))) continue;
       if (row.suspended || row.state === 'failed') { blocked.add(room); continue; }
       const guard = () => {
-        if (!current(row) || !deps.canRun()) throw new Error('OUTBOX_OWNER_CHANGED');
+        if (!current(row)) throw new Error('OUTBOX_OWNER_CHANGED');
         if (client.personalList.hidden(room)) throw Object.assign(new Error('CONVERSATION_NOT_FOUND'), { status: 404 });
       };
       try {
