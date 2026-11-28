@@ -4,6 +4,7 @@
  */
 import {
   MODEL_GROUP_LIMITS,
+  modelGroupAccountId,
   modelGroupAgentDeviceId,
   modelGroupCandidateKey,
   modelGroupResolveResultForRemote,
@@ -39,6 +40,8 @@ export interface ModelGroupHandlersPorts {
   readSessionTarget(sessionId: string): Promise<ModelGroupSessionTarget | null>;
   readPendingSessionTarget?(sessionId: string): PendingModelGroupTarget | null;
   markPendingModelGroupPick?(sessionId: string, pickedKey: string): void;
+  /** 绑定本机来源时固定到选中的账号槽位，并解除同供应商的旧电脑组二次选路。 */
+  pinLocalSource?(sessionId: string, route: { providerId: string; accountId?: string }): Promise<void> | void;
   routeNotePorts: ModelGroupRouteNotePorts;
 }
 
@@ -133,7 +136,7 @@ export function createModelGroupHandlers(ports: ModelGroupHandlersPorts) {
       return ports.runtime().resolver.commit(decisionId);
     },
 
-    bindSession(raw: unknown, assertLocal?: () => void) {
+    async bindSession(raw: unknown, assertLocal?: () => void) {
       assertCaller(assertLocal);
       const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
       const sessionId = sessionIdOf(value);
@@ -149,16 +152,22 @@ export function createModelGroupHandlers(ports: ModelGroupHandlersPorts) {
       const agentDeviceId = route.agentDeviceId === undefined || route.agentDeviceId === null
         ? undefined
         : modelGroupAgentDeviceId(route.agentDeviceId);
+      const accountId = route.accountId === undefined || route.accountId === null
+        ? undefined
+        : (agentDeviceId ? null : modelGroupAccountId(route.accountId));
       if (!selection || (agentKind !== 'cc' && agentKind !== 'codex' && agentKind !== 'pi' && agentKind !== 'acp')
         || typeof providerId !== 'string' || !providerId || providerId.length > MODEL_GROUP_LIMITS.field
         || (agentKind === 'acp' && !pluginEngineKeyFromProviderId(providerId))
         || typeof model !== 'string' || !model || model.length > MODEL_GROUP_LIMITS.field
-        || agentDeviceId === null) {
+        || agentDeviceId === null || accountId === null) {
         throwIpcError('INVALID_PARAMS', 'model group selection and route are required');
       }
-      const pickedKey = modelGroupCandidateKey({ agentKind, providerId, model, agentDeviceId });
+      const pickedKey = modelGroupCandidateKey({ agentKind, providerId, model, agentDeviceId, accountId });
       if (bindModelGroupSession(sessionId, selection, pickedKey)) {
         ports.markPendingModelGroupPick?.(sessionId, pickedKey);
+      }
+      if (!agentDeviceId && ports.pinLocalSource) {
+        await ports.pinLocalSource(sessionId, { providerId, ...(accountId ? { accountId } : {}) });
       }
     },
 

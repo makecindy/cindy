@@ -1538,7 +1538,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     bindSession: (request: {
       sessionId: string;
       selection: import('../shared/modelGroups').ModelGroupSelection;
-      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId'>;
+      route: Pick<import('../shared/modelGroups').ModelGroupResolvedRoute, 'agentKind' | 'providerId' | 'model' | 'agentDeviceId' | 'accountId'>;
     }): Promise<void> => ipcRenderer.invoke('model-groups:bind-session', request),
     /** 解除任务的智能路由持续托管，保留当前具体模型。 */
     unbindSession: (request: { sessionId: string }): Promise<{ ok: boolean; unbound: boolean }> =>
