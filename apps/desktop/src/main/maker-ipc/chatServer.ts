@@ -735,6 +735,23 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const queuedHints = new Map<string, Map<string, WorkHint>>();
   /** When each busy companion's own rooms are next re-read for work its realtime notices missed. */
   const laneSweeps = new Map<string, number>();
+  /**
+   * The group's Cindy only (bot-group-chat.md §9): every computer of the account hears of its work,
+   * but the server hands each group's requests only to that member's chosen computer, so an empty
+   * claim by execution ID is common and tells neither "not yet" nor "never". Such an execution keeps
+   * its notice and is asked again on the work-request failure ladder (2 s doubling to 60 s, as in
+   * `chatWorkPolling`), from notices and room sweeps alike. Companions claim only on their home
+   * computer, where an empty claim is rare, and keep the immediate retry. `lane` is the conversation
+   * found when it was refused, so the order check below needs no extra reads.
+   */
+  const emptyAssistantClaims = new Map<string, { failures: number; retryAt: number; roomId: string; lane: string }>();
+  /**
+   * The group's Cindy's claims by execution ID still on their way. A notice for the room, or naming
+   * the execution, that arrives meanwhile is newer than the answer may be (the member may have chosen
+   * this computer since): an empty answer then counts as a refusal but leaves the execution due.
+   * Entries live only while the request does.
+   */
+  const assistantClaimsInFlight = new Map<string, { roomId: string; noticed: boolean }>();
   const metadata = new Map<string, Promise<void>>();
   /**
    * Followed room scopes, each with the newest cursor this process has read or acked. It only
@@ -1594,6 +1611,15 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
               for (const change of changes) {
                 const value = change as { entityId?: unknown; data?: { botId?: unknown } };
                 if (!queuedForThisDevice(change) || typeof value.entityId !== 'string' || typeof value.data?.botId !== 'string') continue;
+                // The group's Cindy adds no hint from the room stream (it carries other members' requests too),
+                // but its own execution waiting out an empty claim is asked again at once, without restarting the ladder.
+                if (value.data.botId === assistantActorId) {
+                  const backoff = emptyAssistantClaims.get(value.entityId);
+                  if (backoff) backoff.retryAt = 0;
+                  const flight = assistantClaimsInFlight.get(value.entityId);
+                  if (flight) flight.noticed = true;
+                  continue;
+                }
                 // Only companions this installation claims for: other notices would never be read.
                 const botActor = actors.find(a => a.id === value.data!.botId);
                 if (!botActor || !claimable(botActor)) continue;
@@ -1613,8 +1639,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
                 for (const hint of change.data.work) {
                   if (!id.safeParse(hint?.botId).success || !id.safeParse(hint?.conversationId).success) continue;
                   noteUnresolvedWork(hint.botId, hint.conversationId);
-                  // The group's Cindy has no actor of ours: a notice for it just looks for work now.
-                  if (hint.botId === assistantActorId) { targets.push(hint.botId); continue; }
+                  // The group's Cindy has no actor of ours. This stream carries only this account's own
+                  // requests, so its room is noted as a companion's is: while Cindy is busy in another
+                  // conversation only noted rooms are read (#10454). Noted only while it is polled here.
+                  if (hint.botId === assistantActorId) {
+                    if (boundAssistantDevice && selfId) {
+                      const hints = queuedHints.get(hint.botId) ?? new Map<string, WorkHint>();
+                      hints.set(`room:${hint.conversationId}`, { roomId: hint.conversationId });
+                      queuedHints.set(hint.botId, hints);
+                      // A new notice (such as after the member chose this computer) asks again at once,
+                      // without restarting the ladder: repeated notices cost one claim each.
+                      for (const entry of emptyAssistantClaims.values()) if (entry.roomId === hint.conversationId) entry.retryAt = 0;
+                      for (const flight of assistantClaimsInFlight.values()) if (flight.roomId === hint.conversationId) flight.noticed = true;
+                    }
+                    targets.push(hint.botId); continue;
+                  }
                   const bot = actors.find(actor => actor.id === hint.botId);
                   if (!bot || !claimable(bot)) continue;
                   const hints = queuedHints.get(bot.id) ?? new Map<string, WorkHint>();
@@ -4348,22 +4387,44 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return claimed;
   }
 
+  /** Drops the empty-claim backoff of a room's executions, except those still queued in `keep`. */
+  function forgetEmptyAssistantClaims(roomId: string, keep?: ReadonlySet<string>) {
+    for (const [executionId, entry] of emptyAssistantClaims)
+      if (entry.roomId === roomId && !keep?.has(executionId)) emptyAssistantClaims.delete(executionId);
+  }
+  function noteEmptyAssistantClaim(executionId: string, roomId: string, lane: string, noticed: boolean) {
+    const failures = (emptyAssistantClaims.get(executionId)?.failures ?? 0) + 1;
+    // Re-inserted, so the first entry is the one longest without a new refusal.
+    emptyAssistantClaims.delete(executionId);
+    emptyAssistantClaims.set(executionId, { failures, roomId, lane,
+      retryAt: noticed ? 0 : Date.now() + Math.min(60_000, 2_000 * 2 ** Math.min(failures - 1, 5)) });
+    if (emptyAssistantClaims.size <= 1000) return;
+    // Over the bound, the evicted execution loses its notice as well. It is asked again only when its
+    // room is read for another reason (a notice, a sweep), once, and then starts the ladder anew.
+    const evicted = emptyAssistantClaims.keys().next().value!;
+    emptyAssistantClaims.delete(evicted);
+    queuedHints.get(assistantActorId!)?.delete(evicted);
+  }
   /**
    * A busy companion takes only work in its other conversations: a turn in a Thread never waits for
    * one in the main timeline or another Thread, while turns in one conversation stay in order. The
    * server offers the oldest work first, so this names each execution it may take.
    */
   async function claimBesideRuns(actorId: string, runs: Running[], mayRequest: () => boolean = () => true) {
+    const assistant = !!assistantActorId && actorId === assistantActorId;
     const lanes = new Set(runs.map(run => run.lane));
     const hints = queuedHints.get(actorId) ?? new Map<string, WorkHint>();
     const rooms = new Set([...hints.values()].map(hint => hint.roomId));
+    const swept = new Set<string>();
     if (Date.now() >= (laneSweeps.get(actorId) ?? 0)) {
       laneSweeps.set(actorId, Date.now() + LANE_SWEEP_MS);
-      for (const run of runs) rooms.add(run.execution.conversation_id);
+      for (const run of runs) { rooms.add(run.execution.conversation_id); swept.add(run.execution.conversation_id); }
     }
     for (const room of [...rooms].sort()) {
       if (!mayRequest()) return;
       const observed = [...hints].filter(([, hint]) => hint.roomId === room);
+      // Only notices still waiting out an empty claim: nothing to ask this room yet.
+      if (assistant && !swept.has(room) && observed.every(([key]) => Date.now() < (emptyAssistantClaims.get(key)?.retryAt ?? 0))) continue;
       const retireHint = (key: string, hint: WorkHint) => { if (hints.get(key) === hint) hints.delete(key); };
       let rows: Execution[];
       try {
@@ -4372,12 +4433,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         // Left or removed from the room: its notices can never be taken, and the next rooms still are.
         if (!(error instanceof ChatResponseError) || ![403, 404, 410].includes(error.status)) throw error;
         for (const [key, hint] of observed) retireHint(key, hint);
+        if (assistant) forgetEmptyAssistantClaims(room);
         continue;
       }
       // The group's Cindy runs here only for this account's own requests; others' are not ours to claim.
       const queued = rows.filter(row => row.bot_id === actorId && row.status === 'queued'
         && (actorId !== assistantActorId || row.requester_id === selfId))
         .sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? '') || a.id.localeCompare(b.id));
+      if (assistant) forgetEmptyAssistantClaims(room, new Set(queued.map(row => row.id)));
       // A notice is dropped once its work is no longer queued, or once it waits behind a turn in
       // its own conversation (that room is re-read anyway). A failed read or claim keeps it for the next pass.
       // Convert a room hint to actual pending executions before dropping it.
@@ -4385,18 +4448,34 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (observed.some(([key]) => key === `room:${room}`))
         for (const row of queued) if (!hints.has(row.id)) hints.set(row.id, { roomId: room });
       for (const [key, hint] of observed) if (!queued.some(row => row.id === key)) retireHint(key, hint);
+      // The group's Cindy waits out an earlier empty claim and keeps the notice (see `emptyAssistantClaims`),
+      // but never lets a newer request of the same conversation go first: an older one still waiting is
+      // asked just before it, as without the backoff.
+      const checkedAt = Date.now();
+      const waiting: Execution[] = [];
       for (const row of queued) {
         if (!mayRequest()) return;
+        if (assistant && checkedAt < (emptyAssistantClaims.get(row.id)?.retryAt ?? 0)) { waiting.push(row); continue; }
         let lane: string;
         try { lane = await executionLane(row, true); } catch { continue; }
         if (lanes.has(lane)) { hints.delete(row.id); continue; }
-        // A claim failure (such as a rate limit) is reported to the poll, and keeps the notice.
-        if (!mayRequest()) return;
-        const execution = await claim(actorId, row.id);
-        if (!execution) continue;
-        hints.delete(row.id);
-        lanes.add(lane);
-        void runExecution(execution, lane);
+        for (const candidate of [...waiting.filter(older => emptyAssistantClaims.get(older.id)?.lane === lane), row]) {
+          if (lanes.has(lane)) { if (candidate === row) hints.delete(row.id); break; }
+          // Each execution is asked at most once per pass.
+          if (candidate !== row) waiting.splice(waiting.indexOf(candidate), 1);
+          // A claim failure (such as a rate limit) is reported to the poll, and keeps the notice.
+          if (!mayRequest()) return;
+          const flight = { roomId: room, noticed: false };
+          if (assistant) assistantClaimsInFlight.set(candidate.id, flight);
+          let execution: Execution | null;
+          try { execution = await claim(actorId, candidate.id); }
+          finally { if (assistantClaimsInFlight.get(candidate.id) === flight) assistantClaimsInFlight.delete(candidate.id); }
+          if (!execution) { if (assistant) noteEmptyAssistantClaim(candidate.id, room, lane, flight.noticed); continue; }
+          emptyAssistantClaims.delete(candidate.id);
+          hints.delete(candidate.id);
+          lanes.add(lane);
+          void runExecution(execution, lane);
+        }
       }
     }
     if (!hints.size && queuedHints.get(actorId) === hints) queuedHints.delete(actorId);
@@ -4435,6 +4514,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     accept: execution => {
       laneSweeps.delete(execution.bot_id);
       queuedHints.get(execution.bot_id)?.delete(execution.id);
+      emptyAssistantClaims.delete(execution.id);
       void runExecution(execution);
     },
     empty: actorId => { queuedHints.delete(actorId); },
