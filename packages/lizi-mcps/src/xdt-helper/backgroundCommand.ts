@@ -144,14 +144,14 @@ export function registerBackgroundCommandTool(
             : code !== null
               ? `exit ${code}`
               : `被信号终止(${signal ?? 'unknown'})`;
-          return errorPayload("COMMAND_FAILED", `命令失败(${status})${tailText}${logLine}`);
+          return errorPayload("COMMAND_FAILED", `命令已结束(${status}),成败看输出${tailText}${logLine}`);
         }
         return okPayload({
           run_id: result.runId,
           log_path: result.logPath,
           pid: result.pid ?? null,
           ...(tail.trim() ? { log_tail: tail } : {}),
-          note: "命令在受理窗口内已完成(exit 0),结果如上;不会再有「后台命令完成」回报。",
+          note: "命令在受理窗口内已结束(exit 0),成败看输出;不会再有「后台命令完成」回报。",
         });
       }
       return okPayload({
