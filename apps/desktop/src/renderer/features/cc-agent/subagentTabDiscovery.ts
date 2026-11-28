@@ -1,9 +1,8 @@
 /**
  * Subagent tab discovery — "does this Pi task own a durable Subagent tab?".
  *
- * Registration is a one-shot goal, not a subscription: once the tab exists the
- * panel itself owns every later read (local change pushes / its own 1s remote
- * poll). So this watcher stops as soon as it registers.
+ * Historical Pi runs keep the manual entry available. A new or running run
+ * registers the tab. Unchanged snapshots leave a manually closed tab alone.
  *
  * `onPresenceChange` is the exception. The tab's *visibility* cannot be one-shot
  * the way its registration is: a task that started durable children under Pi and
@@ -109,6 +108,9 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
 
   let disposed = false;
   let registered = false;
+  // Compare successful snapshots. A newly observed Pi run can already be
+  // terminal between notifications, especially on a polling Host.
+  let observedRuns: Map<string, boolean> | undefined;
   /** Set once the remote Host's reply declared it forwards its change push. */
   let remotePushDriven = false;
   let poll: ReturnType<typeof setTimeout> | null = null;
@@ -130,11 +132,11 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
     if (disposed || !isRequestOwnerCurrent()) return;
     if (remote && response.changePush === true && subscribeRemoteChanges && !unsubscribeRemote) {
       remotePushDriven = true;
-      unsubscribeRemote = subscribeRemoteChanges(runRemoteChange);
+      unsubscribeRemote = subscribeRemoteChanges(onChange);
       // A change pushed after the Host captured this reply but before the listener
       // existed was missed; read once more instead of trusting the snapshot for the
       // whole slow fallback interval. The re-read finds the listener installed.
-      remoteChangeDuringRound = true;
+      changeDuringRound = true;
     }
     // `unsupported` is the honest answer from a device that has no durable
     // Subagent store; an empty list means this task simply has no children yet.
@@ -144,13 +146,20 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
     // switched to Pi but only has Claude Code / Codex history in the store. The
     // remote read is already narrowed to Pi on the Main side; this is the local
     // path catching up, filtered here so the IPC contract stays unchanged.
-    const present = response.supported && response.runs.some((run) => run.provider === 'pi');
-    onPresenceChange?.(present);
-    if (!present || registered) return;
-    await registerTab();
-    if (disposed) return;
+    const piRuns = response.supported ? response.runs.filter((run) => run.provider === 'pi') : [];
+    onPresenceChange?.(piRuns.length > 0);
+    if (!response.supported) return;
+    const previous = observedRuns;
+    const shouldRegister = piRuns.some((run) =>
+      (run.status === 'running' && !previous?.get(run.id)) ||
+      (previous !== undefined && !previous.has(run.id)),
+    );
+    if (shouldRegister) await registerTab();
+    observedRuns ??= new Map();
+    for (const run of piRuns) observedRuns.set(run.id, run.status === 'running');
+    if (!shouldRegister || disposed) return;
     registered = true;
-    // Registration reached its one-shot goal; the panel owns reads from here.
+    // Without a presence consumer the first registration completes discovery.
     // A presence consumer keeps both watchers, because "should this entry still
     // be offered" stays a live question — the remote one only drops to
     // `presencePollMs` (or the push fallback), since the panel's own faster poll
@@ -164,10 +173,6 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
     unsubscribeRemote = null;
   };
 
-  const runDiscovery = (): void => {
-    void discover().catch(() => undefined);
-  };
-
   /**
    * Chained, not `setInterval`: the next remote round is only armed once this
    * one settled. A device-link invoke defaults to a 30s timeout, so a fixed 5s
@@ -176,41 +181,43 @@ export function startSubagentTabDiscovery(options: SubagentTabDiscoveryOptions):
    * round still re-arms — the link coming back is exactly what this poll is
    * waiting for.
    */
-  let remoteRoundInFlight = false;
-  let remoteChangeDuringRound = false;
-  const runRemoteDiscovery = (): void => {
+  let roundInFlight = false;
+  let changeDuringRound = false;
+  const runDiscovery = (): void => {
     stopPolling();
-    remoteRoundInFlight = true;
+    roundInFlight = true;
     void discover().catch(() => undefined).finally(() => {
-      remoteRoundInFlight = false;
+      roundInFlight = false;
       if (disposed) return;
       if (registered && !onPresenceChange) return;
       // A push that landed mid-read may describe a newer state than the reply.
-      if (remoteChangeDuringRound) {
-        remoteChangeDuringRound = false;
-        runRemoteDiscovery();
+      if (changeDuringRound) {
+        changeDuringRound = false;
+        runDiscovery();
         return;
       }
-      const delay = remotePushDriven ? pushFallbackPollMs : registered ? presencePollMs : pollMs;
-      poll = setTimeout(runRemoteDiscovery, delay);
+      if (!remote) return;
+      const historyFound = Boolean(observedRuns?.size);
+      const delay = remotePushDriven ? pushFallbackPollMs : historyFound ? presencePollMs : pollMs;
+      poll = setTimeout(runDiscovery, delay);
     });
   };
 
   /** Host change push: read now, coalescing with a round already in flight. */
-  function runRemoteChange(): void {
+  function onChange(): void {
     if (disposed) return;
-    if (remoteRoundInFlight) {
-      remoteChangeDuringRound = true;
+    if (roundInFlight) {
+      changeDuringRound = true;
       return;
     }
-    runRemoteDiscovery();
+    runDiscovery();
   }
 
   if (remote) {
-    runRemoteDiscovery();
+    runDiscovery();
   } else {
     runDiscovery();
-    unsubscribe = subscribeLocalChanges(runDiscovery);
+    unsubscribe = subscribeLocalChanges(onChange);
   }
 
   return () => {

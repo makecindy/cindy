@@ -371,7 +371,11 @@ export function RightSidebarShell({
     () => projectedTabs.tabs.filter((tab) => inGroup(tab.id)),
     [inGroup, projectedTabs.tabs],
   );
-  const sessionActiveTabId = projectedTabs.activeTabId;
+  // A silent first Subagent tab has no selection. Keep a plugin already
+  // visible by fallback, including when it has never been explicitly clicked.
+  const preservePinnedFallback = bucket.activeTabId === null &&
+    pinnedTabs.length > 0 && sessionTabs[0]?.kind === 'subagents';
+  const sessionActiveTabId = preservePinnedFallback ? null : projectedTabs.activeTabId;
   /** 本组可见页签 = 归本组的全局页签(钉在前) + 归本组的当前任务页签。 */
   const tabs = useMemo(() => [...pinnedTabs, ...sessionTabs], [pinnedTabs, sessionTabs]);
   // 激活位:用户选中的全局页签优先并跨任务保持;否则是任务自己的激活页签(在本组时);
@@ -389,7 +393,7 @@ export function RightSidebarShell({
         ? sessionActiveTabId
         : groupRememberedActiveId && tabs.some((tab) => tab.id === groupRememberedActiveId)
           ? groupRememberedActiveId
-          : (sessionTabs[0]?.id ?? pinnedTabs[0]?.id ?? null);
+          : (preservePinnedFallback ? pinnedTabs[0].id : sessionTabs[0]?.id ?? pinnedTabs[0]?.id ?? null);
 
   useEffect(() => {
     onActiveTabChange?.(activeTabId);

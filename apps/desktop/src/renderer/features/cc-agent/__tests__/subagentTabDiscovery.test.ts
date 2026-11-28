@@ -11,12 +11,13 @@ import {
   startSubagentTabDiscovery,
 } from '../subagentTabDiscovery';
 
-function runs(count: number): SubagentRunsListResponse {
+function runs(count: number, status: 'completed' | 'running' = 'running'): SubagentRunsListResponse {
   return {
     supported: true,
     runs: Array.from({ length: count }, (_, index) => ({
       id: `run-${index}`,
       provider: 'pi',
+      status,
     })) as unknown as SubagentRunsListResponse['runs'],
   };
 }
@@ -37,7 +38,7 @@ function mixedRuns(): SubagentRunsListResponse {
     supported: true,
     runs: [
       { id: 'legacy-0', provider: 'claude-code' },
-      { id: 'run-0', provider: 'pi' },
+      { id: 'run-0', provider: 'pi', status: 'running' },
     ] as unknown as SubagentRunsListResponse['runs'],
   };
 }
@@ -426,7 +427,7 @@ describe('startSubagentTabDiscovery', () => {
       // Terminal rows are still rows: a Pi task keeps its tab for reviewing
       // them, and a task that moved off Pi has to behave the same.
       const h = harness();
-      h.listLocal.mockResolvedValue(runs(1));
+      h.listLocal.mockResolvedValue(runs(1, 'completed'));
       const presence: boolean[] = [];
 
       const dispose = startSubagentTabDiscovery({
@@ -444,7 +445,19 @@ describe('startSubagentTabDiscovery', () => {
       await settle();
 
       expect(presence).toEqual([true, true]);
+      expect(h.registerTab).not.toHaveBeenCalled();
+      // A short-lived run can already be complete when the change is read.
+      h.listLocal.mockResolvedValue(runs(2, 'completed'));
+      h.emitLocalChange();
+      await settle();
       expect(h.registerTab).toHaveBeenCalledOnce();
+      h.emitLocalChange();
+      await settle();
+      expect(h.registerTab).toHaveBeenCalledOnce();
+      h.listLocal.mockResolvedValue(runs(3, 'completed'));
+      h.emitLocalChange();
+      await settle();
+      expect(h.registerTab).toHaveBeenCalledTimes(2);
       dispose();
     });
 
@@ -484,6 +497,22 @@ describe('startSubagentTabDiscovery', () => {
       await settle();
       expect(presence.at(-1)).toBe(true);
       // Still one-shot where it counts.
+      expect(h.registerTab).toHaveBeenCalledOnce();
+      dispose();
+    });
+
+    it('polls terminal history slowly on a legacy Host and discovers a newly finished run', async () => {
+      const h = harness();
+      h.listRemote.mockResolvedValueOnce(runs(1, 'completed')).mockResolvedValue(runs(2, 'completed'));
+      const dispose = startSubagentTabDiscovery({
+        ...h, sessionId: 's1', deviceId: 'legacy', isRequestOwnerCurrent: () => true,
+        onPresenceChange: vi.fn(),
+      });
+      await settle();
+      await vi.advanceTimersByTimeAsync(REMOTE_SUBAGENT_PRESENCE_POLL_MS - 1);
+      expect(h.listRemote).toHaveBeenCalledTimes(1);
+      expect(h.registerTab).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
       expect(h.registerTab).toHaveBeenCalledOnce();
       dispose();
     });

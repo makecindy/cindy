@@ -87,7 +87,7 @@ import {
   type SidebarVisibilityRequest,
   type SidebarVisibilityRequestOptions,
 } from '../lib/sidebarCommands';
-import { _resetStore, closeTab, getBucket, setActiveTab } from '../store';
+import { _resetStore, addTab, closeTab, getBucket, setActiveTab } from '../store';
 import {
   __resetSidebarTabWindowsStateForTest,
   __setSidebarTabWindowsStateForTest,
@@ -372,6 +372,25 @@ describe('RightSidebarShell empty state', () => {
   // - 现有覆盖缺口:其余用例只覆盖任务桶。
   // - 最小失败输入:一个 plugin-view 全局页签 + 一个任务页签,切换任务。
   // - tier:unit(jsdom,localStorage 全局页签 + 进程内 store)。
+  // #13737, unit: a plugin can be visible before it has an explicit active marker.
+  it('keeps the displayed plugin when a Subagent tab is registered silently', async () => {
+    installedGhostsMock.list = [
+      { manifest: { id: 'alpha', name: 'Alpha', panel: { html: 'p.html' } }, enabled: true },
+    ];
+    const plugin = addGlobalPluginTab('alpha')!;
+    const active = vi.fn();
+    render(createElement(RightSidebarShell, {
+      sessionId: 's1', workdir: 'repo', isMac: true, remoteHostId: null,
+      shellVisible: true, subagentsAvailable: true, onActiveTabChange: active,
+    }));
+    await waitFor(() => expect(getBucket('s1').hydrated).toBe(true));
+    await act(async () => { await addTab('s1', 'subagents', null, { activate: false }); });
+    expect(active).toHaveBeenLastCalledWith(plugin.id);
+    expect(getBucket('s1').activeTabId).toBeNull();
+    fireEvent.click(screen.getByText('rightSidebar.tabs.kinds.subagents'));
+    expect(active).toHaveBeenLastCalledWith(getBucket('s1').tabs[0].id);
+  });
+
   it('pins global plugin-view tabs across tasks without touching the task bucket active marker', async () => {
     installedGhostsMock.list = [
       { manifest: { id: 'alpha', name: 'Alpha', panel: { html: 'p.html', title: 'Alpha Panel' } }, enabled: true },
