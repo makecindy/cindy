@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import {
   parsePluginOauthCallback,
   type PluginOauthOffer,
@@ -41,7 +42,7 @@ export async function listenForOauthCallback(
       res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8' });
       // No provider text, URL or code in the browser result.
       const lang = pickOAuthResultPageLang(req.headers['accept-language']);
-      const copy = getRemoteOAuthCallbackCopy(lang);
+      const copy = getRemoteOAuthCallbackCopy(lang, BRAND_NAME);
       const errors = getGhostOAuthResultCopy(lang);
       res.end(
         renderOAuthResultPage({
@@ -51,7 +52,7 @@ export async function listenForOauthCallback(
           body:
             status === 200
               ? copy.body
-              : errors.errors['invalid-callback'].replace('{brand}', 'Cindy'),
+              : errors.errors['invalid-callback'].replace('{brand}', () => BRAND_NAME),
           pageKind: 'ghost-oauth',
         }),
       );

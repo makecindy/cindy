@@ -4,6 +4,7 @@
  * unavailable; the inlined values mirror docs/design-rules/cindy-design-system.md's default light/dark theme.
  */
 
+import { BRAND_NAME } from '@cindy/maker-shared/branding';
 import { resolveSystemLocale, type SupportedLocale } from '../shared/locale.js';
 import { DEEP_LINK_URL_PREFIX } from '../shared/deepLinkSchemes';
 import { LOGIN_CALLBACK_CHIBI } from './assets/loginCallbackAssets';
@@ -11,36 +12,39 @@ import { LOGIN_CALLBACK_CHIBI } from './assets/loginCallbackAssets';
 export type OAuthResultPageLang = Exclude<SupportedLocale, 'zh-CN'> | 'zh';
 
 /** Receipt is not token-exchange success. The authoritative result stays in the cloud card. */
-export function getRemoteOAuthCallbackCopy(lang: OAuthResultPageLang): { title: string; body: string } {
+export function getRemoteOAuthCallbackCopy(
+  lang: OAuthResultPageLang,
+  brandName: string = BRAND_NAME,
+): { title: string; body: string } {
   return {
-    zh: { title: '已收到授权回调', body: '请返回 Cindy，查看远程设备的授权结果。' },
-    'zh-TW': { title: '已收到授權回呼', body: '請返回 Cindy，查看遠端裝置的授權結果。' },
-    en: { title: 'Authorization callback received', body: 'Return to Cindy to check the authorization result on the remote device.' },
-    ja: { title: '認証コールバックを受信しました', body: 'Cindy に戻り、リモートデバイスの認証結果を確認してください。' },
-    ko: { title: '인증 콜백을 받았습니다', body: 'Cindy로 돌아가 원격 기기의 인증 결과를 확인하세요.' },
+    zh: { title: '已收到授权回调', body: `请返回 ${brandName}，查看远程设备的授权结果。` },
+    'zh-TW': { title: '已收到授權回呼', body: `請返回 ${brandName}，查看遠端裝置的授權結果。` },
+    en: { title: 'Authorization callback received', body: `Return to ${brandName} to check the authorization result on the remote device.` },
+    ja: { title: '認証コールバックを受信しました', body: `${brandName} に戻り、リモートデバイスの認証結果を確認してください。` },
+    ko: { title: '인증 콜백을 받았습니다', body: `${brandName}(으)로 돌아가 원격 기기의 인증 결과를 확인하세요.` },
 
   "es": {
     "title": "Respuesta de autorización recibida",
-    "body": "Vuelve a Cindy para consultar el resultado de la autorización en el dispositivo remoto."
+    "body": `Vuelve a ${brandName} para consultar el resultado de la autorización en el dispositivo remoto.`
   },
   "fr": {
     "title": "Rappel d'autorisation reçu",
-    "body": "Revenez dans Cindy pour vérifier le résultat de l'autorisation sur l'appareil distant."
+    "body": `Revenez dans ${brandName} pour vérifier le résultat de l'autorisation sur l'appareil distant.`
   },
   "de": {
     "title": "Autorisierungsrückmeldung erhalten",
-    "body": "Kehre zu Cindy zurück, um das Ergebnis der Autorisierung auf dem Remote-Gerät zu prüfen."
+    "body": `Kehre zu ${brandName} zurück, um das Ergebnis der Autorisierung auf dem Remote-Gerät zu prüfen.`
   },
   "pt-PT": {
     "title": "Resposta de autorização recebida",
-    "body": "Volte a Cindy para verificar o resultado da autorização no dispositivo remoto."
+    "body": `Volte a ${brandName} para verificar o resultado da autorização no dispositivo remoto.`
   },
   "pt-BR": {
     "title": "Resposta de autorização recebida",
-    "body": "Volte para Cindy para verificar o resultado da autorização no dispositivo remoto."
+    "body": `Volte para ${brandName} para verificar o resultado da autorização no dispositivo remoto.`
   },
-    'zh-Hant-x-lzh': { title: '授權回呼已至', body: '請歸 Cindy，察遠端裝置之授權結果。' },
-    'zh-Hans-x-lzh': { title: '授权回调已至', body: '请归 Cindy，察远程设备之授权结果。' },
+    'zh-Hant-x-lzh': { title: '授權回呼已至', body: `請歸 ${brandName}，察遠端裝置之授權結果。` },
+    'zh-Hans-x-lzh': { title: '授权回调已至', body: `请归 ${brandName}，察远程设备之授权结果。` },
 }[lang];
 }
 export type OAuthResultPageVariant = 'success' | 'warning' | 'error';
@@ -66,6 +70,8 @@ export interface OAuthResultPageInput {
   variant: OAuthResultPageVariant;
   title: string;
   body: string;
+  /** 文档标题的品牌名；未传时跟随统一品牌常量。 */
+  brandName?: string;
   /** Raw diagnostic text rendered as escaped monospace detail. */
   detail?: string;
   /** Success-only countdown template; must contain a `{{count}}` placeholder. */
@@ -628,7 +634,7 @@ function renderBrandLoginCallbackPage(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>${title} · Cindy</title>
+<title>${title} · ${escapeHtml(input.brandName ?? BRAND_NAME)}</title>
 <style>
 :root{color-scheme:light;--page:#f2f2ed;--card:#fdfdf8;--card-border:rgba(0,0,0,.08);--title:rgba(0,0,0,.88);--body:rgba(0,0,0,.56);--detail:rgba(0,0,0,.44);--cta:#3c3f43;--cta-border:#3c3f43;--cta-text:#fcfcfc;--cta-hover:rgba(0,0,0,.2);--cta-active:rgba(0,0,0,.4)}
 :root[data-theme="dark"]{color-scheme:dark;--page:#181818;--card:#1f1f1f;--card-border:rgba(255,255,255,.1);--title:rgba(255,255,255,.82);--body:rgba(255,255,255,.55);--detail:rgba(255,255,255,.4);--cta:#eeeeee;--cta-border:#eeeeee;--cta-text:#151515;--cta-hover:rgba(0,0,0,.05);--cta-active:rgba(0,0,0,.1)}
@@ -694,7 +700,7 @@ export function renderOAuthResultPage(input: OAuthResultPageInput): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>${title} · Cindy</title>
+<title>${title} · ${escapeHtml(input.brandName ?? BRAND_NAME)}</title>
 <style>
 :root{color-scheme:light;--page:#f8f8f6;--card:#fff;--border:#d7d7d4;--text:#262626;--muted:#737373;--detail:#a3a3a3;--chip:#e5e5e5;--cta:#000;--cta-text:#fff;--cta-hover:#262626}
 :root[data-theme="dark"]{color-scheme:dark;--page:#1f1f1e;--card:#2c2c2a;--border:#3c3c3a;--text:#d4d4d4;--muted:#a3a3a3;--detail:#737373;--chip:#3c3c3a;--cta:#fff;--cta-text:#000;--cta-hover:#e5e5e5}
