@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactElement } from 'react';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
+import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money';
 
 function render(ui: ReactElement) {
   return renderUI(ui, { wrapper: ConfirmDialogProvider });
@@ -21,6 +22,7 @@ import type { ProviderView } from '@cindy/model-providers';
 import type { ModelAccessCreditUsage } from '../../../../shared/modelAccess';
 
 const mocks = vi.hoisted(() => ({
+  locale: 'zh-CN',
   claudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
   codexSnapshot: null as RateLimitSnapshot | null,
   xaiSnapshot: null as XaiSubscriptionUsageSnapshot | null,
@@ -49,7 +51,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    i18n: { language: 'zh-CN', resolvedLanguage: 'zh-CN' },
+    i18n: { language: mocks.locale, resolvedLanguage: mocks.locale },
     t: (key: string, options: Record<string, string | number> = {}) => {
       const templates: Record<string, string> = {
         'quotaCard.usageTitle': '用量明细',
@@ -70,6 +72,8 @@ vi.mock('react-i18next', () => ({
         'todaySpend.codex.limitWindow': '限额',
         'todaySpend.codex.daysWindow': '{{days}}天',
         'todaySpend.codex.windowSegment': '{{label}} 剩余 {{remaining}}',
+        'todaySpend.creditLabel': '{{used}} / {{total}}',
+        'todaySpend.tooltip.creditUsed': '账号已用 {{used}} · 总额 {{total}}',
         'todaySpend.sessionCostLabel': '本任务 {{cost}}',
         'todaySpend.tooltip.sessionUsed': '本任务已用 {{cost}}',
         'todaySpend.codex.sessionValueLabel': '本任务价值 {{cost}}',
@@ -280,6 +284,7 @@ beforeEach(() => {
   mocks.xaiSnapshot = null;
   mocks.gatewaySnapshot = null;
   mocks.creditSnapshot = null;
+  mocks.locale = 'zh-CN';
   mocks.sessionTokens = null;
   mocks.codexAuthInjection = null;
   mocks.providers = [];
@@ -379,6 +384,37 @@ describe('TodaySpendChip credit snapshot time', () => {
     act(() => screen.getByRole('button', { name: '用量明细' }).focus());
     return screen.getByTestId('quota-hover-card');
   }
+
+  // #13698: production chip and card must retain billing precision for a fractional personal balance (unit/jsdom).
+  it('shows personal credit amounts with billing precision and preserves remaining percent', () => {
+    mocks.creditSnapshot = {
+      ...creditSnapshot(new Date().toISOString()),
+      available: '2.48',
+      plan: { remaining: '2.48', used: '0.52', total: '3.00' },
+    };
+    render(gatewayChip());
+    expect(screen.getByRole('button', { name: '用量明细' }).textContent).toContain('$0.52 / $3.00');
+    const card = openUsageCard();
+    expect(card.textContent).toContain('账号已用 $0.52 · 总额 $3.00');
+    expect(within(card).getByRole('progressbar').getAttribute('aria-valuenow')).toBe('83');
+  });
+
+  // #13698: tiny nine-place ledger values must format like billing's decimal-string input.
+  it.each(['zh-CN', 'de-DE'])('formats tiny credit usage like billing in %s without changing the balance percentage', (locale) => {
+    mocks.locale = locale;
+    mocks.creditSnapshot = {
+      ...creditSnapshot(new Date().toISOString()),
+      available: '2.9999999',
+      plan: { remaining: '2.9999999', used: '0.0000001', total: '3.00' },
+    };
+    render(gatewayChip());
+    const used = formatBillingAmount('0.0000001', BILLING_CURRENCY, locale);
+    const total = formatBillingAmount('3.00', BILLING_CURRENCY, locale);
+    expect(screen.getByRole('button', { name: '用量明细' }).textContent).toContain(`${used} / ${total}`);
+    const card = openUsageCard();
+    expect(card.textContent).toContain(`账号已用 ${used} · 总额 ${total}`);
+    expect(within(card).getByRole('progressbar').getAttribute('aria-valuenow')).toBe('100');
+  });
 
   // Unit regression: the rendered chip and card must distinguish a disabled
   // enterprise daily limit from a failed daily read; omitted flags retain legacy behavior.
