@@ -96,6 +96,11 @@ export interface WecomIMOptions {
    * 第二份实例必须关掉, 由宿主自己的 IPC 按实例分发。
    */
   ipc?: boolean;
+  /**
+   * 个人 bot 的「群成员也能提问」(宿主按群现读): 主人之外的人在这个群里 @ 机器人也进业务层,
+   * 带非主人标记。缺省 = 只有主人。私聊永远只认主人。
+   */
+  admitMember?: (chatId: string) => boolean;
 }
 
 export interface WecomConfigState {
@@ -871,8 +876,8 @@ export class WecomIM extends BaseIM implements TextChannelIM {
     if (!body || !body.msgid || !body.from?.userid || this.hasSeen(body.msgid))
       return;
 
-    const isOwner = await this.acceptOwner(body);
-    if (!isOwner || !this.isCurrent(client, generation)) return;
+    const sender = await this.acceptSender(body);
+    if (!sender || !this.isCurrent(client, generation)) return;
     const lane =
       body.chattype === "group" && body.chatid
         ? encodeWecomGroupLane(body.chatid)
@@ -907,7 +912,7 @@ export class WecomIM extends BaseIM implements TextChannelIM {
             speaker: {
               id: body.from.userid,
               name: body.from.userid,
-              isOwner: true,
+              isOwner: sender === "owner",
             },
           }
         : {}),
@@ -929,6 +934,17 @@ export class WecomIM extends BaseIM implements TextChannelIM {
       await discard();
     } catch (error) {
       this.log.warn("failed to discard stale inbound media", safeError(error));
+    }
+  }
+
+  /** 主人 → "owner"; 宿主允许的群里的其他成员 → "member"; 其余丢弃。 */
+  private async acceptSender(body: BaseMessage): Promise<"owner" | "member" | null> {
+    if (await this.acceptOwner(body)) return "owner";
+    if (!this.ownerUserId || body.chattype !== "group" || !body.chatid) return null;
+    try {
+      return this.options.admitMember?.(body.chatid) === true ? "member" : null;
+    } catch {
+      return null;
     }
   }
 

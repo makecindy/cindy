@@ -268,7 +268,8 @@ describeMigrationReplay('existing side-chat teams', () => {
         '0164_flat_prism.sql',
         '0165_whole_nemesis.sql',
         '0166_schedule_revision.sql',
-        '0167_acp_usage_reference_price.sql',
+        '0167_token_usage_harness.sql',
+        '0168_acp_usage_reference_price.sql',
       ]);
       expect(columnNames(db, 'schedules')).toContain('model_group');
       expect(columnNames(db, 'schedules')).toContain('schedule_revision');
@@ -502,7 +503,7 @@ describeMigrationReplay('migration replay', () => {
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167,
+          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -682,7 +683,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。
@@ -1182,7 +1183,7 @@ describeMigrationReplay('migration replay', () => {
   // Migration tier: verify 0165 adds nullable sessions.archived_at without mutating
   // existing archived rows (legacy rows must fall back to activity time rather than
   // receiving an artificial archive timestamp) and stays idempotent when already present.
-  // 0167 follows the archive and schedule revision migrations. An old usage row must keep both tokens and spend,
+  // 0168 follows the token harness migration. An old usage row must keep both tokens and spend,
   // and an existing missing-price marker must survive idempotent replay as well.
   it.each([false, true])('upgrades archive timestamps and ACP pricing markers without changing existing rows (present=%s)', (alreadyPresent) => {
     const { db, cleanup } = createTempDb();
@@ -1199,7 +1200,7 @@ describeMigrationReplay('migration replay', () => {
         INSERT INTO daily_model_usage VALUES (12, 0.75${alreadyPresent ? ', 1' : ''});
       `);
       const replay = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 164 });
-      expect(replay.applied.map((migration) => migration.seq)).toEqual([165, 166, 167]);
+      expect(replay.applied.map((migration) => migration.seq)).toEqual([165, 166, 167, 168]);
       expect(db.prepare('SELECT schedule_revision FROM schedules').pluck().get()).toBe(alreadyPresent ? 5 : 0);
       expect(db.prepare('SELECT input_tokens, cost_amount, acp_missing_price FROM daily_model_usage').get()).toEqual({
         input_tokens: 12, cost_amount: 0.75, acp_missing_price: alreadyPresent ? 1 : null,
@@ -1209,6 +1210,54 @@ describeMigrationReplay('migration replay', () => {
         { id: 'a', status: 'active', updated_at: 1, archived_at: null },
         { id: 'b', status: 'archived', updated_at: 2, archived_at: alreadyPresent ? 500 : null },
       ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('migrates populated token attribution and auxiliary receipt rows to harness=unknown and replays idempotently', () => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec(`
+        CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL);
+      `);
+      db.exec(readFileSync(path.join(drizzleDir(), '0154_daily_token_attribution.sql'), 'utf-8'));
+      db.exec(readFileSync(path.join(drizzleDir(), '0155_account_usage_first_day.sql'), 'utf-8'));
+      db.exec(`CREATE TABLE auxiliary_usage_receipts (
+        receipt_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, model TEXT NOT NULL, source TEXT NOT NULL,
+        session_id TEXT, transport TEXT NOT NULL, day TEXT NOT NULL, recorded_at INTEGER NOT NULL,
+        input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_create_tokens INTEGER
+      )`);
+      db.prepare('INSERT INTO daily_token_attribution VALUES(?,?,?,?,?,?,?,?)').run(
+        '2026-11-27', 'xd', 'cindy-ai', 'gpt-5.4', 100, 20, 30, 5,
+      );
+      db.prepare('INSERT INTO token_reporting_first_day VALUES(?,?,?,?,?,?,?,?)').run(
+        'xd', 'cindy-ai', 'gpt-5.4', 'gen-1', 10, 2, 3, 1,
+      );
+      db.prepare('INSERT INTO auxiliary_usage_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(
+        'aux-1', 'xd', 'gpt-5.4', 'title', null, 'http', '2026-11-27', 1000, 50, 10, 0, 0,
+      );
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 166 });
+      expect(db.prepare('SELECT * FROM daily_token_attribution').all()).toEqual([{
+        day: '2026-11-27', provider: 'xd', billing_source: 'cindy-ai', model: 'gpt-5.4', harness: 'unknown',
+        input_tokens: 100, output_tokens: 20, cache_read_tokens: 30, cache_create_tokens: 5,
+      }]);
+      expect(db.prepare('SELECT * FROM token_reporting_first_day').all()).toEqual([{
+        provider: 'xd', billing: 'cindy-ai', model: 'gpt-5.4', harness: 'unknown',
+        generation: 'gen-1', input: 10, output: 2, cache_read: 3, cache_write: 1,
+      }]);
+      expect(db.prepare('SELECT receipt_id, harness FROM auxiliary_usage_receipts').all()).toEqual([
+        { receipt_id: 'aux-1', harness: 'unknown' },
+      ]);
+      // Composite PK must allow the same (day, provider, billing, model) under a distinct harness.
+      db.prepare('INSERT INTO daily_token_attribution VALUES(?,?,?,?,?,?,?,?,?)').run(
+        '2026-11-27', 'xd', 'cindy-ai', 'gpt-5.4', 'codex', 40, 8, 12, 0,
+      );
+      expect(db.prepare('SELECT COUNT(*) FROM daily_token_attribution').pluck().get()).toBe(2);
+      // Idempotent replay after already migrated.
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 166 });
+      expect(db.prepare('SELECT COUNT(*) FROM daily_token_attribution').pluck().get()).toBe(2);
     } finally {
       cleanup();
     }

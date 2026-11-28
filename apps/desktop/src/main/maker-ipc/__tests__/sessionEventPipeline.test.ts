@@ -4345,3 +4345,79 @@ describe('native memory receipt event wiring', () => {
     }
   });
 });
+
+// 回归：运行时临时切模型(runtime override，如自动降级/Orca 切模型)不覆盖 DB sessions.model；
+// 改派判定必须以 turn start 捕获的生效模型(session.model)为准，且按路由归因外部供应商名。
+describe('claude turn model mismatch detection', () => {
+  it('does not false-positive when live session.model runtime override matches actual modelUsage', async () => {
+    const h = harness();
+    effects.fn('getSessionProvider').mockReturnValue('anthropic');
+    effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
+    Object.defineProperty(h.session, 'model', { value: 'claude-opus-5-5' });
+    h.deps.readSessionModelForUsage = vi.fn(async () => 'claude-fable-5-2');
+
+    h.emit(event('status', { isRunning: true }, { source: 'claude-code' }));
+    h.emit(event('done', {
+      total_cost_usd: 0,
+      modelUsageCumulativeStartsAtZero: true,
+      modelUsage: {
+        'claude-opus-5-5': { inputTokens: 100, outputTokens: 800, costUSD: 0 },
+      },
+    }, { source: 'claude-code' }));
+    await microtasks();
+
+    expect(effects.fn('recordModelMismatchOnMessage')).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      scenario: 'anthropic subscription names Anthropic instead of local alias',
+      providerId: 'claude-sub-work',
+      providers: [{ id: 'claude-sub-work', name: 'Work Account', auth: { method: 'oauth', native: 'claude' }, access: { kind: 'subscription' } }],
+      expectedProviderName: 'Anthropic',
+    },
+    {
+      scenario: 'third-party provider names the provider',
+      providerId: 'openrouter',
+      providers: [{ id: 'openrouter', name: 'OpenRouter', auth: { method: 'api_key' }, access: { kind: 'api' } }],
+      expectedProviderName: 'OpenRouter',
+    },
+    {
+      scenario: 'xd gateway omits providerName for generic fallback copy',
+      providerId: 'xd',
+      providers: [{ id: 'xd', name: 'Cindy AI', auth: { method: 'api_key' }, access: { kind: 'managed' } }],
+      expectedProviderName: undefined,
+    },
+  ])('records mismatch with expected provider attribution ($scenario)', async ({
+    providerId,
+    providers,
+    expectedProviderName,
+  }) => {
+    const h = harness();
+    effects.fn('getSessionProvider').mockReturnValue(providerId);
+    effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
+    Object.defineProperty(h.session, 'model', { value: 'claude-fable-5-2' });
+    h.deps.readSessionModelForUsage = vi.fn(async () => 'claude-fable-5-2');
+    effects.fn('getActiveCatalog').mockReturnValue({ providers });
+
+    h.emit(event('status', { isRunning: true }, { source: 'claude-code' }));
+    h.emit(event('done', {
+      total_cost_usd: 0,
+      modelUsageCumulativeStartsAtZero: true,
+      modelUsage: {
+        'claude-opus-4-8': { inputTokens: 100, outputTokens: 800, costUSD: 0 },
+      },
+    }, { source: 'claude-code' }));
+    await microtasks();
+
+    expect(effects.fn('recordModelMismatchOnMessage')).toHaveBeenCalledExactlyOnceWith({
+      sessionId: 'task',
+      clientId: 'assistant-row',
+      mismatch: {
+        selected: 'claude-fable-5-2',
+        actual: 'claude-opus-4-8',
+        ...(expectedProviderName ? { providerName: expectedProviderName } : {}),
+      },
+    });
+  });
+});

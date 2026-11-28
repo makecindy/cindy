@@ -2015,6 +2015,100 @@ describe('a plugin engine of another computer', () => {
     host.dispose();
   });
 
+  // 测试价值
+  // - 生产入口与可观察结果：createDeviceAgentStarter ↔ createRemoteAgentHost 真实往返；此前归属供应商组的任务
+  //   切到远程插件引擎时，即使残留组绑定或换机凭证，也不应带 groupAssigned / groupSwitch 打开插件引擎，
+  //   避免被远端 runHost 以 [REMOTE_AGENT_UNSUPPORTED] 拒绝；同 starter 开内置引擎仍照常携带。
+  // - Bug／规则依据：2026-11-28 实机反馈（供应商组任务切到远程 Antigravity 报 LAZY_CREATE_FAILED:
+  //   [REMOTE_AGENT_UNSUPPORTED] plugin engines only run ordinary tasks of your own computers or direct shares）；
+  //   docs/dev-rules/acp-plugin-harness.md。
+  // - 现有覆盖缺口：本文件其余插件引擎用例直接调 startRemoteAgentSession，未经过 createDeviceAgentStarter
+  //   的 isGroupAssigned / groupSwitch 装配。
+  // - 最小失败输入：isGroupAssigned=()=>true 且带 groupSwitch 凭证时，通过 createDeviceAgentStarter 打开 'acp'。
+  // - tier：unit（进程内 fake Agent，与本 describe 其余往返用例同一隔离方式）。
+  it('omits stale provider-group assignment and switch flags when opening a remote plugin engine, while keeping them for built-in engines', async () => {
+    const { host, started } = createPluginEngineHost();
+    const openPayloads: Array<{ agentKind?: string; groupAssigned?: boolean; acceptsGroupSwitch?: boolean; groupSwitchToken?: string }> = [];
+    const starter = createDeviceAgentStarter({
+      remoteInvoke: async (_deviceId, _channel, args) => {
+        const req = JSON.parse(JSON.stringify(args[0])) as {
+          op?: string;
+          agentKind?: string;
+          payload?: { json?: { groupAssigned?: boolean; acceptsGroupSwitch?: boolean; groupSwitchToken?: string } };
+        };
+        if (req.op === 'open') {
+          openPayloads.push({
+            agentKind: req.agentKind,
+            groupAssigned: req.payload?.json?.groupAssigned,
+            acceptsGroupSwitch: req.payload?.json?.acceptsGroupSwitch,
+            groupSwitchToken: req.payload?.json?.groupSwitchToken,
+          });
+        }
+        try {
+          const result = await host.handle(CONTROLLER, req);
+          return { ok: true, result: JSON.parse(JSON.stringify(result ?? null)) };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return { ok: false, error: { code: 'IPC_ERROR', message } };
+        }
+      },
+      rgPath: () => RG,
+      codexPath: () => 'fixture-never-spawned',
+      mcpProviders: () => [],
+      prepareMcpBridge: async () => ({
+        mcpBridge: { servers: [] },
+        disposeSessionCtx: async () => {},
+        closeSessionInstance: () => {},
+      }) as never,
+      makerMemory: () => undefined,
+      captureKnownFileBefore: async () => undefined,
+      noteOpaqueTurnChange() {},
+      isGroupAssigned: () => true,
+      groupSwitch: { takeForOpen: () => 'stale-group-switch-token', offer: vi.fn() },
+      logger: historyLogger,
+    });
+
+    const acpHandle = await starter({
+      agentKind: 'acp',
+      deviceId: 'studio-mac',
+      options: {
+        sessionId: 'stale-group-plugin-task',
+        workingDir: project,
+        model: 'default',
+        providerId: ENGINE,
+        permissionMode: 'default',
+      },
+    });
+    expect(acpHandle.agentKind).toBe('acp');
+    expect(started).toHaveLength(1);
+    expect(openPayloads[0]).toEqual({
+      agentKind: 'acp',
+      groupAssigned: undefined,
+      acceptsGroupSwitch: undefined,
+      groupSwitchToken: undefined,
+    });
+    await acpHandle.close({ reason: 'navigation' });
+
+    const builtinHandle = await starter({
+      agentKind: 'pi',
+      deviceId: 'studio-mac',
+      options: {
+        sessionId: 'still-group-builtin-task',
+        workingDir: project,
+        model: 'm',
+        permissionMode: 'default',
+      },
+    });
+    expect(openPayloads[1]).toEqual({
+      agentKind: 'pi',
+      groupAssigned: true,
+      acceptsGroupSwitch: true,
+      groupSwitchToken: 'stale-group-switch-token',
+    });
+    await builtinHandle.close({ reason: 'navigation' });
+    host.dispose();
+  });
+
   it.each([
     ['the engine is not opened for remote use', { offered: () => false }, /REMOTE_AGENT_PROVIDER_NOT_ALLOWED/],
     ['the other computer cannot run plugin engines for others', { supported: false }, /REMOTE_AGENT_PEER_TOO_OLD/],

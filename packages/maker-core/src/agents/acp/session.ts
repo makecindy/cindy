@@ -208,6 +208,8 @@ export interface OpenAcpSessionOptions {
    * text. Called only for such messages, so ordinary messages are sent without waiting on it.
    */
   expandSlashInvocation?: (text: string) => Promise<string | null>;
+  /** Host-local observation of usage for the confirmed model, separate from display notifications. */
+  observeContextWindow?: (modelId: string, size: number) => void;
   /** Optional callback to update the host MCP bridge's mutable vendorOptions in-place. */
   onVendorOptionsChange?: (patch: Record<string, unknown>) => void;
   /** Called once when the session's event stream ends (closed, or the endpoint exited). */
@@ -680,6 +682,7 @@ export class AcpSession {
   private reportedSelection = '';
   private contextSelectionPending = 0;
   private modelDetailsListener?: (details: AcpReportedModelDetails | undefined) => void;
+  private readonly observeContextWindow?: OpenAcpSessionOptions['observeContextWindow'];
   private readonly requireSelectedModel: boolean;
   private readonly initialModel: string;
   private capabilitiesSnapshot: Capabilities;
@@ -738,6 +741,7 @@ export class AcpSession {
     this.expandSlashInvocation = this.reviewMode ? undefined : init.options.expandSlashInvocation;
     this.cancelGraceMs = init.options.cancelGraceMs ?? DEFAULT_CANCEL_GRACE_MS;
     this.onVendorOptionsChange = init.options.onVendorOptionsChange;
+    this.observeContextWindow = init.options.observeContextWindow;
     this.recoverVerification = init.options.recoverVerification;
     this.onEnded = init.options.onEnded;
     this.now = init.options.now ?? Date.now;
@@ -1571,10 +1575,21 @@ export class AcpSession {
     if (used === null || size === null) return;
     const window = Number.isSafeInteger(size) && size > 0 ? size : undefined;
     if (this.contextSelectionPending === 0
-      && (!this.turn || this.turn.contextSelection === this.reportedSelection)
-      && this.reportedContextWindow !== window) {
-      this.reportedContextWindow = window;
-      this.publishReportedModelDetails();
+      && (!this.turn || this.turn.contextSelection === this.reportedSelection)) {
+      if (window !== undefined && this.observeContextWindow && !this.ended) {
+        const modelId = this.model;
+        if (modelId) {
+          try {
+            this.observeContextWindow(modelId, window);
+          } catch (error) {
+            this.logger?.error('acp: context window observer failed', { error: String(error) });
+          }
+        }
+      }
+      if (this.reportedContextWindow !== window) {
+        this.reportedContextWindow = window;
+        this.publishReportedModelDetails();
+      }
     }
     const cost = asRecord(update.cost);
     this.usage = {

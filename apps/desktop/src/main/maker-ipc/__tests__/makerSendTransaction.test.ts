@@ -1830,6 +1830,13 @@ describe('maker SEND transaction', () => {
     }
     expect(session.send).toHaveBeenCalledTimes(2);
     expect(switchDeps.closeSession).not.toHaveBeenCalled();
+
+    // PR #13360 follow-up: once no pending switch mismatches, normal sends must not persist dispatchRoute.
+    pending.clear(session.id);
+    await expect(transaction.sendToAgentAccepted(session.id, 'Normal send', undefined,
+      { persistUserMessage: { clientId: 'third', content: 'Normal send' } })).resolves.toMatchObject({ accepted: true });
+    const thirdRow = vi.mocked(deps.createDbMessage).mock.calls[2]?.[1];
+    expect(thirdRow?.agentMeta).not.toHaveProperty('dispatchRoute');
   });
 
   it('awaits the direct-send baseline hook before vendor dispatch', async () => {

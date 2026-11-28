@@ -113,5 +113,30 @@ describe('LiteLlmTranscriptionProvider', () => {
     expect(form.get('model')).toBe('elevenlabs/scribe_v2');
     expect(form.get('language')).toBe('en');
     expect(form.get('file')).toBeInstanceOf(Blob);
+    expect(form.get('prompt')).toBeNull();
+  });
+
+  it('forwards bounded dictionary hotwords only as batch prompt and excludes full recent context sentences', async () => {
+    let requestInit: RequestInit | undefined;
+    outboundFetchMock.mockImplementation(async (_url: string | URL | Request, init?: RequestInit) => {
+      requestInit = init;
+      return new Response(JSON.stringify({ text: 'PostgreSQL ok' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+
+    await transcribeLiteLlmAudioFile({
+      proxyApiKey: 'sk-test',
+      baseUrl: 'https://gateway.example',
+      bytes: Buffer.from('wav-bytes'),
+      recognitionHints: {
+        hotwords: ['PostgreSQL', 'LiteLLM'],
+        recentContext: ['排查数据库慢查询'],
+      },
+    });
+
+    const form = requestInit?.body as FormData;
+    expect(form.get('prompt')).toBe('PostgreSQL, LiteLLM');
   });
 });

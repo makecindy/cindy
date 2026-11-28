@@ -355,7 +355,7 @@ test("root db and guard delegate to the workspace runner", () => {
 	}
 	assert.equal(
 		scripts["test:git-integration"],
-		"pnpm test:runner && node scripts/test-workspaces.mjs --tier git-integration",
+		"pnpm test:runner && node scripts/test-workspaces.mjs --tier git-integration && node --test scripts/__tests__/dev-migration-policy.git-integration.test.ts",
 	);
 	assert.equal(
 		scripts["test:db"],

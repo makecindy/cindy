@@ -555,6 +555,15 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
           return { effects: [{ kind: 'refresh-collection', collectionId: BOT_GROUP_REMOTE_COLLECTION_ID }] };
         }
+        case 'cancelAssistantDeviceWait': {
+          // Only a request this account sees as its own wait for a computer.
+          const executionId = input.executionId;
+          if (!current.chatServer || typeof executionId !== 'string' || !visibleGroup.assistantDeviceWaits?.some(wait => wait.executionId === executionId))
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'cancelAssistantDeviceWait', executionId } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          return { effects: [{ kind: 'refresh-collection', collectionId: BOT_GROUP_REMOTE_COLLECTION_ID }] };
+        }
         case 'set-assistant': {
           if (!visibleGroup.serverBacked || !visibleGroup.supportsGroupAssistant || !current.chatServer)
             throw new RemoteResourceRegistryError('INVALID_PARAMS', 'UNSUPPORTED_OPERATION');
