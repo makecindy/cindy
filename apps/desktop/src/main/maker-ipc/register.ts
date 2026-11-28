@@ -11991,6 +11991,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readSessionExtraDirsFromDb, bootstrapSession,
   });
 
+  const describePluginEngine = (providerId: string | null): string | null => {
+    const key = pluginEngineKeyFromProviderId(providerId);
+    // The name the user sees for it (their own display name when they gave one).
+    return key ? listPluginEngineViews().find((engine) => engine.key === key)?.name ?? null : null;
+  };
+
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = {
     cancelPendingRemoteStart,
     readOwnerGeneration: () => getActiveAppSession().generation,
@@ -12046,11 +12052,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return admitPluginEngineSwitchTarget(target, parseOfferedPluginEngines(reply.result));
     },
-    describePluginEngine: (providerId) => {
-      const key = pluginEngineKeyFromProviderId(providerId);
-      // The name the user sees for it (their own display name when they gave one).
-      return key ? listPluginEngineViews().find((engine) => engine.key === key)?.name ?? null : null;
-    },
+    describePluginEngine,
     getSessionRow: readAgentSwitchSessionRow,
     getLiveSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId, 'agent-switch'),
@@ -19605,13 +19607,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (session) captureManualPiDispatch(session);
     },
     readDispatchRoute: (session, scheduled) => {
-      const actual = { agentKind: session.agentKind, model: session.model ?? '',
-        providerId: getSessionProvider(session.id), agentDeviceId: session.agentDeviceId ?? null };
       const intent = scheduled ? readScheduledPendingSwitch(session.id) : agentSwitchPending.get(session.id);
-      return captureMessageDispatchRoute(actual, intent ? {
-        agentKind: intent.targetAgentKind, model: intent.model, providerId: intent.providerId ?? null,
-        agentDeviceId: intent.targetAgentDeviceId === undefined ? actual.agentDeviceId : intent.targetAgentDeviceId,
-      } : undefined, intent?.preparationError);
+      if (!intent) return undefined;
+      const actualProviderId = getSessionProvider(session.id);
+      const actualDeviceId = session.agentDeviceId ?? null;
+      const targetProviderId = intent.providerId ?? null;
+      const targetDeviceId = intent.targetAgentDeviceId === undefined ? actualDeviceId : intent.targetAgentDeviceId;
+      return captureMessageDispatchRoute(
+        {
+          agentKind: session.agentKind,
+          model: session.model ?? '',
+          providerId: actualProviderId,
+          agentDeviceId: actualDeviceId,
+          ...(session.agentKind === 'acp' && !actualDeviceId ? { engineName: describePluginEngine(actualProviderId) ?? undefined } : {}),
+        },
+        {
+          agentKind: intent.targetAgentKind,
+          model: intent.model,
+          providerId: targetProviderId,
+          agentDeviceId: targetDeviceId,
+          ...(intent.targetAgentKind === 'acp' && !targetDeviceId ? { engineName: describePluginEngine(targetProviderId) ?? undefined } : {}),
+        },
+        intent.preparationError,
+      );
     },
     onUserProviderDispatch: (sessionId) => {
       const session = sessionBindings.getSession(sessionId);
