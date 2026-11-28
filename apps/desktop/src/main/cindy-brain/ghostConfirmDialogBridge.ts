@@ -36,6 +36,8 @@ export interface GhostConfirmPush {
   confirmText: string | null;
   cancelText: string | null;
   danger: boolean;
+  /** Optional: make the trusted body selectable for verified authorization links. */
+  contentSelectable?: boolean;
 }
 
 export interface GhostConfirmDialogBridgeDeps {

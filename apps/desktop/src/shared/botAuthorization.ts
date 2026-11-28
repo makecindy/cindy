@@ -36,7 +36,8 @@ export function botAuthorizationImChannel(id: string): BotImChannel | null {
 /** Stored presentation and opaque target only; never store an OAuth URL or a credential. */
 export type BotAuthorizationTarget =
   | { kind: 'plugin'; id: string; namespace?: string | null; reauthorize?: boolean }
-  | { kind: 'host'; id: BotAuthorizationHostId; reauthorize?: boolean };
+  | { kind: 'host'; id: BotAuthorizationHostId; reauthorize?: boolean }
+  | { kind: 'host-capability'; id: 'feishu-local-cli'; reauthorize?: boolean };
 export interface BotAuthorizationCard {
   v: 1;
   pluginApprovalToken?: string;
@@ -57,9 +58,10 @@ export function readBotAuthorizationCard(value: unknown): BotAuthorizationCard |
     typeof v.sessionId !== 'string' ||
     typeof v.createdAt !== 'number' ||
     !v.target ||
-    !['plugin', 'host'].includes(v.target.kind) ||
+    !['plugin', 'host', 'host-capability'].includes(v.target.kind) ||
     typeof v.target.id !== 'string' ||
     (v.target.kind === 'host' && !isBotAuthorizationHostId(v.target.id)) ||
+    (v.target.kind === 'host-capability' && v.target.id !== 'feishu-local-cli') ||
     ('namespace' in v.target &&
       (v.target.kind !== 'plugin' ||
         (v.target.namespace !== null && !isValidPluginNamespace(v.target.namespace)))) ||

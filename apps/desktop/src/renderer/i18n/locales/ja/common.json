@@ -1,4 +1,10 @@
 {
+  "feishuLocalCli": {
+    "setup": {
+      "importTerminal": "端末に保存されている既存の Feishu CLI ログインを、このアカウントの {{appName}} にインポートしますか？認証情報はチャットに表示されません。",
+      "login": "Feishu CLI を実行しているコンピューターで、確認済みの HTTPS リンクを開き、リクエストを承認してから、ここに戻ってください。リンクを選択してコピーできます：{{url}}"
+    }
+  },
   "antigravityVerification": {
     "title": "Google アカウントの確認",
     "note": "QR コードをスキャンするか、Google のページを開いて確認してください。Antigravity がアクセスを確認すると、タスクが再開します。",

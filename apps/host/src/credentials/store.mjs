@@ -36,7 +36,7 @@ export class SafeStorageUnavailableError extends Error {
  * Resolve the OS key once, then expose the same synchronous semantics the
  * Desktop credential helpers use.
  *
- * @param {{userDataDir: string, keyringApplication?: string, keyPromise?: Promise<Buffer>}} options
+ * @param {{userDataDir: string, identityUserDir?: string, keyringApplication?: string, keyPromise?: Promise<Buffer>}} options
  * @returns {Promise<CredentialStore>}
  */
 export async function createCredentialStore(options) {
@@ -49,7 +49,12 @@ export async function createCredentialStore(options) {
       ).catch(() => { throw new SafeStorageUnavailableError('Unlock the system keyring before connecting Cindy Host.'); });
       codec = { encrypt: value => encryptOsCryptPayload(value, key), decrypt: value => decryptOsCryptPayload(value, key) };
     } else if (platform === 'darwin' || platform === 'win32') {
-      codec = createNativeCredentialCodec(options);
+      // Records can be owner-scoped, but Electron's Keychain/DPAPI identity is
+      // rooted in the shared profile. Keep both processes on that one identity.
+      codec = createNativeCredentialCodec({
+        ...options,
+        userDataDir: options.identityUserDir ?? options.userDataDir,
+      });
     } else {
       throw new SafeStorageUnavailableError('Unsupported host operating system');
     }

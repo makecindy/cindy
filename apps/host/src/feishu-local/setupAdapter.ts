@@ -1,0 +1,125 @@
+import { isValidVerificationUrl } from '@cindy/mcps/feishu-local';
+import type {
+  FeishuLocalHostPort,
+  FeishuLocalReasonCode,
+  FeishuLocalSetupInput,
+} from '@cindy/mcps/feishu-local';
+
+export interface HostConfirmationPayload {
+  ghostId: string;
+  ghostName: string;
+  body: string;
+  confirmText: string | null;
+  cancelText: string | null;
+  danger: boolean;
+  /** Allow selecting the verified authorization URL in the transient dialog. */
+  contentSelectable?: boolean;
+}
+
+export interface HostConfirmations {
+  confirm(payload: HostConfirmationPayload): Promise<boolean>;
+}
+
+export interface SetupAdapterOptions {
+  port: FeishuLocalHostPort;
+  confirmations: HostConfirmations;
+  current(): boolean;
+  ownerScope(): string;
+  t(key: string): string;
+}
+
+export interface SetupResult {
+  ok: boolean;
+  reasonCode?: FeishuLocalReasonCode;
+  message?: string;
+}
+
+function setupUnavailable(): SetupResult {
+  return { ok: false, reasonCode: 'SETUP_UNAVAILABLE', message: 'A native setup card is unavailable in this host.' };
+}
+
+/**
+ * Node Host uses the existing owner-bound confirmation bridge. Both prompts are
+ * localized; the verified URL is shown only in a selectable transient dialog.
+ * Tool results and logs keep a stable reason code.
+ */
+export function createFeishuLocalHostSetupAdapter(options: SetupAdapterOptions) {
+  return async (input: FeishuLocalSetupInput): Promise<SetupResult> => {
+    let scope: string;
+    try {
+      if (!options.current()) return setupUnavailable();
+      scope = options.ownerScope();
+    } catch {
+      return setupUnavailable();
+    }
+    const assertCurrent = () => {
+      if (!options.current()) throw new Error('OWNER_SCOPE_CHANGED');
+      try {
+        if (options.ownerScope() !== scope) throw new Error('OWNER_SCOPE_CHANGED');
+      } catch {
+        throw new Error('OWNER_SCOPE_CHANGED');
+      }
+    };
+    const confirm = async (body: string, contentSelectable = false): Promise<boolean> => {
+      assertCurrent();
+      const accepted = await options.confirmations.confirm({
+        ghostId: 'feishu-local-cli',
+        ghostName: 'Feishu Local CLI',
+        body,
+        confirmText: options.t('remoteDesktop.connect'),
+        cancelText: null,
+        danger: false,
+        ...(contentSelectable ? { contentSelectable: true } : {}),
+      });
+      assertCurrent();
+      return accepted;
+    };
+    try {
+      const auth = await options.port.readAuth();
+      assertCurrent();
+      if (auth.reason_code && !['NOT_AUTHORIZED', 'SCOPE_MISSING', 'SETUP_REQUIRED'].includes(auth.reason_code)) {
+        return { ok: false, reasonCode: auth.reason_code };
+      }
+      if (auth.state === 'ready' && !auth.reason_code && input.reauthorize !== true) return { ok: true };
+      if (auth.reason_code === 'SETUP_REQUIRED') {
+        const accepted = await confirm(options.t('feishuLocalCli.setup.importTerminal'));
+        if (!accepted) return setupUnavailable();
+        const imported = await options.port.connect({
+          mode: 'import-terminal',
+          assertCurrent,
+          beforeCommit: async () => assertCurrent(),
+        });
+        if (imported.ok) return { ok: true };
+        if (imported.reasonCode && !['NOT_AUTHORIZED', 'SCOPE_MISSING'].includes(imported.reasonCode)) {
+          return { ok: false, reasonCode: imported.reasonCode };
+        }
+      }
+    } catch {
+      return setupUnavailable();
+    }
+    try {
+      const login = await options.port.connect({
+        mode: 'login',
+        onAuthorizationUrl: async (url) => {
+          assertCurrent();
+          if (!isValidVerificationUrl(url)) throw new Error('INVALID_VERIFICATION_URL');
+          const accepted = await confirm(
+            options.t('feishuLocalCli.setup.login').replaceAll('{{url}}', url),
+            true,
+          );
+          if (!accepted) throw new Error('USER_CANCELLED');
+        },
+        assertCurrent,
+        beforeCommit: async () => assertCurrent(),
+      });
+      if (login.ok) return { ok: true };
+      return {
+        ok: false,
+        reasonCode: login.reasonCode ?? 'SETUP_UNAVAILABLE',
+        message: login.message ?? 'Feishu Local CLI setup could not be completed.',
+      };
+    } catch {
+      return setupUnavailable();
+    }
+  };
+}

@@ -65,6 +65,7 @@ export const ESSENTIAL_PLUGIN_IDS: ReadonlySet<string> = new Set([
   'xdt_helper',
   'scheduler',
   'lsp',
+  'feishu_local_cli',
 ]);
 
 /** Companions share the ordinary task's infrastructure; no separate permission tier. */

@@ -17,6 +17,10 @@ const state = vi.hoisted(() => ({
   persistedCard: null as BotAuthorizationCard | null,
   deps: null as unknown as Parameters<typeof initBotAuthorizationService>[0],
   execute: vi.fn(async () => ({ ok: true })),
+  emit: vi.fn(),
+  headless: false as boolean | string,
+  feishuAuth: { state: 'ready', identity_alias: 'Fixture User', scopes: ['sheets:spreadsheet', 'drive:drive'] } as Record<string, unknown>,
+  feishuConnect: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
   addImConnection: vi.fn<(input: unknown) => Promise<unknown>>(async () => ({})),
 }));
 vi.mock('electron', () => ({ shell: { openExternal: vi.fn() } }));
@@ -62,11 +66,21 @@ vi.mock('../../cindy-brain/ghostVisibility.desktop.js', () => ({
 }));
 vi.mock('../../cindy-brain/ghostWorkdirPrefs.js', () => ({ isGhostDisabledForWorkdir: () => false }));
 vi.mock('../../cindy-brain/ghostSetupChangeBus.js', () => ({
-  getGhostSetupChangeBus: () => ({ subscribe: state.subscribe, currentRevision: () => 1 }),
+  getGhostSetupChangeBus: () => ({
+    subscribe: state.subscribe,
+    currentRevision: () => 1,
+    emit: (event: { source: string; ref?: string }) => {
+      state.emit(event);
+      for (const [, wake] of state.subscribe.mock.calls) wake(event);
+    },
+  }),
 }));
 vi.mock('../../maker-host/grok-oauth-login.desktop.js', () => ({
   getGrokAccessToken: vi.fn(), hasGrokOAuthLogin: () => false, runGrokOAuthLogin: state.login,
   getGrokOAuthCredentialGeneration: () => 0, cancelGrokOAuthLogin: vi.fn(),
+}));
+vi.mock('../../mcp-integrations/ghostSetupInteractionSurface.js', () => ({
+  isHeadlessGhostSetupTurn: (sessionId: string) => state.headless === true || state.headless === sessionId,
 }));
 // The real runtime pulls the IM transports; its parser is covered by the settings-page path.
 vi.mock('../../im/shared/botImConnectionRuntime.js', () => ({
@@ -81,6 +95,13 @@ import { initializeBotAuthorizationHost } from '../botAuthorizationHost';
 import { createIpcError } from '../../../shared/ipc-errors';
 
 const target = { kind: 'plugin' as const, id: 'art' };
+const hostCapabilityTarget = { kind: 'host-capability' as const, id: 'feishu-local-cli' as const };
+const feishuReadyAuth = { state: 'ready', identity_alias: 'Fixture User', scopes: ['sheets:spreadsheet', 'drive:drive'] };
+const fakeFeishuPort = () => ({
+  probeBinary: async () => ({ installed: true, binary_source: 'fixed-path', version: '1.0.57', version_supported: true }),
+  readAuth: async () => state.feishuAuth,
+  connect: (..._args: unknown[]) => state.feishuConnect(),
+} as never);
 describe('authorization Host live plugin policy', () => {
   beforeEach(() => {
     state.assessment.mockReturnValue({ state: 'ready', revision: 1, groups: [] });
@@ -97,6 +118,13 @@ describe('authorization Host live plugin policy', () => {
     state.login.mockClear();
     state.continued.mockClear();
     state.execute.mockClear();
+    state.emit.mockClear();
+    state.headless = false;
+    state.feishuAuth = { ...feishuReadyAuth };
+    state.feishuConnect.mockReset().mockImplementation(async () => {
+      state.feishuAuth = { ...feishuReadyAuth };
+      return { ok: true };
+    });
     initializeBotAuthorizationHost(async (_card, validate) => {
       await validate();
       state.continued();
@@ -398,5 +426,55 @@ describe('authorization Host live plugin policy', () => {
         state.save.mockReset();
       }
     });
+  });
+
+  it('opens a first-party capability card for an ordinary local task and never exposes device codes', async () => {
+    state.realService = true;
+    state.feishuAuth = { state: 'missing', identity_alias: null, scopes: [], reason_code: 'SETUP_REQUIRED' };
+    state.save.mockImplementation(async (_sessionId, message) => {
+      state.persistedCard = structuredClone(message.agentMeta.botAuthorization);
+    });
+    const service = initializeBotAuthorizationHost(async (_card, validate) => {
+      await validate();
+      state.continued();
+    }, undefined, fakeFeishuPort);
+    try {
+      await expect(service.request('session', hostCapabilityTarget)).resolves.toMatchObject({ ok: false, errorCode: 'SETUP_REQUIRED' });
+      const card = state.persistedCard!;
+      expect(card.target).toMatchObject(hostCapabilityTarget);
+      expect(JSON.stringify(card)).not.toContain('device_code');
+      expect(JSON.stringify(card)).not.toContain('token');
+      const sender = { id: 1, isDestroyed: () => false, send: vi.fn() };
+      expect(await service.resolve(card.snapshot.requestId, { kind: 'plugin_setup', action: 'run_action',
+        actionId: card.snapshot.steps[0]!.action!.id, expectedRevision: card.snapshot.revision }, sender)).toBe(true);
+      await vi.waitFor(() => expect(state.feishuConnect).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(state.continued).toHaveBeenCalledTimes(1));
+      expect(JSON.stringify(state.persistedCard)).not.toContain('device_code');
+    } finally {
+      await service.dispose();
+      state.save.mockReset();
+    }
+  });
+
+  it('keeps plugin and Grok cards buddy-only while allowing only local interactive capability tasks', async () => {
+    state.profileStatus = 'paused';
+    initializeBotAuthorizationHost(async () => {}, undefined, fakeFeishuPort);
+    await expect(state.deps.adapter('session', { kind: 'plugin', id: 'art' })).rejects.toThrow('buddy is unavailable');
+    await expect(state.deps.adapter('session', { kind: 'host', id: 'grok' })).rejects.toThrow('buddy is unavailable');
+    await expect(state.deps.adapter('session', hostCapabilityTarget)).resolves.toMatchObject({ identity: { id: 'feishu-local-cli' } });
+    state.headless = true;
+    await expect(state.deps.adapter('session', hostCapabilityTarget)).rejects.toThrow('buddy is unavailable');
+    expect(state.feishuConnect).not.toHaveBeenCalled();
+  });
+
+  it('keeps reauthorize pending until the capability port completes a new login', async () => {
+    initializeBotAuthorizationHost(async () => {}, undefined, fakeFeishuPort);
+    const adapter = await state.deps.adapter('session', { ...hostCapabilityTarget, reauthorize: true });
+    await expect(adapter.assess()).resolves.toMatchObject({ state: 'required' });
+    adapter.subscribe(vi.fn());
+    await expect(adapter.execute({ id: 'connect-feishu-local-cli', kind: 'oauth_connect' }, undefined)).resolves.toMatchObject({ ok: true });
+    expect(state.feishuConnect).toHaveBeenCalledTimes(1);
+    expect(state.emit).toHaveBeenCalledTimes(1);
+    await expect(adapter.assess()).resolves.toMatchObject({ state: 'ready' });
   });
 });

@@ -139,6 +139,7 @@ import { handleListDevices, defaultDeps as deviceDirectoryDeps } from '../device
 import { countMachineRunningTasks } from '../machines/directory.js';
 import { configureLocalMachineActivity, readLocalMachineStatus } from '../machines/localStatus.js';
 import { getHostSourceDevice, getRemoteLinkCloseEpoch, getSelfDeviceId, onRemotePushChannel, remoteBackgroundInvoke, remoteInvoke as invokeBotPeer, setRemoteInputPeerReadyListener } from '../device-link/index.js';
+import { getFeishuLocalDesktopPort } from '../feishu-local/desktopPort.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { readDeviceProviderCatalog, readDeviceProviderViews, readRemotePluginEngines, readRemoteProviderRoute, resolveDeviceHandoffWindow, type DeviceProviderCatalogRead } from '../remote-agent/controller/deviceCatalog.js';
 import { setPluginModelPickerPluginEnginesProvider } from '../cindy-brain/ghostModelPicker.js';
@@ -14329,7 +14330,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!inputCoordinator.isGenerationCurrent(sessionId, generation))
         throw new Error('Authorization request input boundary changed');
     };
-  });
+  }, getFeishuLocalDesktopPort);
 
   botDirectMessageServiceHolder = createBotDirectMessageService({
     directory: createTeammateDirectory({

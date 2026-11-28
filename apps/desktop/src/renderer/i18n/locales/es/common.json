@@ -1,4 +1,10 @@
 {
+  "feishuLocalCli": {
+    "setup": {
+      "importTerminal": "¿Importar un inicio de sesión existente de Feishu CLI desde la terminal a {{appName}} para esta cuenta? La información de autorización no se muestra en el chat.",
+      "login": "Abre este enlace HTTPS verificado en el equipo donde se ejecuta Feishu CLI, aprueba la solicitud y vuelve aquí. Selecciona y copia el enlace: {{url}}"
+    }
+  },
   "antigravityVerification": {
     "title": "Verifica tu cuenta de Google",
     "note": "Escanea el código o abre la página de Google. La tarea continuará cuando Antigravity confirme el acceso.",
