@@ -23392,10 +23392,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "此連線將不再接收組內的新任務。正在執行的任務仍留在原連線。",
-    "mergeDescription": "從 {{target}} 新建的任務可以使用這兩個供應商。登入、金鑰和既有任務保留在原處。建立調度關係前，Cindy 會測試 {{apiKey}} 的 API Key。",
+    "mergeDescription": "自 {{target}} 新建之任務，分派於可用成員。登入、金鑰及既有任務仍留原處。Cindy 將測試 {{apiKey}} 之 API Key；若僅餘款不足或已達計費之限，仍可併入，恢復可用前不自動分派。",
     "modelUnavailable": "此連線無法呼叫本次自動選擇的模型。再次測試可嘗試其他候選。",
     "noTestModel": "目前的連線沒有可用於測試的模型。請確認 OpenAI 專案可呼叫哪些模型，再重新整理或更新此連線的模型清單。",
-    "billingPaused": "餘款不足或已達計費之限，暫停組內分派。",
+    "billingPaused": "餘款不足或已達計費之限，暫停自動分派。",
     "title": "帳號組",
     "testPassed": "測試成功",
     "refresh": "更新額度"

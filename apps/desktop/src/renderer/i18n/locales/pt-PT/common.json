@@ -23708,10 +23708,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "Esta ligação deixará de receber novas tarefas do grupo. As tarefas em execução permanecerão nesta ligação.",
-    "mergeDescription": "As novas tarefas iniciadas em {{target}} podem usar os dois fornecedores. As sessões iniciadas, chaves e tarefas existentes mantêm-se. A Cindy testará a chave de API de {{apiKey}} antes de ligar os fornecedores.",
+    "mergeDescription": "As novas tarefas iniciadas em {{target}} serão atribuídas aos membros disponíveis. As sessões iniciadas, chaves e tarefas existentes mantêm-se. A Cindy testará a chave de API de {{apiKey}}. Um saldo insuficiente ou um limite de faturação não impedem a sua inclusão, mas não receberá atribuições automáticas até voltar a estar disponível.",
     "modelUnavailable": "Esta ligação não pode usar o modelo escolhido para o teste. Um novo teste pode experimentar outro modelo.",
     "noTestModel": "Nenhum modelo configurado está disponível para teste. Verifique os modelos permitidos no seu projeto da OpenAI e atualize ou edite a lista de modelos desta ligação.",
-    "billingPaused": "Atribuição em pausa por saldo insuficiente ou limite de faturação.",
+    "billingPaused": "Atribuição automática em pausa por saldo insuficiente ou limite de faturação.",
     "title": "Grupo de contas",
     "testPassed": "Teste concluído com sucesso",
     "refresh": "Atualizar quota"

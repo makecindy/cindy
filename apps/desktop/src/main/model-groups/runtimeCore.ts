@@ -4,7 +4,7 @@
  * 伙伴/定时任务选路，以及切账号时的状态释放。
  */
 import { scheduledBillingHold } from '../scheduler-host/billingHolds.js';
-import type { ProviderView } from '@cindy/model-providers';
+import type { AgentKind, ProviderView } from '@cindy/model-providers';
 import type { ModelGroupAgentKind, ModelGroupResolveRequest, ModelGroupTraceQuota } from '../../shared/modelGroups.js';
 import { pluginEngineKeyFromProviderId, type PluginEngineView } from '../../shared/pluginEngines.js';
 import { isProviderShareAgentDeviceId } from '../../shared/providerShare.js';
@@ -40,7 +40,8 @@ export interface ModelGroupRuntimePorts {
   localViews(): Promise<ProviderView[]>;
   localAccounts?(views: readonly ProviderView[]): ReadonlyMap<string, readonly SourceCatalogAccount[]>;
   warmLocalAccounts?(views: readonly ProviderView[]): Promise<void>;
-  localAccount?(providerId: string, accountId: string, model: string): { available: boolean; label: string } | null;
+  localCandidateAvailable?(view: ProviderView, agent: AgentKind): boolean;
+  localAccount?(providerId: string, accountId: string, model: string, agent: AgentKind): { available: boolean; label: string } | null;
   /** 任务在本机账号池里实际绑定的账号(订阅账号池的任务绑定)。 */
   taskAccount?(sessionId: string, providerId: string): string | undefined;
   pluginEngines?(): readonly PluginEngineView[];
@@ -223,7 +224,8 @@ export function createModelGroupRuntime(ports: ModelGroupRuntimePorts) {
     agents: () => ports.localAgents(),
     harnessInstalled: (agent, agentDeviceId) => ports.harnessInstalled(agent, agentDeviceId),
     quotaWindows: (options) => ports.quotaWindows(options),
-    localAccount: ports.localAccount ? (providerId, accountId, model) => ports.localAccount!(providerId, accountId, model) : undefined,
+    localCandidateAvailable: ports.localCandidateAvailable,
+    localAccount: ports.localAccount,
     innerQuota: ports.innerQuota ? (source) => ports.innerQuota!(source) : undefined,
     locations: ports.locations ? () => ports.locations!() : undefined,
     remoteViews: ports.remoteViews ? (agentDeviceId) => ports.remoteViews!(agentDeviceId) : undefined,

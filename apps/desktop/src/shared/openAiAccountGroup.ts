@@ -26,6 +26,15 @@ export interface OpenAiGroupProbeResult {
   billingCode?: ProviderBillingCode;
 }
 
+/** `ok` is membership persistence, not authentication or billing readiness. */
+export interface OpenAiGroupMergeResult {
+  ok: boolean;
+  code?: OpenAiGroupProbeResult['code'];
+  billingCode?: ProviderBillingCode;
+  /** A saved membership may still have a confirmed billing refusal. */
+  probe?: OpenAiGroupProbeResult;
+}
+
 export type OpenAiGroupApiAgent = 'codex' | 'pi';
 
 export interface OpenAiGroupAccount {
