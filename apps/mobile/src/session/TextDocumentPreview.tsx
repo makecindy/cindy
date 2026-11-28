@@ -16,13 +16,17 @@ import { monoFont, spacing, textStyles, useTheme } from "@/theme";
 import { writeClipboardText } from "@/session/messageActions";
 import { PreviewIconButton, PreviewToolbar } from "./PreviewChrome";
 
+import { CODE_HIGHLIGHT_LIMITS, codeLanguageForFile, syntaxColorKey, tokenizeCode, type CodeToken } from "./codeHighlight";
+
 /** Bounded, virtualized source reader. Finding and wrapping never modify the original. */
 export function TextDocumentPreview({
   text,
+  fileName,
   initialLine,
   testID,
 }: {
   text: string;
+  fileName: string;
   testID?: string;
   initialLine?: number | null;
 }) {
@@ -41,6 +45,26 @@ export function TextDocumentPreview({
     null,
   );
   const { lines, truncated } = useMemo(() => splitTextPreviewLines(text), [text]);
+  const highlighted = useMemo(() => {
+    if (truncated || text.length > CODE_HIGHLIGHT_LIMITS.maxSource) return undefined;
+    const language = codeLanguageForFile(fileName);
+    if (!language) return undefined;
+
+    // Tokenize across line breaks so comments and multiline strings keep their state.
+    const rows: CodeToken[][] = [[]];
+    let row = rows[0]!;
+    for (const token of tokenizeCode(lines.join("\n"), language)) {
+      const parts = token.text.split("\n");
+      for (const [index, part] of parts.entries()) {
+        if (index > 0) {
+          row = [];
+          rows.push(row);
+        }
+        if (part) row.push({ kind: token.kind, text: part });
+      }
+    }
+    return rows;
+  }, [fileName, lines, text.length, truncated]);
   const hits = useMemo(
     () =>
       query
@@ -109,7 +133,13 @@ export function TextDocumentPreview({
               ...(wrap ? { flex: 1 } : {}),
             }}
           >
-            {item || " "}
+            {item && highlighted ? highlighted[index]?.map((token, position) =>
+              token.kind === 'plain' ? token.text : (
+                <Text key={position} style={{ color: colors[syntaxColorKey[token.kind]] }}>
+                  {token.text}
+                </Text>
+              ),
+            ) : item || " "}
           </Text>
         </View>
       )}

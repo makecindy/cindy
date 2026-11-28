@@ -28,6 +28,15 @@ export type CodeTokenKind =
   /** `key:` 形态的属性名 / 字段名(对齐 hljs 的 attr,GitHub 主题着蓝)。 */
   | 'property';
 
+export const syntaxColorKey = {
+  keyword: 'syntaxKeyword',
+  string: 'syntaxString',
+  comment: 'syntaxComment',
+  number: 'syntaxNumber',
+  function: 'syntaxFunction',
+  property: 'syntaxProperty',
+} as const satisfies Record<Exclude<CodeTokenKind, 'plain'>, string>;
+
 export interface CodeToken {
   readonly text: string;
   readonly kind: CodeTokenKind;
@@ -150,6 +159,22 @@ const LANGUAGES: Readonly<Record<string, LanguageSpec>> = {
   yml: { family: 'hash', keywords: YAML_KEYWORDS, caseSensitive: true },
   zsh: { family: 'hash', keywords: SHELL_KEYWORDS, caseSensitive: true },
 };
+
+/** File previews highlight only known source extensions; ordinary documents stay plain. */
+export function codeLanguageForFile(name: string): string | undefined {
+  const extension = /\.([^.\\/]+)$/.exec(name)?.[1].toLowerCase();
+  if (!extension) return undefined;
+  switch (extension) {
+    case 'h': return 'c';
+    case 'cc': case 'cxx': case 'hh': case 'hpp': case 'hxx': return 'cpp';
+    case 'cts': case 'mts': return 'ts';
+    case 'kts': return 'kt';
+    case 'htm': case 'xhtml': return 'html';
+    case 'svg': case 'plist': return 'xml';
+    case 'jsonl': case 'ndjson': case 'geojson': return 'json';
+    default: return Object.prototype.hasOwnProperty.call(LANGUAGES, extension) ? extension : undefined;
+  }
+}
 
 const GENERIC_SPEC: LanguageSpec = { family: 'generic', keywords: [], caseSensitive: true };
 

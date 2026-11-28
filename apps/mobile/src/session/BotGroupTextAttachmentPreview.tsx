@@ -263,7 +263,7 @@ export function BotGroupTextAttachmentPreview({ attachmentId, fileName, kind, re
           ) : null}
           {state.status === 'ready' &&
           (source || kind === "json" || kind === "text") ? (
-            <TextDocumentPreview text={state.text} testID={kind === "json" ? "groupChat.server.attachmentJsonPreview" : undefined} />
+            <TextDocumentPreview fileName={fileName} text={state.text} testID={kind === "json" ? "groupChat.server.attachmentJsonPreview" : undefined} />
               ) : null}
               <PreviewFooter />
         </SafeAreaView>
