@@ -63,6 +63,12 @@ export interface SlackHookConfigState {
   discordEnabled: boolean;
   /** Explicit companion assignment; absent preserves ordinary X tasks. */
   xCompanionBotId?: string | null;
+  /**
+   * 各官方渠道交给哪位伙伴(设置 → IM 机器人 → 某平台 →「谁来回复」); 缺省 / null = 普通任务。
+   * 官方机器人只把已绑定主人本人的消息派到这台电脑, 所以交给伙伴的都是主人的轮次。X 仍由
+   * xCompanionBotId 承载(同一个值)。
+   */
+  companionBotIds?: Partial<Record<OfficialCompanionProvider, string | null>>;
   /** 服务器地址覆写(高级/调试用, 无 UI 入口); null = 跟随内置默认。 */
   urlOverride: string | null;
   /** 项目名称 -> 本地绝对路径; 由侧栏项目列表投影而来(projectWorkspaces.ts)。 */
@@ -251,7 +257,12 @@ export interface SlackHookStore {
     alias: string | null,
   ): SlackHookConfigState;
   setXCompanionBotId(botId: string | null): SlackHookConfigState;
+  setCompanionBotId(provider: OfficialCompanionProvider, botId: string | null): SlackHookConfigState;
 }
+
+/** 能交给伙伴的官方渠道。 */
+export const OFFICIAL_COMPANION_PROVIDERS = ['slack', 'telegram', 'feishu', 'discord', 'x'] as const;
+export type OfficialCompanionProvider = (typeof OFFICIAL_COMPANION_PROVIDERS)[number];
 
 export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore & { inspect(fingerprint: string | null): OfficialHookInspection } {
   const { filePath, legacyFilePath, cleanupLegacySecrets, log } = deps;
@@ -261,9 +272,11 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore &
       enabled: boolean;
       bindingsCache: HookBindingCacheEntry[];
       lifecycleAnnouncementOverride: boolean | null;
+      companionBotId?: string | null;
     };
     telegram: {
       enabled: boolean;
+      companionBotId?: string | null;
       bindingCache: ProviderBindingCacheEntry | null;
       defaultWorkspace: string | null;
     };
@@ -276,6 +289,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore &
     /** 官方飞书 / Lark; 旧配置文件没有这个键, 解析为全默认(关闭、无缓存)。 */
     feishu: {
       enabled: boolean;
+      companionBotId?: string | null;
       bindingCache: ProviderBindingCacheEntry | null;
       bindingsCache?: ProviderBindingCacheEntry[];
       defaultWorkspace: string | null;
@@ -283,6 +297,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore &
     /** 官方 Discord; 旧配置文件没有这个键, 解析为全默认(关闭、无缓存)。 */
     discord: {
       enabled: boolean;
+      companionBotId?: string | null;
       bindingCache: ProviderBindingCacheEntry | null;
       defaultWorkspace: string | null;
     };
@@ -448,9 +463,11 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore &
           typeof slack.lifecycleAnnouncementOverride === 'boolean'
             ? slack.lifecycleAnnouncementOverride
             : null,
+        companionBotId: typeof slack.companionBotId === 'string' && slack.companionBotId.length <= 200 ? slack.companionBotId : null,
       },
       telegram: {
         enabled: telegram.enabled === true,
+        companionBotId: typeof telegram.companionBotId === 'string' && telegram.companionBotId.length <= 200 ? telegram.companionBotId : null,
         bindingCache: parseProviderBindingCache(telegram.bindingCache),
         // 同 x: 成员关系留给 viewOf 复核(这里 workspaces 还没读进来)。
         // 旧配置文件没有这个键 —— 读成 null 即"没设过", 不需要迁移动作。
@@ -468,6 +485,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore &
       },
       feishu: {
         enabled: feishu.enabled === true,
+        companionBotId: typeof feishu.companionBotId === 'string' && feishu.companionBotId.length <= 200 ? feishu.companionBotId : null,
         bindingCache: parseProviderBindingCache(feishu.bindingCache),
         ...(Array.isArray(feishu.bindingsCache) ? { bindingsCache: feishu.bindingsCache.map(parseProviderBindingCache)
           .filter((row): row is ProviderBindingCacheEntry => row !== null) } : {}),
@@ -477,6 +495,7 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore &
       },
       discord: {
         enabled: discord.enabled === true,
+        companionBotId: typeof discord.companionBotId === 'string' && discord.companionBotId.length <= 200 ? discord.companionBotId : null,
         bindingCache: parseProviderBindingCache(discord.bindingCache),
         // 同 x: 成员关系留给 viewOf 复核。
         defaultWorkspace:
@@ -673,6 +692,13 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore &
       feishuEnabled: account.feishu.enabled,
       discordEnabled: account.discord.enabled,
       xCompanionBotId: account.x.companionBotId ?? null,
+      companionBotIds: {
+        slack: account.slack.companionBotId ?? null,
+        telegram: account.telegram.companionBotId ?? null,
+        feishu: account.feishu.companionBotId ?? null,
+        discord: account.discord.companionBotId ?? null,
+        x: account.x.companionBotId ?? null,
+      },
       urlOverride: document.urlOverride,
       workspaces: { ...document.workspaces },
       retiredWorkspaces: { ...(document.retiredAliases ?? {}) },
@@ -713,6 +739,18 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore &
     writeDocument(current.document);
     return viewOf(current.document, current.fingerprint);
   }
+  function setCompanionBotId(provider: OfficialCompanionProvider, botId: string | null): SlackHookConfigState {
+    if (!(OFFICIAL_COMPANION_PROVIDERS as readonly string[]).includes(provider)) {
+      throw new HookConnectionValidationError('invalid companion provider');
+    }
+    if (botId !== null && (typeof botId !== 'string' || !botId.trim() || botId.length > 200)) {
+      throw new HookConnectionValidationError('invalid companion id');
+    }
+    return mutateAccount((account) => {
+      account[provider].companionBotId = botId;
+    });
+  }
+
 
   return {
     commitPreferences(patch) {
@@ -872,12 +910,8 @@ export function createSlackHookStore(deps: SlackHookStoreDeps): SlackHookStore &
       });
     },
     setXCompanionBotId(botId) {
-      if (botId !== null && (typeof botId !== 'string' || !botId.trim() || botId.length > 200)) {
-        throw new HookConnectionValidationError('invalid companion id');
-      }
-      return mutateAccount((account) => {
-        account.x.companionBotId = botId;
-      });
+      return setCompanionBotId('x', botId);
     },
+    setCompanionBotId,
   };
 }

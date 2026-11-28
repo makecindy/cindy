@@ -74,6 +74,7 @@ describe('默认态与持久化', () => {
       feishuEnabled: false,
       discordEnabled: false,
       xCompanionBotId: null,
+      companionBotIds: { slack: null, telegram: null, feishu: null, discord: null, x: null },
       urlOverride: null,
       workspaces: {},
       retiredWorkspaces: {},
@@ -212,6 +213,7 @@ describe('旧多连接文件迁移', () => {
       feishuEnabled: false,
       discordEnabled: false,
       xCompanionBotId: null,
+      companionBotIds: { slack: null, telegram: null, feishu: null, discord: null, x: null },
       urlOverride: null,
       workspaces: {},
       retiredWorkspaces: {},
@@ -582,4 +584,33 @@ it('persists store Feishu identities by Cindy account and preserves the legacy f
   account = 'account-a'; expect(store.get().feishuBindingsCache).toEqual(rows);
   store.setFeishuBindingsCache([rows[1]!]);
   expect(store.get().feishuBindingsCache).toEqual([rows[1]]);
+});
+
+// 设置 → IM 机器人 → 某平台「谁来回复」(2026-11-24): 每个官方渠道各自一份伙伴归属, 重启后仍在,
+// 按账号隔离, 改一个渠道不影响别的渠道; X 仍与旧字段 xCompanionBotId 同值(老文件照读)。
+it.each(['slack', 'telegram', 'feishu', 'discord'] as const)(
+  'persists the %s companion per account without touching other channels',
+  (provider) => {
+    let owner = 'owner-one';
+    const store = makeStore(undefined, () => owner);
+    store.setCompanionBotId(provider, 'bot-one');
+    const reloaded = makeStore(undefined, () => owner).get();
+    expect(reloaded.companionBotIds?.[provider]).toBe('bot-one');
+    expect(reloaded.xCompanionBotId).toBeNull();
+    for (const other of ['slack', 'telegram', 'feishu', 'discord'] as const) {
+      if (other !== provider) expect(reloaded.companionBotIds?.[other]).toBeNull();
+    }
+    owner = 'owner-two';
+    expect(store.get().companionBotIds?.[provider]).toBeNull();
+    owner = 'owner-one';
+    store.setCompanionBotId(provider, null);
+    expect(makeStore(undefined, () => owner).get().companionBotIds?.[provider]).toBeNull();
+  },
+);
+
+it('keeps X assignments made through either setter in one place', () => {
+  const store = makeStore(undefined, () => 'owner-one');
+  store.setCompanionBotId('x', 'bot-x');
+  expect(store.get().xCompanionBotId).toBe('bot-x');
+  expect(store.get().companionBotIds?.x).toBe('bot-x');
 });

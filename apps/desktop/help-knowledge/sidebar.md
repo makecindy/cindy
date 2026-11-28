@@ -10,7 +10,7 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 
 - Archived sessions are hidden from the default list, but they are not deleted. Two ways to find one:
   1. **Search** (top of the sidebar): search covers archived sessions by default, because its **Status** filter starts at **All**. Click a result to open it.
-  2. **Sidebar settings → Session status → Archived** (or **All**): the main list then shows archived sessions. Open **Sidebar settings** from the sliders button at the right end of the list header (it appears when you hover over the header), from **Sidebar settings** in the list-header dropdown, or by right-clicking a blank area of the sidebar.
+  2. **Sidebar settings → Session status → Archived** (or **All**): the main list then shows archived sessions. Open **Sidebar settings** from the sliders button at the right end of the list header (it appears when you hover over the header) or by right-clicking a blank area of the sidebar.
 - While **Archived** is selected, the sliders button stays visible and shows a small dot so you remember the list isn't the normal view. **All** shows no dot. Switch back to **Active** to return to the normal list.
 - To restore: hover over an archived row and click the **Unarchive** (undo arrow) button, or right-click the row (or use its **⋮** menu, or the **⋯** menu in the open session's header) and choose **Unarchive**. Archived rows show an archive icon in place of the usual status icon.
 - Sending a new message in an archived session restores it to **Active** automatically. An automation linked to an archived session also restores it the next time it runs.
@@ -28,9 +28,9 @@ The left sidebar lists your sessions. It's the main way to navigate and organize
 
 **Device scope (the list header title):**
 
-- The main list header title is a dropdown that names what you're looking at: **All sessions**, **Local**, a remote device's name, or **N devices**. Click it to switch scope: **All**, **Local**, or a connected remote device (click a row to switch to that device alone; click the checkbox at the right of a row, or Cmd/Ctrl-click, to select several). The menu also has **Remote desktop** (when another desktop computer can be controlled), **Remote connection settings**, and **Sidebar settings**.
+- The main list header title is a dropdown that names what you're looking at: **All sessions**, **Local**, a remote device's name, or **N devices**. Click it to switch scope: **All**, **Local**, or a connected remote device (click a row to switch to that device alone; click the checkbox at the right of a row, or Cmd/Ctrl-click, to select several). The menu also has **Remote desktop** (when another desktop computer can be controlled) and **Remote connection settings**.
 - The scope applies to the whole sidebar, including **Pinned**.
-- With no remote devices, the title still reads **All sessions ▾** and the menu only has **Remote connection settings** and **Sidebar settings**. The header stays visible even when the list is empty or remote sessions are still loading.
+- With no remote devices, the title still reads **All sessions ▾** and the menu only has **Remote connection settings**. The header stays visible even when the list is empty or remote sessions are still loading.
 
 **Sidebar settings menu** (each row shows its current value and opens a submenu):
 

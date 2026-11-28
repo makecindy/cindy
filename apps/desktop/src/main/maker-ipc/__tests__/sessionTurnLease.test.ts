@@ -343,6 +343,83 @@ describe('shared-process session turn lease', () => {
     },
   );
 
+  it('dispatches a same-generation retry once after a committed insert loses its reply', async () => {
+    const { first, second } = setup();
+    let loseReply = true;
+    const client: typeof first = {
+      ...first,
+      tx: async (name: string, args: unknown) => {
+        const result = await first.tx(name, args);
+        if (loseReply) {
+          loseReply = false;
+          throw createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'lost insert reply');
+        }
+        return result;
+      },
+    };
+    const tracker = new SessionTurnLeaseTracker({
+      getDbClient: () => client, owner: { instanceId: 'local', processId: 101 },
+      createTurnId: () => 'fallback', now: () => 1,
+    });
+    let stop!: () => void;
+    const stopped = new Promise<void>(resolve => { stop = resolve; });
+    const send = vi.fn(async () => {});
+    const handle = {
+      id: 'runtime', agentKind: 'pi', send, isTurnRunning: () => false,
+      setInteractionResolver() {}, close: async () => stop(), async *events() { await stopped; },
+    } as unknown as AgentSessionHandle;
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    const session = new Session({ id: 'source-1', agentKind: 'pi', workDir: '/repo', handle,
+      capabilities: {} as never, logger, turnStallMs: 0 });
+    const turnId = (generation: number) => `${session.instanceId}:${generation}`;
+    session.setTurnLifecycleObserver({
+      beforeProviderStart: generation => tracker.markTurnStarted(session.id, turnId(generation)),
+      onUndispatched: generation => tracker.markTurnEnded(session.id, turnId(generation)),
+      onTerminal() {},
+    });
+    try {
+      await expect(session.send('work')).rejects.toMatchObject({ code: DB_TRANSPORT_OUTCOME_UNKNOWN });
+      expect(send).toHaveBeenCalledTimes(0);
+      const committed = await readPersistedSessionTurnLeases(second, session.id);
+      expect(committed).toHaveLength(1);
+      const retry = await Promise.allSettled([session.send('work')]);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(retry[0].status).toBe('fulfilled');
+      const current = turnId(session.getTurnGeneration());
+      expect(committed[0].lease?.turnId).toBe(current);
+      expect(await readPersistedSessionTurnLeases(second, session.id)).toEqual(committed);
+      await tracker.markTurnStarted(session.id, 'successor');
+      expect(await tracker.markTurnEndedAndCheckIdle(session.id, current)).toBe(false);
+      expect(await readPersistedSessionTurnLeases(second, session.id)).toMatchObject([
+        { lease: { turnId: 'successor' } },
+      ]);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('recovers a committed generation replacement after the UPDATE reply is lost', async () => {
+    const { first, second } = setup();
+    const tracker = new SessionTurnLeaseTracker({
+      getDbClient: () => first, owner: { instanceId: 'local', processId: 101 },
+      createTurnId: () => 'fallback', now: () => 1,
+    });
+    await tracker.markTurnStarted('source-1', 'old');
+    const exec = first.exec.bind(first);
+    vi.spyOn(first, 'exec').mockImplementationOnce(async (sql, params) => {
+      await exec(sql, params);
+      throw createDbTransportError(DB_TRANSPORT_OUTCOME_UNKNOWN, 'lost replacement reply');
+    });
+    await expect(tracker.markTurnStarted('source-1', 'next')).rejects.toMatchObject({
+      code: DB_TRANSPORT_OUTCOME_UNKNOWN,
+    });
+    const committed = await readPersistedSessionTurnLeases(second, 'source-1');
+    expect(committed).toMatchObject([{ lease: { turnId: 'next' } }]);
+    await tracker.markTurnStarted('source-1', 'next');
+    await tracker.markTurnEnded('source-1', 'old');
+    expect(await readPersistedSessionTurnLeases(second, 'source-1')).toEqual(committed);
+  });
+
   it('ignores a delayed tracker terminal after a newer generation replaces it', async () => {
     const { first } = setup();
     const tracker = new SessionTurnLeaseTracker({

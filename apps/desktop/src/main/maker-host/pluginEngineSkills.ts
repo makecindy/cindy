@@ -38,14 +38,16 @@ export function createPluginEngineSkillLister(ports: PluginEngineSkillPorts) {
         description: item.description,
         path: item.mdPath ?? path.join(item.absolutePath, 'SKILL.md'),
         scope: item.scope === 'repo' ? 'repo' as const : 'user' as const,
+        managed: false,
       }));
-    return [...managed.map((skill) => ({ ...skill, scope: 'user' as const })), ...discovered]
+    return [...managed.map((skill) => ({ ...skill, scope: 'user' as const, managed: true })), ...discovered]
       .filter((skill) => !disabled || !skill.path || !disabled.has(canonicalSkillPath(skill.path)))
       .map((skill) => ({
         name: skill.name,
         ...(skill.description ? { description: skill.description } : {}),
         ...(skill.path ? { path: skill.path } : {}),
         scope: skill.scope,
+        ...(skill.managed ? { managed: true } : {}),
       }));
   };
 }

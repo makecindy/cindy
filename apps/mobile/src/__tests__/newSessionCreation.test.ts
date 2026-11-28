@@ -25,6 +25,7 @@ vi.mock('@/session/mobileDurableOutbox', () => ({
   mobileDurableOutbox: { update: editOutbox.update, subscribe: () => () => {}, reconcileDrafts: async () => {} },
 }));
 import { getMobileAuthOwner, setMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { setMobileDebugSink } from '@/debug/mobileDebugLog';
 import { returnNewSessionToEdit } from '@/session/returnNewSessionToEdit';
 const recoveryAsyncStorage = vi.hoisted(() => ({
   getItem: vi.fn(async (key: string) => recoveryStorage.get(key) ?? null),
@@ -211,6 +212,53 @@ describe('newSessionCreation pipeline', () => {
     }
     expect(maker.worktree.discardPrecreated).toHaveBeenCalledOnce();
     expect(remove).not.toHaveBeenCalled();
+  });
+
+  // 测试价值：经 startNewSessionCreation 跑真实管线，断言写进本机诊断的分段计时。用户反馈
+  // 「手机新任务点发送后二三十秒才发出去」(2026-11-25)时，本机没有任何分段证据能区分建链、
+  // 查模型、电脑建会话和交出首条消息；耗时必须落在对应阶段、失败时停在失败处，且不带正文。
+  it.each([
+    ['handed-off', undefined, { link: 1_000, modelCheck: 2_000, create: 5_000, handoff: 200 }, 0],
+    // 失败那一步没有走到下一个计时点：卡在 create 的 5 秒留在 restMs，不会被算进别的阶段。
+    ['create-failed', '[MODEL_UNAVAILABLE] unavailable', { link: 1_000, modelCheck: 2_000 }, 5_000],
+  ] as const)('records per-stage creation timing (%s)', async (outcome, createError, stages, restMs) => {
+    let clock = 50_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const records: unknown[] = [];
+    setMobileDebugSink((_level, scope, args) => {
+      if (scope === 'new-session' && args[0] === 'creation timing') records.push(args[1]);
+    });
+    try {
+      const maker = makeMaker({
+        createSession: vi.fn(async (opts: { id?: string }) => {
+          clock += 5_000;
+          if (createError) throw new Error(createError);
+          return { sessionId: opts.id };
+        }),
+        input: {
+          enqueue: vi.fn(async () => { clock += 200; return { sessionId: 's1', pendingQueue: [] }; }),
+          getProjection: vi.fn(async () => ({ sessionId: 's1', pendingQueue: [] })),
+        },
+      });
+      const params = makeParams('s1', maker, {
+        startedAt: clock - 300,
+        confirmUnauthenticated: async () => { clock += 2_000; return { unauthenticated: false, fresh: null }; },
+      });
+      params.transport.openLink = vi.fn(async () => { clock += 1_000; });
+      startNewSessionCreation(params);
+      await flushPipeline();
+      expect(records).toHaveLength(1);
+      const record = records[0] as { client: string; totalMs: number; stagesMs: Record<string, number> };
+      expect(record).toMatchObject({ outcome, agentKind: 'claude-code', path: 'direct', retry: false, prepareMs: 300, restMs });
+      expect(record.stagesMs).toMatchObject(stages);
+      if (createError) expect(record.stagesMs).not.toHaveProperty('create');
+      expect(record.totalMs).toBe(300 + restMs + Object.values(stages).reduce((sum, ms) => sum + ms, 0));
+      expect(record.client).toHaveLength(8);
+      expect(JSON.stringify(record)).not.toContain(DRAFT.firstMessage);
+    } finally {
+      setMobileDebugSink(undefined);
+      now.mockRestore();
+    }
   });
 
   beforeEach(async () => {

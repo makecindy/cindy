@@ -102,6 +102,21 @@ describe('GhostInstallReceiptStore cleanup', () => {
     expect(await fs.promises.readFile(file, 'utf8')).toBe(bytes);
   });
 
+  it.each([true, 'invalid', false, undefined])('never infers change-check consent from an old receipt: %j', async fact => {
+    await store.write(createSetupReceipt());
+    const file = path.join(stateRoot, 'hello.json');
+    const raw = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    raw.checksCapabilityApproved = fact;
+    await fs.promises.writeFile(file, JSON.stringify(raw));
+    const loaded = store.readForRecovery('hello');
+    expect(loaded.state).toBe('approved');
+    if (loaded.state === 'approved') {
+      expect(loaded.receipt.checksCapabilityApproved).toBe(fact === true ? true : undefined);
+      await store.write(loaded.receipt);
+      expect(await store.readAsync('hello')).toMatchObject({ state: 'approved', receipt: loaded.receipt });
+    }
+  });
+
   // Unit: main removed Harness grants. Existing optional-UI tests never load a
   // receipt written by that older Host. A legacy unknown Harness fact must not
   // revoke the plugin or grant UI; read/write must retain identity and setup.

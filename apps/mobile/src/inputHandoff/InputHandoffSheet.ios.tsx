@@ -135,7 +135,7 @@ export function InputHandoffSheet(props: InputHandoffSheetProps) {
           onPress: mode === "code" ? props.onDone : props.onSubmit,
         };
   // A QR step shows just the code; the whole window stays one tap away.
-  const quietPicture = !snapshot.command && !snapshot.agentPicture && (!snapshot.picture || mode === "qr");
+  const quietPicture = !snapshot.accountVerification && !snapshot.command && !snapshot.agentPicture && (!snapshot.picture || mode === "qr");
   return (
     <Host colorScheme={scheme} seedColor={colors.textPrimary} pointerEvents="none" style={{ position: "absolute" }}>
       <BottomSheet
@@ -237,7 +237,7 @@ export function InputHandoffSheet(props: InputHandoffSheetProps) {
               {quietPicture || props.onLiveView ? (
                 <HStack spacing={spacing.xl}>
                   <Spacer />
-                  {mode === "qr" && props.qr?.view.text ? (
+                  {!snapshot.accountVerification && mode === "qr" && props.qr?.view.text ? (
                     <QuietLink
                       label={t(props.qr.view.link ? "interaction.inputHandoff.qr.copyLink" : "interaction.inputHandoff.qr.copyText")}
                       onPress={props.qr.onCopy}
@@ -288,7 +288,7 @@ function SheetContext({ snapshot }: { snapshot: InputHandoffSnapshot }) {
     <VStack spacing={spacing.sm}>
       {snapshot.note ? (
         <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary), multilineTextAlignment("center")]}>
-          {t("interaction.inputHandoff.agentNote", { note: snapshot.note })}
+          {snapshot.accountVerification ? snapshot.note : t("interaction.inputHandoff.agentNote", { note: snapshot.note })}
         </Text>
       ) : null}
       {snapshot.command ? (
@@ -424,13 +424,16 @@ function QrActions({ qr, busy, onClose, onDone }: { qr: InputHandoffQrSheet; bus
   const { colors } = useTheme();
   const shown = qr.view.state === "shown";
   const link = qr.view.link;
+  const secondary = qr.verification
+    ? { label: t("interaction.inputHandoff.refreshVerification"), onPress: qr.verification.refresh }
+    : { label: t("interaction.inputHandoff.qr.share"), onPress: qr.onShare };
   const primary = link
     ? { label: t(link.web ? "interaction.inputHandoff.qr.open" : "interaction.inputHandoff.qr.openApp", { site: link.site }), onPress: qr.onOpen }
-    : { label: t("interaction.inputHandoff.qr.share"), onPress: qr.onShare };
-  const disabled = busy || !shown;
+    : secondary;
+  const disabled = busy || (!shown && (link !== null || !qr.verification));
   return (
     <VStack spacing={spacing.xs}>
-      {onDone ? null : (
+      {onDone || qr.verification ? null : (
         <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle(colors.textSecondary), multilineTextAlignment("center"), frame({ maxWidth: Infinity }), fixedSize({ horizontal: false, vertical: true })]}>
           {t(link ? "interaction.inputHandoff.qr.hintLink" : "interaction.inputHandoff.qr.hint")}
         </Text>
@@ -454,7 +457,7 @@ function QrActions({ qr, busy, onClose, onDone }: { qr: InputHandoffQrSheet; bus
         </Text>
       </Button>
       {link ? (
-        <Button onPress={qr.onShare} modifiers={[buttonStyle("plain"), disabledModifier(disabled), padding({ top: spacing.xs })]}>
+        <Button onPress={secondary.onPress} modifiers={[buttonStyle("plain"), disabledModifier(qr.verification ? busy : disabled), padding({ top: spacing.xs })]}>
           <Text
             modifiers={[
               font({ textStyle: "body", weight: "medium" }),
@@ -465,7 +468,7 @@ function QrActions({ qr, busy, onClose, onDone }: { qr: InputHandoffQrSheet; bus
               contentShape(shapes.capsule()),
             ]}
           >
-            {t("interaction.inputHandoff.qr.share")}
+            {secondary.label}
           </Text>
         </Button>
       ) : null}
@@ -490,7 +493,7 @@ function QrActions({ qr, busy, onClose, onDone }: { qr: InputHandoffQrSheet; bus
           </Text>
         </Button>
       ) : null}
-      <Button onPress={onClose} modifiers={[buttonStyle("plain")]}>
+      <Button onPress={qr.verification?.cancel ?? onClose} modifiers={[buttonStyle("plain"), disabledModifier(!!qr.verification && busy)]}>
         <Text
           modifiers={[
             font({ textStyle: "body", weight: "medium" }),

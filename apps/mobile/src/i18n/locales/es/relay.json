@@ -5,7 +5,8 @@
     "hint": "Los dispositivos usan cifrado de extremo a extremo. El modo de solo cifrado requiere Agent-Net en ambos dispositivos.",
     "updateRequired": "Instala la última versión de la app para usar Agent-Net.",
     "notConfigured": "Este relé aún no ofrece Agent-Net. Actualízalo o únete a un relé V2.",
-    "failed": "No se pudo cambiar la configuración de Agent-Net. Comprueba la conexión del relé e inténtalo de nuevo."
+    "failed": "No se pudo cambiar la configuración de Agent-Net. Comprueba la conexión del relé e inténtalo de nuevo.",
+    "removedOff": "Este teléfono se quitó de tu cuenta, así que Agent-Net se desactivó. Vuelve a activarlo para unirte de nuevo."
   },
   "settings": {
     "sectionTitle": "Servicio de retransmisión",

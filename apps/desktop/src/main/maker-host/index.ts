@@ -122,7 +122,7 @@ import { setAgentAppUpdateSessionHost } from '../agent-app-update/index.js';
 import { isAppUpdateOwnerTurn } from '../agent-app-update/callerAuthority.js';
 import { markKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js';
 import { markOrcaMcpHydratedIfNeeded } from '../maker-ipc/orcaMcpHydrationCache.js';
-import { preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
+import { acpOrcaDiscoveryHandoff, appendOrcaDiscoveryPrompt, isLocalAcpOrcaDiscoveryStartup, preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
 import {
   hydrateBotProfileRuntime,
   markBotProfileRuntimeApplied,
@@ -177,7 +177,7 @@ import { t } from '../i18n.desktop.js';
 import { MACHINE_STATUS_CHANNEL } from '@cindy/device-link';
 import { invokeDeviceValue } from '../maker-ipc/orcaRemoteWorkers.js';
 import { createHistoryRemoteDeps } from '../mcp-integrations/historyDevices.js';
-import { WorktreePool } from '../worktree/index.js';
+import { WorktreeManager, WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
 import {
   ownerScopedUserDataPath,
@@ -290,6 +290,7 @@ import {
 import { ensureCurrentAccountProviderReadiness } from './account-provider-readiness-ensure.js';
 import { ACCOUNT_PROVIDER_NOT_READY_CODE } from '../../shared/accountProviderReadiness.js';
 import { listBotImConnectionsForBot } from '../im/shared/botImConnectionStore.js';
+import { listPersonalChannelsForCompanion } from '../im/shared/personalChannelStore.js';
 import {
   getRejectedCodexDownshiftModel,
   getObservedCodexUpstreamCapacity,
@@ -320,9 +321,14 @@ import {
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.desktop.js';
 import { STARTUP_GHOST_TOOLS_OWNER_KEY } from '../cindy-brain/startupGhostTool.js';
-import { readSessionSource } from '../localDb/sessionDispatchSnapshot.js';
+import { getSessionRowSnapshotStrict } from '../localDb/sessionDispatchSnapshot.js';
+import { isManagedDialogueWorkspace } from '../localDb/dialogueWorkspace.js';
 import { getPiExtraSpawnConfig, invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.desktop.js';
-import { captureKnownFileBefore, noteOpaqueTurnChange } from '../turn-change-set/store.js';
+import {
+  captureKnownFileBefore,
+  noteOpaqueTurnChange,
+  recordKnownFilePreimage,
+} from '../turn-change-set/store.js';
 import {
   getBuiltinMcpServerNames,
   registerCustomMcpArrays,
@@ -344,6 +350,7 @@ import {
   prepareCodexMcpToolCancellation,
   setCodexEnvironmentShutdownHook,
   unregisterCodexMcpThreadContext,
+  closeCodexMcpSessionInstance,
 } from '../mcp-integrations/codexEnvironment.desktop.js';
 import { REMOTE_ALLOWED_SERVER_NAMES, type CodexHttpBridge } from '../mcp-integrations/codexHttpBridge.desktop.js';
 import { setRemoteMcpBridgeTokenRotatedHook } from '../mcp-integrations/remoteMcpBridgeToken.js';
@@ -1929,6 +1936,7 @@ export function getMaker(): Maker {
         });
       },
       unregisterCodexMcpThreadContext,
+      closeCodexMcpSessionInstance,
       prepareCodexMcpToolCancellation,
       // codexAuthTokenReaderBoundary.test.ts and hostCodexAuthTokenReaderParity.test.ts
       // use createCodexAuthTokenReader and recordCodexThreadLocation as extraction bounds.
@@ -2497,8 +2505,13 @@ export function getMaker(): Maker {
         agentKind: companionToolAgentKind(input.agentKind),
       }),
       // 伙伴绑了哪些平台的机器人(不含凭证): 主任务据此挂渠道原生 API 工具(见 hydrate 内注释)。
-      listBotImChannels: ({ botId }) =>
-        [...new Set(listBotImConnectionsForBot(botId).map((connection) => connection.channel))],
+      // 同时覆盖伙伴自有连接(bot-im-connections)与设置里通过「谁来回复」交给这位伙伴的个人机器人。
+      listBotImChannels: ({ botId }) => [
+        ...new Set([
+          ...listBotImConnectionsForBot(botId).map((connection) => connection.channel),
+          ...listPersonalChannelsForCompanion(botId),
+        ]),
+      ],
       listToolsets: async ({ botId, agentKind, workingDir, remoteHostId }) => {
         const registry = getPluginRegistry();
         return Promise.all(
@@ -2580,6 +2593,8 @@ export function getMaker(): Maker {
         readImageDeliveryEpoch: readGeneratedImageEpoch,
         attachmentPreservation: sessionId => attachmentPreservation(sessionId),
         attachmentStorageRoots: sessionId => attachmentStorageRoots(sessionId),
+        ensureWorktreeReady: (sessionId, signal) =>
+          WorktreeManager.ensureBackgroundCheckoutReady(sessionId, signal),
         remoteInvoke: remoteBackgroundInvoke,
         renewSharedProviderLink: (peer) => isCrossRegionProviderShareTarget(peer)
           ? renewCrossRegionProviderShareLink(peer) : openRemoteLink(peer),
@@ -2620,7 +2635,15 @@ export function getMaker(): Maker {
       // Desktop-specific session 生命周期副作用钩子。maker-core 不知道文件系统细节，
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {
-        beforeTurn: applyProjectDirectoriesForTurn,
+        beforeTurn: async (session, signal) => {
+          // 所有入口（桌面、IM turnRunner、自动化、Orca 等）的本机 ACP 发送共用此边界，
+          // 确保受管 worktree 后台 full checkout 完成后再派发 session/prompt；
+          // 远程/共享 ACP（agentDeviceId 非空）延后到 RemoteExecutor 首个工作树工具前等待。
+          if (session.agentKind === 'acp' && !session.agentDeviceId && !session.remoteHostId) {
+            await WorktreeManager.ensureBackgroundCheckoutReady(session.id, signal);
+          }
+          await applyProjectDirectoriesForTurn(session);
+        },
         prepareStartOptions: async (sessionId, opts) => {
           pendingBotRuntimeSnapshots.delete(sessionId);
           // Agent 在另一台电脑上运行的任务：所有入口(界面、定时任务、IM、协同等)恢复时都以任务
@@ -2683,12 +2706,23 @@ export function getMaker(): Maker {
             opts.vendorOptions = { ...opts.vendorOptions };
             delete opts.vendorOptions[STARTUP_GHOST_TOOLS_OWNER_KEY];
           }
-          if (['claude-code', 'codex', 'pi'].includes(opts.agentKind) && !opts.reviewMode &&
-              !opts.remoteHostId && !opts.agentDeviceId && !opts.vendorOptions?.orcaRole) {
+          const builtinDiscovery = ['claude-code', 'codex', 'pi'].includes(opts.agentKind) && !opts.reviewMode && !opts.vendorOptions?.orcaRole;
+          if (opts.agentKind === 'acp' && !opts.agentDeviceId && !opts.deviceHosted && opts.vendorOptions?.orcaRole) {
+            acpOrcaDiscoveryHandoff.consume(sessionId);
+          }
+          const localAcpDiscovery = isLocalAcpOrcaDiscoveryStartup(opts) &&
+            (!opts.resumeSessionId || acpOrcaDiscoveryHandoff.hasPending(sessionId));
+          if (builtinDiscovery || localAcpDiscovery) {
             const owner = activeOwnerScopeKey();
-            const source = await readSessionSource(sessionId).catch(() => null);
-            if (source === 'desktop' && owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()) {
-              opts.vendorOptions = { ...opts.vendorOptions, [STARTUP_GHOST_TOOLS_OWNER_KEY]: owner };
+            const row = await getSessionRowSnapshotStrict(sessionId).catch(error => {
+              desktopMakerLogger.warn('Session startup source lookup failed', { sessionId, error: String(error) });
+              return undefined;
+            });
+            if (owner === activeOwnerScopeKey() && !isAppSessionBoundaryPending()) {
+              appendOrcaDiscoveryPrompt(opts, row, (id, dir) => getPluginRegistry().isEnabled(id, dir), isManagedDialogueWorkspace, sessionId);
+              if (builtinDiscovery && !opts.remoteHostId && !opts.agentDeviceId && row?.source === 'desktop') {
+                opts.vendorOptions = { ...opts.vendorOptions, [STARTUP_GHOST_TOOLS_OWNER_KEY]: owner };
+              }
             }
           }
           if (opts.agentKind === 'pi' && opts.thinkingEnabled === undefined) {
@@ -2917,6 +2951,11 @@ export function getMaker(): Maker {
       appVersion: app.getVersion(),
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
+      turnChangeCapture: {
+        beforeKnownFileWrite: captureKnownFileBefore,
+        recordKnownFilePreimage,
+        noteOpaqueWrite: noteOpaqueTurnChange,
+      },
       getGhostRosterPrompt,
       // Same Skill scope as the built-in Pi engine (Cindy-managed and plugin Skills, Pi's discovery
       // directories, the user's enable switches), discovered in the isolated scan process.

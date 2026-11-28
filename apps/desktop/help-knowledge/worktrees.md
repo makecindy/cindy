@@ -41,7 +41,9 @@ A session can run inside its own **git worktree** — a separate working copy of
 
 - Automations can run in a **New worktree session** (see the Scheduling automations topic), collaboration Workers can get their own worktree (**Create a worktree for this Worker**), and importing a shared session offers **Create in a worktree**.
 - In **Sidebar settings → Session info**, tick **worktree** to show each session's worktree name; click it to open the folder.
-- A session whose working directory is a worktree can't be moved to another project yet.
+- A session whose working directory is a worktree can be moved to another project. Cindy keeps the
+  worktree as the execution directory and changes the task's project membership. Changing the
+  execution directory itself still requires a worktree handoff.
 
 **Notes:**
 

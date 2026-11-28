@@ -170,6 +170,14 @@ export function orcaRoleRememberMutation(
   const rememberTask = task.trim() !== ''
     && task.length <= ORCA_WORKER_ROLE_TASK_MAX_LENGTH
     && task !== orcaRoleStarterTask(form.role);
+  if (form.agent === 'acp') {
+    return {
+      kind: 'remember',
+      role: form.role,
+      ...(rememberTask ? { task } : {}),
+      permission: form.permissionMode,
+    };
+  }
   const model = form.model;
   const fullRoute = model && route.explicit && route.hostCatalog ? {
     agent: form.agent,

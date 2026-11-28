@@ -10,6 +10,25 @@ import { mediaGuideModel } from '../cindy-brain/customMediaConnection.js';
 
 type Actions = ReturnType<typeof registerProviderHandlers>;
 let actions: Actions | undefined;
+/** 目录形状：对话模型按 agent 分列，媒体模型列在 provider 上。 */
+type CatalogProviders = Awaited<ReturnType<Actions['list']>>['providers'];
+/** Same shape the catalog uses for visibility overrides. */
+function visibilityKey(target: { agent: string; providerId: string; modelId: string }): string {
+  return `${target.agent}:${target.providerId}:${target.modelId}`;
+}
+
+/**
+ * Whether this target's flat key can only belong to this target.
+ * The key joins its parts with `:`, so an id that contains `:` gives the same string more than
+ * one split (`pi:custom:xai:foo` is both `(pi, custom:xai, foo)` and `(pi, custom, xai:foo)`,
+ * and a media route can spell it too). Once the provider is gone from the catalog nothing
+ * settles that, so a key with a `:` in its parts is never cleared: refusing beats deleting a
+ * preference the user may still be reading through another route.
+ */
+function visibilityKeyIsUnambiguous(target: { providerId: string; modelId: string }): boolean {
+  return !target.providerId.includes(':') && !target.modelId.includes(':');
+}
+
 export function configureModelSettingsActions(value: Actions): void { actions = value; }
 
 /** These are shared domain operations. IPC still performs its sender checks separately. */
@@ -107,11 +126,41 @@ export async function manageAppModels(input: AppModelsRequest, assertCurrent: ()
       case 'visible': {
         const catalog = await api.list(false);
         await guard();
-        const model = catalog.providers.find(provider => provider.id === target.providerId)?.models[target.agent]?.find(model => model.id === target.modelId);
-        if (!model) throw new Error('MODEL_NOT_IN_CATALOG');
+        const provider = catalog.providers.find(entry => entry.id === target.providerId);
+        // Chat models are listed per agent; media models are listed once for the provider
+        // and are handled by the media settings, never by this selector switch.
+        const model = provider?.models[target.agent]?.find(model => model.id === target.modelId);
+        // Media entries (image / video / audio / …) are listed once for the provider, are
+        // not in the chat selector, and are read through their own source agent. This
+        // tool's `visible` is the selector switch, so it never edits them: the media
+        // settings page owns those. Refusing beats reporting a reset that cleaned a key
+        // nobody reads.
+        const mediaEntry = !model && [...(provider?.imageModels ?? []), ...(provider?.videoModels ?? []),
+          ...(provider?.audioModels ?? []), ...(provider?.evaluationModels ?? []),
+          ...(provider?.embeddingModels ?? [])].some(entry => entry.id === target.modelId);
+        // A provider that left the catalog keeps its overrides. value=null only removes the
+        // stored choice, so it must stay available for those orphan keys; an explicit on/off
+        // choice still needs a catalog entry to resolve the default.
+        if (!model && (change.value !== null || mediaEntry)) throw new Error('MODEL_NOT_IN_CATALOG');
+        // Resetting a key that never existed is not a no-op: the renderer records every
+        // reset in `followCatalogKeys` and nothing removes such a key again, so a typo
+        // would accumulate in local storage forever. Only a stored override may be cleared
+        // without a catalog entry.
+        if (!model && catalog.modelVisibilityOverrides[visibilityKey(target)] === undefined) {
+          throw new Error('MODEL_NOT_IN_CATALOG');
+        }
+        // The override map is flat and joins its parts with `:`, while provider and model
+        // ids may contain `:` themselves (`custom:xai`, `xai:foo`). A stored `pi:custom:xai:foo`
+        // is also produced by the different target `(pi, custom, xai:foo)`, so "the key
+        // exists" cannot prove this target owns it.
+        if (!model && !visibilityKeyIsUnambiguous(target)) {
+          throw new Error('MODEL_NOT_IN_CATALOG');
+        }
         await guard();
-        const receipt = await manageAppPreferences('model-visibility', undefined, { target, visible: change.value, defaultEnabled: model.defaultEnabled });
-        if (!receipt.modelVisibility || (change.value !== null && receipt.modelVisibility.visible !== change.value)) throw new Error('MODEL_VISIBILITY_NOT_CONFIRMED');
+        const receipt = await manageAppPreferences('model-visibility', undefined, { target, visible: change.value, defaultEnabled: model?.defaultEnabled });
+        if (!receipt.modelVisibility || (change.value === null
+          ? receipt.modelVisibility.customized !== false
+          : receipt.modelVisibility.visible !== change.value)) throw new Error('MODEL_VISIBILITY_NOT_CONFIRMED');
         result = receipt.modelVisibility;
         break;
       }

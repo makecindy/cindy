@@ -10,7 +10,7 @@
  * the session IPC (read through `registeredSessionIpcOpts`, a live view of that registration).
  */
 import { eq } from 'drizzle-orm';
-import { normalizeDbAgentKind } from '../../shared/agentKindConversion';
+import { isPluginEngineKind, normalizeDbAgentKind } from '../../shared/agentKindConversion';
 import { normalizeContextWindowBudget } from '../../shared/sessionContextWindowBudget.js';
 import {
   readSessionContextWindowBudget,
@@ -145,7 +145,10 @@ export async function persistSessionFieldsWith(
       scheduledModelBaseline: sessions.scheduledModelBaseline,
     }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
     if (row?.scheduledModelBaseline) {
-      runtimeProjection = projectSessionRuntimeFields({ ...row, agentKind: normalizeDbAgentKind(row.agentKind) });
+      runtimeProjection = projectSessionRuntimeFields({
+        ...row,
+        agentKind: (isPluginEngineKind(row.agentKind) ? row.agentKind : normalizeDbAgentKind(row.agentKind)) as Parameters<typeof projectSessionRuntimeFields>[0]['agentKind'],
+      });
     }
   }
   if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sessionId, { ...clean, ...runtimeProjection }, ownerScope);

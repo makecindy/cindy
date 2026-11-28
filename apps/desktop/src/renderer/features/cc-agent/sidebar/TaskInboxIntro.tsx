@@ -3,12 +3,13 @@
  * request; docs/product-rules/task-inbox.md). Three cards: pending, Done and Snooze, each with a
  * small scene that plays once.
  */
-import type { CSSProperties } from 'react';
+import { useCallback, useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, Clock, ListChecks } from 'lucide-react';
 
 import { FeatureIntroDialog } from '@/components/feature-intro/FeatureIntroDialog';
 import { at } from '@/components/feature-intro/GuideCover';
+import { useTaskListMode, type TaskListMode } from '@/hooks/useTaskListMode';
 import { cn } from '@/lib/utils';
 
 const SEEN_KEY = 'featureIntro.taskInbox.seen';
@@ -22,6 +23,37 @@ export function claimTaskInboxIntro(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Every place that switches between the task list and the inbox (the sidebar top bar button and
+ * the display settings menu) goes through this, so the first entry on this computer shows the
+ * introduction whichever one the user used. Render `intro` next to the control; `switchMode`
+ * returns true when it opened the introduction.
+ */
+export function useTaskListModeSwitch(): {
+  mode: TaskListMode;
+  switchMode: (next: TaskListMode) => boolean;
+  /** Opens the introduction on request (the 「收件箱使用技巧」 row); does not touch the seen record. */
+  showIntro: () => void;
+  intro: ReactNode;
+} {
+  const { mode, setMode } = useTaskListMode();
+  const [introOpen, setIntroOpen] = useState(false);
+  const switchMode = useCallback((next: TaskListMode) => {
+    if (next === mode) return false;
+    setMode(next);
+    if (next !== 'inbox' || !claimTaskInboxIntro()) return false;
+    setIntroOpen(true);
+    return true;
+  }, [mode, setMode]);
+  const showIntro = useCallback(() => setIntroOpen(true), []);
+  return {
+    mode,
+    switchMode,
+    showIntro,
+    intro: introOpen ? <TaskInboxIntro open onClose={() => setIntroOpen(false)} /> : null,
+  };
 }
 
 export function TaskInboxIntro({ open, onClose }: { open: boolean; onClose: () => void }) {

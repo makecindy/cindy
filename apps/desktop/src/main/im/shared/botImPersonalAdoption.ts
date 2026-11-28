@@ -42,6 +42,7 @@ import {
   assertBotImConnectionAddable,
   findBotImConnectionByIdentity,
 } from './botImConnectionRuntime';
+import { clearPersonalChannelChoice, isPersonalChannel, type PersonalChannel } from './personalChannelStore';
 
 const log = createLogger('im:bot-adopt');
 
@@ -49,6 +50,8 @@ const log = createLogger('im:bot-adopt');
 export interface PersonalBotTransport {
   /** 给人看的身份(Telegram @用户名 / Discord bot 标签等); 读不到为 null。不含凭证。 */
   identity(): string | null;
+  /** 此刻是否还有消息正在回复 / 排队 / 回传(切「谁来回复」时先拦截，避免中途重连打断流式卡片)。 */
+  isBusy?(): boolean;
   /** 静默停掉: 让出轮询 / 长连接, 凭证保留, 不通知主人。 */
   stop(): Promise<void>;
   /** 按安全存储里现有的凭证重新起(回滚时恢复原样)。 */
@@ -66,7 +69,9 @@ export interface BotImPersonalAdoptionDeps {
   isReady(): boolean;
   personal: Partial<Record<BotImChannel, PersonalBotTransport>>;
   /** 个人 Telegram bot 的群参与模式(设置卡「群聊」小节)。 */
-  telegramGroupActivation(): Record<string, 'mention' | 'always'> | undefined;
+  telegramGroupActivation(): Record<string, 'always' | 'mention'> | undefined;
+  /** 移交成功后广播该个人渠道的项目/归属已清空(可选)。 */
+  onPersonalChannelCleared?: (channel: PersonalChannel) => void | Promise<void>;
 }
 
 /** 个人 bot 用的安全存储键名(无前缀), 与 lizi-im 各传输层同源。 */
@@ -207,6 +212,49 @@ function carriedGroupActivation(channel: BotImChannel): Record<string, 'always'>
   return Object.keys(always).length > 0 ? always : undefined;
 }
 
+/**
+ * 「谁来回复」切换(设置 → IM 机器人 → 某平台): 凭证不动, 只改归属。若此刻该渠道有消息正在回复
+ * 或排队, 直接报 PRECONDITION_FAILED(与微信一致), 避免重连打断正在发送的卡片; 伙伴删除清理时
+ * 传 `allowWhileBusy: true` 跳过拦截。空闲时静默停下 → 写归属 → 按原凭证起来。没配好的平台直接写。
+ */
+export async function switchPersonalBotReplyTarget(
+  channel: BotImChannel,
+  apply: () => void,
+  options?: { allowWhileBusy?: boolean },
+): Promise<void> {
+  const current = deps;
+  if (!current?.isReady()) throwIpcError('PRECONDITION_FAILED', 'IM_NOT_READY');
+  if (inFlight) throwIpcError('PRECONDITION_FAILED', 'ADOPT_IN_PROGRESS');
+  const personal = readPersonalCredentials(channel, '') ? current.personal[channel] : undefined;
+  const ownerKey = activeOwnerScopeKey();
+  const sameOwner = () => !isAppSessionBoundaryPending() && activeOwnerScopeKey() === ownerKey;
+  const assertOwner = () => {
+    if (!sameOwner()) throwIpcError('PRECONDITION_FAILED', 'OWNER_SCOPE_CHANGED');
+  };
+  assertOwner();
+  if (!options?.allowWhileBusy && personal?.isBusy?.()) {
+    throwIpcError('PRECONDITION_FAILED', 'PERSONAL_BOT_BUSY');
+  }
+  inFlight = true;
+  try {
+    if (personal) await personal.stop();
+    try {
+      assertOwner();
+      apply();
+    } finally {
+      if (personal && sameOwner()) {
+        try {
+          await personal.start();
+        } catch (err) {
+          log.warn(`restart personal ${channel} bot after reply target switch failed: ${String(err)}`);
+        }
+      }
+    }
+  } finally {
+    inFlight = false;
+  }
+}
+
 /** 把个人 bot 移给伙伴: 先停个人 bot, 再按添加平台建连; 失败把个人 bot 恢复原样。 */
 export async function adoptPersonalBot(input: BotImAdoptPersonalBotInput): Promise<BotImConnectionAddResult> {
   const current = deps;
@@ -222,10 +270,12 @@ export async function adoptPersonalBot(input: BotImAdoptPersonalBotInput): Promi
   try {
     // 不合格的(伙伴不可用、已被另一位伙伴用着)在停个人 bot 之前就拒绝。
     await assertBotImConnectionAddable(credentials.input, { adoptingSettingsBot: true });
+    if (!sameOwner()) throwIpcError('PRECONDITION_FAILED', 'OWNER_SCOPE_CHANGED');
     const snapshot = snapshotPersonalSecrets(input.channel);
     const personal = current.personal[input.channel];
     if (!personal) throwIpcError('PRECONDITION_FAILED', 'PERSONAL_BOT_NOT_CONFIGURED');
     await personal.stop();
+    if (!sameOwner()) throwIpcError('PRECONDITION_FAILED', 'OWNER_SCOPE_CHANGED');
     let result: BotImConnectionAddResult;
     try {
       result = await addBotImConnection(credentials.input, {
@@ -255,6 +305,15 @@ export async function adoptPersonalBot(input: BotImAdoptPersonalBotInput): Promi
     }
     // 先删键再让传输层归位: 凭证不能留在个人 bot 上(否则下次启动两处抢同一个 bot)。
     purgePersonalSecrets(input.channel);
+    if (isPersonalChannel(input.channel)) {
+      try {
+        if (clearPersonalChannelChoice(input.channel)) {
+          await current.onPersonalChannelCleared?.(input.channel);
+        }
+      } catch (err) {
+        log.warn(`clear personal channel state after adoption failed: ${String(err)}`);
+      }
+    }
     try {
       await personal.clear();
     } catch (err) {

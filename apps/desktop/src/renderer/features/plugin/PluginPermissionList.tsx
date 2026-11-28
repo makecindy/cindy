@@ -1,6 +1,7 @@
 import { ChevronDown, Shield, type LucideIcon } from 'lucide-react';
 import { useId, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { GhostPermissionItem } from '../../../shared/ghost';
@@ -29,7 +30,7 @@ export function usePluginPermissionFacts(items: readonly GhostPermissionItem[]):
       title: hosts.length > 1 && host ? t('settings.ghosts.perm.networkHosts') : t('settings.ghosts.perm.' + item.labelKey, item.labelArgs),
       descriptions: [hosts.length > 1 && host ? hostText : '', detail, item.detail].filter((value): value is string => Boolean(value)),
       icon: permissionItemIcon(item),
-      highRisk: item.detailKey === 'nodeRuntimeDetail' || item.detailKey === 'nodeMcpDetail' ||
+      highRisk: item.detailKey === 'nodeRuntimeDetail' || item.detailKey === 'nodeMcpDetail' || item.detailKey === 'nodeInheritEnvDetail' ||
         detail?.startsWith('高风险') || detail?.startsWith('高風險') || detail?.startsWith('High risk'),
     }];
   });
@@ -84,7 +85,7 @@ export function PluginPermissionList({ items, showAll = false, limit = 5, choice
                   <p key={index} className="mt-1 whitespace-pre-line break-words text-13 leading-[1.54] text-[var(--text-secondary)]">{description}</p>
                 ))}
               </div>
-              {change === 'added' ? <span className="shrink-0 rounded-full bg-[var(--surface-chip)] px-1.5 text-11 font-medium text-[var(--text-secondary)]">{t('settings.ghosts.installConsent.addedBadge')}</span> : null}
+              {change === 'added' ? <Badge>{t('settings.ghosts.installConsent.addedBadge')}</Badge> : null}
             </li>
           );
         }} />

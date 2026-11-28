@@ -25,7 +25,7 @@ import { resolveFeishuNotificationReply } from './notificationOrigin';
 import path from 'node:path';
 import fs from 'node:fs';
 import { app } from 'electron';
-import { decodeFeishuLaneUserId, type FeishuIM, type FeishuLane, type IMAttachment } from '@cindy/im';
+import { FEISHU_MERGE_FORWARD_PLACEHOLDER, decodeFeishuLaneUserId, type FeishuIM, type FeishuLane, type IMAttachment } from '@cindy/im';
 
 import { imChannelNoteDirectSourceFromEvent } from '../shared/channelNote';
 import { receivedHistoryScope } from '../shared/receivedImageHistory';
@@ -43,12 +43,7 @@ import {
   HISTORY_FILE_MAX,
 } from './groupContext';
 import { createFeishuGroupTurnPermissionPolicy } from './permissionPolicy';
-import {
-  feishuGroupPermissionMode,
-  feishuGroupProjectDefaults,
-  feishuGroupRouteOverride,
-  feishuGroupWorkingDir,
-} from './groupOverrides';
+import { imChatPermissionMode } from '../shared/chatOverrides';
 import { feishuText, ui, REACTION_PROCESSING } from './uiText';
 
 const log = createLogger('im:feishu-adapter');
@@ -146,7 +141,8 @@ export function feishuToolsHint(service: 'feishu' | 'lark'): string {
 
 export interface FeishuAdapterOptions {
   /** 伙伴自有连接: 私聊按主人 / 外部用户分落点(transport 对外开放时才会有外部私聊)。 */
-  companionBotId?: string;
+  /** 交给哪位伙伴: 固定 id(伙伴自有连接), 或每次现读(设置页那份个人机器人的「谁来回复」)。 */
+  companionBotId?: string | (() => string | null);
 }
 
 export function buildFeishuAdapter(
@@ -154,7 +150,10 @@ export function buildFeishuAdapter(
   config: ImOrchestratorConfig,
   options: FeishuAdapterOptions = {},
 ): ImChannelAdapter {
-  const companion = Boolean(options.companionBotId);
+  // 交给伙伴与否按每条消息现读: 设置页那份个人机器人可以随时在「谁来回复」里切换。
+  const isCompanion = (): boolean => Boolean(
+    typeof options.companionBotId === 'function' ? options.companionBotId() : options.companionBotId,
+  );
   const isLark = () => feishuIm.getService() === 'lark';
   const channelLabel = () => isLark() ? 'Lark' : '飞书';
   const conversationPrefix = () => channelLabel() + ' · ';
@@ -221,23 +220,16 @@ export function buildFeishuAdapter(
        * 群那档比私聊那档**宽**时同样覆写 —— 这是用户在设置里对群的显式选择,
        * 「群里的事只看这一行」是产品裁决(不看用户是否手动改过该下拉框)。
        */
-      // 个人机器人还按群读「按群设置」(设置页「群聊」): 这个群单独设置的权限档优先, 其次是
-      // 新任务所在的绑定项目的权限档。伙伴连接的群任务归伙伴设置管, 不读这份。
+      // 个人机器人还按群读「群聊」总表: 这个群单独设置的权限档优先, 其次是新任务所在项目的权限档。
+      // 伙伴连接的群任务归伙伴设置管, 不读这份。按群的项目与模型由编排器统一接
+      // (im/shared/chatOverrides.ts 的 withImChatOverrides, 各平台同一份)。
       permissionModeFor: (userId, projectPermissionMode) => {
         const lane = decodeFeishuLaneUserId(userId);
         if (lane === null) return null;
-        return companion
+        return isCompanion()
           ? readImDefaultSettings('feishu').groupPermissionMode
-          : feishuGroupPermissionMode(feishuIm.getBotAppId(), lane.chatId, projectPermissionMode ?? null);
+          : imChatPermissionMode('feishu', feishuIm.getBotAppId(), lane.chatId, projectPermissionMode ?? null);
       },
-      ...(companion
-        ? {}
-        : {
-            routeOverrideFor: (botAppId: string, userId: string) => feishuGroupRouteOverride(botAppId, userId),
-            laneWorkingDirFor: (botAppId: string, userId: string) => feishuGroupWorkingDir(botAppId, userId),
-            laneProjectDefaultsFor: (botAppId: string, userId: string, workingDir: string) =>
-              feishuGroupProjectDefaults(botAppId, userId, workingDir),
-          }),
       // Main groups keep their native name. A thread's first words provide its subject.
       resolveSessionTitle: async (userId) => {
         const lane = decodeFeishuLaneUserId(userId);
@@ -304,7 +296,7 @@ export function buildFeishuAdapter(
     // Telegram 一致(不用飞书个人 bot 的「非只读即确认」)。
     turnPermissionPolicyFor: (event) => {
       if (!event.speaker) return undefined;
-      if (companion) {
+      if (isCompanion()) {
         return event.speaker.isOwner
           ? undefined
           : createFeishuGroupTurnPermissionPolicy(event.messageId, false, 'destructive');
@@ -315,7 +307,10 @@ export function buildFeishuAdapter(
     // 不再挂强确认策略(maker 不再拒绝, 按用户选择直接执行)。群上下文的
     // 防注入过滤/包裹在 prepareAgentTurnText 里独立生效, 不随权限档关闭;
     // acceptEdits 仍保持失败路径(错误 + 私聊修复卡)。
-    turnPolicyOptionalForMode: (mode) => mode === 'bypassPermissions',
+    // 只对主人触发的轮次放开(伙伴连接沿用伙伴权限档): 个人机器人的群成员轮次最高按自动审批,
+    // 完全访问的群里由共享 runner 临时降到 Auto(「群成员也能提问」, 2026-11-24 主人裁决)。
+    turnPolicyOptionalForMode: (mode, policy) => mode === 'bypassPermissions'
+      && (isCompanion() || policy.autoReviewContext?.requesterAuthority === 'owner'),
     // 渠道说明: 群 lane 用真实群 id + 缓存的群名(拉不到或超时就只写 id), 发言人只有
     // open_id(飞书事件不带显示名)。私聊写 p2p chat_id。
     channelNoteSourceFor: async (event) => {
@@ -354,7 +349,7 @@ export function buildFeishuAdapter(
         chatKind: lane ? 'group' : 'direct',
         requesterIsOwner,
         triggerMessageId: event.messageId,
-        companion,
+        companion: isCompanion(),
       };
     },
     // 群 lane: 触发时按页回翻群历史拼上下文前缀(含媒体附件), 落库仍是渠道原文。
@@ -412,7 +407,10 @@ export function buildFeishuAdapter(
           if (contextAttachments.length) safeReply.attachmentCount = contextAttachments.length;
           if (unavailable.length) safeReply.unavailableAttachments = unavailable;
         }
-        replyPrefix = buildFeishuReplyContextBlock(safeReply);
+        // A bare merged forward carries only a channel placeholder as its text: the user
+        // typed nothing, so the forwarded messages are what they are handing over.
+        const requestText = event.text === FEISHU_MERGE_FORWARD_PLACEHOLDER ? '' : event.text;
+        replyPrefix = buildFeishuReplyContextBlock(safeReply, requestText);
       }
       if (!lane) return replyPrefix ? {
         agentText: `${replyPrefix}${event.text}`,

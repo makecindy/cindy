@@ -857,6 +857,45 @@ describe('fetchLocalMediaToOss — baseDir / maxBytes 服务端强制约束', ()
     expect(uploadLocalFile).toHaveBeenCalledTimes(1);
   });
 
+  it('maxBytes + thumbnail:true: 静态大图优先缩略图 inline 回包; 缩图失败或不可缩(GIF)回退原图时在上传前拒绝超限', async () => {
+    realpathMock.mockImplementation(async (p: string) => p);
+    statMock.mockResolvedValue({ isFile: () => true, size: 5_000_000, mtimeMs: 1 });
+
+    // Static PNG > maxBytes still succeeds via inline thumbnail when thumbnail <= maxBytes.
+    __testing.setThumbnailRenderer(async () => Buffer.from('tiny-webp'));
+    const okThumb = await fetchLocalMediaToOss({
+      url: urlFor('/proj/out/large.png', '&maxBytes=2097152'),
+      thumbnail: true,
+    });
+    expect(okThumb.ossKey).toBe('');
+    expect(okThumb.mimeType).toBe('image/webp');
+    expect(okThumb.inlineBase64).toBe(Buffer.from('tiny-webp').toString('base64'));
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+
+    // When thumbnail fails, fallback upload is rejected before touching uploadLocalFile.
+    __testing.setThumbnailRenderer(async () => null);
+    expect(
+      await codeOf(() =>
+        fetchLocalMediaToOss({
+          url: urlFor('/proj/out/large.png', '&maxBytes=2097152'),
+          thumbnail: true,
+        }),
+      ),
+    ).toMatch(/超出取件大小上限/);
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+
+    // Non-thumbnailable GIF > maxBytes is rejected before upload.
+    expect(
+      await codeOf(() =>
+        fetchLocalMediaToOss({
+          url: urlFor('/proj/out/anim.gif', '&maxBytes=2097152'),
+          thumbnail: true,
+        }),
+      ),
+    ).toMatch(/超出取件大小上限/);
+    expect(uploadLocalFile).not.toHaveBeenCalled();
+  });
+
   it('SSH 分支:两项约束原样下发给 materializeSshRemoteMedia(它 stat 完就会拉整份文件)', async () => {
     const url =
       'xdt-file://local/?path=' +
