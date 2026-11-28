@@ -1099,11 +1099,15 @@ it.each(['group', 'direct'] as const)('durably restores %s sends and reconciles 
     noteBotGroupTimeline('g1', [msg({ id: 'unrelated', sequence: 20 })], beginBotGroupTimelineRead());
     expect(await saved()).toHaveLength(2);
     mocks.getBotGroup.mockImplementation(async (_id, options) => kind === 'direct' && options?.conversationKind !== 'direct'
-      ? { ok: false, errorCode: 'NOT_FOUND' } : ({ ok: true, group: options?.beforeSequence
-      ? { messages: [msg({ id: 'server-first', sequence: 1 }), msg({ id: 'server-second', sequence: 2 })], hasMoreBefore: false }
-      : { messages: [msg({ id: 'newer', sequence: 20 })], hasMoreBefore: true } }));
+      ? { ok: false, errorCode: 'NOT_FOUND' } : ({ ok: true, group: options?.beforeSequence === 20 && kind === 'group'
+      // #13638: a hidden group page must not keep the sent rows in the durable outbox.
+      ? { messages: [], hasMoreBefore: true, pageOldestSequence: 10 }
+      : options?.beforeSequence
+        ? { messages: [msg({ id: 'server-first', sequence: 1 }), msg({ id: 'server-second', sequence: 2 })], hasMoreBefore: false }
+        : { messages: [msg({ id: 'newer', sequence: 20 })], hasMoreBefore: true } }));
     await vi.advanceTimersByTimeAsync(5_000);
     expect(mocks.getBotGroup).toHaveBeenCalledWith('g1', { beforeSequence: 20, ...conversation });
+    if (kind === 'group') expect(mocks.getBotGroup).toHaveBeenCalledWith('g1', { beforeSequence: 10 });
     expect(await saved()).toHaveLength(0);
   } finally { stop(); vi.unstubAllGlobals(); vi.useRealTimers(); rmSync(root, { recursive: true, force: true }); }
 });

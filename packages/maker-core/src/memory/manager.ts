@@ -951,15 +951,35 @@ export class MakerMemoryManager {
     // 发送前复核: 边界已切换则丢弃旧 owner 的 records, fail-closed。
     this.assertScopeUnchanged(scopeAtEntry);
 
-    const summary = records
-      .map((r) => `### ${r.filename}\n- title: ${r.frontmatter.title}\n- description: ${r.frontmatter.description}\n- updatedAt: ${r.frontmatter.updatedAt}\n\n${r.body}`)
-      .join('\n\n---\n\n');
+    // Cap dump size so large memory stores (including a single 56 KB note) cannot overflow context.
+    const REVIEW_DUMP_MAX_CHARS = 48_000;
+    const TRUNCATION_NOTICE = '\n\n_(entry truncated due to review size budget)_';
+    const sorted = [...records].sort((a, b) => b.frontmatter.updatedAt.localeCompare(a.frontmatter.updatedAt));
+    const chunks: string[] = [];
+    let usedChars = 0;
+    for (const r of sorted) {
+      const entry = `### ${r.filename}\n- title: ${r.frontmatter.title}\n- description: ${r.frontmatter.description}\n- updatedAt: ${r.frontmatter.updatedAt}\n\n${r.body}`;
+      const sepLen = chunks.length > 0 ? 7 : 0;
+      if (usedChars + sepLen + entry.length > REVIEW_DUMP_MAX_CHARS) {
+        if (chunks.length === 0) {
+          const allowed = Math.max(0, REVIEW_DUMP_MAX_CHARS - TRUNCATION_NOTICE.length);
+          chunks.push(entry.slice(0, allowed) + TRUNCATION_NOTICE);
+          usedChars = chunks[0].length;
+        }
+        break;
+      }
+      chunks.push(entry);
+      usedChars += sepLen + entry.length;
+    }
+    const omitted = sorted.length - chunks.length;
+    const summary = chunks.join('\n\n---\n\n')
+      + (omitted > 0 ? `\n\n---\n\n_(${omitted} older entries omitted due to review size budget)_` : '');
     const prompt = [
       'You are reviewing a memory store for consistency.',
       'For each potential issue, classify as: contradiction / outdated / duplicate / fine.',
       'Output a concise plan (<= 200 words) listing which files to delete or merge and why.',
       '',
-      `Memory dump (${records.length} entries):`,
+      `Memory dump (${chunks.length}/${records.length} entries):`,
       '',
       summary,
     ].join('\n');

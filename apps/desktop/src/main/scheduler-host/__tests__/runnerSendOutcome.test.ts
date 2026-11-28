@@ -1,3 +1,9 @@
+import fs from 'node:fs';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import * as ownerContext from '../../ownerContext.js';
+import { captureManualPiBillingRecovery, flushScheduledBillingWrites } from '../billingHolds.js';
 import type { ScheduledModelSelection } from '../../maker-ipc/scheduledModelSelection';
 import { describe, expect, it, vi, beforeEach, onTestFinished } from 'vitest';
 import { sharedTaskGuestPeer } from '@cindy/device-link';
@@ -761,6 +767,94 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(maker.createSession).toHaveBeenCalledOnce();
     expect(h.send).toHaveBeenCalledOnce();
     expect(h.listenerCount()).toBe(0);
+  });
+
+  // #12353 / unit: two independent fires on one pinned Pi connection. The existing
+  // single-session recovery tests cannot detect a second upstream generation.
+  // PR #13553: the accepted notification must retain and persist a rejection even when the first atomic rename fails.
+  it.each([0, 1, 2])('skips the next pinned Pi schedule after an explicit Grok billing rejection (failed writes=%i)', async writeFailures => {
+    const dir = await mkdtemp(join(tmpdir(), 'cindy-billing-'));
+    let owner = 1;
+    vi.spyOn(ownerContext, 'ownerScopedPath').mockImplementation((...parts) => join(dir, String(owner), ...parts));
+    vi.spyOn(ownerContext, 'ownerGeneration').mockImplementation(() => owner);
+    vi.spyOn(ownerContext, 'isOwnerBoundaryPending').mockReturnValue(false);
+    const billing = 'HTTP 403: You have run out of credits or need a Grok subscription.';
+    const generation = vi.fn();
+    const { runner, maker, notifier } = createRunnerHarness({} as Session);
+    async function fire(id: string, providerId: string, error?: string, wait?: Promise<void>) {
+      const h = createSessionHarness(async (_input, opts) => {
+        await opts?.onAccepted?.();
+        generation(id);
+        await wait;
+        h.emit(error ? { type: 'error', data: { message: error, isTerminal: true } }
+          : { type: 'done', data: { result: 'done' } });
+        return { accepted: true };
+      });
+      Object.assign(h.session, { id, agentKind: 'pi', model: 'grok-4.6' });
+      vi.mocked(maker.createSession).mockResolvedValueOnce(h.session);
+      return runner.fire(baseSchedule({ id, agentKind: 'pi', model: 'grok-4.6', providerId }), { ...createFireContext(), runId: id });
+    }
+    let release!: () => void;
+    try {
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const inflight = expect(fire('inflight', 'xai', billing, gate)).rejects.toThrow(billing);
+      await vi.waitFor(() => expect(generation).toHaveBeenCalledWith('inflight'));
+      let failedWrites = 0;
+      if (writeFailures) {
+        const rename = fs.renameSync;
+        vi.spyOn(fs, 'renameSync').mockImplementation((src, dst) => {
+          if (failedWrites < writeFailures && dst === join(dir, '1', 'scheduled-billing-holds.json')) {
+            failedWrites++;
+            throw new Error('simulated atomic rename failure');
+          }
+          return rename(src, dst);
+        });
+      }
+      await expect(fire('first', 'xai', billing)).rejects.toThrow(billing);
+      await flushScheduledBillingWrites();
+      expect(failedWrites).toBe(writeFailures);
+      await expect(fire('after-notice', 'xai')).rejects.toThrow('Waiting for credits');
+      await flushScheduledBillingWrites();
+      const persisted = JSON.parse(await readFile(join(dir, '1', 'scheduled-billing-holds.json'), 'utf8'));
+      expect(persisted.holds.xai).toEqual({ version: expect.any(String), notified: true });
+      const stale = captureManualPiBillingRecovery('xai');
+      release();
+      await inflight;
+      const success = { type: 'done', source: 'pi', data: { status: 'completed', result: 'ok' } } as const;
+      stale?.(success);
+      await expect(fire('second', 'xai')).rejects.toThrow('Waiting for credits');
+      expect(notifier.notify).toHaveBeenCalledTimes(1);
+      await expect(fire('ordinary', 'other', 'HTTP 403: forbidden')).rejects.toThrow('forbidden');
+      await expect(fire('other-allowed', 'other')).resolves.toMatchObject({ resultText: 'done' });
+      await expect(fire('rate', 'other', 'HTTP 429: Too many requests')).rejects.toThrow('429');
+      await expect(fire('after-rate', 'other')).resolves.toMatchObject({ resultText: 'done' });
+      await expect(fire('timed', 'other', billing + ' Retry after 5 minutes.')).rejects.toThrow('Retry after');
+      await expect(fire('after-timed', 'other')).resolves.toMatchObject({ resultText: 'done' });
+      await flushScheduledBillingWrites();
+      const stored = JSON.parse(await readFile(join(dir, '1', 'scheduled-billing-holds.json'), 'utf8'));
+      expect(stored.holds.xai).toEqual({ version: expect.any(String), notified: true });
+      owner = 2;
+      await expect(fire('another-owner', 'xai')).resolves.toMatchObject({ resultText: 'done' });
+      owner = 1;
+      const recovered = captureManualPiBillingRecovery('xai');
+      expect(recovered).toBeDefined();
+      recovered?.({ ...success, data: { status: 'cancelled', result: 'partial' } });
+      await expect(fire('still-waiting', 'xai')).rejects.toThrow('Waiting for credits');
+      recovered?.(success);
+      // A different writer records a newer rejection before our queued recovery acquires the lock.
+      const newerHold = { version: '00000000-0000-4000-8000-000000012353', notified: true };
+      fs.writeFileSync(join(dir, '1', 'scheduled-billing-holds.json'), JSON.stringify({ holds: { xai: newerHold } }));
+      await flushScheduledBillingWrites();
+      await expect(fire('after-competing-rejection', 'xai')).rejects.toThrow('Waiting for credits');
+      captureManualPiBillingRecovery('xai')?.(success);
+      await expect(fire('recovered', 'xai')).resolves.toMatchObject({ resultText: 'done' });
+      expect(generation.mock.calls.flat()).toEqual(['inflight', 'first', 'ordinary', 'other-allowed', 'rate', 'after-rate', 'timed', 'after-timed', 'another-owner', 'recovered']);
+    } finally {
+      release?.();
+      await flushScheduledBillingWrites();
+      vi.restoreAllMocks();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('keeps quota failures in scheduler notifications free of IM recovery instructions', async () => {

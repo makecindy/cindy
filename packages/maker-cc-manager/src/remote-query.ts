@@ -19,6 +19,7 @@
  * / supportedModels / mcpServerStatus are not exposed (not MVP).
  */
 
+import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { createAsyncQueue } from './async-queue.js';
 import { NOTIFICATIONS, METHODS } from './protocol.js';
 import type {
@@ -29,6 +30,8 @@ import type {
   SessionClosedNotification,
 } from './protocol.js';
 import type { RpcClient } from './client.js';
+
+const MAX_ERROR_DETAIL_LENGTH = 2048;
 
 export interface RemoteQueryOptions {
   /** Connected + hello'd RpcClient. Caller owns lifecycle. */
@@ -105,6 +108,7 @@ export async function createRemoteQuery(opts: CreateRemoteQueryOptions): Promise
 
   const messageQueue = createAsyncQueue<{ seq: number; message: unknown }>();
   let closed = false;
+  let terminalError: Error | undefined;
   // round-14: 所有内部 RPC 走同款 timeout 兜底, 跟 cc-manager-client 顶层 RPC
   // 一致 (greptile P2 finding remote-query.ts:172)。daemon hang 时 send/control
   // 路径不会无限等。
@@ -124,6 +128,12 @@ export async function createRemoteQuery(opts: CreateRemoteQueryOptions): Promise
       const evt = n.params as SessionClosedNotification;
       if (evt.sessionId === opts.sessionId) {
         if (!closed) {
+          if (evt.reason === 'error') {
+            const detail = typeof evt.detail === 'string'
+              ? redactSensitiveText(evt.detail).trim().slice(0, MAX_ERROR_DETAIL_LENGTH)
+              : '';
+            terminalError = new Error(detail || 'Remote Claude Code session failed');
+          }
           closed = true;
           messageQueue.end();
         }
@@ -282,6 +292,7 @@ export async function createRemoteQuery(opts: CreateRemoteQueryOptions): Promise
       for await (const evt of messageQueue) {
         yield evt.message;
       }
+      if (terminalError) throw terminalError;
     },
   };
 }

@@ -540,8 +540,9 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           // the mask owner separate from the group's administrator.
           const receipt = actionId === 'mask'
             ? await current.chatServer.mask({ groupId, action: input.action as ChatMaskAction | undefined, operationId: input.operationId as string | undefined })
-            : await current.chatServer.mentions({ groupId, before: input.before as string | undefined,
-              readIds: input.readIds as string[] | undefined, operationId: input.operationId as string | undefined });
+            : await current.chatServer.mentions({ groupId, ...(input.history === true ? { history: true } : {}), before: input.before as string | undefined,
+              readIds: input.readIds as string[] | undefined, operationId: input.operationId as string | undefined,
+              originalId: input.originalId as string | undefined });
           if (!receipt.ok) throw new RemoteResourceRegistryError('INVALID_PARAMS', receipt.errorCode);
           ownerService();
           return { result: receipt, effects: [] };
@@ -551,6 +552,15 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
           if (!current.chatServer || typeof deviceId !== 'string' || !visibleGroup.assistantComputers?.some(device => device.id === deviceId))
             throw new RemoteResourceRegistryError('INVALID_PARAMS', 'DEVICE_UNAVAILABLE');
           const receipt = await current.chatServer.manage({ groupId, action: { type: 'assistantDevice', deviceId } });
+          if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
+          return { effects: [{ kind: 'refresh-collection', collectionId: BOT_GROUP_REMOTE_COLLECTION_ID }] };
+        }
+        case 'cancelAssistantDeviceWait': {
+          // Only a request this account sees as its own wait for a computer.
+          const executionId = input.executionId;
+          if (!current.chatServer || typeof executionId !== 'string' || !visibleGroup.assistantDeviceWaits?.some(wait => wait.executionId === executionId))
+            throw new RemoteResourceRegistryError('INVALID_PARAMS', 'INVALID_PARAMS');
+          const receipt = await current.chatServer.manage({ groupId, action: { type: 'cancelAssistantDeviceWait', executionId } });
           if (!receipt.ok) refuse(chatGroupFailure(new Error(receipt.errorCode)));
           return { effects: [{ kind: 'refresh-collection', collectionId: BOT_GROUP_REMOTE_COLLECTION_ID }] };
         }
@@ -610,7 +620,7 @@ export function registerBotGroupRemoteResourceProvider(service: () => BotGroupCh
         case 'update': {
           // A phone cannot point the group at a folder on this computer.
           const patch: Record<string, unknown> = { groupId };
-          for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId', 'allowMentionAllBots', 'allowMemberInvites'] as const) {
+          for (const key of ['name', 'replyMode', 'speakingMode', 'organizerBotId', 'allowMentionAllBots', 'allowMemberMentionAll', 'allowMemberInvites'] as const) {
             if (input[key] !== undefined) patch[key] = input[key];
           }
           if (input.expectedRevision !== undefined) patch.expectedRevision = input.expectedRevision;

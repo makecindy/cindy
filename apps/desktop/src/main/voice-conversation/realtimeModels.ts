@@ -1,7 +1,15 @@
 import { GLM_API_BASE, GLM_REALTIME_FLASH, hasGlmFlashDiscovery, isGlmPresetRoute } from '../../shared/glmRealtimeDiscovery.js';
 import { realtimeSocketUrl, realtimeHeaders } from './realtimeProtocol.js';
-import { isLoopbackProviderUrl, isModelVisible } from '@cindy/model-providers';
 import {
+  BUNDLED_CATALOG,
+  isLoopbackProviderUrl,
+  isModelVisible,
+  resolveModelNativeApi,
+  type Catalog,
+  type ProviderMediaModel,
+} from '@cindy/model-providers';
+import {
+  isOpenAiConversationalRealtimeModel,
   officialRealtimeProtocol,
   realtimeSystemVoices,
   type RealtimeVoiceModel,
@@ -34,16 +42,77 @@ function apiBase(raw: string): URL | undefined {
   }
 }
 
+function nativeProtocol(catalog: Catalog, providerId: string, model: ProviderMediaModel) {
+  const declared =
+    model.nativeApi !== undefined
+      ? model.nativeApi
+      : resolveModelNativeApi(catalog.modelRegistry, providerId, model.id, model.mode);
+  return declared !== undefined
+    ? declared
+    : resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, model.id, model.mode);
+}
+
 type RealtimeRoute = Pick<RealtimeVoiceSelection, 'agent' | 'providerId' | 'modelId' | 'protocol'>;
 
 function bindings(deps: SpeechCatalogDeps, selection?: RealtimeRoute) {
   const result: { model: RealtimeVoiceModel; connection?: RealtimeConnection }[] = [];
   for (const provider of deps.catalog.providers) {
+    if (selection && selection.providerId !== provider.id) continue;
+    if (provider.id === 'xd') {
+      if (!deps.gatewayAllowed) continue;
+      const connection = deps.gatewayConnection();
+      const base = apiBase(connection.baseUrl);
+      if (!connection.apiKey || !base) continue;
+      // Server credentials carry the deployment base shared by chat/media.
+      // Version only Gateway Realtime; BYOK keeps its explicitly configured API prefix.
+      const trimmedPath = base.pathname.replace(/\/+$/, '');
+      base.pathname = trimmedPath.endsWith('/v1') ? trimmedPath : `${trimmedPath}/v1`;
+      for (const media of provider.audioModels ?? []) {
+        if (
+          media.mode !== 'realtime' ||
+          media.disabled ||
+          deps.disabled('xd', media.id) ||
+          media.availability !== 'available'
+        )
+          continue;
+        if (
+          media.modalities &&
+          (!media.modalities.input.includes('audio') || !media.modalities.output.includes('audio'))
+        )
+          continue;
+        const declared = nativeProtocol(deps.catalog, 'xd', media);
+        if (declared !== undefined && declared !== 'openai-realtime') continue;
+        // Gateway mode=realtime also hosts non-conversational ASR/translation streams
+        // (e.g. qwen3-asr-flash-realtime, fun-asr-realtime-*, volc.seedasr.sauc.duration,
+        // gpt-realtime-whisper). Admit only explicitly declared openai-realtime routes
+        // or known OpenAI conversational realtime IDs.
+        if (declared !== 'openai-realtime' && !isOpenAiConversationalRealtimeModel(media.id, true))
+          continue;
+        if (selection && (selection.agent !== undefined || selection.modelId !== media.id))
+          continue;
+        result.push({
+          model: {
+            id: media.id,
+            name: media.name,
+            providerId: 'xd',
+            providerName: provider.name,
+            protocol: 'openai-realtime',
+            protocolLocked: true,
+            pickerVisible: isModelVisible(undefined, media.defaultEnabled),
+          },
+          connection: {
+            url: realtimeSocketUrl(base, media.id, 'openai-realtime'),
+            headers: realtimeHeaders(connection.apiKey),
+            protocol: 'openai-realtime',
+          },
+        });
+      }
+      continue;
+    }
     if (
       provider.source !== 'user' ||
       provider.auth.native ||
-      provider.auth.method !== 'apiKey' ||
-      (selection && selection.providerId !== provider.id)
+      provider.auth.method !== 'apiKey'
     )
       continue;
     for (const media of provider.audioModels ?? []) {
@@ -141,6 +210,7 @@ export function resolveRealtimeConnection(
 
 /** Never move a BYOK credential to another origin or query an arbitrary WS proxy. */
 export function realtimeCustomVoiceConnection(deps: SpeechCatalogDeps, route: RealtimeRoute) {
+  if (route.providerId === 'xd' || !route.agent) throw new Error('voice_catalog_unavailable');
   const connection = resolveRealtimeConnection(deps, route);
   const url = new URL(connection.url);
   if (url.protocol !== 'wss:') throw new Error('voice_catalog_unavailable');

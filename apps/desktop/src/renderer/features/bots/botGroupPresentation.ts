@@ -23,9 +23,12 @@ export {
   botGroupPlanFollowUp,
   botGroupPreviewLine,
   botGroupSidebarPlanPreview,
+  canMentionAllInBotGroup,
   collapseBotGroupMemberJoined,
   continuableRoundEndId,
   currentBotGroupPlanStep,
+  findFirstUnreadBotGroupMessageId,
+  hasUnreadBotGroupMessages,
   isActiveBotGroupMember,
   isBotGroupDivisionBlocked,
   isRunningBotGroupSidebarPreview,
@@ -37,6 +40,7 @@ export {
   type BotGroupComposerPlanState,
   type BotGroupPlanFollowUp,
   type BotGroupSidebarPlanPreview,
+  type BotGroupUnreadBoundary,
 } from '@cindy/maker-shared/botGroupPresentation';
 
 export { BOT_GROUP_MAX_MEMBERS, BOT_GROUP_MIN_MEMBERS };
@@ -51,6 +55,7 @@ export const BOT_GROUP_SETTINGS_PAGE_PARAM = 'groupSettingsPage';
 
 /** Specific error copy when main names a cause the user can act on. */
 export function botGroupErrorKey(errorCode: BotGroupErrorCode | null | undefined, fallback: string): string {
+  if (errorCode === 'PROJECT_NOT_REGISTERED') return 'bots.groupChat.settings.projectDirNotRegistered';
   if (errorCode === 'STOP_OWNERSHIP_UNKNOWN') return 'bots.groupChat.errors.stopOwnershipUnknown';
   if (errorCode === 'REVISION_CONFLICT') return 'bots.groupChat.errors.revisionConflict';
   if (errorCode === 'NOTHING_TO_STOP') return 'bots.groupChat.errors.nothingToStop';

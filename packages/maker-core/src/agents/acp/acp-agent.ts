@@ -19,6 +19,7 @@ import {
   AgentStartupStoppedError,
   BaseAgent,
   isolatedBotProfile,
+  LOCAL_AGENT_CLIENT,
   type AgentDeps,
   type AgentSessionHandle,
   type PiExtraSpawnConfig,
@@ -44,10 +45,14 @@ import {
   deviceHostedPluginEngineMcpServers,
   deviceHostedPluginEngineNote,
 } from '../shared/device-hosted.js';
+import { LIBRARY_READ_ROOT } from '../shared/library-native-read.js';
+import { buildReviewReadGrants, type ReviewReadGrant } from '../shared/review-read-scope.js';
 import { NATIVE_SUBSCRIPTION_ACCOUNT } from '../../interfaces/auth-adapter.js';
 import {
   AcpAccountError,
   AcpAuthRequiredError,
+  AcpRequiredMcpUnavailableError,
+  requiredOrcaMcpServers,
   openAcpSession,
   type AcpClientInfo,
   type AcpVerificationRecovery,
@@ -113,6 +118,8 @@ export interface AcpAgentDeps extends AgentDeps {
   onSessionCapabilities?: (harnessKey: string, capabilities: Capabilities) => void;
   /** Captures the local settings owner before the endpoint starts. */
   observeModelDetails?: (providerId: string) => (details: AcpReportedModelDetails | undefined) => void;
+  /** Scoped to the same local provider as the model details; never observes hosted tasks. */
+  observeContextWindow?: (providerId: string) => (modelId: string, size: number) => void;
   /**
    * The Skills a task in this directory can use (the same discovery and enablement as the built-in Pi
    * engine): the briefing ahead of the first message, `/<skill>` expansion and the `/` menu. A failure
@@ -128,7 +135,7 @@ const NO_INIT = buildAcpCapabilities(
       loadSession: false,
       promptCapabilities: { image: false, audio: false, embeddedContext: false },
       mcpCapabilities: { http: false, sse: false },
-      sessionCapabilities: { resume: false, close: false, list: false, additionalDirectories: false },
+      sessionCapabilities: { resume: false, close: false, list: false, additionalDirectories: false, systemPrompt: false },
     },
     authMethods: [],
     steering: false,
@@ -242,26 +249,43 @@ export class AcpAgent extends BaseAgent {
       }));
     }
     const hosted = opts.deviceHosted;
-    if (opts.reviewMode) {
-      throw new AgentStartupStoppedError(new NotSupportedError('reviewMode', { supported: false, reason: 'not-implemented' }));
+    const reviewMode = opts.reviewMode === true;
+    if (reviewMode && hosted) {
+      throw new AgentStartupStoppedError(new NotSupportedError('reviewMode', {
+        supported: false,
+        reason: 'not-implemented',
+        message: 'Review is not available for tasks whose agent runs on another computer',
+      }));
     }
     const harnessKey = acpHarnessKeyFromProviderId(opts.providerId);
     if (!harnessKey) {
       throw new AgentStartupStoppedError(new Error('A plugin engine task needs its harness id (acp-plugin:<plugin>:<harness>)'));
     }
 
+    let reviewReadGrants: ReviewReadGrant[] = [];
+    if (reviewMode) {
+      try {
+        reviewReadGrants = await buildReviewReadGrants(opts.workingDir, opts.reviewReadPaths ?? []);
+      } catch (error) {
+        throw new AgentStartupStoppedError(error);
+      }
+    }
+
     const managed = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
     // The base provider can rotate through managed logins. Their details belong only to a
     // separate account provider, never to the original login or a guest's settings.
-    const observeDetails = !hosted && opts.providerId
+    const observedProvider = !hosted && opts.providerId
       && (!managed || managed.defaultProfile || opts.providerId !== acpProviderIdForHarness(harnessKey))
-      ? this.acpDeps.observeModelDetails?.(opts.providerId)
+      ? opts.providerId
       : undefined;
+    const observeDetails = observedProvider ? this.acpDeps.observeModelDetails?.(observedProvider) : undefined;
+    const observeContextWindow = observedProvider ? this.acpDeps.observeContextWindow?.(observedProvider) : undefined;
     const logger = this.deps.logger.child(`acp:${harnessKey}`);
     const botMcpPolicy = isolatedBotProfile(opts.botRuntimeProfile)?.mcpPolicy;
     // Mutable object shared by reference with the host MCP bridge so live
     // `setVendorOptions` calls (e.g. upgrading a live task to Orca Lead) take effect immediately.
     const liveVendorOptions: Record<string, unknown> = { ...(opts.vendorOptions ?? {}) };
+    const requiredRoleServers = requiredOrcaMcpServers(reviewMode ? undefined : liveVendorOptions.orcaRole);
     const memoryEnabled = (opts.makerMemoryEnabled ?? this.deps.runtimeConfig.makerMemoryEnabled) === true;
     const memoryScopeKey = memoryEnabled && !hosted
       ? (opts.makerMemoryScopeKey ?? (await resolveMemoryScopeKey(opts.workingDir, opts.remoteHostId)))
@@ -269,7 +293,8 @@ export class AcpAgent extends BaseAgent {
     let extra: PiExtraSpawnConfig | null = null;
     // Hosted for another computer: Cindy tools are that computer's and arrive through the tunnel,
     // so this computer's own tool bridge (and its installed plugins, memory, sessions) stays out.
-    if (!hosted && this.deps.preparePiExtraSpawnConfig) {
+    // Read-only /review strips all MCP servers, matching claude-code and pi.
+    if (!hosted && !reviewMode && this.deps.preparePiExtraSpawnConfig) {
       try {
         extra = await this.deps.preparePiExtraSpawnConfig(this.deps.mcpProviders ?? [], {
           // Same Cindy tool scope as the built-in Pi engine (product decision 2026-11-18).
@@ -288,6 +313,9 @@ export class AcpAgent extends BaseAgent {
           recordMcpToolResults: true,
         });
       } catch (error) {
+        if (requiredRoleServers.length > 0) {
+          throw new AgentStartupStoppedError(new AcpRequiredMcpUnavailableError(requiredRoleServers));
+        }
         logger.error('acp: Cindy tool bridge unavailable; starting without Cindy tools', {
           message: error instanceof Error ? error.message : String(error),
         });
@@ -301,8 +329,15 @@ export class AcpAgent extends BaseAgent {
       }
     };
 
+    const mcpServers = reviewMode ? [] : hosted ? acpMcpServersForHostedTask(hosted) : acpMcpServersFromBridge(extra);
+    const missingRoleServers = requiredRoleServers.filter((name) => !mcpServers.some((server) => server.name === name));
+    if (missingRoleServers.length > 0) {
+      disposeBridge();
+      throw new AgentStartupStoppedError(new AcpRequiredMcpUnavailableError(missingRoleServers));
+    }
+
     // Only a host-provided companion profile supplies the identity for this chat.
-    const companionBriefing = opts.botRuntimeProfile ? [
+    const companionBriefing = !reviewMode && opts.botRuntimeProfile ? [
       opts.botProfilePrompt ?? '',
       opts.botProfileContextPrompt ?? '',
       memoryEnabled && opts.makerMemoryIndexSnapshot?.trim()
@@ -341,7 +376,8 @@ export class AcpAgent extends BaseAgent {
     // (`deviceHostedGhostRoster`, only when the tunnel offers the gateway; this computer's plugins never
     // enter it), and no Skill list: there is no cross-computer source for one. A resumed session already
     // has the briefing, and resuming never falls back to a new session, so nothing is read for it.
-    const capabilities = isolatedBotProfile(opts.botRuntimeProfile) || opts.resumeSessionId ? null
+    // Read-only /review strips roster, skills, memory, companion profile and host briefings.
+    const capabilities = reviewMode || isolatedBotProfile(opts.botRuntimeProfile) || opts.resumeSessionId ? null
       : hosted ? { pluginRoster: deviceHostedGhostRoster(hosted, opts.ghostRosterSnapshot, () => ''), skills: [] }
       : {
         pluginRoster: this.readPluginRoster(opts.workingDir, logger),
@@ -358,7 +394,7 @@ export class AcpAgent extends BaseAgent {
       return raw ? defusePluginEngineSlashMentions(raw, skillCommandNames) : '';
     };
     // The workspace note comes first: without it the agent has no way to know where the project is.
-    const briefing = (acceptedMcpServers: readonly string[]): string => [
+    const briefing = (acceptedMcpServers: readonly string[]): string => reviewMode ? '' : [
       hosted ? deviceHostedPluginEngineNote(hosted, opts.workingDir) : '',
       companionBriefing,
       renderMemoryBriefing(acceptedMcpServers),
@@ -369,12 +405,15 @@ export class AcpAgent extends BaseAgent {
     // message that asks for one (resumed conversations included). Same exclusions as the Skill list:
     // an isolated companion keeps its frozen capability set, and a task of another computer has no
     // Skill source here.
-    const expandSlashInvocation = isolatedBotProfile(opts.botRuntimeProfile) || hosted ? undefined
+    const expandSlashInvocation = reviewMode || isolatedBotProfile(opts.botRuntimeProfile) || hosted ? undefined
       : (text: string) => expandPluginEngineSkillInvocation(
           text,
           () => this.readSessionSkills(opts.workingDir, logger),
           (message) => logger.warn('acp: Skill invocation left unexpanded', { message }),
         );
+    const extraDirs = reviewMode || hosted ? [] : (opts.extraDirs ?? []);
+    const writableDirs = reviewMode || hosted ? [] : (opts.writableDirs ?? []);
+    const libraryRoot = reviewMode || hosted ? undefined : opts[LIBRARY_READ_ROOT];
     // The host's account pool picked an account Cindy added (its own directory); the agent's
     // original login runs exactly as before.
     const account = opts[NATIVE_SUBSCRIPTION_ACCOUNT];
@@ -384,6 +423,14 @@ export class AcpAgent extends BaseAgent {
       ...(hosted?.guest ? { guestWorkspace: true } : {}),
       ...(accountDir ? { accountDir } : {}),
     };
+    // A task hosted for another computer (the same account's or a provider-share guest's) gets the
+    // personal instructions that computer sent with the task (`userPrompt` of the remote-agent start
+    // options), never this computer's own: hosted starts bypass this host's personalization.
+    // A read-only /review runs without the user's own instructions, like it runs without memory:
+    // the frozen start preferences can still carry them after review isolation cleared userPrompt.
+    const personalSystemPrompt = reviewMode || isolatedBotProfile(opts.botRuntimeProfile)
+      ? undefined
+      : opts.userPrompt?.trim();
     const open = async (): Promise<AcpSession> => {
       const tracked = trackClose(Object.keys(connectOptions).length
         ? await this.acpDeps.endpoints.connect(harnessKey, connectOptions)
@@ -394,26 +441,35 @@ export class AcpAgent extends BaseAgent {
           cwd: opts.workingDir,
           clientInfo: this.acpDeps.clientInfo,
           ...(!hosted && opts.sessionId ? { recoverVerification: this.acpDeps.verificationForTask?.(harnessKey, opts.sessionId) } : {}),
-          mcpServers: hosted ? acpMcpServersForHostedTask(hosted) : acpMcpServersFromBridge(extra),
-          // Without the replacement file and command tools the agent could do nothing on the project.
-          ...(hosted ? { requiredMcpServers: [DEVICE_HOSTED_EXEC_MCP_SERVER] } : {}),
-          ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
+          mcpServers,
+          // A role is not hydrated until the negotiated ACP transport can carry its tools.
+          requiredMcpServers: [...(hosted ? [DEVICE_HOSTED_EXEC_MCP_SERVER] : []), ...requiredRoleServers],
+          getOrcaRole: reviewMode ? undefined : () => liveVendorOptions.orcaRole,
+          ...(!reviewMode && opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
           ...(opts.model ? { model: opts.model } : {}),
-          ...(opts.botRuntimeProfile || hosted ? { requireSelectedModel: true } : {}),
+          ...(!reviewMode && (opts.botRuntimeProfile || hosted) ? { requireSelectedModel: true } : {}),
           ...(opts.effort ? { effort: opts.effort } : {}),
-          ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
-          ...(opts.planMode ? { planMode: true } : {}),
-          ...(!hosted && opts.extraDirs && opts.extraDirs.length > 0 ? { extraDirs: opts.extraDirs } : {}),
+          ...(reviewMode ? { permissionMode: 'ask' as const } : opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
+          ...(!reviewMode && opts.planMode ? { planMode: true } : {}),
+          ...(extraDirs.length > 0 ? { extraDirs } : {}),
+          ...(writableDirs.length > 0 ? { writableDirs } : {}),
+          ...(libraryRoot !== undefined ? { libraryRoot } : {}),
+          ...(reviewMode ? { reviewMode: true, reviewReadGrants } : {}),
           // Device-hosted tasks mutate files on the controller computer through cindy_exec,
           // where RemoteExecutor captures pre-write snapshots on the real workspace.
-          ...(!hosted && opts.sessionId && this.deps.turnChangeCapture
+          ...(!reviewMode && !hosted && opts.sessionId && this.deps.turnChangeCapture
             ? { captureSessionId: opts.sessionId, turnChangeCapture: this.deps.turnChangeCapture }
             : {}),
+          ...(personalSystemPrompt ? { personalSystemPrompt } : {}),
           briefing,
+          bindOrcaDiscoveryBriefing: !reviewMode && !hosted && !opts.botRuntimeProfile && !opts[LOCAL_AGENT_CLIENT] &&
+            !opts.pluginEngineBriefing && !liveVendorOptions.orcaRemoteWorker ? opts.bindPluginEngineOrcaDiscoveryBriefing : undefined,
+          readRoleBriefing: reviewMode ? undefined : opts.readPluginEngineRoleBriefing,
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),
           ...(expandSlashInvocation ? { expandSlashInvocation } : {}),
           ...(extra?.takeMcpToolResult ? { takeMcpToolResult: extra.takeMcpToolResult } : {}),
+          ...(observeContextWindow ? { observeContextWindow } : {}),
           logger,
           onVendorOptionsChange: (patch) => {
             for (const [key, value] of Object.entries(patch)) {

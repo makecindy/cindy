@@ -354,6 +354,11 @@ export class AcpUpdateTranslator {
       this.emitToolUse(tool, events);
     } else {
       // Later updates replace only the fields they carry.
+      const namingChanged = !tool.settled && (
+        (fields.name !== undefined && fields.name !== tool.name)
+        || (fields.title !== undefined && fields.title !== tool.title)
+      );
+      const wasMountedMcp = namingChanged && this.mountedMcpTool(tool) !== null;
       if (fields.title !== undefined) tool.title = fields.title;
       if (fields.name !== undefined) tool.name = fields.name;
       if (fields.kind !== undefined) tool.kind = fields.kind;
@@ -361,8 +366,9 @@ export class AcpUpdateTranslator {
       if (fields.content !== undefined) tool.content = fields.content;
       if (fields.locations !== undefined) tool.locations = fields.locations;
       if (fields.rawOutput !== undefined) tool.rawOutput = fields.rawOutput;
-      if (!tool.settled && fields.rawInput !== undefined && !isDeepStrictEqual(fields.rawInput, tool.rawInput)) {
-        tool.rawInput = fields.rawInput;
+      const inputChanged = fields.rawInput !== undefined && !isDeepStrictEqual(fields.rawInput, tool.rawInput);
+      if (!tool.settled && (inputChanged || (namingChanged && (wasMountedMcp || this.mountedMcpTool(tool))))) {
+        if (inputChanged) tool.rawInput = fields.rawInput;
         this.emitToolUse(tool, events, true);
       }
     }
@@ -372,19 +378,33 @@ export class AcpUpdateTranslator {
     return tool;
   }
 
+  private mountedMcpTool(tool: ToolState): ReturnType<typeof parseAcpMcpToolName> {
+    const mounted = this.options.mcpServerNames;
+    if (!mounted?.length) return null;
+    for (const candidate of [tool.name, tool.title]) {
+      if (!candidate) continue;
+      const parsed = parseAcpMcpToolName(candidate, mounted);
+      if (parsed && mounted.includes(parsed.serverName)) return parsed;
+    }
+    return null;
+  }
+
   private emitToolUse(tool: ToolState, events: AgentEvent[], inputPatch = false): void {
     const input = tool.rawInput !== null && typeof tool.rawInput === 'object'
       ? tool.rawInput
       : tool.rawInput === undefined ? {} : { value: tool.rawInput };
+    const mcp = this.mountedMcpTool(tool);
+    const toolName = acpToolDisplayName(tool);
     events.push({
       type: 'tool_use',
       data: {
         ...parseMessageToolUse({
           role: 'tool_use',
-          content: { toolName: acpToolDisplayName(tool), input },
+          content: { toolName, input },
           toolUseId: tool.toolCallId,
         }),
         toolUseId: tool.toolCallId,
+        ...(mcp ? { mcpToolName: `mcp:${mcp.serverName}:${mcp.toolName}` } : {}),
         ...(tool.kind ? { acpKind: tool.kind } : {}),
         ...(tool.locations?.length ? { acpLocations: tool.locations } : {}),
         ...(inputPatch ? { acpInputPatch: true } : {}),
