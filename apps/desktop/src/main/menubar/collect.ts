@@ -719,6 +719,8 @@ export function usageScope(
     const money = finite(row.money?.amount);
     if (harness === 'acp') {
       // Keep the three built-in slots and the existing auxiliary slot stable for older clients.
+      if (row.acpHasEstimate) daily.acpEstimate = (daily.acpEstimate ?? 0) + money;
+      if (row.acpMissingPrice || !row.acpHasEstimate) daily.acpMissingPrice = true;
       daily.tokens[3] ??= 0;
       daily.tokens[4] = (daily.tokens[4] ?? 0) + finite(row.tokens);
     } else {

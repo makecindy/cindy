@@ -78,7 +78,10 @@ class WidgetDay(json: JSONObject) {
   val models: List<Double>? = json.optJSONArray("models")?.doubles()
   /** Tokens per `WidgetUsage.models` entry, then everything else. */
   val modelTokens: List<Double>? = json.optJSONArray("modelTokens")?.doubles()
-  val total: Double get() = money.sum()
+  val acpEstimate = (json.opt("acpEstimate") as? Number)?.toDouble()?.takeIf { it.isFinite() && it >= 0 }
+  val hasMissingEstimate = json.opt("acpMissingPrice") as? Boolean
+    ?: (acpEstimate == null && (tokens.getOrNull(4) ?: 0.0) > 0)
+  val total: Double get() = money.sum() + (acpEstimate ?: 0.0)
   val totalTokens: Double get() = tokens.sum()
 }
 
@@ -339,6 +342,15 @@ class WidgetFormat(val context: Context, val snapshot: WidgetSnapshot?, val nowM
   }
 
   fun text(key: String): String = WidgetText.text(context, key, locale)
+
+  fun referenceValue(value: Double, missing: Boolean, hasQuote: Boolean): String {
+    val formatted = if (value > 0 && value < 0.01) "<" + money(0.01) else money(value)
+    return when {
+      !missing -> formatted
+      value > 0 || hasQuote -> "$formatted · ${text("partialEstimate")}"
+      else -> text("estimateUnavailable")
+    }
+  }
 
   fun money(value: Double): String {
     val symbol = snapshot?.moneySymbol ?: "$"

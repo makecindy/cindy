@@ -67,7 +67,10 @@ struct WidgetDay: Decodable {
   /// Tokens per `WidgetUsage.models` entry, then everything else.
   var modelTokens: [Double]? = nil
 
-  var total: Double { money.reduce(0, +) }
+  var acpEstimate: Double? = nil
+  var acpMissingPrice: Bool? = nil
+  var hasMissingEstimate: Bool { acpMissingPrice ?? (acpEstimate == nil && tokens.count > 4 && tokens[4] > 0) }
+  var total: Double { money.reduce(0, +) + (acpEstimate ?? 0) }
   var totalTokens: Double { tokens.reduce(0, +) }
 }
 
@@ -280,6 +283,13 @@ struct WidgetFormat {
     return text
   }
 
+  func referenceValue(_ value: Double, missing: Bool, hasQuote: Bool) -> String {
+    let formatted = value > 0 && value < 0.01 ? "<" + money(0.01) : money(value)
+    guard missing else { return formatted }
+    if value > 0 || hasQuote { return "\(formatted) · \(WidgetText.text("partialEstimate", locale: locale))" }
+    return WidgetText.text("estimateUnavailable", locale: locale)
+  }
+
   func money(_ value: Double) -> String {
     let symbol = snapshot?.moneySymbol ?? "$"
     if value >= 10_000 { return symbol + String(format: "%.1fk", value / 1000) }
@@ -383,6 +393,7 @@ struct WidgetFormat {
 enum WidgetText {
   private static let table: [String: [String: String]] = [
     "zh-Hans": [
+      "estimateUnavailable": "暂无估值", "partialEstimate": "部分用量暂无估值",
       "quotaName": "订阅余量", "quotaDescription": "每个订阅还剩多少、什么时候回满。",
       "usageName": "每日用量", "usageDescription": "今天用了多少，和最近每天的走势。",
       "emptyTitle": "还没读到余量", "emptyBody": "打开 Cindy 连上一台电脑，这里就会显示每个订阅还剩多少、什么时候回满。",
@@ -392,6 +403,7 @@ enum WidgetText {
       "todayNone": "今天还没有用量", "resetsIn": "{{duration}}后重置", "other": "其他",
     ],
     "zh-Hant": [
+      "estimateUnavailable": "暫無估值", "partialEstimate": "部分用量暫無估值",
       "quotaName": "訂閱餘量", "quotaDescription": "每個訂閱還剩多少、什麼時候回滿。",
       "usageName": "每日用量", "usageDescription": "今天用了多少，和最近每天的走勢。",
       "emptyTitle": "還沒讀到餘量", "emptyBody": "打開 Cindy 連上一台電腦，這裡就會顯示每個訂閱還剩多少、什麼時候回滿。",
@@ -401,6 +413,7 @@ enum WidgetText {
       "todayNone": "今天還沒有用量", "resetsIn": "{{duration}}後重置", "other": "其他",
     ],
     "ja": [
+      "estimateUnavailable": "推定額なし", "partialEstimate": "一部の利用量は未推定",
       "quotaName": "サブスクの残り", "quotaDescription": "各サブスクリプションの残りと、いつ満タンに戻るか。",
       "usageName": "毎日の使用量", "usageDescription": "今日の使用量と、最近の日ごとの推移。",
       "emptyTitle": "残りをまだ取得できていません", "emptyBody": "Cindy を開いてコンピュータに接続すると、各サブスクリプションの残りがここに表示されます。",
@@ -418,6 +431,7 @@ enum WidgetText {
       "durationShort.hours": "{{h}}時間", "durationShort.minutes": "{{m}}分",
     ],
     "ko": [
+      "estimateUnavailable": "추정액 없음", "partialEstimate": "일부 사용량 추정 불가",
       "quotaName": "구독 남은 양", "quotaDescription": "구독마다 얼마나 남았는지, 언제 다시 채워지는지.",
       "usageName": "일일 사용량", "usageDescription": "오늘 사용량과 최근 며칠의 추이.",
       "emptyTitle": "아직 남은 양을 읽지 못했어요", "emptyBody": "Cindy를 열고 컴퓨터에 연결하면 구독마다 얼마나 남았는지 여기에 표시돼요.",
@@ -435,6 +449,7 @@ enum WidgetText {
       "durationShort.hours": "{{h}}시간", "durationShort.minutes": "{{m}}분",
     ],
     "de": [
+      "estimateUnavailable": "Keine Schätzung", "partialEstimate": "Teilweise ohne Schätzung",
       "quotaName": "Abo-Kontingent",
       "quotaDescription": "Wie viel jedes Abo noch hat und wann es sich wieder auffüllt.",
       "usageName": "Tägliche Nutzung",
@@ -474,6 +489,7 @@ enum WidgetText {
       "durationShort.minutes": "{{m}} Min.",
     ],
     "es": [
+      "estimateUnavailable": "Sin estimación", "partialEstimate": "Parte del uso sin estimar",
       "quotaName": "Cuota de suscripciones",
       "quotaDescription": "Cuánto le queda a cada suscripción y cuándo se recarga.",
       "usageName": "Uso diario",
@@ -513,6 +529,7 @@ enum WidgetText {
       "durationShort.minutes": "{{m}}m",
     ],
     "fr": [
+      "estimateUnavailable": "Estimation indisponible", "partialEstimate": "Utilisation partiellement estimée",
       "quotaName": "Quota des abonnements",
       "quotaDescription": "Ce qu'il reste à chaque abonnement et quand il se recharge.",
       "usageName": "Usage quotidien",
@@ -552,6 +569,7 @@ enum WidgetText {
       "durationShort.minutes": "{{m}} min",
     ],
     "pt-BR": [
+      "estimateUnavailable": "Sem estimativa", "partialEstimate": "Parte do uso sem estimativa",
       "quotaName": "Cota das assinaturas",
       "quotaDescription": "Quanto resta em cada assinatura e quando ela renova.",
       "usageName": "Uso diário",
@@ -591,6 +609,7 @@ enum WidgetText {
       "durationShort.minutes": "{{m}}m",
     ],
     "pt-PT": [
+      "estimateUnavailable": "Sem estimativa", "partialEstimate": "Parte da utilização sem estimativa",
       "quotaName": "Quota das subscrições",
       "quotaDescription": "Quanto resta em cada subscrição e quando volta a encher.",
       "usageName": "Utilização diária",
@@ -630,6 +649,7 @@ enum WidgetText {
       "durationShort.minutes": "{{m}}m",
     ],
     "en": [
+      "estimateUnavailable": "No estimate", "partialEstimate": "Some usage has no estimate",
       "quotaName": "Subscription quota", "quotaDescription": "What each subscription has left and when it refills.",
       "usageName": "Daily usage", "usageDescription": "Today's usage and the trend of recent days.",
       "emptyTitle": "No quota yet", "emptyBody": "Open Cindy and connect a computer to see what each subscription has left.",

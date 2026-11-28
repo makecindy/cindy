@@ -56,7 +56,7 @@ const DDL = `
     cost_usd REAL NOT NULL DEFAULT 0,
     cost_amount REAL NOT NULL DEFAULT 0,
     cost_currency TEXT NOT NULL DEFAULT 'USD',
-    cost_is_approximate INTEGER NOT NULL DEFAULT 0,
+    acp_missing_price INTEGER, cost_is_approximate INTEGER NOT NULL DEFAULT 0,
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     cache_read_tokens INTEGER NOT NULL DEFAULT 0,

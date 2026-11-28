@@ -276,7 +276,7 @@ struct UsageWidgetView: View {
     let todayLabel = isCurrent ? format.s("today") : format.monthDay(days[days.count - 1])
     let accented = renderingMode == .accented
     let averageLabel = "\(format.s("dailyAverage")) \(format.tokens(average)) \(format.s("tokenUnit"))"
-    let todayValue = "\(WidgetText.text("valueBasis", locale: format.locale)) \(format.money(today.total))"
+    let todayValue = "\(WidgetText.text("valueBasis", locale: format.locale)) \(format.referenceValue(today.total, missing: today.hasMissingEstimate, hasQuote: today.acpEstimate != nil))"
     switch family {
     case .systemSmall:
       VStack(alignment: .leading, spacing: 0) {
@@ -317,7 +317,7 @@ struct UsageWidgetView: View {
         }
         .font(.system(size: 11)).foregroundStyle(WidgetPalette.ink3).lineLimit(1)
         TokenFigure(tokens: today.totalTokens, size: 46, format: format).padding(.top, 5)
-        Text("\(WidgetText.text("valueBasisLong", locale: format.locale)) \(format.money(today.total))")
+        Text("\(WidgetText.text("valueBasisLong", locale: format.locale)) \(format.referenceValue(today.total, missing: today.hasMissingEstimate, hasQuote: today.acpEstimate != nil))")
           .font(.system(size: 11)).foregroundStyle(WidgetPalette.ink3).padding(.top, 3)
         Spacer(minLength: 6)
         AverageLegend(text: averageLabel).padding(.bottom, 5)
@@ -335,7 +335,7 @@ struct UsageWidgetView: View {
           Text(format.tokens(tokens)).font(WidgetNumFont.font(18)).foregroundStyle(WidgetPalette.ink)
           Text(format.s("tokenUnit")).font(.system(size: 11)).foregroundStyle(WidgetPalette.ink3)
           Spacer(minLength: 4)
-          Text("\(WidgetText.text("valueBasis", locale: format.locale)) \(format.money(total)) · \(format.s("paid")) \(format.money(paid))")
+          Text("\(WidgetText.text("valueBasis", locale: format.locale)) \(format.referenceValue(total, missing: daily.contains { $0.hasMissingEstimate }, hasQuote: daily.contains { $0.acpEstimate != nil })) · \(format.s("paid")) \(format.money(paid))")
             .font(.system(size: 11)).foregroundStyle(WidgetPalette.ink3).lineLimit(1)
         }
         BreakdownSplit(rows: breakdown.ranked(limit: 4) { key in daily.reduce(0) { $0 + breakdown.value($1, key) } },

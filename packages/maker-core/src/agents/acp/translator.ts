@@ -35,9 +35,9 @@ import {
   normalizeToolCallFields,
   type AcpPlanEntry,
   type AcpRecord,
+  type AcpPromptUsageReceipt,
   type AcpStopReason,
   type AcpToolCallFields,
-  type AcpTurnUsage,
 } from './protocol.js';
 
 const MAX_TOOL_OUTPUT_CHARS = 200_000;
@@ -286,7 +286,7 @@ export class AcpUpdateTranslator {
    * or failed turn marks unfinished calls as interrupted; other stop reasons keep
    * the earlier rule and treat them as done.
    */
-  finish(outcome: AcpTurnOutcome, receipt?: { usage: AcpTurnUsage; usageModel?: string }): AgentEvent[] {
+  finish(outcome: AcpTurnOutcome, receipt?: AcpPromptUsageReceipt & { usageParts?: AcpPromptUsageReceipt[] }): AgentEvent[] {
     const events = this.flushPending();
     this.planTurnSeq += 1;
     const interrupted = 'error' in outcome || outcome.stopReason === 'cancelled';

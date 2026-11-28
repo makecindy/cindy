@@ -360,16 +360,23 @@ describe('openAcpSession handshake', () => {
 });
 
 describe('AcpSession turns', () => {
+  const quote = { currency: 'USD', inputPerMtok: 2, outputPerMtok: 4, cacheReadPerMtok: 1, cacheWritePerMtok: 3 };
+  const modelOptions = (price: typeof quote) => [{ id: 'model', name: 'Model', category: 'model', type: 'select',
+    currentValue: 'quoted', options: [{ value: 'quoted', name: 'Quoted', _meta: { cindy: { referencePrice: price } } }],
+  }];
   // Tier 1: the provider emitted a stand-alone warning after an edit. The native turn must stay
   // pending and continue once on that same session, without resending the original command.
   // #13373: each native prompt reports its own spend. Missing usage on a continuation must preserve the first report.
   it.each([
     { name: 'both prompts report usage', resumedUsage: { inputTokens: 50, outputTokens: 6, cachedReadTokens: 8, cachedWriteTokens: 1 },
       expected: { inputTokens: 60, outputTokens: 9, cacheReadTokens: 12, cacheCreationTokens: 3 } },
+    { name: 'the same model has a new quote on continuation', changedQuote: true,
+      resumedUsage: { inputTokens: 50, outputTokens: 6, cachedReadTokens: 8, cachedWriteTokens: 1 },
+      expected: { inputTokens: 60, outputTokens: 9, cacheReadTokens: 12, cacheCreationTokens: 3 } },
     { name: 'only the first prompt reports usage', resumedUsage: undefined,
       expected: { inputTokens: 10, outputTokens: 3, cacheReadTokens: 4, cacheCreationTokens: 2 } },
-  ])('holds a verification warning and settles usage once when $name', async ({ resumedUsage, expected }) => {
-    const agent = createFakeAgent({ handlers: { '_cindy/checkAccountVerification': () => ({ status: 'ready' }) } });
+  ])('holds a verification warning and settles usage once when $name', async ({ resumedUsage, expected, changedQuote }) => {
+    const agent = createFakeAgent({ configOptions: modelOptions(quote), handlers: { '_cindy/checkAccountVerification': () => ({ status: 'ready' }) } });
     const owner = deferred<void>();
     const { session, events } = await open(agent, { recoverVerification: async (probe) => {
       await owner.promise;
@@ -384,6 +391,8 @@ describe('AcpSession turns', () => {
     });
     await new Promise(resolve => setImmediate(resolve));
     expect(events.some(e => e.type === 'done')).toBe(false);
+    const nextQuote = { ...quote, inputPerMtok: 7 };
+    if (changedQuote) agent.update({ sessionUpdate: 'config_option_update', configOptions: modelOptions(nextQuote) });
     owner.resolve();
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(2));
     expect(agent.prompts[1]!.params.sessionId).toBe('sess-1');
@@ -391,13 +400,20 @@ describe('AcpSession turns', () => {
     agent.update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Finished.' } });
     agent.prompts[1]!.settle.resolve({ stopReason: 'end_turn', usage: resumedUsage });
     await vi.waitFor(() => expect(events.filter(e => e.type === 'done')).toHaveLength(1));
-    expect(events.at(-1)?.data).toMatchObject({ usage: expected });
+    expect(events.at(-1)?.data).toMatchObject({
+      usage: expected, usageModel: 'quoted',
+      ...(changedQuote ? { usageParts: [
+        { usageModel: 'quoted', usagePrice: quote, usage: { inputTokens: 10 } },
+        { usageModel: 'quoted', usagePrice: nextQuote, usage: { inputTokens: 50 } },
+      ] } : { usagePrice: quote }),
+    });
+    if (changedQuote) expect(events.at(-1)?.data).not.toHaveProperty('usagePrice');
     await session.close();
   });
 
   // Tier 1, #13373: a user may stop while the QR is on screen, or verification may fail after a billed edit.
   it.each(['stop', 'unavailable'] as const)('keeps the first usage report when verification ends with %s', async (action) => {
-    const agent = createFakeAgent();
+    const agent = createFakeAgent({ configOptions: modelOptions(quote) });
     const outcome = deferred<'ready' | 'unavailable'>();
     const recoverVerification = vi.fn(() => outcome.promise);
     const { session, events } = await open(agent, { recoverVerification });
@@ -411,7 +427,7 @@ describe('AcpSession turns', () => {
     const terminalType = action === 'stop' ? 'done' : 'error';
     await vi.waitFor(() => expect(events.at(-1)?.type).toBe(terminalType));
     expect(events.at(-1)?.data).toMatchObject({
-      type: 'acp/prompt_end', usage: { inputTokens: 20, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 },
+      type: 'acp/prompt_end', usagePrice: quote, usage: { inputTokens: 20, outputTokens: 5, cacheReadTokens: 0, cacheCreationTokens: 0 },
       ...(action === 'stop' ? { stopReason: 'cancelled' } : { isTerminal: true, reason: 'acp-auth-required' }),
     });
     expect(agent.prompts).toHaveLength(1);
@@ -1337,8 +1353,11 @@ describe('AcpSession model and effort', () => {
 
   // #12433 (unit): an active prompt's usage belongs to its model even if the
   // endpoint changes its model option before returning the prompt result.
-  it('reports the model selected when the metered prompt was sent', async () => {
-    const agent = createFakeAgent({ configOptions });
+  it('reports the model and connection quote selected when the metered prompt was sent', async () => {
+    const usagePrice = { currency: 'USD', inputPerMtok: 2, outputPerMtok: 4 };
+    const agent = createFakeAgent({ configOptions: [{ ...configOptions[0], options: [
+      { value: 'v4-flash', name: 'Flash', _meta: { cindy: { referencePrice: usagePrice } } },
+    ] }] });
     const { session, events } = await open(agent);
     await session.send({ type: 'user', content: 'hi' });
     await vi.waitFor(() => expect(agent.prompts).toHaveLength(1));
@@ -1351,7 +1370,7 @@ describe('AcpSession model and effort', () => {
       stopReason: 'end_turn', usage: { inputTokens: 1, outputTokens: 0 },
     });
     await vi.waitFor(() => expect(events.at(-1)).toMatchObject({
-      type: 'done', data: { usageModel: 'v4-flash', usage: { inputTokens: 1 } },
+      type: 'done', data: { usageModel: 'v4-flash', usagePrice, usage: { inputTokens: 1 } },
     }));
   });
 

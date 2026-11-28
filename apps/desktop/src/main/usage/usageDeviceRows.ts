@@ -273,6 +273,7 @@ export function sanitizeUsageDeviceRows(value: unknown): UsageDeviceRows | null 
         : {}),
       ...(isShortString(row.source) ? { source: row.source } : {}),
       ...(isShortString(row.providerId) ? { providerId: row.providerId } : {}),
+      ...(row.agentKind === 'acp' && row.acpMissingPrice === true ? { acpMissingPrice: true } : {}),
       model: row.model,
       money,
       inputTokens: finiteNonNegative(row.inputTokens),

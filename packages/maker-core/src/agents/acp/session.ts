@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile as fsReadFile } from 'node:fs/promises';
 import { basename, extname, resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 import type { Logger } from '../../interfaces/logger.js';
 import {
   TurnPermissionPolicyUnsupportedError,
@@ -85,6 +86,7 @@ import {
   type AcpPermissionOption,
   type AcpPermissionOutcome,
   type AcpRecord,
+  type AcpPromptUsageReceipt,
   type AcpToolCallFields,
   type AcpTurnUsage,
 } from './protocol.js';
@@ -478,7 +480,7 @@ interface QueuedPrompt {
 }
 
 interface ActiveTurn {
-  usageModel: string;
+  usageReceipts: AcpPromptUsageReceipt[];
   usage?: AcpTurnUsage;
   verification?: AbortController;
   token: number;
@@ -1358,7 +1360,7 @@ export class AcpSession {
     this.clearOpenToolCap();
     const turn: ActiveTurn = {
       token: ++this.turnSeq,
-      usageModel: this.model,
+      usageReceipts: [],
       permissionTurnId: this.initializeResult.permissionGate ? randomUUID() : null,
       contextSelection: this.reportedSelection,
       settled: false,
@@ -1416,6 +1418,9 @@ export class AcpSession {
   }
 
   private runPrompt(turn: ActiveTurn, params: AcpRecord, allowRecovery: boolean, onSent?: () => void): void {
+    const usageModel = this.model;
+    const choices = findModelOption(this.configOptions)?.options.filter(choice => choice.value === usageModel);
+    const usagePrice = choices?.length === 1 ? choices[0]?.referencePrice : undefined;
     this.connection.request('session/prompt', params, { timeoutMs: null, onSent }).then(
       (result) => {
         if (this.turn !== turn) return;
@@ -1424,6 +1429,7 @@ export class AcpSession {
         if (usage) {
           this.lastTurnUsage = usage;
           const prior = turn.usage;
+          turn.usageReceipts.push({ usage, usageModel, ...(usagePrice && { usagePrice }) });
           turn.usage = prior ? {
             inputTokens: prior.inputTokens + usage.inputTokens,
             outputTokens: prior.outputTokens + usage.outputTokens,
@@ -1497,7 +1503,14 @@ export class AcpSession {
       ? null
       : { permissionTurnId: turn.permissionTurnId, gate: turn.gate };
     // Turn-closing events belong to the turn that just ended, so they are not tagged background.
-    const receipt = turn.usage && { usage: turn.usage, ...(turn.usageModel && { usageModel: turn.usageModel }) };
+    const [first] = turn.usageReceipts;
+    const receipt = first && turn.usage && {
+      usage: turn.usage,
+      usageModel: first.usageModel,
+      ...(turn.usageReceipts.every(part => part.usageModel === first.usageModel && isDeepStrictEqual(part.usagePrice, first.usagePrice))
+        ? first.usagePrice && { usagePrice: first.usagePrice }
+        : { usageParts: turn.usageReceipts }),
+    };
     for (const event of this.translator.finish(outcome, receipt)) this.queue.push(event);
     this.pump();
     // Calls the agent left running continue as background work.

@@ -136,7 +136,30 @@ export interface AcpInitializeResult {
   permissionGate: boolean;
 }
 
+export interface AcpReferencePrice {
+  currency: 'USD' | 'CNY';
+  inputPerMtok?: number;
+  outputPerMtok?: number;
+  cacheReadPerMtok?: number;
+  cacheWritePerMtok?: number;
+}
+
+/** An ACP endpoint may quote this exact select value in currency units per million tokens. */
+function parseReferencePrice(raw: unknown): AcpReferencePrice | undefined {
+  const price = asRecord(raw);
+  if (price.currency !== 'USD' && price.currency !== 'CNY') return undefined;
+  const result: AcpReferencePrice = { currency: price.currency };
+  for (const key of ['inputPerMtok', 'outputPerMtok', 'cacheReadPerMtok', 'cacheWritePerMtok'] as const) {
+    const rate = price[key];
+    if (rate === undefined) continue;
+    if (typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0) return undefined;
+    result[key] = rate;
+  }
+  return result;
+}
+
 export interface AcpConfigSelectOption {
+  referencePrice?: AcpReferencePrice;
   value: string;
   name: string;
   description?: string;
@@ -166,6 +189,12 @@ export interface AcpTurnUsage {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
+}
+
+export interface AcpPromptUsageReceipt {
+  usage: AcpTurnUsage;
+  usageModel: string;
+  usagePrice?: AcpReferencePrice;
 }
 
 export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
@@ -273,7 +302,8 @@ function normalizeSelectOption(raw: unknown, group?: string): AcpConfigSelectOpt
   const name = asNonEmptyString(option.name);
   if (!value || !name) return null;
   const description = asNonEmptyString(option.description);
-  return { value, name, ...(description ? { description } : {}), ...(group ? { group } : {}) };
+  const price = parseReferencePrice(asRecord(asRecord(option._meta).cindy).referencePrice);
+  return { value, name, ...(price ? { referencePrice: price } : {}), ...(description ? { description } : {}), ...(group ? { group } : {}) };
 }
 
 /** Flattens grouped select options and drops invalid entries (schema: skip-invalid-items). */

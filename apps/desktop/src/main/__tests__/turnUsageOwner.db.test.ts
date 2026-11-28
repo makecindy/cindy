@@ -22,6 +22,7 @@ import * as turnDefaults from '../maker-ipc/turnUsageSessionDefaults.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { wireSessionToIpc } from '../maker-ipc/register.js';
 import { setImmediate } from 'node:timers/promises';
+import { getModelUsageSince } from '../localDb/dailyModelUsage.js';
 import { readAgentTodayUsage, recordModelTurnUsage } from '../usageBroadcaster.js';
 
 const noop = () => {};
@@ -306,10 +307,21 @@ it('records an independently submitted model delta through the original direct A
 // The existing direct API coverage only writes a nonzero Codex delta.
 it('persists an explicitly reported zero ACP turn in the model ledger', async () => {
   const { a } = await databases();
+  setActiveLedgerCurrency('USD');
+  onTestFinished(__resetActiveLedgerCurrencyForTesting);
   await recordModelTurnUsage({ agentKind: 'acp', model: 'gemini-4-hydrogen',
     inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0 });
   expect(a.db.prepare('SELECT agent_kind, model, input_tokens + output_tokens + cache_read_tokens + cache_create_tokens AS tokens FROM daily_model_usage').all())
     .toEqual([{ agent_kind: 'acp', model: 'gemini-4-hydrogen', tokens: 0 }]);
+  // Old ACP rows predate the quote marker. Adding a priced turn must keep the missing-price fact.
+  a.db.prepare('UPDATE daily_model_usage SET acp_missing_price=NULL').run();
+  const money = { amount: 0.013841, currency: 'USD', approximate: true, kind: 'value-estimate' } as const;
+  await recordModelTurnUsage({ agentKind: 'acp', model: 'gemini-4-hydrogen', money,
+    inputTokensDelta: 2161, outputTokensDelta: 15, cacheReadTokensDelta: 9459, cacheCreateTokensDelta: 0 });
+  const rows = await getModelUsageSince('0000-01-01');
+  expect(rows.some(row => row.acpMissingPrice)).toBe(true);
+  expect(rows.find(row => row.money.amount > 0)?.money).toMatchObject(money);
+  expect(a.db.prepare('SELECT COUNT(*) FROM daily_spend').pluck().get()).toBe(0);
 });
 
 

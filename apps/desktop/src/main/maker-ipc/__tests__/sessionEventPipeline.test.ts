@@ -2446,6 +2446,7 @@ describe('usage through the production event pipeline', () => {
     Object.defineProperty(h.session, 'agentDeviceId', { value: agentDeviceId });
     const done = { type: 'done', sessionTurnGeneration: 1, data: {
       type: 'acp/prompt_end', status: 'completed', usageModel: 'original-model',
+      usagePrice: { currency: 'USD', inputPerMtok: 2, outputPerMtok: 4, cacheReadPerMtok: 1 },
       usage: { inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459, cacheCreationTokens: 0 },
     } } satisfies AgentEvent;
     try {
@@ -2455,6 +2456,7 @@ describe('usage through the production event pipeline', () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
         agentKind: 'acp', model: 'original-model', sessionId: 'task',
+        money: expect.objectContaining({ kind: 'value-estimate', currency: 'USD', amount: expect.closeTo(0.013841, 10) }),
         inputTokensDelta: 2161, outputTokensDelta: 15, cacheReadTokensDelta: 9459, cacheCreateTokensDelta: 0,
       }));
       expect(effects.fn('rebroadcastTodaySpend').mock.invocationCallOrder[0])
@@ -2464,19 +2466,52 @@ describe('usage through the production event pipeline', () => {
       } } });
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(2);
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+        money: expect.objectContaining({ amount: 0, kind: 'value-estimate' }),
         inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
       }));
+      // A positive cache-write count needs its own rate even with an input rate.
+      h.emit({ ...done, sessionTurnGeneration: 4, data: { ...done.data, usage: { ...done.data.usage, cacheCreationTokens: 5 } } });
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({ money: undefined, cacheCreateTokensDelta: 5 }));
+      h.emit({ ...done, sessionTurnGeneration: 5, data: { ...done.data,
+        usagePrice: { currency: 'USD', inputPerMtok: 0, outputPerMtok: 0, cacheReadPerMtok: 0 } } });
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+        money: expect.objectContaining({ amount: 0, kind: 'value-estimate' }), cacheReadTokensDelta: 9459,
+      }));
+      h.emit({ ...done, sessionTurnGeneration: 6, data: { ...done.data,
+        usagePrice: { currency: 'USD', inputPerMtok: 2, outputPerMtok: 4 } } });
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+        money: undefined, cacheReadTokensDelta: 9459,
+      }));
       // #13373: a failed verification terminates with an error after a billed first prompt.
-      const error = { ...done, type: 'error', sessionTurnGeneration: 4, data: {
-        type: 'acp/prompt_end', usage: done.data.usage, usageModel: done.data.usageModel,
+      const error = { ...done, type: 'error', sessionTurnGeneration: 7, data: {
+        type: 'acp/prompt_end', usage: done.data.usage, usageModel: done.data.usageModel, usagePrice: done.data.usagePrice,
         isTerminal: true, message: 'Verification failed', reason: 'acp-auth-required',
       } } satisfies AgentEvent;
       h.emit(error);
-      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(3);
-      h.emit({ ...done, sessionTurnGeneration: 4 });
-      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(3);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(6);
+      h.emit({ ...done, sessionTurnGeneration: 7 });
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledTimes(6);
       expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+        money: expect.objectContaining({ currency: 'USD', amount: expect.closeTo(0.013841, 10) }),
         model: 'original-model', inputTokensDelta: 2161, cacheReadTokensDelta: 9459,
+      }));
+      // One verification turn used two different quotes. Settle each native prompt exactly once.
+      const usage = { inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+      const resumed = { ...done, sessionTurnGeneration: 8, data: { type: 'acp/prompt_end',
+        usage: { ...usage, inputTokens: 2 }, usageModel: 'first', usageParts: [
+          { usage, usageModel: 'first', usagePrice: { currency: 'USD', inputPerMtok: 2 } },
+          { usage, usageModel: 'second', usagePrice: { currency: 'CNY', inputPerMtok: 7 } },
+        ],
+      } } satisfies AgentEvent;
+      h.emit(resumed);
+      h.emit(resumed);
+      const writes = effects.fn('recordModelTurnUsage');
+      expect(writes).toHaveBeenCalledTimes(8);
+      expect(writes).toHaveBeenNthCalledWith(7, expect.objectContaining({
+        model: 'first', inputTokensDelta: 1, money: expect.objectContaining({ amount: 0.000002, currency: 'USD' }),
+      }));
+      expect(writes).toHaveBeenNthCalledWith(8, expect.objectContaining({
+        model: 'second', inputTokensDelta: 1, money: expect.objectContaining({ amount: 0.000007, currency: 'CNY' }),
       }));
     } finally {
       await h.dispose();

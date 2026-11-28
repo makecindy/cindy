@@ -13,7 +13,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { formatCompactTokens, formatModelShort } from '@/lib/usageFormat';
+import { formatCompactTokens, formatModelShort, formatTurnCostMoney } from '@/lib/usageFormat';
 import { usageRankOf } from '@/components/new-chat/usagePalette';
 import {
   type AgentTokenRow,
@@ -202,6 +202,14 @@ export function UsageModelTable({
                       : row.agentKind}
                   </Badge>
                 </span>
+                {row.agentKind === 'acp' && (
+                  <div className="mt-1 text-12 text-[var(--text-secondary)]">
+                    {row.estimate
+                      ? [t('usageHistory.referenceValue'), formatTurnCostMoney(row.estimate),
+                          row.acpMissingPrice && t('usageHistory.partialEstimate')].filter(Boolean).join(' ')
+                      : t('usageHistory.estimateUnavailable')}
+                  </div>
+                )}
               </td>
               <td className={TD_CLASS}>{formatCompactTokens(row.tokens)}</td>
               <ShareCell share={row.share} color={color} />

@@ -400,26 +400,38 @@ describe('readUsageHistoryWith', () => {
 
   // #12433 (unit): a single synced ACP model row must survive validation and
   // add the same token total to history, the menu bar, and the widget projection.
-  it('preserves ACP identity and normalized token totals across all usage projections', async () => {
-    const usage = modelRow(TODAY, 'acp', 'gemini-4-hydrogen', actual(0), {
+  it.each([
+    { amount: null, partial: false }, { amount: 0, partial: false },
+    { amount: 0.013841, partial: false }, { amount: 0.013841, partial: true },
+  ])('preserves ACP identity, tokens and reference value ($amount, partial=$partial) across projections', async ({ amount, partial }) => {
+    const usage = modelRow(TODAY, 'acp', 'gemini-4-hydrogen', amount === null ? actual(0) : { ...actual(amount), kind: 'value-estimate', approximate: true }, {
       inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459,
     });
-    const synced = sanitizeUsageDeviceRows({ spendDays: [], modelRows: [usage] });
-    expect(synced?.modelRows).toEqual([usage]);
+    const ledgerRow = { ...usage, ...(partial ? { acpMissingPrice: true } : {}) };
+    const synced = sanitizeUsageDeviceRows({ spendDays: [], modelRows: [ledgerRow] });
+    expect(synced?.modelRows).toEqual([ledgerRow]);
+    const otherSpend = actual(2);
     const result = await readUsageHistoryWith(makeDeps({
-      getModelUsageSince: async () => synced!.modelRows,
+      getAllSpendDays: async () => [{ day: TODAY, monies: [otherSpend] }],
+      getModelUsageSince: async () => [...synced!.modelRows, modelRow(TODAY, 'pi', 'other-model', otherSpend, { outputTokens: 1 })],
     }));
-    expect(result.models).toEqual([expect.objectContaining({
+    expect(result.models.filter(row => row.agentKind === 'acp')).toEqual([expect.objectContaining({
       agentKind: 'acp', model: usage.model, inputTokens: 2161, outputTokens: 15, cacheReadTokens: 9459,
     })]);
-    expect(result.totals.todayTokens).toBe(11635);
+    expect(result.totals.todayTokens).toBe(11636);
     const scope = usageScope(result, [TODAY], []);
     const view = usageView(result);
-    const expectedDay = { money: [0, 0, 0], paid: 0, tokens: [0, 0, 0, 0, 11635] };
+    const expectedDay = {
+      ...(amount !== null ? { acpEstimate: amount } : {}),
+      ...(partial || amount === null ? { acpMissingPrice: true } : {}),
+      money: [0, 0, 2], paid: 2, tokens: [0, 0, 1, 0, 11635],
+    };
+    expect(result.models.find(row => row.agentKind === 'acp')?.estimatedMoney?.amount ?? null).toBe(amount);
+    expect(result.totals.today.amount).toBe(2);
     expect(view.usage.scopes.all.daily).toEqual([expectedDay]);
     const widget = buildUsageWidgetSnapshot(view, Date.now(), () => null, scope.modelSeries)?.usage;
-    expect(widget?.daily).toEqual([{ ...expectedDay, models: [0, 0], modelTokens: [11635, 0] }]);
-    expect(widget?.models).toEqual([{ name: usage.model, harness: 'acp' }]);
+    expect(widget?.daily).toEqual([{ ...expectedDay, models: [amount ?? 0, 2, 0], modelTokens: [11635, 1, 0] }]);
+    expect(widget?.models).toEqual([{ name: usage.model, harness: 'acp' }, { name: 'other-model', harness: 'pi' }]);
   });
 
   it('keeps media fees in actual totals and model detail without inventing chat tokens', async () => {
