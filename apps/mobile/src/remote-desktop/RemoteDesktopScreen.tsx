@@ -380,6 +380,8 @@ export function RemoteDesktopSession({
   const landscape =
     systemSideRail ||
     (!tableRegion && orientationSize.width > orientationSize.height);
+  const androidLandscapeInsets =
+    Platform.OS === "android" && landscape ? insets : undefined;
   const sideRailWidth = Math.max(60, geometry.insets.right + spacing.md);
   // The native status/navigation center sits 6pt inward from the safe strip center.
   // Use the reported status reservation for vertical clearance when available.
@@ -4315,12 +4317,13 @@ export function RemoteDesktopSession({
                 StyleSheet.absoluteFill,
                 {
                   bottom:
-                    Platform.OS === "ios" || landscape ? 0 : toolbarSize.height,
+                    androidLandscapeInsets?.bottom ??
+                    (Platform.OS === "ios" || landscape ? 0 : toolbarSize.height),
                   right:
                     Platform.OS === "ios"
                       ? 0
                       : landscape
-                        ? toolbarSize.width
+                        ? toolbarSize.width + (androidLandscapeInsets?.right ?? 0)
                         : 0,
                 },
               ]}
@@ -4575,6 +4578,11 @@ export function RemoteDesktopSession({
                 paddingRight: landscape ? spacing.xs : edgePadding.paddingRight,
                 paddingLeft: landscape ? 0 : edgePadding.paddingLeft,
                 paddingBottom: keyboard || nativeKeyboard ? 0 : insets.bottom,
+              },
+              androidLandscapeInsets && {
+                right: androidLandscapeInsets.right,
+                bottom: androidLandscapeInsets.bottom,
+                paddingBottom: 0,
               },
               Platform.OS === "ios" && {
                 backgroundColor: "transparent",
