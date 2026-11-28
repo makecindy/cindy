@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "思考中…",
+    "replyStreaming": "正在生成…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
@@ -542,7 +543,8 @@
       "followLastDeviceHint": "用上次在新建任务页选的电脑；没有就用入口带来的电脑。",
       "followLastWorkspaceHint": "恢复上次选的项目或对话；项目模式下用该电脑上次的目录。",
       "followAppHint": "与应用内新建的默认保持一致。"
-    }
+    },
+    "createRejectedResend": "内容已带回，可调整后重新发送。"
   },
   "menu": {
     "moveToProject": "移动任务",
@@ -738,9 +740,15 @@
   "outbox": {
     "deleteConfirmTitle": "删除这条消息？",
     "deleteConfirmBody": "这条消息没有发送成功，删除后无法恢复。",
+    "deleteUnconfirmedBody": "电脑可能已经收到这条消息。删除只会移除本机的待发消息。如果电脑已收到，这条消息仍会出现在对话记录里。",
     "legacyPlanRecovery": "这台电脑暂不支持在计划模式下恢复待发消息。请关闭计划模式，或更新电脑上的 Cindy 后重试",
     "creationRecoveryRequired": "请先重试创建任务，再删除首条消息；这条消息还保存着后续消息所需的任务恢复信息。",
     "confirmationRequired": "电脑暂时无法确认是否收到这条消息。请核对消息记录，或更新电脑上的 Cindy 后重试。",
+    "profileInUseByDesktop": "这份数据正被单独运行的 Cindy 电脑端使用。请先退出它，再发送。",
+    "taskInactive": "这个任务当前无法接收消息。",
+    "inputNotSupported": "这台电脑暂不支持向这个任务发送这类消息。",
+    "invalidInput": "这条消息有无效内容，电脑未接收。",
+    "taskClearedBeforeSend": "任务已清空或正在清空，消息仍保存在本机。",
     "taskCleared": "发送后，这个任务已被清空。消息仍保存在手机上，请核对后处理。",
     "restoreFailed": "暂时无法恢复待发消息，已保存的内容没有删除。请重启 App 后重试。",
     "recoveryTarget": "恢复这个任务时请保留原来的电脑，后续消息仍保存在手机上。",

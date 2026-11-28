@@ -3076,9 +3076,13 @@ describe('direct server group presentation', () => {
     expect(byId('attachment.image')?.getAttribute('data-uri')).toBe('https://media.example.invalid/image-0');
   });
 
-  it.each([undefined, 'thread-root'])('gates server previews by the viewport and reauthorizes on tap (thread=%s)', async (threadRootId) => {
+  // The timeline shows the server thumbnail (phones used to download multi-MB originals per
+  // image); tapping still authorizes and opens the original.
+  it.each([undefined, 'thread-root'])('gates server thumbnails by the viewport and opens the original on tap (thread=%s)', async (threadRootId) => {
     const attachment = { id: 'media', name: 'picture.png', mimeType: 'image/png', size: 10, category: 'image' as const, url: 'https://media.example.invalid/one-use', path: null };
-    h.chat = { pending: [], ...h.chat, server: true, media: vi.fn(async () => attachment) };
+    const thumbnail = { ...attachment, mimeType: 'image/webp', url: 'https://media.example.invalid/thumbnail', thumbnail: true as const };
+    h.chat = { pending: [], ...h.chat, server: true,
+      media: vi.fn(async (_id: string, _signal?: AbortSignal, options?: { thumbnail?: boolean }) => options?.thumbnail ? thumbnail : attachment) };
     await render(group({ messages: [message('picture', 1, { threadRootId, authorKind: 'user', isSelf: false, attachments: [{ ...attachment, url: null, category: 'file' }] })], plans: [], openPlan: null }), 'ready', threadRootId, threadRootId ? '' : 'mac');
     expect(h.chat.media).not.toHaveBeenCalled();
     let row = byId('attachmentStrip') as HTMLElement & { nativeLayout?: (event: unknown) => void };
@@ -3091,10 +3095,13 @@ describe('direct server group presentation', () => {
     await act(async () => h.scroll.onScroll({ nativeEvent: {
       contentOffset: { y: 700 }, contentSize: { height: 1000 }, layoutMeasurement: { height: 500 },
     } }));
-    expect(h.chat.media).toHaveBeenCalledExactlyOnceWith('media', expect.any(AbortSignal));
-    expect(byId('attachment.image')?.getAttribute('data-uri')).toBe(attachment.url);
+    expect(h.chat.media).toHaveBeenCalledExactlyOnceWith('media', expect.any(AbortSignal), { thumbnail: true });
+    expect(byId('attachment.image')?.getAttribute('data-uri')).toBe(thumbnail.url);
     await click('attachment.image'); expect(h.chat.media).toHaveBeenCalledTimes(2);
+    expect(h.chat.media).toHaveBeenLastCalledWith('media', expect.any(AbortSignal));
     expect(byId('lightbox')?.getAttribute('data-url')).toBe(attachment.url);
+    // The healthy thumbnail stays in the timeline instead of being swapped for the original.
+    expect(byId('attachment.image')?.getAttribute('data-uri')).toBe(thumbnail.url);
   });
 });
 

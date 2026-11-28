@@ -37,7 +37,8 @@ describe('custom auxiliary chain does not hit the session agent', () => {
   it('voice refinement pins the effective auxiliary chain for the whole run', () => {
     const source = readFileSync(path.join(root, 'voice-input/index.ts'), 'utf8');
     expect(source).toContain('const auxiliaryChainSnapshot = getEffectiveAuxiliaryModelChainSnapshot();');
-    expect(source.match(/assertVoiceInputOwnerScopeCurrent\(ownerScopeKey, auxiliaryChainSnapshot\)/g)?.length).toBe(3);
+    // Dictionary learning, BYOK refinement and explicit rewrite each retain the owner/chain fence.
+    expect(source.match(/assertVoiceInputOwnerScopeCurrent\(ownerScopeKey, auxiliaryChainSnapshot\)/g)?.length).toBe(4);
     // Cross-file dispatch boundary (server-channel-review): cancellation must not
     // remove the managed refiner's owner fence. The handler lifecycle tests cover
     // the delayed-flush behavior; this guard checks the final dispatch wiring.

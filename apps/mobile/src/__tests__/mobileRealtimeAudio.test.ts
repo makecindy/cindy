@@ -107,7 +107,11 @@ describe('mobileRealtimeAudio', () => {
     await Promise.resolve();
   });
 
-  it.each([undefined, { inputPortTypes: ['MicrophoneBuiltIn'], inputSampleRate: 48000, inputChannels: 1 }])(
+  it.each([
+    undefined,
+    { inputPortTypes: ['MicrophoneBuiltIn'], inputSampleRate: 48000, inputChannels: 1 },
+    { backend: 'android-native' as const, inputPortTypes: ['MicrophoneBuiltIn'], inputSampleRate: 16000, inputChannels: 1, ioBufferDurationMs: 10, sessionActivatedAt: 100, engineStartedAt: 105 },
+  ])(
     'logs input metadata and supports installed modules without it: %j', async (input) => {
       const native = {
         addListener: vi.fn(() => ({ remove: vi.fn() })),
@@ -118,10 +122,15 @@ describe('mobileRealtimeAudio', () => {
       const { startMobileRealtimeAudio } = await import('@/session/mobileRealtimeAudio');
       const stop = await startMobileRealtimeAudio({ onChunk: vi.fn() });
       expect(logMobileVoice).toHaveBeenLastCalledWith('debug', 'capture input', {
-        backend: 'ios-native',
+        backend: input?.backend ?? 'ios-native',
         inputPortTypes: input?.inputPortTypes ?? ['unknown'],
         inputSampleRate: input?.inputSampleRate,
         inputChannels: input?.inputChannels,
+        ...(input?.ioBufferDurationMs === undefined ? {} : {
+          ioBufferDurationMs: input.ioBufferDurationMs,
+          sessionActivatedAt: input.sessionActivatedAt,
+          engineStartedAt: input.engineStartedAt,
+        }),
       });
       await stop();
     },

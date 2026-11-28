@@ -33,8 +33,36 @@ export default {
     offline: {
       about: 'Offline remote computer tasks support queueing Done, Snooze, pending-sync labels, and offline Undo',
     },
+    'health-single': {
+      about: 'Single environment health alert renders compact one-click fix card at top of Inbox',
+    },
+    'health-multi': {
+      about: 'Multiple environment health alerts aggregate into a collapsible summary card',
+    },
   },
   async check(page, ui) {
+    if (ui.case === 'health-single') {
+      const strip = page.getByTestId('inbox-environment-health');
+      await strip.waitFor();
+      await ui.capture('health-single');
+      await strip.getByRole('button', { name: await ui.t('ccAgent.sidebar.inbox.health.actions.connectGithub'), exact: true }).click();
+      assert.equal(
+        await page.locator('[data-inbox-scroller]').getAttribute('data-last-health-action'),
+        'github:connect',
+      );
+      return;
+    }
+    if (ui.case === 'health-multi') {
+      const strip = page.getByTestId('inbox-environment-health');
+      await strip.waitFor();
+      const toggle = strip.locator('button[aria-expanded]');
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+      await ui.capture('health-multi-collapsed');
+      await toggle.click();
+      assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+      await ui.capture('health-multi-expanded');
+      return;
+    }
     if (ui.case === 'offline') {
       const doneTarget = page.locator('[data-session-id="offline-done-target"]');
       const snoozeTarget = page.locator('[data-session-id="offline-snooze-target"]');

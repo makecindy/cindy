@@ -7,7 +7,7 @@
  */
 import { isProviderShareAgentDeviceId, PROVIDER_SHARE_AGENT_DEVICE_PREFIX } from './providerShare.js';
 import type { ProviderManagementRequest, ProviderManagementResult } from './providerManagement';
-import type { OpenAiGroupAccount, OpenAiGroupAccountDetail, OpenAiGroupApiAgent, OpenAiGroupProbeResult } from './openAiAccountGroup.js';
+import type { OpenAiGroupAccount, OpenAiGroupAccountDetail, OpenAiGroupApiAgent, OpenAiGroupMergeResult, OpenAiGroupProbeResult } from './openAiAccountGroup.js';
 import type { SubscriptionAccountView } from './subscriptionAccounts.js';
 import { readProviderMetadataContinuity, type ProviderMetadataContinuity } from '@cindy/device-link';
 import { legacyPoolStrategy, routeStrategyOf, type LegacyPoolStrategy, type RouteStrategy } from './routeStrategy.js';
@@ -373,7 +373,8 @@ export type ProviderGroupCommandResult<C extends ProviderGroupCommand> =
   : C extends { action: 'account-list' } ? OpenAiGroupAccount[]
   : C extends { action: 'account-detail' } ? OpenAiGroupAccountDetail
   : C extends { action: 'account-quota' } ? Pick<SubscriptionAccountView, 'id' | 'identity' | 'usage'>[]
-  : C extends { action: 'account-merge' | 'account-test' | 'account-remove' } ? OpenAiGroupProbeResult
+  : C extends { action: 'account-merge' } ? OpenAiGroupMergeResult
+  : C extends { action: 'account-test' | 'account-remove' } ? OpenAiGroupProbeResult
   : C extends { action: 'account-allocation' } ? ProviderGroupConfig
   : C extends { action: 'list' } ? Record<string, ProviderGroupConfig>
   : C extends { action: 'get' } ? ProviderGroupView

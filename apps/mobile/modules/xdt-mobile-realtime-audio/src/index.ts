@@ -4,6 +4,7 @@ import {
 } from 'expo-modules-core';
 
 export type XdtMobileAudioChunkEvent = {
+  captureId?: string;
   base64Pcm16: string;
   capturedAt: number;
   chunkIndex: number;
@@ -13,15 +14,21 @@ export type XdtMobileAudioChunkEvent = {
 
 export type XdtMobileAudioErrorEvent = {
   message: string;
+  captureId?: string;
 };
 
 export type XdtMobileRealtimeAudioModule = {
-  start(options?: { sampleRate?: number; bufferSize?: number }): Promise<{
+  start(options?: { sampleRate?: number; bufferSize?: number; captureId?: string }): Promise<{
+    backend?: 'ios-native' | 'android-native';
     inputPortTypes: string[];
     inputSampleRate: number;
     inputChannels: number;
+    ioBufferDurationMs?: number;
+    sessionActivatedAt?: number;
+    engineStartedAt?: number;
   } | void>;
   stop(): Promise<void>;
+  stopAndDrain?(afterIndex: number, stoppedAt: number): Promise<XdtMobileAudioChunkEvent[]>;
   prewarm(): Promise<void>;
 };
 

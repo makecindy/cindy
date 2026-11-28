@@ -12,17 +12,21 @@ import {
 } from '@cindy/voice-input-core';
 import { createLogger } from '../logger.js';
 import { createOutboundHttpAgent } from '../maker-host/outbound-fetch.desktop.js';
+import type { CindyVoiceAsrConnection } from './CindyVoiceSessionClient.js';
 import { resamplePcm16 } from './RealtimeAsrWebSocketProvider.js';
 import { volcengineSaucLanguageCode } from './language.js';
 import { mergeRecoveredTranscript } from './transcriptMerge.js';
 import { describeAsrHandshakeTraceId, describeAsrWebSocketTarget } from './voiceInputAsrConfig.js';
+import { isVoiceInputStartRateLimited } from './voiceInputStartError.js';
 import { createWebSocketHandshakeTiming } from './webSocketHandshakeTiming.js';
 
 type VolcengineSaucAsrProviderOptions = {
   proxyApiKey?: string;
   baseUrl?: string;
   endpointPath?: string;
-  connectionProvider?: () => Promise<{ websocketUrl: string; authorizationToken: string }>;
+  connectionProvider?: () => Promise<CindyVoiceAsrConnection>;
+  /** Optional WS origin hint so system proxy resolution can overlap connectionProvider(). */
+  proxyHintUrl?: string;
   resourceId: string;
   sourceLanguage?: string;
   recognitionHints?: AsrRecognitionHints;
@@ -93,7 +97,8 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
   private readonly proxyApiKey?: string;
   private readonly baseUrl?: string;
   private readonly endpointPath?: string;
-  private readonly connectionProvider?: () => Promise<{ websocketUrl: string; authorizationToken: string }>;
+  private readonly connectionProvider?: () => Promise<CindyVoiceAsrConnection>;
+  private readonly proxyHintUrl?: string;
   private readonly resourceId: string;
   private readonly sourceLanguage: string;
   private readonly recognitionHints?: AsrRecognitionHints;
@@ -131,6 +136,7 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     this.baseUrl = options.baseUrl;
     this.endpointPath = options.endpointPath;
     this.connectionProvider = options.connectionProvider;
+    this.proxyHintUrl = options.proxyHintUrl;
     this.resourceId = options.resourceId;
     this.sourceLanguage = options.sourceLanguage ?? 'auto';
     this.recognitionHints = options.recognitionHints;
@@ -163,9 +169,17 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     await this.openSocket();
   }
 
-  private async openSocket(): Promise<void> {
-    const openStartedAt = performance.now();
-    const connection = this.connectionProvider
+  private async resolveConnectionAndAgent(): Promise<{
+    connection: CindyVoiceAsrConnection;
+    agent: Awaited<ReturnType<typeof createOutboundHttpAgent>>;
+    connectionResolvedAt: number;
+    dialStartedAt: number;
+  }> {
+    const hintedOrigin = this.proxyHintUrl ? urlOrigin(this.proxyHintUrl) : null;
+    const hintedAgentPromise = this.connectionProvider && this.proxyHintUrl
+      ? createOutboundHttpAgent(this.proxyHintUrl).catch(() => undefined)
+      : null;
+    const connection: CindyVoiceAsrConnection = this.connectionProvider
       ? await this.connectionProvider()
       : {
           websocketUrl: toWebSocketUrl(this.baseUrl!, this.endpointPath!),
@@ -173,15 +187,32 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
         };
     if (this.stopRequested) throw new Error('Volcengine SAUC ASR connection stopped.');
     const connectionResolvedAt = performance.now();
-    // `ws` 不吃系统代理;直连时为 undefined,行为与不传一致。
-    const agent = await createOutboundHttpAgent(connection.websocketUrl);
+    // `ws` 不吃系统代理;直连时为 undefined,行为与不传一致。与 session 分配并行
+    // 解析同源代理,避免再多等一跳系统 PAC / 代理查询。
+    const canReuseHint = hintedAgentPromise !== null
+      && hintedOrigin !== null
+      && urlOrigin(connection.websocketUrl) === hintedOrigin;
+    const agent = canReuseHint
+      ? await hintedAgentPromise
+      : await createOutboundHttpAgent(connection.websocketUrl);
     // 解析代理是一次异步往返,期间可能已停录 —— 复查后再建连,不留孤儿 socket。
     if (this.stopRequested) throw new Error('Volcengine SAUC ASR connection stopped.');
-    const dialStartedAt = performance.now();
+    return {
+      connection,
+      agent,
+      connectionResolvedAt,
+      dialStartedAt: performance.now(),
+    };
+  }
+
+  private async openSocket(): Promise<void> {
+    const openStartedAt = performance.now();
+    const { connection, agent, connectionResolvedAt, dialStartedAt } = await this.resolveConnectionAndAgent();
     const handshakeTiming = createWebSocketHandshakeTiming();
     let socketOpenedAt = 0;
     const socket = new WebSocket(connection.websocketUrl, {
       headers: {
+        ...connection.headers,
         Authorization: `Bearer ${connection.authorizationToken}`,
         'X-Api-Resource-Id': this.resourceId,
         'X-Api-Connect-Id': buildConnectId(),
@@ -189,6 +220,11 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
       agent,
       finishRequest: handshakeTiming.finishRequest,
     });
+    if (connection.onUpgradeResponse) {
+      socket.once('upgrade', (response) => {
+        connection.onUpgradeResponse?.(response.headers);
+      });
+    }
     this.socket = socket;
     this.attachSocketHandlers(socket);
     await new Promise<void>((resolve, reject) => {
@@ -236,7 +272,7 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
         socketOpenedAt = performance.now();
         log.debug('websocket transport opened', { viaProxy: Boolean(agent), ...handshakeTiming.snapshot() });
         this.startKeepAlive();
-        this.sendInitialRequest();
+        this.sendInitialRequest(socket);
       };
       const onError = (error: Error): void => {
         fail(error, false);
@@ -286,6 +322,98 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
       socket.once('close', onClose);
       socket.once('unexpected-response', onUnexpectedResponse);
     });
+  }
+
+  /**
+   * Opens a standby SAUC socket without disturbing the active socket, waits for
+   * its initial FullClientRequest ACK, and returns it ready for atomic cutover.
+   */
+  private async openStandbySocket(): Promise<WebSocket> {
+    const { connection, agent } = await this.resolveConnectionAndAgent();
+    const socket = new WebSocket(connection.websocketUrl, {
+      headers: {
+        ...connection.headers,
+        Authorization: `Bearer ${connection.authorizationToken}`,
+        'X-Api-Resource-Id': this.resourceId,
+        'X-Api-Connect-Id': buildConnectId(),
+      },
+      agent,
+    });
+    if (connection.onUpgradeResponse) {
+      socket.once('upgrade', (response) => {
+        connection.onUpgradeResponse?.(response.headers);
+      });
+    }
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const cleanup = (): void => {
+        clearTimeout(connectTimer);
+        socket.off('open', onOpen);
+        socket.off('message', onMessage);
+        socket.off('error', onError);
+        socket.off('close', onClose);
+        socket.off('unexpected-response', onUnexpectedResponse);
+      };
+      const fail = (error: Error, terminateSocket: boolean): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (terminateSocket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+          if (socket.readyState === WebSocket.CONNECTING) socket.on('error', () => undefined);
+          socket.terminate();
+        }
+        reject(error);
+      };
+      const connectTimer = setTimeout(() => {
+        fail(new Error(`Volcengine SAUC standby connection timed out after ${this.connectTimeoutMs}ms`), true);
+      }, this.connectTimeoutMs);
+      const onOpen = (): void => {
+        if (settled) return;
+        if (this.stopRequested) {
+          fail(new Error('Volcengine SAUC standby connection opened after stop.'), true);
+          return;
+        }
+        this.sendInitialRequest(socket);
+      };
+      const onMessage = (data: WebSocket.RawData): void => {
+        if (settled) return;
+        let parsed: ParsedVolcengineMessage;
+        try {
+          parsed = decodeVolcengineMessage(rawDataToBuffer(data));
+        } catch {
+          fail(new Error(this.errorFallbackMessage), true);
+          return;
+        }
+        if (parsed.messageType === MESSAGE_TYPE_SERVER_ERROR) {
+          const message = extractErrorMessage(parsed.payload) ?? parsed.payloadText ?? this.errorFallbackMessage;
+          fail(new Error(message), true);
+          return;
+        }
+        if (parsed.messageType !== MESSAGE_TYPE_FULL_SERVER_RESPONSE && parsed.messageType !== MESSAGE_TYPE_SERVER_ACK) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const onError = (error: Error): void => fail(error, false);
+      const onClose = (): void => fail(new Error('Volcengine SAUC standby connection closed before ready.'), false);
+      const onUnexpectedResponse = (_request: ClientRequest, response: IncomingMessage): void => {
+        response.resume();
+        const statusCode = response.statusCode ?? 'unknown';
+        const traceId = describeAsrHandshakeTraceId(response.headers);
+        const target = describeAsrWebSocketTarget(connection.websocketUrl);
+        fail(new Error(
+          `Volcengine SAUC standby handshake failed: HTTP ${statusCode} (${target}${traceId ? `, ${traceId}` : ''})`,
+        ), true);
+      };
+      socket.once('open', onOpen);
+      socket.on('message', onMessage);
+      socket.once('error', onError);
+      socket.once('close', onClose);
+      socket.once('unexpected-response', onUnexpectedResponse);
+    });
+    return socket;
   }
 
   appendAudio(chunk: ArrayBuffer, trace?: AudioTrace): void {
@@ -393,6 +521,78 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     return this.recoveryPromise;
   }
 
+  async rotateSession(): Promise<void> {
+    if (this.stopRequested || !this.started) return;
+    if (this.recoveryPromise) return this.recoveryPromise;
+    this.recoveryPromise = this.performRotateSession().finally(() => {
+      this.recoveryPromise = undefined;
+    });
+    return this.recoveryPromise;
+  }
+
+  private async performRotateSession(): Promise<void> {
+    const startedAt = Date.now();
+    let standbySocket: WebSocket;
+    try {
+      standbySocket = await this.openStandbySocket();
+    } catch (error) {
+      // If the upstream concurrency ceiling (maxConcurrentSessions=2) rejected
+      // make-before-break with 429, fall back to break-before-make recovery so
+      // long dictations still rotate cleanly instead of hitting 180s close.
+      const errorMessage = error instanceof Error ? error.message : String(error ?? '');
+      if (isVoiceInputStartRateLimited(error) || /\b429\b|too many|rate.?limit|concurrency|concurrent/i.test(errorMessage)) {
+        log.info('rotateSession: standby hit concurrency rate limit, falling back to break-before-make');
+        await this.closeCurrentSocketAndWait(500);
+        await this.performRecover().catch((recoverError: unknown) => {
+          this.callback({ type: 'disconnected', at: Date.now() });
+          throw recoverError;
+        });
+        return;
+      }
+      throw error;
+    }
+
+    if (this.stopRequested || !this.started) {
+      if (standbySocket.readyState === WebSocket.OPEN) standbySocket.close();
+      else if (standbySocket.readyState === WebSocket.CONNECTING) standbySocket.terminate();
+      return;
+    }
+
+    const oldSocket = this.socket;
+    const prefix = this.lastTranscript;
+    const replay = [...this.unconfirmedAudio];
+    const replayMs = replay.reduce((sum, item) => sum + item.durationMs, 0);
+
+    this.recovered = true;
+    this.confirmedEndMs = 0;
+    this.sequence = 1;
+    this.finalRequested = false;
+    this.stableEmitted = false;
+    this.sessionTranscriptPrefix = prefix;
+    this.socket = standbySocket;
+    this.connected = true;
+    this.attachSocketHandlers(standbySocket);
+    this.startKeepAlive();
+
+    for (const entry of replay) {
+      if (standbySocket.readyState !== WebSocket.OPEN) break;
+      standbySocket.send(encodeAudioOnlyRequest(entry.pcm, this.nextSequence()));
+      entry.sent = true;
+    }
+
+    if (oldSocket && oldSocket !== standbySocket) {
+      if (oldSocket.readyState === WebSocket.OPEN) oldSocket.close();
+      else if (oldSocket.readyState === WebSocket.CONNECTING) oldSocket.terminate();
+    }
+
+    log.info('rotateSession: Volcengine SAUC make-before-break cutover complete', {
+      prefixChars: prefix.length,
+      replayChunks: replay.length,
+      replayMs: Math.round(replayMs),
+      elapsedMs: Date.now() - startedAt,
+    });
+  }
+
   async stop(): Promise<void> {
     this.stopRequested = true;
     this.started = false;
@@ -435,6 +635,30 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     this.startResolve = undefined;
     this.startReject = undefined;
     this.resolveFlushWaiters();
+  }
+
+  private async closeCurrentSocketAndWait(timeoutMs: number): Promise<void> {
+    const oldSocket = this.socket;
+    this.socket = undefined;
+    this.connected = false;
+    this.stopKeepAlive();
+    if (!oldSocket || oldSocket.readyState === WebSocket.CLOSED) return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        oldSocket.off('close', done);
+        resolve();
+      }, timeoutMs);
+      const done = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      oldSocket.once('close', done);
+      if (oldSocket.readyState === WebSocket.OPEN) oldSocket.close();
+      else {
+        oldSocket.on('error', () => undefined);
+        oldSocket.terminate();
+      }
+    });
   }
 
   private async performRecover(): Promise<void> {
@@ -533,8 +757,8 @@ export class VolcengineSaucAsrProvider implements AsrProvider {
     });
   }
 
-  private sendInitialRequest(): void {
-    const socket = this.socket;
+  private sendInitialRequest(targetSocket = this.socket): void {
+    const socket = targetSocket;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     const language = volcengineSaucLanguageCode(this.sourceLanguage);
     const corpusContext = buildVolcengineSaucCorpusContext(this.recognitionHints);
@@ -909,6 +1133,14 @@ function collectStringFields(value: unknown, keys: Set<string>): string[] {
     result.push(...collectStringFields(child, keys));
   }
   return result;
+}
+
+function urlOrigin(value: string): string | null {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
 }
 
 function toWebSocketUrl(baseUrl: string, endpointPath: string): string {

@@ -7,7 +7,7 @@ import { withLocalProviderGroupAccounts, type ProviderGroupConfig } from '../../
 import { listProviderGroupBindings } from '../provider-group/bindings.desktop.js';
 import { openAiAccountGroupKind } from '../../shared/openAiAccountGroup.js';
 import { apiKeyMemberForConnection, apiKeyPoolMembers, migratedLocalAccountGroup, pendingNativePoolImport, saveApiKeyPoolMembers } from './apiKeyMembers.js';
-import { accountProviderId, placeSubscriptionAccount, providerAccounts, resolveSubscriptionPoolProvider, writeProviderStrategy } from './placement.js';
+import { accountProviderId, placeSubscriptionAccount, providerAccounts, readMergedProviderAccount, resolveSubscriptionPoolProvider, writeProviderStrategy } from './placement.js';
 import { readPool, updatePool } from './store.js';
 import { isNativeProviderAuthBound, isNativeProviderAuthSharedSystemCredential } from '../maker-host/nativeProviderAuthBinding.js';
 
@@ -27,6 +27,12 @@ function connectionKind(id: string) {
 export async function mergeOpenAiPoolConnections(source: string, target: string, assertCurrent: () => void) {
   await withProviderGroupMutation(async () => {
     assertCurrent();
+    // The catalog was checked before waiting for the management lock. A source
+    // already moved elsewhere, or a destination that became an alias, cannot be
+    // used by this now-stale operation.
+    if (readMergedProviderAccount(source) || readMergedProviderAccount(target)) {
+      throw new Error('Providers cannot be merged');
+    }
     const from = connectionKind(source);
     const to = connectionKind(target);
     const pool = readPool('openai');

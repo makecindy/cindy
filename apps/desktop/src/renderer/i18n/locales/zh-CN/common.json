@@ -3154,7 +3154,8 @@
           "gatewayKey": "需要 AI 网关支持所选实时 ASR 路由",
           "codexLogin": "使用 Codex 登录",
           "elevenlabsKey": "使用 ElevenLabs Key（环境变量）",
-          "codexRealtimeUnsupported": "不可用：Codex 登录不是 OpenAI API Realtime 凭证"
+          "codexRealtimeUnsupported": "不可用：Codex 登录不是 OpenAI API Realtime 凭证",
+          "localOffline": "本机离线运行（无需账号或 API Key）"
         },
         "credentialError": {
           "gatewayMissing": "未找到可用的 AI 网关 Key，当前模型无法使用。",
@@ -3162,10 +3163,24 @@
           "elevenlabsMissing": "未配置 ElevenLabs Key（环境变量），当前模型无法使用。",
           "customAsrConfigMissing": "请先完整填写并保存实时 ASR 服务配置，再开始语音输入。",
           "customAsrKeyMissing": "请为自定义实时 ASR 服务填写并保存 API Key。",
-          "codexRealtimeUnsupported": "Codex 登录不能用于实时语音识别，请选择受支持的 ASR 服务。"
+          "codexRealtimeUnsupported": "Codex 登录不能用于实时语音识别，请选择受支持的 ASR 服务。",
+          "localAsrModelMissing": "请先选择本地 sherpa-onnx 语音识别模型目录，再开始离线语音输入。",
+          "localAsrUnsupported": "当前电脑平台暂不支持本地离线语音识别。"
         },
         "manageProviders": "前往模型供应商",
-        "reset": "恢复默认"
+        "reset": "恢复默认",
+        "localAsr": {
+          "optionLabel": "本地离线识别（sherpa-onnx）",
+          "optionDescription": "本机 ONNX 离线转写，无需云账号与 API Key",
+          "notice": "请选择本地 sherpa-onnx 离线模型目录（支持 SenseVoice、Paraformer、Whisper 或 Transducer，需包含 tokens.txt 与 .onnx 权重）。音频全程留在本机。",
+          "modelDirLabel": "本地模型目录",
+          "readyStatus": "已就绪 · {{kind}}（{{folder}}）",
+          "unsupportedStatus": "当前平台暂不支持",
+          "notConfiguredStatus": "尚未选择模型目录",
+          "clearFolder": "清除",
+          "chooseFolder": "选择模型目录",
+          "invalidFolder": "所选目录未找到受支持的 sherpa-onnx 模型文件（需包含 tokens.txt 与 .onnx）。"
+        }
       },
       "historyToggle": {
         "show": "展开近期历史",
@@ -3313,7 +3328,9 @@
           "filters": {
             "all": "全部",
             "automatic": "自动添加",
-            "manual": "手动添加"
+            "manual": "手动添加",
+            "candidates": "候选词",
+            "suppressed": "已抑制"
           },
           "sources": {
             "automatic": "自动",
@@ -3326,6 +3343,28 @@
             "automaticAddedMultiple": "已自动加入词典：{{term}} 等 {{count}} 个词",
             "delete": "删除",
             "deleteAriaLabel": "删除自动加入的词：{{term}}"
+          },
+          "export": {
+            "csv": "导出 CSV",
+            "json": "导出 JSON",
+            "successCsv": "已导出 CSV 词典文件",
+            "successJson": "已导出 JSON 词典文件"
+          },
+          "candidates": {
+            "hint": "自动学习从你的手动修正中观察到的候选词，尚未达到自动转正阈值。可一键加入词典或删除。",
+            "evidenceCount": "已观察 {{count}} 次",
+            "promote": "转正加入",
+            "promoteTooltip": "一键将该候选词加入个人词典",
+            "promotedToast": "已将「{{term}}」加入词典",
+            "empty": "暂无自动学习候选词。"
+          },
+          "suppressed": {
+            "hint": "你曾删除的自动学习词会被抑制，避免再次自动加入。可恢复自动学习资格，或直接重新加入词典。",
+            "restore": "恢复自动学习",
+            "addToDictionary": "重新加入词典",
+            "restoredToast": "已恢复「{{term}}」的自动学习资格",
+            "addedToast": "已将「{{term}}」重新加入词典",
+            "empty": "暂无已抑制词条。"
           }
         }
       },
@@ -3370,7 +3409,15 @@
         "toast": {
           "copied": "已复制",
           "copyFailed": "复制失败"
-        }
+        },
+        "searchAriaLabel": "搜索语音历史记录",
+        "searchPlaceholder": "搜索转写或原始识别内容…",
+        "showRawComparison": "对比原始识别",
+        "hideRawComparison": "收起对比",
+        "rawLabel": "原始识别",
+        "refinedLabel": "润色后",
+        "loadMore": "加载更多（剩余 {{count}} 条）",
+        "noSearchResults": "没有匹配的语音历史记录。"
       },
       "speakerFilter": {
         "label": "识别我的声音",
@@ -10999,12 +11046,14 @@
       "fileCount_other": "{{count}} 个文件",
       "emptyTitle": "暂无改动",
       "emptyDesc": "本任务还没有任何文件改动。让 Agent 编辑或创建文件后，会在这里出现。",
+      "emptyDescSvn": "版本控制下的文件与 SVN 基准版本一致。",
+      "svnSelectFile": "选择文件查看差异。",
       "emptyDescGit": "当前 git worktree 没有 staged 或 unstaged 改动。",
       "filterEmptyTitle": "当前筛选下暂无改动",
-      "filterEmptyDesc": "当前筛选或设置下没有可显示的 git 改动。",
+      "filterEmptyDesc": "当前筛选或设置下没有可显示的改动。",
       "noSessionTitle": "暂无任务",
       "noSessionDesc": "选择一个本机任务后可查看 git worktree 改动。",
-      "loadingTitle": "正在读取 git 改动",
+      "loadingTitle": "正在读取改动",
       "loadingDesc": "面板会保留上一次内容，读取完成后刷新。",
       "errorTitle": "读取失败",
       "refresh": "刷新",
@@ -11204,7 +11253,16 @@
         "leaseExpired": "远端在确认后又发生了变化，已中止推送，请刷新后重新确认。",
         "noRemote": "该仓库没有配置 git 远端，无法推送。",
         "failedTitle": "推送失败",
-        "successToast": "已推送"
+        "successToast": "已推送",
+        "divergedTitle": "远端分支已有新提交",
+        "syncCleanDesc_other": "远端 {{remoteRef}} 比本地多出 {{count}} 个提交，预检无冲突。建议先变基同步远端再推送，避免覆盖远端提交。",
+        "divergedConflictDesc_other": "远端 {{remoteRef}} 比本地多出 {{count}} 个提交，且与本地改动存在冲突（{{files}}）。可以让 Agent 帮你安全整合并解冲突，或改为强制推送。",
+        "divergedDirtyDesc_other": "远端 {{remoteRef}} 比本地多出 {{count}} 个提交，当前工作区还有未提交改动。可以让 Agent 帮你处理后再推送，或改为强制推送。",
+        "divergedGeneralDesc_other": "远端 {{remoteRef}} 比本地多出 {{count}} 个提交。可以让 Agent 帮你安全整合远端更新，或改为强制推送。",
+        "syncAndPushConfirm": "同步并推送",
+        "askAgentSyncConfirm": "交给 Agent 解冲突",
+        "syncedAndPushedToast": "已同步远端并推送",
+        "agentPromptFilled": "已将同步解冲突指令填入输入框，按回车即可交给 Agent 处理"
       },
       "changeStatus": {
         "renamed": "重命名",
@@ -11269,6 +11327,10 @@
         "non-git": {
           "title": "不是 git 仓库",
           "desc": "当前工作目录下没有可用的 git 仓库。"
+        },
+        "svn-unavailable": {
+          "title": "找不到 SVN",
+          "desc": "安装 Subversion 命令行客户端后即可查看工作副本的差异。"
         },
         "git-unavailable": {
           "title": "git 不可用",
@@ -15241,6 +15303,24 @@
       "removeFromList": "从列表中移除",
       "missingDir": "目录不存在"
     },
+    "remoteOutbox": {
+      "notSent": "未发送",
+      "retry": "重试",
+      "delete": "删除",
+      "deliveryUnconfirmed": "发送结果未确认",
+      "recheckDelivery": "重新确认",
+      "waitingForPrevious": "等待前一条消息",
+      "taskInactive": "这个任务当前无法接收消息。",
+      "inputNotSupported": "这台电脑暂不支持向这个任务发送这类消息。",
+      "taskClearedBeforeSend": "任务已清空或正在清空，消息仍保存在本机。",
+      "invalidInput": "这条消息有无效内容，电脑未接收。",
+      "profileInUseByDesktop": "这份数据正被单独运行的 Cindy 电脑端使用。请先退出它，再发送。",
+      "other": "这个操作没有完成。请稍后重试。",
+      "deleteConfirmTitle": "删除这条消息？",
+      "deleteConfirmBody": "这条消息没有发送成功，删除后无法恢复。",
+      "deleteUnconfirmedBody": "电脑可能已经收到这条消息。删除只会移除本机的待发消息。如果电脑已收到，这条消息仍会出现在对话记录里。",
+      "cancel": "取消"
+    },
     "pendingQueue": {
       "waitingForDevice": "尚未发送，等另一台电脑恢复连接后发送",
       "stopping": "停止处理中",
@@ -15360,7 +15440,11 @@
           "description": "请开启麦克风权限，再点击语音输入",
           "confirm": "去授权",
           "cancel": "取消"
-        }
+        },
+        "rewriteSelected": "语音改写",
+        "rewriteSelectedTooltip": "口述指令改写选中文字（如翻译、精简、换语气；失败时保留原文）",
+        "rewriteSelectedAria": "语音改写选中文字",
+        "rewriteFailed": "语音改写未完成，已保留选中的原文。"
       },
       "remoteSwitchFailed": "远程设置切换失败，未生效",
       "switchFailed": "设置切换失败，未生效",
@@ -15559,7 +15643,23 @@
         "missing": "远程分支已不存在",
         "busy": "仓库正忙，请稍后重试",
         "changed": "检出的分支已变化，请重试"
-      }
+      },
+      "rebased_other": "已变基同步 {{count}} 个远端提交",
+      "divergedCanRebase": "本地领先 {{ahead}}、落后 {{behind}} 个提交，预检无冲突。点击将本地提交变基同步到 {{remote}}/{{remoteBranch}}",
+      "divergedConflictHint": "本地与 {{remote}}/{{remoteBranch}} 分叉且存在冲突（{{files}}），点击查看并交给 Agent 处理",
+      "divergedOpenDetails": "查看分支分叉详情并交给 Agent 解冲突",
+      "divergedRebaseNotice": "与 {{remote}} 分叉（领先 {{ahead}}、落后 {{behind}} 个提交），预检无冲突",
+      "divergedConflictNoticeFiles": "与 {{remote}} 分叉且存在冲突（{{files}}）",
+      "divergedDirtyNotice_other": "与 {{remote}} 分叉，且工作区有 {{count}} 个未提交改动",
+      "divergedConflictNotice": "与 {{remote}} 分叉，存在潜在冲突",
+      "rebaseNow": "一键同步",
+      "askAgentResolve": "交给 Agent 解冲突",
+      "agentPromptFilled": "已填入分支同步解冲突指令，确认后直接发送即可",
+      "agentPromptDivergedCounts": "当前领先 {{ahead}}、落后 {{behind}} 个提交",
+      "agentPromptConflictFiles": "预检冲突文件：{{files}}",
+      "agentPromptDirty_other": "工作区另有 {{count}} 个未提交改动",
+      "agentPromptSyncOnly": "请安全同步当前本地分支 {{branch}} 与远端 {{remoteRef}}。{{details}}\n请先检查 git status 与提交历史，使用 rebase 或 merge 整合远端更新并逐一解决冲突；保留本地改动意图，不要使用 git reset --hard 或丢弃未提交改动；完成后简要说明处理结果并运行相关检查。",
+      "agentPromptSyncAndPush": "请安全同步当前本地分支 {{branch}} 与远端 {{remoteRef}} 并完成推送。{{details}}\n请先检查 git status 与提交历史，使用 rebase 或 merge 整合远端更新并逐一解决冲突；保留本地改动意图，不要使用 git reset --hard 或丢弃未提交改动；确认检查通过后再推送到远端。"
     },
     "pluginUi": {
       "title": "插件「{{name}}」新增了交互页面，需要你确认后才能使用",
@@ -15662,6 +15762,106 @@
       "engineMissing": "提供这个引擎的插件已停用或卸载",
       "worktreeUnsupported": "插件引擎暂不支持在 worktree 中新建任务，请取消勾选 worktree 后再发送",
       "modelChangeFailed": "未能切换模型"
+    },
+    "workspaceCapsule": {
+      "popoverTitle": "任务工作区",
+      "checkUpdates": "检查更新",
+      "checkingUpdates": "检查中…",
+      "checkUpdatesAria": "检查云端分支最新状态",
+      "openGuideAria": "不熟悉分支和 worktree？查看图解",
+      "back": "返回",
+      "worktreeTitle": "在隔离副本中执行",
+      "worktreeOnDesc": "单独复制一份工作区，不干扰你当前目录的文件",
+      "worktreeOffDesc": "直接在当前项目目录中改动，切换分支会影响本机文件",
+      "worktreeCompareToggle": "开启和关闭有什么区别？",
+      "compareDirectTitle": "关闭 · 直接修改",
+      "compareIsolatedTitle": "开启 · 隔离副本",
+      "badgeCurrent": "当前",
+      "badgeOff": "未选用",
+      "badgeRecommended": "推荐",
+      "compareMainDir": "主目录",
+      "compareDirectWrite": "直接写入",
+      "compareDirectNote": "适合单任务快速改动，但同时跑两个任务会互相覆盖",
+      "compareUntouched": "保持原样",
+      "compareTaskCopy": "任务副本",
+      "compareIsolatedRun": "独立运行",
+      "remoteLatestReady": "已选用云端最新版本，无需额外同步",
+      "syncedStatus": "已与云端最新保持同步",
+      "aheadOnlyStatus": "本地领先云端 {{count}} 条提交（无需拉取）",
+      "behindTitle": "云端有 {{count}} 条新更新",
+      "behindDesc": "直接拉取到本地，安全无覆盖、不消耗 AI 额度",
+      "syncNow": "同步到本地",
+      "divergedCleanTitle": "本地和云端各有新改动",
+      "divergedCleanDesc": "已预检没有冲突，可一键安全合并，不消耗 AI 额度",
+      "divergedConflictTitle": "本地和云端改到了同一处",
+      "divergedConflictDesc": "有 {{count}} 个文件改动重叠，建议交由 Agent 稳妥合并，不会丢弃你的修改",
+      "divergedDirtyTitle": "当前有 {{count}} 处尚未保存提交的改动",
+      "divergedDirtyDesc": "为保护你正在改的文件，不能直接自动同步，可让 Agent 稳妥协助",
+      "divergedGenericDesc": "本地与云端记录已分叉，建议交由 Agent 协助稳妥合并，不会丢弃修改",
+      "techDetails": "技术详情",
+      "filesAndDetails": "涉及文件与详情",
+      "techRefsLabel": "本地 / 远端",
+      "techCommitsLabel": "提交差异",
+      "techWorkingTreeLabel": "工作区",
+      "techFfSafety": "采用严格快进模式（git merge --ff-only）：若发现意外改动会自动中止，绝不覆盖。",
+      "techRebaseSafety": "只读 merge-tree 已确认无冲突；执行 git rebase，如遇异常自动撤销。",
+      "techAgentSafety": "交给 Agent 时自动附带安全约束：禁止 git reset --hard，保留全部未提交与本地提交改动。",
+      "tooltipBehind": "云端有 {{count}} 条新更新，点击可一键同步",
+      "tooltipConflict": "本地和云端有改动重叠，点击查看处理方式",
+      "branchSwitchReadOnly": "当前位于 {{branch}} 分支；开启上方隔离副本后可自由挑选起始分支",
+      "remoteGroupHint": "团队最新合并版本",
+      "localGroupHint": "本机已有分支",
+      "remoteOptionSub": "基于团队已合并的最新代码开始",
+      "footerGuideCta": "不熟悉分支与 worktree？30 秒图解",
+      "kbdSwitchHint": "↑↓ 切换",
+      "guideTitle": "分支与 worktree 小指南",
+      "guideBranchTitle": "1. 什么是「分支」？",
+      "guideBranchDesc": "可以把它理解成项目的平行草稿线。你在新分支上改功能、做实验，随时可以合并回主版本，改坏了也不会影响主线代码。",
+      "guideGraphMain": "main (主线)",
+      "guideGraphTask": "新任务草稿",
+      "guideWorktreeTitle": "2. 什么是「隔离副本」？",
+      "guideWorktreeDesc": "开启后，Cindy 会为当前任务单独准备一个独立文件夹。你一边自己写代码、一边让多个 Agent 同时跑不同任务，彼此绝不互相覆盖。",
+      "guideChoiceTitle": "3. 该选「云端最新」还是「本机分支」？",
+      "guideRemoteLabel": "云端最新：",
+      "guideRemoteDesc": "想基于团队已合并的最新版本开一个全新任务时选它（最省心）。",
+      "guideLocalLabel": "本机分支：",
+      "guideLocalDesc": "想接着你电脑上还没上传的改动继续往下做时选它。",
+      "guideProHint": "熟悉 Git 的开发者可在同步状态栏点「技术详情」随时查看提交计数与执行命令。"
+    },
+    "workspaceCleanup": {
+      "entrySuggestTitle": "让 AI 整理本地分支与 worktree",
+      "entryUrgentTitle": "建议整理本地分支与 worktree",
+      "entrySub": "已累计 {{cindyBranches}} 个历史分支与 {{idleWorktrees}} 个闲置副本",
+      "entrySubWithFailed": "含 {{cindyBranches}} 个历史分支、{{idleWorktrees}} 个闲置副本及 {{failed}} 处回收残留",
+      "entryCountBadge": "{{branches}} 分支 · {{worktrees}} 闲置",
+      "capsuleRedDotTooltip": "本地积压 {{branches}} 个分支与 {{worktrees}} 个闲置副本，点击可让 AI 安全整理",
+      "paneTitle": "AI 整理本地分支与 worktree",
+      "safeBannerTitle": "只读先盘点，等你确认后再删",
+      "safeBannerDesc": "AI 会先按「可安全清理 / 含未合并改动 / 活跃保护」分类汇报，不会擅自删除任何分支或文件。",
+      "statBranchesLabel": "本机分支",
+      "statWorktreesLabel": "隔离副本 (worktree)",
+      "statCount": "{{count}} 个",
+      "statCindyBranches": "含 {{count}} 个 cindy/* 历史分支",
+      "statActiveProtected": "{{count}} 个活跃任务（自动保护）",
+      "statIdleOnly": "{{count}} 个闲置可检查",
+      "statIdleAndFailed": "{{idle}} 个闲置 · {{failed}} 处回收残留",
+      "scopesTitle": "重点帮我检查（可多选）",
+      "scopeMerged": "已合并的旧分支",
+      "scopeWorktrees": "闲置 worktree 副本",
+      "scopeUnpushed": "提醒未推送改动",
+      "mainRepoNote": "将在项目主目录发起盘点（自动关闭本次 worktree，避免多建副本），优先通过 GitHub 插件核对 PR 合并状态。",
+      "startAuditAction": "填入输入框，让 AI 开始盘点",
+      "snooze7Days": "暂不整理 · 7 天内不再红点提醒",
+      "snoozedToast": "已关闭红点提醒 7 天，随时仍可在分支弹层内发起整理",
+      "agentPromptFilled": "已填入只读盘点指令（不会自动删除，且已在主目录就绪），按回车开始",
+      "promptIntro": "请先以【只读盘点】方式帮我整理当前项目的本地分支和 worktree 隔离副本（第一阶段严格只读：不执行删除、reset、checkout、fetch/prune，大仓也不要对全量分支跑 diff/cherry）：",
+      "promptFocusMerged": "已合并的历史本地分支与 cindy/* 分支（含 Squash Merge：优先用 GitHub 插件 GraphQL 批量核对 PR，必须校验本地 HEAD SHA 与已合并 PR 的 headRefOid 一致或为其祖先，严禁仅凭同名分支判定）",
+      "promptFocusWorktrees": "闲置的 worktree 副本（仅对候选清理目录快速估算空间，不对主仓递归 du；在 macOS APFS 下区分 node_modules 共享块与构建产物等真实可释放空间）",
+      "promptFocusUnpushed": "仍含未推送提交、未保存本地改动或 git stash、需要我确认去留的分支与副本",
+      "promptStepFocus": "1. 重点盘点：{{focus}}。",
+      "promptStepProtect": "2. 自动排除并保护（三重核验）：(a) Cindy 未归档活跃任务（含刚建好、干净且 ahead=0 的待确认任务，注意区分已结束的旧 Worker）；(b) 本机活跃进程占用的目录（lsof/句柄检查）与 .worktree-keep 目录；(c) 关联 OPEN/DRAFT PR 或含未提交/未合并改动的分支与副本。",
+      "promptStepOutput": "3. 按「安全可清理 / 需我确认 / 活跃保护保留」三类通俗汇报；数量较多时按前缀/目录分组聚合并标出空间 Top 项，最后给出编号化的可选清理组合，等我明确回复后再分步执行。",
+      "promptProtectedList": "4. 当前本机检测到 {{count}} 个未归档任务占用中的 worktree 目录，必须全部归入「活跃保护保留」：{{paths}}。"
     }
   },
   "onboarding": {
@@ -18033,7 +18233,41 @@
         "offlineCompleteRejectedNewActivity": "「{{title}}」已退回待处理：电脑离线期间该任务有新进展。",
         "offlineCompleteRejectedRunning": "「{{title}}」已退回待处理：该任务正在运行中。",
         "offlineCompleteRejectedAttached": "「{{title}}」已退回待处理：该任务正被接管或处于共享状态，未自动归档。",
-        "offlineCompleteRejectedPreflight": "「{{title}}」已退回待处理：未能核验 worktree 状态，需手动确认后归档。"
+        "offlineCompleteRejectedPreflight": "「{{title}}」已退回待处理：未能核验 worktree 状态，需手动确认后归档。",
+        "health": {
+          "regionLabel": "环境健康提醒",
+          "dismiss": "关闭此提醒",
+          "summaryTitle_other": "{{count}} 项环境问题待处理",
+          "providerAuthSingleTitle": "{{name}} 连接已失效",
+          "providerAuthSingleDesc": "重新登录后即可恢复模型调用。",
+          "providerAuthMultiTitle_other": "{{count}} 个模型供应商连接已失效",
+          "providerAuthMultiDesc": "涉及：{{names}}。重新登录后即可恢复。",
+          "githubMissingTitle": "GitHub 未连接",
+          "githubNotLoggedInTitle": "GitHub 连接已失效",
+          "gitlabMissingTitle": "GitLab 未连接",
+          "gitlabNotLoggedInTitle": "GitLab 连接已失效",
+          "prAffectedDesc_other": "影响 {{count}} 个 PR 状态刷新与跟进。",
+          "auxiliaryTitle": "辅助模型链路异常",
+          "auxiliarySingleDesc": "{{model}} 当前不可用，标题生成与摘要可能降级。",
+          "auxiliaryMultiDesc_other": "{{count}} 条辅助模型链路异常，标题与摘要可能降级。",
+          "auxiliaryUnavailableDesc": "当前没有可用的辅助模型，标题生成与摘要已暂停。",
+          "automationSingleTitle": "自动化「{{name}}」运行受阻",
+          "automationMissingPluginDesc": "依赖插件「{{plugin}}」未启用或未安装。",
+          "automationPrecheckDesc": "前置检查未通过，最近一次未执行。",
+          "automationFailedDesc": "最近一次运行失败，请检查配置与日志。",
+          "automationMultiTitle_other": "{{count}} 项自动化运行异常",
+          "automationMultiDesc": "涉及：{{names}}。",
+          "actions": {
+            "reconnect": "重新连接",
+            "openProviders": "前往供应商设置",
+            "configureGitlab": "配置 GitLab",
+            "openSettings": "前往设置",
+            "inspectAutomation": "查看并修复",
+            "viewAutomations": "查看自动化",
+            "connectGithub": "连接 GitHub",
+            "openGithubPlugin": "打开 GitHub 插件"
+          }
+        }
       },
       "taskListMode": {
         "heading": "任务模式",
@@ -20698,6 +20932,8 @@
     },
     "errors": {
       "piStartupCloudFile": "发现仅在云端的指令文件：{{path}}。它可能使 Pi 启动等待。请在访达中下载该文件，确认已保存在本机后重试；超时也可能另有原因。",
+      "remoteEngineMissing": "远程电脑没有可用的引擎。请在那台电脑上安装引擎并重启 Cindy 后重试。",
+      "remoteCapabilityUnavailable": "当前服务器或电脑暂不支持此操作。",
       "hostProfileInUseByDesktop": "这份数据正被单独运行的 Cindy 电脑端使用。请先退出它，再发送。",
       "hostProfileInUseByDesktopAtStart": "这份数据正被单独运行的 Cindy 电脑端使用，Cindy 后台服务没有启动。请先退出它，重新启动 Cindy 后台服务，然后重新打开当前这个 Cindy 窗口。",
       "hostProfileInUseByDesktopRetry": "这份数据正被单独运行的 Cindy 电脑端使用，暂时不能修改。请先退出它，再试一次。",
@@ -23400,10 +23636,10 @@
   },
   "openAiAccountGroup": {
     "removeDescription": "此连接将不再接收组内的新任务。正在运行的任务仍留在原连接。",
-    "mergeDescription": "从 {{target}} 新建的任务可以使用这两个供应商。登录、密钥和已有任务保留在原处。建立调度关系前，Cindy 会测试 {{apiKey}} 的 API Key。",
+    "mergeDescription": "从 {{target}} 新建的任务将在可用成员间分配。登录、密钥和已有任务保留在原处。Cindy 会测试 {{apiKey}} 的 API Key；如果只是余额不足或达到计费上限，仍可并入，但在恢复可用前不会自动分配任务给它。",
     "modelUnavailable": "此连接无法调用本次自动选中的模型。再次测试可尝试其他候选。",
     "noTestModel": "当前连接没有可用于测试的模型。请确认 OpenAI 项目可调用哪些模型，再刷新或更新此连接的模型列表。",
-    "billingPaused": "余额不足或达到计费上限，已暂停组内分配。",
+    "billingPaused": "余额不足或达到计费上限，已暂停自动分配。",
     "title": "账号组",
     "testPassed": "测试成功",
     "refresh": "刷新配额"
@@ -23643,7 +23879,15 @@
       "exceptionImage": "消息里有图片，只在能看图的来源里选",
       "exceptionImageFallback": "消息里有图片，但没有能看图的来源，照常选",
       "exceptionHours": "这个时段改走「{{name}}」",
-      "separator": "；"
+      "separator": "；",
+      "usageHabit": "根据你平时的用量优先选它",
+      "usageHabitQuota": "根据你平时的用量优先选它（还剩 {{left}}% 配额）",
+      "autoBalance": "其他来源配额偏紧或已有任务，优先用它分担",
+      "autoBalanceQuota": "综合余量与负载优先选它（还剩 {{left}}% 配额）",
+      "lessBusy": "其他来源正在运行任务，先用空闲的它",
+      "paygFallback": "订阅与共享暂不可用，改用按量付费来源兜底",
+      "paygReserve": "按量付费来源，其余来源不可用时再兜底",
+      "standbyQuotaNeutral": "还剩 {{left}}% 配额，{{reset}} 重置，这次没轮到"
     },
     "settings": {
       "autoSwitch": {

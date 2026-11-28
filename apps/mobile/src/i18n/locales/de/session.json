@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "Denkt nach…",
+    "replyStreaming": "Wird generiert…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} Token",
     "tokenRate": "{{rate}} tok/s",
@@ -542,7 +543,8 @@
       "followLastDeviceHint": "Nutzt den zuletzt auf dem Bildschirm für neue Aufgaben gewählten Computer; sonst den vom Einstieg mitgebrachten.",
       "followLastWorkspaceHint": "Stellt das zuletzt gewählte Projekt oder den Chat wieder her; im Projektmodus den zuletzt auf diesem Computer genutzten Ordner.",
       "followAppHint": "Entspricht dem App-Standard für neue Aufgaben."
-    }
+    },
+    "createRejectedResend": "Dein Inhalt ist wieder da. Passe ihn bei Bedarf an und sende ihn erneut."
   },
   "menu": {
     "moveToProject": "Aufgabe verschieben",
@@ -738,9 +740,15 @@
   "outbox": {
     "deleteConfirmTitle": "Diese Nachricht löschen?",
     "deleteConfirmBody": "Diese Nachricht wurde nicht gesendet. Das Löschen kann nicht rückgängig gemacht werden.",
+    "deleteUnconfirmedBody": "Der Computer hat diese Nachricht möglicherweise schon empfangen. Beim Löschen wird nur die ausstehende Nachricht auf diesem Gerät entfernt. Hat der Computer sie empfangen, ist sie weiterhin im Gesprächsverlauf zu sehen.",
     "legacyPlanRecovery": "Dieser Computer kann gespeicherte Nachrichten im Planmodus nicht wiederherstellen. Deaktiviere den Planmodus oder aktualisiere Cindy auf dem Computer und versuche es erneut.",
     "creationRecoveryRequired": "Versuche erneut, diese Aufgabe zu erstellen, bevor du ihre erste Nachricht löschst. Diese Nachricht enthält die Wiederherstellungsdaten für deine späteren Nachrichten.",
     "confirmationRequired": "Dieser Computer kann nicht bestätigen, ob die Nachricht empfangen wurde. Prüfe seinen Verlauf oder aktualisiere Cindy, bevor du es erneut versuchst.",
+    "profileInUseByDesktop": "Diese Daten werden von der eigenständig laufenden Cindy-Desktop-App verwendet. Beende sie und sende dann erneut.",
+    "taskInactive": "Diese Aufgabe kann gerade keine Nachrichten empfangen.",
+    "inputNotSupported": "Dieser Computer unterstützt diesen Nachrichtentyp für die Aufgabe nicht.",
+    "invalidInput": "Der Computer hat die Nachricht wegen ungültiger Inhalte abgelehnt.",
+    "taskClearedBeforeSend": "Die Aufgabe wurde oder wird gerade geleert. Die Nachricht bleibt auf diesem Gerät gespeichert.",
     "taskCleared": "Diese Aufgabe wurde nach dem Senden der Nachricht geleert. Die gespeicherte Nachricht wurde zur Prüfung aufbewahrt.",
     "restoreFailed": "Gespeicherte Nachrichten konnten nicht wiederhergestellt werden. Sie wurden nicht gelöscht. Starte die App neu und versuche es erneut.",
     "recoveryTarget": "Behalte beim Wiederherstellen dieser Aufgabe den ursprünglichen Computer bei. Die späteren Nachrichten sind noch gespeichert.",

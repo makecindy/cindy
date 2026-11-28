@@ -9,6 +9,7 @@ import type { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readZhipuC
 import { PROVIDER_SHARE_INSIGHTS_CHANNEL } from '../../shared/providerShareInsights.js';
 import { PROVIDER_SHARE_AGENT_NET_LINK_CHANNEL } from '../../shared/providerShareAgentNetLink.js';
 import { sharedTaskRecoveryError } from '../../shared/sharedTaskRecovery.js';
+import { isIpcError } from '../../shared/ipc-errors.js';
 import { hasRichAnswer, compactRichAnswer, richAnswerText } from '@cindy/maker-shared/rich-answer';
 import type { RemoteAgentLimitUsage } from '../../shared/remoteAgentLimits.js';
 import type { executeTaskTags, TASK_TAG_CHANNEL } from '../localDb/ipc/taskTags.js';
@@ -106,6 +107,7 @@ import {
   CONTROLLER_CAPABILITY_PROVIDER_PICKER_V1,
   type ProviderPickerModel,
   DL_VOICE_DICTIONARY_GET_CHANNEL,
+  DL_VOICE_DICTIONARY_MUTATE_CHANNEL,
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
   DL_USAGE_WIDGET_SNAPSHOT_CHANNEL,
@@ -115,6 +117,7 @@ import {
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_PLUGIN_ENGINE_SWITCH_INTENT_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
+  CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   DEVICE_LINK_CAPABILITY_GITHUB_READ_V1,
@@ -184,7 +187,7 @@ import type { admitSharedTaskFsWatchTopics } from './sharedTaskFileAccess.js';
 import type { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import type { readTelegramRemoteStatus, setTelegramRemoteOnline } from './telegramRemoteControl';
 import type { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
-import type { buildMobileDictionarySnapshot } from '../voice-input/dictionarySyncDriver.js';
+import type { buildMobileDictionarySnapshot, mutateMobileDictionary } from '../voice-input/dictionarySyncDriver.js';
 import type {
   setBroadcastTapListener,
 } from './broadcast-tap';
@@ -516,6 +519,7 @@ export interface InboundDispatchPorts {
   setTelegramRemoteOnline?: typeof setTelegramRemoteOnline;
   adviseAndRecordVoiceInputDictionaryLearning?: typeof adviseAndRecordVoiceInputDictionaryLearning;
   buildMobileDictionarySnapshot?: typeof buildMobileDictionarySnapshot;
+  mutateMobileDictionary?: typeof mutateMobileDictionary;
   setBroadcastTapListener: typeof setBroadcastTapListener;
   broadcastTap: typeof broadcastTap;
   RECOVERY_CHECKPOINT_MARKER: typeof RECOVERY_CHECKPOINT_MARKER;
@@ -587,6 +591,7 @@ export function createInboundDispatch(ports: InboundDispatchPorts) {
     setTelegramRemoteOnline = unavailable('setTelegramRemoteOnline'),
     adviseAndRecordVoiceInputDictionaryLearning = unavailable('adviseAndRecordVoiceInputDictionaryLearning'),
     buildMobileDictionarySnapshot = unavailable('buildMobileDictionarySnapshot'),
+    mutateMobileDictionary = unavailable('mutateMobileDictionary'),
     setBroadcastTapListener,
     broadcastTap,
     RECOVERY_CHECKPOINT_MARKER,
@@ -5643,6 +5648,24 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     }
   }
 
+  // device-link:voice:dictionary:mutate 让手机直接通过同账号桌面 CRDT 增删改个人词典词条及别名，
+  // 变更立即经桌面 CRDT 广播同步到其它桌面与手机，避免移动端维护会分叉的可写副本。
+  if (payload.channel === DL_VOICE_DICTIONARY_MUTATE_CHANNEL) {
+    if (!isSameAccountController(src)) {
+      return {
+        ok: false,
+        error: { code: 'CHANNEL_NOT_ALLOWED', message: 'Voice dictionary editing requires the same account' },
+      };
+    }
+    try {
+      return { ok: true, result: mutateMobileDictionary((payload.args ?? [])[0]) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`voice:dictionary:mutate failed from ${shortId(src)}: ${message}`);
+      return { ok: false, error: { code: 'IPC_ERROR', message } };
+    }
+  }
+
   // device-link:voice:dictionary-learning 是手机端 voice refine 后的术语学习 evidence 回写:
   // 手机只负责检测用户编辑,真正 advisor + 词典写入仍在被控桌面执行,避免移动端词典分叉。
   if (payload.channel === DL_VOICE_DICTIONARY_LEARNING_CHANNEL) {
@@ -5790,7 +5813,9 @@ async function executeRemoteInvoke(src: string, payload: InvokePayload | undefin
     if (isDbWorkerOverloadedError(message) && (!handlerCompleted || isCompletedInvokeRetryableReadChannel(payload.channel))) {
       return { ok: false, error: { code: 'BACKPRESSURE', message } };
     }
-    if (payload.channel === 'local-db:messages:around-client-id' && err instanceof DeviceLinkError && err.code === 'NOT_FOUND') {
+    if (!handlerCompleted && payload.channel === 'local-db:messages:around-client-id'
+        && subscriptions.controllerSupports(src, CONTROLLER_CAPABILITY_EXACT_MESSAGE_NOT_FOUND_V1)
+        && (err instanceof DeviceLinkError || isIpcError(err)) && err.code === 'NOT_FOUND') {
       return { ok: false, error: { code: err.code, message } };
     }
     return { ok: false, error: { code: 'IPC_ERROR', message } };

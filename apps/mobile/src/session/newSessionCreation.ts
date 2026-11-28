@@ -1150,7 +1150,15 @@ async function createSessionIdempotent(
       } catch (probeError) {
         if (isStaleNewSessionOwnerError(probeError)) throw probeError;
       }
-      throw new Error(`${formatRemoteError(error)}\n${i18n.t('session.new.worktreeCleanupPending')}`);
+      // The worktree stays retained either way. A definite rejection (the
+      // computer answered with a reason) is not fixed by reconnecting. The failed
+      // task already returns to the new-task form on its own (and cancels the
+      // managed directory), so the hint only says the content is back to resend.
+      // Only an uncertain transport failure keeps the reconnect hint.
+      const nextStep = isTransientRemoteError(error)
+        ? 'session.new.worktreeCleanupPending'
+        : 'session.new.createRejectedResend';
+      throw new Error(`${formatRemoteError(error)}\n${i18n.t(nextStep)}`);
     }
   }
 

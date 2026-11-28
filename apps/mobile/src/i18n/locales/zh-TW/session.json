@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "思考中…",
+    "replyStreaming": "正在生成…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
@@ -542,7 +543,8 @@
       "followLastDeviceHint": "用上次在新建任務頁選的電腦；沒有就用入口帶來的電腦。",
       "followLastWorkspaceHint": "恢復上次選的專案或對話；專案模式下用該電腦上次的目錄。",
       "followAppHint": "與應用內新建的預設保持一致。"
-    }
+    },
+    "createRejectedResend": "內容已帶回，可調整後重新傳送。"
   },
   "menu": {
     "moveToProject": "移動任務",
@@ -738,9 +740,15 @@
   "outbox": {
     "deleteConfirmTitle": "刪除這則訊息？",
     "deleteConfirmBody": "這則訊息未能成功傳送，刪除後無法復原。",
+    "deleteUnconfirmedBody": "電腦可能已經收到這則訊息。刪除只會移除這部裝置上的待傳訊息。若電腦已收到，這則訊息仍會出現在對話記錄中。",
     "legacyPlanRecovery": "這臺電腦暫不支援在計畫模式下恢復待傳訊息。請關閉計畫模式，或更新電腦上的 Cindy 後重試。",
     "creationRecoveryRequired": "請先重試建立任務，再刪除首則訊息；這則訊息仍保存著後續訊息所需的任務恢復資訊。",
     "confirmationRequired": "電腦暫時無法確認是否收到這則訊息。請核對訊息記錄，或更新電腦上的 Cindy 後重試。",
+    "profileInUseByDesktop": "這份資料正被單獨執行的 Cindy 電腦端使用。請先結束它，再傳送。",
+    "taskInactive": "這個任務目前無法接收訊息。",
+    "inputNotSupported": "這部電腦暫不支援向這個任務傳送這類訊息。",
+    "invalidInput": "這則訊息包含無效內容，電腦未接收。",
+    "taskClearedBeforeSend": "任務已清空或正在清空，訊息仍儲存在這部裝置上。",
     "taskCleared": "傳送後，這個任務已被清空。訊息仍保存在手機上，請核對後處理。",
     "restoreFailed": "暫時無法恢復待傳訊息，已保存的內容沒有刪除。請重新啟動 App 後重試。",
     "recoveryTarget": "恢復這個任務時請保留原來的電腦，後續訊息仍保存在手機上。",

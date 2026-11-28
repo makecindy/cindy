@@ -371,12 +371,23 @@ export function RightSidebarShell({
     () => projectedTabs.tabs.filter((tab) => inGroup(tab.id)),
     [inGroup, projectedTabs.tabs],
   );
-  const sessionActiveTabId = projectedTabs.activeTabId;
+  // A silently discovered singleton has no task selection. Keep its group's
+  // global page visible, including when it was only the group's default page.
+  const firstTaskTab = projectedTabs.tabs[0];
+  const passiveGroup = bucket.activeTabId === null && firstTaskTab?.kind === 'subagents'
+    ? tabGroupOf(groupAssignments, firstTaskTab.id)
+    : null;
+  const keepGlobalPage = passiveGroup !== null &&
+    allPinnedTabs.some((tab) => tabGroupOf(groupAssignments, tab.id) === passiveGroup);
+  const sessionActiveTabId = keepGlobalPage ? null : projectedTabs.activeTabId;
   /** 本组可见页签 = 归本组的全局页签(钉在前) + 归本组的当前任务页签。 */
   const tabs = useMemo(() => [...pinnedTabs, ...sessionTabs], [pinnedTabs, sessionTabs]);
   // 激活位:用户选中的全局页签优先并跨任务保持;否则是任务自己的激活页签(在本组时);
   // 本组不含任务级激活页签时用组内上次选中的;再没有就落到第一个页签。
   const groupRememberedActiveId = groupActiveVersion;
+  const defaultTab = keepGlobalPage && passiveGroup === groupId
+    ? pinnedTabs[0]
+    : sessionTabs[0] ?? pinnedTabs[0];
   // 独立窗口:激活位只在本窗口内存里(不写任务桶、不碰主窗的全局激活位)。
   const [hostedActiveTabId, setHostedActiveTabId] = useState<string | null>(null);
   const activeTabId = soloMode
@@ -389,7 +400,7 @@ export function RightSidebarShell({
         ? sessionActiveTabId
         : groupRememberedActiveId && tabs.some((tab) => tab.id === groupRememberedActiveId)
           ? groupRememberedActiveId
-          : (sessionTabs[0]?.id ?? pinnedTabs[0]?.id ?? null);
+          : (defaultTab?.id ?? null);
 
   useEffect(() => {
     onActiveTabChange?.(activeTabId);

@@ -22,6 +22,7 @@ import { readMarkdownPreview } from './markdownReader.js';
 import { GitReviewPushError, pushBranch } from './pushOps.js';
 import { resolveReviewScope } from './scopeResolver.js';
 import { createSshPreviewReaderDeps, withSessionReviewExecution } from './sshReviewBackend.js';
+import { readSvnStatus, readSvnDiffs, readSvnFileDiff } from './svnReader.js';
 import { readStatus } from './statusReader.js';
 import { applyFileBatch, applyHunkSelection, GitReviewStageError } from './stageOps.js';
 import type {
@@ -105,6 +106,15 @@ const defaultGitReviewDeps: GitReviewDeps = {
   readDiffs,
 };
 
+// Only panel reads opt into SVN. Git writes and Reviewer evidence keep their
+// original Git-only resolver, even if an older controller requests a write.
+export const panelReadDeps: GitReviewDeps = {
+  resolveScope: id => resolveReviewScope(id, undefined, 'git-and-svn'),
+  readStatus: scope => scope.vcs === 'svn' ? readSvnStatus(scope) : readStatus(scope),
+  readDiffs: (scope, status, options) => scope.vcs === 'svn'
+    ? readSvnDiffs(scope, status, options) : readDiffs(scope, status, options),
+};
+
 type GitReviewIpcOptions = Pick<GitReviewDeps, 'isSessionRunning'>;
 
 function isGitReviewDeps(value: unknown): value is GitReviewDeps {
@@ -147,10 +157,7 @@ export async function readReviewData(
   };
 }
 
-export async function readReviewSummary(sessionId: string, deps: Pick<GitReviewDeps, 'resolveScope' | 'readStatus'> = {
-  resolveScope: resolveReviewScope,
-  readStatus,
-}): Promise<ReviewDirtySummary> {
+export async function readReviewSummary(sessionId: string, deps: Pick<GitReviewDeps, 'resolveScope' | 'readStatus'> = panelReadDeps): Promise<ReviewDirtySummary> {
   const scope = await deps.resolveScope(sessionId);
   if (scope.disabledReason || !scope.repoRoot) return buildDirtySummary(sessionId, scope, null);
   const status = await deps.readStatus(scope);
@@ -206,10 +213,16 @@ export async function readReviewBranchDiff(
 export async function readReviewFileDiff(
   sessionId: string,
   request: ReviewFileDiffRequest,
-  deps: GitReviewDeps = { resolveScope: resolveReviewScope, readStatus, readDiffs },
+  deps: GitReviewDeps = panelReadDeps,
 ): Promise<ReviewFileDiffData> {
   const scope = await deps.resolveScope(sessionId);
   if (scope.disabledReason || !scope.repoRoot) return { scope, diff: null };
+  if (scope.vcs === 'svn') {
+    if (request.source !== 'unstaged') return { scope, diff: null };
+    const status = await deps.readStatus(scope);
+    const file = status.files.find(item => item.path === request.path);
+    return { scope, diff: file ? await readSvnFileDiff(scope, file, request) : null };
+  }
   if (request.source === 'staged' || request.source === 'unstaged') {
     const status = await deps.readStatus(scope);
     const diff = await readCappedFileDiff(status.scope, status, request.source, {
@@ -433,12 +446,13 @@ export async function runReviewPush(
   sessionId: string,
   confirmForce?: ReviewPushConfirmForce,
   deps: GitReviewDeps = { resolveScope: resolveReviewScope, readStatus, readDiffs },
+  options?: { syncBeforePush?: boolean },
 ): Promise<ReviewPushResult> {
   try {
     return await runQueuedWrite(sessionId, deps, async () => {
       const scope = await deps.resolveScope(sessionId);
       const status = await deps.readStatus(scope);
-      const push = await pushBranch(status.scope, status, confirmForce);
+      const push = await pushBranch(status.scope, status, confirmForce, options);
       const data = await readReviewData(sessionId, deps);
       if (push.kind === 'needs-force') {
         return { data, ...push };
@@ -675,7 +689,11 @@ function parseCommitPayload(payload: unknown): { sessionId: string; message: str
   };
 }
 
-function parsePushPayload(payload: unknown): { sessionId: string; confirmForce?: ReviewPushConfirmForce } {
+function parsePushPayload(payload: unknown): {
+  sessionId: string;
+  confirmForce?: ReviewPushConfirmForce;
+  syncBeforePush?: boolean;
+} {
   const obj = requireObject(payload);
   let confirmForce: ReviewPushConfirmForce | undefined;
   if (obj.confirmForce !== undefined) {
@@ -685,9 +703,11 @@ function parsePushPayload(payload: unknown): { sessionId: string; confirmForce?:
       expectedOid: requireString(rawConfirm.expectedOid, 'confirmForce.expectedOid'),
     };
   }
+  const syncBeforePush = obj.syncBeforePush === true ? true : undefined;
   return {
     sessionId: requireString(obj.sessionId, 'sessionId'),
     confirmForce,
+    syncBeforePush,
   };
 }
 
@@ -700,7 +720,7 @@ export function registerGitReviewIpc(options: GitReviewIpcOptions = {}): void {
   ipcMain.handle(GIT_REVIEW_INVOKE.GET, async (_event, payload: unknown) => {
     try {
       const { sessionId, options } = parseReviewDataPayload(payload);
-      return await withSessionReviewExecution(sessionId, () => readReviewData(sessionId, options));
+      return await withSessionReviewExecution(sessionId, () => readReviewData(sessionId, options, panelReadDeps));
     } catch (err) {
       rethrowReviewIpcError(err);
     }
@@ -829,7 +849,9 @@ export function registerGitReviewIpc(options: GitReviewIpcOptions = {}): void {
   });
 
   ipcMain.handle(GIT_REVIEW_INVOKE.PUSH, async (_event, payload: unknown) => {
-    const { sessionId, confirmForce } = parsePushPayload(payload);
-    return withSessionReviewExecution(sessionId, () => runReviewPush(sessionId, confirmForce, writeDeps));
+    const { sessionId, confirmForce, syncBeforePush } = parsePushPayload(payload);
+    return withSessionReviewExecution(sessionId, () =>
+      runReviewPush(sessionId, confirmForce, writeDeps, { syncBeforePush }),
+    );
   });
 }

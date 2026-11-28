@@ -102,6 +102,11 @@ interface PrCacheStore {
   /** 单会话状态快照(该会话未变时引用稳定)。 */
   getStatusesForSession: (sessionId: string) => ReadonlyMap<string, PrStatusResult>;
   getSuccessfulStatusesForSession: (sessionId: string) => ReadonlyMap<string, PrStatusResult>;
+  /** 汇总指定本机会话集合上因 gh / glab 缺失或未登录而受阻的 PR 数量。 */
+  getLocalAuthAlertSummary: (localSessionIds: ReadonlySet<string>) => {
+    github?: { reason: 'gh-missing' | 'gh-not-logged-in'; affectedPrCount: number };
+    gitlab?: { reason: 'glab-missing' | 'glab-not-logged-in'; affectedPrCount: number; host?: string };
+  };
   /** 本地全量加载:整表替换,但保住 keep 判定为真的既有条目(远程先到的)与未变引用。 */
   mergeLocalRefs: (
     grouped: Map<string, SessionPrRef[]>,
@@ -218,6 +223,42 @@ function createPrCacheStore(): PrCacheStore {
     },
     getSuccessfulStatusesForSession(sessionId) {
       return successfulStatusSnapshots.get(sessionId) ?? EMPTY_STATUSES;
+    },
+    getLocalAuthAlertSummary(localSessionIds) {
+      const githubKeys = new Set<string>();
+      let githubReason: 'gh-missing' | 'gh-not-logged-in' | undefined;
+      const gitlabKeys = new Set<string>();
+      let gitlabReason: 'glab-missing' | 'glab-not-logged-in' | undefined;
+      let gitlabHost: string | undefined;
+      for (const [sessionId, map] of statusesBySession) {
+        if (sessionId === CHAT_LINK_HOVER_SESSION_BUCKET) continue;
+        if (!localSessionIds.has(sessionId)) continue;
+        for (const [key, result] of map) {
+          if (result.ok) continue;
+          if (result.reason === 'gh-missing' || result.reason === 'gh-not-logged-in') {
+            githubKeys.add(key);
+            if (!githubReason || result.reason === 'gh-missing') githubReason = result.reason;
+          } else if (result.reason === 'glab-missing' || result.reason === 'glab-not-logged-in') {
+            gitlabKeys.add(key);
+            if (!gitlabReason || result.reason === 'glab-missing') gitlabReason = result.reason;
+            if (!gitlabHost && result.host) gitlabHost = result.host;
+          }
+        }
+      }
+      return {
+        ...(githubReason && githubKeys.size > 0
+          ? { github: { reason: githubReason, affectedPrCount: githubKeys.size } }
+          : {}),
+        ...(gitlabReason && gitlabKeys.size > 0
+          ? {
+              gitlab: {
+                reason: gitlabReason,
+                affectedPrCount: gitlabKeys.size,
+                ...(gitlabHost ? { host: gitlabHost } : {}),
+              },
+            }
+          : {}),
+      };
     },
     mergeLocalRefs(grouped, keep) {
       let changed = false;
@@ -961,4 +1002,32 @@ export function useTaskPrArchiveEligibility(sessionId: string): { eligible: bool
   ), [store, sessionId]);
   const eligible = useSyncExternalStore(store.subscribe, checkEligibility, checkEligibility);
   return { eligible, checkEligibility };
+}
+
+export interface LocalPrAuthAlertSummary {
+  github?: { reason: 'gh-missing' | 'gh-not-logged-in'; affectedPrCount: number };
+  gitlab?: { reason: 'glab-missing' | 'glab-not-logged-in'; affectedPrCount: number; host?: string };
+}
+
+/**
+ * Aggregated local GitHub/GitLab CLI auth alert summary across the given local sessions.
+ * Preserves snapshot identity when unaffected PR statuses update.
+ */
+export function useLocalPrAuthAlerts(
+  localSessionIds: ReadonlySet<string>,
+): LocalPrAuthAlertSummary {
+  const store = useContext(PrStoreContext);
+  const previous = useRef<{ key: string; value: LocalPrAuthAlertSummary }>({
+    key: '{}',
+    value: {},
+  });
+  const read = () => {
+    const next = store.getLocalAuthAlertSummary(localSessionIds);
+    const nextKey = JSON.stringify(next);
+    if (nextKey !== previous.current.key) {
+      previous.current = { key: nextKey, value: next };
+    }
+    return previous.current.value;
+  };
+  return useSyncExternalStore(store.subscribe, read, read);
 }

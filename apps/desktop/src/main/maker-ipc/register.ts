@@ -1139,7 +1139,9 @@ import {
 import { registerPrecreatedWorktreeDiscardHandler } from './precreatedWorktreeDiscardHandler.js';
 import { registerNewMakerWorktreePreferenceHandler } from './newMakerWorktreePreferenceHandler.js';
 import { registerNewMakerWorktreeBranchPreferenceHandler } from './newMakerWorktreeBranchPreferenceHandler.js';
+import { checkWorktreeBaseRefArg } from '../worktree/sourceRef.js';
 import {
+  resolveExplicitSourceRef,
   resolveFreshSourceBranch,
   getManagedWorktreeReadinessForSession,
   WorktreeManager as worktreeManager,
@@ -2835,6 +2837,14 @@ type SendToSessionInternalResult =
       queuedMessageId?: string;
       /** create + useWorktree 成功时为新 session 的 worktree 绝对路径;其余情况 undefined。 */
       worktreePath?: string | null;
+      /** create + useWorktree:worktree 实际切出的基线(commit-ish)。 */
+      worktreeBaseRef?: string;
+      /** 基线没能从远端刷新时的原因:取自本机已有的副本,可能落后远端。 */
+      worktreeBaseStaleReason?: string;
+      /** create:新任务的模型由哪台电脑提供；null = 本机。SSH 任务没有这个概念,省略。 */
+      providerDeviceId?: string | null;
+      /** create:供应电脑继承自来源任务,而不是调用方点名的。 */
+      providerDeviceInherited?: true;
       projectDir?: string | null;
       /** The project was chosen because the requested execution directory is inside it. */
       projectFromWorkingDir?: true;
@@ -3025,6 +3035,8 @@ interface OrcaCollabService {
     title?: string;
     /** create 分支可选:true = 为新 session 预建独立 git worktree 并以其为 workingDir(jump 忽略)。 */
     useWorktree?: boolean;
+    /** create + useWorktree 可选:worktree 的显式基线；省略 = 远端默认分支或来源任务的在途分支。jump 忽略。 */
+    baseRef?: string;
     projectDir?: string | null;
     /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
     workingDir?: string;
@@ -4654,16 +4666,20 @@ export function applyDirectoryGrants(
         : maker.closeSession(sessionId)),
     });
     if (result.changed && axis === 'extraDirs' && sess?.requiresRuntimeRecycleForExtraDirs?.()) {
-      // ACP only accepts `additionalDirectories` on session/new, session/resume, and session/load.
-      // Recycle the live runtime (immediately when idle, or after the current turn) only when the
-      // session actually binds native `additionalDirectories` at session open.
-      await withRehydrateCloseSuppressed(sessionId, () =>
-        maker.closeSessionIfCurrent(
-          sess,
-          'runtime-refresh',
-          sess.isTurnRunning() ? { afterCurrentTurn: true } : undefined,
-        ),
-      );
+      // ACP only binds user `additionalDirectories` on session/new, session/resume, and
+      // session/load; host-owned plugin library slots are delivered per turn via
+      // `<cindy-library-native-read>` without mutating handshake `additionalDirectories`.
+      // Skip runtime recycle on focus-driven library slot sync so live ACP processes keep
+      // their prompt cache intact across tab switches.
+      if (!options.replaceLibrarySlot) {
+        await withRehydrateCloseSuppressed(sessionId, () =>
+          maker.closeSessionIfCurrent(
+            sess,
+            'runtime-refresh',
+            sess.isTurnRunning() ? { afterCurrentTurn: true } : undefined,
+          ),
+        );
+      }
     }
     if (result.changed || result.rejectedCount > 0) log.info(label, {
       sessionId,
@@ -5361,7 +5377,7 @@ async function readSubscriptionRuntimeSession(id: string) {
   const row = await getSessionRowSnapshotStrict(id);
   if (!sessionRuntimeControlOwnerEpochMatches(owner)) throw new Error('Subscription account owner changed');
   const effective = getSessionRuntimeControlSnapshot(id).effectiveOverride;
-  return row && effective && effective.agentKind === dbToMakerAgentKind(row.agentKind)
+  return row && effective && effective.agentKind === dbToMakerEngineKind(row.agentKind)
     && (effective.agentDeviceId ?? null) === (row.agentDeviceId ?? null)
     ? { ...row, model: effective.model, providerId: effective.providerId } : row;
 }
@@ -5401,7 +5417,7 @@ const subscriptionAccountRecoveryDeps = {
 
 /** 同池是否存在另一个此刻可接手该任务的健康账号（订阅池 / 混合池 / 插件引擎多账号池）。 */
 export async function canSwitchTaskAccount(sessionId: string): Promise<boolean> {
-  return (await canSwitchPluginEngineTaskAccount(sessionId, readSubscriptionRuntimeSession).catch(() => false))
+  return (await canSwitchPluginEngineTaskAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke).catch(() => false))
     || canSwitchSubscriptionAccount(sessionId, readSubscriptionRuntimeSession, remoteBackgroundInvoke);
 }
 
@@ -5417,16 +5433,6 @@ async function prepareSessionAccountsAndHistory(
   sessionId: string,
   retry?: Parameters<NonNullable<typeof contextOverflowRolloverHolder>['prepareNativeSessionRecovery']>[4],
 ): Promise<boolean> {
-  // Plugin engine accounts (subscription-account-pools.md 插件引擎的账号) hand off the same way.
-  const pluginSwitched = await preparePluginEngineAccountForSend(sessionId, {
-    readSession: readSubscriptionRuntimeSession,
-    isRunning: subscriptionAccountRecoveryDeps.isRunning,
-    rebuild: async (id, assertCurrent) => {
-      await subscriptionAccountRecoveryDeps.rebuild(id, assertCurrent);
-      agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
-    },
-    log: subscriptionAccountRecoveryDeps.log,
-  });
   const accountRecovery = retry ? {
     ...subscriptionAccountRecoveryDeps,
     rebuild: async (id: string, assertCurrent: () => void) => {
@@ -5436,6 +5442,17 @@ async function prepareSessionAccountsAndHistory(
         agentInputCoordinatorHolder?.getInputAbortSignal(id), retry);
     },
   } : subscriptionAccountRecoveryDeps;
+  // Plugin engine accounts (subscription-account-pools.md 插件引擎的账号) hand off the same way.
+  const pluginSwitched = await preparePluginEngineAccountForSend(sessionId, {
+    readSession: readSubscriptionRuntimeSession,
+    isRunning: accountRecovery.isRunning,
+    invokeRemote: accountRecovery.invokeRemote,
+    rebuild: async (id, assertCurrent) => {
+      await accountRecovery.rebuild(id, assertCurrent);
+      agentInputCoordinatorHolder?.cancelUsageLimitWait(id);
+    },
+    log: accountRecovery.log,
+  });
   const switched = pluginSwitched || await prepareSubscriptionAccountForSend(sessionId, {
     ...accountRecovery,
     resolveCodexHistoryHome: async threadId => (await readCodexThreadStorageReadOnly(threadId))?.historyHome,
@@ -13023,6 +13040,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     dispatcherSessionId?: string;
     title?: string;
     useWorktree?: boolean;
+    /** create + useWorktree 可选:worktree 的显式基线(分支、远端引用或提交)。jump 忽略。 */
+    baseRef?: string;
     projectDir?: string | null;
     /** create 分支可选:新 session 的工作目录覆盖(绝对路径,须已存在;jump 忽略)。#811 */
     workingDir?: string;
@@ -13181,10 +13200,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             'current MCP call has none (typical: Codex global ctx)',
         };
       }
+      // 显式基线先于任何查询与创建校验:格式不对或没开 use_worktree 时什么都不建。
+      const checkedBaseRef = checkWorktreeBaseRefArg(params.baseRef, useWorktree);
+      if (!checkedBaseRef.ok) {
+        return { ok: false, errorCode: 'INVALID_ARGS', message: checkedBaseRef.message };
+      }
+      const baseRef = checkedBaseRef.value;
       let createdPreviewSessionId: string | null = null;
       let createdPreviewClientId: string | null = null;
       let createdPreviewStarted = false;
-      let handoffWorktree: { sessionId: string; meta: WorktreeMeta } | null = null;
+      let handoffWorktree: { sessionId: string; meta: WorktreeMeta; staleBaseReason?: string } | null = null;
       // 来源任务的 Agent 在另一台电脑运行：新任务继承同一台电脑(它的模型与来源都在那台)；
       // 显式 agentDeviceId 覆盖继承值。
       let inheritedAgentDeviceId: string | undefined;
@@ -13316,6 +13341,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 createWorktree: worktreeManager.createWorktree,
                 createId: () => randomUUID(),
                 resolveFreshSource: resolveFreshSourceBranch,
+                resolveExplicitSource: resolveExplicitSourceRef,
               },
               // working_dir 覆盖时不带 dispatcherSessionId:resolveHandoffBaseRepo
               // 的「dispatcher 自身 worktree」捷径按路径包含判定——覆盖目录若指向
@@ -13324,11 +13350,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               // git 根;覆盖目录落在登记过的 worktree 内时,listAll 反查分支仍生效。
               workingDirOverride !== undefined ? undefined : dispatcherSessionId,
               resolvedWorkDir,
+              // 显式基线压过「跟随来源任务在途分支」与远端默认分支两种推导。
+              baseRef ? { sourceRef: baseRef } : undefined,
             );
             if (!prep.ok) {
-              return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prep.message };
+              // 基线解析不了就在这里失败,不回退默认分支。
+              return { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: baseRef
+                ? `Could not create the worktree from base_ref "${baseRef}": ${prep.message}` : prep.message };
             }
-            handoffWorktree = { sessionId: prep.sessionId, meta: prep.meta };
+            handoffWorktree = { sessionId: prep.sessionId, meta: prep.meta,
+              ...(prep.staleBaseReason ? { staleBaseReason: prep.staleBaseReason } : {}) };
           }
         } else {
           if (useWorktree) {
@@ -13456,6 +13487,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           newSessionId: session.id,
           agentKind: session.agentKind,
           worktreePath: handoffWorktree?.meta.path ?? null,
+          worktreeBaseRef: handoffWorktree?.meta.sourceBranch ?? null,
+          agentDeviceId: openedRow.agentDeviceId ?? null,
         });
         return {
           ok: true,
@@ -13465,6 +13498,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           targetTitle: newTitle,
           targetLastUserSendAt: null,
           worktreePath: handoffWorktree?.meta.path ?? null,
+          ...(handoffWorktree ? {
+            worktreeBaseRef: handoffWorktree.meta.sourceBranch,
+            ...(handoffWorktree.staleBaseReason ? { worktreeBaseStaleReason: handoffWorktree.staleBaseReason } : {}),
+          } : {}),
+          // 回报模型实际由哪台电脑提供:省略 provider_device_id 时它继承自来源任务,
+          // 调用方不看回执就分不清新任务用的是本机供应商还是另一台电脑的账号。
+          // 取落库的值,与上面回显的模型、供应商连接同源。
+          ...(session.remoteHostId ? {} : {
+            providerDeviceId: openedRow.agentDeviceId ?? null,
+            ...(openedRow.agentDeviceId && requestedAgentDeviceId === undefined ? { providerDeviceInherited: true as const } : {}),
+          }),
           projectDir: inherited.projectDir ?? null,
           workspaceKind: openedRow.workspaceKind,
           workingDir: openedRow.workingDir ?? createOpts.workingDir,
@@ -13866,12 +13910,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
 
       lockStage = 'lazy-resume-bootstrap';
+      const storedEffort = dbRow.effort ?? meta.effort;
+      const storedFastMode = dbRow.fastMode ?? meta.fastMode;
       try {
         const createOpts = buildCreateOptsWithStderr({
           id: targetSessionId,
           agentKind: targetAgentKind,
           workingDir: meta.workDir,
           model: meta.model,
+          ...(storedEffort ? { effort: storedEffort as CreateOpts['effort'] } : {}),
+          ...(targetAgentKind === 'acp'
+            ? { fastMode: false }
+            : storedFastMode !== undefined && storedFastMode !== null
+              ? { fastMode: storedFastMode }
+              : {}),
           resumeSessionId: meta.sdkSessionId,
           // 插件任务的档位由用户在任务设置里给定(errand 还会再收窄),不能借 lazy-resume
           // 的缺省 bypass 提权;档位不一致还会让 errand 复用判定每轮都失败、另开新会话
@@ -14204,15 +14256,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         readLocalPluginEngines: () => listPluginEngineViews(),
         readRemotePluginEngines: (id) => readOfferedRemotePluginEngines(id),
       }),
-      prepareWorktree: async (id, directory) => {
+      prepareWorktree: async (id, directory, baseRef) => {
         const prepared = await prepareHandoffWorktree({
           getForSession: worktreeManager.getForSession, listAll: worktreeManager.listAll,
           detectCwd: worktreeManager.detectCwd, suggestName: worktreeManager.suggestName,
           listBranches: worktreeManager.listBranches, resolveCommit: worktreeManager.revParseCommit,
           createWorktree: worktreeManager.createWorktree, createId: () => id,
-          resolveFreshSource: resolveFreshSourceBranch,
-        }, undefined, directory);
-        return prepared.ok ? { ok: true, path: prepared.meta.path }
+          resolveFreshSource: resolveFreshSourceBranch, resolveExplicitSource: resolveExplicitSourceRef,
+        }, undefined, directory, baseRef ? { sourceRef: baseRef } : undefined);
+        return prepared.ok
+          ? { ok: true, path: prepared.meta.path, baseRef: prepared.meta.sourceBranch,
+            ...(prepared.staleBaseReason ? { staleBaseReason: prepared.staleBaseReason } : {}) }
           : { ok: false, errorCode: 'WORKTREE_UNAVAILABLE', message: prepared.message };
       },
       discardWorktree: id => worktreeManager.removeWorktreeForSession(id),

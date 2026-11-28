@@ -854,6 +854,36 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
     await retry;
   });
 
+  // 测试价值：2026-11-28/29 插件市场自动更新 Antigravity 时，3 个任务进程 3 秒多才退出，
+  // stopAndWait 超时、更新失败；执行引擎启动闸一直关着，已启用的插件拒绝所有新任务直到
+  // 重启应用。超时后旧进程真正退出，必须恰好通知宿主恢复一次；期间有新 stop 接手则不通知。
+  it.each([false, true])('stopAndWait 超时后旧进程退出时请宿主恢复(期间再次 stop: %s)', async (stoppedAgain) => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost({ lifecycle: 'resident' });
+    const child = new FakeNodeProcess();
+    vi.spyOn(child, 'kill').mockImplementation(() => {
+      child.killed = true;
+      return true;
+    });
+    const onStopSettledLate = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      onStopSettledLate,
+    });
+    await broker.startResident(ghost);
+
+    const stopping = expect(broker.stopAndWait('node-ghost')).rejects.toThrow('插件 Node 进程停止超时');
+    await vi.advanceTimersByTimeAsync(2_500);
+    await stopping;
+    if (stoppedAgain) broker.stop('node-ghost');
+
+    child.emit('exit', 0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onStopSettledLate).toHaveBeenCalledTimes(stoppedAgain ? 0 : 1);
+    if (!stoppedAgain) expect(onStopSettledLate).toHaveBeenCalledWith('node-ghost');
+  });
+
   it('工作进程先报 error 时仍终止并等待真实 exit', async () => {
     vi.useFakeTimers();
     const ghost = fakeGhost({ lifecycle: 'resident' });
@@ -3571,6 +3601,38 @@ describe('nodeRuntimeBroker · 任务执行引擎进程(harnesses)', () => {
       expect(spawned).toHaveLength(2);
       broker.resumeHarnesses('node-ghost');
       await expect(broker.spawnHarness('node-ghost', 'dsh')).resolves.toBeDefined();
+    } finally { broker.destroyAll(); }
+  });
+
+  // Regression (2026-11-28): an automatic update whose stop wait (2.5s) expired just before a
+  // SIGKILLed engine exited left the start gate closed until the next successful update, so every
+  // task on that engine failed with "The plugin is stopping or updating" for ~20 minutes.
+  // whenProcessesExited lets the update caller restore the old version once the process is gone,
+  // and stays silent when a newer stop (retry, disable, uninstall) owns the plugin again.
+  it.each([
+    { newerStop: false, restored: true },
+    { newerStop: true, restored: false },
+  ])('reports stuck engine exits after a failed stop wait (newer stop: $newerStop)', async ({ newerStop, restored }) => {
+    vi.useFakeTimers();
+    const ghost = harnessGhost();
+    const { broker } = setupHarness(ghost);
+    try {
+      const proc = await broker.spawnHarness('node-ghost', 'dsh') as unknown as FakeHarnessProcess;
+      // The engine takes the signals but only exits later.
+      vi.spyOn(proc, 'kill').mockImplementation(() => { proc.killed = true; return true; });
+      const stopping = expect(broker.stopAndWait('node-ghost')).rejects.toThrow('插件 Node 进程停止超时');
+      await vi.advanceTimersByTimeAsync(2_500);
+      await stopping;
+
+      const onExited = vi.fn(() => broker.resumeHarnesses('node-ghost'));
+      broker.whenProcessesExited('node-ghost', onExited);
+      if (newerStop) broker.stop('node-ghost');
+      proc.emit('exit', null, 'SIGKILL');
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(onExited).toHaveBeenCalledTimes(restored ? 1 : 0);
+      if (restored) await expect(broker.spawnHarness('node-ghost', 'dsh')).resolves.toBeDefined();
+      else await expect(broker.spawnHarness('node-ghost', 'dsh')).rejects.toThrow('stopping or updating');
     } finally { broker.destroyAll(); }
   });
 });

@@ -303,6 +303,7 @@
   },
   "screen": {
     "thinking": "Raciocinando…",
+    "replyStreaming": "Gerando…",
     "tokenCount": "{{tokens}} tok",
     "tokenCountFull": "{{tokens}} tokens",
     "tokenRate": "{{rate}} tok/s",
@@ -543,7 +544,8 @@
       "followLastDeviceHint": "Usa o computador escolhido por último na tela de nova tarefa; caso contrário, o trazido pela entrada.",
       "followLastWorkspaceHint": "Restaura o último projeto ou conversa escolhido; no modo projeto, a última pasta usada nesse computador.",
       "followAppHint": "Igual ao padrão de novas tarefas no app."
-    }
+    },
+    "createRejectedResend": "Seu conteúdo foi restaurado. Ajuste se precisar e envie de novo."
   },
   "menu": {
     "moveToProject": "Mover tarefa",
@@ -741,9 +743,15 @@
   "outbox": {
     "deleteConfirmTitle": "Excluir esta mensagem?",
     "deleteConfirmBody": "Esta mensagem não foi enviada. Sua exclusão não pode ser desfeita.",
+    "deleteUnconfirmedBody": "O computador pode já ter recebido esta mensagem. Excluí-la remove apenas a mensagem pendente deste dispositivo. Se o computador a recebeu, ela continuará aparecendo no histórico da conversa.",
     "legacyPlanRecovery": "Este computador não pode restaurar mensagens salvas no modo de planejamento. Desative o modo de planejamento ou atualize o Cindy no computador e tente novamente.",
     "creationRecoveryRequired": "Tente criar esta tarefa novamente antes de excluir sua primeira mensagem. Essa mensagem mantém os detalhes de recuperação das mensagens posteriores.",
     "confirmationRequired": "Este computador não pode confirmar se a mensagem foi recebida. Verifique o histórico ou atualize o Cindy antes de tentar novamente.",
+    "profileInUseByDesktop": "Estes dados estão sendo usados pelo aplicativo para desktop da Cindy, que está rodando sozinho. Feche-o e envie novamente.",
+    "taskInactive": "Esta tarefa não pode receber mensagens no momento.",
+    "inputNotSupported": "Este computador não oferece suporte ao envio deste tipo de mensagem para a tarefa.",
+    "invalidInput": "O computador recusou a mensagem porque o conteúdo é inválido.",
+    "taskClearedBeforeSend": "A tarefa foi limpa ou está sendo limpa. A mensagem continua salva neste dispositivo.",
     "taskCleared": "Esta tarefa foi limpa após você enviar a mensagem. A mensagem salva foi mantida para sua revisão.",
     "restoreFailed": "Não foi possível restaurar as mensagens salvas. Elas não foram excluídas. Reinicie o aplicativo e tente novamente.",
     "recoveryTarget": "Mantenha o computador original durante a recuperação desta tarefa. As mensagens posteriores dela continuam salvas.",

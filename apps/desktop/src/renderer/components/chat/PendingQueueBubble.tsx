@@ -2,7 +2,9 @@ import { buildQueueRowPresentation } from '@cindy/maker-shared/queue';
 import { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown, ListEnd, Pencil, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { QueuedMessage } from '@/lib/makerChatStore';
+import type { QueuedMessage, RemoteQueueDelivery } from '@/lib/makerChatStore';
+import { Button } from '@/components/ui/button';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,6 +34,47 @@ export interface PendingQueueBubbleProps {
   onSteer?(clientId: string): Promise<boolean>;
   onRemove(clientId: string): void;
   onMove(clientId: string, targetIndex: number): void;
+  onRetryDelivery?(clientId: string): void;
+  onDiscardDelivery?(clientId: string, delivery: RemoteQueueDelivery): void;
+}
+
+function RemoteQueueStatus({ entry, readOnly, onRetryDelivery, onDiscardDelivery }: Pick<
+  PendingQueueBubbleProps, 'entry' | 'readOnly' | 'onRetryDelivery' | 'onDiscardDelivery'
+>) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const delivery = entry.remoteDelivery;
+  if (!delivery) return null;
+  if (delivery.state === 'waiting') {
+    return <span>{t('newChat.remoteOutbox.waitingForPrevious')}</span>;
+  }
+  const unconfirmed = delivery.state === 'unconfirmed';
+  const disabled = readOnly || delivery.checking;
+  const remove = async () => {
+    if (!onDiscardDelivery || disabled) return;
+    if (await confirm({
+      title: t('newChat.remoteOutbox.deleteConfirmTitle'),
+      description: t(unconfirmed ? 'newChat.remoteOutbox.deleteUnconfirmedBody' : 'newChat.remoteOutbox.deleteConfirmBody'),
+      confirmText: t('newChat.remoteOutbox.delete'),
+      cancelText: t('newChat.remoteOutbox.cancel'),
+      confirmVariant: 'destructive',
+    })) onDiscardDelivery(entry.clientId, delivery);
+  };
+  return (
+    <div className="flex flex-col items-end gap-1" data-remote-delivery={delivery.state}>
+      <div className="flex flex-wrap items-center justify-end gap-1">
+        <span>{t(unconfirmed ? 'newChat.remoteOutbox.deliveryUnconfirmed' : 'newChat.remoteOutbox.notSent')}</span>
+        <Button size="xs" variant="secondary" tone="quiet" disabled={disabled || !onRetryDelivery} aria-busy={delivery.checking}
+          onClick={() => onRetryDelivery?.(entry.clientId)}>
+          {t(unconfirmed ? 'newChat.remoteOutbox.recheckDelivery' : 'newChat.remoteOutbox.retry')}
+        </Button>
+        <Button size="xs" variant="secondary" tone="quiet" disabled={disabled || !onDiscardDelivery} onClick={() => void remove()}>
+          {t('newChat.remoteOutbox.delete')}
+        </Button>
+      </div>
+      {delivery.refusal && <span className="text-right">{t(`newChat.remoteOutbox.${delivery.refusal}`)}</span>}
+    </div>
+  );
 }
 
 /** Same full-content bubble as delivered input, with mobile's single queue menu. */
@@ -52,6 +95,8 @@ export function PendingQueueBubble({
   onSteer,
   onRemove,
   onMove,
+  onRetryDelivery,
+  onDiscardDelivery,
 }: PendingQueueBubbleProps) {
   const { t } = useTranslation();
   const presentation = getPendingQueueRowPresentation(entry);
@@ -102,7 +147,8 @@ export function PendingQueueBubble({
       : entry.chatMessage.content;
   const status = (
     <div className={`flex items-center justify-end gap-1 text-12 text-[var(--text-secondary)] ${simplifiedBotConversation ? "min-h-8" : "min-h-6"}`}>
-      {editing ? (
+      {entry.remoteDelivery ? <RemoteQueueStatus entry={entry} readOnly={readOnly}
+        onRetryDelivery={onRetryDelivery} onDiscardDelivery={onDiscardDelivery} /> : editing ? (
         <>
           <Pencil size={14} />
           <span>{t('newChat.pendingQueue.editingInComposer')}</span>
@@ -204,7 +250,7 @@ export function PendingQueueBubble({
         sourceDevice={entry.sourceDevice ?? entry.chatMessage.sourceDevice}
         sourcePlugin={entry.sourcePlugin ?? entry.chatMessage.sourcePlugin}
         pendingIndicator={
-          editing ? <Pencil size={14} /> : sending && statusShown ? <Spinner size={14} /> : null
+          editing ? <Pencil size={14} /> : sending && statusShown && !entry.remoteDelivery ? <Spinner size={14} /> : null
         }
         simplifiedBotConversation={simplifiedBotConversation}
         pendingEditing={editing}
