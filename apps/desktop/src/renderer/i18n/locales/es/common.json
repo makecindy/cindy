@@ -11659,6 +11659,7 @@
     "linuxInstallation": {
       "title": "Esta instalación no puede actualizarse por sí sola",
       "description": "Usa tu gestor de paquetes o sigue la guía de instalación de usuario para Linux. En una instalación administrada, puede ser necesario restaurar herramientas faltantes o el acceso de escritura. Se han conservado Cindy y la actualización descargada.",
+      "missingTools": "Esta actualización necesita estas herramientas y no están disponibles: {{tools}}. Instálalas y vuelve a comprobar. Cindy y la actualización descargada se conservan.",
       "guide": "Abrir la guía de Linux",
       "retry": "Comprobar de nuevo",
       "later": "Más tarde"

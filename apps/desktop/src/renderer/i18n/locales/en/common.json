@@ -11572,6 +11572,7 @@
     "linuxInstallation": {
       "title": "This installation cannot update itself",
       "description": "Use your package manager, or follow the Linux user-install guide. A managed install may need missing tools or write access restored. Cindy and the downloaded update have been kept.",
+      "missingTools": "This installation is missing the tools it needs to update: {{tools}}. Install them, then check again. Cindy and the downloaded update are kept.",
       "guide": "Open Linux guide",
       "retry": "Check again",
       "later": "Later"

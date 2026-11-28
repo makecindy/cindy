@@ -13,6 +13,7 @@ export function useUpdateStatus() {
   const [status, setStatus] = useState<UpdateStatusPayload['status']>('idle');
   const [version, setVersion] = useState<string | undefined>();
   const [errorCode, setErrorCode] = useState<string | undefined>();
+  const [missingTools, setMissingTools] = useState<string[] | undefined>();
   // 下载进度（0-100）。只有 downloading/superseding 的推送带它；invoke 的初始
   // 快照不含 progress，错过的进度由下一条推送补上即可。
   const [progress, setProgress] = useState<number | undefined>();
@@ -29,6 +30,7 @@ export function useUpdateStatus() {
         setStatus(initial.status as UpdateStatusPayload['status']);
         if (initial.version) setVersion(initial.version);
         setErrorCode(initial.errorCode);
+        setMissingTools(initial.missingTools);
       }
     }).catch(() => {});
 
@@ -40,6 +42,7 @@ export function useUpdateStatus() {
           setVersion(payload.version);
         }
         setErrorCode(payload.errorCode);
+        setMissingTools(payload.missingTools);
         setProgress(typeof payload.progress === 'number' ? payload.progress : undefined);
         if (payload.status !== 'downloading' && payload.status !== 'superseding')
           setDownload(undefined);
@@ -55,5 +58,5 @@ export function useUpdateStatus() {
     };
   }, []);
 
-  return { status, version, errorCode, progress, download };
+  return { status, version, errorCode, missingTools, progress, download };
 }

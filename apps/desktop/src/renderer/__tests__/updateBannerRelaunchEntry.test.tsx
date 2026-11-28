@@ -28,6 +28,7 @@ const {
       status: string;
       version?: string;
       errorCode: string | null;
+      missingTools?: string[];
     },
   },
   // dismissed 必须可控且由 dismiss() 真正翻转:要测「confirming 残留到下次唤回」,就得能
@@ -55,6 +56,7 @@ vi.mock('react-i18next', () => ({
         'update.banner.activity.scheduledTask': 'a scheduled task',
         'update.banner.activity.generation': 'a generation',
         'update.banner.activity.subtask': 'a subtask',
+        'update.linuxInstallation.missingTools': 'Missing Linux update tools: {{tools}}',
       };
       const template = templates[key];
       if (!template) return key;
@@ -149,6 +151,29 @@ describe('UpdateBanner relaunch entry', () => {
     updateStatus.current = { status: 'idle', errorCode: null };
     rerender(<UpdateBanner isCollapsed={collapsed} />);
     expect(screen.queryByText('update.linuxInstallation.title')).toBeNull();
+  });
+
+  // Test value
+  // - Production entry and observable result: the Linux prerequisite dialog
+  //   names the absent executables the managed install needs, so a user with a
+  //   distro package manager can install them instead of guessing.
+  // - Bug/rule basis: a NixOS managed install failed with only the generic
+  //   "cannot self-update" copy while `bsdtar` was the sole missing tool.
+  // - Existing coverage gap: the dialog was only asserted for the generic
+  //   unsupported code, never for a missing-tools list.
+  // - Smallest failure: status carrying `linux_update_tools_missing` and one
+  //   tool name; tier: jsdom component test.
+  it('lists the missing Linux update tools in the dialog', async () => {
+    updateStatus.current = {
+      status: 'ready',
+      version: '1.2.3',
+      errorCode: 'linux_update_tools_missing',
+      missingTools: ['bsdtar'],
+    };
+    render(<UpdateBanner isCollapsed={false} />);
+    await screen.findByText('update.linuxInstallation.title');
+    expect(screen.getByText('Missing Linux update tools: bsdtar')).toBeTruthy();
+    expect(relaunchToUpdate).not.toHaveBeenCalled();
   });
 
   it.each([false, true])('cancelling a Linux recheck ignores its late busy=%s result', async (busy) => {

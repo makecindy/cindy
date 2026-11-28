@@ -90,7 +90,7 @@ export function UpdateBanner({
   onOpenVersionNotice,
   autoOpenPrerequisiteDialogs = true,
 }: UpdateBannerProps) {
-  const { status, version, errorCode } = useUpdateStatus();
+  const { status, version, errorCode, missingTools } = useUpdateStatus();
   const { effectiveLocale } = useLocale();
   // 用户主动关闭态(仅本次进程内存,由 UserInfoSection 的火焰按钮唤回)。
   // 新一版更新到达时 useDeferUpdateBannerWhileBusy 会清掉上一版的决定并重新探针。
@@ -142,8 +142,13 @@ export function UpdateBanner({
   const isSpawnFailed = status === 'error' && errorCode === 'updater_spawn_failed';
   const isWindowsRuntimeMissing =
     status === 'ready' && errorCode === 'windows_vc_runtime_missing';
+  // Both Linux prerequisites keep the staged patch and open the same dialog;
+  // only the tools variant knows which executables are absent.
+  const isLinuxUpdateToolsMissing =
+    status === 'ready' && errorCode === 'linux_update_tools_missing';
   const isLinuxInstallationUnsupported =
-    status === 'ready' && errorCode === 'linux_installation_unsupported';
+    isLinuxUpdateToolsMissing
+    || (status === 'ready' && errorCode === 'linux_installation_unsupported');
   const isPreparing = status === 'superseding';
 
   useEffect(() => {
@@ -390,7 +395,11 @@ export function UpdateBanner({
           open={showLinuxInstallationDialog}
           onOpenChange={handleLinuxDialogOpenChange}
           title={t('update.linuxInstallation.title')}
-          description={t('update.linuxInstallation.description')}
+          description={
+            isLinuxUpdateToolsMissing && missingTools?.length
+              ? t('update.linuxInstallation.missingTools', { tools: missingTools.join(', ') })
+              : t('update.linuxInstallation.description')
+          }
           confirmText={t('update.linuxInstallation.guide')}
           tertiaryText={t('update.linuxInstallation.retry')}
           cancelText={t('update.linuxInstallation.later')}

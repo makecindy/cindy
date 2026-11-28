@@ -11528,6 +11528,7 @@
     "linuxInstallation": {
       "title": "当前安装无法自行更新",
       "description": "请使用对应的包管理器，或参考 Linux 用户目录安装指南。受管理的安装可能需要补齐工具或恢复写入权限。Cindy 和已下载的更新均已保留。",
+      "missingTools": "这次更新需要这些工具，但当前系统没有：{{tools}}。安装后重新检查。Cindy 和已下载的更新均已保留。",
       "guide": "打开 Linux 指南",
       "retry": "重新检查",
       "later": "稍后"

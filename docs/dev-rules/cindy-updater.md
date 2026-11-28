@@ -73,6 +73,12 @@ arm64 清单不写清单缓存、不通知监听者，引擎安装继续按进�
 没有 polkit 的云主机每次点更新都白白重启。预检失败记 `linux_installation_unsupported`，空闲与启动
 路径见到该错误码不再重试，直到用户在提示里重新检查。
 
+托管用户目录安装只缺脚本依赖时记 `linux_update_tools_missing`，并在 `update-status` 的
+`missingTools` 里列出缺失的可执行文件名（`bsdtar`、`sha256sum`、`stat`、`dd`、`mktemp`、
+`realpath`、`flock`、`find`、`readlink`、`mv`、`ln`、`setsid`、`pgrep`）。提示直接点名要装的工具，
+不要退回「请看安装指南」这类没有线索的文案：NixOS 等发行版默认没有 `bsdtar`，
+旧文案让人无法判断缺什么。补丁与已下载更新仍然保留，用户装好工具后点「重新检查」即可。
+
 ## Linux 更新后的自动重启
 
 Linux 没有独立更新器，由 `updateScriptLinux.ts` 生成的脚本在旧进程退出后安装并拉起新版本。

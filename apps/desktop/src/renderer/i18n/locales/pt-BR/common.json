@@ -11659,6 +11659,7 @@
     "linuxInstallation": {
       "title": "Esta instalação não pode se atualizar",
       "description": "Use seu gerenciador de pacotes ou siga o guia de instalação de usuário do Linux. Uma instalação gerenciada pode precisar de ferramentas ausentes ou da restauração do acesso de gravação. Cindy e a atualização baixada foram mantidos.",
+      "missingTools": "Esta atualização precisa destas ferramentas, que não foram encontradas: {{tools}}. Instale-as e verifique novamente. O Cindy e a atualização baixada são mantidos.",
       "guide": "Abrir guia do Linux",
       "retry": "Verificar novamente",
       "later": "Mais tarde"

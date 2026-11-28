@@ -11659,6 +11659,7 @@
     "linuxInstallation": {
       "title": "Esta instalação não se pode atualizar automaticamente",
       "description": "Utilize o seu gestor de pacotes ou siga o guia de instalação de utilizador para Linux. Uma instalação gerida poderá precisar de ferramentas em falta ou do restabelecimento do acesso de escrita. A Cindy e a atualização transferida foram mantidas.",
+      "missingTools": "Esta atualização precisa destas ferramentas, que não foram encontradas: {{tools}}. Instale-as e verifique novamente. O Cindy e a atualização transferida são mantidos.",
       "guide": "Abrir guia Linux",
       "retry": "Verificar novamente",
       "later": "Mais tarde"
