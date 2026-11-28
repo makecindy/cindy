@@ -530,6 +530,7 @@ export function buildPnpmArgs(
 	tierConfig = {},
 	selectedFiles = [],
 	relatedFiles,
+	explicitFiles,
 ) {
 	const workspaceAbs = path.join(root, workspace.cwd);
 	if (commandSpec.type === "packageScript")
@@ -537,11 +538,25 @@ export function buildPnpmArgs(
 	if (commandSpec.type === "packageBin") {
 		const useRelated =
 			commandSpec.bin === "vitest" && Array.isArray(relatedFiles);
-		const selectedArgs = useRelated
-			? relatedFiles.map((file) => toWorkspaceRelativeFile(workspace, file))
-			: tierConfig.include?.length
-				? selectedFiles.map((file) => toWorkspaceRelativeFile(workspace, file))
-				: [];
+		// A planner can name the exact tests a change must run. That needs no
+		// import-graph walk, which is what makes `vitest related` expensive on
+		// files almost every test imports (locale JSON).
+		const useExplicit =
+			!useRelated &&
+			commandSpec.bin === "vitest" &&
+			Array.isArray(explicitFiles) &&
+			explicitFiles.length > 0;
+		const useSelected =
+			!useRelated && !useExplicit && Boolean(tierConfig.include?.length);
+		const selectedArgs = (
+			useRelated
+				? relatedFiles
+				: useExplicit
+					? explicitFiles
+					: useSelected
+						? selectedFiles
+						: []
+		).map((file) => toWorkspaceRelativeFile(workspace, file));
 		const binArgs = useRelated
 			? vitestRelatedArgs(commandSpec)
 			: (commandSpec.args ?? []);
@@ -551,7 +566,11 @@ export function buildPnpmArgs(
 			"exec",
 			commandSpec.bin,
 			...binArgs,
-			...(useRelated ? ["--passWithNoTests"] : undersizedVitestShardArgs(commandSpec, selectedFiles)),
+			...(useRelated
+				? ["--passWithNoTests"]
+				: useExplicit
+					? []
+					: undersizedVitestShardArgs(commandSpec, selectedFiles)),
 			...selectedArgs,
 		];
 		for (const pattern of tierConfig.exclude ?? []) {
@@ -812,6 +831,32 @@ export function createWorkspaceRunReporter({
 				`${status} ${run.workspace.cwd} ${run.tier} (${formatElapsed(durationMs)})\n`,
 			);
 		},
+		// Planner-named gates (i18n key parity, glossary) are not workspace
+		// runs, so they report under their own `check:<name>` label.
+		onCheckStart(check) {
+			startedAt.set(`check\0${check.script}`, now());
+			stdout.write(`START ${check.script}\n`);
+		},
+		onCheckComplete(check, result) {
+			const key = `check\0${check.script}`;
+			const started = startedAt.get(key);
+			const durationMs = Number.isFinite(result.durationMs)
+				? Math.max(0, result.durationMs)
+				: started === undefined
+					? 0
+					: Math.max(0, now() - started);
+			startedAt.delete(key);
+			const status =
+				result.exitCode === 0 ? "PASS" : `FAIL ${result.failure}`;
+			stdout.write(
+				`${status} ${check.script} (${formatElapsed(durationMs)})\n`,
+			);
+			if (result.exitCode === 0 || !result.output) return;
+			const output = result.output.endsWith("\n")
+				? result.output
+				: `${result.output}\n`;
+			stdout.write(`\n[${check.script}]\n${output}`);
+		},
 	};
 }
 
@@ -857,6 +902,7 @@ export async function runPlannedTests({
 	runCommandImpl = runCommand,
 	workspaceConcurrency,
 	relatedFilesByWorkspace,
+	explicitFilesByWorkspace,
 	reporter,
 	now = Date.now,
 }) {
@@ -956,6 +1002,8 @@ export async function runPlannedTests({
 			}
 			const relatedFiles =
 				relatedFilesByWorkspace?.[normalizeRelPath(run.workspace.cwd)];
+			const explicitFiles =
+				explicitFilesByWorkspace?.[normalizeRelPath(run.workspace.cwd)];
 			const pnpmArgs = buildPnpmArgs(
 				root,
 				run.workspace,
@@ -963,6 +1011,7 @@ export async function runPlannedTests({
 				run.tierConfig,
 				fileCheck.selected,
 				Array.isArray(relatedFiles) ? relatedFiles : undefined,
+				Array.isArray(explicitFiles) ? explicitFiles : undefined,
 			);
 			const invocation = resolveTestInvocation(pnpmArgs);
 			const commandResult = await runCommandImpl(
@@ -1002,6 +1051,74 @@ export async function runPlannedTests({
 			},
 		);
 		results.push(...tierResults.filter(Boolean));
+	}
+	return results;
+}
+
+/** Planner-named gates across runs, deduped by cwd + package script. */
+export function collectPlanChecks(runs = []) {
+	const seen = new Set();
+	const checks = [];
+	for (const run of runs) {
+		for (const check of run.checks ?? []) {
+			const key = `${check.cwd ?? "."}\0${check.script}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			checks.push(check);
+		}
+	}
+	return checks;
+}
+
+/**
+ * Run the plan's package scripts in order and return their results. Callers own
+ * the failure policy: every check runs so one local pass shows all gate
+ * failures at once, and a non-zero exit must still stop the workspace runs.
+ */
+export async function runPlanChecks({
+	root = ROOT,
+	checks = [],
+	runCommandImpl = runCommand,
+	reporter,
+	now = Date.now,
+}) {
+	const results = [];
+	for (const check of checks) {
+		const startedAt = now();
+		const cwd = path.join(root, check.cwd ?? ".");
+		const pnpmArgs = ["--dir", cwd, "run", check.script];
+		const invocation = resolvePnpmInvocation(pnpmArgs);
+		reporter?.onCheckStart?.(check);
+		const commandResult = await runCommandImpl(
+			invocation.command,
+			invocation.args,
+			{
+				cwd,
+				env: invocation.env
+					? { ...process.env, ...invocation.env }
+					: undefined,
+				shell: invocation.shell,
+				windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+				stdout: reporter ? null : undefined,
+				stderr: reporter ? null : undefined,
+			},
+		);
+		const result = {
+			cwd: normalizeRelPath(check.cwd ?? "."),
+			script: check.script,
+			command: invocation.command,
+			args: invocation.args,
+			exitCode: commandResult.exitCode,
+			output: commandResult.output,
+			failure: classifyFailure({
+				stage: "check",
+				exitCode: commandResult.exitCode,
+				output: commandResult.output,
+			}),
+			durationMs: Math.max(0, now() - startedAt),
+		};
+		reporter?.onCheckComplete?.(check, result);
+		results.push(result);
 	}
 	return results;
 }
@@ -1150,7 +1267,9 @@ async function main() {
 	} = options;
 	let workspaces = options.workspaces;
 	let relatedFilesByWorkspace;
+	let explicitFilesByWorkspace;
 	let relatedPlan;
+	let planChecks = [];
 
 	if (related) {
 		const manifest = (await import("./test-workspaces.config.mjs")).default;
@@ -1169,8 +1288,16 @@ async function main() {
 			);
 			workspaces = selectedRuns.map((run) => run.cwd);
 			relatedFilesByWorkspace = Object.fromEntries(
-				selectedRuns.map((run) => [run.cwd, run.relatedFiles]),
+				selectedRuns
+					.filter((run) => "relatedFiles" in run)
+					.map((run) => [run.cwd, run.relatedFiles]),
 			);
+			explicitFilesByWorkspace = Object.fromEntries(
+				selectedRuns
+					.filter((run) => Array.isArray(run.explicitFiles))
+					.map((run) => [run.cwd, run.explicitFiles]),
+			);
+			planChecks = collectPlanChecks(selectedRuns);
 		}
 	}
 
@@ -1192,6 +1319,19 @@ async function main() {
 		});
 		if (installIssues.length > 0) {
 			for (const issue of installIssues) console.error(`DEPENDENCY_SETUP_INCOMPLETE ${issue}`);
+			process.exitCode = 1;
+			return;
+		}
+	}
+
+	const reporter = createWorkspaceRunReporter();
+	if (planChecks.length > 0) {
+		const checkResults = await runPlanChecks({
+			root: ROOT,
+			checks: planChecks,
+			reporter,
+		});
+		if (checkResults.some((result) => result.exitCode !== 0)) {
 			process.exitCode = 1;
 			return;
 		}
@@ -1228,7 +1368,8 @@ async function main() {
 			excludeWorkspaces,
 			workspaceConcurrency,
 			relatedFilesByWorkspace,
-			reporter: createWorkspaceRunReporter(),
+			explicitFilesByWorkspace,
+			reporter,
 		});
 		printSummary(results, manifest);
 		if (results.some((result) => result.exitCode !== 0)) process.exitCode = 1;
