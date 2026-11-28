@@ -11111,6 +11111,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const owner = getCurrentDbClientSnapshot();
       return () => { if (getCurrentDbClientSnapshot() !== owner) throwIpcError('PRECONDITION_FAILED', 'Worker account changed'); };
     },
+    liveAgentDeviceId: sessionId => maker.getSession(sessionId)?.agentDeviceId,
     closeRuntime: async (sessionId) => {
       const session = maker.getSession(sessionId);
       resetAutomaticRecoveryForExplicitStop(sessionId);

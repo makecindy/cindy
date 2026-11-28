@@ -138,6 +138,8 @@ export interface OrcaRemoteWorkerHostDeps {
     agentDeviceId?: string | null;
     providerId?: string | null;
   }>;
+  /** null = live local handle; undefined = consult the persisted execution route. */
+  liveAgentDeviceId?(sessionId: string): string | null | undefined;
   closeRuntime?(sessionId: string): Promise<void>;
   captureOwner?(): () => void;
   writeRemoteLead(sessionId: string, lead: OrcaRemoteLead): Promise<void>;
@@ -239,6 +241,11 @@ export function createOrcaRemoteWorkerHost(deps: OrcaRemoteWorkerHostDeps) {
         if (lead.releasedAt !== undefined) {
           if (!lead.runtimeClosed) fail('PRECONDITION_FAILED', 'Worker was already released without a stop receipt');
           return { runtimeClosed: true };
+        }
+        const liveDevice = deps.liveAgentDeviceId?.(sessionId);
+        const agentDevice = liveDevice === undefined ? session.agentDeviceId : liveDevice;
+        if (agentDevice) {
+          fail('UNSUPPORTED_CAPABILITY', 'Worker 使用另一台电脑上的 Agent，当前无法确认该电脑已停止 Agent。Worker 已保留，稍后可重试归档。');
         }
         if (!deps.closeRuntime) fail('UNSUPPORTED_CAPABILITY', 'Worker archive unavailable');
         await deps.closeRuntime(sessionId);

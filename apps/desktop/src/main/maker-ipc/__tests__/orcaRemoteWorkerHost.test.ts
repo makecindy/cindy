@@ -266,10 +266,31 @@ describe('orca remote worker host', () => {
     await expect(host.archive(raw)).resolves.toEqual({ runtimeClosed: true });
     // Lose this acknowledgement and recreate the host after a user resumes the ordinary task.
     const closeLaterSession = vi.fn();
-    const restarted = createOrcaRemoteWorkerHost({ ...deps, closeRuntime: closeLaterSession });
+    const restarted = createOrcaRemoteWorkerHost({ ...deps, liveAgentDeviceId: () => 'later-agent-pc', closeRuntime: closeLaterSession });
     await expect(restarted.archive(raw)).resolves.toEqual({ runtimeClosed: true });
     expect(closeLaterSession).not.toHaveBeenCalled();
     expect(deps.closeRuntime).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { liveDevice: 'third-pc', savedDevice: null },
+    { liveDevice: undefined, savedDevice: 'third-pc' },
+  ])('preserves the Worker when the Agent runs on another device: $liveDevice / $savedDevice', async ({ liveDevice, savedDevice }) => {
+    const { deps, host, sessions } = setup();
+    await host.open(request);
+    const row = sessions.get(request.sessionId)!;
+    sessions.set(request.sessionId, { ...row, agentDeviceId: savedDevice });
+    deps.liveAgentDeviceId = () => liveDevice;
+    deps.closeRuntime = vi.fn(async () => undefined);
+    const raw = { sessionId: request.sessionId };
+    await expect(host.archive(raw)).rejects.toThrow(/UNSUPPORTED_CAPABILITY.*无法确认/);
+    expect(deps.closeRuntime).not.toHaveBeenCalled();
+    expect(deps.writeRemoteLead).not.toHaveBeenCalled();
+    expect(sessions.get(request.sessionId)?.orcaRemoteLead).toEqual(row.orcaRemoteLead);
+    // The live local handle is authoritative even if the stored selection still points elsewhere.
+    deps.liveAgentDeviceId = () => null;
+    await expect(host.archive(raw)).resolves.toEqual({ runtimeClosed: true });
+    expect(deps.closeRuntime).toHaveBeenCalledWith(request.sessionId);
   });
 
   it('marks release once and keeps the task', async () => {
