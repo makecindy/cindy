@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { Session, SessionMeta } from '@cindy/maker-core';
+import { AcpAgent, createConsoleLogger, type AcpLineTransport, type Session, type SessionMeta } from '@cindy/maker-core';
+
+import { applyLeadVendorOptions, createAcpLeadBriefingHandoff, preparePersistedOrcaSessionStart } from '../../maker-ipc/orcaSessionStartOptions';
 
 import { restoreSessionForGoal, type RestoreGoalSessionDeps } from '../sessionRestore';
 
@@ -91,6 +93,81 @@ describe('Goal dormant session restore', () => {
 
     expect(deps.maker.createSession).toHaveBeenCalledOnce();
     expect(deps.wireSession).toHaveBeenCalledWith(replacement);
+  });
+
+  // ACP harness §5, unit: a promoted Lead can be dormant when Goal restores it,
+  // before bootstrap could deliver its briefing. Exercise the real Goal restore,
+  // common Orca preparation and ACP prompt boundary without replacing the native id.
+  it('carries a pending ACP Lead briefing through Goal restore only once', async () => {
+    const providerId = 'acp-plugin:fixture:engine';
+    const handoff = createAcpLeadBriefingHandoff({
+      currentOwner: () => 'owner-1',
+      readActiveTeamId: async () => 'team-1',
+      readRole: async () => 'lead',
+    });
+    await applyLeadVendorOptions(handoff, {
+      leadSessionId: META.id,
+      teamId: 'team-1',
+      newTeam: true,
+      admittedLeadAgentKind: 'acp',
+    }, undefined, () => {});
+    const readRole = { getSessionRole: async () => 'lead' as const, getWorkerLink: vi.fn(), warn: vi.fn() };
+    const sent: Array<{ method: string; params: { sessionId?: string; prompt?: Array<{ text: string }> } }> = [];
+    let onLine: ((line: string) => void) | undefined;
+    const transport: AcpLineTransport = {
+      write(line) {
+        const request = JSON.parse(line);
+        sent.push(request);
+        const result = request.method === 'initialize'
+          ? { protocolVersion: 1, agentCapabilities: { mcpCapabilities: { http: true }, sessionCapabilities: { resume: {} } } }
+          : request.method === 'session/prompt' ? { stopReason: 'end_turn' } : {};
+        queueMicrotask(() => onLine?.(JSON.stringify({ jsonrpc: '2.0', id: request.id, result })));
+      },
+      onLine(listener) { onLine = listener; return () => { onLine = undefined; }; },
+      onClose: () => () => {},
+      close: async () => {},
+    };
+    const engine = new AcpAgent({
+      auth: { getState: async () => ({ authenticated: true }), triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {}, getAuthEnv: async () => ({}) },
+      runtimeConfig: {}, binaryPath: '', logger: createConsoleLogger('goal-acp-restore-test'),
+      clientInfo: { name: 'test', version: '1' }, endpoints: { connect: async () => transport },
+      preparePiExtraSpawnConfig: async () => ({
+        mcpBridge: { token: 'fixture', servers: [{ name: 'cindy_orca', url: 'http://127.0.0.1:1/mcp/cindy_orca' }] },
+      }),
+    });
+    let handle: Awaited<ReturnType<AcpAgent['startSession']>> | undefined;
+    const deps = baseDeps({
+      maker: {
+        getSession: vi.fn(),
+        getSessionMeta: vi.fn().mockResolvedValue({ ...META, agentKind: 'acp' }),
+        createSession: async (opts) => {
+          // Like Maker's lifecycle hook, prepare the startup copy a second time.
+          const start = { ...opts };
+          await preparePersistedOrcaSessionStart(META.id, start, readRole, handoff);
+          handle = await engine.startSession({ ...start, sessionId: META.id });
+          return fakeSession();
+        },
+      },
+      prepareOrcaStart: (id, opts) => preparePersistedOrcaSessionStart(id, opts, readRole, handoff),
+      getSessionRow: async () => ({ providerId }),
+    });
+    for (const message of ['Continue the goal', 'Continue again']) {
+      try {
+        expect(await restoreSessionForGoal(META.id, deps)).toBeDefined();
+        await handle!.send({ type: 'user', content: message });
+      } finally {
+        await handle?.close();
+      }
+    }
+    expect(sent.filter(event => event.method === 'session/resume').map(event => event.params.sessionId))
+      .toEqual([META.sdkSessionId, META.sdkSessionId]);
+    const prompts = sent.filter(event => event.method === 'session/prompt').map(event => event.params.prompt);
+    expect(prompts).toEqual([
+      [{ type: 'text', text: expect.stringContaining('You lead an Orca team.') }, { type: 'text', text: 'Continue the goal' }],
+      [{ type: 'text', text: 'Continue again' }],
+    ]);
+    expect(handoff.hasPending(META.id)).toBe(false);
   });
 
   it('preserves a persisted null provider route when restoring a Pi session', async () => {

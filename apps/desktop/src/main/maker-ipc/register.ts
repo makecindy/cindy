@@ -1245,7 +1245,7 @@ import {
   applyOrcaInstructions,
   ORCA_DIRECT_TASK_CREATE,
   synthesizeOrcaVendorOptionsFromDb,
-  createAcpLeadBriefingHandoff,
+  acpLeadBriefings,
   applyLeadVendorOptions,
   prepareAcpRoleBriefingForStart,
 } from './orcaSessionStartOptions.js';
@@ -6946,12 +6946,6 @@ export function registerModelVisibilitySyncIpc(): void {
 }
 
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
-  const acpLeadBriefings = createAcpLeadBriefingHandoff({
-    currentOwner: () => isAppSessionBoundaryPending() ? null : activeOwnerScopeKey(),
-    readActiveTeamId: async id => (await getActiveTeamByLead(id))?.id,
-    readRole: getSessionOrcaRole,
-  });
-
   // Live session for features that serve built-in engines only (Orca, learn capture). Plugin-engine tasks read as absent there (docs/plans/acp-plugin-bridge.md).
   const builtinLiveSession = (sessionId: string) => {
     const live = maker.getSession(sessionId);

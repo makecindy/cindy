@@ -6,7 +6,7 @@ import {
 } from '@cindy/orca-workflow';
 
 import {
-  getSessionOrcaRole, getWorkerLink, getRemoteOrcaSession, listWorkersByLead, type OrcaWorkerRecord,
+  getActiveTeamByLead, getSessionOrcaRole, getWorkerLink, getRemoteOrcaSession, listWorkersByLead, type OrcaWorkerRecord,
 } from '../localDb/orcaTeamStore.js';
 import type { OrcaRemoteLead } from '../../shared/orcaRemoteWorker.js';
 import { createLogger } from '../logger.js';
@@ -309,6 +309,13 @@ export function createAcpLeadBriefingHandoff(deps: {
 
 type AcpLeadBriefingHandoff = ReturnType<typeof createAcpLeadBriefingHandoff>;
 
+// One pending promotion per task, shared by IPC promotion and every Desktop start.
+export const acpLeadBriefings = createAcpLeadBriefingHandoff({
+  currentOwner: () => isAppSessionBoundaryPending() ? null : activeOwnerScopeKey(),
+  readActiveTeamId: async id => (await getActiveTeamByLead(id))?.id,
+  readRole: getSessionOrcaRole,
+});
+
 export async function applyLeadVendorOptions(
   handoff: AcpLeadBriefingHandoff,
   input: { leadSessionId: string; teamId: string; newTeam?: true; admittedLeadAgentKind?: EngineKind;
@@ -391,7 +398,22 @@ export async function preparePersistedOrcaSessionStart(
   sessionId: string,
   o: MakerSessionCreateOpts,
   deps: OrcaSessionStartOptionsDeps = defaultDeps,
+  handoff: AcpLeadBriefingHandoff = acpLeadBriefings,
 ): Promise<boolean> {
   await synthesizeOrcaVendorOptionsFromDb(sessionId, o, deps);
-  return applyOrcaInstructions(o, deps);
+  const injected = await applyOrcaInstructions(o, deps);
+  // Dormant starts such as Goal restore do not pass through bootstrapSession.
+  // Reuse its reader when present; otherwise attach only an undelivered local
+  // promotion. Neither the role nor the options alone can authorize a replay.
+  if (injected && o.agentKind === 'acp' && o.vendorOptions?.orcaRole === 'lead'
+    && !o.agentDeviceId && !o.remoteHostId && !o.deviceHosted && !o.reviewMode
+    && !o.readPluginEngineRoleBriefing && handoff.hasPending(sessionId)) {
+    const briefing = renderOrcaRoleInstructions(o);
+    const read = briefing ? await handoff.forStart(sessionId, briefing) : undefined;
+    if (read) {
+      o.readPluginEngineRoleBriefing = read;
+      o.pluginEngineBriefing = undefined;
+    }
+  }
+  return injected;
 }
