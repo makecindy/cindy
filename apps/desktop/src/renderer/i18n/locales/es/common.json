@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "No se puede reanudar en la computadora original",
-    "description": "Elige otra computadora u otro proveedor para continuar con un traspaso de contexto. Tus mensajes se conservan, pero no se transfiere el estado de ejecución completo de la computadora original.",
-    "choose": "Elegir otra computadora",
+    "description": "Abre el selector de modelos para cambiar a otra computadora, proveedor o modelo y continuar con un traspaso de contexto. Tus mensajes se conservan, pero no se transfiere el estado de ejecución completo de la computadora original.",
+    "choose": "Cambiar modelo o proveedor",
     "cancel": "Permanecer aquí",
     "stage": {
       "owner": "Error al contactar con la computadora que comparte.",
@@ -4356,6 +4356,7 @@
           "supported": "Compatible",
           "unsupported": "No compatible",
           "undeclared": "No declarado",
+          "ultrafastDeclaredUnavailable": "Declarado por el proveedor · No disponible en esta conexión de Codex",
           "pricing": "Precios",
           "pricingLabel": "Precios",
           "noPricing": "No hay datos de precios para esta ruta",
@@ -12366,6 +12367,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} no pudo ejecutar la herramienta: la autorización del grupo ha caducado o no permite esta acción. La persona propietaria del amigo puede volver a solicitarla en este grupo.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "No se pudo verificar la autorización de grupo de {{name}}, por lo que la herramienta no se ejecutó. Vuelve a intentarlo cuando se restablezca la conexión.",
           "ATTACHMENTS_UNAVAILABLE": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga o por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga. Vuelve a enviar los archivos necesarios para esta solicitud.",
+          "ATTACHMENTS_LIMIT_REACHED": "Algunos adjuntos no llegaron a {{name}} por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Algunos adjuntos no llegaron a {{name}} por un fallo de descarga y por el límite de adjuntos. Vuelve a enviar los archivos necesarios para esta solicitud.",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, conecta tu Cindy para que Cindy pueda trabajar por ti (ahora no tienes ningún Cindy conectado).",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, elige un equipo para este grupo para continuar con la solicitud.",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "El equipo que {{name}} eligió para este grupo está desconectado."
@@ -17544,6 +17548,8 @@
       "organizeSidebar": "Configuración de la barra lateral",
       "filterAllText": "todos",
       "filterSelectedProjects": "Seleccionados: {{count}}",
+      "filterSelectedHarnesses": "Seleccionados: {{count}}",
+      "filterVendorPluginHeading": "De complementos",
       "filterStatus": {
         "active": "Activo",
         "archived": "Archivado",
@@ -17562,6 +17568,11 @@
         "device": "Dispositivo",
         "dialogue": "Conversación",
         "automation": "Automatización"
+      },
+      "filterGroupByHint": {
+        "device": "Nivel exterior",
+        "dialogue": "Sesiones sin proyecto",
+        "automation": "Ejecuciones de automatizaciones"
       },
       "filterGroupByDeviceManualTip": "No se puede agrupar por dispositivo con el orden manual",
       "deviceGroup": {
@@ -17593,6 +17604,11 @@
       "filterSortByTip": {
         "priority": "Primero las que esperan tu acción, luego las no leídas, luego las que están en ejecución y el resto por tiempo"
       },
+      "filterSortByHint": {
+        "priority": "Primero las que te esperan",
+        "activity": "Primero la actividad más reciente",
+        "created": "Primero las más nuevas"
+      },
       "filterStatusHeading": "Estado",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "Última actividad",
@@ -17607,9 +17623,17 @@
       "filterProjectOrderTip": {
         "custom": "Arrastra las filas de proyectos con el mouse para reordenarlas. Las sesiones dentro de ellas siguen el orden indicado arriba."
       },
+      "filterProjectOrderHint": {
+        "custom": "Arrastra las filas"
+      },
       "filterCreatorsHeading": "Amigos",
       "filterCreatorsAny": "Todo",
-      "filterHideAutomations": "Ocultar tareas automatizadas",
+      "hideHeading": "Ocultar",
+      "hideOptions": {
+        "automations": "Tareas automatizadas",
+        "taskCreated": "Tareas creadas por otras tareas",
+        "teammates": "Tareas de amigos"
+      },
       "filterCreatorsNone": "Ocultar todo",
       "filterSelectedCreators": "Seleccionados: {{count}}",
       "filterProjectsHeading": "Proyectos",
@@ -17632,6 +17656,10 @@
         "openWorktree": "Abrir carpeta del worktree",
         "tokens": "Tokens",
         "cost": "Costo"
+      },
+      "taskInfoSection": {
+        "identity": "Identificadores de la sesión",
+        "meta": "Detalles a la derecha · en el orden en que los eliges"
       },
       "taskInfoTip": {
         "tokens": "Tokens totales",
@@ -17715,7 +17743,18 @@
         "confirm": "Confirmar",
         "cancel": "Cancelar",
         "scheduleWarning_many": "Las automatizaciones vinculadas {{names}} seguirán ejecutándose y restaurarán esta sesión.",
-        "scheduleWarningMany_many": "{{count}} de estas sesiones tienen automatizaciones vinculadas que las restaurarán cuando se ejecuten."
+        "scheduleWarningMany_many": "{{count}} de estas sesiones tienen automatizaciones vinculadas que las restaurarán cuando se ejecuten.",
+        "deleteSchedules_one": "Eliminar automatización vinculada",
+        "deleteSchedules_other": "Eliminar automatizaciones vinculadas",
+        "deleteSchedules_many": "Eliminar automatizaciones vinculadas",
+        "deleteScheduleWarning_one": "La automatización vinculada {{names}} se eliminará y no se podrá restaurar.",
+        "deleteScheduleWarning_other": "Las automatizaciones vinculadas {{names}} se eliminarán y no se podrán restaurar.",
+        "deleteScheduleWarning_many": "Las automatizaciones vinculadas {{names}} se eliminarán y no se podrán restaurar.",
+        "deleteSchedulesAndArchive": "Eliminar y archivar",
+        "discardDeleteAndArchive": "Descartar, eliminar y archivar",
+        "deleteScheduleFailed_one": "Tarea archivada, pero no se pudo eliminar la automatización vinculada. Elimínala en Automatizaciones.",
+        "deleteScheduleFailed_other": "Tarea archivada, pero no se pudieron eliminar {{count}} automatizaciones vinculadas. Elimínalas en Automatizaciones.",
+        "deleteScheduleFailed_many": "Tarea archivada, pero no se pudieron eliminar {{count}} automatizaciones vinculadas. Elimínalas en Automatizaciones."
       },
       "dialogueAction": {
         "search": "Buscar en este grupo de chats",
@@ -17986,9 +18025,9 @@
         "tasks": "Lista de tareas",
         "inbox": "Bandeja de entrada",
         "enterInbox": "Cambiar al modo bandeja de entrada",
-        "leaveInbox": "Cambiar al modo lista de tareas"
+        "leaveInbox": "Cambiar al modo lista de tareas",
+        "inboxTips": "Consejos para la bandeja de entrada"
       },
-      "filterHideTaskCreated": "Ocultar tareas creadas por otras tareas",
       "origin": {
         "createdByTask": "Abierta por otra tarea",
         "createdByTaskNamed": "Abierta por la tarea «{{title}}»",
@@ -18471,6 +18510,7 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "billingWait": "En espera de que se restablezca el saldo o la suscripción. Cuando recuperes el acceso, envía un mensaje con esta conexión para reanudar las tareas programadas.",
     "prTrigger": {
       "fallback": "Las comprobaciones programadas continúan sin notificaciones de GitHub App.",
       "label": "PR / MR",
@@ -18674,7 +18714,11 @@
       "openWorkdirFailed": "No se pudo abrir la carpeta"
     },
     "runs": {
-      "boundPluginEngineRecovery": "La automatización no se ejecutó. Una automatización vinculada a una tarea con motor de complemento usa el modelo de la propia tarea y se ejecuta en este equipo. Si la automatización elige un modelo, quítalo y vuelve a ejecutarla.",
+      "boundPluginEngineRecovery": "La automatización no pudo ejecutarse con el motor de complemento. Abre los detalles del error para consultar el motivo.",
+      "boundPluginEngineSshRecovery": "Las tareas SSH deben mantener su motor actual. Para usar un motor de complemento, vincula la automatización a una tarea compatible que no use SSH.",
+      "boundPluginEngineSelectionLocationRecovery": "La automatización no puede ejecutarse en la ubicación del motor de complemento seleccionado. En los ajustes del modelo de la automatización, elige un motor en un equipo compatible.",
+      "boundPluginEngineTaskLocationRecovery": "La automatización no puede ejecutarse en la ubicación del motor de complemento de la tarea vinculada. Cambia el motor de la tarea a un equipo compatible o vincula una tarea compatible.",
+      "boundPluginEngineModelRecovery": "La configuración del modelo de la automatización no es compatible con el motor de complemento de la tarea vinculada. Configura la automatización para que use el modelo de la tarea.",
       "queueWaitTimeoutRecovery": "La espera en cola venció antes de enviar el mensaje. Cuando la sesión de destino esté libre, elige {{action}} para ejecutarlo.",
       "status": {
         "running": "En ejecución",
@@ -22819,6 +22863,9 @@
     "send": "Enviar mensaje",
     "sending": "Enviando…",
     "sent": "Enviado",
+    "sendTooManyArguments": "Este mensaje usa más de {{limit}} elementos en un solo paso. Pide al asistente que los divida en grupos más pequeños.",
+    "sendValueUnavailable": "Un valor que usa este mensaje no está disponible. Pide al asistente que revise los campos del formulario.",
+    "sendTextUnavailable": "No se pudo preparar el mensaje para enviarlo.",
     "sendFailed": "El mensaje no fue enviado. Tus entradas todavía están aquí.",
     "playVideo": "Reproducir vídeo",
     "openVideoSource": "Abrir vídeo original",

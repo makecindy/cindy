@@ -507,6 +507,7 @@ export function UnifiedModelPickerSheet(
     for (const catalog of remoteCatalogs) map.set(catalog.deviceId, catalog.providers);
     return map;
   }, [remoteCatalogs]);
+  const keepCurrentMember = !!modelGroupOptions?.onPickMerged && !modelGroupOptions?.activeRouteId;
   const sourceRoutes = useMemo(
     () =>
       withMobileSourceRouteProviders(
@@ -516,6 +517,7 @@ export function UnifiedModelPickerSheet(
           providerId: p.selectedProviderId,
           modelId: p.activeModelId,
           agentDeviceId: selectedDeviceId,
+          keepMember: keepCurrentMember,
         },
         remoteProvidersByDevice,
         (name, count) =>
@@ -531,6 +533,7 @@ export function UnifiedModelPickerSheet(
       p.selectedProviderId,
       p.activeModelId,
       selectedDeviceId,
+      keepCurrentMember,
       remoteProvidersByDevice,
       t,
     ],
@@ -541,13 +544,21 @@ export function UnifiedModelPickerSheet(
     modelGroupOptions?.activeRouteId,
     selectedDeviceId,
   );
+  const shownMergedModelId = shownMergedSourceId
+    ? sourceRoutes.shownModelId(
+        p.selectedProviderId,
+        p.activeModelId,
+        modelGroupOptions?.activeRouteId,
+        selectedDeviceId,
+      )
+    : null;
   const keepModel = useMemo(
     () => ({
       providerId: shownMergedSourceId ?? p.selectedProviderId,
-      modelId: p.activeModelId,
+      modelId: shownMergedModelId ?? p.activeModelId,
       agent: p.agentKind,
     }),
-    [shownMergedSourceId, p.selectedProviderId, p.activeModelId, p.agentKind],
+    [shownMergedSourceId, shownMergedModelId, p.selectedProviderId, p.activeModelId, p.agentKind],
   );
   // 供应商组(provider-groups.md §10):组里其他电脑上的这个供应商收进组那一项,只列组那一项。
   const hostDeviceId = p.unified.remote?.hostDeviceId;

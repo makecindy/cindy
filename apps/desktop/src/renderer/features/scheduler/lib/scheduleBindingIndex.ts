@@ -5,7 +5,11 @@ export type ScheduleBinding = Pick<
   Schedule,
   'id' | 'name' | 'status' | 'targetSessionId' | 'cronExpr' | 'manual' | 'intervalMs'
 > &
-  Partial<Pick<Schedule, 'recurring' | 'persistentSession'>>;
+  Partial<Pick<Schedule, 'recurring' | 'persistentSession' | 'source'>>;
+
+function isScheduleSource(value: unknown): value is NonNullable<Schedule['source']> {
+  return value === 'user' || value === 'project' || value === 'bot';
+}
 
 let lastInput: readonly ScheduleBinding[] | null = null;
 let lastMap: ReadonlyMap<string, ScheduleBinding[]> = new Map();
@@ -61,6 +65,8 @@ export function parseScheduleBindings(raw: unknown): ScheduleBinding[] {
       manual: s.manual === true,
       recurring: s.recurring as boolean | undefined,
       intervalMs: s.intervalMs as number | undefined,
+      // 保留来源供归档确认区分用户与项目自动化；旧端省略或未知值留空（按不可删处理）。
+      ...(isScheduleSource(s.source) ? { source: s.source } : {}),
       // 保留运行模式；持续与手动绑定的自动任务都会恢复已归档的普通任务。
       ...(s.persistentSession === true ? { persistentSession: true } : {}),
     });

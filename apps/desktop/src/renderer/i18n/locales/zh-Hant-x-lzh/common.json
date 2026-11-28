@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "不能於原機續此差事",
-    "description": "可擇他機或他供方，藉上下文交接續行。原訊皆留，然切換不移原機上完整之執行狀態。",
-    "choose": "擇他機",
+    "description": "可啟模型選單，改用他機、他供方或他模型，藉上下文交接續行。原訊皆留，然切換不移原機上完整之執行狀態。",
+    "choose": "換模型或供方",
     "cancel": "留此",
     "stage": {
       "owner": "失敗環節：聯絡分享所在電腦。",
@@ -4260,6 +4260,7 @@
           "supported": "可",
           "unsupported": "不可",
           "undeclared": "未宣",
+          "ultrafastDeclaredUnavailable": "供應商已宣，此 Codex 連線不可用",
           "pricing": "價目",
           "pricingLabel": "價目",
           "noPricing": "此路由無報價資料",
@@ -12228,6 +12229,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
           "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "部分附件下載失敗，未能交給 {{name}}。請重新傳送需要的附件。",
+          "ATTACHMENTS_LIMIT_REACHED": "本輪附件數量超過上限，部分附件未能交給 {{name}}。請分批傳送需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "部分附件下載失敗，另一些超出本輪數量上限，未能交給 {{name}}。請分批重新傳送需要的附件。",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連君之 Cindy，而後 Cindy 可代君行事（君之電腦今無在線之 Cindy）。",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，請擇本群執行之機，既擇即續此事。",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 於本群所擇之機已離線。"
@@ -17304,6 +17308,8 @@
       "organizeSidebar": "側欄顯示規制",
       "filterAllText": "全",
       "filterSelectedProjects": "已擇 {{count}} 案",
+      "filterSelectedHarnesses": "已擇 {{count}} 項",
+      "filterVendorPluginHeading": "出自法器",
       "filterStatus": {
         "active": "活躍",
         "archived": "已封存",
@@ -17322,6 +17328,11 @@
         "device": "機",
         "dialogue": "言談",
         "automation": "自運"
+      },
+      "filterGroupByHint": {
+        "device": "最外之層",
+        "dialogue": "無案之差事",
+        "automation": "自運所行之差事"
       },
       "filterGroupByDeviceManualTip": "手動排序時，暫不能依裝置分組",
       "deviceGroup": {
@@ -17353,6 +17364,11 @@
       "filterSortByTip": {
         "priority": "待君處置者居首，次未讀、方行者，餘依時序"
       },
+      "filterSortByHint": {
+        "priority": "待君者先",
+        "activity": "新動者先",
+        "created": "新立者先"
+      },
       "filterStatusHeading": "狀",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "近活躍",
@@ -17367,9 +17383,17 @@
       "filterProjectOrderTip": {
         "custom": "以滑鼠拖案列以調其序，組內差事仍依上之排序"
       },
+      "filterProjectOrderHint": {
+        "custom": "拖案列"
+      },
       "filterCreatorsHeading": "同伴",
       "filterCreatorsAny": "全",
-      "filterHideAutomations": "隱自動之務",
+      "hideHeading": "隱",
+      "hideOptions": {
+        "automations": "自動之務",
+        "taskCreated": "他差事所立之務",
+        "teammates": "同伴之務"
+      },
       "filterCreatorsNone": "皆不示",
       "filterSelectedCreators": "已擇 {{count}} 位",
       "filterProjectsHeading": "案",
@@ -17392,6 +17416,10 @@
         "openWorktree": "啟 worktree 卷匣",
         "tokens": "Token",
         "cost": "所費"
+      },
+      "taskInfoSection": {
+        "identity": "差事之識",
+        "meta": "右側之訊 · 依勾選之序"
       },
       "taskInfoTip": {
         "tokens": "累計 Token",
@@ -17473,7 +17501,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "善",
-        "cancel": "罷"
+        "cancel": "罷",
+        "deleteSchedules_one": "刪所關聯之自運",
+        "deleteSchedules_other": "刪所關聯之自運",
+        "deleteScheduleWarning_one": "所關聯之自運{{names}}將被刪除，不可復原。",
+        "deleteScheduleWarning_other": "所關聯之自運{{names}}將被刪除，不可復原。",
+        "deleteSchedulesAndArchive": "刪而歸檔",
+        "discardDeleteAndArchive": "棄、刪並歸檔",
+        "deleteScheduleFailed_one": "差事已封存，惟未能刪除所關聯之自運，請往自運頁手動刪除。",
+        "deleteScheduleFailed_other": "差事已封存，惟未能刪除 {{count}} 項所關聯之自運，請往自運頁手動刪除。"
       },
       "dialogueAction": {
         "search": "於言談中尋",
@@ -17739,9 +17775,9 @@
         "tasks": "任務列表",
         "inbox": "收件匣",
         "enterInbox": "轉至收件匣之式",
-        "leaveInbox": "轉至任務列之式"
+        "leaveInbox": "轉至任務列之式",
+        "inboxTips": "收件匣用法"
       },
-      "filterHideTaskCreated": "隱他差事所立之務",
       "origin": {
         "createdByTask": "他差事所立",
         "createdByTaskNamed": "差事「{{title}}」所立",
@@ -18221,6 +18257,7 @@
     "ultra": "窮極"
   },
   "scheduler": {
+    "billingWait": "待籌或訂閱恢復。恢復後，以此連線發訊成功，定時任務即復行。",
     "prTrigger": {
       "fallback": "GitHub App 消息未通，仍依時查驗。",
       "label": "PR / MR",
@@ -18424,7 +18461,11 @@
       "openWorkdirFailed": "啟卷匣未成"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自動之務未行。繫於法器引擎之務者，循其務之模型，行於此機。若自動之務另擇模型，宜去之，復行之。",
+      "boundPluginEngineRecovery": "自運未能用法器引擎而行。展開錯誤詳情，可察其故。",
+      "boundPluginEngineSshRecovery": "SSH 差事須循其原用引擎。欲用法器引擎，宜繫自運於相容之非 SSH 差事。",
+      "boundPluginEngineSelectionLocationRecovery": "所選法器引擎之所在不可行此自運。宜於自運模型設定中擇可用電腦之引擎。",
+      "boundPluginEngineTaskLocationRecovery": "所繫差事之法器引擎所在不可行此自運。宜移其引擎至可用之電腦，或另繫相容差事。",
+      "boundPluginEngineModelRecovery": "自運所設模型與所繫差事之法器引擎不合。宜設自運循差事之模型。",
       "queueWaitTimeoutRecovery": "排候逾時，提示詞未發。待所繫任務閒，按「{{action}}」補行。",
       "status": {
         "running": "方行",
@@ -22524,6 +22565,9 @@
     "send": "遣訊",
     "sending": "方遣…",
     "sent": "已呈",
+    "sendTooManyArguments": "此訊一次所理逾 {{limit}} 項，請助理分組重擬。",
+    "sendValueUnavailable": "此訊所需之值不可得，請助理核查表單欄位。",
+    "sendTextUnavailable": "未能擬就待傳之訊。",
     "sendFailed": "訊未呈，所填之內容仍存",
     "playVideo": "播影",
     "openVideoSource": "啟原影",

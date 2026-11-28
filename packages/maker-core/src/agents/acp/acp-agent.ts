@@ -130,7 +130,7 @@ const NO_INIT = buildAcpCapabilities(
       loadSession: false,
       promptCapabilities: { image: false, audio: false, embeddedContext: false },
       mcpCapabilities: { http: false, sse: false },
-      sessionCapabilities: { resume: false, close: false, list: false, additionalDirectories: false },
+      sessionCapabilities: { resume: false, close: false, list: false, additionalDirectories: false, systemPrompt: false },
     },
     authMethods: [],
     steering: false,
@@ -405,6 +405,14 @@ export class AcpAgent extends BaseAgent {
       ...(hosted?.guest ? { guestWorkspace: true } : {}),
       ...(accountDir ? { accountDir } : {}),
     };
+    // A task hosted for another computer (the same account's or a provider-share guest's) gets the
+    // personal instructions that computer sent with the task (`userPrompt` of the remote-agent start
+    // options), never this computer's own: hosted starts bypass this host's personalization.
+    // A read-only /review runs without the user's own instructions, like it runs without memory:
+    // the frozen start preferences can still carry them after review isolation cleared userPrompt.
+    const personalSystemPrompt = reviewMode || isolatedBotProfile(opts.botRuntimeProfile)
+      ? undefined
+      : opts.userPrompt?.trim();
     const open = async (): Promise<AcpSession> => {
       const tracked = trackClose(Object.keys(connectOptions).length
         ? await this.acpDeps.endpoints.connect(harnessKey, connectOptions)
@@ -433,6 +441,7 @@ export class AcpAgent extends BaseAgent {
           ...(!reviewMode && !hosted && opts.sessionId && this.deps.turnChangeCapture
             ? { captureSessionId: opts.sessionId, turnChangeCapture: this.deps.turnChangeCapture }
             : {}),
+          ...(personalSystemPrompt ? { personalSystemPrompt } : {}),
           briefing,
           ...(companionBriefing ? { resumedCompanionBriefing: companionBriefing } : {}),
           ...(skillCommandNames.length > 0 ? { skillCommandNames } : {}),

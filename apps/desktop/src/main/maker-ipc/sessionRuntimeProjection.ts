@@ -50,7 +50,18 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
       .where(eq(sessions.id, sessionId)).limit(1);
     const scheduledBaseline = parseScheduledModelBaseline(saved?.value);
     if (scheduledBaseline) {
-      broadcastSessionPatched(sessionId, projectScheduledPreferences(sessionId, scheduledBaseline));
+      const projected = projectScheduledPreferences(sessionId, scheduledBaseline) as Record<string, unknown>;
+      const effective = projected.runtimeEffective as SessionRuntimeProfile | undefined;
+      const binding = projectModelGroupBinding?.(sessionId, {
+        agentKind: effective ? makerToDbAgentKind(effective.agentKind) : (projected.agentKind as string | null | undefined),
+        providerId: effective ? effective.providerId : (projected.providerId as string | null | undefined),
+        model: effective ? effective.model : (projected.model as string | null | undefined),
+        agentDeviceId: (effective?.agentDeviceId ?? (projected.agentDeviceId as string | null | undefined)) ?? null,
+      });
+      broadcastSessionPatched(
+        sessionId,
+        binding === undefined ? projected : { ...projected, modelGroupBinding: binding },
+      );
       return;
     }
     let baseline = baselineOverride;
@@ -68,8 +79,22 @@ export function createSessionRuntimeProjection(ports: SessionRuntimeProjectionPo
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .limit(1);
-      // Plugin-engine tasks have no catalog runtime profile to project.
-      if (!row || row.agentKind === 'acp') return;
+      if (!row) return;
+      // Plugin-engine tasks have no catalog runtime profile, but they still carry smart-routing
+      // binding state (e.g. pending switch into a route, ACP member in a route, or detaching after
+      // switching to ACP) so the renderer refreshes its managed-route indicator immediately.
+      if (row.agentKind === 'acp') {
+        const binding = projectModelGroupBinding?.(sessionId, {
+          agentKind: row.agentKind,
+          providerId: row.providerId?.trim() || null,
+          model: row.model,
+          agentDeviceId: row.agentDeviceId ?? null,
+        });
+        if (binding !== undefined) {
+          broadcastSessionPatched(sessionId, { modelGroupBinding: binding });
+        }
+        return;
+      }
       agentDeviceId = row.agentDeviceId;
       baseline = {
         agentKind: dbToMakerAgentKind(row.agentKind),
@@ -159,7 +184,15 @@ export function createSessionRuntimeProjector(ports: SessionRuntimeProjectorPort
     const pending = ports.pendingWorkerQuestion?.(session.id);
     const status = { runtimePluginsSelected, ...(pending === undefined ? {} : { orcaHasPendingQuestion: pending }) };
     const baseline = parseScheduledModelBaseline(session.scheduledModelBaseline);
-    if (!baseline && isPluginEngineKind(session.agentKind)) return status;
+    if (!baseline && isPluginEngineKind(session.agentKind)) {
+      const binding = projectModelGroupBinding?.(session.id, {
+        agentKind: session.agentKind,
+        providerId: session.providerId?.trim() || null,
+        model: session.model,
+        agentDeviceId: session.agentDeviceId ?? null,
+      });
+      return { ...status, ...(binding ? { modelGroupBinding: binding } : {}) };
+    }
     const projection = baseline ? projectScheduledPreferences(session.id, baseline) : projectSessionRuntimeControl(session.id, {
       agentKind: dbToMakerAgentKind(session.agentKind),
       model: session.model,

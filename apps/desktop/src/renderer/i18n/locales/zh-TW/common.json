@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "無法在原電腦上恢復任務",
-    "description": "可以選擇其他電腦或供應商，透過上下文交接繼續。原訊息保留，但切換不會移轉原電腦上的完整執行狀態。",
-    "choose": "選擇其他電腦",
+    "description": "可開啟模型選擇器改用其他電腦、供應商或模型，透過上下文交接繼續。原訊息保留，但切換不會移轉原電腦上的完整執行狀態。",
+    "choose": "切換模型或供應商",
     "cancel": "留在這裡",
     "stage": {
       "owner": "失敗環節：聯絡分享所在電腦。",
@@ -4260,6 +4260,7 @@
           "supported": "支援",
           "unsupported": "不支援",
           "undeclared": "未宣告",
+          "ultrafastDeclaredUnavailable": "供應商已宣告，目前的 Codex 連線無法使用",
           "pricing": "報價",
           "pricingLabel": "報價",
           "noPricing": "此路由沒有報價資料",
@@ -12228,6 +12229,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} 的工具呼叫未執行：群內授權已失效或不允許此操作。請由夥伴主人在目前群組重新發起。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "暫時無法核驗 {{name}} 的群聊授權，這次工具呼叫未執行。請在連線恢復後重試。",
           "ATTACHMENTS_UNAVAILABLE": "部分附件未交給 {{name}}（下載失敗或數量限制）。請重新傳送這次需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "部分附件下載失敗，未能交給 {{name}}。請重新傳送需要的附件。",
+          "ATTACHMENTS_LIMIT_REACHED": "本輪附件數量超過上限，部分附件未能交給 {{name}}。請分批傳送需要的附件。",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "部分附件下載失敗，另一些超出本輪數量上限，未能交給 {{name}}。請分批重新傳送需要的附件。",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}，連接你的 Cindy 後才能讓 Cindy 替你工作（你的電腦上現在沒有在線的 Cindy）。",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}，請先選擇本群組的執行電腦，選好後會繼續這項請求。",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}} 在本群組選擇的執行電腦已離線。"
@@ -17304,6 +17308,8 @@
       "organizeSidebar": "側邊欄顯示設定",
       "filterAllText": "全部",
       "filterSelectedProjects": "已選 {{count}} 個",
+      "filterSelectedHarnesses": "已選 {{count}} 個",
+      "filterVendorPluginHeading": "來自插件",
       "filterStatus": {
         "active": "活躍",
         "archived": "已歸檔",
@@ -17322,6 +17328,11 @@
         "device": "裝置",
         "dialogue": "對話",
         "automation": "自動化"
+      },
+      "filterGroupByHint": {
+        "device": "最外層",
+        "dialogue": "沒有專案的任務",
+        "automation": "自動化執行的任務"
       },
       "filterGroupByDeviceManualTip": "手動排序時按裝置分組暫不可用",
       "deviceGroup": {
@@ -17353,6 +17364,11 @@
       "filterSortByTip": {
         "priority": "等你處理的排在最前，然後是未讀、執行中，其餘按時間"
       },
+      "filterSortByHint": {
+        "priority": "等你處理的在前",
+        "activity": "剛動過的在前",
+        "created": "新建的在前"
+      },
       "filterStatusHeading": "狀態",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最近活躍",
@@ -17367,9 +17383,17 @@
       "filterProjectOrderTip": {
         "custom": "用滑鼠拖曳專案列調整順序，組內任務仍按上面的排序"
       },
+      "filterProjectOrderHint": {
+        "custom": "拖曳專案列"
+      },
       "filterCreatorsHeading": "夥伴",
       "filterCreatorsAny": "全部",
-      "filterHideAutomations": "隱藏自動化任務",
+      "hideHeading": "隱藏",
+      "hideOptions": {
+        "automations": "自動化任務",
+        "taskCreated": "由其他任務建立的任務",
+        "teammates": "夥伴的任務"
+      },
       "filterCreatorsNone": "都不顯示",
       "filterSelectedCreators": "已選 {{count}} 位",
       "filterProjectsHeading": "專案",
@@ -17392,6 +17416,10 @@
         "openWorktree": "開啟 worktree 資料夾",
         "tokens": "Token",
         "cost": "費用"
+      },
+      "taskInfoSection": {
+        "identity": "任務標識",
+        "meta": "右側資訊 · 按勾選順序顯示"
       },
       "taskInfoTip": {
         "tokens": "累計 Token",
@@ -17473,7 +17501,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "確認",
-        "cancel": "取消"
+        "cancel": "取消",
+        "deleteSchedules_one": "刪除關聯的自動化",
+        "deleteSchedules_other": "刪除關聯的自動化",
+        "deleteScheduleWarning_one": "關聯的自動化{{names}}將被刪除，無法復原。",
+        "deleteScheduleWarning_other": "關聯的自動化{{names}}將被刪除，無法復原。",
+        "deleteSchedulesAndArchive": "刪除並歸檔",
+        "discardDeleteAndArchive": "捨棄、刪除並歸檔",
+        "deleteScheduleFailed_one": "任務已歸檔，但未能刪除關聯的自動化，請前往自動化頁面手動刪除。",
+        "deleteScheduleFailed_other": "任務已歸檔，但未能刪除 {{count}} 個關聯的自動化，請前往自動化頁面手動刪除。"
       },
       "dialogueAction": {
         "search": "在對話中搜尋",
@@ -17739,9 +17775,9 @@
         "tasks": "任務列表",
         "inbox": "收件匣",
         "enterInbox": "切換到收件匣模式",
-        "leaveInbox": "切換到任務列表模式"
+        "leaveInbox": "切換到任務列表模式",
+        "inboxTips": "收件匣使用技巧"
       },
-      "filterHideTaskCreated": "隱藏由其他任務建立的任務",
       "origin": {
         "createdByTask": "由其他任務建立",
         "createdByTaskNamed": "由任務「{{title}}」建立",
@@ -18221,6 +18257,7 @@
     "ultra": "極致"
   },
   "scheduler": {
+    "billingWait": "正在等待點數或訂閱恢復。恢復後，使用此連線成功傳送一則訊息，即可繼續執行排程任務。",
     "prTrigger": {
       "fallback": "尚未接通 GitHub App 通知，仍會依排程檢查。",
       "label": "PR / MR",
@@ -18424,7 +18461,11 @@
       "openWorkdirFailed": "開啟資料夾失敗"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自動化未執行。繫結到插件引擎任務的自動化會沿用任務自己的模型，並在這台電腦上執行。如果自動化裡指定了模型，請先移除，再重新執行。",
+      "boundPluginEngineRecovery": "自動化未能使用插件引擎執行。展開錯誤詳情查看原因。",
+      "boundPluginEngineSshRecovery": "SSH 任務必須沿用目前的引擎。若要使用插件引擎，請將自動化繫結到相容的非 SSH 任務。",
+      "boundPluginEngineSelectionLocationRecovery": "所選插件引擎的位置不支援執行此自動化。請在自動化的模型設定中選擇受支援電腦上的引擎。",
+      "boundPluginEngineTaskLocationRecovery": "繫結任務的插件引擎所在位置不支援執行此自動化。請將任務的引擎切換到受支援的電腦，或繫結相容的任務。",
+      "boundPluginEngineModelRecovery": "自動化的模型設定與繫結任務的插件引擎不符。請將自動化設為沿用任務的模型。",
       "queueWaitTimeoutRecovery": "排隊等待逾時，提示詞未傳送。目標任務閒置後可點擊「{{action}}」補跑。",
       "status": {
         "running": "執行中",
@@ -22524,6 +22565,9 @@
     "send": "傳送訊息",
     "sending": "正在傳送…",
     "sent": "已提交",
+    "sendTooManyArguments": "這則訊息一次處理的內容超過 {{limit}} 項。請讓助理分組處理後重新產生。",
+    "sendValueUnavailable": "這則訊息需要的值無法讀取。請讓助理檢查表單欄位。",
+    "sendTextUnavailable": "無法產生要傳送的訊息。",
     "sendFailed": "訊息未提交，已保留填寫內容",
     "playVideo": "播放影片",
     "openVideoSource": "開啟原影片",

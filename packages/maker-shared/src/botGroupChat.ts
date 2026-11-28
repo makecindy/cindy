@@ -58,7 +58,11 @@ export type BotGroupMemberStatus = 'active' | 'paused' | 'error' | 'archived' | 
  * online computer of its requester (card `cindy.group-assistant`, bot-group-chat.md「群里的 Cindy」);
  * Desktop projects it under this code with the requester's name, it is never posted from a client.
  */
-export const BOT_GROUP_CAPABILITY_NOTICE_CODES = ['GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE', 'GROUP_ASSISTANT_UNAVAILABLE', 'GROUP_ASSISTANT_DEVICE_REQUIRED', 'GROUP_ASSISTANT_DEVICE_OFFLINE'] as const;
+export const BOT_GROUP_CAPABILITY_NOTICE_CODES = [
+  'GROUP_AUTHORIZATION_REQUIRED', 'GROUP_AUTHORIZATION_UNAVAILABLE', 'ATTACHMENTS_UNAVAILABLE',
+  'ATTACHMENTS_DOWNLOAD_FAILED', 'ATTACHMENTS_LIMIT_REACHED', 'ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED',
+  'GROUP_ASSISTANT_UNAVAILABLE', 'GROUP_ASSISTANT_DEVICE_REQUIRED', 'GROUP_ASSISTANT_DEVICE_OFFLINE',
+] as const;
 export type BotGroupCapabilityNoticeCode = typeof BOT_GROUP_CAPABILITY_NOTICE_CODES[number];
 export function isBotGroupCapabilityNoticeCode(value: unknown): value is BotGroupCapabilityNoticeCode {
   return BOT_GROUP_CAPABILITY_NOTICE_CODES.some(code => code === value);
@@ -686,6 +690,7 @@ export function chatGroupNotificationPreference(
 }
 
 export interface BotGroupSummary {
+  supportsPersonalMentionHistory?: boolean;
   /** Execution snapshot already included by server-backed group summaries; absent on older hosts. */
   round?: BotGroupRoundView;
   /** Manager-controlled friend invitations; absent on old servers/hosts. */
@@ -1247,6 +1252,10 @@ export interface ChatMaskMention {
   messageId: string; sequence: string; threadRootId?: string; authorName: string; text: string;
   reply?: { companion: ChatMaskIdentity; text: string };
 }
+/** One current group message read by ID, without changing any read position. */
+export interface ChatMaskOriginal {
+  messageId: string; authorName: string; text: string; deleted: boolean;
+}
 /** One reacting actor. `name` is null when the group has no member record for it. */
 export interface ChatReactor { actorId: string; name: string | null; isSelf: boolean; formerMember: boolean }
 /** One member on a message's read list; `readAt` is null when the server knows the read but not its time. */
@@ -1284,7 +1293,7 @@ export type ChatGroupAction =
   | { type: 'retryAttachment'; mediaId: string; name?: string };
 export interface ChatServerApi {
   mask?(input: { groupId: string; action?: ChatMaskAction; operationId?: string }): Promise<ChatServerResult<{ state: ChatMaskState }>>;
-  mentions?(input: { groupId: string; before?: string; readIds?: string[]; operationId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean }>>;
+  mentions?(input: { groupId: string; history?: boolean; before?: string; readIds?: string[]; operationId?: string; originalId?: string }): Promise<ChatServerResult<{ mentions: ChatMaskMention[]; hasMore: boolean; original?: ChatMaskOriginal }>>;
   manage(input: { groupId: string; action: ChatGroupAction }): Promise<ChatServerResult<{ listState?: { conversationId: string; hidden: boolean; revision: number } }>>;
   /** Owned companions across devices. `botId` is the stable external id, not a local-install guarantee. */
   ownedBots(): Promise<ChatServerResult<{ bots: Array<{ actorId: string; botId?: string; name: string; avatar?: string | null; homeDeviceId?: string | null }> }>>;

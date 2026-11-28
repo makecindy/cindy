@@ -15,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "元のコンピューターでセッションを再開できません",
-    "description": "別のコンピューターまたはプロバイダーを選び、コンテキストを引き継いで続行できます。メッセージは保持されますが、元のコンピューターの実行状態全体は移行されません。",
-    "choose": "別のコンピューターを選択",
+    "description": "モデル選択画面を開いて別のコンピューター、プロバイダー、またはモデルに切り替え、コンテキストを引き継いで続行できます。メッセージは保持されますが、元のコンピューターの実行状態全体は移行されません。",
+    "choose": "モデルまたはプロバイダーを切り替え",
     "cancel": "ここに留まる",
     "stage": {
       "owner": "共有元のコンピューターへの接続で失敗しました。",
@@ -4260,6 +4260,7 @@
           "supported": "対応",
           "unsupported": "非対応",
           "undeclared": "宣言なし",
+          "ultrafastDeclaredUnavailable": "プロバイダーは対応を宣言済み。この Codex 接続では利用不可",
           "pricing": "料金",
           "pricingLabel": "料金",
           "noPricing": "このルートの料金データがありません",
@@ -12228,6 +12229,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} のツールは実行されませんでした。グループの許可が失効しているか、この操作が許可されていません。仲間の所有者がこのグループで改めて依頼してください。",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "{{name}} のグループでの許可を確認できず、ツールは実行されませんでした。接続が回復してから再試行してください。",
           "ATTACHMENTS_UNAVAILABLE": "ダウンロードの失敗または添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "ダウンロードの失敗により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+          "ATTACHMENTS_LIMIT_REACHED": "添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "ダウンロードの失敗と添付数の上限により、一部の添付ファイルを {{name}} に渡せませんでした。今回必要なファイルを再送してください。",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}} さん、Cindy に代わりに作業してもらうには、あなたの Cindy を接続してください（現在オンラインの Cindy がありません）。",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}さん、このグループで使うコンピュータを選ぶと、この依頼を続行できます。",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "{{name}}さんがこのグループで選んだコンピュータはオフラインです。"
@@ -17304,6 +17308,8 @@
       "organizeSidebar": "サイドバー表示設定",
       "filterAllText": "すべて",
       "filterSelectedProjects": "{{count}} 件選択",
+      "filterSelectedHarnesses": "{{count}} 件選択",
+      "filterVendorPluginHeading": "プラグイン提供",
       "filterStatus": {
         "active": "アクティブ",
         "archived": "アーカイブ済み",
@@ -17322,6 +17328,11 @@
         "device": "デバイス",
         "dialogue": "チャット",
         "automation": "自動化"
+      },
+      "filterGroupByHint": {
+        "device": "最上位",
+        "dialogue": "プロジェクトのないセッション",
+        "automation": "自動化の実行"
       },
       "filterGroupByDeviceManualTip": "手動並び替え中はデバイス別のグループ化を使用できません",
       "deviceGroup": {
@@ -17353,6 +17364,11 @@
       "filterSortByTip": {
         "priority": "要対応を最上位に、次に未読、実行中、残りは時間順"
       },
+      "filterSortByHint": {
+        "priority": "要対応を先頭に",
+        "activity": "最近動いたものを先頭に",
+        "created": "新しく作成したものを先頭に"
+      },
       "filterStatusHeading": "ステータス",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最終アクティビティ",
@@ -17367,9 +17383,17 @@
       "filterProjectOrderTip": {
         "custom": "マウスでプロジェクト行をドラッグして並び替えます。グループ内のセッションは上の並び替えに従います。"
       },
+      "filterProjectOrderHint": {
+        "custom": "プロジェクト行をドラッグ"
+      },
       "filterCreatorsHeading": "仲間",
       "filterCreatorsAny": "すべて",
-      "filterHideAutomations": "自動化タスクを非表示",
+      "hideHeading": "非表示",
+      "hideOptions": {
+        "automations": "自動化タスク",
+        "taskCreated": "他のタスクから作成されたタスク",
+        "teammates": "仲間のタスク"
+      },
       "filterCreatorsNone": "すべて非表示",
       "filterSelectedCreators": "{{count}} 人を選択",
       "filterProjectsHeading": "プロジェクト",
@@ -17392,6 +17416,10 @@
         "openWorktree": "worktree フォルダーを開く",
         "tokens": "トークン",
         "cost": "コスト"
+      },
+      "taskInfoSection": {
+        "identity": "セッションの目印",
+        "meta": "右側の情報 · 選択した順に表示"
       },
       "taskInfoTip": {
         "tokens": "累計トークン",
@@ -17473,7 +17501,15 @@
         "scheduleName": "「{{name}}」",
         "scheduleNameSeparator": "、",
         "confirm": "確認",
-        "cancel": "キャンセル"
+        "cancel": "キャンセル",
+        "deleteSchedules_one": "関連する自動化を削除",
+        "deleteSchedules_other": "関連する自動化を削除",
+        "deleteScheduleWarning_one": "関連する自動化{{names}}は削除され、復元できなくなります。",
+        "deleteScheduleWarning_other": "関連する自動化{{names}}は削除され、復元できなくなります。",
+        "deleteSchedulesAndArchive": "削除してアーカイブ",
+        "discardDeleteAndArchive": "破棄・削除してアーカイブ",
+        "deleteScheduleFailed_one": "タスクはアーカイブされましたが、関連する自動化の削除に失敗しました。自動化画面から削除してください。",
+        "deleteScheduleFailed_other": "タスクはアーカイブされましたが、{{count}} 件の関連する自動化の削除に失敗しました。自動化画面から削除してください。"
       },
       "dialogueAction": {
         "search": "「会話」グループ内を検索",
@@ -17739,9 +17775,9 @@
         "tasks": "タスク一覧",
         "inbox": "受信トレイ",
         "enterInbox": "受信トレイモードに切り替え",
-        "leaveInbox": "タスク一覧モードに切り替え"
+        "leaveInbox": "タスク一覧モードに切り替え",
+        "inboxTips": "受信トレイの使い方"
       },
-      "filterHideTaskCreated": "他のタスクから作成されたタスクを非表示",
       "origin": {
         "createdByTask": "他のタスクから作成",
         "createdByTaskNamed": "タスク「{{title}}」から作成",
@@ -18221,6 +18257,7 @@
     "ultra": "究極"
   },
   "scheduler": {
+    "billingWait": "クレジットまたはサブスクリプションの回復を待っています。回復後、この接続でメッセージを送信すると、スケジュールされたタスクが再開します。",
     "prTrigger": {
       "fallback": "GitHub App の通知を受け取れない間も定期チェックは続きます。",
       "label": "PR / MR",
@@ -18424,7 +18461,11 @@
       "openWorkdirFailed": "フォルダを開けませんでした"
     },
     "runs": {
-      "boundPluginEngineRecovery": "自動化は実行されませんでした。プラグインエンジンのタスクに紐づけた自動化は、タスク自身のモデルを使い、このコンピュータで実行されます。自動化でモデルを指定している場合は外してから、もう一度実行してください。",
+      "boundPluginEngineRecovery": "プラグインエンジンで自動化を実行できませんでした。エラーの詳細を開いて原因を確認してください。",
+      "boundPluginEngineSshRecovery": "SSH タスクでは現在のエンジンを使う必要があります。プラグインエンジンを使うには、対応する非 SSH タスクに自動化を紐づけてください。",
+      "boundPluginEngineSelectionLocationRecovery": "選択したプラグインエンジンの実行場所では、この自動化を実行できません。自動化のモデル設定で、対応するコンピューター上のエンジンを選んでください。",
+      "boundPluginEngineTaskLocationRecovery": "紐づけたタスクのプラグインエンジンの実行場所では、この自動化を実行できません。タスクのエンジンを対応するコンピューターに移すか、対応するタスクに紐づけてください。",
+      "boundPluginEngineModelRecovery": "自動化のモデル設定が、紐づけたタスクのプラグインエンジンに対応していません。自動化でタスクのモデルを使うように設定してください。",
       "queueWaitTimeoutRecovery": "待機時間を超えたため、プロンプトは送信されませんでした。対象のセッションが空いたら「{{action}}」で実行できます。",
       "status": {
         "running": "実行中",
@@ -22524,6 +22565,9 @@
     "send": "メッセージを送信",
     "sending": "送信中…",
     "sent": "送信済み",
+    "sendTooManyArguments": "このメッセージでは一度に {{limit}} 個を超える項目を処理しています。アシスタントに項目を小分けにするよう依頼してください。",
+    "sendValueUnavailable": "このメッセージに必要な値を取得できません。アシスタントにフォームの項目を確認するよう依頼してください。",
+    "sendTextUnavailable": "送信するメッセージを作成できませんでした。",
     "sendFailed": "メッセージを送信できませんでした。入力内容は保持されています。",
     "playVideo": "動画を再生",
     "openVideoSource": "元の動画を開く",

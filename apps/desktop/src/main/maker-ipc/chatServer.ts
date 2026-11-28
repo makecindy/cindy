@@ -614,6 +614,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
   const importedMaskReports = new Map<string, string>();
   const importingMaskReports = new Set<string>();
   let supportsMaskHistory = false;
+  let supportsPersonalMentionHistory = false;
   let personalMask = false;
   let personalMaskTools = false;
   /** One teammate per request; several take turns on an arrangement (server capability groupSingleSpeaker). */
@@ -1289,9 +1290,10 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const profileRevision = localProfilesRevision;
       profiles = await getDbClient().drizzle.select().from(botProfiles).where(undefined);
       localProfilesRead = profileRevision;
-      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; independentReplies?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupAssistantDevice?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
+      const me = await request<{ actor: Actor; deviceId?: string | null; capabilities?: { personalMentionHistory?: number; messageReaders?: number; groupDiscussionParity?: number; groupSingleSpeaker?: number; independentReplies?: number; companionHome?: boolean; directRoomClaim?: boolean; groupLifecycleVersion?: number; conversationListStateVersion?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupAssistantDevice?: number; groupNotificationSettings?: number; workAvailabilityVersion?: number; workNotificationsVersion?: number } }>('/me'); selfId = me.actor.id;
       supportsMessageReaders = me.capabilities?.messageReaders === 1;
       supportsExecutor = (me.capabilities as { executionExecutor?: number } | undefined)?.executionExecutor === 1;
+      supportsPersonalMentionHistory = me.capabilities?.personalMentionHistory === 1;
       personalMaskTools = (me.capabilities as { personalMaskTools?: number } | undefined)?.personalMaskTools === 1;
       supportsMaskHistory = (me.capabilities as { personalMask?: number } | undefined)?.personalMask === 1;
       personalMask = BOT_GROUP_PERSONAL_REPLIES_ENABLED && supportsMaskHistory;
@@ -2623,7 +2625,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       device.id === selfDeviceId && device.name === device.id ? { ...device, name: hostname() || device.name } : device);
     if (assistantComputers && selfDeviceId && !assistantComputers.some(device => device.id === selfDeviceId))
       assistantComputers.unshift({ id: selfDeviceId, name: hostname() || selfDeviceId });
-    return { ...(!direct && boundAssistantDevice && assistantComputers ? { assistantComputers, assistantDeviceId: s.room.assistant_device_id ?? null } : {}), conversationKind: direct ? 'direct' : 'group', serverBacked: true, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? chatGroupNotificationPreference(s.room, mainRead) : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMemberMentionAll: !direct && supportsMemberMentionAll, allowMemberMentionAll: !direct && s.room.allow_member_mention_all === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, ...(!direct && s.room.org_name ? { orgName: s.room.org_name } : {}), ...(!direct && s.room.external === true ? { external: true } : {}), replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
+    return { ...(!direct && boundAssistantDevice && assistantComputers ? { assistantComputers, assistantDeviceId: s.room.assistant_device_id ?? null } : {}), conversationKind: direct ? 'direct' : 'group', serverBacked: true, supportsPersonalMentionHistory: !direct && supportsPersonalMentionHistory, reactionRevision: reactionRevisions.get(roomId)?.room ?? runtimeReactionRevision, reactionRevisions: { ...reactionRevisions.get(roomId)?.messages }, supportsGroupLeave: !direct, supportsDissolve: !direct && supportsDissolve, supportsListRemoval, supportsMemberAvatar: !direct && supportsMemberAvatar, ...(!direct && supportsMessageReaders ? { supportsMessageReaders: true } : {}), supportsNotificationSettings: !direct && supportsNotificationSettings, ...(!direct && supportsNotificationSettings && s.reads ? chatGroupNotificationPreference(s.room, mainRead) : {}), supportsMemberInvites: !direct && supportsMemberInvites, allowMemberInvites: !direct && s.room.allow_member_invites === true, supportsMemberMentionAll: !direct && supportsMemberMentionAll, allowMemberMentionAll: !direct && s.room.allow_member_mention_all === true, supportsMentionAudiences: !direct && supportsMentionAudiences, allowMentionAllBots: !direct && s.room.allow_mention_all_bots === true, dissolvedAt: s.room.dissolved_at ?? null, migrationPending: [...upgradeErrors.keys()].some(source => upgradedGroups.get(source) === roomId), archived: s.room.archived, selfActorId: selfId, topic: s.room.topic, description: s.room.description, revision: s.room.revision, canInvite: !direct && !s.room.archived && !s.room.dissolved_at && !!invitationActor(s), canStopAll: false, supportsOwnedStop: true, ...(!direct && independentReplies ? { independentReplies: true } : {}), ...(!direct && singleSpeaker ? { singleSpeaker: true, ...(!independentReplies ? { supportsDivision: true } : {}) } : {}), id: s.room.id, name: direct ? s.members.filter(m => m.state === 'joined' && m.id !== selfId).map(member => memberName(member, [])).join(', ') || s.room.name : s.room.name, ...(!direct && s.room.org_name ? { orgName: s.room.org_name } : {}), ...(!direct && s.room.external === true ? { external: true } : {}), replyMode: s.room.response_mode, speakingMode: s.room.speaking_mode,
       teammateActivity: teammateChatActivity({ executions, plans: serverPlans, planning: !!deciding,
         archived: s.room.archived, lastMessageAt: last ? Date.parse(last.createdAt) : 0 }),
       members: s.members.filter(m => m.state === 'joined').map(m => {
@@ -3057,13 +3059,19 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     }
     return { lines, included, omitted: messages.length > newest.length };
   }
+  function attachmentNotice(downloadFailed: boolean, limitReached: boolean): BotGroupCapabilityNoticeCode | undefined {
+    if (downloadFailed && limitReached) return 'ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED';
+    if (downloadFailed) return 'ATTACHMENTS_DOWNLOAD_FAILED';
+    if (limitReached) return 'ATTACHMENTS_LIMIT_REACHED';
+    return undefined;
+  }
   async function downloadTaskAttachments(roomId: string, messages: Pick<Message, 'content'>[]) {
     const mediaIds = [...new Set(messages.flatMap(message => message.content.flatMap(block =>
       block.type === 'media' && block.mediaId ? [block.mediaId] : [])))];
     const downloads = await settleBounded(mediaIds.slice(0, BOT_GROUP_ATTACHMENTS_MAX), TURN_DOWNLOAD_CONCURRENCY,
       mediaId => media.download(roomId, id.parse(mediaId)));
     const attachments = downloads.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
-    return { attachments, incomplete: attachments.length < mediaIds.length };
+    return { attachments, downloadFailed: attachments.length < downloads.length, limitReached: downloads.length < mediaIds.length };
   }
   /**
    * The requester's own words in the Thread under a task card go into the card's task as one
@@ -3098,13 +3106,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       && m.author.kind === 'human' && m.authorId !== selfId && (card.threadSeenSeq === undefined || BigInt(m.seq) > BigInt(card.threadSeenSeq))));
     const quote = readBotGroupQuote(source.content);
     const original = quote ? await readQuotedOriginal(s.room.id, quote.messageId, source) : undefined;
-    const { attachments, incomplete } = await downloadTaskAttachments(s.room.id, [
+    const { attachments, downloadFailed, limitReached } = await downloadTaskAttachments(s.room.id, [
       source, ...(original ? [original] : []), ...others.included.reverse().filter(message => message.id !== quote?.messageId),
     ]);
     if (!current() || running.get(execution.id) !== run || run.settlement) throw new Error('STALE_EXECUTOR');
-    if (incomplete || (quote && quote.attachmentCount > 0 && !original)) {
-      void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', rootId);
-      others.lines.push(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', () => bot?.displayName ?? BOT_GROUP_ASSISTANT_NAME));
+    const notice = attachmentNotice(downloadFailed || (!!quote && quote.attachmentCount > 0 && !original), limitReached);
+    if (notice) {
+      void postCapabilityNotice(run, notice, rootId);
+      others.lines.push(t(`bots.groupChat.notice.capability.${notice}`).replaceAll('{{name}}', () => bot?.displayName ?? BOT_GROUP_ASSISTANT_NAME));
     }
     const message = formatGroupRequest({ words, heading: t('bots.groupChat.task.othersSaid'), background: others.lines });
     const speaker = s.members.find(m => m.id === source.authorId);
@@ -3372,7 +3381,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           else textProgress.delete(run.sessionId);
         }
         if (!pending.cancelled && pending.terminal.outcome !== 'error' && run.attachmentAfter !== undefined) {
-          // Remember only successful, fully delivered input. This is local progress,
+          // Remember the attachment window examined by this settled lane. This is local progress,
           // not server authority, and cannot cross an authorization or Thread lane.
           try {
             const settings = workspaces().read(run.execution.conversation_id) ?? { projectDir: null, plans: {} };
@@ -3590,12 +3599,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!live() || run.settlement) throw new Error('STALE_EXECUTOR');
       selectReplyQuote(run, s.members, source, quotedMessage, []);
       // Files on the request and its direct quote take priority over its displayed background.
-      const { attachments, incomplete } = await downloadTaskAttachments(roomId,
+      const { attachments, downloadFailed, limitReached } = await downloadTaskAttachments(roomId,
         [source, ...(quotedMessage ? [quotedMessage] : []), ...attachmentSources]);
-      if (incomplete || (quote && quote.attachmentCount > 0 && !quotedMessage)) {
-        void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', threadRootId);
+      const notice = attachmentNotice(downloadFailed || (!!quote && quote.attachmentCount > 0 && !quotedMessage), limitReached);
+      if (notice) {
+        void postCapabilityNotice(run, notice, threadRootId);
         // The model also needs to know that a referenced file was not delivered.
-        background.push(t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', () => BOT_GROUP_ASSISTANT_NAME));
+        background.push(t(`bots.groupChat.notice.capability.${notice}`).replaceAll('{{name}}', () => BOT_GROUP_ASSISTANT_NAME));
       }
       if (!live()) throw new Error('STALE_EXECUTOR');
       run.sessionId = sessionId;
@@ -3833,8 +3843,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
         }
         // Explicit quotes can point outside the recent text window or behind progress.
         // Read through the same authorized room endpoint; never trust a card's media/path.
+        const lane = await laneSetup;
+        const localAfter = workspaces().read(s.room.id)?.attachmentAfter?.[lane.sessionId];
+        const ordinary = !execution.plan_id && !execution.mask_owner_id && !digest;
+        const root = thread?.root;
+        const unseenRoot = root && !root.deleted && (!ordinary || !localAfter || BigInt(root.seq) > BigInt(localAfter));
         const quote = (source && !source.deleted ? readBotGroupQuote(source.content) : null)
-          ?? (thread?.root && !thread.root.deleted ? readBotGroupQuote(thread.root.content) : null);
+          ?? (unseenRoot ? readBotGroupQuote(root.content) : null);
         const quoted = quote ? await readMessage(s.room.id, quote.messageId).catch(() => undefined) : undefined;
         const quotedMessage = quoted && quoted.threadRootId === null
           && BigInt(quoted.seq) <= BigInt(execution.context_seq) ? quoted : undefined;
@@ -3851,8 +3866,6 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           ...(quotedMessage ? [quotedMessage.id] : [])]) : null;
         const known = [...history, ...focusMessages.filter(message => !history.some(other => other.id === message.id))];
         const attachmentHistory = thread ? [...focusMessages] : talkIds ? known.filter(message => talkIds.has(message.id)) : known;
-        const lane = await laneSetup;
-        const localAfter = workspaces().read(s.room.id)?.attachmentAfter?.[lane.sessionId];
         const after = [execution.attachment_after_seq, localAfter].reduce<bigint>((value, next) =>
           next !== undefined && BigInt(next) > value ? BigInt(next) : value, 0n);
         while (!thread && !talkIds && (execution.attachment_after_seq !== undefined || localAfter !== undefined) && page.length === 100) {
@@ -3861,16 +3874,14 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           page = await api<Message[]>(`/conversations/${s.room.id}/messages?all=true&limit=100&before=${before}`);
           attachmentHistory.push(...page);
         }
-        // Downloads share the media cache with other consumers. Start them only after the
-        // lane is ready, rather than cancelling a shared download on setup failure.
-        await laneSetup;
         const attachments: BotGroupAttachment[] = [];
         const missingQuotedMedia = !!quote && quote.attachmentCount > 0 && (!quotedMessage || quotedMessage.deleted);
         const missingAttachments: string[] = missingQuotedMedia ? [quote.attachmentName ?? '附件'] : [];
         // Attach a bounded newest set, and retain the names of older files in context.
         // The request and its Thread come first so the cap cannot drop the files under discussion.
-        // A Thread request never carries other Threads' files, and its own Thread's files are
-        // offered again regardless of the watermark, which only records a successful turn.
+        // Server progress is shared across Threads. Only this lane's local progress
+        // can retire its background files; a current request or explicit quote always wins.
+        const historyAfter = thread && ordinary ? BigInt(localAfter ?? '0') : after;
         const mediaDelivery = new Map<string, 'included' | 'not-included'>();
         const order = (message: Message) => {
           if (message.id === source?.id) return 4;
@@ -3884,7 +3895,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           if (message.id === quote?.messageId && (!quotedMessage || quotedMessage.deleted)) continue;
           if (message.threadRootId && !focus.has(message.id)) continue;
           if (message.deleted || block.type !== 'media' || !block.mediaId || mediaDelivery.has(block.mediaId)) continue;
-          if (BigInt(message.seq) <= after && !focus.has(message.id)) continue;
+          const retry = ordinary ? message.id === source?.id || message.id === quotedMessage?.id : focus.has(message.id);
+          if (!retry && BigInt(message.seq) <= historyAfter) continue;
           mediaDelivery.set(block.mediaId, 'not-included');
           candidates.push({ mediaId: block.mediaId, name: block.caption ?? block.mediaId });
         }
@@ -3902,17 +3914,18 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
             else missingAttachments.push(batch[index]!.name);
           });
         }
+        const notice = attachmentNotice(missingAttachments.length > 0, next < candidates.length);
         for (const candidate of candidates.slice(next)) missingAttachments.push(candidate.name);
-        // Do not consume failed/capped files: they remain eligible on the next request.
-        if (!missingAttachments.length) run.attachmentAfter = execution.context_seq;
-        return { history, source, threadRootId, thread, focusMessages, quotedMessage, attachments, missingAttachments, mediaDelivery };
+        // Ordinary lanes retire attempted history after successful settlement. Plans keep retry semantics.
+        if (ordinary || !notice) run.attachmentAfter = execution.context_seq;
+        return { history, source, threadRootId, thread, focusMessages, quotedMessage, attachments, missingAttachments, notice, mediaDelivery };
       })();
       // Observed here so a read that fails after a failed setup is not an unhandled rejection.
       contextRead.catch(() => undefined);
       const lane = await laneSetup;
-      const { history, source, threadRootId, thread, focusMessages, quotedMessage, attachments, missingAttachments, mediaDelivery } = await contextRead;
+      const { history, source, threadRootId, thread, focusMessages, quotedMessage, attachments, missingAttachments, notice, mediaDelivery } = await contextRead;
       if (!current()) throw new Error('OWNER_CHANGED');
-      if (missingAttachments.length) void postCapabilityNotice(run, 'ATTACHMENTS_UNAVAILABLE', threadRootId ?? undefined);
+      if (notice) void postCapabilityNotice(run, notice, threadRootId ?? undefined);
       if (source) selectReplyQuote(run, s.members, source, quotedMessage, history);
       const runtime = laneContext(lane.sessionId);
       const contextScope = JSON.stringify([s.room.id, threadRootId, run.plan?.id, execution.access_mode, execution.access_revision, execution.mask_owner_id]);
@@ -4133,8 +4146,8 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     await deliverDirectRoomMessage({ api, roomId, executionId: execution.id, sourceMessageId: id.parse(execution.source_message_id),
       humanActorId: selfId, botId, deliver: deps.companionCloud.deliverToCanonical,
       prepareAttachments: async content => {
-        const { attachments, incomplete } = await downloadTaskAttachments(roomId, [{ content }]);
-        return { attachments, ...(incomplete || content.some(block => !block.mediaId)
+        const { attachments, downloadFailed, limitReached } = await downloadTaskAttachments(roomId, [{ content }]);
+        return { attachments, ...(downloadFailed || limitReached || content.some(block => !block.mediaId)
           ? { notice: t('bots.groupChat.notice.capability.ATTACHMENTS_UNAVAILABLE').replaceAll('{{name}}', () => localBot(execution.bot_id)?.displayName ?? BOT_GROUP_ASSISTANT_NAME) } : {}) };
       },
       beforeDeliver: async () => {
@@ -4488,6 +4501,13 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     // Old servers have no broadcast marker: keep an empty human broadcast directed.
     return mentions.all && !resolved.length && !supportsMentionAudiences ? [selfId] : resolved;
   }
+  // Desktop sends the expanded audience for older dispatchers. Preserve individual
+  // picks separately when the server can distinguish them in personal history.
+  function namedBroadcastMentions(mention: BotGroupMention, recipients: string[]) {
+    if (!supportsPersonalMentionHistory || !mention.all || !mention.botIds.length) return {};
+    const picked = new Set(mention.botIds);
+    return { namedMentions: recipients.filter(id => picked.has(id) || picked.has(localBot(id)?.id ?? id)) };
+  }
   const result = async <T>(fn: () => Promise<T>) => {
     try { return { ok: true as const, ...await fn() }; }
     catch (error) { return { ok: false as const, errorCode: error instanceof z.ZodError ? 'INVALID_INPUT' : error instanceof Error ? missingGroupCode(error.message) : 'REQUEST_FAILED' }; }
@@ -4552,11 +4572,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     mentions: input => result(async () => {
       await register('foreground');
       if (!supportsMaskHistory) throw new Error('UNSUPPORTED_OPERATION');
+      if (input.history && !supportsPersonalMentionHistory) throw new Error('UNSUPPORTED_OPERATION');
+      const scope = supportsPersonalMentionHistory ? `&scope=${input.history ? 'personal-history' : 'personal-unread'}` : '';
       const groupId=id.parse(input.groupId), before=input.before === undefined ? undefined : z.string().regex(/^[0-9]{1,19}$/).parse(input.before);
+      if (input.originalId !== undefined) {
+        if (!supportsPersonalMentionHistory) throw new Error('UNSUPPORTED_OPERATION');
+        const originalId = id.parse(input.originalId);
+        const message = await api<Message>(`/conversations/${groupId}/messages/${originalId}`);
+        return { mentions: [], hasMore: false, original: {
+          messageId: message.id, authorName: message.author.name, text: message.deleted ? '' : bodyText(message), deleted: message.deleted,
+        } };
+      }
       if (input.readIds) await api(`/conversations/${groupId}/mentions/read`,'POST',{
         operationId:operationId.parse(input.operationId),messageIds:z.array(id).min(1).max(100).parse(input.readIds)});
       if (input.readIds) changed(groupId);
-      const page=await api<{messages:Array<Message & {reply?:{content:Message['content'];maskAttribution:NonNullable<Message['maskAttribution']>} | null}>;hasMore:boolean}>(`/conversations/${groupId}/mentions?limit=100${before ? `&before=${before}` : ''}`);
+      const page=await api<{messages:Array<Message & {reply?:{content:Message['content'];maskAttribution:NonNullable<Message['maskAttribution']>} | null}>;hasMore:boolean}>(`/conversations/${groupId}/mentions?limit=100${scope}${before ? `&before=${before}` : ''}`);
       const threadMentions = page.messages.filter(m => !!m.threadRootId);
       if (threadMentions.length && rememberThreadMessages(mentionThreadMessages, groupId, threadMentions) > 0) changed(groupId);
       const mentions:ChatMaskMention[]=page.messages.map(m=>({messageId:m.id,sequence:m.seq,threadRootId:m.threadRootId ?? undefined,
@@ -4771,6 +4801,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
           post = { body: { operationId: i.clientId, threadRootId: i.rootId,
             ...(independentReplies ? { independentReplies: true } : {}),
             content: [...(i.text ? [{ type: 'text', text: i.text }] : []), ...uploaded], mentions: recipients,
+            ...namedBroadcastMentions(i.mentions, recipients),
             ...(supportsMentionAudiences && botGroupMentionAudience(i.mentions) ? { mentionAudience: botGroupMentionAudience(i.mentions) } : {}) },
             prepared: prepared?.ok ? prepared : undefined };
           postedThreads.set(key, post);
@@ -5003,6 +5034,7 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       const body = recovered?.body ?? {
         operationId: i.clientId, content: [ ...(quote ? [buildBotGroupQuoteCard(quote)] : []), ...(i.text ? [{ type: 'text', text: i.text }] : []),
           ...uploaded ], mentions, deferExecution: shouldPlan,
+          ...namedBroadcastMentions(i.mentions, mentions),
           ...(independentSend ? { independentReplies: true } : {}),
           ...(!direct && supportsMentionAudiences && botGroupMentionAudience(i.mentions) ? { mentionAudience: botGroupMentionAudience(i.mentions) } : {}), ...(!direct && groupDiscussionParity ? { mentionsAll: i.mentions.allBots === true, planningMode: i.division || proposed ? 'explicit' : 'auto' } : {}),
       };
