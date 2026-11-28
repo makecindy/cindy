@@ -25,6 +25,8 @@ export interface PluginEngineAccountConfig {
   limit: number;
   limitSet?: true;
   weight: number;
+  /** Optional owner-chosen display label for this account. */
+  label?: string;
   /** Display identity the plugin last confirmed; kept across sign-out so the row stays recognisable. */
   lastConfirmedIdentity?: string;
   /**
@@ -73,6 +75,7 @@ function strategyOf(value: unknown): RouteStrategy {
 function normalizeAccount(raw: unknown): PluginEngineAccountConfig | null {
   const account = raw as Partial<PluginEngineAccountConfig> | null;
   if (!account || !isPluginEngineAccountId(account.id)) return null;
+  const label = typeof account.label === 'string' ? account.label.trim() : '';
   const identity = typeof account.lastConfirmedIdentity === 'string' ? account.lastConfirmedIdentity.trim() : '';
   const relogin = typeof account.reloginIdentity === 'string' ? account.reloginIdentity.trim() : '';
   return {
@@ -81,6 +84,7 @@ function normalizeAccount(raw: unknown): PluginEngineAccountConfig | null {
     limit: Number.isInteger(account.limit) && account.limit! >= 1 && account.limit! <= 16 ? account.limit! : 4,
     ...(account.limitSet === true ? { limitSet: true as const } : {}),
     weight: Number.isInteger(account.weight) && account.weight! >= 1 && account.weight! <= 100 ? account.weight! : 1,
+    ...(label && label.length <= 64 && !/[\u0000-\u001F\u007F]/.test(label) ? { label } : {}),
     ...(identity && identity.length <= IDENTITY_MAX ? { lastConfirmedIdentity: identity } : {}),
     ...(relogin && relogin.length <= IDENTITY_MAX ? { reloginIdentity: relogin } : {}),
   };

@@ -225,6 +225,7 @@ describe('provider share identity scrubbing', () => {
       subscriptionPoolAlias: true,
       subscriptionPoolTarget: 'private-pool-target',
       subscriptionAccountKeys: ['private-owner-identity-key'],
+      customName: true,
       subscriptionAccount: { source: 'local', identity: 'alice@corp.com' },
       openAiAccount: { source: 'oauth', identity: 'alice@corp.com' },
     };

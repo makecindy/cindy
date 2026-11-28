@@ -66,6 +66,10 @@ export interface MenubarSubscriptionInput {
   logoSvg: string;
   /** Brand shown as the detail title: Claude, Codex, Grok. */
   brand: string;
+  /** Optional custom display name for this subscription source (account label or single-account provider name). */
+  label?: string | null;
+  /** Optional custom display name of the owning provider, used for provider-scoped actions. */
+  providerName?: string | null;
   /** Sharer display name, falling back to the provider label; never an account email or device name. */
   shared?: { label: string; note: string; ownerName?: string; highestWeekly?: boolean };
   /** Account email when the provider exposes one (Codex accounts). */
@@ -539,10 +543,33 @@ class Builder {
     return this.input.settings.privacy ? { label: source.brand } : source.shared;
   }
 
-  /** Short name under a tube and in sentences: the other computer, else the account handle, else the brand. */
+  private maskCustomText(raw: string): string | null {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    if (!this.input.settings.privacy || !trimmed.includes('@')) return trimmed;
+    const [local, domain] = trimmed.split('@');
+    if (!local) return trimmed;
+    const masked = `${local[0]}•••${local.length > 1 ? local[local.length - 1] : ''}`;
+    return domain ? `${masked}@${domain}` : masked;
+  }
+
+  private customLabel(source: MenubarSubscriptionInput): string | null {
+    return source.label ? this.maskCustomText(source.label) : null;
+  }
+
+  private customProviderName(source: MenubarSubscriptionInput): string | null {
+    return source.providerName ? this.maskCustomText(source.providerName) : null;
+  }
+
+  /** Short name under a tube and in sentences: custom name, the other computer, the account handle, else the brand. */
   private baseName(source: MenubarSourceInput): string {
-    if (source.kind === 'subscription') return this.sharedIdentity(source)?.label ??
-      (source.pooled ? this.handle(source) ?? source.device?.name : source.device?.name ?? this.handle(source)) ?? source.brand;
+    if (source.kind === 'subscription') {
+      const shared = this.sharedIdentity(source)?.label;
+      if (shared) return shared;
+      const custom = this.customLabel(source);
+      if (source.pooled) return custom ?? this.handle(source) ?? source.device?.name ?? source.brand;
+      return source.device?.name ?? custom ?? this.handle(source) ?? source.brand;
+    }
     if (source.kind === 'balance') return this.t('balance.short');
     return source.name;
   }
@@ -975,7 +1002,9 @@ class Builder {
   private subscriptionDetail(source: MenubarSubscriptionInput): MenubarDetail {
     const state = this.state(source);
     const ownerName = this.sharedIdentity(source)?.ownerName;
-    const title = ownerName ? `${ownerName} · ${source.brand}` : source.brand;
+    const custom = this.customLabel(source);
+    const providerName = this.customProviderName(source);
+    const title = ownerName ? `${ownerName} · ${source.brand}` : (custom ?? providerName ?? source.brand);
     // The detail page is about what actually limits the account, not the tube's weekly view.
     const limit = state.tightest;
     const handle = this.handle(source);
@@ -983,7 +1012,9 @@ class Builder {
     // An account on another computer runs there; this computer cannot start a task on it directly.
     let actionLabel = source.device || source.shared
       ? this.t('action.openApp')
-      : this.t('action.newTask', { name: source.pooled ? source.brand : handle ?? source.brand });
+      : this.t('action.newTask', {
+          name: source.pooled ? (providerName ?? source.brand) : (custom ?? handle ?? source.brand),
+        });
     let action: MenubarDetailAction = source.device || source.shared
       ? { kind: 'open-app' }
       : { kind: 'new-task', providerId: source.providerId };

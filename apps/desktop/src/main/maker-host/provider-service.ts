@@ -348,9 +348,15 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         }, connected, {}, modelAccess).map(provider => [provider.id, formatModels(provider).models] as const)
       : []);
     const icons = deps.getProviderConnectionIcons?.() ?? {};
-    return buildRegistry(catalog, connected, discoveryFailures, modelAccess).map(formatModels).map((provider) => ({
+    return buildRegistry(catalog, connected, discoveryFailures, modelAccess).map(formatModels).map((provider) => {
+      const presentation = deps.getProviderPresentation?.(provider.id);
+      const builtinPresentation = provider.source === 'builtin' ? presentation : undefined;
+      const hasCustomName = provider.source === 'builtin'
+        ? Boolean(builtinPresentation?.name && provider.id !== 'xd')
+        : provider.source === 'user' && Boolean(presentation?.name && presentation.name === provider.name);
+      return {
       ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
-      ...provider, ...(provider.source === 'builtin' ? deps.getProviderPresentation?.(provider.id) ?? {} : {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
+      ...provider, ...(builtinPresentation ?? {}), ...(hasCustomName ? { customName: true as const } : {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
       ...(provider.source === 'user' && Object.hasOwn(icons, provider.id) ? connectionArtworkFields(icons[provider.id]) : {}),
       ...(provider.source === 'organization' ? { logoKind: deps.getOrganizationProviderLogoKind?.(provider) } : {}),
       // Deletion disconnects first. A live binding wins over a stale removed flag if
@@ -360,7 +366,8 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         ? { subscriptionReadUnavailable: true as const, subscriptionModelsConfirmedAt: unavailableSubscriptions.get(provider.id),
           ...(deps.subscriptionReadUnreachable?.(provider.id) ? { subscriptionReadUnreachable: true as const } : {}) } : {}),
       ...(displayModels.has(provider.id) ? { subscriptionDisplayModels: displayModels.get(provider.id) } : {}),
-    })).map(
+    };
+    }).map(
       (provider) =>
         media === undefined
           ? provider

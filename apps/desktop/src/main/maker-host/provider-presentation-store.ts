@@ -10,6 +10,10 @@ export interface ProviderPresentation {
   name?: string;
   removed?: boolean;
 }
+export interface ProviderPresentationPatch {
+  name?: string | null;
+  removed?: boolean;
+}
 interface PresentationFile extends ProviderPresentation {
   connectionIcons?: Record<string, ConnectionArtwork>;
   providers?: Record<string, ProviderPresentation>;
@@ -92,19 +96,28 @@ export function readProviderPresentation(providerId: string, options?: { allowSi
     ? { ...(name ? { name } : {}), ...(removed !== undefined ? { removed } : {}) }
     : (providers?.[providerId] ?? {});
 }
-export async function setProviderPresentation(providerId: string, patch: ProviderPresentation): Promise<void> {
+export async function setProviderPresentation(providerId: string, patch: ProviderPresentationPatch): Promise<void> {
   if (!/^[a-zA-Z0-9._-]{1,128}$/.test(providerId)) throw new Error('Invalid provider id');
-  if (patch.name !== undefined && (!patch.name.trim() || patch.name.length > 128))
+  if (patch.name !== undefined && patch.name !== null && (!patch.name.trim() || patch.name.length > 128))
     throw new Error('Invalid provider name');
   const normalized = normalizePresentation(patch);
   await store.updateAtomic(({ value }) => {
-    if (providerId === 'openai') return normalized;
-    const providers = value.providers ?? {};
-    return {
-      providers: { ...providers, [providerId]: { ...providers[providerId], ...normalized } },
-    };
+    if (providerId === 'openai') {
+      return {
+        ...(patch.name === null ? { name: undefined } : {}),
+        ...normalized,
+      };
+    }
+    const providers = { ...(value.providers ?? {}) };
+    const nextEntry: ProviderPresentation = { ...providers[providerId], ...normalized };
+    if (patch.name === null) delete nextEntry.name;
+    if (Object.keys(nextEntry).length > 0) providers[providerId] = nextEntry;
+    else delete providers[providerId];
+    return { providers };
   });
 }
+export const onProviderPresentationChanged = (listener: () => void): (() => void) =>
+  store.onChanged(listener);
 export const readLocalCodexPresentation = () => readProviderPresentation('openai');
 export const getHostProviderPresentationStore = () => store;
 /** Login or disconnect is already committed; display preferences cannot reverse its result. */

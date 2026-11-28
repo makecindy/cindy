@@ -526,6 +526,62 @@ describe('SubscriptionAccountsSection usage', () => {
     await vi.waitFor(() => expect(error).toHaveBeenCalledWith('subscriptionAccounts.openDirectoryFailed'));
     expect(screen.queryByText('/home/.claude-second')).toBeNull();
   });
+
+  /* 测试价值：订阅账号行此前无重命名与恢复默认名称入口，多账号或保留默认供应商名时无法单独改账号名。
+   * 真实入口：SubscriptionAccountsSection 账号「···」菜单 -> 重命名对话框与恢复默认名称动作。
+   * 可观察结果：提交新名称发送 configure { label }，账号行主标题显示自定义名并副显原邮箱，点击恢复默认名称发送 { label: null }。
+   * 最小失败输入：展开第一个订阅账号菜单重命名为「主力 Pro」并恢复默认。tier：unit (jsdom)。 */
+  it('renames a subscription account while keeping its email visible, and restores the default name', async () => {
+    let current: SubscriptionPoolView = structuredClone(view);
+    const command = vi.mocked(window.electronAPI.subscriptionAccounts.command).mockImplementation(async request => {
+      if (request.action === 'configure' && 'label' in request && request.accountId) {
+        current = {
+          ...current,
+          accounts: current.accounts.map(account =>
+            account.id === request.accountId
+              ? { ...account, label: request.label ?? undefined }
+              : account),
+        };
+      }
+      return current;
+    });
+    confirmPlacement.mockImplementationOnce(async (options: unknown) => {
+      await Promise.resolve();
+      const dialog = render(<>{(options as { content?: React.ReactNode }).content}</>);
+      fireEvent.change(within(dialog.container).getByRole('textbox', { name: 'settings.providers.pill.rename' }), {
+        target: { value: '  主力 Pro  ' },
+      });
+      dialog.unmount();
+      return true;
+    });
+
+    render(<SubscriptionAccountsSection providerId="anthropic" />);
+    const rows = () => screen.getAllByTestId('subscription-account');
+    await screen.findAllByTestId('subscription-account');
+    fireEvent.pointerDown(within(rows()[0]!).getByRole('button', { name: 'providerGroup.member.moreAria' }),
+      { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.pill.rename' }));
+
+    await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'configure',
+      providerId: 'anthropic',
+      accountId: 'default',
+      label: '主力 Pro',
+    }));
+    await waitFor(() => expect(within(rows()[0]!).getByText('主力 Pro')).toBeTruthy());
+    expect(within(rows()[0]!).getByText('first@example.test')).toBeTruthy();
+
+    fireEvent.pointerDown(within(rows()[0]!).getByRole('button', { name: 'providerGroup.member.moreAria' }),
+      { button: 0, ctrlKey: false, pointerType: 'mouse' });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.menu.resetName' }));
+    await waitFor(() => expect(command).toHaveBeenCalledWith({
+      action: 'configure',
+      providerId: 'anthropic',
+      accountId: 'default',
+      label: null,
+    }));
+    await waitFor(() => expect(within(rows()[0]!).queryByText('主力 Pro')).toBeNull());
+  });
 });
 
 /*

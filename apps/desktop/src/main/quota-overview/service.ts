@@ -49,6 +49,9 @@ import { getResolvedMainLocale, mainStringKeysUnder, rawMainString } from '../i1
 import { getSessionRowSnapshot } from '../localDb/ipc/sessions.js';
 import { createLogger } from '../logger.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
+import { onActiveCatalogChanged } from '../maker-host/active-catalog.js';
+import { onProviderDisableChange } from '../maker-host/model-disable-store.js';
+import { onProviderPresentationChanged } from '../maker-host/provider-presentation-store.js';
 import { readPluginHarnessUsage } from '../cindy-brain/pluginHarnesses.js';
 import { listPluginEngineViews, onPluginEnginesChanged } from '../maker-ipc/pluginEnginesIpc.js';
 import { readKimiCodingAccountUsage, readOpenCodeGoAccountUsage, readZhipuCodingPlanAccountUsage } from '../maker-host/provider-account-usage.js';
@@ -353,6 +356,9 @@ export class QuotaOverviewService {
     this.usageOwnerId = getActiveAppSession().dataOwnerId;
     this.disposers.push(
       observeUsageChanges(() => this.scheduleRebuild()),
+      onProviderPresentationChanged(() => this.scheduleRebuild(0)),
+      onActiveCatalogChanged(() => this.scheduleRebuild()),
+      onProviderDisableChange(() => this.scheduleRebuild()),
       onSubscriptionAccountsChanged(() => {
         this.accountsRevision += 1;
         this.scheduleRebuild();

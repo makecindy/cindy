@@ -59,6 +59,7 @@ const h = vi.hoisted(() => ({
   /** Providers Cindy created for subscription accounts (placement.ts), by provider id. */
   created: {} as Record<string, { kind: 'openai' | 'anthropic'; name: string; account: string }>,
   strategies: {} as Record<string, string>,
+  accountNames: {} as Record<string, string>,
   apiMembers: [] as import('../apiKeyMembers.js').ApiKeyPoolMember[],
   apiAllowed: true,
   apiAutoSwitch: true,
@@ -119,7 +120,10 @@ vi.mock('../placement.js', () => {
     placeSubscriptionAccount: async (kind: string, accountId: string | readonly string[], providerId: string) => {
       for (const id of typeof accountId === 'string' ? [accountId] : accountId) place(kind, id, providerId);
     },
-    discardUnusedSubscriptionAccountPlacement: async (kind: string, id: string) => { delete h.placement[`${kind}:${id}`]; },
+    discardUnusedSubscriptionAccountPlacement: async (kind: string, id: string) => {
+      delete h.placement[`${kind}:${id}`];
+      delete h.accountNames[`${kind}:${id}`];
+    },
     createSubscriptionProvider: async (kind: Kind, accountId: string, name: string, createId: () => string, prepare?: (id: string) => void, additionalAccountIds: readonly string[] = []) => {
       const providerId = `${kind}-sub-${createId()}`;
       prepare?.(providerId);
@@ -130,10 +134,23 @@ vi.mock('../placement.js', () => {
     },
     deleteCreatedSubscriptionProvider: async (providerId: string) => {
       delete h.created[providerId];
-      for (const [key, id] of Object.entries(h.placement)) if (id === providerId) delete h.placement[key];
+      for (const [key, id] of Object.entries(h.placement)) {
+        if (id === providerId) {
+          delete h.placement[key];
+          delete h.accountNames[key];
+        }
+      }
     },
     renameCreatedSubscriptionProvider: async (providerId: string, name: string) => {
       if (h.created[providerId]) h.created[providerId] = { ...h.created[providerId], name };
+    },
+    readSubscriptionAccountName: (kind: string, accountId: string) => h.accountNames[`${kind}:${accountId}`],
+    writeSubscriptionAccountName: async (kind: string, accountIds: readonly string[], label: string | null) => {
+      for (const id of accountIds) {
+        const key = `${kind}:${id}`;
+        if (label === null) delete h.accountNames[key];
+        else h.accountNames[key] = label.trim();
+      }
     },
     readProviderStrategy: (providerId: string) => h.strategies[providerId],
     writeProviderStrategy: async (providerId: string, strategy: string) => { h.strategies[providerId] = strategy; },
@@ -474,6 +491,7 @@ beforeEach(() => {
   h.placement = {};
   h.created = {};
   h.strategies = {};
+  h.accountNames = {};
   h.copyOverrides.mockReset();
   h.storedUsage.clear();
   h.mkdir.mockReset();

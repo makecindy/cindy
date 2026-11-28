@@ -145,9 +145,18 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
       )
         throwIpcError('INVALID_PARAMS', 'Invalid account setting');
     }
+    let label: string | null | undefined;
+    if (value.label === null) label = null;
+    else if (value.label !== undefined) {
+      if (typeof value.label !== 'string') throwIpcError('INVALID_PARAMS', 'Invalid account name');
+      const trimmed = value.label.trim();
+      if (!trimmed || trimmed.length > 64 || /[\u0000-\u001F\u007F]/.test(trimmed))
+        throwIpcError('INVALID_PARAMS', 'Invalid account name');
+      label = trimmed;
+    }
     if (
       accountId === undefined &&
-      (value.paused !== undefined || value.limit !== undefined || value.weight !== undefined)
+      (value.paused !== undefined || value.limit !== undefined || value.weight !== undefined || label !== undefined)
     )
       throwIpcError('INVALID_PARAMS', 'Account required');
     return {
@@ -159,6 +168,7 @@ export function parseSubscriptionAccountCommand(raw: unknown): SubscriptionAccou
       paused: value.paused,
       limit: value.limit,
       weight: value.weight,
+      ...(label !== undefined ? { label } : {}),
     } as SubscriptionAccountCommand;
   }
   throwIpcError('INVALID_PARAMS', 'Invalid account command');
