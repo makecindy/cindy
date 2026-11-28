@@ -138,7 +138,7 @@ function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: Ne
     ), [selectedDeviceId]);
     const common = { ...bindings, selectedDeviceId, setSelectedDeviceId, setSelectedDeviceName,
       newSessionPreferences, setNewSessionPreferences, newSessionPreferencesLoaded, setNewSessionPreferencesLoaded,
-      newSessionDefaults, setNewSessionDefaults,
+      newSessionDefaults, setNewSessionDefaults, originProfile: options.originProfile ?? 'app',
       workingDirPreferenceOverridesRef, workspaceKindPreferenceOverridesRef, initialWorkspaceKeyRef, appliedDefaultDeviceKeyRef,
       userTouchedDeviceRef, userTouchedWorkspaceRef, draft, setDraft, preferredDefaultDevice,
       setBrowseOpen: setBrowseOpenTracked };

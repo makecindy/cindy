@@ -212,6 +212,8 @@ export interface NewSessionDefaultWorkspaceInput {
   deviceId: string;
   initialWorkingDir?: string | null;
   followLastKind?: NewSessionWorkspaceKind | null;
+  /** 当前电脑自己记住的模式；优先于全局「上次」模式，且明确的「对话」不会被项目目录顶掉。 */
+  rememberedKind?: NewSessionWorkspaceKind | null;
   /** 没有任何「上次」模式时，打开新建页时的初始模式（无入口目录 = 对话）。 */
   initialKind?: NewSessionWorkspaceKind;
   rememberedWorkingDir?: string | null;
@@ -251,10 +253,12 @@ export function resolveNewSessionDefaultWorkspace(
 
   const followLast = (): ResolvedNewSessionDefaultWorkspace => {
     const kind = input.followLastKind ?? input.initialKind ?? 'project';
-    if (kind === 'dialogue') return dialogueDecision('last');
     const remembered = input.rememberedWorkingDir?.trim()
       ? input.rememberedWorkingDir
       : '';
+    // 当前电脑显式记过「对话」时，它比这台电脑的旧项目目录更权威；全局旧模式只是兜底。
+    if (input.rememberedKind === 'dialogue' || (kind === 'dialogue' && !remembered))
+      return dialogueDecision('last');
     const recent = input.recentWorkspaces[0]?.workingDir ?? '';
     const workingDir = remembered || recent;
     return {

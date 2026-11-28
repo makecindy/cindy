@@ -623,6 +623,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     [params.deviceOptions],
   );
   const [newSessionPreferences, setNewSessionPreferences] = useState<NewSessionStoredPreferences | null>(null);
+  const newSessionPreferencesRef = useRef(newSessionPreferences);
+  newSessionPreferencesRef.current = newSessionPreferences;
   const [newSessionDefaults, setNewSessionDefaults] = useState<NewSessionDefaults | null>(null);
   const [defaultsSheetOpen, setDefaultsSheetOpen] = useState(false);
   const defaultsEditedRef = useRef(false);
@@ -656,9 +658,6 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     && (readRouteString(params.deviceExplicit) === '1' || !!initialWorkingDir || routeDeviceCandidates.size <= 1);
   const [selectedDeviceId, setSelectedDeviceId] = useState(routeDeviceId);
   const [selectedDeviceName, setSelectedDeviceName] = useState(routeDeviceName);
-  const [newSessionPreferences, setNewSessionPreferences] = useState<NewSessionStoredPreferences | null>(null);
-  const newSessionPreferencesRef = useRef(newSessionPreferences);
-  newSessionPreferencesRef.current = newSessionPreferences;
   const workingDirPreferenceOverridesRef = useRef<Record<string, string>>({});
   const workspaceKindPreferenceOverridesRef = useRef<Record<string, NewSessionWorkspaceKind>>({});
   const [newSessionPreferencesLoaded, setNewSessionPreferencesLoaded] = useState(false);
@@ -1507,6 +1506,7 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     newSessionDefaults,
     setNewSessionDefaults,
     defaultsEditedRef,
+    originProfile: defaultProfile,
   });
 
   useNewSessionDefaultSelection({
@@ -4151,6 +4151,8 @@ function NewRemoteSessionContent({ creatingRef }: { creatingRef: { current: bool
     recentWorkspaces,
     newSessionPreferences,
     newSessionDefaults,
+    workingDirPreferenceOverridesRef,
+    workspaceKindPreferenceOverridesRef,
     originProfile: defaultProfile,
     patchDraft,
     browseOpen,

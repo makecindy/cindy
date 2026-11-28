@@ -127,6 +127,8 @@ export interface NewSessionWorkspacePreferencesInput extends Pick<
   setDevicePickerOpen: Setter<boolean>;
   /** 读取期间用户已保存过默认：不要用迟到的读取结果覆盖。 */
   defaultsEditedRef?: RefObject<boolean>;
+  /** 档案若显式指定了工作区，由 useNewSessionInitialWorkspace 落定记忆模式不再插手。 */
+  originProfile?: NewSessionDefaultProfileKey;
 }
 
 /** The initial async preference read never replaces a choice made in this form. */
@@ -145,6 +147,7 @@ export function useNewSessionWorkspacePreferences(
     newSessionDefaults,
     setNewSessionDefaults,
     userTouchedWorkspaceRef,
+    setDraft,
     userTouchedDeviceRef,
     routeDeviceId,
     routeDeviceName,
@@ -155,6 +158,7 @@ export function useNewSessionWorkspacePreferences(
     setSelectedDeviceId,
     setSelectedDeviceName,
     setDevicePickerOpen,
+    originProfile,
   } = input;
   const appliedInitialWorkspaceKindRef = useRef(false);
   useEffect(() => {
@@ -243,6 +247,11 @@ export function useNewSessionWorkspacePreferences(
     if (!userTouchedDeviceRef.current && selectedDeviceId !== targetDeviceId) {
       return;
     }
+    const profileWorkspaceKind = newSessionDefaults?.[originProfile ?? 'app']?.workspace.kind;
+    const effectiveDefaultKind = profileWorkspaceKind === 'follow-app'
+      ? newSessionDefaults?.app.workspace.kind
+      : profileWorkspaceKind;
+    if (effectiveDefaultKind === 'dialogue' || effectiveDefaultKind === 'project') return;
     appliedInitialWorkspaceKindRef.current = true;
     if (initialWorkingDir || userTouchedWorkspaceRef.current) return;
     const workspaceKind = resolveInitialNewSessionWorkspaceKind({
@@ -262,6 +271,8 @@ export function useNewSessionWorkspacePreferences(
     newSessionPreferencesLoaded,
     preferredDefaultDevice?.deviceId,
     selectedDeviceId,
+    newSessionDefaults,
+    originProfile,
   ]);
 }
 
@@ -438,6 +449,8 @@ export interface NewSessionInitialWorkspaceInput extends Pick<
   | "initialWorkspaceKeyRef"
   | "newSessionPreferences"
   | "newSessionDefaults"
+  | "workingDirPreferenceOverridesRef"
+  | "workspaceKindPreferenceOverridesRef"
   | "setBrowseOpen"
   | "loadBrowsePath"
 > {
@@ -466,6 +479,8 @@ export function useNewSessionInitialWorkspace(
     recentWorkspaces,
     newSessionPreferences,
     newSessionDefaults,
+    workingDirPreferenceOverridesRef,
+    workspaceKindPreferenceOverridesRef,
     originProfile,
     patchDraft,
     browseOpen,
@@ -508,8 +523,13 @@ export function useNewSessionInitialWorkspace(
       deviceId: selectedDeviceId,
       initialWorkingDir,
       followLastKind: newSessionPreferences?.workspaceKind ?? null,
+      rememberedKind: workspaceKindPreferenceOverridesRef?.current?.[selectedDeviceId]
+        ?? newSessionPreferences?.workspaceKindByDevice?.[selectedDeviceId]
+        ?? null,
       initialKind: initialWorkingDir ? 'project' : 'dialogue',
-      rememberedWorkingDir: newSessionPreferences?.workingDirByDevice?.[selectedDeviceId] ?? null,
+      rememberedWorkingDir: workingDirPreferenceOverridesRef?.current?.[selectedDeviceId]
+        ?? newSessionPreferences?.workingDirByDevice?.[selectedDeviceId]
+        ?? null,
       recentWorkspaces,
     });
     // 键包含默认本身：弹窗改默认后能重新应用；最近项目后来重排不会反复改草稿。
@@ -547,6 +567,7 @@ export function useNewSessionInitialWorkspace(
     newSessionPreferencesLoaded,
     newSessionPreferences?.workingDirByDevice,
     newSessionPreferences?.workspaceKind,
+    newSessionPreferences?.workspaceKindByDevice,
     newSessionDefaults,
     originProfile,
     preferredDefaultDevice?.deviceId,
