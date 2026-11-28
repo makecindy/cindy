@@ -87,12 +87,49 @@ test('fixed installation reuses its path and resumes a failed switch with old ru
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'personal-fixed-install-'));
  try {
   const prepare=(v,identity='fixture')=>prepareRuntime({store:path.join(dir,'store'),inputs:{bundleId:'personal-test',version:v},signingIdentity:identity,
-   build:app=>{fs.mkdirSync(app);fs.writeFileSync(path.join(app,'binary'),v);},verifySignature:()=>{}});
+   build:app=>{
+    fs.mkdirSync(app);
+    const binary = path.join(app, 'binary');
+    fs.writeFileSync(binary, v);
+    fs.chmodSync(binary, 0o755);
+   },verifySignature:()=>{}});
   const first=prepare('one'), second=prepare('two');
   const app=path.join(fs.realpathSync(dir),'Applications','Cindy Personal.app');
   const options={isRunning:()=>false,verifySignature:()=>{}};
-  installFixedRuntime(first,app,options);
+  // A supervisor protects its logs and backups with umask 077. The signed copy
+  // must still match the reviewed bundle at both preflight and installation.
+  const previousMask = process.umask();
+  try {
+    if (process.platform === 'darwin') process.umask(0o077);
+    assert.deepEqual(preflightFixedRuntime(first,app,options), {installed:false});
+    assert.equal(fs.existsSync(app), false);
+    installFixedRuntime(first,app,options);
+    if (process.platform === 'darwin') assert.equal(process.umask(), 0o077);
+  } finally { if (process.platform === 'darwin') process.umask(previousMask); }
   assert.deepEqual(preflightFixedRuntime(second,app,{...options,requirement:()=> 'same designated requirement'}),{installed:true,sameRequirement:true});
+  // Only the staged copy fails signature verification. Reject it during the real
+  // restart preflight and leave the running app and install receipt intact.
+  const {restartWithSupervisorLock} = await import('../personal-build/automatic.mjs');
+  const receiptBefore = fs.readFileSync(app+'.personal-install.json');
+  const entriesBefore = fs.readdirSync(path.dirname(app)).sort();
+  const phases = [];
+  let stopped = false, activated = false;
+  await assert.rejects(restartWithSupervisorLock(path.join(dir,'supervisor.lock'),42,{
+    prepare: () => preflightFixedRuntime(second,app,{
+      requirement: () => 'same',
+      verifySignature: candidate => {
+        if (candidate !== app && candidate !== path.join(second.directory,'Cindy.app')) throw Error('candidate copy rejected');
+      },
+    }),
+    observe: () => ({ready:true, pid:42}), stop: () => {stopped=true;},
+    activate: () => {activated=true;}, record: state => phases.push(state.phase),
+  }), /candidate copy rejected/);
+  assert.equal(phases.at(-1),'blocked-before-stop');
+  assert.equal(stopped,false);
+  assert.equal(activated,false);
+  assert.equal(fs.readFileSync(path.join(app,'binary'),'utf8'),'one');
+  assert.deepEqual(fs.readFileSync(app+'.personal-install.json'),receiptBefore);
+  assert.deepEqual(fs.readdirSync(path.dirname(app)).sort(),entriesBefore);
   // Same certificate/bundle ID is insufficient: reject changed designated requirements before quit.
   assert.throws(()=>preflightFixedRuntime(second,app,{...options,requirement:where=>where === app ? 'old' : 'new'}),/signing requirement changed/);
   assert.equal(fs.lstatSync(app).isSymbolicLink(),false);

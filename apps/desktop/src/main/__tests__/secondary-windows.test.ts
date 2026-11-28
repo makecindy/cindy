@@ -100,6 +100,9 @@ vi.mock('../appearance-settings-ipc.js', () => ({
 vi.mock('../mainWindowFullscreenStartup.js', () => ({
   installWindowFullscreenStateBroadcast: vi.fn(),
 }));
+vi.mock('../macFullscreenRecovery.js', () => ({
+  installMacFullscreenDesyncRecovery: vi.fn(),
+}));
 vi.mock('../window-theme-mode-store.js', () => ({
   readWindowThemeSnapshot: () => mocks.readWindowThemeSnapshot(),
 }));

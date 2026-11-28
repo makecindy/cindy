@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { randomUUID } from 'expo-crypto';
 import type { BotGroupRemoteActionId, BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMembership } from '@cindy/maker-shared/botGroupPresentation';
@@ -36,7 +36,8 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     try {
       const { snapshot, self, manager } = await api.client.groupSettings(groupId);
       if (!valid() || sequence.current !== run) return;
-      const settings = { group: { ...chatGroupView({ snapshot, messages: [], before: null }, self), ...api.client.lifecycleCapabilities() }, managerId: manager?.id };
+      const settings = { group: { ...chatGroupView({ snapshot, messages: [], before: null }, self), ...api.client.lifecycleCapabilities(),
+        ...api.client.groupAssistant(snapshot.room, self) }, managerId: manager?.id };
       verified.current = { binding, settings };
       setState({ binding, settings, loading: false, failed: false });
     } catch {
@@ -80,6 +81,10 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
     } else if (actionId === 'bot-access') {
       if (input.access !== 'none' && input.access !== 'chat' && input.access !== 'tools') throw new Error('INVALID_PARAMS');
       action = { type: 'botAccess', actorId: actor(), access: input.access, expectedRevision: revision(input.expectedRevision) };
+    } else if (actionId === 'set-assistant') {
+      if (!current.group.supportsGroupAssistant) throw new Error('CHAT_UNAVAILABLE');
+      if (typeof input.assistant !== 'boolean') throw new Error('INVALID_PARAMS');
+      action = { type: 'update', expectedRevision: revision(input.expectedRevision), assistant: input.assistant };
     } else if (actionId === 'update' || actionId === 'delete' || actionId === 'archive') {
       action = { type: 'update', expectedRevision: revision(input.expectedRevision) };
       if (actionId !== 'update') action.archived = actionId === 'delete' || input.archived !== false;
@@ -147,14 +152,36 @@ export function useBotGroupSettingsManagement(source: BotGroupRemoteChatData, en
   const own = state?.binding === binding;
   const settings = own ? state.settings : undefined;
   const loading = enabled && (!own || state.loading);
-  const editable = !loading && !!settings?.managerId && canManageBotGroup(settings.group) && !settings.group.dissolvedAt;
+  // Follows the account's known values and its /me, so a late answer (another screen's read, a /me that arrives after
+  // this read already failed) reaches an open sheet without waiting for some other render.
+  const known = useSyncExternalStore(api.client.subscribeGroupAssistant, () => api.client.knownGroupAssistant(groupId));
+  const knownRevision = useSyncExternalStore(api.client.subscribeGroupAssistant, () => api.client.knownGroupAssistantRevision(groupId));
+  // This opening's read is behind what the account knows (a newer revision read elsewhere, or the server's switch came
+  // or went): what it shows would not be what a write is based on. Not writable; read again, once per known state.
+  const stale = !!settings && !loading && ((known !== undefined && (typeof known === 'boolean') !== (settings.group.supportsGroupAssistant === true))
+    || (knownRevision !== undefined && settings.group.revision !== undefined && knownRevision > settings.group.revision));
+  const staleRead = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${String(known)}:${String(knownRevision)}`;
+    if (!stale || staleRead.current === key) return;
+    staleRead.current = key; void refresh();
+  }, [stale, known, knownRevision, refresh]);
+  const editable = !loading && !stale && !!settings?.managerId && canManageBotGroup(settings.group) && !settings.group.dissolvedAt;
   // Settings reads skip `/actors`; the chat page already knows which computer runs each of your teammates.
   const homes = new Map(source.members.flatMap(member => member.homeDeviceId && member.actorId ? [[member.actorId, member.homeDeviceId] as const] : []));
-  const group = settings && homes.size ? { ...settings.group, members: settings.group.members.map(member =>
+  const read = settings && homes.size ? { ...settings.group, members: settings.group.members.map(member =>
     member.homeDeviceId === null && member.actorId && homes.has(member.actorId) ? { ...member, homeDeviceId: homes.get(member.actorId) } : member) }
     : settings?.group;
-  return { group, act, invite, refresh, loading, editable, ready: !loading && !!settings,
-    reason: loading ? null : own && state.failed ? 'unavailable' as const : editable ? null : 'permission' as const };
+  // 「群里的 Cindy」 shows the newest value this account has read for the group, whatever the shown data carries: a
+  // settings read kept while the next one loads, a chat page copy that is older or restored without the server's
+  // capabilities. Without a settings read of its own (loading, or failed e.g. offline) the sheet shows the chat page's
+  // group. Display only: writes still need this opening's own settings read. Every case: bot-group-mobile-direct-settings.md.
+  const withKnown = (data: BotGroupRemoteChatData) => known === null ? { ...data, supportsGroupAssistant: false }
+    : known === undefined ? data : { ...data, supportsGroupAssistant: true, assistantEnabled: known };
+  const group = read && withKnown(read);
+  const shown = group ?? withKnown(source);
+  return { group, shown, act, invite, refresh, loading, editable, ready: !loading && !!settings,
+    reason: loading || stale ? null : own && state.failed ? 'unavailable' as const : editable ? null : 'permission' as const };
 }
 
 /** Own cloud actors remain addable while their execution computers are offline. */

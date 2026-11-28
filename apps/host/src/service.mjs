@@ -22,6 +22,7 @@ export const HOST_PATHS_ALLOWED_WHILE_HELD = Object.freeze({
     '/api/turn-change-sets/list', '/api/project-info/get', '/api/project-info/image', '/api/project-aliases/list',
     '/api/recent-workdirs/list', '/api/ghosts', '/api/ghosts/runtime-states', '/api/ghosts/card', '/api/ghosts/cards',
     '/api/plugins/list', '/api/providers', '/api/agents', '/api/agents/auth-state', '/api/agents/status',
+    '/api/plugin-engines/list', '/api/plugin-engines/refresh', '/api/plugin-engines/usage',
     '/api/agents/codex-runtime-route', '/api/model-access', '/api/usage/model-pricing', '/api/usage/reference-model-pricing',
     '/api/interactions/pending', '/api/input/projection', '/api/agent-commands', '/api/agent-skills', '/api/capabilities',
     '/api/right-sidebar-tabs/list', '/api/browser-backend/get-state', '/api/notifications/clear-session-attention',
@@ -329,6 +330,24 @@ export function createHostService(deps) {
     }
     if (url.pathname === '/api/agents') {
         return { status: 200, body: await deps.agents() };
+    }
+    if (url.pathname === '/api/plugin-engines/list') {
+        return { status: 200, body: await deps.pluginEngines.list() };
+    }
+    if (url.pathname === '/api/plugin-engines/refresh') {
+        await deps.pluginEngines.refresh(body.targetGhostId);
+        return { status: 200, body: null };
+    }
+    if (url.pathname === '/api/plugin-engines/usage') {
+        return { status: 200, body: await deps.pluginEngines.usage(body.key, body.task) };
+    }
+    if (url.pathname === '/api/plugin-engines/set-remote-use') {
+        if (!context.trustedNativeClient) throwIpcError('PERMISSION_DENIED', 'A trusted desktop renderer is required');
+        return { status: 200, body: await deps.pluginEngines.setRemoteUse(body.input) };
+    }
+    if (url.pathname === '/api/plugin-engines/set-prefs') {
+        if (!context.trustedNativeClient) throwIpcError('PERMISSION_DENIED', 'A trusted desktop renderer is required');
+        return { status: 200, body: await deps.pluginEngines.setPrefs(body.input) };
     }
     if (url.pathname === '/api/interactions/pending') {
         return { status: 200, body: await deps.interactions.pending(String(body.sessionId ?? '')) };

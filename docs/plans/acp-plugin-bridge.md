@@ -81,8 +81,9 @@ Cindy 主进程**从不执行插件写的命令**，只启动插件包里声明�
 | `acp-agent.ts`（第 3 步） | `AcpAgent extends BaseAgent`，按「插件 Agent 标识」分派到宿主注册的端点 |
 
 第 1 步自写最小 JSON-RPC 客户端，不新增依赖、不改锁文件；只实现 v1，v2 草案不接。
-不经 ACP 向 Agent 注入 Cindy 的 system prompt（v1 已支持客户端 system prompt）；以后要注入，
-按 [Agent 行为规则](../dev-rules/maker-core-and-agent-behavior.md)的 system prompt 门禁单独评审。
+个性化设置里的用户提示词按 ACP v1 的 `sessionCapabilities.systemPrompt` 协商，在新建、加载或恢复会话时
+以 `append` 追加，正文只取启动时冻结的个性化（`hostStartupPreferences.userPrompt`），没有冻结值的入口不发。隔离 Buddy 与只读 `/review` 不转发。替另一台电脑运行的任务（同账号远程供应商与分享受邀者）用任务所在电脑随任务发来的
+`userPrompt`，从不用执行端自己保存的个性化（托管启动不经过执行端的启动准备，见 `Maker.startHostedAgentSession`）。清空时不再传个性化正文，插件恢复会话时仍可能使用自己此前保存的提示词。Cindy 产品提示词与任务插件静态提示词继续由各自的既有路径处理。
 
 **行为映射**
 
@@ -500,10 +501,10 @@ Cindy 不能复制或截断，所以这三项都只用 Cindy 自己的记录。
   历史，不开原生分叉（`sdk_session_id = null`），写一条待发送的交接（`context_rebuild`，
   `reason = native-session-recovery`，`sourceAgentKind = acp`），子任务第一条消息启动全新会话并带上它。
   在第一条消息上分叉时没有可交接的内容，不写空交接。目标在内置引擎的段落里时照旧原生分叉。
-  只限本机插件引擎：那一段跑在另一台电脑或收到的分享上时，分叉会绕过执行端对每个任务的准入，仍明确拒绝
-  （见[插件引擎协议记录](../dev-rules/protocol-compatibility/plugin-harnesses.md)「暂未开放」）。
+  跑在另一台电脑或直连分享（`share:<id>`）上的插件引擎同样走这条记录交接路径（子任务继承 `agentDeviceId`、
+  `sdk_session_id = null`，首条消息启动新会话时由执行端完整复核准入；非法 peer 标识仍拒绝）。
   实现见 `maker-orchestration/fork.ts`（`resolveForkNativeSource`），回归见 `__tests__/fork.test.ts`。
-  侧聊走同一条路径。`[Fork·已剥离]`（剥离加密思考块）只针对 Claude，仍拒绝。手机不需改动。
+  侧聊走同一条路径（含侧聊内切换插件引擎/切回内置引擎）。`[Fork·已剥离]`（剥离加密思考块）只针对 Claude，仍拒绝。手机不需改动。
 - **起名**：自动起名、插件建的任务起名与「AI 重命名」都走辅助模型。辅助模型不可用时不借用任何内置引擎
   兜底（以前普通任务按 Claude Code 读，会回落到 Claude 的一次性请求），标题保留用户原话的截断版；
   「AI 重命名」此时提示生成失败。实现见 `maker-ipc/title.ts`、`maker-host/auxiliary-title-one-shot.ts`

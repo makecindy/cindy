@@ -39,7 +39,7 @@ vi.mock('../../hooks/useProjectLabel', () => ({
 }));
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key, i18n: { exists: () => true } }),
+  useTranslation: () => ({ t: (key: string, options?: { id?: string }) => options?.id ? `${key} ${options.id}` : key, i18n: { exists: () => true } }),
 }));
 
 vi.mock('@/lib/errorDiagnosisPrompt', () => ({
@@ -124,6 +124,43 @@ describe('RunHistoryCard 会话引用状态', () => {
 
     expect(screen.getByText('scheduler.runs.sessionDeleted')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'scheduler.runs.openSession' })).toBeNull();
+  });
+});
+
+describe('RunHistoryCard plugin engine refusals', () => {
+  // Issue 13572: feed the current Runner's persisted error output into the real card.
+  const prefix = 'Scheduled tasks is not available for tasks running on a plugin engine';
+  const failedRun: ScheduleRun = {
+    id: 'plugin-refusal', scheduleId: 'schedule-1', firedAt: 1, finishedAt: 2, status: 'failed',
+  };
+
+  it.each([
+    ['. SSH automation targets must keep their current Harness.', 'boundPluginEngineSshRecovery'],
+    ['. This plugin engine location cannot be used for scheduled tasks.', 'boundPluginEngineSelectionLocationRecovery'],
+    ['. This plugin engine task location cannot be used for scheduled tasks.', 'boundPluginEngineTaskLocationRecovery'],
+    [". An automation linked to a plugin engine task uses the task's own model; remove the model choice from the automation.", 'boundPluginEngineModelRecovery'],
+    ['', 'boundPluginEngineRecovery'],
+    ['. The linked task must run on this computer.', 'boundPluginEngineRecovery'],
+  ])('shows the supported recovery for persisted error suffix %s', (suffix, key) => {
+    const errorMsg = prefix + suffix;
+    renderRun({ ...failedRun, errorMsg });
+    expect(screen.getByText(`scheduler.runs.${key}`)).toBeTruthy();
+    expect(screen.queryByText(/scheduler.*boundSession/)).toBeNull();
+    expect(screen.queryByText(errorMsg)).toBeNull();
+    fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
+    expect(screen.getByText(errorMsg)).toBeTruthy();
+  });
+
+  it.each([
+    ['recorded-task', 'Synthetic task'],
+    ['another-task', 'recorded-task'],
+  ])('labels the recorded task with reference %s', (referenceId, expectedLabel) => {
+    renderRun({ ...failedRun, errorMsg: prefix + '. SSH automation targets must keep their current Harness.',
+      sessionId: 'recorded-task' }, {
+      sessionId: referenceId, state: 'available', title: 'Synthetic task', agentDeviceId: 'current-device',
+    });
+    expect(screen.getByText(`scheduler.runs.boundPluginEngineSshRecovery scheduler.presentation.destination.boundSession ${expectedLabel}`)).toBeTruthy();
+    expect(screen.queryByText(/current-device/)).toBeNull();
   });
 });
 

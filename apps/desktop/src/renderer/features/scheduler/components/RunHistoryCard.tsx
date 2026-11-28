@@ -44,6 +44,15 @@ import { markScheduleRunReadAndSync } from '../lib/scheduleRunReadSync';
 
 const LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:';
 
+// The Runner appends these reasons to the persisted refusal. Older or unknown
+// reasons do not establish which setting blocked this run.
+const PLUGIN_ENGINE_RECOVERY_KEYS = new Map([
+  ['SSH automation targets must keep their current Harness.', 'scheduler.runs.boundPluginEngineSshRecovery'],
+  ['This plugin engine location cannot be used for scheduled tasks.', 'scheduler.runs.boundPluginEngineSelectionLocationRecovery'],
+  ['This plugin engine task location cannot be used for scheduled tasks.', 'scheduler.runs.boundPluginEngineTaskLocationRecovery'],
+  ["An automation linked to a plugin engine task uses the task's own model; remove the model choice from the automation.", 'scheduler.runs.boundPluginEngineModelRecovery'],
+]);
+
 function StatusChip({ status }: { status: RunStatus }) {
   const { t } = useTranslation();
   const label = t(`scheduler.runs.status.${status}`);
@@ -151,16 +160,29 @@ export function RunHistoryCard({
   const { t, i18n } = useTranslation();
   const errorDetail = run.errorMsg?.replace(/^scheduled task auto-resume failed: /, '');
   const errorCode = errorDetail ? parseAgentErrorCode(errorDetail)?.code : undefined;
-  // Match the persisted refusal with or without the recovery sentence added to new runs.
-  const boundPluginEngineRefusal = run.status === 'failed' &&
-    /^Scheduled tasks is not available for tasks running on a plugin engine(?:\.|$)/.test(errorDetail ?? '');
+  const boundPluginEngineRefusal = run.status === 'failed'
+    ? /^Scheduled tasks is not available for tasks running on a plugin engine(?:\.|$)/.exec(errorDetail ?? '')
+    : null;
+  const pluginEngineRecoveryKey = boundPluginEngineRefusal && errorDetail
+    ? PLUGIN_ENGINE_RECOVERY_KEYS.get(errorDetail.slice(boundPluginEngineRefusal[0].length).trim())
+    : undefined;
   const errorKey = boundPluginEngineRefusal
-    ? 'scheduler.runs.boundPluginEngineRecovery'
+    ? pluginEngineRecoveryKey ?? 'scheduler.runs.boundPluginEngineRecovery'
     : run.status === 'failed' && isOneTimeModelRebuildFailure(run.errorMsg)
     ? 'chat.unreadFailedScheduleBanner.modelRebuildRetry'
     : isScheduleActionExpired(run.errorMsg)
     ? `chat.unreadFailedScheduleBanner.${run.failureRecovered ? 'actionRecovered' : 'actionExpired'}`
     : errorCode ? `chat.remoteError.${errorCode}` : undefined;
+  const errorMessage = errorKey && i18n.exists(errorKey) ? t(errorKey) : t('chat.unreadFailedScheduleBanner.text');
+  // The specific reasons come from the bound-task check. The run identifies
+  // the task, and its reference can supply a title,
+  // but its current device cannot establish where this historical run failed.
+  const boundTask = pluginEngineRecoveryKey && run.sessionId
+    ? (sessionReference?.sessionId === run.sessionId ? sessionReference.title?.trim() : undefined) || run.sessionId
+    : undefined;
+  const failureMessage = boundTask
+    ? `${errorMessage} ${t('scheduler.presentation.destination.boundSession', { id: boundTask })}`
+    : errorMessage;
   const navigate = useNavigate();
   const isLegacySessionRun = run.id.startsWith(LEGACY_SESSION_RUN_ID_PREFIX);
   const showError =
@@ -374,13 +396,13 @@ export function RunHistoryCard({
 
       {showError && (run.status === 'failed' ? (
         <ErrorNotice
-          message={errorKey && i18n.exists(errorKey) ? t(errorKey) : t('chat.unreadFailedScheduleBanner.text')}
+          message={failureMessage}
           details={run.errorMsg!}
           onDiagnose={() => {
             // 当前自动化可能已切换或重新绑定；只信任这次运行记录保存的任务归属。
             prefillErrorDiagnosisDraft(buildErrorDiagnosisPrompt(t,
               run.sessionId ? buildSessionDeepLink(run.sessionId) : null, {
-                message: errorKey && i18n.exists(errorKey) ? t(errorKey) : t('chat.unreadFailedScheduleBanner.text'),
+                message: errorMessage,
                 details: scheduleFailureDetails({ ...run, runId: run.id }),
               }));
             navigate('/cc-agent/new');

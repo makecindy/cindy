@@ -129,6 +129,8 @@ export interface RemoteSession {
   /** Host-authoritative IM attachment flag returned by `local-db:sessions:get`. */
   imAttached?: boolean;
   snoozedAt?: string | null;
+  /** Host time when the task was explicitly archived (ISO 8601). Missing on older hosts and legacy/idle-archived rows. */
+  archivedAt?: string | null;
   userSendAt: string | null;
   lastActivityAt?: string | null;
   createdAt: string;

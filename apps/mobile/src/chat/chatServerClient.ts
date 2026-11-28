@@ -8,7 +8,7 @@ import { parseChatInvitationShareId, parseChatInvitationToken } from '@cindy/dev
 import type { ChatInviteShares } from './chatInviteShare';
 import { createConversationListState } from '@cindy/maker-shared/chatConversationList';
 import type { ChatHistory, ChatHistoryBatch } from '@cindy/maker-shared/chat-history';
-import { readBotGroupAssistantNotice, groupAssistantNoticeCode, readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupLiveTaskCard, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
+import { BOT_GROUP_ASSISTANT_AVATAR, readBotGroupAssistantNotice, groupAssistantNoticeCode, readBotGroupCapabilityNotice, botGroupMessageSummaryText, botGroupQuoteFromMessage, buildBotGroupQuoteCard, readBotGroupExecutionFailure, readBotGroupLiveTaskCard, readBotGroupQuote, readBotGroupQuoteCard, readBotGroupTaskCard, readImportedBotGroupRuntimeFailureCode, type BotGroupAttachment, type BotGroupMemberView, type BotGroupMessageView, type BotGroupRemoteChatData } from '@cindy/maker-shared/botGroupChat';
 import { chatGroupMemberName as memberName, chatGroupOwnerName, botGroupActivityAt, latestBotGroupMessage, botGroupExecutionFailureBatches, projectBotGroupExecutionFailures, extractBotGroupThreadCodeRefsFromMessages, describeBotGroupThreadRootFallback } from '@cindy/maker-shared/botGroupPresentation';
 import type { HostedRemoteCollectionItem } from '@/device-link/remoteResources';
 // The app's `@/i18n` sets up this default instance; importing it here would pull React bindings into a plain client.
@@ -51,6 +51,8 @@ function invitationPreview(value: MobileChatInvitePreview): MobileChatInvitePrev
 }
 
 export interface ChatRoom {
+  /** The group's own Cindy is on (servers with `groupAssistant`); absent means on. */
+  assistant?: boolean;
   assistant_device_id?: string | null;
   default_notification_scope?: 'all' | 'mentions';
   id: string; name: string; state?: string; kind: string; archived: boolean; dissolved_at?: string | null;
@@ -125,7 +127,7 @@ export interface ChatHistoryPage { messages: ChatMessage[]; before: string | nul
 export type ChatGroupSettingsAction =
   | { type: 'assistantDevice'; deviceId: string }
   | { type: 'notifications'; mode: ChatGroupNotificationMode }
-  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean; allowMemberMentionAll?: boolean; allowMemberInvites?: boolean }
+  | { type: 'update'; expectedRevision: number; name?: string; topic?: string; description?: string; responseMode?: 'all' | 'mentioned'; speakingMode?: 'auto' | 'sequential'; organizerId?: string | null; archived?: boolean; allowMentionAllBots?: boolean; allowMemberMentionAll?: boolean; allowMemberInvites?: boolean; assistant?: boolean }
   | { type: 'member'; actorId: string; action: 'invite' | 'leave' | 'remove' | 'role'; role?: 'admin' | 'member' }
   /** Your own group identity: a nickname, or a public avatar URL (null resets it). */
   | { type: 'nickname'; actorId: string; nickname: string | null }
@@ -185,13 +187,16 @@ export interface ChatSendInput {
 }
 export interface ChatSendBody {
   independentReplies?: boolean;
-  operationId: string; content: ChatMessage['content']; mentions: string[]; mentionAudience?: 'humans' | 'bots' | 'everyone'; threadRootId?: string;
+  operationId: string; content: ChatMessage['content']; namedMentions?: string[]; mentions: string[]; mentionAudience?: 'humans' | 'bots' | 'everyone'; threadRootId?: string;
 }
 
 export function chatId(value: string): string {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw new Error('INVALID_CHAT_ID');
   return value;
 }
+/** Desktop reads `groupAssistantActorId` with Zod's `uuid()` (RFC 9562 version and variant); this is
+ * the same pattern, so a server both clients see offers the group's Cindy to both or to neither. */
+const GROUP_ASSISTANT_ID = /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/;
 export function chatCursor(value: unknown): string {
   if (typeof value !== 'string' || !/^\d{1,30}$/.test(value)) throw new Error('INVALID_CHAT_CURSOR');
   return value;
@@ -345,8 +350,11 @@ export function chatMemberAvatar(value: string | null): Pick<BotGroupMemberView,
 }
 
 function chatMemberIdentity(member: ChatMember, members: readonly ChatMember[]) {
-  // The group avatar wins in its group, as on Desktop.
-  return { botId: member.id, name: memberName(member, members), ...chatMemberAvatar(member.groupAvatar ?? member.avatar ?? member.defaultAvatarUrl ?? null), avatarColor: '' };
+  // The group avatar wins in its group, as on Desktop. The group's own Cindy always shows
+  // Cindy's artwork, whatever the server sends, also as on Desktop (chatServer.ts members).
+  const avatar = member.kind === 'bot' && member.assistant === true ? BOT_GROUP_ASSISTANT_AVATAR
+    : member.groupAvatar ?? member.avatar ?? member.defaultAvatarUrl ?? null;
+  return { botId: member.id, name: memberName(member, members), ...chatMemberAvatar(avatar), avatarColor: '' };
 }
 
 function chatMessageMentions(message: ChatMessage): BotGroupMention {
@@ -640,7 +648,7 @@ export function chatGroupView(page: ChatPage, selfId: string, actors: readonly C
         && !mayStopWork(members, selfId, execution.bot_id, execution.requester_id)) }, supportsAttachments: true };
 }
 
-type ChatMe = { actor: { id: string; kind: string }; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupNotificationSettings?: number } };
+type ChatMe = { actor: { id: string; kind: string }; groupAssistantActorId?: unknown; capabilities?: { groupLifecycleVersion?: number; conversationListStateVersion?: number; groupSingleSpeaker?: number; independentReplies?: number; personalMentionHistory?: number; personalMask?: number; groupMemberAvatar?: number; groupMentionAudiences?: number; groupMemberMentionAll?: number; groupMemberInvites?: number; groupNotificationSettings?: number; groupAssistant?: number } };
 /** What every screen of one signed-in account may share: who it is on the Chat Server and the
  * read in flight for it. `request` must be fenced to the account, never to one screen, so a
  * screen that closes cannot fail the read another screen is waiting on. */
@@ -678,6 +686,23 @@ export interface ChatAccountIdentity {
   known?: { id: string; at: number; capabilities: ChatMe['capabilities'] };
   reading?: Promise<{ id: string; capabilities: ChatMe['capabilities'] }>;
   peekHistory?: (human: string) => ChatHistory | undefined;
+  /** The newest 「群里的 Cindy」 value this account has read for each group, by room revision, keyed by
+   * `<self actor>\n<room>`. Memory only: it goes with the account session and is cleared when the account changes. */
+  groupAssistant?: Map<string, { revision: number; assistant: boolean }>;
+  /** Screens showing 「群里的 Cindy」, told when `groupAssistant` or `known` changes; see chatGroupAssistantChanged. */
+  groupAssistantListeners?: Set<() => void>;
+  groupAssistantNotifying?: boolean;
+}
+
+/** The account's known 「群里的 Cindy」 values or its `/me` (capability, own actor) changed: open screens recompute.
+ * A chat page may record while it renders, so listeners hear about it once that render is over. */
+export function chatGroupAssistantChanged(account: ChatAccountIdentity) {
+  if (!account.groupAssistantListeners?.size || account.groupAssistantNotifying) return;
+  account.groupAssistantNotifying = true;
+  queueMicrotask(() => {
+    account.groupAssistantNotifying = false;
+    for (const listener of [...account.groupAssistantListeners ?? []]) listener();
+  });
 }
 
 const THREAD_BACKFILL_PAGE_SIZE = 100;
@@ -774,22 +799,26 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
   let singleSpeaker = false;
   let independentReplies = false;
   let personalMask = false;
+  let supportsPersonalMentionHistory = false;
   let supportsMemberAvatar = false;
   let supportsNotificationSettings = false;
   let supportsMentionAudiences = false;
   let supportsMemberMentionAll = false;
   let supportsMemberInvites = false;
+  let supportsGroupAssistant = false;
   function adopt(capabilities: ChatMe['capabilities']) {
     supportsDissolve = capabilities?.groupLifecycleVersion === 1;
     supportsListRemoval = capabilities?.conversationListStateVersion === 1;
     independentReplies = capabilities?.independentReplies === 1;
     singleSpeaker = capabilities?.groupSingleSpeaker === 1;
+    supportsPersonalMentionHistory = capabilities?.personalMentionHistory === 1;
     personalMask = capabilities?.personalMask === 1;
     supportsMemberAvatar = capabilities?.groupMemberAvatar === 1;
     supportsNotificationSettings = capabilities?.groupNotificationSettings === 1;
     supportsMentionAudiences = capabilities?.groupMentionAudiences === 1;
     supportsMemberMentionAll = capabilities?.groupMemberMentionAll === 1;
     supportsMemberInvites = capabilities?.groupMemberInvites === 1;
+    supportsGroupAssistant = capabilities?.groupAssistant === 1;
   }
   // A screen opened after another already knows what the account's server supports.
   if (account.known) adopt(account.known.capabilities);
@@ -799,8 +828,12 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       const me = await (account.request ?? request)<ChatMe>('/me');
       if (me.actor.kind !== 'human') throw new Error('INVALID_CHAT_IDENTITY');
       const id = chatId(me.actor.id);
-      account.known = { id, at: Date.now(), capabilities: me.capabilities };
-      return { id, capabilities: me.capabilities };
+      // As on Desktop, the group's Cindy needs both the capability and a valid actor.
+      const capabilities = me.capabilities?.groupAssistant === 1 && !(typeof me.groupAssistantActorId === 'string' && GROUP_ASSISTANT_ID.test(me.groupAssistantActorId))
+        ? { ...me.capabilities, groupAssistant: undefined } : me.capabilities;
+      account.known = { id, at: Date.now(), capabilities };
+      chatGroupAssistantChanged(account);
+      return { id, capabilities };
     })().finally(() => { if (account.reading === reading) account.reading = undefined; });
     const me = await reading;
     adopt(me.capabilities);
@@ -877,12 +910,19 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       return request<ChatMaskState>(`/conversations/${chatId(roomId)}/mask`, action ? 'POST' : 'GET',
         action ? { ...action, operationId } : undefined);
     },
-    async maskMentions(roomId: string, before?: string, readIds?: string[], operationId?: string) {
+    async mentionOriginal(roomId: string, originalId: string) {
+      const message = await request<ChatMessage>(`/conversations/${chatId(roomId)}/messages/${chatId(originalId)}`);
+      return { messageId: message.id, authorName: message.author.name,
+        text: message.deleted ? '' : [contentText(message), mediaNames(message)].filter(Boolean).join('\n'), deleted: message.deleted };
+    },
+    async maskMentions(roomId: string, before?: string, readIds?: string[], operationId?: string, history = false) {
       await identity();
+      if (history && !supportsPersonalMentionHistory) throw new Error('UNSUPPORTED_OPERATION');
+      const scope = supportsPersonalMentionHistory ? `&scope=${history ? 'personal-history' : 'personal-unread'}` : '';
       if (!personalMask) return { mentions: [] as ChatMaskMention[], hasMore: false };
       const path = `/conversations/${chatId(roomId)}/mentions`;
       if (readIds?.length) await request(`${path}/read`, 'POST', { operationId, messageIds: readIds.map(chatId) });
-      const page = await request<{ messages: Array<ChatMessage & { reply?: { content: ChatMessage['content']; maskAttribution: NonNullable<ChatMessage['maskAttribution']> } }> ; hasMore: boolean }>(`${path}?limit=100${before ? `&before=${chatCursor(before)}` : ''}`);
+      const page = await request<{ messages: Array<ChatMessage & { reply?: { content: ChatMessage['content']; maskAttribution: NonNullable<ChatMessage['maskAttribution']> } }> ; hasMore: boolean }>(`${path}?limit=100${scope}${before ? `&before=${chatCursor(before)}` : ''}`);
       const threadMessages = page.messages.filter(message => !message.deleted && message.threadRootId
         && message.mentionAudience !== 'everyone' && message.mentionAudience !== 'humans');
       return { hasMore: page.hasMore, threadMessages, mentions: page.messages.map((message): ChatMaskMention => ({
@@ -892,7 +932,41 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
           text: message.reply.content.map(block => block.text ?? block.fallback ?? block.caption ?? '').join('\n') } } : {}),
       })) };
     },
-    lifecycleCapabilities: () => ({ supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberMentionAll, supportsMemberInvites, supportsNotificationSettings, supportsScopedStop: singleSpeaker }),
+    /** 「群里的 Cindy」 as on Desktop: only with the server's groupAssistant; an absent value means on.
+     * Every room read (the chat page's and the settings') is recorded, and the newest by revision is shown,
+     * so a view built from an older read never shows over a newer one. */
+    groupAssistant(room: Pick<ChatRoom, 'id' | 'revision' | 'assistant'>, self: string): { assistantEnabled?: boolean } {
+      if (!supportsGroupAssistant) return {};
+      const rooms = account.groupAssistant ??= new Map();
+      const key = `${self}\n${room.id}`;
+      const known = rooms.get(key);
+      if (Number.isSafeInteger(room.revision) && (!known || room.revision >= known.revision)) {
+        const assistant = room.assistant !== false;
+        if (known?.revision !== room.revision || known.assistant !== assistant) { rooms.set(key, { revision: room.revision, assistant }); chatGroupAssistantChanged(account); }
+      }
+      return { assistantEnabled: rooms.get(key)?.assistant ?? room.assistant !== false };
+    },
+    /** Tells `listener` whenever knownGroupAssistant may answer differently, until the returned function is called. */
+    subscribeGroupAssistant(listener: () => void) {
+      const listeners = account.groupAssistantListeners ??= new Set();
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    /** The newest value this account has read for a group, looked up by the account's own verified actor and the
+     * room only, never by what a view carries. `null`: the account's latest `/me` says the server has no switch;
+     * `undefined`: nothing known (no `/me` read yet in this account session, or no value read for the room). */
+    knownGroupAssistant(roomId: string): boolean | null | undefined {
+      const known = account.known;
+      if (!known) return undefined;
+      if (known.capabilities?.groupAssistant !== 1) return null;
+      return account.groupAssistant?.get(`${known.id}\n${roomId}`)?.assistant;
+    },
+    /** The room revision of that newest value, when the account's /me offers the switch. */
+    knownGroupAssistantRevision(roomId: string): number | undefined {
+      const known = account.known;
+      return known?.capabilities?.groupAssistant === 1 ? account.groupAssistant?.get(`${known.id}\n${roomId}`)?.revision : undefined;
+    },
+    lifecycleCapabilities: () => ({ supportsPersonalMentionHistory, supportsDissolve, supportsListRemoval, singleSpeaker, supportsMemberAvatar, supportsMentionAudiences, supportsMemberMentionAll, supportsMemberInvites, supportsNotificationSettings, supportsGroupAssistant, supportsScopedStop: singleSpeaker }),
     async groupSettings(roomId: string) {
       const [snapshot, self] = await Promise.all([
         request<ChatSnapshot>(`/conversations/${chatId(roomId)}/snapshot`), identity(),
@@ -917,6 +991,11 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
         const saved = await request(`/conversations/${chatId(roomId)}/read`, 'POST', { operationId, readSeq: '0', notificationMode: action.mode });
         const stored = await cache(); stored?.invalidate(roomId, true);
         return saved;
+      }
+      // As on Desktop: an older server has no group Cindy switch to write.
+      if (action.type === 'update' && action.assistant !== undefined) {
+        await identity();
+        if (!supportsGroupAssistant) throw new Error('CHAT_UNAVAILABLE');
       }
       const [route, method] = SETTINGS_ROUTES[action.type];
       const { type: _type, ...body } = action;
@@ -1699,6 +1778,7 @@ export function createChatServerClient(request: ChatRequest, personalList = crea
       try {
         if (input.mentions.all && !mentions.size && !supportsMentionAudiences && self) mentions.add(self);
         const body: ChatSendBody = { operationId: input.clientId,
+          ...(supportsPersonalMentionHistory && input.mentions.all && input.mentions.botIds.length ? { namedMentions: input.mentions.botIds.map(chatId) } : {}),
           ...(independentReplies && input.conversationKind !== 'direct' ? { independentReplies: true } : {}),
           ...(supportsMentionAudiences && input.conversationKind !== 'direct' && botGroupMentionAudience(input.mentions) ? { mentionAudience: botGroupMentionAudience(input.mentions) } : {}),
           content, mentions: [...mentions], ...(input.threadRootId ? { threadRootId: chatId(input.threadRootId) } : {}) };

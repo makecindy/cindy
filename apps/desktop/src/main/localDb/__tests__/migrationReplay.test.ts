@@ -266,9 +266,12 @@ describeMigrationReplay('existing side-chat teams', () => {
         '0162_schedule_mr_observation.sql',
         '0163_purge_deleted_task_history.sql',
         '0164_flat_prism.sql',
-        '0165_token_usage_harness.sql',
+        '0165_whole_nemesis.sql',
+        '0166_schedule_revision.sql',
+        '0167_token_usage_harness.sql',
       ]);
       expect(columnNames(db, 'schedules')).toContain('model_group');
+      expect(columnNames(db, 'schedules')).toContain('schedule_revision');
       expect(columnNames(db, 'schedules')).toContain('primary_host_key');
       const reopened = createBetterSqliteDatabase(db.name);
       try {
@@ -499,7 +502,7 @@ describeMigrationReplay('migration replay', () => {
         const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 124 });
         expect(result.applied.map((migration) => migration.seq)).toEqual([
           125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165,
+          143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167,
         ]);
         expect(columnNames(db, 'chat_cache_rooms')).toEqual(['namespace', 'room_id', 'state', 'version']);
         expect(columnNames(db, 'sessions')).toContain('scheduled_model_baseline');
@@ -679,7 +682,7 @@ describeMigrationReplay('migration replay', () => {
       db.exec(readFileSync(path.join(drizzleDir(), '0045_living_namor.sql'), 'utf-8'));
       const result = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 129 });
       expect(result.applied.map((migration) => migration.seq)).toEqual([
-        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165,
+        130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167,
       ]);
       expect(columnNames(db, 'sessions')).toContain('notifications_muted');
       // 存量任务全部回填为「未静音」：升级不能替用户少发提醒。
@@ -1176,6 +1179,31 @@ describeMigrationReplay('migration replay', () => {
     }
   });
 
+  // Migration tier: verify 0165 adds nullable sessions.archived_at without mutating
+  // existing archived rows (legacy rows must fall back to activity time rather than
+  // receiving an artificial archive timestamp) and stays idempotent when already present.
+  it.each([false, true])('adds nullable sessions.archived_at on upgrade without touching existing rows (present=%s)', (alreadyPresent) => {
+    const { db, cleanup } = createTempDb();
+    try {
+      db.exec(`
+        CREATE TABLE migration_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE migration_history (seq INTEGER PRIMARY KEY, file_name TEXT NOT NULL, content_hash TEXT NOT NULL, applied_at INTEGER NOT NULL);
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at INTEGER NOT NULL${alreadyPresent ? ', archived_at INTEGER' : ''});
+        INSERT INTO sessions (id, status, updated_at${alreadyPresent ? ', archived_at' : ''})
+        VALUES ('a', 'active', 1${alreadyPresent ? ', NULL' : ''}), ('b', 'archived', 2${alreadyPresent ? ', 500' : ''});
+      `);
+      const replay = runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 164 });
+      expect(replay.applied.map((migration) => migration.seq)).toEqual([165, 166, 167]);
+      expect(columnNames(db, 'sessions')).toContain('archived_at');
+      expect(db.prepare('SELECT id, status, updated_at, archived_at FROM sessions ORDER BY id').all()).toEqual([
+        { id: 'a', status: 'active', updated_at: 1, archived_at: null },
+        { id: 'b', status: 'archived', updated_at: 2, archived_at: alreadyPresent ? 500 : null },
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
   it('migrates populated token attribution and auxiliary receipt rows to harness=unknown and replays idempotently', () => {
     const { db, cleanup } = createTempDb();
     try {
@@ -1199,7 +1227,7 @@ describeMigrationReplay('migration replay', () => {
       db.prepare('INSERT INTO auxiliary_usage_receipts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(
         'aux-1', 'xd', 'gpt-5.4', 'title', null, 'http', '2026-11-27', 1000, 50, 10, 0, 0,
       );
-      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 164 });
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 166 });
       expect(db.prepare('SELECT * FROM daily_token_attribution').all()).toEqual([{
         day: '2026-11-27', provider: 'xd', billing_source: 'cindy-ai', model: 'gpt-5.4', harness: 'unknown',
         input_tokens: 100, output_tokens: 20, cache_read_tokens: 30, cache_create_tokens: 5,
@@ -1217,7 +1245,7 @@ describeMigrationReplay('migration replay', () => {
       );
       expect(db.prepare('SELECT COUNT(*) FROM daily_token_attribution').pluck().get()).toBe(2);
       // Idempotent replay after already migrated.
-      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 164 });
+      runMigrationReplay(db, { drizzleDir: drizzleDir(), currentVersion: 166 });
       expect(db.prepare('SELECT COUNT(*) FROM daily_token_attribution').pluck().get()).toBe(2);
     } finally {
       cleanup();

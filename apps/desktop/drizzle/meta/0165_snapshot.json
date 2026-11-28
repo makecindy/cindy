@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "a4da3db0-edfc-4c4e-91a8-e4bf6739bf2e",
+  "id": "47024693-e2b1-4e72-b093-a4551da4845a",
   "prevId": "ce0e9b07-6edc-4e03-a1ac-84d63fe95de9",
   "tables": {
     "account_usage_snapshots": {
@@ -208,14 +208,6 @@
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
-        },
-        "harness": {
-          "name": "harness",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'unknown'"
         },
         "session_id": {
           "name": "session_id",
@@ -2470,14 +2462,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "harness": {
-          "name": "harness",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'unknown'"
-        },
         "input_tokens": {
           "name": "input_tokens",
           "type": "integer",
@@ -2510,15 +2494,14 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {
-        "daily_token_attribution_day_provider_billing_source_model_harness_pk": {
+        "daily_token_attribution_day_provider_billing_source_model_pk": {
           "columns": [
             "day",
             "provider",
             "billing_source",
-            "model",
-            "harness"
+            "model"
           ],
-          "name": "daily_token_attribution_day_provider_billing_source_model_harness_pk"
+          "name": "daily_token_attribution_day_provider_billing_source_model_pk"
         }
       },
       "uniqueConstraints": {},
@@ -6229,6 +6212,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "archived_at": {
+          "name": "archived_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "hidden_at": {
           "name": "hidden_at",
           "type": "integer",
@@ -7442,14 +7432,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "harness": {
-          "name": "harness",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": "'unknown'"
-        },
         "generation": {
           "name": "generation",
           "type": "text",
@@ -7489,14 +7471,13 @@
       "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {
-        "token_reporting_first_day_provider_billing_model_harness_pk": {
+        "token_reporting_first_day_provider_billing_model_pk": {
           "columns": [
             "provider",
             "billing",
-            "model",
-            "harness"
+            "model"
           ],
-          "name": "token_reporting_first_day_provider_billing_model_harness_pk"
+          "name": "token_reporting_first_day_provider_billing_model_pk"
         }
       },
       "uniqueConstraints": {},
