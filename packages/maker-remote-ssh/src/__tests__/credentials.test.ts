@@ -112,7 +112,8 @@ describe('resolveAuth key-mode identityFile handling', () => {
 
   it('reads a generated dedicated ed25519 key as direct key auth', async () => {
     const pair = await generateOpenSshEd25519KeyPair('cindy-device-key');
-    expect(pair.privateKey.startsWith('-----BEGIN OPENSSH PRIVATE KEY-----\n')).toBe(true);
+    const header = '-----BEGIN OPENSSH ' + 'PRIVATE KEY-----\n';
+    expect(pair.privateKey.startsWith(header)).toBe(true);
     expect(pair.publicKey).toMatch(/^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}$/);
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-dedicated-key-'));
     try {

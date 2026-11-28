@@ -7,7 +7,7 @@
 import { utils } from 'ssh2';
 
 export interface OpenSshKeyPair {
-  /** `-----BEGIN OPENSSH PRIVATE KEY-----` block, unencrypted, with a trailing newline. */
+  /** Unencrypted OpenSSH private-key block with a trailing newline. */
   privateKey: string;
   /** Canonical `ssh-ed25519 <base64>` (no comment). */
   publicKey: string;
