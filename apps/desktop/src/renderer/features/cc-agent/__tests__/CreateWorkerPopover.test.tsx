@@ -457,7 +457,10 @@ describe('CreateWorkerPopover', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('focuses the first task, traps Tab, closes with Esc, and returns focus on reopen', async () => {
+  // 关闭按钮带 Tip(DESIGN.md §14.6)。Esc 按层级先收最上面的一层:键盘聚焦到关闭按钮时提示弹出,
+  // 第 1 次 Esc 只收起提示,第 2 次才关弹窗;提示没弹出时 1 次 Esc 就关。失效后果:键盘用户按 Esc
+  // 关不掉弹窗,或关闭后焦点丢失。
+  it('focuses the first task, traps Tab, closes with Esc (tooltip first), and returns focus on reopen', async () => {
     function Harness() {
       const [open, setOpen] = useState(false);
       return <><button onClick={() => setOpen(true)}>Add worker</button><CreateWorkerPopover open={open} onClose={() => setOpen(false)} onCreate={vi.fn()} /></>;
@@ -475,10 +478,21 @@ describe('CreateWorkerPopover', () => {
       expect(document.activeElement).toBe(submit);
       await user.tab();
       expect(document.activeElement).toBe(close);
+      expect(screen.getByRole('tooltip').textContent).toBe('orca.createWorker.closeAria');
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
+      expect(screen.queryByRole('dialog')).not.toBeNull();
       await user.keyboard('{Escape}');
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
       await waitFor(() => expect(document.activeElement).toBe(opener));
     }
+    // 提示没弹出(焦点在首条任务)时,1 次 Esc 就关闭弹窗。
+    await user.click(opener);
+    expect(document.activeElement).toBe(screen.getByPlaceholderText('orca.createWorker.initialTaskPlaceholder'));
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(opener));
   });
 
   it.each([
