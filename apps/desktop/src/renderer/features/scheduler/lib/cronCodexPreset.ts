@@ -346,6 +346,12 @@ export function switchScheduleTimingMode(
   };
 }
 
+/** 运行历史将等价的工作日列表按现有预设展示。 */
+export function summarizeCron(expr: string, translate?: TFunction): string {
+  const displayExpr = expr.trim().replace(/^(?<prefix>\d+\s+\d+\s+\*\s+\*\s+)1,2,3,4,5$/, '$<prefix>1-5');
+  return summarizeConfig(cronToConfig(displayExpr), translate);
+}
+
 /** chip 文案：mode + 关键参数；"每天 09:00" / "工作日 09:00" / "每 2 小时" */
 export function summarizeConfig(c: CodexScheduleConfig, translate?: TFunction): string {
   const time = `${pad(c.hour)}:${pad(c.minute)}`;

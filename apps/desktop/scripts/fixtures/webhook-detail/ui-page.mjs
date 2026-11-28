@@ -12,6 +12,11 @@ export default {
     'src/renderer/lib/errorDiagnosisPrompt': 'export const buildErrorDiagnosisPrompt = () => ""; export const prefillErrorDiagnosisDraft = () => {};',
   },
   cases: {
+    // Issue 4757 (Electron UI): formatter unit tests cannot detect a regression
+    // in how RunHistoryPane displays the full weekday list in its header.
+    'cron-full': { about: '完整工作日列表显示本地化摘要', data: { cronExpr: '0 9 * * 1,2,3,4,5', weekdays: true } },
+    'cron-range': { about: '工作日范围显示相同的本地化摘要', data: { cronExpr: '0 9 * * 1-5', weekdays: true } },
+    'cron-partial': { about: '部分工作日保留原 Cron', data: { cronExpr: '0 9 * * 1,3,5' } },
     'single-pr': { about: '特定 PR 的合并触发条件与运行记录', data: {} },
     'app-editing': { about: '编辑时背景详情停止账号读取：返回窗口仅一次读取', data: {} },
     'app-source': { about: 'GitHub App 仓库和事件选择：无需独立地址或密钥', data: {} },
@@ -28,6 +33,19 @@ export default {
     await page.locator('[role="status"], textarea, h2').first().waitFor();
   },
   async check(page, ui) {
+    if (ui.data.cronExpr) {
+      const summary = ui.data.weekdays
+        ? await ui.t('scheduler.presentation.summary.weekdays', { time: '09:00' })
+        : ui.data.cronExpr;
+      const metadata = page.locator('header p[title]');
+      await metadata.waitFor();
+      const text = await metadata.innerText();
+      const title = await metadata.getAttribute('title');
+      if (!text.startsWith(`${summary} · `) || !title?.startsWith(`${summary} · `)) {
+        throw new Error(`Expected run history summary "${summary}", got text "${text}" and title "${title}"`);
+      }
+      return;
+    }
     if (ui.case === 'single-pr') {
       await page.getByText(/example\/project#42/).first().waitFor();
       await page.getByRole('button', { name: await ui.t('scheduler.editor.webhook.authorizeRepositories') }).waitFor();
