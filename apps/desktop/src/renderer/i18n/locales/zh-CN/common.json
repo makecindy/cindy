@@ -4004,7 +4004,7 @@
           "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接 Chat Completions、Anthropic Messages。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。",
           "codexUpstream": "当前上游协议：",
           "pi": "Pi",
-          "piDesc": "Pi 是多协议 harness：你的自定义或本机模型（Ollama、vLLM、自建端点）原生直连，不经 Cindy 的兼容 Proxy。先在下方选 API 类型，再填该来源给 Pi 用的 base URL、密钥与模型；留空则本来源不配置 Pi。"
+          "piDesc": "Pi 是多协议 Harness：你的自定义或本机模型（Ollama、vLLM、自建端点）原生直连，不经 Cindy 的兼容 Proxy。先在下方选 API 类型，再填该来源给 Pi 用的 base URL、密钥与模型；留空则本来源不配置 Pi。"
         },
         "errors": {
           "nameRequired": "请填写显示名称",
@@ -5682,7 +5682,7 @@
       "title": "个性化",
       "subtitle": "自定义提示词",
       "description": "为你的助手提供额外的指令和上下文。",
-      "placeholder": "在这里输入自定义指令，会追加到 Claude / Codex 的系统提示词末尾。\n\n· 仅对 {{appName}} 内嵌的 Agent 会话生效；已有会话维持启动时快照，修改后下一个新会话才应用。\n· 想让所有 Claude Code 会话（含终端直跑、其他 IDE）硬性生效：在 ~/.claude/settings.json 里配 SessionStart hook（harness 级强制）。\n· Codex CLI 可在 ~/.codex/hooks.json 配 SessionStart hook 强制注入（harness 级，和 CC 同款）；或通过 ~/.codex/AGENTS.md 自动加载（软约束，模型可能忽略）。",
+      "placeholder": "在这里输入自定义指令，会追加到 Claude / Codex 的系统提示词末尾。\n\n· 仅对 {{appName}} 内嵌的 Agent 会话生效；已有会话维持启动时快照，修改后下一个新会话才应用。\n· 想让所有 Claude Code 会话（含终端直跑、其他 IDE）硬性生效：在 ~/.claude/settings.json 里配 SessionStart hook（Harness 级强制）。\n· Codex CLI 可在 ~/.codex/hooks.json 配 SessionStart hook 强制注入（Harness 级，和 CC 同款）；或通过 ~/.codex/AGENTS.md 自动加载（软约束，模型可能忽略）。",
       "ariaLabel": "自定义指令",
       "save": "保存",
       "overLimit": " — 已超出长度限制",
@@ -10666,10 +10666,10 @@
       }
     },
     "byAgent": {
-      "title": "按 Agent / harness",
+      "title": "按 Agent / Harness",
       "subtitle": "近 30 天",
       "col": {
-        "agent": "Agent / harness",
+        "agent": "Agent / Harness",
         "total": "近 30 天 token",
         "totalInRange": "{{range}} token",
         "share": "占比",

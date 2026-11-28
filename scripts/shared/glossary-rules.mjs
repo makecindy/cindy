@@ -500,6 +500,27 @@ export function makeEnglishCopyExemptChecker(exempt) {
  * @param {string} text
  * @returns {string}
  */
+/**
+ * DESIGN.md §11.2:es / fr / de / pt-PT / pt-BR 的正文引用必须用本语言的引号形态,不得引入
+ * ASCII 直引号。只数**成对的正文引用**:
+ *  - 插值、标签先按 stripNonProse 剥离;
+ *  - 整条是 shell / 代码示例(`$ echo "…"`)时整条跳过,那里必须原样;
+ *  - 单引号内是 camelCase 之类的代码字面量(`"custom"`、`"apiKey"`)时不计。
+ * 计数口径按「成对引用」而非引号字符数,便于 baseline 指纹稳定。
+ */
+export function countStraightProseQuotes(text) {
+  const raw = String(text ?? '');
+  const trimmed = raw.trimStart();
+  if (trimmed.startsWith('$ ') || trimmed.startsWith('`')) return 0;
+  const prose = stripNonProse(raw);
+  let count = 0;
+  for (const match of prose.matchAll(/"([^"]*)"/g)) {
+    const inner = match[1].trim();
+    const isCodeToken = /^[a-z][A-Za-z0-9_]*$/.test(inner);
+    if (!isCodeToken) count += 1;
+  }
+  return count;
+}
 export function textDigest(text) {
   return createHash('sha256').update(text ?? '').digest('hex').slice(0, 12);
 }

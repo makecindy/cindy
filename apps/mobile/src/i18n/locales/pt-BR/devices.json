@@ -338,7 +338,7 @@
       "actionFailed": "Falha na ação",
       "renameFailed": "Falha ao renomear",
       "deleteTitle": "Excluir sessão?",
-      "deleteMessage": "Isso exclui \"{{title}}\" e não pode ser desfeito."
+      "deleteMessage": "Isso exclui “{{title}}” e não pode ser desfeito."
     },
     "a11y": {
       "selectScope": "Selecionar escopo das sessões",
@@ -556,7 +556,7 @@
     },
     "revoked": {
       "title": "Acesso revogado",
-      "body": "\"{{deviceName}}\" revogou o acesso remoto deste dispositivo. Autorize este dispositivo novamente nas configurações do {{appName}} nesse computador e toque em \"Tentar acessar novamente\".",
+      "body": "“{{deviceName}}” revogou o acesso remoto deste dispositivo. Autorize este dispositivo novamente nas configurações do {{appName}} nesse computador e toque em “Tentar acessar novamente”.",
       "retry": "Tentar acessar novamente"
     },
     "viewAllConversations": "Ver todas as {{count}} sessões",

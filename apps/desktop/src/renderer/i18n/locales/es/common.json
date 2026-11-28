@@ -903,7 +903,7 @@
         "offline": "Sin conexión",
         "unreachableHere": "No se puede acceder desde esta computadora",
         "unavailable": {
-          "provider-off": "\"Permitir uso remoto\" está desactivado para este proveedor en esa computadora",
+          "provider-off": "“Permitir uso remoto” está desactivado para este proveedor en esa computadora",
           "disconnected": "Proveedor no conectado o desactivado",
           "share-paused": "Uso compartido en pausa",
           "share-removed": "Uso compartido eliminado"
@@ -967,12 +967,12 @@
       "availableDescription": "Tus otras computadoras y los proveedores que otros comparten contigo. Selecciona para agregar; no hace falta solicitarlo.",
       "loading": "Buscando computadoras para agregar…",
       "loadFailed": "No se pudieron cargar las computadoras para agregar",
-      "empty": "No hay computadoras para agregar. Activa \"Permitir uso remoto\" para {{provider}} en otra computadora o solicita acceso con el enlace para compartir de otra persona.",
+      "empty": "No hay computadoras para agregar. Activa “Permitir uso remoto” para {{provider}} en otra computadora o solicita acceso con el enlace para compartir de otra persona.",
       "alreadyMember": "Ya está en el grupo",
       "confirm": "Agregar al grupo",
       "cancel": "Cancelar",
-      "linkDescription": "Pega un enlace para compartir {{provider}} de otra persona. Cuando lo apruebe, vuelve a \"Ya disponible\" y selecciónalo.",
-      "remoteLinkDescription": "Ingresa el enlace para compartir en la configuración del proveedor de la computadora que tiene este grupo. Cuando el propietario lo apruebe, vuelve a \"Ya disponible\" y selecciónalo.",
+      "linkDescription": "Pega un enlace para compartir {{provider}} de otra persona. Cuando lo apruebe, vuelve a “Ya disponible” y selecciónalo.",
+      "remoteLinkDescription": "Ingresa el enlace para compartir en la configuración del proveedor de la computadora que tiene este grupo. Cuando el propietario lo apruebe, vuelve a “Ya disponible” y selecciónalo.",
       "pasteLink": "Pegar enlace para compartir"
     },
     "toast": {
@@ -1391,7 +1391,7 @@
     "MODEL_SWITCH_TASK_RUNNING": "Modelo no cambiado: esta tarea aún se está ejecutando. Espera a que termine la respuesta actual y vuelve a intentarlo.",
     "MODEL_WINDOW_PREPARATION_IN_PROGRESS": "Modelo no cambiado: Cindy ya está preparando el contexto de esta tarea. Espera a que termine y vuelve a intentarlo.",
     "SESSION_RUNNING": "Esta sesión está ejecutando una tarea. Inténtalo de nuevo en breve.",
-    "PI_IMAGE_INPUT_UNSUPPORTED": "La entrada de imágenes no está habilitada para el modelo Pi actual. Cambia a un modelo que admita imágenes. Si es un modelo personalizado, activa \"Admite entrada de imágenes\" en la configuración del proveedor y luego inicia una nueva tarea Pi.",
+    "PI_IMAGE_INPUT_UNSUPPORTED": "La entrada de imágenes no está habilitada para el modelo Pi actual. Cambia a un modelo que admita imágenes. Si es un modelo personalizado, activa “Admite entrada de imágenes” en la configuración del proveedor y luego inicia una nueva tarea Pi.",
     "CREDENTIAL_SWITCH_BUSY": "Otra tarea Codex todavía se está ejecutando, por lo que este cambio de proveedor no se aplicó (la sesión mantiene su proveedor anterior). Inténtalo de nuevo después de que finalicen esas tareas.",
     "PI_CATALOG_RELOAD_UNCONFIRMED": "No se confirmó la recarga del catálogo de modelos, por lo que se detuvo esta tarea. Vuelve a abrir la tarea y cambia de modelo de nuevo.",
     "REMOTE_WORKDIR_INVALID": "La ruta del proyecto remoto no es válida. Vuelve a elegir el directorio del proyecto.",
@@ -1414,7 +1414,7 @@
     "RIGHT_SIDEBAR_STATE_TOO_LARGE": "El contenido de la pestaña es demasiado grande para agregarlo",
     "RIGHT_SIDEBAR_UNKNOWN_KIND": "Este tipo de pestaña no está disponible",
     "REMOTE_AGENT_DEVICE_UNREACHABLE": "Modelo no cambiado: no se puede acceder a la computadora que ejecutaría el Agent. Asegúrate de que esté en línea y permita el control remoto, y luego inténtalo de nuevo.",
-    "REMOTE_AGENT_MODEL_UNAVAILABLE": "Modelo no cambiado: esa computadora no tiene este modelo o no ha activado \"Permitir uso remoto\" para este proveedor. Elige otro modelo.",
+    "REMOTE_AGENT_MODEL_UNAVAILABLE": "Modelo no cambiado: esa computadora no tiene este modelo o no ha activado “Permitir uso remoto” para este proveedor. Elige otro modelo.",
     "PROVIDER_SHARE_LINK_USED": "Este enlace para compartir ya se ha utilizado. Los enlaces funcionan una sola vez; pídele uno nuevo a la persona que lo compartió.",
     "PROVIDER_SHARE_LINK_EXPIRED": "Este enlace para compartir ha caducado. Los enlaces son válidos durante 5 minutos; pídele uno nuevo a la persona que lo compartió.",
     "PROVIDER_SHARE_SELF": "Este es tu propio proveedor. Tus otras computadoras pueden usarlo directamente.",
@@ -1446,7 +1446,7 @@
     "TIMEOUT": "Se agotó el tiempo de conexión. Comprueba tu red y la URL base",
     "CERT_ERROR": "No se pudo verificar el certificado. Comprueba que el nombre de host de la URL base coincida con el certificado, así como la cadena de certificados y la configuración de confianza de la CA de tu organización.",
     "UNKNOWN": "Error desconocido. Consulta los registros para obtener más detalles.",
-    "upstreamToast": "Error en la solicitud del proveedor \"{{provider}}\": {{message}}"
+    "upstreamToast": "Error en la solicitud del proveedor “{{provider}}”: {{message}}"
   },
   "appError": {
     "title": "Algo salió mal",
@@ -1979,7 +1979,7 @@
         "write": "Cindy no pudo guardar la clave de host de confianza: {{reason}}. Conexión rechazada.",
         "mismatch": "La clave de host de {{host}} cambió ({{fingerprint}}) y ya no coincide con la huella digital en la que Cindy confiaba. Puede que el servidor se haya reinstalado o que se trate de un ataque de intermediario (man-in-the-middle). Conexión rechazada.",
         "file": "Archivo de claves de host de confianza:\n{{filePath}}",
-        "repair": "Cindy no lee ~/.ssh/known_hosts. La huella digital anterior está guardada en:\n{{filePath}}\nLa clave de la entrada es \"{{host}}\".\nSi ya comprobó que este cambio es de confianza, cierre Cindy, elimine solo esta entrada, conserve el archivo y los demás hosts, y vuelva a conectarse. La nueva huella digital se guardará en la primera conexión. No elimine el archivo completo.",
+        "repair": "Cindy no lee ~/.ssh/known_hosts. La huella digital anterior está guardada en:\n{{filePath}}\nLa clave de la entrada es “{{host}}”.\nSi ya comprobó que este cambio es de confianza, cierre Cindy, elimine solo esta entrada, conserve el archivo y los demás hosts, y vuelva a conectarse. La nueva huella digital se guardará en la primera conexión. No elimine el archivo completo.",
         "verifyChange": "Confirme el cambio con el administrador del servidor antes de actualizar el registro de claves de host de confianza."
       },
       "footnote": "Fase A: solo administración de conexiones SSH. Una actualización posterior permitirá ejecutar Agents en la computadora remota.",
@@ -3814,8 +3814,8 @@
         "formatStructure": "El archivo contiene un objeto JSON, sin Base64, un enlace de importación o un contenedor adicional. Los campos siguientes describen un proveedor de claves API personalizado. Los nombres de los campos distinguen entre mayúsculas y minúsculas; JSON no permite comentarios.",
         "formatIdentity": "Obligatorio. Establece kind en \"custom\" y name en el nombre del proveedor que quieres mostrar.",
         "formatAuth": "Obligatorio. En este ejemplo, establece method en \"apiKey\" y sustituye apiKey por la clave de tu proveedor.",
-        "formatEndpoint": "Obligatorio para cada endpoint. protocol admite \"openai-chat\", \"openai-responses\", \"anthropic-messages\" y \"google-generative-ai\". Establece baseUrl en la URL HTTP(S) completa del servicio; se recomienda HTTPS.",
-        "formatTargets": "Opcional. Matriz de motores: \"claude-code\", \"codex\" o \"pi\". Omítela para que los motores se asignen por protocolo, o especifícalos explícitamente. Claude Code también admite los protocolos de OpenAI y Google. El ejemplo solo habilita Pi.",
+        "formatEndpoint": "Obligatorio para cada endpoint. protocol admite “openai-chat”, “openai-responses”, “anthropic-messages” y “google-generative-ai”. Establece baseUrl en la URL HTTP(S) completa del servicio; se recomienda HTTPS.",
+        "formatTargets": "Opcional. Matriz de motores: “claude-code”, \"codex\" o \"pi\". Omítela para que los motores se asignen por protocolo, o especifícalos explícitamente. Claude Code también admite los protocolos de OpenAI y Google. El ejemplo solo habilita Pi.",
         "formatModels": "Opcional. Usa cadenas con el ID del modelo u objetos con id (name es opcional). Omite la lista o déjala vacía para obtener los modelos tras la confirmación. Una lista no vacía omite la búsqueda automática.",
         "formatMetadata": "Campos opcionales del modelo: group es el grupo del modelo, contextWindow es la longitud del contexto y maxOutputTokens es el límite de salida; ambos se expresan en tokens. Los valores de ejemplo son ilustrativos. Usa las capacidades reales del modelo.",
         "formatEffort": "Campos opcionales del modelo: efforts enumera los niveles de intensidad de razonamiento compatibles; defaultEffort selecciona uno como predeterminado. Si tienes dudas, elimina ambos campos.",
@@ -4485,7 +4485,7 @@
         },
         "logoutConfirm": {
           "title": "¿Desconectar “{{name}}”?",
-          "description": "Cindy ya no utilizará \"{{name}}\". El proveedor se conserva para que puedas volver a conectarte más tarde.",
+          "description": "Cindy ya no utilizará “{{name}}”. El proveedor se conserva para que puedas volver a conectarte más tarde.",
           "confirm": "Desconectar",
           "cancel": "Cancelar"
         }
@@ -4494,7 +4494,7 @@
       "detail": {
         "singleAgentNote": "Solo {{agent}}",
         "emptyModels": "Los modelos disponibles se descubren después de iniciar sesión",
-        "emptyList": "Haga clic en \"Agregar proveedor\" a continuación para conectar su primera fuente de modelo",
+        "emptyList": "Haga clic en “Agregar proveedor” a continuación para conectar su primera fuente de modelo",
         "emptyModelsConnected": "Conectado: descubriendo modelos disponibles. Si permanece vacío, inténtalo de nuevo en breve.",
         "discoveryFailed": {
           "network": "No se puede conectar con este proveedor, por lo que su lista de modelos no está disponible. Verifique la configuración de su red o proxy y luego vuelva a intentarlo.",
@@ -4818,7 +4818,7 @@
         "pending": "Preparando credenciales",
         "unavailable": "No disponible temporalmente"
       },
-      "claudeAccountRetired": "Cindy ya no admite el inicio de sesión en su suscripción a través de esta conexión Claude heredada. Su cuenta Claude y su suscripción no se ven afectadas. Utilice \"Iniciar sesión con Claude Code\" para conectarse.",
+      "claudeAccountRetired": "Cindy ya no admite el inicio de sesión en su suscripción a través de esta conexión Claude heredada. Su cuenta Claude y su suscripción no se ven afectadas. Utilice “Iniciar sesión con Claude Code” para conectarse.",
       "speechSetup": {
         "title": "Voz",
         "add": "Agregar modelos de voz",
@@ -7470,7 +7470,7 @@
     },
     "devices": {
       "title": "Enlace de dispositivo",
-      "description": "Los dispositivos que hayan iniciado sesión con la misma cuenta de Feishu pueden detectarse entre sí. Al activar \"Permitir control\", tus otros dispositivos podrán controlar {{appName}} de forma remota en esta computadora.",
+      "description": "Los dispositivos que hayan iniciado sesión con la misma cuenta de Feishu pueden detectarse entre sí. Al activar “Permitir control”, tus otros dispositivos podrán controlar {{appName}} de forma remota en esta computadora.",
       "allowControl": "Permitir que los dispositivos de la misma cuenta controlen esta computadora",
       "allowControlHint": "Cuando está activado, otros dispositivos con la misma cuenta pueden controlar esta computadora sin aprobación por conexión. Se muestra un indicador visible mientras se controla y puedes desconectarla en cualquier momento.",
       "keepAwake": "Mantener la computadora activa",
@@ -8212,7 +8212,7 @@
         "saveFailed": "No se pudo guardar la configuración de atajos",
         "notBindable": "No se puede usar esta combinación de teclas",
         "systemReserved": "Reservada por el sistema operativo",
-        "conflict": "En conflicto con \"{{name}}\"",
+        "conflict": "En conflicto con “{{name}}”",
         "voiceConflict": "En conflicto con el atajo de entrada de voz",
         "composerVoiceConflict": "En conflicto con el atajo de entrada de voz. Cambia el atajo de envío del editor de mensajes o el atajo de entrada de voz.",
         "menuAccelerator": "Esta combinación no se puede registrar como atajo de menú",
@@ -8745,15 +8745,15 @@
           "empty": "No hay entradas de complementos en este mercado",
           "skippedEntries": "Se omitieron {{count}} entradas de complementos no válidas",
           "unreadableEntries": "{{count}} entradas de complementos no se pueden leer temporalmente; actualiza para reintentar",
-          "addedReceipt": "Se agregó \"{{name}}\" y se encontraron {{count}} complementos",
-          "refreshedReceipt": "Se actualizó \"{{name}}\" y se encontraron {{count}} complementos",
+          "addedReceipt": "Se agregó “{{name}}” y se encontraron {{count}} complementos",
+          "refreshedReceipt": "Se actualizó “{{name}}” y se encontraron {{count}} complementos",
           "emptyWithSkippedEntries": "No se encontraron complementos utilizables porque se omitieron todas las entradas de la lista. Revisa los tipos de fuente, los directorios de complementos y las entradas del manifiesto.",
           "localBadge": "Local",
           "defaultRef": "Rama predeterminada",
           "neverSynced": "Nunca se sincronizó",
           "refresh": "Actualizar",
           "remove": "Quitar",
-          "removeConfirmTitle": "¿Quitar el mercado \"{{name}}\"?",
+          "removeConfirmTitle": "¿Quitar el mercado “{{name}}”?",
           "removeConfirmDescription": "Los complementos de este mercado dejarán de aparecer en la lista. Los complementos instalados se conservarán.",
           "close": "Cerrar",
           "add": "Agregar mercado",
@@ -8778,7 +8778,7 @@
             "structureLabelEntry": "Entrada del complemento",
             "structureNote": "El manifiesto puede estar en una de estas ubicaciones:",
             "manifestTitle": "Formato del manifiesto",
-            "manifestBody": "name es la identidad única del mercado (lo administras con este nombre después de agregarlo). Cada source del arreglo plugins apunta a un directorio de complemento dentro del repositorio mediante una ruta relativa; también se admite el formato de objeto {\"source\": \"local\", \"path\": \"…\"}.",
+            "manifestBody": "name es la identidad única del mercado (lo administras con este nombre después de agregarlo). Cada source del arreglo plugins apunta a un directorio de complemento dentro del repositorio mediante una ruta relativa; también se admite el formato de objeto {\"source\": \"local\", \"path\": “…”}.",
             "sourceTitle": "Formatos de fuente",
             "sourceBody": "Fuentes admitidas: formato abreviado owner/repo de GitHub, URL completas de Git (https / ssh / git@) y rutas de carpetas locales (se admite ~). La referencia de Git acepta una rama, etiqueta o commit; déjala vacía para usar la rama predeterminada. Las rutas de extracción parcial (una por línea) extraen solo los subdirectorios indicados, lo que resulta útil para repositorios grandes.",
             "authTitle": "Repositorios privados",
@@ -8848,7 +8848,7 @@
       "enableAria": "Habilitar {{name}}",
       "uninstall": "Desinstalar",
       "uninstallConfirm": {
-        "title": "¿Desinstalar \"{{name}}\"?",
+        "title": "¿Desinstalar “{{name}}”?",
         "description": "Se eliminarán su panel y sus capacidades. Su lugar en el diseño se conservará y se restaurará si lo vuelves a instalar.",
         "cancel": "Cancelar"
       },
@@ -8862,14 +8862,14 @@
         "groupSeparator": ", "
       },
       "toast": {
-        "installed": "Se instaló \"{{name}}\"",
-        "uninstalled": "Se desinstaló \"{{name}}\"",
-        "updated": "\"{{name}}\" se actualizó a v{{version}}",
-        "reapproved": "Se restauró \"{{name}}\"",
-        "exported": "Se exportó el archivo .cindy de \"{{name}}\"",
-        "exportFailed": "No se pudo exportar \"{{name}}\"; inténtalo de nuevo",
-        "projectDisabled": "Se deshabilitó \"{{name}}\" para este proyecto",
-        "projectEnabled": "\"{{name}}\" ahora sigue la configuración global en este proyecto"
+        "installed": "Se instaló “{{name}}”",
+        "uninstalled": "Se desinstaló “{{name}}”",
+        "updated": "“{{name}}” se actualizó a v{{version}}",
+        "reapproved": "Se restauró “{{name}}”",
+        "exported": "Se exportó el archivo .cindy de “{{name}}”",
+        "exportFailed": "No se pudo exportar “{{name}}”; inténtalo de nuevo",
+        "projectDisabled": "Se deshabilitó “{{name}}” para este proyecto",
+        "projectEnabled": "“{{name}}” ahora sigue la configuración global en este proyecto"
       },
       "panelError": {
         "crashed": "Este complemento falló",
@@ -9047,16 +9047,16 @@
         "nodeRuntimeDetail": "Alto riesgo: tiene el mismo acceso local que tu cuenta de usuario, incluidos archivos, red e inicio de otros programas. Cindy no puede contenerlo en el entorno aislado del navegador.",
         "nodeInheritEnv": "Heredar el entorno local",
         "nodeInheritEnvDetail": "Alto riesgo: el programa Node del complemento y sus procesos secundarios reciben todas las variables de entorno disponibles para Cindy, incluida la configuración de proxy y certificados y cualquier clave de API o token que contengan.",
-        "nodeSecret": "Puede proporcionar la credencial almacenada \"{{name}}\" al programa local Node",
+        "nodeSecret": "Puede proporcionar la credencial almacenada “{{name}}” al programa local Node",
         "nodeSecretDetail": "Cindy lo almacena cifrado y lo inyecta solo mientras se ejecutan los métodos Worker declarados a continuación. El programa Node recibe el texto sin cifrar y puede devolverlo, registrarlo, guardarlo o exponerlo de otro modo al código del complemento del navegador o a los parámetros de Agent. Instala únicamente complementos en los que confíes.",
         "nodeResident": "El programa Node puede seguir ejecutándose en segundo plano",
         "nodeResidentDetail": "Se ejecuta mientras el complemento está habilitado y se detiene cuando se deshabilita, se actualiza, se desinstala o cuando se cierra Cindy.",
-        "tool": "Herramienta \"{{name}}\"",
-        "toolAutoApprove": "El Agent puede ejecutar la herramienta \"{{name}}\" sin confirmación",
+        "tool": "Herramienta “{{name}}”",
+        "toolAutoApprove": "El Agent puede ejecutar la herramienta “{{name}}” sin confirmación",
         "toolAutoApproveDetail": "Cuando el Agent llama a esta herramienta, se ejecuta de inmediato sin pedir confirmación ni revisar cada llamada.",
         "command": "Comando de chat ${{command}}",
-        "panelLeft": "Panel \"{{title}}\" · se muestra en la barra lateral",
-        "panelTab": "Panel \"{{title}}\" · se abre dentro de la página de complementos",
+        "panelLeft": "Panel “{{title}}” · se muestra en la barra lateral",
+        "panelTab": "Panel “{{title}}” · se abre dentro de la página de complementos",
         "mainView": "Puede agregar una entrada “{{title}}” a la navegación izquierda de Cindy",
         "mainViewDetail": "Al abrirlo, se muestra la vista principal en el entorno aislado del complemento y no otorga acceso a archivos, redes ni credenciales.",
         "taskView": "Página de tarea “{{title}}” · se abre en la barra lateral de la tarea",
@@ -9119,13 +9119,13 @@
         "libraryPersistDetail": "Obtiene un área de almacenamiento administrada por Cindy para tu trabajo (lienzos, imágenes, bases de datos) sin la cuota normal de datos de complementos. Todas las operaciones de archivos y bases de datos las ejecuta el host; el complemento solo usa rutas relativas dentro de su propia biblioteca y no puede tocar tus otros archivos. También puede pedirle a Cindy que muestre un archivo de la biblioteca en Finder o Explorer, o abrir el cuadro de diálogo Guardar como del sistema para que elijas dónde va una copia; cancelar Guardar como no copia nada. También puede escribir un mapa de bits PNG en el portapapeles del sistema sin ningún cuadro de diálogo de confirmación; esto sobrescribe el portapapeles actual. Desinstalar el complemento no elimina estos datos; la eliminación requiere una confirmación por separado en la configuración de Cindy.",
         "networkHost": "Accede al destino de red {{host}}",
         "networkHosts": "Destinos de red",
-        "networkSecret": "Necesita que proporciones una credencial: \"{{name}}\"",
+        "networkSecret": "Necesita que proporciones una credencial: “{{name}}”",
         "networkSecretGhostInputDetail": "Se recopila mediante la interfaz de configuración propia de este complemento: la página del complemento ve el valor en el momento de introducirlo. Luego se entrega al host en un solo paso para almacenarlo cifrado; una vez almacenado, el complemento nunca podrá volver a leerlo y el host lo inyecta solo para los dominios que declara.",
-        "networkSecretIdentity": "Usará tu correo electrónico de inicio de sesión como credencial \"{{name}}\"",
+        "networkSecretIdentity": "Usará tu correo electrónico de inicio de sesión como credencial “{{name}}”",
         "networkSecretIdentityDetail": "El valor proviene del correo electrónico de la cuenta con la que iniciaste sesión; el host lo deriva e inyecta en el momento de la solicitud, así que no hay nada que completar. El complemento puede leer este correo electrónico para mostrar la identidad actual en su interfaz de configuración.",
-        "networkSecretGhCli": "Preferirá tu inicio de sesión local de GitHub CLI para la credencial \"{{name}}\"",
+        "networkSecretGhCli": "Preferirá tu inicio de sesión local de GitHub CLI para la credencial “{{name}}”",
         "networkSecretGhCliDetail": "El host lee el token de inicio de sesión local de gh solo cuando es necesario y lo inyecta solo en las solicitudes a la API de GitHub; el código del complemento no puede leer ni almacenar el token. Si gh no está disponible, puedes configurar un token de acceso personal alternativo en la configuración del complemento.",
-        "networkSecretOrganizationIdentity": "Usará tu identidad de organización de Cindy como credencial \"{{name}}\"",
+        "networkSecretOrganizationIdentity": "Usará tu identidad de organización de Cindy como credencial “{{name}}”",
         "networkSecretOrganizationIdentityDetail": "Cindy emite una afirmación de identidad de corta duración cuando es necesario y el host la envía solo a los hosts de servicio indicados explícitamente. El código del complemento no puede leer ni almacenar el token.",
         "networkSecretOauth": "Autorizar {{name}} o usar una cuenta conectada en {{host}}",
         "networkSecretOauthDetail": "Cindy administra el inicio de sesión y los tokens. Puedes autorizar una cuenta nueva o elegir una cuenta conectada compatible. Revisa los alcances siguientes; las cuentas conectadas conservan sus permisos existentes.",
@@ -9159,7 +9159,7 @@
         "browserExtensionPageControlDetail": "Solo las extensiones indicadas a continuación pueden conectarse. La extensión también implementa el control de páginas: al seleccionar “Mi navegador”, el Agent puede leer y manejar páginas en el navegador que estás usando.",
         "nodeChildSpawn": "Su programa Node puede pedirle al host que inicie subprocesos declarados en su paquete",
         "nodeChildSpawnDetail": "Solo se pueden iniciar archivos JS declarados dentro de su propio paquete (con los mismos permisos locales que el programa principal); no se pueden ejecutar comandos arbitrarios. Los subprocesos se cierran junto con el complemento cuando este se desactiva o se cierra.",
-        "skill": "Agrega la habilidad \"{{name}}\" a tus asistentes de IA",
+        "skill": "Agrega la habilidad “{{name}}” a tus asistentes de IA",
         "skillDetail": "Una habilidad es un archivo de instrucciones que la IA carga y sigue como propio, con todos tus permisos, en Claude Code y Codex, en todos los proyectos; no se limita al entorno aislado de este complemento. Permanece disponible mientras el complemento está habilitado y se elimina cuando el complemento se deshabilita o desinstala; desactivar el complemento para una sola carpeta no la oculta. No se puede obtener una vista previa del texto completo de la habilidad aquí; instala solo complementos en los que confíes.",
         "routineEvents": "Eventos de automatización",
         "mcpUi": "Mostrar páginas interactivas en la conversación",
@@ -9260,7 +9260,7 @@
       },
       "connections": {
         "confirmTitle": "Agregar dirección de conexión",
-        "confirmMessage": "El complemento \"{{name}}\" solicita agregar la dirección de conexión {{host}}",
+        "confirmMessage": "El complemento “{{name}}” solicita agregar la dirección de conexión {{host}}",
         "confirmDetail": "Si lo permites, este complemento podrá acceder a esta dirección a través del host ({{label}}); la credencial que proporciones se inyectará solo en las solicitudes a esta dirección.",
         "confirmAllow": "Permitir",
         "confirmCancel": "Cancelar"
@@ -9275,7 +9275,7 @@
         "brokerRedirectPortRequired": "Este complemento declara un intermediario de autorización, pero no declara redirectPort en la misma configuración de OAuth. Pídele al autor que agregue el campo para que el último paso de autorización pueda volver al puerto de escucha local.",
         "sourceMissing": "No se encontró el archivo seleccionado",
         "generic": "La operación falló. Inténtalo de nuevo.",
-        "updateIdMismatch": "El archivo seleccionado es el complemento \"{{id}}\", que no coincide con este complemento \"{{expected}}\""
+        "updateIdMismatch": "El archivo seleccionado es el complemento “{{id}}”, que no coincide con este complemento “{{expected}}”"
       },
       "detail": {
         "enable": "Activar",
@@ -9552,7 +9552,7 @@
         "legacyReattachUnknownSource": "Estos datos de trabajo no tienen registro de origen. Es posible que se hayan copiado manualmente o mediante un script. Asegúrate de que pertenezcan a este complemento."
       },
       "updateConfirm": {
-        "title": "¿Actualizar el complemento \"{{name}}\"?",
+        "title": "¿Actualizar el complemento “{{name}}”?",
         "body": "Versión {{from}} → {{to}}. Esto reemplaza la versión instalada; se conservan el estado de activación y la posición del panel.",
         "oauthClientChanged": "Esta actualización cambia el cliente OAuth. Las cuentas conectadas que usan la autorización integrada del complemento caducarán tras la actualización y deberás volver a conectarlas.",
         "confirm": "Actualizar",
@@ -9993,7 +9993,7 @@
         "deleteFailed": "Error al eliminar"
       },
       "deleteConfirm": {
-        "title": "¿Eliminar \"{{name}}\"?",
+        "title": "¿Eliminar “{{name}}”?",
         "message": "Las nuevas sesiones de Agent ya no cargarán este MCP.",
         "confirm": "Eliminar"
       },
@@ -10332,7 +10332,7 @@
     "cancel": "Cancelar",
     "chooseMethod": "Elige cómo iniciar sesión",
     "emailCode": "Iniciar sesión con un código por correo",
-    "orgDetected": "{{email}} pertenece a \"{{org}}\"",
+    "orgDetected": "{{email}} pertenece a “{{org}}”",
     "enterpriseLogin": "Con tu cuenta de trabajo",
     "enterpriseVia": "SSO mediante {{name}}",
     "personalLogin": "Con una cuenta personal",
@@ -10353,7 +10353,7 @@
     "ssoOrgSubtitle": "Ingresa un ID de empresa, un slug de organización o un dominio verificado para continuar con el inicio de sesión único",
     "ssoOrgPlaceholder": "ID de empresa, slug o dominio",
     "ssoOrgHint": "¿No conoces tu identificador de inicio de sesión empresarial? Consulta a tu administrador",
-    "ssoOrgDetected": "Elige una conexión de inicio de sesión único para \"{{org}}\"",
+    "ssoOrgDetected": "Elige una conexión de inicio de sesión único para “{{org}}”",
     "realmConsent": {
       "personalTitle": "Inicio de sesión empresarial disponible",
       "personalBodyCn": "Se encontró una empresa en China continental.\nUsa SSO o continúa con tu cuenta.",
@@ -12550,7 +12550,7 @@
         "replyMode": "Cuando no se @menciona a nadie",
         "replyModeAll": "Cualquiera puede responder",
         "replyModeMentioned": "Solo responden los @mencionados",
-        "replyModeNote": "Los amigos que no tienen nada que añadir se quedan callados. Cada ronda ejecuta hasta 3 pases y 10 mensajes, luego espera a que hagas clic en \"Continuar discusión\".",
+        "replyModeNote": "Los amigos que no tienen nada que añadir se quedan callados. Cada ronda ejecuta hasta 3 pases y 10 mensajes, luego espera a que hagas clic en “Continuar discusión”.",
         "replyModeSaveFailed": "No se pudo guardar la configuración de respuesta. Inténtalo de nuevo.",
         "delete": "Eliminar chat grupal",
         "deleteNote": "Sólo se eliminan este chat grupal y sus mensajes. Los amigos, su memoria y sus chats privados no se ven afectados.",
@@ -12686,7 +12686,7 @@
         "groupNew": "Mensajes nuevos del grupo",
         "threadRecent": "Mensajes recientes del hilo",
         "threadNew": "Mensajes nuevos del hilo",
-        "replyingTo": "En respuesta a \"{{name}}\": {{text}}",
+        "replyingTo": "En respuesta a “{{name}}”: {{text}}",
         "filesOutsideWorkingDir": "No se adjuntaron los archivos fuera del directorio de trabajo.",
         "modelFallback": "El modelo seleccionado no está en este equipo, así que esta respuesta usa {{model}}.",
         "modelFallbackUnnamed": "El modelo seleccionado no está en este equipo, así que esta respuesta usa un modelo disponible aquí.",
@@ -15478,11 +15478,11 @@
       "noTextContent": "(sin contenido de texto)",
       "orcaRowAria": "Mensaje de colaboración de {{sender}} en cola",
       "schedulerRowAria": "Mensaje de tarea de automatización de {{sender}} en cola",
-      "sessionRowAria": "Mensaje de la sesión \"{{sender}}\" en cola",
+      "sessionRowAria": "Mensaje de la sesión “{{sender}}” en cola",
       "sessionSenderFallback": "Otra sesión",
-      "pluginRowAria": "Mensaje del complemento \"{{sender}}\" en cola",
+      "pluginRowAria": "Mensaje del complemento “{{sender}}” en cola",
       "pluginSenderFallback": "Complemento",
-      "botRowAria": "Mensaje del amigo \"{{sender}}\" en cola",
+      "botRowAria": "Mensaje del amigo “{{sender}}” en cola",
       "dragAria": "Arrastra el mensaje en cola {{index}} para reordenarlo",
       "steerAction": "Incorporar",
       "steerRunningTip": "Incorpora este mensaje a la tarea en curso sin interrumpirla; se atenderá cuando termine la acción actual",
@@ -17086,26 +17086,26 @@
       "attachmentSourceMissing": "No se puede guardar el adjunto porque el archivo de origen ya no existe",
       "attachmentSaveFailed": "No se puede guardar el adjunto. Revisa los permisos de la carpeta de destino y vuelve a intentarlo",
       "automationSent": "Enviado por una automatización",
-      "automationSentNamed": "Enviado por la automatización \"{{name}}\"",
+      "automationSentNamed": "Enviado por la automatización “{{name}}”",
       "automationViewTask": "Ver tarea de automatización",
       "sessionSent": "Enviado por otra sesión",
-      "sessionSentNamed": "Enviado por la sesión \"{{name}}\"",
+      "sessionSentNamed": "Enviado por la sesión “{{name}}”",
       "sessionViewSource": "Ver sesión de origen",
-      "botSentNamed": "Enviado por el amigo \"{{name}}\"",
-      "groupThreadSent": "Enviado por \"{{name}}\" en un hilo de \"{{group}}\"",
-      "groupRequestSent": "Del grupo \"{{group}}\" · {{name}}",
+      "botSentNamed": "Enviado por el amigo “{{name}}”",
+      "groupThreadSent": "Enviado por “{{name}}” en un hilo de “{{group}}”",
+      "groupRequestSent": "Del grupo “{{group}}” · {{name}}",
       "orcaFromLead": "Mensaje de Lead",
       "orcaFromWorker": "Mensaje de Worker",
       "orcaFromWorkerBatch": "Informe del sistema: {{count}} resultados de Worker",
-      "orcaFromWorkerNamed": "Mensaje del Worker \"{{role}}\"",
+      "orcaFromWorkerNamed": "Mensaje del Worker “{{role}}”",
       "hookChannelFrom": "De {{channel}}",
-      "deviceSentMobileNamed": "Enviado desde el teléfono \"{{name}}\"",
+      "deviceSentMobileNamed": "Enviado desde el teléfono “{{name}}”",
       "deviceSentMobile": "Enviado desde un teléfono",
-      "deviceSentDesktopNamed": "Enviado desde la computadora \"{{name}}\"",
+      "deviceSentDesktopNamed": "Enviado desde la computadora “{{name}}”",
       "deviceSentDesktop": "Enviado desde una computadora",
       "deviceViewSettings": "Ver en Mis dispositivos",
       "deviceRemoved": "Este dispositivo se eliminó",
-      "pluginSentNamed": "Enviado por el complemento \"{{name}}\"",
+      "pluginSentNamed": "Enviado por el complemento “{{name}}”",
       "pluginSent": "Enviado por un complemento",
       "pluginViewDetail": "Ver complemento",
       "sourceIds": {
@@ -17379,7 +17379,7 @@
     },
     "credentialSwitchWait": {
       "waiting": "Otra tarea de Codex se está ejecutando con un proveedor de modelos diferente. Este mensaje se enviará automáticamente con el proveedor seleccionado para esta sesión cuando termine.",
-      "waitingForNamed": "\"{{titles}}\" se está ejecutando con un proveedor de modelos diferente. Este mensaje se enviará automáticamente con el proveedor seleccionado para esta sesión cuando termine.",
+      "waitingForNamed": "“{{titles}}” se está ejecutando con un proveedor de modelos diferente. Este mensaje se enviará automáticamente con el proveedor seleccionado para esta sesión cuando termine.",
       "cancel": "Cancelar",
       "cancelTitle": "Dejar de esperar y eliminar este mensaje"
     },
@@ -17428,7 +17428,7 @@
     },
     "ghostHook": {
       "blockedFallback": "Mensaje bloqueado por un complemento; no se envió",
-      "fused": "\"{{name}}\" no respondió repetidamente; su bloqueo está en pausa (solo observación)",
+      "fused": "“{{name}}” no respondió repetidamente; su bloqueo está en pausa (solo observación)",
       "processing": "El complemento está procesando…",
       "viewOriginal": "Ver original",
       "viewGhostCard": "Ver tarjeta del complemento"
@@ -17450,10 +17450,10 @@
       "infoActionCheckProvider": "Si ocurre en varios turnos seguidos, revisa la cuota de tu proveedor de modelos o la configuración de enrutamiento de la pasarela."
     },
     "ghostNotify": {
-      "secretSaved": "Credencial \"{{name}}\" guardada",
+      "secretSaved": "Credencial “{{name}}” guardada",
       "oauthConnected": "Autorizado: conectado como {{label}}",
       "oauthConnectedNoLabel": "Autorizado: cuenta conectada",
-      "connectionAdded": "Se agregó la dirección de conexión de \"{{label}}\""
+      "connectionAdded": "Se agregó la dirección de conexión de “{{label}}”"
     },
     "ghostPreview": {
       "opened": "Se abrió una página de vista previa"
@@ -18804,7 +18804,7 @@
       "createFailed": "Error al crear: {{message}}",
       "deleteFile": {
         "title": "Eliminar archivo",
-        "description": "¿Eliminar \"{{name}}\"? Esta acción no se puede deshacer.",
+        "description": "¿Eliminar “{{name}}”? Esta acción no se puede deshacer.",
         "confirm": "Eliminar",
         "cancel": "Cancelar"
       },
@@ -18895,7 +18895,7 @@
       },
       "archiveSession": {
         "title": "Archivar sesión",
-        "description": "\"{{title}}\" se archivará y se quitará de la lista. Puedes restaurarlo desde la vista de archivados.",
+        "description": "“{{title}}” se archivará y se quitará de la lista. Puedes restaurarlo desde la vista de archivados.",
         "confirm": "Archivar",
         "cancel": "Cancelar",
         "failed": "No se pudo archivar. Vuelve a intentarlo",
@@ -18904,8 +18904,8 @@
       },
       "confirmSwitchAway": {
         "title": "El archivo actual tiene cambios sin guardar",
-        "descriptionSwitchFile": "\"{{path}}\" no está guardado. Si cambias a otro archivo, se descartarán los cambios sin guardar.",
-        "descriptionCloseTab": "\"{{path}}\" no está guardado. Si lo cierras, se descartará el contenido sin guardar.",
+        "descriptionSwitchFile": "“{{path}}” no está guardado. Si cambias a otro archivo, se descartarán los cambios sin guardar.",
+        "descriptionCloseTab": "“{{path}}” no está guardado. Si lo cierras, se descartará el contenido sin guardar.",
         "saveAndSwitch": "Guardar y cambiar",
         "save": "Guardar",
         "tertiary": "No guardar",
@@ -19148,7 +19148,7 @@
       "removeProject": {
         "menu": "Quitar del proyecto",
         "confirmTitle": "¿Quitar de la automatización del proyecto?",
-        "confirmDescription": "Quita \"{{name}}\" de .cindy/automations/schedules.json. Después del commit, esto afecta a todos los colaboradores.",
+        "confirmDescription": "Quita “{{name}}” de .cindy/automations/schedules.json. Después del commit, esto afecta a todos los colaboradores.",
         "confirm": "Quitar",
         "demote": "Quitar y conservar una copia personal",
         "demoteSuccess": "Se quitó del proyecto y se conservó como personal"
@@ -19258,7 +19258,7 @@
         "titleProjectCreate": "Nueva automatización del proyecto",
         "titleProjectEdit": "Editar automatización del proyecto",
         "subtitle": "Elige cuándo ejecutar una sesión de IA o un script.",
-        "subtitleFromGhost": "\"{{name}}\" te pide que crees una automatización. Elige un modelo y guarda para activarla.",
+        "subtitleFromGhost": "“{{name}}” te pide que crees una automatización. Elige un modelo y guarda para activarla.",
         "save": "Guardar",
         "create": "Crear",
         "saveAria": "Guardar automatización",
@@ -19305,8 +19305,8 @@
           "usage_read": "Lee los ID, planes, períodos de cuota y horas de actualización de las cuentas locales de Claude/Codex conectadas a tu cuenta de Cindy. Lee el uso diario y por modelo registrado, los costes estimados, la configuración y el estado de los grupos de equipos y los ID, nombres y avatares visibles de miembros y dispositivos, tanto en este equipo como en otros equipos autorizados de la misma cuenta. No permite leer correos de inicio de sesión de las suscripciones, directorios de cuentas, huellas de identidad internas, credenciales ni archivos, ni modificar cuentas o ajustes."
         },
         "capabilityWarn": {
-          "ghostMissing": "Requiere el complemento \"{{name}}\", que no está instalado; esta capacidad fallará al ejecutarse",
-          "ghostAsleep": "Requiere el complemento \"{{name}}\", que está desactivado; esta capacidad fallará al ejecutarse"
+          "ghostMissing": "Requiere el complemento “{{name}}”, que no está instalado; esta capacidad fallará al ejecutarse",
+          "ghostAsleep": "Requiere el complemento “{{name}}”, que está desactivado; esta capacidad fallará al ejecutarse"
         }
       },
       "fields": {
@@ -19729,10 +19729,10 @@
       "renameFailed": "Error al cambiar el nombre: {{error}}",
       "deleteFailed": "Error al eliminar: {{error}}",
       "restartFailed": "Error al reiniciar: {{error}}",
-      "pluginDraftIgnoredFormOpen": "\"{{name}}\" solicitó crear una automatización, pero ya hay un formulario abierto. Tus cambios se conservaron: guárdalo o ciérralo y vuelve a activar la solicitud."
+      "pluginDraftIgnoredFormOpen": "“{{name}}” solicitó crear una automatización, pero ya hay un formulario abierto. Tus cambios se conservaron: guárdalo o ciérralo y vuelve a activar la solicitud."
     },
     "deleteDialog": {
-      "title": "¿Eliminar la automatización \"{{name}}\"?",
+      "title": "¿Eliminar la automatización “{{name}}”?",
       "titleFallback": "¿Eliminar automatización?",
       "description": "Se detendrán las activaciones futuras. Elige qué hacer con las sesiones que ya generó esta automatización.",
       "sessionCountPending": "Contando sesiones generadas…",
@@ -19759,7 +19759,7 @@
     },
     "confirm": {
       "delete": {
-        "title": "¿Eliminar la automatización \"{{name}}\"?",
+        "title": "¿Eliminar la automatización “{{name}}”?",
         "description": "Se detendrán las activaciones futuras. Se conservará el historial de ejecuciones existente. Esta acción no se puede deshacer.",
         "withInflight": "Esta automatización tiene {{count}} ejecución(es) en curso. Al eliminarla, se detendrán de inmediato y podría perderse el trabajo en curso. ¿Continuar?",
         "confirm": "Eliminar",
@@ -19767,7 +19767,7 @@
         "cancel": "Cancelar"
       },
       "pause": {
-        "title": "¿Pausar la automatización \"{{name}}\"?",
+        "title": "¿Pausar la automatización “{{name}}”?",
         "withInflight": "Esta automatización tiene {{count}} ejecución(es) en curso. Al pausarla, se detendrán de inmediato y podría perderse el trabajo en curso. ¿Continuar?",
         "confirm": "Pausar",
         "cancel": "Cancelar"
@@ -19812,7 +19812,7 @@
         "domain-radar": {
           "name": "Radar temático",
           "description": "Recopila periódicamente las últimas novedades de un tema que sigues y entrega un resumen con análisis",
-          "prompt": "Recopila las últimas novedades sobre \"{{topic}}\" de las últimas 24 horas (los lunes, incluye todo el fin de semana) y elabora un resumen con análisis.\nRestricciones:\n- Usa la búsqueda web, contrasta varias fuentes antes de confiar en una afirmación y cita el enlace de la fuente de cada elemento\n- Prioriza novedades sustanciales (lanzamientos, investigaciones, políticas, debates destacados); filtra el contenido promocional vacío y las republicaciones\n- Para cada elemento, añade una valoración de una línea sobre su importancia en lugar de limitarte a listar enlaces\n- Cuando la información sea escasa o las fuentes sean dudosas, indícalo con honestidad; nunca inventes información",
+          "prompt": "Recopila las últimas novedades sobre “{{topic}}” de las últimas 24 horas (los lunes, incluye todo el fin de semana) y elabora un resumen con análisis.\nRestricciones:\n- Usa la búsqueda web, contrasta varias fuentes antes de confiar en una afirmación y cita el enlace de la fuente de cada elemento\n- Prioriza novedades sustanciales (lanzamientos, investigaciones, políticas, debates destacados); filtra el contenido promocional vacío y las republicaciones\n- Para cada elemento, añade una valoración de una línea sobre su importancia en lugar de limitarte a listar enlaces\n- Cuando la información sea escasa o las fuentes sean dudosas, indícalo con honestidad; nunca inventes información",
           "params": {
             "topic": {
               "label": "Tema que seguir",
@@ -19834,12 +19834,12 @@
         "weekly-work-draft": {
           "name": "Redactor de informes semanales",
           "description": "Recopila el trabajo de esta semana a partir de los documentos del directorio de trabajo en un borrador de informe",
-          "prompt": "A partir de los cambios de esta semana en documentos, notas y trabajos del directorio de trabajo, elabora un borrador de informe semanal.\nRestricciones:\n- Usa como evidencia solo contenido con rastros reales de modificación en el directorio de trabajo y cita los archivos\n- Organiza el informe en \"Hecho esta semana / En curso / Próxima semana / Requiere coordinación\", con suficiente concisión para enviarlo directamente\n- Separa los avances sustanciales de las tareas rutinarias y destaca los resultados valiosos\n- Deja marcadores con notas donde el material sea insuficiente para que el usuario pueda completarlos"
+          "prompt": "A partir de los cambios de esta semana en documentos, notas y trabajos del directorio de trabajo, elabora un borrador de informe semanal.\nRestricciones:\n- Usa como evidencia solo contenido con rastros reales de modificación en el directorio de trabajo y cita los archivos\n- Organiza el informe en “Hecho esta semana / En curso / Próxima semana / Requiere coordinación”, con suficiente concisión para enviarlo directamente\n- Separa los avances sustanciales de las tareas rutinarias y destaca los resultados valiosos\n- Deja marcadores con notas donde el material sea insuficiente para que el usuario pueda completarlos"
         },
         "knowledge-freshness": {
           "name": "Revisión de vigencia de la base de conocimientos",
           "description": "Revisión mensual de los documentos del directorio de trabajo para detectar contenido desactualizado o contradictorio",
-          "prompt": "Revisa el estado de los documentos del directorio de trabajo y busca contenido que necesite actualizarse.\nRestricciones:\n- Busca información desactualizada (fechas antiguas, enlaces rotos, procesos o herramientas obsoletos), contradicciones y duplicaciones\n- Cita la ruta del archivo y la ubicación de cada problema y explica el razonamiento\n- Clasifica las sugerencias como \"actualizar / combinar / eliminar\" y elabora una lista de verificación de revisiones\n- Presenta solo el informe; no modifiques los documentos"
+          "prompt": "Revisa el estado de los documentos del directorio de trabajo y busca contenido que necesite actualizarse.\nRestricciones:\n- Busca información desactualizada (fechas antiguas, enlaces rotos, procesos o herramientas obsoletos), contradicciones y duplicaciones\n- Cita la ruta del archivo y la ubicación de cada problema y explica el razonamiento\n- Clasifica las sugerencias como “actualizar / combinar / eliminar” y elabora una lista de verificación de revisiones\n- Presenta solo el informe; no modifiques los documentos"
         }
       }
     },
@@ -20076,7 +20076,7 @@
         "publicToPrivateBody": "Esta incidencia será visible solo para ti. Los demás miembros del equipo no la verán en la lista ni en las búsquedas.",
         "publicToPrivateConfirm": "Hacer privado",
         "publicToPrivateWithAssigneeTitle": "¿Confirmas el cambio a privado?",
-        "publicToPrivateWithAssigneeBody": "Esta incidencia será visible solo para ti. Actualmente está asignada a \"{{assignee}}\"; al cambiarla a privada, se quitará automáticamente la asignación.",
+        "publicToPrivateWithAssigneeBody": "Esta incidencia será visible solo para ti. Actualmente está asignada a “{{assignee}}”; al cambiarla a privada, se quitará automáticamente la asignación.",
         "publicToPrivateWithAssigneeConfirm": "Hacer privado y quitar asignación",
         "assigneeFallback": "alguien",
         "privateToPublicTitle": "¿Hacer pública esta incidencia?",
@@ -20108,7 +20108,7 @@
       "marked": "Marcado como duplicado",
       "bannerPrefix": "Esta incidencia es un duplicado de",
       "bannerSuffix": "",
-      "bannerTitleWrap": "\"{{title}}\"",
+      "bannerTitleWrap": "“{{title}}”",
       "checkPanel": {
         "ariaLabel": "Se encontraron incidencias similares",
         "close": "Cerrar",
@@ -20151,7 +20151,7 @@
       "delete": "Eliminar",
       "deleteDialog": {
         "title": "¿Eliminar comentario?",
-        "description": "Tras eliminarlo, se mostrará el marcador \"El autor eliminó este comentario\". Esta acción no se puede deshacer.",
+        "description": "Tras eliminarlo, se mostrará el marcador “El autor eliminó este comentario”. Esta acción no se puede deshacer.",
         "cancel": "Cancelar",
         "confirm": "Confirmar eliminación",
         "confirming": "Eliminando…"
@@ -21224,7 +21224,7 @@
       "discordFieldsRequired": "Bot Token y el ID de usuario de Discord son obligatorios",
       "discordOwnerUserIdFormat": "El ID de usuario de Discord debe tener entre 17 y 20 dígitos",
       "telegramFieldsRequired": "Bot Token y el ID de usuario de Telegram son obligatorios",
-      "telegramTokenFormat": "Formato de token no válido: se esperaba el formato \"digits:secret\" generado por BotFather",
+      "telegramTokenFormat": "Formato de token no válido: se esperaba el formato “digits:secret” generado por BotFather",
       "telegramOwnerUserIdFormat": "El ID de usuario de Telegram debe ser numérico",
       "dingtalkFieldsRequired": "Client ID y Client Secret son obligatorios"
     },
@@ -21258,11 +21258,11 @@
       "remoteCcBinaryMissingTitle": "El componente de Claude Code no está listo en el dispositivo remoto",
       "remoteCodexBinaryMissingTitle": "El componente de Codex no está listo en el dispositivo remoto",
       "remotePiBinaryMissingTitle": "El componente de Pi no está listo en el dispositivo remoto",
-      "remoteAuthDescription": "Debes completar la configuración en el dispositivo remoto \"{{device}}\" antes de poder iniciar una sesión aquí. Configúralo en ese dispositivo e inténtalo de nuevo.",
+      "remoteAuthDescription": "Debes completar la configuración en el dispositivo remoto “{{device}}” antes de poder iniciar una sesión aquí. Configúralo en ese dispositivo e inténtalo de nuevo.",
       "remoteCodexNoSourceTitle": "No hay ninguna fuente de Codex conectada en el dispositivo remoto",
-      "remoteCodexNoSourceDescription": "\"{{device}}\" no tiene ninguna fuente de modelos conectada para Codex, por lo que no se pueden iniciar sesiones desde aquí. Abre {{appName}} en ese dispositivo, inicia sesión en OpenAI o conecta otra fuente en Configuración → Proveedores y vuelve a intentarlo.",
+      "remoteCodexNoSourceDescription": "“{{device}}” no tiene ninguna fuente de modelos conectada para Codex, por lo que no se pueden iniciar sesiones desde aquí. Abre {{appName}} en ese dispositivo, inicia sesión en OpenAI o conecta otra fuente en Configuración → Proveedores y vuelve a intentarlo.",
       "remoteCcNoSourceTitle": "No hay ninguna fuente de Claude conectada en el dispositivo remoto",
-      "remoteCcNoSourceDescription": "\"{{device}}\" no tiene ninguna fuente de modelos de Claude conectada, por lo que no se pueden iniciar sesiones desde aquí. Abre {{appName}} en ese dispositivo, conecta una fuente en Configuración → Proveedores y vuelve a intentarlo.",
+      "remoteCcNoSourceDescription": "“{{device}}” no tiene ninguna fuente de modelos de Claude conectada, por lo que no se pueden iniciar sesiones desde aquí. Abre {{appName}} en ese dispositivo, conecta una fuente en Configuración → Proveedores y vuelve a intentarlo.",
       "gotIt": "Entendido"
     },
     "fileTypes": {
@@ -21597,7 +21597,7 @@
       "review": "Revisar propuesta",
       "fromConversation": "Sintetizada a partir de la sesión actual",
       "openSession": "Abrir sesión de aprendizaje",
-      "continueHint": "Sigue conversando en esta sesión para modificar la propuesta; aplícala desde \"Revisar propuesta\" cuando estés conforme"
+      "continueHint": "Sigue conversando en esta sesión para modificar la propuesta; aplícala desde “Revisar propuesta” cuando estés conforme"
     },
     "review": {
       "ariaLabel": "Panel de revisión de propuestas de habilidades",

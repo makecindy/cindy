@@ -56,6 +56,7 @@ import {
   findHalfWidthPunct,
   makeEnglishCopyExemptChecker,
   textDigest,
+  countStraightProseQuotes,
   hasAsciiEllipsis,
   normalizeForPunctuation,
   makeExemptChecker,
@@ -400,6 +401,30 @@ for (const locale of locales) {
   }
 }
 
+// --- 规则 3b:非英语语种的引号形态(DESIGN.md §11.2) ---
+// es / fr / de / pt-PT / pt-BR 的正文引用必须用本语言引号,不得引入 ASCII 直引号。
+// 与 en-straight-quote 同口径,但豁免不同:这里的代码字面量(`"custom"`)由 helper 计数时排除,
+// shell / 命令示例整条跳过——那些必须原样。
+const STRAIGHT_QUOTE_LOCALES = new Set(['es', 'fr', 'de', 'pt-PT', 'pt-BR']);
+for (const locale of locales) {
+  if (!STRAIGHT_QUOTE_LOCALES.has(locale)) continue;
+  for (const [key, value] of corpus.get(locale)) {
+    const pairs = countStraightProseQuotes(value);
+    if (pairs === 0) continue;
+    violations.push(
+      makeViolation({
+        locale,
+        key,
+        rule: 'punct-straight-quote',
+        detail: `"×${pairs}`,
+        severity: 'error',
+        text: value,
+        hint:
+          '正文引用用本语言引号:es / pt-BR 用 “ ”,pt-PT 用 « » 或 “ ”,de 用 „ “,fr 用 « »(DESIGN.md §11.2)',
+      }),
+    );
+  }
+}
 // --- 规则 4:英文写法(DESIGN.md §11.1 / §11.2,只查 en) ---
 // 2026-11-11 维护者裁决 B-14:保留规则,先修高频文案,只拦新增。引入时的存量冻结在
 // baseline 里,按页迁移时修一条摘一条;规则口径见 shared/glossary-rules.mjs。

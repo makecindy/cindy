@@ -4004,7 +4004,7 @@
           "codexDesc": "Codex 使用 OpenAI Responses 協定。上游可選擇原生 Responses，或由 Cindy 橋接 Chat Completions、Anthropic Messages。填該來源用於 Codex 的 baseURL、金鑰與模型，留空則此來源不提供 Codex。",
           "codexUpstream": "目前上游協定：",
           "pi": "Pi",
-          "piDesc": "Pi 是多協定 harness：你的自訂或本機模型（Ollama、vLLM、自建端點）原生直連，不經 Cindy 的相容 Proxy。先在下方選 API 類型，再填該來源給 Pi 用的 base URL、金鑰與模型；留空則本來源不設定 Pi。"
+          "piDesc": "Pi 是多協定 Harness：你的自訂或本機模型（Ollama、vLLM、自建端點）原生直連，不經 Cindy 的相容 Proxy。先在下方選 API 類型，再填該來源給 Pi 用的 base URL、金鑰與模型；留空則本來源不設定 Pi。"
         },
         "errors": {
           "nameRequired": "請填寫顯示名稱",
@@ -5682,7 +5682,7 @@
       "title": "個人化",
       "subtitle": "自訂提示詞",
       "description": "為你的助手提供額外的指令和上下文。",
-      "placeholder": "在這裡輸入自訂指令，會追加到 Claude / Codex 的系統提示詞末尾。\n\n· 僅對 {{appName}} 內嵌的 Agent 會話生效；已有會話維持啟動時快照，修改後下一個新會話才套用。\n· 想讓所有 Claude Code 會話（含終端機直接執行、其他 IDE）硬性生效：在 ~/.claude/settings.json 裡設定 SessionStart hook（harness 級強制）。\n· Codex CLI 可在 ~/.codex/hooks.json 設定 SessionStart hook 強制注入（harness 級，和 CC 同款）；或透過 ~/.codex/AGENTS.md 自動載入（軟約束，模型可能忽略）。",
+      "placeholder": "在這裡輸入自訂指令，會追加到 Claude / Codex 的系統提示詞末尾。\n\n· 僅對 {{appName}} 內嵌的 Agent 會話生效；已有會話維持啟動時快照，修改後下一個新會話才套用。\n· 想讓所有 Claude Code 會話（含終端機直接執行、其他 IDE）硬性生效：在 ~/.claude/settings.json 裡設定 SessionStart hook（Harness 級強制）。\n· Codex CLI 可在 ~/.codex/hooks.json 設定 SessionStart hook 強制注入（Harness 級，和 CC 同款）；或透過 ~/.codex/AGENTS.md 自動載入（軟約束，模型可能忽略）。",
       "ariaLabel": "自訂指令",
       "save": "儲存",
       "overLimit": " — 已超出長度限制",
@@ -10666,10 +10666,10 @@
       }
     },
     "byAgent": {
-      "title": "按 Agent / harness",
+      "title": "按 Agent / Harness",
       "subtitle": "近 30 天",
       "col": {
-        "agent": "Agent / harness",
+        "agent": "Agent / Harness",
         "total": "近 30 天 token",
         "totalInRange": "{{range}} token",
         "share": "佔比",
@@ -21090,7 +21090,7 @@
     "split": {
       "leadLabel": "Lead ({{agent}})",
       "workerLabel": "Worker ({{agent}})",
-      "leadNotFound": "找不到 Orca lead 任務",
+      "leadNotFound": "找不到 Orca Lead 任務",
       "waitingForWorker": "等待 Worker",
       "workerHiddenInSeparateWindow": "獨立視窗中不顯示 Worker 對話",
       "viewWorkerInMainWindow": "在主視窗查看",

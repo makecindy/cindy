@@ -212,7 +212,7 @@
     "goalObjectiveAccessibility": "Contenido del objetivo",
     "goalPlaceholder": "¿Qué quieres lograr? El Agent seguirá trabajando para alcanzar ese objetivo hasta completarlo o llegar a un límite.",
     "advancedSettings": "Configuraciones avanzadas",
-    "limitsHint": "Si no se modifica, se aplican los límites predeterminados de la computadora remota; el objetivo se detiene automáticamente al alcanzar cualquier límite y puedes detenerlo manualmente en cualquier momento; \"Ilimitado\" significa que no se establece ningún límite.",
+    "limitsHint": "Si no se modifica, se aplican los límites predeterminados de la computadora remota; el objetivo se detiene automáticamente al alcanzar cualquier límite y puedes detenerlo manualmente en cualquier momento; “Ilimitado” significa que no se establece ningún límite.",
     "maxTurns": "Máximo de turnos",
     "tokenBudget": "Presupuesto de tokens",
     "noProgressLimit": "Límite sin progreso",
