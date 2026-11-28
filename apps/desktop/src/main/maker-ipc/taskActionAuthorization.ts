@@ -132,7 +132,8 @@ export const HELPER_AUTOMATION_ACTION_TOOLS: ReadonlySet<string> = new Set([
 
 /** Side-effect coverage, not an allowlist of what autonomous teammates may do. */
 export const SCHEDULER_TASK_ACTION_TOOLS: ReadonlySet<string> = new Set([
-  'schedule_create', 'schedule_update', 'schedule_delete', 'schedule_run_now',
+  'schedule_create', 'schedule_update', 'schedule_delete', 'schedule_delete_run',
+  'schedule_mark_run_read', 'schedule_run_now',
   'schedule_pause', 'schedule_resume', 'schedule_set_pre_run_hook',
   'schedule_webhook_release', 'schedule_webhook_restore',
 ]);

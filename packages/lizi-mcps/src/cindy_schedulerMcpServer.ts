@@ -33,6 +33,8 @@ import {
   registerScheduleWebhookTools,
   registerScheduleListEventSourcesTool,
   registerScheduleListRunsTool,
+  registerScheduleDeleteRunTool,
+  registerScheduleMarkRunReadTool,
   registerScheduleListModelsTool,
   registerScheduleListTool,
   registerScheduleNotifyCurrentRunTool,
@@ -94,7 +96,7 @@ const CATEGORY_ENUM = ['scheduler'] as const;
 /** 类目概览的一句话用途 + 作用范围(本机 / 可跨电脑);改工具作用范围时同步改这里。 */
 export const SCHEDULER_CATEGORY_DESCRIPTIONS: Record<(typeof CATEGORY_ENUM)[number], string> = {
   scheduler:
-    '定时任务（自动化 / 心跳）的查询与管理。定时任务保存在各自的电脑上：查询、修改、暂停、恢复、删除、立即运行，以及 schedule_create(device=) 新建，均可指定电脑（查询可传 all）；检查脚本安装、当前运行的通知设置、插件事件来源列表（schedule_list_event_sources）只在本机。Webhook 触发配置可指定电脑；密钥与更换地址由用户在目标电脑详情操作。地址清单与名额释放覆盖账号全部电脑，重新连接可指定电脑。本机定时任务可完整选择本机、远程或分享来源的模型（schedule_list_models 查位置与模型），并为自动化显式指定模型运行位置。',
+    '定时任务（自动化 / 心跳）的查询与管理。定时任务保存在各自的电脑上：查询、修改、暂停、恢复、删除、立即运行，以及 schedule_create(device=) 新建，均可指定电脑（查询可传 all）；删除单条运行记录（schedule_delete_run）和把一条标为已读（schedule_mark_run_read）也可指定电脑。检查脚本安装、当前运行的通知设置、插件事件来源列表（schedule_list_event_sources）只在本机。Webhook 触发配置可指定电脑；密钥与更换地址由用户在目标电脑详情操作。地址清单与名额释放覆盖账号全部电脑，重新连接可指定电脑。本机定时任务可完整选择本机、远程或分享来源的模型（schedule_list_models 查位置与模型），并为自动化显式指定模型运行位置。',
 };
 
 function registerListToolsEntry(
@@ -225,6 +227,8 @@ export function createSchedulerMcpServer(
   // 本机插件事件来源;host 未注入 pluginEventSources 时内部跳过注册。
   registerScheduleListEventSourcesTool(registry, deps);
   registerScheduleListRunsTool(registry, deps);
+  registerScheduleDeleteRunTool(registry, deps);
+  registerScheduleMarkRunReadTool(registry, deps);
   // 运行位置与模型目录;host 未注入 listModels 时内部跳过注册。
   registerScheduleListModelsTool(registry, deps);
   // create / update 都注入 ctx:bindToCurrentSession 据 sessionId 自动填 targetSessionId,

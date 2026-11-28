@@ -13,6 +13,8 @@ export { registerScheduleListEventSourcesTool } from './eventSources.js';
 export { registerScheduleCreateTool } from './create.js';
 export { registerScheduleUpdateTool } from './update.js';
 export { registerScheduleDeleteTool } from './delete.js';
+export { registerScheduleDeleteRunTool } from './deleteRun.js';
+export { registerScheduleMarkRunReadTool } from './markRunRead.js';
 export { registerSchedulePauseTool } from './pause.js';
 export { registerScheduleResumeTool } from './resume.js';
 export { registerScheduleRunNowTool } from './runNow.js';

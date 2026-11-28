@@ -228,6 +228,8 @@ const SCHEDULER_CROSS_DEVICE_WRITE_TOOLS: ReadonlySet<string> = new Set([
   'schedule_pause',
   'schedule_resume',
   'schedule_delete',
+  'schedule_delete_run',
+  'schedule_mark_run_read',
   'schedule_run_now',
 ]);
 
@@ -377,6 +379,7 @@ export function getDesktopMcpToolApprovalPolicy(
   // 改动另一台电脑上的定时任务（可改写并触发那台电脑上的命令）同样交给权限档：Full Access
   // 免审批，Auto 走统一审阅，Ask 由用户确认。本机删除同样走普通审批，不再依赖额外自主确认。
   if (serverName === 'cindy_scheduler' && (toolName === 'schedule_delete' ||
+    toolName === 'schedule_delete_run' ||
     toolName === 'schedule_webhook_release' || toolName === 'schedule_webhook_restore')) return 'prompt-each-time';
   if (serverName === 'cindy_scheduler' && (toolName === 'call_tool' || !toolName)) {
     const params = readJsonObject(toolParams);
@@ -386,7 +389,7 @@ export function getDesktopMcpToolApprovalPolicy(
     // a direct deletion's bare id must not inherit trusted-server approval.
     if (!toolName && (!params || !innerName || !args ||
       Object.keys(params).some((key) => key !== 'name' && key !== 'args'))) return 'prompt-each-time';
-    if (innerName === 'schedule_delete' ||
+    if (innerName === 'schedule_delete' || innerName === 'schedule_delete_run' ||
       innerName === 'schedule_webhook_release' || innerName === 'schedule_webhook_restore') return 'prompt-each-time';
     if (SCHEDULER_CROSS_DEVICE_WRITE_TOOLS.has(innerName) && targetsAnotherComputer(args?.device)) {
       return 'prompt-each-time';

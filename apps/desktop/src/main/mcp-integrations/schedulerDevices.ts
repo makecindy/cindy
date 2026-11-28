@@ -12,6 +12,8 @@ const CHANNELS: Record<SchedulerRemoteOp, string> = {
   list: 'maker:schedule:list',
   get: 'maker:schedule:get',
   'list-runs': 'maker:schedule:list-runs',
+  'delete-run': 'maker:schedule:delete-run',
+  'mark-run-read': 'maker:schedule:mark-run-read',
   create: 'maker:schedule:create',
   update: 'maker:schedule:update',
   pause: 'maker:schedule:pause',
@@ -40,6 +42,8 @@ const WRITE_OPS: ReadonlySet<SchedulerRemoteOp> = new Set([
   'pause',
   'resume',
   'delete',
+  'delete-run',
+  'mark-run-read',
   'run-now',
   'webhook-restore',
 ]);

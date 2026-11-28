@@ -13,8 +13,10 @@ import {
   registerScheduleCreateTool,
   registerScheduleDeleteTool,
   registerScheduleGetTool,
+  registerScheduleDeleteRunTool,
   registerScheduleListRunsTool,
   registerScheduleListTool,
+  registerScheduleMarkRunReadTool,
   registerSchedulePauseTool,
   registerScheduleResumeTool,
   registerScheduleRunNowTool,
@@ -120,6 +122,8 @@ function setup(
   registerScheduleListTool(registry, deps);
   registerScheduleGetTool(registry, deps);
   registerScheduleListRunsTool(registry, deps);
+  registerScheduleDeleteRunTool(registry, deps);
+  registerScheduleMarkRunReadTool(registry, deps);
   registerScheduleUpdateTool(registry, deps, () => ({
     sessionId: "caller",
     agentKind: "claude-code",
@@ -220,6 +224,15 @@ describe("cindy_scheduler cross-device routing", () => {
       ).groups[0].data,
     ).toEqual([{ id: "run-remote" }]);
     expect(s.invoke).toHaveBeenLastCalledWith("mbp", "list-runs", ["r1", 5]);
+    // 跨电脑枚举复用已有 delete-run / mark-run-read，不另开通道。
+    expect(
+      parse(await s.registry.call("schedule_delete_run", { runId: "run-remote", device: "mbp" })),
+    ).toMatchObject({ ok: true, deviceId: "mbp", data: { deleted: "run-remote" } });
+    expect(s.invoke).toHaveBeenLastCalledWith("mbp", "delete-run", ["run-remote"]);
+    expect(
+      parse(await s.registry.call("schedule_mark_run_read", { runId: "run-remote", device: "mbp" })),
+    ).toMatchObject({ ok: true, deviceId: "mbp", data: { accepted: true } });
+    expect(s.invoke).toHaveBeenLastCalledWith("mbp", "mark-run-read", ["run-remote"]);
     const missing = await s.registry.call("schedule_get", {
       id: "r1",
       device: "nope",
