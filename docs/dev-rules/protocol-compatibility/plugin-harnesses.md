@@ -417,6 +417,15 @@ IM 轮次只有已知的读和搜索操作可以经上述条件直接放行，�
    - 代理任务行（`OrcaRemoteWorkerProxySessionSeed`）追加可选 `providerId` 落库，`orcaRemoteWorkerBridge` 放开 `'acp'` Worker 向 Lead 回报（MCP 上下文 `agentKind` 与 `acp-agent.ts` 同口径映射为 `'pi'`）。
    - 不新增 channel、allowlist 项或中转帧，官方与自建中转按既有 invoke 帧透明转发，无需改动。
 
+## 插件工具卡片识别
+
+任务消息的 `tool_use.content` 新增可选字符串 `mcpToolName`。新版桌面只在识别插件卡片和媒体锚点时
+优先使用它，普通工具行继续显示 `toolName`。据对 Factory droid 1.23.0 打包代码的静态阅读（未实测），
+droid 在 `tool_call.name` 中以 `server___tool` 报 MCP 机器名。新版仅按本会话挂载的服务器解析此格式；
+同一解析也用于已有的空工具结果回填（#12891）。不识别截断加哈希的长名字。旧桌面忽略新字段，
+不识别此机器名格式时降级为普通工具行；手机仍只读取已有字段。不改变权限判定、真实 MCP 参数、
+消息通道或中转帧；自建中转原样转发。
+
 ## 用户自定义提示词（ACP `systemPrompt`，2026-11-28）
 
 Cindy 自己的系统提示词仍不交给插件引擎；「个性化 → 自定义提示词」按 ACP v1 标准字段交出（#13098、#13515）：
