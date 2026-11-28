@@ -60,6 +60,38 @@ afterEach(() => {
 });
 
 describe('dedicated Auto-review candidate policy', () => {
+  // #8706 unit: the old chain retries hard quota failures and loses the cause at Core.
+  // Existing missing-model/transient tests do not cover deterministic quota or auxiliary quota.
+  it.each(['dedicated', 'auxiliary'] as const)('preserves %s quota through the reviewer and Core without retrying it', async (phase) => {
+    const log = logger();
+    const quota = {
+      ...failed(DEDICATED_AUTO_REVIEW_CANDIDATES[0], 'http_error', 429),
+      attempts: [{ providerId: 'xd', model: 'cindy/auto-review', transport: 'litellm-chat-completions',
+        status: 'failed', reason: 'http_error', httpStatus: 429, quotaExhausted: true }],
+    } as UtilityTextResult;
+    const requestCandidate = vi.fn(async (_prompt, candidate) => phase === 'dedicated' && candidate.id === DEDICATED_AUTO_REVIEW_CANDIDATES[0].id
+      ? quota : { ok: false, reason: 'no_candidate', attempts: [{ providerId: candidate.providerId,
+        model: candidate.model, transport: candidate.transport, status: 'skipped', reason: 'not_authenticated' }] } as UtilityTextResult);
+    const route = createAutoReviewModelRouter({ logger: log, requestCandidate,
+      createAuxiliaryFallback: () => phase === 'auxiliary' ? async () => quota : undefined });
+    const reviewer = createAutoPermissionReviewer({ logger: log, managesRetries: true,
+      requestText: (_request, prompt, { signal }) => route(prompt, signal) });
+    const decision = await resolveAutoReviewDecision({ agentKind: 'pi', model: 'task-model',
+      providerId: 'task-provider', userIntent: 'Run the build', action: { kind: 'exec', command: 'npm run build' },
+      workspaceRoots: ['/repo'], platform: 'win32' }, reviewer);
+    expect(requestCandidate).toHaveBeenCalledTimes(3);
+    expect(decision).toMatchObject({ verdict: 'ask', unavailable: true, unavailableReason: 'quota_exhausted' });
+    const emit = vi.fn();
+    createAutoReviewUnavailableNotice(emit).notify(decision);
+    expect(emit).toHaveBeenCalledWith(expect.stringContaining('[AUTO_REVIEW_UNAVAILABLE_QUOTA]'));
+    expect(emit.mock.calls[0][0]).not.toContain('Full access');
+    expect(log.warn).toHaveBeenCalledWith('auto permission reviewer attempt failed', expect.objectContaining({
+      failure: 'quota_exhausted', reviewCandidates: expect.arrayContaining([expect.objectContaining({
+        providerId: 'xd', model: 'cindy/auto-review', reason: 'http_error', httpStatus: 429,
+      })]),
+    }));
+  });
+
   // #10385: existing router tests stopped at null and never checked the host/Core handoff.
   // Unit: all dedicated providers unavailable + no explicit auxiliary chain must produce
   // an actionable, credential-safe notice through the real review entry points.
@@ -187,7 +219,7 @@ describe('dedicated Auto-review candidate policy', () => {
         return succeeded(DEDICATED_AUTO_REVIEW_CANDIDATES[0], 'not a decision');
       },
     });
-    await expect(route('classify')).resolves.toEqual({ failure: failure === 'malformed' ? 'malformed' : failure === 'throws' ? 'request_failed' : 'configuration_unavailable' });
+    await expect(route('classify')).resolves.toMatchObject({ failure: failure === 'malformed' ? 'malformed' : failure === 'throws' ? 'request_failed' : 'configuration_unavailable' });
   });
 
   it('reserves a full auxiliary budget after the dedicated phase exhausts its deadline', async () => {
@@ -206,7 +238,7 @@ describe('dedicated Auto-review candidate policy', () => {
     await vi.advanceTimersByTimeAsync(AUTO_REVIEW_AUXILIARY_TIMEOUT_MS - 1);
     expect(signal.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    await expect(pending).resolves.toEqual({ failure: 'timeout' });
+    await expect(pending).resolves.toMatchObject({ failure: 'timeout' });
     expect(signal.aborted).toBe(true);
   });
 
@@ -384,7 +416,7 @@ describe('dedicated Auto-review candidate policy', () => {
     const pending = route('classify');
     await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CHAIN_TIMEOUT_MS);
 
-    await expect(pending).resolves.toEqual({ failure: 'timeout' });
+    await expect(pending).resolves.toMatchObject({ failure: 'timeout' });
     expect(calls).toEqual(['cindy-gateway', 'chatgpt-auto-review', 'chatgpt-luna']);
     // 已排队的延后重试因预算不足被跳过时要留下记录,不能只剩一条 deferred。
     const skipped = log.warn.mock.calls
@@ -413,7 +445,7 @@ describe('dedicated Auto-review candidate policy', () => {
     const pending = route('classify');
     await vi.advanceTimersByTimeAsync(AUTO_REVIEW_CHAIN_TIMEOUT_MS);
 
-    await expect(pending).resolves.toEqual({ failure: 'timeout' });
+    await expect(pending).resolves.toMatchObject({ failure: 'timeout' });
     const attempts = Math.ceil(AUTO_REVIEW_CHAIN_TIMEOUT_MS / AUTO_REVIEW_CANDIDATE_TIMEOUT_MS);
     expect(requestCandidate).toHaveBeenCalledTimes(attempts);
     expect(observedSignals).toHaveLength(attempts);

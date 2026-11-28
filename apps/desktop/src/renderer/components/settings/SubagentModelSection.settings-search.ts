@@ -5,7 +5,7 @@ export const subagentModelSettings = defineSettings({
   subagentModelsSmartRoutingLabel: {
     id: 'settings.subagentModels.smartRouting.label',
     fallbackTargetId: 'settings-search-target-personalization-subagents',
-    tab: 'personalization',
+    tab: 'model-groups',
     targetId: 'settings-search-settings-subagentModels-smartRouting-label',
     titleKey: 'settings.subagentModels.smartRouting.label',
     sectionKey: 'settings.sections.subagentModels',

@@ -796,7 +796,7 @@ function FileBrowserBodyWithWorkdir({
       </div>
       {isDraggingFile && (
         <div
-          className="pointer-events-none absolute inset-2 z-20 rounded-xl border border-dashed border-[var(--drop-overlay-border)] bg-[var(--drop-overlay-bg)]"
+          className="pointer-events-none absolute inset-2 z-page-float rounded-xl border border-dashed border-[var(--drop-overlay-border)] bg-[var(--drop-overlay-bg)]"
           aria-hidden="true"
         />
       )}

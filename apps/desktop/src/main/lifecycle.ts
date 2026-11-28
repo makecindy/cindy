@@ -53,15 +53,18 @@ import {
   noteExpectedExit,
   noteQuitDisposersCompleted,
   noteShutdownBegin,
+  noteUncaughtExceptionDuringQuit,
   WINDOWS_SESSION_END_REASON,
 } from './startup-diagnostics';
 import { isGhostSandboxWebContentsId } from './cindy-brain/runtime/electronSandboxAdapter';
 import { isRsbNativePopupWebContentsId } from './rsb-browser-bridge/native-popup-surfaces';
+import { isCloudLoginWindow } from './cloud-settings-client/login-window-registry.js';
 import { isResourceUsageWebContentsId } from './resource-usage-window/registry.js';
 import { isRemoteDesktopViewer } from './remote-desktop-viewer/registry.js';
 import { isRsbWindowWebContentsId } from './right-sidebar-window/registry.js';
 import { isReviewArtifactConfirmWebContentsId } from './reviewer/reviewArtifactConfirmWindowRegistry.js';
 import { isCaptureWindowWebContents } from './remote-desktop/captureWindowRegistry.js';
+import { createGpuCrashTracker, recordGpuCrashLoopFallback } from './gpuRenderingPolicy.js';
 
 /**
  * 瞬时网络错误的 wire payload (main → renderer)。code 永远存在 (Node 的 ErrnoException
@@ -122,15 +125,30 @@ export function onQuit(
   registry.push({ name, phase, fn });
 }
 
+/**
+ * Told when a quit step did not finish cleanly and when the quit chain completed. A managed cloud
+ * instance records clean shutdowns with it; nothing else observes the quit chain.
+ */
+export interface QuitStepObserver {
+  fault(): void;
+  completed(reason: string): void;
+}
+let quitObserver: QuitStepObserver | null = null;
+export function observeQuitSteps(observer: QuitStepObserver): void {
+  quitObserver = observer;
+}
+
 export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
   // ── Phase 1: sync ────────────────────────────────────────────────────────
   for (const d of registry.filter((x) => x.phase === 'sync')) {
     try {
       const ret = d.fn();
       if (ret && typeof (ret as Promise<unknown>).then === 'function') {
+        quitObserver?.fault();
         log.warn(`sync disposer "${d.name}" returned a promise — not awaited`);
       }
     } catch (err) {
+      quitObserver?.fault();
       log.error(`sync disposer "${d.name}" threw`, err);
     }
   }
@@ -143,6 +161,7 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
         Promise.resolve()
           .then(() => d.fn())
           .catch((err) => {
+            quitObserver?.fault();
             log.error(`async disposer "${d.name}" threw`, err);
             throw err;
           }),
@@ -159,6 +178,7 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
       ),
     ]);
     if (timedOut) {
+      quitObserver?.fault();
       log.warn(`async disposers timed out after ${timeoutMs}ms — proceeding to post-async`);
     }
   }
@@ -171,9 +191,10 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
     try {
       const ret = d.fn();
       if (ret && typeof (ret as Promise<unknown>).then === 'function') {
-        const settled = (ret as Promise<unknown>).catch((err) =>
-          log.error(`post-async disposer "${d.name}" threw`, err),
-        );
+        const settled = (ret as Promise<unknown>).catch((err) => {
+          quitObserver?.fault();
+          log.error(`post-async disposer "${d.name}" threw`, err);
+        });
         let timer: NodeJS.Timeout | undefined;
         let timedOut = false;
         await Promise.race([
@@ -187,10 +208,12 @@ export async function runQuitDisposers(timeoutMs = 2000): Promise<void> {
         ]);
         clearTimeout(timer);
         if (timedOut) {
+          quitObserver?.fault();
           log.warn(`post-async disposer "${d.name}" timed out after ${timeoutMs}ms — continuing`);
         }
       }
     } catch (err) {
+      quitObserver?.fault();
       log.error(`post-async disposer "${d.name}" threw`, err);
     }
   }
@@ -486,6 +509,46 @@ function notifyFatalShutdown(reason: string): void {
   }
 }
 
+const mainRenderers = new WeakSet<Electron.WebContents>();
+let currentMainRenderer: WeakRef<Electron.WebContents> | undefined;
+
+export function trackMainWindow(window: BrowserWindow, isQuitting: () => boolean): void {
+  const contents = window.webContents;
+  mainRenderers.add(contents);
+  currentMainRenderer = new WeakRef(contents);
+  // A normal close request can hide the window. Only a close during app quit
+  // retires it. An unexpected 'closed' can precede the global crash event.
+  window.on('close', () => {
+    if (isQuitting() && currentMainRenderer?.deref() === contents) currentMainRenderer = undefined;
+  });
+}
+
+function isolatedRendererDescription(contents: Electron.WebContents): string | undefined {
+  if (currentMainRenderer?.deref() === contents) return;
+  if (mainRenderers.has(contents)) return 'retired main renderer render-process-gone (isolated, no shutdown)';
+  if (isCaptureWindowWebContents(contents)) return 'capture transport render-process-gone (isolated, no shutdown)';
+
+  // The JS wrapper can outlive the native WebContents. Without metadata or
+  // positive main-window identity, this event must not shut down the app.
+  let id: number;
+  let type: string;
+  try {
+    if (contents.isDestroyed()) return 'unidentified render-process-gone (isolated, no shutdown)';
+    id = contents.id;
+    type = contents.getType();
+  } catch {
+    return 'unidentified render-process-gone (isolated, no shutdown)';
+  }
+  if (isGhostSandboxWebContentsId(id)) return 'ghost sandbox render-process-gone (isolated, no shutdown)';
+  if (type === 'webview') return 'webview guest render-process-gone (isolated, no shutdown)';
+  if (isRsbNativePopupWebContentsId(id)) return 'native popup render-process-gone (isolated, no shutdown)';
+  if (isResourceUsageWebContentsId(id) || isRemoteDesktopViewer(id) || isCloudLoginWindow(id)) {
+    return 'resource usage render-process-gone (isolated, no shutdown)';
+  }
+  if (isRsbWindowWebContentsId(id)) return 'right sidebar render-process-gone (isolated, no shutdown)';
+  if (isReviewArtifactConfirmWebContentsId(id)) return 'Review artifact consent render-process-gone (isolated, access denied)';
+}
+
 /**
  * 幂等启动 disposer chain: 第一次调用真的跑, 后续调用复用同一个 Promise。
  * 返回的 Promise 在 sync + async + post-async 三阶段都跑完 (或 async 超时) 后 resolve。
@@ -514,8 +577,10 @@ function beginShutdown(timeoutMs: number, reason: string): Promise<void> {
     .then(() => {
       log.info('runQuitDisposers completed');
       noteQuitDisposersCompleted();
+      quitObserver?.completed(reason);
     })
     .catch((err) => {
+      quitObserver?.fault();
       log.error('runQuitDisposers threw', err);
     });
   return _disposeStarted;
@@ -558,16 +623,23 @@ export function installQuitHandler(timeoutMs = 2000): void {
   );
 
   // ── Layer 1: graceful quit (before-quit) ────────────────────────────────
-  // preventDefault 阻断默认 quit, 等 disposer chain 跑完再 app.exit(0)。
+  // preventDefault 阻断默认 quit, 等 disposer chain 跑完再退出。
+  // undefined 表示清理尚未由 before-quit 启动。
+  let beforeQuitExitCode: number | undefined;
   app.on('before-quit', (e) => {
     // arm-first(review P1):本 handler 必然走向退出,而下面第一行 log 就是
     // 同步盘 IO——日志落在坏盘/网络盘上时会在布防前就挂死,watchdog 形同虚设。
     // 幂等,与 beginShutdown 里的布防互为兜底。
     armShutdownHardKillWatchdog();
     log.info('before-quit received');
-    if (_isDisposing) return;
+    if (_isDisposing) {
+      // 再次退出也必须等待已启动的清理链，否则 Electron 可能以默认状态码退出。
+      if (beforeQuitExitCode !== undefined) e.preventDefault();
+      return;
+    }
     e.preventDefault();
-    void beginShutdown(timeoutMs, 'before-quit').finally(() => app.exit(0));
+    beforeQuitExitCode = 0;
+    void beginShutdown(timeoutMs, 'before-quit').finally(() => app.exit(beforeQuitExitCode));
   });
 
   // ── Layer 2: Unix process signals ───────────────────────────────────────
@@ -625,7 +697,15 @@ export function installQuitHandler(timeoutMs = 2000): void {
     // 瞬时网络两个不退出的分支绝不能布防,否则 20s 后 watchdog 会误杀健康进程。
     armShutdownHardKillWatchdog();
     log.error('uncaughtException — shutting down', err);
-    if (_isDisposing) return;
+    if (_isDisposing) {
+      // 保留已启动的清理链和原预算，只更新最终退出结果。
+      if (beforeQuitExitCode === 0) {
+        beforeQuitExitCode = 1;
+        noteUncaughtExceptionDuringQuit();
+        notifyFatalShutdown('uncaughtException');
+      }
+      return;
+    }
     void beginShutdown(timeoutMs, 'uncaughtException').finally(() => app.exit(1));
   });
 
@@ -650,46 +730,9 @@ export function installQuitHandler(timeoutMs = 2000): void {
   // 例外 4:资源用量窗是预热复用的辅助 renderer；Controller 会有限重建，崩溃不影响主界面。
   // 隐藏传输窗口也有自己的失败清理；其 renderer 崩溃只撤下对应传输，不能关闭 device-link。
   app.on('render-process-gone', (_event, webContents, details) => {
-    if (isCaptureWindowWebContents(webContents)) {
-      log.warn(
-        `capture transport render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (isGhostSandboxWebContentsId(webContents.id)) {
-      log.warn(
-        `ghost sandbox render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (webContents.getType() === 'webview') {
-      log.warn(
-        `webview guest render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (isRsbNativePopupWebContentsId(webContents.id)) {
-      log.warn(
-        `native popup render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (isResourceUsageWebContentsId(webContents.id) || isRemoteDesktopViewer(webContents.id)) {
-      log.warn(
-        `resource usage render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (isRsbWindowWebContentsId(webContents.id)) {
-      log.warn(
-        `right sidebar render-process-gone (isolated, no shutdown): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
-      return;
-    }
-    if (isReviewArtifactConfirmWebContentsId(webContents.id)) {
-      log.warn(
-        `Review artifact consent render-process-gone (isolated, access denied): reason=${details.reason} exitCode=${details.exitCode}`,
-      );
+    const isolated = isolatedRendererDescription(webContents);
+    if (isolated) {
+      log.warn(`${isolated}: reason=${details.reason} exitCode=${details.exitCode}`);
       return;
     }
     // arm-first(review P1):所有可隔离恢复的 renderer 分支在上面已 return,
@@ -706,6 +749,7 @@ export function installQuitHandler(timeoutMs = 2000): void {
   // GPU 崩溃 Chromium 会自行重启 GPU 进程,utility 崩溃影响面局部,都不值得
   // 整个 app 退出;但此前这些事件完全无日志,「app 卡死/白屏前发生过什么」
   // 无从追溯 (issue #758)。clean-exit / killed 是正常回收,降级 info。
+  const gpuCrashTracker = createGpuCrashTracker();
   app.on('child-process-gone', (_event, details) => {
     const desc =
       `child-process-gone: type=${details.type} reason=${details.reason} ` +
@@ -714,8 +758,39 @@ export function installQuitHandler(timeoutMs = 2000): void {
       (details.serviceName ? ` serviceName=${details.serviceName}` : '');
     if (details.reason === 'clean-exit' || details.reason === 'killed') {
       log.info(desc);
-    } else {
-      log.error(desc);
+      return;
+    }
+    log.error(desc);
+    if (details.type === 'GPU') {
+      // GPU 进程异常退出后触发可见窗口重绘，缓解恢复后留黑块/花屏帧。
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed() && win.isVisible() && !win.webContents.isDestroyed()) {
+          try {
+            win.webContents.invalidate();
+          } catch {
+            /* ignore repaint failure on closing window */
+          }
+        }
+      }
+      const crashStatus = gpuCrashTracker.record(Date.now());
+      if (crashStatus.thresholdReached) {
+        try {
+          const armed = recordGpuCrashLoopFallback({
+            userDataDir: app.getPath('userData'),
+            appVersion: app.getVersion(),
+            crashCount: crashStatus.crashCount,
+          });
+          if (armed) {
+            log.warn(
+              `GPU process crashed ${crashStatus.crashCount} times within window — ` +
+                'armed software-rendering fallback for next restart ' +
+                '(set XDT_DISABLE_HARDWARE_ACCELERATION=0 to bypass)',
+            );
+          }
+        } catch (err) {
+          log.warn('failed to persist GPU crash-loop fallback policy', err);
+        }
+      }
     }
   });
 

@@ -48,6 +48,7 @@ export type GhostInstallConsentPolicy =
       prompt: GhostInstallConsentPrompt;
       initiator: GhostInstallConsentInitiator;
       origin: GhostInstallConsentOrigin;
+      communityMarket?: GhostInstallConsentRequest['communityMarket'];
       originLabel?: string;
       trust?: GhostInstallConsentRequest['trust'];
       target?: GhostInstallConsentRequest['target'];
@@ -122,6 +123,20 @@ export function confirmedHarnesses(
   const facts = evaluateGhostInstallConsent(installed, next);
   const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
   return shown?.some(item => item.key === 'harnesses') ? declared : [];
+}
+
+/** Approved extensions shown in the install or update confirmation. */
+export function confirmedFileOpenerExtensions(
+  decision: GhostInstallConsentDecision,
+  installed: InstalledGhost | null | undefined,
+  next: GhostManifest,
+): string[] {
+  const declared = next.fileOpener?.extensions ?? [];
+  if (decision.mode === 'exempt') return declared;
+  if (decision.mode !== 'confirmed') return [];
+  const facts = evaluateGhostInstallConsent(installed, next);
+  const shown = facts?.kind === 'install' ? facts.permissions : facts?.added;
+  return shown?.some(item => item.key === 'file-opener') ? declared : [];
 }
 
 /**
@@ -199,6 +214,7 @@ export async function obtainGhostInstallConsent(
     confirmed = await policy.prompt({
       initiator: policy.initiator,
       origin: policy.origin,
+      ...(policy.communityMarket ? { communityMarket: policy.communityMarket } : {}),
       installationSource: policy.origin === 'custom-market' ? { kind: 'third-party' }
         : policy.origin === 'local-file' || policy.origin === 'forge' ? { kind: 'local' }
         : policy.target?.namespace && policy.target.namespace !== 'local' ? { kind: 'organization', namespace: policy.target.namespace }

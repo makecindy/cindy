@@ -14,6 +14,7 @@ import { Check, ChevronDown, ChevronUp, Circle, CircleAlert, CircleCheck, Circle
 import { botGroupPlanStepState, botGroupQueueWindow, canSkipBotGroupPlanStep } from '@cindy/maker-shared/botGroupPresentation';
 import { useTranslation } from 'react-i18next';
 
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -65,9 +66,9 @@ function stepIdentity(step: BotGroupPlanStepView, members: readonly BotGroupMemb
 export function BotGroupOrganizerTag() {
   const { t } = useTranslation();
   return (
-    <span className="inline-flex min-h-[18px] shrink-0 select-none items-center rounded-full bg-[var(--surface-chip)] px-1.5 py-px text-11 font-medium leading-tight text-[var(--text-secondary)]">
+    <Badge>
       {t('bots.groupChat.organizer')}
-    </span>
+    </Badge>
   );
 }
 
@@ -343,7 +344,7 @@ export function BotGroupPlanCard({
           const identity = stepIdentity(step, members);
           const state = botGroupPlanStepState(plan, step);
           return <li key={step.position} data-testid="bot-group-plan-step"
-            className="bot-group-talk-step grid min-h-10 min-w-0 grid-cols-[20px_minmax(0,1fr)] items-start gap-x-2.5 gap-y-0.5 py-[7px]">
+            className="bot-group-talk-step grid min-h-10 min-w-0 grid-cols-[20px_minmax(0,1fr)] items-start gap-x-2.5 gap-y-0.5 py-1.5">
             <BotAvatar bot={identity} size="xs" className="h-5 w-5 shrink-0 text-11" />
             <span className="min-w-0 flex-1 break-words text-13 font-medium leading-5 text-[var(--text-primary)] [overflow-wrap:anywhere]">{identity.name}</span>
             <span className="bot-group-talk-tail col-start-2 flex min-w-0 items-center justify-between gap-2.5">

@@ -41,6 +41,14 @@ import { resolveSessionCardBody } from './sessionCardPreview';
 import { aggregateRailActivity, dotToneOf, remoteLampOf } from './railActivity';
 import { sortPinnedSidebarEntries } from '../lib/pinnedSidebarOrder';
 import type { PinnedSortBy } from '../hooks/helpers/sidebarFilterCore';
+import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import {
+  isSidebarNewWindowActivation,
+  openTargetInNewWindow,
+  preventMiddleClickAutoscroll,
+  type SidebarClickModifiers,
+} from '@/lib/sidebarNewWindowActivation';
+import { toast } from '@/lib/toast';
 export { remoteLampOf } from './railActivity';
 
 /** 预览卡宽度(px)——旧 RailFlyout 同宽。 */
@@ -120,9 +128,9 @@ function SessionPreviewCard({ preview }: { preview: PreviewState }) {
       ref={ref}
       role="tooltip"
       className={cn(
-        'pointer-events-none fixed z-[9999] rounded-xl',
+        'pointer-events-none fixed z-fullscreen rounded-xl',
         'bg-[var(--surface-elevated)] border border-sidebar-border',
-        'px-3 pb-[11px] pt-[10px]',
+        'px-3 pb-2.5 pt-2.5',
       )}
       style={{
         left: preview.anchorRight + 10,
@@ -150,7 +158,7 @@ function SessionPreviewCard({ preview }: { preview: PreviewState }) {
           {body}
         </div>
       )}
-      <div className="mt-[7px] text-10 leading-none text-[var(--text-tertiary)]">{meta}</div>
+      <div className="mt-1.5 text-10 leading-none text-[var(--text-tertiary)]">{meta}</div>
     </div>,
     document.body,
   );
@@ -254,14 +262,22 @@ export function RailNav({
   const [preview, setPreview] = useState<PreviewState | null>(null);
 
   const handlePinnedClick = useCallback(
-    async (id: string) => {
+    async (id: string, modifiers?: SidebarClickModifiers) => {
       setPreview(null);
       railPanelStore.closeAll();
-      if (id === activeSessionId) return;
       const target = sessions.find((s) => s.id === id);
+      if (modifiers && isSidebarNewWindowActivation(modifiers)) {
+        if (target && isRemoteSessionWriteBlocked(target)) {
+          toast.warning(t('ccAgent.remoteSession.actionsUnavailable'));
+          return;
+        }
+        void openTargetInNewWindow(id, target?.deviceLinkDeviceId);
+        return;
+      }
+      if (id === activeSessionId) return;
       navigate(await resolveSessionRoute(id, target));
     },
-    [activeSessionId, navigate, sessions],
+    [activeSessionId, navigate, sessions, t],
   );
 
   const openSectionAt = useCallback(
@@ -289,7 +305,7 @@ export function RailNav({
         getId={(s) => s.id}
         onReorder={onReorderPinned}
         reducedMotion={reducedMotion}
-        className="flex w-full shrink-0 flex-col items-center gap-[3px]"
+        className="flex w-full shrink-0 flex-col items-center gap-0.5"
         filter="input, textarea, select, a, [data-no-drag]"
         renderItem={(session) => {
         const isActive = session.id === activeSessionId;
@@ -307,7 +323,14 @@ export function RailNav({
             key={session.id}
             aria-label={displayTitle}
             aria-current={isActive ? 'page' : undefined}
-            onClick={() => void handlePinnedClick(session.id)}
+            onMouseDown={preventMiddleClickAutoscroll}
+            onClick={(e) => void handlePinnedClick(session.id, e)}
+            onAuxClick={(e) => {
+              if (e.button !== 1) return;
+              e.preventDefault();
+              e.stopPropagation();
+              void handlePinnedClick(session.id, e);
+            }}
             onMouseEnter={(e) => {
               const rect = e.currentTarget.getBoundingClientRect();
               setPreview({
@@ -319,7 +342,7 @@ export function RailNav({
               });
             }}
             onMouseLeave={() => setPreview(null)}
-            className="group/pin flex w-full shrink-0 flex-col items-center gap-[2px] py-[2px]"
+            className="group/pin flex w-full shrink-0 flex-col items-center gap-0.5 py-0.5"
           >
             <span
               className={cn(
@@ -363,7 +386,7 @@ export function RailNav({
       />
 
       {pinnedSessions.length > 0 && (
-        <div className="my-[7px] h-px w-[22px] shrink-0 bg-sidebar-border" aria-hidden />
+        <div className="my-1.5 h-px w-[22px] shrink-0 bg-sidebar-border" aria-hidden />
       )}
 
       {/* ── 项目 / 对话:功能钮同款圆钮;hover/点击经 railPanelStore 通知

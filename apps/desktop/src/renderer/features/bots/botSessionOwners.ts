@@ -184,6 +184,10 @@ export function createSessionEntryNavigator(
     committedSinceOpen = new Set();
     const ownerCurrent = deps.captureOwner?.() ?? (() => true);
     const isLatest = () => sequence === entry && ownerCurrent();
+    if (deviceId === 'local') {
+      deps.openOrdinary(sessionId, messageClientId, isLatest, deviceId);
+      return;
+    }
     if (deviceId && deps.isRemoteDevice) {
       void deps.isRemoteDevice(deviceId).then((remote) => {
         if (!isLatest() || committedSinceOpen.size > 0) return;

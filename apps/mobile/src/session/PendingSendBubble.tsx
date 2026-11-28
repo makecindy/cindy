@@ -315,7 +315,13 @@ export function PendingSendBubble({
   /** 当前查看设备:排队消息就是本机发的时不显示设备标签(与已发送消息同一规则)。 */
   viewerDeviceId?: string | null;
   renderImage: (uri: string | null, sourceUri: string | null, onError: () => void) => ReactNode;
-  renderText: (text: string, index: number) => ReactNode;
+  /**
+   * `longMessage` 来自气泡的实测收起判定(measureBody + onTextLayout),由宿主决定
+   * 长正文展开后挂哪种原生文本根:普通任务回退 RN Text,伙伴用有界文本分组,避免巨型
+   * iOS UITextView 展开后空白的回归。text 只是单块 token,判定必须按整条 displayBody,
+   * 因此这个状态由气泡单点持有并透传给宿主;结构化 atom 与普通正文两条路径共用同一判定。
+   */
+  renderText: (text: string, index: number, longMessage: boolean) => ReactNode;
   renderFile: (name: string, index: number) => ReactNode;
   /** 伙伴私聊的引用回复块;普通任务不传。 */
   renderReplyQuote?: (quote: NonNullable<MobilePendingSendItem['replyQuote']>) => ReactNode;
@@ -345,6 +351,7 @@ export function PendingSendBubble({
   const uploadsPending = item.phase === 'uploading';
   const statusShown = useLocalSendStatusShown(item.key);
   const waiting = item.phase === 'waiting';
+  const pendingText = item.pendingDelivery && item.phase === 'sending';
   const queued = item.phase === 'queued' && !!item.actions;
   const failedImages = item.thumbs.filter((thumb) => thumb.failed).length;
   // 只有「正在下方输入框编辑」时淡化:那一刻气泡确实在被改写。
@@ -411,9 +418,10 @@ export function PendingSendBubble({
   };
   const badgePosition = badgeAnchor?.clientId === item.clientId
     ? { left: badgeAnchor.left } : { right: 0 };
-  const statusLabel = failed
-    ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
-    : waiting
+  const statusLabel = item.historyConfirmation
+    ? `${bubbleLabel} · ${t('message.queue.deliveryUnconfirmed')}`
+    : failed ? t('message.queue.sendFailedMessage', { text: bubbleLabel })
+    : waiting || item.waitingForRemoteAccount
       ? t('message.queue.waitingMessage', { text: bubbleLabel })
     : spinning
       ? t('message.queue.sendingMessage', { text: bubbleLabel })
@@ -555,13 +563,13 @@ export function PendingSendBubble({
                   maxVisibleLines={collapsedLines}
                   numberOfLines={collapsedLines}
                   renderText={collapsedLines ? undefined : (text, index) => (
-                    <View key={`text:${index}`} style={styles.textChunk}>{renderText(text, index)}</View>
+                    <View key={`text:${index}`} style={styles.textChunk}>{renderText(text, index, shouldCollapse)}</View>
                   )}
                   testID="pendingSend.sentInlineAtoms"
                   textStyle={styles.bubbleText}
                   tokens={item.sentInlineTokens}
                 />
-              ) : item.text && !collapsedLines ? renderText(item.text, 0) : item.text ? (
+              ) : item.text && !collapsedLines ? renderText(item.text, 0, shouldCollapse) : item.text ? (
                 <Text numberOfLines={collapsedLines} style={styles.bubbleText}>
                   {item.text}
                 </Text>
@@ -612,7 +620,10 @@ export function PendingSendBubble({
       </View>
       {/* 气泡下方这一行:送达后正式消息的「复制 / …」也占这一行,状态与操作都放这里,前后行高不变。 */}
       <View style={styles.statusRow} testID={`pendingSend.statusRow.${item.clientId}`}>
-        {failed ? (
+        {item.historyConfirmation ? (
+          <OutboxHistoryConfirmationRow clientId={item.clientId}
+            requested={item.historyConfirmation === 'requested'} onConfirm={actions.onRetryOutbox} />
+        ) : failed ? (
           <>
             <Text numberOfLines={1} style={styles.statusError}>
               {failedImages > 0 ? t('message.queue.imagesNotUploaded', { count: failedImages }) : t('message.queue.notSent')}
@@ -652,6 +663,18 @@ export function PendingSendBubble({
               ? t('message.queue.withSource', { source: item.source.label, message: statusLabel })
               : statusLabel} />
           </CompanionFadeIn>
+        ) : pendingText && statusShown ? (
+          <CompanionFadeIn distance={0} duration={motionDuration.fast} play={statusShown === 'revealed'}>
+          <View style={styles.statusActions}>
+            <Text accessibilityRole="button" style={styles.statusText} onPress={() => actions.onSelect(selected ? null : item.clientId)}>
+              {t('message.queue.pendingDelivery')}
+            </Text>
+            {selected && item.canCancel !== false ? (
+              <StatusAction busy={actions.busy} label={t('message.queue.cancel')}
+                onPress={() => actions.onRemoveOutbox(item.clientId)} testID={`pendingSend.outboxRemove.${item.clientId}`} />
+            ) : null}
+          </View>
+          </CompanionFadeIn>
         ) : selected && outbox && item.canCancel !== false ? (
           // 还在上传 / 发出途中:轻点气泡才露出「取消」,平时这一行留空,只有左侧图标。
           <View style={styles.statusActions} testID={`pendingSend.outboxActions.${item.clientId}`}>
@@ -662,10 +685,13 @@ export function PendingSendBubble({
       </View>
       {/* 有具体原因的失败(比如模型不支持图片)直接写出来,用户才知道该怎么处理;图片没传上去的
           通用提示由那张图上的重传按钮表达,轻点气泡才看。 */}
-      {item.errorText && (failedImages === 0 || selected) ? (
+      {!item.historyConfirmation && item.errorText && (failedImages === 0 || selected) ? (
         <Text style={styles.errorReason} testID={`pendingSend.error.${item.clientId}`}>{item.errorText}</Text>
       ) : null}
       {/* 轻点气泡看排队操作为什么不可用。 */}
+      {selected && pendingText && statusShown ? (
+        <Text style={styles.rowHint}>{t('message.queue.pendingDeliveryHint')}</Text>
+      ) : null}
       {selected && item.hint ? (
         <Text style={styles.rowHint} testID={`pendingSend.hint.${item.clientId}`}>{item.hint}</Text>
       ) : null}
@@ -704,7 +730,7 @@ function QueuedSendMenu({ item, actions, accessibilityLabel }: {
       testID={`pendingSend.queueStatus.${item.clientId}`}
     >
       <ListEnd color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-      <Text style={styles.queueStatusText}>{t('message.queue.queued')}</Text>
+      <Text style={styles.queueStatusText}>{t(item.waitingForRemoteAccount ? 'message.queue.waitingForComputer' : 'message.queue.queued')}</Text>
       {!disabled && <ChevronDown color={colors.textTertiary} size={iconSize.xs} strokeWidth={iconStroke.regular} />}
     </Pressable>
   );
@@ -722,6 +748,23 @@ function QueuedSendMenu({ item, actions, accessibilityLabel }: {
       }}>
       {trigger}
     </Menu>
+  );
+}
+
+export function OutboxHistoryConfirmationRow({ clientId, requested, onConfirm }: {
+  clientId: string;
+  requested: boolean;
+  onConfirm(clientId: string): void;
+}) {
+  const { t } = useTranslation();
+  const styles = useThemedStyles(makeStyles);
+  return (
+    <View style={styles.confirmationActions} testID={`pendingSend.outboxConfirmation.${clientId}`}>
+      <Text style={styles.statusError}>{t('message.queue.deliveryUnconfirmed')}</Text>
+      <View style={styles.statusDivider} />
+      <StatusAction busy={requested} disabled={requested} label={t('message.queue.recheckDelivery')} primary
+        onPress={() => onConfirm(clientId)} testID={`pendingSend.outboxRecheck.${clientId}`} />
+    </View>
   );
 }
 
@@ -838,6 +881,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   statusRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, height: 46, justifyContent: 'flex-end', marginTop: -spacing.sm, maxWidth: '100%' },
   // 按钮自带 44 宽的留白,彼此只留 4 的间距。
   statusActions: { maxWidth: '100%', alignItems: 'center', alignSelf: 'stretch', flexDirection: 'row', gap: spacing.xs },
+  confirmationActions: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, maxWidth: '100%' },
   queueMenuTrigger: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs, minHeight: 44, minWidth: 44 },
   queueStatusText: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption, fontWeight: fontWeight.regular },
   // 说明 / 报错是成句的话:13/18,二级色;失败用报错色。

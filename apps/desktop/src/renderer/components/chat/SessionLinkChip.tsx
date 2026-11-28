@@ -22,16 +22,16 @@ import { useTranslation } from 'react-i18next';
 
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
+import { confirmSessionOrigin } from '@/features/device-link/confirmSessionOrigin';
+import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
 import { cn } from '@/lib/utils';
 import { useOptionalAuthDeviceId } from '@/contexts/AuthContext';
 import { parseSessionDeepLinkHref } from '@/lib/deepLink';
 import { getSessionRouteOwnerId, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { resolveSessionMessageText } from '@/lib/sessionMessageText';
 import * as sessionService from '@/lib/sessionService';
-import {
-  remoteProjectsStore,
-  useRemoteProjectSessions,
-} from '@/features/device-link/remoteProjectsStore';
+import { remoteProjectsStore, useRemoteProjectSessions } from '@/features/device-link/remoteProjectsStore';
 import {
   useSessionNavigationIntent,
   useSessionNavigationMode,
@@ -75,23 +75,32 @@ export function useSessionLinkTarget(href: string) {
   );
   const openTarget = async (separate: boolean) => {
     if (!target || !sessionId) return;
-    // 只在点击时读一次远程镜像快照：不订阅整份远程任务列表，避免每个链接/来源标签
-    // 在列表变化时重渲染并各自扫描（来源标签随长聊天大量挂载）。
-    const remoteSession = remoteProjectsStore.getVisibleMergedRemoteSessions().find((s) =>
-      s.id === sessionId && (!targetDeviceId || s.deviceLinkDeviceId === targetDeviceId)) ?? null;
     const navigationRequestVersion = ++navigationRequestVersionRef.current;
+    const owner = getDataOwnerGeneration();
+    const active = () => navigationRequestVersionRef.current === navigationRequestVersion && isDataOwnerGenerationCurrent(owner);
     const resolveTargetRoute = async () => {
-      let deviceId = targetDeviceId ?? remoteProjectsStore.getSessionDeviceId(sessionId);
-      if (deviceId) {
+      let deviceId = targetDeviceId ?? getStickySessionDeviceId(sessionId);
+      if (targetDeviceId) {
         const selfDeviceId = localDeviceId ?? (await window.electronAPI.getDeviceId());
-        if (navigationRequestVersionRef.current !== navigationRequestVersion) return null;
-        // 归档任务可能尚未进入远程镜像；先登记链接的归属，再由现有传输层按设备读取。
-        if (deviceId !== selfDeviceId) {
-          remoteProjectsStore.pinSessionOrigin(deviceId, sessionId);
-        } else {
+        if (!active()) return null;
+        const known = getStickySessionDeviceId(sessionId);
+        if (targetDeviceId === selfDeviceId || targetDeviceId === 'local') {
+          if (known) throw new Error('Conflicting local session origin');
           deviceId = undefined;
+        } else if (known && known !== deviceId) {
+          throw new Error('Conflicting remote session origin');
         }
       }
+      let remoteSession = null;
+      if (!separate && deviceId) {
+        if (!targetDeviceId) {
+          // An ID-only link follows its established transport even during a disconnect.
+          remoteSession = remoteProjectsStore.getDeviceSessions(deviceId).find(row => row.id === sessionId) ?? null;
+        } else {
+          remoteSession = await confirmSessionOrigin(sessionId, deviceId, active);
+        }
+      }
+      if (!active()) return null;
       if (separate) {
         await window.electronAPI.maker.openSessionInNewWindow(sessionId, deviceId, messageClientId);
         return null;
@@ -102,7 +111,7 @@ export function useSessionLinkTarget(href: string) {
     // 会 miss → 远程 Orca 会话被当普通会话路由,后续 redirect 会丢 searchJump 锚点。
     // 把远程镜像里的 session 对象直接传入,让 Orca 路由一步到位(Codex review P2)。
     await resolveTargetRoute().then((route) => {
-      if (!route || navigationRequestVersionRef.current !== navigationRequestVersion) return;
+      if (!route || !active()) return;
       reportSessionNavigation?.(sessionId, getSessionRouteOwnerId(route) ?? sessionId);
       navigate(
         route,
@@ -271,7 +280,7 @@ export function SessionLinkChip({ href, label }: SessionLinkChipProps) {
         }}
         onContextMenu={linkMenu.onContextMenu}
         splitPaneRouteAction
-        className="relative top-[-1px] -my-[1px] max-w-[min(240px,55vw)] align-middle"
+        className="relative top-[-1px] -my-px max-w-[min(240px,55vw)] align-middle"
       />
       {linkMenu.menu}
     </>

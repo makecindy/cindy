@@ -13,7 +13,7 @@
  */
 import type { Maker } from '@cindy/maker-core';
 import { eq } from 'drizzle-orm';
-import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
+import { dbToMakerAgentKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
@@ -48,6 +48,12 @@ export function createSelectSameAgentModel(ports: {
       ...(intent.confirmedContextWindow ? { confirmedContextWindow: intent.confirmedContextWindow } : {}),
     }, { source: 'user', sessionLockHeld: true, applyingUserSelectionOnSend: applyNow,
       runtimeSource: intent.runtimeSource, configStaged: intent.configStaged === true,
+      ...(intent.preserveModelGroupBinding === true ? { preserveModelGroupBinding: true } : {}),
+      ...(intent.modelGroupPickedKey ? { modelGroupPickedKey: intent.modelGroupPickedKey } : {}),
+      credentialSelectionAxes: intent.credentialSelectionAxes ?? {
+        effort: !intent.configStaged && intent.effort !== undefined,
+        fastMode: !intent.configStaged && intent.fastMode !== undefined,
+      },
       deviceLinkModelSelectionOrigin: intent.deviceLinkModelSelectionOrigin,
       nextInputChars, assertSelectionCurrent, beforeMutation, pendingSelectionAccess });
     if (result.contextWindowConfirmationRequired !== undefined) {
@@ -156,7 +162,7 @@ export function createRecoverRenamedSessionModelOnSend(ports: {
       fastMode: sessions.fastMode,
     }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
     if (!row || row.status !== 'active' || !row.providerId ||
-        row.remoteHostId || row.agentDeviceId) return;
+        row.remoteHostId || row.agentDeviceId || isPluginEngineKind(row.agentKind)) return;
     const providers = await getDesktopProviderService().listProviders({
       allowSideEffects: false,
       catalog: getActiveCatalog(),

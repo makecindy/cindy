@@ -135,6 +135,39 @@ describe('rail 过滤(suspended)', () => {
   });
 });
 
+// 依据:隐藏是陈列、停用是准入(本文件头注的两根轴)。回归点是「把隐藏做成停用」——
+// 用户隐藏供应商后辅助模型链 / 已有会话解析不到来源。最小失败输入:同一个被隐藏的
+// 供应商,分别走路由口径与「给人挑的清单」口径(tier: unit,纯函数)。
+describe('供应商级隐藏(hidden)只收起清单,不影响路由', () => {
+  const views = buildRegistry(CATALOG, ALL_CONNECTED, {}, { hiddenProviders: { alpha: true } });
+  const visible = () => true;
+
+  it('路由与来源解析照常落到被隐藏的供应商,它也不算停用', () => {
+    expect(views.find((v) => v.id === 'alpha')).toMatchObject({ hidden: true });
+    expect(views.find((v) => v.id === 'alpha')!.suspended).toBeUndefined();
+    expect(connectedProvidersForAgent(views, 'claude-code').map((p) => p.id)).toEqual(['alpha', 'beta']);
+    expect(effectiveSourceIdForModel(views, 'alpha', 'claude-sonnet-5', 'claude-code')).toBe('alpha');
+    // 不带可见性谓词 = 路由 / 能力快照口径:隐藏不生效。
+    expect(deriveModelList({ providers: views, agent: 'claude-code', dedupe: 'none' })
+      .some((m) => m.sourceProviderId === 'alpha')).toBe(true);
+  });
+
+  it('带可见性谓词的清单把它整家收起;选中行与 includeHiddenProviders 是两个出口', () => {
+    const listed = (extra: Partial<Parameters<typeof deriveModelSections>[0]> = {}) =>
+      deriveModelSections({ providers: views, agent: 'claude-code', isVisible: visible, ...extra })
+        .map((section) => [section.provider.id, section.models.map((m) => m.id)]);
+    expect(listed()).toEqual([['beta', ['claude-opus-5']]]);
+    expect(listed({ keepSelected: { providerId: 'alpha', modelId: 'claude-sonnet-5' } })).toEqual([
+      ['alpha', ['claude-sonnet-5']],
+      ['beta', ['claude-opus-5']],
+    ]);
+    expect(listed({ includeHiddenProviders: true })).toEqual([
+      ['alpha', ['claude-opus-5', 'claude-sonnet-5']],
+      ['beta', ['claude-opus-5']],
+    ]);
+  });
+});
+
 describe('来源过滤(模型级停用拷贝)', () => {
   // 同 id 模型 alpha 家停用、beta 家启用:默认来源解析必须落到 beta(PR #744 review)。
   const views = buildRegistry(CATALOG, ALL_CONNECTED, {}, {

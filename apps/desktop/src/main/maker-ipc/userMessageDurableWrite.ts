@@ -7,6 +7,11 @@ import type { InterruptedTurnAutoResumeGuard } from './interruptedTurnAutoResume
 import type { SilentStopAutoResumeGuard } from './silentStopAutoResume.js';
 
 type CreateDbMessage = typeof createDbMessageType;
+type UserMessageDurableWrite = (
+  sessionId: Parameters<CreateDbMessage>[0],
+  message: Parameters<CreateDbMessage>[1],
+  opts?: NonNullable<Parameters<CreateDbMessage>[2]> & { ownReconnectRecoverySignal?: AbortSignal },
+) => ReturnType<CreateDbMessage>;
 type DurableWriteOwnerScope = NonNullable<Parameters<CreateDbMessage>[2]>['broadcastOwnerScope'];
 
 /**
@@ -19,7 +24,9 @@ export interface UserMessageDurableWritePorts {
   silentStopAutoResumeGuard: Pick<SilentStopAutoResumeGuard, 'noteUserSend'>;
   interruptedTurnAutoResumeGuard: Pick<InterruptedTurnAutoResumeGuard, 'noteUserSend'>;
   usageLimitAutoResume: { noteUserAction(sessionId: string): void };
-  getProviderGroupService(): { noteUserAction(sessionId: string): void } | null | undefined;
+  /** A new turn (any input but an auto-resume): sources that failed in earlier turns may take over again. */
+  startFallbackTurn(sessionId: string): void;
+  getProviderGroupService(): { noteUserAction(sessionId: string, ownReconnectRecoverySignal?: AbortSignal): void } | null | undefined;
   enqueueDurableWrite<T>(label: string, write: (ownerScope: DurableWriteOwnerScope) => Promise<T>): Promise<T>;
   getLastAssistantTranscriptUuid(sessionId: string): string | undefined;
   getSessionDbAgentKind(sessionId: string): Parameters<CreateDbMessage>[1]['agentKind'] | undefined;
@@ -41,10 +48,10 @@ export function autoResumeAttemptTokenFromAgentMeta(agentMeta: unknown): number 
  * pending outcome, and writes the row through the durable FIFO with its transcript anchor.
  */
 export function createUserMessageDurableWrite({
-  autoResumeBookkeeping, silentStopAutoResumeGuard, interruptedTurnAutoResumeGuard, usageLimitAutoResume,
+  autoResumeBookkeeping, silentStopAutoResumeGuard, interruptedTurnAutoResumeGuard, usageLimitAutoResume, startFallbackTurn,
   getProviderGroupService, enqueueDurableWrite, getLastAssistantTranscriptUuid, getSessionDbAgentKind, createDbMessage,
-}: UserMessageDurableWritePorts): CreateDbMessage {
-  return async (sessionId, message, opts) => {
+}: UserMessageDurableWritePorts): UserMessageDurableWrite {
+  return async (sessionId, message, { ownReconnectRecoverySignal, ...opts } = {}) => {
     // 真实用户消息(renderer 发送事务)→ 给两个自动续跑守卫充值额度。
     //
     // **必须按 agentMeta.autoResume 排除自动补发的消息。** silent-stop 的自动续跑
@@ -70,11 +77,12 @@ export function createUserMessageDurableWrite({
       // messages, but must not recharge the interrupted-turn episode budget and defeat its
       // hard upper bound.
       const isAutomaticPrompt = isAutomaticInputOriginKind(originKind);
+      startFallbackTurn(sessionId);
       silentStopAutoResumeGuard.noteUserSend(sessionId);
       if (!isAutomaticPrompt) {
         interruptedTurnAutoResumeGuard.noteUserSend(sessionId);
         usageLimitAutoResume.noteUserAction(sessionId);
-        getProviderGroupService()?.noteUserAction(sessionId);
+        getProviderGroupService()?.noteUserAction(sessionId, ownReconnectRecoverySignal);
       }
     }
     // 落库失败 → 撤掉刚才那条待确认登记:那条消息压根不存在,留着会让后续事件去 patch
@@ -107,7 +115,7 @@ export function createUserMessageDurableWrite({
         // session-agent-switch:user 行逐行 stamp 当前引擎(见 messages.agent_kind 注释)。
         const agentKind = getSessionDbAgentKind(sessionId);
         const scopedOpts = {
-          ...(opts ?? {}),
+          ...opts,
           // Keep a committed user row durable across an owner switch, while
           // preventing createMessage from relabelling its broadcast to the
           // next owner after the media-ref await.

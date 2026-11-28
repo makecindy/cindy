@@ -142,3 +142,19 @@ describe('代输入 live view leases', () => {
     expect(ended).toEqual(['req1']);
   });
 });
+
+// Unit: a host capability must not let a restricted lease probe desktop AX state.
+// Existing operation-denial tests did not exercise editableClick after input or
+// both transports. Removing the host allowlist makes this regression fail.
+it.each(['relay', 'media'] as const)('refuses desktop field detection from a restricted lease over %s', async (source) => {
+  const h = harness();
+  h.deps.editableAt = vi.fn(async () => true);
+  const { lease } = await h.open({ control: true });
+  await h.controller.request('phone', {
+    op: 'input', lease, sequence: 1, events: [{ kind: 'button', button: 0, down: false, x: 0.4, y: 0.8 }],
+  }, source);
+  await expect(h.controller.request('phone', {
+    op: 'editableClick', lease, sequence: 1,
+  }, source)).rejects.toThrow('DESKTOP_HANDOFF_WINDOW_ONLY');
+  expect(h.deps.editableAt).not.toHaveBeenCalled();
+});

@@ -303,7 +303,7 @@ describe("collaboration navigation wiring", () => {
     expect(source).toContain("type CollabSessionStateLike,");
     expect(block).toContain("navigateToCollabSession(");
     expect(block).toContain("getState: () => navigation.getState(),");
-    expect(block).toContain("push: (target) => router.push({");
+    expect(block).toContain("push: (target) => pushSessionDrillDown(router, {");
     expect(block).toContain("dismissTo: (target) => router.dismissTo({");
     // 旧的裸 push(直接拿目标 id 组 params)已不存在:那正是命中「同 id 复用 + 移到栈顶」的那一行。
     expect(block).not.toContain(

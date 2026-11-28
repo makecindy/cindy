@@ -7,10 +7,17 @@ import { accessSync, constants } from 'node:fs';
 import path from 'node:path';
 import type { RemoteClipboardContent } from '@cindy/device-link';
 import { isLinuxDesktopUnlocked } from './linuxSessionLock';
+import { isX11Clipboard, readX11ClipboardSnapshot, writeX11Clipboard } from './linuxX11Clipboard';
+import {
+  gnomeClipboardReady,
+  readGnomeClipboardSnapshot,
+  stopGnomeClipboard,
+  writeGnomeClipboard,
+} from './linuxGnomeClipboard';
 import { CLIPBOARD_IMAGE_BYTES, CLIPBOARD_IMAGE_PIXELS } from './clipboardLimits';
 
 const exec = promisify(execFile);
-export function supportsLinuxClipboard(): boolean {
+export function supportsHyprlandClipboard(): boolean {
   if (process.platform !== 'linux' || !process.env.HYPRLAND_INSTANCE_SIGNATURE) return false;
   try {
     accessSync('/usr/bin/wl-paste', constants.X_OK);
@@ -18,6 +25,9 @@ export function supportsLinuxClipboard(): boolean {
   } catch {
     return false;
   }
+}
+export function supportsLinuxClipboard(): boolean {
+  return isX11Clipboard() || gnomeClipboardReady() || supportsHyprlandClipboard();
 }
 /** Remote transfers require an unlocked compositor. A local in-app copy skips
  * the probe: it is user-initiated, and older Hyprland lacks `solitaryBlockedBy`. */
@@ -63,7 +73,9 @@ export async function readLinuxClipboardSnapshot(
   primary = false,
   { checkLock = true }: LockOptions = {},
 ): Promise<{ formats: string[]; content: RemoteClipboardContent }> {
-  if (!supportsLinuxClipboard()) throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
+  if (isX11Clipboard()) return readX11ClipboardSnapshot(primary, { checkLock });
+  if (gnomeClipboardReady()) return readGnomeClipboardSnapshot(primary);
+  if (!supportsHyprlandClipboard()) throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
   const selection = primary ? ['--primary'] : [];
   const formats = (await read([...selection, '--list-types'], 16384, checkLock))
     .toString()
@@ -156,12 +168,15 @@ let writer: ChildProcessWithoutNullStreams | null = null;
 export function stopLinuxClipboardWriter(): void {
   writer?.kill();
   writer = null;
+  stopGnomeClipboard();
 }
 export async function writeLinuxClipboard(
   content: RemoteClipboardContent,
   current: () => boolean,
   { checkLock = true }: LockOptions = {},
 ): Promise<void> {
+  if (isX11Clipboard()) return writeX11Clipboard(content, current, { checkLock });
+  if (gnomeClipboardReady()) return writeGnomeClipboard(content, current);
   const executable = await binary();
   await assertUnlocked(checkLock);
   if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');

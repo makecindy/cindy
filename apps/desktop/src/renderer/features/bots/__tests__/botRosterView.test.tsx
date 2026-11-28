@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
   opts ? `${key}:${JSON.stringify(opts)}` : key;
-vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }) }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: 'fixture-owner' }), useOptionalAuthDeviceId: () => null }));
 // Creation tests supply a local-only location catalog; device presence is covered by the route hook tests.
 vi.mock('@/hooks/useModelRouteDevices', () => ({
   useModelRouteDevices: () => ({ devices: [], leadAgentDeviceId: null }),
@@ -115,7 +115,7 @@ vi.mock('@/components/new-chat/ModelSelector', async () => {
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 
 vi.mock('../BotPortraitPicker', () => ({
-  BOT_PORTRAIT_COUNT: 17,
+  BOT_PORTRAIT_COUNT: 26,
   BotPortraitPicker: ({ value, onChange }: { value?: string; onChange: (value: string) => void }) => <button type="button" data-testid="portrait" onClick={() => onChange('data:image/png;base64,bWFudWFs')}>{value}</button>,
   galleryPortrait: mocks.galleryPortrait,
 }));
@@ -178,7 +178,7 @@ describe('name-only creation', () => {
     expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('');
   });
 
-  it('randomizes across all 17 portraits per new form, not by roster length', async () => {
+  it('randomizes across all 26 portraits per new form, not by roster length', async () => {
     const random = vi.spyOn(Math, 'random').mockReturnValue(0);
     const first = render(<BotRosterView inline />);
     await waitFor(() => expect(mocks.galleryPortrait).toHaveBeenCalledWith(0));
@@ -188,7 +188,7 @@ describe('name-only creation', () => {
     expect(mocks.galleryPortrait).toHaveBeenCalledTimes(1);
     first.unmount();
     render(<BotRosterView inline />);
-    await waitFor(() => expect(mocks.galleryPortrait).toHaveBeenLastCalledWith(16));
+    await waitFor(() => expect(mocks.galleryPortrait).toHaveBeenLastCalledWith(25));
   });
 
   it('does not replace a manual choice when the initial random image arrives late', async () => {

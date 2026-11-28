@@ -37,6 +37,9 @@ type NotificationResponse = Parameters<
  */
 export function PushNotificationsBridge() {
   const auth = useAuth();
+  const pushAccountId = auth.user?.id;
+  const previousProfile = useRef(auth.user);
+  const onProfileRefresh = useRef<(() => void) | null>(null);
   const { i18n: { language } } = useTranslation();
   const router = useRouter();
   const pathname = usePathname();
@@ -75,23 +78,59 @@ export function PushNotificationsBridge() {
     void registerNotificationActionCategories().catch(() => undefined);
   }, [language]);
 
-  // 登录态就绪后同步注册状态(开关关闭 / 从未注册时是 no-op)
+  // 登录态就绪后同步注册状态；账号代次或路由改变时重新登记，同账号的资料刷新只用于失败恢复。
   useEffect(() => {
     if (!isPushSupported()) return;
-    if (!auth.initialized || !auth.isAuthenticated) return;
+    if (!auth.initialized || !auth.isAuthenticated || !pushAccountId) return;
     let cancelled = false;
-    void (async () => {
-      // 只用当前会话补偿当前区域的注销，再按本机开关同步注册状态。
-      await retryPendingUnregister(apiFetchRef.current).catch(() => undefined);
-      if (cancelled) return;
-      const enabled = await readPushEnabled();
-      if (cancelled || !enabled) return;
-      await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current }).catch(() => undefined);
-    })();
+    let running = false;
+    let replay = false;
+    let profileRetryAvailable = true;
+    async function reconcile(skipConfirmed: boolean) {
+      if (running) { replay = true; return; }
+      running = true;
+      try {
+        const unregistered = await retryPendingUnregister(apiFetchRef.current);
+        if (cancelled) return;
+        const enabled = await readPushEnabled();
+        if (cancelled) return;
+        if (enabled) {
+          const result = await syncPushRegistration({ enabled, apiFetch: apiFetchRef.current, skipConfirmed });
+          if (result === 'registered') profileRetryAvailable = true;
+        } else if (unregistered) {
+          profileRetryAvailable = true;
+        }
+      } catch {
+        // A profile-triggered failure waits for foreground before another retry.
+      } finally {
+        running = false;
+        if (replay && !cancelled) { replay = false; void reconcile(true); }
+      }
+    }
+    onProfileRefresh.current = () => {
+      if (!profileRetryAvailable) return;
+      profileRetryAvailable = false;
+      void reconcile(true);
+    };
+    const foreground = AppState.addEventListener('change', state => {
+      if (state !== 'active') return;
+      profileRetryAvailable = true;
+      void reconcile(true);
+    });
+    void reconcile(false);
     return () => {
       cancelled = true;
+      onProfileRefresh.current = null;
+      foreground.remove();
     };
-  }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated, auth.user, selfHostedRelay, agentNetPreferences.generation]);
+  }, [auth.accountGeneration, auth.initialized, auth.isAuthenticated, pushAccountId, selfHostedRelay, agentNetPreferences.generation]);
+
+  useEffect(() => {
+    if (previousProfile.current?.id === auth.user?.id && previousProfile.current !== auth.user) {
+      onProfileRefresh.current?.();
+    }
+    previousProfile.current = auth.user;
+  }, [auth.user]);
 
   // APNs token 轮换 → 重新上报(仅开关开启且已登录时)
   useEffect(() => {

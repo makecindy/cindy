@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { zstdCompress, zstdDecompress, zstdCompressSync, zstdDecompressSync } from 'node:zlib';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAnthropicCompatProxy } from '@cindy/anthropic-compat-proxy';
 import type { NativeSubscriptionAccount } from '@cindy/maker-core';
@@ -13,6 +13,39 @@ const { ownerState } = vi.hoisted(() => ({
     afterFastRead: undefined as 'relax' | 'owner' | undefined,
   },
 }));
+
+// Install before the bridge captures its default ports. A bare-fetch regression
+// must fail locally, including when the core captures fetch at module load time.
+const desktopTransport = vi.hoisted(() => {
+  const realFetch = globalThis.fetch;
+  const loopbackOrigins = new Set<string>();
+  const bareFetch = vi.fn<typeof fetch>((input, init) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    if (url.protocol === 'http:' && url.hostname === '127.0.0.1' && loopbackOrigins.has(url.origin)) {
+      return realFetch(input, init);
+    }
+    return Promise.reject(new Error('Unexpected non-fixture fetch in subscription forwarding test'));
+  });
+  vi.stubGlobal('fetch', bareFetch);
+  return {
+    loopbackOrigins, bareFetch,
+    fetch: vi.fn<typeof fetch>(),
+    getGrokToken: vi.fn(async () => 'fixture-default-xai-token'),
+    peekGrokToken: vi.fn(() => 'fixture-default-xai-token'),
+    invalidateXai: vi.fn(async () => 'ignored' as const),
+    recordXaiRateLimit: vi.fn(),
+  };
+});
+
+vi.mock('../outbound-fetch.desktop.js', () => ({ outboundFetch: desktopTransport.fetch }));
+vi.mock('../grok-oauth-login.desktop.js', () => ({
+  getGrokAccessToken: desktopTransport.getGrokToken,
+  peekGrokAccessToken: desktopTransport.peekGrokToken,
+}));
+vi.mock('../xai-auth-invalidation-host.js', () => ({ invalidateXaiBridgeAuth: desktopTransport.invalidateXai }));
+vi.mock('../../usageBroadcaster.js', () => ({ recordXaiRateLimitSnapshot: desktopTransport.recordXaiRateLimit }));
+
+afterAll(() => vi.unstubAllGlobals());
 
 // Measure actual asynchronous zstd work on the production HTTP path. The
 // synchronous fixture encoder/decoder remains untouched.
@@ -133,6 +166,58 @@ function deps(overrides: Partial<PiNativeSubscriptionHandlerDeps> = {}): PiNativ
 }
 
 describe('PI native subscription forwarding', () => {
+  // #8667: injected deps and the Host assembly do not protect Desktop's default
+  // outbound port. Exercise the real Desktop wrapper/core with synthetic auth;
+  // assert the forwarded stream or readable network failure, never real cloud I/O.
+  it.each(['xai', 'openai'].flatMap(provider => [false, true].map(networkFailure => ({ provider, networkFailure }))))(
+    'uses the default Desktop transport for $provider (networkFailure=$networkFailure)', async ({ provider, networkFailure }) => {
+      desktopTransport.fetch.mockReset();
+      desktopTransport.bareFetch.mockClear();
+      desktopTransport.invalidateXai.mockClear();
+      desktopTransport.getGrokToken.mockClear();
+      const invalidateAuth = vi.fn();
+      const account: NativeSubscriptionAccount = { id: 'fixture-default-account', configDir: '/fixture/default-account',
+        assertCurrent: () => {}, readState: async () => ({ authenticated: true }),
+        readCodexTokens: async () => ({ accessToken: 'fixture-default-codex-token', chatgptAccountId: 'fixture-default-account' }),
+        invalidateAuth };
+      const endpoint = provider === 'xai' ? 'https://api.x.ai/v1/responses' : 'https://chatgpt.com/backend-api/codex/responses';
+      const stream = 'event: response.completed\ndata: {"type":"response.completed"}\n\n';
+      if (networkFailure) desktopTransport.fetch.mockRejectedValueOnce(new TypeError('fetch failed'));
+      else desktopTransport.fetch.mockResolvedValueOnce(new Response(stream, {
+        status: 200, headers: { 'content-type': 'text/event-stream' },
+      }));
+      const body = { model: provider === 'xai' ? 'grok-4.6' : 'gpt-6.1-sol', input: 'fixture prompt' };
+      const res = responseRecorder();
+      await getPiNativeSubscriptionHandler(provider, 'fixture-default-transport', undefined, provider === 'openai' ? account : undefined)({
+        rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body,
+        ctx: { method: 'POST', url: provider === 'xai' ? '/v1/responses' : '/codex/responses', headers: {} }, res,
+      } as never);
+      expect(desktopTransport.fetch).toHaveBeenCalledExactlyOnceWith(endpoint, expect.objectContaining({
+        method: 'POST', headers: expect.objectContaining({
+          authorization: `Bearer fixture-default-${provider === 'xai' ? 'xai' : 'codex'}-token`,
+          ...(provider === 'openai' ? { 'chatgpt-account-id': 'fixture-default-account' } : {}),
+        }),
+      }));
+      const request = desktopTransport.fetch.mock.calls[0]![1]!;
+      expect(JSON.parse(Buffer.from(request.body as Uint8Array).toString())).toMatchObject(body);
+      if (networkFailure) {
+        expect(res.status).toBe(502);
+        expect(JSON.parse(Buffer.concat(res.chunks).toString())).toMatchObject({ error: {
+          type: 'upstream_error', provider, endpoint,
+          message: `${provider === 'xai' ? 'xAI/Grok' : 'OpenAI/ChatGPT'} upstream request failed: fetch failed`,
+        } });
+      } else {
+        expect(res.status).toBe(200);
+        expect(res.headers['content-type']).toBe('text/event-stream');
+        expect(Buffer.concat(res.chunks).toString()).toBe(stream);
+      }
+      expect(desktopTransport.bareFetch).not.toHaveBeenCalled();
+      expect(desktopTransport.invalidateXai).not.toHaveBeenCalled();
+      expect(invalidateAuth).not.toHaveBeenCalled();
+      expect(desktopTransport.getGrokToken).toHaveBeenCalledTimes(provider === 'xai' ? 1 : 0);
+    },
+  );
+
   // Unit regression from the shared-task log: a migrated OpenAI id and an
   // account-pool lease must reach the real auth reader, not a mocked success.
   it.each(['openai', 'openai-migrated-fixture'])('uses the selected pool account for %s', async providerId => {
@@ -611,6 +696,7 @@ describe('PI native subscription forwarding', () => {
       input: 'hello',
     })));
 
+    desktopTransport.loopbackOrigins.add(new URL(proxy.url).origin);
     try {
       const response = await fetch(`${proxy.url}/codex/responses`, {
         method: 'POST',
@@ -621,6 +707,7 @@ describe('PI native subscription forwarding', () => {
       await response.text();
     } finally {
       await proxy.dispose();
+      desktopTransport.loopbackOrigins.delete(new URL(proxy.url).origin);
     }
 
     const init = fetchMock.mock.calls[0]![1];
@@ -656,6 +743,7 @@ describe('PI native subscription forwarding', () => {
       routingTransform: () => ({ localHandler: handler }),
     });
 
+    desktopTransport.loopbackOrigins.add(new URL(proxy.url).origin);
     try {
       await expect((async () => {
         const response = await fetch(`${proxy.url}/codex/responses`, {
@@ -667,6 +755,7 @@ describe('PI native subscription forwarding', () => {
       })()).rejects.toThrow();
     } finally {
       await proxy.dispose();
+      desktopTransport.loopbackOrigins.delete(new URL(proxy.url).origin);
     }
   });
 

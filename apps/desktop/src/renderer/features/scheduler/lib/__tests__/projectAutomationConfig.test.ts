@@ -56,6 +56,18 @@ describe('formToProjectConfig fastMode', () => {
   });
 });
 
+// PR #11881 review r4651177664, unit: the project form is what writes schedules.json. Gap: only the schedule→config
+// path carried the mode, so saving the form dropped it and the next load removed it from the database too.
+// Minimal input: a form with a mode, the same form as a script, and a saved schedule with a mode.
+describe('project automation model group', () => {
+  it('keeps the mode when the form saves and when a schedule is promoted; script tasks have none', () => {
+    expect(formToProjectConfig(makeForm({ agentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily' }), 'm1').modelGroup).toBe('daily');
+    expect(formToProjectConfig(makeForm({ executionMode: 'script', modelGroup: 'daily' }), 'm2').modelGroup).toBeUndefined();
+    expect(scheduleToProjectConfig({ id: 's1', name: 'Daily', prompt: 'Check', cronExpr: '0 9 * * *', timezone: 'UTC',
+      agentKind: 'codex', model: 'gpt-saved', modelGroup: 'daily' } as Schedule).modelGroup).toBe('daily');
+  });
+});
+
 describe('project automation providerId serialization', () => {
   // PR #6832: promotion and subsequent edits must keep the provider's device.
   // Unit: both production projections cross JSON, which previously lost it.
@@ -95,6 +107,19 @@ describe('project automation providerId serialization', () => {
 });
 
 describe('project automation explicit Harness serialization', () => {
+  // User decision 2026-11-16 / unit: a newly supplied default must not need an ID allowlist
+  // to clear a stale route when the owner selects buddy inheritance.
+  it('serializes buddy inheritance for a new default task ID without retaining its old route', () => {
+    const config = JSON.parse(JSON.stringify(formToProjectConfig(makeForm({
+      followTeammateModel: true, agentKind: 'codex', modelAgentKind: 'codex',
+      model: 'old-model', providerId: 'old-provider', modelAgentDeviceId: 'remote',
+      agentDeviceId: 'remote', effort: 'high', fastMode: 'ultrafast',
+    }), 'future-default-task')));
+    expect(config.followTeammateModel).toBe(true);
+    for (const key of ['model', 'agentKind', 'modelAgentKind', 'modelAgentDeviceId',
+      'providerId', 'agentDeviceId', 'effort', 'fastMode']) expect(config).not.toHaveProperty(key);
+  });
+
   it('preserves the selection through JSON and omits its marker when following', () => {
     const form = makeForm({ agentKind: 'pi', modelAgentKind: 'pi', model: 'test-model',
       providerId: 'custom', effort: 'medium', fastMode: true, persistentSession: true,

@@ -34,7 +34,6 @@ import {
 } from '../dailySpend';
 import { incrementDailyModelUsage } from '../dailyModelUsage';
 import { readUsageHistoryWith } from '../../usage/usageHistory';
-import { USD_TO_CNY_FIXED_RATE } from '../../../shared/regionalMoney';
 import {
   __resetActiveLedgerCurrencyForTesting,
   setActiveLedgerCurrency,
@@ -167,7 +166,7 @@ describe('daily ledger multi-currency rows', () => {
         isModelPricingRefreshInFlight: () => false,
         todayKey: () => localDayKey(),
       });
-      const expected = currency === 'CNY' ? 4 * USD_TO_CNY_FIXED_RATE + 10 : 4;
+      const expected = currency === 'CNY' ? 10 : 4;
       const today = await getTodaySpend();
       expect(today).toMatchObject({ amount: expected, currency, approximate: false });
       expect(today).toEqual((await readHistory()).totals.today);

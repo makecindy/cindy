@@ -76,10 +76,14 @@ describe('legacy consent migration window guards', () => {
     // 用户主动跳过登录无歧义:调 seal(无条件),不是 close(带探测闸)。
     expect(body).toContain('if (authManager.isLocalMode()) sealMigrationWindowOrLog();');
     expect(body).not.toContain('closeMigrationWindowOrLog');
-    // 封窗要发生在广播之前:广播出去的 allowed 必须已经反映本地模式。
-    expect(body.indexOf('sealMigrationWindowOrLog()')).toBeLessThan(
-      body.indexOf('broadcastSettingsChange()'),
-    );
+    // 统一通知入口仍须先封窗再广播，避免未同意的本地用户被静默纳入统计。
+    const applyIndex = body.indexOf('applyPermissionChange()');
+    expect(applyIndex).toBeGreaterThan(-1);
+    expect(body.indexOf('sealMigrationWindowOrLog()')).toBeLessThan(applyIndex);
+    const applyStart = serviceSource.indexOf('function applyPermissionChange(');
+    expect(applyStart).toBeGreaterThan(-1);
+    const applyBody = serviceSource.slice(applyStart, serviceSource.indexOf('\n}\n', applyStart));
+    expect(applyBody).toContain('broadcastSettingsChange();');
   });
 
   it('上报结论叠加本地模式运行时闸,且不写盘', () => {

@@ -25,7 +25,9 @@ import { SETTINGS_PAGE_TITLE_CLASS, SettingsCard, SettingsSection } from '@/comp
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
+import { usePluginEngines, useRemotePluginEngines } from '@/hooks/usePluginEngines';
 import { useProviders } from '@/hooks/useProviders';
+import { pluginEngineKeyFromProviderId } from '../../../shared/pluginEngines';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { ProviderGroupSection } from '@/features/provider-group/ProviderGroupSection';
@@ -60,6 +62,7 @@ export function ProviderShareManagePage({
   providerId,
   providerName,
   providerIcon,
+  backLabel,
   gate,
   deviceId,
   deviceName,
@@ -70,6 +73,7 @@ export function ProviderShareManagePage({
   providerId: string;
   providerName: string;
   providerIcon: ReactNode;
+  backLabel?: string;
   gate: ProviderShareGate;
   deviceId?: string;
   deviceName?: string;
@@ -81,8 +85,11 @@ export function ProviderShareManagePage({
   const { confirm } = useConfirmDialog();
   const time = useShareTimeFormat();
   const devices = useDeviceLinkDeviceList();
+  const isPluginEngine = pluginEngineKeyFromProviderId(providerId) !== null;
   const { providers } = useProviders();
-  const remoteCatalog = useDeviceProviders(deviceId);
+  const remoteCatalog = useDeviceProviders(isPluginEngine ? undefined : deviceId);
+  const localPluginEngines = usePluginEngines(isPluginEngine && !deviceId);
+  const remotePluginEngines = useRemotePluginEngines(isPluginEngine && deviceId ? deviceId : undefined, 'once');
   const selfDeviceName = deviceId ? deviceName ?? devices?.find((device) => device.deviceId === deviceId)?.name ?? null
     : devices?.find((device) => device.isSelf)?.name ?? null;
   const [remoteGroup, setRemoteGroup] = useState<ProviderGroupConfig | null>(initialGroup ?? null);
@@ -327,11 +334,17 @@ export function ProviderShareManagePage({
 
   const ready = state?.ready === true;
   const canCreateLink = gate === 'on' && ready && !loadFailed;
-  const providerForApproval = (deviceId ? remoteCatalog.providers : providers).find((provider) => provider.id === providerId);
-  const sharesClaudeEmail = sharesClaudeLoginEmail(providerForApproval);
+  const providerForApproval = isPluginEngine
+    ? undefined
+    : (deviceId ? remoteCatalog.providers : providers).find((provider) => provider.id === providerId);
+  const sharesClaudeEmail = !isPluginEngine && sharesClaudeLoginEmail(providerForApproval);
   // 审批只用当前目录中的目标供应商分类；进入管理页时的旧投影不能证明它仍然存在。
-  const providerClassificationReady = providerForApproval !== undefined
-    && (!deviceId || (!remoteCatalog.loading && remoteCatalog.error === null));
+  const providerClassificationReady = isPluginEngine
+    ? (deviceId
+        ? remotePluginEngines.engines !== null && remotePluginEngines.engines.some((engine) => engine.providerId === providerId)
+        : localPluginEngines.some((engine) => engine.providerId === providerId))
+    : providerForApproval !== undefined
+      && (!deviceId || (!remoteCatalog.loading && remoteCatalog.error === null));
   const memberActions = useMemo<ProviderShareMemberActions>(() => ({
     busy: (id) => loadFailed || busy.has(id),
     canApproveReshare: providerClassificationReady,
@@ -359,7 +372,7 @@ export function ProviderShareManagePage({
         className="mb-4 inline-flex h-8 shrink-0 items-center gap-2 self-start rounded-full px-2 text-13 font-medium text-[var(--settings-section-sublabel)] transition-colors hover:bg-sidebar-item-hover hover:text-[var(--settings-section-title)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
       >
         <ArrowLeft size={16} aria-hidden />
-        {t('settings.providers.title')}
+        {backLabel ?? t('settings.providers.title')}
       </button>
 
       {/* 标题已经说明这页是什么；这台电脑的名字由组里本机那一行承载，不在这里重复一遍。 */}
@@ -532,7 +545,7 @@ export function ProviderShareManagePage({
         </SettingsSection>
       )}
 
-      {deviceId && providerForApproval?.subscriptionFastPolicy && (
+      {!isPluginEngine && deviceId && providerForApproval?.subscriptionFastPolicy && (
         <div className="mt-6 shrink-0">
           <SubscriptionFastSetting provider={providerForApproval} deviceId={deviceId} />
         </div>
@@ -541,11 +554,13 @@ export function ProviderShareManagePage({
         {...(providerForApproval?.subscriptionPoolAlias ? { poolName: (deviceId ? remoteCatalog.providers : providers)
           .find(entry => entry.id === (providerForApproval.subscriptionPoolTarget ?? 'openai'))?.name ?? 'OpenAI' } : {})} />
 
-      <ProviderGroupSection
-        providerId={providerId} providerName={providerName} deviceId={deviceId} deviceName={deviceName}
-        fastPolicySupported={Boolean(providerForApproval?.subscriptionFastPolicy)}
-        initialConfig={initialGroup} remoteProvider={remoteProvider} onConfigChange={setRemoteGroup}
-      />
+      {!isPluginEngine && (
+        <ProviderGroupSection
+          providerId={providerId} providerName={providerName} deviceId={deviceId} deviceName={deviceName}
+          fastPolicySupported={Boolean(providerForApproval?.subscriptionFastPolicy)}
+          initialConfig={initialGroup} remoteProvider={remoteProvider} onConfigChange={setRemoteGroup}
+        />
+      )}
 
       <ProviderShareVisibilitySection key={`${deviceId ?? 'local'}:${providerId}`} providerId={providerId} deviceId={deviceId} />
 

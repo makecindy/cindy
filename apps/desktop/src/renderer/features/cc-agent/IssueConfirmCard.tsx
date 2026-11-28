@@ -210,7 +210,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
         }
       }}
       className={cn(
-        'w-full max-w-[914px] overflow-hidden rounded-[12px] border',
+        'w-full max-w-[914px] overflow-hidden rounded-xl border',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
       )}
     >
@@ -244,8 +244,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
                 ].join(' / ')}
                 value={type}
                 onValueChange={(next) => updateDraft({ type: next })}
-                height={28}
-                optionHeight={24}
+                density="sm"
                 optionClassName="px-2.5"
                 options={[
                   { value: 'bug', label: t('issueAgent.confirm.typeBug') },
@@ -268,7 +267,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
               maxLength={TITLE_MAX}
               onChange={(e) => updateDraft({ title: e.target.value })}
               className={cn(
-                'mt-1 w-full rounded-[8px] border px-3 py-2',
+                'mt-1 w-full rounded-lg border px-3 py-2',
                 'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
                 'text-13 leading-tight text-[var(--chat-input-text)]',
                 'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',
@@ -289,7 +288,7 @@ export function IssueConfirmCard({ sessionId, pending, onRespond }: IssueConfirm
               onChange={(e) => updateDraft({ body: e.target.value })}
               rows={8}
               className={cn(
-                'mt-1 w-full resize-y rounded-[8px] border px-3 py-2',
+                'mt-1 w-full resize-y rounded-lg border px-3 py-2',
                 'border-[var(--perm-code-border)] bg-[var(--perm-code-bg)]',
                 'font-mono text-13 leading-relaxed text-[var(--chat-input-text)]',
                 'focus:outline-none focus:ring-1 focus:ring-[var(--focus-ring)]',

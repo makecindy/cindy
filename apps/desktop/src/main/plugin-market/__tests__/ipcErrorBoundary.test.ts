@@ -41,7 +41,7 @@ describe('Plugin Market IPC error boundary', () => {
     expect(body).toContain("throwIpcError('INTERNAL', 'Plugin market operation failed');");
     // The three new catalog/query/recommendation entry points must use the same
     // sanitized boundary as the existing fourteen market operations.
-    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(17);
+    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(18);
   });
 
   it('validates local icon keys with the same reserved-prefix contract as the service', () => {

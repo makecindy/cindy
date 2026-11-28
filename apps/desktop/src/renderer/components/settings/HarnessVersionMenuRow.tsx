@@ -33,7 +33,7 @@ export function HarnessVersionMenuRow({ label, manageLabel, version, status, pen
             <ChevronDown size={13} aria-hidden className="shrink-0" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" sideOffset={6} className="z-[10000] w-[272px] max-w-[calc(100vw-24px)] p-1.5">
+        <DropdownMenuContent align="end" sideOffset={6} className="w-[272px] max-w-[calc(100vw-24px)] p-1.5">
           {children}
         </DropdownMenuContent>
       </DropdownMenu>

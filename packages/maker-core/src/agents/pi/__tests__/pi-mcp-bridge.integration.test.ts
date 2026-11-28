@@ -193,8 +193,11 @@ function scriptedAnthropicTurn(requestBody: string): string {
   }
   if (requestBody.includes('discover Cindy controls')) {
     const call = (tool: string, args: Record<string, unknown>) => ({ name: 'cindy_mcp_call_tool', input: { server: 'cindy_helper', tool, args } });
+    const missingQuery = 'qzv10721xkfj982none';
     const calls = [
+      { name: 'cindy_mcp_list_tools', input: { query: missingQuery } },
       { name: 'cindy_mcp_list_tools', input: { server: 'cindy_helper', tool: 'list_tools' } },
+      call('list_tools', { query: missingQuery }),
       call('list_tools', { query: '壁纸' }),
       call('list_tools', { key: 'appearance.wallpaper' }),
       { name: 'cindy_mcp_list_tools', input: { server: 'cindy_helper', tool: 'call_tool' } },
@@ -203,7 +206,7 @@ function scriptedAnthropicTurn(requestBody: string): string {
       call('call_tool', { name: 'get_app_settings', args: { section: 'appearance' } }),
     ];
     const step = calls[toolResultCount];
-    return step ? anthropicToolTurn(toolResultCount + 1, step.name, step.input) : anthropicTextTurn(8, 'Controls verified');
+    return step ? anthropicToolTurn(toolResultCount + 1, step.name, step.input) : anthropicTextTurn(toolResultCount + 1, 'Controls verified');
   }
   // #10691: malformed plugin calls -> actionable feedback -> corrected calls.
   // This scripts model output; it tests real Pi routing, not model decision quality.
@@ -460,6 +463,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
   let recoveryWrites = 0;
   const recoveryCalls: string[] = [];
   const recoveryHandshakes: Array<string | string[] | undefined> = [];
+  let recoveryDeletes = 0;
+  let peerHandshakes = 0;
 
   beforeAll(async () => {
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-mcp-int-'));
@@ -481,13 +486,23 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       seenMcpUrls.push(req.url ?? '');
       const auth = req.headers.authorization ?? '';
       if (req.url?.includes('/recovery')) {
-        if (auth !== `Bearer ${MCP_TOKEN}`) { res.writeHead(401).end(); return; }
+        if (auth !== `Bearer ${MCP_TOKEN}` && auth !== `Bearer ${REMOTE_BEARER}`) { res.writeHead(401).end(); return; }
+        if (req.method === 'DELETE') {
+          recoveryDeletes += 1;
+          res.writeHead(204).end();
+          return;
+        }
         const body = JSON.parse(await readBody(req));
         if (body.id === undefined) { res.writeHead(202).end(); return; }
         let result: unknown = {};
         if (body.method === 'initialize') {
-          recoveryHandshakes.push(req.headers['mcp-session-id']);
-          res.setHeader('mcp-session-id', 'session-' + recoveryHandshakes.length);
+          if (auth === `Bearer ${REMOTE_BEARER}`) {
+            peerHandshakes++;
+            res.setHeader('mcp-session-id', 'peer-session');
+          } else {
+            recoveryHandshakes.push(req.headers['mcp-session-id']);
+            res.setHeader('mcp-session-id', 'session-' + recoveryHandshakes.length);
+          }
           result = { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'recovery', version: '1' } };
         } else if (body.method === 'tools/list') {
           result = { tools: [{ name: 'echo', description: 'Recovery fixture', inputSchema: {
@@ -901,7 +916,18 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
           mcpBridge: { token: MCP_TOKEN, servers: [{ name: 'cindy_helper', url: mcpUrl + '/controls' }] },
         };
         if (bridgeMode === 'recovery') {
-          return { mcpBridge: { token: MCP_TOKEN, servers: [{ name: 'recovery', url: mcpUrl + '/recovery' }] } };
+          // #10775: one startup descriptor repeats a server. A second identity
+          // at the same endpoint uses its own credential and must connect too.
+          const server = { name: 'recovery', url: mcpUrl + '/recovery' };
+          return {
+            mcpBridge: { token: MCP_TOKEN, servers: [server, server, {
+              name: 'peer', url: server.url, remote: {
+                headerEnvVars: { authorization: 'CINDY_PI_REMOTE_MCP_SECRET_0' },
+                startupTimeoutMs: 1_000, requestTimeoutMs: 5_000,
+              },
+            }] },
+            mcpEnv: { CINDY_PI_REMOTE_MCP_SECRET_0: `Bearer ${REMOTE_BEARER}` },
+          };
         }
         if (bridgeMode === 'remote') {
           return {
@@ -1197,6 +1223,8 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
 
   // Integration: the real Pi binary must traverse both discovery layers with
   // the production helper schemas. Scripted model only; no claim of model choice quality.
+  // #10721: an unmatched query at either layer must explain which existing filter to try.
+  // The adjacent successful search only exercises matching, not recovery.
   it('discovers and calls Cindy controls through the real Pi gateway', { timeout: 90_000 }, async () => {
     controlCalls.length = 0; controlSize = 16;
     const approvals: string[] = [];
@@ -1204,10 +1232,16 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
       if (request.kind === 'permission') approvals.push(request.toolName);
       return { kind: 'permission', behavior: 'allow' };
     }, 'controls', 'discover Cindy controls', false, 'controls-first-use');
-    const firstSchema = JSON.parse(latestToolResultContent(requests[1]));
+    const gatewayMiss = JSON.parse(latestToolResultContent(requests[1]));
+    expect.soft(gatewayMiss).toMatchObject({ ok: true, tools: [], total: 0, hint: expect.stringMatching(/Omit query.*server/) });
+    const firstSchema = JSON.parse(latestToolResultContent(requests[2]));
     expect(firstSchema.tools[0].inputSchema.properties).toHaveProperty('query');
-    const search = JSON.parse(latestToolResultContent(requests[2]));
+    const helperMiss = JSON.parse(latestToolResultContent(requests[3]));
+    expect.soft(helperMiss).toMatchObject({ ok: true, items: [], total: 0, complete: true, nextCursor: null,
+      hint: expect.stringMatching(/list_tools\(\{category\}\).*list_tools\(\{name\}\)/) });
+    const search = JSON.parse(latestToolResultContent(requests[4]));
     expect(search.items).toContainEqual(expect.objectContaining({ key: 'appearance.wallpaper', availability: 'available' }));
+    expect(search).not.toHaveProperty('hint');
     expect(controlCalls).toEqual([
       { callerSessionId: 'control-owner', operation: 'update', section: 'appearance', patch: { uiSize: 17 } },
       { callerSessionId: 'control-owner', operation: 'get', section: 'appearance' },
@@ -1238,14 +1272,18 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
     recoveryWrites = 0;
     recoveryCalls.length = 0;
     recoveryHandshakes.length = 0;
+    peerHandshakes = 0;
+    recoveryDeletes = 0;
     const approvals: string[] = [];
     const { requestBodies } = await runOneTurn('ask', async (req) => {
       if (req.kind === 'permission') approvals.push(req.toolName);
       return { kind: 'permission', behavior: 'allow' };
     }, 'recovery', 'recover MCP transport', false, 'recovery-' + mode);
     expect(recoveryCalls).toEqual(['write', 'inspect']);
+    expect(peerHandshakes).toBe(1);
     expect(recoveryHandshakes).toEqual([undefined, undefined]);
     expect(recoveryWrites).toBe(mode === 'expired' ? 0 : 1);
+    expect(recoveryDeletes).toBe(1);
     expect(approvals.filter(name => name === 'mcp__recovery__echo')).toHaveLength(2);
     expect(requestBodies.at(-1)).toContain('not replayed');
     expect(requestBodies.at(-1)).toContain('writes=' + recoveryWrites);
@@ -1939,20 +1977,17 @@ describe.skipIf(!piAvailable)('PiAgent × cindy-bridge (real pi + MCP bridge + p
         })();
         await handle.send({ type: 'user', content: 'inspect unavailable MCP' });
         await done;
-        await waitFor(() => {
+        const failures = [
+          /connect rejecting_remote failed: HTTP 401/,
+          /connect slow_remote failed: startup timed out during initialize after \d+ms \(startup budget 50ms, request limit 5000ms\)/,
+          /connect stalling_body_remote failed: startup timed out during initialize after \d+ms \(startup budget 50ms, request limit 5000ms\)/,
+          /connect paginated_timeout_remote failed: startup timed out during tools\/list after \d+ms \(startup budget 200ms, request limit 5000ms\)/,
+        ];
+        await vi.waitFor(() => {
           const logs = JSON.stringify(entries);
-          return (
-              logs.includes('HTTP 401')
-            && logs.includes('connect slow_remote failed: request timed out')
-            && logs.includes('connect stalling_body_remote failed: request timed out')
-            && logs.includes('connect paginated_timeout_remote failed: request timed out')
-            );
-          });
+          for (const failure of failures) expect(logs).toMatch(failure);
+        }, { timeout: 5000 });
         const logs = JSON.stringify(entries);
-        expect(logs).toContain('connect rejecting_remote failed: HTTP 401');
-        expect(logs).toContain('connect slow_remote failed: request timed out');
-        expect(logs).toContain('connect stalling_body_remote failed: request timed out');
-        expect(logs).toContain('connect paginated_timeout_remote failed: request timed out');
         expect(timedOutPaginationCursors).toEqual([undefined, 'slow-page']);
         const requestBodies = modelRequestBodies.slice(requestBodyStart);
         expect(requestBodies.some((body) =>

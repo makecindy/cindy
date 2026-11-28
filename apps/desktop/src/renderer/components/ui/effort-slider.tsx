@@ -220,7 +220,7 @@ export function EffortSlider({
         >
           <div
             className={cn(
-              'pointer-events-none absolute bottom-[calc(100%-2px)] left-1/2 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-[7px] px-2.5 py-1',
+              'pointer-events-none absolute bottom-[calc(100%-2px)] left-1/2 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-xl px-2.5 py-1',
               'bg-[var(--tooltip-bg)] text-11 text-[var(--tooltip-text)] opacity-0 transition-opacity duration-100',
               'group-hover/effort:opacity-100',
               dragging && 'opacity-100',

@@ -23,6 +23,13 @@ const base = {
 };
 
 describe('assessRuntimeModelSwitchGate', () => {
+  // Quota fallback must recover known target pressure even without old-route
+  // metadata. Previously only a verified shrink could reach recovery (unit).
+  it.each([undefined, twoHundredK, 128_000])('prepares an overflowing target with current window %s', verifiedCurrentWindow => {
+    expect(assessRuntimeModelSwitchGate({ ...base, verifiedCurrentWindow,
+      verifiedTargetWindow: twoHundredK, contextTokens: 220_000 }))
+      .toEqual({ skipRebuild: false, defer: false });
+  });
   // Codex can compact with the previous model before sampling the smaller one.
   // Rebuilding here would discard the native history before it gets that chance.
   it.each([false, true])('leaves Codex shrink compaction to native (remote=%s)', (isRemote) => {

@@ -7,8 +7,48 @@ import type { TextChannelIM, ImFinalOutput } from '../channelIM.js';
 import type { IMHost, IMMessageEvent, IMStatus, SendFileResult } from '../types.js';
 import { classifyInboundAttachment, UnsupportedInboundMediaError } from '../inboundKind.js';
 import { isPrivateListener, LocalWebhookReceiver } from '../localWebhook.js';
-import { BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesAttachment, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
+import { AUTOMATION_DENIED, BlueBubblesApi, BlueBubblesApiError, blueBubblesOrigin, BLUEBUBBLES_MAX_BYTES, type BlueBubblesAttachment, type BlueBubblesChat, type BlueBubblesMessage } from './api.js';
+import { isHeicPhoto, localHeicPreview } from './heic.js';
 import { BlueBubblesReceipts, type BlueBubblesStateStorage } from './state.js';
+
+/**
+ * The on-disk name of a fetched original, kept within one 255-byte file name together with the
+ * `<digest16>-preview-` prefix (25 bytes); downloads stage under their own short names. Keeps the extension and
+ * replaces characters Windows refuses in file names.
+ */
+function attachmentFileName(raw: string): string {
+  const cleaned = path.basename(raw.replace(/\\/g, '/')).replace(/[\u0000-\u001f<>:"/\\|?*]/g, '_')
+    .replace(/^\.+/, '').replace(/[. ]+$/, '');
+  const limit = 190;
+  if (Buffer.byteLength(cleaned, 'utf8') <= limit) return cleaned;
+  const rawExt = path.extname(cleaned);
+  const ext = Buffer.byteLength(rawExt, 'utf8') <= 16 ? rawExt : '';
+  let stem = '';
+  let bytes = Buffer.byteLength(ext, 'utf8');
+  for (const ch of cleaned.slice(0, cleaned.length - rawExt.length)) {
+    bytes += Buffer.byteLength(ch, 'utf8');
+    if (bytes > limit) break;
+    stem += ch;
+  }
+  return stem + ext;
+}
+
+/** BlueBubbles can answer before Messages has the full file; its record states the real size. */
+function isShortCopy(attachment: BlueBubblesAttachment, bytes: Uint8Array): boolean {
+  return (attachment.totalBytes ?? 0) > 0 && bytes.byteLength < attachment.totalBytes!;
+}
+/** A converted complete photo is reusable by history; a short transfer must be retried. */
+function heicPreviewToken(token: string, attachment: BlueBubblesAttachment): string {
+  return `${token}:heic-preview:${attachment.totalBytes || 0}`;
+}
+/** Human-readable size for attachment notes the model reads. */
+function formatBytes(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+/** Where the original is and how to get it; shown inside the untrusted attachment data block. */
+function originalPointer(messageId: string, attachmentGuid: string): string {
+  return `message_id=${messageId}，attachment_guid=${attachmentGuid}；可用 cindy_imessage.fetch_attachment 取原件`;
+}
 
 export interface BlueBubblesConfig {
   serverUrl: string;
@@ -58,6 +98,7 @@ export interface BlueBubblesOptions {
   secretPrefix: string;
   /** Host-persisted route identity survives a server address edit. */
   contextId?(): string | null;
+  delegatedGroupAlias?(chatId: string, authorization: string): Promise<string | undefined>;
   storage: BlueBubblesStateStorage;
   receiver(host: string, port: number): LocalWebhookReceiver;
   api?(origin: string, password: string): BlueBubblesApi;
@@ -88,6 +129,8 @@ function mentionsSelf(body: unknown, selfAddress: string | undefined): boolean {
 
 export class BlueBubblesIM extends BaseIM implements TextChannelIM {
   private status: IMStatus = { kind: 'idle' };
+  /** Wait between re-downloads while Messages finishes an incoming original. */
+  shortCopyRetryMs = 5_000;
   private readonly messages = new Set<Handler>();
   private readonly statuses = new Set<(status: IMStatus) => void>();
   private config: BlueBubblesConfig | null = null;
@@ -158,16 +201,22 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       && chat.participants![0]!.address.toLowerCase() === this.config?.ownerAddress)?.guid ?? null;
   }
   isGroup(chatGuid: string): boolean { return /^(?:iMessage|any);\+;/.test(chatGuid) || (this.chats.get(chatGuid)?.participants?.length ?? 0) > 1; }
-  isGroupInvocation(text: string): boolean {
+  /** Identifies this chat's continuous grant on the current bridge without disclosing its address. */
+  groupAuthorization(chat: string): string | null {
+    if (!this.config || !this.receipts || !this.chats.has(chat) || !this.isGroup(chat)) return null;
+    return createHash('sha256').update(JSON.stringify([this.config.serverUrl, this.config.ownerAddress,
+      chat, this.receipts.activatedAtFor(chat)])).digest('hex');
+  }
+  isGroupInvocation(text: string, aliases = this.config?.groupAliases ?? []): boolean {
     const current = text.split('\n').filter(line => !line.trimStart().startsWith('>')).join('\n')
       .replace(/"[^"\n]*"|“[^”\n]*”|「[^」\n]*」|`[^`\n]*`/g, '');
-    return (this.config?.groupAliases ?? []).some(alias => {
+    return aliases.some(alias => {
       const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return new RegExp(`(^|[^\\p{L}\\p{N}_@])@${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(current);
     });
   }
   getChat(chatGuid: string): BlueBubblesChat | undefined { return this.chats.get(chatGuid); }
-  health(): { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number } {
+  health(): { lastCatchUpAt: number | null; lastWebhookAt: number | null; uncertainInputs: number; uncertainSends: number; automationDenied?: boolean } {
     return { lastCatchUpAt: this.lastCatchUpAt, lastWebhookAt: this.lastWebhookAt,
       ...(this.receipts?.uncertainCounts(this.activeDispatches, this.activeSends)
         ?? { uncertainInputs: 0, uncertainSends: 0 }) };
@@ -625,7 +674,10 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
           const group = this.isGroup(chat.guid);
           // The Apple thread root can point to our message even when the direct
           // reply targets someone else. Leave it to context, never activation.
-          const invoked = group && (this.isGroupInvocation(message.text ?? '')
+          const grant = group && this.groupAuthorization(chat.guid);
+          const alias = grant && await this.options.delegatedGroupAlias?.(chat.guid, grant);
+          this.assertLive(generation);
+          const invoked = group && (this.isGroupInvocation(message.text ?? '', alias ? [alias] : undefined)
             || (typeof message.replyToGuid === 'string' && receipts.hasSentMessage(chat.guid, message.replyToGuid))
             || mentionsSelf(message.attributedBody, this.verifiedMentionAddress));
           event = { channelName: 'imessage', senderId: chat.guid, chatId: chat.guid,
@@ -788,12 +840,33 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     if (this.live(generation) && receipts.isPending(guid)) this.metadata.set(guid, message);
   }
 
-  private async stageAttachment(attachment: BlueBubblesAttachment, bytes: Uint8Array) {
+  private async stageAttachment(attachment: BlueBubblesAttachment, bytes: Uint8Array, api: BlueBubblesApi, generation: number) {
     const name = attachment.transferName || attachment.guid;
     const kind = classifyInboundAttachment(attachment.mimeType, name);
-    if (kind.kind === 'file') return this.host.files?.stage({ integration: 'imessage', buffer: bytes, fileName: name });
-    const params = { integration: 'imessage' as const, token: `${this.botContextId}:${attachment.guid}`, buffer: bytes, mimeType: kind.mimeType };
-    return kind.kind === 'image' ? this.host.media?.cacheImage({ ...params, staging: true }) : this.host.media?.cacheMedia?.(params);
+    const token = `${this.botContextId}:${attachment.guid}`;
+    if (kind.kind === 'image' && isHeicPhoto(bytes)) {
+      // Keep the original retrievable by GUID even if the bridge has no working decoder.
+      const previewToken = isShortCopy(attachment, bytes) ? token + ':preview' : heicPreviewToken(token, attachment);
+      const cachePreview = async (preview: Uint8Array | null, mimeType: string) => {
+        this.assertLive(generation);
+        if (!preview?.byteLength) return null;
+        try {
+          return await this.host.media?.cacheImage({ integration: 'imessage', token: previewToken,
+            buffer: preview, mimeType, staging: true });
+        } catch (error) {
+          if (!(error instanceof UnsupportedInboundMediaError)) throw error;
+          return null;
+        }
+      };
+      // Prefer the local decoder so mislabeled files do not depend on bridge-side MIME detection.
+      const stored = await cachePreview(await localHeicPreview(bytes), 'image/jpeg')
+        ?? await cachePreview(await api.downloadImagePreview(attachment.guid).catch(() => null), 'image/png');
+      return { stored, heic: true };
+    }
+    if (kind.kind === 'file') return { stored: await this.host.files?.stage({ integration: 'imessage', buffer: bytes, fileName: name }) };
+    // A short copy is never cached as the attachment itself, so a later read downloads it again.
+    const params = { integration: 'imessage' as const, token: token + (isShortCopy(attachment, bytes) ? ':preview' : ''), buffer: bytes, mimeType: kind.mimeType };
+    return { stored: kind.kind === 'image' ? await this.host.media?.cacheImage({ ...params, staging: true }) : await this.host.media?.cacheMedia?.(params) };
   }
 
   /** Only read the explicit reply and selected background from this connected chat. */
@@ -827,19 +900,38 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
         const name = item.transferName || item.guid;
         const kind = classifyInboundAttachment(item.mimeType, name);
         const image = kind.kind === 'image';
-        if ((image ? images : files) === 0 || (item.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) {
+        if ((item.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) {
+          unavailable.push(`${name}（${formatBytes(item.totalBytes!)}，超过直接读取上限；${originalPointer(guid, item.guid)}）`);
+          continue;
+        }
+        if ((image ? images : files) === 0) {
           unavailable.push(name);
           continue;
         }
         try {
-          const cached = image ? await this.host.media?.getCachedImage('imessage', `${this.botContextId}:${item.guid}`,
-            { staging: true, shouldReuse: () => this.live(generation) }) : null;
+          const token = `${this.botContextId}:${item.guid}`;
+          const cacheOptions = { staging: true, shouldReuse: () => this.live(generation) };
+          const cached = image ? await this.host.media?.getCachedImage('imessage', token, cacheOptions) : null;
           this.assertLive(generation);
-          let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined = cached;
+          // An earlier short copy cached under this attachment is not the attachment.
+          const cachedSize = cached && item.totalBytes ? await fs.stat(cached.absPath).then(stat => stat.size, () => 0) : 0;
+          let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined =
+            cached && !(item.totalBytes && cachedSize < item.totalBytes) ? cached : null;
+          if (!stored && image) {
+            this.assertLive(generation);
+            stored = await this.host.media?.getCachedImage('imessage', heicPreviewToken(token, item), cacheOptions);
+            this.assertLive(generation);
+          }
           if (!stored) {
             const bytes = await api.download(item.guid);
             this.assertLive(generation);
-            stored = await this.stageAttachment(item, bytes);
+            const result = await this.stageAttachment(item, bytes, api, generation);
+            stored = result.stored;
+            if (result.heic && !stored) {
+              unavailable.push(`${name}（${originalPointer(guid, item.guid)}）`);
+              continue;
+            }
+            if (isShortCopy(item, bytes)) unavailable.push(`${name}（只拿到 ${formatBytes(bytes.byteLength)} 的预览，原件 ${formatBytes(item.totalBytes!)}；${originalPointer(guid, item.guid)}）`);
           }
           if (!this.live(generation)) await stored?.discard?.();
           this.assertLive(generation);
@@ -870,21 +962,45 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.assertLive(generation);
       for (const attachment of message.attachments ?? []) {
         const name = attachment.transferName || attachment.guid;
-        if ((attachment.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) { event.unsupported.push({ type: 'oversize', label: name }); continue; }
+        const oversize = () => event.unsupported.push({ type: 'oversize', retrievable: true, label:
+          `${name}（${attachment.totalBytes ? formatBytes(attachment.totalBytes) : '超过 64 MB'}，超过直接读取上限；${originalPointer(guid, attachment.guid)}）` });
+        if ((attachment.totalBytes ?? 0) > BLUEBUBBLES_MAX_BYTES) { oversize(); continue; }
         let bytes: Uint8Array;
-        try { bytes = await api.download(attachment.guid); }
-        catch (error) {
+        try {
+          bytes = await api.download(attachment.guid);
+          // Messages may still be transferring the original; wait briefly for the full file.
+          for (let attempt = 0; attempt < 2 && isShortCopy(attachment, bytes); attempt++) {
+            await new Promise(resolve => setTimeout(resolve, this.shortCopyRetryMs));
+            this.assertLive(generation);
+            if (this.cancelledEvents.has(event)) return;
+            bytes = await api.download(attachment.guid);
+          }
+        } catch (error) {
           this.assertLive(generation);
+          if (error instanceof BlueBubblesApiError && error.code === 'BLUEBUBBLES_HTTP_404') {
+            event.unsupported.push({ type: 'unavailable', label: name });
+            continue;
+          }
           if (!(error instanceof BlueBubblesApiError) || error.code !== 'BLUEBUBBLES_RESPONSE_TOO_LARGE') throw error;
-          event.unsupported.push({ type: 'oversize', label: name });
+          oversize();
           continue;
         }
         this.assertLive(generation);
+        if (isShortCopy(attachment, bytes)) {
+          event.unsupported.push({ type: 'preview', retrievable: true, label:
+            `${name}（本轮附件只有 ${formatBytes(bytes.byteLength)}，原件 ${formatBytes(attachment.totalBytes!)}；${originalPointer(guid, attachment.guid)}）` });
+        }
         if (this.cancelledEvents.has(event)) return;
         const kind = classifyInboundAttachment(attachment.mimeType, name);
         let stored: { absPath: string; url?: string; mimeType?: string; discard?: () => Promise<void> } | null | undefined;
         try {
-          stored = await this.stageAttachment(attachment, bytes);
+          const result = await this.stageAttachment(attachment, bytes, api, generation);
+          stored = result.stored;
+          if (result.heic) {
+            if (!isShortCopy(attachment, bytes)) event.unsupported.push({ type: 'original', retrievable: true,
+              label: `${name}（HEIC 原件；${originalPointer(guid, attachment.guid)}）` });
+            if (!stored) continue;
+          }
         } catch (error) {
           if (!(error instanceof UnsupportedInboundMediaError)) throw error;
           event.unsupported.push({ type: 'unsupported', label: name });
@@ -941,9 +1057,14 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     }
     if (changed) void this.pump(generation).catch(error => this.fail(generation, error));
   }
-  private async send(chatId: string, text: string | null, operation: (api: BlueBubblesApi, id: string) => Promise<{ guid: string }>): Promise<{ messageId: string }> {
+  private async send(chatId: string, text: string | null, operation: (api: BlueBubblesApi, id: string) => Promise<{ guid: string }>, requestId?: string): Promise<{ messageId: string }> {
     const { api, receipts, generation } = this.target(chatId);
-    const id = randomUUID();
+    const id = requestId ?? randomUUID();
+    if (requestId && receipts.hasOutgoing(requestId)) {
+      const messageId = receipts.confirmedSend(requestId, chatId);
+      if (!messageId) throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
+      return { messageId };
+    }
     const echoSignature = text === null ? 'file' : receipts.textSignature(text);
     receipts.outgoing(id, { chatId, state: 'sending', echoSignature });
     let sent = false;
@@ -958,10 +1079,14 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
       this.assertLive(generation);
       this.wakeSendWaiters(chatId, generation);
       return { messageId: result.guid };
-    } catch {
+    } catch (error) {
       const confirmed = receipts.confirmedSend(id);
       if (confirmed && this.live(generation)) return { messageId: confirmed };
-      if (!sent) receipts.outgoing(id, { chatId, state: 'unknown', echoSignature });
+      // The server reports only the final AppleScript attempt. A prior attempt
+      // may have succeeded, so retain the correlation and never replay here.
+      const denied = error instanceof BlueBubblesApiError && error.code === AUTOMATION_DENIED;
+      if (!sent) receipts.outgoing(id, { chatId, state: 'unknown', echoSignature, ...(denied && { automationDenied: true }) });
+      if (denied) throw error;
       throw new Error('BLUEBUBBLES_SEND_UNKNOWN');
     } finally {
       if (this.live(generation)) { this.activeSends.delete(id); this.setStatus(this.status); }
@@ -973,10 +1098,73 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     this.assertLive(generation);
     return rows.filter(row => row.chats?.some(chat => chat.guid === chatId));
   }
+  /**
+   * Download one attachment's stored original into `destDir`. The message must be in this connected
+   * chat and carry that attachment; credentials and the BlueBubbles origin never reach the caller.
+   */
+  async fetchAttachment(chatId: string, messageId: string, attachmentGuid: string, destDir: string) {
+    const { api, generation } = this.target(chatId);
+    const message = await api.message(messageId);
+    this.assertLive(generation);
+    const attachment = message?.guid === messageId && message.chats?.some(chat => chat.guid === chatId)
+      ? message.attachments?.find(item => item.guid === attachmentGuid) : undefined;
+    if (!attachment) throw new Error('BLUEBUBBLES_ATTACHMENT_NOT_IN_CHAT');
+    const name = attachmentFileName(attachment.transferName || attachment.guid) || attachment.guid.slice(0, 8);
+    await fs.mkdir(destDir, { recursive: true });
+    // The full attachment identity tells apart originals whose GUIDs share a prefix and whose names match.
+    const id = createHash('sha256').update(attachment.guid).digest('hex').slice(0, 16);
+    // Each download lands in its own staging file first. Only a complete original is published under the
+    // original's name; an incomplete copy gets its own preview name, so it never replaces a verified original.
+    const staged = path.join(destDir, `.${randomUUID()}.download`);
+    const bytes = await api.downloadToFile(attachment.guid, staged);
+    const totalBytes = attachment.totalBytes ?? null;
+    const complete = totalBytes === null || totalBytes === 0 || bytes >= totalBytes;
+    const dest = path.join(destDir, `${id}-${complete ? '' : 'preview-'}${name}`);
+    try {
+      this.assertLive(generation);
+      await fs.rename(staged, dest);
+    } catch (error) {
+      await fs.rm(staged, { force: true }).catch(() => {});
+      throw error;
+    }
+    return { path: dest, name, bytes, totalBytes, complete };
+  }
+  /** Reuse the already-authorized receiver. No dispose, credential write or second listener. */
+  async verifyGroupHandoff(chatId: string): Promise<() => void> {
+    const { api, generation } = this.target(chatId);
+    const url = this.webhookUrl;
+    if (!url || !this.isGroup(chatId)) throw new Error('BLUEBUBBLES_INVALID_GROUP');
+    let step = 'SERVER';
+    try {
+      await api.info();
+      this.assertLive(generation);
+      step = 'CHAT';
+      const chat = await api.chat(chatId);
+      if (chat.guid !== chatId || !chat.participants?.length) throw new Error('BLUEBUBBLES_INVALID_GROUP');
+      this.assertLive(generation);
+      step = 'CALLBACK';
+      await api.registerWebhook(url);
+      this.assertLive(generation);
+    } catch (error) {
+      const reason = error instanceof BlueBubblesApiError ? error.code : 'UNAVAILABLE';
+      throw new Error(`BLUEBUBBLES_${step}_${reason}`);
+    }
+    return () => {
+      this.assertLive(generation);
+      if ([...this.activeDispatches].some(id => this.pendingInputs.get(id)?.chatId === chatId))
+        throw new Error('GROUP_BUSY');
+    };
+  }
   listChats(): BlueBubblesChat[] { return [...this.chats.values()].map(chat => structuredClone(chat)); }
   sendText(chatId: string, text: string): Promise<{ messageId: string }> { return this.send(chatId, text, (api, id) => api.sendText(chatId, text, id)); }
+  sendDirectDelivery(chatId: string, text: string, requestId: string): Promise<{ messageId: string }> {
+    if (!/^(?:iMessage|any);-;/.test(chatId) || this.isGroup(chatId)) {
+      return Promise.reject(new Error('BLUEBUBBLES_DIRECT_CHAT_REQUIRED'));
+    }
+    return this.send(chatId, text, (api, id) => api.sendText(chatId, text, id), requestId);
+  }
   sendMarkdownText(chatId: string, text: string): Promise<{ messageId: string }> { return this.sendText(chatId, text); }
-  async sendFile(chatId: string, absPath: string, displayName?: string): Promise<SendFileResult> {
+  async sendFile(chatId: string, absPath: string, displayName?: string): Promise<SendFileResult & { deliveryError?: typeof AUTOMATION_DENIED | 'BLUEBUBBLES_SEND_UNKNOWN' }> {
     const { generation } = this.target(chatId);
     let bytes: Buffer;
     try {
@@ -990,13 +1178,17 @@ export class BlueBubblesIM extends BaseIM implements TextChannelIM {
     if (bytes.length > BLUEBUBBLES_MAX_BYTES) return { ok: false, reason: 'TOO_LARGE' };
     const name = path.basename(displayName ?? absPath);
     try { return { ok: true, ...await this.send(chatId, null, (api, id) => api.sendFile(chatId, bytes, name, id)) }; }
-    catch { return { ok: false, reason: 'SEND_FAIL' }; }
+    catch (error) {
+      const deliveryError = error instanceof BlueBubblesApiError && error.code === AUTOMATION_DENIED
+        ? AUTOMATION_DENIED : 'BLUEBUBBLES_SEND_UNKNOWN';
+      return { ok: false, reason: 'SEND_FAIL', deliveryError };
+    }
   }
   async commitFinal(output: ImFinalOutput): Promise<void> {
     if (output.text.trim() && output.text.trim() !== 'NO_REPLY') await this.sendText(output.userId, output.text);
     for (const file of new Set(output.mediaAbsPaths ?? [])) {
       const result = await this.sendFile(output.userId, file);
-      if (!result.ok) throw new Error('BLUEBUBBLES_FILE_SEND_FAILED');
+      if (!result.ok) throw new Error(result.deliveryError ?? 'BLUEBUBBLES_FILE_SEND_FAILED');
     }
   }
   cancelTextReply(requestId: string): boolean {

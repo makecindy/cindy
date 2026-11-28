@@ -54,6 +54,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AutoReviewDecision, ReviewableAction } from '@cindy/maker-core';
+import { isLooseBase64Chars } from '@cindy/maker-shared';
 import { deleteEntry, listDir, readFileChunk, writeFileBytes } from '@cindy/file-browser-core';
 
 import {
@@ -246,7 +247,7 @@ function decodeContent(
   if (encoding === 'base64') {
     // 先按编码长度粗闸再解码:超大字符串不值得先分配一份 Buffer 再拒。
     if (content.length > (GHOST_FS_WRITE_MAX_BYTES * 4) / 3 + 8) return { error: overLimit };
-    if (!/^[A-Za-z0-9+/=\r\n]*$/.test(content)) return { error: 'content 不是合法 base64' };
+    if (!isLooseBase64Chars(content, { allowEmpty: true, allowLineBreaks: true })) return { error: 'content 不是合法 base64' };
     bytes = Buffer.from(content, 'base64');
   } else {
     // UTF-8 编码字节数恒 ≥ UTF-16 码元数,长度先超即字节必超。

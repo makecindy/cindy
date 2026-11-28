@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, renderHook, screen } from '@testing-library
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TeammateSearchResults, useTeammateSearchMatches } from '../TeammateSearchResults';
+import { writeHiddenRemoteBotKeys } from '../teammatesSectionPrefs';
 
 const mocks = vi.hoisted(() => ({
   profiles: [] as unknown[],
@@ -48,6 +49,19 @@ const names = (query: string) =>
   renderHook(() => useTeammateSearchMatches(query, null)).result.current.map((match) => match.name);
 
 describe('teammates in the sidebar-wide search', () => {
+  // #8585, unit: search must share the real roster's same-home shadow recovery
+  // route, then return to the local buddy after restoration (previously absent).
+  it('finds a same-home shadow once and returns to its local route after recovery', () => {
+    mocks.profiles = [bot('writer', 'Writer')];
+    mocks.remoteBots = [];
+    mocks.cloud = { enabled: true, selfDeviceId: 'desk', humanActorId: 'human', demotedBotIds: ['writer'], actors: [
+      { id: 'a-writer', externalId: 'writer', name: 'Writer', avatar: null, homeDeviceId: 'desk' }] };
+    const view = renderHook(() => useTeammateSearchMatches('writer', null));
+    expect(view.result.current.map(match => match.route)).toEqual(['/bots/remote/desk/writer']);
+    mocks.cloud = { ...mocks.cloud, demotedBotIds: [] };
+    view.rerender();
+    expect(view.result.current.map(match => match.route)).toEqual(['/bots/writer']);
+  });
   // Issue #6575 P1: task-ID filtering did not constrain the leading roster hits.
   // Existing global-query tests never lock a dialogue group. Unit regression:
   // one matching local bot, remote bot and group must disappear while locked,
@@ -135,5 +149,46 @@ describe('teammates in the sidebar-wide search', () => {
     fireEvent.click(screen.getByRole('button', { name: /周末出游/ }));
     expect(mocks.navigate).toHaveBeenLastCalledWith('/bots/groups/trip');
     expect(screen.getByText('bots.groupChat.sidebar.title')).toBeTruthy();
+  });
+
+  it('opens matched teammates and groups in a new window on primary-mod click and middle click', () => {
+    const openSessionInNewWindow = vi.fn(async () => undefined);
+    const prevApi = window.electronAPI;
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      platform: 'win32',
+      maker: { openSessionInNewWindow },
+    };
+    try {
+      const onSelected = vi.fn();
+      const { result } = renderHook(() => useTeammateSearchMatches('e', null));
+      render(<TeammateSearchResults matches={result.current} onSelected={onSelected} />);
+
+      fireEvent.click(screen.getByRole('button', { name: /Writer/ }), { ctrlKey: true });
+      fireEvent(screen.getByRole('button', { name: /Cloud helper/ }), new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(1, '/bots/writer', undefined, undefined);
+      expect(openSessionInNewWindow).toHaveBeenNthCalledWith(2, '/bots/remote/mac-mini/cloud', undefined, undefined);
+      expect(mocks.navigate).not.toHaveBeenCalled();
+      expect(onSelected).toHaveBeenCalledTimes(2);
+    } finally {
+      (window as unknown as { electronAPI: unknown }).electronAPI = prevApi;
+    }
+  });
+
+  // Issue #13461 (unit): sidebar search must continue finding remote companions hidden
+  // locally in the teammates section by name, description, or device name and open them.
+  it('still finds locally hidden remote companions by name, description, and device name', () => {
+    localStorage.clear();
+    mocks.remoteBots = [
+      { id: 'cloud', deviceId: 'mac-mini', deviceName: 'Office Studio', name: 'Cloud helper', description: 'Nightly build monitor', activityAt: 1 },
+    ];
+    writeHiddenRemoteBotKeys('fixture-owner', ['mac-mini:cloud']);
+    expect(names('cloud helper')).toEqual(['Cloud helper']);
+    expect(names('nightly build')).toEqual(['Cloud helper']);
+    expect(names('office studio')).toEqual(['Cloud helper']);
+    const matches = renderHook(() => useTeammateSearchMatches('office studio', null)).result.current;
+    render(<TeammateSearchResults matches={matches} />);
+    fireEvent.click(screen.getByRole('button', { name: /Cloud helper/ }));
+    expect(mocks.navigate).toHaveBeenCalledWith('/bots/remote/mac-mini/cloud');
+    localStorage.clear();
   });
 });

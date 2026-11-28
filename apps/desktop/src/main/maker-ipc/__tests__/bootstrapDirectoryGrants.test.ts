@@ -259,7 +259,8 @@ describe('bootstrap directory-grant wiring', () => {
     const prepareGrants = bootstrap.indexOf('await prepareDirectoryGrantsForBootstrap(');
     // Creation is now delegated to the awaited recovery wrapper; narrowing
     // must still finish before its runtime factory is even constructed.
-    const createRuntime = bootstrap.indexOf('const start = () => createSessionWithRuntimePlugins(o, creationSignal)');
+    const createRuntime = bootstrap.indexOf('return createSessionWithRuntimePlugins(o, creationSignal)');
+    expect(bootstrap).toMatch(/const start = \(\) => \{[^}]*return createSessionWithRuntimePlugins\(o, creationSignal\);\s*\};/);
     expect(bootstrap).toContain('await withSharedSessionResumeRecovery(o, start,');
     expect(prepareGrants).toBeGreaterThanOrEqual(0);
     expect(createRuntime).toBeGreaterThanOrEqual(0);

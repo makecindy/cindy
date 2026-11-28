@@ -437,6 +437,27 @@ describe('按需拉起', () => {
     expect(h.deps.sendToGhost).not.toHaveBeenCalled();
     expect(invalidated).toHaveBeenCalledWith('art');
   });
+
+  // Unit: the owner can stay active while a pinned tool's own authorization
+  // expires during cold startup. No tool-call may reach the ready worker.
+  it('rechecks pinned call authority after the sandbox is ready', async () => {
+    const h = makeHarness({ state: 'off' });
+    const ready = deferred();
+    const started = deferred();
+    h.deps.spawn.mockImplementation(async () => {
+      started.resolve();
+      await ready.promise;
+      h.deps.runtimeStateOf.mockReturnValue('running');
+      return { ok: true };
+    });
+    let current = true;
+    const call = h.dispatcher.callGhostTool({ ...CALL, isCurrent: () => current });
+    await started.promise;
+    current = false;
+    ready.resolve();
+    await expect(call).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(h.sent).toHaveLength(0);
+  });
 });
 
 describe('配对交卷', () => {

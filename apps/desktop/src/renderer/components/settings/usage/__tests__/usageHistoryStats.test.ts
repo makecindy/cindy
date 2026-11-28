@@ -313,6 +313,19 @@ describe('filterUsageHistoryPayload', () => {
     ],
   });
 
+  // #12433 (unit): the selected-range model table must show a reported zero;
+  // a model with no daily report has no corresponding table row.
+  it('keeps explicitly reported zero ACP usage in the selected range', () => {
+    const history = payload({
+      modelDaily: [daily({ agentKind: 'acp', model: 'reported-zero' })],
+    });
+    const filtered = filterUsageHistoryPayload(history, 'today');
+    expect(buildModelRows(filtered)).toEqual([
+      expect.objectContaining({ agentKind: 'acp', model: 'reported-zero', tokens: 0 }),
+    ]);
+    expect(buildModelRows(filterUsageHistoryPayload(history, 'day:2026-08-20'))).toEqual([]);
+  });
+
   it('按选择的窗口过滤并重新聚合模型与统计值', () => {
     const result = filterUsageHistoryPayload(source, '7d');
     expect(result?.days.map((row) => row.day)).toEqual(['2026-08-20', '2026-08-22']);

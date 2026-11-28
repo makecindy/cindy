@@ -4,6 +4,7 @@ import {
   DEVICE_LINK_USAGE_WIDGET_SNAPSHOT_CHANNEL,
   type MobileUsageWidgetSnapshot,
 } from '@cindy/maker-shared/device-link-contract';
+import { mobileDebugLog } from '@/debug/mobileDebugLog';
 
 /** One computer's answer. `update-desktop`: its Cindy is too old to answer. */
 export type UsageWidgetState =
@@ -146,16 +147,22 @@ export async function refreshUsageWidgetStore(
   isCurrent: () => boolean = () => true,
 ): Promise<UsageWidgetStore> {
   const computers = devices.filter(isWidgetComputer);
-  const listed = new Set(computers.map(device => device.deviceId));
+  // A reading is dropped only when its computer has left the account. Right after the phone
+  // reconnects, the roster can briefly show a computer as offline or not yet controllable;
+  // dropping its reading then emptied the drawer until that computer answered again.
+  const onAccount = new Set(devices.filter(device => !device.isSelf).map(device => device.deviceId));
   const states: Record<string, UsageWidgetState> = {};
   for (const [id, state] of Object.entries(previous?.states ?? {})) {
-    if (listed.has(id)) states[id] = state;
+    if (onAccount.has(id)) states[id] = state;
   }
-  let autoDeviceId = previous?.autoDeviceId && listed.has(previous.autoDeviceId) ? previous.autoDeviceId : null;
+  let autoDeviceId = previous?.autoDeviceId && onAccount.has(previous.autoDeviceId) ? previous.autoDeviceId : null;
   const outcomes = new Map<string, 'answered' | 'too-old' | 'failed'>();
+  /** Why each request ended, for the phone's debug log only. */
+  const reasons: string[] = [];
   const ask = async (device: DeviceView) => {
     if (!isCurrent()) throw new Error('Widget refresh expired');
     let outcome: 'answered' | 'too-old' | 'failed' = 'failed';
+    let reason = 'unavailable';
     try {
       const result = await invoke<{ ok?: boolean; snapshot?: unknown }>(
         device.deviceId, DEVICE_LINK_USAGE_WIDGET_SNAPSHOT_CHANNEL, [],
@@ -165,11 +172,14 @@ export async function refreshUsageWidgetStore(
           kind: 'snapshot', receivedAtMs: nowMs(), deviceName: device.selfName || device.name, snapshot: result.snapshot,
         };
         outcome = 'answered';
+        reason = 'answered';
       }
     } catch (error) {
       if (isChannelNotAllowed(error)) outcome = 'too-old';
+      reason = outcome === 'too-old' ? 'too-old' : String((error as { code?: unknown } | null)?.code ?? 'error');
     }
     outcomes.set(device.deviceId, outcome);
+    reasons.push(`${device.deviceId.slice(0, 8)}:${reason}`);
     return outcome;
   };
 
@@ -196,6 +206,12 @@ export async function refreshUsageWidgetStore(
       states[id] = { kind: 'update-desktop', receivedAtMs: nowMs() };
     }
   }
+  mobileDebugLog('info', 'recovery', 'usage-widget-refresh', {
+    asked: reasons,
+    online: candidates.length,
+    auto: autoDeviceId?.slice(0, 8) ?? null,
+    autoState: autoDeviceId ? states[autoDeviceId]?.kind ?? 'none' : 'none',
+  });
   return {
     version: 2,
     autoDeviceId,

@@ -23,6 +23,17 @@ describe('fillGhostCardPrStatus', () => {
     return document.querySelector('div')!;
   };
 
+  it('matches a GitLab archive button to its instance even when two projects share the same path and IID', () => {
+    const url = 'https://git.team.test/group/sub/project/-/merge_requests/2';
+    const key = 'gitlab:git.team.test/group/sub/project#2';
+    document.body.innerHTML = `<button data-ghost-task-archive="${url}" data-ghost-task-archive-auto></button>`;
+    expect(readPrStatusSlotKey(document.body.innerHTML)).toBe(key);
+    const states = new Map([['gitlab:other.test/group/sub/project#2', status({ status: 'merged' })]]);
+    expect(fillGhostCardPrStatus(document, id => states.get(id), t, true)).toBe(false);
+    states.set(key, status({ status: 'merged' }));
+    expect(fillGhostCardPrStatus(document, id => states.get(id), t, true)).toBe(true);
+  });
+
   it('replaces the snapshot with the title bar status for the same PR', () => {
     expect(readPrStatusSlotKey(' <div data-ghost-pr-status="Octo/Repo#9">')).toBe('octo/repo#9');
     const slot = card();
@@ -60,6 +71,49 @@ describe('fillGhostCardPrStatus', () => {
     expect(el.style.display).toBe('flex');
     fillGhostCardPrStatus(document, () => status({ status: 'closed' }), t);
     expect(el.style.display).toBe('none');
+  });
+
+  it('reveals a dormant merge-ready button when live status becomes CLEAN and hides it otherwise', () => {
+    document.body.innerHTML =
+      '<button id="dormant" data-ghost-action="pr:merge" data-ghost-pr-merge-ready="Octo/Repo#9" style="display:none"></button>' +
+      '<button id="active" data-ghost-action="pr:merge" data-ghost-pr-merge-ready="Octo/Repo#9" style="display:inline-flex"></button>';
+    const dormant = document.querySelector<HTMLElement>('#dormant')!;
+    const active = document.querySelector<HTMLElement>('#active')!;
+    // Live BLOCKED hides both.
+    fillGhostCardPrStatus(document, () => status({ mergeState: 'BLOCKED' }), t);
+    expect(dormant.style.display).toBe('none');
+    expect(active.style.display).toBe('none');
+    // Live CLEAN reveals both.
+    fillGhostCardPrStatus(document, () => status({ mergeState: 'CLEAN' }), t);
+    expect(dormant.style.display).toBe('inline-flex');
+    expect(active.style.display).toBe('inline-flex');
+    // Missing or legacy status restores each button's original plugin snapshot display.
+    fillGhostCardPrStatus(document, () => undefined, t);
+    expect(dormant.style.display).toBe('none');
+    expect(active.style.display).toBe('inline-flex');
+    // Merged PR hides both.
+    fillGhostCardPrStatus(document, () => status({ status: 'merged', mergeState: undefined }), t);
+    expect(dormant.style.display).toBe('none');
+    expect(active.style.display).toBe('none');
+  });
+
+  // Regression (Greptile P2 on #12991): a button carrying both open-only and merge-ready previously
+  // captured `none!important` written by applyOpenOnly when first rendered as merged, losing its
+  // plugin fallback display once live status later became unavailable.
+  it('preserves the original plugin display when open-only and merge-ready share one button', () => {
+    document.body.innerHTML =
+      '<button data-ghost-action="pr:merge" data-ghost-pr-open-only="Octo/Repo#9" data-ghost-pr-merge-ready="Octo/Repo#9" style="display:inline-flex"></button>';
+    const btn = document.querySelector<HTMLElement>('button')!;
+    fillGhostCardPrStatus(document, () => status({ status: 'merged', mergeState: undefined }), t);
+    expect(btn.style.display).toBe('none');
+    fillGhostCardPrStatus(document, () => undefined, t);
+    expect(btn.style.display).toBe('inline-flex');
+    fillGhostCardPrStatus(document, () => status({ status: 'open', mergeState: 'BLOCKED' }), t);
+    expect(btn.style.display).toBe('none');
+    fillGhostCardPrStatus(document, () => status({ status: 'open', mergeState: 'CLEAN' }), t);
+    expect(btn.style.display).toBe('inline-flex');
+    fillGhostCardPrStatus(document, () => undefined, t);
+    expect(btn.style.display).toBe('inline-flex');
   });
 
   // Regression: one merged card must not offer to archive a task with another unfinished PR.

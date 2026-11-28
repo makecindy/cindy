@@ -1,8 +1,18 @@
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createLiziMcpProviders } from '@cindy/mcps';
 import { createSourceFile, isFunctionDeclaration, ScriptTarget, transpileModule } from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import { installedGhostStoragePart } from '../../shared/pluginIdentity.js';
+import { GhostManager } from '../cindy-brain/GhostManager.js';
+import { createHostServiceToolExecutor } from '../cindy-brain/hostServiceCatalog.js';
+import { handlePluginHostToolRequest } from '../cindy-brain/hostToolSlot.js';
+import { spawnResidentGhost } from '../cindy-brain/residentGhost.js';
+import { writeTestCindyPackage } from '../cindy-brain/__tests__/cindyPackageFixture.js';
 import { StableOwnerPostCommitCoordinator } from '../stableOwnerPostCommit';
 import * as hostTools from '../mcp-integrations/hostToolCaller.js';
+import type { DataOwnerPushStamp } from '../../shared/dataOwnerPush.js';
 import type { StableOwnerPostCommitTask } from '../stableOwnerPostCommit';
 
 // Run the production auth entrypoints with the real post-commit coordinator,
@@ -47,6 +57,8 @@ function setup(mode: 'cloud' | 'local' | 'signed-out', passive = false) {
   const deps = {
     authRefreshOverride: null,
     stableOwnerPostCommitCoordinator: coordinator,
+    // Not a managed instance, so initialize keeps the ordinary path.
+    getInstanceConfig: () => null,
     isPassiveSharedUserDataInstance: () => passive,
     getActiveAppSession: () => state,
     isOwnerChangeShellPending: () => !stable,
@@ -156,6 +168,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
       activeOwnerScopeKey: () => 'recovered-scope', getActiveAppSession: () => ({ dataOwnerId: scenario.ownerId }),
       getActiveDataOwnerPushStamp: () => recovered, getMakerIfReady: () => scenario.liveMaker ? {} : null,
       refreshHostToolProviderOwner: hostTools.refreshHostToolProviderOwner,
+      makerProviderRefreshConfigured: false,
       scheduleNativeHistoryBackupCleanup: () => {},
       builtinPostCommitStep: { run: async () => 'deferred' },
     };
@@ -170,6 +183,140 @@ describe('authentication does not wait for optional plugin provisioning', () => 
         expect(hostTools.createHostToolRuntime('cindy_helper', original)).toBeNull();
       } else expect(runtime.call).not.toHaveBeenCalled();
     } finally { hostTools.setHostToolProviders([], original); }
+  });
+
+  // Unit, #12177 / #12376: resident activation can precede the DB/model startup hook.
+  // The same-owner cases above never start with a discarded signed-out Maker.
+  // One installed, approved discovery plugin must succeed on its first call.
+  it('registers the new owner’s Host tools before post-login resident activation', async () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), 'cindy-host-login-')));
+    const manager = new GhostManager({ getRootDir: () => join(dir, 'plugins') });
+    const signedOut = { dataOwnerId: null, ownerGeneration: 1 };
+    const loggedIn = { dataOwnerId: 'owner-a', ownerGeneration: 2 };
+    let owner: DataOwnerPushStamp = signedOut;
+    let pending = false;
+    const getGhost = (id: string) => !pending && owner.dataOwnerId === loggedIn.dataOwnerId
+      ? manager.findInstalledInstance(id) ?? null : null;
+    const request = async (id: string) => {
+      const result = await handlePluginHostToolRequest(id, {
+        type: 'host-tool-request', server: 'cindy_helper', tool: 'host_services', args: {},
+      }, () => true, { getGhost, owner: () => owner, createRuntime: hostTools.createHostToolRuntime });
+      const content = result.content[0];
+      if (content?.type !== 'text') throw new Error('Expected a Host tool text result');
+      return JSON.parse(content.text);
+    };
+    let maker: object | null = null;
+    const getMakerCore = () => {
+      if (!maker) {
+        const providers = createLiziMcpProviders({ xdtHelper: {
+          authorizeCall: hostTools.authorizePluginHostToolCall,
+          hostServices: createHostServiceToolExecutor(hostTools.hostServiceCatalog, {
+            pluginCall: hostTools.getPluginHostToolCaller, getGhost,
+          }),
+        } });
+        hostTools.setHostToolProviders(providers, owner);
+        maker = {};
+      }
+      return maker;
+    };
+    try {
+      const pkg = await writeTestCindyPackage(join(dir, 'discovery.cindy'), {
+        schemaVersion: 3, minCindyVersion: '0.1.72', id: 'test-discovery', name: 'Test discovery',
+        version: '1.0.0', kind: 'chip', entry: 'main.js', launch: 'resident',
+        agent: { hostTools: ['discovery'] },
+      });
+      const installed = await manager.install(pkg);
+      expect(installed).toHaveProperty('ghost.approval.state', 'approved');
+      const ghost = manager.list()[0]!;
+      const id = installedGhostStoragePart(ghost);
+      getMakerCore(); // Signed-out registration predates the login.
+      expect(await request(id)).toMatchObject({ errorCode: 'PERMISSION_DENIED' });
+      pending = true;
+      maker = null; // The real account teardown discards Maker before publishing the owner.
+      expect(await request(id)).toMatchObject({ errorCode: 'PERMISSION_DENIED' });
+      owner = loggedIn;
+      pending = false;
+
+      let firstCall: ReturnType<typeof request> | undefined;
+      let task!: StableOwnerPostCommitTask;
+      const deps = {
+        authManager: { setStableOwnerPostCommitTask: (callback: StableOwnerPostCommitTask) => { task = callback; } },
+        isAppSessionBoundaryPending: () => pending,
+        activeOwnerScopeKey: () => 'cloud:owner-a:2',
+        getActiveAppSession: () => owner,
+        getActiveDataOwnerPushStamp: () => owner,
+        getMakerIfReady: () => maker,
+        makerProviderRefreshConfigured: true,
+        getMakerCore,
+        ownerBackgroundLog: { warn: vi.fn() },
+        refreshHostToolProviderOwner: hostTools.refreshHostToolProviderOwner,
+        scheduleNativeHistoryBackupCleanup: () => {},
+        builtinPostCommitStep: { run: (_scope: string, provision: () => Promise<unknown>) => provision() },
+        runStableOwnerPostCommitTask: async () => {
+          spawnResidentGhost(ghost, {
+            isAvailable: () => true, startNode: vi.fn(), warn: vi.fn(),
+            spawnBrowser: async () => { firstCall = request(id); await firstCall; return { ok: true }; },
+          });
+          return 'deferred';
+        },
+      };
+      new Function(...Object.keys(deps), stableTaskCode)(...Object.values(deps));
+      await task({ reason: 'owner-commit', scopeKey: 'cloud:owner-a:2', dataOwnerId: loggedIn.dataOwnerId });
+
+      // The existing post-DB path is a positive control. Both calls use the same gateway.
+      getMakerCore();
+      const discovery = { ok: true, scope: 'local', services: expect.arrayContaining([
+        expect.objectContaining({ group: 'discovery', available: true, declared: true }),
+      ]) };
+      const afterBackgroundStartup = await request(id);
+      expect(afterBackgroundStartup, JSON.stringify(afterBackgroundStartup)).toMatchObject(discovery);
+      const firstResult = await firstCall;
+      expect(firstResult, JSON.stringify(firstResult)).toMatchObject(discovery);
+      expect(hostTools.createHostToolRuntime('cindy_helper', { ...signedOut, kind: 'plugin', pluginId: id })).toBeNull();
+      expect(await request('unknown-plugin')).toMatchObject({ errorCode: 'PERMISSION_DENIED' });
+
+      owner = { dataOwnerId: 'owner-b', ownerGeneration: 3 };
+      expect(await request(id)).toMatchObject({ errorCode: 'PERMISSION_DENIED' });
+      expect(hostTools.createHostToolRuntime('cindy_helper', { ...owner, kind: 'plugin', pluginId: id })).toBeNull();
+      owner = { dataOwnerId: null, ownerGeneration: 4 };
+      expect(await request(id)).toMatchObject({ errorCode: 'PERMISSION_DENIED' });
+    } finally {
+      manager.disposeNotificationIndex();
+      hostTools.setHostToolProviders([], signedOut);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The optional early registration must neither construct a signed-out or
+  // unconfigured Maker nor prevent the existing provisioning fallback on failure.
+  // Unit tier, production stable-owner callback; one throwing constructor is enough.
+  it.each([
+    { configured: false, ownerId: 'owner', attempts: 0 },
+    { configured: true, ownerId: null, attempts: 0 },
+    { configured: true, ownerId: 'owner', attempts: 1 },
+  ])('keeps owner provisioning available when early registration cannot run: %j', async scenario => {
+    let task!: StableOwnerPostCommitTask;
+    const construct = vi.fn(() => { throw new Error('synthetic initialization failure'); });
+    const provision = vi.fn(async () => 'deferred');
+    const warn = vi.fn();
+    const deps = {
+      authManager: { setStableOwnerPostCommitTask: (callback: StableOwnerPostCommitTask) => { task = callback; } },
+      isAppSessionBoundaryPending: () => false,
+      activeOwnerScopeKey: () => 'stable-scope',
+      getActiveAppSession: () => ({ dataOwnerId: scenario.ownerId }),
+      getMakerIfReady: () => null,
+      makerProviderRefreshConfigured: scenario.configured,
+      getMakerCore: construct,
+      ownerBackgroundLog: { warn },
+      scheduleNativeHistoryBackupCleanup: () => {},
+      builtinPostCommitStep: { run: provision },
+    };
+    new Function(...Object.keys(deps), stableTaskCode)(...Object.values(deps));
+    await expect(task({ reason: 'owner-commit', scopeKey: 'stable-scope', dataOwnerId: scenario.ownerId }))
+      .resolves.toBe('deferred');
+    expect(provision).toHaveBeenCalledOnce();
+    expect(construct).toHaveBeenCalledTimes(scenario.attempts);
+    expect(warn).toHaveBeenCalledTimes(scenario.attempts);
   });
 
   it.each([false, true])('settles the startup boundary push even with notify=false (teardown fails: %s)', async (fails) => {
@@ -235,6 +382,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
         },
       },
       authManager: run,
+      companyReporting: { refresh: vi.fn() },
       authCredentialRecovery: { request: vi.fn() },
       app: { isPackaged: true },
       isCindyVersionLaunchPending: () => false,
@@ -243,6 +391,7 @@ describe('authentication does not wait for optional plugin provisioning', () => 
     new Function(...Object.keys(deps), compiled)(...Object.values(deps));
     try {
       await expect(initialize()).resolves.toBe(run.state);
+      expect(deps.companyReporting.refresh).toHaveBeenCalledTimes(1);
       expect(run.task).toHaveBeenCalledTimes(1);
       expect(deps.noteAuthColdStartState).toHaveBeenCalledWith(run.state, null);
     } finally {

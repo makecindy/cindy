@@ -5,7 +5,7 @@
  *  - 主人私聊 → 伙伴主任务(不注入渠道 vendorOptions, 按共享任务给投递说明);
  *  - 群 / 话题 → 伙伴 channel 专线(route key 按 chat / topic, 照常挂渠道工具);
  *  - 伙伴任务不跟随渠道默认、不对齐渠道默认路由;
- *  - 伙伴解析不出 → 回落原有渠道路由, 每个连接只告警一次;
+ *  - 伙伴解析不出 → 拒绝并回「伙伴暂时不可用」, 不回落渠道路由(瞬时态先重试), 每个连接只告警一次;
  *  - 发送前伙伴守卫拒绝 → 回一句提示, 不发送;
  *  - 停止 / `/new` 走同一解析, 停止不建行。
  */
@@ -16,6 +16,15 @@ import { acceptSessionRuntimeMutation, captureSessionRuntimeControlOwnerEpoch, c
 afterEach(() => clearSessionRuntimeControlState('mimi-main'));
 
 import type { AgentEvent, MakerEvent, Session, SessionSendResult, TurnPermissionPolicy } from '@cindy/maker-core';
+import { createHash } from 'node:crypto';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import * as ownerStorage from '../../ownerScopedStorage';
+import { isIMessageSteeringEnabled } from '../../imessage/steering';
+import { findImQuestionReply } from '../questionPresentation';
+import { getActiveInteractionRoute } from '../../../maker-ipc/interactionRouter';
+import { readChannelToolScope, type IMessageToolScope } from '../channelToolScope';
 import type { ChannelIM } from '@cindy/im';
 
 const mocks = vi.hoisted(() => ({
@@ -49,8 +58,15 @@ const mocks = vi.hoisted(() => ({
   onSilentStopSettled: vi.fn(() => vi.fn()),
   rejectAllPending: vi.fn(() => []),
   dbSelect: vi.fn(),
+  readRemotePluginEngines: vi.fn(),
+  listPluginEngineViews: vi.fn(),
 }));
 
+vi.mock('../../../remote-agent/controller/deviceCatalog', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../../remote-agent/controller/deviceCatalog')>()),
+  readRemotePluginEngines: mocks.readRemotePluginEngines,
+}));
+vi.mock('../../../maker-ipc/pluginEnginesIpc', () => ({ listPluginEngineViews: mocks.listPluginEngineViews }));
 vi.mock('../../../logger', () => ({ createLogger: () => mocks.logger }));
 vi.mock('../../../maker-host', () => ({ getMaker: mocks.getMaker }));
 vi.mock('../../../maker-host/createDesktopProviderService', () => ({
@@ -62,7 +78,7 @@ vi.mock('../../../localDb/client/current', () => ({
 vi.mock('../../../localDb/schema', () => ({ sessions: {} }));
 vi.mock('../sessionRepo', () => ({
   touchUserSent: mocks.touchUserSent,
-  toCoreAgentKind: (kind: string) => (kind === 'codex' ? 'codex' : 'claude-code'),
+  toCoreEngineKind: (kind: string) => (kind === 'acp' ? 'acp' : kind === 'codex' ? 'codex' : 'claude-code'),
 }));
 vi.mock('../../messagePersistence', () => ({ persistUserMessage: mocks.persistUserMessage }));
 vi.mock('../../binding', () => ({
@@ -314,7 +330,119 @@ async function runTurn(userId: string, text = 'hello'): Promise<void> {
 beforeEach(() => setMainLocale('zh-CN'));
 afterEach(() => setMainLocale('en'));
 
+// Unit, #12820: the permission picker and its selection validator use the runner's modes.
+// Existing companion routing tests exercise dispatch, never a cold ACP task's settings.
+describe('turnRunner: plugin engine permission modes', () => {
+  it.each([true, false])('uses the execution computer for a cold task (reachable: %s)', async (reachable) => {
+    const providerId = 'acp-plugin:test:engine';
+    const remoteMode = { id: 'plan', displayName: 'Plan' };
+    mocks.listPluginEngineViews.mockReturnValue([{ providerId, permissionModes: [{ id: 'ask', displayName: 'Local ask' }] }]);
+    if (reachable) {
+      mocks.readRemotePluginEngines.mockResolvedValueOnce([{ providerId, permissionModes: [remoteMode] }]);
+    } else {
+      mocks.readRemotePluginEngines.mockRejectedValueOnce(new Error('offline'));
+    }
+
+    const modes = await runner.getPermissionModes('acp', { sessionId: 'cold', providerId, agentDeviceId: 'other-computer' });
+
+    expect(modes).toEqual(reachable ? [remoteMode] : []);
+    expect(mocks.readRemotePluginEngines).toHaveBeenCalledExactlyOnceWith('other-computer');
+    expect(mocks.listPluginEngineViews).not.toHaveBeenCalled();
+  });
+});
+
 describe('turnRunner: connection handed to a companion bot', () => {
+  // Tier 1: one busy owner DM shares a task with Desktop; a fifth chat must still defer.
+  // Existing route tests only send idle messages and never exercise same-turn admission.
+  it('steers exactly the configured iMessage chats into their own live inbound turns', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'imessage-steering-'));
+    const file = path.join(directory, 'steering.json');
+    const location = vi.spyOn(ownerStorage, 'ownerScopedImUserDataPath').mockReturnValue(file);
+    const chats = [OWNER, 'g/group', 'dm-a', 'dm-b'];
+    const connection = 'test-connection';
+    try {
+      await writeFile(file, JSON.stringify({ routes: chats.map(chat => ({
+        botId: binding, connectionId: connection,
+        chatSha256: createHash('sha256').update(chat).digest('hex'),
+      })) }));
+      runner = createTurnRunner({
+        ...fakeAdapter, channel: 'imessage',
+        output: { kind: 'chunked-text', im: fakeAdapter.im, commitFinal: vi.fn() },
+        companionLane: chat => chat === OWNER ? { kind: 'owner-dm' }
+          : chat.startsWith('g/') ? { kind: 'group', chatId: chat, threadId: '' }
+          : { kind: 'guest-dm', userId: chat },
+        steerWhileBusy: (bot, chat) => isIMessageSteeringEnabled(connection, bot, chat),
+      }, fakeRepo, fakeCards, { companion: companion as unknown as ImCompanionRouteDeps });
+      mocks.persistUserMessage.mockImplementation(async ({ text }) => ({ clientId: 'receipt-' + text }));
+      const receive = (chat: string, text: string, owner = chat === OWNER, respondent = chat) => runner.dispatchAgentTurn({
+        queueMode: 'external', beforeProviderStart: async () => {}, botContextId: BOT_CONTEXT,
+        userId: chat, text, attachments: [], userMessageId: chat + text, requesterIsOwner: owner, questionRespondentId: respondent,
+        channelToolScope: { channel: 'imessage', botId: BOT_CONTEXT, laneUserId: chat, chatId: chat,
+          im: mocks.im as unknown as IMessageToolScope['im'], requesterIsOwner: owner,
+          companion: true, chatKind: chat.startsWith('g/') ? 'group' : 'direct' },
+      });
+      const create = mocks.getMaker().createSession;
+      const original = create.getMockImplementation();
+      create.mockImplementation(async (args: { id: string }) => {
+        const session: Session = await original(args);
+        const h = harnesses.get(args.id)!;
+        if (!session.steer) {
+          Object.assign(session, { getTurnGeneration: () => 1, capabilities: { sameTurnSteer: { supported: true } },
+            steer: vi.fn(async (_msg, opts) => { await opts.beforeProviderStart(); }) });
+          h.send.mockImplementation(async (_msg, opts) => {
+            await opts.beforeProviderStart();
+            await opts.onAccepted();
+            vi.mocked(session.isTurnRunning).mockReturnValue(true);
+            return { accepted: true };
+          });
+        }
+        return session;
+      });
+      for (const chat of [...chats, 'dm-other']) {
+        const first = await receive(chat, 'first');
+        expect(first.kind).toBe('accepted');
+        if (first.kind !== 'accepted') throw new Error(first.reason);
+        const h = harnesses.get(first.sessionId)!;
+        const follow = await receive(chat, 'follow ' + chat, chat === OWNER, chat === 'g/group' ? 'second-member' : chat);
+        if (chats.includes(chat)) {
+          expect(follow).toMatchObject({ kind: 'accepted', sessionId: first.sessionId, terminal: first.terminal });
+          expect(readChannelToolScope({ sessionId: first.sessionId, sessionInstanceId: h.session.instanceId })?.inputClientId)
+            .toBe('receipt-follow ' + chat);
+          if (chat === 'g/group') {
+            const route = getActiveInteractionRoute(h.session)!;
+            await route.presentQuestion!({ kind: 'ask_user_question', requestId: 'q', delivery: 'async',
+              questions: [{ id: 'a', question: 'Which?' }] }, { answer: vi.fn(), settled: new Promise(() => {}) });
+            const code = String(mocks.im.sendText.mock.calls.at(-1)?.[1]).match(/Q[0-9a-f]{8}/)![0];
+            const reply = (id: string) => findImQuestionReply(fakeAdapter.im, {
+              senderId: chat, text: code + ' OK', speaker: { id, name: id, isOwner: false },
+            })!();
+            expect(await reply(chat)).toBe(false);
+            expect(await reply('second-member')).toBe(true);
+          }
+          expect(h.session.steer).toHaveBeenCalledTimes(1);
+          expect(JSON.stringify(vi.mocked(h.session.steer).mock.calls[0]![0])).toContain('follow ' + chat);
+        } else {
+          expect(follow.kind).toBe('busy');
+          expect(h.session.steer).not.toHaveBeenCalled();
+        }
+        if (chat === OWNER) expect((await receive(chat, 'changed authority', false)).kind).toBe('busy');
+        expect(h.send).toHaveBeenCalledOnce();
+        if (chat === OWNER) {
+          h.emit({ type: 'done', data: {} } as AgentEvent);
+          await first.terminal;
+          // Desktop now occupies the same canonical session, with no IM lease.
+          expect((await receive(chat, 'during desktop turn')).kind).toBe('busy');
+          vi.mocked(h.session.isTurnRunning).mockReturnValue(false);
+          expect((await receive(chat, 'idle again')).kind).toBe('accepted');
+          expect(h.send).toHaveBeenCalledTimes(2);
+        }
+      }
+    } finally {
+      location.mockRestore();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   // PR #10271, unit: cold wiring used to start the exhausted legacy source before the shared
   // pre-send recovery could run. A real runner input must use the recovered row on its first startup.
   it.each([false, true])('prepares a cold legacy task before wiring its first channel message (temporary settings: %s)', async temporary => {
@@ -684,7 +812,11 @@ describe('turnRunner: connection handed to a companion bot', () => {
         }),
       }),
     }));
-    runner = createTurnRunner(fakeAdapter, fakeRepo, fakeCards, {
+    const commitFinal = vi.fn(async () => undefined);
+    runner = createTurnRunner({
+      ...fakeAdapter, channel: 'imessage',
+      output: { kind: 'chunked-text', im: fakeAdapter.im, commitFinal },
+    }, fakeRepo, fakeCards, {
       companion: companion as unknown as ImCompanionRouteDeps,
       acquirePendingAgentSwitch,
     });
@@ -694,6 +826,10 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(harnesses.get('mimi-main')!.send).not.toHaveBeenCalled();
     expect(switched.send).toHaveBeenCalledTimes(1);
     for (const [, text] of mocks.im.sendText.mock.calls) expect(String(text)).not.toContain('❌');
+    switched.emit({ type: 'text', data: { text: 'sample reply', isFinal: true } } as AgentEvent);
+    switched.emit({ type: 'done', data: {} } as AgentEvent);
+    await vi.waitFor(() => expect(commitFinal).toHaveBeenCalledOnce());
+    expect(commitFinal).toHaveBeenCalledWith(expect.objectContaining({ userId: OWNER, text: 'sample reply', terminal: 'done' }));
     expect(runner.getMakerSessionById('mimi-main')).toBe(switched.session);
   });
 
@@ -758,23 +894,15 @@ describe('turnRunner: connection handed to a companion bot', () => {
   });
 
   // Use the public runner and inspect Session.send: a binding alone must never
-  // suppress the policy on fallback. No network or extra runtime is required.
+  // suppress the policy on a channel-owned session. No network or extra runtime is required.
   it.each([
     { route: 'companion', owner: true, optIn: true, forced: false },
     { route: 'companion', owner: false, optIn: true, forced: true },
     { route: 'companion', owner: undefined, optIn: true, forced: true },
     { route: 'companion', owner: true, optIn: false, forced: true },
-    { route: 'paused', owner: true, optIn: true, forced: true },
-    { route: 'missing-row', owner: true, optIn: true, forced: true },
     { route: 'unbound', owner: true, optIn: true, forced: true },
   ])('keeps the resolved-route permission boundary: %j', async ({ route, owner, optIn, forced }) => {
-    if (route === 'paused') {
-      companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
-    } else if (route === 'missing-row') {
-      botRows.delete('mimi-main');
-    } else if (route === 'unbound') {
-      binding = null;
-    }
+    if (route === 'unbound') binding = null;
     const policy: TurnPermissionPolicy = {
       origin: { kind: 'im', channel: 'wechat' },
       confirmationSurface: 'channel',
@@ -791,16 +919,109 @@ describe('turnRunner: connection handed to a companion bot', () => {
     expect(send.mock.calls[0]![1]?.turnPermissionPolicy).toBe(forced ? policy : undefined);
   });
 
-  it('falls back to the channel’s own routing when the bot cannot be resolved, warning once', async () => {
-    companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
-    await runTurn(OWNER, 'first');
-    harnesses.get(legacyIdFor(BOT_CONTEXT, OWNER))!.emit({ type: 'done', data: {} } as AgentEvent);
-    await runTurn(OWNER, 'second');
-    expect(fakeRepo.createSession).toHaveBeenCalledTimes(1);
-    expect(harnesses.get(legacyIdFor(BOT_CONTEXT, OWNER))!.send).toHaveBeenCalledTimes(2);
+  // Bug: an unresolvable companion (paused, canonical task changing, no model for a new
+  // group) used to fall back to a plain channel task that answered under another identity.
+  // A companion connection must reject with the same notice as the pre-send guard and never
+  // start or persist anything. In a group nobody, the owner included, sees internal details.
+  it.each([
+    { name: 'paused owner DM', userId: OWNER, owner: true, errorCode: 'TARGET_BOT_INACTIVE',
+      says: 'Bot 当前未启用', hides: null },
+    { name: 'no model, member in a new group', userId: 'g/-100123', owner: false, errorCode: 'NO_MODEL',
+      says: '请稍后再试', hides: '模型' },
+    { name: 'no model, owner in a new group', userId: 'g/-100123', owner: true, errorCode: 'NO_MODEL',
+      says: '请稍后再试', hides: '模型' },
+    { name: 'paused, member in a group', userId: 'g/-100123', owner: false, errorCode: 'BOT_UNAVAILABLE',
+      says: 'Bot 当前未启用', hides: null },
+    { name: 'resolver threw', userId: 'g/-100123', owner: false, errorCode: 'THROW',
+      says: '请稍后再试', hides: 'db exploded' },
+  ])('rejects instead of using the channel’s own routing: $name', async ({ userId, owner, errorCode, says, hides }) => {
+    if (errorCode === 'THROW') companion.resolveSession.mockRejectedValue(new Error('db exploded'));
+    else companion.resolveSession.mockResolvedValue({ ok: false, errorCode, message: '伙伴还没有可用模型' });
+    for (const text of ['first', 'second']) {
+      await runner.runAgentTurn({
+        botContextId: BOT_CONTEXT, userId, userMessageId: `${userId}|${text}`, text, attachments: [],
+        ...(owner ? { requesterIsOwner: true } : {}),
+      });
+    }
+    expect(fakeRepo.createSession).not.toHaveBeenCalled();
+    expect(createSessionArgs).toHaveLength(0);
+    expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+    const notices = mocks.im.sendText.mock.calls.map(([, text]) => String(text));
+    expect(notices).toHaveLength(2);
+    for (const notice of notices) {
+      expect(notice).toContain('伙伴现在接不了消息');
+      expect(notice).toContain(says);
+      if (hides) expect(notice).not.toContain(hides);
+    }
     const warnings = mocks.logger.warn.mock.calls.filter(([msg]) =>
-      String(msg).includes('falling back to the channel'));
+      String(msg).includes('rejecting instead of using the channel'));
     expect(warnings).toHaveLength(1);
+  });
+
+  // #12116 keeps an explicitly delegated iMessage group on its recipient: when that buddy is
+  // unavailable the route fails with GROUP_RECIPIENT_UNAVAILABLE. Merging this PR must keep that
+  // maintainer behavior (no transient retry, no notice, no channel task) while other groups
+  // still get the companion-unavailable notice.
+  it('keeps the delegated-group failure from #12116 instead of the unavailable notice', async () => {
+    runner = createTurnRunner({ ...fakeAdapter, requiresCompanionLane: (userId) => userId === 'g/-100777' },
+      fakeRepo, fakeCards, { companion: companion as unknown as ImCompanionRouteDeps });
+    companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_CANONICAL_UNAVAILABLE', message: 'changing' });
+    await expect(runner.runAgentTurn({
+      botContextId: BOT_CONTEXT, userId: 'g/-100777', userMessageId: 'delegated', text: 'hello', attachments: [],
+    })).rejects.toThrow('GROUP_RECIPIENT_UNAVAILABLE');
+    expect(companion.resolveSession).toHaveBeenCalledOnce();
+    expect(mocks.im.sendText).not.toHaveBeenCalled();
+    expect(fakeRepo.createSession).not.toHaveBeenCalled();
+
+    companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
+    await runTurn('g/-100123');
+    expect(mocks.im.sendText).toHaveBeenCalledWith('g/-100123', expect.stringContaining('Bot 当前未启用'), expect.anything());
+    expect(fakeRepo.createSession).not.toHaveBeenCalled();
+  });
+
+  // A stalled processing-reaction request must not hold the rejected turn (and the lane's
+  // later input queued behind it) open: cleanup is bounded like the other pre-dispatch rejections.
+  it('settles a companion-unavailable rejection even when the ack reaction never resolves', async () => {
+    companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      let settled = false;
+      const turn = runner.runAgentTurn({
+        botContextId: BOT_CONTEXT, userId: OWNER, userMessageId: 'stalled-ack', text: 'hello', attachments: [],
+        requesterIsOwner: true, ackReactionIdPromise: new Promise<string | null>(() => undefined),
+      }).then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(settled).toBe(true);
+      await turn;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(mocks.im.sendText).toHaveBeenCalledWith(OWNER, expect.stringContaining('Bot 当前未启用'), expect.anything());
+  });
+
+  it.each([
+    { name: 'recovers once the canonical task settles', recovers: true },
+    { name: 'rejects when it stays unavailable', recovers: false },
+  ])('retries a changing canonical task briefly: $name', async ({ recovers }) => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      const changing = { ok: false, errorCode: 'TARGET_CANONICAL_UNAVAILABLE', message: '目标伙伴的主任务正在变化' };
+      companion.resolveSession.mockResolvedValueOnce(changing).mockResolvedValueOnce(changing);
+      if (!recovers) companion.resolveSession.mockResolvedValue(changing);
+      const turn = runTurn(OWNER);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await turn;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(companion.resolveSession).toHaveBeenCalledTimes(3);
+    expect(fakeRepo.createSession).not.toHaveBeenCalled();
+    if (recovers) {
+      expect(harnesses.get('mimi-main')!.send).toHaveBeenCalledOnce();
+    } else {
+      expect(harnesses.has('mimi-main')).toBe(false);
+      expect(mocks.im.sendText).toHaveBeenCalledWith(OWNER, expect.stringContaining('请稍后再试'), expect.anything());
+    }
   });
 
   it('replies with a notice and does not send when the bot guard blocks the turn', async () => {
@@ -838,6 +1059,12 @@ describe('turnRunner: connection handed to a companion bot', () => {
 
     await expect(runner.rotateCompanionLane!(BOT_CONTEXT, OWNER)).resolves.toBe('owner-dm');
     expect(companion.archiveLane).toHaveBeenCalledTimes(1);
+
+    // An unresolvable companion answers `/new` with the notice instead of the channel's own `/new`.
+    companion.resolveSession.mockResolvedValue({ ok: false, errorCode: 'TARGET_BOT_INACTIVE', message: 'paused' });
+    await expect(runner.rotateCompanionLane!(BOT_CONTEXT, OWNER)).resolves.toEqual({
+      unavailable: expect.stringContaining('Bot 当前未启用'),
+    });
 
     binding = null;
     await expect(runner.rotateCompanionLane!(BOT_CONTEXT, 'g/-100123')).resolves.toBe('unbound');

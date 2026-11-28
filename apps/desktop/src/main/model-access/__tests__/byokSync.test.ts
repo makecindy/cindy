@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ServerApiError } from '../../serverApiClient.js';
 import {
   createByokSync,
   PENDING_RETRY_DELAY_MS,
@@ -59,6 +60,35 @@ function deferred<T>() {
 }
 
 describe('enterprise BYOK sync', () => {
+  // Unit: a v1-only server rejects the new read with HTTP 400; credentials still
+  // match the v1 projection, including when the cached/current catalog was v2.
+  it('falls back once on HTTP 400 and removes artwork when the v1 directory wins', async () => {
+    const h = setup();
+    const icon = '<svg/>';
+    const v2 = { ...directory(), schemaVersion: 2, providers: [{ ...provider(), icon }] };
+    h.fetch.mockResolvedValueOnce(v2).mockResolvedValueOnce(credentials());
+    await h.sync.sync();
+    expect(h.active()[0]?.provider.icon).toBe(icon);
+    h.fetch.mockClear().mockRejectedValueOnce(new ServerApiError('INVALID_PARAMS', 400, 'unknown schema'))
+      .mockResolvedValueOnce(directory()).mockResolvedValueOnce(credentials());
+    await h.sync.sync();
+    expect(h.fetch.mock.calls.map(([path]) => path)).toEqual([
+      '/api/model-access/byok/providers?schemaVersion=2',
+      '/api/model-access/byok/providers?schemaVersion=1',
+      '/api/model-access/byok/credentials?schemaVersion=1',
+    ]);
+    expect(h.active()[0]?.provider).toMatchObject({ id: 'byok-a' });
+    expect(h.active()[0]?.provider).not.toHaveProperty('icon');
+  });
+
+  it('keeps its existing error handling for other HTTP statuses', async () => {
+    const h = setup();
+    h.fetch.mockRejectedValueOnce(new ServerApiError('RATE_LIMITED', 429, 'busy'));
+    await h.sync.sync();
+    expect(h.fetch).toHaveBeenCalledTimes(1);
+    expect(h.sync.getStatus().state).toBe('failed');
+  });
+
   it('fetches directory then batch credentials once and never exposes keys in status', async () => {
     const h = setup();
     h.fetch
@@ -189,7 +219,7 @@ describe('enterprise BYOK sync', () => {
           ],
         });
       h.fetch.mockImplementation(async (path: string) =>
-        path === '/api/model-access/byok/providers?schemaVersion=1'
+        path === '/api/model-access/byok/providers?schemaVersion=2'
           ? directory([provider(), provider('byok-b')])
           : next(),
       );

@@ -25,6 +25,7 @@ import { isDeviceLinkRemotePushCurrent } from '@/lib/remoteDataOwnerPushFence';
 
 import {
   SUBSCRIPTION_ACCOUNTS_CHANNEL,
+  isSubscriptionPoolProviderIdShape,
   isSubscriptionProvider,
   isUnusedDefaultAccount,
   type SubscriptionAccountView,
@@ -40,7 +41,7 @@ export type GroupMemberAccount = {
   number: number;
 };
 
-function listedAccounts(raw: unknown, providerId: SubscriptionProvider): GroupMemberAccount[] {
+function listedAccounts(raw: unknown, providerId: string): GroupMemberAccount[] {
   const view = raw as { providerId?: unknown; accounts?: unknown } | null | undefined;
   if (view?.providerId !== providerId || !Array.isArray(view.accounts)) return [];
   return (view.accounts as SubscriptionAccountView[]).flatMap((account, index) =>
@@ -53,8 +54,14 @@ export function useGroupMemberAccounts(
   providerId: string | null,
   deviceId: string | null,
   enabled: boolean,
+  options?: { poolKind?: SubscriptionProvider },
 ): { accounts: GroupMemberAccount[] | null; loading: boolean } {
-  const pool = enabled && providerId && isSubscriptionProvider(providerId) ? providerId : null;
+  const pool = enabled && providerId && (
+    options?.poolKind
+      ? isSubscriptionPoolProviderIdShape(providerId)
+      : isSubscriptionProvider(providerId)
+  ) ? providerId : null;
+  const changeProviderId = options?.poolKind ?? pool;
   const observed = useLiveQuotaForeground(pool !== null) && pool !== null ? pool : null;
   const reconnectEpoch = useDeviceLinkReconnectEpoch(
     observed && deviceId ? deviceId : undefined,
@@ -119,21 +126,23 @@ export function useGroupMemberAccounts(
     };
     void refresh();
     const timer = window.setInterval(() => void refresh(), REFRESH_MS);
+    const matchesChange = (payloadProviderId: unknown) =>
+      payloadProviderId === observed || payloadProviderId === changeProviderId;
     const offChanged = deviceId
       ? window.electronAPI.deviceLink.onRemotePush?.((push, stamp) => {
           if (push.deviceId === deviceId && push.channel === 'subscription-accounts:changed' &&
-              (push.payload as { providerId?: unknown } | null)?.providerId === observed &&
+              matchesChange((push.payload as { providerId?: unknown } | null)?.providerId) &&
               isDeviceLinkRemotePushCurrent(push, stamp)) void refresh();
         })
       : window.electronAPI.subscriptionAccounts.onChanged((event) => {
-          if (event.providerId === observed) void refresh();
+          if (matchesChange(event.providerId)) void refresh();
         });
     return () => {
       disposed = true;
       window.clearInterval(timer);
       offChanged?.();
     };
-  }, [observed, deviceId, key, owner, reconnectEpoch]);
+  }, [observed, changeProviderId, deviceId, key, owner, reconnectEpoch]);
   const current = pool && loaded?.key === key && isDataOwnerGenerationCurrent(loaded.owner)
     ? loaded
     : null;

@@ -61,6 +61,7 @@ export class AgentNetMembership {
   private retryMs = MEMBERSHIP_RETRY_FIRST_MS;
   private lastReadFailed = false;
   private epoch = 0;
+  private resetAt = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly ports: AgentNetMembershipPorts) {}
 
@@ -74,6 +75,12 @@ export class AgentNetMembership {
 
   /** 读到过设备列表（这之前不拦任何设备）。 */
   hasDeviceList(): boolean { return this.listed !== null; }
+
+  /**
+   * 最近一次读到的设备列表里有没有这台（没读到过列表时 null）。查的是本机自己：被删后重新登录的设备 Device Link 照常能连，
+   * 却不回到列表里，同账号的电脑在 Agent-Net 上都拦它（2026-11-26），它要据此按被移除处理，不去等不会来的回应。
+   */
+  lists(deviceId: string): boolean | null { return this.listed ? this.listed.ids.has(deviceId) : null; }
 
   /** 名册变了。出现了列表里没有的设备（新加入的、刚重新登录的或删掉的）就去读一次列表；被拦的设备刚上线，最多每分钟确认一次。 */
   noteDirectory(members: Iterable<{ deviceId: string; online: boolean }>): void {
@@ -105,6 +112,7 @@ export class AgentNetMembership {
 
   /** 别处刚读到的本账号设备列表；startedAt 是开始读的时间（不传就算现在）。 */
   noteDeviceList(ids: Iterable<string>, startedAt = this.now()): void {
+    if (startedAt < this.resetAt) return;
     if (this.listed && this.listed.at > startedAt) return;
     this.listed = { ids: new Set(ids), at: startedAt };
     this.lastReadAt = Math.max(this.lastReadAt, startedAt);
@@ -143,6 +151,7 @@ export class AgentNetMembership {
   /** 换了账号或网络：之前的结论都不算。 */
   reset(): void {
     this.epoch++;
+    this.resetAt = this.now();
     if (this.deferred) { clearTimeout(this.deferred); this.deferred = null; }
     if (this.background) { clearTimeout(this.background); this.background = null; }
     this.retryMs = MEMBERSHIP_RETRY_FIRST_MS;

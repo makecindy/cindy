@@ -8,7 +8,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import type { AgentKind, EngineKind, Maker } from '@cindy/maker-core';
+import type { Maker } from '@cindy/maker-core';
 
 import { accountUsageLimitFromExhaustedResets } from '../../shared/accountUsageLimit.js';
 import { isOpenCodeGoProvider, opencodeGoUsageEndpoint } from '../../shared/opencodeGoUsage.js';
@@ -18,16 +18,17 @@ import { providerRoutingForModel } from '../maker-host/provider-route.js';
 import { createLogger } from '../logger.js';
 import {
   hasRestoredCodexQuota,
+  readLocalSubscriptionTaskUsageLimit,
   acquirePendingAgentSwitchForDirectSend,
   isSessionInTurn,
   ensureGoalInputReady,
   isGoalInputBlocked,
   resolveSessionRuntimeRoute,
   stopActiveGoalTurnForClear,
+  tryGoalModelGroupRecovery,
 } from '../maker-ipc/register.js';
 import { isSessionSharedTaskActive } from '../device-link/sharedTaskDispatch.js';
 import { createMessage } from '../localDb/ipc/messages.js';
-import { isPluginEngineTask } from '../maker-host/engineKind.js';
 import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings-store.js';
 import { getSessionRowSnapshot, touchSessionActivityInDb } from '../localDb/ipc/sessions.js';
 import {
@@ -56,13 +57,6 @@ export interface StartGoalControllerDeps {
   onUndispatchedUserTurn?: (sessionId: string) => void;
 }
 
-/** Goals do not run on plugin engines; every other live session keeps its Goal path. */
-function isGoalEngineSession<T extends { readonly agentKind: EngineKind }>(
-  session: T,
-): session is T & { readonly agentKind: AgentKind } {
-  return !isPluginEngineTask(session);
-}
-
 let _controller: GoalController | null = null;
 // Reuse the bounded startup gate, with one instance per controller lifetime.
 let _controllerReady = createMakerStartupGate();
@@ -80,11 +74,8 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
   const storage = new GoalStorage(deps.getDb);
   const controller = new GoalController({
     storage,
-    // Goal 只跑在内置引擎上;插件引擎任务的 live 会话不当作 Goal 会话(sessionRestore 同口径拒绝)。
-    getSession: (id): SessionLike | undefined => {
-      const session = deps.maker.getSession(id);
-      return session && isGoalEngineSession(session) ? session : undefined;
-    },
+    // 插件引擎任务同样能设目标(2026-11-25)：每轮按与用户发送相同的路径交给它自己的引擎。
+    getSession: (id): SessionLike | undefined => deps.maker.getSession(id),
     // 确保会话活着:已活直接返回;未活按存档 SessionMeta resume(spawn agent),
     // 仿 scheduler 心跳。修"开了对话没发消息 → goal 发不出第一轮"的根因。
     ensureSession: (id): Promise<SessionLike | undefined> =>
@@ -133,7 +124,11 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       });
     },
     // 按实际订阅账号处理限额错误与重置时刻；其它订阅保留主动配额检测。
-    getAccountLimit: async (agentKind, sessionId, turnError) => {
+    getAccountLimit: async (engineKind, sessionId, turnError) => {
+      // Plugin engines use their own CLI's login: Cindy has no account window to read. A rejected turn
+      // still stops the goal through the turn error itself (passive path).
+      if (engineKind === 'acp') return null;
+      const agentKind = engineKind;
       const row = await getSessionRowSnapshot(sessionId);
       const { providerId, modelId } = resolveSessionRuntimeRoute(sessionId, agentKind, row);
       const provider = providerId && getActiveCatalog().providers.find(p => p.id === providerId);
@@ -171,9 +166,17 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
       // 那台的独立账号本机目录认不出(上面判不出订阅家族)时也到这里,同样不读。
       // SSH 沿用原有的网关预算回落。
       if (row?.agentDeviceId && !row.remoteHostId) return null;
-      const subscription = await readAccountUsageLimit(agentKind, providerId, modelId).catch(
-        () => null,
-      );
+      const subscription = await (async () => {
+        if (family === 'claude' || family === 'codex') {
+          const pooled = await readLocalSubscriptionTaskUsageLimit(
+            family,
+            { sessionId, nativeSessionId: row?.sdkSessionId, providerId, agentKind, modelId },
+            { fresh: turnError !== undefined },
+          );
+          if (pooled !== undefined) return pooled;
+        }
+        return readAccountUsageLimit(agentKind, providerId, modelId);
+      })().catch(() => null);
       if (subscription !== undefined) return subscription;
       // 非订阅的 Claude Code 会话(Cindy 网关):读 LiteLLM 预算周期。
       if (agentKind === 'claude-code') {
@@ -189,6 +192,7 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
     },
     // usageLimited 到点自动续跑时,落一条"用量已恢复,继续目标"提示(渲染成 system card)。
     isSessionShared: (sessionId) => isSessionSharedTaskActive(sessionId),
+    tryModelGroupRecovery: (sessionId, signals) => tryGoalModelGroupRecovery(sessionId, signals),
     persistGoalNotice: async (sessionId, kind) => {
       await createMessage(sessionId, {
         clientId: randomUUID(),

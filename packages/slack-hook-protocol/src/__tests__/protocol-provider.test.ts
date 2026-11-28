@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   HOOK_FEATURE_PROVIDER_BIND,
+  HOOK_FEATURE_PROVIDER_DISCORD,
   HOOK_FEATURE_PROVIDER_FEISHU,
   HOOK_FEATURE_PROVIDER_PREFS,
   HOOK_FEATURE_PROVIDER_TELEGRAM,
@@ -124,6 +125,7 @@ describe('provider feature negotiation constants', () => {
     expect(HOOK_FEATURE_PROVIDER_TELEGRAM).toBe('provider:telegram');
     expect(HOOK_FEATURE_PROVIDER_X).toBe('provider:x');
     expect(HOOK_FEATURE_PROVIDER_FEISHU).toBe('provider:feishu');
+    expect(HOOK_FEATURE_PROVIDER_DISCORD).toBe('provider:discord');
   });
 
   it('does not alter the legacy Slack bind.start payload', () => {
@@ -234,10 +236,44 @@ describe('provider.bind frames', () => {
     );
   });
 
+  it('round-trips the discord bind code attempt and confirmed binding', () => {
+    // Official Discord binds by a one-time code the user sends to the bot (DM or
+    // /bind); connectUrl only installs the app, it never carries the secret.
+    const discordPending: ProviderBindStatusPayload = {
+      ...PENDING,
+      provider: 'discord',
+      scopeId: '100000000000000001',
+      scopeName: 'Cindy',
+      connectUrl: 'https://discord.com/oauth2/authorize?client_id=100000000000000001',
+      bindCode: 'K7Q4-M2XD',
+      actions: ['copy_bind_code', 'open_connect_url', 'copy_connect_url', 'cancel'],
+    };
+    roundTrip(makeProviderBindStart({ requestId: 'request-d-1', provider: 'discord' }));
+    roundTrip(makeProviderBindUpdate(discordPending));
+    roundTrip(
+      makeProviderBindState({
+        ...CONFIRMED,
+        provider: 'discord',
+        principalId: '200000000000000002',
+        scopeId: '100000000000000001',
+        scopeName: 'Cindy',
+        remediationUrl: null,
+      }),
+    );
+    roundTrip(
+      makeProviderPrefsGet({
+        requestId: 'prefs-d-1',
+        provider: 'discord',
+        bindingId: 'binding-d',
+        scopeId: null,
+      }),
+    );
+  });
+
   it('rejects unknown providers and unsafe links', () => {
     const start = makeProviderBindStart({ requestId: 'request-1', provider: 'telegram' });
     expectReject(
-      { ...start, payload: { ...start.payload, provider: 'discord' } },
+      { ...start, payload: { ...start.payload, provider: 'matrix' } },
       'provider.bind.start.provider',
     );
     const state = makeProviderBindState(PENDING);

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { BUNDLED_CATALOG, unifiedModelEntries, modelProtocolComparison, pickRecommendedAgent, type ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, unifiedModelEntries, modelProtocolComparison, pickRecommendedAgent, type ProviderView } from '@cindy/model-providers';
 import { parseModelsSyncPayload } from '../../main/model-access/modelsSyncRefresh';
 import {
   getActiveCatalog,
@@ -131,4 +131,39 @@ it('lists downloaded Gateway models in settings and follows catalog defaults unt
       modalities: { input: ['text', 'image'], output: ['text'] },
     },
   );
+});
+
+
+// #12253, unit: render the Settings rows from the stored result of a complete
+// refresh. Gateway arrival tests cannot catch a missing notice after the toast.
+it('keeps a model marked when its provider did not list it at the last refresh', () => {
+  const snapshot = (missing: boolean, listedForCodex = false): ProviderView => ({
+    ...buildUserProvider({
+      id: 'refresh-status-example', name: 'Refresh status', runtimes: {
+        pi: {
+          baseUrl: 'https://fixture.example/v1', wireProtocol: 'openai-chat',
+          models: [
+            { id: 'retained', name: 'Retained Model', listedUpstream: true,
+              ...(missing ? { missingUpstream: true } : {}) },
+            { id: 'available', name: 'Available Model', listedUpstream: true },
+          ],
+        },
+        ...(listedForCodex ? { codex: {
+          baseUrl: 'https://fixture.example/v1', wireProtocol: 'openai-chat',
+          models: [{ id: 'retained', name: 'Retained Model', listedUpstream: true }],
+        } } : {}),
+      },
+    }),
+    connected: true,
+  });
+  const status = 'settings.providers.models.withdrawn.rowStatus';
+  const view = render(<UnifiedModelList provider={snapshot(true)} />);
+  const retained = screen.getByText('Retained Model');
+  expect(retained.parentElement?.textContent).toContain(status);
+  expect(screen.getByText('Available Model').parentElement?.textContent).not.toContain(status);
+
+  view.rerender(<UnifiedModelList provider={snapshot(true, true)} />);
+  expect(screen.queryByText(status)).toBeNull();
+  view.rerender(<UnifiedModelList provider={snapshot(false)} />);
+  expect(screen.queryByText(status)).toBeNull();
 });

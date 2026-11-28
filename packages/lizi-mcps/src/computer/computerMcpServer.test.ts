@@ -2207,6 +2207,55 @@ describe('unavailable observations get window state without an identity error', 
   });
 });
 
+describe('a target app macOS refuses to the driver is named as a permission problem', () => {
+  // macOS 27.3 lets the person allow CuaDriver to control only chosen apps. A target outside
+  // that list answers AX with kAXErrorAPIDisabled while CGWindowList still shows the window,
+  // so the old classification sent the model to rediscover a window that was never missing.
+  const denied = "ax_window_unresolved: window_id 9 exists and is owned by pid 7, but reading that pid's AXWindows failed with AXError -25211 (kAXErrorAPIDisabled). The tree is returned EMPTY on purpose";
+  const onScreen = { windows: [{ pid: 7, window_id: 9, app_name: 'Notes', is_on_screen: true }] };
+
+  it.each([
+    ['a degraded read', () => ({ degraded: true, degraded_reason: denied, elements: [], tree_markdown: '' }), 'app_control_not_allowed'],
+    ['a thrown read', () => { throw Object.assign(new Error(denied), { code: 'ax_window_unresolved' }); }, 'app_control_not_allowed'],
+    // Other AX errors mean the app did not answer, not that macOS refused it.
+    ['an unanswered read', () => ({ degraded: true, degraded_reason: denied.replace('-25211 (kAXErrorAPIDisabled)', '-25204 (kAXErrorCannotComplete)'), elements: [], tree_markdown: '' }), 'driver_error'],
+  ])('get_window_state: %s', async (_label, read, reason) => {
+    const callTool = vi.fn(async (name: string) => name === 'list_windows' ? onScreen : read());
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: `denied-${reason}` });
+    try {
+      const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'get_window_state', args: { pid: 7, window_id: 9, include_screenshot: false },
+      } })) as { reason?: string; hint?: string; data?: { hint?: string; next_step?: string }; recovery?: unknown };
+      expect(result.reason).toBe(reason);
+      // #12506 review: denied reads cannot be recovered by re-enumerating windows (unit).
+      expect(callTool.mock.calls.map(([name]) => name)).toEqual(
+        reason === 'app_control_not_allowed' ? ['get_window_state'] : ['get_window_state', 'list_windows'],
+      );
+      if (reason === 'app_control_not_allowed') {
+        expect(result.recovery).toBeUndefined();
+        expect(result.hint ?? result.data?.hint).toContain('System & App Protection Override');
+      }
+    } finally { await h.cleanup(); }
+  });
+
+  it.each([
+    ['thrown', () => { throw new Error('click failed: AXUIElementPerformAction returned AXError -25211 (kAXErrorAPIDisabled)'); }],
+    ['returned', () => ({ ok: false, degraded_reason: denied })],
+  ])('points a %s refused action at check_permissions instead of a retry', async (_label, refuse) => {
+    const callTool = vi.fn(async (_name: string) => refuse());
+    const h = await makeHarness({ getStatus: vi.fn(), callTool, describeDesktop: async () => ({ screen_locked: false }) }, { sessionId: 'denied-click' });
+    try {
+      const result = textPayload(await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'click', args: { pid: 7, window_id: 9, x: 10, y: 10 },
+      } })) as { errorCode?: string; reason?: string; data?: { next_step?: string; hint?: string }; recovery?: unknown };
+      expect(result).toMatchObject({ errorCode: 'COMPUTER_DRIVER_ERROR', reason: 'app_control_not_allowed' });
+      expect(result.data).toMatchObject({ next_step: 'check_permissions' });
+      expect(result.recovery).toBeUndefined();
+      expect(callTool.mock.calls.map(([name]) => name)).toEqual(['click']);
+    } finally { await h.cleanup(); }
+  });
+});
+
 describe('thrown window identity failures carry the same reason', () => {
   // 2026-10-31 dev-build run: a dead window_id made the driver throw
   // window_id_not_found, which skipped the CUA_UNAVAILABLE classification.

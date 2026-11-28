@@ -1,3 +1,19 @@
+// Internal send-admission signal for the queue coordinator. Keep the existing
+// IPC error contract if this reaches the ordinary failure path.
+export class BotCapabilityRefreshDeferredError extends Error {
+  readonly code = 'PRECONDITION_FAILED';
+
+  constructor() {
+    super('[PRECONDITION_FAILED] 伙伴能力正在刷新，请稍后再发送');
+  }
+}
+
+export class BotRuntimeBecameBusyError extends Error {
+  constructor() {
+    super('Bot runtime became busy before compact refresh');
+  }
+}
+
 export interface BotCompactRuntimeSession {
   readonly id: string;
   readonly instanceId: string;
@@ -18,7 +34,8 @@ export type BotCompactRuntimeRefreshOutcome = 'refreshed' | 'not-bot' | 'deferre
 
 /** Send admission adds one outcome: the refresh stays pending, but the input
  * may run on the current runtime because only background jobs block it. */
-export type BotCapabilityEpochSendOutcome = BotCompactRuntimeRefreshOutcome | 'kept-current-runtime';
+type BotRuntimeRefreshAttempt = BotCompactRuntimeRefreshOutcome | 'refresh-failed';
+export type BotCapabilityEpochSendOutcome = BotRuntimeRefreshAttempt | 'kept-current-runtime';
 
 /** Model switching may already bootstrap the latest Profile. Do not close that
  * fresh handle again: a native thread may not persist a rollout until its first
@@ -44,26 +61,42 @@ export interface BotCompactRuntimeRefreshDeps {
   ): Promise<BotCompactRuntimeRefreshOutcome>;
   now?: () => number;
   onError?: (sessionId: string, error: unknown) => void;
+  onReady?: (sessionId: string) => void;
+}
+
+/**
+ * A resource/profile refresh signal may keep the live runtime only when the
+ * preflight compared against an applied baseline and found it unchanged. No
+ * hydrated Profile or no applied baseline (e.g. its first write failed) is not
+ * proof of "unchanged", so it keeps the previous rebuild.
+ */
+export function botRuntimeRefreshNeedsReplacement(snapshot: {
+  runtimeEpochChanged: boolean;
+  runtimeEpochBaseline: boolean;
+} | null | undefined): boolean {
+  return !snapshot || !snapshot.runtimeEpochBaseline || snapshot.runtimeEpochChanged;
 }
 
 /**
  * Preserve the live runtime when a frozen Bot resource changed. The preflight
  * must finish before close, and ownership is checked again immediately before
- * the destructive half of the swap.
+ * the destructive half of the swap. The preflight reports whether the runtime
+ * epoch changed; an unchanged epoch keeps the live runtime and returns null,
+ * matching the comparison made before a send.
  */
 export async function replaceBotRuntimeAfterPreflight<T>(deps: {
-  preflight(): Promise<void>;
+  preflight(): Promise<boolean>;
   isCurrentOwner(): boolean;
   isIdle?(): boolean;
   close(): Promise<void>;
   bootstrap(): Promise<T>;
-}): Promise<T> {
-  await deps.preflight();
+}): Promise<T | null> {
+  if (!await deps.preflight()) return null;
   if (!deps.isCurrentOwner()) {
     throw new Error('Bot runtime owner changed before compact refresh');
   }
   if (deps.isIdle && !deps.isIdle()) {
-    throw new Error('Bot runtime became busy before compact refresh');
+    throw new BotRuntimeBecameBusyError();
   }
   await deps.close();
   return deps.bootstrap();
@@ -85,7 +118,7 @@ export function createBotCompactRuntimeRefreshCoordinator(
   >();
   const inFlight = new Map<string, {
     entry: { session: BotCompactRuntimeSession; boundary: BotCompactBoundary };
-    operation: Promise<BotCompactRuntimeRefreshOutcome>;
+    operation: Promise<BotRuntimeRefreshAttempt>;
   }>();
 
   function noteBoundary(session: BotCompactRuntimeSession): BotCompactBoundary {
@@ -104,9 +137,9 @@ export function createBotCompactRuntimeRefreshCoordinator(
     return boundary;
   }
 
-  async function attempt(
+  async function attemptForSend(
     session: BotCompactRuntimeSession,
-  ): Promise<BotCompactRuntimeRefreshOutcome> {
+  ): Promise<BotRuntimeRefreshAttempt> {
     const entry = pending.get(session.id);
     if (!entry || entry.session !== session || entry.boundary.sessionInstanceId !== session.instanceId) {
       return 'not-bot';
@@ -116,7 +149,7 @@ export function createBotCompactRuntimeRefreshCoordinator(
       if (existing.entry === entry) return existing.operation;
       // A newer boundary/instance must not consume the old refresh's receipt.
       await existing.operation;
-      return attempt(session);
+      return attemptForSend(session);
     }
     if (
       session.isTurnRunning()
@@ -129,17 +162,23 @@ export function createBotCompactRuntimeRefreshCoordinator(
 
     const operation = (async () => deps.refresh(session, entry.boundary))()
       .then((outcome) => {
-        if (
-          outcome !== 'deferred'
-          && pending.get(session.id) === entry
-        ) {
+        const current = pending.get(session.id);
+        if (outcome !== 'deferred' && current === entry) {
           pending.delete(session.id);
+        }
+        // A successful replacement can clear the old runtime's marker during
+        // close. A newer pending epoch still owns its own readiness boundary.
+        if (outcome !== 'deferred' && (current === entry || (!current && outcome === 'refreshed'))) {
+          deps.onReady?.(session.id);
         }
         return outcome;
       })
       .catch((error) => {
+        if (error instanceof BotRuntimeBecameBusyError) return 'deferred' as const;
         deps.onError?.(session.id, error);
-        return 'deferred' as const;
+        const current = pending.get(session.id);
+        if (current === entry || !current) deps.onReady?.(session.id);
+        return 'refresh-failed' as const;
       })
       .finally(() => {
         if (inFlight.get(session.id)?.operation === operation) inFlight.delete(session.id);
@@ -170,7 +209,11 @@ export function createBotCompactRuntimeRefreshCoordinator(
 
   return {
     noteBoundary,
-    attempt,
+    async attempt(session: BotCompactRuntimeSession): Promise<BotCompactRuntimeRefreshOutcome> {
+      const outcome = await attemptForSend(session);
+      return outcome === 'refresh-failed' ? 'deferred' : outcome;
+    },
+    attemptForSend,
     clearForClosedSession,
     isBlockedOnlyByBackgroundTasks,
     hasPending: (sessionId: string, session?: BotCompactRuntimeSession) => {
@@ -213,7 +256,8 @@ export async function prepareBotCapabilityEpochBeforeSend<T extends {
     if (!await deps.preflight({ ...row, workingDir: row.workingDir })) return 'not-bot';
     coordinator.noteBoundary(session);
   }
-  const outcome = await coordinator.attempt(session);
+  const outcome = await coordinator.attemptForSend(session);
   if (!coordinator.hasPending(session.id, session)) return outcome;
-  return coordinator.isBlockedOnlyByBackgroundTasks(session) ? 'kept-current-runtime' : 'deferred';
+  if (coordinator.isBlockedOnlyByBackgroundTasks(session)) return 'kept-current-runtime';
+  return outcome === 'refresh-failed' ? outcome : 'deferred';
 }

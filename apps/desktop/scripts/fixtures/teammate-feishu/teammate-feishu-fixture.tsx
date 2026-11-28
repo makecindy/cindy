@@ -8,6 +8,7 @@ mountPage({
     let saved = false;
     const connections = ctx.data.imessage ? [{ id: 'aabbccddeeff', botId: 'fixture-cindy', channel: 'imessage',
       createdAt: 1, status: { kind: 'connected', appId: 'fixture' }, identity: { username: null, ownerUserId: null },
+      ...(ctx.data.denied ? { health: { uncertainInputs: 0, uncertainSends: 1, automationDenied: true } } : {}),
       ...(ctx.data.groupEdit ? { botContextId: 'fixture' } : {}) }] : [];
     return {
     botImConnection: {

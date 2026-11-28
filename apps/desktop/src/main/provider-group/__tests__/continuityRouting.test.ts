@@ -20,6 +20,7 @@ vi.mock('@cindy/device-link', async () => {
     isProviderAccessDeniedError: metadata.isProviderAccessDeniedError,
     readProviderMetadataContinuity: metadata.readProviderMetadataContinuity,
     PROVIDER_METADATA_TRUST_MS: metadata.PROVIDER_METADATA_TRUST_MS,
+    REMOTE_CATALOG_FRESH_MS: metadata.REMOTE_CATALOG_FRESH_MS,
     isScopedPeer: protocol.isScopedPeer,
     PROVIDER_GROUP_REMOTE_CHANNEL: group.PROVIDER_GROUP_REMOTE_CHANNEL,
     providerShareGuestPeer: protocol.providerShareGuestPeer,
@@ -38,7 +39,7 @@ function fixture(options: { withLocal?: boolean } = {}) {
   });
   const executor = createGroupContinuityExecutor({ capture: () => () => clock.current, inspect, bindFast: bind,
     wall: () => clock.wall, mono: () => clock.mono });
-  const config = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true, allowFast: false,
+  const config = normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true, allowFast: false,
     members: [
       ...(options.withLocal ? [{ kind: 'local' }] : []),
       { kind: 'device', agentDeviceId: 'M', providerId: 'openai' },
@@ -532,7 +533,7 @@ describe('same-account group continuity routing', () => {
 
   it('keeps a neighbour provider usable when another group is forgotten', async () => {
     const f = fixture();
-    const otherConfig = normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true, allowFast: false,
+    const otherConfig = normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true, allowFast: false,
       members: [{ kind: 'device', agentDeviceId: 'M2', providerId: 'anthropic' }] }, 'anthropic')!;
     const otherGrant = { ...f.grant, id: 'grant-other', group: 'anthropic', providerId: 'anthropic' };
     const otherAck = await f.executor.handle('O', { action: 'continuity-prepare', grant: otherGrant });
@@ -622,7 +623,7 @@ describe('same-account group continuity routing', () => {
   // - Tier: unit integration (real client/executor; fake transport/metadata capture).
   it('does not evict a neighbour when an uncapturable pick or existing-key refresh needs no new row', async () => {
     const clock = { wall: 0, mono: 0, online: true };
-    const configFor = (agentDeviceId: string) => normalizeProviderGroupConfig({ strategy: 'least', autoSwitch: true,
+    const configFor = (agentDeviceId: string) => normalizeProviderGroupConfig({ strategy: 'expiring', autoSwitch: true,
       allowFast: false, members: [{ kind: 'device', agentDeviceId, providerId: 'openai' }] }, 'openai')!;
     const oldConfig = configFor('M'), newConfig = configFor('M2');
     const oldMember = oldConfig.members[0], newMember = newConfig.members[0];

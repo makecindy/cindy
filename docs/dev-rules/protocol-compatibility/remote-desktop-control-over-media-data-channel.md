@@ -6,7 +6,7 @@
 `{ type: "request", id, request }`，并以 `{ type: "reply", id, ok, result | error }` 回复。
 可走通道的请求限于 `REMOTE_DESKTOP_CHANNEL_OPS`（`control`、`heartbeat`、`presentation`、`hostMute`、
 `privacyScreen`、`windowAction`（不含 `list`）、`displayModes`、`clipboardSync`、
-`clipboardVersion`、`screenShape`），单条不超过 32 KiB（32768 字节），id 为 1–64 位 `[A-Za-z0-9_-]`。
+`clipboardVersion`、`screenShape`、[`editableClick`](remote-desktop-editable-click.md)），单条不超过 32 KiB（32768 字节），id 为 1–64 位 `[A-Za-z0-9_-]`。
 
 旧被控端收到不认识的通道数据会结束会话，因此控制端只在能力为真、视频已在播放、请求
 lease 与当前 lease 一致时才走通道，否则照旧走 relay。被控端主进程对通道请求做与 relay

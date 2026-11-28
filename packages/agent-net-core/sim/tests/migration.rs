@@ -422,6 +422,72 @@ fn idle_connections_only_keep_alive() {
     assert_eq!(duo.spurious_wakes, 0);
 }
 
+/// 测试价值：公开 SecureConnection 收发与计时入口上，两端都没事做时对端没了（被强行结束、休眠、断网）。
+/// 探测一直没有回音，到判死时限这条连接要断：否则上层一直显示对端在线、也不再重拨（2026-11-21 真机，
+/// 手机被强杀以后电脑抱着连接 44 秒到 15 分钟）。`idle_connections_only_keep_alive` 只覆盖对端一直回探测的情形；
+/// 可靠层的判死（`outages_recover_or_give_up_within_the_deadline`）都有数据在途。
+/// 最小输入：一条传完数据、已经空闲的连接，之后一个方向的包全部送不到。Rust integration，虚拟时间。
+#[test]
+fn an_idle_connection_whose_peer_is_gone_is_declared_dead() {
+    let mut duo = Duo::new();
+    duo.upload(&[1; 20_000]);
+    assert!(duo.run_until(duo.now + 5_000_000, &|duo| duo.in_flight.is_empty()));
+    // 对端只是没东西要发：一来一回的探测一直有回音，过多久都不判死。
+    assert!(!duo.run_until(duo.now + 90_000_000, &|duo| duo.client.is_dead() || duo.server.is_dead()));
+    // 客户端的包从此送不到服务端：服务端最后一次听到客户端最多是 15 秒前（空闲时的探测间隔）。
+    duo.uplink = false;
+    let (gone, packets) = (duo.now, duo.wire.len());
+    assert!(duo.run_until(gone + 60_000_000, &|duo| duo.server.is_dead()), "the server never gave up");
+    let waited = duo.now - gone;
+    assert!((14_000_000..=31_000_000).contains(&waited), "gave up after {waited} us");
+    // 判死前每秒探测一次，不退避也不加码。
+    let probes = duo.wire[packets..].iter().filter(|(to_server, _, _)| !*to_server).count();
+    assert!(probes <= 40, "{probes} packets to a peer that is gone");
+    // 服务端停了以后客户端也再听不到任何包，同样在判死时限内放弃。
+    let quiet = duo.now;
+    assert!(duo.run_until(quiet + 60_000_000, &|duo| duo.client.is_dead()), "the client never gave up");
+    assert!(duo.now - quiet <= 31_000_000, "the client gave up after {} us", duo.now - quiet);
+    assert_eq!(duo.spurious_wakes, 0);
+}
+
+/// 测试价值：同一入口上，这一端自己停了很久（手机进程被冻结、电脑休眠）再醒来。离上次听到对端早就超过判死时限，
+/// 但那段时间这一端没有在听：对端还在时醒来探测一次就有回音，连接不能断；对端真没了，要接连探测几次都没有回音才判死。
+/// 停之前已经有一次探测没等到回音时也一样（PR #11856 审阅：那次探测丢了、这一端随后停了，醒来的第一个计时器
+/// 不能拿它判死）。没有这两条时 `an_idle_connection_whose_peer_is_gone_is_declared_dead` 的规则会把好连接判死。
+/// 最小输入：一条空闲的连接，停之前探测有回音或正好丢了，时钟一次跳过两个判死时限，跳完以后对端在或不在。
+/// Rust integration，虚拟时间。
+#[test]
+fn waking_after_a_long_stop_probes_before_giving_up() {
+    for (probe_lost_before, peer_alive) in [(false, true), (false, false), (true, true), (true, false)] {
+        let label = format!("probe lost before the stop: {probe_lost_before}, peer alive: {peer_alive}");
+        let mut duo = Duo::new();
+        duo.upload(&[1; 20_000]);
+        assert!(duo.run_until(duo.now + 20_000_000, &|duo| duo.in_flight.is_empty()), "{label}");
+        if probe_lost_before {
+            // 服务端下一次探测（最多 15 秒后）等不到回音，之后每秒一次，这样过了几秒才停。
+            let probes = duo.server.security_stats().silence_pings;
+            duo.uplink = false;
+            assert!(duo.run_until(duo.now + 20_000_000, &|duo| duo.server.security_stats().silence_pings >= probes + 3), "{label}");
+            assert!(!duo.server.is_dead(), "{label}");
+        }
+        // 两端都停了一分钟：谁也没有运行，线上也没有包。
+        duo.in_flight.clear();
+        duo.now += 60_000_000;
+        duo.uplink = peer_alive;
+        let woke = duo.now;
+        let died = duo.run_until(woke + 20_000_000, &|duo| duo.server.is_dead());
+        assert_eq!(died, !peer_alive, "{label}");
+        if peer_alive {
+            assert!(!duo.client.is_dead() && duo.client.is_established() && duo.server.is_established(), "{label}");
+        } else {
+            let waited = duo.now - woke;
+            assert!((2_000_000..=5_000_000).contains(&waited), "{label}: gave up {waited} us after waking");
+        }
+        // 时钟跳过去的那一下，两端到期的计时器各算一次；之后不能再空转。
+        assert!(duo.spurious_wakes <= 2, "{label}: {} spurious wakes", duo.spurious_wakes);
+    }
+}
+
 /// 抓到过真实 bug 的种子，每次都跑：5314、9232 换网后几轮几乎没送到数据，降速阶段的节奏被压成 0，除以 0 崩溃；
 /// 900360 真换了网络时抢先复制的包把要验证的地址顶掉，真的新地址一直验证不完；901894 对端回过一次探测就再也不探测，
 /// 之后悄悄换了地址就失联；921733 换网后只在下载、新网络上行丢三成还成段丢包，唯一送到的探测又被抢先复制，
@@ -540,4 +606,262 @@ fn rotating_ids_survive_random_moves() {
         let report = run_rotating_moves(&case);
         assert!(report.finished && report.spurious_wakes == 0 && amplification_bounded(&report), "seed {seed}: {}\n{case:?}", describe(&report));
     }
+}
+
+/// 测试价值（小 MTU 直连路径自动降档探测与双向传输）：
+/// - 生产入口与可观察结果：`SecureConnection::probe_path` 与 `poll_transmit_via` 在直连路径丢弃 > 1200 字节 UDP 包时，
+///   主动端前两次满长（1309 B）探测失败后第 3 次自动降档到 `SMALL_MTU_PROBE_LEN`（1180 B）验证通过并收窄活跃发包上限；
+///   随后主动端经新路径发送短包触发跟随端受放大额度限制的短验证（< 1180 B），跟随端收到 1180 B 回复后同样收窄到 1180 B
+///   （不把短验证误当满长证明），两端在 1200 B 路径上双向各完成 64 KiB 数据传输；再切到全 MTU 路径时双端恢复 1309 B。
+///   若切换瞬间发送队列仍有未确认的超长分片，先留作备用不卡死重传，待确认清空后再次探测可顺利切换。
+/// - Bug／规则依据：跨 PPPoE/IPv6/VPN 隧道直连时，1309 B 验证包被静默黑洞会导致直连打不通；若跟随端把受放大限制的短验证
+///   当成 1309 B 满长证明，反向大包仍会在 1200 B 路径上被持续丢弃。
+/// - 现有覆盖缺口：已有迁移测试的链路均放行完整 `send_packet_size`，未覆盖小 MTU 直连路径黑洞、跟随端短验证与双向发包上限收窄/恢复。
+/// - 最小失败输入：中转路径 0（全 MTU，cost 1）+ 直连路径 1（硬上限 1200 B，cost 0）+ 直连路径 2（全 MTU，cost 0）。
+/// - tier：Rust integration，虚拟时间，无真实网络。
+#[test]
+fn small_mtu_direct_path_falls_back_to_reduced_probe_and_transfers_data() {
+    use agent_net_core::Crypto;
+    let cfg = Config { send_packet_size: 1309, ..config() };
+    let client_crypto = TestCrypto::<AesGcm>::from_seed(101);
+    let server_crypto_init = TestCrypto::<AesGcm>::from_seed(202);
+    let server_pub = server_crypto_init.static_public();
+    let mut server_crypto_opt = Some(server_crypto_init);
+    let mut client = SecureConnection::connect(client_crypto, cfg.clone(), PROLOGUE, &server_pub, b"", 0).unwrap();
+    let mut server: Option<SecureConnection<TestCrypto<AesGcm>>> = None;
+    let mut out = [0u8; 2048];
+    let mut now = 0u64;
+
+    let mut step = |now: u64, client: &mut SecureConnection<TestCrypto<AesGcm>>, server: &mut Option<SecureConnection<TestCrypto<AesGcm>>>, max_on_path1: usize, drop_path0: bool| -> (Vec<usize>, Vec<usize>, Vec<u8>, Vec<u8>) {
+        let mut client_path1_sizes = Vec::new();
+        let mut server_path1_sizes = Vec::new();
+        let mut server_delivered = Vec::new();
+        let mut client_delivered = Vec::new();
+        let mut buf = [0u8; 2048];
+        for _ in 0..32 {
+            let mut moved = false;
+            while let Some((n, path)) = client.poll_transmit_via(now, &mut out) {
+                moved = true;
+                if path == 1 {
+                    client_path1_sizes.push(n);
+                    if n > max_on_path1 {
+                        continue;
+                    }
+                }
+                if path == 0 && drop_path0 {
+                    continue;
+                }
+                if let Some(srv) = server.as_mut() {
+                    let _ = srv.on_packet_via(now, path, &out[..n]);
+                } else if is_initiation(&out[..n]) {
+                    let srv_crypto = server_crypto_opt.take().unwrap();
+                    let incoming = Incoming::read(&srv_crypto, PROLOGUE, &out[..n]).unwrap();
+                    let mut srv = incoming.accept(srv_crypto, cfg.clone(), b"", now).unwrap();
+                    srv.set_path_cost(0, 1);
+                    *server = Some(srv);
+                }
+            }
+            if let Some(srv) = server.as_mut() {
+                while let Some((n, path)) = srv.poll_transmit_via(now, &mut out) {
+                    moved = true;
+                    if path == 1 {
+                        server_path1_sizes.push(n);
+                        if n > max_on_path1 {
+                            continue;
+                        }
+                    }
+                    if path == 0 && drop_path0 {
+                        continue;
+                    }
+                    let _ = client.on_packet_via(now, path, &out[..n]);
+                }
+                loop {
+                    let got = srv.recv(now, &mut buf);
+                    if got == 0 { break; }
+                    server_delivered.extend_from_slice(&buf[..got]);
+                }
+            }
+            loop {
+                let got = client.recv(now, &mut buf);
+                if got == 0 { break; }
+                client_delivered.extend_from_slice(&buf[..got]);
+            }
+            if !moved { break; }
+        }
+        (client_path1_sizes, server_path1_sizes, server_delivered, client_delivered)
+    };
+
+    client.set_path_cost(0, 1);
+    while !client.is_established() || !server.as_ref().is_some_and(SecureConnection::is_established) {
+        step(now, &mut client, &mut server, 1200, false);
+        now += 10_000;
+        client.tick(now);
+        if let Some(srv) = server.as_mut() { srv.tick(now); }
+        assert!(now < 2_000_000, "handshake did not complete");
+    }
+    assert_eq!(client.path(), 0);
+    assert_eq!(client.active_send_packet_size(), 1309);
+    assert_eq!(server.as_ref().unwrap().active_send_packet_size(), 1309);
+
+    // Probe direct path 1 whose MTU ceiling is 1200 bytes: first two 1309B probes drop, third steps down to 1180B and succeeds.
+    assert!(client.probe_path(now, 1));
+    let mut saw_full_probe = false;
+    let mut saw_small_probe = false;
+    while client.path() != 1 {
+        let (sizes, _, _, _) = step(now, &mut client, &mut server, 1200, false);
+        for s in sizes {
+            if s == 1309 { saw_full_probe = true; }
+            if s == agent_net_core::SMALL_MTU_PROBE_LEN { saw_small_probe = true; }
+        }
+        now += 20_000;
+        client.tick(now);
+        server.as_mut().unwrap().tick(now);
+        assert!(now < 4_000_000, "small-MTU direct path did not validate");
+    }
+    assert!(saw_full_probe && saw_small_probe, "expected full-size attempts before stepping down");
+    assert_eq!(client.active_send_packet_size(), agent_net_core::SMALL_MTU_PROBE_LEN);
+
+    // Trigger follower migration with a tiny packet so server's first passive challenge is amplification-limited (< 1180B).
+    // Server must NOT treat that short challenge + 1180B response as proof of 1309B MTU; it must clamp to 1180B as well.
+    let ping_payload = b"short-follow-trigger";
+    assert_eq!(client.send(now, ping_payload), ping_payload.len());
+    let mut short_received = Vec::new();
+    let mut saw_short_follower_challenge = false;
+    while server.as_ref().unwrap().path() != 1 || short_received.len() < ping_payload.len() {
+        let (_, srv_sizes, got, _) = step(now, &mut client, &mut server, 1200, false);
+        if srv_sizes.iter().any(|&s| s < agent_net_core::SMALL_MTU_PROBE_LEN) {
+            saw_short_follower_challenge = true;
+        }
+        short_received.extend_from_slice(&got);
+        now += 10_000;
+        client.tick(now);
+        server.as_mut().unwrap().tick(now);
+        assert!(now < 6_000_000, "follower did not migrate to small-MTU path 1");
+    }
+    assert_eq!(short_received, ping_payload);
+    assert!(saw_short_follower_challenge, "expected follower to send an amplification-limited short challenge");
+    assert_eq!(server.as_ref().unwrap().active_send_packet_size(), agent_net_core::SMALL_MTU_PROBE_LEN);
+
+    // Reverse bulk transfer (server -> client, 64 KiB) over the 1200B-MTU direct path: every server packet must stay <= 1180B.
+    let reverse_payload: Vec<u8> = (0..65_536).map(|i| ((i * 7 + 13) % 251) as u8).collect();
+    let mut reverse_sent = 0usize;
+    let mut reverse_received = Vec::new();
+    while reverse_received.len() < reverse_payload.len() {
+        if reverse_sent < reverse_payload.len() {
+            reverse_sent += server.as_mut().unwrap().send(now, &reverse_payload[reverse_sent..]);
+        }
+        let (_, srv_sizes, _, got_client) = step(now, &mut client, &mut server, 1200, false);
+        assert!(srv_sizes.iter().all(|&s| s <= agent_net_core::SMALL_MTU_PROBE_LEN), "oversized follower packet on clamped path: {srv_sizes:?}");
+        reverse_received.extend_from_slice(&got_client);
+        now += 5_000;
+        client.tick(now);
+        server.as_mut().unwrap().tick(now);
+        assert!(now < 12_000_000, "reverse transfer stalled on small-MTU path: got {}/{}", reverse_received.len(), reverse_payload.len());
+    }
+    assert_eq!(reverse_received, reverse_payload);
+
+    // Forward bulk transfer (client -> server, 64 KiB) over the 1200B-MTU direct path; every emitted packet on path 1 must stay <= 1180B.
+    let payload: Vec<u8> = (0..65_536).map(|i| (i % 251) as u8).collect();
+    let mut sent = 0usize;
+    let mut received = Vec::new();
+    while received.len() < payload.len() {
+        if sent < payload.len() {
+            sent += client.send(now, &payload[sent..]);
+        }
+        let (sizes, _, got, _) = step(now, &mut client, &mut server, 1200, false);
+        assert!(sizes.iter().all(|&s| s <= agent_net_core::SMALL_MTU_PROBE_LEN), "oversized packet on clamped path: {sizes:?}");
+        received.extend_from_slice(&got);
+        now += 5_000;
+        client.tick(now);
+        server.as_mut().unwrap().tick(now);
+        assert!(now < 18_000_000, "transfer stalled on small-MTU path: got {}/{}", received.len(), payload.len());
+    }
+    assert_eq!(received, payload);
+
+    // Probing a full-MTU direct path (path 2) restores active_send_packet_size back to 1309 on BOTH client and follower.
+    assert!(client.probe_path(now, 2));
+    while client.path() != 2 {
+        step(now, &mut client, &mut server, 1200, false);
+        now += 10_000;
+        client.tick(now);
+        server.as_mut().unwrap().tick(now);
+        assert!(now < 20_000_000, "full-MTU path 2 did not validate");
+    }
+    assert_eq!(client.active_send_packet_size(), 1309);
+    let follow_full = b"back-to-full-mtu";
+    assert_eq!(client.send(now, follow_full), follow_full.len());
+    let mut full_received = Vec::new();
+    while server.as_ref().unwrap().path() != 2 || full_received.len() < follow_full.len() {
+        let (_, _, got, _) = step(now, &mut client, &mut server, 1200, false);
+        full_received.extend_from_slice(&got);
+        now += 10_000;
+        client.tick(now);
+        server.as_mut().unwrap().tick(now);
+        assert!(now < 22_000_000, "follower did not migrate to full-MTU path 2");
+    }
+    assert_eq!(full_received, follow_full);
+    assert_eq!(server.as_ref().unwrap().active_send_packet_size(), 1309);
+
+    // Queue an oversized segment (> 1180B) on full-MTU path 2 and drop path 2 packets so it remains unacked while probing
+    // small-MTU path 1: switch must defer instead of livelocking, and succeed cleanly once path 2 drains.
+    let big = vec![0x5au8; 4_096];
+    assert_eq!(client.send(now, &big), big.len());
+    let mut pkt = [0u8; 2048];
+    let mut saw_oversized_on_path2 = false;
+    while let Some((n, path)) = client.poll_transmit_via(now, &mut pkt) {
+        if path == 2 && n > agent_net_core::SMALL_MTU_PROBE_LEN {
+            saw_oversized_on_path2 = true;
+        }
+    }
+    assert!(saw_oversized_on_path2, "expected an oversized segment (>1180B) to be cut on full-MTU path 2");
+    assert!(client.probe_path(now, 1));
+    let start_defer = now;
+    while now - start_defer < 1_000_000 {
+        let mut buf = [0u8; 2048];
+        while let Some((n, path)) = client.poll_transmit_via(now, &mut pkt) {
+            // Drop path 2 data so oversized segments remain unacked, while letting path 1 (<=1200B) pass.
+            if path == 1 && n <= 1200 {
+                let _ = server.as_mut().unwrap().on_packet_via(now, path, &pkt[..n]);
+            }
+        }
+        while let Some((n, path)) = server.as_mut().unwrap().poll_transmit_via(now, &mut pkt) {
+            if path == 1 && n <= 1200 {
+                let _ = client.on_packet_via(now, path, &pkt[..n]);
+            }
+        }
+        let _ = server.as_mut().unwrap().recv(now, &mut buf);
+        now += 20_000;
+        client.tick(now);
+        server.as_mut().unwrap().tick(now);
+    }
+    // Deferred: still on path 2 at full MTU, path 1 kept as alternate.
+    assert_eq!(client.path(), 2);
+    assert_eq!(client.active_send_packet_size(), 1309);
+    // Drain path 2 so oversized segments finish acking, then re-probe path 1 -> switches cleanly to 1180B.
+    let mut drained = Vec::new();
+    while drained.len() < big.len() {
+        let (_, _, got, _) = step(now, &mut client, &mut server, 1200, false);
+        drained.extend_from_slice(&got);
+        now += 10_000;
+        client.tick(now);
+        server.as_mut().unwrap().tick(now);
+        assert!(now < 28_000_000, "failed to drain oversized segment: got {}/{}", drained.len(), big.len());
+    }
+    assert_eq!(drained, big);
+    // Allow ack to settle back to client.
+    for _ in 0..5 {
+        step(now, &mut client, &mut server, 1200, false);
+        now += 10_000;
+        client.tick(now);
+        server.as_mut().unwrap().tick(now);
+    }
+    assert!(client.probe_path(now, 1));
+    while client.path() != 1 {
+        step(now, &mut client, &mut server, 1200, false);
+        now += 20_000;
+        client.tick(now);
+        server.as_mut().unwrap().tick(now);
+        assert!(now < 32_000_000, "path 1 did not switch after drain");
+    }
+    assert_eq!(client.active_send_packet_size(), agent_net_core::SMALL_MTU_PROBE_LEN);
 }

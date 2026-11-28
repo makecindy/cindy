@@ -61,6 +61,7 @@ vi.mock('../../device-link/crossProcessLock.js', () => ({
   ) => task({ held: mock.lockHeld, reason: 'busy' }),
 }));
 vi.mock('../../appSessionState.js', () => ({
+  getDataOwnerLifetime: () => 0,
   getActiveAppSession: () => ({ mode: 'local', dataOwnerId: mock.owner }),
   activeOwnerScopeKey: () => `local:${mock.owner}:${mock.generation}`,
   isAppSessionBoundaryPending: () => false,

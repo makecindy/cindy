@@ -3,7 +3,15 @@ import { useTranslation } from 'react-i18next';
 
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, type DataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { toast } from '@/lib/toast';
+import type { CompanionArrivalNoticeKind } from '../../../shared/companionCloud';
 import { companionCloudApi, refreshCompanionCloudSettled, useCompanionCloud } from './companionCloudStore';
+
+const ARRIVAL_NOTICE_KEYS: Record<CompanionArrivalNoticeKind, string> = {
+  permissions: 'bots.cloud.arrivalPermissions',
+  model: 'bots.cloud.arrivalModel',
+  model_setup: 'bots.cloud.arrivalModelSetup',
+  partial_content: 'bots.cloud.arrivalPartialContent',
+};
 
 /**
  * The notices shown per bot while main's dismissal is not yet read back, so a snapshot that still
@@ -30,7 +38,7 @@ export function useCompanionArrivalNotice(botId: string | undefined, name: strin
     const entry = { owner: getDataOwnerGeneration(), batch };
     shown.set(botId, entry);
     for (const notice of notices) {
-      toast.info(t(notice === 'model' ? 'bots.cloud.arrivalModel' : 'bots.cloud.arrivalPermissions', { name: name ?? '' }));
+      toast.info(t(ARRIVAL_NOTICE_KEYS[notice] ?? 'bots.cloud.arrivalPermissions', { name: name ?? '' }));
     }
     // Whether main dismissed it or not, the dedupe ends here; a failed dismissal may show again next time.
     void Promise.resolve(companionCloudApi()?.dismissCompanionArrivalNotices?.(botId))

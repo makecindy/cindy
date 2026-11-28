@@ -35,7 +35,7 @@ export function BotGroupTaskCard({ task, owned, botId }: { task: BotGroupTaskCar
       data-state={task.state}
       className="flex w-fit min-w-0 max-w-full items-start gap-2.5 rounded-lg bg-[var(--surface)] px-3 py-2"
     >
-      <ListTodo size={14} aria-hidden className="mt-[5px] shrink-0 text-[var(--text-tertiary)]" />
+      <ListTodo size={14} aria-hidden className="mt-1 shrink-0 text-[var(--text-tertiary)]" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span title={task.title} className="truncate text-13 font-medium leading-6 text-[var(--text-primary)]">{task.title}</span>
         <span className="min-w-0 break-words text-12 leading-5 text-[var(--text-tertiary)]">
@@ -63,7 +63,7 @@ export function BotGroupLiveTaskCard({ task }: { task: NonNullable<BotGroupMessa
     void resolveSessionRoute(task.taskId, undefined, task.here ? undefined : { remote: true }).then(route => navigate(route));
   };
   const body = <>
-    <ListTodo size={14} aria-hidden className="mt-[5px] shrink-0 text-[var(--text-tertiary)]" />
+    <ListTodo size={14} aria-hidden className="mt-1 shrink-0 text-[var(--text-tertiary)]" />
     <span className="flex min-w-0 flex-1 flex-col gap-0.5 text-left">
       <span className="truncate text-13 font-medium leading-[1.846] text-[var(--text-primary)]">{task.title || t('bots.groupChat.task.untitled')}</span>
       <span title={status} className="min-w-0 truncate text-12 leading-[1.667] text-[var(--text-tertiary)]">{status}</span>

@@ -16,7 +16,7 @@
  * 这里用 `111` 开头的 0xE1–0xE4。
  * 对端用 8 字节摘要表示（设备号的 SHA-256 前 8 字节）。
  */
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, createSecretKey, timingSafeEqual, type KeyObject } from 'node:crypto';
 
 export const UDP_RELAY_HEADER = 'x-agent-net-udp';
 /**
@@ -25,16 +25,23 @@ export const UDP_RELAY_HEADER = 'x-agent-net-udp';
  */
 export const UDP_RELAY_VERSION = '2';
 export const UDP_RELAY_FEATURE = 'udp-relay-v2';
+export const UDP_RELAY_PROBE_FEATURE = 'udp-relay-probe-v1';
 export const UDP_RELAY_REGISTER = 0xe1;
 export const UDP_RELAY_REGISTER_ACK = 0xe2;
 export const UDP_RELAY_UP = 0xe3;
 export const UDP_RELAY_DOWN = 0xe4;
+export const UDP_RELAY_PROBE = 0xe5;
+export const UDP_RELAY_PROBE_ACK = 0xe6;
 export const UDP_RELAY_SESSION_BYTES = 8;
 export const UDP_RELAY_KEY_BYTES = 32;
 export const UDP_RELAY_COOKIE_BYTES = 16;
 const HASH_BYTES = 8;
 const MAC_BYTES = 16;
 const COUNTER_BYTES = 8;
+/** 满尺寸探测包长度：与经中转的最大业务 UDP 包一致，直接验证本机 ↔ 中转大包双向可达（VPN 吞大包 / MTU 黑洞）。 */
+export const UDP_RELAY_PROBE_BYTES = 1350;
+export const UDP_RELAY_PROBE_MIN_BYTES = 1 + UDP_RELAY_SESSION_BYTES + COUNTER_BYTES + MAC_BYTES;
+export const UDP_RELAY_PROBE_MAX_BYTES = 1350;
 /** 中转在核心的包外加的字节数：上行 `[类型 1][会话号 8][计数器 8][目的摘要 8][MAC 16]`，下行 `[类型 1][来源摘要 8][MAC 16]`。
  * 设备据此给核心的发包上限留出余量，经中转的 UDP 载荷才不会超过隧道的 MTU（见 agent-net 的 transport.ts）。 */
 export const UDP_RELAY_UP_OVERHEAD = 1 + UDP_RELAY_SESSION_BYTES + COUNTER_BYTES + HASH_BYTES + MAC_BYTES;
@@ -52,8 +59,8 @@ const MAX_DATAGRAM_BYTES = 65_000;
 /** 上行计数器的接收窗口：比已收到的最大值小这么多以内、没收过的才收。UDP 会乱序，窗口要盖过一阵突发里的乱序深度。 */
 export const UDP_RELAY_REPLAY_WINDOW = 1024;
 
-/** 中继在 hello 里给的这条会话的 UDP 凭据。 */
-export interface UdpRelayCredentials { session: Uint8Array; key: Uint8Array }
+/** 中继在 hello 里给的这条会话的 UDP 凭据。`probe` 为真时中继支持满尺寸双向探测（0xE5/0xE6）。 */
+export interface UdpRelayCredentials { session: Uint8Array; key: Uint8Array; probe?: boolean }
 
 /** 设备号的 8 字节摘要；中继按它查同一网络里的目标会话，设备按它认来源。 */
 export function udpRelayPeerHash(deviceId: string): Buffer {
@@ -61,11 +68,23 @@ export function udpRelayPeerHash(deviceId: string): Buffer {
 }
 
 export function isUdpRelayPacket(packet: Uint8Array): boolean {
-  return packet.length > 0 && packet[0] >= UDP_RELAY_REGISTER && packet[0] <= UDP_RELAY_DOWN;
+  return packet.length > 0 && packet[0] >= UDP_RELAY_REGISTER && packet[0] <= UDP_RELAY_PROBE_ACK;
+}
+
+/**
+ * 每把会话密钥只建一次密钥对象。`createHmac` 拿到原始字节时每次调用都新建一个密钥对象，比算 HMAC 本身还贵：每个经 UDP 中转的
+ * 数据报在设备上算一次、在中转上验一次再算一次，2026-11-21 剖面里它占了 Agent-Net 线程六成的 CPU（单次 13 微秒，用密钥对象 2 微秒；
+ * Electron 里 3.4 对 1.3 微秒）。按密钥这个数组本身记：凭据对象在一条中转会话里不换，会话结束后随它一起回收。
+ */
+const macKeys = new WeakMap<Uint8Array, KeyObject>();
+function macKey(key: Uint8Array): KeyObject {
+  let cached = macKeys.get(key);
+  if (!cached) { cached = createSecretKey(key); macKeys.set(key, cached); }
+  return cached;
 }
 
 function mac(key: Uint8Array, ...parts: Uint8Array[]): Buffer {
-  const hmac = createHmac('sha256', key);
+  const hmac = createHmac('sha256', macKey(key));
   for (const part of parts) hmac.update(part);
   return hmac.digest().subarray(0, MAC_BYTES);
 }
@@ -106,9 +125,10 @@ export function encodeUdpUp(credentials: UdpRelayCredentials, counter: bigint, d
   return Buffer.concat([header, mac(credentials.key, header, datagram), datagram]);
 }
 
-/** 中继：登记包和上行包都以会话号开头，先用它找会话，再用会话的密钥验证。 */
+/** 中继：登记包、上行包与探测包都以会话号开头，先用它找会话，再用会话的密钥验证。 */
 export function readUdpRelaySession(packet: Uint8Array): Buffer | null {
-  if ((packet[0] !== UDP_RELAY_REGISTER && packet[0] !== UDP_RELAY_UP) || packet.length < 1 + UDP_RELAY_SESSION_BYTES + MAC_BYTES) return null;
+  if ((packet[0] !== UDP_RELAY_REGISTER && packet[0] !== UDP_RELAY_UP && packet[0] !== UDP_RELAY_PROBE)
+    || packet.length < 1 + UDP_RELAY_SESSION_BYTES + MAC_BYTES) return null;
   return Buffer.from(packet.subarray(1, 1 + UDP_RELAY_SESSION_BYTES));
 }
 
@@ -158,6 +178,46 @@ export function verifyUdpDown(packet: Uint8Array, key: Uint8Array): { srcHash: B
   const datagram = packet.subarray(macEnd);
   if (!sameMac(mac(key, packet.subarray(0, headerEnd), datagram), packet.subarray(headerEnd, macEnd))) return null;
   return { srcHash: Buffer.from(packet.subarray(1, headerEnd)), datagram: Buffer.from(datagram) };
+}
+
+/**
+ * 设备 → 中继：第 1 跳（本机 ↔ 中转）满尺寸双向探测包。长度默认与经中转最大业务 UDP 包一致（1350 字节），
+ * 用以区分「本机到中转的 UDP 被 VPN/MTU 吞大包」与「某台远端对端掉线/抖动」。
+ */
+export function encodeUdpProbe(credentials: UdpRelayCredentials, counter: bigint, totalBytes = UDP_RELAY_PROBE_BYTES): Buffer {
+  const size = Math.max(UDP_RELAY_PROBE_MIN_BYTES, Math.min(UDP_RELAY_PROBE_MAX_BYTES, Math.trunc(totalBytes)));
+  const header = Buffer.concat([Buffer.of(UDP_RELAY_PROBE), credentials.session, counterBytes(counter)]);
+  const padding = Buffer.alloc(size - UDP_RELAY_PROBE_MIN_BYTES);
+  return Buffer.concat([header, mac(credentials.key, header, padding), padding]);
+}
+
+export function verifyUdpProbe(packet: Uint8Array, key: Uint8Array): { counter: bigint; size: number } | null {
+  const headerEnd = 1 + UDP_RELAY_SESSION_BYTES + COUNTER_BYTES, macEnd = headerEnd + MAC_BYTES;
+  if (packet[0] !== UDP_RELAY_PROBE || packet.length < UDP_RELAY_PROBE_MIN_BYTES || packet.length > UDP_RELAY_PROBE_MAX_BYTES) return null;
+  const padding = packet.subarray(macEnd);
+  if (!sameMac(mac(key, packet.subarray(0, headerEnd), padding), packet.subarray(headerEnd, macEnd))) return null;
+  return { counter: readCounter(packet, 1 + UDP_RELAY_SESSION_BYTES), size: packet.length };
+}
+
+/**
+ * 中继 → 设备：满尺寸探测确认。长度比请求少 8 字节（不放大流量），同时仍保持与业务下行相近的包长，
+ * 验证下行方向也能过同尺寸 UDP 包；会话号参与 MAC，旧会话的确认无效。
+ */
+export function encodeUdpProbeAck(credentials: UdpRelayCredentials, counter: bigint, probeSize: number): Buffer {
+  const header = Buffer.concat([Buffer.of(UDP_RELAY_PROBE_ACK), counterBytes(counter)]);
+  const minAck = 1 + COUNTER_BYTES + MAC_BYTES;
+  const clamped = Math.max(UDP_RELAY_PROBE_MIN_BYTES, Math.min(UDP_RELAY_PROBE_MAX_BYTES, Math.trunc(probeSize)));
+  const ackSize = Math.max(minAck, clamped - UDP_RELAY_SESSION_BYTES);
+  const padding = Buffer.alloc(ackSize - minAck);
+  return Buffer.concat([header, mac(credentials.key, header, credentials.session, padding), padding]);
+}
+
+export function verifyUdpProbeAck(packet: Uint8Array, credentials: UdpRelayCredentials): { counter: bigint; size: number } | null {
+  const headerEnd = 1 + COUNTER_BYTES, macEnd = headerEnd + MAC_BYTES;
+  if (packet[0] !== UDP_RELAY_PROBE_ACK || packet.length < macEnd || packet.length > UDP_RELAY_PROBE_MAX_BYTES) return null;
+  const padding = packet.subarray(macEnd);
+  if (!sameMac(mac(credentials.key, packet.subarray(0, headerEnd), credentials.session, padding), packet.subarray(headerEnd, macEnd))) return null;
+  return { counter: readCounter(packet, 1), size: packet.length };
 }
 
 /**

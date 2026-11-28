@@ -8,6 +8,8 @@ export default {
   notCovered:
     'Microphone/ASR, live companion tasks, real media IO and speech synthesis; host services, delayed image cache, model catalog and dictation hook use scenario data. Windows runtime is not exercised.',
   stubs: {
+    'src/renderer/components/chat/GhostToolCard': 'export const GhostToolCard = () => null; export const MailCardEditor = () => null; export const CARD_EXPAND_TOGGLE_EVENT = "xdt-card-expand-toggle";',
+    'src/renderer/voice-input/workletUrl': 'export const getVoiceInputWorkletUrl = () => "";',
     'src/renderer/hooks/useProviders': `const providers = [{ id: 'openai', name: 'OpenAI', source: 'builtin', connected: true, agents: ['codex'], auth: { method: 'oauth' }, routing: { codex: { upstream: 'https://example.test', authStrategy: 'oauth-passthrough' } }, models: { codex: [{ id: 'fixture-chat', name: 'Fixture', contextWindow: 200000, efforts: [], defaultEffort: null }] } }]; export const useProviders = () => ({ providers, loading: false });`,
     'src/renderer/hooks/useDeviceProviders': {
       partial: `export const useDeviceProviders = () => ({ providers: [], loading: false, unsupported: false });`,
@@ -344,6 +346,10 @@ export default {
     }
     if (ui.case === 'voice-hold') {
       const editor = page.locator('.ProseMirror');
+      const caretColor = () => editor.evaluate((node) => getComputedStyle(node).caretColor);
+      const hiddenCaret = 'rgba(0, 0, 0, 0)';
+      const typingCaret = await caretColor();
+      assert.notEqual(typingCaret, hiddenCaret);
       const hint = page.getByTestId('composer-voice-hint');
       const hintText = async (key) => {
         await hint.waitFor();
@@ -374,10 +380,12 @@ export default {
       await page.mouse.down();
       await page.waitForFunction(() => document.querySelector('[data-voice-holding="true"]'));
       await hintText('speakRelease');
+      assert.equal(await caretColor(), hiddenCaret, 'No text caret over the empty recording hint');
       await ui.capture('hold-empty');
       await page.mouse.up();
       await page.waitForFunction(() => document.querySelector('.ProseMirror')?.textContent === 'Dictated message');
       assert.equal(await hint.count(), 0);
+      assert.equal(await caretColor(), typingCaret, 'Stopping restores the typing caret');
 
       // The gap above the toolbar is also part of the input surface.
       const editorBox = await editor.boundingBox();
@@ -414,6 +422,7 @@ export default {
       await page.waitForFunction(() => document.getSelection()?.isCollapsed);
       assert.equal(await editor.evaluate((node) => node.editor.state.selection.from), insertionPoint);
       assert.equal(await hint.count(), 0);
+      assert.equal(await caretColor(), hiddenCaret, 'No native caret inside existing text during dictation');
       await page.mouse.up();
       await page.locator('.ProseMirror[contenteditable="true"]').waitFor();
       assert.equal(await page.evaluate(() => window.getSelection()?.toString()), '');

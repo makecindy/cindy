@@ -51,6 +51,36 @@ export function parseFsWatchTopic(topic: string): string | null {
   return workdir.length > 0 ? workdir : null;
 }
 
+// Optional whole-host summary for an iPhone's foreground Live Activity.
+export const TASK_ACTIVITY_SNAPSHOT = 'agent-island:task-activity';
+export const TASK_ACTIVITY_CAPABILITY = 'task-activity-snapshot-v1';
+// revision is local to one host connection lifetime and never used as an account version.
+export type ForegroundHostTaskActivity = HostTaskActivity & { revision: number };
+export interface HostTaskActivity {
+  schemaVersion: 1;
+  waitingCount: number;
+  unreadCount: number;
+  runningCount: number;
+  selected: {
+    sessionId: string;
+    title: string;
+    status: 'attention' | 'completed' | 'error' | 'running';
+    /** Optional companion identity when the selected task speaks for one and is not running.
+     * Only on the device-link snapshot; never part of the official task-activity upload. */
+    companion?: HostTaskActivityCompanion;
+  } | null;
+}
+/** Mirrors the desktop Live Activity companion: hue family, glyph fallback and an optional
+ * base64 JPEG thumbnail of at most {@link HOST_TASK_ACTIVITY_COMPANION_JPEG_MAX} characters. */
+export interface HostTaskActivityCompanion {
+  hue: string;
+  glyph: string;
+  glyphIsInitial: boolean;
+  imageJpeg?: string;
+}
+/** ActivityKit caps a content update at 4 KB; the thumbnail must leave room for the rest. */
+export const HOST_TASK_ACTIVITY_COMPANION_JPEG_MAX = 2048;
+
 export type SessionActivityPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
 
 export interface SessionActivityPayload {
@@ -154,6 +184,7 @@ export function expandMakerEventBatchPayload(payload: unknown): unknown[] {
  * 保证任何控制端都能收到并把已缓存会话的 historyLoaded 置 false。
  */
 const SESSION_LIST_CHANNELS: ReadonlySet<string> = new Set([
+  TASK_ACTIVITY_SNAPSHOT,
   'local-db:sessions:created',
   'local-db:task-tags:changed',
   'local-db:sessions:patched',

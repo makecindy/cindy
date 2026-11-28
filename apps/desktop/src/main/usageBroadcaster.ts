@@ -1,3 +1,4 @@
+import { getDataOwnerLifetime } from './appSessionState.js';
 // The desktop's usageBroadcaster: its core (usageBroadcasterCore.ts, shared with the Node Host), with the desktop
 // functions it imported before bound to its ports (usageBroadcastPorts.ts), each resolved when called.
 // The core calls no port while its module loads (export * evaluates it before the binding below runs);
@@ -8,6 +9,7 @@ import { getGatewayModelPricing } from './usage/modelPricing';
 import { bindUsageBroadcastPorts } from './usageBroadcastPorts.js';
 
 bindUsageBroadcastPorts({
+  getTokenOwnerLifetime: getDataOwnerLifetime,
   getAllWindows: () => BrowserWindow.getAllWindows(),
   isTrustedAppRendererWindow: (win) => isTrustedAppRendererWindow(win as Electron.BrowserWindow),
   getGatewayModelPricing: (...args) => getGatewayModelPricing(...args),

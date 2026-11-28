@@ -224,7 +224,7 @@ export const DEFAULT_AGENT_ISLAND_SOUND_SETTINGS: AgentIslandSoundSettings = {
   },
 };
 
-export const DEFAULT_AGENT_ISLAND_MASCOT_SKIN: AgentIslandMascotSkin = 'pululu';
+export const DEFAULT_AGENT_ISLAND_MASCOT_SKIN: AgentIslandMascotSkin = 'cindy';
 export const DEFAULT_AGENT_ISLAND_DISPLAY_TARGET: AgentIslandDisplayTarget = { mode: 'all' };
 export const AGENT_ISLAND_MIN_DARWIN_MAJOR = 23; // macOS 14 Sonoma.
 
@@ -303,7 +303,7 @@ export function isSilentAgentIslandSoundChoice(choice: AgentIslandSoundChoice): 
   return choice.type === 'builtin' && choice.id === 'none';
 }
 
-/** Task notification sound ownership is per event; no chosen sound means OS defaults. */
+/** Whether Cindy plays an event sound for this alert kind (used to avoid double sounds on fallback OS toasts). */
 export function hasAgentIslandNotificationSound(
   settings: AgentIslandSoundSettings,
   kind: 'done' | 'needs-reply' | 'error',

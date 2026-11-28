@@ -1,5 +1,5 @@
 /**
- * 新建群聊：云端群可选择同账号各设备的伙伴；本地群沿用本机伙伴。
+ * 新建群聊：云端群先填写群名，个人伙伴从群内邀请；本地群在建群时选择本机伙伴。
  *
  * 表单弹窗遵循 DESIGN.md §4 Dialog & Modal：无右上角 ×，点遮罩不关闭（误触不能丢掉
  * 填了一半的表单），Esc 与底部「取消」关闭，打开时聚焦群名称。成员数与群名长度由
@@ -7,7 +7,6 @@
  */
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
@@ -20,6 +19,7 @@ import { BotAvatar } from './BotAvatar';
 import { botGroupApi, refreshBotGroups } from './botGroupStore';
 import { BOT_GROUP_MAX_MEMBERS, BOT_GROUP_MIN_MEMBERS, botGroupErrorKey } from './botGroupPresentation';
 import { useBotProfiles, type BotProfile } from './botStore';
+import { Checkbox } from '@/components/ui/checkbox';
 
 function pickableBots(bots: readonly BotProfile[]): BotProfile[] {
   return bots
@@ -39,17 +39,14 @@ export function BotGroupCreateDialog({
 }: {
   privateChatBotId?: string;
   onOpenChange: (open: boolean) => void;
-  onCreated: (groupId: string) => void;
+  onCreated: (groupId: string, serverBacked: boolean) => void;
 }) {
   const { t } = useTranslation();
   const bots = useBotProfiles();
-  type Candidate = Pick<BotProfile, 'id' | 'name' | 'avatar' | 'status' | 'enabled'>;
-  const [cloudBots, setCloudBots] = useState<Candidate[]>([]);
-  const [loadingMembers, setLoadingMembers] = useState(!privateChatBotId);
-  const [membersLoadFailed, setMembersLoadFailed] = useState(false);
-  const [membersLoadAttempt, setMembersLoadAttempt] = useState(0);
-  const [serverBacked, setServerBacked] = useState(false);
-  const candidates = useMemo(() => serverBacked ? cloudBots : pickableBots(bots), [bots, cloudBots, serverBacked]);
+  const [groupMode, setGroupMode] = useState<'loading' | 'shared' | 'local' | 'unavailable'>(privateChatBotId ? 'shared' : 'loading');
+  const [statusAttempt, setStatusAttempt] = useState(0);
+  const showMemberPicker = groupMode === 'local';
+  const candidates = useMemo(() => showMemberPicker ? pickableBots(bots) : [], [bots, showMemberPicker]);
   const selectableCount = candidates.filter(isSelectable).length;
   useEffect(() => {
     if (privateChatBotId) return;
@@ -58,27 +55,14 @@ export function BotGroupCreateDialog({
     const current = () => !disposed && isDataOwnerGenerationCurrent(owner);
     void (async () => {
       try {
-        const api = botGroupApi()?.chatServer;
-        const status = await api?.status();
-        if (!current()) return;
-        setServerBacked(status?.enabled === true);
-        if (status?.enabled && api) {
-          const result = await api.ownedBots();
-          if (!current()) return;
-          if (!result.ok) throw new Error(result.errorCode);
-          setCloudBots(result.bots.flatMap(bot => bot.botId ? [{
-            id: bot.botId, name: bot.name, avatar: bot.avatar ?? '', status: 'active' as const, enabled: true,
-          }] : []));
-        }
+        const status = await botGroupApi()?.chatServer?.status();
+        if (current()) setGroupMode(status?.enabled ? 'shared' : 'local');
       } catch {
-        if (current()) setMembersLoadFailed(true);
-      } finally {
-        if (current()) setLoadingMembers(false);
+        if (current()) setGroupMode('unavailable');
       }
     })();
     return () => { disposed = true; };
-  }, [privateChatBotId, membersLoadAttempt]);
-  const minMembers = privateChatBotId ? 1 : serverBacked ? 0 : BOT_GROUP_MIN_MEMBERS;
+  }, [privateChatBotId, statusAttempt]);
   const [name, setName] = useState('');
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [nameError, setNameError] = useState(false);
@@ -87,7 +71,7 @@ export function BotGroupCreateDialog({
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
-  const firstMemberRef = useRef<HTMLButtonElement>(null);
+  const firstMemberRef = useRef<HTMLInputElement>(null);
 
   // Speaking order follows the picker's order, not the click order.
   const orderedSelection = privateChatBotId ? [privateChatBotId] : candidates
@@ -107,12 +91,11 @@ export function BotGroupCreateDialog({
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
-    if (busyRef.current || loadingMembers || membersLoadFailed) return;
+    if (busyRef.current || groupMode === 'loading' || groupMode === 'unavailable') return;
     const trimmed = name.trim();
     const nameInvalid = trimmed.length === 0;
-    const membersInvalid =
-      orderedSelection.length < minMembers ||
-      orderedSelection.length > BOT_GROUP_MAX_MEMBERS;
+    const membersInvalid = showMemberPicker &&
+      (orderedSelection.length < BOT_GROUP_MIN_MEMBERS || orderedSelection.length > BOT_GROUP_MAX_MEMBERS);
     setNameError(nameInvalid);
     setMembersError(membersInvalid);
     if (nameInvalid) {
@@ -146,7 +129,7 @@ export function BotGroupCreateDialog({
         return;
       }
       refreshBotGroups();
-      onCreated(result.groupId);
+      onCreated(result.groupId, groupMode === 'shared');
     } catch {
       if (isDataOwnerGenerationCurrent(owner)) setSubmitError(t('bots.groupChat.create.failed'));
     } finally {
@@ -155,15 +138,14 @@ export function BotGroupCreateDialog({
     }
   };
 
-  const membersHint =
-    membersLoadFailed ? t('bots.groupChat.create.failed') : selectableCount < minMembers
-      ? t('bots.groupChat.create.notEnoughBots', { min: BOT_GROUP_MIN_MEMBERS })
-      : undefined;
+  const membersHint = selectableCount < BOT_GROUP_MIN_MEMBERS
+    ? t('bots.groupChat.create.notEnoughBots', { min: BOT_GROUP_MIN_MEMBERS })
+    : undefined;
 
   return (
     <Dialog.Root open onOpenChange={(open) => !busyRef.current && onOpenChange(open)}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[70]" />
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" />
         <Dialog.Content
           onPointerDownOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
@@ -174,14 +156,14 @@ export function BotGroupCreateDialog({
             event.preventDefault();
             nameInputRef.current?.focus();
           }}
-          className="modal-panel fixed inset-0 z-[71] m-auto flex h-fit max-h-[85vh] w-[min(460px,calc(100vw-32px))] flex-col p-4 outline-none"
+          className="modal-panel fixed inset-0 z-modal-raised m-auto flex h-fit max-h-[85vh] w-[min(460px,calc(100vw-32px))] flex-col p-4 outline-none"
         >
           <form className="flex min-h-0 flex-col" onSubmit={(event) => void submit(event)} noValidate>
             <Dialog.Title className="text-18 font-medium text-[var(--confirm-title)]">
               {t('bots.groupChat.create.title')}
             </Dialog.Title>
-            <Dialog.Description className={privateChatBotId ? 'sr-only' : 'mt-1 text-13 leading-normal text-[var(--confirm-desc)]'}>
-              {t(privateChatBotId || serverBacked ? 'bots.groupChat.server.createDescription' : 'bots.groupChat.create.description')}
+            <Dialog.Description className={showMemberPicker ? 'mt-1 text-13 leading-normal text-[var(--confirm-desc)]' : 'sr-only'}>
+              {t(showMemberPicker ? 'bots.groupChat.create.description' : 'bots.groupChat.server.createDescription')}
             </Dialog.Description>
 
             {/* Leave room for outer input rings inside the scroll container. */}
@@ -214,7 +196,7 @@ export function BotGroupCreateDialog({
                 )}
               </FormField>
 
-              {!privateChatBotId && <div className="flex min-w-0 flex-col gap-2">
+              {showMemberPicker && <div className="flex min-w-0 flex-col gap-2">
                 <div className="flex items-center justify-between gap-2">
                   <span
                     id="bot-group-create-members-label"
@@ -241,18 +223,11 @@ export function BotGroupCreateDialog({
                       const selectable = isSelectable(bot);
                       const disabled = busy || !selectable || (!checked && atLimit);
                       return (
-                        <button
+                        <label
                           key={bot.id}
-                          ref={index === 0 ? firstMemberRef : undefined}
-                          type="button"
-                          role="checkbox"
-                          aria-checked={checked}
-                          disabled={disabled}
-                          onClick={() => toggle(bot.id)}
                           className={cn(
-                            'flex min-h-10 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-13 text-[var(--text-primary)] outline-none transition-colors',
-                            'focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
-                            'enabled:hover:bg-[var(--model-item-hover)] disabled:cursor-not-allowed',
+                            'flex min-h-10 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-13 text-[var(--text-primary)] transition-colors',
+                            disabled ? 'cursor-not-allowed' : 'cursor-pointer hover:bg-[var(--model-item-hover)]',
                             !selectable && 'opacity-60',
                           )}
                         >
@@ -267,33 +242,20 @@ export function BotGroupCreateDialog({
                               )}
                             </span>
                           ) : null}
-                          <span
-                            aria-hidden
-                            className={cn(
-                              'flex h-5 w-5 shrink-0 items-center justify-center rounded-full border',
-                              checked
-                                ? 'border-transparent bg-[var(--accent-cta-bg-pure)] text-[var(--accent-pure-cta-fg)]'
-                                : 'border-[var(--text-tertiary)]',
-                            )}
-                          >
-                            {checked ? <Check size={12} strokeWidth={3} /> : null}
-                          </span>
-                        </button>
+                          {/* Shared Checkbox (DESIGN.md §4, B-10); the row label toggles it. */}
+                          <Checkbox
+                            ref={index === 0 ? firstMemberRef : undefined}
+                            checked={checked}
+                            disabled={disabled}
+                            onChange={() => toggle(bot.id)}
+                          />
+                        </label>
                       );
                     })}
                   </div>
                 ) : null}
                 <div id="bot-group-create-members-feedback" className="text-12 leading-snug">
                   {membersHint ? <p className="text-[var(--form-field-hint)]">{membersHint}</p> : null}
-                  {membersLoadFailed ? (
-                    <Button type="button" variant="secondary" size="sm" onClick={() => {
-                      setMembersLoadFailed(false);
-                      setLoadingMembers(true);
-                      setMembersLoadAttempt(attempt => attempt + 1);
-                    }}>
-                      {t('commonUi.retry')}
-                    </Button>
-                  ) : null}
                   <p aria-live="polite" className="text-[var(--error-fg)]">
                     {membersError
                       ? t('bots.groupChat.create.minMembers', { min: BOT_GROUP_MIN_MEMBERS })
@@ -303,6 +265,17 @@ export function BotGroupCreateDialog({
               </div>}
             </div>
 
+            {groupMode === 'unavailable' && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <p role="alert" className="text-12 text-[var(--error-fg)]">{t('bots.groupChat.errors.chatUnavailable')}</p>
+                <Button type="button" variant="secondary" size="sm" onClick={() => {
+                  setGroupMode('loading');
+                  setStatusAttempt(attempt => attempt + 1);
+                }}>
+                  {t('commonUi.retry')}
+                </Button>
+              </div>
+            )}
             {submitError ? (
               <p role="alert" className="mt-2 text-12 text-[var(--error-fg)]">
                 {submitError}
@@ -315,7 +288,7 @@ export function BotGroupCreateDialog({
                   {t('bots.cancel')}
                 </Button>
               </Dialog.Close>
-              <Button type="submit" variant="cta" palette="confirmation" size="lg" loading={busy} disabled={loadingMembers || membersLoadFailed}>
+              <Button type="submit" variant="cta" palette="confirmation" size="lg" loading={busy} disabled={groupMode === 'loading' || groupMode === 'unavailable'}>
                 {t('bots.groupChat.create.submit')}
               </Button>
             </div>

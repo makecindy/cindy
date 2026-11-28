@@ -4,9 +4,15 @@ export default {
   viewport: { width: 332, height: 700 },
   real: 'QuotaTray, its settings/detail/usage pages, shared presentation contract and buildMenubarView',
   notCovered: 'OS tray hover, native window positioning, persisted user settings and Swift rendering',
-  cases: { default: { about: 'Eight unread tasks, default clipping, settings, provider details and usage navigation' } },
+  cases: {
+    default: { about: 'Eight unread tasks, default clipping, settings, provider details and usage navigation' },
+    crowded: { about: 'Nine sources at the widest panel: every value on one line inside its column, tubes level', viewport: { width: 368, height: 700 } },
+    'detail-fit': { about: 'A four-window plugin engine detail settles at one height when the window follows the card' },
+  },
   async check(page, ui) {
     await page.locator('html[data-quota-painted=true]').waitFor();
+    if (ui.case === 'crowded') return checkCrowdedRow(page, ui);
+    if (ui.case === 'detail-fit') return checkDetailFit(page, ui);
     const natural = Number(await page.locator('html').getAttribute('data-quota-natural-height'));
     await page.setViewportSize({ width: 332, height: Math.ceil(natural) });
     const count = await page.locator('.task-row').count();
@@ -21,7 +27,10 @@ export default {
     await page.locator('.more').click();
     await page.getByRole('button', { name: await ui.t('menubar.ui.settings'), exact: true }).click();
     await page.getByRole('switch', { name: await ui.t('menubar.ui.privacy'), exact: true }).check();
-    await page.locator('select').selectOption('local');
+    const currency = page.getByLabel(await ui.t('menubar.ui.usageCurrency'));
+    await currency.selectOption('USD');
+    await page.getByLabel(await ui.t('menubar.ui.usageScope')).selectOption('local');
+    if (await currency.inputValue() !== 'USD') throw new Error('Changing scope reset the selected usage currency');
     // #11277 review: the last visible source cannot be hidden (Swift panel parity); its switch shakes.
     const sourceSwitches = page.locator('.manage-source input[type=checkbox]');
     const sourceCount = await sourceSwitches.count();
@@ -118,3 +127,77 @@ export default {
     if (await selected.textContent() !== await ui.t('menubar.ui.tabUsage')) throw new Error('Visible tray changed tabs');
   },
 };
+
+/**
+ * Regression (Windows screenshot, 2026-11-22): with nine sources each column is about 34px, and
+ * the 22px values wrapped ("100" over "%"), dropping that column's tube and labels, or ran into
+ * the neighbour ("¥90.20" over "13%"); the fixed 40px tubes stuck out of their columns. Measures
+ * the real panel in the browser, since jsdom has no layout.
+ */
+async function checkCrowdedRow(page, ui) {
+  await page.evaluate(() => document.fonts.ready);
+  // The fit follows font loading through a ResizeObserver, a frame after the card is painted.
+  // Polled as a function: the page's CSP has no 'unsafe-eval', which a string expression needs.
+  await page.waitForFunction(crowdedRowIssues, true, { timeout: 2000 }).catch(() => {});
+  const issues = await page.evaluate(crowdedRowIssues, false);
+  if (issues.length) throw new Error('Crowded source row is uneven: ' + issues.join('; '));
+  await ui.capture('crowded', { locator: page.locator('.sources') });
+}
+
+/**
+ * Regression (Windows recording, 2026-11-26): the Antigravity and Grok detail pages jumped up and
+ * down nonstop. The card asks the host for a window as tall as its content, and the host sizes
+ * the window to that. A request even a fraction of a pixel short spills into a scrollbar; on
+ * Windows and Linux the scrollbar takes width, the long legend and reset sentence wrap onto
+ * another line, the card asks for more, the scrollbar goes away, the lines unwrap, and the card
+ * asks for less again. macOS overlay scrollbars take no width, so the page is given a classic
+ * one here. Replays the host's sizing over a range of widths, standing in for other fonts,
+ * languages and texts: each must settle without a scrollbar.
+ */
+async function checkDetailFit(page, ui) {
+  await page.addStyleTag({ content: 'main { scrollbar-width: auto; scrollbar-color: auto; } main::-webkit-scrollbar { width: 10px; } main::-webkit-scrollbar-thumb { background: gray; }' });
+  await page.evaluate(() => document.fonts.ready);
+  await page.locator('.source').first().click();
+  await page.locator('.rings').waitFor();
+  await page.locator('.page[data-leaving]').waitFor({ state: 'detached' });
+  const frames = () => page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+  const requested = async () => Number(await page.locator('html').getAttribute('data-quota-natural-height'));
+  const failures = [];
+  for (let width = 320; width <= 380; width += 2) {
+    const heights = [];
+    let settled = false;
+    for (let round = 0; round < 6 && !settled; round++) {
+      const height = await requested();
+      heights.push(height);
+      // The host gives the window what the card asked for (windowsPanel.ts `position`).
+      await page.setViewportSize({ width, height: Math.ceil(height) });
+      await frames();
+      settled = await requested() === height;
+    }
+    const overflow = await page.locator('main').evaluate(element => element.scrollHeight - element.clientHeight);
+    if (!settled || overflow > 0) failures.push(`${width}px: asked for ${heights.join(' → ')}, overflow ${overflow}px`);
+  }
+  if (failures.length) throw new Error('Detail page never settled:\n' + failures.join('\n'));
+  await ui.capture('detail-fit');
+}
+
+/** Runs in the page: what keeps the source row from lining up, or only whether nothing does. */
+function crowdedRowIssues(settled) {
+  const issues = [];
+  const columns = [...document.querySelectorAll('.source')];
+  if (columns.length !== 9) issues.push(`${columns.length} columns instead of 9`);
+  const tops = columns.map(column => column.querySelector('.tube').getBoundingClientRect().top);
+  if (Math.max(...tops) - Math.min(...tops) > 0.5) issues.push('tubes start at different heights: ' + tops.join(', '));
+  for (const column of columns) {
+    const box = column.getBoundingClientRect();
+    const name = column.querySelector('.source > span:not(.logo)').textContent;
+    // The value's drawn text, after any scaling, and the tube itself.
+    const text = document.createRange();
+    text.selectNodeContents(column.firstElementChild);
+    const parts = { value: text.getBoundingClientRect(), tube: column.querySelector('.tube').getBoundingClientRect() };
+    for (const [part, rect] of Object.entries(parts)) {
+      if (rect.left < box.left - 0.5 || rect.right > box.right + 0.5) issues.push(`${name}: ${part} leaves its column`);
+    }
+  }
+  return settled ? issues.length === 0 : issues;
+}

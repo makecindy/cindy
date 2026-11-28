@@ -38,6 +38,9 @@ import {
 import type { MobileMakerTransport } from './mobileMakerTransport';
 import { useMobileMakerTransport } from './useMobileMakerTransport';
 
+/** Background catalog recovery rounds before waiting for an explicit trigger (≈2 min of backoff). */
+const MAX_PROVIDER_RECOVERY_ATTEMPTS = 8;
+
 export { evictDeviceProviders } from './deviceProvidersCache';
 
 export interface UseDeviceProvidersResult {
@@ -247,6 +250,9 @@ export function useDeviceProviders(
 
   // A peer link can recover without a new relay epoch. Retry only this failed
   // catalog read; never reset the transport or turn cached rows into ready data.
+  // Bounded: after MAX_PROVIDER_RECOVERY_ATTEMPTS (about two minutes of backoff) wait for the
+  // next foreground entry, picker open, reconnect or catalog change instead of polling a
+  // computer that stays offline every 30s for as long as the app is open.
   const needsRecovery = errorDeviceId === deviceId && error !== null && canRecoverProviderRead(error);
   useEffect(() => {
     if (!deviceId || !needsRecovery || status !== 'online' || recovering) return;
@@ -272,14 +278,16 @@ export function useDeviceProviders(
         await request;
       } catch (failure) {
         inFlight = false;
-        if (canRecoverProviderRead(failure)) schedule(connectionRecoverySyncRetryDelayMs(attempt++));
+        if (canRecoverProviderRead(failure) && attempt < MAX_PROVIDER_RECOVERY_ATTEMPTS) {
+          schedule(connectionRecoverySyncRetryDelayMs(attempt++));
+        }
       } finally {
         inFlight = false;
       }
     };
     const subscription = AppState.addEventListener('change', (next) => {
       clearTimeout(timer);
-      if (next === 'active') schedule(0);
+      if (next === 'active') { attempt = 0; schedule(0); }
     });
     schedule(pickerOpen ? 0 : connectionRecoverySyncRetryDelayMs(attempt++));
     return () => {

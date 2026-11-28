@@ -10,6 +10,7 @@ export class RemoteDesktopPermissionsService {
   private reading: Promise<RemoteDesktopPermissions> | null = null;
   private generation = 0;
   private opening = false;
+  private readonly openedSettings = new Map<DesktopPermission, 'standard' | 'separate'>();
   private requestAbort: AbortController | null = null;
   guideOpen = false;
   constructor(
@@ -21,8 +22,8 @@ export class RemoteDesktopPermissionsService {
         permission: DesktopPermission,
         isCurrent: () => boolean,
         signal: AbortSignal,
-      ): Promise<void>;
-      openSettings(permission: DesktopPermission): Promise<void>;
+      ): Promise<boolean>;
+      openSettings(permission: DesktopPermission, separateWindow: boolean): Promise<void>;
       showGuide(): void;
     },
   ) {}
@@ -38,6 +39,8 @@ export class RemoteDesktopPermissionsService {
       } catch {
         /* unknown is not granted */
       }
+      if (desktopPermissionReady(screenRecording)) this.openedSettings.delete('screenRecording');
+      if (desktopPermissionReady(accessibility)) this.openedSettings.delete('accessibility');
       return { screenRecording, accessibility };
     })().finally(() => {
       this.reading = null;
@@ -63,7 +66,11 @@ export class RemoteDesktopPermissionsService {
   dismiss(): void {
     this.generation++;
     this.requestAbort?.abort();
+    this.openedSettings.clear();
     this.guideOpen = false;
+  }
+  get separateWindowRetries(): DesktopPermission[] {
+    return [...this.openedSettings].filter(([, state]) => state === 'standard').map(([permission]) => permission);
   }
   async open(permission: DesktopPermission): Promise<void> {
     if (!this.deps.required || this.opening) return;
@@ -72,11 +79,30 @@ export class RemoteDesktopPermissionsService {
     this.requestAbort = abort;
     this.opening = true;
     try {
-      // A failed prompt must still offer the exact System Settings pane.
-      await this.deps
+      // A sheet in System Settings can absorb a successful URL dispatch.
+      // The retry button opens that pane directly without another OS prompt.
+      if (this.openedSettings.get(permission) === 'standard') {
+        this.openedSettings.set(permission, 'separate');
+        try {
+          await this.deps.openSettings(permission, true);
+        } catch {
+          // Keep the usual pane available when System Settings refuses another instance.
+          if (generation === this.generation && this.openedSettings.has(permission)) {
+            await this.deps.openSettings(permission, false);
+          }
+        }
+        return;
+      }
+      const granted = await this.deps
         .request(permission, () => generation === this.generation, abort.signal)
-        .catch(() => {});
-      if (generation === this.generation) await this.deps.openSettings(permission);
+        .catch(() => false);
+      if (generation !== this.generation) return;
+      if (granted) {
+        this.openedSettings.delete(permission);
+        return;
+      }
+      if (!this.openedSettings.has(permission)) this.openedSettings.set(permission, 'standard');
+      await this.deps.openSettings(permission, false);
     } finally {
       if (this.requestAbort === abort) this.requestAbort = null;
       this.opening = false;

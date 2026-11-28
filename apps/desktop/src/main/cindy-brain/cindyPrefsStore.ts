@@ -1,3 +1,6 @@
+import { inspectSettingsJson, isSettingsRecord } from '../maker-host/inspect-settings-json.js';
+import { validateOptionalSettingsFields } from '../maker-host/settings-inspection.js';
+import path from 'node:path';
 /**
  * cindyPrefsStore —— cindy 槽的用户级隐藏配置(在途并发上限)。
  *
@@ -76,6 +79,19 @@ function createStore() {
 
 let store = createStore();
 
+/** Host-managed preference records only; does not load Ghosts or arbitrary plugin KV. */
+export function inspectGhostCindyPrefs(root: string) {
+  return inspectSettingsJson(path.join(root, 'ghost-cindy-prefs.json'), raw => {
+    validateOptionalSettingsFields(raw, { overrides: isSettingsRecord, inflightLimits: isSettingsRecord });
+    if (isSettingsRecord(raw.overrides)) for (const caps of Object.values(raw.overrides)) {
+      if (!isSettingsRecord(caps)) throw new Error('invalid capability preferences');
+      validateOptionalSettingsFields(caps, { 'text.oneshot': (value: unknown) => typeof value === 'string' && value.length > 0 });
+    }
+    if (isSettingsRecord(raw.inflightLimits) && Object.values(raw.inflightLimits).some(value => typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1)) throw new Error('invalid concurrency preference');
+    return normalize(raw);
+  });
+}
+
 /** 读某插件的在途并发上限;null = 未配置 = 不限并发。 */
 export function readGhostCindyInflightLimit(ghostId: string): number | null {
   // 本文件是"直接改文件也算配置入口"的隐藏配置(无 UI),读前做 mtime 守卫
@@ -130,3 +146,4 @@ export const __testing = {
     store = createStore();
   },
 };
+export const getHostPluginCindyStore = () => store;

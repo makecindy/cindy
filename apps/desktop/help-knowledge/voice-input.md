@@ -39,6 +39,7 @@ Voice input lets you dictate instead of typing. The recognized text goes into th
 - **Microphone** — required. The page shows **Granted** or a **Grant** button.
 - **Shortcut listener** (Input Monitoring) — needed only for Fn, standalone Command / Option / Control, and standalone F1–F24 shortcuts. Regular key combinations don't need it.
 - **Automatic input** (Accessibility) — lets voice input type into other apps, read nearby text for refinement context, and learn from your edits there.
+  On macOS 27.3 and later the permission link opens **System & App Protection Override**. Select the running Cindy app and review the requested scope. If you allow Cindy to control only chosen apps, voice input still types into those apps; in any other app it tells you that app isn't allowed and keeps the text for you to copy.
 
 **Notes:**
 

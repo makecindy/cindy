@@ -23,6 +23,7 @@ type：feat / fix / refactor / perf / chore / docs / test / revert / build / ci
 ### 范围
 
 - 关联 Issue / 需求：
+  <!-- 来自社区反馈时按 CONTRIBUTING.md「给反馈者署名」添加本 PR 的署名记录，触发共同作者校验与发版贡献墙。仅记录本人同意公开的信息。 -->
 - 本 PR 包含：
 - 明确不包含：
 - 用户可见变化：
@@ -87,6 +88,7 @@ branch/worktree、Metro 归属与 __DEV__ build label 证据。 -->
 - [ ] 协议兼容
 - [ ] 权限 / 安全 / 用户数据
 - [ ] 存量插件兼容（批准状态 / 指纹 / manifest 校验 / 安装布局 / 包格式）
+- [ ] 插件引擎（ACP）与插件模型影响面（新任务 / 模型选择器 / 权限 / 多端 / 引擎枚举分支）
 - [ ] 原生层 / fingerprint / OTA
 - [ ] 跨平台差异
 - [ ] 其他：
@@ -103,8 +105,9 @@ branch/worktree、Metro 归属与 __DEV__ build label 证据。 -->
 基于旧布局的升级用例跑在哪。会让用户已装插件失效或需要重装／重新确认的改动，
 需把关人对该影响明确确认；规则见 docs/dev-rules/plugin-security-and-authoring.md 第 5 节。
 
-改动会改变 mobile runtime fingerprint（即触发冷更）时，还要写明为什么冷更不可避免、
-存量装机的影响范围与发版节奏建议。冷更 PR 按普通流程审查与合并，可保持 Ready，
+改动会改变 mobile runtime fingerprint（即触发冷更）时，只需简明写清影响哪些平台、
+带来的体验或能力变化（确认是有意原生改动而非误碰指纹），以及未升级旧原生包的兼容／降级表现；
+不要求论证冷更不可避免或填写发版节奏建议。冷更 PR 按普通流程审查与合并，可保持 Ready，
 不因冷更要求新建讨论 issue 或转为 draft。规则见
 docs/dev-rules/mobile-development.md 的「冷更边界」。 -->
 

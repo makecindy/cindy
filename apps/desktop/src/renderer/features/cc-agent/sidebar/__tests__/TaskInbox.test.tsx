@@ -20,16 +20,24 @@ vi.mock('../SessionEntryList', () => ({ SessionEntryRows: ({ entries, onAction }
   entries: { session: Session }[]; onAction: (id: string, action: 'complete') => unknown;
 }) => <div data-testid="row" data-device={entries[0].session.deviceLinkDeviceId}>{entries[0].session.id}<button data-inbox-complete aria-label={`complete:${entries[0].session.id}`}
   onClick={() => { void onAction(entries[0].session.id, 'complete'); }} /></div> }));
-vi.mock('@/features/bots/TeammateInboxRow', () => ({ TeammateInboxRow: ({ entry }: { entry: { key: string } }) =>
-  <div data-testid="row">{entry.key}<button data-inbox-complete aria-label={`complete:${entry.key}`} /></div> }));
-import type { TeammateInboxEntry } from '@/features/bots/teammateInbox';
 import { markSessionStarting, clearSessionStarting } from '@/lib/sessionStartingStore';
 import { TaskInbox } from '../TaskInbox';
 import { useInboxUnread } from '../useInboxUnread';
+import type { AutomationScheduleSessionInfo } from '../../lib/automationSidebarGrouping';
 import { useSessionAttentionKindsWithOrcaLeads } from '../../lib/orcaLeadWorkerAttention';
 import { useRemoteSidebarWaitingRows } from '../../lib/sidebarPriorityContext';
 beforeEach(() => following.clear());
 afterEach(() => { cleanup(); clearRemoteSessionActivity(); remoteProjectsStore.clear(); });
+
+function publishScheduleIndex(deviceId: string, index: ReadonlyMap<string, AutomationScheduleSessionInfo>) {
+  const read = remoteProjectsStore.beginDeviceScheduleIndexRead(deviceId);
+  try {
+    expect(read.commit(index)).toBe(true);
+  } finally {
+    read.release();
+  }
+}
+
 // The controller still has a running flag when the host sends the unread result.
 it('moves only the waiting or finished device’s task to Pending without a list refresh', () => {
   const sharedId = 'same-id';
@@ -87,7 +95,7 @@ it('keeps an unread remote automation in Pending when there is no activity repla
   for (const device of ['studio', 'other']) {
     remoteProjectsStore.setDeviceSessions(device, device, []);
   }
-  const publish = (device: string, unreadRunIds: string[]) => remoteProjectsStore.setDeviceScheduleIndex(device, new Map([
+  const publish = (device: string, unreadRunIds: string[]) => publishScheduleIndex(device, new Map([
     ['scheduled', { scheduleId: device, scheduleName: device, hasUnreadRun: unreadRunIds.length > 0,
       unreadRunIds, unreadFailedRunIds: [], hasUnreadFailedRun: false }],
   ]));
@@ -122,7 +130,7 @@ it.each(['worker question', 'failed automation'] as const)('keeps a remote %s Pe
     if (fromWorker) {
       remoteProjectsStore.applyPatch('studio', worker.id, { orcaHasPendingQuestion: pending });
     } else {
-      remoteProjectsStore.setDeviceScheduleIndex('studio', new Map([[lead.id, {
+      publishScheduleIndex('studio', new Map([[lead.id, {
         scheduleId: 'scheduled', scheduleName: 'Scheduled', hasUnreadRun: true,
         unreadRunIds: ['run'], unreadFailedRunIds: pending ? ['run'] : [], hasUnreadFailedRun: pending,
       }]]));
@@ -244,10 +252,11 @@ it.each([false, true])('settles an already-read open task without another data u
   expect(rows(0)).toContain('a');
 });
 
-it('keeps a held task Pending when its completion was blocked', async () => {
+it('immediately removes a held task and restores it if the remote completion is blocked', async () => {
   const a = { id: 'a', status: 'active', title: 'A' } as Session;
   following.add(a);
-  const onAction = vi.fn(async () => {});
+  let cancel!: () => void;
+  const onAction = vi.fn(() => new Promise<void>(resolve => { cancel = resolve; }));
   const props: Parameters<typeof TaskInbox>[0] = {
     activeSessionId: 'a', sessions: [a], onAction,
     priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set(), heldPriorityRanks: new Map([['a', 1]]) },
@@ -257,7 +266,9 @@ it('keeps a held task Pending when its completion was blocked', async () => {
   const view = render(<TaskInbox {...props} />);
   fireEvent.mouseOver(screen.getByRole('button', { name: 'complete:a' }));
   fireEvent.click(screen.getByRole('button', { name: 'complete:a' }));
-  await waitFor(() => expect(onAction).toHaveBeenCalledOnce());
+  expect(screen.queryByTestId('row')).toBeNull();
+  expect(view.container.querySelector('section > button')?.lastElementChild?.textContent).toBe('0');
+  await act(async () => cancel());
   expect(view.container.querySelector('section')?.querySelector('[data-testid="row"]')?.textContent).toBe('a');
 });
 
@@ -287,48 +298,54 @@ it('keeps the new viewed task settled when an older completion returns late', as
   expect(pendingRows()).toHaveLength(0);
 });
 
-// 2026-11-20 user decision (task-inbox.md「伙伴主对话」): a teammate's main conversation is one
-// row placed by whose turn it is. No earlier test rendered a teammate in the inbox. Unit: real
-// placement, counts and Done-hover freeze with a stub row; minimal input is one teammate per state.
-it('places teammate conversations with the tasks and removes a read one even while Done is hovered', () => {
-  const teammate = (key: string, status: TeammateInboxEntry['status'], snoozedUntil: string | null = null) => ({
-    key, status, snooze: { snoozedUntil, snoozedAt: snoozedUntil && new Date().toISOString(), userSendAt: null },
-  }) as TeammateInboxEntry;
-  const props: Parameters<typeof TaskInbox>[0] = {
-    sessions: [{ id: 'task', title: 'Task', status: 'active' } as Session],
-    priorityContext: { runningSessionIds: new Set(), attentionSessionIds: new Set() },
-    runningSessionIds: new Set(), attachedSessionIds: new Set(), notifications: new Set(),
-    onSessionClick: () => {}, onAction: () => {}, onRename: () => {}, onTogglePin: () => {}, onScheduleAction: () => {},
-  };
-  const later = new Date(Date.now() + 3_600_000).toISOString();
-  const view = render(<TaskInbox {...props} teammates={[
-    teammate('unread', 'unread'), teammate('running', 'running'), teammate('idle', 'idle'), teammate('later', 'awaiting', later),
-  ]} />);
-  const rows = () => Array.from(view.container.querySelectorAll('section'), section =>
-    Array.from(section.querySelectorAll('[data-testid="row"]'), row => row.textContent));
-  expect(rows()).toEqual([['unread', 'task'], ['running'], ['later'], []]);
-  expect(Array.from(view.container.querySelectorAll('section > button'), button => button.lastElementChild?.textContent))
-    .toEqual(['2', '1', '1', '0']);
-  fireEvent.mouseOver(screen.getByRole('button', { name: 'complete:task' }));
-  view.rerender(<TaskInbox {...props} teammates={[teammate('unread', 'idle'), teammate('running', 'unread')]} />);
-  // Read leaves at once; a reply that arrived meanwhile waits for the pointer like any other move.
-  expect(rows()).toEqual([['task'], ['running'], [], []]);
-  fireEvent.mouseOut(screen.getByRole('button', { name: 'complete:task' }));
-  expect(rows()).toEqual([['running', 'task'], [], [], []]);
+// 2026-11-25 user decision (task-inbox.md「分区与动作」): rows inside a section follow time alone.
+// Before, the inbox reused the list's priority sort, so week-old unread archives sat above a task
+// archived a minute ago. Unit: real grouping; minimal input is an older unread and a newer read
+// task in both Pending and Done.
+it('orders each section by latest activity, whether or not a task is unread', () => {
+  const at = (daysAgo: number) => new Date(Date.now() - daysAgo * 86_400_000).toISOString();
+  const sessions = [
+    { id: 'old-unread', title: 'old-unread', status: 'active', lastActivityAt: at(7) },
+    { id: 'new-read', title: 'new-read', status: 'active', lastActivityAt: at(0) },
+    { id: 'old-unread-done', title: 'old-unread-done', status: 'archived', lastActivityAt: at(7) },
+    { id: 'new-read-done', title: 'new-read-done', status: 'archived', lastActivityAt: at(0) },
+  ] as Session[];
+  const view = render(<TaskInbox sessions={sessions}
+    priorityContext={{ runningSessionIds: new Set(), attentionSessionIds: new Set(['old-unread', 'old-unread-done']) }}
+    runningSessionIds={new Set()} attachedSessionIds={new Set()} notifications={new Set()}
+    onSessionClick={() => {}} onAction={() => {}} onRename={() => {}} onTogglePin={() => {}} onScheduleAction={() => {}} />);
+  expect(Array.from(view.container.querySelectorAll('section'), section =>
+    Array.from(section.querySelectorAll('[data-testid="row"]'), row => row.textContent)))
+    .toEqual([['new-read', 'old-unread'], [], [], ['new-read-done', 'old-unread-done']]);
 });
 
+// 2026-11-27 user decision (task-inbox.md「分区与动作」): Done rows sort by archivedAt
+// descending so a long-quiet task completed just now rises to the top, while legacy rows
+// without archivedAt fall back to regular activity time. Unit: real TaskInbox sorting.
+it('orders the archived section by archivedAt descending with activity fallback for legacy rows', () => {
+  const at = (hoursAgo: number) => new Date(Date.now() - hoursAgo * 3_600_000).toISOString();
+  const sessions = [
+    { id: 'active-earlier-archived', title: 'active-earlier-archived', status: 'archived', lastActivityAt: at(1), archivedAt: at(3) },
+    { id: 'old-just-archived', title: 'old-just-archived', status: 'archived', lastActivityAt: at(48), archivedAt: at(0) },
+    { id: 'legacy-no-archived-at', title: 'legacy-no-archived-at', status: 'archived', lastActivityAt: at(2), archivedAt: null },
+  ] as Session[];
+  const view = render(<TaskInbox sessions={sessions}
+    priorityContext={{ runningSessionIds: new Set(), attentionSessionIds: new Set() }}
+    runningSessionIds={new Set()} attachedSessionIds={new Set()} notifications={new Set()}
+    onSessionClick={() => {}} onAction={() => {}} onRename={() => {}} onTogglePin={() => {}} onScheduleAction={() => {}} />);
+  expect(Array.from(view.container.querySelectorAll('section')[3].querySelectorAll('[data-testid="row"]'), row => row.textContent))
+    .toEqual(['old-just-archived', 'legacy-no-archived-at', 'active-earlier-archived']);
+});
 
-// Unit: task-inbox.md. Row placement tests cannot see the closed inbox's indicator.
-// A snoozed remote result wakes on time and clears on read despite the open row's held rank.
 it('keeps the entry green dot off for remote failures and on for a different device’s unread completion', () => {
   const id = 'scheduled';
   const sessions = ['studio', 'other'].map(deviceLinkDeviceId => ({ id, status: 'active', deviceLinkDeviceId } as Session));
   for (const device of ['studio', 'other']) remoteProjectsStore.setDeviceSessions(device, device, []);
-  remoteProjectsStore.setDeviceScheduleIndex('studio', new Map([[id, {
+  publishScheduleIndex('studio', new Map([[id, {
     scheduleId: 'schedule', scheduleName: 'Scheduled', hasUnreadRun: true,
     unreadRunIds: ['run'], hasUnreadFailedRun: true, unreadFailedRunIds: ['run'],
   }]]));
-  const view = renderHook(() => useInboxUnread(sessions, [], {
+  const view = renderHook(() => useInboxUnread(sessions, {
     runningSessionIds: new Set(), attentionSessionIds: new Set([id]),
     remoteUnreadScheduleRows: useRemoteUnreadScheduleRows(), remoteWaitingRows: useRemoteSidebarWaitingRows(),
   }, () => false));
@@ -342,6 +359,8 @@ it('keeps the entry green dot off for remote failures and on for a different dev
   expect(view.result.current.hasUnread).toBe(false);
 });
 
+// Unit: task-inbox.md. Row placement tests cannot see the closed inbox's indicator.
+// A snoozed remote result wakes on time and clears on read despite the open row's held rank.
 it('lights for a due remote result and clears as soon as the host acknowledges it', () => {
   vi.useFakeTimers();
   try {
@@ -352,7 +371,7 @@ it('lights for a due remote result and clears as soon as the host acknowledges i
     const publish = (attention: boolean) => act(() => applyRemoteSessionActivity('studio', {
       sessionId: 'remote', phase: 'completed', attention,
     }));
-    const view = renderHook(() => useInboxUnread([session], [], priority, () => false));
+    const view = renderHook(() => useInboxUnread([session], priority, () => false));
     publish(true);
     expect(view.result.current.hasUnread).toBe(false);
     act(() => vi.advanceTimersByTime(1000));

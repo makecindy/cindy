@@ -95,7 +95,7 @@ function StatusDot({ state }: { state: MyIssueItem['state'] }) {
     <span
       aria-hidden
       className={cn(
-        'mt-[7px] size-2 shrink-0 rounded-full',
+        'mt-1.5 size-2 shrink-0 rounded-full',
         state === 'open' && 'bg-foreground',
         state === 'closed' && 'border border-sidebar-muted',
         state === 'unknown' && 'border border-dashed border-sidebar-muted',

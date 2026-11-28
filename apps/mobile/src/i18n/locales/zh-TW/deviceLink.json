@@ -35,7 +35,17 @@
   "retryAccess": "重試存取",
   "recheck": "重新檢查",
   "deviceRemovedTitle": "裝置已移除",
-  "deviceRemovedHint": "請登出後重新登入，以重新加入裝置清單。",
+  "deviceRemovedHint": "這台手機已從帳號中移除，點「重新加入」即可回來。",
+  "rejoin": {
+    "action": "重新加入",
+    "busy": "正在重新加入",
+    "doneTitle": "已重新加入",
+    "agentNetUnavailable": "Agent-Net 服務暫不支援重新加入，這台手機暫時不使用 Agent-Net 連線。",
+    "failedTitle": "無法重新加入",
+    "failed": "請檢查網路後再試一次。",
+    "unsupported": "服務暫不支援重新加入，請登出後重新登入。",
+    "agentNetUnsupported": "Agent-Net 服務暫不支援重新加入。關閉「僅使用加密連線」後，這台手機可以先不用 Agent-Net 連回來。"
+  },
   "authFailedTitle": "登入已失效",
   "authFailedHint": "登入狀態已過期，請登出後重新登入。",
   "replacedTitle": "連線被頂替",

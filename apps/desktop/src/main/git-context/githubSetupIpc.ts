@@ -1,3 +1,5 @@
+import { readGithubAppToken, onGithubAppAuthorizationChanged } from './githubAppAuthorization.desktop.js';
+import { githubInstallationAccess } from './githubInstallationAccess.js';
 import path from 'node:path';
 import { createGithubStar } from './githubStar.js';
 import { app, BrowserWindow, ipcMain } from 'electron';
@@ -60,6 +62,7 @@ export async function readGithubConnection(
         : fallback
           ? readGhostSecret(fallback.instanceId, fallback.key)
           : readGithubPluginToken(),
+    readApp: readGithubAppToken,
     fetch: outboundFetch,
   });
   if (owner !== activeOwnerScopeKey()) return { status: 'missing' };
@@ -112,6 +115,8 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
       if (!win.isDestroyed()) win.webContents.send('git-context:github-connected');
     }
   };
+  let accessGeneration = 0;
+  const stopAppChanges = onGithubAppAuthorizationChanged(() => { accessGeneration++; changed(); });
   const setup = createGithubSetup(root, changed);
   const star = createGithubStar({
     owner: () => getActiveAppSession().dataOwnerId ? activeOwnerScopeKey() : null,
@@ -122,8 +127,8 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
       source.invalidate();
       const token = await source.readToken();
       if (owner !== activeOwnerScopeKey()) return null;
-      return token ?? readGhostSecret(cindyGithubRootInstance(), 'github_pat')
-        ?? readGhostSecret('cindy-github', 'github_pat');
+      // A temporary App refresh failure reads as "not connected" instead of failing the action.
+      return token ?? readGithubPluginToken() ?? await readGithubAppToken().catch(() => null);
     },
     fetch: outboundFetch,
   });
@@ -154,6 +159,12 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
       'git-context:github-setup:connection',
       readGithubConnection,
     ],
+    ['git-context:github-app:access', () => {
+      const owner = activeOwnerScopeKey();
+      const generation = accessGeneration;
+      return githubInstallationAccess(readGithubAppToken, outboundFetch,
+        () => owner === activeOwnerScopeKey() && generation === accessGeneration);
+    }],
     ['git-context:github-app:status', () => githubApp('status')],
     ['git-context:github-app:connect', () => githubApp('connect')],
     ['git-context:github-app:install', () => githubApp('install')],
@@ -171,6 +182,7 @@ export function registerGithubSetupIpc(invalidateStatuses: () => void): void {
     });
   }
   app.once('before-quit', () => {
+    stopAppChanges();
     unsubscribes.forEach(unsubscribe => unsubscribe());
     setup.cancel();
   });

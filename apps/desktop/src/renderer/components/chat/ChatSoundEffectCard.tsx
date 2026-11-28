@@ -177,7 +177,7 @@ export function ChatSoundEffectCard({ track, sessionId }: ChatSoundEffectCardPro
           {playing ? (
             <Pause size={14} fill="currentColor" />
           ) : (
-            <Play size={14} fill="currentColor" style={{ marginLeft: 1 }} />
+            <Play size={14} fill="currentColor" style={{ marginLeft: 'var(--space-px)' }} />
           )}
         </button>
       </Tip>

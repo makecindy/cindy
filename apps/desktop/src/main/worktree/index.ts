@@ -17,6 +17,8 @@ import { isDesktopPlatform } from '../device-link/controllerPlatform';
 import { getCurrentDbClientSnapshot } from '../localDb/client/current';
 
 import { ipcMain as ipcMainType, type IpcMain, shell } from 'electron';
+// Bind the Desktop platform ports before any Worktree operation runs.
+import './WorktreeManagerPorts.desktop.js';
 import * as WorktreeManager from './WorktreeManager';
 import * as worktreeStore from './worktreeStore';
 import { getWorktreeRestoreStatus, restoreWorktreeForSession } from './restore';
@@ -43,6 +45,7 @@ export {
   reconcileWorktreesForDeletedSessions,
 } from './sessionRemovalRecycle';
 export { reconcilePendingSafeDirectoryCleanups } from './WorktreeManager';
+export { configureWorktreeStoreDbSync } from './worktreeStoreCore.js';
 export {
   getWorktreeRestoreStatus,
   getManagedWorktreeReadinessForSession,

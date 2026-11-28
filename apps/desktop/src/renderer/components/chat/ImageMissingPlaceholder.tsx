@@ -26,6 +26,7 @@ interface ImageMissingPlaceholderProps {
   maxWidth?: number;
   /** Remount a readable image after a transient display failure; never regenerate it. */
   onRetry?: () => void;
+  onOpen?: () => void;
 }
 
 export function ImageMissingPlaceholder({
@@ -34,13 +35,14 @@ export function ImageMissingPlaceholder({
   className,
   maxWidth = 280,
   onRetry,
+  onOpen,
 }: ImageMissingPlaceholderProps) {
   const { t } = useTranslation();
   return (
-    <div
+    <span
       className={cn(
         'flex flex-col items-center justify-center gap-2',
-        'rounded-[12px] border border-dashed',
+        'rounded-xl border border-dashed',
         // These tokens are HSL channels: `var(--border)` alone is invalid CSS and drew a black border.
         'border-border bg-muted',
         'p-4 text-muted-foreground',
@@ -58,7 +60,7 @@ export function ImageMissingPlaceholder({
       ) : (
         <ImageOff className="h-8 w-8 text-[var(--text-tertiary)]" aria-hidden="true" />
       )}
-      <div className="text-xs font-medium">
+      <span className="text-xs font-medium">
         {t(
           status === 'missing'
             ? 'chat.imageMissing.title'
@@ -66,21 +68,25 @@ export function ImageMissingPlaceholder({
               ? 'chat.imageMissing.loading'
               : 'chat.imageMissing.unavailable',
         )}
-      </div>
+      </span>
       {/* v5: 原生 title 替换为 Radix Tooltip(mono) — 文件名走 mono 风格。 */}
       <Tooltip.Root>
         <Tooltip.Trigger asChild>
-          <div className="max-w-full truncate text-11 text-[var(--text-tertiary)]">{filename}</div>
+          <span className="max-w-full truncate text-11 text-[var(--text-tertiary)]">{filename}</span>
         </Tooltip.Trigger>
         <Tooltip.Content variant="mono">{filename}</Tooltip.Content>
       </Tooltip.Root>
-      {status === 'unavailable' && onRetry && (
+      {status === 'unavailable' && ([
+        { label: t('commonUi.retry'), activate: onRetry },
+        { label: t('chat.media.openWithApp'), activate: onOpen },
+      ].map(({ label, activate }) => activate && (
         <Button
           {...{ [SHARE_EXCLUDE_ATTR]: '' }}
+          key={label}
           type="button"
           variant="secondary"
           size="sm"
-          aria-label={`${t('commonUi.retry')}: ${filename}`}
+          aria-label={`${label}: ${filename}`}
           onKeyDown={(event) => {
             // Linked images also activate their outer target on Enter/Space.
             // Keep the button's native keyboard click without activating that link.
@@ -93,12 +99,12 @@ export function ImageMissingPlaceholder({
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            onRetry();
+            activate();
           }}
         >
-          {t('commonUi.retry')}
+          {label}
         </Button>
-      )}
-    </div>
+      )))}
+    </span>
   );
 }

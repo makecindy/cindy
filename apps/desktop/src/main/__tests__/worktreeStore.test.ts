@@ -1,39 +1,17 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import type { WorktreeMeta } from '../worktree/types';
 
-// 按 store 文件名隔离的后备数据: worktrees.json 与 worktree-safe-directory-cleanup.json
-// 是两个物理文件, 单测同样按 name 隔离, 验证队列写入不会碰 worktrees 键。
-const storesByName = new Map<string, Record<string, unknown>>();
 const setWorktreePathInDbMock = vi.fn();
-
-vi.mock('electron-store', () => ({
-  default: class MockStore {
-    constructor(opts: { name?: string } = {}) {
-      this.name = opts.name ?? 'default';
-      if (!storesByName.has(this.name)) storesByName.set(this.name, {});
-    }
-
-    name: string;
-
-    get(key: string, fallback: unknown) {
-      const backing = storesByName.get(this.name) ?? {};
-      return backing[key] ?? fallback;
-    }
-
-    set(key: string, value: unknown) {
-      const backing = storesByName.get(this.name) ?? {};
-      backing[key] = value;
-      storesByName.set(this.name, backing);
-    }
-  },
-}));
 
 vi.mock('../localDb/ipc/sessions', () => ({
   setWorktreePathInDb: (...args: unknown[]) => setWorktreePathInDbMock(...args),
 }));
 
-// 队列读改写走跨进程锁; 单测里直通持锁, 聚焦合并/去重语义, 不落真实锁文件。
+// Queue read/modify/write locking is covered separately; these tests focus on persistence semantics.
 vi.mock('../device-link/crossProcessLock', () => ({
   withCrossProcessLock: (
     _lockPath: string,
@@ -43,10 +21,20 @@ vi.mock('../device-link/crossProcessLock', () => ({
 }));
 
 describe('worktreeStore', () => {
+  let profile = '';
+
   beforeEach(async () => {
-    storesByName.clear();
     setWorktreePathInDbMock.mockReset();
     vi.resetModules();
+    profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-worktree-store-'));
+    const { configureUserDataDir } = await import('../userDataPath');
+    configureUserDataDir(profile);
+    const { configureWorktreeStoreDbSync } = await import('../worktree/worktreeStoreCore');
+    configureWorktreeStoreDbSync((sessionId, worktreePath) => setWorktreePathInDbMock(sessionId, worktreePath));
+  });
+
+  afterEach(() => {
+    fs.rmSync(profile, { recursive: true, force: true });
   });
 
   it('keeps store metadata when DB sync fails', async () => {
@@ -100,11 +88,26 @@ describe('worktreeStore', () => {
     await store.set(meta.sessionId, meta);
     await store.addPendingSafeDirectoryCleanups(['/deferred']);
 
-    // 两类写入落在不同 store 文件: worktrees.json 只含 worktrees 键,
-    // 队列文件只含 pending 键 —— 互相整体重写也不会抹掉对方的数据。
-    expect(Object.keys(storesByName.get('worktrees') ?? {})).toEqual(['worktrees']);
-    expect(storesByName.get('worktrees')?.worktrees).toEqual({ [meta.sessionId]: meta });
-    expect(storesByName.get('worktree-safe-directory-cleanup')).toEqual({ pending: ['/deferred'] });
+    const registry = JSON.parse(fs.readFileSync(path.join(profile, 'worktrees.json'), 'utf8'));
+    const cleanup = JSON.parse(fs.readFileSync(path.join(profile, 'worktree-safe-directory-cleanup.json'), 'utf8'));
+    expect(Object.keys(registry)).toEqual(['worktrees']);
+    expect(registry.worktrees).toEqual({ [meta.sessionId]: meta });
+    expect(cleanup).toEqual({ pending: ['/deferred'] });
+  });
+
+  it('does not publish metadata when the locked mutation guard fails', async () => {
+    const store = await import('../worktree/worktreeStore');
+    const meta: WorktreeMeta = {
+      sessionId: 'guarded', name: 'guarded', path: '/repo/.cindy-worktrees/guarded',
+      baseRepo: '/repo', branch: 'cindy/guarded', sourceBranch: 'main',
+      createdAt: '2026-05-26T00:00:00.000Z', ephemeral: false,
+    };
+
+    await expect(store.set(meta.sessionId, meta, async () => {
+      throw new Error('profile held');
+    })).rejects.toThrow('profile held');
+    expect(store.get(meta.sessionId)).toBeNull();
+    expect(setWorktreePathInDbMock).not.toHaveBeenCalled();
   });
 
   it('replaces pooled generations atomically in the registry', async () => {

@@ -29,6 +29,7 @@ import type { Logger } from '../../../interfaces/logger.js';
 import type { CodexSessionMcpConfigInput, CodexSubagentRoutingProfile } from '../../base-agent.js';
 import { AppServerClient, AppServerResponseError, type OversizedNotification, type RequestProgressDeadline } from './client.js';
 import { CODEX_EXTERNAL_AUTH_REFRESH, CodexExternalAuthSession, assertCodexEphemeralAuth, type CodexExternalAuth } from './external-auth.js';
+import type { CodexResponseTiming } from './response-timing.js';
 import type { Transport } from './transport.js';
 import {
   Method,
@@ -105,6 +106,10 @@ const SUBSCRIBED_METHODS = [
   'item/autoApprovalReview/started',
   'item/autoApprovalReview/completed',
   'guardianWarning',
+  // One per model response, sent as the response completes and before any tool it
+  // called runs: the only end-of-response boundary on every thread (raw response events
+  // only reach threads started with them). Read for the speed clock; the payload is unused.
+  'turn/moderationMetadata',
   'warning',                         // thread 级提示 (如 WebSocket 回退到 HTTPS)
   'error',
 ] as const;
@@ -115,7 +120,6 @@ const NOTIFICATIONS_TO_OPT_OUT = [
   'item/fileChange/outputDelta',
   // 以下高频通知全仓无消费方 (client 只会落一条 unhandled notification 日志, 实测合计
   // ~2万条/天)。要消费其中任一项时, 先从这里移除再加进 SUBSCRIBED_METHODS。
-  'turn/moderationMetadata',
   'mcpServer/startupStatus/updated',
   'remoteControl/status/changed',
   'item/commandExecution/terminalInteraction',
@@ -131,6 +135,12 @@ const TURN_STATUSES: ReadonlySet<string> = new Set<TurnStatus>(['completed', 'in
  * 工具生命周期, 不能当它没发生过。
  */
 export const ITEM_OMITTED_METHOD = 'cindy/item/omitted';
+
+/**
+ * Cindy 本地合成的通知: 一次模型响应由服务端报告的生成耗时, 读自 Codex 的计时 trace 行
+ * (见 response-timing.ts)。只用于显示速度。
+ */
+export const RESPONSE_TIMING_METHOD = 'cindy/response/timing';
 
 export interface ItemOmittedParams {
   threadId: string;
@@ -174,6 +184,10 @@ export interface ThreadEventHandlers {
   itemCompleted?: (params: ItemCompletedNotification['params']) => void;
   /** item/* 通知因超过单行上限被丢弃正文, 见 ITEM_OMITTED_METHOD。 */
   itemOmitted?: (params: ItemOmittedParams) => void;
+  /** A model response completed (`turn/moderationMetadata`); only its turn is read. */
+  responseCompleted?: (params: { threadId: string; turnId: string }) => void;
+  /** Server-reported generation time of one response, see RESPONSE_TIMING_METHOD. */
+  responseTiming?: (params: CodexResponseTiming) => void;
   /** 正文的逐段增量；item/completed 仍会下发最终全文做权威校准。 */
   agentMessageDelta?: (params: AgentMessageDeltaNotification['params']) => void;
   /** Codex native update_plan snapshots. */
@@ -733,6 +747,9 @@ export class AppServerHost {
         // Keep the shared startPromise while recovering this one pre-protocol
         // failure. Every other transport error retains the normal host lifecycle.
         if (!client.nativeSqliteInitializationFailed()) this.handleTransportError(err);
+      },
+      onResponseTiming: (timing) => {
+        if (this.client === client) this.routeNotification(RESPONSE_TIMING_METHOD, timing);
       },
       onOversizedNotification: (notification) => {
         const handled = this.handleOversizedNotification(notification);
@@ -1972,6 +1989,8 @@ export class AppServerHost {
       case 'item/updated': fn = handlers.itemUpdated as (p: never) => void; break;
       case 'item/completed': fn = handlers.itemCompleted as (p: never) => void; break;
       case ITEM_OMITTED_METHOD: fn = handlers.itemOmitted as (p: never) => void; break;
+      case 'turn/moderationMetadata': fn = handlers.responseCompleted as (p: never) => void; break;
+      case RESPONSE_TIMING_METHOD: fn = handlers.responseTiming as (p: never) => void; break;
       case 'item/agentMessage/delta': fn = handlers.agentMessageDelta as (p: never) => void; break;
       case 'turn/plan/updated': fn = handlers.turnPlanUpdated as (p: never) => void; break;
       case 'item/reasoning/summaryTextDelta': fn = handlers.reasoningSummaryTextDelta as (p: never) => void; break;

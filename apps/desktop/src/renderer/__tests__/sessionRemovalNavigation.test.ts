@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  getVisibleInboxTargets,
   getVisibleSidebarSessionIds,
   pickSessionIdAfterRemoval,
 } from '@/features/cc-agent/lib/sessionRemovalNavigation';
@@ -31,6 +32,18 @@ describe('pickSessionIdAfterRemoval', () => {
   it('returns null when the anchor is not in the ordered list', () => {
     expect(pickSessionIdAfterRemoval(['a', 'b'], new Set(['x']), 'x')).toBeNull();
   });
+});
+
+it('collects pending task destinations in visible display order', () => {
+  const section = document.createElement('section');
+  section.innerHTML = `
+    <div data-sidebar-session-row="true" data-session-id="first"></div>
+    <div hidden data-sidebar-session-row="true" data-session-id="hidden"></div>
+    <div data-sidebar-session-row="true" data-session-id="last"></div>`;
+  expect([...getVisibleInboxTargets(section).values()]).toEqual([
+    { sessionId: 'first' }, { sessionId: 'last' },
+  ]);
+  expect(getVisibleSidebarSessionIds(section)).toEqual(['first', 'last']);
 });
 
 describe('getVisibleSidebarSessionIds', () => {

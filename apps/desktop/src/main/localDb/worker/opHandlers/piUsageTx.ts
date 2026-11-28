@@ -68,12 +68,20 @@ export function recordPiUsage(db: Database.Database, args: PiUsageWrite[], write
           updated_at = MAX(updated_at, excluded.updated_at)`)
           .run(r.day, r.currency, amount, Number(r.approximate), r.recordedAt);
         db.prepare(`UPDATE sessions SET
-          total_cost_amount = CASE WHEN total_cost_currency IS NULL OR total_cost_currency = ?
-            THEN total_cost_amount + ? ELSE ? END,
-          total_cost_is_approximate = CASE WHEN total_cost_currency IS NULL OR total_cost_currency = ?
-            THEN total_cost_is_approximate OR ? ELSE ? END,
-          total_cost_currency = ? WHERE id = ?`)
-          .run(r.currency, amount, amount, r.currency, Number(r.approximate), Number(r.approximate), r.currency, r.sessionId);
+      total_cost_usd_is_approximate = total_cost_usd_is_approximate OR CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN @approximate
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN total_cost_is_approximate ELSE 0 END,
+      total_cost_usd = total_cost_usd + CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN @amount
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN total_cost_amount ELSE 0 END,
+      total_cost_amount = CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN total_cost_amount
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN @amount ELSE total_cost_amount + @amount END,
+      total_cost_is_approximate = CASE
+        WHEN total_cost_currency = 'CNY' AND @currency = 'USD' THEN total_cost_is_approximate
+        WHEN total_cost_currency = 'USD' AND @currency = 'CNY' THEN @approximate ELSE total_cost_is_approximate OR @approximate END,
+      total_cost_currency = CASE WHEN total_cost_currency = 'CNY' THEN 'CNY' ELSE @currency END
+      WHERE id = @sessionId`).run({ currency: r.currency, amount, approximate: Number(r.approximate), sessionId: r.sessionId });
       }
     }
     return { changed };

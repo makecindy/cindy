@@ -26,6 +26,10 @@ import {
   compactCodexStream,
   type TimedCodexNotification,
 } from '../packages/maker-core/src/agents/codex/recorded-stream-fixture.js';
+import {
+  parseCodexResponseTiming,
+  withResponseTimingLogFilter,
+} from '../packages/maker-core/src/agents/codex/app-server/response-timing.js';
 
 const DEFAULT_PROMPT =
   'Think it through first, then write a small LRU cache with expiry in TypeScript to lru.ts, ' +
@@ -91,9 +95,20 @@ async function recordCodex(codex: string, args: string[]): Promise<void> {
   const effort = option(args, '--effort');
   const prompt = args[0] ?? DEFAULT_PROMPT;
   const cwd = mkdtempSync(join(tmpdir(), 'cindy-token-speed-'));
-  const child = spawn(codex, ['app-server'], { cwd, stdio: ['pipe', 'pipe', 'inherit'] });
+  // Codex writes each response's own generation time to its trace log: record it next to
+  // the notifications, as the app receives it, so a replay can compare against it.
+  const child = spawn(codex, ['app-server'], {
+    cwd,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, RUST_LOG: withResponseTimingLogFilter(process.env.RUST_LOG) },
+  });
   const file = createWriteStream(out);
   const startedAt = Date.now();
+  createInterface({ input: child.stderr }).on('line', (line) => {
+    const timing = parseCodexResponseTiming(line);
+    if (timing) file.write(`${JSON.stringify({ t: Date.now() - startedAt, msg: { method: 'cindy/response/timing', params: timing } })}\n`);
+    else process.stderr.write(`${line}\n`);
+  });
   let messages = 0;
   let nextId = 1;
   const pending = new Map<number, (result: Record<string, unknown>) => void>();

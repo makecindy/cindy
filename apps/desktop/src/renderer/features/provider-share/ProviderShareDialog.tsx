@@ -43,13 +43,13 @@ export function ProviderShareDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next && busy) return; onOpenChange(next); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="modal-scrim fixed inset-0 z-[10000]" style={WINDOW_DRAG_STYLE}>
+        <Dialog.Overlay className="modal-scrim fixed inset-0 z-modal" style={WINDOW_DRAG_STYLE}>
           <Dialog.Content
             role={role}
             data-testid={testId}
             aria-describedby={undefined}
             className={cn(
-              'modal-panel fixed inset-0 z-[10000] m-auto h-fit',
+              'modal-panel fixed inset-0 z-modal m-auto h-fit',
               'flex max-h-[85vh] w-full flex-col overflow-y-auto overscroll-contain p-4',
               'text-[var(--text-primary)]',
             )}
@@ -73,7 +73,7 @@ export function ProviderShareDialog({
             } : undefined}
           >
             {closeLabel && (
-              <Tip text={closeLabel} contentClassName="z-[10001]">
+              <Tip text={closeLabel}>
                 <Button
                   variant="secondary"
                   size="md"

@@ -345,11 +345,11 @@ function TaskRow({
         type="button"
         onClick={clickable ? handleClick : undefined}
         className={cn(
-          'flex min-w-0 flex-1 items-start gap-2 rounded-[8px] px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+          'flex min-w-0 flex-1 items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
           clickable ? 'hover:bg-[var(--surface-hover)]' : 'cursor-default',
         )}
       >
-        <span className="mt-[1px] inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-secondary)]">
+        <span className="mt-px inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)] text-[var(--text-secondary)]">
           <KindIcon size={12} aria-hidden="true" />
         </span>
         <span className="min-w-0 flex-1">

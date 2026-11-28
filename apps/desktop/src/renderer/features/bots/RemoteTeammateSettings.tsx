@@ -182,7 +182,7 @@ function RemoteSettingsPages({ bot, ops, initialPage: requestedPage = 'home', be
         {/* The pages sit exactly where the local ones do; the offline note floats over their bottom edge so neither its appearance nor its absence moves anything. */}
         <div className="relative flex min-h-0 flex-1 flex-col">
           {!bot.online ? (
-            <p role="status" className="absolute inset-x-0 bottom-0 z-10 border-t border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 py-2 text-12 leading-5 text-[var(--text-secondary)]">
+            <p role="status" className="absolute inset-x-0 bottom-0 z-raised border-t border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 py-2 text-12 leading-5 text-[var(--text-secondary)]">
               {offlineDescription}
             </p>
           ) : null}

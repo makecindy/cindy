@@ -30,6 +30,7 @@ import { tryAcquireSkillInstallLock } from './installLock';
 import * as installService from './installService';
 import type { SkillhubMarketService } from './marketService';
 import type { RegisterSkillhubIpcOptions } from './registerIpc';
+import { joinSharedSkillPreparation } from './sharedSkillPreparation';
 import type { RemoteSkillMarketItem, RemoteSkillProject } from '../../shared/remoteSkills';
 import { readRemoteSkillCatalog } from './remoteCatalog';
 
@@ -102,6 +103,7 @@ export function createRemoteSkillsHost(
     return match.root;
   };
   const scan = async (): Promise<RemoteSkillRecord<Target>[]> => {
+    await joinSharedSkillPreparation(options.prepareSharedSkills, 'remote-scan');
     const targets = await projectTargets();
     const projects = targets.map(({ root, view }) => ({
       projectRoot: root,

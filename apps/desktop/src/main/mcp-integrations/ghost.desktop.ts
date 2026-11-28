@@ -10,7 +10,7 @@ import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService
 import { isBotAuthorizationSession } from '../maker-ipc/botAuthorizationHost.js';
 import { publishImage } from '../cindy-media/publishImage.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
-import { getGhostCardService, getGhostManager, listInstalledGhostsAsync, getGhostPipeDispatcher, getGhostSetupAssessment, ghostForgeForbiddenRootDirs, captureGhostMutationOwnerForMcp, acquireGhostMutationLeaseForMcp, installOrUpdateLocalGhostPackageFromForge, isGhostAvailableForActiveSession, getGhostHandoffStore } from '../cindy-brain/index.js';
+import { getGhostCardService, connectGhostGithubAccount, getGhostManager, listInstalledGhostsAsync, getGhostPipeDispatcher, getGhostSetupAssessment, ghostForgeForbiddenRootDirs, captureGhostMutationOwnerForMcp, acquireGhostMutationLeaseForMcp, installOrUpdateLocalGhostPackageFromForge, isGhostAvailableForActiveSession, getGhostHandoffStore } from '../cindy-brain/index.js';
 import { writeForgeScaffoldWithStableParent } from '../cindy-brain/forgeScaffoldCapability.js';
 import { currentPublisherIdentity, getPluginPublisherOrchestrator, startPluginPublish } from '../plugin-publisher/host.js';
 import * as blobStore from '../cindy-media/blobStore.desktop.js';
@@ -20,6 +20,7 @@ import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
 import { forkForgeIconConversionHost } from './forgeIconConversionHost.js';
 import { t } from '../i18n.desktop.js';
 import { openGithubSignIn, readGithubConnection } from '../git-context/githubSetupIpc.js';
+import { getInstanceConfig } from '../instance-runtime/config.js';
 import { createGhostGateway } from './ghost.js';
 export type { GhostGrantLiveSessionState, CindyGhostsHostDeps } from './ghost.js';
 
@@ -40,6 +41,8 @@ const gateway = createGhostGateway({
   publishImage: (...args) => publishImage(...args),
   getSessionFsSnapshot: (...args) => getSessionFsSnapshot(...args),
   getGhostCardService: (...args) => getGhostCardService(...args),
+  // Only the managed cloud image ships the GitHub device login helper.
+  connectGhostGithubAccount: (...args) => getInstanceConfig() ? connectGhostGithubAccount(...args) : Promise.resolve(null),
   getGhostManager: (...args) => getGhostManager(...args),
   listInstalledGhostsAsync: (...args) => listInstalledGhostsAsync(...args),
   getGhostPipeDispatcher: (...args) => getGhostPipeDispatcher(...args),

@@ -9,17 +9,17 @@ import { withRehydrateCloseSuppressed } from '../../../desktop/src/main/maker-ho
  * /sessions/update runs (session-update.ts).
  */
 
-/** The desktop's worktree registry (worktree/worktreeStore.ts): electron-store `worktrees` in the profile root. */
+/** The shared worktree registry (worktree/worktreeStore.ts): `worktrees.json` in the profile root. */
 const WORKTREE_REGISTRY_FILE = 'worktrees.json';
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
- * A task's live worktree binding, read from the desktop's registry; the Host only reads it (it creates
- * no worktrees). The file is `{ "worktrees": { "<sessionId>": { "path": … } } }`, plain JSON written
- * atomically (electron-store over conf). The desktop answers `worktreeStore.get(id)?.path ?? null`
- * (bootstrap-electron.ts) and reads the file on every call, as this does.
+ * A task's live worktree binding, read from the shared registry. Remote creation writes through
+ * the same Node-safe store and file shape: `{ "worktrees": { "<sessionId>": { "path": … } } }`.
+ * The desktop answers `worktreeStore.get(id)?.path ?? null` (bootstrap-electron.ts) and reads the
+ * file on every call, as this does.
  * - No file: no binding (the desktop's store starts from `{ worktrees: {} }`).
  * - A file the desktop cannot read (unreadable, not JSON, not the registry's shape) fails the move: the
  *   desktop's store throws there too, and "no binding" would let a worktree task move out of it.
@@ -84,7 +84,7 @@ export function createHostSessionMovePorts(deps: {
 }): {
   move: {
     lookupSessionWorktreeBinding: SessionWorktreeBindingLookup;
-    closeIdleSessionForMove(sessionId: string): Promise<boolean>;
+    closeIdleSessionForMove(sessionId: string, storedAgentKind: string): Promise<boolean>;
     broadcastRecentWorkdirsChanged(path: string): void;
   };
   liveCcSessionBridge: LiveCcSessionBridge;
@@ -96,18 +96,20 @@ export function createHostSessionMovePorts(deps: {
       // suppressed. The Host also counts a turn whose rows are still settling (the desktop reads the
       // runtime only): closing then could race those writes. The idle runtime closes through the
       // executor, which lets go of the instance (interactions, binding, environment notes) first.
-      closeIdleSessionForMove: async sessionId => {
+      closeIdleSessionForMove: async (sessionId, storedAgentKind) => {
         const maker = deps.getMakerIfReady();
-        if (deps.isTurnRunning(sessionId) || maker?.getSession(sessionId)?.isTurnRunning()) return false;
-        if (maker) await withRehydrateCloseSuppressed(sessionId, () => deps.closeRuntime(sessionId));
+        const live = maker?.getSession(sessionId);
+        if (deps.isTurnRunning(sessionId) || live?.isTurnRunning()) return false;
+        if (maker && storedAgentKind !== 'cc') {
+          await withRehydrateCloseSuppressed(sessionId, () => deps.closeRuntime(sessionId));
+        }
         return true;
       },
       broadcastRecentWorkdirsChanged: createRecentWorkdirsChangedPush(deps.publish),
     },
     // As register.ts setLiveCcSessionBridge: a Claude task's resume id in memory, and Maker closing its
-    // runtime so the old directory's CLI stops writing the transcript being copied. The desktop does not
-    // check for a running turn here; Maker's close settles an unfinished turn with its terminal before it
-    // drops its listeners, so this goes to Maker itself and the executor still sees that terminal.
+    // runtime so the old directory's CLI stops writing the transcript being copied. The shared move check has
+    // already verified this turn is idle. Keep the handle until relocation reads its live resume id.
     liveCcSessionBridge: {
       resolveSdkSessionId: sessionId =>
         deps.getMakerIfReady()?.listActiveSessions().find(session => session.id === sessionId)?.sdkSessionId ?? null,

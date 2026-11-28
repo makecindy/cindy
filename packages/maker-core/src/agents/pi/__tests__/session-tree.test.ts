@@ -138,6 +138,38 @@ describe('pi session tree adapter', () => {
       .toThrow('discard output or session state');
   });
 
+  // #11339, unit: branch rehydration must distinguish old and new calls even
+  // when their raw Pi tool names match. Existing tests only restored MCP calls.
+  it('distinguishes a native extension call from old and new Cindy subagent calls', () => {
+    const toolCall = (id: string, name: string) => ({
+      type: 'toolCall', id, name, arguments: {},
+    });
+    const data = retryTree([
+      { type: 'message', message: { role: 'assistant', content: [toolCall('same-call-id', 'subagent')] } },
+      { type: 'message', message: { role: 'assistant', content: [
+        toolCall('same-call-id', 'subagent'), toolCall('built-in', 'cindy_subagent'),
+      ] } },
+      { type: 'custom', customType: 'cindy-native-subagent-call', data: { toolCallId: 'same-call-id' } },
+      { type: 'message', message: { role: 'toolResult', toolCallId: 'same-call-id', content: 'extension result' } },
+    ]);
+    const snapshot = normalizePiSessionTree(data);
+    expect(snapshot.activePathIds).toEqual(['0', '1', '2', '4']);
+    expect(snapshot.roots[0].children[0].children[0].children).toEqual([
+      expect.objectContaining({ id: '4', parentId: '2', role: 'tool' }),
+    ]);
+    // A stopped turn can leave the metadata as the raw leaf.
+    expect(normalizePiSessionTree({ ...data, leafId: '3' }).leafId).toBe('2');
+    const expectedCalls = [
+      { toolUseId: 'same-call-id', toolName: 'subagent', input: {} },
+      { toolUseId: 'same-call-id', toolName: 'dynamic:subagent', input: {} },
+      { toolUseId: 'built-in', toolName: 'subagent', input: {} },
+    ];
+    for (const leafId of ['4', '2']) {
+      expect(activePiHistoryFromTree({ ...data, leafId }).filter(message => message.role === 'tool_use')
+        .map(message => message.content)).toEqual(expectedCalls);
+    }
+  });
+
   it('restores gateway calls using the same tool contract as live events', () => {
     const data = structuredClone(treeData);
     const block = data.tree[0].children[0].entry.message.content[2];

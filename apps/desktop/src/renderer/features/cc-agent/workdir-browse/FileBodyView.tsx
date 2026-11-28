@@ -73,6 +73,7 @@ import { MermaidSourceEditorHost } from '@/components/markdown/MermaidSourceEdit
 import { MarkdownImageLightboxHost } from '@/components/markdown/MarkdownImageLightboxHost';
 import { SelectionQuoteButton } from '@/components/chat/SelectionQuoteButton';
 import { resolveLocalPath, toLocalFileUrl } from '@/lib/localPathResolver';
+import type { RemoteMediaOrigin } from '../../../../shared/remoteMediaUrl';
 import { detectRenderable } from '@/lib/textPreview';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -939,17 +940,18 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
 
   // ── Text branch ─────────────────────────────────────────────────────────
   const renderable = detectRenderable(relPath);
+  const imageRemoteOrigin: RemoteMediaOrigin | null = deviceId
+    ? { kind: 'device', deviceId }
+    : remoteHostId
+      ? { kind: 'ssh', remoteHostId, workdir }
+      : null;
   // Markdown live-preview 图片的相对路径基准 = 被预览文件自己的父目录(不是
   // workdir 根):`docs/readme.md` 里的 `![](./img/a.png)` 必须解析到
-  // `<workdir>/docs/img/a.png`。纯字符串推导,镜像 TextLightbox 的
-  // fileParentDir 逻辑,无需 IPC。
+  // `<workdir>/docs/img/a.png`。远程会话(device-link / SSH)一并计算远端父目录,
+  // 由 markdownImageLivePreview 经 imageRemoteOrigin 改写到 cindy-remote-media://
+  // (SSH 越出 workdir 自动拒绝,不会读控制端本机磁盘)。
   const imageBaseDir = (() => {
     if (!relPath || renderable.kind !== 'markdown') return undefined;
-    // 远程会话(SSH / device-link):workdir 是远端绝对路径,按它拼出来的
-    // xdt-file:// 指向控制端本地文件系统——路径恰好存在时会渲染出错误的
-    // 本地媒体。禁用行内图片解析(图片位保持占位),远程图片经取回管线
-    // 内联预览属后续任务。
-    if (remoteHostId || deviceId) return undefined;
     const abs = resolveLocalPath(relPath, workdir);
     const idx = Math.max(abs.lastIndexOf('/'), abs.lastIndexOf('\\'));
     if (idx < 0) return workdir;
@@ -1009,7 +1011,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
           - alwaysEdit (code/text):没有按钮,只在 dirty 时挂 amber "未保存" chip。
             保存通过 Ctrl+S 或右键菜单,UI 更干净。
           z-10 确保浮在内容上。 */}
-      <div className="absolute right-[18px] top-[14px] z-10 flex items-center gap-2">
+      <div className="absolute right-[18px] top-[14px] z-raised flex items-center gap-2">
         {!barVisible && canEdit && !isMarkdown && (alwaysEdit ? dirty || saving : editMode) && (
           <EditingChip dirty={dirty} compact={alwaysEdit} saving={saving} />
         )}
@@ -1049,7 +1051,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
       {saveError && (
         <ErrorNotice
           role="alert"
-          className="absolute right-[18px] top-[54px] z-10 max-w-[360px]"
+          className="absolute right-[18px] top-[54px] z-raised max-w-[360px]"
           message={t('ccAgent.workdirBrowse.fileBody.saveFailed', { message: saveError })}
         />
       )}
@@ -1089,6 +1091,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
             {content.truncated && (
               // editContainerCls 现在不带 px(为了让 cm-scroller 拉满到右边沿),
               // 这里 banner 自己补 px-[30px] 让左右内边距和 .cm-content 对齐。
+              // 30px 跟随编辑器主题（DESIGN.md §5 登记），改其一须两边同改。
               <div className="flex-none px-[30px] py-3">
                 <div
                   className={cn(
@@ -1134,6 +1137,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
                 initialScrollLine={scrollAnchor?.line}
                 initialScrollOffset={scrollAnchor?.offset}
                 imageBaseDir={imageBaseDir}
+                imageRemoteOrigin={imageRemoteOrigin}
                 onScroll={handleEditorScroll}
                 onChange={
                   editMode
@@ -1165,7 +1169,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
             aria-orientation="vertical"
             onPointerDown={(e) => e.stopPropagation()}
             className={cn(
-              'fixed z-[9999] w-[168px] rounded-xl p-0.5 overflow-hidden',
+              'fixed z-fullscreen w-[168px] rounded-xl p-0.5 overflow-hidden',
               'bg-[var(--cmd-palette-bg)]',
               'border border-[var(--cmd-palette-border)]',
               'shadow-[shadow:var(--shadow-menu)]',
@@ -1185,7 +1189,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
                   );
                 }}
                 className={cn(
-                  'flex h-7 w-full items-center rounded-md px-2.5 text-left',
+                  'flex h-7 w-full items-center rounded-lg px-2.5 text-left',
                   'text-13 leading-none text-[var(--msg-assistant-text)]',
                   'hover:bg-[var(--cmd-palette-item-hover)] focus:bg-[var(--cmd-palette-item-hover)] focus:outline-none',
                 )}
@@ -1207,7 +1211,7 @@ export const FileBodyView = forwardRef<FileBodyHandle, FileBodyViewProps>(functi
                   void writeToDisk();
                 }}
                 className={cn(
-                  'flex h-7 w-full items-center rounded-md px-2.5 text-left',
+                  'flex h-7 w-full items-center rounded-lg px-2.5 text-left',
                   'text-13 leading-none text-[var(--msg-assistant-text)]',
                   'hover:bg-[var(--cmd-palette-item-hover)] focus:bg-[var(--cmd-palette-item-hover)] focus:outline-none',
                   'disabled:pointer-events-none disabled:opacity-45',

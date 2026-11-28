@@ -9,9 +9,9 @@
  * footer(13/18 400 textSecondary,iOS Section footer / Android 列表辅助文字惯例),
  * 所以行组件不再提供 hint / detail;一组需要多段说明时拆成多个分组(2026-10-19 用户定稿)。
  */
-import { Children, isValidElement, type ReactNode } from 'react';
+import { Children, createContext, isValidElement, useContext, type ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { ChevronDown, ChevronRight } from 'lucide-react-native';
+import { ChevronDown, ChevronRight, ChevronUp } from 'lucide-react-native';
 import { Text } from '@/components/AppText';
 import { mobileInteractionStyles } from '@/components/mobileInteractionStyles';
 import { NativeSwitch } from '@/platform/chrome';
@@ -21,6 +21,7 @@ import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScal
 import { DisclosureItem } from './listDisclosureTransition';
 
 export const useSettingsRowStyles = () => useThemedStyles(makeSettingsRowStyles);
+export const SettingsCardFill = createContext<string | undefined>(undefined);
 
 export type SettingsGroupMessage = { text: string; testID?: string } | null | undefined | false;
 
@@ -47,6 +48,7 @@ export function SettingsGroup({
   titleAccessory?: ReactNode;
 }) {
   const styles = useSettingsRowStyles();
+  const cardFill = useContext(SettingsCardFill);
   // Children.toArray 会丢弃 null/false 并给每个 child 赋稳定 key(沿用元素自身 key),
   // 比 key={index} 更稳:后续插入/重排行时不会让无关行 remount。
   const rows = Children.toArray(children);
@@ -61,7 +63,7 @@ export function SettingsGroup({
         </View>
       ) : null}
       {rows.length > 0 ? (
-        <DisclosureItem style={styles.card}>
+        <DisclosureItem style={[styles.card, cardFill && { backgroundColor: cardFill }]}>
           {rows.map((row, index) => (
             <DisclosureItem exit key={isValidElement(row) && row.key != null ? row.key : index}>
               {index > 0 ? <View style={styles.divider} /> : null}
@@ -117,6 +119,7 @@ export function ChoicePickerRow({
 }) {
   const styles = useSettingsRowStyles();
   const { colors } = useTheme();
+  const Chevron = expanded ? ChevronUp : ChevronDown;
   return (
     <Pressable
       accessibilityLabel={`${label}: ${value}`}
@@ -129,7 +132,7 @@ export function ChoicePickerRow({
       <View style={styles.rowLine}>
         <Text style={styles.rowLabel}>{label}</Text>
         <Text style={styles.rowValue} numberOfLines={1}>{value}</Text>
-        <ChevronDown color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+        <Chevron color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
       </View>
     </Pressable>
   );

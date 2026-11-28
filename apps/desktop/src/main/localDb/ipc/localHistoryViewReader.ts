@@ -12,7 +12,7 @@
  * already recorded in the visible user round, which turn cost recording adds to the final message.
  */
 import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
-import { supplementalConversationEstimates } from '@cindy/maker-shared/usage-cost-details';
+import { sumUsageAmounts, supplementalConversationAmounts } from '@cindy/maker-shared/usage-cost-details';
 import { historyOutlineContent, historyOutlineContentStamp, withHistoryArtifacts } from './historyViewOutline';
 import { getDbClient, getCurrentDbClientSnapshot } from '../client/current';
 import type { DbClient } from '../client/DbClient';
@@ -29,6 +29,7 @@ import {
   asValueEstimateMoney,
   legacyUsdMoney,
   normalizeRegionalMoney,
+  sumMoneyByCurrency,
   type RegionalMoney,
 } from '../../../shared/regionalMoney.js';
 import type { Message } from '../../../renderer/lib/ccAgent.types';
@@ -71,6 +72,7 @@ function notAutoResumeAgentMetaSql() {
  * scoped; callers use this value only to produce a user-facing round total.
  */
 export interface PriorUserRoundCost {
+  amounts?: RegionalMoney[];
   additionalCosts?: RegionalMoney[];
   money: RegionalMoney | null;
   costUsd: number;
@@ -408,8 +410,10 @@ export async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Me
     .orderBy(asc(messages.createdAt), asc(messageRowid));
 
   const totalsByClientId = new Map<string, PriorUserRoundCost>();
+  const mixedRoundByClientId = new Map<string, RegionalMoney[]>();
   const additionalByClientId = new Map<string, RegionalMoney[]>();
   const roundMoneyByClientId = new Map<string, { money: RegionalMoney; isEstimate: boolean }>();
+  let roundAmounts: RegionalMoney[] = [];
   let roundValues: RegionalMoney[] = [];
   let additionalCosts: RegionalMoney[] = [];
   let hasRealUserBoundary = false;
@@ -422,6 +426,7 @@ export async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Me
       additionalCosts = Array.isArray(recorded) ? recorded.map(normalizeRegionalMoney)
         .filter((value): value is RegionalMoney => !!value && value.amount > 0) : [];
       roundValues = [...additionalCosts];
+      roundAmounts = sumUsageAmounts(additionalCosts);
       costUsd = additionalCosts.filter(value => value.currency === 'USD').reduce((sum, value) => sum + value.amount, 0);
       hasEstimatedValue = false;
       continue;
@@ -433,14 +438,22 @@ export async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Me
       (typeof meta?.turnCostUsd === 'number' && Number.isFinite(meta.turnCostUsd) && meta.turnCostUsd > 0
         ? legacyUsdMoney(meta.turnCostUsd) : null);
     const segmentMoney = rawMoney && meta?.turnCostIsEstimate === true ? asValueEstimateMoney(rawMoney) : rawMoney;
-    if (segmentMoney) roundValues.push(segmentMoney);
-    roundValues.push(...supplementalConversationEstimates(meta));
+    const segment = supplementalConversationAmounts(meta);
+    if (segmentMoney) segment.unshift(segmentMoney);
+    if (segment.length) {
+      roundValues = sumMoneyByCurrency([...roundValues, ...segment]);
+      roundAmounts = sumUsageAmounts([...roundAmounts, ...segment]);
+    }
+    if (hasRealUserBoundary && roundAmounts.length > 1 && pageAssistantClientIds.has(row.clientId)) {
+      mixedRoundByClientId.set(row.clientId, roundAmounts);
+    }
     // Only calculate recovery totals for messages on this history page, not every older segment.
-    const roundMoney = additionalCosts.length && pageAssistantClientIds.has(row.clientId)
+    const needsProjection = additionalCosts.length > 0 || (roundAmounts.length > 1 && !meta?.userTurnCost);
+    const roundMoney = needsProjection && pageAssistantClientIds.has(row.clientId)
       ? addCompatibleRegionalMoney(roundValues, segmentMoney?.currency) : null;
     if (hasRealUserBoundary && roundMoney) roundMoneyByClientId.set(row.clientId, {
       money: roundMoney,
-      isEstimate: roundValues.some(value => value.currency === roundMoney.currency && value.kind === 'value-estimate'),
+      isEstimate: roundAmounts.some(value => value.currency === roundMoney.currency && value.kind === 'value-estimate'),
     });
     const segmentCost = meta?.turnCostUsd;
     if (
@@ -467,7 +480,8 @@ export async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Me
     const message = history[index];
     const agentMeta = message.agentMeta;
     const additional = additionalByClientId.get(message.clientId);
-    if (additional) {
+    const userTurnAmounts = mixedRoundByClientId.get(message.clientId);
+    if (additional || userTurnAmounts) {
       const round = roundMoneyByClientId.get(message.clientId);
       hydrated ??= history.slice();
       hydrated[index] = { ...message, agentMeta: { ...agentMeta,
@@ -476,7 +490,7 @@ export async function hydrateLegacyUserTurnCosts(history: Message[]): Promise<Me
           userTurnCostUsd: round.money.currency === 'USD' ? round.money.amount : undefined,
           userTurnCostIsEstimate: round.isEstimate,
         } : {}),
-        turnUsageDetails: buildTurnUsageDetails({ ...normalizeTurnUsageDetails(agentMeta?.turnUsageDetails), additionalCosts: additional }) ?? undefined,
+        turnUsageDetails: buildTurnUsageDetails({ ...normalizeTurnUsageDetails(agentMeta?.turnUsageDetails), additionalCosts: additional, userTurnAmounts }) ?? undefined,
       } };
       // The ledger projection already includes legacy USD segments and estimates.
       // Do not overwrite it with the older USD-only compatibility subtotal.
@@ -593,7 +607,8 @@ export async function readPriorUserRoundCost(
         beforeTarget,
         ...visibleAfterClear,
       ),
-    );
+    )
+    .orderBy(asc(messages.createdAt), asc(messageRowid));
 
   const values: RegionalMoney[] = [];
   const additionalCosts: RegionalMoney[] = [];
@@ -620,17 +635,20 @@ export async function readPriorUserRoundCost(
     const rawSegment = structured ?? legacy;
     const isEstimate = rawSegment?.kind === 'value-estimate' || meta?.turnCostIsEstimate === true;
     const segment = rawSegment && isEstimate ? asValueEstimateMoney(rawSegment) : rawSegment;
-    for (const estimate of supplementalConversationEstimates(meta)) {
-      values.push(estimate);
-      estimatedCurrencies.add(estimate.currency);
+    if (segment && segment.amount > 0) {
+      values.push(segment);
+      if (isEstimate) estimatedCurrencies.add(segment.currency);
     }
-    if (!segment || segment.amount <= 0) continue;
-    values.push(segment);
-    if (isEstimate) estimatedCurrencies.add(segment.currency);
+    for (const value of supplementalConversationAmounts(meta)) {
+      values.push(value);
+      if (value.kind === 'value-estimate') estimatedCurrencies.add(value.currency);
+    }
   }
+  const amounts = sumUsageAmounts(values);
   const money = addCompatibleRegionalMoney(values);
   const hasEstimatedValue = money !== null && estimatedCurrencies.has(money.currency);
   return {
+    ...(amounts.length > 1 && { amounts }),
     money,
     costUsd: money?.currency === 'USD' ? money.amount : 0,
     hasEstimatedValue,

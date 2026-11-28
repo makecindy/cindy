@@ -16,6 +16,14 @@ export async function readScheduledTargetStatus(sessionId: string): Promise<stri
   return row?.status ?? null;
 }
 
+export async function readScheduledTargetArchivedAt(sessionId: string): Promise<number | null> {
+  const row = await getDbClient().queryOne<{ archivedAt: number | null }>(
+    'SELECT archived_at AS archivedAt FROM sessions WHERE id = ?',
+    [sessionId],
+  );
+  return row?.archivedAt ?? null;
+}
+
 /**
  * Owner input or a question for the owner since the round started; scheduled and delegated
  * executions do not count. CASE guards json_extract on malformed rows (same as agentHandoffHistory).
@@ -29,7 +37,11 @@ const OWNER_MESSAGE_SINCE_SQL = `SELECT 1 AS hit FROM messages
   LIMIT 1`;
 
 /** Uses the ordinary archive write; any sign of the user in the task keeps it restored. */
-export async function archiveQuietScheduledTarget(sessionId: string, sinceMs: number): Promise<void> {
+export async function archiveQuietScheduledTarget(
+  sessionId: string,
+  sinceMs: number,
+  archivedAt: number | null = null,
+): Promise<void> {
   if ((getSessionLastUserActionAt(sessionId) ?? 0) >= sinceMs) return;
   if (isSchedulerTargetSessionBusy(sessionId) || hasPendingSchedulerTargetInput(sessionId)) return;
   await withSessionRouteLock(sessionId, async () => {
@@ -49,7 +61,7 @@ export async function archiveQuietScheduledTarget(sessionId: string, sinceMs: nu
         || isSchedulerTargetSessionBusy(sessionId) || hasPendingSchedulerTargetInput(sessionId)) throw superseded;
     };
     try {
-      await patchSessionMetaInDb(sessionId, { status: 'archived' }, { routeLockHeld: true, beforeWrite });
+      await patchSessionMetaInDb(sessionId, { status: 'archived' }, { routeLockHeld: true, beforeWrite, archivedAt });
     } catch (error) {
       if (error !== superseded) throw error;
     }

@@ -34,6 +34,7 @@ interface UsageState {
   costBreakdown?: UsageCostRow[] | null;
   account: SessionMenuAccountUsage | null;
   estimate: RemoteMoney | null;
+  estimateAmounts?: RemoteMoney[];
   accountFailed: boolean;
   estimateFailed: boolean;
   loading: boolean;
@@ -71,6 +72,7 @@ export function useSessionMenuUsage(
   provider?: OpenAiAccountProvider,
   /** Defaults to the task host; null = this account cannot be read from here (shown unavailable). */
   accountReader: SessionMenuAccountReader | null = reader,
+  modelLabel?: string | null,
 ) {
   const taskScope = [
     session.deviceLinkDeviceId,
@@ -101,6 +103,7 @@ export function useSessionMenuUsage(
             ? previous.value
             : {
                 ...EMPTY,
+                estimateAmounts: previous?.taskScope === taskScope ? previous.value.estimateAmounts : undefined,
                 estimate:
                   previous?.taskScope === taskScope
                     ? previous.value.estimate
@@ -116,7 +119,7 @@ export function useSessionMenuUsage(
       update({ loading: true });
       await Promise.allSettled([
         (accountReader
-          ? readSessionMenuAccountUsage(session, accountReader, provider)
+          ? readSessionMenuAccountUsage(session, accountReader, provider, modelLabel)
           : Promise.resolve(unavailableSessionMenuAccountUsage())
         ).then(
           (account) => update({ account, accountFailed: false }),
@@ -132,6 +135,7 @@ export function useSessionMenuUsage(
           (snapshot) =>
             update({
               costBreakdown: Array.isArray(snapshot.costBreakdown) ? normalizeUsageCostRows(snapshot.costBreakdown) : null,
+              estimateAmounts: snapshot.totalValueAmounts?.map(normalizeRemoteMoney).filter((value): value is RemoteMoney => !!value),
               estimate:
                 normalizeRemoteMoney(snapshot.totalValueMoney) ??
                 (typeof snapshot.totalValueUsd === "number" &&
@@ -170,12 +174,14 @@ export function useSessionMenuUsage(
     session.id,
     codexRateLimits,
     provider,
+    modelLabel,
   ]);
   return {
     ...(stored?.scope === scope
       ? stored.value
       : {
           ...EMPTY,
+          estimateAmounts: stored?.taskScope === taskScope ? stored.value.estimateAmounts : undefined,
           estimate:
             stored?.taskScope === taskScope ? stored.value.estimate : null,
         }),

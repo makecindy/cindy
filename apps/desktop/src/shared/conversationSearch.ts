@@ -3,7 +3,7 @@ import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import type { SessionSource } from './sessionSource';
 
-export type ConversationSearchAgentKind = 'cc' | 'codex' | 'pi';
+export type ConversationSearchAgentKind = 'cc' | 'codex' | 'pi' | 'acp';
 export type ConversationSearchWorkspaceKind = 'project' | 'dialogue';
 export type ConversationSearchSessionStatus = 'active' | 'archived' | 'deleted';
 export type ConversationSearchOrcaRole = 'lead' | 'worker';
@@ -123,6 +123,7 @@ export function conversationSearchTitle(title: string, unnamedLabel?: string | n
 }
 
 export interface ConversationSearchResponse {
+  querySyntaxVersion?: 1;
   query: string;
   results: ConversationSearchResultItem[];
   vectorUsed: boolean;

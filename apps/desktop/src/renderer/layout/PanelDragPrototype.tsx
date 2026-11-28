@@ -343,7 +343,7 @@ export function PanelDragPrototype({
             node.style.transform = `translate3d(${pointRef.current.x}px, ${pointRef.current.y}px, 0)`;
           }
         }}
-        className="pointer-events-none fixed left-0 top-0 z-[9999] will-change-transform"
+        className="pointer-events-none fixed left-0 top-0 z-fullscreen will-change-transform"
       >
         <div
           className="h-[110px] w-[170px] rounded-xl border animate-fade-in"
@@ -356,6 +356,7 @@ export function PanelDragPrototype({
           }}
         >
           {/* 迷你骨架示意"这是一个面板":一条假 Tab 条 + 两行假内容。 */}
+          {/* 插画内部的形状，不是控件框（DESIGN.md §5 插画登记） */}
           <div className="mx-2 mt-2 h-[14px] w-[70%] rounded-md bg-[var(--surface-chip)]" />
           <div className="mx-2 mt-2 h-[10px] w-[85%] rounded bg-[var(--surface-chip)] opacity-70" />
           <div className="mx-2 mt-1.5 h-[10px] w-[60%] rounded bg-[var(--surface-chip)] opacity-70" />
