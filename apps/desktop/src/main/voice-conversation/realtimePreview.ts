@@ -1,3 +1,4 @@
+import { RealtimeProtocolAdapter } from './realtimeProtocol.js';
 import type WebSocket from 'ws';
 import type { RealtimeConnection } from './realtimeModels.js';
 import { connectRealtimeSocket } from './realtimeSocket.js';
@@ -14,10 +15,12 @@ export class RealtimeVoicePreview {
 
   constructor(
     private readonly binding: RealtimeConnection,
+    private readonly model: string,
     private readonly assertCurrent: () => void,
   ) {}
 
   async start({ voice, text }: { voice: string; text: string }) {
+    const adapter = new RealtimeProtocolAdapter(this.binding.protocol);
     const socket = await connectRealtimeSocket(this.binding, this.assertCurrent);
     this.socket = socket;
     let received = 0;
@@ -34,29 +37,13 @@ export class RealtimeVoicePreview {
         };
         const send = (event: object) => {
           this.assertCurrent();
-          socket.send(JSON.stringify(event));
+          socket.send(adapter.encode(event));
         };
         socket.on('error', () => finish(new SpeechError('request')));
         socket.on('close', () => finish(new SpeechError('request')));
         socket.once('open', () => {
           try {
-            const session =
-              this.binding.protocol === 'openai-realtime'
-                ? {
-                    type: 'realtime',
-                    output_modalities: ['audio'],
-                    audio: {
-                      input: { turn_detection: null },
-                      output: { voice, format: { type: 'audio/pcm', rate: SAMPLE_RATE } },
-                    },
-                  }
-                : {
-                    modalities: ['text', 'audio'],
-                    voice,
-                    output_audio_format: 'pcm',
-                    turn_detection: null,
-                  };
-            send({ type: 'session.update', session });
+            send(adapter.start({ kind: 'preview', model: this.model, voice }));
           } catch {
             finish(new SpeechError('unavailable'));
           }
@@ -65,7 +52,7 @@ export class RealtimeVoicePreview {
           if (ended) return;
           try {
             this.assertCurrent();
-            const event = JSON.parse(raw.toString());
+            const event = adapter.decode(raw.toString());
             if (event.type === 'session.updated' && !requested) {
               requested = true;
               send({
@@ -84,8 +71,7 @@ export class RealtimeVoicePreview {
               send({ type: 'response.create' });
             } else if (
               requested &&
-              (event.type === 'response.output_audio.delta' ||
-                event.type === 'response.audio.delta')
+              event.type === 'response.audio.delta'
             ) {
               if (typeof event.delta !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(event.delta))
                 throw new Error('invalid_audio');

@@ -1893,28 +1893,39 @@ test("darwinStaleDevEnvUnset keeps variables this launch forwards (isolated with
 	for (const key of keys) assert.ok(!forwarded.includes(`${key}=`), `${key} both forwarded and unset`);
 });
 
-test("darwin dev terminal output is recorded through script(1) under the checkout logs", () => {
+test("darwin dev terminal output is recorded through script(1) under the checkout logs without placing a FIFO in logs", () => {
 	const logPath = desktopDevTerminalLogPath("/repo/cindy feature");
 	assert.equal(logPath, path.join("/repo/cindy feature", "apps", "desktop", "logs", "dev-terminal.log"));
+	const fifoDir = path.join(os.tmpdir(), "cindy-fifo-root");
 	const command = darwinTerminalLoggedCommand("'node' 'runner.mjs' 'remote'", logPath, {
 		envPrefix: "XDT_ISOLATED='1' ",
 		maxBytes: 1024,
+		fifoDir,
 	});
 	assert.match(command, /^\{ /);
 	assert.ok(command.includes(`head -c 1024 > '${logPath}'`), command);
+	// FIFO 必须建在临时目录而不是 apps/desktop/logs/ 下，避免 dev 运行时递归 grep 阻塞在活跃 FIFO 上。
+	assert.ok(command.includes(`mktemp -d '${path.join(fifoDir, "cindy-dev-term.XXXXXX")}'`), command);
+	assert.ok(!command.includes(`${logPath}.fifo`), command);
 	// 环境变量前缀必须紧贴 script，才能传给 dev 进程。
-	assert.match(command, /; XDT_ISOLATED='1' \/usr\/bin\/script -q -F '[^']+dev-terminal\.log\.fifo' 'node' 'runner\.mjs' 'remote'; /);
+	assert.match(command, /&& XDT_ISOLATED='1' \/usr\/bin\/script -q -F "\$cindyDevFifo" 'node' 'runner\.mjs' 'remote'; /);
 	assert.match(command, /\(exit \$cindyDevExit\); \}$/);
 });
 
-test("logged terminal command keeps the child exit code and caps the log size", {
+test("logged terminal command keeps the child exit code, caps the log size, and keeps FIFOs out of the log dir", {
 	skip: process.platform !== "darwin" ? "script(1) flags differ outside macOS" : false,
 }, () => {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-dev-term-"));
+	const fifoDir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-dev-term-fifo-"));
 	try {
 		const logPath = path.join(dir, "dev-terminal.log");
-		const child = "sh -c 'i=0; while [ $i -lt 2000 ]; do echo line-$i-$CINDY_PROBE; i=$((i+1)); done; exit 4'";
-		const logged = darwinTerminalLoggedCommand(child, logPath, { envPrefix: "CINDY_PROBE='ok' ", maxBytes: 64 });
+		const probePath = path.join(dir, "running-entries.txt");
+		const child = `sh -c 'ls -A "${dir}" > "${probePath}"; i=0; while [ $i -lt 2000 ]; do echo line-$i-$CINDY_PROBE; i=$((i+1)); done; exit 4'`;
+		const logged = darwinTerminalLoggedCommand(child, logPath, {
+			envPrefix: "CINDY_PROBE='ok' ",
+			maxBytes: 64,
+			fifoDir,
+		});
 		const result = spawnSync("/bin/sh", ["-c", `cd / && ${logged}; echo exit=$?`], {
 			encoding: "utf8",
 			stdio: ["ignore", "pipe", "pipe"],
@@ -1922,9 +1933,13 @@ test("logged terminal command keeps the child exit code and caps the log size", 
 		assert.match(result.stdout, /exit=4\s*$/);
 		assert.equal(fs.statSync(logPath).size, 64);
 		assert.match(fs.readFileSync(logPath, "utf8"), /line-0-ok/);
+		// 运行期间日志目录下不能出现任何 .fifo，退出后临时目录也被清理。
+		assert.doesNotMatch(fs.readFileSync(probePath, "utf8"), /\.fifo\b/);
 		assert.equal(fs.existsSync(`${logPath}.fifo`), false);
+		assert.deepEqual(fs.readdirSync(fifoDir), []);
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
+		fs.rmSync(fifoDir, { recursive: true, force: true });
 	}
 });
 
@@ -2058,4 +2073,14 @@ test('isolated preview refuses a shared instance in its checkout before stopping
  assert.equal(dev.length,1);
  assert.throws(()=>assertNoRestartTargets(dev,root,[root]),/occupied checkout/);
  assert.doesNotThrow(()=>assertNoRestartTargets(processes,'/tmp/another-candidate',[root,'/tmp/another-candidate']));
+});
+
+// An ambiguous endpoint source must not stop the currently running dev client.
+test("desktop restart rejects conflicting private endpoint flags before process control", () => {
+  const steps = [];
+  assert.throws(() => runDesktopRestart(
+    ["--region=cn", "--endpoints-file=/private/cloud test/endpoint.json", "--endpoints-cdn"],
+    "/repo/cindy", (step) => steps.push(step), () => {},
+  ), /cannot be combined/);
+  assert.deepEqual(steps, []);
 });

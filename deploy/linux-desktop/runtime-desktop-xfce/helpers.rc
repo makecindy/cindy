@@ -1,0 +1,12 @@
+#
+# Default helpers.rc for Xfce's Preferred Applications
+#
+# Copyright (c) 2005-2006 Benedikt Meurer <benny@xfce.org>
+#
+# Cloud desktop: links open in the Dock's personal Chrome profile. A user's
+# ~/.config/xfce4/helpers.rc still takes precedence.
+
+WebBrowser=cindy-cloud-chrome
+MailReader=thunderbird
+TerminalEmulator=debian-x-terminal-emulator
+FileManager=thunar

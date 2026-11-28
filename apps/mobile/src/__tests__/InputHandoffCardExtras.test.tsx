@@ -4,6 +4,32 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { InputHandoffSnapshot } from "@cindy/device-link";
 
+// Render the platform's real sheet with native controls projected into the test DOM.
+let platform: "android" | "ios" = "android";
+vi.mock("@/inputHandoff/InputHandoffSheet", async (importOriginal) => {
+  const android = await importOriginal<typeof import("@/inputHandoff/InputHandoffSheet")>();
+  const ios = await import("@/inputHandoff/InputHandoffSheet.ios");
+  return { InputHandoffSheet: (props: Parameters<typeof android.InputHandoffSheet>[0]) =>
+    createElement(platform === "ios" ? ios.InputHandoffSheet : android.InputHandoffSheet, props) };
+});
+vi.mock("@expo/ui", () => ({ Host: ({ children }: { children: ReactNode }) => children }));
+vi.mock("@expo/ui/swift-ui", () => {
+  const group = ({ children }: { children: ReactNode }) => children;
+  return {
+    Group: group, HStack: group, VStack: group, Text: group, ScrollView: group, RNHostView: group,
+    Image: () => null, Spacer: () => null,
+    BottomSheet: ({ isPresented, children }: { isPresented: boolean; children: ReactNode }) =>
+      isPresented ? createElement("div", { "data-testid": "interaction.inputHandoff.sheet" }, children) : null,
+    Button: ({ children, onPress }: { children: ReactNode; onPress(): void }) => createElement("button", { onClick: onPress }, children),
+  };
+});
+vi.mock("@expo/ui/swift-ui/modifiers", () => ({
+  ...Object.fromEntries(("accessibilityLabel background buttonStyle contentShape disabled fixedSize font foregroundStyle frame " +
+    "layoutPriority lineLimit multilineTextAlignment onGeometryChange padding presentationDetents presentationDragIndicator " +
+    "scrollDismissesKeyboard strokeBorder useScrollGeometryChange").split(/ +/).map(key => [key, () => undefined])),
+  shapes: { capsule: () => null, rectangle: () => null, roundedRectangle: () => null },
+}));
+
 const push = vi.fn();
 const openURL = vi.fn(async () => true);
 const setStringAsync = vi.fn(async () => true);
@@ -94,6 +120,7 @@ vi.mock("@/components/MobilePrimitives", async () => {
 vi.mock("@/theme", () => ({
   useTheme: () => ({ colors: {} }),
   useThemedStyles: () => ({}),
+  radius: {},
   iconSize: {},
   iconStroke: {},
   spacing: {},
@@ -120,6 +147,7 @@ let roots: Root[] = [];
 afterEach(() => {
   act(() => roots.forEach((root) => root.unmount()));
   roots = [];
+  platform = "android";
   for (const fn of [push, openURL, setStringAsync, submit, shareAsync, writeAsStringAsync, openPicture]) fn.mockClear();
   answers.length = 0;
 });
@@ -334,6 +362,34 @@ it("offers a sign-in code to copy and its link to open on this phone", async () 
   // A link whose shown origin does not match is never offered.
   const forged = mount(step({ deviceCode: { ...deviceCode, origin: "https://example.com" }, controls: [] }));
   expect(buttons(forged.container)).not.toContain("interaction.inputHandoff.action.fill");
+});
+
+// Tier 1: the account challenge must open on the same phone even when it is the only device
+// available. After refresh, both the image and the primary button must use the new revision.
+it.each(["android", "ios"] as const)("opens, refreshes and cancels account verification on %s", async (os) => {
+  platform = os;
+  const first = step({ controls: [], picture: true, qr: "scan", accountVerification: true });
+  const { container, render, onDecision } = mount(first);
+  await act(async () => {});
+  const code = () => container.querySelector<HTMLButtonElement>('[data-testid="interaction.inputHandoff.qr.code"]');
+  expect(code()).not.toBeNull();
+  expect(buttons(container)).not.toContain("interaction.inputHandoff.qr.share");
+  await act(async () => code()!.click());
+  expect(openURL).toHaveBeenLastCalledWith(qrLink);
+  expect(answers).toHaveLength(0);
+  await press(container, "interaction.inputHandoff.refreshVerification");
+  expect(onDecision).toHaveBeenLastCalledWith({ kind: "input_handoff", action: "refresh", expectedRevision: 2 });
+  const nextUrl = "https://example.test/renewed";
+  openPicture.mockImplementationOnce(async (_snapshot, answer) => {
+    await answer({ ...qrPicture, qr: { text: nextUrl, url: nextUrl } });
+  });
+  render({ ...first, revision: 3 });
+  await press(container, "interaction.inputHandoff.qr.open");
+  expect(openURL).toHaveBeenLastCalledWith(nextUrl);
+  await press(container, "interaction.inputHandoff.action.close");
+  expect(onDecision).toHaveBeenLastCalledWith({ kind: "input_handoff", action: "cancel", expectedRevision: 3 });
+  render({ ...first, revision: 4, phase: "cancelled", terminal: true });
+  expect(sheet(container)).toBeNull();
 });
 
 it("hands a QR code from the computer to this phone: open its link here, or save or share it", async () => {

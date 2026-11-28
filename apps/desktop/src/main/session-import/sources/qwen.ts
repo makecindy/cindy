@@ -115,12 +115,13 @@ function activeBranch(loaded: Loaded): QwenRecord[] {
   return out.reverse();
 }
 
-function firstUserText(loaded: Loaded): string {
+function firstUserTitle(loaded: Loaded): string {
   for (const id of loaded.order) {
     const r = loaded.records.get(id)!;
     if (r.type !== 'user') continue;
-    const text = r.parts.map((p) => (isRecord(p) && typeof p.text === 'string' && p.thought !== true ? p.text : '')).join('').trim();
-    if (text) return text;
+    const text = r.parts.map((p) => (isRecord(p) && typeof p.text === 'string' && p.thought !== true ? p.text : '')).join('');
+    const title = makeTitle(text, '');
+    if (title) return title;
   }
   return '';
 }
@@ -145,7 +146,7 @@ async function list(ctx: ScanContext): Promise<SourceListResult> {
       seen.add(id);
       try {
         const loaded = await load(f.file, { maxBytes: 512 * 1024 });
-        const title = makeTitle(loaded.title || firstUserText(loaded), '');
+        const title = makeTitle(loaded.title, '') || firstUserTitle(loaded);
         if (!title) continue;
         sessions.push({
           source: 'qwen',

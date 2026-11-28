@@ -6,9 +6,12 @@
  * 自动跟随,无缓存失效问题。
  */
 import type { ToolRowWording } from '@cindy/maker-shared/message-presentation';
+import { formatCollabTargetsSummary } from '@cindy/maker-shared/tool-use-descriptor';
 
 import { i18n } from '@/i18n';
 import {
+  COLLAB_ROW_COUNT_VERB_KEY,
+  COLLAB_ROW_VERB_KEY,
   FILE_CHANGE_UPDATED_FILES_I18N_KEY,
   INTENT_ROW_VERB_KEY,
   TOOL_ROW_VERB_I18N_KEY,
@@ -20,6 +23,19 @@ export function createMobileToolRowWording(): ToolRowWording {
     intentVerb: (action) => i18n.t(INTENT_ROW_VERB_KEY[action]),
     // 整句 key:语序按语言走,不在这里拼动词与文件数(ja/ko 拼出来不成句)。
     updateFilesLabel: (count) => i18n.t(FILE_CHANGE_UPDATED_FILES_I18N_KEY, { count }),
+    collabLabel: (descriptor) => {
+      if (descriptor.action === 'other') {
+        return `${i18n.t(TOOL_ROW_VERB_I18N_KEY.use)} ${descriptor.toolLabel}`.trim();
+      }
+      const targets = formatCollabTargetsSummary(descriptor.targets, descriptor.targetCount);
+      if (targets) {
+        return `${i18n.t(COLLAB_ROW_VERB_KEY[descriptor.action])} ${targets}`.trim();
+      }
+      if (descriptor.targetCount && descriptor.targetCount > 0) {
+        return i18n.t(COLLAB_ROW_COUNT_VERB_KEY[descriptor.action], { count: descriptor.targetCount });
+      }
+      return i18n.t(COLLAB_ROW_VERB_KEY[descriptor.action]);
+    },
   };
 }
 

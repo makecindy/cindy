@@ -9,7 +9,7 @@
  * re-implement what we're trying to verify.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -390,6 +390,36 @@ describe('resolveWorkspacePathCached', () => {
 });
 
 describe('bfsFindManyBySuffix (single-walk multi-href)', () => {
+  // Unit regression: a full answer in a wide directory used to wait for yield
+  // turns over unrelated entries. Small filesystem fixtures never hit that path.
+  it('finishes all candidate buckets before yielding over unrelated entries', async () => {
+    const entries = ['foo.ts', 'bar.ts', ...Array.from({ length: 512 }, (_, i) => `other-${i}.ts`)]
+      .map((name) => ({ name, isFile: () => true, isDirectory: () => false }) as fs.Dirent);
+    const read = vi.spyOn(fs.promises, 'readdir').mockResolvedValue(entries as never);
+    const turns: Array<() => void> = [];
+    const yieldTurn = vi.spyOn(globalThis, 'setImmediate').mockImplementation((callback, ...args) => {
+      turns.push(() => callback(...args));
+      return {} as NodeJS.Immediate;
+    });
+    const lookup = bfsFindManyBySuffix(workspace, ['foo.ts', 'bar.ts'], { maxCandidates: 1 });
+    try {
+      const result = await Promise.race([
+        lookup,
+        Promise.resolve().then(() => Promise.resolve()).then(() => 'still waiting'),
+      ]);
+      expect(result).toEqual(new Map([
+        ['foo.ts', [path.join(workspace, 'foo.ts')]],
+        ['bar.ts', [path.join(workspace, 'bar.ts')]],
+      ]));
+      expect(yieldTurn).not.toHaveBeenCalled();
+    } finally {
+      for (const turn of turns) turn();
+      await lookup;
+      read.mockRestore();
+      yieldTurn.mockRestore();
+    }
+  });
+
   it('resolves several hrefs in one walk', async () => {
     const a = write('apps/desktop/src/App.tsx');
     const b = write('apps/server/src/index.ts');

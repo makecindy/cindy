@@ -249,7 +249,7 @@ export function UpgradeBanner({ hostId, agent, sessionId, className, style }: Up
   return (
     <div
       className={cn(
-        'mx-auto flex select-none items-start gap-2 rounded-md px-3 py-2',
+        'mx-auto flex select-none items-start gap-2 rounded-xl px-3 py-2',
         'border bg-[var(--upgrade-banner-bg)] border-[var(--upgrade-banner-border)]',
         className,
       )}

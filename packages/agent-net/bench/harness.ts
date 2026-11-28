@@ -250,9 +250,14 @@ async function startAgentNetNetwork(directory: string, network: BenchNetwork, mo
         // 中转的 UDP 端口经这台设备自己的限速线路；STUN 也走它，查到的是本机回环地址，会被「只交换公网地址」滤掉。
         ? { udp: true, publicCandidatesOnly: true, relayUdpServer: udpServers[role], stunServers: [udpServers[role]] }
         : { udp: false };
+      // `--native <module>`：Agent-Net 跑在原生引擎上（packages/agent-net-native/node，`node build.mjs --out <module>` 生成），和 Desktop
+      // 一样；引擎自己绑 0.0.0.0，不传 bindAddress（传了就退回 WASM）。只交换公网候选地址照样生效，数据仍经中转。
+      const native = argument('--native');
       const options = { client: api, userId: bootstrap.ownerCertificate.subject, module,
         // 中转在另一台电脑上时 UDP 要能发出本机；只交换公网候选地址，局域网与 VPN 地址照样被滤掉，数据仍经中转。
-        bindAddress: argument('--remote-network') ? '0.0.0.0' : '127.0.0.1', lanDiscovery: false, ...transport };
+        ...(native ? { native: { binding: native, onFallback: (code: string) => { throw new Error('AGENT_NET_NATIVE_FALLBACK_' + code); } } }
+          : { bindAddress: argument('--remote-network') ? '0.0.0.0' : '127.0.0.1' }),
+        lanDiscovery: false, ...transport };
       return mode === 'portable' || mode === 'session' ? AgentNetSocket.open(options) : AgentNetWorkerSocket.open({ ...options, workerFile, log });
     },
   });

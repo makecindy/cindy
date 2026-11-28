@@ -34,9 +34,19 @@ vi.mock('react-i18next', async (importOriginal) => ({
 const auth = vi.hoisted(() => ({
   mode: 'local' as 'local' | 'cloud',
   user: null as { name: string; membershipKind: 'personal' } | null,
+  cloudAccess: 'hidden',
+}));
+vi.mock('@/features/cloud-settings/CloudInstanceAccess', () => ({
+  useCloudInstanceAccess: () => auth.cloudAccess,
 }));
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ mode: auth.mode, dataOwnerId: null, user: auth.user }),
+}));
+vi.mock('@/components/ui/confirm-dialog-provider', () => ({
+  useConfirmDialog: () => ({ confirm: vi.fn().mockResolvedValue(false) }),
+}));
+vi.mock('@/features/device-link/useDeviceLinkDeviceList', () => ({
+  useDeviceLinkDeviceList: () => [],
 }));
 vi.mock('@/lib/useCindyVersions', () => ({
   useCindyVersions: () => ({ state: 'idle' }),
@@ -67,9 +77,19 @@ vi.mock('../AppearanceSection', () => ({ AppearanceSection: () => {
 } }));
 vi.mock('../SubagentModelSection', () => ({ SubagentModelSection: Stub }));
 vi.mock('../AuxiliaryModelSection', () => ({ AuxiliaryModelSection: Stub }));
-vi.mock('../ProvidersSection', () => ({ ProvidersSection: Stub }));
+const providersStub = vi.hoisted(() => ({ mounts: 0 }));
+vi.mock('../ProvidersSection', async () => {
+  const { useEffect } = await import('react');
+  // 记下挂载次数，并像真实左栏那样在「智能路由」和供应商之间来回切换。
+  function ProvidersSection({ routing, onRoutingChange }: { routing?: boolean; onRoutingChange?: (next: boolean) => void }) {
+    useEffect(() => { providersStub.mounts += 1; }, []);
+    return <button type="button" data-testid="providers-stub" data-routing={String(!!routing)} onClick={() => onRoutingChange?.(!routing)} />;
+  }
+  return { ProvidersSection };
+});
 vi.mock('../McpServersSection', () => ({ McpServersSection: Stub }));
 vi.mock('../RemoteControlSection', () => ({ RemoteControlSection: Stub }));
+vi.mock('../LocalAgentSection', () => ({ LocalAgentSection: Stub }));
 vi.mock('@/features/device-link/SharedTaskDialog', () => ({ SharedTaskDialog: Stub }));
 vi.mock('../NotificationSection', () => ({ NotificationSection: Stub }));
 vi.mock('../WindowBehaviorSection', () => ({ WindowBehaviorSection: Stub }));
@@ -197,6 +217,8 @@ beforeEach(() => {
 afterEach(() => {
   localStorage.clear();
   vi.unstubAllGlobals();
+  auth.mode = 'local';
+  auth.cloudAccess = 'hidden';
 });
 
 describe('SettingsView Escape', () => {
@@ -433,6 +455,13 @@ describe('SettingsView Escape', () => {
     }
   });
 
+  // The instance's remote desktop must not offer keep-awake or quit.
+  it.each([false, true])('shows app behavior only outside a managed cloud instance (%s)', (hostOwned) => {
+    Object.assign(window.electronAPI, { platform: 'linux', hostSettings: { hostOwned } });
+    renderSettings('/settings');
+    expect(!!document.getElementById('settings-window-behavior')).toBe(!hostOwned);
+    expect(document.getElementById('settings-search-target-general-language')).toBeTruthy();
+  });
   // Unit regression: the direct-link test cannot detect losing General's position after a round trip.
   it.each(['back', 'escape'])('restores the scrolled General page after returning with %s', async (action) => {
     renderSettings('/settings');
@@ -449,6 +478,21 @@ describe('SettingsView Escape', () => {
     else fireEvent.click(back);
     expect(await screen.findByRole('button', { name: /settings.piPackages.manageLabel/ })).toBe(entry);
     expect(viewport.scrollTop).toBe(640);
+  });
+
+  // 2026-11-26 用户反馈 / unit：从「智能路由」点下面的供应商，整页重新挂载——列表闪一下加载，刚点的供应商丢了，落回第一个。
+  // 两者是同一个页面里的两栏(tab=model-groups / providers)，切换不能换掉面板。最小输入：在两栏之间来回切一次。
+  it('keeps the providers page mounted when switching between smart routing and a provider', async () => {
+    renderSettings('/settings?tab=model-groups');
+    const stub = await screen.findByTestId('providers-stub');
+    const mounted = providersStub.mounts;
+    expect(stub.getAttribute('data-routing')).toBe('true');
+    fireEvent.click(stub);
+    await waitFor(() => expect(screen.getByTestId('providers-stub').getAttribute('data-routing')).toBe('false'));
+    fireEvent.click(screen.getByTestId('providers-stub'));
+    await waitFor(() => expect(screen.getByTestId('providers-stub').getAttribute('data-routing')).toBe('true'));
+    expect(providersStub.mounts).toBe(mounted);
+    expect(screen.getByTestId('providers-stub')).toBe(stub);
   });
 
   it('returns from the Pi extensions page to General before leaving Settings', async () => {

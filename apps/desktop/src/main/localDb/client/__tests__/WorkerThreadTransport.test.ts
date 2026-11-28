@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { buildDbWorkerBundle, createMigratedSmokeDb } from '../../__tests__/dbWorkerTestUtils.js';
 import {
@@ -117,7 +117,7 @@ describe('WorkerThreadTransport', () => {
     }
   });
 
-  it('counts queue wait against the RPC timeout budget', async () => {
+  it('counts queue wait against the RPC timeout budget and correlates late replies', async () => {
     const transport = new WorkerThreadTransport({
       useInlineWorker: true,
       maxInFlightRpcs: 1,
@@ -127,13 +127,30 @@ describe('WorkerThreadTransport', () => {
       // request's total budget.
       rpcTimeoutMs: 500,
     });
+    const diagnostics: unknown[] = [];
+    transport.on('log', ({ scope, payload }) => {
+      if (scope === 'db-rpc') diagnostics.push(payload);
+    });
     const startedAt = Date.now();
     try {
       const active = transport.send('sleep', { ms: 200 });
       const queued = transport.send('sleep', { ms: 400 });
       await expect(active).resolves.toEqual({ slept: 200 });
-      await expect(queued).rejects.toThrow(/RPC timeout/);
+      const failure = await queued.catch((error: Error) => error);
+      expect(failure).toMatchObject({
+        code: DB_TRANSPORT_OUTCOME_UNKNOWN,
+        message: expect.stringMatching(/RPC timeout: op="sleep" id=\d+/),
+      });
       expect(Date.now() - startedAt).toBeLessThan(700);
+      // #12828: an already-posted, late response used to lose its timing
+      // when this same budget check removed the pending request.
+      const id = Number((failure as Error).message.match(/id=(\d+)/)?.[1]);
+      expect(diagnostics).toContainEqual(expect.objectContaining({
+        event: 'rpc.timeout', id, queueMs: expect.any(Number), workerTiming: 'unknown',
+      }));
+      await vi.waitFor(() => expect(diagnostics).toContainEqual(expect.objectContaining({
+        event: 'rpc.lateReply', id, workerExecutionMs: expect.any(Number), ok: true,
+      })));
     } finally {
       await transport.close();
     }
@@ -213,7 +230,7 @@ describe('WorkerThreadTransport', () => {
           context_window_runtime INTEGER,
           fast_mode INTEGER NOT NULL,
           cleared_at INTEGER,
-          pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER,
+          pinned_at INTEGER, snoozed_until INTEGER, snoozed_at INTEGER, archived_at INTEGER,
           user_send_at INTEGER,
           agent_kind TEXT NOT NULL,
           workspace_kind TEXT NOT NULL,

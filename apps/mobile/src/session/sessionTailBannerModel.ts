@@ -66,7 +66,7 @@ export type SessionTailBannerState = SessionTailErrorBanner | SessionTailInterru
 export interface ResolveSessionTailBannerInput {
   messages: readonly RemoteMessage[];
   session: Pick<RemoteSession, 'activeTurnStartedAt' | 'lastTurnEndedAt' | 'clearedAt' | 'source'> | null;
-  projection: Pick<InputProjection, 'error' | 'credentialSwitchWait'>;
+  projection: Pick<InputProjection, 'error' | 'credentialSwitchWait' | 'autoResumePending'>;
   isSessionStreaming: boolean;
   /**
    * 在途续跑(pendingQueue **加** settling 窗口里存在续跑指令项)——由调用方用
@@ -100,14 +100,14 @@ export function isContinuationQueueItem(item: Pick<QueuedRemoteMessage, 'text'>)
 export function resolveSessionTailBanner(input: ResolveSessionTailBannerInput): SessionTailBannerState {
   const { projection } = input;
   if (projection.error) return null;
-  if (projection.credentialSwitchWait) return null;
+  if (projection.credentialSwitchWait || projection.autoResumePending?.reason === 'codex_reconnect_stalled') return null;
   if (input.isSessionStreaming) return null;
   if (input.continuationInFlight) return null;
 
   const tail = findErrorTailMessage(input.messages);
   if (tail && !input.hiddenErrorClientIds.has(tail.clientId)) {
     const nonRetryableGuidance = describeNonRetryableAgentError(tail.text, tail.reason);
-    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop, tail.text, tail.outputLimit);
+    const agentErrorGuidance = localizeAgentError(tail.reason, tail.toolLoop, tail.text, tail.outputLimit, tail.reconnectHandoff);
     return {
       kind: 'error-tail',
       clientId: tail.clientId,
@@ -141,6 +141,7 @@ interface ErrorTailMessage {
   reason: string | null;
   toolLoop: MobileToolLoopErrorDetails | null;
   outputLimit: OutputLimitDetails | null;
+  reconnectHandoff?: unknown;
 }
 
 /**
@@ -174,6 +175,7 @@ function findErrorTailMessage(messages: readonly RemoteMessage[]): ErrorTailMess
       text: rawText,
       reason: typeof content?.reason === 'string' ? content.reason : null,
       toolLoop: parseMobileToolLoopErrorDetails(content?.toolLoop),
+      reconnectHandoff: content?.reconnectHandoff,
       outputLimit: parseOutputLimitDetails(content?.outputLimit) ?? null,
     };
   }

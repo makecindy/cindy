@@ -191,7 +191,8 @@ PDF worker 的 `.mjs` 在 Electron 与 Chromium 宿主均按 JavaScript 提供�
 这不代表单页工具会自动加载项目的其它 Vite 插件或其提供的静态目录。
 
 `check(page, ui)` 里的 `page` 是 Playwright Page。`ui` 包含当前变体
-（`case`、`theme`、`locale`、`viewport`、`data`）以及：
+（`case`、`theme`、`locale`、`viewport`、`data`）与 `role`（`before`/`after`：`--compare` 里旧代码
+那一侧，断言无法成立时可以跳过），以及：
 
 - `ui.capture(name, { locator })`：额外截图；
 - `ui.t(key, values)`：当前语言的翻译；

@@ -97,6 +97,10 @@ vi.mock('@radix-ui/react-dialog', async () => {
   };
 });
 
+vi.mock('@/hooks/useModelRouteDevices', () => ({
+  useModelRouteDevices: () => ({ leadAgentDeviceId: null, devices: [] }),
+}));
+
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({
     confirm: vi.fn(async () => true),
