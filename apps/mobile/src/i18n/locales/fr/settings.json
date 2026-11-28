@@ -54,6 +54,12 @@
     "reset": "Rétablir le réglage par défaut"
   },
   "appearance": {
+    "chatReadingSize": {
+      "title": "Taille du texte du chat",
+      "default": "Par défaut",
+      "smaller": "Plus petite",
+      "saveFailed": "Impossible d’enregistrer la taille du texte du chat."
+    },
     "title": "Apparence",
     "modeLabel": "Mode d'apparence",
     "options": {

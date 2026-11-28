@@ -88,7 +88,7 @@ export function buildTableMessageContent(blocks: readonly MobileMarkdownBlock[],
   return { html, tableStyles: tableStyles.join('\n'), links, copies };
 }
 
-export function tableMessageCss(colors: ThemeColors, scale: number, layout: MessageContentLayout, borderWidth: number): string {
+export function tableMessageCss(colors: ThemeColors, scale: number, layout: MessageContentLayout, borderWidth: number, smallerBody = false): string {
   return buildSelectableMarkdownCss({ fontSize: typeScale.bodyLarge * scale,
     lineHeight: lineHeight.bodyLarge * scale, horizontalPadding: 0,
     bodyGap: layout.markdownBodyGap, markerWidth: layout.markdownListMarkerWidth,
@@ -100,6 +100,7 @@ export function tableMessageCss(colors: ThemeColors, scale: number, layout: Mess
   }, false) + `
   html,body{height:auto;min-height:0}#xdt-content{min-width:0;white-space:pre-wrap}
   body{font-size:${typeScale.bodyLarge * scale}px;line-height:${lineHeight.bodyLarge * scale}px}
+  ${smallerBody ? `p,blockquote{font-size:${typeScale.body * scale}px;line-height:${lineHeight.body * scale}px}` : ''}
   h1{font-size:${typeScale.title * scale}px;line-height:${lineHeight.listTitle * scale}px}
   h2{font-size:${typeScale.subtitle * scale}px;line-height:${lineHeight.listTitle * scale}px}
   h3,h4,h5,h6{font-size:${typeScale.bodyLarge * scale}px;line-height:${lineHeight.bodyLarge * scale}px}

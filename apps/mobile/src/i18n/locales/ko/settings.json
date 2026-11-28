@@ -54,6 +54,12 @@
     "reset": "기본값으로 재설정"
   },
   "appearance": {
+    "chatReadingSize": {
+      "title": "채팅 글자 크기",
+      "default": "기본",
+      "smaller": "작게",
+      "saveFailed": "채팅 글자 크기를 저장하지 못했습니다."
+    },
     "title": "외관",
     "modeLabel": "표시 모드",
     "options": {

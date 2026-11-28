@@ -54,6 +54,12 @@
     "reset": "復預設"
   },
   "appearance": {
+    "chatReadingSize": {
+      "title": "對話字號",
+      "default": "如常",
+      "smaller": "稍小",
+      "saveFailed": "未能存對話字號。"
+    },
     "title": "儀容",
     "modeLabel": "顯示之式",
     "options": {

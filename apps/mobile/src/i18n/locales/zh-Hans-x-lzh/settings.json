@@ -54,6 +54,12 @@
     "reset": "复默认"
   },
   "appearance": {
+    "chatReadingSize": {
+      "title": "对话字号",
+      "default": "如常",
+      "smaller": "稍小",
+      "saveFailed": "未能存对话字号。"
+    },
     "title": "仪容",
     "modeLabel": "显示之式",
     "options": {

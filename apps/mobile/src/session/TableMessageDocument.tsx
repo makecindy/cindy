@@ -60,10 +60,10 @@ type Slot = { id: string; top: number; height: number };
 type LinkAction = { onPress?: () => void; onLongPress?: () => void };
 
 /** Android single-message text carrier. Its document has no network or URL bridge. */
-export function TableMessageDocument({ text, blocks, layout, streaming, selectable, codeCopyEnabled = true,
+export function TableMessageDocument({ text, blocks, layout, smallerBody = false, streaming, selectable, codeCopyEnabled = true,
   documentKey, initialHeight, onOpenSessionLink, onReadyChange, onFailure }: {
   text: string; blocks: readonly MobileMarkdownBlock[]; layout: MessageContentLayout;
-  streaming?: boolean; selectable?: boolean; codeCopyEnabled?: boolean;
+  smallerBody?: boolean; streaming?: boolean; selectable?: boolean; codeCopyEnabled?: boolean;
   documentKey: string; initialHeight?: number; onOpenSessionLink?: (url: string) => void;
   onReadyChange?: (ready: boolean) => void;
   onFailure?: () => void;
@@ -100,7 +100,7 @@ export function TableMessageDocument({ text, blocks, layout, streaming, selectab
   const displayStates = Object.fromEntries(content.links.map(link => [link.id,
     (linkState?.contentId === contentId ? linkState.values[link.id] : undefined)
       ?? { text: link.text, lit: false, code: link.code }]));
-  const heightKey = JSON.stringify(['table-body-height', documentKey, text, width, scale, layout, codeCopyEnabled,
+  const heightKey = JSON.stringify(['table-body-height', documentKey, text, width, scale, smallerBody, layout, codeCopyEnabled,
     content.copies.length, Object.values(displayStates).map(state => [state.text, state.code])]);
   const mounted = useDeferredRichContent(width > 0 && ((row?.visible ?? true) || selectionActive), contentId);
   const generation = useRef({ mounted: false, value: 0 });
@@ -108,7 +108,7 @@ export function TableMessageDocument({ text, blocks, layout, streaming, selectab
     generation.current = { mounted, value: generation.current.value + 1 };
     loaded.current = false; settled.current = false;
   }
-  const layoutSignature = JSON.stringify([width, scale, layout, colors, codeCopyEnabled,
+  const layoutSignature = JSON.stringify([width, scale, smallerBody, layout, colors, codeCopyEnabled,
     selectable, streaming, Object.values(displayStates)]);
   const layoutVersion = useRef({ signature: '', version: 0 });
   if (layoutVersion.current.signature !== layoutSignature) {
@@ -120,7 +120,7 @@ export function TableMessageDocument({ text, blocks, layout, streaming, selectab
   current.current = { mounted, revision, contentId, heightKey, width };
   const isCurrentMount = () => generation.current.mounted && generation.current.value === mountGeneration;
   const payload: Document = { revision, html: content.html,
-    css: tableMessageCss(colors, scale, layout, StyleSheet.hairlineWidth) + content.tableStyles,
+    css: tableMessageCss(colors, scale, layout, StyleSheet.hairlineWidth, smallerBody) + content.tableStyles,
     selectable: selectable === true && !streaming, links: displayStates };
   const latestPayload = useRef(payload); latestPayload.current = payload;
   const sessionLinkTitles = useMarkdownSessionLinkTitles(text);

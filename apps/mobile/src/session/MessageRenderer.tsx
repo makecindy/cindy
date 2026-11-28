@@ -455,6 +455,7 @@ import { tokenizeInlineMath } from '@cindy/maker-shared/math-markdown';
 import type { RemoteTextFilePreviewResult } from '@/device-link/mobileMakerTransport';
 import { fontWeight, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 import { iconSize, iconStroke, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
+import { ChatReadingSizeContext } from '@/settings/chatReadingSize';
 import { useUserBubbleAppearance } from '@/theme/userBubblePreference';
 import { isOwnUserBubble } from './userBubbleOwnership';
 import { i18n } from '@/i18n';
@@ -3436,14 +3437,14 @@ const RenderItemView = memo(function RenderItemView({
               <FileChip key={`${name}:${index}`} name={name} presentationOnly
                 layout={buildMessageContentLayout({ screenWidth: actions.screenWidth })} />
             )}
-            renderText={(text, index, longMessage) => (
+            renderText={(text, index, longMessage, smallerBody) => (
               // 排队/待发送正文仍是可读内容:待答 ask 卡锁住输入框时,主人要能长按
               // 选中并复制刚排队的话,再粘到自定义答案里。发送锁不能降级为阅读锁。
               // 长正文展开后沿用完成态同款有界保护:普通任务回退可选中的 RN Text,
               // 伙伴用有界文本分组保留部分选字,避免巨型 iOS UITextView 展开后空白。
               // longMessage 由真实气泡按整条正文实测透传,结构化 atom 与普通正文共用,
               // 避免在此按单块 token 再判一次长度(单一状态所有者)。
-              <MarkdownBody key={`text:${index}`} text={text} streaming={false}
+              <MarkdownBody key={`text:${index}`} text={text} streaming={false} smallerBody={smallerBody}
                 selectable pinContentWidth={false}
                 allowIosUITextView={!longMessage || actions.companion === true}
                 boundTextRuns={longMessage && actions.companion === true}
@@ -3749,6 +3750,11 @@ function MessageBubble({
   const { user: viewer } = useAuth();
   const { selected: wallpaper } = useWallpaper();
   const styles = useThemedStyles(makeStyles);
+  const readingSize = useContext(ChatReadingSizeContext);
+  const smallerBody = readingSize === 'smaller' &&
+    (item.message.kind === 'user' || item.message.kind === 'assistant') &&
+    !item.message.systemCardType;
+  const bodyTextStyle = smallerBody ? styles.smallerMessageText : styles.messageText;
   const { colors, mode } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
   const [copyState, setCopyState] = useRecyclingState<CopyMessageStatus | 'idle' | 'copying'>('idle');
@@ -3964,9 +3970,10 @@ function MessageBubble({
   const [measuredBody, setMeasuredBody] = useRecyclingState<{
     body: string;
     lines: number;
+    smallerBody: boolean;
   } | null>(null);
   const measuredBodyLines =
-    measuredBody && measuredBody.body === displayBubbleBody ? measuredBody.lines : null;
+    measuredBody && measuredBody.body === displayBubbleBody && measuredBody.smallerBody === smallerBody ? measuredBody.lines : null;
   const [longMessageExpanded, setLongMessageExpanded] = useRecyclingState(false);
   // 折叠判定单向闩锁(绑定 body,FlatList 复用换消息时自动失效):测量 Text
   // 的排版宽度跟随气泡宽度,而气泡宽度又随折叠状态变化(展开态的 markdown
@@ -4253,7 +4260,7 @@ function MessageBubble({
               numberOfLines={collapsedLineCount}
               selectable={bubbleTextSelectable}
               testID="message.collapsedSentInlineAtoms"
-              textStyle={styles.messageText}
+              textStyle={bodyTextStyle}
               tokens={sentInlineTokens}
             />
           ) : (
@@ -4263,7 +4270,7 @@ function MessageBubble({
             <MarkdownSelectableText
               numberOfLines={collapsedLineCount}
               selectable={bubbleTextSelectable}
-              style={styles.messageText}
+              style={bodyTextStyle}
               testID="message.collapsedBody"
             >
               {displayBubbleBody}
@@ -4285,6 +4292,7 @@ function MessageBubble({
                   onOpenSessionLink={actions.onOpenSessionLink}
                   pinContentWidth={!isUser}
                   selectable={bubbleTextSelectable}
+                  smallerBody={smallerBody}
                   streaming={false}
                   text={text}
                 />
@@ -4307,6 +4315,7 @@ function MessageBubble({
             onOpenSessionLink={actions.onOpenSessionLink}
             pinContentWidth={!isUser}
             selectable={bubbleTextSelectable}
+            smallerBody={smallerBody}
             streaming={isStreamingAssistant}
             text={bubbleBody}
           />
@@ -4334,8 +4343,9 @@ function MessageBubble({
             onTextLayout={(e) => setMeasuredBody({
               body: displayBubbleBody,
               lines: e.nativeEvent.lines.length,
+              smallerBody,
             })}
-            style={styles.messageText}
+            style={bodyTextStyle}
           >
             {displayBubbleBody}
           </Text>
@@ -6451,6 +6461,7 @@ function MarkdownBodyBase({
   onOpenSessionLink,
   pinContentWidth = false,
   selectable: selectionAllowed,
+  smallerBody = false,
   streaming,
   text,
 }: {
@@ -6485,11 +6496,13 @@ function MarkdownBodyBase({
   selectable?: boolean;
   /** 消息流式中:文件 chip 层跳过远端验证。 */
   streaming?: boolean;
+  smallerBody?: boolean;
   text: string;
 }) {
   const { colors } = useTheme();
   const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
+  const bodyTextStyle = smallerBody ? styles.smallerMessageText : styles.messageText;
   const chatFilePathContext = useContext(ChatFilePathContext);
   const resolveMarkdownMedia = useContext(MarkdownRemoteMediaContext);
   // iOS UITextView 在 stretch/百分比宽度下会偶发只量出部分高度,LegendList 按这次
@@ -6508,7 +6521,7 @@ function MarkdownBodyBase({
   const [tableFailedRevision, setTableFailedRevision] = useRowState<string | null>(null);
   const bodyInstance = useId();
   const documentKey = richStateKey ?? markdownImageCacheKey ?? bodyInstance;
-  const documentRevision = JSON.stringify([documentKey, text]);
+  const documentRevision = JSON.stringify([documentKey, text, smallerBody]);
   const currentDocumentRevision = useRef(documentRevision);
   useLayoutEffect(() => { currentDocumentRevision.current = documentRevision; }, [documentRevision]);
   const handleSettledWidthLayout = useCallback((event: LayoutChangeEvent) => {
@@ -6518,8 +6531,8 @@ function MarkdownBodyBase({
   }, [measuresSettledWidth]);
   const pinSettledWidth = measuresSettledWidth && contentWidth > 0;
   const settledTextStyle = useMemo(() => pinSettledWidth
-    ? [styles.messageText, { width: contentWidth }]
-    : styles.messageText, [contentWidth, pinSettledWidth, styles.messageText]);
+    ? [bodyTextStyle, { width: contentWidth }]
+    : bodyTextStyle, [bodyTextStyle, contentWidth, pinSettledWidth]);
   const markdownParseRef = useRef<MobileMarkdownParseResult | null>(null);
   const markdownParse = useMemo(() => {
     const startedAt = typeof performance !== 'undefined' && typeof performance.now === 'function'
@@ -6703,7 +6716,7 @@ function MarkdownBodyBase({
     }
     const baseStyle: StyleProp<TextStyle> = block.type === 'heading'
       ? [styles.markdownHeading, headingSizeStyle(styles, block.level)]
-      : styles.messageText;
+      : block.type === 'paragraph' ? bodyTextStyle : styles.messageText;
     const content: ReactNode[] = [];
     if (block.type === 'list_item' && !('textRunContinuation' in block && block.textRunContinuation)) {
       content.push(
@@ -6721,7 +6734,7 @@ function MarkdownBodyBase({
       </MarkdownListParagraph>);
     } else spans.push(...content);
     return spans;
-  }, [hasNestedLists, layout.markdownBodyGap, renderInlines, selectable, spanFor, styles]);
+  }, [bodyTextStyle, hasNestedLists, layout.markdownBodyGap, renderInlines, selectable, spanFor, styles]);
   const renderTextRun = (group: Extract<MobileMarkdownBlockGroup, { type: 'text_run' }>): ReactNode => {
     const runSelectable = selectable === true;
     return (
@@ -6730,10 +6743,10 @@ function MarkdownBodyBase({
         paragraphLayout={hasNestedLists}
         alignmentTextStyles={group.blocks.map((block) => block.type === 'heading'
           ? headingSizeStyle(styles, block.level)
-          : styles.messageText)}
+          : block.type === 'paragraph' ? bodyTextStyle : styles.messageText)}
         key={`${group.key}:${pinSettledWidth ? contentWidth : 'hug'}`}
         selectable={runSelectable}
-        style={settledTextStyle}
+        style={smallerBody && group.blocks.some(block => block.type !== 'paragraph') ? styles.messageText : settledTextStyle}
         testID="message.markdownTextRun"
       >
         {group.blocks.map((block, index) => (
@@ -6853,7 +6866,7 @@ function MarkdownBodyBase({
           <MarkdownSelectableText
             allowIosUITextView={singleBlockAllowsIosUITextView}
             selectable={inlinesSelectable(block.inlines)}
-            style={[styles.messageText, styles.markdownQuoteText]}
+            style={[bodyTextStyle, styles.markdownQuoteText]}
           >
             {renderInlines(block.inlines, singleBlockSpanFor(inlinesSelectable(block.inlines)))}
           </MarkdownSelectableText>
@@ -6958,7 +6971,7 @@ function MarkdownBodyBase({
         {renderInlines(block.inlines, singleBlockSpanFor(inlinesSelectable(block.inlines)))}
       </MarkdownSelectableText>
     );
-  }, [allowIosUITextView, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, streaming, styles, t]);
+  }, [allowIosUITextView, bodyTextStyle, boundTextRuns, codeCopyEnabled, contentWidth, inlinesSelectable, layout, onOpenPayload, pinSettledWidth, renderInlines, selectable, settledTextStyle, spanFor, streaming, styles, t]);
   return <MarkdownLinkActivationContext.Provider value={linkActivation}>
     <View
       collapsable={false}
@@ -6989,7 +7002,7 @@ function MarkdownBodyBase({
         importantForAccessibility={showTableDocument ? 'auto' : 'no-hide-descendants'}
         style={tableDocumentStyle}>
         <TableMessageDocument documentKey={documentKey} text={text} blocks={blocks} layout={layout}
-          initialHeight={nativeBodySize.height} selectable={selectionAllowed} streaming={streaming}
+          initialHeight={nativeBodySize.height} selectable={selectionAllowed} smallerBody={smallerBody} streaming={streaming}
           codeCopyEnabled={codeCopyEnabled} onOpenSessionLink={onOpenSessionLink}
           onReadyChange={tableReady} onFailure={tableFailedToLoad} />
       </View> : null}
@@ -9710,6 +9723,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     lineHeight: lineHeight.caption,
   },
   messageText: { color: colors.textPrimary, fontSize: typeScale.bodyLarge, lineHeight: lineHeight.bodyLarge },
+  smallerMessageText: { color: colors.textPrimary, fontSize: typeScale.body, lineHeight: lineHeight.body },
   automationOriginRow: {
     alignItems: 'center',
     flexDirection: 'row',
