@@ -838,6 +838,7 @@ export interface BotGroupDetail extends BotGroupSummary {
 }
 
 export type BotGroupErrorCode =
+  | 'PROJECT_NOT_REGISTERED'
   | 'INVALID_ATTACHMENT'
   | 'ATTACHMENT_UNAVAILABLE'
   | 'ATTACHMENT_TOO_LARGE'

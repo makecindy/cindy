@@ -12,10 +12,12 @@ export default {
   real: 'BotGroupSettingsDrawer, ChatGroupSettings (群设置 | 成员, 群管理, 编辑群资料, 本群资料, 伙伴在本群), ChatGroupMembersTab, ChatGroupInviteMenu, ChatBotAccessField, ProfileEditDialog',
   notCovered: 'Server writes (every chatServer.manage call is forbidden), the invite link dialog, AI 代答 (see group-mask), full chat host/entry, real accounts and mobile rendering',
   stubs: {
+    'src/renderer/contexts/AuthContext': { partial: 'export const useOptionalDataOwnerGeneration = () => 0; export const useOptionalAuthUser = () => null;' },
     // 新建伙伴 opens the full roster; it is not part of these settings.
     'src/renderer/features/bots/BotRosterView': 'export const BotRosterView = () => null;',
   },
   cases: {
+    'unregistered-folder': { about: 'Group management shows how to add an unregistered folder', data: { role: 'owner', unregisteredFolder: true } },
     computer: { about: 'A member chooses the computer for their own group Cindy', data: { role: 'member', assistant: 'on', computers: true } },
     'member-invites': { about: 'Owner manages friend invitations; members can still invite their own teammates', data: { role: 'owner', memberInvites: true } },
     default: { about: 'Owner: 群管理 with 解散, member menus, invite menu with both items', data: { role: 'owner' } },
@@ -37,6 +39,14 @@ export default {
     const dialog = page.getByRole('dialog');
     const invite = page.getByTestId('chat-group-invite');
     const manage = await row(page, await t('manage'));
+    if (ui.case === 'unregistered-folder') {
+      await manage.click();
+      await dialog.getByRole('button', { name: await t('ownFolder') }).click();
+      const hint = dialog.getByText(await ui.t('bots.groupChat.settings.projectDirNotRegistered'));
+      await hint.scrollIntoViewIfNeeded();
+      await ui.capture('registration-hint');
+      return;
+    }
     if (ui.case === 'computer') {
       const picker = dialog.getByRole('combobox', { name: await t('assistantComputer') });
       const triggerWidth = await picker.evaluate(element => element.offsetWidth);

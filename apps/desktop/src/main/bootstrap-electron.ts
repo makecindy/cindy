@@ -156,6 +156,8 @@ import {
   readWindowFullscreenState,
   showMainWindowAndRestoreFullscreen,
 } from './mainWindowFullscreenStartup';
+import { installMacFullscreenDesyncRecovery } from './macFullscreenRecovery';
+import { readPluginUiRegions } from './mcp-apps/visibility';
 import {
   installMainWindowMaximizeRecovery,
   installMainWindowNativeRestoreIntent,
@@ -4966,6 +4968,15 @@ const createWindow = () => {
     // macOS 26 no longer emits will-leave-full-screen. Resize detects the
     // animation start so traffic-light padding returns before the end event.
     getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
+  });
+  installMacFullscreenDesyncRecovery(mainWindow, {
+    windowLabel: 'main',
+    trafficLightPosition: { x: 12, y: 16 },
+    minSize: { width: 800, height: 600 },
+    shouldShowWindowButtons: () => {
+      const regions = readPluginUiRegions(mainWindow);
+      return regions.workspace && regions.windowControls;
+    },
   });
 
   // Wire resize / move / maximize / fullscreen listeners that persist the

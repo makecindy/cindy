@@ -12320,6 +12320,7 @@
         "projectDirClear": "Clear Folder",
         "projectDirNote": "Choose an existing project on this computer. Otherwise, work uses the matching repository project or the executing buddy’s project. Git work splits use a worktree.",
         "autoContinueSaveFailed": "Couldn’t save step handoffs. Try again.",
+        "projectDirNotRegistered": "Add this folder as a project in Cindy, then select it again.",
         "projectDirSaveFailed": "Couldn’t save the project folder. Make sure the folder still exists, then try again.",
         "allowMemberInvites": "Let all members invite friends",
         "allowMemberInvitesHint": "When on, all joined members can invite friends. Only the group owner and admins can change this.",
