@@ -225,6 +225,8 @@ function BubbleHarness({ body, kind = 'user', automationOrigin: origin }) {
   const displayBubbleBody = body;
   const bubbleBody = body;
   const hasPluginInvocations = false;
+  // This harness starts with the visible body of a plain message.
+  const pluginDirective = undefined;
   const userBubbleColors = undefined;
   const wallpaper = 'none';
   const actions = {};

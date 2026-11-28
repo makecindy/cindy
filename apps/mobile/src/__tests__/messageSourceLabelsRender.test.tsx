@@ -230,6 +230,7 @@ vi.mock("lucide-react-native", () => ({
   Smartphone: () => null,
   ListTodo: () => null,
   LoaderCircle: () => null,
+  Pencil: () => null,
   PencilLine: () => null,
   RefreshCw: () => createElement("span", { "data-testid": "retry-icon" }),
   Play: () => createElement("span", { "data-testid": "play-icon" }),
@@ -377,8 +378,10 @@ vi.mock("@/session/messageActions", async (original) => ({
 }));
 
 import { i18n } from "@/i18n";
+import { expandGhostCommand } from "@cindy/maker-shared/ghost-command";
 import { AttachmentStrip, COMPANION_AVATAR_SIZE, MessagePayloadModal, MessageRenderer } from "@/session/MessageRenderer";
 import { BotGroupMarkdownText } from '@/session/BotGroupMessageText';
+import { composerDocumentProjectedText } from "@/session/composerDocument";
 import { buildMediaPayload } from "@/session/messagePayload";
 import { buildMessageContentLayout } from "@/session/messageContentLayout";
 import { copyMessageText, writeClipboardText } from "@/session/messageActions";
@@ -702,6 +705,30 @@ describe("message delete entry", () => {
 });
 
 describe('completed message actions', () => {
+  // PR #12896, unit: the real edit action must restore the full legacy draft
+  // even when the bubble folds its directive. Plain-message cases never cover
+  // a historical command that an old host cannot expand again.
+  it('folds a legacy plugin directive in history and keeps it visible in an explicit edit', () => {
+    const text = '$art cat';
+    const history = expandGhostCommand(text, [
+      { manifest: { id: 'art', name: 'Art', command: 'art' }, enabled: true },
+    ]);
+    const onEditMessage = vi.fn();
+    const h = mount([msg('legacy', history, null)], { onEditMessage });
+    try {
+      const bubble = h.host.querySelector('[data-testid="message.userBubble"]')!;
+      expect(bubble.textContent).toContain(text);
+      expect(bubble.textContent).toContain('Art');
+      expect(bubble.textContent).not.toContain('ghost_call');
+      const edit = h.host.querySelector('[data-testid="message.editButton"]')!;
+      act(() => edit.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+      expect(onEditMessage).toHaveBeenCalledTimes(1);
+      expect(composerDocumentProjectedText(onEditMessage.mock.calls[0][1].document)).toBe(history);
+    } finally {
+      h.unmount();
+    }
+  });
+
   // Production render/model gate: source scans could pass with an action bar
   // attached to system cards, or More exposed on an intermediate assistant row.
   it('omits user controls on user-kind system cards and incomplete assistant rows', () => {

@@ -143,6 +143,7 @@ import {
   parseChatQuoteSegments,
   type ChatQuote,
 } from '@cindy/maker-shared/chat-quotes';
+import { splitGhostDirective } from '@cindy/maker-shared/ghost-command';
 import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
 import { QuoteCapsule } from '@/session/QuoteCapsule';
 import { MessageListActionButton } from './MessageListActionButton';
@@ -3741,7 +3742,7 @@ function SyncingMessages() {
 }
 
 function MessageBubble({
-  item,
+  item: sourceItem,
   actions,
 }: {
   item: MobileMessageItem;
@@ -3753,6 +3754,21 @@ function MessageBubble({
   const styles = useThemedStyles(makeStyles);
   const { colors, mode } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
+  const message = sourceItem.message;
+  const canShowPluginDirective = message.kind === 'user' && message.align === 'user'
+    && !actions.companion && !message.hookSource && !message.systemCardType && message.draftBody === undefined;
+  const ghostSplit = useMemo(
+    () => canShowPluginDirective ? splitGhostDirective(message.body) : null,
+    [canShowPluginDirective, message.body],
+  );
+  // Fold the directive in the history bubble and copy only. Drafts use the original message.
+  const item = useMemo(() => ghostSplit
+    ? { ...sourceItem, message: { ...message, body: ghostSplit.body } }
+    : sourceItem, [ghostSplit, message, sourceItem]);
+  const [pluginDirectiveExpanded, setPluginDirectiveExpanded] = useRecyclingState(false);
+  const pluginDirective = ghostSplit?.directive;
+  const pluginDirectiveLabel = pluginDirective?.kind === 'command' ? pluginDirective.name
+    : pluginDirective?.ghosts.map((ghost) => ghost.name).join(t('message.pluginInvocation.listSeparator'));
   const [copyState, setCopyState] = useRecyclingState<CopyMessageStatus | 'idle' | 'copying'>('idle');
   const [actionSheetOpen, setActionSheetOpen] = useRecyclingState(false);
   const historyActive = useMessageHistoryActive();
@@ -3812,8 +3828,12 @@ function MessageBubble({
   const displayBubbleBody = hasSentInlineAtoms
     ? sentInlineTokensDisplayText(sentInlineTokens)
     : bubbleBody;
-  const draftBody = item.message.draftBody ?? item.message.body;
-  const draftText = item.message.draftBody ?? bubbleBody;
+  // Keep the full legacy text visible and editable. An older host may be unable
+  // to regenerate the directive from the command alone.
+  const draftBody = message.draftBody ?? message.body;
+  const draftText = message.draftBody ?? (
+    ghostSplit ? bubbleBody + message.body.slice(ghostSplit.body.length) : bubbleBody
+  );
   const composerDraftDocument = useMemo(
     () =>
       item.message.kind === 'user'
@@ -4171,7 +4191,7 @@ function MessageBubble({
     />
   ) : null;
   const hasBubbleContent = !!(
-    hookSource || item.message.systemCardType || displayBubbleBody || item.message.secondaryBody ||
+    hookSource || item.message.systemCardType || displayBubbleBody || item.message.secondaryBody || pluginDirective ||
     // A quote or reply target alone still needs the bubble, e.g. an attachment-only reply.
     (companionQuote && (replyQuote || replyTarget))
   );
@@ -4357,6 +4377,22 @@ function MessageBubble({
         >
           {longMessageExpanded ? t('message.renderer.collapse') : t('message.renderer.expand')}
         </Text>
+      ) : null}
+      {pluginDirective && pluginDirectiveLabel ? (
+        <>
+          <Text
+            accessibilityRole="button"
+            accessibilityState={{ expanded: pluginDirectiveExpanded }}
+            onPress={() => setPluginDirectiveExpanded((expanded) => !expanded)}
+            style={styles.collapseToggleText}
+            suppressHighlighting
+          >
+            {t(pluginDirectiveExpanded ? 'message.renderer.collapseRow' : 'message.renderer.expandRow', {
+              label: pluginDirectiveLabel,
+            })}
+          </Text>
+          {pluginDirectiveExpanded ? <Text style={styles.detailText}>{pluginDirective.raw}</Text> : null}
+        </>
       ) : null}
       {item.message.secondaryBody ? (
         <MarkdownSelectableText selectable={bubbleTextSelectable} style={styles.detailText}>
