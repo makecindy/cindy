@@ -3220,6 +3220,7 @@ export class AgentInputCoordinator {
       await this.deps.steerToAgent(sessionId, buildMakerUserMessage(item, referenceContexts, {
         sendToSession: this.deps.sendToSessionHint?.(sessionId, 'live'),
       }), {
+        ...(item.fromDeviceLinkClient ? { fromDeviceLinkClient: true } : {}),
         ...(opts?.beforeMutation ? { beforeProviderStart: async () => {
           try { await opts.beforeMutation!(); }
           catch (error) { authorizationFailed = true; throw error; }

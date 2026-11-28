@@ -1,6 +1,6 @@
 import { FORWARDED_REQUEST_RECEIPT, type AgentRequestReceipt } from '../../shared/forwardedRequest.js';
 import { MCP_APP_MESSAGE_GUARD, type McpAppMessageGuard } from '../mcp-apps/message.js';
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, defusePluginEngineWireEnvelope } from '@cindy/maker-core';
+import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, MAIN_OWNED_SEND_CONTEXT, SELECTED_CODEX_SKILL, ASYNC_QUESTION_ANSWER, SUPERSEDE_ASYNC_QUESTIONS, defusePluginEngineWireEnvelope } from '@cindy/maker-core';
 import { AUTO_REVIEW_DELEGATED_CONTINUATION, restoreAutoReviewSteerIntent } from './autoReviewUserIntent.js';
 import { type MainOwnedSendContext } from '@cindy/maker-core';
 import { throwIpcError } from '../utils/ipcValidate.js';
@@ -15,9 +15,9 @@ import { buildWireMessageSourceNote, readWireSourceDevice } from './messageSourc
 import { SIDE_CHAT_CONTEXT } from './sideChatContext.js';
 import { buildUiLanguageErrorNote, turnClassicalStyleFromSendOpts, turnUiLanguageFromSendOpts } from './uiLanguageErrorNote.js';
 
-import type { Session } from '@cindy/maker-core';
+import type { Session, UserMessage } from '@cindy/maker-core';
 import type { AgentSendToSessionHint } from '@cindy/maker-shared/agent-input-projection';
-import type { MakerSendTransactionDeps } from './makerSendTransaction.js';
+import { selectedCodexSkillName, type MakerSendTransactionDeps } from './makerSendTransaction.js';
 import type { createWireNoteMemory } from './wireNoteMemory.js';
 
 type IpcUserMessage = string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> };
@@ -64,6 +64,7 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
       beforeProviderStart?: () => Promise<void>;
       /** coordinator 从队列项透传的手机来源(main 构造,非 wire 输入)。 */
       fromMobileClient?: boolean;
+      fromDeviceLinkClient?: boolean;
       uiLanguage?: string;
       classicalStyle?: string;
       /**
@@ -254,7 +255,13 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
       publishUiSessionIntervention(sessionId);
       // A channel route vouches only for its triggering sender; steered input ends that.
       noteInteractionRouteSteer(sess);
+      const source = typeof normalized === 'string' ? normalized : normalized.content as UserMessage['content'];
+      const selectedSkill = sess.agentKind === 'codex' && !sess.remoteHostId && !sess.agentDeviceId &&
+        !so.fromMobileClient && !so.fromDeviceLinkClient
+        ? selectedCodexSkillName(so[REPLY_QUOTE_SOURCE_CONTENT], source)
+        : undefined;
       await sess.steer(steerPayload as never, {
+        ...(selectedSkill ? { [SELECTED_CODEX_SKILL]: selectedSkill } : {}),
         ...(so[MCP_APP_MESSAGE_GUARD] || so.beforeProviderStart || appContext?.text ? {
           beforeProviderStart: async () => {
             await so[MCP_APP_MESSAGE_GUARD]?.();
@@ -269,7 +276,7 @@ export function createMakerSteerTransaction(deps: MakerSteerTransactionDeps) {
         [MAIN_OWNED_SEND_CONTEXT]: so[MAIN_OWNED_SEND_CONTEXT],
         [ASYNC_QUESTION_ANSWER]: so[ASYNC_QUESTION_ANSWER],
         [SUPERSEDE_ASYNC_QUESTIONS]: so[SUPERSEDE_ASYNC_QUESTIONS],
-        [AUTO_REVIEW_SOURCE_CONTENT]: so[AUTO_REVIEW_SOURCE_CONTENT],
+        [AUTO_REVIEW_SOURCE_CONTENT]: selectedSkill ? source : so[AUTO_REVIEW_SOURCE_CONTENT],
         [AUTO_REVIEW_DELEGATED_CONTINUATION]: so[AUTO_REVIEW_DELEGATED_CONTINUATION],
         [AUTO_REVIEW_USER_INTENT]: restoredSteerIntent,
       });

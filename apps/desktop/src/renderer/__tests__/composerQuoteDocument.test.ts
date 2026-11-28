@@ -5,6 +5,9 @@ import Paragraph from '@tiptap/extension-paragraph';
 import Text from '@tiptap/extension-text';
 import HardBreak from '@tiptap/extension-hard-break';
 import { afterEach, describe, expect, it } from 'vitest';
+import { MenuAgentSkillMark, replaceSlashCommandRunWithText } from '@/components/new-chat/SlashCommandDecoration';
+import { serializeEditorContent } from '@/components/new-chat/composerContentSerialization';
+import { parseUserContent, stringifyUserContent } from '@/lib/imageRef';
 import { ComposerQuoteNode } from '@/components/new-chat/ComposerQuoteNode';
 import {
   COMPOSER_QUOTE_NODE_TYPE,
@@ -25,7 +28,7 @@ afterEach(() => {
 
 function makeEditor(): Editor {
   const editor = new Editor({
-    extensions: [Document, Paragraph, Text, HardBreak, ComposerQuoteNode],
+    extensions: [Document, Paragraph, Text, HardBreak, ComposerQuoteNode, MenuAgentSkillMark],
     content: { type: 'doc', content: [{ type: 'paragraph' }] },
   });
   editors.push(editor);
@@ -33,6 +36,25 @@ function makeEditor(): Editor {
 }
 
 describe('composerQuoteDocument', () => {
+  // Unit: a real palette insertion survives draft JSON and the existing send envelope.
+  it('serializes explicit menu skill selection, but leaves matching typed text unmarked', () => {
+    const editor = makeEditor();
+    editor.commands.insertContent('/pot');
+    editor.view.dispatch(replaceSlashCommandRunWithText(
+      editor.state.tr, editor.schema, 1, 5, 'example-skill', 'agent-skill',
+    ));
+    const restored = makeEditor();
+    restored.commands.setContent(editor.getJSON());
+    const result = serializeEditorContent(restored);
+    expect(result.text).toBe('/example-skill');
+    expect(result.slashCommandRanges).toEqual([{ start: 0, end: 14, subtype: 'agent-skill' }]);
+    expect(parseUserContent(stringifyUserContent(
+      result.text, [], [], false, [], result.slashCommandRanges,
+    )).slashCommandRanges).toEqual(result.slashCommandRanges);
+    restored.commands.setContent('<p>/example-skill</p>');
+    expect(serializeEditorContent(restored).slashCommandRanges).toEqual([]);
+  });
+
   it('appends quotes inline so each reply can continue directly beside its quote', () => {
     const first = appendQuoteToComposerDocument(null, { text: 'quote one' });
     first.content![0].content!.push({ type: 'text', text: 'response one' });

@@ -68,10 +68,11 @@ export interface PastedTextRange {
   display: string;
 }
 
-/** Local-only presentation metadata for a slash command confirmed by the composer roster. */
+/** Slash command range. Only explicit menu selection sets the skill subtype. */
 export interface SlashCommandRange {
   start: number;
   end: number;
+  subtype?: 'agent-skill';
 }
 
 export interface UserMessageContent {
@@ -344,7 +345,7 @@ function coerceSlashCommandRanges(value: unknown, text: string): SlashCommandRan
     const end = range.end as number;
     if (start < previousEnd || start < 0 || end <= start || end > text.length) return null;
     if (!/^\/\S+$/.test(text.slice(start, end))) return null;
-    ranges.push({ start, end });
+    ranges.push({ start, end, ...(range.subtype === 'agent-skill' ? { subtype: range.subtype } : {}) });
     previousEnd = end;
   }
   return ranges;

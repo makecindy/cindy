@@ -275,6 +275,7 @@ export function serializeComposerContentBlocksWithRanges(
     }
     for (const range of block.slashCommandRanges ?? []) {
       slashCommandRanges.push({
+        ...range,
         start: blockStart + range.start,
         end: blockStart + range.end,
       });
@@ -300,7 +301,10 @@ export function serializeComposerContentBlocksWithRanges(
       })
       .filter((range): range is PastedTextRange => range !== null),
     slashCommandRanges: slashCommandRanges
-      .map((range) => trimRangeToText(range, leadingTrim, text.length))
+      .map((range) => {
+        const trimmed = trimRangeToText(range, leadingTrim, text.length);
+        return trimmed ? { ...range, ...trimmed } : null;
+      })
       .filter((range): range is SlashCommandRange => range !== null),
   };
 }

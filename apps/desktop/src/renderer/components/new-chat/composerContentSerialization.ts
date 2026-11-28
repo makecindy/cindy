@@ -29,7 +29,7 @@ import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 
 import type { MentionChipAttrs } from './MentionChipNode';
 import type { PastedTextChipAttrs } from './PastedTextChipNode';
-import { getDecoratedSlashCommandMatches, type SlashCommandMatch } from './SlashCommandDecoration';
+import { getDecoratedSlashCommandMatches, MENU_AGENT_SKILL_MARK, type SlashCommandMatch } from './SlashCommandDecoration';
 import { serializeSessionChipText } from './sessionLinkPaste';
 import { serializeProjectChipText } from './pastePipeline';
 
@@ -163,9 +163,11 @@ function serializeComposerDocument(
       documentStart: number,
       textLength: number,
       bufferStart: number,
+      selectedEnd?: number,
     ) => {
       for (const match of matches) {
         if (match.from < documentStart || match.to > documentStart + textLength) continue;
+        if (selectedEnd !== undefined && match.from < documentStart + selectedEnd) continue;
         bufferSlashCommandRanges.push({
           start: bufferStart + match.from - documentStart,
           end: bufferStart + match.to - documentStart,
@@ -425,11 +427,18 @@ function serializeComposerDocument(
         const bufferStart = buffer.length;
         const documentStart = paragraphPosition + 1 + childOffset;
         buffer += childText;
+        const selected = child.marks.find((mark) => mark.type.name === MENU_AGENT_SKILL_MARK)?.attrs.name;
+        const selectedToken = typeof selected === 'string' ? '/' + selected : undefined;
+        const selectedEnd = selectedToken && childText === selectedToken ? selectedToken.length : undefined;
+        if (selectedEnd !== undefined) {
+          bufferSlashCommandRanges.push({ start: bufferStart, end: bufferStart + selectedEnd, subtype: 'agent-skill' });
+        }
         appendSlashCommandRanges(
           decoratedSlashMatches,
           documentStart,
           childText.length,
           bufferStart,
+          selectedEnd,
         );
       }
     });

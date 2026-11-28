@@ -51,6 +51,7 @@ import {
   AUTO_REVIEW_SOURCE_CONTENT,
   INHERITED_CAPABILITY_SELECTION,
   PINNED_SKILL_INVOCATION,
+  SELECTED_CODEX_SKILL,
   CodexResumePreparationBlockedError,
   OneShotError,
   AgentNotAuthenticatedError,
@@ -2017,15 +2018,25 @@ export class CodexAgent extends BaseAgent {
     workingDir: string,
     forceReload: boolean,
     remoteHostId?: string,
+    reloadOnMiss?: (skills: SkillMetadata[]) => boolean,
   ): Promise<{ skills: SkillMetadata[]; errors: Array<{ path?: string; message: string }> }> {
     const discoverySignal = this.routeResolutionAbort.signal;
+    let listingStarted = false;
+    const list = async (host: AppServerHost, timeoutMs?: number) => {
+      listingStarted = true;
+      const first = await this.listSkillsForHost(host, workingDir, forceReload, timeoutMs);
+      if (!forceReload && reloadOnMiss?.(first.skills)) {
+        return this.listSkillsForHost(host, workingDir, true, timeoutMs);
+      }
+      return first;
+    };
     try {
       return await this.withHostOperation(async () => remoteHostId
         ? { key: hostKey(remoteHostId), host: await this.getHost(remoteHostId) }
         : this.getUtilityHost(),
-      host => this.listSkillsForHost(host, workingDir, forceReload));
+      host => list(host));
     } catch (error) {
-      if (remoteHostId || !(error instanceof AgentNotAuthenticatedError)) throw error;
+      if (remoteHostId || (reloadOnMiss && listingStarted) || !(error instanceof AgentNotAuthenticatedError)) throw error;
       discoverySignal.throwIfAborted();
       const env = await buildCodexEnv(this.deps.auth, this.deps.runtimeConfig);
       discoverySignal.throwIfAborted();
@@ -2045,7 +2056,7 @@ export class CodexAgent extends BaseAgent {
       });
       this.skillDiscoveryHosts.add(host);
       try {
-        return await this.listSkillsForHost(host, workingDir, forceReload, CRITICAL_THREAD_RPC_TIMEOUT_MS);
+        return await list(host, CRITICAL_THREAD_RPC_TIMEOUT_MS);
       } finally {
         await host.retire('Codex skill discovery complete', { throwOnTransportError: true });
         this.skillDiscoveryHosts.delete(host);
@@ -7168,8 +7179,15 @@ assertRouteCurrent();
       content: UserMessage['content'],
       pinnedSkill?: PinnedSkillInvocation,
       sourceContent?: UserMessage['content'],
+      menuSkillName?: string,
     ): Promise<UserInput[]> => {
+      const isLocal = !opts.remoteHostId && !hosted;
+      const selectedName = isLocal ? menuSkillName : undefined;
+      const unavailableSkill = () => new Error(
+        "The selected Codex skill is unavailable. Refresh the skill menu before sending again.",
+      );
       if (reviewMode) {
+        if (selectedName && !pinnedSkill) throw unavailableSkill();
         if (pinnedSkill) {
           throw new Error('A pinned Skill invocation is not allowed in review mode');
         }
@@ -7178,16 +7196,21 @@ assertRouteCurrent();
         // prompt and evidence must stay independent from task customizations.
         return toAppServerInput(content, opts.workingDir);
       }
-      if (typeof content !== 'string') {
+      if (typeof content !== 'string' && (!selectedName || pinnedSkill)) {
         if (pinnedSkill) {
           throw new Error('A pinned Skill invocation requires a text command');
         }
         return toAppServerInput(content, opts.workingDir);
       }
 
-      const slash = parseLeadingSlashToken(
-        (pinnedSkill && typeof sourceContent === 'string' ? sourceContent : content).trim(),
-      );
+      const firstText = (value: UserMessage['content'] | undefined) => typeof value === 'string'
+        ? value : value?.find((block) => block.type === 'text')?.text;
+      const wireText = firstText(content) ?? '';
+      const sourceText = pinnedSkill && typeof sourceContent === 'string' ? sourceContent : wireText;
+      const wireSlash = parseLeadingSlashToken(sourceText.trim());
+      const sourceSlash = selectedName && !pinnedSkill ? parseLeadingSlashToken(firstText(sourceContent)?.trim() ?? '') : null;
+      const slash = sourceSlash?.name.toLowerCase() === selectedName?.toLowerCase() && sourceSlash
+        ? sourceSlash : wireSlash;
       if (pinnedSkill) {
         const normalizedSlashName = slash?.name.toLowerCase();
         const normalizedSkillName = pinnedSkill.name.toLowerCase();
@@ -7206,6 +7229,7 @@ assertRouteCurrent();
         // Authenticate the command from Host-owned source text, but assemble the
         // prompt from the wire text. Notes can precede the command and library
         // mappings can follow it; neither may disappear when using a pinned Skill.
+        if (typeof content !== 'string') throw new Error('A pinned Skill invocation requires a text command');
         const wireSlash = parseLeadingSlashToken(content.trim());
         const prompt = (wireSlash?.name.toLowerCase() === normalizedSlashName
           ? wireSlash.rest
@@ -7213,28 +7237,43 @@ assertRouteCurrent();
         if (prompt) inputs.push({ type: 'text', text: prompt });
         return inputs;
       }
+      if (selectedName && slash?.name.toLowerCase() !== selectedName.toLowerCase()) throw unavailableSkill();
       if (!slash) return toAppServerInput(content, opts.workingDir);
 
+      // Hosted guests may only invoke skills from their own allowed roots.
+      const select = (skills: SkillMetadata[]) => selectInvocableCodexSkill(
+        guestSkillAllowed ? skills.filter((candidate) => guestSkillAllowed(candidate.path, candidate.scope)) : skills,
+        slash.name,
+      );
+      let skill: SkillMetadata | undefined;
       try {
-        const { skills } = await this.listSkillsForCwd(opts.workingDir, false);
-        // 受邀者：斜杠只解析它自己带来的技能与 Codex 自带技能，不把本机用户的技能文件交给模型。
-        const skill = selectInvocableCodexSkill(
-          guestSkillAllowed ? skills.filter((candidate) => guestSkillAllowed(candidate.path, candidate.scope)) : skills,
-          slash.name,
+        const { skills } = await this.listSkillsForCwd(
+          opts.workingDir, false, undefined, isLocal ? (items) => !select(items) : undefined,
         );
-        if (!skill) return toAppServerInput(content, opts.workingDir);
-
-        const inputs: UserInput[] = [{ type: 'skill', name: skill.name, path: skill.path }];
-        const prompt = slash.rest.trim() || skill.interface?.defaultPrompt?.trim() || '';
-        if (prompt) inputs.push({ type: 'text', text: prompt });
-        return inputs;
+        skill = select(skills);
       } catch (err) {
-        log.warn('failed to resolve leading slash as Codex skill, sending literal text', {
-          name: slash.name,
-          error: String(err),
-        });
+        log.warn('failed to resolve leading slash as Codex skill', { name: slash.name, error: String(err) });
+      }
+      if (!skill) {
+        if (selectedName) throw unavailableSkill();
         return toAppServerInput(content, opts.workingDir);
       }
+
+      const inputs: UserInput[] = [{ type: 'skill', name: skill.name, path: skill.path }];
+      const sameCommand = wireSlash?.name.toLowerCase() === slash.name.toLowerCase();
+      const defaultPrompt = skill.interface?.defaultPrompt?.trim() || '';
+      if (typeof content !== 'string') {
+        const textIndex = content.findIndex((block) => block.type === 'text');
+        const argument = (sameCommand ? wireSlash?.rest.trim() : undefined) || defaultPrompt;
+        const remaining = sameCommand
+          ? content.flatMap((block, index) => index !== textIndex ? [block] : argument ? [{ type: 'text' as const, text: argument }] : [])
+          : content;
+        if (remaining.length) inputs.push(...await toAppServerInput(remaining, opts.workingDir));
+      } else {
+        const prompt = (sameCommand ? wireSlash?.rest.trim() : content.trim()) || defaultPrompt;
+        if (prompt) inputs.push({ type: 'text', text: prompt });
+      }
+      return inputs;
     };
 
     // Resolve the canonical history before asking a new account host about a thread
@@ -14536,6 +14575,7 @@ assertRouteCurrent();
             withLibraryNativeReadContext(message.content, mutableLibraryRoot, mutableExtraDirs),
             sendOpts?.[PINNED_SKILL_INVOCATION],
             sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT],
+            sendOpts?.[SELECTED_CODEX_SKILL],
           );
         } catch (e) {
           isTurnStartPending = false;
@@ -15187,7 +15227,9 @@ assertRouteCurrent();
         // Validate content before steering. `toTurnInput` can touch local
         // files/images; if that fails, leaving the current turn untouched is
         // better than sending a broken 插话.
-        const input = await toTurnInput(message.content);
+        const input = await toTurnInput(
+          message.content, undefined, sendOpts?.[AUTO_REVIEW_SOURCE_CONTENT], sendOpts?.[SELECTED_CODEX_SKILL],
+        );
         rejectIfCancelled(sendOpts, 'steer');
         if (closed) {
           throw new Error('No active Codex turn to steer: session is closed');

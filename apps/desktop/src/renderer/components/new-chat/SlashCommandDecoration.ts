@@ -9,7 +9,7 @@
  * 旧草稿里曾保存过的 `mentionChip(kind=slash)` 会在首个 transaction 中无损迁移
  * 回纯文本,同时保留其后的原有空格与正文。
  */
-import { Extension, type Editor } from '@tiptap/core';
+import { Extension, Mark, type Editor } from '@tiptap/core';
 import type { Node as PMNode, Schema } from '@tiptap/pm/model';
 import { Plugin, PluginKey, type EditorState, type Transaction } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -118,14 +118,30 @@ function buildDecorations(doc: PMNode, commands: SlashCommandRoster): Decoration
   return DecorationSet.create(doc, decorations);
 }
 
-/** Palette 选择后用普通文本替换 slash run,不创建 mentionChip atom。 */
+export const MENU_AGENT_SKILL_MARK = 'menuAgentSkill';
+
+// Keep menu intent on editable text and in the draft JSON. A pasted HTML span
+// cannot create this mark, and adjacent typing must not inherit it.
+export const MenuAgentSkillMark = Mark.create({
+  name: MENU_AGENT_SKILL_MARK,
+  inclusive: false,
+  addAttributes: () => ({ name: { default: null, rendered: false } }),
+  renderHTML: () => ['span', 0],
+});
+
+/** Palette selection replaces the slash run with editable text. */
 export function replaceSlashCommandRunWithText(
   tr: Transaction,
   schema: Schema,
   from: number,
   to: number,
   commandName: string,
+  subtype?: 'agent-skill',
 ): Transaction {
+  const mark = subtype === 'agent-skill' ? schema.marks[MENU_AGENT_SKILL_MARK] : undefined;
+  if (mark) {
+    return tr.replaceWith(from, to, [schema.text('/' + commandName, [mark.create({ name: commandName })]), schema.text(' ')]);
+  }
   return tr.replaceWith(from, to, schema.text(`/${commandName} `));
 }
 

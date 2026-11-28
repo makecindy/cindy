@@ -2393,6 +2393,9 @@ export const INHERITED_CAPABILITY_SELECTION = Symbol('cindy.inherited-capability
  */
 export const PINNED_SKILL_INVOCATION = Symbol('cindy.pinned-skill-invocation');
 
+/** Host-validated menu intent. The backend still resolves the skill path. */
+export const SELECTED_CODEX_SKILL = Symbol('cindy.selected-codex-skill');
+
 export interface PinnedSkillInvocation {
   readonly name: string;
   readonly path: string;
@@ -2448,6 +2451,7 @@ export interface SendOptions {
   readonly [INHERITED_CAPABILITY_SELECTION]?: string;
   /** Exact Skill selected by a Host authorization check for this send. */
   readonly [PINNED_SKILL_INVOCATION]?: PinnedSkillInvocation;
+  readonly [SELECTED_CODEX_SKILL]?: string;
   /** Host-authenticated metadata; never accept an equivalent string-keyed wire field. */
   readonly [MAIN_OWNED_SEND_CONTEXT]?: MainOwnedSendContext;
   /**

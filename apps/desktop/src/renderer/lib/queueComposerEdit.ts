@@ -1,6 +1,7 @@
 import { readAgentInputReferences } from '@cindy/maker-shared/agent-input-projection';
 import type { JSONContent } from '@tiptap/core';
 
+import { MENU_AGENT_SKILL_MARK } from '@/components/new-chat/SlashCommandDecoration';
 import type { ComposerDraft } from '@/lib/composerDraftStore';
 import { formatQuoteForSend, parseChatQuoteSegments, type ChatQuoteSegment } from '@/lib/chatQuotes';
 import { COMPOSER_QUOTE_NODE_TYPE } from '@/lib/composerQuoteDocument';
@@ -206,6 +207,17 @@ function collectInlineReplacements(entry: QueuedMessage, text: string): InlineRe
         attrs: { text: text.slice(range.start, range.end), display: range.display },
       },
       priority: 1,
+    });
+  }
+
+  for (const { start, end, subtype } of entry.chatMessage.slashCommandRanges ?? []) {
+    if (subtype !== 'agent-skill' || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
+        start < 0 || end <= start + 1 || end > text.length) continue;
+    const token = text.slice(start, end);
+    if (!token.startsWith('/')) continue;
+    replacements.push({
+      start, end, priority: 3,
+      node: { type: 'text', text: token, marks: [{ type: MENU_AGENT_SKILL_MARK, attrs: { name: token.slice(1) } }] },
     });
   }
 
