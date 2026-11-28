@@ -43,6 +43,23 @@ function renderMarkdown(content: string, origin: SessionFileOrigin, workingDir: 
   );
 }
 
+function renderStreamingMarkdown(content: string, origin: SessionFileOrigin, workingDir: string) {
+  return render(
+    <MemoryRouter>
+      <Tooltip.Provider>
+        <ChatSessionFileProvider value={{ sessionId: 's1', workingDir, origin }}>
+          <MarkdownRenderer
+            content={content}
+            workingDir={workingDir}
+            currentSessionId="s1"
+            isStreaming
+          />
+        </ChatSessionFileProvider>
+      </Tooltip.Provider>
+    </MemoryRouter>,
+  );
+}
+
 beforeEach(() => {
   chatStat.mockReset().mockResolvedValue({ verdict: 'nonfile' });
   vi.stubGlobal('electronAPI', {
@@ -99,5 +116,19 @@ describe('remote references that cannot be fetched', () => {
       expect(toast.error).toHaveBeenCalledWith(label('chat.remoteFile.outsideWorkdir')),
     );
     expect(toast.error).not.toHaveBeenCalledWith(label('chat.markdownRenderer.fileUnavailable'));
+  });
+
+  it('keeps the retrying state instead of declaring a remote image unavailable', async () => {
+    // 回复还在输出时图片可能只是没写完:此时界面仍在自动重试,结论还没定,
+    // 不能先说「在远程设备上,本端无法显示」。
+    renderStreamingMarkdown(
+      `![preview](cindy-media://blobs/${'b'.repeat(64)}.png)`,
+      { kind: 'device', deviceId: 'dev-1' },
+      '/work',
+    );
+    const img = await screen.findByAltText('preview');
+    fireEvent.error(img);
+    expect(await screen.findByText(label('chat.imageMissing.loading'))).toBeTruthy();
+    expect(screen.queryByText(label('chat.imageMissing.remote'))).toBeNull();
   });
 });

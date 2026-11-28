@@ -941,6 +941,7 @@ function LightboxImage({
   // 远程来源的图片:字节在另一台机器上(经 cindy-remote-media 中转取回)。取回失败时
   // 说明「图片在远程设备上」,而不是笼统的「图片暂时无法显示」——否则用户只看到一
   // 张坏图,既不知道为什么,也会以为文件损坏或链接写错。
+  // 仍在自动重试(loading)时不用这句:那时结论还没定,说了等于提前判失败。
   const isRemoteSrc = typeof src === 'string' && src.startsWith(`${REMOTE_MEDIA_SCHEME}:`);
   // Right-click → custom popover menu. We track cursor pos so a 0×0 virtual
   // trigger can anchor the Radix DropdownMenu wherever the user clicked.
@@ -966,7 +967,7 @@ function LightboxImage({
       <ImageMissingPlaceholder
         filename={alt || fallbackName}
         status={imageStatus}
-        message={isRemoteSrc ? t('chat.imageMissing.remote') : undefined}
+        message={isRemoteSrc && imageStatus !== 'loading' ? t('chat.imageMissing.remote') : undefined}
         onRetry={canRetry ? retry : undefined}
         onOpen={allowLocalFileOpen && src?.startsWith('xdt-file://')
           ? () => void openLocalImage(src)
