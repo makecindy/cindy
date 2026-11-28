@@ -5,11 +5,14 @@ import { RemoteBotSessionView } from '../../../src/renderer/features/bots/Remote
 
 void mountPage({
   route: '/bots/remote/home/writer',
-  host: () => ({
+  host: (ctx) => ({
     deviceLink: {
       // Just launched: the relay is still connecting and the directory read has not answered.
-      getState: async () => ({ linkStatus: 'connecting' }),
-      listDevices: () => new Promise(() => undefined),
+      getState: async () => ({ linkStatus: ctx.data.reachable ? 'online' : 'connecting' }),
+      listDevices: () => ctx.data.reachable ? Promise.resolve({ devices: [{
+        deviceId: 'home', name: 'Home iMac', platform: 'darwin', isSelf: false,
+        online: true, controlEnabled: true, remoteControlEnabled: true,
+      }] }) : new Promise(() => undefined),
       onStatusChanged: subscription('deviceLinkStatus'),
       onPresenceChanged: subscription('deviceLinkPresence'),
       onControlTargetChanged: subscription('deviceLinkControlTarget'),

@@ -783,3 +783,55 @@ it.each(['canonical', 'history', 'channel'] as const)('opens %s companion search
     { state: { searchJump: { kind: 'conversation-search', sessionId: 'chat', messageId: 'message', messageClientId: 'client' } } },
   ));
 });
+
+it('opens searched sessions and message hits in a new window on primary-mod click and middle click', async () => {
+  const openSessionInNewWindow = vi.fn(async () => undefined);
+  const prevDesc = Object.getOwnPropertyDescriptor(window, 'electronAPI');
+  const prevApi = prevDesc?.value as Record<string, unknown> | undefined;
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: {
+      ...prevApi,
+      platform: 'darwin',
+      maker: {
+        ...((prevApi?.maker as Record<string, unknown> | undefined) ?? {}),
+        openSessionInNewWindow,
+      },
+    },
+  });
+  try {
+    const hitA = { messageId: 'm1', messageClientId: 'c1', role: 'assistant' as const,
+      createdAt: '2026-10-20T00:00:00Z', snippet: null, preview: 'first match', score: 1, ftsRank: 1, vectorRank: null };
+    const hitB = { messageId: 'm2', messageClientId: 'c2', role: 'user' as const,
+      createdAt: '2026-10-20T00:01:00Z', snippet: null, preview: 'second match', score: 0.9, ftsRank: 2, vectorRank: null };
+    vi.mocked(searchConversations).mockResolvedValue({ query: 'match', results: [{
+      session: { id: 'remote-chat', title: 'search thread', workingDir: '/repo', workspaceKind: 'project',
+        agentKind: 'cc', status: 'active', deviceLinkDeviceId: 'dev-a',
+        userSendAt: null, updatedAt: '2026-10-20T00:01:00Z', createdAt: '2026-10-20T00:00:00Z', _count: { messages: 2 } },
+      matchKind: 'content', titleMatchIndices: [], titleScore: null, contentHit: hitA, contentHits: [hitA, hitB], rankScore: 1,
+    }], vectorUsed: false, vectorSkipReason: null, poolCapped: false });
+    renderSearchBox();
+    fireEvent.click(screen.getByLabelText('ccAgent.search.open'));
+    fireEvent.change(screen.getByLabelText('ccAgent.search.placeholder'), { target: { value: 'match' } });
+
+    const row = await screen.findByRole('button', { name: /search thread/ });
+    fireEvent.click(row, { metaKey: true });
+    await waitFor(() =>
+      expect(openSessionInNewWindow).toHaveBeenCalledWith('remote-chat', 'dev-a', 'c1'),
+    );
+
+    fireEvent.click(screen.getByLabelText('ccAgent.search.open'));
+    const secondHit = await screen.findByRole('button', { name: /second match/ });
+    fireEvent(secondHit, new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    await waitFor(() =>
+      expect(openSessionInNewWindow).toHaveBeenCalledWith('remote-chat', 'dev-a', 'c2'),
+    );
+    expect(navigate).not.toHaveBeenCalled();
+  } finally {
+    if (prevDesc) {
+      Object.defineProperty(window, 'electronAPI', prevDesc);
+    } else {
+      Reflect.deleteProperty(window, 'electronAPI');
+    }
+  }
+});

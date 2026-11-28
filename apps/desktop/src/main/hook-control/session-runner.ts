@@ -60,8 +60,8 @@ import {
 } from '@cindy/model-providers';
 
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
+import { getModelGroupStartBridge } from '../model-groups/startBridge.js';
 import { getMaker } from '../maker-host/index.js';
-import { hasBuiltinAgentKind } from '../maker-host/engineKind.js';
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import { desktopSessionStorage } from '../maker-host/session-storage.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
@@ -300,7 +300,8 @@ function hookDefaultsFingerprint(inputs: ReturnType<typeof hookDefaultInputs>): 
   const { channel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults } = inputs;
   return JSON.stringify(['hook', channel, mergedOverrides.agentKind, mergedOverrides.model,
     mergedOverrides.effort, workdirProviderId, fingerprintImDefaultSettings(imDefaults),
-    ...(workdirRoute?.agentDeviceId ? [workdirRoute.agentDeviceId] : [])]);
+    ...(workdirRoute?.agentDeviceId ? [workdirRoute.agentDeviceId] : []),
+    ...(workdirRoute?.modelGroup ? [workdirRoute.modelGroup] : [])]);
 }
 
 /** Plugin IM entrances use the same canonical project settings and resolver as official bots. */
@@ -323,9 +324,10 @@ export function resolveSharedImProjectConfig(
   alias: string,
   log: { warn(msg: string): void },
   providerSnapshot?: ProviderView[],
+  options?: { dryRun?: boolean },
 ) {
   return resolveNewSessionConfig({ agentKind: null, model: null, effort: null, permissionMode: null },
-    log, 'slack', { alias, teamId: null }, providerSnapshot, true);
+    log, 'slack', { alias, teamId: null }, providerSnapshot, true, options);
 }
 
 /**
@@ -342,7 +344,8 @@ async function resolveNewSessionConfig(
   workspaceCtx?: HookWorkspaceCtx,
   providerSnapshot?: ProviderView[],
   sharedProject = false,
-): Promise<ResolvedHookSessionConfig & { fingerprint: string }> {
+  options?: { dryRun?: boolean },
+): Promise<ResolvedHookSessionConfig & { fingerprint: string; modelGroupStart?: string }> {
   const inputs = hookDefaultInputs(overrides, sourceIm, workspaceCtx, sharedProject);
   const fingerprint = hookDefaultsFingerprint(inputs);
   let providers: ProviderView[] | null = null;
@@ -355,6 +358,97 @@ async function resolveNewSessionConfig(
   }
 
   const { channel, mergedOverrides, workdirProviderId, workdirRoute, imDefaults } = inputs;
+  const activeModelGroupId = workdirRoute?.modelGroup ?? (mergedOverrides.model === null && mergedOverrides.agentKind !== 'acp' ? imDefaults.modelGroup ?? undefined : undefined);
+  const groupBridge = activeModelGroupId ? getModelGroupStartBridge() : null;
+  if (activeModelGroupId && groupBridge) {
+    let route: {
+      agentKind: 'cc' | 'codex' | 'pi' | 'acp';
+      model: string;
+      effort?: string;
+      providerId: string;
+      agentDeviceId?: string | null;
+    } | null = null;
+    let preparedToken: string | undefined;
+    try {
+      const keptModelName = mergedOverrides.model ?? imDefaults.agents[imDefaults.agentKind]?.model ?? '';
+      const resolvedGroup = options?.dryRun
+        ? await groupBridge.resolve({
+            selection: { type: 'route', id: activeModelGroupId },
+            dryRun: true,
+          })
+        : null;
+      const prepared = !options?.dryRun
+        ? await groupBridge.prepare(activeModelGroupId, { keptModelName })
+        : null;
+      route = prepared?.route ?? (resolvedGroup?.outcome === 'routed' ? resolvedGroup.route : null);
+      preparedToken = prepared?.token;
+    } catch (err) {
+      log.warn(`hook model group unavailable; falling back to concrete route: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (route) {
+      if (route.agentKind === 'acp') {
+        const requestedPermissionMode = mergedOverrides.permissionMode;
+        const permissionMode: PermissionMode =
+          requestedPermissionMode === null
+            ? 'bypassPermissions'
+            : isPluginEnginePermissionModeId(requestedPermissionMode)
+              ? requestedPermissionMode
+              : 'ask';
+        return {
+          agentKind: 'acp',
+          model: route.model,
+          effort: (route.effort ?? mergedOverrides.effort ?? undefined) as ResolvedHookSessionConfig['effort'],
+          providerId: route.providerId,
+          ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
+          permissionMode,
+          fingerprint,
+          ...(preparedToken ? { modelGroupStart: preparedToken } : {}),
+        };
+      }
+      const agentKind: 'claude-code' | 'codex' | 'pi' = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
+      const requestedPermissionMode = mergedOverrides.permissionMode;
+      let permissionMode: PermissionMode = 'bypassPermissions';
+      if (route.agentDeviceId) {
+        const permissionModes = requestedPermissionMode !== null
+          ? await readImRemotePermissionModes(route.agentDeviceId, agentKind)
+          : [];
+        // 与具体远端路由一致：不把远端首项当作最严档，显式权限不被支持时直接拒绝，避免静默放宽或降级。
+        if (requestedPermissionMode !== null && (
+          !isImDefaultPermissionMode(requestedPermissionMode) ||
+          !permissionModes.includes(requestedPermissionMode)
+        )) {
+          throw new Error('Selected permission mode is unavailable for the remote agent' + routeReselectHint());
+        }
+        if (requestedPermissionMode !== null) {
+          permissionMode = requestedPermissionMode as PermissionMode;
+        }
+      } else if (requestedPermissionMode !== null) {
+        const supported = getMaker().getCapabilities(agentKind).permissionModes.map((pm) => pm.id);
+        if (isImDefaultPermissionMode(requestedPermissionMode) && supported.includes(requestedPermissionMode)) {
+          permissionMode = requestedPermissionMode as PermissionMode;
+        } else if (supported.length > 0) {
+          permissionMode = supported[0] as PermissionMode;
+          log.warn(
+            `hook override permissionMode '${requestedPermissionMode}' not supported by ${agentKind}, falling back to strictest supported '${permissionMode}'`,
+          );
+        } else {
+          log.warn(
+            `hook override permissionMode '${requestedPermissionMode}' rejected: ${agentKind} declares no permission modes; using legacy default 'bypassPermissions'`,
+          );
+        }
+      }
+      return {
+        agentKind,
+        model: route.model,
+        effort: (route.effort ?? mergedOverrides.effort ?? undefined) as ResolvedHookSessionConfig['effort'],
+        providerId: route.providerId,
+        ...(route.agentDeviceId ? { agentDeviceId: route.agentDeviceId } : {}),
+        permissionMode,
+        fingerprint,
+        ...(preparedToken ? { modelGroupStart: preparedToken } : {}),
+      };
+    }
+  }
   let defaults = imDefaults;
   const selectedAgent = mergedOverrides.agentKind;
   const selectedBuiltinAgent =
@@ -387,11 +481,14 @@ async function resolveNewSessionConfig(
         : isPluginEnginePermissionModeId(requestedPermissionMode)
           ? requestedPermissionMode
           : 'ask';
+    const inheritedAcpEffort = explicitAcp && (acpWorkdirRoute || mergedOverrides.model !== null)
+      ? ''
+      : (acp?.effort ?? '');
     return {
       ...(agentDeviceId ? { agentDeviceId } : {}),
       agentKind: 'acp',
       model: model.trim(),
-      effort: ((mergedOverrides.effort ?? acp?.effort ?? '') || undefined) as Effort | undefined,
+      effort: ((mergedOverrides.effort ?? inheritedAcpEffort) || undefined) as Effort | undefined,
       permissionMode,
       providerId,
       fingerprint,
@@ -1248,6 +1345,9 @@ export function createMakerHookSessionRunner(deps: {
           if (sessionProviderId && accountStillCurrent()) {
             setSessionProvider(session.id, sessionProviderId);
           }
+          if (resolved?.modelGroupStart && accountStillCurrent()) {
+            getModelGroupStartBridge()?.attach(session.id, resolved.modelGroupStart);
+          }
         } else {
           hydrateSessionProvider(session.id, rowProviderId);
         }
@@ -1520,6 +1620,7 @@ export function createMakerHookSessionRunner(deps: {
           ? decodeAttachments(req.attachments, log)
           : { images: [], files: [], skipped: 0 };
       let inboundAttachmentFailures = decoded.skipped;
+      const readOnlyAttachmentPaths: string[] = [];
       const imageBlocks: UserContentBlock[] = [];
       const imageRefs: Array<{ url: string; mimeType: string; originalName: string }> = [];
       for (const img of decoded.images) {
@@ -1538,6 +1639,7 @@ export function createMakerHookSessionRunner(deps: {
           });
           const { absPath } = resolveCindyMediaUrl(url);
           imageBlocks.push({ type: 'image', path: absPath, mimeType: img.mimeType });
+          readOnlyAttachmentPaths.push(absPath);
           imageRefs.push({
             url,
             mimeType: img.mimeType,
@@ -1582,6 +1684,7 @@ export function createMakerHookSessionRunner(deps: {
           });
           const { absPath } = resolveCindyMediaUrl(url);
           fileBlocks.push({ type: 'file', path: absPath, mimeType });
+          readOnlyAttachmentPaths.push(absPath);
           const safeName = sanitizeAttachmentName(file.name);
           fileRefs.push({ name: safeName, path: url, mimeType });
         } catch (err) {
@@ -1609,6 +1712,7 @@ export function createMakerHookSessionRunner(deps: {
               try {
                 await fs.writeFile(absPath, file.bytes);
                 fileBlocks.push({ type: 'file', path: absPath, mimeType: file.mimeType });
+                readOnlyAttachmentPaths.push(absPath);
                 fileRefs.push({ name: safeName, path: absPath, mimeType: file.mimeType });
               } catch (err) {
                 inboundAttachmentFailures += 1;
@@ -1624,11 +1728,17 @@ export function createMakerHookSessionRunner(deps: {
             );
           }
       }
+      const contextImageBlocks: UserContentBlock[] = [];
+      for (const img of req.contextImages ?? []) {
+        contextImageBlocks.push({ type: 'image', path: img.absPath, mimeType: img.mimeType });
+        readOnlyAttachmentPaths.push(img.absPath);
+      }
       // 渠道说明只进喂给 agent 的内容,不进落库的 userMessageContent ——
       // 渲染层展示的用户消息保持来源 IM 原话。逐 turn 追加固定文本,教模型
       // 用 xdt-file 引用回传文件而非误用 cindy_feishu_bot(规则 9,实踩背景
       // 见 outbound.ts 的常量注释)。
-      const publicCompanionNote = req.companionBotId
+      // 只有 X 是公开回帖; 其它官方渠道交给伙伴时是主人与伙伴的私聊 / 群, 不加这条。
+      const publicCompanionNote = req.companionBotId && req.source?.im === 'x'
         ? '\n[渠道说明] 本轮是主人通过官方 X 账号绑定发起的公开提问，最终回答将公开回帖。请勿公开伙伴记忆或工作目录中的私人信息。回复由当前 X 通道投递，不要另用 X Manager 发帖。'
         : '';
       const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}${publicCompanionNote}`;
@@ -1706,8 +1816,13 @@ export function createMakerHookSessionRunner(deps: {
         }
       }
       const sendContentBase =
-        imageBlocks.length > 0 || fileBlocks.length > 0
-          ? [{ type: 'text' as const, text: promptWithNote }, ...imageBlocks, ...fileBlocks]
+        imageBlocks.length > 0 || fileBlocks.length > 0 || contextImageBlocks.length > 0
+          ? [
+              { type: 'text' as const, text: promptWithNote },
+              ...imageBlocks,
+              ...fileBlocks,
+              ...contextImageBlocks,
+            ]
           : promptWithNote;
       const sendContent = replacementHandoff
         ? (prependHandoffToUserMessage(
@@ -1729,10 +1844,14 @@ export function createMakerHookSessionRunner(deps: {
       // Same projection as personal IM: the server-stamped reply target (captured before
       // display bounding) and the attachments actually delivered, never parsed from the prompt.
       const autoReviewReferences = trustedChannelOrigin
-        ? hookAutoReviewReferences(req.autoReviewReplyTarget, {
-            images: imageRefs.length,
-            files: fileRefs.length,
-          })
+        ? hookAutoReviewReferences(
+            req.autoReviewReplyTarget,
+            {
+              images: imageRefs.length,
+              files: fileRefs.length,
+            },
+            readOnlyAttachmentPaths,
+          )
         : undefined;
       const bindAttemptProviderHooks = (): void => {
         if (req.onRuntimeRecovery) bindRuntimeRecoveryNotice(session, async (text) => {
@@ -1903,11 +2022,9 @@ export function createMakerHookSessionRunner(deps: {
                     : {}),
                 },
               });
-              // Turn change capture relies on built-in engine hooks (same rule as desktop sends).
-              if (hasBuiltinAgentKind(session)) {
-                await beginTurnChangeSetAtDispatch(session, turnChangeAnchorClientId);
-                turnChangeSetStarted = true;
-              }
+              getModelGroupStartBridge()?.dispatched(session.id, turnChangeAnchorClientId);
+              await beginTurnChangeSetAtDispatch(session, turnChangeAnchorClientId);
+              turnChangeSetStarted = true;
               // 每次被接受的 IM 消息都是一次用户发送: bump userSendAt 让排序
               // 时间轴与桌面端 sendMessage 口径一致, sessions:patched 广播顺带把
               // 复用/接管会话即时重排序(新建路径已在广播前落过, 这里更新为实际
@@ -2120,13 +2237,11 @@ export function createMakerHookSessionRunner(deps: {
                       agentMeta: { origin, autoResume: true },
                     });
                   }
-                  if (hasBuiltinAgentKind(session)) {
-                    await beginTurnChangeSetAtDispatch(
-                      session,
-                      hadAnyOutput ? retryClientId : turnChangeAnchorClientId,
-                    );
-                    retryTurnChangeSetStarted = true;
-                  }
+                  await beginTurnChangeSetAtDispatch(
+                    session,
+                    hadAnyOutput ? retryClientId : turnChangeAnchorClientId,
+                  );
+                  retryTurnChangeSetStarted = true;
                 },
               });
               if (retryPendingHandoff && retrySendResult.accepted) {
@@ -2230,8 +2345,8 @@ export function createMakerHookSessionRunner(deps: {
         // 找不到任务实际目录对应的别名时，不能把未知目录默认当成已清空。
         ownsRow: (row) => workspace.alias !== undefined && isHookDefaultRouteRow(row),
         fingerprint: () => hookDefaultsFingerprint(hookDefaultInputs(overrides, req.source?.im, workspace)),
-        resolveTarget: async (providers) => {
-          const resolved = await resolveNewSessionConfig(overrides, log, req.source?.im, workspace, providers);
+        resolveTarget: async (providers, _row, options) => {
+          const resolved = await resolveNewSessionConfig(overrides, log, req.source?.im, workspace, providers, false, options);
           return { ...resolved, effort: resolved.effort ?? null };
         },
         // 新任务配置解析已校验来源和模型可用性。

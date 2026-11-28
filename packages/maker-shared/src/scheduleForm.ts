@@ -64,6 +64,8 @@ export interface MobileScheduleDraft {
   providerId: string;
   effort: string;
   fastMode: boolean | 'ultrafast';
+  /** Optional smart route id; null explicitly clears an existing schedule route. */
+  modelGroup?: string | null;
   workspaceKind: RemoteScheduleWorkspaceKind;
   workingDir: string;
   useWorktree: boolean;
@@ -210,6 +212,7 @@ export function createMobileScheduleDraft(
     providerId: schedule.providerId ?? '',
     effort: schedule.effort ?? '',
     fastMode: (schedule.fastMode ?? false),
+    ...(schedule.modelGroup ? { modelGroup: schedule.modelGroup } : {}),
     workspaceKind,
     workingDir: schedule.workingDir ?? '',
     useWorktree: workspaceKind === 'project' && !!schedule.useWorktree,
@@ -518,6 +521,7 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
   // Fast 对 Codex 与 Pi 都生效(runner 对 claude-code 忽略此字段,并按模型 supportsFastMode
   // 收口);只序列化 codex 会让 Pi 任务里开的 Fast 被静默丢弃。
   if (draft.agentKind === 'codex' || draft.agentKind === 'pi') input.fastMode = draft.fastMode;
+  if (draft.modelGroup !== undefined) input.modelGroup = draft.modelGroup;
   return input;
 }
 

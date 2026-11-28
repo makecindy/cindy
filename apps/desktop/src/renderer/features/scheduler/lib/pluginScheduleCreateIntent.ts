@@ -17,6 +17,7 @@ import type { ScheduleFormState } from './scheduleFormLogic';
 export interface PluginScheduleCreateIntent {
   kind: 'plugin-schedule-draft';
   primaryHostKey?: string;
+  preRunPlugin?: { pluginId: string; onFailure: 'allow' };
   /** main 铸的请求 id;renderer 用它去重(同一次请求重复推送不叠开面板)。 */
   requestId: string;
   /**
@@ -66,6 +67,8 @@ export function readPluginScheduleCreateIntent(
     typeof value.prompt !== 'string' ||
     !value.prompt ||
     (value.primaryHostKey !== undefined && typeof value.primaryHostKey !== 'string') ||
+    (value.preRunPlugin !== undefined && (!value.preRunPlugin || typeof value.preRunPlugin.pluginId !== 'string' ||
+      !value.preRunPlugin.pluginId || value.preRunPlugin.onFailure !== 'allow')) ||
     (value.intervalMs !== undefined &&
       (typeof value.intervalMs !== 'number' ||
         !Number.isFinite(value.intervalMs) ||
@@ -115,6 +118,8 @@ export function buildPluginScheduleFormOverrides(
     name: intent.name,
     prompt: intent.prompt,
     executionMode: 'agent',
+    ...(intent.preRunPlugin ? { preRunHookEnabled: true, preRunSource: 'plugin' as const,
+      preRunPluginId: intent.preRunPlugin.pluginId, preRunPluginOnFailure: intent.preRunPlugin.onFailure } : {}),
     ...(intent.intervalMs !== undefined ? { intervalMs: intent.intervalMs } : {}),
     timezone: systemTimeZone(),
     recurring: true,

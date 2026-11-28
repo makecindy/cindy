@@ -45,6 +45,7 @@ export function classifyTurnUsageLimit(data: unknown): boolean {
   // 结构化 tag(权威)。
   if (d.sdkError === 'rate_limit') return true;
   if (d.codexErrorInfo === 'usageLimitExceeded' || d.codexErrorInfo === 'rateLimitExceeded') return true;
+  if (d.reason === 'acp-usage-limit') return true;
   if (d.usageLimit === true) return true;
   if (d.errorStatus === 429 || d.errorStatus === 529) return true;
   // Codex / 兜底:文本匹配。
@@ -104,7 +105,7 @@ export function classifyTurnOverload(data: unknown): boolean {
   // 静默失效, 而这条判定决定的是「60s 短窗口自动续跑」还是「判 blocked 交回用户」
   // —— 漏判等于把可自愈的容量抖动变成需要人工 resume 的死局。
   if (d.codexErrorInfo === 'serverOverloaded') return true;
-  if (d.reason === UPSTREAM_OVERLOAD_REASON) return true;
+  if (d.reason === UPSTREAM_OVERLOAD_REASON || d.reason === 'acp-overloaded') return true;
   if (d.errorStatus === 529) return true;
   const msg = typeof d.message === 'string' ? d.message : '';
   // `at capacity` 要求精确短语,避免误伤业务文案里的 capacity(缓存/队列容量)。

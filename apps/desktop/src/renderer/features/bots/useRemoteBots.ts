@@ -14,7 +14,7 @@ import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDev
 import { revokedDevicesStore } from '@/features/device-link/revokedDevicesStore';
 import { startDeviceLinkFirstConnectionWatch } from '@/features/device-link/deviceLinkFirstConnection';
 import { useCompanionCloud, companionCloudApi } from './companionCloudStore';
-import { parseRemoteBots, parseTeammateInboxSnooze, remoteBotCreatedTaskIds, type RemoteBot } from './remoteBotRoster';
+import { parseRemoteBots, remoteBotCreatedTaskIds, type RemoteBot } from './remoteBotRoster';
 
 const CACHE_PREFIX = 'cindy.remoteBots.v1.';
 let owner: string | null = null;
@@ -66,6 +66,12 @@ export function useRemoteCindyIds(): ReadonlySet<string> {
 }
 const EMPTY_CINDY_IDS: ReadonlySet<string> = new Set();
 
+let retryRoster: ((deviceId: string) => void) | undefined;
+
+export function retryRemoteBotRoster(deviceId: string): void {
+  retryRoster?.(deviceId);
+}
+
 /** Each complete app window mirrors the roster; only the main window writes the display cache. */
 export function useRemoteBotSync(): void {
   const { dataOwnerId, isAuthenticated } = useAuth();
@@ -110,8 +116,6 @@ export function useRemoteBotSync(): void {
               delegatedSessionIds: Array.isArray(bot.delegatedSessionIds) ? bot.delegatedSessionIds.filter((id: unknown) => typeof id === 'string') : undefined,
               activityAt: bot.activityAt, sessionId: typeof bot.sessionId === 'string' ? bot.sessionId : null,
               lastReplyAt: Number.isFinite(bot.lastReplyAt) ? bot.lastReplyAt : undefined,
-              // A snoozed teammate stays snoozed while its computer is offline.
-              ...(parseTeammateInboxSnooze(bot.inboxSnooze) ? { inboxSnooze: parseTeammateInboxSnooze(bot.inboxSnooze) } : {}),
               online: false, connectionKnown: false,
             }));
           }
@@ -123,7 +127,7 @@ export function useRemoteBotSync(): void {
     if (!nextOwner) return;
     if (!devices) { publish(snapshot.map((bot) => ({ ...bot, online: false, connectionKnown: false, generation: undefined }))); return; }
     let disposed = false;
-    let relayAvailable = false;
+    let relayAvailable: boolean | undefined;
     let statusRevision = 0;
     const hosts = devices.filter(
       (d) => !d.isSelf && d.controlEnabled && d.remoteControlEnabled && !revoked.has(d.deviceId),
@@ -288,6 +292,17 @@ export function useRemoteBotSync(): void {
     // Sharing its pushes avoids competing subscribe/unsubscribe owners.
     // Subscribe before reading status: a stopped/connecting relay cannot inherit
     // a stale device directory's online flag, and a late GET cannot undo a push.
+    const retryHost = async (deviceId: string) => {
+      if (!current() || !byId.get(deviceId)?.online) return;
+      if (relayAvailable === undefined) {
+        const revision = statusRevision;
+        const state = await window.electronAPI.deviceLink.getState().catch(() => null);
+        if (!current() || revision !== statusRevision || !state) return;
+        relayAvailable = state.linkStatus === 'online';
+      }
+      await refresh(deviceId);
+    };
+    retryRoster = retryHost;
     const offPush = window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
       if (
         !current() ||
@@ -336,6 +351,7 @@ export function useRemoteBotSync(): void {
     });
     return () => {
       disposed = true;
+      if (retryRoster === retryHost) retryRoster = undefined;
       offPush();
       offStatus();
       timers.forEach(clearTimeout);

@@ -150,7 +150,7 @@ const describeSendToSession = (supportsRemote: boolean, supportsShared: boolean)
     '共享投递返回 task_link、delivery_id、delivery_state=pending/accepted；pending 对应 wake_kind=queued，无需重试；accepted 对应 wake_kind=accepted，仅证明原任务已接受输入，不证明仍在运行或执行成功。DELIVERY_UNKNOWN 时消息可能已入队，保留 task_link 和 delivery_id；再次调用相同 target_session_id、message 并带 delivery_id 只对账，绝不重发。unknown 不能证明未送达，不能换新 ID 重发；也可用 get_shared_task_progress 查看进展。只读、退出、移除、撤销共享、旧版或不可用均明确失败，不改走同账号远控。',
   ] : []),
   "",
-  '⚠️【不要用于"开协同 / 多 worker"】本工具 create 模式产出的是普通独立 session,不进入 Orca 协同分组或 Lead 右侧 worker 栏。用户明确要协同 team/worker 时才使用 cindy_orca；外部业务对象(issue / jira / pr)需要独立项目 session 时使用本工具。',
+  '⚠️【不要用于"开协同 / 多 worker"或内部临时子步骤】本工具 create 模式会创建用户侧边栏可见的普通独立任务（不会隐藏，也不进入 Orca 协同分组或 Lead 右侧 worker 栏）。只服务于当前任务的临时代码检查、独立复核、调研或拆分子步骤，优先用当前引擎原生 subagent；用户明确需要多 worker 协同 team 时才使用 cindy_orca。只有在确实需要独立的、用户可见的业务任务（如跟进 issue / jira / pr 或长期独立工作流）时才用本工具新建任务。',
   "",
   "把一条控制层 handoff 消息投递到一个 session。两种模式:",
   "- 传 target_session_id → jump:投递到该既有 session(已关闭会自动 resume),wake_kind 返 resumed / already-active;目标正在跑 turn 时消息进入其输入队列、当前 turn 结束后自动派发,wake_kind 返 queued(无需重试)。",
@@ -255,7 +255,7 @@ export function registerSendToSessionTool(
             "要发给已有任务时必传(不知道 id 先用 list_sessions 查);提供 → jump 到该既有 session。" +
             (deps.sendToRemoteSession ? "另一台电脑上的任务用 deviceId::sessionId。" : deps.sendToSharedTask ? '本机目标用裸 ID。' : "仅支持发给本机已有任务。") +
             (deps.sendToSharedTask ? '已加入的共享任务传完整复制任务链接，或完整共享 device 引用加 ::sessionId；不要只取房主设备或裸任务 ID。' : '') +
-            "省略 → create:新建任务并立刻跑一轮；项目归属由 project_path 指定或继承。",
+            "省略 → create:新建用户侧边栏可见的独立任务并立刻跑一轮（不要拿它承接只服务当前任务的临时检查、复核或子步骤，这类内部步骤优先用当前引擎原生 subagent）；项目归属由 project_path 指定或继承。",
         ),
       ...(deps.sendToSharedTask ? { delivery_id: z.string().min(1).max(256).optional().describe(
         '仅共享任务：先前投递回执的 delivery_id。提供时只查询该消息是否排队/已接受，绝不再次发送；结果不明时保留原 ID。首次发送省略。',

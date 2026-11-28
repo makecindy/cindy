@@ -1,4 +1,9 @@
 {
+  "antigravityVerification": {
+    "title": "Google-Konto bestätigen",
+    "note": "Scanne den QR-Code oder öffne die Google-Seite. Sobald Antigravity den Zugriff bestätigt, wird die Aufgabe fortgesetzt.",
+    "refresh": "QR-Code aktualisieren"
+  },
   "runtimePlugins": {
     "save": "Speichern",
     "promptUnsupported": "Dieser Pi-Ausführungsort unterstützt keine Systemanweisungsfragmente.",
@@ -10,8 +15,8 @@
   },
   "sharedTaskRecovery": {
     "title": "Fortsetzen auf dem ursprünglichen Computer nicht möglich",
-    "description": "Wähle einen anderen Computer oder Anbieter, um mit einer Kontextübergabe fortzufahren. Deine Nachrichten bleiben erhalten, der vollständige Ausführungszustand des ursprünglichen Computers wird jedoch nicht übertragen.",
-    "choose": "Anderen Computer wählen",
+    "description": "Öffne die Modellauswahl, um zu einem anderen Computer, Anbieter oder Modell zu wechseln und mit einer Kontextübergabe fortzufahren. Deine Nachrichten bleiben erhalten, der vollständige Ausführungszustand des ursprünglichen Computers wird jedoch nicht übertragen.",
+    "choose": "Modell oder Anbieter wechseln",
     "cancel": "Hier bleiben",
     "stage": {
       "owner": "Fehler beim Kontakt mit dem freigebenden Computer.",
@@ -1851,8 +1856,7 @@
       "ariaLabel": "Einstellungen durchsuchen",
       "placeholder": "Einstellungen durchsuchen",
       "resultsLabel": "Suchergebnisse in den Einstellungen",
-      "noResults": "Keine Einstellungen gefunden. Versuche ein anderes Stichwort.",
-      "clear": "Suche leeren"
+      "noResults": "Keine Einstellungen gefunden. Versuche ein anderes Stichwort."
     },
     "back": "Zurück",
     "defaults": {
@@ -4298,6 +4302,7 @@
           "supported": "Unterstützt",
           "unsupported": "Nicht unterstützt",
           "undeclared": "Nicht angegeben",
+          "ultrafastDeclaredUnavailable": "Vom Anbieter angegeben · Für diese Codex-Verbindung nicht verfügbar",
           "pricing": "Preise",
           "pricingLabel": "Preise",
           "noPricing": "Keine Preisdaten für diese Route",
@@ -4903,68 +4908,7 @@
         "hint": "Sendet eine private Nachricht über den verknüpften Feishu- oder Lark-Bot; nur, wenn das Fenster nicht fokussiert ist.",
         "disabledHint": "Richte zuerst den Bot ein und sende ihm einmal eine Direktnachricht, um die Verknüpfung abzuschließen."
       },
-      "bind": "Verknüpfen",
-      "groups": {
-        "title": "Gruppenchats",
-        "description": "Lege für eine Gruppe, in der der Bot ist, ein eigenes Projekt, Modell und eigene Berechtigungen fest.",
-        "rules": "Was du nicht festlegst: Eine Gruppe mit Projekt folgt diesem Projekt unter Projekte und Modelle; eine Gruppe ohne Projekt folgt oben der Konfiguration für neue Unterhaltungen und dem Berechtigungsmodus für neue Gruppenaufgaben. Der Hauptchat einer Gruppe und ihre Themen teilen sich eine Einstellung.",
-        "expand": "Ausklappen",
-        "collapse": "Einklappen",
-        "groupCount_one": "{{count}} Gruppe",
-        "groupCount_other": "{{count}} Gruppen",
-        "customCount_one": "{{count}} mit eigenen Einstellungen",
-        "customCount_other": "{{count}} mit eigenen Einstellungen",
-        "refresh": "Aktualisieren",
-        "loading": "Gruppen werden geladen …",
-        "loadFailed": "Gruppen konnten nicht geladen werden. Versuche es gleich noch einmal mit Aktualisieren.",
-        "saveFailed": "Gruppeneinstellungen konnten nicht gespeichert werden",
-        "notConnected": "Gruppen werden angezeigt, sobald der Bot verbunden ist. Unten stehen nur Gruppen mit eigenen Einstellungen.",
-        "empty": "Der Bot ist noch in keiner Gruppe. Füge ihn einer Gruppe hinzu und komm dann hierher zurück.",
-        "listPermission": "Die Gruppen des Bots können nicht gelesen werden. Erteile dieser App auf der Feishu Open Platform die Berechtigung, Gruppeninformationen zu lesen. Unten stehen die Gruppen, in denen der Bot schon verwendet wurde.",
-        "listUnavailable": "Die Gruppen des Bots können gerade nicht gelesen werden. Unten stehen die Gruppen, in denen der Bot schon verwendet wurde.",
-        "unnamed": "Unbenannte Gruppe ({{id}})",
-        "summaryModel": "Eigenes Modell",
-        "summaryPermission": "Eigene Berechtigungen",
-        "expandAria": "Einstellungen für {{name}}",
-        "searchLabel": "Gruppen durchsuchen",
-        "searchPlaceholder": "Nach Gruppenname suchen",
-        "customHeading": "Eigene Einstellungen",
-        "followHeading": "Folgen den Kanaleinstellungen",
-        "showMore": "{{count}} weitere anzeigen",
-        "showLess": "Weniger anzeigen",
-        "noMatch": "Keine Gruppe passt zu „{{query}}“",
-        "project": {
-          "label": "Projekt",
-          "follow": "Chat",
-          "missing": "{{name}} (nicht mehr in der Seitenleiste)",
-          "hint": "Gilt, sobald der Bot in der Gruppe zum ersten Mal erwähnt wird, ein Thema beginnt oder jemand /new sendet. Laufende Aufgaben werden nicht verschoben. Mit einem Projekt folgen Modell und Berechtigungen diesem Projekt unter Projekte und Modelle; mit Chat bleiben Aufgaben im Unterhaltungsordner des Bots und folgen oben der Konfiguration für neue Unterhaltungen. Nur Projekte aus der Seitenleiste dieses Computers sind wählbar."
-        },
-        "model": {
-          "label": "Modell und Denkintensität",
-          "hintFollow": "Folgt der Konfiguration für neue Unterhaltungen. Wenn du hier Modell oder Denkintensität änderst, gilt das nur für diese Gruppe.",
-          "hintFollowProject": "Folgt dem Projekt „{{project}}“ unter Projekte und Modelle. Wenn du hier Modell oder Denkintensität änderst, gilt das nur für diese Gruppe.",
-          "hintProjectUnavailable": "Das Modell, das für „{{project}}“ unter Projekte und Modelle eingestellt ist, ist gerade nicht verfügbar. Wähle dort ein anderes oder hier eines für diese Gruppe.",
-          "hintFixed": "Diese Gruppe hat ein eigenes Modell. Aufgaben in dieser Gruppe, deren Modell nicht geändert wurde, wechseln bei der nächsten Nachricht; neue Aufgaben nutzen dieses Modell."
-        },
-        "permission": {
-          "label": "Berechtigungen",
-          "hintFollow": "Folgt dem Berechtigungsmodus für neue Gruppenaufgaben. Gilt nur für Aufgaben, die ab jetzt in dieser Gruppe erstellt werden; bestehende Aufgaben wechselst du mit /permission in der Gruppe.",
-          "hintFollowProject": "Folgt den Berechtigungen von „{{project}}“ unter Projekte und Modelle. Gilt nur für Aufgaben, die ab jetzt in dieser Gruppe erstellt werden; bestehende Aufgaben wechselst du mit /permission in der Gruppe.",
-          "hintFixed": "Diese Gruppe hat einen eigenen Berechtigungsmodus. Gilt nur für Aufgaben, die ab jetzt in dieser Gruppe erstellt werden; bestehende Aufgaben wechselst du mit /permission in der Gruppe."
-        },
-        "fullAccessConfirm": {
-          "title": "Vollzugriff in {{name}} verwenden?",
-          "description": "Neue Aufgaben in dieser Gruppe laufen ohne Bestätigung einzelner Schritte, egal wer den Bot erwähnt. Gruppennachrichten kommen von den Mitgliedern – tu das nur, wenn du allen in der Gruppe vertraust.",
-          "confirm": "Vollzugriff verwenden",
-          "cancel": "Abbrechen"
-        },
-        "widerConfirm": {
-          "title": "Berechtigungen in {{name}} lockern?",
-          "description": "Neue Aufgaben in dieser Gruppe wechseln von „{{current}}“ zu „{{next}}“, egal wer den Bot erwähnt. Gruppennachrichten kommen von den Mitgliedern – tu das nur, wenn du allen in der Gruppe vertraust.",
-          "confirm": "Trotzdem ändern",
-          "cancel": "Abbrechen"
-        }
-      }
+      "bind": "Verknüpfen"
     },
     "wechatBot": {
       "title": "Persönliches WeChat",
@@ -5523,6 +5467,27 @@
           "description": "Dadurch werden alle Erinnerungen, die {{label}} in jedem Projekt angesammelt hat, dauerhaft gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.",
           "confirm": "Zurücksetzen",
           "cancel": "Abbrechen"
+        }
+      },
+      "tidy": {
+        "label": "Speicher- & Skill-Bereinigung",
+        "description": "Bereinigt und verdichtet die Erinnerungen und Skills deiner Buddys regelmäßig im Hintergrund. Läuft nur bei ausreichend neuer Aktivität, verursacht im Leerlauf keine Kosten und hinterlässt keine offenen Aufgaben.",
+        "cadenceLabel": "Bereinigungsintervall",
+        "cadences": {
+          "weekly": "Wöchentlich",
+          "biweekly": "Alle 2 Wochen",
+          "monthly": "Monatlich",
+          "off": "Aus (nur manuell)"
+        },
+        "runNow": "Jetzt bereinigen",
+        "running": "Wird bereinigt…",
+        "toast": {
+          "cadenceSaved": "Bereinigungsintervall aktualisiert",
+          "cadenceFailed": "Bereinigungsintervall konnte nicht aktualisiert werden",
+          "updated": "Bereinigung abgeschlossen ({{count}} aktualisiert)",
+          "idle": "Keine Bereinigung erforderlich",
+          "skipped": "Keine passenden Buddys zum Bereinigen",
+          "failed": "Speicherbereinigung fehlgeschlagen"
         }
       }
     },
@@ -7140,6 +7105,8 @@
           "controlling": "Steuert diesen Computer",
           "protocol": "Verbindung",
           "rttNote": "zuletzt gemessen",
+          "relayLegSelf": "Dieses Gerät {{transport}}",
+          "relayLegPeer": "Anderes Gerät {{transport}}",
           "manage": "Gerät verwalten…",
           "linkStatus": "Zu {{name}}",
           "version": "Cindy {{version}}",
@@ -7189,6 +7156,7 @@
         },
         "onlyEncrypted": "Nur Agent-Net verwenden",
         "onlyEncryptedHint": "Ältere Geräte und Freigaben über die bisherige Verbindung sind dann nicht verfügbar. Standardmäßig deaktiviert.",
+        "removedOff": "Dieser Computer wurde aus deinem Konto entfernt, daher wurde Agent-Net ausgeschaltet. Schalte es wieder ein, um erneut beizutreten.",
         "peerSwitch": {
           "row": {
             "toAgentNet": "Wechsel zu Agent-Net…",
@@ -7409,7 +7377,7 @@
     "tina": {
       "chat": {
         "title": "Chat",
-        "description": "Einfache Unterhaltungen ohne Repository; wähle „chat“ in Slack, Telegram, X oder Feishu / Lark, mit einer Sitzung pro Unterhaltungsstrang."
+        "description": "Einfache Unterhaltungen ohne Projektordner. Wird genutzt, wenn eine Chat-App kein bestimmtes Projekt auswählt."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -7540,7 +7508,8 @@
       "groups": {
         "cindy": "Offiziell",
         "personal": "Persönlich",
-        "plugins": "Plugins"
+        "plugins": "Plugins",
+        "shared": "Gemeinsam"
       },
       "tips": {
         "cindy": "Von Cindy bereitgestellt und gepflegt. Du musst keinen Bot erstellen oder Zugangsdaten angeben – folge den Verbindungsschritten, um loszulegen.",
@@ -7581,6 +7550,190 @@
       "plugins": {
         "rowHint": "Anmeldung, Verknüpfung und Einstellungen pro Chat findest du auf der Seite des Plugins.",
         "open": "Plugin öffnen"
+      },
+      "replyTarget": {
+        "label": "Wer antwortet",
+        "cindy": "Normale Aufgaben",
+        "cindyHint": "Wird als normale Aufgabe in der Seitenleiste mit dem Projekt und Modell unten bearbeitet. Oder einem Buddy mit eigenem Gedächtnis zuweisen.",
+        "companionHint": "Direktnachrichten gehen in deinen Chat mit {{name}}, Gruppen laufen separat unter {{name}}. Modell, Rechte und Gedächtnis folgen {{name}}.",
+        "openCompanion": "Einstellungen von {{name}}",
+        "summary": "{{name}} antwortet",
+        "missingCompanion": "Nicht verfügbarer Freund",
+        "busy": "Dieser Bot hat noch wartende Nachrichten oder eine laufende Aufgabe. Wechsle, wenn sie fertig sind.",
+        "updateFailed": "Wechsel fehlgeschlagen. Prüfe, ob der Freund noch verfügbar ist, und versuche es erneut.",
+        "companionSettingsHint": "Modell, Berechtigungen und Speicher"
+      },
+      "nav": {
+        "back": "Zurück",
+        "backTo": "Zurück zu {{page}}"
+      },
+      "pageDescription": "Schreib Cindy oder deinen Freunden aus Chat-Apps wie WeChat, Feishu und Telegram.",
+      "list": {
+        "connected": "Verbunden",
+        "available": "Weitere Apps",
+        "choose": "Chat-App auswählen",
+        "cindyReplies": "Normale Aufgaben",
+        "official": "Offizieller Bot: {{status}}",
+        "projects": "Projekte und Modelle",
+        "projectsHint": "Modell und Berechtigungen je Projekt, wenn eine Chat-App oder ein Plugin darin eine Aufgabe startet",
+        "hint": {
+          "both": "Offizieller Bot oder ein eigener Bot",
+          "slack": "Mit dem offiziellen Cindy-Bot. Bei Slack anmelden, fertig",
+          "x": "Mit dem offiziellen Cindy-Konto. Nach der Freigabe antwortet es dir auf X",
+          "wechat": "Persönliches WeChat per QR-Code verbinden",
+          "personal": "Mit einem eigenen Bot"
+        },
+        "companionDedicated": "Buddy-eigen: {{names}}"
+      },
+      "apps": {
+        "telegram": "Telegram",
+        "slack": "Slack",
+        "discord": "Discord",
+        "x": "X",
+        "wechat": "WeChat",
+        "feishu": "Feishu / Lark",
+        "wecom": "WeCom",
+        "dingtalk": "DingTalk"
+      },
+      "ways": {
+        "official": "Offizieller Cindy-Bot",
+        "personal": "Dein eigener Bot",
+        "personalHint": "Ein Bot, den du auf der Plattform erstellst – Name und Bild bestimmst du.",
+        "personalSetupTitle": "Eigenen Bot verwenden",
+        "setUp": "Einrichten",
+        "personalSetupHint": {
+          "telegram": "Erstelle einen Bot mit BotFather und gib dann das Token und deine Nutzer-ID ein.",
+          "discord": "Erstelle einen Bot im Discord Developer Portal und gib dann das Token ein.",
+          "feishu": "Erstelle eine App auf der Feishu- oder Lark-Plattform und gib dann App ID und App Secret ein."
+        },
+        "officialHint": "Keine eigene App nötig — verbindet sich direkt mit deinem Cindy-Konto."
+      },
+      "rows": {
+        "model": "Modell",
+        "groupReply": "Wann in Gruppen antworten",
+        "persona": "Name und Persönlichkeit",
+        "behavior": "Reaktionen und Zitate",
+        "receiveHere": "Nachrichten auf diesem Computer empfangen",
+        "receiveHereHint": "Ausschalten nimmt den Bot hier offline. Die Zugangsdaten bleiben gespeichert, du kannst ihn jederzeit wieder einschalten.",
+        "unbind": "Diesen Bot trennen",
+        "ownerId": "Meine Nutzer-ID {{id}}",
+        "discordChannels": "Serverkanäle",
+        "discordChannelsHint": "In welchen Serverkanälen der Bot arbeiten darf",
+        "notifications": "Benachrichtigungen",
+        "on": "An",
+        "off": "Aus",
+        "project": "Projekt",
+        "projectDialogue": "Chat (kein Projekt)",
+        "projectMissing": "Projekt nicht mehr in der Seitenleiste",
+        "projectHint": "Neue Aufgaben landen in diesem Projekt und nutzen dessen Modell und Berechtigungen aus „Projekte und Modelle“.",
+        "projectDialogueHint": "Neue Aufgaben landen im eigenen Chat-Ordner des Bots und nutzen das Modell unten.",
+        "officialProjectHint": "Neue Aufgaben landen in diesem Projekt und nutzen dessen Modell und Berechtigungen aus Projekte und Modelle. Gilt für alle offiziellen Cindy-Bots.",
+        "officialProjectDialogueHint": "Neue Aufgaben bleiben im Chat-Ordner und nutzen die Zeile Chat in Projekte und Modelle. Gilt für alle offiziellen Cindy-Bots.",
+        "projectFullAccessTitle": "Berechtigungen von {{name}} verwenden?",
+        "projectFullAccessDescription": "{{name}} hat in „Projekte und Modelle“ Vollzugriff: Neue Aufgaben aus {{app}} laufen ohne Rückfrage bei jedem Schritt. Du kannst es vorher in „Projekte und Modelle“ auf Auto oder Ask stellen.",
+        "projectFullAccessConfirm": "Trotzdem verwenden",
+        "projectFullAccessCancel": "Abbrechen",
+        "projectUpdateFailed": "Projekt konnte nicht gewechselt werden. Prüfe, ob es noch in der Seitenleiste ist, und versuche es erneut.",
+        "chats": "Gruppenchats",
+        "channels": "Kanäle",
+        "projectModel": "Modell und Berechtigungen",
+        "projectModelHint": "Verwaltet unter Projekte und Modelle",
+        "projectModelFollow": "Folgt „{{name}}“",
+        "groupReplyHint": "Festlegen, ob der Bot in Gruppen nur bei Erwähnung oder auf alle Nachrichten antwortet"
+      },
+      "chats": {
+        "title": "Gruppenchats",
+        "description": "Lege für eine Gruppe, in der der Bot ist, ein eigenes Projekt, Modell und eigene Berechtigungen fest und bestimme, ob andere Mitglieder fragen dürfen.",
+        "rules": "Was du nicht festlegst: Eine Gruppe mit Projekt folgt diesem Projekt unter Projekte und Modelle; eine Gruppe ohne Projekt folgt dem Projekt des Bots oder, wenn er keines hat, seinen Modelleinstellungen. Der Hauptchat einer Gruppe und ihre Themen teilen sich eine Einstellung.",
+        "expand": "Ausklappen",
+        "collapse": "Einklappen",
+        "groupCount_one": "{{count}} Gruppe",
+        "groupCount_other": "{{count}} Gruppen",
+        "customCount_one": "{{count}} mit eigenen Einstellungen",
+        "customCount_other": "{{count}} mit eigenen Einstellungen",
+        "refresh": "Aktualisieren",
+        "loading": "Gruppen werden geladen …",
+        "loadFailed": "Gruppen konnten nicht geladen werden. Versuche es gleich noch einmal mit Aktualisieren.",
+        "saveFailed": "Gruppeneinstellungen konnten nicht gespeichert werden",
+        "notConnected": "Gruppen werden angezeigt, sobald der Bot verbunden ist. Unten stehen nur Gruppen mit eigenen Einstellungen.",
+        "empty": "Der Bot ist noch in keiner Gruppe. Füge ihn einer Gruppe hinzu und komm dann hierher zurück.",
+        "listPermission": "Die Gruppen des Bots können nicht gelesen werden. Erteile dieser App auf der Feishu Open Platform die Berechtigung, Gruppeninformationen zu lesen. Unten stehen die Gruppen, in denen der Bot schon verwendet wurde.",
+        "listUnavailable": "Die Gruppen des Bots können gerade nicht gelesen werden. Unten stehen die Gruppen, in denen der Bot schon verwendet wurde.",
+        "unnamed": "Unbenannte Gruppe ({{id}})",
+        "summaryModel": "Eigenes Modell",
+        "summaryPermission": "Eigene Berechtigungen",
+        "expandAria": "Einstellungen für {{name}}",
+        "searchLabel": "Gruppen durchsuchen",
+        "searchPlaceholder": "Nach Gruppenname suchen",
+        "customHeading": "Eigene Einstellungen",
+        "followHeading": "Folgen den Kanaleinstellungen",
+        "showMore": "{{count}} weitere anzeigen",
+        "showLess": "Weniger anzeigen",
+        "noMatch": "Keine Gruppe passt zu „{{query}}“",
+        "project": {
+          "label": "Projekt",
+          "follow": "Dem Bot folgen",
+          "missing": "{{name}} (nicht mehr in der Seitenleiste)",
+          "hint": "Gilt, sobald der Bot in der Gruppe zum ersten Mal erwähnt wird, ein Thema beginnt oder jemand /new sendet. Laufende Aufgaben werden nicht verschoben. Mit einem Projekt folgen Modell und Berechtigungen diesem Projekt unter Projekte und Modelle; mit „Dem Bot folgen“ nutzt die Gruppe das Projekt des Bots oder, wenn er keines hat, seinen Unterhaltungsordner und seine Modelleinstellungen. Nur Projekte aus der Seitenleiste dieses Computers sind wählbar.",
+          "followWith": "Dem Bot folgen ({{project}})"
+        },
+        "model": {
+          "label": "Modell und Denkintensität",
+          "hintFollow": "Folgt der Konfiguration für neue Unterhaltungen. Wenn du hier Modell oder Denkintensität änderst, gilt das nur für diese Gruppe.",
+          "hintFollowProject": "Folgt dem Projekt „{{project}}“ unter Projekte und Modelle. Wenn du hier Modell oder Denkintensität änderst, gilt das nur für diese Gruppe.",
+          "hintProjectUnavailable": "Das Modell, das für „{{project}}“ unter Projekte und Modelle eingestellt ist, ist gerade nicht verfügbar. Wähle dort ein anderes oder hier eines für diese Gruppe.",
+          "hintFixed": "Diese Gruppe hat ein eigenes Modell. Aufgaben in dieser Gruppe, deren Modell nicht geändert wurde, wechseln bei der nächsten Nachricht; neue Aufgaben nutzen dieses Modell.",
+          "reset": "Wieder dem Standardmodell folgen"
+        },
+        "permission": {
+          "label": "Berechtigungen",
+          "hintFollow": "Folgt dem Berechtigungsmodus für neue Gruppenaufgaben. Gilt nur für Aufgaben, die ab jetzt in dieser Gruppe erstellt werden; bestehende Aufgaben wechselst du mit /permission in der Gruppe.",
+          "hintFollowProject": "Folgt den Berechtigungen von „{{project}}“ unter Projekte und Modelle. Gilt nur für Aufgaben, die ab jetzt in dieser Gruppe erstellt werden; bestehende Aufgaben wechselst du mit /permission in der Gruppe.",
+          "hintFixed": "Diese Gruppe hat einen eigenen Berechtigungsmodus. Gilt nur für Aufgaben, die ab jetzt in dieser Gruppe erstellt werden; bestehende Aufgaben wechselst du mit /permission in der Gruppe.",
+          "hintFollowBot": "Folgt den eigenen Berechtigungen des Bots. Gilt nur für Aufgaben, die ab jetzt in dieser Gruppe erstellt werden; bestehende Aufgaben wechselst du mit /permission in der Gruppe.",
+          "followWith": "Folgen · {{mode}}"
+        },
+        "fullAccessConfirm": {
+          "title": "Vollzugriff in {{name}} verwenden?",
+          "description": "Neue Aufgaben in dieser Gruppe laufen ohne Bestätigung einzelner Schritte, egal wer den Bot erwähnt. Gruppennachrichten kommen von den Mitgliedern – tu das nur, wenn du allen in der Gruppe vertraust.",
+          "confirm": "Vollzugriff verwenden",
+          "cancel": "Abbrechen"
+        },
+        "widerConfirm": {
+          "title": "Berechtigungen in {{name}} lockern?",
+          "description": "Neue Aufgaben in dieser Gruppe wechseln von „{{current}}“ zu „{{next}}“, egal wer den Bot erwähnt. Gruppennachrichten kommen von den Mitgliedern – tu das nur, wenn du allen in der Gruppe vertraust.",
+          "confirm": "Trotzdem ändern",
+          "cancel": "Abbrechen"
+        },
+        "descriptionChannels": "Lege für einen Kanal, in dem der Bot arbeitet, ein eigenes Projekt, Modell und eigene Berechtigungen fest und bestimme, ob andere Mitglieder fragen dürfen.",
+        "kindGroup": "Gruppe",
+        "kindChannel": "Kanal",
+        "channelCount_one": "{{count}} Kanal",
+        "channelCount_other": "{{count}} Kanäle",
+        "membersCount_one": "{{count}} offen für Mitglieder",
+        "membersCount_other": "{{count}} offen für Mitglieder",
+        "unnamedChannel": "Unbenannter Kanal ({{id}})",
+        "searchPlaceholderChannels": "Nach Kanalname suchen",
+        "emptyLocal": "Noch keine Gruppe erfasst. Erwähne den Bot einmal in einer Gruppe, dann erscheint sie hier.",
+        "emptyChannels": "Noch keine Kanäle freigegeben. Schalte zuerst unter Serverkanäle die Kanäle ein, in denen der Bot arbeitet.",
+        "members": {
+          "label": "Auch Mitglieder dürfen fragen",
+          "hint": "Wenn aktiv, bekommen auch andere Mitglieder, die den Bot erwähnen, eine Antwort – mit Projekt und Modell dieser Gruppe. Ihre Fragen laufen höchstens mit Auto-Prüfung, Aktionen brauchen also weiter deine Bestätigung; deine eigenen Fragen nutzen die Berechtigungen der Gruppe.",
+          "guard": "Wenn du in der Gruppe nichts schreibst, werden Mitglieder nach {{limit}} Fragen in Folge pausiert, bis du den Bot dort erwähnst oder auf Fortsetzen klickst. Befehle gelten nur für dich.",
+          "paused": "Für Mitglieder pausiert: Sie haben {{limit}}-mal hintereinander gefragt, während du nicht da warst.",
+          "resume": "Fortsetzen",
+          "chip": "Mitglieder dürfen fragen",
+          "pausedChip": "Mitglieder pausiert",
+          "resumeFailed": "Fortsetzen fehlgeschlagen. Versuch es später erneut."
+        },
+        "statusCustom": "Eigene Einstellungen",
+        "shownHint": "{{shown}} von {{total}} angezeigt. Gib einen Namen ein, um zu filtern.",
+        "fieldsNote": "Änderungen an Projekt, Modell und Berechtigungen gelten ab der nächsten neuen Aufgabe in dieser Gruppe; laufende Aufgaben werden nicht verschoben."
+      },
+      "companionBots": {
+        "title": "Buddy-spezifische Bots",
+        "description": "Einzeln in den Buddy-Einstellungen eingerichtet. Bestehende Bots laufen nach Upgrades weiter.",
+        "manage": "Verwalten"
       }
     },
     "shortcuts": {
@@ -8816,6 +8969,8 @@
         "nodeRuntime": "Kann ein mitgeliefertes Node-Programm auf diesem Computer ausführen",
         "nodeMcp": "Kann einen mitgelieferten stdio MCP auf diesem Computer ausführen",
         "nodeRuntimeDetail": "Hohes Risiko: Es hat dieselben lokalen Zugriffsrechte wie dein Benutzerkonto, einschließlich Dateien, Netzwerk und dem Starten anderer Programme. Cindy kann es nicht in der Browser-Sandbox einschränken.",
+        "nodeInheritEnv": "Lokale Umgebung übernehmen",
+        "nodeInheritEnvDetail": "Hohes Risiko: Das Node-Programm des Plugins und seine Kindprozesse erhalten alle Umgebungsvariablen von Cindy, einschließlich Proxy- und Zertifikatseinstellungen sowie darin enthaltener API-Schlüssel oder Tokens.",
         "nodeSecret": "Kann die gespeicherten Zugangsdaten „{{name}}“ dem lokalen Node-Programm bereitstellen",
         "nodeSecretDetail": "Cindy speichert sie verschlüsselt und stellt sie nur während der Ausführung der unten deklarierten Worker-Methoden bereit. Das Node-Programm erhält den Klartext und kann ihn zurückgeben, protokollieren, speichern oder anderweitig gegenüber browserseitigem Plugin-Code oder Agent-Parametern offenlegen. Installiere nur Plugins, denen du vertraust.",
         "nodeResident": "Das Node-Programm kann im Hintergrund weiterlaufen",
@@ -9022,7 +9177,10 @@
             "user": "Benutzer",
             "assistant": "Assistent"
           }
-        }
+        },
+        "agentChecks": "Kann Quellen auf neue Inhalte prüfen",
+        "agentChecksDetail": "Tauscht mit anderen genehmigten Plugins nur den Status geändert, unverändert oder unbekannt aus. Jedes Plugin verwendet seine eigenen verbundenen Konten. Nachrichteninhalte und Zugangsdaten werden nicht geteilt. Die Prüfung nutzt kein Modell. Prüft auch lokale Cindy-Unterhaltungen auf Änderungen, ohne Inhalte zurückzugeben.",
+        "agentChecksRequest": "Berechtigung zur Änderungsprüfung prüfen"
       },
       "connections": {
         "confirmTitle": "Verbindungsadresse hinzufügen",
@@ -9911,6 +10069,49 @@
         "identity": "Verzeichnisidentität muss geprüft werden",
         "failed": "Bereinigung konnte nicht abgeschlossen werden",
         "pending": "In der Warteschlange"
+      },
+      "remote": {
+        "title": "Ausstehende Remote-Worktrees",
+        "description": "Unvollendete Remote-Worktrees blockieren neue Worktrees auf demselben Gerät, bis die Bereinigung gelingt oder du das Remote-Verzeichnis behältst.",
+        "storageUnreadable": "Das Bereinigungsprotokoll für Remote-Worktrees konnte nicht gelesen werden. Das Erstellen neuer Remote-Worktrees ist pausiert, bis der lokale Speicher wieder verfügbar ist.",
+        "sessionLabel": "Aufgabe {{id}}",
+        "keepUnblock": "Verzeichnis behalten & entsperren",
+        "confirmKeepTitle": "Remote-Worktree-Verzeichnis behalten und entsperren?",
+        "confirmKeepDescription": "Dadurch wird der lokale Bereinigungseintrag gelöscht, sodass du auf {{device}} wieder neue Worktrees erstellen kannst. Das Verzeichnis auf dem Remote-Gerät wird nicht gelöscht.",
+        "confirmKeepConfirm": "Behalten & entsperren",
+        "retrySuccess": "Remote-Worktree bereinigt.",
+        "keepSuccess": "Bereinigungseintrag gelöscht. Du kannst jetzt wieder neue Remote-Worktrees erstellen.",
+        "keepFailed": "Bereinigungseintrag konnte nicht gelöscht werden. Aktualisiere und versuche es erneut.",
+        "phase": {
+          "reserved": "Erstellung unbestätigt",
+          "precreated": "Wartet auf Bereinigung",
+          "session-create-started": "Aufgabenerstellung unbestätigt"
+        },
+        "failure": {
+          "offline": "Gerät nicht erreichbar oder Zeitüberschreitung",
+          "in-progress": "Erstellung oder Checkout läuft noch",
+          "preserved": "Vom Remote-Gerät behalten",
+          "mismatch": "Bereinigungsschlüssel stimmt nicht überein",
+          "unsupported": "Remote-Cindy-Version nicht unterstützt",
+          "create-started": "Wartet auf Bestätigung der Aufgabe",
+          "storage": "Lokales Protokoll nicht verfügbar",
+          "unknown": "Bereinigung konnte nicht abgeschlossen werden"
+        },
+        "preserveReason": {
+          "claimed": "Bereits von einer Aufgabe verwendet",
+          "in-progress": "Erstellung oder Checkout läuft noch",
+          "dirty": "Enthält nicht committete Änderungen",
+          "keep-sentinel": "Zum Behalten markiert (.worktree-keep)",
+          "live-reference": "Noch von einer anderen Aufgabe oder einem Prozess belegt",
+          "branch-mismatch": "Branch- oder Verzeichniszustand geändert",
+          "include-files-changed": "Lokale Konfigurationsdateien geändert",
+          "ignored-files": "Enthält nicht reproduzierbare ignorierte Dateien",
+          "ephemeral": "Verwaltetes Pool-Verzeichnis",
+          "pending-transfer": "Übertragung läuft",
+          "invalid-quarantine": "Ungültiger Quarantänezustand",
+          "quarantine-failed": "Verzeichnis konnte nicht isoliert werden",
+          "remove-failed": "Verzeichnis konnte nicht gelöscht werden"
+        }
       }
     },
     "awayFromComputer": {
@@ -10186,7 +10387,8 @@
       "INVALID_AUTH_CODE": "Autorisierung abgelaufen. Starte die Anmeldung erneut.",
       "INVALID_LOGIN_TICKET": "Die Anmeldesitzung ist abgelaufen. Starte erneut.",
       "INVALID_BIND_TICKET": "Die Bestätigungssitzung ist abgelaufen. Starte erneut.",
-      "REGION_MISMATCH": "Die Region des Anmeldedienstes stimmt nicht mit dieser App überein."
+      "REGION_MISMATCH": "Die Region des Anmeldedienstes stimmt nicht mit dieser App überein.",
+      "INVALID_SIGNUP_TICKET": "Die Registrierungsbestätigung ist abgelaufen. Melde dich erneut an."
     },
     "rateLimit": {
       "retryAt": "Versuche es nach {{time}} (Ortszeit) erneut.",
@@ -10194,6 +10396,15 @@
       "intro": "Der Anmeldedienst begrenzt vorübergehend die Anfragen. Dies ist unabhängig von einem lokalen Fehler beim Speichern der Zugangsdaten.",
       "guidance": "Warte, bevor du einen weiteren Code anforderst. Ein Neustart, eine Neuinstallation oder ein Netzwerkwechsel garantiert nicht, dass die Begrenzung aufgehoben wird.",
       "support": "Wenn das Problem nach dem Warten weiterhin besteht, sende die Protokolle vertraulich an feedback@cindy.app und gib dein Betriebssystem, die Cindy-Version, den Fehlerzeitpunkt und den unten stehenden Code an. Veröffentliche die Protokolle nicht."
+    },
+    "signup": {
+      "title": "Noch kein Cindy-Konto",
+      "subtitle": "{{target}} ist nicht bei Cindy registriert. Schon anders angemeldet? Geh zurück und wähle das.",
+      "subtitleSocial": "Dieses {{provider}}-Konto ist nicht bei Cindy registriert. Schon anders angemeldet? Geh zurück und wähle das.",
+      "create": "Neues Konto erstellen",
+      "createDescEmail": "Mit dieser E-Mail registrieren",
+      "createDescPhone": "Mit dieser Nummer registrieren",
+      "createDescSocial": "Mit diesem {{provider}}-Konto registrieren"
     }
   },
   "legalTermsUpdate": {
@@ -10312,6 +10523,7 @@
     "sessionCostLabel": "Sitzung {{cost}}",
     "codex": {
       "waiting": "Codex --",
+      "openAiApiLabel": "OpenAI API",
       "noUsageLabel": "Noch keine Nutzung",
       "noUsageDetail": "Für diese Sitzung wurde noch keine Nutzung erfasst.",
       "unavailableLabel": "Nutzung nicht verfügbar",
@@ -10747,7 +10959,6 @@
     "fileBrowser": {
       "noWorkdir": "Diese Sitzung hat kein lokales Arbeitsverzeichnis; der Dateibrowser ist nicht verfügbar",
       "filterPlaceholder": "Dateien filtern…",
-      "filterClear": "Filter löschen",
       "filterIndexing": "Projektdateien werden indiziert…",
       "filterNoMatch": "Keine passenden Dateien",
       "filterRgUnavailable": "ripgrep ist auf dem Remote-Gerät nicht installiert; Filtern nach Dateinamen ist nicht verfügbar",
@@ -11511,7 +11722,17 @@
         "enable": "Aktivieren",
         "enabled": "Aktiviert"
       },
-      "close": "Download-Dialog schließen"
+      "close": "Download-Dialog schließen",
+      "scanToLogin": "Mit der Cindy-App scannen und dieses Konto anmelden",
+      "approveTitle": "Anmeldung des Handys erlauben?",
+      "approveBody": "{{device}} meldet sich per Code an. Wenn du das nicht bist, tippe auf „Ablehnen“.",
+      "approveBodyUnknown": "Ein Handy meldet sich per Code an. Wenn du das nicht bist, tippe auf „Ablehnen“.",
+      "approve": "Erlauben",
+      "deny": "Ablehnen",
+      "loginApproved": "Handy angemeldet",
+      "loginDenied": "Anmeldung abgelehnt",
+      "qrExpired": "Der Code ist abgelaufen",
+      "qrRefresh": "Aktualisieren"
     },
     "localNetwork": {
       "title": "Zugriff auf lokales Netzwerk erlauben",
@@ -12036,6 +12257,17 @@
       "memberCount_other": "{{count}} Mitglieder",
       "nameLabel": "Gruppenname",
       "waitingConfirm": "{{name}} wartet auf dein Okay",
+      "assistantDevice": {
+        "title": "Die Gruppen-Cindy wartet, bis du einen Computer auswählst",
+        "onlyYou": "Nur für dich sichtbar",
+        "request": "„{{request}}“ startet, sobald du einen Computer auswählst.",
+        "requestUnknown": "Deine Anfrage startet, sobald du einen Computer auswählst.",
+        "requests_one": "{{count}} Anfrage wartet und startet, sobald du einen Computer auswählst.",
+        "requests_other": "{{count}} Anfragen warten und starten, sobald du einen Computer auswählst.",
+        "remember": "Deine weiteren Anfragen in dieser Gruppe nutzen denselben Computer. Du kannst ihn in den Gruppeneinstellungen ändern.",
+        "cancel": "Anfrage abbrechen",
+        "continue": "Weiter"
+      },
       "loadFailedTitle": "Dieser Gruppenchat konnte nicht geladen werden",
       "loadFailedDescription": "Cindy kann diesen Gruppenchat gerade nicht lesen. Versuch es erneut oder geh zurück zu den Freunden.",
       "unavailableTitle": "Dieser Gruppenchat ist nicht mehr verfügbar",
@@ -12147,6 +12379,8 @@
       },
       "notice": {
         "memberJoined": "{{name}} ist der Gruppe beigetreten",
+        "memberJoinedList": "{{names}} sind der Gruppe beigetreten",
+        "memberJoinedSummary": "{{names}} und {{others}} weitere sind der Gruppe beigetreten",
         "memberFailed": "{{name}} konnte diesmal nicht antworten",
         "memberTimeout": "{{name}} hat zu lange für die Antwort gebraucht und wurde diesmal übersprungen",
         "memberUnavailable": "{{name}} ist nicht verfügbar und hat diesmal nicht gesprochen",
@@ -12176,6 +12410,9 @@
           "GROUP_AUTHORIZATION_REQUIRED": "{{name}} konnte dieses Werkzeug nicht ausführen: Die Gruppenberechtigung ist abgelaufen oder erlaubt diese Aktion nicht. Der Besitzer des Freundes kann die Anfrage in dieser Gruppe erneut stellen.",
           "GROUP_AUTHORIZATION_UNAVAILABLE": "Die Gruppenberechtigung für {{name}} konnte nicht überprüft werden. Dieses Werkzeug wurde daher nicht ausgeführt. Versuche es erneut, sobald die Verbindung wiederhergestellt ist.",
           "ATTACHMENTS_UNAVAILABLE": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers oder der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
+          "ATTACHMENTS_DOWNLOAD_FAILED": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
+          "ATTACHMENTS_LIMIT_REACHED": "Einige Anhänge wurden {{name}} wegen der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
+          "ATTACHMENTS_DOWNLOAD_FAILED_AND_LIMIT_REACHED": "Einige Anhänge wurden {{name}} wegen eines Downloadfehlers und der maximalen Anzahl an Anhängen nicht übermittelt. Sende die für diese Anfrage benötigten Anhänge erneut.",
           "GROUP_ASSISTANT_UNAVAILABLE": "{{name}}, verbinde dein Cindy, damit Cindy für dich arbeiten kann (gerade ist kein Cindy von dir online).",
           "GROUP_ASSISTANT_DEVICE_REQUIRED": "{{name}}, wähle einen Computer für diese Gruppe, um die Anfrage fortzusetzen.",
           "GROUP_ASSISTANT_DEVICE_OFFLINE": "Der von {{name}} für diese Gruppe gewählte Computer ist offline."
@@ -12218,9 +12455,12 @@
         "projectDirClear": "Ordner entfernen",
         "projectDirNote": "Wähle ein vorhandenes Projekt auf diesem Computer. Ohne Auswahl wird das passende Repository-Projekt oder das Projekt des ausführenden Begleiters verwendet. Für die Arbeitsteilung mit Git wird ein eigener Worktree angelegt.",
         "autoContinueSaveFailed": "Die Schrittübergabe konnte nicht gespeichert werden. Versuch es erneut.",
+        "projectDirNotRegistered": "Füge diesen Ordner in Cindy als Projekt hinzu und wähle ihn erneut aus.",
         "projectDirSaveFailed": "Der Projektordner konnte nicht gespeichert werden. Prüfe, ob der Ordner noch vorhanden ist, und versuch es erneut.",
         "allowMemberInvites": "Alle Mitglieder dürfen Freunde einladen",
         "allowMemberInvitesHint": "Wenn aktiviert, dürfen alle beigetretenen Mitglieder Freunde einladen. Nur Gruppeninhaber und Admins können dies ändern.",
+        "allowMemberMentionAll": "Allen Mitgliedern @Alle erlauben",
+        "allowMemberMentionAllHint": "Wenn aktiviert, können alle Mitglieder @Alle verwenden; sonst nur Gruppeninhaber und Admins. Nur Gruppeninhaber und Admins können dies ändern.",
         "allowMentionAllBots": "@Alle Freunde erlauben",
         "allowMentionAllBotsHint": "Nur der Gruppeninhaber kann dies ändern. Alle Freunde können antworten; in großen Gruppen mit Bedacht verwenden. KI-Antworten in deinem Namen sind davon unabhängig."
       },
@@ -12252,6 +12492,7 @@
         "groupDissolved": "Diese Gruppe wurde aufgelöst. Du kannst den verfügbaren Verlauf weiterhin lesen.",
         "lastOwner": "Übertrage die Inhaberschaft oder löse diese Gruppe auf, bevor du sie verlässt.",
         "allBotsMentionDisabled": "Der Gruppeninhaber hat @Alle Freunde noch nicht aktiviert.",
+        "allHumansMentionForbidden": "Nur der Gruppeninhaber und Admins können @Alle verwenden.",
         "turnAlreadyStarted": "Dieser Freund hat bereits begonnen und kann nicht übersprungen werden"
       },
       "organizer": "Organisator",
@@ -12327,6 +12568,8 @@
         "threadNew": "Neue Nachrichten im Thread",
         "replyingTo": "Antwort an „{{name}}“: {{text}}",
         "filesOutsideWorkingDir": "Dateien außerhalb des Arbeitsverzeichnisses wurden nicht angehängt.",
+        "modelFallback": "Das ausgewählte Modell ist auf diesem Computer nicht verfügbar, daher antwortet diesmal {{model}}.",
+        "modelFallbackUnnamed": "Das ausgewählte Modell ist auf diesem Computer nicht verfügbar, daher antwortet diesmal ein hier verfügbares Modell.",
         "earlierOmitted": "(Ältere Nachrichten ausgelassen)",
         "actingFor": "{{name}} · für {{person}}",
         "checkout": {
@@ -12407,13 +12650,40 @@
           "unfollowTip": "Nicht mehr folgen: Du wirst nur benachrichtigt, wenn dich jemand erwähnt",
           "listLabel": "Threads in diesem Gruppenchat",
           "listNews": "Neue Antworten",
-          "listOthers": "Andere Threads",
-          "newSeparator": "Neue Antworten"
+          "newSeparator": "Neue Antworten",
+          "openIndex": "Threads",
+          "indexTitle": "Threads",
+          "backToList": "Zurück zu Threads",
+          "filterAria": "Threads filtern",
+          "filterMine": "Für mich",
+          "filterAll": "Alle",
+          "searchPlaceholder": "Threads, Antworten oder Mitglieder suchen",
+          "clearSearch": "Suche löschen",
+          "listRecent": "Zuletzt",
+          "indexParticipatedTag": "Beteiligt",
+          "indexMentionedTag": "Erwähnt",
+          "locateInGroup": "Im Gruppenchat zeigen",
+          "indexEmptyMine": "Noch keine Threads mit deiner Beteiligung oder Erwähnung",
+          "indexEmptyAll": "Noch keine Threads in dieser Gruppe",
+          "indexEmptySearch": "Keine passenden Threads",
+          "viewAllThreads": "Alle Threads anzeigen",
+          "syncingHistory": "Ältere Threads werden geladen…",
+          "rootKind": {
+            "task": "Aufgabe",
+            "image": "Bild",
+            "video": "Video",
+            "audio": "Audio",
+            "file": "Datei",
+            "share": "Geteilte Antwort",
+            "card": "Karte"
+          }
         },
         "replyPlaceholder": "Antworte auf diese Nachricht; mit @ erwähnst du einen Freund…",
         "sendReply": "Antwort senden",
+        "moreReactions": "Weitere Reaktionen",
         "addReaction": "Reaktion hinzufügen",
         "reactionCount": "{{emoji}} · {{count}} Reaktionen",
+        "reactionTotal": "{{emoji}} · {{count}} Reaktionen",
         "reactionWho": "{{emoji}} · {{count}} Reaktionen: {{names}}",
         "reactorSelf": "Du",
         "reactorFormer": "{{name}} (nicht mehr in der Gruppe)",
@@ -12537,6 +12807,7 @@
           "accessNone": "Nur Inhaber",
           "accessChat": "Nur Gruppenchat",
           "accessTools": "Kann Tools und Informationen nutzen",
+          "memberPermissions": "Mitgliederberechtigungen",
           "replies": "Antwortverhalten der Freunde",
           "replyModeMentionedNote": "Freunde bleiben still, solange sie niemand mit @ erwähnt.",
           "assistant": "Gruppen-Cindy",
@@ -12620,7 +12891,19 @@
         "failed": "Diese Aktion konnte nicht abgeschlossen werden. Versuche es erneut.",
         "lastOwner": "Übertrage die Inhaberschaft oder löse diese Gruppe auf, bevor du sie verlässt."
       },
-      "externalBadge": "Extern"
+      "externalBadge": "Extern",
+      "links": {
+        "kind": {
+          "pull": "Pull Request",
+          "issue": "Issue",
+          "discussion": "Diskussion",
+          "commit": "Commit",
+          "file": "Datei",
+          "folder": "Ordner",
+          "release": "Release",
+          "repo": "Repository"
+        }
+      }
     },
     "joined": {
       "today": "Heute beigetreten",
@@ -13168,7 +13451,11 @@
         "unbound": "Lass {{name}} deine Fragen an den offiziellen Bot @askmycindy übernehmen.",
         "managed": "Ein Freund übernimmt X-Fragen. Ändere die Zuweisung in den Nachrichtenplattform-Einstellungen dieses Freundes.",
         "riskBody": "Fragen über X nutzen den gemeinsamen Speicher, die Tools und den Arbeitsbereich des Freundes. Antworten sind öffentlich. Nutze X nicht für private Informationen. Der X-Thread greift nicht direkt auf deinen privaten Chatverlauf zu."
-      }
+      },
+      "handedOver": "{{apps}}: In den Einstellungen antwortet {{name}} hier.",
+      "handedOverSeparator": ", ",
+      "manageInSettings": "In den Einstellungen verwalten",
+      "handedOverHint": "Unten hinzugefügte Bots gehören ausschließlich {{name}} und sind von den Bots in den Einstellungen getrennt."
     },
     "voiceMode": {
       "realtime": {
@@ -13347,6 +13634,7 @@
   },
   "commonUi": {
     "retry": "Erneut versuchen",
+    "clearSearch": "Suche leeren",
     "listSeparator": ", ",
     "crossAgentConvert": {
       "asking": {
@@ -13868,7 +14156,8 @@
         },
         "companion": {
           "retryLater": "bitte versuche es später noch einmal"
-        }
+        },
+        "membersPaused": "Fragen von Mitgliedern pausieren, bis der Besitzer zurück ist 🙈"
       },
       "hook": {
         "interaction": {
@@ -14867,6 +15156,12 @@
       "discoveredCopy": {
         "unavailableHere": "{{provider}} auf diesem Computer ist gerade nicht verfügbar.",
         "unavailableOn": "{{provider}} auf „{{device}}“ ist gerade nicht verfügbar."
+      },
+      "preparation": {
+        "pending": "Nächste Nachricht",
+        "preparing": "Wird vorbereitet…",
+        "failed": "Wechsel fehlgeschlagen",
+        "usingPrevious": "Diese Nachricht verwendet {{actual}}; {{target}} ist noch nicht bereit."
       }
     },
     "permissionSelector": {
@@ -15156,6 +15451,7 @@
       },
       "credentialSwitchDeferred": "Modellanbieter gewechselt — wird nach Abschluss der aktuellen Aufgabe wirksam.",
       "effortRuntimeDirty": "Die Denkintensität wird noch aktualisiert. Warte kurz und sende dann erneut.",
+      "tooManyTaskReferences": "Pro Nachricht sind bis zu {{max}} Aufgabenverweise möglich. Entferne die überzähligen Links.",
       "steerNotSent": "Nachricht nicht gesendet. Das Einbringen ist vorübergehend nicht verfügbar; dein Entwurf wurde beibehalten.",
       "credentialSwitchApplied": "Der Wechsel des Modellanbieters ist jetzt wirksam.",
       "credentialSwitchFailed": "Wechsel des Modellanbieters fehlgeschlagen. Wähle das Modell erneut.",
@@ -15365,6 +15661,7 @@
         "diverged": "Der lokale und der entfernte Branch haben unterschiedliche Änderungen. Kläre diese Unterschiede vor dem Wechsel.",
         "missing": "Der ausgewählte Branch existiert nicht mehr. Aktualisiere die Liste.",
         "git": "Der Vorgang konnte nicht abgeschlossen werden. Prüfe den aktuellen Branch und gespeicherte Änderungen und versuche es erneut",
+        "timeout": "Zeitüberschreitung beim Prüfen des Git-Status. Große Repositories oder viele nicht übernommene Änderungen können zu lange dauern. Bereinige die Änderungen oder verwende worktree.",
         "savedMissing": "Diese gespeicherten Änderungen sind nicht mehr verfügbar",
         "undoUnavailable": "Dieser Branch-Wechsel lässt sich nicht mehr rückgängig machen"
       },
@@ -15648,7 +15945,8 @@
       "runningFor": "Läuft seit {{duration}}",
       "startedAt": "Gestartet um {{time}}",
       "recentOutput": "Letzte Ausgabe · vor {{time}} aktualisiert",
-      "noOutputYet": "Noch keine Ausgabe"
+      "noOutputYet": "Noch keine Ausgabe",
+      "recentActivity": "Letzte Aktivität"
     },
     "planPill": {
       "step": "Schritt {{current}} von {{total}}",
@@ -16178,7 +16476,30 @@
       },
       "status": {
         "running": "Wird ausgeführt",
-        "done": "Abgeschlossen"
+        "done": "Abgeschlossen",
+        "failed": "Fehlgeschlagen"
+      },
+      "collab": {
+        "wait": "Auf Subagent warten",
+        "waitCount_one": "Auf {{count}} Subagent warten",
+        "waitCount_other": "Auf {{count}} Subagents warten",
+        "sendInput": "Anweisungen an Subagent senden",
+        "sendInputCount_one": "Anweisungen an {{count}} Subagent senden",
+        "sendInputCount_other": "Anweisungen an {{count}} Subagents senden",
+        "resume": "Subagent fortsetzen",
+        "resumeCount_one": "{{count}} Subagent fortsetzen",
+        "resumeCount_other": "{{count}} Subagents fortsetzen",
+        "close": "Subagent schließen",
+        "closeCount_one": "{{count}} Subagent schließen",
+        "closeCount_other": "{{count}} Subagents schließen",
+        "spawn": "Subagent starten",
+        "spawnCount_one": "{{count}} Subagent starten",
+        "spawnCount_other": "{{count}} Subagents starten",
+        "targets": "Ziele: {{targets}}",
+        "targetCount_one": "Ziele: {{count}} Subagent",
+        "targetCount_other": "Ziele: {{count}} Subagents",
+        "prompt": "Anweisung: {{prompt}}",
+        "model": "Modell: {{model}}"
       }
     },
     "systemCard": {
@@ -17113,6 +17434,22 @@
       "piRemoteUnsupported": "Pi läuft nur lokal und kann keine SSH-Remotehosts nutzen. Wechsle zu Claude oder Codex, um diesen Host zu nutzen.",
       "localWorktreeCleanupPending": "Die vorherige lokale Worktree-Sitzung wartet noch auf die Bereinigung. Versuche es erneut, sobald die Bereinigung abgeschlossen ist.",
       "remoteWorktreeCleanupPending": "Der vorherige Remote-Worktree wartet noch auf die Bereinigung. Verbinde das Gerät erneut und versuche es noch einmal.",
+      "remoteWorktreeCleanupOpenSettings": "Worktree-Bereinigung",
+      "remoteWorktreeCleanup": {
+        "inProgress": "Der vorherige Remote-Worktree wird noch erstellt oder ausgecheckt. Warte kurz und versuche es erneut oder verwalte ihn unter Einstellungen → Speicher.",
+        "preserved": "Das Remote-Gerät hat den vorherigen Worktree behalten (möglicherweise geändert oder noch in Verwendung). Wiederhole den Vorgang oder entsperre ihn unter Einstellungen → Speicher.",
+        "preservedDirty": "Das Remote-Gerät hat den vorherigen Worktree wegen nicht committeter Änderungen behalten. Prüfe ihn dort oder entsperre ihn unter Einstellungen → Speicher.",
+        "preservedKeepSentinel": "Das Remote-Gerät hat den vorherigen Worktree behalten, weil er als zu behalten markiert ist (.worktree-keep). Verwalte ihn unter Einstellungen → Speicher.",
+        "preservedLiveReference": "Das Remote-Gerät hat den vorherigen Worktree behalten, weil eine andere Aufgabe oder ein Prozess ihn noch nutzt. Wiederhole den Vorgang oder entsperre ihn unter Einstellungen → Speicher.",
+        "preservedBranchMismatch": "Das Remote-Gerät konnte den Branch- oder Verzeichniszustand des vorherigen Worktrees nicht prüfen. Wiederhole den Vorgang oder entsperre ihn unter Einstellungen → Speicher.",
+        "preservedIncludeFilesChanged": "Das Remote-Gerät hat den vorherigen Worktree behalten, weil lokale Konfigurationsdateien geändert wurden. Wiederhole den Vorgang oder entsperre ihn unter Einstellungen → Speicher.",
+        "preservedIgnoredFiles": "Das Remote-Gerät hat den vorherigen Worktree behalten, weil er nicht reproduzierbare ignorierte Dateien enthält. Wiederhole den Vorgang oder entsperre ihn unter Einstellungen → Speicher.",
+        "preservedRemoveFailed": "Das Remote-Gerät konnte das vorherige Worktree-Verzeichnis nicht entfernen. Prüfe Berechtigungen oder geöffnete Dateien dort oder entsperre es unter Einstellungen → Speicher.",
+        "mismatch": "Das Remote-Gerät hat den Bereinigungsschlüssel des Worktrees abgelehnt. Wiederhole den Vorgang oder entsperre ihn unter Einstellungen → Speicher.",
+        "unsupported": "Die Cindy-Version auf dem Remote-Gerät unterstützt keine automatische Worktree-Bereinigung. Aktualisiere Cindy dort oder entsperre den Vorgang unter Einstellungen → Speicher.",
+        "createStarted": "Die Erstellung der vorherigen Remote-Aufgabe wurde nicht bestätigt. Verbinde das Gerät zur Prüfung erneut oder entsperre sie unter Einstellungen → Speicher.",
+        "storage": "Der lokale Eintrag für die Remote-Worktree-Bereinigung konnte nicht gelesen oder geschrieben werden. Prüfe Einstellungen → Speicher."
+      },
       "remoteProviderUpdating": "Die Zugangsdaten des Anbieters werden aktualisiert – versuch es gleich erneut",
       "remoteProviderUnsupported": "Dieser Anbieter wird in SSH-Remote-Sitzungen nicht unterstützt – wähle eine andere Quelle",
       "remoteNativeOauthUnavailable": "Remote-Aufgaben können kein Claude-Abonnement nutzen – wähle ein Gateway- oder API-Schlüssel-Modell",
@@ -17143,9 +17480,6 @@
     },
     "sidebar": {
       "machineSwitcher": {
-        "addCloud": "Cloud-Computer hinzufügen",
-        "preparingCloud": "Cloud-Computer wird vorbereitet",
-        "manageCloud": "Cloud-Computer verwalten",
         "allMachines": "Alle",
         "localMachine": "Lokal",
         "connecting": "Verbindung wird hergestellt…",
@@ -17203,6 +17537,8 @@
       "organizeSidebar": "Seitenleisteneinstellungen",
       "filterAllText": "alle",
       "filterSelectedProjects": "{{count}} ausgewählt",
+      "filterSelectedHarnesses": "{{count}} ausgewählt",
+      "filterVendorPluginHeading": "Aus Plugins",
       "filterStatus": {
         "active": "Aktiv",
         "archived": "Archiviert",
@@ -17212,7 +17548,8 @@
         "all": "Alle",
         "cc": "Claude Code",
         "codex": "Codex",
-        "pi": "Pi"
+        "pi": "Pi",
+        "acp": "Plugin-Engine"
       },
       "filterGroupBy": {
         "project": "Projekt",
@@ -17220,6 +17557,11 @@
         "device": "Gerät",
         "dialogue": "Chat",
         "automation": "Automatisierung"
+      },
+      "filterGroupByHint": {
+        "device": "Äußerste Ebene",
+        "dialogue": "Sitzungen ohne Projekt",
+        "automation": "Automatisierungsläufe"
       },
       "filterGroupByDeviceManualTip": "Bei manueller Sortierung ist die Gruppierung nach Gerät nicht verfügbar",
       "deviceGroup": {
@@ -17251,6 +17593,11 @@
       "filterSortByTip": {
         "priority": "Zuerst auf dich wartende, dann ungelesene, dann laufende, dann nach Zeit"
       },
+      "filterSortByHint": {
+        "priority": "Wartet auf dich zuerst",
+        "activity": "Zuletzt aktiv zuerst",
+        "created": "Neueste zuerst"
+      },
       "filterStatusHeading": "Status",
       "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "Letzte Aktivität",
@@ -17265,9 +17612,17 @@
       "filterProjectOrderTip": {
         "custom": "Ziehe Projektzeilen mit der Maus, um sie neu anzuordnen. Sitzungen darin folgen weiterhin der obigen Sortierung."
       },
+      "filterProjectOrderHint": {
+        "custom": "Projektzeilen ziehen"
+      },
       "filterCreatorsHeading": "Freunde",
       "filterCreatorsAny": "Alle",
-      "filterHideAutomations": "Automatisierte Aufgaben ausblenden",
+      "hideHeading": "Ausblenden",
+      "hideOptions": {
+        "automations": "Automatisierte Aufgaben",
+        "taskCreated": "Von anderen Aufgaben erstellte Aufgaben",
+        "teammates": "Aufgaben von Freunden"
+      },
       "filterCreatorsNone": "Alle ausblenden",
       "filterSelectedCreators": "{{count}} ausgewählt",
       "filterProjectsHeading": "Projekte",
@@ -17290,6 +17645,10 @@
         "openWorktree": "Worktree-Ordner öffnen",
         "tokens": "Tokens",
         "cost": "Kosten"
+      },
+      "taskInfoSection": {
+        "identity": "Sitzungskennzeichen",
+        "meta": "Details rechts · in Auswahlreihenfolge"
       },
       "taskInfoTip": {
         "tokens": "Tokens gesamt",
@@ -17371,7 +17730,15 @@
         "scheduleName": "“{{name}}”",
         "scheduleNameSeparator": ", ",
         "confirm": "Bestätigen",
-        "cancel": "Abbrechen"
+        "cancel": "Abbrechen",
+        "deleteSchedules_one": "Verknüpfte Automatisierung löschen",
+        "deleteSchedules_other": "Verknüpfte Automatisierungen löschen",
+        "deleteScheduleWarning_one": "Die verknüpfte Automatisierung {{names}} wird gelöscht und kann nicht wiederhergestellt werden.",
+        "deleteScheduleWarning_other": "Die verknüpften Automatisierungen {{names}} werden gelöscht und können nicht wiederhergestellt werden.",
+        "deleteSchedulesAndArchive": "Löschen und archivieren",
+        "discardDeleteAndArchive": "Verwerfen, löschen und archivieren",
+        "deleteScheduleFailed_one": "Aufgabe archiviert, aber die verknüpfte Automatisierung konnte nicht gelöscht werden. Bitte unter Automatisierungen löschen.",
+        "deleteScheduleFailed_other": "Aufgabe archiviert, aber {{count}} verknüpfte Automatisierungen konnten nicht gelöscht werden. Bitte unter Automatisierungen löschen."
       },
       "dialogueAction": {
         "search": "Diese Chatgruppe durchsuchen",
@@ -17505,6 +17872,8 @@
         "moveToProjectRemoteUnsupported": "Das Verschieben von Remote-Sitzungen wird noch nicht unterstützt",
         "moveToProjectWorktreeBlocked": "Das Arbeitsverzeichnis dieser Aufgabe ist ein Worktree. Sie kann daher noch nicht in ein anderes Projekt verschoben werden.",
         "openInNewWindow": "In neuem Fenster öffnen",
+        "openInNewWindowShortcutMac": "⌘+Klick",
+        "openInNewWindowShortcutOther": "Strg+Klick",
         "exportShare": "Sitzung exportieren…",
         "exportHtml": "Als HTML exportieren…",
         "exportHtmlSuccess": "Sitzung als HTML exportiert",
@@ -17635,7 +18004,14 @@
         "tasks": "Aufgabenliste",
         "inbox": "Posteingang",
         "enterInbox": "Zum Posteingangsmodus wechseln",
-        "leaveInbox": "Zum Aufgabenlistenmodus wechseln"
+        "leaveInbox": "Zum Aufgabenlistenmodus wechseln",
+        "inboxTips": "Tipps zum Posteingang"
+      },
+      "origin": {
+        "createdByTask": "Von einer anderen Aufgabe geöffnet",
+        "createdByTaskNamed": "Von Aufgabe „{{title}}“ geöffnet",
+        "createdByRemoteTask": "Von einer Aufgabe auf {{device}} geöffnet",
+        "createdByRemoteTaskNamed": "Von „{{title}}“ auf {{device}} geöffnet"
       }
     },
     "rename": {
@@ -17656,7 +18032,9 @@
       "orcaRemoteLead": "Zusammenarbeit von {{device}}",
       "orcaRemoteLeadReleased": "Zusammenarbeit beendet · von {{device}}",
       "orcaRemoteLeadUnknownDevice": "einem anderen Computer",
-      "orcaRemoteLeadTip": "Ein Worker für „{{lead}}“ auf {{device}}. Seine Aufgabe, sein Ordner und seine Befehle werden auf diesem Computer ausgeführt. Nachrichten, die du hier sendest, werden nicht an den Lead weitergegeben."
+      "orcaRemoteLeadTip": "Ein Worker für „{{lead}}“ auf {{device}}. Seine Aufgabe, sein Ordner und seine Befehle werden auf diesem Computer ausgeführt. Nachrichten, die du hier sendest, werden nicht an den Lead weitergegeben.",
+      "createdByTask": "Aus anderer Aufgabe",
+      "createdByTaskNamed": "Aus „{{title}}“"
     },
     "gitContext": {
       "detached": "Detached HEAD",
@@ -18108,6 +18486,7 @@
     "ultra": "Ultra"
   },
   "scheduler": {
+    "billingWait": "Guthaben oder Abonnement noch nicht wieder verfügbar. Sende nach der Wiederherstellung über diese Verbindung eine Nachricht, damit geplante Aufgaben fortgesetzt werden.",
     "prTrigger": {
       "fallback": "Ohne GitHub-App-Benachrichtigungen wird weiterhin regelmäßig geprüft.",
       "label": "PR / MR",
@@ -18311,7 +18690,11 @@
       "openWorkdirFailed": "Ordner konnte nicht geöffnet werden"
     },
     "runs": {
-      "boundPluginEngineRecovery": "Die Automatisierung wurde nicht ausgeführt. Eine Automatisierung, die mit einer Aufgabe auf einer Plug-in-Engine verknüpft ist, nutzt das Modell der Aufgabe und läuft auf diesem Computer. Wenn in der Automatisierung ein Modell gewählt ist, entferne es und führe sie erneut aus.",
+      "boundPluginEngineRecovery": "Die Automatisierung konnte nicht mit der Plug-in-Engine ausgeführt werden. Öffne die Fehlerdetails, um den Grund zu prüfen.",
+      "boundPluginEngineSshRecovery": "SSH-Aufgaben müssen ihre aktuelle Engine beibehalten. Verknüpfe die Automatisierung mit einer kompatiblen Aufgabe ohne SSH, um eine Plug-in-Engine zu verwenden.",
+      "boundPluginEngineSelectionLocationRecovery": "Die Automatisierung kann am gewählten Standort der Plug-in-Engine nicht ausgeführt werden. Wähle in den Modelleinstellungen der Automatisierung eine Engine auf einem unterstützten Computer.",
+      "boundPluginEngineTaskLocationRecovery": "Die Automatisierung kann am Standort der Plug-in-Engine der verknüpften Aufgabe nicht ausgeführt werden. Verschiebe die Engine der Aufgabe auf einen unterstützten Computer oder verknüpfe eine kompatible Aufgabe.",
+      "boundPluginEngineModelRecovery": "Die Modelleinstellungen der Automatisierung passen nicht zur Plug-in-Engine der verknüpften Aufgabe. Stelle die Automatisierung so ein, dass sie das Modell der Aufgabe verwendet.",
       "queueWaitTimeoutRecovery": "Die Wartezeit ist abgelaufen, bevor die Eingabe gesendet wurde. Sobald die Zielsitzung frei ist, wähle {{action}}, um sie auszuführen.",
       "status": {
         "running": "Wird ausgeführt",
@@ -19045,6 +19428,24 @@
         "reconnectFailed": "Verbindung fehlgeschlagen. Verfügbare Plätze prüfen und erneut versuchen."
       },
       "pluginTitle": "Plugin-Ereignis-Auslöser"
+    },
+    "pause": {
+      "prBarTitle": "{{count}} pausierte PR-Nachverfolgungen",
+      "viewPaused": "Anzeigen",
+      "resumeAll": "Alle fortsetzen",
+      "cleanMerged": "Gemergte bereinigen",
+      "checking": "Prüfe…",
+      "resumeAllConfirmTitle": "{{count}} pausierte PR-Nachverfolgungen fortsetzen?",
+      "resumeAllConfirmDescription": "Setzt alle pausierten PR-Automatisierungen in dieser Ansicht fort und berechnet ihre nächste geplante Prüfung neu.",
+      "resumeAllConfirmAction": "Alle fortsetzen",
+      "resumeAllDone": "{{count}} PR-Nachverfolgungen fortgesetzt",
+      "resumeAllPartial": "{{resumed}} PR-Nachverfolgungen fortgesetzt ({{failed}} fehlgeschlagen)",
+      "noMergedFound": "Keine gemergten oder geschlossenen PRs unter den pausierten Automatisierungen gefunden",
+      "cleanMergedConfirmTitle": "{{count}} abgeschlossene PR-Automatisierungen löschen?",
+      "cleanMergedConfirmDescription": "Diese pausierten Automatisierungen verfolgen PRs, die bereits gemergt oder geschlossen sind: {{names}}",
+      "cleanMergedConfirmAction": "Löschen",
+      "cleanMergedDone": "{{count}} abgeschlossene PR-Automatisierungen gelöscht",
+      "checkFailed": "PR-Status kann derzeit nicht geprüft werden"
     }
   },
   "issueTracker": {
@@ -22406,6 +22807,9 @@
     "send": "Nachricht senden",
     "sending": "Wird gesendet…",
     "sent": "Eingereicht",
+    "sendTooManyArguments": "Diese Nachricht verarbeitet mehr als {{limit}} Einträge in einem Schritt. Bitte den Assistenten, sie in kleinere Gruppen aufzuteilen.",
+    "sendValueUnavailable": "Ein Wert für diese Nachricht ist nicht verfügbar. Bitte den Assistenten, die Formularfelder zu prüfen.",
+    "sendTextUnavailable": "Die Nachricht konnte nicht zum Senden vorbereitet werden.",
     "sendFailed": "Die Nachricht wurde nicht gesendet. Deine Eingaben sind noch da.",
     "playVideo": "Video abspielen",
     "openVideoSource": "Originalvideo öffnen",
@@ -23180,7 +23584,10 @@
       "mergedLabel_one": "{{name}} · Route ({{count}} Quelle)",
       "mergedLabel_other": "{{name}} · Route ({{count}} Quellen)",
       "routeDecides": "Die Route „{{name}}“ bestimmt, welche Quelle diese Aufgabe nutzt",
-      "quotaOf": "Kontingent: {{name}}"
+      "quotaOf": "Kontingent: {{name}}",
+      "managedBy": "Verwaltet von „{{name}}“",
+      "detach": "Lösen",
+      "detached": "Vom smarten Routing gelöst. Das aktuelle Modell bleibt aktiv."
     },
     "why": {
       "expiringQuota": "Noch {{left}} % Kontingent, Zurücksetzung am {{reset}} – daher zuerst",
@@ -23218,11 +23625,17 @@
       "newRoute": "Neue Route",
       "newRouteName": "Neue Route",
       "routesEmpty": "Noch keine Routen. Erstelle eine und füge mehrere Quellen hinzu.",
-      "scopeNote": "Smartes Routing gilt für Aufgaben auf diesem Computer. Eine neue Aufgabe wählt beim Start eine Quelle. Wählst du eine Route in einer laufenden Aufgabe, wird sofort einmal gewechselt; danach wechselt sie nicht von selbst.",
+      "scopeNote": "Smartes Routing verwaltet Aufgaben auf diesem Computer und unterstützten Einstiegspunkten dauerhaft. Einmal beim Start oder mittendrin gewählt, prüft es vor jeder Runde Verfügbarkeit und Kontingent, wechselt bei Bildern auf eine bildfähige Quelle, schützt warme Caches und übernimmt bei Fehlern, bis du es löst oder ein konkretes Modell wählst.",
       "back": "Zurück zum smarten Routing",
       "name": "Name",
       "nameHint": "Wird in der Modellauswahl angezeigt.",
-      "routeShownAs": "Wird in der Modellauswahl unter „Smartes Routing“ angezeigt.",
+      "routeType": "Routentyp",
+      "routeTypeModel": "Modellroute",
+      "routeTypeProvider": "Anbieterroute",
+      "switchTypeConfirmTitle": "Routentyp wechseln?",
+      "switchTypeConfirmDescription": "Bereits hinzugefügte Quellen werden entfernt. Name, Auswahlregel und Ausnahmen bleiben erhalten.",
+      "switchTypeConfirmTargetWarning": "Zeitregeln anderer Routen, die auf diese Route verweisen, werden ebenfalls entfernt.",
+      "switchTypeConfirmAction": "Typ wechseln",
       "pick": "Welche verwendet wird",
       "moreStrategies": "Weitere Optionen",
       "effort": "Denkintensität",
@@ -23232,11 +23645,10 @@
       "weightAria": "Gewichtung für „{{name}}“",
       "weightHint": "Bei „Nach Gewichtung“ erhält eine höhere Gewichtung mehr neue Aufgaben. 1–1000.",
       "sources": "Nutzbare Quellen",
-      "sourcesHint": "Verschiedene Modelle können nebeneinander stehen. Die Aufgabe zeigt, welches verwendet wurde.",
-      "sourcesEmpty": "Noch keine Quellen. Füge unten ein verbundenes Modell hinzu.",
+      "sourcesEmpty": "Verschiedene Modelle können nebeneinander stehen · Die Aufgabe zeigt, welches verwendet wurde · Unten ein verbundenes Modell hinzufügen",
       "sourcesEmptyMerged": "Noch keine Quellen. Füge unten einen verbundenen Anbieter hinzu.",
       "sourcesFull": "Eine Route fasst bis zu {{count}} Quellen.",
-      "addSource": "Quelle hinzufügen",
+      "addSource": "Modellroute hinzufügen",
       "chooseModel": "Modell auswählen",
       "notConnected": "Nicht verbunden",
       "moveUp": "Nach oben",
@@ -23320,10 +23732,9 @@
       "note": "Automatische Routen folgen deinen verbundenen Anbietern. Mitglieder lassen sich nicht hinzufügen oder entfernen, aber du kannst sie umsortieren, Gewichte festlegen, einzelne ausschalten, die Strategie ändern oder die Route ausblenden.",
       "providers_one": "{{count}} Anbieter",
       "providers_other": "{{count}} Anbieter",
-      "addWhole": "Ganzen Anbieter hinzufügen",
+      "addWhole": "Anbieterroute hinzufügen",
       "addWholeHint": "Alle seine Modelle gehören dann zu dieser Route. In der Modellauswahl verhält sich die Route wie ein Anbieter: Wähle wie gewohnt ein Modell, und die Route entscheidet, welches Mitglied es ausführt.",
-      "addModelHint": "Füge ein Modell eines Anbieters hinzu. Wird diese Route gewählt, nimmt sie eine dieser Quellen nach ihrer Strategie.",
-      "detailHint": "Diese Route fasst ganze Anbieter zusammen. In der Modellauswahl verhält sie sich wie ein Anbieter: Wähle Modell und Denkintensität wie gewohnt, und die Route entscheidet, welches Mitglied es ausführt."
+      "addModelHint": "Füge ein Modell eines Anbieters hinzu. Wird diese Route gewählt, nimmt sie eine dieser Quellen nach ihrer Strategie."
     },
     "kinds": {
       "byModel": "Nach Modell",
@@ -23348,6 +23759,11 @@
       "deviceDefaultReadOnly": "Aktualisiere diesen Computer, um sein Standardmodell hier zu ändern.",
       "deviceUnavailable": "Die Buddy-Einstellungen dieses Computers können gerade nicht gelesen werden. Prüfe, ob er online ist, und öffne sie erneut.",
       "deviceLoading": "Einstellungen dieses Computers werden gelesen …"
+    },
+    "turnSwitch": {
+      "preflightUnavailable": "Aktuelle Quelle nicht verfügbar oder Kontingent erschöpft; vor dem Senden gewechselt",
+      "imageInput": "Nachricht enthält Bilder; auf eine bildfähige Quelle gewechselt",
+      "cacheExpired": "Prompt-Cache abgelaufen; Quelle nach Routenstrategie neu gewählt"
     }
   },
   "projectSettings": {

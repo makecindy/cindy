@@ -1,3 +1,5 @@
+import { scheduledBillingHold, rejectScheduledBilling, claimScheduledBillingNotice } from './billingHolds.js';
+import { isGrokBillingRejection } from '../../shared/usageLimitRecovery.js';
 import type { SessionRowSnapshot } from '../localDb/sessionDispatchSnapshot.js';
 import { primaryHostTargetIsRemote, skipPrimaryHostRun } from './pluginAutomationHostGuard.js';
 import { projectForScheduledTask, type ScheduleProjectLookup } from './scheduleProject.js';
@@ -96,13 +98,14 @@ import {
 import { setSessionEffort, setSessionFastMode } from '../maker-host/session-effort-store.js';
 import {
   CredentialModeSwitchBusyError,
+  crossesCodexSessionCustomProviderIdentity,
   isCodexThreadModelProviderIdentityMismatch,
   prepareLocalCodexCredentialModeSwitch,
   prepareLocalSessionCredentialModeSwitch,
+  readCodexPoolExecution,
   shouldCloseSessionForCredentialSwitch,
 } from '../maker-host/codex-credential-switch.js';
 import { withRehydrateCloseSuppressed } from '../maker-host/rehydrateCloseSuppression.js';
-import { crossesCodexAppliedCustomProviderIdentity } from '../maker-host/codex-custom-provider-route.js';
 import { PluginEngineUnsupportedError } from '../maker-host/engineKind.js';
 import { dbToMakerEngineKind, isPluginEngineKind } from '../../shared/agentKindConversion.js';
 import { ensureDialogueWorkspaceDir } from '../localDb/dialogueWorkspace';
@@ -231,36 +234,23 @@ function boundPluginEngineRefusal(
   const requestedPluginDeviceId = schedule.modelAgentDeviceId === undefined
     ? (target?.agentDeviceId ?? schedule.agentDeviceId ?? null)
     : (schedule.modelAgentDeviceId || null);
-  if (schedule.source === 'bot' || target?.source === 'bot') {
-    reason = 'Teammate routines cannot run on a plugin engine yet.';
-  } else if (selectsPluginEngine) {
-    if (schedule.persistentSession) {
-      reason = 'A plugin engine schedule cannot use a persistent session.';
-    } else if (isDisallowedPluginEngineDeviceId(requestedPluginDeviceId)) {
+  if (selectsPluginEngine) {
+    if (isDisallowedPluginEngineDeviceId(requestedPluginDeviceId)) {
       reason = 'This plugin engine location cannot be used for scheduled tasks.';
     } else if (target?.remoteHostId) {
       reason = 'SSH automation targets must keep their current Harness.';
-    } else if (target?.orcaRole || target?.orcaRemoteLead) {
-      reason = 'Collaborative tasks cannot switch to or from a plugin engine.';
-    } else if (target?.source && target.source !== 'desktop' && target.source !== 'scheduler') {
-      reason = 'This task cannot switch to or from a plugin engine.';
     } else if (targetIsPluginEngine && isDisallowedPluginEngineDeviceId(target?.agentDeviceId)) {
       reason = 'This plugin engine task location cannot be used for scheduled tasks.';
     }
   } else if (targetIsPluginEngine) {
-    if (schedule.persistentSession) {
-      reason = 'A plugin engine schedule cannot use a persistent session.';
-    } else if (target?.remoteHostId) {
+    if (target?.remoteHostId) {
       reason = 'SSH automation targets must keep their current Harness.';
     } else if (isDisallowedPluginEngineDeviceId(target?.agentDeviceId)) {
       reason = 'This plugin engine task location cannot be used for scheduled tasks.';
-    } else if (schedule.modelAgentKind && schedule.model?.trim()) {
-      if (target?.orcaRole || target?.orcaRemoteLead) {
-        reason = 'Collaborative tasks cannot switch to or from a plugin engine.';
-      } else if (target?.source && target.source !== 'desktop' && target.source !== 'scheduler') {
-        reason = 'This task cannot switch to or from a plugin engine.';
-      }
-    } else if (schedule.modelAgentKind || schedule.model?.trim() || schedule.providerId?.trim() || schedule.effort) {
+    } else if (
+      !(schedule.modelAgentKind && schedule.model?.trim())
+      && (schedule.modelAgentKind || schedule.model?.trim() || schedule.providerId?.trim() || schedule.effort)
+    ) {
       reason = 'An automation linked to a plugin engine task uses the task\'s own model; remove the model choice from the automation.';
     }
   }
@@ -399,6 +389,8 @@ export interface MakerScheduleRunnerDeps {
   readAutoReviewHistory?: (sessionId: string) => Promise<AutoReviewHistory>;
   beforeDispatchUserTurn?: (sessionId: string, signal?: AbortSignal) => void | Promise<void>;
   onUndispatchedUserTurn?: (sessionId: string) => void;
+  /** Only alternatives explicitly configured for this bound task are eligible. */
+  resolveBillingFallback?: (sessionId: string, model: string, providerId: string) => Promise<ScheduledModelSelection | null>;
   /** Fire-local model defaults supplied by the host; never persisted into the schedule. */
   resolveInheritedModel?: (schedule: Schedule) => Promise<Partial<Schedule> | null>;
   /** Saved quota waits deduplicate by schedule even when each fire creates a new task. */
@@ -504,6 +496,15 @@ export interface MakerScheduleRunnerDeps {
  * (与 fire 主路径的准入拒绝同语义);其它路由同步失败仍按 non-fatal warn 处理。
  */
 class QueuedRouteDisabledError extends Error {}
+class ScheduledBillingWaitError extends QueuedRouteDisabledError {
+  constructor(readonly providerId: string, message: string) { super(message); }
+}
+
+function assertScheduledBillingAvailable(session: Session, waitMessage?: () => string): void {
+  if (session.agentKind !== 'pi' || session.agentDeviceId || session.remoteHostId) return;
+  const providerId = getSessionProvider(session.id);
+  if (providerId && scheduledBillingHold(providerId)) throw new ScheduledBillingWaitError(providerId, waitMessage?.() ?? 'SCHEDULE_BILLING_WAIT');
+}
 
 /** Same dispatch veto, but a bound automation can reacquire its model on a later fire. */
 class QueuedModelChangedError extends QueuedRouteDisabledError {}
@@ -647,6 +648,7 @@ interface SchedulerRunContextOwner {
 
 /** Execution ports supplied by the launcher; no desktop imports in the runner. */
 export interface SchedulerRunnerRuntime {
+  billingWaitMessage?(): string;
   shouldApplyExclusiveProviderRerouteLive: typeof import('../maker-host/model-route-guard-live.js').shouldApplyExclusiveProviderRerouteLive;
   createMessage: typeof import('../localDb/ipc/messages.js').createMessage;
   rewindPersistedUserMessageAfterClear: typeof import('../localDb/ipc/messages.js').rewindPersistedUserMessageAfterClear;
@@ -668,6 +670,7 @@ export interface SchedulerRunnerRuntime {
 }
 
 export class MakerScheduleRunner implements ScheduleRunner {
+  private readonly rejectedBillingProviders = new Map<string, string>();
   private scheduler: Scheduler | null = null;
   /**
    * The vendor option is a single session-level value, so a late finally from
@@ -749,7 +752,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 选着模式时新建任务由模式选来源，存下的具体模型只是兜底：模式此刻能选出可用来源就放行(只看不提交)，
     // 选不出来才要求兜底模型可用。
     const groupId = schedule.modelGroup?.trim();
-    if (groupId && schedule.agentKind !== 'acp' && this.deps.modelGroupStart) {
+    if (groupId && this.deps.modelGroupStart) {
       const usable = await this.deps.modelGroupStart.canRoute(groupId, { localOnly: !!schedule.primaryHostKey?.trim() })
         .catch(() => false);
       if (usable) return;
@@ -806,14 +809,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
     schedule: Schedule,
     agentDeviceId?: string | null,
   ): Promise<{ model: string; effort: string }> {
-    const boundOverride = Boolean(schedule.targetSessionId) && !schedule.persistentSession;
+    const hasBoundTarget = Boolean(schedule.targetSessionId);
     const resolvedDeviceId = agentDeviceId !== undefined
       ? (agentDeviceId?.trim() || null)
       : ((schedule.modelAgentDeviceId ?? schedule.agentDeviceId)?.trim() || null);
     if (!this.deps.admitPluginEngine
       || schedule.modelAgentKind !== 'acp'
-      || (!boundOverride && schedule.agentKind !== 'acp')
-      || schedule.persistentSession
+      || (!hasBoundTarget && schedule.agentKind !== 'acp')
       || isDisallowedPluginEngineDeviceId(resolvedDeviceId)
       || schedule.executionMode === 'script') {
       throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
@@ -976,7 +978,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     this.deps.logger.info?.(
       `[runner] defer fire (${reason}) schedule=${schedule.id} retryIn=${RETRY_DELAY_MS}ms`,
     );
-    return { sessionId, deferred: true, deferRetryMs: RETRY_DELAY_MS };
+    return { sessionId, deferred: true, deferRetryMs: RETRY_DELAY_MS, deferReason: reason };
   }
 
   /**
@@ -1191,12 +1193,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
         fastMode: undefined, modelAgentKind: undefined,
       };
     }
-    const holder: EphemeralSessionHolder = { assertOwner: ctx.assertFireContext };
+    const holder: EphemeralSessionHolder = {
+      assertOwner: ctx.assertFireContext,
+      ownerScope: captureDataOwnerBroadcastScope(),
+    };
     // 模型组：只有这次要新建任务时按模式选(续跑、发到还在的任务都按那个任务自己的模式走)；
     // 脚本与插件引擎任务不按模式选。只在本机运行的自动化只在本机的来源里选。
     const groupId = schedule.modelGroup?.trim();
     const groupApplies = !!groupId && !ctx.resumeSessionId && (schedule.executionMode ?? 'agent') !== 'script'
-      && schedule.agentKind !== 'acp' && !!this.deps.modelGroupStart;
+      && !!this.deps.modelGroupStart;
     const startsNewTask = groupApplies && await this.startsNewTask(schedule);
     if (groupApplies && !startsNewTask && await this.deps.modelGroupStart!.exists(groupId!).catch(() => false)) {
       // 发到还在的任务：按那个任务自己的模式走，沿用它当前的来源(与续跑同一做法)。存下的具体模型只是新建任务
@@ -1206,6 +1211,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
     if (groupApplies && startsNewTask) {
       const prepared = await this.deps.modelGroupStart!.prepare(groupId!, {
+        scheduled: true,
         keptModelName: schedule.model?.trim() || schedule.modelAgentKind || schedule.agentKind,
         localOnly: !!schedule.primaryHostKey?.trim(),
       }).catch((error: unknown) => {
@@ -1218,11 +1224,16 @@ export class MakerScheduleRunner implements ScheduleRunner {
       throwIfFireAborted(ctx.signal, 'runner entry');
       if (prepared?.route) {
         const { route } = prepared;
-        schedule = { ...schedule, fastMode: false,
-          modelAgentKind: route.agentKind === 'cc' ? 'claude-code' : route.agentKind,
+        const routedAgentKind: EngineKind = route.agentKind === 'cc' ? 'claude-code' : route.agentKind;
+        schedule = {
+          ...schedule,
+          fastMode: false,
+          ...(routedAgentKind === 'acp' ? { agentKind: 'acp' } : {}),
+          modelAgentKind: routedAgentKind,
           model: route.model, providerId: route.providerId, effort: route.effort,
           // '' = 本机：选中的来源在哪台，新任务就在哪台运行。
-          modelAgentDeviceId: route.agentDeviceId ?? '' };
+          modelAgentDeviceId: route.agentDeviceId ?? '',
+        };
       }
       if (prepared) holder.modelGroupStart = prepared.token;
     }
@@ -1233,6 +1244,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       throwIfFireAborted(ctx.signal, 'runner entry');
       return await this.fireInner(schedule, ctx, holder, enqueuePrompt);
     } finally {
+      this.rejectedBillingProviders.delete(ctx.runId);
       closeQuietOutput?.();
       holder.releaseAgentSwitchLock?.();
       holder.releaseAgentSwitchLock = undefined;
@@ -1300,23 +1312,41 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // A scheduled message restores its ordinary target just like user input.
     // Do this before hooks/model selection, while keeping deleted-target behavior
     // and service-owned Bot lifecycle separate.
+    let confirmedBoundSessionId: string | undefined;
+    let boundTarget: SessionRowSnapshot | null = null;
     if (schedule.source !== 'bot' && schedule.targetSessionId) {
       const target = await this.runtime.getSessionRowSnapshot(schedule.targetSessionId);
+      boundTarget = target;
       if (primaryHostTargetIsRemote(schedule, target)) return skipPrimaryHostRun(ctx, 'The persistent task moved off the automation host.', schedule.targetSessionId);
       if (target && !schedule.persistentSession && (target.status === 'deleted'
         || (target.status === 'archived' && this.runtime.isManagedScheduledTarget(target)))) {
         return this.retireHeartbeat(schedule, ctx, target.status);
       }
+      if (target && target.status !== 'deleted') {
+        confirmedBoundSessionId = schedule.targetSessionId;
+      }
       // An unsupported plugin-engine target or override is refused before hooks, restore or any engine switch.
       const refusal = target && (isPluginEngineKind(target.agentKind) || schedule.modelAgentKind === 'acp')
         ? boundPluginEngineRefusal(schedule, target) : null;
       if (refusal) {
-        await this.notifyFailureSilent(schedule, ctx, refusal.message);
+        await this.notifyFailureSilent(schedule, ctx, refusal.message, undefined, confirmedBoundSessionId);
         throw refusal;
       }
       if (target && target.status !== 'deleted') {
         await this.runtime.restoreScheduledTarget(schedule.targetSessionId, target, ctx.signal);
       }
+    }
+
+    // Short-circuit before running preRunHook when a previous passed fire for this exact
+    // schedule is already waiting in the bound session's queue: running the hook again can only
+    // end in deferFire('already-queued') and wastes external API calls (e.g. PR gate polls).
+    if (
+      schedule.source !== 'bot' &&
+      schedule.targetSessionId &&
+      this.canDefer(schedule, ctx) &&
+      this.deps.schedulerQueue?.hasQueuedPrompt(schedule.targetSessionId, schedule.id)
+    ) {
+      return this.deferFire(schedule, schedule.targetSessionId, 'already-queued');
     }
 
     // 1.5 前置检查脚本(Pre-run Hook):放在 worktree 创建 / session 创建
@@ -1382,7 +1412,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           ...(ctx.trigger ? { trigger: ctx.trigger } : {}),
         },
       }), schedule.preRunHook.command, this.deps.diagnosePreRunHookFailure);
-      await ctx.onPreRunHookCompleted?.(hook);
+      const hookOutcome = await ctx.onPreRunHookCompleted?.(hook);
       if (hook.status === 'aborted' || ctx.signal.aborted) {
         // 本轮已被 pause/delete 中止:不留痕、不继续执行,直接抛回 engine
         // (controller.signal.aborted 会让 run 记 'aborted' 而非 'failed')。
@@ -1416,7 +1446,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
           error: hook.error,
           stderr: hook.stderr.slice(0, 500),
         });
-        await this.notifyFailureSilent(schedule, ctx, errMsg, hook);
+        if (!hookOutcome?.quietFailure) {
+          await this.notifyFailureSilent(schedule, ctx, errMsg, hook);
+        }
         throw new Error(errMsg);
       }
       holder.preRunHookResult = hook;
@@ -1439,6 +1471,20 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (inherited) schedule = { ...schedule, ...inherited };
     }
 
+    const billingProvider = schedule.providerId || boundTarget?.providerId;
+    const billingModel = schedule.model || boundTarget?.model;
+    const billingAgent = schedule.modelAgentKind ?? (schedule.model ? schedule.agentKind : boundTarget?.agentKind);
+    if (!ctx.resumeSessionId && schedule.targetSessionId && billingModel && billingProvider && billingAgent === 'pi' &&
+        !boundTarget?.remoteHostId && !(schedule.modelAgentDeviceId ?? schedule.agentDeviceId ?? boundTarget?.agentDeviceId) &&
+        this.deps.resolveBillingFallback && scheduledBillingHold(billingProvider)) {
+      const replacement = await this.deps.resolveBillingFallback(schedule.targetSessionId, billingModel, billingProvider);
+      ctx.assertFireContext?.();
+      throwIfFireAborted(ctx.signal, 'agent turn dispatch');
+      if (replacement) schedule = { ...schedule, modelAgentKind: replacement.agentKind, modelAgentDeviceId: '',
+        model: replacement.model, providerId: replacement.providerId ?? undefined, effort: replacement.effort ?? undefined,
+        fastMode: replacement.fastMode };
+    }
+
     // isHeartbeat / sessionId 在 persistentSession 自我续命分支里可能被翻回新建路径，
     // 所以这里用 let，下面的 archived 兜底里会显式重置。
     let isHeartbeat = !!schedule.targetSessionId;
@@ -1450,7 +1496,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     let heartbeatWorkingDir: string | undefined;
     let heartbeatModel: string | undefined;
     let heartbeatEffort: string | undefined;
-    let heartbeatAgentKind: AgentKind | undefined;
+    let heartbeatAgentKind: EngineKind | undefined;
     // 持续会话沿用 session 自己存的 fast 态（与 model 同源取 meta）。
     let heartbeatFastMode: boolean | 'ultrafast' | undefined;
     let heartbeatPermissions: { permissionMode: PermissionMode; planMode: boolean } | undefined;
@@ -1471,10 +1517,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       if (restorePending) return restorePending;
       if (!schedule.modelAgentKind && schedule.model?.trim()) {
         const currentAgentKind = (await this.deps.maker.getSessionMeta(sessionId).catch(() => null))?.agentKind;
-        // Never switch a plugin-engine task to the schedule's Harness: refuse it.
-        const legacyModelAgentKind = legacyCrossHarnessModelAgentKind(schedule, scheduledBuiltinAgentKind(currentAgentKind));
-        // Fire-local only: the saved schedule keeps its original shape.
-        if (legacyModelAgentKind) schedule = { ...schedule, modelAgentKind: legacyModelAgentKind };
+        if (currentAgentKind !== 'acp') {
+          const legacyModelAgentKind = legacyCrossHarnessModelAgentKind(schedule, currentAgentKind);
+          // Fire-local only: the saved schedule keeps its original shape.
+          if (legacyModelAgentKind) schedule = { ...schedule, modelAgentKind: legacyModelAgentKind };
+        }
       }
       const selection: ScheduledModelSelection | undefined =
         schedule.modelAgentKind && schedule.model?.trim()
@@ -1502,8 +1549,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
           return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
         }
       }
+      const resolvePreSnapshotSessionId = (): Promise<string | undefined> =>
+        this.resolveConfirmedBoundSessionId(schedule, sessionId, confirmedBoundSessionId);
       if (selection && !this.deps.acquirePendingAgentSwitch) {
-        throw new Error('Scheduled model selection is not available');
+        const err = new Error('Scheduled model selection is not available');
+        await this.notifyPreDispatchRouteFailure(schedule, ctx, holder, err, resolvePreSnapshotSessionId);
+        throw err;
       }
       try {
         const lease = await (selection
@@ -1518,7 +1569,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
           resolvedSelection = lease.selection;
         }
       } catch (error) {
-        if (!(error instanceof ScheduledModelSelectionBusyError)) throw error;
+        if (!(error instanceof ScheduledModelSelectionBusyError)) {
+          await this.notifyPreDispatchRouteFailure(schedule, ctx, holder, error, resolvePreSnapshotSessionId);
+          throw error;
+        }
         // 会话正忙 → 任务切换流程按设计不抢占当前回合(绑定自动化遇忙顺延的规则,
         // docs/product-rules/model-selector-unified.md)。能顺延的行按原语义顺延;
         // 不能顺延的行保留本轮,交给 B1.5 的排队窗口(#12544):提示词留在会话队列里,
@@ -1560,6 +1614,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             this.deps.logger.warn?.('[runner] persistent rebind clear failed', err);
           }
           isHeartbeat = false;
+          confirmedBoundSessionId = undefined;
           // The replacement belongs to the schedule's saved location. Discard the
           // old target's catalog snapshot and resolve the original preferences there.
           resolvedSelection = undefined;
@@ -1583,6 +1638,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           throw new Error(errMsg);
         }
       } else {
+        confirmedBoundSessionId = sessionId;
         let meta = initialMeta;
         let row = initialRow;
         // The fire-entry row check covers ordinary targets; this covers the rest
@@ -1594,7 +1650,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             ?? (pluginEngineTarget && resolvedSelection && resolvedSelection.agentKind !== 'acp'
               ? new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE) : null);
           if (refusal) {
-            await this.notifyFailureSilent(schedule, ctx, refusal.message);
+            await this.notifyFailureSilent(schedule, ctx, refusal.message, holder.preRunHookResult, confirmedBoundSessionId);
             throw refusal;
           }
         }
@@ -1656,8 +1712,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
               effort: routeEffort,
             });
           } catch (error) {
-            // The engine's ordinary failure path records the run without notifying; use the runner's outlet.
-            await this.notifyFailureSilent(schedule, ctx, error instanceof Error ? error.message : String(error));
+            await this.notifyPreDispatchRouteFailure(schedule, ctx, holder, error, confirmedBoundSessionId);
             throw error;
           }
           if (this.deps.schedulerQueue.hasQueuedPrompt(sessionId, schedule.id)) {
@@ -1711,14 +1766,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
           const liveSession = this.deps.maker.getSession(sessionId);
           if (
-            liveSession &&
-            crossesCodexAppliedCustomProviderIdentity({
+            liveSession?.agentKind === 'codex' &&
+            crossesCodexSessionCustomProviderIdentity({
+              sessionId: liveSession.agentDeviceId ? undefined : sessionId,
               agentKind: liveSession.agentKind,
               remoteHostId: liveSession.remoteHostId,
+              currentProviderId: getSessionProvider(sessionId) ?? row?.providerId ?? null,
+              currentModel: liveSession.model,
               currentCodexProxyActive: liveSession.codexProxyActive,
-              currentThreadModelProviderId: liveSession.codexThreadModelProviderId,
-              targetProviderId: schedule.providerId?.trim() || row?.providerId || null,
-              targetModel: schedule.model?.trim() || meta?.model || liveSession.model,
+              currentCodexThreadModelProviderId: liveSession.codexThreadModelProviderId,
+              nextProviderId: schedule.providerId?.trim() || row?.providerId || null,
+              nextModel: schedule.model?.trim() || meta?.model || liveSession.model,
             })
           ) {
             holder.releaseAgentSwitchLock?.();
@@ -1757,7 +1815,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
             }
             reacquired = lease.selection;
           } catch (error) {
-            if (!(error instanceof ScheduledModelSelectionBusyError)) throw error;
+            if (!(error instanceof ScheduledModelSelectionBusyError)) {
+              await this.notifyPreDispatchRouteFailure(schedule, ctx, holder, error, confirmedBoundSessionId);
+              throw error;
+            }
           }
           if (reacquired) {
             resolvedSelection = reacquired;
@@ -1802,8 +1863,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         heartbeatWorkingDir = meta?.workDir;
         heartbeatModel = meta?.model;
         heartbeatEffort = meta?.effort;
-        // Plugin-engine tasks returned through their queue above.
-        heartbeatAgentKind = scheduledBuiltinAgentKind(meta?.agentKind);
+        heartbeatAgentKind = meta?.agentKind;
         heartbeatFastMode = meta?.fastMode;
         heartbeatProviderId = row?.providerId ?? null;
         // A resumed/rebuilt task keeps its current location, including relocation
@@ -1885,16 +1945,34 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 它不在内置模型目录里：只属于内置引擎的步骤一律经 builtinKind()，插件引擎万一走到会明确拒绝，
     // 绝不被当成内置引擎；插件引擎改按本机或目标电脑此刻提供的引擎准入，不可用时本次运行明确失败。
     const pluginEngineRun = effectiveAgentKind === 'acp';
-    if (pluginEngineRun && isHeartbeat) throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
     const builtinKind = (): AgentKind => scheduledBuiltinAgentKind(effectiveAgentKind);
     // 新建任务的 Agent 在另一台电脑运行:模型与来源属于那台的已授权目录,本机的默认路由、
     // 停用轴与能力表都不适用,统一交给 resolveModelSelection / admitScheduledPluginEngine 按那台目录解析。
     // 绑定的任务仍存在时运行位置跟随它(heartbeat 分支由 acquirePendingAgentSwitch 按任务所在位置解析)。
     const freshAgentDeviceId = isHeartbeat ? null
       : (schedule.modelAgentDeviceId ?? schedule.agentDeviceId)?.trim() || null;
-    const pluginEngineRoute = pluginEngineRun
-      ? await this.admitScheduledPluginEngine(schedule, freshAgentDeviceId)
-      : null;
+    const pluginEngineDeviceId = isHeartbeat
+      ? (resolvedSelection?.agentDeviceId !== undefined
+          ? resolvedSelection.agentDeviceId
+          : (schedule.modelAgentDeviceId !== undefined
+              ? (schedule.modelAgentDeviceId.trim() || null)
+              : (heartbeatAgentDeviceId ?? null)))
+      : freshAgentDeviceId;
+    let pluginEngineRoute: Awaited<ReturnType<MakerScheduleRunner['admitScheduledPluginEngine']>> | null = null;
+    if (pluginEngineRun) {
+      try {
+        pluginEngineRoute = await this.admitScheduledPluginEngine({
+          ...schedule,
+          modelAgentKind: 'acp',
+          providerId: schedule.providerId?.trim() || heartbeatProviderId || undefined,
+          model: schedule.model?.trim() || heartbeatModel || 'default',
+          effort: schedule.effort ?? heartbeatEffort,
+        }, pluginEngineDeviceId);
+      } catch (error) {
+        await this.notifyPreDispatchRouteFailure(schedule, ctx, holder, error, confirmedBoundSessionId);
+        throw error;
+      }
+    }
     const rawModel = schedule.model?.trim()
       ? schedule.model
       : isHeartbeat
@@ -1904,7 +1982,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     const defaultRouteProviderId = explicitProviderId ?? (isHeartbeat ? heartbeatProviderId : null);
     const followsNewTaskDefault = !pluginEngineRun && !rawModel?.trim();
     if (freshAgentDeviceId && followsNewTaskDefault) {
-      throw new Error('schedule route unavailable: a remote agent location requires an explicit model');
+      const err = new Error('schedule route unavailable: a remote agent location requires an explicit model');
+      await this.notifyPreDispatchRouteFailure(schedule, ctx, holder, err);
+      throw err;
     }
     // Fresh Claude schedules must freeze the same provider rail the UI would use for this model.
     // Leaving providerId null delegates credential selection to the legacy auth fallback, which can
@@ -1932,9 +2012,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       ? pluginEngineRoute.model
       : followsNewTaskDefault ? (dynamicDefaultRoute?.model ?? '') : rawModel!;
     if (!model) {
-      throw new Error(
-        `schedule route unavailable: ${effectiveAgentKind} has no connected model source`,
-      );
+      const err = new Error(`schedule route unavailable: ${effectiveAgentKind} has no connected model source`);
+      await this.notifyPreDispatchRouteFailure(schedule, ctx, holder, err, confirmedBoundSessionId);
+      throw err;
     }
     if (
       shouldMaterializeFreshClaudeProvider &&
@@ -1942,9 +2022,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
       (!dynamicDefaultRoute ||
         (dynamicDefaultRoute.providerId === null && dynamicDefaultRoute.catalogKnown !== false))
     ) {
-      throw new Error(
-        `schedule route unavailable: Claude Code has no connected source for model "${model}"`,
-      );
+      const err = new Error(`schedule route unavailable: Claude Code has no connected source for model "${model}"`);
+      await this.notifyPreDispatchRouteFailure(schedule, ctx, holder, err);
+      throw err;
     }
     // 实时解析出的默认来源要与模型成对写入会话(含心跳绑定会话首次解析默认时;Pi 由自己的
     // 模型选择链路落来源),否则 spawn 凭证、聊天选择器、落库与下一次运行会各自重新猜一次默认来源。
@@ -1981,9 +2061,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
     if (this.deps.checkModelRoute && !agentDeviceId && !pluginEngineRun) {
       const verdict = await this.checkRouteFor(isHeartbeat ? sessionId : undefined, builtinKind(), model, createProviderId);
       if (verdict.kind === 'reject') {
-        throw new Error(
+        const err = new Error(
           `schedule route unavailable: ${describeModelRouteRejection(verdict.reason, model, createProviderId)} (${verdict.reason})`,
         );
+        await this.notifyPreDispatchRouteFailure(schedule, ctx, holder, err, confirmedBoundSessionId);
+        throw err;
       }
       if (verdict.kind === 'reroute' && this.runtime.shouldApplyExclusiveProviderRerouteLive(createProviderId)) {
         createProviderId = verdict.providerId;
@@ -1991,8 +2073,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
       }
     }
     if (!isHeartbeat && !pluginEngineRun && (schedule.modelAgentKind || freshAgentDeviceId) && !resolvedSelection) {
-      if (!this.deps.resolveModelSelection)
-        throw new Error('Scheduled model selection is not available');
+      if (!this.deps.resolveModelSelection) {
+        const err = new Error('Scheduled model selection is not available');
+        await this.notifyPreDispatchRouteFailure(schedule, ctx, holder, err);
+        throw err;
+      }
       const selection: ScheduledModelSelection = {
         agentKind: builtinKind(),
         agentDeviceId,
@@ -2001,9 +2086,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
         effort: (schedule.effort as Effort | undefined) ?? null,
         fastMode: fastMode ?? false,
       };
-      resolvedSelection = freshAgentDeviceId
-        ? await this.deps.resolveModelSelection(selection, { agentDeviceId: freshAgentDeviceId })
-        : await this.deps.resolveModelSelection(selection);
+      try {
+        resolvedSelection = freshAgentDeviceId
+          ? await this.deps.resolveModelSelection(selection, { agentDeviceId: freshAgentDeviceId })
+          : await this.deps.resolveModelSelection(selection);
+      } catch (error) {
+        await this.notifyPreDispatchRouteFailure(schedule, ctx, holder, error);
+        throw error;
+      }
       createProviderId = resolvedSelection.providerId;
       fastMode = resolvedSelection.fastMode;
       schedule = {
@@ -2021,9 +2111,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 只影响本次 fire 的运行值(该模型日后支持该档时自动生效)。直发 / 排队两路径共用
     // reconcileEffortForModel(见其注释),口径一致;lookup 失败不阻断 headless 运行。
     if (resolvedSelection && createProviderId !== resolvedSelection.providerId) {
-      throw new Error(
-        'Scheduled model route changed after selection; retry with the current catalog',
-      );
+      const err = new Error('Scheduled model route changed after selection; retry with the current catalog');
+      await this.notifyPreDispatchRouteFailure(schedule, ctx, holder, err, confirmedBoundSessionId);
+      throw err;
     }
     let reconciledEffort = resolvedSelection
       ? (resolvedSelection.effort ?? undefined)
@@ -2068,7 +2158,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
     let preflightProviderId: string | null = null;
     if (reusedLiveSession) {
       const liveSession = this.deps.maker.getSession(sessionId);
-      if (liveSession?.agentKind === 'acp') throw new PluginEngineUnsupportedError(SCHEDULED_TASKS_FEATURE);
       const currentProviderId = getSessionProvider(sessionId) ?? heartbeatProviderId;
       // 隐式改道(reroutedProviderId)也是本次 fire 的落地来源:跨凭证家族的改道
       // (如停用 XD 默认 → 改道 Anthropic)若不进本判定,会复用旧凭证 spawn 的
@@ -2079,8 +2168,28 @@ export class MakerScheduleRunner implements ScheduleRunner {
         materializedDefaultProviderId ??
         currentProviderId;
       preflightProviderId = nextProviderId;
+      if (liveSession?.agentKind === 'acp') {
+        if (effectiveAgentKind !== 'acp' || (nextProviderId ?? null) !== (currentProviderId ?? null)) {
+          try {
+            await prepareLocalSessionCredentialModeSwitch({
+              maker: this.deps.maker,
+              sessionId,
+              isSessionInTurn: this.runtime.isSessionInTurn,
+              signal: ctx.signal,
+            });
+          } catch (err) {
+            if (err instanceof CredentialModeSwitchBusyError) {
+              return this.failOrDeferSessionRunning(schedule, ctx, sessionId, isHeartbeat);
+            }
+            throw err;
+          }
+          throwIfFireAborted(ctx.signal, 'session creation');
+          reusedLiveSession = false;
+        }
+      } else {
       const credentialSwitchInput = liveSession && !agentDeviceId
         ? {
+            sessionId,
             agentKind: liveSession.agentKind,
             remoteHostId: liveSession.remoteHostId,
             currentProviderId,
@@ -2093,16 +2202,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
               liveSession.codexCindyRemoteCompactionCompatible,
           }
         : null;
-      const crossesCustomProviderIdentity = credentialSwitchInput
-        ? crossesCodexAppliedCustomProviderIdentity({
-            agentKind: credentialSwitchInput.agentKind,
-            remoteHostId: credentialSwitchInput.remoteHostId,
-            currentCodexProxyActive: credentialSwitchInput.currentCodexProxyActive,
-            currentThreadModelProviderId: credentialSwitchInput.currentCodexThreadModelProviderId,
-            targetProviderId: credentialSwitchInput.nextProviderId,
-            targetModel: credentialSwitchInput.nextModel,
-          })
-        : false;
       if (
         liveSession &&
         credentialSwitchInput &&
@@ -2119,6 +2218,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
             nextProviderId: currentProviderId,
             nextModel: liveSession.model,
           });
+        const closeOnlyCurrentSession = currentThreadRouteMismatch ||
+          !!readCodexPoolExecution(credentialSwitchInput) ||
+          crossesCodexSessionCustomProviderIdentity(credentialSwitchInput);
         if (isHeartbeat && this.runtime.isSessionInTurn(sessionId)) {
           return this.failOrDeferSessionRunning(schedule, ctx, sessionId, true);
         }
@@ -2126,8 +2228,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           throwIfFireAborted(ctx.signal, 'credential mode switch');
           if (
             liveSession.agentKind === 'codex' &&
-            !currentThreadRouteMismatch &&
-            !crossesCustomProviderIdentity
+            !closeOnlyCurrentSession
           ) {
             await prepareLocalCodexCredentialModeSwitch({
               maker: this.deps.maker,
@@ -2157,10 +2258,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           nextProviderId,
           fromModel: liveSession.model,
           toModel: model,
-          closeScope:
-            currentThreadRouteMismatch || crossesCustomProviderIdentity
-              ? 'session'
-              : 'all-local-codex',
+          closeScope: closeOnlyCurrentSession ? 'session' : 'all-local-codex',
         });
       }
       if (
@@ -2246,6 +2344,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             toWorkingDir: workingDir,
           });
         }
+      }
       }
     }
     if (!agentDeviceId && isHeartbeat && effectiveAgentKind === 'pi' && !reusedLiveSession && resumeSessionId) {
@@ -2849,6 +2948,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           if (
             effectiveAgentKind !== 'pi' &&
             shouldCloseSessionForCredentialSwitch({
+              sessionId: session.id,
               agentKind: scheduledBuiltinAgentKind(session.agentKind),
               remoteHostId: session.remoteHostId,
               currentProviderId: dispatchProviderId,
@@ -2886,6 +2986,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         ctx.signal.removeEventListener('abort', onAbort);
         return this.deferFire(schedule, session.id, 'routine-dispatch-invalidated');
       }
+      assertScheduledBillingAvailable(session, this.runtime.billingWaitMessage);
       sendStarted = true;
       const sendResult = await session.send(outgoingMessage as never, {
         origin,
@@ -2924,6 +3025,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             }
           : {}),
         onDispatching: () => {
+          assertScheduledBillingAvailable(session, this.runtime.billingWaitMessage);
           const expected = routinePermissions ?? heartbeatPermissions;
           if (
             expected &&
@@ -3078,6 +3180,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // the engine's skipped settlement so cron/interval scheduling remains
         // owned by the engine, without a short deferred retry.
         return this.settleStoppedDispatch(schedule, ctx, session.id, holder, err);
+      }
+      if (err instanceof ScheduledBillingWaitError) {
+        waiter.stopListening();
+        ctx.signal.removeEventListener('abort', onAbort);
+        if (claimScheduledBillingNotice(err.providerId)) {
+          await this.notifyPreDispatchRouteFailure(schedule, ctx, holder, err, session.id);
+        }
+        throw err;
       }
       const normalized = normalizeSchedulerSendError(err);
       if (err instanceof RoutineDispatchDeferredError) {
@@ -3619,6 +3729,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           assertQueuedRoute(live, routingBaseline,
             routingBaseline.resolvedSelection ? getSessionProvider(sessionId) : null, preparingLocalCodexRebuild, !preparingLocalCodexRebuild);
           await this.applyQueuedHeartbeatRouting(schedule, live, routingBaseline, preparedPiRoute);
+          assertScheduledBillingAvailable(live, this.runtime.billingWaitMessage);
         } catch (err) {
           if (
             err instanceof QueuedRouteDisabledError ||
@@ -3940,7 +4051,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // Refused before vendor dispatch (route or engine turned off, plugin-engine task no longer
         // qualifies). A visible failure the user configured notifications for; the engine's
         // ordinary failure path records it without notifying.
-        await this.notifyFailureSilent(schedule, ctx, err.message, holder.preRunHookResult);
+        if (!(err instanceof ScheduledBillingWaitError) || claimScheduledBillingNotice(err.providerId)) {
+          await this.notifyFailureSilent(schedule, ctx, err.message, holder.preRunHookResult, sessionId);
+        }
         throw err;
       }
       if (err instanceof QueuedDispatchTimeoutError || err instanceof QueuedSlotUnavailableError) {
@@ -4261,31 +4374,28 @@ export class MakerScheduleRunner implements ScheduleRunner {
     if (explicitRoute?.providerId && nextProviderId !== explicitRoute.providerId) {
       throw queuedRouteMismatch('provider');
     }
-    if (
-      !remoteAgent && crossesCodexAppliedCustomProviderIdentity({
-        agentKind: live.agentKind,
-        remoteHostId: live.remoteHostId,
-        currentCodexProxyActive: live.codexProxyActive,
-        currentThreadModelProviderId: live.codexThreadModelProviderId,
-        targetProviderId: nextProviderId,
-        targetModel,
-      })
-    ) {
+    const credentialSwitchInput = {
+      sessionId: live.id,
+      agentKind: live.agentKind,
+      remoteHostId: live.remoteHostId,
+      currentProviderId,
+      nextProviderId,
+      currentModel: live.model,
+      nextModel: targetModel,
+      currentCodexProxyActive: live.codexProxyActive,
+      currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
+      currentCodexCindyRemoteCompactionCompatible: live.codexCindyRemoteCompactionCompatible,
+    };
+    if (!remoteAgent && crossesCodexSessionCustomProviderIdentity(credentialSwitchInput)) {
       throw new QueuedCodexThreadIdentityMismatchError(
         `queued heartbeat Codex thread provider identity does not match the target session route (session "${live.id}")`,
       );
     }
     if (
       !remoteAgent && isCodexThreadModelProviderIdentityMismatch({
-        agentKind: live.agentKind,
-        remoteHostId: live.remoteHostId,
-        currentProviderId,
+        ...credentialSwitchInput,
         nextProviderId: currentProviderId,
-        currentModel: live.model,
         nextModel: live.model,
-        currentCodexProxyActive: live.codexProxyActive,
-        currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
-        currentCodexCindyRemoteCompactionCompatible: live.codexCindyRemoteCompactionCompatible,
       })
     ) {
       throw new QueuedCodexThreadIdentityMismatchError(
@@ -4294,19 +4404,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
     if (
       !remoteAgent && live.agentKind !== 'pi' &&
-      shouldCloseSessionForCredentialSwitch({
-        agentKind: live.agentKind,
-        remoteHostId: live.remoteHostId,
-        currentProviderId,
-        nextProviderId,
-        currentModel: live.model,
-        nextModel: targetModel,
-        currentCodexProxyActive: live.codexProxyActive,
-        currentCodexThreadModelProviderId: live.codexThreadModelProviderId,
-        currentCodexCindyRemoteCompactionCompatible: live.codexCindyRemoteCompactionCompatible,
-      })
+      shouldCloseSessionForCredentialSwitch(credentialSwitchInput)
     ) {
-      if (resolvedSelection || explicitRoute) {
+      if (resolvedSelection || explicitRoute || readCodexPoolExecution(credentialSwitchInput)) {
         throw new QueuedRouteDisabledError(
           'Scheduled model route requires rebuilding before queued dispatch',
         );
@@ -4535,6 +4635,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
     finalTextMatchesStream: boolean,
   ): Promise<FireResult> {
     const declinedPlanReviews = takeUnattendedPlanReviewDeclines(sessionId);
+    const rejectedProvider = this.rejectedBillingProviders.get(ctx.runId);
+    if (runError && rejectedProvider && isGrokBillingRejection({ message: runError })) {
+      if (!claimScheduledBillingNotice(rejectedProvider)) throw new Error(runError);
+      runError += '\n' + (this.runtime.billingWaitMessage?.() ?? 'SCHEDULE_BILLING_WAIT');
+    }
     const streamedResultText = !runError && assistantText ? assistantText : undefined;
     const resultText: string | undefined = runError
       ? undefined
@@ -4684,6 +4789,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     options: TurnCompletionWaiterOptions,
   ): TurnCompletionWaiter {
     const sessionId = initialSession.id;
+    const billingOwner = captureDataOwnerBroadcastScope();
     let assistantText = '';
     let finalTextMatchesStream = false;
     let streamContainsHiddenText = false;
@@ -4791,7 +4897,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         fail(new Error(`scheduler session ended without a terminal event (${status})`));
       };
 
-      const onSessionEvent = (owner: Session, ev: AgentEvent): void => {
+      const onSessionEvent = (owner: Session, providerAtDispatch: string | null, ev: AgentEvent): void => {
         if (owner !== currentSession) return;
         // 一个绑定会话可能在自动续跑退避期间被用户接管。waiter 只消费本 run
         // 的 scheduler turn（初始派发与 autoResume 都保留同一 origin）；其它 run、
@@ -4946,6 +5052,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
         } else if (isTerminalAgentErrorEvent(ev)) {
           if (owner === initialSession && isSharedReconnectPending()) return;
           const error = extractErr(ev.data);
+          if (owner.agentKind === 'pi' && !owner.agentDeviceId && !owner.remoteHostId &&
+              isGrokBillingRejection(ev.data) && isDataOwnerBroadcastScopeCurrent(billingOwner)) {
+            const providerId = getSessionProvider(owner.id);
+            if (providerId && providerId === providerAtDispatch) {
+              rejectScheduledBilling(providerId);
+              this.rejectedBillingProviders.set(options.origin.runId, providerId);
+            }
+          }
           lastTerminalError = error;
           ignorePairedInterruptedDone = true;
           clearInterruptedDoneTimer();
@@ -4975,7 +5089,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
         offStatus =
           nextSession.onStatusChange?.((status) => onSessionStatus(nextSession, status)) ??
           (() => undefined);
-        off = nextSession.onEvent((event) => onSessionEvent(nextSession, event));
+        const providerAtDispatch = getSessionProvider(nextSession.id);
+        off = nextSession.onEvent((event) => onSessionEvent(nextSession, providerAtDispatch, event));
       };
 
       // Maker is already the source of truth for same-business-id Session replacement.
@@ -5039,11 +5154,64 @@ export class MakerScheduleRunner implements ScheduleRunner {
 
   // ── helpers ────────────────────────────────────────────────────────────────
 
+  private isFireOwnerStillCurrent(ctx: FireContext, holder: EphemeralSessionHolder): boolean {
+    if (holder.ownerScope && !isDataOwnerBroadcastScopeCurrent(holder.ownerScope)) return false;
+    try {
+      ctx.assertFireContext?.();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async resolveConfirmedBoundSessionId(
+    schedule: Schedule,
+    sessionId: string,
+    confirmedBoundSessionId: string | undefined,
+  ): Promise<string | undefined> {
+    if (confirmedBoundSessionId) return confirmedBoundSessionId;
+    if (schedule.source !== 'bot') return undefined;
+    const row = await this.runtime.getSessionRowSnapshot(sessionId).catch(() => null);
+    return row && row.status !== 'deleted' && row.status !== 'archived' ? sessionId : undefined;
+  }
+
+  /**
+   * 派发前的模型/路由准入拒绝（如 [MODEL_SELECTION_UNAVAILABLE]、停用路由、远程/插件模型不可用）
+   * 在进入 createSession/finalizeRun 之前即中止；外层调度引擎的普通失败落库路径不发通知，
+   * 统一经此补发一次失败通知（跳过已取消/跨账号边界），与排队路径 QueuedRouteDisabledError 口径一致。
+   * 绑定任务仅在目标会话已确认存在时附带 sessionId（供手机推送与免打扰判定），新建任务留空。
+   */
+  private async notifyPreDispatchRouteFailure(
+    schedule: Schedule,
+    ctx: FireContext,
+    holder: EphemeralSessionHolder,
+    error: unknown,
+    sessionId?: string | (() => Promise<string | undefined>),
+  ): Promise<void> {
+    if (
+      !ctx.signal.aborted &&
+      !isAbortError(error) &&
+      this.isFireOwnerStillCurrent(ctx, holder)
+    ) {
+      const resolvedSessionId = typeof sessionId === 'function' ? await sessionId() : sessionId;
+      if (ctx.signal.aborted || !this.isFireOwnerStillCurrent(ctx, holder)) return;
+      const errMsg = error instanceof Error ? error.message : String(error);
+      await this.notifyFailureSilent(
+        schedule,
+        ctx,
+        errMsg,
+        holder.preRunHookResult,
+        resolvedSessionId,
+      );
+    }
+  }
+
   private async notifyFailureSilent(
     schedule: Schedule,
     ctx: FireContext,
     errMsg: string,
     preRunHookResult?: ScheduleRun['preRunHookResult'],
+    sessionId?: string,
   ): Promise<void> {
     // 见 finalizeRun 同名判断:已被卡死守卫强制收口的 run,引擎已经投过失败通知。
     if (this.scheduler?.isRunAbandoned?.(ctx.runId)) {
@@ -5056,6 +5224,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
     const fauxRun: ScheduleRun = {
       id: ctx.runId,
       scheduleId: schedule.id,
+      ...(sessionId ? { sessionId } : {}),
       firedAt: ctx.firedAt,
       finishedAt: Date.now(),
       status: 'failed',
@@ -5176,6 +5345,10 @@ type FireAbortStage =
   | 'model switch rebuild'
   | 'credential mode switch';
 
+function isAbortError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { name?: unknown }).name === 'AbortError';
+}
+
 function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
   if (signal.aborted) {
     throw new Error(`schedule fire aborted before ${stage}`);
@@ -5189,6 +5362,7 @@ function throwIfFireAborted(signal: AbortSignal, stage: FireAbortStage): void {
  */
 interface EphemeralSessionHolder {
   assertOwner?: () => void;
+  ownerScope?: ReturnType<typeof captureDataOwnerBroadcastScope>;
   /** 这次新建任务按模式选来源时的凭据，随建任务参数交给 bootstrapSession(model-groups/sessionStart.ts)。 */
   modelGroupStart?: string;
   preRunHookOutput?: string;

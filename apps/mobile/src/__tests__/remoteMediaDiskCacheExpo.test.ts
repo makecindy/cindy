@@ -190,7 +190,7 @@ describe('bounded temporary media downloads', () => {
     expect(io.remove).not.toHaveBeenCalled();
     finish('dimensions and embedded bytes');
     expect(await result).toBe('dimensions and embedded bytes');
-    expect(io.remove).toHaveBeenCalledExactlyOnceWith(io.download.mock.calls[0]![1].uri);
+    expect(io.remove).toHaveBeenCalledExactlyOnceWith(io.resumable.mock.calls[0]![1]);
   });
 
   // Unit: large text fallback must stop a slow/oversized OSS download and clean
@@ -244,7 +244,7 @@ describe('bounded temporary media downloads', () => {
 
   it.each(['download', 'read'])('removes partial files after a %s failure', async (failure) => {
     const read = vi.fn(async () => { throw new Error('read failed'); });
-    if (failure === 'download') io.download.mockRejectedValueOnce(new Error('interrupted'));
+    if (failure === 'download') io.resumable.mockRejectedValueOnce(new Error('interrupted'));
     expect(await withDownloadedRemoteMediaFile('https://example.com/image', 'image/png', 8, read)).toBeNull();
     expect(io.remove).toHaveBeenCalledOnce();
   });
@@ -256,10 +256,29 @@ describe('bounded temporary media downloads', () => {
     expect(io.download).not.toHaveBeenCalled();
   });
 
-  it('preserves the existing inline-resource download contract', async () => {
+  it('preserves the existing inline-resource download contract and stops on cancel or oversize', async () => {
     expect(await downloadRemoteMediaAsDataUri('https://example.com/image', 'image/png', 8))
       .toBe('data:image/png;base64,aGVsbG8=');
     expect(io.remove).toHaveBeenCalledOnce();
+
+    // Signal aborts an in-flight downloadRemoteMediaAsDataUri fallback cleanly.
+    io.resumable.mockReturnValueOnce(new Promise(() => {}));
+    const abort = new AbortController();
+    const cancelled = downloadRemoteMediaAsDataUri('https://example.com/slow.gif', 'image/gif', 100, abort.signal);
+    await vi.waitFor(() => expect(io.resumable).toHaveBeenCalledTimes(2));
+    abort.abort();
+    expect(await cancelled).toBeNull();
+    expect(io.cancel).toHaveBeenCalled();
+    expect(io.deleteAsync).toHaveBeenCalled();
+
+    // Expected Content-Length over maxBytes aborts immediately before finishing download.
+    io.cancel.mockClear();
+    io.resumable.mockReturnValueOnce(new Promise(() => {}));
+    const oversize = downloadRemoteMediaAsDataUri('https://example.com/huge.gif', 'image/gif', 100);
+    await vi.waitFor(() => expect(io.resumable).toHaveBeenCalledTimes(3));
+    io.progress({ totalBytesWritten: 10, totalBytesExpectedToWrite: 500 });
+    expect(await oversize).toBeNull();
+    expect(io.cancel).toHaveBeenCalled();
   });
 });
 

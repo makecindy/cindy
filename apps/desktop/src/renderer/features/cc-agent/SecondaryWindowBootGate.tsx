@@ -1,4 +1,4 @@
-import { isCompanionChatTarget } from '../bots/companionChatTarget';
+import { companionWindowBootRoute } from '../bots/companionChatTarget';
 /**
  * SecondaryWindowBootGate — 「在新窗口打开」副窗的启动路由网关。
  * ---------------------------------------------------------------------------
@@ -27,6 +27,11 @@ import { getBootDeviceId, getBootSessionId, getBootMessageClientId } from '@/lib
 import { confirmSessionOrigin } from '@/features/device-link/confirmSessionOrigin';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { getDataOwnerGeneration, isDataOwnerGenerationCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  makeNewTaskSecondaryWindowRouteState,
+  NEW_TASK_SECONDARY_WINDOW_TARGET,
+  parseNewTaskSecondaryWindowTarget,
+} from './lib/newTaskSecondaryWindow';
 import { SessionEntryError, sessionEntryFailure } from './SessionEntryError';
 import { createLogger } from '@/lib/logger';
 
@@ -43,6 +48,14 @@ export function SecondaryWindowBootGate() {
       navigate('/cc-agent', { replace: true });
       return;
     }
+    const newTaskDraftHint = parseNewTaskSecondaryWindowTarget(bootSessionId);
+    if (newTaskDraftHint) {
+      navigate(NEW_TASK_SECONDARY_WINDOW_TARGET, {
+        replace: true,
+        state: makeNewTaskSecondaryWindowRouteState(getBootDeviceId(), newTaskDraftHint),
+      });
+      return;
+    }
 
     setFailure(null);
     let cancelled = false;
@@ -50,8 +63,9 @@ export function SecondaryWindowBootGate() {
     const active = () => !cancelled && isDataOwnerGenerationCurrent(owner);
     const bootDeviceId = getBootDeviceId();
     const messageClientId = getBootMessageClientId();
+    const companionRoute = companionWindowBootRoute(bootSessionId);
     void (async () => {
-      if (isCompanionChatTarget(bootSessionId)) return bootSessionId;
+      if (companionRoute) return companionRoute;
       if (!bootDeviceId) return resolveSessionRoute(bootSessionId);
 
       const remoteSession = await confirmSessionOrigin(bootSessionId, bootDeviceId, active);
@@ -61,7 +75,7 @@ export function SecondaryWindowBootGate() {
         if (!active()) return;
         navigate(target, {
           replace: true,
-          ...(messageClientId
+          ...(!companionRoute && messageClientId
             ? {
                 state: {
                   searchJump: {

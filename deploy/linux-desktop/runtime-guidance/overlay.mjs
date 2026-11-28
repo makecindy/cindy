@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { addImports } from '../overlay-imports.mjs';
 
 export const settingsPrompt = fs.readFileSync(new URL('./settings.md', import.meta.url), 'utf8').trimEnd();
 export const promptSha256 = createHash('sha256').update(settingsPrompt).digest('hex');
@@ -43,7 +44,7 @@ export function transformCloudSource(code, relativePath) {
     once(code, getterAnchor, relativePath);
     const getter = getterAnchor.slice('get: () => '.length, -1);
     code = code.replace(getterAnchor, `get: () => appendCloudSettingsPrompt(${getter}, getInstanceConfig() !== null),`);
-    return `import { appendCloudSettingsPrompt } from '${virtualId}';\n${code}`;
+    return addImports(code, relativePath, [`import { appendCloudSettingsPrompt } from '${virtualId}';`]);
   }
   const anchors = wiring[relativePath];
   if (!anchors) return null;

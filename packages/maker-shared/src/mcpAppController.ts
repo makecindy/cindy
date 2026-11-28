@@ -8,6 +8,11 @@ export type AppRpc = {
   [key: string]: unknown;
 };
 export type AppInvoker = (sessionId: string | null, input: Record<string, unknown>) => Promise<unknown>;
+export type McpAppResourceSource = {
+  instanceId: string;
+  viewId: string;
+  composerAction?: { id: string; contributionId: string };
+};
 export { McpAppViewSlots, McpAppWindowLimitError, confirmsMcpAppViewGone, isMcpAppOpenRejectedBeforeAllocation } from './mcpAppViewSlots.js';
 
 let nextOpenId = 0;
@@ -40,7 +45,7 @@ export class McpAppController {
     private readonly onState: (message: AppRpc) => void,
     private readonly onError: (error: unknown) => void,
     private readonly openLink?: (url: string) => Promise<void>,
-    private readonly resourceSource?: { instanceId: string; viewId: string },
+    private readonly resourceSource?: McpAppResourceSource,
   ) {}
 
   async open(context: Record<string, unknown>, onViewLimit?: (waiting: boolean) => boolean | Promise<boolean>): Promise<McpAppOpenResult | undefined> {

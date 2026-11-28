@@ -91,6 +91,17 @@ describe('actual interaction preference readers', () => {
     const result = noWrites(read);
     expect(value(result, 'shortcuts.toggle-sidebar')).toEqual([]);
     expect(result.fields['browser.backend']).toMatchObject({ source: 'override', value: 'external' });
+    write('browser-backend-settings.json', { kind: 'user-browser', useRealProfile: false }, false);
+    const userBrowserResult = noWrites(read);
+    expect(userBrowserResult.fields['browser.backend']).toMatchObject({ status: 'value', source: 'override', value: 'user-browser' });
+    expect(z.safeParse(SETTINGS_READ_CATALOG['browser.backend'].valueSchema, 'user-browser').success).toBe(true);
+    expect(projectSettingsSnapshotV2({
+      fields: {
+        ...Object.fromEntries(SETTINGS_READ_FIELD_IDS.map(id => [id, { status: 'unsupported' } as const])),
+        ...userBrowserResult.fields,
+      },
+      collections: Object.fromEntries(SETTINGS_READ_COLLECTION_IDS.map(id => [id, { status: 'unavailable' } as const])),
+    }).fields['browser.backend']).toEqual({ status: 'value', source: 'override', value: 'user-browser' });
     expect(value(result, 'shortcuts.new-maker')).toEqual([{ code: 'KeyQ', meta: true, ctrl: false, alt: false, shift: false }]);
     expect(result.fields['shortcuts.zoom-in']).toEqual({ status: 'unsupported' });
     const windows = inspectInteractionSettings({ ...context(), platform: 'win32' });
