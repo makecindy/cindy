@@ -328,7 +328,7 @@
     "termRequired": "请先输入词条内容。",
     "aliasesLabel": "常被听成（别名）",
     "aliasesPlaceholder": "每行一个误识别写法",
-    "aliasesHint": "多个别名请用换行或逗号分隔，清空即可移除。",
+    "aliasesHint": "每行填写一个别名，清空即可移除。",
     "searchPlaceholder": "搜索词条或别名",
     "noSearchResults": "没有匹配的词条。",
     "save": "保存",

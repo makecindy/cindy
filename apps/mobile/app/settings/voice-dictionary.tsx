@@ -47,7 +47,7 @@ type EditorMode =
 function parseAliasLines(raw: string): string[] {
   const seen = new Set<string>();
   const aliases: string[] = [];
-  for (const part of raw.split(/[\n,，、]+/)) {
+  for (const part of raw.split(/\r?\n/)) {
     const cleaned = part.trim();
     const key = cleaned.toLowerCase();
     if (!cleaned || seen.has(key)) continue;
@@ -174,6 +174,7 @@ export default function VoiceDictionaryScreen() {
     () =>
       buildMobileVoiceDictionaryEntryViews(
         allHostIds.map((hostId) => readCachedMobileVoiceDictionarySnapshot(hostId)),
+        { maxAliases: Number.POSITIVE_INFINITY },
       ),
     [allHostIds, dictionaryRevision],
   );
@@ -416,7 +417,7 @@ export default function VoiceDictionaryScreen() {
               {item.aliases.length > 0 ? (
                 <Text style={rowStyles.rowDetail} numberOfLines={2}>
                   {t('settings.voiceDictionary.aliases', {
-                    aliases: item.aliases.join(t('settings.voiceDictionary.aliasSeparator')),
+                    aliases: item.aliases.slice(0, 3).join(t('settings.voiceDictionary.aliasSeparator')),
                   })}
                 </Text>
               ) : null}

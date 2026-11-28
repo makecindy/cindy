@@ -14,7 +14,7 @@ export const DEFAULT_DICTATION_REWRITER_SYSTEM_PROMPT: string = `
 只返回 JSON：{"text":"改写后的文字"}。
 `.trim();
 
-const MAX_SELECTED_TEXT_CHARS = 8_000;
+export const MAX_VOICE_REWRITE_SELECTED_TEXT_CHARS = 8_000;
 const MAX_INSTRUCTION_CHARS = 2_000;
 const MAX_SURROUNDING_CONTEXT_CHARS = 800;
 const MAX_DICTIONARY_CHARS = 4_000;
@@ -75,7 +75,16 @@ export class DictationRewriter {
     }
 
     const rawContext = this.contextProvider();
-    const selectedText = (rawContext.selectedText ?? '').slice(0, MAX_SELECTED_TEXT_CHARS);
+    const selectedText = rawContext.selectedText ?? '';
+    if (selectedText.length > MAX_VOICE_REWRITE_SELECTED_TEXT_CHARS) {
+      return {
+        accepted: false,
+        sourceSegmentIds: input.segmentIds,
+        basedOnText: input.text,
+        rejectionReason: 'selection_too_long',
+        elapsedMs: 0,
+      };
+    }
     if (!selectedText.trim()) {
       return {
         accepted: false,

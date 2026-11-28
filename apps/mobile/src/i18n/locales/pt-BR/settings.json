@@ -328,7 +328,7 @@
     "termRequired": "Digite um termo antes de salvar.",
     "aliasesLabel": "Frequentemente ouvido como",
     "aliasesPlaceholder": "Um erro de reconhecimento por linha",
-    "aliasesHint": "Separe vários apelidos com quebras de linha ou vírgulas.",
+    "aliasesHint": "Digite um apelido por linha.",
     "searchPlaceholder": "Pesquisar termos ou apelidos",
     "noSearchResults": "Nenhum termo encontrado.",
     "save": "Salvar",

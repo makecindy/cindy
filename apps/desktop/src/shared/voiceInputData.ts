@@ -740,7 +740,8 @@ export function serializeVoiceInputDictionaryCsv(
   const normalized = normalizeVoiceInputDictionaryEntries(entries);
   const lines = ['term,aliases,source'];
   for (const entry of normalized) {
-    const aliases = entry.aliases.map((alias) => alias.text).join(' | ');
+    // JSON array is reversible even when an alias contains CSV or legacy alias separators.
+    const aliases = JSON.stringify(entry.aliases.map((alias) => alias.text));
     lines.push([
       escapeCsvField(entry.text),
       escapeCsvField(aliases),
@@ -1608,9 +1609,23 @@ function parseVoiceInputDictionaryCsvImport(rawText: string): VoiceInputDictiona
       continue;
     }
     const rawAliasCell = effectiveAliasCol >= 0 ? (row[effectiveAliasCol] ?? '').trim() : '';
-    const rawAliases = rawAliasCell
-      ? rawAliasCell.split(/[|;；、\r\n,]+/).map((part) => part.trim()).filter(Boolean)
-      : [];
+    let rawAliases: string[] = [];
+    let parsedExportAliases = false;
+    if (rawAliasCell.startsWith('[')) {
+      try {
+        const parsed: unknown = JSON.parse(rawAliasCell);
+        if (Array.isArray(parsed) && parsed.every((alias) => typeof alias === 'string')) {
+          rawAliases = parsed;
+          parsedExportAliases = true;
+        }
+      } catch {
+        // An older human-authored alias may start with '['; use legacy parsing.
+      }
+    }
+    if (!parsedExportAliases && rawAliasCell) {
+      // Accept CSV files authored before the reversible export format.
+      rawAliases = rawAliasCell.split(/[|;；、\r\n,]+/).map((part) => part.trim()).filter(Boolean);
+    }
     const key = dictionaryTextKey(term);
     const cleanedAliases = cleanImportAliasList(rawAliases, key);
     const existing = byKey.get(key);

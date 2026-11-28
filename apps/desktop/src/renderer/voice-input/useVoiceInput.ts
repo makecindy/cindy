@@ -10,7 +10,7 @@ import type {
   VoiceInputRendererEvent,
   VoiceInputState,
 } from '@cindy/voice-input-core';
-import { takeRefinementContextHead, takeRefinementContextTail } from '@cindy/voice-input-core';
+import { MAX_VOICE_REWRITE_SELECTED_TEXT_CHARS, takeRefinementContextHead, takeRefinementContextTail } from '@cindy/voice-input-core';
 
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
@@ -36,6 +36,7 @@ import {
   VOICE_INPUT_REFINEMENT_CACHE_SCOPE,
   buildReplyToMessageFromChatMessages,
   buildEditorSelectionContext,
+  selectedTextForVoiceContext,
   type VoiceInputChatMessage,
 } from './refinementContext';
 import {
@@ -862,7 +863,7 @@ export function useVoiceInput(
       return {
         ...baseContext,
         selectionBefore: takeRefinementContextTail(text.slice(0, range.from)),
-        selectedText: takeRefinementContextHead(text.slice(range.from, range.to)),
+        selectedText: selectedTextForVoiceContext(text.slice(range.from, range.to), activeModeRef.current),
         selectionAfter: takeRefinementContextHead(text.slice(range.to)),
         replyToMessage,
       };
@@ -883,7 +884,7 @@ export function useVoiceInput(
       ...baseContext,
       // DictationRefiner.getContext re-imposes cache-friendly ordering when
       // serializing the request body.
-      ...buildEditorSelectionContext(doc, range),
+      ...buildEditorSelectionContext(doc, range, activeModeRef.current),
       replyToMessage,
     };
   }, [
@@ -1458,6 +1459,10 @@ export function useVoiceInput(
         initialRange.to = clamped.to;
       }
       if (!originalText.trim()) return false;
+      if (originalText.replace(/\r\n?/g, '\n').length > MAX_VOICE_REWRITE_SELECTED_TEXT_CHARS) {
+        toast.warning(t('newChat.chatInput.voiceInput.rewriteFailed'));
+        return false;
+      }
       activeModeRef.current = 'rewrite';
       setActiveMode('rewrite');
       rewriteTargetRef.current = { start: initialRange.from, end: initialRange.to, originalText };

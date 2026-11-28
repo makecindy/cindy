@@ -328,7 +328,7 @@
     "termRequired": "保存する前に用語を入力してください。",
     "aliasesLabel": "誤認識されやすい表現",
     "aliasesPlaceholder": "1 行につき 1 つ入力",
-    "aliasesHint": "複数の別名は改行またはカンマで区切ります。",
+    "aliasesHint": "別名は1行に1つ入力します。",
     "searchPlaceholder": "用語や別名を検索",
     "noSearchResults": "一致する用語がありません。",
     "save": "保存",

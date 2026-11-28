@@ -328,7 +328,7 @@
     "termRequired": "请先入词条之文。",
     "aliasesLabel": "常误听为（别名）",
     "aliasesPlaceholder": "每行一误识写法",
-    "aliasesHint": "诸别名以换行或逗号分之，空之即除。",
+    "aliasesHint": "别名逐行书之，空之即除。",
     "searchPlaceholder": "搜寻词条或别名",
     "noSearchResults": "无相合词条。",
     "save": "存",

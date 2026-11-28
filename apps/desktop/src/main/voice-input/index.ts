@@ -603,6 +603,7 @@ function resolveRefineSourceLanguage(explicit?: string): string {
 function normalizeRefinementContext(
   context: DictationRefinementContext | undefined,
   sourceLanguage: string,
+  isRewriteMode = false,
 ): DictationRefinementContext {
   const contextSourceLanguage = context?.sourceLanguage?.trim();
   const effectiveSourceLanguage =
@@ -624,7 +625,9 @@ function normalizeRefinementContext(
     dictionaryAliasHints: normalizeDictionaryAliasHints(context?.dictionaryAliasHints),
     voiceInputHistory: normalizeMultilineText(context?.voiceInputHistory ?? ''),
     selectionBefore: takeTail(context?.selectionBefore ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
-    selectedText: takeHead(context?.selectedText ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
+    selectedText: isRewriteMode
+      ? (context?.selectedText ?? '')
+      : takeHead(context?.selectedText ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
     selectionAfter: takeHead(context?.selectionAfter ?? '', MAX_REFINEMENT_SIDE_CONTEXT_CHARS),
     replyToMessage: truncateRefinementReply(
       context?.replyToMessage ?? '',
@@ -2354,7 +2357,7 @@ export function registerVoiceInputIpc(): void {
     // the overlay was shown. We mutate refinementContext in place once that
     // capture resolves — kicked off in parallel with the provider create so
     // ASR start latency isn't blocked by AX capture.
-    const refinementContext = normalizeRefinementContext(payload?.refinementContext, refineSourceLanguage);
+    const refinementContext = normalizeRefinementContext(payload?.refinementContext, refineSourceLanguage, isRewriteMode);
     if (shouldRefine) {
       beginOverlayContextInjection(payload?.refinementContext, event.sender, refinementContext);
     }

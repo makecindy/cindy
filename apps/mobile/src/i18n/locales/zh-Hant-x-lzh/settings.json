@@ -328,7 +328,7 @@
     "termRequired": "請先入詞條之文。",
     "aliasesLabel": "常誤聽為（別名）",
     "aliasesPlaceholder": "每行一誤識寫法",
-    "aliasesHint": "諸別名以換行或逗號分之，空之即除。",
+    "aliasesHint": "別名逐行書之，空之即除。",
     "searchPlaceholder": "搜尋詞條或別名",
     "noSearchResults": "無相合詞條。",
     "save": "存",

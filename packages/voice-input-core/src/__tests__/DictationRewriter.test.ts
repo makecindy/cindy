@@ -14,6 +14,7 @@ import {
   DEFAULT_DICTATION_REFINER_SYSTEM_PROMPT,
   DEFAULT_DICTATION_REWRITER_SYSTEM_PROMPT,
   DictationRewriter,
+  MAX_VOICE_REWRITE_SELECTED_TEXT_CHARS,
   type TextModelClient,
 } from '../index';
 
@@ -81,6 +82,21 @@ describe('DictationRewriter', () => {
 
     expect(result).toMatchObject({ accepted: false, rejectionReason: 'missing_selected_text' });
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('rejects an oversized selection instead of replacing text the model never received', async () => {
+    const requestJson = vi.fn();
+    const rewriter = new DictationRewriter({
+      client: { async requestJson<T>(input: Parameters<TextModelClient['requestJson']>[0]): Promise<T> {
+        requestJson(input);
+        return { text: 'incomplete rewrite' } as T;
+      } },
+      model: 'auxiliary',
+      contextProvider: () => ({ selectedText: 'A'.repeat(MAX_VOICE_REWRITE_SELECTED_TEXT_CHARS + 1) }),
+    });
+    const result = await rewriter.refine({ text: '翻译', runId: 'run-long', segmentIds: ['seg'] });
+    expect(result).toMatchObject({ accepted: false, rejectionReason: 'selection_too_long' });
+    expect(requestJson).not.toHaveBeenCalled();
   });
 
   it('returns accepted: false on client failure so caller preserves original selected text', async () => {

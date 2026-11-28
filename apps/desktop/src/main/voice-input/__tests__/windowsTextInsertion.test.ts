@@ -143,7 +143,7 @@ describe('WindowsTextInsertionClient', () => {
     });
   });
 
-  it('retries once when resident helper unexpectedly exited before replying', async () => {
+  it('retries capture when the helper exits, but never replays an ambiguous paste', async () => {
     let calls = 0;
     const transport = createFakeTransport(async () => {
       calls += 1;
@@ -158,9 +158,12 @@ describe('WindowsTextInsertionClient', () => {
     }, { aliveAfterError: false });
 
     const client = new WindowsTextInsertionClient(transport);
-    const result = await client.pasteVerified({ processName: 'notepad', bundleId: 'notepad', pid: 100, hwnd: '999' });
+    await expect(client.pasteVerified({ processName: 'notepad', bundleId: 'notepad', pid: 100, hwnd: '999' }))
+      .rejects.toThrow('helper exited');
+    expect(calls).toBe(1);
+    const result = await client.captureTarget();
     expect(calls).toBe(2);
-    expect(result).toMatchObject({ ok: true, outcome: 'command_issued', commandIssued: true });
+    expect(result).toBeNull();
   });
 });
 

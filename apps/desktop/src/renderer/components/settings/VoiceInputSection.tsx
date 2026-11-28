@@ -822,7 +822,7 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
                 >
                   <div className="flex flex-wrap justify-end gap-2">
                     {localAsrStatus?.modelDir ? (
-                      <Button
+                      <Button data-settings-search-action="Clear the selected local ASR model folder"
                         variant="secondary"
                         size="sm"
                         compact
@@ -833,7 +833,7 @@ function VoiceInputServiceSourceCard({ modelSelection }: VoiceInputSectionProps)
                         {t('settings.voiceInput.serviceSource.localAsr.clearFolder')}
                       </Button>
                     ) : null}
-                    <Button
+                    <Button data-settings-search-action="Choose a local ASR model folder"
                       variant="secondary"
                       size="sm"
                       compact
@@ -3174,7 +3174,7 @@ export function VoiceInputSection({ modelSelection }: VoiceInputSectionProps) {
                             }
                           >
                             {t('settings.voiceInput.history.loadMore', {
-                              remaining: filteredHistoryEntries.length - visibleHistoryEntries.length,
+                              count: filteredHistoryEntries.length - visibleHistoryEntries.length,
                             })}
                           </Button>
                         </div>

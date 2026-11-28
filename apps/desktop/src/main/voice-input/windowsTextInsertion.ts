@@ -170,6 +170,7 @@ const WINDOWS_HELPER_POWERSHELL_SCRIPT = [
   '      var curRoot = GetAncestor(currentHwnd, GA_ROOT);',
   '      var tgtRoot = GetAncestor(targetHwnd, GA_ROOT);',
   '      if (curRoot != IntPtr.Zero && curRoot == tgtRoot) return true;',
+  '      return false;',
   '    }',
   '    if (targetPid > 0 && currentPid == targetPid) return true;',
   '    return false;',
@@ -512,13 +513,14 @@ class PowerShellWindowsHelperTransport implements WindowsHelperTransport {
 
       const readyTimer = setTimeout(() => {
         settleStart(() => {
-          this.teardownChild('Windows text insertion helper startup timed out.');
+          this.teardownChild('Windows text insertion helper startup timed out.', child);
           reject(new Error('Windows text insertion helper startup timed out.'));
         });
       }, DEFAULT_START_TIMEOUT_MS);
 
       child.stdout.setEncoding('utf8');
       child.stdout.on('data', (chunk: string) => {
+        if (this.child !== child) return;
         this.stdoutBuffer += chunk;
         const lines = this.stdoutBuffer.split(/\r?\n/);
         this.stdoutBuffer = lines.pop() ?? '';
@@ -551,6 +553,7 @@ class PowerShellWindowsHelperTransport implements WindowsHelperTransport {
 
       child.stderr.setEncoding('utf8');
       child.stderr.on('data', (chunk: string) => {
+        if (this.child !== child) return;
         const trimmed = chunk.trim();
         if (trimmed) {
           log.debug('windows text insertion helper stderr', { message: trimmed.slice(0, 300) });
@@ -561,11 +564,11 @@ class PowerShellWindowsHelperTransport implements WindowsHelperTransport {
         const err = error instanceof Error ? error : new Error(String(error));
         if (!settled) {
           settleStart(() => {
-            this.teardownChild(err.message);
+            this.teardownChild(err.message, child);
             reject(err);
           });
         } else {
-          this.teardownChild(err.message);
+          this.teardownChild(err.message, child);
         }
       });
 
@@ -573,11 +576,11 @@ class PowerShellWindowsHelperTransport implements WindowsHelperTransport {
         const reason = `Windows text insertion helper exited (code=${String(code)}, signal=${String(signal)}).`;
         if (!settled) {
           settleStart(() => {
-            this.teardownChild(reason);
+            this.teardownChild(reason, child);
             reject(new Error(reason));
           });
         } else {
-          this.teardownChild(reason);
+          this.teardownChild(reason, child);
         }
       });
     });
@@ -593,7 +596,7 @@ class PowerShellWindowsHelperTransport implements WindowsHelperTransport {
     return new Promise<HelperRawResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(payload.id);
-        this.teardownChild(`Windows text insertion helper timed out after ${timeoutMs}ms.`);
+        this.teardownChild(`Windows text insertion helper timed out after ${timeoutMs}ms.`, child);
         reject(new Error(`Windows text insertion helper timed out after ${timeoutMs}ms.`));
       }, timeoutMs);
       this.pending.set(payload.id, { resolve, reject, timer });
@@ -603,7 +606,7 @@ class PowerShellWindowsHelperTransport implements WindowsHelperTransport {
         this.pending.delete(payload.id);
         clearTimeout(timer);
         const err = error instanceof Error ? error : new Error(String(error));
-        this.teardownChild(err.message);
+        this.teardownChild(err.message, child);
         reject(err);
       }
     });
@@ -613,7 +616,8 @@ class PowerShellWindowsHelperTransport implements WindowsHelperTransport {
     this.teardownChild('Windows text insertion helper stopped.');
   }
 
-  private teardownChild(reason: string): void {
+  private teardownChild(reason: string, expectedChild?: ChildProcessWithoutNullStreams): void {
+    if (expectedChild && this.child !== expectedChild) return;
     const child = this.child;
     this.child = null;
     this.startPromise = null;
@@ -751,6 +755,8 @@ export class WindowsTextInsertionClient {
     try {
       return await this.transport.send(payload, timeoutMs);
     } catch (firstError) {
+      // A lost acknowledgement does not prove SendInput was skipped.
+      if (payload.command === 'paste-verified') throw firstError;
       if (this.transport.isAlive) throw firstError;
       // Resident helper exited unexpectedly; spawn a clean instance once.
       const retryPayload = { ...payload, id: this.nextRequestId++ };

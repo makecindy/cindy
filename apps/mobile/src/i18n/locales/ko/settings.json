@@ -328,7 +328,7 @@
     "termRequired": "저장하기 전에 용어를 입력하세요.",
     "aliasesLabel": "자주 잘못 인식되는 표현",
     "aliasesPlaceholder": "한 줄에 하나씩 입력",
-    "aliasesHint": "여러 별칭은 줄바꿈이나 쉼표로 구분하세요.",
+    "aliasesHint": "별칭을 한 줄에 하나씩 입력하세요.",
     "searchPlaceholder": "용어 또는 별칭 검색",
     "noSearchResults": "일치하는 용어가 없습니다.",
     "save": "저장",

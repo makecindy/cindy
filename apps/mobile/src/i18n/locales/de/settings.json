@@ -328,7 +328,7 @@
     "termRequired": "Gib vor dem Speichern einen Begriff ein.",
     "aliasesLabel": "Häufig falsch verstanden als",
     "aliasesPlaceholder": "Eine Fehlerkennung pro Zeile",
-    "aliasesHint": "Mehrere Aliase durch Zeilenumbrüche oder Kommas trennen.",
+    "aliasesHint": "Einen Alias pro Zeile eingeben.",
     "searchPlaceholder": "Begriffe oder Aliase suchen",
     "noSearchResults": "Keine passenden Begriffe.",
     "save": "Speichern",

@@ -328,7 +328,7 @@
     "termRequired": "Enter a term before saving.",
     "aliasesLabel": "Often misheard as",
     "aliasesPlaceholder": "One misrecognition per line",
-    "aliasesHint": "Separate multiple aliases with new lines or commas.",
+    "aliasesHint": "Enter one alias per line.",
     "searchPlaceholder": "Search terms or aliases",
     "noSearchResults": "No matching terms.",
     "save": "Save",

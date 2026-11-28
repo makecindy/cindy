@@ -121,6 +121,34 @@ describe('LocalAsrModelStore', () => {
 });
 
 describe('LocalSherpaAsrProvider', () => {
+  it('bounds preview decoding and reports the recording limit instead of returning truncated speech', async () => {
+    vi.useFakeTimers();
+    try {
+      const transcribe = vi.fn(async () => 'preview');
+      const provider = new LocalSherpaAsrProvider({
+        engine: { warm: vi.fn(async () => undefined), transcribe },
+        sampleRate: 10,
+        minPartialAudioMs: 0,
+        partialIntervalMs: 700,
+      });
+      const events: AsrEvent[] = [];
+      provider.onEvent((event) => events.push(event));
+      await provider.start();
+      provider.appendAudio(new Int16Array(90).buffer);
+      await vi.advanceTimersByTimeAsync(700);
+      expect(transcribe).toHaveBeenCalledWith(expect.objectContaining({ length: 80 }), 10, undefined);
+
+      provider.appendAudio(new Int16Array(1_710).buffer);
+      provider.appendAudio(new Int16Array(1).buffer);
+      expect(events.some((event) => event.type === 'error')).toBe(true);
+      await provider.flushAudio();
+      expect(events.some((event) => event.type === 'stable')).toBe(false);
+      await provider.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('warms offline engine on start and emits stable transcript on flushAudio without cloud credentials', async () => {
     const warm = vi.fn(async () => undefined);
     const transcribe = vi.fn(async (samples: Float32Array) => (samples.length > 0 ? '离线语音测试' : ''));

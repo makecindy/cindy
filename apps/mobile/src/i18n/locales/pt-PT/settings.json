@@ -328,7 +328,7 @@
     "termRequired": "Introduza um termo antes de guardar.",
     "aliasesLabel": "Frequentemente ouvido como",
     "aliasesPlaceholder": "Um erro de reconhecimento por linha",
-    "aliasesHint": "Separe vários aliases com quebras de linha ou vírgulas.",
+    "aliasesHint": "Introduza um alias por linha.",
     "searchPlaceholder": "Pesquisar termos ou aliases",
     "noSearchResults": "Nenhum termo encontrado.",
     "save": "Guardar",

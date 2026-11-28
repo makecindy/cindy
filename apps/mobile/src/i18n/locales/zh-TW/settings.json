@@ -328,7 +328,7 @@
     "termRequired": "請先輸入詞條內容。",
     "aliasesLabel": "常被聽成（別名）",
     "aliasesPlaceholder": "每行一個誤辨識寫法",
-    "aliasesHint": "多個別名請用換行或逗號分隔，清空即可移除。",
+    "aliasesHint": "每行填寫一個別名，清空即可移除。",
     "searchPlaceholder": "搜尋詞條或別名",
     "noSearchResults": "沒有相符的詞條。",
     "save": "儲存",

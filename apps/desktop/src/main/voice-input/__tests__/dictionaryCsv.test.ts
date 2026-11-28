@@ -106,7 +106,8 @@ describe('voice input dictionary CSV import', () => {
     const entryB = createManualVoiceInputDictionaryEntry('OpenAI, Inc.');
     if (!entryA || !entryB) throw new Error('failed to create fixture entries');
     entryA.aliases = [
-      { text: 'web coding', count: 3, lastSeenAt: 100 },
+      { text: 'OpenAI, Inc.', count: 3, lastSeenAt: 100 },
+      { text: 'A | B', count: 2, lastSeenAt: 100 },
       { text: '外博扣丁', count: 1, lastSeenAt: 90 },
     ];
 
@@ -116,7 +117,7 @@ describe('voice input dictionary CSV import', () => {
       ok: true,
       format: 'json',
       items: [
-        { text: 'Vibe Coding', aliases: ['web coding', '外博扣丁'] },
+        { text: 'Vibe Coding', aliases: ['OpenAI, Inc.', 'A | B', '外博扣丁'] },
         { text: 'OpenAI, Inc.', aliases: [] },
       ],
       duplicateRowCount: 0,
@@ -129,7 +130,7 @@ describe('voice input dictionary CSV import', () => {
       ok: true,
       format: 'csv',
       items: [
-        { text: 'Vibe Coding', aliases: ['web coding', '外博扣丁'] },
+        { text: 'Vibe Coding', aliases: ['OpenAI, Inc.', 'A | B', '外博扣丁'] },
         { text: 'OpenAI, Inc.', aliases: [] },
       ],
       duplicateRowCount: 0,
@@ -138,7 +139,7 @@ describe('voice input dictionary CSV import', () => {
 
     const merged = mergeVoiceInputDictionaryImportItems([], parsedCsv.ok ? parsedCsv.items : []);
     expect(merged.importedCount).toBe(2);
-    expect(merged.entries[0]?.aliases.map((alias) => alias.text)).toEqual(['web coding', '外博扣丁']);
+    expect(merged.entries[0]?.aliases.map((alias) => alias.text)).toEqual(['OpenAI, Inc.', 'A | B', '外博扣丁']);
   });
 
   it('keeps legacy one-column CSV import compatible and rejects unrecognized multi-column CSV', () => {
