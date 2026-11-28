@@ -2317,10 +2317,46 @@ function createDeepSeekV41ReplayTransform(frozenAuthInjection?: CodexProxyAuthIn
     // The routing preflight normally returns a local 400 first. Fail closed if
     // another earlier transform changes a safe request into an ambiguous batch.
     if (result.kind === 'invalid') throw new Error('deepseek_tool_output_order_invalid');
-    return result.kind === 'normalized' ? result.body : null;
+    const normalized = result.kind === 'normalized' ? result.body : body;
+    const candidates = inlineToolJpegs(normalized);
+    if (candidates.length) return omitUnreadableToolJpegs(normalized, candidates);
+    return result.kind === 'normalized' ? normalized : null;
   };
   transform.errorMode = 'reject-request';
   return transform;
+}
+
+function inlineToolJpegs(body: Record<string, unknown>) {
+  const candidates: { index: number; partIndex: number; data: string }[] = [];
+  if (!Array.isArray(body.input)) return candidates;
+  for (const [index, item] of body.input.entries()) {
+    if (!isPlainObject(item) || (item.type !== 'function_call_output' && item.type !== 'custom_tool_call_output')
+      || !Array.isArray(item.output)) continue;
+    for (const [partIndex, part] of item.output.entries()) {
+      if (!isPlainObject(part) || part.type !== 'input_image' || typeof part.image_url !== 'string') continue;
+      const prefix = /^data:image\/jpe?g;base64,/i.exec(part.image_url);
+      if (prefix) candidates.push({ index, partIndex, data: part.image_url.slice(prefix[0].length) });
+    }
+  }
+  return candidates;
+}
+
+/** Validate on the outgoing copy, preserving stored history. */
+async function omitUnreadableToolJpegs(body: Record<string, unknown>, candidates: ReturnType<typeof inlineToolJpegs>) {
+  const { default: sharp } = await import('sharp');
+  const input = [...body.input as unknown[]];
+  for (const { index, partIndex, data } of candidates) {
+    try {
+      // stats() consumes the pixel stream; metadata() only reads the header.
+      await sharp(Buffer.from(data, 'base64'), { failOn: 'warning' }).stats();
+    } catch {
+      const item = input[index] as Record<string, unknown> & { output: unknown[] };
+      const output = [...item.output];
+      output[partIndex] = { type: 'input_text', text: '[Tool image omitted: the JPEG could not be decoded.]' };
+      input[index] = { ...item, output };
+    }
+  }
+  return { ...body, input };
 }
 
 function rejectAmbiguousDeepSeekReplay(): RoutingDecision {

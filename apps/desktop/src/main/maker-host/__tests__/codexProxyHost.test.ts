@@ -7287,6 +7287,20 @@ describe('codex proxy host', () => {
       for (const transform of transforms) current = await transform(current, ctx) ?? current;
       expect(current).toHaveProperty('input', [call, output, developer]);
       expect(input).toEqual([call, developer, output]);
+      // #13643, unit: run the configured outbound chain with a valid JPEG and
+      // a local decoder failure, including the next user input on the same thread.
+      const sharp = (await import('sharp')).default;
+      const jpeg = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).jpeg().toBuffer();
+      const valid = { type: 'input_image', image_url: 'data:image/jpeg;base64,' + jpeg.toString('base64') };
+      const unreadable = { type: 'input_image', image_url: 'data:image/jpeg;base64,AA==' };
+      const text = { type: 'input_text', text: 'tool text' };
+      const mixed = { ...output, output: [valid, unreadable, text] };
+      const next = { type: 'message', role: 'user', content: 'continue' };
+      current = { model, input: [call, mixed, next] };
+      for (const transform of transforms) current = await transform(current, ctx) ?? current;
+      expect(current).toHaveProperty('input', [call, { ...mixed, output: [valid,
+        { type: 'input_text', text: expect.stringContaining('could not be decoded') }, text] }, next]);
+      expect(mixed.output[1]).toBe(unreadable);
     } finally {
       host.unregister('session-deepseek-replay');
       clearSessionProvider('session-deepseek-replay');

@@ -540,6 +540,26 @@ describe('forkSessionAtMessage', () => {
     }
   });
 
+  // #13643, unit: a lost fork.session reply can precede or follow the commit.
+  it.each([true, false])('recovers a lost fork receipt with one native child (committed=%s)', async committed => {
+    selectQueue.push([makeSourceRow({})], [makeMessageRow({ id: 'target-user', role: 'user', createdAt: 3000 })],
+      [makeMessageRow({ id: 'asst', role: 'assistant', agentMeta: JSON.stringify({ uuid: 'anchor' }), createdAt: 2000 })]);
+    forkSdkSessionMock.mockResolvedValueOnce({ newSdkSessionId: 'child-sdk', uuidMap: new Map() });
+    txMock.mockImplementationOnce((_name, args) => {
+      const { newSession } = args as { newSession: Parameters<typeof makeSourceRow>[0] };
+      const row = makeSourceRow(newSession);
+      if (!committed) selectQueue.push([]);
+      selectQueue.push([row]);
+      return Promise.reject(Object.assign(new Error('lost reply'), { code: 'DB_TRANSPORT_OUTCOME_UNKNOWN' }));
+    });
+    const result = await forkSessionAtMessage('src-session', 'target-user');
+    expect(result.sdkSessionId).toBe('child-sdk');
+    expect(result.parentSessionId).toBe('src-session');
+    expect(forkSdkSessionMock).toHaveBeenCalledTimes(1);
+    expect(txMock).toHaveBeenCalledTimes(committed ? 1 : 2);
+    if (!committed) expect(txMock.mock.calls[1]).toEqual(txMock.mock.calls[0]);
+  });
+
   it('inherits the task context-window budget on a strip-encrypted Codex fork too', async () => {
     const first = makeMessageRow({ id: 'user-1', role: 'user', createdAt: 1000 });
     const second = makeMessageRow({ id: 'asst-1', role: 'assistant', createdAt: 2000 });
