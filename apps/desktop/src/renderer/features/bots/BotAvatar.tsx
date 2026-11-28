@@ -105,9 +105,13 @@ export interface BotAvatarProps {
   bot: { avatarUrl?: string | null; deviceId?: string; name: string; avatar?: string | null; avatarColor?: string | null };
   size?: BotAvatarSize;
   className?: string;
+  preview?: {
+    label: string;
+    open: (src: string, trigger: HTMLButtonElement) => void;
+  };
 }
 
-export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
+export function BotAvatar({ bot, size = 'md', className, preview }: BotAvatarProps) {
   const emoji = (bot.avatar ?? '').trim();
   const bundledArtwork = BUNDLED_AVATAR_BY_SENTINEL[emoji.toLowerCase()] ?? null;
   const publicArtwork = [bot.avatarUrl, emoji].find((value) => value?.startsWith('https://')) ?? null;
@@ -125,16 +129,22 @@ export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
   const [failed, setFailed] = useState<readonly string[]>([]);
   useEffect(() => setFailed([]), [candidateKey]);
   const visibleArtwork = candidates.find((candidate) => !failed.includes(candidate)) ?? null;
+  const [loadedArtwork, setLoadedArtwork] = useState<string | null>(null);
+  const previewSource = preview && !bot.deviceId && visibleArtwork === emoji && isManagedBotAvatarUrl(visibleArtwork)
+    ? visibleArtwork
+    : null;
+  const canPreview = previewSource !== null && loadedArtwork === previewSource;
   // Anything that is not one grapheme (an unresolved sentinel, an address whose image failed)
   // falls through to the initial rather than painting the raw string.
   const glyph = !visibleArtwork && isSingleBotAvatarGrapheme(emoji) ? emoji : '';
   const initial = waiting ? '' : botAvatarInitial(bot.name);
   return (
     <span
-      aria-hidden
+      aria-hidden={canPreview ? undefined : true}
       className={cn(
         'inline-flex shrink-0 select-none items-center justify-center overflow-hidden rounded-full leading-none',
         SIZE_CLASSES[size],
+        canPreview && 'relative',
         className,
       )}
       // Kept even for artwork: the hue is what shows through while the bundled
@@ -148,6 +158,7 @@ export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
           src={visibleArtwork}
           alt=""
           draggable={false}
+          onLoad={previewSource ? () => setLoadedArtwork(previewSource) : undefined}
           onError={() => setFailed((previous) => [...previous, visibleArtwork])}
           className="pointer-events-none h-full w-full select-none rounded-full object-cover"
         />
@@ -155,6 +166,15 @@ export function BotAvatar({ bot, size = 'md', className }: BotAvatarProps) {
         <span>{glyph}</span>
       ) : (
         <span className="font-medium text-[var(--text-primary)]">{initial}</span>
+      )}
+      {canPreview && preview && (
+        <button
+          type="button"
+          aria-label={preview.label}
+          title={preview.label}
+          className="absolute inset-0 cursor-zoom-in rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
+          onClick={(event) => preview.open(previewSource, event.currentTarget)}
+        />
       )}
     </span>
   );
