@@ -5,6 +5,11 @@ import { sharedTaskRecoveryError, sharedTaskRecoveryFor } from '../../shared/sha
 import { i18n } from '@/i18n';
 
 describe('decodeRemoteErrorMessage', () => {
+  it('localizes a Claude Code SSH startup failure wrapped by the send path', () => {
+    const raw = 'LAZY_CREATE_FAILED: [SSH_EXEC_FAILED] SSH command channel open failed';
+    expect(decodeRemoteErrorMessage(raw)).toBe('Could not run the command over SSH. Try again in a moment.');
+  });
+
   // #10796, unit: the enqueue boundary must keep the transport cause for live
   // localization and diagnostics; reporting failure must not resend the input.
   it.each(['TIMEOUT', 'LINK_BUSY', 'UNRESPONSIVE'])('retains remote %s through an enqueue rejection without replay', async cause => {

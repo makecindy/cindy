@@ -4,7 +4,7 @@ import { pendingGhostCardFormDelivery } from '@cindy/maker-shared/ghost-card-for
 import { applySessionRebalancePreferencePatch } from '@/features/provider-group/sessionRebalanceCache';
 import { isVoiceCallTaskMessage } from '../../shared/voiceConversation';
 import { remoteAgentLimitErrorKey } from '../../shared/remoteAgentLimits';
-import { chatRemoteErrorGuidanceKey } from './autoReviewUnavailableGuidance';
+import { chatRemoteErrorGuidanceKey, parseDesktopChatErrorCode } from './autoReviewUnavailableGuidance';
 import { sharedTaskRecoveryReason } from '../../shared/sharedTaskRecovery';
 import { readBotTaskResults } from '@cindy/maker-shared/botCollaboration';
 import {
@@ -78,7 +78,6 @@ import {
   isProviderSafetyRefusalError,
   PROVIDER_SAFETY_REFUSAL_REASON,
   redactSensitiveText,
-  parseAgentErrorCode,
   localizeSubscriptionAccountError,
 } from '@cindy/maker-shared/error-redaction';
 import {
@@ -396,7 +395,7 @@ export function remoteErrorI18nKey(msg: string): string | undefined {
   if (recovery) return `sharedTaskRecovery.reason.${recovery}`;
   const limitKey = remoteAgentLimitErrorKey(msg);
   if (limitKey) return limitKey;
-  const parsed = parseAgentErrorCode(msg);
+  const parsed = parseDesktopChatErrorCode(msg);
   return parsed ? chatRemoteErrorGuidanceKey(parsed.code, null) : undefined;
 }
 
@@ -409,7 +408,7 @@ export function decodeRemoteErrorMessage(msg: string): string {
   if (recovery) return i18n.t(`sharedTaskRecovery.reason.${recovery}`);
   const limitKey = remoteAgentLimitErrorKey(msg);
   if (limitKey) return i18n.t(limitKey);
-  const parsed = parseAgentErrorCode(msg);
+  const parsed = parseDesktopChatErrorCode(msg);
   return parsed
     ? i18n.t(chatRemoteErrorGuidanceKey(parsed.code, null)!, { defaultValue: parsed.fallback })
     : msg;

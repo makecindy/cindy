@@ -255,6 +255,20 @@ export function resolveProxyBundlePath(): string | null {
   return null;
 }
 
+function isSshProbeChannelRejected(error: unknown): boolean {
+  // ssh2 forwards this error before the remote probe command can execute.
+  return error instanceof Error && error.message.startsWith('(SSH) Channel open failure:');
+}
+
+function joinInstallAfterRejectedProbe(hostId: string, error: unknown): Promise<void> | undefined {
+  if (!isSshProbeChannelRejected(error)) return;
+
+  // A same-host install may have started while this probe was in flight.
+  const installing = inFlightCcManagerInstall.get(hostId);
+  if (installing) return installing.promise;
+  throwIpcError('SSH_EXEC_FAILED', 'SSH command channel open failed');
+}
+
 /**
  * Ensure cc-manager is installed on the given remote host. Idempotent:
  * cache hit returns ~0ms; cold path runs probe + (conditional) node install +
@@ -281,6 +295,8 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
 }): Promise<void> {
   const { host, installProxyOnDemand = false, forceReinstall = false } = opts;
   const hostId = host.id;
+  const installing = inFlightCcManagerInstall.get(hostId);
+  if (!forceReinstall && installing) return installing.promise;
 
   // In-memory cache hit: 上次 install 成功过, fast path return。但 cache 只代表
   // "这个 desktop 进程在此次启动后曾经装过" — 文件可能被外部 rm / 磁盘 cleanup /
@@ -291,8 +307,8 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
   //
   // stat 是单个 ssh exec `[ -f bundle ] && [ -x node ]`, 几十 ms, 比 probeCcManager 的完整
   // bash script (含 node spawn 验证 cc-mgr.mjs --version) 轻得多, 但能覆盖
-  // "缺失" 这个最常见的 cache-stale 场景。stat 失败 → 清 cache 走完整 install
-  // pipeline (包含上传新 bundle), 自动恢复。
+  // "缺失" 这个最常见的 cache-stale 场景。确认缺失时清 cache 并走安装；若 SSH
+  // 拒绝打开探测通道，本次请求直接失败并保留上次验证的缓存。
   if (!forceReinstall && ccManagerInstalledCache.has(hostId)) {
     try {
       const r = await host.exec(
@@ -309,6 +325,8 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
       ccManagerInstalledCache.delete(hostId);
       claudeBinaryPathCache.delete(hostId);
     } catch (err) {
+      const install = joinInstallAfterRejectedProbe(hostId, err);
+      if (install) return install;
       log.warn('cc-mgr install: bundle stat failed (will fall through to full install)', {
         hostId,
         error: err instanceof Error ? err.message : String(err),
@@ -340,6 +358,8 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
         });
       }
     } catch (err) {
+      const install = joinInstallAfterRejectedProbe(hostId, err);
+      if (install) return install;
       claudeRuntimeReady = false;
       log.warn('cc-mgr install: Claude Code version probe failed (will attempt install)', {
         hostId,
@@ -430,6 +450,7 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
                 `then echo ALIVE; else echo DEAD; fi'`,
               { timeoutMs: 3_000, label: 'cc-mgr-daemon-alive-check' },
             ).catch((err) => {
+              if (isSshProbeChannelRejected(err)) throw err;
               log.warn('cc-mgr daemon-alive check failed (treating as alive to be safe)', {
                 hostId,
                 error: err instanceof Error ? err.message : String(err),
@@ -463,6 +484,8 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
         }
       }
     } catch (err) {
+      const install = joinInstallAfterRejectedProbe(hostId, err);
+      if (install) return install;
       log.warn('cc-mgr probe failed (will attempt install)', {
         hostId,
         error: err instanceof Error ? err.message : String(err),
@@ -604,24 +627,19 @@ export async function ensureCcManagerInstalledOrInstall(opts: {
         phase: 'failed',
         message: msg,
       });
-      throw err;
+      log.error('cc-mgr install: failed', { hostId, error: msg });
+      // The initiating caller and all joiners receive the same coded result.
+      if (err instanceof Error && (err as { code?: string }).code) throw err;
+      throwIpcError('SSH_INSTALL_FAILED', msg);
     }
-  })();
-
-  inFlightCcManagerInstall.set(hostId, { promise, withForceReinstall: forceReinstall });
-  try {
-    await promise;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.error('cc-mgr install: failed', { hostId, error: msg });
-    // Preserve coded IpcError when present; wrap raw errors.
-    if (err instanceof Error && (err as { code?: string }).code) throw err;
-    throwIpcError('SSH_INSTALL_FAILED', msg);
-  } finally {
+  })().finally(() => {
     if (inFlightCcManagerInstall.get(hostId)?.promise === promise) {
       inFlightCcManagerInstall.delete(hostId);
     }
-  }
+  });
+
+  inFlightCcManagerInstall.set(hostId, { promise, withForceReinstall: forceReinstall });
+  await promise;
 }
 
 

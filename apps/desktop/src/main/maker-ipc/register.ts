@@ -20778,6 +20778,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           });
           sess = lazySess;
         } catch (err) {
+          if (isIpcError(err) && err.code === 'SSH_EXEC_FAILED') throw err;
           throwIpcError(
             'INTERNAL',
             err instanceof Error ? err.message : 'context usage lazy create failed',

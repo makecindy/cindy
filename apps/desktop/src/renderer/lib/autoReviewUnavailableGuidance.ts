@@ -1,3 +1,9 @@
+import { parseAgentErrorCode } from '@cindy/maker-shared/error-redaction';
+
+export function parseDesktopChatErrorCode(message: string) {
+  return parseAgentErrorCode(message, ['SSH_EXEC_FAILED']);
+}
+
 /**
  * Personal WeChat turns always attach a confirmation policy, and none of the
  * three harnesses allow Full access under that policy. Viewing the task must
@@ -12,6 +18,7 @@ export function chatRemoteErrorGuidanceKey(
   sessionSource: unknown,
 ): string | undefined {
   if (!code) return undefined;
+  if (code === 'SSH_EXEC_FAILED') return 'ipcError.SSH_EXEC_FAILED';
   if (code === 'REMOTE_CODEX_SOURCE_UNSUPPORTED') {
     return 'settings.remote.startSession.unsupportedCodexSource';
   }
