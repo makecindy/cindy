@@ -3251,12 +3251,26 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
       if (!invalidInput(refusal) && (!refusal || refusal instanceof ChatResponseError)) supportsTeammateMentions = false;
     }
     if (!refusal) return;
+    // The server refused the terminal result itself. Two families share one end state:
+    // - content refusal: retry once without the optional locator, then retire if still refused;
+    // - every other definitive refusal (#7394: 409 STALE_EXECUTOR / lease expiry, withdrawn
+    //   access, a gone room): nothing can change the outcome, so retire as a failure at once.
+    // A definitive `fail`/`cancel` refusal is not re-routed here: the group simply never learns —
+    // the same end state as before, and a newer executor's own result stays the only one shown.
+    // A stop is not routed here either: `STOP_REQUESTED` keeps its own path (stop the input, retire
+    // the lease with `cancel`), so a turn the owner stopped is never presented as a failure.
+    if (definitiveRefusal(action, refusal)) { reportRefusal(run, action, refusal, payload.content, 1); throw new SettlementRefused(refusal); }
     if (!contentRefusal(action, refusal)) throw refusal;
     reportRefusal(run, action, refusal, payload.content, 1);
     if (!dropProcessLocator(payload)) throw new SettlementRefused(refusal);
     const retried = await attempt();
     if (!retried) return;
-    if (!contentRefusal(action, retried)) throw retried;
+    if (!contentRefusal(action, retried)) {
+      // The degraded attempt can be refused for the lease or access instead of the content: there is
+      // nothing left to drop, so it retires as a failure exactly like the first attempt (#7394).
+      if (definitiveRefusal(action, retried)) { reportRefusal(run, action, retried, payload.content, 2); throw new SettlementRefused(retried); }
+      throw retried;
+    }
     // Describe the request that was actually refused this time: the locator is gone by now, so the
     // second refusal must not be paired with the first attempt's block shapes.
     reportRefusal(run, action, retried, payload.content, 2);
@@ -3271,6 +3285,21 @@ function createChatServer(local: BotGroupChatService, deps: BotGroupChatServiceD
     return action === 'complete' && error instanceof ChatResponseError && !retryableResponse(error)
       && error.status >= 400 && error.status < 500 && error.status !== 408
       && ['INVALID_INPUT', 'INVALID_PARAMS', 'REQUEST_FAILED'].includes(error.message);
+  }
+  /**
+   * Any definitive refusal of the terminal result that is not a content validation: the lease is
+   * stale or expired (`STALE_EXECUTOR`/`STALE_EXECUTION`/`EXECUTION_EXPIRED`), access was
+   * withdrawn, or the room is gone. The content ladder cannot save it, and leaving it silent drops
+   * the turn in the group's eyes (#7394): retire it through the same `fail` ladder instead. Only a
+   * `complete` result takes this path — `fail`/`cancel` refusals end the turn as they always have.
+   *
+   * A stop is not a refusal of the result: `STOP_REQUESTED` means the owner stopped the turn from
+   * another device, so it keeps its own path (stop the input, retire the lease with `cancel`).
+   */
+  function definitiveRefusal(action: string, error: unknown): error is ChatResponseError {
+    return action === 'complete' && error instanceof ChatResponseError && !retryableResponse(error)
+      && error.status >= 400 && error.status < 500 && error.message !== 'STOP_REQUESTED'
+      && !contentRefusal(action, error);
   }
   /** Drops the optional locator block the retry leaves out; `false` when there is nothing to drop. */
   function dropProcessLocator(payload: Record<string, unknown>): boolean {
