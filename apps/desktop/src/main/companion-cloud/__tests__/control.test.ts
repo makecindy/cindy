@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { COMPANION_CLOUD_VERSION } from '@cindy/device-link';
+import { COMPANION_CLOUD_VERSION, parseCompanionCloudRemoteActionResult } from '@cindy/device-link';
 import { createIpcError, missingBotModelError } from '../../../shared/ipc-errors.js';
 import type { DeviceLinkDeviceView } from '../../../shared/deviceLinkIpc.js';
 import type { CompanionCloudActionResult } from '../../../shared/companionCloud.js';
@@ -23,7 +23,7 @@ const MIA = { name: 'Mia', description: '', soul: '', systemPrompt: '', user: ''
 let runtime: CompanionCloudRuntime | undefined;
 afterEach(() => { runtime?.dispose(); runtime = undefined; });
 
-function setup(options: { home: string | null; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[]; backgroundIdentityApi?: CompanionApi;
+function setup(options: { home: string | null; selfDeviceId?: string; handler?: ApiHandler; devices?: DeviceLinkDeviceView[]; profiles?: string[]; backgroundIdentityApi?: CompanionApi;
   backgroundMirror?: Parameters<typeof startCompanionCloud>[0]['backgroundMirror'];
   rowsAfter?: CompanionCloudHost['rowsAfter']; latestRows?: CompanionCloudHost['latestRows'];
   readActors?: () => Promise<CompanionRuntimeActor[]>; identityDeferred?: (error: unknown) => boolean;
@@ -66,8 +66,8 @@ function setup(options: { home: string | null; handler?: ApiHandler; devices?: D
   };
   runtime = startCompanionCloud({ api, ...(options.backgroundIdentityApi ? { backgroundIdentity: {
     api: options.backgroundIdentityApi, isDeferred: options.identityDeferred ?? (() => false) } } : {}),
-    backgroundMirror: options.backgroundMirror, store: options.store, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: 'desk', current: options.current ?? (() => true),
-    bots: () => actors.filter(a => a.homeDeviceId === 'desk' && !state.isDemoted(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
+    backgroundMirror: options.backgroundMirror, store: options.store, host, endpoint: 'https://chat', humanActorId: 'human', selfDeviceId: options.selfDeviceId ?? 'desk', current: options.current ?? (() => true),
+    bots: () => actors.filter(a => a.homeDeviceId === (options.selfDeviceId ?? 'desk') && !state.isDemoted(a.externalId)).map(a => ({ botId: a.externalId, actorId: a.id, name: a.name })),
     actors: () => actors, refresh, refreshForeground: options.refreshForeground, publish, onShadowChanged, log, ...(options.syncProfile ? { syncProfile: options.syncProfile } : {}),
     ...(options.paused ? { paused: options.paused } : {}) });
   return { runtime, actors, calls, local, state, files, refresh, publish, onShadowChanged, host, log };
@@ -1266,6 +1266,29 @@ describe('switch home from any computer', () => {
     expect(await t.runtime.homeChoices('bot_mia')).toEqual({ homeDeviceId: 'desk', homeName: '', mode: 'local', targets: [{ deviceId: 'laptop', name: 'laptop', online: true }] });
     expect(await t.runtime.switchHome('bot_mia', 'laptop')).toEqual({ ok: true });
     expect(t.state.isDemoted('bot_mia')).toBe(true);
+  });
+
+  // #12842, unit: the registered home can be reachable before its local copy can run.
+  it('reports an unready home to the requesting computer without moving the buddy', async () => {
+    const home = setup({ home: 'desk', devices: [device('laptop')] });
+    try {
+      home.state.update('bot_mia', 'actor-1', entry => { entry.demoted = true; });
+      const caller = setup({ selfDeviceId: 'laptop', home: 'desk', devices: [device('desk')], homeLink: {
+        version: async () => 2, targets: () => home.runtime.transferTargets(),
+        handOver: async (_deviceId, botId, target) => {
+          const parsed = parseCompanionCloudRemoteActionResult(await home.runtime.transfer(botId, target));
+          if (parsed.ok || parsed.code !== 'FAILED') throw new Error('Expected the home to decline the hand-over');
+          return { ...parsed, code: 'FAILED' };
+        },
+      } });
+      expect(await caller.runtime.homeChoices('bot_mia')).toMatchObject({ mode: 'remote', homeDeviceId: 'desk' });
+      expect(await caller.runtime.switchHome('bot_mia', 'laptop')).toEqual({
+        ok: false, code: 'FAILED', handOverFailure: 'HOME_NOT_READY',
+      });
+      expect([...home.calls, ...caller.calls].filter(call => call.method !== 'GET')).toEqual([]);
+      expect(home.state.isDemoted('bot_mia')).toBe(true);
+      expect(home.actors[0]!.homeDeviceId).toBe('desk');
+    } finally { home.runtime.dispose(); }
   });
 
   it('asks the online home to hand the companion over, and re-reads homes when it moved here', async () => {
