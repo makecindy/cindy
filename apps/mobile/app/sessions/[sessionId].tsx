@@ -68,7 +68,7 @@ import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, reconcileMobileOutboxDrafts } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
-import { hasUncreatedHostSession, isDurableOutboxSettled, isPendingHostDialogueCreation, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { hasUncreatedHostSession, isDurableOutboxHandedOff, isDurableOutboxSettled, isPendingHostDialogueCreation, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { isInFlightDeviceLinkError, isSharedTaskPeer, isScopedPeer, resolveRemoteText } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
@@ -1865,9 +1865,10 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   const sendInFlightRef = useRef(false);
   const rawOutboxRecords = useSyncExternalStore(mobileDurableOutbox.subscribe, mobileDurableOutbox.getSnapshot);
   const durableOutboxRecords = useMemo(() => rawOutboxRecords.filter((record) => record.accountId === outboxOwner.accountKey && !isDurableOutboxSettled(record)), [rawOutboxRecords, outboxOwner]);
-  const outboxItems = useMemo(() => durableOutboxRecords
-    .filter((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && r.accountId === getMobileAuthOwner().accountKey)
-    .map(durableOutboxDisplayItem), [durableOutboxRecords, deviceId, sessionId]);
+  const taskOutboxRecords = useMemo(() => durableOutboxRecords
+    .filter((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && r.accountId === getMobileAuthOwner().accountKey),
+    [durableOutboxRecords, deviceId, sessionId]);
+  const outboxItems = useMemo(() => taskOutboxRecords.map(durableOutboxDisplayItem), [taskOutboxRecords]);
   const outboxRef = useRef<readonly MobileOutboxItem[]>(outboxItems);
   outboxRef.current = outboxItems;
   useEffect(() => observeDurableOutboxSending(mobileDurableOutbox, deviceId, sessionId, (record) => {
@@ -4938,10 +4939,18 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
   // 已进被控端队列的消息归队列管,不再算交接。已回流进历史、且后面已有回复(turn 已跑过)
   // 的消息也不算,否则快速 turn 结束后活动条要等后台对账才熄灭。只「已确认」不排除:
   // 被控端先落库用户消息、再跑派发前钩子,这段还没有运行信号。
-  const handoffSettledClientIds = useMemo(() => new Set([
-    ...inputProjection.pendingQueue.map((item) => item.clientId),
-    ...repliedHistoryUserClientIds(historyView.snapshot, rawMessages),
-  ]), [inputProjection.pendingQueue, historyView.snapshot, rawMessages]);
+  const rawHistoryDeviceId = remoteSessionStore.getSessionDeviceId(sessionId);
+  const handoffSettledClientIds = useMemo(() => {
+    // 活动条可以用同设备已确认的发送和实时终态收尾，待发记录仍等离线历史缓存完成。
+    const confirmedOutbox = rawHistoryDeviceId === deviceId ? {
+      sessionId,
+      clientIds: new Set(taskOutboxRecords.filter((record) => record.historyConfirmed).map((record) => record.item.clientId)),
+    } : undefined;
+    return new Set([
+      ...inputProjection.pendingQueue.map((item) => item.clientId),
+      ...repliedHistoryUserClientIds(historyView.snapshot, rawMessages, confirmedOutbox),
+    ]);
+  }, [inputProjection.pendingQueue, historyView.snapshot, rawMessages, rawHistoryDeviceId, deviceId, sessionId, taskOutboxRecords]);
   const messageHandoffActive = hasActiveOutboxHandoff(
     durableOutboxRecords,
     { deviceId, sessionId },
@@ -6579,20 +6588,22 @@ function SessionScreenContent({ beforeSessionSwitchRef, newSessionActionRef }: S
       || getNewSessionCreationTask(sessionId) !== null
     );
   };
-  const { findDurableOutboxRecord, retryOutboxItem, removeOutboxItem } = usePendingOutboxActions({
+  const { retryOutboxItem, removeOutboxItem } = usePendingOutboxActions({
     deviceId, deviceName, sessionId, router, outboxSessionAliveRef,
     setError, setQueueSelectedClientId, t,
   });
   const outboxLeftVersion = useSyncExternalStore(subscribeOutboxLeftInBackground, getOutboxLeftInBackgroundVersion);
-  const outboxDisplayItems = useMemo(() => outboxItems.map((item) => {
-    const record = findDurableOutboxRecord(item.clientId);
-    return {
-      ...outboxDisplayItem(item),
-      ...(record ? { sentAt: record.createdAt, pendingDelivery: isPendingDeliveryAfterLeaving(record) } : {}),
-      historyConfirmation: record?.historyConfirmation,
-      canCancel: !record?.historyConfirmation && !(record && hasUncreatedHostSession(record)),
-    };
-  }), [outboxItems, deviceId, sessionId, outboxLeftVersion]);
+  const outboxDisplayItems = useMemo(() => {
+    const head = taskOutboxRecords.findIndex((record) => !isDurableOutboxHandedOff(record));
+    return taskOutboxRecords.map((record, index) => ({
+      ...outboxDisplayItem(outboxItems[index]!),
+      sentAt: record.createdAt,
+      pendingDelivery: isPendingDeliveryAfterLeaving(record),
+      historyConfirmation: record.historyConfirmation,
+      waitingForPrevious: head !== -1 && index > head && !isDurableOutboxHandedOff(record),
+      canCancel: !record.historyConfirmation && !hasUncreatedHostSession(record),
+    }));
+  }, [taskOutboxRecords, outboxItems, outboxLeftVersion]);
 
   // Legacy creation tasks have no app-owned first record. Never downgrade durable follow-ups
   // into the old ephemeral draft recovery; new creation tasks use the branch above.
