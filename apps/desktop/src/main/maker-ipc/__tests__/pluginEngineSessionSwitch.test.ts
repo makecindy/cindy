@@ -325,6 +325,9 @@ describe('switching a task onto a plugin engine', () => {
     { name: 'a Telegram IM task', row: { source: 'telegram' } },
     { name: 'a Feishu IM task', row: { source: 'feishu' } },
     { name: 'a collaboration lead', row: { orcaRole: 'lead' as const } },
+    // #12276: combine the companion source and Lead role so the unit test checks
+    // that the pending plugin model commits for the reported task, too.
+    { name: 'a companion collaboration lead', row: { source: 'bot', orcaRole: 'lead' as const } },
     { name: 'a collaboration worker', row: { orcaRole: 'worker' as const } },
     { name: 'a scheduler task', row: { source: 'scheduler' } },
     { name: 'a learn task', row: { source: 'learn' } },

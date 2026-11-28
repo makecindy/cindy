@@ -6051,6 +6051,28 @@ describe('Teammate model selection shares profile persistence and route reconcil
       id: JSON.stringify(['pi', 'xd', model.id]), model };
   }
 
+  // #12276 / #13342, DB tier. The settings IPC must save an admitted plugin
+  // model and request reconciliation for an existing canonical Orca Lead.
+  // Creation and ordinary companion saves do not cover the active Lead role.
+  it('saves a plugin model for an existing companion Lead', async () => {
+    const created = await invoke('local-db:bots:create-canonical-session', {
+      botId: 'bot-1', expectedCanonicalSessionId: null, expectedProfileVersion: 1,
+    });
+    const sessionId = created.session.id;
+    h.sqlite!.prepare("UPDATE sessions SET orca_role = 'lead' WHERE id = ?").run(sessionId);
+    const plugin: BotModelRoute = {
+      harness: 'acp', providerId: 'acp-plugin:fixture:echo', model: 'default', effort: '', fastMode: false,
+    };
+
+    await invoke('local-db:bots:update', { id: 'bot-1', capabilities: { modelChainOverride: [plugin] } });
+
+    expect(await invoke('local-db:bots:get', 'bot-1')).toMatchObject({
+      canonicalSessionId: sessionId,
+      capabilities: { modelChain: [plugin], modelChainOverride: [plugin] },
+    });
+    expect(h.requestRuntimeRefresh).toHaveBeenCalledWith(sessionId, 'model');
+  });
+
   // #7177, DB tier: an explicit same-value tool selection must reach the
   // acceptance transaction; a plain metadata edit must retain the old scope.
   it('reaccepts the same model through the teammate tool without treating a rename as recovery', async () => {
