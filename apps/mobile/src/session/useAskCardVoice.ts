@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { i18n } from '@/i18n';
 import { playHaptic } from '@/platform/haptics';
 import { useAskCardAuth } from '@/session/askCardAuth';
+import { useMobileFailedVoiceRetry } from '@/session/useMobileFailedVoiceRetry';
 import { useSpeakerFilterNotice } from '@/session/useSpeakerFilterNotice';
 import type { MobileVoiceSelection } from '@/session/mobileVoiceInput';
 
@@ -31,14 +32,18 @@ export function useAskCardVoice(input: {
   error: string | null;
   /** The voiceprint filter just muted someone else's speech. */
   speakerFiltered: boolean;
+  canRetry: boolean;
   toggle: () => void;
   stop: () => Promise<boolean>;
+  retry: () => void;
 } {
   const auth = useAskCardAuth();
   const [starting, setStarting] = useState(false);
   const [listening, setListening] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const failedRetry = useMobileFailedVoiceRetry(input.deviceId);
   const {
     visible: speakerFiltered,
     show: showSpeakerFiltered,
@@ -46,11 +51,13 @@ export function useAskCardVoice(input: {
   } = useSpeakerFilterNotice();
   const runRef = useRef<VoiceRun | null>(null);
   const startingRef = useRef(false);
+  const retryingRef = useRef(false);
   const runReadyRef = useRef<{ promise: Promise<VoiceRun | null>; resolve: (run: VoiceRun | null) => void } | null>(null);
   const stoppingRef = useRef<Promise<boolean> | null>(null);
   const failedRef = useRef(false);
   const mountedRef = useRef(true);
   const startAbortRef = useRef<AbortController | null>(null);
+  const replayAbortRef = useRef<AbortController | null>(null);
   const inputRef = useRef(input);
   inputRef.current = input;
   const authRef = useRef(auth);
@@ -94,6 +101,8 @@ export function useAskCardVoice(input: {
       mountedRef.current = false;
       startingRef.current = false;
       startAbortRef.current?.abort();
+      replayAbortRef.current?.abort();
+      replayAbortRef.current = null;
       runReadyRef.current?.resolve(null);
       startAbortRef.current = null;
       const run = runRef.current;
@@ -102,10 +111,17 @@ export function useAskCardVoice(input: {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      replayAbortRef.current?.abort();
+      replayAbortRef.current = null;
+    };
+  }, [input.deviceId]);
+
   const toggle = useCallback(() => {
     // A session that is still closing must finish first; starting a new one
     // now would race the microphone teardown.
-    if (stoppingRef.current) return;
+    if (stoppingRef.current || retryingRef.current) return;
     if (startingRef.current && !runRef.current) {
       // A second mic tap cancels setup; submit calls stop() directly and waits.
       startAbortRef.current?.abort();
@@ -124,6 +140,7 @@ export function useAskCardVoice(input: {
       setError(i18n.t('composer.voice.loginRequired'));
       return;
     }
+    failedRetry.clear();
     startingRef.current = true;
     failedRef.current = false;
     setStarting(true);
@@ -167,6 +184,10 @@ export function useAskCardVoice(input: {
           onSpeakerFiltered: () => {
             if (!abort.signal.aborted) showSpeakerFiltered();
           },
+          onRetainedFailedAudio: (audio) => {
+            if (!mountedRef.current || abort.signal.aborted) return;
+            failedRetry.retain(audio);
+          },
           onError: (message) => {
             if (abort.signal.aborted) return;
             failedRef.current = true;
@@ -202,7 +223,68 @@ export function useAskCardVoice(input: {
         }
       }
     })();
-  }, [clearSpeakerFiltered, showSpeakerFiltered, stop]);
+  }, [clearSpeakerFiltered, failedRetry, showSpeakerFiltered, stop]);
 
-  return { listening, starting, stopping, busy: starting || listening || stopping, error, speakerFiltered, toggle, stop };
+  const retry = useCallback(() => {
+    if (stoppingRef.current || startingRef.current || runRef.current || retryingRef.current) return;
+    const retained = failedRetry.peek();
+    if (!retained) return;
+    const deviceId = inputRef.current.deviceId?.trim();
+    const currentAuth = authRef.current;
+    if (!deviceId || !currentAuth) {
+      setError(i18n.t('composer.voice.loginRequired'));
+      return;
+    }
+    retryingRef.current = true;
+    const replayAbort = new AbortController();
+    replayAbortRef.current = replayAbort;
+    setRetrying(true);
+    setError(null);
+    clearSpeakerFiltered();
+    const selection = { ...inputRef.current.getSelection() };
+    void (async () => {
+      try {
+        const { replayAskCardDictation } = await import('@/session/askCardVoiceStart');
+        await replayAskCardDictation({
+          deviceId,
+          audio: retained,
+          signal: replayAbort.signal,
+          getAccessToken: () => currentAuth.getAccessToken(),
+          refreshAccessToken: () => currentAuth.refreshAccessToken(),
+          apiFetch: currentAuth.apiFetch,
+          getText: () => inputRef.current.getText(),
+          setText: (value, nextSelection) => { if (mountedRef.current && !replayAbort.signal.aborted) inputRef.current.setText(value, nextSelection); },
+          getSelection: () => selection,
+          onError: (message) => {
+            if (mountedRef.current && !replayAbort.signal.aborted) setError(message);
+          },
+        });
+        if (mountedRef.current && !replayAbort.signal.aborted) {
+          failedRetry.clear();
+          setError(null);
+        }
+      } catch (err) {
+        if (mountedRef.current && !replayAbort.signal.aborted) {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        if (replayAbortRef.current === replayAbort) replayAbortRef.current = null;
+        retryingRef.current = false;
+        if (mountedRef.current) setRetrying(false);
+      }
+    })();
+  }, [clearSpeakerFiltered, failedRetry]);
+
+  return {
+    listening,
+    starting,
+    stopping: stopping || retrying,
+    busy: starting || listening || stopping || retrying,
+    error,
+    speakerFiltered,
+    canRetry: failedRetry.canRetry && !retrying,
+    toggle,
+    stop,
+    retry,
+  };
 }

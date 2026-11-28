@@ -22,12 +22,14 @@ const state = vi.hoisted(() => ({
   appListeners: new Set<(value: string) => void>(),
   accountGeneration: 1,
   task: null as NewSessionCreationTask | null,
+  pendingDialogueCreation: false,
   router: { canGoBack: vi.fn(() => true), back: vi.fn(), replace: vi.fn() },
 }));
 vi.mock('@/session/useCachedCompanionSession', () => ({ useCachedCompanionSession: () => state.cachedCompanion ? { ref: { id: 'bot-a' } } : null }));
 vi.mock('@/device-link/remoteResourceCache', () => ({ forgetRemoteResource: vi.fn() }));
 vi.mock('@/session/newSessionCreation', () => ({
   useNewSessionCreationTask: () => state.task,
+  usePendingHostDialogueCreation: () => state.pendingDialogueCreation,
 }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('@/device-link/remoteStatus', () => ({ formatRemoteError: (error: Error) => error.message }));
@@ -93,6 +95,7 @@ beforeEach(() => {
   state.appListeners.clear();
   state.accountGeneration = 1;
   state.task = null;
+  state.pendingDialogueCreation = false;
   state.router.canGoBack.mockReset().mockReturnValue(true);
   state.router.back.mockReset();
   state.router.replace.mockReset();
@@ -429,6 +432,53 @@ describe('mobile Cindy Make links', () => {
     state.connectionEpoch += 1;
     await renderGate();
     expect(container.textContent).toBe('Composer');
+  });
+
+  // Real-device offline-send regression: after a transient offline creation failure hands
+  // recovery from the live task to the durable outbox, the gate previously unmounted the
+  // chat screen, called getSession on reconnect before createMissingDialogue completed, and
+  // locked blockedScope on NOT_FOUND. Existing tests only covered an in-memory task; unit tier.
+  it('keeps the task mounted while durable outbox owns pending dialogue creation across reconnect', async () => {
+    state.task = { ...failedCreation(), status: 'running' };
+    state.pendingDialogueCreation = true;
+    state.sessions = [{ id: 'new-task', deviceLinkDeviceId: 'device-a' }];
+    state.status = 'disconnected';
+    await renderGate();
+    expect(container.textContent).toBe('Composer');
+
+    // Transient offline error dismisses the live task; durable outbox still owns creation.
+    state.task = null;
+    await renderGate();
+    expect(container.textContent).toBe('Composer');
+    expect(state.maker.getSession).not.toHaveBeenCalled();
+
+    // Relay reconnects before createMissingDialogue finishes: must not race getSession/NOT_FOUND.
+    state.status = 'online';
+    state.connectionEpoch += 1;
+    state.maker.getSession.mockRejectedValue(Object.assign(new Error('[NOT_FOUND]'), { code: 'NOT_FOUND' }));
+    await renderGate();
+    expect(container.textContent).toBe('Composer');
+    expect(state.maker.getSession).not.toHaveBeenCalled();
+
+    // Once createMissingDialogue patches source: null and clears needsHostCreation, stay mounted cleanly.
+    state.sessions = [{ id: 'new-task', deviceLinkDeviceId: 'device-a', source: null as unknown as string }];
+    state.pendingDialogueCreation = false;
+    await renderGate();
+    expect(container.textContent).toBe('Composer');
+    expect(state.maker.getSession).not.toHaveBeenCalled();
+  });
+
+  it('does not extend durable pending dialogue entry to file routes or known Make sessions', async () => {
+    state.pendingDialogueCreation = true;
+    await act(async () => root.render(
+      <CindyMakeSessionGate sessionId="new-task" deviceId="device-a"><span>Files</span></CindyMakeSessionGate>,
+    ));
+    expect(container.textContent).not.toContain('Files');
+    expect(state.maker.getSession).not.toHaveBeenCalled();
+
+    state.sessions = [{ id: 'new-task', deviceLinkDeviceId: 'device-a', source: 'cindy-make' }];
+    await renderGate();
+    expect(container.textContent).toBe('redirect:/');
   });
 
   it('does not extend optimistic entry to file routes', async () => {

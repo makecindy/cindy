@@ -51,9 +51,11 @@ import { botTaskResultKey, type BotCollaborationMeta } from '@cindy/maker-shared
 import { ChatBubble, CHAT_BUBBLE_COLUMN_CLASS } from './ChatBubble';
 import { memo, useCallback, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, TriangleAlert } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { formatModelShortLabel } from '@/lib/modelShortLabel';
+import { FailedSamplingNotice } from './FailedSamplingNotice';
+import { ModelMismatchNotice } from './ModelMismatchNotice';
+import type { ModelMismatchInfo } from '../../../shared/modelMismatch';
 import { stripGoalVerdictBlock } from '@cindy/maker-shared/goal-verdict';
 import { getGhostCardEntry, subscribeGhostCards } from '@/cindy-brain/ghostCardStore';
 import { GhostToolCard } from './GhostToolCard';
@@ -241,9 +243,9 @@ interface AssistantMessageProps {
   turnUsageDetails?: TurnUsageDetails;
   /** 同一用户轮跨多个 SDK segment 聚合后的 token/cache/model 明细。 */
   userTurnUsageDetails?: TurnUsageDetails;
-  /** 本轮模型降级标记(main turn 结束检测命中时挂到收尾 assistant 上),
-   *  正文下方渲染一条常显的降级提示行。 */
-  modelMismatch?: { selected: string; actual: string };
+  /** 本轮模型改派标记(main turn 结束检测命中时挂到收尾 assistant 上),
+   *  正文下方渲染一条常显提示行及成因说明入口。 */
+  modelMismatch?: ModelMismatchInfo;
   /** 出口钩子(will-assistant-message)后台处理中:回复已显示、意识还在跑那段
    *  (润色/自绘,最长 5 分钟)挂一条"意识处理中"轻指示;完成/超时由 main 清。 */
   ghostReplyPending?: boolean;
@@ -422,11 +424,7 @@ export const AssistantMessage = memo(function AssistantMessage({
         {botBubble && botQuote && messageClientId ? (
           <BotChatReplyTarget message={{ clientId: messageClientId, replyToClientId }} context={botQuote} />
         ) : null}
-        {failedSamplingAttempt && (
-          <div className="mb-1 text-13 font-normal leading-[1.384615]" style={{ color: 'var(--text-secondary)' }}>
-            {t('chat.failedSamplingAttempt')}
-          </div>
-        )}
+        {failedSamplingAttempt && <FailedSamplingNotice />}
         <div data-selection-quote-body="" className="contents">
           {renderPluginUiBody(pluginUi.messageBody ? { position: 'message.body', role: 'assistant', sessionId: currentSessionId, clientId: messageClientId,
             disabled: !!ghostRenderCard || !!remoteHostId,
@@ -495,22 +493,12 @@ export const AssistantMessage = memo(function AssistantMessage({
             {t('chat.ghostHook.processing')}
           </div>
         )}
-        {/* 模型降级提示:所选模型本轮被上游静默替换(main turn 结束检测,详见
-            shared/modelMismatch.ts)。常显不随 hover —— 用户需要在不悬停的情况
-            下知道这轮不是自己选的模型回答的;icon 用 warning 语义色(token 豁免
-            簇),文字保持 tertiary 灰阶,不喧宾夺主。 */}
+        {/* 模型改派提示:所选模型本轮被模型供应商改派(main turn 结束检测,详见
+            shared/modelMismatch.ts)。常显不随 hover,并附带「了解原因」浮层。 */}
         {botBubble && botStartedTasks?.length ? (
           <BotStartedTasksFooter tasks={botStartedTasks} hostSessionId={currentSessionId} />
         ) : null}
-        {modelMismatch && (
-          <div className="mt-1 flex items-center gap-1.5 text-11" style={{ color: 'var(--text-tertiary)' }}>
-            <TriangleAlert size={11} style={{ color: 'var(--warning-fg)' }} aria-hidden />
-            {t('chat.modelMismatch.notice', {
-              actual: formatModelShortLabel(modelMismatch.actual) || modelMismatch.actual,
-              selected: formatModelShortLabel(modelMismatch.selected) || modelMismatch.selected,
-            })}
-          </div>
-        )}
+        {modelMismatch && <ModelMismatchNotice mismatch={modelMismatch} />}
       </ChatBubble>
       {botBubble && actionBar}
       {dmThread?.thread && !isStreaming ? (

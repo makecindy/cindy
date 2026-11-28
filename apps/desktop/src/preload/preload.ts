@@ -250,10 +250,11 @@ import type {
   ImDefaultSettingsState,
 } from '../shared/imDefaultSettings';
 import type {
-  FeishuGroupSettingsList,
-  FeishuGroupSettingsPatch,
-  FeishuGroupSettingsView,
-} from '../shared/feishuGroupSettings';
+  ImChatSettingsChannel,
+  ImChatSettingsList,
+  ImChatSettingsPatch,
+  ImChatSettingsView,
+} from '../shared/imChatSettings';
 import type {
   SubagentModelSettingsPatch,
   SubagentModelSettingsState,
@@ -2940,6 +2941,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── 伙伴自有 IM 机器人连接(Telegram / 飞书, 伙伴设置「消息平台」页)──
   // 凭证只进 main 的安全存储, 不回传; 记录按连接 id 管理。
   botImConnection: {
+    getPersonalChannel: (payload: { channel: string }): Promise<import('../shared/botImConnection').PersonalChannelState> =>
+      ipcRenderer.invoke('imPersonalChannel:get', payload),
+    setPersonalChannelProject: (payload: { channel: string; projectDir: string | null }): Promise<import('../shared/botImConnection').PersonalChannelState> =>
+      ipcRenderer.invoke('imPersonalChannel:set-project', payload),
+    getPersonalReplyTarget: async (payload: { channel: string }) => {
+      const state: import('../shared/botImConnection').PersonalChannelState = await ipcRenderer.invoke('imPersonalChannel:get', payload);
+      return { channel: state.channel, companionBotId: state.companionBotId };
+    },
+    setPersonalReplyTarget: async (payload: { channel: string; companionBotId: string | null }) => {
+      const state: import('../shared/botImConnection').PersonalChannelState = await ipcRenderer.invoke('imPersonalChannel:set-companion', payload);
+      return { channel: state.channel, companionBotId: state.companionBotId };
+    },
+    onPersonalChannelChanged: (listener: (state: import('../shared/botImConnection').PersonalChannelState) => void): (() => void) => {
+      const handler = (_event: unknown, state: import('../shared/botImConnection').PersonalChannelState) => listener(state);
+      ipcRenderer.on('imPersonalChannel:changed', handler);
+      return () => { ipcRenderer.removeListener('imPersonalChannel:changed', handler); };
+    },
+    onPersonalReplyTargetChanged: (listener: (state: { channel: string; companionBotId: string | null }) => void): (() => void) => {
+      const handler = (_event: unknown, state: import('../shared/botImConnection').PersonalChannelState) =>
+        listener({ channel: state.channel, companionBotId: state.companionBotId });
+      ipcRenderer.on('imPersonalChannel:changed', handler);
+      return () => { ipcRenderer.removeListener('imPersonalChannel:changed', handler); };
+    },
     getIMessageConfig: (payload: { id: string }): Promise<import('../shared/botImConnection').BotIMessageConfig> => ipcRenderer.invoke('botImConnection:get-imessage-config', payload),
     updateIMessageConfig: (payload: { id: string; config: import('../shared/botImConnection').BotIMessageUpdateInput }): Promise<import('../shared/botImConnection').BotImConnectionListPayload> => ipcRenderer.invoke('botImConnection:update-imessage-config', payload),
 
@@ -3131,9 +3155,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       workingDir: string | null;
       workingDirAvailable: boolean; companionBotId?: string;
     }> => ipcRenderer.invoke('wechatBot:get-channel-settings'),
-    setCompanion: (botId: string | null): Promise<{
+    setCompanion: (botId: string | null, options?: { allowReassign?: boolean }): Promise<{
       version: 1; workingDir: string | null; workingDirAvailable: boolean; companionBotId?: string;
-    }> => ipcRenderer.invoke('wechatBot:set-companion', botId),
+    }> => ipcRenderer.invoke('wechatBot:set-companion', botId, options),
     chooseWorkingDirectory: (): Promise<{
       canceled: boolean;
       state: { version: 1; workingDir: string | null; workingDirAvailable: boolean; companionBotId?: string };
@@ -6009,6 +6033,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:add-project', { directory }),
     setXCompanion: (botId: string | null, expectedBotId: string | null): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-x-companion', { botId, expectedBotId }),
+    setProviderCompanion: (
+      provider: 'slack' | 'telegram' | 'feishu' | 'discord' | 'x',
+      botId: string | null,
+      expectedBotId: string | null,
+    ): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:set-provider-companion', { provider, botId, expectedBotId }),
     setProviderDefaultWorkspace: (
       provider: 'telegram' | 'x' | 'feishu' | 'discord',
       alias: string | null,
@@ -8470,18 +8500,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:im-default-settings:set', patch, channel),
     imDefaultSettingsReset: (channel?: ImDefaultSettingsChannel): Promise<ImDefaultSettingsState> =>
       ipcRenderer.invoke('maker:im-default-settings:reset', channel),
-    /** 个人飞书 / Lark 机器人所在的群与各群单独的项目、模型、权限。 */
-    feishuGroupSettingsList: (options?: { refresh?: boolean; summary?: boolean }): Promise<FeishuGroupSettingsList> =>
-      ipcRenderer.invoke('maker:feishu-group-settings:list', {
+    /** 个人 IM 机器人的「群聊」总表: 所在的群与各群单独的项目、模型、权限、群成员也能提问。 */
+    imChatSettingsList: (
+      channel: ImChatSettingsChannel,
+      options?: { refresh?: boolean; summary?: boolean },
+    ): Promise<ImChatSettingsList> =>
+      ipcRenderer.invoke('maker:im-chat-settings:list', channel, {
         refresh: options?.refresh === true,
         summary: options?.summary === true,
       }),
-    feishuGroupSettingsSet: (
+    imChatSettingsSet: (
+      channel: ImChatSettingsChannel,
       chatId: string,
-      patch: FeishuGroupSettingsPatch,
+      patch: ImChatSettingsPatch,
       name: string | null,
-    ): Promise<FeishuGroupSettingsView> =>
-      ipcRenderer.invoke('maker:feishu-group-settings:set', chatId, patch, name),
+    ): Promise<ImChatSettingsView> =>
+      ipcRenderer.invoke('maker:im-chat-settings:set', channel, chatId, patch, name),
+    imChatSettingsResumeMembers: (
+      channel: ImChatSettingsChannel,
+      chatId: string,
+      name: string | null,
+    ): Promise<ImChatSettingsView> =>
+      ipcRenderer.invoke('maker:im-chat-settings:resume-members', channel, chatId, name),
 
     /**
      * 子代理模型覆盖与 Codex 子代理护栏。null 表示不注入覆盖。Claude 字段对新建

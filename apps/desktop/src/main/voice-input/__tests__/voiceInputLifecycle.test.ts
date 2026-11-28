@@ -33,6 +33,10 @@ const m = vi.hoisted(() => {
   }
   return {
     deferred, plan, plans, providers, Provider, owner: 'owner-a', boundary: false, muted: false,
+    supportedContextFields: [] as string[],
+    isOverlaySender: false,
+    overlayTarget: null as { processName: string; bundleId?: string } | null,
+    overlayContext: null as { selectionBefore: string; selectedText: string; selectionAfter: string } | null,
     handlers: new Map<string, (...args: any[]) => any>(),
     listeners: new Map<string, (...args: any[]) => any>(),
     restore: vi.fn(async (_id: number | symbol | 'remote-desktop') => {}), unregister: vi.fn(),
@@ -61,7 +65,10 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({ assertTrustedAppRendere
 vi.mock('../../model-access/gatewayKeyRejection.js', () => ({ reportCindyGatewayKeyRejected: vi.fn() }));
 vi.mock('../FallbackAsrProvider.js', () => ({ FallbackAsrProvider: m.Provider }));
 vi.mock('../CindyVoiceSessionClient.js', () => ({ CINDY_MANAGED_REFINER_PROVIDER: 'auto',
-  CindyVoiceRunContext: class { refineRequestBudget() { return 1; } }, isCindyVoiceServiceReady: () => true }));
+  CindyVoiceRunContext: class {
+    refineRequestBudget() { return 1; }
+    supportsRefinementContextField(field: string) { return m.supportedContextFields.includes(field); }
+  }, isCindyVoiceServiceReady: () => true }));
 vi.mock('../VoiceInputModelSelection.js', () => ({
   getVoiceInputModelSelection: () => ({ asrProvider: 'litellm-volcengine-sauc-asr', refinerProvider: 'codex-gpt-5.4-mini', serviceMode: 'cindy' }),
   voiceInputModelSelectionSignature: () => 'fixed', effectiveVoiceInputServiceMode: () => 'cindy',
@@ -88,11 +95,14 @@ vi.mock('../SystemAudioMuteGuard.js', async importOriginal => {
     get hasPendingOrActiveMute() { return guard.hasPendingOrActiveMute; },
   } };
 });
-vi.mock('../global.js', () => ({ isGlobalVoiceInputOverlaySender: () => false,
+vi.mock('../global.js', () => ({ isGlobalVoiceInputOverlaySender: () => m.isOverlaySender,
   registerActiveInlineVoiceInputWebContents: vi.fn(), unregisterActiveInlineVoiceInputWebContents: m.unregister,
   refreshVoiceInputInputMonitoringPermissionSnapshot: async () => ({ ok: true }),
   getVoiceInputInputMonitoringPermissionCachedSnapshot: () => ({ ok: true }),
-  getVoiceInputAccessibilityPermissionSnapshot: () => ({ ok: true }), awaitGlobalOverlayPasteContext: vi.fn(),
+  getVoiceInputAccessibilityPermissionSnapshot: () => ({ ok: true }),
+  getGlobalOverlayPasteTarget: () => m.overlayTarget,
+  awaitGlobalOverlayPasteContext: vi.fn(async () => m.overlayContext),
+  awaitGlobalOverlayPasteSnapshot: vi.fn(async () => ({ target: m.overlayTarget, context: m.overlayContext })),
   showVoiceInputDictionaryToast: vi.fn(), takeOverlayDictionaryToastAnchor: vi.fn(),
 }));
 vi.mock('../CodexResponsesTextModelClient.js', () => ({ CodexResponsesTextModelClient: class {}, prewarmCodexResponsesEndpoint: vi.fn() }));
@@ -123,7 +133,19 @@ const invoke = (name: string, event: ReturnType<typeof windowEvent>, payload?: u
 const start = (event: ReturnType<typeof windowEvent>) => invoke('start', event, { refinementEnabled: false });
 function plan() { const p = m.plan(); m.plans.push(p); return p; }
 beforeAll(() => registerVoiceInputIpc());
-beforeEach(() => { vi.useFakeTimers(); windows = []; m.providers.length = 0; m.owner = 'owner-a'; m.boundary = false; m.restore.mockClear(); m.unregister.mockClear(); });
+beforeEach(() => {
+  vi.useFakeTimers();
+  windows = [];
+  m.providers.length = 0;
+  m.owner = 'owner-a';
+  m.boundary = false;
+  m.supportedContextFields = [];
+  m.isOverlaySender = false;
+  m.overlayTarget = null;
+  m.overlayContext = null;
+  m.restore.mockClear();
+  m.unregister.mockClear();
+});
 afterEach(async () => {
   for (const p of [...m.providers.map(provider => provider.plan), ...m.plans]) { p.connect.resolve(); p.disposed.resolve(); }
   for (const event of windows) await invoke('cancel', event);
@@ -326,5 +348,32 @@ describe('registered main dictation lifecycle (#6656)', () => {
     old.connect.resolve(); old.disposed.resolve(); await first;
     expect((await second).ok).toBe(false);
     expect(m.providers).toHaveLength(1);
+  });
+
+  it.each([false, true])('gates overlay activeApp context by managed voice-server capability (%s)', async serverSupportsActiveApp => {
+    m.isOverlaySender = true;
+    m.overlayTarget = { processName: 'Cursor', bundleId: 'com.todesktop.230313mzl4w4u92' };
+    m.supportedContextFields = serverSupportsActiveApp ? ['activeApp'] : [];
+    let capturedContext: Record<string, unknown> | undefined;
+    const refine = vi.spyOn(DictationRefiner.prototype, 'refine').mockImplementation(async function (this: DictationRefiner) {
+      const warmup = this.buildWarmupRequest();
+      capturedContext = (warmup.user as { context: Record<string, unknown> }).context;
+      return { accepted: false, sourceSegmentIds: [], basedOnText: 'spoken', elapsedMs: 0 };
+    });
+    const event = windowEvent(); const provider = plan();
+    provider.connect.resolve(); provider.disposed.resolve();
+    try {
+      const run = await invoke('start', event, { refinementEnabled: true });
+      expect(run.ok).toBe(true);
+      await invoke('stop', event);
+      expect(capturedContext).toBeDefined();
+      if (serverSupportsActiveApp) {
+        expect(capturedContext?.activeApp).toBe('Cursor (code_editor)');
+      } else {
+        expect(capturedContext).not.toHaveProperty('activeApp');
+      }
+    } finally {
+      refine.mockRestore();
+    }
   });
 });

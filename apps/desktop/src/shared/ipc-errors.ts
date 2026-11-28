@@ -636,6 +636,17 @@ export function createIpcError(
   return err;
 }
 
+/** In-process reason for a strict canonical creation failure. Keep the public IPC code and message. */
+export function missingBotModelError() {
+  return Object.assign(createIpcError('PRECONDITION_FAILED', '请先连接模型供应商或选择伙伴模型'), {
+    reason: 'BOT_MODEL_REQUIRED' as const,
+  });
+}
+
+export function isMissingBotModelError(err: unknown): boolean {
+  return isIpcError(err) && err.code === 'PRECONDITION_FAILED' && 'reason' in err && err.reason === 'BOT_MODEL_REQUIRED';
+}
+
 export function isIpcError(err: unknown): err is Error & { code: IpcErrorCode } {
   return err instanceof Error && isIpcErrorCode((err as { code?: unknown }).code);
 }
